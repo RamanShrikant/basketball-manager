@@ -1,11 +1,14 @@
 {
   "buildCommand": "cd frontend && npm install && npm run build",
   "outputDirectory": "frontend/dist",
-  "builds": [
-    { "src": "backend/server.js", "use": "@vercel/node" }
-  ],
+  "framework": "vite",
   "routes": [
-    { "src": "/api/(.*)", "dest": "/backend/server.js" },
+    { "src": "/api/(.*)", "dest": "backend/server.js" },
     { "src": "/(.*)", "dest": "/frontend/dist/$1" }
-  ]
+  ],
+  "functions": {
+    "api/*.js": {
+      "runtime": "nodejs18.x"
+    }
+  }
 }
