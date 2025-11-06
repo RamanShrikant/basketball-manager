@@ -1,16 +1,4 @@
-// server.js
-import overallRoute from "./routes/overall.js";
-import express from "express";
-import cors from "cors";
+import app from "./app.js";
 
-const app = express();
-app.use(cors());
-app.use(express.json());
-app.use("/overall", overallRoute);
-
-
-app.get("/", (req, res) => {
-  res.send("Basketball Manager backend running!");
-});
-
-app.listen(5000, () => console.log("✅ Server started on port 5000"));
+const port = process.env.PORT || 5000;
+app.listen(port, () => console.log(`✅ Server started on port ${port}`));
