@@ -24,6 +24,9 @@ function Layout() {
             <NavLink to="/simulate" className={activeLink}>
               Game Simulator
             </NavLink>
+            <NavLink to="/league-editor" className={activeLink}>
+              League Editor
+            </NavLink>
           </nav>
         </div>
       </header>

@@ -4,6 +4,8 @@ import Home from "./pages/Home.jsx";
 import PlayerEditor from "./pages/PlayerEditor.jsx";
 import TradeSimulator from "./pages/TradeSimulator.jsx";
 import GameSimulator from "./pages/GameSimulator.jsx";
+import LeagueEditor from "./pages/LeagueEditor";
+
 
 function App() {
   return (
@@ -15,6 +17,7 @@ function App() {
           <Route path="players/:playerId" element={<PlayerEditor />} />
           <Route path="trade" element={<TradeSimulator />} />
           <Route path="simulate" element={<GameSimulator />} />
+          <Route path="/league-editor" element={<LeagueEditor />} />
         </Route>
       </Routes>
     </BrowserRouter>
