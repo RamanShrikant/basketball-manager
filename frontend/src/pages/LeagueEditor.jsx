@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 
 /* ------------------------------------------------------------
-   League Editor v4.3 – Height + Edit Team + Auto-Save
+   League Editor v4.4 – Live Recalc Fix + Height/Potential Sync
    ------------------------------------------------------------ */
 
 export default function LeagueEditor() {
@@ -67,7 +67,10 @@ export default function LeagueEditor() {
     let overall = 60 + 39*sigmoid(B);
     overall = Math.round(Math.min(99, Math.max(60, overall)));
     const num90 = attrs.filter(a=>a>90).length;
-    if (num90>=3) overall = Math.min(99, overall + 1 + (num90-3));
+    if (num90 >= 3) {
+    const bonus = num90 - 2; // +1 for 3, +2 for 4, etc.
+    overall = Math.min(99, overall + bonus);
+    }
     return overall;
   };
 
@@ -117,6 +120,17 @@ export default function LeagueEditor() {
   useEffect(()=>{
     localStorage.setItem("leagueData",JSON.stringify({leagueName,conferences}));
   },[leagueName,conferences]);
+
+  /* ---------------- 🔁 Live Recalculation ---------------- */
+  useEffect(() => {
+    if (!showPlayerForm) return;
+    setPlayerForm(prev => {
+      const overall = calcOverall(prev.attrs, prev.pos);
+      const { off, def } = calcOffDef(prev.attrs, prev.pos);
+      const stamina = calcStamina(prev.age, prev.attrs[7]);
+      return { ...prev, overall, offRating: off, defRating: def, stamina };
+    });
+  }, [showPlayerForm, playerForm.attrs, playerForm.age, playerForm.potential, playerForm.height]);
 
   /* ---------------- Handlers ---------------- */
   const addTeam=()=>{if(!newTeamName.trim())return;
@@ -274,6 +288,7 @@ export default function LeagueEditor() {
                 <th className="text-center font-semibold">Age</th>
                 <th className="text-center font-semibold">Height</th>
                 <th className="text-center font-semibold">OVR</th>
+                <th className="text-center font-semibold">POT</th>
                 <th></th>
               </tr>
             </thead>
@@ -303,6 +318,7 @@ export default function LeagueEditor() {
                   <td className="text-center">{p.age}</td>
                   <td className="text-center">{formatHeight(p.height)}</td>
                   <td className="text-center font-bold">{p.overall}</td>
+                  <td className="text-center">{p.potential}</td>
                   <td className="text-right">
                     <button onClick={()=>openPlayerForm(idx,i)} className="text-blue-600 text-sm hover:underline mr-2">Edit</button>
                     <button onClick={()=>{
@@ -327,77 +343,141 @@ export default function LeagueEditor() {
           <h2 className="text-xl font-bold mb-4">{editingPlayer!==null?"Edit Player":"Add Player"}</h2>
           <div className="flex flex-col gap-2 mb-3">
             <input className="border p-2 rounded" placeholder="Player Name"
-              value={playerForm.name} onChange={e=>setPlayerForm({...playerForm,name:e.target.value})}/>
+                            value={playerForm.name} 
+              onChange={e => setPlayerForm({ ...playerForm, name: e.target.value })}/>
             <input className="border p-2 rounded" placeholder="Headshot URL"
-              value={playerForm.headshot} onChange={e=>setPlayerForm({...playerForm,headshot:e.target.value})}/>
+              value={playerForm.headshot} 
+              onChange={e => setPlayerForm({ ...playerForm, headshot: e.target.value })}/>
             <select className="border p-2 rounded" value={playerForm.pos}
-              onChange={e=>{
-                const pos=e.target.value;
-                setPlayerForm({...playerForm,pos,secondaryPos:playerForm.secondaryPos===pos?"":playerForm.secondaryPos});
+              onChange={e => {
+                const pos = e.target.value;
+                setPlayerForm({
+                  ...playerForm,
+                  pos,
+                  secondaryPos: playerForm.secondaryPos === pos ? "" : playerForm.secondaryPos
+                });
               }}>
-              {["PG","SG","SF","PF","C"].map(p=><option key={p}>{p}</option>)}
+              {["PG","SG","SF","PF","C"].map(p => <option key={p}>{p}</option>)}
             </select>
             <select className="border p-2 rounded" value={playerForm.secondaryPos}
-              onChange={e=>setPlayerForm({...playerForm,secondaryPos:e.target.value})}>
+              onChange={e => setPlayerForm({ ...playerForm, secondaryPos: e.target.value })}>
               <option value="">No Secondary</option>
-              {["PG","SG","SF","PF","C"].filter(p=>p!==playerForm.pos)
-                .map(p=><option key={p}>{p}</option>)}
+              {["PG","SG","SF","PF","C"].filter(p => p !== playerForm.pos)
+                .map(p => <option key={p}>{p}</option>)}
             </select>
           </div>
 
           {/* Sliders */}
           <div className="space-y-2">
-            {attrNames.map((l,i)=>(
-              <div key={i}><label className="text-sm">{l}: {playerForm.attrs[i]}</label>
-              <input type="range" min="25" max="99" value={playerForm.attrs[i]}
-                onChange={e=>setPlayerForm(p=>({...p,attrs:p.attrs.map((a,j)=>j===i?+e.target.value:a)}))}
-                className="w-full accent-blue-600"/></div>
+            {attrNames.map((l, i) => (
+              <div key={i}>
+                <label className="text-sm">{l}: {playerForm.attrs[i]}</label>
+                <input 
+                  type="range" 
+                  min="25" 
+                  max="99" 
+                  value={playerForm.attrs[i]}
+                  onChange={e => 
+                    setPlayerForm(p => ({
+                      ...p, 
+                      attrs: p.attrs.map((a, j) => j === i ? +e.target.value : a)
+                    }))
+                  }
+                  className="w-full accent-blue-600"
+                />
+              </div>
             ))}
-            <div><label className="text-sm">Age: {playerForm.age}</label>
-              <input type="range" min="18" max="45" value={playerForm.age}
-                onChange={e=>setPlayerForm({...playerForm,age:+e.target.value})}
-                className="w-full accent-green-600"/></div>
-            <div><label className="text-sm">Height: {formatHeight(playerForm.height)}</label>
-              <input type="range" min="65" max="90" value={playerForm.height}
-                onChange={e=>setPlayerForm({...playerForm,height:+e.target.value})}
-                className="w-full accent-purple-600"/></div>
-            <div><label className="text-sm">Potential: {playerForm.potential}</label>
-              <input type="range" min="25" max="99" value={playerForm.potential}
-                onChange={e=>setPlayerForm({...playerForm,potential:+e.target.value})}
-                className="w-full accent-pink-600"/></div>
+            <div>
+              <label className="text-sm">Age: {playerForm.age}</label>
+              <input 
+                type="range" 
+                min="18" 
+                max="45" 
+                value={playerForm.age}
+                onChange={e => setPlayerForm({ ...playerForm, age: +e.target.value })}
+                className="w-full accent-green-600"
+              />
+            </div>
+            <div>
+              <label className="text-sm">Height: {formatHeight(playerForm.height)}</label>
+              <input 
+                type="range" 
+                min="65" 
+                max="90" 
+                value={playerForm.height}
+                onChange={e => setPlayerForm({ ...playerForm, height: +e.target.value })}
+                className="w-full accent-purple-600"
+              />
+            </div>
+            <div>
+              <label className="text-sm">Potential: {playerForm.potential}</label>
+              <input 
+                type="range" 
+                min="25" 
+                max="99" 
+                value={playerForm.potential}
+                onChange={e => setPlayerForm({ ...playerForm, potential: +e.target.value })}
+                className="w-full accent-pink-600"
+              />
+            </div>
           </div>
 
+          {/* Live Stat Bar */}
           <p className="mt-4 font-semibold text-lg">
-            Overall: {playerForm.overall} | Off: {playerForm.offRating} | Def: {playerForm.defRating} | Sta: {playerForm.stamina} | Pot: {playerForm.potential} | Ht: {formatHeight(playerForm.height)}
+            Overall: {playerForm.overall} | Off: {playerForm.offRating} | 
+            Def: {playerForm.defRating} | Sta: {playerForm.stamina} | 
+            Pot: {playerForm.potential} | Ht: {formatHeight(playerForm.height)}
           </p>
 
+          {/* Modal Buttons */}
           <div className="flex justify-end gap-2 mt-4">
-            <button onClick={()=>setShowPlayerForm(false)} className="px-3 py-2 rounded bg-gray-300 hover:bg-gray-400">Cancel</button>
-            <button onClick={savePlayer} className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700">Save Player</button>
+            <button 
+              onClick={() => setShowPlayerForm(false)} 
+              className="px-3 py-2 rounded bg-gray-300 hover:bg-gray-400">
+              Cancel
+            </button>
+            <button 
+              onClick={savePlayer} 
+              className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700">
+              Save Player
+            </button>
           </div>
         </div>
       </div>
     )}
 
     {/* Edit Team Modal */}
-    {editTeamModal&&(
+    {editTeamModal && (
       <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50">
         <div className="bg-white rounded-lg p-6 w-[400px]">
           <h2 className="text-xl font-bold mb-4">Edit Team</h2>
-          <input className="border p-2 rounded w-full mb-2"
-            placeholder="Team Name" value={editTeamModal.name}
-            onChange={e=>setEditTeamModal({...editTeamModal,name:e.target.value})}/>
-          <input className="border p-2 rounded w-full mb-4"
-            placeholder="Logo URL" value={editTeamModal.logo}
-            onChange={e=>setEditTeamModal({...editTeamModal,logo:e.target.value})}/>
+          <input 
+            className="border p-2 rounded w-full mb-2"
+            placeholder="Team Name" 
+            value={editTeamModal.name}
+            onChange={e => setEditTeamModal({ ...editTeamModal, name: e.target.value })}
+          />
+          <input 
+            className="border p-2 rounded w-full mb-4"
+            placeholder="Logo URL" 
+            value={editTeamModal.logo}
+            onChange={e => setEditTeamModal({ ...editTeamModal, logo: e.target.value })}
+          />
           <div className="flex justify-end gap-2">
-            <button onClick={()=>setEditTeamModal(null)}
-              className="px-3 py-2 rounded bg-gray-300 hover:bg-gray-400">Cancel</button>
-            <button onClick={saveEditTeam}
-              className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700">Save</button>
+            <button 
+              onClick={() => setEditTeamModal(null)}
+              className="px-3 py-2 rounded bg-gray-300 hover:bg-gray-400">
+              Cancel
+            </button>
+            <button 
+              onClick={saveEditTeam}
+              className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700">
+              Save
+            </button>
           </div>
         </div>
       </div>
     )}
   </div>);
 }
+
