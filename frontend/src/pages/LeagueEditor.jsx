@@ -67,7 +67,7 @@ export default function LeagueEditor() {
     const B = p.alpha*Peak + (1-p.alpha)*W;
     let overall = 60 + 39*sigmoid(B);
     overall = Math.round(Math.min(99, Math.max(60, overall)));
-    const num90 = attrs.filter(a=>a>90).length;
+    const num90 = attrs.filter(a=>a>= 90).length;
     if (num90 >= 3) {
     const bonus = num90 - 2; // +1 for 3, +2 for 4, etc.
     overall = Math.min(99, overall + bonus);

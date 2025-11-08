@@ -31,9 +31,53 @@ function RosterView() {
 
   return (
     <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center py-10">
-      <h1 className="text-4xl font-extrabold text-orange-500 mb-4">
-        {selectedTeam.name} Roster
-      </h1>
+<div className="flex items-center gap-6 mb-4">
+  <button
+    onClick={() => {
+      const allTeams = [
+        ...(leagueData?.conferences?.East || []),
+        ...(leagueData?.conferences?.West || []),
+      ];
+      const sorted = allTeams.sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
+      const currentIndex = sorted.findIndex(
+        (t) => t.name === selectedTeam.name
+      );
+      const prevTeam =
+        sorted[(currentIndex - 1 + sorted.length) % sorted.length];
+      setSelectedTeam(prevTeam);
+    }}
+    className="text-3xl text-orange-500 hover:text-orange-400 transition"
+  >
+    ‹
+  </button>
+
+  <h1 className="text-4xl font-extrabold text-orange-500">
+    {selectedTeam.name} Roster
+  </h1>
+
+  <button
+    onClick={() => {
+      const allTeams = [
+        ...(leagueData?.conferences?.East || []),
+        ...(leagueData?.conferences?.West || []),
+      ];
+      const sorted = allTeams.sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
+      const currentIndex = sorted.findIndex(
+        (t) => t.name === selectedTeam.name
+      );
+      const nextTeam = sorted[(currentIndex + 1) % sorted.length];
+      setSelectedTeam(nextTeam);
+    }}
+    className="text-3xl text-orange-500 hover:text-orange-400 transition"
+  >
+    ›
+  </button>
+</div>
+
 
       {/* --- HEADER --- */}
       <div className="relative w-full max-w-5xl bg-neutral-800 px-8 pt-8 pb-2 rounded-t-xl shadow-lg">
@@ -113,37 +157,63 @@ function RosterView() {
       <div className="w-full max-w-5xl overflow-x-auto">
         <table className="w-full border-collapse text-left">
           <thead className="bg-neutral-800 text-gray-300">
-            <tr>
-              <th className="p-3">Name</th>
-              <th className="p-3">POS</th>
-              <th className="p-3">AGE</th>
-              <th className="p-3">OVR</th>
-              <th className="p-3">OFF</th>
-              <th className="p-3">DEF</th>
-              <th className="p-3">STAM</th>
-            </tr>
-          </thead>
-          <tbody>
-            {players.map((p) => (
-              <tr
-                key={p.name}
-                onClick={() => setSelectedPlayer(p)}
-                className={`cursor-pointer transition ${
-                  player.name === p.name
-                    ? "bg-orange-600 text-white"
-                    : "hover:bg-neutral-800"
-                }`}
-              >
-                <td className="p-3">{p.name}</td>
-                <td className="p-3">{p.pos}</td>
-                <td className="p-3">{p.age}</td>
-                <td className="p-3">{p.overall}</td>
-                <td className="p-3">{p.offRating}</td>
-                <td className="p-3">{p.defRating}</td>
-                <td className="p-3">{p.stamina}</td>
-              </tr>
-            ))}
-          </tbody>
+  <tr>
+    <th className="p-3">Name</th>
+    <th className="p-3">POS</th>
+    <th className="p-3">AGE</th>
+    <th className="p-3">OVR</th>
+    <th className="p-3">OFF</th>
+    <th className="p-3">DEF</th>
+    <th className="p-3">STAM</th>
+    <th className="p-3">POT</th>
+    <th className="p-3">INS</th>
+    <th className="p-3">MID</th>
+    <th className="p-3">3PT</th>
+    <th className="p-3">INS D</th>
+    <th className="p-3">PER D</th>
+    <th className="p-3">PLAYMAK</th>
+    <th className="p-3">REB</th>
+    <th className="p-3">PHYS</th>
+    <th className="p-3">IQ</th>
+    <th className="p-3">F</th>
+  </tr>
+</thead>
+
+<tbody>
+  {players.map((p) => (
+    <tr
+      key={p.name}
+      onClick={() => setSelectedPlayer(p)}
+      className={`cursor-pointer transition ${
+        player.name === p.name
+          ? "bg-orange-600 text-white"
+          : "hover:bg-neutral-800"
+      }`}
+    >
+      <td className="p-3">{p.name}</td>
+      <td className="p-3">{p.pos}</td>
+      <td className="p-3">{p.age}</td>
+      <td className="p-3">{p.overall}</td>
+      <td className="p-3">{p.offRating ?? "-"}</td>
+      <td className="p-3">{p.defRating ?? "-"}</td>
+      <td className="p-3">{p.stamina ?? "-"}</td>
+      <td className="p-3">{p.potential ?? "-"}</td>
+
+      {/* Attribute values */}
+      <td className="p-3">{p.insideShot ?? "-"}</td>
+      <td className="p-3">{p.midRange ?? "-"}</td>
+      <td className="p-3">{p.threePoint ?? "-"}</td>
+      <td className="p-3">{p.insideDefense ?? "-"}</td>
+      <td className="p-3">{p.perimeterDefense ?? "-"}</td>
+      <td className="p-3">{p.playmaking ?? "-"}</td>
+      <td className="p-3">{p.rebounding ?? "-"}</td>
+      <td className="p-3">{p.physical ?? "-"}</td>
+      <td className="p-3">{p.bballIQ ?? "-"}</td>
+      <td className="p-3">{p.finishing ?? "-"}</td>
+    </tr>
+  ))}
+</tbody>
+
         </table>
       </div>
 
