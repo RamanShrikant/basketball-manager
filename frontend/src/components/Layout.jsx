@@ -10,7 +10,9 @@ function Layout() {
     <div className="min-h-screen bg-slate-100">
       <header className="bg-white shadow-sm">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
-          <h1 className="text-xl font-semibold text-slate-900">Basketball Manager</h1>
+          <h1 className="text-xl font-semibold text-slate-900">
+            Basketball Manager
+          </h1>
           <nav className="flex gap-2">
             <NavLink to="/" end className={activeLink}>
               Home
@@ -27,9 +29,15 @@ function Layout() {
             <NavLink to="/league-editor" className={activeLink}>
               League Editor
             </NavLink>
+
+            {/* ✅ New Play button */}
+            <NavLink to="/play" className={activeLink}>
+              Play
+            </NavLink>
           </nav>
         </div>
       </header>
+
       <main className="mx-auto max-w-5xl px-4 py-8">
         <Outlet />
       </main>
