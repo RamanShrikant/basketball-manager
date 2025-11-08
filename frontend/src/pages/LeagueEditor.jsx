@@ -16,6 +16,7 @@ export default function LeagueEditor() {
   const [playerForm, setPlayerForm] = useState(initPlayer());
   const [expandedTeams, setExpandedTeams] = useState({});
   const [sortedTeams, setSortedTeams] = useState({});
+  const [originalOrders, setOriginalOrders] = useState({});
   const [editTeamModal, setEditTeamModal] = useState(null);
 
   /* ---------------- Player Model ---------------- */
@@ -178,7 +179,41 @@ export default function LeagueEditor() {
     setShowPlayerForm(false);
   };
 
-  const toggleSort=(idx)=>setSortedTeams(prev=>({...prev,[idx]:!prev[idx]}));
+const toggleSort = (idx) => {
+  setConferences(prev => {
+    const copy = JSON.parse(JSON.stringify(prev));
+    const teamList = copy[selectedConf][idx];
+    const isSorted = !sortedTeams[idx];
+
+    if (isSorted) {
+      // Save original order for this team
+      setOriginalOrders(prevOrders => ({
+        ...prevOrders,
+        [`${selectedConf}-${idx}`]: [...teamList.players],
+      }));
+
+      // Sort actual array in descending order of OVR
+      teamList.players.sort((a, b) => b.overall - a.overall);
+    } else {
+      // Restore original order from saved snapshot
+      setOriginalOrders(prevOrders => {
+        const saved = prevOrders[`${selectedConf}-${idx}`];
+        if (saved) {
+          teamList.players = saved;
+        }
+        const newOrders = { ...prevOrders };
+        delete newOrders[`${selectedConf}-${idx}`];
+        return newOrders;
+      });
+    }
+
+    return copy;
+  });
+
+  // Flip sort visual indicator
+  setSortedTeams(prev => ({ ...prev, [idx]: !prev[idx] }));
+};
+
   const toggleAdvanced=(idx)=>setExpandedTeams(prev=>({...prev,[idx]:!prev[idx]}));
 
   /* ---------------- UI ---------------- */
@@ -249,7 +284,7 @@ export default function LeagueEditor() {
     <div className="flex flex-col gap-8">
       {conferences[selectedConf].map((team,idx)=>{
         const sorted=sortedTeams[idx];
-        const players=sorted?[...team.players].sort((a,b)=>b.overall-a.overall):team.players;
+        const players = team.players;
         return (
         <div key={idx} className="border rounded-2xl p-8 bg-white shadow-lg">
           <div className="flex justify-between items-center mb-3">
