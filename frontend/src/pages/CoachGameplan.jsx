@@ -12,7 +12,7 @@ export default function CoachGameplan() {
   const [teamRatings, setTeamRatings] = useState({ overall: 0, off: 0, def: 0 });
   const navigate = useNavigate();
 
-  // ---- Helper functions ----
+  // --- Helper functions ---
   const fatiguePenalty = (mins, stamina) => {
     const threshold = 0.359 * stamina + 2.46;
     const over = Math.max(0, mins - threshold);
@@ -22,17 +22,21 @@ export default function CoachGameplan() {
   const calculateTeamRatings = (players, minutes) => {
     const totalMins = Object.values(minutes).reduce((a, b) => a + b, 0);
     if (totalMins === 0) return { overall: 0, off: 0, def: 0 };
+
     let teamOff = 0,
       teamDef = 0,
       teamOvr = 0;
+
     for (const p of players) {
+      if (!p || !p.name) continue;
       const min = minutes[p.name] || 0;
       const weight = min / totalMins;
       const pen = fatiguePenalty(min, p.stamina || 70);
-      teamOff += weight * (p.offRating * pen);
-      teamDef += weight * (p.defRating * pen);
-      teamOvr += weight * (p.overall * pen);
+      teamOff += weight * ((p.offRating || 0) * pen);
+      teamDef += weight * ((p.defRating || 0) * pen);
+      teamOvr += weight * ((p.overall || 0) * pen);
     }
+
     return {
       overall: Math.round(teamOvr),
       off: Math.round(teamOff),
@@ -40,19 +44,21 @@ export default function CoachGameplan() {
     };
   };
 
-  // ---- Smarter Python-mirrored rotation logic ----
   const buildSmartRotation = (teamPlayers) => {
     const positionOrder = ["PG", "SG", "SF", "PF", "C"];
-    const sortedByOvr = [...teamPlayers].sort((a, b) => b.overall - a.overall);
+    const validPlayers = (teamPlayers || []).filter(
+      (p) => p && typeof p.overall === "number" && p.name
+    );
+    if (validPlayers.length === 0) return { sorted: [], obj: {} };
+
+    const sortedByOvr = [...validPlayers].sort((a, b) => b.overall - a.overall);
     const starters = [];
     const used = new Set();
 
-    // fill each position using primary+secondary match
+    // Fill each role using primary or secondary match
     for (const pos of positionOrder) {
       const eligible = sortedByOvr.filter(
-        (p) =>
-          !used.has(p.name) &&
-          (p.pos === pos || p.secondaryPos === pos)
+        (p) => !used.has(p.name) && (p.pos === pos || p.secondaryPos === pos)
       );
       if (eligible.length > 0) {
         starters.push(eligible[0]);
@@ -60,12 +66,15 @@ export default function CoachGameplan() {
       }
     }
 
-    // fill remaining positions with best remaining players
+    // Fill bench and remaining spots
     for (const p of sortedByOvr) {
-      if (!used.has(p.name)) starters.push(p), used.add(p.name);
+      if (!used.has(p.name)) {
+        starters.push(p);
+        used.add(p.name);
+      }
     }
 
-    // --- Minute tiers identical to python ---
+    // Minute tiers
     const starterMinutes = [36, 34, 34, 34, 32];
     const benchMinutes = [25, 20, 18, 15, 12];
     const deepBenchMinutes = [6, 4, 2, 1, 0];
@@ -80,14 +89,14 @@ export default function CoachGameplan() {
       else obj[p.name] = 0;
     });
 
-    // normalize strictly to 240
+    // Normalize to 240 minutes
     const total = Object.values(obj).reduce((a, b) => a + b, 0);
     const ratio = 240 / total;
     Object.keys(obj).forEach((k) => (obj[k] = Math.round(obj[k] * ratio)));
     let adj = 240 - Object.values(obj).reduce((a, b) => a + b, 0);
     const keys = Object.keys(obj);
     let i = 0;
-    while (adj !== 0) {
+    while (adj !== 0 && keys.length > 0) {
       obj[keys[i]] += adj > 0 ? 1 : -1;
       adj = 240 - Object.values(obj).reduce((a, b) => a + b, 0);
       i = (i + 1) % keys.length;
@@ -96,7 +105,7 @@ export default function CoachGameplan() {
     return { sorted: starters, obj };
   };
 
-  // ---- Hooks ----
+  // --- Hooks ---
   useEffect(() => {
     if (!selectedTeam) return;
     const key = `gameplan_${selectedTeam.name}`;
@@ -163,7 +172,7 @@ export default function CoachGameplan() {
     }
   };
 
-  // ---- UI ----
+  // --- Fallback when no team selected ---
   if (!selectedTeam)
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
@@ -177,7 +186,18 @@ export default function CoachGameplan() {
       </div>
     );
 
-  const player = selectedPlayer || players[0];
+  // --- Defensive fallback for player object ---
+  const player =
+    selectedPlayer ||
+    (players && players[0]) || {
+      name: "Loading...",
+      pos: "",
+      secondaryPos: "",
+      age: "",
+      overall: 0,
+      headshot: "",
+    };
+
   const total = Object.values(minutes).reduce((a, b) => a + b, 0);
   const remaining = Math.max(0, 240 - total);
   const fillPercent = Math.min(player.overall / 99, 1);
@@ -203,12 +223,17 @@ export default function CoachGameplan() {
           <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
           <div className="flex items-end justify-between">
             <div className="flex items-end gap-6">
-              <img src={player.headshot} alt={player.name} className="h-[175px] w-auto object-contain -mb-[9px]" />
+              <img
+                src={player.headshot}
+                alt={player.name}
+                className="h-[175px] w-auto object-contain -mb-[9px]"
+              />
               <div className="flex flex-col justify-end mb-3">
                 <h2 className="text-[44px] font-bold leading-tight">{player.name}</h2>
                 <p className="text-gray-400 text-[24px] mt-1">
                   {player.pos}
-                  {player.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age {player.age}
+                  {player.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age{" "}
+                  {player.age}
                 </p>
               </div>
             </div>
@@ -257,9 +282,15 @@ export default function CoachGameplan() {
             </span>
             <div className="flex gap-6">
               <span className="text-white">Team Overall:</span>
-              <span>OVR <span className="text-orange-400">{teamRatings.overall}</span></span>
-              <span>OFF <span className="text-orange-400">{teamRatings.off}</span></span>
-              <span>DEF <span className="text-orange-400">{teamRatings.def}</span></span>
+              <span>
+                OVR <span className="text-orange-400">{teamRatings.overall}</span>
+              </span>
+              <span>
+                OFF <span className="text-orange-400">{teamRatings.off}</span>
+              </span>
+              <span>
+                DEF <span className="text-orange-400">{teamRatings.def}</span>
+              </span>
             </div>
           </div>
 
