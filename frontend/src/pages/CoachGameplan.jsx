@@ -19,99 +19,154 @@ export default function CoachGameplan() {
     return Math.max(0.7, 1 - 0.0075 * over);
   };
 
-// Replace ONLY this function in CoachGameplan.jsx
-const calculateTeamRatings = (players, minutes) => {
-  const totalMins = Object.values(minutes).reduce((a, b) => a + b, 0);
-  if (totalMins === 0) return { overall: 0, off: 0, def: 0 };
+  // Ratings shown in the header — matches Python math (m/240 + coverage penalty)
+  const calculateTeamRatings = (players, minutes) => {
+    const posTot = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
+    let off = 0, def = 0, ovr = 0;
 
-  let off = 0, def = 0, ovr = 0;
-  const posTot = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
+    for (const p of players) {
+      if (!p || !p.name) continue;
+      const m = minutes[p.name] || 0;
+      if (m <= 0) continue;
 
-  for (const p of players) {
-    if (!p || !p.name) continue;
-    const m = minutes[p.name] || 0;
-    if (m <= 0) continue;
+      const w = m / 240;
+      const pen = fatiguePenalty(m, p.stamina || 70);
 
-    // Use per-game baseline (m/240) like the Python + your optimizer's teamTotal()
-    const w = m / 240;
-    const pen = fatiguePenalty(m, p.stamina || 70);
+      off += w * ((p.offRating || 0) * pen);
+      def += w * ((p.defRating || 0) * pen);
+      ovr += w * ((p.overall  || 0) * pen);
 
-    off += w * ((p.offRating || 0) * pen);
-    def += w * ((p.defRating || 0) * pen);
-    ovr += w * ((p.overall  || 0) * pen);
+      if (p.pos) posTot[p.pos] += m;
+      if (p.secondaryPos) posTot[p.secondaryPos] += m * 0.2;
+    }
 
-    // Position coverage: full credit for primary, 20% for secondary
-    if (p.pos && posTot[p.pos] !== undefined) posTot[p.pos] += m;
-    if (p.secondaryPos && posTot[p.secondaryPos] !== undefined) posTot[p.secondaryPos] += m * 0.2;
-  }
+    const missing =
+      Math.max(0, 48 - posTot.PG) +
+      Math.max(0, 48 - posTot.SG) +
+      Math.max(0, 48 - posTot.SF) +
+      Math.max(0, 48 - posTot.PF) +
+      Math.max(0, 48 - posTot.C);
 
-  // Missing minutes across the five positions (each needs ~48)
-  const missing =
-    Math.max(0, 48 - posTot.PG) +
-    Math.max(0, 48 - posTot.SG) +
-    Math.max(0, 48 - posTot.SF) +
-    Math.max(0, 48 - posTot.PF) +
-    Math.max(0, 48 - posTot.C);
+    const coveragePenalty = 1 - 0.02 * (missing / 240);
 
-  // Same coverage penalty your Python uses
-  const coveragePenalty = 1 - 0.02 * (missing / 240);
-
-  return {
-    overall: Math.round(ovr * coveragePenalty),
-    off:     Math.round(off * coveragePenalty),
-    def:     Math.round(def * coveragePenalty),
+    return {
+      overall: Math.round(ovr * coveragePenalty),
+      off:     Math.round(off * coveragePenalty),
+      def:     Math.round(def * coveragePenalty),
+    };
   };
-};
 
-
-  // === AUTO-SORT (iterative optimizer) ===
+  // === AUTO-SORT – exact parity with your Python "coach gameplan.py" ===
   const buildSmartRotation = (teamPlayers) => {
-    const POS = ["PG", "SG", "SF", "PF", "C"];
+    const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
     const valid = (teamPlayers || []).filter(
       (p) => p && p.name && Number.isFinite(p.overall)
     );
     if (valid.length === 0) return { sorted: [], obj: {} };
 
-    // Helpers
     const score = (p) => (p.overall || 0) + ((p.stamina || 70) - 70) * 0.15;
 
-    const teamTotal = (arr, mins) => {
-      let off = 0,
-        deff = 0,
-        ovr = 0;
-      const posTot = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
+    // 1) Ensure 1 for each position, then fill to 10 by score (Python order)
+    const chosen = [];
+    for (const pos of POSITIONS) {
+      const posPlayers = valid
+        .filter((p) => p.pos === pos || p.secondaryPos === pos)
+        .sort((a, b) => score(b) - score(a));
+      if (posPlayers.length) {
+        const best = posPlayers[0];
+        if (!chosen.find((c) => c.name === best.name)) chosen.push(best);
+      }
+    }
+    for (const p of [...valid].sort((a, b) => score(b) - score(a))) {
+      if (chosen.length >= Math.min(10, valid.length)) break;
+      if (!chosen.find((c) => c.name === p.name)) chosen.push(p);
+    }
 
+    // Work array that carries minutes like the Python objects
+    const work = chosen.map((p) => ({ ...p, minutes: 0 }));
+
+    // 2) Base minutes: 12 each then round-robin distribute the rest
+    for (const w of work) w.minutes = 12;
+    let remain = 240 - 12 * work.length;
+    let i = 0;
+    while (remain > 0 && work.length > 0) {
+      work[i % work.length].minutes += 1;
+      i++;
+      remain--;
+    }
+
+    // team_total clone
+    const teamTotal = (arr) => {
+      let off = 0, deff = 0, ovr = 0;
+      const posTot = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
       for (const p of arr) {
-        const m = mins[p.name] || 0;
+        const m = p.minutes || 0;
         if (m <= 0) continue;
-        const w = m / 240;
         const pen = fatiguePenalty(m, p.stamina || 70);
+        const w = m / 240;
         off += w * ((p.offRating || 0) * pen);
         deff += w * ((p.defRating || 0) * pen);
         ovr += w * ((p.overall || 0) * pen);
-
-        posTot[p.pos] = (posTot[p.pos] || 0) + m;
-        if (p.secondaryPos) posTot[p.secondaryPos] = (posTot[p.secondaryPos] || 0) + m * 0.2;
+        if (p.pos) posTot[p.pos] += m;
+        if (p.secondaryPos) posTot[p.secondaryPos] += m * 0.2;
       }
-
       const missing =
         Math.max(0, 48 - (posTot.PG || 0)) +
         Math.max(0, 48 - (posTot.SG || 0)) +
         Math.max(0, 48 - (posTot.SF || 0)) +
         Math.max(0, 48 - (posTot.PF || 0)) +
-        Math.max(0, 48 - (posTot.C || 0));
-
+        Math.max(0, 48 - (posTot.C  || 0));
       const coveragePenalty = 1 - 0.02 * (missing / 240);
       return { off: off * coveragePenalty, deff: deff * coveragePenalty, ovr: ovr * coveragePenalty };
     };
 
+    // 3) Hill-climb (bench capped at 24, core = first 5 of 'chosen')
+    const coreSet = new Set(work.slice(0, 5).map((p) => p.name));
+    let improved = true;
+    while (improved) {
+      improved = false;
+      let base = teamTotal(work).ovr;
+
+      for (let a = 0; a < work.length; a++) {
+        for (let b = 0; b < work.length; b++) {
+          if (a === b) continue;
+          const A = work[a], B = work[b];
+          if ((A.minutes || 0) <= 12) continue;
+          if ((B.minutes || 0) >= 24 && !coreSet.has(B.name)) continue;
+
+          A.minutes -= 1;
+          B.minutes += 1;
+
+          const test = teamTotal(work).ovr;
+          if (test > base) {
+            base = test;
+            improved = true;
+          } else {
+            A.minutes += 1;
+            B.minutes -= 1;
+          }
+        }
+      }
+    }
+
+    // 4) Best 5-man position map (exact)
+    const permute = (arr) => {
+      const out = [];
+      const rec = (path, rest) => {
+        if (rest.length === 0) { out.push(path.slice()); return; }
+        for (let i = 0; i < rest.length; i++) {
+          path.push(rest[i]);
+          rec(path, [...rest.slice(0, i), ...rest.slice(i + 1)]);
+          path.pop();
+        }
+      };
+      rec([], arr.slice());
+      return out;
+    };
     const combos = (arr, k) => {
       const res = [];
       const go = (start, path) => {
-        if (path.length === k) {
-          res.push(path.slice());
-          return;
-        }
+        if (path.length === k) { res.push(path.slice()); return; }
         for (let i = start; i < arr.length; i++) {
           path.push(arr[i]);
           go(i + 1, path);
@@ -122,134 +177,42 @@ const calculateTeamRatings = (players, minutes) => {
       return res;
     };
 
-    const permute = (arr) => {
-      const out = [];
-      const rec = (path, rest) => {
-        if (rest.length === 0) {
-          out.push(path.slice());
-          return;
-        }
-        for (let i = 0; i < rest.length; i++) {
-          path.push(rest[i]);
-          rec(path, [...rest.slice(0, i), ...rest.slice(i + 1)]);
-          path.pop();
-        }
-      };
-      rec([], arr.slice());
-      return out;
-    };
-
-    // 1) Choose up to 10
-    const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
-    const used = new Set();
-    const chosen = [];
-
-    for (const pos of POSITIONS) {
-      const eligible = valid
-        .filter((p) => !used.has(p.name) && (p.pos === pos || p.secondaryPos === pos))
-        .sort((a, b) => score(b) - score(a));
-      if (eligible.length) {
-        chosen.push(eligible[0]);
-        used.add(eligible[0].name);
-      }
-    }
-
-    for (const p of [...valid].sort((a, b) => score(b) - score(a))) {
-      if (chosen.length >= Math.min(10, valid.length)) break;
-      if (!used.has(p.name)) {
-        chosen.push(p);
-        used.add(p.name);
-      }
-    }
-
-    // 2) Base minutes
-    const mins = {};
-    for (const p of chosen) mins[p.name] = 12;
-    let remain = 240 - 12 * chosen.length;
-    let idx = 0;
-    while (remain > 0 && chosen.length > 0) {
-      mins[chosen[idx % chosen.length].name] += 1;
-      idx++;
-      remain--;
-    }
-
-    // 3) Hill-climb minutes
-    const coreSet = new Set(chosen.slice(0, 5).map((p) => p.name));
-    let improved = true;
-    while (improved) {
-      improved = false;
-      let base = teamTotal(chosen, mins).ovr;
-
-      for (let i = 0; i < chosen.length; i++) {
-        for (let j = 0; j < chosen.length; j++) {
-          if (i === j) continue;
-          const a = chosen[i];
-          const b = chosen[j];
-
-          if ((mins[a.name] || 0) <= 12) continue;
-          if ((mins[b.name] || 0) >= 24 && !coreSet.has(b.name)) continue;
-
-          mins[a.name] -= 1;
-          mins[b.name] += 1;
-
-          const test = teamTotal(chosen, mins).ovr;
-          if (test > base) {
-            base = test;
-            improved = true;
-          } else {
-            mins[a.name] += 1;
-            mins[b.name] -= 1;
-          }
-        }
-      }
-    }
-
-    // 4) Best 5-man position map
     const posPerms = permute(POSITIONS);
-    let bestMap = null;
-    let bestScore = -Infinity;
+    let bestMap = null, bestScore = -Infinity;
 
-    for (const five of combos(chosen, Math.min(5, chosen.length))) {
+    for (const five of combos(work, Math.min(5, work.length))) {
       for (const perm of posPerms) {
-        let validMap = true;
+        let ok = true;
         const mapping = {};
         for (let k = 0; k < five.length; k++) {
-          const pl = five[k];
-          const pos = perm[k];
-          if (!(pl.pos === pos || pl.secondaryPos === pos)) {
-            validMap = false;
-            break;
-          }
+          const pl = five[k], pos = perm[k];
+          if (!(pl.pos === pos || pl.secondaryPos === pos)) { ok = false; break; }
           mapping[pos] = pl;
         }
-        if (!validMap) continue;
-
-        const { ovr } = teamTotal(five, mins);
-        if (ovr > bestScore) {
-          bestScore = ovr;
-          bestMap = mapping;
-        }
+        if (!ok) continue;
+        const { ovr } = teamTotal(five);
+        if (ovr > bestScore) { bestScore = ovr; bestMap = mapping; }
       }
     }
 
     if (!bestMap) {
-      const top5 = [...chosen].sort((a, b) => b.overall - a.overall).slice(0, 5);
+      const top5 = [...work].sort((a, b) => (b.overall || 0) - (a.overall || 0)).slice(0, 5);
       bestMap = {};
-      for (let i = 0; i < POSITIONS.length; i++) {
-        if (top5[i]) bestMap[POSITIONS[i]] = top5[i];
-      }
+      const POS = ["PG", "SG", "SF", "PF", "C"];
+      for (let i = 0; i < POS.length; i++) if (top5[i]) bestMap[POS[i]] = top5[i];
     }
 
-    const starters = POSITIONS.map((p) => bestMap[p]).filter(Boolean);
+    const starters = ["PG", "SG", "SF", "PF", "C"].map((p) => bestMap[p]).filter(Boolean);
     const starterIds = new Set(starters.map((p) => p.name));
-    const bench = chosen
+    const bench = work
       .filter((p) => !starterIds.has(p.name))
-      .sort((a, b) => (mins[b.name] || 0) - (mins[a.name] || 0));
-    const others = valid.filter((p) => !used.has(p.name));
+      .sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
+    const usedNames = new Set(work.map((w) => w.name));
+    const others = valid.filter((p) => !usedNames.has(p.name));
     const sorted = [...starters, ...bench, ...others];
 
     const obj = {};
-    for (const p of sorted) obj[p.name] = mins[p.name] || 0;
+    for (const p of sorted) obj[p.name] = p.minutes || 0;
     for (const p of valid) if (!(p.name in obj)) obj[p.name] = 0;
 
     return { sorted, obj };
@@ -360,7 +323,7 @@ const calculateTeamRatings = (players, minutes) => {
       const p1 = swapSelection,
         p2 = player;
 
-      // swap players only (minutes stay tied to names = follow the player)
+      // swap players visually; minutes remain on the player
       let newPlayers = [];
       setPlayers((prev) => {
         const arr = [...prev];
@@ -555,7 +518,7 @@ const calculateTeamRatings = (players, minutes) => {
                       <div className="flex items-center gap-3 justify-center">
                         <input
                           type="range"
-                          min={i < 5 ? 1 : 0}   // starters must be >= 1
+                          min={i < 5 ? 1 : 0}
                           max="48"
                           step="1"
                           value={minutes[p.name] ?? 0}
