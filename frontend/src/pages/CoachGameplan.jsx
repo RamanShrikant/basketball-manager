@@ -19,30 +19,50 @@ export default function CoachGameplan() {
     return Math.max(0.7, 1 - 0.0075 * over);
   };
 
-  const calculateTeamRatings = (players, minutes) => {
-    const totalMins = Object.values(minutes).reduce((a, b) => a + b, 0);
-    if (totalMins === 0) return { overall: 0, off: 0, def: 0 };
+// Replace ONLY this function in CoachGameplan.jsx
+const calculateTeamRatings = (players, minutes) => {
+  const totalMins = Object.values(minutes).reduce((a, b) => a + b, 0);
+  if (totalMins === 0) return { overall: 0, off: 0, def: 0 };
 
-    let teamOff = 0,
-      teamDef = 0,
-      teamOvr = 0;
+  let off = 0, def = 0, ovr = 0;
+  const posTot = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
 
-    for (const p of players) {
-      if (!p || !p.name) continue;
-      const min = minutes[p.name] || 0;
-      const weight = min / totalMins;
-      const pen = fatiguePenalty(min, p.stamina || 70);
-      teamOff += weight * ((p.offRating || 0) * pen);
-      teamDef += weight * ((p.defRating || 0) * pen);
-      teamOvr += weight * ((p.overall || 0) * pen);
-    }
+  for (const p of players) {
+    if (!p || !p.name) continue;
+    const m = minutes[p.name] || 0;
+    if (m <= 0) continue;
 
-    return {
-      overall: Math.round(teamOvr),
-      off: Math.round(teamOff),
-      def: Math.round(teamDef),
-    };
+    // Use per-game baseline (m/240) like the Python + your optimizer's teamTotal()
+    const w = m / 240;
+    const pen = fatiguePenalty(m, p.stamina || 70);
+
+    off += w * ((p.offRating || 0) * pen);
+    def += w * ((p.defRating || 0) * pen);
+    ovr += w * ((p.overall  || 0) * pen);
+
+    // Position coverage: full credit for primary, 20% for secondary
+    if (p.pos && posTot[p.pos] !== undefined) posTot[p.pos] += m;
+    if (p.secondaryPos && posTot[p.secondaryPos] !== undefined) posTot[p.secondaryPos] += m * 0.2;
+  }
+
+  // Missing minutes across the five positions (each needs ~48)
+  const missing =
+    Math.max(0, 48 - posTot.PG) +
+    Math.max(0, 48 - posTot.SG) +
+    Math.max(0, 48 - posTot.SF) +
+    Math.max(0, 48 - posTot.PF) +
+    Math.max(0, 48 - posTot.C);
+
+  // Same coverage penalty your Python uses
+  const coveragePenalty = 1 - 0.02 * (missing / 240);
+
+  return {
+    overall: Math.round(ovr * coveragePenalty),
+    off:     Math.round(off * coveragePenalty),
+    def:     Math.round(def * coveragePenalty),
   };
+};
+
 
   // === AUTO-SORT (iterative optimizer) ===
   const buildSmartRotation = (teamPlayers) => {
