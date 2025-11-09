@@ -9,6 +9,8 @@ import Play from "./pages/Play.jsx"; // ✅ new
 import TeamSelector from "./components/TeamSelector.jsx"; // ✅ will add next
 import TeamHub from "./pages/TeamHub.jsx";
 import RosterView from "./pages/RosterView.jsx";
+import CoachGameplan from "./pages/CoachGameplan.jsx";
+
 
 
 function App() {
@@ -30,6 +32,7 @@ function App() {
         <Route path="/team-selector" element={<TeamSelector />} />
         <Route path="/team-hub" element={<TeamHub />} />
         <Route path="/roster-view" element={<RosterView />} />
+        <Route path="/coach-gameplan" element={<CoachGameplan />} />
       </Routes>
     </BrowserRouter>
   );
