@@ -44,65 +44,207 @@ export default function CoachGameplan() {
     };
   };
 
+  // === AUTO-SORT (mirrors Python iterative optimizer) ===
   const buildSmartRotation = (teamPlayers) => {
-    const positionOrder = ["PG", "SG", "SF", "PF", "C"];
-    const validPlayers = (teamPlayers || []).filter(
-      (p) => p && typeof p.overall === "number" && p.name
+    const POS = ["PG", "SG", "SF", "PF", "C"];
+    const valid = (teamPlayers || []).filter(
+      (p) => p && p.name && Number.isFinite(p.overall)
     );
-    if (validPlayers.length === 0) return { sorted: [], obj: {} };
+    if (valid.length === 0) return { sorted: [], obj: {} };
 
-    const sortedByOvr = [...validPlayers].sort((a, b) => b.overall - a.overall);
-    const starters = [];
+    // Helpers
+    const score = (p) => (p.overall || 0) + ((p.stamina || 70) - 70) * 0.15;
+
+    const teamTotal = (arr, mins) => {
+      // minutes-weighted OFF/DEF/OVR with fatigue & coverage penalty
+      let off = 0,
+        deff = 0,
+        ovr = 0;
+      const posTot = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
+
+      for (const p of arr) {
+        const m = mins[p.name] || 0;
+        if (m <= 0) continue;
+        const w = m / 240;
+        const pen = fatiguePenalty(m, p.stamina || 70);
+        off += w * ((p.offRating || 0) * pen);
+        deff += w * ((p.defRating || 0) * pen);
+        ovr += w * ((p.overall || 0) * pen);
+
+        posTot[p.pos] = (posTot[p.pos] || 0) + m;
+        if (p.secondaryPos) posTot[p.secondaryPos] = (posTot[p.secondaryPos] || 0) + m * 0.2;
+      }
+
+      const missing =
+        Math.max(0, 48 - (posTot.PG || 0)) +
+        Math.max(0, 48 - (posTot.SG || 0)) +
+        Math.max(0, 48 - (posTot.SF || 0)) +
+        Math.max(0, 48 - (posTot.PF || 0)) +
+        Math.max(0, 48 - (posTot.C || 0));
+
+      // mild penalty if any position is under-covered
+      const coveragePenalty = 1 - 0.02 * (missing / 240);
+      return { off: off * coveragePenalty, deff: deff * coveragePenalty, ovr: ovr * coveragePenalty };
+    };
+
+    // combos of k
+    const combos = (arr, k) => {
+      const res = [];
+      const go = (start, path) => {
+        if (path.length === k) {
+          res.push(path.slice());
+          return;
+        }
+        for (let i = start; i < arr.length; i++) {
+          path.push(arr[i]);
+          go(i + 1, path);
+          path.pop();
+        }
+      };
+      go(0, []);
+      return res;
+    };
+
+    // all permutations of fixed 5 positions (5! = 120)
+    const permute = (arr) => {
+      const out = [];
+      const rec = (path, rest) => {
+        if (rest.length === 0) {
+          out.push(path.slice());
+          return;
+        }
+        for (let i = 0; i < rest.length; i++) {
+          path.push(rest[i]);
+          rec(path, [...rest.slice(0, i), ...rest.slice(i + 1)]);
+          path.pop();
+        }
+      };
+      rec([], arr.slice());
+      return out;
+    };
+
+    // ---------- 1) Choose pool of up to 10 ----------
     const used = new Set();
+    const chosen = [];
 
-    // Fill each role using primary or secondary match
-    for (const pos of positionOrder) {
-      const eligible = sortedByOvr.filter(
-        (p) => !used.has(p.name) && (p.pos === pos || p.secondaryPos === pos)
-      );
-      if (eligible.length > 0) {
-        starters.push(eligible[0]);
+    // ensure at least one for each position if possible
+    for (const pos of POS) {
+      const eligible = valid
+        .filter((p) => !used.has(p.name) && (p.pos === pos || p.secondaryPos === pos))
+        .sort((a, b) => score(b) - score(a));
+      if (eligible.length) {
+        chosen.push(eligible[0]);
         used.add(eligible[0].name);
       }
     }
 
-    // Fill bench and remaining spots
-    for (const p of sortedByOvr) {
+    // fill remaining slots by best score
+    for (const p of [...valid].sort((a, b) => score(b) - score(a))) {
+      if (chosen.length >= Math.min(10, valid.length)) break;
       if (!used.has(p.name)) {
-        starters.push(p);
+        chosen.push(p);
         used.add(p.name);
       }
     }
 
-    // Minute tiers
-    const starterMinutes = [36, 34, 34, 34, 32];
-    const benchMinutes = [25, 20, 18, 15, 12];
-    const deepBenchMinutes = [6, 4, 2, 1, 0];
-
-    const obj = {};
-    starters.forEach((p, i) => {
-      if (i < starterMinutes.length) obj[p.name] = starterMinutes[i];
-      else if (i < starterMinutes.length + benchMinutes.length)
-        obj[p.name] = benchMinutes[i - starterMinutes.length];
-      else if (i < starterMinutes.length + benchMinutes.length + deepBenchMinutes.length)
-        obj[p.name] = deepBenchMinutes[i - starterMinutes.length - benchMinutes.length];
-      else obj[p.name] = 0;
-    });
-
-    // Normalize to 240 minutes
-    const total = Object.values(obj).reduce((a, b) => a + b, 0);
-    const ratio = 240 / total;
-    Object.keys(obj).forEach((k) => (obj[k] = Math.round(obj[k] * ratio)));
-    let adj = 240 - Object.values(obj).reduce((a, b) => a + b, 0);
-    const keys = Object.keys(obj);
-    let i = 0;
-    while (adj !== 0 && keys.length > 0) {
-      obj[keys[i]] += adj > 0 ? 1 : -1;
-      adj = 240 - Object.values(obj).reduce((a, b) => a + b, 0);
-      i = (i + 1) % keys.length;
+    // ---------- 2) Base minute distribution ----------
+    const mins = {};
+    for (const p of chosen) mins[p.name] = 12; // baseline
+    // distribute the remainder round-robin
+    let remain = 240 - 12 * chosen.length;
+    let idx = 0;
+    while (remain > 0 && chosen.length > 0) {
+      mins[chosen[idx % chosen.length].name] += 1;
+      idx++;
+      remain--;
     }
 
-    return { sorted: starters, obj };
+    // ---------- 3) Iterative minute optimization (hill climb) ----------
+    const coreSet = new Set(chosen.slice(0, 5).map((p) => p.name)); // the initial 5 picked for coverage
+    let improved = true;
+    while (improved) {
+      improved = false;
+      let base = teamTotal(chosen, mins).ovr;
+
+      for (let i = 0; i < chosen.length; i++) {
+        for (let j = 0; j < chosen.length; j++) {
+          if (i === j) continue;
+          const a = chosen[i];
+          const b = chosen[j];
+
+          if ((mins[a.name] || 0) <= 12) continue; // don't drop below baseline
+          if ((mins[b.name] || 0) >= 24 && !coreSet.has(b.name)) continue; // keep bench from ballooning
+
+          mins[a.name] -= 1;
+          mins[b.name] += 1;
+
+          const test = teamTotal(chosen, mins).ovr;
+          if (test > base) {
+            base = test;
+            improved = true;
+          } else {
+            // revert if no improvement
+            mins[a.name] += 1;
+            mins[b.name] -= 1;
+          }
+        }
+      }
+    }
+
+    // ---------- 4) Pick best 5-man lineup & position mapping ----------
+    const posPerms = permute(POS);
+    let bestMap = null;
+    let bestScore = -Infinity;
+
+    for (const five of combos(chosen, Math.min(5, chosen.length))) {
+      for (const perm of posPerms) {
+        // require each mapped player to be eligible for that position (primary or secondary)
+        let validMap = true;
+        const mapping = {};
+        for (let k = 0; k < five.length; k++) {
+          const pl = five[k];
+          const pos = perm[k];
+          if (!(pl.pos === pos || pl.secondaryPos === pos)) {
+            validMap = false;
+            break;
+          }
+          mapping[pos] = pl;
+        }
+        if (!validMap) continue;
+
+        const { ovr } = teamTotal(five, mins);
+        if (ovr > bestScore) {
+          bestScore = ovr;
+          bestMap = mapping;
+        }
+      }
+    }
+
+    // fallback: simple top-5 if nothing mapped
+    if (!bestMap) {
+      const top5 = [...chosen].sort((a, b) => b.overall - a.overall).slice(0, 5);
+      bestMap = {};
+      for (let i = 0; i < POS.length; i++) {
+        if (top5[i]) bestMap[POS[i]] = top5[i];
+      }
+    }
+
+    // starters in PG->C order
+    const starters = POS.map((p) => bestMap[p]).filter(Boolean);
+    const starterIds = new Set(starters.map((p) => p.name));
+    // bench = remaining chosen, sort by minutes desc
+    const bench = chosen.filter((p) => !starterIds.has(p.name)).sort((a, b) => (mins[b.name] || 0) - (mins[a.name] || 0));
+    // others not in the 10-man pool
+    const others = valid.filter((p) => !used.has(p.name));
+    // final order
+    const sorted = [...starters, ...bench, ...others];
+
+    // minutes object for whole roster (0 for non-chosen)
+    const obj = {};
+    for (const p of sorted) obj[p.name] = mins[p.name] || 0;
+    for (const p of valid) if (!(p.name in obj)) obj[p.name] = 0;
+
+    return { sorted, obj };
   };
 
   // --- Hooks ---
