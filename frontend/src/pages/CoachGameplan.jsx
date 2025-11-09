@@ -44,7 +44,7 @@ export default function CoachGameplan() {
     };
   };
 
-  // === AUTO-SORT (mirrors Python iterative optimizer) ===
+  // === AUTO-SORT (iterative optimizer) ===
   const buildSmartRotation = (teamPlayers) => {
     const POS = ["PG", "SG", "SF", "PF", "C"];
     const valid = (teamPlayers || []).filter(
@@ -56,7 +56,6 @@ export default function CoachGameplan() {
     const score = (p) => (p.overall || 0) + ((p.stamina || 70) - 70) * 0.15;
 
     const teamTotal = (arr, mins) => {
-      // minutes-weighted OFF/DEF/OVR with fatigue & coverage penalty
       let off = 0,
         deff = 0,
         ovr = 0;
@@ -82,12 +81,10 @@ export default function CoachGameplan() {
         Math.max(0, 48 - (posTot.PF || 0)) +
         Math.max(0, 48 - (posTot.C || 0));
 
-      // mild penalty if any position is under-covered
       const coveragePenalty = 1 - 0.02 * (missing / 240);
       return { off: off * coveragePenalty, deff: deff * coveragePenalty, ovr: ovr * coveragePenalty };
     };
 
-    // combos of k
     const combos = (arr, k) => {
       const res = [];
       const go = (start, path) => {
@@ -105,7 +102,6 @@ export default function CoachGameplan() {
       return res;
     };
 
-    // all permutations of fixed 5 positions (5! = 120)
     const permute = (arr) => {
       const out = [];
       const rec = (path, rest) => {
@@ -123,12 +119,12 @@ export default function CoachGameplan() {
       return out;
     };
 
-    // ---------- 1) Choose pool of up to 10 ----------
+    // 1) Choose up to 10
+    const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
     const used = new Set();
     const chosen = [];
 
-    // ensure at least one for each position if possible
-    for (const pos of POS) {
+    for (const pos of POSITIONS) {
       const eligible = valid
         .filter((p) => !used.has(p.name) && (p.pos === pos || p.secondaryPos === pos))
         .sort((a, b) => score(b) - score(a));
@@ -138,7 +134,6 @@ export default function CoachGameplan() {
       }
     }
 
-    // fill remaining slots by best score
     for (const p of [...valid].sort((a, b) => score(b) - score(a))) {
       if (chosen.length >= Math.min(10, valid.length)) break;
       if (!used.has(p.name)) {
@@ -147,10 +142,9 @@ export default function CoachGameplan() {
       }
     }
 
-    // ---------- 2) Base minute distribution ----------
+    // 2) Base minutes
     const mins = {};
-    for (const p of chosen) mins[p.name] = 12; // baseline
-    // distribute the remainder round-robin
+    for (const p of chosen) mins[p.name] = 12;
     let remain = 240 - 12 * chosen.length;
     let idx = 0;
     while (remain > 0 && chosen.length > 0) {
@@ -159,8 +153,8 @@ export default function CoachGameplan() {
       remain--;
     }
 
-    // ---------- 3) Iterative minute optimization (hill climb) ----------
-    const coreSet = new Set(chosen.slice(0, 5).map((p) => p.name)); // the initial 5 picked for coverage
+    // 3) Hill-climb minutes
+    const coreSet = new Set(chosen.slice(0, 5).map((p) => p.name));
     let improved = true;
     while (improved) {
       improved = false;
@@ -172,8 +166,8 @@ export default function CoachGameplan() {
           const a = chosen[i];
           const b = chosen[j];
 
-          if ((mins[a.name] || 0) <= 12) continue; // don't drop below baseline
-          if ((mins[b.name] || 0) >= 24 && !coreSet.has(b.name)) continue; // keep bench from ballooning
+          if ((mins[a.name] || 0) <= 12) continue;
+          if ((mins[b.name] || 0) >= 24 && !coreSet.has(b.name)) continue;
 
           mins[a.name] -= 1;
           mins[b.name] += 1;
@@ -183,7 +177,6 @@ export default function CoachGameplan() {
             base = test;
             improved = true;
           } else {
-            // revert if no improvement
             mins[a.name] += 1;
             mins[b.name] -= 1;
           }
@@ -191,14 +184,13 @@ export default function CoachGameplan() {
       }
     }
 
-    // ---------- 4) Pick best 5-man lineup & position mapping ----------
-    const posPerms = permute(POS);
+    // 4) Best 5-man position map
+    const posPerms = permute(POSITIONS);
     let bestMap = null;
     let bestScore = -Infinity;
 
     for (const five of combos(chosen, Math.min(5, chosen.length))) {
       for (const perm of posPerms) {
-        // require each mapped player to be eligible for that position (primary or secondary)
         let validMap = true;
         const mapping = {};
         for (let k = 0; k < five.length; k++) {
@@ -220,31 +212,71 @@ export default function CoachGameplan() {
       }
     }
 
-    // fallback: simple top-5 if nothing mapped
     if (!bestMap) {
       const top5 = [...chosen].sort((a, b) => b.overall - a.overall).slice(0, 5);
       bestMap = {};
-      for (let i = 0; i < POS.length; i++) {
-        if (top5[i]) bestMap[POS[i]] = top5[i];
+      for (let i = 0; i < POSITIONS.length; i++) {
+        if (top5[i]) bestMap[POSITIONS[i]] = top5[i];
       }
     }
 
-    // starters in PG->C order
-    const starters = POS.map((p) => bestMap[p]).filter(Boolean);
+    const starters = POSITIONS.map((p) => bestMap[p]).filter(Boolean);
     const starterIds = new Set(starters.map((p) => p.name));
-    // bench = remaining chosen, sort by minutes desc
-    const bench = chosen.filter((p) => !starterIds.has(p.name)).sort((a, b) => (mins[b.name] || 0) - (mins[a.name] || 0));
-    // others not in the 10-man pool
+    const bench = chosen
+      .filter((p) => !starterIds.has(p.name))
+      .sort((a, b) => (mins[b.name] || 0) - (mins[a.name] || 0));
     const others = valid.filter((p) => !used.has(p.name));
-    // final order
     const sorted = [...starters, ...bench, ...others];
 
-    // minutes object for whole roster (0 for non-chosen)
     const obj = {};
     for (const p of sorted) obj[p.name] = mins[p.name] || 0;
     for (const p of valid) if (!(p.name in obj)) obj[p.name] = 0;
 
     return { sorted, obj };
+  };
+
+  // --- Ensure starters have at least 1 minute (used when swapping) ---
+  const enforceStarterMinimums = (arr, minsObj) => {
+    const updated = { ...minsObj };
+    let added = 0;
+
+    for (let i = 0; i < Math.min(5, arr.length); i++) {
+      const nm = arr[i].name;
+      if ((updated[nm] ?? 0) < 1) {
+        updated[nm] = 1;
+        added += 1;
+      }
+    }
+
+    if (added === 0) return updated;
+
+    // shave from bench first
+    const bench = arr.slice(5).sort((a, b) => (updated[b.name] || 0) - (updated[a.name] || 0));
+    let remain = added;
+    for (const p of bench) {
+      if (remain <= 0) break;
+      const take = Math.min(updated[p.name] || 0, remain);
+      if (take > 0) {
+        updated[p.name] -= take;
+        remain -= take;
+      }
+    }
+
+    // if still need, shave from starters with >1
+    if (remain > 0) {
+      const starters = arr.slice(0, 5).sort((a, b) => (updated[b.name] || 0) - (updated[a.name] || 0));
+      for (const p of starters) {
+        if (remain <= 0) break;
+        const extra = Math.max(0, (updated[p.name] || 0) - 1);
+        const take = Math.min(extra, remain);
+        if (take > 0) {
+          updated[p.name] -= take;
+          remain -= take;
+        }
+      }
+    }
+
+    return updated;
   };
 
   // --- Hooks ---
@@ -281,36 +313,51 @@ export default function CoachGameplan() {
     setTeamRatings(calculateTeamRatings(sorted, obj));
   };
 
+  // ENFORCE: starters min 1 via UI & handler
   const handleMinuteChange = (name, value) => {
-    const num = Math.round(Number(value));
+    const numRaw = Math.round(Number(value));
+    const idx = players.findIndex((p) => p.name === name);
+    const minAllowed = idx > -1 && idx < 5 ? 1 : 0;
+    const num = Math.max(minAllowed, numRaw);
+
     const totalNow = Object.entries(minutes)
       .filter(([k]) => k !== name)
       .reduce((a, [, v]) => a + v, 0);
     if (totalNow + num > 240) return;
+
     const updated = { ...minutes, [name]: num };
     setMinutes(updated);
     setTeamRatings(calculateTeamRatings(players, updated));
   };
 
+  // SWAP: minutes follow the player; then ensure new starters >=1
   const handleSquareClick = (player) => {
-    if (!swapSelection) setSwapSelection(player);
-    else if (swapSelection.name === player.name) setSwapSelection(null);
-    else {
-      const p1 = swapSelection, p2 = player;
+    if (!swapSelection) {
+      setSwapSelection(player);
+    } else if (swapSelection.name === player.name) {
+      setSwapSelection(null);
+    } else {
+      const p1 = swapSelection,
+        p2 = player;
+
+      // swap players only (minutes stay tied to names = follow the player)
+      let newPlayers = [];
       setPlayers((prev) => {
         const arr = [...prev];
         const i1 = arr.findIndex((x) => x.name === p1.name);
         const i2 = arr.findIndex((x) => x.name === p2.name);
         if (i1 !== -1 && i2 !== -1) [arr[i1], arr[i2]] = [arr[i2], arr[i1]];
+        newPlayers = arr;
         return arr;
       });
+
       setMinutes((prev) => {
-        const m = { ...prev };
-        [m[p1.name], m[p2.name]] = [m[p2.name], m[p1.name]];
-        return m;
+        const adjusted = enforceStarterMinimums(newPlayers.length ? newPlayers : players, prev);
+        setTeamRatings(calculateTeamRatings(newPlayers.length ? newPlayers : players, adjusted));
+        return adjusted;
       });
+
       setSwapSelection(null);
-      setTeamRatings(calculateTeamRatings(players, minutes));
     }
   };
 
@@ -488,7 +535,7 @@ export default function CoachGameplan() {
                       <div className="flex items-center gap-3 justify-center">
                         <input
                           type="range"
-                          min="0"
+                          min={i < 5 ? 1 : 0}   // starters must be >= 1
                           max="48"
                           step="1"
                           value={minutes[p.name] ?? 0}
