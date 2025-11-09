@@ -10,6 +10,8 @@ import TeamSelector from "./components/TeamSelector.jsx"; // ✅ will add next
 import TeamHub from "./pages/TeamHub.jsx";
 import RosterView from "./pages/RosterView.jsx";
 import CoachGameplan from "./pages/CoachGameplan.jsx";
+import Calendar from "./pages/Calendar.jsx";
+
 
 
 
@@ -33,6 +35,7 @@ function App() {
         <Route path="/team-hub" element={<TeamHub />} />
         <Route path="/roster-view" element={<RosterView />} />
         <Route path="/coach-gameplan" element={<CoachGameplan />} />
+        <Route path="/calendar" element={<Calendar />} />
       </Routes>
     </BrowserRouter>
   );

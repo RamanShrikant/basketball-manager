@@ -20,13 +20,13 @@ export default function TeamHub() {
     );
   }
 
-const tiles = [
-  { name: "View Roster", path: "/roster-view" },
-  { name: "Trades", path: "#" },
-  { name: "Coach Gameplan", path: "/coach-gameplan" },
-  { name: "Standings", path: "#" },
-];
-
+  const tiles = [
+    { name: "View Roster", path: "/roster-view" },
+    { name: "Trades", path: "#" },
+    { name: "Coach Gameplan", path: "/coach-gameplan" },
+    { name: "Schedule", path: "/calendar" },      // ✅ added
+    { name: "Standings", path: "#" },
+  ];
 
   return (
     <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
