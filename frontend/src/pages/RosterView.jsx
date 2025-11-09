@@ -1,15 +1,30 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 
 export default function RosterView() {
-  const { selectedTeam } = useGame();
+  const { leagueData, selectedTeam, setSelectedTeam } = useGame();
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
   const [showLetters, setShowLetters] = useState(
     localStorage.getItem("showLetters") === "true"
   );
   const navigate = useNavigate();
+
+  // ✅ Restore last viewed team if none is selected
+  useEffect(() => {
+    if (!selectedTeam) {
+      const savedTeam = localStorage.getItem("selectedTeam");
+      if (savedTeam) setSelectedTeam(JSON.parse(savedTeam));
+    }
+  }, [selectedTeam, setSelectedTeam]);
+
+  // ✅ Save selected team on change
+  useEffect(() => {
+    if (selectedTeam) {
+      localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam));
+    }
+  }, [selectedTeam]);
 
   if (!selectedTeam) {
     return (
@@ -43,7 +58,7 @@ export default function RosterView() {
     { key: "attr12", label: "REB", index: 12 },
     { key: "attr7", label: "ATH", index: 7 },
     { key: "attr13", label: "OIQ", index: 13 },
-    { key: "attr14", label: "DIQ", index: 14 }
+    { key: "attr14", label: "DIQ", index: 14 },
   ];
 
   // Letter converter
@@ -70,6 +85,24 @@ export default function RosterView() {
     localStorage.setItem("showLetters", newState);
   };
 
+  // --- Team navigation setup ---
+  const allTeams = leagueData
+    ? Object.values(leagueData.conferences)
+        .flat()
+        .sort((a, b) => a.name.localeCompare(b.name))
+    : [];
+  const currentIndex = allTeams.findIndex((t) => t.name === selectedTeam?.name);
+
+  const handleTeamSwitch = (direction) => {
+    if (!allTeams.length) return;
+    let newIndex =
+      direction === "next"
+        ? (currentIndex + 1) % allTeams.length
+        : (currentIndex - 1 + allTeams.length) % allTeams.length;
+    setSelectedTeam(allTeams[newIndex]);
+    setSelectedPlayer(null); // reset to first player
+  };
+
   // Sort handling
   const handleSort = (key) => {
     let direction = "desc";
@@ -78,14 +111,37 @@ export default function RosterView() {
     setSortConfig({ key, direction });
   };
 
+  const positionOrder = ["PG", "SG", "SF", "PF", "C"];
+
   const getSortedPlayers = () => {
     if (!sortConfig.key || sortConfig.direction === "default") return players;
     const sorted = [...players];
     sorted.sort((a, b) => {
       const key = sortConfig.key;
-      if (["age", "overall", "stamina", "potential", "offRating", "defRating"].includes(key)) {
+
+      // --- POS sorting custom logic ---
+      if (key === "pos") {
+        const aIdx = positionOrder.indexOf(a.pos);
+        const bIdx = positionOrder.indexOf(b.pos);
+        const diff =
+          (aIdx === -1 ? 99 : aIdx) - (bIdx === -1 ? 99 : bIdx);
+        return sortConfig.direction === "asc" ? diff : -diff;
+      }
+
+      // --- Name sorting ---
+      if (key === "name") {
+        return sortConfig.direction === "asc"
+          ? a.name.localeCompare(b.name)
+          : -a.name.localeCompare(b.name);
+      }
+
+      // --- Numeric columns ---
+      if (
+        ["age", "overall", "stamina", "potential", "offRating", "defRating"].includes(key)
+      ) {
         return sortConfig.direction === "asc" ? a[key] - b[key] : b[key] - a[key];
       }
+
       if (key.startsWith("attr")) {
         const idx = parseInt(key.replace("attr", ""));
         const aVal = a.attrs?.[idx] ?? 0;
@@ -106,11 +162,25 @@ export default function RosterView() {
 
   return (
     <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center py-10">
-      {/* Team Header */}
-      <div className="flex items-center justify-center gap-4 mb-6">
-        <h1 className="text-4xl font-extrabold text-orange-500 text-center">
-          {selectedTeam.name} Roster
-        </h1>
+      {/* Team Header with Navigation */}
+      <div className="flex items-center justify-center gap-6 mb-6 select-none">
+<button
+  onClick={() => handleTeamSwitch("prev")}
+  className="text-4xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
+>
+  ◄
+</button>
+<h1 className="text-4xl font-extrabold text-orange-500 text-center min-w-[280px]">
+  {selectedTeam.name} Roster
+</h1>
+<button
+  onClick={() => handleTeamSwitch("next")}
+  className="text-4xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
+
+>
+  ►
+</button>
+
       </div>
 
       {/* Player Card */}
@@ -130,7 +200,8 @@ export default function RosterView() {
                 <h2 className="text-[44px] font-bold leading-tight">{player.name}</h2>
                 <p className="text-gray-400 text-[24px] mt-1">
                   {player.pos}
-                  {player.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age {player.age}
+                  {player.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age{" "}
+                  {player.age}
                 </p>
               </div>
             </div>
@@ -183,97 +254,99 @@ export default function RosterView() {
       </div>
 
       {/* Table */}
-<div className="w-full flex justify-center transition-opacity duration-300 ease-in-out mt-[-1px]">
-  <div className="w-full max-w-5xl overflow-x-auto">
-    <div className="min-w-[1200px] max-w-max mx-auto">
-      <table className="w-full border-collapse text-center">
-        <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
-          <tr>
-            {[{ key: "name", label: "Name" },
-              { key: "pos", label: "POS" },
-              { key: "age", label: "AGE" },
-              { key: "overall", label: "OVR" },
-              { key: "offRating", label: "OFF" },
-              { key: "defRating", label: "DEF" },
-              { key: "stamina", label: "STAM" },
-              { key: "potential", label: "POT" },
-              ...attrColumns
-            ].map((col) => (
-              <th
-                key={col.key}
-                className={`py-3 px-3 min-w-[95px] ${
-                  col.key === "name" ? "min-w-[150px] text-left pl-4" : "text-center"
-                } cursor-pointer select-none`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleSort(col.key);
-                }}
-              >
-                {col.label}
-                {sortConfig.key === col.key && (
-                  <span className="ml-1 text-orange-400">
-                    {sortConfig.direction === "asc"
-                      ? "▲"
-                      : sortConfig.direction === "desc"
-                      ? "▼"
-                      : ""}
-                  </span>
-                )}
-              </th>
-            ))}
-          </tr>
-        </thead>
+      <div className="w-full flex justify-center transition-opacity duration-300 ease-in-out mt-[-1px]">
+        <div className="w-full max-w-5xl overflow-x-auto">
+          <div className="min-w-[1200px] max-w-max mx-auto">
+            <table className="w-full border-collapse text-center">
+              <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
+                <tr>
+                  {[
+                    { key: "name", label: "Name" },
+                    { key: "pos", label: "POS" },
+                    { key: "age", label: "AGE" },
+                    { key: "overall", label: "OVR" },
+                    { key: "offRating", label: "OFF" },
+                    { key: "defRating", label: "DEF" },
+                    { key: "stamina", label: "STAM" },
+                    { key: "potential", label: "POT" },
+                    ...attrColumns,
+                  ].map((col) => (
+                    <th
+                      key={col.key}
+                      className={`py-3 px-3 min-w-[95px] ${
+                        col.key === "name"
+                          ? "min-w-[150px] text-left pl-4"
+                          : "text-center"
+                      } cursor-pointer select-none`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSort(col.key);
+                      }}
+                    >
+                      {col.label}
+                      {sortConfig.key === col.key && (
+                        <span className="ml-1 text-orange-400">
+                          {sortConfig.direction === "asc"
+                            ? "▲"
+                            : sortConfig.direction === "desc"
+                            ? "▼"
+                            : ""}
+                        </span>
+                      )}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
 
-        <tbody className="text-[17px] font-medium">
-          {sortedPlayers.map((p) => (
-            <tr
-              key={p.name}
-              onClick={() => setSelectedPlayer(p)}
-              className={`cursor-pointer transition ${
-                player.name === p.name
-                  ? "bg-orange-600 text-white"
-                  : "hover:bg-neutral-800"
-              }`}
-            >
-              <td className="py-2 px-3 whitespace-nowrap text-left pl-4">
-                {p.name}
-              </td>
-              <td className="py-2 px-3">{p.pos}</td>
-              <td className="py-2 px-3">{p.age}</td>
-              <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                {showLetters ? toLetter(p.overall) : p.overall}
-              </td>
-              <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                {showLetters ? toLetter(p.offRating) : p.offRating}
-              </td>
-              <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                {showLetters ? toLetter(p.defRating) : p.defRating}
-              </td>
-              <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                {showLetters ? toLetter(p.stamina) : p.stamina}
-              </td>
-              <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                {showLetters ? toLetter(p.potential) : p.potential}
-              </td>
-              {attrColumns.map((a) => (
-                <td
-                  key={a.key}
-                  className="py-2 px-3"
-                  onDoubleClick={handleCellDoubleClick}
-                >
-                  {showLetters
-                    ? toLetter(p.attrs?.[a.index] ?? 0)
-                    : p.attrs?.[a.index] ?? "-"}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
-
+              <tbody className="text-[17px] font-medium">
+                {sortedPlayers.map((p) => (
+                  <tr
+                    key={p.name}
+                    onClick={() => setSelectedPlayer(p)}
+                    className={`cursor-pointer transition ${
+                      player.name === p.name
+                        ? "bg-orange-600 text-white"
+                        : "hover:bg-neutral-800"
+                    }`}
+                  >
+                    <td className="py-2 px-3 whitespace-nowrap text-left pl-4">
+                      {p.name}
+                    </td>
+                    <td className="py-2 px-3">{p.pos}</td>
+                    <td className="py-2 px-3">{p.age}</td>
+                    <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                      {showLetters ? toLetter(p.overall) : p.overall}
+                    </td>
+                    <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                      {showLetters ? toLetter(p.offRating) : p.offRating}
+                    </td>
+                    <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                      {showLetters ? toLetter(p.defRating) : p.defRating}
+                    </td>
+                    <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                      {showLetters ? toLetter(p.stamina) : p.stamina}
+                    </td>
+                    <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                      {showLetters ? toLetter(p.potential) : p.potential}
+                    </td>
+                    {attrColumns.map((a) => (
+                      <td
+                        key={a.key}
+                        className="py-2 px-3"
+                        onDoubleClick={handleCellDoubleClick}
+                      >
+                        {showLetters
+                          ? toLetter(p.attrs?.[a.index] ?? 0)
+                          : p.attrs?.[a.index] ?? "-"}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
 
       <button
         onClick={() => navigate("/team-hub")}
