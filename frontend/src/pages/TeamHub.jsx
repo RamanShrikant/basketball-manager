@@ -25,7 +25,8 @@ export default function TeamHub() {
     { name: "Trades", path: "#" },
     { name: "Coach Gameplan", path: "/coach-gameplan" },
     { name: "Schedule", path: "/calendar" },      // ✅ added
-    { name: "Standings", path: "#" },
+    { name: "Player Stats", path: "/player-stats" },   // ✅ added
+    { name: "Standings", path: "/standings" },  
   ];
 
   return (

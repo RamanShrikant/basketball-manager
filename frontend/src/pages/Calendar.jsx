@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
+import { simulateOneGame } from "../api/simEngine";
 
 /* ----------------------- date helpers ----------------------- */
 const fmt = (d) => d.toISOString().slice(0, 10);
@@ -32,11 +33,7 @@ const Logo = ({ team, size = 36 }) => {
   );
 };
 
-/* ----------------------- round-robin (fixed, supports odd N) ----------------------- */
-/** Classic circle method:
- *  Add "__BYE__" if odd, pair (arr[i], arr[n-1-i]), then rotate:
- *  keep arr[0] fixed, move last into index 1, shift middle right.
- */
+/* ----------------------- round-robin (supports odd N) ----------------------- */
 function singleRoundRobinRounds(teamIds) {
   const ids = [...teamIds];
   if (ids.length % 2 === 1) ids.push("__BYE__");
@@ -50,13 +47,11 @@ function singleRoundRobinRounds(teamIds) {
       const a = arr[i];
       const b = arr[n - 1 - i];
       if (a !== "__BYE__" && b !== "__BYE__") {
-        // alternate H/A by round for a little variety
         games.push(r % 2 === 0 ? { home: a, away: b } : { home: b, away: a });
       }
     }
     rounds.push(games);
-    // rotate
-    arr = [arr[0], arr[n - 1]].concat(arr.slice(1, n - 1));
+    arr = [arr[0], arr[n - 1]].concat(arr.slice(1, n - 1)); // rotate
   }
   return rounds;
 }
@@ -69,31 +64,26 @@ function generateFullSeasonSchedule(teams, startDate, endDate) {
   if (N < 2) return { byDate: {}, list: [] };
 
   const target = 82;
-  const perTeamPerDoubleCycle = 2 * (N - 1); // games per team per "home+away" cycle
+  const perTeamPerDoubleCycle = 2 * (N - 1);
 
   const baseCycles = Math.floor(target / perTeamPerDoubleCycle);
-  const remainingPerTeam = target - baseCycles * perTeamPerDoubleCycle; // leftover per team (0..2N-3)
+  const remainingPerTeam = target - baseCycles * perTeamPerDoubleCycle;
 
   const single = singleRoundRobinRounds(teamIds);
   const mirrored = single.map((rd) => rd.map((g) => ({ home: g.away, away: g.home })));
-  const oneDouble = [...single, ...mirrored]; // array of rounds
+  const oneDouble = [...single, ...mirrored];
 
-  // Build base cycles with some rotation/reversal for variety
   const rounds = [];
   for (let c = 0; c < baseCycles; c++) {
     const rotated = rotate(oneDouble, c % oneDouble.length);
     rounds.push(...(c % 2 === 0 ? rotated : rotated.slice().reverse()));
   }
 
-  // --- Correct "extra rounds" math ---
-  // Total additional league games needed = remainingPerTeam * N / 2
+  // correct extra rounds math
   const totalExtraGames = Math.ceil((remainingPerTeam * N) / 2);
   const gamesPerRound = Math.floor(N / 2);
   const roundsNeeded = Math.ceil(totalExtraGames / gamesPerRound);
-
-  for (let i = 0; i < roundsNeeded; i++) {
-    rounds.push(rotate(single, i % single.length)); // add fair extra single rounds
-  }
+  for (let i = 0; i < roundsNeeded; i++) rounds.push(rotate(single, i % single.length));
 
   const days = rangeDays(startDate, endDate);
   const D = days.length, R = rounds.length;
@@ -102,7 +92,6 @@ function generateFullSeasonSchedule(teams, startDate, endDate) {
   const teamGamesCount = Object.fromEntries(teamIds.map((id) => [id, 0]));
   const dayTeams = Array.from({ length: D }, () => new Set());
 
-  // Evenly map rounds across the calendar
   for (let r = 0; r < R; r++) {
     const desired = Math.floor(r * (D - 1) / Math.max(1, R - 1));
     let dIdx = desired;
@@ -136,25 +125,24 @@ function generateFullSeasonSchedule(teams, startDate, endDate) {
         }
         byDate[dateStr] = arr;
         placed = true;
-      } else {
-        dIdx++; // try next day
-      }
+      } else dIdx++;
     }
   }
-
   return { byDate, list: Object.values(byDate).flat() };
 }
 
-/* ----------------------- component ----------------------- */
+/* ============================================================= */
+/*                          COMPONENT                             */
+/* ============================================================= */
 export default function Calendar() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam, setSelectedTeam } = useGame();
 
-  // Season window (Oct 19 -> Apr 25 next year)
+  // Season window
   const now = new Date();
   const seasonYear = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
-  const seasonStart = useMemo(() => new Date(seasonYear, 9, 19), [seasonYear]);     // Oct
-  const seasonEnd   = useMemo(() => new Date(seasonYear + 1, 3, 25), [seasonYear]); // next Apr
+  const seasonStart = useMemo(() => new Date(seasonYear, 9, 19), [seasonYear]);
+  const seasonEnd   = useMemo(() => new Date(seasonYear + 1, 3, 25), [seasonYear]);
   const allDays     = useMemo(() => rangeDays(seasonStart, seasonEnd), [seasonStart, seasonEnd]);
 
   // Teams
@@ -173,17 +161,17 @@ export default function Calendar() {
   };
   useEffect(() => { if (selectedTeam) localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam)); }, [selectedTeam]);
 
-  // Schedule state
+  // Storage helpers
+  const SCHED_KEY = "bm_schedule_v3";
+  const RESULT_KEY = "bm_results_v1";
   const [scheduleByDate, setScheduleByDate] = useState({});
-  const [confirmDate, setConfirmDate] = useState(null);
-  const [focusedDate, setFocusedDate] = useState(null);
-  const [month, setMonth] = useState(() => monthKey(seasonStart));
+  const [resultsById, setResultsById] = useState({});
 
-  const selectedTeamId = useMemo(() => selectedTeam ? (selectedTeam.id ?? selectedTeam.name ?? null) : null, [selectedTeam]);
+  const saveSchedule = (obj) => { setScheduleByDate(obj); localStorage.setItem(SCHED_KEY, JSON.stringify(obj)); };
+  const saveResults  = (obj) => { setResultsById(obj);   localStorage.setItem(RESULT_KEY, JSON.stringify(obj)); };
 
-  // Generate / load schedule (v3 forces a clean rebuild with fixed logic)
+  // Load / build schedule + results
   useEffect(() => {
-    const KEY = "bm_schedule_v3";
     const withinWindow = (obj) => {
       const dates = Object.keys(obj || {});
       if (!dates.length) return false;
@@ -194,19 +182,23 @@ export default function Calendar() {
     const regen = () => {
       if (teams && teams.length >= 2) {
         const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
-        setScheduleByDate(byDate);
-        localStorage.setItem(KEY, JSON.stringify(byDate));
+        saveSchedule(byDate);
         return byDate;
       }
       return {};
     };
 
-    let parsed = {};
-    try { const savedRaw = localStorage.getItem(KEY); parsed = savedRaw ? JSON.parse(savedRaw) : {}; } catch {}
-    if (!withinWindow(parsed)) parsed = regen(); else setScheduleByDate(parsed);
+    let parsedSched = {};
+    try { const savedRaw = localStorage.getItem(SCHED_KEY); parsedSched = savedRaw ? JSON.parse(savedRaw) : {}; } catch {}
+    if (!withinWindow(parsedSched)) parsedSched = regen(); else setScheduleByDate(parsedSched);
+
+    let parsedResults = {};
+    try { const savedR = localStorage.getItem(RESULT_KEY); parsedResults = savedR ? JSON.parse(savedR) : {}; } catch {}
+    setResultsById(parsedResults);
   }, [teams, seasonStart, seasonEnd]);
 
-  const saveSchedule = (obj) => { setScheduleByDate(obj); localStorage.setItem("bm_schedule_v3", JSON.stringify(obj)); };
+  // Selected team context
+  const selectedTeamId = useMemo(() => selectedTeam ? (selectedTeam.id ?? selectedTeam.name ?? null) : null, [selectedTeam]);
 
   // My team’s games by date
   const myGames = useMemo(() => {
@@ -219,13 +211,15 @@ export default function Calendar() {
     return map;
   }, [scheduleByDate, selectedTeamId]);
 
-  // Focused date banner
+  // Focused date
+  const [focusedDate, setFocusedDate] = useState(null);
   useEffect(() => {
     const firstGameDate = Object.keys(myGames).sort()[0];
     setFocusedDate(firstGameDate || fmt(seasonStart));
   }, [myGames, seasonStart]);
 
   // Months & visible days
+  const [month, setMonth] = useState(() => monthKey(seasonStart));
   const months = useMemo(() => Array.from(new Set(allDays.map(monthKey))), [allDays]);
   const visibleDays = useMemo(() => {
     const [y, m] = month.split("-").map(Number);
@@ -238,19 +232,109 @@ export default function Calendar() {
     return padded;
   }, [month]);
 
-  // Sim stubs (mark as played only)
+  // Modals
+  const [boxModal, setBoxModal] = useState(null);     // {game, result}
+  const [actionModal, setActionModal] = useState(null); // { dateStr, game }
+
+  /* ----------------------- simulation helpers ----------------------- */
+  // Pure sim – no saving here.
+  const simOne = (game) => simulateOneGame({
+    leagueData,
+    homeTeamName: teams.find(t => t.id === game.homeId)?.name || game.home,
+    awayTeamName: teams.find(t => t.id === game.awayId)?.name || game.away,
+  });
+
+  const handleSimOnlyGame = (dateStr, game) => {
+    const upd = { ...scheduleByDate };
+    const newResults = { ...resultsById };
+
+    // mark just this game as played
+    upd[dateStr] = (upd[dateStr] || []).map(g => g.id === game.id ? { ...g, played: true } : g);
+
+    // simulate and persist
+    newResults[game.id] = simOne(game);
+    saveSchedule(upd);
+    saveResults(newResults);
+
+    setActionModal(null);
+    setBoxModal({ game, result: newResults[game.id] });
+  };
+
   const handleSimToDate = (dateStr) => {
     const sorted = Object.keys(scheduleByDate).sort();
     const upd = { ...scheduleByDate };
-    for (const d of sorted) if (d <= dateStr) upd[d] = upd[d].map((g) => ({ ...g, played: true }));
-    saveSchedule(upd); setConfirmDate(null);
-  };
-  const handleSimSeason = () => {
-    const upd = { ...scheduleByDate };
-    Object.keys(upd).forEach((d) => (upd[d] = upd[d].map((g) => ({ ...g, played: true }))));
-    saveSchedule(upd); setConfirmDate(null);
+    const newResults = { ...resultsById };
+
+    for (const d of sorted) {
+      if (d > dateStr) break;
+      upd[d] = upd[d].map((g) => {
+        if (!g.played) {
+          const res = simOne(g);
+          newResults[g.id] = res;
+        }
+        return { ...g, played: true };
+      });
+    }
+    saveSchedule(upd);
+    saveResults(newResults);
+    setActionModal(null);
   };
 
+  const handleSimSeason = () => {
+    const upd = { ...scheduleByDate };
+    const newResults = { ...resultsById };
+
+    Object.keys(upd).sort().forEach((d) => {
+      upd[d] = upd[d].map((g) => {
+        if (!g.played) {
+          const res = simOne(g);
+          newResults[g.id] = res;
+        }
+        return { ...g, played: true };
+      });
+    });
+
+    saveSchedule(upd);
+    saveResults(newResults);
+    setActionModal(null);
+  };
+
+  const handleBackfillMissing = () => {
+    const upd = { ...scheduleByDate };
+    const newResults = { ...resultsById };
+
+    Object.keys(upd).forEach((d) => {
+      upd[d] = upd[d].map((g) => {
+        if (g.played && !newResults[g.id]) {
+          const res = simOne(g);
+          newResults[g.id] = res;
+        }
+        return g;
+      });
+    });
+
+    saveResults(newResults);
+  };
+
+  const hasPlayedWithoutResult = useMemo(() => {
+    for (const games of Object.values(scheduleByDate)) {
+      for (const g of games) if (g.played && !resultsById[g.id]) return true;
+    }
+    return false;
+  }, [scheduleByDate, resultsById]);
+
+  const handleResetSeason = () => {
+    if (!window.confirm("Reset the season? This clears all results and regenerates the schedule.")) return;
+    localStorage.removeItem(SCHED_KEY);
+    localStorage.removeItem(RESULT_KEY);
+    const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
+    saveSchedule(byDate);
+    saveResults({});
+    const firstGameDate = Object.keys(byDate).sort()[0];
+    setFocusedDate(firstGameDate || fmt(seasonStart));
+  };
+
+  /* ----------------------- guards ----------------------- */
   if (!selectedTeam) {
     return (
       <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center justify-center">
@@ -285,10 +369,11 @@ export default function Calendar() {
     return `DATE: ${label}`;
   })();
 
+  /* ----------------------- UI ----------------------- */
   return (
     <div className="min-h-screen bg-neutral-900 text-white py-8">
       <div className="max-w-6xl mx-auto px-4">
-        {/* Header: Current Team + arrows + Back */}
+        {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-4">
             <span className="text-gray-300">Current Team:</span>
@@ -302,6 +387,10 @@ export default function Calendar() {
 
           <div className="flex items-center gap-2">
             <button className="px-3 py-2 bg-neutral-700 rounded hover:bg-neutral-600" onClick={() => navigate("/team-hub")}>Back to Team Hub</button>
+            {hasPlayedWithoutResult && (
+              <button className="px-3 py-2 bg-yellow-700 rounded hover:bg-yellow-600" onClick={handleBackfillMissing}>Backfill Scores</button>
+            )}
+            <button className="px-3 py-2 bg-red-700 rounded hover:bg-red-600" onClick={handleResetSeason}>Reset Season</button>
             <button className="px-3 py-2 bg-neutral-800 rounded hover:bg-neutral-700" onClick={() => { const i = months.indexOf(month); if (i > 0) setMonth(months[i - 1]); }}>‹ Prev</button>
             <select className="px-3 py-2 bg-neutral-800 rounded" value={month} onChange={(e) => setMonth(e.target.value)}>
               {months.map((m) => {
@@ -315,7 +404,7 @@ export default function Calendar() {
           </div>
         </div>
 
-        {/* Top banner like 2K */}
+        {/* Top banner */}
         {focusedDate && (
           <div className="mb-5">
             <div className="px-4 py-2 rounded bg-neutral-800 border border-neutral-700 text-sm font-semibold">
@@ -337,28 +426,57 @@ export default function Calendar() {
 
             const dateStr = fmt(d);
             const myGame = myGames[dateStr];
-            const isHome = myGame && (myGame.homeId === (selectedTeam.id ?? selectedTeam.name));
+            const iAmHome = myGame && (myGame.homeId === (selectedTeam.id ?? selectedTeam.name));
+            const res = myGame ? resultsById[myGame.id] : null;
+
+            // W/L + Final
+            let finalScoreText = null;
+            let WLTag = null;
+            if (myGame && myGame.played && res?.totals) {
+              const myScore  = iAmHome ? res.totals.home : res.totals.away;
+              const oppScore = iAmHome ? res.totals.away : res.totals.home;
+              const isWin = myScore > oppScore;
+              WLTag = (
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold mr-1 ${isWin ? "bg-green-600/80" : "bg-red-600/80"}`}>
+                  {isWin ? "W" : "L"}
+                </span>
+              );
+              finalScoreText = `Final ${myScore}-${oppScore}`;
+            }
 
             return (
               <div
                 key={dateStr}
-                className={`h-28 rounded-lg border bg-neutral-850 border-neutral-800 p-2 relative cursor-pointer hover:bg-neutral-700`}
-                onClick={() => { setFocusedDate(dateStr); if (myGame) setConfirmDate(dateStr); }}
+                className={`h-28 rounded-lg border p-2 relative cursor-pointer 
+                  ${myGame ? (iAmHome ? "border-blue-400" : "border-red-400") : "border-neutral-800"} 
+                  bg-neutral-850 hover:bg-neutral-700`}
+                onClick={() => {
+                  setFocusedDate(dateStr);
+                  if (myGame) setActionModal({ dateStr, game: myGame });
+                }}
               >
                 <div className="text-xs text-gray-400">{d.getDate()}</div>
 
                 {myGame && (
                   <div className="mt-2 flex items-center gap-2">
-                    <div title={isHome ? "Home" : "Away"} className={`w-2.5 h-2.5 rounded-full ${isHome ? "bg-blue-400" : "bg-red-400"}`} />
-                    <div className="flex items-center gap-2">
-                      <Logo team={isHome ? (teams.find(t => t.id === myGame.awayId) || { name: myGame.away }) : (teams.find(t => t.id === myGame.homeId) || { name: myGame.home })} size={32} />
-                      <div className="text-sm">{isHome ? myGame.away : myGame.home}</div>
+                    <Logo
+                      team={iAmHome ? (teams.find(t => t.id === myGame.awayId) || { name: myGame.away }) : (teams.find(t => t.id === myGame.homeId) || { name: myGame.home })}
+                      size={32}
+                    />
+                    <div className="text-sm">
+                      {iAmHome ? myGame.away : myGame.home}
                     </div>
                   </div>
                 )}
 
-                {myGame?.played && (
-                  <span className="absolute bottom-2 right-2 text-[10px] px-2 py-0.5 rounded bg-green-600/80">Simmed</span>
+                {/* Bottom-right: W/L + Final only */}
+                {myGame && myGame.played && (
+                  <div className="absolute bottom-2 right-2 flex items-center">
+                    {WLTag}
+                    <span className="text-[11px] px-2 py-0.5 rounded bg-green-700/80">
+                      {finalScoreText || "Final"}
+                    </span>
+                  </div>
                 )}
               </div>
             );
@@ -366,16 +484,130 @@ export default function Calendar() {
         </div>
       </div>
 
-      {/* Confirm modal */}
-      {confirmDate && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-neutral-800 border border-neutral-700 rounded-xl p-5 w-[460px]">
-            <h3 className="text-xl font-bold mb-2">Game Day: {confirmDate}</h3>
-            <p className="text-gray-300 text-sm mb-4">Choose how far to simulate.</p>
-            <div className="flex gap-3 justify-end">
-              <button className="px-4 py-2 bg-neutral-700 rounded hover:bg-neutral-600" onClick={() => setConfirmDate(null)}>Cancel</button>
-              <button className="px-4 py-2 bg-orange-600 rounded hover:bg-orange-500" onClick={() => handleSimToDate(confirmDate)}>Simulate to this day</button>
-              <button className="px-4 py-2 bg-blue-600 rounded hover:bg-blue-500" onClick={handleSimSeason}>Simulate season</button>
+      {/* Action modal (opens when clicking a tile) */}
+      {actionModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-neutral-900 border border-neutral-700 rounded-xl w-[520px] p-5">
+            <div className="mb-3">
+              <div className="text-sm text-gray-300 mb-1">{actionModal.dateStr}</div>
+              <div className="text-lg font-bold">
+                {actionModal.game.away} @ {actionModal.game.home}
+              </div>
+            </div>
+
+            {!actionModal.game.played ? (
+              <div className="flex flex-col gap-2">
+                <button
+                  className="px-4 py-2 rounded bg-neutral-700 hover:bg-neutral-600 text-left"
+                  onClick={() => handleSimOnlyGame(actionModal.dateStr, actionModal.game)}
+                >
+                  Simulate only this game
+                </button>
+                <button
+                  className="px-4 py-2 rounded bg-orange-600 hover:bg-orange-500 text-left"
+                  onClick={() => handleSimToDate(actionModal.dateStr)}
+                >
+                  Simulate to this day
+                </button>
+                <button
+                  className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-left"
+                  onClick={handleSimSeason}
+                >
+                  Simulate season
+                </button>
+                <button className="px-4 py-2 rounded bg-neutral-800 hover:bg-neutral-700 text-left" onClick={() => setActionModal(null)}>
+                  Close
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2 justify-end">
+                <button
+                  className="px-4 py-2 rounded bg-neutral-700 hover:bg-neutral-600"
+                  onClick={() => {
+                    // if a legacy "played-without-result" exists, backfill just this game
+                    let r = resultsById[actionModal.game.id];
+                    if (!r) {
+                      const newResults = { ...resultsById, [actionModal.game.id]: simOne(actionModal.game) };
+                      saveResults(newResults);
+                      r = newResults[actionModal.game.id];
+                    }
+                    setActionModal(null);
+                    setBoxModal({ game: actionModal.game, result: r });
+                  }}
+                >
+                  View box score
+                </button>
+                <button className="px-4 py-2 rounded bg-neutral-800 hover:bg-neutral-700" onClick={() => setActionModal(null)}>
+                  Close
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Box Score modal */}
+      {boxModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-neutral-900 border border-neutral-700 rounded-xl w-[920px] max-h-[85vh] overflow-auto p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xl font-bold">
+                {boxModal.game.away} @ {boxModal.game.home} • {boxModal.result?.winner?.score}{boxModal.result?.winner?.ot ? " (OT)" : ""}
+              </h3>
+              <button className="px-3 py-1 bg-neutral-700 rounded hover:bg-neutral-600" onClick={() => setBoxModal(null)}>Close</button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              {["away","home"].map(side => {
+                const teamName = side === "away" ? boxModal.game.away : boxModal.game.home;
+                const rows = boxModal.result?.box?.[side] || [];
+                return (
+                  <div key={side} className="bg-neutral-800 rounded-lg p-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Logo team={teams.find(t => t.name === teamName) || { name: teamName }} size={28} />
+                      <h4 className="font-semibold">{teamName}</h4>
+                    </div>
+                    <div className="overflow-auto">
+                      <table className="w-full text-sm">
+                        <thead className="text-gray-300">
+                          <tr className="text-left border-b border-neutral-700">
+                            <th className="py-1 pr-2">Player</th>
+                            <th className="py-1 pr-2">MIN</th>
+                            <th className="py-1 pr-2">PTS</th>
+                            <th className="py-1 pr-2">REB</th>
+                            <th className="py-1 pr-2">AST</th>
+                            <th className="py-1 pr-2">STL</th>
+                            <th className="py-1 pr-2">BLK</th>
+                            <th className="py-1 pr-2">FG</th>
+                            <th className="py-1 pr-2">3P</th>
+                            <th className="py-1 pr-2">FT</th>
+                            <th className="py-1 pr-2">TO</th>
+                            <th className="py-1 pr-2">PF</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map(r => (
+                            <tr key={r.player} className="border-b border-neutral-800">
+                              <td className="py-1 pr-2">{r.player}</td>
+                              <td className="py-1 pr-2">{r.min}</td>
+                              <td className="py-1 pr-2">{r.pts}</td>
+                              <td className="py-1 pr-2">{r.reb}</td>
+                              <td className="py-1 pr-2">{r.ast}</td>
+                              <td className="py-1 pr-2">{r.stl}</td>
+                              <td className="py-1 pr-2">{r.blk}</td>
+                              <td className="py-1 pr-2">{r.fg}</td>
+                              <td className="py-1 pr-2">{r["3p"]}</td>
+                              <td className="py-1 pr-2">{r.ft}</td>
+                              <td className="py-1 pr-2">{r.to}</td>
+                              <td className="py-1 pr-2">{r.pf}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

@@ -11,6 +11,8 @@ import TeamHub from "./pages/TeamHub.jsx";
 import RosterView from "./pages/RosterView.jsx";
 import CoachGameplan from "./pages/CoachGameplan.jsx";
 import Calendar from "./pages/Calendar.jsx";
+import PlayerStats from "./pages/PlayerStats.jsx";
+import Standings from "./pages/Standings.jsx";
 
 
 
@@ -36,6 +38,8 @@ function App() {
         <Route path="/roster-view" element={<RosterView />} />
         <Route path="/coach-gameplan" element={<CoachGameplan />} />
         <Route path="/calendar" element={<Calendar />} />
+        <Route path="/player-stats" element={<PlayerStats />} />
+        <Route path="/standings" element={<Standings />} />
       </Routes>
     </BrowserRouter>
   );
