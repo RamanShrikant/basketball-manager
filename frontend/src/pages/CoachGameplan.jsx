@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 
 export default function CoachGameplan() {
-  const { selectedTeam } = useGame();
+  const { leagueData, selectedTeam, setSelectedTeam } = useGame(); // ⬅️ added leagueData + setSelectedTeam
   const [players, setPlayers] = useState([]);
   const [minutes, setMinutes] = useState({});
   const [selectedPlayer, setSelectedPlayer] = useState(null);
@@ -12,6 +12,28 @@ export default function CoachGameplan() {
   const [teamRatings, setTeamRatings] = useState({ overall: 0, off: 0, def: 0 });
   const navigate = useNavigate();
 
+  // ---------- Team list + index for static arrows ----------
+  const allTeams = useMemo(() => {
+    if (!leagueData?.conferences) return [];
+    const confs = Object.values(leagueData.conferences);
+    return confs.flat().sort((a, b) => a.name.localeCompare(b.name));
+  }, [leagueData]);
+  const currentIndex = useMemo(() => {
+    if (!selectedTeam) return -1;
+    return allTeams.findIndex((t) => t.name === selectedTeam.name);
+  }, [allTeams, selectedTeam]);
+
+  const handleTeamSwitch = (dir) => {
+    if (!allTeams.length || currentIndex < 0) return;
+    const next =
+      dir === "next"
+        ? (currentIndex + 1) % allTeams.length
+        : (currentIndex - 1 + allTeams.length) % allTeams.length;
+    setSelectedTeam(allTeams[next]);
+    setSelectedPlayer(null);
+    setSwapSelection(null);
+  };
+
   // --- Helper functions ---
   const fatiguePenalty = (mins, stamina) => {
     const threshold = 0.359 * stamina + 2.46;
@@ -19,7 +41,6 @@ export default function CoachGameplan() {
     return Math.max(0.7, 1 - 0.0075 * over);
   };
 
-  // Ratings shown in the header — matches Python math (m/240 + coverage penalty)
   const calculateTeamRatings = (players, minutes) => {
     const posTot = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
     let off = 0, def = 0, ovr = 0;
@@ -56,7 +77,7 @@ export default function CoachGameplan() {
     };
   };
 
-  // === AUTO-SORT – exact parity with your Python "coach gameplan.py" ===
+  // === AUTO-SORT – exact parity with your Python logic ===
   const buildSmartRotation = (teamPlayers) => {
     const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
     const valid = (teamPlayers || []).filter(
@@ -66,7 +87,6 @@ export default function CoachGameplan() {
 
     const score = (p) => (p.overall || 0) + ((p.stamina || 70) - 70) * 0.15;
 
-    // 1) Ensure 1 for each position, then fill to 10 by score (Python order)
     const chosen = [];
     for (const pos of POSITIONS) {
       const posPlayers = valid
@@ -82,10 +102,8 @@ export default function CoachGameplan() {
       if (!chosen.find((c) => c.name === p.name)) chosen.push(p);
     }
 
-    // Work array that carries minutes like the Python objects
     const work = chosen.map((p) => ({ ...p, minutes: 0 }));
 
-    // 2) Base minutes: 12 each then round-robin distribute the rest
     for (const w of work) w.minutes = 12;
     let remain = 240 - 12 * work.length;
     let i = 0;
@@ -95,7 +113,6 @@ export default function CoachGameplan() {
       remain--;
     }
 
-    // team_total clone
     const teamTotal = (arr) => {
       let off = 0, deff = 0, ovr = 0;
       const posTot = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
@@ -120,7 +137,6 @@ export default function CoachGameplan() {
       return { off: off * coveragePenalty, deff: deff * coveragePenalty, ovr: ovr * coveragePenalty };
     };
 
-    // 3) Hill-climb (bench capped at 24, core = first 5 of 'chosen')
     const coreSet = new Set(work.slice(0, 5).map((p) => p.name));
     let improved = true;
     while (improved) {
@@ -149,7 +165,6 @@ export default function CoachGameplan() {
       }
     }
 
-    // 4) Best 5-man position map (exact)
     const permute = (arr) => {
       const out = [];
       const rec = (path, rest) => {
@@ -218,7 +233,6 @@ export default function CoachGameplan() {
     return { sorted, obj };
   };
 
-  // --- Ensure starters have at least 1 minute (used when swapping) ---
   const enforceStarterMinimums = (arr, minsObj) => {
     const updated = { ...minsObj };
     let added = 0;
@@ -230,10 +244,8 @@ export default function CoachGameplan() {
         added += 1;
       }
     }
-
     if (added === 0) return updated;
 
-    // shave from bench first
     const bench = arr.slice(5).sort((a, b) => (updated[b.name] || 0) - (updated[a.name] || 0));
     let remain = added;
     for (const p of bench) {
@@ -244,8 +256,6 @@ export default function CoachGameplan() {
         remain -= take;
       }
     }
-
-    // if still need, shave from starters with >1
     if (remain > 0) {
       const starters = arr.slice(0, 5).sort((a, b) => (updated[b.name] || 0) - (updated[a.name] || 0));
       for (const p of starters) {
@@ -258,11 +268,10 @@ export default function CoachGameplan() {
         }
       }
     }
-
     return updated;
   };
 
-  // --- Hooks ---
+  // --- Load + build on team change ---
   useEffect(() => {
     if (!selectedTeam) return;
     const key = `gameplan_${selectedTeam.name}`;
@@ -280,7 +289,7 @@ export default function CoachGameplan() {
       setPlayers(sorted);
       setTeamRatings(calculateTeamRatings(sorted, obj));
     }
-  }, [selectedTeam]);
+  }, [selectedTeam]); // switching teams auto-loads
 
   const handleSave = () => {
     if (!selectedTeam) return;
@@ -290,13 +299,13 @@ export default function CoachGameplan() {
   };
 
   const handleAutoRebuild = () => {
+    if (!selectedTeam) return;
     const { sorted, obj } = buildSmartRotation(selectedTeam.players);
     setPlayers(sorted);
     setMinutes(obj);
     setTeamRatings(calculateTeamRatings(sorted, obj));
   };
 
-  // ENFORCE: starters min 1 via UI & handler
   const handleMinuteChange = (name, value) => {
     const numRaw = Math.round(Number(value));
     const idx = players.findIndex((p) => p.name === name);
@@ -313,17 +322,13 @@ export default function CoachGameplan() {
     setTeamRatings(calculateTeamRatings(players, updated));
   };
 
-  // SWAP: minutes follow the player; then ensure new starters >=1
   const handleSquareClick = (player) => {
     if (!swapSelection) {
       setSwapSelection(player);
     } else if (swapSelection.name === player.name) {
       setSwapSelection(null);
     } else {
-      const p1 = swapSelection,
-        p2 = player;
-
-      // swap players visually; minutes remain on the player
+      const p1 = swapSelection, p2 = player;
       let newPlayers = [];
       setPlayers((prev) => {
         const arr = [...prev];
@@ -344,7 +349,6 @@ export default function CoachGameplan() {
     }
   };
 
-  // --- Fallback when no team selected ---
   if (!selectedTeam)
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
@@ -358,7 +362,6 @@ export default function CoachGameplan() {
       </div>
     );
 
-  // --- Defensive fallback for player object ---
   const player =
     selectedPlayer ||
     (players && players[0]) || {
@@ -372,8 +375,8 @@ export default function CoachGameplan() {
 
   const total = Object.values(minutes).reduce((a, b) => a + b, 0);
   const remaining = Math.max(0, 240 - total);
-  const fillPercent = Math.min(player.overall / 99, 1);
   const circleCircumference = 2 * Math.PI * 50;
+  const fillPercent = Math.min(player.overall / 99, 1);
   const strokeOffset = circleCircumference * (1 - fillPercent);
   const lineupLabels = ["PG", "SG", "SF", "PF", "C", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"];
 
@@ -385,9 +388,38 @@ export default function CoachGameplan() {
         </div>
       )}
 
-      <h1 className="text-4xl font-extrabold text-orange-500 mb-6">
-        {selectedTeam.name} – Coach Gameplan
-      </h1>
+      {/* Static header with pinned arrows (never shifts) */}
+      <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
+        <div className="w-24 flex items-center justify-start">
+          <button
+            onClick={() => handleTeamSwitch("prev")}
+            disabled={!allTeams.length}
+            className={`text-4xl font-bold transition-transform active:scale-90 ${
+              allTeams.length ? "text-white hover:text-orange-400" : "text-neutral-600 cursor-not-allowed"
+            }`}
+            title="Prev team"
+          >
+            ◄
+          </button>
+        </div>
+
+        <h1 className="text-3xl md:text-4xl font-extrabold text-orange-500 text-center">
+          {selectedTeam.name} – Coach Gameplan
+        </h1>
+
+        <div className="w-24 flex items-center justify-end">
+          <button
+            onClick={() => handleTeamSwitch("next")}
+            disabled={!allTeams.length}
+            className={`text-4xl font-bold transition-transform active:scale-90 ${
+              allTeams.length ? "text-white hover:text-orange-400" : "text-neutral-600 cursor-not-allowed"
+            }`}
+            title="Next team"
+          >
+            ►
+          </button>
+        </div>
+      </div>
 
       {/* Player Card */}
       <div className="relative w-full flex justify-center mb-0">
@@ -404,8 +436,7 @@ export default function CoachGameplan() {
                 <h2 className="text-[44px] font-bold leading-tight">{player.name}</h2>
                 <p className="text-gray-400 text-[24px] mt-1">
                   {player.pos}
-                  {player.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age{" "}
-                  {player.age}
+                  {player.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age {player.age}
                 </p>
               </div>
             </div>
