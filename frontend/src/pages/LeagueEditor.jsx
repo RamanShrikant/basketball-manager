@@ -67,6 +67,17 @@ export default function LeagueEditor() {
 
   /* ---------------- Helpers ---------------- */
   // Build a fresh snapshot with ratings recomputed using the current baselines
+// Safely read OFF/DEF for display. If missing, compute using the same logic.
+const viewOff = (p) =>
+  Number.isFinite(p?.offRating)
+    ? p.offRating
+    : pyRound(calcOffDef(p.attrs, p.pos, p.name, p.height).off);
+
+const viewDef = (p) =>
+  Number.isFinite(p?.defRating)
+    ? p.defRating
+    : pyRound(calcOffDef(p.attrs, p.pos, p.name, p.height).def);
+
 const buildExportSnapshot = () => {
   const clone = JSON.parse(JSON.stringify(conferences));
 
@@ -611,25 +622,11 @@ const calcOffDef = (attrs, pos, name = "", height = 78) => {
                   </td>
                   <td className="text-center">{p.pos}{p.secondaryPos?` / ${p.secondaryPos}`:""}</td>
                   <td className="text-center">{p.age}</td>
-                 <td className="text-center font-bold">{p.overall}</td>
-
-{/* OFF */}
-<td className="text-center">
-  <span className="inline-flex items-center justify-center rounded-full bg-slate-100 text-slate-800 text-sm font-semibold px-2 py-0.5">
-    {p.offRating}
-  </span>
-</td>
-
-{/* DEF */}
-<td className="text-center">
-  <span className="inline-flex items-center justify-center rounded-full bg-slate-100 text-slate-800 text-sm font-semibold px-2 py-0.5">
-    {p.defRating}
-  </span>
-</td>
-
-{/* POT (unchanged) */}
-<td className="text-center">{p.potential}</td>
-
+                  <td className="text-center">{formatHeight(p.height)}</td>
+                  <td className="text-center font-bold">{p.overall}</td>
+                  {/* OFF (plain number) */}
+                  <td className="text-center">{viewOff(p)}</td>
+                  <td className="text-center">{viewDef(p)}</td>
                   <td className="text-center">{p.potential}</td>
                   <td className="text-right">
                     <button onClick={()=>openPlayerForm(idx,i)} className="text-blue-600 text-sm hover:underline mr-2">Edit</button>
