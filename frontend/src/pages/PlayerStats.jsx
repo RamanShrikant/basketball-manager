@@ -55,7 +55,6 @@ export default function PlayerStats() {
   // ---------- league helpers ----------
   const allTeams = useMemo(() => {
     const confs = Object.values(leagueData.conferences || {});
-    // keep stable alphabetical order
     return confs.flat().sort((a, b) => a.name.localeCompare(b.name));
   }, [leagueData]);
 
@@ -111,6 +110,7 @@ export default function PlayerStats() {
           ast += rec.ast || 0;
           stl += rec.stl || 0;
           blk += rec.blk || 0;
+
           const [fgmN, fgaN] = rec.fg?.split("/")?.map(Number) || [0, 0];
           const [tpmN, tpaN] = rec["3p"]?.split("/")?.map(Number) || [0, 0];
           const [ftmN, ftaN] = rec.ft?.split("/")?.map(Number) || [0, 0];
@@ -157,15 +157,15 @@ export default function PlayerStats() {
     };
   };
 
-  // ---------- team aggregates strictly from observed results ----------
+  // ---------- team aggregates strictly from observed results (adds PA) ----------
   const allTeamsAgg = useMemo(() => {
-    // per-team season totals & game counts
-    const totals = {}; // { [team]: { gp, pts, reb, ..., fgm, fga, tpm, tpa, ftm, fta } }
+    const totals = {}; // season totals
     const ensure = (team) => {
       if (!totals[team]) {
         totals[team] = {
           gp: 0,
           pts: 0,
+          oppPts: 0, // <-- points allowed accumulator
           reb: 0,
           ast: 0,
           stl: 0,
@@ -181,12 +181,11 @@ export default function PlayerStats() {
       return totals[team];
     };
 
-    for (const [gameId, g] of Object.entries(results)) {
+    for (const g of Object.values(results)) {
       if (!g.box) continue;
 
-      // per-game, accumulate by team so each team increments GP once per game
-      const perGameByTeam = {};
-
+      // Build per-game team totals
+      const perGameByTeam = {}; // { team: { pts, reb, ... } }
       for (const side of ["home", "away"]) {
         const list = g.box[side] || [];
         for (const rec of list) {
@@ -225,11 +224,17 @@ export default function PlayerStats() {
         }
       }
 
-      // push this game's totals to season totals
-      for (const [team, box] of Object.entries(perGameByTeam)) {
+      // For each team in this game, opponent points = sum(other teams' points)
+      const entries = Object.entries(perGameByTeam);
+      for (const [team, box] of entries) {
+        const oppPts = entries
+          .filter(([t]) => t !== team)
+          .reduce((s, [, b]) => s + (b.pts || 0), 0);
+
         const row = ensure(team);
         row.gp += 1;
         row.pts += box.pts;
+        row.oppPts += oppPts; // <-- accumulate PA
         row.reb += box.reb;
         row.ast += box.ast;
         row.stl += box.stl;
@@ -243,7 +248,7 @@ export default function PlayerStats() {
       }
     }
 
-    // produce per-game averages
+    // produce per-game averages (include PA)
     const rows = Object.keys(totals).map((team) => {
       const t = totals[team];
       const gp = Math.max(1, t.gp);
@@ -256,6 +261,7 @@ export default function PlayerStats() {
         stats: {
           GP: t.gp,
           PTS: (t.pts / gp).toFixed(1),
+          PA: (t.oppPts / gp).toFixed(1), // <-- points allowed per game
           REB: (t.reb / gp).toFixed(1),
           AST: (t.ast / gp).toFixed(1),
           STL: (t.stl / gp).toFixed(1),
@@ -269,7 +275,7 @@ export default function PlayerStats() {
       };
     });
 
-    // include teams with 0 games so far (showing zeros), in alpha order
+    // include teams with 0 games so far (showing zeros)
     const have = new Set(rows.map((r) => r.teamName));
     for (const t of allTeams) {
       if (!have.has(t.name)) {
@@ -279,6 +285,7 @@ export default function PlayerStats() {
           stats: {
             GP: 0,
             PTS: "0.0",
+            PA: "0.0",
             REB: "0.0",
             AST: "0.0",
             STL: "0.0",
@@ -308,7 +315,6 @@ export default function PlayerStats() {
     return allPlayers.map((p) => ({ ...p, stats: computePlayerStats(p.name) }));
   }, [allPlayers, results]);
 
-  // default header selections
   useEffect(() => {
     if (mode === "players") {
       setSelectedPlayer((prev) => prev || (teamPlayers[0] || null));
@@ -319,7 +325,7 @@ export default function PlayerStats() {
     }
   }, [mode, teamPlayers, leaguePlayers, allTeamsAgg]);
 
-  // team switching (only meaningful in players mode)
+  // team switching (players mode only)
   const currentIndex = allTeams.findIndex((t) => t.name === selectedTeam.name);
   const handleTeamSwitch = (dir) => {
     if (mode !== "players") return;
@@ -353,10 +359,12 @@ export default function PlayerStats() {
     { key: "FTA", label: "FTA" },
   ];
 
+  // Team table columns (adds PA after PTS)
   const teamCols = [
     { key: "team", label: "Team" },
     { key: "GP", label: "GP" },
     { key: "PTS", label: "PTS" },
+    { key: "PA", label: "PA" }, // <-- Points Allowed per game
     { key: "REB", label: "REB" },
     { key: "AST", label: "AST" },
     { key: "STL", label: "STL" },
@@ -368,7 +376,7 @@ export default function PlayerStats() {
     { key: "FTA", label: "FTA" },
   ];
 
-  // sort for each mode
+  // sort helpers
   const applySort = (rows, type) => {
     if (!sortConfig.key || sortConfig.direction === "default") return rows;
 
@@ -405,9 +413,10 @@ export default function PlayerStats() {
     mode === "players" ? applySort(teamPlayers, "players") : applySort(leaguePlayers, "players");
   const rowsTeams = applySort(allTeamsAgg, "teams");
 
-  // header card fill (player) circle
-  const cardPlayer = mode === "players" || mode === "league" ? (selectedPlayer || rowsPlayers[0]) : null;
-  const fillPercent = Math.min(((cardPlayer?.overall || 0) / 99), 1);
+  // header player circle fill
+  const cardPlayer =
+    mode === "players" || mode === "league" ? selectedPlayer || rowsPlayers[0] : null;
+  const fillPercent = Math.min((cardPlayer?.overall || 0) / 99, 1);
   const circleCircumference = 2 * Math.PI * 50;
   const strokeOffset = circleCircumference * (1 - fillPercent);
 
@@ -419,7 +428,7 @@ export default function PlayerStats() {
 
   return (
     <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center py-10">
-      {/* Header: pinned arrows + centered title + mode switch (doesn't move) */}
+      {/* Header: pinned arrows + centered title + mode switch */}
       <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
         <div className="w-24 flex items-center justify-start">
           <button
@@ -550,16 +559,24 @@ export default function PlayerStats() {
             <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-6">
+                {/* Transparent logo (no background tile) */}
                 <img
                   src={cardTeam.logo}
                   alt={cardTeam.teamName}
-                  className="h-[90px] w-[90px] object-contain bg-neutral-900 rounded-lg p-2"
+                  className="h-[90px] w-[90px] object-contain"
                 />
                 <h2 className="text-[40px] font-bold leading-tight">{cardTeam.teamName}</h2>
               </div>
               <div className="text-right text-gray-300 text-lg">
-                <div>GP: <span className="text-white font-semibold">{cardTeam.stats.GP}</span></div>
-                <div>PTS: <span className="text-white font-semibold">{cardTeam.stats.PTS}</span></div>
+                <div>
+                  GP: <span className="text-white font-semibold">{cardTeam.stats.GP}</span>
+                </div>
+                <div>
+                  PTS: <span className="text-white font-semibold">{cardTeam.stats.PTS}</span>
+                </div>
+                <div>
+                  PA: <span className="text-white font-semibold">{cardTeam.stats.PA}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -569,15 +586,11 @@ export default function PlayerStats() {
       {/* Tables */}
       <div className="w-full flex justify-center mt-[-1px]">
         <div className="w-full max-w-5xl overflow-x-auto">
-          {/* PLAYERS TABLES */}
           {(mode === "players" || mode === "league") && (
             <table className="w-full border-collapse text-center text-[17px] font-medium">
               <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
                 <tr>
-                  {/* In All League view, prepend a logo column */}
-                  {mode === "league" && (
-                    <th className="py-3 px-2 min-w-[60px]">Team</th>
-                  )}
+                  {mode === "league" && <th className="py-3 px-2 min-w-[60px]">Team</th>}
                   {baseCols.map((col) => (
                     <th
                       key={col.key}
@@ -606,17 +619,18 @@ export default function PlayerStats() {
                     key={`${p.teamName || selectedTeam.name}-${p.name}`}
                     onClick={() => setSelectedPlayer(p)}
                     className={`cursor-pointer transition ${
-                      cardPlayer?.name === p.name
+                      (selectedPlayer || rowsPlayers[0])?.name === p.name
                         ? "bg-orange-600 text-white"
                         : "hover:bg-neutral-800"
                     }`}
                   >
                     {mode === "league" && (
                       <td className="py-2 px-2">
+                        {/* Fine to keep transparent here too if you like; currently unchanged */}
                         <img
                           src={p.teamLogo}
                           alt={p.teamName}
-                          className="inline-block h-[36px] w-[36px] object-contain bg-neutral-900 rounded"
+                          className="inline-block h-[36px] w-[36px] object-contain"
                           title={p.teamName}
                         />
                       </td>
@@ -641,12 +655,10 @@ export default function PlayerStats() {
             </table>
           )}
 
-          {/* TEAMS TABLE */}
           {mode === "teams" && (
             <table className="w-full border-collapse text-center text-[17px] font-medium">
               <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
                 <tr>
-                  {/* team logo + name as one sortable "team" column */}
                   {teamCols.map((col) => (
                     <th
                       key={col.key}
@@ -675,23 +687,25 @@ export default function PlayerStats() {
                     key={t.teamName}
                     onClick={() => setSelectedTeamRow(t.teamName)}
                     className={`cursor-pointer transition ${
-                      cardTeam?.teamName === t.teamName
+                      (cardTeam || rowsTeams[0])?.teamName === t.teamName
                         ? "bg-orange-600 text-white"
                         : "hover:bg-neutral-800"
                     }`}
                   >
                     <td className="py-2 px-3 text-left pl-4">
                       <div className="flex items-center gap-3">
+                        {/* Transparent logo (no background tile) */}
                         <img
                           src={t.logo}
                           alt={t.teamName}
-                          className="h-[32px] w-[32px] object-contain bg-neutral-900 rounded"
+                          className="h-[32px] w-[32px] object-contain"
                         />
                         <span>{t.teamName}</span>
                       </div>
                     </td>
                     <td>{t.stats.GP}</td>
                     <td>{t.stats.PTS}</td>
+                    <td>{t.stats.PA}</td>
                     <td>{t.stats.REB}</td>
                     <td>{t.stats.AST}</td>
                     <td>{t.stats.STL}</td>
