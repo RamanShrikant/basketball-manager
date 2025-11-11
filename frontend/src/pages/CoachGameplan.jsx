@@ -77,7 +77,7 @@ export default function CoachGameplan() {
     };
   };
 
-  // === AUTO-SORT – exact parity with your Python logic ===
+  // === AUTO-SORT – parity with the Python "average OVR w/ primary preference" ===
   const buildSmartRotation = (teamPlayers) => {
     const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
     const valid = (teamPlayers || []).filter(
@@ -87,6 +87,7 @@ export default function CoachGameplan() {
 
     const score = (p) => (p.overall || 0) + ((p.stamina || 70) - 70) * 0.15;
 
+    // ---- choose ~10 and baseline minutes (unchanged from your version) ----
     const chosen = [];
     for (const pos of POSITIONS) {
       const posPlayers = valid
@@ -104,6 +105,7 @@ export default function CoachGameplan() {
 
     const work = chosen.map((p) => ({ ...p, minutes: 0 }));
 
+    // give everyone minutes, then smooth (unchanged)
     for (const w of work) w.minutes = 12;
     let remain = 240 - 12 * work.length;
     let i = 0;
@@ -137,6 +139,7 @@ export default function CoachGameplan() {
       return { off: off * coveragePenalty, deff: deff * coveragePenalty, ovr: ovr * coveragePenalty };
     };
 
+    // small minute hill-climb (unchanged)
     const coreSet = new Set(work.slice(0, 5).map((p) => p.name));
     let improved = true;
     while (improved) {
@@ -165,6 +168,7 @@ export default function CoachGameplan() {
       }
     }
 
+    // --- Python parity: starters chosen by MAX AVERAGE OVR with primary bonus & secondary penalty
     const permute = (arr) => {
       const out = [];
       const rec = (path, rest) => {
@@ -195,18 +199,29 @@ export default function CoachGameplan() {
     const posPerms = permute(POSITIONS);
     let bestMap = null, bestScore = -Infinity;
 
+    const PRIMARY_BONUS = 0.02; // tiny nudge toward primaries
+    const SECONDARY_PEN = 0.01; // tiny nudge against secondaries
+
     for (const five of combos(work, Math.min(5, work.length))) {
       for (const perm of posPerms) {
         let ok = true;
+        let primaryHits = 0;
+        let secUses = 0;
+        let sumOvr = 0;
         const mapping = {};
         for (let k = 0; k < five.length; k++) {
           const pl = five[k], pos = perm[k];
-          if (!(pl.pos === pos || pl.secondaryPos === pos)) { ok = false; break; }
+          const eligible = (pl.pos === pos) || (pl.secondaryPos === pos);
+          if (!eligible) { ok = false; break; }
           mapping[pos] = pl;
+          sumOvr += (pl.overall || 0);
+          if (pos === pl.pos) primaryHits += 1;
+          else if (pl.secondaryPos === pos) secUses += 1;
         }
         if (!ok) continue;
-        const { ovr } = teamTotal(five);
-        if (ovr > bestScore) { bestScore = ovr; bestMap = mapping; }
+        const avgOvr = sumOvr / 5;
+        const score = avgOvr + PRIMARY_BONUS * primaryHits - SECONDARY_PEN * secUses;
+        if (score > bestScore) { bestScore = score; bestMap = mapping; }
       }
     }
 
@@ -226,6 +241,7 @@ export default function CoachGameplan() {
     const others = valid.filter((p) => !usedNames.has(p.name));
     const sorted = [...starters, ...bench, ...others];
 
+    // minutes remain exactly as allocated above (Python parity)
     const obj = {};
     for (const p of sorted) obj[p.name] = p.minutes || 0;
     for (const p of valid) if (!(p.name in obj)) obj[p.name] = 0;
