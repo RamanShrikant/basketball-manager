@@ -1,0 +1,210 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,700;0,800;0,900;1,700;1,800;1,900&display=swap');
+/* ===============================
+  FIXED TEAM SELECTOR UI MODULE
+  (No glow + bright orange accents)
+  =============================== */
+
+:root {
+  --accent: #ffa500; /* bright orange */
+}
+
+/* FULL wrapper with metallic pattern + original layout intact */
+.wrapper {
+  /* original layout */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;          /* title sits at top-left nicely */
+  min-height: 100vh;                    /* cover the viewport (avoid white gap) */
+  width: 100%;
+  color: white;
+  position: relative;                   /* required for ::before/::after layering */
+  overflow: hidden;
+  font-family: "Bebas Neue", sans-serif;
+
+  /* background stack: subtle metallic lines + your vignette */
+  background:
+    /* thin diagonal lines */
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 22px),
+    /* original vignette */
+    radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%);
+}
+
+/* Soft white arcs (stay behind content) */
+.wrapper::before {
+  content: "";
+  position: absolute;
+  inset: -120px;
+  pointer-events: none;
+  z-index: -1;
+  background-image:
+    conic-gradient(from 210deg at 18% 22%,
+      rgba(255,255,255,0.16) 0deg, rgba(255,255,255,0.08) 14deg,
+      rgba(255,255,255,0.00) 36deg 360deg),
+    conic-gradient(from 30deg at 82% 78%,
+      rgba(255,255,255,0.14) 0deg, rgba(255,255,255,0.07) 16deg,
+      rgba(255,255,255,0.00) 38deg 360deg);
+  background-repeat: no-repeat, no-repeat;
+  background-size: 760px 760px, 700px 700px;
+  background-position: left -120px top -80px, right -90px bottom -60px;
+  filter: blur(20px);
+  opacity: 0.26; /* tune 0.18–0.32 */
+}
+
+/* Subtle basketball pattern layer (also behind content) */
+.wrapper::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("../assets/basketball-pattern.svg");
+  background-repeat: repeat;
+  background-size: 340px 340px;
+  opacity: 0.06;     /* slightly lowered so it doesn’t darken cards */
+  animation: drift 80s linear infinite;
+  z-index: -1;
+}
+
+/* keep your existing .title/.scrollRow/.card/... etc. rules as-is */
+
+
+/* Title: far left, italic, bold, no glow */
+.title {
+  font-family: "Poppins", "Bebas Neue", sans-serif;
+  font-style: italic;
+  font-weight: 800;                  /* juicy */
+  font-size: clamp(48px, 8vw, 96px); /* scales nicely */
+  color: #fff;
+  text-shadow: none;                 /* no glow */
+  letter-spacing: 1px;
+
+  /* push to the far-left even though wrapper centers children */
+  align-self: flex-start;
+  margin: 0 0 40px 2rem;             /* left inset; adjust if you want tighter */
+}
+
+
+/* Scroll row */
+.scrollRow {
+  display: flex;
+  overflow-x: auto;
+  align-items: center;
+  gap: 3rem;
+  width: 96%;
+  padding: 1rem 2rem;
+  margin-bottom: 130px;
+  scroll-snap-type: x mandatory;
+}
+
+/* Team card */
+.card {
+  flex-shrink: 0;
+  width: 370px;
+  height: 460px;
+  background-color: #171717;
+  border-radius: 20px;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.5); /* base depth only */
+  transition: transform 0.25s ease, opacity 0.25s ease, border-color 0.25s ease;
+  cursor: pointer;
+  scroll-snap-align: center;
+  opacity: 0.5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.card:hover {
+  opacity: 1;
+  transform: scale(1.05);
+  /* no colored glow on hover */
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.5);
+}
+
+/* Selected team */
+.selected {
+  border: 4px solid var(--accent);
+  /* remove glow & pulse */
+  box-shadow: none;
+  opacity: 1;
+  animation: none;
+}
+
+/* Logos + Text */
+.logo {
+  height: 15rem;
+  object-fit: contain;
+  margin-bottom: 1rem;
+  pointer-events: none;
+  user-select: none;
+}
+
+.name {
+  font-size: 32px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* Horizontal scrollbar (the orange bar under the cards) */
+.scrollRow::-webkit-scrollbar {
+  height: 8px; /* a touch thicker to pop like the screenshot */
+}
+.scrollRow::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollRow::-webkit-scrollbar-thumb {
+  background-color: var(--accent); /* always bright orange */
+  border-radius: 10px;
+}
+.scrollRow::-webkit-scrollbar-thumb:hover,
+.scrollRow::-webkit-scrollbar-thumb:active {
+  background-color: var(--accent); /* no darkening */
+}
+
+/* Bottom controls */
+.controlsBar {
+  position: absolute;
+  bottom: 10px;
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 2.5rem;
+  font-family: monospace;
+  color: #ccc;
+  font-size: 0.85rem;
+  letter-spacing: 2px;
+}
+
+.advanceBtn {
+  background-color: #555;
+  color: #888;
+  font-weight: bold;
+  border: none;
+  border-radius: 6px;
+  padding: 0.8rem 2rem;
+  font-size: 1.1rem;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.advanceBtn.active {
+  background-color: var(--accent);
+  color: white;
+}
+.advanceBtn.active:hover {
+  background-color: var(--accent); /* keep it bright */
+}
+
+/* Animations */
+@keyframes drift {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(-100px, -60px) rotate(1deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+
+/* pulse keyframes can remain; not used anymore */
+@keyframes pulse {
+  0% { box-shadow: none; }
+  50% { box-shadow: none; }
+  100% { box-shadow: none; }
+}
