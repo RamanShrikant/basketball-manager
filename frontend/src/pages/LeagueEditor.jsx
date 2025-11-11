@@ -66,6 +66,31 @@ export default function LeagueEditor() {
   const DEF_ATTRS = [7,8,9,10,11,12,14];
 
   /* ---------------- Helpers ---------------- */
+  // Build a fresh snapshot with ratings recomputed using the current baselines
+const buildExportSnapshot = () => {
+  const clone = JSON.parse(JSON.stringify(conferences));
+
+  const recalcPlayer = (p) => {
+    const { off, def } = calcOffDef(p.attrs, p.pos, p.name, p.height);
+    return {
+      ...p,
+      overall: calcOverall(p.attrs, p.pos),
+      offRating: off,
+      defRating: def,
+      stamina: calcStamina(p.age, p.attrs[7]),
+    };
+  };
+
+  ["East","West"].forEach(side => {
+    clone[side] = (clone[side] || []).map(team => ({
+      ...team,
+      players: (team.players || []).map(recalcPlayer),
+    }));
+  });
+
+  return clone;
+};
+
   function genId() {
     if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
     return `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
@@ -466,16 +491,23 @@ const calcOffDef = (attrs, pos, name = "", height = 78) => {
               r.readAsText(f);
             }}/>
         </label>
-        <button onClick={()=>{
-          const json={leagueName,conferences};
-          const blob=new Blob([JSON.stringify(json,null,2)],{type:"application/json"});
-          const url=URL.createObjectURL(blob);
-          const a=document.createElement("a");
-          a.href=url;a.download=`${leagueName}.json`;a.click();URL.revokeObjectURL(url);
-        }}
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-          Export JSON
-        </button>
+<button
+  onClick={() => {
+    const snapshot = buildExportSnapshot(); // <-- recompute here
+    const json = { leagueName, conferences: snapshot };
+    const blob = new Blob([JSON.stringify(json, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${leagueName}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }}
+  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+>
+  Export JSON
+</button>
+
       </div>
     </div>
 
@@ -541,17 +573,20 @@ const calcOffDef = (attrs, pos, name = "", height = 78) => {
 
           {/* Player Table */}
           <table className="w-full text-base">
-            <thead>
-              <tr className="border-b">
-                <th className="text-left font-semibold">Player</th>
-                <th className="text-center font-semibold">Pos</th>
-                <th className="text-center font-semibold">Age</th>
-                <th className="text-center font-semibold">Height</th>
-                <th className="text-center font-semibold">OVR</th>
-                <th className="text-center font-semibold">POT</th>
-                <th></th>
-              </tr>
-            </thead>
+<thead>
+  <tr className="border-b">
+    <th className="text-left font-semibold">Player</th>
+    <th className="text-center font-semibold">Pos</th>
+    <th className="text-center font-semibold">Age</th>
+    <th className="text-center font-semibold">Height</th>
+    <th className="text-center font-semibold">OVR</th>
+    <th className="text-center font-semibold">OFF</th>
+    <th className="text-center font-semibold">DEF</th>
+    <th className="text-center font-semibold">POT</th>
+    <th></th>
+  </tr>
+</thead>
+
             <tbody>
               {players.map((p,i)=>(
                 <tr key={i} className="border-b align-middle py-4">
@@ -576,8 +611,25 @@ const calcOffDef = (attrs, pos, name = "", height = 78) => {
                   </td>
                   <td className="text-center">{p.pos}{p.secondaryPos?` / ${p.secondaryPos}`:""}</td>
                   <td className="text-center">{p.age}</td>
-                  <td className="text-center">{formatHeight(p.height)}</td>
-                  <td className="text-center font-bold">{p.overall}</td>
+                 <td className="text-center font-bold">{p.overall}</td>
+
+{/* OFF */}
+<td className="text-center">
+  <span className="inline-flex items-center justify-center rounded-full bg-slate-100 text-slate-800 text-sm font-semibold px-2 py-0.5">
+    {p.offRating}
+  </span>
+</td>
+
+{/* DEF */}
+<td className="text-center">
+  <span className="inline-flex items-center justify-center rounded-full bg-slate-100 text-slate-800 text-sm font-semibold px-2 py-0.5">
+    {p.defRating}
+  </span>
+</td>
+
+{/* POT (unchanged) */}
+<td className="text-center">{p.potential}</td>
+
                   <td className="text-center">{p.potential}</td>
                   <td className="text-right">
                     <button onClick={()=>openPlayerForm(idx,i)} className="text-blue-600 text-sm hover:underline mr-2">Edit</button>
