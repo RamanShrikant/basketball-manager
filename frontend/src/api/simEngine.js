@@ -158,7 +158,7 @@ function coveragePenaltyPts(posMin) {
 
 const scaleRange = (raw) => clamp((raw - 75) * TR_GAIN + 75, 25, 99);
 
-function computeTeamRatings(team, minsObj) {
+export function computeTeamRatings(team, minsObj) {
   const { roster, posMin, total } = minutesWeighted(team, minsObj);
   if (!total) return { overall: 0, off: 0, def: 0, rosterOut: roster };
 
@@ -209,19 +209,32 @@ function leagueAttrMeans(leagueData) {
   };
 }
 
-// ------------------------ scoreboard model (Python parity) ------------------------
+// ------------------------ scoreboard model (Python parity - updated) ------------------------
 const OFF_MEAN = 80.0, DEF_MEAN = 80.0;
-const BASE_O = 112.7272727273;
-const OFF_COEF = 17.0 / 33.0;  // ≈0.515
-const DEF_COEF = 16.0 / 33.0;  // ≈0.485
-const DEF_BIAS = 1.0;
 
-const PACE_A = 0.0042, PACE_D = 0.0032;
-const PACE_CLAMP = [0.92, 1.08];
+// Calibrated for ~105–122 typical totals
+const BASE_O   = 111.5;
+const OFF_COEF = 19.0 / 33.0;   // ≈0.576
+const DEF_COEF = 19.0 / 33.0;   // ≈0.576
+const DEF_BIAS = 0.0;
 
-const sigmaMarginForDelta = (d) => Math.max(7.0, Math.min(13.0, 13.0 - 0.25 * Math.abs(d)));
-const sigmaTotalForDelta = (d) => Math.max(10.0, Math.min(16.0, 16.0 - 0.10 * Math.abs(d)));
-const MARG_PER_OVR = 0.8416 * 7.0 / 24.0; // ≈0.2455
+// Tighter, slightly slower pace band
+const PACE_A = 0.0032, PACE_D = 0.0030;
+const PACE_CLAMP = [0.84, 1.07];
+
+// Variance curves (broader small-gap margins, cap totals sigma at 15)
+const sigmaMarginForDelta = (d) => {
+  const gap = Math.abs(d);
+  const base = 10.6;
+  const slope = 0.10;
+  const extra = 0.60 * Math.max(0, gap - 18.0);
+  return Math.max(10.0, Math.min(16.0, base - slope * gap + extra));
+};
+const sigmaTotalForDelta = (d) => Math.max(10.0, Math.min(15.0, 15.0 - 0.10 * Math.abs(d)));
+
+const MARG_PER_OVR   = 0.27;
+const STYLE_MARGIN_K = 0.22;
+const TOTAL_SKEW_K   = 0.48;
 
 const expectedPointsFor = (off, oppDef) =>
   BASE_O + OFF_COEF * (off - OFF_MEAN) - DEF_COEF * (oppDef - DEF_MEAN) + DEF_BIAS;
@@ -231,6 +244,7 @@ const paceMultiplier = (offA, defA, offB, defB) => {
               - PACE_D * ((defA - DEF_MEAN) + (defB - DEF_MEAN));
   return clamp(1 + tempo, PACE_CLAMP[0], PACE_CLAMP[1]);
 };
+
 
 // ------------------------ box score generator ------------------------
 function sampleMultinomial(total, weights) {
@@ -639,25 +653,44 @@ export function simulateOneGame({ leagueData, homeTeamName, awayTeamName }) {
   const rateH = computeTeamRatings(H, minutesH);
   const rateA = computeTeamRatings(A, minutesA);
 
-  // OVERALL → margin; OFF/DEF (+pace) → totals
-  const dOvr = rateH.overall - rateA.overall;
-  const sigM = sigmaMarginForDelta(dOvr);
-  const sigT = sigmaTotalForDelta(dOvr);
-  const marginMean = MARG_PER_OVR * dOvr;
+// PATCH 2: identity-aware margin & totals + gentle underdog shock
+const dOvr = rateH.overall - rateA.overall;
+const sigM = sigmaMarginForDelta(dOvr);
+const sigT = sigmaTotalForDelta(dOvr);
 
-  const baseHome = expectedPointsFor(rateH.off, rateA.def);
-  const baseAway = expectedPointsFor(rateA.off, rateH.def);
-  const pace = paceMultiplier(rateH.off, rateH.def, rateA.off, rateA.def);
-  const muHome = baseHome * pace;
-  const muAway = baseAway * pace;
-  const totalMean = muHome + muAway;
+// style term: home OFF vs away DEF minus away OFF vs home DEF
+const styleTerm = STYLE_MARGIN_K * ((rateH.off - rateA.def) - (rateA.off - rateH.def));
 
-  const sampledTotal = gauss(totalMean, sigT);
-  const sampledMargin = gauss(marginMean, sigM);
-  let hs = Math.round((sampledTotal + sampledMargin) / 2);
-  let as = Math.round(sampledTotal - hs);
-  hs = clamp(hs, 85, 155);
-  as = clamp(as, 85, 155);
+// base margin from overall gap + style; compress huge gaps softly
+let marginMu = MARG_PER_OVR * dOvr + styleTerm;
+const comp = 1 / (1 + 0.020 * Math.abs(dOvr)); // compression factor
+marginMu *= comp;
+
+// base totals from OFF/DEF + pace
+const pace = paceMultiplier(rateH.off, rateH.def, rateA.off, rateA.def);
+const muHome = expectedPointsFor(rateH.off, rateA.def) * pace;
+const muAway = expectedPointsFor(rateA.off, rateH.def) * pace;
+let totalMu = muHome + muAway;
+
+// skew totals toward the favorite’s identity (offense up, defense down)
+const favored = dOvr >= 0 ? rateH : rateA;
+const identSkew = TOTAL_SKEW_K * ((favored.off - OFF_MEAN) - (favored.def - DEF_MEAN)) / 2;
+totalMu += identSkew;
+
+// small underdog shock so upsets can happen
+const upsetChance = clamp(0.025 + 0.065 * Math.exp(-Math.abs(dOvr) / 10), 0.02, 0.07);
+if (rand() < upsetChance) {
+  marginMu *= -1 * (0.55 + 0.90 * rand());
+}
+
+const sampledTotal  = gauss(totalMu, sigT);
+const sampledMargin = gauss(marginMu, sigM);
+
+let hs = Math.round((sampledTotal + sampledMargin) / 2);
+let as = Math.round(sampledTotal - hs);
+hs = clamp(hs, 85, 155);
+as = clamp(as, 85, 155);
+    
 
   // quarter split + unlimited OT (aggregate OT points)
   const qsplit = (total) => {
