@@ -375,16 +375,32 @@ export default function Calendar() {
       <div className="max-w-6xl mx-auto px-4">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
+          {/* LEFT: Static arrows + team identity (no 'Current Team:' label) */}
           <div className="flex items-center gap-4">
-            <span className="text-gray-300">Current Team:</span>
+            {/* fixed-width arrow block so position never shifts */}
+            <div className="w-16 flex items-center justify-start gap-2 select-none">
+              <button
+                onClick={() => handleTeamSwitch("prev")}
+                className="text-2xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
+                title="Previous Team"
+              >
+                ◄
+              </button>
+              <button
+                onClick={() => handleTeamSwitch("next")}
+                className="text-2xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
+                title="Next Team"
+              >
+                ►
+              </button>
+            </div>
+
+            {/* Team logo + name (arrows no longer tied to name width) */}
             <Logo team={selectedTeam} size={32} />
             <h1 className="text-2xl font-extrabold text-orange-500">{selectedTeam.name}</h1>
-            <div className="flex items-center gap-2 ml-2 select-none">
-              <button onClick={() => handleTeamSwitch("prev")} className="text-2xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold" title="Previous Team">◄</button>
-              <button onClick={() => handleTeamSwitch("next")} className="text-2xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold" title="Next Team">►</button>
-            </div>
           </div>
 
+          {/* RIGHT: existing controls unchanged */}
           <div className="flex items-center gap-2">
             <button className="px-3 py-2 bg-neutral-700 rounded hover:bg-neutral-600" onClick={() => navigate("/team-hub")}>Back to Team Hub</button>
             {hasPlayedWithoutResult && (

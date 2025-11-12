@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 
@@ -11,39 +11,7 @@ export default function RosterView() {
   );
   const navigate = useNavigate();
 
-  // ✅ Restore last viewed team if none is selected
-  useEffect(() => {
-    if (!selectedTeam) {
-      const savedTeam = localStorage.getItem("selectedTeam");
-      if (savedTeam) setSelectedTeam(JSON.parse(savedTeam));
-    }
-  }, [selectedTeam, setSelectedTeam]);
-
-  // ✅ Save selected team on change
-  useEffect(() => {
-    if (selectedTeam) {
-      localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam));
-    }
-  }, [selectedTeam]);
-
-  if (!selectedTeam) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
-        <p className="text-lg mb-4">No team selected.</p>
-        <button
-          onClick={() => navigate("/team-selector")}
-          className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
-        >
-          Back to Team Select
-        </button>
-      </div>
-    );
-  }
-
-  const players = selectedTeam.players || [];
-  const player = selectedPlayer || players[0];
-
-  // Attribute mapping
+  // --- attribute columns ---
   const attrColumns = [
     { key: "attr0", label: "3PT", index: 0 },
     { key: "attr1", label: "MID", index: 1 },
@@ -61,7 +29,6 @@ export default function RosterView() {
     { key: "attr14", label: "DIQ", index: 14 },
   ];
 
-  // Letter converter
   const toLetter = (num) => {
     if (num >= 94) return "A+";
     if (num >= 87) return "A";
@@ -77,110 +44,166 @@ export default function RosterView() {
     if (num >= 50) return "D-";
     return "F";
   };
-
-  // Toggle entire table on double click (remembers preference)
   const handleCellDoubleClick = () => {
-    const newState = !showLetters;
-    setShowLetters(newState);
-    localStorage.setItem("showLetters", newState);
+    const next = !showLetters;
+    setShowLetters(next);
+    localStorage.setItem("showLetters", next);
   };
 
-  // --- Team navigation setup ---
-  const allTeams = leagueData
-    ? Object.values(leagueData.conferences)
-        .flat()
-        .sort((a, b) => a.name.localeCompare(b.name))
-    : [];
-  const currentIndex = allTeams.findIndex((t) => t.name === selectedTeam?.name);
+  // restore/save selected team
+  useEffect(() => {
+    if (!selectedTeam) {
+      const saved = localStorage.getItem("selectedTeam");
+      if (saved) setSelectedTeam(JSON.parse(saved));
+    }
+  }, [selectedTeam, setSelectedTeam]);
+  useEffect(() => {
+    if (selectedTeam) localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam));
+  }, [selectedTeam]);
 
-  const handleTeamSwitch = (direction) => {
-    if (!allTeams.length) return;
-    let newIndex =
-      direction === "next"
-        ? (currentIndex + 1) % allTeams.length
-        : (currentIndex - 1 + allTeams.length) % allTeams.length;
-    setSelectedTeam(allTeams[newIndex]);
-    setSelectedPlayer(null); // reset to first player
+  // teams sorted
+  const teamsSorted = useMemo(() => {
+    if (!leagueData?.conferences) return [];
+    return Object.values(leagueData.conferences)
+      .flat()
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }, [leagueData]);
+
+  // all players list
+  const allLeaguePlayers = useMemo(
+    () => teamsSorted.flatMap((t) => t.players || []),
+    [teamsSorted]
+  );
+
+  // map player -> team info (for logo column)
+  const teamOfPlayer = useMemo(() => {
+    const map = {};
+    for (const t of teamsSorted) {
+      const logo = t.logo || t.teamLogo || t.newTeamLogo || t.image || t.logoUrl || "";
+      for (const p of t.players || []) map[p.name] = { teamName: t.name, logo };
+    }
+    return map;
+  }, [teamsSorted]);
+
+  // view index: 0..N-1 teams, N = All Players
+  const [viewIndex, setViewIndex] = useState(0);
+  useEffect(() => {
+    const idx = teamsSorted.findIndex((t) => t.name === selectedTeam?.name);
+    setViewIndex(idx >= 0 ? idx : 0);
+  }, [teamsSorted, selectedTeam]);
+
+  const totalSlots = teamsSorted.length + 1; // +1 for All Players
+  const isAllView = viewIndex === teamsSorted.length;
+
+  const handleTeamSwitch = (dir) => {
+    if (!totalSlots) return;
+    setViewIndex((prev) => {
+      const next =
+        dir === "next"
+          ? (prev + 1 + totalSlots) % totalSlots
+          : (prev - 1 + totalSlots) % totalSlots;
+      if (next < teamsSorted.length) setSelectedTeam(teamsSorted[next]);
+      setSelectedPlayer(null);
+      return next;
+    });
   };
 
-  // Sort handling
+  // active rows
+  const viewPlayers = isAllView ? allLeaguePlayers : (selectedTeam?.players || []);
+  useEffect(() => {
+    if (!viewPlayers?.length) { setSelectedPlayer(null); return; }
+    if (!selectedPlayer || !viewPlayers.some((p) => p.name === selectedPlayer.name)) {
+      setSelectedPlayer(viewPlayers[0]);
+    }
+  }, [viewPlayers, selectedPlayer]);
+
+  // sorting
+  const positionOrder = ["PG", "SG", "SF", "PF", "C"];
   const handleSort = (key) => {
     let direction = "desc";
     if (sortConfig.key === key && sortConfig.direction === "desc") direction = "asc";
     else if (sortConfig.key === key && sortConfig.direction === "asc") direction = "default";
     setSortConfig({ key, direction });
   };
-
-  const positionOrder = ["PG", "SG", "SF", "PF", "C"];
-
-  const getSortedPlayers = () => {
-    if (!sortConfig.key || sortConfig.direction === "default") return players;
-    const sorted = [...players];
-    sorted.sort((a, b) => {
+  const sortedPlayers = useMemo(() => {
+    if (!sortConfig.key || sortConfig.direction === "default") return viewPlayers;
+    const rows = [...viewPlayers];
+    rows.sort((a, b) => {
       const key = sortConfig.key;
-
-      // --- POS sorting custom logic ---
       if (key === "pos") {
         const aIdx = positionOrder.indexOf(a.pos);
         const bIdx = positionOrder.indexOf(b.pos);
-        const diff =
-          (aIdx === -1 ? 99 : aIdx) - (bIdx === -1 ? 99 : bIdx);
+        const diff = (aIdx === -1 ? 99 : aIdx) - (bIdx === -1 ? 99 : bIdx);
         return sortConfig.direction === "asc" ? diff : -diff;
       }
-
-      // --- Name sorting ---
       if (key === "name") {
         return sortConfig.direction === "asc"
           ? a.name.localeCompare(b.name)
           : -a.name.localeCompare(b.name);
       }
-
-      // --- Numeric columns ---
-      if (
-        ["age", "overall", "stamina", "potential", "offRating", "defRating"].includes(key)
-      ) {
+      if (["age", "overall", "stamina", "potential", "offRating", "defRating"].includes(key)) {
         return sortConfig.direction === "asc" ? a[key] - b[key] : b[key] - a[key];
       }
-
       if (key.startsWith("attr")) {
         const idx = parseInt(key.replace("attr", ""));
-        const aVal = a.attrs?.[idx] ?? 0;
-        const bVal = b.attrs?.[idx] ?? 0;
-        return sortConfig.direction === "asc" ? aVal - bVal : bVal - aVal;
+        const av = a.attrs?.[idx] ?? 0;
+        const bv = b.attrs?.[idx] ?? 0;
+        return sortConfig.direction === "asc" ? av - bv : bv - av;
       }
       return 0;
     });
-    return sorted;
-  };
+    return rows;
+  }, [viewPlayers, sortConfig]);
 
-  const sortedPlayers = getSortedPlayers();
+  // guards
+  if (!selectedTeam && !teamsSorted.length) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
+        <p className="text-lg mb-4">No team selected.</p>
+        <button
+          onClick={() => navigate("/team-selector")}
+          className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
+        >
+          Back to Team Select
+        </button>
+      </div>
+    );
+  }
+
+  const player = selectedPlayer || viewPlayers[0] || {};
+  const headerTitle = isAllView ? "All Players" : `${selectedTeam.name} Roster`;
+  const showTeamCol = isAllView; // logo column only in All Players view
 
   // OVR circle
-  const fillPercent = Math.min(player.overall / 99, 1);
+  const fillPercent = Math.min((player.overall || 0) / 99, 1);
   const circleCircumference = 2 * Math.PI * 50;
   const strokeOffset = circleCircumference * (1 - fillPercent);
 
   return (
     <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center py-10">
-      {/* Team Header with Navigation */}
-      <div className="flex items-center justify-center gap-6 mb-6 select-none">
-<button
-  onClick={() => handleTeamSwitch("prev")}
-  className="text-4xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
->
-  ◄
-</button>
-<h1 className="text-4xl font-extrabold text-orange-500 text-center min-w-[280px]">
-  {selectedTeam.name} Roster
-</h1>
-<button
-  onClick={() => handleTeamSwitch("next")}
-  className="text-4xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
-
->
-  ►
-</button>
-
+      {/* Static header with pinned arrows */}
+      <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
+        <div className="w-24 flex items-center justify-start">
+          <button
+            onClick={() => handleTeamSwitch("prev")}
+            className="text-4xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
+            title="Previous Team"
+          >
+            ◄
+          </button>
+        </div>
+        <h1 className="text-4xl font-extrabold text-orange-500 text-center">
+          {headerTitle}
+        </h1>
+        <div className="w-24 flex items-center justify-end">
+          <button
+            onClick={() => handleTeamSwitch("next")}
+            className="text-4xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
+            title="Next Team"
+          >
+            ►
+          </button>
+        </div>
       </div>
 
       {/* Player Card */}
@@ -190,23 +213,28 @@ export default function RosterView() {
           <div className="flex items-end justify-between relative">
             <div className="flex items-end gap-6">
               <div className="relative -mb-[9px]">
-                <img
-                  src={player.headshot}
-                  alt={player.name}
-                  className="h-[175px] w-auto object-contain"
-                />
+                {player?.headshot ? (
+                  <img
+                    src={player.headshot}
+                    alt={player.name}
+                    className="h-[175px] w-auto object-contain"
+                  />
+                ) : (
+                  <div className="h-[175px] w-[130px] bg-neutral-700 rounded flex items-center justify-center text-neutral-300">
+                    No Image
+                  </div>
+                )}
               </div>
               <div className="flex flex-col justify-end mb-3">
-                <h2 className="text-[44px] font-bold leading-tight">{player.name}</h2>
+                <h2 className="text-[44px] font-bold leading-tight">{player?.name || "-"}</h2>
                 <p className="text-gray-400 text-[24px] mt-1">
-                  {player.pos}
-                  {player.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age{" "}
-                  {player.age}
+                  {player?.pos || "-"}
+                  {player?.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age{" "}
+                  {player?.age ?? "-"}
                 </p>
               </div>
             </div>
 
-            {/* OVR Circle */}
             <div className="relative flex flex-col items-center justify-center mr-4 mb-2">
               <svg width="110" height="110" viewBox="0 0 120 120">
                 <defs>
@@ -215,14 +243,7 @@ export default function RosterView() {
                     <stop offset="100%" stopColor="#FFD54F" />
                   </linearGradient>
                 </defs>
-                <circle
-                  cx="60"
-                  cy="60"
-                  r="50"
-                  stroke="rgba(255,255,255,0.08)"
-                  strokeWidth="8"
-                  fill="none"
-                />
+                <circle cx="60" cy="60" r="50" stroke="rgba(255,255,255,0.08)" strokeWidth="8" fill="none" />
                 <circle
                   cx="60"
                   cy="60"
@@ -239,13 +260,10 @@ export default function RosterView() {
               <div className="absolute flex flex-col items-center justify-center text-center">
                 <p className="text-sm text-gray-300 tracking-wide mb-1">OVR</p>
                 <p className="text-[47px] font-extrabold text-orange-400 leading-none mt-[-11px]">
-                  {player.overall}
+                  {player?.overall ?? "-"}
                 </p>
                 <p className="text-[10px] text-gray-400 mt-[-2px]">
-                  POT{" "}
-                  <span className="text-orange-400 font-semibold">
-                    {player.potential}
-                  </span>
+                  POT <span className="text-orange-400 font-semibold">{player?.potential ?? "-"}</span>
                 </p>
               </div>
             </div>
@@ -260,6 +278,7 @@ export default function RosterView() {
             <table className="w-full border-collapse text-center">
               <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
                 <tr>
+                  {showTeamCol && <th className="py-3 px-3 min-w-[60px]">Team</th>}
                   {[
                     { key: "name", label: "Name" },
                     { key: "pos", label: "POS" },
@@ -274,9 +293,7 @@ export default function RosterView() {
                     <th
                       key={col.key}
                       className={`py-3 px-3 min-w-[95px] ${
-                        col.key === "name"
-                          ? "min-w-[150px] text-left pl-4"
-                          : "text-center"
+                        col.key === "name" ? "min-w-[150px] text-left pl-4" : "text-center"
                       } cursor-pointer select-none`}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -286,11 +303,7 @@ export default function RosterView() {
                       {col.label}
                       {sortConfig.key === col.key && (
                         <span className="ml-1 text-orange-400">
-                          {sortConfig.direction === "asc"
-                            ? "▲"
-                            : sortConfig.direction === "desc"
-                            ? "▼"
-                            : ""}
+                          {sortConfig.direction === "asc" ? "▲" : sortConfig.direction === "desc" ? "▼" : ""}
                         </span>
                       )}
                     </th>
@@ -299,49 +312,56 @@ export default function RosterView() {
               </thead>
 
               <tbody className="text-[17px] font-medium">
-                {sortedPlayers.map((p) => (
-                  <tr
-                    key={p.name}
-                    onClick={() => setSelectedPlayer(p)}
-                    className={`cursor-pointer transition ${
-                      player.name === p.name
-                        ? "bg-orange-600 text-white"
-                        : "hover:bg-neutral-800"
-                    }`}
-                  >
-                    <td className="py-2 px-3 whitespace-nowrap text-left pl-4">
-                      {p.name}
-                    </td>
-                    <td className="py-2 px-3">{p.pos}</td>
-                    <td className="py-2 px-3">{p.age}</td>
-                    <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                      {showLetters ? toLetter(p.overall) : p.overall}
-                    </td>
-                    <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                      {showLetters ? toLetter(p.offRating) : p.offRating}
-                    </td>
-                    <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                      {showLetters ? toLetter(p.defRating) : p.defRating}
-                    </td>
-                    <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                      {showLetters ? toLetter(p.stamina) : p.stamina}
-                    </td>
-                    <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                      {showLetters ? toLetter(p.potential) : p.potential}
-                    </td>
-                    {attrColumns.map((a) => (
-                      <td
-                        key={a.key}
-                        className="py-2 px-3"
-                        onDoubleClick={handleCellDoubleClick}
-                      >
-                        {showLetters
-                          ? toLetter(p.attrs?.[a.index] ?? 0)
-                          : p.attrs?.[a.index] ?? "-"}
+                {sortedPlayers.map((p, idx) => {
+                  const tinfo = teamOfPlayer[p.name] || {};
+                  return (
+                    <tr
+                      key={`${p.name}-${idx}`}
+                      onClick={() => setSelectedPlayer(p)}
+                      className={`cursor-pointer transition ${
+                        selectedPlayer && selectedPlayer.name === p.name
+                          ? "bg-orange-600 text-white"
+                          : "hover:bg-neutral-800"
+                      }`}
+                    >
+                      {showTeamCol && (
+                        <td className="py-2 px-3">
+                          {tinfo.logo ? (
+                            <img
+                              src={tinfo.logo}
+                              alt={tinfo.teamName || "Team"}
+                              className="h-6 w-6 object-contain inline-block align-middle"
+                            />
+                          ) : null}
+                        </td>
+                      )}
+
+                      <td className="py-2 px-3 whitespace-nowrap text-left pl-4">{p.name}</td>
+                      <td className="py-2 px-3">{p.pos}</td>
+                      <td className="py-2 px-3">{p.age}</td>
+                      <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                        {showLetters ? toLetter(p.overall) : p.overall}
                       </td>
-                    ))}
-                  </tr>
-                ))}
+                      <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                        {showLetters ? toLetter(p.offRating) : p.offRating}
+                      </td>
+                      <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                        {showLetters ? toLetter(p.defRating) : p.defRating}
+                      </td>
+                      <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                        {showLetters ? toLetter(p.stamina) : p.stamina}
+                      </td>
+                      <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                        {showLetters ? toLetter(p.potential) : p.potential}
+                      </td>
+                      {attrColumns.map((a) => (
+                        <td key={a.key} className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                          {showLetters ? toLetter(p.attrs?.[a.index] ?? 0) : p.attrs?.[a.index] ?? "-"}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
