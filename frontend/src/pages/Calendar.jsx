@@ -22,6 +22,7 @@ function getAllTeamsFromLeague(leagueData) {
   }
   return [];
 }
+
 const Logo = ({ team, size = 36 }) => {
   const src = team.logo || team.teamLogo || team.newTeamLogo || team.image || team.logoUrl || "";
   if (src) return <img src={src} alt={team.name} className="object-contain" style={{ width: size, height: size }} />;
@@ -51,83 +52,194 @@ function singleRoundRobinRounds(teamIds) {
       }
     }
     rounds.push(games);
-    arr = [arr[0], arr[n - 1]].concat(arr.slice(1, n - 1)); // rotate
+    // standard circle method rotate
+    arr = [arr[0], arr[n - 1]].concat(arr.slice(1, n - 1));
   }
   return rounds;
 }
 
-/* ----------------------- schedule generation ----------------------- */
-function generateFullSeasonSchedule(teams, startDate, endDate) {
-  const teamIds = teams.map((t, i) => t.id ?? t.name ?? `team_${i}`);
-  const teamById = {}; teams.forEach((t, i) => (teamById[teamIds[i]] = t));
-  const N = teamIds.length;
-  if (N < 2) return { byDate: {}, list: [] };
+/* ----------------------- schedule generation (revamped) ----------------------- */
+function slugifyId(v) {
+  if (!v) return "";
+  return String(v).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
 
-  const target = 82;
-  const perTeamPerDoubleCycle = 2 * (N - 1);
+function isScheduleValid(byDate, teamIds, target, start, end) {
+  if (!byDate || typeof byDate !== "object") return false;
+  const keys = Object.keys(byDate);
+  if (!keys.length) return false;
+  const first = keys[0], last = keys[keys.length - 1];
+  if (first !== fmt(start) || last !== fmt(end)) return false;
 
-  const baseCycles = Math.floor(target / perTeamPerDoubleCycle);
-  const remainingPerTeam = target - baseCycles * perTeamPerDoubleCycle;
-
-  const single = singleRoundRobinRounds(teamIds);
-  const mirrored = single.map((rd) => rd.map((g) => ({ home: g.away, away: g.home })));
-  const oneDouble = [...single, ...mirrored];
-
-  const rounds = [];
-  for (let c = 0; c < baseCycles; c++) {
-    const rotated = rotate(oneDouble, c % oneDouble.length);
-    rounds.push(...(c % 2 === 0 ? rotated : rotated.slice().reverse()));
-  }
-
-  // correct extra rounds math
-  const totalExtraGames = Math.ceil((remainingPerTeam * N) / 2);
-  const gamesPerRound = Math.floor(N / 2);
-  const roundsNeeded = Math.ceil(totalExtraGames / gamesPerRound);
-  for (let i = 0; i < roundsNeeded; i++) rounds.push(rotate(single, i % single.length));
-
-  const days = rangeDays(startDate, endDate);
-  const D = days.length, R = rounds.length;
-
-  const byDate = {};
-  const teamGamesCount = Object.fromEntries(teamIds.map((id) => [id, 0]));
-  const dayTeams = Array.from({ length: D }, () => new Set());
-
-  for (let r = 0; r < R; r++) {
-    const desired = Math.floor(r * (D - 1) / Math.max(1, R - 1));
-    let dIdx = desired;
-    let placed = false;
-
-    while (dIdx < D && !placed) {
-      const todaySet = dayTeams[dIdx];
-      const toSchedule = [];
-
-      for (const g of rounds[r]) {
-        const a = g.home, b = g.away;
-        if (teamGamesCount[a] >= target || teamGamesCount[b] >= target) continue;
-        if (todaySet.has(a) || todaySet.has(b)) continue;
-        toSchedule.push(g);
-        todaySet.add(a); todaySet.add(b);
-      }
-
-      if (toSchedule.length) {
-        const dateStr = fmt(days[dIdx]);
-        const arr = byDate[dateStr] || [];
-        for (const g of toSchedule) {
-          arr.push({
-            id: `${dateStr}_${g.home}_vs_${g.away}_${arr.length}`,
-            date: dateStr,
-            homeId: g.home, awayId: g.away,
-            home: teamById[g.home]?.name || g.home,
-            away: teamById[g.away]?.name || g.away,
-            played: false,
-          });
-          teamGamesCount[g.home]++; teamGamesCount[g.away]++;
-        }
-        byDate[dateStr] = arr;
-        placed = true;
-      } else dIdx++;
+  // no undefined teams
+  for (const games of Object.values(byDate)) {
+    for (const g of games) {
+      if (!g?.homeId || !g?.awayId) return false;
     }
   }
+
+  // check per-team counts
+  const cnt = Object.fromEntries(teamIds.map(id => [id, 0]));
+  for (const games of Object.values(byDate)) {
+    for (const g of games) {
+      if (cnt[g.homeId] == null || cnt[g.awayId] == null) return false;
+      cnt[g.homeId]++; cnt[g.awayId]++;
+    }
+  }
+  return teamIds.every(id => cnt[id] === target);
+}
+
+function generateFullSeasonSchedule(teams, startDate, endDate) {
+  const teamIds = teams.map((t, i) => t.id ?? t.name ?? `team_${i}`);
+  const canonicalIds = teamIds.map((id, i) => slugifyId(id) || `team_${i}`);
+  const idMap = Object.fromEntries(teamIds.map((id, i) => [id, canonicalIds[i]]));
+  const N = canonicalIds.length;
+
+  if (N < 2) return { byDate: {}, list: [] };
+
+  // Build quick lookup for display snapshots (name/logo at generation time)
+  const byCanon = {};
+  teams.forEach((t, i) => {
+    const cid = idMap[t.id ?? t.name ?? `team_${i}`];
+    byCanon[cid] = {
+      id: cid,
+      name: t.name ?? `Team ${i + 1}`,
+      logo: t.logo || t.teamLogo || t.newTeamLogo || t.image || t.logoUrl || "",
+    };
+  });
+
+  const target = 82;
+  const perTeamPerDouble = 2 * (N - 1);   // double round-robin yields this many games per team
+  const baseCycles = Math.floor(target / perTeamPerDouble); // e.g., with N=12, baseCycles=3 (66 games)
+  const remainingPerTeam = target - baseCycles * perTeamPerDouble; // e.g., 16 rounds to reach 82
+
+  // Core rounds
+  const single = singleRoundRobinRounds(canonicalIds);
+  const mirrored = single.map((rd) => rd.map((g) => ({ home: g.away, away: g.home })));
+  const oneDouble = [...single, ...mirrored]; // length = 2*(N-1)
+
+  // Assemble the complete set of "rounds" (each round: each team plays once)
+  const rounds = [];
+
+  // Base cycles of double RR
+  for (let c = 0; c < baseCycles; c++) {
+    const rotatedDouble = rotate(oneDouble, c % oneDouble.length);
+    // alternate reversing to vary H/A patterns over cycles
+    const pack = (c % 2 === 0) ? rotatedDouble : rotatedDouble.slice().reverse();
+    for (const rd of pack) rounds.push(rd.map(g => ({ ...g }))); // push one round at a time
+  }
+
+// Extra rounds (exactly remainingPerTeam)
+for (let i = 0; i < remainingPerTeam; i++) {
+  // alternate single/mirrored to roughly balance home/away in the tail
+  const base = (i % 2 === 0) ? single : mirrored;
+  const rd = base[i % base.length];              // ✅ pick ONE round
+  rounds.push(rd.map(g => ({ ...g })));          // ✅ push a single proper round
+}
+
+
+  const days = rangeDays(startDate, endDate);
+  const D = days.length;
+  const R = rounds.length;
+
+  const byDate = {};
+  const dayTeams = Array.from({ length: D }, () => new Set());
+  const teamGamesCount = Object.fromEntries(canonicalIds.map(id => [id, 0]));
+
+  // Helper to place a single game on first feasible day >= startIdx, else search forward then backward
+  function placeGame(game, startIdx, forceDayIdx = null) {
+    const tryDay = (di) => {
+      if (di < 0 || di >= D) return false;
+      const used = dayTeams[di];
+      if (used.has(game.home) || used.has(game.away)) return false;
+      if (teamGamesCount[game.home] >= target || teamGamesCount[game.away] >= target) return false;
+
+      const dateStr = fmt(days[di]);
+      const arr = byDate[dateStr] || [];
+      arr.push({
+        id: `${dateStr}_${byCanon[game.home]?.name || game.home}_vs_${byCanon[game.away]?.name || game.away}_${arr.length}`,
+        date: dateStr,
+        homeId: game.home,
+        awayId: game.away,
+        // snapshot human-friendly labels now (stable for display)
+        home: byCanon[game.home]?.name || game.home,
+        away: byCanon[game.away]?.name || game.away,
+        played: false,
+      });
+      byDate[dateStr] = arr;
+      used.add(game.home); used.add(game.away);
+      teamGamesCount[game.home]++; teamGamesCount[game.away]++;
+      return true;
+    };
+
+    if (forceDayIdx != null) {
+      return tryDay(forceDayIdx);
+    }
+
+    // forward sweep from desired start
+    for (let di = startIdx; di < D; di++) {
+      if (tryDay(di)) return true;
+    }
+    // backward sweep (only if we couldn't place forward)
+    for (let di = startIdx - 1; di >= 0; di--) {
+      if (tryDay(di)) return true;
+    }
+    return false;
+  }
+
+  // Distribute rounds across window; guarantee at least one game on first and last day
+  for (let r = 0; r < R; r++) {
+    // desired anchor day for this round
+    const desired = Math.floor(r * (D - 1) / Math.max(1, R - 1));
+    const roundGames = rounds[r];
+
+    // Special handling to anchor the first/last day with at least one game
+    if (r === 0) {
+      // place one game on day 0 if possible
+      let anchored = false;
+      for (let k = 0; k < roundGames.length; k++) {
+        if (placeGame(roundGames[k], 0, 0)) { roundGames.splice(k,1); anchored = true; break; }
+      }
+      // continue placing the rest normally
+    } else if (r === R - 1) {
+      // place one game on last day if possible
+      let anchored = false;
+      for (let k = 0; k < roundGames.length; k++) {
+        if (placeGame(roundGames[k], D - 1, D - 1)) { roundGames.splice(k,1); anchored = true; break; }
+      }
+    }
+
+    // place remaining games of the round with spillover (never drop)
+    for (const g of roundGames) {
+      const ok = placeGame(g, desired);
+      if (!ok) {
+        // As a last resort, try ANY day (should be rare)
+        let forced = false;
+        for (let di = 0; di < D && !forced; di++) forced = placeGame(g, di, di);
+        if (!forced) {
+          console.warn("Failed to place a game; this should not happen", g);
+        }
+      }
+    }
+  }
+
+  // Final validation & summary
+  const perTeam = Object.fromEntries(canonicalIds.map(id => [id, 0]));
+  Object.values(byDate).forEach(games => {
+    games.forEach(g => { perTeam[g.homeId]++; perTeam[g.awayId]++; });
+  });
+
+  const countsArr = Object.entries(perTeam).map(([id,c]) => ({ id, c }));
+  countsArr.sort((a,b)=>a.c-b.c);
+
+  const firstKey = Object.keys(byDate).sort()[0];
+  const lastKey = Object.keys(byDate).sort().slice(-1)[0];
+
+  console.debug("[Calendar] Schedule summary:",
+    { start: fmt(startDate), end: fmt(endDate), days: D, rounds: R,
+      minGames: countsArr[0]?.c, maxGames: countsArr[countsArr.length-1]?.c,
+      firstDay: firstKey, lastDay: lastKey });
+
   return { byDate, list: Object.values(byDate).flat() };
 }
 
@@ -138,11 +250,11 @@ export default function Calendar() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam, setSelectedTeam } = useGame();
 
-  // Season window
+  // Season window (pin to Oct 21 -> Apr 12)
   const now = new Date();
   const seasonYear = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
-  const seasonStart = useMemo(() => new Date(seasonYear, 9, 19), [seasonYear]);
-  const seasonEnd   = useMemo(() => new Date(seasonYear + 1, 3, 25), [seasonYear]);
+  const seasonStart = useMemo(() => new Date(seasonYear, 9, 21), [seasonYear]);      // Oct 21
+  const seasonEnd   = useMemo(() => new Date(seasonYear + 1, 3, 12), [seasonYear]);  // Apr 12
   const allDays     = useMemo(() => rangeDays(seasonStart, seasonEnd), [seasonStart, seasonEnd]);
 
   // Teams
@@ -172,25 +284,34 @@ export default function Calendar() {
 
   // Load / build schedule + results
   useEffect(() => {
-    const withinWindow = (obj) => {
-      const dates = Object.keys(obj || {});
-      if (!dates.length) return false;
-      const min = dates.reduce((a,b)=> (a<b?a:b));
-      const max = dates.reduce((a,b)=> (a>b?a:b));
-      return min >= fmt(seasonStart) && max <= fmt(seasonEnd);
-    };
-    const regen = () => {
-      if (teams && teams.length >= 2) {
-        const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
-        saveSchedule(byDate);
-        return byDate;
-      }
-      return {};
+    if (!teams || teams.length < 2) return;
+
+    const wantStart = fmt(seasonStart);
+    const wantEnd = fmt(seasonEnd);
+    const canonicalIds = teams.map((t, i) => slugifyId(t.id ?? t.name ?? `team_${i}`));
+    const target = 82;
+
+    const shouldRegen = (obj) => {
+      try {
+        if (!obj || !Object.keys(obj).length) return true;
+        const keys = Object.keys(obj).sort();
+        if (keys[0] !== wantStart || keys[keys.length-1] !== wantEnd) return true;
+        return !isScheduleValid(obj, canonicalIds, target, seasonStart, seasonEnd);
+      } catch { return true; }
     };
 
     let parsedSched = {};
     try { const savedRaw = localStorage.getItem(SCHED_KEY); parsedSched = savedRaw ? JSON.parse(savedRaw) : {}; } catch {}
-    if (!withinWindow(parsedSched)) parsedSched = regen(); else setScheduleByDate(parsedSched);
+
+    if (shouldRegen(parsedSched)) {
+      // blow away broken schedules (e.g., undefined teams / wrong window / wrong counts)
+      const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
+      saveSchedule(byDate);
+      console.info("[Calendar] Generated fresh schedule and saved to localStorage.");
+    } else {
+      setScheduleByDate(parsedSched);
+      console.info("[Calendar] Loaded existing valid schedule from localStorage.");
+    }
 
     let parsedResults = {};
     try { const savedR = localStorage.getItem(RESULT_KEY); parsedResults = savedR ? JSON.parse(savedR) : {}; } catch {}
@@ -205,7 +326,7 @@ export default function Calendar() {
     if (!selectedTeamId) return {};
     const map = {};
     Object.entries(scheduleByDate).forEach(([d, games]) => {
-      const g = games.find(x => x.homeId === selectedTeamId || x.awayId === selectedTeamId);
+      const g = games.find(x => x.homeId === slugifyId(selectedTeamId) || x.awayId === slugifyId(selectedTeamId));
       if (g) map[d] = g;
     });
     return map;
@@ -237,25 +358,19 @@ export default function Calendar() {
   const [actionModal, setActionModal] = useState(null); // { dateStr, game }
 
   /* ----------------------- simulation helpers ----------------------- */
-  // Pure sim – no saving here.
   const simOne = (game) => simulateOneGame({
     leagueData,
-    homeTeamName: teams.find(t => t.id === game.homeId)?.name || game.home,
-    awayTeamName: teams.find(t => t.id === game.awayId)?.name || game.away,
+    homeTeamName: teams.find(t => slugifyId(t.id ?? t.name) === game.homeId)?.name || game.home,
+    awayTeamName: teams.find(t => slugifyId(t.id ?? t.name) === game.awayId)?.name || game.away,
   });
 
   const handleSimOnlyGame = (dateStr, game) => {
     const upd = { ...scheduleByDate };
     const newResults = { ...resultsById };
-
-    // mark just this game as played
     upd[dateStr] = (upd[dateStr] || []).map(g => g.id === game.id ? { ...g, played: true } : g);
-
-    // simulate and persist
     newResults[game.id] = simOne(game);
     saveSchedule(upd);
     saveResults(newResults);
-
     setActionModal(null);
     setBoxModal({ game, result: newResults[game.id] });
   };
@@ -361,7 +476,7 @@ export default function Calendar() {
     if (!focusedDate) return "";
     const g = myGames[focusedDate];
     if (g) {
-      const isHome = g.homeId === (selectedTeam.id ?? selectedTeam.name);
+      const isHome = g.homeId === slugifyId(selectedTeam.id ?? selectedTeam.name);
       return `GAME DAY: ${isHome ? g.away : selectedTeam.name} @ ${isHome ? selectedTeam.name : g.home}`;
     }
     const dt = new Date(focusedDate);
@@ -369,15 +484,14 @@ export default function Calendar() {
     return `DATE: ${label}`;
   })();
 
-  /* ----------------------- UI ----------------------- */
+  /* ----------------------- UI (unchanged) ----------------------- */
   return (
     <div className="min-h-screen bg-neutral-900 text-white py-8">
       <div className="max-w-6xl mx-auto px-4">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
-          {/* LEFT: Static arrows + team identity (no 'Current Team:' label) */}
+          {/* LEFT: arrows + team identity */}
           <div className="flex items-center gap-4">
-            {/* fixed-width arrow block so position never shifts */}
             <div className="w-16 flex items-center justify-start gap-2 select-none">
               <button
                 onClick={() => handleTeamSwitch("prev")}
@@ -394,13 +508,11 @@ export default function Calendar() {
                 ►
               </button>
             </div>
-
-            {/* Team logo + name (arrows no longer tied to name width) */}
             <Logo team={selectedTeam} size={32} />
             <h1 className="text-2xl font-extrabold text-orange-500">{selectedTeam.name}</h1>
           </div>
 
-          {/* RIGHT: existing controls unchanged */}
+          {/* RIGHT: controls */}
           <div className="flex items-center gap-2">
             <button className="px-3 py-2 bg-neutral-700 rounded hover:bg-neutral-600" onClick={() => navigate("/team-hub")}>Back to Team Hub</button>
             {hasPlayedWithoutResult && (
@@ -442,7 +554,7 @@ export default function Calendar() {
 
             const dateStr = fmt(d);
             const myGame = myGames[dateStr];
-            const iAmHome = myGame && (myGame.homeId === (selectedTeam.id ?? selectedTeam.name));
+            const iAmHome = myGame && (myGame.homeId === slugifyId(selectedTeam.id ?? selectedTeam.name));
             const res = myGame ? resultsById[myGame.id] : null;
 
             // W/L + Final
@@ -476,7 +588,7 @@ export default function Calendar() {
                 {myGame && (
                   <div className="mt-2 flex items-center gap-2">
                     <Logo
-                      team={iAmHome ? (teams.find(t => t.id === myGame.awayId) || { name: myGame.away }) : (teams.find(t => t.id === myGame.homeId) || { name: myGame.home })}
+                      team={iAmHome ? (teams.find(t => slugifyId(t.id ?? t.name) === myGame.awayId) || { name: myGame.away }) : (teams.find(t => slugifyId(t.id ?? t.name) === myGame.homeId) || { name: myGame.home })}
                       size={32}
                     />
                     <div className="text-sm">
@@ -540,7 +652,6 @@ export default function Calendar() {
                 <button
                   className="px-4 py-2 rounded bg-neutral-700 hover:bg-neutral-600"
                   onClick={() => {
-                    // if a legacy "played-without-result" exists, backfill just this game
                     let r = resultsById[actionModal.game.id];
                     if (!r) {
                       const newResults = { ...resultsById, [actionModal.game.id]: simOne(actionModal.game) };
