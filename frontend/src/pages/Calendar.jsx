@@ -239,8 +239,57 @@ for (let i = 0; i < remainingPerTeam; i++) {
     { start: fmt(startDate), end: fmt(endDate), days: D, rounds: R,
       minGames: countsArr[0]?.c, maxGames: countsArr[countsArr.length-1]?.c,
       firstDay: firstKey, lastDay: lastKey });
+  
+  /* ------------------ pre-save balance: ensure all teams play 82 ------------------ */
+  const underfilled = Object.entries(perTeam)
+    .filter(([_, c]) => c < target)
+    .map(([id]) => id);
+
+  if (underfilled.length) {
+    console.warn(`[Calendar] Pre-save balancing ${underfilled.length} underfilled teams`);
+    const lastDayStr = fmt(days[days.length - 1]);
+
+    // Keep pairing lowest-play-count teams until all reach 82
+    const sortedTeams = Object.keys(perTeam).sort(
+      (a, b) => perTeam[a] - perTeam[b]
+    );
+    let safety = 200; // prevent infinite loop
+
+    while (safety-- > 0) {
+      const tA = sortedTeams.find((id) => perTeam[id] < target);
+      if (!tA) break;
+
+      const opp = sortedTeams.find(
+        (id) => id !== tA && perTeam[id] < target
+      );
+      if (!opp) break;
+
+      // Make sure array exists so we can get the index
+      byDate[lastDayStr] = byDate[lastDayStr] || [];
+      const idx = byDate[lastDayStr].length;
+
+      // ✅ ID pattern matches all normal games: DATE_Home Name_vs_Away Name_index
+      const newGame = {
+        id: `${lastDayStr}_${byCanon[tA]?.name || tA}_vs_${byCanon[opp]?.name || opp}_${idx}`,
+        date: lastDayStr,
+        homeId: tA,
+        awayId: opp,
+        home: byCanon[tA]?.name || tA,
+        away: byCanon[opp]?.name || opp,
+        played: false,
+      };
+
+      byDate[lastDayStr].push(newGame);
+      perTeam[tA]++; 
+      perTeam[opp]++;
+
+      // Resort teams for next iteration
+      sortedTeams.sort((a, b) => perTeam[a] - perTeam[b]);
+    }
+  }
 
   return { byDate, list: Object.values(byDate).flat() };
+
 }
 
 /* ============================================================= */
@@ -275,7 +324,7 @@ export default function Calendar() {
 
   // Storage helpers
   const SCHED_KEY = "bm_schedule_v3";
-  const RESULT_KEY = "bm_results_v1";
+  const RESULT_KEY = "bm_results_v2";
   const [scheduleByDate, setScheduleByDate] = useState({});
   const [resultsById, setResultsById] = useState({});
 
@@ -300,22 +349,45 @@ export default function Calendar() {
       } catch { return true; }
     };
 
-    let parsedSched = {};
-    try { const savedRaw = localStorage.getItem(SCHED_KEY); parsedSched = savedRaw ? JSON.parse(savedRaw) : {}; } catch {}
+    let parsedResults = {};
+    try {
+      const savedR = localStorage.getItem(RESULT_KEY);
+      parsedResults = savedR ? JSON.parse(savedR) : {};
+    } catch {
+      parsedResults = {};
+    }
+    const hasAnyResults =
+      parsedResults && Object.keys(parsedResults).length > 0;
 
-    if (shouldRegen(parsedSched)) {
-      // blow away broken schedules (e.g., undefined teams / wrong window / wrong counts)
-      const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
-      saveSchedule(byDate);
-      console.info("[Calendar] Generated fresh schedule and saved to localStorage.");
-    } else {
-      setScheduleByDate(parsedSched);
-      console.info("[Calendar] Loaded existing valid schedule from localStorage.");
+    // 🔹 existing schedule load
+    let parsedSched = {};
+    try {
+      const savedRaw = localStorage.getItem(SCHED_KEY);
+      parsedSched = savedRaw ? JSON.parse(savedRaw) : {};
+    } catch {
+      parsedSched = {};
     }
 
-    let parsedResults = {};
-    try { const savedR = localStorage.getItem(RESULT_KEY); parsedResults = savedR ? JSON.parse(savedR) : {}; } catch {}
-    setResultsById(parsedResults);
+    // 🔹 NEW: only regenerate if we have NO results yet
+    if (!hasAnyResults && shouldRegen(parsedSched)) {
+      const { byDate } = generateFullSeasonSchedule(
+        teams,
+        seasonStart,
+        seasonEnd
+      );
+      saveSchedule(byDate);
+      setScheduleByDate(byDate);
+      console.info(
+        "[Calendar] Generated fresh schedule (no prior results found)."
+      );
+    } else {
+      setScheduleByDate(parsedSched || {});
+      console.info(
+        "[Calendar] Loaded existing schedule without regeneration."
+      );
+    }
+
+    setResultsById(parsedResults || {});
   }, [teams, seasonStart, seasonEnd]);
 
   // Selected team context
@@ -364,16 +436,55 @@ export default function Calendar() {
     awayTeamName: teams.find(t => slugifyId(t.id ?? t.name) === game.awayId)?.name || game.away,
   });
 
-  const handleSimOnlyGame = (dateStr, game) => {
-    const upd = { ...scheduleByDate };
-    const newResults = { ...resultsById };
-    upd[dateStr] = (upd[dateStr] || []).map(g => g.id === game.id ? { ...g, played: true } : g);
-    newResults[game.id] = simOne(game);
-    saveSchedule(upd);
-    saveResults(newResults);
-    setActionModal(null);
-    setBoxModal({ game, result: newResults[game.id] });
+  // Keep only what Calendar + Standings + BoxScore actually use
+function slimResult(full) {
+  if (!full) return null;
+
+  const mapSide = (side) =>
+    (full.box?.[side] || []).map((p) => ({
+      player: p.player,
+      min: p.min,
+      pts: p.pts,
+      reb: p.reb,
+      ast: p.ast,
+      stl: p.stl,
+      blk: p.blk,
+      fg: p.fg,
+      "3p": p["3p"],
+      ft: p.ft,
+      to: p.to,
+      pf: p.pf,
+    }));
+
+  return {
+    winner: full.winner,
+    totals: full.totals,
+    box: {
+      home: mapSide("home"),
+      away: mapSide("away"),
+    },
   };
+}
+
+
+const handleSimOnlyGame = (dateStr, game) => {
+  const upd = { ...scheduleByDate };
+  const newResults = { ...resultsById };
+
+  const full = simOne(game);
+  const result = slimResult(full);
+
+  upd[dateStr] = (upd[dateStr] || []).map((g) =>
+    g.id === game.id ? { ...g, played: true } : g
+  );
+  newResults[game.id] = result;
+
+  saveSchedule(upd);
+  saveResults(newResults);
+  setActionModal(null);
+  setBoxModal({ game, result });
+};
+
 
   const handleSimToDate = (dateStr) => {
     const sorted = Object.keys(scheduleByDate).sort();
@@ -384,8 +495,8 @@ export default function Calendar() {
       if (d > dateStr) break;
       upd[d] = upd[d].map((g) => {
         if (!g.played) {
-          const res = simOne(g);
-          newResults[g.id] = res;
+          const full = simOne(g);
+          newResults[g.id] = slimResult(full);
         }
         return { ...g, played: true };
       });
@@ -402,8 +513,8 @@ export default function Calendar() {
     Object.keys(upd).sort().forEach((d) => {
       upd[d] = upd[d].map((g) => {
         if (!g.played) {
-          const res = simOne(g);
-          newResults[g.id] = res;
+          const full = simOne(g);
+          newResults[g.id] = slimResult(full);   // ✅ store slim result
         }
         return { ...g, played: true };
       });
@@ -414,16 +525,17 @@ export default function Calendar() {
     setActionModal(null);
   };
 
+
   const handleBackfillMissing = () => {
     const upd = { ...scheduleByDate };
     const newResults = { ...resultsById };
 
     Object.keys(upd).forEach((d) => {
       upd[d] = upd[d].map((g) => {
-        if (g.played && !newResults[g.id]) {
-          const res = simOne(g);
-          newResults[g.id] = res;
-        }
+if (g.played && !newResults[g.id]) {
+  const full = simOne(g);
+  newResults[g.id] = slimResult(full);
+}
         return g;
       });
     });
@@ -515,9 +627,6 @@ export default function Calendar() {
           {/* RIGHT: controls */}
           <div className="flex items-center gap-2">
             <button className="px-3 py-2 bg-neutral-700 rounded hover:bg-neutral-600" onClick={() => navigate("/team-hub")}>Back to Team Hub</button>
-            {hasPlayedWithoutResult && (
-              <button className="px-3 py-2 bg-yellow-700 rounded hover:bg-yellow-600" onClick={handleBackfillMissing}>Backfill Scores</button>
-            )}
             <button className="px-3 py-2 bg-red-700 rounded hover:bg-red-600" onClick={handleResetSeason}>Reset Season</button>
             <button className="px-3 py-2 bg-neutral-800 rounded hover:bg-neutral-700" onClick={() => { const i = months.indexOf(month); if (i > 0) setMonth(months[i - 1]); }}>‹ Prev</button>
             <select className="px-3 py-2 bg-neutral-800 rounded" value={month} onChange={(e) => setMonth(e.target.value)}>
@@ -652,12 +761,14 @@ export default function Calendar() {
                 <button
                   className="px-4 py-2 rounded bg-neutral-700 hover:bg-neutral-600"
                   onClick={() => {
-                    let r = resultsById[actionModal.game.id];
-                    if (!r) {
-                      const newResults = { ...resultsById, [actionModal.game.id]: simOne(actionModal.game) };
+                      let r = resultsById[actionModal.game.id];
+                      if (!r) {
+                      const full = simOne(actionModal.game);
+                      const slim = slimResult(full);
+                      const newResults = { ...resultsById, [actionModal.game.id]: slim };
                       saveResults(newResults);
-                      r = newResults[actionModal.game.id];
-                    }
+                      r = slim;
+                      }
                     setActionModal(null);
                     setBoxModal({ game: actionModal.game, result: r });
                   }}

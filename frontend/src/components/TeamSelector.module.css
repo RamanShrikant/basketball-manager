@@ -29,7 +29,9 @@
     repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 22px),
     /* original vignette */
     radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%);
+  zoom: 0.9;
 }
+
 
 /* Soft white arcs (stay behind content) */
 .wrapper::before {
@@ -207,4 +209,11 @@
   0% { box-shadow: none; }
   50% { box-shadow: none; }
   100% { box-shadow: none; }
+}
+
+/* Apply ONLY while TeamSelector is mounted */
+:global(body.ts-no-scroll) {
+  margin: 0;
+  overflow-y: hidden;        /* hides the vertical scrollbar */
+  background-color: #0d0d0d; /* dark background so no white gap when zoomed out */
 }

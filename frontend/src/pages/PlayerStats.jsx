@@ -31,7 +31,7 @@ export default function PlayerStats() {
   // load observed results
   const results = useMemo(() => {
     try {
-      const saved = localStorage.getItem("bm_results_v1");
+      const saved = localStorage.getItem("bm_results_v2");
       return saved ? JSON.parse(saved) : {};
     } catch {
       return {};

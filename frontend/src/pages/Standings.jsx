@@ -9,7 +9,7 @@ export default function Standings() {
 
   const results = useMemo(() => {
     try {
-      const raw = localStorage.getItem("bm_results_v1");
+      const raw = localStorage.getItem("bm_results_v2");
       return raw ? JSON.parse(raw) : {};
     } catch {
       return {};

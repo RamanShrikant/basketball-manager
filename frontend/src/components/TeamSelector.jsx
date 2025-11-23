@@ -18,10 +18,16 @@ export default function TeamSelector() {
     };
     window.addEventListener("keydown", handleKey);
     window.addEventListener("contextmenu", handleRightClick);
-    return () => {
-      window.removeEventListener("keydown", handleKey);
-      window.removeEventListener("contextmenu", handleRightClick);
-    };
+    
+  // 👇 only while we're on TeamSelector
+  document.body.classList.add("ts-no-scroll");
+
+  return () => {
+    window.removeEventListener("keydown", handleKey);
+    window.removeEventListener("contextmenu", handleRightClick);
+
+    document.body.classList.remove("ts-no-scroll");
+  };
   });
 
   if (!leagueData) {
