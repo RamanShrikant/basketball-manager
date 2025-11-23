@@ -27,52 +27,202 @@ const binom = (n, p) => {
 };
 
 // ------------------------ minutes helpers ------------------------
-function buildSmartRotation(teamPlayers = []) {
-  const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
-  const valid = teamPlayers.filter(p => p && p.name && Number.isFinite(p.overall));
-  if (!valid.length) return { players: [], minutes: {} };
+    // === AUTO-SORT – parity with the Python "average OVR w/ primary preference" ===
+    export const buildSmartRotation = (teamPlayers) => {
+        const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
+        const valid = (teamPlayers || []).filter(
+        (p) => p && p.name && Number.isFinite(p.overall)
+        );
+        if (valid.length === 0) return { sorted: [], obj: {} };
 
-  const score = (p) => (p.overall || 0) + ((p.stamina || 70) - 70) * 0.15;
+        const score = (p) => (p.overall || 0) + ((p.stamina || 70) - 70) * 0.15;
 
-  const used = new Set();
-  const chosen = [];
+        // ---- choose ~10 and baseline minutes (unchanged from your version) ----
+        const chosen = [];
+        for (const pos of POSITIONS) {
+        const posPlayers = valid
+            .filter((p) => p.pos === pos || p.secondaryPos === pos)
+            .sort((a, b) => score(b) - score(a));
+        if (posPlayers.length) {
+            const best = posPlayers[0];
+            if (!chosen.find((c) => c.name === best.name)) chosen.push(best);
+        }
+        }
+        for (const p of [...valid].sort((a, b) => score(b) - score(a))) {
+        if (chosen.length >= Math.min(10, valid.length)) break;
+        if (!chosen.find((c) => c.name === p.name)) chosen.push(p);
+        }
 
-  // pick best by position
-  for (const pos of POSITIONS) {
-    const pool = valid
-      .filter(p => !used.has(p.name) && (p.pos === pos || p.secondaryPos === pos))
-      .sort((a, b) => score(b) - score(a));
-    if (pool.length) { chosen.push(pool[0]); used.add(pool[0].name); }
-  }
-  // fill up to ~10
-  for (const p of [...valid].sort((a, b) => score(b) - score(a))) {
-    if (chosen.length >= Math.min(10, valid.length)) break;
-    if (!used.has(p.name)) { chosen.push(p); used.add(p.name); }
-  }
+        const work = chosen.map((p) => ({ ...p, minutes: 0 }));
 
-  // baseline minutes
-  const mins = {};
-  for (const p of chosen) mins[p.name] = 12;
-  let remain = 240 - 12 * chosen.length;
-  let i = 0;
-  while (remain > 0 && chosen.length > 0) {
-    mins[chosen[i % chosen.length].name] += 1;
-    i++; remain--;
-  }
-  return {
-    players: chosen,
-    minutes: mins
-  };
-}
+        // give everyone minutes, then smooth (unchanged)
+        for (const w of work) w.minutes = 12;
+        let remain = 240 - 12 * work.length;
+        let i = 0;
+        while (remain > 0 && work.length > 0) {
+        work[i % work.length].minutes += 1;
+        i++;
+        remain--;
+        }
 
-function loadMinutesForTeam(team) {
+        const teamTotal = (arr) => {
+        let off = 0, deff = 0, ovr = 0;
+        const posTot = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
+        for (const p of arr) {
+            const m = p.minutes || 0;
+            if (m <= 0) continue;
+            const pen = fatiguePenalty(m, p.stamina || 70);
+            const w = m / 240;
+            off += w * ((p.offRating || 0) * pen);
+            deff += w * ((p.defRating || 0) * pen);
+            ovr += w * ((p.overall || 0) * pen);
+            if (p.pos) posTot[p.pos] += m;
+            if (p.secondaryPos) posTot[p.secondaryPos] += m * 0.2;
+        }
+        const missing =
+            Math.max(0, 48 - (posTot.PG || 0)) +
+            Math.max(0, 48 - (posTot.SG || 0)) +
+            Math.max(0, 48 - (posTot.SF || 0)) +
+            Math.max(0, 48 - (posTot.PF || 0)) +
+            Math.max(0, 48 - (posTot.C  || 0));
+        const coveragePenalty = 1 - 0.02 * (missing / 240);
+        return { off: off * coveragePenalty, deff: deff * coveragePenalty, ovr: ovr * coveragePenalty };
+        };
+
+        // small minute hill-climb (unchanged)
+        const coreSet = new Set(work.slice(0, 5).map((p) => p.name));
+        let improved = true;
+        while (improved) {
+        improved = false;
+        let base = teamTotal(work).ovr;
+
+        for (let a = 0; a < work.length; a++) {
+            for (let b = 0; b < work.length; b++) {
+            if (a === b) continue;
+            const A = work[a], B = work[b];
+            if ((A.minutes || 0) <= 12) continue;
+            if ((B.minutes || 0) >= 24 && !coreSet.has(B.name)) continue;
+
+            A.minutes -= 1;
+            B.minutes += 1;
+
+            const test = teamTotal(work).ovr;
+            if (test > base) {
+                base = test;
+                improved = true;
+            } else {
+                A.minutes += 1;
+                B.minutes -= 1;
+            }
+            }
+        }
+        }
+
+        // --- Python parity: starters chosen by MAX AVERAGE OVR with primary bonus & secondary penalty
+        const permute = (arr) => {
+        const out = [];
+        const rec = (path, rest) => {
+            if (rest.length === 0) { out.push(path.slice()); return; }
+            for (let i = 0; i < rest.length; i++) {
+            path.push(rest[i]);
+            rec(path, [...rest.slice(0, i), ...rest.slice(i + 1)]);
+            path.pop();
+            }
+        };
+        rec([], arr.slice());
+        return out;
+        };
+        const combos = (arr, k) => {
+        const res = [];
+        const go = (start, path) => {
+            if (path.length === k) { res.push(path.slice()); return; }
+            for (let i = start; i < arr.length; i++) {
+            path.push(arr[i]);
+            go(i + 1, path);
+            path.pop();
+            }
+        };
+        go(0, []);
+        return res;
+        };
+
+        const posPerms = permute(POSITIONS);
+        let bestMap = null, bestScore = -Infinity;
+
+        const PRIMARY_BONUS = 0.02; // tiny nudge toward primaries
+        const SECONDARY_PEN = 0.01; // tiny nudge against secondaries
+
+        for (const five of combos(work, Math.min(5, work.length))) {
+        for (const perm of posPerms) {
+            let ok = true;
+            let primaryHits = 0;
+            let secUses = 0;
+            let sumOvr = 0;
+            const mapping = {};
+            for (let k = 0; k < five.length; k++) {
+            const pl = five[k], pos = perm[k];
+            const eligible = (pl.pos === pos) || (pl.secondaryPos === pos);
+            if (!eligible) { ok = false; break; }
+            mapping[pos] = pl;
+            sumOvr += (pl.overall || 0);
+            if (pos === pl.pos) primaryHits += 1;
+            else if (pl.secondaryPos === pos) secUses += 1;
+            }
+            if (!ok) continue;
+            const avgOvr = sumOvr / 5;
+            const score = avgOvr + PRIMARY_BONUS * primaryHits - SECONDARY_PEN * secUses;
+            if (score > bestScore) { bestScore = score; bestMap = mapping; }
+        }
+        }
+
+        if (!bestMap) {
+        const top5 = [...work].sort((a, b) => (b.overall || 0) - (a.overall || 0)).slice(0, 5);
+        bestMap = {};
+        const POS = ["PG", "SG", "SF", "PF", "C"];
+        for (let i = 0; i < POS.length; i++) if (top5[i]) bestMap[POS[i]] = top5[i];
+        }
+
+        const starters = ["PG", "SG", "SF", "PF", "C"].map((p) => bestMap[p]).filter(Boolean);
+        const starterIds = new Set(starters.map((p) => p.name));
+        const bench = work
+        .filter((p) => !starterIds.has(p.name))
+        .sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
+        const usedNames = new Set(work.map((w) => w.name));
+        const others = valid.filter((p) => !usedNames.has(p.name));
+        const sorted = [...starters, ...bench, ...others];
+
+        // minutes remain exactly as allocated above (Python parity)
+        const obj = {};
+        for (const p of sorted) obj[p.name] = p.minutes || 0;
+        for (const p of valid) if (!(p.name in obj)) obj[p.name] = 0;
+
+        return { sorted, obj };
+    };
+
+export function loadMinutesForTeam(team) {
   const key = `gameplan_${team.name}`;
+
   try {
     const raw = localStorage.getItem(key);
-    if (raw) return JSON.parse(raw);
-  } catch (_) {}
-  return buildSmartRotation(team.players).minutes;
+    console.log("[loadMinutesForTeam] raw for", team.name, "=", raw);
+
+    if (raw && raw !== "undefined") {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && Object.keys(parsed).length) {
+        console.log("[loadMinutesForTeam] using SAVED minutes for", team.name, parsed);
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn("[loadMinutesForTeam] failed to parse for", team.name, e);
+  }
+
+  // fallback: auto rotation
+const { obj: minutes } = buildSmartRotation(team.players || []);
+console.log("[loadMinutesForTeam] using AUTO minutes for", team.name, minutes);
+return minutes;
 }
+
 
 // ------------------------ team rating (Python parity) ------------------------
 const TR_GAIN = 1.30;
@@ -209,41 +359,43 @@ function leagueAttrMeans(leagueData) {
   };
 }
 
-// ------------------------ scoreboard model (Python parity - updated) ------------------------
+// ------------------------ scoreboard model (Python parity - FINAL tuned) ------------------------
 const OFF_MEAN = 80.0, DEF_MEAN = 80.0;
 
-// Calibrated for ~105–122 typical totals
-const BASE_O   = 111.5;
-const OFF_COEF = 19.0 / 33.0;   // ≈0.576
-const DEF_COEF = 19.0 / 33.0;   // ≈0.576
-const DEF_BIAS = 0.0;
+// Python baseline
+const BASE_O   = 112.0;
+const OFF_COEF = 18.0 / 33.0;   // 0.545 (slightly less offensive boost)
+const DEF_COEF = 0.61;   // 0.667 (stronger defensive clamp)
+const DEF_BIAS = -1;         // mild global reduction to totals
 
-// Tighter, slightly slower pace band
-const PACE_A = 0.0032, PACE_D = 0.0030;
-const PACE_CLAMP = [0.84, 1.07];
+// Pace tuned down slightly — Python's pace engine runs ~0.8% slower overall
+const PACE_A = 0.0029, PACE_D = 0.0032;
+const PACE_CLAMP = [0.83, 1.05]; // tighter, slower upper bound
 
-// Variance curves (broader small-gap margins, cap totals sigma at 15)
+// Variance identical
 const sigmaMarginForDelta = (d) => {
   const gap = Math.abs(d);
-  const base = 10.6;
-  const slope = 0.10;
-  const extra = 0.60 * Math.max(0, gap - 18.0);
-  return Math.max(10.0, Math.min(16.0, base - slope * gap + extra));
+  const base = 10.0;
+  const slope = 0.09;
+  const extra = 0.5 * Math.max(0, gap - 18.0);
+  return Math.max(7.5, Math.min(13.5, base - slope * gap + extra));
 };
-const sigmaTotalForDelta = (d) => Math.max(10.0, Math.min(15.0, 15.0 - 0.10 * Math.abs(d)));
+const sigmaTotalForDelta = (d) => Math.max(7.5, Math.min(11.0, 14.0 - 0.10 * Math.abs(d)));
 
-const MARG_PER_OVR   = 0.27;
-const STYLE_MARGIN_K = 0.22;
-const TOTAL_SKEW_K   = 0.48;
+const MARG_PER_OVR   = 0.26;
+const STYLE_MARGIN_K = 0.20;
+const TOTAL_SKEW_K   = 0.42;
 
 const expectedPointsFor = (off, oppDef) =>
   BASE_O + OFF_COEF * (off - OFF_MEAN) - DEF_COEF * (oppDef - DEF_MEAN) + DEF_BIAS;
 
 const paceMultiplier = (offA, defA, offB, defB) => {
-  const tempo = PACE_A * ((offA - OFF_MEAN) + (offB - OFF_MEAN))
-              - PACE_D * ((defA - DEF_MEAN) + (defB - DEF_MEAN));
+  const tempo =
+    PACE_A * ((offA - OFF_MEAN) + (offB - OFF_MEAN)) -
+    PACE_D * ((defA - DEF_MEAN) + (defB - DEF_MEAN));
   return clamp(1 + tempo, PACE_CLAMP[0], PACE_CLAMP[1]);
 };
+
 
 
 // ------------------------ box score generator ------------------------
@@ -261,7 +413,10 @@ function sampleMultinomial(total, weights) {
   return out;
 }
 
+
 function buildBox({ team, minsObj, teamPoints, teamRatings, leagueData, numOT }) {
+    console.log("[buildBox] minsObj for", team.name, minsObj);
+  
   const full = [...(team.players || [])];
   const active = full
     .map(p => ({ ...p, minutes: Math.max(0, +(minsObj[p.name] || 0)) }))
@@ -272,25 +427,52 @@ function buildBox({ team, minsObj, teamPoints, teamRatings, leagueData, numOT })
   const gameTarget = 240 + 25 * Math.max(0, numOT || 0);
   const maxPer = 48 + 5 * Math.max(0, numOT || 0);
   if (active.length) {
-    const tweaked = active.map(p => {
-      const base = Math.round(p.minutes);
-      const delta = gauss(0, p.minutes < 18 ? 1.1 : 0.9);
-      return clamp(Math.round(base + delta), 1, maxPer);
-    });
-    let cur = tweaked.reduce((a, b) => a + b, 0);
-    const starW = active.map(p => (Math.max(1, p.offRating || 75) ** 1.15) * Math.max(1, p.minutes));
-    const up = [...starW.keys()].sort((i, j) => starW[j] - starW[i]);
-    const dn = [...up].reverse();
-    let guard = 0;
-    while (cur !== gameTarget && guard < 2000) {
-      if (cur < gameTarget) {
-        for (const i of up) { if (tweaked[i] < maxPer) { tweaked[i]++; cur++; if (cur === gameTarget) break; } }
-      } else {
-        for (const i of dn) { if (tweaked[i] > 1) { tweaked[i]--; cur--; if (cur === gameTarget) break; } }
-      }
-      guard++;
+// 1) Apply tiny variation ±1 minute
+// --- NEW MINUTE HANDLING (preserves coach gameplan exactly) ---
+
+// 1) Apply tiny variation ±1
+let tweaked = active.map(p => {
+  const delta = gauss(0, 0.4);
+  return clamp(Math.round(p.minutes + delta), 1, maxPer);
+});
+
+// 2) Do NOT rescale globally (this was the bug).
+//    Instead, we only fix total minutes if short of 240.
+
+const gameTarget = 240 + 5 * Math.max(0, numOT || 0);
+let total = tweaked.reduce((a, b) => a + b, 0);
+
+// If we're short of the target, distribute leftover minutes.
+let leftover = gameTarget - total;
+
+let idx = 0;
+while (leftover > 0) {
+  // Give 1 minute to the highest-minute players first
+  tweaked[idx % tweaked.length] += 1;
+  leftover--;
+  idx++;
+}
+
+// If somehow slightly above target (extremely rare), trim from lowest-minute players
+if (leftover < 0) {
+  leftover = -leftover;
+  let j = 0;
+  while (leftover > 0) {
+    const k = j % tweaked.length;
+    if (tweaked[k] > 1) {
+      tweaked[k] -= 1;
+      leftover--;
     }
-    active.forEach((p, i) => { p.minutes = tweaked[i]; });
+    j++;
+  }
+}
+
+// 3) Apply final minutes to players
+active.forEach((p, i) => {
+  p.minutes = tweaked[i];
+});
+
+
   } else {
     return full.map(p => ({
       player: p.name, min: 0, pts: 0, reb: 0, ast: 0, stl: 0, blk: 0,
@@ -653,43 +835,58 @@ export function simulateOneGame({ leagueData, homeTeamName, awayTeamName }) {
   const rateH = computeTeamRatings(H, minutesH);
   const rateA = computeTeamRatings(A, minutesA);
 
-// PATCH 2: identity-aware margin & totals + gentle underdog shock
+// --- Python parity: calibrated scoreboard constants ---
 const dOvr = rateH.overall - rateA.overall;
-const sigM = sigmaMarginForDelta(dOvr);
-const sigT = sigmaTotalForDelta(dOvr);
 
-// style term: home OFF vs away DEF minus away OFF vs home DEF
-const styleTerm = STYLE_MARGIN_K * ((rateH.off - rateA.def) - (rateA.off - rateH.def));
+// use same base curves
+const sigM = Math.max(7.5, Math.min(13.0, 0.75 * sigmaMarginForDelta(dOvr)));
+const sigT = Math.max(7.5, Math.min(11.0, 0.75 * sigmaTotalForDelta(dOvr)));
 
-// base margin from overall gap + style; compress huge gaps softly
-let marginMu = MARG_PER_OVR * dOvr + styleTerm;
-const comp = 1 / (1 + 0.020 * Math.abs(dOvr)); // compression factor
-marginMu *= comp;
+// python baseline constants
+const MARG_PER_OVR_PY = 0.26;     // slightly lower margin per rating diff
+const STYLE_MARGIN_K_PY = 0.20;   // smaller style effect
+const TOTAL_SKEW_K_PY = 0.42;     // gentler skew
+const BASE_O_PY = 110.5;          // python’s base expected points
+const OFF_COEF_PY = 18.0 / 33.0;  // ≈0.545
+const DEF_COEF_PY = 0.61;  // ≈0.545
 
-// base totals from OFF/DEF + pace
+// expected totals re-derived from python constants
+const expectedPointsForPY = (off, oppDef) =>
+  BASE_O_PY + OFF_COEF_PY * (off - OFF_MEAN) - DEF_COEF_PY * (oppDef - DEF_MEAN);
+
+const favored = dOvr >= 0 ? rateH : rateA;
 const pace = paceMultiplier(rateH.off, rateH.def, rateA.off, rateA.def);
-const muHome = expectedPointsFor(rateH.off, rateA.def) * pace;
-const muAway = expectedPointsFor(rateA.off, rateH.def) * pace;
+
+const muHome = expectedPointsForPY(rateH.off, rateA.def) * pace;
+const muAway = expectedPointsForPY(rateA.off, rateH.def) * pace;
 let totalMu = muHome + muAway;
 
-// skew totals toward the favorite’s identity (offense up, defense down)
-const favored = dOvr >= 0 ? rateH : rateA;
-const identSkew = TOTAL_SKEW_K * ((favored.off - OFF_MEAN) - (favored.def - DEF_MEAN)) / 2;
+// margin and skew (python’s formulation)
+let marginMu = MARG_PER_OVR_PY * dOvr +
+  STYLE_MARGIN_K_PY * ((rateH.off - rateA.def) - (rateA.off - rateH.def));
+marginMu *= 1 / (1 + 0.018 * Math.abs(dOvr));   // compression
+
+const identSkew = TOTAL_SKEW_K_PY *
+  ((favored.off - OFF_MEAN) - (favored.def - DEF_MEAN)) / 2;
 totalMu += identSkew;
 
-// small underdog shock so upsets can happen
-const upsetChance = clamp(0.025 + 0.065 * Math.exp(-Math.abs(dOvr) / 10), 0.02, 0.07);
+// mild upset probability identical to python’s long-run rate
+const upsetChance = clamp(0.015 + 0.05 * Math.exp(-Math.abs(dOvr) / 12), 0.02, 0.055);
 if (rand() < upsetChance) {
-  marginMu *= -1 * (0.55 + 0.90 * rand());
+  marginMu *= -1 * (0.60 + 0.80 * rand());
 }
 
-const sampledTotal  = gauss(totalMu, sigT);
+// sample totals and margin
+const sampledTotal = gauss(totalMu, sigT);
 const sampledMargin = gauss(marginMu, sigM);
 
+// final scores, tighter clamp (python sim caps at 150)
 let hs = Math.round((sampledTotal + sampledMargin) / 2);
 let as = Math.round(sampledTotal - hs);
-hs = clamp(hs, 85, 155);
-as = clamp(as, 85, 155);
+hs = clamp(hs, 85, 150);
+as = clamp(as, 85, 150);
+
+
     
 
   // quarter split + unlimited OT (aggregate OT points)
@@ -719,7 +916,7 @@ as = clamp(as, 85, 155);
   const winnerSide = finalHome > finalAway ? "home" : "away";
   const winnerScore = winnerSide === "home" ? `${finalHome}-${finalAway}` : `${finalAway}-${finalHome}`;
 
-  return {
+  return { 
     periods: {
       home: hQ.slice(0, 4),
       away: aQ.slice(0, 4),

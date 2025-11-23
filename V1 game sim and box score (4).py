@@ -3,7 +3,7 @@ from tkinter import ttk
 import json, itertools, random, math
 
 # --- Load JSON ---
-with open("atlantic northwest bucks cavs.json", "r", encoding="utf-8") as f:
+with open("15.json", "r", encoding="utf-8") as f:
     data = json.load(f)
 
 teams = [t for conf in data["conferences"].values() for t in conf]

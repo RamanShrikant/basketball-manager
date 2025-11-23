@@ -2,6 +2,7 @@
     import React, { useState, useEffect, useMemo } from "react";
     import { useGame } from "../context/GameContext";
     import { useNavigate } from "react-router-dom";
+    
 
     export default function CoachGameplan() {
     const { leagueData, selectedTeam, setSelectedTeam } = useGame(); // ⬅️ added leagueData + setSelectedTeam

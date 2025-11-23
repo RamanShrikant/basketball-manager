@@ -1,11 +1,33 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useState, useEffect } from "react";
+import { buildSmartRotation } from "../api/simEngine";  // <-- IMPORT CLEANLY
 
 const GameContext = createContext();
 
-// ✅ This provider wraps your entire app (we added it to main.jsx)
 export function GameProvider({ children }) {
-  const [leagueData, setLeagueData] = useState(null); // stores parsed JSON
-  const [selectedTeam, setSelectedTeam] = useState(null); // stores chosen team object
+  const [leagueData, setLeagueData] = useState(null);
+  const [selectedTeam, setSelectedTeam] = useState(null);
+
+  // -----------------------------------------------------
+  // AUTO-GENERATE GAMEPLANS ONCE PER TEAM
+  // -----------------------------------------------------
+useEffect(() => {
+  if (!leagueData) return;
+
+  const teams = Object.values(leagueData.conferences || {}).flat();
+
+  teams.forEach((team) => {
+    const key = `gameplan_${team.name}`;
+
+    // do NOT override if user clicked "Save Gameplan"
+    const exists = localStorage.getItem(key);
+    if (exists) return;
+
+    // Build auto rotation only once
+    const { minutes } = buildSmartRotation(team.players || []);
+    localStorage.setItem(key, JSON.stringify(minutes));
+  });
+}, [leagueData]);
+
 
   return (
     <GameContext.Provider
@@ -21,7 +43,6 @@ export function GameProvider({ children }) {
   );
 }
 
-// ✅ This hook lets you access the context anywhere easily
 export function useGame() {
   return useContext(GameContext);
 }
