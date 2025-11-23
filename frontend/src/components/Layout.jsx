@@ -1,81 +1,31 @@
-import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { useGame } from "../context/GameContext";
-import styles from "./TeamSelector.module.css";
+// src/components/Layout.jsx
+import React from "react";
+import { Outlet, Link } from "react-router-dom";
 
-export default function TeamSelector() {
-  const { leagueData, setSelectedTeam } = useGame();
-  const navigate = useNavigate();
-  const [selected, setSelected] = useState(null);
-
-  useEffect(() => {
-    const handleKey = (e) => {
-      if (e.key === "Enter" && selected) handleAdvance();
-    };
-    const handleRightClick = (e) => {
-      e.preventDefault();
-      setSelected(null);
-    };
-    window.addEventListener("keydown", handleKey);
-    window.addEventListener("contextmenu", handleRightClick);
-    return () => {
-      window.removeEventListener("keydown", handleKey);
-      window.removeEventListener("contextmenu", handleRightClick);
-    };
-  });
-
-  if (!leagueData) {
-    return (
-      <div className={styles.wrapper}>
-        <p>No league loaded.</p>
-        <button onClick={() => navigate("/play")}>Go Back</button>
-      </div>
-    );
-  }
-
-  const allTeams = [
-    ...(leagueData.conferences?.East || []),
-    ...(leagueData.conferences?.West || []),
-  ];
-
-  const handleSelect = (team) => setSelected(team.name);
-
-  const handleAdvance = () => {
-    if (!selected) return;
-    const teamObj = allTeams.find((t) => t.name === selected);
-    setSelectedTeam(teamObj);
-    navigate("/team-hub");
-  };
-
+export default function Layout() {
   return (
-    <div className={styles.wrapper}>
-      <h1 className={styles.title}>Select Your Team</h1>
+    <div className="min-h-screen bg-white text-black flex flex-col">
+      {/* simple nav just like the old white screen */}
+      <header className="w-full bg-gray-100 border-b border-gray-300 px-6 py-3 flex items-center gap-4">
+        <h1 className="text-xl font-bold">Basketball Manager</h1>
 
-      <div className={styles.scrollRow}>
-        {allTeams.map((team) => (
-          <div
-            key={team.name}
-            onClick={() => handleSelect(team)}
-            className={`${styles.card} ${
-              selected === team.name ? styles.selected : ""
-            }`}
-          >
-            <img src={team.logo} alt={team.name} className={styles.logo} />
-            <h2 className={styles.name}>{team.name}</h2>
-          </div>
-        ))}
-      </div>
+        <nav className="flex gap-3 text-sm">
+          <Link to="/" className="hover:underline">
+            Home
+          </Link>
+          <Link to="/league-editor" className="hover:underline">
+            League Editor
+          </Link>
+          <Link to="/play" className="hover:underline">
+            Play
+          </Link>
+        </nav>
+      </header>
 
-      <div className={styles.controlsBar}>
-        <div>ENTER: ADVANCE &nbsp;&nbsp; L-CLICK: SELECT &nbsp;&nbsp; R-CLICK: DESELECT</div>
-        <button
-          onClick={handleAdvance}
-          disabled={!selected}
-          className={`${styles.advanceBtn} ${selected ? styles.active : ""}`}
-        >
-          Advance
-        </button>
-      </div>
+      <main className="flex-1">
+        {/* 👇 this renders your Home, LeagueEditor, etc */}
+        <Outlet />
+      </main>
     </div>
   );
 }

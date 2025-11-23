@@ -23,7 +23,7 @@ function App() {
       <Routes>
         {/* ✅ Routes that use your shared Layout */}
         <Route element={<Layout />}>
-          <Route index element={<Home />} />
+          <Route index element={<LeagueEditor  />} />
           <Route path="players" element={<PlayerEditor />} />
           <Route path="players/:playerId" element={<PlayerEditor />} />
           <Route path="trade" element={<TradeSimulator />} />
