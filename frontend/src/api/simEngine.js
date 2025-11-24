@@ -201,27 +201,40 @@ const binom = (n, p) => {
 
 export function loadMinutesForTeam(team) {
   const key = `gameplan_${team.name}`;
+  const raw = localStorage.getItem(key);
 
-  try {
-    const raw = localStorage.getItem(key);
-    console.log("[loadMinutesForTeam] raw for", team.name, "=", raw);
-
-    if (raw && raw !== "undefined") {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object" && Object.keys(parsed).length) {
-        console.log("[loadMinutesForTeam] using SAVED minutes for", team.name, parsed);
-        return parsed;
-      }
-    }
-  } catch (e) {
-    console.warn("[loadMinutesForTeam] failed to parse for", team.name, e);
+  // -------------------------
+  // HANDLE CORRUPTED ENTRIES
+  // -------------------------
+  if (!raw || raw === "undefined") {
+    console.warn("[loadMinutesForTeam] corrupted or missing gameplan for", team.name);
+    const { obj } = buildSmartRotation(team.players || []);
+    localStorage.setItem(key, JSON.stringify(obj));
+    return obj;
   }
 
-  // fallback: auto rotation
-const { obj: minutes } = buildSmartRotation(team.players || []);
-console.log("[loadMinutesForTeam] using AUTO minutes for", team.name, minutes);
-return minutes;
+  // -------------------------
+  // TRY NORMAL PARSE
+  // -------------------------
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
+      console.log("[loadMinutesForTeam] using SAVED minutes for", team.name);
+      return parsed;
+    }
+  } catch (e) {
+    console.warn("[loadMinutesForTeam] parse error for", team.name, e);
+  }
+
+  // -------------------------
+  // FALLBACK AUTO BUILD
+  // -------------------------
+  const { obj } = buildSmartRotation(team.players || []);
+  localStorage.setItem(key, JSON.stringify(obj));
+  console.log("[loadMinutesForTeam] fallback AUTO minutes for", team.name);
+  return obj;
 }
+
 
 
 // ------------------------ team rating (Python parity) ------------------------
