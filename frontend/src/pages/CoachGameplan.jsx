@@ -272,12 +272,25 @@
         const saved = localStorage.getItem(key);
         const teamPlayers = selectedTeam.players || [];
 
-        if (saved) {
-        const obj = JSON.parse(saved);
-        setMinutes(obj);
-        setPlayers([...teamPlayers]);
-        setTeamRatings(calculateTeamRatings(teamPlayers, obj));
-        } else {
+if (saved) {
+    const obj = JSON.parse(saved);
+
+    // Always rebuild sorted ordering using minutes
+    const sortedNames = Object.keys(obj);
+
+    const sortedPlayers = sortedNames
+        .map(name => teamPlayers.find(p => p.name === name))
+        .filter(Boolean);
+
+    // fallback in case order mismatch
+    const missing = teamPlayers.filter(p => !sortedNames.includes(p.name));
+    const finalSorted = [...sortedPlayers, ...missing];
+
+    setMinutes(obj);
+    setPlayers(finalSorted);
+    setTeamRatings(calculateTeamRatings(finalSorted, obj));
+}
+ else {
         const { sorted, obj } = buildSmartRotation(teamPlayers);
         setMinutes(obj);
         setPlayers(sorted);
@@ -285,12 +298,21 @@
         }
     }, [selectedTeam]); // switching teams auto-loads
 
-    const handleSave = () => {
-        if (!selectedTeam) return;
-        localStorage.setItem(`gameplan_${selectedTeam.name}`, JSON.stringify(minutes));
-        setToast(true);
-        setTimeout(() => setToast(false), 2000);
-    };
+const handleSave = () => {
+    if (!selectedTeam) return;
+
+    setMinutes(prev => {
+        localStorage.setItem(
+            `gameplan_${selectedTeam.name}`,
+            JSON.stringify(prev)
+        );
+        return prev;
+    });
+
+    setToast(true);
+    setTimeout(() => setToast(false), 2000);
+};
+
 
     const handleAutoRebuild = () => {
         if (!selectedTeam) return;
