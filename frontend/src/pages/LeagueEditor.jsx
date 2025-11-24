@@ -38,6 +38,7 @@ export default function LeagueEditor() {
       stamina: 75,
       potential: 75,
       headshot: "",
+      scoringRating: 50,
     };
   }
 
@@ -333,17 +334,122 @@ export default function LeagueEditor() {
     return { off: bankersRound(off), def: bankersRound(def) };
   };
 
+  // ----------------------------
+// Exploding Elite Curve (JS)
+// ----------------------------
+function explodeJS(value, power) {
+  return (value / 100) ** power;
+}
+
+// ----------------------------
+// Close Shot Penalty (JS)
+// ----------------------------
+function closePenaltyJS(close) {
+  if (close >= 70) return 0;
+  return ((70 - close) / 30) ** 2.3;
+}
+
+// ----------------------------
+// Scoring Rating 1:1 Python port (JS)
+// ----------------------------
+function calcScoringRating(pos, three, mid, close) {
+  // ------- Guards (PG / SG) -------
+  if (pos === "PG" || pos === "SG") {
+    const three_term = explodeJS(three, 7) * 1.20;
+    const mid_term   = explodeJS(mid,   7) * 1.55;
+    const close_term = explodeJS(close, 6) * 1.10;
+
+    const base =
+      0.38 * (three / 100) +
+      0.40 * (mid   / 100) +
+      0.22 * (close / 100);
+
+    const penalty = closePenaltyJS(close) * 1.7;
+
+    const raw = base + three_term + mid_term + close_term - penalty;
+    const scaled = raw * 14.75 + 43.5;
+    return scaled;
+  }
+
+  // ------- Wings (SF) -------
+  if (pos === "SF") {
+    const three_term = explodeJS(three, 7) * 1.05;
+    const mid_term   = explodeJS(mid,   7) * 1.40;
+    const close_term = explodeJS(close, 7) * 1.50;
+
+    const base =
+      0.32 * (three / 100) +
+      0.35 * (mid   / 100) +
+      0.33 * (close / 100);
+
+    const penalty = closePenaltyJS(close) * 1.2;
+
+    const raw = base + three_term + mid_term + close_term - penalty;
+    const scaled = raw * 14.75 + 43.5;
+    return scaled;
+  }
+
+  // ------- Bigs (PF / C) -------
+  if (pos === "PF" || pos === "C") {
+    const close_term = explodeJS(close, 8) * 1.95;
+    const mid_term   = explodeJS(mid,   6) * 1.30;
+    const three_term = explodeJS(three, 5) * 0.60;
+
+    const base =
+      0.58 * (close / 100) +
+      0.27 * (mid   / 100) +
+      0.15 * (three / 100);
+
+    const penalty = closePenaltyJS(close) * 2.0;
+
+    const raw = base + three_term + mid_term + close_term - penalty;
+    const scaled = raw * 14.75 + 43.5;
+    return scaled;
+  }
+
+  // fallback
+  return 50;
+}
+
+
   /* ---------------- Auto-Save + Load ---------------- */
-  useEffect(() => {
-    const saved = localStorage.getItem("leagueData");
-    if (saved) {
-      try {
-        const data = JSON.parse(saved);
-        setLeagueName(data.leagueName || "NBA 2025");
-        setConferences(data.conferences || { East: [], West: [] });
-      } catch {}
+useEffect(() => {
+  const saved = localStorage.getItem("leagueData");
+  if (!saved) return;
+
+  try {
+    const data = JSON.parse(saved);
+
+    const updated = { ...data, conferences: {} };
+
+    for (const side of ["East", "West"]) {
+      updated.conferences[side] = (data.conferences[side] || []).map(team => ({
+        ...team,
+        players: (team.players || []).map(p => {
+          const three = p.attrs?.[0] ?? 75;
+          const mid   = p.attrs?.[1] ?? 75;
+          const close = p.attrs?.[2] ?? 75;
+
+          const scoringRating = calcScoringRating(
+            p.pos,
+            three,
+            mid,
+            close
+          );
+
+          return { ...p, scoringRating };
+        })
+      }));
     }
-  }, []);
+
+    setLeagueName(updated.leagueName);
+    setConferences(updated.conferences);
+
+  } catch (err) {
+    console.error(err);
+  }
+}, []);
+
 
   useEffect(() => {
     localStorage.setItem("leagueData", JSON.stringify({ leagueName, conferences }));
@@ -352,12 +458,26 @@ export default function LeagueEditor() {
   /* ---------------- Live Recalc in Modal ---------------- */
   useEffect(() => {
     if (!showPlayerForm) return;
-    setPlayerForm(prev => {
-      const overall = calcOverall(prev.attrs, prev.pos);
-      const { off, def } = calcOffDef(prev.attrs, prev.pos, prev.name, prev.height);
-      const stamina = calcStamina(prev.age, prev.attrs[ATH]);
-      return { ...prev, overall, offRating: off, defRating: def, stamina };
-    });
+setPlayerForm(prev => {
+  const overall = calcOverall(prev.attrs, prev.pos);
+  const { off, def } = calcOffDef(prev.attrs, prev.pos, prev.name, prev.height);
+  const stamina = calcStamina(prev.age, prev.attrs[ATH]);
+  
+  const three = prev.attrs[0];
+  const mid   = prev.attrs[1];
+  const close = prev.attrs[2];
+  const scoringRating = calcScoringRating(prev.pos, three, mid, close);
+
+  return { 
+    ...prev, 
+    overall, 
+    offRating: off, 
+    defRating: def, 
+    scoringRating, 
+    stamina 
+  };
+});
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPlayerForm, playerForm.attrs, playerForm.age, playerForm.potential, playerForm.height, playerForm.pos, playerForm.name]);
 
@@ -386,7 +506,7 @@ export default function LeagueEditor() {
     if (pIdx !== null) {
       setEditingPlayer(pIdx);
       const ex = conferences[selectedConf][tIdx].players[pIdx];
-      const safe = { potential: 75, height: 78, secondaryPos: "", ...ex };
+      const safe = { potential: 75, height: 78, secondaryPos: "", scoringRating: 50, ...ex };
       setPlayerForm(JSON.parse(JSON.stringify(safe)));
     } else {
       setEditingPlayer(null);
@@ -442,16 +562,20 @@ export default function LeagueEditor() {
   // Export snapshot: recompute OFF/DEF with current baselines, bake into JSON
   const buildExportSnapshot = () => {
     const clone = JSON.parse(JSON.stringify(conferences));
-    const recalcPlayer = (p) => {
-      const { off, def } = calcOffDef(p.attrs, p.pos, p.name, p.height);
-      return {
-        ...p,
-        overall: calcOverall(p.attrs, p.pos),
-        offRating: off,
-        defRating: def,
-        stamina: calcStamina(p.age, p.attrs[ATH]),
-      };
-    };
+const recalcPlayer = (p) => {
+  const { off, def } = calcOffDef(p.attrs, p.pos, p.name, p.height);
+  const scoringRating = calcScoringRating(p.pos, p.attrs[0], p.attrs[1], p.attrs[2]);
+
+  return {
+    ...p,
+    overall: calcOverall(p.attrs, p.pos),
+    offRating: off,
+    defRating: def,
+    scoringRating,
+    stamina: calcStamina(p.age, p.attrs[ATH]),
+  };
+};
+
     ["East","West"].forEach(side => {
       clone[side] = (clone[side] || []).map(team => ({
         ...team,
@@ -481,7 +605,37 @@ export default function LeagueEditor() {
                   try{
                     const d=JSON.parse(x.target.result);
                     if(d.leagueName&&d.conferences){
-                      setLeagueName(d.leagueName);setConferences(d.conferences);
+                      if (d.leagueName && d.conferences) {
+  // 🔥 AUTO-ADD scoring ratings to imported players
+  const updated = { ...d, conferences: {} };
+
+  for (const side of ["East", "West"]) {
+    updated.conferences[side] = (d.conferences[side] || []).map(team => ({
+      ...team,
+      players: (team.players || []).map(p => {
+        const three = p.attrs?.[0] ?? 75;
+        const mid   = p.attrs?.[1] ?? 75;
+        const close = p.attrs?.[2] ?? 75;
+
+        const scoringRating = calcScoringRating(
+          p.pos,
+          three,
+          mid,
+          close
+        );
+
+        return { ...p, scoringRating };
+      })
+    }));
+  }
+
+  setLeagueName(updated.leagueName);
+  setConferences(updated.conferences);
+  localStorage.setItem("leagueData", JSON.stringify(updated));
+
+  alert(`✅ Imported ${d.leagueName} with scoring ratings added`);
+}
+
                       localStorage.setItem("leagueData",JSON.stringify(d));
                       alert(`✅ Imported ${d.leagueName}`);
                     }else alert("⚠️ Invalid JSON");
@@ -572,6 +726,7 @@ export default function LeagueEditor() {
                   <th className="text-center font-semibold">OFF</th>
                   <th className="text-center font-semibold">DEF</th>
                   <th className="text-center font-semibold">POT</th>
+                  <th className="text-center font-semibold">SCO</th>
                   <th></th>
                 </tr>
               </thead>
@@ -595,6 +750,7 @@ export default function LeagueEditor() {
                             {attrNames.map((n,j)=><span key={j}>{n.split(" ")[0]} {p.attrs?.[j]}</span>)}
                             <span>Off {live.off}</span><span>Def {live.def}</span>
                             <span>Sta {p.stamina}</span><span>Pot {p.potential}</span>
+                            <span>Sco {p.scoringRating?.toFixed(1)}</span>
                             <span>Ht {formatHeight(p.height)}</span>
                           </div>
                         )}
@@ -607,6 +763,7 @@ export default function LeagueEditor() {
                     <td className="text-center">{live.off}</td>
                     <td className="text-center">{live.def}</td>
                     <td className="text-center">{p.potential}</td>
+                    <td className="text-center">{p.scoringRating?.toFixed(1) ?? "—"}</td>
                     <td className="text-right">
                       <button onClick={()=>openPlayerForm(idx,i)} className="text-blue-600 text-sm hover:underline mr-2">Edit</button>
                       <button onClick={()=>{
@@ -691,7 +848,7 @@ export default function LeagueEditor() {
 
             {/* Live Stat Bar */}
             <p className="mt-4 font-semibold text-lg">
-              Overall: {playerForm.overall} | Off: {playerForm.offRating} | Def: {playerForm.defRating} | Sta: {playerForm.stamina} | Pot: {playerForm.potential} | Ht: {formatHeight(playerForm.height)}
+              Overall: {playerForm.overall} | Off: {playerForm.offRating} | Def: {playerForm.defRating} | Sta: {playerForm.stamina} | Pot: {playerForm.potential} | Ht: {formatHeight(playerForm.height)} | Sco: {playerForm.scoringRating.toFixed(2)}
             </p>
 
             {/* Modal Buttons */}
