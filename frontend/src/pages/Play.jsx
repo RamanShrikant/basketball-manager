@@ -18,17 +18,26 @@ export default function Play() {
     }
 
     const reader = new FileReader();
+
     reader.onload = (event) => {
       try {
         const parsed = JSON.parse(event.target.result);
+
+        // React state
         setLeagueData(parsed);
+
+        // 🔥 GLOBAL version (Python worker needs this)
+        window.leagueData = parsed;
+        console.log("GLOBAL leagueData updated:", window.leagueData);
+
         setFileName(file.name);
         setError("");
       } catch (err) {
         setError("Invalid JSON format.");
       }
     };
-    reader.readAsText(file);
+
+    reader.readAsText(file); // ← YOU WERE MISSING THIS!
   };
 
   const handleContinue = () => {
@@ -50,6 +59,7 @@ export default function Play() {
         >
           Upload League JSON
         </label>
+
         <input
           id="fileUpload"
           type="file"

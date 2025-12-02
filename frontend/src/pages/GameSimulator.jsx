@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
-import { simulateOneGame } from "../api/simEngine";
+import { simulateOneGame } from "@/api/simEnginePy";
 
 export default function GameSimulator() {
   const { leagueData, selectedTeam } = useGame();
@@ -41,7 +41,11 @@ export default function GameSimulator() {
     if (!home || !away || home === away) return;
     setRunning(true);
     try {
-      const out = simulateOneGame({ leagueData, homeTeamName: home, awayTeamName: away });
+      simulateOneGame({
+  homeTeam: window.leagueData.conferences.East[0],
+  awayTeam: window.leagueData.conferences.West[0]
+})
+
       setResult(out);
     } catch (e) {
       console.error(e);

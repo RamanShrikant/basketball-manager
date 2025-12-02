@@ -24,11 +24,35 @@ export default function PlayerStats() {
     }
   }, [selectedTeam, setSelectedTeam]);
 
+  // 🔥 keys + pre-aggregated player stats + schedule
+  const PLAYER_STATS_KEY = "bm_player_stats_v1";
+  const SCHED_KEY = "bm_schedule_v3";
+
+  // per-player season totals written by Calendar
+  const playerStatsMap = useMemo(() => {
+    try {
+      const raw = localStorage.getItem(PLAYER_STATS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  }, []);
+
+  // schedule needed for team PTS / PA
+  const schedule = useMemo(() => {
+    try {
+      const raw = localStorage.getItem(SCHED_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  }, []);
+
   useEffect(() => {
     if (selectedTeam) localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam));
   }, [selectedTeam]);
 
-  // load observed results
+  // load observed results (for totals only)
   const results = useMemo(() => {
     try {
       const saved = localStorage.getItem("bm_results_v2");
@@ -82,49 +106,12 @@ export default function PlayerStats() {
     );
   }, [allTeams]);
 
-  // ---------- per-player stats from observed results ----------
-  const computePlayerStats = (playerName) => {
-    let gp = 0,
-      min = 0,
-      pts = 0,
-      reb = 0,
-      ast = 0,
-      stl = 0,
-      blk = 0,
-      fgm = 0,
-      fga = 0,
-      tpm = 0,
-      tpa = 0,
-      ftm = 0,
-      fta = 0;
+  // ---------- per-player stats from pre-aggregated map ----------
+  const computePlayerStats = (playerName, teamName) => {
+    const key = `${playerName}__${teamName}`;
+    const rec = playerStatsMap[key];
 
-    for (const g of Object.values(results)) {
-      if (!g.box) continue;
-      for (const side of ["home", "away"]) {
-        const rec = g.box[side]?.find((r) => r.player === playerName);
-        if (rec) {
-          gp++;
-          min += rec.min || 0;
-          pts += rec.pts || 0;
-          reb += rec.reb || 0;
-          ast += rec.ast || 0;
-          stl += rec.stl || 0;
-          blk += rec.blk || 0;
-
-          const [fgmN, fgaN] = rec.fg?.split("/")?.map(Number) || [0, 0];
-          const [tpmN, tpaN] = rec["3p"]?.split("/")?.map(Number) || [0, 0];
-          const [ftmN, ftaN] = rec.ft?.split("/")?.map(Number) || [0, 0];
-          fgm += fgmN;
-          fga += fgaN;
-          tpm += tpmN;
-          tpa += tpaN;
-          ftm += ftmN;
-          fta += ftaN;
-        }
-      }
-    }
-
-    if (gp === 0) {
+    if (!rec || !rec.gp) {
       return {
         GP: 0,
         MIN: 0,
@@ -140,32 +127,38 @@ export default function PlayerStats() {
         FTA: 0,
       };
     }
-    const games = gp || 1;
+
+    const games = rec.gp || 1;
+
+    const fgPct = rec.fga > 0 ? ((rec.fgm / rec.fga) * 100).toFixed(1) : "0.0";
+    const tpPct = rec.tpa > 0 ? ((rec.tpm / rec.tpa) * 100).toFixed(1) : "0.0";
+    const ftPct = rec.fta > 0 ? ((rec.ftm / rec.fta) * 100).toFixed(1) : "0.0";
+
     return {
-      GP: gp,
-      MIN: (min / games).toFixed(1),
-      PTS: (pts / games).toFixed(1),
-      REB: (reb / games).toFixed(1),
-      AST: (ast / games).toFixed(1),
-      STL: (stl / games).toFixed(1),
-      BLK: (blk / games).toFixed(1),
-      FG: fga > 0 ? ((fgm / fga) * 100).toFixed(1) : "0.0",
-      "3P": tpa > 0 ? ((tpm / tpa) * 100).toFixed(1) : "0.0",
-      FT: fta > 0 ? ((ftm / fta) * 100).toFixed(1) : "0.0",
-      "3PA": (tpa / games).toFixed(1),
-      FTA: (fta / games).toFixed(1),
+      GP: rec.gp,
+      MIN: (rec.min / games).toFixed(1),
+      PTS: (rec.pts / games).toFixed(1),
+      REB: (rec.reb / games).toFixed(1),
+      AST: (rec.ast / games).toFixed(1),
+      STL: (rec.stl / games).toFixed(1),
+      BLK: (rec.blk / games).toFixed(1),
+      FG: fgPct,
+      "3P": tpPct,
+      FT: ftPct,
+      "3PA": (rec.tpa / games).toFixed(1),
+      FTA: (rec.fta / games).toFixed(1),
     };
   };
 
   // ---------- team aggregates strictly from observed results (adds PA) ----------
   const allTeamsAgg = useMemo(() => {
-    const totals = {}; // season totals
+    const totals = {};
     const ensure = (team) => {
       if (!totals[team]) {
         totals[team] = {
           gp: 0,
           pts: 0,
-          oppPts: 0, // <-- points allowed accumulator
+          oppPts: 0,
           reb: 0,
           ast: 0,
           stl: 0,
@@ -181,87 +174,55 @@ export default function PlayerStats() {
       return totals[team];
     };
 
-    for (const g of Object.values(results)) {
-      if (!g.box) continue;
+    // 1) GP, PTS, PA from schedule + compact results
+    for (const games of Object.values(schedule || {})) {
+      for (const g of games || []) {
+        const r = results?.[g.id];
+        if (!r || !r.totals) continue;
 
-      // Build per-game team totals
-      const perGameByTeam = {}; // { team: { pts, reb, ... } }
-      for (const side of ["home", "away"]) {
-        const list = g.box[side] || [];
-        for (const rec of list) {
-          const team = playerToTeam[rec.player];
-          if (!team) continue;
-          if (!perGameByTeam[team]) {
-            perGameByTeam[team] = {
-              pts: 0,
-              reb: 0,
-              ast: 0,
-              stl: 0,
-              blk: 0,
-              fgm: 0,
-              fga: 0,
-              tpm: 0,
-              tpa: 0,
-              ftm: 0,
-              fta: 0,
-            };
-          }
-          perGameByTeam[team].pts += rec.pts || 0;
-          perGameByTeam[team].reb += rec.reb || 0;
-          perGameByTeam[team].ast += rec.ast || 0;
-          perGameByTeam[team].stl += rec.stl || 0;
-          perGameByTeam[team].blk += rec.blk || 0;
+        const homeRow = ensure(g.home);
+        const awayRow = ensure(g.away);
 
-          const [fgmN, fgaN] = rec.fg?.split("/")?.map(Number) || [0, 0];
-          const [tpmN, tpaN] = rec["3p"]?.split("/")?.map(Number) || [0, 0];
-          const [ftmN, ftaN] = rec.ft?.split("/")?.map(Number) || [0, 0];
-          perGameByTeam[team].fgm += fgmN;
-          perGameByTeam[team].fga += fgaN;
-          perGameByTeam[team].tpm += tpmN;
-          perGameByTeam[team].tpa += tpaN;
-          perGameByTeam[team].ftm += ftmN;
-          perGameByTeam[team].fta += ftaN;
-        }
-      }
+        homeRow.gp += 1;
+        homeRow.pts += r.totals.home || 0;
+        homeRow.oppPts += r.totals.away || 0;
 
-      // For each team in this game, opponent points = sum(other teams' points)
-      const entries = Object.entries(perGameByTeam);
-      for (const [team, box] of entries) {
-        const oppPts = entries
-          .filter(([t]) => t !== team)
-          .reduce((s, [, b]) => s + (b.pts || 0), 0);
-
-        const row = ensure(team);
-        row.gp += 1;
-        row.pts += box.pts;
-        row.oppPts += oppPts; // <-- accumulate PA
-        row.reb += box.reb;
-        row.ast += box.ast;
-        row.stl += box.stl;
-        row.blk += box.blk;
-        row.fgm += box.fgm;
-        row.fga += box.fga;
-        row.tpm += box.tpm;
-        row.tpa += box.tpa;
-        row.ftm += box.ftm;
-        row.fta += box.fta;
+        awayRow.gp += 1;
+        awayRow.pts += r.totals.away || 0;
+        awayRow.oppPts += r.totals.home || 0;
       }
     }
 
-    // produce per-game averages (include PA)
+    // 2) REB/AST/STL/BLK/FG splits from aggregated player stats
+    for (const rec of Object.values(playerStatsMap || {})) {
+      const row = ensure(rec.team);
+      row.reb += rec.reb || 0;
+      row.ast += rec.ast || 0;
+      row.stl += rec.stl || 0;
+      row.blk += rec.blk || 0;
+      row.fgm += rec.fgm || 0;
+      row.fga += rec.fga || 0;
+      row.tpm += rec.tpm || 0;
+      row.tpa += rec.tpa || 0;
+      row.ftm += rec.ftm || 0;
+      row.fta += rec.fta || 0;
+    }
+
     const rows = Object.keys(totals).map((team) => {
       const t = totals[team];
-      const gp = Math.max(1, t.gp);
+      const gp = t.gp || 1;
+
       const FG = t.fga > 0 ? ((t.fgm / t.fga) * 100).toFixed(1) : "0.0";
       const TP = t.tpa > 0 ? ((t.tpm / t.tpa) * 100).toFixed(1) : "0.0";
       const FT = t.fta > 0 ? ((t.ftm / t.fta) * 100).toFixed(1) : "0.0";
+
       return {
         teamName: team,
         logo: teamLogo[team] || "",
         stats: {
           GP: t.gp,
           PTS: (t.pts / gp).toFixed(1),
-          PA: (t.oppPts / gp).toFixed(1), // <-- points allowed per game
+          PA: (t.oppPts / gp).toFixed(1),
           REB: (t.reb / gp).toFixed(1),
           AST: (t.ast / gp).toFixed(1),
           STL: (t.stl / gp).toFixed(1),
@@ -275,7 +236,7 @@ export default function PlayerStats() {
       };
     });
 
-    // include teams with 0 games so far (showing zeros)
+    // keep teams with 0 games
     const have = new Set(rows.map((r) => r.teamName));
     for (const t of allTeams) {
       if (!have.has(t.name)) {
@@ -301,19 +262,25 @@ export default function PlayerStats() {
     }
 
     return rows.sort((a, b) => a.teamName.localeCompare(b.teamName));
-  }, [results, playerToTeam, teamLogo, allTeams]);
+  }, [schedule, results, playerStatsMap, allTeams, teamLogo]);
 
   // ---------- rows for current mode ----------
   const positionOrder = ["PG", "SG", "SF", "PF", "C"];
 
   const teamPlayers = useMemo(() => {
     const roster = selectedTeam.players || [];
-    return roster.map((p) => ({ ...p, stats: computePlayerStats(p.name) }));
-  }, [selectedTeam, results]);
+    return roster.map((p) => ({
+      ...p,
+      stats: computePlayerStats(p.name, selectedTeam.name),
+    }));
+  }, [selectedTeam, playerStatsMap]);
 
   const leaguePlayers = useMemo(() => {
-    return allPlayers.map((p) => ({ ...p, stats: computePlayerStats(p.name) }));
-  }, [allPlayers, results]);
+    return allPlayers.map((p) => ({
+      ...p,
+      stats: computePlayerStats(p.name, p.teamName),
+    }));
+  }, [allPlayers, playerStatsMap]);
 
   useEffect(() => {
     if (mode === "players") {
@@ -364,7 +331,7 @@ export default function PlayerStats() {
     { key: "team", label: "Team" },
     { key: "GP", label: "GP" },
     { key: "PTS", label: "PTS" },
-    { key: "PA", label: "PA" }, // <-- Points Allowed per game
+    { key: "PA", label: "PA" },
     { key: "REB", label: "REB" },
     { key: "AST", label: "AST" },
     { key: "STL", label: "STL" },
@@ -626,7 +593,6 @@ export default function PlayerStats() {
                   >
                     {mode === "league" && (
                       <td className="py-2 px-2">
-                        {/* Fine to keep transparent here too if you like; currently unchanged */}
                         <img
                           src={p.teamLogo}
                           alt={p.teamName}
@@ -694,7 +660,6 @@ export default function PlayerStats() {
                   >
                     <td className="py-2 px-3 text-left pl-4">
                       <div className="flex items-center gap-3">
-                        {/* Transparent logo (no background tile) */}
                         <img
                           src={t.logo}
                           alt={t.teamName}

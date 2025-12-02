@@ -1,43 +1,218 @@
+
 import React, { useEffect, useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
-import { simulateOneGame } from "../api/simEngine";
+import { simulateOneGame } from "@/api/simEnginePy";
+import { queueSim } from "@/api/simQueue";
 
-/* ----------------------- date helpers ----------------------- */
+
+
+
+/* -------------------------------------------------------------------------- */
+/*                                ID UTILITIES                                */
+/* -------------------------------------------------------------------------- */
+function slugifyId(v) {
+  if (!v) return "";
+  return String(v)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+window.__slug = slugifyId;
+
+
+/* -------------------------------------------------------------------------- */
+/*                              SIMULATION WRAPPER                             */
+/* -------------------------------------------------------------------------- */
+async function simOneSafe(game, leagueData, teams) {
+  const p = (async () => {
+// inside simOneSafe
+    if (window.__debugSimLogs) {
+      window.__lastGame = game;
+      console.log("⏳ simOneSafe starting:", game.home, "vs", game.away);
+    }
+
+    const homeTeamObj = teams.find(
+      (t) => slugifyId(t.name) === game.homeId
+    );
+    const awayTeamObj = teams.find(
+      (t) => slugifyId(t.name) === game.awayId
+    );
+
+    if (!homeTeamObj || !awayTeamObj) {
+      throw new Error(
+        `Team lookup failed: ${game.homeId} / ${game.awayId}`
+      );
+    }
+
+    // -------------------------------
+    // 🔥 SANITIZE SECONDARY POSITIONS
+    // -------------------------------
+    for (const p of homeTeamObj.players) {
+      if (!p.secondaryPos || p.secondaryPos.trim() === "") {
+        p.secondaryPos = null;
+      }
+    }
+    for (const p of awayTeamObj.players) {
+      if (!p.secondaryPos || p.secondaryPos.trim() === "") {
+        p.secondaryPos = null;
+      }
+    }
+    // -------------------------------
+
+homeTeamObj.minutes = JSON.parse(
+  localStorage.getItem(`gameplan_${homeTeamObj.name}`) || "{}"
+);
+
+awayTeamObj.minutes = JSON.parse(
+  localStorage.getItem(`gameplan_${awayTeamObj.name}`) || "{}"
+);
+
+
+
+    return await simulateOneGame({
+      homeTeam: homeTeamObj,
+      awayTeam: awayTeamObj,
+      leagueData,
+    });
+  })();
+
+  // timeout promise
+return p;
+
+}
+// ---------------------------------------------------------------------------
+// Helper: run ONE game with retries, using simOneSafe + queueSim
+// ---------------------------------------------------------------------------
+async function runGameWithRetries(game, leagueData, teams, maxRetries = 3) {
+  let lastFull = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    console.log(
+      `[RetrySim] Game ${game.id} (${game.away} @ ${game.home}) attempt`,
+      attempt,
+      "of",
+      maxRetries
+    );
+
+    lastFull = await queueSim(() => simOneSafe(game, leagueData, teams));
+
+    // good result?
+    if (!isBadFullResult(lastFull)) {
+      console.log("[RetrySim] Success for game", game.id, "on attempt", attempt);
+      return lastFull;
+    }
+
+    console.warn(
+      "[RetrySim] BAD result for game",
+      game.id,
+      "on attempt",
+      attempt,
+      lastFull
+    );
+  }
+
+  console.error(
+    "[RetrySim] Permanent failure after",
+    maxRetries,
+    "attempts for game",
+    game.id,
+    lastFull
+  );
+
+  // keep a global list for debugging
+  window.__failedGames = window.__failedGames || [];
+  window.__failedGames.push({ id: game.id, game, lastFull });
+
+  return null; // caller will decide what to do
+}
+
+
+
+
+/* -------------------------------------------------------------------------- */
+/*                                 DATE UTILS                                 */
+/* -------------------------------------------------------------------------- */
 const fmt = (d) => d.toISOString().slice(0, 10);
-const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
-const rangeDays = (start, end) => { const out = []; for (let d = new Date(start); d <= end; d = addDays(d, 1)) out.push(new Date(d)); return out; };
-const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-const rotate = (arr, k) => { const n = arr.length; if (!n) return arr; const s = ((k % n) + n) % n; return arr.slice(s).concat(arr.slice(0, s)); };
+const addDays = (d, n) => {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+};
+const rangeDays = (start, end) => {
+  const out = [];
+  for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
+    out.push(new Date(d));
+  }
+  return out;
+};
+const monthKey = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 
-/* ----------------------- league helpers ----------------------- */
+/* -------------------------------------------------------------------------- */
+/*                                TEAM HELPERS                                */
+/* -------------------------------------------------------------------------- */
 function getAllTeamsFromLeague(leagueData) {
   if (!leagueData) return [];
   if (Array.isArray(leagueData.teams)) return leagueData.teams;
+
   if (leagueData.conferences) {
-    const confs = leagueData.conferences;
-    let arr = [];
-    Object.keys(confs).forEach((k) => (arr = arr.concat(confs[k] || [])));
-    return arr;
+    return Object.values(leagueData.conferences).flat();
   }
+
   return [];
 }
 
+/* -------------------------------------------------------------------------- */
+/*                                TEAM LOGO UI                                */
+/* -------------------------------------------------------------------------- */
 const Logo = ({ team, size = 36 }) => {
-  const src = team.logo || team.teamLogo || team.newTeamLogo || team.image || team.logoUrl || "";
-  if (src) return <img src={src} alt={team.name} className="object-contain" style={{ width: size, height: size }} />;
-  const initials = (team.name || "?").split(" ").map(w => w[0]?.toUpperCase()).join("").slice(0,3);
+  const src =
+    team.logo ||
+    team.teamLogo ||
+    team.newTeamLogo ||
+    team.image ||
+    team.logoUrl;
+
+  if (src) {
+    return (
+      <img
+        src={src}
+        alt={team.name}
+        style={{
+          width: size,
+          height: size,
+          objectFit: "contain",
+          display: "block",
+        }}
+      />
+    );
+  }
+
+  const initials = (team.name || "?")
+    .split(" ")
+    .map((w) => w[0]?.toUpperCase())
+    .join("")
+    .slice(0, 3);
+
   return (
-    <div className="flex items-center justify-center rounded bg-neutral-700 text-white" style={{ width: size, height: size }}>
+    <div
+      className="flex items-center justify-center rounded bg-neutral-700 text-white"
+      style={{ width: size, height: size }}
+    >
       <span className="text-sm font-bold">{initials}</span>
     </div>
   );
 };
 
-/* ----------------------- round-robin (supports odd N) ----------------------- */
+
+/* -------------------------------------------------------------------------- */
+/*                        ROUND-ROBIN + SCHEDULE ENGINE                       */
+/* -------------------------------------------------------------------------- */
 function singleRoundRobinRounds(teamIds) {
   const ids = [...teamIds];
   if (ids.length % 2 === 1) ids.push("__BYE__");
+
   const n = ids.length;
   const rounds = [];
   let arr = ids.slice();
@@ -48,671 +223,1207 @@ function singleRoundRobinRounds(teamIds) {
       const a = arr[i];
       const b = arr[n - 1 - i];
       if (a !== "__BYE__" && b !== "__BYE__") {
-        games.push(r % 2 === 0 ? { home: a, away: b } : { home: b, away: a });
+        games.push(
+          r % 2 === 0 ? { home: a, away: b } : { home: b, away: a }
+        );
       }
     }
+
     rounds.push(games);
-    // standard circle method rotate
     arr = [arr[0], arr[n - 1]].concat(arr.slice(1, n - 1));
   }
+
   return rounds;
 }
 
-/* ----------------------- schedule generation (revamped) ----------------------- */
-function slugifyId(v) {
-  if (!v) return "";
-  return String(v).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-}
-
-function isScheduleValid(byDate, teamIds, target, start, end) {
-  if (!byDate || typeof byDate !== "object") return false;
-  const keys = Object.keys(byDate);
-  if (!keys.length) return false;
-  const first = keys[0], last = keys[keys.length - 1];
-  if (first !== fmt(start) || last !== fmt(end)) return false;
-
-  // no undefined teams
-  for (const games of Object.values(byDate)) {
-    for (const g of games) {
-      if (!g?.homeId || !g?.awayId) return false;
-    }
-  }
-
-  // check per-team counts
-  const cnt = Object.fromEntries(teamIds.map(id => [id, 0]));
-  for (const games of Object.values(byDate)) {
-    for (const g of games) {
-      if (cnt[g.homeId] == null || cnt[g.awayId] == null) return false;
-      cnt[g.homeId]++; cnt[g.awayId]++;
-    }
-  }
-  return teamIds.every(id => cnt[id] === target);
-}
-
 function generateFullSeasonSchedule(teams, startDate, endDate) {
-  const teamIds = teams.map((t, i) => t.id ?? t.name ?? `team_${i}`);
-  const canonicalIds = teamIds.map((id, i) => slugifyId(id) || `team_${i}`);
-  const idMap = Object.fromEntries(teamIds.map((id, i) => [id, canonicalIds[i]]));
+  const canonicalIds = teams.map((t) => slugifyId(t.name));
   const N = canonicalIds.length;
-
   if (N < 2) return { byDate: {}, list: [] };
 
-  // Build quick lookup for display snapshots (name/logo at generation time)
   const byCanon = {};
-  teams.forEach((t, i) => {
-    const cid = idMap[t.id ?? t.name ?? `team_${i}`];
+  teams.forEach((t) => {
+    const cid = slugifyId(t.name);
     byCanon[cid] = {
       id: cid,
-      name: t.name ?? `Team ${i + 1}`,
-      logo: t.logo || t.teamLogo || t.newTeamLogo || t.image || t.logoUrl || "",
+      name: t.name,
+      logo:
+  t.logo ||
+  t.teamLogo ||
+  t.logoUrl ||
+  t.image ||
+  t.img ||
+  t.newTeamLogo ||
+  "",
+
     };
   });
 
   const target = 82;
-  const perTeamPerDouble = 2 * (N - 1);   // double round-robin yields this many games per team
-  const baseCycles = Math.floor(target / perTeamPerDouble); // e.g., with N=12, baseCycles=3 (66 games)
-  const remainingPerTeam = target - baseCycles * perTeamPerDouble; // e.g., 16 rounds to reach 82
 
-  // Core rounds
   const single = singleRoundRobinRounds(canonicalIds);
-  const mirrored = single.map((rd) => rd.map((g) => ({ home: g.away, away: g.home })));
-  const oneDouble = [...single, ...mirrored]; // length = 2*(N-1)
+  const mirrored = single.map((rd) =>
+    rd.map((g) => ({ home: g.away, away: g.home }))
+  );
 
-  // Assemble the complete set of "rounds" (each round: each team plays once)
+  const perTeamPerDouble = 2 * (N - 1);
+  const baseCycles = Math.floor(target / perTeamPerDouble);
+  const remainingPerTeam = target - baseCycles * perTeamPerDouble;
+
   const rounds = [];
 
-  // Base cycles of double RR
   for (let c = 0; c < baseCycles; c++) {
-    const rotatedDouble = rotate(oneDouble, c % oneDouble.length);
-    // alternate reversing to vary H/A patterns over cycles
-    const pack = (c % 2 === 0) ? rotatedDouble : rotatedDouble.slice().reverse();
-    for (const rd of pack) rounds.push(rd.map(g => ({ ...g }))); // push one round at a time
+    const pack =
+      c % 2 === 0 ? [...single, ...mirrored] : [...single, ...mirrored].reverse();
+    for (const rd of pack) rounds.push(rd.map((g) => ({ ...g })));
   }
 
-// Extra rounds (exactly remainingPerTeam)
-for (let i = 0; i < remainingPerTeam; i++) {
-  // alternate single/mirrored to roughly balance home/away in the tail
-  const base = (i % 2 === 0) ? single : mirrored;
-  const rd = base[i % base.length];              // ✅ pick ONE round
-  rounds.push(rd.map(g => ({ ...g })));          // ✅ push a single proper round
-}
-
+  for (let i = 0; i < remainingPerTeam; i++) {
+    const base = i % 2 === 0 ? single : mirrored;
+    rounds.push(base[i % base.length].map((g) => ({ ...g })));
+  }
 
   const days = rangeDays(startDate, endDate);
   const D = days.length;
-  const R = rounds.length;
-
   const byDate = {};
-  const dayTeams = Array.from({ length: D }, () => new Set());
-  const teamGamesCount = Object.fromEntries(canonicalIds.map(id => [id, 0]));
 
-  // Helper to place a single game on first feasible day >= startIdx, else search forward then backward
-  function placeGame(game, startIdx, forceDayIdx = null) {
-    const tryDay = (di) => {
-      if (di < 0 || di >= D) return false;
-      const used = dayTeams[di];
-      if (used.has(game.home) || used.has(game.away)) return false;
-      if (teamGamesCount[game.home] >= target || teamGamesCount[game.away] >= target) return false;
+  const teamGames = Object.fromEntries(
+    canonicalIds.map((id) => [id, 0])
+  );
 
-      const dateStr = fmt(days[di]);
-      const arr = byDate[dateStr] || [];
-      arr.push({
-        id: `${dateStr}_${byCanon[game.home]?.name || game.home}_vs_${byCanon[game.away]?.name || game.away}_${arr.length}`,
-        date: dateStr,
-        homeId: game.home,
-        awayId: game.away,
-        // snapshot human-friendly labels now (stable for display)
-        home: byCanon[game.home]?.name || game.home,
-        away: byCanon[game.away]?.name || game.away,
-        played: false,
-      });
-      byDate[dateStr] = arr;
-      used.add(game.home); used.add(game.away);
-      teamGamesCount[game.home]++; teamGamesCount[game.away]++;
-      return true;
-    };
+function placeGame(game, dayIndex) {
+  const dateStr = fmt(days[dayIndex]);
 
-    if (forceDayIdx != null) {
-      return tryDay(forceDayIdx);
-    }
-
-    // forward sweep from desired start
-    for (let di = startIdx; di < D; di++) {
-      if (tryDay(di)) return true;
-    }
-    // backward sweep (only if we couldn't place forward)
-    for (let di = startIdx - 1; di >= 0; di--) {
-      if (tryDay(di)) return true;
-    }
-    return false;
+  // ensure no team already plays this day
+  const todaysGames = byDate[dateStr] || [];
+  if (todaysGames.some(g =>
+    g.homeId === game.home ||
+    g.awayId === game.home ||
+    g.homeId === game.away ||
+    g.awayId === game.away
+  )) {
+    return false; // can't play here
   }
 
-  // Distribute rounds across window; guarantee at least one game on first and last day
-  for (let r = 0; r < R; r++) {
-    // desired anchor day for this round
-    const desired = Math.floor(r * (D - 1) / Math.max(1, R - 1));
-    const roundGames = rounds[r];
+  // team game caps
+  if (teamGames[game.home] >= target) return false;
+  if (teamGames[game.away] >= target) return false;
 
-    // Special handling to anchor the first/last day with at least one game
-    if (r === 0) {
-      // place one game on day 0 if possible
-      let anchored = false;
-      for (let k = 0; k < roundGames.length; k++) {
-        if (placeGame(roundGames[k], 0, 0)) { roundGames.splice(k,1); anchored = true; break; }
+  const idx = todaysGames.length;
+  byDate[dateStr] = [...todaysGames, {
+    id: `${dateStr}_${game.home}_vs_${game.away}_${idx}`,
+    date: dateStr,
+    homeId: game.home,
+    awayId: game.away,
+    home: byCanon[game.home].name,
+    away: byCanon[game.away].name,
+    homeLogo: byCanon[game.home].logo,
+    awayLogo: byCanon[game.away].logo,
+    homeTeamObj: byCanon[game.home],
+    awayTeamObj: byCanon[game.away],
+    played: false
+  }];
+
+  teamGames[game.home]++;
+  teamGames[game.away]++;
+  return true;
+}
+
+
+  let dayPointer = 0;
+
+  for (const rd of rounds) {
+    for (const g of rd) {
+      while (!placeGame(g, dayPointer)) {
+        dayPointer = (dayPointer + 1) % D;
       }
-      // continue placing the rest normally
-    } else if (r === R - 1) {
-      // place one game on last day if possible
-      let anchored = false;
-      for (let k = 0; k < roundGames.length; k++) {
-        if (placeGame(roundGames[k], D - 1, D - 1)) { roundGames.splice(k,1); anchored = true; break; }
-      }
-    }
-
-    // place remaining games of the round with spillover (never drop)
-    for (const g of roundGames) {
-      const ok = placeGame(g, desired);
-      if (!ok) {
-        // As a last resort, try ANY day (should be rare)
-        let forced = false;
-        for (let di = 0; di < D && !forced; di++) forced = placeGame(g, di, di);
-        if (!forced) {
-          console.warn("Failed to place a game; this should not happen", g);
-        }
-      }
-    }
-  }
-
-  // Final validation & summary
-  const perTeam = Object.fromEntries(canonicalIds.map(id => [id, 0]));
-  Object.values(byDate).forEach(games => {
-    games.forEach(g => { perTeam[g.homeId]++; perTeam[g.awayId]++; });
-  });
-
-  const countsArr = Object.entries(perTeam).map(([id,c]) => ({ id, c }));
-  countsArr.sort((a,b)=>a.c-b.c);
-
-  const firstKey = Object.keys(byDate).sort()[0];
-  const lastKey = Object.keys(byDate).sort().slice(-1)[0];
-
-  console.debug("[Calendar] Schedule summary:",
-    { start: fmt(startDate), end: fmt(endDate), days: D, rounds: R,
-      minGames: countsArr[0]?.c, maxGames: countsArr[countsArr.length-1]?.c,
-      firstDay: firstKey, lastDay: lastKey });
-  
-  /* ------------------ pre-save balance: ensure all teams play 82 ------------------ */
-  const underfilled = Object.entries(perTeam)
-    .filter(([_, c]) => c < target)
-    .map(([id]) => id);
-
-  if (underfilled.length) {
-    console.warn(`[Calendar] Pre-save balancing ${underfilled.length} underfilled teams`);
-    const lastDayStr = fmt(days[days.length - 1]);
-
-    // Keep pairing lowest-play-count teams until all reach 82
-    const sortedTeams = Object.keys(perTeam).sort(
-      (a, b) => perTeam[a] - perTeam[b]
-    );
-    let safety = 200; // prevent infinite loop
-
-    while (safety-- > 0) {
-      const tA = sortedTeams.find((id) => perTeam[id] < target);
-      if (!tA) break;
-
-      const opp = sortedTeams.find(
-        (id) => id !== tA && perTeam[id] < target
-      );
-      if (!opp) break;
-
-      // Make sure array exists so we can get the index
-      byDate[lastDayStr] = byDate[lastDayStr] || [];
-      const idx = byDate[lastDayStr].length;
-
-      // ✅ ID pattern matches all normal games: DATE_Home Name_vs_Away Name_index
-      const newGame = {
-        id: `${lastDayStr}_${byCanon[tA]?.name || tA}_vs_${byCanon[opp]?.name || opp}_${idx}`,
-        date: lastDayStr,
-        homeId: tA,
-        awayId: opp,
-        home: byCanon[tA]?.name || tA,
-        away: byCanon[opp]?.name || opp,
-        played: false,
-      };
-
-      byDate[lastDayStr].push(newGame);
-      perTeam[tA]++; 
-      perTeam[opp]++;
-
-      // Resort teams for next iteration
-      sortedTeams.sort((a, b) => perTeam[a] - perTeam[b]);
+      dayPointer = (dayPointer + 1) % D;
     }
   }
 
   return { byDate, list: Object.values(byDate).flat() };
-
 }
-
-/* ============================================================= */
-/*                          COMPONENT                             */
-/* ============================================================= */
-export default function Calendar() {
-  const navigate = useNavigate();
-  const { leagueData, selectedTeam, setSelectedTeam } = useGame();
-
-  // Season window (pin to Oct 21 -> Apr 12)
-  const now = new Date();
-  const seasonYear = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
-  const seasonStart = useMemo(() => new Date(seasonYear, 9, 21), [seasonYear]);      // Oct 21
-  const seasonEnd   = useMemo(() => new Date(seasonYear + 1, 3, 12), [seasonYear]);  // Apr 12
-  const allDays     = useMemo(() => rangeDays(seasonStart, seasonEnd), [seasonStart, seasonEnd]);
-
-  // Teams
-  const teams = useMemo(() => {
-    const arr = getAllTeamsFromLeague(leagueData);
-    return arr.map((t, i) => ({ ...t, id: t.id ?? t.name ?? `team_${i}` }));
-  }, [leagueData]);
-
-  // Team switching
-  const allTeamsSorted = useMemo(() => [...teams].sort((a,b)=> (a.name||"").localeCompare(b.name||"")), [teams]);
-  const currentIndex = useMemo(() => selectedTeam ? allTeamsSorted.findIndex(t => t.name === selectedTeam.name) : -1, [selectedTeam, allTeamsSorted]);
-  const handleTeamSwitch = (dir) => {
-    if (!allTeamsSorted.length || currentIndex === -1) return;
-    const i = dir === "next" ? (currentIndex + 1) % allTeamsSorted.length : (currentIndex - 1 + allTeamsSorted.length) % allTeamsSorted.length;
-    setSelectedTeam(allTeamsSorted[i]);
-  };
-  useEffect(() => { if (selectedTeam) localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam)); }, [selectedTeam]);
-
-  // Storage helpers
-  const SCHED_KEY = "bm_schedule_v3";
-  const RESULT_KEY = "bm_results_v2";
-  const [scheduleByDate, setScheduleByDate] = useState({});
-  const [resultsById, setResultsById] = useState({});
-
-  const saveSchedule = (obj) => { setScheduleByDate(obj); localStorage.setItem(SCHED_KEY, JSON.stringify(obj)); };
-  const saveResults  = (obj) => { setResultsById(obj);   localStorage.setItem(RESULT_KEY, JSON.stringify(obj)); };
-
-  // Load / build schedule + results
-  useEffect(() => {
-    if (!teams || teams.length < 2) return;
-
-    const wantStart = fmt(seasonStart);
-    const wantEnd = fmt(seasonEnd);
-    const canonicalIds = teams.map((t, i) => slugifyId(t.id ?? t.name ?? `team_${i}`));
-    const target = 82;
-
-    const shouldRegen = (obj) => {
-      try {
-        if (!obj || !Object.keys(obj).length) return true;
-        const keys = Object.keys(obj).sort();
-        if (keys[0] !== wantStart || keys[keys.length-1] !== wantEnd) return true;
-        return !isScheduleValid(obj, canonicalIds, target, seasonStart, seasonEnd);
-      } catch { return true; }
-    };
-
-    let parsedResults = {};
-    try {
-      const savedR = localStorage.getItem(RESULT_KEY);
-      parsedResults = savedR ? JSON.parse(savedR) : {};
-    } catch {
-      parsedResults = {};
-    }
-    const hasAnyResults =
-      parsedResults && Object.keys(parsedResults).length > 0;
-
-    // 🔹 existing schedule load
-    let parsedSched = {};
-    try {
-      const savedRaw = localStorage.getItem(SCHED_KEY);
-      parsedSched = savedRaw ? JSON.parse(savedRaw) : {};
-    } catch {
-      parsedSched = {};
-    }
-
-    // 🔹 NEW: only regenerate if we have NO results yet
-    if (!hasAnyResults && shouldRegen(parsedSched)) {
-      const { byDate } = generateFullSeasonSchedule(
-        teams,
-        seasonStart,
-        seasonEnd
-      );
-      saveSchedule(byDate);
-      setScheduleByDate(byDate);
-      console.info(
-        "[Calendar] Generated fresh schedule (no prior results found)."
-      );
-    } else {
-      setScheduleByDate(parsedSched || {});
-      console.info(
-        "[Calendar] Loaded existing schedule without regeneration."
-      );
-    }
-
-    setResultsById(parsedResults || {});
-  }, [teams, seasonStart, seasonEnd]);
-
-  // Selected team context
-  const selectedTeamId = useMemo(() => selectedTeam ? (selectedTeam.id ?? selectedTeam.name ?? null) : null, [selectedTeam]);
-
-  // My team’s games by date
-  const myGames = useMemo(() => {
-    if (!selectedTeamId) return {};
-    const map = {};
-    Object.entries(scheduleByDate).forEach(([d, games]) => {
-      const g = games.find(x => x.homeId === slugifyId(selectedTeamId) || x.awayId === slugifyId(selectedTeamId));
-      if (g) map[d] = g;
-    });
-    return map;
-  }, [scheduleByDate, selectedTeamId]);
-
-  // Focused date
-  const [focusedDate, setFocusedDate] = useState(null);
-  useEffect(() => {
-    const firstGameDate = Object.keys(myGames).sort()[0];
-    setFocusedDate(firstGameDate || fmt(seasonStart));
-  }, [myGames, seasonStart]);
-
-  // Months & visible days
-  const [month, setMonth] = useState(() => monthKey(seasonStart));
-  const months = useMemo(() => Array.from(new Set(allDays.map(monthKey))), [allDays]);
-  const visibleDays = useMemo(() => {
-    const [y, m] = month.split("-").map(Number);
-    const first = new Date(y, m - 1, 1);
-    const last = new Date(y, m, 0);
-    const days = rangeDays(first, last);
-    const padStart = first.getDay();
-    const padded = Array(padStart).fill(null).concat(days);
-    while (padded.length % 7 !== 0) padded.push(null);
-    return padded;
-  }, [month]);
-
-  // Modals
-  const [boxModal, setBoxModal] = useState(null);     // {game, result}
-  const [actionModal, setActionModal] = useState(null); // { dateStr, game }
-
-  /* ----------------------- simulation helpers ----------------------- */
-  const simOne = (game) => simulateOneGame({
-    leagueData,
-    homeTeamName: teams.find(t => slugifyId(t.id ?? t.name) === game.homeId)?.name || game.home,
-    awayTeamName: teams.find(t => slugifyId(t.id ?? t.name) === game.awayId)?.name || game.away,
-  });
-
-  // Keep only what Calendar + Standings + BoxScore actually use
+/* -------------------------------------------------------------------------- */
+/*                         SLIM RESULT (SAVED TO STORAGE)                     */
+/* -------------------------------------------------------------------------- */
 function slimResult(full) {
   if (!full) return null;
 
-  const mapSide = (side) =>
-    (full.box?.[side] || []).map((p) => ({
-      player: p.player,
-      min: p.min,
-      pts: p.pts,
-      reb: p.reb,
-      ast: p.ast,
-      stl: p.stl,
-      blk: p.blk,
-      fg: p.fg,
-      "3p": p["3p"],
-      ft: p.ft,
-      to: p.to,
-      pf: p.pf,
-    }));
+  const homeScore = full.score?.home ?? 0;
+  const awayScore = full.score?.away ?? 0;
+
+  const rawHomeBox =
+    full.box_home ||
+    full.boxHome ||
+    full.home_box ||
+    [];
+  const rawAwayBox =
+    full.box_away ||
+    full.boxAway ||
+    full.away_box ||
+    [];
+
+  const makePair = (m, a) => `${m || 0}-${a || 0}`;
+
+  // 🔥 helper to pull makes/attempts from a variety of shapes
+  function extractMA(obj, keysM, keysA, stringKeys = []) {
+    let m, a;
+
+    // numeric-style keys
+    for (const k of keysM) {
+      if (obj[k] != null) {
+        m = Number(obj[k]) || 0;
+        break;
+      }
+    }
+    for (const k of keysA) {
+      if (obj[k] != null) {
+        a = Number(obj[k]) || 0;
+        break;
+      }
+    }
+
+    // string-style key like "11-22" or "11/22"
+    if ((m == null || a == null) && stringKeys.length) {
+      for (const sk of stringKeys) {
+        const raw = obj[sk];
+        if (!raw) continue;
+        const str = String(raw).trim();
+        if (!str) continue;
+
+        const parts = str.split(/[\/-]/).map((x) => parseInt(x.trim(), 10) || 0);
+        if (parts.length >= 2) {
+          if (m == null) m = parts[0];
+          if (a == null) a = parts[1];
+          break;
+        }
+      }
+    }
+
+    return {
+      m: m || 0,
+      a: a || 0,
+    };
+  }
+
+  const convertBox = (arr) =>
+    (arr || []).map((p) => {
+      const obj = p instanceof Map ? Object.fromEntries(p) : p;
+
+      // 🔥 FG
+      const fg = extractMA(
+        obj,
+        ["fgm", "fg_m"],
+        ["fga", "fg_a"],
+        ["fg"]
+      );
+
+      // 🔥 3P
+      const tp = extractMA(
+        obj,
+        ["tpm", "tp_m", "fg3m", "three_m"],
+        ["tpa", "tp_a", "fg3a", "three_a"],
+        ["3p", "tp", "three"]
+      );
+
+      // 🔥 FT
+      const ft = extractMA(
+        obj,
+        ["ftm", "ft_m"],
+        ["fta", "ft_a"],
+        ["ft"]
+      );
+
+      const fgStr = makePair(fg.m, fg.a);
+      const threeStr = makePair(tp.m, tp.a);
+      const ftStr = makePair(ft.m, ft.a);
+
+      return {
+        player: obj.player ?? obj.player_name ?? obj.name ?? "Unknown",
+        min: obj.min ?? obj.minutes ?? 0,
+        pts: obj.pts ?? obj.points ?? 0,
+        reb: obj.reb ?? obj.rebounds ?? 0,
+        ast: obj.ast ?? obj.assists ?? 0,
+        stl: obj.stl ?? obj.steals ?? 0,
+        blk: obj.blk ?? obj.blocks ?? 0,
+        fg: fgStr,
+        "3p": threeStr,
+        ft: ftStr,
+        to: obj.to ?? obj.turnovers ?? 0,
+        pf: obj.pf ?? obj.fouls ?? 0,
+      };
+    });
+
+  const side =
+    homeScore > awayScore ? "home" :
+    awayScore > homeScore ? "away" :
+    "tie";
+
+  const boxHome = convertBox(rawHomeBox);
+  const boxAway = convertBox(rawAwayBox);
+
+  if ((boxHome.length === 0 || boxAway.length === 0) && (homeScore || awayScore)) {
+    console.warn("⚠ slimResult: empty box with non-zero score", {
+      homeScore,
+      awayScore,
+      rawHomeBox,
+      rawAwayBox,
+    });
+  }
 
   return {
-    winner: full.winner,
-    totals: full.totals,
+    winner: {
+      score: `${homeScore}-${awayScore}`,
+      home: homeScore,
+      away: awayScore,
+      ot: full.ot ?? 0,
+      side,
+    },
+    totals: {
+      home: homeScore,
+      away: awayScore,
+    },
     box: {
-      home: mapSide("home"),
-      away: mapSide("away"),
+      home: boxHome,
+      away: boxAway,
     },
   };
 }
 
 
-const handleSimOnlyGame = (dateStr, game) => {
+
+
+/* -------------------------------------------------------------------------- */
+/*                  BAD RESULT / GHOST GAME DETECTION HELPERS                 */
+/* -------------------------------------------------------------------------- */
+
+// works on the *full* Python result from simEnginePy
+function isBadFullResult(full) {
+  if (!full) return true;
+  if (full.error) return true;         // timeout or Python error
+
+  if (!full.score) return true;
+
+  const home = full.score.home ?? 0;
+  const away = full.score.away ?? 0;
+
+  const noBox =
+    (!full.box_home || full.box_home.length === 0) &&
+    (!full.box_away || full.box_away.length === 0);
+
+  // ghost signature: 0–0 and no box data
+  return home === 0 && away === 0 && noBox;
+}
+
+// works on the *slim* results object and schedule
+function cleanupGhostGames(sched, results) {
+  const badIds = Object.entries(results)
+    .filter(([id, r]) => {
+      if (!r) return true;
+      if (r.error) return true;
+
+      const totals = r.totals || {};
+      const box = r.box || {};
+      const zeroTotals =
+        (totals.home ?? 0) === 0 &&
+        (totals.away ?? 0) === 0 &&
+        box &&
+        (!box.home || box.home.length === 0) &&
+        (!box.away || box.away.length === 0);
+
+      return zeroTotals;
+    })
+    .map(([id]) => id);
+
+  if (!badIds.length) {
+    console.log("[Calendar] cleanupGhostGames: no ghosts to clean");
+    return;
+  }
+
+  console.warn(
+    "[Calendar] cleanupGhostGames: removing",
+    badIds.length,
+    "ghost result(s)",
+    badIds
+  );
+
+  for (const badId of badIds) {
+    delete results[badId];
+
+    for (const games of Object.values(sched)) {
+      const g = games.find((gg) => gg.id === badId);
+      if (g) {
+        g.played = false;
+        break;
+      }
+    }
+  }
+}
+
+
+/* -------------------------------------------------------------------------- */
+/*                           MAIN CALENDAR COMPONENT                          */
+/* -------------------------------------------------------------------------- */
+export default function Calendar() {
+  
+  const navigate = useNavigate();
+  const { leagueData, selectedTeam, setSelectedTeam } = useGame();
+  console.log("🔥 Calendar leagueData =", leagueData);
+
+
+  /* -------------------------------- Season Window ------------------------------- */
+  const today = new Date();
+  const seasonYear =
+    today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
+
+  const seasonStart = useMemo(
+    () => new Date(seasonYear, 9, 21),
+    [seasonYear]
+  );
+  const seasonEnd = useMemo(
+    () => new Date(seasonYear + 1, 3, 12),
+    [seasonYear]
+  );
+
+  const allDays = useMemo(
+    () => rangeDays(seasonStart, seasonEnd),
+    [seasonStart, seasonEnd]
+  );
+
+  /* --------------------------------- TEAM LIST --------------------------------- */
+const teams = useMemo(() => {
+  if (!leagueData) return [];
+
+  const arr = getAllTeamsFromLeague(leagueData);
+  console.log("🔥 DEBUG Calendar loaded teams:", arr);
+  window.__debugTeams = arr;
+
+  return arr.map((t) => ({
+    ...t,
+    id: slugifyId(t.name),
+  }));
+}, [leagueData]);
+
+
+
+  /* ---------------------------- Team Switch Controls ---------------------------- */
+  const allTeamsSorted = useMemo(
+    () => [...teams].sort((a, b) => (a.name || "").localeCompare(b.name || "")),
+    [teams]
+  );
+
+  const currentIndex = useMemo(() => {
+    return selectedTeam
+      ? allTeamsSorted.findIndex((t) => t.name === selectedTeam.name)
+      : -1;
+  }, [selectedTeam, allTeamsSorted]);
+
+  const handleTeamSwitch = (dir) => {
+    if (!allTeamsSorted.length || currentIndex < 0) return;
+
+    const i =
+      dir === "next"
+        ? (currentIndex + 1) % allTeamsSorted.length
+        : (currentIndex - 1 + allTeamsSorted.length) %
+          allTeamsSorted.length;
+
+    setSelectedTeam(allTeamsSorted[i]);
+  };
+
+  useEffect(() => {
+    if (selectedTeam)
+      localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam));
+  }, [selectedTeam]);
+
+  /* ----------------------------- LOCAL STORAGE KEYS ----------------------------- */
+  const SCHED_KEY = "bm_schedule_v3";
+const RESULT_KEY = "bm_results_v2";
+const PLAYER_STATS_KEY = "bm_player_stats_v1";
+
+function loadPlayerStats() {
+  try {
+    return JSON.parse(localStorage.getItem(PLAYER_STATS_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function savePlayerStats(stats) {
+  localStorage.setItem(PLAYER_STATS_KEY, JSON.stringify(stats));
+}
+
+function parsePair(s) {
+  const [m, a] = String(s || "0-0").split("-").map(Number);
+  return { m: m || 0, a: a || 0 };
+}
+
+// slim = result from slimResult(full)
+// game = schedule game object (has game.home / game.away)
+function applyGameToPlayerStats(stats, slim, game) {
+  if (!slim?.box) return stats;
+
+  const updateSide = (side, teamName) => {
+    const rows = slim.box[side] || [];
+    for (const row of rows) {
+      const key = `${row.player}__${teamName}`;
+      const cur = stats[key] || {
+        player: row.player,
+        team: teamName,
+        gp: 0,
+        min: 0,
+        pts: 0,
+        reb: 0,
+        ast: 0,
+        stl: 0,
+        blk: 0,
+        fgm: 0,
+        fga: 0,
+        tpm: 0,
+        tpa: 0,
+        ftm: 0,
+        fta: 0,
+      };
+
+      cur.gp += 1;
+      cur.min += row.min || 0;
+      cur.pts += row.pts || 0;
+      cur.reb += row.reb || 0;
+      cur.ast += row.ast || 0;
+      cur.stl += row.stl || 0;
+      cur.blk += row.blk || 0;
+
+      const { m: fgm, a: fga } = parsePair(row.fg);
+      const { m: tpm, a: tpa } = parsePair(row["3p"]);
+      const { m: ftm, a: fta } = parsePair(row.ft);
+
+      cur.fgm += fgm;
+      cur.fga += fga;
+      cur.tpm += tpm;
+      cur.tpa += tpa;
+      cur.ftm += ftm;
+      cur.fta += fta;
+
+      stats[key] = cur;
+    }
+  };
+
+  updateSide("home", game.home);
+  updateSide("away", game.away);
+  return stats;
+}
+// 🔥 Rebuild player stats from existing schedule + results
+  function recomputePlayerSeasonStatsFromResults(schedule, results) {
+    let stats = {};
+
+    for (const games of Object.values(schedule || {})) {
+      for (const g of games || []) {
+        const slim = results?.[g.id];
+        if (!slim) continue;
+        stats = applyGameToPlayerStats(stats, slim, g);
+      }
+    }
+
+    savePlayerStats(stats);
+    console.log(
+      "[Calendar] recomputed player stats from existing results:",
+      Object.keys(stats).length,
+      "players"
+    );
+    return stats;
+  }
+
+  
+
+  const [scheduleByDate, setScheduleByDate] = useState({});
+  const [resultsById, setResultsById] = useState({});
+  // expose for debugging
+window.__sched = scheduleByDate;
+window.__results = resultsById;
+window.__teams = teams;
+
+
+
+  const saveSchedule = (obj) => {
+    setScheduleByDate(obj);
+    localStorage.setItem(SCHED_KEY, JSON.stringify(obj));
+  };
+
+
+function saveResults(results) {
+  setResultsById(results);
+  try {
+    const payload = JSON.stringify(results);
+    localStorage.setItem(RESULT_KEY, payload);
+  } catch (err) {
+    if (err.name === "QuotaExceededError") {
+      console.error("localStorage is full; some results may not be saved", err);
+    } else {
+      throw err;
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+  /* -------------------------------------------------------------------------- */
+  /*                          Schedule + Results Loader                         */
+  /* -------------------------------------------------------------------------- */
+  /* -------------------------------------------------------------------------- */
+  /*                          Schedule + Results Loader                         */
+  /* -------------------------------------------------------------------------- */
+useEffect(() => {
+  if (!teams || teams.length < 2) return;
+
+  const wantStart = fmt(seasonStart);
+  const wantEnd = fmt(seasonEnd);
+  const canonicalIds = teams.map((t) => slugifyId(t.name));
+  const target = 82;
+
+  const isScheduleValid = (obj) => {
+    try {
+      if (!obj || !Object.keys(obj).length) return false;
+
+      const keys = Object.keys(obj).sort();
+      if (keys[0] !== wantStart || keys[keys.length - 1] !== wantEnd) return false;
+
+      const cnt = Object.fromEntries(canonicalIds.map((id) => [id, 0]));
+      for (const games of Object.values(obj)) {
+        for (const g of games) {
+          if (!g.homeId || !g.awayId) return false;
+          if (!cnt.hasOwnProperty(g.homeId)) return false;
+          if (!cnt.hasOwnProperty(g.awayId)) return false;
+
+          cnt[g.homeId]++;
+          cnt[g.awayId]++;
+        }
+      }
+
+      return canonicalIds.every((id) => cnt[id] === target);
+    } catch {
+      return false;
+    }
+  };
+
+  // ----- load from storage -----
+  let parsedSched = {};
+  let parsedResults = {};
+  let parsedPlayerStats = loadPlayerStats(); // uses PLAYER_STATS_KEY
+
+  try {
+    parsedSched = JSON.parse(localStorage.getItem(SCHED_KEY)) || {};
+  } catch {
+    parsedSched = {};
+  }
+
+  try {
+    parsedResults = JSON.parse(localStorage.getItem(RESULT_KEY)) || {};
+  } catch {
+    parsedResults = {};
+  }
+
+  const hasValidResults = Object.values(parsedResults).some(
+    (r) => r?.totals?.home != null && r?.totals?.away != null
+  );
+  const hasPlayerStats = parsedPlayerStats && Object.keys(parsedPlayerStats).length > 0;
+
+  // ----- schedule handling -----
+  if (!hasValidResults && !isScheduleValid(parsedSched)) {
+    // fresh season
+    const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
+    saveSchedule(byDate);
+    setScheduleByDate(byDate);
+    setResultsById({});
+  } else {
+    // reuse what we have
+    setScheduleByDate(parsedSched);
+    setResultsById(parsedResults);
+
+    // 🔥 if we have results but NO bm_player_stats_v1, rebuild it automatically
+    if (!hasPlayerStats && hasValidResults) {
+      const rebuilt = recomputePlayerSeasonStatsFromResults(parsedSched, parsedResults);
+      console.log(
+        "[Calendar] auto-rebuilt player stats; players =",
+        Object.keys(rebuilt).length
+      );
+    }
+  }
+}, [teams, seasonStart, seasonEnd]);
+
+
+
+  /* -------------------------------------------------------------------------- */
+  /*                                My Team Games                               */
+  /* -------------------------------------------------------------------------- */
+  const myGames = useMemo(() => {
+    if (!selectedTeam) return {};
+
+    const myId = slugifyId(selectedTeam.name);
+    const map = {};
+
+    for (const [d, games] of Object.entries(scheduleByDate)) {
+      const matches = games.filter(
+        (g) => g.homeId === myId || g.awayId === myId
+      );
+
+      if (matches.length === 1) map[d] = matches[0];
+      else if (matches.length > 1) map[d] = matches[matches.length - 1];
+    }
+
+    return map;
+  }, [scheduleByDate, selectedTeam]);
+
+  /* -------------------------------------------------------------------------- */
+  /*                                 Focused Date                               */
+  /* -------------------------------------------------------------------------- */
+  const [focusedDate, setFocusedDate] = useState(null);
+
+  useEffect(() => {
+    const firstGameDate = Object.keys(myGames).sort()[0];
+    setFocusedDate(firstGameDate || fmt(seasonStart));
+  }, [myGames, seasonStart]);
+
+  /* -------------------------------------------------------------------------- */
+  /*                              Month & Visible Days                           */
+  /* -------------------------------------------------------------------------- */
+  const [month, setMonth] = useState(() => monthKey(seasonStart));
+
+  const months = useMemo(
+    () => Array.from(new Set(allDays.map(monthKey))),
+    [allDays]
+  );
+
+  const visibleDays = useMemo(() => {
+    const [y, m] = month.split("-").map(Number);
+    const first = new Date(y, m - 1, 1);
+    const last = new Date(y, m, 0);
+    const days = rangeDays(first, last);
+    const pad = first.getDay();
+
+    const padded = Array(pad).fill(null).concat(days);
+    while (padded.length % 7 !== 0) padded.push(null);
+    return padded;
+  }, [month]);
+
+  /* -------------------------------------------------------------------------- */
+  /*                                 Action Modals                               */
+  /* -------------------------------------------------------------------------- */
+  const [boxModal, setBoxModal] = useState(null);
+  const [actionModal, setActionModal] = useState(null);
+  const [simLock, setSimLock] = useState(false);
+
+/* -------------------------------------------------------------------------- */
+/*                           SIMULATION HANDLERS                               */
+/* -------------------------------------------------------------------------- */
+const handleSimOnlyGame = async (dateStr, game) => {
   const upd = { ...scheduleByDate };
   const newResults = { ...resultsById };
 
-  const full = simOne(game);
+  const full = await runGameWithRetries(game, leagueData, teams);
+
+  if (!full) {
+    // still bad after retries → leave game unplayed so user can try again later
+    console.error("[SimOnly] Could not get a valid result for game", game.id);
+    return;
+  }
+
   const result = slimResult(full);
 
-  upd[dateStr] = (upd[dateStr] || []).map((g) =>
+  upd[dateStr] = upd[dateStr].map((g) =>
     g.id === game.id ? { ...g, played: true } : g
   );
+
   newResults[game.id] = result;
+  let playerStats = loadPlayerStats();
+playerStats = applyGameToPlayerStats(playerStats, result, game);
+savePlayerStats(playerStats);
+
 
   saveSchedule(upd);
   saveResults(newResults);
+
   setActionModal(null);
   setBoxModal({ game, result });
 };
 
+const handleSimToDate = async (dateStr) => {
+  // start from whatever is already in storage
+  let playerStats = loadPlayerStats();
 
-  const handleSimToDate = (dateStr) => {
-    const sorted = Object.keys(scheduleByDate).sort();
-    const upd = { ...scheduleByDate };
-    const newResults = { ...resultsById };
+  if (simLock) return;
+  setSimLock(true);
 
+  console.log("▶ SimToDate ENTER:", dateStr);
+
+  let upd = structuredClone(scheduleByDate);
+  let newResults = structuredClone(resultsById);
+
+  const sorted = Object.keys(upd).sort(
+    (a, b) => new Date(a) - new Date(b)
+  );
+
+  const staticLeagueData = leagueData;
+  const staticTeams = teams;
+
+  try {
     for (const d of sorted) {
       if (d > dateStr) break;
-      upd[d] = upd[d].map((g) => {
-        if (!g.played) {
-          const full = simOne(g);
-          newResults[g.id] = slimResult(full);
+
+      const dayGames = upd[d];
+      if (!Array.isArray(dayGames)) continue;
+
+      for (let i = 0; i < dayGames.length; i++) {
+        const g = dayGames[i];
+        if (!g || g.played) continue;
+
+        try {
+          const full = await runGameWithRetries(
+            g,
+            staticLeagueData,
+            staticTeams
+          );
+
+          // still failed → skip, leave unplayed
+          if (!full) continue;
+
+          const slim = slimResult(full);
+          newResults[g.id] = slim;
+          dayGames[i] = { ...g, played: true };
+
+          // 🔥 update player stats
+          playerStats = applyGameToPlayerStats(playerStats, slim, g);
+        } catch (err) {
+          console.error("[SimToDate] ERROR for game", g.id, err);
+          // keep unplayed on error
         }
-        return { ...g, played: true };
-      });
+
+        // yield to browser
+        await new Promise((res) => setTimeout(res, 0));
+      }
+
+      upd[d] = dayGames;
     }
+
+    // final saves
+    savePlayerStats(playerStats);
+    cleanupGhostGames(upd, newResults);
     saveSchedule(upd);
     saveResults(newResults);
+  } finally {
     setActionModal(null);
-  };
-
-  const handleSimSeason = () => {
-    const upd = { ...scheduleByDate };
-    const newResults = { ...resultsById };
-
-    Object.keys(upd).sort().forEach((d) => {
-      upd[d] = upd[d].map((g) => {
-        if (!g.played) {
-          const full = simOne(g);
-          newResults[g.id] = slimResult(full);   // ✅ store slim result
-        }
-        return { ...g, played: true };
-      });
-    });
-
-    saveSchedule(upd);
-    saveResults(newResults);
-    setActionModal(null);
-  };
+    setSimLock(false);
+    console.log("◀ SimToDate EXIT:", dateStr);
+  }
+};
 
 
-  const handleBackfillMissing = () => {
-    const upd = { ...scheduleByDate };
-    const newResults = { ...resultsById };
 
-    Object.keys(upd).forEach((d) => {
-      upd[d] = upd[d].map((g) => {
-if (g.played && !newResults[g.id]) {
-  const full = simOne(g);
-  newResults[g.id] = slimResult(full);
+function sanitizeTeam(team) {
+  if (!team) return null;
+
+  const clean = structuredClone(team);
+
+  // remove React garbage
+  delete clean._reactInternals;
+  for (const key of Object.keys(clean)) {
+    if (key.startsWith("__react")) delete clean[key];
+  }
+
+  // remove anything unserializable
+  for (const p of clean.players || []) {
+    delete p._reactInternals;
+    for (const key of Object.keys(p)) {
+      if (key.startsWith("__react")) delete p[key];
+    }
+  }
+
+  // load minutes
+  const key = `gameplan_${team.name}`;
+  try {
+    clean.minutes = JSON.parse(localStorage.getItem(key) || "{}");
+  } catch {
+    clean.minutes = {};
+  }
+
+  // defaults for missing attrs
+  clean.strategy = clean.strategy || {};
+  clean.team_ratings =
+    clean.team_ratings && typeof clean.team_ratings === "object"
+      ? clean.team_ratings
+      : { offense: 50, defense: 50 };
+
+  return clean;
 }
-        return g;
-      });
-    });
 
-    saveResults(newResults);
-  };
+async function simulateBatch(games) {
+  // games = [ { id, home, away }, ... ] (clean objects)
+  const results = [];
 
-  const hasPlayedWithoutResult = useMemo(() => {
-    for (const games of Object.values(scheduleByDate)) {
-      for (const g of games) if (g.played && !resultsById[g.id]) return true;
-    }
-    return false;
-  }, [scheduleByDate, resultsById]);
+  // Run each game through queueSim + simulateOneGame
+  for (const g of games) {
+    const full = await queueSim(() =>
+      simulateOneGame({
+        homeTeam: g.home,
+        awayTeam: g.away
+      })
+    );
 
-  const handleResetSeason = () => {
-    if (!window.confirm("Reset the season? This clears all results and regenerates the schedule.")) return;
-    localStorage.removeItem(SCHED_KEY);
+    results.push(full);
+  }
+
+  return results;
+}
+
+const handleSimSeason = async () => {
+  // block if already running
+  if (simLock) {
+    console.log("FULL SEASON blocked: simLock already true");
+    return;
+  }
+
+  // start with current stats
+  let playerStats = loadPlayerStats();
+
+  try {
+    console.log("Clearing old bm_results_v2 before full season sim");
     localStorage.removeItem(RESULT_KEY);
-    const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
-    saveSchedule(byDate);
-    saveResults({});
-    const firstGameDate = Object.keys(byDate).sort()[0];
-    setFocusedDate(firstGameDate || fmt(seasonStart));
-  };
-
-  /* ----------------------- guards ----------------------- */
-  if (!selectedTeam) {
-    return (
-      <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center justify-center">
-        <p className="mb-4">No team selected.</p>
-        <button className="px-5 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg" onClick={() => navigate("/team-selector")}>
-          Pick a Team
-        </button>
-      </div>
-    );
-  }
-  if (!teams || teams.length < 2) {
-    return (
-      <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center justify-center">
-        <p className="text-lg">League data not loaded.</p>
-        <p className="text-sm text-gray-400 mt-2">Load/create a league in the League Editor, then return here.</p>
-        <button className="mt-5 px-5 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg" onClick={() => navigate("/league-editor")}>
-          Go to League Editor
-        </button>
-      </div>
-    );
+  } catch (e) {
+    console.warn("Could not clear old results", e);
   }
 
-  const bannerText = (() => {
-    if (!focusedDate) return "";
-    const g = myGames[focusedDate];
-    if (g) {
-      const isHome = g.homeId === slugifyId(selectedTeam.id ?? selectedTeam.name);
-      return `GAME DAY: ${isHome ? g.away : selectedTeam.name} @ ${isHome ? selectedTeam.name : g.home}`;
+  setSimLock(true);
+  console.log("🔥 FULL SEASON START");
+
+  let upd = structuredClone(scheduleByDate);
+  let results = structuredClone(resultsById);
+
+  const staticLeagueData = leagueData;
+  const staticTeams = teams;
+
+  const dates = Object.keys(upd).sort();
+  let gamesSimmed = 0;
+  let lastDateProcessed = null;
+
+  try {
+    for (let di = 0; di < dates.length; di++) {
+      const date = dates[di];
+      lastDateProcessed = date;
+
+      const dayGames = upd[date];
+      if (!Array.isArray(dayGames)) {
+        console.error("FULL SEASON FATAL: dayGames is not an array for", date, dayGames);
+        break;
+      }
+
+      console.log(
+        "📅 Processing date",
+        di + 1,
+        "of",
+        dates.length,
+        date,
+        "games:",
+        dayGames.length
+      );
+
+      for (let i = 0; i < dayGames.length; i++) {
+        const g = dayGames[i];
+        if (!g) {
+          console.error("FULL SEASON FATAL: missing game object at", date, "index", i);
+          break;
+        }
+        if (g.played) continue;
+
+        try {
+          const full = await runGameWithRetries(g, staticLeagueData, staticTeams);
+          if (!full) continue;
+
+          const slim = slimResult(full);
+          results[g.id] = slim;
+          dayGames[i] = { ...g, played: true };
+          gamesSimmed++;
+
+          playerStats = applyGameToPlayerStats(playerStats, slim, g);
+    if (gamesSimmed % 10 === 0) {
+      console.log("   ✅ Progress:", gamesSimmed, "games simulated so far");
+      saveSchedule(structuredClone(upd));
+      saveResults(structuredClone(results));
+      savePlayerStats(playerStats); // 🔥 keep bm_player_stats_v1 in sync
+      await new Promise((res) => setTimeout(res, 0));
     }
-    const dt = new Date(focusedDate);
-    const label = dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-    return `DATE: ${label}`;
-  })();
 
-  /* ----------------------- UI (unchanged) ----------------------- */
+        } catch (err) {
+          console.error("FULL SEASON ERROR for game", g.id, err);
+        }
+      }
+
+      upd[date] = dayGames;
+    }
+  } catch (err) {
+    console.error(
+      "FULL SEASON FATAL outer error:",
+      err,
+      "lastDateProcessed:",
+      lastDateProcessed
+    );
+  } finally {
+    saveSchedule(upd);
+    saveResults(results);
+    savePlayerStats(playerStats);
+    setActionModal(null);
+    setSimLock(false);
+
+    console.log(
+      "🏁 FULL SEASON EXIT, total gamesSimmed:",
+      gamesSimmed,
+      "last date processed:",
+      lastDateProcessed
+    );
+  }
+};
+
+
+
+
+const handleResetSeason = () => {
+  if (!window.confirm("Reset season? ALL results + schedule will be wiped.")) return;
+
+  localStorage.removeItem(SCHED_KEY);
+  localStorage.removeItem(RESULT_KEY);
+  localStorage.removeItem(PLAYER_STATS_KEY); // 🔥 add this
+
+  const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
+
+  saveSchedule(byDate);
+  saveResults({});
+
+  const firstGameDate = Object.keys(byDate).sort()[0];
+  setFocusedDate(firstGameDate);
+};
+
+
+
+/* -------------------------------------------------------------------------- */
+/*                                    UI                                      */
+/* -------------------------------------------------------------------------- */
+if (!leagueData) {
+  return <div className="text-white p-6">Loading league...</div>;
+}
+if (!selectedTeam) {
+  return (
+    <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center justify-center">
+      <p>No team selected.</p>
+      <button
+        className="mt-4 px-4 py-2 bg-orange-600 rounded"
+        onClick={() => navigate("/team-selector")}
+      >
+        Pick a Team
+      </button>
+    </div>
+  );
+}
+
+const bannerText = (() => {
+  if (!focusedDate) return "";
+  const g = myGames[focusedDate];
+  if (g) {
+    const isHome = g.homeId === slugifyId(selectedTeam.name);
+    return `GAME DAY: ${isHome ? g.away : selectedTeam.name} @ ${
+      isHome ? selectedTeam.name : g.home
+    }`;
+  }
+  return focusedDate;
+})();
+
+/* -------------------------------------------------------------------------- */
+/*                               CALENDAR GRID                                */
+/* -------------------------------------------------------------------------- */
+
   return (
     <div className="min-h-screen bg-neutral-900 text-white py-8">
       <div className="max-w-6xl mx-auto px-4">
-        {/* Header */}
+        {/* HEADER */}
         <div className="flex items-center justify-between mb-4">
-          {/* LEFT: arrows + team identity */}
+          {/* left: team switch + logo + name */}
           <div className="flex items-center gap-4">
-            <div className="w-16 flex items-center justify-start gap-2 select-none">
-              <button
-                onClick={() => handleTeamSwitch("prev")}
-                className="text-2xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
-                title="Previous Team"
-              >
-                ◄
-              </button>
-              <button
-                onClick={() => handleTeamSwitch("next")}
-                className="text-2xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
-                title="Next Team"
-              >
-                ►
-              </button>
+            <button
+              className="text-2xl hover:text-orange-400"
+              onClick={() => handleTeamSwitch("prev")}
+            >
+              ◄
+            </button>
+            <button
+              className="text-2xl hover:text-orange-400"
+              onClick={() => handleTeamSwitch("next")}
+            >
+              ►
+            </button>
+
+            <div className="flex items-center gap-3">
+              <Logo team={selectedTeam} size={40} />
+              <h1 className="text-2xl font-bold text-orange-500">
+                {selectedTeam.name}
+              </h1>
             </div>
-            <Logo team={selectedTeam} size={32} />
-            <h1 className="text-2xl font-extrabold text-orange-500">{selectedTeam.name}</h1>
           </div>
 
-          {/* RIGHT: controls */}
+          {/* right: controls */}
           <div className="flex items-center gap-2">
-            <button className="px-3 py-2 bg-neutral-700 rounded hover:bg-neutral-600" onClick={() => navigate("/team-hub")}>Back to Team Hub</button>
-            <button className="px-3 py-2 bg-red-700 rounded hover:bg-red-600" onClick={handleResetSeason}>Reset Season</button>
-            <button className="px-3 py-2 bg-neutral-800 rounded hover:bg-neutral-700" onClick={() => { const i = months.indexOf(month); if (i > 0) setMonth(months[i - 1]); }}>‹ Prev</button>
-            <select className="px-3 py-2 bg-neutral-800 rounded" value={month} onChange={(e) => setMonth(e.target.value)}>
+            <button
+              className="px-3 py-2 bg-neutral-700 rounded"
+              onClick={() => navigate("/team-hub")}
+            >
+              Team Hub
+            </button>
+            <button
+              className="px-3 py-2 bg-red-700 rounded"
+              onClick={handleResetSeason}
+            >
+              Reset Season
+            </button>
+
+            {/* Month navigation */}
+            <button
+              className="px-3 py-2 bg-neutral-700 rounded"
+              onClick={() => {
+                const i = months.indexOf(month);
+                if (i > 0) setMonth(months[i - 1]);
+              }}
+            >
+              ‹ Prev
+            </button>
+            <select
+              value={month}
+              onChange={(e) => setMonth(e.target.value)}
+              className="px-3 py-2 bg-neutral-800 rounded"
+            >
               {months.map((m) => {
                 const [y, mm] = m.split("-").map(Number);
                 const dt = new Date(y, mm - 1, 1);
-                const label = dt.toLocaleString("default", { month: "long", year: "numeric" });
-                return <option key={m} value={m}>{label}</option>;
+                return (
+                  <option key={m} value={m}>
+                    {dt.toLocaleString("default", {
+                      month: "long",
+                      year: "numeric",
+                    })}
+                  </option>
+                );
               })}
             </select>
-            <button className="px-3 py-2 bg-neutral-800 rounded hover:bg-neutral-700" onClick={() => { const i = months.indexOf(month); if (i < months.length - 1) setMonth(months[i + 1]); }}>Next ›</button>
+            <button
+              className="px-3 py-2 bg-neutral-700 rounded"
+              onClick={() => {
+                const i = months.indexOf(month);
+                if (i < months.length - 1) setMonth(months[i + 1]);
+              }}
+            >
+              Next ›
+            </button>
           </div>
         </div>
 
-        {/* Top banner */}
+        {/* BANNER */}
         {focusedDate && (
-          <div className="mb-5">
-            <div className="px-4 py-2 rounded bg-neutral-800 border border-neutral-700 text-sm font-semibold">
-              {bannerText}
-            </div>
+          <div className="mb-4 px-4 py-2 bg-neutral-800 rounded border border-neutral-700">
+            {bannerText}
           </div>
         )}
 
-        {/* Weekday header */}
+        {/* WEEKDAYS */}
         <div className="grid grid-cols-7 text-center text-gray-400 mb-2">
-          {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((w) => <div key={w} className="py-2">{w}</div>)}
+          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((w) => (
+            <div key={w}>{w}</div>
+          ))}
         </div>
 
-        {/* Calendar grid */}
-        <div className="grid grid-cols-7 gap-[6px]">
+        {/* MAIN CALENDAR */}
+        <div className="grid grid-cols-7 gap-1">
           {visibleDays.map((d, idx) => {
-            if (!d)
-              return <div key={`pad-${idx}`} className="h-28 rounded-lg bg-neutral-800/40 border border-neutral-800" />;
+            if (!d) {
+              return (
+                <div
+                  key={"pad-" + idx}
+                  className="h-28 bg-neutral-800/40 rounded border border-neutral-800"
+                />
+              );
+            }
 
             const dateStr = fmt(d);
-            const myGame = myGames[dateStr];
-            const iAmHome = myGame && (myGame.homeId === slugifyId(selectedTeam.id ?? selectedTeam.name));
-            const res = myGame ? resultsById[myGame.id] : null;
+            const game = myGames[dateStr];
+            const result = game ? resultsById[game.id] : null;
 
-            // W/L + Final
-            let finalScoreText = null;
-            let WLTag = null;
-            if (myGame && myGame.played && res?.totals) {
-              const myScore  = iAmHome ? res.totals.home : res.totals.away;
-              const oppScore = iAmHome ? res.totals.away : res.totals.home;
-              const isWin = myScore > oppScore;
-              WLTag = (
-                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold mr-1 ${isWin ? "bg-green-600/80" : "bg-red-600/80"}`}>
-                  {isWin ? "W" : "L"}
-                </span>
-              );
-              finalScoreText = `Final ${myScore}-${oppScore}`;
-            }
+            const finalScore =
+              game && game.played && result
+                ? `${result.totals?.home}-${result.totals?.away}`
+                : null;
+
+            const iAmHome =
+              game && game.homeId === slugifyId(selectedTeam.name);
+
+            const winnerSide = result?.winner?.side || null;
+
+            const outcome =
+              game && game.played && winnerSide && winnerSide !== "tie"
+                ? winnerSide === (iAmHome ? "home" : "away")
+                  ? "W"
+                  : "L"
+                : null;
+
 
             return (
               <div
                 key={dateStr}
-                className={`h-28 rounded-lg border p-2 relative cursor-pointer 
-                  ${myGame ? (iAmHome ? "border-blue-400" : "border-red-400") : "border-neutral-800"} 
-                  bg-neutral-850 hover:bg-neutral-700`}
+                className={`relative h-28 p-2 rounded border cursor-pointer overflow-visible ${
+                  game
+                    ? iAmHome
+                      ? "border-blue-400"
+                      : "border-red-400"
+                    : "border-neutral-700"
+                } bg-neutral-850 hover:bg-neutral-700`}
                 onClick={() => {
                   setFocusedDate(dateStr);
-                  if (myGame) setActionModal({ dateStr, game: myGame });
+                  if (game) setActionModal({ dateStr, game });
                 }}
               >
                 <div className="text-xs text-gray-400">{d.getDate()}</div>
 
-                {myGame && (
-                  <div className="mt-2 flex items-center gap-2">
-                    <Logo
-                      team={iAmHome ? (teams.find(t => slugifyId(t.id ?? t.name) === myGame.awayId) || { name: myGame.away }) : (teams.find(t => slugifyId(t.id ?? t.name) === myGame.homeId) || { name: myGame.home })}
-                      size={32}
-                    />
-                    <div className="text-sm">
-                      {iAmHome ? myGame.away : myGame.home}
+                {game && (
+                  <div className="mt-2 flex items-center gap-2 overflow-visible">
+                    <div className="shrink-0">
+                      <Logo
+                        team={{
+                          name: iAmHome ? game.away : game.home,
+                          logo: iAmHome ? game.awayLogo : game.homeLogo,
+                        }}
+                        size={26}
+                      />
                     </div>
+
+                    <span className="text-sm">
+                      {iAmHome ? game.away : game.home}
+                    </span>
                   </div>
                 )}
 
-                {/* Bottom-right: W/L + Final only */}
-                {myGame && myGame.played && (
-                  <div className="absolute bottom-2 right-2 flex items-center">
-                    {WLTag}
-                    <span className="text-[11px] px-2 py-0.5 rounded bg-green-700/80">
-                      {finalScoreText || "Final"}
-                    </span>
+                {/* W / L badge for selected team */}
+                {game && game.played && outcome && (
+                  <div
+                    className={`absolute bottom-2 left-2 text-[11px] font-bold px-2 py-1 rounded ${
+                      outcome === "W" ? "bg-green-700" : "bg-red-700"
+                    }`}
+                  >
+                    {outcome}
+                  </div>
+                )}
+
+                {/* Final score badge (bottom-right) */}
+                {game && game.played && finalScore && (
+                  <div className="absolute bottom-2 right-2 text-[11px] bg-green-700 px-2 py-1 rounded">
+                    Final {finalScore}
                   </div>
                 )}
               </div>
@@ -721,128 +1432,119 @@ if (g.played && !newResults[g.id]) {
         </div>
       </div>
 
-      {/* Action modal (opens when clicking a tile) */}
+      {/* ---------------------------- ACTION MODAL ---------------------------- */}
       {actionModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-neutral-900 border border-neutral-700 rounded-xl w-[520px] p-5">
-            <div className="mb-3">
-              <div className="text-sm text-gray-300 mb-1">{actionModal.dateStr}</div>
-              <div className="text-lg font-bold">
-                {actionModal.game.away} @ {actionModal.game.home}
-              </div>
-            </div>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center">
+          <div className="bg-neutral-900 border border-neutral-700 rounded p-5 w-[500px]">
+            <h2 className="text-lg font-bold mb-3">
+              {actionModal.game.away} @ {actionModal.game.home}
+            </h2>
 
             {!actionModal.game.played ? (
               <div className="flex flex-col gap-2">
                 <button
-                  className="px-4 py-2 rounded bg-neutral-700 hover:bg-neutral-600 text-left"
-                  onClick={() => handleSimOnlyGame(actionModal.dateStr, actionModal.game)}
+                  className="px-4 py-2 bg-neutral-700 rounded"
+                  onClick={() =>
+                    handleSimOnlyGame(actionModal.dateStr, actionModal.game)
+                  }
                 >
-                  Simulate only this game
+                  Simulate this game
                 </button>
                 <button
-                  className="px-4 py-2 rounded bg-orange-600 hover:bg-orange-500 text-left"
+                  className="px-4 py-2 bg-orange-600 rounded"
                   onClick={() => handleSimToDate(actionModal.dateStr)}
                 >
-                  Simulate to this day
+                  Simulate to this date
                 </button>
                 <button
-                  className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-left"
+                  className="px-4 py-2 bg-blue-600 rounded"
                   onClick={handleSimSeason}
                 >
-                  Simulate season
+                  Simulate full season
                 </button>
-                <button className="px-4 py-2 rounded bg-neutral-800 hover:bg-neutral-700 text-left" onClick={() => setActionModal(null)}>
+                <button
+                  className="px-4 py-2 bg-neutral-700 rounded"
+                  onClick={() => setActionModal(null)}
+                >
                   Close
                 </button>
               </div>
             ) : (
-              <div className="flex gap-2 justify-end">
-                <button
-                  className="px-4 py-2 rounded bg-neutral-700 hover:bg-neutral-600"
-                  onClick={() => {
-                      let r = resultsById[actionModal.game.id];
-                      if (!r) {
-                      const full = simOne(actionModal.game);
-                      const slim = slimResult(full);
-                      const newResults = { ...resultsById, [actionModal.game.id]: slim };
-                      saveResults(newResults);
-                      r = slim;
-                      }
-                    setActionModal(null);
-                    setBoxModal({ game: actionModal.game, result: r });
-                  }}
-                >
-                  View box score
-                </button>
-                <button className="px-4 py-2 rounded bg-neutral-800 hover:bg-neutral-700" onClick={() => setActionModal(null)}>
-                  Close
-                </button>
-              </div>
+              <button
+                className="px-4 py-2 bg-neutral-700 rounded"
+                onClick={() => {
+                  const r = resultsById[actionModal.game.id];
+                  setActionModal(null);
+                  setBoxModal({ game: actionModal.game, result: r });
+                }}
+              >
+                View Box Score
+              </button>
             )}
           </div>
         </div>
       )}
 
-      {/* Box Score modal */}
+      {/* ---------------------------- BOX SCORE MODAL ---------------------------- */}
       {boxModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-neutral-900 border border-neutral-700 rounded-xl w-[920px] max-h-[85vh] overflow-auto p-5">
-            <div className="flex items-center justify-between mb-3">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center">
+          <div className="bg-neutral-900 border border-neutral-700 rounded-xl w-[880px] max-h-[90vh] overflow-auto p-5">
+            <div className="flex justify-between mb-4">
               <h3 className="text-xl font-bold">
-                {boxModal.game.away} @ {boxModal.game.home} • {boxModal.result?.winner?.score}{boxModal.result?.winner?.ot ? " (OT)" : ""}
+                {boxModal.game.away} @ {boxModal.game.home} •{" "}
+                {boxModal.result?.winner?.score}
+                {boxModal.result?.winner?.ot ? " (OT)" : ""}
               </h3>
-              <button className="px-3 py-1 bg-neutral-700 rounded hover:bg-neutral-600" onClick={() => setBoxModal(null)}>Close</button>
+              <button
+                className="px-2 py-1 bg-neutral-700 rounded"
+                onClick={() => setBoxModal(null)}
+              >
+                Close
+              </button>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              {["away","home"].map(side => {
-                const teamName = side === "away" ? boxModal.game.away : boxModal.game.home;
-                const rows = boxModal.result?.box?.[side] || [];
+              {["away", "home"].map((side) => {
+                const name =
+                  side === "away" ? boxModal.game.away : boxModal.game.home;
+                const rows = boxModal.result.box?.[side] || [];
+
+
                 return (
-                  <div key={side} className="bg-neutral-800 rounded-lg p-3">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Logo team={teams.find(t => t.name === teamName) || { name: teamName }} size={28} />
-                      <h4 className="font-semibold">{teamName}</h4>
-                    </div>
-                    <div className="overflow-auto">
-                      <table className="w-full text-sm">
-                        <thead className="text-gray-300">
-                          <tr className="text-left border-b border-neutral-700">
-                            <th className="py-1 pr-2">Player</th>
-                            <th className="py-1 pr-2">MIN</th>
-                            <th className="py-1 pr-2">PTS</th>
-                            <th className="py-1 pr-2">REB</th>
-                            <th className="py-1 pr-2">AST</th>
-                            <th className="py-1 pr-2">STL</th>
-                            <th className="py-1 pr-2">BLK</th>
-                            <th className="py-1 pr-2">FG</th>
-                            <th className="py-1 pr-2">3P</th>
-                            <th className="py-1 pr-2">FT</th>
-                            <th className="py-1 pr-2">TO</th>
-                            <th className="py-1 pr-2">PF</th>
+                  <div key={side} className="bg-neutral-800 p-3 rounded-lg">
+                    <h4 className="font-bold mb-2">{name}</h4>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-neutral-700">
+                          <th className="py-1">Player</th>
+                          <th className="py-1">MIN</th>
+                          <th className="py-1">PTS</th>
+                          <th className="py-1">REB</th>
+                          <th className="py-1">AST</th>
+                          <th className="py-1">STL</th>
+                          <th className="py-1">BLK</th>
+                          <th className="py-1">FG</th>
+                          <th className="py-1">3P</th>
+                          <th className="py-1">FT</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((r, i) => (
+                          <tr key={i} className="border-b border-neutral-700">
+                            <td>{r.player}</td>
+                            <td>{r.min}</td>
+                            <td>{r.pts}</td>
+                            <td>{r.reb}</td>
+                            <td>{r.ast}</td>
+                            <td>{r.stl}</td>
+                            <td>{r.blk}</td>
+                            <td>{r.fg}</td>
+                            <td>{r["3p"]}</td>
+                            <td>{r.ft}</td>
                           </tr>
-                        </thead>
-                        <tbody>
-                          {rows.map(r => (
-                            <tr key={r.player} className="border-b border-neutral-800">
-                              <td className="py-1 pr-2">{r.player}</td>
-                              <td className="py-1 pr-2">{r.min}</td>
-                              <td className="py-1 pr-2">{r.pts}</td>
-                              <td className="py-1 pr-2">{r.reb}</td>
-                              <td className="py-1 pr-2">{r.ast}</td>
-                              <td className="py-1 pr-2">{r.stl}</td>
-                              <td className="py-1 pr-2">{r.blk}</td>
-                              <td className="py-1 pr-2">{r.fg}</td>
-                              <td className="py-1 pr-2">{r["3p"]}</td>
-                              <td className="py-1 pr-2">{r.ft}</td>
-                              <td className="py-1 pr-2">{r.to}</td>
-                              <td className="py-1 pr-2">{r.pf}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 );
               })}
@@ -853,3 +1555,5 @@ if (g.played && !newResults[g.id]) {
     </div>
   );
 }
+
+

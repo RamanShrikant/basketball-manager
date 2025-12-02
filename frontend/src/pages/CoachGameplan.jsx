@@ -1,4 +1,4 @@
-    import { computeTeamRatings as engineTeamRatings } from "../api/simEngine";
+    import { computeTeamRatings } from "../api/teamRatings";
     import React, { useState, useEffect, useMemo } from "react";
     import { useGame } from "../context/GameContext";
     import { useNavigate } from "react-router-dom";
@@ -46,7 +46,7 @@
     const calculateTeamRatings = (playersArr, minutesObj) => {
   try {
     // exact parity with the sim: pass a team-like object with a players field
-    const out = engineTeamRatings({ players: playersArr }, minutesObj);
+    const out = computeTeamRatings({ players: playersArr }, minutesObj);
     return { overall: out.overall, off: out.off, def: out.def };
   } catch (e) {
     console.warn("calcTeamRatings fallback:", e);

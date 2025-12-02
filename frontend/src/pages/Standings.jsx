@@ -1,6 +1,16 @@
   import React, { useMemo, useState } from "react";
   import { useGame } from "../context/GameContext";
   import { useNavigate } from "react-router-dom";
+  // pick a logo from whatever key the team uses
+const resolveLogo = (t) =>
+  t.logo ||
+  t.teamLogo ||
+  t.newTeamLogo ||
+  t.logoUrl ||
+  t.image ||
+  t.img ||
+  "";
+
 
   export default function Standings() {
     const schedule = useMemo(() => {
@@ -25,64 +35,102 @@
       }
     }, []);
 
-    const allTeams = useMemo(() => {
-      if (!leagueData?.conferences) return [];
-      return Object.entries(leagueData.conferences).flatMap(([conf, teams]) =>
-        teams.map((t) => ({ ...t, conf }))
-      );
-    }, [leagueData]);
+const allTeams = useMemo(() => {
+  if (!leagueData?.conferences) return [];
+  return Object.entries(leagueData.conferences).flatMap(([conf, teams]) =>
+    teams.map((t) => ({
+      ...t,
+      conf,
+      logo: resolveLogo(t),
+    }))
+  );
+}, [leagueData]);
+
 
   const teamStats = useMemo(() => {
     const stats = {};
-    allTeams.forEach((t) => {
-      stats[t.name] = { team: t.name, conf: t.conf, w: 0, l: 0, pf: 0, pa: 0 };
-    });
 
-const findGameMeta = (gameId) => {
-  for (const games of Object.values(schedule)) {
-    for (const g of games) {
-      if (g.id === gameId) return g;
-    }
-  }
-  return null;
-};
+    // start every team at 0
+allTeams.forEach((t) => {
+  stats[t.name] = {
+    team: t.name,
+    conf: t.conf,
+    logo: t.logo,
+    w: 0,
+    l: 0,
+    pf: 0,
+    pa: 0,
+  };
+});
 
+
+    // helper to look up a game by id inside the schedule
+    const findGameMeta = (gameId) => {
+      for (const games of Object.values(schedule)) {
+        for (const g of games) {
+          if (g.id === gameId) return g;
+        }
+      }
+      return null;
+    };
 
     Object.entries(results).forEach(([gameId, g]) => {
-const meta = findGameMeta(gameId);
-if (!meta) return; // skip bad games
+      if (!g || !g.totals) return;
 
-const home = meta.home;
-const away = meta.away;
+      const meta = findGameMeta(gameId);
+      if (!meta) return;
 
+      const homeName = meta.home;
+      const awayName = meta.away;
 
-      const homePts = g.totals.home || 0;
-      const awayPts = g.totals.away || 0;
-      const winner = g.winner?.side;
+      const homePts = Number(g.totals.home || 0);
+      const awayPts = Number(g.totals.away || 0);
 
-      if (!stats[home]) stats[home] = { team: home, w: 0, l: 0, pf: 0, pa: 0 };
-      if (!stats[away]) stats[away] = { team: away, w: 0, l: 0, pf: 0, pa: 0 };
+      if (!stats[homeName]) {
+        stats[homeName] = {
+          team: homeName,
+          conf: meta.confHome || "",
+          w: 0,
+          l: 0,
+          pf: 0,
+          pa: 0,
+        };
+      }
+      if (!stats[awayName]) {
+        stats[awayName] = {
+          team: awayName,
+          conf: meta.confAway || "",
+          w: 0,
+          l: 0,
+          pf: 0,
+          pa: 0,
+        };
+      }
 
-      stats[home].pf += homePts;
-      stats[home].pa += awayPts;
-      stats[away].pf += awayPts;
-      stats[away].pa += homePts;
+      // points for / against
+      stats[homeName].pf += homePts;
+      stats[homeName].pa += awayPts;
+      stats[awayName].pf += awayPts;
+      stats[awayName].pa += homePts;
 
-      if (winner === "home") {
-        stats[home].w++;
-        stats[away].l++;
-      } else if (winner === "away") {
-        stats[away].w++;
-        stats[home].l++;
+      // decide winner directly from points
+      if (homePts > awayPts) {
+        stats[homeName].w += 1;
+        stats[awayName].l += 1;
+      } else if (awayPts > homePts) {
+        stats[awayName].w += 1;
+        stats[homeName].l += 1;
       }
     });
 
+    // final shape for the table
     return Object.values(stats).map((t) => ({
       ...t,
-      pct: (t.w + t.l) > 0 ? (t.w / (t.w + t.l)).toFixed(3) : "0.000",
+      pct: t.w + t.l > 0 ? (t.w / (t.w + t.l)).toFixed(3) : "0.000",
       diff: t.pf - t.pa,
     }));
-  }, [results, allTeams]);
+  }, [results, allTeams, schedule]);
+
 
 
     const filtered = useMemo(() => {
@@ -145,7 +193,18 @@ const away = meta.away;
                     }`}
                   >
                     <td className="px-3 py-2 text-left pl-4 font-semibold">
-                      {i + 1}. {t.team}
+                      <div className="flex items-center gap-2">
+                        {t.logo && (
+                          <img
+                            src={t.logo}
+                            alt={t.team}
+                            className="w-6 h-6 object-contain"
+                          />
+                        )}
+                        <span>
+                          {i + 1}. {t.team}
+                        </span>
+                      </div>
                     </td>
                     <td className="px-3 py-2">{t.w}</td>
                     <td className="px-3 py-2">{t.l}</td>
