@@ -4,6 +4,7 @@ import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import { simulateOneGame } from "@/api/simEnginePy";
 import { queueSim } from "@/api/simQueue";
+import LZString from "lz-string";
 
 
 
@@ -637,16 +638,40 @@ const teams = useMemo(() => {
 
   /* ----------------------------- LOCAL STORAGE KEYS ----------------------------- */
   const SCHED_KEY = "bm_schedule_v3";
-const RESULT_KEY = "bm_results_v2";
-const PLAYER_STATS_KEY = "bm_player_stats_v1";
+  const RESULT_KEY = "bm_results_v2";
+  const PLAYER_STATS_KEY = "bm_player_stats_v1";
 
-function loadPlayerStats() {
-  try {
-    return JSON.parse(localStorage.getItem(PLAYER_STATS_KEY)) || {};
-  } catch {
-    return {};
+  function loadResults() {
+    try {
+      const stored = localStorage.getItem(RESULT_KEY);
+      if (!stored) return {};
+
+      // Try to treat it as compressed (new format)
+      const decompressed = LZString.decompressFromUTF16(stored);
+      if (decompressed) {
+        return JSON.parse(decompressed);
+      }
+
+      // If decompress returns null, it might just be plain JSON from old saves
+      return JSON.parse(stored);
+    } catch (e) {
+      console.warn("[Calendar] loadResults failed, returning empty", e);
+      return {};
+    }
   }
-}
+
+  function loadPlayerStats() {
+    try {
+      return JSON.parse(localStorage.getItem(PLAYER_STATS_KEY)) || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function savePlayerStats(stats) {
+    localStorage.setItem(PLAYER_STATS_KEY, JSON.stringify(stats));
+  }
+
 
 function savePlayerStats(stats) {
   localStorage.setItem(PLAYER_STATS_KEY, JSON.stringify(stats));
@@ -750,10 +775,14 @@ window.__teams = teams;
 
 
 function saveResults(results) {
+  // keep React state in sync
   setResultsById(results);
+
   try {
-    const payload = JSON.stringify(results);
-    localStorage.setItem(RESULT_KEY, payload);
+    const json = JSON.stringify(results);
+    const compressed = LZString.compressToUTF16(json);
+
+    localStorage.setItem(RESULT_KEY, compressed);
   } catch (err) {
     if (err.name === "QuotaExceededError") {
       console.error("localStorage is full; some results may not be saved", err);
@@ -762,6 +791,8 @@ function saveResults(results) {
     }
   }
 }
+
+
 
 
 
@@ -821,11 +852,8 @@ useEffect(() => {
     parsedSched = {};
   }
 
-  try {
-    parsedResults = JSON.parse(localStorage.getItem(RESULT_KEY)) || {};
-  } catch {
-    parsedResults = {};
-  }
+  parsedResults = loadResults();  // ⬅️ new line, no JSON.parse here
+
 
   const hasValidResults = Object.values(parsedResults).some(
     (r) => r?.totals?.home != null && r?.totals?.away != null

@@ -1,6 +1,32 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
+import LZString from "lz-string";
+
+const RESULT_KEY = "bm_results_v2";
+
+function loadResultsFromStorage() {
+  try {
+    const stored = localStorage.getItem(RESULT_KEY);
+    if (!stored) return {};
+
+    const decompressed = LZString.decompressFromUTF16(stored);
+    if (decompressed) {
+      return JSON.parse(decompressed);
+    }
+
+    // fallback for old uncompressed saves
+    return JSON.parse(stored);
+  } catch (e) {
+    console.warn("[PlayerStats] loadResultsFromStorage failed, returning empty", e);
+    return {};
+  }
+}
+
+// 🔍 DEV HELPER: expose to window so you can call it in DevTools
+if (typeof window !== "undefined") {
+  window.__bmLoadResultsFromStorage = loadResultsFromStorage;
+}
 
 export default function PlayerStats() {
   const { leagueData, selectedTeam, setSelectedTeam } = useGame();
@@ -53,14 +79,9 @@ export default function PlayerStats() {
   }, [selectedTeam]);
 
   // load observed results (for totals only)
-  const results = useMemo(() => {
-    try {
-      const saved = localStorage.getItem("bm_results_v2");
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  }, []);
+// load observed results (for totals only, decompressed)
+const results = useMemo(() => loadResultsFromStorage(), []);
+
 
   if (!leagueData || !selectedTeam) {
     return (

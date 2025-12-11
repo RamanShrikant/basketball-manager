@@ -1,6 +1,33 @@
   import React, { useMemo, useState } from "react";
   import { useGame } from "../context/GameContext";
   import { useNavigate } from "react-router-dom";
+  import LZString from "lz-string";
+
+
+
+const RESULT_KEY = "bm_results_v2";  // same key Calendar uses
+
+function loadResultsFromStorage() {
+  try {
+    const stored = localStorage.getItem(RESULT_KEY);
+    if (!stored) return {};
+
+    // Try compressed (new format)
+    const decompressed = LZString.decompressFromUTF16(stored);
+    if (decompressed) {
+      return JSON.parse(decompressed);
+    }
+
+    // If decompress returned null, maybe it's an old plain JSON save
+    return JSON.parse(stored);
+  } catch (e) {
+    console.warn("[Standings] loadResultsFromStorage failed, returning empty", e);
+    return {};
+  }
+}
+
+
+
   // pick a logo from whatever key the team uses
 const resolveLogo = (t) =>
   t.logo ||
@@ -22,18 +49,14 @@ const resolveLogo = (t) =>
   }
 }, []);
 
-    const { leagueData, selectedTeam } = useGame();
-    const navigate = useNavigate();
-    const [viewMode, setViewMode] = useState("all");
+const { leagueData, selectedTeam } = useGame();
+const navigate = useNavigate();
+const [viewMode, setViewMode] = useState("all");
 
-    const results = useMemo(() => {
-      try {
-        const raw = localStorage.getItem("bm_results_v2");
-        return raw ? JSON.parse(raw) : {};
-      } catch {
-        return {};
-      }
-    }, []);
+// ✅ load compressed results just once
+const results = useMemo(() => loadResultsFromStorage(), []);
+
+
 
 const allTeams = useMemo(() => {
   if (!leagueData?.conferences) return [];
