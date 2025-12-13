@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import { simulateOneGame } from "@/api/simEnginePy";
+import { computeSeasonAwards } from "@/api/simEnginePy";
 import { queueSim } from "@/api/simQueue";
 import LZString from "lz-string";
 
@@ -559,6 +560,28 @@ function cleanupGhostGames(sched, results) {
       }
     }
   }
+}
+function normalizeAwards(raw) {
+  if (!raw) return null;
+
+  // Python gives us an array of [key, value] pairs
+  if (!Array.isArray(raw)) return raw; // already a plain object
+
+  const outer = Object.fromEntries(raw);
+
+  const asObj = (x) => {
+    if (!x) return null;
+    if (Array.isArray(x)) return Object.fromEntries(x);
+    return x;
+  };
+
+  return {
+    season: outer.season,
+    mvp: asObj(outer.mvp),
+    dpoy: asObj(outer.dpoy),
+    roty: asObj(outer.roty),
+    sixth_man: asObj(outer.sixth_man),
+  };
 }
 
 
@@ -1199,12 +1222,50 @@ const handleSimSeason = async () => {
       lastDateProcessed
     );
   } finally {
+    // persist season data
     saveSchedule(upd);
     saveResults(results);
     savePlayerStats(playerStats);
+
+    
+// 🔥 compute awards from final playerStats
+try {
+  const playersArray = Object.values(playerStats || {});
+  console.log(
+    "[Calendar] computing awards for",
+    playersArray.length,
+    "players"
+  );
+
+  // awardsRaw comes straight from Python (awards.py)
+  // shape: {
+  //   season, mvp, dpoy, roty, sixth_man,
+  //   mvp_race, dpoy_race, roty_race, sixth_man_race
+  // }
+  const awardsRaw = await computeSeasonAwards(playersArray, {
+    seasonYear,
+    gamesSimmed,
+  });
+
+  const awards = awardsRaw || {};
+  console.log("[Calendar] awards result:", awards);
+
+  // store full python-driven object for debugging if you want
+  localStorage.setItem("bm_awards_latest", JSON.stringify(awards));
+
+  // 👇 this is what Awards.jsx reads
+  localStorage.setItem("bm_awards_v1", JSON.stringify(awards));
+} catch (e) {
+  console.error("[Calendar] awards computation failed:", e);
+}
+
+
     setActionModal(null);
     setSimLock(false);
 
+    // 👉 jump straight to awards screen
+    navigate("/awards");
+// 🔥 compute awards from final playerStats
     console.log(
       "🏁 FULL SEASON EXIT, total gamesSimmed:",
       gamesSimmed,
@@ -1212,7 +1273,9 @@ const handleSimSeason = async () => {
       lastDateProcessed
     );
   }
+
 };
+
 
 
 

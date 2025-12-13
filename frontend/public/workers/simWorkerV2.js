@@ -23,6 +23,7 @@ const pythonFiles = [
   "efficiency.py",
   "assists.py",
   "rebounds.py",
+  "awards.py",
   "steals.py",
   "blocks.py",
   "shooting_model.py",
@@ -124,6 +125,40 @@ out
 }
 
 // ------------------------------------------------------------
+// AWARDS MODE  ✅
+// ------------------------------------------------------------
+async function computeAwards(requestId, players, meta) {
+  try {
+    // JS → Python
+    pyodide.globals.set("players_js", pyodide.toPy(players));
+    pyodide.globals.set("meta_js", pyodide.toPy(meta || {}));
+
+    const pyRes = await pyodide.runPythonAsync(`
+from awards import compute_awards
+res = compute_awards(players_js, meta_js)
+res
+    `);
+
+    const awards = pyRes.toJs({ dict_converter: Object });
+
+    postMessage({
+      type: "awards-result",
+      requestId,
+      awards,
+    });
+  } catch (err) {
+    console.error("[simWorkerV2] computeAwards error:", err);
+    postMessage({
+      type: "awards-error",
+      requestId,
+      error: err.toString(),
+    });
+  }
+}
+
+
+
+// ------------------------------------------------------------
 // Dispatcher
 // ------------------------------------------------------------
 onmessage = async (e) => {
@@ -138,4 +173,11 @@ onmessage = async (e) => {
   if (msg.type === "simulate-batch") {
     return simulateBatch(msg.batchId, msg.games);
   }
+
+  // 🔥 NEW: awards
+  if (msg.type === "compute-awards") {
+    const season = msg.meta?.seasonYear || null;
+    return computeAwards(msg.requestId, msg.players, season);
+  }
 };
+

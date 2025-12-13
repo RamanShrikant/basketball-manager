@@ -92,6 +92,34 @@ if (msg.type === "result-single") {
       }
       return;
     }
+        // 🔥 awards result
+    if (msg.type === "awards-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] awards-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.awards);
+      return;
+    }
+
+    // 🔥 awards error
+    if (msg.type === "awards-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] awards-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Awards compute failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ error: err });
+      return;
+    }
+
   };
 
   worker.postMessage({ type: "init" });
@@ -184,3 +212,30 @@ export function simulateBatchGames(games) {
     });
   });
 }
+
+// ------------------------------------------------------------
+// PUBLIC API — SEASON AWARDS
+// players = array of season stat dicts (from bm_player_stats_v1)
+// ------------------------------------------------------------
+export function computeSeasonAwards(players, meta = {}) {
+  // make sure worker is started
+  startWorker();
+
+  const requestId = "A" + counter++;
+
+  return new Promise((resolve, reject) => {
+    pending.set(requestId, {
+      resolve,
+      reject,
+      timer: null, // no timeout for awards
+    });
+
+    worker.postMessage({
+      type: "compute-awards",
+      requestId,
+      players: deepSanitize(players),
+      meta,
+    });
+  });
+}
+

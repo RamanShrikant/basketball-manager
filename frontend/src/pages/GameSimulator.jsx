@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
-import { simulateOneGame } from "@/api/simEnginePy";
+import * as simEnginePy from "@/api/simEnginePy";
 
 export default function GameSimulator() {
   const { leagueData, selectedTeam } = useGame();

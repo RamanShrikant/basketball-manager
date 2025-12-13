@@ -13,7 +13,7 @@ import CoachGameplan from "./pages/CoachGameplan.jsx";
 import Calendar from "./pages/Calendar.jsx";
 import PlayerStats from "./pages/PlayerStats.jsx";
 import Standings from "./pages/Standings.jsx";
-
+import Awards from "./pages/Awards"; // ⬅️ add this
 
 
 
@@ -29,6 +29,7 @@ function App() {
           <Route path="trade" element={<TradeSimulator />} />
           <Route path="simulate" element={<GameSimulator />} />
           <Route path="league-editor" element={<LeagueEditor />} />
+          <Route path="awards" element={<Awards />} />  {/* ✅ no leading slash */}
         </Route>
 
         {/* ✅ Standalone full-screen routes */}
