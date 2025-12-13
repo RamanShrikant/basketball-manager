@@ -2,6 +2,10 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import AllNbaTeams from "./AllNbaTeams";
+console.log("✅ Awards.jsx NEW loaded");
+
+
 
 /* -------------------------------------------------------------------------- */
 /*                               AWARD CONSTANTS                              */
@@ -49,17 +53,29 @@ function normalizeAwards(raw) {
 
   let awards = raw;
 
+  // LocalStorage format: array of [key, value] pairs.
   if (Array.isArray(raw)) {
     awards = Object.fromEntries(raw);
   }
 
+  // Winners (single objects)
   for (const key of ["mvp", "dpoy", "roty", "sixth_man"]) {
     if (awards[key] && Array.isArray(awards[key])) {
       awards[key] = fromEntriesMaybe(awards[key]);
     }
   }
 
+  // Races (arrays of objects)
   for (const key of ["mvp_race", "dpoy_race", "roty_race", "sixth_man_race"]) {
+    if (Array.isArray(awards[key])) {
+      awards[key] = awards[key].map((entry) =>
+        Array.isArray(entry) ? Object.fromEntries(entry) : entry
+      );
+    }
+  }
+
+  // 🔥 NEW: All-NBA teams (arrays of objects)
+  for (const key of ["all_nba_first", "all_nba_second", "all_nba_third"]) {
     if (Array.isArray(awards[key])) {
       awards[key] = awards[key].map((entry) =>
         Array.isArray(entry) ? Object.fromEntries(entry) : entry
@@ -69,6 +85,8 @@ function normalizeAwards(raw) {
 
   return awards;
 }
+
+
 
 /* -------------------------------------------------------------------------- */
 /*                               STATS HELPERS                                */
@@ -195,7 +213,8 @@ export default function Awards() {
     [leagueData]
   );
 
-  const [awardIndex, setAwardIndex] = useState(0);
+const [awardIndex, setAwardIndex] = useState(0);
+const [showAllNba, setShowAllNba] = useState(false);
   const currentKey = AWARD_ORDER[awardIndex];
   const meta = AWARD_META[currentKey];
   const season = awards?.season || "Season";
@@ -217,9 +236,26 @@ export default function Awards() {
     return entry?.portrait || null;
   }, [winner, portraitsIndex]);
 
-  const goPrev = () =>
-    setAwardIndex((i) => (i - 1 + AWARD_ORDER.length) % AWARD_ORDER.length);
-  const goNext = () => setAwardIndex((i) => (i + 1) % AWARD_ORDER.length);
+const isLastAward = awardIndex === AWARD_ORDER.length - 1;
+
+const goPrev = () => {
+  // if you’re on the All-NBA screen, go back to Awards (last award)
+  if (showAllNba) {
+    setShowAllNba(false);
+    return;
+  }
+  setAwardIndex((i) => Math.max(0, i - 1));
+};
+
+const goNext = () => {
+  if (!isLastAward) {
+    setAwardIndex((i) => Math.min(AWARD_ORDER.length - 1, i + 1));
+  } else {
+    // last award -> All-NBA screen
+    setShowAllNba(true);
+  }
+};
+
 
   const hasWinner = !!winner && !!winnerRow;
 
@@ -268,6 +304,10 @@ export default function Awards() {
       </ul>
     );
   }
+if (showAllNba) {
+  return <AllNbaTeams leagueDataProp={leagueData} />;
+}
+
 
   return (
     <div className="min-h-screen bg-neutral-900 text-white py-10">
@@ -482,12 +522,12 @@ export default function Awards() {
             >
               Back to Calendar
             </button>
-            <button
-              className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded text-xs"
-              onClick={goNext}
-            >
-              Next Award ▶
-            </button>
+<button
+  className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded text-xs"
+  onClick={goNext}
+>
+  {isLastAward ? "All-NBA Teams ▶" : "Next Award ▶"}
+</button>
           </div>
         </div>
       </div>
