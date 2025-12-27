@@ -3,29 +3,43 @@ import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 
-const RESULT_KEY = "bm_results_v2";
+// ✅ V3 per-game results (matches Standings.jsx)
+const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
+const RESULT_V3_PREFIX = "bm_result_v3_";
+const resultV3Key = (gameId) => `${RESULT_V3_PREFIX}${gameId}`;
 
-function loadResultsFromStorage() {
+function loadResultsIndexV3() {
   try {
-    const stored = localStorage.getItem(RESULT_KEY);
-    if (!stored) return {};
-
-    const decompressed = LZString.decompressFromUTF16(stored);
-    if (decompressed) {
-      return JSON.parse(decompressed);
-    }
-
-    // fallback for old uncompressed saves
-    return JSON.parse(stored);
-  } catch (e) {
-    console.warn("[PlayerStats] loadResultsFromStorage failed, returning empty", e);
-    return {};
+    const raw = localStorage.getItem(RESULT_V3_INDEX_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
 }
 
-// 🔍 DEV HELPER: expose to window so you can call it in DevTools
-if (typeof window !== "undefined") {
-  window.__bmLoadResultsFromStorage = loadResultsFromStorage;
+function loadOneResultV3(gameId) {
+  try {
+    const stored = localStorage.getItem(resultV3Key(gameId));
+    if (!stored) return null;
+
+    const decompressed = LZString.decompressFromUTF16(stored);
+    const json = decompressed || stored;
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function loadAllResultsV3() {
+  const ids = loadResultsIndexV3();
+  const out = {};
+  for (const id of ids) {
+    const r = loadOneResultV3(id);
+    if (r) out[String(id)] = r; // normalize key to string
+  }
+  return out;
 }
 
 export default function PlayerStats() {
@@ -78,10 +92,8 @@ export default function PlayerStats() {
     if (selectedTeam) localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam));
   }, [selectedTeam]);
 
-  // load observed results (for totals only)
-// load observed results (for totals only, decompressed)
-const results = useMemo(() => loadResultsFromStorage(), []);
-
+  // ✅ load observed results (for totals only, V3 per-game)
+  const results = useMemo(() => loadAllResultsV3(), []);
 
   if (!leagueData || !selectedTeam) {
     return (
@@ -198,7 +210,7 @@ const results = useMemo(() => loadResultsFromStorage(), []);
     // 1) GP, PTS, PA from schedule + compact results
     for (const games of Object.values(schedule || {})) {
       for (const g of games || []) {
-        const r = results?.[g.id];
+        const r = results?.[String(g.id)]; // ✅ V3 keys normalized to string
         if (!r || !r.totals) continue;
 
         const homeRow = ensure(g.home);

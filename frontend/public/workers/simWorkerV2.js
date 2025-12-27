@@ -1,5 +1,5 @@
 // ============================================================
-//  simWorkerV2.js — Batch-safe Pyodide Simulation Worker
+// simWorkerV2.js — Batch-safe Pyodide Simulation Worker
 // ============================================================
 console.log("[simWorkerV2] booting…");
 
@@ -46,7 +46,8 @@ sys.path.append("/python")
 
   // load python files
   for (const file of pythonFiles) {
-    const code = await fetch(`/python/${file}`).then((r) => r.text());
+    const code = await fetch(`/python/${file}?v=${Date.now()}`).then((r) => r.text());
+
     pyodide.FS.writeFile(file, code);
   }
 
@@ -92,7 +93,6 @@ result
 // BATCH GAME MODE
 // ------------------------------------------------------------
 async function simulateBatch(batchId, games) {
-  // games = [{ id, home, away }]
   console.log("[simWorkerV2] simulateBatch:", games.length, "games");
 
   try {
@@ -125,17 +125,17 @@ out
 }
 
 // ------------------------------------------------------------
-// AWARDS MODE  ✅
+// AWARDS MODE ✅
+// NOTE: your awards.py expects compute_awards(players, seasonYear)
 // ------------------------------------------------------------
-async function computeAwards(requestId, players, meta) {
+async function computeAwards(requestId, players, seasonYear) {
   try {
-    // JS → Python
-    pyodide.globals.set("players_js", pyodide.toPy(players));
-    pyodide.globals.set("meta_js", pyodide.toPy(meta || {}));
+    pyodide.globals.set("players_js", pyodide.toPy(players || []));
+    pyodide.globals.set("season_js", seasonYear ?? null);
 
     const pyRes = await pyodide.runPythonAsync(`
 from awards import compute_awards
-res = compute_awards(players_js, meta_js)
+res = compute_awards(players_js, season_js)
 res
     `);
 
@@ -156,6 +156,48 @@ res
   }
 }
 
+// ------------------------------------------------------------
+// FINALS MVP MODE ✅
+// calls awards.py compute_finals_mvp(players, championTeam, seasonYear)
+// ------------------------------------------------------------
+// ------------------------------------------------------------
+// FINALS MVP MODE ✅
+// ------------------------------------------------------------
+async function computeFinalsMvp(requestId, players, meta) {
+  try {
+    pyodide.globals.set("players_js", pyodide.toPy(players || []));
+    pyodide.globals.set("meta_js", pyodide.toPy(meta || {}));
+
+    const pyRes = await pyodide.runPythonAsync(`
+import importlib
+import awards
+importlib.reload(awards)
+from awards import compute_finals_mvp
+
+champion = meta_js.get("championTeam") if hasattr(meta_js, "get") else None
+season = meta_js.get("seasonYear") if hasattr(meta_js, "get") else None
+
+res = compute_finals_mvp(players_js, champion, season)
+res
+    `);
+
+    const finalsMvp = pyRes.toJs({ dict_converter: Object.fromEntries });
+
+
+    postMessage({
+      type: "finals-mvp-result",
+      requestId,
+      finalsMvp,
+    });
+  } catch (err) {
+    console.error("[simWorkerV2] computeFinalsMvp error:", err);
+    postMessage({
+      type: "finals-mvp-error",
+      requestId,
+      error: err.toString(),
+    });
+  }
+}
 
 
 // ------------------------------------------------------------
@@ -174,10 +216,14 @@ onmessage = async (e) => {
     return simulateBatch(msg.batchId, msg.games);
   }
 
-  // 🔥 NEW: awards
+  // awards
   if (msg.type === "compute-awards") {
-    const season = msg.meta?.seasonYear || null;
-    return computeAwards(msg.requestId, msg.players, season);
+    const seasonYear = msg.meta?.seasonYear ?? null;
+    return computeAwards(msg.requestId, msg.players, seasonYear);
+  }
+
+  // finals mvp
+  if (msg.type === "compute-finals-mvp") {
+    return computeFinalsMvp(msg.requestId, msg.players, msg.meta || {});
   }
 };
-

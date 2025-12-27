@@ -14,6 +14,10 @@ import Calendar from "./pages/Calendar.jsx";
 import PlayerStats from "./pages/PlayerStats.jsx";
 import Standings from "./pages/Standings.jsx";
 import Awards from "./pages/Awards"; // ⬅️ add this
+import Playoffs from "./pages/Playoffs.jsx";
+import FinalsMvp from "./pages/FinalsMVP.jsx";
+
+
 
 
 
@@ -30,6 +34,8 @@ function App() {
           <Route path="simulate" element={<GameSimulator />} />
           <Route path="league-editor" element={<LeagueEditor />} />
           <Route path="awards" element={<Awards />} />  {/* ✅ no leading slash */}
+          <Route path="/finals-mvp" element={<FinalsMvp />} />
+
         </Route>
 
         {/* ✅ Standalone full-screen routes */}
@@ -41,6 +47,7 @@ function App() {
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/player-stats" element={<PlayerStats />} />
         <Route path="/standings" element={<Standings />} />
+        <Route path="/playoffs" element={<Playoffs />} />
       </Routes>
     </BrowserRouter>
   );

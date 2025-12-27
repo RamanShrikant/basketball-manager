@@ -1,11 +1,13 @@
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import { simulateOneGame } from "@/api/simEnginePy";
 import { computeSeasonAwards } from "@/api/simEnginePy";
 import { queueSim } from "@/api/simQueue";
 import LZString from "lz-string";
+window.LZString = LZString;
+
 
 
 
@@ -97,7 +99,24 @@ async function runGameWithRetries(game, leagueData, teams, maxRetries = 3) {
       maxRetries
     );
 
-    lastFull = await queueSim(() => simOneSafe(game, leagueData, teams));
+    lastFull = await simOneSafe(game, leagueData, teams);
+
+    if (isBadFullResult(lastFull)) {
+  window.__lastBad = {
+    id: game.id,
+    attempt,
+    gotNull: lastFull === null,
+    type: lastFull === null ? "null" : typeof lastFull,
+    keys: lastFull && typeof lastFull === "object" ? Object.keys(lastFull) : null,
+    score: lastFull?.score ?? null,
+    boxKeys: lastFull && typeof lastFull === "object"
+      ? ["box_home","box_away","boxHome","boxAway","home_box","away_box"].filter(k => k in lastFull)
+      : null,
+    raw: lastFull,
+  };
+  console.log("[RetrySim] __lastBad saved to window.__lastBad");
+}
+
 
     // good result?
     if (!isBadFullResult(lastFull)) {
@@ -500,22 +519,45 @@ function slimResult(full) {
 /* -------------------------------------------------------------------------- */
 
 // works on the *full* Python result from simEnginePy
+function pairsToObj(x) {
+  if (!x) return x;
+  if (x instanceof Map) return Object.fromEntries(x);
+  if (Array.isArray(x) && x.length && Array.isArray(x[0]) && x[0].length === 2) {
+    return Object.fromEntries(x);
+  }
+  return x;
+}
+
 function isBadFullResult(full) {
   if (!full) return true;
-  if (full.error) return true;         // timeout or Python error
+  if (full.error) return true;
 
-  if (!full.score) return true;
+  const score = pairsToObj(full.score);
+  if (!score) return true;
 
-  const home = full.score.home ?? 0;
-  const away = full.score.away ?? 0;
+  const home = Number(score.home ?? score.Home ?? 0) || 0;
+  const away = Number(score.away ?? score.Away ?? 0) || 0;
 
-  const noBox =
-    (!full.box_home || full.box_home.length === 0) &&
-    (!full.box_away || full.box_away.length === 0);
+  const homeBox =
+    full.box_home ||
+    full.boxHome ||
+    full.home_box ||
+    (full.box && (full.box.home || full.box.Home)) ||
+    [];
 
-  // ghost signature: 0–0 and no box data
+  const awayBox =
+    full.box_away ||
+    full.boxAway ||
+    full.away_box ||
+    (full.box && (full.box.away || full.box.Away)) ||
+    [];
+
+  const noBox = (!homeBox || homeBox.length === 0) && (!awayBox || awayBox.length === 0);
+
+  // “ghost” signature
   return home === 0 && away === 0 && noBox;
 }
+
 
 // works on the *slim* results object and schedule
 function cleanupGhostGames(sched, results) {
@@ -551,6 +593,8 @@ function cleanupGhostGames(sched, results) {
 
   for (const badId of badIds) {
     delete results[badId];
+    deleteOneResultV3(badId);
+
 
     for (const games of Object.values(sched)) {
       const g = games.find((gg) => gg.id === badId);
@@ -593,6 +637,8 @@ export default function Calendar() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam, setSelectedTeam } = useGame();
   console.log("🔥 Calendar leagueData =", leagueData);
+  window.__leagueData = leagueData;
+
 
 
   /* -------------------------------- Season Window ------------------------------- */
@@ -663,25 +709,132 @@ const teams = useMemo(() => {
   const SCHED_KEY = "bm_schedule_v3";
   const RESULT_KEY = "bm_results_v2";
   const PLAYER_STATS_KEY = "bm_player_stats_v1";
+  // ===============================
+// FAST RESULTS STORE (per-game)
+// ===============================
+const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
+const RESULT_V3_PREFIX = "bm_result_v3_"; // each game stored as bm_result_v3_<gameId>
+const RESULT_V2_BLOB_KEY = "bm_results_v2"; // legacy blob (for migration)
 
-  function loadResults() {
-    try {
-      const stored = localStorage.getItem(RESULT_KEY);
-      if (!stored) return {};
+const resultV3Key = (gameId) => `${RESULT_V3_PREFIX}${gameId}`;
 
-      // Try to treat it as compressed (new format)
-      const decompressed = LZString.decompressFromUTF16(stored);
-      if (decompressed) {
-        return JSON.parse(decompressed);
-      }
-
-      // If decompress returns null, it might just be plain JSON from old saves
-      return JSON.parse(stored);
-    } catch (e) {
-      console.warn("[Calendar] loadResults failed, returning empty", e);
-      return {};
-    }
+function loadResultsIndexV3() {
+  try {
+    const raw = localStorage.getItem(RESULT_V3_INDEX_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
+}
+
+function saveResultsIndexV3(ids) {
+  try {
+    localStorage.setItem(RESULT_V3_INDEX_KEY, JSON.stringify(ids));
+  } catch (e) {
+    console.warn("[ResultsV3] failed saving index", e);
+  }
+}
+
+function loadOneResultV3(gameId) {
+  try {
+    const stored = localStorage.getItem(resultV3Key(gameId));
+    if (!stored) return null;
+    const decompressed = LZString.decompressFromUTF16(stored);
+    const json = decompressed || stored;
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function saveOneResultV3(gameId, slim) {
+  try {
+    const json = JSON.stringify(slim);
+    const compressed = LZString.compressToUTF16(json);
+    localStorage.setItem(resultV3Key(gameId), compressed);
+
+    // update index (small + fast)
+    const ids = loadResultsIndexV3();
+    if (!ids.includes(gameId)) {
+      ids.push(gameId);
+      saveResultsIndexV3(ids);
+    }
+  } catch (e) {
+    console.error("[ResultsV3] failed saving game", gameId, e);
+  }
+}
+
+function deleteOneResultV3(gameId) {
+  try {
+    localStorage.removeItem(resultV3Key(gameId));
+    const ids = loadResultsIndexV3().filter((id) => id !== gameId);
+    saveResultsIndexV3(ids);
+  } catch {}
+}
+
+function clearAllResultsV3() {
+  try {
+    const ids = loadResultsIndexV3();
+    for (const id of ids) localStorage.removeItem(resultV3Key(id));
+    localStorage.removeItem(RESULT_V3_INDEX_KEY);
+  } catch {}
+}
+
+// One-time migration: bm_results_v2 blob -> per-game v3
+function migrateResultsV2BlobToV3IfNeeded() {
+  try {
+    const blob = localStorage.getItem(RESULT_V2_BLOB_KEY);
+    if (!blob) return;
+
+    // If v3 already exists, don’t re-migrate.
+    const existing = loadResultsIndexV3();
+    if (existing.length > 0) return;
+
+    const decompressed = LZString.decompressFromUTF16(blob);
+    const json = decompressed || blob;
+    const obj = JSON.parse(json) || {};
+    const ids = Object.keys(obj);
+
+    for (const id of ids) {
+      // store exactly what you already saved (includes box scores)
+      const slim = obj[id];
+      if (slim) {
+        const c = LZString.compressToUTF16(JSON.stringify(slim));
+        localStorage.setItem(resultV3Key(id), c);
+      }
+    }
+
+    saveResultsIndexV3(ids);
+
+    // optional: remove old blob to free space + avoid confusion
+    // localStorage.removeItem(RESULT_V2_BLOB_KEY);
+
+    console.log("[ResultsV3] migrated", ids.length, "games from v2 blob");
+  } catch (e) {
+    console.warn("[ResultsV3] migration failed", e);
+  }
+}
+
+// Load ALL results (used on startup). Still includes EVERY box score.
+function loadAllResultsV3() {
+  const ids = loadResultsIndexV3();
+  const out = {};
+  for (const id of ids) {
+    const r = loadOneResultV3(id);
+    if (r) out[id] = r;
+  }
+  return out;
+}
+
+
+function loadResults() {
+  // migrate old blob once (keeps all saved box scores)
+  migrateResultsV2BlobToV3IfNeeded();
+  return loadAllResultsV3();
+}
+
 
   function loadPlayerStats() {
     try {
@@ -696,22 +849,80 @@ const teams = useMemo(() => {
   }
 
 
-function savePlayerStats(stats) {
-  localStorage.setItem(PLAYER_STATS_KEY, JSON.stringify(stats));
-}
-
 function parsePair(s) {
   const [m, a] = String(s || "0-0").split("-").map(Number);
   return { m: m || 0, a: a || 0 };
 }
+// ------------------------------------------------------------
+// SIXTH MAN ROLE HELPERS (starter vs sixth vs bench)
+// ------------------------------------------------------------
+function loadTeamMinutes(teamName) {
+  try {
+    return JSON.parse(localStorage.getItem(`gameplan_${teamName}`) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+// Uses OBJECT KEY ORDER (your saved gameplan preserves rotation order)
+// first 5 keys => starters, 6th key => sixth_man, rest => bench
+function buildRoleMapFromMinutes(minutesObj) {
+  const entries = Object.entries(minutesObj || {}).filter(
+    ([, m]) => Number(m) > 0
+  );
+
+  const names = entries.map(([name]) => name); // preserves order
+  const role = {};
+
+  for (let i = 0; i < names.length; i++) {
+    const nm = names[i];
+    if (i < 5) role[nm] = "starter";
+    else role[nm] = "bench";
+  }
+
+  if (names.length > 5) {
+    role[names[5]] = "sixth_man";
+  }
+
+  return role;
+}
+
+// Mutates slim.box rows by adding row.role = "starter" | "sixth_man" | "bench"
+function annotateSlimWithRoles(slim, homeRoleMap, awayRoleMap) {
+  if (!slim || !slim.box) return slim;
+
+  const apply = (side, roleMap) => {
+    const rows = slim.box?.[side] || [];
+    for (const row of rows) {
+      const nm = row?.player;
+      row.role = (nm && roleMap && roleMap[nm]) ? roleMap[nm] : "bench";
+    }
+  };
+
+  apply("home", homeRoleMap);
+  apply("away", awayRoleMap);
+
+  return slim;
+}
+
 
 // slim = result from slimResult(full)
-// game = schedule game object (has game.home / game.away)
 function applyGameToPlayerStats(stats, slim, game) {
   if (!slim?.box) return stats;
 
+  const toNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
   const updateSide = (side, teamName) => {
     const rows = slim.box[side] || [];
+
+// Determine starters + ONE sixth man (either from role tag, or 6th-highest minutes fallback)
+const sortedByMin = [...rows].sort((a, b) => toNum(b.min) - toNum(a.min));
+const starters = new Set(sortedByMin.slice(0, 5).map((r) => r.player));
+const sixthManByMinutes = sortedByMin[5]?.player || null;
+
     for (const row of rows) {
       const key = `${row.player}__${teamName}`;
       const cur = stats[key] || {
@@ -730,15 +941,18 @@ function applyGameToPlayerStats(stats, slim, game) {
         tpa: 0,
         ftm: 0,
         fta: 0,
+        // 🔥 role tracking
+        started: 0,
+        sixth: 0,
       };
 
       cur.gp += 1;
-      cur.min += row.min || 0;
-      cur.pts += row.pts || 0;
-      cur.reb += row.reb || 0;
-      cur.ast += row.ast || 0;
-      cur.stl += row.stl || 0;
-      cur.blk += row.blk || 0;
+      cur.min += toNum(row.min);
+      cur.pts += toNum(row.pts);
+      cur.reb += toNum(row.reb);
+      cur.ast += toNum(row.ast);
+      cur.stl += toNum(row.stl);
+      cur.blk += toNum(row.blk);
 
       const { m: fgm, a: fga } = parsePair(row.fg);
       const { m: tpm, a: tpa } = parsePair(row["3p"]);
@@ -751,6 +965,17 @@ function applyGameToPlayerStats(stats, slim, game) {
       cur.ftm += ftm;
       cur.fta += fta;
 
+      // 🔥 starter vs bench counts
+// 🔥 role tracking (only ONE sixth man, not the whole bench)
+const role = row.role; // may exist if you annotated slim with roles
+if (role === "starter") cur.started += 1;
+else if (role === "sixth_man") cur.sixth += 1;
+else {
+  // if role isn't present (older saved results), fall back to minutes heuristic
+  if (starters.has(row.player)) cur.started += 1;
+  else if (sixthManByMinutes && row.player === sixthManByMinutes) cur.sixth += 1;
+}
+
       stats[key] = cur;
     }
   };
@@ -759,6 +984,7 @@ function applyGameToPlayerStats(stats, slim, game) {
   updateSide("away", game.away);
   return stats;
 }
+
 // 🔥 Rebuild player stats from existing schedule + results
   function recomputePlayerSeasonStatsFromResults(schedule, results) {
     let stats = {};
@@ -788,6 +1014,8 @@ function applyGameToPlayerStats(stats, slim, game) {
 window.__sched = scheduleByDate;
 window.__results = resultsById;
 window.__teams = teams;
+window.__results = resultsById;
+
 
 
 
@@ -801,19 +1029,21 @@ function saveResults(results) {
   // keep React state in sync
   setResultsById(results);
 
+  // bulk write (slower than per-game, but fine for end-of-sim / rebuild cases)
   try {
-    const json = JSON.stringify(results);
-    const compressed = LZString.compressToUTF16(json);
-
-    localStorage.setItem(RESULT_KEY, compressed);
-  } catch (err) {
-    if (err.name === "QuotaExceededError") {
-      console.error("localStorage is full; some results may not be saved", err);
-    } else {
-      throw err;
+    const ids = Object.keys(results || {});
+    for (const id of ids) {
+      const slim = results[id];
+      if (slim) {
+        localStorage.setItem(resultV3Key(id), LZString.compressToUTF16(JSON.stringify(slim)));
+      }
     }
+    saveResultsIndexV3(ids);
+  } catch (e) {
+    console.error("[ResultsV3] bulk save failed", e);
   }
 }
+
 
 
 
@@ -867,7 +1097,7 @@ useEffect(() => {
   // ----- load from storage -----
   let parsedSched = {};
   let parsedResults = {};
-  let parsedPlayerStats = loadPlayerStats(); // uses PLAYER_STATS_KEY
+  let parsedPlayerStats = loadPlayerStats();
 
   try {
     parsedSched = JSON.parse(localStorage.getItem(SCHED_KEY)) || {};
@@ -875,36 +1105,52 @@ useEffect(() => {
     parsedSched = {};
   }
 
-  parsedResults = loadResults();  // ⬅️ new line, no JSON.parse here
-
+  parsedResults = loadResults();
 
   const hasValidResults = Object.values(parsedResults).some(
     (r) => r?.totals?.home != null && r?.totals?.away != null
   );
+
   const hasPlayerStats = parsedPlayerStats && Object.keys(parsedPlayerStats).length > 0;
+  const hasRoleFields =
+    parsedPlayerStats &&
+    Object.values(parsedPlayerStats).some((p) => p && (("started" in p) || ("sixth" in p)));
 
-  // ----- schedule handling -----
-  if (!hasValidResults && !isScheduleValid(parsedSched)) {
-    // fresh season
+  const scheduleValid = isScheduleValid(parsedSched);
+
+  // ✅ IMPORTANT: if schedule is missing/invalid, regenerate it EVEN IF results exist
+  if (!scheduleValid) {
     const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
-    saveSchedule(byDate);
-    setScheduleByDate(byDate);
-    setResultsById({});
-  } else {
-    // reuse what we have
-    setScheduleByDate(parsedSched);
-    setResultsById(parsedResults);
 
-    // 🔥 if we have results but NO bm_player_stats_v1, rebuild it automatically
-    if (!hasPlayerStats && hasValidResults) {
-      const rebuilt = recomputePlayerSeasonStatsFromResults(parsedSched, parsedResults);
-      console.log(
-        "[Calendar] auto-rebuilt player stats; players =",
-        Object.keys(rebuilt).length
+    // if we already have results, mark those games as played in the regenerated schedule
+    const rebuilt = {};
+    for (const [d, games] of Object.entries(byDate)) {
+      rebuilt[d] = (games || []).map((g) =>
+        parsedResults && parsedResults[g.id] ? { ...g, played: true } : g
       );
     }
+
+    saveSchedule(rebuilt);          // writes storage + sets state
+    setResultsById(parsedResults);  // keep results if they exist
+
+    if (hasValidResults && (!hasPlayerStats || !hasRoleFields)) {
+      const rebuiltStats = recomputePlayerSeasonStatsFromResults(rebuilt, parsedResults);
+      console.log("[Calendar] auto-rebuilt player stats (role-aware); players =", Object.keys(rebuiltStats).length);
+    }
+
+    return;
+  }
+
+  // ----- normal path: reuse stored schedule -----
+  setScheduleByDate(parsedSched);
+  setResultsById(parsedResults);
+
+  if (hasValidResults && (!hasPlayerStats || !hasRoleFields)) {
+    const rebuiltStats = recomputePlayerSeasonStatsFromResults(parsedSched, parsedResults);
+    console.log("[Calendar] auto-rebuilt player stats (role-aware); players =", Object.keys(rebuiltStats).length);
   }
 }, [teams, seasonStart, seasonEnd]);
+
 
 
 
@@ -964,9 +1210,21 @@ useEffect(() => {
   /* -------------------------------------------------------------------------- */
   /*                                 Action Modals                               */
   /* -------------------------------------------------------------------------- */
-  const [boxModal, setBoxModal] = useState(null);
-  const [actionModal, setActionModal] = useState(null);
-  const [simLock, setSimLock] = useState(false);
+const [boxModal, setBoxModal] = useState(null);
+const [actionModal, setActionModal] = useState(null);
+const [simLock, setSimLock] = useState(false);
+
+// ✅ stop control (ADD THIS)
+const stopRef = useRef(false);
+const [stopRequested, setStopRequested] = useState(false);
+
+const requestStop = () => {
+  if (!simLock) return;
+  stopRef.current = true;
+  setStopRequested(true);
+  console.log("[Sim] stop requested");
+};
+
 
 /* -------------------------------------------------------------------------- */
 /*                           SIMULATION HANDLERS                               */
@@ -984,10 +1242,16 @@ const handleSimOnlyGame = async (dateStr, game) => {
   }
 
   const result = slimResult(full);
+  const homeRoles = buildRoleMapFromMinutes(loadTeamMinutes(game.home));
+  const awayRoles = buildRoleMapFromMinutes(loadTeamMinutes(game.away));
+  annotateSlimWithRoles(result, homeRoles, awayRoles);
+
 
   upd[dateStr] = upd[dateStr].map((g) =>
     g.id === game.id ? { ...g, played: true } : g
+  
   );
+  
 
   newResults[game.id] = result;
   let playerStats = loadPlayerStats();
@@ -995,11 +1259,18 @@ playerStats = applyGameToPlayerStats(playerStats, result, game);
 savePlayerStats(playerStats);
 
 
-  saveSchedule(upd);
-  saveResults(newResults);
+saveSchedule(upd);
 
-  setActionModal(null);
-  setBoxModal({ game, result });
+// ✅ save this one game to per-game storage
+saveOneResultV3(game.id, result);
+
+// ✅ keep UI state in sync instantly
+setResultsById((prev) => ({ ...prev, [game.id]: result }));
+
+setActionModal(null);
+setBoxModal({ game, result });
+
+
 };
 
 const handleSimToDate = async (dateStr) => {
@@ -1007,47 +1278,65 @@ const handleSimToDate = async (dateStr) => {
   let playerStats = loadPlayerStats();
 
   if (simLock) return;
-  setSimLock(true);
 
+  // ✅ reset stop state at the start of THIS run
+  stopRef.current = false;
+  setStopRequested(false);
+
+  setSimLock(true);
   console.log("▶ SimToDate ENTER:", dateStr);
 
   let upd = structuredClone(scheduleByDate);
   let newResults = structuredClone(resultsById);
 
-  const sorted = Object.keys(upd).sort(
-    (a, b) => new Date(a) - new Date(b)
-  );
+  const sorted = Object.keys(upd).sort((a, b) => new Date(a) - new Date(b));
 
   const staticLeagueData = leagueData;
   const staticTeams = teams;
 
   try {
     for (const d of sorted) {
+      // ✅ allow stop between dates
+      if (stopRef.current) break;
+
       if (d > dateStr) break;
 
       const dayGames = upd[d];
       if (!Array.isArray(dayGames)) continue;
 
       for (let i = 0; i < dayGames.length; i++) {
+        // ✅ allow stop between games
+        if (stopRef.current) break;
+
         const g = dayGames[i];
         if (!g || g.played) continue;
 
         try {
-          const full = await runGameWithRetries(
-            g,
-            staticLeagueData,
-            staticTeams
-          );
+          const full = await runGameWithRetries(g, staticLeagueData, staticTeams);
+
+          // ✅ if user clicked stop while this game was running, bail after it finishes
+          if (stopRef.current) break;
 
           // still failed → skip, leave unplayed
           if (!full) continue;
 
           const slim = slimResult(full);
+
+          const homeRoles = buildRoleMapFromMinutes(loadTeamMinutes(g.home));
+          const awayRoles = buildRoleMapFromMinutes(loadTeamMinutes(g.away));
+          annotateSlimWithRoles(slim, homeRoles, awayRoles);
+
           newResults[g.id] = slim;
+          saveOneResultV3(g.id, slim);
+
           dayGames[i] = { ...g, played: true };
 
           // 🔥 update player stats
           playerStats = applyGameToPlayerStats(playerStats, slim, g);
+
+          // ✅ LIVE UI UPDATE (optional but makes it feel instant)
+          setResultsById((prev) => ({ ...prev, [g.id]: slim }));
+          setScheduleByDate((prev) => ({ ...prev, [d]: dayGames.slice() }));
         } catch (err) {
           console.error("[SimToDate] ERROR for game", g.id, err);
           // keep unplayed on error
@@ -1060,7 +1349,7 @@ const handleSimToDate = async (dateStr) => {
       upd[d] = dayGames;
     }
 
-    // final saves
+    // final saves (even if stopped, we save progress)
     savePlayerStats(playerStats);
     cleanupGhostGames(upd, newResults);
     saveSchedule(upd);
@@ -1071,6 +1360,7 @@ const handleSimToDate = async (dateStr) => {
     console.log("◀ SimToDate EXIT:", dateStr);
   }
 };
+
 
 
 
@@ -1137,12 +1427,17 @@ const handleSimSeason = async () => {
     return;
   }
 
+  // ✅ reset stop state at the start of a run
+  stopRef.current = false;
+  setStopRequested(false);
+
   // start with current stats
   let playerStats = loadPlayerStats();
 
   try {
-    console.log("Clearing old bm_results_v2 before full season sim");
-    localStorage.removeItem(RESULT_KEY);
+    console.log("Clearing old results before full season sim");
+    clearAllResultsV3();
+    try { localStorage.removeItem(RESULT_V2_BLOB_KEY); } catch {}
   } catch (e) {
     console.warn("Could not clear old results", e);
   }
@@ -1160,8 +1455,13 @@ const handleSimSeason = async () => {
   let gamesSimmed = 0;
   let lastDateProcessed = null;
 
+  // ✅ track if user stopped
+  let stopped = false;
+
   try {
     for (let di = 0; di < dates.length; di++) {
+      if (stopRef.current) { stopped = true; break; }
+
       const date = dates[di];
       lastDateProcessed = date;
 
@@ -1182,9 +1482,12 @@ const handleSimSeason = async () => {
       );
 
       for (let i = 0; i < dayGames.length; i++) {
+        if (stopRef.current) { stopped = true; break; }
+
         const g = dayGames[i];
         if (!g) {
           console.error("FULL SEASON FATAL: missing game object at", date, "index", i);
+          stopped = true;
           break;
         }
         if (g.played) continue;
@@ -1193,26 +1496,42 @@ const handleSimSeason = async () => {
           const full = await runGameWithRetries(g, staticLeagueData, staticTeams);
           if (!full) continue;
 
+          if (stopRef.current) { stopped = true; break; }
+
           const slim = slimResult(full);
+
+          const homeRoles = buildRoleMapFromMinutes(loadTeamMinutes(g.home));
+          const awayRoles = buildRoleMapFromMinutes(loadTeamMinutes(g.away));
+          annotateSlimWithRoles(slim, homeRoles, awayRoles);
+
           results[g.id] = slim;
+          saveOneResultV3(g.id, slim);
+
           dayGames[i] = { ...g, played: true };
           gamesSimmed++;
 
           playerStats = applyGameToPlayerStats(playerStats, slim, g);
-    if (gamesSimmed % 10 === 0) {
-      console.log("   ✅ Progress:", gamesSimmed, "games simulated so far");
-      saveSchedule(structuredClone(upd));
-      saveResults(structuredClone(results));
-      savePlayerStats(playerStats); // 🔥 keep bm_player_stats_v1 in sync
-      await new Promise((res) => setTimeout(res, 0));
-    }
 
+          // ✅ LIVE UI UPDATE (so W/L shows immediately, not in batches)
+          setResultsById((prev) => ({ ...prev, [g.id]: slim }));
+          setScheduleByDate((prev) => ({ ...prev, [date]: dayGames.slice() }));
+
+          // yield to browser so it paints
+          await new Promise((res) => setTimeout(res, 0));
         } catch (err) {
           console.error("FULL SEASON ERROR for game", g.id, err);
         }
       }
 
       upd[date] = dayGames;
+
+      if (stopped) break;
+
+      // optional: occasionally persist schedule + stats (not required for UI)
+      if (gamesSimmed % 50 === 0) {
+        saveSchedule(structuredClone(upd));
+        savePlayerStats(playerStats);
+      }
     }
   } catch (err) {
     console.error(
@@ -1222,50 +1541,47 @@ const handleSimSeason = async () => {
       lastDateProcessed
     );
   } finally {
-    // persist season data
+    // persist what we have so far
     saveSchedule(upd);
     saveResults(results);
     savePlayerStats(playerStats);
 
-    
-// 🔥 compute awards from final playerStats
-try {
-  const playersArray = Object.values(playerStats || {});
-  console.log(
-    "[Calendar] computing awards for",
-    playersArray.length,
-    "players"
-  );
-
-  // awardsRaw comes straight from Python (awards.py)
-  // shape: {
-  //   season, mvp, dpoy, roty, sixth_man,
-  //   mvp_race, dpoy_race, roty_race, sixth_man_race
-  // }
-  const awardsRaw = await computeSeasonAwards(playersArray, {
-    seasonYear,
-    gamesSimmed,
-  });
-
-  const awards = awardsRaw || {};
-  console.log("[Calendar] awards result:", awards);
-
-  // store full python-driven object for debugging if you want
-  localStorage.setItem("bm_awards_latest", JSON.stringify(awards));
-
-  // 👇 this is what Awards.jsx reads
-  localStorage.setItem("bm_awards_v1", JSON.stringify(awards));
-} catch (e) {
-  console.error("[Calendar] awards computation failed:", e);
-}
-
-
     setActionModal(null);
     setSimLock(false);
 
-    // 👉 jump straight to awards screen
+    // ✅ If stopped, do NOT compute awards or navigate away
+    if (stopped) {
+      console.log("🛑 FULL SEASON STOPPED by user at gamesSimmed:", gamesSimmed);
+      return;
+    }
+
+    // 🔥 compute awards from final playerStats
+    try {
+      const playersArray = Object.values(playerStats || {});
+      console.log("[Calendar] computing awards for", playersArray.length, "players");
+
+      const awardsRaw = await computeSeasonAwards(playersArray, {
+        seasonYear,
+        gamesSimmed,
+      });
+
+      const deepUnpair = (x) => {
+        if (Array.isArray(x) && x.length && Array.isArray(x[0]) && x[0].length === 2) {
+          return Object.fromEntries(x.map(([k, v]) => [k, deepUnpair(v)]));
+        }
+        if (Array.isArray(x)) return x.map(deepUnpair);
+        return x;
+      };
+
+      const awards = deepUnpair(awardsRaw) || {};
+      localStorage.setItem("bm_awards_latest", JSON.stringify(awards));
+      localStorage.setItem("bm_awards_v1", JSON.stringify(awards));
+    } catch (e) {
+      console.error("[Calendar] awards computation failed:", e);
+    }
+
     navigate("/awards");
-// 🔥 compute awards from final playerStats
+
     console.log(
       "🏁 FULL SEASON EXIT, total gamesSimmed:",
       gamesSimmed,
@@ -1273,8 +1589,8 @@ try {
       lastDateProcessed
     );
   }
-
 };
+
 
 
 
@@ -1283,9 +1599,26 @@ try {
 const handleResetSeason = () => {
   if (!window.confirm("Reset season? ALL results + schedule will be wiped.")) return;
 
-  localStorage.removeItem(SCHED_KEY);
-  localStorage.removeItem(RESULT_KEY);
-  localStorage.removeItem(PLAYER_STATS_KEY); // 🔥 add this
+  // ✅ wipe all schedule/result/playoffs versions (so future key bumps don't break reset)
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+
+if (
+  k.startsWith("bm_schedule_") ||
+  k.startsWith("bm_results_") ||
+  k.startsWith("bm_postseason_") ||
+  k.startsWith("bm_champ_") ||
+  k.startsWith("bm_result_v3_") ||     // ✅ NEW
+  k === "bm_results_index_v3"          // ✅ NEW
+) {
+  localStorage.removeItem(k);
+}
+
+  }
+
+  // keep your player stats wipe
+  localStorage.removeItem(PLAYER_STATS_KEY);
 
   const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
 
@@ -1295,6 +1628,7 @@ const handleResetSeason = () => {
   const firstGameDate = Object.keys(byDate).sort()[0];
   setFocusedDate(firstGameDate);
 };
+
 
 
 
@@ -1370,12 +1704,35 @@ const bannerText = (() => {
             >
               Team Hub
             </button>
+            {simLock && (
+  <>
+    <button
+      className="px-3 py-2 bg-neutral-600 rounded opacity-80 cursor-not-allowed"
+      disabled
+      title="Simulation in progress"
+    >
+      Simulating…
+    </button>
+
+    <button
+      className={`px-3 py-2 rounded ${stopRequested ? "bg-yellow-900 opacity-70 cursor-not-allowed" : "bg-yellow-600"}`}
+      disabled={stopRequested}
+      onClick={requestStop}
+      title="Stop simulation"
+    >
+      {stopRequested ? "Stopping…" : "Stop"}
+    </button>
+  </>
+)}
+
             <button
+            
               className="px-3 py-2 bg-red-700 rounded"
               onClick={handleResetSeason}
             >
               Reset Season
             </button>
+            
 
             {/* Month navigation */}
             <button

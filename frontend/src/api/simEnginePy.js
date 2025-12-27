@@ -119,6 +119,34 @@ if (msg.type === "result-single") {
       else entry.resolve({ error: err });
       return;
     }
+        // 🏆 finals mvp result
+    if (msg.type === "finals-mvp-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] finals-mvp-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(deepFromEntries(msg.finalsMvp));
+      return;
+    }
+
+    // 🏆 finals mvp error
+    if (msg.type === "finals-mvp-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] finals-mvp-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Finals MVP compute failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ error: err });
+      return;
+    }
+
 
   };
 
@@ -127,6 +155,34 @@ if (msg.type === "result-single") {
 
 startWorker();
 
+function isPairsArray(x) {
+  return (
+    Array.isArray(x) &&
+    x.length > 0 &&
+    Array.isArray(x[0]) &&
+    x[0].length === 2 &&
+    (typeof x[0][0] === "string" || typeof x[0][0] === "number")
+  );
+}
+
+function deepFromEntries(x) {
+  // Python dicts sometimes arrive as: [ [k,v], [k2,v2], ... ]
+  if (isPairsArray(x)) {
+    const obj = {};
+    for (const [k, v] of x) obj[k] = deepFromEntries(v);
+    return obj;
+  }
+
+  if (Array.isArray(x)) return x.map(deepFromEntries);
+
+  if (x && typeof x === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(x)) out[k] = deepFromEntries(v);
+    return out;
+  }
+
+  return x;
+}
 
 // ------------------------------------------------------------
 // PY → JS converter
@@ -147,7 +203,7 @@ function convert(py) {
 // ------------------------------------------------------------
 // how long to wait for a single game before giving up
 // make this aggressive so “weird” games get retried quickly
-const WORKER_TIMEOUT_MS = 150; // 2.5 seconds, tweak if you want
+const WORKER_TIMEOUT_MS = 300; // 2.5 seconds, tweak if you want
 
 
 
@@ -238,4 +294,43 @@ export function computeSeasonAwards(players, meta = {}) {
     });
   });
 }
+// ------------------------------------------------------------
+// PUBLIC API — FINALS MVP
+// finalsPlayers = array of FINALS-only aggregated stat dicts
+// meta = { seasonYear, championTeam }
+// ------------------------------------------------------------
+export function computeFinalsMvp(finalsPlayers, meta = {}) {
+  startWorker();
+
+  const requestId = "F" + counter++;
+
+  console.log("[simEnginePy] FMVP POST", {
+    requestId,
+    n: (finalsPlayers || []).length,
+    meta,
+  });
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      console.error("[simEnginePy] FMVP TIMEOUT waiting for worker", { requestId });
+      reject(new Error("FMVP worker timeout"));
+    }, 8000);
+
+    pending.set(requestId, {
+      resolve: (v) => { clearTimeout(timer); resolve(v); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "compute-finals-mvp",
+      requestId,
+      players: deepSanitize(finalsPlayers),
+      meta,
+    });
+  });
+}
+
+
+
 

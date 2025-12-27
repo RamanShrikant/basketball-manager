@@ -362,9 +362,6 @@ export default function AllNbaTeams({ leagueDataProp }) {
                       : ""}{" "}
                     {cardPlayer.age ? `• Age ${cardPlayer.age}` : ""}
                   </p>
-                  <p className="text-gray-400 text-[16px] mt-1">
-                    {cardPlayer.teamName}
-                  </p>
                 </div>
               </div>
 
@@ -475,7 +472,7 @@ export default function AllNbaTeams({ leagueDataProp }) {
       className="inline-block h-[36px] w-[36px] object-contain"
       title={p.teamName}
     />
-  </div>
+  </div>      
 </td>
 
                   <td className="py-2 px-3 text-left pl-4">{p.name}</td>
@@ -495,12 +492,22 @@ export default function AllNbaTeams({ leagueDataProp }) {
         </div>
       </div>
 
-      <button
-        onClick={() => navigate("/calendar")}
-        className="mt-10 px-8 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
-      >
-        Back to Awards
-      </button>
+<div className="flex gap-2">
+  <button
+    className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded"
+    onClick={() => navigate("/calendar")}
+  >
+    Back to Calendar
+  </button>
+
+  <button
+    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded"
+    onClick={() => navigate("/playoffs")}
+  >
+    Playoffs ▶
+  </button>
+</div>
+
     </div>
   );
 }
