@@ -666,6 +666,40 @@ function buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById) {
   }));
 }
 
+// ------------------------------------------------------------
+// AWARDS: attach def_rating to player season stat objects
+// by looking it up from leagueData rosters
+// ------------------------------------------------------------
+function buildDefRatingLookupFromLeague(allTeams) {
+  const map = {}; // key: "Player Name__Team Name" -> def_rating
+
+  for (const t of (allTeams || [])) {
+    const teamName = t?.name || t?.team;
+    if (!teamName) continue;
+
+    for (const pl of (t.players || [])) {
+      const playerName = pl?.player || pl?.name;
+      if (!playerName) continue;
+
+      // try common keys (add more if your roster uses a different name)
+      const def =
+        pl.def_rating ??
+        pl.defRating ??
+        pl.defensive_rating ??
+        pl.defensiveRating ??
+        pl.drtg ??
+        pl.defrtg;
+
+      if (def != null && Number.isFinite(Number(def))) {
+        map[`${playerName}__${teamName}`] = Number(def);
+      }
+    }
+  }
+
+  return map;
+}
+
+
 /* -------------------------------------------------------------------------- */
 /*                           MAIN CALENDAR COMPONENT                          */
 /* -------------------------------------------------------------------------- */
