@@ -474,10 +474,11 @@ function slimResult(full) {
       };
     });
 
-  const side =
+const side =
     homeScore > awayScore ? "home" :
-    awayScore > awayScore ? "away" :
+    awayScore > homeScore ? "away" :
     "tie";
+
 
   const boxHome = convertBox(rawHomeBox);
   const boxAway = convertBox(rawAwayBox);
