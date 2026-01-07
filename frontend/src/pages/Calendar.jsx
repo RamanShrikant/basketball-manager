@@ -1628,7 +1628,45 @@ const handleSimSeason = async () => {
 
     // 🔥 compute awards from final playerStats
     try {
-      const playersArray = Object.values(playerStats || {});
+      // build def_rating lookup from rosters (staticTeams)
+const defMap = {};
+for (const t of staticTeams || []) {
+  const teamName = t?.name || t?.team;
+  for (const pl of t?.players || []) {
+    const playerName = pl?.name || pl?.player;
+
+    const def =
+      pl?.def_rating ??
+      pl?.defRating ??
+      pl?.defensive_rating ??
+      pl?.defensiveRating ??
+      pl?.drtg ??
+      pl?.defrtg;
+
+    if (playerName && teamName && def != null && Number.isFinite(Number(def))) {
+      defMap[`${playerName}__${teamName}`] = Number(def);
+    }
+  }
+}
+
+// build playersArray WITH def_rating attached (awards.py reads this)
+const playersArray = Object.values(playerStats || {}).map((p) => {
+  const key = `${p.player}__${p.team}`;
+  const def = defMap[key];
+  return {
+    ...p,
+    def_rating: Number.isFinite(Number(def)) ? Number(def) : 110,
+  };
+});
+
+console.log("[Calendar] computing awards for", playersArray.length, "players");
+console.log(
+  "[Calendar] def_rating attached:",
+  playersArray.filter(p => p.def_rating != null).length,
+  "out of",
+  playersArray.length
+);
+
       console.log("[Calendar] computing awards for", playersArray.length, "players");
 
 const teamsWithWins = buildTeamsWithWinsForAwards(staticTeams, upd, results);
