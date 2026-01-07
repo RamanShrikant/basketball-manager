@@ -58,25 +58,18 @@ function startWorker() {
     }
 
     // single result
-// single result
-if (msg.type === "result-single") {
-  const entry = pending.get(msg.id);
-  if (entry) {
-    pending.delete(msg.id);
-    clearTimeout(entry.timer);
-    console.log("[simEnginePy] result-single for id", msg.id);
-    entry.resolve(convert(msg.result));
-  } else {
-    console.warn(
-      "[simEnginePy] result-single for unknown id",
-      msg.id,
-      msg
-    );
-  }
-  return;
-}
-
-
+    if (msg.type === "result-single") {
+      const entry = pending.get(msg.id);
+      if (entry) {
+        pending.delete(msg.id);
+        clearTimeout(entry.timer);
+        console.log("[simEnginePy] result-single for id", msg.id);
+        entry.resolve(convert(msg.result));
+      } else {
+        console.warn("[simEnginePy] result-single for unknown id", msg.id, msg);
+      }
+      return;
+    }
 
     // batch result
     if (msg.type === "result-batch") {
@@ -92,7 +85,8 @@ if (msg.type === "result-single") {
       }
       return;
     }
-        // 🔥 awards result
+
+    // 🔥 awards result
     if (msg.type === "awards-result") {
       const entry = pending.get(msg.requestId);
       if (!entry) {
@@ -119,7 +113,8 @@ if (msg.type === "result-single") {
       else entry.resolve({ error: err });
       return;
     }
-        // 🏆 finals mvp result
+
+    // 🏆 finals mvp result
     if (msg.type === "finals-mvp-result") {
       const entry = pending.get(msg.requestId);
       if (!entry) {
@@ -146,8 +141,6 @@ if (msg.type === "result-single") {
       else entry.resolve({ error: err });
       return;
     }
-
-
   };
 
   worker.postMessage({ type: "init" });
@@ -205,8 +198,6 @@ function convert(py) {
 // make this aggressive so “weird” games get retried quickly
 const WORKER_TIMEOUT_MS = 300; // 2.5 seconds, tweak if you want
 
-
-
 // ------------------------------------------------------------
 // PUBLIC API — SINGLE GAME (with timeout)
 // ------------------------------------------------------------
@@ -225,10 +216,7 @@ export function simulateOneGame({ homeTeam, awayTeam }) {
         if (!pending.has(id)) return; // already handled
 
         pending.delete(id);
-        console.warn(
-          "[simEnginePy] TIMEOUT waiting for worker result id",
-          id
-        );
+        console.warn("[simEnginePy] TIMEOUT waiting for worker result id", id);
         // this will be caught by the retry wrapper on the React side
         resolve({ error: "WORKER_TIMEOUT" });
       }, WORKER_TIMEOUT_MS);
@@ -244,9 +232,6 @@ export function simulateOneGame({ homeTeam, awayTeam }) {
     });
   });
 }
-
-
-
 
 // ------------------------------------------------------------
 // PUBLIC API — BATCH GAME SCHEDULING
@@ -271,13 +256,57 @@ export function simulateBatchGames(games) {
 
 // ------------------------------------------------------------
 // PUBLIC API — SEASON AWARDS
-// players = array of season stat dicts (from bm_player_stats_v1)
+// players = array of season stat dicts
+// meta should include { seasonYear }, and optionally { standings }
 // ------------------------------------------------------------
 export function computeSeasonAwards(players, meta = {}) {
-  // make sure worker is started
   startWorker();
 
   const requestId = "A" + counter++;
+
+  // ✅ MINIMAL SURGICAL FIX:
+  // Build a teams list shaped like: [{ team: "Name", wins: 54 }, ...]
+  // Prefer meta.standings (regular-season truth in your app). Fallback to localStorage.
+  let teamsForAwards = [];
+
+  // meta.standings can be an object or a Map
+  try {
+    const st = meta?.standings;
+    if (st) {
+      const arr = st instanceof Map ? Array.from(st.values()) : Object.values(st);
+      teamsForAwards = (arr || [])
+        .map((s) => ({
+          team: s?.team ?? s?.name ?? s?.teamName ?? null,
+          wins: Number(s?.wins ?? 0) || 0,
+        }))
+        .filter((t) => !!t.team);
+    }
+  } catch {}
+
+  if (!teamsForAwards.length) {
+    try {
+      const raw =
+        localStorage.getItem("bm_teams_v1") ||
+        localStorage.getItem("bm_teams") ||
+        "{}";
+      const parsed = JSON.parse(raw);
+      const arr = Array.isArray(parsed) ? parsed : Object.values(parsed || {});
+      teamsForAwards = (arr || [])
+        .map((t) => ({
+          team: t?.team ?? t?.name ?? t?.teamName ?? null,
+          wins: Number(t?.wins ?? t?.W ?? 0) || 0,
+        }))
+        .filter((t) => !!t.team);
+    } catch {}
+  }
+
+  console.log("[simEnginePy] computeSeasonAwards POST", {
+    requestId,
+    seasonYear: meta?.seasonYear ?? null,
+    playersLen: (players || []).length,
+    teamsLen: teamsForAwards.length,
+    teamsSample: teamsForAwards.slice(0, 5),
+  });
 
   return new Promise((resolve, reject) => {
     pending.set(requestId, {
@@ -290,10 +319,12 @@ export function computeSeasonAwards(players, meta = {}) {
       type: "compute-awards",
       requestId,
       players: deepSanitize(players),
+      teams: deepSanitize(teamsForAwards), // ✅ ADD THIS
       meta,
     });
   });
 }
+
 // ------------------------------------------------------------
 // PUBLIC API — FINALS MVP
 // finalsPlayers = array of FINALS-only aggregated stat dicts
@@ -317,8 +348,14 @@ export function computeFinalsMvp(finalsPlayers, meta = {}) {
     }, 8000);
 
     pending.set(requestId, {
-      resolve: (v) => { clearTimeout(timer); resolve(v); },
-      reject: (e) => { clearTimeout(timer); reject(e); },
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
       timer,
     });
 
@@ -330,7 +367,3 @@ export function computeFinalsMvp(finalsPlayers, meta = {}) {
     });
   });
 }
-
-
-
-

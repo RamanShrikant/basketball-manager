@@ -1,15 +1,12 @@
-# awards.py
-
-
 from typing import Any, Dict, List, Optional
-AWARDS_PY_VERSION = "2025-12-26_awards_refresh_v1"
 
+AWARDS_PY_VERSION = "2026-01-09_debug_guardrail_v1"
 
+# ---------------------------------------------------------------------------
+# UTILITIES
+# ---------------------------------------------------------------------------
 
 def _to_py_players(players_js) -> List[Dict[str, Any]]:
-    """
-    Convert the JS → Pyodide proxy list into a normal list[dict].
-    """
     out = []
     for p in list(players_js):
         try:
@@ -19,359 +16,205 @@ def _to_py_players(players_js) -> List[Dict[str, Any]]:
     return out
 
 
-def _gp(p: Dict[str, Any]) -> int:
-    return int(p.get("gp", 0))
+def _gp(p): return int(p.get("gp", 0))
+def _pg(p, k): return float(p.get(k, 0)) / max(_gp(p), 1)
 
+def _ppg(p): return _pg(p, "pts")
+def _apg(p): return _pg(p, "ast")
+def _rpg(p): return _pg(p, "reb")
+def _spg(p): return _pg(p, "stl")
+def _bpg(p): return _pg(p, "blk")
+def _mpg(p): return float(p.get("min", 0)) / max(_gp(p), 1)
 
-def _ppg(p: Dict[str, Any]) -> float:
-    gp = max(_gp(p), 1)
-    return float(p.get("pts", 0)) / gp
+def _stocks(p): return _spg(p) + _bpg(p)
 
+def _started(p): return int(p.get("started", 0) or 0)
+def _sixth(p): return int(p.get("sixth", 0) or 0)
 
-def _rpg(p: Dict[str, Any]) -> float:
-    gp = max(_gp(p), 1)
-    return float(p.get("reb", 0)) / gp
+# ---------------------------------------------------------------------------
+# NORMALIZATION
+# ---------------------------------------------------------------------------
 
+def _norm(v, vmax):
+    return 0.0 if vmax <= 0 else max(0.0, min(1.0, v / vmax))
 
-def _apg(p: Dict[str, Any]) -> float:
-    gp = max(_gp(p), 1)
-    return float(p.get("ast", 0)) / gp
+def _norm_def(v, lo, hi):
+    return 0.0 if hi <= lo else max(0.0, min(1.0, (hi - v) / (hi - lo)))
 
+# ---------------------------------------------------------------------------
+# CONTEXT BUILDERS
+# ---------------------------------------------------------------------------
 
-def _spg(p: Dict[str, Any]) -> float:
-    gp = max(_gp(p), 1)
-    return float(p.get("stl", 0)) / gp
-
-
-def _bpg(p: Dict[str, Any]) -> float:
-    gp = max(_gp(p), 1)
-    return float(p.get("blk", 0)) / gp
-
-
-def _tpg(p: Dict[str, Any]) -> float:
-    gp = max(_gp(p), 1)
-    return float(p.get("to", 0)) / gp
-
-
-def _stocks_pg(p: Dict[str, Any]) -> float:
-    """Steals + blocks per game (for quick DPOY proxy)."""
-    return _spg(p) + _bpg(p)
-def _fg_pct(p: Dict[str, Any]) -> Optional[float]:
-    fga = float(p.get("fga", 0))
-    if fga <= 0:
-        return None
-    return 100.0 * float(p.get("fgm", 0)) / fga
-
-
-def _tp_pct(p: Dict[str, Any]) -> Optional[float]:
-    tpa = float(p.get("tpa", 0))
-    if tpa <= 0:
-        return None
-    return 100.0 * float(p.get("tpm", 0)) / tpa
-
-
-
-def _basic_award_payload(
-    p: Dict[str, Any],
-    metric_name: str,
-    metric_value: float,
-) -> Dict[str, Any]:
+def _ctx(players):
     return {
-        "player": p.get("player") or p.get("name"),
-        "team": p.get("team"),
-        "gp": _gp(p),
-        metric_name: round(float(metric_value), 1),
+        "ppg": max(_ppg(p) for p in players),
+        "apg": max(_apg(p) for p in players),
+        "rpg": max(_rpg(p) for p in players),
+        "spg": max(_spg(p) for p in players),
+        "bpg": max(_bpg(p) for p in players),
+        "wins": 82,
+        "def_lo": min(float(p.get("def_rating", 110)) for p in players),
+        "def_hi": max(float(p.get("def_rating", 110)) for p in players),
     }
 
-
-def _mvp_payload(p: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Full payload for MVP ladders + winner.
-    """
-    base = _basic_award_payload(p, "ppg", _ppg(p))
-    base["rpg"] = round(_rpg(p), 1)
-    base["apg"] = round(_apg(p), 1)
-    return base
-
-
-def _dpoy_payload(p: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Full payload for DPOY ladders + winner.
-    """
-    base = _basic_award_payload(p, "stocks_pg", _stocks_pg(p))
-    base["spg"] = round(_spg(p), 1)
-    base["bpg"] = round(_bpg(p), 1)
-    return base
-
-
 # ---------------------------------------------------------------------------
-# ALL-NBA HELPERS
+# IMPACT SCORES
 # ---------------------------------------------------------------------------
 
-def _all_nba_score(p: Dict[str, Any]) -> float:
-    """
-    Simple impact score for All-NBA selection.
-    Positionless: higher = more likely to make All-NBA.
-    """
+def _impact_mvp(p, c):
     return (
-        1.0 * _ppg(p)
-        + 0.7 * _apg(p)
-        + 0.5 * _rpg(p)
+        0.30 * _norm(_ppg(p), c["ppg"]) +
+        0.15 * _norm(_apg(p), c["apg"]) +
+        0.15 * _norm(_rpg(p), c["rpg"]) +
+        0.20 * _norm(p["_team_wins"], c["wins"]) +
+        0.075 * _norm(_spg(p), c["spg"]) +
+        0.075 * _norm(_bpg(p), c["bpg"]) +
+        0.05 * _norm_def(float(p.get("def_rating", c["def_hi"])), c["def_lo"], c["def_hi"])
     )
 
-
-def _all_nba_payload(p: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Payload for All-NBA team entries.
-    """
-    return {
-        "player": p.get("player") or p.get("name"),
-        "team": p.get("team"),
-        "gp": _gp(p),
-        "ppg": round(_ppg(p), 1),
-        "rpg": round(_rpg(p), 1),
-        "apg": round(_apg(p), 1),
-    }
-
-# ---------------------------------------------------------------------------
-# SIXTH MAN HELPERS (ROLE-AWARE)
-# Relies on Calendar.jsx now storing per-season fields:
-#   started = games started count
-#   sixth   = games as "sixth_man" count
-# ---------------------------------------------------------------------------
-
-def _mpg(p: Dict[str, Any]) -> float:
-    gp = max(_gp(p), 1)
-    return float(p.get("min", 0)) / gp
-
-
-def _started(p: Dict[str, Any]) -> int:
-    return int(p.get("started", 0) or 0)
-
-
-def _sixth(p: Dict[str, Any]) -> int:
-    return int(p.get("sixth", 0) or 0)
-
-
-def _sixth_man_payload(p: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "player": p.get("player") or p.get("name"),
-        "team": p.get("team"),
-        "gp": _gp(p),
-        "ppg": round(_ppg(p), 1),
-        "mpg": round(_mpg(p), 1),
-        "started": _started(p),
-        "sixth": _sixth(p),
-    }
-
-
-# ---------------------------------------------------------------------------
-# FINALS MVP (NEW) ✅
-# Expects FINALS-ONLY aggregated stat dicts (per player) from JS:
-#   {
-#     player: "Name",
-#     team: "Team",
-#     gp: 6,
-#     min: 220,
-#     pts: 180,
-#     reb: 55,
-#     ast: 42,
-#     stl: 9,
-#     blk: 6,
-#     to: 14,   # OPTIONAL (safe if missing)
-#   }
-# ---------------------------------------------------------------------------
-
-def _finals_mvp_score(p: Dict[str, Any]) -> float:
-    """
-    Finals MVP scoring formula (edit this as desired).
-    NOTE: This is per-game based so series length doesn't automatically dominate.
-    """
+def _impact_6moy(p, c):
     return (
-        1.00 * _ppg(p)
-        + 0.70 * _apg(p)
-        + 0.55 * _rpg(p)
-        + 0.40 * _stocks_pg(p)
-        - 0.25 * _tpg(p)
+        0.35 * _norm(_ppg(p), c["ppg"]) +
+        0.20 * _norm(_apg(p), c["apg"]) +
+        0.20 * _norm(_rpg(p), c["rpg"]) +
+        0.10 * _norm(_spg(p), c["spg"]) +
+        0.10 * _norm(_bpg(p), c["bpg"]) +
+        0.05 * _norm_def(float(p.get("def_rating", c["def_hi"])), c["def_lo"], c["def_hi"])
     )
 
+def _impact_dpoy(p, c):
+    return (
+        0.35 * _norm(_spg(p), c["spg"]) +
+        0.35 * _norm(_bpg(p), c["bpg"]) +
+        0.20 * _norm_def(float(p.get("def_rating", c["def_hi"])), c["def_lo"], c["def_hi"]) +
+        0.10 * _norm(p["_team_wins"], c["wins"])
+    )
 
-def _finals_mvp_payload(p: Dict[str, Any]) -> Dict[str, Any]:
-    fg_pct = _fg_pct(p)
-    tp_pct = _tp_pct(p)
+def _impact_fmvp(p, c):
+    return (
+        0.35 * _norm(_ppg(p), c["ppg"]) +
+        0.20 * _norm(_apg(p), c["apg"]) +
+        0.20 * _norm(_rpg(p), c["rpg"]) +
+        0.10 * _norm(_spg(p), c["spg"]) +
+        0.10 * _norm(_bpg(p), c["bpg"]) +
+        0.05 * _norm_def(float(p.get("def_rating", c["def_hi"])), c["def_lo"], c["def_hi"])
+    )
 
-    return {
-        "player": p.get("player") or p.get("name"),
-        "team": p.get("team"),
-        "gp": _gp(p),
-        "ppg": round(_ppg(p), 1),
-        "rpg": round(_rpg(p), 1),
-        "apg": round(_apg(p), 1),
-        "spg": round(_spg(p), 1),
-        "bpg": round(_bpg(p), 1),
-        "tpg": round(_tpg(p), 1),
-        "fg_pct": round(fg_pct, 1) if fg_pct is not None else None,
-        "tp_pct": round(tp_pct, 1) if tp_pct is not None else None,
-        "score": round(float(_finals_mvp_score(p)), 2),
-    }
+# ---------------------------------------------------------------------------
+# FINALS MVP
+# ---------------------------------------------------------------------------
 
+def compute_finals_mvp(finals_players_js, champion_team=None, season_js=None):
+    players = _to_py_players(finals_players_js)
+    if champion_team:
+        players = [p for p in players if p.get("team") == champion_team]
+    if not players:
+        return {"finals_mvp": None, "finals_mvp_race": [], "season": season_js}
 
+    ctx = _ctx(players)
+    for p in players:
+        p["_fmvp"] = _impact_fmvp(p, ctx)
 
-def compute_finals_mvp(
-    finals_players_js,
-    champion_team_js: Optional[str] = None,
-    season_js: Optional[int] = None,
-) -> Dict[str, Any]:
-    """
-    Entry point for Finals MVP.
-    finals_players_js: list of FINALS-ONLY aggregated stat dicts.
-    champion_team_js: used to restrict finalists to champion (fail-closed to that team if provided).
-    """
-    finals_players = _to_py_players(finals_players_js)
-    if not finals_players:
-        return {
-            "season": season_js,
-            "champion_team": champion_team_js,
-            "finals_mvp": None,
-            "finals_mvp_race": [],
-            "awards_py_version": AWARDS_PY_VERSION,
-        }
-
-    # Only players who actually appeared in the Finals
-    MIN_FINALS_GP = 1
-    eligible = [p for p in finals_players if _gp(p) >= MIN_FINALS_GP]
-
-    # If champion team provided, restrict to that team (classic Finals MVP behavior)
-    if champion_team_js:
-        eligible = [p for p in eligible if p.get("team") == champion_team_js]
-
-    if not eligible:
-        return {
-            "season": season_js,
-            "champion_team": champion_team_js,
-            "finals_mvp": None,
-            "finals_mvp_race": [],
-            "awards_py_version": AWARDS_PY_VERSION,
-        }
-
-    fmvp_sorted = sorted(eligible, key=_finals_mvp_score, reverse=True)
-    finals_mvp_race = [_finals_mvp_payload(p) for p in fmvp_sorted[:5]]
-    finals_mvp = finals_mvp_race[0] if finals_mvp_race else None
-
+    ranked = sorted(players, key=lambda p: p["_fmvp"], reverse=True)
     return {
         "season": season_js,
-        "champion_team": champion_team_js,
-        "finals_mvp": finals_mvp,
-        "finals_mvp_race": finals_mvp_race,
+        "finals_mvp": ranked[0],
+        "finals_mvp_race": ranked[:5],
         "awards_py_version": AWARDS_PY_VERSION,
     }
 
+# ---------------------------------------------------------------------------
+# MAIN ENTRY
+# ---------------------------------------------------------------------------
 
-def compute_awards(players_js, season_js: Optional[int] = None) -> Dict[str, Any]:
-    """
-    Entry point used by simWorkerV2.
-    """
+def compute_awards(players_js, teams_js, season_js=None):
+    # --- DEBUG: what did we receive? ---
+    print("[awards] AWARDS_PY_VERSION:", AWARDS_PY_VERSION)
+    print("[awards] types:", type(players_js), type(teams_js), type(season_js))
+
     players = _to_py_players(players_js)
-    if not players:
-        return {
-            "season": season_js,
-            "mvp": None,
-            "dpoy": None,
-            "roty": None,
-            "sixth_man": None,
-            "mvp_race": [],
-            "dpoy_race": [],
-            "roty_race": [],
-            "sixth_man_race": [],
-            "all_nba_first": [],
-            "all_nba_second": [],
-            "all_nba_third": [],
-            "awards_py_version": AWARDS_PY_VERSION,
 
-        }
+    # ✅ GUARDRAIL (minimal fix):
+    # If teams_js is actually the season year (int), Calendar is calling compute_awards wrong.
+    # We treat that int as season_js and use empty teams list so we don't crash.
+    if isinstance(teams_js, (int, float)) and season_js is None:
+        print("[awards] WARNING: teams_js is a number. Treating it as season year. teams_js will be empty.")
+        season_js = int(teams_js)
+        teams_js = []
+
+    # If someone passed a dict instead of list, try to convert to list of values
+    if isinstance(teams_js, dict):
+        print("[awards] NOTE: teams_js is a dict; using its values().")
+        teams_js = list(teams_js.values())
+
+    teams = _to_py_players(teams_js)
+
+    # --- DEBUG: teams payload sanity ---
+    print("[awards] players:", len(players), "teams:", len(teams), "season:", season_js)
+
+    team_wins = {}
+    for t in teams:
+        key = t.get("team") or t.get("name")
+        if key is None:
+            continue
+        team_wins[key] = int(t.get("wins", 0) or 0)
+
+    # --- DEBUG: show a few team wins, and how many are non-zero ---
+    sample = list(team_wins.items())[:5]
+    nonzero = sum(1 for _, w in team_wins.items() if w > 0)
+    print("[awards] team_wins sample:", sample)
+    print("[awards] team_wins nonzero count:", nonzero, "out of", len(team_wins))
 
     MIN_GAMES = 40
-    eligible = [p for p in players if _gp(p) >= MIN_GAMES]
-    if not eligible:
-        eligible = players
+    eligible = [p for p in players if _gp(p) >= MIN_GAMES] or players
 
-    # -----------------------
-    # MVP
-    # -----------------------
-    mvp_sorted = sorted(eligible, key=_ppg, reverse=True)
-    mvp_race = [_mvp_payload(p) for p in mvp_sorted[:5]]
-    mvp = mvp_race[0] if mvp_race else None
+    for p in eligible:
+        p["_team_wins"] = team_wins.get(p.get("team"), 0)
 
-    # -----------------------
-    # DPOY
-    # -----------------------
-    dpoy_sorted = sorted(eligible, key=_stocks_pg, reverse=True)
-    dpoy_race = [_dpoy_payload(p) for p in dpoy_sorted[:5]]
-    dpoy = dpoy_race[0] if dpoy_race else None
+    # --- DEBUG: show team wins for current top few PPG players ---
+    top_ppg = sorted(eligible, key=lambda x: _ppg(x), reverse=True)[:5]
+    dbg = [(x.get("player"), x.get("team"), _ppg(x), x.get("_team_wins")) for x in top_ppg]
+    print("[awards] top PPG players (player, team, ppg, _team_wins):", dbg)
 
-    # -----------------------
-    # ROTY (unchanged placeholder)
-    # -----------------------
-    roty = None
-    roty_race: List[Dict[str, Any]] = []
+    ctx = _ctx(eligible)
+    for p in eligible:
+        p["_impact"] = _impact_mvp(p, ctx)
+        p["_dpoy"] = _impact_dpoy(p, ctx)
 
-    # -----------------------
-    # SIXTH MAN (ROLE-AWARE)  ✅ FAIL-CLOSED
-    # -----------------------
-    # If started/sixth role counts are missing, we do NOT guess.
-    # This prevents superstars/starters from ever winning 6MOY due to missing role data.
-    def _has_role_counts(pp: Dict[str, Any]) -> bool:
-        return ("started" in pp) or ("sixth" in pp)
+    ranked = sorted(eligible, key=lambda p: p["_impact"], reverse=True)
+    mvp_race = ranked[:5]
+    dpoy_race = sorted(eligible, key=lambda p: p["_dpoy"], reverse=True)[:5]
 
-    def _is_sixth_eligible(pp: Dict[str, Any]) -> bool:
-        gp = _gp(pp)
-        if gp < MIN_GAMES:
-            return False
+    def is_6m(p):
+        return (
+            _gp(p) >= MIN_GAMES and
+            ("started" in p or "sixth" in p) and
+            _mpg(p) >= 14 and
+            _started(p) <= int(0.2 * _gp(p)) and
+            _sixth(p) >= max(10, int(0.25 * _gp(p)))
+        )
 
-        if not _has_role_counts(pp):
-            return False  # fail-closed (no role info => cannot win 6MOY)
+    sixth = [p for p in eligible if is_6m(p)]
+    ctx6 = _ctx(sixth) if sixth else ctx
+    for p in sixth:
+        p["_6m"] = _impact_6moy(p, ctx6)
 
-        started = _started(pp)
-        sixth = _sixth(pp)
-        mpg = _mpg(pp)
+    sixth_sorted = sorted(sixth, key=lambda p: p["_6m"], reverse=True)
 
-        if mpg < 14.0:
-            return False
-        if started > int(0.20 * gp):  # started too often
-            return False
-        if sixth < max(10, int(0.25 * gp)):  # must be sixth often enough
-            return False
-
-        return True
-
-    sixth_candidates = [p for p in eligible if _is_sixth_eligible(p)]
-
-    # winner rule: best scorer among eligible sixth candidates
-    sixth_sorted = sorted(sixth_candidates, key=_ppg, reverse=True)
-    sixth_man_race = [_sixth_man_payload(p) for p in sixth_sorted[:5]]
-    sixth_man = sixth_man_race[0] if sixth_man_race else None
-
-    # -----------------------
-    # ALL-NBA
-    # -----------------------
-    all_nba_sorted = sorted(eligible, key=_all_nba_score, reverse=True)
-    all_nba_first = [_all_nba_payload(p) for p in all_nba_sorted[:5]]
-    all_nba_second = [_all_nba_payload(p) for p in all_nba_sorted[5:10]]
-    all_nba_third = [_all_nba_payload(p) for p in all_nba_sorted[10:15]]
+    # --- DEBUG: MVP race with wins + impact ---
+    dbg_mvp = [(p.get("player"), p.get("team"), p.get("_team_wins"), p.get("_impact")) for p in mvp_race]
+    print("[awards] MVP race (player, team, wins, impact):", dbg_mvp)
 
     return {
         "season": season_js,
-        "mvp": mvp,
-        "dpoy": dpoy,
-        "roty": roty,
-        "sixth_man": sixth_man,
+        "mvp": mvp_race[0] if mvp_race else None,
         "mvp_race": mvp_race,
+        "all_nba_first": ranked[:5],
+        "all_nba_second": ranked[5:10],
+        "all_nba_third": ranked[10:15],
+        "dpoy": dpoy_race[0] if dpoy_race else None,
         "dpoy_race": dpoy_race,
-        "roty_race": roty_race,
-        "sixth_man_race": sixth_man_race,
-        "all_nba_first": all_nba_first,
-        "all_nba_second": all_nba_second,
-        "all_nba_third": all_nba_third,
-        "awards_py_version": AWARDS_PY_VERSION,  # ✅ add this
+        "sixth_man": sixth_sorted[0] if sixth_sorted else None,
+        "sixth_man_race": sixth_sorted[:5],
+        "awards_py_version": AWARDS_PY_VERSION,
     }
-

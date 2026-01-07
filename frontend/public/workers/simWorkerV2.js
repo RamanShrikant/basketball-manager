@@ -47,7 +47,6 @@ sys.path.append("/python")
   // load python files
   for (const file of pythonFiles) {
     const code = await fetch(`/python/${file}?v=${Date.now()}`).then((r) => r.text());
-
     pyodide.FS.writeFile(file, code);
   }
 
@@ -58,6 +57,7 @@ sys.path.append("/python")
 
 // Raw logging
 self.addEventListener("message", (e) => {
+  // keep this; it's useful for debugging payloads
   console.log("[simWorkerV2] MSG IN:", e.data);
 });
 
@@ -126,16 +126,19 @@ out
 
 // ------------------------------------------------------------
 // AWARDS MODE ✅
-// NOTE: your awards.py expects compute_awards(players, seasonYear)
+// FIX: awards.py expects compute_awards(players_js, teams_js, season_js=None)
 // ------------------------------------------------------------
-async function computeAwards(requestId, players, seasonYear) {
+async function computeAwards(requestId, players, teams, seasonYear) {
   try {
     pyodide.globals.set("players_js", pyodide.toPy(players || []));
+    pyodide.globals.set("teams_js", pyodide.toPy(teams || []));
     pyodide.globals.set("season_js", seasonYear ?? null);
 
     const pyRes = await pyodide.runPythonAsync(`
+import importlib, awards
+importlib.reload(awards)
 from awards import compute_awards
-res = compute_awards(players_js, season_js)
+res = compute_awards(players_js, teams_js, season_js)
 res
     `);
 
@@ -156,10 +159,6 @@ res
   }
 }
 
-// ------------------------------------------------------------
-// FINALS MVP MODE ✅
-// calls awards.py compute_finals_mvp(players, championTeam, seasonYear)
-// ------------------------------------------------------------
 // ------------------------------------------------------------
 // FINALS MVP MODE ✅
 // ------------------------------------------------------------
@@ -183,7 +182,6 @@ res
 
     const finalsMvp = pyRes.toJs({ dict_converter: Object.fromEntries });
 
-
     postMessage({
       type: "finals-mvp-result",
       requestId,
@@ -198,7 +196,6 @@ res
     });
   }
 }
-
 
 // ------------------------------------------------------------
 // Dispatcher
@@ -219,7 +216,7 @@ onmessage = async (e) => {
   // awards
   if (msg.type === "compute-awards") {
     const seasonYear = msg.meta?.seasonYear ?? null;
-    return computeAwards(msg.requestId, msg.players, seasonYear);
+    return computeAwards(msg.requestId, msg.players, msg.teams, seasonYear);
   }
 
   // finals mvp
