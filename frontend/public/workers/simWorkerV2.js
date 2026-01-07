@@ -57,7 +57,6 @@ sys.path.append("/python")
 
 // Raw logging
 self.addEventListener("message", (e) => {
-  // keep this; it's useful for debugging payloads
   console.log("[simWorkerV2] MSG IN:", e.data);
 });
 
@@ -126,7 +125,7 @@ out
 
 // ------------------------------------------------------------
 // AWARDS MODE ✅
-// FIX: awards.py expects compute_awards(players_js, teams_js, season_js=None)
+// NOW: compute_awards(players_js, teams_js, season_js)
 // ------------------------------------------------------------
 async function computeAwards(requestId, players, teams, seasonYear) {
   try {
@@ -135,19 +134,20 @@ async function computeAwards(requestId, players, teams, seasonYear) {
     pyodide.globals.set("season_js", seasonYear ?? null);
 
     const pyRes = await pyodide.runPythonAsync(`
-import importlib, awards
+import importlib
+import awards
 importlib.reload(awards)
 from awards import compute_awards
 res = compute_awards(players_js, teams_js, season_js)
 res
     `);
 
-    const awards = pyRes.toJs({ dict_converter: Object });
+    const awardsOut = pyRes.toJs({ dict_converter: Object });
 
     postMessage({
       type: "awards-result",
       requestId,
-      awards,
+      awards: awardsOut,
     });
   } catch (err) {
     console.error("[simWorkerV2] computeAwards error:", err);
@@ -216,7 +216,8 @@ onmessage = async (e) => {
   // awards
   if (msg.type === "compute-awards") {
     const seasonYear = msg.meta?.seasonYear ?? null;
-    return computeAwards(msg.requestId, msg.players, msg.teams, seasonYear);
+    const teams = msg.teams || msg.meta?.teams || [];
+    return computeAwards(msg.requestId, msg.players, teams, seasonYear);
   }
 
   // finals mvp

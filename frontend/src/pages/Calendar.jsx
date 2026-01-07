@@ -628,6 +628,43 @@ function normalizeAwards(raw) {
   };
 }
 
+// ------------------------------------------------------------
+// AWARDS: derive team wins from schedule + saved results
+// (because leagueData does NOT store wins)
+// ------------------------------------------------------------
+function buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById) {
+  const wins = {};
+
+  const bump = (teamName) => {
+    if (!teamName) return;
+    wins[teamName] = (wins[teamName] || 0) + 1;
+  };
+
+  for (const games of Object.values(scheduleByDate || {})) {
+    for (const g of games || []) {
+      if (!g?.played) continue;
+
+      const r = resultsById?.[g.id];
+      if (!r?.totals) continue;
+
+      const homePts = Number(r.totals.home ?? 0);
+      const awayPts = Number(r.totals.away ?? 0);
+
+      // ignore ties
+      if (homePts === awayPts) continue;
+
+      if (homePts > awayPts) bump(g.home);
+      else bump(g.away);
+    }
+  }
+
+  // Return a list that awards.py can consume:
+  // awards.py expects each item to have { team, wins }
+  return (allTeams || []).map((t) => ({
+    team: t?.name,     // IMPORTANT: must match playerStats.team (your schedule uses team names)
+    wins: wins[t?.name] || 0,
+  }));
+}
 
 /* -------------------------------------------------------------------------- */
 /*                           MAIN CALENDAR COMPONENT                          */
@@ -1560,10 +1597,22 @@ const handleSimSeason = async () => {
       const playersArray = Object.values(playerStats || {});
       console.log("[Calendar] computing awards for", playersArray.length, "players");
 
-      const awardsRaw = await computeSeasonAwards(playersArray, {
-        seasonYear,
-        gamesSimmed,
-      });
+const teamsWithWins = buildTeamsWithWinsForAwards(staticTeams, upd, results);
+
+console.log("[Calendar] awards teamsWithWins sample:", teamsWithWins.slice(0, 5));
+console.log(
+  "[Calendar] awards wins nonzero teams:",
+  teamsWithWins.filter(t => (t.wins || 0) > 0).length,
+  "out of",
+  teamsWithWins.length
+);
+
+const awardsRaw = await computeSeasonAwards(playersArray, {
+  seasonYear,
+  gamesSimmed,
+  teams: teamsWithWins, // ✅ THIS is what makes _team_wins non-zero
+});
+
 
       const deepUnpair = (x) => {
         if (Array.isArray(x) && x.length && Array.isArray(x[0]) && x[0].length === 2) {

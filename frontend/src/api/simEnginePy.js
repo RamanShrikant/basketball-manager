@@ -86,7 +86,7 @@ function startWorker() {
       return;
     }
 
-    // 🔥 awards result
+    // awards result
     if (msg.type === "awards-result") {
       const entry = pending.get(msg.requestId);
       if (!entry) {
@@ -99,7 +99,7 @@ function startWorker() {
       return;
     }
 
-    // 🔥 awards error
+    // awards error
     if (msg.type === "awards-error") {
       const entry = pending.get(msg.requestId);
       if (!entry) {
@@ -114,7 +114,7 @@ function startWorker() {
       return;
     }
 
-    // 🏆 finals mvp result
+    // finals mvp result
     if (msg.type === "finals-mvp-result") {
       const entry = pending.get(msg.requestId);
       if (!entry) {
@@ -127,7 +127,7 @@ function startWorker() {
       return;
     }
 
-    // 🏆 finals mvp error
+    // finals mvp error
     if (msg.type === "finals-mvp-error") {
       const entry = pending.get(msg.requestId);
       if (!entry) {
@@ -159,7 +159,6 @@ function isPairsArray(x) {
 }
 
 function deepFromEntries(x) {
-  // Python dicts sometimes arrive as: [ [k,v], [k2,v2], ... ]
   if (isPairsArray(x)) {
     const obj = {};
     for (const [k, v] of x) obj[k] = deepFromEntries(v);
@@ -192,15 +191,10 @@ function convert(py) {
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — SINGLE GAME
-// ------------------------------------------------------------
-// how long to wait for a single game before giving up
-// make this aggressive so “weird” games get retried quickly
-const WORKER_TIMEOUT_MS = 300; // 2.5 seconds, tweak if you want
-
-// ------------------------------------------------------------
 // PUBLIC API — SINGLE GAME (with timeout)
 // ------------------------------------------------------------
+const WORKER_TIMEOUT_MS = 300;
+
 export function simulateOneGame({ homeTeam, awayTeam }) {
   return queueSim(() => {
     return new Promise((resolve) => {
@@ -211,13 +205,11 @@ export function simulateOneGame({ homeTeam, awayTeam }) {
         timer: null,
       };
 
-      // aggressive timeout in case worker never responds
       entry.timer = setTimeout(() => {
-        if (!pending.has(id)) return; // already handled
+        if (!pending.has(id)) return;
 
         pending.delete(id);
         console.warn("[simEnginePy] TIMEOUT waiting for worker result id", id);
-        // this will be caught by the retry wrapper on the React side
         resolve({ error: "WORKER_TIMEOUT" });
       }, WORKER_TIMEOUT_MS);
 
@@ -235,7 +227,6 @@ export function simulateOneGame({ homeTeam, awayTeam }) {
 
 // ------------------------------------------------------------
 // PUBLIC API — BATCH GAME SCHEDULING
-// games = [{ id, homeTeam, awayTeam }]
 // ------------------------------------------------------------
 export function simulateBatchGames(games) {
   return new Promise((resolve) => {
@@ -256,70 +247,29 @@ export function simulateBatchGames(games) {
 
 // ------------------------------------------------------------
 // PUBLIC API — SEASON AWARDS
-// players = array of season stat dicts
-// meta should include { seasonYear }, and optionally { standings }
+// players = array of season stat dicts (from bm_player_stats_v1)
+// meta can include: { seasonYear, teams: [{team, wins, ...}] }
 // ------------------------------------------------------------
 export function computeSeasonAwards(players, meta = {}) {
   startWorker();
 
   const requestId = "A" + counter++;
 
-  // ✅ MINIMAL SURGICAL FIX:
-  // Build a teams list shaped like: [{ team: "Name", wins: 54 }, ...]
-  // Prefer meta.standings (regular-season truth in your app). Fallback to localStorage.
-  let teamsForAwards = [];
-
-  // meta.standings can be an object or a Map
-  try {
-    const st = meta?.standings;
-    if (st) {
-      const arr = st instanceof Map ? Array.from(st.values()) : Object.values(st);
-      teamsForAwards = (arr || [])
-        .map((s) => ({
-          team: s?.team ?? s?.name ?? s?.teamName ?? null,
-          wins: Number(s?.wins ?? 0) || 0,
-        }))
-        .filter((t) => !!t.team);
-    }
-  } catch {}
-
-  if (!teamsForAwards.length) {
-    try {
-      const raw =
-        localStorage.getItem("bm_teams_v1") ||
-        localStorage.getItem("bm_teams") ||
-        "{}";
-      const parsed = JSON.parse(raw);
-      const arr = Array.isArray(parsed) ? parsed : Object.values(parsed || {});
-      teamsForAwards = (arr || [])
-        .map((t) => ({
-          team: t?.team ?? t?.name ?? t?.teamName ?? null,
-          wins: Number(t?.wins ?? t?.W ?? 0) || 0,
-        }))
-        .filter((t) => !!t.team);
-    } catch {}
-  }
-
-  console.log("[simEnginePy] computeSeasonAwards POST", {
-    requestId,
-    seasonYear: meta?.seasonYear ?? null,
-    playersLen: (players || []).length,
-    teamsLen: teamsForAwards.length,
-    teamsSample: teamsForAwards.slice(0, 5),
-  });
+  // ✅ MINIMAL: forward teams as a top-level field too
+  const teams = Array.isArray(meta?.teams) ? meta.teams : [];
 
   return new Promise((resolve, reject) => {
     pending.set(requestId, {
       resolve,
       reject,
-      timer: null, // no timeout for awards
+      timer: null,
     });
 
     worker.postMessage({
       type: "compute-awards",
       requestId,
       players: deepSanitize(players),
-      teams: deepSanitize(teamsForAwards), // ✅ ADD THIS
+      teams: deepSanitize(teams),
       meta,
     });
   });
@@ -327,8 +277,6 @@ export function computeSeasonAwards(players, meta = {}) {
 
 // ------------------------------------------------------------
 // PUBLIC API — FINALS MVP
-// finalsPlayers = array of FINALS-only aggregated stat dicts
-// meta = { seasonYear, championTeam }
 // ------------------------------------------------------------
 export function computeFinalsMvp(finalsPlayers, meta = {}) {
   startWorker();
@@ -348,14 +296,8 @@ export function computeFinalsMvp(finalsPlayers, meta = {}) {
     }, 8000);
 
     pending.set(requestId, {
-      resolve: (v) => {
-        clearTimeout(timer);
-        resolve(v);
-      },
-      reject: (e) => {
-        clearTimeout(timer);
-        reject(e);
-      },
+      resolve: (v) => { clearTimeout(timer); resolve(v); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
       timer,
     });
 
