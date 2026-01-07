@@ -1,4 +1,3 @@
-
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
@@ -477,7 +476,7 @@ function slimResult(full) {
 
   const side =
     homeScore > awayScore ? "home" :
-    awayScore > homeScore ? "away" :
+    awayScore > awayScore ? "away" :
     "tie";
 
   const boxHome = convertBox(rawHomeBox);
@@ -713,9 +712,20 @@ export default function Calendar() {
 
 
   /* -------------------------------- Season Window ------------------------------- */
+  const META_KEY = "bm_league_meta_v1";
   const today = new Date();
+  let storedSeasonYear = null;
+  try {
+    const metaRaw = localStorage.getItem(META_KEY);
+    const meta = metaRaw ? JSON.parse(metaRaw) : null;
+    const y = meta?.seasonYear;
+    if (Number.isFinite(Number(y))) storedSeasonYear = Number(y);
+  } catch {}
+
   const seasonYear =
-    today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
+    storedSeasonYear != null
+      ? storedSeasonYear
+      : (today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1);
 
   const seasonStart = useMemo(
     () => new Date(seasonYear, 9, 21),
@@ -781,8 +791,8 @@ const teams = useMemo(() => {
   const RESULT_KEY = "bm_results_v2";
   const PLAYER_STATS_KEY = "bm_player_stats_v1";
   // ===============================
-// FAST RESULTS STORE (per-game)
-// ===============================
+  // FAST RESULTS STORE (per-game)
+  // ===============================
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_"; // each game stored as bm_result_v3_<gameId>
 const RESULT_V2_BLOB_KEY = "bm_results_v2"; // legacy blob (for migration)
@@ -1114,6 +1124,8 @@ function saveResults(results) {
     console.error("[ResultsV3] bulk save failed", e);
   }
 }
+
+
 
 
 
@@ -1717,6 +1729,7 @@ const awardsRaw = await computeSeasonAwards(playersArray, {
 
 
 
+
 const handleResetSeason = () => {
   if (!window.confirm("Reset season? ALL results + schedule will be wiped.")) return;
 
@@ -1773,17 +1786,124 @@ if (!selectedTeam) {
   );
 }
 
-const bannerText = (() => {
-  if (!focusedDate) return "";
-  const g = myGames[focusedDate];
-  if (g) {
-    const isHome = g.homeId === slugifyId(selectedTeam.name);
-    return `GAME DAY: ${isHome ? g.away : selectedTeam.name} @ ${
-      isHome ? selectedTeam.name : g.home
-    }`;
+/* -------------------------------------------------------------------------- */
+/*                      HEADER (Season / Record / Standings)                  */
+/* -------------------------------------------------------------------------- */
+const confByTeam = useMemo(() => {
+  const map = {};
+  const confs = leagueData?.conferences || {};
+  for (const [conf, arr] of Object.entries(confs)) {
+    for (const t of arr || []) {
+      if (t?.name) map[t.name] = conf;
+    }
   }
-  return focusedDate;
-})();
+  return map;
+}, [leagueData]);
+
+const teamAgg = useMemo(() => {
+  const totals = {};
+  const ensure = (teamName) => {
+    if (!totals[teamName]) {
+      totals[teamName] = { team: teamName, w: 0, l: 0, gp: 0, pf: 0, pa: 0 };
+    }
+    return totals[teamName];
+  };
+
+  for (const games of Object.values(scheduleByDate || {})) {
+    for (const g of games || []) {
+      if (!g?.played) continue;
+      const r = resultsById?.[g.id];
+      if (!r?.totals) continue;
+
+      const homeName = g.home;
+      const awayName = g.away;
+
+      const homePts = Number(r.totals.home ?? 0);
+      const awayPts = Number(r.totals.away ?? 0);
+
+      const homeRow = ensure(homeName);
+      const awayRow = ensure(awayName);
+
+      homeRow.gp += 1;
+      awayRow.gp += 1;
+
+      homeRow.pf += homePts;
+      homeRow.pa += awayPts;
+
+      awayRow.pf += awayPts;
+      awayRow.pa += homePts;
+
+      if (homePts > awayPts) {
+        homeRow.w += 1;
+        awayRow.l += 1;
+      } else if (awayPts > homePts) {
+        awayRow.w += 1;
+        homeRow.l += 1;
+      }
+    }
+  }
+
+  return totals;
+}, [scheduleByDate, resultsById]);
+
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+const headerInfo = useMemo(() => {
+  const seasonLabel = `${seasonYear}-${seasonYear + 1}`;
+
+  const myName = selectedTeam?.name;
+  const myConf = confByTeam?.[myName] || "";
+
+  const myRow = teamAgg?.[myName] || { w: 0, l: 0, gp: 0, pf: 0, pa: 0 };
+  const w = myRow.w || 0;
+  const l = myRow.l || 0;
+
+  // standings in conference (pct desc, then diff desc)
+  const confTeams = Object.keys(confByTeam || {}).filter((t) => confByTeam[t] === myConf);
+  const rows = confTeams.map((t) => {
+    const r = teamAgg?.[t] || { w: 0, l: 0, gp: 0, pf: 0, pa: 0 };
+    const gp = (r.w || 0) + (r.l || 0);
+    const pct = gp > 0 ? (r.w / gp) : 0;
+    const diff = (r.pf || 0) - (r.pa || 0);
+    return { team: t, w: r.w || 0, l: r.l || 0, pct, diff };
+  });
+
+  rows.sort((a, b) => b.pct - a.pct || b.diff - a.diff);
+  const confRank = myName ? (rows.findIndex((x) => x.team === myName) + 1) : 0;
+
+  // Off/Def ranks in league (Off: PF/G desc, Def: PA/G asc)
+  const leagueTeams = Object.keys(confByTeam || {});
+  const offRows = leagueTeams.map((t) => {
+    const r = teamAgg?.[t] || { pf: 0, pa: 0, gp: 0, w: 0, l: 0 };
+    const gp = r.gp || ((r.w || 0) + (r.l || 0)) || 0;
+    const pfpg = gp > 0 ? (r.pf / gp) : 0;
+    return { team: t, val: pfpg };
+  }).sort((a, b) => b.val - a.val);
+
+  const defRows = leagueTeams.map((t) => {
+    const r = teamAgg?.[t] || { pf: 0, pa: 0, gp: 0, w: 0, l: 0 };
+    const gp = r.gp || ((r.w || 0) + (r.l || 0)) || 0;
+    const papg = gp > 0 ? (r.pa / gp) : 0;
+    return { team: t, val: papg };
+  }).sort((a, b) => a.val - b.val);
+
+  const offRank = myName ? (offRows.findIndex((x) => x.team === myName) + 1) : 0;
+  const defRank = myName ? (defRows.findIndex((x) => x.team === myName) + 1) : 0;
+
+  return {
+    seasonLabel,
+    w,
+    l,
+    conf: myConf,
+    confRank,
+    offRank,
+    defRank,
+  };
+}, [seasonYear, selectedTeam, confByTeam, teamAgg]);
 
 /* -------------------------------------------------------------------------- */
 /*                               CALENDAR GRID                                */
@@ -1896,11 +2016,40 @@ const bannerText = (() => {
         </div>
 
         {/* BANNER */}
-        {focusedDate && (
-          <div className="mb-4 px-4 py-2 bg-neutral-800 rounded border border-neutral-700">
-            {bannerText}
+        <div className="mb-4 px-4 py-2 bg-neutral-800 rounded border border-neutral-700">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span className="font-semibold text-gray-200">
+              Season {headerInfo.seasonLabel}
+            </span>
+
+            <span className="text-gray-400">•</span>
+
+            <span className="text-gray-200">
+              Record{" "}
+              <span className="font-bold text-green-400">{headerInfo.w}</span>
+              <span className="text-gray-300">-</span>
+              <span className="font-bold text-red-400">{headerInfo.l}</span>
+            </span>
+
+            <span className="text-gray-400">•</span>
+
+            <span className="text-gray-200">
+              {headerInfo.confRank ? `${ordinal(headerInfo.confRank)} in ${headerInfo.conf}` : `— in ${headerInfo.conf || "—"}`}
+            </span>
+
+            <span className="text-gray-400">•</span>
+
+            <span className="text-gray-200">
+              Off Rank {headerInfo.offRank ? `#${headerInfo.offRank}` : "—"}
+            </span>
+
+            <span className="text-gray-400">•</span>
+
+            <span className="text-gray-200">
+              Def Rank {headerInfo.defRank ? `#${headerInfo.defRank}` : "—"}
+            </span>
           </div>
-        )}
+        </div>
 
         {/* WEEKDAYS */}
         <div className="grid grid-cols-7 text-center text-gray-400 mb-2">
@@ -2124,5 +2273,3 @@ const bannerText = (() => {
     </div>
   );
 }
-
-
