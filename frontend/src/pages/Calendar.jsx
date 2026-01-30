@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import { simulateOneGame } from "@/api/simEnginePy";
@@ -62,6 +63,7 @@ async function simOneSafe(game, leagueData, teams) {
       }
     }
     // -------------------------------
+ensureGameplansForLeague(leagueData);
 
 homeTeamObj.minutes = JSON.parse(
   localStorage.getItem(`gameplan_${homeTeamObj.name}`) || "{}"

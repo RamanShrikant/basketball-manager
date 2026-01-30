@@ -452,6 +452,15 @@ function buildFinalsAggregatePlayers(post, resultsById) {
 
   const agg = {}; // key = player__team
 
+  const parseMA = (val) => {
+    // expects "M-A" (like "9-18")
+    if (!val) return { m: 0, a: 0 };
+    const s = String(val).trim();
+    const parts = s.split("-").map((x) => Number(x));
+    if (parts.length !== 2) return { m: 0, a: 0 };
+    return { m: Number.isFinite(parts[0]) ? parts[0] : 0, a: Number.isFinite(parts[1]) ? parts[1] : 0 };
+  };
+
   const addRow = (teamName, row) => {
     if (!row?.player) return;
 
@@ -468,11 +477,12 @@ function buildFinalsAggregatePlayers(post, resultsById) {
         stl: 0,
         blk: 0,
         to: 0,
-            // ✅ add
-    fgm: 0,
-    fga: 0,
-    tpm: 0,
-    tpa: 0,
+
+        // ✅ REQUIRED for awards.py FG% / 3P%
+        fgm: 0,
+        fga: 0,
+        tpm: 0,
+        tpa: 0,
       };
     }
 
@@ -485,13 +495,15 @@ function buildFinalsAggregatePlayers(post, resultsById) {
     a.stl += Number(row.stl || 0);
     a.blk += Number(row.blk || 0);
     a.to += Number(row.to || 0);
-    // ✅ add
-const fg = parseMadeAtt(row.fg);
-const tp = parseMadeAtt(row["3p"]);
-a.fgm += fg.m;
-a.fga += fg.a;
-a.tpm += tp.m;
-a.tpa += tp.a;
+
+    // row.fg and row["3p"] are strings like "M-A"
+    const fg = parseMA(row.fg);
+    const tp = parseMA(row["3p"]);
+
+    a.fgm += fg.m;
+    a.fga += fg.a;
+    a.tpm += tp.m;
+    a.tpa += tp.a;
   };
 
   const order = homeOrderForBestOf7HigherSeedHome();
@@ -513,6 +525,7 @@ a.tpa += tp.a;
 
   return Object.values(agg);
 }
+
 
 /* ================== PAGE ================== */
 export default function Playoffs() {
@@ -761,8 +774,17 @@ export default function Playoffs() {
     if (!post?.finals?.complete) return;
 
     try {
-      const existing = JSON.parse(localStorage.getItem(FINALS_MVP_KEY) || "null");
-      if (existing?.season === seasonYear && existing?.champion_team === champModal.team) return;
+const EXPECTED_AWARDS_PY_VERSION = "2025-12-26_fmvp_eff_v1";
+
+const existing = JSON.parse(localStorage.getItem(FINALS_MVP_KEY) || "null");
+if (
+  existing?.season === seasonYear &&
+  existing?.champion_team === champModal.team &&
+  existing?.awards_py_version === EXPECTED_AWARDS_PY_VERSION
+) {
+  return;
+}
+
     } catch {}
 
     const run = async () => {

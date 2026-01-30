@@ -27,6 +27,7 @@ const pythonFiles = [
   "steals.py",
   "blocks.py",
   "shooting_model.py",
+  "progression.py",
 ];
 
 async function init() {
@@ -198,6 +199,56 @@ res
 }
 
 // ------------------------------------------------------------
+// PLAYER PROGRESSION MODE ✅ (SURGICAL FIX)
+// - Calls your real entrypoint:
+//   apply_end_of_season_progression_with_deltas(league, stats_by_key, settings, seed)
+// - Returns: { league, deltas, version }
+// ------------------------------------------------------------
+async function computeProgression(requestId, leagueData, statsByKey, meta) {
+  try {
+    pyodide.globals.set("league_js", pyodide.toPy(leagueData || {}));
+    pyodide.globals.set("stats_js", pyodide.toPy(statsByKey || {}));
+    pyodide.globals.set("meta_js", pyodide.toPy(meta || {}));
+
+    const pyRes = await pyodide.runPythonAsync(`
+import importlib
+import progression
+importlib.reload(progression)
+
+from progression import apply_end_of_season_progression_with_deltas
+
+seed = None
+try:
+  seed = meta_js.get("seed")
+except Exception:
+  seed = None
+
+res = apply_end_of_season_progression_with_deltas(
+  league=league_js,
+  stats_by_key=stats_js,
+  settings=None,
+  seed=seed
+)
+
+res
+    `);
+
+    postMessage({
+      type: "progression-result",
+      requestId,
+      payload: pyRes.toJs({ dict_converter: Object }),
+    });
+  } catch (err) {
+    console.error("[simWorkerV2] computeProgression error:", err);
+    postMessage({
+      type: "progression-error",
+      requestId,
+      error: err.toString(),
+    });
+  }
+}
+
+// ------------------------------------------------------------
 // Dispatcher
 // ------------------------------------------------------------
 onmessage = async (e) => {
@@ -205,7 +256,7 @@ onmessage = async (e) => {
 
   if (!ready) await init();
 
-  if (msg.type === "simulate-single") {
+  if (msg.type === "simulate-single")  {
     return simulateOneGame(msg.id, msg.home, msg.away);
   }
 
@@ -223,5 +274,15 @@ onmessage = async (e) => {
   // finals mvp
   if (msg.type === "compute-finals-mvp") {
     return computeFinalsMvp(msg.requestId, msg.players, msg.meta || {});
+  }
+
+  // progression ✅ (SURGICAL ADD)
+  if (msg.type === "compute-progression") {
+    return computeProgression(
+      msg.requestId,
+      msg.leagueData,
+      msg.statsByKey,
+      msg.meta || {}
+    );
   }
 };

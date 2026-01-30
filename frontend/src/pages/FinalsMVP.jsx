@@ -41,9 +41,102 @@ function fmt1(x) {
   return Number(x).toFixed(1);
 }
 
+// -------------------------
+// NEW SEASON HELPERS
+// -------------------------
+const META_KEY = "bm_league_meta_v1";
+const PLAYER_STATS_KEY = "bm_player_stats_v1";
+const SCHED_KEY = "bm_schedule_v3";
+const RESULT_V2_BLOB_KEY = "bm_results_v2";
+const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
+const RESULT_V3_PREFIX = "bm_result_v3_";
+
+const DELTAS_KEY = "bm_progression_deltas_v1";
+
+function bumpSeasonYearMeta() {
+  const today = new Date();
+  const fallback = today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
+
+  let meta = {};
+  try {
+    meta = JSON.parse(localStorage.getItem(META_KEY) || "{}") || {};
+  } catch {
+    meta = {};
+  }
+
+  const cur = Number.isFinite(Number(meta.seasonYear)) ? Number(meta.seasonYear) : fallback;
+  meta.seasonYear = cur + 1;
+
+  localStorage.setItem(META_KEY, JSON.stringify(meta));
+  return meta.seasonYear;
+}
+
+function clearSeasonStores() {
+  // playoffs + schedule/results
+  localStorage.removeItem("bm_postseason_v2");
+  localStorage.removeItem("bm_champ_v1");
+  localStorage.removeItem(SCHED_KEY);
+
+  // results v2 blob + v3 per-game
+  localStorage.removeItem(RESULT_V2_BLOB_KEY);
+  localStorage.removeItem(RESULT_V3_INDEX_KEY);
+
+  // delete all per-game result keys
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k.startsWith(RESULT_V3_PREFIX)) localStorage.removeItem(k);
+  }
+
+  // wipe season stats (new season starts empty)
+  localStorage.removeItem(PLAYER_STATS_KEY);
+}
+
+function ageUpLeagueAndMakeDeltas(league) {
+  const clone = structuredClone(league);
+
+  const teams = getAllTeamsFromLeague(clone);
+  const deltas = {};
+
+  for (const t of teams) {
+    for (const p of (t.players || [])) {
+      const name = p?.name || p?.player;
+      if (!name) continue;
+
+      const prevAge = Number.isFinite(Number(p.age)) ? Number(p.age) : 25;
+      p.age = prevAge + 1;
+
+      // only thing you explicitly want right now
+      deltas[name] = { age: 1 };
+    }
+  }
+
+  return { league: clone, deltas };
+}
+
+function pushFinalsMvpToHistory(fmvpRaw) {
+  if (!fmvpRaw) return;
+
+  // keep "latest" around
+  localStorage.setItem("bm_finals_mvp_latest", JSON.stringify(fmvpRaw));
+
+  // append to history
+  const key = "bm_finals_mvp_history_v1";
+  let hist = [];
+  try {
+    hist = JSON.parse(localStorage.getItem(key) || "[]");
+    if (!Array.isArray(hist)) hist = [];
+  } catch {
+    hist = [];
+  }
+
+  hist.push(fmvpRaw);
+  localStorage.setItem(key, JSON.stringify(hist));
+}
+
 export default function FinalsMvp() {
   const navigate = useNavigate();
-  const { leagueData } = useGame();
+  const { leagueData, setLeagueData, selectedTeam, setSelectedTeam } = useGame();
 
   const fmvpRaw = useMemo(
     () => JSON.parse(localStorage.getItem("bm_finals_mvp_v1") || "null"),
@@ -71,13 +164,51 @@ export default function FinalsMvp() {
 
   const portraitSrc = playerMeta?.portrait || null;
 
-  const startNewSeason = () => {
-    localStorage.removeItem("bm_postseason_v2");
-    localStorage.removeItem("bm_results_v2");
-    localStorage.removeItem("bm_schedule_v3");
-    localStorage.removeItem("bm_champ_v1");
+  const continueToProgressionThenCalendar = () => {
+    // 1) preserve Finals MVP always (history + latest)
+    pushFinalsMvpToHistory(fmvpRaw);
+
+    // 2) age up everyone + store deltas (you asked for +1 ages)
+    const baseLeague =
+      leagueData ||
+      (() => {
+        try {
+          return JSON.parse(localStorage.getItem("leagueData") || "null");
+        } catch {
+          return null;
+        }
+      })();
+
+    if (baseLeague) {
+      const { league: nextLeague, deltas } = ageUpLeagueAndMakeDeltas(baseLeague);
+
+      localStorage.setItem("leagueData", JSON.stringify(nextLeague));
+      localStorage.setItem(DELTAS_KEY, JSON.stringify(deltas));
+
+      setLeagueData(nextLeague);
+
+      // keep selectedTeam in sync with new league blob
+      if (selectedTeam?.name) {
+        const teams = getAllTeamsFromLeague(nextLeague);
+        const updatedTeam = teams.find((t) => t?.name === selectedTeam.name) || null;
+        if (updatedTeam) {
+          setSelectedTeam(updatedTeam);
+          localStorage.setItem("selectedTeam", JSON.stringify(updatedTeam));
+        }
+      }
+    }
+
+    // 3) bump season year so Calendar header updates + schedule window changes
+    bumpSeasonYearMeta();
+
+    // 4) clear season runtime keys so Calendar generates a fresh schedule/results
+    clearSeasonStores();
+
+    // 5) do NOT delete finals mvp history/latest; we only clear the "one-time page payload"
     localStorage.removeItem("bm_finals_mvp_v1");
-    navigate("/calendar");
+
+    // 6) go to progression screen (then you hit Return to Calendar)
+    navigate("/player-progression");
   };
 
   const finalsRow = useMemo(() => {
@@ -101,7 +232,6 @@ export default function FinalsMvp() {
   return (
     <div className="min-h-screen bg-neutral-900 text-white py-10">
       <div className="max-w-5xl mx-auto px-4">
-
         {/* Title */}
         <div className="text-center mb-5">
           <h1 className="text-4xl font-extrabold text-orange-500">FINALS MVP</h1>
@@ -127,9 +257,7 @@ export default function FinalsMvp() {
               </div>
 
               <div className="mb-2">
-                <h2 className="text-[42px] font-bold leading-tight">
-                  {winner?.player}
-                </h2>
+                <h2 className="text-[42px] font-bold leading-tight">{winner?.player}</h2>
                 <p className="text-gray-400 text-[22px] mt-1">
                   {playerMeta?.pos} • Age {playerMeta?.age}
                 </p>
@@ -144,7 +272,14 @@ export default function FinalsMvp() {
                     <stop offset="100%" stopColor="#FFD54F" />
                   </linearGradient>
                 </defs>
-                <circle cx="60" cy="60" r="50" stroke="rgba(255,255,255,0.08)" strokeWidth="8" fill="none" />
+                <circle
+                  cx="60"
+                  cy="60"
+                  r="50"
+                  stroke="rgba(255,255,255,0.08)"
+                  strokeWidth="8"
+                  fill="none"
+                />
                 <circle
                   cx="60"
                   cy="60"
@@ -192,9 +327,7 @@ export default function FinalsMvp() {
             </thead>
             <tbody>
               <tr className="bg-orange-600 text-white">
-                <td className="py-3 px-4 text-left font-bold">
-                  {winner?.player}
-                </td>
+                <td className="py-3 px-4 text-left font-bold">{winner?.player}</td>
 
                 <td className="text-center">
                   {winner?.team && teamLogoMap[winner.team] ? (
@@ -230,11 +363,12 @@ export default function FinalsMvp() {
           >
             View Season Awards
           </button>
+
           <button
             className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg text-sm font-bold"
-            onClick={startNewSeason}
+            onClick={continueToProgressionThenCalendar}
           >
-            Start New Season
+            Continue
           </button>
         </div>
       </div>

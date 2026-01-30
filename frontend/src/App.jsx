@@ -16,6 +16,8 @@ import Standings from "./pages/Standings.jsx";
 import Awards from "./pages/Awards"; // ⬅️ add this
 import Playoffs from "./pages/Playoffs.jsx";
 import FinalsMvp from "./pages/FinalsMVP.jsx";
+import PlayerProgression from "./pages/PlayerProgression";
+
 
 
 
@@ -48,6 +50,8 @@ function App() {
         <Route path="/player-stats" element={<PlayerStats />} />
         <Route path="/standings" element={<Standings />} />
         <Route path="/playoffs" element={<Playoffs />} />
+        <Route path="/player-progression" element={<PlayerProgression />} />
+
       </Routes>
     </BrowserRouter>
   );
