@@ -35,6 +35,18 @@ function buildPlayerIndex(leagueData) {
 
 const resolveLogo = (t) =>
   t.logo || t.teamLogo || t.newTeamLogo || t.logoUrl || t.image || t.img || "";
+function pickNum(obj, keys, fallback = null) {
+  for (const k of keys) {
+    const v = Number(obj?.[k]);
+    if (Number.isFinite(v)) return v;
+  }
+  return fallback;
+}
+
+function pct(m, a) {
+  if (!Number.isFinite(m) || !Number.isFinite(a) || a <= 0) return null;
+  return (m / a) * 100;
+}
 
 function fmt1(x) {
   if (x === null || x === undefined || Number.isNaN(Number(x))) return "—";
@@ -89,7 +101,6 @@ function clearSeasonStores() {
   }
 
   // wipe season stats (new season starts empty)
-  localStorage.removeItem(PLAYER_STATS_KEY);
 }
 
 function ageUpLeagueAndMakeDeltas(league) {
@@ -168,36 +179,6 @@ export default function FinalsMvp() {
     // 1) preserve Finals MVP always (history + latest)
     pushFinalsMvpToHistory(fmvpRaw);
 
-    // 2) age up everyone + store deltas (you asked for +1 ages)
-    const baseLeague =
-      leagueData ||
-      (() => {
-        try {
-          return JSON.parse(localStorage.getItem("leagueData") || "null");
-        } catch {
-          return null;
-        }
-      })();
-
-    if (baseLeague) {
-      const { league: nextLeague, deltas } = ageUpLeagueAndMakeDeltas(baseLeague);
-
-      localStorage.setItem("leagueData", JSON.stringify(nextLeague));
-      localStorage.setItem(DELTAS_KEY, JSON.stringify(deltas));
-
-      setLeagueData(nextLeague);
-
-      // keep selectedTeam in sync with new league blob
-      if (selectedTeam?.name) {
-        const teams = getAllTeamsFromLeague(nextLeague);
-        const updatedTeam = teams.find((t) => t?.name === selectedTeam.name) || null;
-        if (updatedTeam) {
-          setSelectedTeam(updatedTeam);
-          localStorage.setItem("selectedTeam", JSON.stringify(updatedTeam));
-        }
-      }
-    }
-
     // 3) bump season year so Calendar header updates + schedule window changes
     bumpSeasonYearMeta();
 
@@ -211,19 +192,46 @@ export default function FinalsMvp() {
     navigate("/player-progression");
   };
 
-  const finalsRow = useMemo(() => {
-    if (!winner) return null;
-    return {
-      gp: winner.gp ?? null,
-      ppg: winner.ppg ?? null,
-      rpg: winner.rpg ?? null,
-      apg: winner.apg ?? null,
-      spg: winner.spg ?? null,
-      bpg: winner.bpg ?? null,
-      fg: winner.fg_pct ?? null,
-      tp: winner.tp_pct ?? null,
-    };
-  }, [winner]);
+const finalsRow = useMemo(() => {
+  if (!winner) return null;
+
+  const gp = pickNum(winner, ["gp"], 0);
+
+  const pts = pickNum(winner, ["pts", "points"], 0);
+  const reb = pickNum(winner, ["reb", "rebounds"], 0);
+  const ast = pickNum(winner, ["ast", "assists"], 0);
+  const stl = pickNum(winner, ["stl", "steals"], 0);
+  const blk = pickNum(winner, ["blk", "blocks"], 0);
+
+  const fgm = pickNum(winner, ["fgm", "fg_m"], 0);
+  const fga = pickNum(winner, ["fga", "fg_a"], 0);
+  const tpm = pickNum(winner, ["tpm", "tp_m", "fg3m", "three_m"], 0);
+  const tpa = pickNum(winner, ["tpa", "tp_a", "fg3a", "three_a"], 0);
+
+  const perGame = (total) => (gp > 0 ? total / gp : null);
+
+  const normalizePct = (v) => {
+    if (!Number.isFinite(v)) return null;
+    return v <= 1 ? v * 100 : v;
+  };
+
+  const fgPctRaw = pickNum(winner, ["fg_pct", "fgPct"], null);
+  const tpPctRaw = pickNum(winner, ["tp_pct", "tpPct"], null);
+
+  return {
+    gp: gp || null,
+    ppg: winner.ppg ?? perGame(pts),
+    rpg: winner.rpg ?? perGame(reb),
+    apg: winner.apg ?? perGame(ast),
+    spg: winner.spg ?? perGame(stl),
+    bpg: winner.bpg ?? perGame(blk),
+    fg: normalizePct(fgPctRaw) ?? pct(fgm, fga),
+    tp: normalizePct(tpPctRaw) ?? pct(tpm, tpa),
+  };
+
+  
+}, [winner]);
+
 
   const fillPercent = Math.min((playerMeta?.ovr || 0) / 99, 1);
   const circleCircumference = 2 * Math.PI * 50;
@@ -350,6 +358,7 @@ export default function FinalsMvp() {
                 <td>{fmt1(finalsRow?.bpg)}</td>
                 <td>{fmt1(finalsRow?.fg)}</td>
                 <td>{fmt1(finalsRow?.tp)}</td>
+                
               </tr>
             </tbody>
           </table>

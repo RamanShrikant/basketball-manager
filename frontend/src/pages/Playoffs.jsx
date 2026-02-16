@@ -2372,13 +2372,6 @@ ${disabled ? "opacity-60" : ""}
 
             <button
               className="w-full mt-2 px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm"
-              onClick={startNewSeason}
-            >
-              Start New Season (Skip)
-            </button>
-
-            <button
-              className="w-full mt-2 px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm"
               onClick={() => setChampModal(null)}
             >
               Close

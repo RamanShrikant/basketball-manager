@@ -78,7 +78,7 @@ result
     postMessage({
       type: "result-single",
       id,
-      result: pyRes.toJs({ dict_converter: Object }),
+      result: pyRes.toJs({ dict_converter: Object, create_pyproxies: false }),
     });
   } catch (err) {
     postMessage({
@@ -112,7 +112,7 @@ out
     postMessage({
       type: "result-batch",
       batchId,
-      results: pyRes.toJs({ dict_converter: Object }),
+      results: pyRes.toJs({ dict_converter: Object, create_pyproxies: false }),
     });
   } catch (err) {
     postMessage({
@@ -126,7 +126,6 @@ out
 
 // ------------------------------------------------------------
 // AWARDS MODE ✅
-// NOW: compute_awards(players_js, teams_js, season_js)
 // ------------------------------------------------------------
 async function computeAwards(requestId, players, teams, seasonYear) {
   try {
@@ -143,7 +142,7 @@ res = compute_awards(players_js, teams_js, season_js)
 res
     `);
 
-    const awardsOut = pyRes.toJs({ dict_converter: Object });
+    const awardsOut = pyRes.toJs({ dict_converter: Object, create_pyproxies: false });
 
     postMessage({
       type: "awards-result",
@@ -181,7 +180,7 @@ res = compute_finals_mvp(players_js, champion, season)
 res
     `);
 
-    const finalsMvp = pyRes.toJs({ dict_converter: Object.fromEntries });
+    const finalsMvp = pyRes.toJs({ dict_converter: Object, create_pyproxies: false });
 
     postMessage({
       type: "finals-mvp-result",
@@ -199,10 +198,7 @@ res
 }
 
 // ------------------------------------------------------------
-// PLAYER PROGRESSION MODE ✅ (SURGICAL FIX)
-// - Calls your real entrypoint:
-//   apply_end_of_season_progression_with_deltas(league, stats_by_key, settings, seed)
-// - Returns: { league, deltas, version }
+// PLAYER PROGRESSION MODE ✅
 // ------------------------------------------------------------
 async function computeProgression(requestId, leagueData, statsByKey, meta) {
   try {
@@ -210,8 +206,9 @@ async function computeProgression(requestId, leagueData, statsByKey, meta) {
     pyodide.globals.set("stats_js", pyodide.toPy(statsByKey || {}));
     pyodide.globals.set("meta_js", pyodide.toPy(meta || {}));
 
-    const pyRes = await pyodide.runPythonAsync(`
-import importlib
+    // ✅ Return JSON to guarantee a plain JS object (no PyProxy / Map / pairs issues)
+    const pyJson = await pyodide.runPythonAsync(`
+import importlib, json
 import progression
 importlib.reload(progression)
 
@@ -223,20 +220,29 @@ try:
 except Exception:
   seed = None
 
+season_year = None
+try:
+  season_year = meta_js.get("seasonYear")
+except Exception:
+  season_year = None
+
 res = apply_end_of_season_progression_with_deltas(
-  league=league_js,
-  stats_by_key=stats_js,
-  settings=None,
-  seed=seed
+  league = league_js,
+  stats_by_key = stats_js,
+  settings = None,
+  seed = seed,
+  season_year = season_year
 )
 
-res
+json.dumps(res)
     `);
+
+    const payload = JSON.parse(pyJson);
 
     postMessage({
       type: "progression-result",
       requestId,
-      payload: pyRes.toJs({ dict_converter: Object }),
+      payload,
     });
   } catch (err) {
     console.error("[simWorkerV2] computeProgression error:", err);
@@ -248,6 +254,8 @@ res
   }
 }
 
+
+
 // ------------------------------------------------------------
 // Dispatcher
 // ------------------------------------------------------------
@@ -256,7 +264,7 @@ onmessage = async (e) => {
 
   if (!ready) await init();
 
-  if (msg.type === "simulate-single")  {
+  if (msg.type === "simulate-single") {
     return simulateOneGame(msg.id, msg.home, msg.away);
   }
 
@@ -276,11 +284,12 @@ onmessage = async (e) => {
     return computeFinalsMvp(msg.requestId, msg.players, msg.meta || {});
   }
 
-  // progression ✅ (SURGICAL ADD)
+  // progression ✅ (accept BOTH leagueData and league)
   if (msg.type === "compute-progression") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return computeProgression(
       msg.requestId,
-      msg.leagueData,
+      leaguePayload,
       msg.statsByKey,
       msg.meta || {}
     );

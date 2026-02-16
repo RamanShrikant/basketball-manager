@@ -141,6 +141,62 @@ function startWorker() {
       else entry.resolve({ error: err });
       return;
     }
+
+    // ------------------------------------------------------------
+    // PLAYER PROGRESSION RESULT ✅ (SURGICAL ADD)
+    // ------------------------------------------------------------
+if (msg.type === "progression-result") {
+  const entry = pending.get(msg.requestId);
+  if (!entry) {
+    console.warn("[simEnginePy] progression-result for unknown requestId", msg.requestId, msg);
+    return;
+  }
+
+  pending.delete(msg.requestId);
+  if (entry.timer) clearTimeout(entry.timer);
+
+  let out = null;
+  try {
+    out = typeof msg.payloadJson === "string" ? JSON.parse(msg.payloadJson) : msg.payload;
+  } catch (e) {
+    console.error("[simEnginePy] Failed to parse progression payloadJson", e);
+    out = { error: "PROGRESSION_PARSE_FAILED" };
+  }
+
+  // ✅ convert Pyodide pairs -> normal object (safe even if already object)
+  out = deepFromEntries(out);
+
+  // ✅ ultra-safe unwrap if something ever comes back nested
+  if (out && typeof out === "object" && out.payload && !out.league && out.payload.league) {
+    out = out.payload;
+  }
+
+  console.log("[simEnginePy] progression-result msg keys:", Object.keys(msg));
+  console.log("[simEnginePy] progression-result out keys:", Object.keys(out || {}));
+  console.log("[simEnginePy] progression-result out.version:", out?.version);
+
+  entry.resolve(out);
+  return;
+}
+
+
+
+    // ------------------------------------------------------------
+    // PLAYER PROGRESSION ERROR ✅ (SURGICAL ADD)
+    // ------------------------------------------------------------
+    if (msg.type === "progression-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] progression-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Progression compute failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ error: err });
+      return;
+    }
   };
 
   worker.postMessage({ type: "init" });
@@ -296,8 +352,14 @@ export function computeFinalsMvp(finalsPlayers, meta = {}) {
     }, 8000);
 
     pending.set(requestId, {
-      resolve: (v) => { clearTimeout(timer); resolve(v); },
-      reject: (e) => { clearTimeout(timer); reject(e); },
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
       timer,
     });
 
@@ -309,3 +371,54 @@ export function computeFinalsMvp(finalsPlayers, meta = {}) {
     });
   });
 }
+
+// ------------------------------------------------------------
+// PUBLIC API — PLAYER PROGRESSION (Python) ✅ (SURGICAL ADD)
+// Returns: { league, deltas, version }
+// ------------------------------------------------------------
+export function computePlayerProgression(leagueData, statsByKey = {}, meta = {}) {
+  startWorker();
+
+  const requestId = "P" + counter++;
+
+  console.log("[simEnginePy] progression POST", {
+    requestId,
+    seasonYear: meta?.seasonYear,
+    seed: meta?.seed,
+    hasLeague: !!leagueData,
+    hasStats: !!statsByKey && Object.keys(statsByKey || {}).length > 0,
+  });
+
+  const PROGRESSION_TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+
+      console.error("[simEnginePy] PROGRESSION TIMEOUT waiting for worker", { requestId });
+      reject(new Error("PROGRESSION_WORKER_TIMEOUT"));
+    }, PROGRESSION_TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "compute-progression",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      statsByKey: deepSanitize(statsByKey),
+      meta,
+    });
+  });
+}
+

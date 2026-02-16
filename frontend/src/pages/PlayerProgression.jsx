@@ -1,11 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import { computePlayerProgression } from "../api/simEnginePy";
 
 const DELTAS_KEY = "bm_progression_deltas_v1";
 const PROG_META_KEY = "bm_progression_meta_v1";
 const LEAGUE_KEY = "leagueData";
-const META_KEY = "bm_league_meta_v1";
+  const META_KEY = "bm_league_meta_v1";
+
+// If a run gets stuck INFLIGHT (worker failed / page refresh), clear after this long
+const INFLIGHT_STALE_MS = 15000;
 
 function clamp(n, lo = 0, hi = 99) {
   const x = Number(n);
@@ -35,107 +39,242 @@ function resolvePortrait(p) {
 
 const playerKey = (name, team) => `${name}__${team}`;
 
-function generateProgressionDeltasForLeague(leagueData) {
+function resolveTeamLogo(teamObj) {
+  return (
+    teamObj?.logo ||
+    teamObj?.logoUrl ||
+    teamObj?.logoURL ||
+    teamObj?.teamLogo ||
+    teamObj?.image ||
+    teamObj?.img ||
+    teamObj?.icon ||
+    null
+  );
+}
+
+function loadStatsByKeyFromStorage() {
+  const keysToTry = [
+    "bm_player_stats_v1",
+    "bm_season_player_stats_v1",
+    "playerStatsByKey",
+    "statsByKey",
+  ];
+
+  const stores = [localStorage, sessionStorage];
+
+  for (const store of stores) {
+    for (const k of keysToTry) {
+      try {
+        const raw = store.getItem(k);
+        if (!raw) continue;
+
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") continue;
+
+        const someKey = Object.keys(parsed)[0];
+        if (someKey && someKey.includes("__")) {
+          return parsed;
+        }
+
+        const rows = Array.isArray(parsed) ? parsed : Object.values(parsed);
+
+        const statsByKey = {};
+        for (const r of rows) {
+          const name = r?.player ?? r?.name ?? r?.playerName;
+          const team = r?.team ?? r?.teamName;
+          if (!name || !team) continue;
+          statsByKey[`${name}__${team}`] = r;
+        }
+
+        if (Object.keys(statsByKey).length > 0) {
+          try {
+            localStorage.setItem("bm_player_stats_v1", JSON.stringify(statsByKey));
+          } catch {}
+          return statsByKey;
+        }
+      } catch {}
+    }
+  }
+
+  return {};
+}
+
+function buildProgressionDeltas(beforeLeague, afterLeague) {
+  const teamsA = getAllTeamsFromLeague(beforeLeague);
+  const teamsB = getAllTeamsFromLeague(afterLeague);
+
+  const mapPlayers = (teams) => {
+    const m = {};
+    for (const t of teams || []) {
+      const teamName = t?.name || "";
+      for (const p of t?.players || []) {
+        if (!p?.name || !teamName) continue;
+        m[`${p.name}__${teamName}`] = p;
+      }
+    }
+    return m;
+  };
+
+  const A = mapPlayers(teamsA);
+  const B = mapPlayers(teamsB);
+
+  const deltas = {};
+
+  for (const key of Object.keys(B)) {
+    const p0 = A[key];
+    const p1 = B[key];
+    if (!p0 || !p1) continue;
+
+    const d = {};
+
+    const scalarKeys = ["age", "overall", "offRating", "defRating", "stamina", "potential"];
+    for (const k of scalarKeys) {
+      const v0 = Number(p0?.[k] ?? 0);
+      const v1 = Number(p1?.[k] ?? 0);
+      const diff = v1 - v0;
+      if (diff) d[k] = diff;
+    }
+
+    const attrs0 = Array.isArray(p0?.attrs) ? p0.attrs : [];
+    const attrs1 = Array.isArray(p1?.attrs) ? p1.attrs : [];
+    const maxLen = Math.max(attrs0.length, attrs1.length);
+
+    for (let i = 0; i < maxLen; i++) {
+      const v0 = Number(attrs0[i] ?? 0);
+      const v1 = Number(attrs1[i] ?? 0);
+      const diff = v1 - v0;
+      if (diff) d[`attr${i}`] = diff;
+    }
+
+if (Object.keys(d).length) {
+  deltas[key] = d;
+}
+
+  }
+
+  return deltas;
+}
+
+function deepUnpair(x) {
+  if (!x) return x;
+
+  // Map -> Object
+  if (x instanceof Map) {
+    const obj = Object.fromEntries(x);
+    for (const k of Object.keys(obj)) obj[k] = deepUnpair(obj[k]);
+    return obj;
+  }
+
+  // Array of [k,v] pairs -> Object
+  if (Array.isArray(x) && x.length && Array.isArray(x[0]) && x[0].length === 2) {
+    const obj = Object.fromEntries(x.map(([k, v]) => [k, deepUnpair(v)]));
+    return obj;
+  }
+
+  // Normal array -> recurse items
+  if (Array.isArray(x)) return x.map(deepUnpair);
+
+  // Plain object -> recurse props
+  if (typeof x === "object") {
+    const out = { ...x };
+    for (const k of Object.keys(out)) out[k] = deepUnpair(out[k]);
+    return out;
+  }
+
+  return x;
+}
+
+function normalizeDeltasFromPython(league, pythonDeltas) {
+  const unpaired = deepUnpair(pythonDeltas);
+  if (!unpaired || typeof unpaired !== "object") return {};
+
+  const keys = Object.keys(unpaired);
+  const firstKey = keys[0] || "";
+
+  // If Python already returns byKey ("Name__Team"), keep it.
+  if (firstKey.includes("__")) return unpaired;
+
+  // Otherwise assume byName, convert to byKey using current league rosters.
   const out = {};
-  const teams = getAllTeamsFromLeague(leagueData);
+  const teams = getAllTeamsFromLeague(league);
 
-  for (const t of teams) {
-    const teamName = t?.name || "Team";
-    for (const p of t.players || []) {
+  for (const t of teams || []) {
+    const teamName = t?.name || "";
+    for (const p of t?.players || []) {
       const name = p?.name;
-      if (!name) continue;
+      if (!name || !teamName) continue;
 
-      const age = Number(p.age ?? 25);
-      const overall = Number(p.overall ?? 60);
-      const pot = Number(p.potential ?? overall);
-
-      const room = pot - overall;
-      const young = age <= 24 ? 1.0 : age <= 27 ? 0.65 : age <= 30 ? 0.25 : -0.35;
-
-      let seed = 0;
-      const seedStr = `${name}__${teamName}`;
-      for (let i = 0; i < seedStr.length; i++) seed = (seed * 31 + seedStr.charCodeAt(i)) >>> 0;
-
-      const rand = () => {
-        seed = (seed * 1664525 + 1013904223) >>> 0;
-        return (seed / 4294967296) * 2 - 1;
-      };
-
-      const jitter = () => Math.round(rand() * 1);
-
-      const base = clamp(room / 10, -2, 4);
-      const mag = base + young;
-
-      const dOverall = Math.round(mag + jitter());
-      const dOff = Math.round(mag + jitter());
-      const dDef = Math.round(mag * 0.75 + jitter());
-      const dStam = Math.round(mag * 0.5 + jitter());
-
-      const attrDelta = (scale = 0.6) => Math.round(mag * scale + jitter());
-
-      out[playerKey(name, teamName)] = {
-        age: 1, // always +1
-        overall: dOverall,
-        offRating: dOff,
-        defRating: dDef,
-        stamina: dStam,
-        // tiny POT shift optional
-        potential: Math.round((young > 0 ? 1 : -1) * (rand() > 0.6 ? 1 : 0)),
-
-        attr0: attrDelta(0.55),
-        attr1: attrDelta(0.50),
-        attr2: attrDelta(0.50),
-        attr3: attrDelta(0.35),
-        attr4: attrDelta(0.45),
-        attr5: attrDelta(0.45),
-        attr7: attrDelta(0.45),
-        attr8: attrDelta(0.45),
-        attr9: attrDelta(0.45),
-        attr10: attrDelta(0.35),
-        attr11: attrDelta(0.35),
-        attr12: attrDelta(0.40),
-        attr13: attrDelta(0.40),
-        attr14: attrDelta(0.40),
-      };
+      const byName = unpaired?.[name];
+      if (byName && typeof byName === "object") {
+        out[`${name}__${teamName}`] = byName;
+      }
     }
   }
 
   return out;
 }
 
-function applyDeltasToLeague(leagueData, deltas) {
-  const next = structuredClone(leagueData);
-  const teams = getAllTeamsFromLeague(next);
 
+
+function snapshotLeague(obj) {
+  try {
+    if (typeof structuredClone === "function") return structuredClone(obj);
+  } catch {}
+  try {
+    return JSON.parse(JSON.stringify(obj));
+  } catch {
+    return obj;
+  }
+}
+function getSeasonYearFromMeta() {
+  try {
+    const raw = localStorage.getItem(META_KEY);
+    const meta = raw ? JSON.parse(raw) : null;
+    const y = Number(meta?.seasonYear);
+    return Number.isFinite(y) ? y : null;
+  } catch {
+    return null;
+  }
+}
+
+function inferSeasonYear(leagueData) {
+  const metaYear = getSeasonYearFromMeta();
+  if (metaYear != null) return metaYear;
+
+  const y1 = Number(leagueData?.seasonYear);
+  if (Number.isFinite(y1)) return y1;
+
+  const y2 = Number(leagueData?.seasonStartYear);
+  if (Number.isFinite(y2)) return y2;
+
+  const today = new Date();
+  return today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
+}
+
+
+function stampAgingGuards(league, seasonYear) {
+  if (!league) return league;
+  const teams = getAllTeamsFromLeague(league);
   for (const t of teams) {
-    const teamName = t?.name || "Team";
-    for (const p of t.players || []) {
-      const name = p?.name;
-      if (!name) continue;
-
-      const key = playerKey(name, teamName);
-      const d = deltas?.[key];
-      if (!d) continue;
-
-      p.age = clamp((p.age ?? 0) + (d.age ?? 1), 18, 45);
-
-      if (p.overall != null) p.overall = clamp(p.overall + (d.overall ?? 0));
-      if (p.offRating != null) p.offRating = clamp(p.offRating + (d.offRating ?? 0));
-      if (p.defRating != null) p.defRating = clamp(p.defRating + (d.defRating ?? 0));
-      if (p.stamina != null) p.stamina = clamp(p.stamina + (d.stamina ?? 0));
-      if (p.potential != null) p.potential = clamp(p.potential + (d.potential ?? 0));
-
-      if (Array.isArray(p.attrs)) {
-        const idxs = [0,1,2,3,4,5,7,8,9,10,11,12,13,14];
-        for (const i of idxs) {
-          const add = Number(d[`attr${i}`] ?? 0) || 0;
-          p.attrs[i] = clamp((p.attrs[i] ?? 0) + add);
-        }
+    for (const p of t?.players || []) {
+      if (!p || typeof p !== "object") continue;
+      if (!Number.isFinite(Number(p.lastBirthdayYear))) {
+        p.lastBirthdayYear = seasonYear;
       }
     }
   }
+  return league;
+}
 
-  return next;
+function readJsonSafe(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export default function PlayerProgression() {
@@ -145,6 +284,8 @@ export default function PlayerProgression() {
   const [showLetters, setShowLetters] = useState(localStorage.getItem("showLetters") === "true");
   const [teamFilter, setTeamFilter] = useState("ALL");
   const [featuredKey, setFeaturedKey] = useState(null);
+
+  const [deltas, setDeltas] = useState(() => readJsonSafe(DELTAS_KEY, {}));
 
   const attrColumns = [
     { key: "attr0", label: "3PT", index: 0 },
@@ -186,7 +327,6 @@ export default function PlayerProgression() {
     localStorage.setItem("showLetters", String(next));
   };
 
-  // restore selectedTeam if missing (not required for all-teams view, but keep it)
   useEffect(() => {
     if (!selectedTeam) {
       const saved = localStorage.getItem("selectedTeam");
@@ -194,58 +334,209 @@ export default function PlayerProgression() {
     }
   }, [selectedTeam, setSelectedTeam]);
 
-  // Apply progression ONCE per season if deltas exist (or generate them once)
+  // ✅ Apply progression ONCE per season using Python
   useEffect(() => {
     if (!leagueData) return;
 
-    let seasonYear = null;
+    const seasonYear = inferSeasonYear(leagueData);
+    
+
+    // Read meta
+    let progMeta = readJsonSafe(PROG_META_KEY, null);
+    console.log("[PlayerProgression] seasonYear =", seasonYear);
+console.log("[PlayerProgression] leagueData.seasonYear =", leagueData?.seasonYear);
+console.log("[PlayerProgression] leagueData.seasonStartYear =", leagueData?.seasonStartYear);
+console.log("[PlayerProgression] progMeta =", progMeta);
+
+
+
+// ✅ if meta stuck INFLIGHT too long, clear it
+if (progMeta?.appliedForSeasonYear === "INFLIGHT") {
+  const ageMs = Date.now() - Number(progMeta?.ts || 0);
+
+  if (ageMs > INFLIGHT_STALE_MS) {
+    console.warn("[PlayerProgression] stale INFLIGHT detected, clearing meta so progression can rerun.");
     try {
-      const meta = JSON.parse(localStorage.getItem(META_KEY) || "null");
-      if (Number.isFinite(Number(meta?.seasonYear))) seasonYear = Number(meta.seasonYear);
+      localStorage.removeItem(PROG_META_KEY);
     } catch {}
-    if (seasonYear == null) seasonYear = new Date().getFullYear();
+    progMeta = null;
+  }
+}
 
-    let progMeta = null;
-    try {
-      progMeta = JSON.parse(localStorage.getItem(PROG_META_KEY) || "null");
-    } catch {}
 
-    if (progMeta?.appliedForSeasonYear === seasonYear) return;
 
-    let deltas = {};
-    try {
-      deltas = JSON.parse(localStorage.getItem(DELTAS_KEY) || "{}") || {};
-    } catch {
-      deltas = {};
+
+ // ✅ If already applied this season, skip (never rerun aging)
+if (progMeta?.appliedForSeasonYear === seasonYear) return;
+
+
+    const statsByKeyPreview = loadStatsByKeyFromStorage();
+    const hasStats = statsByKeyPreview && Object.keys(statsByKeyPreview).length > 0;
+
+    if (!hasStats) {
+      console.warn("[PlayerProgression] No stats found. Running progression without stats.");
     }
 
-    if (!deltas || Object.keys(deltas).length === 0) {
-      deltas = generateProgressionDeltasForLeague(leagueData);
-      localStorage.setItem(DELTAS_KEY, JSON.stringify(deltas));
+    // mark inflight
+    try {
+      localStorage.setItem(
+        PROG_META_KEY,
+        JSON.stringify({ appliedForSeasonYear: "INFLIGHT", ts: Date.now(), seasonYear })
+      );
+    } catch {}
+
+    (async () => {
+      try {
+        const beforeSnapshot = snapshotLeague(leagueData);
+
+        const leagueForProg = snapshotLeague(leagueData);
+        leagueForProg.seasonYear = seasonYear;
+        leagueForProg.seasonStartYear = seasonYear;
+
+        console.log("[PlayerProgression] computePlayerProgression POST", {
+          seasonYear,
+          hasLeague: !!leagueForProg,
+          hasStats,
+        });
+
+const msg = await computePlayerProgression(leagueForProg, statsByKeyPreview, {
+  seed: seasonYear,
+  seasonYear,
+});
+
+// ✅ Support both shapes:
+// 1) msg = { league, deltas, version }
+// 2) msg = { type, requestId, payload: { league, deltas, version } }
+const res = msg?.league ? msg : msg?.payload;
+
+console.log("[PlayerProgression] computePlayerProgression msg keys:", Object.keys(msg || {}));
+console.log("[PlayerProgression] computePlayerProgression res keys:", Object.keys(res || {}));
+console.log("[PlayerProgression] res.version:", res?.version);
+
+if (!res || !res.league) {
+  throw new Error("[PlayerProgression] Progression returned no league. Check worker response shape.");
+}
+
+let updatedLeague = res.league;
+
+
+        if (!Number.isFinite(Number(updatedLeague?.seasonYear))) updatedLeague.seasonYear = seasonYear;
+        if (!Number.isFinite(Number(updatedLeague?.seasonStartYear))) updatedLeague.seasonStartYear = seasonYear;
+
+        updatedLeague = stampAgingGuards(updatedLeague, seasonYear);
+
+let newDeltas = {};
+if (res?.deltas && typeof res.deltas === "object" && Object.keys(res.deltas).length > 0) {
+  newDeltas = normalizeDeltasFromPython(updatedLeague, res.deltas);
+} else {
+  newDeltas = buildProgressionDeltas(beforeSnapshot, updatedLeague);
+}
+
+
+const deltaCount = Object.keys(newDeltas || {}).length;
+console.log("[PlayerProgression] deltas count:", deltaCount);
+
+// ✅ If no deltas, something is wrong. Do NOT save/lock.
+if (deltaCount === 0) {
+  throw new Error(`[PlayerProgression] deltaCount = 0 for seasonYear = ${seasonYear}. Refusing to lock season.`);
+}
+
+localStorage.setItem(LEAGUE_KEY, JSON.stringify(updatedLeague));
+
+
+// ✅ EARLY LOCK: if we crash after this point, never rerun progression for this season
+try {
+  localStorage.setItem(
+    PROG_META_KEY,
+    JSON.stringify({
+      appliedForSeasonYear: seasonYear,
+      ts: Date.now(),
+      deltaCount,
+      seasonYear,
+      deltasSaved: false,
+      stage: "EARLY_LOCK",
+    })
+  );
+} catch {}
+
+let deltaSaveOk = true;
+try {
+  localStorage.setItem(DELTAS_KEY, JSON.stringify(newDeltas));
+} catch (e) {
+  deltaSaveOk = false;
+  console.error("[PlayerProgression] Failed to save deltas. Continuing anyway.", e);
+
+  // keep the key valid so your UI does not crash
+  try {
+    localStorage.setItem(DELTAS_KEY, JSON.stringify({}));
+  } catch {}
+}
+
+        // ✅ FIX 4: clear season stats AFTER progression succeeds (so next season starts fresh)
+if (deltaCount > 0) {
+  const statKeysToClear = [
+    "bm_player_stats_v1",
+    "bm_season_player_stats_v1",
+    "playerStatsByKey",
+    "statsByKey",
+  ];
+
+  for (const store of [localStorage, sessionStorage]) {
+    for (const k of statKeysToClear) {
+      try {
+        store.removeItem(k);
+      } catch {}
     }
+  }
 
-    const updatedLeague = applyDeltasToLeague(leagueData, deltas);
-    localStorage.setItem(LEAGUE_KEY, JSON.stringify(updatedLeague));
-    setLeagueData(updatedLeague);
+  console.log("[PlayerProgression] cleared season stat keys:", statKeysToClear);
+}
 
-    // keep selectedTeam pointer valid
-    const teams = getAllTeamsFromLeague(updatedLeague);
-    const updatedTeam = teams.find((t) => t?.name === selectedTeam?.name);
-    if (updatedTeam) setSelectedTeam(updatedTeam);
 
-    localStorage.setItem(PROG_META_KEY, JSON.stringify({ appliedForSeasonYear: seasonYear, ts: Date.now() }));
+        setDeltas(newDeltas);
+        setLeagueData(updatedLeague);
+
+        const teamsLocal = getAllTeamsFromLeague(updatedLeague);
+        const updatedTeam = teamsLocal.find((t) => t?.name === selectedTeam?.name);
+        if (updatedTeam) setSelectedTeam(updatedTeam);
+
+        // ✅ only lock season if we actually produced deltas
+  localStorage.setItem(
+  PROG_META_KEY,
+  JSON.stringify({
+    appliedForSeasonYear: seasonYear,
+    ts: Date.now(),
+    deltaCount,
+    seasonYear,
+    deltasSaved: deltaSaveOk,
+  })
+);
+
+      } catch (err) {
+        console.error("[PlayerProgression] Python progression failed:", err);
+        // ✅ do NOT lock season on error
+        try {
+          localStorage.setItem(
+            PROG_META_KEY,
+            JSON.stringify({ appliedForSeasonYear: "ERROR", ts: Date.now(), error: String(err) })
+          );
+        } catch {}
+      }
+    })();
   }, [leagueData, selectedTeam, setLeagueData, setSelectedTeam]);
 
-  const deltas = useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem(DELTAS_KEY) || "{}") || {};
-    } catch {
-      return {};
-    }
-  }, []);
-
-  // Build league-wide rows
   const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
+
+  const teamLogoByName = useMemo(() => {
+    const map = {};
+    for (const t of teams || []) {
+      const name = t?.name;
+      if (!name) continue;
+      const logo = resolveTeamLogo(t);
+      if (logo) map[name] = logo;
+    }
+    return map;
+  }, [teams]);
 
   const allRows = useMemo(() => {
     const rows = [];
@@ -268,7 +559,6 @@ export default function PlayerProgression() {
     return allRows.filter((r) => r.team === teamFilter);
   }, [allRows, teamFilter]);
 
-  // Featured player
   useEffect(() => {
     if (!featuredKey && rows.length) setFeaturedKey(rows[0].__key);
   }, [rows, featuredKey]);
@@ -279,8 +569,13 @@ export default function PlayerProgression() {
   }, [rows, featuredKey]);
 
   const deltaFor = (row, key) => {
-    const d = deltas?.[row.__key] || {};
-    return Number(d?.[key] ?? 0) || 0;
+    const byKey = deltas?.[row.__key];
+    if (byKey && typeof byKey === "object") return Number(byKey?.[key] ?? 0) || 0;
+
+    const byName = deltas?.[row.name];
+    if (byName && typeof byName === "object") return Number(byName?.[key] ?? 0) || 0;
+
+    return 0;
   };
 
   const DeltaBadge = ({ d }) => {
@@ -297,6 +592,7 @@ export default function PlayerProgression() {
   };
 
   const portraitSrc = resolvePortrait(featured);
+  const featuredTeamLogo = featured?.team ? teamLogoByName?.[featured.team] : null;
 
   const fillPercent = Math.min((featured?.overall || 0) / 99, 1);
   const circleCircumference = 2 * Math.PI * 50;
@@ -313,7 +609,6 @@ export default function PlayerProgression() {
   return (
     <div className="min-h-screen bg-neutral-900 text-white py-10">
       <div className="max-w-6xl mx-auto px-4">
-        {/* Top bar */}
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-4xl font-extrabold text-orange-500">Player Progression</h1>
           <div className="flex items-center gap-3">
@@ -326,7 +621,9 @@ export default function PlayerProgression() {
               className="px-3 py-2 bg-neutral-800 rounded border border-neutral-700"
             >
               {teamOptions.map((t) => (
-                <option key={t} value={t}>{t}</option>
+                <option key={t} value={t}>
+                  {t}
+                </option>
               ))}
             </select>
             <button
@@ -338,7 +635,6 @@ export default function PlayerProgression() {
           </div>
         </div>
 
-        {/* Featured header */}
         {featured && (
           <div className="relative bg-neutral-800 rounded-xl shadow-lg px-8 pt-7 pb-4 mb-6">
             <div className="absolute left-0 right-0 bottom-0 h-[2px] bg-white opacity-20" />
@@ -357,8 +653,19 @@ export default function PlayerProgression() {
 
                 <div className="mb-2">
                   <h2 className="text-[42px] font-bold leading-tight">{featured.name}</h2>
-                  <p className="text-gray-400 text-[22px] mt-1">
-                    {featured.pos} • {featured.team} • Age {featured.age}
+                  <p className="text-gray-400 text-[22px] mt-1 flex items-center gap-2">
+                    {featured.pos} •{" "}
+                    {featuredTeamLogo ? (
+                      <img
+                        src={featuredTeamLogo}
+                        alt={featured.team}
+                        className="h-[22px] w-[22px] object-contain inline-block"
+                        draggable={false}
+                      />
+                    ) : (
+                      <span className="inline-block w-[22px]" />
+                    )}{" "}
+                    • Age {featured.age}
                   </p>
                 </div>
               </div>
@@ -400,7 +707,6 @@ export default function PlayerProgression() {
           </div>
         )}
 
-        {/* Table */}
         <div className="overflow-x-auto">
           <div className="min-w-[1300px] max-w-max mx-auto">
             <table className="w-full border-collapse text-center">
@@ -433,6 +739,8 @@ export default function PlayerProgression() {
               <tbody className="text-[17px] font-medium">
                 {rows.map((p, idx) => {
                   const active = p.__key === featured?.__key;
+                  const logo = teamLogoByName?.[p.team] || null;
+
                   return (
                     <tr
                       key={`${p.__key}-${idx}`}
@@ -440,7 +748,20 @@ export default function PlayerProgression() {
                       onClick={() => setFeaturedKey(p.__key)}
                     >
                       <td className="py-2 px-3 whitespace-nowrap text-left pl-4 font-semibold">{p.name}</td>
-                      <td className="py-2 px-3">{p.team}</td>
+
+                      <td className="py-2 px-3">
+                        {logo ? (
+                          <img
+                            src={logo}
+                            alt={p.team}
+                            className="h-[22px] w-[22px] object-contain mx-auto"
+                            draggable={false}
+                          />
+                        ) : (
+                          <span className="text-neutral-500">-</span>
+                        )}
+                      </td>
+
                       <td className="py-2 px-3">{p.pos}</td>
 
                       <td className="py-2 px-3">
