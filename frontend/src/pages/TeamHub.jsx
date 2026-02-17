@@ -1,18 +1,32 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import styles from "../components/TeamHub.module.css";
 
 export default function TeamHub() {
   const { selectedTeam } = useGame();
   const navigate = useNavigate();
 
+  useEffect(() => {
+    document.body.classList.add("th-no-scroll");
+    return () => document.body.classList.remove("th-no-scroll");
+  }, []);
+
   if (!selectedTeam) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
-        <p className="text-lg mb-4">No team selected.</p>
+      <div className={styles.wrapper}>
+        <p style={{ fontSize: "18px", marginBottom: "16px" }}>No team selected.</p>
         <button
           onClick={() => navigate("/team-selector")}
-          className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
+          style={{
+            padding: "12px 24px",
+            backgroundColor: "#ea580c",
+            borderRadius: "10px",
+            fontWeight: 700,
+            border: "none",
+            cursor: "pointer",
+            color: "white",
+          }}
         >
           Back to Team Select
         </button>
@@ -24,33 +38,40 @@ export default function TeamHub() {
     { name: "View Roster", path: "/roster-view" },
     { name: "Trades", path: "#" },
     { name: "Coach Gameplan", path: "/coach-gameplan" },
-    { name: "Schedule", path: "/calendar" },      // ✅ added
-    { name: "Statistics", path: "/player-stats" },   // ✅ added
-    { name: "Standings", path: "/standings" },  
+    { name: "Schedule", path: "/calendar" },
+    { name: "Statistics", path: "/player-stats" },
+    { name: "Standings", path: "/standings" },
   ];
 
   return (
-    <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
-      <h1 className="text-4xl font-bold text-orange-500 mb-6">{selectedTeam.name}</h1>
-      <img src={selectedTeam.logo} alt="Team Logo" className="h-28 mb-10" />
+    <div className={styles.wrapper}>
+      <div className={styles.scrollRow}>
+        {tiles.map((tile) => {
+          const enabled = tile.path !== "#";
 
-      <div className="grid grid-cols-2 gap-8">
-        {tiles.map((tile) => (
-          <div
-            key={tile.name}
-            onClick={() => tile.path !== "#" && navigate(tile.path)}
-            className={`flex flex-col items-center justify-center w-56 h-40 rounded-2xl shadow-lg cursor-pointer transition transform hover:scale-105 ${
-              tile.path !== "#"
-                ? "bg-orange-600 hover:bg-orange-500"
-                : "bg-neutral-800 hover:bg-neutral-700"
-            }`}
-          >
-            <h2 className="text-xl font-semibold">{tile.name}</h2>
-          </div>
-        ))}
+          return (
+            <div
+              key={tile.name}
+              onClick={() => enabled && navigate(tile.path)}
+              className={`${styles.card} ${enabled ? "" : styles.disabled}`}
+            >
+              <img
+                src={selectedTeam.logo}
+                alt={selectedTeam.name}
+                className={styles.logo}
+              />
+
+              <div className={styles.labelBar}>
+                <div className={styles.labelBg} />
+                <div className={styles.labelText}>
+                  <div className={styles.tileName}>{tile.name}</div>
+                  <div className={styles.teamName}>{selectedTeam.name}</div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
-
-      <p className="mt-10 text-gray-400 text-sm italic">Select an option to continue</p>
     </div>
   );
 }

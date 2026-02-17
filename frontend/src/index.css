@@ -2,10 +2,41 @@
 @tailwind components;
 @tailwind utilities;
 
+html,
+body {
+  overflow-x: hidden;
+}
+
 body {
   @apply text-slate-900;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
 main {
   min-height: calc(100vh - 4rem);
 }
+/* Hide horizontal scrollbars everywhere (Chrome/Edge/Safari) */
+*::-webkit-scrollbar:horizontal {
+  height: 0px;
+}
+
+/* Hide scrollbar visually but keep scrolling */
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none;
+}
+
+html,
+body {
+  -ms-overflow-style: none; /* IE/Edge */
+  scrollbar-width: none;    /* Firefox */
+}
+

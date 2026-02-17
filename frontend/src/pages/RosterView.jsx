@@ -273,7 +273,7 @@ export default function RosterView() {
 
       {/* Table */}
       <div className="w-full flex justify-center transition-opacity duration-300 ease-in-out mt-[-1px]">
-        <div className="w-full max-w-5xl overflow-x-auto">
+        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar">
           <div className="min-w-[1200px] max-w-max mx-auto">
             <table className="w-full border-collapse text-center">
               <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">

@@ -516,12 +516,6 @@ if (showAllNba) {
           </button>
 
           <div className="flex gap-2">
-            <button
-              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-xs"
-              onClick={() => navigate("/calendar")}
-            >
-              Back to Calendar
-            </button>
 <button
   className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded text-xs"
   onClick={goNext}

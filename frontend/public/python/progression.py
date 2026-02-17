@@ -122,14 +122,14 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "Star": 1.30
     },
 
-    "potential_scale": 0.010,
+    "potential_scale": 0.060,
 
     "minutes_cap_mpg": 30.0,
     "minutes_min_mpg": 5.0,
 
-    "noise_sigma": 0.15,
+    "noise_sigma": 0.20,
 
-    "max_abs_delta_per_attr": 3.0,
+    "max_abs_delta_per_attr": 6.0,
     "min_rating": 25,
     "max_rating": 99,
 
@@ -145,7 +145,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "def_mult": 0.35,
         "stamina_mult": 0.50,
         "scoring_mult": 0.25,
-        "max_abs_delta_per_field": 2.0
+        "max_abs_delta_per_field": 4.0
     },
 }
 
@@ -259,7 +259,7 @@ def _minutes_factor(mpg: Optional[float], settings: Dict[str, Any]) -> float:
 
 def _dev_multiplier(potential: float, dev_trait: str, settings: Dict[str, Any]) -> float:
     trait_mult = settings.get("dev_trait_mult", {}).get(dev_trait, 1.0)
-    pot_scale = float(settings.get("potential_scale", 0.01))
+    pot_scale = float(settings.get("potential_scale", 0.06))
     pot_bonus = (potential - 50.0) * pot_scale
     return float(trait_mult) * (1.0 + pot_bonus)
 
@@ -298,7 +298,7 @@ def apply_end_of_season_progression(
 
     rmin = int(settings.get("min_rating", 25))
     rmax = int(settings.get("max_rating", 99))
-    max_abs_attr = float(settings.get("max_abs_delta_per_attr", 3.0))
+    max_abs_attr = float(settings.get("max_abs_delta_per_attr", 6.0))
 
     attrs_cfg = settings.get("attrs", {}) or {}
     groups = (attrs_cfg.get("groups") or {}) if isinstance(attrs_cfg.get("groups"), dict) else {}
@@ -325,7 +325,7 @@ def apply_end_of_season_progression(
     def_mult = float(derived.get("def_mult", 0.35))
     stamina_mult = float(derived.get("stamina_mult", 0.50))
     scoring_mult = float(derived.get("scoring_mult", 0.25))
-    max_abs_field = float(derived.get("max_abs_delta_per_field", 2.0))
+    max_abs_field = float(derived.get("max_abs_delta_per_field", 4.0))
 
     teams = _iter_teams(league)
 
@@ -364,7 +364,7 @@ def apply_end_of_season_progression(
             dev_fac = _dev_multiplier(potential, dev_trait, settings)
             prod_fac = _production_bonus(stats)
 
-            noise = rng.gauss(0.0, float(settings.get("noise_sigma", 0.15)))
+            noise = rng.gauss(0.0, float(settings.get("noise_sigma", 0.2)))
             base_delta = base * dev_fac * min_fac * prod_fac * (1.0 + noise)
 
             is_old = age >= 30

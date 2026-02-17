@@ -585,7 +585,7 @@ export default function PlayerStats() {
 
       {/* Tables */}
       <div className="w-full flex justify-center mt-[-1px]">
-        <div className="w-full max-w-5xl overflow-x-auto">
+        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar">
           {(mode === "players" || mode === "league") && (
             <table className="w-full border-collapse text-center text-[17px] font-medium">
               <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">

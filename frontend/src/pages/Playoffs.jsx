@@ -2124,13 +2124,6 @@ ${disabled ? "opacity-60" : ""}
       {/* top bar */}
       <div className="absolute left-0 right-0 top-0 h-[72px] px-8 flex items-center justify-between z-20">
         <div className="flex gap-2">
-          <button
-            onClick={() => navigate("/calendar")}
-            className="px-4 py-2 bg-neutral-800/80 hover:bg-neutral-700 rounded text-sm border border-neutral-700"
-            disabled={simLock}
-          >
-            Back to Calendar
-          </button>
 
           {/* ✅ PATCH: TOP BUTTONS ONLY (Simulate Round + Simulate Playoffs) */}
           <button

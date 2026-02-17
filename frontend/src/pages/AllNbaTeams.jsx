@@ -306,38 +306,36 @@ export default function AllNbaTeams({ leagueDataProp }) {
 
   return (
     <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center py-10">
-      {/* Title row (no arrows) */}
-      <div className="w-full max-w-5xl flex items-center justify-center mb-6 select-none">
-        <h1 className="text-3xl md:text-4xl font-extrabold text-orange-500 text-center">
-          All-NBA Teams
-        </h1>
-      </div>
+     {/* Title row (no arrows) */}
+<div className="w-full max-w-5xl flex items-center justify-between mt-6 mb-6 select-none">
+  <h1 className="text-3xl md:text-4xl font-extrabold text-orange-500">
+    All-NBA Teams
+  </h1>
 
-      {/* Team switch (1st/2nd/3rd) */}
-      <div className="w-full max-w-5xl flex items-center justify-end gap-2 mb-3">
-        {[
-          { k: "first", label: "First Team" },
-          { k: "second", label: "Second Team" },
-          { k: "third", label: "Third Team" },
-        ].map((tab) => (
-          <button
-            key={tab.k}
-            onClick={() => {
-              setTier(tab.k);
-              setSortConfig({ key: null, direction: "desc" });
-            }}
-            className={`px-3 py-1 rounded-md text-sm font-semibold ${
-              tier === tab.k
-                ? "bg-orange-600 text-white"
-                : "bg-neutral-800 text-gray-300 hover:bg-neutral-700"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+  <div className="flex items-center gap-2">
+    {[
+      { k: "first", label: "First Team" },
+      { k: "second", label: "Second Team" },
+      { k: "third", label: "Third Team" },
+    ].map((tab) => (
+      <button
+        key={tab.k}
+        onClick={() => {
+          setTier(tab.k);
+          setSortConfig({ key: null, direction: "desc" });
+        }}
+        className={`px-3 py-1 rounded-md text-sm font-semibold ${
+          tier === tab.k
+            ? "bg-orange-600 text-white"
+            : "bg-neutral-800 text-gray-300 hover:bg-neutral-700"
+        }`}
+      >
+        {tab.label}
+      </button>
+    ))}
+  </div>
+</div>
 
-      {/* Header card – same layout as All League Players */}
       {cardPlayer && (
         <div className="relative w-full flex justify-center">
           <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
@@ -423,7 +421,7 @@ export default function AllNbaTeams({ leagueDataProp }) {
 
       {/* Table – 5 players of selected All-NBA team */}
       <div className="w-full flex justify-center mt-[-1px]">
-        <div className="w-full max-w-5xl overflow-x-auto">
+        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar">
           <table className="w-full border-collapse text-center text-[17px] font-medium">
             <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
               <tr>
@@ -492,21 +490,15 @@ export default function AllNbaTeams({ leagueDataProp }) {
         </div>
       </div>
 
-<div className="flex gap-2">
+<div className="flex justify-end w-full max-w-5xl mt-6">
   <button
-    className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded"
-    onClick={() => navigate("/calendar")}
-  >
-    Back to Calendar
-  </button>
-
-  <button
-    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded"
+    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-semibold"
     onClick={() => navigate("/playoffs")}
   >
     Playoffs ▶
   </button>
 </div>
+
 
     </div>
   );
