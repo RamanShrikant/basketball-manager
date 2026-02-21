@@ -482,7 +482,7 @@ def apply_end_of_season_progression_with_deltas(
             "team": tname
         }
 
-    #apply_jan1_age_up_all_players(league, season_year=season_year)
+    apply_jan1_age_up_all_players(league, season_year=season_year)
 
     apply_end_of_season_progression(
         league=league,
