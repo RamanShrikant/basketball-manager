@@ -278,6 +278,11 @@ function readJsonSafe(key, fallback) {
 }
 
 export default function PlayerProgression() {
+  useEffect(() => {
+  console.log("[PPDBG] MOUNT PlayerProgression");
+  return () => console.log("[PPDBG] UNMOUNT PlayerProgression");
+}, []);
+  console.count("[PPDBG] component render");
   const { leagueData, setLeagueData, selectedTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
 
@@ -328,6 +333,7 @@ export default function PlayerProgression() {
   };
 
   useEffect(() => {
+    console.log("[PPDBG] selectedTeam loader effect", { selectedTeam: selectedTeam?.name || null });
     if (!selectedTeam) {
       const saved = localStorage.getItem("selectedTeam");
       if (saved) setSelectedTeam(JSON.parse(saved));
@@ -337,8 +343,53 @@ export default function PlayerProgression() {
   // ✅ Apply progression ONCE per season using Python
   useEffect(() => {
     if (!leagueData) return;
+    // =====================
+// [PPDBG] Block A - Effect entry + BEFORE snapshot context
+// =====================
+const runId = `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+console.groupCollapsed(`[PPDBG] useEffect ENTER runId=${runId}`);
+console.count("[PPDBG] useEffect fired");
 
+// Grab raw meta strings too (so we see exact stored values, not parsed guesses)
+const rawLeagueMeta = localStorage.getItem(META_KEY);
+const rawProgMeta = localStorage.getItem(PROG_META_KEY);
+
+console.log("[PPDBG] raw metas", { runId, rawLeagueMeta, rawProgMeta });
+
+const findPlayerAnyTeam = (league, playerName) => {
+  const teams = getAllTeamsFromLeague(league);
+  for (const t of teams || []) {
+    const teamName = t?.name || "";
+    for (const p of t?.players || []) {
+      if (p?.name === playerName) {
+        return {
+          team: teamName,
+          overall: p?.overall,
+          age: p?.age,
+          attr0_3pt: p?.attrs?.[0],
+          attr1_mid: p?.attrs?.[1],
+          attr2_close: p?.attrs?.[2],
+        };
+      }
+    }
+  }
+  return null;
+};
+
+console.log("[PPDBG] BEFORE (leagueData) peek", {
+  runId,
+  leagueData_seasonYear: leagueData?.seasonYear,
+  leagueData_seasonStartYear: leagueData?.seasonStartYear,
+  metaSeasonYear: getSeasonYearFromMeta(),
+  inferredSeasonYear: inferSeasonYear(leagueData),
+  derrick: findPlayerAnyTeam(leagueData, "Derrick White"),
+  anfernee: findPlayerAnyTeam(leagueData, "Anfernee Simons"),
+});
+    // --- [PERM FIX] run identity + cleanup guards ---
+let cancelled = false;
+let inflightInterval = null;
     const seasonYear = inferSeasonYear(leagueData);
+    
     
 
     // Read meta
@@ -350,18 +401,55 @@ console.log("[PlayerProgression] progMeta =", progMeta);
 
 
 
-// ✅ if meta stuck INFLIGHT too long, clear it
+// --- [PERM FIX] If another progression is already running, do NOT start a second one.
+// Instead, attach to it and load results once it finishes.
 if (progMeta?.appliedForSeasonYear === "INFLIGHT") {
   const ageMs = Date.now() - Number(progMeta?.ts || 0);
 
-  if (ageMs > INFLIGHT_STALE_MS) {
-    console.warn("[PlayerProgression] stale INFLIGHT detected, clearing meta so progression can rerun.");
-    try {
-      localStorage.removeItem(PROG_META_KEY);
-    } catch {}
-    progMeta = null;
+  // fresh inflight - attach
+  if (ageMs <= INFLIGHT_STALE_MS) {
+    console.log("[PlayerProgression] INFLIGHT detected, attaching instead of rerunning", { runId, seasonYear, ageMs });
+
+    inflightInterval = setInterval(() => {
+      if (cancelled) return;
+
+      const m = readJsonSafe(PROG_META_KEY, null);
+      const done = m?.appliedForSeasonYear === seasonYear;
+
+      if (done) {
+        try {
+          const updatedLeague = readJsonSafe(LEAGUE_KEY, null);
+          const savedDeltas = readJsonSafe(DELTAS_KEY, {});
+
+          if (updatedLeague) {
+            setDeltas(savedDeltas || {});
+            setLeagueData(updatedLeague);
+
+            const teamsLocal = getAllTeamsFromLeague(updatedLeague);
+            const updatedTeam = teamsLocal.find((t) => t?.name === selectedTeam?.name);
+            if (updatedTeam) setSelectedTeam(updatedTeam);
+          }
+        } finally {
+          clearInterval(inflightInterval);
+          inflightInterval = null;
+        }
+      }
+    }, 200);
+
+    // IMPORTANT - we are done here, do not start progression
+    return () => {
+      cancelled = true;
+      if (inflightInterval) clearInterval(inflightInterval);
+    };
   }
-}
+
+  // stale inflight - clear and allow rerun
+  console.warn("[PlayerProgression] stale INFLIGHT detected, clearing meta so progression can rerun.", { runId, ageMs });
+  try {
+    localStorage.removeItem(PROG_META_KEY);
+  } catch {}
+  progMeta = null;
+} 
 
 
 
@@ -379,9 +467,10 @@ if (progMeta?.appliedForSeasonYear === seasonYear) return;
 
     // mark inflight
     try {
+      console.log("[PPDBG] setting INFLIGHT", { runId, seasonYear });
       localStorage.setItem(
         PROG_META_KEY,
-        JSON.stringify({ appliedForSeasonYear: "INFLIGHT", ts: Date.now(), seasonYear })
+        JSON.stringify({ appliedForSeasonYear: "INFLIGHT", ts: Date.now(), seasonYear, runId })
       );
     } catch {}
 
@@ -398,16 +487,32 @@ if (progMeta?.appliedForSeasonYear === seasonYear) return;
           hasLeague: !!leagueForProg,
           hasStats,
         });
-
+console.log("[PPDBG] calling computePlayerProgression", {
+  runId,
+  seasonYear,
+  hasStats,
+  statsKeyCount: Object.keys(statsByKeyPreview || {}).length,
+});
 const msg = await computePlayerProgression(leagueForProg, statsByKeyPreview, {
   seed: seasonYear,
   seasonYear,
 });
 
+  console.log("[DEBUG] raw deltas from Python:", JSON.stringify(msg?.deltas ?? msg?.payload?.deltas));
+
 // ✅ Support both shapes:
 // 1) msg = { league, deltas, version }
 // 2) msg = { type, requestId, payload: { league, deltas, version } }
 const res = msg?.league ? msg : msg?.payload;
+console.log("[PPDBG] worker response", {
+  runId,
+  msgKeys: Object.keys(msg || {}),
+  resKeys: Object.keys(res || {}),
+  version: res?.version,
+  hasLeague: !!res?.league,
+  hasDeltas: !!res?.deltas,
+  resDeltaCount: res?.deltas ? Object.keys(res.deltas).length : 0,
+});
 
 console.log("[PlayerProgression] computePlayerProgression msg keys:", Object.keys(msg || {}));
 console.log("[PlayerProgression] computePlayerProgression res keys:", Object.keys(res || {}));
@@ -431,6 +536,27 @@ if (res?.deltas && typeof res.deltas === "object" && Object.keys(res.deltas).len
 } else {
   newDeltas = buildProgressionDeltas(beforeSnapshot, updatedLeague);
 }
+const derrickAfter = findPlayerAnyTeam(updatedLeague, "Derrick White");
+const anferneeAfter = findPlayerAnyTeam(updatedLeague, "Anfernee Simons");
+
+const derrickKey = derrickAfter?.team ? `Derrick White__${derrickAfter.team}` : null;
+const anferneeKey = anferneeAfter?.team ? `Anfernee Simons__${anferneeAfter.team}` : null;
+
+console.log("[PPDBG] AFTER (updatedLeague) peek", {
+  runId,
+  derrickAfter,
+  anferneeAfter,
+});
+
+console.log("[PPDBG] deltas built", {
+  runId,
+  deltaCount: Object.keys(newDeltas || {}).length,
+  source: (res?.deltas && Object.keys(res.deltas || {}).length > 0) ? "python" : "js_fallback",
+  derrickKey,
+  anferneeKey,
+  derrickDelta: derrickKey ? newDeltas?.[derrickKey] : null,
+  anferneeDelta: anferneeKey ? newDeltas?.[anferneeKey] : null,
+});
 
 
 const deltaCount = Object.keys(newDeltas || {}).length;
@@ -440,8 +566,20 @@ console.log("[PlayerProgression] deltas count:", deltaCount);
 if (deltaCount === 0) {
   throw new Error(`[PlayerProgression] deltaCount = 0 for seasonYear = ${seasonYear}. Refusing to lock season.`);
 }
+console.log("[PPDBG] writing LEAGUE_KEY", { runId, seasonYear });
+// --- [PERM FIX] Only the owner runId is allowed to commit writes ---
+const metaNow = readJsonSafe(PROG_META_KEY, null);
+const stillOwner =
+  metaNow?.appliedForSeasonYear === "INFLIGHT" &&
+  metaNow?.seasonYear === seasonYear &&
+  metaNow?.runId === runId;
 
+if (!stillOwner) {
+  console.warn("[PlayerProgression] Not owner anymore - skipping commits", { runId, seasonYear, metaNow });
+  return;
+}
 localStorage.setItem(LEAGUE_KEY, JSON.stringify(updatedLeague));
+
 
 
 // ✅ EARLY LOCK: if we crash after this point, never rerun progression for this season
@@ -457,10 +595,18 @@ try {
       stage: "EARLY_LOCK",
     })
   );
+  console.log("[PPDBG] DONE", {
+  runId,
+  seasonYear,
+  savedProgMeta: readJsonSafe(PROG_META_KEY, null),
+  savedDeltaCount: Object.keys(readJsonSafe(DELTAS_KEY, {}) || {}).length,
+});
+console.groupEnd();
 } catch {}
 
 let deltaSaveOk = true;
 try {
+  console.log("[PPDBG] writing DELTAS_KEY", { runId, seasonYear, deltaCount: Object.keys(newDeltas || {}).length });
   localStorage.setItem(DELTAS_KEY, JSON.stringify(newDeltas));
 } catch (e) {
   deltaSaveOk = false;
@@ -521,8 +667,14 @@ if (deltaCount > 0) {
             JSON.stringify({ appliedForSeasonYear: "ERROR", ts: Date.now(), error: String(err) })
           );
         } catch {}
+        console.log("[PPDBG] ERROR end", { runId, err: String(err) });
+        console.groupEnd();
       }
     })();
+    return () => {
+  cancelled = true;
+  if (inflightInterval) clearInterval(inflightInterval);
+};
   }, [leagueData, selectedTeam, setLeagueData, setSelectedTeam]);
 
   const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
