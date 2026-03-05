@@ -28,11 +28,13 @@ def _stoch_round(x: float, rng: random.Random) -> int:
 def _clamp(x: float, lo: float, hi: float) -> float:
     return lo if x < lo else hi if x > hi else x
 
+
 def _safe_int(x: Any, default: int = 0) -> int:
     try:
         return int(x)
     except Exception:
         return default
+
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
     try:
@@ -40,10 +42,12 @@ def _safe_float(x: Any, default: float = 0.0) -> float:
     except Exception:
         return default
 
+
 def _parse_iso_date(date_iso: str) -> _dt.date:
     # expects "YYYY-MM-DD"
     y, m, d = date_iso.split("-")
     return _dt.date(int(y), int(m), int(d))
+
 
 def _player_id(p: Dict[str, Any]) -> str:
     for k in ("id", "pid", "playerId", "player_id"):
@@ -51,8 +55,10 @@ def _player_id(p: Dict[str, Any]) -> str:
             return str(p[k])
     return str(p.get("name", p.get("player", "UNKNOWN_PLAYER")))
 
+
 def _player_name(p: Dict[str, Any]) -> str:
     return str(p.get("name") or p.get("player") or "UNKNOWN_PLAYER")
+
 
 def _iter_teams(league: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
@@ -76,8 +82,10 @@ def _iter_teams(league: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     return []
 
+
 def _team_name(team: Dict[str, Any]) -> str:
     return str(team.get("name") or team.get("team") or "")
+
 
 def _stat_lookup(
     stats_by_key: Optional[Dict[str, Dict[str, Any]]],
@@ -148,6 +156,85 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "max_abs_delta_per_field": 4.0
     },
 }
+
+# -------------------------
+# Overall calculator (JS parity with LeagueEditor.jsx)
+# -------------------------
+
+def _sigmoid_overall(x: float) -> float:
+    return 1.0 / (1.0 + math.exp(-0.12 * (x - 77.0)))
+
+
+_POS_PARAMS = {
+    "PG": {
+        "weights": [0.11, 0.05, 0.03, 0.05, 0.17, 0.17, 0.10, 0.07, 0.10, 0.02, 0.01, 0.07, 0.05, 0.01, 0.01],
+        "prim": [5, 6, 1, 7],
+        "alpha": 0.25,
+    },
+    "SG": {
+        "weights": [0.15, 0.08, 0.05, 0.05, 0.12, 0.07, 0.11, 0.07, 0.11, 0.03, 0.02, 0.08, 0.06, 0.01, 0.01],
+        "prim": [1, 5, 7],
+        "alpha": 0.28,
+    },
+    "SF": {
+        "weights": [0.12, 0.09, 0.07, 0.04, 0.08, 0.07, 0.10, 0.10, 0.10, 0.06, 0.04, 0.08, 0.05, 0.01, 0.01],
+        "prim": [1, 8, 9],
+        "alpha": 0.22,
+    },
+    "PF": {
+        "weights": [0.07, 0.07, 0.12, 0.03, 0.05, 0.05, 0.08, 0.12, 0.07, 0.13, 0.08, 0.08, 0.05, 0.01, 0.01],
+        "prim": [3, 10, 8],
+        "alpha": 0.24,
+    },
+    "C": {
+        "weights": [0.04, 0.06, 0.17, 0.03, 0.02, 0.04, 0.07, 0.12, 0.05, 0.16, 0.13, 0.06, 0.08, 0.01, 0.01],
+        "prim": [3, 10, 11, 13],
+        "alpha": 0.30,
+    },
+}
+
+
+def calc_overall_from_attrs(attrs: List[Any], pos: str) -> int:
+    # JS: p = posParams[pos]; if (!p) return 0;
+    p = _POS_PARAMS.get(str(pos or "SF"), _POS_PARAMS["SF"])
+
+    # Ensure length 15, default 75
+    a = list(attrs or [])
+    if len(a) < 15:
+        a = a + [75] * (15 - len(a))
+    elif len(a) > 15:
+        a = a[:15]
+
+    weights = p["weights"]
+    alpha = float(p["alpha"])
+    prim = [int(i) - 1 for i in p["prim"]]  # JS converts 1-based to 0-based
+
+    # W = sum(weights[i] * attrs[i])
+    W = 0.0
+    for i in range(15):
+        W += float(weights[i]) * float(a[i] if a[i] is not None else 75)
+
+    # Peak = max(attrs[prim])
+    peak_vals = []
+    for idx in prim:
+        if 0 <= idx < 15:
+            peak_vals.append(float(a[idx] if a[idx] is not None else 75))
+    Peak = max(peak_vals) if peak_vals else 75.0
+
+    # B = alpha*Peak + (1-alpha)*W
+    B = alpha * Peak + (1.0 - alpha) * W
+
+    # overall = 60 + 39*sigmoid(B); clamp 60..99; round
+    overall = 60.0 + 39.0 * _sigmoid_overall(B)
+    overall = max(60.0, min(99.0, overall))
+    overall = int(math.floor(overall + 0.5))  # JS Math.round for positive numbers
+
+    # JS bonus: num90 >= 3 => bonus = num90 - 2
+    num90 = sum(1 for v in a if float(v if v is not None else 0) >= 90.0)
+    if num90 >= 3:
+        overall = min(99, overall + (num90 - 2))
+
+    return int(overall)
 
 
 # -------------------------
@@ -244,6 +331,7 @@ def _age_curve_value(age: int, settings: Dict[str, Any]) -> float:
         return float(curve.get(40, -1.7))
     return float(curve.get(max(min(age, 40), 18), 0.0))
 
+
 def _minutes_factor(mpg: Optional[float], settings: Dict[str, Any]) -> float:
     # ✅ If no stats, treat as neutral minutes (don’t kill progression).
     if mpg is None:
@@ -257,11 +345,13 @@ def _minutes_factor(mpg: Optional[float], settings: Dict[str, Any]) -> float:
         return 1.0
     return 0.15 + 0.85 * ((mpg - lo) / (hi - lo))
 
+
 def _dev_multiplier(potential: float, dev_trait: str, settings: Dict[str, Any]) -> float:
     trait_mult = settings.get("dev_trait_mult", {}).get(dev_trait, 1.0)
     pot_scale = float(settings.get("potential_scale", 0.06))
     pot_bonus = (potential - 50.0) * pot_scale
     return float(trait_mult) * (1.0 + pot_bonus)
+
 
 def _production_bonus(stats: Optional[Dict[str, Any]]) -> float:
     if not stats:
@@ -383,7 +473,9 @@ def apply_end_of_season_progression(
                     d = _clamp(base_delta * mult, -max_abs_attr, max_abs_attr)
                     new_val = _clamp(old_val + d, rmin, rmax)
                     attrs[i] = _stoch_round(new_val, rng)
-
+            # ✅ Recompute overall from attrs + pos (JS parity)
+            if isinstance(p.get("attrs"), list) and len(p.get("attrs")) > 0:
+                p["overall"] = calc_overall_from_attrs(p.get("attrs") or [], p.get("pos") or p.get("position") or "SF")
 
             def _bump_field(field_key: str, mult: float) -> None:
                 if field_key not in p or p[field_key] is None:
@@ -392,8 +484,6 @@ def apply_end_of_season_progression(
                 d = _clamp(base_delta * mult, -max_abs_field, max_abs_field)
                 p[field_key] = _stoch_round(_clamp(old_val + d, rmin, rmax), rng)
 
-
-            _bump_field("overall", overall_mult)
             _bump_field("offRating", off_mult)
             _bump_field("defRating", def_mult)
             _bump_field("stamina", stamina_mult)
@@ -402,6 +492,12 @@ def apply_end_of_season_progression(
                 old_sr = _safe_float(p.get("scoringRating"), 0.0)
                 d_sr = _clamp(base_delta * scoring_mult, -max_abs_field, max_abs_field)
                 p["scoringRating"] = float(_clamp(old_sr + d_sr, 0.0, 100.0))
+
+            # ✅ Option B: if OVR exceeds POT, raise POT to match (keep visuals consistent)
+            ovr = _safe_int(p.get("overall"), 0)
+            pot = _safe_int(p.get("potential"), 50)
+            if ovr > pot:
+                p["potential"] = min(rmax, ovr)
 
     return league
 
@@ -413,6 +509,7 @@ def _all_players(league: Dict[str, Any]) -> List[Dict[str, Any]]:
             if isinstance(p, dict):
                 out.append(p)
     return out
+
 
 def _all_players_with_team(league: Dict[str, Any]) -> List[Tuple[Dict[str, Any], str]]:
     out: List[Tuple[Dict[str, Any], str]] = []
@@ -457,14 +554,14 @@ def apply_end_of_season_progression_with_deltas(
     Returns:
       {
         "league": <updated league dict>,
-        "deltas": { playerName: { "age":1, "overall":+1, "attr0":-2, ... }, "player__team": {...} },
+        "deltas": { "player__team": {...} },
         "version": PROGRESSION_PY_VERSION
       }
     """
     if not isinstance(league, dict):
         return {"league": league, "deltas": {}, "version": PROGRESSION_PY_VERSION}
 
-    ensure_progression_fields(league, season_start_year=season_year)
+    ensure_progression_fields(league, season_start_year = season_year)
 
     # snapshot before (keyed by composite to avoid collisions)
     before: Dict[str, Dict[str, Any]] = {}
@@ -477,19 +574,22 @@ def apply_end_of_season_progression_with_deltas(
             "offRating": _safe_int(p.get("offRating"), 0),
             "defRating": _safe_int(p.get("defRating"), 0),
             "stamina": _safe_int(p.get("stamina"), 0),
+            "potential": _safe_int(p.get("potential"), 50),
             "attrs": list(p.get("attrs") or []),
             "name": name,
             "team": tname
         }
 
-    apply_jan1_age_up_all_players(league, season_year=season_year)
-
+    # ✅ Progress first (uses current season age)
     apply_end_of_season_progression(
-        league=league,
-        stats_by_key=stats_by_key,
-        settings=settings,
-        seed=seed
+        league = league,
+        stats_by_key = stats_by_key,
+        settings = settings,
+        seed = seed
     )
+
+    # ✅ Age up after progression so next season starts older
+    apply_jan1_age_up_all_players(league = league, season_year = season_year)
 
     deltas: Dict[str, Dict[str, Any]] = {}
     for p, tname in _all_players_with_team(league):
@@ -502,7 +602,7 @@ def apply_end_of_season_progression_with_deltas(
         d: Dict[str, Any] = {}
         d["age"] = _safe_int(p.get("age"), 0) - _safe_int(b.get("age"), 0)
 
-        for k in ("overall", "offRating", "defRating", "stamina"):
+        for k in ("overall", "offRating", "defRating", "stamina", "potential"):
             d[k] = _safe_int(p.get(k), 0) - _safe_int(b.get(k), 0)
 
         new_attrs = list(p.get("attrs") or [])
@@ -513,8 +613,6 @@ def apply_end_of_season_progression_with_deltas(
             ov = _safe_int(old_attrs[i], 0) if i < len(old_attrs) else 0
             d[f"attr{i}"] = nv - ov
 
-        # ✅ store BOTH keys (composite + name-only)
         deltas[key] = d
-
 
     return {"league": league, "deltas": deltas, "version": PROGRESSION_PY_VERSION}
