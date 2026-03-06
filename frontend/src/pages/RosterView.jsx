@@ -1,15 +1,23 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
+import { releasePlayerToFreeAgency } from "../api/simEnginePy.js";
 
 export default function RosterView() {
-  const { leagueData, selectedTeam, setSelectedTeam } = useGame();
+  const { leagueData, selectedTeam, setSelectedTeam, setLeagueData } = useGame();
+  const [workingLeagueData, setWorkingLeagueData] = useState(leagueData || null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
   const [showLetters, setShowLetters] = useState(
     localStorage.getItem("showLetters") === "true"
   );
+  const [releaseModalOpen, setReleaseModalOpen] = useState(false);
+  const [releaseTargetPlayer, setReleaseTargetPlayer] = useState(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    setWorkingLeagueData(leagueData || null);
+  }, [leagueData]);
 
   // --- attribute columns ---
   const attrColumns = [
@@ -44,11 +52,79 @@ export default function RosterView() {
     if (num >= 50) return "D-";
     return "F";
   };
+
   const handleCellDoubleClick = () => {
     const next = !showLetters;
     setShowLetters(next);
     localStorage.setItem("showLetters", next);
   };
+
+  const formatDollars = (amount) => {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    }).format(Number(amount || 0));
+  };
+
+  const formatSeasonLabel = (startYear) => {
+    const endYY = String((Number(startYear) + 1) % 100).padStart(2, "0");
+    return `${startYear}-${endYY}`;
+  };
+
+  const getCurrentSeasonYear = () => {
+    return Number(
+      workingLeagueData?.seasonYear ||
+      workingLeagueData?.currentSeasonYear ||
+      2026
+    );
+  };
+
+  const getReleaseSalaryInfo = (player) => {
+    const contract = player?.contract;
+    const currentSeasonYear = getCurrentSeasonYear();
+
+    if (!contract || !Array.isArray(contract.salaryByYear) || !contract.salaryByYear.length) {
+      return {
+        totalOwed: 0,
+        untilSeason: null,
+        remainingRows: [],
+      };
+    }
+
+    const startYear = Number(contract.startYear ?? currentSeasonYear);
+    const salaryByYear = contract.salaryByYear.map((x) => Number(x) || 0);
+
+    let startIdx = currentSeasonYear - startYear;
+    if (startIdx < 0) startIdx = 0;
+
+    const remainingRows = salaryByYear
+      .slice(startIdx)
+      .map((amount, idx) => {
+        const seasonYear = startYear + startIdx + idx;
+        return {
+          seasonYear,
+          label: formatSeasonLabel(seasonYear),
+          amount,
+        };
+      })
+      .filter((row) => row.amount > 0);
+
+    const totalOwed = remainingRows.reduce((sum, row) => sum + row.amount, 0);
+    const untilSeason = remainingRows.length
+      ? remainingRows[remainingRows.length - 1].label
+      : null;
+
+    return {
+      totalOwed,
+      untilSeason,
+      remainingRows,
+    };
+  };
+
+  const releaseInfo = useMemo(() => {
+    return releaseTargetPlayer ? getReleaseSalaryInfo(releaseTargetPlayer) : null;
+  }, [releaseTargetPlayer, workingLeagueData]);
 
   // restore/save selected team
   useEffect(() => {
@@ -57,17 +133,18 @@ export default function RosterView() {
       if (saved) setSelectedTeam(JSON.parse(saved));
     }
   }, [selectedTeam, setSelectedTeam]);
+
   useEffect(() => {
     if (selectedTeam) localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam));
   }, [selectedTeam]);
 
   // teams sorted
   const teamsSorted = useMemo(() => {
-    if (!leagueData?.conferences) return [];
-    return Object.values(leagueData.conferences)
+    if (!workingLeagueData?.conferences) return [];
+    return Object.values(workingLeagueData.conferences)
       .flat()
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-  }, [leagueData]);
+  }, [workingLeagueData]);
 
   // all players list
   const allLeaguePlayers = useMemo(
@@ -87,6 +164,7 @@ export default function RosterView() {
 
   // view index: 0..N-1 teams, N = All Players
   const [viewIndex, setViewIndex] = useState(0);
+
   useEffect(() => {
     const idx = teamsSorted.findIndex((t) => t.name === selectedTeam?.name);
     setViewIndex(idx >= 0 ? idx : 0);
@@ -110,8 +188,12 @@ export default function RosterView() {
 
   // active rows
   const viewPlayers = isAllView ? allLeaguePlayers : (selectedTeam?.players || []);
+
   useEffect(() => {
-    if (!viewPlayers?.length) { setSelectedPlayer(null); return; }
+    if (!viewPlayers?.length) {
+      setSelectedPlayer(null);
+      return;
+    }
     if (!selectedPlayer || !viewPlayers.some((p) => p.name === selectedPlayer.name)) {
       setSelectedPlayer(viewPlayers[0]);
     }
@@ -119,12 +201,14 @@ export default function RosterView() {
 
   // sorting
   const positionOrder = ["PG", "SG", "SF", "PF", "C"];
+
   const handleSort = (key) => {
     let direction = "desc";
     if (sortConfig.key === key && sortConfig.direction === "desc") direction = "asc";
     else if (sortConfig.key === key && sortConfig.direction === "asc") direction = "default";
     setSortConfig({ key, direction });
   };
+
   const sortedPlayers = useMemo(() => {
     if (!sortConfig.key || sortConfig.direction === "default") return viewPlayers;
     const rows = [...viewPlayers];
@@ -154,6 +238,66 @@ export default function RosterView() {
     });
     return rows;
   }, [viewPlayers, sortConfig]);
+
+  const handleNameDoubleClick = (player, e) => {
+    e.stopPropagation();
+    if (isAllView) return;
+    setSelectedPlayer(player);
+    setReleaseTargetPlayer(player);
+    setReleaseModalOpen(true);
+  };
+
+  const closeReleaseModal = () => {
+    setReleaseModalOpen(false);
+    setReleaseTargetPlayer(null);
+  };
+
+  const handleReleaseToFreeAgency = async () => {
+    if (!releaseTargetPlayer || !selectedTeam || !workingLeagueData?.conferences) return;
+
+    try {
+      const res = await releasePlayerToFreeAgency(
+        workingLeagueData,
+        selectedTeam.name,
+        releaseTargetPlayer.id || null,
+        releaseTargetPlayer.name || null
+      );
+
+      if (!res?.ok || !res?.leagueData) {
+        console.error("[RosterView] release failed:", res?.reason || res);
+        return;
+      }
+
+      const updated = res.leagueData;
+      setWorkingLeagueData(updated);
+
+      if (typeof setLeagueData === "function") {
+        setLeagueData(updated);
+      }
+
+      let updatedTeam = null;
+      for (const confKey of Object.keys(updated.conferences || {})) {
+        const team = (updated.conferences[confKey] || []).find(
+          (t) => t.name === selectedTeam.name
+        );
+        if (team) {
+          updatedTeam = team;
+          break;
+        }
+      }
+
+      if (updatedTeam) {
+        setSelectedTeam(updatedTeam);
+        localStorage.setItem("selectedTeam", JSON.stringify(updatedTeam));
+      }
+
+      localStorage.setItem("leagueData", JSON.stringify(updated));
+
+      closeReleaseModal();
+    } catch (err) {
+      console.error("[RosterView] release worker error:", err);
+    }
+  };
 
   // guards
   if (!selectedTeam && !teamsSorted.length) {
@@ -336,7 +480,13 @@ export default function RosterView() {
                         </td>
                       )}
 
-                      <td className="py-2 px-3 whitespace-nowrap text-left pl-4">{p.name}</td>
+                      <td
+                        className="py-2 px-3 whitespace-nowrap text-left pl-4"
+                        onDoubleClick={(e) => handleNameDoubleClick(p, e)}
+                        title={isAllView ? p.name : "Double click to release to free agency"}
+                      >
+                        {p.name}
+                      </td>
                       <td className="py-2 px-3">{p.pos}</td>
                       <td className="py-2 px-3">{p.age}</td>
                       <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
@@ -374,6 +524,64 @@ export default function RosterView() {
       >
         Back to Team Hub
       </button>
+
+      {releaseModalOpen && releaseTargetPlayer && !isAllView && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4">
+          <div className="w-full max-w-xl bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-6">
+            <h2 className="text-2xl font-bold text-orange-400 mb-3">
+              Release to Free Agency
+            </h2>
+
+            <p className="text-white text-lg mb-2">
+              {releaseTargetPlayer.name}
+            </p>
+
+            <p className="text-gray-300 mb-4 leading-relaxed">
+              Releasing this player will move him into free agency immediately.
+              In this game, the remaining guaranteed contract is kept on your books as dead money.
+            </p>
+
+            {releaseInfo?.totalOwed > 0 ? (
+              <div className="bg-neutral-900 rounded-xl p-4 border border-neutral-700 mb-5">
+                <p className="text-red-300 font-semibold mb-2">
+                  Warning: You will still owe {formatDollars(releaseInfo.totalOwed)}
+                  {releaseInfo.untilSeason ? ` through ${releaseInfo.untilSeason}` : ""}.
+                </p>
+
+                <div className="space-y-1 text-sm text-gray-300">
+                  {releaseInfo.remainingRows.map((row) => (
+                    <div key={row.label} className="flex justify-between">
+                      <span>{row.label}</span>
+                      <span>{formatDollars(row.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="bg-neutral-900 rounded-xl p-4 border border-neutral-700 mb-5">
+                <p className="text-gray-300">
+                  This player has no remaining guaranteed salary stored in the contract.
+                </p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={closeReleaseModal}
+                className="px-5 py-2 rounded-lg bg-gray-600 hover:bg-gray-500 text-white font-semibold transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReleaseToFreeAgency}
+                className="px-5 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold transition"
+              >
+                Release to Free Agency
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

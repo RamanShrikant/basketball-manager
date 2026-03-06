@@ -28,6 +28,7 @@ const pythonFiles = [
   "blocks.py",
   "shooting_model.py",
   "progression.py",
+  "free_agency_logic.py",
 ];
 
 async function init() {
@@ -254,7 +255,88 @@ json.dumps(res)
   }
 }
 
+// ------------------------------------------------------------
+// FREE AGENCY GENERIC REQUEST MODE ✅
+// ------------------------------------------------------------
+async function runFreeAgencyRequest(requestId, action, leagueData, payload, okType, errType) {
+  try {
+    pyodide.globals.set("fa_request_js", pyodide.toPy({
+      action,
+      leagueData: leagueData || {},
+      payload: payload || {},
+    }));
 
+    const pyJson = await pyodide.runPythonAsync(`
+import importlib, json
+import free_agency_logic
+importlib.reload(free_agency_logic)
+
+from free_agency_logic import handle_request
+
+res = handle_request(fa_request_js)
+json.dumps(res)
+    `);
+
+    const payloadOut = JSON.parse(pyJson);
+
+    postMessage({
+      type: okType,
+      requestId,
+      payload: payloadOut,
+    });
+  } catch (err) {
+    console.error("[simWorkerV2] free agency request error:", action, err);
+    postMessage({
+      type: errType,
+      requestId,
+      error: err.toString(),
+    });
+  }
+}
+
+async function generateFreeAgencyMarket(requestId, leagueData) {
+  return runFreeAgencyRequest(
+    requestId,
+    "generate_market_for_all_free_agents",
+    leagueData,
+    {},
+    "free-agency-market-result",
+    "free-agency-market-error"
+  );
+}
+
+async function evaluateFreeAgencyOffer(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "evaluate_offer",
+    leagueData,
+    payload || {},
+    "free-agency-eval-result",
+    "free-agency-eval-error"
+  );
+}
+
+async function signFreeAgent(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "sign_free_agent",
+    leagueData,
+    payload || {},
+    "free-agency-sign-result",
+    "free-agency-sign-error"
+  );
+}
+
+async function releasePlayerFreeAgency(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "release_player",
+    leagueData,
+    payload || {},
+    "free-agency-release-result",
+    "free-agency-release-error"
+  );
+}
 
 // ------------------------------------------------------------
 // Dispatcher
@@ -293,5 +375,29 @@ onmessage = async (e) => {
       msg.statsByKey,
       msg.meta || {}
     );
+  }
+
+  // free agency market ✅
+  if (msg.type === "generate-free-agency-market") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return generateFreeAgencyMarket(msg.requestId, leaguePayload);
+  }
+
+  // free agency evaluate ✅
+  if (msg.type === "evaluate-free-agent-offer") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return evaluateFreeAgencyOffer(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // free agency sign ✅
+  if (msg.type === "sign-free-agent") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return signFreeAgent(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // free agency release ✅
+  if (msg.type === "release-player-free-agency") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return releasePlayerFreeAgency(msg.requestId, leaguePayload, msg.payload || {});
   }
 };
