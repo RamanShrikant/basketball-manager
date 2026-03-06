@@ -17,7 +17,8 @@ import Awards from "./pages/Awards"; // ⬅️ add this
 import Playoffs from "./pages/Playoffs.jsx";
 import FinalsMvp from "./pages/FinalsMVP.jsx";
 import PlayerProgression from "./pages/PlayerProgression";
-
+import SalaryTable from "./pages/SalaryTable.jsx";
+import FreeAgents from "./pages/FreeAgents.jsx";
 
 
 
@@ -51,6 +52,8 @@ function App() {
         <Route path="/standings" element={<Standings />} />
         <Route path="/playoffs" element={<Playoffs />} />
         <Route path="/player-progression" element={<PlayerProgression />} />
+        <Route path="salary-table" element={<SalaryTable />} />
+        <Route path="/free-agents" element={<FreeAgents />} />
 
       </Routes>
     </BrowserRouter>

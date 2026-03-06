@@ -11,34 +11,63 @@ function getAllTeamsFromLeague(leagueData) {
   return [];
 }
 
+function leagueHasTeams(leagueData) {
+  const teams = getAllTeamsFromLeague(leagueData);
+  return Array.isArray(teams) && teams.length > 0;
+}
+
 export function GameProvider({ children }) {
   const [leagueData, setLeagueData] = useState(null);
 
   // ✅ store ONLY the team name (prevents stale roster objects)
   const [selectedTeamName, setSelectedTeamName] = useState(null);
 
-  // Load league from localStorage at startup
+  // Load league from localStorage at startup (and keep trying until it is populated)
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("leagueData");
-if (saved) {
-  const parsed = JSON.parse(saved);
-  console.log("🔥 Loaded leagueData into GameContext:", parsed);
+    let intervalId = null;
 
-  // ✅ Seed missing CPU gameplans automatically (does NOT overwrite existing ones)
-  try {
-    const res = ensureGameplansForLeague(parsed);
-    console.log("✅ ensureGameplansForLeague:", res);
-  } catch (e) {
-    console.warn("ensureGameplansForLeague failed:", e);
-  }
+    const tryHydrateLeague = () => {
+      try {
+        const saved = localStorage.getItem("leagueData");
+        if (!saved) return false;
 
-  setLeagueData(parsed);
-}
+        const parsed = JSON.parse(saved);
 
-    } catch (err) {
-      console.error("Failed to parse leagueData:", err);
+        // If league exists but has 0 teams, don't lock it in forever.
+        if (!leagueHasTeams(parsed)) return false;
+
+        console.log("🔥 Loaded populated leagueData into GameContext:", parsed);
+
+        // ✅ Seed missing CPU gameplans automatically (does NOT overwrite existing ones)
+        try {
+          const res = ensureGameplansForLeague(parsed);
+          console.log("✅ ensureGameplansForLeague:", res);
+        } catch (e) {
+          console.warn("ensureGameplansForLeague failed:", e);
+        }
+
+        setLeagueData(parsed);
+        return true;
+      } catch (err) {
+        console.error("Failed to parse leagueData:", err);
+        return false;
+      }
+    };
+
+    // First attempt immediately
+    const ok = tryHydrateLeague();
+
+    // If not ok (empty skeleton), keep checking until populated
+    if (!ok) {
+      intervalId = setInterval(() => {
+        const done = tryHydrateLeague();
+        if (done) clearInterval(intervalId);
+      }, 250);
     }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
   }, []);
 
   // ✅ restore selectedTeam (supports OLD saved object too)

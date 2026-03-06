@@ -38,9 +38,11 @@ export default function TeamHub() {
     { name: "View Roster", path: "/roster-view" },
     { name: "Trades", path: "#" },
     { name: "Coach Gameplan", path: "/coach-gameplan" },
+    { name: "Free Agents", path: "/free-agents" },
     { name: "Schedule", path: "/calendar" },
     { name: "Statistics", path: "/player-stats" },
     { name: "Standings", path: "/standings" },
+    { name: "Salary Table", path: "/salary-table" },
   ];
 
   return (

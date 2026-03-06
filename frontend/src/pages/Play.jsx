@@ -25,6 +25,7 @@ export default function Play() {
 
         // React state
         setLeagueData(parsed);
+        localStorage.setItem("leagueData", JSON.stringify(parsed));
 
         // 🔥 GLOBAL version (Python worker needs this)
         window.leagueData = parsed;

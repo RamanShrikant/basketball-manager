@@ -4,21 +4,33 @@ import React, { useState, useEffect, useMemo } from "react";
 /* ------------------------------------------------------------
    League Editor v5.1 (v19 OFF/DEF parity + live table render)
    - OFF/DEF table cells now compute from live formula (no lag)
-   - v19 math: PF absolute mix + PF→SF bridge + SF DEF lift
-   - Banker’s rounding; jitter after league-shift
+   - v19 math: PF absolute mix + PF->SF bridge + SF DEF lift
+   - Banker's rounding; jitter after league-shift
    - NEW: birthdays + contracts (with options) + backwards-compatible import/load
+   - NEW: free agents pool (separate from teams)
    ------------------------------------------------------------ */
 
 export default function LeagueEditor() {
   const [leagueName, setLeagueName] = useState("NBA 2025");
   const [conferences, setConferences] = useState({ East: [], West: [] });
+
+  // FIX 1: free agents pool + pool toggle
+  const [freeAgents, setFreeAgents] = useState([]);
+  const [selectedPool, setSelectedPool] = useState("TEAMS"); // "TEAMS" | "FA"
+
   const [selectedConf, setSelectedConf] = useState("East");
   const [newTeamName, setNewTeamName] = useState("");
   const [newTeamLogo, setNewTeamLogo] = useState("");
   const [editingTeam, setEditingTeam] = useState(null);
   const [editingPlayer, setEditingPlayer] = useState(null);
+
+  // FIX 6: track which pool is being edited
+  const [editingPool, setEditingPool] = useState("TEAMS");
+
   const [showPlayerForm, setShowPlayerForm] = useState(false);
-  const [playerForm, setPlayerForm] = useState(initPlayer());
+const [playerForm, setPlayerForm] = useState(initPlayer());
+const [salaryText, setSalaryText] = useState("");
+const [optionYearsText, setOptionYearsText] = useState("");
   const [expandedTeams, setExpandedTeams] = useState({});
   const [sortedTeams, setSortedTeams] = useState({});
   const [originalOrders, setOriginalOrders] = useState({});
@@ -128,7 +140,7 @@ export default function LeagueEditor() {
       contract: {
         startYear: 2026,
         salaryByYear: [8_000_000, 8_500_000],
-        option: null, // { yearIndex: 1, type: "team" | "player", picked: null }
+        option: null, // { type: "team" | "player", yearIndices: [1], picked: null }
       },
     };
   }
@@ -137,6 +149,18 @@ export default function LeagueEditor() {
   const normalizePlayer = (p) => {
     const birthMonth = Number(p?.birthMonth ?? 1);
     const birthDay = Number(p?.birthDay ?? 1);
+
+    // IMPORTANT: allow true free agents to have no contract at all
+    if (p?.contract === null) {
+      return {
+        ...p,
+        headshot: p?.headshot || "",
+        scoringRating: p?.scoringRating ?? 50,
+        birthMonth: Math.min(12, Math.max(1, birthMonth)),
+        birthDay: Math.min(31, Math.max(1, birthDay)),
+        contract: null,
+      };
+    }
 
     const contract =
       p?.contract ??
@@ -154,13 +178,21 @@ export default function LeagueEditor() {
             option: null,
           });
 
-    const safeContract = {
-      startYear: Number(contract?.startYear ?? 2026),
-      salaryByYear: Array.isArray(contract?.salaryByYear)
-        ? contract.salaryByYear.map((x) => Number(x) || 0)
-        : [8_000_000],
-      option: contract?.option ?? null,
-    };
+const rawOption = contract?.option ?? null;
+
+const safeContract = {
+  startYear: Number(contract?.startYear ?? 2026),
+  salaryByYear: Array.isArray(contract?.salaryByYear)
+    ? contract.salaryByYear.map((x) => Number(x) || 0)
+    : [8_000_000],
+  option: rawOption
+    ? {
+        type: rawOption?.type === "player" ? "player" : "team",
+        yearIndices: getOptionYearIndices(rawOption),
+        picked: rawOption?.picked ?? null,
+      }
+    : null,
+};
 
     return {
       ...p,
@@ -171,6 +203,69 @@ export default function LeagueEditor() {
       contract: safeContract,
     };
   };
+  const formatSalaryText = (salaryByYear = []) => {
+  return (salaryByYear || [])
+    .map((x) => {
+      const m = Number(x) / 1_000_000;
+      return Number.isFinite(m) ? String(m) : "";
+    })
+    .filter(Boolean)
+    .join(", ");
+};
+
+const parseSalaryText = (text) => {
+  const vals = String(text || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .map((s) => Math.round(Number(s) * 1_000_000))
+    .filter((n) => Number.isFinite(n) && n >= 0);
+
+  return vals.length ? vals : [8_000_000];
+};
+function getOptionYearIndices(option) {
+  if (!option) return [];
+
+  const raw = Array.isArray(option.yearIndices)
+    ? option.yearIndices
+    : option.yearIndex != null
+    ? [option.yearIndex]
+    : [];
+
+  return [...new Set(
+    raw
+      .map((x) => Number(x))
+      .filter((n) => Number.isInteger(n) && n >= 0)
+  )].sort((a, b) => a - b);
+}
+
+function formatOptionYearsText(option) {
+  return getOptionYearIndices(option)
+    .map((i) => String(i + 1))
+    .join(", ");
+}
+
+function parseOptionYearsText(text, maxN = 1) {
+  const seen = new Set();
+
+  return String(text || "")
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n) && n >= 1)
+    .map((n) => Math.min(maxN, Math.max(1, Math.floor(n))) - 1)
+    .filter((n) => {
+      if (seen.has(n)) return false;
+      seen.add(n);
+      return true;
+    })
+    .sort((a, b) => a - b);
+}
+
+function formatOptionSummary(option) {
+  if (!option?.type) return "—";
+  const ys = getOptionYearIndices(option).map((i) => `Y${i + 1}`);
+  return ys.length ? `${option.type.toUpperCase()} ${ys.join(", ")}` : option.type.toUpperCase();
+}
 
   /* ---------------- Attribute indexes ---------------- */
   const T3 = 0,
@@ -232,7 +327,20 @@ export default function LeagueEditor() {
       alpha: 0.3,
     },
   };
-
+  const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
   const attrNames = [
     "Three Point",
     "Mid Range",
@@ -627,16 +735,27 @@ export default function LeagueEditor() {
         }));
       }
 
+      // FIX 2: load free agents
+      updated.freeAgents = (data.freeAgents || []).map((p) => {
+        const three = p.attrs?.[0] ?? 75;
+        const mid = p.attrs?.[1] ?? 75;
+        const close = p.attrs?.[2] ?? 75;
+        const scoringRating = calcScoringRating(p.pos, three, mid, close);
+        return normalizePlayer({ ...p, scoringRating });
+      });
+
       setLeagueName(updated.leagueName);
       setConferences(updated.conferences);
+      setFreeAgents(updated.freeAgents || []);
     } catch (err) {
       console.error(err);
     }
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("leagueData", JSON.stringify({ leagueName, conferences }));
-  }, [leagueName, conferences]);
+    // FIX 2: save free agents too
+    localStorage.setItem("leagueData", JSON.stringify({ leagueName, conferences, freeAgents }));
+  }, [leagueName, conferences, freeAgents]);
 
   /* ---------------- Live Recalc in Modal ---------------- */
   useEffect(() => {
@@ -685,39 +804,87 @@ export default function LeagueEditor() {
     setEditTeamModal(null);
   };
 
-  const openPlayerForm = (tIdx, pIdx = null) => {
+  // FIX 6: openPlayerForm supports pool selection
+  const openPlayerForm = (tIdx, pIdx = null, pool = "TEAMS") => {
+    setEditingPool(pool);
     setEditingTeam(tIdx);
+
     if (pIdx !== null) {
       setEditingPlayer(pIdx);
-      const ex = conferences[selectedConf][tIdx].players[pIdx];
-      const safe = normalizePlayer({
-        potential: 75,
-        height: 78,
-        secondaryPos: "",
-        scoringRating: 50,
-        ...ex,
-      });
-      setPlayerForm(JSON.parse(JSON.stringify(safe)));
+
+      const ex =
+        pool === "FA"
+          ? freeAgents[pIdx]
+          : conferences[selectedConf][tIdx].players[pIdx];
+const safe = normalizePlayer({
+  potential: 75,
+  height: 78,
+  secondaryPos: "",
+  scoringRating: 50,
+  ...ex,
+});
+setPlayerForm(JSON.parse(JSON.stringify(safe)));
+setSalaryText(formatSalaryText(safe.contract?.salaryByYear || []));
+setOptionYearsText(formatOptionYearsText(safe.contract?.option));
     } else {
-      setEditingPlayer(null);
-      setPlayerForm(initPlayer());
+setEditingPlayer(null);
+const fresh = initPlayer();
+setPlayerForm(fresh);
+setSalaryText(formatSalaryText(fresh.contract?.salaryByYear || []));
+setOptionYearsText(formatOptionYearsText(fresh.contract?.option));
     }
     setShowPlayerForm(true);
   };
 
-  const savePlayer = () => {
-    const p = normalizePlayer({ ...playerForm });
+const savePlayer = () => {
+  const salaryByYear = parseSalaryText(salaryText);
+  const optionType = playerForm.contract?.option?.type ?? null;
+  const optionYearIndices = parseOptionYearsText(
+    optionYearsText,
+    Math.max(1, salaryByYear.length)
+  );
+
+  const builtOption =
+    optionType && optionYearIndices.length
+      ? {
+          type: optionType,
+          yearIndices: optionYearIndices,
+          picked: playerForm.contract?.option?.picked ?? null,
+        }
+      : null;
+
+  const p = normalizePlayer({
+    ...playerForm,
+    contract: {
+      ...(playerForm.contract ?? {}),
+      startYear: playerForm.contract?.startYear ?? 2026,
+      salaryByYear,
+      option: builtOption,
+    },
+  });
     const { off, def } = calcOffDef(p.attrs, p.pos, p.name, p.height);
     p.overall = calcOverall(p.attrs, p.pos);
     p.offRating = off;
     p.defRating = def;
     p.stamina = calcStamina(p.age, p.attrs[ATH]);
-    setConferences((prev) => {
-      const copy = JSON.parse(JSON.stringify(prev));
-      if (editingPlayer !== null) copy[selectedConf][editingTeam].players[editingPlayer] = p;
-      else copy[selectedConf][editingTeam].players.push(p);
-      return copy;
-    });
+
+    // FIX 6: write to correct pool
+    if (editingPool === "FA") {
+      setFreeAgents((prev) => {
+        const copy = JSON.parse(JSON.stringify(prev || []));
+        if (editingPlayer !== null) copy[editingPlayer] = p;
+        else copy.push(p);
+        return copy;
+      });
+    } else {
+      setConferences((prev) => {
+        const copy = JSON.parse(JSON.stringify(prev));
+        if (editingPlayer !== null) copy[selectedConf][editingTeam].players[editingPlayer] = p;
+        else copy[selectedConf][editingTeam].players.push(p);
+        return copy;
+      });
+    }
+
     setShowPlayerForm(false);
   };
 
@@ -773,7 +940,10 @@ export default function LeagueEditor() {
         players: (team.players || []).map(recalcPlayer),
       }));
     });
-    return clone;
+
+    // FIX 3: export recalced free agents too
+    const freeAgentsOut = (freeAgents || []).map(recalcPlayer);
+    return { conferences: clone, freeAgents: freeAgentsOut };
   };
 
   /* ---------------- UI ---------------- */
@@ -818,11 +988,22 @@ export default function LeagueEditor() {
                         }));
                       }
 
+                      // FIX 4: import free agents
+                      updated.freeAgents = (d.freeAgents || []).map((p) => {
+                        const three = p.attrs?.[0] ?? 75;
+                        const mid = p.attrs?.[1] ?? 75;
+                        const close = p.attrs?.[2] ?? 75;
+                        const scoringRating = calcScoringRating(p.pos, three, mid, close);
+                        return normalizePlayer({ ...p, scoringRating });
+                      });
+
                       setLeagueName(updated.leagueName);
                       setConferences(updated.conferences);
+                      setFreeAgents(updated.freeAgents || []);
+
                       localStorage.setItem("leagueData", JSON.stringify(updated));
 
-                      alert(`✅ Imported ${updated.leagueName} (birthdays + contracts kept / added)`);
+                      alert(`✅ Imported ${updated.leagueName} (birthdays + contracts + free agents kept / added)`);
                     } else alert("⚠️ Invalid JSON");
                   } catch {
                     alert("❌ Failed to parse JSON");
@@ -842,8 +1023,9 @@ export default function LeagueEditor() {
 
           <button
             onClick={() => {
+              // FIX 3: export includes free agents, recalced
               const snapshot = buildExportSnapshot();
-              const json = { leagueName, conferences: snapshot };
+              const json = { leagueName, conferences: snapshot.conferences, freeAgents: snapshot.freeAgents };
               const blob = new Blob([JSON.stringify(json, null, 2)], { type: "application/json" });
               const url = URL.createObjectURL(blob);
               const a = document.createElement("a");
@@ -859,194 +1041,354 @@ export default function LeagueEditor() {
         </div>
       </div>
 
+      {/* FIX 5: Pool Toggle */}
       <div className="flex justify-center gap-4">
-        {["East", "West"].map((c) => (
+        {["TEAMS", "FA"].map((p) => (
           <button
-            key={c}
-            onClick={() => setSelectedConf(c)}
+            key={p}
+            onClick={() => setSelectedPool(p)}
             className={`px-4 py-2 rounded ${
-              selectedConf === c ? "bg-green-600 text-white" : "bg-gray-200"
+              selectedPool === p ? "bg-orange-600 text-white" : "bg-gray-200"
             }`}
           >
-            {c} Conference
+            {p === "TEAMS" ? "Teams" : "Free Agents"}
           </button>
         ))}
       </div>
 
-      <div className="flex flex-wrap justify-center gap-2">
-        <input
-          className="border p-2 rounded w-52"
-          placeholder="Team Name"
-          value={newTeamName}
-          onChange={(e) => setNewTeamName(e.target.value)}
-        />
-        <input
-          className="border p-2 rounded w-52"
-          placeholder="Logo URL"
-          value={newTeamLogo}
-          onChange={(e) => setNewTeamLogo(e.target.value)}
-        />
-        <button
-          onClick={addTeam}
-          className="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
-        >
-          Add Team
-        </button>
-      </div>
+      {/* Only show conference toggle when on Teams */}
+      {selectedPool === "TEAMS" && (
+        <div className="flex justify-center gap-4">
+          {["East", "West"].map((c) => (
+            <button
+              key={c}
+              onClick={() => setSelectedConf(c)}
+              className={`px-4 py-2 rounded ${
+                selectedConf === c ? "bg-green-600 text-white" : "bg-gray-200"
+              }`}
+            >
+              {c} Conference
+            </button>
+          ))}
+        </div>
+      )}
 
-      <div className="flex flex-col gap-8">
-        {conferences[selectedConf].map((team, idx) => {
-          const sorted = sortedTeams[idx];
-          const players = team.players || [];
-          return (
-            <div key={idx} className="border rounded-2xl p-8 bg-white shadow-lg">
-              <div className="flex justify-between items-center mb-3">
-                <div className="flex items-center gap-3">
-                  {team.logo && <img src={team.logo} alt="" className="w-14 h-14 object-contain" />}
-                  <h2 className="text-2xl font-bold">{team.name}</h2>
-                </div>
-                <div className="flex gap-2 items-center">
-                  <button
-                    onClick={() => openPlayerForm(idx)}
-                    className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-                  >
-                    Add Player
-                  </button>
-                  <button
-                    onClick={() => toggleAdvanced(idx)}
-                    className="bg-gray-200 px-3 py-1 rounded hover:bg-gray-300"
-                  >
-                    {expandedTeams[idx] ? "Hide Advanced" : "Show Advanced"}
-                  </button>
-                  <button
-                    onClick={() => toggleSort(idx)}
-                    className={`bg-gray-200 px-2 py-1 rounded hover:bg-gray-300 text-lg ${
-                      sorted ? "text-green-600" : ""
-                    }`}
-                    title="Sort by Overall"
-                  >
-                    ⬇️ OVR
-                  </button>
-                  <button
-                    onClick={() => openEditTeam(idx)}
-                    className="text-blue-600 text-xl hover:opacity-80"
-                  >
-                    ✏️
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (window.confirm("Delete team?")) {
-                        setConferences((prev) => {
-                          const c = JSON.parse(JSON.stringify(prev));
-                          c[selectedConf].splice(idx, 1);
-                          return c;
-                        });
-                      }
-                    }}
-                    className="text-red-600 text-xl hover:opacity-75"
-                  >
-                    🗑️
-                  </button>
-                </div>
-              </div>
+      {/* Only show team creation when on Teams */}
+      {selectedPool === "TEAMS" && (
+        <div className="flex flex-wrap justify-center gap-2">
+          <input
+            className="border p-2 rounded w-52"
+            placeholder="Team Name"
+            value={newTeamName}
+            onChange={(e) => setNewTeamName(e.target.value)}
+          />
+          <input
+            className="border p-2 rounded w-52"
+            placeholder="Logo URL"
+            value={newTeamLogo}
+            onChange={(e) => setNewTeamLogo(e.target.value)}
+          />
+          <button
+            onClick={addTeam}
+            className="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
+          >
+            Add Team
+          </button>
+        </div>
+      )}
 
-              <table className="w-full text-base">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left font-semibold">Player</th>
-                    <th className="text-center font-semibold">Pos</th>
-                    <th className="text-center font-semibold">Age</th>
-                    <th className="text-center font-semibold">Height</th>
-                    <th className="text-center font-semibold">OVR</th>
-                    <th className="text-center font-semibold">OFF</th>
-                    <th className="text-center font-semibold">DEF</th>
-                    <th className="text-center font-semibold">POT</th>
-                    <th className="text-center font-semibold">SCO</th>
-                    <th></th>
+      {/* FIX 7: Free Agents table */}
+      {selectedPool === "FA" && (
+        <div className="border rounded-2xl p-8 bg-white shadow-lg">
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="text-2xl font-bold">Free Agents</h2>
+            <button
+              onClick={() => {
+                openPlayerForm(null, null, "FA");
+                setPlayerForm((prev) => ({ ...prev, contract: null }));
+              }}
+              className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+            >
+              Add Free Agent
+            </button>
+          </div>
+
+          <table className="w-full text-base">
+            <thead>
+              <tr className="border-b">
+                <th className="text-left font-semibold">Player</th>
+                <th className="text-center font-semibold">Pos</th>
+                <th className="text-center font-semibold">Age</th>
+                <th className="text-center font-semibold">Height</th>
+                <th className="text-center font-semibold">OVR</th>
+                <th className="text-center font-semibold">OFF</th>
+                <th className="text-center font-semibold">DEF</th>
+                <th className="text-center font-semibold">POT</th>
+                <th className="text-center font-semibold">SCO</th>
+                <th className="text-center font-semibold">Contract</th>
+                <th></th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {(freeAgents || []).map((p0, i) => {
+                const p = normalizePlayer(p0);
+                const live = calcOffDef(p.attrs, p.pos, p.name, p.height);
+
+                return (
+                  <tr key={p.id || i} className="border-b align-middle py-4">
+                    <td className="flex items-center gap-4 py-4">
+                      {p.headshot && (
+                        <div
+                          className="w-16 h-16 rounded-full bg-white border border-slate-200"
+                          style={{
+                            backgroundImage: `url(${p.headshot})`,
+                            backgroundSize: "80%",
+                            backgroundPosition: "center 10%",
+                            backgroundRepeat: "no-repeat",
+                          }}
+                        />
+                      )}
+                      <div>
+                        <div className="font-semibold text-base">{p.name}</div>
+                        <div className="text-[0.8rem] text-slate-600">FA</div>
+                      </div>
+                    </td>
+
+                    <td className="text-center">
+                      {p.pos}
+                      {p.secondaryPos ? ` / ${p.secondaryPos}` : ""}
+                    </td>
+                    <td className="text-center">{p.age}</td>
+                    <td className="text-center">{formatHeight(p.height)}</td>
+                    <td className="text-center font-bold">{p.overall}</td>
+                    <td className="text-center">{live.off}</td>
+                    <td className="text-center">{live.def}</td>
+                    <td className="text-center">{p.potential}</td>
+                    <td className="text-center">{p.scoringRating?.toFixed(1) ?? "—"}</td>
+
+                    <td className="text-center text-sm text-slate-700">
+                      {(() => {
+                        const c = p.contract;
+                        if (!c) return "Unsigned";
+                        const years = c.salaryByYear ?? [];
+                        const cur = years.length ? years[0] : 0;
+                        const curM = (Number(cur) || 0) / 1_000_000;
+
+const opt = formatOptionSummary(c.option);
+
+                        return `${years.length}Y | $${curM.toFixed(1)}M | ${opt}`;
+                      })()}
+                    </td>
+
+                    <td className="text-right">
+                      <button
+                        onClick={() => openPlayerForm(null, i, "FA")}
+                        className="text-blue-600 text-sm hover:underline mr-2"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => {
+                          setFreeAgents((prev) => {
+                            const copy = JSON.parse(JSON.stringify(prev || []));
+                            copy.splice(i, 1);
+                            return copy;
+                          });
+                        }}
+                        className="text-red-600 text-xl hover:opacity-75"
+                      >
+                        🗑️
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {players.map((p0, i) => {
-                    const p = normalizePlayer(p0);
-                    const live = calcOffDef(p.attrs, p.pos, p.name, p.height);
-                    return (
-                      <tr key={p.id || i} className="border-b align-middle py-4">
-                        <td className="flex items-center gap-4 py-4">
-                          {p.headshot && (
-                            <div
-                              className="w-16 h-16 rounded-full bg-white border border-slate-200"
-                              style={{
-                                backgroundImage: `url(${p.headshot})`,
-                                backgroundSize: "80%",
-                                backgroundPosition: "center 10%",
-                                backgroundRepeat: "no-repeat",
-                              }}
-                            />
-                          )}
-                          <div>
-                            <div className="font-semibold text-base">{p.name}</div>
-                            {expandedTeams[idx] && (
-                              <div className="text-[0.8rem] text-slate-600 grid grid-cols-3 gap-x-2">
-                                {attrNames.map((n, j) => (
-                                  <span key={j}>
-                                    {n.split(" ")[0]} {p.attrs?.[j]}
-                                  </span>
-                                ))}
-                                <span>Off {live.off}</span>
-                                <span>Def {live.def}</span>
-                                <span>Sta {p.stamina}</span>
-                                <span>Pot {p.potential}</span>
-                                <span>Sco {p.scoringRating?.toFixed(1)}</span>
-                                <span>Ht {formatHeight(p.height)}</span>
-                                <span>BD {p.birthMonth}/{p.birthDay}</span>
-                                <span>Yrs {(p.contract?.salaryByYear || []).length}</span>
-                                <span>
-                                  Opt {p.contract?.option?.type ? `${p.contract.option.type} Y${(p.contract.option.yearIndex ?? 0) + 1}` : "None"}
-                                </span>
-                              </div>
+                );
+              })}
+
+              {!(freeAgents || []).length && (
+                <tr>
+                  <td colSpan={11} className="text-center text-slate-500 py-6">
+                    No free agents yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Teams view stays the same, but only renders when TEAMS */}
+      {selectedPool === "TEAMS" && (
+        <div className="flex flex-col gap-8">
+          {conferences[selectedConf].map((team, idx) => {
+            const sorted = sortedTeams[idx];
+            const players = team.players || [];
+            return (
+              <div key={idx} className="border rounded-2xl p-8 bg-white shadow-lg">
+                <div className="flex justify-between items-center mb-3">
+                  <div className="flex items-center gap-3">
+                    {team.logo && <img src={team.logo} alt="" className="w-14 h-14 object-contain" />}
+                    <h2 className="text-2xl font-bold">{team.name}</h2>
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <button
+                      onClick={() => openPlayerForm(idx)}
+                      className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                    >
+                      Add Player
+                    </button>
+                    <button
+                      onClick={() => toggleAdvanced(idx)}
+                      className="bg-gray-200 px-3 py-1 rounded hover:bg-gray-300"
+                    >
+                      {expandedTeams[idx] ? "Hide Advanced" : "Show Advanced"}
+                    </button>
+                    <button
+                      onClick={() => toggleSort(idx)}
+                      className={`bg-gray-200 px-2 py-1 rounded hover:bg-gray-300 text-lg ${
+                        sorted ? "text-green-600" : ""
+                      }`}
+                      title="Sort by Overall"
+                    >
+                      ⬇️ OVR
+                    </button>
+                    <button
+                      onClick={() => openEditTeam(idx)}
+                      className="text-blue-600 text-xl hover:opacity-80"
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (window.confirm("Delete team?")) {
+                          setConferences((prev) => {
+                            const c = JSON.parse(JSON.stringify(prev));
+                            c[selectedConf].splice(idx, 1);
+                            return c;
+                          });
+                        }
+                      }}
+                      className="text-red-600 text-xl hover:opacity-75"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                </div>
+
+                <table className="w-full text-base">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left font-semibold">Player</th>
+                      <th className="text-center font-semibold">Pos</th>
+                      <th className="text-center font-semibold">Age</th>
+                      <th className="text-center font-semibold">Height</th>
+                      <th className="text-center font-semibold">OVR</th>
+                      <th className="text-center font-semibold">OFF</th>
+                      <th className="text-center font-semibold">DEF</th>
+                      <th className="text-center font-semibold">POT</th>
+                      <th className="text-center font-semibold">SCO</th>
+                      <th className="text-center font-semibold">Contract</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {players.map((p0, i) => {
+                      const p = normalizePlayer(p0);
+                      const live = calcOffDef(p.attrs, p.pos, p.name, p.height);
+                      return (
+                        <tr key={p.id || i} className="border-b align-middle py-4">
+                          <td className="flex items-center gap-4 py-4">
+                            {p.headshot && (
+                              <div
+                                className="w-16 h-16 rounded-full bg-white border border-slate-200"
+                                style={{
+                                  backgroundImage: `url(${p.headshot})`,
+                                  backgroundSize: "80%",
+                                  backgroundPosition: "center 10%",
+                                  backgroundRepeat: "no-repeat",
+                                }}
+                              />
                             )}
-                          </div>
-                        </td>
-                        <td className="text-center">
-                          {p.pos}
-                          {p.secondaryPos ? ` / ${p.secondaryPos}` : ""}
-                        </td>
-                        <td className="text-center">{p.age}</td>
-                        <td className="text-center">{formatHeight(p.height)}</td>
-                        <td className="text-center font-bold">{p.overall}</td>
-                        <td className="text-center">{live.off}</td>
-                        <td className="text-center">{live.def}</td>
-                        <td className="text-center">{p.potential}</td>
-                        <td className="text-center">{p.scoringRating?.toFixed(1) ?? "—"}</td>
-                        <td className="text-right">
-                          <button
-                            onClick={() => openPlayerForm(idx, i)}
-                            className="text-blue-600 text-sm hover:underline mr-2"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => {
-                              setConferences((prev) => {
-                                const c = JSON.parse(JSON.stringify(prev));
-                                c[selectedConf][idx].players.splice(i, 1);
-                                return c;
-                              });
-                            }}
-                            className="text-red-600 text-xl hover:opacity-75"
-                          >
-                            🗑️
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          );
-        })}
-      </div>
+                            <div>
+                              <div className="font-semibold text-base">{p.name}</div>
+                              {expandedTeams[idx] && (
+                                <div className="text-[0.8rem] text-slate-600 grid grid-cols-3 gap-x-2">
+                                  {attrNames.map((n, j) => (
+                                    <span key={j}>
+                                      {n.split(" ")[0]} {p.attrs?.[j]}
+                                    </span>
+                                  ))}
+                                  <span>Off {live.off}</span>
+                                  <span>Def {live.def}</span>
+                                  <span>Sta {p.stamina}</span>
+                                  <span>Pot {p.potential}</span>
+                                  <span>Sco {p.scoringRating?.toFixed(1)}</span>
+                                  <span>Ht {formatHeight(p.height)}</span>
+                                  <span>BD {p.birthMonth}/{p.birthDay}</span>
+                                  <span>Yrs {(p.contract?.salaryByYear || []).length}</span>
+<span>
+  Opt {formatOptionSummary(p.contract?.option) === "—" ? "None" : formatOptionSummary(p.contract?.option)}
+</span>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td className="text-center">
+                            {p.pos}
+                            {p.secondaryPos ? ` / ${p.secondaryPos}` : ""}
+                          </td>
+                          <td className="text-center">{p.age}</td>
+                          <td className="text-center">{formatHeight(p.height)}</td>
+                          <td className="text-center font-bold">{p.overall}</td>
+                          <td className="text-center">{live.off}</td>
+                          <td className="text-center">{live.def}</td>
+                          <td className="text-center">{p.potential}</td>
+                          <td className="text-center">{p.scoringRating?.toFixed(1) ?? "—"}</td>
+
+                          <td className="text-center text-sm text-slate-700">
+                            {(() => {
+                              const c = p.contract;
+                              if (!c) return "—";
+                              const years = c.salaryByYear ?? [];
+                              const cur = years.length ? years[0] : 0;
+                              const curM = (Number(cur) || 0) / 1_000_000;
+
+const opt = formatOptionSummary(c.option);
+
+                              return `${years.length}Y | $${curM.toFixed(1)}M | ${opt}`;
+                            })()}
+                          </td>
+
+                          <td className="text-right">
+                            <button
+                              onClick={() => openPlayerForm(idx, i)}
+                              className="text-blue-600 text-sm hover:underline mr-2"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => {
+                                setConferences((prev) => {
+                                  const c = JSON.parse(JSON.stringify(prev));
+                                  c[selectedConf][idx].players.splice(i, 1);
+                                  return c;
+                                });
+                              }}
+                              className="text-red-600 text-xl hover:opacity-75"
+                            >
+                              🗑️
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Trades Modal */}
       {showTradeModal && (
@@ -1222,143 +1564,213 @@ export default function LeagueEditor() {
                 onChange={(e) => setPlayerForm({ ...playerForm, headshot: e.target.value })}
               />
 
-              {/* NEW: Birthdays */}
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  className="border p-2 rounded"
-                  type="number"
-                  min="1"
-                  max="12"
-                  placeholder="Birth Month (1-12)"
-                  value={playerForm.birthMonth ?? 1}
-                  onChange={(e) =>
-                    setPlayerForm({ ...playerForm, birthMonth: Number(e.target.value) })
-                  }
-                />
-                <input
-                  className="border p-2 rounded"
-                  type="number"
-                  min="1"
-                  max="31"
-                  placeholder="Birth Day (1-31)"
-                  value={playerForm.birthDay ?? 1}
-                  onChange={(e) =>
-                    setPlayerForm({ ...playerForm, birthDay: Number(e.target.value) })
-                  }
-                />
+              {/* Bio */}
+              <div className="mt-2">
+                <div className="text-sm font-semibold text-slate-700 mb-1">Bio</div>
+                <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-slate-600">Birth Month</label>
+                  <select
+                    className="border p-2 rounded w-full"
+                    value={(playerForm.birthMonth ?? 1) - 1}
+                    onChange={(e) =>
+                      setPlayerForm({
+                        ...playerForm,
+                        birthMonth: Number(e.target.value) + 1,
+                      })
+                    }
+                  >
+                    {MONTHS.map((m, idx) => (
+                      <option key={m} value={idx}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                  <div>
+                    <label className="text-xs text-slate-600">Birth Day</label>
+                    <input
+                      className="border p-2 rounded w-full"
+                      type="number"
+                      min="1"
+                      max="31"
+                      placeholder="DD"
+                      value={playerForm.birthDay ?? 1}
+                      onChange={(e) => setPlayerForm({ ...playerForm, birthDay: Number(e.target.value) })}
+                    />
+                  </div>
+                </div>
               </div>
 
-              {/* NEW: Contract */}
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  className="border p-2 rounded"
-                  type="number"
-                  placeholder="Contract Start Year"
-                  value={playerForm.contract?.startYear ?? 2026}
-                  onChange={(e) => {
-                    const startYear = Number(e.target.value);
-                    setPlayerForm({
-                      ...playerForm,
-                      contract: {
-                        ...(playerForm.contract ?? {}),
-                        startYear,
-                        salaryByYear: playerForm.contract?.salaryByYear ?? [8_000_000],
-                        option: playerForm.contract?.option ?? null,
-                      },
-                    });
-                  }}
-                />
+              {/* Contract */}
+              <div className="mt-4">
+                <div className="text-sm font-semibold text-slate-700 mb-1">Contract</div>
 
-                <input
-                  className="border p-2 rounded"
-                  type="text"
-                  placeholder="Salaries CSV (millions) e.g. 8, 8.5, 9"
-                  value={(playerForm.contract?.salaryByYear ?? [])
-                    .map((x) => {
-                      const m = Number(x) / 1_000_000;
-                      const s = m.toFixed(1);
-                      return s.endsWith(".0") ? s.slice(0, -2) : s;
-                    })
-                    .join(", ")}
-                  onChange={(e) => {
-                    const salaryByYear = e.target.value
-                      .split(",")
-                      .map((s) => s.trim())
-                      .filter((s) => s.length > 0)
-                      .map((s) => Math.round(Number(s) * 1_000_000))
-                      .filter((n) => Number.isFinite(n) && n >= 0);
+                {editingPool === "FA" && (
+                  <div className="text-xs text-slate-500 mb-2">
+                    Free agents are unsigned. Contract is set when they sign with a team.
+                  </div>
+                )}
 
-                    setPlayerForm({
-                      ...playerForm,
-                      contract: {
-                        ...(playerForm.contract ?? {}),
-                        startYear: playerForm.contract?.startYear ?? 2026,
-                        salaryByYear: salaryByYear.length ? salaryByYear : [8_000_000],
-                        option: playerForm.contract?.option ?? null,
-                      },
-                    });
-                  }}
-                />
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-slate-600">Start Year</label>
+                    <input
+                      className="border p-2 rounded w-full"
+                      type="number"
+                      placeholder="2026"
+                      value={playerForm.contract?.startYear ?? 2026}
+                      onChange={(e) => {
+                        const startYear = Number(e.target.value);
+                        setPlayerForm({
+                          ...playerForm,
+                          contract: {
+                            ...(playerForm.contract ?? {}),
+                            startYear,
+                            salaryByYear: playerForm.contract?.salaryByYear ?? [8_000_000],
+                            option: playerForm.contract?.option ?? null,
+                          },
+                        });
+                      }}
+                      disabled={editingPool === "FA"}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-600">Salaries (in $M, CSV)</label>
+<input
+  className="border p-2 rounded w-full"
+  type="text"
+  placeholder="8, 8.5, 9"
+  value={salaryText}
+  onChange={(e) => {
+    const raw = e.target.value;
+    setSalaryText(raw);
+
+    setPlayerForm({
+      ...playerForm,
+      contract: {
+        ...(playerForm.contract ?? {}),
+        startYear: playerForm.contract?.startYear ?? 2026,
+        salaryByYear: parseSalaryText(raw),
+        option: playerForm.contract?.option ?? null,
+      },
+    });
+  }}
+/>
+                  </div>
+                </div>
+
+                <div className="text-xs text-slate-500 mt-1">
+                  Stored as dollars in JSON (ex: 8.5 becomes 8500000).
+                </div>
               </div>
 
-              {/* NEW: Option */}
-              <div className="grid grid-cols-2 gap-2">
-                <select
-                  className="border p-2 rounded"
-                  value={playerForm.contract?.option?.type ?? "none"}
-                  onChange={(e) => {
-                    const type = e.target.value;
-                    const cur = playerForm.contract ?? { startYear: 2026, salaryByYear: [8_000_000], option: null };
+              {/* Option */}
+              <div className="mt-4">
+                <div className="text-sm font-semibold text-slate-700 mb-1">Option</div>
 
-                    setPlayerForm({
-                      ...playerForm,
-                      contract: {
-                        ...cur,
-                        option:
-                          type === "none"
-                            ? null
-                            : {
-                                yearIndex: cur.option?.yearIndex ?? Math.max(0, (cur.salaryByYear?.length ?? 1) - 1),
-                                type,
-                                picked: cur.option?.picked ?? null,
-                              },
-                      },
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-slate-600">Option Type</label>
+                    <select
+                      className="border p-2 rounded w-full"
+                      value={playerForm.contract?.option?.type ?? "none"}
+onChange={(e) => {
+  const type = e.target.value;
+  const cur = playerForm.contract ?? {
+    startYear: 2026,
+    salaryByYear: [8_000_000],
+    option: null,
+  };
+
+  const maxN = Math.max(1, cur.salaryByYear?.length ?? 1);
+  const parsedYears = parseOptionYearsText(
+    optionYearsText || formatOptionYearsText(cur.option),
+    maxN
+  );
+  const nextYears = parsedYears.length ? parsedYears : [Math.max(0, maxN - 1)];
+
+  const nextOption =
+    type === "none"
+      ? null
+      : {
+          type,
+          yearIndices: nextYears,
+          picked: cur.option?.picked ?? null,
+        };
+
+  setPlayerForm({
+    ...playerForm,
+    contract: {
+      ...cur,
+      option: nextOption,
+    },
+  });
+
+  setOptionYearsText(type === "none" ? "" : nextYears.map((i) => String(i + 1)).join(", "));
+}}
+                      disabled={editingPool === "FA"}
+                    >
+                      <option value="none">None</option>
+                      <option value="team">Team Option</option>
+                      <option value="player">Player Option</option>
+                    </select>
+                  </div>
+
+<div>
+  <label className="text-xs text-slate-600">Option Year(s) (1..N, CSV)</label>
+  <input
+    className="border p-2 rounded w-full"
+    type="text"
+    placeholder="1 or 1, 2"
+    value={optionYearsText}
+    onChange={(e) => {
+      const raw = e.target.value;
+      setOptionYearsText(raw);
+
+      const cur = playerForm.contract ?? {
+        startYear: 2026,
+        salaryByYear: [8_000_000],
+        option: null,
+      };
+      if (!cur.option) return;
+
+      const maxN = Math.max(1, cur.salaryByYear?.length ?? 1);
+      const yearIndices = parseOptionYearsText(raw, maxN);
+
+      setPlayerForm({
+        ...playerForm,
+        contract: {
+          ...cur,
+          option: {
+            ...cur.option,
+            yearIndices,
+          },
+        },
+      });
+    }}
+    disabled={!playerForm.contract?.option || editingPool === "FA"}
+  />
+</div>
+                </div>
+
+                <div className="mt-2 text-sm text-slate-700">
+                  <span className="font-semibold">Preview:</span>{" "}
+                  {(() => {
+                    const c = playerForm.contract;
+                    if (!c) return "—";
+                    const start = c.startYear ?? 2026;
+                    const years = c.salaryByYear ?? [];
+                    const parts = years.map((v, i) => {
+                      const yr = start + i;
+                      const m = (Number(v) || 0) / 1_000_000;
+                      return `${yr}: $${m.toFixed(1)}M`;
                     });
-                  }}
-                >
-                  <option value="none">No Option</option>
-                  <option value="team">Team Option</option>
-                  <option value="player">Player Option</option>
-                </select>
-
-                <input
-                  className="border p-2 rounded"
-                  type="number"
-                  min="1"
-                  placeholder="Option Year (1..N)"
-                  value={
-                    playerForm.contract?.option
-                      ? Number(playerForm.contract.option.yearIndex ?? 0) + 1
-                      : 1
-                  }
-                  onChange={(e) => {
-                    const year1 = Math.max(1, Number(e.target.value));
-                    const cur = playerForm.contract ?? { startYear: 2026, salaryByYear: [8_000_000], option: null };
-                    if (!cur.option) return;
-
-                    const maxN = Math.max(1, cur.salaryByYear?.length ?? 1);
-                    const clamped = Math.min(maxN, Math.max(1, year1));
-
-                    setPlayerForm({
-                      ...playerForm,
-                      contract: {
-                        ...cur,
-                        option: { ...cur.option, yearIndex: clamped - 1 },
-                      },
-                    });
-                  }}
-                  disabled={!playerForm.contract?.option}
-                />
+                    const opt = c.option?.type ? ` (${formatOptionSummary(c.option)})` : "";
+                    return parts.join(", ") + opt;
+                  })()}
+                </div>
               </div>
 
               <select

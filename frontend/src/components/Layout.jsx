@@ -42,6 +42,9 @@ export default function Layout() {
             <Link to="/league-editor" className="hover:underline">
               League Editor
             </Link>
+            <Link to="/salary-table" className="hover:underline">
+              Salary Table
+            </Link>
             <Link to="/play" className="hover:underline">
               Play
             </Link>
