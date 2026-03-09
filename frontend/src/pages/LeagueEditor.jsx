@@ -28,18 +28,18 @@ export default function LeagueEditor() {
   const [editingPool, setEditingPool] = useState("TEAMS");
 
   const [showPlayerForm, setShowPlayerForm] = useState(false);
-const [playerForm, setPlayerForm] = useState(initPlayer());
-const [salaryText, setSalaryText] = useState("");
-const [optionYearsText, setOptionYearsText] = useState("");
+  const [playerForm, setPlayerForm] = useState(initPlayer());
+  const [salaryText, setSalaryText] = useState("");
+  const [optionYearsText, setOptionYearsText] = useState("");
   const [expandedTeams, setExpandedTeams] = useState({});
   const [sortedTeams, setSortedTeams] = useState({});
   const [originalOrders, setOriginalOrders] = useState({});
   const [editTeamModal, setEditTeamModal] = useState(null);
 
-  // Trades modal state (simple roster swap tool)
+  // Trades modal state (teams + free agents bucket)
   const [showTradeModal, setShowTradeModal] = useState(false);
-  const [tradeA, setTradeA] = useState({ conf: "East", teamIdx: 0 });
-  const [tradeB, setTradeB] = useState({ conf: "West", teamIdx: 0 });
+  const [tradeA, setTradeA] = useState({ pool: "TEAMS", conf: "East", teamIdx: 0 });
+  const [tradeB, setTradeB] = useState({ pool: "TEAMS", conf: "West", teamIdx: 0 });
   const [sendAIds, setSendAIds] = useState([]);
   const [sendBIds, setSendBIds] = useState([]);
 
@@ -59,55 +59,125 @@ const [optionYearsText, setOptionYearsText] = useState("");
     return out;
   }, [conferences]);
 
-  const getTeam = (ref) => conferences?.[ref.conf]?.[ref.teamIdx] || null;
+  const tradeTargets = useMemo(() => {
+    return [
+      ...allTeamsFlat.map((t) => ({
+        ...t,
+        pool: "TEAMS",
+      })),
+      {
+        key: "FA",
+        pool: "FA",
+        conf: null,
+        teamIdx: null,
+        name: "Free Agents",
+      },
+    ];
+  }, [allTeamsFlat]);
+
+  const getTeam = (ref) => {
+    if (!ref || ref.pool !== "TEAMS") return null;
+    return conferences?.[ref.conf]?.[ref.teamIdx] || null;
+  };
+
+  const getTradeBucket = (ref, confState = conferences, faState = freeAgents) => {
+    if (!ref) return [];
+    if (ref.pool === "FA") return faState || [];
+    return confState?.[ref.conf]?.[ref.teamIdx]?.players || [];
+  };
+
+  const getTradeLabel = (ref) => {
+    if (!ref) return "Unknown";
+    if (ref.pool === "FA") return "Free Agents";
+    return getTeam(ref)?.name || "Unknown Team";
+  };
+
+  const getTradeLogo = (ref) => {
+    if (!ref || ref.pool === "FA") return "";
+    return getTeam(ref)?.logo || "";
+  };
+
+  const encodeTradeRef = (ref) => {
+    if (!ref) return "";
+    if (ref.pool === "FA") return "FA";
+    return `${ref.conf}-${ref.teamIdx}`;
+  };
+
+  const decodeTradeRef = (value) => {
+    if (value === "FA") {
+      return { pool: "FA", conf: null, teamIdx: null };
+    }
+    const [conf, idxStr] = String(value).split("-");
+    return {
+      pool: "TEAMS",
+      conf,
+      teamIdx: Number(idxStr),
+    };
+  };
 
   const toggleId = (arr, id) =>
     arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id];
 
   const openTradeModal = () => {
-    const firstEast = conferences?.East?.length
-      ? { conf: "East", teamIdx: 0 }
-      : { conf: "West", teamIdx: 0 };
-    const firstWest = conferences?.West?.length
-      ? { conf: "West", teamIdx: 0 }
-      : { conf: "East", teamIdx: 0 };
+    const firstTeam = conferences?.East?.length
+      ? { pool: "TEAMS", conf: "East", teamIdx: 0 }
+      : conferences?.West?.length
+      ? { pool: "TEAMS", conf: "West", teamIdx: 0 }
+      : { pool: "FA", conf: null, teamIdx: null };
 
-    setTradeA(firstEast);
-    setTradeB(firstWest);
+    const secondTarget = conferences?.West?.length
+      ? { pool: "TEAMS", conf: "West", teamIdx: 0 }
+      : { pool: "FA", conf: null, teamIdx: null };
+
+    setTradeA(firstTeam);
+    setTradeB(secondTarget);
     setSendAIds([]);
     setSendBIds([]);
     setShowTradeModal(true);
   };
 
   const executeTrade = () => {
-    const A = getTeam(tradeA);
-    const B = getTeam(tradeB);
+    const sameBucket =
+      tradeA.pool === tradeB.pool &&
+      tradeA.conf === tradeB.conf &&
+      tradeA.teamIdx === tradeB.teamIdx;
 
-    if (!A || !B) return;
-
-    if (tradeA.conf === tradeB.conf && tradeA.teamIdx === tradeB.teamIdx) {
-      alert("Pick two different teams.");
+    if (sameBucket) {
+      alert("Pick two different destinations.");
       return;
     }
 
-    setConferences((prev) => {
-      const copy = JSON.parse(JSON.stringify(prev));
+    const confCopy = JSON.parse(JSON.stringify(conferences));
+    const faCopy = JSON.parse(JSON.stringify(freeAgents || []));
 
-      const teamA = copy[tradeA.conf][tradeA.teamIdx];
-      const teamB = copy[tradeB.conf][tradeB.teamIdx];
+    const bucketA = getTradeBucket(tradeA, confCopy, faCopy);
+    const bucketB = getTradeBucket(tradeB, confCopy, faCopy);
 
-      const aSend = (teamA.players || []).filter((p) => sendAIds.includes(p.id));
-      const bSend = (teamB.players || []).filter((p) => sendBIds.includes(p.id));
+    const aSend = bucketA.filter((p) => sendAIds.includes(p.id));
+    const bSend = bucketB.filter((p) => sendBIds.includes(p.id));
 
-      teamA.players = (teamA.players || [])
-        .filter((p) => !sendAIds.includes(p.id))
-        .concat(bSend);
-      teamB.players = (teamB.players || [])
-        .filter((p) => !sendBIds.includes(p.id))
-        .concat(aSend);
+    const nextA = bucketA
+      .filter((p) => !sendAIds.includes(p.id))
+      .concat(bSend);
 
-      return copy;
-    });
+    const nextB = bucketB
+      .filter((p) => !sendBIds.includes(p.id))
+      .concat(aSend);
+
+    if (tradeA.pool === "FA") {
+      faCopy.splice(0, faCopy.length, ...nextA);
+    } else {
+      confCopy[tradeA.conf][tradeA.teamIdx].players = nextA;
+    }
+
+    if (tradeB.pool === "FA") {
+      faCopy.splice(0, faCopy.length, ...nextB);
+    } else {
+      confCopy[tradeB.conf][tradeB.teamIdx].players = nextB;
+    }
+
+    setConferences(confCopy);
+    setFreeAgents(faCopy);
 
     setSendAIds([]);
     setSendBIds([]);
@@ -178,21 +248,21 @@ const [optionYearsText, setOptionYearsText] = useState("");
             option: null,
           });
 
-const rawOption = contract?.option ?? null;
+    const rawOption = contract?.option ?? null;
 
-const safeContract = {
-  startYear: Number(contract?.startYear ?? 2026),
-  salaryByYear: Array.isArray(contract?.salaryByYear)
-    ? contract.salaryByYear.map((x) => Number(x) || 0)
-    : [8_000_000],
-  option: rawOption
-    ? {
-        type: rawOption?.type === "player" ? "player" : "team",
-        yearIndices: getOptionYearIndices(rawOption),
-        picked: rawOption?.picked ?? null,
-      }
-    : null,
-};
+    const safeContract = {
+      startYear: Number(contract?.startYear ?? 2026),
+      salaryByYear: Array.isArray(contract?.salaryByYear)
+        ? contract.salaryByYear.map((x) => Number(x) || 0)
+        : [8_000_000],
+      option: rawOption
+        ? {
+            type: rawOption?.type === "player" ? "player" : "team",
+            yearIndices: getOptionYearIndices(rawOption),
+            picked: rawOption?.picked ?? null,
+          }
+        : null,
+    };
 
     return {
       ...p,
@@ -203,69 +273,71 @@ const safeContract = {
       contract: safeContract,
     };
   };
+
   const formatSalaryText = (salaryByYear = []) => {
-  return (salaryByYear || [])
-    .map((x) => {
-      const m = Number(x) / 1_000_000;
-      return Number.isFinite(m) ? String(m) : "";
-    })
-    .filter(Boolean)
-    .join(", ");
-};
+    return (salaryByYear || [])
+      .map((x) => {
+        const m = Number(x) / 1_000_000;
+        return Number.isFinite(m) ? String(m) : "";
+      })
+      .filter(Boolean)
+      .join(", ");
+  };
 
-const parseSalaryText = (text) => {
-  const vals = String(text || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-    .map((s) => Math.round(Number(s) * 1_000_000))
-    .filter((n) => Number.isFinite(n) && n >= 0);
+  const parseSalaryText = (text) => {
+    const vals = String(text || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .map((s) => Math.round(Number(s) * 1_000_000))
+      .filter((n) => Number.isFinite(n) && n >= 0);
 
-  return vals.length ? vals : [8_000_000];
-};
-function getOptionYearIndices(option) {
-  if (!option) return [];
+    return vals.length ? vals : [8_000_000];
+  };
 
-  const raw = Array.isArray(option.yearIndices)
-    ? option.yearIndices
-    : option.yearIndex != null
-    ? [option.yearIndex]
-    : [];
+  function getOptionYearIndices(option) {
+    if (!option) return [];
 
-  return [...new Set(
-    raw
-      .map((x) => Number(x))
-      .filter((n) => Number.isInteger(n) && n >= 0)
-  )].sort((a, b) => a - b);
-}
+    const raw = Array.isArray(option.yearIndices)
+      ? option.yearIndices
+      : option.yearIndex != null
+      ? [option.yearIndex]
+      : [];
 
-function formatOptionYearsText(option) {
-  return getOptionYearIndices(option)
-    .map((i) => String(i + 1))
-    .join(", ");
-}
+    return [...new Set(
+      raw
+        .map((x) => Number(x))
+        .filter((n) => Number.isInteger(n) && n >= 0)
+    )].sort((a, b) => a - b);
+  }
 
-function parseOptionYearsText(text, maxN = 1) {
-  const seen = new Set();
+  function formatOptionYearsText(option) {
+    return getOptionYearIndices(option)
+      .map((i) => String(i + 1))
+      .join(", ");
+  }
 
-  return String(text || "")
-    .split(",")
-    .map((s) => Number(s.trim()))
-    .filter((n) => Number.isFinite(n) && n >= 1)
-    .map((n) => Math.min(maxN, Math.max(1, Math.floor(n))) - 1)
-    .filter((n) => {
-      if (seen.has(n)) return false;
-      seen.add(n);
-      return true;
-    })
-    .sort((a, b) => a - b);
-}
+  function parseOptionYearsText(text, maxN = 1) {
+    const seen = new Set();
 
-function formatOptionSummary(option) {
-  if (!option?.type) return "—";
-  const ys = getOptionYearIndices(option).map((i) => `Y${i + 1}`);
-  return ys.length ? `${option.type.toUpperCase()} ${ys.join(", ")}` : option.type.toUpperCase();
-}
+    return String(text || "")
+      .split(",")
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n >= 1)
+      .map((n) => Math.min(maxN, Math.max(1, Math.floor(n))) - 1)
+      .filter((n) => {
+        if (seen.has(n)) return false;
+        seen.add(n);
+        return true;
+      })
+      .sort((a, b) => a - b);
+  }
+
+  function formatOptionSummary(option) {
+    if (!option?.type) return "—";
+    const ys = getOptionYearIndices(option).map((i) => `Y${i + 1}`);
+    return ys.length ? `${option.type.toUpperCase()} ${ys.join(", ")}` : option.type.toUpperCase();
+  }
 
   /* ---------------- Attribute indexes ---------------- */
   const T3 = 0,
@@ -327,20 +399,22 @@ function formatOptionSummary(option) {
       alpha: 0.3,
     },
   };
+
   const MONTHS = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+
   const attrNames = [
     "Three Point",
     "Mid Range",
@@ -463,8 +537,7 @@ function formatOptionSummary(option) {
       return Math.max(1.0, Math.sqrt(v));
     };
 
-    const posMean = {},
-      posStd = {};
+    const posMean = {}, posStd = {};
     for (const p of POS) {
       posMean[p] = {};
       posStd[p] = {};
@@ -474,8 +547,8 @@ function formatOptionSummary(option) {
         posStd[p][k] = arr.length ? sampleStd(arr) : 1.0;
       }
     }
-    const absMean = {},
-      absStd = {};
+
+    const absMean = {}, absStd = {};
     for (const k of offIdx) {
       const arr = absBuckets[k];
       absMean[k] = arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 75;
@@ -487,8 +560,7 @@ function formatOptionSummary(option) {
     const zAbs = (attrs, k) => (attrs[k] - (absMean[k] ?? 75)) / safe(absStd[k]);
 
     const pfBridgedWeights = (() => {
-      const pf = OFF_WEIGHTS_POSZ.PF,
-        sf = OFF_WEIGHTS_POSZ.SF;
+      const pf = OFF_WEIGHTS_POSZ.PF, sf = OFF_WEIGHTS_POSZ.SF;
       const keys = new Set([...Object.keys(pf), ...Object.keys(sf)].map(Number));
       const out = {};
       for (const k of keys) out[k] = 0.7 * (pf[k] || 0) + 0.3 * (sf[k] || 0);
@@ -503,13 +575,13 @@ function formatOptionSummary(option) {
       const w = p === "PF" ? pfBridgedWeights : OFF_WEIGHTS_POSZ[p] || OFF_WEIGHTS_POSZ.SF;
       const mix = ABS_MIX[p] ?? 0.1;
 
-      let zPosSum = 0,
-        zAbsSum = 0;
+      let zPosSum = 0, zAbsSum = 0;
       for (const [kStr, wt] of Object.entries(w)) {
         const k = +kStr;
         zPosSum += wt * zPos(attrs, p, k);
         zAbsSum += wt * zAbs(attrs, k);
       }
+
       let off = zToRating((1 - mix) * zPosSum + mix * zAbsSum);
 
       const t3Gap = Math.max(0, 50 - (attrs[T3] || 0) - 2);
@@ -541,10 +613,8 @@ function formatOptionSummary(option) {
         absPen *= 0.8;
         relPen *= 0.8;
         def += 2.5;
-        const perd = attrs[PERD] ?? 75,
-          intd = attrs[INTD] ?? 75;
-        const hi = Math.max(perd, intd),
-          lo = Math.min(perd, intd);
+        const perd = attrs[PERD] ?? 75, intd = attrs[INTD] ?? 75;
+        const hi = Math.max(perd, intd), lo = Math.min(perd, intd);
         if (perd >= 88 && intd >= 88) def += Math.min(1.0, (Math.min(perd, intd) - 88) * 0.05);
         let tier = 0;
         if (perd >= 90 || intd >= 90) tier += 0.5;
@@ -559,10 +629,7 @@ function formatOptionSummary(option) {
       return clamp(def, 50, cap);
     };
 
-    let sumOV = 0,
-      sumOFF = 0,
-      sumDEF = 0,
-      n = 0;
+    let sumOV = 0, sumOFF = 0, sumDEF = 0, n = 0;
     for (const t of [...(conferences.East || []), ...(conferences.West || [])]) {
       for (const p of t.players || []) {
         const a = p.attrs || Array(15).fill(75);
@@ -572,6 +639,7 @@ function formatOptionSummary(option) {
         sumDEF += previewDef(a, p.pos);
       }
     }
+
     const ovMean = n ? sumOV / n : 75;
     const offMean = n ? sumOFF / n : 75;
     const defMean = n ? sumDEF / n : 75;
@@ -596,8 +664,7 @@ function formatOptionSummary(option) {
     const wBase =
       p === "PF"
         ? (() => {
-            const pf = OFF_WEIGHTS_POSZ.PF,
-              sf = OFF_WEIGHTS_POSZ.SF;
+            const pf = OFF_WEIGHTS_POSZ.PF, sf = OFF_WEIGHTS_POSZ.SF;
             const keys = new Set([...Object.keys(pf), ...Object.keys(sf)].map(Number));
             const out = {};
             for (const k of keys) out[k] = 0.7 * (pf[k] || 0) + 0.3 * (sf[k] || 0);
@@ -605,8 +672,7 @@ function formatOptionSummary(option) {
           })()
         : OFF_WEIGHTS_POSZ[p] || OFF_WEIGHTS_POSZ.SF;
 
-    let zPosSum = 0,
-      zAbsSum = 0;
+    let zPosSum = 0, zAbsSum = 0;
     for (const [kStr, wt] of Object.entries(wBase)) {
       const k = +kStr;
       zPosSum += wt * zPos(k);
@@ -639,10 +705,8 @@ function formatOptionSummary(option) {
       absPen *= 0.8;
       relPen *= 0.8;
       def += 2.5;
-      const perd = attrs[PERD] ?? 75,
-        intd = attrs[INTD] ?? 75;
-      const hi = Math.max(perd, intd),
-        lo = Math.min(perd, intd);
+      const perd = attrs[PERD] ?? 75, intd = attrs[INTD] ?? 75;
+      const hi = Math.max(perd, intd), lo = Math.min(perd, intd);
       if (perd >= 88 && intd >= 88) def += Math.min(1.0, (Math.min(perd, intd) - 88) * 0.05);
       let tier = 0;
       if (perd >= 90 || intd >= 90) tier += 0.5;
@@ -816,52 +880,54 @@ function formatOptionSummary(option) {
         pool === "FA"
           ? freeAgents[pIdx]
           : conferences[selectedConf][tIdx].players[pIdx];
-const safe = normalizePlayer({
-  potential: 75,
-  height: 78,
-  secondaryPos: "",
-  scoringRating: 50,
-  ...ex,
-});
-setPlayerForm(JSON.parse(JSON.stringify(safe)));
-setSalaryText(formatSalaryText(safe.contract?.salaryByYear || []));
-setOptionYearsText(formatOptionYearsText(safe.contract?.option));
+
+      const safe = normalizePlayer({
+        potential: 75,
+        height: 78,
+        secondaryPos: "",
+        scoringRating: 50,
+        ...ex,
+      });
+      setPlayerForm(JSON.parse(JSON.stringify(safe)));
+      setSalaryText(formatSalaryText(safe.contract?.salaryByYear || []));
+      setOptionYearsText(formatOptionYearsText(safe.contract?.option));
     } else {
-setEditingPlayer(null);
-const fresh = initPlayer();
-setPlayerForm(fresh);
-setSalaryText(formatSalaryText(fresh.contract?.salaryByYear || []));
-setOptionYearsText(formatOptionYearsText(fresh.contract?.option));
+      setEditingPlayer(null);
+      const fresh = initPlayer();
+      setPlayerForm(fresh);
+      setSalaryText(formatSalaryText(fresh.contract?.salaryByYear || []));
+      setOptionYearsText(formatOptionYearsText(fresh.contract?.option));
     }
     setShowPlayerForm(true);
   };
 
-const savePlayer = () => {
-  const salaryByYear = parseSalaryText(salaryText);
-  const optionType = playerForm.contract?.option?.type ?? null;
-  const optionYearIndices = parseOptionYearsText(
-    optionYearsText,
-    Math.max(1, salaryByYear.length)
-  );
+  const savePlayer = () => {
+    const salaryByYear = parseSalaryText(salaryText);
+    const optionType = playerForm.contract?.option?.type ?? null;
+    const optionYearIndices = parseOptionYearsText(
+      optionYearsText,
+      Math.max(1, salaryByYear.length)
+    );
 
-  const builtOption =
-    optionType && optionYearIndices.length
-      ? {
-          type: optionType,
-          yearIndices: optionYearIndices,
-          picked: playerForm.contract?.option?.picked ?? null,
-        }
-      : null;
+    const builtOption =
+      optionType && optionYearIndices.length
+        ? {
+            type: optionType,
+            yearIndices: optionYearIndices,
+            picked: playerForm.contract?.option?.picked ?? null,
+          }
+        : null;
 
-  const p = normalizePlayer({
-    ...playerForm,
-    contract: {
-      ...(playerForm.contract ?? {}),
-      startYear: playerForm.contract?.startYear ?? 2026,
-      salaryByYear,
-      option: builtOption,
-    },
-  });
+    const p = normalizePlayer({
+      ...playerForm,
+      contract: {
+        ...(playerForm.contract ?? {}),
+        startYear: playerForm.contract?.startYear ?? 2026,
+        salaryByYear,
+        option: builtOption,
+      },
+    });
+
     const { off, def } = calcOffDef(p.attrs, p.pos, p.name, p.height);
     p.overall = calcOverall(p.attrs, p.pos);
     p.offRating = off;
@@ -1175,7 +1241,7 @@ const savePlayer = () => {
                         const cur = years.length ? years[0] : 0;
                         const curM = (Number(cur) || 0) / 1_000_000;
 
-const opt = formatOptionSummary(c.option);
+                        const opt = formatOptionSummary(c.option);
 
                         return `${years.length}Y | $${curM.toFixed(1)}M | ${opt}`;
                       })()}
@@ -1326,9 +1392,9 @@ const opt = formatOptionSummary(c.option);
                                   <span>Ht {formatHeight(p.height)}</span>
                                   <span>BD {p.birthMonth}/{p.birthDay}</span>
                                   <span>Yrs {(p.contract?.salaryByYear || []).length}</span>
-<span>
-  Opt {formatOptionSummary(p.contract?.option) === "—" ? "None" : formatOptionSummary(p.contract?.option)}
-</span>
+                                  <span>
+                                    Opt {formatOptionSummary(p.contract?.option) === "—" ? "None" : formatOptionSummary(p.contract?.option)}
+                                  </span>
                                 </div>
                               )}
                             </div>
@@ -1353,7 +1419,7 @@ const opt = formatOptionSummary(c.option);
                               const cur = years.length ? years[0] : 0;
                               const curM = (Number(cur) || 0) / 1_000_000;
 
-const opt = formatOptionSummary(c.option);
+                              const opt = formatOptionSummary(c.option);
 
                               return `${years.length}Y | $${curM.toFixed(1)}M | ${opt}`;
                             })()}
@@ -1400,22 +1466,21 @@ const opt = formatOptionSummary(c.option);
               <div>
                 <div className="text-sm font-semibold mb-1 flex items-center gap-2">
                   <span>Team A</span>
-                  {getTeam(tradeA)?.logo && (
-                    <img src={getTeam(tradeA).logo} alt="" className="w-5 h-5 object-contain" />
+                  {getTradeLogo(tradeA) && (
+                    <img src={getTradeLogo(tradeA)} alt="" className="w-5 h-5 object-contain" />
                   )}
                 </div>
                 <select
                   className="border p-2 rounded w-full"
-                  value={`${tradeA.conf}-${tradeA.teamIdx}`}
+                  value={encodeTradeRef(tradeA)}
                   onChange={(e) => {
-                    const [conf, idxStr] = e.target.value.split("-");
-                    setTradeA({ conf, teamIdx: Number(idxStr) });
+                    setTradeA(decodeTradeRef(e.target.value));
                     setSendAIds([]);
                   }}
                 >
-                  {allTeamsFlat.map((t) => (
-                    <option key={`A-${t.key}`} value={t.key}>
-                      {t.name} ({t.conf})
+                  {tradeTargets.map((t) => (
+                    <option key={`A-${t.pool}-${t.key}`} value={t.pool === "FA" ? "FA" : `${t.conf}-${t.teamIdx}`}>
+                      {t.name}{t.pool === "TEAMS" ? ` (${t.conf})` : ""}
                     </option>
                   ))}
                 </select>
@@ -1424,22 +1489,21 @@ const opt = formatOptionSummary(c.option);
               <div>
                 <div className="text-sm font-semibold mb-1 flex items-center gap-2">
                   <span>Team B</span>
-                  {getTeam(tradeB)?.logo && (
-                    <img src={getTeam(tradeB).logo} alt="" className="w-5 h-5 object-contain" />
+                  {getTradeLogo(tradeB) && (
+                    <img src={getTradeLogo(tradeB)} alt="" className="w-5 h-5 object-contain" />
                   )}
                 </div>
                 <select
                   className="border p-2 rounded w-full"
-                  value={`${tradeB.conf}-${tradeB.teamIdx}`}
+                  value={encodeTradeRef(tradeB)}
                   onChange={(e) => {
-                    const [conf, idxStr] = e.target.value.split("-");
-                    setTradeB({ conf, teamIdx: Number(idxStr) });
+                    setTradeB(decodeTradeRef(e.target.value));
                     setSendBIds([]);
                   }}
                 >
-                  {allTeamsFlat.map((t) => (
-                    <option key={`B-${t.key}`} value={t.key}>
-                      {t.name} ({t.conf})
+                  {tradeTargets.map((t) => (
+                    <option key={`B-${t.pool}-${t.key}`} value={t.pool === "FA" ? "FA" : `${t.conf}-${t.teamIdx}`}>
+                      {t.name}{t.pool === "TEAMS" ? ` (${t.conf})` : ""}
                     </option>
                   ))}
                 </select>
@@ -1449,10 +1513,10 @@ const opt = formatOptionSummary(c.option);
             <div className="grid grid-cols-2 gap-6">
               <div className="border rounded-lg p-3">
                 <div className="font-semibold mb-2">
-                  Send from {getTeam(tradeA)?.name || "Team A"} → {getTeam(tradeB)?.name || "Team B"}
+                  Send from {getTradeLabel(tradeA)} → {getTradeLabel(tradeB)}
                 </div>
                 <div className="space-y-2 max-h-[45vh] overflow-y-auto pr-2">
-                  {(getTeam(tradeA)?.players || []).map((p0) => {
+                  {getTradeBucket(tradeA).map((p0) => {
                     const p = normalizePlayer(p0);
                     return (
                       <label key={`Apl-${p.id}`} className="flex items-center gap-2 text-sm cursor-pointer">
@@ -1477,7 +1541,7 @@ const opt = formatOptionSummary(c.option);
                       </label>
                     );
                   })}
-                  {!(getTeam(tradeA)?.players || []).length && (
+                  {!getTradeBucket(tradeA).length && (
                     <div className="text-sm text-slate-500">No players.</div>
                   )}
                 </div>
@@ -1485,10 +1549,10 @@ const opt = formatOptionSummary(c.option);
 
               <div className="border rounded-lg p-3">
                 <div className="font-semibold mb-2">
-                  Send from {getTeam(tradeB)?.name || "Team B"} → {getTeam(tradeA)?.name || "Team A"}
+                  Send from {getTradeLabel(tradeB)} → {getTradeLabel(tradeA)}
                 </div>
                 <div className="space-y-2 max-h-[45vh] overflow-y-auto pr-2">
-                  {(getTeam(tradeB)?.players || []).map((p0) => {
+                  {getTradeBucket(tradeB).map((p0) => {
                     const p = normalizePlayer(p0);
                     return (
                       <label key={`Bpl-${p.id}`} className="flex items-center gap-2 text-sm cursor-pointer">
@@ -1518,7 +1582,7 @@ const opt = formatOptionSummary(c.option);
                       </label>
                     );
                   })}
-                  {!(getTeam(tradeB)?.players || []).length && (
+                  {!getTradeBucket(tradeB).length && (
                     <div className="text-sm text-slate-500">No players.</div>
                   )}
                 </div>
@@ -1568,25 +1632,25 @@ const opt = formatOptionSummary(c.option);
               <div className="mt-2">
                 <div className="text-sm font-semibold text-slate-700 mb-1">Bio</div>
                 <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs text-slate-600">Birth Month</label>
-                  <select
-                    className="border p-2 rounded w-full"
-                    value={(playerForm.birthMonth ?? 1) - 1}
-                    onChange={(e) =>
-                      setPlayerForm({
-                        ...playerForm,
-                        birthMonth: Number(e.target.value) + 1,
-                      })
-                    }
-                  >
-                    {MONTHS.map((m, idx) => (
-                      <option key={m} value={idx}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                  <div>
+                    <label className="text-xs text-slate-600">Birth Month</label>
+                    <select
+                      className="border p-2 rounded w-full"
+                      value={(playerForm.birthMonth ?? 1) - 1}
+                      onChange={(e) =>
+                        setPlayerForm({
+                          ...playerForm,
+                          birthMonth: Number(e.target.value) + 1,
+                        })
+                      }
+                    >
+                      {MONTHS.map((m, idx) => (
+                        <option key={m} value={idx}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   <div>
                     <label className="text-xs text-slate-600">Birth Day</label>
                     <input
@@ -1638,26 +1702,26 @@ const opt = formatOptionSummary(c.option);
 
                   <div>
                     <label className="text-xs text-slate-600">Salaries (in $M, CSV)</label>
-<input
-  className="border p-2 rounded w-full"
-  type="text"
-  placeholder="8, 8.5, 9"
-  value={salaryText}
-  onChange={(e) => {
-    const raw = e.target.value;
-    setSalaryText(raw);
+                    <input
+                      className="border p-2 rounded w-full"
+                      type="text"
+                      placeholder="8, 8.5, 9"
+                      value={salaryText}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setSalaryText(raw);
 
-    setPlayerForm({
-      ...playerForm,
-      contract: {
-        ...(playerForm.contract ?? {}),
-        startYear: playerForm.contract?.startYear ?? 2026,
-        salaryByYear: parseSalaryText(raw),
-        option: playerForm.contract?.option ?? null,
-      },
-    });
-  }}
-/>
+                        setPlayerForm({
+                          ...playerForm,
+                          contract: {
+                            ...(playerForm.contract ?? {}),
+                            startYear: playerForm.contract?.startYear ?? 2026,
+                            salaryByYear: parseSalaryText(raw),
+                            option: playerForm.contract?.option ?? null,
+                          },
+                        });
+                      }}
+                    />
                   </div>
                 </div>
 
@@ -1676,40 +1740,40 @@ const opt = formatOptionSummary(c.option);
                     <select
                       className="border p-2 rounded w-full"
                       value={playerForm.contract?.option?.type ?? "none"}
-onChange={(e) => {
-  const type = e.target.value;
-  const cur = playerForm.contract ?? {
-    startYear: 2026,
-    salaryByYear: [8_000_000],
-    option: null,
-  };
+                      onChange={(e) => {
+                        const type = e.target.value;
+                        const cur = playerForm.contract ?? {
+                          startYear: 2026,
+                          salaryByYear: [8_000_000],
+                          option: null,
+                        };
 
-  const maxN = Math.max(1, cur.salaryByYear?.length ?? 1);
-  const parsedYears = parseOptionYearsText(
-    optionYearsText || formatOptionYearsText(cur.option),
-    maxN
-  );
-  const nextYears = parsedYears.length ? parsedYears : [Math.max(0, maxN - 1)];
+                        const maxN = Math.max(1, cur.salaryByYear?.length ?? 1);
+                        const parsedYears = parseOptionYearsText(
+                          optionYearsText || formatOptionYearsText(cur.option),
+                          maxN
+                        );
+                        const nextYears = parsedYears.length ? parsedYears : [Math.max(0, maxN - 1)];
 
-  const nextOption =
-    type === "none"
-      ? null
-      : {
-          type,
-          yearIndices: nextYears,
-          picked: cur.option?.picked ?? null,
-        };
+                        const nextOption =
+                          type === "none"
+                            ? null
+                            : {
+                                type,
+                                yearIndices: nextYears,
+                                picked: cur.option?.picked ?? null,
+                              };
 
-  setPlayerForm({
-    ...playerForm,
-    contract: {
-      ...cur,
-      option: nextOption,
-    },
-  });
+                        setPlayerForm({
+                          ...playerForm,
+                          contract: {
+                            ...cur,
+                            option: nextOption,
+                          },
+                        });
 
-  setOptionYearsText(type === "none" ? "" : nextYears.map((i) => String(i + 1)).join(", "));
-}}
+                        setOptionYearsText(type === "none" ? "" : nextYears.map((i) => String(i + 1)).join(", "));
+                      }}
                       disabled={editingPool === "FA"}
                     >
                       <option value="none">None</option>
@@ -1718,41 +1782,41 @@ onChange={(e) => {
                     </select>
                   </div>
 
-<div>
-  <label className="text-xs text-slate-600">Option Year(s) (1..N, CSV)</label>
-  <input
-    className="border p-2 rounded w-full"
-    type="text"
-    placeholder="1 or 1, 2"
-    value={optionYearsText}
-    onChange={(e) => {
-      const raw = e.target.value;
-      setOptionYearsText(raw);
+                  <div>
+                    <label className="text-xs text-slate-600">Option Year(s) (1..N, CSV)</label>
+                    <input
+                      className="border p-2 rounded w-full"
+                      type="text"
+                      placeholder="1 or 1, 2"
+                      value={optionYearsText}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setOptionYearsText(raw);
 
-      const cur = playerForm.contract ?? {
-        startYear: 2026,
-        salaryByYear: [8_000_000],
-        option: null,
-      };
-      if (!cur.option) return;
+                        const cur = playerForm.contract ?? {
+                          startYear: 2026,
+                          salaryByYear: [8_000_000],
+                          option: null,
+                        };
+                        if (!cur.option) return;
 
-      const maxN = Math.max(1, cur.salaryByYear?.length ?? 1);
-      const yearIndices = parseOptionYearsText(raw, maxN);
+                        const maxN = Math.max(1, cur.salaryByYear?.length ?? 1);
+                        const yearIndices = parseOptionYearsText(raw, maxN);
 
-      setPlayerForm({
-        ...playerForm,
-        contract: {
-          ...cur,
-          option: {
-            ...cur.option,
-            yearIndices,
-          },
-        },
-      });
-    }}
-    disabled={!playerForm.contract?.option || editingPool === "FA"}
-  />
-</div>
+                        setPlayerForm({
+                          ...playerForm,
+                          contract: {
+                            ...cur,
+                            option: {
+                              ...cur.option,
+                              yearIndices,
+                            },
+                          },
+                        });
+                      }}
+                      disabled={!playerForm.contract?.option || editingPool === "FA"}
+                    />
+                  </div>
                 </div>
 
                 <div className="mt-2 text-sm text-slate-700">

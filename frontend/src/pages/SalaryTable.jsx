@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 
 export default function SalaryTable() {
   const navigate = useNavigate();
-  const { leagueData: ctxLeague } = useGame();
+  const { leagueData: ctxLeague, selectedTeam: ctxSelectedTeam } = useGame();
 
   const [leagueData, setLeagueData] = useState(null);
   const [selectedTeamKey, setSelectedTeamKey] = useState("");
@@ -67,6 +67,10 @@ export default function SalaryTable() {
     return best;
   };
 
+  const readSelectedTeamFromLocalStorage = () => {
+    return safeJSON(localStorage.getItem("selectedTeam"));
+  };
+
   // Load league (prefer GameContext, fallback localStorage)
   useEffect(() => {
     if (looksLikeLeague(ctxLeague)) {
@@ -96,12 +100,29 @@ export default function SalaryTable() {
     return out;
   }, [leagueData]);
 
-  // Auto-select first team once teams exist
+  // Auto-select actual selected team first, then fallback to first team
   useEffect(() => {
-    if (selectedTeamKey) return;
     if (allTeamsFlat.length === 0) return;
-    setSelectedTeamKey(allTeamsFlat[0].key);
-  }, [allTeamsFlat, selectedTeamKey]);
+
+    const preferredName =
+      ctxSelectedTeam?.name ||
+      readSelectedTeamFromLocalStorage()?.name ||
+      "";
+
+    if (preferredName) {
+      const found = allTeamsFlat.find((t) => t.name === preferredName);
+      if (found) {
+        if (selectedTeamKey !== found.key) {
+          setSelectedTeamKey(found.key);
+        }
+        return;
+      }
+    }
+
+    if (!selectedTeamKey) {
+      setSelectedTeamKey(allTeamsFlat[0].key);
+    }
+  }, [allTeamsFlat, ctxSelectedTeam, selectedTeamKey]);
 
   const selectedTeam = useMemo(() => {
     if (!leagueData?.conferences) return null;
@@ -131,8 +152,19 @@ export default function SalaryTable() {
 
       let optionLabel = "None";
       if (c.option?.type) {
-        const y = Number(c.option.yearIndex ?? 0) + 1;
-        optionLabel = `${c.option.type.toUpperCase()} Y${y}`;
+        const optionYears = Array.isArray(c.option?.yearIndices)
+          ? c.option.yearIndices
+          : c.option?.yearIndex != null
+          ? [c.option.yearIndex]
+          : [];
+
+        if (optionYears.length) {
+          optionLabel = `${c.option.type.toUpperCase()} ${optionYears
+            .map((y) => `Y${Number(y) + 1}`)
+            .join(", ")}`;
+        } else {
+          optionLabel = c.option.type.toUpperCase();
+        }
       }
 
       // Optional display fields (if your data has them later)
@@ -247,7 +279,6 @@ export default function SalaryTable() {
               </select>
             </div>
 
-            {/* ✅ NEW: Back button (minimal) */}
             <button
               onClick={() => navigate("/team-hub")}
               className="px-6 py-2 bg-orange-600 hover:bg-orange-500 rounded-xl font-semibold transition"
@@ -414,7 +445,6 @@ export default function SalaryTable() {
           </div>
         )}
 
-        {/* ✅ NEW: Bottom back button (minimal) */}
         <div className="flex justify-center pt-2">
           <button
             onClick={() => navigate("/team-hub")}

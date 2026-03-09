@@ -143,7 +143,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // PLAYER PROGRESSION RESULT ✅ (SURGICAL ADD)
+    // PLAYER PROGRESSION RESULT ✅
     // ------------------------------------------------------------
     if (msg.type === "progression-result") {
       const entry = pending.get(msg.requestId);
@@ -163,10 +163,8 @@ function startWorker() {
         out = { error: "PROGRESSION_PARSE_FAILED" };
       }
 
-      // ✅ convert Pyodide pairs -> normal object (safe even if already object)
       out = deepFromEntries(out);
 
-      // ✅ ultra-safe unwrap if something ever comes back nested
       if (out && typeof out === "object" && out.payload && !out.league && out.payload.league) {
         out = out.payload;
       }
@@ -180,7 +178,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // PLAYER PROGRESSION ERROR ✅ (SURGICAL ADD)
+    // PLAYER PROGRESSION ERROR ✅
     // ------------------------------------------------------------
     if (msg.type === "progression-error") {
       const entry = pending.get(msg.requestId);
@@ -311,6 +309,238 @@ function startWorker() {
       else entry.resolve({ ok: false, reason: err });
       return;
     }
+
+    // ------------------------------------------------------------
+    // OFFSEASON CONTRACT PREVIEW RESULT ✅
+    // ------------------------------------------------------------
+    if (msg.type === "free-agency-preview-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-preview-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "free-agency-preview-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-preview-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Offseason contract preview failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
+
+    // ------------------------------------------------------------
+    // OFFSEASON CONTRACT APPLY RESULT ✅
+    // ------------------------------------------------------------
+    if (msg.type === "free-agency-apply-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-apply-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "free-agency-apply-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-apply-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Offseason contract apply failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
+
+    // ------------------------------------------------------------
+    // FREE AGENCY INIT RESULT ✅
+    // ------------------------------------------------------------
+    if (msg.type === "free-agency-init-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-init-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "free-agency-init-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-init-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Free agency initialization failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
+
+    // ------------------------------------------------------------
+    // FREE AGENCY STATE SUMMARY RESULT ✅
+    // ------------------------------------------------------------
+    if (msg.type === "free-agency-state-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-state-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "free-agency-state-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-state-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Free agency state summary failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
+
+    // ------------------------------------------------------------
+    // FREE AGENT OFFERS RESULT ✅
+    // ------------------------------------------------------------
+    if (msg.type === "free-agency-offers-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-offers-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "free-agency-offers-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-offers-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Free agent offers load failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
+
+    // ------------------------------------------------------------
+    // SUBMIT USER OFFER RESULT ✅
+    // ------------------------------------------------------------
+    if (msg.type === "free-agency-submit-offer-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-submit-offer-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "free-agency-submit-offer-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-submit-offer-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Submit user free agent offer failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
+
+    // ------------------------------------------------------------
+    // ADVANCE FREE AGENCY DAY RESULT ✅
+    // ------------------------------------------------------------
+    if (msg.type === "free-agency-advance-day-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-advance-day-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "free-agency-advance-day-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-advance-day-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Advance free agency day failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
+
+    // ------------------------------------------------------------
+    // PLAYER RETIREMENTS RESULT ✅
+    // ------------------------------------------------------------
+    if (msg.type === "player-retirements-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] player-retirements-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "player-retirements-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] player-retirements-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Player retirement run failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
   };
 
   worker.postMessage({ type: "init" });
@@ -425,7 +655,6 @@ export function computeSeasonAwards(players, meta = {}) {
 
   const requestId = "A" + counter++;
 
-  // ✅ MINIMAL: forward teams as a top-level field too
   const teams = Array.isArray(meta?.teams) ? meta.teams : [];
 
   return new Promise((resolve, reject) => {
@@ -487,7 +716,7 @@ export function computeFinalsMvp(finalsPlayers, meta = {}) {
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — PLAYER PROGRESSION (Python) ✅ (SURGICAL ADD)
+// PUBLIC API — PLAYER PROGRESSION (Python) ✅
 // Returns: { league, deltas, version }
 // ------------------------------------------------------------
 export function computePlayerProgression(leagueData, statsByKey = {}, meta = {}) {
@@ -702,6 +931,351 @@ export function releasePlayerToFreeAgency(
         teamName,
         playerId,
         playerName,
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------
+// PUBLIC API — OFFSEASON CONTRACT PREVIEW ✅
+// ------------------------------------------------------------
+export function previewOffseasonContracts(leagueData, userTeamName = null) {
+  startWorker();
+
+  const requestId = "FAP" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("FREE_AGENCY_PREVIEW_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "preview-offseason-contracts",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        userTeamName,
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------
+// PUBLIC API — APPLY OFFSEASON CONTRACT DECISIONS ✅
+// ------------------------------------------------------------
+export function applyOffseasonContractDecisions(
+  leagueData,
+  userTeamName = null,
+  teamOptionDecisions = {}
+) {
+  startWorker();
+
+  const requestId = "FAA" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("FREE_AGENCY_APPLY_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "apply-offseason-contract-decisions",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        userTeamName,
+        teamOptionDecisions: deepSanitize(teamOptionDecisions),
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------
+// PUBLIC API — INITIALIZE LIVE FREE AGENCY ✅
+// ------------------------------------------------------------
+export function initializeFreeAgencyPeriod(
+  leagueData,
+  userTeamName = null,
+  maxDays = 7
+) {
+  startWorker();
+
+  const requestId = "FAI" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("FREE_AGENCY_INIT_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "initialize-free-agency-period",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        userTeamName,
+        maxDays,
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------
+// PUBLIC API — FREE AGENCY STATE SUMMARY ✅
+// ------------------------------------------------------------
+export function getFreeAgencyStateSummary(leagueData) {
+  startWorker();
+
+  const requestId = "FAST" + counter++;
+  const TIMEOUT_MS = 12000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("FREE_AGENCY_STATE_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "get-free-agency-state-summary",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {},
+    });
+  });
+}
+
+// ------------------------------------------------------------
+// PUBLIC API — GET FREE AGENT OFFERS ✅
+// ------------------------------------------------------------
+export function getFreeAgentOffers(
+  leagueData,
+  playerId = null,
+  playerName = null
+) {
+  startWorker();
+
+  const requestId = "FAO" + counter++;
+  const TIMEOUT_MS = 12000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("FREE_AGENT_OFFERS_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "get-free-agent-offers",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        playerId,
+        playerName,
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------
+// PUBLIC API — SUBMIT USER FREE AGENT OFFER ✅
+// ------------------------------------------------------------
+export function submitUserFreeAgentOffer(
+  leagueData,
+  teamName,
+  playerId = null,
+  playerName = null,
+  offer = {}
+) {
+  startWorker();
+
+  const requestId = "FAU" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("SUBMIT_USER_FREE_AGENT_OFFER_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "submit-user-free-agent-offer",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        teamName,
+        playerId,
+        playerName,
+        offer: deepSanitize(offer),
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------
+// PUBLIC API — ADVANCE FREE AGENCY DAY ✅
+// ------------------------------------------------------------
+export function advanceFreeAgencyDay(
+  leagueData,
+  userTeamName = null
+) {
+  startWorker();
+
+  const requestId = "FAD" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("ADVANCE_FREE_AGENCY_DAY_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "advance-free-agency-day",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        userTeamName,
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------
+// PUBLIC API — PLAYER RETIREMENTS ✅
+// ------------------------------------------------------------
+export function runPlayerRetirements(
+  leagueData,
+  statsByKey = {},
+  settings = {},
+  meta = {}
+) {
+  startWorker();
+
+  const requestId = "RET" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("PLAYER_RETIREMENTS_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "run-player-retirements",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        statsByKey: deepSanitize(statsByKey),
+        settings: deepSanitize(settings),
+        seasonYear: meta?.seasonYear ?? null,
+        seed: meta?.seed ?? null,
       },
     });
   });

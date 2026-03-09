@@ -1,13 +1,9 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
+import * as simEngine from "../api/simEnginePy.js";
 
-// If your simEnginePy.js lives elsewhere, only change this one import line.
-import {
-  evaluateFreeAgencyOffer,
-  signFreeAgent,
-  generateFreeAgencyMarket,
-} from "../api/simEnginePy.js";
+const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 
 export default function FreeAgents() {
   const { leagueData, selectedTeam, setSelectedTeam, setLeagueData } = useGame();
@@ -28,11 +24,38 @@ export default function FreeAgents() {
   const [offerEvalLoading, setOfferEvalLoading] = useState(false);
   const [signError, setSignError] = useState("");
 
+  const [marketInitLoading, setMarketInitLoading] = useState(false);
+  const [advanceDayLoading, setAdvanceDayLoading] = useState(false);
+  const [offersModalOpen, setOffersModalOpen] = useState(false);
+  const [offersViewLoading, setOffersViewLoading] = useState(false);
+  const [offersViewError, setOffersViewError] = useState("");
+  const [offersViewData, setOffersViewData] = useState(null);
+  const [daySummary, setDaySummary] = useState(null);
+  const [offseasonState, setOffseasonState] = useState(() =>
+    safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), null) || {}
+  );
+
   const navigate = useNavigate();
+
+  const evaluateFreeAgencyOffer = simEngine.evaluateFreeAgencyOffer;
+  const signFreeAgent = simEngine.signFreeAgent;
+  const generateFreeAgencyMarket = simEngine.generateFreeAgencyMarket;
+  const previewOffseasonContracts = simEngine.previewOffseasonContracts;
+  const applyOffseasonContractDecisions = simEngine.applyOffseasonContractDecisions;
+  const initializeFreeAgencyPeriod = simEngine.initializeFreeAgencyPeriod;
+  const getFreeAgentOffers = simEngine.getFreeAgentOffers;
+  const submitUserFreeAgentOffer = simEngine.submitUserFreeAgentOffer;
+  const advanceFreeAgencyDay = simEngine.advanceFreeAgencyDay;
 
   useEffect(() => {
     setWorkingLeagueData(leagueData || null);
   }, [leagueData]);
+
+  useEffect(() => {
+    setOffseasonState(
+      safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), null) || {}
+    );
+  }, [workingLeagueData]);
 
   const attrColumns = [
     { key: "attr0", label: "3PT", index: 0 },
@@ -50,6 +73,22 @@ export default function FreeAgents() {
     { key: "attr13", label: "OIQ", index: 13 },
     { key: "attr14", label: "DIQ", index: 14 },
   ];
+
+  function safeJSON(raw, fallback = null) {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed ?? fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  const updateOffseasonState = (patch) => {
+    const current = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {}) || {};
+    const next = { ...current, ...patch };
+    localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(next));
+    setOffseasonState(next);
+  };
 
   const toLetter = (num) => {
     if (num >= 94) return "A+";
@@ -102,9 +141,111 @@ export default function FreeAgents() {
     );
   };
 
+  const isOffseasonMode = !!offseasonState?.active;
+  const preFreeAgencyResolved = !!offseasonState?.preFreeAgencyResolved;
+  const freeAgencyFinished = !!offseasonState?.freeAgencyComplete;
+
   const freeAgents = useMemo(() => {
     return workingLeagueData?.freeAgents || [];
   }, [workingLeagueData]);
+
+  const liveFreeAgencyState = useMemo(() => {
+    return workingLeagueData?.freeAgencyState || {};
+  }, [workingLeagueData]);
+
+  const isLiveFreeAgencyActive = !!liveFreeAgencyState?.isActive;
+  const currentDay = Number(liveFreeAgencyState?.currentDay || 0);
+  const maxDays = Number(liveFreeAgencyState?.maxDays || 0);
+  const signedPlayersLog = liveFreeAgencyState?.signedPlayersLog || [];
+
+  const activeOfferCount = useMemo(() => {
+    const offersByPlayer = liveFreeAgencyState?.offersByPlayer || {};
+    let count = 0;
+
+    for (const offers of Object.values(offersByPlayer)) {
+      for (const offer of offers || []) {
+        if (offer?.status === "active" || !offer?.status) count += 1;
+      }
+    }
+
+    return count;
+  }, [liveFreeAgencyState]);
+
+  const applyLeagueUpdate = (updated) => {
+    if (!updated) return;
+
+    setWorkingLeagueData(updated);
+
+    if (typeof setLeagueData === "function") {
+      setLeagueData(updated);
+    }
+
+    localStorage.setItem("leagueData", JSON.stringify(updated));
+
+    if (typeof setSelectedTeam === "function" && selectedTeam?.name) {
+      let nextSelectedTeam = null;
+
+      for (const confKey of Object.keys(updated.conferences || {})) {
+        const team = (updated.conferences[confKey] || []).find(
+          (t) => t.name === selectedTeam.name
+        );
+        if (team) {
+          nextSelectedTeam = team;
+          break;
+        }
+      }
+
+      if (nextSelectedTeam) {
+        setSelectedTeam(nextSelectedTeam);
+        localStorage.setItem("selectedTeam", JSON.stringify(nextSelectedTeam));
+      }
+    }
+  };
+
+  const getPlayerKey = (player) => {
+    if (!player) return "";
+    if (player.id !== undefined && player.id !== null && player.id !== "") {
+      return `id:${player.id}`;
+    }
+    return `name:${player.name || ""}`;
+  };
+
+  const buildLocalOffersView = (player) => {
+    if (!player) return null;
+
+    const offersByPlayer = liveFreeAgencyState?.offersByPlayer || {};
+    const key = getPlayerKey(player);
+    const offers = Array.isArray(offersByPlayer[key]) ? offersByPlayer[key] : [];
+
+    const enriched = [...offers]
+      .map((offer) => ({
+        ...offer,
+        playerViewScore: Number(offer?.playerViewScore || 0),
+      }))
+      .sort((a, b) => {
+        const scoreDiff = Number(b.playerViewScore || 0) - Number(a.playerViewScore || 0);
+        if (scoreDiff !== 0) return scoreDiff;
+        return Number(b.totalValue || 0) - Number(a.totalValue || 0);
+      });
+
+    const bestOfferId = enriched[0]?.offerId || null;
+
+    return {
+      ok: true,
+      player: {
+        id: player.id,
+        name: player.name,
+        overall: player.overall,
+        age: player.age,
+        position: player.pos,
+        marketValue: player.marketValue || null,
+      },
+      offers: enriched.map((offer) => ({
+        ...offer,
+        isBestOffer: offer.offerId === bestOfferId,
+      })),
+    };
+  };
 
   useEffect(() => {
     if (!selectedTeam && typeof setSelectedTeam === "function") {
@@ -135,17 +276,10 @@ export default function FreeAgents() {
 
     (async () => {
       try {
-        const res = await generateFreeAgencyMarket(workingLeagueData);
+        const res = await generateFreeAgencyMarket?.(workingLeagueData);
         if (cancelled) return;
         if (!res?.ok || !res?.leagueData) return;
-
-        setWorkingLeagueData(res.leagueData);
-
-        if (typeof setLeagueData === "function") {
-          setLeagueData(res.leagueData);
-        }
-
-        localStorage.setItem("leagueData", JSON.stringify(res.leagueData));
+        applyLeagueUpdate(res.leagueData);
       } catch (err) {
         console.error("Failed to generate free agency market", err);
       }
@@ -154,7 +288,7 @@ export default function FreeAgents() {
     return () => {
       cancelled = true;
     };
-  }, [workingLeagueData, freeAgents, setLeagueData]);
+  }, [workingLeagueData, freeAgents, generateFreeAgencyMarket]);
 
   useEffect(() => {
     if (!freeAgents.length) {
@@ -202,7 +336,7 @@ export default function FreeAgents() {
       }
 
       if (key.startsWith("attr")) {
-        const idx = parseInt(key.replace("attr", ""));
+        const idx = parseInt(key.replace("attr", ""), 10);
         const av = a.attrs?.[idx] ?? 0;
         const bv = b.attrs?.[idx] ?? 0;
         return sortConfig.direction === "asc" ? av - bv : bv - av;
@@ -267,6 +401,51 @@ export default function FreeAgents() {
     setSignError("");
   };
 
+  const openOffersModal = async (player) => {
+    if (!player) return;
+
+    setSelectedPlayer(player);
+    setOffersViewLoading(true);
+    setOffersViewError("");
+    setOffersViewData(null);
+    setOffersModalOpen(true);
+
+    try {
+      if (typeof getFreeAgentOffers === "function") {
+        const res = await getFreeAgentOffers(
+          workingLeagueData,
+          player.id || null,
+          player.name || null
+        );
+
+        if (!res?.ok) {
+          setOffersViewError(res?.reason || "Failed to load offers.");
+        } else {
+          setOffersViewData(res);
+        }
+      } else {
+        const localView = buildLocalOffersView(player);
+        setOffersViewData(localView);
+      }
+    } catch (err) {
+      const localView = buildLocalOffersView(player);
+      if (localView) {
+        setOffersViewData(localView);
+      } else {
+        setOffersViewError(err?.message || "Failed to load offers.");
+      }
+    } finally {
+      setOffersViewLoading(false);
+    }
+  };
+
+  const closeOffersModal = () => {
+    setOffersModalOpen(false);
+    setOffersViewLoading(false);
+    setOffersViewError("");
+    setOffersViewData(null);
+  };
+
   useEffect(() => {
     if (!signModalOpen || !signTargetPlayer || !selectedTeam || !workingLeagueData) {
       setOfferEvaluation(null);
@@ -291,7 +470,7 @@ export default function FreeAgents() {
 
     const timer = setTimeout(async () => {
       try {
-        const res = await evaluateFreeAgencyOffer(
+        const res = await evaluateFreeAgencyOffer?.(
           workingLeagueData,
           selectedTeam.name,
           signTargetPlayer,
@@ -299,7 +478,7 @@ export default function FreeAgents() {
         );
 
         if (cancelled) return;
-        setOfferEvaluation(res);
+        setOfferEvaluation(res || null);
       } catch (err) {
         if (cancelled) return;
         setOfferEvaluation({
@@ -324,6 +503,7 @@ export default function FreeAgents() {
     offerYears,
     optionType,
     optionYear,
+    evaluateFreeAgencyOffer,
   ]);
 
   const interestDisplay = useMemo(() => {
@@ -361,7 +541,193 @@ export default function FreeAgents() {
     return { percent, label: "Not Interested", barClass: "bg-red-500" };
   }, [offerEvaluation, offerEvalLoading]);
 
-  const handleSignPlayer = async () => {
+  const handleInitializeFreeAgency = async () => {
+    if (!workingLeagueData) return;
+
+    if (
+      typeof initializeFreeAgencyPeriod !== "function" ||
+      typeof previewOffseasonContracts !== "function" ||
+      typeof applyOffseasonContractDecisions !== "function"
+    ) {
+      setDaySummary({
+        error: "Free agency preseason wiring is not fully connected in simEnginePy.js yet.",
+      });
+      return;
+    }
+
+    try {
+      setMarketInitLoading(true);
+      setDaySummary(null);
+
+      let baseLeague = workingLeagueData;
+      let prepSummary = null;
+
+      if (isOffseasonMode && !preFreeAgencyResolved) {
+        const previewRes = await previewOffseasonContracts(
+          baseLeague,
+          selectedTeam?.name || null
+        );
+
+        if (!previewRes?.ok) {
+          setDaySummary({
+            error: previewRes?.reason || "Failed to preview offseason contracts.",
+          });
+          return;
+        }
+
+        let applyRes = await applyOffseasonContractDecisions(
+          baseLeague,
+          selectedTeam?.name || null,
+          {}
+        );
+
+        if (!applyRes?.ok && Array.isArray(applyRes?.pendingTeamOptions) && applyRes.pendingTeamOptions.length) {
+          const autoExerciseDecisions = {};
+          for (const row of applyRes.pendingTeamOptions) {
+            const key = row?.playerId ?? row?.playerName;
+            if (key !== undefined && key !== null && key !== "") {
+              autoExerciseDecisions[String(key)] = true;
+            }
+          }
+
+          applyRes = await applyOffseasonContractDecisions(
+            baseLeague,
+            selectedTeam?.name || null,
+            autoExerciseDecisions
+          );
+        }
+
+        if (!applyRes?.ok || !applyRes?.leagueData) {
+          setDaySummary({
+            error: applyRes?.reason || "Failed to apply offseason contract decisions.",
+          });
+          return;
+        }
+
+        baseLeague = applyRes.leagueData;
+        prepSummary = applyRes.summary || null;
+        applyLeagueUpdate(baseLeague);
+
+        updateOffseasonState({
+          active: true,
+          preFreeAgencyResolved: true,
+          freeAgencyComplete: false,
+        });
+
+        if (!(baseLeague?.freeAgents || []).length) {
+          updateOffseasonState({
+            active: true,
+            preFreeAgencyResolved: true,
+            freeAgencyComplete: true,
+          });
+
+          setDaySummary({
+            dayResolved: 0,
+            signings: [],
+            generatedOffers: [],
+            prepSummary,
+            stateSummary: {
+              isActive: false,
+              currentDay: 0,
+              maxDays: 0,
+              freeAgentCount: 0,
+            },
+          });
+          return;
+        }
+      }
+
+      const res = await initializeFreeAgencyPeriod(
+        baseLeague,
+        selectedTeam?.name || null,
+        7
+      );
+
+      if (!res?.ok || !res?.leagueData) {
+        setDaySummary({
+          error: res?.reason || "Failed to start free agency.",
+        });
+        return;
+      }
+
+      applyLeagueUpdate(res.leagueData);
+
+      updateOffseasonState({
+        active: true,
+        preFreeAgencyResolved: true,
+        freeAgencyComplete: false,
+      });
+
+      setDaySummary({
+        dayResolved: 0,
+        signings: [],
+        generatedOffers: res?.openingOffers || [],
+        prepSummary,
+        stateSummary: res?.stateSummary || null,
+      });
+    } catch (err) {
+      setDaySummary({
+        error: err?.message || "Failed to start free agency.",
+      });
+    } finally {
+      setMarketInitLoading(false);
+    }
+  };
+
+  const handleAdvanceDay = async () => {
+    if (!workingLeagueData) return;
+
+    if (typeof advanceFreeAgencyDay !== "function") {
+      setDaySummary({
+        error: "Advance day is not wired in simEnginePy.js yet.",
+      });
+      return;
+    }
+
+    try {
+      setAdvanceDayLoading(true);
+      const res = await advanceFreeAgencyDay(
+        workingLeagueData,
+        selectedTeam?.name || null
+      );
+
+      if (!res?.ok || !res?.leagueData) {
+        setDaySummary({
+          error: res?.reason || "Failed to advance free agency day.",
+        });
+        return;
+      }
+
+      applyLeagueUpdate(res.leagueData);
+
+      if (!res?.stateSummary?.isActive) {
+        updateOffseasonState({
+          active: true,
+          preFreeAgencyResolved: true,
+          freeAgencyComplete: true,
+        });
+      }
+
+      setDaySummary({
+        dayResolved: res?.dayResolved ?? null,
+        signings: res?.signings || [],
+        generatedOffers: res?.generatedOffers || [],
+        stateSummary: res?.stateSummary || null,
+      });
+
+      if (offersModalOpen && selectedPlayer) {
+        await openOffersModal(selectedPlayer);
+      }
+    } catch (err) {
+      setDaySummary({
+        error: err?.message || "Failed to advance free agency day.",
+      });
+    } finally {
+      setAdvanceDayLoading(false);
+    }
+  };
+
+  const handleSubmitOrSignPlayer = async () => {
     if (!signTargetPlayer || !selectedTeam || !workingLeagueData) return;
 
     setSignError("");
@@ -375,57 +741,82 @@ export default function FreeAgents() {
     const offer = buildOfferContract(year1Salary, offerYears, optionType, optionYear);
 
     try {
-      const res = await signFreeAgent(
-        workingLeagueData,
-        selectedTeam.name,
-        signTargetPlayer.id || null,
-        signTargetPlayer.name || null,
-        offer
-      );
-
-      if (!res?.ok || !res?.leagueData) {
-        setSignError(res?.reason || "Signing failed.");
-        return;
-      }
-
-      const updated = res.leagueData;
-      setWorkingLeagueData(updated);
-
-      if (typeof setLeagueData === "function") {
-        setLeagueData(updated);
-      }
-
-      localStorage.setItem("leagueData", JSON.stringify(updated));
-
-      if (typeof setSelectedTeam === "function") {
-        let nextSelectedTeam = null;
-
-        for (const confKey of Object.keys(updated.conferences || {})) {
-          const team = (updated.conferences[confKey] || []).find(
-            (t) => t.name === selectedTeam.name
-          );
-          if (team) {
-            nextSelectedTeam = team;
-            break;
-          }
+      if (isOffseasonMode) {
+        if (!isLiveFreeAgencyActive) {
+          setSignError("Start the live free agency period before submitting offers.");
+          return;
         }
 
-        if (nextSelectedTeam) {
-          setSelectedTeam(nextSelectedTeam);
-          localStorage.setItem("selectedTeam", JSON.stringify(nextSelectedTeam));
+        if (typeof submitUserFreeAgentOffer !== "function") {
+          setSignError("Live offer submission is not wired in simEnginePy.js yet.");
+          return;
         }
-      }
 
-      closeSignModal();
+        const res = await submitUserFreeAgentOffer(
+          workingLeagueData,
+          selectedTeam.name,
+          signTargetPlayer.id || null,
+          signTargetPlayer.name || null,
+          offer
+        );
+
+        if (!res?.ok || !res?.leagueData) {
+          setSignError(res?.reason || "Offer submission failed.");
+          return;
+        }
+
+        applyLeagueUpdate(res.leagueData);
+        closeSignModal();
+
+        if (offersModalOpen || selectedPlayer?.name === signTargetPlayer?.name) {
+          await openOffersModal(signTargetPlayer);
+        }
+      } else {
+        const res = await signFreeAgent(
+          workingLeagueData,
+          selectedTeam.name,
+          signTargetPlayer.id || null,
+          signTargetPlayer.name || null,
+          offer
+        );
+
+        if (!res?.ok || !res?.leagueData) {
+          setSignError(res?.reason || "Signing failed.");
+          return;
+        }
+
+        applyLeagueUpdate(res.leagueData);
+        closeSignModal();
+      }
     } catch (err) {
-      setSignError(err?.message || "Signing failed.");
+      setSignError(err?.message || (isOffseasonMode ? "Offer submission failed." : "Signing failed."));
     }
   };
 
-  if (!freeAgents.length) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
-        <p className="text-lg mb-4">No free agents available.</p>
+  const noFreeAgentsView = (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-neutral-900 text-white px-4">
+      <p className="text-lg mb-4">
+        {freeAgencyFinished
+          ? "Free agency is complete."
+          : "No free agents available."}
+      </p>
+      <div className="flex gap-3 flex-wrap justify-center">
+        {isOffseasonMode && freeAgencyFinished && (
+          <button
+            onClick={() => navigate("/player-progression")}
+            className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
+          >
+            Continue to Progression
+          </button>
+        )}
+        {isOffseasonMode && (
+          <button
+            onClick={() => navigate("/offseason-hub")}
+            className="px-6 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
+          >
+            Back to Offseason Hub
+          </button>
+        )}
         <button
           onClick={() => navigate("/team-hub")}
           className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
@@ -433,7 +824,11 @@ export default function FreeAgents() {
           Back to Team Hub
         </button>
       </div>
-    );
+    </div>
+  );
+
+  if (!freeAgents.length && (!isOffseasonMode || preFreeAgencyResolved || freeAgencyFinished)) {
+    return noFreeAgentsView;
   }
 
   const player = selectedPlayer || freeAgents[0] || {};
@@ -469,11 +864,131 @@ export default function FreeAgents() {
         }
       `}</style>
 
-      <div className="w-full max-w-5xl flex items-center justify-center mb-6 select-none">
+      <div className="w-full max-w-5xl flex items-center justify-center mb-4 select-none">
         <h1 className="text-4xl font-extrabold text-orange-500 text-center">
-          Free Agents
+          {isOffseasonMode ? "Free Agency - Live Market" : "Free Agents"}
         </h1>
       </div>
+
+      {isOffseasonMode && (
+        <div className="w-full max-w-5xl bg-neutral-800 border border-neutral-700 rounded-2xl shadow-lg px-5 py-4 mb-6">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div>
+              <p className="text-sm text-gray-400">
+                Mode: Offseason Free Agency
+              </p>
+              <p className="text-lg font-semibold text-white mt-1">
+                {freeAgencyFinished
+                  ? "Free agency complete"
+                  : isLiveFreeAgencyActive
+                  ? `Day ${currentDay} of ${maxDays || 7}`
+                  : preFreeAgencyResolved
+                  ? "Live market ready to start"
+                  : "Pre-free-agency contract resolution pending"}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full lg:w-auto">
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+                <div className="text-xs text-gray-400 mb-1">Free Agents</div>
+                <div className="text-base font-semibold text-white">{freeAgents.length}</div>
+              </div>
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+                <div className="text-xs text-gray-400 mb-1">Active Offers</div>
+                <div className="text-base font-semibold text-white">{activeOfferCount}</div>
+              </div>
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+                <div className="text-xs text-gray-400 mb-1">Signed</div>
+                <div className="text-base font-semibold text-white">{signedPlayersLog.length}</div>
+              </div>
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+                <div className="text-xs text-gray-400 mb-1">Your Team</div>
+                <div className="text-base font-semibold text-white">
+                  {selectedTeam?.name || "-"}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-3 mt-4">
+            {freeAgencyFinished ? (
+              <button
+                onClick={() => navigate("/player-progression")}
+                className="px-5 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
+              >
+                Continue to Progression
+              </button>
+            ) : !isLiveFreeAgencyActive ? (
+              <button
+                onClick={handleInitializeFreeAgency}
+                disabled={marketInitLoading}
+                className="px-5 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
+              >
+                {marketInitLoading
+                  ? "Starting..."
+                  : preFreeAgencyResolved
+                  ? "Start Live Market"
+                  : "Resolve Contracts + Start FA"}
+              </button>
+            ) : (
+              <button
+                onClick={handleAdvanceDay}
+                disabled={advanceDayLoading}
+                className="px-5 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
+              >
+                {advanceDayLoading ? "Advancing..." : "Advance Day"}
+              </button>
+            )}
+
+            <button
+              onClick={() => navigate("/offseason-hub")}
+              className="px-5 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
+            >
+              Back to Offseason Hub
+            </button>
+          </div>
+
+          {daySummary?.error && (
+            <div className="mt-4 text-red-300 text-sm font-semibold">
+              {daySummary.error}
+            </div>
+          )}
+
+          {!daySummary?.error && daySummary && (
+            <div className="mt-4 bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+              <div className="text-sm font-semibold text-orange-300 mb-2">
+                Latest Market Update
+              </div>
+              <div className="text-sm text-gray-300 space-y-1">
+                {daySummary?.prepSummary && (
+                  <>
+                    <div>
+                      Entered free agency after cleanup: {daySummary.prepSummary.enteredFreeAgencyCount || 0}
+                    </div>
+                    <div>
+                      Team options declined: {daySummary.prepSummary.teamOptionDeclinedCount || 0}
+                    </div>
+                  </>
+                )}
+                {daySummary?.dayResolved ? (
+                  <div>Resolved Day {daySummary.dayResolved}</div>
+                ) : (
+                  <div>
+                    {preFreeAgencyResolved ? "Opening market initialized." : "Pre-free-agency cleanup resolved."}
+                  </div>
+                )}
+                <div>New CPU offers: {daySummary?.generatedOffers?.length || 0}</div>
+                <div>Signings today: {daySummary?.signings?.length || 0}</div>
+                {freeAgencyFinished && (
+                  <div className="text-green-300 font-semibold pt-1">
+                    Free agency is complete.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="relative w-full flex justify-center">
         <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
@@ -506,14 +1021,29 @@ export default function FreeAgents() {
                 </p>
                 <p className="text-gray-500 text-[18px] mt-1">Unsigned Free Agent</p>
 
-                <div className="mt-4">
+                <div className="mt-4 flex flex-wrap gap-3">
                   <button
                     onClick={() => openSignModal(player)}
-                    disabled={!selectedTeam}
+                    disabled={
+                      !selectedTeam ||
+                      !player?.name ||
+                      freeAgencyFinished ||
+                      (isOffseasonMode && !isLiveFreeAgencyActive)
+                    }
                     className="px-5 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
                   >
-                    Offer Contract
+                    {isOffseasonMode ? "Submit Offer" : "Offer Contract"}
                   </button>
+
+                  {isOffseasonMode && (
+                    <button
+                      onClick={() => openOffersModal(player)}
+                      disabled={!isLiveFreeAgencyActive || !player?.name}
+                      className="px-5 py-2 bg-neutral-700 hover:bg-neutral-600 disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed rounded-lg font-semibold transition"
+                    >
+                      View Offers
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -570,8 +1100,7 @@ export default function FreeAgents() {
             <table className="w-full border-collapse text-center">
               <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
                 <tr>
-                  {[
-                    { key: "name", label: "Name" },
+                  {[{ key: "name", label: "Name" },
                     { key: "pos", label: "POS" },
                     { key: "age", label: "AGE" },
                     { key: "overall", label: "OVR" },
@@ -579,8 +1108,7 @@ export default function FreeAgents() {
                     { key: "defRating", label: "DEF" },
                     { key: "stamina", label: "STAM" },
                     { key: "potential", label: "POT" },
-                    ...attrColumns,
-                  ].map((col) => (
+                    ...attrColumns].map((col) => (
                     <th
                       key={col.key}
                       className={`py-3 px-3 min-w-[95px] ${
@@ -623,7 +1151,7 @@ export default function FreeAgents() {
                         e.stopPropagation();
                         openSignModal(p);
                       }}
-                      title="Double click to offer contract"
+                      title={isOffseasonMode ? "Double click to submit offer" : "Double click to offer contract"}
                     >
                       {p.name}
                     </td>
@@ -667,18 +1195,36 @@ export default function FreeAgents() {
         </div>
       </div>
 
-      <button
-        onClick={() => navigate("/team-hub")}
-        className="mt-10 px-8 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
-      >
-        Back to Team Hub
-      </button>
+      <div className="flex gap-3 flex-wrap justify-center mt-10">
+        {isOffseasonMode && (
+          <button
+            onClick={() => navigate("/offseason-hub")}
+            className="px-8 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
+          >
+            Back to Offseason Hub
+          </button>
+        )}
+        {isOffseasonMode && freeAgencyFinished && (
+          <button
+            onClick={() => navigate("/player-progression")}
+            className="px-8 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
+          >
+            Continue to Progression
+          </button>
+        )}
+        <button
+          onClick={() => navigate("/team-hub")}
+          className="px-8 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
+        >
+          Back to Team Hub
+        </button>
+      </div>
 
       {signModalOpen && signTargetPlayer && (
         <div className="fixed inset-0 bg-black/60 flex items-start justify-center overflow-y-auto z-50 px-4 py-6">
           <div className="fa-modal-scroll w-full max-w-xl max-h-[88vh] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5 sm:p-4">
             <h2 className="text-xl font-bold text-orange-400 mb-1.5">
-              Offer Contract
+              {isOffseasonMode ? "Submit Offer" : "Offer Contract"}
             </h2>
 
             <p className="text-white text-base mb-1">
@@ -704,7 +1250,7 @@ export default function FreeAgents() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
                 <div className="text-xs text-gray-400 mb-1">Current Payroll</div>
                 <div className="text-base font-semibold text-white">
@@ -716,6 +1262,13 @@ export default function FreeAgents() {
                 <div className="text-xs text-gray-400 mb-1">Cap Room</div>
                 <div className="text-base font-semibold text-white">
                   {formatDollars(offerEvaluation?.teamSnapshot?.capRoom || 0)}
+                </div>
+              </div>
+
+              <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                <div className="text-xs text-gray-400 mb-1">Dead Cap</div>
+                <div className="text-base font-semibold text-white">
+                  {formatDollars(offerEvaluation?.teamSnapshot?.deadCap || 0)}
                 </div>
               </div>
             </div>
@@ -874,15 +1427,21 @@ export default function FreeAgents() {
               </div>
             )}
 
-            {!offerEvalLoading && offerEvaluation?.ok && !offerEvaluation.accepted && (
+            {!offerEvalLoading && offerEvaluation?.ok && !offerEvaluation.accepted && !isOffseasonMode && (
               <div className="mb-4 text-yellow-300 text-sm font-semibold">
                 Current offer is not strong enough yet.
               </div>
             )}
 
-            {!offerEvalLoading && offerEvaluation?.ok && offerEvaluation.accepted && (
+            {!offerEvalLoading && offerEvaluation?.ok && offerEvaluation.accepted && !isOffseasonMode && (
               <div className="mb-4 text-green-300 text-sm font-semibold">
                 This player is ready to sign this offer.
+              </div>
+            )}
+
+            {isOffseasonMode && (
+              <div className="mb-4 text-blue-300 text-sm font-semibold">
+                In offseason mode, this submits a live market offer. The player may wait and compare it to CPU offers.
               </div>
             )}
 
@@ -894,11 +1453,146 @@ export default function FreeAgents() {
                 Cancel
               </button>
               <button
-                onClick={handleSignPlayer}
-                disabled={!selectedTeam || offerEvalLoading}
+                onClick={handleSubmitOrSignPlayer}
+                disabled={
+                  !selectedTeam ||
+                  offerEvalLoading ||
+                  freeAgencyFinished ||
+                  (isOffseasonMode && !isLiveFreeAgencyActive)
+                }
                 className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold transition"
               >
-                Sign Player
+                {isOffseasonMode ? "Submit Offer" : "Sign Player"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {offersModalOpen && (
+        <div className="fixed inset-0 bg-black/60 flex items-start justify-center overflow-y-auto z-50 px-4 py-6">
+          <div className="fa-modal-scroll w-full max-w-2xl max-h-[88vh] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5 sm:p-4">
+            <h2 className="text-xl font-bold text-orange-400 mb-1.5">
+              View Offers
+            </h2>
+
+            <p className="text-white text-base mb-1">
+              {offersViewData?.player?.name || selectedPlayer?.name || "-"}
+            </p>
+
+            <p className="text-gray-400 text-sm mb-4">
+              Live market offers for this free agent
+            </p>
+
+            {offersViewLoading ? (
+              <div className="text-gray-300 py-8">Loading offers...</div>
+            ) : offersViewError ? (
+              <div className="text-red-300 py-4 font-semibold">{offersViewError}</div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                  <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                    <div className="text-xs text-gray-400 mb-1">Offer Count</div>
+                    <div className="text-base font-semibold text-white">
+                      {offersViewData?.offers?.length || 0}
+                    </div>
+                  </div>
+
+                  <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                    <div className="text-xs text-gray-400 mb-1">Expected AAV</div>
+                    <div className="text-base font-semibold text-white">
+                      {formatDollars(offersViewData?.player?.marketValue?.expectedAAV || 0)}
+                    </div>
+                  </div>
+
+                  <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                    <div className="text-xs text-gray-400 mb-1">Expected Years</div>
+                    <div className="text-base font-semibold text-white">
+                      {offersViewData?.player?.marketValue?.expectedYears ?? "-"}
+                    </div>
+                  </div>
+                </div>
+
+                {!offersViewData?.offers?.length ? (
+                  <div className="text-gray-300 py-6">
+                    No current offers on this player yet.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {offersViewData.offers.map((offer, idx) => (
+                      <div
+                        key={`${offer.offerId || offer.teamName}-${idx}`}
+                        className={`rounded-xl border p-4 ${
+                          offer.isBestOffer
+                            ? "border-orange-500 bg-orange-500/10"
+                            : "border-neutral-700 bg-neutral-900"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-4 mb-2">
+                          <div className="text-white font-semibold">
+                            {offer.teamName}
+                          </div>
+                          <div className="flex items-center gap-2 flex-wrap justify-end">
+                            {offer.source && (
+                              <span className="px-2 py-1 rounded-full text-xs font-semibold bg-neutral-700 text-gray-200">
+                                {String(offer.source).toUpperCase()}
+                              </span>
+                            )}
+                            {offer.isBestOffer && (
+                              <span className="px-2 py-1 rounded-full text-xs font-semibold bg-orange-600 text-white">
+                                Best Offer
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                          <div>
+                            <div className="text-gray-400 mb-1">Years</div>
+                            <div className="text-white font-semibold">{offer.years || "-"}</div>
+                          </div>
+                          <div>
+                            <div className="text-gray-400 mb-1">AAV</div>
+                            <div className="text-white font-semibold">{formatDollars(offer.aav || 0)}</div>
+                          </div>
+                          <div>
+                            <div className="text-gray-400 mb-1">Total Value</div>
+                            <div className="text-white font-semibold">{formatDollars(offer.totalValue || 0)}</div>
+                          </div>
+                          <div>
+                            <div className="text-gray-400 mb-1">Submitted Day</div>
+                            <div className="text-white font-semibold">{offer.submittedDay || "-"}</div>
+                          </div>
+                        </div>
+
+                        {!!offer.salaryByYear?.length && (
+                          <div className="mt-3 text-sm">
+                            <div className="text-gray-400 mb-1.5">Year by Year</div>
+                            <div className="space-y-1">
+                              {offer.salaryByYear.map((amount, yearIdx) => (
+                                <div key={`${offer.teamName}-${yearIdx}`} className="flex justify-between gap-4 text-gray-300">
+                                  <span>
+                                    {getCurrentSeasonYear() + yearIdx}
+                                  </span>
+                                  <span>{formatDollars(amount)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="flex justify-end gap-3 pt-4">
+              <button
+                onClick={closeOffersModal}
+                className="px-4 py-2 rounded-lg bg-gray-600 hover:bg-gray-500 text-white font-semibold transition"
+              >
+                Close
               </button>
             </div>
           </div>

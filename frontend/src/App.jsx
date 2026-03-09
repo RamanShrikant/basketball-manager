@@ -19,6 +19,8 @@ import FinalsMvp from "./pages/FinalsMVP.jsx";
 import PlayerProgression from "./pages/PlayerProgression";
 import SalaryTable from "./pages/SalaryTable.jsx";
 import FreeAgents from "./pages/FreeAgents.jsx";
+import OffseasonHub from "./pages/OffseasonHub";
+import PlayerRetirements from "./pages/PlayerRetirements";
 
 
 
@@ -54,6 +56,8 @@ function App() {
         <Route path="/player-progression" element={<PlayerProgression />} />
         <Route path="salary-table" element={<SalaryTable />} />
         <Route path="/free-agents" element={<FreeAgents />} />
+        <Route path="/offseason-hub" element={<OffseasonHub />} />
+<Route path="/player-retirements" element={<PlayerRetirements />} />
 
       </Routes>
     </BrowserRouter>

@@ -1,5 +1,5 @@
 // ============================================================
-// simWorkerV2.js — Batch-safe Pyodide Simulation Worker
+// simWorkerV2.js - Batch-safe Pyodide Simulation Worker
 // ============================================================
 console.log("[simWorkerV2] booting…");
 
@@ -29,6 +29,7 @@ const pythonFiles = [
   "shooting_model.py",
   "progression.py",
   "free_agency_logic.py",
+  "retirement_logic.py",
 ];
 
 async function init() {
@@ -207,7 +208,6 @@ async function computeProgression(requestId, leagueData, statsByKey, meta) {
     pyodide.globals.set("stats_js", pyodide.toPy(statsByKey || {}));
     pyodide.globals.set("meta_js", pyodide.toPy(meta || {}));
 
-    // ✅ Return JSON to guarantee a plain JS object (no PyProxy / Map / pairs issues)
     const pyJson = await pyodide.runPythonAsync(`
 import importlib, json
 import progression
@@ -338,6 +338,132 @@ async function releasePlayerFreeAgency(requestId, leagueData, payload) {
   );
 }
 
+async function previewOffseasonContracts(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "preview_offseason_contracts",
+    leagueData,
+    payload || {},
+    "free-agency-preview-result",
+    "free-agency-preview-error"
+  );
+}
+
+async function applyOffseasonContractDecisions(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "apply_offseason_contract_decisions",
+    leagueData,
+    payload || {},
+    "free-agency-apply-result",
+    "free-agency-apply-error"
+  );
+}
+
+async function initializeFreeAgencyPeriod(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "initialize_free_agency_period",
+    leagueData,
+    payload || {},
+    "free-agency-init-result",
+    "free-agency-init-error"
+  );
+}
+
+async function getFreeAgencyStateSummary(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "get_free_agency_state_summary",
+    leagueData,
+    payload || {},
+    "free-agency-state-result",
+    "free-agency-state-error"
+  );
+}
+
+async function getFreeAgentOffers(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "get_free_agent_offers",
+    leagueData,
+    payload || {},
+    "free-agency-offers-result",
+    "free-agency-offers-error"
+  );
+}
+
+async function submitUserFreeAgentOffer(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "submit_user_free_agent_offer",
+    leagueData,
+    payload || {},
+    "free-agency-submit-offer-result",
+    "free-agency-submit-offer-error"
+  );
+}
+
+async function advanceFreeAgencyDay(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "advance_free_agency_day",
+    leagueData,
+    payload || {},
+    "free-agency-advance-day-result",
+    "free-agency-advance-day-error"
+  );
+}
+
+// ------------------------------------------------------------
+// PLAYER RETIREMENT GENERIC REQUEST MODE ✅
+// ------------------------------------------------------------
+async function runRetirementRequest(requestId, leagueData, payload, okType, errType) {
+  try {
+    pyodide.globals.set("ret_request_js", pyodide.toPy({
+      action: "run_player_retirements",
+      leagueData: leagueData || {},
+      payload: payload || {},
+    }));
+
+    const pyJson = await pyodide.runPythonAsync(`
+import importlib, json
+import retirement_logic
+importlib.reload(retirement_logic)
+
+from retirement_logic import handle_request
+
+res = handle_request(ret_request_js)
+json.dumps(res)
+    `);
+
+    const payloadOut = JSON.parse(pyJson);
+
+    postMessage({
+      type: okType,
+      requestId,
+      payload: payloadOut,
+    });
+  } catch (err) {
+    console.error("[simWorkerV2] retirement request error:", err);
+    postMessage({
+      type: errType,
+      requestId,
+      error: err.toString(),
+    });
+  }
+}
+
+async function runPlayerRetirements(requestId, leagueData, payload) {
+  return runRetirementRequest(
+    requestId,
+    leagueData,
+    payload || {},
+    "player-retirements-result",
+    "player-retirements-error"
+  );
+}
+
 // ------------------------------------------------------------
 // Dispatcher
 // ------------------------------------------------------------
@@ -366,7 +492,7 @@ onmessage = async (e) => {
     return computeFinalsMvp(msg.requestId, msg.players, msg.meta || {});
   }
 
-  // progression ✅ (accept BOTH leagueData and league)
+  // progression ✅
   if (msg.type === "compute-progression") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return computeProgression(
@@ -399,5 +525,53 @@ onmessage = async (e) => {
   if (msg.type === "release-player-free-agency") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return releasePlayerFreeAgency(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // offseason contract preview ✅
+  if (msg.type === "preview-offseason-contracts") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return previewOffseasonContracts(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // offseason contract apply ✅
+  if (msg.type === "apply-offseason-contract-decisions") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return applyOffseasonContractDecisions(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // initialize live free agency ✅
+  if (msg.type === "initialize-free-agency-period") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return initializeFreeAgencyPeriod(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // free agency state summary ✅
+  if (msg.type === "get-free-agency-state-summary") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return getFreeAgencyStateSummary(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // view offers ✅
+  if (msg.type === "get-free-agent-offers") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return getFreeAgentOffers(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // submit user offer ✅
+  if (msg.type === "submit-user-free-agent-offer") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return submitUserFreeAgentOffer(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // advance free agency day ✅
+  if (msg.type === "advance-free-agency-day") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return advanceFreeAgencyDay(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // player retirements ✅
+  if (msg.type === "run-player-retirements") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return runPlayerRetirements(msg.requestId, leaguePayload, msg.payload || {});
   }
 };

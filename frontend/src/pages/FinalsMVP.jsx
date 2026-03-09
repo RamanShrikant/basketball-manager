@@ -35,6 +35,7 @@ function buildPlayerIndex(leagueData) {
 
 const resolveLogo = (t) =>
   t.logo || t.teamLogo || t.newTeamLogo || t.logoUrl || t.image || t.img || "";
+
 function pickNum(obj, keys, fallback = null) {
   for (const k of keys) {
     const v = Number(obj?.[k]);
@@ -57,13 +58,12 @@ function fmt1(x) {
 // NEW SEASON HELPERS
 // -------------------------
 const META_KEY = "bm_league_meta_v1";
-const PLAYER_STATS_KEY = "bm_player_stats_v1";
 const SCHED_KEY = "bm_schedule_v3";
 const RESULT_V2_BLOB_KEY = "bm_results_v2";
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
-
-const DELTAS_KEY = "bm_progression_deltas_v1";
+const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
+const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
 
 function bumpSeasonYearMeta() {
   const today = new Date();
@@ -103,28 +103,6 @@ function clearSeasonStores() {
   // wipe season stats (new season starts empty)
 }
 
-function ageUpLeagueAndMakeDeltas(league) {
-  const clone = structuredClone(league);
-
-  const teams = getAllTeamsFromLeague(clone);
-  const deltas = {};
-
-  for (const t of teams) {
-    for (const p of (t.players || [])) {
-      const name = p?.name || p?.player;
-      if (!name) continue;
-
-      const prevAge = Number.isFinite(Number(p.age)) ? Number(p.age) : 25;
-      p.age = prevAge + 1;
-
-      // only thing you explicitly want right now
-      deltas[name] = { age: 1 };
-    }
-  }
-
-  return { league: clone, deltas };
-}
-
 function pushFinalsMvpToHistory(fmvpRaw) {
   if (!fmvpRaw) return;
 
@@ -143,6 +121,16 @@ function pushFinalsMvpToHistory(fmvpRaw) {
 
   hist.push(fmvpRaw);
   localStorage.setItem(key, JSON.stringify(hist));
+}
+
+function buildFreshOffseasonState(seasonYear) {
+  return {
+    active: true,
+    seasonYear,
+    retirementsComplete: false,
+    freeAgencyComplete: false,
+    progressionComplete: false,
+  };
 }
 
 export default function FinalsMvp() {
@@ -175,63 +163,99 @@ export default function FinalsMvp() {
 
   const portraitSrc = playerMeta?.portrait || null;
 
-  const continueToProgressionThenCalendar = () => {
+  const continueToOffseasonHub = () => {
     // 1) preserve Finals MVP always (history + latest)
     pushFinalsMvpToHistory(fmvpRaw);
 
-    // 3) bump season year so Calendar header updates + schedule window changes
-    bumpSeasonYearMeta();
+    // 2) bump season year so offseason pages can read the next cycle
+    const nextSeasonYear = bumpSeasonYearMeta();
 
-    // 4) clear season runtime keys so Calendar generates a fresh schedule/results
+    // 3) clear season runtime keys so Calendar generates a fresh schedule/results later
     clearSeasonStores();
 
-    // 5) do NOT delete finals mvp history/latest; we only clear the "one-time page payload"
+    // 4) reset offseason state/results for the new offseason
+    localStorage.setItem(
+      OFFSEASON_STATE_KEY,
+      JSON.stringify(buildFreshOffseasonState(nextSeasonYear))
+    );
+    localStorage.removeItem(RETIREMENT_RESULTS_KEY);
+
+    // 5) update leagueData season year in memory/localStorage so hub/pages read the right year
+    if (leagueData) {
+      const updatedLeague = structuredClone(leagueData);
+      updatedLeague.seasonYear = nextSeasonYear;
+      updatedLeague.currentSeasonYear = nextSeasonYear;
+
+      if (typeof setLeagueData === "function") {
+        setLeagueData(updatedLeague);
+      }
+
+      localStorage.setItem("leagueData", JSON.stringify(updatedLeague));
+
+      if (selectedTeam?.name && typeof setSelectedTeam === "function") {
+        let updatedSelectedTeam = null;
+
+        for (const confKey of Object.keys(updatedLeague.conferences || {})) {
+          const found = (updatedLeague.conferences[confKey] || []).find(
+            (t) => t.name === selectedTeam.name
+          );
+          if (found) {
+            updatedSelectedTeam = found;
+            break;
+          }
+        }
+
+        if (updatedSelectedTeam) {
+          setSelectedTeam(updatedSelectedTeam);
+          localStorage.setItem("selectedTeam", JSON.stringify(updatedSelectedTeam));
+        }
+      }
+    }
+
+    // 6) do NOT delete finals mvp history/latest; we only clear the one-time page payload
     localStorage.removeItem("bm_finals_mvp_v1");
 
-    // 6) go to progression screen (then you hit Return to Calendar)
-    navigate("/player-progression");
+    // 7) go to offseason hub
+    navigate("/offseason-hub");
   };
 
-const finalsRow = useMemo(() => {
-  if (!winner) return null;
+  const finalsRow = useMemo(() => {
+    if (!winner) return null;
 
-  const gp = pickNum(winner, ["gp"], 0);
+    const gp = pickNum(winner, ["gp"], 0);
 
-  const pts = pickNum(winner, ["pts", "points"], 0);
-  const reb = pickNum(winner, ["reb", "rebounds"], 0);
-  const ast = pickNum(winner, ["ast", "assists"], 0);
-  const stl = pickNum(winner, ["stl", "steals"], 0);
-  const blk = pickNum(winner, ["blk", "blocks"], 0);
+    const pts = pickNum(winner, ["pts", "points"], 0);
+    const reb = pickNum(winner, ["reb", "rebounds"], 0);
+    const ast = pickNum(winner, ["ast", "assists"], 0);
+    const stl = pickNum(winner, ["stl", "steals"], 0);
+    const blk = pickNum(winner, ["blk", "blocks"], 0);
 
-  const fgm = pickNum(winner, ["fgm", "fg_m"], 0);
-  const fga = pickNum(winner, ["fga", "fg_a"], 0);
-  const tpm = pickNum(winner, ["tpm", "tp_m", "fg3m", "three_m"], 0);
-  const tpa = pickNum(winner, ["tpa", "tp_a", "fg3a", "three_a"], 0);
+    const fgm = pickNum(winner, ["fgm", "fg_m"], 0);
+    const fga = pickNum(winner, ["fga", "fg_a"], 0);
+    const tpm = pickNum(winner, ["tpm", "tp_m", "fg3m", "three_m"], 0);
+    const tpa = pickNum(winner, ["tpa", "tp_a", "fg3a", "three_a"], 0);
 
-  const perGame = (total) => (gp > 0 ? total / gp : null);
+    const perGame = (total) => (gp > 0 ? total / gp : null);
 
-  const normalizePct = (v) => {
-    if (!Number.isFinite(v)) return null;
-    return v <= 1 ? v * 100 : v;
-  };
+    const normalizePct = (v) => {
+      if (!Number.isFinite(v)) return null;
+      return v <= 1 ? v * 100 : v;
+    };
 
-  const fgPctRaw = pickNum(winner, ["fg_pct", "fgPct"], null);
-  const tpPctRaw = pickNum(winner, ["tp_pct", "tpPct"], null);
+    const fgPctRaw = pickNum(winner, ["fg_pct", "fgPct"], null);
+    const tpPctRaw = pickNum(winner, ["tp_pct", "tpPct"], null);
 
-  return {
-    gp: gp || null,
-    ppg: winner.ppg ?? perGame(pts),
-    rpg: winner.rpg ?? perGame(reb),
-    apg: winner.apg ?? perGame(ast),
-    spg: winner.spg ?? perGame(stl),
-    bpg: winner.bpg ?? perGame(blk),
-    fg: normalizePct(fgPctRaw) ?? pct(fgm, fga),
-    tp: normalizePct(tpPctRaw) ?? pct(tpm, tpa),
-  };
-
-  
-}, [winner]);
-
+    return {
+      gp: gp || null,
+      ppg: winner.ppg ?? perGame(pts),
+      rpg: winner.rpg ?? perGame(reb),
+      apg: winner.apg ?? perGame(ast),
+      spg: winner.spg ?? perGame(stl),
+      bpg: winner.bpg ?? perGame(blk),
+      fg: normalizePct(fgPctRaw) ?? pct(fgm, fga),
+      tp: normalizePct(tpPctRaw) ?? pct(tpm, tpa),
+    };
+  }, [winner]);
 
   const fillPercent = Math.min((playerMeta?.ovr || 0) / 99, 1);
   const circleCircumference = 2 * Math.PI * 50;
@@ -358,7 +382,6 @@ const finalsRow = useMemo(() => {
                 <td>{fmt1(finalsRow?.bpg)}</td>
                 <td>{fmt1(finalsRow?.fg)}</td>
                 <td>{fmt1(finalsRow?.tp)}</td>
-                
               </tr>
             </tbody>
           </table>
@@ -375,7 +398,7 @@ const finalsRow = useMemo(() => {
 
           <button
             className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg text-sm font-bold"
-            onClick={continueToProgressionThenCalendar}
+            onClick={continueToOffseasonHub}
           >
             Continue
           </button>
