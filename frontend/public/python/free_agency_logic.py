@@ -5,7 +5,9 @@ import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 DEFAULT_SALARY_CAP = 150_000_000
-DEFAULT_ROSTER_LIMIT = 15
+REGULAR_SEASON_MIN_ROSTER = 14
+REGULAR_SEASON_MAX_ROSTER = 15
+DEFAULT_ROSTER_LIMIT = REGULAR_SEASON_MAX_ROSTER
 DEFAULT_SEASON_YEAR = 2026
 
 MIN_DEAL = 1_200_000
@@ -58,7 +60,15 @@ def get_roster_limit(league_data: Dict[str, Any]) -> int:
     return int(
         league_data.get("rosterLimit")
         or league_data.get("maxRosterSize")
-        or DEFAULT_ROSTER_LIMIT
+        or REGULAR_SEASON_MAX_ROSTER
+    )
+
+
+def get_min_roster_target(league_data: Dict[str, Any]) -> int:
+    return int(
+        league_data.get("minRosterSize")
+        or league_data.get("minRosterLimit")
+        or REGULAR_SEASON_MIN_ROSTER
     )
 
 
@@ -177,6 +187,22 @@ def get_next_season_salary(contract: Optional[Dict[str, Any]], season_year: int)
     return get_contract_salary_for_year(contract, season_year + 1)
 
 
+def get_option_pick_value(option: Optional[Dict[str, Any]], year_index: int):
+    if not option:
+        return None
+
+    raw_picked = option.get("picked")
+
+    if isinstance(raw_picked, dict):
+        if str(year_index) in raw_picked:
+            return raw_picked[str(year_index)]
+        if "default" in raw_picked:
+            return raw_picked["default"]
+        return None
+
+    return raw_picked
+
+
 def get_active_option_for_year(contract: Optional[Dict[str, Any]], season_year: int) -> Optional[Dict[str, Any]]:
     contract = normalize_contract(contract)
     if not contract:
@@ -194,11 +220,15 @@ def get_active_option_for_year(contract: Optional[Dict[str, Any]], season_year: 
     if idx not in year_indices:
         return None
 
+    picked_value = get_option_pick_value(option, idx)
+    if picked_value is not None:
+        return None
+
     return {
         "type": option.get("type"),
         "yearIndex": idx,
         "salary": get_contract_salary_for_year(contract, season_year),
-        "picked": option.get("picked"),
+        "picked": picked_value,
     }
 
 
@@ -422,6 +452,15 @@ def build_contract_from_offer(league_data: Dict[str, Any], offer: Dict[str, Any]
         "salaryByYear": safe_salary_by_year,
         "option": offer.get("option"),
     })
+
+
+def is_minimum_contract_for_current_year(
+    league_data: Dict[str, Any],
+    contract: Dict[str, Any]
+) -> bool:
+    season_year = get_current_season_year(league_data)
+    offered_current_salary = get_contract_salary_for_year(contract, season_year)
+    return int(offered_current_salary) <= int(MIN_DEAL)
 
 
 # ------------------------------------------------------------
@@ -725,9 +764,11 @@ def build_contract_status_row(
     team_direction = classify_team_direction(team)
     re_sign_interest = estimate_team_re_sign_interest(team, player)
 
-    salary_this_year = get_contract_salary_for_year(contract, season_year)
-    salary_next_year = get_next_season_salary(contract, season_year) if contract else 0
-    active_option = get_active_option_for_year(contract, season_year)
+    upcoming_year = season_year + 1
+
+    salary_this_year = get_contract_salary_for_year(contract, upcoming_year)
+    salary_next_year = get_contract_salary_for_year(contract, upcoming_year + 1) if contract else 0
+    active_option = get_active_option_for_year(contract, upcoming_year)
     contract_last_year = get_contract_last_year(contract)
 
     status = "signed"
@@ -760,9 +801,9 @@ def build_contract_status_row(
         row["option"] = active_option
 
         if active_option["type"] == "player":
-            row["playerOptionDecision"] = decide_player_option(player, season_year)
+            row["playerOptionDecision"] = decide_player_option(player, upcoming_year)
         elif active_option["type"] == "team":
-            row["cpuTeamOptionDecision"] = decide_cpu_team_option(team, player, season_year)
+            row["cpuTeamOptionDecision"] = decide_cpu_team_option(team, player, upcoming_year)
 
     return row
 
@@ -913,8 +954,9 @@ def apply_offseason_contract_decisions(
 
         for player in original_players:
             contract = normalize_contract(player.get("contract"))
-            salary_this_year = get_contract_salary_for_year(contract, season_year)
-            active_option = get_active_option_for_year(contract, season_year)
+            upcoming_year = season_year + 1
+            salary_this_year = get_contract_salary_for_year(contract, upcoming_year)
+            active_option = get_active_option_for_year(contract, upcoming_year)
 
             if contract is None or salary_this_year <= 0:
                 add_player_to_free_agency(
@@ -934,7 +976,7 @@ def apply_offseason_contract_decisions(
                 continue
 
             if active_option and active_option.get("type") == "player":
-                decision = decide_player_option(player, season_year)
+                decision = decide_player_option(player, upcoming_year)
                 if decision["exerciseOption"]:
                     kept_player = copy.deepcopy(player)
                     kept_player["contract"] = set_option_pick_for_year(
@@ -981,7 +1023,7 @@ def apply_offseason_contract_decisions(
                         "score": None,
                     }
                 else:
-                    decision = decide_cpu_team_option(team, player, season_year)
+                    decision = decide_cpu_team_option(team, player, upcoming_year)
                     exercise = decision["exerciseOption"]
 
                 if exercise:
@@ -1101,6 +1143,75 @@ def get_active_offer_count_for_team(state: Dict[str, Any], team_name: str) -> in
             if offer.get("status", "active") == "active" and offer.get("teamName") == team_name:
                 count += 1
     return count
+
+
+def get_projected_team_roster_count(
+    league_data: Dict[str, Any],
+    team_name: str,
+    state: Optional[Dict[str, Any]] = None
+) -> int:
+    _, _, team = find_team_entry(league_data, team_name)
+    if team is None:
+        return 0
+
+    projected_count = len(get_team_players(team))
+    if state is not None:
+        projected_count += get_active_offer_count_for_team(state, team_name)
+
+    return projected_count
+
+
+def get_team_roster_deficit(
+    league_data: Dict[str, Any],
+    team_name: str,
+    state: Optional[Dict[str, Any]] = None
+) -> int:
+    min_roster_target = get_min_roster_target(league_data)
+    projected_count = get_projected_team_roster_count(
+        league_data = league_data,
+        team_name = team_name,
+        state = state,
+    )
+    return max(0, min_roster_target - projected_count)
+
+
+def get_team_remaining_roster_slots(
+    league_data: Dict[str, Any],
+    team_name: str,
+    state: Optional[Dict[str, Any]] = None
+) -> int:
+    max_roster_limit = get_roster_limit(league_data)
+    projected_count = get_projected_team_roster_count(
+        league_data = league_data,
+        team_name = team_name,
+        state = state,
+    )
+    return max(0, max_roster_limit - projected_count)
+
+
+def get_active_offer_limit_for_team(
+    league_data: Dict[str, Any],
+    team_name: str,
+    state: Dict[str, Any]
+) -> int:
+    _, _, team = find_team_entry(league_data, team_name)
+    if team is None:
+        return MAX_ACTIVE_OFFERS_PER_TEAM
+
+    current_roster_count = len(get_team_players(team))
+    remaining_slots_now = max(0, get_roster_limit(league_data) - current_roster_count)
+    roster_deficit = get_team_roster_deficit(
+        league_data = league_data,
+        team_name = team_name,
+        state = state,
+    )
+
+    desired_limit = max(MAX_ACTIVE_OFFERS_PER_TEAM, roster_deficit)
+
+    if remaining_slots_now <= 0:
+        return 0
+
+    return min(remaining_slots_now, desired_limit)
 
 
 def get_outstanding_offer_year1_total(
@@ -1243,7 +1354,12 @@ def evaluate_market_offer_submission(
             "teamSnapshot": snapshot,
         }
 
-    if snapshot["payroll"] + outstanding_current_salary + offered_current_salary > snapshot["salaryCap"]:
+    allow_minimum_exception = is_minimum_contract_for_current_year(
+        league_data = league_data,
+        contract = contract,
+    )
+
+    if not allow_minimum_exception and snapshot["payroll"] + outstanding_current_salary + offered_current_salary > snapshot["salaryCap"]:
         over_by = snapshot["payroll"] + outstanding_current_salary + offered_current_salary - snapshot["salaryCap"]
         return {
             "ok": False,
@@ -1361,6 +1477,8 @@ def build_cpu_offer_contract(
     expected_year1 = int(market_value["expectedYear1Salary"])
     expected_years = int(market_value["expectedYears"])
 
+    roster_deficit = max(0, get_min_roster_target(league_data) - len(get_team_players(team)))
+
     multiplier = 0.90 + (0.10 * rng.random()) + (0.04 * (current_day / max(1, max_days)))
 
     if direction == "contending" and age >= 29:
@@ -1369,6 +1487,8 @@ def build_cpu_offer_contract(
         multiplier += 0.02
     if overall >= 85:
         multiplier += 0.04
+    if roster_deficit > 0:
+        multiplier += min(0.14, roster_deficit * 0.02)
 
     year1_salary = int(round_to_nearest(clamp(expected_year1 * multiplier, MIN_DEAL, MAX_SALARY), base = 1_000))
     years = expected_years
@@ -1376,6 +1496,9 @@ def build_cpu_offer_contract(
     if direction == "contending" and age >= 31:
         years = max(1, years - 1)
     elif direction in ["rebuilding", "retooling"] and age <= 25:
+        years = min(4, years + 1)
+
+    if roster_deficit > 0 and age <= 29:
         years = min(4, years + 1)
 
     years = int(clamp(years, 1, 4))
@@ -1395,6 +1518,7 @@ def generate_cpu_offers_for_day(
     current_day = int(num(state.get("currentDay"), 1))
     max_days = int(num(state.get("maxDays"), DEFAULT_FREE_AGENCY_DAYS))
     season_year = get_current_season_year(league_data)
+    min_roster_target = get_min_roster_target(league_data)
 
     generated = []
     free_agents = sorted(
@@ -1430,13 +1554,31 @@ def generate_cpu_offers_for_day(
                 continue
             if team_name in existing_team_names:
                 continue
-            if len(get_team_players(team)) >= get_roster_limit(league_data):
+
+            projected_roster_count = get_projected_team_roster_count(
+                league_data = league_data,
+                team_name = team_name,
+                state = state,
+            )
+            remaining_roster_slots = get_team_remaining_roster_slots(
+                league_data = league_data,
+                team_name = team_name,
+                state = state,
+            )
+            active_offer_limit = get_active_offer_limit_for_team(
+                league_data = league_data,
+                team_name = team_name,
+                state = state,
+            )
+
+            if remaining_roster_slots <= 0:
                 continue
-            if get_active_offer_count_for_team(state, team_name) >= MAX_ACTIVE_OFFERS_PER_TEAM:
+            if get_active_offer_count_for_team(state, team_name) >= active_offer_limit:
                 continue
 
             fit = estimate_team_free_agent_fit(team, player)
-            if fit["interestScore"] < 0.52:
+            min_fit_threshold = 0.34 if projected_roster_count < min_roster_target else 0.52
+            if fit["interestScore"] < min_fit_threshold:
                 continue
 
             seed = stable_text_seed(f"{season_year}|{current_day}|{team_name}|{player_key}")
@@ -1463,7 +1605,13 @@ def generate_cpu_offers_for_day(
             if not eval_res.get("ok"):
                 continue
 
+            roster_deficit = max(0, min_roster_target - projected_roster_count)
+
             candidate_score = fit["interestScore"] + rng.random() * 0.08
+            if roster_deficit > 0:
+                candidate_score += min(0.40, roster_deficit * 0.07)
+                candidate_score += min(0.08, remaining_roster_slots * 0.01)
+
             candidates.append((candidate_score, team_name, contract))
 
         candidates.sort(key = lambda x: x[0], reverse = True)
@@ -1643,8 +1791,12 @@ def finalize_free_agent_signing_from_offer(
     snapshot = get_team_cap_snapshot(league_data, chosen_offer.get("teamName"))
     contract = normalize_contract(chosen_offer.get("contract"))
     offered_current_salary = get_contract_salary_for_year(contract, get_current_season_year(league_data))
+    allow_minimum_exception = is_minimum_contract_for_current_year(
+        league_data = league_data,
+        contract = contract,
+    )
 
-    if snapshot["payroll"] + offered_current_salary > snapshot["salaryCap"]:
+    if not allow_minimum_exception and snapshot["payroll"] + offered_current_salary > snapshot["salaryCap"]:
         return None
     if len(get_team_players(team)) >= get_roster_limit(league_data):
         return None
@@ -1898,8 +2050,12 @@ def evaluate_offer(
     contract = build_contract_from_offer(league_data, offer)
     season_year = get_current_season_year(league_data)
     offered_current_salary = get_contract_salary_for_year(contract, season_year)
+    allow_minimum_exception = is_minimum_contract_for_current_year(
+        league_data = league_data,
+        contract = contract,
+    )
 
-    if snapshot["payroll"] + offered_current_salary > snapshot["salaryCap"]:
+    if not allow_minimum_exception and snapshot["payroll"] + offered_current_salary > snapshot["salaryCap"]:
         over_by = snapshot["payroll"] + offered_current_salary - snapshot["salaryCap"]
         return {
             "ok": False,

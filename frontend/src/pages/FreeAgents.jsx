@@ -31,6 +31,7 @@ export default function FreeAgents() {
   const [offersViewError, setOffersViewError] = useState("");
   const [offersViewData, setOffersViewData] = useState(null);
   const [daySummary, setDaySummary] = useState(null);
+  const [rosterActionError, setRosterActionError] = useState("");
   const [offseasonState, setOffseasonState] = useState(() =>
     safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), null) || {}
   );
@@ -171,6 +172,61 @@ export default function FreeAgents() {
     return count;
   }, [liveFreeAgencyState]);
 
+  const currentUserTeam = useMemo(() => {
+    if (!workingLeagueData?.conferences || !selectedTeam?.name) return null;
+
+    for (const confKey of Object.keys(workingLeagueData.conferences || {})) {
+      const found = (workingLeagueData.conferences[confKey] || []).find(
+        (team) => team.name === selectedTeam.name
+      );
+      if (found) return found;
+    }
+
+    return null;
+  }, [workingLeagueData, selectedTeam]);
+
+  const minRosterSize = Number(
+    workingLeagueData?.minRosterSize ||
+    workingLeagueData?.minRosterLimit ||
+    14
+  );
+
+  const maxRosterSize = Number(
+    workingLeagueData?.rosterLimit ||
+    workingLeagueData?.maxRosterSize ||
+    15
+  );
+
+  const userRosterCount = Number(currentUserTeam?.players?.length || 0);
+  const userRosterTooFew = !!selectedTeam?.name && userRosterCount < minRosterSize;
+  const userRosterTooMany = !!selectedTeam?.name && userRosterCount > maxRosterSize;
+  const userRosterInvalid = userRosterTooFew || userRosterTooMany;
+
+  const canSubmitLiveOffer = isOffseasonMode && isLiveFreeAgencyActive;
+  const canManualCleanupSign = isOffseasonMode && freeAgencyFinished && userRosterTooFew;
+  const canUseFreeAgencyAction = !isOffseasonMode || canSubmitLiveOffer || canManualCleanupSign;
+
+  const rosterValidationMessage = useMemo(() => {
+    if (!selectedTeam?.name) return "";
+
+    if (userRosterTooFew) {
+      return `${selectedTeam.name} has ${userRosterCount} players. You need at least ${minRosterSize} players before leaving free agency.`;
+    }
+
+    if (userRosterTooMany) {
+      return `${selectedTeam.name} has ${userRosterCount} players. You must get down to ${maxRosterSize} players before leaving free agency.`;
+    }
+
+    return "";
+  }, [
+    selectedTeam?.name,
+    userRosterCount,
+    userRosterTooFew,
+    userRosterTooMany,
+    minRosterSize,
+    maxRosterSize,
+  ]);
+
   const applyLeagueUpdate = (updated) => {
     if (!updated) return;
 
@@ -300,6 +356,12 @@ export default function FreeAgents() {
       setSelectedPlayer(freeAgents[0]);
     }
   }, [freeAgents, selectedPlayer]);
+
+  useEffect(() => {
+    if (!userRosterInvalid) {
+      setRosterActionError("");
+    }
+  }, [userRosterInvalid]);
 
   const positionOrder = ["PG", "SG", "SF", "PF", "C"];
 
@@ -541,6 +603,15 @@ export default function FreeAgents() {
     return { percent, label: "Not Interested", barClass: "bg-red-500" };
   }, [offerEvaluation, offerEvalLoading]);
 
+  const handleContinueToProgression = () => {
+    if (userRosterInvalid) {
+      setRosterActionError(rosterValidationMessage);
+      return;
+    }
+
+    navigate("/player-progression");
+  };
+
   const handleInitializeFreeAgency = async () => {
     if (!workingLeagueData) return;
 
@@ -567,6 +638,32 @@ export default function FreeAgents() {
           baseLeague,
           selectedTeam?.name || null
         );
+        console.log("[FA PREVIEW]", {
+          seasonYear: baseLeague?.seasonYear,
+          currentSeasonYear: baseLeague?.currentSeasonYear,
+          freeAgentsBefore: (baseLeague?.freeAgents || []).length,
+          summary: previewRes?.summary,
+          expiredSample: (previewRes?.expiredContracts || []).slice(0, 15).map((r) => ({
+            team: r.teamName,
+            player: r.playerName,
+            status: r.status,
+            salaryThisYear: r.salaryThisYear,
+            salaryNextYear: r.salaryNextYear,
+            contractLastYear: r.contractLastYear,
+          })),
+          playerOptionSample: (previewRes?.playerOptions || []).slice(0, 10).map((r) => ({
+            team: r.teamName,
+            player: r.playerName,
+            option: r.option,
+            decision: r.playerOptionDecision,
+          })),
+          teamOptionSample: (previewRes?.teamOptions || []).slice(0, 10).map((r) => ({
+            team: r.teamName,
+            player: r.playerName,
+            option: r.option,
+            decision: r.cpuTeamOptionDecision,
+          })),
+        });
 
         if (!previewRes?.ok) {
           setDaySummary({
@@ -583,18 +680,27 @@ export default function FreeAgents() {
 
         if (!applyRes?.ok && Array.isArray(applyRes?.pendingTeamOptions) && applyRes.pendingTeamOptions.length) {
           const autoExerciseDecisions = {};
+
           for (const row of applyRes.pendingTeamOptions) {
-            const key = row?.playerId ?? row?.playerName;
-            if (key !== undefined && key !== null && key !== "") {
-              autoExerciseDecisions[String(key)] = true;
+            if (row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== "") {
+              autoExerciseDecisions[String(row.playerId)] = false;
+            }
+
+            if (row?.playerName) {
+              autoExerciseDecisions[String(row.playerName)] = false;
             }
           }
+
+          console.log("[FA PENDING OPTIONS]", applyRes.pendingTeamOptions);
+          console.log("[FA AUTO DECISIONS]", autoExerciseDecisions);
 
           applyRes = await applyOffseasonContractDecisions(
             baseLeague,
             selectedTeam?.name || null,
             autoExerciseDecisions
           );
+
+          console.log("[FA APPLY SECOND]", applyRes);
         }
 
         if (!applyRes?.ok || !applyRes?.leagueData) {
@@ -603,6 +709,16 @@ export default function FreeAgents() {
           });
           return;
         }
+
+        console.log("[FA APPLY]", {
+          summary: applyRes?.summary,
+          freeAgentsAfter: (applyRes?.leagueData?.freeAgents || []).length,
+          decisionLogSample: (applyRes?.decisionLog || []).slice(0, 25),
+        });
+
+        baseLeague = applyRes.leagueData;
+        prepSummary = applyRes.summary || null;
+        applyLeagueUpdate(baseLeague);
 
         baseLeague = applyRes.leagueData;
         prepSummary = applyRes.summary || null;
@@ -731,6 +847,7 @@ export default function FreeAgents() {
     if (!signTargetPlayer || !selectedTeam || !workingLeagueData) return;
 
     setSignError("");
+    setRosterActionError("");
 
     const year1Salary = parseMillionsText(offerSalaryText);
     if (!year1Salary) {
@@ -742,52 +859,85 @@ export default function FreeAgents() {
 
     try {
       if (isOffseasonMode) {
-        if (!isLiveFreeAgencyActive) {
-          setSignError("Start the live free agency period before submitting offers.");
+        if (canSubmitLiveOffer) {
+          if (typeof submitUserFreeAgentOffer !== "function") {
+            setSignError("Live offer submission is not wired in simEnginePy.js yet.");
+            return;
+          }
+
+          const res = await submitUserFreeAgentOffer(
+            workingLeagueData,
+            selectedTeam.name,
+            signTargetPlayer.id || null,
+            signTargetPlayer.name || null,
+            offer
+          );
+
+          if (!res?.ok || !res?.leagueData) {
+            setSignError(res?.reason || "Offer submission failed.");
+            return;
+          }
+
+          applyLeagueUpdate(res.leagueData);
+          closeSignModal();
+
+          if (offersModalOpen || selectedPlayer?.name === signTargetPlayer?.name) {
+            await openOffersModal(signTargetPlayer);
+          }
+
           return;
         }
 
-        if (typeof submitUserFreeAgentOffer !== "function") {
-          setSignError("Live offer submission is not wired in simEnginePy.js yet.");
+        if (canManualCleanupSign) {
+          const res = await signFreeAgent(
+            workingLeagueData,
+            selectedTeam.name,
+            signTargetPlayer.id || null,
+            signTargetPlayer.name || null,
+            offer
+          );
+
+          if (!res?.ok || !res?.leagueData) {
+            setSignError(res?.reason || "Signing failed.");
+            return;
+          }
+
+          applyLeagueUpdate(res.leagueData);
+          closeSignModal();
+
+          if (offersModalOpen) {
+            closeOffersModal();
+          }
+
           return;
         }
 
-        const res = await submitUserFreeAgentOffer(
-          workingLeagueData,
-          selectedTeam.name,
-          signTargetPlayer.id || null,
-          signTargetPlayer.name || null,
-          offer
-        );
-
-        if (!res?.ok || !res?.leagueData) {
-          setSignError(res?.reason || "Offer submission failed.");
+        if (userRosterTooMany) {
+          setSignError(
+            `${selectedTeam.name} has ${userRosterCount} players. You must get down to ${maxRosterSize} before leaving free agency.`
+          );
           return;
         }
 
-        applyLeagueUpdate(res.leagueData);
-        closeSignModal();
-
-        if (offersModalOpen || selectedPlayer?.name === signTargetPlayer?.name) {
-          await openOffersModal(signTargetPlayer);
-        }
-      } else {
-        const res = await signFreeAgent(
-          workingLeagueData,
-          selectedTeam.name,
-          signTargetPlayer.id || null,
-          signTargetPlayer.name || null,
-          offer
-        );
-
-        if (!res?.ok || !res?.leagueData) {
-          setSignError(res?.reason || "Signing failed.");
-          return;
-        }
-
-        applyLeagueUpdate(res.leagueData);
-        closeSignModal();
+        setSignError("The live market is closed.");
+        return;
       }
+
+      const res = await signFreeAgent(
+        workingLeagueData,
+        selectedTeam.name,
+        signTargetPlayer.id || null,
+        signTargetPlayer.name || null,
+        offer
+      );
+
+      if (!res?.ok || !res?.leagueData) {
+        setSignError(res?.reason || "Signing failed.");
+        return;
+      }
+
+      applyLeagueUpdate(res.leagueData);
+      closeSignModal();
     } catch (err) {
       setSignError(err?.message || (isOffseasonMode ? "Offer submission failed." : "Signing failed."));
     }
@@ -800,10 +950,23 @@ export default function FreeAgents() {
           ? "Free agency is complete."
           : "No free agents available."}
       </p>
+
+      {rosterValidationMessage && (
+        <div className="mb-4 max-w-2xl w-full bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 text-red-200 text-sm font-semibold text-center">
+          {rosterValidationMessage}
+        </div>
+      )}
+
+      {rosterActionError && rosterActionError !== rosterValidationMessage && (
+        <div className="mb-4 text-red-300 text-sm font-semibold">
+          {rosterActionError}
+        </div>
+      )}
+
       <div className="flex gap-3 flex-wrap justify-center">
         {isOffseasonMode && freeAgencyFinished && (
           <button
-            onClick={() => navigate("/player-progression")}
+            onClick={handleContinueToProgression}
             className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
           >
             Continue to Progression
@@ -879,7 +1042,9 @@ export default function FreeAgents() {
               </p>
               <p className="text-lg font-semibold text-white mt-1">
                 {freeAgencyFinished
-                  ? "Free agency complete"
+                  ? userRosterInvalid
+                    ? "Roster action required"
+                    : "Free agency complete"
                   : isLiveFreeAgencyActive
                   ? `Day ${currentDay} of ${maxDays || 7}`
                   : preFreeAgencyResolved
@@ -913,7 +1078,7 @@ export default function FreeAgents() {
           <div className="flex flex-wrap gap-3 mt-4">
             {freeAgencyFinished ? (
               <button
-                onClick={() => navigate("/player-progression")}
+                onClick={handleContinueToProgression}
                 className="px-5 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
               >
                 Continue to Progression
@@ -947,6 +1112,26 @@ export default function FreeAgents() {
               Back to Offseason Hub
             </button>
           </div>
+
+          {rosterValidationMessage && (
+            <div className="mt-4 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3">
+              <div className="text-sm font-semibold text-red-200">
+                {rosterValidationMessage}
+              </div>
+
+              {freeAgencyFinished && userRosterTooFew && (
+                <div className="text-xs text-red-300 mt-1">
+                  The live market is over, but you can still sign remaining free agents directly on this page until you reach {minRosterSize} players.
+                </div>
+              )}
+            </div>
+          )}
+
+          {rosterActionError && rosterActionError !== rosterValidationMessage && (
+            <div className="mt-4 text-red-300 text-sm font-semibold">
+              {rosterActionError}
+            </div>
+          )}
 
           {daySummary?.error && (
             <div className="mt-4 text-red-300 text-sm font-semibold">
@@ -1027,12 +1212,17 @@ export default function FreeAgents() {
                     disabled={
                       !selectedTeam ||
                       !player?.name ||
-                      freeAgencyFinished ||
-                      (isOffseasonMode && !isLiveFreeAgencyActive)
+                      (isOffseasonMode && !canUseFreeAgencyAction)
                     }
                     className="px-5 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
                   >
-                    {isOffseasonMode ? "Submit Offer" : "Offer Contract"}
+                    {isOffseasonMode
+                      ? canSubmitLiveOffer
+                        ? "Submit Offer"
+                        : canManualCleanupSign
+                        ? "Sign Player"
+                        : "Submit Offer"
+                      : "Offer Contract"}
                   </button>
 
                   {isOffseasonMode && (
@@ -1206,7 +1396,7 @@ export default function FreeAgents() {
         )}
         {isOffseasonMode && freeAgencyFinished && (
           <button
-            onClick={() => navigate("/player-progression")}
+            onClick={handleContinueToProgression}
             className="px-8 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
           >
             Continue to Progression
@@ -1439,9 +1629,15 @@ export default function FreeAgents() {
               </div>
             )}
 
-            {isOffseasonMode && (
+            {canSubmitLiveOffer && (
               <div className="mb-4 text-blue-300 text-sm font-semibold">
                 In offseason mode, this submits a live market offer. The player may wait and compare it to CPU offers.
+              </div>
+            )}
+
+            {canManualCleanupSign && (
+              <div className="mb-4 text-yellow-300 text-sm font-semibold">
+                The live market is over. Because your team is below the minimum roster size, you can still sign remaining free agents directly until you reach {minRosterSize} players.
               </div>
             )}
 
@@ -1457,12 +1653,17 @@ export default function FreeAgents() {
                 disabled={
                   !selectedTeam ||
                   offerEvalLoading ||
-                  freeAgencyFinished ||
-                  (isOffseasonMode && !isLiveFreeAgencyActive)
+                  (isOffseasonMode && !canUseFreeAgencyAction)
                 }
                 className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold transition"
               >
-                {isOffseasonMode ? "Submit Offer" : "Sign Player"}
+                {isOffseasonMode
+                  ? canSubmitLiveOffer
+                    ? "Submit Offer"
+                    : canManualCleanupSign
+                    ? "Sign Player"
+                    : "Submit Offer"
+                  : "Sign Player"}
               </button>
             </div>
           </div>

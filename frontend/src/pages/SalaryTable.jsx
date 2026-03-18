@@ -11,7 +11,11 @@ export default function SalaryTable() {
   const [selectedTeamKey, setSelectedTeamKey] = useState("");
 
   // ---- Theme constants (match your app) ----
-  const leagueStartYear = 2026;
+ const currentSeasonYear = Number(
+  leagueData?.seasonYear ||
+  leagueData?.currentSeasonYear ||
+  2026
+);
 
   // These are just UI reference lines (you can later make them dynamic per season/CBA rules)
   const SALARY_CAP = 141_000_000;
@@ -134,7 +138,7 @@ export default function SalaryTable() {
 
   const normalizeContract = (p) => {
     const contract = p?.contract || null;
-    const startYear = Number(contract?.startYear ?? leagueStartYear);
+    const startYear = Number(contract?.startYear ?? currentSeasonYear);
     const salaryByYear = Array.isArray(contract?.salaryByYear)
       ? contract.salaryByYear.map((x) => Number(x) || 0)
       : [];
@@ -187,14 +191,24 @@ export default function SalaryTable() {
     });
   }, [selectedTeam]);
 
-  const maxYears = useMemo(() => {
-    if (!players.length) return 1;
-    return Math.max(1, ...players.map((p) => p.contract.salaryByYear.length || 1));
-  }, [players]);
+const displayEndYear = useMemo(() => {
+  if (!players.length) return currentSeasonYear;
 
-  const yearColumns = useMemo(() => {
-    return Array.from({ length: maxYears }, (_, i) => leagueStartYear + i);
-  }, [maxYears]);
+  return Math.max(
+    currentSeasonYear,
+    ...players.map((p) => {
+      const years = Math.max(1, p.contract.salaryByYear.length || 1);
+      return p.contract.startYear + years - 1;
+    })
+  );
+}, [players, currentSeasonYear]);
+
+const yearColumns = useMemo(() => {
+  return Array.from(
+    { length: displayEndYear - currentSeasonYear + 1 },
+    (_, i) => currentSeasonYear + i
+  );
+}, [currentSeasonYear, displayEndYear]);
 
   const teamTotalsByYear = useMemo(() => {
     const totals = yearColumns.map(() => 0);
