@@ -41,8 +41,6 @@ export default function FreeAgents() {
   const evaluateFreeAgencyOffer = simEngine.evaluateFreeAgencyOffer;
   const signFreeAgent = simEngine.signFreeAgent;
   const generateFreeAgencyMarket = simEngine.generateFreeAgencyMarket;
-  const previewOffseasonContracts = simEngine.previewOffseasonContracts;
-  const applyOffseasonContractDecisions = simEngine.applyOffseasonContractDecisions;
   const initializeFreeAgencyPeriod = simEngine.initializeFreeAgencyPeriod;
   const getFreeAgentOffers = simEngine.getFreeAgentOffers;
   const submitUserFreeAgentOffer = simEngine.submitUserFreeAgentOffer;
@@ -143,7 +141,7 @@ export default function FreeAgents() {
   };
 
   const isOffseasonMode = !!offseasonState?.active;
-  const preFreeAgencyResolved = !!offseasonState?.preFreeAgencyResolved;
+  const optionsComplete = !!offseasonState?.optionsComplete;
   const freeAgencyFinished = !!offseasonState?.freeAgencyComplete;
 
   const freeAgents = useMemo(() => {
@@ -158,6 +156,13 @@ export default function FreeAgents() {
   const currentDay = Number(liveFreeAgencyState?.currentDay || 0);
   const maxDays = Number(liveFreeAgencyState?.maxDays || 0);
   const signedPlayersLog = liveFreeAgencyState?.signedPlayersLog || [];
+
+  const effectiveFreeAgencyFinished =
+    freeAgencyFinished ||
+    (isOffseasonMode &&
+      optionsComplete &&
+      !isLiveFreeAgencyActive &&
+      freeAgents.length === 0);
 
   const activeOfferCount = useMemo(() => {
     const offersByPlayer = liveFreeAgencyState?.offersByPlayer || {};
@@ -202,8 +207,8 @@ export default function FreeAgents() {
   const userRosterTooMany = !!selectedTeam?.name && userRosterCount > maxRosterSize;
   const userRosterInvalid = userRosterTooFew || userRosterTooMany;
 
-  const canSubmitLiveOffer = isOffseasonMode && isLiveFreeAgencyActive;
-  const canManualCleanupSign = isOffseasonMode && freeAgencyFinished && userRosterTooFew;
+  const canSubmitLiveOffer = isOffseasonMode && optionsComplete && isLiveFreeAgencyActive;
+  const canManualCleanupSign = isOffseasonMode && effectiveFreeAgencyFinished && userRosterTooFew;
   const canUseFreeAgencyAction = !isOffseasonMode || canSubmitLiveOffer || canManualCleanupSign;
 
   const rosterValidationMessage = useMemo(() => {
@@ -362,6 +367,41 @@ export default function FreeAgents() {
       setRosterActionError("");
     }
   }, [userRosterInvalid]);
+
+  useEffect(() => {
+    if (!isOffseasonMode) return;
+    if (!optionsComplete) return;
+    if (freeAgencyFinished) return;
+    if (isLiveFreeAgencyActive) return;
+    if (freeAgents.length > 0) return;
+
+    updateOffseasonState({
+      active: true,
+      optionsComplete: true,
+      freeAgencyComplete: true,
+    });
+
+    setDaySummary((prev) => {
+      if (prev) return prev;
+      return {
+        dayResolved: 0,
+        signings: [],
+        generatedOffers: [],
+        stateSummary: {
+          isActive: false,
+          currentDay: 0,
+          maxDays: 0,
+          freeAgentCount: 0,
+        },
+      };
+    });
+  }, [
+    isOffseasonMode,
+    optionsComplete,
+    freeAgencyFinished,
+    isLiveFreeAgencyActive,
+    freeAgents.length,
+  ]);
 
   const positionOrder = ["PG", "SG", "SF", "PF", "C"];
 
@@ -615,11 +655,14 @@ export default function FreeAgents() {
   const handleInitializeFreeAgency = async () => {
     if (!workingLeagueData) return;
 
-    if (
-      typeof initializeFreeAgencyPeriod !== "function" ||
-      typeof previewOffseasonContracts !== "function" ||
-      typeof applyOffseasonContractDecisions !== "function"
-    ) {
+    if (isOffseasonMode && !optionsComplete) {
+      setDaySummary({
+        error: "Complete the Player / Team Options stage before starting free agency.",
+      });
+      return;
+    }
+
+    if (typeof initializeFreeAgencyPeriod !== "function") {
       setDaySummary({
         error: "Free agency preseason wiring is not fully connected in simEnginePy.js yet.",
       });
@@ -630,131 +673,29 @@ export default function FreeAgents() {
       setMarketInitLoading(true);
       setDaySummary(null);
 
-      let baseLeague = workingLeagueData;
-      let prepSummary = null;
-
-      if (isOffseasonMode && !preFreeAgencyResolved) {
-        const previewRes = await previewOffseasonContracts(
-          baseLeague,
-          selectedTeam?.name || null
-        );
-        console.log("[FA PREVIEW]", {
-          seasonYear: baseLeague?.seasonYear,
-          currentSeasonYear: baseLeague?.currentSeasonYear,
-          freeAgentsBefore: (baseLeague?.freeAgents || []).length,
-          summary: previewRes?.summary,
-          expiredSample: (previewRes?.expiredContracts || []).slice(0, 15).map((r) => ({
-            team: r.teamName,
-            player: r.playerName,
-            status: r.status,
-            salaryThisYear: r.salaryThisYear,
-            salaryNextYear: r.salaryNextYear,
-            contractLastYear: r.contractLastYear,
-          })),
-          playerOptionSample: (previewRes?.playerOptions || []).slice(0, 10).map((r) => ({
-            team: r.teamName,
-            player: r.playerName,
-            option: r.option,
-            decision: r.playerOptionDecision,
-          })),
-          teamOptionSample: (previewRes?.teamOptions || []).slice(0, 10).map((r) => ({
-            team: r.teamName,
-            player: r.playerName,
-            option: r.option,
-            decision: r.cpuTeamOptionDecision,
-          })),
-        });
-
-        if (!previewRes?.ok) {
-          setDaySummary({
-            error: previewRes?.reason || "Failed to preview offseason contracts.",
-          });
-          return;
-        }
-
-        let applyRes = await applyOffseasonContractDecisions(
-          baseLeague,
-          selectedTeam?.name || null,
-          {}
-        );
-
-        if (!applyRes?.ok && Array.isArray(applyRes?.pendingTeamOptions) && applyRes.pendingTeamOptions.length) {
-          const autoExerciseDecisions = {};
-
-          for (const row of applyRes.pendingTeamOptions) {
-            if (row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== "") {
-              autoExerciseDecisions[String(row.playerId)] = false;
-            }
-
-            if (row?.playerName) {
-              autoExerciseDecisions[String(row.playerName)] = false;
-            }
-          }
-
-          console.log("[FA PENDING OPTIONS]", applyRes.pendingTeamOptions);
-          console.log("[FA AUTO DECISIONS]", autoExerciseDecisions);
-
-          applyRes = await applyOffseasonContractDecisions(
-            baseLeague,
-            selectedTeam?.name || null,
-            autoExerciseDecisions
-          );
-
-          console.log("[FA APPLY SECOND]", applyRes);
-        }
-
-        if (!applyRes?.ok || !applyRes?.leagueData) {
-          setDaySummary({
-            error: applyRes?.reason || "Failed to apply offseason contract decisions.",
-          });
-          return;
-        }
-
-        console.log("[FA APPLY]", {
-          summary: applyRes?.summary,
-          freeAgentsAfter: (applyRes?.leagueData?.freeAgents || []).length,
-          decisionLogSample: (applyRes?.decisionLog || []).slice(0, 25),
-        });
-
-        baseLeague = applyRes.leagueData;
-        prepSummary = applyRes.summary || null;
-        applyLeagueUpdate(baseLeague);
-
-        baseLeague = applyRes.leagueData;
-        prepSummary = applyRes.summary || null;
-        applyLeagueUpdate(baseLeague);
-
+      if (!(workingLeagueData?.freeAgents || []).length) {
         updateOffseasonState({
           active: true,
-          preFreeAgencyResolved: true,
-          freeAgencyComplete: false,
+          optionsComplete: true,
+          freeAgencyComplete: true,
         });
 
-        if (!(baseLeague?.freeAgents || []).length) {
-          updateOffseasonState({
-            active: true,
-            preFreeAgencyResolved: true,
-            freeAgencyComplete: true,
-          });
-
-          setDaySummary({
-            dayResolved: 0,
-            signings: [],
-            generatedOffers: [],
-            prepSummary,
-            stateSummary: {
-              isActive: false,
-              currentDay: 0,
-              maxDays: 0,
-              freeAgentCount: 0,
-            },
-          });
-          return;
-        }
+        setDaySummary({
+          dayResolved: 0,
+          signings: [],
+          generatedOffers: [],
+          stateSummary: {
+            isActive: false,
+            currentDay: 0,
+            maxDays: 0,
+            freeAgentCount: 0,
+          },
+        });
+        return;
       }
 
       const res = await initializeFreeAgencyPeriod(
-        baseLeague,
+        workingLeagueData,
         selectedTeam?.name || null,
         7
       );
@@ -770,7 +711,7 @@ export default function FreeAgents() {
 
       updateOffseasonState({
         active: true,
-        preFreeAgencyResolved: true,
+        optionsComplete: true,
         freeAgencyComplete: false,
       });
 
@@ -778,7 +719,6 @@ export default function FreeAgents() {
         dayResolved: 0,
         signings: [],
         generatedOffers: res?.openingOffers || [],
-        prepSummary,
         stateSummary: res?.stateSummary || null,
       });
     } catch (err) {
@@ -819,7 +759,7 @@ export default function FreeAgents() {
       if (!res?.stateSummary?.isActive) {
         updateOffseasonState({
           active: true,
-          preFreeAgencyResolved: true,
+          optionsComplete: true,
           freeAgencyComplete: true,
         });
       }
@@ -943,10 +883,41 @@ export default function FreeAgents() {
     }
   };
 
+  const optionsLockedView = (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-neutral-900 text-white px-4">
+      <p className="text-lg mb-4 text-center">
+        Complete the Player / Team Options stage before opening free agency.
+      </p>
+
+      <div className="flex gap-3 flex-wrap justify-center">
+        <button
+          onClick={() => navigate("/player-team-options")}
+          className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
+        >
+          Go to Player / Team Options
+        </button>
+
+        <button
+          onClick={() => navigate("/offseason-hub")}
+          className="px-6 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
+        >
+          Back to Offseason Hub
+        </button>
+
+        <button
+          onClick={() => navigate("/team-hub")}
+          className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
+        >
+          Back to Team Hub
+        </button>
+      </div>
+    </div>
+  );
+
   const noFreeAgentsView = (
     <div className="flex flex-col items-center justify-center min-h-screen bg-neutral-900 text-white px-4">
       <p className="text-lg mb-4">
-        {freeAgencyFinished
+        {effectiveFreeAgencyFinished
           ? "Free agency is complete."
           : "No free agents available."}
       </p>
@@ -964,7 +935,7 @@ export default function FreeAgents() {
       )}
 
       <div className="flex gap-3 flex-wrap justify-center">
-        {isOffseasonMode && freeAgencyFinished && (
+        {isOffseasonMode && effectiveFreeAgencyFinished && (
           <button
             onClick={handleContinueToProgression}
             className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
@@ -990,7 +961,11 @@ export default function FreeAgents() {
     </div>
   );
 
-  if (!freeAgents.length && (!isOffseasonMode || preFreeAgencyResolved || freeAgencyFinished)) {
+  if (isOffseasonMode && !optionsComplete && !isLiveFreeAgencyActive && !freeAgencyFinished) {
+    return optionsLockedView;
+  }
+
+  if (!freeAgents.length && (!isOffseasonMode || optionsComplete || effectiveFreeAgencyFinished)) {
     return noFreeAgentsView;
   }
 
@@ -1041,15 +1016,13 @@ export default function FreeAgents() {
                 Mode: Offseason Free Agency
               </p>
               <p className="text-lg font-semibold text-white mt-1">
-                {freeAgencyFinished
+                {effectiveFreeAgencyFinished
                   ? userRosterInvalid
                     ? "Roster action required"
                     : "Free agency complete"
                   : isLiveFreeAgencyActive
                   ? `Day ${currentDay} of ${maxDays || 7}`
-                  : preFreeAgencyResolved
-                  ? "Live market ready to start"
-                  : "Pre-free-agency contract resolution pending"}
+                  : "Live market ready to start"}
               </p>
             </div>
 
@@ -1076,7 +1049,7 @@ export default function FreeAgents() {
           </div>
 
           <div className="flex flex-wrap gap-3 mt-4">
-            {freeAgencyFinished ? (
+            {effectiveFreeAgencyFinished ? (
               <button
                 onClick={handleContinueToProgression}
                 className="px-5 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
@@ -1089,11 +1062,7 @@ export default function FreeAgents() {
                 disabled={marketInitLoading}
                 className="px-5 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
               >
-                {marketInitLoading
-                  ? "Starting..."
-                  : preFreeAgencyResolved
-                  ? "Start Live Market"
-                  : "Resolve Contracts + Start FA"}
+                {marketInitLoading ? "Starting..." : "Start Live Market"}
               </button>
             ) : (
               <button
@@ -1119,7 +1088,7 @@ export default function FreeAgents() {
                 {rosterValidationMessage}
               </div>
 
-              {freeAgencyFinished && userRosterTooFew && (
+              {effectiveFreeAgencyFinished && userRosterTooFew && (
                 <div className="text-xs text-red-300 mt-1">
                   The live market is over, but you can still sign remaining free agents directly on this page until you reach {minRosterSize} players.
                 </div>
@@ -1158,13 +1127,11 @@ export default function FreeAgents() {
                 {daySummary?.dayResolved ? (
                   <div>Resolved Day {daySummary.dayResolved}</div>
                 ) : (
-                  <div>
-                    {preFreeAgencyResolved ? "Opening market initialized." : "Pre-free-agency cleanup resolved."}
-                  </div>
+                  <div>Opening market initialized.</div>
                 )}
                 <div>New CPU offers: {daySummary?.generatedOffers?.length || 0}</div>
                 <div>Signings today: {daySummary?.signings?.length || 0}</div>
-                {freeAgencyFinished && (
+                {effectiveFreeAgencyFinished && (
                   <div className="text-green-300 font-semibold pt-1">
                     Free agency is complete.
                   </div>
@@ -1394,7 +1361,7 @@ export default function FreeAgents() {
             Back to Offseason Hub
           </button>
         )}
-        {isOffseasonMode && freeAgencyFinished && (
+        {isOffseasonMode && effectiveFreeAgencyFinished && (
           <button
             onClick={handleContinueToProgression}
             className="px-8 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"

@@ -104,29 +104,27 @@ export default function SalaryTable() {
     return out;
   }, [leagueData]);
 
-  // Auto-select actual selected team first, then fallback to first team
-  useEffect(() => {
-    if (allTeamsFlat.length === 0) return;
+useEffect(() => {
+  if (allTeamsFlat.length === 0) return;
 
-    const preferredName =
-      ctxSelectedTeam?.name ||
-      readSelectedTeamFromLocalStorage()?.name ||
-      "";
+  // Do not override a manual dropdown selection
+  if (selectedTeamKey) return;
 
-    if (preferredName) {
-      const found = allTeamsFlat.find((t) => t.name === preferredName);
-      if (found) {
-        if (selectedTeamKey !== found.key) {
-          setSelectedTeamKey(found.key);
-        }
-        return;
-      }
+  const preferredName =
+    ctxSelectedTeam?.name ||
+    readSelectedTeamFromLocalStorage()?.name ||
+    "";
+
+  if (preferredName) {
+    const found = allTeamsFlat.find((t) => t.name === preferredName);
+    if (found) {
+      setSelectedTeamKey(found.key);
+      return;
     }
+  }
 
-    if (!selectedTeamKey) {
-      setSelectedTeamKey(allTeamsFlat[0].key);
-    }
-  }, [allTeamsFlat, ctxSelectedTeam, selectedTeamKey]);
+  setSelectedTeamKey(allTeamsFlat[0].key);
+}, [allTeamsFlat, ctxSelectedTeam, selectedTeamKey]);
 
   const selectedTeam = useMemo(() => {
     if (!leagueData?.conferences) return null;

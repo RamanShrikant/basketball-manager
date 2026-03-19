@@ -1,5 +1,5 @@
 // ============================================================
-// simEnginePy.js — Supports Single + Batch Simulation
+// simEnginePy.js - Supports Single + Batch Simulation
 // ============================================================
 console.log("### simEnginePy loaded:", import.meta.url);
 
@@ -143,7 +143,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // PLAYER PROGRESSION RESULT ✅
+    // PLAYER PROGRESSION RESULT
     // ------------------------------------------------------------
     if (msg.type === "progression-result") {
       const entry = pending.get(msg.requestId);
@@ -178,7 +178,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // PLAYER PROGRESSION ERROR ✅
+    // PLAYER PROGRESSION ERROR
     // ------------------------------------------------------------
     if (msg.type === "progression-error") {
       const entry = pending.get(msg.requestId);
@@ -195,7 +195,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // FREE AGENCY MARKET RESULT ✅
+    // FREE AGENCY MARKET RESULT
     // ------------------------------------------------------------
     if (msg.type === "free-agency-market-result") {
       const entry = pending.get(msg.requestId);
@@ -224,7 +224,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // FREE AGENCY EVALUATE RESULT ✅
+    // FREE AGENCY EVALUATE RESULT
     // ------------------------------------------------------------
     if (msg.type === "free-agency-eval-result") {
       const entry = pending.get(msg.requestId);
@@ -253,7 +253,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // FREE AGENCY SIGN RESULT ✅
+    // FREE AGENCY SIGN RESULT
     // ------------------------------------------------------------
     if (msg.type === "free-agency-sign-result") {
       const entry = pending.get(msg.requestId);
@@ -282,7 +282,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // FREE AGENCY RELEASE RESULT ✅
+    // FREE AGENCY RELEASE RESULT
     // ------------------------------------------------------------
     if (msg.type === "free-agency-release-result") {
       const entry = pending.get(msg.requestId);
@@ -311,7 +311,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // OFFSEASON CONTRACT PREVIEW RESULT ✅
+    // OFFSEASON CONTRACT PREVIEW RESULT
     // ------------------------------------------------------------
     if (msg.type === "free-agency-preview-result") {
       const entry = pending.get(msg.requestId);
@@ -340,7 +340,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // OFFSEASON CONTRACT APPLY RESULT ✅
+    // OFFSEASON CONTRACT APPLY RESULT
     // ------------------------------------------------------------
     if (msg.type === "free-agency-apply-result") {
       const entry = pending.get(msg.requestId);
@@ -369,7 +369,65 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // FREE AGENCY INIT RESULT ✅
+    // PLAYER / TEAM OPTIONS PREVIEW RESULT
+    // ------------------------------------------------------------
+    if (msg.type === "player-team-options-preview-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] player-team-options-preview-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "player-team-options-preview-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] player-team-options-preview-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Player / Team options preview failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
+
+    // ------------------------------------------------------------
+    // PLAYER / TEAM OPTIONS APPLY RESULT
+    // ------------------------------------------------------------
+    if (msg.type === "player-team-options-apply-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] player-team-options-apply-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "player-team-options-apply-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] player-team-options-apply-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Player / Team options apply failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
+
+    // ------------------------------------------------------------
+    // FREE AGENCY INIT RESULT
     // ------------------------------------------------------------
     if (msg.type === "free-agency-init-result") {
       const entry = pending.get(msg.requestId);
@@ -398,7 +456,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // FREE AGENCY STATE SUMMARY RESULT ✅
+    // FREE AGENCY STATE SUMMARY RESULT
     // ------------------------------------------------------------
     if (msg.type === "free-agency-state-result") {
       const entry = pending.get(msg.requestId);
@@ -427,7 +485,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // FREE AGENT OFFERS RESULT ✅
+    // FREE AGENT OFFERS RESULT
     // ------------------------------------------------------------
     if (msg.type === "free-agency-offers-result") {
       const entry = pending.get(msg.requestId);
@@ -456,7 +514,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // SUBMIT USER OFFER RESULT ✅
+    // SUBMIT USER OFFER RESULT
     // ------------------------------------------------------------
     if (msg.type === "free-agency-submit-offer-result") {
       const entry = pending.get(msg.requestId);
@@ -485,7 +543,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // ADVANCE FREE AGENCY DAY RESULT ✅
+    // ADVANCE FREE AGENCY DAY RESULT
     // ------------------------------------------------------------
     if (msg.type === "free-agency-advance-day-result") {
       const entry = pending.get(msg.requestId);
@@ -514,7 +572,7 @@ function startWorker() {
     }
 
     // ------------------------------------------------------------
-    // PLAYER RETIREMENTS RESULT ✅
+    // PLAYER RETIREMENTS RESULT
     // ------------------------------------------------------------
     if (msg.type === "player-retirements-result") {
       const entry = pending.get(msg.requestId);
@@ -577,7 +635,7 @@ function deepFromEntries(x) {
 }
 
 // ------------------------------------------------------------
-// PY → JS converter
+// PY -> JS converter
 // ------------------------------------------------------------
 function convert(py) {
   if (!py) return null;
@@ -591,7 +649,7 @@ function convert(py) {
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — SINGLE GAME (with timeout)
+// PUBLIC API - SINGLE GAME (with timeout)
 // ------------------------------------------------------------
 const WORKER_TIMEOUT_MS = 300;
 
@@ -626,7 +684,7 @@ export function simulateOneGame({ homeTeam, awayTeam }) {
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — BATCH GAME SCHEDULING
+// PUBLIC API - BATCH GAME SCHEDULING
 // ------------------------------------------------------------
 export function simulateBatchGames(games) {
   return new Promise((resolve) => {
@@ -646,9 +704,7 @@ export function simulateBatchGames(games) {
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — SEASON AWARDS
-// players = array of season stat dicts (from bm_player_stats_v1)
-// meta can include: { seasonYear, teams: [{team, wins, ...}] }
+// PUBLIC API - SEASON AWARDS
 // ------------------------------------------------------------
 export function computeSeasonAwards(players, meta = {}) {
   startWorker();
@@ -675,7 +731,7 @@ export function computeSeasonAwards(players, meta = {}) {
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — FINALS MVP
+// PUBLIC API - FINALS MVP
 // ------------------------------------------------------------
 export function computeFinalsMvp(finalsPlayers, meta = {}) {
   startWorker();
@@ -716,8 +772,7 @@ export function computeFinalsMvp(finalsPlayers, meta = {}) {
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — PLAYER PROGRESSION (Python) ✅
-// Returns: { league, deltas, version }
+// PUBLIC API - PLAYER PROGRESSION (Python)
 // ------------------------------------------------------------
 export function computePlayerProgression(leagueData, statsByKey = {}, meta = {}) {
   startWorker();
@@ -766,7 +821,7 @@ export function computePlayerProgression(leagueData, statsByKey = {}, meta = {})
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — FREE AGENCY MARKET ✅
+// PUBLIC API - FREE AGENCY MARKET
 // ------------------------------------------------------------
 export function generateFreeAgencyMarket(leagueData) {
   startWorker();
@@ -802,7 +857,7 @@ export function generateFreeAgencyMarket(leagueData) {
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — FREE AGENCY OFFER EVALUATION ✅
+// PUBLIC API - FREE AGENCY OFFER EVALUATION
 // ------------------------------------------------------------
 export function evaluateFreeAgencyOffer(leagueData, teamName, player, offer = {}) {
   startWorker();
@@ -843,7 +898,7 @@ export function evaluateFreeAgencyOffer(leagueData, teamName, player, offer = {}
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — SIGN FREE AGENT ✅
+// PUBLIC API - SIGN FREE AGENT
 // ------------------------------------------------------------
 export function signFreeAgent(
   leagueData,
@@ -891,7 +946,7 @@ export function signFreeAgent(
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — RELEASE PLAYER TO FREE AGENCY ✅
+// PUBLIC API - RELEASE PLAYER TO FREE AGENCY
 // ------------------------------------------------------------
 export function releasePlayerToFreeAgency(
   leagueData,
@@ -937,7 +992,7 @@ export function releasePlayerToFreeAgency(
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — OFFSEASON CONTRACT PREVIEW ✅
+// PUBLIC API - OFFSEASON CONTRACT PREVIEW
 // ------------------------------------------------------------
 export function previewOffseasonContracts(leagueData, userTeamName = null) {
   startWorker();
@@ -976,7 +1031,7 @@ export function previewOffseasonContracts(leagueData, userTeamName = null) {
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — APPLY OFFSEASON CONTRACT DECISIONS ✅
+// PUBLIC API - APPLY OFFSEASON CONTRACT DECISIONS
 // ------------------------------------------------------------
 export function applyOffseasonContractDecisions(
   leagueData,
@@ -1020,7 +1075,90 @@ export function applyOffseasonContractDecisions(
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — INITIALIZE LIVE FREE AGENCY ✅
+// PUBLIC API - PLAYER / TEAM OPTIONS PREVIEW
+// ------------------------------------------------------------
+export function previewPlayerTeamOptions(leagueData, userTeamName = null) {
+  startWorker();
+
+  const requestId = "PTOP" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("PLAYER_TEAM_OPTIONS_PREVIEW_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "preview-player-team-options",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        userTeamName,
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------
+// PUBLIC API - PLAYER / TEAM OPTIONS APPLY
+// ------------------------------------------------------------
+export function applyPlayerTeamOptions(
+  leagueData,
+  userTeamName = null,
+  teamOptionDecisions = {}
+) {
+  startWorker();
+
+  const requestId = "PTOA" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("PLAYER_TEAM_OPTIONS_APPLY_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "apply-player-team-options",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        userTeamName,
+        teamOptionDecisions: deepSanitize(teamOptionDecisions),
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------
+// PUBLIC API - INITIALIZE LIVE FREE AGENCY
 // ------------------------------------------------------------
 export function initializeFreeAgencyPeriod(
   leagueData,
@@ -1064,7 +1202,7 @@ export function initializeFreeAgencyPeriod(
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — FREE AGENCY STATE SUMMARY ✅
+// PUBLIC API - FREE AGENCY STATE SUMMARY
 // ------------------------------------------------------------
 export function getFreeAgencyStateSummary(leagueData) {
   startWorker();
@@ -1101,7 +1239,7 @@ export function getFreeAgencyStateSummary(leagueData) {
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — GET FREE AGENT OFFERS ✅
+// PUBLIC API - GET FREE AGENT OFFERS
 // ------------------------------------------------------------
 export function getFreeAgentOffers(
   leagueData,
@@ -1145,7 +1283,7 @@ export function getFreeAgentOffers(
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — SUBMIT USER FREE AGENT OFFER ✅
+// PUBLIC API - SUBMIT USER FREE AGENT OFFER
 // ------------------------------------------------------------
 export function submitUserFreeAgentOffer(
   leagueData,
@@ -1193,7 +1331,7 @@ export function submitUserFreeAgentOffer(
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — ADVANCE FREE AGENCY DAY ✅
+// PUBLIC API - ADVANCE FREE AGENCY DAY
 // ------------------------------------------------------------
 export function advanceFreeAgencyDay(
   leagueData,
@@ -1235,7 +1373,7 @@ export function advanceFreeAgencyDay(
 }
 
 // ------------------------------------------------------------
-// PUBLIC API — PLAYER RETIREMENTS ✅
+// PUBLIC API - PLAYER RETIREMENTS
 // ------------------------------------------------------------
 export function runPlayerRetirements(
   leagueData,

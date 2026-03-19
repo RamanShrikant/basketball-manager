@@ -212,26 +212,47 @@ def get_active_option_for_year(contract: Optional[Dict[str, Any]], season_year: 
     if not option:
         return None
 
-    idx = get_contract_year_index(contract, season_year)
-    if idx is None or idx < 0:
-        return None
-
+    salary_by_year = contract["salaryByYear"]
     year_indices = get_option_year_indices(option)
-    if idx not in year_indices:
-        return None
+    target_idx = season_year - contract["startYear"]
 
-    picked_value = get_option_pick_value(option, idx)
-    if picked_value is not None:
-        return None
+    # Normal case: the option year already exists as a real future salary slot
+    if 0 <= target_idx < len(salary_by_year) and target_idx in year_indices:
+        picked_value = get_option_pick_value(option, target_idx)
+        if picked_value is not None:
+            return None
 
-    return {
-        "type": option.get("type"),
-        "yearIndex": idx,
-        "salary": get_contract_salary_for_year(contract, season_year),
-        "picked": picked_value,
-    }
+        return {
+            "type": option.get("type"),
+            "yearIndex": target_idx,
+            "salary": int(salary_by_year[target_idx]),
+            "picked": picked_value,
+            "bridgeOption": False,
+            "targetSeasonYear": season_year,
+        }
 
+    # Bridge case: one stored salary year with option index [0]
+    # Treat that as a pending option decision for the following offseason
+    source_idx = target_idx - 1
+    if (
+        len(salary_by_year) == 1
+        and source_idx == 0
+        and source_idx in year_indices
+    ):
+        picked_value = get_option_pick_value(option, source_idx)
+        if picked_value is not None:
+            return None
 
+        return {
+            "type": option.get("type"),
+            "yearIndex": source_idx,
+            "salary": int(salary_by_year[source_idx]),
+            "picked": picked_value,
+            "bridgeOption": True,
+            "targetSeasonYear": season_year,
+        }
+
+    return None
 def set_option_pick_for_year(contract: Dict[str, Any], year_index: int, picked_value: bool) -> Dict[str, Any]:
     normalized = normalize_contract(contract)
     if not normalized or not normalized.get("option"):
@@ -248,6 +269,32 @@ def set_option_pick_for_year(contract: Dict[str, Any], year_index: int, picked_v
 
     picked_map[str(year_index)] = bool(picked_value)
     normalized["option"]["picked"] = picked_map
+    return normalized
+
+def apply_option_exercise_to_contract(
+    contract: Dict[str, Any],
+    active_option: Dict[str, Any]
+) -> Dict[str, Any]:
+    normalized = normalize_contract(contract)
+    if not normalized or not active_option:
+        return normalized
+
+    if active_option.get("bridgeOption"):
+        target_season_year = int(active_option.get("targetSeasonYear"))
+        target_idx = target_season_year - normalized["startYear"]
+        salary_by_year = list(normalized.get("salaryByYear", []))
+
+        while len(salary_by_year) <= target_idx:
+            salary_by_year.append(int(active_option.get("salary", 0)))
+
+        salary_by_year[target_idx] = int(active_option.get("salary", 0))
+        normalized["salaryByYear"] = salary_by_year
+
+    normalized = set_option_pick_for_year(
+        contract = normalized,
+        year_index = int(active_option.get("yearIndex", 0)),
+        picked_value = True,
+    )
     return normalized
 
 
@@ -463,6 +510,166 @@ def is_minimum_contract_for_current_year(
     return int(offered_current_salary) <= int(MIN_DEAL)
 
 
+
+def finalize_cpu_min_roster_cleanup(
+    league_data: Dict[str, Any],
+    current_day: int,
+    user_team_name: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    cleanup_signings = []
+    min_roster_target = get_min_roster_target(league_data)
+    season_year = get_current_season_year(league_data)
+    state = ensure_free_agency_state(league_data)
+
+    while True:
+        made_move = False
+        teams_below_min = []
+
+        for _, _, team in iter_teams(league_data):
+            team_name = team.get("name")
+            if not team_name:
+                continue
+            if user_team_name and team_name == user_team_name:
+                continue
+
+            deficit = max(0, min_roster_target - len(get_team_players(team)))
+            if deficit > 0:
+                teams_below_min.append((deficit, team_name))
+
+        if not teams_below_min:
+            break
+
+        teams_below_min.sort(key = lambda x: (-x[0], x[1]))
+
+        for _, team_name in teams_below_min:
+            while True:
+                _, _, live_team = find_team_entry(league_data, team_name)
+                if live_team is None:
+                    break
+
+                if len(get_team_players(live_team)) >= min_roster_target:
+                    break
+
+                snapshot = get_team_cap_snapshot(league_data, team_name)
+                if not snapshot.get("ok"):
+                    break
+
+                candidate_rows = []
+
+                for fa in league_data.get("freeAgents", []):
+                    minimum_contract = normalize_contract({
+                        "startYear": season_year,
+                        "salaryByYear": [MIN_DEAL],
+                        "option": None,
+                    })
+
+                    threshold = get_market_acceptance_threshold(
+                        league_data = league_data,
+                        player = fa,
+                        contract = minimum_contract,
+                    )
+
+                    required_aav = int(
+                        round_to_nearest(
+                            max(MIN_DEAL, num(threshold.get("requiredAAV"), MIN_DEAL)),
+                            base = 1_000,
+                        )
+                    )
+
+                    candidate_rows.append((
+                        0 if threshold.get("autoAccept") else 1,
+                        required_aav,
+                        num(fa.get("overall"), 0),
+                        -int(num(fa.get("age"), 27)),
+                        str(fa.get("name", "")),
+                        fa,
+                        threshold,
+                    ))
+
+                if not candidate_rows:
+                    break
+
+                candidate_rows.sort(key = lambda x: (x[0], x[1], x[2], x[3], x[4]))
+
+                signed_this_round = None
+
+                for _, required_aav, _, _, _, fa, threshold in candidate_rows:
+                    offered_salary = int(MIN_DEAL)
+
+                    if not threshold.get("autoAccept"):
+                        if snapshot["payroll"] >= snapshot["salaryCap"]:
+                            continue
+
+                        offered_salary = int(max(MIN_DEAL, required_aav))
+
+                        if snapshot["payroll"] + offered_salary > snapshot["salaryCap"]:
+                            continue
+
+                    evaluation = evaluate_offer(
+                        league_data = league_data,
+                        team_name = team_name,
+                        player = fa,
+                        offer = {
+                            "startYear": season_year,
+                            "salaryByYear": [offered_salary],
+                            "option": None,
+                        },
+                    )
+
+                    if not evaluation.get("ok") or not evaluation.get("accepted"):
+                        continue
+
+                    player_idx = find_free_agent_index(
+                        league_data.get("freeAgents", []),
+                        fa.get("id"),
+                        fa.get("name"),
+                    )
+                    if player_idx == -1:
+                        continue
+
+                    signed_player = copy.deepcopy(league_data["freeAgents"][player_idx])
+                    signed_player["contract"] = evaluation["contract"]
+                    signed_player["marketValue"] = estimate_market_value(signed_player)
+
+                    league_data["freeAgents"].pop(player_idx)
+                    live_team.setdefault("players", []).append(signed_player)
+
+                    player_key = get_player_key_from_player(signed_player)
+                    if player_key in state.get("offersByPlayer", {}):
+                        del state["offersByPlayer"][player_key]
+
+                    state["signedPlayersLog"].append({
+                        "day": current_day,
+                        "playerId": signed_player.get("id"),
+                        "playerName": signed_player.get("name"),
+                        "teamName": team_name,
+                        "contract": signed_player.get("contract"),
+                        "allOffers": [],
+                        "source": "cpu_min_roster_cleanup",
+                    })
+
+                    signed_this_round = {
+                        "playerId": signed_player.get("id"),
+                        "playerName": signed_player.get("name"),
+                        "signedWith": team_name,
+                        "day": current_day,
+                        "contract": signed_player.get("contract"),
+                        "totalValue": int(sum(signed_player["contract"]["salaryByYear"])),
+                        "aav": int(sum(signed_player["contract"]["salaryByYear"]) / len(signed_player["contract"]["salaryByYear"])),
+                        "cleanupSigning": True,
+                    }
+                    cleanup_signings.append(signed_this_round)
+                    made_move = True
+                    break
+
+                if not signed_this_round:
+                    break
+
+        if not made_move:
+            break
+
+    return cleanup_signings
+
 # ------------------------------------------------------------
 # TEAM DIRECTION / CPU BEHAVIOR HELPERS
 # ------------------------------------------------------------
@@ -492,7 +699,7 @@ def classify_team_direction(team: Dict[str, Any]) -> Dict[str, Any]:
 
     if core_overall >= 82 and core_age >= 27:
         direction = "contending"
-    elif core_overall <= 74 and core_age <= 25:
+    elif core_overall <= 76 and core_age <= 25:
         direction = "rebuilding"
     elif core_potential_gap >= 3 and core_age <= 26:
         direction = "retooling"
@@ -769,6 +976,9 @@ def build_contract_status_row(
     salary_this_year = get_contract_salary_for_year(contract, upcoming_year)
     salary_next_year = get_contract_salary_for_year(contract, upcoming_year + 1) if contract else 0
     active_option = get_active_option_for_year(contract, upcoming_year)
+
+    if active_option and salary_this_year <= 0:
+        salary_this_year = int(active_option.get("salary", 0))
     contract_last_year = get_contract_last_year(contract)
 
     status = "signed"
@@ -958,7 +1168,10 @@ def apply_offseason_contract_decisions(
             salary_this_year = get_contract_salary_for_year(contract, upcoming_year)
             active_option = get_active_option_for_year(contract, upcoming_year)
 
-            if contract is None or salary_this_year <= 0:
+            if active_option and salary_this_year <= 0:
+                salary_this_year = int(active_option.get("salary", 0))
+
+            if contract is None or (salary_this_year <= 0 and not active_option):
                 add_player_to_free_agency(
                     updated = updated,
                     player = player,
@@ -979,10 +1192,9 @@ def apply_offseason_contract_decisions(
                 decision = decide_player_option(player, upcoming_year)
                 if decision["exerciseOption"]:
                     kept_player = copy.deepcopy(player)
-                    kept_player["contract"] = set_option_pick_for_year(
+                    kept_player["contract"] = apply_option_exercise_to_contract(
                         contract = kept_player.get("contract"),
-                        year_index = active_option["yearIndex"],
-                        picked_value = True,
+                        active_option = active_option,
                     )
                     kept_players.append(kept_player)
                     decision_log.append({
@@ -1028,10 +1240,9 @@ def apply_offseason_contract_decisions(
 
                 if exercise:
                     kept_player = copy.deepcopy(player)
-                    kept_player["contract"] = set_option_pick_for_year(
+                    kept_player["contract"] = apply_option_exercise_to_contract(
                         contract = kept_player.get("contract"),
-                        year_index = active_option["yearIndex"],
-                        picked_value = True,
+                        active_option = active_option,
                     )
                     kept_players.append(kept_player)
                     decision_log.append({
@@ -1401,12 +1612,28 @@ def score_offer_for_player(
     offer: Dict[str, Any]
 ) -> float:
     market_value = player.get("marketValue") or estimate_market_value(player)
-    expected_aav = int(market_value["expectedAAV"])
     expected_years = int(market_value["expectedYears"])
 
     offered_aav = int(num(offer.get("aav"), 0))
     offered_years = int(num(offer.get("years"), 1))
     team_name = offer.get("teamName")
+
+    contract = normalize_contract(offer.get("contract"))
+    if not contract:
+        contract = normalize_contract({
+            "startYear": get_current_season_year(league_data),
+            "salaryByYear": list(offer.get("salaryByYear", [])) or [offered_aav],
+            "option": None,
+        })
+
+    threshold = get_market_acceptance_threshold(
+        league_data = league_data,
+        player = player,
+        contract = contract,
+        exclude_offer_id = offer.get("offerId"),
+    )
+
+    required_aav = int(max(MIN_DEAL, num(threshold.get("requiredAAV"), MIN_DEAL)))
 
     _, _, team = find_team_entry(league_data, team_name)
     direction = classify_team_direction(team)["direction"] if team else "balanced"
@@ -1421,8 +1648,11 @@ def score_offer_for_player(
     )
 
     score = 0.0
-    score += offered_aav / max(1.0, float(expected_aav))
+    score += offered_aav / max(1.0, float(required_aav))
     score -= abs(offered_years - expected_years) * 0.05
+
+    if threshold.get("autoAccept"):
+        score = max(score, 1.08)
 
     if previous_team and previous_team == team_name:
         score += 0.05
@@ -1471,13 +1701,37 @@ def build_cpu_offer_contract(
     direction = classify_team_direction(team)["direction"]
 
     age = int(num(player.get("age"), 27))
-    overall = num(player.get("overall"), 75)
-    potential = num(player.get("potential"), overall)
+    overall = int(round(num(player.get("overall"), 75)))
+    potential = int(round(num(player.get("potential"), overall)))
 
     expected_year1 = int(market_value["expectedYear1Salary"])
     expected_years = int(market_value["expectedYears"])
 
-    roster_deficit = max(0, get_min_roster_target(league_data) - len(get_team_players(team)))
+    actual_roster_count = len(get_team_players(team))
+    min_roster_target = get_min_roster_target(league_data)
+    below_min = actual_roster_count < min_roster_target
+
+    fringe_player = (
+        overall <= 74
+        or (overall <= 76 and age >= 27 and potential <= overall + 1)
+    )
+
+    # CPU treats true fringe players like roster-spot signings
+    if fringe_player:
+        return normalize_contract({
+            "startYear": get_current_season_year(league_data),
+            "salaryByYear": [MIN_DEAL],
+            "option": None,
+        })
+
+    # Teams below minimum get more practical on low-end players
+    if below_min and overall <= 78:
+        year1_salary = max(MIN_DEAL, int(round_to_nearest(expected_year1 * 0.55, base = 1_000)))
+        return normalize_contract({
+            "startYear": get_current_season_year(league_data),
+            "salaryByYear": [year1_salary],
+            "option": None,
+        })
 
     multiplier = 0.90 + (0.10 * rng.random()) + (0.04 * (current_day / max(1, max_days)))
 
@@ -1487,8 +1741,6 @@ def build_cpu_offer_contract(
         multiplier += 0.02
     if overall >= 85:
         multiplier += 0.04
-    if roster_deficit > 0:
-        multiplier += min(0.14, roster_deficit * 0.02)
 
     year1_salary = int(round_to_nearest(clamp(expected_year1 * multiplier, MIN_DEAL, MAX_SALARY), base = 1_000))
     years = expected_years
@@ -1496,9 +1748,6 @@ def build_cpu_offer_contract(
     if direction == "contending" and age >= 31:
         years = max(1, years - 1)
     elif direction in ["rebuilding", "retooling"] and age <= 25:
-        years = min(4, years + 1)
-
-    if roster_deficit > 0 and age <= 29:
         years = min(4, years + 1)
 
     years = int(clamp(years, 1, 4))
@@ -1538,7 +1787,7 @@ def generate_cpu_offers_for_day(
             desired_offer_count = 4
         elif overall >= 80:
             desired_offer_count = 3
-        elif overall >= 74:
+        elif overall >= 76:
             desired_offer_count = 2
 
         target_new_offers = max(0, desired_offer_count - len(active_offers))
@@ -1560,6 +1809,9 @@ def generate_cpu_offers_for_day(
                 team_name = team_name,
                 state = state,
             )
+            actual_roster_count = len(get_team_players(team))
+            actual_roster_deficit = max(0, min_roster_target - actual_roster_count)
+            
             remaining_roster_slots = get_team_remaining_roster_slots(
                 league_data = league_data,
                 team_name = team_name,
@@ -1577,7 +1829,7 @@ def generate_cpu_offers_for_day(
                 continue
 
             fit = estimate_team_free_agent_fit(team, player)
-            min_fit_threshold = 0.34 if projected_roster_count < min_roster_target else 0.52
+            min_fit_threshold = 0.34 if actual_roster_count < min_roster_target else 0.52
             if fit["interestScore"] < min_fit_threshold:
                 continue
 
@@ -1605,7 +1857,7 @@ def generate_cpu_offers_for_day(
             if not eval_res.get("ok"):
                 continue
 
-            roster_deficit = max(0, min_roster_target - projected_roster_count)
+            roster_deficit = actual_roster_deficit
 
             candidate_score = fit["interestScore"] + rng.random() * 0.08
             if roster_deficit > 0:
@@ -1853,7 +2105,6 @@ def finalize_free_agent_signing_from_offer(
         "aav": chosen_offer.get("aav"),
     }
 
-
 def resolve_signings_for_day(league_data: Dict[str, Any], current_day: int) -> List[Dict[str, Any]]:
     state = ensure_free_agency_state(league_data)
     max_days = int(num(state.get("maxDays"), DEFAULT_FREE_AGENCY_DAYS))
@@ -1886,11 +2137,21 @@ def resolve_signings_for_day(league_data: Dict[str, Any], current_day: int) -> L
         second_score = offers[1]["playerViewScore"] if len(offers) > 1 else None
         best_score = num(best_offer.get("playerViewScore"), 0)
 
+        best_market = get_market_acceptance_threshold(
+            league_data = league_data,
+            player = player,
+            contract = normalize_contract(best_offer.get("contract")),
+            exclude_offer_id = best_offer.get("offerId"),
+        )
+
         threshold = max(0.84, 1.03 - 0.03 * max(0, current_day - 1))
         margin_needed = 0.04 if current_day <= 2 else 0.02 if current_day <= 4 else 0.0
 
         should_sign = False
-        if current_day >= max_days:
+
+        if best_market.get("autoAccept"):
+            should_sign = True
+        elif current_day >= max_days:
             should_sign = best_score >= 0.82
         elif best_score >= threshold:
             if second_score is None:
@@ -1952,7 +2213,6 @@ def initialize_free_agency_period(
         "stateSummary": build_free_agency_state_summary(updated),
     }
 
-
 def advance_free_agency_day(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None
@@ -1982,6 +2242,20 @@ def advance_free_agency_day(
     })
 
     if current_day >= max_days or len(updated.get("freeAgents", [])) == 0:
+        cleanup_signings = finalize_cpu_min_roster_cleanup(
+            league_data = updated,
+            current_day = current_day,
+            user_team_name = user_team_name,
+        )
+
+        if cleanup_signings:
+            signings.extend(cleanup_signings)
+            state["dailyLog"].append({
+                "day": current_day,
+                "type": "cpu_min_roster_cleanup",
+                "signings": len(cleanup_signings),
+            })
+
         state["isActive"] = False
         return {
             "ok": True,
@@ -2006,6 +2280,20 @@ def advance_free_agency_day(
     })
 
     if len(updated.get("freeAgents", [])) == 0:
+        cleanup_signings = finalize_cpu_min_roster_cleanup(
+            league_data = updated,
+            current_day = state["currentDay"],
+            user_team_name = user_team_name,
+        )
+
+        if cleanup_signings:
+            signings.extend(cleanup_signings)
+            state["dailyLog"].append({
+                "day": state["currentDay"],
+                "type": "cpu_min_roster_cleanup",
+                "signings": len(cleanup_signings),
+            })
+
         state["isActive"] = False
 
     return {
@@ -2021,6 +2309,83 @@ def advance_free_agency_day(
 # ------------------------------------------------------------
 # IMMEDIATE OFFER EVALUATION / SIGN / RELEASE
 # ------------------------------------------------------------
+def get_market_acceptance_threshold(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    contract: Dict[str, Any],
+    exclude_offer_id: Optional[str] = None
+) -> Dict[str, Any]:
+    contract = normalize_contract(contract)
+    if not contract:
+        return {
+            "requiredAAV": MAX_SALARY,
+            "autoAccept": False,
+            "offerCount": 0,
+            "bestLiveAAV": 0,
+            "fringePlayer": False,
+        }
+
+    market_value = player.get("marketValue") or estimate_market_value(player)
+
+    min_acceptable_aav = int(market_value["minAcceptableAAV"])
+    offered_years = len(contract["salaryByYear"])
+    offered_aav = int(sum(contract["salaryByYear"]) / max(1, offered_years))
+
+    overall = int(round(num(player.get("overall"), 0)))
+    age = int(num(player.get("age"), 27))
+    potential = int(round(num(player.get("potential"), overall)))
+
+    state = ensure_free_agency_state(league_data)
+    player_key = get_player_key_from_player(player)
+    active_offers = [
+        o for o in state.get("offersByPlayer", {}).get(player_key, [])
+        if o.get("status", "active") == "active"
+        and (exclude_offer_id is None or o.get("offerId") != exclude_offer_id)
+    ]
+
+    offer_count = len(active_offers)
+    best_live_aav = max([int(num(o.get("aav"), 0)) for o in active_offers], default = 0)
+
+    current_day = int(num(state.get("currentDay"), 1))
+    max_days = int(num(state.get("maxDays"), DEFAULT_FREE_AGENCY_DAYS))
+    day_progress = current_day / max(1, max_days)
+
+    fringe_player = (
+        overall <= 74
+        or (overall <= 76 and age >= 27 and potential <= overall + 1)
+    )
+
+    if fringe_player and offer_count == 0 and offered_years == 1 and offered_aav >= MIN_DEAL:
+        return {
+            "requiredAAV": MIN_DEAL,
+            "autoAccept": True,
+            "offerCount": offer_count,
+            "bestLiveAAV": best_live_aav,
+            "fringePlayer": True,
+        }
+
+    required_aav = min_acceptable_aav
+
+    if offer_count == 0:
+        if fringe_player:
+            required_aav = max(MIN_DEAL, int(round(min_acceptable_aav * (0.55 - 0.15 * day_progress))))
+        elif overall <= 80:
+            required_aav = max(MIN_DEAL, int(round(min_acceptable_aav * (0.78 - 0.10 * day_progress))))
+        else:
+            required_aav = max(MIN_DEAL, int(round(min_acceptable_aav * (0.92 - 0.05 * day_progress))))
+    else:
+        required_aav = max(
+            MIN_DEAL,
+            int(round(max(best_live_aav * 0.98, min_acceptable_aav * 0.90)))
+        )
+
+    return {
+        "requiredAAV": required_aav,
+        "autoAccept": False,
+        "offerCount": offer_count,
+        "bestLiveAAV": best_live_aav,
+        "fringePlayer": fringe_player,
+    }
 def evaluate_offer(
     league_data: Dict[str, Any],
     team_name: str,
@@ -2071,11 +2436,20 @@ def evaluate_offer(
     expected_aav = int(market_value["expectedAAV"])
     min_acceptable_aav = int(market_value["minAcceptableAAV"])
 
-    salary_ratio = offered_aav / max(1, expected_aav)
-    year_penalty = abs(offered_years - expected_years) * 0.06
-    acceptance_score = salary_ratio - year_penalty
+    market_threshold = get_market_acceptance_threshold(
+        league_data = league_data,
+        player = player,
+        contract = contract,
+    )
 
-    accepted = offered_aav >= min_acceptable_aav and acceptance_score >= 0.92
+    required_aav = int(market_threshold["requiredAAV"])
+    year_penalty = abs(offered_years - expected_years) * 0.06
+    acceptance_score = (offered_aav / max(1, required_aav)) - year_penalty
+
+    accepted = bool(market_threshold["autoAccept"]) or (
+        offered_aav >= required_aav and acceptance_score >= 0.92
+    )
+
 
     return {
         "ok": True,
@@ -2090,7 +2464,11 @@ def evaluate_offer(
             "expectedYears": expected_years,
             "expectedAAV": expected_aav,
             "minAcceptableAAV": min_acceptable_aav,
+            "requiredAAV": required_aav,
             "acceptanceScore": round(acceptance_score, 3),
+            "offerCount": market_threshold["offerCount"],
+            "bestLiveAAV": market_threshold["bestLiveAAV"],
+            "fringePlayer": market_threshold["fringePlayer"],
         },
     }
 
@@ -2243,13 +2621,13 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
     if action == "generate_market_for_all_free_agents":
         return add_market_values_to_free_agents(league_data)
 
-    if action == "preview_offseason_contracts":
+    if action in ["preview_offseason_contracts", "preview_player_team_options"]:
         return preview_offseason_contracts(
             league_data = league_data,
             user_team_name = payload.get("userTeamName"),
         )
 
-    if action == "apply_offseason_contract_decisions":
+    if action in ["apply_offseason_contract_decisions", "apply_player_team_options"]:
         return apply_offseason_contract_decisions(
             league_data = league_data,
             user_team_name = payload.get("userTeamName"),

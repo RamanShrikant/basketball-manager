@@ -7,6 +7,7 @@ const DELTAS_KEY = "bm_progression_deltas_v1";
 const PROG_META_KEY = "bm_progression_meta_v1";
 const LEAGUE_KEY = "leagueData";
   const META_KEY = "bm_league_meta_v1";
+  const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 
 // If a run gets stuck INFLIGHT (worker failed / page refresh), clear after this long
 const INFLIGHT_STALE_MS = 15000;
@@ -702,6 +703,30 @@ function recomputeDerivedRatingsInLeague(leagueData) {
   return leagueData;
 }
 export default function PlayerProgression() {
+  function handleReturnToCalendar() {
+  try {
+    localStorage.setItem(
+      OFFSEASON_STATE_KEY,
+      JSON.stringify({
+        active: false,
+        seasonYear: Number(
+          leagueData?.seasonYear ||
+          leagueData?.currentSeasonYear ||
+          leagueData?.seasonStartYear ||
+          2026
+        ),
+        retirementsComplete: false,
+        optionsComplete: false,
+        freeAgencyComplete: false,
+        progressionComplete: false,
+      })
+    );
+  } catch (err) {
+    console.error("[PlayerProgression] failed to reset offseason state", err);
+  }
+
+  navigate("/calendar");
+}
   useEffect(() => {
   console.log("[PPDBG] MOUNT PlayerProgression");
   return () => console.log("[PPDBG] UNMOUNT PlayerProgression");
@@ -1201,12 +1226,12 @@ if (deltaCount > 0) {
                 </option>
               ))}
             </select>
-            <button
-              onClick={() => navigate("/calendar")}
-              className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
-            >
-              Return to Calendar
-            </button>
+              <button
+                onClick={handleReturnToCalendar}
+                className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
+              >
+                Return to Calendar
+              </button>
           </div>
         </div>
 

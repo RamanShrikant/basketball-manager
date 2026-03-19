@@ -35,6 +35,7 @@ function buildDefaultOffseasonState(seasonYear) {
     active: true,
     seasonYear,
     retirementsComplete: false,
+    optionsComplete: false,
     freeAgencyComplete: false,
     progressionComplete: false,
   };
@@ -152,6 +153,7 @@ export default function OffseasonHub() {
 
   const cards = useMemo(() => {
     const retirementsComplete = !!offseasonState.retirementsComplete;
+    const optionsComplete = !!offseasonState.optionsComplete;
     const freeAgencyComplete = !!offseasonState.freeAgencyComplete;
     const progressionComplete = !!offseasonState.progressionComplete;
 
@@ -169,17 +171,28 @@ export default function OffseasonHub() {
       },
       {
         step: "2",
-        title: "Free Agency",
+        title: "Player / Team Options",
         description:
-          "Negotiate with available players and reshape your roster once retirements are resolved and the offseason market is ready.",
-        status: freeAgencyComplete ? "Complete" : retirementsComplete ? "Current" : "Locked",
-        accent: freeAgencyComplete ? "green" : retirementsComplete ? "orange" : "neutral",
-        buttonLabel: retirementsComplete ? "Open Free Agency" : "Locked",
+          "Resolve player options and team options before free agency begins so every contract decision is settled first.",
+        status: optionsComplete ? "Complete" : retirementsComplete ? "Current" : "Locked",
+        accent: optionsComplete ? "green" : retirementsComplete ? "orange" : "neutral",
+        buttonLabel: retirementsComplete ? "Open Options" : "Locked",
         disabled: !retirementsComplete,
-        onClick: () => navigate("/free-agents"),
+        onClick: () => navigate("/player-team-options"),
       },
       {
         step: "3",
+        title: "Free Agency",
+        description:
+          "Negotiate with available players and reshape your roster once all option decisions are settled and the offseason market is ready.",
+        status: freeAgencyComplete ? "Complete" : optionsComplete ? "Current" : "Locked",
+        accent: freeAgencyComplete ? "green" : optionsComplete ? "orange" : "neutral",
+        buttonLabel: optionsComplete ? "Open Free Agency" : "Locked",
+        disabled: !optionsComplete,
+        onClick: () => navigate("/free-agents"),
+      },
+      {
+        step: "4",
         title: "Player Progression",
         description:
           "Apply offseason development once roster moves are finished so your updated squads grow into the next year together.",
@@ -190,10 +203,10 @@ export default function OffseasonHub() {
         onClick: () => navigate("/player-progression"),
       },
       {
-        step: "4",
+        step: "5",
         title: "Start New Season",
         description:
-          "Finalize the offseason and roll into the next season once retirements, free agency, and progression are all complete.",
+          "Finalize the offseason and roll into the next season once retirements, options, free agency, and progression are all complete.",
         status: progressionComplete ? "Current" : "Locked",
         accent: progressionComplete ? "orange" : "neutral",
         buttonLabel: progressionComplete ? "Continue to Team Hub" : "Locked",
@@ -244,8 +257,10 @@ export default function OffseasonHub() {
                     ? "Start"
                     : offseasonState.freeAgencyComplete
                     ? "Progression"
-                    : offseasonState.retirementsComplete
+                    : offseasonState.optionsComplete
                     ? "Free Agency"
+                    : offseasonState.retirementsComplete
+                    ? "Options"
                     : "Retirements"
                 }
               />
@@ -253,7 +268,7 @@ export default function OffseasonHub() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
           {cards.map((card) => (
             <EventCard key={card.step} {...card} />
           ))}

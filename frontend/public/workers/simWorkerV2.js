@@ -1,7 +1,7 @@
 // ============================================================
 // simWorkerV2.js - Batch-safe Pyodide Simulation Worker
 // ============================================================
-console.log("[simWorkerV2] booting…");
+console.log("[simWorkerV2] booting...");
 
 self.addEventListener("error", (e) =>
   console.error("[simWorkerV2] WORKER ERROR:", e)
@@ -35,7 +35,7 @@ const pythonFiles = [
 async function init() {
   if (ready) return;
 
-  console.log("[simWorkerV2] loading Pyodide…");
+  console.log("[simWorkerV2] loading Pyodide...");
   pyodide = await loadPyodide({
     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/",
   });
@@ -127,7 +127,7 @@ out
 }
 
 // ------------------------------------------------------------
-// AWARDS MODE ✅
+// AWARDS MODE
 // ------------------------------------------------------------
 async function computeAwards(requestId, players, teams, seasonYear) {
   try {
@@ -162,7 +162,7 @@ res
 }
 
 // ------------------------------------------------------------
-// FINALS MVP MODE ✅
+// FINALS MVP MODE
 // ------------------------------------------------------------
 async function computeFinalsMvp(requestId, players, meta) {
   try {
@@ -200,7 +200,7 @@ res
 }
 
 // ------------------------------------------------------------
-// PLAYER PROGRESSION MODE ✅
+// PLAYER PROGRESSION MODE
 // ------------------------------------------------------------
 async function computeProgression(requestId, leagueData, statsByKey, meta) {
   try {
@@ -256,7 +256,7 @@ json.dumps(res)
 }
 
 // ------------------------------------------------------------
-// FREE AGENCY GENERIC REQUEST MODE ✅
+// FREE AGENCY GENERIC REQUEST MODE
 // ------------------------------------------------------------
 async function runFreeAgencyRequest(requestId, action, leagueData, payload, okType, errType) {
   try {
@@ -360,6 +360,28 @@ async function applyOffseasonContractDecisions(requestId, leagueData, payload) {
   );
 }
 
+async function previewPlayerTeamOptions(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "preview_player_team_options",
+    leagueData,
+    payload || {},
+    "player-team-options-preview-result",
+    "player-team-options-preview-error"
+  );
+}
+
+async function applyPlayerTeamOptions(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "apply_player_team_options",
+    leagueData,
+    payload || {},
+    "player-team-options-apply-result",
+    "player-team-options-apply-error"
+  );
+}
+
 async function initializeFreeAgencyPeriod(requestId, leagueData, payload) {
   return runFreeAgencyRequest(
     requestId,
@@ -416,7 +438,7 @@ async function advanceFreeAgencyDay(requestId, leagueData, payload) {
 }
 
 // ------------------------------------------------------------
-// PLAYER RETIREMENT GENERIC REQUEST MODE ✅
+// PLAYER RETIREMENT GENERIC REQUEST MODE
 // ------------------------------------------------------------
 async function runRetirementRequest(requestId, leagueData, payload, okType, errType) {
   try {
@@ -492,7 +514,7 @@ onmessage = async (e) => {
     return computeFinalsMvp(msg.requestId, msg.players, msg.meta || {});
   }
 
-  // progression ✅
+  // progression
   if (msg.type === "compute-progression") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return computeProgression(
@@ -503,73 +525,85 @@ onmessage = async (e) => {
     );
   }
 
-  // free agency market ✅
+  // free agency market
   if (msg.type === "generate-free-agency-market") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return generateFreeAgencyMarket(msg.requestId, leaguePayload);
   }
 
-  // free agency evaluate ✅
+  // free agency evaluate
   if (msg.type === "evaluate-free-agent-offer") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return evaluateFreeAgencyOffer(msg.requestId, leaguePayload, msg.payload || {});
   }
 
-  // free agency sign ✅
+  // free agency sign
   if (msg.type === "sign-free-agent") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return signFreeAgent(msg.requestId, leaguePayload, msg.payload || {});
   }
 
-  // free agency release ✅
+  // free agency release
   if (msg.type === "release-player-free-agency") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return releasePlayerFreeAgency(msg.requestId, leaguePayload, msg.payload || {});
   }
 
-  // offseason contract preview ✅
+  // offseason contract preview
   if (msg.type === "preview-offseason-contracts") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return previewOffseasonContracts(msg.requestId, leaguePayload, msg.payload || {});
   }
 
-  // offseason contract apply ✅
+  // offseason contract apply
   if (msg.type === "apply-offseason-contract-decisions") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return applyOffseasonContractDecisions(msg.requestId, leaguePayload, msg.payload || {});
   }
 
-  // initialize live free agency ✅
+  // player / team options preview
+  if (msg.type === "preview-player-team-options") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return previewPlayerTeamOptions(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // player / team options apply
+  if (msg.type === "apply-player-team-options") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return applyPlayerTeamOptions(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // initialize live free agency
   if (msg.type === "initialize-free-agency-period") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return initializeFreeAgencyPeriod(msg.requestId, leaguePayload, msg.payload || {});
   }
 
-  // free agency state summary ✅
+  // free agency state summary
   if (msg.type === "get-free-agency-state-summary") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return getFreeAgencyStateSummary(msg.requestId, leaguePayload, msg.payload || {});
   }
 
-  // view offers ✅
+  // view offers
   if (msg.type === "get-free-agent-offers") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return getFreeAgentOffers(msg.requestId, leaguePayload, msg.payload || {});
   }
 
-  // submit user offer ✅
+  // submit user offer
   if (msg.type === "submit-user-free-agent-offer") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return submitUserFreeAgentOffer(msg.requestId, leaguePayload, msg.payload || {});
   }
 
-  // advance free agency day ✅
+  // advance free agency day
   if (msg.type === "advance-free-agency-day") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return advanceFreeAgencyDay(msg.requestId, leaguePayload, msg.payload || {});
   }
 
-  // player retirements ✅
+  // player retirements
   if (msg.type === "run-player-retirements") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return runPlayerRetirements(msg.requestId, leaguePayload, msg.payload || {});
