@@ -140,7 +140,11 @@ export default function FreeAgents() {
     );
   };
 
-  const isOffseasonMode = !!offseasonState?.active;
+  const currentSeasonYear = getCurrentSeasonYear();
+
+const isOffseasonMode =
+  !!offseasonState?.active &&
+  Number(offseasonState?.seasonYear || currentSeasonYear) === currentSeasonYear;
   const optionsComplete = !!offseasonState?.optionsComplete;
   const freeAgencyFinished = !!offseasonState?.freeAgencyComplete;
 

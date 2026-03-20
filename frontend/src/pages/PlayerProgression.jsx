@@ -239,14 +239,21 @@ function getSeasonYearFromMeta() {
 }
 
 function inferSeasonYear(leagueData) {
-  const metaYear = getSeasonYearFromMeta();
-  if (metaYear != null) return metaYear;
-
   const y1 = Number(leagueData?.seasonYear);
   if (Number.isFinite(y1)) return y1;
 
-  const y2 = Number(leagueData?.seasonStartYear);
+  const y2 = Number(leagueData?.currentSeasonYear);
   if (Number.isFinite(y2)) return y2;
+
+  const y3 = Number(leagueData?.seasonStartYear);
+  if (Number.isFinite(y3)) return y3;
+
+  const offseasonState = readJsonSafe(OFFSEASON_STATE_KEY, null);
+  const offY = Number(offseasonState?.seasonYear);
+  if (Number.isFinite(offY)) return offY;
+
+  const metaYear = getSeasonYearFromMeta();
+  if (metaYear != null) return metaYear;
 
   const today = new Date();
   return today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
@@ -703,18 +710,39 @@ function recomputeDerivedRatingsInLeague(leagueData) {
   return leagueData;
 }
 export default function PlayerProgression() {
-  function handleReturnToCalendar() {
+function handleReturnToCalendar() {
+  const resolvedSeasonYear = Number(
+    leagueData?.seasonYear ??
+    leagueData?.currentSeasonYear ??
+    leagueData?.seasonStartYear ??
+    readJsonSafe(OFFSEASON_STATE_KEY, null)?.seasonYear ??
+    2026
+  );
+
   try {
+    const nextLeague = snapshotLeague(leagueData || {});
+    nextLeague.seasonYear = resolvedSeasonYear;
+    nextLeague.currentSeasonYear = resolvedSeasonYear;
+    nextLeague.seasonStartYear = resolvedSeasonYear;
+
+    localStorage.setItem(LEAGUE_KEY, JSON.stringify(nextLeague));
+
+    const existingMeta = readJsonSafe(META_KEY, {}) || {};
+    localStorage.setItem(
+      META_KEY,
+      JSON.stringify({
+        ...existingMeta,
+        seasonYear: resolvedSeasonYear,
+        currentSeasonYear: resolvedSeasonYear,
+        seasonStartYear: resolvedSeasonYear,
+      })
+    );
+
     localStorage.setItem(
       OFFSEASON_STATE_KEY,
       JSON.stringify({
         active: false,
-        seasonYear: Number(
-          leagueData?.seasonYear ||
-          leagueData?.currentSeasonYear ||
-          leagueData?.seasonStartYear ||
-          2026
-        ),
+        seasonYear: resolvedSeasonYear,
         retirementsComplete: false,
         optionsComplete: false,
         freeAgencyComplete: false,
@@ -974,8 +1002,9 @@ if (!res || !res.league) {
 let updatedLeague = res.league;
 
 
-        if (!Number.isFinite(Number(updatedLeague?.seasonYear))) updatedLeague.seasonYear = seasonYear;
-        if (!Number.isFinite(Number(updatedLeague?.seasonStartYear))) updatedLeague.seasonStartYear = seasonYear;
+        updatedLeague.seasonYear = seasonYear;
+        updatedLeague.currentSeasonYear = seasonYear;
+        updatedLeague.seasonStartYear = seasonYear;
 
         updatedLeague = stampAgingGuards(updatedLeague, seasonYear);
 

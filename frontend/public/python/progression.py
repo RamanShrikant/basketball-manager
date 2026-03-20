@@ -82,6 +82,12 @@ def _iter_teams(league: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     return []
 
+def _iter_free_agents(league: Dict[str, Any]) -> List[Dict[str, Any]]:
+    fas = league.get("freeAgents")
+    if isinstance(fas, list):
+        return [p for p in fas if isinstance(p, dict)]
+    return []
+
 
 def _team_name(team: Dict[str, Any]) -> str:
     return str(team.get("name") or team.get("team") or "")
@@ -93,10 +99,11 @@ def _stat_lookup(
     team_name: str
 ) -> Optional[Dict[str, Any]]:
     """
-    Your JS stores season stats as:
-      "Player Name__Team Name" (or occasionally name-only)
-
-    We also allow lookup by player id for future-proofing.
+    Supports:
+      - player id
+      - Player__CurrentTeam
+      - Player__PreviousTeam (important for free agents)
+      - name-only fallback
     """
     if not stats_by_key:
         return None
@@ -104,9 +111,27 @@ def _stat_lookup(
     pid = _player_id(p)
     name = _player_name(p)
 
-    for k in (pid, f"{name}__{team_name}", name):
+    lookup_keys = [pid]
+
+    if team_name:
+        lookup_keys.append(f"{name}__{team_name}")
+
+    prev_team = None
+    fam = p.get("freeAgencyMeta")
+    if isinstance(fam, dict):
+        prev_team = fam.get("fromTeam")
+
+    prev_team = prev_team or p.get("previousTeam") or p.get("team")
+
+    if prev_team:
+        lookup_keys.append(f"{name}__{prev_team}")
+
+    lookup_keys.append(name)
+
+    for k in lookup_keys:
         if k in stats_by_key:
             return stats_by_key[k]
+
     return None
 
 
@@ -251,30 +276,25 @@ def ensure_progression_fields(league: Dict[str, Any], season_start_year: Optiona
         return league
 
     if season_start_year is None:
-        # ✅ Prefer seasonYear if present, then seasonStartYear, then season_year, then fallback.
         season_start_year = _safe_int(
             league.get("seasonYear") or league.get("seasonStartYear") or league.get("season_year") or 2025,
             2025
         )
 
-    teams = _iter_teams(league)
-    for t in teams:
-        for p in (t.get("players") or []):
-            if not isinstance(p, dict):
-                continue
+    for p in _all_players(league):
+        if not isinstance(p, dict):
+            continue
 
-            # ✅ disable birthdays unless real values exist
-            p.setdefault("birthMonth", 0)
-            p.setdefault("birthDay", 0)
+        p.setdefault("birthMonth", 0)
+        p.setdefault("birthDay", 0)
+        p.setdefault("potential", 50)
+        p.setdefault("dev_trait", "Normal")
 
-            p.setdefault("potential", 50)
-            p.setdefault("dev_trait", "Normal")
+        if "lastBirthdayYear" not in p:
+            p["lastBirthdayYear"] = season_start_year - 1
 
-            if "lastBirthdayYear" not in p:
-                p["lastBirthdayYear"] = season_start_year - 1
-
-            if "age" not in p:
-                p["age"] = 25
+        if "age" not in p:
+            p["age"] = 25
 
     league.setdefault("seasonStartYear", season_start_year)
     return league
@@ -417,87 +437,86 @@ def apply_end_of_season_progression(
     scoring_mult = float(derived.get("scoring_mult", 0.25))
     max_abs_field = float(derived.get("max_abs_delta_per_field", 4.0))
 
-    teams = _iter_teams(league)
+    for p, tname in _all_players_with_team(league):
+        if not isinstance(p, dict):
+            continue
 
-    for t in teams:
-        tname = _team_name(t)
-        for p in (t.get("players") or []):
-            if not isinstance(p, dict):
-                continue
+        stats = _stat_lookup(stats_by_key, p, tname)
 
-            stats = _stat_lookup(stats_by_key, p, tname)
+        age = _safe_int(p.get("age"), 25)
+        potential = _safe_float(p.get("potential"), 50.0)
+        dev_trait = str(p.get("dev_trait", "Normal"))
 
-            age = _safe_int(p.get("age"), 25)
-            potential = _safe_float(p.get("potential"), 50.0)
-            dev_trait = str(p.get("dev_trait", "Normal"))
+        mpg: Optional[float] = None
+        if isinstance(stats, dict):
+            if "mpg" in stats and stats["mpg"] is not None:
+                mpg = _safe_float(stats.get("mpg"), None)
+            else:
+                gp = _safe_float(stats.get("gp"), 0.0)
+                if gp <= 0:
+                    gp = _safe_float(stats.get("games"), 0.0)
 
-            mpg: Optional[float] = None
-            if isinstance(stats, dict):
-                if "mpg" in stats and stats["mpg"] is not None:
-                    mpg = _safe_float(stats.get("mpg"), None)
+                mins = _safe_float(stats.get("min"), 0.0)
+                if mins <= 0:
+                    mins = _safe_float(stats.get("mins"), 0.0)
+                if mins <= 0:
+                    mins = _safe_float(stats.get("minutes"), 0.0)
+
+                if gp > 0 and mins > 0:
+                    mpg = mins / gp
+
+        base = _age_curve_value(age, settings)
+        min_fac = _minutes_factor(mpg, settings)
+        dev_fac = _dev_multiplier(potential, dev_trait, settings)
+        prod_fac = _production_bonus(stats)
+
+        noise = rng.gauss(0.0, float(settings.get("noise_sigma", 0.2)))
+        base_delta = base * dev_fac * min_fac * prod_fac * (1.0 + noise)
+
+        is_old = age >= 30
+
+        attrs = p.get("attrs")
+        if isinstance(attrs, list) and len(attrs) > 0:
+            for i in range(len(attrs)):
+                old_val = _safe_float(attrs[i], 0.0)
+
+                if i in group_idx_to_mult:
+                    ym, om = group_idx_to_mult[i]
+                    mult = om if is_old else ym
                 else:
-                    gp = _safe_float(stats.get("gp"), 0.0)
-                    if gp <= 0:
-                        gp = _safe_float(stats.get("games"), 0.0)
+                    mult = old_mult_all if is_old else young_mult_all
 
-                    mins = _safe_float(stats.get("min"), 0.0)
-                    if mins <= 0:
-                        mins = _safe_float(stats.get("mins"), 0.0)
-                    if mins <= 0:
-                        mins = _safe_float(stats.get("minutes"), 0.0)
+                d = _clamp(base_delta * mult, -max_abs_attr, max_abs_attr)
+                new_val = _clamp(old_val + d, rmin, rmax)
+                attrs[i] = _stoch_round(new_val, rng)
 
-                    if gp > 0 and mins > 0:
-                        mpg = mins / gp
+        if isinstance(p.get("attrs"), list) and len(p.get("attrs")) > 0:
+            p["overall"] = calc_overall_from_attrs(p.get("attrs") or [], p.get("pos") or p.get("position") or "SF")
 
-            base = _age_curve_value(age, settings)
-            min_fac = _minutes_factor(mpg, settings)
-            dev_fac = _dev_multiplier(potential, dev_trait, settings)
-            prod_fac = _production_bonus(stats)
+        def _bump_field(field_key: str, mult: float) -> None:
+            if field_key not in p or p[field_key] is None:
+                return
+            old_val = _safe_float(p[field_key], 0.0)
+            d = _clamp(base_delta * mult, -max_abs_field, max_abs_field)
+            p[field_key] = _stoch_round(_clamp(old_val + d, rmin, rmax), rng)
 
-            noise = rng.gauss(0.0, float(settings.get("noise_sigma", 0.2)))
-            base_delta = base * dev_fac * min_fac * prod_fac * (1.0 + noise)
+        _bump_field("offRating", off_mult)
+        _bump_field("defRating", def_mult)
+        _bump_field("stamina", stamina_mult)
 
-            is_old = age >= 30
+        if "scoringRating" in p and p["scoringRating"] is not None:
+            old_sr = _safe_float(p.get("scoringRating"), 0.0)
+            d_sr = _clamp(base_delta * scoring_mult, -max_abs_field, max_abs_field)
+            p["scoringRating"] = float(_clamp(old_sr + d_sr, 0.0, 100.0))
 
-            attrs = p.get("attrs")
-            if isinstance(attrs, list) and len(attrs) > 0:
-                for i in range(len(attrs)):
-                    old_val = _safe_float(attrs[i], 0.0)
+        ovr = _safe_int(p.get("overall"), 0)
+        pot = _safe_int(p.get("potential"), 50)
+        if ovr > pot:
+            p["potential"] = min(rmax, ovr)
 
-                    if i in group_idx_to_mult:
-                        ym, om = group_idx_to_mult[i]
-                        mult = om if is_old else ym
-                    else:
-                        mult = old_mult_all if is_old else young_mult_all
-
-                    d = _clamp(base_delta * mult, -max_abs_attr, max_abs_attr)
-                    new_val = _clamp(old_val + d, rmin, rmax)
-                    attrs[i] = _stoch_round(new_val, rng)
-            # ✅ Recompute overall from attrs + pos (JS parity)
-            if isinstance(p.get("attrs"), list) and len(p.get("attrs")) > 0:
-                p["overall"] = calc_overall_from_attrs(p.get("attrs") or [], p.get("pos") or p.get("position") or "SF")
-
-            def _bump_field(field_key: str, mult: float) -> None:
-                if field_key not in p or p[field_key] is None:
-                    return
-                old_val = _safe_float(p[field_key], 0.0)
-                d = _clamp(base_delta * mult, -max_abs_field, max_abs_field)
-                p[field_key] = _stoch_round(_clamp(old_val + d, rmin, rmax), rng)
-
-            _bump_field("offRating", off_mult)
-            _bump_field("defRating", def_mult)
-            _bump_field("stamina", stamina_mult)
-
-            if "scoringRating" in p and p["scoringRating"] is not None:
-                old_sr = _safe_float(p.get("scoringRating"), 0.0)
-                d_sr = _clamp(base_delta * scoring_mult, -max_abs_field, max_abs_field)
-                p["scoringRating"] = float(_clamp(old_sr + d_sr, 0.0, 100.0))
-
-            # ✅ Option B: if OVR exceeds POT, raise POT to match (keep visuals consistent)
-            ovr = _safe_int(p.get("overall"), 0)
-            pot = _safe_int(p.get("potential"), 50)
-            if ovr > pot:
-                p["potential"] = min(rmax, ovr)
+        # Clear stale market value so free agency logic recalculates it later
+        if "marketValue" in p:
+            p.pop("marketValue", None)
 
     return league
 
@@ -508,16 +527,25 @@ def _all_players(league: Dict[str, Any]) -> List[Dict[str, Any]]:
         for p in (t.get("players") or []):
             if isinstance(p, dict):
                 out.append(p)
+
+    for p in _iter_free_agents(league):
+        out.append(p)
+
     return out
 
 
 def _all_players_with_team(league: Dict[str, Any]) -> List[Tuple[Dict[str, Any], str]]:
     out: List[Tuple[Dict[str, Any], str]] = []
+
     for t in _iter_teams(league):
         tname = _team_name(t)
         for p in (t.get("players") or []):
             if isinstance(p, dict):
                 out.append((p, tname))
+
+    for p in _iter_free_agents(league):
+        out.append((p, "__FREE_AGENCY__"))
+
     return out
 
 

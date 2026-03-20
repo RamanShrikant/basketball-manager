@@ -11,11 +11,16 @@ export default function SalaryTable() {
   const [selectedTeamKey, setSelectedTeamKey] = useState("");
 
   // ---- Theme constants (match your app) ----
- const currentSeasonYear = Number(
-  leagueData?.seasonYear ||
-  leagueData?.currentSeasonYear ||
-  2026
+const rawSeasonYear = Number(
+  leagueData?.seasonYear ??
+  leagueData?.currentSeasonYear ??
+  leagueData?.seasonStartYear ??
+  2025
 );
+
+const currentSeasonYear = Number.isFinite(rawSeasonYear)
+  ? rawSeasonYear + 1
+  : 2026;
 
   // These are just UI reference lines (you can later make them dynamic per season/CBA rules)
   const SALARY_CAP = 141_000_000;
@@ -134,15 +139,37 @@ useEffect(() => {
     return leagueData.conferences?.[conf]?.[idx] || null;
   }, [leagueData, selectedTeamKey]);
 
-  const normalizeContract = (p) => {
-    const contract = p?.contract || null;
-    const startYear = Number(contract?.startYear ?? currentSeasonYear);
-    const salaryByYear = Array.isArray(contract?.salaryByYear)
-      ? contract.salaryByYear.map((x) => Number(x) || 0)
-      : [];
-    const option = contract?.option ?? null;
-    return { startYear, salaryByYear, option };
-  };
+const normalizeContract = (p) => {
+  const contract = p?.contract || null;
+
+  let startYear = Number(contract?.startYear ?? currentSeasonYear);
+  let salaryByYear = Array.isArray(contract?.salaryByYear)
+    ? contract.salaryByYear.map((x) => Number(x) || 0)
+    : [];
+  const option = contract?.option ?? null;
+
+  const lastYear = startYear + Math.max(0, salaryByYear.length - 1);
+
+  const hasCurrentSeasonSlot =
+    salaryByYear.length > 0 &&
+    currentSeasonYear >= startYear &&
+    currentSeasonYear <= lastYear;
+
+  // Bridge fix:
+  // if a player signed a 1-year deal in the previous offseason,
+  // but the contract was saved with startYear = previous year,
+  // show it as belonging to the current displayed season.
+  const looksLikePreviousOffseasonOneYearDeal =
+    salaryByYear.length === 1 &&
+    startYear === currentSeasonYear - 1 &&
+    !hasCurrentSeasonSlot;
+
+  if (looksLikePreviousOffseasonOneYearDeal) {
+    startYear = currentSeasonYear;
+  }
+
+  return { startYear, salaryByYear, option };
+};
 
   const players = useMemo(() => {
     const pls = selectedTeam?.players || [];
@@ -150,7 +177,11 @@ useEffect(() => {
       const c = normalizeContract(p);
       const years = Math.max(1, c.salaryByYear.length || 1);
       const endYear = c.salaryByYear.length ? c.startYear + c.salaryByYear.length - 1 : c.startYear;
-      const totalRemaining = c.salaryByYear.reduce((s, v) => s + (Number(v) || 0), 0);
+      const totalRemaining = c.salaryByYear.reduce((s, v, idx) => {
+  const seasonYear = c.startYear + idx;
+  if (seasonYear < currentSeasonYear) return s;
+  return s + (Number(v) || 0);
+}, 0);
 
       let optionLabel = "None";
       if (c.option?.type) {
@@ -187,26 +218,15 @@ useEffect(() => {
         expType,
       };
     });
-  }, [selectedTeam]);
+  }, [selectedTeam, currentSeasonYear]);
 
-const displayEndYear = useMemo(() => {
-  if (!players.length) return currentSeasonYear;
-
-  return Math.max(
-    currentSeasonYear,
-    ...players.map((p) => {
-      const years = Math.max(1, p.contract.salaryByYear.length || 1);
-      return p.contract.startYear + years - 1;
-    })
-  );
-}, [players, currentSeasonYear]);
+const DISPLAY_YEARS = 5;
 
 const yearColumns = useMemo(() => {
-  return Array.from(
-    { length: displayEndYear - currentSeasonYear + 1 },
-    (_, i) => currentSeasonYear + i
-  );
-}, [currentSeasonYear, displayEndYear]);
+  return Array.from({ length: DISPLAY_YEARS }, (_, i) => currentSeasonYear + i);
+}, [currentSeasonYear]);
+
+
 
   const teamTotalsByYear = useMemo(() => {
     const totals = yearColumns.map(() => 0);
