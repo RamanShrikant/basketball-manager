@@ -226,6 +226,69 @@ const Logo = ({ team, size = 36 }) => {
     </div>
   );
 };
+const MiniStandingsPanel = ({
+  title,
+  rows,
+  selectedTeamName,
+  hidden,
+  onToggle,
+  collapsedLabel,
+  side,
+}) => {
+  const sideClass = side === "left" ? "left-5" : "right-5";
+
+  if (hidden) {
+    return (
+      <div className={`fixed top-32 ${sideClass} z-40`}>
+        <button
+          onClick={onToggle}
+          className="rounded-xl border border-neutral-700 bg-neutral-800 px-4 py-3 text-sm font-semibold shadow-xl hover:bg-neutral-700"
+        >
+          {collapsedLabel}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`group fixed top-28 ${sideClass} z-40 w-44`}>
+      <div className="overflow-hidden rounded-xl border-2 border-white/60 bg-neutral-900 shadow-2xl"> 
+        <div className="flex items-center justify-between border-b border-neutral-700 bg-neutral-800 px-3 py-2">
+          <h3 className="text-sm font-bold text-gray-200">{title}</h3>
+          <button
+            onClick={onToggle}
+            className="rounded bg-neutral-700 px-2 py-1 text-xs hover:bg-neutral-600"
+          >
+            Hide
+          </button>
+        </div>
+
+        <div className="standings-scrollbar max-h-[74vh] overflow-y-auto pr-1">
+          {rows.map((row, index) => (
+<div
+  key={row.team}
+  title={row.team}
+  className={`flex items-center gap-2 border-b border-neutral-800 px-3 py-2 last:border-b-0 ${
+    selectedTeamName === row.team
+      ? "bg-orange-600/20"
+      : "hover:bg-neutral-800/70"
+  }`}
+>
+  <span className="w-4 text-xs text-gray-400">{index + 1}</span>
+  <Logo team={{ name: row.team, logo: row.logo }} size={32} />
+
+  <div className="flex items-center gap-1 text-sm font-semibold">
+    <span className="text-green-400">{row.w}</span>
+    <span className="text-gray-500">-</span>
+    <span className="text-red-400">{row.l}</span>
+  </div>
+</div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 
 /* -------------------------------------------------------------------------- */
@@ -1265,6 +1328,7 @@ useEffect(() => {
   /*                                 Focused Date                               */
   /* -------------------------------------------------------------------------- */
   const [focusedDate, setFocusedDate] = useState(null);
+  const monthRefs = useRef({});
 
   useEffect(() => {
     const firstGameDate = Object.keys(myGames).sort()[0];
@@ -1281,17 +1345,53 @@ useEffect(() => {
     [allDays]
   );
 
-  const visibleDays = useMemo(() => {
-    const [y, m] = month.split("-").map(Number);
-    const first = new Date(y, m - 1, 1);
-    const last = new Date(y, m, 0);
-    const days = rangeDays(first, last);
-    const pad = first.getDay();
+const scrollToMonth = (monthStr) => {
+  setMonth(monthStr);
 
-    const padded = Array(pad).fill(null).concat(days);
+  requestAnimationFrame(() => {
+    const el = monthRefs.current[monthStr];
+    if (el) {
+      el.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }
+  });
+};
+
+const buildVisibleDaysForMonth = (monthStr) => {
+  const [y, m] = monthStr.split("-").map(Number);
+  const first = new Date(y, m - 1, 1);
+  const last = new Date(y, m, 0);
+
+  const isSeasonStartMonth =
+    y === seasonStart.getFullYear() &&
+    m - 1 === seasonStart.getMonth();
+
+  if (isSeasonStartMonth) {
+    const compactStart = addDays(seasonStart, -seasonStart.getDay());
+    const compactDays = rangeDays(compactStart, last);
+    const padded = [...compactDays];
+
     while (padded.length % 7 !== 0) padded.push(null);
     return padded;
-  }, [month]);
+  }
+
+  const days = rangeDays(first, last);
+  const pad = first.getDay();
+
+  const padded = Array(pad).fill(null).concat(days);
+  while (padded.length % 7 !== 0) padded.push(null);
+  return padded;
+};
+
+const visibleDaysByMonth = useMemo(() => {
+  const out = {};
+  for (const monthStr of months) {
+    out[monthStr] = buildVisibleDaysForMonth(monthStr);
+  }
+  return out;
+}, [months, seasonStart]);
 
   /* -------------------------------------------------------------------------- */
   /*                                 Action Modals                               */
@@ -1303,6 +1403,9 @@ const [simLock, setSimLock] = useState(false);
 // ✅ stop control (ADD THIS)
 const stopRef = useRef(false);
 const [stopRequested, setStopRequested] = useState(false);
+const [showWestStandings, setShowWestStandings] = useState(true);
+const [showEastStandings, setShowEastStandings] = useState(true);
+const CALENDAR_SCALE = 0.97;
 
 const requestStop = () => {
   if (!simLock) return;
@@ -1908,15 +2011,178 @@ const headerInfo = useMemo(() => {
   };
 }, [seasonYear, selectedTeam, confByTeam, teamAgg]);
 
+const conferenceStandings = useMemo(() => {
+  const rows = teams.map((t) => {
+    const agg = teamAgg?.[t.name] || { w: 0, l: 0, pf: 0, pa: 0 };
+    const gp = (agg.w || 0) + (agg.l || 0);
+
+    return {
+      team: t.name,
+      conf: String(confByTeam?.[t.name] || ""),
+      logo:
+        t.logo ||
+        t.teamLogo ||
+        t.newTeamLogo ||
+        t.logoUrl ||
+        t.image ||
+        t.img ||
+        "",
+      w: agg.w || 0,
+      l: agg.l || 0,
+      pct: gp > 0 ? agg.w / gp : 0,
+      diff: (agg.pf || 0) - (agg.pa || 0),
+    };
+  });
+
+  const sorter = (a, b) =>
+    b.pct - a.pct || b.diff - a.diff || a.team.localeCompare(b.team);
+
+  return {
+    west: rows
+      .filter((row) => row.conf.toLowerCase() === "west")
+      .sort(sorter),
+    east: rows
+      .filter((row) => row.conf.toLowerCase() === "east")
+      .sort(sorter),
+  };
+}, [teams, teamAgg, confByTeam]);
+
 /* -------------------------------------------------------------------------- */
 /*                               CALENDAR GRID                                */
 /* -------------------------------------------------------------------------- */
 
-  return (
-    <div className="min-h-screen bg-neutral-900 text-white py-8">
-      <div className="max-w-6xl mx-auto px-4">
+return (
+  <div
+    className="relative h-screen overflow-hidden text-white py-2"
+    style={{
+      background: `
+        repeating-linear-gradient(45deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 28px),
+        repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 22px),
+        radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%)
+      `,
+    }}
+  >
+    <div
+      className="pointer-events-none absolute -inset-[120px] z-0"
+      style={{
+        backgroundImage: `
+          conic-gradient(from 210deg at 18% 22%,
+            rgba(255,255,255,0.16) 0deg,
+            rgba(255,255,255,0.08) 14deg,
+            rgba(255,255,255,0.00) 36deg 360deg),
+          conic-gradient(from 30deg at 82% 78%,
+            rgba(255,255,255,0.14) 0deg,
+            rgba(255,255,255,0.07) 16deg,
+            rgba(255,255,255,0.00) 38deg 360deg)
+        `,
+        backgroundRepeat: "no-repeat, no-repeat",
+        backgroundSize: "760px 760px, 700px 700px",
+        backgroundPosition: "left -120px top -80px, right -90px bottom -60px",
+        filter: "blur(20px)",
+        opacity: 0.26,
+      }}
+    />
+
+
+
+<style>
+  {`
+    @keyframes calendarBgDrift {
+      0% { transform: translate(0, 0) rotate(0deg); }
+      50% { transform: translate(-100px, -60px) rotate(1deg); }
+      100% { transform: translate(0, 0) rotate(0deg); }
+    }
+
+    .orange-scrollbar {
+      scrollbar-width: auto;
+      scrollbar-color: #f97316 #171717;
+    }
+
+    .orange-scrollbar::-webkit-scrollbar {
+      width: 16px;
+      height: 16px;
+    }
+
+    .orange-scrollbar::-webkit-scrollbar-track {
+      background: #171717;
+      border-radius: 8px;
+    }
+
+    .orange-scrollbar::-webkit-scrollbar-thumb {
+      background: #f97316;
+      border-radius: 6px;
+      border: 2px solid #171717;
+    }
+
+    .orange-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #ea580c;
+    }
+
+    .standings-scrollbar {
+      scrollbar-width: none;
+    }
+
+    .group:hover .standings-scrollbar {
+      scrollbar-width: auto;
+      scrollbar-color: #f97316 #171717;
+    }
+
+    .standings-scrollbar::-webkit-scrollbar {
+      width: 0px;
+      height: 0px;
+    }
+
+    .group:hover .standings-scrollbar::-webkit-scrollbar {
+      width: 16px;
+      height: 16px;
+    }
+
+    .group:hover .standings-scrollbar::-webkit-scrollbar-track {
+      background: #171717;
+      border-radius: 8px;
+    }
+
+    .group:hover .standings-scrollbar::-webkit-scrollbar-thumb {
+      background: #f97316;
+      border-radius: 6px;
+      border: 2px solid #171717;
+    }
+
+    .group:hover .standings-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #ea580c;
+    }
+  `}
+</style>
+    <MiniStandingsPanel
+      title="West"
+      rows={conferenceStandings.west}
+      selectedTeamName={selectedTeam.name}
+      hidden={!showWestStandings}
+      onToggle={() => setShowWestStandings((v) => !v)}
+      collapsedLabel="Show West"
+      side="left"
+    />
+
+    <MiniStandingsPanel
+      title="East"
+      rows={conferenceStandings.east}
+      selectedTeamName={selectedTeam.name}
+      hidden={!showEastStandings}
+      onToggle={() => setShowEastStandings((v) => !v)}
+      collapsedLabel="Show East"
+      side="right"
+    />
+
+<div
+  className="relative z-10 max-w-6xl mx-auto px-4 h-full flex flex-col"
+  style={{
+    zoom: CALENDAR_SCALE,
+    transformOrigin: "top center",
+  }}
+>
         {/* HEADER */}
-        <div className="flex items-center justify-between mb-4">
+        {/* HEADER */}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
           {/* left: team switch + logo + name */}
           <div className="flex items-center gap-4">
             <button
@@ -1933,7 +2199,7 @@ const headerInfo = useMemo(() => {
             </button>
 
             <div className="flex items-center gap-3">
-              <Logo team={selectedTeam} size={40} />
+              <Logo team={selectedTeam} size={72} />
               <h1 className="text-2xl font-bold text-orange-500">
                 {selectedTeam.name}
               </h1>
@@ -1978,19 +2244,19 @@ const headerInfo = useMemo(() => {
             </button>
             
 
-            {/* Month navigation */}
+                        {/* Month navigation */}
             <button
               className="px-3 py-2 bg-neutral-700 rounded"
               onClick={() => {
                 const i = months.indexOf(month);
-                if (i > 0) setMonth(months[i - 1]);
+                if (i > 0) scrollToMonth(months[i - 1]);
               }}
             >
               ‹ Prev
             </button>
             <select
               value={month}
-              onChange={(e) => setMonth(e.target.value)}
+              onChange={(e) => scrollToMonth(e.target.value)}
               className="px-3 py-2 bg-neutral-800 rounded"
             >
               {months.map((m) => {
@@ -2010,7 +2276,7 @@ const headerInfo = useMemo(() => {
               className="px-3 py-2 bg-neutral-700 rounded"
               onClick={() => {
                 const i = months.indexOf(month);
-                if (i < months.length - 1) setMonth(months[i + 1]);
+                if (i < months.length - 1) scrollToMonth(months[i + 1]);
               }}
             >
               Next ›
@@ -2019,7 +2285,7 @@ const headerInfo = useMemo(() => {
         </div>
 
         {/* BANNER */}
-        <div className="mb-4 px-4 py-2 bg-neutral-800 rounded border border-neutral-700">
+        <div className="mb-4 px-4 py-2 bg-neutral-800 rounded-xl border-2 border-white">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <span className="font-semibold text-gray-200">
               Season {headerInfo.seasonLabel}
@@ -2054,104 +2320,139 @@ const headerInfo = useMemo(() => {
           </div>
         </div>
 
-        {/* WEEKDAYS */}
-        <div className="grid grid-cols-7 text-center text-gray-400 mb-2">
-          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((w) => (
-            <div key={w}>{w}</div>
-          ))}
-        </div>
+        {/* SCROLLABLE CALENDAR AREA */}
+        <div className="flex-1 min-h-0 overflow-y-auto pr-2 orange-scrollbar">
+          <div className="space-y-6 pb-6">
+            {months.map((monthStr) => {
+              const monthDays = visibleDaysByMonth[monthStr] || [];
+              const [y, m] = monthStr.split("-").map(Number);
+              const monthDate = new Date(y, m - 1, 1);
+              const isSelectedMonth = month === monthStr;
 
-        {/* MAIN CALENDAR */}
-        <div className="grid grid-cols-7 gap-1">
-          {visibleDays.map((d, idx) => {
-            if (!d) {
               return (
                 <div
-                  key={"pad-" + idx}
-                  className="h-28 bg-neutral-800/40 rounded border border-neutral-800"
-                />
+                  key={monthStr}
+                  ref={(el) => {
+                    monthRefs.current[monthStr] = el;
+                  }}
+className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
+  isSelectedMonth
+    ? "border-orange-500 ring-1 ring-orange-500/60"
+    : "border-white/70 hover:border-orange-500"
+}`}
+                >
+                  <div className="mb-3">
+                    <h2
+                      className={`text-xl font-bold ${
+                        isSelectedMonth ? "text-orange-400" : "text-gray-200"
+                      }`}
+                    >
+                      {monthDate.toLocaleString("default", {
+                        month: "long",
+                        year: "numeric",
+                      })}
+                    </h2>
+                  </div>
+
+                  <div className="grid grid-cols-7 text-center text-gray-400 mb-2">
+                    {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((w) => (
+                      <div key={w}>{w}</div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-7 gap-1">
+                    {monthDays.map((d, idx) => {
+                      if (!d) {
+                        return (
+                          <div
+                            key={"pad-" + monthStr + "-" + idx}
+                            className="h-28 bg-neutral-800/40 rounded border border-neutral-800"
+                          />
+                        );
+                      }
+
+                      const dateStr = fmt(d);
+                      const game = myGames[dateStr];
+                      const result = game ? resultsById[game.id] : null;
+
+                      const finalScore =
+                        game && game.played && result
+                          ? `${result.totals?.home}-${result.totals?.away}`
+                          : null;
+
+                      const iAmHome =
+                        game && game.homeId === slugifyId(selectedTeam.name);
+
+                      const winnerSide = result?.winner?.side || null;
+
+                      const outcome =
+                        game && game.played && winnerSide && winnerSide !== "tie"
+                          ? winnerSide === (iAmHome ? "home" : "away")
+                            ? "W"
+                            : "L"
+                          : null;
+
+                      return (
+                        <div
+                          key={monthStr + "-" + dateStr}
+                          className={`relative h-28 p-2 rounded border cursor-pointer overflow-visible ${
+                            game
+                              ? iAmHome
+                                ? "border-blue-400"
+                                : "border-red-400"
+                              : "border-neutral-700"
+                          } bg-neutral-850 hover:bg-neutral-700`}
+                          onClick={() => {
+                            setFocusedDate(dateStr);
+                            setMonth(monthStr);
+                            if (game) setActionModal({ dateStr, game });
+                          }}
+                        >
+                          <div className="text-xs text-gray-400">{d.getDate()}</div>
+
+                          {game && (
+                            <div className="mt-2 flex items-center gap-2 overflow-visible">
+                              <div className="shrink-0">
+                                <Logo
+                                  team={{
+                                    name: iAmHome ? game.away : game.home,
+                                    logo: iAmHome ? game.awayLogo : game.homeLogo,
+                                  }}
+                                  size={26}
+                                />
+                              </div>
+
+                              <span className="text-sm">
+                                {iAmHome ? game.away : game.home}
+                              </span>
+                            </div>
+                          )}
+
+                          {game && game.played && outcome && (
+                            <div
+                              className={`absolute bottom-2 left-2 text-[11px] font-bold px-2 py-1 rounded ${
+                                outcome === "W" ? "bg-green-700" : "bg-red-700"
+                              }`}
+                            >
+                              {outcome}
+                            </div>
+                          )}
+
+                          {game && game.played && finalScore && (
+                            <div className="absolute bottom-2 right-2 text-[11px] bg-green-700 px-2 py-1 rounded">
+                              Final {finalScore}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               );
-            }
-
-            const dateStr = fmt(d);
-            const game = myGames[dateStr];
-            const result = game ? resultsById[game.id] : null;
-
-            const finalScore =
-              game && game.played && result
-                ? `${result.totals?.home}-${result.totals?.away}`
-                : null;
-
-            const iAmHome =
-              game && game.homeId === slugifyId(selectedTeam.name);
-
-            const winnerSide = result?.winner?.side || null;
-
-            const outcome =
-              game && game.played && winnerSide && winnerSide !== "tie"
-                ? winnerSide === (iAmHome ? "home" : "away")
-                  ? "W"
-                  : "L"
-                : null;
-
-
-            return (
-              <div
-                key={dateStr}
-                className={`relative h-28 p-2 rounded border cursor-pointer overflow-visible ${
-                  game
-                    ? iAmHome
-                      ? "border-blue-400"
-                      : "border-red-400"
-                    : "border-neutral-700"
-                } bg-neutral-850 hover:bg-neutral-700`}
-                onClick={() => {
-                  setFocusedDate(dateStr);
-                  if (game) setActionModal({ dateStr, game });
-                }}
-              >
-                <div className="text-xs text-gray-400">{d.getDate()}</div>
-
-                {game && (
-                  <div className="mt-2 flex items-center gap-2 overflow-visible">
-                    <div className="shrink-0">
-                      <Logo
-                        team={{
-                          name: iAmHome ? game.away : game.home,
-                          logo: iAmHome ? game.awayLogo : game.homeLogo,
-                        }}
-                        size={26}
-                      />
-                    </div>
-
-                    <span className="text-sm">
-                      {iAmHome ? game.away : game.home}
-                    </span>
-                  </div>
-                )}
-
-                {/* W / L badge for selected team */}
-                {game && game.played && outcome && (
-                  <div
-                    className={`absolute bottom-2 left-2 text-[11px] font-bold px-2 py-1 rounded ${
-                      outcome === "W" ? "bg-green-700" : "bg-red-700"
-                    }`}
-                  >
-                    {outcome}
-                  </div>
-                )}
-
-                {/* Final score badge (bottom-right) */}
-                {game && game.played && finalScore && (
-                  <div className="absolute bottom-2 right-2 text-[11px] bg-green-700 px-2 py-1 rounded">
-                    Final {finalScore}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+            })}
+          </div>
         </div>
-      </div>
+                  </div>
 
       {/* ---------------------------- ACTION MODAL ---------------------------- */}
       {actionModal && (

@@ -422,21 +422,45 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
     def_rating = num(player.get("defRating"), overall)
     scoring_rating = num(player.get("scoringRating"), 50)
 
-    base_salary = MIN_DEAL + (max(0, overall - 65) ** 1.65) * 180_000
+    # Much flatter curve so high 70s / low 80s are actually signable
+    base_salary = MIN_DEAL + (max(0, overall - 70) ** 1.50) * 230_000
 
+
+    # Age curve
     if age <= 23:
-        base_salary *= 1.05 + max(0, potential - overall) * 0.01
-    elif 24 <= age <= 29:
-        base_salary *= 1.03
-    elif age >= 32:
-        base_salary *= max(0.72, 1.0 - (age - 31) * 0.045)
+        base_salary *= 1.04 + max(0, potential - overall) * 0.008
+    elif 24 <= age <= 27:
+        base_salary *= 1.00
+    elif 28 <= age <= 30:
+        base_salary *= 0.97
+    elif age >= 31:
+        base_salary *= max(0.55, 1.0 - (age - 30) * 0.07)
 
-    if off_rating >= 85:
-        base_salary *= 1.05
-    if def_rating >= 85:
-        base_salary *= 1.05
+    # Young prime creators should cost more than older same-OVR vets
+    if 24 <= age <= 27 and overall >= 83:
+        base_salary *= 1.20
+    if age <= 27 and overall >= 82 and potential - overall >= 2:
+        base_salary *= 1.07
+
+    # Skill bonuses
+    if off_rating >= 88:
+        base_salary *= 1.04
+    if def_rating >= 88:
+        base_salary *= 1.04
     if scoring_rating >= 80:
-        base_salary *= 1.05
+        base_salary *= 1.04
+
+    # Extra premium for young scoring guards/wings
+    if age <= 27 and overall >= 82 and off_rating >= 86 and scoring_rating >= 86:
+        base_salary *= 1.08
+
+    # Older mid-tier vets should get cheap fast
+    if age >= 30 and overall <= 82:
+        base_salary *= 0.82
+    if age >= 32 and overall <= 78:
+        base_salary *= 0.74
+    if age >= 34 and overall <= 76:
+        base_salary *= 0.66
 
     year1_salary = int(
         round_to_nearest(
@@ -447,20 +471,46 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
 
     if age >= 35:
         years = 1
-    elif age >= 31:
-        years = 2 if overall >= 78 else 1
-    elif age <= 24 and potential - overall >= 4:
-        years = 4
-    elif overall >= 82:
+    elif overall <= 76:
+        years = 2 if age <= 28 else 1
+    elif overall <= 80:
+        years = 3 if age <= 28 else 2
+    elif overall <= 83:
+        years = 4 if age <= 27 else 3
+    elif overall <= 86:
         years = 4 if age <= 29 else 3
-    elif overall >= 75:
-        years = 3 if age <= 29 else 2
     else:
-        years = 2 if age <= 30 else 1
+        years = 4 if age <= 31 else 3
+
+    if age <= 24 and potential - overall >= 3 and overall >= 79:
+        years = min(4, years + 1)
 
     years = int(clamp(years, 1, 4))
     salary_by_year = build_salary_by_year(year1_salary, years)
-    min_acceptable_aav = int(round_to_nearest(year1_salary * 0.85, base = 1_000))
+
+    # Lower minimum ask for the mid-tier market
+    if overall <= 78 or (age >= 30 and overall <= 82):
+        min_accept_mult = 0.70
+    elif overall <= 81:
+        min_accept_mult = 0.78
+    elif overall <= 83:
+        min_accept_mult = 0.87
+    elif overall <= 85:
+        min_accept_mult = 0.95
+    else:
+        min_accept_mult = 0.80
+
+    if 24 <= age <= 27 and overall >= 83:
+        min_accept_mult += 0.02
+
+    min_accept_mult = clamp(min_accept_mult, 0.70, 0.98)
+
+    min_acceptable_aav = int(
+        round_to_nearest(
+            max(MIN_DEAL, year1_salary * min_accept_mult),
+            base = 1_000,
+        )
+    )
 
     return {
         "expectedYears": years,
@@ -469,7 +519,6 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
         "expectedAAV": int(sum(salary_by_year) / len(salary_by_year)),
         "minAcceptableAAV": min_acceptable_aav,
     }
-
 
 def add_market_values_to_free_agents(league_data: Dict[str, Any]) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
@@ -483,6 +532,9 @@ def add_market_values_to_free_agents(league_data: Dict[str, Any]) -> Dict[str, A
         "leagueData": updated,
         "freeAgentCount": len(free_agents),
     }
+def refresh_free_agent_market_values(league_data: Dict[str, Any]) -> None:
+    for player in league_data.get("freeAgents", []):
+        player["marketValue"] = estimate_market_value(player)
 
 
 def build_contract_from_offer(league_data: Dict[str, Any], offer: Dict[str, Any]) -> Dict[str, Any]:
@@ -499,7 +551,19 @@ def build_contract_from_offer(league_data: Dict[str, Any], offer: Dict[str, Any]
         "salaryByYear": safe_salary_by_year,
         "option": offer.get("option"),
     })
+def apply_free_agency_start_year(
+    league_data: Dict[str, Any],
+    contract: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    normalized = normalize_contract(contract)
+    if not normalized:
+        return normalized
 
+    state = ensure_free_agency_state(league_data)
+    if state.get("isActive"):
+        normalized["startYear"] = get_current_season_year(league_data) + 1
+
+    return normalized
 
 def is_minimum_contract_for_current_year(
     league_data: Dict[str, Any],
@@ -594,26 +658,51 @@ def finalize_cpu_min_roster_cleanup(
                 signed_this_round = None
 
                 for _, required_aav, _, _, _, fa, threshold in candidate_rows:
+                    overall = int(round(num(fa.get("overall"), 0)))
+                    age = int(num(fa.get("age"), 27))
+                    market_value = fa.get("marketValue") or estimate_market_value(fa)
+
+                    cleanup_years = 1
+                    if overall >= 84:
+                        cleanup_years = min(3, int(market_value.get("expectedYears", 2)))
+                    elif overall >= 79:
+                        cleanup_years = min(2, int(market_value.get("expectedYears", 2)))
+                    elif overall >= 76 and age <= 28:
+                        cleanup_years = 2
+
                     offered_salary = int(MIN_DEAL)
 
-                    if not threshold.get("autoAccept"):
+                    if threshold.get("autoAccept"):
+                        offer_contract = {
+                            "startYear": season_year,
+                            "salaryByYear": build_salary_by_year(MIN_DEAL, cleanup_years),
+                            "option": None,
+                        }
+                    else:
                         if snapshot["payroll"] >= snapshot["salaryCap"]:
                             continue
 
                         offered_salary = int(max(MIN_DEAL, required_aav))
 
-                        if snapshot["payroll"] + offered_salary > snapshot["salaryCap"]:
+                        offer_contract = {
+                            "startYear": season_year,
+                            "salaryByYear": build_salary_by_year(offered_salary, cleanup_years),
+                            "option": None,
+                        }
+
+                        offered_current_salary = get_contract_salary_for_year(
+                            normalize_contract(offer_contract),
+                            season_year,
+                        )
+
+                        if snapshot["payroll"] + offered_current_salary > snapshot["salaryCap"]:
                             continue
 
                     evaluation = evaluate_offer(
                         league_data = league_data,
                         team_name = team_name,
                         player = fa,
-                        offer = {
-                            "startYear": season_year,
-                            "salaryByYear": [offered_salary],
-                            "option": None,
-                        },
+                        offer = offer_contract,
                     )
 
                     if not evaluation.get("ok") or not evaluation.get("accepted"):
@@ -628,7 +717,10 @@ def finalize_cpu_min_roster_cleanup(
                         continue
 
                     signed_player = copy.deepcopy(league_data["freeAgents"][player_idx])
-                    signed_player["contract"] = evaluation["contract"]
+                    signed_player["contract"] = apply_free_agency_start_year(
+                        league_data,
+                        evaluation["contract"],
+                    )
                     signed_player["marketValue"] = estimate_market_value(signed_player)
 
                     league_data["freeAgents"].pop(player_idx)
@@ -1703,6 +1795,8 @@ def build_cpu_offer_contract(
     age = int(num(player.get("age"), 27))
     overall = int(round(num(player.get("overall"), 75)))
     potential = int(round(num(player.get("potential"), overall)))
+    off_rating = int(round(num(player.get("offRating"), overall)))
+    scoring_rating = int(round(num(player.get("scoringRating"), overall)))
 
     expected_year1 = int(market_value["expectedYear1Salary"])
     expected_years = int(market_value["expectedYears"])
@@ -1716,7 +1810,6 @@ def build_cpu_offer_contract(
         or (overall <= 76 and age >= 27 and potential <= overall + 1)
     )
 
-    # CPU treats true fringe players like roster-spot signings
     if fringe_player:
         return normalize_contract({
             "startYear": get_current_season_year(league_data),
@@ -1724,28 +1817,85 @@ def build_cpu_offer_contract(
             "option": None,
         })
 
-    # Teams below minimum get more practical on low-end players
-    if below_min and overall <= 78:
-        year1_salary = max(MIN_DEAL, int(round_to_nearest(expected_year1 * 0.55, base = 1_000)))
-        return normalize_contract({
-            "startYear": get_current_season_year(league_data),
-            "salaryByYear": [year1_salary],
-            "option": None,
-        })
+    # Teams trying to fill spots should get much more practical on high 70s / low 80s players
+    if below_min:
+        if overall <= 78:
+            practical_mult = 0.50 if age >= 29 else 0.58
+            practical_years = 1
+            year1_salary = max(
+                MIN_DEAL,
+                int(round_to_nearest(expected_year1 * practical_mult, base = 1_000))
+            )
+            return normalize_contract({
+                "startYear": get_current_season_year(league_data),
+                "salaryByYear": [year1_salary],
+                "option": None,
+            })
 
-    multiplier = 0.90 + (0.10 * rng.random()) + (0.04 * (current_day / max(1, max_days)))
+        if overall <= 80:
+            practical_mult = 0.68 if age >= 29 else 0.76
+            practical_years = 1 if age >= 29 else 2
+            year1_salary = max(
+                MIN_DEAL,
+                int(round_to_nearest(expected_year1 * practical_mult, base = 1_000))
+            )
+            return normalize_contract({
+                "startYear": get_current_season_year(league_data),
+                "salaryByYear": build_salary_by_year(year1_salary, practical_years),
+                "option": None,
+            })
+
+        if overall <= 83:
+            practical_mult = 0.84 if age >= 28 else 0.92
+            practical_years = min(2, expected_years)
+            year1_salary = max(
+                MIN_DEAL,
+                int(round_to_nearest(expected_year1 * practical_mult, base = 1_000))
+            )
+            return normalize_contract({
+                "startYear": get_current_season_year(league_data),
+                "salaryByYear": build_salary_by_year(year1_salary, practical_years),
+                "option": None,
+            })
+
+    multiplier = 0.92 + (0.08 * rng.random()) + (0.10 * (current_day / max(1, max_days)))
 
     if direction == "contending" and age >= 29:
-        multiplier += 0.03
+        multiplier += 0.02
     if direction == "rebuilding" and age <= 25 and potential - overall >= 2:
         multiplier += 0.02
-    if overall >= 85:
+    if overall >= 86:
+        multiplier += 0.05
+    if overall >= 83:
         multiplier += 0.04
+    if age >= 30 and overall <= 82:
+        multiplier -= 0.06
 
-    year1_salary = int(round_to_nearest(clamp(expected_year1 * multiplier, MIN_DEAL, MAX_SALARY), base = 1_000))
+    if 24 <= age <= 27 and overall >= 83:
+        multiplier += 0.08
+    if age <= 27 and overall >= 82 and off_rating >= 86 and scoring_rating >= 86:
+        multiplier += 0.05
+
+    if 24 <= age <= 27 and overall >= 83:
+        multiplier = max(multiplier, 1.04)
+
+    year1_salary = int(
+        round_to_nearest(
+            clamp(expected_year1 * multiplier, MIN_DEAL, MAX_SALARY),
+            base = 1_000,
+        )
+    )
+
     years = expected_years
 
-    if direction == "contending" and age >= 31:
+    if overall <= 78:
+        years = max(years, 2 if age <= 29 else 1)
+    elif overall <= 83:
+        years = max(years, 3 if age <= 29 else 2)
+    else:
+        years = max(years, 4 if age <= 30 else 3)
+
+    if direction == "contending" and age >= 32:
         years = max(1, years - 1)
     elif direction in ["rebuilding", "retooling"] and age <= 25:
         years = min(4, years + 1)
@@ -1764,6 +1914,7 @@ def generate_cpu_offers_for_day(
     user_team_name: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     state = ensure_free_agency_state(league_data)
+    refresh_free_agent_market_values(league_data)
     current_day = int(num(state.get("currentDay"), 1))
     max_days = int(num(state.get("maxDays"), DEFAULT_FREE_AGENCY_DAYS))
     season_year = get_current_season_year(league_data)
@@ -1829,7 +1980,14 @@ def generate_cpu_offers_for_day(
                 continue
 
             fit = estimate_team_free_agent_fit(team, player)
-            min_fit_threshold = 0.34 if actual_roster_count < min_roster_target else 0.52
+            min_fit_threshold = 0.30 if actual_roster_count < min_roster_target else 0.46
+
+            if overall >= 82:
+                min_fit_threshold -= 0.05
+            if current_day >= max_days - 1:
+                min_fit_threshold -= 0.04
+
+            min_fit_threshold = max(0.28, min_fit_threshold)
             if fit["interestScore"] < min_fit_threshold:
                 continue
 
@@ -2041,7 +2199,7 @@ def finalize_free_agent_signing_from_offer(
         return None
 
     snapshot = get_team_cap_snapshot(league_data, chosen_offer.get("teamName"))
-    contract = normalize_contract(chosen_offer.get("contract"))
+    contract = apply_free_agency_start_year(league_data, chosen_offer.get("contract"))
     offered_current_salary = get_contract_salary_for_year(contract, get_current_season_year(league_data))
     allow_minimum_exception = is_minimum_contract_for_current_year(
         league_data = league_data,
@@ -2183,8 +2341,8 @@ def initialize_free_agency_period(
 ) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
 
-    for player in updated.setdefault("freeAgents", []):
-        player["marketValue"] = estimate_market_value(player)
+    updated.setdefault("freeAgents", [])
+    refresh_free_agent_market_values(updated)
 
     state = ensure_free_agency_state(updated)
     state["isActive"] = True
@@ -2219,6 +2377,7 @@ def advance_free_agency_day(
 ) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
     state = ensure_free_agency_state(updated)
+    refresh_free_agent_market_values(updated)
 
     if not state.get("isActive"):
         return {
@@ -2355,7 +2514,7 @@ def get_market_acceptance_threshold(
         or (overall <= 76 and age >= 27 and potential <= overall + 1)
     )
 
-    if fringe_player and offer_count == 0 and offered_years == 1 and offered_aav >= MIN_DEAL:
+    if fringe_player and offer_count == 0 and offered_years <= 2 and offered_aav >= MIN_DEAL:
         return {
             "requiredAAV": MIN_DEAL,
             "autoAccept": True,
@@ -2368,15 +2527,51 @@ def get_market_acceptance_threshold(
 
     if offer_count == 0:
         if fringe_player:
-            required_aav = max(MIN_DEAL, int(round(min_acceptable_aav * (0.55 - 0.15 * day_progress))))
+            accept_mult = 0.50 - (0.20 * day_progress)
         elif overall <= 80:
-            required_aav = max(MIN_DEAL, int(round(min_acceptable_aav * (0.78 - 0.10 * day_progress))))
+            accept_mult = 0.60 - (0.16 * day_progress)
+        elif overall <= 83:
+            accept_mult = 0.74 - (0.12 * day_progress)
+        elif overall <= 85:
+            accept_mult = 0.96 - (0.05 * day_progress)
         else:
-            required_aav = max(MIN_DEAL, int(round(min_acceptable_aav * (0.92 - 0.05 * day_progress))))
-    else:
+            accept_mult = 0.86 - (0.06 * day_progress)
+
+        if age >= 30 and overall <= 82:
+            accept_mult -= 0.05
+        if age >= 32 and overall <= 78:
+            accept_mult -= 0.05
+
+        accept_mult = clamp(accept_mult, 0.45, 0.96)
+
         required_aav = max(
             MIN_DEAL,
-            int(round(max(best_live_aav * 0.98, min_acceptable_aav * 0.90)))
+            int(round(min_acceptable_aav * accept_mult))
+        )
+
+        if overall >= 84:
+            required_aav = max(
+                required_aav,
+                int(round(max(MIN_DEAL, market_value["expectedAAV"] * 0.92)))
+            )
+        elif overall >= 82:
+            required_aav = max(
+                required_aav,
+                int(round(max(MIN_DEAL, market_value["expectedAAV"] * 0.86)))
+            )
+    else:
+        best_offer_mult = 0.94 if overall <= 83 else 0.96
+        market_floor_mult = 0.84 if overall <= 83 else 0.90
+
+        if age >= 30 and overall <= 82:
+            market_floor_mult -= 0.04
+
+        required_aav = max(
+            MIN_DEAL,
+            int(round(max(
+                best_live_aav * best_offer_mult,
+                min_acceptable_aav * market_floor_mult,
+            )))
         )
 
     return {
@@ -2520,7 +2715,10 @@ def sign_free_agent(
         }
 
     signed_player = copy.deepcopy(player)
-    signed_player["contract"] = evaluation["contract"]
+    signed_player["contract"] = apply_free_agency_start_year(
+        updated,
+        evaluation["contract"],
+    )
     signed_player["marketValue"] = estimate_market_value(signed_player)
 
     free_agents.pop(player_idx)

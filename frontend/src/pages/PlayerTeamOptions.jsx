@@ -117,7 +117,120 @@ function DataPill({ children, tone = "neutral" }) {
     </div>
   );
 }
+function getTeamFilterOptions(rows) {
+  const teams = Array.from(
+    new Set((rows || []).map((row) => row?.teamName).filter(Boolean))
+  ).sort();
 
+  return ["ALL", ...teams];
+}
+
+function filterRowsByTeam(rows, teamFilter) {
+  if (!Array.isArray(rows)) return [];
+  if (!teamFilter || teamFilter === "ALL") return rows;
+  return rows.filter((row) => row?.teamName === teamFilter);
+}
+
+function buildKeyInterestRows(expiredContracts, playerOptions, teamOptions) {
+  const out = [];
+
+  for (const row of expiredContracts || []) {
+    if (Number(row?.overall || 0) >= 85) {
+      out.push({
+        ...row,
+        interestType: "expired_contract",
+      });
+    }
+  }
+
+  for (const row of playerOptions || []) {
+    if (Number(row?.overall || 0) >= 85) {
+      out.push({
+        ...row,
+        interestType: "player_option",
+      });
+    }
+  }
+
+  for (const row of teamOptions || []) {
+    if (Number(row?.overall || 0) >= 85) {
+      out.push({
+        ...row,
+        interestType: "team_option",
+      });
+    }
+  }
+
+  const seen = new Set();
+  const deduped = [];
+
+  for (const row of out) {
+    const key = `${row?.playerName || ""}__${row?.teamName || ""}__${row?.interestType || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+
+  return deduped.sort((a, b) => {
+    const ovrDiff = Number(b?.overall || 0) - Number(a?.overall || 0);
+    if (ovrDiff !== 0) return ovrDiff;
+
+    const teamA = String(a?.teamName || "");
+    const teamB = String(b?.teamName || "");
+    if (teamA !== teamB) return teamA.localeCompare(teamB);
+
+    return String(a?.playerName || "").localeCompare(String(b?.playerName || ""));
+  });
+}
+
+function SectionControls({
+  isShown,
+  onShowAll,
+  onHideAll,
+  teamFilter,
+  onTeamFilterChange,
+  filterOptions,
+}) {
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <select
+        value={teamFilter}
+        onChange={(e) => onTeamFilterChange(e.target.value)}
+        className="px-3 py-2 rounded-lg bg-neutral-700 border border-white/10 text-white text-sm"
+      >
+        {filterOptions.map((team) => (
+          <option key={team} value={team}>
+            {team === "ALL" ? "All Teams" : team}
+          </option>
+        ))}
+      </select>
+
+      <button
+        onClick={onShowAll}
+        disabled={isShown}
+        className={`px-3 py-2 rounded-lg text-sm font-semibold transition ${
+          isShown
+            ? "bg-neutral-700 text-white/35 cursor-not-allowed"
+            : "bg-neutral-700 hover:bg-neutral-600 text-white"
+        }`}
+      >
+        Show All
+      </button>
+
+      <button
+        onClick={onHideAll}
+        disabled={!isShown}
+        className={`px-3 py-2 rounded-lg text-sm font-semibold transition ${
+          !isShown
+            ? "bg-neutral-700 text-white/35 cursor-not-allowed"
+            : "bg-neutral-700 hover:bg-neutral-600 text-white"
+        }`}
+      >
+        Hide All
+      </button>
+    </div>
+  );
+}
 export default function PlayerTeamOptions() {
   const navigate = useNavigate();
   const { leagueData, setLeagueData, selectedTeam, setSelectedTeam } = useGame();
@@ -129,9 +242,25 @@ export default function PlayerTeamOptions() {
   const [previewData, setPreviewData] = useState(null);
   const [appliedData, setAppliedData] = useState(null);
   const [userTeamOptionChoices, setUserTeamOptionChoices] = useState({});
-  const [loadingPreview, setLoadingPreview] = useState(false);
-  const [loadingApply, setLoadingApply] = useState(false);
-  const [error, setError] = useState("");
+ const [loadingPreview, setLoadingPreview] = useState(false);
+const [loadingApply, setLoadingApply] = useState(false);
+const [error, setError] = useState("");
+
+const [sectionVisibility, setSectionVisibility] = useState({
+  keyInterest: true,
+  playerOptions: true,
+  teamOptions: true,
+  expiredContracts: true,
+  resolutionLog: true,
+});
+
+const [sectionTeamFilters, setSectionTeamFilters] = useState({
+  keyInterest: "ALL",
+  playerOptions: "ALL",
+  teamOptions: "ALL",
+  expiredContracts: "ALL",
+  resolutionLog: "ALL",
+});
 
   useEffect(() => {
     setWorkingLeagueData(leagueData || null);
@@ -261,6 +390,23 @@ export default function PlayerTeamOptions() {
   const playerOptions = previewData?.playerOptions || [];
   const teamOptions = previewData?.teamOptions || [];
   const decisionLog = appliedData?.decisionLog || [];
+  const resolutionLogFilterOptions = useMemo(() => {
+  return getTeamFilterOptions(decisionLog);
+}, [decisionLog]);
+
+const filteredDecisionLog = useMemo(() => {
+  const filtered = filterRowsByTeam(decisionLog, sectionTeamFilters.resolutionLog);
+
+  return [...filtered].sort((a, b) => {
+    const teamDiff = String(a?.teamName || "").localeCompare(String(b?.teamName || ""));
+    if (teamDiff !== 0) return teamDiff;
+
+    const typeDiff = String(a?.type || "").localeCompare(String(b?.type || ""));
+    if (typeDiff !== 0) return typeDiff;
+
+    return String(a?.playerName || "").localeCompare(String(b?.playerName || ""));
+  });
+}, [decisionLog, sectionTeamFilters.resolutionLog]);
 
   const allUserChoicesMade = useMemo(() => {
     if (!pendingUserTeamOptions.length) return true;
@@ -275,11 +421,51 @@ export default function PlayerTeamOptions() {
     });
   }, [pendingUserTeamOptions, userTeamOptionChoices]);
 
-  const previewSummary = previewData?.summary || {};
-  const appliedSummary = appliedData?.summary || {};
+const previewSummary = previewData?.summary || {};
+const appliedSummary = appliedData?.summary || {};
 
-  const selectedTeamName = selectedTeam?.name || null;
-  const optionsComplete = !!offseasonState?.optionsComplete || !!appliedData?.ok;
+const selectedTeamName = selectedTeam?.name || null;
+const optionsComplete = !!offseasonState?.optionsComplete || !!appliedData?.ok;
+
+const cpuTeamOptions = useMemo(() => {
+  return (teamOptions || []).filter((row) => row?.teamName !== selectedTeamName);
+}, [teamOptions, selectedTeamName]);
+
+const keyInterestRows = useMemo(() => {
+  return buildKeyInterestRows(expiredContracts, playerOptions, teamOptions);
+}, [expiredContracts, playerOptions, teamOptions]);
+
+const keyInterestFilterOptions = useMemo(() => {
+  return getTeamFilterOptions(keyInterestRows);
+}, [keyInterestRows]);
+
+const playerOptionFilterOptions = useMemo(() => {
+  return getTeamFilterOptions(playerOptions);
+}, [playerOptions]);
+
+const teamOptionFilterOptions = useMemo(() => {
+  return getTeamFilterOptions(cpuTeamOptions);
+}, [cpuTeamOptions]);
+
+const expiredContractFilterOptions = useMemo(() => {
+  return getTeamFilterOptions(expiredContracts);
+}, [expiredContracts]);
+
+const filteredKeyInterestRows = useMemo(() => {
+  return filterRowsByTeam(keyInterestRows, sectionTeamFilters.keyInterest);
+}, [keyInterestRows, sectionTeamFilters.keyInterest]);
+
+const filteredPlayerOptions = useMemo(() => {
+  return filterRowsByTeam(playerOptions, sectionTeamFilters.playerOptions);
+}, [playerOptions, sectionTeamFilters.playerOptions]);
+
+const filteredCpuTeamOptions = useMemo(() => {
+  return filterRowsByTeam(cpuTeamOptions, sectionTeamFilters.teamOptions);
+}, [cpuTeamOptions, sectionTeamFilters.teamOptions]);
+
+const filteredExpiredContracts = useMemo(() => {
+  return filterRowsByTeam(expiredContracts, sectionTeamFilters.expiredContracts);
+}, [expiredContracts, sectionTeamFilters.expiredContracts]);
 
   const resolveOptions = async () => {
     if (!workingLeagueData) {
@@ -373,6 +559,62 @@ export default function PlayerTeamOptions() {
       [key]: value,
     }));
   };
+  const showSection = (sectionKey) => {
+  setSectionVisibility((prev) => ({
+    ...prev,
+    [sectionKey]: true,
+  }));
+};
+
+const hideSection = (sectionKey) => {
+  setSectionVisibility((prev) => ({
+    ...prev,
+    [sectionKey]: false,
+  }));
+};
+
+const setSectionTeamFilter = (sectionKey, value) => {
+  setSectionTeamFilters((prev) => ({
+    ...prev,
+    [sectionKey]: value,
+  }));
+};
+
+const renderKeyInterestExtraNode = (row) => {
+  if (row?.interestType === "expired_contract") {
+    return <DataPill>Expiring Deal</DataPill>;
+  }
+
+  if (row?.interestType === "player_option") {
+    return (
+      <>
+        <DataPill tone="orange">Player Option</DataPill>
+        <DataPill tone="orange">
+          {row?.playerOptionDecision?.exerciseOption ? "Likely Opt In" : "Likely Free Agency"}
+        </DataPill>
+      </>
+    );
+  }
+
+  if (row?.interestType === "team_option") {
+    const isUserTeam = row?.teamName === selectedTeamName;
+
+    return (
+      <>
+        <DataPill tone="green">Team Option</DataPill>
+        <DataPill tone="green">
+          {isUserTeam
+            ? "User Decision"
+            : row?.cpuTeamOptionDecision?.exerciseOption
+            ? "Likely Exercise"
+            : "Likely Decline"}
+        </DataPill>
+      </>
+    );
+  }
+
+  return null;
+};
 
   const renderRow = (row, idx, extraNode = null) => {
     const logo = teamLogoMap[row?.teamName] || "";
@@ -597,126 +839,210 @@ export default function PlayerTeamOptions() {
               </div>
             )}
           </SectionShell>
-
           <SectionShell
-            title="Player Options"
-            subtitle="These are auto-resolved by the Python logic when you finalize this stage."
-          >
-            {!playerOptions.length ? (
-              <div className="px-6 py-14 text-center text-white/50">
-                No player options this offseason.
-              </div>
-            ) : (
-              <div className="divide-y divide-white/5">
-                {playerOptions.map((row, idx) =>
-                  renderRow(
-                    row,
-                    idx,
-                    <DataPill tone="orange">
-                      {row?.playerOptionDecision?.exerciseOption ? "Likely Opt In" : "Likely Free Agency"}
-                    </DataPill>
-                  )
-                )}
-              </div>
-            )}
-          </SectionShell>
+  title="Players of Key Interest"
+  subtitle="High-impact players (85+ OVR) who are expiring, on a player option, or on a team option this offseason."
+  rightNode={
+    <SectionControls
+      isShown={sectionVisibility.keyInterest}
+      onShowAll={() => showSection("keyInterest")}
+      onHideAll={() => hideSection("keyInterest")}
+      teamFilter={sectionTeamFilters.keyInterest}
+      onTeamFilterChange={(value) => setSectionTeamFilter("keyInterest", value)}
+      filterOptions={keyInterestFilterOptions}
+    />
+  }
+>
+  {!sectionVisibility.keyInterest ? (
+    <div className="px-6 py-14 text-center text-white/50">
+      Section hidden. Click Show All to expand.
+    </div>
+  ) : !filteredKeyInterestRows.length ? (
+    <div className="px-6 py-14 text-center text-white/50">
+      No key interest players match this filter.
+    </div>
+  ) : (
+    <div className="divide-y divide-white/5">
+      {filteredKeyInterestRows.map((row, idx) =>
+        renderRow(row, idx, renderKeyInterestExtraNode(row))
+      )}
+    </div>
+  )}
+</SectionShell>
+<SectionShell
+  title="Player Options"
+  subtitle="These are auto-resolved by the Python logic when you finalize this stage."
+  rightNode={
+    <SectionControls
+      isShown={sectionVisibility.playerOptions}
+      onShowAll={() => showSection("playerOptions")}
+      onHideAll={() => hideSection("playerOptions")}
+      teamFilter={sectionTeamFilters.playerOptions}
+      onTeamFilterChange={(value) => setSectionTeamFilter("playerOptions", value)}
+      filterOptions={playerOptionFilterOptions}
+    />
+  }
+>
+  {!sectionVisibility.playerOptions ? (
+    <div className="px-6 py-14 text-center text-white/50">
+      Section hidden. Click Show All to expand.
+    </div>
+  ) : !filteredPlayerOptions.length ? (
+    <div className="px-6 py-14 text-center text-white/50">
+      No player options match this filter.
+    </div>
+  ) : (
+    <div className="divide-y divide-white/5">
+      {filteredPlayerOptions.map((row, idx) =>
+        renderRow(
+          row,
+          idx,
+          <DataPill tone="orange">
+            {row?.playerOptionDecision?.exerciseOption ? "Likely Opt In" : "Likely Free Agency"}
+          </DataPill>
+        )
+      )}
+    </div>
+  )}
+</SectionShell>
+<SectionShell
+  title="CPU Team Options"
+  subtitle="CPU teams will automatically decide whether to keep or decline these players."
+  rightNode={
+    <SectionControls
+      isShown={sectionVisibility.teamOptions}
+      onShowAll={() => showSection("teamOptions")}
+      onHideAll={() => hideSection("teamOptions")}
+      teamFilter={sectionTeamFilters.teamOptions}
+      onTeamFilterChange={(value) => setSectionTeamFilter("teamOptions", value)}
+      filterOptions={teamOptionFilterOptions}
+    />
+  }
+>
+  {!sectionVisibility.teamOptions ? (
+    <div className="px-6 py-14 text-center text-white/50">
+      Section hidden. Click Show All to expand.
+    </div>
+  ) : !filteredCpuTeamOptions.length ? (
+    <div className="px-6 py-14 text-center text-white/50">
+      No CPU team options match this filter.
+    </div>
+  ) : (
+    <div className="divide-y divide-white/5">
+      {filteredCpuTeamOptions.map((row, idx) =>
+        renderRow(
+          row,
+          idx,
+          <DataPill tone="green">
+            {row?.cpuTeamOptionDecision?.exerciseOption ? "Likely Exercise" : "Likely Decline"}
+          </DataPill>
+        )
+      )}
+    </div>
+  )}
+</SectionShell>
 
-          <SectionShell
-            title="CPU Team Options"
-            subtitle="CPU teams will automatically decide whether to keep or decline these players."
-          >
-            {!teamOptions.length ? (
-              <div className="px-6 py-14 text-center text-white/50">
-                No team options this offseason.
-              </div>
-            ) : (
-              <div className="divide-y divide-white/5">
-                {teamOptions.map((row, idx) =>
-                  renderRow(
-                    row,
-                    idx,
-                    <DataPill tone="green">
-                      {row?.cpuTeamOptionDecision?.exerciseOption ? "Likely Exercise" : "Likely Decline"}
-                    </DataPill>
-                  )
-                )}
-              </div>
-            )}
-          </SectionShell>
+<SectionShell
+  title="Expired Contracts"
+  subtitle="These players will enter free agency when you resolve this stage."
+  rightNode={
+    <SectionControls
+      isShown={sectionVisibility.expiredContracts}
+      onShowAll={() => showSection("expiredContracts")}
+      onHideAll={() => hideSection("expiredContracts")}
+      teamFilter={sectionTeamFilters.expiredContracts}
+      onTeamFilterChange={(value) => setSectionTeamFilter("expiredContracts", value)}
+      filterOptions={expiredContractFilterOptions}
+    />
+  }
+>
+  {!sectionVisibility.expiredContracts ? (
+    <div className="px-6 py-14 text-center text-white/50">
+      Section hidden. Click Show All to expand.
+    </div>
+  ) : !filteredExpiredContracts.length ? (
+    <div className="px-6 py-14 text-center text-white/50">
+      No expired contracts match this filter.
+    </div>
+  ) : (
+    <div className="divide-y divide-white/5">
+      {filteredExpiredContracts.map((row, idx) =>
+        renderRow(
+          row,
+          idx,
+          <DataPill>Expiring Deal</DataPill>
+        )
+      )}
+    </div>
+  )}
+</SectionShell>
 
-          <SectionShell
-            title="Expired Contracts"
-            subtitle="These players will enter free agency when you resolve this stage."
-          >
-            {!expiredContracts.length ? (
-              <div className="px-6 py-14 text-center text-white/50">
-                No expired contracts to process.
-              </div>
-            ) : (
-              <div className="divide-y divide-white/5">
-                {expiredContracts.map((row, idx) =>
-                  renderRow(
-                    row,
-                    idx,
-                    <DataPill>Expiring Deal</DataPill>
-                  )
-                )}
-              </div>
-            )}
-          </SectionShell>
+{optionsComplete && (
+  <SectionShell
+    title="Resolution Log"
+    subtitle="These are the option and contract decisions that were applied to the league."
+    rightNode={
+      <SectionControls
+        isShown={sectionVisibility.resolutionLog}
+        onShowAll={() => showSection("resolutionLog")}
+        onHideAll={() => hideSection("resolutionLog")}
+        teamFilter={sectionTeamFilters.resolutionLog}
+        onTeamFilterChange={(value) => setSectionTeamFilter("resolutionLog", value)}
+        filterOptions={resolutionLogFilterOptions}
+      />
+    }
+  >
+    {!sectionVisibility.resolutionLog ? (
+      <div className="px-6 py-14 text-center text-white/50">
+        Section hidden. Click Show All to expand.
+      </div>
+    ) : !filteredDecisionLog.length ? (
+      <div className="px-6 py-14 text-center text-white/50">
+        No decision log available for this filter.
+      </div>
+    ) : (
+      <div className="divide-y divide-white/5">
+        {filteredDecisionLog.map((row, idx) => {
+          const logo = teamLogoMap[row?.teamName] || "";
 
-          {optionsComplete && (
-            <SectionShell
-              title="Resolution Log"
-              subtitle="These are the option and contract decisions that were applied to the league."
+          return (
+            <div
+              key={`${row?.playerName || "decision"}-${idx}`}
+              className="px-6 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4 hover:bg-white/5 transition"
             >
-              {!decisionLog.length ? (
-                <div className="px-6 py-14 text-center text-white/50">
-                  No decision log available.
+              <div className="flex items-center gap-4 min-w-0">
+                {logo ? (
+                  <img
+                    src={logo}
+                    alt={row?.teamName || "Team"}
+                    className="h-10 w-10 object-contain"
+                  />
+                ) : (
+                  <div className="h-10 w-10 rounded bg-white/5 border border-white/10" />
+                )}
+
+                <div className="min-w-0">
+                  <div className="text-lg font-bold text-white truncate">
+                    {row?.playerName || "Unknown Player"}
+                  </div>
+                  <div className="text-sm text-white/55 mt-1">
+                    {row?.teamName || "Unknown Team"} • {String(row?.type || "").replaceAll("_", " ")}
+                  </div>
                 </div>
-              ) : (
-                <div className="divide-y divide-white/5">
-                  {decisionLog.map((row, idx) => {
-                    const logo = teamLogoMap[row?.teamName] || "";
+              </div>
 
-                    return (
-                      <div
-                        key={`${row?.playerName || "decision"}-${idx}`}
-                        className="px-6 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4 hover:bg-white/5 transition"
-                      >
-                        <div className="flex items-center gap-4 min-w-0">
-                          {logo ? (
-                            <img
-                              src={logo}
-                              alt={row?.teamName || "Team"}
-                              className="h-10 w-10 object-contain"
-                            />
-                          ) : (
-                            <div className="h-10 w-10 rounded bg-white/5 border border-white/10" />
-                          )}
-
-                          <div className="min-w-0">
-                            <div className="text-lg font-bold text-white truncate">
-                              {row?.playerName || "Unknown Player"}
-                            </div>
-                            <div className="text-sm text-white/55 mt-1">
-                              {row?.teamName || "Unknown Team"} • {String(row?.type || "").replaceAll("_", " ")}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3 flex-wrap">
-                          <DataPill tone="orange">
-                            {String(row?.result || "resolved").replaceAll("_", " ")}
-                          </DataPill>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </SectionShell>
-          )}
+              <div className="flex items-center gap-3 flex-wrap">
+                <DataPill tone="orange">
+                  {String(row?.result || "resolved").replaceAll("_", " ")}
+                </DataPill>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    )}
+  </SectionShell>
+)}
         </div>
 
         <div className="mt-8 flex justify-center gap-4 flex-wrap">
