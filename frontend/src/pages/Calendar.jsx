@@ -6,6 +6,7 @@ import { simulateOneGame } from "@/api/simEnginePy";
 import { computeSeasonAwards } from "@/api/simEnginePy";
 import { queueSim } from "@/api/simQueue";
 import LZString from "lz-string";
+import { createPortal } from "react-dom";
 window.LZString = LZString;
 
 
@@ -333,14 +334,13 @@ function generateFullSeasonSchedule(teams, startDate, endDate) {
       id: cid,
       name: t.name,
       logo:
-  t.logo ||
-  t.teamLogo ||
-  t.logoUrl ||
-  t.image ||
-  t.img ||
-  t.newTeamLogo ||
-  "",
-
+        t.logo ||
+        t.teamLogo ||
+        t.logoUrl ||
+        t.image ||
+        t.img ||
+        t.newTeamLogo ||
+        "",
     };
   });
 
@@ -359,8 +359,13 @@ function generateFullSeasonSchedule(teams, startDate, endDate) {
 
   for (let c = 0; c < baseCycles; c++) {
     const pack =
-      c % 2 === 0 ? [...single, ...mirrored] : [...single, ...mirrored].reverse();
-    for (const rd of pack) rounds.push(rd.map((g) => ({ ...g })));
+      c % 2 === 0
+        ? [...single, ...mirrored]
+        : [...single, ...mirrored].reverse();
+
+    for (const rd of pack) {
+      rounds.push(rd.map((g) => ({ ...g })));
+    }
   }
 
   for (let i = 0; i < remainingPerTeam; i++) {
@@ -369,61 +374,47 @@ function generateFullSeasonSchedule(teams, startDate, endDate) {
   }
 
   const days = rangeDays(startDate, endDate);
-  const D = days.length;
   const byDate = {};
 
-  const teamGames = Object.fromEntries(
-    canonicalIds.map((id) => [id, 0])
-  );
-
-function placeGame(game, dayIndex) {
-  const dateStr = fmt(days[dayIndex]);
-
-  // ensure no team already plays this day
-  const todaysGames = byDate[dateStr] || [];
-  if (todaysGames.some(g =>
-    g.homeId === game.home ||
-    g.awayId === game.home ||
-    g.homeId === game.away ||
-    g.awayId === game.away
-  )) {
-    return false; // can't play here
+  for (const d of days) {
+    byDate[fmt(d)] = [];
   }
 
-  // team game caps
-  if (teamGames[game.home] >= target) return false;
-  if (teamGames[game.away] >= target) return false;
+  const allStarBreak = new Set([
+    fmt(new Date(endDate.getFullYear(), 1, 13)),
+    fmt(new Date(endDate.getFullYear(), 1, 14)),
+    fmt(new Date(endDate.getFullYear(), 1, 15)),
+  ]);
 
-  const idx = todaysGames.length;
-  byDate[dateStr] = [...todaysGames, {
-    id: `${dateStr}_${game.home}_vs_${game.away}_${idx}`,
-    date: dateStr,
-    homeId: game.home,
-    awayId: game.away,
-    home: byCanon[game.home].name,
-    away: byCanon[game.away].name,
-    homeLogo: byCanon[game.home].logo,
-    awayLogo: byCanon[game.away].logo,
-    homeTeamObj: byCanon[game.home],
-    awayTeamObj: byCanon[game.away],
-    played: false
-  }];
+  const playableDays = days.filter((d) => !allStarBreak.has(fmt(d)));
 
-  teamGames[game.home]++;
-  teamGames[game.away]++;
-  return true;
-}
+  const roundCount = rounds.length;
+  const lastPlayableIndex = playableDays.length - 1;
+  const lastRoundIndex = Math.max(1, roundCount - 1);
 
+  for (let roundIndex = 0; roundIndex < roundCount; roundIndex++) {
+    const daySlot = Math.floor(
+      (roundIndex * lastPlayableIndex) / lastRoundIndex
+    );
 
-  let dayPointer = 0;
+    const dateStr = fmt(playableDays[daySlot]);
+    const roundGames = rounds[roundIndex];
 
-  for (const rd of rounds) {
-    for (const g of rd) {
-      while (!placeGame(g, dayPointer)) {
-        dayPointer = (dayPointer + 1) % D;
-      }
-      dayPointer = (dayPointer + 1) % D;
-    }
+    roundGames.forEach((g, gameIndex) => {
+      byDate[dateStr].push({
+        id: `${dateStr}_${g.home}_vs_${g.away}_${roundIndex}_${gameIndex}`,
+        date: dateStr,
+        homeId: g.home,
+        awayId: g.away,
+        home: byCanon[g.home].name,
+        away: byCanon[g.away].name,
+        homeLogo: byCanon[g.home].logo,
+        awayLogo: byCanon[g.away].logo,
+        homeTeamObj: byCanon[g.home],
+        awayTeamObj: byCanon[g.away],
+        played: false,
+      });
+    });
   }
 
   return { byDate, list: Object.values(byDate).flat() };
@@ -2454,126 +2445,158 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
         </div>
                   </div>
 
-      {/* ---------------------------- ACTION MODAL ---------------------------- */}
-      {actionModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center">
-          <div className="bg-neutral-900 border border-neutral-700 rounded p-5 w-[500px]">
-            <h2 className="text-lg font-bold mb-3">
-              {actionModal.game.away} @ {actionModal.game.home}
-            </h2>
+{/* ---------------------------- ACTION MODAL ---------------------------- */}
+{actionModal &&
+  createPortal(
+    <div
+      className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center p-4"
+      onClick={() => setActionModal(null)}
+    >
+      <div
+        className="w-full max-w-[500px] rounded-xl border border-neutral-700 bg-neutral-900 p-5 shadow-2xl text-white"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="mb-4 text-lg font-bold text-white">
+          {actionModal.game.away} @ {actionModal.game.home}
+        </h2>
 
-            {!actionModal.game.played ? (
-              <div className="flex flex-col gap-2">
-                <button
-                  className="px-4 py-2 bg-neutral-700 rounded"
-                  onClick={() =>
-                    handleSimOnlyGame(actionModal.dateStr, actionModal.game)
-                  }
-                >
-                  Simulate this game
-                </button>
-                <button
-                  className="px-4 py-2 bg-orange-600 rounded"
-                  onClick={() => handleSimToDate(actionModal.dateStr)}
-                >
-                  Simulate to this date
-                </button>
-                <button
-                  className="px-4 py-2 bg-blue-600 rounded"
-                  onClick={handleSimSeason}
-                >
-                  Simulate full season
-                </button>
-                <button
-                  className="px-4 py-2 bg-neutral-700 rounded"
-                  onClick={() => setActionModal(null)}
-                >
-                  Close
-                </button>
+        {!actionModal.game.played ? (
+          <div className="flex flex-col gap-2">
+            <button
+              className="px-4 py-2 bg-neutral-700 rounded hover:bg-neutral-600"
+              onClick={() =>
+                handleSimOnlyGame(actionModal.dateStr, actionModal.game)
+              }
+            >
+              Simulate this game
+            </button>
+
+            <button
+              className="px-4 py-2 bg-orange-600 rounded hover:bg-orange-500"
+              onClick={() => handleSimToDate(actionModal.dateStr)}
+            >
+              Simulate to this date
+            </button>
+
+            <button
+              className="px-4 py-2 bg-blue-600 rounded hover:bg-blue-500"
+              onClick={handleSimSeason}
+            >
+              Simulate full season
+            </button>
+
+            <button
+              className="px-4 py-2 bg-neutral-700 rounded hover:bg-neutral-600"
+              onClick={() => setActionModal(null)}
+            >
+              Close
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <button
+              className="px-4 py-2 bg-neutral-700 rounded hover:bg-neutral-600"
+              onClick={() => {
+                const r = resultsById[actionModal.game.id];
+                setActionModal(null);
+                setBoxModal({ game: actionModal.game, result: r });
+              }}
+            >
+              View Box Score
+            </button>
+
+            <button
+              className="px-4 py-2 bg-neutral-700 rounded hover:bg-neutral-600"
+              onClick={() => setActionModal(null)}
+            >
+              Close
+            </button>
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body
+  )}
+
+{/* ---------------------------- BOX SCORE MODAL ---------------------------- */}
+{boxModal &&
+  createPortal(
+    <div
+      className="fixed inset-0 z-[210] bg-black/70 flex items-center justify-center p-4"
+      onClick={() => setBoxModal(null)}
+    >
+      <div
+        className="w-full max-w-[880px] max-h-[90vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-5 shadow-2xl text-white"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex justify-between">
+          <h3 className="text-xl font-bold">
+            {boxModal.game.away} @ {boxModal.game.home} •{" "}
+            {boxModal.result?.winner?.score}
+            {boxModal.result?.winner?.ot ? " (OT)" : ""}
+          </h3>
+
+          <button
+            className="px-2 py-1 bg-neutral-700 rounded hover:bg-neutral-600"
+            onClick={() => setBoxModal(null)}
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          {["away", "home"].map((side) => {
+            const name =
+              side === "away" ? boxModal.game.away : boxModal.game.home;
+            const rows = boxModal.result.box?.[side] || [];
+
+            return (
+              <div key={side} className="bg-neutral-800 p-3 rounded-lg">
+                <h4 className="font-bold mb-2">{name}</h4>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left border-b border-neutral-700">
+                      <th className="py-1">Player</th>
+                      <th>MIN</th>
+                      <th>PTS</th>
+                      <th>REB</th>
+                      <th>AST</th>
+                      <th>STL</th>
+                      <th>BLK</th>
+                      <th>FG</th>
+                      <th>3P</th>
+                      <th>FT</th>
+                      <th>TO</th>
+                      <th>PF</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((p, i) => (
+                      <tr key={i} className="border-b border-neutral-800">
+                        <td className="py-1">{p.player}</td>
+                        <td>{p.min}</td>
+                        <td>{p.pts}</td>
+                        <td>{p.reb}</td>
+                        <td>{p.ast}</td>
+                        <td>{p.stl}</td>
+                        <td>{p.blk}</td>
+                        <td>{p.fg}</td>
+                        <td>{p["3p"]}</td>
+                        <td>{p.ft}</td>
+                        <td>{p.to}</td>
+                        <td>{p.pf}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            ) : (
-              <button
-                className="px-4 py-2 bg-neutral-700 rounded"
-                onClick={() => {
-                  const r = resultsById[actionModal.game.id];
-                  setActionModal(null);
-                  setBoxModal({ game: actionModal.game, result: r });
-                }}
-              >
-                View Box Score
-              </button>
-            )}
-          </div>
+            );
+          })}
         </div>
-      )}
-
-      {/* ---------------------------- BOX SCORE MODAL ---------------------------- */}
-      {boxModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center">
-          <div className="bg-neutral-900 border border-neutral-700 rounded-xl w-[880px] max-h-[90vh] overflow-auto p-5">
-            <div className="flex justify-between mb-4">
-              <h3 className="text-xl font-bold">
-                {boxModal.game.away} @ {boxModal.game.home} •{" "}
-                {boxModal.result?.winner?.score}
-                {boxModal.result?.winner?.ot ? " (OT)" : ""}
-              </h3>
-              <button
-                className="px-2 py-1 bg-neutral-700 rounded"
-                onClick={() => setBoxModal(null)}
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              {["away", "home"].map((side) => {
-                const name =
-                  side === "away" ? boxModal.game.away : boxModal.game.home;
-                const rows = boxModal.result.box?.[side] || [];
-
-
-                return (
-                  <div key={side} className="bg-neutral-800 p-3 rounded-lg">
-                    <h4 className="font-bold mb-2">{name}</h4>
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-neutral-700">
-                          <th className="py-1">Player</th>
-                          <th className="py-1">MIN</th>
-                          <th className="py-1">PTS</th>
-                          <th className="py-1">REB</th>
-                          <th className="py-1">AST</th>
-                          <th className="py-1">STL</th>
-                          <th className="py-1">BLK</th>
-                          <th className="py-1">FG</th>
-                          <th className="py-1">3P</th>
-                          <th className="py-1">FT</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rows.map((r, i) => (
-                          <tr key={i} className="border-b border-neutral-700">
-                            <td>{r.player}</td>
-                            <td>{r.min}</td>
-                            <td>{r.pts}</td>
-                            <td>{r.reb}</td>
-                            <td>{r.ast}</td>
-                            <td>{r.stl}</td>
-                            <td>{r.blk}</td>
-                            <td>{r.fg}</td>
-                            <td>{r["3p"]}</td>
-                            <td>{r.ft}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
+      </div>
+    </div>,
+    document.body
+  )}
     </div>
   );
 }
