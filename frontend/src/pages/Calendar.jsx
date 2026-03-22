@@ -25,68 +25,119 @@ function slugifyId(v) {
     .replace(/(^-|-$)/g, "");
 }
 window.__slug = slugifyId;
+function readSavedGameplan(teamName) {
+  try {
+    const raw = localStorage.getItem(`gameplan_${teamName}`);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readFlatMinutesFromGameplan(teamName) {
+  const saved = readSavedGameplan(teamName);
+  if (!saved) return {};
+
+  if (
+    saved.minutes &&
+    typeof saved.minutes === "object" &&
+    !Array.isArray(saved.minutes)
+  ) {
+    return { ...saved.minutes };
+  }
+
+  // backward compatibility with old flat format
+  return { ...saved };
+}
+
+function buildRoleMapFromMinutes(minutesObj, orderedNames = null) {
+  const names = Array.isArray(orderedNames) && orderedNames.length
+    ? orderedNames.filter((name) => Number(minutesObj?.[name] || 0) > 0)
+    : Object.entries(minutesObj || {})
+        .filter(([, m]) => Number(m) > 0)
+        .map(([name]) => name);
+
+  const role = {};
+
+  for (let i = 0; i < names.length; i++) {
+    const nm = names[i];
+    if (i < 5) role[nm] = "starter";
+    else role[nm] = "bench";
+  }
+
+  if (names.length > 5) {
+    role[names[5]] = "sixth_man";
+  }
+
+  return role;
+}
+
+function loadTeamRoleMap(teamName) {
+  const saved = readSavedGameplan(teamName);
+  if (!saved) return {};
+
+  const minutesObj =
+    saved.minutes &&
+    typeof saved.minutes === "object" &&
+    !Array.isArray(saved.minutes)
+      ? saved.minutes
+      : saved;
+
+  const orderedNames = Array.isArray(saved.order) ? saved.order : null;
+
+  return buildRoleMapFromMinutes(minutesObj, orderedNames);
+}
 
 
 /* -------------------------------------------------------------------------- */
 /*                              SIMULATION WRAPPER                             */
 /* -------------------------------------------------------------------------- */
 async function simOneSafe(game, leagueData, teams) {
-  const p = (async () => {
-// inside simOneSafe
-    if (window.__debugSimLogs) {
-      window.__lastGame = game;
-      console.log("⏳ simOneSafe starting:", game.home, "vs", game.away);
+  if (window.__debugSimLogs) {
+    window.__lastGame = game;
+    console.log("⏳ simOneSafe starting:", game.home, "vs", game.away);
+  }
+
+  const homeSource = teams.find((t) => slugifyId(t.name) === game.homeId);
+  const awaySource = teams.find((t) => slugifyId(t.name) === game.awayId);
+
+  if (!homeSource || !awaySource) {
+    throw new Error(`Team lookup failed: ${game.homeId} / ${game.awayId}`);
+  }
+
+  ensureGameplansForLeague(leagueData);
+
+  const homeTeamObj = structuredClone(homeSource);
+  const awayTeamObj = structuredClone(awaySource);
+
+  for (const p of homeTeamObj.players || []) {
+    if (!p.secondaryPos || String(p.secondaryPos).trim() === "") {
+      p.secondaryPos = null;
     }
+  }
 
-    const homeTeamObj = teams.find(
-      (t) => slugifyId(t.name) === game.homeId
-    );
-    const awayTeamObj = teams.find(
-      (t) => slugifyId(t.name) === game.awayId
-    );
-
-    if (!homeTeamObj || !awayTeamObj) {
-      throw new Error(
-        `Team lookup failed: ${game.homeId} / ${game.awayId}`
-      );
+  for (const p of awayTeamObj.players || []) {
+    if (!p.secondaryPos || String(p.secondaryPos).trim() === "") {
+      p.secondaryPos = null;
     }
+  }
 
-    // -------------------------------
-    // 🔥 SANITIZE SECONDARY POSITIONS
-    // -------------------------------
-    for (const p of homeTeamObj.players) {
-      if (!p.secondaryPos || p.secondaryPos.trim() === "") {
-        p.secondaryPos = null;
-      }
-    }
-    for (const p of awayTeamObj.players) {
-      if (!p.secondaryPos || p.secondaryPos.trim() === "") {
-        p.secondaryPos = null;
-      }
-    }
-    // -------------------------------
-ensureGameplansForLeague(leagueData);
+  homeTeamObj.minutes = readFlatMinutesFromGameplan(homeTeamObj.name);
+  awayTeamObj.minutes = readFlatMinutesFromGameplan(awayTeamObj.name);
 
-homeTeamObj.minutes = JSON.parse(
-  localStorage.getItem(`gameplan_${homeTeamObj.name}`) || "{}"
-);
+  if (window.__debugSimLogs) {
+    console.log("[simOneSafe] home minutes keys =", Object.keys(homeTeamObj.minutes || {}));
+    console.log("[simOneSafe] away minutes keys =", Object.keys(awayTeamObj.minutes || {}));
+  }
 
-awayTeamObj.minutes = JSON.parse(
-  localStorage.getItem(`gameplan_${awayTeamObj.name}`) || "{}"
-);
-
-
-
-    return await simulateOneGame({
-      homeTeam: homeTeamObj,
-      awayTeam: awayTeamObj,
-      leagueData,
-    });
-  })();
-
-  // timeout promise
-return p;
-
+  return await simulateOneGame({
+    homeTeam: homeTeamObj,
+    awayTeam: awayTeamObj,
+    leagueData,
+  });
 }
 // ---------------------------------------------------------------------------
 // Helper: run ONE game with retries, using simOneSafe + queueSim
@@ -1363,36 +1414,6 @@ function parsePair(s) {
 // ------------------------------------------------------------
 // SIXTH MAN ROLE HELPERS (starter vs sixth vs bench)
 // ------------------------------------------------------------
-function loadTeamMinutes(teamName) {
-  try {
-    return JSON.parse(localStorage.getItem(`gameplan_${teamName}`) || "{}");
-  } catch {
-    return {};
-  }
-}
-
-// Uses OBJECT KEY ORDER (your saved gameplan preserves rotation order)
-// first 5 keys => starters, 6th key => sixth_man, rest => bench
-function buildRoleMapFromMinutes(minutesObj) {
-  const entries = Object.entries(minutesObj || {}).filter(
-    ([, m]) => Number(m) > 0
-  );
-
-  const names = entries.map(([name]) => name); // preserves order
-  const role = {};
-
-  for (let i = 0; i < names.length; i++) {
-    const nm = names[i];
-    if (i < 5) role[nm] = "starter";
-    else role[nm] = "bench";
-  }
-
-  if (names.length > 5) {
-    role[names[5]] = "sixth_man";
-  }
-
-  return role;
-}
 
 // Mutates slim.box rows by adding row.role = "starter" | "sixth_man" | "bench"
 function annotateSlimWithRoles(slim, homeRoleMap, awayRoleMap) {
@@ -1831,8 +1852,8 @@ const handleSimOnlyGame = async (dateStr, game) => {
   }
 
   const result = slimResult(full);
-  const homeRoles = buildRoleMapFromMinutes(loadTeamMinutes(game.home));
-  const awayRoles = buildRoleMapFromMinutes(loadTeamMinutes(game.away));
+ const homeRoles = loadTeamRoleMap(game.home);
+const awayRoles = loadTeamRoleMap(game.away);
   annotateSlimWithRoles(result, homeRoles, awayRoles);
 
 
@@ -1926,8 +1947,8 @@ for (const d of sorted) {
 
           const slim = slimResult(full);
 
-          const homeRoles = buildRoleMapFromMinutes(loadTeamMinutes(g.home));
-          const awayRoles = buildRoleMapFromMinutes(loadTeamMinutes(g.away));
+const homeRoles = loadTeamRoleMap(g.home);
+const awayRoles = loadTeamRoleMap(g.away);
           annotateSlimWithRoles(slim, homeRoles, awayRoles);
 
           newResults[g.id] = slim;
@@ -1991,12 +2012,7 @@ function sanitizeTeam(team) {
   }
 
   // load minutes
-  const key = `gameplan_${team.name}`;
-  try {
-    clean.minutes = JSON.parse(localStorage.getItem(key) || "{}");
-  } catch {
-    clean.minutes = {};
-  }
+clean.minutes = readFlatMinutesFromGameplan(team.name);
 
   // defaults for missing attrs
   clean.strategy = clean.strategy || {};
@@ -2116,8 +2132,8 @@ for (let di = 0; di < dates.length; di++) {
 
           const slim = slimResult(full);
 
-          const homeRoles = buildRoleMapFromMinutes(loadTeamMinutes(g.home));
-          const awayRoles = buildRoleMapFromMinutes(loadTeamMinutes(g.away));
+const homeRoles = loadTeamRoleMap(g.home);
+const awayRoles = loadTeamRoleMap(g.away);
           annotateSlimWithRoles(slim, homeRoles, awayRoles);
 
           results[g.id] = slim;

@@ -5,6 +5,7 @@ import { useGame } from "../context/GameContext";
 import LZString from "lz-string";
 import { simulateOneGame, computeFinalsMvp } from "@/api/simEnginePy"; // ✅ PATCH (Finals MVP)
 import { queueSim } from "@/api/simQueue";
+import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import styles from "./Playoffs.module.css";
 
 /* ---------------- utils ---------------- */
@@ -13,6 +14,33 @@ function getAllTeamsFromLeague(leagueData) {
   if (Array.isArray(leagueData.teams)) return leagueData.teams;
   if (leagueData.conferences) return Object.values(leagueData.conferences).flat();
   return [];
+}
+function readSavedGameplan(teamName) {
+  try {
+    const raw = localStorage.getItem(`gameplan_${teamName}`);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readFlatMinutesFromGameplan(teamName) {
+  const saved = readSavedGameplan(teamName);
+  if (!saved) return {};
+
+  if (
+    saved.minutes &&
+    typeof saved.minutes === "object" &&
+    !Array.isArray(saved.minutes)
+  ) {
+    return { ...saved.minutes };
+  }
+
+  // backward compatibility with old flat format
+  return { ...saved };
 }
 
 /* -----------------------------
@@ -368,33 +396,40 @@ function sortWithTiebreak(teamNames, standings) {
 async function simOneSafe({ homeName, awayName, leagueData, teamsByName }) {
   const homeTeamObj = teamsByName[homeName];
   const awayTeamObj = teamsByName[awayName];
-  if (!homeTeamObj || !awayTeamObj) throw new Error("Team lookup failed");
+
+  if (!homeTeamObj || !awayTeamObj) {
+    throw new Error(`Team lookup failed: ${homeName} / ${awayName}`);
+  }
+
+  ensureGameplansForLeague(leagueData);
 
   const home = structuredClone(homeTeamObj);
   const away = structuredClone(awayTeamObj);
 
   for (const p of home.players || []) {
-    if (!p.secondaryPos || String(p.secondaryPos).trim() === "") p.secondaryPos = null;
+    if (!p.secondaryPos || String(p.secondaryPos).trim() === "") {
+      p.secondaryPos = null;
+    }
   }
+
   for (const p of away.players || []) {
-    if (!p.secondaryPos || String(p.secondaryPos).trim() === "") p.secondaryPos = null;
+    if (!p.secondaryPos || String(p.secondaryPos).trim() === "") {
+      p.secondaryPos = null;
+    }
   }
 
-  try {
-    home.minutes = JSON.parse(localStorage.getItem(`gameplan_${home.name}`) || "{}");
-  } catch {
-    home.minutes = {};
-  }
-  try {
-    away.minutes = JSON.parse(localStorage.getItem(`gameplan_${away.name}`) || "{}");
-  } catch {
-    away.minutes = {};
+  home.minutes = readFlatMinutesFromGameplan(home.name);
+  away.minutes = readFlatMinutesFromGameplan(away.name);
+
+  if (window.__debugSimLogs) {
+    console.log("[Playoffs simOneSafe] home minutes keys =", Object.keys(home.minutes || {}));
+    console.log("[Playoffs simOneSafe] away minutes keys =", Object.keys(away.minutes || {}));
   }
 
-  // ✅ keep your calendar-style consistency (including your existing simEngine behavior)
   const full = await queueSim(() =>
     simulateOneGame({ homeTeam: home, awayTeam: away, leagueData })
   );
+
   return full;
 }
 

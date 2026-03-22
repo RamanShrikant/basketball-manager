@@ -3,7 +3,69 @@
     import { useGame } from "../context/GameContext";
     import { useNavigate } from "react-router-dom";
     
+    const GAMEPLAN_VERSION = 2;
 
+function getRosterSignature(teamPlayers = []) {
+    return [...teamPlayers]
+        .map((p) =>
+            [
+                p.name || "",
+                p.pos || "",
+                p.secondaryPos || "",
+                p.overall || 0,
+            ].join("|")
+        )
+        .sort()
+        .join("||");
+}
+
+function buildGameplanPayload(teamName, teamPlayers, sortedPlayers, minutesObj) {
+    const orderedMinutes = {};
+    for (const p of sortedPlayers) {
+        orderedMinutes[p.name] = Number(minutesObj[p.name] || 0);
+    }
+    for (const p of teamPlayers) {
+        if (!(p.name in orderedMinutes)) {
+            orderedMinutes[p.name] = Number(minutesObj[p.name] || 0);
+        }
+    }
+
+    return {
+        version: GAMEPLAN_VERSION,
+        teamName,
+        rosterSignature: getRosterSignature(teamPlayers),
+        order: sortedPlayers.map((p) => p.name),
+        minutes: orderedMinutes,
+        updatedAt: Date.now(),
+    };
+}
+
+function saveGameplanToStorage(teamName, teamPlayers, sortedPlayers, minutesObj) {
+    if (!teamName) return;
+
+    const payload = buildGameplanPayload(
+        teamName,
+        teamPlayers,
+        sortedPlayers,
+        minutesObj
+    );
+
+    localStorage.setItem(`gameplan_${teamName}`, JSON.stringify(payload));
+}
+
+function readGameplanFromStorage(teamName) {
+    if (!teamName) return null;
+
+    const raw = localStorage.getItem(`gameplan_${teamName}`);
+    if (!raw) return null;
+
+    try {
+        return JSON.parse(raw);
+    } catch (e) {
+        console.warn("Bad saved gameplan, ignoring:", e);
+        return null;
+    }
+}
     export default function CoachGameplan() {
     const { leagueData, selectedTeam, setSelectedTeam } = useGame(); // ⬅️ added leagueData + setSelectedTeam
     const [players, setPlayers] = useState([]);
@@ -267,60 +329,87 @@
 
     // --- Load + build on team change ---
     useEffect(() => {
-        if (!selectedTeam) return;
-        const key = `gameplan_${selectedTeam.name}`;
-        const saved = localStorage.getItem(key);
-        const teamPlayers = selectedTeam.players || [];
+    if (!selectedTeam) return;
 
-if (saved) {
-    const obj = JSON.parse(saved);
+    const teamPlayers = selectedTeam.players || [];
+    const saved = readGameplanFromStorage(selectedTeam.name);
+    const currentRosterSignature = getRosterSignature(teamPlayers);
 
-    // Always rebuild sorted ordering using minutes
-    const sortedNames = Object.keys(obj);
+    let loaded = false;
 
-    const sortedPlayers = sortedNames
-        .map(name => teamPlayers.find(p => p.name === name))
-        .filter(Boolean);
+    if (saved) {
+        const savedMinutes =
+            saved && typeof saved.minutes === "object" && saved.minutes !== null
+                ? saved.minutes
+                : saved;
 
-    // fallback in case order mismatch
-    const missing = teamPlayers.filter(p => !sortedNames.includes(p.name));
-    const finalSorted = [...sortedPlayers, ...missing];
+        const savedOrder = Array.isArray(saved?.order)
+            ? saved.order
+            : Object.keys(savedMinutes || {});
 
-    setMinutes(obj);
-    setPlayers(finalSorted);
-    setTeamRatings(calculateTeamRatings(finalSorted, obj));
-}
- else {
-        const { sorted, obj } = buildSmartRotation(teamPlayers);
-        setMinutes(obj);
-        setPlayers(sorted);
-        setTeamRatings(calculateTeamRatings(sorted, obj));
+        const rosterMatches =
+            saved?.rosterSignature === currentRosterSignature &&
+            savedOrder.length > 0;
+
+        if (rosterMatches) {
+            const orderedPlayers = [
+                ...savedOrder
+                    .map((name) => teamPlayers.find((p) => p.name === name))
+                    .filter(Boolean),
+                ...teamPlayers.filter((p) => !savedOrder.includes(p.name)),
+            ];
+
+            const normalizedMinutes = {};
+            for (const p of teamPlayers) {
+                normalizedMinutes[p.name] = Number(savedMinutes?.[p.name] || 0);
+            }
+
+            setPlayers(orderedPlayers);
+            setMinutes(normalizedMinutes);
+            setTeamRatings(calculateTeamRatings(orderedPlayers, normalizedMinutes));
+            loaded = true;
         }
-    }, [selectedTeam]); // switching teams auto-loads
+    }
+
+    if (!loaded) {
+        const { sorted, obj } = buildSmartRotation(teamPlayers);
+        setPlayers(sorted);
+        setMinutes(obj);
+        setTeamRatings(calculateTeamRatings(sorted, obj));
+
+        // important: auto-save rebuilt plan immediately
+        saveGameplanToStorage(selectedTeam.name, teamPlayers, sorted, obj);
+    }
+}, [selectedTeam]);
 
 const handleSave = () => {
     if (!selectedTeam) return;
 
-    setMinutes(prev => {
-        localStorage.setItem(
-            `gameplan_${selectedTeam.name}`,
-            JSON.stringify(prev)
-        );
-        return prev;
-    });
+    saveGameplanToStorage(
+        selectedTeam.name,
+        selectedTeam.players || [],
+        players,
+        minutes
+    );
 
     setToast(true);
     setTimeout(() => setToast(false), 2000);
 };
 
 
-    const handleAutoRebuild = () => {
-        if (!selectedTeam) return;
-        const { sorted, obj } = buildSmartRotation(selectedTeam.players);
-        setPlayers(sorted);
-        setMinutes(obj);
-        setTeamRatings(calculateTeamRatings(sorted, obj));
-    };
+const handleAutoRebuild = () => {
+    if (!selectedTeam) return;
+
+    const teamPlayers = selectedTeam.players || [];
+    const { sorted, obj } = buildSmartRotation(teamPlayers);
+
+    setPlayers(sorted);
+    setMinutes(obj);
+    setTeamRatings(calculateTeamRatings(sorted, obj));
+
+    // important: rebuild should persist immediately
+    saveGameplanToStorage(selectedTeam.name, teamPlayers, sorted, obj);
+};
 
     const handleMinuteChange = (name, value) => {
         const numRaw = Math.round(Number(value));

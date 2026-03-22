@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import * as simEngine from "../api/simEnginePy.js";
+import { rebuildGameplansForLeague } from "../utils/ensureGameplans";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 
@@ -647,14 +648,23 @@ const isOffseasonMode =
     return { percent, label: "Not Interested", barClass: "bg-red-500" };
   }, [offerEvaluation, offerEvalLoading]);
 
-  const handleContinueToProgression = () => {
-    if (userRosterInvalid) {
-      setRosterActionError(rosterValidationMessage);
-      return;
-    }
+const handleContinueToProgression = () => {
+  if (userRosterInvalid) {
+    setRosterActionError(rosterValidationMessage);
+    return;
+  }
 
-    navigate("/player-progression");
-  };
+  try {
+    const result = rebuildGameplansForLeague(workingLeagueData, {
+      skipUserTeamName: selectedTeam?.name || null,
+    });
+    console.log("[FreeAgents] rebuilt CPU gameplans before progression:", result);
+  } catch (err) {
+    console.error("[FreeAgents] failed to rebuild CPU gameplans", err);
+  }
+
+  navigate("/player-progression");
+};
 
   const handleInitializeFreeAgency = async () => {
     if (!workingLeagueData) return;
