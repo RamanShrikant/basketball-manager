@@ -89,13 +89,37 @@
 /* Scroll row */
 .scrollRow {
   display: flex;
-  overflow-x: auto;
+  overflow-x: scroll;
+  overflow-y: hidden;
   align-items: center;
   gap: 3rem;
   width: 96%;
-  padding: 1rem 2rem;
+  padding: 1rem 2rem 1.35rem 2rem;
   margin-bottom: 130px;
   scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+
+  scrollbar-width: thin;
+  scrollbar-color: #f97316 rgba(255, 255, 255, 0.08);
+}
+
+.scrollRow::-webkit-scrollbar {
+  height: 14px;
+}
+
+.scrollRow::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+}
+
+.scrollRow::-webkit-scrollbar-thumb {
+  background: linear-gradient(90deg, #fb923c, #ea580c);
+  border-radius: 9999px;
+  border: 2px solid rgba(0, 0, 0, 0);
+}
+
+.scrollRow::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(90deg, #fdba74, #f97316);
 }
 
 /* Team card */
