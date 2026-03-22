@@ -236,8 +236,15 @@ const MiniStandingsPanel = ({
   onToggle,
   collapsedLabel,
   side,
+  awardsEnabled = false,
+  showAwards = false,
+  onToggleAwards,
+  awardTab = "mvp",
+  awardRows = [],
+  onPrevAward,
+  onNextAward,
 }) => {
-  const sideClass = side === "left" ? "left-5" : "right-5";
+  const sideClass = side === "left" ? "left-2" : "right-2";
 
   if (hidden) {
     return (
@@ -253,40 +260,127 @@ const MiniStandingsPanel = ({
   }
 
   return (
-    <div className={`group fixed top-28 ${sideClass} z-40 w-44`}>
-      <div className="overflow-hidden rounded-xl border-2 border-white/60 bg-neutral-900 shadow-2xl"> 
+    <div className={`group fixed top-28 ${sideClass} z-40 w-52`}>
+      <div className="overflow-hidden rounded-xl border-2 border-white/60 bg-neutral-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-neutral-700 bg-neutral-800 px-3 py-2">
-          <h3 className="text-sm font-bold text-gray-200">{title}</h3>
-          <button
-            onClick={onToggle}
-            className="rounded bg-neutral-700 px-2 py-1 text-xs hover:bg-neutral-600"
-          >
-            Hide
-          </button>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-bold text-gray-200">
+              {showAwards ? "Awards" : title}
+            </h3>
+
+            {showAwards && (
+              <div className="flex items-center gap-1 rounded bg-neutral-900/80 px-1 py-0.5">
+                <button
+                  onClick={onPrevAward}
+                  className="px-1 text-xs text-gray-300 hover:text-orange-400"
+                  title="Previous ladder"
+                >
+                  ◄
+                </button>
+
+                <span className="text-[11px] font-bold text-orange-400">
+                  {MINI_AWARD_LABELS[awardTab] || "MVP"}
+                </span>
+
+                <button
+                  onClick={onNextAward}
+                  className="px-1 text-xs text-gray-300 hover:text-orange-400"
+                  title="Next ladder"
+                >
+                  ►
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1">
+            {awardsEnabled && (
+              <button
+                onClick={onToggleAwards}
+                className="rounded bg-neutral-700 px-2 py-1 text-xs hover:bg-neutral-600"
+              >
+                {showAwards ? "Standings" : "Awards"}
+              </button>
+            )}
+
+            <button
+              onClick={onToggle}
+              className="rounded bg-neutral-700 px-2 py-1 text-xs hover:bg-neutral-600"
+            >
+              Hide
+            </button>
+          </div>
         </div>
 
-        <div className="standings-scrollbar max-h-[74vh] overflow-y-auto pr-1">
-          {rows.map((row, index) => (
-<div
-  key={row.team}
-  title={row.team}
-  className={`flex items-center gap-2 border-b border-neutral-800 px-3 py-2 last:border-b-0 ${
-    selectedTeamName === row.team
-      ? "bg-orange-600/20"
-      : "hover:bg-neutral-800/70"
-  }`}
->
-  <span className="w-4 text-xs text-gray-400">{index + 1}</span>
-  <Logo team={{ name: row.team, logo: row.logo }} size={32} />
+        {!showAwards ? (
+          <div className="standings-scrollbar max-h-[74vh] overflow-y-auto pr-1">
+            {rows.map((row, index) => (
+              <div
+                key={row.team}
+                title={row.team}
+                className={`flex items-center gap-2 border-b border-neutral-800 px-3 py-2 last:border-b-0 ${
+                  selectedTeamName === row.team
+                    ? "bg-orange-600/20"
+                    : "hover:bg-neutral-800/70"
+                }`}
+              >
+                <span className="w-4 text-xs text-gray-400">{index + 1}</span>
+                <Logo team={{ name: row.team, logo: row.logo }} size={32} />
 
-  <div className="flex items-center gap-1 text-sm font-semibold">
-    <span className="text-green-400">{row.w}</span>
-    <span className="text-gray-500">-</span>
-    <span className="text-red-400">{row.l}</span>
-  </div>
-</div>
-          ))}
-        </div>
+                <div className="flex items-center gap-1 text-sm font-semibold">
+                  <span className="text-green-400">{row.w}</span>
+                  <span className="text-gray-500">-</span>
+                  <span className="text-red-400">{row.l}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="standings-scrollbar max-h-[74vh] overflow-y-auto pr-1">
+            {!awardRows.length ? (
+              <div className="px-3 py-4 text-sm text-neutral-400">
+                No ladder data yet.
+              </div>
+            ) : (
+              awardRows.map((row, index) => (
+                <div
+                  key={`${awardTab}_${row.player}_${row.team}`}
+                  className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2 last:border-b-0 hover:bg-neutral-800/70"
+                  title={`${index + 1}. ${row.player}`}
+                >
+                  <span className="w-4 shrink-0 text-xs text-gray-400">
+                    {index + 1}
+                  </span>
+
+                  <div className="h-8 w-8 shrink-0 overflow-hidden rounded-full border border-neutral-700 bg-neutral-950">
+                    {row.headshot ? (
+                      <img
+                        src={row.headshot}
+                        alt={row.player}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="h-full w-full" />
+                    )}
+                  </div>
+
+                  <div className="shrink-0">
+                    <Logo
+                      team={{ name: row.team, logo: row.teamLogo }}
+                      size={18}
+                    />
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-gray-200">
+                      {row.player}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -722,7 +816,281 @@ function buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById) {
     wins: wins[t?.name] || 0,
   }));
 }
+const MINI_AWARD_TABS = ["mvp", "dpoy", "sixth_man"];
+const MINI_AWARD_LABELS = {
+  mvp: "MVP",
+  dpoy: "DPOY",
+  sixth_man: "6MOY",
+};
 
+const MINI_AWARD_LIMIT = 10;
+const MINI_AWARD_MIN_GAMES = 10;
+
+function awardStatsKey(player, team) {
+  return `${player}__${team}`;
+}
+
+function miniPerGame(total, gp) {
+  const games = Number(gp || 0);
+  return games > 0 ? Number(total || 0) / games : 0;
+}
+
+function miniPpg(p) {
+  return miniPerGame(p.pts, p.gp);
+}
+
+function miniApg(p) {
+  return miniPerGame(p.ast, p.gp);
+}
+
+function miniRpg(p) {
+  return miniPerGame(p.reb, p.gp);
+}
+
+function miniSpg(p) {
+  return miniPerGame(p.stl, p.gp);
+}
+
+function miniBpg(p) {
+  return miniPerGame(p.blk, p.gp);
+}
+
+function miniMpg(p) {
+  return miniPerGame(p.min, p.gp);
+}
+
+function miniNorm(v, vmax) {
+  if (vmax <= 0) return 0;
+  return Math.max(0, Math.min(1, v / vmax));
+}
+
+function miniNormDef(v, lo, hi) {
+  if (hi <= lo) return 0;
+  return Math.max(0, Math.min(1, (hi - v) / (hi - lo)));
+}
+
+function buildMiniAwardContext(players) {
+  if (!players.length) {
+    return {
+      ppg: 1,
+      apg: 1,
+      rpg: 1,
+      spg: 1,
+      bpg: 1,
+      wins: 82,
+      defLo: 90,
+      defHi: 120,
+    };
+  }
+
+  return {
+    ppg: Math.max(...players.map((p) => miniPpg(p)), 1),
+    apg: Math.max(...players.map((p) => miniApg(p)), 1),
+    rpg: Math.max(...players.map((p) => miniRpg(p)), 1),
+    spg: Math.max(...players.map((p) => miniSpg(p)), 1),
+    bpg: Math.max(...players.map((p) => miniBpg(p)), 1),
+    wins: Math.max(...players.map((p) => Number(p._team_wins || 0)), 1),
+    defLo: Math.min(...players.map((p) => Number(p.def_rating ?? 110))),
+    defHi: Math.max(...players.map((p) => Number(p.def_rating ?? 110))),
+  };
+}
+
+function calcMiniMvpScore(p, c) {
+  return (
+    0.30 * miniNorm(miniPpg(p), c.ppg) +
+    0.15 * miniNorm(miniApg(p), c.apg) +
+    0.15 * miniNorm(miniRpg(p), c.rpg) +
+    0.20 * miniNorm(Number(p._team_wins || 0), c.wins) +
+    0.075 * miniNorm(miniSpg(p), c.spg) +
+    0.075 * miniNorm(miniBpg(p), c.bpg) +
+    0.05 * miniNormDef(Number(p.def_rating ?? c.defHi), c.defLo, c.defHi)
+  );
+}
+
+function calcMiniDpoyScore(p, c) {
+  return (
+    0.35 * miniNorm(miniSpg(p), c.spg) +
+    0.35 * miniNorm(miniBpg(p), c.bpg) +
+    0.20 * miniNormDef(Number(p.def_rating ?? c.defHi), c.defLo, c.defHi) +
+    0.10 * miniNorm(Number(p._team_wins || 0), c.wins)
+  );
+}
+
+function calcMiniSixthManScore(p, c) {
+  return (
+    0.35 * miniNorm(miniPpg(p), c.ppg) +
+    0.20 * miniNorm(miniApg(p), c.apg) +
+    0.20 * miniNorm(miniRpg(p), c.rpg) +
+    0.10 * miniNorm(miniSpg(p), c.spg) +
+    0.10 * miniNorm(miniBpg(p), c.bpg) +
+    0.05 * miniNormDef(Number(p.def_rating ?? c.defHi), c.defLo, c.defHi)
+  );
+}
+
+function isMiniSixthManEligible(p) {
+  const gp = Number(p.gp || 0);
+  const starts = Number(p.started || 0);
+  const sixth = Number(p.sixth || 0);
+
+  return (
+    gp >= MINI_AWARD_MIN_GAMES &&
+    miniMpg(p) >= 14 &&
+    starts <= Math.floor(0.2 * gp) &&
+    sixth >= Math.max(5, Math.floor(0.25 * gp))
+  );
+}
+
+function buildMiniRosterInfoIndex(allTeams) {
+  const map = {};
+
+  for (const t of allTeams || []) {
+    const teamName = t?.name || t?.team;
+    if (!teamName) continue;
+
+    const teamLogo =
+      t.logo ||
+      t.teamLogo ||
+      t.newTeamLogo ||
+      t.logoUrl ||
+      t.image ||
+      t.img ||
+      null;
+
+    for (const pl of t?.players || []) {
+      const playerName = pl?.name || pl?.player;
+      if (!playerName) continue;
+
+      map[awardStatsKey(playerName, teamName)] = {
+        headshot:
+          pl?.portrait ||
+          pl?.image ||
+          pl?.photo ||
+          pl?.headshot ||
+          pl?.img ||
+          pl?.face ||
+          null,
+        teamLogo,
+        def_rating:
+          pl?.def_rating ??
+          pl?.defRating ??
+          pl?.defensive_rating ??
+          pl?.defensiveRating ??
+          pl?.drtg ??
+          pl?.defrtg ??
+          110,
+      };
+    }
+  }
+
+  return map;
+}
+
+function toMiniAwardRow(p, score) {
+  return {
+    player: p.player,
+    team: p.team,
+    headshot: p.headshot || null,
+    teamLogo: p.teamLogo || null,
+    _score: score,
+  };
+}
+
+function buildMiniAwardLadders(allTeams, statsMap, scheduleByDate, resultsById) {
+  const rosterInfoIndex = buildMiniRosterInfoIndex(allTeams);
+
+  const teamWinsRows = buildTeamsWithWinsForAwards(
+    allTeams,
+    scheduleByDate,
+    resultsById
+  );
+
+  const teamWinsMap = {};
+  for (const t of teamWinsRows) {
+    teamWinsMap[t.team] = Number(t.wins || 0);
+  }
+
+  const playerPool = [];
+
+  for (const t of allTeams || []) {
+    const teamName = t?.name || t?.team;
+    if (!teamName) continue;
+
+    for (const pl of t?.players || []) {
+      const playerName = pl?.name || pl?.player;
+      if (!playerName) continue;
+
+      const key = awardStatsKey(playerName, teamName);
+      const s = statsMap?.[key];
+      if (!s || Number(s.gp || 0) <= 0) continue;
+
+      const info = rosterInfoIndex[key] || {};
+
+      playerPool.push({
+        player: playerName,
+        team: teamName,
+        gp: Number(s.gp || 0),
+        min: Number(s.min || 0),
+        pts: Number(s.pts || 0),
+        reb: Number(s.reb || 0),
+        ast: Number(s.ast || 0),
+        stl: Number(s.stl || 0),
+        blk: Number(s.blk || 0),
+        started: Number(s.started || 0),
+        sixth: Number(s.sixth || 0),
+        def_rating: Number(info.def_rating ?? 110),
+        headshot: info.headshot || null,
+        teamLogo: info.teamLogo || null,
+        _team_wins: Number(teamWinsMap[teamName] || 0),
+      });
+    }
+  }
+
+  if (!playerPool.length) {
+    return {
+      mvp: [],
+      dpoy: [],
+      sixth_man: [],
+    };
+  }
+
+  const eligiblePool = playerPool.filter(
+    (p) => Number(p.gp || 0) >= MINI_AWARD_MIN_GAMES
+  );
+
+  const basePool = eligiblePool.length ? eligiblePool : playerPool;
+  const baseCtx = buildMiniAwardContext(basePool);
+
+  const mvp = basePool
+    .map((p) => toMiniAwardRow(p, calcMiniMvpScore(p, baseCtx)))
+    .sort((a, b) => b._score - a._score)
+    .slice(0, MINI_AWARD_LIMIT);
+
+  const dpoy = basePool
+    .map((p) => toMiniAwardRow(p, calcMiniDpoyScore(p, baseCtx)))
+    .sort((a, b) => b._score - a._score)
+    .slice(0, MINI_AWARD_LIMIT);
+
+  const strictSixthPool = basePool.filter((p) => isMiniSixthManEligible(p));
+  const fallbackSixthPool = basePool.filter(
+    (p) =>
+      miniMpg(p) >= 14 &&
+      Number(p.started || 0) <= Math.floor(0.4 * Number(p.gp || 0))
+  );
+
+  const sixthPool = strictSixthPool.length ? strictSixthPool : fallbackSixthPool;
+  const sixthCtx = buildMiniAwardContext(sixthPool.length ? sixthPool : basePool);
+
+  const sixth_man = (sixthPool.length ? sixthPool : [])
+    .map((p) => toMiniAwardRow(p, calcMiniSixthManScore(p, sixthCtx)))
+    .sort((a, b) => b._score - a._score)
+    .slice(0, MINI_AWARD_LIMIT);
+
+  return {
+    mvp,
+    dpoy,
+    sixth_man,
+  };
+}
 // ------------------------------------------------------------
 // AWARDS: attach def_rating to player season stat objects
 // by looking it up from leagueData rosters
@@ -1404,6 +1772,8 @@ const stopRef = useRef(false);
 const [stopRequested, setStopRequested] = useState(false);
 const [showWestStandings, setShowWestStandings] = useState(true);
 const [showEastStandings, setShowEastStandings] = useState(true);
+const [showAwardsPanel, setShowAwardsPanel] = useState(false);
+const [miniAwardTab, setMiniAwardTab] = useState("mvp");
 const CALENDAR_SCALE = 0.97;
 const requestStop = () => {
   if (!simLock) return;
@@ -1414,15 +1784,23 @@ const requestStop = () => {
 
 const openAllStarTeams = async () => {
   try {
+    const stats = loadPlayerStats();
+
+    console.log("[AllStars DEBUG] stats count =", Object.keys(stats || {}).length);
+    console.log("[AllStars DEBUG] first 5 stats =", Object.values(stats || {}).slice(0, 5));
+    console.log("[AllStars DEBUG] conferences =", leagueData?.conferences);
+
     const payload = {
       season: `${seasonYear}-${seasonYear + 1}`,
       cutoff_date: ALL_STAR_DATE,
       min_games: 12,
-      playerStats: loadPlayerStats(),
+      playerStats: stats,
       leagueData,
       scheduleByDate,
       resultsById,
     };
+
+    console.log("[AllStars DEBUG] payload =", payload);
 
     const result = await computeAllStars(payload);
     console.log("[AllStars] result =", result);
@@ -1919,6 +2297,8 @@ if (
 setAllStarPromptOpen(false);
 setAllStarOpen(false);
 setAllStarData(null);
+setShowAwardsPanel(false);
+setMiniAwardTab("mvp");
 
   const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
 
@@ -2107,6 +2487,34 @@ const conferenceStandings = useMemo(() => {
   };
 }, [teams, teamAgg, confByTeam]);
 
+const livePlayerStats = useMemo(() => {
+  return loadPlayerStats();
+}, [scheduleByDate, resultsById]);
+
+const miniAwardLadders = useMemo(() => {
+  return buildMiniAwardLadders(
+    teams,
+    livePlayerStats,
+    scheduleByDate,
+    resultsById
+  );
+}, [teams, livePlayerStats, scheduleByDate, resultsById]);
+
+const cycleMiniAwardTab = (dir) => {
+  setMiniAwardTab((prev) => {
+    const i = MINI_AWARD_TABS.indexOf(prev);
+    if (i === -1) return "mvp";
+
+    if (dir === "next") {
+      return MINI_AWARD_TABS[(i + 1) % MINI_AWARD_TABS.length];
+    }
+
+    return MINI_AWARD_TABS[
+      (i - 1 + MINI_AWARD_TABS.length) % MINI_AWARD_TABS.length
+    ];
+  });
+};
+
 /* -------------------------------------------------------------------------- */
 /*                               CALENDAR GRID                                */
 /* -------------------------------------------------------------------------- */
@@ -2213,25 +2621,39 @@ return (
     }
   `}
 </style>
-    <MiniStandingsPanel
-      title="West"
-      rows={conferenceStandings.west}
-      selectedTeamName={selectedTeam.name}
-      hidden={!showWestStandings}
-      onToggle={() => setShowWestStandings((v) => !v)}
-      collapsedLabel="Show West"
-      side="left"
-    />
+<MiniStandingsPanel
+  title="West"
+  rows={conferenceStandings.west}
+  selectedTeamName={selectedTeam.name}
+  hidden={!showWestStandings}
+  onToggle={() => setShowWestStandings((v) => !v)}
+  collapsedLabel="Show West"
+  side="left"
+  awardsEnabled={true}
+  showAwards={showWestAwardsPanel}
+  onToggleAwards={() => setShowWestAwardsPanel((v) => !v)}
+  awardTab={miniAwardTabWest}
+  awardRows={miniAwardLadders[miniAwardTabWest] || []}
+  onPrevAward={() => cycleMiniAwardTab("west", "prev")}
+  onNextAward={() => cycleMiniAwardTab("west", "next")}
+/>
 
-    <MiniStandingsPanel
-      title="East"
-      rows={conferenceStandings.east}
-      selectedTeamName={selectedTeam.name}
-      hidden={!showEastStandings}
-      onToggle={() => setShowEastStandings((v) => !v)}
-      collapsedLabel="Show East"
-      side="right"
-    />
+<MiniStandingsPanel
+  title="East"
+  rows={conferenceStandings.east}
+  selectedTeamName={selectedTeam.name}
+  hidden={!showEastStandings}
+  onToggle={() => setShowEastStandings((v) => !v)}
+  collapsedLabel="Show East"
+  side="right"
+  awardsEnabled={true}
+  showAwards={showAwardsPanel}
+  onToggleAwards={() => setShowAwardsPanel((v) => !v)}
+  awardTab={miniAwardTab}
+  awardRows={miniAwardLadders[miniAwardTab] || []}
+  onPrevAward={() => cycleMiniAwardTab("prev")}
+  onNextAward={() => cycleMiniAwardTab("next")}
+/>
 
 <div
   className="relative z-10 max-w-6xl mx-auto px-4 h-full flex flex-col"
