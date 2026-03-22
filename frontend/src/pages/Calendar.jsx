@@ -2621,22 +2621,15 @@ return (
     }
   `}
 </style>
-<MiniStandingsPanel
-  title="West"
-  rows={conferenceStandings.west}
-  selectedTeamName={selectedTeam.name}
-  hidden={!showWestStandings}
-  onToggle={() => setShowWestStandings((v) => !v)}
-  collapsedLabel="Show West"
-  side="left"
-  awardsEnabled={true}
-  showAwards={showWestAwardsPanel}
-  onToggleAwards={() => setShowWestAwardsPanel((v) => !v)}
-  awardTab={miniAwardTabWest}
-  awardRows={miniAwardLadders[miniAwardTabWest] || []}
-  onPrevAward={() => cycleMiniAwardTab("west", "prev")}
-  onNextAward={() => cycleMiniAwardTab("west", "next")}
-/>
+    <MiniStandingsPanel
+      title="West"
+      rows={conferenceStandings.west}
+      selectedTeamName={selectedTeam.name}
+      hidden={!showWestStandings}
+      onToggle={() => setShowWestStandings((v) => !v)}
+      collapsedLabel="Show West"
+      side="left"
+    />
 
 <MiniStandingsPanel
   title="East"
