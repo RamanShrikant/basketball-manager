@@ -99,6 +99,7 @@ function startWorker() {
       return;
     }
 
+
     // awards error
     if (msg.type === "awards-error") {
       const entry = pending.get(msg.requestId);
@@ -109,6 +110,31 @@ function startWorker() {
       pending.delete(msg.requestId);
       if (entry.timer) clearTimeout(entry.timer);
       const err = msg.error || "Awards compute failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ error: err });
+      return;
+    }
+if (msg.type === "all-stars-result") {
+  const entry = pending.get(msg.requestId);
+  if (!entry) {
+    console.warn("[simEnginePy] all-stars-result for unknown requestId", msg.requestId, msg);
+    return;
+  }
+  pending.delete(msg.requestId);
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.resolve(deepFromEntries(msg.payload));
+  return;
+}
+
+    if (msg.type === "all-stars-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] all-stars-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "All-Star compute failed";
       if (entry.reject) entry.reject(new Error(err));
       else entry.resolve({ error: err });
       return;
@@ -706,6 +732,39 @@ export function simulateBatchGames(games) {
 // ------------------------------------------------------------
 // PUBLIC API - SEASON AWARDS
 // ------------------------------------------------------------
+
+export function computeAllStars(payload = {}) {
+  startWorker();
+
+  const requestId = "AS" + counter++;
+  const TIMEOUT_MS = 12000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("ALL_STARS_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "compute-all-stars",
+      requestId,
+      payload: deepSanitize(payload),
+    });
+  });
+}
 export function computeSeasonAwards(players, meta = {}) {
   startWorker();
 

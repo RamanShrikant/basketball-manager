@@ -30,6 +30,7 @@ const pythonFiles = [
   "progression.py",
   "free_agency_logic.py",
   "retirement_logic.py",
+  "all_star_logic.py",
 ];
 
 async function init() {
@@ -198,7 +199,36 @@ res
     });
   }
 }
+async function computeAllStars(requestId, payload) {
+  try {
+    pyodide.globals.set("all_star_payload_js", pyodide.toPy(payload || {}));
 
+    const pyRes = await pyodide.runPythonAsync(`
+import importlib
+import all_star_logic
+importlib.reload(all_star_logic)
+from all_star_logic import compute_all_stars
+
+res = compute_all_stars(all_star_payload_js)
+res
+    `);
+
+    const allStarsOut = pyRes.toJs({ dict_converter: Object, create_pyproxies: false });
+
+    postMessage({
+      type: "all-stars-result",
+      requestId,
+      payload: allStarsOut,
+    });
+  } catch (err) {
+    console.error("[simWorkerV2] computeAllStars error:", err);
+    postMessage({
+      type: "all-stars-error",
+      requestId,
+      error: err.toString(),
+    });
+  }
+}
 // ------------------------------------------------------------
 // PLAYER PROGRESSION MODE
 // ------------------------------------------------------------
@@ -496,6 +526,9 @@ onmessage = async (e) => {
 
   if (msg.type === "simulate-single") {
     return simulateOneGame(msg.id, msg.home, msg.away);
+  }
+    if (msg.type === "compute-all-stars") {
+    return computeAllStars(msg.requestId, msg.payload || {});
   }
 
   if (msg.type === "simulate-batch") {

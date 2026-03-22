@@ -43,6 +43,7 @@ export default function TeamHub() {
     { name: "Statistics", path: "/player-stats" },
     { name: "Standings", path: "/standings" },
     { name: "Salary Table", path: "/salary-table" },
+    { name: "Award Tracker", path: "/award-tracker" },
   ];
 
   return (

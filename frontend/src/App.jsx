@@ -22,6 +22,7 @@ import FreeAgents from "./pages/FreeAgents.jsx";
 import OffseasonHub from "./pages/OffseasonHub";
 import PlayerRetirements from "./pages/PlayerRetirements";
 import PlayerTeamOptions from "./pages/PlayerTeamOptions";
+import AwardTracker from "./pages/AwardTracker.jsx";
 
 
 
@@ -56,6 +57,7 @@ function App() {
         <Route path="/player-progression" element={<PlayerProgression />} />
         <Route path="salary-table" element={<SalaryTable />} />
         <Route path="/free-agents" element={<FreeAgents />} />
+        <Route path="/award-tracker" element={<AwardTracker />} />
         <Route path="/offseason-hub" element={<OffseasonHub />} />
         <Route path="/player-team-options" element={<PlayerTeamOptions />} />
 <Route path="/player-retirements" element={<PlayerRetirements />} />

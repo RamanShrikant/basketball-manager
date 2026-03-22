@@ -2,11 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
-import { simulateOneGame } from "@/api/simEnginePy";
-import { computeSeasonAwards } from "@/api/simEnginePy";
+import { simulateOneGame, computeSeasonAwards, computeAllStars } from "@/api/simEnginePy";
 import { queueSim } from "@/api/simQueue";
 import LZString from "lz-string";
 import { createPortal } from "react-dom";
+import AllStars from "./AllStars";
+
 window.LZString = LZString;
 
 
@@ -1391,18 +1392,48 @@ const [boxModal, setBoxModal] = useState(null);
 const [actionModal, setActionModal] = useState(null);
 const [simLock, setSimLock] = useState(false);
 
-// ✅ stop control (ADD THIS)
+const [allStarPromptOpen, setAllStarPromptOpen] = useState(false);
+const [allStarOpen, setAllStarOpen] = useState(false);
+const [allStarData, setAllStarData] = useState(null);
+
+const ALL_STAR_DATE = fmt(new Date(seasonYear + 1, 1, 13));
+const allStarHandledRef = useRef(false);
+
+// ✅ stop control
 const stopRef = useRef(false);
 const [stopRequested, setStopRequested] = useState(false);
 const [showWestStandings, setShowWestStandings] = useState(true);
 const [showEastStandings, setShowEastStandings] = useState(true);
 const CALENDAR_SCALE = 0.97;
-
 const requestStop = () => {
   if (!simLock) return;
   stopRef.current = true;
   setStopRequested(true);
   console.log("[Sim] stop requested");
+};
+
+const openAllStarTeams = async () => {
+  try {
+    const payload = {
+      season: `${seasonYear}-${seasonYear + 1}`,
+      cutoff_date: ALL_STAR_DATE,
+      min_games: 12,
+      playerStats: loadPlayerStats(),
+      leagueData,
+      scheduleByDate,
+      resultsById,
+    };
+
+    const result = await computeAllStars(payload);
+    console.log("[AllStars] result =", result);
+
+    setAllStarData(result);
+    setAllStarOpen(true);
+    setAllStarPromptOpen(false);
+    allStarHandledRef.current = true;
+  } catch (err) {
+    console.error("[AllStars] Failed to compute all stars:", err);
+  }
 };
 
 
@@ -1459,6 +1490,9 @@ const handleSimToDate = async (dateStr) => {
 
   if (simLock) return;
 
+  setActionModal(null);
+  setBoxModal(null);
+
   // ✅ reset stop state at the start of THIS run
   stopRef.current = false;
   setStopRequested(false);
@@ -1475,14 +1509,26 @@ const handleSimToDate = async (dateStr) => {
   const staticTeams = teams;
 
   try {
-    for (const d of sorted) {
-      // ✅ allow stop between dates
-      if (stopRef.current) break;
+for (const d of sorted) {
+  // ✅ allow stop between dates
+  if (stopRef.current) break;
 
-      if (d > dateStr) break;
+  if (d > dateStr) break;
 
-      const dayGames = upd[d];
-      if (!Array.isArray(dayGames)) continue;
+  if (d === ALL_STAR_DATE && !allStarHandledRef.current) {
+    savePlayerStats(playerStats);
+    cleanupGhostGames(upd, newResults);
+    saveSchedule(upd);
+    saveResults(newResults);
+
+    setScheduleByDate(structuredClone(upd));
+    setResultsById(structuredClone(newResults));
+    setAllStarPromptOpen(true);
+    return;
+  }
+
+  const dayGames = upd[d];
+  if (!Array.isArray(dayGames)) continue;
 
       for (let i = 0; i < dayGames.length; i++) {
         // ✅ allow stop between games
@@ -1534,6 +1580,9 @@ const handleSimToDate = async (dateStr) => {
     cleanupGhostGames(upd, newResults);
     saveSchedule(upd);
     saveResults(newResults);
+
+    setScheduleByDate(structuredClone(upd));
+    setResultsById(structuredClone(newResults));
   } finally {
     setActionModal(null);
     setSimLock(false);
@@ -1607,6 +1656,9 @@ const handleSimSeason = async () => {
     return;
   }
 
+  setActionModal(null);
+  setBoxModal(null);
+
   // ✅ reset stop state at the start of a run
   stopRef.current = false;
   setStopRequested(false);
@@ -1635,21 +1687,27 @@ const handleSimSeason = async () => {
   let gamesSimmed = 0;
   let lastDateProcessed = null;
 
-  // ✅ track if user stopped
-  let stopped = false;
+// ✅ track if user stopped
+let stopped = false;
+let pausedForAllStar = false;
 
   try {
-    for (let di = 0; di < dates.length; di++) {
-      if (stopRef.current) { stopped = true; break; }
+for (let di = 0; di < dates.length; di++) {
+  if (stopRef.current) { stopped = true; break; }
 
-      const date = dates[di];
-      lastDateProcessed = date;
+  const date = dates[di];
+  lastDateProcessed = date;
 
-      const dayGames = upd[date];
-      if (!Array.isArray(dayGames)) {
-        console.error("FULL SEASON FATAL: dayGames is not an array for", date, dayGames);
-        break;
-      }
+  if (date === ALL_STAR_DATE && !allStarHandledRef.current) {
+    pausedForAllStar = true;
+    break;
+  }
+
+  const dayGames = upd[date];
+  if (!Array.isArray(dayGames)) {
+    console.error("FULL SEASON FATAL: dayGames is not an array for", date, dayGames);
+    break;
+  }
 
       console.log(
         "📅 Processing date",
@@ -1726,14 +1784,21 @@ const handleSimSeason = async () => {
     saveResults(results);
     savePlayerStats(playerStats);
 
-    setActionModal(null);
-    setSimLock(false);
+setActionModal(null);
+setSimLock(false);
 
-    // ✅ If stopped, do NOT compute awards or navigate away
-    if (stopped) {
-      console.log("🛑 FULL SEASON STOPPED by user at gamesSimmed:", gamesSimmed);
-      return;
-    }
+if (pausedForAllStar) {
+  setScheduleByDate(structuredClone(upd));
+  setResultsById(structuredClone(results));
+  setAllStarPromptOpen(true);
+  return;
+}
+
+// ✅ If stopped, do NOT compute awards or navigate away
+if (stopped) {
+  console.log("🛑 FULL SEASON STOPPED by user at gamesSimmed:", gamesSimmed);
+  return;
+}
 
     // 🔥 compute awards from final playerStats
     try {
@@ -1850,6 +1915,10 @@ if (
 
   // keep your player stats wipe
   localStorage.removeItem(PLAYER_STATS_KEY);
+  allStarHandledRef.current = false;
+setAllStarPromptOpen(false);
+setAllStarOpen(false);
+setAllStarData(null);
 
   const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
 
@@ -2226,13 +2295,14 @@ return (
   </>
 )}
 
-            <button
-            
-              className="px-3 py-2 bg-red-700 rounded"
-              onClick={handleResetSeason}
-            >
-              Reset Season
-            </button>
+<button
+  className="px-3 py-2 bg-red-700 rounded"
+  onClick={handleResetSeason}
+>
+  Reset Season
+</button>
+
+
             
 
                         {/* Month navigation */}
@@ -2597,6 +2667,43 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
     </div>,
     document.body
   )}
+{allStarPromptOpen && (
+  <div className="fixed inset-0 z-[235] flex items-center justify-center bg-black/75 p-4">
+    <div className="w-full max-w-xl rounded-2xl border border-white/15 bg-neutral-900 p-6 text-white shadow-2xl">
+      <h2 className="text-2xl font-bold text-orange-400">All-Star Weekend</h2>
+
+      <p className="mt-3 text-sm text-neutral-300">
+        It is now All-Star Weekend. Would you like to pause and view the
+        All-Star teams?
+      </p>
+
+      <div className="mt-6 flex justify-end gap-3">
+        <button
+          className="rounded-lg bg-neutral-700 px-4 py-2 font-semibold text-white hover:bg-neutral-600"
+          onClick={() => {
+            allStarHandledRef.current = true;
+            setAllStarPromptOpen(false);
+          }}
+        >
+          Not Now
+        </button>
+
+        <button
+          className="rounded-lg bg-orange-600 px-4 py-2 font-semibold text-white hover:bg-orange-500"
+          onClick={openAllStarTeams}
+        >
+          View All-Stars
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+<AllStars
+  open={allStarOpen}
+  data={allStarData}
+  onClose={() => setAllStarOpen(false)}
+/>
     </div>
   );
 }
