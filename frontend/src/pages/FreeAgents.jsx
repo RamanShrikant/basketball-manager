@@ -912,7 +912,7 @@ const handleContinueToProgression = () => {
         </button>
 
         <button
-          onClick={() => navigate("/offseason-hub")}
+          onClick={() => navigate("/offseason")}
           className="px-6 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
         >
           Back to Offseason Hub
@@ -959,7 +959,7 @@ const handleContinueToProgression = () => {
         )}
         {isOffseasonMode && (
           <button
-            onClick={() => navigate("/offseason-hub")}
+            onClick={() => navigate("/offseason")}
             className="px-6 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
           >
             Back to Offseason Hub
@@ -1089,7 +1089,7 @@ const handleContinueToProgression = () => {
             )}
 
             <button
-              onClick={() => navigate("/offseason-hub")}
+              onClick={() => navigate("/offseason")}
               className="px-5 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
             >
               Back to Offseason Hub
@@ -1156,8 +1156,8 @@ const handleContinueToProgression = () => {
         </div>
       )}
 
-      <div className="relative w-full flex justify-center">
-        <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
+      <div className="w-full flex justify-center px-4">
+        <div className="relative bg-neutral-800/95 backdrop-blur-md border border-neutral-700 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-2xl">
           <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
 
           <div className="flex items-end justify-between relative">
@@ -1265,11 +1265,11 @@ const handleContinueToProgression = () => {
         </div>
       </div>
 
-      <div className="w-full flex justify-center transition-opacity duration-300 ease-in-out mt-[-1px]">
-        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar">
-          <div className="min-w-[1200px] max-w-max mx-auto">
+<div className="w-full flex justify-center transition-opacity duration-300 ease-in-out mt-[-1px] px-4">
+  <div className="w-full max-w-5xl max-h-[62vh] overflow-auto rounded-b-xl border border-neutral-700 border-t-0 bg-neutral-900 no-scrollbar">
+    <div className="min-w-[1200px] w-max">
             <table className="w-full border-collapse text-center">
-              <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
+              <thead className="sticky top-0 z-20 bg-neutral-800 text-gray-300 text-[16px] font-semibold">
                 <tr>
                   {[{ key: "name", label: "Name" },
                     { key: "pos", label: "POS" },
@@ -1369,7 +1369,7 @@ const handleContinueToProgression = () => {
       <div className="flex gap-3 flex-wrap justify-center mt-10">
         {isOffseasonMode && (
           <button
-            onClick={() => navigate("/offseason-hub")}
+            onClick={() => navigate("/offseason")}
             className="px-8 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
           >
             Back to Offseason Hub

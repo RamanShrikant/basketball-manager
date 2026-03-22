@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/Layout.jsx";
 import Home from "./pages/Home.jsx";
 import PlayerEditor from "./pages/PlayerEditor.jsx";
@@ -58,7 +58,9 @@ function App() {
         <Route path="salary-table" element={<SalaryTable />} />
         <Route path="/free-agents" element={<FreeAgents />} />
         <Route path="/award-tracker" element={<AwardTracker />} />
-        <Route path="/offseason-hub" element={<OffseasonHub />} />
+        <Route path="/offseason" element={<OffseasonHub />} />
+        <Route path="/offseason" element={<OffseasonHub />} />
+<Route path="/offseason-hub" element={<Navigate to="/offseason" replace />} />
         <Route path="/player-team-options" element={<PlayerTeamOptions />} />
 <Route path="/player-retirements" element={<PlayerRetirements />} />
 

@@ -216,7 +216,7 @@ export default function FinalsMvp() {
     localStorage.removeItem("bm_finals_mvp_v1");
 
     // 7) go to offseason hub
-    navigate("/offseason-hub");
+    navigate("/offseason");
   };
 
   const finalsRow = useMemo(() => {

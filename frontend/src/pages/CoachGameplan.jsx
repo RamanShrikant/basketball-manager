@@ -1,7 +1,12 @@
-    import { computeTeamRatings } from "../api/teamRatings";
+   import {
+  rebuildSingleTeamGameplan,
+  getRosterSignatureForGameplan,
+} from "../utils/ensureGameplans";
+   import { computeTeamRatings } from "../api/teamRatings";
     import React, { useState, useEffect, useMemo } from "react";
     import { useGame } from "../context/GameContext";
     import { useNavigate } from "react-router-dom";
+    
     
     const GAMEPLAN_VERSION = 2;
 
@@ -328,72 +333,98 @@ function readGameplanFromStorage(teamName) {
     };
 
     // --- Load + build on team change ---
-    useEffect(() => {
-    if (!selectedTeam) return;
+useEffect(() => {
+  if (!selectedTeam) return;
 
-    const teamPlayers = selectedTeam.players || [];
-    const saved = readGameplanFromStorage(selectedTeam.name);
-    const currentRosterSignature = getRosterSignature(teamPlayers);
+  const key = `gameplan_${selectedTeam.name}`;
+  const raw = localStorage.getItem(key);
+  const teamPlayers = selectedTeam.players || [];
+  const currentRosterSignature = getRosterSignatureForGameplan(teamPlayers);
 
-    let loaded = false;
+  let loaded = false;
 
-    if (saved) {
-        const savedMinutes =
-            saved && typeof saved.minutes === "object" && saved.minutes !== null
-                ? saved.minutes
-                : saved;
+  if (raw) {
+    try {
+      const saved = JSON.parse(raw);
 
-        const savedOrder = Array.isArray(saved?.order)
-            ? saved.order
-            : Object.keys(savedMinutes || {});
+      const isNewFormat =
+        saved &&
+        typeof saved === "object" &&
+        saved.minutes &&
+        Array.isArray(saved.order);
 
-        const rosterMatches =
-            saved?.rosterSignature === currentRosterSignature &&
-            savedOrder.length > 0;
+      if (isNewFormat && saved.rosterSignature === currentRosterSignature) {
+        const orderedPlayers = [
+          ...saved.order
+            .map((name) => teamPlayers.find((p) => p.name === name))
+            .filter(Boolean),
+          ...teamPlayers.filter((p) => !saved.order.includes(p.name)),
+        ];
 
-        if (rosterMatches) {
-            const orderedPlayers = [
-                ...savedOrder
-                    .map((name) => teamPlayers.find((p) => p.name === name))
-                    .filter(Boolean),
-                ...teamPlayers.filter((p) => !savedOrder.includes(p.name)),
-            ];
-
-            const normalizedMinutes = {};
-            for (const p of teamPlayers) {
-                normalizedMinutes[p.name] = Number(savedMinutes?.[p.name] || 0);
-            }
-
-            setPlayers(orderedPlayers);
-            setMinutes(normalizedMinutes);
-            setTeamRatings(calculateTeamRatings(orderedPlayers, normalizedMinutes));
-            loaded = true;
+        const normalizedMinutes = {};
+        for (const p of teamPlayers) {
+          normalizedMinutes[p.name] = Number(saved.minutes?.[p.name] || 0);
         }
-    }
 
-    if (!loaded) {
-        const { sorted, obj } = buildSmartRotation(teamPlayers);
-        setPlayers(sorted);
-        setMinutes(obj);
-        setTeamRatings(calculateTeamRatings(sorted, obj));
-
-        // important: auto-save rebuilt plan immediately
-        saveGameplanToStorage(selectedTeam.name, teamPlayers, sorted, obj);
+        setMinutes(normalizedMinutes);
+        setPlayers(orderedPlayers);
+        setTeamRatings(calculateTeamRatings(orderedPlayers, normalizedMinutes));
+        loaded = true;
+      }
+    } catch (e) {
+      console.warn("Bad saved gameplan:", e);
     }
+  }
+
+  if (!loaded) {
+    rebuildSingleTeamGameplan(selectedTeam);
+
+    const freshRaw = localStorage.getItem(key);
+    if (!freshRaw) return;
+
+    try {
+      const fresh = JSON.parse(freshRaw);
+
+      const orderedPlayers = [
+        ...fresh.order
+          .map((name) => teamPlayers.find((p) => p.name === name))
+          .filter(Boolean),
+        ...teamPlayers.filter((p) => !fresh.order.includes(p.name)),
+      ];
+
+      const normalizedMinutes = {};
+      for (const p of teamPlayers) {
+        normalizedMinutes[p.name] = Number(fresh.minutes?.[p.name] || 0);
+      }
+
+      setMinutes(normalizedMinutes);
+      setPlayers(orderedPlayers);
+      setTeamRatings(calculateTeamRatings(orderedPlayers, normalizedMinutes));
+    } catch (e) {
+      console.warn("Failed loading rebuilt gameplan:", e);
+    }
+  }
 }, [selectedTeam]);
 
 const handleSave = () => {
-    if (!selectedTeam) return;
+  if (!selectedTeam) return;
 
-    saveGameplanToStorage(
-        selectedTeam.name,
-        selectedTeam.players || [],
-        players,
-        minutes
-    );
+  const payload = {
+    version: 2,
+    teamName: selectedTeam.name,
+    rosterSignature: getRosterSignatureForGameplan(selectedTeam.players || []),
+    order: players.map((p) => p.name),
+    minutes: { ...minutes },
+    updatedAt: Date.now(),
+  };
 
-    setToast(true);
-    setTimeout(() => setToast(false), 2000);
+  localStorage.setItem(
+    `gameplan_${selectedTeam.name}`,
+    JSON.stringify(payload)
+  );
+
+  setToast(true);
+  setTimeout(() => setToast(false), 2000);
 };
 
 

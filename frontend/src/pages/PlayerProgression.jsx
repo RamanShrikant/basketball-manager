@@ -710,7 +710,7 @@ function recomputeDerivedRatingsInLeague(leagueData) {
   return leagueData;
 }
 export default function PlayerProgression() {
-function handleReturnToCalendar() {
+function handleReturnToOffseasonHub() {
   const resolvedSeasonYear = Number(
     leagueData?.seasonYear ??
     leagueData?.currentSeasonYear ??
@@ -738,22 +738,21 @@ function handleReturnToCalendar() {
       })
     );
 
+    const existingOffseason = readJsonSafe(OFFSEASON_STATE_KEY, {}) || {};
     localStorage.setItem(
       OFFSEASON_STATE_KEY,
       JSON.stringify({
-        active: false,
+        ...existingOffseason,
+        active: true,
         seasonYear: resolvedSeasonYear,
-        retirementsComplete: false,
-        optionsComplete: false,
-        freeAgencyComplete: false,
-        progressionComplete: false,
+        progressionComplete: true,
       })
     );
   } catch (err) {
-    console.error("[PlayerProgression] failed to reset offseason state", err);
+    console.error("[PlayerProgression] failed to save offseason state", err);
   }
 
-  navigate("/calendar");
+  navigate("/offseason");
 }
   useEffect(() => {
   console.log("[PPDBG] MOUNT PlayerProgression");
@@ -1148,6 +1147,16 @@ if (deltaCount > 0) {
     deltasSaved: deltaSaveOk,
   })
 );
+const existingOffseason = readJsonSafe(OFFSEASON_STATE_KEY, {}) || {};
+localStorage.setItem(
+  OFFSEASON_STATE_KEY,
+  JSON.stringify({
+    ...existingOffseason,
+    active: true,
+    seasonYear,
+    progressionComplete: true,
+  })
+);
 
       } catch (err) {
         console.error("[PlayerProgression] Python progression failed:", err);
@@ -1316,12 +1325,12 @@ onChange={(e) => {
                 </option>
               ))}
             </select>
-              <button
-                onClick={handleReturnToCalendar}
-                className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
-              >
-                Return to Calendar
-              </button>
+<button
+  onClick={handleReturnToOffseasonHub}
+  className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
+>
+  Back to Offseason Hub
+</button>
           </div>
         </div>
 

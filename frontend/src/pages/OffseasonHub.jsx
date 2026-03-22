@@ -58,6 +58,7 @@ function saveOffseasonState(state) {
   localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(state));
 }
 
+
 function StatPill({ label, value }) {
   return (
     <div className="px-4 py-3 rounded-xl bg-white/5 border border-white/10">
@@ -138,6 +139,18 @@ export default function OffseasonHub() {
   const seasonYear = getSeasonYear(leagueData);
   const champion = getChampionName();
   const [offseasonState, setOffseasonState] = useState(() => readOffseasonState(seasonYear));
+  const handleAdvanceToNewSeason = () => {
+  const next = {
+    ...offseasonState,
+    active: false,
+    progressionComplete: true,
+  };
+
+  setOffseasonState(next);
+  saveOffseasonState(next);
+
+  navigate("/calendar");
+};
 
   useEffect(() => {
     const next = readOffseasonState(seasonYear);
@@ -202,17 +215,17 @@ export default function OffseasonHub() {
         disabled: !freeAgencyComplete,
         onClick: () => navigate("/player-progression"),
       },
-      {
-        step: "5",
-        title: "Start New Season",
-        description:
-          "Finalize the offseason and roll into the next season once retirements, options, free agency, and progression are all complete.",
-        status: progressionComplete ? "Current" : "Locked",
-        accent: progressionComplete ? "orange" : "neutral",
-        buttonLabel: progressionComplete ? "Continue to Team Hub" : "Locked",
-        disabled: !progressionComplete,
-        onClick: () => navigate("/team-hub"),
-      },
+{
+  step: "5",
+  title: "Advance to New Season",
+  description:
+    "Finalize the offseason and begin the new season once retirements, options, free agency, and progression are all complete.",
+  status: progressionComplete ? "Current" : "Locked",
+  accent: progressionComplete ? "orange" : "neutral",
+  buttonLabel: progressionComplete ? "Advance to New Season" : "Locked",
+  disabled: !progressionComplete,
+  onClick: handleAdvanceToNewSeason,
+},
     ];
   }, [navigate, offseasonState]);
 
@@ -282,12 +295,12 @@ export default function OffseasonHub() {
             Back to Finals MVP
           </button>
 
-          <button
-            onClick={() => navigate("/team-hub")}
-            className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-xl font-semibold transition"
-          >
-            Back to Team Hub
-          </button>
+<button
+  onClick={() => navigate("/team-hub", { state: { offseasonMode: true, returnTo: "/offseason" } })}
+  className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-xl font-semibold transition"
+>
+  Open Team Hub
+</button>
         </div>
       </div>
     </div>

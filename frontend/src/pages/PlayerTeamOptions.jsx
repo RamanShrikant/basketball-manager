@@ -720,7 +720,7 @@ const renderKeyInterestExtraNode = (row) => {
                 </button>
               ) : (
                 <button
-                  onClick={() => navigate("/offseason-hub")}
+                  onClick={() => navigate("/offseason")}
                   className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl font-bold transition"
                 >
                   Continue to Offseason Hub
@@ -781,6 +781,8 @@ const renderKeyInterestExtraNode = (row) => {
         )}
 
         <div className="space-y-7">
+  {!optionsComplete && (
+    <>
           <SectionShell
             title="Your Team Options"
             subtitle={
@@ -976,8 +978,10 @@ const renderKeyInterestExtraNode = (row) => {
     </div>
   )}
 </SectionShell>
+    </>
+  )}
 
-{optionsComplete && (
+  {optionsComplete && (
   <SectionShell
     title="Resolution Log"
     subtitle="These are the option and contract decisions that were applied to the league."
@@ -1047,7 +1051,7 @@ const renderKeyInterestExtraNode = (row) => {
 
         <div className="mt-8 flex justify-center gap-4 flex-wrap">
           <button
-            onClick={() => navigate("/offseason-hub")}
+            onClick={() => navigate("/offseason")}
             className="px-6 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-semibold transition"
           >
             Back to Offseason Hub

@@ -2199,7 +2199,19 @@ ${disabled ? "opacity-60" : ""}
           PLAYOFFS
         </div>
 
-        <div className="w-[220px]" />
+        <button
+  onClick={() =>
+    navigate("/team-hub", {
+      state: {
+        playoffMode: true,
+        playoffReturnTo: "/playoffs",
+      },
+    })
+  }
+  className="w-[220px] px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm font-bold"
+>
+  Back to Team Hub
+</button>
       </div>
 
       {/* stage (scaled) */}
