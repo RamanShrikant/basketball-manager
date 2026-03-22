@@ -763,11 +763,12 @@ function handleReturnToCalendar() {
   const { leagueData, setLeagueData, selectedTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
 
-  const [showLetters, setShowLetters] = useState(localStorage.getItem("showLetters") === "true");
-  const [teamFilter, setTeamFilter] = useState("ALL");
-  const [featuredKey, setFeaturedKey] = useState(null);
+const [showLetters, setShowLetters] = useState(localStorage.getItem("showLetters") === "true");
+const [teamFilter, setTeamFilter] = useState("ALL");
+const [featuredKey, setFeaturedKey] = useState(null);
+const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
 
-  const [deltas, setDeltas] = useState(() => readJsonSafe(DELTAS_KEY, {}));
+const [deltas, setDeltas] = useState(() => readJsonSafe(DELTAS_KEY, {}));
 
   const attrColumns = [
     { key: "attr0", label: "3PT", index: 0 },
@@ -808,6 +809,19 @@ function handleReturnToCalendar() {
     setShowLetters(next);
     localStorage.setItem("showLetters", String(next));
   };
+  const positionOrder = ["PG", "SG", "SF", "PF", "C"];
+
+const handleSort = (key) => {
+  let direction = "desc";
+
+  if (sortConfig.key === key && sortConfig.direction === "desc") {
+    direction = "asc";
+  } else if (sortConfig.key === key && sortConfig.direction === "asc") {
+    direction = "default";
+  }
+
+  setSortConfig({ key, direction });
+};
 
   useEffect(() => {
     console.log("[PPDBG] selectedTeam loader effect", { selectedTeam: selectedTeam?.name || null });
@@ -1188,14 +1202,60 @@ if (deltaCount > 0) {
     return allRows.filter((r) => r.team === teamFilter);
   }, [allRows, teamFilter]);
 
-  useEffect(() => {
-    if (!featuredKey && rows.length) setFeaturedKey(rows[0].__key);
-  }, [rows, featuredKey]);
+  const sortedRows = useMemo(() => {
+  if (!sortConfig.key || sortConfig.direction === "default") return rows;
 
-  const featured = useMemo(() => {
-    if (!rows.length) return null;
-    return rows.find((r) => r.__key === featuredKey) || rows[0];
-  }, [rows, featuredKey]);
+  const out = [...rows];
+
+  out.sort((a, b) => {
+    const key = sortConfig.key;
+
+    if (key === "name") {
+      return sortConfig.direction === "asc"
+        ? a.name.localeCompare(b.name)
+        : b.name.localeCompare(a.name);
+    }
+
+    if (key === "team") {
+      return sortConfig.direction === "asc"
+        ? (a.team || "").localeCompare(b.team || "")
+        : (b.team || "").localeCompare(a.team || "");
+    }
+
+    if (key === "pos") {
+      const aIdx = positionOrder.indexOf(a.pos);
+      const bIdx = positionOrder.indexOf(b.pos);
+      const diff = (aIdx === -1 ? 99 : aIdx) - (bIdx === -1 ? 99 : bIdx);
+      return sortConfig.direction === "asc" ? diff : -diff;
+    }
+
+    if (["age", "overall", "offRating", "defRating", "stamina", "potential"].includes(key)) {
+      const av = Number(a[key] || 0);
+      const bv = Number(b[key] || 0);
+      return sortConfig.direction === "asc" ? av - bv : bv - av;
+    }
+
+    if (key.startsWith("attr")) {
+      const idx = parseInt(key.replace("attr", ""), 10);
+      const av = Number(a.attrs?.[idx] ?? 0);
+      const bv = Number(b.attrs?.[idx] ?? 0);
+      return sortConfig.direction === "asc" ? av - bv : bv - av;
+    }
+
+    return 0;
+  });
+
+  return out;
+}, [rows, sortConfig]);
+
+useEffect(() => {
+  if (!featuredKey && sortedRows.length) setFeaturedKey(sortedRows[0].__key);
+}, [sortedRows, featuredKey]);
+
+const featured = useMemo(() => {
+  if (!sortedRows.length) return null;
+  return sortedRows.find((r) => r.__key === featuredKey) || sortedRows[0];
+}, [sortedRows, featuredKey]);
 
   const deltaFor = (row, key) => {
     const byKey = deltas?.[row.__key];
@@ -1243,10 +1303,11 @@ if (deltaCount > 0) {
           <div className="flex items-center gap-3">
             <select
               value={teamFilter}
-              onChange={(e) => {
-                setTeamFilter(e.target.value);
-                setFeaturedKey(null);
-              }}
+onChange={(e) => {
+  setTeamFilter(e.target.value);
+  setFeaturedKey(null);
+  setSortConfig({ key: null, direction: "desc" });
+}}
               className="px-3 py-2 bg-neutral-800 rounded border border-neutral-700"
             >
               {teamOptions.map((t) => (
@@ -1353,20 +1414,33 @@ if (deltaCount > 0) {
                     { key: "potential", label: "POT" },
                     ...attrColumns,
                   ].map((col) => (
-                    <th
-                      key={col.key}
-                      className={`py-3 px-3 min-w-[95px] ${
-                        col.key === "name" ? "min-w-[200px] text-left pl-4" : "text-center"
-                      }`}
-                    >
-                      {col.label}
-                    </th>
+<th
+  key={col.key}
+  className={`py-3 px-3 min-w-[95px] ${
+    col.key === "name" ? "min-w-[200px] text-left pl-4" : "text-center"
+  } cursor-pointer select-none`}
+  onClick={(e) => {
+    e.stopPropagation();
+    handleSort(col.key);
+  }}
+>
+  {col.label}
+  {sortConfig.key === col.key && (
+    <span className="ml-1 text-orange-400">
+      {sortConfig.direction === "asc"
+        ? "▲"
+        : sortConfig.direction === "desc"
+        ? "▼"
+        : ""}
+    </span>
+  )}
+</th>
                   ))}
                 </tr>
               </thead>
 
               <tbody className="text-[17px] font-medium">
-                {rows.map((p, idx) => {
+                {sortedRows.map((p, idx) => {
                   const active = p.__key === featured?.__key;
                   const logo = teamLogoByName?.[p.team] || null;
 
