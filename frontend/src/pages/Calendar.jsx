@@ -91,7 +91,52 @@ function loadTeamRoleMap(teamName) {
   return buildRoleMapFromMinutes(minutesObj, orderedNames);
 }
 
+function getTeamPlayerCount(team) {
+  return Array.isArray(team?.players)
+    ? team.players.filter((p) => p && (p.name || p.player)).length
+    : 0;
+}
 
+function getSimulationBlockMessageForGame(game, teams) {
+  const homeTeam = teams.find((t) => slugifyId(t.name) === game?.homeId);
+  const awayTeam = teams.find((t) => slugifyId(t.name) === game?.awayId);
+
+  if (!homeTeam || !awayTeam) {
+    return `Team lookup failed: ${game?.homeId} / ${game?.awayId}`;
+  }
+
+  const homeCount = getTeamPlayerCount(homeTeam);
+  const awayCount = getTeamPlayerCount(awayTeam);
+
+  if (homeCount < 5) {
+    return `${homeTeam.name} doesn't have enough players. Minimum 5 required to simulate games.`;
+  }
+
+  if (awayCount < 5) {
+    return `${awayTeam.name} doesn't have enough players. Minimum 5 required to simulate games.`;
+  }
+
+  return "";
+}
+
+function getSimulationBlockMessageThroughDate(scheduleByDate, teams, endDate = null) {
+  const dates = Object.keys(scheduleByDate || {}).sort(
+    (a, b) => new Date(a) - new Date(b)
+  );
+
+  for (const d of dates) {
+    if (endDate && d > endDate) break;
+
+    for (const game of scheduleByDate?.[d] || []) {
+      if (!game || game.played) continue;
+
+      const msg = getSimulationBlockMessageForGame(game, teams);
+      if (msg) return msg;
+    }
+  }
+
+  return "";
+}
 /* -------------------------------------------------------------------------- */
 /*                              SIMULATION WRAPPER                             */
 /* -------------------------------------------------------------------------- */
@@ -101,12 +146,17 @@ async function simOneSafe(game, leagueData, teams) {
     console.log("⏳ simOneSafe starting:", game.home, "vs", game.away);
   }
 
-  const homeSource = teams.find((t) => slugifyId(t.name) === game.homeId);
-  const awaySource = teams.find((t) => slugifyId(t.name) === game.awayId);
+const homeSource = teams.find((t) => slugifyId(t.name) === game.homeId);
+const awaySource = teams.find((t) => slugifyId(t.name) === game.awayId);
 
-  if (!homeSource || !awaySource) {
-    throw new Error(`Team lookup failed: ${game.homeId} / ${game.awayId}`);
-  }
+if (!homeSource || !awaySource) {
+  throw new Error(`Team lookup failed: ${game.homeId} / ${game.awayId}`);
+}
+
+const simBlockMessage = getSimulationBlockMessageForGame(game, teams);
+if (simBlockMessage) {
+  throw new Error(simBlockMessage);
+}
 
   ensureGameplansForLeague(leagueData);
 
@@ -1231,6 +1281,11 @@ const teams = useMemo(() => {
     id: slugifyId(t.name),
   }));
 }, [leagueData]);
+const selectedTeamPlayerCount = useMemo(() => {
+  return getTeamPlayerCount(selectedTeam);
+}, [selectedTeam]);
+
+const selectedTeamCanSim = selectedTeamPlayerCount >= 5;
 
 
 
@@ -1779,6 +1834,7 @@ const visibleDaysByMonth = useMemo(() => {
   /* -------------------------------------------------------------------------- */
 const [boxModal, setBoxModal] = useState(null);
 const [actionModal, setActionModal] = useState(null);
+const [simErrorModal, setSimErrorModal] = useState(null);
 const [simLock, setSimLock] = useState(false);
 
 const [allStarPromptOpen, setAllStarPromptOpen] = useState(false);
@@ -1796,6 +1852,11 @@ const [showEastStandings, setShowEastStandings] = useState(true);
 const [showAwardsPanel, setShowAwardsPanel] = useState(false);
 const [miniAwardTab, setMiniAwardTab] = useState("mvp");
 const CALENDAR_SCALE = 0.97;
+
+const openSimError = (message, title = "Cannot simulate") => {
+  setSimErrorModal({ title, message });
+};
+
 const requestStop = () => {
   if (!simLock) return;
   stopRef.current = true;
@@ -1840,47 +1901,51 @@ const openAllStarTeams = async () => {
 /*                           SIMULATION HANDLERS                               */
 /* -------------------------------------------------------------------------- */
 const handleSimOnlyGame = async (dateStr, game) => {
+  const simBlockMessage = getSimulationBlockMessageForGame(game, teams);
+  if (simBlockMessage) {
+    openSimError(simBlockMessage, "Roster issue");
+    return;
+  }
+
   const upd = { ...scheduleByDate };
   const newResults = { ...resultsById };
 
-  const full = await runGameWithRetries(game, leagueData, teams);
+  let full;
+  try {
+    full = await runGameWithRetries(game, leagueData, teams);
+  } catch (err) {
+    openSimError(
+      err?.message || "This team doesn't have enough players.",
+      "Simulation blocked"
+    );
+    return;
+  }
 
   if (!full) {
-    // still bad after retries → leave game unplayed so user can try again later
     console.error("[SimOnly] Could not get a valid result for game", game.id);
     return;
   }
 
   const result = slimResult(full);
- const homeRoles = loadTeamRoleMap(game.home);
-const awayRoles = loadTeamRoleMap(game.away);
+  const homeRoles = loadTeamRoleMap(game.home);
+  const awayRoles = loadTeamRoleMap(game.away);
   annotateSlimWithRoles(result, homeRoles, awayRoles);
-
 
   upd[dateStr] = upd[dateStr].map((g) =>
     g.id === game.id ? { ...g, played: true } : g
-  
   );
-  
 
   newResults[game.id] = result;
   let playerStats = loadPlayerStats();
-playerStats = applyGameToPlayerStats(playerStats, result, game);
-savePlayerStats(playerStats);
+  playerStats = applyGameToPlayerStats(playerStats, result, game);
+  savePlayerStats(playerStats);
 
+  saveSchedule(upd);
+  saveOneResultV3(game.id, result);
+  setResultsById((prev) => ({ ...prev, [game.id]: result }));
 
-saveSchedule(upd);
-
-// ✅ save this one game to per-game storage
-saveOneResultV3(game.id, result);
-
-// ✅ keep UI state in sync instantly
-setResultsById((prev) => ({ ...prev, [game.id]: result }));
-
-setActionModal(null);
-setBoxModal({ game, result });
-
-
+  setActionModal(null);
+  setBoxModal({ game, result });
 };
 
 const handleSimToDate = async (dateStr) => {
@@ -1889,8 +1954,22 @@ const handleSimToDate = async (dateStr) => {
 
   if (simLock) return;
 
-  setActionModal(null);
-  setBoxModal(null);
+if (!selectedTeamCanSim) {
+  openSimError(
+    `${selectedTeam.name} doesn't have enough players. Minimum 5 required to simulate games.`,
+    "Roster issue"
+  );
+  return;
+}
+
+const simBlockMessage = getSimulationBlockMessageThroughDate(scheduleByDate, teams, dateStr);
+if (simBlockMessage) {
+  openSimError(simBlockMessage, "Simulation blocked");
+  return;
+}
+
+setActionModal(null);
+setBoxModal(null);
 
   // ✅ reset stop state at the start of THIS run
   stopRef.current = false;
@@ -2050,8 +2129,22 @@ const handleSimSeason = async () => {
     return;
   }
 
-  setActionModal(null);
-  setBoxModal(null);
+  if (!selectedTeamCanSim) {
+  openSimError(
+    `${selectedTeam.name} doesn't have enough players. Minimum 5 required to simulate games.`,
+    "Roster issue"
+  );
+  return;
+}
+
+const simBlockMessage = getSimulationBlockMessageThroughDate(scheduleByDate, teams);
+if (simBlockMessage) {
+  openSimError(simBlockMessage, "Simulation blocked");
+  return;
+}
+
+setActionModal(null);
+setBoxModal(null);
 
   // ✅ reset stop state at the start of a run
   stopRef.current = false;
@@ -2534,7 +2627,9 @@ const cycleMiniAwardTab = (dir) => {
 /* -------------------------------------------------------------------------- */
 /*                               CALENDAR GRID                                */
 /* -------------------------------------------------------------------------- */
-
+const actionModalBlockMessage = actionModal
+  ? getSimulationBlockMessageForGame(actionModal.game, teams)
+  : "";
 return (
   <div
     className="relative h-screen overflow-hidden text-white py-2"
@@ -2972,19 +3067,37 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
               Simulate this game
             </button>
 
-            <button
-              className="px-4 py-2 bg-orange-600 rounded hover:bg-orange-500"
-              onClick={() => handleSimToDate(actionModal.dateStr)}
-            >
-              Simulate to this date
-            </button>
+<button
+  className={`px-4 py-2 rounded transition ${
+    selectedTeamCanSim
+      ? "bg-orange-600 hover:bg-orange-500"
+      : "bg-orange-600 hover:bg-orange-500 ring-1 ring-orange-300/30"
+  }`}
+  onClick={() => handleSimToDate(actionModal.dateStr)}
+  title={
+    !selectedTeamCanSim
+      ? `${selectedTeam.name} doesn't have enough players. Minimum 5 required to simulate games.`
+      : ""
+  }
+>
+  Simulate to this date
+</button>
 
-            <button
-              className="px-4 py-2 bg-blue-600 rounded hover:bg-blue-500"
-              onClick={handleSimSeason}
-            >
-              Simulate full season
-            </button>
+<button
+  className={`px-4 py-2 rounded transition ${
+    selectedTeamCanSim
+      ? "bg-blue-600 hover:bg-blue-500"
+      : "bg-blue-600 hover:bg-blue-500 ring-1 ring-blue-300/30"
+  }`}
+  onClick={handleSimSeason}
+  title={
+    !selectedTeamCanSim
+      ? `${selectedTeam.name} doesn't have enough players. Minimum 5 required to simulate games.`
+      : ""
+  }
+>
+  Simulate full season
+</button>
 
             <button
               className="px-4 py-2 bg-neutral-700 rounded hover:bg-neutral-600"
@@ -3014,6 +3127,53 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
             </button>
           </div>
         )}
+      </div>
+    </div>,
+    document.body
+  )}
+
+{/* ---------------------------- SIM ERROR MODAL ---------------------------- */}
+{simErrorModal &&
+  createPortal(
+    <div
+      className="fixed inset-0 z-[205] bg-black/75 backdrop-blur-[2px] flex items-center justify-center p-4"
+      onClick={() => setSimErrorModal(null)}
+    >
+      <div
+        className="w-full max-w-[460px] rounded-2xl border border-orange-500/40 bg-neutral-900 shadow-[0_0_30px_rgba(0,0,0,0.55)] overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="border-b border-orange-500/20 bg-gradient-to-r from-orange-600/20 to-red-500/10 px-5 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-full border border-orange-400/40 bg-orange-500/15 text-xl">
+              !
+            </div>
+
+            <div>
+              <h3 className="text-lg font-bold text-white">
+                {simErrorModal.title || "Cannot simulate"}
+              </h3>
+              <p className="text-sm text-orange-200/80">
+                Fix the roster issue before continuing
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="px-5 py-4">
+          <div className="rounded-xl border border-neutral-700 bg-neutral-850 px-4 py-3 text-sm leading-6 text-neutral-200">
+            {simErrorModal.message}
+          </div>
+
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              className="px-4 py-2 rounded-lg bg-neutral-800 text-neutral-200 hover:bg-neutral-700"
+              onClick={() => setSimErrorModal(null)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
       </div>
     </div>,
     document.body

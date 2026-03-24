@@ -235,7 +235,7 @@ export default function PlayerRetirements() {
 
             <div className="flex gap-3 flex-wrap">
               <button
-                onClick={() => navigate("/offseason-hub")}
+                onClick={() => navigate("/offseason")}
                 className="px-5 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-xl font-semibold transition"
               >
                 Back to Hub
@@ -282,7 +282,7 @@ export default function PlayerRetirements() {
 
             {alreadyRan && (
               <button
-                onClick={() => navigate("/offseason-hub")}
+                onClick={() => navigate("/offseason")}
                 className="px-5 py-3 bg-orange-600 hover:bg-orange-500 rounded-xl font-semibold transition"
               >
                 Continue to Offseason Hub
@@ -376,7 +376,7 @@ export default function PlayerRetirements() {
 
         <div className="mt-8 flex justify-center gap-4 flex-wrap">
           <button
-            onClick={() => navigate("/offseason-hub")}
+            onClick={() => navigate("/offseason")}
             className="px-6 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-semibold transition"
           >
             Back to Offseason Hub

@@ -701,9 +701,10 @@ function recomputeDerivedRatingsInLeague(leagueData) {
       p.defRating = def;
 
       p.stamina = calcStaminaFromAgeAth(p?.age ?? 25, attrs[ATH]);
-
-      const sco = calcScoringRating(pos, attrs[T3], attrs[MID], attrs[CLOSE]);
-      p.scoringRating = Number.isFinite(sco) ? sco : (p.scoringRating ?? 50);
+const sco = calcScoringRating(pos, attrs[T3], attrs[MID], attrs[CLOSE]);
+p.scoringRating = Number.isFinite(sco)
+  ? clampRange(Math.round(sco), 0, 99)
+  : (p.scoringRating ?? 50);
     }
   }
 
