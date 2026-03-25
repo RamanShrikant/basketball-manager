@@ -39,23 +39,27 @@ function readOffseasonState(seasonYear) {
   const stored = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), null);
 
   if (!stored || typeof stored !== "object") {
-    return {
-      active: true,
-      seasonYear,
-      retirementsComplete: false,
-      freeAgencyComplete: false,
-      progressionComplete: false,
-    };
+return {
+  active: true,
+  seasonYear,
+  retirementsComplete: false,
+  retirementsSkipped: false,
+  retirementsDisabled: false,
+  freeAgencyComplete: false,
+  progressionComplete: false,
+};
   }
 
-  return {
-    active: true,
-    seasonYear,
-    retirementsComplete: false,
-    freeAgencyComplete: false,
-    progressionComplete: false,
-    ...stored,
-  };
+return {
+  active: true,
+  seasonYear,
+  retirementsComplete: false,
+  retirementsSkipped: false,
+  retirementsDisabled: false,
+  freeAgencyComplete: false,
+  progressionComplete: false,
+  ...stored,
+};
 }
 
 function saveOffseasonState(next) {
@@ -121,16 +125,72 @@ export default function PlayerRetirements() {
     teamsAffected: 0,
   };
 
-  const alreadyRan = !!retirementResult?.ok || !!offseasonState.retirementsComplete;
+const alreadyRan = !!retirementResult?.ok || !!offseasonState.retirementsComplete;
+const retirementsDisabled = !!offseasonState.retirementsDisabled;
 
+const finalizeRetirementsAsSkipped = ({ disabled = false } = {}) => {
+  const res = {
+    ok: true,
+    skipped: true,
+    disabled,
+    seasonYear,
+    leagueData: workingLeagueData,
+    retiredPlayers: [],
+    summary: {
+      retiredCount: 0,
+      averageAge: 0,
+      averageOverall: 0,
+      teamsAffected: 0,
+    },
+  };
+
+  setRetirementResult(res);
+
+  if (typeof setLeagueData === "function" && workingLeagueData) {
+    setLeagueData(workingLeagueData);
+  }
+
+  if (workingLeagueData) {
+    localStorage.setItem("leagueData", JSON.stringify(workingLeagueData));
+  }
+
+  localStorage.setItem(RETIREMENT_RESULTS_KEY, JSON.stringify(res));
+
+  const nextOffseasonState = {
+    ...readOffseasonState(seasonYear),
+    active: true,
+    seasonYear,
+    retirementsComplete: true,
+    retirementsSkipped: true,
+    retirementsDisabled: disabled ? true : retirementsDisabled,
+  };
+
+  saveOffseasonState(nextOffseasonState);
+  setError("");
+};
+
+const toggleRetirementsDisabled = () => {
+  const next = {
+    ...readOffseasonState(seasonYear),
+    retirementsDisabled: !retirementsDisabled,
+  };
+
+  saveOffseasonState(next);
+  setError("");
+};
   const runRetirements = async () => {
-    if (!workingLeagueData) {
-      setError("No league data found.");
-      return;
-    }
+if (!workingLeagueData) {
+  setError("No league data found.");
+  return;
+}
 
-    setLoading(true);
-    setError("");
+if (readOffseasonState(seasonYear).retirementsDisabled) {
+  finalizeRetirementsAsSkipped({ disabled: true });
+  return;
+}
+
+setLoading(true);
+setError("");
 
     try {
       const simEngineModule = await import("../api/simEnginePy.js");
@@ -233,26 +293,58 @@ export default function PlayerRetirements() {
               </p>
             </div>
 
-            <div className="flex gap-3 flex-wrap">
-              <button
-                onClick={() => navigate("/offseason")}
-                className="px-5 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-xl font-semibold transition"
-              >
-                Back to Hub
-              </button>
+<div className="flex gap-3 flex-wrap">
+  <button
+    onClick={() => navigate("/offseason")}
+    className="px-5 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-xl font-semibold transition"
+  >
+    Back to Hub
+  </button>
 
-              <button
-                onClick={runRetirements}
-                disabled={loading || alreadyRan}
-                className={`px-5 py-3 rounded-xl font-bold transition ${
-                  loading || alreadyRan
-                    ? "bg-neutral-700 text-white/45 cursor-not-allowed"
-                    : "bg-orange-600 hover:bg-orange-500 text-white"
-                }`}
-              >
-                {loading ? "Running Retirements..." : alreadyRan ? "Retirements Complete" : "Run Player Retirements"}
-              </button>
-            </div>
+  <button
+    onClick={toggleRetirementsDisabled}
+    disabled={alreadyRan}
+    className={`px-5 py-3 rounded-xl font-bold transition ${
+      alreadyRan
+        ? "bg-neutral-700 text-white/45 cursor-not-allowed"
+        : retirementsDisabled
+        ? "bg-emerald-700 hover:bg-emerald-600 text-white"
+        : "bg-neutral-700 hover:bg-neutral-600 text-white"
+    }`}
+  >
+    {retirementsDisabled ? "Retirements: OFF" : "Retirements: ON"}
+  </button>
+
+  <button
+    onClick={() => finalizeRetirementsAsSkipped({ disabled: retirementsDisabled })}
+    disabled={loading || alreadyRan}
+    className={`px-5 py-3 rounded-xl font-bold transition ${
+      loading || alreadyRan
+        ? "bg-neutral-700 text-white/45 cursor-not-allowed"
+        : "bg-blue-600 hover:bg-blue-500 text-white"
+    }`}
+  >
+    Skip This Offseason
+  </button>
+
+  <button
+    onClick={runRetirements}
+    disabled={loading || alreadyRan || retirementsDisabled}
+    className={`px-5 py-3 rounded-xl font-bold transition ${
+      loading || alreadyRan || retirementsDisabled
+        ? "bg-neutral-700 text-white/45 cursor-not-allowed"
+        : "bg-orange-600 hover:bg-orange-500 text-white"
+    }`}
+  >
+    {loading
+      ? "Running Retirements..."
+      : alreadyRan
+      ? "Retirements Complete"
+      : retirementsDisabled
+      ? "Retirements Disabled"
+      : "Run Player Retirements"}
+  </button>
+</div>
           </div>
         </div>
 
@@ -295,12 +387,16 @@ export default function PlayerRetirements() {
               No retirement results yet.
             </div>
           ) : retiredPlayers.length === 0 ? (
-            <div className="px-6 py-16 text-center">
-              <p className="text-2xl font-bold text-white">No retirements this offseason.</p>
-              <p className="text-white/55 mt-2">
-                The league rolls forward with every player still active.
-              </p>
-            </div>
+<div className="px-6 py-16 text-center">
+  <p className="text-2xl font-bold text-white">
+    {retirementResult?.disabled ? "Retirements are disabled." : "No retirements this offseason."}
+  </p>
+  <p className="text-white/55 mt-2">
+    {retirementResult?.disabled
+      ? "Veteran players will remain active in the league until you turn retirements back on."
+      : "The league rolls forward with every player still active."}
+  </p>
+</div>
           ) : (
             <div className="divide-y divide-white/5">
               {retiredPlayers.map((player, idx) => {

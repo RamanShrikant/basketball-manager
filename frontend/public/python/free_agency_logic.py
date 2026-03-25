@@ -2797,7 +2797,53 @@ def release_player(
         "teamSnapshot": get_team_cap_snapshot(updated, team_name),
     }
 
+def repair_cpu_teams_to_min_roster(
+    league_data: Dict[str, Any],
+    user_team_name: Optional[str] = None,
+    min_players: Optional[int] = None,
+    current_day: int = 0,
+) -> Dict[str, Any]:
+    updated = copy.deepcopy(league_data)
 
+    if min_players is not None:
+        try:
+            updated["minRosterSize"] = int(min_players)
+        except (TypeError, ValueError):
+            pass
+
+    refresh_free_agent_market_values(updated)
+
+    cleanup_signings = finalize_cpu_min_roster_cleanup(
+        league_data = updated,
+        current_day = int(num(current_day, 0)),
+        user_team_name = user_team_name,
+    )
+
+    min_target = get_min_roster_target(updated)
+    failed_teams = []
+
+    for _, _, team in iter_teams(updated):
+        team_name = team.get("name")
+        if not team_name:
+            continue
+        if user_team_name and team_name == user_team_name:
+            continue
+
+        player_count = len(get_team_players(team))
+        if player_count < min_target:
+            failed_teams.append({
+                "teamName": team_name,
+                "playerCount": player_count,
+                "minPlayers": min_target,
+            })
+
+    return {
+        "ok": len(failed_teams) == 0,
+        "leagueData": updated,
+        "signings": cleanup_signings,
+        "failedTeams": failed_teams,
+        "minPlayers": min_target,
+    }
 def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
     action = request.get("action")
     league_data = request.get("leagueData", {})
@@ -2884,13 +2930,20 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
             player_name = payload.get("playerName"),
             offer = payload.get("offer", {}),
         )
-
     if action == "release_player":
         return release_player(
             league_data = league_data,
             team_name = payload.get("teamName", ""),
             player_id = payload.get("playerId"),
             player_name = payload.get("playerName"),
+        )
+
+    if action == "repair_cpu_teams_to_min_roster":
+        return repair_cpu_teams_to_min_roster(
+            league_data = league_data,
+            user_team_name = payload.get("userTeamName"),
+            min_players = payload.get("minPlayers"),
+            current_day = int(num(payload.get("currentDay"), 0)),
         )
 
     return {

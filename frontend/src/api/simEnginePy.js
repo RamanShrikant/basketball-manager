@@ -99,7 +99,6 @@ function startWorker() {
       return;
     }
 
-
     // awards error
     if (msg.type === "awards-error") {
       const entry = pending.get(msg.requestId);
@@ -112,6 +111,32 @@ function startWorker() {
       const err = msg.error || "Awards compute failed";
       if (entry.reject) entry.reject(new Error(err));
       else entry.resolve({ error: err });
+      return;
+    }
+
+    if (msg.type === "cpu-roster-repair-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] cpu-roster-repair-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "cpu-roster-repair-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] cpu-roster-repair-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "CPU roster repair failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
       return;
     }
 if (msg.type === "all-stars-result") {
@@ -678,7 +703,48 @@ function convert(py) {
 // PUBLIC API - SINGLE GAME (with timeout)
 // ------------------------------------------------------------
 const WORKER_TIMEOUT_MS = 300;
+export function repairCpuTeamsToMinRoster(
+  leagueData,
+  userTeamName = null,
+  minPlayers = 14,
+  currentDay = 0
+) {
+  startWorker();
 
+  const requestId = "FACR" + counter++;
+  const TIMEOUT_MS = 60000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("CPU_ROSTER_REPAIR_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "repair-cpu-teams-to-min-roster",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        userTeamName,
+        minPlayers,
+        currentDay,
+      },
+    });
+  });
+}
 export function simulateOneGame({ homeTeam, awayTeam }) {
   return queueSim(() => {
     return new Promise((resolve) => {
@@ -737,7 +803,7 @@ export function computeAllStars(payload = {}) {
   startWorker();
 
   const requestId = "AS" + counter++;
-  const TIMEOUT_MS = 12000;
+  const TIMEOUT_MS = 60000;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {

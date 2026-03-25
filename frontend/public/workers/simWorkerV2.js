@@ -466,6 +466,16 @@ async function advanceFreeAgencyDay(requestId, leagueData, payload) {
     "free-agency-advance-day-error"
   );
 }
+async function repairCpuTeamsToMinRoster(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "repair_cpu_teams_to_min_roster",
+    leagueData,
+    payload || {},
+    "cpu-roster-repair-result",
+    "cpu-roster-repair-error"
+  );
+}
 
 // ------------------------------------------------------------
 // PLAYER RETIREMENT GENERIC REQUEST MODE
@@ -529,6 +539,10 @@ onmessage = async (e) => {
   }
     if (msg.type === "compute-all-stars") {
     return computeAllStars(msg.requestId, msg.payload || {});
+  }
+    if (msg.type === "repair-cpu-teams-to-min-roster") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return repairCpuTeamsToMinRoster(msg.requestId, leaguePayload, msg.payload || {});
   }
 
   if (msg.type === "simulate-batch") {

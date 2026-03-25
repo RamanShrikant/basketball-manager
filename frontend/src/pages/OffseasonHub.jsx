@@ -35,6 +35,8 @@ function buildDefaultOffseasonState(seasonYear) {
     active: true,
     seasonYear,
     retirementsComplete: false,
+    retirementsSkipped: false,
+    retirementsDisabled: false,
     optionsComplete: false,
     freeAgencyComplete: false,
     progressionComplete: false,
@@ -139,7 +141,18 @@ export default function OffseasonHub() {
   const seasonYear = getSeasonYear(leagueData);
   const champion = getChampionName();
   const [offseasonState, setOffseasonState] = useState(() => readOffseasonState(seasonYear));
-  const handleAdvanceToNewSeason = () => {
+
+const toggleRetirementsDisabled = () => {
+  const next = {
+    ...readOffseasonState(seasonYear),
+    retirementsDisabled: !offseasonState.retirementsDisabled,
+  };
+
+  setOffseasonState(next);
+  saveOffseasonState(next);
+};
+
+const handleAdvanceToNewSeason = () => {
   const next = {
     ...offseasonState,
     active: false,
@@ -175,7 +188,9 @@ export default function OffseasonHub() {
         step: "1",
         title: "Player Retirements",
         description:
-          "Run retirement logic, remove retired veterans from active rosters, and store them in league history before the market opens.",
+  offseasonState.retirementsDisabled
+    ? "Retirements are disabled for this save, so veteran players will remain active and the offseason will continue without removing anyone."
+    : "Run retirement logic, remove retired veterans from active rosters, and store them in league history before the market opens.",
         status: retirementsComplete ? "Complete" : "Current",
         accent: retirementsComplete ? "green" : "orange",
         buttonLabel: retirementsComplete ? "View Results" : "Open Retirements",
@@ -253,10 +268,23 @@ export default function OffseasonHub() {
               <h2 className="text-3xl font-extrabold text-white">
                 {seasonYear} Offseason
               </h2>
-              <p className="text-white/60 mt-2">
-                {champion ? `Champions: ${champion}` : "Championship complete."}
-                {selectedTeam?.name ? ` Your team: ${selectedTeam.name}.` : ""}
-              </p>
+<p className="text-white/60 mt-2">
+  {champion ? `Champions: ${champion}` : "Championship complete."}
+  {selectedTeam?.name ? ` Your team: ${selectedTeam.name}.` : ""}
+</p>
+
+<div className="mt-4">
+  <button
+    onClick={toggleRetirementsDisabled}
+    className={`px-4 py-2 rounded-xl font-semibold transition ${
+      offseasonState.retirementsDisabled
+        ? "bg-emerald-700 hover:bg-emerald-600 text-white"
+        : "bg-neutral-700 hover:bg-neutral-600 text-white"
+    }`}
+  >
+    {offseasonState.retirementsDisabled ? "Retirements: OFF" : "Retirements: ON"}
+  </button>
+</div>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

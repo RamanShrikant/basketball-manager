@@ -2,8 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
-import { simulateOneGame, computeSeasonAwards, computeAllStars } from "@/api/simEnginePy";
-import { queueSim } from "@/api/simQueue";
+import {
+  simulateOneGame,
+  computeSeasonAwards,
+  computeAllStars,
+  repairCpuTeamsToMinRoster,
+} from "@/api/simEnginePy";import { queueSim } from "@/api/simQueue";
 import LZString from "lz-string";
 import { createPortal } from "react-dom";
 import AllStars from "./AllStars";
@@ -108,12 +112,12 @@ function getSimulationBlockMessageForGame(game, teams) {
   const homeCount = getTeamPlayerCount(homeTeam);
   const awayCount = getTeamPlayerCount(awayTeam);
 
-  if (homeCount < 5) {
-    return `${homeTeam.name} doesn't have enough players. Minimum 5 required to simulate games.`;
+  if (homeCount < 14) {
+    return `${homeTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`;
   }
 
-  if (awayCount < 5) {
-    return `${awayTeam.name} doesn't have enough players. Minimum 5 required to simulate games.`;
+  if (awayCount < 14) {
+    return `${awayTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`;
   }
 
   return "";
@@ -1232,7 +1236,7 @@ function buildDefRatingLookupFromLeague(allTeams) {
 export default function Calendar() {
   
   const navigate = useNavigate();
-  const { leagueData, selectedTeam, setSelectedTeam } = useGame();
+  const { leagueData, setLeagueData, selectedTeam, setSelectedTeam } = useGame();
   console.log("🔥 Calendar leagueData =", leagueData);
   window.__leagueData = leagueData;
 
@@ -1285,8 +1289,7 @@ const selectedTeamPlayerCount = useMemo(() => {
   return getTeamPlayerCount(selectedTeam);
 }, [selectedTeam]);
 
-const selectedTeamCanSim = selectedTeamPlayerCount >= 5;
-
+const selectedTeamCanSim = selectedTeamPlayerCount >= 14;
 
 
   /* ---------------------------- Team Switch Controls ---------------------------- */
@@ -1895,16 +1898,99 @@ const openAllStarTeams = async () => {
     console.error("[AllStars] Failed to compute all stars:", err);
   }
 };
+function buildTeamsFromLeagueForSim(league) {
+  return getAllTeamsFromLeague(league).map((t) => ({
+    ...t,
+    id: slugifyId(t.name),
+  }));
+}
 
+async function repairCpuRostersBeforeSimulation({
+  leagueData,
+  selectedTeam,
+  setLeagueData,
+}) {
+  const repairRes = await repairCpuTeamsToMinRoster(
+    leagueData,
+    selectedTeam?.name || null,
+    14,
+    0
+  );
 
+  console.log("[CPU Repair] raw result =", repairRes);
+  console.log("[CPU Repair] signings =", repairRes?.signings || []);
+  console.log("[CPU Repair] failedTeams =", repairRes?.failedTeams || []);
+
+  const repairedLeagueData = repairRes?.leagueData || leagueData;
+  const repairedTeams = buildTeamsFromLeagueForSim(repairedLeagueData);
+
+  const magic = repairedTeams.find((t) => t.name === "Orlando Magic");
+  console.log("[CPU Repair] Orlando count after repair =", getTeamPlayerCount(magic));
+
+  if (repairRes?.leagueData && typeof setLeagueData === "function") {
+    setLeagueData(repairedLeagueData);
+  }
+
+  try {
+    localStorage.setItem("leagueData", JSON.stringify(repairedLeagueData));
+  } catch {}
+  if (repairRes?.signings?.length) {
+  const touchedTeams = Array.from(
+    new Set(
+      repairRes.signings
+        .map((s) => s.teamName || s.team)
+        .filter(Boolean)
+    )
+  );
+
+  for (const teamName of touchedTeams) {
+    try {
+      localStorage.removeItem(`gameplan_${teamName}`);
+    } catch {}
+  }
+
+  ensureGameplansForLeague(repairedLeagueData);
+}
+
+  return {
+    repairRes,
+    repairedLeagueData,
+    repairedTeams,
+  };
+}
 /* -------------------------------------------------------------------------- */
 /*                           SIMULATION HANDLERS                               */
 /* -------------------------------------------------------------------------- */
 const handleSimOnlyGame = async (dateStr, game) => {
-  const simBlockMessage = getSimulationBlockMessageForGame(game, teams);
-  if (simBlockMessage) {
-    openSimError(simBlockMessage, "Roster issue");
+  const {
+    repairRes,
+    repairedLeagueData,
+    repairedTeams,
+  } = await repairCpuRostersBeforeSimulation({
+    leagueData,
+    selectedTeam,
+    setLeagueData,
+  });
+
+  const userTeamLive = repairedTeams.find((t) => t.name === selectedTeam?.name);
+  const userCount = getTeamPlayerCount(userTeamLive);
+
+  if (userCount < 14) {
+    openSimError(
+      `${selectedTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`,
+      "Roster issue"
+    );
     return;
+  }
+
+  const simBlockMessage = getSimulationBlockMessageForGame(game, repairedTeams);
+  if (simBlockMessage) {
+    openSimError(simBlockMessage, "Simulation blocked");
+    return;
+  }
+
+  if (repairRes?.signings?.length) {
+    console.log("[CPU Roster Repair] auto-signings before single game:", repairRes.signings);
   }
 
   const upd = { ...scheduleByDate };
@@ -1912,7 +1998,7 @@ const handleSimOnlyGame = async (dateStr, game) => {
 
   let full;
   try {
-    full = await runGameWithRetries(game, leagueData, teams);
+    full = await runGameWithRetries(game, repairedLeagueData, repairedTeams);
   } catch (err) {
     openSimError(
       err?.message || "This team doesn't have enough players.",
@@ -1953,16 +2039,32 @@ const handleSimToDate = async (dateStr) => {
   let playerStats = loadPlayerStats();
 
   if (simLock) return;
+    const {
+    repairRes,
+    repairedLeagueData,
+    repairedTeams,
+  } = await repairCpuRostersBeforeSimulation({
+    leagueData,
+    selectedTeam,
+    setLeagueData,
+  });
 
-if (!selectedTeamCanSim) {
+  const userTeamLive = repairedTeams.find((t) => t.name === selectedTeam?.name);
+  const userCount = getTeamPlayerCount(userTeamLive);
+
+if (userCount < 14) {
   openSimError(
-    `${selectedTeam.name} doesn't have enough players. Minimum 5 required to simulate games.`,
+    `${selectedTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`,
     "Roster issue"
   );
   return;
 }
 
-const simBlockMessage = getSimulationBlockMessageThroughDate(scheduleByDate, teams, dateStr);
+const simBlockMessage = getSimulationBlockMessageThroughDate(
+  scheduleByDate,
+  repairedTeams,
+  dateStr
+);
 if (simBlockMessage) {
   openSimError(simBlockMessage, "Simulation blocked");
   return;
@@ -1983,8 +2085,8 @@ setBoxModal(null);
 
   const sorted = Object.keys(upd).sort((a, b) => new Date(a) - new Date(b));
 
-  const staticLeagueData = leagueData;
-  const staticTeams = teams;
+  const staticLeagueData = repairedLeagueData;
+  const staticTeams = repairedTeams;
 
   try {
 for (const d of sorted) {
@@ -2128,16 +2230,30 @@ const handleSimSeason = async () => {
     console.log("FULL SEASON blocked: simLock already true");
     return;
   }
+    const {
+    repairRes,
+    repairedLeagueData,
+    repairedTeams,
+  } = await repairCpuRostersBeforeSimulation({
+    leagueData,
+    selectedTeam,
+    setLeagueData,
+  });
 
-  if (!selectedTeamCanSim) {
+  const userTeamLive = repairedTeams.find((t) => t.name === selectedTeam?.name);
+  const userCount = getTeamPlayerCount(userTeamLive);
+if (userCount < 14) {
   openSimError(
-    `${selectedTeam.name} doesn't have enough players. Minimum 5 required to simulate games.`,
+    `${selectedTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`,
     "Roster issue"
   );
   return;
 }
 
-const simBlockMessage = getSimulationBlockMessageThroughDate(scheduleByDate, teams);
+const simBlockMessage = getSimulationBlockMessageThroughDate(
+  scheduleByDate,
+  repairedTeams
+);
 if (simBlockMessage) {
   openSimError(simBlockMessage, "Simulation blocked");
   return;
@@ -2153,13 +2269,7 @@ setBoxModal(null);
   // start with current stats
   let playerStats = loadPlayerStats();
 
-  try {
-    console.log("Clearing old results before full season sim");
-    clearAllResultsV3();
-    try { localStorage.removeItem(RESULT_V2_BLOB_KEY); } catch {}
-  } catch (e) {
-    console.warn("Could not clear old results", e);
-  }
+
 
   setSimLock(true);
   console.log("🔥 FULL SEASON START");
@@ -2167,8 +2277,8 @@ setBoxModal(null);
   let upd = structuredClone(scheduleByDate);
   let results = structuredClone(resultsById);
 
-  const staticLeagueData = leagueData;
-  const staticTeams = teams;
+  const staticLeagueData = repairedLeagueData;
+  const staticTeams = repairedTeams;
 
   const dates = Object.keys(upd).sort();
   let gamesSimmed = 0;

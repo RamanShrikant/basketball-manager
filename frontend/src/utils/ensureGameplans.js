@@ -1,6 +1,4 @@
-// src/utils/ensureGameplans.js
-
-const GAMEPLAN_VERSION = 2;
+const GAMEPLAN_VERSION = 3;
 
 // Helpers to support both league shapes: { teams: [...] } or { conferences: { ... } }
 function getAllTeamsFromLeague(leagueData) {
@@ -22,6 +20,72 @@ function getRosterSignature(teamPlayers = []) {
     )
     .sort()
     .join("||");
+}
+
+function getRosterNames(teamPlayers = []) {
+  return new Set(
+    (teamPlayers || [])
+      .map((p) => p?.name)
+      .filter(Boolean)
+  );
+}
+
+function safeParseGameplan(raw) {
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function setsMatch(a, b) {
+  if (a.size !== b.size) return false;
+
+  for (const value of a) {
+    if (!b.has(value)) return false;
+  }
+
+  return true;
+}
+
+function hasValidMinutesMap(minutes, rosterNames) {
+  if (!minutes || typeof minutes !== "object") return false;
+
+  const minuteNames = new Set(Object.keys(minutes));
+
+  if (!setsMatch(rosterNames, minuteNames)) return false;
+
+  for (const name of minuteNames) {
+    if (!Number.isFinite(Number(minutes[name]))) return false;
+  }
+
+  return true;
+}
+
+function hasValidOrder(order, rosterNames) {
+  if (!Array.isArray(order)) return false;
+
+  const orderNames = new Set(order.filter(Boolean));
+  return setsMatch(rosterNames, orderNames);
+}
+
+function shouldRebuildGameplan(team, savedPlan) {
+  if (!team?.name) return false;
+  if (!savedPlan || typeof savedPlan !== "object") return true;
+
+  const teamPlayers = team?.players || [];
+  const liveSignature = getRosterSignature(teamPlayers);
+  const liveNames = getRosterNames(teamPlayers);
+
+  if (savedPlan.version !== GAMEPLAN_VERSION) return true;
+  if (savedPlan.teamName !== team.name) return true;
+  if (savedPlan.rosterSignature !== liveSignature) return true;
+  if (!hasValidOrder(savedPlan.order, liveNames)) return true;
+  if (!hasValidMinutesMap(savedPlan.minutes, liveNames)) return true;
+
+  return false;
 }
 
 function fatiguePenalty(mins, stamina) {
@@ -268,27 +332,47 @@ function saveGameplan(team) {
   return true;
 }
 
-// creates only missing plans
+export function ensureSingleTeamGameplan(team) {
+  if (!team?.name) {
+    return { created: false, rebuilt: false, skipped: true };
+  }
+
+  const key = `gameplan_${team.name}`;
+  const raw = localStorage.getItem(key);
+  const saved = safeParseGameplan(raw);
+
+  if (!shouldRebuildGameplan(team, saved)) {
+    return { created: false, rebuilt: false, skipped: true };
+  }
+
+  const existedBefore = !!raw;
+  saveGameplan(team);
+
+  return {
+    created: !existedBefore,
+    rebuilt: existedBefore,
+    skipped: false,
+  };
+}
+
+// creates missing plans and rebuilds stale ones
 export function ensureGameplansForLeague(leagueData) {
   const teams = getAllTeamsFromLeague(leagueData);
-  if (!teams.length) return { created: 0, skipped: 0 };
+  if (!teams.length) return { created: 0, rebuilt: 0, skipped: 0 };
 
   let created = 0;
+  let rebuilt = 0;
   let skipped = 0;
 
   for (const t of teams) {
-    const key = `gameplan_${t.name}`;
-    const already = localStorage.getItem(key);
+    const res = ensureSingleTeamGameplan(t);
 
-    if (already) {
-      skipped++;
-      continue;
-    }
-
-    if (saveGameplan(t)) created++;
+    if (res.created) created++;
+    else if (res.rebuilt) rebuilt++;
+    else skipped++;
   }
 
-  return { created, skipped };
+  return { created, rebuilt, skipped };
 }
 
 // force rebuilds ALL teams, overwriting stale plans
