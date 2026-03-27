@@ -141,44 +141,54 @@ def _stat_lookup(
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "age_curve": {
-        18: 1.60, 19: 1.50, 20: 1.35, 21: 1.20,
-        22: 1.00, 23: 0.90, 24: 0.75, 25: 0.60, 26: 0.40,
-        27: 0.20, 28: 0.10, 29: 0.05,
-        30: -0.20, 31: -0.35, 32: -0.50, 33: -0.65, 34: -0.80,
-        35: -0.95, 36: -1.10, 37: -1.25, 38: -1.40, 39: -1.55, 40: -1.70
+        18: 0.08, 19: 0.08, 20: 0.07, 21: 0.06,
+        22: 0.05, 23: 0.04, 24: 0.03, 25: 0.02, 26: 0.01,
+        27: 0.00, 28: 0.00, 29: 0.00,
+        30: 0.00, 31: -0.10, 32: -0.16, 33: -0.24, 34: -0.34,
+        35: -0.46, 36: -0.60, 37: -0.76, 38: -0.94, 39: -1.14, 40: -1.36
     },
 
     "dev_trait_mult": {
-        "Bust": 0.80,
+        "Bust": 0.95,
         "Normal": 1.00,
-        "High": 1.15,
-        "Star": 1.30
+        "High": 1.04,
+        "Star": 1.08
     },
 
-    "potential_scale": 0.060,
+    "potential_scale": 0.008,
 
-    "minutes_cap_mpg": 30.0,
+    "peak_age": 30,
+    "decline_start_age": 30,
+    "young_progress_attr_scale": 0.30,
+    "young_max_delta": 1.05,
+    "peak_age_gap_scale": 0.08,
+     "old_decline_base": 0.28,
+    "old_decline_age_scale": 0.10,
+    "old_decline_mult": 1.06,
+    "old_max_decline": 1.35,
+
+    "minutes_cap_mpg": 32.0,
     "minutes_min_mpg": 5.0,
 
-    "noise_sigma": 0.20,
+    "noise_sigma": 0.06,
 
-    "max_abs_delta_per_attr": 6.0,
+    "max_abs_delta_per_attr": 2.5,
     "min_rating": 25,
     "max_rating": 99,
 
     "attrs": {
-        "young_mult_all": 1.00,
-        "old_mult_all": 1.15,
+        "young_mult_all": 0.92,
+        "old_mult_all": 1.02,
         "groups": {}
     },
 
     "derived_fields": {
-        "overall_mult": 0.35,
-        "off_mult": 0.35,
-        "def_mult": 0.35,
-        "stamina_mult": 0.50,
-        "scoring_mult": 0.25,
-        "max_abs_delta_per_field": 4.0
+        "overall_mult": 0.28,
+        "off_mult": 0.28,
+        "def_mult": 0.28,
+        "stamina_mult": 0.30,
+        "scoring_mult": 0.22,
+        "max_abs_delta_per_field": 2.8
     },
 }
 
@@ -353,17 +363,19 @@ def _age_curve_value(age: int, settings: Dict[str, Any]) -> float:
 
 
 def _minutes_factor(mpg: Optional[float], settings: Dict[str, Any]) -> float:
-    # ✅ If no stats, treat as neutral minutes (don’t kill progression).
+    # If no stats, treat as neutral minutes.
     if mpg is None:
         return 1.0
 
     lo = float(settings.get("minutes_min_mpg", 5.0))
-    hi = float(settings.get("minutes_cap_mpg", 30.0))
+    hi = float(settings.get("minutes_cap_mpg", 32.0))
+
     if mpg <= lo:
-        return 0.15
+        return 0.45
     if mpg >= hi:
         return 1.0
-    return 0.15 + 0.85 * ((mpg - lo) / (hi - lo))
+
+    return 0.45 + 0.55 * ((mpg - lo) / (hi - lo))
 
 
 def _dev_multiplier(potential: float, dev_trait: str, settings: Dict[str, Any]) -> float:
@@ -376,6 +388,7 @@ def _dev_multiplier(potential: float, dev_trait: str, settings: Dict[str, Any]) 
 def _production_bonus(stats: Optional[Dict[str, Any]]) -> float:
     if not stats:
         return 1.0
+
     gp = max(_safe_float(stats.get("gp"), 0.0), 0.0)
     if gp <= 0:
         return 1.0
@@ -386,10 +399,8 @@ def _production_bonus(stats: Optional[Dict[str, Any]]) -> float:
     stl = _safe_float(stats.get("stl"), 0.0) / gp
     blk = _safe_float(stats.get("blk"), 0.0) / gp
 
-    idx = pts + 1.5 * ast + 1.2 * reb + 3.0 * stl + 3.0 * blk
-    return _clamp(1.0 + (idx - 20.0) / 400.0, 0.95, 1.05)
-
-
+    idx = pts + 1.2 * ast + 1.0 * reb + 2.0 * stl + 2.0 * blk
+    return _clamp(1.0 + (idx - 20.0) / 800.0, 0.97, 1.03)
 def apply_end_of_season_progression(
     league: Dict[str, Any],
     stats_by_key: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -465,15 +476,58 @@ def apply_end_of_season_progression(
                 if gp > 0 and mins > 0:
                     mpg = mins / gp
 
-        base = _age_curve_value(age, settings)
+        current_overall = _safe_float(p.get("overall"), 0.0)
+        if current_overall <= 0 and isinstance(p.get("attrs"), list) and len(p.get("attrs") or []) > 0:
+            current_overall = float(
+                calc_overall_from_attrs(
+                    p.get("attrs") or [],
+                    p.get("pos") or p.get("position") or "SF"
+                )
+            )
+
+        peak_age = int(settings.get("peak_age", 30))
+        decline_start_age = int(settings.get("decline_start_age", 30))
+        gap_to_potential = potential - current_overall
+
         min_fac = _minutes_factor(mpg, settings)
         dev_fac = _dev_multiplier(potential, dev_trait, settings)
         prod_fac = _production_bonus(stats)
+        age_curve = _age_curve_value(age, settings)
+        noise = rng.gauss(0.0, float(settings.get("noise_sigma", 0.10)))
 
-        noise = rng.gauss(0.0, float(settings.get("noise_sigma", 0.2)))
-        base_delta = base * dev_fac * min_fac * prod_fac * (1.0 + noise)
+        if age < peak_age:
+            years_to_peak = max(1, peak_age - age)
+            progress_step = max(0.0, gap_to_potential) / years_to_peak
+            base_delta = progress_step * float(settings.get("young_progress_attr_scale", 0.32))
+            base_delta *= min_fac * prod_fac * dev_fac
+            base_delta += age_curve + noise
+            base_delta = _clamp(base_delta, 0.0, float(settings.get("young_max_delta", 1.15)))
+        elif age == peak_age:
+            settle_gap = gap_to_potential * float(settings.get("peak_age_gap_scale", 0.10))
+            base_delta = _clamp((settle_gap * min_fac * prod_fac) + noise, -0.15, 0.35)
+        else:
+            years_past_peak = age - decline_start_age
+            decline = float(settings.get("old_decline_base", 0.30)) + (
+                years_past_peak * float(settings.get("old_decline_age_scale", 0.10))
+            )
 
-        is_old = age >= 30
+            if current_overall >= 85:
+                decline += 0.08
+            if current_overall >= 90:
+                decline += 0.08
+
+            decline *= float(settings.get("old_decline_mult", 1.00))
+            if min_fac >= 0.85:
+                decline *= 0.95
+
+            base_delta = -decline + noise
+            base_delta = _clamp(
+                base_delta,
+                -float(settings.get("old_max_decline", 1.40)),
+                -0.05
+            )
+
+        is_old = age > decline_start_age
 
         attrs = p.get("attrs")
         if isinstance(attrs, list) and len(attrs) > 0:
@@ -511,8 +565,27 @@ def apply_end_of_season_progression(
 
         ovr = _safe_int(p.get("overall"), 0)
         pot = _safe_int(p.get("potential"), 50)
-        if ovr > pot:
-            p["potential"] = min(rmax, ovr)
+
+        if age <= 27:
+            upside_cap = 12
+            pot_decay = 0
+        elif age <= 30:
+            upside_cap = 8
+            pot_decay = max(0, age - 28)
+        elif age <= 33:
+            upside_cap = 4
+            pot_decay = 2 + (age - 31)
+        else:
+            upside_cap = 2
+            pot_decay = 4 + (max(0, age - 34) * 2)
+
+        new_potential = max(ovr, pot - pot_decay)
+        new_potential = min(new_potential, ovr + upside_cap)
+
+        if ovr > new_potential:
+            new_potential = ovr
+
+        p["potential"] = min(rmax, new_potential)
 
         # Clear stale market value so free agency logic recalculates it later
         if "marketValue" in p:
