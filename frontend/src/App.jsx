@@ -23,6 +23,7 @@ import OffseasonHub from "./pages/OffseasonHub";
 import PlayerRetirements from "./pages/PlayerRetirements";
 import PlayerTeamOptions from "./pages/PlayerTeamOptions";
 import AwardTracker from "./pages/AwardTracker.jsx";
+import ViewingOffers from "./pages/ViewingOffers.jsx";
 
 
 
@@ -63,6 +64,7 @@ function App() {
 <Route path="/offseason-hub" element={<Navigate to="/offseason" replace />} />
         <Route path="/player-team-options" element={<PlayerTeamOptions />} />
 <Route path="/player-retirements" element={<PlayerRetirements />} />
+<Route path="/viewing-offers" element={<ViewingOffers />} />
 
       </Routes>
     </BrowserRouter>

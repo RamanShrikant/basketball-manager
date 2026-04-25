@@ -614,6 +614,7 @@ if (msg.type === "all-stars-result") {
         console.warn("[simEnginePy] free-agency-advance-day-error for unknown requestId", msg.requestId, msg);
         return;
       }
+      
       pending.delete(msg.requestId);
       if (entry.timer) clearTimeout(entry.timer);
       const err = msg.error || "Advance free agency day failed";
@@ -621,7 +622,34 @@ if (msg.type === "all-stars-result") {
       else entry.resolve({ ok: false, reason: err });
       return;
     }
+        // ------------------------------------------------------------
+    // PROCESS PENDING USER DECISIONS RESULT
+    // ------------------------------------------------------------
+    if (msg.type === "free-agency-process-pending-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-process-pending-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
 
+    if (msg.type === "free-agency-process-pending-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] free-agency-process-pending-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Process pending user free agency decisions failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
     // ------------------------------------------------------------
     // PLAYER RETIREMENTS RESULT
     // ------------------------------------------------------------
@@ -1492,6 +1520,46 @@ export function advanceFreeAgencyDay(
       leagueData: deepSanitize(leagueData),
       payload: {
         userTeamName,
+      },
+    });
+  });
+}
+export function processPendingUserFreeAgencyDecisions(
+  leagueData,
+  userTeamName = null,
+  selectedPlayerKeys = []
+) {
+  startWorker();
+
+  const requestId = "FAPD" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("PROCESS_PENDING_USER_FREE_AGENCY_DECISIONS_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "process-pending-user-free-agency-decisions",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        userTeamName,
+        selectedPlayerKeys: deepSanitize(selectedPlayerKeys),
       },
     });
   });

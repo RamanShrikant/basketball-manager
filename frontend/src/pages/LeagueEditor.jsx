@@ -136,143 +136,311 @@ export default function LeagueEditor() {
     setShowTradeModal(true);
   };
 
-  const executeTrade = () => {
-    const sameBucket =
-      tradeA.pool === tradeB.pool &&
-      tradeA.conf === tradeB.conf &&
-      tradeA.teamIdx === tradeB.teamIdx;
+const executeTrade = () => {
+  const sameBucket =
+    tradeA.pool === tradeB.pool &&
+    tradeA.conf === tradeB.conf &&
+    tradeA.teamIdx === tradeB.teamIdx;
 
-    if (sameBucket) {
-      alert("Pick two different destinations.");
-      return;
-    }
-
-    const confCopy = JSON.parse(JSON.stringify(conferences));
-    const faCopy = JSON.parse(JSON.stringify(freeAgents || []));
-
-    const bucketA = getTradeBucket(tradeA, confCopy, faCopy);
-    const bucketB = getTradeBucket(tradeB, confCopy, faCopy);
-
-    const aSend = bucketA.filter((p) => sendAIds.includes(p.id));
-    const bSend = bucketB.filter((p) => sendBIds.includes(p.id));
-
-    const nextA = bucketA
-      .filter((p) => !sendAIds.includes(p.id))
-      .concat(bSend);
-
-    const nextB = bucketB
-      .filter((p) => !sendBIds.includes(p.id))
-      .concat(aSend);
-
-    if (tradeA.pool === "FA") {
-      faCopy.splice(0, faCopy.length, ...nextA);
-    } else {
-      confCopy[tradeA.conf][tradeA.teamIdx].players = nextA;
-    }
-
-    if (tradeB.pool === "FA") {
-      faCopy.splice(0, faCopy.length, ...nextB);
-    } else {
-      confCopy[tradeB.conf][tradeB.teamIdx].players = nextB;
-    }
-
-    setConferences(confCopy);
-    setFreeAgents(faCopy);
-
-    setSendAIds([]);
-    setSendBIds([]);
-    setShowTradeModal(false);
-  };
-
-  /* ---------------- Player Model ---------------- */
-  function initPlayer() {
-    return {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      name: "",
-      pos: "PG",
-      secondaryPos: "",
-      age: 25,
-      height: 78,
-      attrs: Array(15).fill(75),
-      overall: 75,
-      offRating: 75,
-      defRating: 75,
-      stamina: 75,
-      potential: 75,
-      headshot: "",
-      scoringRating: 50,
-
-      // NEW: birthdays
-      birthMonth: 1,
-      birthDay: 1,
-
-      // NEW: contract (supports options)
-      contract: {
-        startYear: 2026,
-        salaryByYear: [8_000_000, 8_500_000],
-        option: null, // { type: "team" | "player", yearIndices: [1], picked: null }
-      },
-    };
+  if (sameBucket) {
+    alert("Pick two different destinations.");
+    return;
   }
 
-  // Backwards-compatible defaults for player objects (load/import/edit)
-  const normalizePlayer = (p) => {
-    const birthMonth = Number(p?.birthMonth ?? 1);
-    const birthDay = Number(p?.birthDay ?? 1);
+  const confCopy = JSON.parse(JSON.stringify(conferences));
+  const faCopy = JSON.parse(JSON.stringify(freeAgents || []));
 
-    // IMPORTANT: allow true free agents to have no contract at all
-    if (p?.contract === null) {
+  const bucketA = getTradeBucket(tradeA, confCopy, faCopy);
+  const bucketB = getTradeBucket(tradeB, confCopy, faCopy);
+
+  const aSend = bucketA.filter((p) => sendAIds.includes(p.id)).map((p0) => normalizePlayer(p0));
+  const bSend = bucketB.filter((p) => sendBIds.includes(p.id)).map((p0) => normalizePlayer(p0));
+
+  const destATeamName =
+    tradeA.pool === "FA"
+      ? null
+      : confCopy?.[tradeA.conf]?.[tradeA.teamIdx]?.name || null;
+
+  const destBTeamName =
+    tradeB.pool === "FA"
+      ? null
+      : confCopy?.[tradeB.conf]?.[tradeB.teamIdx]?.name || null;
+
+  const movePlayersToDestination = (players, destTeamName, destPool) => {
+    return players.map((p0) => {
+      const p = normalizePlayer(p0);
+
+      const nextMeta = {
+        ...(p.meta || buildDefaultMeta()),
+        acquiredVia: destPool === "FA" ? "waivers" : "trade",
+      };
+
+      const nextRights =
+        destPool === "FA"
+          ? {
+              ...(p.rights || buildDefaultRights()),
+              heldByTeam: null,
+              seasonsTowardBird: 0,
+              birdLevel: "none",
+            }
+          : {
+              ...(p.rights || buildDefaultRights()),
+              heldByTeam: destTeamName,
+            };
+
       return {
         ...p,
-        headshot: p?.headshot || "",
-        scoringRating: p?.scoringRating ?? 50,
-        birthMonth: Math.min(12, Math.max(1, birthMonth)),
-        birthDay: Math.min(31, Math.max(1, birthDay)),
-        contract: null,
+        meta: nextMeta,
+        rights: buildDefaultRights(nextRights),
       };
-    }
+    });
+  };
 
-    const contract =
-      p?.contract ??
-      (p?.salary != null || p?.contractYears != null
-        ? {
-            startYear: 2026,
-            salaryByYear: Array(Math.max(1, Number(p.contractYears ?? 1))).fill(
-              Number(p.salary ?? 8) * 1_000_000
-            ),
-            option: null,
-          }
-        : {
-            startYear: 2026,
-            salaryByYear: [8_000_000, 8_500_000],
-            option: null,
-          });
+  const movedAToB = movePlayersToDestination(aSend, destBTeamName, tradeB.pool);
+  const movedBToA = movePlayersToDestination(bSend, destATeamName, tradeA.pool);
 
-    const rawOption = contract?.option ?? null;
+  const nextA = bucketA
+    .filter((p) => !sendAIds.includes(p.id))
+    .concat(movedBToA);
 
-    const safeContract = {
-      startYear: Number(contract?.startYear ?? 2026),
-      salaryByYear: Array.isArray(contract?.salaryByYear)
-        ? contract.salaryByYear.map((x) => Number(x) || 0)
-        : [8_000_000],
-      option: rawOption
-        ? {
-            type: rawOption?.type === "player" ? "player" : "team",
-            yearIndices: getOptionYearIndices(rawOption),
-            picked: rawOption?.picked ?? null,
-          }
-        : null,
+  const nextB = bucketB
+    .filter((p) => !sendBIds.includes(p.id))
+    .concat(movedAToB);
+
+  if (tradeA.pool === "FA") {
+    faCopy.splice(0, faCopy.length, ...nextA);
+  } else {
+    confCopy[tradeA.conf][tradeA.teamIdx].players = nextA;
+  }
+
+  if (tradeB.pool === "FA") {
+    faCopy.splice(0, faCopy.length, ...nextB);
+  } else {
+    confCopy[tradeB.conf][tradeB.teamIdx].players = nextB;
+  }
+
+  setConferences(confCopy);
+  setFreeAgents(faCopy);
+
+  setSendAIds([]);
+  setSendBIds([]);
+  setShowTradeModal(false);
+};
+  function getBirdLevelFromSeasons(seasonsTowardBird = 0) {
+  const n = Math.max(0, Number(seasonsTowardBird) || 0);
+
+  if (n >= 3) return "bird";
+  if (n >= 2) return "early_bird";
+  if (n >= 1) return "non_bird";
+  return "none";
+}
+
+function buildDefaultRights(overrides = {}) {
+  const seasonsTowardBird = Math.max(
+    0,
+    Number(overrides?.seasonsTowardBird) || 0
+  );
+
+  return {
+    heldByTeam: overrides?.heldByTeam ?? null,
+    seasonsTowardBird,
+    birdLevel:
+      overrides?.birdLevel ?? getBirdLevelFromSeasons(seasonsTowardBird),
+    rookieScale: Boolean(overrides?.rookieScale),
+    restrictedFreeAgent: Boolean(overrides?.restrictedFreeAgent),
+  };
+}
+
+function buildDefaultMeta(overrides = {}) {
+  return {
+    draftYear:
+      overrides?.draftYear === null || overrides?.draftYear === undefined
+        ? null
+        : Number(overrides.draftYear),
+    draftRound:
+      overrides?.draftRound === null || overrides?.draftRound === undefined
+        ? null
+        : Number(overrides.draftRound),
+    draftPick:
+      overrides?.draftPick === null || overrides?.draftPick === undefined
+        ? null
+        : Number(overrides.draftPick),
+    draftedBy: overrides?.draftedBy ?? null,
+    acquiredVia: overrides?.acquiredVia ?? "editor",
+    proSeasons: Math.max(0, Number(overrides?.proSeasons) || 0),
+    yearsWithCurrentTeam: Math.max(0, Number(overrides?.yearsWithCurrentTeam) || 0),
+  };
+}
+
+function buildDefaultHistory(overrides = {}) {
+  return {
+    seasons: Array.isArray(overrides?.seasons) ? overrides.seasons : [],
+    accolades: Array.isArray(overrides?.accolades) ? overrides.accolades : [],
+    transactions: Array.isArray(overrides?.transactions) ? overrides.transactions : [],
+  };
+}
+
+function getBirdLabel(birdLevel) {
+  if (birdLevel === "bird") return "Full Bird";
+  if (birdLevel === "early_bird") return "Early Bird";
+  if (birdLevel === "non_bird") return "Non-Bird";
+  return "None";
+}
+
+function getBirdCreditFromLevel(birdLevel) {
+  if (birdLevel === "bird") return 3;
+  if (birdLevel === "early_bird") return 2;
+  if (birdLevel === "non_bird") return 1;
+  return 0;
+}
+
+const ACCOLADE_OPTIONS = [
+  { value: "mvp", label: "Most Valuable Player" },
+  { value: "dpoy", label: "Defensive Player of the Year" },
+  { value: "roy", label: "Rookie of the Year" },
+  { value: "sixth_man", label: "Sixth Man of the Year" },
+  { value: "mip", label: "Most Improved Player" },
+  { value: "clutch_player", label: "Clutch Player of the Year" },
+  { value: "all_nba_first", label: "All-NBA First Team" },
+  { value: "all_nba_second", label: "All-NBA Second Team" },
+  { value: "all_nba_third", label: "All-NBA Third Team" },
+  { value: "all_defensive_first", label: "All-Defensive First Team" },
+  { value: "all_defensive_second", label: "All-Defensive Second Team" },
+  { value: "all_rookie_first", label: "All-Rookie First Team" },
+  { value: "all_rookie_second", label: "All-Rookie Second Team" },
+  { value: "all_star", label: "NBA All-Star" },
+  { value: "all_star_mvp", label: "All-Star Game MVP" },
+  { value: "scoring_champ", label: "Scoring Champion" },
+  { value: "assist_champ", label: "Assist Champion" },
+  { value: "rebounding_champ", label: "Rebounding Champion" },
+  { value: "steals_champ", label: "Steals Champion" },
+  { value: "blocks_champ", label: "Blocks Champion" },
+  { value: "nba_champion", label: "NBA Champion" },
+  { value: "finals_mvp", label: "Finals MVP" },
+  { value: "custom", label: "Custom" },
+];
+
+function getAccoladeLabel(type) {
+  const found = ACCOLADE_OPTIONS.find((item) => item.value === type);
+  return found?.label ?? "Custom";
+}
+  /* ---------------- Player Model ---------------- */
+function initPlayer() {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: "",
+    pos: "PG",
+    secondaryPos: "",
+    age: 25,
+    height: 78,
+    attrs: Array(15).fill(75),
+    overall: 75,
+    offRating: 75,
+    defRating: 75,
+    stamina: 75,
+    potential: 75,
+    headshot: "",
+    scoringRating: 50,
+
+    // birthdays
+    birthMonth: 1,
+    birthDay: 1,
+
+    // contract
+    contract: {
+      startYear: 2026,
+      salaryByYear: [8_000_000, 8_500_000],
+      option: null,
+    },
+
+    // Bird rights / team-control scaffolding
+    rights: buildDefaultRights(),
+
+    // career / rookie / draft scaffolding
+    meta: buildDefaultMeta(),
+
+    // career continuity
+    history: buildDefaultHistory(),
+  };
+}
+  // Backwards-compatible defaults for player objects (load/import/edit)
+const normalizePlayer = (p) => {
+  const birthMonth = Number(p?.birthMonth ?? 1);
+  const birthDay = Number(p?.birthDay ?? 1);
+
+  const safeMeta = buildDefaultMeta(p?.meta ?? {});
+  const safeHistory = buildDefaultHistory(p?.history ?? {});
+
+  const rawRights =
+    p?.rights ??
+    {
+      heldByTeam: null,
+      seasonsTowardBird: 0,
+      rookieScale: false,
+      restrictedFreeAgent: false,
     };
 
+  const safeRights = buildDefaultRights(rawRights);
+
+  // IMPORTANT: allow true free agents to have no contract at all
+  if (p?.contract === null) {
     return {
       ...p,
       headshot: p?.headshot || "",
       scoringRating: p?.scoringRating ?? 50,
       birthMonth: Math.min(12, Math.max(1, birthMonth)),
       birthDay: Math.min(31, Math.max(1, birthDay)),
-      contract: safeContract,
+      rights: safeRights,
+      meta: safeMeta,
+      history: safeHistory,
+      contract: null,
     };
+  }
+
+  const contract =
+    p?.contract ??
+    (p?.salary != null || p?.contractYears != null
+      ? {
+          startYear: 2026,
+          salaryByYear: Array(Math.max(1, Number(p.contractYears ?? 1))).fill(
+            Number(p.salary ?? 8) * 1_000_000
+          ),
+          option: null,
+        }
+      : {
+          startYear: 2026,
+          salaryByYear: [8_000_000, 8_500_000],
+          option: null,
+        });
+
+  const rawOption = contract?.option ?? null;
+
+  const safeContract = {
+    startYear: Number(contract?.startYear ?? 2026),
+    salaryByYear: Array.isArray(contract?.salaryByYear)
+      ? contract.salaryByYear.map((x) => Number(x) || 0)
+      : [8_000_000],
+    option: rawOption
+      ? {
+          type: rawOption?.type === "player" ? "player" : "team",
+          yearIndices: getOptionYearIndices(rawOption),
+          picked: rawOption?.picked ?? null,
+        }
+      : null,
   };
+
+  return {
+    ...p,
+    headshot: p?.headshot || "",
+    scoringRating: p?.scoringRating ?? 50,
+    birthMonth: Math.min(12, Math.max(1, birthMonth)),
+    birthDay: Math.min(31, Math.max(1, birthDay)),
+    rights: safeRights,
+    meta: safeMeta,
+    history: safeHistory,
+    contract: safeContract,
+  };
+};
 
   const formatSalaryText = (salaryByYear = []) => {
     return (salaryByYear || [])
@@ -900,6 +1068,10 @@ export default function LeagueEditor() {
     }
     setShowPlayerForm(true);
   };
+    const getEditingRightsHolder = () => {
+    if (editingPool === "FA") return null;
+    return conferences?.[selectedConf]?.[editingTeam]?.name || null;
+  };
 
   const savePlayer = () => {
     const salaryByYear = parseSalaryText(salaryText);
@@ -918,8 +1090,14 @@ export default function LeagueEditor() {
           }
         : null;
 
+    const rightsHolder = getEditingRightsHolder();
+
     const p = normalizePlayer({
       ...playerForm,
+      rights: buildDefaultRights({
+        ...(playerForm.rights ?? buildDefaultRights()),
+        heldByTeam: rightsHolder,
+      }),
       contract: {
         ...(playerForm.contract ?? {}),
         startYear: playerForm.contract?.startYear ?? 2026,
@@ -1391,6 +1569,10 @@ export default function LeagueEditor() {
                                   <span>Sco {p.scoringRating?.toFixed(1)}</span>
                                   <span>Ht {formatHeight(p.height)}</span>
                                   <span>BD {p.birthMonth}/{p.birthDay}</span>
+                                  <span>Pro {p.meta?.proSeasons ?? 0}</span>
+                                  <span>TeamYrs {p.meta?.yearsWithCurrentTeam ?? 0}</span>
+                                  <span>Via {p.meta?.acquiredVia ?? "editor"}</span>
+                                  <span>Bird {getBirdLabel(p.rights?.birdLevel)}</span>
                                   <span>Yrs {(p.contract?.salaryByYear || []).length}</span>
                                   <span>
                                     Opt {formatOptionSummary(p.contract?.option) === "—" ? "None" : formatOptionSummary(p.contract?.option)}
@@ -1730,6 +1912,158 @@ export default function LeagueEditor() {
                 </div>
               </div>
 
+              {/* Career / Rights */}
+              <div className="mt-4">
+                <div className="text-sm font-semibold text-slate-700 mb-1">Career / Rights</div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-slate-600">Pro Seasons</label>
+                    <input
+                      className="border p-2 rounded w-full"
+                      type="number"
+                      min="0"
+                      max="30"
+                      value={playerForm.meta?.proSeasons ?? 0}
+                      onChange={(e) =>
+                        setPlayerForm({
+                          ...playerForm,
+                          meta: {
+                            ...(playerForm.meta ?? buildDefaultMeta()),
+                            proSeasons: Number(e.target.value),
+                          },
+                        })
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-600">Years With Current Team</label>
+                    <input
+                      className="border p-2 rounded w-full"
+                      type="number"
+                      min="0"
+                      max="30"
+                      value={playerForm.meta?.yearsWithCurrentTeam ?? 0}
+                      onChange={(e) =>
+                        setPlayerForm({
+                          ...playerForm,
+                          meta: {
+                            ...(playerForm.meta ?? buildDefaultMeta()),
+                            yearsWithCurrentTeam: Number(e.target.value),
+                          },
+                        })
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-600">Acquired Via</label>
+                    <select
+                      className="border p-2 rounded w-full"
+                      value={playerForm.meta?.acquiredVia ?? "editor"}
+                      onChange={(e) =>
+                        setPlayerForm({
+                          ...playerForm,
+                          meta: {
+                            ...(playerForm.meta ?? buildDefaultMeta()),
+                            acquiredVia: e.target.value,
+                          },
+                        })
+                      }
+                    >
+                      <option value="editor">Editor / Unknown</option>
+                      <option value="draft">Draft</option>
+                      <option value="trade">Trade</option>
+                      <option value="free_agency">Free Agency</option>
+                      <option value="waivers">Waivers</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-600">Bird Rights</label>
+                    <select
+                      className="border p-2 rounded w-full"
+                      value={playerForm.rights?.birdLevel ?? "none"}
+                      onChange={(e) => {
+                        const birdLevel = e.target.value;
+                        const seasonsTowardBird = getBirdCreditFromLevel(birdLevel);
+
+                        setPlayerForm({
+                          ...playerForm,
+                          rights: buildDefaultRights({
+                            ...(playerForm.rights ?? buildDefaultRights()),
+                            birdLevel,
+                            seasonsTowardBird,
+                          }),
+                        });
+                      }}
+                    >
+                      <option value="none">None</option>
+                      <option value="non_bird">Non-Bird</option>
+                      <option value="early_bird">Early Bird</option>
+                      <option value="bird">Full Bird</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-600">Rights Held By</label>
+                    <div className="border p-2 rounded w-full bg-slate-50 text-slate-700">
+                      {editingPool === "FA"
+                        ? "None - Free Agent"
+                        : conferences?.[selectedConf]?.[editingTeam]?.name || "Current Team"}
+                    </div>
+                    <div className="text-[0.7rem] text-slate-500 mt-1">
+                      Automatically assigned from the player&apos;s current team.
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-600">Team Control</label>
+                    <div className="border rounded p-2 flex flex-col gap-1 text-sm">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(playerForm.rights?.rookieScale)}
+                          onChange={(e) =>
+                            setPlayerForm({
+                              ...playerForm,
+                              rights: buildDefaultRights({
+                                ...(playerForm.rights ?? buildDefaultRights()),
+                                rookieScale: e.target.checked,
+                              }),
+                            })
+                          }
+                        />
+                        Rookie Scale
+                      </label>
+
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(playerForm.rights?.restrictedFreeAgent)}
+                          onChange={(e) =>
+                            setPlayerForm({
+                              ...playerForm,
+                              rights: buildDefaultRights({
+                                ...(playerForm.rights ?? buildDefaultRights()),
+                                restrictedFreeAgent: e.target.checked,
+                              }),
+                            })
+                          }
+                        />
+                        Restricted FA
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-xs text-slate-500 mt-2">
+                  Bird Rights Preview: {getBirdLabel(playerForm.rights?.birdLevel)} | Bird Credit: {" "}
+                  {playerForm.rights?.seasonsTowardBird ?? 0}
+                </div>
+              </div>
+
               {/* Option */}
               <div className="mt-4">
                 <div className="text-sm font-semibold text-slate-700 mb-1">Option</div>
@@ -1834,6 +2168,460 @@ export default function LeagueEditor() {
                     const opt = c.option?.type ? ` (${formatOptionSummary(c.option)})` : "";
                     return parts.join(", ") + opt;
                   })()}
+                </div>
+              </div>
+
+              {/* History */}
+              <div className="mt-4">
+                <div className="text-sm font-semibold text-slate-700 mb-1">History</div>
+
+                <div className="border rounded p-3 bg-slate-50">
+                  <div className="flex justify-between items-center mb-2">
+                    <div className="text-sm font-semibold">Season Stat Rows</div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPlayerForm({
+                          ...playerForm,
+                          history: buildDefaultHistory({
+                            ...(playerForm.history ?? buildDefaultHistory()),
+                            seasons: [
+                              ...((playerForm.history?.seasons) ?? []),
+                              {
+                                seasonYear: 2026,
+                                teamName: "",
+                                teamLogo: "",
+                                games: 0,
+                                ppg: 0,
+                                rpg: 0,
+                                apg: 0,
+                                spg: 0,
+                                bpg: 0,
+                                fgPct: 0,
+                                threePct: 0,
+                                ftPct: 0,
+                              },
+                            ],
+                          }),
+                        })
+                      }
+                      className="text-xs bg-blue-600 text-white px-2 py-1 rounded"
+                    >
+                      Add Season
+                    </button>
+                  </div>
+
+                  <div className="space-y-3 max-h-[32rem] overflow-y-auto pr-1">
+  {(playerForm.history?.seasons ?? []).map((row, idx) => (
+    <div key={`season-${idx}`} className="border bg-white rounded p-3">
+      <div className="grid grid-cols-4 gap-2 items-start">
+        <div>
+          <label className="block text-[11px] font-medium text-slate-600 mb-1">Season Year</label>
+          <input
+            className="border p-2 rounded text-sm w-full"
+            type="number"
+            placeholder="2026"
+            value={row.seasonYear ?? ""}
+            onChange={(e) => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons[idx] = { ...seasons[idx], seasonYear: Number(e.target.value) };
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+          />
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-medium text-slate-600 mb-1">Team</label>
+          <input
+            className="border p-2 rounded text-sm w-full"
+            placeholder="Toronto Raptors"
+            value={row.teamName ?? ""}
+            onChange={(e) => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons[idx] = { ...seasons[idx], teamName: e.target.value };
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+          />
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-medium text-slate-600 mb-1">Team Logo URL</label>
+          <input
+            className="border p-2 rounded text-sm w-full"
+            placeholder="/logos/raptors.png"
+            value={row.teamLogo ?? ""}
+            onChange={(e) => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons[idx] = { ...seasons[idx], teamLogo: e.target.value };
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+          />
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons.splice(idx, 1);
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+            className="text-red-600 text-sm mt-6"
+          >
+            Remove
+          </button>
+        </div>
+      </div>
+
+      {(row.teamLogo || row.teamName) && (
+        <div className="flex items-center gap-2 mt-3 text-sm text-slate-700">
+          {row.teamLogo ? (
+            <img
+              src={row.teamLogo}
+              alt={row.teamName || "Team logo"}
+              className="w-8 h-8 object-contain"
+              onError={(e) => {
+                e.currentTarget.style.display = "none";
+              }}
+            />
+          ) : null}
+          <span>{row.teamName || "Team"}</span>
+        </div>
+      )}
+
+      <div className="mt-4">
+        <div className="grid grid-cols-9 gap-2 mb-1">
+          {["GP", "PPG", "RPG", "APG", "SPG", "BPG", "FG%", "3P%", "FT%"].map((label) => (
+            <div key={label} className="text-[11px] font-medium text-slate-600">
+              {label}
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-9 gap-2">
+          <input
+            className="border p-2 rounded text-sm w-full"
+            type="number"
+            placeholder="0"
+            value={row.games ?? ""}
+            onChange={(e) => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons[idx] = { ...seasons[idx], games: Number(e.target.value) };
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+          />
+
+          <input
+            className="border p-2 rounded text-sm w-full"
+            type="number"
+            step="0.1"
+            placeholder="0.0"
+            value={row.ppg ?? ""}
+            onChange={(e) => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons[idx] = { ...seasons[idx], ppg: Number(e.target.value) };
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+          />
+
+          <input
+            className="border p-2 rounded text-sm w-full"
+            type="number"
+            step="0.1"
+            placeholder="0.0"
+            value={row.rpg ?? ""}
+            onChange={(e) => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons[idx] = { ...seasons[idx], rpg: Number(e.target.value) };
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+          />
+
+          <input
+            className="border p-2 rounded text-sm w-full"
+            type="number"
+            step="0.1"
+            placeholder="0.0"
+            value={row.apg ?? ""}
+            onChange={(e) => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons[idx] = { ...seasons[idx], apg: Number(e.target.value) };
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+          />
+
+          <input
+            className="border p-2 rounded text-sm w-full"
+            type="number"
+            step="0.1"
+            placeholder="0.0"
+            value={row.spg ?? ""}
+            onChange={(e) => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons[idx] = { ...seasons[idx], spg: Number(e.target.value) };
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+          />
+
+          <input
+            className="border p-2 rounded text-sm w-full"
+            type="number"
+            step="0.1"
+            placeholder="0.0"
+            value={row.bpg ?? ""}
+            onChange={(e) => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons[idx] = { ...seasons[idx], bpg: Number(e.target.value) };
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+          />
+
+          <input
+            className="border p-2 rounded text-sm w-full"
+            type="number"
+            step="0.1"
+            placeholder="0.0"
+            value={row.fgPct ?? ""}
+            onChange={(e) => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons[idx] = { ...seasons[idx], fgPct: Number(e.target.value) };
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+          />
+
+          <input
+            className="border p-2 rounded text-sm w-full"
+            type="number"
+            step="0.1"
+            placeholder="0.0"
+            value={row.threePct ?? ""}
+            onChange={(e) => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons[idx] = { ...seasons[idx], threePct: Number(e.target.value) };
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+          />
+
+          <input
+            className="border p-2 rounded text-sm w-full"
+            type="number"
+            step="0.1"
+            placeholder="0.0"
+            value={row.ftPct ?? ""}
+            onChange={(e) => {
+              const seasons = [...(playerForm.history?.seasons ?? [])];
+              seasons[idx] = { ...seasons[idx], ftPct: Number(e.target.value) };
+              setPlayerForm({
+                ...playerForm,
+                history: buildDefaultHistory({
+                  ...(playerForm.history ?? buildDefaultHistory()),
+                  seasons,
+                }),
+              });
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  ))}
+
+  {!(playerForm.history?.seasons ?? []).length && (
+    <div className="text-xs text-slate-500">No season history yet.</div>
+  )}
+</div>
+                </div>
+
+                <div className="border rounded p-3 bg-slate-50 mt-3">
+                  <div className="flex justify-between items-center mb-2">
+                    <div className="text-sm font-semibold">Accolades</div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPlayerForm({
+                          ...playerForm,
+                          history: buildDefaultHistory({
+                            ...(playerForm.history ?? buildDefaultHistory()),
+                            accolades: [
+                              ...((playerForm.history?.accolades) ?? []),
+                              {
+                                seasonYear: 2026,
+                                type: "all_star",
+                                label: "NBA All-Star",
+                              },
+                            ],
+                          }),
+                        })
+                      }
+                      className="text-xs bg-blue-600 text-white px-2 py-1 rounded"
+                    >
+                      Add Accolade
+                    </button>
+                  </div>
+
+                  <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
+                    {(playerForm.history?.accolades ?? []).map((row, idx) => (
+                      <div key={`accolade-${idx}`} className="grid grid-cols-4 gap-2">
+                        <input
+                          className="border p-1 rounded text-xs"
+                          type="number"
+                          placeholder="Year"
+                          value={row.seasonYear ?? ""}
+                          onChange={(e) => {
+                            const accolades = [...(playerForm.history?.accolades ?? [])];
+                            accolades[idx] = { ...accolades[idx], seasonYear: Number(e.target.value) };
+                            setPlayerForm({
+                              ...playerForm,
+                              history: buildDefaultHistory({
+                                ...(playerForm.history ?? buildDefaultHistory()),
+                                accolades,
+                              }),
+                            });
+                          }}
+                        />
+
+                        <select
+                          className="border p-1 rounded text-xs"
+                          value={row.type ?? "custom"}
+                          onChange={(e) => {
+                            const nextType = e.target.value;
+                            const nextLabel = getAccoladeLabel(nextType);
+
+                            const accolades = [...(playerForm.history?.accolades ?? [])];
+                            accolades[idx] = {
+                              ...accolades[idx],
+                              type: nextType,
+                              label: nextType === "custom" ? accolades[idx]?.label ?? "" : nextLabel,
+                            };
+
+                            setPlayerForm({
+                              ...playerForm,
+                              history: buildDefaultHistory({
+                                ...(playerForm.history ?? buildDefaultHistory()),
+                                accolades,
+                              }),
+                            });
+                          }}
+                        >
+                          {ACCOLADE_OPTIONS.map((item) => (
+                            <option key={item.value} value={item.value}>
+                              {item.label}
+                            </option>
+                          ))}
+                        </select>
+
+                        <input
+                          className="border p-1 rounded text-xs"
+                          placeholder="Label"
+                          value={row.label ?? ""}
+                          onChange={(e) => {
+                            const accolades = [...(playerForm.history?.accolades ?? [])];
+                            accolades[idx] = { ...accolades[idx], label: e.target.value };
+                            setPlayerForm({
+                              ...playerForm,
+                              history: buildDefaultHistory({
+                                ...(playerForm.history ?? buildDefaultHistory()),
+                                accolades,
+                              }),
+                            });
+                          }}
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const accolades = [...(playerForm.history?.accolades ?? [])];
+                            accolades.splice(idx, 1);
+                            setPlayerForm({
+                              ...playerForm,
+                              history: buildDefaultHistory({
+                                ...(playerForm.history ?? buildDefaultHistory()),
+                                accolades,
+                              }),
+                            });
+                          }}
+                          className="text-red-600 text-xs"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+
+                    {!(playerForm.history?.accolades ?? []).length && (
+                      <div className="text-xs text-slate-500">No accolades yet.</div>
+                    )}
+                  </div>
                 </div>
               </div>
 

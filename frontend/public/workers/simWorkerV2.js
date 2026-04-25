@@ -466,6 +466,16 @@ async function advanceFreeAgencyDay(requestId, leagueData, payload) {
     "free-agency-advance-day-error"
   );
 }
+async function processPendingUserFreeAgencyDecisions(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "process_pending_user_decisions",
+    leagueData,
+    payload || {},
+    "free-agency-process-pending-result",
+    "free-agency-process-pending-error"
+  );
+}
 async function repairCpuTeamsToMinRoster(requestId, leagueData, payload) {
   return runFreeAgencyRequest(
     requestId,
@@ -648,6 +658,10 @@ onmessage = async (e) => {
   if (msg.type === "advance-free-agency-day") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return advanceFreeAgencyDay(msg.requestId, leaguePayload, msg.payload || {});
+  }
+  if (msg.type === "process-pending-user-free-agency-decisions") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return processPendingUserFreeAgencyDecisions(msg.requestId, leaguePayload, msg.payload || {});
   }
 
   // player retirements

@@ -267,6 +267,19 @@ const isOffseasonMode =
       }
     }
   };
+    const applyLeagueUpdateWithLatestResults = (updated, latestResults = null) => {
+    if (!updated) return;
+
+    const nextLeagueData = {
+      ...updated,
+      freeAgencyState: {
+        ...(updated.freeAgencyState || {}),
+        latestResults: latestResults || null,
+      },
+    };
+
+    applyLeagueUpdate(nextLeagueData);
+  };
 
   const getPlayerKey = (player) => {
     if (!player) return "";
@@ -465,7 +478,7 @@ const isOffseasonMode =
   };
 
   const buildOfferContract = (year1Salary, years, currentOptionType, currentOptionYear) => {
-    const startYear = getCurrentSeasonYear();
+    const startYear = getCurrentSeasonYear() + (isOffseasonMode ? 1 : 0);
     const salaryByYear = getOfferSalaryByYear(year1Salary, years);
 
     return {
@@ -721,7 +734,14 @@ const handleContinueToProgression = () => {
         return;
       }
 
-      applyLeagueUpdate(res.leagueData);
+      const latestResults = {
+        dayResolved: 0,
+        signings: res?.cleanupSignings || [],
+        generatedOffers: res?.openingOffers || [],
+        stateSummary: res?.stateSummary || null,
+      };
+
+      applyLeagueUpdateWithLatestResults(res.leagueData, latestResults);
 
       updateOffseasonState({
         active: true,
@@ -729,12 +749,7 @@ const handleContinueToProgression = () => {
         freeAgencyComplete: false,
       });
 
-      setDaySummary({
-        dayResolved: 0,
-        signings: [],
-        generatedOffers: res?.openingOffers || [],
-        stateSummary: res?.stateSummary || null,
-      });
+      setDaySummary(latestResults);
     } catch (err) {
       setDaySummary({
         error: err?.message || "Failed to start free agency.",
@@ -768,7 +783,14 @@ const handleContinueToProgression = () => {
         return;
       }
 
-      applyLeagueUpdate(res.leagueData);
+      const latestResults = {
+        dayResolved: res?.dayResolved ?? null,
+        signings: res?.signings || [],
+        generatedOffers: res?.generatedOffers || [],
+        stateSummary: res?.stateSummary || null,
+      };
+
+      applyLeagueUpdateWithLatestResults(res.leagueData, latestResults);
 
       if (!res?.stateSummary?.isActive) {
         updateOffseasonState({
@@ -778,16 +800,11 @@ const handleContinueToProgression = () => {
         });
       }
 
-      setDaySummary({
-        dayResolved: res?.dayResolved ?? null,
-        signings: res?.signings || [],
-        generatedOffers: res?.generatedOffers || [],
-        stateSummary: res?.stateSummary || null,
-      });
+      setDaySummary(latestResults);
 
-      if (offersModalOpen && selectedPlayer) {
-        await openOffersModal(selectedPlayer);
-      }
+      closeSignModal();
+      closeOffersModal();
+      navigate("/viewing-offers");
     } catch (err) {
       setDaySummary({
         error: err?.message || "Failed to advance free agency day.",
@@ -1754,7 +1771,7 @@ const handleContinueToProgression = () => {
                               {offer.salaryByYear.map((amount, yearIdx) => (
                                 <div key={`${offer.teamName}-${yearIdx}`} className="flex justify-between gap-4 text-gray-300">
                                   <span>
-                                    {getCurrentSeasonYear() + yearIdx}
+                                    {(offer?.contract?.startYear ?? (getCurrentSeasonYear() + (isOffseasonMode ? 1 : 0))) + yearIdx}
                                   </span>
                                   <span>{formatDollars(amount)}</span>
                                 </div>
