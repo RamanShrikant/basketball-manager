@@ -3,6 +3,7 @@ import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import AllNbaTeams from "./AllNbaTeams";
+import LZString from "lz-string";
 console.log("✅ Awards.jsx NEW loaded");
 
 
@@ -132,6 +133,31 @@ function statsKey(player, team) {
   return `${player}__${team}`;
 }
 
+function readCompressedOrJson(key, fallback = null) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+
+    if (raw.startsWith("lz:")) {
+      const decompressed = LZString.decompressFromUTF16(raw.slice(3));
+      return decompressed ? JSON.parse(decompressed) : fallback;
+    }
+
+    try {
+      return JSON.parse(raw);
+    } catch {}
+
+    const decompressed = LZString.decompressFromUTF16(raw);
+    return decompressed ? JSON.parse(decompressed) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function loadPlayerStatsFromStorage() {
+  return readCompressedOrJson("bm_player_stats_v1", {});
+}
+
 /* -------------------------------------------------------------------------- */
 /*                          LEAGUE / PORTRAIT / LOGOS                         */
 /* -------------------------------------------------------------------------- */
@@ -199,7 +225,7 @@ export default function Awards() {
   const awards = useMemo(() => normalizeAwards(awardsRaw), [awardsRaw]);
 
   const statsMap = useMemo(
-    () => JSON.parse(localStorage.getItem("bm_player_stats_v1") || "{}"),
+    () => loadPlayerStatsFromStorage(),
     []
   );
 

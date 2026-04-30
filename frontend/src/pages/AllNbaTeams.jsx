@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import LZString from "lz-string";
 
 /* -------------------------------------------------------------------------- */
 /*                             AWARDS NORMALIZATION                           */
@@ -64,6 +65,27 @@ function getAllTeamsFromLeague(leagueData) {
   return [];
 }
 
+function readCompressedOrJson(key, fallback = {}) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+
+    if (raw.startsWith("lz:")) {
+      const decompressed = LZString.decompressFromUTF16(raw.slice(3));
+      return decompressed ? JSON.parse(decompressed) : fallback;
+    }
+
+    try {
+      return JSON.parse(raw);
+    } catch {}
+
+    const decompressed = LZString.decompressFromUTF16(raw);
+    return decompressed ? JSON.parse(decompressed) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /*                             ALL-NBA TEAMS PAGE                             */
 /* -------------------------------------------------------------------------- */
@@ -103,12 +125,7 @@ export default function AllNbaTeams({ leagueDataProp }) {
   const awards = useMemo(() => normalizeAwards(awardsRaw), [awardsRaw]);
 
   const playerStatsMap = useMemo(() => {
-    try {
-      const raw = localStorage.getItem("bm_player_stats_v1");
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
+    return readCompressedOrJson("bm_player_stats_v1", {});
   }, []);
 
   /* ----------------------------- league indexes ----------------------------- */

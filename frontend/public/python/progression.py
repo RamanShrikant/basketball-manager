@@ -43,6 +43,85 @@ def _safe_float(x: Any, default: float = 0.0) -> float:
         return default
 
 
+def _calculate_bird_level(seasons_toward_bird: int) -> str:
+    seasons = max(0, min(3, _safe_int(seasons_toward_bird, 0)))
+    if seasons >= 3:
+        return "bird"
+    if seasons == 2:
+        return "early_bird"
+    if seasons == 1:
+        return "non_bird"
+    return "none"
+
+
+def _normalize_rights_dict(p: Dict[str, Any]) -> Dict[str, Any]:
+    rights = p.get("rights")
+    if not isinstance(rights, dict):
+        rights = {}
+
+    seasons = max(0, min(3, _safe_int(rights.get("seasonsTowardBird"), 0)))
+    level = str(rights.get("birdLevel") or _calculate_bird_level(seasons)).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "full_bird": "bird",
+        "fullbird": "bird",
+        "bird_rights": "bird",
+        "earlybird": "early_bird",
+        "early_bird": "early_bird",
+        "nonbird": "non_bird",
+        "non_bird": "non_bird",
+        "none": "none",
+        "no_rights": "none",
+    }
+    level = aliases.get(level, level)
+    if level not in ["bird", "early_bird", "non_bird", "none"]:
+        level = _calculate_bird_level(seasons)
+
+    return {
+        "heldByTeam": rights.get("heldByTeam"),
+        "seasonsTowardBird": seasons,
+        "birdLevel": level,
+        "rookieScale": bool(rights.get("rookieScale", False)),
+        "restrictedFreeAgent": bool(rights.get("restrictedFreeAgent", False)),
+    }
+
+
+def advance_rostered_player_rights_one_season(league: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Run once at season rollover. Only rostered players gain Bird/pro-season credit.
+    Unsigned free agents do not gain seasonsTowardBird while sitting in the FA pool.
+    """
+    for team in _iter_teams(league):
+        team_name = _team_name(team)
+        if not team_name:
+            continue
+
+        for p in (team.get("players") or []):
+            if not isinstance(p, dict):
+                continue
+
+            meta = p.get("meta")
+            if not isinstance(meta, dict):
+                meta = {}
+                p["meta"] = meta
+
+            meta["proSeasons"] = max(0, _safe_int(meta.get("proSeasons"), 0)) + 1
+            meta["yearsWithCurrentTeam"] = max(0, _safe_int(meta.get("yearsWithCurrentTeam"), 0)) + 1
+
+            rights = _normalize_rights_dict(p)
+            old_seasons = max(0, _safe_int(rights.get("seasonsTowardBird"), 0))
+            new_seasons = min(3, old_seasons + 1)
+
+            p["rights"] = {
+                "heldByTeam": team_name,
+                "seasonsTowardBird": new_seasons,
+                "birdLevel": _calculate_bird_level(new_seasons),
+                "rookieScale": bool(rights.get("rookieScale", False)),
+                "restrictedFreeAgent": bool(rights.get("restrictedFreeAgent", False)),
+            }
+
+    return league
+
+
 def _parse_iso_date(date_iso: str) -> _dt.date:
     # expects "YYYY-MM-DD"
     y, m, d = date_iso.split("-")
@@ -691,6 +770,10 @@ def apply_end_of_season_progression_with_deltas(
 
     # ✅ Age up after progression so next season starts older
     apply_jan1_age_up_all_players(league = league, season_year = season_year)
+
+    # ✅ Rostered players gain one pro/team/Bird-right season at rollover.
+    # Free agents do not gain Bird years while unsigned.
+    advance_rostered_player_rights_one_season(league)
 
     deltas: Dict[str, Dict[str, Any]] = {}
     for p, tname in _all_players_with_team(league):

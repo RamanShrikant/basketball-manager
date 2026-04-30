@@ -316,12 +316,7 @@ const handleAdvanceToNewSeason = () => {
         </div>
 
         <div className="mt-8 flex justify-center gap-4 flex-wrap">
-          <button
-            onClick={() => navigate("/finals-mvp")}
-            className="px-6 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-semibold transition"
-          >
-            Back to Finals MVP
-          </button>
+
 
 <button
   onClick={() => navigate("/team-hub", { state: { offseasonMode: true, returnTo: "/offseason" } })}

@@ -21,6 +21,15 @@ DEFAULT_NON_TAXPAYER_MLE = 14_100_000
 DEFAULT_TAXPAYER_MLE = 5_700_000
 TAXPAYING_TEAM_BUFFER = 20_000_000
 
+# Soft CBA/apron defaults
+DEFAULT_LUXURY_TAX_LINE = 180_000_000
+DEFAULT_FIRST_APRON = 190_000_000
+DEFAULT_SECOND_APRON = 200_000_000
+
+# Bird-right offer limits
+NON_BIRD_RAISE_MULT = 1.20
+EARLY_BIRD_RAISE_MULT = 1.75
+
 
 def get_room_exception_amount(league_data: Dict[str, Any]) -> int:
     return int(
@@ -89,6 +98,414 @@ def get_salary_cap(league_data: Dict[str, Any]) -> int:
         league_data.get("salaryCap")
         or league_data.get("capLimit")
         or DEFAULT_SALARY_CAP
+    )
+
+
+def get_luxury_tax_line(league_data: Dict[str, Any]) -> int:
+    return int(
+        league_data.get("luxuryTaxLine")
+        or league_data.get("taxLine")
+        or DEFAULT_LUXURY_TAX_LINE
+    )
+
+
+def get_first_apron(league_data: Dict[str, Any]) -> int:
+    return int(
+        league_data.get("firstApron")
+        or league_data.get("apron1")
+        or DEFAULT_FIRST_APRON
+    )
+
+
+def get_second_apron(league_data: Dict[str, Any]) -> int:
+    return int(
+        league_data.get("secondApron")
+        or league_data.get("apron2")
+        or DEFAULT_SECOND_APRON
+    )
+
+
+def get_payroll_zone_for_amount(league_data: Dict[str, Any], payroll: int) -> str:
+    payroll = int(num(payroll, 0))
+
+    if payroll >= get_second_apron(league_data):
+        return "second_apron"
+    if payroll >= get_first_apron(league_data):
+        return "first_apron"
+    if payroll >= get_luxury_tax_line(league_data):
+        return "tax"
+    if payroll >= get_salary_cap(league_data):
+        return "over_cap"
+    return "below_cap"
+
+
+def calculate_bird_level(seasons_toward_bird: int) -> str:
+    seasons = int(num(seasons_toward_bird, 0))
+
+    if seasons >= 3:
+        return "bird"
+    if seasons == 2:
+        return "early_bird"
+    if seasons == 1:
+        return "non_bird"
+    return "none"
+
+
+def normalize_bird_level(raw_level: Any, seasons_toward_bird: int = 0) -> str:
+    level = str(raw_level or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    aliases = {
+        "full_bird": "bird",
+        "fullbird": "bird",
+        "bird_rights": "bird",
+        "earlybird": "early_bird",
+        "early_bird": "early_bird",
+        "nonbird": "non_bird",
+        "non_bird": "non_bird",
+        "none": "none",
+        "no_rights": "none",
+        "": "",
+    }
+
+    mapped = aliases.get(level, level)
+    if mapped in ["bird", "early_bird", "non_bird", "none"]:
+        return mapped
+
+    return calculate_bird_level(seasons_toward_bird)
+
+
+def get_player_rights(player: Dict[str, Any]) -> Dict[str, Any]:
+    raw = player.get("rights")
+    if not isinstance(raw, dict):
+        raw = {}
+
+    seasons = int(num(raw.get("seasonsTowardBird"), 0))
+    seasons = max(0, min(3, seasons))
+    level = normalize_bird_level(raw.get("birdLevel"), seasons)
+
+    return {
+        "heldByTeam": raw.get("heldByTeam"),
+        "seasonsTowardBird": seasons,
+        "birdLevel": level,
+        "rookieScale": bool(raw.get("rookieScale", False)),
+        "restrictedFreeAgent": bool(raw.get("restrictedFreeAgent", False)),
+    }
+
+
+def set_player_rights(
+    player: Dict[str, Any],
+    held_by_team: Optional[str],
+    seasons_toward_bird: int,
+    rookie_scale: Optional[bool] = None,
+    restricted_free_agent: Optional[bool] = None,
+) -> Dict[str, Any]:
+    old_rights = get_player_rights(player)
+    seasons = max(0, min(3, int(num(seasons_toward_bird, 0))))
+
+    player["rights"] = {
+        "heldByTeam": held_by_team,
+        "seasonsTowardBird": seasons,
+        "birdLevel": calculate_bird_level(seasons),
+        "rookieScale": old_rights["rookieScale"] if rookie_scale is None else bool(rookie_scale),
+        "restrictedFreeAgent": old_rights["restrictedFreeAgent"] if restricted_free_agent is None else bool(restricted_free_agent),
+    }
+
+    return player["rights"]
+
+
+def get_rights_team(player: Dict[str, Any]) -> Optional[str]:
+    rights = get_player_rights(player)
+    held_by = rights.get("heldByTeam")
+    return str(held_by) if held_by not in [None, ""] else None
+
+
+def is_rights_team(player: Dict[str, Any], team_name: Optional[str]) -> bool:
+    if not team_name:
+        return False
+
+    rights_team = get_rights_team(player)
+    return bool(rights_team and rights_team == team_name)
+
+
+def get_previous_salary_reference(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+) -> int:
+    season_year = get_current_season_year(league_data)
+
+    previous_contract = normalize_contract(player.get("previousContract"))
+    current_contract = normalize_contract(player.get("contract"))
+
+    for contract in [previous_contract, current_contract]:
+        if not contract:
+            continue
+
+        salary = get_contract_salary_for_year(contract, season_year)
+        if salary > 0:
+            return int(salary)
+
+        salary_by_year = contract.get("salaryByYear", [])
+        if salary_by_year:
+            return int(num(salary_by_year[-1], 0))
+
+    market_value = player.get("marketValue") or estimate_market_value(player)
+    return int(num(market_value.get("expectedYear1Salary"), MIN_DEAL))
+
+
+def get_bird_rights_salary_ceiling(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    team_name: str,
+) -> int:
+    if not is_rights_team(player, team_name):
+        return 0
+
+    rights = get_player_rights(player)
+    bird_level = rights.get("birdLevel", "none")
+    previous_salary = get_previous_salary_reference(league_data, player)
+
+    if bird_level == "bird":
+        return int(MAX_SALARY)
+
+    if bird_level == "early_bird":
+        return int(min(MAX_SALARY, max(
+            MIN_DEAL,
+            get_non_taxpayer_mle_amount(league_data),
+            previous_salary * EARLY_BIRD_RAISE_MULT,
+        )))
+
+    if bird_level == "non_bird":
+        return int(min(MAX_SALARY, max(
+            MIN_DEAL,
+            previous_salary * NON_BIRD_RAISE_MULT,
+        )))
+
+    return 0
+
+
+def normalize_player_rights_for_location(
+    player: Dict[str, Any],
+    current_team_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    rights = get_player_rights(player)
+
+    if current_team_name:
+        held_by_team = current_team_name
+        seasons = rights["seasonsTowardBird"]
+
+        if seasons <= 0:
+            meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+            years_with_team = int(num(meta.get("yearsWithCurrentTeam"), 1))
+            seasons = max(1, min(3, years_with_team))
+
+        return set_player_rights(
+            player = player,
+            held_by_team = held_by_team,
+            seasons_toward_bird = seasons,
+            rookie_scale = rights["rookieScale"],
+            restricted_free_agent = rights["restrictedFreeAgent"],
+        )
+
+    held_by_team = rights.get("heldByTeam")
+    seasons = rights["seasonsTowardBird"]
+
+    if not held_by_team:
+        meta = player.get("freeAgencyMeta") if isinstance(player.get("freeAgencyMeta"), dict) else {}
+        from_team = meta.get("fromTeam")
+        if from_team and seasons > 0:
+            held_by_team = from_team
+
+    if not held_by_team:
+        seasons = 0
+
+    return set_player_rights(
+        player = player,
+        held_by_team = held_by_team,
+        seasons_toward_bird = seasons,
+        rookie_scale = rights["rookieScale"],
+        restricted_free_agent = rights["restrictedFreeAgent"],
+    )
+
+
+def normalize_all_player_rights(league_data: Dict[str, Any]) -> None:
+    for _, _, team in iter_teams(league_data):
+        team_name = team.get("name")
+        for player in team.get("players", []):
+            normalize_player_rights_for_location(player, team_name)
+
+    for player in league_data.get("freeAgents", []):
+        normalize_player_rights_for_location(player, None)
+
+
+def update_player_rights_after_signing(
+    player: Dict[str, Any],
+    team_name: str,
+    signing_source: str = "free_agency",
+    matched_rfa: bool = False,
+) -> None:
+    old_rights = get_player_rights(player)
+    old_rights_team = old_rights.get("heldByTeam")
+    same_rights_team = bool(old_rights_team and old_rights_team == team_name)
+
+    if same_rights_team:
+        seasons = max(1, old_rights["seasonsTowardBird"])
+    else:
+        seasons = 1
+
+    set_player_rights(
+        player = player,
+        held_by_team = team_name,
+        seasons_toward_bird = seasons,
+        rookie_scale = old_rights["rookieScale"],
+        restricted_free_agent = False,
+    )
+
+    meta = player.setdefault("meta", {})
+    if not isinstance(meta, dict):
+        player["meta"] = {}
+        meta = player["meta"]
+
+    if matched_rfa:
+        meta["acquiredVia"] = "rfa_matched"
+    elif same_rights_team:
+        meta["acquiredVia"] = "re_signed"
+    else:
+        meta["acquiredVia"] = signing_source
+
+    if same_rights_team:
+        meta["yearsWithCurrentTeam"] = max(1, int(num(meta.get("yearsWithCurrentTeam"), 1)))
+    else:
+        meta["yearsWithCurrentTeam"] = 1
+
+    player.pop("qualifyingOffer", None)
+    player.pop("freeAgencyMeta", None)
+
+
+def should_extend_qualifying_offer(
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+    reason: str,
+) -> bool:
+    rights = get_player_rights(player)
+
+    if not rights.get("rookieScale"):
+        return False
+
+    if reason == "declined_team_option":
+        return False
+
+    age = int(num(player.get("age"), 24))
+    overall = int(round(num(player.get("overall"), 0)))
+    potential = int(round(num(player.get("potential"), overall)))
+
+    if age > 27:
+        return False
+
+    if overall >= 70:
+        return True
+
+    if potential >= overall + 3:
+        return True
+
+    if potential >= 73:
+        return True
+
+    return False
+
+
+def get_qualifying_offer_amount(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+) -> int:
+    previous_salary = get_previous_salary_reference(league_data, player)
+    amount = max(MIN_DEAL, int(round(previous_salary * 1.25)))
+    return int(round_to_nearest(amount, base = 1_000))
+
+
+def apply_qualifying_offer_if_needed(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+    team_name: str,
+    season_year: int,
+    reason: str,
+) -> None:
+    if not should_extend_qualifying_offer(team, player, reason):
+        return
+
+    rights = get_player_rights(player)
+    set_player_rights(
+        player = player,
+        held_by_team = team_name,
+        seasons_toward_bird = max(1, rights["seasonsTowardBird"]),
+        rookie_scale = rights["rookieScale"],
+        restricted_free_agent = True,
+    )
+
+    player["qualifyingOffer"] = {
+        "teamName": team_name,
+        "amount": get_qualifying_offer_amount(league_data, player),
+        "seasonYear": season_year + 1,
+        "status": "extended",
+    }
+
+
+def mark_qualifying_offer_pending_if_needed(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+    team_name: str,
+    season_year: int,
+    reason: str,
+) -> None:
+    if not should_extend_qualifying_offer(team, player, reason):
+        return
+
+    rights = get_player_rights(player)
+    set_player_rights(
+        player = player,
+        held_by_team = team_name,
+        seasons_toward_bird = max(1, rights["seasonsTowardBird"]),
+        rookie_scale = rights["rookieScale"],
+        restricted_free_agent = False,
+    )
+
+    player.pop("qualifyingOffer", None)
+    player["qualifyingOfferEligible"] = {
+        "teamName": team_name,
+        "amount": get_qualifying_offer_amount(league_data, player),
+        "seasonYear": season_year + 1,
+        "status": "pending",
+    }
+
+
+def process_qualifying_offer_after_entry(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+    team_name: str,
+    season_year: int,
+    reason: str,
+    user_team_name: Optional[str] = None,
+) -> None:
+    if user_team_name and team_name == user_team_name:
+        mark_qualifying_offer_pending_if_needed(
+            league_data = league_data,
+            team = team,
+            player = player,
+            team_name = team_name,
+            season_year = season_year,
+            reason = reason,
+        )
+        return
+
+    apply_qualifying_offer_if_needed(
+        league_data = league_data,
+        team = team,
+        player = player,
+        team_name = team_name,
+        season_year = season_year,
+        reason = reason,
     )
 
 
@@ -277,7 +694,9 @@ def get_active_option_for_year(contract: Optional[Dict[str, Any]], season_year: 
         }
 
     # Bridge case: one stored salary year with option index [0]
-    # Treat that as a pending option decision for the following offseason
+    # Treat that as a pending option decision for the following offseason.
+    # Player-specific rookie-scale final-year cases are filtered by
+    # get_active_option_for_player_for_year(...) before this generic bridge is used.
     source_idx = target_idx - 1
     if (
         len(salary_by_year) == 1
@@ -298,6 +717,92 @@ def get_active_option_for_year(contract: Optional[Dict[str, Any]], season_year: 
         }
 
     return None
+
+
+def get_player_pro_seasons(player: Dict[str, Any]) -> int:
+    direct_keys = [
+        "proSeasons",
+        "seasonsPro",
+        "yearsPro",
+        "yearsOfExperience",
+        "yoe",
+    ]
+
+    for key in direct_keys:
+        if player.get(key) not in [None, ""]:
+            return int(num(player.get(key), 0))
+
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    for key in direct_keys:
+        if meta.get(key) not in [None, ""]:
+            return int(num(meta.get(key), 0))
+
+    return 0
+
+
+def is_completed_final_rookie_scale_team_option(
+    player: Dict[str, Any],
+    current_season_year: int,
+) -> bool:
+    contract = normalize_contract(player.get("contract"))
+    if not contract:
+        return False
+
+    rights = get_player_rights(player)
+    if not rights.get("rookieScale"):
+        return False
+
+    if get_player_pro_seasons(player) < 4:
+        return False
+
+    option = contract.get("option")
+    if not option or option.get("type") != "team":
+        return False
+
+    salary_by_year = contract.get("salaryByYear", [])
+    year_indices = get_option_year_indices(option)
+
+    if year_indices != [0]:
+        return False
+
+    picked_value = get_option_pick_value(option, 0)
+    if picked_value is not None and picked_value is False:
+        return False
+
+    start_year = int(contract.get("startYear", DEFAULT_SEASON_YEAR))
+    if start_year > int(current_season_year):
+        return False
+
+    # Normal raw data shape: one final rookie-scale option salary.
+    # That option carried the player through the just-finished season.
+    # The next offseason control mechanism is the qualifying offer.
+    if len(salary_by_year) == 1:
+        return True
+
+    # Recovery shape from older logic / old saves:
+    # a bridge-option exercise duplicated the same final rookie-option salary
+    # into the next year, e.g. [4878938, 4878938] with picked {"0": true}.
+    # This is not a real extra cheap team option year. It still goes to QO/RFA.
+    if (
+        len(salary_by_year) == 2
+        and picked_value is True
+        and int(num(salary_by_year[0], 0)) == int(num(salary_by_year[1], 0))
+    ):
+        return True
+
+    return False
+
+def get_active_option_for_player_for_year(
+    player: Dict[str, Any],
+    contract: Optional[Dict[str, Any]],
+    option_season_year: int,
+    current_season_year: int,
+) -> Optional[Dict[str, Any]]:
+    if is_completed_final_rookie_scale_team_option(player, current_season_year):
+        return None
+
+    return get_active_option_for_year(contract, option_season_year)
+
 def set_option_pick_for_year(contract: Dict[str, Any], year_index: int, picked_value: bool) -> Dict[str, Any]:
     normalized = normalize_contract(contract)
     if not normalized or not normalized.get("option"):
@@ -426,6 +931,126 @@ def get_team_payroll(
     if league_data is not None and team_name:
         payroll += get_team_dead_cap_for_year(league_data, team_name, season_year)
     return payroll
+
+def get_cap_hold_player_key(player: Dict[str, Any]) -> str:
+    return get_player_key(player.get("id"), player.get("name"))
+
+
+def get_player_cap_hold_amount(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    team_name: str,
+) -> int:
+    rights = get_player_rights(player)
+
+    if player.get("rightsRenounced"):
+        return 0
+
+    if rights.get("heldByTeam") != team_name:
+        return 0
+
+    bird_level = rights.get("birdLevel", "none")
+    if bird_level == "none":
+        return 0
+
+    qualifying_offer = player.get("qualifyingOffer")
+    if (
+        rights.get("restrictedFreeAgent")
+        and isinstance(qualifying_offer, dict)
+        and qualifying_offer.get("status", "extended") == "extended"
+    ):
+        qo_amount = int(num(qualifying_offer.get("amount"), 0))
+        if qo_amount > 0:
+            return int(round_to_nearest(max(MIN_DEAL, qo_amount), base = 1_000))
+
+    previous_salary = get_previous_salary_reference(league_data, player)
+    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_year_one = int(num(market_value.get("expectedYear1Salary"), MIN_DEAL))
+
+    if bird_level == "bird":
+        hold = max(previous_salary, market_year_one, MIN_DEAL)
+    elif bird_level == "early_bird":
+        hold = max(previous_salary * 1.30, MIN_DEAL)
+    elif bird_level == "non_bird":
+        hold = max(previous_salary * 1.20, MIN_DEAL)
+    else:
+        hold = 0
+
+    return int(round_to_nearest(hold, base = 1_000))
+
+
+def get_team_cap_hold_rows(
+    league_data: Dict[str, Any],
+    team_name: str,
+) -> List[Dict[str, Any]]:
+    rows = []
+
+    for player in league_data.get("freeAgents", []):
+        rights = get_player_rights(player)
+        if rights.get("heldByTeam") != team_name:
+            continue
+
+        cap_hold = get_player_cap_hold_amount(
+            league_data = league_data,
+            player = player,
+            team_name = team_name,
+        )
+
+        if cap_hold <= 0:
+            continue
+
+        qualifying_offer = player.get("qualifyingOffer")
+        qualifying_offer_eligible = player.get("qualifyingOfferEligible")
+        market_value = player.get("marketValue") or estimate_market_value(player)
+
+        rows.append({
+            "playerKey": get_cap_hold_player_key(player),
+            "playerId": player.get("id"),
+            "playerName": player.get("name"),
+            "name": player.get("name"),
+            "position": player.get("pos") or player.get("position"),
+            "pos": player.get("pos") or player.get("position"),
+            "age": player.get("age"),
+            "overall": player.get("overall"),
+            "potential": player.get("potential"),
+            "teamName": team_name,
+            "rights": rights,
+            "birdLevel": rights.get("birdLevel", "none"),
+            "restrictedFreeAgent": bool(rights.get("restrictedFreeAgent")),
+            "rookieScale": bool(rights.get("rookieScale")),
+            "qualifyingOffer": qualifying_offer if isinstance(qualifying_offer, dict) else None,
+            "qualifyingOfferEligible": qualifying_offer_eligible if isinstance(qualifying_offer_eligible, dict) else None,
+            "marketValue": market_value,
+            "previousSalary": get_previous_salary_reference(league_data, player),
+            "capHold": cap_hold,
+            "capHoldAmount": cap_hold,
+        })
+
+    rows.sort(
+        key = lambda row: (
+            -int(num(row.get("capHoldAmount"), 0)),
+            str(row.get("playerName", "")),
+        )
+    )
+
+    return rows
+
+
+def get_team_cap_hold_total(
+    league_data: Dict[str, Any],
+    team_name: str,
+    exclude_player_key: Optional[str] = None,
+) -> int:
+    total = 0
+
+    for row in get_team_cap_hold_rows(league_data, team_name):
+        if exclude_player_key and row.get("playerKey") == exclude_player_key:
+            continue
+        total += int(num(row.get("capHoldAmount"), 0))
+
+    return int(total)
+
+
 def _optional_int(value: Any) -> Optional[int]:
     try:
         if value in [None, "", False]:
@@ -515,8 +1140,21 @@ def get_team_hard_cap(league_data: Dict[str, Any], team_name: str) -> Optional[i
 
     return None
 
-def get_team_cap_snapshot(league_data: Dict[str, Any], team_name: str) -> Dict[str, Any]:
+def get_team_cap_snapshot(
+    league_data: Dict[str, Any],
+    team_name: str,
+    exclude_cap_hold_player_key: Optional[str] = None,
+) -> Dict[str, Any]:
     season_year = get_operating_season_year(league_data)
+    state = league_data.get("freeAgencyState", {})
+    if not (isinstance(state, dict) and state.get("isActive")):
+        has_offseason_free_agents = any(
+            isinstance(player.get("freeAgencyMeta"), dict)
+            for player in league_data.get("freeAgents", [])
+        )
+        if has_offseason_free_agents:
+            season_year = get_current_season_year(league_data) + 1
+
     salary_cap = get_salary_cap(league_data)
     roster_limit = get_roster_limit(league_data)
 
@@ -529,30 +1167,60 @@ def get_team_cap_snapshot(league_data: Dict[str, Any], team_name: str) -> Dict[s
 
     player_payroll = get_team_player_payroll(team, season_year)
     dead_cap = get_team_dead_cap_for_year(league_data, team_name, season_year)
-    payroll = player_payroll + dead_cap
+
+    cap_hold_rows = get_team_cap_hold_rows(
+        league_data = league_data,
+        team_name = team_name,
+    )
+
+    if exclude_cap_hold_player_key:
+        cap_hold_rows = [
+            row for row in cap_hold_rows
+            if row.get("playerKey") != exclude_cap_hold_player_key
+        ]
+
+    cap_hold_total = int(sum(int(num(row.get("capHoldAmount"), 0)) for row in cap_hold_rows))
+
+    raw_payroll_without_holds = player_payroll + dead_cap
+    practical_payroll = raw_payroll_without_holds + cap_hold_total
+
     roster_count = len(get_team_players(team))
 
     hard_cap = get_team_hard_cap(league_data, team_name)
     hard_cap_room = None
     if hard_cap is not None:
-        hard_cap_room = int(hard_cap) - int(payroll)
+        hard_cap_room = int(hard_cap) - int(practical_payroll)
 
     return {
         "ok": True,
         "teamName": team_name,
         "seasonYear": season_year,
         "salaryCap": salary_cap,
+        "luxuryTaxLine": get_luxury_tax_line(league_data),
+        "firstApron": get_first_apron(league_data),
+        "secondApron": get_second_apron(league_data),
+
         "playerPayroll": player_payroll,
         "deadCap": dead_cap,
-        "payroll": payroll,
-        "capRoom": salary_cap - payroll,
+
+        "rawPayrollWithoutHolds": raw_payroll_without_holds,
+        "rawCapRoomWithoutHolds": salary_cap - raw_payroll_without_holds,
+
+        "capHolds": cap_hold_total,
+        "capHoldTotal": cap_hold_total,
+        "capHoldRows": cap_hold_rows,
+
+        "payroll": practical_payroll,
+        "capRoom": salary_cap - practical_payroll,
+        "practicalPayroll": practical_payroll,
+        "practicalCapRoom": salary_cap - practical_payroll,
+
         "rosterCount": roster_count,
         "rosterLimit": roster_limit,
         "hardCap": hard_cap,
         "hardCapRoom": hard_cap_room,
         "isHardCapped": is_team_hard_capped(league_data, team_name),
     }
-
 
 def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
     overall = num(player.get("overall"), 75)
@@ -872,6 +1540,13 @@ def finalize_cpu_min_roster_cleanup(
                     })
                     signed_player["marketValue"] = estimate_market_value(signed_player)
 
+                    update_player_rights_after_signing(
+                        player = signed_player,
+                        team_name = team_name,
+                        signing_source = "minimum_cleanup",
+                        matched_rfa = False,
+                    )
+
                     league_data["freeAgents"].pop(player_idx)
                     live_team.setdefault("players", []).append(signed_player)
 
@@ -1063,31 +1738,221 @@ def get_team_exception_room(
 
     cap_room = max(0, int(num(snapshot.get("capRoom"), 0)))
     payroll = int(num(snapshot.get("payroll"), 0))
-    salary_cap = int(num(snapshot.get("salaryCap"), get_salary_cap(league_data)))
+    remaining = get_team_remaining_exceptions(league_data, team_name)
 
-    room_exception = get_room_exception_amount(league_data)
-    non_taxpayer_mle = get_non_taxpayer_mle_amount(league_data)
-    taxpayer_mle = get_taxpayer_mle_amount(league_data)
-
-    if cap_room > 0:
-        # Cap-space teams can always use actual room.
-        # If they only have a little room left, give them a room-exception lane too.
+    if player is not None and is_rights_team(player, team_name):
+        usable_room = get_bird_rights_salary_ceiling(
+            league_data = league_data,
+            player = player,
+            team_name = team_name,
+        )
+    elif cap_room > 0:
         usable_room = cap_room
-        if cap_room <= room_exception:
-            usable_room = max(usable_room, room_exception)
+        if cap_room <= remaining["roomException"]:
+            usable_room = max(usable_room, remaining["roomException"])
     else:
-        # Over-the-cap teams get an exception lane instead of being fully dead.
-        if payroll >= salary_cap + TAXPAYING_TEAM_BUFFER:
-            usable_room = taxpayer_mle
+        zone = get_payroll_zone_for_amount(league_data, payroll)
+
+        if zone == "second_apron":
+            usable_room = MIN_DEAL
+        elif zone in ["first_apron", "tax"]:
+            usable_room = remaining["taxpayerMLE"]
         else:
-            usable_room = non_taxpayer_mle
+            usable_room = remaining["nonTaxpayerMLE"]
 
     hard_cap_room = snapshot.get("hardCapRoom")
-    if hard_cap_room is not None:
+    if bool(snapshot.get("isHardCapped")) and hard_cap_room is not None:
         usable_room = min(usable_room, max(0, int(num(hard_cap_room, 0))))
 
     return max(0, int(usable_room))
 
+def validate_offer_spending_rules(
+    league_data: Dict[str, Any],
+    team_name: str,
+    player: Dict[str, Any],
+    contract: Dict[str, Any],
+    outstanding_current_salary: int = 0,
+    snapshot: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    snapshot = snapshot or get_team_cap_snapshot(league_data, team_name)
+    if not snapshot.get("ok"):
+        return snapshot
+
+    contract = normalize_contract(contract)
+    if not contract:
+        return {
+            "ok": False,
+            "reason": "Invalid contract.",
+            "teamSnapshot": snapshot,
+        }
+
+    season_year = get_operating_season_year(league_data)
+    offered_current_salary = get_contract_salary_for_year(contract, season_year)
+    outstanding_current_salary = int(num(outstanding_current_salary, 0))
+
+    replaced_cap_hold = 0
+    if is_rights_team(player, team_name):
+        replaced_cap_hold = get_player_cap_hold_amount(
+            league_data = league_data,
+            player = player,
+            team_name = team_name,
+        )
+
+    projected_payroll = (
+        int(num(snapshot.get("payroll"), 0))
+        - int(replaced_cap_hold)
+        + int(outstanding_current_salary)
+        + int(offered_current_salary)
+    )
+
+    hard_cap = snapshot.get("hardCap")
+    is_hard_capped = bool(snapshot.get("isHardCapped"))
+    if is_hard_capped and hard_cap is not None and projected_payroll > int(num(hard_cap, 0)):
+        over_by = projected_payroll - int(num(hard_cap, 0))
+        return {
+            "ok": False,
+            "reason": f"{team_name} would exceed its hard cap by ${int(over_by):,}.",
+            "teamSnapshot": snapshot,
+            "exceptionRoom": get_team_exception_room(league_data, team_name, player),
+            "spendingType": "hard_cap_blocked",
+        }
+
+    allow_minimum_exception = is_minimum_contract_for_current_year(
+        league_data = league_data,
+        contract = contract,
+    )
+
+    rights = get_player_rights(player)
+    own_rights = is_rights_team(player, team_name)
+    payroll_zone = get_payroll_zone_for_amount(league_data, int(num(snapshot.get("payroll"), 0)))
+    cap_room = max(0, int(num(snapshot.get("capRoom"), 0)))
+    remaining = get_team_remaining_exceptions(league_data, team_name)
+
+    if own_rights and rights.get("birdLevel") in ["bird", "early_bird", "non_bird"]:
+        bird_ceiling = get_bird_rights_salary_ceiling(
+            league_data = league_data,
+            player = player,
+            team_name = team_name,
+        )
+
+        if offered_current_salary > bird_ceiling:
+            over_by = offered_current_salary - bird_ceiling
+            return {
+                "ok": False,
+                "reason": f"{team_name} only has {rights.get('birdLevel')} rights for {player.get('name')}. This offer is over the rights limit by ${int(over_by):,}.",
+                "teamSnapshot": snapshot,
+                "exceptionRoom": bird_ceiling,
+                "spendingType": "bird_rights_blocked",
+                "birdRights": rights,
+                "payrollZone": payroll_zone,
+            }
+
+        return {
+            "ok": True,
+            "reason": "Offer is legal using Bird rights.",
+            "teamSnapshot": snapshot,
+            "exceptionRoom": bird_ceiling,
+            "spendingType": "bird_rights",
+            "exceptionType": None,
+            "birdRights": rights,
+            "payrollZone": payroll_zone,
+            "projectedPayroll": projected_payroll,
+            "exceptionRemaining": remaining,
+        }
+
+    if allow_minimum_exception:
+        return {
+            "ok": True,
+            "reason": "Offer is legal using the minimum exception.",
+            "teamSnapshot": snapshot,
+            "exceptionRoom": MIN_DEAL,
+            "spendingType": "minimum",
+            "exceptionType": None,
+            "birdRights": rights,
+            "payrollZone": payroll_zone,
+            "projectedPayroll": projected_payroll,
+            "exceptionRemaining": remaining,
+        }
+
+    needed_room = outstanding_current_salary + offered_current_salary
+    available_room = 0
+    spending_type = "cap_or_exception"
+    exception_type = None
+    legal_reason = "Offer is legal using cap room, exception room, or minimum exception."
+
+    if cap_room > 0 and needed_room <= cap_room + int(replaced_cap_hold):
+        available_room = cap_room + int(replaced_cap_hold)
+        spending_type = "cap_space"
+        exception_type = None
+        legal_reason = "Offer is legal using cap room."
+    elif cap_room > 0 and needed_room <= remaining["roomException"] + int(replaced_cap_hold):
+        available_room = remaining["roomException"] + int(replaced_cap_hold)
+        spending_type = "cap_or_exception"
+        exception_type = "room_exception"
+        legal_reason = "Offer is legal using remaining room exception."
+    else:
+        if payroll_zone == "second_apron":
+            return {
+                "ok": False,
+                "reason": f"{team_name} is above the second apron and can only sign outside free agents to minimum contracts.",
+                "teamSnapshot": snapshot,
+                "exceptionRoom": MIN_DEAL,
+                "spendingType": "second_apron_blocked",
+                "exceptionType": None,
+                "birdRights": rights,
+                "payrollZone": payroll_zone,
+                "exceptionRemaining": remaining,
+            }
+
+        if payroll_zone in ["first_apron", "tax"]:
+            available_room = remaining["taxpayerMLE"] + int(replaced_cap_hold)
+            exception_type = "taxpayer_mle"
+            legal_reason = "Offer is legal using remaining taxpayer MLE."
+        else:
+            available_room = remaining["nonTaxpayerMLE"] + int(replaced_cap_hold)
+            exception_type = "non_taxpayer_mle"
+            legal_reason = "Offer is legal using remaining non-taxpayer MLE."
+
+    if exception_type == "non_taxpayer_mle" and projected_payroll > get_first_apron(league_data):
+        over_by = projected_payroll - get_first_apron(league_data)
+        return {
+            "ok": False,
+            "reason": f"{team_name} cannot use the non-taxpayer MLE because this offer would cross the first apron by ${int(over_by):,}.",
+            "teamSnapshot": snapshot,
+            "exceptionRoom": available_room,
+            "spendingType": "first_apron_blocked",
+            "exceptionType": exception_type,
+            "birdRights": rights,
+            "payrollZone": payroll_zone,
+            "exceptionRemaining": remaining,
+        }
+
+    if needed_room > available_room:
+        over_by = needed_room - available_room
+        return {
+            "ok": False,
+            "reason": f"{team_name} does not have enough remaining room for this offer. Over by ${int(over_by):,}.",
+            "teamSnapshot": snapshot,
+            "exceptionRoom": available_room,
+            "spendingType": "room_blocked",
+            "exceptionType": exception_type,
+            "birdRights": rights,
+            "payrollZone": payroll_zone,
+            "exceptionRemaining": remaining,
+        }
+
+    return {
+        "ok": True,
+        "reason": legal_reason,
+        "teamSnapshot": snapshot,
+        "exceptionRoom": available_room,
+        "spendingType": spending_type,
+        "exceptionType": exception_type,
+        "birdRights": rights,
+        "payrollZone": payroll_zone,
+        "projectedPayroll": projected_payroll,
+        "exceptionRemaining": remaining,
+    }
 
 def classify_team_direction(team: Dict[str, Any]) -> Dict[str, Any]:
     return build_team_roster_profile(team)
@@ -1407,16 +2272,35 @@ def build_free_agent_record(
     reason: str
 ) -> Dict[str, Any]:
     fa_player = copy.deepcopy(player)
+    previous_rights = get_player_rights(fa_player)
+
     fa_player["previousContract"] = normalize_contract(player.get("contract"))
     fa_player["freeAgencyMeta"] = {
         "fromTeam": from_team_name,
         "seasonYear": season_year,
         "reason": reason,
     }
+
+    if reason == "declined_team_option":
+        set_player_rights(
+            player = fa_player,
+            held_by_team = None,
+            seasons_toward_bird = 0,
+            rookie_scale = previous_rights["rookieScale"],
+            restricted_free_agent = False,
+        )
+    else:
+        set_player_rights(
+            player = fa_player,
+            held_by_team = previous_rights.get("heldByTeam") or from_team_name,
+            seasons_toward_bird = max(1, previous_rights["seasonsTowardBird"]),
+            rookie_scale = previous_rights["rookieScale"],
+            restricted_free_agent = previous_rights["restrictedFreeAgent"],
+        )
+
     fa_player["contract"] = None
     fa_player["marketValue"] = estimate_market_value(fa_player)
     return fa_player
-
 
 def remove_existing_free_agent_match(
     free_agents: List[Dict[str, Any]],
@@ -1471,7 +2355,21 @@ def build_contract_status_row(
 
     salary_this_year = get_contract_salary_for_year(contract, upcoming_year)
     salary_next_year = get_contract_salary_for_year(contract, upcoming_year + 1) if contract else 0
-    active_option = get_active_option_for_year(contract, upcoming_year)
+    final_rookie_option_completed = is_completed_final_rookie_scale_team_option(
+        player = player,
+        current_season_year = season_year,
+    )
+    active_option = get_active_option_for_player_for_year(
+        player = player,
+        contract = contract,
+        option_season_year = upcoming_year,
+        current_season_year = season_year,
+    )
+
+    if final_rookie_option_completed:
+        salary_this_year = 0
+        salary_next_year = 0
+        active_option = None
 
     if active_option and salary_this_year <= 0:
         salary_this_year = int(active_option.get("salary", 0))
@@ -1501,6 +2399,12 @@ def build_contract_status_row(
         "marketValue": market_value,
         "teamDirection": team_direction["direction"],
         "reSignInterestScore": re_sign_interest["reSignInterestScore"],
+        "finalRookieOptionCompleted": bool(final_rookie_option_completed),
+        "qualifyingOfferCandidate": bool(
+            final_rookie_option_completed
+            and get_player_rights(player).get("rookieScale")
+            and get_player_rights(player).get("heldByTeam")
+        ),
     }
 
     if active_option:
@@ -1662,18 +2566,63 @@ def apply_offseason_contract_decisions(
             contract = normalize_contract(player.get("contract"))
             upcoming_year = season_year + 1
             salary_this_year = get_contract_salary_for_year(contract, upcoming_year)
-            active_option = get_active_option_for_year(contract, upcoming_year)
+            active_option = get_active_option_for_player_for_year(
+                player = player,
+                contract = contract,
+                option_season_year = upcoming_year,
+                current_season_year = season_year,
+            )
 
             if active_option and salary_this_year <= 0:
                 salary_this_year = int(active_option.get("salary", 0))
 
+            final_rookie_option_completed = is_completed_final_rookie_scale_team_option(
+                player = player,
+                current_season_year = season_year,
+            )
+
+            if final_rookie_option_completed:
+                fa_player = add_player_to_free_agency(
+                    updated = updated,
+                    player = player,
+                    from_team_name = team_name,
+                    season_year = season_year,
+                    reason = "expired_rookie_scale_contract",
+                )
+                process_qualifying_offer_after_entry(
+                    league_data = updated,
+                    team = team,
+                    player = fa_player,
+                    team_name = team_name,
+                    season_year = season_year,
+                    reason = "expired_rookie_scale_contract",
+                    user_team_name = user_team_name,
+                )
+                decision_log.append({
+                    "type": "rookie_scale_qo",
+                    "playerName": player.get("name"),
+                    "teamName": team_name,
+                    "result": "entered_free_agency_qo_eligible",
+                })
+                teams_affected.add(team_name)
+                continue
+
             if contract is None or (salary_this_year <= 0 and not active_option):
-                add_player_to_free_agency(
+                fa_player = add_player_to_free_agency(
                     updated = updated,
                     player = player,
                     from_team_name = team_name,
                     season_year = season_year,
                     reason = "expired_contract" if contract else "no_contract",
+                )
+                process_qualifying_offer_after_entry(
+                    league_data = updated,
+                    team = team,
+                    player = fa_player,
+                    team_name = team_name,
+                    season_year = season_year,
+                    reason = "expired_contract" if contract else "no_contract",
+                    user_team_name = user_team_name,
                 )
                 decision_log.append({
                     "type": "expired_contract",
@@ -1701,12 +2650,21 @@ def apply_offseason_contract_decisions(
                         "score": decision["score"],
                     })
                 else:
-                    add_player_to_free_agency(
+                    fa_player = add_player_to_free_agency(
                         updated = updated,
                         player = player,
                         from_team_name = team_name,
                         season_year = season_year,
                         reason = "declined_player_option",
+                    )
+                    process_qualifying_offer_after_entry(
+                        league_data = updated,
+                        team = team,
+                        player = fa_player,
+                        team_name = team_name,
+                        season_year = season_year,
+                        reason = "declined_player_option",
+                        user_team_name = user_team_name,
                     )
                     decision_log.append({
                         "type": "player_option",
@@ -1750,12 +2708,21 @@ def apply_offseason_contract_decisions(
                         "userControlled": bool(user_team_name and team_name == user_team_name),
                     })
                 else:
-                    add_player_to_free_agency(
+                    fa_player = add_player_to_free_agency(
                         updated = updated,
                         player = player,
                         from_team_name = team_name,
                         season_year = season_year,
                         reason = "declined_team_option",
+                    )
+                    process_qualifying_offer_after_entry(
+                        league_data = updated,
+                        team = team,
+                        player = fa_player,
+                        team_name = team_name,
+                        season_year = season_year,
+                        reason = "declined_team_option",
+                        user_team_name = user_team_name,
                     )
                     decision_log.append({
                         "type": "team_option",
@@ -1771,6 +2738,8 @@ def apply_offseason_contract_decisions(
             kept_players.append(player)
 
         team["players"] = kept_players
+
+    normalize_all_player_rights(updated)
 
     for player in updated.setdefault("freeAgents", []):
         player["marketValue"] = estimate_market_value(player)
@@ -1835,10 +2804,119 @@ def ensure_free_agency_state(league_data: Dict[str, Any]) -> Dict[str, Any]:
     state.setdefault("dailyLog", [])
     state.setdefault("signedPlayersLog", [])
     state.setdefault("offerHistory", [])
+    state.setdefault("userOfferOutcomeLog", [])
     state.setdefault("pendingUserDecisions", [])
+    state.setdefault("pendingRfaMatchDecisions", [])
     state.setdefault("pendingUserTeamName", None)
     state.setdefault("pendingUserTeamSnapshot", None)
+    state.setdefault("exceptionUsageByTeam", {})
+    state.setdefault("teamNeedProfiles", {})
     return state
+
+
+def normalize_exception_type(raw_value: Any) -> Optional[str]:
+    raw = str(raw_value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    if raw in ["", "none", "null", "cap_space", "minimum", "bird_rights", "rfa_match"]:
+        return None
+
+    if "room" in raw:
+        return "room_exception"
+    if "non_taxpayer" in raw or "non_tax" in raw or "nonpayer" in raw:
+        return "non_taxpayer_mle"
+    if "taxpayer" in raw:
+        return "taxpayer_mle"
+    if "mid_level" in raw or raw == "mle":
+        return "non_taxpayer_mle"
+
+    return None
+
+
+def get_exception_usage_ledger(league_data: Dict[str, Any]) -> Dict[str, Any]:
+    state = ensure_free_agency_state(league_data)
+    usage = state.setdefault("exceptionUsageByTeam", {})
+    if not isinstance(usage, dict):
+        state["exceptionUsageByTeam"] = {}
+        usage = state["exceptionUsageByTeam"]
+    return usage
+
+
+def get_team_exception_usage(league_data: Dict[str, Any], team_name: str) -> Dict[str, int]:
+    usage = get_exception_usage_ledger(league_data)
+    row = usage.setdefault(team_name, {})
+    if not isinstance(row, dict):
+        usage[team_name] = {}
+        row = usage[team_name]
+
+    normalized = {
+        "nonTaxpayerMLE": int(num(row.get("nonTaxpayerMLE") or row.get("non_taxpayer_mle"), 0)),
+        "taxpayerMLE": int(num(row.get("taxpayerMLE") or row.get("taxpayer_mle"), 0)),
+        "roomException": int(num(row.get("roomException") or row.get("room_exception"), 0)),
+    }
+
+    row["nonTaxpayerMLE"] = normalized["nonTaxpayerMLE"]
+    row["taxpayerMLE"] = normalized["taxpayerMLE"]
+    row["roomException"] = normalized["roomException"]
+    row["totalUsed"] = (
+        normalized["nonTaxpayerMLE"]
+        + normalized["taxpayerMLE"]
+        + normalized["roomException"]
+    )
+    return normalized
+
+
+def get_team_remaining_exceptions(league_data: Dict[str, Any], team_name: str) -> Dict[str, int]:
+    used = get_team_exception_usage(league_data, team_name)
+    return {
+        "nonTaxpayerMLE": max(0, get_non_taxpayer_mle_amount(league_data) - used["nonTaxpayerMLE"]),
+        "taxpayerMLE": max(0, get_taxpayer_mle_amount(league_data) - used["taxpayerMLE"]),
+        "roomException": max(0, get_room_exception_amount(league_data) - used["roomException"]),
+    }
+
+
+def record_exception_usage_for_signing(
+    league_data: Dict[str, Any],
+    team_name: str,
+    spending_res: Dict[str, Any],
+    current_year_salary: int,
+) -> Optional[Dict[str, Any]]:
+    exception_type = normalize_exception_type(spending_res.get("exceptionType"))
+    amount = int(num(current_year_salary, 0))
+
+    if not exception_type or amount <= MIN_DEAL:
+        return None
+
+    usage = get_exception_usage_ledger(league_data)
+    row = usage.setdefault(team_name, {})
+    if not isinstance(row, dict):
+        usage[team_name] = {}
+        row = usage[team_name]
+
+    key_map = {
+        "non_taxpayer_mle": "nonTaxpayerMLE",
+        "taxpayer_mle": "taxpayerMLE",
+        "room_exception": "roomException",
+    }
+    key = key_map.get(exception_type)
+    if not key:
+        return None
+
+    before = int(num(row.get(key), 0))
+    row[key] = before + amount
+    row["totalUsed"] = (
+        int(num(row.get("nonTaxpayerMLE"), 0))
+        + int(num(row.get("taxpayerMLE"), 0))
+        + int(num(row.get("roomException"), 0))
+    )
+
+    return {
+        "teamName": team_name,
+        "exceptionType": exception_type,
+        "amountUsed": amount,
+        "usedBefore": before,
+        "usedAfter": row[key],
+        "remainingAfter": get_team_remaining_exceptions(league_data, team_name),
+    }
 
 
 def get_active_offers_for_player(state: Dict[str, Any], player_key: str) -> List[Dict[str, Any]]:
@@ -2099,12 +3177,295 @@ def clear_pending_user_decisions(state: Dict[str, Any]) -> None:
     state["pendingUserTeamSnapshot"] = None
 
 
+def build_pending_rfa_match_decision_entry(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    chosen_offer: Dict[str, Any],
+    all_offers: List[Dict[str, Any]],
+    current_day: int,
+) -> Dict[str, Any]:
+    player_key = get_player_key_from_player(player)
+    rights = get_player_rights(player)
+    rights_team_name = rights.get("heldByTeam")
+
+    offer_sheet = copy.deepcopy(chosen_offer)
+    offer_sheet["contract"] = normalize_contract(offer_sheet.get("contract"))
+
+    contract = normalize_contract(offer_sheet.get("contract"))
+    salary_by_year = list(contract.get("salaryByYear", [])) if contract else []
+    total_value = int(sum(salary_by_year))
+    years = len(salary_by_year)
+    current_year_salary = int(salary_by_year[0]) if salary_by_year else 0
+    offering_team_name = offer_sheet.get("teamName")
+
+    return {
+        "id": f"rfa:{player_key}:{current_day}:{offering_team_name}",
+        "type": "rfa_match_decision",
+        "status": "pending",
+        "playerKey": player_key,
+        "playerId": player.get("id"),
+        "playerName": player.get("name"),
+        "player": {
+            "id": player.get("id"),
+            "name": player.get("name"),
+            "overall": player.get("overall"),
+            "age": player.get("age"),
+            "position": player.get("pos"),
+            "headshot": player.get("headshot"),
+        },
+        "rightsTeamName": rights_team_name,
+        "teamName": rights_team_name,
+        "offeringTeamName": offering_team_name,
+        "offerSheet": offer_sheet,
+        "chosenOffer": offer_sheet,
+        "contract": contract,
+        "salaryByYear": salary_by_year,
+        "currentYearSalary": current_year_salary,
+        "years": years,
+        "totalValue": total_value,
+        "aav": int(total_value / max(1, years)),
+        "day": current_day,
+        "deadlineDay": current_day + 1,
+        "allOffers": sort_offers_for_display(copy.deepcopy(all_offers)),
+    }
+
+
+def upsert_pending_rfa_match_decision(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    chosen_offer: Dict[str, Any],
+    all_offers: List[Dict[str, Any]],
+    current_day: int,
+) -> Dict[str, Any]:
+    state = ensure_free_agency_state(league_data)
+    entry = build_pending_rfa_match_decision_entry(
+        league_data = league_data,
+        player = player,
+        chosen_offer = chosen_offer,
+        all_offers = all_offers,
+        current_day = current_day,
+    )
+
+    pending_rows = [
+        row for row in state.get("pendingRfaMatchDecisions", [])
+        if row.get("playerKey") != entry.get("playerKey")
+    ]
+    pending_rows.append(entry)
+    pending_rows.sort(
+        key = lambda row: (
+            -num(row.get("totalValue"), 0),
+            str(row.get("playerName", "")),
+        )
+    )
+
+    state["pendingRfaMatchDecisions"] = pending_rows
+    state["pendingUserTeamName"] = entry.get("rightsTeamName")
+
+    rights_team_name = entry.get("rightsTeamName")
+    snapshot = get_team_cap_snapshot(league_data, rights_team_name) if rights_team_name else None
+    state["pendingUserTeamSnapshot"] = snapshot if snapshot and snapshot.get("ok") else None
+
+    return entry
+
+
+def should_create_user_rfa_match_decision(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    chosen_offer: Dict[str, Any],
+    user_team_name: Optional[str] = None,
+) -> bool:
+    if not user_team_name:
+        return False
+
+    rights = get_player_rights(player)
+    rights_team_name = rights.get("heldByTeam")
+
+    if not rights.get("restrictedFreeAgent"):
+        return False
+
+    if not rights_team_name or rights_team_name != user_team_name:
+        return False
+
+    if chosen_offer.get("teamName") == rights_team_name:
+        return False
+
+    if chosen_offer.get("status", "active") != "active":
+        return False
+
+    return True
+
+
+def clear_pending_rfa_match_decision_for_player(state: Dict[str, Any], player_key: str) -> None:
+    state["pendingRfaMatchDecisions"] = [
+        row for row in state.get("pendingRfaMatchDecisions", [])
+        if row.get("playerKey") != player_key
+    ]
+
+
+def process_pending_rfa_match_decision(
+    league_data: Dict[str, Any],
+    user_team_name: Optional[str] = None,
+    player_key: Optional[str] = None,
+    decision: str = "decline",
+) -> Dict[str, Any]:
+    updated = copy.deepcopy(league_data)
+    normalize_all_player_rights(updated)
+    state = ensure_free_agency_state(updated)
+
+    pending_rows = list(state.get("pendingRfaMatchDecisions", []))
+    if not pending_rows:
+        return {
+            "ok": True,
+            "leagueData": updated,
+            "processedDecision": None,
+            "processedSigning": None,
+            "pendingRfaMatchDecisions": [],
+            "stateSummary": build_free_agency_state_summary(updated),
+            "teamSnapshot": state.get("pendingUserTeamSnapshot"),
+        }
+
+    if not user_team_name:
+        user_team_name = state.get("pendingUserTeamName")
+
+    target_row = None
+    if player_key:
+        for row in pending_rows:
+            if str(row.get("playerKey")) == str(player_key):
+                target_row = row
+                break
+    else:
+        target_row = pending_rows[0]
+
+    if not target_row:
+        return {
+            "ok": False,
+            "reason": "Pending RFA match decision not found.",
+            "leagueData": updated,
+            "stateSummary": build_free_agency_state_summary(updated),
+            "teamSnapshot": state.get("pendingUserTeamSnapshot"),
+        }
+
+    row_player_key = target_row.get("playerKey") or get_player_key(
+        target_row.get("playerId"),
+        target_row.get("playerName"),
+    )
+
+    rights_team_name = target_row.get("rightsTeamName") or target_row.get("teamName")
+    if user_team_name and rights_team_name and user_team_name != rights_team_name:
+        return {
+            "ok": False,
+            "reason": f"This RFA match decision belongs to {rights_team_name}.",
+            "leagueData": updated,
+            "blockedPlayerKey": row_player_key,
+            "stateSummary": build_free_agency_state_summary(updated),
+            "teamSnapshot": state.get("pendingUserTeamSnapshot"),
+        }
+
+    free_agents = updated.setdefault("freeAgents", [])
+    player_idx = find_free_agent_index(
+        free_agents,
+        target_row.get("playerId"),
+        target_row.get("playerName"),
+    )
+    if player_idx == -1:
+        clear_pending_rfa_match_decision_for_player(state, row_player_key)
+        return {
+            "ok": False,
+            "reason": f"{target_row.get('playerName', 'Player')} is no longer available.",
+            "leagueData": updated,
+            "blockedPlayerKey": row_player_key,
+            "stateSummary": build_free_agency_state_summary(updated),
+            "teamSnapshot": state.get("pendingUserTeamSnapshot"),
+        }
+
+    player = free_agents[player_idx]
+    current_day = int(num(state.get("currentDay"), target_row.get("day", 1)))
+    raw_decision = str(decision or "decline").strip().lower().replace("-", "_").replace(" ", "_")
+    match_offer = raw_decision in ["match", "match_offer", "matched", "accept", "accept_match"]
+
+    offer_sheet = copy.deepcopy(
+        target_row.get("offerSheet")
+        or target_row.get("chosenOffer")
+        or {}
+    )
+    offer_sheet["contract"] = normalize_contract(
+        offer_sheet.get("contract") or target_row.get("contract")
+    )
+
+    if match_offer:
+        chosen_offer = copy.deepcopy(offer_sheet)
+        chosen_offer["teamName"] = rights_team_name
+        chosen_offer["source"] = "rfa_user_match"
+        chosen_offer["matchedOriginalTeamName"] = rights_team_name
+        chosen_offer["originalOfferTeamName"] = target_row.get("offeringTeamName") or offer_sheet.get("teamName")
+        chosen_offer["forceRfaMatch"] = True
+        final_decision = "match"
+    else:
+        chosen_offer = copy.deepcopy(offer_sheet)
+        chosen_offer["source"] = chosen_offer.get("source") or "cpu"
+        chosen_offer["declinedRightsTeamName"] = rights_team_name
+        chosen_offer["rfaMatchDeclined"] = True
+        chosen_offer["skipRfaAutoMatch"] = True
+        final_decision = "decline"
+
+    signed = finalize_free_agent_signing_from_offer(
+        league_data = updated,
+        player = player,
+        chosen_offer = chosen_offer,
+        current_day = current_day,
+    )
+
+    if not signed:
+        return {
+            "ok": False,
+            "reason": f"Unable to process RFA decision for {target_row.get('playerName', 'player')} with the current cap / roster situation.",
+            "leagueData": league_data,
+            "blockedPlayerKey": row_player_key,
+            "pendingRfaMatchDecision": target_row,
+            "stateSummary": build_free_agency_state_summary(league_data),
+            "teamSnapshot": state.get("pendingUserTeamSnapshot"),
+        }
+
+    state = ensure_free_agency_state(updated)
+    clear_pending_rfa_match_decision_for_player(state, row_player_key)
+    state["pendingUserTeamName"] = rights_team_name
+    state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, rights_team_name) if rights_team_name else None
+    state.setdefault("dailyLog", []).append({
+        "day": current_day,
+        "type": "rfa_match_decision",
+        "playerName": target_row.get("playerName"),
+        "rightsTeamName": rights_team_name,
+        "offeringTeamName": target_row.get("offeringTeamName"),
+        "decision": final_decision,
+        "signedWith": signed.get("signedWith"),
+    })
+
+    return {
+        "ok": True,
+        "leagueData": updated,
+        "processedDecision": {
+            "playerKey": row_player_key,
+            "playerId": target_row.get("playerId"),
+            "playerName": target_row.get("playerName"),
+            "rightsTeamName": rights_team_name,
+            "offeringTeamName": target_row.get("offeringTeamName"),
+            "decision": final_decision,
+        },
+        "processedSigning": signed,
+        "processedSignings": [signed],
+        "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
+        "stateSummary": build_free_agency_state_summary(updated),
+        "teamSnapshot": state.get("pendingUserTeamSnapshot"),
+    }
+
+
 def process_pending_user_decisions(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None,
     selected_player_keys: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
+    normalize_all_player_rights(updated)
     state = ensure_free_agency_state(updated)
 
     pending_rows = list(state.get("pendingUserDecisions", []))
@@ -2114,6 +3475,7 @@ def process_pending_user_decisions(
             "leagueData": updated,
             "processedSignings": [],
             "generatedOffers": [],
+            "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
             "stateSummary": build_free_agency_state_summary(updated),
             "teamSnapshot": state.get("pendingUserTeamSnapshot"),
         }
@@ -2251,6 +3613,7 @@ def process_pending_user_decisions(
         "leagueData": preview,
         "processedSignings": processed_signings,
         "generatedOffers": generated_offers,
+        "pendingRfaMatchDecisions": preview_state.get("pendingRfaMatchDecisions", []),
         "stateSummary": build_free_agency_state_summary(preview),
         "teamSnapshot": preview_state.get("pendingUserTeamSnapshot"),
     }
@@ -2296,6 +3659,8 @@ def evaluate_market_offer_submission(
     contract: Dict[str, Any],
     exclude_offer_id: Optional[str] = None
 ) -> Dict[str, Any]:
+    normalize_player_rights_for_location(player, None)
+
     snapshot = get_team_cap_snapshot(league_data, team_name)
     if not snapshot.get("ok"):
         return snapshot
@@ -2337,38 +3702,16 @@ def evaluate_market_offer_submission(
             "teamSnapshot": snapshot,
         }
 
-    allow_minimum_exception = is_minimum_contract_for_current_year(
-        league_data = league_data,
-        contract = contract,
-    )
-
-    available_room = get_team_exception_room(
+    spending_res = validate_offer_spending_rules(
         league_data = league_data,
         team_name = team_name,
         player = player,
+        contract = contract,
+        outstanding_current_salary = outstanding_current_salary,
+        snapshot = snapshot,
     )
-
-    hard_cap = snapshot.get("hardCap")
-    is_hard_capped = bool(snapshot.get("isHardCapped"))
-    projected_payroll = int(num(snapshot.get("payroll"), 0)) + int(outstanding_current_salary) + int(offered_current_salary)
-
-    if is_hard_capped and hard_cap is not None and projected_payroll > int(num(hard_cap, 0)):
-        over_by = projected_payroll - int(num(hard_cap, 0))
-        return {
-            "ok": False,
-            "reason": f"{team_name} would exceed its hard cap by ${int(over_by):,}.",
-            "teamSnapshot": snapshot,
-            "exceptionRoom": available_room,
-        }
-
-    if not allow_minimum_exception and outstanding_current_salary + offered_current_salary > available_room:
-        over_by = outstanding_current_salary + offered_current_salary - available_room
-        return {
-            "ok": False,
-            "reason": f"{team_name} does not have enough room for this live offer. Over by ${int(over_by):,}.",
-            "teamSnapshot": snapshot,
-            "exceptionRoom": available_room,
-        }
+    if not spending_res.get("ok"):
+        return spending_res
 
     market_value = player.get("marketValue") or estimate_market_value(player)
     offered_years = len(contract["salaryByYear"])
@@ -2381,13 +3724,21 @@ def evaluate_market_offer_submission(
     year_penalty = abs(offered_years - expected_years) * 0.06
     acceptance_score = salary_ratio - year_penalty
 
+    if is_rights_team(player, team_name):
+        acceptance_score += 0.04
+
     return {
         "ok": True,
-        "reason": "Offer can be submitted to the live market.",
+        "reason": spending_res.get("reason", "Offer can be submitted to the live market."),
         "teamSnapshot": snapshot,
         "contract": contract,
         "marketValue": market_value,
-        "exceptionRoom": available_room,
+        "exceptionRoom": spending_res.get("exceptionRoom"),
+        "spendingType": spending_res.get("spendingType"),
+        "exceptionType": spending_res.get("exceptionType"),
+        "exceptionRemaining": spending_res.get("exceptionRemaining"),
+        "birdRights": spending_res.get("birdRights"),
+        "payrollZone": spending_res.get("payrollZone"),
         "details": {
             "offeredYears": offered_years,
             "offeredAAV": offered_aav,
@@ -2397,6 +3748,7 @@ def evaluate_market_offer_submission(
             "acceptanceScore": round(acceptance_score, 3),
         },
     }
+
 def score_offer_for_player(
     league_data: Dict[str, Any],
     player: Dict[str, Any],
@@ -2448,6 +3800,12 @@ def score_offer_for_player(
     if previous_team and previous_team == team_name:
         score += 0.05
 
+    if is_rights_team(player, team_name):
+        score += 0.06
+
+    if get_player_rights(player).get("restrictedFreeAgent") and is_rights_team(player, team_name):
+        score += 0.04
+
     if age >= 30 and direction == "contending":
         score += 0.08
     if age >= 34 and direction == "contending":
@@ -2456,6 +3814,12 @@ def score_offer_for_player(
         score += 0.07
     if potential - overall >= 2 and direction in ["rebuilding", "retooling"]:
         score += 0.05
+    if team:
+        fit = estimate_team_free_agent_fit(team, player)
+        score += float(fit.get("needScore", 0.0)) * 0.035
+        if fit.get("positionBucket") in (fit.get("weakestPositions", []) or [])[:2]:
+            score += 0.025
+
     if age >= 34 and offered_years >= 3:
         score -= 0.06
 
@@ -2465,10 +3829,15 @@ def score_offer_for_player(
 def build_free_agency_state_summary(league_data: Dict[str, Any]) -> Dict[str, Any]:
     state = ensure_free_agency_state(league_data)
     active_offer_count = 0
+    active_offer_salary_by_team = {}
+
     for offers in state.get("offersByPlayer", {}).values():
         for offer in offers:
             if offer.get("status", "active") == "active":
                 active_offer_count += 1
+                team_name = offer.get("teamName")
+                if team_name:
+                    active_offer_salary_by_team[team_name] = active_offer_salary_by_team.get(team_name, 0) + int(num(offer.get("currentYearSalary"), 0))
 
     return {
         "isActive": bool(state.get("isActive")),
@@ -2476,10 +3845,12 @@ def build_free_agency_state_summary(league_data: Dict[str, Any]) -> Dict[str, An
         "maxDays": int(num(state.get("maxDays"), DEFAULT_FREE_AGENCY_DAYS)),
         "freeAgentCount": len(league_data.get("freeAgents", [])),
         "activeOfferCount": active_offer_count,
+        "activeOfferSalaryByTeam": active_offer_salary_by_team,
         "signedCount": len(state.get("signedPlayersLog", [])),
         "pendingUserDecisionCount": len(state.get("pendingUserDecisions", [])),
+        "pendingRfaMatchDecisionCount": len(state.get("pendingRfaMatchDecisions", [])),
+        "exceptionUsageByTeam": copy.deepcopy(state.get("exceptionUsageByTeam", {})),
     }
-
 
 def build_cpu_offer_contract(
     league_data: Dict[str, Any],
@@ -2523,7 +3894,13 @@ def build_cpu_offer_contract(
     previous_team = None
     if isinstance(player.get("freeAgencyMeta"), dict):
         previous_team = player["freeAgencyMeta"].get("fromTeam")
-    is_returning_team_target = bool(team_name and previous_team == team_name)
+    is_returning_team_target = bool(
+        team_name
+        and (
+            previous_team == team_name
+            or is_rights_team(player, team_name)
+        )
+    )
 
     premium_talent = overall >= 84
     high_end_talent = overall >= 81
@@ -2697,6 +4074,11 @@ def generate_cpu_offers_for_day(
     offseason_min_target = get_free_agency_min_roster_target(league_data)
 
     generated = []
+    state["teamNeedProfiles"] = {
+        team.get("name"): build_team_roster_profile(team)
+        for _, _, team in iter_teams(league_data)
+        if team.get("name")
+    }
     free_agents = sorted(
         league_data.get("freeAgents", []),
         key = lambda p: (
@@ -2808,6 +4190,23 @@ def generate_cpu_offers_for_day(
                 min_fit_threshold -= 0.06
 
             min_fit_threshold = max(0.06, min_fit_threshold)
+            need_score = float(fit.get("needScore", 0.0))
+            position_bucket = fit.get("positionBucket")
+            weakest_positions = fit.get("weakestPositions", []) or []
+
+            if need_score >= 0.70:
+                min_fit_threshold -= 0.10
+            elif need_score >= 0.50:
+                min_fit_threshold -= 0.06
+            elif need_score <= 0.22 and actual_roster_deficit <= 0 and overall < 82:
+                min_fit_threshold += 0.08
+
+            if position_bucket in weakest_positions[:1]:
+                min_fit_threshold -= 0.06
+            elif position_bucket in weakest_positions[:2]:
+                min_fit_threshold -= 0.03
+
+            min_fit_threshold = max(0.04, min_fit_threshold)
             if fit["interestScore"] < min_fit_threshold:
                 continue
 
@@ -2840,8 +4239,24 @@ def generate_cpu_offers_for_day(
             candidate_score = fit["interestScore"] + (rng.random() * 0.05)
             candidate_score += max(0.0, (overall - 75.0) * 0.010)
             candidate_score += max(0.0, (overall - 82.0) * 0.018)
-            candidate_score += fit.get("needScore", 0.0) * 0.22
+            need_score = float(fit.get("needScore", 0.0))
+            position_bucket = fit.get("positionBucket")
+            weakest_positions = fit.get("weakestPositions", []) or []
+
+            candidate_score += need_score * 0.36
             candidate_score += min(0.45, actual_roster_deficit * 0.13)
+
+            if position_bucket in weakest_positions[:1]:
+                candidate_score += 0.16
+            elif position_bucket in weakest_positions[:2]:
+                candidate_score += 0.09
+
+            if need_score >= 0.75:
+                candidate_score += 0.16
+            elif need_score >= 0.55:
+                candidate_score += 0.09
+            elif need_score <= 0.22 and actual_roster_deficit <= 0 and overall < 82:
+                candidate_score -= 0.10
 
             if cap_room >= 25_000_000:
                 candidate_score += max(0.0, (overall - 77.0) * 0.022)
@@ -2865,17 +4280,19 @@ def generate_cpu_offers_for_day(
                 previous_team = player["freeAgencyMeta"].get("fromTeam")
             if previous_team and previous_team == team_name:
                 candidate_score += 0.18
+            if is_rights_team(player, team_name):
+                candidate_score += 0.18
 
             if current_day >= max_days - 1:
                 candidate_score += 0.10
             elif current_day >= max_days - 2:
                 candidate_score += 0.05
 
-            candidates.append((candidate_score, team_name, contract))
+            candidates.append((candidate_score, team_name, contract, eval_res, fit, profile))
 
         candidates.sort(key = lambda x: x[0], reverse = True)
 
-        for _, team_name, contract in candidates[:target_new_offers]:
+        for _, team_name, contract, eval_res, fit, profile in candidates[:target_new_offers]:
             offer_record = build_offer_record(
                 league_data = league_data,
                 team_name = team_name,
@@ -2884,6 +4301,22 @@ def generate_cpu_offers_for_day(
                 source = "cpu",
                 current_day = current_day,
             )
+            offer_record["spendingType"] = eval_res.get("spendingType")
+            offer_record["exceptionType"] = eval_res.get("exceptionType")
+            offer_record["payrollZone"] = eval_res.get("payrollZone")
+            offer_record["exceptionRoom"] = eval_res.get("exceptionRoom")
+            offer_record["exceptionRemaining"] = eval_res.get("exceptionRemaining")
+            offer_record["birdRights"] = eval_res.get("birdRights")
+            offer_record["teamDirection"] = profile.get("direction")
+            offer_record["needScore"] = fit.get("needScore")
+            offer_record["positionBucket"] = fit.get("positionBucket")
+            offer_record["weakestPositions"] = fit.get("weakestPositions")
+            offer_record["rosterNeed"] = {
+                "position": fit.get("positionBucket"),
+                "needScore": fit.get("needScore"),
+                "weakestPositions": fit.get("weakestPositions"),
+                "teamDirection": profile.get("direction"),
+            }
             upsert_offer_record(
                 league_data = league_data,
                 player_key = player_key,
@@ -2896,6 +4329,18 @@ def generate_cpu_offers_for_day(
                 "contract": offer_record["contract"],
                 "totalValue": offer_record["totalValue"],
                 "aav": offer_record["aav"],
+                "spendingType": offer_record.get("spendingType"),
+                "exceptionType": offer_record.get("exceptionType"),
+                "payrollZone": offer_record.get("payrollZone"),
+                "exceptionRoom": offer_record.get("exceptionRoom"),
+                "exceptionRemaining": offer_record.get("exceptionRemaining"),
+                "teamDirection": offer_record.get("teamDirection"),
+                "needScore": offer_record.get("needScore"),
+                "positionBucket": offer_record.get("positionBucket"),
+                "weakestPositions": offer_record.get("weakestPositions"),
+                "rosterNeed": offer_record.get("rosterNeed"),
+                "rfaOfferSheet": bool(get_player_rights(player).get("restrictedFreeAgent") and not is_rights_team(player, team_name)),
+                "rightsTeamName": get_player_rights(player).get("heldByTeam"),
             })
 
     return generated
@@ -2948,6 +4393,10 @@ def get_free_agent_offers(
             "age": player.get("age"),
             "position": player.get("pos"),
             "marketValue": player.get("marketValue") or estimate_market_value(player),
+            "rights": get_player_rights(player),
+            "qualifyingOffer": copy.deepcopy(player.get("qualifyingOffer")) if isinstance(player.get("qualifyingOffer"), dict) else None,
+            "qualifyingOfferEligible": copy.deepcopy(player.get("qualifyingOfferEligible")) if isinstance(player.get("qualifyingOfferEligible"), dict) else None,
+            "freeAgencyMeta": copy.deepcopy(player.get("freeAgencyMeta")) if isinstance(player.get("freeAgencyMeta"), dict) else None,
         },
         "offers": offers,
         "stateSummary": build_free_agency_state_summary(league_data),
@@ -2962,6 +4411,7 @@ def submit_user_free_agent_offer(
     offer: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
+    normalize_all_player_rights(updated)
     state = ensure_free_agency_state(updated)
 
     if not state.get("isActive"):
@@ -3012,6 +4462,11 @@ def submit_user_free_agent_offer(
         source = "user",
         current_day = current_day,
     )
+    offer_record["spendingType"] = eval_res.get("spendingType")
+    offer_record["exceptionType"] = eval_res.get("exceptionType")
+    offer_record["payrollZone"] = eval_res.get("payrollZone")
+    offer_record["exceptionRoom"] = eval_res.get("exceptionRoom")
+    offer_record["birdRights"] = eval_res.get("birdRights")
     upsert_offer_record(
         league_data = updated,
         player_key = player_key,
@@ -3034,6 +4489,104 @@ def submit_user_free_agent_offer(
     }
 
 
+def should_match_restricted_free_agent_offer(
+    league_data: Dict[str, Any],
+    rights_team_name: str,
+    player: Dict[str, Any],
+    chosen_offer: Dict[str, Any],
+) -> bool:
+    if not rights_team_name:
+        return False
+
+    if chosen_offer.get("teamName") == rights_team_name:
+        return False
+
+    rights = get_player_rights(player)
+    if not rights.get("restrictedFreeAgent"):
+        return False
+
+    _, _, rights_team = find_team_entry(league_data, rights_team_name)
+    if rights_team is None:
+        return False
+
+    contract = normalize_contract(chosen_offer.get("contract"))
+    if not contract:
+        return False
+
+    market_value = player.get("marketValue") or estimate_market_value(player)
+
+    offered_years = len(contract.get("salaryByYear", []))
+    offered_aav = int(sum(contract.get("salaryByYear", [])) / max(1, offered_years))
+
+    expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
+    overall = int(round(num(player.get("overall"), 0)))
+    age = int(num(player.get("age"), 24))
+    potential = int(round(num(player.get("potential"), overall)))
+    upside = max(0, potential - overall)
+
+    profile = build_team_roster_profile(rights_team)
+    direction = profile.get("direction", "balanced")
+
+    overpay_ratio = offered_aav / max(1, expected_aav)
+
+    if overall >= 82:
+        return overpay_ratio <= 1.40
+
+    if overall >= 78 and age <= 25:
+        return overpay_ratio <= 1.30
+
+    if age <= 24 and upside >= 4:
+        return overpay_ratio <= 1.25
+
+    if direction in ["rebuilding", "retooling"] and age <= 25 and overall >= 74:
+        return overpay_ratio <= 1.18
+
+    if overall >= 74 and overpay_ratio <= 1.05:
+        return True
+
+    return False
+
+
+def maybe_apply_rfa_match(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    chosen_offer: Dict[str, Any],
+) -> Tuple[Dict[str, Any], bool]:
+    rights = get_player_rights(player)
+    rights_team_name = rights.get("heldByTeam")
+
+    if chosen_offer.get("skipRfaAutoMatch") or chosen_offer.get("rfaMatchDeclined"):
+        return chosen_offer, False
+
+    if chosen_offer.get("forceRfaMatch"):
+        matched_offer = copy.deepcopy(chosen_offer)
+        matched_offer["matchedOriginalTeamName"] = rights_team_name or chosen_offer.get("teamName")
+        matched_offer["originalOfferTeamName"] = chosen_offer.get("originalOfferTeamName")
+        matched_offer["teamName"] = rights_team_name or chosen_offer.get("teamName")
+        return matched_offer, True
+
+    if not rights.get("restrictedFreeAgent"):
+        return chosen_offer, False
+
+    if not rights_team_name or rights_team_name == chosen_offer.get("teamName"):
+        return chosen_offer, False
+
+    if not should_match_restricted_free_agent_offer(
+        league_data = league_data,
+        rights_team_name = rights_team_name,
+        player = player,
+        chosen_offer = chosen_offer,
+    ):
+        return chosen_offer, False
+
+    matched_offer = copy.deepcopy(chosen_offer)
+    matched_offer["matchedOriginalTeamName"] = rights_team_name
+    matched_offer["originalOfferTeamName"] = chosen_offer.get("teamName")
+    matched_offer["teamName"] = rights_team_name
+    matched_offer["source"] = "rfa_match"
+    return matched_offer, True
+
+
 def finalize_free_agent_signing_from_offer(
     league_data: Dict[str, Any],
     player: Dict[str, Any],
@@ -3043,36 +4596,45 @@ def finalize_free_agent_signing_from_offer(
     player_key = get_player_key_from_player(player)
     state = ensure_free_agency_state(league_data)
 
-    _, _, team = find_team_entry(league_data, chosen_offer.get("teamName"))
+    chosen_offer, matched_rfa = maybe_apply_rfa_match(
+        league_data = league_data,
+        player = player,
+        chosen_offer = chosen_offer,
+    )
+
+    signing_team_name = chosen_offer.get("teamName")
+
+    _, _, team = find_team_entry(league_data, signing_team_name)
     if team is None:
         return None
 
-    snapshot = get_team_cap_snapshot(league_data, chosen_offer.get("teamName"))
+    snapshot = get_team_cap_snapshot(league_data, signing_team_name)
     if not snapshot.get("ok"):
         return None
 
     contract = apply_free_agency_start_year(league_data, chosen_offer.get("contract"))
-    offered_current_salary = get_contract_salary_for_year(contract, get_operating_season_year(league_data))
 
-    allow_minimum_exception = is_minimum_contract_for_current_year(
-        league_data = league_data,
-        contract = contract,
-    )
+    if chosen_offer.get("forceRfaMatch"):
+        spending_res = {
+            "ok": True,
+            "reason": "Offer matched using restricted free agent matching rights.",
+            "teamSnapshot": snapshot,
+            "exceptionRoom": get_team_exception_room(league_data, signing_team_name, player),
+            "spendingType": "rfa_match",
+            "birdRights": get_player_rights(player),
+            "payrollZone": get_payroll_zone_for_amount(league_data, int(num(snapshot.get("payroll"), 0))),
+        }
+    else:
+        spending_res = validate_offer_spending_rules(
+            league_data = league_data,
+            team_name = signing_team_name,
+            player = player,
+            contract = contract,
+            outstanding_current_salary = 0,
+            snapshot = snapshot,
+        )
 
-    available_room = get_team_exception_room(
-        league_data = league_data,
-        team_name = chosen_offer.get("teamName"),
-        player = player,
-    )
-
-    hard_cap = snapshot.get("hardCap")
-    is_hard_capped = bool(snapshot.get("isHardCapped"))
-    projected_payroll = int(num(snapshot.get("payroll"), 0)) + int(offered_current_salary)
-
-    if is_hard_capped and hard_cap is not None and projected_payroll > int(num(hard_cap, 0)):
-        return None
-
-    if not allow_minimum_exception and offered_current_salary > available_room:
+    if not spending_res.get("ok"):
         return None
 
     if len(get_team_players(team)) >= get_roster_limit(league_data):
@@ -3095,8 +4657,23 @@ def finalize_free_agent_signing_from_offer(
     signed_player["contract"] = contract
     signed_player["marketValue"] = estimate_market_value(signed_player)
 
+    update_player_rights_after_signing(
+        player = signed_player,
+        team_name = signing_team_name,
+        signing_source = "free_agency",
+        matched_rfa = matched_rfa,
+    )
+
     free_agents.pop(player_idx)
     team.setdefault("players", []).append(signed_player)
+
+    current_year_salary = get_contract_salary_for_year(contract, get_operating_season_year(league_data))
+    exception_usage = record_exception_usage_for_signing(
+        league_data = league_data,
+        team_name = signing_team_name,
+        spending_res = spending_res,
+        current_year_salary = current_year_salary,
+    )
 
     all_offers = []
     for offer in state.get("offersByPlayer", {}).get(player_key, []):
@@ -3105,29 +4682,106 @@ def finalize_free_agent_signing_from_offer(
             logged["status"] = "accepted"
         else:
             logged["status"] = "lost"
+
+        if matched_rfa and logged.get("offerId") == chosen_offer.get("offerId"):
+            logged["status"] = "matched_by_original_team"
+
         logged["playerViewScore"] = score_offer_for_player(league_data, player, offer)
         all_offers.append(logged)
+
+    sorted_all_offers = sort_offers_for_display(all_offers)
+
+    user_offer_outcomes = []
+    for logged in sorted_all_offers:
+        if logged.get("source") != "user":
+            continue
+
+        user_team_name = logged.get("teamName")
+        user_status = logged.get("status")
+        if user_status == "accepted" and user_team_name == signing_team_name:
+            outcome_status = "won"
+        elif user_status == "matched_by_original_team":
+            outcome_status = "matched_by_original_team"
+        else:
+            outcome_status = "lost"
+
+        user_contract = normalize_contract(logged.get("contract"))
+        user_salary_by_year = list(user_contract.get("salaryByYear", [])) if user_contract else []
+        user_total_value = int(sum(user_salary_by_year)) if user_salary_by_year else int(num(logged.get("totalValue"), 0))
+        user_years = len(user_salary_by_year) if user_salary_by_year else int(num(logged.get("years"), 0))
+
+        user_offer_outcomes.append({
+            "id": f"{player_key}|{user_team_name}|{current_day}|{outcome_status}",
+            "day": current_day,
+            "playerId": player.get("id"),
+            "playerName": player.get("name"),
+            "playerKey": player_key,
+            "userTeamName": user_team_name,
+            "status": outcome_status,
+            "offerStatus": user_status,
+            "signedWith": signing_team_name,
+            "signedContract": contract,
+            "signedTotalValue": int(sum(contract.get("salaryByYear", []))),
+            "signedYears": len(contract.get("salaryByYear", [])),
+            "userOfferContract": user_contract,
+            "userOfferTotalValue": user_total_value,
+            "userOfferYears": user_years,
+            "rfaMatched": matched_rfa,
+            "originalOfferTeamName": chosen_offer.get("originalOfferTeamName"),
+        })
+
+    if user_offer_outcomes:
+        state.setdefault("userOfferOutcomeLog", []).extend(copy.deepcopy(user_offer_outcomes))
 
     state["signedPlayersLog"].append({
         "day": current_day,
         "playerId": player.get("id"),
         "playerName": player.get("name"),
-        "teamName": chosen_offer.get("teamName"),
+        "teamName": signing_team_name,
+        "signedWith": signing_team_name,
         "contract": contract,
-        "allOffers": sort_offers_for_display(all_offers),
+        "totalValue": int(sum(contract.get("salaryByYear", []))),
+        "aav": int(sum(contract.get("salaryByYear", [])) / max(1, len(contract.get("salaryByYear", [])))),
+        "spendingType": spending_res.get("spendingType"),
+        "exceptionType": spending_res.get("exceptionType"),
+        "exceptionUsage": exception_usage,
+        "exceptionRemaining": get_team_remaining_exceptions(league_data, signing_team_name),
+        "payrollZone": spending_res.get("payrollZone"),
+        "allOffers": sorted_all_offers,
+        "userOfferOutcomes": user_offer_outcomes,
+        "rfaMatched": matched_rfa,
+        "originalOfferTeamName": chosen_offer.get("originalOfferTeamName"),
+        "matchedOriginalTeamName": chosen_offer.get("matchedOriginalTeamName"),
+        "declinedRightsTeamName": chosen_offer.get("declinedRightsTeamName"),
     })
 
     if player_key in state.get("offersByPlayer", {}):
         del state["offersByPlayer"][player_key]
 
+    total_value = int(sum(contract.get("salaryByYear", [])))
+    years = len(contract.get("salaryByYear", []))
+    aav = int(total_value / max(1, years))
+
     return {
         "playerId": player.get("id"),
         "playerName": player.get("name"),
-        "signedWith": chosen_offer.get("teamName"),
+        "signedWith": signing_team_name,
+        "teamName": signing_team_name,
         "day": current_day,
         "contract": contract,
-        "totalValue": chosen_offer.get("totalValue"),
-        "aav": chosen_offer.get("aav"),
+        "totalValue": total_value,
+        "aav": aav,
+        "spendingType": spending_res.get("spendingType"),
+        "exceptionType": spending_res.get("exceptionType"),
+        "exceptionUsage": exception_usage,
+        "exceptionRemaining": get_team_remaining_exceptions(league_data, signing_team_name),
+        "payrollZone": spending_res.get("payrollZone"),
+        "allOffers": sorted_all_offers,
+        "userOfferOutcomes": user_offer_outcomes,
+        "rfaMatched": matched_rfa,
+        "originalOfferTeamName": chosen_offer.get("originalOfferTeamName"),
+        "matchedOriginalTeamName": chosen_offer.get("matchedOriginalTeamName"),
+        "declinedRightsTeamName": chosen_offer.get("declinedRightsTeamName"),
     }
 
 def resolve_signings_for_day(
@@ -3260,6 +4914,30 @@ def resolve_signings_for_day(
         if not should_sign:
             continue
 
+        if should_create_user_rfa_match_decision(
+            league_data = league_data,
+            player = player,
+            chosen_offer = best_offer,
+            user_team_name = user_team_name,
+        ):
+            pending_entry = upsert_pending_rfa_match_decision(
+                league_data = league_data,
+                player = player,
+                chosen_offer = best_offer,
+                all_offers = offers,
+                current_day = current_day,
+            )
+            state.setdefault("dailyLog", []).append({
+                "day": current_day,
+                "type": "rfa_offer_sheet_pending",
+                "playerName": player.get("name"),
+                "rightsTeamName": pending_entry.get("rightsTeamName"),
+                "offeringTeamName": pending_entry.get("offeringTeamName"),
+                "totalValue": pending_entry.get("totalValue"),
+                "years": pending_entry.get("years"),
+            })
+            continue
+
         if (
             user_team_name
             and best_offer.get("teamName") == user_team_name
@@ -3295,6 +4973,7 @@ def initialize_free_agency_period(
     updated = copy.deepcopy(league_data)
 
     updated.setdefault("freeAgents", [])
+    normalize_all_player_rights(updated)
     refresh_free_agent_market_values(updated)
 
     state = ensure_free_agency_state(updated)
@@ -3305,7 +4984,11 @@ def initialize_free_agency_period(
     state["dailyLog"] = []
     state["signedPlayersLog"] = []
     state["offerHistory"] = []
+    state["userOfferOutcomeLog"] = []
     state["pendingUserDecisions"] = []
+    state["pendingRfaMatchDecisions"] = []
+    state["exceptionUsageByTeam"] = {}
+    state["teamNeedProfiles"] = {}
     state["pendingUserTeamName"] = user_team_name
     state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, user_team_name) if user_team_name else None
 
@@ -3341,6 +5024,7 @@ def advance_free_agency_day(
     user_team_name: Optional[str] = None
 ) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
+    normalize_all_player_rights(updated)
     state = ensure_free_agency_state(updated)
     refresh_free_agent_market_values(updated)
 
@@ -3356,6 +5040,15 @@ def advance_free_agency_day(
             "ok": False,
             "reason": "Process your pending user signings before advancing the day.",
             "leagueData": updated,
+            "stateSummary": build_free_agency_state_summary(updated),
+        }
+
+    if state.get("pendingRfaMatchDecisions"):
+        return {
+            "ok": False,
+            "reason": "Process your pending restricted free agent match decisions before advancing the day.",
+            "leagueData": updated,
+            "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
             "stateSummary": build_free_agency_state_summary(updated),
         }
 
@@ -3375,13 +5068,14 @@ def advance_free_agency_day(
         "signings": len(signings),
     })
 
-    if state.get("pendingUserDecisions"):
+    if state.get("pendingUserDecisions") or state.get("pendingRfaMatchDecisions"):
         return {
             "ok": True,
             "leagueData": updated,
             "dayResolved": current_day,
             "signings": signings,
             "generatedOffers": [],
+            "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
             "stateSummary": build_free_agency_state_summary(updated),
         }
 
@@ -3413,6 +5107,7 @@ def advance_free_agency_day(
             "dayResolved": current_day,
             "signings": signings,
             "generatedOffers": [],
+            "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
             "stateSummary": build_free_agency_state_summary(updated),
         }
 
@@ -3437,6 +5132,7 @@ def advance_free_agency_day(
         "dayResolved": current_day,
         "signings": signings,
         "generatedOffers": generated_offers,
+        "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
         "stateSummary": build_free_agency_state_summary(updated),
     }
 
@@ -3602,39 +5298,30 @@ def evaluate_offer(
     season_year = get_operating_season_year(league_data)
     offered_current_salary = get_contract_salary_for_year(contract, season_year)
 
-    allow_minimum_exception = is_minimum_contract_for_current_year(
-        league_data = league_data,
-        contract = contract,
-    )
-
-    available_room = get_team_exception_room(
+    spending_res = validate_offer_spending_rules(
         league_data = league_data,
         team_name = team_name,
         player = player,
+        contract = contract,
+        outstanding_current_salary = 0,
+        snapshot = snapshot,
     )
 
-    hard_cap = snapshot.get("hardCap")
-    is_hard_capped = bool(snapshot.get("isHardCapped"))
-    projected_payroll = int(num(snapshot.get("payroll"), 0)) + int(offered_current_salary)
+    available_room = spending_res.get("exceptionRoom", 0)
 
-    if is_hard_capped and hard_cap is not None and projected_payroll > int(num(hard_cap, 0)):
-        over_by = projected_payroll - int(num(hard_cap, 0))
+    if not spending_res.get("ok"):
         return {
             "ok": False,
             "accepted": False,
-            "reason": f"{team_name} would exceed its hard cap by ${int(over_by):,}.",
-            "teamSnapshot": snapshot,
-            "contract": contract,
-        }
-
-    if not allow_minimum_exception and offered_current_salary > available_room:
-        over_by = offered_current_salary - available_room
-        return {
-            "ok": False,
-            "reason": f"{team_name} is over its available room by ${int(over_by):,}.",
+            "reason": spending_res.get("reason", "Offer is not legal."),
             "teamSnapshot": snapshot,
             "exceptionRoom": available_room,
             "contract": contract,
+            "spendingType": spending_res.get("spendingType"),
+            "exceptionType": spending_res.get("exceptionType"),
+            "exceptionRemaining": spending_res.get("exceptionRemaining"),
+            "birdRights": spending_res.get("birdRights"),
+            "payrollZone": spending_res.get("payrollZone"),
         }
 
     market_value = player.get("marketValue") or estimate_market_value(player)
@@ -3667,6 +5354,11 @@ def evaluate_offer(
         "contract": contract,
         "marketValue": market_value,
         "exceptionRoom": available_room,
+        "spendingType": spending_res.get("spendingType"),
+        "exceptionType": spending_res.get("exceptionType"),
+        "exceptionRemaining": spending_res.get("exceptionRemaining"),
+        "birdRights": spending_res.get("birdRights"),
+        "payrollZone": spending_res.get("payrollZone"),
         "details": {
             "offeredYears": offered_years,
             "offeredAAV": offered_aav,
@@ -3703,6 +5395,7 @@ def sign_free_agent(
     offer: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
+    normalize_all_player_rights(updated)
     free_agents = updated.setdefault("freeAgents", [])
 
     player_idx = find_free_agent_index(free_agents, player_id, player_name)
@@ -3765,6 +5458,13 @@ def sign_free_agent(
     )
     signed_player["marketValue"] = estimate_market_value(signed_player)
 
+    update_player_rights_after_signing(
+        player = signed_player,
+        team_name = team_name,
+        signing_source = "free_agency",
+        matched_rfa = False,
+    )
+
     free_agents.pop(player_idx)
     team.setdefault("players", []).append(signed_player)
 
@@ -3821,6 +5521,13 @@ def release_player(
 
     released_player["previousContract"] = normalize_contract(released_player.get("contract"))
     released_player["contract"] = None
+    set_player_rights(
+        player = released_player,
+        held_by_team = None,
+        seasons_toward_bird = 0,
+        rookie_scale = get_player_rights(released_player).get("rookieScale", False),
+        restricted_free_agent = False,
+    )
     released_player["marketValue"] = estimate_market_value(released_player)
     released_player["freeAgencyMeta"] = {
         "fromTeam": team_name,
@@ -3840,6 +5547,270 @@ def release_player(
         "teamSnapshot": get_team_cap_snapshot(updated, team_name),
     }
 
+
+def preview_rights_management(
+    league_data: Dict[str, Any],
+    team_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    updated = copy.deepcopy(league_data)
+    normalize_all_player_rights(updated)
+    refresh_free_agent_market_values(updated)
+
+    if not team_name:
+        return {
+            "ok": False,
+            "reason": "No team name provided for rights management.",
+        }
+
+    _, _, team = find_team_entry(updated, team_name)
+    if team is None:
+        return {
+            "ok": False,
+            "reason": f"Team '{team_name}' not found.",
+        }
+
+    snapshot = get_team_cap_snapshot(updated, team_name)
+    rows = snapshot.get("capHoldRows", [])
+
+    return {
+        "ok": True,
+        "leagueData": updated,
+        "teamName": team_name,
+        "rightsRows": rows,
+        "rows": rows,
+        "teamSnapshot": snapshot,
+        "summary": {
+            "teamName": team_name,
+            "seasonYear": snapshot.get("seasonYear"),
+            "salaryCap": snapshot.get("salaryCap"),
+            "playerPayroll": snapshot.get("playerPayroll", 0),
+            "deadCap": snapshot.get("deadCap", 0),
+            "payrollBeforeHolds": snapshot.get("rawPayrollWithoutHolds", 0),
+            "rawCapRoomWithoutHolds": snapshot.get("rawCapRoomWithoutHolds", 0),
+            "capHoldTotal": snapshot.get("capHoldTotal", 0),
+            "practicalPayroll": snapshot.get("practicalPayroll", 0),
+            "practicalCapRoom": snapshot.get("practicalCapRoom", 0),
+            "rightsCount": len(rows),
+        },
+    }
+
+
+def _normalize_rights_decision(value: Any) -> str:
+    if isinstance(value, bool):
+        return "renounce" if value else "keep"
+
+    raw = str(value or "keep").strip().lower().replace("-", "_").replace(" ", "_")
+
+    if raw in ["renounce", "renounced", "release_rights", "drop_rights"]:
+        return "renounce"
+
+    if raw in ["extend_qo", "extend_qualifying_offer", "offer_qo", "offer_qualifying_offer"]:
+        return "extend_qo"
+
+    if raw in ["decline_qo", "decline_qualifying_offer", "do_not_offer_qo", "no_qo"]:
+        return "decline_qo"
+
+    if raw in ["withdraw_qo", "withdraw_qualifying_offer", "remove_qo"]:
+        return "withdraw_qo"
+
+    if raw in ["keep_qo", "keep_qualifying_offer"]:
+        return "keep_qo"
+
+    if raw in ["keep", "keep_rights", "retain", "retain_rights", ""]:
+        return "keep"
+
+    return "keep"
+
+
+def _get_rights_decision_for_player(
+    rights_decisions: Dict[str, Any],
+    player: Dict[str, Any],
+) -> str:
+    player_key = get_cap_hold_player_key(player)
+    player_id = player.get("id")
+    player_name = player.get("name")
+
+    possible_keys = [
+        player_key,
+        str(player_id) if player_id not in [None, ""] else None,
+        str(player_name) if player_name not in [None, ""] else None,
+    ]
+
+    for key in possible_keys:
+        if key and key in rights_decisions:
+            return _normalize_rights_decision(rights_decisions.get(key))
+
+    return "keep"
+
+
+def apply_rights_management(
+    league_data: Dict[str, Any],
+    team_name: Optional[str] = None,
+    rights_decisions: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    updated = copy.deepcopy(league_data)
+    normalize_all_player_rights(updated)
+    refresh_free_agent_market_values(updated)
+
+    rights_decisions = rights_decisions or {}
+
+    if not team_name:
+        return {
+            "ok": False,
+            "reason": "No team name provided for rights management.",
+            "leagueData": updated,
+        }
+
+    _, _, team = find_team_entry(updated, team_name)
+    if team is None:
+        return {
+            "ok": False,
+            "reason": f"Team '{team_name}' not found.",
+            "leagueData": updated,
+        }
+
+    decision_log = []
+
+    for player in updated.get("freeAgents", []):
+        rights = get_player_rights(player)
+        if rights.get("heldByTeam") != team_name:
+            continue
+
+        decision = _get_rights_decision_for_player(
+            rights_decisions = rights_decisions,
+            player = player,
+        )
+
+        if decision == "renounce":
+            old_cap_hold = get_player_cap_hold_amount(
+                league_data = updated,
+                player = player,
+                team_name = team_name,
+            )
+
+            set_player_rights(
+                player = player,
+                held_by_team = None,
+                seasons_toward_bird = 0,
+                rookie_scale = rights.get("rookieScale", False),
+                restricted_free_agent = False,
+            )
+
+            player["rightsRenounced"] = True
+            player.pop("qualifyingOffer", None)
+            player.pop("qualifyingOfferEligible", None)
+
+            decision_log.append({
+                "playerKey": get_cap_hold_player_key(player),
+                "playerId": player.get("id"),
+                "playerName": player.get("name"),
+                "teamName": team_name,
+                "decision": "renounce",
+                "capHoldCleared": old_cap_hold,
+            })
+
+        elif decision == "extend_qo":
+            eligible = player.get("qualifyingOfferEligible") if isinstance(player.get("qualifyingOfferEligible"), dict) else None
+            amount = int(num(eligible.get("amount"), 0)) if eligible else get_qualifying_offer_amount(updated, player)
+
+            set_player_rights(
+                player = player,
+                held_by_team = team_name,
+                seasons_toward_bird = rights.get("seasonsTowardBird", 0),
+                rookie_scale = rights.get("rookieScale", False),
+                restricted_free_agent = True,
+            )
+
+            player["qualifyingOffer"] = {
+                "teamName": team_name,
+                "amount": int(round_to_nearest(max(MIN_DEAL, amount), base = 1_000)),
+                "seasonYear": int(num((eligible or {}).get("seasonYear"), get_current_season_year(updated) + 1)),
+                "status": "extended",
+            }
+            player.pop("qualifyingOfferEligible", None)
+            player.pop("rightsRenounced", None)
+
+            decision_log.append({
+                "playerKey": get_cap_hold_player_key(player),
+                "playerId": player.get("id"),
+                "playerName": player.get("name"),
+                "teamName": team_name,
+                "decision": "extend_qo",
+                "qualifyingOfferAmount": int(player["qualifyingOffer"]["amount"]),
+            })
+
+        elif decision in ["decline_qo", "withdraw_qo"]:
+            old_qo = player.get("qualifyingOffer") if isinstance(player.get("qualifyingOffer"), dict) else None
+            old_eligible = player.get("qualifyingOfferEligible") if isinstance(player.get("qualifyingOfferEligible"), dict) else None
+
+            set_player_rights(
+                player = player,
+                held_by_team = team_name,
+                seasons_toward_bird = rights.get("seasonsTowardBird", 0),
+                rookie_scale = rights.get("rookieScale", False),
+                restricted_free_agent = False,
+            )
+
+            player.pop("qualifyingOffer", None)
+            player.pop("qualifyingOfferEligible", None)
+            player.pop("rightsRenounced", None)
+
+            decision_log.append({
+                "playerKey": get_cap_hold_player_key(player),
+                "playerId": player.get("id"),
+                "playerName": player.get("name"),
+                "teamName": team_name,
+                "decision": decision,
+                "qualifyingOfferAmount": int(num((old_qo or old_eligible or {}).get("amount"), 0)),
+            })
+
+        else:
+            if decision == "keep_qo" and isinstance(player.get("qualifyingOffer"), dict):
+                set_player_rights(
+                    player = player,
+                    held_by_team = team_name,
+                    seasons_toward_bird = rights.get("seasonsTowardBird", 0),
+                    rookie_scale = rights.get("rookieScale", False),
+                    restricted_free_agent = True,
+                )
+                player.pop("rightsRenounced", None)
+
+            decision_log.append({
+                "playerKey": get_cap_hold_player_key(player),
+                "playerId": player.get("id"),
+                "playerName": player.get("name"),
+                "teamName": team_name,
+                "decision": "keep_qo" if decision == "keep_qo" else "keep",
+                "capHoldKept": get_player_cap_hold_amount(
+                    league_data = updated,
+                    player = player,
+                    team_name = team_name,
+                ),
+            })
+
+    preview_after = preview_rights_management(
+        league_data = updated,
+        team_name = team_name,
+    )
+
+    return {
+        "ok": True,
+        "leagueData": updated,
+        "teamName": team_name,
+        "decisionLog": decision_log,
+        "summary": {
+            "keptCount": len([row for row in decision_log if row.get("decision") in ["keep", "keep_qo"]]),
+            "renouncedCount": len([row for row in decision_log if row.get("decision") == "renounce"]),
+            "extendedQOCount": len([row for row in decision_log if row.get("decision") == "extend_qo"]),
+            "declinedQOCount": len([row for row in decision_log if row.get("decision") == "decline_qo"]),
+            "withdrawnQOCount": len([row for row in decision_log if row.get("decision") == "withdraw_qo"]),
+            "capHoldCleared": int(sum(int(num(row.get("capHoldCleared"), 0)) for row in decision_log)),
+        },
+        "previewAfter": preview_after,
+        "teamSnapshot": preview_after.get("teamSnapshot"),
+    }
+
+
 def repair_cpu_teams_to_min_roster(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None,
@@ -3847,6 +5818,7 @@ def repair_cpu_teams_to_min_roster(
     current_day: int = 0,
 ) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
+    normalize_all_player_rights(updated)
 
     if min_players is not None:
         try:
@@ -3921,6 +5893,19 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
             team_option_decisions = payload.get("teamOptionDecisions", {}) or {},
         )
 
+    if action == "preview_rights_management":
+        return preview_rights_management(
+            league_data = league_data,
+            team_name = payload.get("teamName") or payload.get("userTeamName"),
+        )
+
+    if action == "apply_rights_management":
+        return apply_rights_management(
+            league_data = league_data,
+            team_name = payload.get("teamName") or payload.get("userTeamName"),
+            rights_decisions = payload.get("rightsDecisions", {}) or {},
+        )
+
     if action == "initialize_free_agency_period":
         return initialize_free_agency_period(
             league_data = league_data,
@@ -3961,6 +5946,14 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
             league_data = league_data,
             user_team_name = payload.get("userTeamName"),
             selected_player_keys = payload.get("selectedPlayerKeys", []) or [],
+        )
+
+    if action == "process_pending_rfa_match_decision":
+        return process_pending_rfa_match_decision(
+            league_data = league_data,
+            user_team_name = payload.get("userTeamName"),
+            player_key = payload.get("playerKey"),
+            decision = payload.get("decision", "decline"),
         )
 
     if action == "evaluate_offer":

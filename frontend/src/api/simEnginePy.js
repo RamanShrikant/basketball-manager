@@ -636,6 +636,34 @@ if (msg.type === "all-stars-result") {
       entry.resolve(msg.payload);
       return;
     }
+    // ------------------------------------------------------------
+// PROCESS PENDING RFA MATCH DECISION RESULT
+// ------------------------------------------------------------
+if (msg.type === "free-agency-process-rfa-match-result") {
+  const entry = pending.get(msg.requestId);
+  if (!entry) {
+    console.warn("[simEnginePy] free-agency-process-rfa-match-result for unknown requestId", msg.requestId, msg);
+    return;
+  }
+  pending.delete(msg.requestId);
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.resolve(msg.payload);
+  return;
+}
+
+if (msg.type === "free-agency-process-rfa-match-error") {
+  const entry = pending.get(msg.requestId);
+  if (!entry) {
+    console.warn("[simEnginePy] free-agency-process-rfa-match-error for unknown requestId", msg.requestId, msg);
+    return;
+  }
+  pending.delete(msg.requestId);
+  if (entry.timer) clearTimeout(entry.timer);
+  const err = msg.error || "Process pending RFA match decision failed";
+  if (entry.reject) entry.reject(new Error(err));
+  else entry.resolve({ ok: false, reason: err });
+  return;
+}
 
     if (msg.type === "free-agency-process-pending-error") {
       const entry = pending.get(msg.requestId);
@@ -646,6 +674,63 @@ if (msg.type === "all-stars-result") {
       pending.delete(msg.requestId);
       if (entry.timer) clearTimeout(entry.timer);
       const err = msg.error || "Process pending user free agency decisions failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
+        // ------------------------------------------------------------
+    // RIGHTS MANAGEMENT PREVIEW RESULT
+    // ------------------------------------------------------------
+    if (msg.type === "rights-management-preview-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] rights-management-preview-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "rights-management-preview-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] rights-management-preview-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Rights management preview failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
+
+    // ------------------------------------------------------------
+    // RIGHTS MANAGEMENT APPLY RESULT
+    // ------------------------------------------------------------
+    if (msg.type === "rights-management-apply-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] rights-management-apply-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "rights-management-apply-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] rights-management-apply-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Rights management apply failed";
       if (entry.reject) entry.reject(new Error(err));
       else entry.resolve({ ok: false, reason: err });
       return;
@@ -1528,7 +1613,9 @@ export function processPendingUserFreeAgencyDecisions(
   leagueData,
   userTeamName = null,
   selectedPlayerKeys = []
-) {
+) 
+
+{
   startWorker();
 
   const requestId = "FAPD" + counter++;
@@ -1560,6 +1647,133 @@ export function processPendingUserFreeAgencyDecisions(
       payload: {
         userTeamName,
         selectedPlayerKeys: deepSanitize(selectedPlayerKeys),
+      },
+    });
+  });
+}
+export function processPendingRfaMatchDecision(
+  leagueData,
+  userTeamName = null,
+  playerKey = null,
+  decision = "decline"
+) {
+  startWorker();
+
+  const requestId = "FARFA" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("PROCESS_PENDING_RFA_MATCH_DECISION_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "process-pending-rfa-match-decision",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        userTeamName,
+        playerKey,
+        decision,
+      },
+    });
+  });
+}
+// ------------------------------------------------------------
+// PUBLIC API - RIGHTS MANAGEMENT PREVIEW
+// ------------------------------------------------------------
+export function previewRightsManagement(
+  leagueData,
+  teamName = null
+) {
+  startWorker();
+
+  const requestId = "RMP" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("RIGHTS_MANAGEMENT_PREVIEW_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "preview-rights-management",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        teamName,
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------
+// PUBLIC API - RIGHTS MANAGEMENT APPLY
+// ------------------------------------------------------------
+export function applyRightsManagement(
+  leagueData,
+  teamName = null,
+  rightsDecisions = {}
+) {
+  startWorker();
+
+  const requestId = "RMA" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("RIGHTS_MANAGEMENT_APPLY_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "apply-rights-management",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        teamName,
+        rightsDecisions: deepSanitize(rightsDecisions),
       },
     });
   });
