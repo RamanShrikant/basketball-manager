@@ -112,31 +112,57 @@ def extract_points_per_game(stats_entry: Dict[str, Any]) -> float:
 
 
 def get_age_base_probability(age: int) -> float:
-    if age <= 29:
+    if age <= 32:
         return 0.0
-    if age == 30:
-        return 0.002
-    if age == 31:
-        return 0.006
-    if age == 32:
-        return 0.015
     if age == 33:
-        return 0.035
+        return 0.02
     if age == 34:
-        return 0.075
+        return 0.05
     if age == 35:
-        return 0.14
+        return 0.10
     if age == 36:
-        return 0.24
+        return 0.18
     if age == 37:
-        return 0.37
+        return 0.28
     if age == 38:
-        return 0.53
+        return 0.40
     if age == 39:
-        return 0.72
+        return 0.52
     if age == 40:
-        return 0.86
-    return 0.96
+        return 0.65
+    if age == 41:
+        return 0.78
+    if age == 42:
+        return 0.88
+    if age == 43:
+        return 0.95
+    return 1.0
+
+
+def get_overall_rating_adjustment(overall: float) -> float:
+    if overall >= 90:
+        return -0.20
+    if overall >= 85:
+        return -0.15
+    if overall >= 80:
+        return -0.10
+    if overall >= 75:
+        return -0.05
+    if overall >= 72:
+        return 0.0
+    if overall >= 70:
+        return 0.10
+    if overall >= 69:
+        return 0.22
+    if overall >= 68:
+        return 0.32
+    if overall >= 66:
+        return 0.40
+    if overall >= 64:
+        return 0.48
+    if overall >= 60:
+        return 0.55
+    return 0.65
 
 
 def get_remaining_guaranteed_years(player: Dict[str, Any], season_year: int) -> int:
@@ -156,6 +182,108 @@ def get_remaining_guaranteed_years(player: Dict[str, Any], season_year: int) -> 
     return remaining
 
 
+def get_free_agent_last_team_name(player: Dict[str, Any]) -> str:
+    possible_keys = [
+        "lastTeam",
+        "previousTeam",
+        "formerTeam",
+        "team",
+        "rightsHeldBy",
+        "lastKnownTeam",
+    ]
+
+    for key in possible_keys:
+        value = player.get(key)
+        if isinstance(value, str) and value.strip():
+            normalized = value.strip()
+            if normalized.lower() not in ["free agent", "free agency", "fa", "none"]:
+                return normalized
+
+    return "Free Agency"
+
+
+def add_free_agent_pool_ref(
+    refs: List[Tuple[Dict[str, Any], str, List[Dict[str, Any]], str]],
+    seen_pool_ids: set,
+    container: Dict[str, Any],
+    key: str,
+    label: str,
+) -> None:
+    pool = container.get(key)
+
+    if not isinstance(pool, list):
+        return
+
+    pool_id = id(pool)
+    if pool_id in seen_pool_ids:
+        return
+
+    seen_pool_ids.add(pool_id)
+    refs.append((container, key, pool, label))
+
+
+def get_free_agent_pool_refs(
+    league_data: Dict[str, Any],
+) -> List[Tuple[Dict[str, Any], str, List[Dict[str, Any]], str]]:
+    refs: List[Tuple[Dict[str, Any], str, List[Dict[str, Any]], str]] = []
+    seen_pool_ids = set()
+
+    top_level_list_keys = [
+        "freeAgents",
+        "freeAgentPool",
+        "availableFreeAgents",
+        "unsignedPlayers",
+        "freeAgentsPool",
+    ]
+
+    for key in top_level_list_keys:
+        add_free_agent_pool_ref(
+            refs = refs,
+            seen_pool_ids = seen_pool_ids,
+            container = league_data,
+            key = key,
+            label = "Free Agency",
+        )
+
+    top_level_object_keys = [
+        "freeAgency",
+        "freeAgentMarket",
+        "freeAgentData",
+    ]
+
+    nested_list_keys = [
+        "players",
+        "freeAgents",
+        "freeAgentPool",
+        "availablePlayers",
+        "availableFreeAgents",
+        "unsignedPlayers",
+        "pool",
+        "list",
+    ]
+
+    for object_key in top_level_object_keys:
+        value = league_data.get(object_key)
+
+        if isinstance(value, list):
+            pool_id = id(value)
+            if pool_id not in seen_pool_ids:
+                seen_pool_ids.add(pool_id)
+                refs.append((league_data, object_key, value, "Free Agency"))
+
+        if isinstance(value, dict):
+            for nested_key in nested_list_keys:
+                add_free_agent_pool_ref(
+                    refs = refs,
+                    seen_pool_ids = seen_pool_ids,
+                    container = value,
+                    key = nested_key,
+                    label = "Free Agency",
+                )
+
+    return refs
+
+
 def compute_retirement_probability(
     player: Dict[str, Any],
     team_name: str,
@@ -163,7 +291,6 @@ def compute_retirement_probability(
     settings: Optional[Dict[str, Any]] = None,
     season_year: Optional[int] = None,
 ) -> Dict[str, Any]:
-    settings = settings or {}
     current_year = int(season_year or DEFAULT_SEASON_YEAR)
 
     name = player.get("name") or player.get("player") or "Unknown"
@@ -176,69 +303,18 @@ def compute_retirement_probability(
     mpg = extract_minutes_per_game(stats_entry)
     ppg = extract_points_per_game(stats_entry)
 
-    probability = get_age_base_probability(age)
+    age_base_probability = get_age_base_probability(age)
+    overall_adjustment = get_overall_rating_adjustment(overall)
 
-    # Older lower-end players retire more often
-    if age >= 32 and overall <= 74:
-        probability += 0.05
-    if age >= 33 and overall <= 70:
-        probability += 0.08
-    if age >= 35 and overall <= 67:
-        probability += 0.10
-
-    # Declining players are more likely to walk away
-    if age >= 33 and potential <= overall - 4:
-        probability += 0.04
-    if age >= 35 and potential <= overall - 8:
-        probability += 0.05
-
-    # Deep bench / barely played players retire more often
-    if age >= 33 and gp <= 12:
-        probability += 0.08
-    if age >= 34 and gp <= 5:
-        probability += 0.08
-    if age >= 33 and mpg > 0 and mpg < 10:
-        probability += 0.06
-    if age >= 35 and mpg > 0 and mpg < 6:
-        probability += 0.07
-
-    # Productive veterans hang on a bit longer
-    if overall >= 82:
-        probability -= 0.06
-    if overall >= 87:
-        probability -= 0.06
-    if ppg >= 18:
-        probability -= 0.04
-    if mpg >= 28:
-        probability -= 0.04
-    if potential >= overall + 3:
-        probability -= 0.03
-
-    # Multi-year money can keep players around slightly longer in v1
-    remaining_years = get_remaining_guaranteed_years(player, current_year)
-    if remaining_years >= 2 and age <= 37:
-        probability -= 0.03
-    elif remaining_years >= 1 and age <= 35:
-        probability -= 0.015
-
-    # Settings knobs for your friend later
-    global_age_bonus = num(settings.get("globalAgeBonus"), 0.0)
-    global_probability_shift = num(settings.get("globalRetirementShift"), 0.0)
-
-    if age >= int(num(settings.get("extraBonusAgeThreshold"), 99)):
-        probability += global_age_bonus
-
-    probability += global_probability_shift
-
-    # Hard guards
-    if age <= 27:
+    if age <= 32:
         probability = 0.0
-    elif age <= 30:
-        probability = min(probability, 0.015)
-    elif age <= 32:
-        probability = min(probability, 0.07)
+    elif age >= 44:
+        probability = 1.0
+    else:
+        probability = age_base_probability + overall_adjustment
+        probability = clamp(probability, 0.0, 0.99)
 
-    probability = clamp(probability, 0.0, 0.99)
+    remaining_years = get_remaining_guaranteed_years(player, current_year)
 
     return {
         "playerName": name,
@@ -250,6 +326,8 @@ def compute_retirement_probability(
         "minutesPerGame": round(mpg, 1),
         "pointsPerGame": round(ppg, 1),
         "remainingGuaranteedYears": remaining_years,
+        "ageBaseProbability": round(age_base_probability, 4),
+        "overallAdjustment": round(overall_adjustment, 4),
         "retirementProbability": round(probability, 4),
     }
 
@@ -268,12 +346,17 @@ def apply_player_retirements(
     retired_players: List[Dict[str, Any]] = []
     teams_affected = set()
 
+    # 1. Check all rostered players
     for _, _, team in iter_teams(updated):
         team_name = team.get("name", "Unknown Team")
         old_players = team.get("players", [])
         kept_players = []
 
         for player in old_players:
+            if not isinstance(player, dict):
+                kept_players.append(player)
+                continue
+
             retirement_eval = compute_retirement_probability(
                 player = player,
                 team_name = team_name,
@@ -282,10 +365,13 @@ def apply_player_retirements(
                 season_year = current_year,
             )
 
+            retirement_eval["currentStatus"] = "Rostered"
+            retirement_eval["currentTeam"] = team_name
+
             probability = retirement_eval["retirementProbability"]
             roll = rng.random()
 
-            auto_retire = retirement_eval["age"] >= 42
+            auto_retire = retirement_eval["age"] >= 44
             should_retire = auto_retire or (roll < probability)
 
             if should_retire:
@@ -294,6 +380,7 @@ def apply_player_retirements(
                 retired_record["retired"] = True
                 retired_record["retiredSeasonYear"] = current_year
                 retired_record["retiredFromTeam"] = team_name
+                retired_record["retirementSource"] = "Roster"
                 retired_record["retirementProbability"] = probability
                 retired_record["retirementRoll"] = round(roll, 4)
                 retired_record["retirementSnapshot"] = retirement_eval
@@ -304,6 +391,58 @@ def apply_player_retirements(
                 kept_players.append(player)
 
         team["players"] = kept_players
+
+    # 2. Check all free-agent pools
+    free_agent_pool_refs = get_free_agent_pool_refs(updated)
+
+    for free_agent_container, free_agent_key, free_agents, pool_label in free_agent_pool_refs:
+        kept_free_agents = []
+
+        for player in free_agents:
+            if not isinstance(player, dict):
+                kept_free_agents.append(player)
+                continue
+
+            last_team_name = get_free_agent_last_team_name(player)
+
+            retirement_eval = compute_retirement_probability(
+                player = player,
+                team_name = last_team_name,
+                stats_by_key = stats_by_key,
+                settings = settings,
+                season_year = current_year,
+            )
+
+            retirement_eval["currentStatus"] = "Free Agent"
+            retirement_eval["currentTeam"] = "Free Agency"
+            retirement_eval["lastKnownTeam"] = last_team_name
+            retirement_eval["freeAgentPoolKey"] = free_agent_key
+
+            probability = retirement_eval["retirementProbability"]
+            roll = rng.random()
+
+            auto_retire = retirement_eval["age"] >= 44
+            should_retire = auto_retire or (roll < probability)
+
+            if should_retire:
+                retired_record = copy.deepcopy(player)
+
+                retired_record["retired"] = True
+                retired_record["retiredSeasonYear"] = current_year
+                retired_record["retiredFromTeam"] = "Free Agency"
+                retired_record["lastKnownTeam"] = last_team_name
+                retired_record["retirementSource"] = pool_label
+                retired_record["retirementPoolKey"] = free_agent_key
+                retired_record["retirementProbability"] = probability
+                retired_record["retirementRoll"] = round(roll, 4)
+                retired_record["retirementSnapshot"] = retirement_eval
+
+                retired_players.append(retired_record)
+                teams_affected.add("Free Agency")
+            else:
+                kept_free_agents.append(player)
+
+        free_agent_container[free_agent_key] = kept_free_agents
 
     retired_players.sort(
         key = lambda p: (
@@ -330,6 +469,7 @@ def apply_player_retirements(
         "averageOverall": round(avg_ovr, 1) if retired_players else 0.0,
         "seasonYear": current_year,
         "seed": seed if seed is not None else current_year,
+        "checkedFreeAgentPools": len(free_agent_pool_refs),
     }
 
     return {
@@ -349,18 +489,51 @@ def preview_player_retirements(
     current_year = int(season_year or get_current_season_year(league_data))
     previews = []
 
+    # 1. Preview rostered players
     for _, _, team in iter_teams(league_data):
         team_name = team.get("name", "Unknown Team")
         for player in team.get("players", []):
-            previews.append(
-                compute_retirement_probability(
-                    player = player,
-                    team_name = team_name,
-                    stats_by_key = stats_by_key,
-                    settings = settings,
-                    season_year = current_year,
-                )
+            if not isinstance(player, dict):
+                continue
+
+            preview = compute_retirement_probability(
+                player = player,
+                team_name = team_name,
+                stats_by_key = stats_by_key,
+                settings = settings,
+                season_year = current_year,
             )
+
+            preview["currentStatus"] = "Rostered"
+            preview["currentTeam"] = team_name
+
+            previews.append(preview)
+
+    # 2. Preview free agents
+    free_agent_pool_refs = get_free_agent_pool_refs(league_data)
+
+    for _, free_agent_key, free_agents, pool_label in free_agent_pool_refs:
+        for player in free_agents:
+            if not isinstance(player, dict):
+                continue
+
+            last_team_name = get_free_agent_last_team_name(player)
+
+            preview = compute_retirement_probability(
+                player = player,
+                team_name = last_team_name,
+                stats_by_key = stats_by_key,
+                settings = settings,
+                season_year = current_year,
+            )
+
+            preview["currentStatus"] = "Free Agent"
+            preview["currentTeam"] = "Free Agency"
+            preview["lastKnownTeam"] = last_team_name
+            preview["freeAgentPoolKey"] = free_agent_key
+            preview["retirementSource"] = pool_label
+
+            previews.append(preview)
 
     previews.sort(
         key = lambda row: (
@@ -373,6 +546,7 @@ def preview_player_retirements(
     return {
         "ok": True,
         "seasonYear": current_year,
+        "checkedFreeAgentPools": len(free_agent_pool_refs),
         "preview": previews,
     }
 
