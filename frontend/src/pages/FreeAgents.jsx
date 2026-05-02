@@ -122,6 +122,48 @@ export default function FreeAgents() {
     }).format(Number(amount || 0));
   };
 
+  const getRights = (player) => {
+    return player?.rights && typeof player.rights === "object"
+      ? player.rights
+      : { heldByTeam: null, birdLevel: "none", seasonsTowardBird: 0, restrictedFreeAgent: false, rookieScale: false };
+  };
+
+  const formatBirdLabel = (level) => {
+    if (level === "bird") return "Bird";
+    if (level === "early_bird") return "Early Bird";
+    if (level === "non_bird") return "Non-Bird";
+    return "No Rights";
+  };
+
+  const Chip = ({ children, tone = "neutral" }) => {
+    const cls =
+      tone === "orange"
+        ? "border-orange-500/30 bg-orange-500/10 text-orange-200"
+        : tone === "green"
+        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+        : tone === "red"
+        ? "border-red-500/30 bg-red-500/10 text-red-200"
+        : "border-neutral-600 bg-neutral-800 text-neutral-200";
+    return <span className={`inline-flex px-2.5 py-1 rounded-full border text-xs font-bold uppercase tracking-wide ${cls}`}>{children}</span>;
+  };
+
+  const renderRightsChips = (player, evaluation = null) => {
+    const rights = getRights(player);
+    const chips = [];
+    chips.push(rights.restrictedFreeAgent ? <Chip key="rfa" tone="green">RFA</Chip> : <Chip key="ufa">UFA</Chip>);
+    if (rights.heldByTeam) chips.push(<Chip key="rights" tone="orange">{formatBirdLabel(rights.birdLevel)}: {rights.heldByTeam}</Chip>);
+    if (player?.qualifyingOffer?.amount) chips.push(<Chip key="qo" tone="green">QO {formatDollars(player.qualifyingOffer.amount)}</Chip>);
+    if (evaluation?.spendingType) chips.push(<Chip key="tool" tone={evaluation.spendingType === "bird_rights" ? "orange" : "green"}>Using {String(evaluation.spendingType).replaceAll("_", " ")}</Chip>);
+    if (evaluation?.exceptionType) chips.push(<Chip key="ex" tone="green">{String(evaluation.exceptionType).replaceAll("_", " ")}</Chip>);
+    if (evaluation?.payrollZone) chips.push(<Chip key="zone">{String(evaluation.payrollZone).replaceAll("_", " ")}</Chip>);
+    return chips;
+  };
+
+  const isRestrictedFreeAgent = (player) => {
+    const rights = getRights(player);
+    return Boolean(rights?.restrictedFreeAgent || player?.qualifyingOffer?.amount);
+  };
+
   const formatMillionsInput = (amount) => {
     const val = Number(amount || 0) / 1_000_000;
     return val.toFixed(3).replace(/\.?0+$/, "");
@@ -147,6 +189,7 @@ const isOffseasonMode =
   !!offseasonState?.active &&
   Number(offseasonState?.seasonYear || currentSeasonYear) === currentSeasonYear;
   const optionsComplete = !!offseasonState?.optionsComplete;
+  const rightsManagementComplete = !!offseasonState?.rightsManagementComplete;
   const freeAgencyFinished = !!offseasonState?.freeAgencyComplete;
 
   const freeAgents = useMemo(() => {
@@ -212,7 +255,7 @@ const isOffseasonMode =
   const userRosterTooMany = !!selectedTeam?.name && userRosterCount > maxRosterSize;
   const userRosterInvalid = userRosterTooFew || userRosterTooMany;
 
-  const canSubmitLiveOffer = isOffseasonMode && optionsComplete && isLiveFreeAgencyActive;
+  const canSubmitLiveOffer = isOffseasonMode && optionsComplete && rightsManagementComplete && isLiveFreeAgencyActive;
   const canManualCleanupSign = isOffseasonMode && effectiveFreeAgencyFinished && userRosterTooFew;
   const canUseFreeAgencyAction = !isOffseasonMode || canSubmitLiveOffer || canManualCleanupSign;
 
@@ -318,12 +361,583 @@ const isOffseasonMode =
         age: player.age,
         position: player.pos,
         marketValue: player.marketValue || null,
+        rights: player.rights || null,
+        qualifyingOffer: player.qualifyingOffer || null,
+        qualifyingOfferEligible: player.qualifyingOfferEligible || null,
       },
       offers: enriched.map((offer) => ({
         ...offer,
         isBestOffer: offer.offerId === bestOfferId,
       })),
     };
+  };
+
+  // ------------------------------------------------------------
+  // User team cap dashboard + affordability model
+  // ------------------------------------------------------------
+  const MIN_CONTRACT_AMOUNT = 1_200_000;
+  const DEFAULT_SALARY_CAP = 150_000_000;
+  const DEFAULT_LUXURY_TAX_LINE = 180_000_000;
+  const DEFAULT_FIRST_APRON = 190_000_000;
+  const DEFAULT_SECOND_APRON = 200_000_000;
+  const DEFAULT_ROOM_EXCEPTION = 8_000_000;
+  const DEFAULT_NON_TAXPAYER_MLE = 14_100_000;
+  const DEFAULT_TAXPAYER_MLE = 5_700_000;
+
+  const getOperatingSeasonYear = () => {
+    return getCurrentSeasonYear() + (isOffseasonMode ? 1 : 0);
+  };
+
+  const getLeagueAmount = (keys, fallback) => {
+    for (const key of keys) {
+      const value = Number(workingLeagueData?.[key] || 0);
+      if (value > 0) return value;
+    }
+    return fallback;
+  };
+
+  const getSalaryCapAmount = () => getLeagueAmount(["salaryCap", "capLimit"], DEFAULT_SALARY_CAP);
+  const getLuxuryTaxLineAmount = () => getLeagueAmount(["luxuryTaxLine", "taxLine"], DEFAULT_LUXURY_TAX_LINE);
+  const getFirstApronAmount = () => getLeagueAmount(["firstApron", "apron1"], DEFAULT_FIRST_APRON);
+  const getSecondApronAmount = () => getLeagueAmount(["secondApron", "apron2"], DEFAULT_SECOND_APRON);
+  const getRoomExceptionAmount = () => getLeagueAmount(["roomException", "roomExceptionAmount"], DEFAULT_ROOM_EXCEPTION);
+  const getNonTaxpayerMleAmount = () => getLeagueAmount(["midLevelException", "nonTaxpayerMLE", "nonTaxpayerMidLevelException"], DEFAULT_NON_TAXPAYER_MLE);
+  const getTaxpayerMleAmount = () => getLeagueAmount(["taxpayerMLE", "taxpayerMidLevelException"], DEFAULT_TAXPAYER_MLE);
+
+  const getContractSalaryForYear = (contract, seasonYear) => {
+    const startYear = Number(contract?.startYear || 0);
+    const salaryByYear = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+    const idx = Number(seasonYear) - startYear;
+
+    if (idx < 0 || idx >= salaryByYear.length) return 0;
+    return Number(salaryByYear[idx] || 0);
+  };
+
+  const getTeamDeadCapForYear = (teamName, seasonYear) => {
+    const deadCapMap = workingLeagueData?.deadCapByTeam || {};
+    const rows = Array.isArray(deadCapMap?.[teamName]) ? deadCapMap[teamName] : [];
+
+    return rows.reduce((sum, row) => {
+      if (Number(row?.seasonYear || -1) !== Number(seasonYear)) return sum;
+      return sum + Number(row?.amount || 0);
+    }, 0);
+  };
+
+  const getPreviousSalaryForCapHold = (player) => {
+    const previousSalaryByYear = Array.isArray(player?.previousContract?.salaryByYear)
+      ? player.previousContract.salaryByYear
+      : [];
+    const currentSalaryByYear = Array.isArray(player?.contract?.salaryByYear)
+      ? player.contract.salaryByYear
+      : [];
+
+    if (previousSalaryByYear.length) {
+      return Number(previousSalaryByYear[previousSalaryByYear.length - 1] || 0);
+    }
+
+    if (currentSalaryByYear.length) {
+      return Number(currentSalaryByYear[currentSalaryByYear.length - 1] || 0);
+    }
+
+    return Number(player?.marketValue?.expectedYear1Salary || MIN_CONTRACT_AMOUNT);
+  };
+
+  const getCapHoldForPlayer = (player, teamName) => {
+    const rights = getRights(player);
+
+    if (player?.rightsRenounced) return 0;
+    if (!teamName || rights?.heldByTeam !== teamName) return 0;
+    if (!rights?.birdLevel || rights.birdLevel === "none") return 0;
+
+    if (
+      rights?.restrictedFreeAgent &&
+      player?.qualifyingOffer?.amount &&
+      player?.qualifyingOffer?.status !== "withdrawn"
+    ) {
+      return Math.max(MIN_CONTRACT_AMOUNT, Number(player.qualifyingOffer.amount || 0));
+    }
+
+    const previousSalary = getPreviousSalaryForCapHold(player);
+    const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || MIN_CONTRACT_AMOUNT);
+
+    if (rights.birdLevel === "bird") {
+      return Math.max(previousSalary, marketYearOne, MIN_CONTRACT_AMOUNT);
+    }
+
+    if (rights.birdLevel === "early_bird") {
+      return Math.max(previousSalary * 1.3, MIN_CONTRACT_AMOUNT);
+    }
+
+    if (rights.birdLevel === "non_bird") {
+      return Math.max(previousSalary * 1.2, MIN_CONTRACT_AMOUNT);
+    }
+
+    return 0;
+  };
+
+  const getActiveOfferSalaryForTeam = (teamName) => {
+    const offersByPlayer = liveFreeAgencyState?.offersByPlayer || {};
+    let total = 0;
+
+    for (const offers of Object.values(offersByPlayer)) {
+      for (const offer of offers || []) {
+        if (offer?.teamName !== teamName) continue;
+        if (offer?.status && offer.status !== "active") continue;
+
+        const currentSalary = Number(
+          offer?.currentYearSalary ||
+          offer?.salaryByYear?.[0] ||
+          offer?.contract?.salaryByYear?.[0] ||
+          0
+        );
+
+        total += currentSalary;
+      }
+    }
+
+    return total;
+  };
+
+  const getTeamPayrollForOperatingSeason = (team, seasonYear, teamName) => {
+    const playerPayroll = (team?.players || []).reduce((sum, player) => {
+      return sum + getContractSalaryForYear(player?.contract, seasonYear);
+    }, 0);
+
+    return playerPayroll + getTeamDeadCapForYear(teamName, seasonYear);
+  };
+
+  const getHardCapForTeam = (teamName) => {
+    if (!teamName) return null;
+
+    const team = currentUserTeam || {};
+    const isHardCapped =
+      Boolean(team?.isHardCapped) ||
+      Boolean(team?.hardCapped) ||
+      Boolean(team?.hardCapTriggered) ||
+      Boolean(team?.triggeredHardCap) ||
+      Boolean(workingLeagueData?.hardCappedByTeam?.[teamName]) ||
+      Boolean(workingLeagueData?.hardCapTriggeredByTeam?.[teamName]) ||
+      (Array.isArray(workingLeagueData?.hardCappedTeams) &&
+        workingLeagueData.hardCappedTeams.includes(teamName));
+
+    if (!isHardCapped) return null;
+
+    const teamKeys = [
+      "hardCap",
+      "hardCapValue",
+      "hardCapAmount",
+      "hardCapLine",
+      "hardCapLimit",
+      "secondApron",
+      "secondApronValue",
+      "secondApronAmount",
+      "secondApronLine",
+      "apron2",
+    ];
+
+    for (const key of teamKeys) {
+      const value = Number(team?.[key] || 0);
+      if (value > 0) return value;
+    }
+
+    for (const mapKey of ["hardCapByTeam", "teamHardCaps", "hardCapMap", "secondApronByTeam", "teamSecondAprons"]) {
+      const value = Number(workingLeagueData?.[mapKey]?.[teamName] || 0);
+      if (value > 0) return value;
+    }
+
+    return getSecondApronAmount();
+  };
+
+  const getPayrollZone = (payroll) => {
+    const amount = Number(payroll || 0);
+
+    if (amount >= getSecondApronAmount()) return "second_apron";
+    if (amount >= getFirstApronAmount()) return "first_apron";
+    if (amount >= getLuxuryTaxLineAmount()) return "tax";
+    if (amount >= getSalaryCapAmount()) return "over_cap";
+    return "below_cap";
+  };
+
+  const getOfferExceptionType = (offer) => {
+    const raw = String(offer?.exceptionType || offer?.spendingTool || offer?.spendingType || "").toLowerCase();
+
+    if (raw.includes("non_taxpayer") || raw.includes("non-taxpayer") || raw.includes("non taxpayer") || raw.includes("mid_level") || raw.includes("mid-level")) return "non_taxpayer_mle";
+    if (raw.includes("taxpayer")) return "taxpayer_mle";
+    if (raw.includes("room")) return "room_exception";
+    if (raw.includes("mle")) return "non_taxpayer_mle";
+
+    return "";
+  };
+
+  const getRecordedExceptionUsageForTeam = (teamName) => {
+    const out = {
+      nonTaxpayerMLE: 0,
+      taxpayerMLE: 0,
+      roomException: 0,
+    };
+
+    const usageSources = [
+      liveFreeAgencyState?.exceptionUsageByTeam,
+      liveFreeAgencyState?.exceptionUsage,
+      workingLeagueData?.freeAgencyState?.exceptionUsageByTeam,
+      workingLeagueData?.exceptionUsageByTeam,
+      workingLeagueData?.exceptionUsage,
+    ];
+
+    let foundBackendLedger = false;
+
+    for (const source of usageSources) {
+      const row = source?.[teamName];
+      if (!row || typeof row !== "object") continue;
+
+      foundBackendLedger = true;
+
+      out.nonTaxpayerMLE += Number(
+        row.nonTaxpayerMLE ||
+        row.non_taxpayer_mle ||
+        row.midLevelException ||
+        row.mid_level_exception ||
+        0
+      );
+
+      out.taxpayerMLE += Number(
+        row.taxpayerMLE ||
+        row.taxpayer_mle ||
+        row.taxpayerMidLevelException ||
+        0
+      );
+
+      out.roomException += Number(
+        row.roomException ||
+        row.room_exception ||
+        0
+      );
+    }
+
+    // Fallback for old saves only. Once the Python backend has a real
+    // exceptionUsageByTeam ledger, signedPlayersLog is informational and
+    // should not be counted again.
+    if (!foundBackendLedger) {
+      for (const log of liveFreeAgencyState?.signedPlayersLog || []) {
+        const signedTeam = log?.teamName || log?.signedWith;
+        if (signedTeam !== teamName) continue;
+
+        const firstYearSalary = Number(log?.currentYearSalary || log?.contract?.salaryByYear?.[0] || 0);
+        const type = getOfferExceptionType(log);
+
+        if (type === "taxpayer_mle") out.taxpayerMLE += firstYearSalary;
+        if (type === "non_taxpayer_mle") out.nonTaxpayerMLE += firstYearSalary;
+        if (type === "room_exception") out.roomException += firstYearSalary;
+      }
+    }
+
+    const offersByPlayer = liveFreeAgencyState?.offersByPlayer || {};
+    for (const offers of Object.values(offersByPlayer)) {
+      for (const offer of offers || []) {
+        if (offer?.teamName !== teamName) continue;
+        if (offer?.status && offer.status !== "active") continue;
+
+        const firstYearSalary = Number(
+          offer?.currentYearSalary ||
+          offer?.salaryByYear?.[0] ||
+          offer?.contract?.salaryByYear?.[0] ||
+          0
+        );
+        const type = getOfferExceptionType(offer);
+
+        if (type === "taxpayer_mle") out.taxpayerMLE += firstYearSalary;
+        if (type === "non_taxpayer_mle") out.nonTaxpayerMLE += firstYearSalary;
+        if (type === "room_exception") out.roomException += firstYearSalary;
+      }
+    }
+
+    return out;
+  };
+
+  const userCapDashboard = useMemo(() => {
+    if (!selectedTeam?.name || !currentUserTeam) return null;
+
+    const teamName = selectedTeam.name;
+    const seasonYear = getOperatingSeasonYear();
+    const salaryCap = getSalaryCapAmount();
+    const payroll = getTeamPayrollForOperatingSeason(currentUserTeam, seasonYear, teamName);
+
+    const capHoldTotal = freeAgents.reduce((sum, player) => {
+      return sum + getCapHoldForPlayer(player, teamName);
+    }, 0);
+
+    const activeOfferSalary = getActiveOfferSalaryForTeam(teamName);
+    const hardCap = getHardCapForTeam(teamName);
+    const practicalPayroll = payroll + capHoldTotal + activeOfferSalary;
+    const hardCapRoom = hardCap === null ? null : hardCap - practicalPayroll;
+    const exceptionUsage = getRecordedExceptionUsageForTeam(teamName);
+
+    const roomException = Math.max(0, getRoomExceptionAmount() - exceptionUsage.roomException);
+    const nonTaxpayerMLE = Math.max(0, getNonTaxpayerMleAmount() - exceptionUsage.nonTaxpayerMLE);
+    const taxpayerMLE = Math.max(0, getTaxpayerMleAmount() - exceptionUsage.taxpayerMLE);
+
+    return {
+      teamName,
+      seasonYear,
+      salaryCap,
+      luxuryTaxLine: getLuxuryTaxLineAmount(),
+      firstApron: getFirstApronAmount(),
+      secondApron: getSecondApronAmount(),
+      roomException,
+      nonTaxpayerMLE,
+      taxpayerMLE,
+      exceptionUsage,
+      payroll,
+      capHoldTotal,
+      activeOfferSalary,
+      capRoom: salaryCap - payroll,
+      practicalPayroll,
+      practicalCapRoom: salaryCap - practicalPayroll,
+      hardCap,
+      hardCapRoom,
+      rosterCount: userRosterCount,
+      rosterLimit: maxRosterSize,
+      rosterSpots: Math.max(0, maxRosterSize - userRosterCount),
+      payrollZone: getPayrollZone(practicalPayroll),
+    };
+  }, [
+    workingLeagueData,
+    liveFreeAgencyState,
+    selectedTeam?.name,
+    currentUserTeam,
+    freeAgents,
+    currentSeasonYear,
+    isOffseasonMode,
+    userRosterCount,
+    maxRosterSize,
+  ]);
+
+  const getBestExceptionLabel = (dashboard) => {
+    if (!dashboard) return "-";
+
+    if (dashboard.payrollZone === "second_apron") return "Min Only";
+    if (dashboard.payrollZone === "first_apron" || dashboard.payrollZone === "tax") {
+      return `Tax MLE ${formatDollars(dashboard.taxpayerMLE)}`;
+    }
+    if (dashboard.practicalCapRoom > 0) {
+      return `Room ${formatDollars(dashboard.roomException)}`;
+    }
+    return `MLE ${formatDollars(dashboard.nonTaxpayerMLE)}`;
+  };
+
+  const getExpectedYearOneSalary = (player) => {
+    return Number(
+      player?.marketValue?.expectedYear1Salary ||
+      player?.marketValue?.expectedAAV ||
+      player?.marketValue?.minAcceptableAAV ||
+      MIN_CONTRACT_AMOUNT
+    );
+  };
+
+  const formatExpectedSalaryShort = (player) => {
+    const amount = getExpectedYearOneSalary(player);
+    if (!amount) return "-";
+
+    const millions = amount / 1_000_000;
+    return millions.toFixed(1).replace(/\.0$/, "");
+  };
+
+  const buildAffordabilityForPlayer = (player) => {
+    if (!player || !userCapDashboard || !selectedTeam?.name) {
+      return {
+        label: "-",
+        tone: "neutral",
+        sortValue: 0,
+        title: "No selected team.",
+      };
+    }
+
+    const rights = getRights(player);
+    const isRfa = Boolean(rights?.restrictedFreeAgent || player?.qualifyingOffer?.amount);
+    const ownRights =
+      rights?.heldByTeam === selectedTeam.name &&
+      rights?.birdLevel &&
+      rights.birdLevel !== "none";
+
+    const ask = getExpectedYearOneSalary(player);
+    const projectedPayroll = Number(userCapDashboard.practicalPayroll || 0) + ask;
+
+    if (userCapDashboard.rosterCount >= userCapDashboard.rosterLimit) {
+      return {
+        label: "NO",
+        tone: "red",
+        sortValue: 0,
+        title: "Your roster is full.",
+      };
+    }
+
+    if (
+      userCapDashboard.hardCapRoom !== null &&
+      ask > Number(userCapDashboard.hardCapRoom || 0)
+    ) {
+      return {
+        label: "NO",
+        tone: "red",
+        sortValue: 0,
+        title: "Expected first-year salary does not fit under your hard cap room.",
+      };
+    }
+
+    if (ownRights) {
+      if (rights.birdLevel === "bird") {
+        return {
+          label: isRfa ? "RFA/BIRD" : "BIRD",
+          tone: "orange",
+          sortValue: 95,
+          title: isRfa
+            ? "You hold Bird rights and RFA match rights. You can exceed the cap, subject to any hard cap."
+            : "You hold Bird rights and can exceed the cap to re-sign him, subject to any hard cap.",
+        };
+      }
+
+      if (rights.birdLevel === "early_bird") {
+        return {
+          label: "EARLY",
+          tone: "orange",
+          sortValue: 84,
+          title: "You hold Early Bird rights. This is generally re-signable up to the Early Bird limit.",
+        };
+      }
+
+      if (rights.birdLevel === "non_bird") {
+        return {
+          label: "NON-BIRD",
+          tone: "orange",
+          sortValue: 76,
+          title: "You hold Non-Bird rights. This is signable only within the Non-Bird raise limit unless another tool is available.",
+        };
+      }
+    }
+
+    if (userCapDashboard.practicalCapRoom >= ask) {
+      return {
+        label: isRfa ? "YES/RFA" : "YES",
+        tone: "green",
+        sortValue: isRfa ? 68 : 72,
+        title: isRfa
+          ? "Fits using practical cap room, but the original team may still match the offer sheet."
+          : "Fits using practical cap room after holds and active offers.",
+      };
+    }
+
+    if (ask <= MIN_CONTRACT_AMOUNT) {
+      return {
+        label: "MIN",
+        tone: "neutral",
+        sortValue: 46,
+        title: isRfa
+          ? "Minimum offer should fit, but the original team may still match because he is RFA."
+          : "Minimum contract should be available.",
+      };
+    }
+
+    const zone = userCapDashboard.payrollZone;
+
+    if (zone === "second_apron") {
+      return {
+        label: "MIN",
+        tone: "neutral",
+        sortValue: 35,
+        title: "Second-apron team: outside free agents are minimum-only in this model.",
+      };
+    }
+
+    if (zone === "first_apron" || zone === "tax") {
+      if (ask <= userCapDashboard.taxpayerMLE) {
+        return {
+          label: isRfa ? "TAX/RFA" : "TAX MLE",
+          tone: "orange",
+          sortValue: isRfa ? 58 : 62,
+          title: isRfa
+            ? "Fits the taxpayer MLE range, but the original team may still match the offer sheet."
+            : "Fits the remaining taxpayer MLE range.",
+        };
+      }
+
+      return {
+        label: "NO",
+        tone: "red",
+        sortValue: 0,
+        title: "Does not fit cap room, minimum, or remaining taxpayer MLE.",
+      };
+    }
+
+    if (userCapDashboard.practicalCapRoom > 0 && ask <= userCapDashboard.roomException) {
+      return {
+        label: isRfa ? "ROOM/RFA" : "ROOM",
+        tone: "orange",
+        sortValue: isRfa ? 56 : 59,
+        title: isRfa
+          ? "Could fit through room-exception style spending, but the original team may still match."
+          : "Could fit through remaining room-exception style spending.",
+      };
+    }
+
+    if (
+      ask <= userCapDashboard.nonTaxpayerMLE &&
+      projectedPayroll <= userCapDashboard.firstApron
+    ) {
+      return {
+        label: isRfa ? "MLE/RFA" : "MLE",
+        tone: "orange",
+        sortValue: isRfa ? 54 : 57,
+        title: isRfa
+          ? "Fits the remaining non-taxpayer MLE range, but the original team may still match."
+          : "Fits the remaining non-taxpayer MLE range and stays under the first-apron style limit.",
+      };
+    }
+
+    if (ask <= userCapDashboard.taxpayerMLE) {
+      return {
+        label: isRfa ? "TAX/RFA" : "TAX MLE",
+        tone: "orange",
+        sortValue: isRfa ? 50 : 53,
+        title: isRfa
+          ? "Fits the remaining taxpayer MLE range, but the original team may still match."
+          : "Fits the remaining taxpayer MLE range.",
+      };
+    }
+
+    return {
+      label: "NO",
+      tone: "red",
+      sortValue: 0,
+      title: "Expected first-year salary is above your cap, exception, minimum, or hard-cap path.",
+    };
+  };
+
+  const affordabilityByPlayerKey = useMemo(() => {
+    const out = {};
+
+    for (const player of freeAgents) {
+      out[getPlayerKey(player)] = buildAffordabilityForPlayer(player);
+    }
+
+    return out;
+  }, [
+    freeAgents,
+    userCapDashboard,
+    selectedTeam?.name,
+    userRosterCount,
+    maxRosterSize,
+  ]);
+
+  const getAffordableChipClass = (tone) => {
+    if (tone === "green") {
+      return "bg-emerald-500/15 border-emerald-500/30 text-emerald-200";
+    }
+    if (tone === "orange") {
+      return "bg-orange-500/15 border-orange-500/30 text-orange-200";
+    }
+    if (tone === "red") {
+      return "bg-red-500/15 border-red-500/30 text-red-200";
+    }
+    return "bg-neutral-800 border-neutral-700 text-neutral-300";
   };
 
   useEffect(() => {
@@ -445,6 +1059,24 @@ const isOffseasonMode =
         return sortConfig.direction === "asc" ? diff : -diff;
       }
 
+      if (key === "rfa") {
+        const av = isRestrictedFreeAgent(a) ? 1 : 0;
+        const bv = isRestrictedFreeAgent(b) ? 1 : 0;
+        return sortConfig.direction === "asc" ? av - bv : bv - av;
+      }
+
+      if (key === "affordable") {
+        const av = affordabilityByPlayerKey[getPlayerKey(a)]?.sortValue || 0;
+        const bv = affordabilityByPlayerKey[getPlayerKey(b)]?.sortValue || 0;
+        return sortConfig.direction === "asc" ? av - bv : bv - av;
+      }
+
+      if (key === "expectedSalary") {
+        const av = getExpectedYearOneSalary(a);
+        const bv = getExpectedYearOneSalary(b);
+        return sortConfig.direction === "asc" ? av - bv : bv - av;
+      }
+
       if (key === "name") {
         return sortConfig.direction === "asc"
           ? a.name.localeCompare(b.name)
@@ -466,7 +1098,7 @@ const isOffseasonMode =
     });
 
     return rows;
-  }, [freeAgents, sortConfig]);
+  }, [freeAgents, sortConfig, affordabilityByPlayerKey]);
 
   const getOfferSalaryByYear = (year1Salary, years) => {
     const out = [];
@@ -682,9 +1314,11 @@ const handleContinueToProgression = () => {
   const handleInitializeFreeAgency = async () => {
     if (!workingLeagueData) return;
 
-    if (isOffseasonMode && !optionsComplete) {
+    if (isOffseasonMode && (!optionsComplete || !rightsManagementComplete)) {
       setDaySummary({
-        error: "Complete the Player / Team Options stage before starting free agency.",
+        error: !optionsComplete
+          ? "Complete the Player / Team Options stage before starting free agency."
+          : "Finalize Rights Management before starting free agency.",
       });
       return;
     }
@@ -917,7 +1551,7 @@ const handleContinueToProgression = () => {
   const optionsLockedView = (
     <div className="flex flex-col items-center justify-center min-h-screen bg-neutral-900 text-white px-4">
       <p className="text-lg mb-4 text-center">
-        Complete the Player / Team Options stage before opening free agency.
+        Complete Player / Team Options and Rights Management before opening free agency.
       </p>
 
       <div className="flex gap-3 flex-wrap justify-center">
@@ -925,7 +1559,7 @@ const handleContinueToProgression = () => {
           onClick={() => navigate("/player-team-options")}
           className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
         >
-          Go to Player / Team Options
+          Go to Options / Rights
         </button>
 
         <button
@@ -992,7 +1626,7 @@ const handleContinueToProgression = () => {
     </div>
   );
 
-  if (isOffseasonMode && !optionsComplete && !isLiveFreeAgencyActive && !freeAgencyFinished) {
+  if (isOffseasonMode && (!optionsComplete || !rightsManagementComplete) && !isLiveFreeAgencyActive && !freeAgencyFinished) {
     return optionsLockedView;
   }
 
@@ -1055,6 +1689,9 @@ const handleContinueToProgression = () => {
                   ? `Day ${currentDay} of ${maxDays || 7}`
                   : "Live market ready to start"}
               </p>
+              {isOffseasonMode && optionsComplete && !rightsManagementComplete && (
+                <p className="text-sm text-orange-300 mt-2">Finalize Rights Management before starting the market.</p>
+              )}
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full lg:w-auto">
@@ -1078,6 +1715,67 @@ const handleContinueToProgression = () => {
               </div>
             </div>
           </div>
+
+          {userCapDashboard && (
+            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 mt-4">
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+                <div className="text-xs text-gray-400 mb-1">Payroll</div>
+                <div className="text-base font-semibold text-white">
+                  {formatDollars(userCapDashboard.payroll)}
+                </div>
+              </div>
+
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+                <div className="text-xs text-gray-400 mb-1">Cap Holds</div>
+                <div className="text-base font-semibold text-orange-200">
+                  {formatDollars(userCapDashboard.capHoldTotal)}
+                </div>
+              </div>
+
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+                <div className="text-xs text-gray-400 mb-1">Cap Space</div>
+                <div className={`text-base font-semibold ${userCapDashboard.capRoom < 0 ? "text-red-300" : "text-emerald-300"}`}>
+                  {formatDollars(userCapDashboard.capRoom)}
+                </div>
+              </div>
+
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+                <div className="text-xs text-gray-400 mb-1">Practical Cap</div>
+                <div className={`text-base font-semibold ${userCapDashboard.practicalCapRoom < 0 ? "text-red-300" : "text-emerald-300"}`}>
+                  {formatDollars(userCapDashboard.practicalCapRoom)}
+                </div>
+                <div className="text-[11px] text-gray-500 mt-1">holds + offers</div>
+              </div>
+
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+                <div className="text-xs text-gray-400 mb-1">Hard Cap Room</div>
+                <div className={`text-base font-semibold ${userCapDashboard.hardCapRoom !== null && userCapDashboard.hardCapRoom < 0 ? "text-red-300" : "text-white"}`}>
+                  {userCapDashboard.hardCapRoom === null ? "None" : formatDollars(userCapDashboard.hardCapRoom)}
+                </div>
+              </div>
+
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+                <div className="text-xs text-gray-400 mb-1">Best Exception</div>
+                <div className="text-base font-semibold text-orange-200">
+                  {getBestExceptionLabel(userCapDashboard)}
+                </div>
+              </div>
+
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+                <div className="text-xs text-gray-400 mb-1">Offer Commit</div>
+                <div className="text-base font-semibold text-orange-200">
+                  {formatDollars(userCapDashboard.activeOfferSalary)}
+                </div>
+              </div>
+
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
+                <div className="text-xs text-gray-400 mb-1">Roster</div>
+                <div className={`text-base font-semibold ${userCapDashboard.rosterCount > userCapDashboard.rosterLimit ? "text-red-300" : "text-white"}`}>
+                  {userCapDashboard.rosterCount} / {userCapDashboard.rosterLimit}
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="flex flex-wrap gap-3 mt-4">
             {effectiveFreeAgencyFinished ? (
@@ -1284,12 +1982,15 @@ const handleContinueToProgression = () => {
 
 <div className="w-full flex justify-center transition-opacity duration-300 ease-in-out mt-[-1px] px-4">
   <div className="w-full max-w-5xl max-h-[62vh] overflow-auto rounded-b-xl border border-neutral-700 border-t-0 bg-neutral-900 no-scrollbar">
-    <div className="min-w-[1200px] w-max">
+    <div className="min-w-[1420px] w-max">
             <table className="w-full border-collapse text-center">
               <thead className="sticky top-0 z-20 bg-neutral-800 text-gray-300 text-[16px] font-semibold">
                 <tr>
                   {[{ key: "name", label: "Name" },
                     { key: "pos", label: "POS" },
+                    { key: "rfa", label: "RFA" },
+                    { key: "affordable", label: "AFFORD" },
+                    { key: "expectedSalary", label: "EXP" },
                     { key: "age", label: "AGE" },
                     { key: "overall", label: "OVR" },
                     { key: "offRating", label: "OFF" },
@@ -1323,7 +2024,10 @@ const handleContinueToProgression = () => {
               </thead>
 
               <tbody className="text-[17px] font-medium">
-                {sortedPlayers.map((p, idx) => (
+                {sortedPlayers.map((p, idx) => {
+                  const affordability = affordabilityByPlayerKey[getPlayerKey(p)] || buildAffordabilityForPlayer(p);
+
+                  return (
                   <tr
                     key={`${p.name}-${idx}`}
                     onClick={() => setSelectedPlayer(p)}
@@ -1344,6 +2048,34 @@ const handleContinueToProgression = () => {
                       {p.name}
                     </td>
                     <td className="py-2 px-3">{p.pos}</td>
+                    <td className="py-2 px-3">
+                      {isRestrictedFreeAgent(p) ? (
+                        <span className="inline-flex px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-200 text-xs font-bold uppercase">
+                          Yes
+                        </span>
+                      ) : (
+                        <span className="inline-flex px-2 py-0.5 rounded-full bg-neutral-800 border border-neutral-700 text-neutral-300 text-xs font-bold uppercase">
+                          No
+                        </span>
+                      )}
+                    </td>
+
+                    <td className="py-2 px-3">
+                      <span
+                        title={affordability.title}
+                        className={`inline-flex px-2 py-0.5 rounded-full border text-xs font-bold uppercase whitespace-nowrap ${getAffordableChipClass(affordability.tone)}`}
+                      >
+                        {affordability.label}
+                      </span>
+                    </td>
+
+                    <td
+                      className="py-2 px-3 text-emerald-200 font-bold whitespace-nowrap"
+                      title={`Expected first-year salary: ${formatDollars(getExpectedYearOneSalary(p))}`}
+                    >
+                      {formatExpectedSalaryShort(p)}
+                    </td>
+
                     <td className="py-2 px-3">{p.age}</td>
 
                     <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
@@ -1376,7 +2108,8 @@ const handleContinueToProgression = () => {
                       </td>
                     ))}
                   </tr>
-                ))}
+                    );
+                })}
               </tbody>
             </table>
           </div>
@@ -1418,6 +2151,9 @@ const handleContinueToProgression = () => {
             <p className="text-white text-base mb-1">
               {signTargetPlayer.name}
             </p>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {renderRightsChips(signTargetPlayer, offerEvaluation)}
+            </div>
 
             <p className="text-gray-400 text-sm mb-4">
               Offering from {selectedTeam?.name || "No Team Selected"}
@@ -1689,32 +2425,69 @@ const handleContinueToProgression = () => {
               <div className="text-red-300 py-4 font-semibold">{offersViewError}</div>
             ) : (
               <>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-                  <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
-                    <div className="text-xs text-gray-400 mb-1">Offer Count</div>
-                    <div className="text-base font-semibold text-white">
-                      {offersViewData?.offers?.length || 0}
-                    </div>
-                  </div>
+                {(() => {
+                  const modalPlayer = offersViewData?.player || selectedPlayer || {};
+                  const modalRights = getRights(modalPlayer);
+                  const qoAmount = Number(modalPlayer?.qualifyingOffer?.amount || 0);
+                  const isRfa = Boolean(modalRights?.restrictedFreeAgent || qoAmount > 0);
 
-                  <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
-                    <div className="text-xs text-gray-400 mb-1">Expected AAV</div>
-                    <div className="text-base font-semibold text-white">
-                      {formatDollars(offersViewData?.player?.marketValue?.expectedAAV || 0)}
-                    </div>
-                  </div>
+                  return (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                        <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                          <div className="text-xs text-gray-400 mb-1">Outside Offers</div>
+                          <div className="text-base font-semibold text-white">
+                            {offersViewData?.offers?.length || 0}
+                          </div>
+                        </div>
 
-                  <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
-                    <div className="text-xs text-gray-400 mb-1">Expected Years</div>
-                    <div className="text-base font-semibold text-white">
-                      {offersViewData?.player?.marketValue?.expectedYears ?? "-"}
-                    </div>
-                  </div>
-                </div>
+                        <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                          <div className="text-xs text-gray-400 mb-1">Expected AAV</div>
+                          <div className="text-base font-semibold text-white">
+                            {formatDollars(modalPlayer?.marketValue?.expectedAAV || 0)}
+                          </div>
+                        </div>
+
+                        <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                          <div className="text-xs text-gray-400 mb-1">Expected Years</div>
+                          <div className="text-base font-semibold text-white">
+                            {modalPlayer?.marketValue?.expectedYears ?? "-"}
+                          </div>
+                        </div>
+
+                        <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                          <div className="text-xs text-gray-400 mb-1">RFA</div>
+                          <div className={isRfa ? "text-base font-semibold text-emerald-300" : "text-base font-semibold text-white"}>
+                            {isRfa ? "Yes" : "No"}
+                          </div>
+                        </div>
+                      </div>
+
+                      {(isRfa || qoAmount > 0 || modalRights?.heldByTeam) && (
+                        <div className="flex flex-wrap gap-2 mb-4">
+                          {isRfa && <Chip tone="green">Restricted Free Agent</Chip>}
+                          {qoAmount > 0 && <Chip tone="green">Qualifying Offer {formatDollars(qoAmount)}</Chip>}
+                          {modalRights?.heldByTeam && <Chip tone="orange">Rights Held By {modalRights.heldByTeam}</Chip>}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
 
                 {!offersViewData?.offers?.length ? (
                   <div className="text-gray-300 py-6">
-                    No current offers on this player yet.
+                    {(() => {
+                      const modalPlayer = offersViewData?.player || selectedPlayer || {};
+                      const modalRights = getRights(modalPlayer);
+                      const qoAmount = Number(modalPlayer?.qualifyingOffer?.amount || 0);
+                      const isRfa = Boolean(modalRights?.restrictedFreeAgent || qoAmount > 0);
+
+                      if (isRfa || qoAmount > 0) {
+                        return "No outside offer sheets yet. The qualifying offer/RFA status is still active.";
+                      }
+
+                      return "No current offers on this player yet.";
+                    })()}
                   </div>
                 ) : (
                   <div className="space-y-3">

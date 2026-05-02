@@ -11,6 +11,12 @@ import {
 import LZString from "lz-string";
 import { createPortal } from "react-dom";
 import AllStars from "./AllStars";
+import {
+  saveBoxScoreToDB,
+  loadBoxScoreFromDB,
+  deleteBoxScoreFromDB,
+  clearBoxScoresFromDB,
+} from "../utils/indexedDbStorage";
 
 window.LZString = LZString;
 
@@ -1334,6 +1340,71 @@ const RESULT_V2_BLOB_KEY = "bm_results_v2"; // legacy blob (for migration)
 
 const resultV3Key = (gameId) => `${RESULT_V3_PREFIX}${gameId}`;
 
+function isQuotaError(err) {
+  return (
+    err?.name === "QuotaExceededError" ||
+    String(err?.message || "").toLowerCase().includes("quota")
+  );
+}
+
+function hasBoxRows(slim) {
+  return !!(
+    slim?.box &&
+    ((Array.isArray(slim.box.home) && slim.box.home.length > 0) ||
+      (Array.isArray(slim.box.away) && slim.box.away.length > 0))
+  );
+}
+
+function compactResultForCalendar(slim) {
+  if (!slim) return null;
+
+  return {
+    winner: slim.winner || null,
+    totals: slim.totals || {
+      home: Number(slim?.winner?.home || 0),
+      away: Number(slim?.winner?.away || 0),
+    },
+    box: {
+      home: [],
+      away: [],
+    },
+    hasBoxScore: hasBoxRows(slim),
+  };
+}
+
+function readCompressedOrJson(key, fallback = null) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+
+    if (raw.startsWith("lz:")) {
+      const decompressed = LZString.decompressFromUTF16(raw.slice(3));
+      return decompressed ? JSON.parse(decompressed) : fallback;
+    }
+
+    try {
+      return JSON.parse(raw);
+    } catch {}
+
+    const decompressed = LZString.decompressFromUTF16(raw);
+    return decompressed ? JSON.parse(decompressed) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeCompressedJson(key, value) {
+  const json = JSON.stringify(value || {});
+  const compressed = "lz:" + LZString.compressToUTF16(json);
+  localStorage.setItem(key, compressed);
+}
+
+function removeLegacyResultsBlob() {
+  try {
+    localStorage.removeItem(RESULT_V2_BLOB_KEY);
+  } catch {}
+}
+
 function loadResultsIndexV3() {
   try {
     const raw = localStorage.getItem(RESULT_V3_INDEX_KEY);
@@ -1349,6 +1420,7 @@ function saveResultsIndexV3(ids) {
   try {
     localStorage.setItem(RESULT_V3_INDEX_KEY, JSON.stringify(ids));
   } catch (e) {
+    if (isQuotaError(e)) removeLegacyResultsBlob();
     console.warn("[ResultsV3] failed saving index", e);
   }
 }
@@ -1357,34 +1429,70 @@ function loadOneResultV3(gameId) {
   try {
     const stored = localStorage.getItem(resultV3Key(gameId));
     if (!stored) return null;
+
     const decompressed = LZString.decompressFromUTF16(stored);
     const json = decompressed || stored;
-    return JSON.parse(json);
+    const parsed = JSON.parse(json);
+
+    // Old saves may still have full box scores in localStorage.
+    // Move them to IndexedDB, then shrink localStorage to score-only.
+    if (hasBoxRows(parsed)) {
+      const compact = compactResultForCalendar(parsed);
+
+      saveBoxScoreToDB(gameId, parsed)
+        .then(() => {
+          try {
+            localStorage.setItem(
+              resultV3Key(gameId),
+              LZString.compressToUTF16(JSON.stringify(compact))
+            );
+          } catch (e) {
+            console.warn("[ResultsV3] failed compacting migrated result", gameId, e);
+          }
+        })
+        .catch((e) => console.warn("[IndexedDB] failed migrating box score", gameId, e));
+
+      return compact;
+    }
+
+    return parsed;
   } catch {
     return null;
   }
 }
 
-function saveOneResultV3(gameId, slim) {
+function saveOneResultV3(gameId, slim, game = null, seasonYearValue = null) {
+  if (!gameId || !slim) return;
+
+  if (hasBoxRows(slim)) {
+    saveBoxScoreToDB(gameId, slim, {
+      seasonYear: seasonYearValue,
+      home: game?.home,
+      away: game?.away,
+    }).catch((e) => console.warn("[IndexedDB] failed saving box score", gameId, e));
+  }
+
   try {
-    const json = JSON.stringify(slim);
+    const compact = compactResultForCalendar(slim);
+    const json = JSON.stringify(compact);
     const compressed = LZString.compressToUTF16(json);
     localStorage.setItem(resultV3Key(gameId), compressed);
 
-    // update index (small + fast)
     const ids = loadResultsIndexV3();
     if (!ids.includes(gameId)) {
       ids.push(gameId);
       saveResultsIndexV3(ids);
     }
   } catch (e) {
-    console.error("[ResultsV3] failed saving game", gameId, e);
+    console.error("[ResultsV3] failed saving compact game", gameId, e);
+    if (isQuotaError(e)) removeLegacyResultsBlob();
   }
 }
 
 function deleteOneResultV3(gameId) {
   try {
     localStorage.removeItem(resultV3Key(gameId));
+    deleteBoxScoreFromDB(gameId).catch(() => {});
     const ids = loadResultsIndexV3().filter((id) => id !== gameId);
     saveResultsIndexV3(ids);
   } catch {}
@@ -1395,18 +1503,20 @@ function clearAllResultsV3() {
     const ids = loadResultsIndexV3();
     for (const id of ids) localStorage.removeItem(resultV3Key(id));
     localStorage.removeItem(RESULT_V3_INDEX_KEY);
+    clearBoxScoresFromDB().catch(() => {});
   } catch {}
 }
 
-// One-time migration: bm_results_v2 blob -> per-game v3
 function migrateResultsV2BlobToV3IfNeeded() {
   try {
     const blob = localStorage.getItem(RESULT_V2_BLOB_KEY);
     if (!blob) return;
 
-    // If v3 already exists, don’t re-migrate.
     const existing = loadResultsIndexV3();
-    if (existing.length > 0) return;
+    if (existing.length > 0) {
+      removeLegacyResultsBlob();
+      return;
+    }
 
     const decompressed = LZString.decompressFromUTF16(blob);
     const json = decompressed || blob;
@@ -1414,55 +1524,67 @@ function migrateResultsV2BlobToV3IfNeeded() {
     const ids = Object.keys(obj);
 
     for (const id of ids) {
-      // store exactly what you already saved (includes box scores)
       const slim = obj[id];
-      if (slim) {
-        const c = LZString.compressToUTF16(JSON.stringify(slim));
-        localStorage.setItem(resultV3Key(id), c);
+      if (!slim) continue;
+
+      if (hasBoxRows(slim)) {
+        saveBoxScoreToDB(id, slim).catch((e) =>
+          console.warn("[IndexedDB] failed migrating v2 box score", id, e)
+        );
       }
+
+      const compact = compactResultForCalendar(slim);
+      localStorage.setItem(
+        resultV3Key(id),
+        LZString.compressToUTF16(JSON.stringify(compact))
+      );
     }
 
     saveResultsIndexV3(ids);
+    removeLegacyResultsBlob();
 
-    // optional: remove old blob to free space + avoid confusion
-    // localStorage.removeItem(RESULT_V2_BLOB_KEY);
-
-    console.log("[ResultsV3] migrated", ids.length, "games from v2 blob");
+    console.log("[ResultsV3] migrated", ids.length, "games from v2 blob into compact localStorage + IndexedDB boxes");
   } catch (e) {
     console.warn("[ResultsV3] migration failed", e);
   }
 }
 
-// Load ALL results (used on startup). Still includes EVERY box score.
 function loadAllResultsV3() {
   const ids = loadResultsIndexV3();
   const out = {};
+
   for (const id of ids) {
     const r = loadOneResultV3(id);
-    if (r) out[id] = r;
+    if (r) out[id] = compactResultForCalendar(r);
   }
+
   return out;
 }
 
-
 function loadResults() {
-  // migrate old blob once (keeps all saved box scores)
   migrateResultsV2BlobToV3IfNeeded();
   return loadAllResultsV3();
 }
 
+function loadPlayerStats() {
+  return readCompressedOrJson(PLAYER_STATS_KEY, {});
+}
 
-  function loadPlayerStats() {
+function savePlayerStats(stats) {
+  try {
+    writeCompressedJson(PLAYER_STATS_KEY, stats || {});
+  } catch (e) {
+    console.warn("[Calendar] compressed player stats save failed", e);
+
+    if (isQuotaError(e)) removeLegacyResultsBlob();
+
     try {
-      return JSON.parse(localStorage.getItem(PLAYER_STATS_KEY)) || {};
-    } catch {
-      return {};
+      writeCompressedJson(PLAYER_STATS_KEY, stats || {});
+    } catch (err) {
+      console.error("[Calendar] player stats save failed after retry", err);
     }
   }
-
-  function savePlayerStats(stats) {
-    localStorage.setItem(PLAYER_STATS_KEY, JSON.stringify(stats));
-  }
+}
 
 
 function parsePair(s) {
@@ -1607,27 +1729,32 @@ window.__results = resultsById;
 
   const saveSchedule = (obj) => {
     setScheduleByDate(obj);
-    localStorage.setItem(SCHED_KEY, JSON.stringify(obj));
+    try {
+      localStorage.setItem(SCHED_KEY, JSON.stringify(obj));
+    } catch (e) {
+      console.warn("[Calendar] schedule save failed", e);
+      if (isQuotaError(e)) removeLegacyResultsBlob();
+    }
   };
 
 
 function saveResults(results) {
-  // keep React state in sync
-  setResultsById(results);
+  const compactResults = {};
 
-  // bulk write (slower than per-game, but fine for end-of-sim / rebuild cases)
   try {
     const ids = Object.keys(results || {});
     for (const id of ids) {
       const slim = results[id];
-      if (slim) {
-        localStorage.setItem(resultV3Key(id), LZString.compressToUTF16(JSON.stringify(slim)));
-      }
+      if (!slim) continue;
+      compactResults[id] = compactResultForCalendar(slim);
+      saveOneResultV3(id, slim, null, seasonYear);
     }
     saveResultsIndexV3(ids);
   } catch (e) {
     console.error("[ResultsV3] bulk save failed", e);
   }
+
+  setResultsById(compactResults);
 }
 
 
@@ -1898,6 +2025,24 @@ const openAllStarTeams = async () => {
     console.error("[AllStars] Failed to compute all stars:", err);
   }
 };
+async function openBoxScoreForGame(game) {
+  if (!game?.id) return;
+
+  try {
+    const dbResult = await loadBoxScoreFromDB(game.id);
+    const fallback = resultsById?.[game.id];
+    const result = dbResult || fallback;
+
+    setActionModal(null);
+    setBoxModal({ game, result });
+  } catch (e) {
+    console.warn("[Calendar] failed loading box score from IndexedDB", e);
+    const fallback = resultsById?.[game.id];
+    setActionModal(null);
+    setBoxModal({ game, result: fallback });
+  }
+}
+
 function buildTeamsFromLeagueForSim(league) {
   return getAllTeamsFromLeague(league).map((t) => ({
     ...t,
@@ -2027,7 +2172,7 @@ const handleSimOnlyGame = async (dateStr, game) => {
   savePlayerStats(playerStats);
 
   saveSchedule(upd);
-  saveOneResultV3(game.id, result);
+  saveOneResultV3(game.id, result, game, seasonYear);
   setResultsById((prev) => ({ ...prev, [game.id]: result }));
 
   setActionModal(null);
@@ -2133,7 +2278,7 @@ const awayRoles = loadTeamRoleMap(g.away);
           annotateSlimWithRoles(slim, homeRoles, awayRoles);
 
           newResults[g.id] = slim;
-          saveOneResultV3(g.id, slim);
+          saveOneResultV3(g.id, slim, g, seasonYear);
 
           dayGames[i] = { ...g, played: true };
 
@@ -2340,7 +2485,7 @@ const awayRoles = loadTeamRoleMap(g.away);
           annotateSlimWithRoles(slim, homeRoles, awayRoles);
 
           results[g.id] = slim;
-          saveOneResultV3(g.id, slim);
+          saveOneResultV3(g.id, slim, g, seasonYear);
 
           dayGames[i] = { ...g, played: true };
           gamesSimmed++;
@@ -2509,6 +2654,8 @@ if (
 }
 
   }
+
+  clearBoxScoresFromDB().catch(() => {});
 
   // keep your player stats wipe
   localStorage.removeItem(PLAYER_STATS_KEY);
@@ -3220,11 +3367,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
           <div className="flex flex-col gap-2">
             <button
               className="px-4 py-2 bg-neutral-700 rounded hover:bg-neutral-600"
-              onClick={() => {
-                const r = resultsById[actionModal.game.id];
-                setActionModal(null);
-                setBoxModal({ game: actionModal.game, result: r });
-              }}
+              onClick={() => openBoxScoreForGame(actionModal.game)}
             >
               View Box Score
             </button>

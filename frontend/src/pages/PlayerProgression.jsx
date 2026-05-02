@@ -765,7 +765,7 @@ function handleReturnToOffseasonHub() {
 
 const [showLetters, setShowLetters] = useState(localStorage.getItem("showLetters") === "true");
 const [teamFilter, setTeamFilter] = useState("ALL");
-const [featuredKey, setFeaturedKey] = useState(null);
+const [hasDefaultedTeamFilter, setHasDefaultedTeamFilter] = useState(false);const [featuredKey, setFeaturedKey] = useState(null);
 const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
 
 const [deltas, setDeltas] = useState(() => readJsonSafe(DELTAS_KEY, {}));
@@ -1206,6 +1206,17 @@ localStorage.setItem(
     const names = Array.from(new Set((teams || []).map((t) => t?.name).filter(Boolean))).sort();
     return ["ALL", ...names];
   }, [teams]);
+  useEffect(() => {
+  if (hasDefaultedTeamFilter) return;
+  const selectedTeamName = selectedTeam?.name;
+  if (!selectedTeamName) return;
+  if (!teamOptions.includes(selectedTeamName)) return;
+
+  setTeamFilter(selectedTeamName);
+  setFeaturedKey(null);
+  setSortConfig({ key: null, direction: "desc" });
+  setHasDefaultedTeamFilter(true);
+}, [hasDefaultedTeamFilter, selectedTeam?.name, teamOptions]);
 
   const rows = useMemo(() => {
     if (teamFilter === "ALL") return allRows;
@@ -1307,6 +1318,33 @@ const featured = useMemo(() => {
 
   return (
     <div className="min-h-screen bg-neutral-900 text-white py-10">
+      <style>{`
+        .bm-orange-scroll {
+          scrollbar-width: thin;
+          scrollbar-color: #f97316 #171717;
+        }
+
+        .bm-orange-scroll::-webkit-scrollbar {
+          width: 10px;
+          height: 10px;
+        }
+
+        .bm-orange-scroll::-webkit-scrollbar-track {
+          background: #171717;
+          border-radius: 9999px;
+        }
+
+        .bm-orange-scroll::-webkit-scrollbar-thumb {
+          background: linear-gradient(to bottom, #f97316, #c2410c);
+          border-radius: 9999px;
+          border: 2px solid #171717;
+        }
+
+        .bm-orange-scroll::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(to bottom, #fb923c, #ea580c);
+        }
+      `}</style>
+
       <div className="max-w-6xl mx-auto px-4">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-4xl font-extrabold text-orange-500">Player Progression</h1>
@@ -1317,7 +1355,9 @@ onChange={(e) => {
   setTeamFilter(e.target.value);
   setFeaturedKey(null);
   setSortConfig({ key: null, direction: "desc" });
+  setHasDefaultedTeamFilter(true);
 }}
+
               className="px-3 py-2 bg-neutral-800 rounded border border-neutral-700"
             >
               {teamOptions.map((t) => (
@@ -1406,11 +1446,10 @@ onChange={(e) => {
             </div>
           </div>
         )}
-
-        <div className="overflow-x-auto">
+        <div className="bm-orange-scroll max-h-[610px] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900">
           <div className="min-w-[1300px] max-w-max mx-auto">
             <table className="w-full border-collapse text-center">
-              <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
+              <thead className="sticky top-0 z-20 bg-neutral-800 text-gray-300 text-[16px] font-semibold">
                 <tr>
                   {[
                     { key: "name", label: "Name" },

@@ -41,6 +41,7 @@ function buildDefaultOffseasonState(seasonYear) {
     seasonYear,
     retirementsComplete: false,
     optionsComplete: false,
+    rightsManagementComplete: false,
     preFreeAgencyResolved: false,
     freeAgencyComplete: false,
     progressionComplete: false,
@@ -62,6 +63,19 @@ function readOffseasonState(seasonYear) {
 
 function saveOffseasonState(state) {
   localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(state));
+}
+
+function safeSetJSON(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch (err) {
+    console.warn(`[PlayerTeamOptions] Failed to save ${key}`, err);
+    try {
+      localStorage.removeItem(key);
+    } catch {}
+    return false;
+  }
 }
 
 function fmtMoney(amount) {
@@ -116,6 +130,110 @@ function DataPill({ children, tone = "neutral" }) {
       {children}
     </div>
   );
+}
+function getPlayerKey(row) {
+  if (row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== "") return String(row.playerId);
+  if (row?.id !== undefined && row?.id !== null && row?.id !== "") return String(row.id);
+  return String(row?.playerName || row?.name || "");
+}
+
+function getRights(player) {
+  return player?.rights && typeof player.rights === "object"
+    ? player.rights
+    : { heldByTeam: null, seasonsTowardBird: 0, birdLevel: "none", rookieScale: false, restrictedFreeAgent: false };
+}
+
+function normalizeBirdLabel(level) {
+  if (level === "bird") return "Bird";
+  if (level === "early_bird") return "Early Bird";
+  if (level === "non_bird") return "Non-Bird";
+  return "No Rights";
+}
+
+function getPreviousSalary(player) {
+  const salaryByYear = player?.previousContract?.salaryByYear || player?.contract?.salaryByYear || [];
+  if (Array.isArray(salaryByYear) && salaryByYear.length) return Number(salaryByYear[salaryByYear.length - 1] || 0);
+  return Number(player?.marketValue?.expectedYear1Salary || 0);
+}
+
+function getCapHold(player) {
+  const rights = getRights(player);
+  if (!rights?.heldByTeam || rights?.birdLevel === "none") return 0;
+  if (rights?.restrictedFreeAgent && player?.qualifyingOffer?.amount) return Number(player.qualifyingOffer.amount || 0);
+  const previousSalary = getPreviousSalary(player);
+  const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || 0);
+  if (rights.birdLevel === "bird") return Math.max(previousSalary, marketYearOne, 1200000);
+  if (rights.birdLevel === "early_bird") return Math.max(previousSalary * 1.3, 1200000);
+  if (rights.birdLevel === "non_bird") return Math.max(previousSalary * 1.2, 1200000);
+  return 0;
+}
+
+function getUserRightsRows(leagueData, teamName) {
+  if (!leagueData || !teamName) return [];
+  const rows = [];
+  for (const player of leagueData.freeAgents || []) {
+    const rights = getRights(player);
+    if (rights?.heldByTeam !== teamName) continue;
+    const capHold = getCapHold(player);
+    if (capHold <= 0) continue;
+    rows.push({
+      playerId: player?.id,
+      playerName: player?.name,
+      position: player?.pos || player?.position || "-",
+      age: player?.age,
+      overall: player?.overall,
+      potential: player?.potential,
+      teamName,
+      rights,
+      birdLevel: rights?.birdLevel || "none",
+      restrictedFreeAgent: !!rights?.restrictedFreeAgent,
+      rookieScale: !!rights?.rookieScale,
+      qualifyingOffer: player?.qualifyingOffer || null,
+      marketValue: player?.marketValue || null,
+      capHold,
+      previousSalary: getPreviousSalary(player),
+    });
+  }
+  return rows.sort((a, b) => Number(b.capHold || 0) - Number(a.capHold || 0));
+}
+
+function getTeamPayrollForNextSeason(leagueData, teamName) {
+  const teams = getAllTeamsFromLeague(leagueData);
+  const team = teams.find((t) => t?.name === teamName);
+  const seasonYear = getSeasonYear(leagueData) + 1;
+  let payroll = 0;
+  for (const player of team?.players || []) {
+    const c = player?.contract;
+    const startYear = Number(c?.startYear || 0);
+    const salaryByYear = Array.isArray(c?.salaryByYear) ? c.salaryByYear : [];
+    const idx = seasonYear - startYear;
+    if (idx >= 0 && idx < salaryByYear.length) payroll += Number(salaryByYear[idx] || 0);
+  }
+  return payroll;
+}
+
+function applyRenounceRightsLocal(leagueData, teamName, renounceMap) {
+  const updated = JSON.parse(JSON.stringify(leagueData || {}));
+  updated.freeAgents = (updated.freeAgents || []).map((player) => {
+    const rights = getRights(player);
+    if (rights?.heldByTeam !== teamName) return player;
+    const key = getPlayerKey({ playerId: player?.id, playerName: player?.name });
+    if (!renounceMap?.[key]) return player;
+    const next = {
+      ...player,
+      rightsRenounced: true,
+      rights: {
+        ...rights,
+        heldByTeam: null,
+        seasonsTowardBird: 0,
+        birdLevel: "none",
+        restrictedFreeAgent: false,
+      },
+    };
+    delete next.qualifyingOffer;
+    return next;
+  });
+  return updated;
 }
 function getTeamFilterOptions(rows) {
   const teams = Array.from(
@@ -237,6 +355,8 @@ export default function PlayerTeamOptions() {
 
   const previewPlayerTeamOptions = simEngine.previewOffseasonContracts;
   const applyPlayerTeamOptions = simEngine.applyOffseasonContractDecisions;
+  const previewRightsManagement = simEngine.previewRightsManagement;
+  const applyRightsManagement = simEngine.applyRightsManagement;
 
   const [workingLeagueData, setWorkingLeagueData] = useState(leagueData || null);
   const [previewData, setPreviewData] = useState(null);
@@ -245,6 +365,12 @@ export default function PlayerTeamOptions() {
  const [loadingPreview, setLoadingPreview] = useState(false);
 const [loadingApply, setLoadingApply] = useState(false);
 const [error, setError] = useState("");
+const [rightsDecisionMap, setRightsDecisionMap] = useState({});
+const [rightsSavedMessage, setRightsSavedMessage] = useState("");
+const [rightsFinalizedLocal, setRightsFinalizedLocal] = useState(false);
+const [rightsPreviewData, setRightsPreviewData] = useState(null);
+const [rightsPreviewLoading, setRightsPreviewLoading] = useState(false);
+const [rightsApplyLoading, setRightsApplyLoading] = useState(false);
 
 const [sectionVisibility, setSectionVisibility] = useState({
   keyInterest: true,
@@ -252,6 +378,7 @@ const [sectionVisibility, setSectionVisibility] = useState({
   teamOptions: true,
   expiredContracts: true,
   resolutionLog: true,
+  rightsManagement: true,
 });
 
 const [sectionTeamFilters, setSectionTeamFilters] = useState({
@@ -260,6 +387,7 @@ const [sectionTeamFilters, setSectionTeamFilters] = useState({
   teamOptions: "ALL",
   expiredContracts: "ALL",
   resolutionLog: "ALL",
+  rightsManagement: "ALL",
 });
 
   useEffect(() => {
@@ -361,20 +489,53 @@ const [sectionTeamFilters, setSectionTeamFilters] = useState({
 
       setPreviewData(res);
 
+      // Keep this storage tiny. Full preview payloads can exceed browser localStorage quota.
       const stored = safeJSON(localStorage.getItem(OPTIONS_RESULTS_KEY), {}) || {};
-      localStorage.setItem(
-        OPTIONS_RESULTS_KEY,
-        JSON.stringify({
-          ...stored,
-          seasonYear,
-          preview: res,
-          applied: stored?.applied || null,
-        })
-      );
+      safeSetJSON(OPTIONS_RESULTS_KEY, {
+        ...stored,
+        seasonYear,
+        preview: {
+          ok: true,
+          seasonYear: res?.seasonYear,
+          summary: res?.summary || {},
+        },
+        applied: stored?.applied || null,
+      });
     } catch (err) {
       setError(err?.message || "Failed to load player and team options.");
     } finally {
       setLoadingPreview(false);
+    }
+  };
+
+  const loadRightsPreview = async (baseLeague = workingLeagueData) => {
+    if (!baseLeague || !selectedTeam?.name) return null;
+
+    if (typeof previewRightsManagement !== "function") {
+      return null;
+    }
+
+    setRightsPreviewLoading(true);
+    setError("");
+
+    try {
+      const res = await previewRightsManagement(
+        baseLeague,
+        selectedTeam.name
+      );
+
+      if (!res?.ok) {
+        setError(res?.reason || "Failed to load rights management.");
+        return null;
+      }
+
+      setRightsPreviewData(res);
+      return res;
+    } catch (err) {
+      setError(err?.message || "Failed to load rights management.");
+      return null;
+    } finally {
+      setRightsPreviewLoading(false);
     }
   };
 
@@ -426,6 +587,118 @@ const appliedSummary = appliedData?.summary || {};
 
 const selectedTeamName = selectedTeam?.name || null;
 const optionsComplete = !!offseasonState?.optionsComplete || !!appliedData?.ok;
+
+useEffect(() => {
+  if (!optionsComplete) return;
+  if (!selectedTeamName) return;
+  if (!workingLeagueData) return;
+  if (rightsFinalizedLocal) return;
+
+  loadRightsPreview(workingLeagueData);
+}, [optionsComplete, selectedTeamName, workingLeagueData, rightsFinalizedLocal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+const rightsRows = useMemo(() => {
+  const rows =
+    rightsPreviewData?.rightsRows ||
+    rightsPreviewData?.rows ||
+    rightsPreviewData?.teamSnapshot?.capHoldRows ||
+    [];
+
+  return Array.isArray(rows) ? rows : [];
+}, [rightsPreviewData]);
+
+const selectedRenounceRows = useMemo(() => {
+  return rightsRows.filter((row) => {
+    const key = row?.playerKey || getPlayerKey(row);
+    return rightsDecisionMap[key] === "renounce";
+  });
+}, [rightsRows, rightsDecisionMap]);
+
+const rightsCapHoldTotal = useMemo(() => {
+  const fromSummary = rightsPreviewData?.summary?.capHoldTotal;
+  const fromSnapshot = rightsPreviewData?.teamSnapshot?.capHoldTotal;
+
+  if (fromSummary !== undefined && fromSummary !== null) return Number(fromSummary || 0);
+  if (fromSnapshot !== undefined && fromSnapshot !== null) return Number(fromSnapshot || 0);
+
+  return rightsRows.reduce(
+    (sum, row) => sum + Number(row?.capHoldAmount ?? row?.capHold ?? 0),
+    0
+  );
+}, [rightsPreviewData, rightsRows]);
+
+const selectedRenounceCapHold = useMemo(() => {
+  return selectedRenounceRows.reduce(
+    (sum, row) => sum + Number(row?.capHoldAmount ?? row?.capHold ?? 0),
+    0
+  );
+}, [selectedRenounceRows]);
+
+const payrollBeforeHolds = useMemo(() => {
+  const fromSummary = rightsPreviewData?.summary?.payrollBeforeHolds;
+  const fromSnapshot = rightsPreviewData?.teamSnapshot?.rawPayrollWithoutHolds;
+
+  if (fromSummary !== undefined && fromSummary !== null) return Number(fromSummary || 0);
+  if (fromSnapshot !== undefined && fromSnapshot !== null) return Number(fromSnapshot || 0);
+
+  return getTeamPayrollForNextSeason(workingLeagueData || leagueData, selectedTeamName);
+}, [rightsPreviewData, workingLeagueData, leagueData, selectedTeamName]);
+
+const salaryCap = Number(
+  rightsPreviewData?.summary?.salaryCap ||
+  rightsPreviewData?.teamSnapshot?.salaryCap ||
+  (workingLeagueData || leagueData)?.salaryCap ||
+  (workingLeagueData || leagueData)?.capLimit ||
+  150000000
+);
+
+const practicalCapRoomBeforeRenounce = Number(
+  rightsPreviewData?.summary?.practicalCapRoom ??
+  rightsPreviewData?.teamSnapshot?.practicalCapRoom ??
+  (salaryCap - payrollBeforeHolds - rightsCapHoldTotal)
+);
+
+const practicalCapRoomAfterRenounce =
+  practicalCapRoomBeforeRenounce + selectedRenounceCapHold;
+
+const rightsManagementComplete =
+  rightsFinalizedLocal ||
+  !!offseasonState?.rightsManagementComplete ||
+  (optionsComplete && !!rightsPreviewData?.ok && rightsRows.length === 0);
+
+const canContinueToFreeAgency = optionsComplete && rightsManagementComplete;
+
+useEffect(() => {
+  if (!optionsComplete) return;
+  if (!selectedTeamName) return;
+  if (!rightsPreviewData?.ok) return;
+  if (rightsRows.length > 0) return;
+  if (rightsFinalizedLocal || offseasonState?.rightsManagementComplete) return;
+
+  const nextState = {
+    ...readOffseasonState(seasonYear),
+    active: true,
+    seasonYear,
+    retirementsComplete: true,
+    optionsComplete: true,
+    rightsManagementComplete: true,
+    preFreeAgencyResolved: true,
+    freeAgencyComplete: false,
+    progressionComplete: false,
+  };
+
+  saveOffseasonState(nextState);
+  setRightsFinalizedLocal(true);
+  setRightsSavedMessage("Rights reviewed. No outgoing rights to manage.");
+}, [
+  optionsComplete,
+  selectedTeamName,
+  rightsPreviewData?.ok,
+  rightsRows.length,
+  rightsFinalizedLocal,
+  offseasonState?.rightsManagementComplete,
+  seasonYear,
+]);
 
 const cpuTeamOptions = useMemo(() => {
   return (teamOptions || []).filter((row) => row?.teamName !== selectedTeamName);
@@ -526,21 +799,28 @@ const filteredExpiredContracts = useMemo(() => {
         seasonYear,
         retirementsComplete: true,
         optionsComplete: true,
-        preFreeAgencyResolved: true,
+        rightsManagementComplete: false,
+        preFreeAgencyResolved: false,
         freeAgencyComplete: false,
         progressionComplete: false,
       };
 
       saveOffseasonState(nextOffseasonState);
 
-      localStorage.setItem(
-        OPTIONS_RESULTS_KEY,
-        JSON.stringify({
-          seasonYear,
-          preview: res?.previewAfter || previewData || null,
-          applied: res,
-        })
-      );
+      // Store only lightweight UI history. Do not store full leagueData/previewAfter here.
+      safeSetJSON(OPTIONS_RESULTS_KEY, {
+        seasonYear,
+        preview: {
+          ok: true,
+          seasonYear: res?.previewAfter?.seasonYear || seasonYear,
+          summary: res?.previewAfter?.summary || {},
+        },
+        applied: {
+          ok: true,
+          summary: res?.summary || {},
+          decisionLog: res?.decisionLog || [],
+        },
+      });
     } catch (err) {
       setError(err?.message || "Failed to apply option decisions.");
     } finally {
@@ -578,6 +858,125 @@ const setSectionTeamFilter = (sectionKey, value) => {
     ...prev,
     [sectionKey]: value,
   }));
+};
+
+const getRightsDecisionKey = (row) => row?.playerKey || getPlayerKey(row);
+
+const hasPendingQualifyingOffer = (row) => {
+  return row?.qualifyingOfferEligible?.status === "pending";
+};
+
+const hasExtendedQualifyingOffer = (row) => {
+  return row?.qualifyingOffer?.status === "extended" || !!row?.qualifyingOffer?.amount;
+};
+
+const getDefaultRightsDecision = (row) => {
+  if (hasExtendedQualifyingOffer(row)) return "keep_qo";
+  if (hasPendingQualifyingOffer(row)) return "";
+  return "keep";
+};
+
+const getRightsDecision = (row) => {
+  const key = getRightsDecisionKey(row);
+  return rightsDecisionMap[key] ?? getDefaultRightsDecision(row);
+};
+
+const setRightsDecisionForRow = (row, decision) => {
+  const key = getRightsDecisionKey(row);
+  setRightsSavedMessage("");
+  setRightsDecisionMap((prev) => ({
+    ...prev,
+    [key]: decision,
+  }));
+};
+
+const getPendingQORowsMissingDecision = () => {
+  return rightsRows.filter((row) => {
+    if (!hasPendingQualifyingOffer(row)) return false;
+    const decision = getRightsDecision(row);
+    return !["extend_qo", "decline_qo", "renounce"].includes(decision);
+  });
+};
+
+const finalizeRightsManagement = async () => {
+  if (!selectedTeamName || !workingLeagueData) return;
+
+  if (typeof applyRightsManagement !== "function") {
+    setError("Rights management backend is not wired in simEnginePy.js.");
+    return;
+  }
+
+  setRightsApplyLoading(true);
+  setError("");
+  setRightsSavedMessage("");
+
+  try {
+    const missingQODecisions = getPendingQORowsMissingDecision();
+    if (missingQODecisions.length) {
+      setError("Choose Extend QO, No QO, or Renounce Rights for every QO-eligible player before finalizing rights management.");
+      return;
+    }
+
+    const rightsDecisions = {};
+
+    for (const row of rightsRows) {
+      const key = getRightsDecisionKey(row);
+      const decision = getRightsDecision(row);
+      rightsDecisions[key] = decision || "keep";
+    }
+
+    const res = await applyRightsManagement(
+      workingLeagueData,
+      selectedTeamName,
+      rightsDecisions
+    );
+
+    if (!res?.ok || !res?.leagueData) {
+      setError(res?.reason || "Failed to apply rights management.");
+      return;
+    }
+
+    applyLeagueUpdate(res.leagueData);
+
+    if (res?.previewAfter) {
+      setRightsPreviewData(res.previewAfter);
+    } else {
+      await loadRightsPreview(res.leagueData);
+    }
+
+    const nextState = {
+      ...readOffseasonState(seasonYear),
+      active: true,
+      seasonYear,
+      retirementsComplete: true,
+      optionsComplete: true,
+      rightsManagementComplete: true,
+      preFreeAgencyResolved: true,
+      freeAgencyComplete: false,
+      progressionComplete: false,
+    };
+
+    saveOffseasonState(nextState);
+    setRightsFinalizedLocal(true);
+
+    const renouncedCount =
+      res?.summary?.renouncedCount ?? selectedRenounceRows.length;
+    const extendedQOCount = Number(res?.summary?.extendedQOCount || 0);
+    const declinedQOCount = Number(res?.summary?.declinedQOCount || 0) + Number(res?.summary?.withdrawnQOCount || 0);
+
+    const parts = [];
+    if (renouncedCount) parts.push(`${renouncedCount} renounced`);
+    if (extendedQOCount) parts.push(`${extendedQOCount} QO extended`);
+    if (declinedQOCount) parts.push(`${declinedQOCount} QO declined/withdrawn`);
+
+    setRightsSavedMessage(
+      parts.length ? `Rights saved: ${parts.join(", ")}.` : "Rights reviewed. No changes selected."
+    );
+  } catch (err) {
+    setError(err?.message || "Failed to apply rights management.");
+  } finally {
+    setRightsApplyLoading(false);
+  }
 };
 
 const renderKeyInterestExtraNode = (row) => {
@@ -666,6 +1065,32 @@ const renderKeyInterestExtraNode = (row) => {
 
   return (
     <div className="min-h-screen bg-neutral-900 text-white py-10 px-4">
+
+      <style>{`
+        .bm-orange-scroll {
+          scrollbar-width: thin;
+          scrollbar-color: #f97316 #171717;
+        }
+
+        .bm-orange-scroll::-webkit-scrollbar {
+          width: 10px;
+        }
+
+        .bm-orange-scroll::-webkit-scrollbar-track {
+          background: #171717;
+          border-radius: 9999px;
+        }
+
+        .bm-orange-scroll::-webkit-scrollbar-thumb {
+          background: linear-gradient(to bottom, #f97316, #c2410c);
+          border-radius: 9999px;
+          border: 2px solid #171717;
+        }
+
+        .bm-orange-scroll::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(to bottom, #fb923c, #ea580c);
+        }
+      `}</style>
       <div className="max-w-6xl mx-auto">
         <div className="text-center mb-7">
           <p className="text-sm uppercase tracking-[0.28em] text-white/40 mb-3">
@@ -864,7 +1289,7 @@ const renderKeyInterestExtraNode = (row) => {
       No key interest players match this filter.
     </div>
   ) : (
-    <div className="divide-y divide-white/5">
+    <div className="bm-orange-scroll max-h-[520px] overflow-y-auto divide-y divide-white/5 pr-1">
       {filteredKeyInterestRows.map((row, idx) =>
         renderRow(row, idx, renderKeyInterestExtraNode(row))
       )}
@@ -894,7 +1319,7 @@ const renderKeyInterestExtraNode = (row) => {
       No player options match this filter.
     </div>
   ) : (
-    <div className="divide-y divide-white/5">
+    <div className="bm-orange-scroll max-h-[520px] overflow-y-auto divide-y divide-white/5 pr-1">
       {filteredPlayerOptions.map((row, idx) =>
         renderRow(
           row,
@@ -930,7 +1355,7 @@ const renderKeyInterestExtraNode = (row) => {
       No CPU team options match this filter.
     </div>
   ) : (
-    <div className="divide-y divide-white/5">
+    <div className="bm-orange-scroll max-h-[520px] overflow-y-auto divide-y divide-white/5 pr-1">
       {filteredCpuTeamOptions.map((row, idx) =>
         renderRow(
           row,
@@ -967,7 +1392,7 @@ const renderKeyInterestExtraNode = (row) => {
       No expired contracts match this filter.
     </div>
   ) : (
-    <div className="divide-y divide-white/5">
+    <div className="bm-orange-scroll max-h-[520px] overflow-y-auto divide-y divide-white/5 pr-1">
       {filteredExpiredContracts.map((row, idx) =>
         renderRow(
           row,
@@ -979,6 +1404,182 @@ const renderKeyInterestExtraNode = (row) => {
   )}
 </SectionShell>
     </>
+  )}
+
+  {optionsComplete && (
+    <SectionShell
+      title="Rights Management / Cap Holds"
+      subtitle="Keep Bird/RFA control or renounce rights to clear cap holds before free agency."
+      rightNode={
+        <div className="flex items-center gap-2 flex-wrap">
+          <DataPill tone="orange">Cap Holds {fmtMoney(rightsCapHoldTotal)}</DataPill>
+          <DataPill tone="green">After Renounces {fmtMoney(practicalCapRoomAfterRenounce)}</DataPill>
+        </div>
+      }
+    >
+      {!rightsRows.length ? (
+        <div className="px-6 py-12 text-center text-white/50 space-y-4">
+          <div>No outgoing free-agent rights to manage for your team.</div>
+          <button
+            onClick={finalizeRightsManagement}
+            disabled={rightsManagementComplete || rightsApplyLoading || rightsPreviewLoading}
+            className={`px-5 py-3 rounded-xl font-bold transition ${
+              (rightsManagementComplete || rightsApplyLoading || rightsPreviewLoading)
+                ? "bg-neutral-700 text-white/45 cursor-not-allowed"
+                : "bg-orange-600 hover:bg-orange-500 text-white"
+            }`}
+          >
+            {rightsApplyLoading ? "Saving Rights..." : rightsManagementComplete ? "Rights Finalized" : "Confirm Rights Reviewed"}
+          </button>
+        </div>
+      ) : (
+        <div className="p-6 space-y-5">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <SummaryCard label="Roster Payroll" value={fmtMoney(payrollBeforeHolds)} />
+            <SummaryCard label="Cap Holds Kept" value={fmtMoney(rightsCapHoldTotal - selectedRenounceCapHold)} tone="orange" />
+            <SummaryCard label="Cap Room Now" value={fmtMoney(practicalCapRoomBeforeRenounce)} />
+            <SummaryCard label="Cap Room If Saved" value={fmtMoney(practicalCapRoomAfterRenounce)} tone="green" />
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/65">
+Keeping rights preserves Bird control, but the cap hold stays on your books. For QO-eligible players, extend the qualifying offer to make them RFA, choose No QO to make them UFA while keeping Bird rights, or renounce rights completely to clear the hold.          </div>
+          {rightsSavedMessage && (
+            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-200">{rightsSavedMessage}</div>
+          )}
+          <div className="divide-y divide-white/5 rounded-2xl overflow-hidden border border-white/10">
+            {rightsRows.map((row, idx) => {
+              const key = getRightsDecisionKey(row);
+              const decision = getRightsDecision(row);
+              const renounced = decision === "renounce";
+              const pendingQO = hasPendingQualifyingOffer(row);
+              const extendedQO = hasExtendedQualifyingOffer(row);
+              const qoAmount = Number(row?.qualifyingOfferEligible?.amount || row?.qualifyingOffer?.amount || 0);
+              const disabled = rightsManagementComplete || rightsApplyLoading;
+              const buttonClass = (active, tone = "neutral") => {
+                const activeClass =
+                  tone === "red"
+                    ? "bg-red-600 text-white"
+                    : tone === "green"
+                    ? "bg-emerald-600 text-white"
+                    : "bg-orange-600 text-white";
+
+                const inactiveClass = "bg-neutral-700 hover:bg-neutral-600 text-white";
+
+                return `px-3 py-2 rounded-lg font-semibold text-sm whitespace-nowrap transition ${
+                  active ? activeClass : inactiveClass
+                } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`;
+              };
+
+              const actionButtons = pendingQO ? (
+                <>
+                  <button
+                    onClick={() => setRightsDecisionForRow(row, "extend_qo")}
+                    disabled={disabled}
+                    className={buttonClass(decision === "extend_qo", "green")}
+                  >
+                    Extend QO
+                  </button>
+
+                  <button
+                    onClick={() => setRightsDecisionForRow(row, "decline_qo")}
+                    disabled={disabled}
+                    className={buttonClass(decision === "decline_qo")}
+                  >
+                    No QO, Keep Rights
+                  </button>
+
+                  <button
+                    onClick={() => setRightsDecisionForRow(row, "renounce")}
+                    disabled={disabled}
+                    className={buttonClass(renounced, "red")}
+                  >
+                    Renounce Rights
+                  </button>
+                </>
+              ) : extendedQO ? (
+                <>
+                  <button
+                    onClick={() => setRightsDecisionForRow(row, "keep_qo")}
+                    disabled={disabled}
+                    className={buttonClass(decision === "keep_qo", "green")}
+                  >
+                    Keep QO
+                  </button>
+
+                  <button
+                    onClick={() => setRightsDecisionForRow(row, "withdraw_qo")}
+                    disabled={disabled}
+                    className={buttonClass(decision === "withdraw_qo")}
+                  >
+                    Withdraw QO
+                  </button>
+
+                  <button
+                    onClick={() => setRightsDecisionForRow(row, "renounce")}
+                    disabled={disabled}
+                    className={buttonClass(renounced, "red")}
+                  >
+                    Renounce Rights
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setRightsDecisionForRow(row, "keep")}
+                    disabled={disabled}
+                    className={buttonClass(decision === "keep", "green")}
+                  >
+                    Keep Rights
+                  </button>
+
+                  <button
+                    onClick={() => setRightsDecisionForRow(row, "renounce")}
+                    disabled={disabled}
+                    className={buttonClass(renounced, "red")}
+                  >
+                    Renounce Rights
+                  </button>
+                </>
+              );
+
+              return (
+                <div
+                  key={`${key}-${idx}`}
+                  className="px-5 py-4 bg-neutral-900/70"
+                >
+                  <div className="grid grid-cols-1 xl:grid-cols-[minmax(180px,260px)_minmax(430px,1fr)_auto] gap-4 xl:items-center">
+                    <div className="min-w-0">
+                      <div className="text-lg font-bold text-white truncate">
+                        {row.playerName}
+                      </div>
+                      <div className="text-sm text-white/55 mt-1">
+                        {row.position || "-"} • Age {row.age ?? "-"} • OVR {row.overall ?? "-"}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap min-w-0">
+                      <DataPill tone="orange">{normalizeBirdLabel(row.birdLevel)}</DataPill>
+                      {extendedQO && <DataPill tone="green">RFA / QO {fmtMoney(qoAmount)}</DataPill>}
+                      {pendingQO && <DataPill tone="orange">QO Eligible {fmtMoney(qoAmount)}</DataPill>}
+                      <DataPill>Hold {fmtMoney(row.capHoldAmount ?? row.capHold)}</DataPill>
+                      {row.marketValue?.expectedAAV > 0 && <DataPill>Market {fmtMoney(row.marketValue.expectedAAV)}</DataPill>}
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap xl:flex-nowrap xl:justify-end">
+                      {actionButtons}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex justify-end">
+            <button onClick={finalizeRightsManagement} disabled={rightsManagementComplete || rightsApplyLoading || rightsPreviewLoading} className={`px-5 py-3 rounded-xl font-bold transition ${(rightsManagementComplete || rightsApplyLoading || rightsPreviewLoading) ? "bg-neutral-700 text-white/45 cursor-not-allowed" : "bg-orange-600 hover:bg-orange-500 text-white"}`}>
+              {rightsApplyLoading ? "Saving Rights..." : rightsManagementComplete ? "Rights Finalized" : "Finalize Rights Management"}
+            </button>
+          </div>
+        </div>
+      )}
+    </SectionShell>
   )}
 
   {optionsComplete && (
@@ -1005,7 +1606,7 @@ const renderKeyInterestExtraNode = (row) => {
         No decision log available for this filter.
       </div>
     ) : (
-      <div className="divide-y divide-white/5">
+      <div className="bm-orange-scroll max-h-[520px] overflow-y-auto divide-y divide-white/5 pr-1">
         {filteredDecisionLog.map((row, idx) => {
           const logo = teamLogoMap[row?.teamName] || "";
 
@@ -1072,9 +1673,14 @@ const renderKeyInterestExtraNode = (row) => {
           ) : (
             <button
               onClick={() => navigate("/free-agents")}
-              className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl font-semibold transition"
+              disabled={!canContinueToFreeAgency}
+              className={`px-6 py-3 rounded-xl font-semibold transition ${
+                !canContinueToFreeAgency
+                  ? "bg-neutral-700 text-white/45 cursor-not-allowed"
+                  : "bg-emerald-600 hover:bg-emerald-500 text-white"
+              }`}
             >
-              Continue to Free Agency
+              {canContinueToFreeAgency ? "Continue to Free Agency" : "Finalize Rights First"}
             </button>
           )}
 

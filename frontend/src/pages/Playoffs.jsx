@@ -99,6 +99,80 @@ const POSTSEASON_KEY = "bm_postseason_v2";
 const CHAMP_KEY = "bm_champ_v1";
 const FINALS_MVP_KEY = "bm_finals_mvp_v1"; // ✅ PATCH (Finals MVP)
 
+function safeReadCompressedJSON(key, fallback = null) {
+  try {
+    const stored = localStorage.getItem(key);
+    if (!stored) return fallback;
+
+    const decompressed = LZString.decompressFromUTF16(stored);
+    const json = decompressed || stored;
+    return JSON.parse(json);
+  } catch {
+    return fallback;
+  }
+}
+
+function safeSetCompressedJSON(key, value, fallbackCleaner = null) {
+  const json = JSON.stringify(value);
+  const compressed = LZString.compressToUTF16(json);
+
+  try {
+    localStorage.setItem(key, compressed);
+    return true;
+  } catch (err) {
+    console.warn(`[Playoffs] Failed to save ${key}. Trying storage cleanup fallback.`, err);
+
+    try {
+      if (typeof fallbackCleaner === "function") fallbackCleaner();
+      localStorage.removeItem(key);
+      localStorage.setItem(key, compressed);
+      return true;
+    } catch (fallbackErr) {
+      console.error(`[Playoffs] Could not save ${key} even after cleanup.`, fallbackErr);
+      return false;
+    }
+  }
+}
+
+function cleanupOldSeasonStorageForPostseasonSave() {
+  // Once the playoff bracket exists, regular-season game blobs and schedule are
+  // no longer needed for bracket progress. Clearing them prevents season-two
+  // localStorage quota crashes.
+  try {
+    clearAllResultsV3();
+    localStorage.removeItem(SCHED_KEY);
+  } catch {}
+}
+
+function loadPostseasonState() {
+  return safeReadCompressedJSON(POSTSEASON_KEY, null);
+}
+
+function savePostseasonState(postseasonState) {
+  return safeSetCompressedJSON(
+    POSTSEASON_KEY,
+    postseasonState,
+    cleanupOldSeasonStorageForPostseasonSave
+  );
+}
+
+function safeSetSmallJSON(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch (err) {
+    console.warn(`[Playoffs] Failed to save ${key}.`, err);
+    try {
+      cleanupOldSeasonStorageForPostseasonSave();
+      localStorage.removeItem(key);
+      localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 function loadPlayoffResults() {
   try {
     const stored = localStorage.getItem(RESULT_KEY);
@@ -111,9 +185,7 @@ function loadPlayoffResults() {
   }
 }
 function savePlayoffResults(results) {
-  const json = JSON.stringify(results);
-  const compressed = LZString.compressToUTF16(json);
-  localStorage.setItem(RESULT_KEY, compressed);
+  safeSetCompressedJSON(RESULT_KEY, results, cleanupOldSeasonStorageForPostseasonSave);
 }
 
 function loadSchedule() {
@@ -683,10 +755,20 @@ export default function Playoffs() {
   }, [teams, scheduleByDate, resultsById]);
 
   const seasonYear = useMemo(() => {
+    const leagueYear = Number(
+      leagueData?.seasonYear ||
+        leagueData?.currentSeasonYear ||
+        leagueData?.year ||
+        0
+    );
+
+    if (Number.isFinite(leagueYear) && leagueYear > 0) return leagueYear;
+
     const y = window.__seasonYear;
     if (typeof y === "number") return y;
+
     return new Date().getFullYear();
-  }, []);
+  }, [leagueData]);
 
   const seeds = useMemo(() => {
     const out = {};
@@ -706,7 +788,12 @@ export default function Playoffs() {
 
   const seedNumOf = (confKey, teamName) => {
     if (!teamName) return null;
-    const list = seeds?.[confKey] || [];
+
+    const savedSeedOrder = loadPostseasonState()?.seedOrder || {};
+    const list = (seeds?.[confKey] || []).length
+      ? seeds?.[confKey] || []
+      : savedSeedOrder?.[confKey] || [];
+
     const idx = list.findIndex((t) => t === teamName);
     return idx >= 0 ? idx + 1 : null;
   };
@@ -832,18 +919,15 @@ if (
           championTeam: champModal.team,
         });
 
-        localStorage.setItem(FINALS_MVP_KEY, JSON.stringify(payload));
+        safeSetSmallJSON(FINALS_MVP_KEY, payload);
       } catch (e) {
         console.warn("[playoffs] Finals MVP compute failed", e);
-        localStorage.setItem(
-          FINALS_MVP_KEY,
-          JSON.stringify({
-            season: seasonYear,
-            champion_team: champModal.team,
-            finals_mvp: null,
-            error: String(e?.message || e),
-          })
-        );
+        safeSetSmallJSON(FINALS_MVP_KEY, {
+          season: seasonYear,
+          champion_team: champModal.team,
+          finals_mvp: null,
+          error: String(e?.message || e),
+        });
       } finally {
         setFmvpLoading(false);
       }
@@ -859,13 +943,13 @@ if (
 
   function persistPost(next) {
     setPost(next);
-    localStorage.setItem(POSTSEASON_KEY, JSON.stringify(next));
+    savePostseasonState(next);
 
     // ALWAYS show champion popup once finals completes (and store it)
     const champ = finalsChampionName(next.finals);
     if (champ) {
       const payload = { seasonYear: next.seasonYear, team: champ };
-      localStorage.setItem(CHAMP_KEY, JSON.stringify(payload));
+      safeSetSmallJSON(CHAMP_KEY, payload);
       setChampModal(payload);
     }
   }
@@ -945,6 +1029,7 @@ if (
 
     return {
       seasonYear,
+      seedOrder: seeds,
       layout: { left: westKey, right: eastKey },
       conf: {
         [westKey]: mkConf(westKey),
@@ -957,27 +1042,23 @@ if (
   useEffect(() => {
     if (!seasonYear) return;
 
-    // Need seeds to exist before building
+    // Try loading an existing compressed or legacy postseason first.
+    // This must happen before the seed check, because we may intentionally
+    // clear regular-season results/schedule after the bracket is created.
+    const loaded = loadPostseasonState();
+    if (loaded?.seasonYear === seasonYear) {
+      setPost(loaded);
+      return;
+    }
+
+    // Need seeds to exist before building a brand-new bracket.
     const confs = Object.keys(seeds || {});
     const hasSeeds = confs.some((k) => (seeds?.[k] || []).length >= 8);
     if (!hasSeeds) return;
 
-    // Try load existing postseason
-    try {
-      const raw = localStorage.getItem(POSTSEASON_KEY);
-      if (raw) {
-        const loaded = JSON.parse(raw);
-        if (loaded?.seasonYear === seasonYear) {
-          setPost(loaded);
-          return;
-        }
-      }
-    } catch {}
-
     // Build new postseason
     const fresh = buildInitialPostseason({ seasonYear, seeds });
-    setPost(fresh);
-    localStorage.setItem(POSTSEASON_KEY, JSON.stringify(fresh));
+    persistPost(fresh);
   }, [seasonYear, seeds]);
 
   function winnerFromSlim(slim) {

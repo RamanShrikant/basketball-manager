@@ -52,6 +52,60 @@ function getOvrRingMetrics(overall) {
     strokeOffset: circumference * (1 - fillPercent),
   };
 }
+function InfoChip({ children, tone = "neutral" }) {
+  const cls =
+    tone === "orange"
+      ? "border-orange-500/30 bg-orange-500/10 text-orange-200"
+      : tone === "green"
+      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+      : tone === "red"
+      ? "border-red-500/30 bg-red-500/10 text-red-200"
+      : "border-neutral-600 bg-neutral-800 text-neutral-200";
+  return <span className={`inline-flex px-2.5 py-1 rounded-full border text-xs font-bold uppercase tracking-wide ${cls}`}>{children}</span>;
+}
+
+function formatToolLabel(value) {
+  if (!value) return "";
+  return String(value).replaceAll("_", " ");
+}
+
+function formatNeedScore(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  return `${Math.round(n * 100)}%`;
+}
+
+function getOfferPlayerKeyFromParts(playerId, playerName) {
+  if (playerId !== undefined && playerId !== null && playerId !== "") {
+    return `id:${playerId}`;
+  }
+  return `name:${playerName || ""}`;
+}
+
+function getOfferStatusTone(status) {
+  if (["won", "pending_user_decision", "active"].includes(status)) return "green";
+  if (["lost", "matched_by_original_team"].includes(status)) return "red";
+  return "neutral";
+}
+
+function getOfferStatusLabel(status, signedWith = "", userTeamName = "") {
+  if (status === "won") return "Won - Signed With You";
+  if (status === "pending_user_decision") return "Ready to Sign";
+  if (status === "active") return "Still Active";
+  if (status === "matched_by_original_team") {
+    return signedWith ? `Matched by ${signedWith}` : "Matched by Rights Team";
+  }
+  if (status === "lost") {
+    return signedWith ? `Lost to ${signedWith}` : "Lost";
+  }
+  return "Tracking";
+}
+
+function getSignedWithDisplay(signedWith, userTeamName) {
+  if (!signedWith) return "-";
+  if (userTeamName && signedWith === userTeamName) return `${signedWith} (You)`;
+  return signedWith;
+}
 
 export default function ViewingOffers() {
   const navigate = useNavigate();
@@ -63,6 +117,15 @@ export default function ViewingOffers() {
   const [actionError, setActionError] = useState("");
   const [processingBack, setProcessingBack] = useState(false);
   const [processingAdvance, setProcessingAdvance] = useState(false);
+  const [offerStatusPopupOpen, setOfferStatusPopupOpen] = useState(false);
+  const [dismissedOfferStatusIds, setDismissedOfferStatusIds] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem("bm_dismissed_offer_status_ids_v1");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
 
   const advanceFreeAgencyDay = simEngine.advanceFreeAgencyDay;
   const processPendingUserFreeAgencyDecisions =
@@ -101,6 +164,154 @@ export default function ViewingOffers() {
   const getTeamLogo = (teamName) => {
     return teamLogoMap.get(teamName) || "";
   };
+
+  const getPlayerKeyFromFreeAgent = (player) => {
+    if (!player) return "";
+    return getOfferPlayerKeyFromParts(player.id, player.name);
+  };
+
+  const findFreeAgentByKey = (playerKey) => {
+    for (const player of leagueData?.freeAgents || []) {
+      if (getPlayerKeyFromFreeAgent(player) === playerKey) return player;
+    }
+    return null;
+  };
+
+  const userOfferActivity = useMemo(() => {
+    const teamName = selectedTeam?.name;
+    if (!teamName) return [];
+
+    const state = leagueData?.freeAgencyState || {};
+    const rowsByKey = new Map();
+
+    const addRow = (row) => {
+      if (!row?.playerKey) return;
+      const old = rowsByKey.get(row.playerKey);
+      const priority = {
+        lost: 5,
+        matched_by_original_team: 5,
+        won: 4,
+        pending_user_decision: 3,
+        active: 2,
+      };
+
+      if (!old || (priority[row.status] || 0) >= (priority[old.status] || 0)) {
+        rowsByKey.set(row.playerKey, row);
+      }
+    };
+
+    for (const row of state.pendingUserDecisions || []) {
+      if (!row?.playerKey) continue;
+      addRow({
+        id: `pending|${row.playerKey}|${row.day || ""}`,
+        playerKey: row.playerKey,
+        playerName: row.playerName || row?.player?.name || "Unknown Player",
+        status: "pending_user_decision",
+        teamName,
+        signedWith: teamName,
+        contract: row.contract,
+        totalValue: row.totalValue,
+        years: row.years,
+        day: row.day,
+        detail: "Your offer is currently waiting for your final approval on this screen.",
+        popupEligible: false,
+      });
+    }
+
+    const offersByPlayer = state.offersByPlayer || {};
+    for (const [playerKey, offers] of Object.entries(offersByPlayer)) {
+      for (const offer of offers || []) {
+        if (offer?.teamName !== teamName) continue;
+        if (offer?.source !== "user") continue;
+        if (offer?.status && offer.status !== "active") continue;
+
+        const player = findFreeAgentByKey(playerKey);
+        addRow({
+          id: `active|${playerKey}|${offer.submittedDay || ""}`,
+          playerKey,
+          playerName: offer.playerName || player?.name || "Unknown Player",
+          status: "active",
+          teamName,
+          signedWith: null,
+          contract: offer.contract,
+          totalValue: offer.totalValue,
+          years: offer.years,
+          day: offer.submittedDay,
+          detail: "Your offer is live. The player is still comparing offers.",
+          popupEligible: false,
+        });
+      }
+    }
+
+    for (const log of state.signedPlayersLog || []) {
+      const allOffers = Array.isArray(log?.allOffers) ? log.allOffers : [];
+      const userOffer = allOffers.find((offer) => offer?.teamName === teamName && offer?.source === "user");
+      if (!userOffer) continue;
+
+      const playerKey = getOfferPlayerKeyFromParts(log.playerId, log.playerName);
+      const signedWith = log.teamName || log.signedWith;
+      const won = signedWith === teamName || userOffer.status === "accepted";
+      const matchedByOriginal = Boolean(log.rfaMatched && log.originalOfferTeamName === teamName && signedWith !== teamName);
+      const status = won ? "won" : matchedByOriginal ? "matched_by_original_team" : "lost";
+
+      const signedContractSummary = getContractSummary(log.contract);
+      const userOfferContractSummary = getContractSummary(
+        userOffer.contract,
+        userOffer.totalValue,
+        userOffer.years
+      );
+
+      addRow({
+        id: `${status}|${playerKey}|${signedWith || ""}|${log.day || ""}`,
+        playerKey,
+        playerName: log.playerName || userOffer.playerName || "Unknown Player",
+        status,
+        teamName,
+        signedWith,
+        contract: log.contract || userOffer.contract,
+        totalValue: signedContractSummary.totalValue || userOffer.totalValue,
+        years: signedContractSummary.years || userOffer.years,
+        userOfferContract: userOffer.contract,
+        userOfferTotalValue: userOfferContractSummary.totalValue,
+        userOfferYears: userOfferContractSummary.years,
+        signedContract: log.contract || userOffer.contract,
+        signedTotalValue: signedContractSummary.totalValue || userOffer.totalValue,
+        signedYears: signedContractSummary.years || userOffer.years,
+        day: log.day,
+        detail: won
+          ? `${log.playerName || "The player"} signed with ${teamName}. Your offer won.`
+          : matchedByOriginal
+          ? `${signedWith} matched your RFA offer sheet. ${log.playerName || "The player"} signed with ${signedWith}.`
+          : `${log.playerName || "The player"} signed with ${signedWith || "another team"} instead of accepting your offer.`,
+        popupEligible: !won,
+      });
+    }
+
+    return Array.from(rowsByKey.values()).sort((a, b) => {
+      const priority = { lost: 1, matched_by_original_team: 1, pending_user_decision: 2, active: 3, won: 4 };
+      const diff = (priority[a.status] || 9) - (priority[b.status] || 9);
+      if (diff !== 0) return diff;
+      return String(a.playerName || "").localeCompare(String(b.playerName || ""));
+    });
+  }, [leagueData, selectedTeam?.name]);
+
+  const offerPopupRows = useMemo(() => {
+    const dismissed = new Set(dismissedOfferStatusIds || []);
+    return userOfferActivity.filter((row) => row.popupEligible && !dismissed.has(row.id));
+  }, [userOfferActivity, dismissedOfferStatusIds]);
+
+  const dismissOfferStatusPopup = () => {
+    const ids = Array.from(new Set([
+      ...(dismissedOfferStatusIds || []),
+      ...offerPopupRows.map((row) => row.id),
+    ]));
+    setDismissedOfferStatusIds(ids);
+    try {
+      sessionStorage.setItem("bm_dismissed_offer_status_ids_v1", JSON.stringify(ids));
+    } catch {}
+    setOfferStatusPopupOpen(false);
+  };
+
 
   const applyLeagueUpdate = (updated) => {
     if (!updated) return;
@@ -154,6 +365,12 @@ export default function ViewingOffers() {
       return next;
     });
   }, [pendingUserDecisions]);
+
+  useEffect(() => {
+    if (offerPopupRows.length > 0) {
+      setOfferStatusPopupOpen(true);
+    }
+  }, [offerPopupRows.length]);
   const finalizeFreeAgencyComplete = (updated, nextLatestResults = null) => {
   if (!updated) return;
 
@@ -232,12 +449,17 @@ export default function ViewingOffers() {
 
     const payrollAfter = payrollBefore + selectedCurrentYearTotal;
     const capRoomAfter = capRoomBefore - selectedCurrentYearTotal;
+    const capHoldTotal = Number(pendingUserTeamSnapshot?.capHoldTotal || 0);
+    const practicalPayrollAfter = Number(pendingUserTeamSnapshot?.practicalPayroll || payrollBefore + capHoldTotal) + selectedCurrentYearTotal;
+    const practicalCapRoomAfter = Number(pendingUserTeamSnapshot?.practicalCapRoom ?? capRoomBefore - capHoldTotal) - selectedCurrentYearTotal;
+    const firstApron = Number(pendingUserTeamSnapshot?.firstApron || 0);
+    const secondApron = Number(pendingUserTeamSnapshot?.secondApron || 0);
     const hardCapRoomAfter =
       hardCapRoomBefore === null ? null : hardCapRoomBefore - selectedCurrentYearTotal;
     const rosterAfter = rosterBefore + selectedCount;
 
     const warnings = [];  
-
+    const apronNotes = [];
 
 
     if (hardCapRoomAfter !== null && hardCapRoomAfter < 0) {
@@ -247,6 +469,11 @@ export default function ViewingOffers() {
     if (rosterAfter > rosterLimit) {
       warnings.push(`Selected signings would take you over the ${rosterLimit}-man roster limit.`);
     }
+if (secondApron > 0 && payrollAfter >= secondApron) {
+  apronNotes.push("Selected signings would leave you at or above the second apron.");
+} else if (firstApron > 0 && payrollAfter >= firstApron) {
+  apronNotes.push("Selected signings would leave you at or above the first apron.");
+}
 
     return {
       selectedCount,
@@ -256,6 +483,11 @@ export default function ViewingOffers() {
       payrollAfter,
       capRoomBefore,
       capRoomAfter,
+      capHoldTotal,
+      practicalPayrollAfter,
+      practicalCapRoomAfter,
+      firstApron,
+      secondApron,
       hardCapRoomBefore,
       hardCapRoomAfter,
       rosterBefore,
@@ -423,8 +655,33 @@ if (baseStateSummary && !baseStateSummary.isActive) {
     }
   };
 
-  return (
-    <div className="min-h-screen bg-neutral-900 text-white px-6 py-8">
+return (
+  <div className="min-h-screen bg-neutral-900 text-white px-6 py-8">
+    <style>{`
+      .bm-orange-scroll {
+        scrollbar-width: thin;
+        scrollbar-color: #f97316 #171717;
+      }
+
+      .bm-orange-scroll::-webkit-scrollbar {
+        width: 10px;
+      }
+
+      .bm-orange-scroll::-webkit-scrollbar-track {
+        background: #171717;
+        border-radius: 9999px;
+      }
+
+      .bm-orange-scroll::-webkit-scrollbar-thumb {
+        background: linear-gradient(to bottom, #f97316, #c2410c);
+        border-radius: 9999px;
+        border: 2px solid #171717;
+      }
+
+      .bm-orange-scroll::-webkit-scrollbar-thumb:hover {
+        background: linear-gradient(to bottom, #fb923c, #ea580c);
+      }
+    `}</style>
       <div className="max-w-6xl mx-auto">
         <div className="mb-8">
           <h1 className="text-4xl font-extrabold text-orange-500 mb-2">
@@ -502,6 +759,78 @@ if (baseStateSummary && !baseStateSummary.isActive) {
               </div>
             </div>
 
+
+            {userOfferActivity.length > 0 && (
+              <div className="bg-neutral-800 border border-neutral-700 rounded-2xl p-6 mb-6 shadow-lg">
+                <div className="flex items-center justify-between gap-4 mb-4">
+                  <div>
+                    <div className="text-lg font-semibold text-orange-400">
+                      Your Offer Tracker
+                    </div>
+                    <div className="text-sm text-gray-400 mt-1">
+                      Live status for players you submitted offers to.
+                    </div>
+                  </div>
+                  <div className="text-sm text-gray-400">
+                    {userOfferActivity.length} tracked
+                  </div>
+                </div>
+
+                <div className="bm-orange-scroll max-h-[280px] overflow-y-auto pr-2 space-y-3">
+                  {userOfferActivity.map((row) => (
+                    <div
+                      key={row.id}
+                      className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3"
+                    >
+                      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <div>
+                          <div className="text-white font-semibold">
+                            {row.playerName}
+                          </div>
+                          <div className="text-sm text-gray-400 mt-1">
+                            {row.detail}
+                          </div>
+                          <div className="text-sm text-gray-500 mt-2 space-y-1">
+                            {row.status === "active" || row.status === "pending_user_decision" ? (
+                              <div>
+                                Your offer: {formatContractLine(row.contract, row.totalValue, row.years)}
+                                {row.day ? ` • Day ${row.day}` : ""}
+                              </div>
+                            ) : (
+                              <>
+                                <div>
+                                  Signed with: <span className="text-gray-300 font-semibold">{getSignedWithDisplay(row.signedWith, selectedTeam?.name)}</span>
+                                </div>
+                                <div>
+                                  Signed contract: {formatContractLine(row.signedContract || row.contract, row.signedTotalValue || row.totalValue, row.signedYears || row.years)}
+                                </div>
+                                <div>
+                                  Your offer: {formatContractLine(row.userOfferContract || row.contract, row.userOfferTotalValue || row.totalValue, row.userOfferYears || row.years)}
+                                  {row.day ? ` • Day ${row.day}` : ""}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 md:justify-end">
+                          <InfoChip tone={getOfferStatusTone(row.status)}>
+                            {getOfferStatusLabel(row.status, row.signedWith, selectedTeam?.name)}
+                          </InfoChip>
+                          {row.signedWith && row.signedWith !== selectedTeam?.name && (
+                            <InfoChip tone="orange">Signed With {row.signedWith}</InfoChip>
+                          )}
+                          {row.signedWith && row.signedWith === selectedTeam?.name && (
+                            <InfoChip tone="green">Signed With You</InfoChip>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="bg-neutral-800 border border-neutral-700 rounded-2xl p-6 mb-6 shadow-lg">
               <div className="flex items-center justify-between gap-4 mb-4">
                 <div className="text-lg font-semibold text-orange-400">
@@ -513,7 +842,7 @@ if (baseStateSummary && !baseStateSummary.isActive) {
               </div>
 
               {pendingUserTeamSnapshot?.ok && (
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-5">
                   <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
                     <div className="text-xs text-gray-400 mb-1">Payroll</div>
                     <div className="text-base font-semibold text-white">
@@ -526,6 +855,14 @@ if (baseStateSummary && !baseStateSummary.isActive) {
                     <div className={`text-base font-semibold ${(selectionPreview?.capRoomAfter ?? pendingUserTeamSnapshot?.capRoom ?? 0) < 0 ? "text-red-300" : "text-white"}`}>
                       {formatDollars(selectionPreview?.capRoomAfter ?? pendingUserTeamSnapshot?.capRoom ?? 0)}
                     </div>
+                  </div>
+
+                  <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
+                    <div className="text-xs text-gray-400 mb-1">Practical Cap</div>
+                    <div className={`text-base font-semibold ${(selectionPreview?.practicalCapRoomAfter ?? pendingUserTeamSnapshot?.practicalCapRoom ?? 0) < 0 ? "text-red-300" : "text-white"}`}>
+                      {formatDollars(selectionPreview?.practicalCapRoomAfter ?? pendingUserTeamSnapshot?.practicalCapRoom ?? 0)}
+                    </div>
+                    <div className="text-[11px] text-gray-500 mt-1">incl. holds</div>
                   </div>
 
                   <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
@@ -687,6 +1024,12 @@ if (baseStateSummary && !baseStateSummary.isActive) {
       <div className="text-sm text-gray-500 mt-1">
         Current year cap hit: {formatDollars(contractSummary.currentYearSalary || row?.currentYearSalary || 0)}
       </div>
+      <div className="flex flex-wrap gap-2 mt-3">
+        {row?.spendingType && <InfoChip tone={row.spendingType === "bird_rights" ? "orange" : "green"}>{formatToolLabel(row.spendingType)}</InfoChip>}
+        {row?.exceptionType && <InfoChip tone="green">{formatToolLabel(row.exceptionType)}</InfoChip>}
+        {row?.payrollZone && <InfoChip>{formatToolLabel(row.payrollZone)}</InfoChip>}
+        {row?.chosenOffer?.rfaMatched && <InfoChip tone="orange">RFA Match</InfoChip>}
+      </div>
     </div>
   </div>
 
@@ -720,8 +1063,8 @@ if (baseStateSummary && !baseStateSummary.isActive) {
                   {!signings.length ? (
                     <p className="text-gray-400">No signings recorded.</p>
                   ) : (
-                    <div className="space-y-3">
-                      {signings.map((signing, idx) => {
+<div className="bm-orange-scroll max-h-[540px] overflow-y-auto pr-2 space-y-3">
+  {signings.map((signing, idx) => {
                         const logo = getTeamLogo(signing?.signedWith);
 
                         return (
@@ -749,6 +1092,12 @@ if (baseStateSummary && !baseStateSummary.isActive) {
                                 </div>
                                 <div className="text-sm text-gray-500 mt-2">
                                   {formatContractLine(signing?.contract)}
+                                </div>
+                                <div className="flex flex-wrap gap-2 mt-2">
+                                  {signing?.spendingType && <InfoChip tone={signing.spendingType === "bird_rights" ? "orange" : "green"}>{formatToolLabel(signing.spendingType)}</InfoChip>}
+                                  {signing?.exceptionType && <InfoChip tone="green">{formatToolLabel(signing.exceptionType)}</InfoChip>}
+                                  {signing?.exceptionUsage?.amountUsed > 0 && <InfoChip tone="orange">Used {formatDollars(signing.exceptionUsage.amountUsed)}</InfoChip>}
+                                  {signing?.rfaMatched && <InfoChip tone="orange">RFA Matched</InfoChip>}
                                 </div>
                               </div>
                             </div>
@@ -778,8 +1127,8 @@ if (baseStateSummary && !baseStateSummary.isActive) {
                   {!generatedOffers.length ? (
                     <p className="text-gray-400">No new CPU offers were generated.</p>
                   ) : (
-                    <div className="space-y-3">
-                      {generatedOffers.map((offer, idx) => {
+<div className="bm-orange-scroll max-h-[540px] overflow-y-auto pr-2 space-y-3">
+  {generatedOffers.map((offer, idx) => {
                         const logo = getTeamLogo(offer?.teamName);
 
                         return (
@@ -807,6 +1156,13 @@ if (baseStateSummary && !baseStateSummary.isActive) {
                                 </div>
                                 <div className="text-sm text-gray-500 mt-2">
                                   {formatContractLine(offer?.contract, offer?.totalValue, offer?.years)}
+                                </div>
+                                <div className="flex flex-wrap gap-2 mt-2">
+                                  {offer?.spendingType && <InfoChip tone={offer.spendingType === "bird_rights" ? "orange" : "green"}>{formatToolLabel(offer.spendingType)}</InfoChip>}
+                                  {offer?.exceptionType && <InfoChip tone="green">{formatToolLabel(offer.exceptionType)}</InfoChip>}
+                                  {offer?.rosterNeed?.position && <InfoChip tone="orange">Need {offer.rosterNeed.position} {formatNeedScore(offer.rosterNeed.needScore)}</InfoChip>}
+                                  {offer?.teamDirection && <InfoChip>{formatToolLabel(offer.teamDirection)}</InfoChip>}
+                                  {offer?.payrollZone && <InfoChip>{formatToolLabel(offer.payrollZone)}</InfoChip>}
                                 </div>
                               </div>
                             </div>
@@ -906,6 +1262,86 @@ if (baseStateSummary && !baseStateSummary.isActive) {
           </>
         )}
       </div>
+      {offerStatusPopupOpen && offerPopupRows.length > 0 && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] px-4 py-6">
+          <div className="w-full max-w-2xl bg-neutral-800 rounded-2xl border border-orange-500/40 shadow-2xl p-6">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h2 className="text-2xl font-extrabold text-orange-400">
+                  Offer Update
+                </h2>
+                <p className="text-sm text-gray-400 mt-1">
+                  One or more players you offered have made a decision.
+                </p>
+              </div>
+              <button
+                onClick={dismissOfferStatusPopup}
+                className="px-3 py-2 rounded-lg bg-neutral-700 hover:bg-neutral-600 text-white font-semibold transition"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="bm-orange-scroll max-h-[360px] overflow-y-auto pr-2 space-y-3">
+              {offerPopupRows.map((row) => (
+                <div
+                  key={row.id}
+                  className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-4"
+                >
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                    <div>
+                      <div className="text-white text-lg font-bold">
+                        {row.playerName}
+                      </div>
+                      <div className="text-sm text-gray-300 mt-1">
+                        {row.detail}
+                      </div>
+                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+                        <div className="bg-neutral-800/80 border border-neutral-700 rounded-lg px-3 py-2">
+                          <div className="text-xs text-gray-500 mb-1">Signed With</div>
+                          <div className="text-gray-100 font-semibold">
+                            {getSignedWithDisplay(row.signedWith, selectedTeam?.name)}
+                          </div>
+                        </div>
+                        <div className="bg-neutral-800/80 border border-neutral-700 rounded-lg px-3 py-2">
+                          <div className="text-xs text-gray-500 mb-1">Signed Contract</div>
+                          <div className="text-gray-100 font-semibold">
+                            {formatContractLine(row.signedContract || row.contract, row.signedTotalValue || row.totalValue, row.signedYears || row.years)}
+                          </div>
+                        </div>
+                        <div className="bg-neutral-800/80 border border-neutral-700 rounded-lg px-3 py-2">
+                          <div className="text-xs text-gray-500 mb-1">Your Offer</div>
+                          <div className="text-gray-100 font-semibold">
+                            {formatContractLine(row.userOfferContract || row.contract, row.userOfferTotalValue || row.totalValue, row.userOfferYears || row.years)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 md:justify-end">
+                      <InfoChip tone={getOfferStatusTone(row.status)}>
+                        {getOfferStatusLabel(row.status, row.signedWith, selectedTeam?.name)}
+                      </InfoChip>
+                      {row.signedWith && row.signedWith !== selectedTeam?.name && <InfoChip tone="orange">Signed With {row.signedWith}</InfoChip>}
+                      {row.signedWith && row.signedWith === selectedTeam?.name && <InfoChip tone="green">Signed With You</InfoChip>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-end mt-5">
+              <button
+                onClick={dismissOfferStatusPopup}
+                className="px-5 py-2.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white font-bold transition"
+              >
+                Got It
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

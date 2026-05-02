@@ -476,6 +476,37 @@ async function processPendingUserFreeAgencyDecisions(requestId, leagueData, payl
     "free-agency-process-pending-error"
   );
 }
+async function processPendingRfaMatchDecision(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "process_pending_rfa_match_decision",
+    leagueData,
+    payload || {},
+    "free-agency-process-rfa-match-result",
+    "free-agency-process-rfa-match-error"
+  );
+}
+async function previewRightsManagement(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "preview_rights_management",
+    leagueData,
+    payload || {},
+    "rights-management-preview-result",
+    "rights-management-preview-error"
+  );
+}
+
+async function applyRightsManagement(requestId, leagueData, payload) {
+  return runFreeAgencyRequest(
+    requestId,
+    "apply_rights_management",
+    leagueData,
+    payload || {},
+    "rights-management-apply-result",
+    "rights-management-apply-error"
+  );
+}
 async function repairCpuTeamsToMinRoster(requestId, leagueData, payload) {
   return runFreeAgencyRequest(
     requestId,
@@ -659,9 +690,26 @@ onmessage = async (e) => {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return advanceFreeAgencyDay(msg.requestId, leaguePayload, msg.payload || {});
   }
-  if (msg.type === "process-pending-user-free-agency-decisions") {
+if (msg.type === "process-pending-user-free-agency-decisions") {
+  const leaguePayload = msg.leagueData ?? msg.league ?? {};
+  return processPendingUserFreeAgencyDecisions(msg.requestId, leaguePayload, msg.payload || {});
+}
+
+if (msg.type === "process-pending-rfa-match-decision") {
+  const leaguePayload = msg.leagueData ?? msg.league ?? {};
+  return processPendingRfaMatchDecision(msg.requestId, leaguePayload, msg.payload || {});
+}
+
+// rights management preview
+if (msg.type === "preview-rights-management") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
-    return processPendingUserFreeAgencyDecisions(msg.requestId, leaguePayload, msg.payload || {});
+    return previewRightsManagement(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // rights management apply
+  if (msg.type === "apply-rights-management") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return applyRightsManagement(msg.requestId, leaguePayload, msg.payload || {});
   }
 
   // player retirements

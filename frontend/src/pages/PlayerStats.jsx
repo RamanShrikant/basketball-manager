@@ -3,10 +3,37 @@ import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 
-// ✅ V3 per-game results (matches Standings.jsx)
+/* -------------------------------------------------------------------------- */
+/*                              STORAGE HELPERS                               */
+/* -------------------------------------------------------------------------- */
+
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
+const PLAYER_STATS_KEY = "bm_player_stats_v1";
+const SCHED_KEY = "bm_schedule_v3";
+
 const resultV3Key = (gameId) => `${RESULT_V3_PREFIX}${gameId}`;
+
+function readCompressedOrJson(key, fallback = {}) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+
+    if (raw.startsWith("lz:")) {
+      const decompressed = LZString.decompressFromUTF16(raw.slice(3));
+      return decompressed ? JSON.parse(decompressed) : fallback;
+    }
+
+    try {
+      return JSON.parse(raw);
+    } catch {}
+
+    const decompressed = LZString.decompressFromUTF16(raw);
+    return decompressed ? JSON.parse(decompressed) : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function loadResultsIndexV3() {
   try {
@@ -35,160 +62,203 @@ function loadOneResultV3(gameId) {
 function loadAllResultsV3() {
   const ids = loadResultsIndexV3();
   const out = {};
+
   for (const id of ids) {
     const r = loadOneResultV3(id);
-    if (r) out[String(id)] = r; // normalize key to string
+    if (r) out[String(id)] = r;
   }
+
   return out;
 }
+
+/* -------------------------------------------------------------------------- */
+/*                               LEAGUE HELPERS                               */
+/* -------------------------------------------------------------------------- */
+
+function getAllTeamsFromLeague(leagueData) {
+  if (!leagueData) return [];
+  if (Array.isArray(leagueData.teams)) return leagueData.teams;
+  if (leagueData.conferences) return Object.values(leagueData.conferences).flat();
+  return [];
+}
+
+function playerNameOf(player) {
+  return player?.name || player?.player || "Unknown";
+}
+
+function playerPosOf(player) {
+  return player?.pos || player?.position || "-";
+}
+
+function teamLogoOf(team) {
+  return (
+    team?.logo ||
+    team?.teamLogo ||
+    team?.newTeamLogo ||
+    team?.logoUrl ||
+    team?.image ||
+    team?.img ||
+    ""
+  );
+}
+
+function playerHeadshotOf(player) {
+  return (
+    player?.headshot ||
+    player?.portrait ||
+    player?.image ||
+    player?.photo ||
+    player?.img ||
+    player?.face ||
+    ""
+  );
+}
+
+function fmtAvg(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(1) : "0.0";
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                 COMPONENT                                  */
+/* -------------------------------------------------------------------------- */
 
 export default function PlayerStats() {
   const { leagueData, selectedTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
 
-  // ----- View mode: players (team), league (all players), teams (all teams) -----
-  const [mode, setMode] = useState("players"); // "players" | "league" | "teams"
-
-  // sorting
+  const [mode, setMode] = useState("players"); // players | league | teams
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
-
-  // selections for header card
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [selectedTeamRow, setSelectedTeamRow] = useState(null);
 
-  // restore last viewed team (for players mode)
   useEffect(() => {
-    if (!selectedTeam) {
+    if (selectedTeam) return;
+
+    try {
       const saved = localStorage.getItem("selectedTeam");
-      if (saved) setSelectedTeam(JSON.parse(saved));
-    }
+      if (!saved) return;
+
+      const parsed = JSON.parse(saved);
+      if (typeof parsed === "string") setSelectedTeam(parsed);
+      else if (parsed?.name) setSelectedTeam(parsed.name);
+    } catch {}
   }, [selectedTeam, setSelectedTeam]);
 
-  // 🔥 keys + pre-aggregated player stats + schedule
-  const PLAYER_STATS_KEY = "bm_player_stats_v1";
-  const SCHED_KEY = "bm_schedule_v3";
-
-  // per-player season totals written by Calendar
-  const playerStatsMap = useMemo(() => {
-    try {
-      const raw = localStorage.getItem(PLAYER_STATS_KEY);
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
-  }, []);
-
-  // schedule needed for team PTS / PA
-  const schedule = useMemo(() => {
-    try {
-      const raw = localStorage.getItem(SCHED_KEY);
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
-  }, []);
-
   useEffect(() => {
-    if (selectedTeam) localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam));
+    if (selectedTeam?.name) {
+      localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam.name));
+    }
   }, [selectedTeam]);
 
-  // ✅ load observed results (for totals only, V3 per-game)
-  const results = useMemo(() => loadAllResultsV3(), []);
-
-  if (!leagueData || !selectedTeam) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
-        <p className="mb-3 text-lg">No team selected or league missing.</p>
-        <button
-          onClick={() => navigate("/team-selector")}
-          className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold"
-        >
-          Back to Team Select
-        </button>
-      </div>
-    );
-  }
-
-  // ---------- league helpers ----------
   const allTeams = useMemo(() => {
-    const confs = Object.values(leagueData.conferences || {});
-    return confs.flat().sort((a, b) => a.name.localeCompare(b.name));
+    return getAllTeamsFromLeague(leagueData)
+      .filter((team) => team?.name)
+      .sort((a, b) => a.name.localeCompare(b.name));
   }, [leagueData]);
-
-  const playerToTeam = useMemo(() => {
-    const map = {};
-    for (const t of allTeams) {
-      for (const p of t.players || []) map[p.name] = t.name;
-    }
-    return map;
-  }, [allTeams]);
 
   const teamLogo = useMemo(() => {
     const map = {};
-    for (const t of allTeams) map[t.name] = t.logo || "";
+    for (const team of allTeams) {
+      map[team.name] = teamLogoOf(team);
+    }
     return map;
   }, [allTeams]);
 
   const allPlayers = useMemo(() => {
-    return allTeams.flatMap((t) =>
-      (t.players || []).map((p) => ({
-        ...p,
-        teamName: t.name,
-        teamLogo: t.logo || "",
+    return allTeams.flatMap((team) =>
+      (team.players || []).map((player) => ({
+        ...player,
+        name: playerNameOf(player),
+        pos: playerPosOf(player),
+        headshot: playerHeadshotOf(player),
+        teamName: team.name,
+        teamLogo: teamLogoOf(team),
       }))
     );
   }, [allTeams]);
 
-  // ---------- per-player stats from pre-aggregated map ----------
+  const playerStatsMap = useMemo(() => {
+    return readCompressedOrJson(PLAYER_STATS_KEY, {});
+  }, []);
+
+  const schedule = useMemo(() => {
+    return readCompressedOrJson(SCHED_KEY, {});
+  }, []);
+
+  const results = useMemo(() => loadAllResultsV3(), []);
+
   const computePlayerStats = (playerName, teamName) => {
     const key = `${playerName}__${teamName}`;
-    const rec = playerStatsMap[key];
+    const rec = playerStatsMap?.[key];
 
-    if (!rec || !rec.gp) {
+    if (!rec || !Number(rec.gp || 0)) {
       return {
         GP: 0,
-        MIN: 0,
-        PTS: 0,
-        REB: 0,
-        AST: 0,
-        STL: 0,
-        BLK: 0,
-        FG: 0,
-        "3P": 0,
-        FT: 0,
-        "3PA": 0,
-        FTA: 0,
+        MIN: "0.0",
+        PTS: "0.0",
+        REB: "0.0",
+        AST: "0.0",
+        STL: "0.0",
+        BLK: "0.0",
+        FG: "0.0",
+        "3P": "0.0",
+        FT: "0.0",
+        "3PA": "0.0",
+        FTA: "0.0",
       };
     }
 
-    const games = rec.gp || 1;
-
-    const fgPct = rec.fga > 0 ? ((rec.fgm / rec.fga) * 100).toFixed(1) : "0.0";
-    const tpPct = rec.tpa > 0 ? ((rec.tpm / rec.tpa) * 100).toFixed(1) : "0.0";
-    const ftPct = rec.fta > 0 ? ((rec.ftm / rec.fta) * 100).toFixed(1) : "0.0";
+    const games = Number(rec.gp || 1);
+    const fgPct = rec.fga > 0 ? (Number(rec.fgm || 0) / Number(rec.fga || 1)) * 100 : 0;
+    const tpPct = rec.tpa > 0 ? (Number(rec.tpm || 0) / Number(rec.tpa || 1)) * 100 : 0;
+    const ftPct = rec.fta > 0 ? (Number(rec.ftm || 0) / Number(rec.fta || 1)) * 100 : 0;
 
     return {
-      GP: rec.gp,
-      MIN: (rec.min / games).toFixed(1),
-      PTS: (rec.pts / games).toFixed(1),
-      REB: (rec.reb / games).toFixed(1),
-      AST: (rec.ast / games).toFixed(1),
-      STL: (rec.stl / games).toFixed(1),
-      BLK: (rec.blk / games).toFixed(1),
-      FG: fgPct,
-      "3P": tpPct,
-      FT: ftPct,
-      "3PA": (rec.tpa / games).toFixed(1),
-      FTA: (rec.fta / games).toFixed(1),
+      GP: Number(rec.gp || 0),
+      MIN: fmtAvg(Number(rec.min || 0) / games),
+      PTS: fmtAvg(Number(rec.pts || 0) / games),
+      REB: fmtAvg(Number(rec.reb || 0) / games),
+      AST: fmtAvg(Number(rec.ast || 0) / games),
+      STL: fmtAvg(Number(rec.stl || 0) / games),
+      BLK: fmtAvg(Number(rec.blk || 0) / games),
+      FG: fmtAvg(fgPct),
+      "3P": fmtAvg(tpPct),
+      FT: fmtAvg(ftPct),
+      "3PA": fmtAvg(Number(rec.tpa || 0) / games),
+      FTA: fmtAvg(Number(rec.fta || 0) / games),
     };
   };
 
-  // ---------- team aggregates strictly from observed results (adds PA) ----------
+  const teamPlayers = useMemo(() => {
+    if (!selectedTeam?.players) return [];
+
+    return (selectedTeam.players || []).map((player) => ({
+      ...player,
+      name: playerNameOf(player),
+      pos: playerPosOf(player),
+      headshot: playerHeadshotOf(player),
+      teamName: selectedTeam.name,
+      teamLogo: teamLogoOf(selectedTeam),
+      stats: computePlayerStats(playerNameOf(player), selectedTeam.name),
+    }));
+  }, [selectedTeam, playerStatsMap]);
+
+  const leaguePlayers = useMemo(() => {
+    return allPlayers.map((player) => ({
+      ...player,
+      stats: computePlayerStats(player.name, player.teamName),
+    }));
+  }, [allPlayers, playerStatsMap]);
+
   const allTeamsAgg = useMemo(() => {
     const totals = {};
-    const ensure = (team) => {
-      if (!totals[team]) {
-        totals[team] = {
+
+    const ensure = (teamName) => {
+      if (!teamName) return null;
+
+      if (!totals[teamName]) {
+        totals[teamName] = {
           gp: 0,
           pts: 0,
           oppPts: 0,
@@ -204,78 +274,77 @@ export default function PlayerStats() {
           fta: 0,
         };
       }
-      return totals[team];
+
+      return totals[teamName];
     };
 
-    // 1) GP, PTS, PA from schedule + compact results
     for (const games of Object.values(schedule || {})) {
-      for (const g of games || []) {
-        const r = results?.[String(g.id)]; // ✅ V3 keys normalized to string
-        if (!r || !r.totals) continue;
+      for (const game of games || []) {
+        const result = results?.[String(game.id)];
+        if (!result?.totals) continue;
 
-        const homeRow = ensure(g.home);
-        const awayRow = ensure(g.away);
+        const homeRow = ensure(game.home);
+        const awayRow = ensure(game.away);
+        if (!homeRow || !awayRow) continue;
 
         homeRow.gp += 1;
-        homeRow.pts += r.totals.home || 0;
-        homeRow.oppPts += r.totals.away || 0;
+        homeRow.pts += Number(result.totals.home || 0);
+        homeRow.oppPts += Number(result.totals.away || 0);
 
         awayRow.gp += 1;
-        awayRow.pts += r.totals.away || 0;
-        awayRow.oppPts += r.totals.home || 0;
+        awayRow.pts += Number(result.totals.away || 0);
+        awayRow.oppPts += Number(result.totals.home || 0);
       }
     }
 
-    // 2) REB/AST/STL/BLK/FG splits from aggregated player stats
     for (const rec of Object.values(playerStatsMap || {})) {
-      const row = ensure(rec.team);
-      row.reb += rec.reb || 0;
-      row.ast += rec.ast || 0;
-      row.stl += rec.stl || 0;
-      row.blk += rec.blk || 0;
-      row.fgm += rec.fgm || 0;
-      row.fga += rec.fga || 0;
-      row.tpm += rec.tpm || 0;
-      row.tpa += rec.tpa || 0;
-      row.ftm += rec.ftm || 0;
-      row.fta += rec.fta || 0;
+      const row = ensure(rec?.team);
+      if (!row) continue;
+
+      row.reb += Number(rec.reb || 0);
+      row.ast += Number(rec.ast || 0);
+      row.stl += Number(rec.stl || 0);
+      row.blk += Number(rec.blk || 0);
+      row.fgm += Number(rec.fgm || 0);
+      row.fga += Number(rec.fga || 0);
+      row.tpm += Number(rec.tpm || 0);
+      row.tpa += Number(rec.tpa || 0);
+      row.ftm += Number(rec.ftm || 0);
+      row.fta += Number(rec.fta || 0);
     }
 
-    const rows = Object.keys(totals).map((team) => {
-      const t = totals[team];
-      const gp = t.gp || 1;
-
-      const FG = t.fga > 0 ? ((t.fgm / t.fga) * 100).toFixed(1) : "0.0";
-      const TP = t.tpa > 0 ? ((t.tpm / t.tpa) * 100).toFixed(1) : "0.0";
-      const FT = t.fta > 0 ? ((t.ftm / t.fta) * 100).toFixed(1) : "0.0";
+    const rows = Object.keys(totals).map((teamName) => {
+      const t = totals[teamName];
+      const gp = Number(t.gp || 0);
+      const safeGp = gp || 1;
 
       return {
-        teamName: team,
-        logo: teamLogo[team] || "",
+        teamName,
+        logo: teamLogo[teamName] || "",
         stats: {
-          GP: t.gp,
-          PTS: (t.pts / gp).toFixed(1),
-          PA: (t.oppPts / gp).toFixed(1),
-          REB: (t.reb / gp).toFixed(1),
-          AST: (t.ast / gp).toFixed(1),
-          STL: (t.stl / gp).toFixed(1),
-          BLK: (t.blk / gp).toFixed(1),
-          FG,
-          "3P": TP,
-          FT,
-          "3PA": (t.tpa / gp).toFixed(1),
-          FTA: (t.fta / gp).toFixed(1),
+          GP: gp,
+          PTS: fmtAvg(t.pts / safeGp),
+          PA: fmtAvg(t.oppPts / safeGp),
+          REB: fmtAvg(t.reb / safeGp),
+          AST: fmtAvg(t.ast / safeGp),
+          STL: fmtAvg(t.stl / safeGp),
+          BLK: fmtAvg(t.blk / safeGp),
+          FG: t.fga > 0 ? fmtAvg((t.fgm / t.fga) * 100) : "0.0",
+          "3P": t.tpa > 0 ? fmtAvg((t.tpm / t.tpa) * 100) : "0.0",
+          FT: t.fta > 0 ? fmtAvg((t.ftm / t.fta) * 100) : "0.0",
+          "3PA": fmtAvg(t.tpa / safeGp),
+          FTA: fmtAvg(t.fta / safeGp),
         },
       };
     });
 
-    // keep teams with 0 games
-    const have = new Set(rows.map((r) => r.teamName));
-    for (const t of allTeams) {
-      if (!have.has(t.name)) {
+    const have = new Set(rows.map((row) => row.teamName));
+
+    for (const team of allTeams) {
+      if (!have.has(team.name)) {
         rows.push({
-          teamName: t.name,
-          logo: t.logo || "",
+          teamName: team.name,
+          logo: teamLogoOf(team),
           stats: {
             GP: 0,
             PTS: "0.0",
@@ -297,50 +366,57 @@ export default function PlayerStats() {
     return rows.sort((a, b) => a.teamName.localeCompare(b.teamName));
   }, [schedule, results, playerStatsMap, allTeams, teamLogo]);
 
-  // ---------- rows for current mode ----------
-  const positionOrder = ["PG", "SG", "SF", "PF", "C"];
-
-  const teamPlayers = useMemo(() => {
-    const roster = selectedTeam.players || [];
-    return roster.map((p) => ({
-      ...p,
-      stats: computePlayerStats(p.name, selectedTeam.name),
-    }));
-  }, [selectedTeam, playerStatsMap]);
-
-  const leaguePlayers = useMemo(() => {
-    return allPlayers.map((p) => ({
-      ...p,
-      stats: computePlayerStats(p.name, p.teamName),
-    }));
-  }, [allPlayers, playerStatsMap]);
-
   useEffect(() => {
     if (mode === "players") {
-      setSelectedPlayer((prev) => prev || (teamPlayers[0] || null));
-    } else if (mode === "league") {
-      setSelectedPlayer((prev) => prev || (leaguePlayers[0] || null));
-    } else if (mode === "teams") {
-      setSelectedTeamRow((prev) => prev || (allTeamsAgg[0]?.teamName || null));
+      setSelectedPlayer((prev) => {
+        if (prev && teamPlayers.some((p) => p.name === prev.name)) return prev;
+        return teamPlayers[0] || null;
+      });
+    }
+
+    if (mode === "league") {
+      setSelectedPlayer((prev) => {
+        if (prev && leaguePlayers.some((p) => p.name === prev.name && p.teamName === prev.teamName)) return prev;
+        return leaguePlayers[0] || null;
+      });
+    }
+
+    if (mode === "teams") {
+      setSelectedTeamRow((prev) => {
+        if (prev && allTeamsAgg.some((row) => row.teamName === prev)) return prev;
+        return allTeamsAgg[0]?.teamName || null;
+      });
     }
   }, [mode, teamPlayers, leaguePlayers, allTeamsAgg]);
 
-  // team switching (players mode only)
-  const currentIndex = allTeams.findIndex((t) => t.name === selectedTeam.name);
+  const currentIndex = selectedTeam
+    ? allTeams.findIndex((team) => team.name === selectedTeam.name)
+    : -1;
+
   const handleTeamSwitch = (dir) => {
     if (mode !== "players") return;
+    if (!allTeams.length || currentIndex < 0) return;
+
     let newIndex = dir === "next" ? currentIndex + 1 : currentIndex - 1;
     newIndex = (newIndex + allTeams.length) % allTeams.length;
-    setSelectedTeam(allTeams[newIndex]);
+
+    setSelectedTeam(allTeams[newIndex].name);
     setSelectedPlayer(null);
   };
 
   const handleSort = (key) => {
     let direction = "desc";
-    if (sortConfig.key === key && sortConfig.direction === "desc") direction = "asc";
-    else if (sortConfig.key === key && sortConfig.direction === "asc") direction = "default";
+
+    if (sortConfig.key === key && sortConfig.direction === "desc") {
+      direction = "asc";
+    } else if (sortConfig.key === key && sortConfig.direction === "asc") {
+      direction = "default";
+    }
+
     setSortConfig({ key, direction });
   };
+
+  const positionOrder = ["PG", "SG", "SF", "PF", "C"];
 
   const baseCols = [
     { key: "name", label: "Name" },
@@ -359,7 +435,6 @@ export default function PlayerStats() {
     { key: "FTA", label: "FTA" },
   ];
 
-  // Team table columns (adds PA after PTS)
   const teamCols = [
     { key: "team", label: "Team" },
     { key: "GP", label: "GP" },
@@ -376,7 +451,6 @@ export default function PlayerStats() {
     { key: "FTA", label: "FTA" },
   ];
 
-  // sort helpers
   const applySort = (rows, type) => {
     if (!sortConfig.key || sortConfig.direction === "default") return rows;
 
@@ -386,20 +460,27 @@ export default function PlayerStats() {
     if (type === "players") {
       sorted.sort((a, b) => {
         const key = sortConfig.key;
-        if (key === "name") return dir * a.name.localeCompare(b.name);
+
+        if (key === "name") return dir * String(a.name || "").localeCompare(String(b.name || ""));
+
         if (key === "pos") {
           const aIdx = positionOrder.indexOf(a.pos);
           const bIdx = positionOrder.indexOf(b.pos);
           return dir * ((aIdx === -1 ? 99 : aIdx) - (bIdx === -1 ? 99 : bIdx));
         }
+
         const aVal = parseFloat(a.stats?.[key]) || 0;
         const bVal = parseFloat(b.stats?.[key]) || 0;
         return dir * (aVal - bVal);
       });
-    } else if (type === "teams") {
+    }
+
+    if (type === "teams") {
       sorted.sort((a, b) => {
         const key = sortConfig.key;
+
         if (key === "team") return dir * a.teamName.localeCompare(b.teamName);
+
         const aVal = parseFloat(a.stats?.[key]) || 0;
         const bVal = parseFloat(b.stats?.[key]) || 0;
         return dir * (aVal - bVal);
@@ -410,25 +491,41 @@ export default function PlayerStats() {
   };
 
   const rowsPlayers =
-    mode === "players" ? applySort(teamPlayers, "players") : applySort(leaguePlayers, "players");
+    mode === "players"
+      ? applySort(teamPlayers, "players")
+      : applySort(leaguePlayers, "players");
+
   const rowsTeams = applySort(allTeamsAgg, "teams");
 
-  // header player circle fill
   const cardPlayer =
-    mode === "players" || mode === "league" ? selectedPlayer || rowsPlayers[0] : null;
-  const fillPercent = Math.min((cardPlayer?.overall || 0) / 99, 1);
+    mode === "players" || mode === "league"
+      ? selectedPlayer || rowsPlayers[0] || null
+      : null;
+
+  const cardTeam = useMemo(() => {
+    return rowsTeams.find((row) => row.teamName === selectedTeamRow) || rowsTeams[0] || null;
+  }, [rowsTeams, selectedTeamRow]);
+
+  const fillPercent = Math.min((Number(cardPlayer?.overall || 0)) / 99, 1);
   const circleCircumference = 2 * Math.PI * 50;
   const strokeOffset = circleCircumference * (1 - fillPercent);
 
-  // selected team row object for teams mode
-  const cardTeam = useMemo(
-    () => rowsTeams.find((r) => r.teamName === selectedTeamRow) || rowsTeams[0],
-    [rowsTeams, selectedTeamRow]
-  );
+  if (!leagueData || !selectedTeam) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
+        <p className="mb-3 text-lg">No team selected or league missing.</p>
+        <button
+          onClick={() => navigate("/team-selector")}
+          className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold"
+        >
+          Back to Team Select
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center py-10">
-      {/* Header: pinned arrows + centered title + mode switch */}
       <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
         <div className="w-24 flex items-center justify-start">
           <button
@@ -469,7 +566,6 @@ export default function PlayerStats() {
         </div>
       </div>
 
-      {/* Mode switch */}
       <div className="w-full max-w-5xl flex items-center justify-end gap-2 mb-3">
         {[
           { k: "players", label: "Players" },
@@ -483,7 +579,9 @@ export default function PlayerStats() {
               setSortConfig({ key: null, direction: "desc" });
             }}
             className={`px-3 py-1 rounded-md text-sm font-semibold ${
-              mode === tab.k ? "bg-orange-600 text-white" : "bg-neutral-800 text-gray-300 hover:bg-neutral-700"
+              mode === tab.k
+                ? "bg-orange-600 text-white"
+                : "bg-neutral-800 text-gray-300 hover:bg-neutral-700"
             }`}
           >
             {tab.label}
@@ -491,31 +589,35 @@ export default function PlayerStats() {
         ))}
       </div>
 
-      {/* Header card */}
       {mode !== "teams" && cardPlayer && (
         <div className="relative w-full flex justify-center">
           <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
-            <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
+            <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60" />
+
             <div className="flex items-end justify-between relative">
               <div className="flex items-end gap-6">
                 <div className="relative -mb-[9px]">
-                  <img
-                    src={cardPlayer.headshot}
-                    alt={cardPlayer.name}
-                    className="h-[175px] w-auto object-contain"
-                  />
+                  {cardPlayer.headshot ? (
+                    <img
+                      src={cardPlayer.headshot}
+                      alt={cardPlayer.name}
+                      className="h-[175px] w-auto object-contain"
+                    />
+                  ) : (
+                    <div className="h-[175px] w-[120px]" />
+                  )}
                 </div>
+
                 <div className="flex flex-col justify-end mb-3">
                   <h2 className="text-[44px] font-bold leading-tight">{cardPlayer.name}</h2>
                   <p className="text-gray-400 text-[24px] mt-1">
                     {cardPlayer.pos}
                     {cardPlayer.secondaryPos ? ` / ${cardPlayer.secondaryPos}` : ""} • Age{" "}
-                    {cardPlayer.age}
+                    {cardPlayer.age ?? "-"}
                   </p>
                 </div>
               </div>
 
-              {/* OVR circle */}
               <div className="relative flex flex-col items-center justify-center mr-4 mb-2">
                 <svg width="110" height="110" viewBox="0 0 120 120">
                   <defs>
@@ -524,7 +626,16 @@ export default function PlayerStats() {
                       <stop offset="100%" stopColor="#FFD54F" />
                     </linearGradient>
                   </defs>
-                  <circle cx="60" cy="60" r="50" stroke="rgba(255,255,255,0.08)" strokeWidth="8" fill="none" />
+
+                  <circle
+                    cx="60"
+                    cy="60"
+                    r="50"
+                    stroke="rgba(255,255,255,0.08)"
+                    strokeWidth="8"
+                    fill="none"
+                  />
+
                   <circle
                     cx="60"
                     cy="60"
@@ -538,13 +649,17 @@ export default function PlayerStats() {
                     transform="rotate(-90 60 60)"
                   />
                 </svg>
+
                 <div className="absolute flex flex-col items-center justify-center text-center">
                   <p className="text-sm text-gray-300 tracking-wide mb-1">OVR</p>
                   <p className="text-[47px] font-extrabold text-orange-400 leading-none mt-[-11px]">
-                    {cardPlayer.overall}
+                    {cardPlayer.overall ?? "-"}
                   </p>
                   <p className="text-[10px] text-gray-400 mt-[-2px]">
-                    POT <span className="text-orange-400 font-semibold">{cardPlayer.potential}</span>
+                    POT{" "}
+                    <span className="text-orange-400 font-semibold">
+                      {cardPlayer.potential ?? "-"}
+                    </span>
                   </p>
                 </div>
               </div>
@@ -556,17 +671,23 @@ export default function PlayerStats() {
       {mode === "teams" && cardTeam && (
         <div className="relative w-full flex justify-center">
           <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-4 rounded-t-xl shadow-lg">
-            <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
+            <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60" />
+
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-6">
-                {/* Transparent logo (no background tile) */}
-                <img
-                  src={cardTeam.logo}
-                  alt={cardTeam.teamName}
-                  className="h-[90px] w-[90px] object-contain"
-                />
+                {cardTeam.logo ? (
+                  <img
+                    src={cardTeam.logo}
+                    alt={cardTeam.teamName}
+                    className="h-[90px] w-[90px] object-contain"
+                  />
+                ) : (
+                  <div className="h-[90px] w-[90px]" />
+                )}
+
                 <h2 className="text-[40px] font-bold leading-tight">{cardTeam.teamName}</h2>
               </div>
+
               <div className="text-right text-gray-300 text-lg">
                 <div>
                   GP: <span className="text-white font-semibold">{cardTeam.stats.GP}</span>
@@ -583,7 +704,6 @@ export default function PlayerStats() {
         </div>
       )}
 
-      {/* Tables */}
       <div className="w-full flex justify-center mt-[-1px]">
         <div className="w-full max-w-5xl overflow-x-auto no-scrollbar">
           {(mode === "players" || mode === "league") && (
@@ -591,6 +711,7 @@ export default function PlayerStats() {
               <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
                 <tr>
                   {mode === "league" && <th className="py-3 px-2 min-w-[60px]">Team</th>}
+
                   {baseCols.map((col) => (
                     <th
                       key={col.key}
@@ -613,41 +734,47 @@ export default function PlayerStats() {
                   ))}
                 </tr>
               </thead>
+
               <tbody>
-                {rowsPlayers.map((p) => (
+                {rowsPlayers.map((player) => (
                   <tr
-                    key={`${p.teamName || selectedTeam.name}-${p.name}`}
-                    onClick={() => setSelectedPlayer(p)}
+                    key={`${player.teamName || selectedTeam.name}-${player.name}`}
+                    onClick={() => setSelectedPlayer(player)}
                     className={`cursor-pointer transition ${
-                      (selectedPlayer || rowsPlayers[0])?.name === p.name
+                      (selectedPlayer || rowsPlayers[0])?.name === player.name &&
+                      (mode !== "league" ||
+                        (selectedPlayer || rowsPlayers[0])?.teamName === player.teamName)
                         ? "bg-orange-600 text-white"
                         : "hover:bg-neutral-800"
                     }`}
                   >
                     {mode === "league" && (
                       <td className="py-2 px-2">
-                        <img
-                          src={p.teamLogo}
-                          alt={p.teamName}
-                          className="inline-block h-[36px] w-[36px] object-contain"
-                          title={p.teamName}
-                        />
+                        {player.teamLogo ? (
+                          <img
+                            src={player.teamLogo}
+                            alt={player.teamName}
+                            className="inline-block h-[36px] w-[36px] object-contain"
+                            title={player.teamName}
+                          />
+                        ) : null}
                       </td>
                     )}
-                    <td className="py-2 px-3 text-left pl-4">{p.name}</td>
-                    <td>{p.pos}</td>
-                    <td>{p.stats.GP}</td>
-                    <td>{p.stats.MIN}</td>
-                    <td>{p.stats.PTS}</td>
-                    <td>{p.stats.REB}</td>
-                    <td>{p.stats.AST}</td>
-                    <td>{p.stats.STL}</td>
-                    <td>{p.stats.BLK}</td>
-                    <td>{p.stats.FG}</td>
-                    <td>{p.stats["3P"]}</td>
-                    <td>{p.stats.FT}</td>
-                    <td>{p.stats["3PA"]}</td>
-                    <td>{p.stats.FTA}</td>
+
+                    <td className="py-2 px-3 text-left pl-4">{player.name}</td>
+                    <td>{player.pos}</td>
+                    <td>{player.stats.GP}</td>
+                    <td>{player.stats.MIN}</td>
+                    <td>{player.stats.PTS}</td>
+                    <td>{player.stats.REB}</td>
+                    <td>{player.stats.AST}</td>
+                    <td>{player.stats.STL}</td>
+                    <td>{player.stats.BLK}</td>
+                    <td>{player.stats.FG}</td>
+                    <td>{player.stats["3P"]}</td>
+                    <td>{player.stats.FT}</td>
+                    <td>{player.stats["3PA"]}</td>
+                    <td>{player.stats.FTA}</td>
                   </tr>
                 ))}
               </tbody>
@@ -680,39 +807,46 @@ export default function PlayerStats() {
                   ))}
                 </tr>
               </thead>
+
               <tbody>
-                {rowsTeams.map((t) => (
+                {rowsTeams.map((team) => (
                   <tr
-                    key={t.teamName}
-                    onClick={() => setSelectedTeamRow(t.teamName)}
+                    key={team.teamName}
+                    onClick={() => setSelectedTeamRow(team.teamName)}
                     className={`cursor-pointer transition ${
-                      (cardTeam || rowsTeams[0])?.teamName === t.teamName
+                      (cardTeam || rowsTeams[0])?.teamName === team.teamName
                         ? "bg-orange-600 text-white"
                         : "hover:bg-neutral-800"
                     }`}
                   >
                     <td className="py-2 px-3 text-left pl-4">
                       <div className="flex items-center gap-3">
-                        <img
-                          src={t.logo}
-                          alt={t.teamName}
-                          className="h-[32px] w-[32px] object-contain"
-                        />
-                        <span>{t.teamName}</span>
+                        {team.logo ? (
+                          <img
+                            src={team.logo}
+                            alt={team.teamName}
+                            className="h-[32px] w-[32px] object-contain"
+                          />
+                        ) : (
+                          <div className="h-[32px] w-[32px]" />
+                        )}
+
+                        <span>{team.teamName}</span>
                       </div>
                     </td>
-                    <td>{t.stats.GP}</td>
-                    <td>{t.stats.PTS}</td>
-                    <td>{t.stats.PA}</td>
-                    <td>{t.stats.REB}</td>
-                    <td>{t.stats.AST}</td>
-                    <td>{t.stats.STL}</td>
-                    <td>{t.stats.BLK}</td>
-                    <td>{t.stats.FG}</td>
-                    <td>{t.stats["3P"]}</td>
-                    <td>{t.stats.FT}</td>
-                    <td>{t.stats["3PA"]}</td>
-                    <td>{t.stats.FTA}</td>
+
+                    <td>{team.stats.GP}</td>
+                    <td>{team.stats.PTS}</td>
+                    <td>{team.stats.PA}</td>
+                    <td>{team.stats.REB}</td>
+                    <td>{team.stats.AST}</td>
+                    <td>{team.stats.STL}</td>
+                    <td>{team.stats.BLK}</td>
+                    <td>{team.stats.FG}</td>
+                    <td>{team.stats["3P"]}</td>
+                    <td>{team.stats.FT}</td>
+                    <td>{team.stats["3PA"]}</td>
+                    <td>{team.stats.FTA}</td>
                   </tr>
                 ))}
               </tbody>
