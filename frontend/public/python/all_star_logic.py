@@ -30,6 +30,20 @@ def _safe_get(raw: Dict[str, Any], *keys: str, default = None):
     return default
 
 
+def _norm(v, vmax):
+    return 0.0 if vmax <= 0 else max(0.0, min(1.0, v / vmax))
+
+
+def _norm_range_hi(v, lo, hi):
+    return 0.0 if hi <= lo else max(0.0, min(1.0, (v - lo) / (hi - lo)))
+
+
+def _norm_wins(wins: float, cap: float, gamma: float = 2.0) -> float:
+    base = _norm(wins, cap)
+    floor = 0.30
+    return floor + (1.0 - floor) * base
+
+
 def _normalize_player_stats(player_stats: Any) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
 
@@ -74,6 +88,8 @@ def _normalize_player_stats(player_stats: Any) -> List[Dict[str, Any]]:
         ftm = _to_float(_safe_get(raw, "ftm"), 0.0)
         fta = _to_float(_safe_get(raw, "fta"), 0.0)
 
+        def_rating = _to_float(_safe_get(raw, "def_rating", "defRating", "defense", "def"), 0.0)
+
         rows.append({
             "player": str(player_name),
             "team": str(team_name),
@@ -91,6 +107,7 @@ def _normalize_player_stats(player_stats: Any) -> List[Dict[str, Any]]:
             "tpa": tpa,
             "ftm": ftm,
             "fta": fta,
+            "def_rating": def_rating,
         })
 
     return rows
@@ -196,17 +213,6 @@ def _decorate_players(
 
         team_wins_value = team_wins.get(row["team"], 0)
 
-        all_star_score = (
-            ppg
-            + 0.70 * rpg
-            + 0.90 * apg
-            + 1.80 * spg
-            + 1.50 * bpg
-            + 0.04 * team_wins_value
-            + 0.03 * row["started"]
-            + 0.01 * row["sixth"]
-        )
-
         out.append({
             "player": row["player"],
             "team": row["team"],
@@ -223,10 +229,57 @@ def _decorate_players(
             "started": row["started"],
             "sixth": row["sixth"],
             "team_wins": team_wins_value,
-            "all_star_score": round(float(all_star_score), 3),
+            "def_rating": row["def_rating"],
+            "all_star_score": 0.0,
         })
 
     return out
+
+
+def _build_all_star_context(players: List[Dict[str, Any]]) -> Dict[str, float]:
+    if not players:
+        return {
+            "ppg": 0.0,
+            "apg": 0.0,
+            "rpg": 0.0,
+            "spg": 0.0,
+            "bpg": 0.0,
+            "wins": 82.0,
+            "def_lo": 0.0,
+            "def_hi": 0.0,
+        }
+
+    return {
+        "ppg": max(p["ppg"] for p in players),
+        "apg": max(p["apg"] for p in players),
+        "rpg": max(p["rpg"] for p in players),
+        "spg": max(p["spg"] for p in players),
+        "bpg": max(p["bpg"] for p in players),
+        "wins": 82.0,
+        "def_lo": min(p["def_rating"] for p in players),
+        "def_hi": max(p["def_rating"] for p in players),
+    }
+
+
+def _impact_all_nba_style(p: Dict[str, Any], c: Dict[str, float]) -> float:
+    return (
+        0.15 * _norm_wins(p["team_wins"], c["wins"], gamma = 2.0) +
+        0.30 * _norm(p["ppg"], c["ppg"]) +
+        0.15 * _norm(p["apg"], c["apg"]) +
+        0.15 * _norm(p["rpg"], c["rpg"]) +
+        0.10 * _norm(p["spg"], c["spg"]) +
+        0.10 * _norm(p["bpg"], c["bpg"]) +
+        0.05 * _norm_range_hi(p["def_rating"], c["def_lo"], c["def_hi"])
+    )
+
+
+def _apply_all_star_scores(players: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    ctx = _build_all_star_context(players)
+
+    for p in players:
+        p["all_star_score"] = round(float(_impact_all_nba_style(p, ctx)), 3)
+
+    return players
 
 
 def _sort_players(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -281,6 +334,8 @@ def compute_all_stars(payload: Dict[str, Any]) -> Dict[str, Any]:
         team_wins = team_wins,
         min_games = min_games,
     )
+
+    decorated = _apply_all_star_scores(decorated)
 
     east = _build_conference_team(decorated, "East")
     west = _build_conference_team(decorated, "West")
