@@ -348,6 +348,241 @@ function setHighLowBySeed(confKey, a, b, seedNumOf) {
   return { high: b, low: a, highNum: sb, lowNum: sa };
 }
 
+
+function getWinPctFromStanding(row) {
+  const wins = Number(row?.wins || 0);
+  const losses = Number(row?.losses || 0);
+  const games = wins + losses;
+  if (!games) return 0;
+  return wins / games;
+}
+
+function buildRegularSeasonSnapshot({ standings, seeds }) {
+  const rows = Object.values(standings || {}).filter((row) => row?.team);
+
+  const leagueSorted = [...rows].sort((a, b) => {
+    const winDiff = getWinPctFromStanding(b) - getWinPctFromStanding(a);
+    if (winDiff !== 0) return winDiff;
+    const diffDiff = Number(b?.diff || 0) - Number(a?.diff || 0);
+    if (diffDiff !== 0) return diffDiff;
+    return String(a.team || "").localeCompare(String(b.team || ""));
+  });
+
+  const leagueRankByTeam = {};
+  leagueSorted.forEach((row, idx) => {
+    leagueRankByTeam[row.team] = idx + 1;
+  });
+
+  const seedByTeam = {};
+  for (const [confKey, teamNames] of Object.entries(seeds || {})) {
+    (teamNames || []).forEach((teamName, idx) => {
+      seedByTeam[teamName] = {
+        conference: confKey,
+        conferenceSeed: idx + 1,
+      };
+    });
+  }
+
+  return rows.map((row) => {
+    const seedInfo = seedByTeam[row.team] || {};
+    const wins = Number(row?.wins || 0);
+    const losses = Number(row?.losses || 0);
+    const gp = wins + losses;
+    const conferenceSeed = Number(seedInfo.conferenceSeed || 0) || null;
+
+    return {
+      teamName: row.team,
+      conference: row.conf || seedInfo.conference || null,
+      wins,
+      losses,
+      gamesPlayed: gp,
+      winPct: gp ? Number((wins / gp).toFixed(3)) : 0,
+      pointDifferential: Number(row?.diff || 0),
+      pointsFor: Number(row?.pf || 0),
+      pointsAgainst: Number(row?.pa || 0),
+      conferenceWins: Number(row?.confWins || 0),
+      conferenceLosses: Number(row?.confLosses || 0),
+      conferenceSeed,
+      leagueRank: leagueRankByTeam[row.team] || null,
+      topSixSeed: Boolean(conferenceSeed && conferenceSeed <= 6),
+      madePlayIn: Boolean(conferenceSeed && conferenceSeed >= 7 && conferenceSeed <= 10),
+    };
+  });
+}
+
+function playoffLossLabel(round) {
+  if (round >= 4) return "finals";
+  if (round === 3) return "conference_finals";
+  if (round === 2) return "second_round";
+  if (round === 1) return "first_round";
+  return "missed_playoffs";
+}
+
+function buildPlayoffResultMap(post) {
+  const resultByTeam = {};
+
+  const ensure = (teamName) => {
+    if (!teamName) return null;
+    if (!resultByTeam[teamName]) {
+      resultByTeam[teamName] = {
+        madePlayoffs: false,
+        madePlayIn: false,
+        playoffResult: "missed_playoffs",
+        playoffRoundReached: 0,
+        champion: false,
+        finals: false,
+        conferenceFinals: false,
+      };
+    }
+    return resultByTeam[teamName];
+  };
+
+  const markPlayIn = (teamName) => {
+    const row = ensure(teamName);
+    if (!row) return;
+    row.madePlayIn = true;
+    if (!row.madePlayoffs) row.playoffResult = "play_in";
+  };
+
+  const markRound = (teamName, round) => {
+    const row = ensure(teamName);
+    if (!row) return;
+    row.madePlayoffs = true;
+    row.playoffRoundReached = Math.max(Number(row.playoffRoundReached || 0), round);
+    if (round >= 3) row.conferenceFinals = true;
+    if (round >= 4) row.finals = true;
+    row.playoffResult = playoffLossLabel(round);
+  };
+
+  const markSeries = (series, round) => {
+    if (!series) return;
+    const teams = [series.highSeedTeam, series.lowSeedTeam].filter(Boolean);
+    for (const teamName of teams) markRound(teamName, round);
+
+    if (!series.complete || teams.length < 2) return;
+
+    const highWon = Number(series.winsHigh || 0) > Number(series.winsLow || 0);
+    const winner = highWon ? series.highSeedTeam : series.lowSeedTeam;
+    const loser = highWon ? series.lowSeedTeam : series.highSeedTeam;
+
+    if (winner) markRound(winner, round + 1);
+    if (loser) {
+      const loserRow = ensure(loser);
+      loserRow.playoffResult = playoffLossLabel(round);
+      loserRow.playoffRoundReached = Math.max(Number(loserRow.playoffRoundReached || 0), round);
+      if (round >= 3) loserRow.conferenceFinals = true;
+      if (round >= 4) loserRow.finals = true;
+    }
+  };
+
+  for (const [confKey, conf] of Object.entries(post?.conf || {})) {
+    const pi = conf?.playIn;
+    if (pi) {
+      markPlayIn(pi?.g78?.home);
+      markPlayIn(pi?.g78?.away);
+      markPlayIn(pi?.g910?.home);
+      markPlayIn(pi?.g910?.away);
+      markPlayIn(pi?.gFinal?.home);
+      markPlayIn(pi?.gFinal?.away);
+    }
+
+    const r1 = conf?.rounds?.r1 || {};
+    markSeries(r1.s1v8, 1);
+    markSeries(r1.s4v5, 1);
+    markSeries(r1.s3v6, 1);
+    markSeries(r1.s2v7, 1);
+
+    const r2 = conf?.rounds?.r2 || {};
+    markSeries(r2.top, 2);
+    markSeries(r2.bot, 2);
+
+    markSeries(conf?.rounds?.r3?.confFinals, 3);
+  }
+
+  markSeries(post?.finals, 4);
+
+  const champion = seriesWinnerTeam(post?.finals);
+  if (champion) {
+    const row = ensure(champion);
+    row.madePlayoffs = true;
+    row.champion = true;
+    row.finals = true;
+    row.conferenceFinals = true;
+    row.playoffRoundReached = 5;
+    row.playoffResult = "champion";
+  }
+
+  return resultByTeam;
+}
+
+function buildSeasonHistoryEntry({ seasonYear, teams, regularSeasonSnapshot, post }) {
+  const regularRows = Array.isArray(regularSeasonSnapshot) ? regularSeasonSnapshot : [];
+  const regularByTeam = {};
+  for (const row of regularRows) {
+    if (row?.teamName) regularByTeam[row.teamName] = row;
+  }
+
+  const playoffByTeam = buildPlayoffResultMap(post);
+
+  const teamRows = (teams || []).map((team) => {
+    const teamName = team?.name || "Unknown Team";
+    const regular = regularByTeam[teamName] || {
+      teamName,
+      conference: team?.conference || team?.conf || null,
+      wins: Number(team?.wins || 0),
+      losses: Number(team?.losses || 0),
+      gamesPlayed: Number(team?.wins || 0) + Number(team?.losses || 0),
+      winPct: 0,
+      conferenceSeed: null,
+      leagueRank: null,
+      topSixSeed: false,
+      madePlayIn: false,
+    };
+
+    const playoff = playoffByTeam[teamName] || {
+      madePlayoffs: false,
+      madePlayIn: Boolean(regular.madePlayIn),
+      playoffResult: Boolean(regular.madePlayIn) ? "play_in" : "missed_playoffs",
+      playoffRoundReached: 0,
+      champion: false,
+      finals: false,
+      conferenceFinals: false,
+    };
+
+    return {
+      ...regular,
+      madePlayIn: Boolean(regular.madePlayIn || playoff.madePlayIn),
+      madePlayoffs: Boolean(playoff.madePlayoffs),
+      playoffResult: playoff.playoffResult,
+      playoffRoundReached: Number(playoff.playoffRoundReached || 0),
+      champion: Boolean(playoff.champion),
+      finals: Boolean(playoff.finals),
+      conferenceFinals: Boolean(playoff.conferenceFinals),
+    };
+  });
+
+  return {
+    seasonYear,
+    createdAt: new Date().toISOString(),
+    champion: seriesWinnerTeam(post?.finals),
+    teams: teamRows,
+  };
+}
+
+function upsertSeasonHistoryEntry(leagueData, entry) {
+  if (!leagueData || !entry?.seasonYear) return leagueData;
+
+  const next = { ...leagueData };
+  const existing = Array.isArray(next.seasonHistory) ? next.seasonHistory : [];
+  const filtered = existing.filter((row) => Number(row?.seasonYear) !== Number(entry.seasonYear));
+
+  next.seasonHistory = [...filtered, entry]
+    .sort((a, b) => Number(a?.seasonYear || 0) - Number(b?.seasonYear || 0))
+    .slice(-10);
+
+  return next;
+}
+
 /* ------------ standings + tiebreak helpers ------------ */
 function computeStandings({ teams, scheduleByDate, resultsById, confOf }) {
   const base = {};
@@ -703,7 +938,7 @@ export default function Playoffs() {
   }
 
   const navigate = useNavigate();
-  const { leagueData } = useGame();
+  const { leagueData, setLeagueData } = useGame();
 
   const teams = useMemo(() => {
     const arr = getAllTeamsFromLeague(leagueData);
@@ -941,12 +1176,72 @@ if (
     return (series.winsHigh ?? 0) > (series.winsLow ?? 0) ? series.highSeedTeam : series.lowSeedTeam;
   }
 
+  function getLeagueDataForHistoryWrite() {
+    try {
+      const raw = localStorage.getItem("leagueData");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") return parsed;
+      }
+    } catch {}
+
+    return leagueData;
+  }
+
+  function persistSeasonHistorySnapshot(next, { force = false } = {}) {
+    if (!next?.seasonYear) return;
+
+    const sourceLeague = getLeagueDataForHistoryWrite();
+    if (!sourceLeague || typeof sourceLeague !== "object") return;
+
+    const champ = finalsChampionName(next.finals);
+    const history = Array.isArray(sourceLeague.seasonHistory) ? sourceLeague.seasonHistory : [];
+    const hasCurrentSeasonHistory = history.some(
+      (row) => Number(row?.seasonYear) === Number(next.seasonYear)
+    );
+
+    // Before the Finals are done, write the snapshot once so offseason preview/team
+    // direction can use real standings instead of roster-only fallback. Once a
+    // champion exists, force an update with the final playoff result.
+    if (!force && !champ && hasCurrentSeasonHistory) return;
+
+    const regularSeasonSnapshot =
+      Array.isArray(next.regularSeasonSnapshot) && next.regularSeasonSnapshot.length
+        ? next.regularSeasonSnapshot
+        : buildRegularSeasonSnapshot({ standings, seeds });
+
+    const historyEntry = {
+      ...buildSeasonHistoryEntry({
+        seasonYear: next.seasonYear,
+        teams,
+        regularSeasonSnapshot,
+        post: next,
+      }),
+      status: champ ? "complete" : "in_progress",
+    };
+
+    const leagueWithHistory = upsertSeasonHistoryEntry(sourceLeague, historyEntry);
+    if (!leagueWithHistory) return;
+
+    if (typeof setLeagueData === "function") {
+      setLeagueData(leagueWithHistory);
+    }
+
+    try {
+      localStorage.setItem("leagueData", JSON.stringify(leagueWithHistory));
+    } catch (err) {
+      console.warn("[Playoffs] Failed to save seasonHistory to leagueData", err);
+    }
+  }
+
   function persistPost(next) {
     setPost(next);
     savePostseasonState(next);
 
-    // ALWAYS show champion popup once finals completes (and store it)
     const champ = finalsChampionName(next.finals);
+    persistSeasonHistorySnapshot(next, { force: Boolean(champ) });
+
+    // ALWAYS show champion popup once finals completes (and store it)
     if (champ) {
       const payload = { seasonYear: next.seasonYear, team: champ };
       safeSetSmallJSON(CHAMP_KEY, payload);
@@ -954,7 +1249,7 @@ if (
     }
   }
 
-  function buildInitialPostseason({ seasonYear, seeds }) {
+  function buildInitialPostseason({ seasonYear, seeds, regularSeasonSnapshot = [] }) {
     const confs = Object.keys(seeds || {});
     const westKey =
       confs.find((k) => String(k).toLowerCase().includes("west")) || confs[0] || "West";
@@ -1030,6 +1325,7 @@ if (
     return {
       seasonYear,
       seedOrder: seeds,
+      regularSeasonSnapshot,
       layout: { left: westKey, right: eastKey },
       conf: {
         [westKey]: mkConf(westKey),
@@ -1048,6 +1344,7 @@ if (
     const loaded = loadPostseasonState();
     if (loaded?.seasonYear === seasonYear) {
       setPost(loaded);
+      persistSeasonHistorySnapshot(loaded);
       return;
     }
 
@@ -1056,10 +1353,11 @@ if (
     const hasSeeds = confs.some((k) => (seeds?.[k] || []).length >= 8);
     if (!hasSeeds) return;
 
-    // Build new postseason
-    const fresh = buildInitialPostseason({ seasonYear, seeds });
+    // Build new postseason and freeze regular-season standings before any cleanup can wipe game results.
+    const regularSeasonSnapshot = buildRegularSeasonSnapshot({ standings, seeds });
+    const fresh = buildInitialPostseason({ seasonYear, seeds, regularSeasonSnapshot });
     persistPost(fresh);
-  }, [seasonYear, seeds]);
+  }, [seasonYear, seeds, standings]);
 
   function winnerFromSlim(slim) {
     if (!slim?.winner?.side || slim.winner.side === "tie") return null;

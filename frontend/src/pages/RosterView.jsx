@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import { releasePlayerToFreeAgency } from "../api/simEnginePy.js";
+import PlayerCardModal from "../components/PlayerCardModal.jsx";
 
 export default function RosterView() {
   const { leagueData, selectedTeam, setSelectedTeam, setLeagueData } = useGame();
@@ -13,6 +14,10 @@ export default function RosterView() {
   );
   const [releaseModalOpen, setReleaseModalOpen] = useState(false);
   const [releaseTargetPlayer, setReleaseTargetPlayer] = useState(null);
+  const [playerActionOpen, setPlayerActionOpen] = useState(false);
+  const [actionTargetPlayer, setActionTargetPlayer] = useState(null);
+  const [playerCardOpen, setPlayerCardOpen] = useState(false);
+  const [cardTargetPlayer, setCardTargetPlayer] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -157,10 +162,34 @@ export default function RosterView() {
     const map = {};
     for (const t of teamsSorted) {
       const logo = t.logo || t.teamLogo || t.newTeamLogo || t.image || t.logoUrl || "";
-      for (const p of t.players || []) map[p.name] = { teamName: t.name, logo };
+      for (const p of t.players || []) {
+        const row = { teamName: t.name, logo, team: t };
+        if (p.id !== undefined && p.id !== null) map[`id:${p.id}`] = row;
+        if (p.name) map[`name:${p.name}`] = row;
+      }
     }
     return map;
   }, [teamsSorted]);
+
+  const getPlayerKey = (target) => {
+    if (!target) return "";
+    if (target.id !== undefined && target.id !== null && target.id !== "") return `id:${target.id}`;
+    return `name:${target.name || ""}`;
+  };
+
+  const getTeamForPlayer = (target) => {
+    if (!target) return null;
+
+    const direct = teamOfPlayer[getPlayerKey(target)] || teamOfPlayer[`name:${target.name || ""}`];
+    if (direct?.team) return direct.team;
+
+    return teamsSorted.find((team) =>
+      (team.players || []).some((row) => {
+        if (target.id && row.id) return String(row.id) === String(target.id);
+        return row.name === target.name;
+      })
+    ) || null;
+  };
 
   // view index: 0..N-1 teams, N = All Players
   const [viewIndex, setViewIndex] = useState(0);
@@ -239,12 +268,36 @@ export default function RosterView() {
     return rows;
   }, [viewPlayers, sortConfig]);
 
-  const handleNameDoubleClick = (player, e) => {
-    e.stopPropagation();
-    if (isAllView) return;
+  const openPlayerActions = (player, e) => {
+    e?.stopPropagation?.();
+    if (!player) return;
     setSelectedPlayer(player);
+    setActionTargetPlayer(player);
+    setPlayerActionOpen(true);
+  };
+
+  const closePlayerActions = () => {
+    setPlayerActionOpen(false);
+    setActionTargetPlayer(null);
+  };
+
+  const openPlayerCard = (player) => {
+    if (!player) return;
+    setCardTargetPlayer(player);
+    setPlayerCardOpen(true);
+    closePlayerActions();
+  };
+
+  const closePlayerCard = () => {
+    setPlayerCardOpen(false);
+    setCardTargetPlayer(null);
+  };
+
+  const openReleaseFromActions = (player) => {
+    if (!player || isAllView) return;
     setReleaseTargetPlayer(player);
     setReleaseModalOpen(true);
+    closePlayerActions();
   };
 
   const closeReleaseModal = () => {
@@ -457,7 +510,7 @@ export default function RosterView() {
 
               <tbody className="text-[17px] font-medium">
                 {sortedPlayers.map((p, idx) => {
-                  const tinfo = teamOfPlayer[p.name] || {};
+                  const tinfo = teamOfPlayer[getPlayerKey(p)] || teamOfPlayer[`name:${p.name || ""}`] || {};
                   return (
                     <tr
                       key={`${p.name}-${idx}`}
@@ -482,8 +535,8 @@ export default function RosterView() {
 
                       <td
                         className="py-2 px-3 whitespace-nowrap text-left pl-4"
-                        onDoubleClick={(e) => handleNameDoubleClick(p, e)}
-                        title={isAllView ? p.name : "Double click to release to free agency"}
+                        onDoubleClick={(e) => openPlayerActions(p, e)}
+                        title="Double click for player actions"
                       >
                         {p.name}
                       </td>
@@ -524,6 +577,115 @@ export default function RosterView() {
       >
         Back to Team Hub
       </button>
+
+      {playerActionOpen && actionTargetPlayer && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 px-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closePlayerActions();
+          }}
+        >
+          <div className="relative w-full max-w-lg overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 shadow-[0_28px_90px_rgba(0,0,0,0.65)]">
+            <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-orange-600 via-amber-400 to-orange-600" />
+            <div className="absolute -right-16 -top-16 h-44 w-44 rounded-full bg-orange-500/20 blur-3xl" />
+            <div className="absolute -left-20 bottom-0 h-48 w-48 rounded-full bg-amber-400/10 blur-3xl" />
+
+            <div className="relative p-5 sm:p-6">
+              <div className="flex items-center gap-4">
+                <div className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-neutral-900">
+                  {actionTargetPlayer?.headshot ? (
+                    <img
+                      src={actionTargetPlayer.headshot}
+                      alt={actionTargetPlayer.name}
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-xs font-bold text-neutral-500">
+                      No Image
+                    </div>
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-black uppercase tracking-[0.22em] text-orange-300">
+                    Player Actions
+                  </div>
+                  <h2 className="mt-1 truncate text-2xl font-black text-white">
+                    {actionTargetPlayer?.name || "Player"}
+                  </h2>
+                  <div className="mt-1 text-sm font-semibold text-neutral-400">
+                    {actionTargetPlayer?.pos || "-"}
+                    {actionTargetPlayer?.secondaryPos ? ` / ${actionTargetPlayer.secondaryPos}` : ""}
+                    {" • "}Age {actionTargetPlayer?.age ?? "-"}
+                    {" • "}OVR {actionTargetPlayer?.overall ?? "-"}
+                  </div>
+                </div>
+
+                <button
+                  onClick={closePlayerActions}
+                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm font-black text-neutral-300 transition hover:bg-white/10 hover:text-white"
+                  title="Close"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="mt-6 grid gap-3">
+                <button
+                  onClick={() => openPlayerCard(actionTargetPlayer)}
+                  className="group flex items-center justify-between rounded-2xl border border-orange-400/25 bg-orange-500/10 px-5 py-4 text-left transition hover:-translate-y-0.5 hover:border-orange-300/50 hover:bg-orange-500/20 hover:shadow-[0_18px_40px_rgba(234,88,12,0.18)]"
+                >
+                  <div>
+                    <div className="text-lg font-black text-white">View Player Card</div>
+                    <div className="mt-1 text-sm font-semibold text-neutral-400">
+                      Mood, history, accolades, contract, ratings, and transactions.
+                    </div>
+                  </div>
+                  <div className="ml-4 rounded-full bg-orange-500 px-3 py-1 text-sm font-black text-white transition group-hover:bg-orange-400">
+                    Open
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => openReleaseFromActions(actionTargetPlayer)}
+                  disabled={isAllView}
+                  className={`flex items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
+                    isAllView
+                      ? "cursor-not-allowed border-white/10 bg-white/[0.03] opacity-50"
+                      : "border-red-400/25 bg-red-500/10 hover:-translate-y-0.5 hover:border-red-300/50 hover:bg-red-500/20 hover:shadow-[0_18px_40px_rgba(239,68,68,0.16)]"
+                  }`}
+                >
+                  <div>
+                    <div className="text-lg font-black text-white">Release to Free Agency</div>
+                    <div className="mt-1 text-sm font-semibold text-neutral-400">
+                      {isAllView
+                        ? "Switch to a team roster first before releasing a player."
+                        : "Move him to free agency and keep guaranteed salary as dead money."}
+                    </div>
+                  </div>
+                  <div className="ml-4 rounded-full bg-red-600 px-3 py-1 text-sm font-black text-white">
+                    Release
+                  </div>
+                </button>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs font-semibold text-neutral-500">
+                Tip: single click selects a player. Double click the player name to open this menu.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <PlayerCardModal
+        open={playerCardOpen}
+        player={cardTargetPlayer}
+        team={getTeamForPlayer(cardTargetPlayer)}
+        teamName={getTeamForPlayer(cardTargetPlayer)?.name || (isAllView ? teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.teamName : selectedTeam?.name)}
+        teamLogo={getTeamForPlayer(cardTargetPlayer)?.logo || teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.logo || selectedTeam?.logo}
+        leagueData={workingLeagueData}
+        onClose={closePlayerCard}
+      />
 
       {releaseModalOpen && releaseTargetPlayer && !isAllView && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4">

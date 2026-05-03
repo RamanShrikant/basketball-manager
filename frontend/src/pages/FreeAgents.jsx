@@ -3,6 +3,7 @@ import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import * as simEngine from "../api/simEnginePy.js";
 import { rebuildGameplansForLeague } from "../utils/ensureGameplans";
+import PlayerCardModal from "../components/PlayerCardModal.jsx";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 
@@ -10,6 +11,7 @@ export default function FreeAgents() {
   const { leagueData, selectedTeam, setSelectedTeam, setLeagueData } = useGame();
   const [workingLeagueData, setWorkingLeagueData] = useState(leagueData || null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
+  const [playerCardPlayer, setPlayerCardPlayer] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
   const [showLetters, setShowLetters] = useState(
     localStorage.getItem("showLetters") === "true"
@@ -20,7 +22,6 @@ export default function FreeAgents() {
   const [offerSalaryText, setOfferSalaryText] = useState("");
   const [offerYears, setOfferYears] = useState(1);
   const [optionType, setOptionType] = useState("none");
-  const [optionYear, setOptionYear] = useState(1);
   const [offerEvaluation, setOfferEvaluation] = useState(null);
   const [offerEvalLoading, setOfferEvalLoading] = useState(false);
   const [signError, setSignError] = useState("");
@@ -376,13 +377,13 @@ const isOffseasonMode =
   // User team cap dashboard + affordability model
   // ------------------------------------------------------------
   const MIN_CONTRACT_AMOUNT = 1_200_000;
-  const DEFAULT_SALARY_CAP = 150_000_000;
-  const DEFAULT_LUXURY_TAX_LINE = 180_000_000;
-  const DEFAULT_FIRST_APRON = 190_000_000;
-  const DEFAULT_SECOND_APRON = 200_000_000;
-  const DEFAULT_ROOM_EXCEPTION = 8_000_000;
-  const DEFAULT_NON_TAXPAYER_MLE = 14_100_000;
-  const DEFAULT_TAXPAYER_MLE = 5_700_000;
+  const DEFAULT_SALARY_CAP = 154_647_000;
+  const DEFAULT_LUXURY_TAX_LINE = 187_895_000;
+  const DEFAULT_FIRST_APRON = 195_945_000;
+  const DEFAULT_SECOND_APRON = 207_824_000;
+  const DEFAULT_ROOM_EXCEPTION = 8_781_000;
+  const DEFAULT_NON_TAXPAYER_MLE = 14_104_000;
+  const DEFAULT_TAXPAYER_MLE = 5_685_000;
 
   const getOperatingSeasonYear = () => {
     return getCurrentSeasonYear() + (isOffseasonMode ? 1 : 0);
@@ -668,7 +669,10 @@ const isOffseasonMode =
 
     const activeOfferSalary = getActiveOfferSalaryForTeam(teamName);
     const hardCap = getHardCapForTeam(teamName);
-    const practicalPayroll = payroll + capHoldTotal + activeOfferSalary;
+
+    // Live offers are not completed contracts. Show them separately, but do not
+    // subtract them from practical cap room until the user accepts a signing.
+    const practicalPayroll = payroll + capHoldTotal;
     const hardCapRoom = hardCap === null ? null : hardCap - practicalPayroll;
     const exceptionUsage = getRecordedExceptionUsageForTeam(teamName);
 
@@ -762,7 +766,7 @@ const isOffseasonMode =
     const ask = getExpectedYearOneSalary(player);
     const projectedPayroll = Number(userCapDashboard.practicalPayroll || 0) + ask;
 
-    if (userCapDashboard.rosterCount >= userCapDashboard.rosterLimit) {
+    if (!isLiveFreeAgencyActive && userCapDashboard.rosterCount >= userCapDashboard.rosterLimit) {
       return {
         label: "NO",
         tone: "red",
@@ -986,6 +990,7 @@ const isOffseasonMode =
   useEffect(() => {
     if (!freeAgents.length) {
       setSelectedPlayer(null);
+      setPlayerCardPlayer(null);
       return;
     }
 
@@ -1109,19 +1114,21 @@ const isOffseasonMode =
     return out;
   };
 
-  const buildOfferContract = (year1Salary, years, currentOptionType, currentOptionYear) => {
+  const buildOfferContract = (year1Salary, years, currentOptionType) => {
     const startYear = getCurrentSeasonYear() + (isOffseasonMode ? 1 : 0);
     const salaryByYear = getOfferSalaryByYear(year1Salary, years);
+    const finalOptionIndex = Math.max(0, Number(years || 1) - 1);
 
     return {
       startYear,
       salaryByYear,
       option:
-        currentOptionType === "none"
+        currentOptionType === "none" || Number(years || 1) <= 1
           ? null
           : {
               type: currentOptionType,
-              yearIndex: currentOptionYear - 1,
+              yearIndex: finalOptionIndex,
+              yearIndices: [finalOptionIndex],
               picked: null,
             },
     };
@@ -1138,7 +1145,6 @@ const isOffseasonMode =
     setOfferSalaryText(formatMillionsInput(defaultYear1Salary));
     setOfferYears(defaultYears);
     setOptionType("none");
-    setOptionYear(defaultYears);
     setOfferEvaluation(null);
     setOfferEvalLoading(false);
     setSignError("");
@@ -1153,7 +1159,13 @@ const isOffseasonMode =
     setSignError("");
   };
 
-  const openOffersModal = async (player) => {
+  useEffect(() => {
+    if (offerYears <= 1 && optionType !== "none") {
+      setOptionType("none");
+    }
+  }, [offerYears, optionType]);
+
+  const openOffersModal = async (player, baseLeagueData = workingLeagueData, forcedOffersView = null) => {
     if (!player) return;
 
     setSelectedPlayer(player);
@@ -1162,10 +1174,16 @@ const isOffseasonMode =
     setOffersViewData(null);
     setOffersModalOpen(true);
 
+    if (forcedOffersView?.ok) {
+      setOffersViewData(forcedOffersView);
+      setOffersViewLoading(false);
+      return;
+    }
+
     try {
       if (typeof getFreeAgentOffers === "function") {
         const res = await getFreeAgentOffers(
-          workingLeagueData,
+          baseLeagueData,
           player.id || null,
           player.name || null
         );
@@ -1215,7 +1233,7 @@ const isOffseasonMode =
       return;
     }
 
-    const offer = buildOfferContract(year1Salary, offerYears, optionType, optionYear);
+    const offer = buildOfferContract(year1Salary, offerYears, optionType);
 
     let cancelled = false;
     setOfferEvalLoading(true);
@@ -1254,7 +1272,6 @@ const isOffseasonMode =
     offerSalaryText,
     offerYears,
     optionType,
-    optionYear,
     evaluateFreeAgencyOffer,
   ]);
 
@@ -1460,7 +1477,7 @@ const handleContinueToProgression = () => {
       return;
     }
 
-    const offer = buildOfferContract(year1Salary, offerYears, optionType, optionYear);
+    const offer = buildOfferContract(year1Salary, offerYears, optionType);
 
     try {
       if (isOffseasonMode) {
@@ -1486,9 +1503,13 @@ const handleContinueToProgression = () => {
           applyLeagueUpdate(res.leagueData);
           closeSignModal();
 
-          if (offersModalOpen || selectedPlayer?.name === signTargetPlayer?.name) {
-            await openOffersModal(signTargetPlayer);
-          }
+          // Show the updated live ranking immediately using the fresh backend
+          // response, so the user's new/replaced offer appears right away.
+          await openOffersModal(
+            signTargetPlayer,
+            res.leagueData,
+            res.offersView || null
+          );
 
           return;
         }
@@ -1930,6 +1951,14 @@ const handleContinueToProgression = () => {
                       View Offers
                     </button>
                   )}
+
+                  <button
+                    onClick={() => setPlayerCardPlayer(player)}
+                    disabled={!player?.name}
+                    className="px-5 py-2 bg-white/[0.06] hover:bg-orange-500/15 border border-white/10 hover:border-orange-400/40 rounded-lg font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Player Card
+                  </button>
                 </div>
               </div>
             </div>
@@ -2045,7 +2074,18 @@ const handleContinueToProgression = () => {
                       }}
                       title={isOffseasonMode ? "Double click to submit offer" : "Double click to offer contract"}
                     >
-                      {p.name}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPlayer(p);
+                          setPlayerCardPlayer(p);
+                        }}
+                        className="text-left font-bold underline-offset-4 hover:text-orange-200 hover:underline"
+                        title="Open player card"
+                      >
+                        {p.name}
+                      </button>
                     </td>
                     <td className="py-2 px-3">{p.pos}</td>
                     <td className="py-2 px-3">
@@ -2243,7 +2283,6 @@ const handleContinueToProgression = () => {
                     key={y}
                     onClick={() => {
                       setOfferYears(y);
-                      if (optionYear > y) setOptionYear(y);
                       setSignError("");
                     }}
                     className={`px-3.5 py-2 rounded-lg font-semibold transition ${
@@ -2261,38 +2300,22 @@ const handleContinueToProgression = () => {
             <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700 mb-4">
               <div className="text-sm font-semibold text-gray-300 mb-2.5">Option</div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <select
-                    value={optionType}
-                    onChange={(e) => {
-                      setOptionType(e.target.value);
-                      setSignError("");
-                    }}
-                    className="w-full px-4 py-2 rounded-lg bg-neutral-800 border border-neutral-600 text-white outline-none focus:border-orange-500"
-                  >
-                    <option value="none">No Option</option>
-                    <option value="team">Team Option</option>
-                    <option value="player">Player Option</option>
-                  </select>
-                </div>
+              <div className="space-y-2">
+                <select
+                  value={optionType}
+                  onChange={(e) => {
+                    setOptionType(e.target.value);
+                    setSignError("");
+                  }}
+                  className="w-full px-4 py-2 rounded-lg bg-neutral-800 border border-neutral-600 text-white outline-none focus:border-orange-500"
+                >
+                  <option value="none">No Option</option>
+                  <option value="team" disabled={offerYears <= 1}>Team Option</option>
+                  <option value="player" disabled={offerYears <= 1}>Player Option</option>
+                </select>
 
-                <div>
-                  <select
-                    value={optionYear}
-                    onChange={(e) => {
-                      setOptionYear(Number(e.target.value));
-                      setSignError("");
-                    }}
-                    disabled={optionType === "none"}
-                    className="w-full px-4 py-2 rounded-lg bg-neutral-800 border border-neutral-600 text-white outline-none focus:border-orange-500 disabled:opacity-50"
-                  >
-                    {Array.from({ length: offerYears }, (_, i) => i + 1).map((y) => (
-                      <option key={y} value={y}>
-                        Option Year {y}
-                      </option>
-                    ))}
-                  </select>
+                <div className="text-xs text-gray-500">
+                  Options automatically apply to the final year of the contract. Team options lower player interest. Player options improve player interest.
                 </div>
               </div>
             </div>
@@ -2305,7 +2328,7 @@ const handleContinueToProgression = () => {
                   const year =
                     (offerEvaluation?.contract?.startYear || getCurrentSeasonYear()) + idx;
                   const isOptionYear =
-                    optionType !== "none" && optionYear === idx + 1;
+                    optionType !== "none" && offerYears > 1 && idx === offerYears - 1;
 
                   return (
                     <div key={year} className="flex justify-between gap-4">
@@ -2570,6 +2593,15 @@ const handleContinueToProgression = () => {
           </div>
         </div>
       )}
+
+      <PlayerCardModal
+        open={!!playerCardPlayer}
+        player={playerCardPlayer}
+        teamName={playerCardPlayer?.teamName || playerCardPlayer?.rights?.heldByTeam || "Free Agent"}
+        teamLogo={playerCardPlayer?.teamLogo || ""}
+        leagueData={workingLeagueData}
+        onClose={() => setPlayerCardPlayer(null)}
+      />
     </div>
   );
 }
