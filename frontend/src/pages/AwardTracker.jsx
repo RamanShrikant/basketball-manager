@@ -68,6 +68,29 @@ function loadAllResultsV3() {
   return out;
 }
 
+function loadMaybeCompressedJSON(key, fallback = {}) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+
+    if (raw.startsWith("lz:")) {
+      const compressed = raw.slice(3);
+      const decompressed = LZString.decompressFromUTF16(compressed);
+      return decompressed ? JSON.parse(decompressed) : fallback;
+    }
+
+    const decompressed = LZString.decompressFromUTF16(raw);
+    if (decompressed) {
+      return JSON.parse(decompressed);
+    }
+
+    return JSON.parse(raw);
+  } catch (err) {
+    console.warn(`[AwardTracker] Failed to load ${key}:`, err);
+    return fallback;
+  }
+}
+
 function getAllTeamsFromLeague(leagueData) {
   if (!leagueData) return [];
   if (Array.isArray(leagueData.teams)) return leagueData.teams;
@@ -343,6 +366,28 @@ export default function AwardTracker() {
 
   const [currentTab, setCurrentTab] = useState("mvp");
   const [selectedPlayerKey, setSelectedPlayerKey] = useState(null);
+  const [statsMap, setStatsMap] = useState(() =>
+    loadMaybeCompressedJSON(PLAYER_STATS_KEY, {})
+  );
+
+  useEffect(() => {
+    const refreshStats = () => {
+      setStatsMap(loadMaybeCompressedJSON(PLAYER_STATS_KEY, {}));
+    };
+
+    refreshStats();
+
+    const intervalId = window.setInterval(refreshStats, 2000);
+
+    window.addEventListener("focus", refreshStats);
+    document.addEventListener("visibilitychange", refreshStats);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshStats);
+      document.removeEventListener("visibilitychange", refreshStats);
+    };
+  }, []);
 
   const seasonLabel = useMemo(() => {
     try {
@@ -355,15 +400,6 @@ export default function AwardTracker() {
     const today = new Date();
     const y = today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
     return `${y}-${y + 1}`;
-  }, []);
-
-  const statsMap = useMemo(() => {
-    try {
-      const raw = localStorage.getItem(PLAYER_STATS_KEY);
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
   }, []);
 
   const scheduleByDate = useMemo(() => {
@@ -769,7 +805,7 @@ export default function AwardTracker() {
 
           {activeRows.length === 0 && (
             <div className="bg-neutral-800 text-neutral-400 text-center py-8">
-              No qualified players yet.
+              No player stats loaded yet.
             </div>
           )}
         </div>

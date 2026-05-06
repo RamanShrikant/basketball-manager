@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
+import PlayerCardModal from "../components/PlayerCardModal.jsx";
 
 /* -------------------------------------------------------------------------- */
 /*                              STORAGE HELPERS                               */
@@ -130,6 +131,7 @@ export default function PlayerStats() {
   const [mode, setMode] = useState("players"); // players | league | teams
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
   const [selectedPlayer, setSelectedPlayer] = useState(null);
+  const [playerCardPlayer, setPlayerCardPlayer] = useState(null);
   const [selectedTeamRow, setSelectedTeamRow] = useState(null);
 
   useEffect(() => {
@@ -615,6 +617,13 @@ export default function PlayerStats() {
                     {cardPlayer.secondaryPos ? ` / ${cardPlayer.secondaryPos}` : ""} • Age{" "}
                     {cardPlayer.age ?? "-"}
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => setPlayerCardPlayer(cardPlayer)}
+                    className="mt-4 w-fit px-5 py-2 bg-white/[0.06] hover:bg-orange-500/15 border border-white/10 hover:border-orange-400/40 rounded-lg text-sm font-semibold transition"
+                  >
+                    Open Player Card
+                  </button>
                 </div>
               </div>
 
@@ -761,7 +770,20 @@ export default function PlayerStats() {
                       </td>
                     )}
 
-                    <td className="py-2 px-3 text-left pl-4">{player.name}</td>
+                    <td className="py-2 px-3 text-left pl-4">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPlayer(player);
+                          setPlayerCardPlayer(player);
+                        }}
+                        className="text-left font-bold underline-offset-4 hover:text-orange-200 hover:underline"
+                        title="Open player card"
+                      >
+                        {player.name}
+                      </button>
+                    </td>
                     <td>{player.pos}</td>
                     <td>{player.stats.GP}</td>
                     <td>{player.stats.MIN}</td>
@@ -854,6 +876,17 @@ export default function PlayerStats() {
           )}
         </div>
       </div>
+
+
+      <PlayerCardModal
+        open={!!playerCardPlayer}
+        player={playerCardPlayer}
+        teamName={playerCardPlayer?.teamName || selectedTeam?.name}
+        teamLogo={playerCardPlayer?.teamLogo || teamLogoOf(selectedTeam)}
+        leagueData={leagueData}
+        currentStats={playerCardPlayer?.stats || null}
+        onClose={() => setPlayerCardPlayer(null)}
+      />
 
       <button
         onClick={() => navigate("/team-hub")}

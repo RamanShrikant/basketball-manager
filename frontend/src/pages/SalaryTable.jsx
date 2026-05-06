@@ -10,23 +10,30 @@ export default function SalaryTable() {
   const [leagueData, setLeagueData] = useState(null);
   const [selectedTeamKey, setSelectedTeamKey] = useState("");
 
-  // ---- Theme constants (match your app) ----
-const rawSeasonYear = Number(
-  leagueData?.seasonYear ??
-  leagueData?.currentSeasonYear ??
-  leagueData?.seasonStartYear ??
-  2025
-);
+  const rawSeasonYear = Number(
+    leagueData?.seasonYear ??
+    leagueData?.currentSeasonYear ??
+    leagueData?.seasonStartYear ??
+    2025
+  );
 
-const currentSeasonYear = Number.isFinite(rawSeasonYear)
-  ? rawSeasonYear + 1
-  : 2026;
+  const currentSeasonYear = Number.isFinite(rawSeasonYear)
+    ? rawSeasonYear + 1
+    : 2026;
 
-  // These are just UI reference lines (you can later make them dynamic per season/CBA rules)
-  const SALARY_CAP = 141_000_000;
-  const TAX_LINE = 171_000_000;
-  const SECOND_APRON = 176_000_000;
-  const HARD_CAP = 185_000_000; // visual only
+  const getLeagueAmount = (keys, fallback) => {
+    for (const key of keys) {
+      const value = Number(leagueData?.[key] || 0);
+      if (value > 0) return value;
+    }
+    return fallback;
+  };
+
+  const SALARY_CAP = getLeagueAmount(["salaryCap", "capLimit"], 154_647_000);
+  const TAX_LINE = getLeagueAmount(["luxuryTaxLine", "taxLine"], 187_895_000);
+  const FIRST_APRON = getLeagueAmount(["firstApron", "apron1"], 195_945_000);
+  const SECOND_APRON = getLeagueAmount(["secondApron", "apron2"], 207_824_000);
+  const HARD_CAP = getLeagueAmount(["hardCap", "hardCapLimit"], SECOND_APRON);
 
   const fmtM = (n) => {
     const v = Number(n) || 0;
@@ -49,11 +56,9 @@ const currentSeasonYear = Number.isFinite(rawSeasonYear)
   };
 
   const readLeagueFromLocalStorage = () => {
-    // 1) Prefer "leagueData"
     const direct = safeJSON(localStorage.getItem("leagueData"));
     if (looksLikeLeague(direct)) return direct;
 
-    // 2) Otherwise scan all keys for best match
     let best = null;
     let bestScore = -1;
 
@@ -80,7 +85,6 @@ const currentSeasonYear = Number.isFinite(rawSeasonYear)
     return safeJSON(localStorage.getItem("selectedTeam"));
   };
 
-  // Load league (prefer GameContext, fallback localStorage)
   useEffect(() => {
     if (looksLikeLeague(ctxLeague)) {
       setLeagueData(ctxLeague);
@@ -109,27 +113,26 @@ const currentSeasonYear = Number.isFinite(rawSeasonYear)
     return out;
   }, [leagueData]);
 
-useEffect(() => {
-  if (allTeamsFlat.length === 0) return;
+  useEffect(() => {
+    if (allTeamsFlat.length === 0) return;
+    if (selectedTeamKey) return;
 
-  // Do not override a manual dropdown selection
-  if (selectedTeamKey) return;
+    const preferredName =
+      ctxSelectedTeam?.name ||
+      readSelectedTeamFromLocalStorage()?.name ||
+      readSelectedTeamFromLocalStorage() ||
+      "";
 
-  const preferredName =
-    ctxSelectedTeam?.name ||
-    readSelectedTeamFromLocalStorage()?.name ||
-    "";
-
-  if (preferredName) {
-    const found = allTeamsFlat.find((t) => t.name === preferredName);
-    if (found) {
-      setSelectedTeamKey(found.key);
-      return;
+    if (preferredName) {
+      const found = allTeamsFlat.find((t) => t.name === preferredName);
+      if (found) {
+        setSelectedTeamKey(found.key);
+        return;
+      }
     }
-  }
 
-  setSelectedTeamKey(allTeamsFlat[0].key);
-}, [allTeamsFlat, ctxSelectedTeam, selectedTeamKey]);
+    setSelectedTeamKey(allTeamsFlat[0].key);
+  }, [allTeamsFlat, ctxSelectedTeam, selectedTeamKey]);
 
   const selectedTeam = useMemo(() => {
     if (!leagueData?.conferences) return null;
@@ -139,49 +142,47 @@ useEffect(() => {
     return leagueData.conferences?.[conf]?.[idx] || null;
   }, [leagueData, selectedTeamKey]);
 
-const normalizeContract = (p) => {
-  const contract = p?.contract || null;
+  const normalizeContract = (p) => {
+    const contract = p?.contract || null;
 
-  let startYear = Number(contract?.startYear ?? currentSeasonYear);
-  let salaryByYear = Array.isArray(contract?.salaryByYear)
-    ? contract.salaryByYear.map((x) => Number(x) || 0)
-    : [];
-  const option = contract?.option ?? null;
+    let startYear = Number(contract?.startYear ?? currentSeasonYear);
+    const salaryByYear = Array.isArray(contract?.salaryByYear)
+      ? contract.salaryByYear.map((x) => Number(x) || 0)
+      : [];
+    const option = contract?.option ?? null;
 
-  const lastYear = startYear + Math.max(0, salaryByYear.length - 1);
+    const lastYear = startYear + Math.max(0, salaryByYear.length - 1);
 
-  const hasCurrentSeasonSlot =
-    salaryByYear.length > 0 &&
-    currentSeasonYear >= startYear &&
-    currentSeasonYear <= lastYear;
+    const hasCurrentSeasonSlot =
+      salaryByYear.length > 0 &&
+      currentSeasonYear >= startYear &&
+      currentSeasonYear <= lastYear;
 
-  // Bridge fix:
-  // if a player signed a 1-year deal in the previous offseason,
-  // but the contract was saved with startYear = previous year,
-  // show it as belonging to the current displayed season.
-  const looksLikePreviousOffseasonOneYearDeal =
-    salaryByYear.length === 1 &&
-    startYear === currentSeasonYear - 1 &&
-    !hasCurrentSeasonSlot;
+    const looksLikePreviousOffseasonOneYearDeal =
+      salaryByYear.length === 1 &&
+      startYear === currentSeasonYear - 1 &&
+      !hasCurrentSeasonSlot;
 
-  if (looksLikePreviousOffseasonOneYearDeal) {
-    startYear = currentSeasonYear;
-  }
+    if (looksLikePreviousOffseasonOneYearDeal) {
+      startYear = currentSeasonYear;
+    }
 
-  return { startYear, salaryByYear, option };
-};
+    return { startYear, salaryByYear, option };
+  };
 
   const players = useMemo(() => {
     const pls = selectedTeam?.players || [];
     return pls.map((p) => {
       const c = normalizeContract(p);
       const years = Math.max(1, c.salaryByYear.length || 1);
-      const endYear = c.salaryByYear.length ? c.startYear + c.salaryByYear.length - 1 : c.startYear;
+      const endYear = c.salaryByYear.length
+        ? c.startYear + c.salaryByYear.length - 1
+        : c.startYear;
       const totalRemaining = c.salaryByYear.reduce((s, v, idx) => {
-  const seasonYear = c.startYear + idx;
-  if (seasonYear < currentSeasonYear) return s;
-  return s + (Number(v) || 0);
-}, 0);
+        const seasonYear = c.startYear + idx;
+        if (seasonYear < currentSeasonYear) return s;
+        return s + (Number(v) || 0);
+      }, 0);
 
       let optionLabel = "None";
       if (c.option?.type) {
@@ -200,15 +201,14 @@ const normalizeContract = (p) => {
         }
       }
 
-      // Optional display fields (if your data has them later)
       const headshot = p?.headshot || "";
-      const expType = "UFA"; // placeholder to match the mock style
+      const expType = "UFA";
 
       return {
         id: p?.id || `${p?.name || "player"}-${Math.random().toString(36).slice(2, 8)}`,
         name: p?.name || "Unknown",
         pos: p?.pos || "",
-        overall: p?.overall ?? "—",
+        overall: p?.overall ?? "-",
         headshot,
         contract: c,
         years,
@@ -220,13 +220,11 @@ const normalizeContract = (p) => {
     });
   }, [selectedTeam, currentSeasonYear]);
 
-const DISPLAY_YEARS = 5;
+  const DISPLAY_YEARS = 5;
 
-const yearColumns = useMemo(() => {
-  return Array.from({ length: DISPLAY_YEARS }, (_, i) => currentSeasonYear + i);
-}, [currentSeasonYear]);
-
-
+  const yearColumns = useMemo(() => {
+    return Array.from({ length: DISPLAY_YEARS }, (_, i) => currentSeasonYear + i);
+  }, [currentSeasonYear]);
 
   const teamTotalsByYear = useMemo(() => {
     const totals = yearColumns.map(() => 0);
@@ -247,16 +245,16 @@ const yearColumns = useMemo(() => {
     return teamTotalsByYear.reduce((s, v) => s + (Number(v) || 0), 0);
   }, [teamTotalsByYear]);
 
-  // Current-year payroll (first column)
   const payrollThisYear = teamTotalsByYear?.[0] ?? 0;
 
   const capStatus = useMemo(() => {
     if (payrollThisYear >= HARD_CAP) return { label: "Hard Cap", tone: "danger" };
     if (payrollThisYear >= SECOND_APRON) return { label: "2nd Apron", tone: "danger" };
+    if (payrollThisYear >= FIRST_APRON) return { label: "1st Apron", tone: "warn" };
     if (payrollThisYear >= TAX_LINE) return { label: "Luxury Tax", tone: "warn" };
     if (payrollThisYear >= SALARY_CAP) return { label: "Over Cap", tone: "neutral" };
     return { label: "Below Cap", tone: "good" };
-  }, [payrollThisYear]);
+  }, [payrollThisYear, HARD_CAP, SECOND_APRON, FIRST_APRON, TAX_LINE, SALARY_CAP]);
 
   const toneClass = (tone) => {
     if (tone === "danger") return "bg-red-500/15 text-red-200 border-red-400/25";
@@ -274,11 +272,10 @@ const yearColumns = useMemo(() => {
         <div className="max-w-xl w-full bg-neutral-800/80 border border-white/10 rounded-2xl p-6 shadow-lg">
           <div className="text-2xl font-extrabold text-orange-500">Salary Table</div>
           <div className="text-white/70 mt-2">
-            No league found yet. Import a league in League Editor (or load one via Play) first.
+            No league found yet. Import a league in League Editor or load one through Play first.
           </div>
           <div className="text-white/50 text-sm mt-4">
-            Tip: if you just loaded a fresh file, make sure it was saved to localStorage (key: leagueData) or exists in
-            GameContext.
+            Tip: make sure the league is saved to localStorage under leagueData or exists in GameContext.
           </div>
         </div>
       </div>
@@ -288,7 +285,6 @@ const yearColumns = useMemo(() => {
   return (
     <div className="min-h-screen bg-neutral-900 text-white p-6">
       <div className="max-w-6xl mx-auto space-y-5">
-        {/* Header row */}
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-4xl font-extrabold text-orange-500 leading-tight">Salary Table</h1>
@@ -322,15 +318,12 @@ const yearColumns = useMemo(() => {
 
         {emptyTeams && (
           <div className="bg-neutral-800/70 border border-orange-500/20 rounded-2xl p-4 text-white/75">
-            Found a league object, but it has 0 teams in East/West. That usually means this page is reading a different
-            localStorage league than the rest of the app (or the league hasn’t been written yet).
+            Found a league object, but it has 0 teams in East/West. That usually means this page is reading a different localStorage league than the rest of the app.
           </div>
         )}
 
-        {/* Main card */}
         {selectedTeam && (
           <div className="bg-neutral-800/80 border border-white/10 rounded-2xl shadow-2xl overflow-hidden">
-            {/* Team header + cap chips */}
             <div className="p-5 border-b border-white/10 flex flex-col gap-3">
               <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div className="flex items-center gap-3">
@@ -354,16 +347,15 @@ const yearColumns = useMemo(() => {
                 </div>
               </div>
 
-              {/* Cap chips row (matches your mock image vibe) */}
               <div className="flex flex-wrap gap-2">
                 <Chip label={`Salary Cap: ${fmtM(SALARY_CAP)}`} />
                 <Chip label={`Luxury Tax: ${fmtM(TAX_LINE)}`} />
+                <Chip label={`1st Apron: ${fmtM(FIRST_APRON)}`} />
                 <Chip label={`2nd Apron: ${fmtM(SECOND_APRON)}`} />
                 <Chip label={`Hard Cap: ${fmtM(HARD_CAP)}`} />
               </div>
             </div>
 
-            {/* Table */}
             <div className="overflow-x-auto">
               <table className="w-full min-w-[980px]">
                 <thead className="bg-white/5 border-b border-white/10">
@@ -371,78 +363,72 @@ const yearColumns = useMemo(() => {
                     <th className="text-left px-4 py-3">Player</th>
                     <th className="text-center px-3 py-3">Pos</th>
                     <th className="text-center px-3 py-3">OVR</th>
-
                     {yearColumns.map((y) => (
                       <th key={y} className="text-right px-3 py-3 whitespace-nowrap">
                         {y}
                       </th>
                     ))}
-
                     <th className="text-right px-3 py-3 whitespace-nowrap">Total Remaining</th>
                     <th className="text-center px-3 py-3 whitespace-nowrap">Exp.</th>
                   </tr>
                 </thead>
 
                 <tbody>
-                  {players.map((p) => {
-                    return (
-                      <tr key={p.id} className="border-b border-white/5 hover:bg-white/5 transition">
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-3">
-                            {p.headshot ? (
-                              <img
-                                src={p.headshot}
-                                alt={p.name}
-                                className="w-14 h-14 rounded-full object-cover border border-white/10 bg-white/5"
-                                onError={(e) => {
-                                  e.currentTarget.style.display = "none";
-                                }}
-                              />
-                            ) : (
-                              <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10" />
-                            )}
+                  {players.map((p) => (
+                    <tr key={p.id} className="border-b border-white/5 hover:bg-white/5 transition">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          {p.headshot ? (
+                            <img
+                              src={p.headshot}
+                              alt={p.name}
+                              className="w-14 h-14 rounded-full object-cover border border-white/10 bg-white/5"
+                              onError={(e) => {
+                                e.currentTarget.style.display = "none";
+                              }}
+                            />
+                          ) : (
+                            <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10" />
+                          )}
 
-                            <div className="leading-tight">
-                              <div className="font-semibold">{p.name}</div>
-                              <div className="text-xs text-white/50">{p.optionLabel}</div>
-                            </div>
+                          <div className="leading-tight">
+                            <div className="font-semibold">{p.name}</div>
+                            <div className="text-xs text-white/50">{p.optionLabel}</div>
                           </div>
-                        </td>
+                        </div>
+                      </td>
 
-                        <td className="text-center px-3 py-3 text-white/85">{p.pos}</td>
-                        <td className="text-center px-3 py-3 font-semibold text-orange-300">{p.overall}</td>
+                      <td className="text-center px-3 py-3 text-white/85">{p.pos}</td>
+                      <td className="text-center px-3 py-3 font-semibold text-orange-300">{p.overall}</td>
 
-                        {yearColumns.map((seasonYear) => {
-                          const idx = seasonYear - p.contract.startYear;
-                          const sal = idx >= 0 ? Number(p.contract.salaryByYear[idx] || 0) : 0;
+                      {yearColumns.map((seasonYear) => {
+                        const idx = seasonYear - p.contract.startYear;
+                        const sal = idx >= 0 ? Number(p.contract.salaryByYear[idx] || 0) : 0;
+                        const isBig = sal >= 25_000_000;
+                        const salClass = isBig ? "text-emerald-300" : "text-white/85";
 
-                          const isBig = sal >= 25_000_000;
-                          const salClass = isBig ? "text-emerald-300" : "text-white/85";
+                        return (
+                          <td
+                            key={`${p.id}-${seasonYear}`}
+                            className={`text-right px-3 py-3 whitespace-nowrap ${
+                              sal > 0 ? salClass : "text-white/35"
+                            }`}
+                          >
+                            {sal > 0 ? fmtM(sal) : "-"}
+                          </td>
+                        );
+                      })}
 
-                          return (
-                            <td
-                              key={`${p.id}-${seasonYear}`}
-                              className={`text-right px-3 py-3 whitespace-nowrap ${
-                                sal > 0 ? salClass : "text-white/35"
-                              }`}
-                            >
-                              {sal > 0 ? fmtM(sal) : "—"}
-                            </td>
-                          );
-                        })}
+                      <td className="text-right px-3 py-3 whitespace-nowrap font-extrabold text-emerald-300">
+                        {fmtM(p.totalRemaining)}
+                      </td>
 
-                        <td className="text-right px-3 py-3 whitespace-nowrap font-extrabold text-emerald-300">
-                          {fmtM(p.totalRemaining)}
-                        </td>
+                      <td className="text-center px-3 py-3 whitespace-nowrap text-white/65">
+                        {p.endYear} {p.expType}
+                      </td>
+                    </tr>
+                  ))}
 
-                        <td className="text-center px-3 py-3 whitespace-nowrap text-white/65">
-                          {p.endYear} {p.expType}
-                        </td>
-                      </tr>
-                    );
-                  })}
-
-                  {/* Totals row */}
                   <tr className="bg-white/5">
                     <td className="px-4 py-3 font-extrabold text-white/90" colSpan={3}>
                       Team Totals:
@@ -469,7 +455,7 @@ const yearColumns = useMemo(() => {
                       {fmtM(teamTotalAllYears)}
                     </td>
 
-                    <td className="text-center px-3 py-3 whitespace-nowrap text-white/40">—</td>
+                    <td className="text-center px-3 py-3 whitespace-nowrap text-white/40">-</td>
                   </tr>
                 </tbody>
               </table>

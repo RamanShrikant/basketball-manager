@@ -130,6 +130,8 @@ export default function ViewingOffers() {
   const advanceFreeAgencyDay = simEngine.advanceFreeAgencyDay;
   const processPendingUserFreeAgencyDecisions =
     simEngine.processPendingUserFreeAgencyDecisions;
+  const processPendingRfaMatchDecision =
+    simEngine.processPendingRfaMatchDecision;
 
   const freeAgencyState = leagueData?.freeAgencyState || {};
   const latestResults = freeAgencyState?.latestResults || null;
@@ -146,6 +148,10 @@ export default function ViewingOffers() {
 
   const pendingUserTeamSnapshot =
     freeAgencyState?.pendingUserTeamSnapshot || null;
+
+  const pendingRfaMatchDecisions = Array.isArray(freeAgencyState?.pendingRfaMatchDecisions)
+    ? freeAgencyState.pendingRfaMatchDecisions
+    : [];
 
   const teamLogoMap = useMemo(() => {
     const map = new Map();
@@ -506,6 +512,51 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
     setActionError("");
   };
 
+  const handleRfaMatchDecision = async (row, decision) => {
+    if (!selectedTeam?.name) {
+      setActionError("No team selected.");
+      return;
+    }
+
+    if (!row?.playerKey) {
+      setActionError("Missing restricted free agent decision key.");
+      return;
+    }
+
+    try {
+      setProcessingBack(true);
+      setActionError("");
+
+      const res = await processPendingRfaMatchDecision(
+        leagueData,
+        selectedTeam.name,
+        row.playerKey,
+        decision
+      );
+
+      if (!res?.ok) {
+        if (res?.leagueData) {
+          applyLeagueUpdate(res.leagueData);
+        }
+        setActionError(res?.reason || "Failed to process RFA match decision.");
+        return;
+      }
+
+      const latest = {
+        dayResolved: dayResolved ?? row?.day ?? null,
+        signings: res?.processedSignings || (res?.processedSigning ? [res.processedSigning] : []),
+        generatedOffers: res?.generatedOffers || [],
+        stateSummary: res?.stateSummary || null,
+      };
+
+      applyLeagueUpdateWithLatestResults(res.leagueData, latest);
+    } catch (err) {
+      setActionError(err?.message || "Failed to process RFA match decision.");
+    } finally {
+      setProcessingBack(false);
+    }
+  };
+
   const processSelections = async () => {
     if (!selectedTeam?.name) {
       return { ok: false, reason: "No team selected." };
@@ -827,6 +878,99 @@ return (
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+
+            {pendingRfaMatchDecisions.length > 0 && (
+              <div className="bg-neutral-800 border border-orange-500/40 rounded-2xl p-6 mb-6 shadow-lg">
+                <div className="flex items-center justify-between gap-4 mb-4">
+                  <div>
+                    <div className="text-lg font-semibold text-orange-400">
+                      Restricted Free Agent Match Decisions
+                    </div>
+                    <div className="text-sm text-gray-400 mt-1">
+                      Another team signed one of your restricted free agents to an offer sheet. Match it or let him leave.
+                    </div>
+                  </div>
+                  <div className="text-sm text-gray-400">
+                    {pendingRfaMatchDecisions.length} pending
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {pendingRfaMatchDecisions.map((row) => {
+                    const contractSummary = getContractSummary(
+                      row?.contract || row?.offerSheet?.contract,
+                      row?.totalValue,
+                      row?.years
+                    );
+
+                    return (
+                      <div
+                        key={row.playerKey}
+                        className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-4"
+                      >
+                        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                          <div className="flex items-center gap-4 min-w-0">
+                            <div className="w-16 h-16 rounded-full overflow-hidden bg-neutral-800 border border-neutral-700 shrink-0 flex items-center justify-center">
+                              {row?.player?.headshot ? (
+                                <img
+                                  src={row.player.headshot}
+                                  alt={row?.player?.name || row?.playerName || "Player"}
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <div className="text-xs text-gray-400">No Image</div>
+                              )}
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <div className="text-white font-semibold text-2xl leading-tight">
+                                {row?.player?.name || row?.playerName || "Unknown Player"}
+                              </div>
+
+                              <div className="text-sm text-gray-400 mt-1">
+                                Rights Team: <span className="text-orange-200 font-semibold">{row?.rightsTeamName || selectedTeam?.name}</span>
+                                {row?.offeringTeamName ? ` • Offer Sheet From: ${row.offeringTeamName}` : ""}
+                              </div>
+
+                              <div className="text-base text-gray-300 mt-2">
+                                {formatContractLine(row?.contract || row?.offerSheet?.contract, row?.totalValue, row?.years)}
+                              </div>
+
+                              <div className="text-sm text-gray-500 mt-1">
+                                Current year cap hit: {formatDollars(contractSummary.currentYearSalary || row?.currentYearSalary || 0)}
+                              </div>
+
+                              <div className="flex flex-wrap gap-2 mt-3">
+                                <InfoChip tone="orange">RFA Offer Sheet</InfoChip>
+                                {row?.deadlineDay && <InfoChip>Deadline Day {row.deadlineDay}</InfoChip>}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 lg:justify-end shrink-0">
+                            <button
+                              onClick={() => handleRfaMatchDecision(row, "match")}
+                              disabled={processingBack}
+                              className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold transition"
+                            >
+                              Match Offer
+                            </button>
+                            <button
+                              onClick={() => handleRfaMatchDecision(row, "decline")}
+                              disabled={processingBack}
+                              className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold transition"
+                            >
+                              Decline Match
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
