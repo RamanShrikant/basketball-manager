@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import * as simEngine from "../api/simEnginePy.js";
 import { rebuildGameplansForLeague } from "../utils/ensureGameplans";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
+import styles from "./FreeAgents.module.css";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 
@@ -1327,7 +1328,26 @@ const handleContinueToProgression = () => {
 
   navigate("/player-progression");
 };
-
+  const buildCleanFreeAgencyStateForInit = (seasonYear, userTeamName = null, maxDays = 7) => {
+  return {
+    seasonYear,
+    isActive: false,
+    currentDay: 0,
+    maxDays,
+    offersByPlayer: {},
+    dailyLog: [],
+    signedPlayersLog: [],
+    offerHistory: [],
+    userOfferOutcomeLog: [],
+    pendingUserDecisions: [],
+    pendingRfaMatchDecisions: [],
+    exceptionUsageByTeam: {},
+    teamNeedProfiles: {},
+    pendingUserTeamName: userTeamName,
+    pendingUserTeamSnapshot: null,
+    latestResults: null,
+  };
+};
   const handleInitializeFreeAgency = async () => {
     if (!workingLeagueData) return;
 
@@ -1372,11 +1392,24 @@ const handleContinueToProgression = () => {
         return;
       }
 
-      const res = await initializeFreeAgencyPeriod(
-        workingLeagueData,
-        selectedTeam?.name || null,
-        7
-      );
+const cleanFreeAgencyState = buildCleanFreeAgencyStateForInit(
+  currentSeasonYear,
+  selectedTeam?.name || null,
+  7
+);
+
+const leagueForInit = {
+  ...workingLeagueData,
+  freeAgencyState: cleanFreeAgencyState,
+};
+
+applyLeagueUpdate(leagueForInit);
+
+const res = await initializeFreeAgencyPeriod(
+  leagueForInit,
+  selectedTeam?.name || null,
+  7
+);
 
       if (!res?.ok || !res?.leagueData) {
         setDaySummary({
@@ -1394,11 +1427,13 @@ const handleContinueToProgression = () => {
 
       applyLeagueUpdateWithLatestResults(res.leagueData, latestResults);
 
-      updateOffseasonState({
-        active: true,
-        optionsComplete: true,
-        freeAgencyComplete: false,
-      });
+updateOffseasonState({
+  active: true,
+  seasonYear: currentSeasonYear,
+  optionsComplete: true,
+  rightsManagementComplete: true,
+  freeAgencyComplete: false,
+});
 
       setDaySummary(latestResults);
     } catch (err) {
@@ -1570,7 +1605,7 @@ const handleContinueToProgression = () => {
   };
 
   const optionsLockedView = (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-neutral-900 text-white px-4">
+    <div className={`${styles.freeAgentsPage} flex flex-col items-center justify-center min-h-screen text-white px-4`}>
       <p className="text-lg mb-4 text-center">
         Complete Player / Team Options and Rights Management before opening free agency.
       </p>
@@ -1601,7 +1636,7 @@ const handleContinueToProgression = () => {
   );
 
   const noFreeAgentsView = (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-neutral-900 text-white px-4">
+    <div className={`${styles.freeAgentsPage} flex flex-col items-center justify-center min-h-screen text-white px-4`}>
       <p className="text-lg mb-4">
         {effectiveFreeAgencyFinished
           ? "Free agency is complete."
@@ -1661,7 +1696,7 @@ const handleContinueToProgression = () => {
   const strokeOffset = circleCircumference * (1 - fillPercent);
 
   return (
-    <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center py-10">
+    <div className={`${styles.freeAgentsPage} min-h-screen text-white flex flex-col items-center py-10`}>
       <style>{`
         .fa-modal-scroll {
           scrollbar-width: thin;

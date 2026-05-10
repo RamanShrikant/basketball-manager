@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import styles from "./PlayerRetirements.module.css";
 
 const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
@@ -266,7 +267,7 @@ setError("");
   };
 
   return (
-    <div className="min-h-screen bg-neutral-900 text-white py-10 px-4">
+    <div className={`${styles.retirementsPage} min-h-screen text-white py-10 px-4`}>
       <div className="max-w-6xl mx-auto">
         <div className="text-center mb-7">
           <p className="text-sm uppercase tracking-[0.28em] text-white/40 mb-3">

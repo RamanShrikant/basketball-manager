@@ -210,6 +210,17 @@ function buildTeamLogoIndex(leagueData) {
   return idx;
 }
 
+
+function getAwardsDisplaySeason(awards) {
+  const raw = Number(awards?.season);
+
+  if (Number.isFinite(raw) && raw > 1900) {
+    return raw + 1;
+  }
+
+  return awards?.season || "Season";
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                 COMPONENT                                  */
 /* -------------------------------------------------------------------------- */
@@ -243,7 +254,7 @@ const [awardIndex, setAwardIndex] = useState(0);
 const [showAllNba, setShowAllNba] = useState(false);
   const currentKey = AWARD_ORDER[awardIndex];
   const meta = AWARD_META[currentKey];
-  const season = awards?.season || "Season";
+  const season = getAwardsDisplaySeason(awards);
 
   const winner = awards?.[currentKey] || null;
   const race = awards?.[`${currentKey}_race`] || [];

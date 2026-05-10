@@ -3,6 +3,7 @@ import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import { releasePlayerToFreeAgency } from "../api/simEnginePy.js";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
+import styles from "./RosterView.module.css";
 
 export default function RosterView() {
   const { leagueData, selectedTeam, setSelectedTeam, setLeagueData } = useGame();
@@ -23,6 +24,14 @@ export default function RosterView() {
   useEffect(() => {
     setWorkingLeagueData(leagueData || null);
   }, [leagueData]);
+
+  useEffect(() => {
+    document.body.classList.add("rv-roster-bg");
+
+    return () => {
+      document.body.classList.remove("rv-roster-bg");
+    };
+  }, []);
 
   // --- attribute columns ---
   const attrColumns = [
@@ -377,7 +386,7 @@ export default function RosterView() {
   const strokeOffset = circleCircumference * (1 - fillPercent);
 
   return (
-    <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center py-10">
+    <div className={`${styles.rosterPage} min-h-screen text-white flex flex-col items-center py-10`}>
       {/* Static header with pinned arrows */}
       <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
         <div className="w-24 flex items-center justify-start">
@@ -470,7 +479,7 @@ export default function RosterView() {
 
       {/* Table */}
       <div className="w-full flex justify-center transition-opacity duration-300 ease-in-out mt-[-1px]">
-        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar">
+        <div className={`${styles.tablePanel} w-full max-w-5xl overflow-x-auto no-scrollbar`}>
           <div className="min-w-[1200px] max-w-max mx-auto">
             <table className="w-full border-collapse text-center">
               <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
@@ -580,7 +589,7 @@ export default function RosterView() {
 
       {playerActionOpen && actionTargetPlayer && (
         <div
-          className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 px-4"
+          className={`${styles.modalLayer} fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 px-4`}
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) closePlayerActions();
           }}
@@ -688,7 +697,7 @@ export default function RosterView() {
       />
 
       {releaseModalOpen && releaseTargetPlayer && !isAllView && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4">
+        <div className={`${styles.modalLayer} fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4`}>
           <div className="w-full max-w-xl bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-6">
             <h2 className="text-2xl font-bold text-orange-400 mb-3">
               Release to Free Agency

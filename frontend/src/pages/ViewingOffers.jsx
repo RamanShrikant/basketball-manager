@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
+import styles from "./ViewingOffers.module.css";
 
 function formatDollars(amount) {
   return new Intl.NumberFormat("en-US", {
@@ -707,7 +708,7 @@ if (baseStateSummary && !baseStateSummary.isActive) {
   };
 
 return (
-  <div className="min-h-screen bg-neutral-900 text-white px-6 py-8">
+  <div className={`${styles.viewingOffersPage} min-h-screen text-white px-6 py-8`}>
     <style>{`
       .bm-orange-scroll {
         scrollbar-width: thin;

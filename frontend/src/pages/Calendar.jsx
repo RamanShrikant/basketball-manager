@@ -1972,7 +1972,19 @@ const [allStarOpen, setAllStarOpen] = useState(false);
 const [allStarData, setAllStarData] = useState(null);
 
 const ALL_STAR_DATE = fmt(new Date(seasonYear + 1, 1, 13));
-const allStarHandledRef = useRef(false);
+const ALL_STAR_HANDLED_KEY = `bm_all_star_handled_v1_${seasonYear}`;
+const allStarHandledRef = useRef(localStorage.getItem(ALL_STAR_HANDLED_KEY) === "true");
+
+useEffect(() => {
+  allStarHandledRef.current = localStorage.getItem(ALL_STAR_HANDLED_KEY) === "true";
+
+  try {
+    const savedAllStars = JSON.parse(localStorage.getItem("bm_all_stars_v1") || "null");
+    if (savedAllStars?.season === `${seasonYear}-${seasonYear + 1}`) {
+      setAllStarData(savedAllStars);
+    }
+  } catch {}
+}, [ALL_STAR_HANDLED_KEY, seasonYear]);
 
 // ✅ stop control
 const stopRef = useRef(false);
@@ -2016,6 +2028,9 @@ const openAllStarTeams = async () => {
 
     const result = await computeAllStars(payload);
     console.log("[AllStars] result =", result);
+
+    localStorage.setItem("bm_all_stars_v1", JSON.stringify(result));
+    localStorage.setItem(ALL_STAR_HANDLED_KEY, "true");
 
     setAllStarData(result);
     setAllStarOpen(true);
@@ -2659,6 +2674,15 @@ if (
 
   // keep your player stats wipe
   localStorage.removeItem(PLAYER_STATS_KEY);
+  localStorage.removeItem("bm_all_stars_v1");
+
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith("bm_all_star_handled_v1_")) {
+      localStorage.removeItem(k);
+    }
+  }
+
   allStarHandledRef.current = false;
 setAllStarPromptOpen(false);
 setAllStarOpen(false);
@@ -3525,6 +3549,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
         <button
           className="rounded-lg bg-neutral-700 px-4 py-2 font-semibold text-white hover:bg-neutral-600"
           onClick={() => {
+            localStorage.setItem(ALL_STAR_HANDLED_KEY, "true");
             allStarHandledRef.current = true;
             setAllStarPromptOpen(false);
           }}

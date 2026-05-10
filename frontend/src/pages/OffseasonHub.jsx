@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import styles from "./OffseasonHub.module.css";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 
@@ -245,7 +246,7 @@ const handleAdvanceToNewSeason = () => {
   }, [navigate, offseasonState]);
 
   return (
-    <div className="min-h-screen bg-neutral-900 text-white py-10 px-4">
+    <div className={`${styles.offseasonPage} min-h-screen text-white py-10 px-4`}>
       <div className="max-w-6xl mx-auto">
         <div className="text-center mb-8">
           <p className="text-sm text-white/45 tracking-[0.25em] uppercase mb-3">

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
+import styles from "./PlayerTeamOptions.module.css";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const OPTIONS_RESULTS_KEY = "bm_option_decision_results_v1";
@@ -1064,7 +1065,7 @@ const renderKeyInterestExtraNode = (row) => {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-900 text-white py-10 px-4">
+    <div className={`${styles.optionsPage} min-h-screen text-white py-10 px-4`}>
 
       <style>{`
         .bm-orange-scroll {

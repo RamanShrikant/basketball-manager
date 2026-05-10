@@ -2,6 +2,8 @@
 import React, { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import { archiveCurrentSeasonIntoPlayerCards } from "../utils/playerCareerHistory";
+import styles from "./FinalsMvp.module.css";
 
 function getAllTeamsFromLeague(leagueData) {
   if (!leagueData) return [];
@@ -17,6 +19,7 @@ function statsKey(player, team) {
 function buildPlayerIndex(leagueData) {
   const teams = getAllTeamsFromLeague(leagueData);
   const idx = {};
+
   for (const team of teams) {
     for (const p of team.players || []) {
       const key = statsKey(p.name || p.player, team.name);
@@ -30,6 +33,7 @@ function buildPlayerIndex(leagueData) {
       };
     }
   }
+
   return idx;
 }
 
@@ -64,6 +68,7 @@ const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
+const PLAYER_STATS_KEY = "bm_player_stats_v1";
 
 function bumpSeasonYearMeta() {
   const today = new Date();
@@ -83,6 +88,34 @@ function bumpSeasonYearMeta() {
   return meta.seasonYear;
 }
 
+function getCompletedSeasonYearForArchive(leagueData, fmvpRaw) {
+  try {
+    const meta = JSON.parse(localStorage.getItem(META_KEY) || "{}") || {};
+    const metaStartYear = Number(meta?.seasonYear);
+
+    if (Number.isFinite(metaStartYear) && metaStartYear > 1900) {
+      return metaStartYear + 1;
+    }
+  } catch {}
+
+  const leagueYear = Number(
+    leagueData?.seasonYear ||
+    leagueData?.currentSeasonYear ||
+    0
+  );
+
+  if (Number.isFinite(leagueYear) && leagueYear > 1900) {
+    return leagueYear + 1;
+  }
+
+  const fmvpSeason = Number(fmvpRaw?.season);
+  if (Number.isFinite(fmvpSeason) && fmvpSeason > 1900) {
+    return fmvpSeason;
+  }
+
+  return 2026;
+}
+
 function clearSeasonStores() {
   // playoffs + schedule/results
   localStorage.removeItem("bm_postseason_v2");
@@ -100,7 +133,8 @@ function clearSeasonStores() {
     if (k.startsWith(RESULT_V3_PREFIX)) localStorage.removeItem(k);
   }
 
-  // wipe season stats (new season starts empty)
+  // wipe season stats so the next season starts from 0
+  localStorage.removeItem(PLAYER_STATS_KEY);
 }
 
 function pushFinalsMvpToHistory(fmvpRaw) {
@@ -152,7 +186,7 @@ export default function FinalsMvp() {
   }, [leagueData]);
 
   const winner = fmvpRaw?.finals_mvp || null;
-  const season = fmvpRaw?.season ?? "Season";
+  const season = getCompletedSeasonYearForArchive(leagueData, fmvpRaw);
   const championTeam = fmvpRaw?.champion_team ?? winner?.team ?? null;
 
   const playerMeta = useMemo(() => {
@@ -164,25 +198,37 @@ export default function FinalsMvp() {
   const portraitSrc = playerMeta?.portrait || null;
 
   const continueToOffseasonHub = () => {
-    // 1) preserve Finals MVP always (history + latest)
-    pushFinalsMvpToHistory(fmvpRaw);
+    // 1) resolve the completed season display year from the current calendar season
+    const completedSeasonYear = getCompletedSeasonYearForArchive(leagueData, fmvpRaw);
+    const correctedFmvpRaw = fmvpRaw
+      ? { ...fmvpRaw, season: completedSeasonYear }
+      : fmvpRaw;
 
-    // 2) bump season year so offseason pages can read the next cycle
+    // 2) preserve Finals MVP always (history + latest) with the corrected year
+    pushFinalsMvpToHistory(correctedFmvpRaw);
+
+    // 3) archive completed live season stats/accolades into player cards BEFORE clearing current-season stats
+    const archivedLeagueData = archiveCurrentSeasonIntoPlayerCards(
+      leagueData,
+      completedSeasonYear
+    );
+
+    // 3) bump season year so offseason pages can read the next cycle
     const nextSeasonYear = bumpSeasonYearMeta();
 
-    // 3) clear season runtime keys so Calendar generates a fresh schedule/results later
+    // 4) clear season runtime keys so Calendar generates a fresh schedule/results later
     clearSeasonStores();
 
-    // 4) reset offseason state/results for the new offseason
+    // 5) reset offseason state/results for the new offseason
     localStorage.setItem(
       OFFSEASON_STATE_KEY,
       JSON.stringify(buildFreshOffseasonState(nextSeasonYear))
     );
     localStorage.removeItem(RETIREMENT_RESULTS_KEY);
 
-    // 5) update leagueData season year in memory/localStorage so hub/pages read the right year
-    if (leagueData) {
-      const updatedLeague = structuredClone(leagueData);
+    // 6) update leagueData season year in memory/localStorage so hub/pages read the right year
+    if (archivedLeagueData) {
+      const updatedLeague = structuredClone(archivedLeagueData);
       updatedLeague.seasonYear = nextSeasonYear;
       updatedLeague.currentSeasonYear = nextSeasonYear;
 
@@ -212,10 +258,10 @@ export default function FinalsMvp() {
       }
     }
 
-    // 6) do NOT delete finals mvp history/latest; we only clear the one-time page payload
+    // 7) do NOT delete finals mvp history/latest; we only clear the one-time page payload
     localStorage.removeItem("bm_finals_mvp_v1");
 
-    // 7) go to offseason hub
+    // 8) go to offseason hub
     navigate("/offseason");
   };
 
@@ -262,7 +308,7 @@ export default function FinalsMvp() {
   const strokeOffset = circleCircumference * (1 - fillPercent);
 
   return (
-    <div className="min-h-screen bg-neutral-900 text-white py-10">
+    <div className={`${styles.finalsMvpPage} min-h-screen text-white py-10`}>
       <div className="max-w-5xl mx-auto px-4">
         {/* Title */}
         <div className="text-center mb-5">
@@ -340,7 +386,7 @@ export default function FinalsMvp() {
         </div>
 
         {/* Table */}
-        <div className="overflow-x-auto mt-[-1px]">
+        <div className={`${styles.tablePanel} overflow-x-auto mt-[-1px]`}>
           <table className="w-full border-collapse text-center text-[16px] font-medium">
             <thead className="bg-neutral-800 text-gray-300 font-semibold">
               <tr>
@@ -384,17 +430,12 @@ export default function FinalsMvp() {
                 <td>{fmt1(finalsRow?.tp)}</td>
               </tr>
             </tbody>
-          </table>
+          </table>    
         </div>
 
         {/* Buttons */}
         <div className="mt-7 flex justify-center gap-4">
-          <button
-            className="px-6 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-sm"
-            onClick={() => navigate("/awards")}
-          >
-            View Season Awards
-          </button>
+
 
           <button
             className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg text-sm font-bold"

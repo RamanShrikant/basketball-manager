@@ -1406,7 +1406,7 @@ export function initializeFreeAgencyPeriod(
   startWorker();
 
   const requestId = "FAI" + counter++;
-  const TIMEOUT_MS = 15000;
+  const TIMEOUT_MS = 65000;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -1578,7 +1578,7 @@ export function advanceFreeAgencyDay(
   startWorker();
 
   const requestId = "FAD" + counter++;
-  const TIMEOUT_MS = 15000;
+  const TIMEOUT_MS = 65000;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
