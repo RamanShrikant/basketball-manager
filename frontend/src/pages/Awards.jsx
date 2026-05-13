@@ -5,6 +5,8 @@ import { useGame } from "../context/GameContext";
 import AllNbaTeams from "./AllNbaTeams";
 import LZString from "lz-string";
 import styles from "./Awards.module.css";
+import PageFade from "../components/PageFade";
+import "../styles/BMAnimations.css";
 console.log("✅ Awards.jsx NEW loaded");
 
 
@@ -348,7 +350,34 @@ if (showAllNba) {
 
 
   return (
-    <div className={`${styles.awardsPage} min-h-screen text-white py-10`}>
+    <PageFade>
+      <div className={`${styles.awardsPage} min-h-screen text-white py-10`}>
+        <style>{`
+          @keyframes bmAwardStepEnter {
+            from {
+              opacity: 0;
+              transform: translateY(10px) scale(0.99);
+              filter: blur(2px);
+            }
+
+            to {
+              opacity: 1;
+              transform: translateY(0) scale(1);
+              filter: blur(0px);
+            }
+          }
+
+          .bmAwardStepEnter {
+            animation: bmAwardStepEnter 260ms ease-out both;
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .bmAwardStepEnter {
+              animation: none;
+            }
+          }
+        `}</style>
+
       <div className="max-w-6xl mx-auto px-4">
         {/* TITLE (global page title) 
             - text-3xl: change to text-4xl to make "2025 Season Awards" bigger */}
@@ -356,6 +385,7 @@ if (showAllNba) {
           {season} Season Awards
         </h1>
 
+        <div key={currentKey} className="bmAwardStepEnter">
         {/* TOP ROW */}
         <div className="flex flex-col lg:flex-row gap-6 mb-6">
           {/* WINNER CARD ----------------------------------------------------- */}
@@ -562,7 +592,9 @@ if (showAllNba) {
 </button>
           </div>
         </div>
+        </div>
       </div>
-    </div>
+      </div>
+    </PageFade>
   );
 }

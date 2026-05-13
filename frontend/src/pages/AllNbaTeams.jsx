@@ -4,6 +4,8 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import LZString from "lz-string";
 import styles from "./AllNbaTeams.module.css";
+import PageFade from "../components/PageFade";
+import "../styles/BMAnimations.css";
 
 /* -------------------------------------------------------------------------- */
 /*                             AWARDS NORMALIZATION                           */
@@ -100,7 +102,8 @@ export default function AllNbaTeams({ leagueDataProp }) {
   // --- guard: no league yet ---
   if (!leagueData) {
     return (
-      <div className={`${styles.allNbaPage} flex flex-col items-center justify-center h-screen text-white`}>
+      <PageFade>
+        <div className={`${styles.allNbaPage} flex flex-col items-center justify-center h-screen text-white`}>
         <p className="mb-3 text-lg">League data not found.</p>
         <button
           onClick={() => navigate("/team-selector")}
@@ -108,7 +111,8 @@ export default function AllNbaTeams({ leagueDataProp }) {
         >
           Back to Team Select
         </button>
-      </div>
+        </div>
+      </PageFade>
     );
   }
 
@@ -265,6 +269,17 @@ export default function AllNbaTeams({ leagueDataProp }) {
   /* ------------------------------- sorting (like All League) ------------------------------ */
 
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
+  const [playoffsTransitioning, setPlayoffsTransitioning] = useState(false);
+
+  const goToPlayoffs = () => {
+    if (playoffsTransitioning) return;
+
+    setPlayoffsTransitioning(true);
+
+    window.setTimeout(() => {
+      navigate("/playoffs");
+    }, 180);
+  };
 
   const baseCols = [
     { key: "name", label: "Name" },
@@ -323,7 +338,8 @@ export default function AllNbaTeams({ leagueDataProp }) {
   /* -------------------------------------------------------------------------- */
 
   return (
-    <div className={`${styles.allNbaPage} min-h-screen text-white flex flex-col items-center py-10`}>
+    <PageFade>
+      <div className={`${styles.allNbaPage} min-h-screen text-white flex flex-col items-center py-10`}>
      {/* Title row (no arrows) */}
 <div className="w-full max-w-5xl flex items-center justify-between mt-6 mb-6 select-none">
   <h1 className="text-3xl md:text-4xl font-extrabold text-orange-500">
@@ -511,13 +527,43 @@ export default function AllNbaTeams({ leagueDataProp }) {
 <div className="flex justify-end w-full max-w-5xl mt-6">
   <button
     className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-semibold"
-    onClick={() => navigate("/playoffs")}
+    onClick={goToPlayoffs}
   >
     Playoffs ▶
   </button>
 </div>
 
+        {playoffsTransitioning && (
+          <>
+            <style>{`
+              @keyframes bmRouteSoftOut {
+                from {
+                  opacity: 0;
+                  backdrop-filter: blur(0px);
+                }
 
-    </div>
+                to {
+                  opacity: 1;
+                  backdrop-filter: blur(2px);
+                }
+              }
+
+              .bmRouteSoftOut {
+                animation: bmRouteSoftOut 180ms ease-out both;
+              }
+
+              @media (prefers-reduced-motion: reduce) {
+                .bmRouteSoftOut {
+                  animation: none;
+                }
+              }
+            `}</style>
+
+            <div className="bmRouteSoftOut pointer-events-none fixed inset-0 z-[260] bg-black/35" />
+          </>
+        )}
+
+      </div>
+    </PageFade>
   );
 }

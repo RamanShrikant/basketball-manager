@@ -7,6 +7,8 @@ import { simulateOneGame, computeFinalsMvp } from "@/api/simEnginePy"; // ✅ PA
 import { queueSim } from "@/api/simQueue";
 import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import styles from "./Playoffs.module.css";
+import FinalsMvpReveal from "../components/FinalsMvpReveal";
+import { finalizeFinalsMvpAndGoOffseason } from "../utils/finalsMvpSeasonActions";
 
 /* ---------------- utils ---------------- */
 function getAllTeamsFromLeague(leagueData) {
@@ -938,7 +940,7 @@ export default function Playoffs() {
   }
 
   const navigate = useNavigate();
-  const { leagueData, setLeagueData } = useGame();
+  const { leagueData, setLeagueData, selectedTeam, setSelectedTeam } = useGame();
 
   const teams = useMemo(() => {
     const arr = getAllTeamsFromLeague(leagueData);
@@ -1049,6 +1051,26 @@ export default function Playoffs() {
 
   // ✅ PATCH (Finals MVP)
   const [fmvpLoading, setFmvpLoading] = useState(false);
+  const [showFinalsMvpModal, setShowFinalsMvpModal] = useState(false);
+
+  const continueFromFinalsMvpModal = () => {
+    let fmvpRaw = null;
+
+    try {
+      fmvpRaw = JSON.parse(localStorage.getItem(FINALS_MVP_KEY) || "null");
+    } catch {
+      fmvpRaw = null;
+    }
+
+    finalizeFinalsMvpAndGoOffseason({
+      leagueData,
+      fmvpRaw,
+      selectedTeam,
+      setLeagueData,
+      setSelectedTeam,
+      navigate,
+    });
+  };
 
   // ===== FAST RESULTS SAVE (debounced) =====
   const resultsRef = useRef(resultsLive);
@@ -2766,7 +2788,7 @@ ${disabled ? "opacity-60" : ""}
       )}
 
       {/* ✅ PATCH: CHAMPIONS MODAL is OUTSIDE the series/play-in modal */}
-      {champModal && (
+      {champModal && !showFinalsMvpModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]">
           <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-6 w-[520px] text-center">
             <div className="text-2xl font-extrabold text-white mb-2">CHAMPIONS</div>
@@ -2780,17 +2802,38 @@ ${disabled ? "opacity-60" : ""}
               wins the {champModal.seasonYear} title.
             </div>
 
-            {/* ✅ PATCH (Finals MVP): go to Finals MVP page instead of straight calendar */}
+            {/* Finals MVP reveal opens as an in-page modal instead of leaving Playoffs */}
             <button
               className="w-full px-4 py-3 bg-orange-600 hover:bg-orange-500 rounded font-bold disabled:opacity-50"
               disabled={fmvpLoading}
-              onClick={() => navigate("/finals-mvp")}
+              onClick={() => setShowFinalsMvpModal(true)}
             >
-              {fmvpLoading ? "Computing Finals MVP..." : "View Finals MVP"}
+              {fmvpLoading ? "Computing Finals MVP..." : "Reveal Finals MVP"}
             </button>
 
 
           </div>
+        </div>
+      )}
+
+
+
+      {/* Finals MVP Reveal Modal */}
+      {showFinalsMvpModal && (
+        <div className="fixed inset-0 z-[80] bg-black/30 flex items-center justify-center p-4">
+          <FinalsMvpReveal
+            leagueData={leagueData}
+            fmvpRaw={(() => {
+              try {
+                return JSON.parse(localStorage.getItem(FINALS_MVP_KEY) || "null");
+              } catch {
+                return null;
+              }
+            })()}
+            onContinue={continueFromFinalsMvpModal}
+            continueLabel="Continue to Offseason"
+            mode="modal"
+          />
         </div>
       )}
 

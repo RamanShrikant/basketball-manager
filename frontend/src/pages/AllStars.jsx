@@ -166,12 +166,53 @@ export default function AllStars({ open, data, onClose }) {
   if (!open || !data) return null;
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-[240] flex items-center justify-center bg-black/80 p-4"
-      onClick={onClose}
-    >
+    <>
+      <style>{`
+        @keyframes bmModalBackdropIn {
+          from {
+            opacity: 0;
+          }
+
+          to {
+            opacity: 1;
+          }
+        }
+
+        @keyframes bmModalLiftIn {
+          from {
+            opacity: 0;
+            transform: translateY(10px) scale(0.985);
+          }
+
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+
+        .bmModalFade {
+          animation: bmModalBackdropIn 220ms ease-out both;
+        }
+
+        .bmModalLift {
+          animation: bmModalLiftIn 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+          will-change: opacity, transform;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .bmModalFade,
+          .bmModalLift {
+            animation: none;
+          }
+        }
+      `}</style>
+
       <div
-        className="max-h-[92vh] w-full max-w-7xl overflow-auto rounded-2xl border border-white/20 bg-neutral-900 p-6 text-white shadow-2xl"
+        className="bmModalFade fixed inset-0 z-[240] flex items-center justify-center bg-black/80 backdrop-blur-md p-4"
+        onClick={onClose}
+      >
+      <div
+        className="bmModalLift max-h-[92vh] w-full max-w-7xl overflow-auto rounded-2xl border border-white/20 bg-neutral-900 p-6 text-white shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-6 flex items-start justify-between gap-4">
@@ -198,7 +239,8 @@ export default function AllStars({ open, data, onClose }) {
           <ConferenceColumn title="Western Conference" data={data.west} lookup={lookup} />
         </div>
       </div>
-    </div>,
+      </div>
+    </>,
     document.body
   );
 }
