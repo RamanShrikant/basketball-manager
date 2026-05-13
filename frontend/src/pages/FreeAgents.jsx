@@ -5,8 +5,286 @@ import * as simEngine from "../api/simEnginePy.js";
 import { rebuildGameplansForLeague } from "../utils/ensureGameplans";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./FreeAgents.module.css";
+import PageFade from "../components/PageFade";
+import "../styles/BMAnimations.css";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
+
+function compactStorySideForStorage(side) {
+  if (!side || typeof side !== "object") return null;
+
+  return {
+    title: side.title || "",
+    voice: side.voice || "",
+    summary: side.summary || "",
+    bullets: Array.isArray(side.bullets)
+      ? side.bullets.filter(Boolean).slice(0, 5)
+      : [],
+  };
+}
+
+function compactStoryContextForStorage(story) {
+  if (!story || typeof story !== "object") return null;
+
+  const sections = Array.isArray(story.sections)
+    ? story.sections
+        .filter((section) => section && (section.label || section.value))
+        .slice(0, 7)
+        .map((section) => ({
+          label: section.label || "",
+          value: section.value || "",
+        }))
+    : [];
+
+  const otherOffers = Array.isArray(story.otherOffers)
+    ? story.otherOffers.slice(0, 3).map((offer) => ({
+        teamName: offer.teamName || "",
+        displayTeamName: offer.displayTeamName || "",
+        line: offer.line || "",
+        totalValue: offer.totalValue || 0,
+        years: offer.years || 0,
+        playerViewScore: offer.playerViewScore || 0,
+      }))
+    : [];
+
+  const rosterContext = story.rosterContext && typeof story.rosterContext === "object"
+    ? {
+        positionBucket: story.rosterContext.positionBucket || "",
+        topPlayerNames: story.rosterContext.topPlayerNames || "",
+        starNames: story.rosterContext.starNames || "",
+        samePositionNames: story.rosterContext.samePositionNames || "",
+        youngCoreNames: story.rosterContext.youngCoreNames || "",
+        rotationSamePositionCount: story.rosterContext.rotationSamePositionCount || 0,
+        averageCoreAge: story.rosterContext.averageCoreAge ?? null,
+        playerOverall: story.rosterContext.playerOverall ?? null,
+        playerAge: story.rosterContext.playerAge ?? null,
+        playerPotential: story.rosterContext.playerPotential ?? null,
+        roleRead: story.rosterContext.roleRead || "",
+        betterSamePositionNames: story.rosterContext.betterSamePositionNames || "",
+        clearlyBelowSamePositionNames: story.rosterContext.clearlyBelowSamePositionNames || "",
+      }
+    : null;
+
+  return {
+    version: story.version || 1,
+    eventType: story.eventType || "",
+    headline: story.headline || "",
+    subtitle: story.subtitle || story.contractLine || "",
+    playerName: story.playerName || "",
+    teamName: story.teamName || "",
+    teamDisplayName: story.teamDisplayName || "",
+    day: story.day ?? null,
+    contractLine: story.contractLine || "",
+    totalValue: story.totalValue || 0,
+    years: story.years || 0,
+    aav: story.aav || 0,
+    spendingType: story.spendingType || "",
+    exceptionType: story.exceptionType || "",
+    payrollZone: story.payrollZone || "",
+    teamDirection: story.teamDirection || "",
+    needScore: story.needScore ?? null,
+    positionBucket: story.positionBucket || "",
+    recentRecord: story.recentRecord || "",
+    recentTeamShort: story.recentTeamShort || "",
+    moodAngle: story.moodAngle || "",
+    rfaMatched: Boolean(story.rfaMatched),
+    originalOfferTeamName: story.originalOfferTeamName || "",
+    rightsTeamName: story.rightsTeamName || "",
+    teamSide: compactStorySideForStorage(story.teamSide),
+    playerSide: compactStorySideForStorage(story.playerSide),
+    otherOffers,
+    rosterContext,
+    sections,
+  };
+}
+
+
+function compactOfferForStorage(offer, keepStory = false) {
+  if (!offer || typeof offer !== "object") return offer;
+
+  return {
+    offerId: offer.offerId || null,
+    playerId: offer.playerId ?? null,
+    playerName: offer.playerName || "",
+    playerKey: offer.playerKey || "",
+    teamName: offer.teamName || "",
+    source: offer.source || "",
+    status: offer.status || "active",
+    submittedDay: offer.submittedDay ?? offer.day ?? null,
+    day: offer.day ?? offer.submittedDay ?? null,
+    contract: offer.contract || null,
+    salaryByYear: Array.isArray(offer.salaryByYear) ? offer.salaryByYear : undefined,
+    years: offer.years || offer.contract?.salaryByYear?.length || 0,
+    totalValue: offer.totalValue || 0,
+    aav: offer.aav || 0,
+    currentYearSalary:
+      offer.currentYearSalary ||
+      offer.contract?.salaryByYear?.[0] ||
+      offer.salaryByYear?.[0] ||
+      0,
+    playerViewScore: offer.playerViewScore || 0,
+    spendingType: offer.spendingType || "",
+    exceptionType: offer.exceptionType || "",
+    payrollZone: offer.payrollZone || "",
+    teamDirection: offer.teamDirection || "",
+    needScore: offer.needScore ?? offer.rosterNeed?.needScore ?? null,
+    positionBucket: offer.positionBucket || offer.rosterNeed?.position || "",
+    weakestPositions: Array.isArray(offer.weakestPositions) ? offer.weakestPositions.slice(0, 3) : undefined,
+    rosterNeed: offer.rosterNeed
+      ? {
+          position: offer.rosterNeed.position || offer.rosterNeed.positionBucket || "",
+          needScore: offer.rosterNeed.needScore ?? null,
+          teamDirection: offer.rosterNeed.teamDirection || offer.teamDirection || "",
+          weakestPositions: Array.isArray(offer.rosterNeed.weakestPositions)
+            ? offer.rosterNeed.weakestPositions.slice(0, 3)
+            : undefined,
+        }
+      : undefined,
+    rfaOfferSheet: Boolean(offer.rfaOfferSheet),
+    rfaMatched: Boolean(offer.rfaMatched),
+    rightsTeamName: offer.rightsTeamName || "",
+    originalOfferTeamName: offer.originalOfferTeamName || "",
+    matchedOriginalTeamName: offer.matchedOriginalTeamName || "",
+    storyContext: keepStory ? compactStoryContextForStorage(offer.storyContext) : undefined,
+  };
+}
+
+function compactSigningForStorage(row, emergency = false) {
+  if (!row || typeof row !== "object") return row;
+
+  return {
+    day: row.day ?? null,
+    playerId: row.playerId ?? null,
+    playerName: row.playerName || "",
+    playerKey: row.playerKey || "",
+    teamName: row.teamName || row.signedWith || "",
+    signedWith: row.signedWith || row.teamName || "",
+    contract: row.contract || row.signedContract || null,
+    totalValue: row.totalValue || row.signedTotalValue || 0,
+    aav: row.aav || 0,
+    years: row.years || row.signedYears || row.contract?.salaryByYear?.length || 0,
+    spendingType: row.spendingType || "",
+    exceptionType: row.exceptionType || "",
+    payrollZone: row.payrollZone || "",
+    exceptionUsage: row.exceptionUsage
+      ? {
+          type: row.exceptionUsage.type || "",
+          amountUsed: row.exceptionUsage.amountUsed || 0,
+        }
+      : null,
+    rfaMatched: Boolean(row.rfaMatched),
+    originalOfferTeamName: row.originalOfferTeamName || "",
+    matchedOriginalTeamName: row.matchedOriginalTeamName || "",
+    declinedRightsTeamName: row.declinedRightsTeamName || "",
+    userOfferOutcomes: Array.isArray(row.userOfferOutcomes)
+      ? row.userOfferOutcomes.slice(0, emergency ? 8 : 20).map((outcome) => ({
+          id: outcome.id || "",
+          day: outcome.day ?? null,
+          playerId: outcome.playerId ?? null,
+          playerName: outcome.playerName || "",
+          playerKey: outcome.playerKey || "",
+          userTeamName: outcome.userTeamName || "",
+          status: outcome.status || "",
+          offerStatus: outcome.offerStatus || "",
+          signedWith: outcome.signedWith || "",
+          signedContract: outcome.signedContract || null,
+          signedTotalValue: outcome.signedTotalValue || 0,
+          signedYears: outcome.signedYears || 0,
+          userOfferContract: outcome.userOfferContract || null,
+          userOfferTotalValue: outcome.userOfferTotalValue || 0,
+          userOfferYears: outcome.userOfferYears || 0,
+          rfaMatched: Boolean(outcome.rfaMatched),
+          originalOfferTeamName: outcome.originalOfferTeamName || "",
+          storyContext: compactStoryContextForStorage(outcome.storyContext),
+        }))
+      : [],
+    allOffers: Array.isArray(row.allOffers)
+      ? row.allOffers.slice(0, emergency ? 6 : 12).map((offer) => compactOfferForStorage(offer, false))
+      : [],
+    storyContext: compactStoryContextForStorage(row.storyContext),
+  };
+}
+
+function compactFreeAgencyStateForStorage(state, emergency = false) {
+  if (!state || typeof state !== "object") return state;
+
+  const offersByPlayer = {};
+  for (const [playerKey, offers] of Object.entries(state.offersByPlayer || {})) {
+    offersByPlayer[playerKey] = Array.isArray(offers)
+      ? offers.slice(0, emergency ? 8 : 20).map((offer) => compactOfferForStorage(offer, false))
+      : offers;
+  }
+
+  const latestResults = state.latestResults
+    ? {
+        dayResolved: state.latestResults.dayResolved ?? null,
+        stateSummary: state.latestResults.stateSummary || null,
+        signings: Array.isArray(state.latestResults.signings)
+          ? state.latestResults.signings
+              .slice(0, emergency ? 40 : 120)
+              .map((row) => compactSigningForStorage(row, emergency))
+          : [],
+        generatedOffers: Array.isArray(state.latestResults.generatedOffers)
+          ? state.latestResults.generatedOffers
+              .slice(0, emergency ? 120 : 420)
+              .map((offer) => compactOfferForStorage(offer, true))
+          : [],
+      }
+    : null;
+
+  return {
+    ...state,
+    offersByPlayer,
+    latestResults,
+    signedPlayersLog: Array.isArray(state.signedPlayersLog)
+      ? state.signedPlayersLog.map((row) => compactSigningForStorage(row, emergency))
+      : [],
+    offerHistory: Array.isArray(state.offerHistory)
+      ? state.offerHistory.slice(-1 * (emergency ? 40 : 120)).map((offer) => compactOfferForStorage(offer, false))
+      : [],
+    dailyLog: Array.isArray(state.dailyLog)
+      ? state.dailyLog.slice(-1 * (emergency ? 5 : 12))
+      : [],
+    userOfferOutcomeLog: Array.isArray(state.userOfferOutcomeLog)
+      ? state.userOfferOutcomeLog.slice(-1 * (emergency ? 60 : 160)).map((row) => ({
+          ...row,
+          storyContext: compactStoryContextForStorage(row.storyContext),
+        }))
+      : [],
+  };
+}
+
+function compactLeagueDataForStorage(leagueData, emergency = false) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+
+  return {
+    ...leagueData,
+    freeAgencyState: compactFreeAgencyStateForStorage(leagueData.freeAgencyState, emergency),
+  };
+}
+
+function persistLeagueData(updated) {
+  if (!updated) return;
+
+  const primary = compactLeagueDataForStorage(updated, false);
+
+  try {
+    localStorage.setItem("leagueData", JSON.stringify(primary));
+    return;
+  } catch (err) {
+    console.warn("[FreeAgencyStorage] Primary leagueData save was too large. Retrying compact save.", err);
+  }
+
+  const emergency = compactLeagueDataForStorage(updated, true);
+
+  try {
+    localStorage.setItem("leagueData", JSON.stringify(emergency));
+  } catch (err) {
+    console.error("[FreeAgencyStorage] Emergency leagueData save failed.", err);
+    throw err;
+  }
+}
+
 
 export default function FreeAgents() {
   const { leagueData, selectedTeam, setSelectedTeam, setLeagueData } = useGame();
@@ -291,7 +569,7 @@ const isOffseasonMode =
       setLeagueData(updated);
     }
 
-    localStorage.setItem("leagueData", JSON.stringify(updated));
+    persistLeagueData(updated);
 
     if (typeof setSelectedTeam === "function" && selectedTeam?.name) {
       let nextSelectedTeam = null;
@@ -1605,6 +1883,7 @@ updateOffseasonState({
   };
 
   const optionsLockedView = (
+    <PageFade>
     <div className={`${styles.freeAgentsPage} flex flex-col items-center justify-center min-h-screen text-white px-4`}>
       <p className="text-lg mb-4 text-center">
         Complete Player / Team Options and Rights Management before opening free agency.
@@ -1633,9 +1912,12 @@ updateOffseasonState({
         </button>
       </div>
     </div>
+  
+    </PageFade>
   );
 
   const noFreeAgentsView = (
+    <PageFade>
     <div className={`${styles.freeAgentsPage} flex flex-col items-center justify-center min-h-screen text-white px-4`}>
       <p className="text-lg mb-4">
         {effectiveFreeAgencyFinished
@@ -1680,6 +1962,8 @@ updateOffseasonState({
         </button>
       </div>
     </div>
+  
+    </PageFade>
   );
 
   if (isOffseasonMode && (!optionsComplete || !rightsManagementComplete) && !isLiveFreeAgencyActive && !freeAgencyFinished) {
@@ -1696,6 +1980,7 @@ updateOffseasonState({
   const strokeOffset = circleCircumference * (1 - fillPercent);
 
   return (
+    <PageFade>
     <div className={`${styles.freeAgentsPage} min-h-screen text-white flex flex-col items-center py-10`}>
       <style>{`
         .fa-modal-scroll {
@@ -2638,5 +2923,7 @@ updateOffseasonState({
         onClose={() => setPlayerCardPlayer(null)}
       />
     </div>
+  
+    </PageFade>
   );
 }

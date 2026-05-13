@@ -2,6 +2,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
+import PageFade from "../components/PageFade";
+import "../styles/BMAnimations.css";
 
 export default function SalaryTable() {
   const navigate = useNavigate();
@@ -283,6 +285,7 @@ export default function SalaryTable() {
   }
 
   return (
+    <PageFade>
     <div className="min-h-screen bg-neutral-900 text-white p-6">
       <div className="max-w-6xl mx-auto space-y-5">
         <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -473,6 +476,8 @@ export default function SalaryTable() {
         </div>
       </div>
     </div>
+  
+    </PageFade>
   );
 }
 

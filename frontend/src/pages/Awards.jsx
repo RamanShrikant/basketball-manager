@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import AllNbaTeams from "./AllNbaTeams";
 import LZString from "lz-string";
+import styles from "./Awards.module.css";
 console.log("✅ Awards.jsx NEW loaded");
 
 
@@ -347,7 +348,7 @@ if (showAllNba) {
 
 
   return (
-    <div className="min-h-screen bg-neutral-900 text-white py-10">
+    <div className={`${styles.awardsPage} min-h-screen text-white py-10`}>
       <div className="max-w-6xl mx-auto px-4">
         {/* TITLE (global page title) 
             - text-3xl: change to text-4xl to make "2025 Season Awards" bigger */}

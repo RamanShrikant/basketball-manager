@@ -1,0 +1,78 @@
+html,
+body,
+#root {
+  min-height: 100%;
+  background: #050505;
+}
+
+body {
+  margin: 0;
+  overflow-x: hidden;
+}
+
+.bmSmoothButton {
+  transition:
+    transform 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    opacity 180ms ease;
+}
+
+.bmSmoothButton:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(249, 115, 22, 0.22);
+}
+
+.bmSmoothButton:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.bmRowEnter {
+  animation: bmRowIn 360ms ease both;
+  will-change: opacity, transform;
+}
+
+@keyframes bmRowIn {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Shared Team Hub selectable-card feel. */
+.bmRouteCardClickable {
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    filter 160ms ease;
+}
+
+.bmRouteCardClickable:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.06);
+}
+
+.bmRouteCardClickable:active {
+  transform: scale(0.997);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bmRowEnter {
+    animation: none;
+  }
+
+  .bmSmoothButton,
+  .bmSmoothButton:hover,
+  .bmSmoothButton:active,
+  .bmRouteCardClickable,
+  .bmRouteCardClickable:hover,
+  .bmRouteCardClickable:active {
+    transform: none;
+    transition: none;
+  }
+}

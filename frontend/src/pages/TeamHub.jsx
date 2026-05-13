@@ -2,6 +2,8 @@ import React, { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import styles from "../components/TeamHub.module.css";
+import PageFade from "../components/PageFade";
+import "../styles/BMAnimations.css";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const POSTSEASON_KEY = "bm_postseason_v2";
@@ -115,23 +117,26 @@ export default function TeamHub() {
   const handleTileClick = (tile) => {
     if (!tile.enabled || tile.path === "#") return;
 
+    const navState = isOffseasonMode
+      ? {
+          offseasonMode: true,
+          returnTo: offseasonReturnTo,
+        }
+      : isPlayoffMode
+      ? {
+          playoffMode: true,
+          playoffReturnTo,
+        }
+      : undefined;
+
     navigate(tile.path, {
-      state: isOffseasonMode
-        ? {
-            offseasonMode: true,
-            returnTo: offseasonReturnTo,
-          }
-        : isPlayoffMode
-        ? {
-            playoffMode: true,
-            playoffReturnTo,
-          }
-        : undefined,
+      state: navState,
     });
   };
 
   return (
-    <div className={styles.wrapper}>
+    <PageFade>
+      <div className={styles.wrapper}>
       {isOffseasonMode && (
         <div
           style={{
@@ -180,7 +185,7 @@ export default function TeamHub() {
             <div
               key={tile.name}
               onClick={() => handleTileClick(tile)}
-              className={`${styles.card} ${enabled ? "" : styles.disabled}`}
+              className={`${styles.card} ${enabled ? "bmRouteCardClickable" : styles.disabled}`}
               style={{
                 opacity: enabled ? 1 : 0.55,
                 cursor: enabled ? "pointer" : "not-allowed",
@@ -210,5 +215,6 @@ export default function TeamHub() {
         })}
       </div>
     </div>
+    </PageFade>
   );
 }

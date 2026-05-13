@@ -2,7 +2,284 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
+import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./ViewingOffers.module.css";
+
+function compactStorySideForStorage(side) {
+  if (!side || typeof side !== "object") return null;
+
+  return {
+    title: side.title || "",
+    voice: side.voice || "",
+    summary: side.summary || "",
+    bullets: Array.isArray(side.bullets)
+      ? side.bullets.filter(Boolean).slice(0, 5)
+      : [],
+  };
+}
+
+function compactStoryContextForStorage(story) {
+  if (!story || typeof story !== "object") return null;
+
+  const sections = Array.isArray(story.sections)
+    ? story.sections
+        .filter((section) => section && (section.label || section.value))
+        .slice(0, 7)
+        .map((section) => ({
+          label: section.label || "",
+          value: section.value || "",
+        }))
+    : [];
+
+  const otherOffers = Array.isArray(story.otherOffers)
+    ? story.otherOffers.slice(0, 3).map((offer) => ({
+        teamName: offer.teamName || "",
+        displayTeamName: offer.displayTeamName || "",
+        line: offer.line || "",
+        totalValue: offer.totalValue || 0,
+        years: offer.years || 0,
+        playerViewScore: offer.playerViewScore || 0,
+      }))
+    : [];
+
+  const rosterContext = story.rosterContext && typeof story.rosterContext === "object"
+    ? {
+        positionBucket: story.rosterContext.positionBucket || "",
+        topPlayerNames: story.rosterContext.topPlayerNames || "",
+        starNames: story.rosterContext.starNames || "",
+        samePositionNames: story.rosterContext.samePositionNames || "",
+        youngCoreNames: story.rosterContext.youngCoreNames || "",
+        rotationSamePositionCount: story.rosterContext.rotationSamePositionCount || 0,
+        averageCoreAge: story.rosterContext.averageCoreAge ?? null,
+        playerOverall: story.rosterContext.playerOverall ?? null,
+        playerAge: story.rosterContext.playerAge ?? null,
+        playerPotential: story.rosterContext.playerPotential ?? null,
+        roleRead: story.rosterContext.roleRead || "",
+        betterSamePositionNames: story.rosterContext.betterSamePositionNames || "",
+        clearlyBelowSamePositionNames: story.rosterContext.clearlyBelowSamePositionNames || "",
+      }
+    : null;
+
+  return {
+    version: story.version || 1,
+    eventType: story.eventType || "",
+    headline: story.headline || "",
+    subtitle: story.subtitle || story.contractLine || "",
+    playerName: story.playerName || "",
+    teamName: story.teamName || "",
+    teamDisplayName: story.teamDisplayName || "",
+    day: story.day ?? null,
+    contractLine: story.contractLine || "",
+    totalValue: story.totalValue || 0,
+    years: story.years || 0,
+    aav: story.aav || 0,
+    spendingType: story.spendingType || "",
+    exceptionType: story.exceptionType || "",
+    payrollZone: story.payrollZone || "",
+    teamDirection: story.teamDirection || "",
+    needScore: story.needScore ?? null,
+    positionBucket: story.positionBucket || "",
+    recentRecord: story.recentRecord || "",
+    recentTeamShort: story.recentTeamShort || "",
+    moodAngle: story.moodAngle || "",
+    rfaMatched: Boolean(story.rfaMatched),
+    originalOfferTeamName: story.originalOfferTeamName || "",
+    rightsTeamName: story.rightsTeamName || "",
+    teamSide: compactStorySideForStorage(story.teamSide),
+    playerSide: compactStorySideForStorage(story.playerSide),
+    otherOffers,
+    rosterContext,
+    sections,
+  };
+}
+
+
+function compactOfferForStorage(offer, keepStory = false) {
+  if (!offer || typeof offer !== "object") return offer;
+
+  return {
+    offerId: offer.offerId || null,
+    playerId: offer.playerId ?? null,
+    playerName: offer.playerName || "",
+    playerKey: offer.playerKey || "",
+    teamName: offer.teamName || "",
+    source: offer.source || "",
+    status: offer.status || "active",
+    submittedDay: offer.submittedDay ?? offer.day ?? null,
+    day: offer.day ?? offer.submittedDay ?? null,
+    contract: offer.contract || null,
+    salaryByYear: Array.isArray(offer.salaryByYear) ? offer.salaryByYear : undefined,
+    years: offer.years || offer.contract?.salaryByYear?.length || 0,
+    totalValue: offer.totalValue || 0,
+    aav: offer.aav || 0,
+    currentYearSalary:
+      offer.currentYearSalary ||
+      offer.contract?.salaryByYear?.[0] ||
+      offer.salaryByYear?.[0] ||
+      0,
+    playerViewScore: offer.playerViewScore || 0,
+    spendingType: offer.spendingType || "",
+    exceptionType: offer.exceptionType || "",
+    payrollZone: offer.payrollZone || "",
+    teamDirection: offer.teamDirection || "",
+    needScore: offer.needScore ?? offer.rosterNeed?.needScore ?? null,
+    positionBucket: offer.positionBucket || offer.rosterNeed?.position || "",
+    weakestPositions: Array.isArray(offer.weakestPositions) ? offer.weakestPositions.slice(0, 3) : undefined,
+    rosterNeed: offer.rosterNeed
+      ? {
+          position: offer.rosterNeed.position || offer.rosterNeed.positionBucket || "",
+          needScore: offer.rosterNeed.needScore ?? null,
+          teamDirection: offer.rosterNeed.teamDirection || offer.teamDirection || "",
+          weakestPositions: Array.isArray(offer.rosterNeed.weakestPositions)
+            ? offer.rosterNeed.weakestPositions.slice(0, 3)
+            : undefined,
+        }
+      : undefined,
+    rfaOfferSheet: Boolean(offer.rfaOfferSheet),
+    rfaMatched: Boolean(offer.rfaMatched),
+    rightsTeamName: offer.rightsTeamName || "",
+    originalOfferTeamName: offer.originalOfferTeamName || "",
+    matchedOriginalTeamName: offer.matchedOriginalTeamName || "",
+    storyContext: keepStory ? compactStoryContextForStorage(offer.storyContext) : undefined,
+  };
+}
+
+function compactSigningForStorage(row, emergency = false) {
+  if (!row || typeof row !== "object") return row;
+
+  return {
+    day: row.day ?? null,
+    playerId: row.playerId ?? null,
+    playerName: row.playerName || "",
+    playerKey: row.playerKey || "",
+    teamName: row.teamName || row.signedWith || "",
+    signedWith: row.signedWith || row.teamName || "",
+    contract: row.contract || row.signedContract || null,
+    totalValue: row.totalValue || row.signedTotalValue || 0,
+    aav: row.aav || 0,
+    years: row.years || row.signedYears || row.contract?.salaryByYear?.length || 0,
+    spendingType: row.spendingType || "",
+    exceptionType: row.exceptionType || "",
+    payrollZone: row.payrollZone || "",
+    exceptionUsage: row.exceptionUsage
+      ? {
+          type: row.exceptionUsage.type || "",
+          amountUsed: row.exceptionUsage.amountUsed || 0,
+        }
+      : null,
+    rfaMatched: Boolean(row.rfaMatched),
+    originalOfferTeamName: row.originalOfferTeamName || "",
+    matchedOriginalTeamName: row.matchedOriginalTeamName || "",
+    declinedRightsTeamName: row.declinedRightsTeamName || "",
+    userOfferOutcomes: Array.isArray(row.userOfferOutcomes)
+      ? row.userOfferOutcomes.slice(0, emergency ? 8 : 20).map((outcome) => ({
+          id: outcome.id || "",
+          day: outcome.day ?? null,
+          playerId: outcome.playerId ?? null,
+          playerName: outcome.playerName || "",
+          playerKey: outcome.playerKey || "",
+          userTeamName: outcome.userTeamName || "",
+          status: outcome.status || "",
+          offerStatus: outcome.offerStatus || "",
+          signedWith: outcome.signedWith || "",
+          signedContract: outcome.signedContract || null,
+          signedTotalValue: outcome.signedTotalValue || 0,
+          signedYears: outcome.signedYears || 0,
+          userOfferContract: outcome.userOfferContract || null,
+          userOfferTotalValue: outcome.userOfferTotalValue || 0,
+          userOfferYears: outcome.userOfferYears || 0,
+          rfaMatched: Boolean(outcome.rfaMatched),
+          originalOfferTeamName: outcome.originalOfferTeamName || "",
+          storyContext: compactStoryContextForStorage(outcome.storyContext),
+        }))
+      : [],
+    allOffers: Array.isArray(row.allOffers)
+      ? row.allOffers.slice(0, emergency ? 6 : 12).map((offer) => compactOfferForStorage(offer, false))
+      : [],
+    storyContext: compactStoryContextForStorage(row.storyContext),
+  };
+}
+
+function compactFreeAgencyStateForStorage(state, emergency = false) {
+  if (!state || typeof state !== "object") return state;
+
+  const offersByPlayer = {};
+  for (const [playerKey, offers] of Object.entries(state.offersByPlayer || {})) {
+    offersByPlayer[playerKey] = Array.isArray(offers)
+      ? offers.slice(0, emergency ? 8 : 20).map((offer) => compactOfferForStorage(offer, false))
+      : offers;
+  }
+
+  const latestResults = state.latestResults
+    ? {
+        dayResolved: state.latestResults.dayResolved ?? null,
+        stateSummary: state.latestResults.stateSummary || null,
+        signings: Array.isArray(state.latestResults.signings)
+          ? state.latestResults.signings
+              .slice(0, emergency ? 40 : 120)
+              .map((row) => compactSigningForStorage(row, emergency))
+          : [],
+        generatedOffers: Array.isArray(state.latestResults.generatedOffers)
+          ? state.latestResults.generatedOffers
+              .slice(0, emergency ? 120 : 420)
+              .map((offer) => compactOfferForStorage(offer, true))
+          : [],
+      }
+    : null;
+
+  return {
+    ...state,
+    offersByPlayer,
+    latestResults,
+    signedPlayersLog: Array.isArray(state.signedPlayersLog)
+      ? state.signedPlayersLog.map((row) => compactSigningForStorage(row, emergency))
+      : [],
+    offerHistory: Array.isArray(state.offerHistory)
+      ? state.offerHistory.slice(-1 * (emergency ? 40 : 120)).map((offer) => compactOfferForStorage(offer, false))
+      : [],
+    dailyLog: Array.isArray(state.dailyLog)
+      ? state.dailyLog.slice(-1 * (emergency ? 5 : 12))
+      : [],
+    userOfferOutcomeLog: Array.isArray(state.userOfferOutcomeLog)
+      ? state.userOfferOutcomeLog.slice(-1 * (emergency ? 60 : 160)).map((row) => ({
+          ...row,
+          storyContext: compactStoryContextForStorage(row.storyContext),
+        }))
+      : [],
+  };
+}
+
+function compactLeagueDataForStorage(leagueData, emergency = false) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+
+  return {
+    ...leagueData,
+    freeAgencyState: compactFreeAgencyStateForStorage(leagueData.freeAgencyState, emergency),
+  };
+}
+
+function persistLeagueData(updated) {
+  if (!updated) return;
+
+  const primary = compactLeagueDataForStorage(updated, false);
+
+  try {
+    localStorage.setItem("leagueData", JSON.stringify(primary));
+    return;
+  } catch (err) {
+    console.warn("[FreeAgencyStorage] Primary leagueData save was too large. Retrying compact save.", err);
+  }
+
+  const emergency = compactLeagueDataForStorage(updated, true);
+
+  try {
+    localStorage.setItem("leagueData", JSON.stringify(emergency));
+  } catch (err) {
+    console.error("[FreeAgencyStorage] Emergency leagueData save failed.", err);
+    throw err;
+  }
+}
+
 
 function formatDollars(amount) {
   return new Intl.NumberFormat("en-US", {
@@ -10,6 +287,13 @@ function formatDollars(amount) {
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(Number(amount || 0));
+}
+
+function withTeamArticle(teamName) {
+  const name = String(teamName || "Unknown Team").trim();
+  if (!name) return "the Unknown Team";
+  if (name.toLowerCase().startsWith("the ")) return name;
+  return `the ${name}`;
 }
 
 function getContractSummary(contract, fallbackTotal = 0, fallbackYears = 0) {
@@ -53,7 +337,7 @@ function getOvrRingMetrics(overall) {
     strokeOffset: circumference * (1 - fillPercent),
   };
 }
-function InfoChip({ children, tone = "neutral" }) {
+function InfoChip({ children, tone = "neutral", onClick, title = "" }) {
   const cls =
     tone === "orange"
       ? "border-orange-500/30 bg-orange-500/10 text-orange-200"
@@ -62,7 +346,36 @@ function InfoChip({ children, tone = "neutral" }) {
       : tone === "red"
       ? "border-red-500/30 bg-red-500/10 text-red-200"
       : "border-neutral-600 bg-neutral-800 text-neutral-200";
-  return <span className={`inline-flex px-2.5 py-1 rounded-full border text-xs font-bold uppercase tracking-wide ${cls}`}>{children}</span>;
+
+  const commonClass = `inline-flex px-2.5 py-1 rounded-full border text-xs font-bold uppercase tracking-wide ${cls}`;
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title={title || "View details"}
+        className={`${commonClass} cursor-pointer transition hover:scale-[1.03] hover:border-orange-300/70 hover:bg-orange-500/20`}
+      >
+        {children}
+      </button>
+    );
+  }
+
+  return <span className={commonClass}>{children}</span>;
+}
+
+function PlayerNameButton({ children, onClick, className = "" }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`text-left font-semibold underline-offset-4 transition hover:text-orange-200 hover:underline ${className}`}
+      title="Open player card"
+    >
+      {children}
+    </button>
+  );
 }
 
 function formatToolLabel(value) {
@@ -108,6 +421,516 @@ function getSignedWithDisplay(signedWith, userTeamName) {
   return signedWith;
 }
 
+function getAllTeamsFromLeague(leagueData) {
+  if (!leagueData) return [];
+  if (Array.isArray(leagueData.teams)) return leagueData.teams;
+  if (leagueData.conferences) return Object.values(leagueData.conferences).flat();
+  return [];
+}
+
+function getTeamByName(leagueData, teamName) {
+  if (!teamName) return null;
+  return getAllTeamsFromLeague(leagueData).find((team) => team?.name === teamName) || null;
+}
+
+function getPlayerKeyFromAny(row = {}) {
+  return getOfferPlayerKeyFromParts(row.playerId || row.id || row?.player?.id, row.playerName || row.name || row?.player?.name);
+}
+
+function findPlayerInLeague(leagueData, row = {}) {
+  const playerId = row.playerId || row.id || row?.player?.id;
+  const playerName = row.playerName || row.name || row?.player?.name;
+
+  if (row?.player && typeof row.player === "object") {
+    return row.player;
+  }
+
+  const freeAgents = Array.isArray(leagueData?.freeAgents) ? leagueData.freeAgents : [];
+  const teams = getAllTeamsFromLeague(leagueData);
+  const pools = [freeAgents, ...teams.map((team) => team?.players || [])];
+
+  for (const pool of pools) {
+    for (const player of pool || []) {
+      if (playerId !== undefined && playerId !== null && playerId !== "" && player?.id === playerId) {
+        return player;
+      }
+      if (playerName && player?.name === playerName) {
+        return player;
+      }
+    }
+  }
+
+  if (playerName) {
+    return {
+      id: playerId || null,
+      name: playerName,
+      pos: row.position || row.pos || row?.player?.position || row?.player?.pos || "-",
+      age: row.age || row?.player?.age || null,
+      overall: row.overall || row?.player?.overall || null,
+      potential: row.potential || row?.player?.potential || null,
+      headshot: row.headshot || row?.player?.headshot || "",
+    };
+  }
+
+  return null;
+}
+
+function getLatestTeamHistoryRow(leagueData, teamName) {
+  const seasons = Array.isArray(leagueData?.seasonHistory) ? leagueData.seasonHistory : [];
+
+  for (const season of [...seasons].reverse()) {
+    const teamRow = (season?.teams || []).find((team) => team?.teamName === teamName || team?.name === teamName);
+    if (teamRow) {
+      return {
+        ...teamRow,
+        seasonYear: season?.seasonYear || teamRow?.seasonYear,
+        championTeam: season?.champion,
+      };
+    }
+  }
+
+  return null;
+}
+
+function formatTeamContext(leagueData, teamName) {
+  const row = getLatestTeamHistoryRow(leagueData, teamName);
+  if (!row) {
+    return {
+      label: "No recent standings context found",
+      short: "their current roster situation",
+      mood: "The player mood read will lean more on role, contract, and roster fit because recent standings are not available yet.",
+    };
+  }
+
+  const wins = Number(row?.wins || 0);
+  const losses = Number(row?.losses || 0);
+  const seed = row?.conferenceSeed || row?.seed;
+  const result = String(row?.playoffResult || "missed_playoffs").replaceAll("_", " ");
+  const record = wins || losses ? `${wins}-${losses}` : "record unavailable";
+
+  let label = `${record}`;
+  if (seed) label += `, ${seed} seed`;
+  if (result && result !== "missed playoffs") label += `, ${result}`;
+
+  let short = "a team trying to define its next step";
+  let mood = "The player mood should be fairly neutral unless role or money becomes a major factor.";
+
+  if (row?.champion) {
+    short = "a defending champion environment";
+    mood = "This should give the player a strong mood bump because the new team is coming off a title.";
+  } else if (row?.finals) {
+    short = "a Finals-level situation";
+    mood = "This should help the player mood because the team already looks like a real title threat.";
+  } else if (row?.conferenceFinals) {
+    short = "a deep playoff team";
+    mood = "This should usually improve mood because the player is joining a serious playoff group.";
+  } else if (wins >= 50) {
+    short = "a 50-win team";
+    mood = "This should be a positive mood environment because the team is already winning.";
+  } else if (wins >= 42 || row?.madePlayoffs) {
+    short = "a playoff-caliber team";
+    mood = "This should be a stable mood landing spot because the team is competitive.";
+  } else if (wins <= 25 && wins > 0) {
+    short = "a rebuilding team with a bigger role available";
+    mood = "The standings may lower short-term mood, but a bigger role or stronger contract can balance that out.";
+  }
+
+  return { label, short, mood, row };
+}
+
+function stableTextNumber(text) {
+  let out = 0;
+  for (let i = 0; i < String(text || "").length; i++) {
+    out += String(text || "").charCodeAt(i) * (i + 7);
+  }
+  return out;
+}
+
+function pickVariant(seedText, options) {
+  if (!options.length) return "";
+  return options[stableTextNumber(seedText) % options.length];
+}
+
+function buildPlayerTraitLine(player) {
+  if (!player) return "Player profile details were limited for this event.";
+
+  const age = Number(player?.age || 0);
+  const overall = Number(player?.overall || 0);
+  const potential = Number(player?.potential || overall || 0);
+  const pos = player?.pos || player?.position || "player";
+
+  if (overall >= 88) return `${player.name} is being treated like a true star-level ${pos}.`;
+  if (overall >= 82 && age <= 26) return `${player.name} gives the team a young high-end ${pos} who can still grow.`;
+  if (overall >= 80) return `${player.name} profiles as a strong rotation/starter-level ${pos}.`;
+  if (age <= 24 && potential >= overall + 3) return `${player.name} is more of an upside bet than a finished product right now.`;
+  if (age >= 32) return `${player.name} looks like a veteran stability move more than a long-term upside swing.`;
+  return `${player.name} gives the team another playable ${pos} option.`;
+}
+
+function buildToolExplanation(label, row = {}) {
+  const raw = String(label || row?.spendingType || row?.exceptionType || row?.payrollZone || "").toLowerCase();
+
+  if (raw.includes("bird")) {
+    return "Bird rights let the signing team keep its own free agent without needing normal cap room, which is why this move can happen even if the team is operating above the cap.";
+  }
+  if (raw.includes("taxpayer")) {
+    return "The taxpayer mid-level exception is a smaller spending tool for teams already operating around the tax/apron range. This usually points to a win-now team adding a role player without real cap room.";
+  }
+  if (raw.includes("mid") || raw.includes("mle")) {
+    return "The mid-level exception is the team's main over-the-cap tool. It is usually used when the player is too expensive for a minimum deal but the team does not have true cap space.";
+  }
+  if (raw.includes("minimum")) {
+    return "A minimum contract usually means the player accepted a smaller role, the team needed cheap depth, or the market did not produce a stronger offer.";
+  }
+  if (raw.includes("cap") || raw.includes("room")) {
+    return "This points to cap-space or room-exception spending. The team had enough flexibility to chase the player without relying only on minimum deals.";
+  }
+  if (raw.includes("rfa")) {
+    return "Restricted free agency lets the rights team match an outside offer sheet. The player can negotiate elsewhere, but the original team gets the final call.";
+  }
+  if (raw.includes("contending") || raw.includes("win now")) {
+    return "The team profile suggests they are prioritizing immediate wins, so the offer is more about filling a playoff rotation need than long-term upside.";
+  }
+  if (raw.includes("rebuilding") || raw.includes("retooling")) {
+    return "The team profile suggests a longer-term move, so age, upside, and role opportunity matter more than one-season impact.";
+  }
+
+  return "This tag is a quick label from the free agency engine. The full context depends on team need, available spending tools, player market value, and the player's role fit.";
+}
+
+
+function normalizeStorySections(story) {
+  if (!story || typeof story !== "object") return [];
+
+  if (Array.isArray(story.sections) && story.sections.length) {
+    return story.sections.filter((section) => section && (section.label || section.value));
+  }
+
+  return [
+    story.whatHappened ? { label: "What happened", value: story.whatHappened } : null,
+    story.playerFit ? { label: "Player fit", value: story.playerFit } : null,
+    story.teamContext ? { label: "Team context", value: story.teamContext } : null,
+    story.moodAngle ? { label: "Mood angle", value: story.moodAngle } : null,
+    story.tagMeaning ? { label: "Tag meaning", value: story.tagMeaning } : null,
+  ].filter(Boolean);
+}
+
+function buildPopupFromStoryContext(row, chipLabel = "Transaction Detail") {
+  const story = row?.storyContext || row?.chosenOffer?.storyContext || row?.offerSheet?.storyContext;
+  if (!story) return null;
+
+  return {
+    title: story.headline || `${row?.playerName || story.playerName || "Player"} - ${chipLabel}`,
+    subtitle: story.subtitle || story.contractLine || "Free agency context",
+    playerSource: {
+      ...row,
+      playerName: row?.playerName || story.playerName,
+      teamName: row?.teamName || row?.signedWith || story.teamName,
+    },
+    teamSide: story.teamSide || null,
+    playerSide: story.playerSide || null,
+    otherOffers: Array.isArray(story.otherOffers) ? story.otherOffers : [],
+    rosterContext: story.rosterContext || null,
+    sections: normalizeStorySections(story),
+  };
+}
+
+
+function includesAnyText(text, needles = []) {
+  const haystack = String(text || "").toLowerCase();
+  return needles.some((needle) => haystack.includes(String(needle || "").toLowerCase()));
+}
+
+function formatPositionContextLabel(pos) {
+  const raw = String(pos || "").trim().toUpperCase();
+
+  const labels = {
+    PG: "point guard",
+    SG: "shooting guard",
+    SF: "small forward / wing",
+    PF: "power forward / frontcourt",
+    C: "center",
+  };
+
+  return labels[raw] || String(pos || "position").replaceAll("_", " ");
+}
+
+function formatPositionChipLabel(pos) {
+  const raw = String(pos || "").trim().toUpperCase();
+
+  const labels = {
+    PG: "Point Guard",
+    SG: "Shooting Guard",
+    SF: "Wing",
+    PF: "Frontcourt",
+    C: "Center",
+  };
+
+  return labels[raw] || String(pos || "Position").replaceAll("_", " ");
+}
+
+function getFocusedTitleLabel(focusType) {
+  if (focusType === "cba") return "Contract / CBA Path";
+  if (focusType === "need") return "Position Need";
+  if (focusType === "direction") return "Team Direction";
+  return "Transaction Context";
+}
+
+function getFocusedSubtitle(focusType) {
+  if (focusType === "cba") return "Only showing how this signing or offer was financially possible.";
+  if (focusType === "need") return "Only showing the roster and position-need logic behind this tag.";
+  if (focusType === "direction") return "Only showing the team's competitive situation and direction.";
+  return "Full transaction context.";
+}
+
+function buildFocusFallbackSections({ row = {}, fullPopup = {}, chipLabel = "Context", focusType = "full", leagueData = null }) {
+  const storySections = Array.isArray(fullPopup?.sections) ? fullPopup.sections : [];
+  const rosterContext = fullPopup?.rosterContext || row?.storyContext?.rosterContext || row?.rosterContext || null;
+  const teamName = row?.teamName || row?.signedWith || fullPopup?.playerSource?.teamName || fullPopup?.teamName || "Unknown Team";
+  const playerName = row?.playerName || fullPopup?.playerSource?.playerName || fullPopup?.playerName || "the player";
+
+  if (focusType === "cba") {
+    const pathPieces = [
+      row?.spendingType ? formatToolLabel(row.spendingType) : "",
+      row?.exceptionType ? formatToolLabel(row.exceptionType) : "",
+      row?.payrollZone ? formatToolLabel(row.payrollZone) : "",
+    ].filter(Boolean);
+
+    const sections = [
+      {
+        label: "How the signing path worked",
+        value: buildToolExplanation(chipLabel || pathPieces[0] || "contract path", row),
+      },
+    ];
+
+    if (pathPieces.length) {
+      sections.push({
+        label: "Recorded path",
+        value: `The engine tagged this as ${pathPieces.join(" / ")}. That is the financial lane being shown here.`,
+      });
+    }
+
+    if (row?.exceptionUsage?.amountUsed > 0) {
+      sections.push({
+        label: "Amount used",
+        value: `${teamName} used ${formatDollars(row.exceptionUsage.amountUsed)} of this spending path.`,
+      });
+    }
+
+    if (row?.rfaMatched || row?.chosenOffer?.rfaMatched || row?.rfaOfferSheet) {
+      sections.push({
+        label: "Restricted free agency note",
+        value: "This tag is tied to restricted free agency. The player could sign an outside offer sheet, but the rights team could still match depending on the decision state.",
+      });
+    }
+
+    return sections;
+  }
+
+  if (focusType === "need") {
+    const needPos = row?.rosterNeed?.position || row?.positionBucket || rosterContext?.positionBucket || "";
+    const needScore = row?.rosterNeed?.needScore ?? row?.needScore ?? null;
+    const positionText = formatPositionContextLabel(needPos);
+
+    const sections = [
+      {
+        label: "Position need",
+        value: needPos
+          ? `${teamName} had this tagged as a ${positionText} need${formatNeedScore(needScore) ? ` at ${formatNeedScore(needScore)}` : ""}. This view is only about the roster-fit reason for the tag, not the full signing story.`
+          : `${teamName} had a roster-need tag attached to this move, but the exact position was not stored on this row.`,
+      },
+    ];
+
+    if (rosterContext?.samePositionNames) {
+      sections.push({
+        label: "Players already in that area",
+        value: `${teamName} already had ${rosterContext.samePositionNames} in the same general position group, so this tag is about depth, role balance, or upgrading the rotation around that spot.`,
+      });
+    }
+
+    if (rosterContext?.topPlayerNames || rosterContext?.starNames) {
+      sections.push({
+        label: "Roster around the need",
+        value: `The broader roster context included ${rosterContext.starNames || rosterContext.topPlayerNames}. The need tag should be read around those players, not as a full-team reset by itself.`,
+      });
+    }
+
+    if (rosterContext?.roleRead) {
+      sections.push({
+        label: "Role read",
+        value: rosterContext.roleRead,
+      });
+    }
+
+    return sections;
+  }
+
+  if (focusType === "direction") {
+    const teamContext = formatTeamContext(leagueData, teamName);
+    const direction = formatToolLabel(row?.teamDirection || row?.rosterNeed?.teamDirection || fullPopup?.teamDirection || "");
+    const sections = [
+      {
+        label: "Team direction",
+        value: direction
+          ? `${teamName} was tagged as ${direction}. This view is only about where the team is competitively, not the whole contract or player-side decision.`
+          : `${teamName}'s exact direction tag was not stored on this row, so the read comes from recent team context and the offer type.`,
+      },
+      {
+        label: "Recent team context",
+        value: `${teamName} is coming off ${teamContext.label}. This reads like ${teamContext.short}.`,
+      },
+      {
+        label: "What that usually means",
+        value: buildToolExplanation(direction || chipLabel || "team direction", row),
+      },
+    ];
+
+    return sections;
+  }
+
+  return storySections;
+}
+
+function buildFocusedPopup({ fullPopup, row = {}, chipLabel = "Context", focusType = "full", leagueData = null }) {
+  if (!fullPopup) return null;
+  if (!focusType || focusType === "full") return fullPopup;
+
+  const labelKeywords = {
+    cba: ["tag", "contract", "cba", "money", "cap", "rights", "rfa", "exception", "minimum", "bird", "payroll", "apron", "spending"],
+    need: ["need", "position", "roster", "fit", "rotation", "depth", "role"],
+    direction: ["team context", "direction", "recent", "standings", "record", "playoff", "contending", "rebuilding", "retooling", "win now", "mood"],
+  };
+
+  const keywords = labelKeywords[focusType] || [];
+  const filteredSections = (fullPopup.sections || []).filter((section) => {
+    const label = section?.label || "";
+    const value = section?.value || "";
+    return includesAnyText(label, keywords) || includesAnyText(value, keywords);
+  });
+
+  const fallbackSections = buildFocusFallbackSections({
+    row,
+    fullPopup,
+    chipLabel,
+    focusType,
+    leagueData,
+  });
+
+  const seen = new Set();
+  const mergedSections = [...filteredSections, ...fallbackSections]
+    .filter((section) => section && (section.label || section.value))
+    .filter((section) => {
+      const key = `${section.label || ""}|${section.value || ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 5);
+
+  return {
+    ...fullPopup,
+    title: `${fullPopup?.playerSource?.playerName || row?.playerName || "Player"} - ${getFocusedTitleLabel(focusType)}`,
+    subtitle: getFocusedSubtitle(focusType),
+    teamSide: null,
+    playerSide: null,
+    otherOffers: [],
+    sections: mergedSections.length ? mergedSections : fallbackSections,
+  };
+}
+
+
+function buildSigningPopup({ row, chipLabel, leagueData, selectedTeamName }) {
+  const backendPopup = buildPopupFromStoryContext(row, chipLabel);
+  if (backendPopup) return backendPopup;
+
+  const player = findPlayerInLeague(leagueData, row);
+  const signedWith = row?.signedWith || row?.teamName || row?.rightsTeamName || selectedTeamName || "Unknown Team";
+  const teamContext = formatTeamContext(leagueData, signedWith);
+  const contractLine = formatContractLine(row?.contract || row?.signedContract || row?.offerSheet?.contract, row?.totalValue || row?.signedTotalValue, row?.years || row?.signedYears);
+  const seed = `${row?.playerName || player?.name}-${signedWith}-${contractLine}-${chipLabel}-${row?.day || ""}`;
+  const opener = pickVariant(seed, [
+    `${signedWith} did not make this move randomly - this was a fit, money, and timing decision.`,
+    `This signing has a pretty clear team-building logic behind it once you look past the headline.`,
+    `${signedWith} saw a path to add value here without changing the whole roster direction.`,
+    `The move makes more sense when you connect the contract, the player profile, and where ${signedWith} sits as a team.`,
+    `This is the kind of signing that tells you what ${signedWith} thinks it needs right now.`,
+  ]);
+
+  const playerName = row?.playerName || player?.name || "This player";
+  const rfaLine = row?.rfaMatched
+    ? `${signedWith} matched the offer sheet instead of letting ${playerName} leave. ${row?.originalOfferTeamName ? `${row.originalOfferTeamName} appears to have created the outside offer pressure.` : "The outside offer created the pressure point."}`
+    : null;
+
+  return {
+    title: `${playerName} - ${chipLabel}`,
+    subtitle: contractLine !== "-" ? contractLine : "Free agency detail",
+    playerSource: { ...row, playerName, teamName: signedWith },
+    sections: [
+      { label: "What happened", value: opener },
+      { label: "Player fit", value: buildPlayerTraitLine(player) },
+      { label: "Team context", value: `${signedWith} is coming off ${teamContext.label}. This reads like ${teamContext.short}.` },
+      { label: "Mood angle", value: teamContext.mood },
+      ...(rfaLine ? [{ label: "RFA detail", value: rfaLine }] : []),
+      { label: "Tag meaning", value: buildToolExplanation(chipLabel, row) },
+    ],
+  };
+}
+
+function buildOfferPopup({ row, chipLabel, leagueData }) {
+  const backendPopup = buildPopupFromStoryContext(row, chipLabel);
+  if (backendPopup) return backendPopup;
+
+  const player = findPlayerInLeague(leagueData, row);
+  const teamName = row?.teamName || "Unknown Team";
+  const teamContext = formatTeamContext(leagueData, teamName);
+  const contractLine = formatContractLine(row?.contract, row?.totalValue, row?.years);
+  const needText = row?.rosterNeed?.position
+    ? `The engine marked ${row.rosterNeed.position} as a need${formatNeedScore(row?.rosterNeed?.needScore) ? ` at ${formatNeedScore(row.rosterNeed.needScore)}` : ""}.`
+    : "No specific position-need score was attached to this offer.";
+  const seed = `${row?.playerName}-${teamName}-${contractLine}-${chipLabel}`;
+  const opener = pickVariant(seed, [
+    `${teamName} is testing the market here rather than waiting for leftovers.`,
+    `This offer looks like a targeted roster-building swing from ${teamName}.`,
+    `${teamName} seems to be using free agency to solve a specific roster problem.`,
+    `This is a live-market offer, so the player can still compare it against other teams.`,
+  ]);
+
+  return {
+    title: `${row?.playerName || player?.name || "Player"} - ${chipLabel}`,
+    subtitle: `${teamName} offer${contractLine !== "-" ? ` - ${contractLine}` : ""}`,
+    playerSource: { ...row, playerName: row?.playerName || player?.name, teamName },
+    sections: [
+      { label: "Why the team offered", value: opener },
+      { label: "Need / direction", value: `${needText} Team direction tag: ${formatToolLabel(row?.teamDirection) || "not listed"}.` },
+      { label: "Team context", value: `${teamName} is coming off ${teamContext.label}. This reads like ${teamContext.short}.` },
+      { label: "Player angle", value: buildPlayerTraitLine(player) },
+      { label: "Tag meaning", value: buildToolExplanation(chipLabel, row) },
+    ],
+  };
+}
+
+function buildUserOfferPopup({ row, chipLabel, leagueData, selectedTeamName }) {
+  const backendPopup = buildPopupFromStoryContext(row, chipLabel);
+  if (backendPopup) return backendPopup;
+
+  const player = findPlayerInLeague(leagueData, row);
+  const signedWith = row?.signedWith || selectedTeamName || "your team";
+  const contractLine = formatContractLine(row?.contract || row?.userOfferContract || row?.signedContract, row?.totalValue || row?.userOfferTotalValue || row?.signedTotalValue, row?.years || row?.userOfferYears || row?.signedYears);
+  const teamContext = formatTeamContext(leagueData, signedWith);
+
+  return {
+    title: `${row?.playerName || player?.name || "Player"} - ${chipLabel}`,
+    subtitle: contractLine !== "-" ? contractLine : "Offer tracker detail",
+    playerSource: { ...row, playerName: row?.playerName || player?.name, teamName: signedWith },
+    sections: [
+      { label: "Offer status", value: row?.detail || "This row tracks what happened to your live offer." },
+      { label: "Player angle", value: buildPlayerTraitLine(player) },
+      { label: "Team context", value: `${signedWith} is tied to ${teamContext.label}. ${teamContext.mood}` },
+      { label: "Tag meaning", value: buildToolExplanation(chipLabel, row) },
+    ],
+  };
+}
+
 export default function ViewingOffers() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam, setLeagueData, setSelectedTeam } = useGame();
@@ -127,6 +950,8 @@ export default function ViewingOffers() {
       return [];
     }
   });
+  const [playerCardView, setPlayerCardView] = useState(null);
+  const [infoPopup, setInfoPopup] = useState(null);
 
   const advanceFreeAgencyDay = simEngine.advanceFreeAgencyDay;
   const processPendingUserFreeAgencyDecisions =
@@ -170,6 +995,77 @@ export default function ViewingOffers() {
 
   const getTeamLogo = (teamName) => {
     return teamLogoMap.get(teamName) || "";
+  };
+
+
+  const openPlayerCardFromRow = (row = {}, preferredTeamName = "") => {
+    const player = findPlayerInLeague(leagueData, row);
+    if (!player) return;
+
+    const resolvedTeamName =
+      preferredTeamName ||
+      row?.teamName ||
+      row?.signedWith ||
+      row?.rightsTeamName ||
+      player?.teamName ||
+      player?.rights?.heldByTeam ||
+      "Free Agent";
+
+    setPlayerCardView({
+      player,
+      teamName: resolvedTeamName,
+      teamLogo: getTeamLogo(resolvedTeamName) || player?.teamLogo || "",
+    });
+  };
+
+  const openSigningInfo = (row, chipLabel = "Signing Detail", focusType = "full") => {
+    const fullPopup = buildSigningPopup({
+      row,
+      chipLabel,
+      leagueData,
+      selectedTeamName: selectedTeam?.name || "",
+    });
+
+    setInfoPopup(buildFocusedPopup({
+      fullPopup,
+      row,
+      chipLabel,
+      focusType,
+      leagueData,
+    }));
+  };
+
+  const openOfferInfo = (row, chipLabel = "Offer Detail", focusType = "full") => {
+    const fullPopup = buildOfferPopup({
+      row,
+      chipLabel,
+      leagueData,
+    });
+
+    setInfoPopup(buildFocusedPopup({
+      fullPopup,
+      row,
+      chipLabel,
+      focusType,
+      leagueData,
+    }));
+  };
+
+  const openUserOfferInfo = (row, chipLabel = "Offer Detail", focusType = "full") => {
+    const fullPopup = buildUserOfferPopup({
+      row,
+      chipLabel,
+      leagueData,
+      selectedTeamName: selectedTeam?.name || "",
+    });
+
+    setInfoPopup(buildFocusedPopup({
+      fullPopup,
+      row,
+      chipLabel,
+      focusType,
+      leagueData,
+    }));
   };
 
   const getPlayerKeyFromFreeAgent = (player) => {
@@ -290,6 +1186,7 @@ export default function ViewingOffers() {
           : matchedByOriginal
           ? `${signedWith} matched your RFA offer sheet. ${log.playerName || "The player"} signed with ${signedWith}.`
           : `${log.playerName || "The player"} signed with ${signedWith || "another team"} instead of accepting your offer.`,
+        storyContext: log?.storyContext || userOffer?.storyContext || null,
         popupEligible: !won,
       });
     }
@@ -327,7 +1224,7 @@ export default function ViewingOffers() {
       setLeagueData(updated);
     }
 
-    localStorage.setItem("leagueData", JSON.stringify(updated));
+    persistLeagueData(updated);
 
     if (typeof setSelectedTeam === "function" && selectedTeam?.name) {
       let nextSelectedTeam = null;
@@ -837,7 +1734,9 @@ return (
                       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                         <div>
                           <div className="text-white font-semibold">
-                            {row.playerName}
+                            <PlayerNameButton onClick={() => openPlayerCardFromRow(row, row.signedWith || selectedTeam?.name || "Free Agent")}>
+                              {row.playerName}
+                            </PlayerNameButton>
                           </div>
                           <div className="text-sm text-gray-400 mt-1">
                             {row.detail}
@@ -866,14 +1765,18 @@ return (
                         </div>
 
                         <div className="flex flex-wrap gap-2 md:justify-end">
-                          <InfoChip tone={getOfferStatusTone(row.status)}>
+                          <InfoChip tone="orange" onClick={() => openUserOfferInfo(row, "Full Transaction Context", "full")}>Click For Context</InfoChip>
+                          <InfoChip
+                            tone={getOfferStatusTone(row.status)}
+                            onClick={() => openUserOfferInfo(row, getOfferStatusLabel(row.status, row.signedWith, selectedTeam?.name), "cba")}
+                          >
                             {getOfferStatusLabel(row.status, row.signedWith, selectedTeam?.name)}
                           </InfoChip>
                           {row.signedWith && row.signedWith !== selectedTeam?.name && (
-                            <InfoChip tone="orange">Signed With {row.signedWith}</InfoChip>
+                            <InfoChip tone="orange" onClick={() => openUserOfferInfo(row, `Signed With ${row.signedWith}`, "direction")}>Signed With {row.signedWith}</InfoChip>
                           )}
                           {row.signedWith && row.signedWith === selectedTeam?.name && (
-                            <InfoChip tone="green">Signed With You</InfoChip>
+                            <InfoChip tone="green" onClick={() => openUserOfferInfo(row, "Signed With You", "direction")}>Signed With You</InfoChip>
                           )}
                         </div>
                       </div>
@@ -929,7 +1832,9 @@ return (
 
                             <div className="min-w-0 flex-1">
                               <div className="text-white font-semibold text-2xl leading-tight">
-                                {row?.player?.name || row?.playerName || "Unknown Player"}
+                                <PlayerNameButton onClick={() => openPlayerCardFromRow(row, row?.rightsTeamName || selectedTeam?.name || "Free Agent")} className="text-2xl">
+                                  {row?.player?.name || row?.playerName || "Unknown Player"}
+                                </PlayerNameButton>
                               </div>
 
                               <div className="text-sm text-gray-400 mt-1">
@@ -946,8 +1851,9 @@ return (
                               </div>
 
                               <div className="flex flex-wrap gap-2 mt-3">
-                                <InfoChip tone="orange">RFA Offer Sheet</InfoChip>
-                                {row?.deadlineDay && <InfoChip>Deadline Day {row.deadlineDay}</InfoChip>}
+                                <InfoChip tone="orange" onClick={() => openSigningInfo(row, "Full Transaction Context", "full")}>Click For Context</InfoChip>
+                                <InfoChip tone="orange" onClick={() => openSigningInfo(row, "RFA Offer Sheet", "cba")}>RFA Offer Sheet</InfoChip>
+                                {row?.deadlineDay && <InfoChip onClick={() => openSigningInfo(row, `Deadline Day ${row.deadlineDay}`, "cba")}>Deadline Day {row.deadlineDay}</InfoChip>}
                               </div>
                             </div>
                           </div>
@@ -1154,7 +2060,9 @@ return (
 
     <div className="min-w-0 flex-1">
       <div className="text-white font-semibold text-2xl leading-tight">
-        {row?.player?.name || row?.playerName || "Unknown Player"}
+        <PlayerNameButton onClick={() => openPlayerCardFromRow(row, selectedTeam?.name || "Free Agent")} className="text-2xl">
+          {row?.player?.name || row?.playerName || "Unknown Player"}
+        </PlayerNameButton>
       </div>
 
       <div className="text-sm text-gray-400 mt-1">
@@ -1170,10 +2078,11 @@ return (
         Current year cap hit: {formatDollars(contractSummary.currentYearSalary || row?.currentYearSalary || 0)}
       </div>
       <div className="flex flex-wrap gap-2 mt-3">
-        {row?.spendingType && <InfoChip tone={row.spendingType === "bird_rights" ? "orange" : "green"}>{formatToolLabel(row.spendingType)}</InfoChip>}
-        {row?.exceptionType && <InfoChip tone="green">{formatToolLabel(row.exceptionType)}</InfoChip>}
-        {row?.payrollZone && <InfoChip>{formatToolLabel(row.payrollZone)}</InfoChip>}
-        {row?.chosenOffer?.rfaMatched && <InfoChip tone="orange">RFA Match</InfoChip>}
+        <InfoChip tone="orange" onClick={() => openSigningInfo(row, "Full Transaction Context", "full")}>Click For Context</InfoChip>
+        {row?.spendingType && <InfoChip tone={row.spendingType === "bird_rights" ? "orange" : "green"} onClick={() => openSigningInfo(row, formatToolLabel(row.spendingType), "cba")}>{formatToolLabel(row.spendingType)}</InfoChip>}
+        {row?.exceptionType && <InfoChip tone="green" onClick={() => openSigningInfo(row, formatToolLabel(row.exceptionType), "cba")}>{formatToolLabel(row.exceptionType)}</InfoChip>}
+        {row?.payrollZone && <InfoChip onClick={() => openSigningInfo(row, formatToolLabel(row.payrollZone), "cba")}>{formatToolLabel(row.payrollZone)}</InfoChip>}
+        {row?.chosenOffer?.rfaMatched && <InfoChip tone="orange" onClick={() => openSigningInfo(row, "RFA Match", "cba")}>RFA Match</InfoChip>}
       </div>
     </div>
   </div>
@@ -1230,7 +2139,9 @@ return (
 
                               <div className="min-w-0 flex-1">
                                 <div className="text-white font-semibold">
-                                  {signing.playerName || "Unknown Player"}
+                                  <PlayerNameButton onClick={() => openPlayerCardFromRow(signing, signing?.signedWith || "Free Agent")}>
+                                    {signing.playerName || "Unknown Player"}
+                                  </PlayerNameButton>
                                 </div>
                                 <div className="text-sm text-gray-400 mt-1">
                                   Signed with {signing.signedWith || "Unknown Team"}
@@ -1239,10 +2150,11 @@ return (
                                   {formatContractLine(signing?.contract)}
                                 </div>
                                 <div className="flex flex-wrap gap-2 mt-2">
-                                  {signing?.spendingType && <InfoChip tone={signing.spendingType === "bird_rights" ? "orange" : "green"}>{formatToolLabel(signing.spendingType)}</InfoChip>}
-                                  {signing?.exceptionType && <InfoChip tone="green">{formatToolLabel(signing.exceptionType)}</InfoChip>}
-                                  {signing?.exceptionUsage?.amountUsed > 0 && <InfoChip tone="orange">Used {formatDollars(signing.exceptionUsage.amountUsed)}</InfoChip>}
-                                  {signing?.rfaMatched && <InfoChip tone="orange">RFA Matched</InfoChip>}
+                                  <InfoChip tone="orange" onClick={() => openSigningInfo(signing, "Full Transaction Context", "full")}>Click For Context</InfoChip>
+                                  {signing?.spendingType && <InfoChip tone={signing.spendingType === "bird_rights" ? "orange" : "green"} onClick={() => openSigningInfo(signing, formatToolLabel(signing.spendingType), "cba")}>{formatToolLabel(signing.spendingType)}</InfoChip>}
+                                  {signing?.exceptionType && <InfoChip tone="green" onClick={() => openSigningInfo(signing, formatToolLabel(signing.exceptionType), "cba")}>{formatToolLabel(signing.exceptionType)}</InfoChip>}
+                                  {signing?.exceptionUsage?.amountUsed > 0 && <InfoChip tone="orange" onClick={() => openSigningInfo(signing, `Used ${formatDollars(signing.exceptionUsage.amountUsed)}`, "cba")}>Used {formatDollars(signing.exceptionUsage.amountUsed)}</InfoChip>}
+                                  {signing?.rfaMatched && <InfoChip tone="orange" onClick={() => openSigningInfo(signing, "RFA Matched", "cba")}>RFA Matched</InfoChip>}
                                 </div>
                               </div>
                             </div>
@@ -1297,17 +2209,21 @@ return (
                                   {offer.teamName || "Unknown Team"}
                                 </div>
                                 <div className="text-sm text-gray-400 mt-1">
-                                  Offered {offer.playerName || "Unknown Player"}
+                                  Offered{" "}
+                                  <PlayerNameButton onClick={() => openPlayerCardFromRow(offer, "Free Agent")} className="text-sm text-gray-200">
+                                    {offer.playerName || "Unknown Player"}
+                                  </PlayerNameButton>
                                 </div>
                                 <div className="text-sm text-gray-500 mt-2">
                                   {formatContractLine(offer?.contract, offer?.totalValue, offer?.years)}
                                 </div>
                                 <div className="flex flex-wrap gap-2 mt-2">
-                                  {offer?.spendingType && <InfoChip tone={offer.spendingType === "bird_rights" ? "orange" : "green"}>{formatToolLabel(offer.spendingType)}</InfoChip>}
-                                  {offer?.exceptionType && <InfoChip tone="green">{formatToolLabel(offer.exceptionType)}</InfoChip>}
-                                  {offer?.rosterNeed?.position && <InfoChip tone="orange">Need {offer.rosterNeed.position} {formatNeedScore(offer.rosterNeed.needScore)}</InfoChip>}
-                                  {offer?.teamDirection && <InfoChip>{formatToolLabel(offer.teamDirection)}</InfoChip>}
-                                  {offer?.payrollZone && <InfoChip>{formatToolLabel(offer.payrollZone)}</InfoChip>}
+                                  <InfoChip tone="orange" onClick={() => openOfferInfo(offer, "Full Transaction Context", "full")}>Click For Context</InfoChip>
+                                  {offer?.spendingType && <InfoChip tone={offer.spendingType === "bird_rights" ? "orange" : "green"} onClick={() => openOfferInfo(offer, formatToolLabel(offer.spendingType), "cba")}>{formatToolLabel(offer.spendingType)}</InfoChip>}
+                                  {offer?.exceptionType && <InfoChip tone="green" onClick={() => openOfferInfo(offer, formatToolLabel(offer.exceptionType), "cba")}>{formatToolLabel(offer.exceptionType)}</InfoChip>}
+                                  {offer?.rosterNeed?.position && <InfoChip tone="orange" onClick={() => openOfferInfo(offer, `Need ${formatPositionChipLabel(offer.rosterNeed.position)}`, "need")}>Need {formatPositionChipLabel(offer.rosterNeed.position)} {formatNeedScore(offer.rosterNeed.needScore)}</InfoChip>}
+                                  {offer?.teamDirection && <InfoChip onClick={() => openOfferInfo(offer, formatToolLabel(offer.teamDirection), "direction")}>{formatToolLabel(offer.teamDirection)}</InfoChip>}
+                                  {offer?.payrollZone && <InfoChip onClick={() => openOfferInfo(offer, formatToolLabel(offer.payrollZone), "cba")}>{formatToolLabel(offer.payrollZone)}</InfoChip>}
                                 </div>
                               </div>
                             </div>
@@ -1436,7 +2352,9 @@ return (
                   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                     <div>
                       <div className="text-white text-lg font-bold">
-                        {row.playerName}
+                        <PlayerNameButton onClick={() => openPlayerCardFromRow(row, row.signedWith || selectedTeam?.name || "Free Agent")} className="text-lg">
+                          {row.playerName}
+                        </PlayerNameButton>
                       </div>
                       <div className="text-sm text-gray-300 mt-1">
                         {row.detail}
@@ -1464,11 +2382,15 @@ return (
                     </div>
 
                     <div className="flex flex-wrap gap-2 md:justify-end">
-                      <InfoChip tone={getOfferStatusTone(row.status)}>
+                      <InfoChip tone="orange" onClick={() => openUserOfferInfo(row, "Full Transaction Context", "full")}>Click For Context</InfoChip>
+                      <InfoChip
+                        tone={getOfferStatusTone(row.status)}
+                        onClick={() => openUserOfferInfo(row, getOfferStatusLabel(row.status, row.signedWith, selectedTeam?.name), "cba")}
+                      >
                         {getOfferStatusLabel(row.status, row.signedWith, selectedTeam?.name)}
                       </InfoChip>
-                      {row.signedWith && row.signedWith !== selectedTeam?.name && <InfoChip tone="orange">Signed With {row.signedWith}</InfoChip>}
-                      {row.signedWith && row.signedWith === selectedTeam?.name && <InfoChip tone="green">Signed With You</InfoChip>}
+                      {row.signedWith && row.signedWith !== selectedTeam?.name && <InfoChip tone="orange" onClick={() => openUserOfferInfo(row, `Signed With ${row.signedWith}`, "direction")}>Signed With {row.signedWith}</InfoChip>}
+                      {row.signedWith && row.signedWith === selectedTeam?.name && <InfoChip tone="green" onClick={() => openUserOfferInfo(row, "Signed With You", "direction")}>Signed With You</InfoChip>}
                     </div>
                   </div>
                 </div>
@@ -1486,6 +2408,138 @@ return (
           </div>
         </div>
       )}
+
+      {infoPopup && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[80] px-4 py-6">
+          <div className="w-full max-w-2xl bg-neutral-800 rounded-2xl border border-orange-500/40 shadow-2xl p-6">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-[0.22em] text-orange-300 mb-2">
+                  Transaction Context
+                </div>
+                <h2 className="text-2xl font-extrabold text-white">
+                  {infoPopup.title}
+                </h2>
+                {infoPopup.subtitle && (
+                  <p className="text-sm text-gray-400 mt-1">{infoPopup.subtitle}</p>
+                )}
+              </div>
+              <button
+                onClick={() => setInfoPopup(null)}
+                className="px-3 py-2 rounded-lg bg-neutral-700 hover:bg-neutral-600 text-white font-semibold transition"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="bm-orange-scroll max-h-[430px] overflow-y-auto pr-2 space-y-3">
+              {(infoPopup.teamSide || infoPopup.playerSide) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {infoPopup.teamSide && (
+                    <div className="bg-orange-500/10 border border-orange-500/30 rounded-xl px-4 py-3">
+                      <div className="text-xs font-bold uppercase tracking-[0.16em] text-orange-300 mb-1">
+                        {infoPopup.teamSide.title || "Team Side"}
+                      </div>
+                      <div className="text-sm leading-relaxed text-gray-100 whitespace-pre-line">
+                        “{infoPopup.teamSide.summary}”
+                      </div>
+                      {!!infoPopup.teamSide.bullets?.length && (
+                        <div className="mt-3 space-y-1">
+                          {infoPopup.teamSide.bullets.map((bullet, idx) => (
+                            <div key={`team-side-${idx}`} className="text-xs leading-relaxed text-gray-300">
+                              • {bullet}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {infoPopup.playerSide && (
+                    <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3">
+                      <div className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-300 mb-1">
+                        {infoPopup.playerSide.title || "Player Side"}
+                      </div>
+                      <div className="text-sm leading-relaxed text-gray-100 whitespace-pre-line">
+                        “{infoPopup.playerSide.summary}”
+                      </div>
+                      {!!infoPopup.playerSide.bullets?.length && (
+                        <div className="mt-3 space-y-1">
+                          {infoPopup.playerSide.bullets.map((bullet, idx) => (
+                            <div key={`player-side-${idx}`} className="text-xs leading-relaxed text-gray-300">
+                              • {bullet}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!!infoPopup.otherOffers?.length && (
+                <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
+                  <div className="text-xs font-bold uppercase tracking-[0.16em] text-orange-300 mb-2">
+                    Real competing offers
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {infoPopup.otherOffers.map((offer, idx) => (
+                      <div key={`${offer.teamName}-${idx}`} className="bg-neutral-800/80 border border-neutral-700 rounded-lg px-3 py-2">
+                        <div className="text-[11px] text-gray-500 uppercase tracking-wide">
+                          Option {idx + 2}
+                        </div>
+                        <div className="text-sm text-white font-bold">
+                          {offer.displayTeamName || withTeamArticle(offer.teamName)}
+                        </div>
+                        <div className="text-xs text-gray-300 mt-0.5">
+                          {offer.line || "Terms unavailable"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(infoPopup.sections || []).map((section, idx) => (
+                <div key={`${section.label}-${idx}`} className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
+                  <div className="text-xs font-bold uppercase tracking-[0.16em] text-orange-300 mb-1">
+                    {section.label}
+                  </div>
+                  <div className="text-sm leading-relaxed text-gray-200">
+                    {section.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-end gap-3 mt-5">
+              {infoPopup.playerSource && (
+                <button
+                  onClick={() => openPlayerCardFromRow(infoPopup.playerSource, infoPopup.playerSource?.teamName || infoPopup.playerSource?.signedWith || "Free Agent")}
+                  className="px-5 py-2.5 rounded-lg bg-neutral-700 hover:bg-neutral-600 text-white font-bold transition"
+                >
+                  Open Player Card
+                </button>
+              )}
+              <button
+                onClick={() => setInfoPopup(null)}
+                className="px-5 py-2.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white font-bold transition"
+              >
+                Got It
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <PlayerCardModal
+        open={!!playerCardView?.player}
+        player={playerCardView?.player}
+        teamName={playerCardView?.teamName || "Free Agent"}
+        teamLogo={playerCardView?.teamLogo || ""}
+        leagueData={leagueData}
+        onClose={() => setPlayerCardView(null)}
+      />
 
     </div>
   );

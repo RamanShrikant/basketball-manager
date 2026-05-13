@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import LZString from "lz-string";
+import PageFade from "../components/PageFade";
+import "../styles/BMAnimations.css";
+import "../styles/BMPageBackground.css";
 
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
@@ -549,7 +552,7 @@ export default function AwardTracker() {
 
   if (!leagueData || !selectedTeam) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-neutral-900 text-white">
+      <div className="flex min-h-screen flex-col items-center justify-center bmCourtPage text-white">
         <p className="mb-3 text-lg">No team selected or league missing.</p>
         <button
           onClick={() => navigate("/team-selector")}
@@ -562,7 +565,8 @@ export default function AwardTracker() {
   }
 
   return (
-    <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center py-10">
+    <PageFade>
+    <div className="min-h-screen bmCourtPage text-white flex flex-col items-center py-10">
       <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
         <div className="w-24" />
         <h1 className="text-3xl md:text-4xl font-extrabold text-orange-500 text-center">
@@ -593,7 +597,7 @@ export default function AwardTracker() {
 
       {cardPlayer && (
         <div className="relative w-full flex justify-center">
-          <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
+          <div className="relative bmSolidPanel w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
             <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
 
             <div className="flex items-end justify-between relative">
@@ -691,7 +695,7 @@ export default function AwardTracker() {
       )}
 
       <div className="w-full flex justify-center mt-[-1px]">
-        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar">
+        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar bmTablePanel">
           <table className="w-full border-collapse text-center text-[17px] font-medium">
             <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
               <tr>
@@ -822,5 +826,7 @@ export default function AwardTracker() {
         Back to Team Hub
       </button>
     </div>
+  
+    </PageFade>
   );
 }

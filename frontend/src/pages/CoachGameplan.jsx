@@ -6,6 +6,9 @@
     import React, { useState, useEffect, useMemo } from "react";
     import { useGame } from "../context/GameContext";
     import { useNavigate } from "react-router-dom";
+import PageFade from "../components/PageFade";
+import "../styles/BMAnimations.css";
+import "../styles/BMPageBackground.css";
     
     
     const GAMEPLAN_VERSION = 2;
@@ -487,7 +490,7 @@ const handleAutoRebuild = () => {
 
     if (!selectedTeam)
         return (
-        <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
+        <div className="flex flex-col items-center justify-center min-h-screen bmCourtPage text-white">
             <p>No team selected.</p>
             <button
             onClick={() => navigate("/team-selector")}
@@ -517,7 +520,8 @@ const handleAutoRebuild = () => {
     const lineupLabels = ["PG", "SG", "SF", "PF", "C", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"];
 
     return (
-        <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center py-10">
+    <PageFade>
+        <div className="min-h-screen bmCourtPage text-white flex flex-col items-center py-10">
         {toast && (
             <div className="fixed top-6 right-6 bg-neutral-800 border border-orange-500 text-orange-400 px-5 py-2 rounded-lg shadow-lg animate-pulse">
             Gameplan saved!
@@ -559,7 +563,7 @@ const handleAutoRebuild = () => {
 
         {/* Player Card */}
         <div className="relative w-full flex justify-center mb-0">
-            <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
+            <div className="relative bmSolidPanel w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
             <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
             <div className="flex items-end justify-between">
                 <div className="flex items-end gap-6">
@@ -611,7 +615,7 @@ const handleAutoRebuild = () => {
 
         {/* Table */}
         <div className="w-full flex justify-center mt-[-1px]">
-            <div className="w-full max-w-5xl bg-neutral-800 rounded-b-xl p-6 shadow-lg">
+            <div className="w-full max-w-5xl bmSolidPanel rounded-b-xl p-6 shadow-lg">
             <div className="flex justify-between items-center mb-4 text-gray-300 text-lg font-semibold">
                 <span>
                 Total: {total} / 240{" "}
@@ -736,5 +740,7 @@ const handleAutoRebuild = () => {
             </div>
         </div>
         </div>
-    );
+    
+    </PageFade>
+  );
     }

@@ -1,0 +1,34 @@
+html,
+body,
+#root {
+  min-height: 100%;
+  background: #050505;
+}
+
+.bm-page-fade {
+  min-height: 100vh;
+  background: #050505;
+}
+
+.bm-page-fade > * {
+  animation: bmPageContentIn 260ms ease-out both;
+  will-change: opacity, transform;
+}
+
+@keyframes bmPageContentIn {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bm-page-fade > * {
+    animation: none;
+  }
+}

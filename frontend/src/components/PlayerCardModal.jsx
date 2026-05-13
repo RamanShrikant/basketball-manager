@@ -1258,7 +1258,7 @@ export default function PlayerCardModal({
 
           <div className="px-5 pt-4 pb-3 sm:px-6 sm:pt-5 sm:pb-3 pr-16">
             <div className="flex min-w-0 gap-5 sm:gap-6">
-              <div className="pc-face-card relative flex h-40 w-32 shrink-0 self-end items-end justify-center overflow-hidden rounded-t-[28px] rounded-b-none border-2 border-white/20 bg-gradient-to-b from-zinc-800 to-zinc-950 sm:h-48 sm:w-40">
+              <div className="pc-face-card relative -mb-[14px] flex h-40 w-32 shrink-0 self-end items-end justify-center overflow-hidden rounded-t-[28px] rounded-b-none border-x-2 border-t-2 border-b-0 border-white/20 bg-gradient-to-b from-zinc-800 to-zinc-950 sm:h-48 sm:w-40">
                 {resolvedTeamLogo && (
                   <img
                     src={resolvedTeamLogo}

@@ -1,16 +1,223 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { computePlayerProgression } from "../api/simEnginePy";
+import styles from "./PlayerProgression.module.css";
 
 const DELTAS_KEY = "bm_progression_deltas_v1";
 const PROG_META_KEY = "bm_progression_meta_v1";
 const LEAGUE_KEY = "leagueData";
-  const META_KEY = "bm_league_meta_v1";
-  const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
+const META_KEY = "bm_league_meta_v1";
+const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 
 // If a run gets stuck INFLIGHT (worker failed / page refresh), clear after this long
-const INFLIGHT_STALE_MS = 15000;
+const INFLIGHT_STALE_MS = 75000;
+
+
+// -----------------------------------------------------------------------------
+// TEMP DEBUG HARNESS - remove after we isolate the progression bug.
+// This does not change progression formulas. It only logs state/storage flow.
+// -----------------------------------------------------------------------------
+const PP_DEBUG = true;
+const PP_STORAGE_KEYS = [
+  LEAGUE_KEY,
+  DELTAS_KEY,
+  PROG_META_KEY,
+  META_KEY,
+  OFFSEASON_STATE_KEY,
+  "selectedTeam",
+  "bm_player_stats_v1",
+  "bm_season_player_stats_v1",
+  "playerStatsByKey",
+  "statsByKey",
+];
+
+function ppByteSize(str) {
+  try {
+    return new Blob([String(str || "")]).size;
+  } catch {
+    return String(str || "").length * 2;
+  }
+}
+
+function ppSafeJson(raw) {
+  try {
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    return { __parseError: String(err), __rawStart: String(raw || "").slice(0, 180) };
+  }
+}
+
+function ppFindPlayer(league, playerName) {
+  const teams = getAllTeamsFromLeague(league);
+  for (const t of teams || []) {
+    const teamName = t?.name || "";
+    for (const p of t?.players || []) {
+      if (p?.name === playerName) {
+        return {
+          name: p?.name,
+          team: teamName,
+          age: p?.age,
+          overall: p?.overall,
+          offRating: p?.offRating,
+          defRating: p?.defRating,
+          stamina: p?.stamina,
+          potential: p?.potential,
+          attrs0_3pt: p?.attrs?.[0],
+          attrs1_mid: p?.attrs?.[1],
+          attrs2_close: p?.attrs?.[2],
+          attrs7_ath: p?.attrs?.[7],
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function ppLeagueMini(league) {
+  const teams = getAllTeamsFromLeague(league);
+  let playerCount = 0;
+  for (const t of teams || []) playerCount += Array.isArray(t?.players) ? t.players.length : 0;
+
+  let sig = null;
+  try {
+    sig = leagueProgressionSignature(league);
+  } catch (err) {
+    sig = `signature-error: ${String(err)}`;
+  }
+
+  return {
+    exists: !!league,
+    seasonYear: league?.seasonYear,
+    currentSeasonYear: league?.currentSeasonYear,
+    seasonStartYear: league?.seasonStartYear,
+    teamCount: teams?.length || 0,
+    playerCount,
+    signature: sig,
+    firstTeam: teams?.[0]?.name || null,
+    paolo: ppFindPlayer(league, "Paolo Banchero"),
+    lauri: ppFindPlayer(league, "Lauri Markkanen"),
+    derrick: ppFindPlayer(league, "Derrick White"),
+    anfernee: ppFindPlayer(league, "Anfernee Simons"),
+  };
+}
+
+function ppKeyInfo(key) {
+  const raw = localStorage.getItem(key);
+  const parsed = ppSafeJson(raw);
+
+  const info = {
+    key,
+    exists: raw != null,
+    chars: raw ? raw.length : 0,
+    kb: raw ? Number((ppByteSize(raw) / 1024).toFixed(1)) : 0,
+    parseOk: raw ? !parsed?.__parseError : null,
+  };
+
+  if (key === LEAGUE_KEY) {
+    info.league = ppLeagueMini(parsed);
+  }
+
+  if (key === DELTAS_KEY) {
+    info.deltaCount = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? Object.keys(parsed).length
+      : 0;
+    info.sampleKeys = parsed && typeof parsed === "object"
+      ? Object.keys(parsed).slice(0, 8)
+      : [];
+    info.paoloDelta = parsed?.["Paolo Banchero__Orlando Magic"] || parsed?.["Paolo Banchero"] || null;
+    info.lauriDelta = parsed?.["Lauri Markkanen__Utah Jazz"] || parsed?.["Lauri Markkanen"] || null;
+  }
+
+  if (key === PROG_META_KEY || key === META_KEY || key === OFFSEASON_STATE_KEY || key === "selectedTeam") {
+    info.value = parsed;
+  }
+
+  return info;
+}
+
+function ppAllStorageSizes() {
+  const rows = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      const raw = localStorage.getItem(key);
+      rows.push({
+        key,
+        chars: raw ? raw.length : 0,
+        kb: raw ? Number((ppByteSize(raw) / 1024).toFixed(1)) : 0,
+      });
+    }
+  } catch (err) {
+    rows.push({ key: "__error", chars: 0, kb: 0, error: String(err) });
+  }
+  return rows.sort((a, b) => b.kb - a.kb);
+}
+
+function ppDump(label, contextLeague = null, extra = {}) {
+  if (!PP_DEBUG) return null;
+
+  const storageKeys = PP_STORAGE_KEYS.map(ppKeyInfo);
+  const storageSizes = ppAllStorageSizes().slice(0, 25);
+  const storageLeague = readJsonSafe(LEAGUE_KEY, null);
+  const savedDeltas = readJsonSafe(DELTAS_KEY, {});
+  const progMeta = readJsonSafe(PROG_META_KEY, null);
+  const meta = readJsonSafe(META_KEY, null);
+  const offseason = readJsonSafe(OFFSEASON_STATE_KEY, null);
+
+  const contextSig = (() => {
+    try { return leagueProgressionSignature(contextLeague); } catch { return null; }
+  })();
+  const storageSig = (() => {
+    try { return leagueProgressionSignature(storageLeague); } catch { return null; }
+  })();
+
+  const dump = {
+    label,
+    timestamp: new Date().toISOString(),
+    location: window.location?.pathname,
+    extra,
+    contextVsStorageSameSignature: contextSig && storageSig ? contextSig === storageSig : null,
+    contextLeague: ppLeagueMini(contextLeague),
+    storageLeague: ppLeagueMini(storageLeague),
+    savedDeltaCount: savedDeltas && typeof savedDeltas === "object" ? Object.keys(savedDeltas).length : 0,
+    progMeta,
+    meta,
+    offseason,
+    storageKeys,
+    largestLocalStorageKeys: storageSizes,
+  };
+
+  console.groupCollapsed(`%c[PPDBG:DUMP] ${label}`, "color:#f97316;font-weight:bold");
+  console.log(dump);
+  try { console.table(storageKeys.map(({ key, exists, kb, parseOk, deltaCount }) => ({ key, exists, kb, parseOk, deltaCount }))); } catch {}
+  try { console.table(storageSizes.slice(0, 12)); } catch {}
+  console.groupEnd();
+
+  return dump;
+}
+
+function ppTrySetItem(key, value, label) {
+  const raw = typeof value === "string" ? value : JSON.stringify(value);
+  const kb = Number((ppByteSize(raw) / 1024).toFixed(1));
+
+  console.log(`[PPDBG:WRITE_ATTEMPT] ${label || key}`, { key, kb, chars: raw.length });
+
+  try {
+    localStorage.setItem(key, raw);
+    console.log(`[PPDBG:WRITE_OK] ${label || key}`, ppKeyInfo(key));
+    return true;
+  } catch (err) {
+    console.error(`[PPDBG:WRITE_FAIL] ${label || key}`, {
+      key,
+      kb,
+      chars: raw.length,
+      error: String(err),
+      largestLocalStorageKeys: ppAllStorageSizes().slice(0, 15),
+    });
+    return false;
+  }
+}
 
 function clamp(n, lo = 0, hi = 99) {
   const x = Number(n);
@@ -147,10 +354,9 @@ function buildProgressionDeltas(beforeLeague, afterLeague) {
       if (diff) d[`attr${i}`] = diff;
     }
 
-if (Object.keys(d).length) {
-  deltas[key] = d;
-}
-
+    if (Object.keys(d).length) {
+      deltas[key] = d;
+    }
   }
 
   return deltas;
@@ -215,8 +421,6 @@ function normalizeDeltasFromPython(league, pythonDeltas) {
   return out;
 }
 
-
-
 function snapshotLeague(obj) {
   try {
     if (typeof structuredClone === "function") return structuredClone(obj);
@@ -227,6 +431,7 @@ function snapshotLeague(obj) {
     return obj;
   }
 }
+
 function getSeasonYearFromMeta() {
   try {
     const raw = localStorage.getItem(META_KEY);
@@ -259,7 +464,6 @@ function inferSeasonYear(leagueData) {
   return today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
 }
 
-
 function stampAgingGuards(league, seasonYear) {
   if (!league) return league;
   const teams = getAllTeamsFromLeague(league);
@@ -284,6 +488,33 @@ function readJsonSafe(key, fallback) {
     return fallback;
   }
 }
+
+function leagueProgressionSignature(league) {
+  const teams = getAllTeamsFromLeague(league);
+
+  let count = 0;
+  let ageSum = 0;
+  let overallSum = 0;
+  let offSum = 0;
+  let defSum = 0;
+  let staminaSum = 0;
+  let potentialSum = 0;
+
+  for (const t of teams || []) {
+    for (const p of t?.players || []) {
+      count += 1;
+      ageSum += Number(p?.age || 0);
+      overallSum += Number(p?.overall || 0);
+      offSum += Number(p?.offRating || 0);
+      defSum += Number(p?.defRating || 0);
+      staminaSum += Number(p?.stamina || 0);
+      potentialSum += Number(p?.potential || 0);
+    }
+  }
+
+  return `${count}|${ageSum}|${overallSum}|${offSum}|${defSum}|${staminaSum}|${potentialSum}`;
+}
+
 // -------------------------
 // LeagueEditor parity helpers (v19)
 // Paste above PlayerProgression component
@@ -701,74 +932,203 @@ function recomputeDerivedRatingsInLeague(leagueData) {
       p.defRating = def;
 
       p.stamina = calcStaminaFromAgeAth(p?.age ?? 25, attrs[ATH]);
-const sco = calcScoringRating(pos, attrs[T3], attrs[MID], attrs[CLOSE]);
-p.scoringRating = Number.isFinite(sco)
-  ? clampRange(Math.round(sco), 0, 99)
-  : (p.scoringRating ?? 50);
+      const sco = calcScoringRating(pos, attrs[T3], attrs[MID], attrs[CLOSE]);
+      p.scoringRating = Number.isFinite(sco)
+        ? clampRange(Math.round(sco), 0, 99)
+        : (p.scoringRating ?? 50);
     }
   }
 
   return leagueData;
 }
+
 export default function PlayerProgression() {
-function handleReturnToOffseasonHub() {
-  const resolvedSeasonYear = Number(
-    leagueData?.seasonYear ??
-    leagueData?.currentSeasonYear ??
-    leagueData?.seasonStartYear ??
-    readJsonSafe(OFFSEASON_STATE_KEY, null)?.seasonYear ??
-    2026
-  );
-
-  try {
-    const nextLeague = snapshotLeague(leagueData || {});
-    nextLeague.seasonYear = resolvedSeasonYear;
-    nextLeague.currentSeasonYear = resolvedSeasonYear;
-    nextLeague.seasonStartYear = resolvedSeasonYear;
-
-    localStorage.setItem(LEAGUE_KEY, JSON.stringify(nextLeague));
-
-    const existingMeta = readJsonSafe(META_KEY, {}) || {};
-    localStorage.setItem(
-      META_KEY,
-      JSON.stringify({
-        ...existingMeta,
-        seasonYear: resolvedSeasonYear,
-        currentSeasonYear: resolvedSeasonYear,
-        seasonStartYear: resolvedSeasonYear,
-      })
-    );
-
-    const existingOffseason = readJsonSafe(OFFSEASON_STATE_KEY, {}) || {};
-    localStorage.setItem(
-      OFFSEASON_STATE_KEY,
-      JSON.stringify({
-        ...existingOffseason,
-        active: true,
-        seasonYear: resolvedSeasonYear,
-        progressionComplete: true,
-      })
-    );
-  } catch (err) {
-    console.error("[PlayerProgression] failed to save offseason state", err);
-  }
-
-  navigate("/offseason");
-}
-  useEffect(() => {
-  console.log("[PPDBG] MOUNT PlayerProgression");
-  return () => console.log("[PPDBG] UNMOUNT PlayerProgression");
-}, []);
-  console.count("[PPDBG] component render");
   const { leagueData, setLeagueData, selectedTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
+  const hasHydratedSavedProgressionRef = useRef(false);
+  const selectedTeamNameRef = useRef(selectedTeam?.name || null);
 
-const [showLetters, setShowLetters] = useState(localStorage.getItem("showLetters") === "true");
-const [teamFilter, setTeamFilter] = useState("ALL");
-const [hasDefaultedTeamFilter, setHasDefaultedTeamFilter] = useState(false);const [featuredKey, setFeaturedKey] = useState(null);
-const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
+  useEffect(() => {
+    selectedTeamNameRef.current = selectedTeam?.name || null;
+  }, [selectedTeam?.name]);
 
-const [deltas, setDeltas] = useState(() => readJsonSafe(DELTAS_KEY, {}));
+  function getPreferredSelectedTeamName() {
+    if (selectedTeamNameRef.current) return selectedTeamNameRef.current;
+
+    try {
+      const saved = localStorage.getItem("selectedTeam");
+      const parsed = saved ? JSON.parse(saved) : null;
+      return parsed?.name || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function hydrateProgressedLeagueIntoState(updatedLeague, savedDeltas = readJsonSafe(DELTAS_KEY, {}), label = "") {
+    if (!updatedLeague) return;
+
+    console.log("[PlayerProgression] hydrating progressed league into React state", {
+      label,
+      savedDeltaCount:
+        savedDeltas && typeof savedDeltas === "object"
+          ? Object.keys(savedDeltas).length
+          : 0,
+    });
+
+    setDeltas(savedDeltas || {});
+    setLeagueData(updatedLeague);
+
+    const preferredTeamName = getPreferredSelectedTeamName();
+    const teamsLocal = getAllTeamsFromLeague(updatedLeague);
+    const updatedTeam = teamsLocal.find((t) => t?.name === preferredTeamName);
+
+    if (updatedTeam) {
+      setSelectedTeam(updatedTeam);
+      try {
+        localStorage.setItem("selectedTeam", JSON.stringify(updatedTeam));
+      } catch {}
+    }
+
+    setTimeout(() => {
+      ppDump(`POST_HYDRATE_TIMEOUT_${label}`, updatedLeague, { label });
+    }, 0);
+  }
+
+  function handleReturnToOffseasonHub() {
+    const resolvedSeasonYear = Number(
+      leagueData?.seasonYear ??
+      leagueData?.currentSeasonYear ??
+      leagueData?.seasonStartYear ??
+      readJsonSafe(OFFSEASON_STATE_KEY, null)?.seasonYear ??
+      2026
+    );
+
+    const savedDeltas = readJsonSafe(DELTAS_KEY, {});
+    const savedDeltaCount =
+      savedDeltas && typeof savedDeltas === "object"
+        ? Object.keys(savedDeltas).length
+        : 0;
+
+    // IMPORTANT:
+    // Do not re-save the full leagueData here. Progression already committed leagueData
+    // during the run. Re-saving the full league on the Back button can exceed the
+    // browser localStorage quota and block the offseason hub from unlocking Step 5.
+    try {
+      const existingMeta = readJsonSafe(META_KEY, {}) || {};
+      localStorage.setItem(
+        META_KEY,
+        JSON.stringify({
+          ...existingMeta,
+          seasonYear: resolvedSeasonYear,
+          currentSeasonYear: resolvedSeasonYear,
+          seasonStartYear: resolvedSeasonYear,
+        })
+      );
+    } catch (err) {
+      console.error("[PlayerProgression] failed to save league meta on return", err);
+    }
+
+    try {
+      if (savedDeltaCount > 0) {
+        const existingProgMeta = readJsonSafe(PROG_META_KEY, {}) || {};
+        localStorage.setItem(
+          PROG_META_KEY,
+          JSON.stringify({
+            ...existingProgMeta,
+            appliedForSeasonYear: resolvedSeasonYear,
+            ts: Date.now(),
+            deltaCount: savedDeltaCount,
+            seasonYear: resolvedSeasonYear,
+            deltasSaved: true,
+            stage: "DONE",
+          })
+        );
+      }
+    } catch (err) {
+      console.error("[PlayerProgression] failed to save progression meta on return", err);
+    }
+
+    try {
+      const existingOffseason = readJsonSafe(OFFSEASON_STATE_KEY, {}) || {};
+      localStorage.setItem(
+        OFFSEASON_STATE_KEY,
+        JSON.stringify({
+          ...existingOffseason,
+          active: true,
+          seasonYear: resolvedSeasonYear,
+          progressionComplete: savedDeltaCount > 0,
+        })
+      );
+    } catch (err) {
+      console.error("[PlayerProgression] failed to save offseason completion on return", err);
+    }
+
+    if (savedDeltaCount <= 0) {
+      console.warn("[PlayerProgression] returning to offseason without saved deltas", {
+        resolvedSeasonYear,
+        savedDeltaCount,
+      });
+    }
+
+    navigate("/offseason");
+  }
+
+  useEffect(() => {
+    console.log("[PPDBG] MOUNT PlayerProgression");
+    return () => console.log("[PPDBG] UNMOUNT PlayerProgression");
+  }, []);
+
+  console.count("[PPDBG] component render");
+
+  const [showLetters, setShowLetters] = useState(localStorage.getItem("showLetters") === "true");
+  const [teamFilter, setTeamFilter] = useState("ALL");
+  const [hasDefaultedTeamFilter, setHasDefaultedTeamFilter] = useState(false);
+  const [featuredKey, setFeaturedKey] = useState(null);
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
+  const [deltas, setDeltas] = useState(() => readJsonSafe(DELTAS_KEY, {}));
+
+
+  useEffect(() => {
+    if (!PP_DEBUG) return;
+
+    window.BM_PP_DEBUG = {
+      dump: (label = "manual") => ppDump(label, leagueData, { currentDeltasInReact: Object.keys(deltas || {}).length }),
+      copyDump: (label = "manual-copy") => {
+        const data = ppDump(label, leagueData, { currentDeltasInReact: Object.keys(deltas || {}).length });
+        try {
+          copy(JSON.stringify(data, null, 2));
+          console.log("[PPDBG] copied debug dump to clipboard");
+        } catch (err) {
+          console.warn("[PPDBG] copy failed. Expand object above instead.", err);
+        }
+        return data;
+      },
+      keys: () => {
+        const rows = ppAllStorageSizes();
+        console.table(rows);
+        return rows;
+      },
+      progressionKeys: () => {
+        const rows = PP_STORAGE_KEYS.map(ppKeyInfo);
+        console.table(rows.map(({ key, exists, kb, parseOk, deltaCount }) => ({ key, exists, kb, parseOk, deltaCount })));
+        return rows;
+      },
+      player: (name) => ({
+        context: ppFindPlayer(leagueData, name),
+        storage: ppFindPlayer(readJsonSafe(LEAGUE_KEY, null), name),
+        deltasByName: deltas?.[name] || null,
+      }),
+      clearProgressionOnly: () => {
+        localStorage.removeItem(PROG_META_KEY);
+        localStorage.removeItem(DELTAS_KEY);
+        console.warn("[PPDBG] cleared only progression meta + deltas. leagueData was not cleared.");
+        return ppDump("after-clearProgressionOnly", leagueData);
+      },
+    };
+
+    console.warn("[PPDBG] window.BM_PP_DEBUG ready. Use BM_PP_DEBUG.copyDump() after the first-click test.");
+    ppDump("WINDOW_DEBUG_READY", leagueData, { currentDeltasInReact: Object.keys(deltas || {}).length });
+  }, [leagueData, deltas]);
 
   const attrColumns = [
     { key: "attr0", label: "3PT", index: 0 },
@@ -809,19 +1169,20 @@ const [deltas, setDeltas] = useState(() => readJsonSafe(DELTAS_KEY, {}));
     setShowLetters(next);
     localStorage.setItem("showLetters", String(next));
   };
+
   const positionOrder = ["PG", "SG", "SF", "PF", "C"];
 
-const handleSort = (key) => {
-  let direction = "desc";
+  const handleSort = (key) => {
+    let direction = "desc";
 
-  if (sortConfig.key === key && sortConfig.direction === "desc") {
-    direction = "asc";
-  } else if (sortConfig.key === key && sortConfig.direction === "asc") {
-    direction = "default";
-  }
+    if (sortConfig.key === key && sortConfig.direction === "desc") {
+      direction = "asc";
+    } else if (sortConfig.key === key && sortConfig.direction === "asc") {
+      direction = "default";
+    }
 
-  setSortConfig({ key, direction });
-};
+    setSortConfig({ key, direction });
+  };
 
   useEffect(() => {
     console.log("[PPDBG] selectedTeam loader effect", { selectedTeam: selectedTeam?.name || null });
@@ -831,123 +1192,180 @@ const handleSort = (key) => {
     }
   }, [selectedTeam, setSelectedTeam]);
 
-  // ✅ Apply progression ONCE per season using Python
+  // Apply progression ONCE per season using Python
   useEffect(() => {
     if (!leagueData) return;
-    // =====================
-// [PPDBG] Block A - Effect entry + BEFORE snapshot context
-// =====================
-const runId = `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
-console.groupCollapsed(`[PPDBG] useEffect ENTER runId=${runId}`);
-console.count("[PPDBG] useEffect fired");
 
-// Grab raw meta strings too (so we see exact stored values, not parsed guesses)
-const rawLeagueMeta = localStorage.getItem(META_KEY);
-const rawProgMeta = localStorage.getItem(PROG_META_KEY);
+    const runId = `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+    ppDump("EFFECT_START", leagueData);
+    console.groupCollapsed(`[PPDBG] useEffect ENTER runId=${runId}`);
+    console.count("[PPDBG] useEffect fired");
 
-console.log("[PPDBG] raw metas", { runId, rawLeagueMeta, rawProgMeta });
+    let cancelled = false;
+    let inflightInterval = null;
 
-const findPlayerAnyTeam = (league, playerName) => {
-  const teams = getAllTeamsFromLeague(league);
-  for (const t of teams || []) {
-    const teamName = t?.name || "";
-    for (const p of t?.players || []) {
-      if (p?.name === playerName) {
-        return {
-          team: teamName,
-          overall: p?.overall,
-          age: p?.age,
-          attr0_3pt: p?.attrs?.[0],
-          attr1_mid: p?.attrs?.[1],
-          attr2_close: p?.attrs?.[2],
-        };
-      }
-    }
-  }
-  return null;
-};
+    const findPlayerAnyTeam = (league, playerName) => {
+      const teams = getAllTeamsFromLeague(league);
 
-console.log("[PPDBG] BEFORE (leagueData) peek", {
-  runId,
-  leagueData_seasonYear: leagueData?.seasonYear,
-  leagueData_seasonStartYear: leagueData?.seasonStartYear,
-  metaSeasonYear: getSeasonYearFromMeta(),
-  inferredSeasonYear: inferSeasonYear(leagueData),
-  derrick: findPlayerAnyTeam(leagueData, "Derrick White"),
-  anfernee: findPlayerAnyTeam(leagueData, "Anfernee Simons"),
-});
-    // --- [PERM FIX] run identity + cleanup guards ---
-let cancelled = false;
-let inflightInterval = null;
-    const seasonYear = inferSeasonYear(leagueData);
-    
-    
+      for (const t of teams || []) {
+        const teamName = t?.name || "";
 
-    // Read meta
-    let progMeta = readJsonSafe(PROG_META_KEY, null);
-    console.log("[PlayerProgression] seasonYear =", seasonYear);
-console.log("[PlayerProgression] leagueData.seasonYear =", leagueData?.seasonYear);
-console.log("[PlayerProgression] leagueData.seasonStartYear =", leagueData?.seasonStartYear);
-console.log("[PlayerProgression] progMeta =", progMeta);
-
-
-
-// --- [PERM FIX] If another progression is already running, do NOT start a second one.
-// Instead, attach to it and load results once it finishes.
-if (progMeta?.appliedForSeasonYear === "INFLIGHT") {
-  const ageMs = Date.now() - Number(progMeta?.ts || 0);
-
-  // fresh inflight - attach
-  if (ageMs <= INFLIGHT_STALE_MS) {
-    console.log("[PlayerProgression] INFLIGHT detected, attaching instead of rerunning", { runId, seasonYear, ageMs });
-
-    inflightInterval = setInterval(() => {
-      if (cancelled) return;
-
-      const m = readJsonSafe(PROG_META_KEY, null);
-      const done = m?.appliedForSeasonYear === seasonYear;
-
-      if (done) {
-        try {
-          const updatedLeague = readJsonSafe(LEAGUE_KEY, null);
-          const savedDeltas = readJsonSafe(DELTAS_KEY, {});
-
-          if (updatedLeague) {
-            setDeltas(savedDeltas || {});
-            setLeagueData(updatedLeague);
-
-            const teamsLocal = getAllTeamsFromLeague(updatedLeague);
-            const updatedTeam = teamsLocal.find((t) => t?.name === selectedTeam?.name);
-            if (updatedTeam) setSelectedTeam(updatedTeam);
+        for (const p of t?.players || []) {
+          if (p?.name === playerName) {
+            return {
+              team: teamName,
+              overall: p?.overall,
+              age: p?.age,
+              attr0_3pt: p?.attrs?.[0],
+              attr1_mid: p?.attrs?.[1],
+              attr2_close: p?.attrs?.[2],
+            };
           }
-        } finally {
-          clearInterval(inflightInterval);
-          inflightInterval = null;
         }
       }
-    }, 200);
 
-    // IMPORTANT - we are done here, do not start progression
-    return () => {
-      cancelled = true;
-      if (inflightInterval) clearInterval(inflightInterval);
+      return null;
     };
-  }
 
-  // stale inflight - clear and allow rerun
-  console.warn("[PlayerProgression] stale INFLIGHT detected, clearing meta so progression can rerun.", { runId, ageMs });
-  try {
-    localStorage.removeItem(PROG_META_KEY);
-  } catch {}
-  progMeta = null;
-} 
+    const rawLeagueMeta = localStorage.getItem(META_KEY);
+    const rawProgMeta = localStorage.getItem(PROG_META_KEY);
+    const seasonYear = inferSeasonYear(leagueData);
 
+    console.log("[PPDBG] raw metas", {
+      runId,
+      rawLeagueMeta,
+      rawProgMeta,
+    });
 
+    ppDump("EFFECT_AFTER_RAW_META", leagueData, { runId, rawLeagueMeta, rawProgMeta });
 
+    console.log("[PPDBG] BEFORE (leagueData) peek", {
+      runId,
+      leagueData_seasonYear: leagueData?.seasonYear,
+      leagueData_seasonStartYear: leagueData?.seasonStartYear,
+      metaSeasonYear: getSeasonYearFromMeta(),
+      inferredSeasonYear: seasonYear,
+      derrick: findPlayerAnyTeam(leagueData, "Derrick White"),
+      anfernee: findPlayerAnyTeam(leagueData, "Anfernee Simons"),
+    });
 
- // ✅ If already applied this season, skip (never rerun aging)
-if (progMeta?.appliedForSeasonYear === seasonYear) return;
+    let progMeta = readJsonSafe(PROG_META_KEY, null);
 
+    console.log("[PlayerProgression] seasonYear =", seasonYear);
+    console.log("[PlayerProgression] leagueData.seasonYear =", leagueData?.seasonYear);
+    console.log("[PlayerProgression] leagueData.seasonStartYear =", leagueData?.seasonStartYear);
+    console.log("[PlayerProgression] progMeta =", progMeta);
+
+    if (progMeta?.appliedForSeasonYear === "INFLIGHT") {
+      const ageMs = Date.now() - Number(progMeta?.ts || 0);
+
+      if (ageMs <= INFLIGHT_STALE_MS) {
+        ppDump("BRANCH_INFLIGHT_ATTACH", leagueData, { runId, seasonYear, ageMs });
+        console.log("[PlayerProgression] INFLIGHT detected, attaching instead of rerunning", {
+          runId,
+          seasonYear,
+          ageMs,
+        });
+
+        inflightInterval = setInterval(() => {
+          if (cancelled) return;
+
+          const m = readJsonSafe(PROG_META_KEY, null);
+          const done = m?.appliedForSeasonYear === seasonYear;
+
+          if (done) {
+            try {
+              const updatedLeague = readJsonSafe(LEAGUE_KEY, null);
+              const savedDeltas = readJsonSafe(DELTAS_KEY, {});
+
+              if (updatedLeague) {
+                hydrateProgressedLeagueIntoState(updatedLeague, savedDeltas || {}, "inflight-attached-done");
+              }
+            } finally {
+              clearInterval(inflightInterval);
+              inflightInterval = null;
+            }
+          }
+        }, 200);
+
+        console.groupEnd();
+
+        return () => {
+          cancelled = true;
+          if (inflightInterval) clearInterval(inflightInterval);
+        };
+      }
+
+      console.warn("[PlayerProgression] stale INFLIGHT detected, clearing meta so progression can rerun.", {
+        runId,
+        ageMs,
+      });
+
+      try {
+        localStorage.removeItem(PROG_META_KEY);
+      } catch {}
+
+      progMeta = null;
+    }
+
+    // If already applied this season, only trust the lock if deltas actually exist.
+    if (progMeta?.appliedForSeasonYear === seasonYear) {
+      const savedDeltas = readJsonSafe(DELTAS_KEY, {});
+      const savedDeltaCount =
+        savedDeltas && typeof savedDeltas === "object"
+          ? Object.keys(savedDeltas).length
+          : 0;
+
+      if (savedDeltaCount > 0 && progMeta?.deltasSaved !== false) {
+        ppDump("BRANCH_ALREADY_APPLIED", leagueData, { runId, seasonYear, savedDeltaCount, progMeta });
+        console.log("[PlayerProgression] Already applied this season. Loading saved deltas and saved league.", {
+          seasonYear,
+          savedDeltaCount,
+          progMeta,
+        });
+
+        setDeltas(savedDeltas);
+
+        if (!hasHydratedSavedProgressionRef.current) {
+          hasHydratedSavedProgressionRef.current = true;
+
+          const savedLeague = readJsonSafe(LEAGUE_KEY, null);
+
+          if (savedLeague) {
+            const currentSig = leagueProgressionSignature(leagueData);
+            const savedSig = leagueProgressionSignature(savedLeague);
+
+            console.log("[PlayerProgression] hydration check", {
+              seasonYear,
+              currentSig,
+              savedSig,
+              shouldHydrate: currentSig !== savedSig,
+            });
+
+            if (currentSig !== savedSig) {
+              hydrateProgressedLeagueIntoState(savedLeague, savedDeltas, "already-applied-hydration");
+            }
+          } else {
+            console.warn("[PlayerProgression] Deltas exist but saved leagueData was missing.");
+          }
+        }
+
+        console.groupEnd();
+        return;
+      }
+
+      console.warn("[PlayerProgression] Bad progression lock found. Clearing so progression can run.", {
+        seasonYear,
+        progMeta,
+        savedDeltaCount,
+      });
+
+      try {
+        localStorage.removeItem(PROG_META_KEY);
+      } catch {}
+
+      progMeta = null;
+    }
 
     const statsByKeyPreview = loadStatsByKeyFromStorage();
     const hasStats = statsByKeyPreview && Object.keys(statsByKeyPreview).length > 0;
@@ -956,12 +1374,21 @@ if (progMeta?.appliedForSeasonYear === seasonYear) return;
       console.warn("[PlayerProgression] No stats found. Running progression without stats.");
     }
 
-    // mark inflight
     try {
-      console.log("[PPDBG] setting INFLIGHT", { runId, seasonYear });
+      ppDump("BRANCH_RUN_NEW_BEFORE_INFLIGHT", leagueData, { runId, seasonYear, hasStats });
+      console.log("[PPDBG] setting INFLIGHT", {
+        runId,
+        seasonYear,
+      });
+
       localStorage.setItem(
         PROG_META_KEY,
-        JSON.stringify({ appliedForSeasonYear: "INFLIGHT", ts: Date.now(), seasonYear, runId })
+        JSON.stringify({
+          appliedForSeasonYear: "INFLIGHT",
+          ts: Date.now(),
+          seasonYear,
+          runId,
+        })
       );
     } catch {}
 
@@ -971,6 +1398,7 @@ if (progMeta?.appliedForSeasonYear === seasonYear) return;
 
         const leagueForProg = snapshotLeague(leagueData);
         leagueForProg.seasonYear = seasonYear;
+        leagueForProg.currentSeasonYear = seasonYear;
         leagueForProg.seasonStartYear = seasonYear;
 
         console.log("[PlayerProgression] computePlayerProgression POST", {
@@ -978,43 +1406,55 @@ if (progMeta?.appliedForSeasonYear === seasonYear) return;
           hasLeague: !!leagueForProg,
           hasStats,
         });
-console.log("[PPDBG] calling computePlayerProgression", {
-  runId,
-  seasonYear,
-  hasStats,
-  statsKeyCount: Object.keys(statsByKeyPreview || {}).length,
-});
-const msg = await computePlayerProgression(leagueForProg, statsByKeyPreview, {
-  seed: seasonYear,
-  seasonYear,
-});
 
-  console.log("[DEBUG] raw deltas from Python:", JSON.stringify(msg?.deltas ?? msg?.payload?.deltas));
+        console.log("[PPDBG] calling computePlayerProgression", {
+          runId,
+          seasonYear,
+          hasStats,
+          statsKeyCount: Object.keys(statsByKeyPreview || {}).length,
+        });
 
-// ✅ Support both shapes:
-// 1) msg = { league, deltas, version }
-// 2) msg = { type, requestId, payload: { league, deltas, version } }
-const res = msg?.league ? msg : msg?.payload;
-console.log("[PPDBG] worker response", {
-  runId,
-  msgKeys: Object.keys(msg || {}),
-  resKeys: Object.keys(res || {}),
-  version: res?.version,
-  hasLeague: !!res?.league,
-  hasDeltas: !!res?.deltas,
-  resDeltaCount: res?.deltas ? Object.keys(res.deltas).length : 0,
-});
+        const msg = await computePlayerProgression(leagueForProg, statsByKeyPreview, {
+          seed: seasonYear,
+          seasonYear,
+        });
 
-console.log("[PlayerProgression] computePlayerProgression msg keys:", Object.keys(msg || {}));
-console.log("[PlayerProgression] computePlayerProgression res keys:", Object.keys(res || {}));
-console.log("[PlayerProgression] res.version:", res?.version);
+        const shouldUpdateReactState = !cancelled;
 
-if (!res || !res.league) {
-  throw new Error("[PlayerProgression] Progression returned no league. Check worker response shape.");
-}
+        if (cancelled) {
+          console.warn("[PlayerProgression] Owner effect was cleaned up before worker returned. Still committing storage so attached run can finish.", {
+            runId,
+            seasonYear,
+          });
+        }
 
-let updatedLeague = res.league;
+        console.log("[DEBUG] raw deltas from Python:", JSON.stringify(msg?.deltas ?? msg?.payload?.deltas));
 
+        // Support both shapes:
+        // 1) msg = { league, deltas, version }
+        // 2) msg = { type, requestId, payload: { league, deltas, version } }
+        const res = msg?.league ? msg : msg?.payload;
+
+        ppDump("WORKER_RETURNED_BEFORE_PARSE", leagueData, { runId, seasonYear });
+        console.log("[PPDBG] worker response", {
+          runId,
+          msgKeys: Object.keys(msg || {}),
+          resKeys: Object.keys(res || {}),
+          version: res?.version,
+          hasLeague: !!res?.league,
+          hasDeltas: !!res?.deltas,
+          resDeltaCount: res?.deltas ? Object.keys(res.deltas).length : 0,
+        });
+
+        console.log("[PlayerProgression] computePlayerProgression msg keys:", Object.keys(msg || {}));
+        console.log("[PlayerProgression] computePlayerProgression res keys:", Object.keys(res || {}));
+        console.log("[PlayerProgression] res.version:", res?.version);
+
+        if (!res || !res.league) {
+          throw new Error("[PlayerProgression] Progression returned no league. Check worker response shape.");
+        }
+
+        let updatedLeague = res.league;
 
         updatedLeague.seasonYear = seasonYear;
         updatedLeague.currentSeasonYear = seasonYear;
@@ -1022,161 +1462,221 @@ let updatedLeague = res.league;
 
         updatedLeague = stampAgingGuards(updatedLeague, seasonYear);
 
-// ✅ FORCE LeagueEditor formulas as the source of truth for derived ratings
-updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
+        // FORCE LeagueEditor formulas as the source of truth for derived ratings
+        updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
 
-// ✅ Build deltas from final values so the UI matches exactly
-const newDeltas = buildProgressionDeltas(beforeSnapshot, updatedLeague);
-const derrickAfter = findPlayerAnyTeam(updatedLeague, "Derrick White");
-const anferneeAfter = findPlayerAnyTeam(updatedLeague, "Anfernee Simons");
+        // Build deltas from final values so the UI matches exactly
+        const newDeltas = buildProgressionDeltas(beforeSnapshot, updatedLeague);
+        const derrickAfter = findPlayerAnyTeam(updatedLeague, "Derrick White");
+        const anferneeAfter = findPlayerAnyTeam(updatedLeague, "Anfernee Simons");
 
-const derrickKey = derrickAfter?.team ? `Derrick White__${derrickAfter.team}` : null;
-const anferneeKey = anferneeAfter?.team ? `Anfernee Simons__${anferneeAfter.team}` : null;
+        const derrickKey = derrickAfter?.team ? `Derrick White__${derrickAfter.team}` : null;
+        const anferneeKey = anferneeAfter?.team ? `Anfernee Simons__${anferneeAfter.team}` : null;
 
-console.log("[PPDBG] AFTER (updatedLeague) peek", {
-  runId,
-  derrickAfter,
-  anferneeAfter,
-});
+        console.log("[PPDBG] AFTER (updatedLeague) peek", {
+          runId,
+          derrickAfter,
+          anferneeAfter,
+        });
 
-console.log("[PPDBG] deltas built", {
-  runId,
-  deltaCount: Object.keys(newDeltas || {}).length,
-  source: (res?.deltas && Object.keys(res.deltas || {}).length > 0) ? "python" : "js_fallback",
-  derrickKey,
-  anferneeKey,
-  derrickDelta: derrickKey ? newDeltas?.[derrickKey] : null,
-  anferneeDelta: anferneeKey ? newDeltas?.[anferneeKey] : null,
-});
+        console.log("[PPDBG] deltas built", {
+          runId,
+          deltaCount: Object.keys(newDeltas || {}).length,
+          source: res?.deltas && Object.keys(res.deltas || {}).length > 0 ? "python" : "js_fallback",
+          derrickKey,
+          anferneeKey,
+          derrickDelta: derrickKey ? newDeltas?.[derrickKey] : null,
+          anferneeDelta: anferneeKey ? newDeltas?.[anferneeKey] : null,
+        });
 
+        const deltaCount = Object.keys(newDeltas || {}).length;
+        console.log("[PlayerProgression] deltas count:", deltaCount);
 
-const deltaCount = Object.keys(newDeltas || {}).length;
-console.log("[PlayerProgression] deltas count:", deltaCount);
+        if (deltaCount === 0) {
+          throw new Error(`[PlayerProgression] deltaCount = 0 for seasonYear = ${seasonYear}. Refusing to lock season.`);
+        }
 
-// ✅ If no deltas, something is wrong. Do NOT save/lock.
-if (deltaCount === 0) {
-  throw new Error(`[PlayerProgression] deltaCount = 0 for seasonYear = ${seasonYear}. Refusing to lock season.`);
-}
-console.log("[PPDBG] writing LEAGUE_KEY", { runId, seasonYear });
-// --- [PERM FIX] Only the owner runId is allowed to commit writes ---
-const metaNow = readJsonSafe(PROG_META_KEY, null);
-const stillOwner =
-  metaNow?.appliedForSeasonYear === "INFLIGHT" &&
-  metaNow?.seasonYear === seasonYear &&
-  metaNow?.runId === runId;
+        ppDump("BEFORE_COMMITS", leagueData, { runId, seasonYear, deltaCount });
+        console.log("[PPDBG] preparing progression commits", {
+          runId,
+          seasonYear,
+          deltaCount,
+        });
 
-if (!stillOwner) {
-  console.warn("[PlayerProgression] Not owner anymore - skipping commits", { runId, seasonYear, metaNow });
-  return;
-}
-localStorage.setItem(LEAGUE_KEY, JSON.stringify(updatedLeague));
+        const metaNow = readJsonSafe(PROG_META_KEY, null);
+        const stillOwner =
+          metaNow?.appliedForSeasonYear === "INFLIGHT" &&
+          metaNow?.seasonYear === seasonYear &&
+          metaNow?.runId === runId;
 
+        if (!stillOwner) {
+          console.warn("[PlayerProgression] Not owner anymore - skipping commits", {
+            runId,
+            seasonYear,
+            metaNow,
+          });
 
+          console.groupEnd();
+          return;
+        }
 
-// ✅ EARLY LOCK: if we crash after this point, never rerun progression for this season
-try {
-  localStorage.setItem(
-    PROG_META_KEY,
-    JSON.stringify({
-      appliedForSeasonYear: seasonYear,
-      ts: Date.now(),
-      deltaCount,
-      seasonYear,
-      deltasSaved: false,
-      stage: "EARLY_LOCK",
-    })
-  );
-  console.log("[PPDBG] DONE", {
-  runId,
-  seasonYear,
-  savedProgMeta: readJsonSafe(PROG_META_KEY, null),
-  savedDeltaCount: Object.keys(readJsonSafe(DELTAS_KEY, {}) || {}).length,
-});
-console.groupEnd();
-} catch {}
+        // Free heavy season stat keys before saving leagueData so localStorage quota does not block the commit.
+        const statKeysToClearBeforeSave = [
+          "bm_player_stats_v1",
+          "bm_season_player_stats_v1",
+          "playerStatsByKey",
+          "statsByKey",
+        ];
 
-let deltaSaveOk = true;
-try {
-  console.log("[PPDBG] writing DELTAS_KEY", { runId, seasonYear, deltaCount: Object.keys(newDeltas || {}).length });
-  localStorage.setItem(DELTAS_KEY, JSON.stringify(newDeltas));
-} catch (e) {
-  deltaSaveOk = false;
-  console.error("[PlayerProgression] Failed to save deltas. Continuing anyway.", e);
+        for (const store of [localStorage, sessionStorage]) {
+          for (const k of statKeysToClearBeforeSave) {
+            try {
+              store.removeItem(k);
+            } catch {}
+          }
+        }
 
-  // keep the key valid so your UI does not crash
-  try {
-    localStorage.setItem(DELTAS_KEY, JSON.stringify({}));
-  } catch {}
-}
+        console.log("[PlayerProgression] cleared season stat keys before saving league:", statKeysToClearBeforeSave);
 
-        // ✅ FIX 4: clear season stats AFTER progression succeeds (so next season starts fresh)
-if (deltaCount > 0) {
-  const statKeysToClear = [
-    "bm_player_stats_v1",
-    "bm_season_player_stats_v1",
-    "playerStatsByKey",
-    "statsByKey",
-  ];
+        try {
+          console.log("[PPDBG] writing DELTAS_KEY", {
+            runId,
+            seasonYear,
+            deltaCount: Object.keys(newDeltas || {}).length,
+          });
 
-  for (const store of [localStorage, sessionStorage]) {
-    for (const k of statKeysToClear) {
-      try {
-        store.removeItem(k);
-      } catch {}
-    }
-  }
+          ppTrySetItem(DELTAS_KEY, newDeltas, "progression-deltas");
 
-  console.log("[PlayerProgression] cleared season stat keys:", statKeysToClear);
-}
+          console.log("[PPDBG] writing LEAGUE_KEY", {
+            runId,
+            seasonYear,
+          });
 
+          ppTrySetItem(LEAGUE_KEY, updatedLeague, "progressed-leagueData");
 
-        setDeltas(newDeltas);
-        setLeagueData(updatedLeague);
+          ppDump("AFTER_WRITING_LEAGUE_AND_DELTAS", leagueData, { runId, seasonYear, deltaCount });
+          console.log("[PPDBG] saved progression league + deltas", {
+            runId,
+            seasonYear,
+            savedDeltaCount: Object.keys(readJsonSafe(DELTAS_KEY, {}) || {}).length,
+          });
+        } catch (e) {
+          console.error("[PlayerProgression] Failed to save progression league/deltas. Not locking season.", e);
 
-        const teamsLocal = getAllTeamsFromLeague(updatedLeague);
-        const updatedTeam = teamsLocal.find((t) => t?.name === selectedTeam?.name);
-        if (updatedTeam) setSelectedTeam(updatedTeam);
+          try {
+            localStorage.setItem(
+              PROG_META_KEY,
+              JSON.stringify({
+                appliedForSeasonYear: "ERROR",
+                ts: Date.now(),
+                seasonYear,
+                runId,
+                error: String(e),
+              })
+            );
+          } catch {}
 
-        // ✅ only lock season if we actually produced deltas
-  localStorage.setItem(
-  PROG_META_KEY,
-  JSON.stringify({
-    appliedForSeasonYear: seasonYear,
-    ts: Date.now(),
-    deltaCount,
-    seasonYear,
-    deltasSaved: deltaSaveOk,
-  })
-);
-const existingOffseason = readJsonSafe(OFFSEASON_STATE_KEY, {}) || {};
-localStorage.setItem(
-  OFFSEASON_STATE_KEY,
-  JSON.stringify({
-    ...existingOffseason,
-    active: true,
-    seasonYear,
-    progressionComplete: true,
-  })
-);
+          throw e;
+        }
 
+        if (deltaCount > 0) {
+          const statKeysToClear = [
+            "bm_player_stats_v1",
+            "bm_season_player_stats_v1",
+            "playerStatsByKey",
+            "statsByKey",
+          ];
+
+          for (const store of [localStorage, sessionStorage]) {
+            for (const k of statKeysToClear) {
+              try {
+                store.removeItem(k);
+              } catch {}
+            }
+          }
+
+          console.log("[PlayerProgression] cleared season stat keys:", statKeysToClear);
+        }
+
+        // Mark progression DONE before touching React league state.
+        // This prevents the leagueData state update from immediately retriggering this effect
+        // while the lock still says INFLIGHT.
+        localStorage.setItem(
+          PROG_META_KEY,
+          JSON.stringify({
+            appliedForSeasonYear: seasonYear,
+            ts: Date.now(),
+            deltaCount,
+            seasonYear,
+            deltasSaved: true,
+            stage: "DONE",
+          })
+        );
+
+        const existingOffseason = readJsonSafe(OFFSEASON_STATE_KEY, {}) || {};
+
+        localStorage.setItem(
+          OFFSEASON_STATE_KEY,
+          JSON.stringify({
+            ...existingOffseason,
+            active: true,
+            seasonYear,
+            progressionComplete: true,
+          })
+        );
+
+        if (shouldUpdateReactState) {
+          ppDump("BEFORE_REACT_HYDRATE_OWNER", leagueData, { runId, seasonYear, deltaCount });
+          hydrateProgressedLeagueIntoState(updatedLeague, newDeltas, "owner-run-complete");
+        } else {
+          console.log("[PlayerProgression] Skipped React state update because owner effect was cleaned up. Attached run will load saved results.", {
+            runId,
+            seasonYear,
+          });
+        }
+
+        ppDump("DONE_FINAL", updatedLeague, { runId, seasonYear, deltaCount, shouldUpdateReactState });
+        console.log("[PPDBG] DONE", {
+          runId,
+          seasonYear,
+          savedProgMeta: readJsonSafe(PROG_META_KEY, null),
+          savedDeltaCount: Object.keys(readJsonSafe(DELTAS_KEY, {}) || {}).length,
+        });
+
+        console.groupEnd();
       } catch (err) {
         console.error("[PlayerProgression] Python progression failed:", err);
-        // ✅ do NOT lock season on error
+
         try {
           localStorage.setItem(
             PROG_META_KEY,
-            JSON.stringify({ appliedForSeasonYear: "ERROR", ts: Date.now(), error: String(err) })
+            JSON.stringify({
+              appliedForSeasonYear: "ERROR",
+              ts: Date.now(),
+              seasonYear,
+              runId,
+              error: String(err),
+            })
           );
         } catch {}
-        console.log("[PPDBG] ERROR end", { runId, err: String(err) });
+
+        console.log("[PPDBG] ERROR end", {
+          runId,
+          err: String(err),
+        });
+
         console.groupEnd();
       }
     })();
+
     return () => {
-  cancelled = true;
-  if (inflightInterval) clearInterval(inflightInterval);
-};
-  }, [leagueData, selectedTeam, setLeagueData, setSelectedTeam]);
+      cancelled = true;
+
+      if (inflightInterval) {
+        clearInterval(inflightInterval);
+      }
+    };
+  }, [leagueData, setLeagueData, setSelectedTeam]);
 
   const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
 
@@ -1206,17 +1706,18 @@ localStorage.setItem(
     const names = Array.from(new Set((teams || []).map((t) => t?.name).filter(Boolean))).sort();
     return ["ALL", ...names];
   }, [teams]);
-  useEffect(() => {
-  if (hasDefaultedTeamFilter) return;
-  const selectedTeamName = selectedTeam?.name;
-  if (!selectedTeamName) return;
-  if (!teamOptions.includes(selectedTeamName)) return;
 
-  setTeamFilter(selectedTeamName);
-  setFeaturedKey(null);
-  setSortConfig({ key: null, direction: "desc" });
-  setHasDefaultedTeamFilter(true);
-}, [hasDefaultedTeamFilter, selectedTeam?.name, teamOptions]);
+  useEffect(() => {
+    if (hasDefaultedTeamFilter) return;
+    const selectedTeamName = selectedTeam?.name;
+    if (!selectedTeamName) return;
+    if (!teamOptions.includes(selectedTeamName)) return;
+
+    setTeamFilter(selectedTeamName);
+    setFeaturedKey(null);
+    setSortConfig({ key: null, direction: "desc" });
+    setHasDefaultedTeamFilter(true);
+  }, [hasDefaultedTeamFilter, selectedTeam?.name, teamOptions]);
 
   const rows = useMemo(() => {
     if (teamFilter === "ALL") return allRows;
@@ -1224,59 +1725,59 @@ localStorage.setItem(
   }, [allRows, teamFilter]);
 
   const sortedRows = useMemo(() => {
-  if (!sortConfig.key || sortConfig.direction === "default") return rows;
+    if (!sortConfig.key || sortConfig.direction === "default") return rows;
 
-  const out = [...rows];
+    const out = [...rows];
 
-  out.sort((a, b) => {
-    const key = sortConfig.key;
+    out.sort((a, b) => {
+      const key = sortConfig.key;
 
-    if (key === "name") {
-      return sortConfig.direction === "asc"
-        ? a.name.localeCompare(b.name)
-        : b.name.localeCompare(a.name);
-    }
+      if (key === "name") {
+        return sortConfig.direction === "asc"
+          ? a.name.localeCompare(b.name)
+          : b.name.localeCompare(a.name);
+      }
 
-    if (key === "team") {
-      return sortConfig.direction === "asc"
-        ? (a.team || "").localeCompare(b.team || "")
-        : (b.team || "").localeCompare(a.team || "");
-    }
+      if (key === "team") {
+        return sortConfig.direction === "asc"
+          ? (a.team || "").localeCompare(b.team || "")
+          : (b.team || "").localeCompare(a.team || "");
+      }
 
-    if (key === "pos") {
-      const aIdx = positionOrder.indexOf(a.pos);
-      const bIdx = positionOrder.indexOf(b.pos);
-      const diff = (aIdx === -1 ? 99 : aIdx) - (bIdx === -1 ? 99 : bIdx);
-      return sortConfig.direction === "asc" ? diff : -diff;
-    }
+      if (key === "pos") {
+        const aIdx = positionOrder.indexOf(a.pos);
+        const bIdx = positionOrder.indexOf(b.pos);
+        const diff = (aIdx === -1 ? 99 : aIdx) - (bIdx === -1 ? 99 : bIdx);
+        return sortConfig.direction === "asc" ? diff : -diff;
+      }
 
-    if (["age", "overall", "offRating", "defRating", "stamina", "potential"].includes(key)) {
-      const av = Number(a[key] || 0);
-      const bv = Number(b[key] || 0);
-      return sortConfig.direction === "asc" ? av - bv : bv - av;
-    }
+      if (["age", "overall", "offRating", "defRating", "stamina", "potential"].includes(key)) {
+        const av = Number(a[key] || 0);
+        const bv = Number(b[key] || 0);
+        return sortConfig.direction === "asc" ? av - bv : bv - av;
+      }
 
-    if (key.startsWith("attr")) {
-      const idx = parseInt(key.replace("attr", ""), 10);
-      const av = Number(a.attrs?.[idx] ?? 0);
-      const bv = Number(b.attrs?.[idx] ?? 0);
-      return sortConfig.direction === "asc" ? av - bv : bv - av;
-    }
+      if (key.startsWith("attr")) {
+        const idx = parseInt(key.replace("attr", ""), 10);
+        const av = Number(a.attrs?.[idx] ?? 0);
+        const bv = Number(b.attrs?.[idx] ?? 0);
+        return sortConfig.direction === "asc" ? av - bv : bv - av;
+      }
 
-    return 0;
-  });
+      return 0;
+    });
 
-  return out;
-}, [rows, sortConfig]);
+    return out;
+  }, [rows, sortConfig]);
 
-useEffect(() => {
-  if (!featuredKey && sortedRows.length) setFeaturedKey(sortedRows[0].__key);
-}, [sortedRows, featuredKey]);
+  useEffect(() => {
+    if (!featuredKey && sortedRows.length) setFeaturedKey(sortedRows[0].__key);
+  }, [sortedRows, featuredKey]);
 
-const featured = useMemo(() => {
-  if (!sortedRows.length) return null;
-  return sortedRows.find((r) => r.__key === featuredKey) || sortedRows[0];
-}, [sortedRows, featuredKey]);
+  const featured = useMemo(() => {
+    if (!sortedRows.length) return null;
+    return sortedRows.find((r) => r.__key === featuredKey) || sortedRows[0];
+  }, [sortedRows, featuredKey]);
 
   const deltaFor = (row, key) => {
     const byKey = deltas?.[row.__key];
@@ -1310,14 +1811,14 @@ const featured = useMemo(() => {
 
   if (!leagueData) {
     return (
-      <div className="min-h-screen bg-neutral-900 text-white flex items-center justify-center">
+      <div className={`${styles.progressionPage} min-h-screen text-white flex items-center justify-center`}>
         Loading progression...
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-neutral-900 text-white py-10">
+    <div className={`${styles.progressionPage} min-h-screen text-white py-10`}>
       <style>{`
         .bm-orange-scroll {
           scrollbar-width: thin;
@@ -1351,13 +1852,12 @@ const featured = useMemo(() => {
           <div className="flex items-center gap-3">
             <select
               value={teamFilter}
-onChange={(e) => {
-  setTeamFilter(e.target.value);
-  setFeaturedKey(null);
-  setSortConfig({ key: null, direction: "desc" });
-  setHasDefaultedTeamFilter(true);
-}}
-
+              onChange={(e) => {
+                setTeamFilter(e.target.value);
+                setFeaturedKey(null);
+                setSortConfig({ key: null, direction: "desc" });
+                setHasDefaultedTeamFilter(true);
+              }}
               className="px-3 py-2 bg-neutral-800 rounded border border-neutral-700"
             >
               {teamOptions.map((t) => (
@@ -1366,17 +1866,17 @@ onChange={(e) => {
                 </option>
               ))}
             </select>
-<button
-  onClick={handleReturnToOffseasonHub}
-  className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
->
-  Back to Offseason Hub
-</button>
+            <button
+              onClick={handleReturnToOffseasonHub}
+              className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
+            >
+              Back to Offseason Hub
+            </button>
           </div>
         </div>
 
         {featured && (
-          <div className="relative bg-neutral-800 rounded-xl shadow-lg px-8 pt-7 pb-4 mb-6">
+          <div className={`${styles.featurePanel} relative bg-neutral-800/95 backdrop-blur-md border border-neutral-700 rounded-xl shadow-lg px-8 pt-7 pb-4 mb-6`}>
             <div className="absolute left-0 right-0 bottom-0 h-[2px] bg-white opacity-20" />
 
             <div className="flex items-end justify-between gap-6">
@@ -1446,7 +1946,7 @@ onChange={(e) => {
             </div>
           </div>
         )}
-        <div className="bm-orange-scroll max-h-[610px] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900">
+        <div className={`${styles.tablePanel} bm-orange-scroll max-h-[610px] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900`}>
           <div className="min-w-[1300px] max-w-max mx-auto">
             <table className="w-full border-collapse text-center">
               <thead className="sticky top-0 z-20 bg-neutral-800 text-gray-300 text-[16px] font-semibold">
@@ -1463,27 +1963,27 @@ onChange={(e) => {
                     { key: "potential", label: "POT" },
                     ...attrColumns,
                   ].map((col) => (
-<th
-  key={col.key}
-  className={`py-3 px-3 min-w-[95px] ${
-    col.key === "name" ? "min-w-[200px] text-left pl-4" : "text-center"
-  } cursor-pointer select-none`}
-  onClick={(e) => {
-    e.stopPropagation();
-    handleSort(col.key);
-  }}
->
-  {col.label}
-  {sortConfig.key === col.key && (
-    <span className="ml-1 text-orange-400">
-      {sortConfig.direction === "asc"
-        ? "▲"
-        : sortConfig.direction === "desc"
-        ? "▼"
-        : ""}
-    </span>
-  )}
-</th>
+                    <th
+                      key={col.key}
+                      className={`py-3 px-3 min-w-[95px] ${
+                        col.key === "name" ? "min-w-[200px] text-left pl-4" : "text-center"
+                      } cursor-pointer select-none`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSort(col.key);
+                      }}
+                    >
+                      {col.label}
+                      {sortConfig.key === col.key && (
+                        <span className="ml-1 text-orange-400">
+                          {sortConfig.direction === "asc"
+                            ? "▲"
+                            : sortConfig.direction === "desc"
+                            ? "▼"
+                            : ""}
+                        </span>
+                      )}
+                    </th>
                   ))}
                 </tr>
               </thead>

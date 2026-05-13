@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import LZString from "lz-string";
+import styles from "./AllNbaTeams.module.css";
 
 /* -------------------------------------------------------------------------- */
 /*                             AWARDS NORMALIZATION                           */
@@ -99,7 +100,7 @@ export default function AllNbaTeams({ leagueDataProp }) {
   // --- guard: no league yet ---
   if (!leagueData) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
+      <div className={`${styles.allNbaPage} flex flex-col items-center justify-center h-screen text-white`}>
         <p className="mb-3 text-lg">League data not found.</p>
         <button
           onClick={() => navigate("/team-selector")}
@@ -322,7 +323,7 @@ export default function AllNbaTeams({ leagueDataProp }) {
   /* -------------------------------------------------------------------------- */
 
   return (
-    <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center py-10">
+    <div className={`${styles.allNbaPage} min-h-screen text-white flex flex-col items-center py-10`}>
      {/* Title row (no arrows) */}
 <div className="w-full max-w-5xl flex items-center justify-between mt-6 mb-6 select-none">
   <h1 className="text-3xl md:text-4xl font-extrabold text-orange-500">
@@ -438,7 +439,7 @@ export default function AllNbaTeams({ leagueDataProp }) {
 
       {/* Table – 5 players of selected All-NBA team */}
       <div className="w-full flex justify-center mt-[-1px]">
-        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar">
+        <div className={`${styles.tablePanel} w-full max-w-5xl overflow-x-auto no-scrollbar`}>
           <table className="w-full border-collapse text-center text-[17px] font-medium">
             <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
               <tr>

@@ -17,6 +17,8 @@ import {
   deleteBoxScoreFromDB,
   clearBoxScoresFromDB,
 } from "../utils/indexedDbStorage";
+import PageFade from "../components/PageFade";
+import "../styles/BMAnimations.css";
 
 window.LZString = LZString;
 
@@ -2912,6 +2914,7 @@ const actionModalBlockMessage = actionModal
   ? getSimulationBlockMessageForGame(actionModal.game, teams)
   : "";
 return (
+    <PageFade>
   <div
     className="relative h-screen overflow-hidden text-white py-2"
     style={{
@@ -3574,5 +3577,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
   onClose={() => setAllStarOpen(false)}
 />
     </div>
+  
+    </PageFade>
   );
 }

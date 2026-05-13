@@ -3,6 +3,8 @@ import React, { useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
+import PageFade from "../components/PageFade";
+import "../styles/BMAnimations.css";
 
 /* -----------------------------
    Results V3 (per-game storage)
@@ -183,6 +185,7 @@ export default function Standings() {
   );
 
   return (
+    <PageFade>
     <div className="min-h-screen bg-neutral-900 text-white py-10 px-6">
       <div className="max-w-5xl mx-auto">
         <div className="flex items-center justify-between mb-6">
@@ -259,5 +262,7 @@ export default function Standings() {
         </button>
       </div>
     </div>
+  
+    </PageFade>
   );
 }

@@ -3,6 +3,8 @@ import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
+import PageFade from "../components/PageFade";
+import "../styles/BMPageBackground.css";
 
 /* -------------------------------------------------------------------------- */
 /*                              STORAGE HELPERS                               */
@@ -514,20 +516,23 @@ export default function PlayerStats() {
 
   if (!leagueData || !selectedTeam) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-neutral-900 text-white">
-        <p className="mb-3 text-lg">No team selected or league missing.</p>
-        <button
-          onClick={() => navigate("/team-selector")}
-          className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold"
-        >
-          Back to Team Select
-        </button>
-      </div>
+      <PageFade>
+        <div className="flex flex-col items-center justify-center min-h-screen bmCourtPage text-white">
+          <p className="mb-3 text-lg">No team selected or league missing.</p>
+          <button
+            onClick={() => navigate("/team-selector")}
+            className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold"
+          >
+            Back to Team Select
+          </button>
+        </div>
+      </PageFade>
     );
   }
 
   return (
-    <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center py-10">
+    <PageFade>
+      <div className="min-h-screen bmCourtPage text-white flex flex-col items-center py-10">
       <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
         <div className="w-24 flex items-center justify-start">
           <button
@@ -593,7 +598,7 @@ export default function PlayerStats() {
 
       {mode !== "teams" && cardPlayer && (
         <div className="relative w-full flex justify-center">
-          <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
+          <div className="relative bmSolidPanel w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
             <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60" />
 
             <div className="flex items-end justify-between relative">
@@ -679,7 +684,7 @@ export default function PlayerStats() {
 
       {mode === "teams" && cardTeam && (
         <div className="relative w-full flex justify-center">
-          <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-4 rounded-t-xl shadow-lg">
+          <div className="relative bmSolidPanel w-full max-w-5xl px-8 pt-8 pb-4 rounded-t-xl shadow-lg">
             <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60" />
 
             <div className="flex items-center justify-between">
@@ -714,7 +719,7 @@ export default function PlayerStats() {
       )}
 
       <div className="w-full flex justify-center mt-[-1px]">
-        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar">
+        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar bmTablePanel">
           {(mode === "players" || mode === "league") && (
             <table className="w-full border-collapse text-center text-[17px] font-medium">
               <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
@@ -894,6 +899,7 @@ export default function PlayerStats() {
       >
         Back to Team Hub
       </button>
-    </div>
+      </div>
+    </PageFade>
   );
 }

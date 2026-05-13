@@ -4,6 +4,8 @@ import { useNavigate } from "react-router-dom";
 import { releasePlayerToFreeAgency } from "../api/simEnginePy.js";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./RosterView.module.css";
+import PageFade from "../components/PageFade";
+import "../styles/BMAnimations.css";
 
 export default function RosterView() {
   const { leagueData, selectedTeam, setSelectedTeam, setLeagueData } = useGame();
@@ -386,6 +388,7 @@ export default function RosterView() {
   const strokeOffset = circleCircumference * (1 - fillPercent);
 
   return (
+    <PageFade>
     <div className={`${styles.rosterPage} min-h-screen text-white flex flex-col items-center py-10`}>
       {/* Static header with pinned arrows */}
       <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
@@ -754,5 +757,7 @@ export default function RosterView() {
         </div>
       )}
     </div>
+  
+    </PageFade>
   );
 }

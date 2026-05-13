@@ -1480,6 +1480,16 @@ def finalize_cpu_min_roster_cleanup(
         if player_key in state.get("offersByPlayer", {}):
             del state["offersByPlayer"][player_key]
 
+        story_context = build_free_agency_story_context(
+            league_data = league_data,
+            player = signed_player,
+            team_name = team_name,
+            contract = signed_player.get("contract"),
+            row = {"spendingType": "minimum", "source": source},
+            event_type = "cleanup_signing",
+            current_day = current_day,
+        )
+
         state["signedPlayersLog"].append({
             "day": current_day,
             "playerId": signed_player.get("id"),
@@ -1488,6 +1498,8 @@ def finalize_cpu_min_roster_cleanup(
             "contract": signed_player.get("contract"),
             "allOffers": [],
             "source": source,
+            "spendingType": "minimum",
+            "storyContext": story_context,
         })
 
         signing_row = {
@@ -1500,6 +1512,8 @@ def finalize_cpu_min_roster_cleanup(
             "aav": int(sum(signed_player["contract"]["salaryByYear"]) / len(signed_player["contract"]["salaryByYear"])),
             "cleanupSigning": True,
             "emergencySigning": True,
+            "spendingType": "minimum",
+            "storyContext": story_context,
         }
         cleanup_signings.append(signing_row)
         return signing_row
@@ -3193,6 +3207,1329 @@ def ensure_free_agency_state(league_data: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 
+# ------------------------------------------------------------
+# FREE AGENCY STORY CONTEXT HELPERS
+# ------------------------------------------------------------
+def _story_format_dollars(amount: Any) -> str:
+    amount = int(num(amount, 0))
+    if amount >= 1_000_000:
+        text = f"${amount / 1_000_000:.1f}M"
+        return text.replace(".0M", "M")
+    if amount > 0:
+        return f"${amount:,}"
+    return "$0"
+
+
+def _story_contract_summary(contract: Optional[Dict[str, Any]], fallback_total: int = 0, fallback_years: int = 0) -> Dict[str, Any]:
+    normalized = normalize_contract(contract)
+    salary_by_year = list(normalized.get("salaryByYear", [])) if normalized else []
+    years = len(salary_by_year) or int(num(fallback_years, 0))
+    total_value = int(sum(int(num(x, 0)) for x in salary_by_year)) if salary_by_year else int(num(fallback_total, 0))
+    current_year_salary = int(salary_by_year[0]) if salary_by_year else 0
+    aav = int(total_value / max(1, years)) if years else 0
+
+    return {
+        "years": years,
+        "totalValue": total_value,
+        "currentYearSalary": current_year_salary,
+        "aav": aav,
+        "line": f"{_story_format_dollars(total_value)} - {years} years" if years and total_value else "contract details unavailable",
+    }
+
+
+def _story_pick(seed_text: str, options: List[str]) -> str:
+    if not options:
+        return ""
+    idx = stable_text_seed(seed_text) % len(options)
+    return options[idx]
+
+
+def _story_tool_label(value: Any) -> str:
+    text = str(value or "").replace("_", " ").replace("-", " ").strip()
+    return " ".join(part.capitalize() for part in text.split()) if text else ""
+
+
+def _story_player_profile_line(player: Dict[str, Any]) -> str:
+    name = player.get("name") or "This player"
+    pos = player.get("pos") or player.get("position") or "player"
+    overall = int(round(num(player.get("overall"), 0)))
+    potential = int(round(num(player.get("potential"), overall)))
+    age = int(num(player.get("age"), 27))
+    upside = potential - overall
+
+    if overall >= 88:
+        return f"{name} profiles as a true star-level {pos}, so the signing changes the top of the rotation immediately."
+    if overall >= 83 and age <= 26:
+        return f"{name} gives the team a young high-end {pos} with enough runway to keep improving."
+    if overall >= 80:
+        return f"{name} looks like a strong starter or high-minute rotation {pos}, which makes the contract more than a depth move."
+    if age <= 24 and upside >= 3:
+        return f"{name} is an upside swing: the team is betting on development as much as current production."
+    if age >= 33 and overall >= 76:
+        return f"{name} is a veteran stability move, likely valued for immediate minutes more than long-term growth."
+    if overall <= 74:
+        return f"{name} is mainly a depth and roster-balance piece at this stage of the market."
+    return f"{name} gives the team another playable {pos} option without forcing a major roster reset."
+
+
+def _story_recent_team_context(league_data: Dict[str, Any], team_name: str) -> Dict[str, Any]:
+    profile = build_recent_team_results_profile(league_data, team_name)
+    if not profile.get("historyAvailable"):
+        return {
+            "label": "no recent standings context found",
+            "short": "a roster-context move",
+            "mood": "Without recent standings data, player mood should lean more on role, contract size, and roster fit.",
+            "profile": profile,
+        }
+
+    wins = profile.get("lastSeasonWins")
+    losses = profile.get("lastSeasonLosses")
+    seed = profile.get("lastSeasonSeed")
+    result = str(profile.get("lastSeasonPlayoffResult") or "missed_playoffs").replace("_", " ")
+    record = f"{wins}-{losses}" if wins is not None and losses is not None else "record unavailable"
+    label_parts = [record]
+    if seed:
+        label_parts.append(f"{seed} seed")
+    if result and result != "missed playoffs":
+        label_parts.append(result)
+    label = ", ".join(label_parts)
+
+    if profile.get("lastSeasonChampion"):
+        short = "a defending champion trying to protect its title window"
+        mood = "This should be one of the strongest mood environments because the player is joining a fresh champion."
+    elif profile.get("lastSeasonFinals"):
+        short = "a Finals-level team adding another piece"
+        mood = "This should help the player's mood because the team already looks like a title threat."
+    elif profile.get("lastSeasonConferenceFinals"):
+        short = "a deep playoff team looking for one more edge"
+        mood = "This should usually create a positive mood read because the player joins a serious playoff group."
+    elif wins is not None and wins >= 50:
+        short = "a 50-win team strengthening its rotation"
+        mood = "This is a strong mood landing spot because winning is already built into the situation."
+    elif wins is not None and wins >= 42:
+        short = "a playoff-caliber team trying to stabilize its rotation"
+        mood = "This should be a stable mood landing spot because the team is competitive."
+    elif wins is not None and wins <= 25:
+        short = "a rebuilding team offering opportunity and flexibility"
+        mood = "The standings may hurt short-term mood, but a bigger role or stronger contract can balance that out."
+    else:
+        short = "a team still defining its next step"
+        mood = "Mood should depend heavily on whether the player gets the role and minutes expected from this signing."
+
+    return {
+        "label": label,
+        "short": short,
+        "mood": mood,
+        "profile": profile,
+    }
+
+
+def _story_team_building_context(
+    league_data: Dict[str, Any],
+    team_name: str,
+    player: Dict[str, Any],
+    roster_need: Optional[Dict[str, Any]] = None,
+    team_profile: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    _, _, team = find_team_entry(league_data, team_name)
+
+    if team_profile is None and team is not None:
+        team_profile = build_team_roster_profile(team, league_data = league_data)
+
+    if team_profile is None:
+        team_profile = {}
+
+    bucket = None
+    need_score = None
+
+    if isinstance(roster_need, dict):
+        bucket = roster_need.get("position") or roster_need.get("positionBucket")
+        need_score = roster_need.get("needScore")
+
+    if not bucket:
+        bucket = get_player_position_bucket(player)
+
+    if need_score is None and team is not None:
+        need_score = get_player_need_score_for_team(team, player, league_data = league_data)
+
+    need_score = float(num(need_score, 0.0))
+    direction = team_profile.get("direction") or "balanced"
+
+    if need_score >= 0.70:
+        need_line = f"The need grade is strong at {_story_position_phrase(bucket, str(bucket) + '|building')}, so this looks like a targeted positional fix."
+    elif need_score >= 0.45:
+        need_line = f"The team had a real {_story_position_phrase(bucket, str(bucket) + '|building-mid')} need, even if it was not an emergency hole."
+    elif need_score > 0:
+        need_line = f"The {_story_position_phrase(bucket, str(bucket) + '|building-light')} need was lighter, so the move is more about value, role, or market timing."
+    else:
+        need_line = "No strong positional-need signal was attached to this move."
+
+    direction_line = {
+        "contending": "The direction profile is contending, so the front office is prioritizing immediate rotation value.",
+        "win now": "The direction profile is win-now, which explains paying for present-day reliability.",
+        "retooling": "The direction profile is retooling, so this move balances current usefulness with some flexibility.",
+        "rebuilding": "The direction profile is rebuilding, so age, upside, and role opportunity matter more than one-year impact.",
+        "balanced": "The direction profile is balanced, so this reads like a practical roster fit instead of an all-in swing.",
+    }.get(direction, f"The team direction is {direction}, which shapes how aggressive this offer looks.")
+
+    return {
+        "direction": direction,
+        "directionConfidence": team_profile.get("directionConfidence"),
+        "positionBucket": bucket,
+        "needScore": round(need_score, 3),
+        "needLine": need_line,
+        "directionLine": direction_line,
+        "profile": team_profile,
+    }
+
+
+def _story_team_display(team_name: Any, capital: bool = False) -> str:
+    name = str(team_name or "Unknown Team").strip()
+    if not name:
+        name = "Unknown Team"
+    lowered = name.lower()
+    if lowered.startswith("the "):
+        return name[0].upper() + name[1:] if capital else name
+    prefix = "The" if capital else "the"
+    return f"{prefix} {name}"
+
+
+def _story_team_possessive(team_name: Any) -> str:
+    display = _story_team_display(team_name, capital = True)
+    return f"{display}'" if display.endswith("s") else f"{display}'s"
+
+
+
+def _story_position_phrase(bucket: Any, seed: str = "", style: str = "default") -> str:
+    raw = str(bucket or "UTIL").upper().strip()
+    options = {
+        "PG": ["point guard", "lead-guard spot", "at the 1", "primary guard spot"],
+        "SG": ["shooting guard", "off-guard spot", "at the 2", "secondary guard spot"],
+        "SF": ["small forward", "wing spot", "at the 3", "perimeter-forward spot"],
+        "PF": ["power forward", "frontcourt spot", "at the 4", "forward spot"],
+        "C": ["center", "middle", "at the 5", "big-man spot"],
+        "UTIL": ["rotation", "utility", "depth", "multi-position"],
+    }
+
+    picked = _story_pick(f"{seed}|position|{raw}|{style}", options.get(raw, options["UTIL"]))
+    if style == "room":
+        if picked.startswith("at the "):
+            return f"{picked} spot"
+        return f"{picked} room"
+    return picked
+
+
+def _story_rows_count(rows: Any) -> int:
+    return len(rows) if isinstance(rows, list) else 0
+
+
+def _story_is_plural_count(count: int) -> bool:
+    return int(count or 0) != 1
+
+
+def _story_be_verb(count: int) -> str:
+    return "are" if _story_is_plural_count(count) else "is"
+
+
+def _story_have_verb(count: int) -> str:
+    return "have" if _story_is_plural_count(count) else "has"
+
+
+def _story_group_label(names: str, count: int, fallback: str = "that group") -> str:
+    if names:
+        return names
+    return fallback
+
+
+def _story_player_first_name(player: Dict[str, Any]) -> str:
+    name = str(player.get("name") or "I").strip()
+    return name.split(" ")[0] if name else "I"
+
+
+def _story_rating_lookup(player: Dict[str, Any], keys: List[str]) -> Optional[float]:
+    for key in keys:
+        value = player.get(key)
+        if value not in [None, ""]:
+            return num(value, 0)
+    return None
+
+
+def _story_player_strength_phrase(player: Dict[str, Any], seed: str = "", pronoun: str = "his") -> str:
+    # This stays user-facing and basketball-real: no OVR/POT numbers in dialogue.
+    # It only names skills if those attribute fields exist in the player row.
+    skill_fields = [
+        ("shooting", ["3PT", "3pt", "three", "threePt", "threePoint", "threePointRating", "three_point", "rating3pt"]),
+        ("mid-range scoring", ["MID", "mid", "midRange", "midRating", "midRangeRating"]),
+        ("finishing", ["CLOSE", "close", "closeRating", "inside", "insideScoring", "finishing"]),
+        ("free-throw touch", ["FT", "ft", "freeThrow", "freeThrowRating"]),
+        ("passing", ["PASS", "pass", "passing", "passRating", "passingRating"]),
+        ("ball handling", ["BALL", "ball", "ballHandle", "ballHandling", "handle", "dribble"]),
+        ("defense", ["DEF", "def", "defense", "defRating", "defensiveRating"]),
+        ("offense", ["OFF", "off", "offense", "offRating", "offensiveRating"]),
+        ("scoring", ["scoring", "scoringRating"]),
+        ("rebounding", ["REB", "reb", "rebound", "rebounding", "rebRating"]),
+    ]
+
+    found = []
+    for label, keys in skill_fields:
+        rating = _story_rating_lookup(player, keys)
+        if rating is None:
+            continue
+        if rating >= 86:
+            found.append((rating, label))
+        elif rating >= 82 and label in ["shooting", "defense", "passing", "ball handling", "finishing", "scoring"]:
+            found.append((rating, label))
+
+    found.sort(key = lambda item: (-item[0], item[1]))
+    labels = []
+    for _, label in found:
+        if label not in labels:
+            labels.append(label)
+        if len(labels) >= 3:
+            break
+
+    if labels:
+        if len(labels) == 1:
+            skill_text = f"{labels[0]} profile"
+        elif len(labels) == 2:
+            skill_text = f"{labels[0]} and {labels[1]} profile"
+        else:
+            skill_text = f"{labels[0]}, {labels[1]}, and {labels[2]} profile"
+        return f"{pronoun} {skill_text}"
+
+    off_rating = _story_rating_lookup(player, ["OFF", "off", "offense", "offRating", "offensiveRating"])
+    def_rating = _story_rating_lookup(player, ["DEF", "def", "defense", "defRating", "defensiveRating"])
+
+    if off_rating is not None and def_rating is not None:
+        if off_rating >= def_rating + 5:
+            return f"{pronoun} offensive skill set"
+        if def_rating >= off_rating + 5:
+            return f"{pronoun} defensive skill set"
+        return f"{pronoun} two-way skill set"
+
+    return _story_pick(seed + "|generic-skill-phrase", [
+        f"{pronoun} basketball profile",
+        f"{pronoun} skill set",
+        f"{pronoun} game",
+        f"the way {pronoun} game fits the roster",
+    ])
+
+
+def _story_is_minimum_deal(contract_info: Dict[str, Any], spending_type: Any, exception_type: Any) -> bool:
+    raw = f"{spending_type or ''} {exception_type or ''}".lower()
+    first_year = int(num(contract_info.get("currentYearSalary"), 0))
+    aav = int(num(contract_info.get("aav"), 0))
+    return "minimum" in raw or (first_year > 0 and first_year <= int(MIN_DEAL * 1.15)) or (aav > 0 and aav <= int(MIN_DEAL * 1.25))
+
+
+def _story_spending_line(spending_type: Any, exception_type: Any, payroll_zone: Any, exception_usage: Optional[Dict[str, Any]]) -> str:
+    raw = f"{spending_type or ''} {exception_type or ''} {payroll_zone or ''}".lower()
+
+    if "rfa_match" in raw:
+        return "We used restricted-free-agent matching rights here, so this was about keeping control of our own player instead of treating it like a normal open-market win."
+    if "bird" in raw:
+        return "We used Bird-rights flexibility, which is exactly the tool built for keeping a player we already know without needing normal cap room."
+    if "taxpayer" in raw:
+        return "We were working with taxpayer mid-level type spending, so this was a limited but meaningful way to add someone we actually believe can help."
+    if "non_taxpayer" in raw or "mid_level" in raw or "mle" in raw:
+        return "We used mid-level exception type spending, which means we valued him well above minimum depth but were still operating inside a controlled CBA path."
+    if "room" in raw or "cap_space" in raw or "below_cap" in raw:
+        return "We had cap-space or room-exception flexibility, so this was a real target rather than a leftover minimum swing."
+    if "minimum" in raw:
+        return "We kept the contract in minimum territory, so this is about roster access, cheap depth, and giving the player a chance to stick."
+
+    if exception_usage and int(num(exception_usage.get("amountUsed"), 0)) > 0:
+        return f"We used {_story_format_dollars(exception_usage.get('amountUsed'))} of an exception to complete this signing."
+
+    return "The free-agency engine treated this as legal based on our cap room, rights, exceptions, and roster-limit situation."
+
+
+def _story_name_list(players: List[Dict[str, Any]], limit: int = 3) -> str:
+    names = []
+    for player in players[:max(0, limit)]:
+        name = player.get("name")
+        if name:
+            names.append(str(name))
+
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return f"{', '.join(names[:-1])}, and {names[-1]}"
+
+
+def _story_same_player(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    if not a or not b:
+        return False
+    a_id = a.get("id")
+    b_id = b.get("id")
+    if a_id not in [None, ""] and b_id not in [None, ""] and a_id == b_id:
+        return True
+    a_name = a.get("name")
+    b_name = b.get("name")
+    return bool(a_name and b_name and a_name == b_name)
+
+
+def _story_team_roster_context(
+    league_data: Dict[str, Any],
+    team_name: str,
+    player: Dict[str, Any],
+) -> Dict[str, Any]:
+    _, _, team = find_team_entry(league_data, team_name)
+    players = list(team.get("players", [])) if team else []
+
+    existing_players = [p for p in players if not _story_same_player(p, player)]
+    ranked = sorted(
+        existing_players,
+        key = lambda p: (
+            -num(p.get("overall"), 0),
+            -num(p.get("potential"), num(p.get("overall"), 0)),
+            int(num(p.get("age"), 27)),
+            str(p.get("name", "")),
+        ),
+    )
+
+    bucket = get_player_position_bucket(player)
+    player_overall = int(round(num(player.get("overall"), 0)))
+    player_age = int(num(player.get("age"), 0))
+    player_potential = int(round(num(player.get("potential"), player_overall)))
+
+    same_position = [p for p in ranked if get_player_position_bucket(p) == bucket]
+    rotation_same_position = [p for p in same_position if num(p.get("overall"), 0) >= 74]
+    better_same_position = [p for p in same_position if num(p.get("overall"), 0) >= player_overall + 2]
+    comparable_same_position = [p for p in same_position if abs(num(p.get("overall"), 0) - player_overall) <= 1]
+    clearly_below_same_position = [p for p in same_position if num(p.get("overall"), 0) <= player_overall - 3]
+
+    top_players = ranked[:3]
+    star_players = [p for p in ranked if num(p.get("overall"), 0) >= 85]
+    young_core = [
+        p for p in ranked
+        if int(num(p.get("age"), 27)) <= 26 and num(p.get("overall"), 0) >= 76
+    ][:3]
+
+    average_age = None
+    if ranked:
+        average_age = round(sum(num(p.get("age"), 0) for p in ranked[:8]) / max(1, len(ranked[:8])), 1)
+
+    if not same_position:
+        role_read = "clean_path"
+    elif player_overall >= 84:
+        role_read = "high_end_piece"
+    elif better_same_position and player_overall < 80:
+        role_read = "depth_competition"
+    elif player_overall >= 80 and len(clearly_below_same_position) >= 1:
+        role_read = "position_upgrade"
+    elif comparable_same_position:
+        role_read = "rotation_overlap"
+    elif len(rotation_same_position) >= 2 and player_overall < 78:
+        role_read = "crowded_depth"
+    else:
+        role_read = "rotation_fit"
+
+    return {
+        "teamFound": bool(team),
+        "positionBucket": bucket,
+        "playerOverall": player_overall,
+        "playerAge": player_age,
+        "playerPotential": player_potential,
+        "topPlayers": [
+            {
+                "name": p.get("name"),
+                "overall": int(round(num(p.get("overall"), 0))),
+                "age": int(num(p.get("age"), 0)),
+                "position": p.get("pos") or p.get("position"),
+            }
+            for p in top_players
+        ],
+        "starPlayers": [
+            {
+                "name": p.get("name"),
+                "overall": int(round(num(p.get("overall"), 0))),
+                "age": int(num(p.get("age"), 0)),
+                "position": p.get("pos") or p.get("position"),
+            }
+            for p in star_players[:3]
+        ],
+        "samePositionPlayers": [
+            {
+                "name": p.get("name"),
+                "overall": int(round(num(p.get("overall"), 0))),
+                "age": int(num(p.get("age"), 0)),
+                "position": p.get("pos") or p.get("position"),
+            }
+            for p in same_position[:5]
+        ],
+        "betterSamePositionPlayers": [
+            {"name": p.get("name"), "overall": int(round(num(p.get("overall"), 0)))}
+            for p in better_same_position[:3]
+        ],
+        "clearlyBelowSamePositionPlayers": [
+            {"name": p.get("name"), "overall": int(round(num(p.get("overall"), 0)))}
+            for p in clearly_below_same_position[:4]
+        ],
+        "rotationSamePositionCount": len(rotation_same_position),
+        "samePositionCount": len(same_position),
+        "topPlayerNames": _story_name_list(top_players, 3),
+        "starNames": _story_name_list(star_players, 2),
+        "samePositionNames": _story_name_list(same_position, 3),
+        "betterSamePositionNames": _story_name_list(better_same_position, 3),
+        "clearlyBelowSamePositionNames": _story_name_list(clearly_below_same_position, 3),
+        "youngCoreNames": _story_name_list(young_core, 3),
+        "averageCoreAge": average_age,
+        "roleRead": role_read,
+    }
+
+
+def _story_offer_team_name(offer: Dict[str, Any]) -> str:
+    return str(offer.get("teamName") or offer.get("signedWith") or offer.get("originalOfferTeamName") or "")
+
+
+def _story_offer_total(offer: Dict[str, Any]) -> int:
+    contract = normalize_contract(offer.get("contract"))
+    if contract:
+        return int(sum(int(num(x, 0)) for x in contract.get("salaryByYear", [])))
+    return int(num(offer.get("totalValue") or offer.get("signedTotalValue") or offer.get("userOfferTotalValue"), 0))
+
+
+def _story_offer_years(offer: Dict[str, Any]) -> int:
+    contract = normalize_contract(offer.get("contract"))
+    if contract:
+        return len(contract.get("salaryByYear", []))
+    return int(num(offer.get("years") or offer.get("signedYears") or offer.get("userOfferYears"), 0))
+
+
+def _story_offer_line(offer: Dict[str, Any]) -> str:
+    years = _story_offer_years(offer)
+    total = _story_offer_total(offer)
+    if years and total:
+        return f"{_story_format_dollars(total)} over {years} year{'s' if years != 1 else ''}"
+    if total:
+        return _story_format_dollars(total)
+    return "terms not fully listed"
+
+
+def _story_offer_score(offer: Dict[str, Any]) -> float:
+    return float(num(offer.get("playerViewScore") or offer.get("acceptanceScore") or offer.get("score"), 0))
+
+
+def _story_offer_compact_row(offer: Dict[str, Any]) -> Dict[str, Any]:
+    raw_team = _story_offer_team_name(offer)
+    return {
+        "teamName": raw_team,
+        "displayTeamName": _story_team_display(raw_team),
+        "line": _story_offer_line(offer),
+        "totalValue": _story_offer_total(offer),
+        "years": _story_offer_years(offer),
+        "playerViewScore": round(_story_offer_score(offer), 3),
+    }
+
+
+def _story_market_offer_context(
+    all_offers: List[Dict[str, Any]],
+    accepted_team_name: str,
+    accepted_total_value: int,
+    seed_text: str = "",
+) -> Dict[str, Any]:
+    accepted_display = _story_team_display(accepted_team_name)
+
+    if not all_offers:
+        return {
+            "offerCount": 0,
+            "acceptedOffer": None,
+            "otherOffers": [],
+            "marketLine": _story_pick(seed_text + "|no-offers", [
+                "I did not have a full list of competing offers attached here, so I am reading this as the clearest available path from the data we have.",
+                "There was not a tracked second offer in this row, so the decision comes down to the role, money, and fit this team put in front of me.",
+                "The market data did not show another finalist offer, which makes this feel like the offer that actually gave me a real decision to make.",
+            ]),
+            "teamMarketLine": _story_pick(seed_text + "|no-team-offers", [
+                "We did not have a full competing-offer list attached to this row, so we evaluated the move from our own offer, roster fit, and CBA path.",
+                "There was not a deep finalist list in the data, so our job was to make the role and contract clear enough to close the deal.",
+                "The attached market data was thin, so we treated this as a direct fit-and-price decision rather than a bidding war.",
+            ]),
+        }
+
+    try:
+        sorted_offers = sort_offers_for_display(copy.deepcopy(all_offers))
+    except Exception:
+        sorted_offers = sorted(
+            copy.deepcopy(all_offers),
+            key = lambda offer: (_story_offer_score(offer), _story_offer_total(offer)),
+            reverse = True,
+        )
+
+    accepted_offer = None
+    for offer in sorted_offers:
+        if _story_offer_team_name(offer) == accepted_team_name:
+            accepted_offer = offer
+            break
+
+    if accepted_offer is None and sorted_offers:
+        accepted_offer = sorted_offers[0]
+
+    other_offers = [
+        offer for offer in sorted_offers
+        if _story_offer_team_name(offer)
+        and _story_offer_team_name(offer) != accepted_team_name
+    ]
+
+    other_rows = [_story_offer_compact_row(offer) for offer in other_offers[:3]]
+
+    if not other_rows:
+        market_line = _story_pick(seed_text + "|single-market", [
+            "I did not have another tracked finalist offer once this decision was made, so this was about accepting the cleanest available path.",
+            "I did not see another real finalist in the attached market data, so the offer in front of me mattered more than waiting for something vague.",
+            "There was not a listed second choice here, which made the decision feel pretty direct once the role and contract lined up.",
+        ])
+        team_market_line = _story_pick(seed_text + "|single-team-market", [
+            "We were not beating a deep list of tracked finalist offers here; our main job was giving him a clean reason to say yes.",
+            "There was not a listed second bidder pushing us, so this was more about fit and commitment than winning an auction.",
+            "The market did not show a real finalist pileup, so we focused on giving him a contract and role that made sense now.",
+        ])
+    else:
+        second = other_rows[0]
+        third = other_rows[1] if len(other_rows) > 1 else None
+        accepted_total = int(num(accepted_total_value, 0))
+        second_total = int(num(second.get("totalValue"), 0))
+        second_display = second.get("displayTeamName") or _story_team_display(second.get("teamName"))
+
+        if accepted_total > 0 and second_total > 0 and accepted_total >= second_total * 1.45:
+            money_read = _story_pick(seed_text + "|accepted-way-more", [
+                f"That second offer was not close financially, so it was hard to treat it like the same level of commitment.",
+                f"The gap was big enough that I could not pretend the money and security were equal.",
+                f"That next offer gave me interest, but not the same financial respect or security.",
+            ])
+        elif second_total > accepted_total and accepted_total > 0:
+            money_read = _story_pick(seed_text + "|accepted-less", [
+                "That offer had more total money, so my choice was not only about the biggest number.",
+                "I left some money on the table, which means fit, role, comfort, or team situation had to matter.",
+                "The bigger number was there, but the accepted offer made more sense as a full basketball situation.",
+            ])
+        elif second_total == accepted_total and second_total > 0:
+            money_read = _story_pick(seed_text + "|even-money", [
+                "The money was basically even, so role, fit, and comfort mattered more.",
+                "With the dollars that close, the team context and path to minutes became the separator.",
+                "The contracts were close enough that I had to decide where the basketball fit made more sense.",
+            ])
+        else:
+            money_read = _story_pick(seed_text + "|accepted-more", [
+                "The accepted deal gave me the stronger money or security compared with that next option.",
+                "The offer I took was the stronger commitment once I compared the actual terms.",
+                "The other interest was real, but the accepted deal gave me the cleaner financial path.",
+            ])
+
+        if third:
+            third_display = third.get("displayTeamName") or _story_team_display(third.get("teamName"))
+            third_text = _story_pick(seed_text + "|third-offer", [
+                f" I also had {third_display} at {third['line']}, so there were multiple real paths on the table.",
+                f" {third_display} had another offer at {third['line']}, but it did not beat the full situation I chose.",
+                f" The third tracked option was {third_display} at {third['line']}, which made this a real market read rather than a single-phone-call decision.",
+                f" {third_display} stayed in the mix at {third['line']}, but the final choice still came down to the best blend of role, money, and fit.",
+                f" I had {third_display} on the board too at {third['line']}, which gave me leverage but not a better final landing spot.",
+                f" {third_display} made the board more interesting at {third['line']}, but that offer did not change where I felt the best overall fit was.",
+                f" There was also {third_display} at {third['line']}, so the choice was not made in a quiet market.",
+                f" {third_display} gave me a third option at {third['line']}, but once I weighed the details, it was not the one I wanted most.",
+            ])
+        else:
+            third_text = ""
+
+        market_line = _story_pick(seed_text + "|market-line", [
+            f"I also had {second_display} at {second['line']}. {money_read}{third_text}",
+            f"My next real option came from {second_display} at {second['line']}. {money_read}{third_text}",
+            f"When I compared the board, {second_display} gave me the main alternative at {second['line']}. {money_read}{third_text}",
+            f"The second choice in the data came from {second_display} at {second['line']}. {money_read}{third_text}",
+            f"There was real interest beyond the team I picked: {second_display} had {second['line']} waiting. {money_read}{third_text}",
+            f"I had to weigh this against {second_display}'s {second['line']} offer. {money_read}{third_text}",
+            f"The cleanest comparison was {second_display} at {second['line']}. {money_read}{third_text}",
+            f"This was not just about saying yes to the first call; {second_display} had a real offer at {second['line']}. {money_read}{third_text}",
+            f"The market gave me a real fallback through {second_display} at {second['line']}. {money_read}{third_text}",
+            f"I had to compare the accepted deal against {second_display}'s {second['line']} number. {money_read}{third_text}",
+            f"There was another route available with {second_display} at {second['line']}. {money_read}{third_text}",
+            f"I was not choosing in a vacuum; {second_display} had a serious alternative at {second['line']}. {money_read}{third_text}",
+            f"The other finalist that mattered most was {second_display} at {second['line']}. {money_read}{third_text}",
+            f"I had options, and the first one I had to measure against was {second_display}'s {second['line']} offer. {money_read}{third_text}",
+            f"The board gave me at least one clear alternative: {second_display} at {second['line']}. {money_read}{third_text}",
+        ])
+        team_market_line = _story_pick(seed_text + "|team-market-line", [
+            f"We knew {second_display} had a real alternative at {second['line']}, so our offer needed to win on the full mix of money, role, roster fit, and timing.",
+            f"We were not bidding in a vacuum - {second_display} had {second['line']} on the board, so we had to make the full situation make sense.",
+            f"The market gave him another route through {second_display} at {second['line']}, which meant our pitch could not just be empty minutes talk.",
+            f"With {second_display} on the board at {second['line']}, we had to decide how much we valued the player and what role we were ready to offer.",
+            f"There was another team in the conversation, and {second_display}'s {second['line']} offer forced us to be clear about why our situation was better.",
+            f"{second_display.capitalize()} made this competitive at {second['line']}, so we could not rely on vague interest or a weak role pitch.",
+            f"Once {second_display} put {second['line']} into the decision, we had to win more than the salary column.",
+            f"We saw {second_display}'s {second['line']} offer and knew the final pitch had to connect money, role, and roster logic.",
+            f"The alternative from {second_display} was real at {second['line']}, so this became a full-context recruiting job.",
+            f"We had to beat the idea of {second_display}, not just the dollars. Their {second['line']} offer made the comparison real.",
+            f"That {second_display} offer at {second['line']} gave him leverage, so we needed our roster fit to matter.",
+            f"The board was not empty. {second_display} had {second['line']} available, and our deal had to feel like the better basketball answer.",
+            f"We knew he could point to {second_display}'s {second['line']} offer, so our side had to make sense beyond the headline number.",
+            f"The market had another door open through {second_display} at {second['line']}, which made our role clarity and team context important.",
+            f"We were competing with a real option from {second_display} at {second['line']}, not just a rumor.",
+        ])
+
+    return {
+        "offerCount": len(sorted_offers),
+        "acceptedOffer": accepted_offer,
+        "otherOffers": other_rows,
+        "marketLine": market_line,
+        "teamMarketLine": team_market_line,
+    }
+
+
+def _story_success_memory(recent_context: Dict[str, Any]) -> str:
+    profile = recent_context.get("profile") or {}
+    if profile.get("lastSeasonChampion"):
+        return "we just proved this group can win the whole thing"
+    if profile.get("lastSeasonFinals"):
+        return "we already reached the Finals with this group"
+    if profile.get("lastSeasonConferenceFinals"):
+        return "we already made a deep playoff run with this group"
+    wins = profile.get("lastSeasonWins")
+    if wins is not None and wins >= 50:
+        return "we were already a 50-win team"
+    if wins is not None and wins >= 42:
+        return "we were already in the playoff mix"
+    return "we know the current team context clearly"
+
+
+def _story_tenure_read(player: Dict[str, Any], team_name: str) -> Dict[str, Any]:
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    fa_meta = player.get("freeAgencyMeta") if isinstance(player.get("freeAgencyMeta"), dict) else {}
+    rights = get_player_rights(player)
+
+    years = int(num(
+        meta.get("yearsWithCurrentTeam")
+        or meta.get("yearsWithTeam")
+        or meta.get("seasonsWithTeam"),
+        0,
+    ))
+    from_team = fa_meta.get("fromTeam")
+    rights_team = rights.get("heldByTeam")
+    acquired_via = str(meta.get("acquiredVia") or "").strip().lower()
+
+    # Important: after a player signs, update_player_rights_after_signing sets
+    # rights.heldByTeam to the new club. That does NOT mean the new club had
+    # formal pre-signing rights. Only treat it as continuity/rights if the
+    # player came from that team or the signing was explicitly recorded as a
+    # re-sign / RFA match.
+    same_team_from_entry = bool(from_team and team_name and from_team == team_name)
+    same_team_from_acquired_via = bool(
+        team_name
+        and rights_team == team_name
+        and acquired_via in ["re_signed", "rfa_matched"]
+    )
+    same_team = bool(same_team_from_entry or same_team_from_acquired_via)
+
+    if same_team and years <= 0:
+        years = max(1, int(num(rights.get("seasonsTowardBird"), 0)))
+
+    if not same_team:
+        years = 0
+
+    return {
+        "sameTeam": same_team,
+        "years": years,
+        "fromTeam": from_team,
+        "rightsTeam": rights_team,
+        "birdLevel": rights.get("birdLevel"),
+        "rfa": bool((same_team and rights.get("restrictedFreeAgent")) or player.get("qualifyingOffer") or acquired_via == "rfa_matched"),
+        "acquiredVia": acquired_via,
+    }
+
+def _story_role_line_for_team(player: Dict[str, Any], roster_context: Dict[str, Any], seed: str) -> str:
+    player_name = player.get("name") or "him"
+    bucket = roster_context.get("positionBucket") or get_player_position_bucket(player)
+    pos = _story_position_phrase(bucket, seed + "|team-role-pos")
+    pos_room = _story_position_phrase(bucket, seed + "|team-role-room", style = "room")
+    overall = int(num(roster_context.get("playerOverall"), num(player.get("overall"), 0)))
+    skill_phrase = _story_player_strength_phrase(player, seed + "|team-skill", pronoun = "his")
+    same_names = roster_context.get("samePositionNames")
+    below_names = roster_context.get("clearlyBelowSamePositionNames")
+    better_names = roster_context.get("betterSamePositionNames")
+    role_read = roster_context.get("roleRead")
+
+    same_count = _story_rows_count(roster_context.get("samePositionPlayers"))
+    below_count = _story_rows_count(roster_context.get("clearlyBelowSamePositionPlayers"))
+    better_count = _story_rows_count(roster_context.get("betterSamePositionPlayers"))
+    below_be = _story_be_verb(below_count)
+    better_be = _story_be_verb(better_count)
+
+    if role_read in ["high_end_piece", "position_upgrade"] or overall >= 82:
+        if below_names:
+            return _story_pick(seed + "|team-role-upgrade", [
+                f"At {pos}, we see {player_name} as more than depth - {skill_phrase} gives us a stronger option than the current same-position group that includes {below_names}.",
+                f"This is not about asking {player_name} to fight for scraps; compared with {below_names}, he gives us a higher-level option in the {pos_room}.",
+                f"The {pos_room} needed quality, and {player_name}'s game gives us a stronger answer than the depth names we already had there, including {below_names}.",
+                f"We are not bringing him in behind weaker depth. {below_names} {below_be} already in that room, but {player_name} changes the top of that position group.",
+                f"This is a real upgrade play. The roster had bodies in the {pos_room}, but {player_name} rates above the names already sitting there, including {below_names}.",
+            ])
+        return _story_pick(seed + "|team-role-high", [
+            f"We view {player_name} as a real rotation piece right away, not a fringe player hoping the depth chart breaks perfectly.",
+            f"His level is high enough that the role conversation starts with how we use him, not whether he belongs in the rotation.",
+            f"We are treating him like a real piece of the {pos_room} because his skill set can help immediately.",
+            f"This is not a camp-body read. We expect his game to factor into the real rotation.",
+        ])
+
+    if better_names:
+        return _story_pick(seed + "|team-role-behind", [
+            f"At {pos}, {better_names} {better_be} still above him in the current roster data, so we see this as depth and competition rather than a guaranteed top role.",
+            f"We like the depth he gives us, but with {better_names} already here, the role has to be earned realistically.",
+            f"The {pos_room} is not empty because of {better_names}, so this is more about strengthening the bench than promising a major role.",
+            f"We are being honest about the depth chart: {better_names} {better_be} ahead today, but this signing gives us another playable option.",
+        ])
+
+    if same_names:
+        return _story_pick(seed + "|team-role-overlap", [
+            f"At {pos}, we already had {same_names}, so this move gives us real competition and lineup flexibility.",
+            f"The fit is about giving ourselves another option around {same_names}, not pretending the depth chart was empty.",
+            f"With {same_names} already in the room, we wanted one more playable body who could push the rotation instead of just filling space.",
+            f"The {pos_room} already had names in it, but adding {player_name} gives us a cleaner mix of depth, insurance, and matchup options.",
+        ])
+
+    return _story_pick(seed + "|team-role-clean", [
+        f"At {pos}, the current roster data did not show many established names ahead of him, so the path to minutes is cleaner.",
+        f"The depth chart in the {pos_room} gave us room to add someone who could matter right away.",
+        f"We saw a cleaner opening in the {pos_room}, which made the basketball fit easier to justify.",
+        f"There was enough open space in the {pos_room} for this signing to make practical sense instead of feeling crowded from day one.",
+    ])
+
+def _story_role_line_for_player(player: Dict[str, Any], roster_context: Dict[str, Any], seed: str) -> str:
+    bucket = roster_context.get("positionBucket") or get_player_position_bucket(player)
+    pos = _story_position_phrase(bucket, seed + "|player-role-pos")
+    pos_room = _story_position_phrase(bucket, seed + "|player-role-room", style = "room")
+    overall = int(num(roster_context.get("playerOverall"), num(player.get("overall"), 0)))
+    skill_phrase = _story_player_strength_phrase(player, seed + "|player-skill", pronoun = "my")
+    same_names = roster_context.get("samePositionNames")
+    below_names = roster_context.get("clearlyBelowSamePositionNames")
+    better_names = roster_context.get("betterSamePositionNames")
+    role_read = roster_context.get("roleRead")
+
+    below_count = _story_rows_count(roster_context.get("clearlyBelowSamePositionPlayers"))
+    better_count = _story_rows_count(roster_context.get("betterSamePositionPlayers"))
+    below_be = _story_be_verb(below_count)
+    better_be = _story_be_verb(better_count)
+
+    if role_read in ["high_end_piece", "position_upgrade"] or overall >= 82:
+        if below_names:
+            return _story_pick(seed + "|player-role-upgrade", [
+                f"I do not look at this like I am begging for minutes; compared with {below_names}, I know I raise the level of the {pos_room}.",
+                f"I respect the guys already there, but my level says I should help right away, especially in a {pos_room} that included {below_names}.",
+                f"This role makes sense because I am not coming in as the last man - I can be one of the better {pos} options on the roster.",
+                f"I can read the depth chart too. {below_names} {below_be} there, but {skill_phrase} says I should be competing for real minutes, not just surviving the roster cut.",
+            ])
+        return _story_pick(seed + "|player-role-high", [
+            f"I see myself as a real rotation player, so I needed a team that was ready to use me at that level.",
+            f"My priority was finding a role that matched my level, not just finding any roster spot.",
+            f"I wanted a place where the team saw me as part of the rotation right away.",
+            f"At my level, the question is not whether I belong. It is whether the role and team situation make sense.",
+        ])
+
+    if better_names:
+        return _story_pick(seed + "|player-role-behind", [
+            f"I know {better_names} {better_be} already ahead in the {pos_room}, so I have to earn minutes and make the most of the role I get.",
+            f"The depth chart is not wide open with {better_names} there, but I can still see a path if I play well.",
+            f"This is not a guaranteed role because {better_names} {better_be} already in the room, so I have to prove I belong.",
+            f"I am not pretending the {pos_room} is empty. {better_names} {better_be} there, so my job is to turn the opportunity into trust.",
+        ])
+
+    if same_names:
+        return _story_pick(seed + "|player-role-overlap", [
+            f"I know there are other {pos} options like {same_names}, but the role is realistic enough for me to see how I fit.",
+            f"There is competition with {same_names}, but not so much that I cannot picture a real role.",
+            f"The {pos_room} has bodies, including {same_names}, but I still see a chance to carve out minutes.",
+            f"I am walking into competition, not a promise. With {same_names} there, I have to make the fit obvious.",
+        ])
+
+    return _story_pick(seed + "|player-role-clean", [
+        f"The {pos_room} gives me a cleaner lane to earn minutes.",
+        f"I can see the opening at {pos}, and that matters when I am picking a team.",
+        f"There is enough room in the {pos_room} for me to believe the opportunity is real.",
+        f"The role feels believable because there is not a long list of established names blocking the path at {pos}.",
+    ])
+
+def _story_team_side_voice(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    team_name: str,
+    contract_info: Dict[str, Any],
+    team_context: Dict[str, Any],
+    recent_context: Dict[str, Any],
+    roster_context: Dict[str, Any],
+    market_context: Dict[str, Any],
+    money_line: str,
+    event_type: str,
+    matched_rfa: bool,
+    original_offer_team_name: Optional[str],
+    spending_type: Any = None,
+    exception_type: Any = None,
+    seed: str = "",
+) -> Dict[str, Any]:
+    player_name = player.get("name") or "this player"
+    bucket = roster_context.get("positionBucket") or get_player_position_bucket(player)
+    direction = team_context.get("direction") or "balanced"
+    need_score = float(num(team_context.get("needScore"), 0))
+    star_names = roster_context.get("starNames")
+    top_names = roster_context.get("topPlayerNames")
+    tenure = _story_tenure_read(player, team_name)
+    team_display = _story_team_display(team_name)
+    outside_display = _story_team_display(original_offer_team_name) if original_offer_team_name else "the outside team"
+    is_minimum = _story_is_minimum_deal(contract_info, spending_type, exception_type)
+    bird_level = str(tenure.get("birdLevel") or "none")
+    rights_raw = f"{spending_type or ''} {exception_type or ''} {event_type or ''}".lower()
+    bird_spending = "bird" in rights_raw
+    rfa_spending = bool(matched_rfa or "rfa" in rights_raw)
+    own_rights = bool(tenure.get("sameTeam") and bird_level != "none" and (bird_spending or rfa_spending))
+    continuity_only = bool(tenure.get("sameTeam") and tenure.get("years", 0) >= 3 and not own_rights)
+
+    if matched_rfa:
+        opener = _story_pick(seed + "|team-opener-rfa", [
+            f"We were not letting {player_name} walk after {outside_display} put the offer sheet on the table.",
+            f"Once {outside_display} tested our resolve, we had to decide if {player_name} was still worth protecting. We decided he was.",
+            f"The offer sheet forced the question, and our answer was simple: we still valued {player_name} enough to match.",
+        ])
+    elif own_rights and tenure.get("years", 0) >= 3:
+        success = _story_success_memory(recent_context)
+        opener = _story_pick(seed + "|team-opener-longtime", [
+            f"We know {player_name} already. He has been with us for {tenure.get('years')} years, {success}, and Bird rights gave us the cleanest path to keep that continuity.",
+            f"This was about trust as much as talent. {player_name} has been in our system for {tenure.get('years')} years, and we were comfortable using our Bird rights to keep him.",
+            f"We did not want to create a hole with a player who already fits here. After {tenure.get('years')} years together, keeping {player_name} made more sense than replacing him blindly.",
+        ])
+    elif own_rights:
+        opener = _story_pick(seed + "|team-opener-bird", [
+            f"We were happy to use our Bird-rights path because {player_name} already made sense in our building.",
+            f"Bird-rights flexibility matters exactly in this kind of spot: we could keep a player we knew without needing to clear normal cap room.",
+            f"We saw value in continuity, and our rights gave us a way to keep {player_name} without reshaping the entire cap sheet first.",
+            f"This is why rights matter. We already had the relationship with {player_name}, and the CBA gave us a clean way to keep it going.",
+        ])
+    elif continuity_only:
+        opener = _story_pick(seed + "|team-opener-continuity-no-rights", [
+            f"We already knew {player_name}'s fit here, so the move was about continuity and trust, not pretending we had some special rights advantage.",
+            f"This was a familiarity play. {player_name} had already spent time with us, and keeping that role stable made basketball sense.",
+            f"We were not starting from zero with {player_name}. The relationship and role were already there, so the contract just had to make sense.",
+        ])
+    elif is_minimum:
+        opener = _story_pick(seed + "|team-opener-min", [
+            f"We needed a roster spot filled the right way, and {player_name} was available on a simple minimum path.",
+            f"This was not a headline chase. We needed cheap playable depth, and {player_name} gave us a reasonable way to finish the roster.",
+            f"At this point in the market, we were looking for someone willing to come in, compete, and give us depth without stressing the cap sheet.",
+        ])
+    elif star_names:
+        opener = _story_pick(seed + "|team-opener-stars", [
+            f"We already have {star_names} setting the top of our roster, so we wanted {player_name} to make that group easier to support.",
+            f"With {star_names} already carrying a lot of the identity, this move was about adding the right complementary piece.",
+            f"Our top-end talent is already there with {star_names}. The question was how to make the rotation around them stronger, and {player_name} fit that answer.",
+        ])
+    elif top_names:
+        opener = _story_pick(seed + "|team-opener-top", [
+            f"With {top_names} already shaping our rotation, we saw {player_name} as a way to make the roster more complete.",
+            f"We looked at the group around {top_names} and felt {player_name} filled a real basketball need.",
+            f"The core of the roster already had {top_names}; adding {player_name} was about improving the next layer.",
+        ])
+    else:
+        opener = _story_pick(seed + "|team-opener-basic", [
+            f"We looked at our roster and saw {player_name} as a practical way to add another playable {_story_position_phrase(bucket, seed + '|basic-pos')}.",
+            f"The roster needed another credible option, and {player_name} was the cleanest fit at this point in the market.",
+            f"This was a fit-and-price decision: we saw a role, we saw the contract path, and we moved.",
+        ])
+
+    role_line = _story_role_line_for_team(player, roster_context, seed)
+
+    if need_score >= 0.70:
+        need_line = _story_pick(seed + "|team-need-strong", [
+            f"The need grade was strong at {_story_position_phrase(bucket, seed + '|need-strong-a')}, so we treated this as a targeted positional fix instead of a random market swing.",
+            f"The {_story_position_phrase(bucket, seed + '|need-strong-b')} need was loud enough that we wanted a real answer, not just another body.",
+            f"Our board said {_story_position_phrase(bucket, seed + '|need-strong-c')} was one of the spots to address, and this signing directly speaks to that.",
+        ])
+    elif need_score >= 0.45:
+        need_line = _story_pick(seed + "|team-need-medium", [
+            f"The {_story_position_phrase(bucket, seed + '|need-medium-a')} need was real enough that we wanted another option, even if it was not the only hole on the roster.",
+            f"This was not an emergency, but the {_story_position_phrase(bucket, seed + '|need-medium-b', style = 'room')} still needed another playable piece.",
+            f"We did not need to panic at {_story_position_phrase(bucket, seed + '|need-medium-c')}, but we did need more stability there.",
+        ])
+    else:
+        need_line = _story_pick(seed + "|team-need-light", [
+            f"The {_story_position_phrase(bucket, seed + '|need-light-a')} need was not screaming emergency, but we still liked the value and fit at this price.",
+            f"This was less about plugging the biggest hole and more about adding value where the market made sense.",
+            f"Even if {_story_position_phrase(bucket, seed + '|need-light-c')} was not our loudest need, the player and contract still made the roster cleaner.",
+        ])
+
+    direction_line = {
+        "contending": _story_pick(seed + "|team-dir-contending", [
+            "We are trying to win now, so the priority was someone who can survive in meaningful rotation minutes.",
+            "Our timeline is not theoretical - we need players who can help in real games right away.",
+            "For us, the bar is playoff usefulness, not just regular-season depth.",
+        ]),
+        "win now": _story_pick(seed + "|team-dir-win", [
+            "We are leaning win-now, so present-day reliability mattered more than a long development curve.",
+            "The direction of the team pushed us toward someone we trust to help sooner rather than later.",
+            "We valued immediate usefulness here because the roster is trying to win now.",
+        ]),
+        "retooling": _story_pick(seed + "|team-dir-retool", [
+            "We are retooling, so we wanted a move that helps now without locking us into a bad long-term shape.",
+            "We are not trying to freeze the roster, but we still need useful players while we reshape it.",
+            "This fits a retool: useful now, not reckless later.",
+        ]),
+        "rebuilding": _story_pick(seed + "|team-dir-rebuild", [
+            "We are still building, so age, runway, and role flexibility mattered as much as immediate wins.",
+            "In our situation, opportunity and development have to be part of the pitch.",
+            "We are not selling a finished product, so the move has to make sense through role and growth.",
+        ]),
+        "balanced": _story_pick(seed + "|team-dir-balanced", [
+            "We are in a balanced spot, so this was about value, roster balance, and keeping options open.",
+            "This was a practical move: not reckless, not passive, just a cleaner roster fit.",
+            "We weighed the move as both a basketball fit and a flexibility decision.",
+        ]),
+    }.get(direction, f"Our direction reads as {direction}, so we weighed this move against that timeline.")
+
+    summary_parts = [opener, role_line, need_line, direction_line]
+    if market_context.get("teamMarketLine"):
+        summary_parts.append(market_context.get("teamMarketLine"))
+    summary = " ".join(part for part in summary_parts if part).strip()
+
+    return {
+        "title": f"{_story_team_possessive(team_name)} side",
+        "voice": "team",
+        "summary": summary,
+        "bullets": [
+            f"Recent team context: {recent_context.get('label') or 'not available'}.",
+            f"Roster names used: {top_names or 'no top-player names available in this team row'}.",
+            f"Depth chart read: {roster_context.get('samePositionNames') or ('limited established ' + _story_position_phrase(bucket, seed + '|bullet-pos') + ' depth found')}.",
+            f"Contract path: {money_line}",
+        ],
+    }
+
+
+def _story_player_side_voice(
+    player: Dict[str, Any],
+    team_name: str,
+    contract_info: Dict[str, Any],
+    roster_context: Dict[str, Any],
+    market_context: Dict[str, Any],
+    recent_context: Dict[str, Any],
+    event_type: str,
+    matched_rfa: bool,
+    spending_type: Any = None,
+    exception_type: Any = None,
+    seed: str = "",
+) -> Dict[str, Any]:
+    player_name = player.get("name") or "I"
+    first_name = _story_player_first_name(player)
+    age = int(num(player.get("age"), 27))
+    overall = int(round(num(player.get("overall"), 0)))
+    potential = int(round(num(player.get("potential"), overall)))
+    upside = potential - overall
+    contract_line = contract_info.get("line") or "the contract"
+    team_display = _story_team_display(team_name)
+    tenure = _story_tenure_read(player, team_name)
+    is_minimum = _story_is_minimum_deal(contract_info, spending_type, exception_type)
+
+    if matched_rfa:
+        opener = _story_pick(seed + "|player-opener-rfa", [
+            f"From my side, the outside offer finally set the market, and once {team_display} matched it, the decision was made.",
+            f"I got to test the market, but restricted free agency means the team with my rights still had the final say once they matched.",
+            f"The offer sheet showed my value, and {team_display} decided they still wanted me at that number.",
+        ])
+    elif tenure.get("sameTeam") and tenure.get("years", 0) >= 3:
+        success = _story_success_memory(recent_context)
+        opener = _story_pick(seed + "|player-opener-longtime", [
+            f"I already know this place. I have been with {team_display} for {tenure.get('years')} years, {success}, and staying made sense once the contract showed they still valued me.",
+            f"Continuity mattered here. I know the role, I know the locker room, and after {tenure.get('years')} years with {team_display}, this did not feel like starting over.",
+            f"I was comfortable here. {team_display} knew my game, I knew what they expected from me, and the deal was strong enough to keep that going.",
+        ])
+    elif is_minimum:
+        opener = _story_pick(seed + "|player-opener-min", [
+            f"From my side, I wanted a real roster spot. A minimum deal is not about ego; it is about getting in the building and earning trust.",
+            f"I know this is a minimum, but it keeps me in the league and gives me a chance to prove I can help.",
+            f"At this point, I am thankful to have a team willing to give me a roster spot and a chance to compete.",
+            f"The money is not the headline here. I needed an opportunity, and {team_display} gave me one.",
+        ])
+    elif overall >= 85:
+        opener = _story_pick(seed + "|player-opener-star", [
+            f"From my side, I needed a team that treated me like a major piece, and {team_display} put real value behind that with {contract_line}.",
+            f"I was not looking for just any offer. I needed the money, role, and roster direction to line up, and {team_display} made that case.",
+            f"At my level, the decision has to be about respect, winning direction, and role. {team_display} checked enough of those boxes.",
+        ])
+    elif age <= 25 and upside >= 3:
+        opener = _story_pick(seed + "|player-opener-young", [
+            f"From my side, I wanted a place where I could keep growing instead of getting buried, and this deal gives me a real runway.",
+            f"I am still building my value, so I needed opportunity, patience, and a role that gives me room to improve.",
+            f"The money matters, but at my age the role matters too. I wanted a team that could actually let me grow.",
+        ])
+    elif age >= 32:
+        opener = _story_pick(seed + "|player-opener-vet", [
+            f"From my side, I wanted stability, a defined role, and a team that still had a reason to use me right away.",
+            f"At this stage, I am not chasing empty promises. I needed a team that knew how I could help.",
+            f"I wanted a situation that made sense now, not just a vague chance to hang around.",
+        ])
+    else:
+        opener = _story_pick(seed + "|player-opener-prime", [
+            f"From my side, I was looking for the cleanest mix of role, money, and fit, and {team_display} gave me that path.",
+            f"I had to weigh the full picture: the contract, the rotation, and whether the team actually had a plan for me.",
+            f"This was not just about signing somewhere. I wanted the team that made the role and money make sense together.",
+        ])
+
+    role_line = _story_role_line_for_player(player, roster_context, seed)
+
+    if is_minimum:
+        money_line = _story_pick(seed + "|player-money-min", [
+            f"The {contract_line} structure means I have to earn everything from here.",
+            f"On a minimum, the job is simple: get on the roster, compete, and make it hard for them to cut my minutes.",
+            f"This is not long-term security, so the opportunity matters more than pretending the contract is huge.",
+        ])
+    elif contract_info.get("years", 0) >= 3:
+        money_line = _story_pick(seed + "|player-money-long", [
+            f"The {contract_line} structure gives me security, which matters because I do not have to treat this like a one-year survival deal.",
+            f"The years mattered. I can settle into the role instead of feeling like everything resets immediately.",
+            f"The contract gave me enough stability to focus on basketball instead of chasing the next market right away.",
+        ])
+    elif contract_info.get("years", 0) == 2:
+        money_line = _story_pick(seed + "|player-money-two", [
+            f"The {contract_line} structure gives me some security while still leaving room to prove my value again.",
+            f"Two years gives me a little stability without completely locking me into one path.",
+            f"The deal is not forever, but it is enough commitment for me to take the situation seriously.",
+        ])
+    else:
+        money_line = _story_pick(seed + "|player-money-one", [
+            f"The {contract_line} structure feels more like a prove-it deal, so the opportunity and minutes have to matter.",
+            f"On a one-year structure, I need the role to help me build the next contract.",
+            f"This is a short runway, so I have to make the fit work fast.",
+        ])
+
+    if is_minimum:
+        growth_line = _story_pick(seed + "|player-growth-min", [
+            "I am coming in thankful, but not satisfied - I still have to earn a real place in the rotation.",
+            "For me, this is about staying ready and turning a small contract into a bigger opportunity.",
+            "The first goal is simple: stick on the roster, then force the coaches to trust me.",
+        ])
+    elif age <= 25 and upside >= 2:
+        growth_line = _story_pick(seed + "|player-growth-young", [
+            "I still have development value, so I care about touches, mistakes, and whether the team will actually let me grow.",
+            "I am not a finished product, so the team context matters as much as the number on the contract.",
+            "I need minutes that help me become more than what I am right now.",
+        ])
+    elif overall >= 80:
+        growth_line = _story_pick(seed + "|player-growth-good", [
+            "I already see myself as a real rotation piece, so I wanted a place where the role matches my level.",
+            "I am past the point of just hoping to belong; I wanted a team that sees me as useful right away.",
+            "The role had to respect the player I already am, not treat me like a fringe gamble.",
+        ])
+    elif age >= 32:
+        growth_line = _story_pick(seed + "|player-growth-vet", [
+            "At this stage, I am not only chasing upside; I need a situation that gives me a real job.",
+            "I know what I am in the league, so fit and clarity matter more than vague upside talk.",
+            "The goal is to help now and keep showing I can still belong.",
+        ])
+    else:
+        growth_line = _story_pick(seed + "|player-growth-default", [
+            "I am trying to turn this contract into a stable role and a stronger market next time.",
+            "This gives me a chance to build trust and make the next decision easier.",
+            "The opportunity is real enough that I can see how this helps my career.",
+        ])
+
+    summary = " ".join([
+        opener,
+        market_context.get("marketLine", ""),
+        role_line,
+        money_line,
+        growth_line,
+    ]).strip()
+
+    return {
+        "title": f"{first_name}'s side",
+        "voice": "player",
+        "summary": summary,
+        "bullets": [
+            f"Player profile: age {age}, {_story_position_phrase(player.get('pos') or player.get('position'), seed + '|bullet-profile-pos')}; {_story_player_strength_phrase(player, seed + '|bullet-profile-skill', pronoun = 'his')}.",
+            f"Role read: {role_line}",
+            f"Market read: {market_context.get('marketLine')}",
+            f"Mood read: {recent_context.get('mood')}",
+        ],
+    }
+
+
+def build_free_agency_story_context(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    team_name: str,
+    contract: Optional[Dict[str, Any]] = None,
+    row: Optional[Dict[str, Any]] = None,
+    offer: Optional[Dict[str, Any]] = None,
+    all_offers: Optional[List[Dict[str, Any]]] = None,
+    spending_res: Optional[Dict[str, Any]] = None,
+    event_type: str = "signing",
+    current_day: Optional[int] = None,
+    matched_rfa: bool = False,
+    original_offer_team_name: Optional[str] = None,
+    rights_team_name: Optional[str] = None,
+    exception_usage: Optional[Dict[str, Any]] = None,
+    roster_need: Optional[Dict[str, Any]] = None,
+    team_profile: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    row = row or {}
+    offer = offer or row or {}
+    spending_res = spending_res or {}
+    all_offers = all_offers or []
+
+    player_name = player.get("name") or row.get("playerName") or offer.get("playerName") or "Player"
+    team_name = team_name or row.get("teamName") or offer.get("teamName") or "Unknown Team"
+    team_display = _story_team_display(team_name)
+    contract = contract or row.get("contract") or offer.get("contract")
+    contract_info = _story_contract_summary(
+        contract,
+        fallback_total = int(num(row.get("totalValue") or offer.get("totalValue"), 0)),
+        fallback_years = int(num(row.get("years") or offer.get("years"), 0)),
+    )
+
+    spending_type = spending_res.get("spendingType") or row.get("spendingType") or offer.get("spendingType")
+    exception_type = spending_res.get("exceptionType") or row.get("exceptionType") or offer.get("exceptionType")
+    payroll_zone = spending_res.get("payrollZone") or row.get("payrollZone") or offer.get("payrollZone")
+    original_offer_team_name = original_offer_team_name or row.get("originalOfferTeamName") or offer.get("originalOfferTeamName")
+    rights_team_name = rights_team_name or row.get("rightsTeamName") or get_player_rights(player).get("heldByTeam")
+    roster_need = roster_need or row.get("rosterNeed") or offer.get("rosterNeed")
+
+    recent_context = _story_recent_team_context(league_data, team_name)
+    team_context = _story_team_building_context(
+        league_data = league_data,
+        team_name = team_name,
+        player = player,
+        roster_need = roster_need,
+        team_profile = team_profile,
+    )
+    roster_context = _story_team_roster_context(
+        league_data = league_data,
+        team_name = team_name,
+        player = player,
+    )
+
+    seed = f"{event_type}|{player_name}|{team_name}|{contract_info['totalValue']}|{current_day}|{spending_type}|{exception_type}|{original_offer_team_name}"
+    market_context = _story_market_offer_context(
+        all_offers = all_offers,
+        accepted_team_name = team_name,
+        accepted_total_value = contract_info.get("totalValue", 0),
+        seed_text = seed,
+    )
+    tag = _story_tool_label(exception_type or spending_type or event_type) or "Free Agency"
+    outside_display = _story_team_display(original_offer_team_name) if original_offer_team_name else "the outside bidder"
+
+    if matched_rfa or str(event_type).startswith("rfa") or str(spending_type) == "rfa_match":
+        headline = f"{player_name} - RFA matched"
+        what_happened = _story_pick(seed + "|what-rfa", [
+            f"{_story_team_display(team_name, capital = True)} matched the offer sheet after {outside_display} pushed the market to {contract_info['line']}.",
+            f"{outside_display.capitalize()} created the pressure, but {team_display} kept control by matching the {contract_info['line']} offer sheet.",
+            f"This was not a normal open-market win: {team_display} used its RFA rights to keep {player_name} after the outside offer arrived.",
+            f"{_story_team_display(team_name, capital = True)} decided the cost was worth it and prevented {player_name} from leaving on the offer sheet.",
+        ])
+    elif event_type == "cpu_offer":
+        headline = f"{player_name} - {tag} offer"
+        what_happened = _story_pick(seed + "|what-offer", [
+            f"{_story_team_display(team_name, capital = True)} entered the bidding with a {contract_info['line']} offer because the fit lined up with its roster direction.",
+            f"This is a targeted offer from {team_display}, not just random market noise.",
+            f"{_story_team_display(team_name, capital = True)} is testing whether {contract_info['line']} is enough to pull {player_name} into its rotation.",
+            f"The offer tells you {team_display} sees a specific use for {player_name} at this point in the market.",
+        ])
+    elif event_type == "pending_user_signing":
+        headline = f"{player_name} - ready to sign"
+        what_happened = _story_pick(seed + "|what-user", [
+            f"Your offer has reached the decision stage, and {player_name} is ready to join if you approve the signing.",
+            f"The market has moved far enough that {player_name} is willing to accept your {contract_info['line']} offer.",
+            f"This is now your final call: accept the signing or let the player stay on the market.",
+        ])
+    elif event_type == "cleanup_signing":
+        headline = f"{player_name} - roster fill"
+        what_happened = _story_pick(seed + "|what-cleanup", [
+            f"{_story_team_display(team_name, capital = True)} used the late market to fill out the roster with {player_name}.",
+            f"This was a practical roster-compliance move after the main market cooled down.",
+            f"{_story_team_display(team_name, capital = True)} needed playable depth, and {player_name} was still available at the right price.",
+        ])
+    else:
+        headline = f"{player_name} - {tag}"
+        what_happened = _story_pick(seed + "|what-signing", [
+            f"{_story_team_display(team_name, capital = True)} completed the signing at {contract_info['line']} after the market settled around this offer.",
+            f"The signing connects contract value, team need, and player fit more than it looks at first glance.",
+            f"{_story_team_display(team_name, capital = True)} found a legal spending path and finished the deal before the market moved on.",
+            f"This move shows what {team_display} valued most in this free-agency window.",
+            f"The deal is less about a generic roster spot and more about how {player_name}'s level, price, and role fit {team_display} specifically.",
+        ])
+
+    money_line = _story_spending_line(spending_type, exception_type, payroll_zone, exception_usage)
+    team_side = _story_team_side_voice(
+        league_data = league_data,
+        player = player,
+        team_name = team_name,
+        contract_info = contract_info,
+        team_context = team_context,
+        recent_context = recent_context,
+        roster_context = roster_context,
+        market_context = market_context,
+        money_line = money_line,
+        event_type = event_type,
+        matched_rfa = bool(matched_rfa),
+        original_offer_team_name = original_offer_team_name,
+        spending_type = spending_type,
+        exception_type = exception_type,
+        seed = seed,
+    )
+    player_side = _story_player_side_voice(
+        player = player,
+        team_name = team_name,
+        contract_info = contract_info,
+        roster_context = roster_context,
+        market_context = market_context,
+        recent_context = recent_context,
+        event_type = event_type,
+        matched_rfa = bool(matched_rfa),
+        spending_type = spending_type,
+        exception_type = exception_type,
+        seed = seed,
+    )
+
+    team_need = f"{team_context['needLine']} {team_context['directionLine']}"
+    recent_line = f"{_story_team_display(team_name, capital = True)} is coming off {recent_context['label']}. This reads like {recent_context['short']}."
+    mood_angle = recent_context["mood"]
+
+    return {
+        "version": 3,
+        "eventType": event_type,
+        "headline": headline,
+        "subtitle": contract_info["line"],
+        "playerName": player_name,
+        "teamName": team_name,
+        "teamDisplayName": team_display,
+        "day": current_day,
+        "contractLine": contract_info["line"],
+        "totalValue": contract_info["totalValue"],
+        "years": contract_info["years"],
+        "aav": contract_info["aav"],
+        "spendingType": spending_type,
+        "exceptionType": exception_type,
+        "payrollZone": payroll_zone,
+        "teamDirection": team_context.get("direction"),
+        "needScore": team_context.get("needScore"),
+        "positionBucket": team_context.get("positionBucket"),
+        "recentRecord": recent_context.get("label"),
+        "recentTeamShort": recent_context.get("short"),
+        "moodAngle": mood_angle,
+        "rfaMatched": bool(matched_rfa),
+        "originalOfferTeamName": original_offer_team_name,
+        "rightsTeamName": rights_team_name,
+        "uniquenessSeed": seed,
+        "teamSide": team_side,
+        "playerSide": player_side,
+        "otherOffers": market_context.get("otherOffers", []),
+        "rosterContext": roster_context,
+        "sections": [
+            {"label": "What happened", "value": what_happened},
+            {"label": "Contract / CBA path", "value": money_line},
+            {"label": "Team need / direction", "value": team_need},
+            {"label": "Recent team context", "value": recent_line},
+            {"label": "Other offers", "value": market_context.get("marketLine")},
+            {"label": "Mood angle", "value": mood_angle},
+        ],
+    }
+
 def normalize_exception_type(raw_value: Any) -> Optional[str]:
     raw = str(raw_value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
@@ -3506,6 +4843,18 @@ def build_pending_user_decision_entry(
         "years": years,
         "totalValue": total_value,
         "allOffers": sort_offers_for_display(copy.deepcopy(all_offers)),
+        "storyContext": build_free_agency_story_context(
+            league_data = league_data,
+            player = player,
+            team_name = team_name,
+            contract = contract,
+            row = chosen_offer_copy,
+            all_offers = all_offers,
+            spending_res = chosen_offer_copy,
+            event_type = "pending_user_signing",
+            current_day = current_day,
+            roster_need = chosen_offer_copy.get("rosterNeed"),
+        ),
     }
 
 
@@ -3603,6 +4952,20 @@ def build_pending_rfa_match_decision_entry(
         "day": current_day,
         "deadlineDay": current_day + 1,
         "allOffers": sort_offers_for_display(copy.deepcopy(all_offers)),
+        "storyContext": build_free_agency_story_context(
+            league_data = league_data,
+            player = player,
+            team_name = rights_team_name,
+            contract = contract,
+            row = offer_sheet,
+            all_offers = all_offers,
+            spending_res = {"spendingType": "rfa_match"},
+            event_type = "rfa_pending",
+            current_day = current_day,
+            matched_rfa = True,
+            original_offer_team_name = offering_team_name,
+            rights_team_name = rights_team_name,
+        ),
     }
 
 
@@ -4725,6 +6088,19 @@ def generate_cpu_offers_for_day(
                 "weakestPositions": fit.get("weakestPositions"),
                 "teamDirection": profile.get("direction"),
             }
+            offer_record["storyContext"] = build_free_agency_story_context(
+                league_data = league_data,
+                player = player,
+                team_name = team_name,
+                contract = offer_record.get("contract"),
+                row = offer_record,
+                offer = offer_record,
+                spending_res = eval_res,
+                event_type = "cpu_offer",
+                current_day = current_day,
+                roster_need = offer_record.get("rosterNeed"),
+                team_profile = profile,
+            )
             upsert_offer_record(
                 league_data = league_data,
                 player_key = player_key,
@@ -4747,6 +6123,7 @@ def generate_cpu_offers_for_day(
                 "positionBucket": offer_record.get("positionBucket"),
                 "weakestPositions": offer_record.get("weakestPositions"),
                 "rosterNeed": offer_record.get("rosterNeed"),
+                "storyContext": offer_record.get("storyContext"),
                 "rfaOfferSheet": bool(get_player_rights(player).get("restrictedFreeAgent") and not is_rights_team(player, team_name)),
                 "rightsTeamName": get_player_rights(player).get("heldByTeam"),
             })
@@ -4875,6 +6252,20 @@ def submit_user_free_agent_offer(
     offer_record["payrollZone"] = eval_res.get("payrollZone")
     offer_record["exceptionRoom"] = eval_res.get("exceptionRoom")
     offer_record["birdRights"] = eval_res.get("birdRights")
+    _, _, offer_team = find_team_entry(updated, team_name)
+    offer_profile = build_team_roster_profile(offer_team, league_data = updated) if offer_team else None
+    offer_record["storyContext"] = build_free_agency_story_context(
+        league_data = updated,
+        player = player,
+        team_name = team_name,
+        contract = offer_record.get("contract"),
+        row = offer_record,
+        offer = offer_record,
+        spending_res = eval_res,
+        event_type = "user_offer",
+        current_day = current_day,
+        team_profile = offer_profile,
+    )
     upsert_offer_record(
         league_data = updated,
         player_key = player_key,
@@ -5172,10 +6563,43 @@ def finalize_free_agent_signing_from_offer(
             "userOfferYears": user_years,
             "rfaMatched": matched_rfa,
             "originalOfferTeamName": chosen_offer.get("originalOfferTeamName"),
+            "storyContext": build_free_agency_story_context(
+                league_data = league_data,
+                player = signed_player,
+                team_name = signing_team_name,
+                contract = contract,
+                row = logged,
+                offer = logged,
+                all_offers = sorted_all_offers,
+                spending_res = spending_res,
+                event_type = "rfa_matched" if matched_rfa else "user_offer_outcome",
+                current_day = current_day,
+                matched_rfa = matched_rfa,
+                original_offer_team_name = chosen_offer.get("originalOfferTeamName"),
+                rights_team_name = chosen_offer.get("matchedOriginalTeamName") or get_player_rights(player).get("heldByTeam"),
+            ),
         })
 
     if user_offer_outcomes:
         state.setdefault("userOfferOutcomeLog", []).extend(copy.deepcopy(user_offer_outcomes))
+
+    story_context = build_free_agency_story_context(
+        league_data = league_data,
+        player = signed_player,
+        team_name = signing_team_name,
+        contract = contract,
+        row = chosen_offer,
+        offer = chosen_offer,
+        all_offers = sorted_all_offers,
+        spending_res = spending_res,
+        event_type = "rfa_matched" if matched_rfa else "signing",
+        current_day = current_day,
+        matched_rfa = matched_rfa,
+        original_offer_team_name = chosen_offer.get("originalOfferTeamName"),
+        rights_team_name = chosen_offer.get("matchedOriginalTeamName") or get_player_rights(player).get("heldByTeam"),
+        exception_usage = exception_usage,
+        roster_need = chosen_offer.get("rosterNeed"),
+    )
 
     state["signedPlayersLog"].append({
         "day": current_day,
@@ -5197,6 +6621,7 @@ def finalize_free_agent_signing_from_offer(
         "originalOfferTeamName": chosen_offer.get("originalOfferTeamName"),
         "matchedOriginalTeamName": chosen_offer.get("matchedOriginalTeamName"),
         "declinedRightsTeamName": chosen_offer.get("declinedRightsTeamName"),
+        "storyContext": story_context,
     })
 
     if player_key in state.get("offersByPlayer", {}):
@@ -5226,6 +6651,7 @@ def finalize_free_agent_signing_from_offer(
         "originalOfferTeamName": chosen_offer.get("originalOfferTeamName"),
         "matchedOriginalTeamName": chosen_offer.get("matchedOriginalTeamName"),
         "declinedRightsTeamName": chosen_offer.get("declinedRightsTeamName"),
+        "storyContext": story_context,
     }
 
 def resolve_signings_for_day(
