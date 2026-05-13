@@ -1,4 +1,5 @@
 // src/components/FinalsMvpReveal.jsx
+// FMVP reveal surgical patch v5_REAL - shows MIN/TOV/FGA/3PA/FTA
 import React, { useMemo } from "react";
 import { getCompletedSeasonYearForArchive } from "../utils/finalsMvpSeasonActions";
 import styles from "../pages/FinalsMvp.module.css";
@@ -61,6 +62,8 @@ export default function FinalsMvpReveal({
   fmvpRaw,
   onContinue,
   continueLabel = "Continue",
+  onBack,
+  backLabel = "Back",
   mode = "page",
 }) {
   const playerIndex = useMemo(() => buildPlayerIndex(leagueData), [leagueData]);
@@ -94,11 +97,15 @@ export default function FinalsMvpReveal({
     const ast = pickNum(winner, ["ast", "assists"], 0);
     const stl = pickNum(winner, ["stl", "steals"], 0);
     const blk = pickNum(winner, ["blk", "blocks"], 0);
+    const min = pickNum(winner, ["min", "minutes"], 0);
+    const tov = pickNum(winner, ["to", "tov", "turnovers"], 0);
 
     const fgm = pickNum(winner, ["fgm", "fg_m"], 0);
     const fga = pickNum(winner, ["fga", "fg_a"], 0);
     const tpm = pickNum(winner, ["tpm", "tp_m", "fg3m", "three_m"], 0);
     const tpa = pickNum(winner, ["tpa", "tp_a", "fg3a", "three_a"], 0);
+    const ftm = pickNum(winner, ["ftm", "ft_m"], 0);
+    const fta = pickNum(winner, ["fta", "ft_a"], 0);
 
     const perGame = (total) => (gp > 0 ? total / gp : null);
 
@@ -112,11 +119,16 @@ export default function FinalsMvpReveal({
 
     return {
       gp: gp || null,
+      mpg: winner.mpg ?? perGame(min),
       ppg: winner.ppg ?? perGame(pts),
       rpg: winner.rpg ?? perGame(reb),
       apg: winner.apg ?? perGame(ast),
       spg: winner.spg ?? perGame(stl),
       bpg: winner.bpg ?? perGame(blk),
+      tov: winner.tov ?? perGame(tov),
+      fga: winner.fga_pg ?? perGame(fga),
+      tpa: winner.tpa_pg ?? perGame(tpa),
+      fta: winner.fta_pg ?? perGame(fta),
       fg: normalizePct(fgPctRaw) ?? pct(fgm, fga),
       tp: normalizePct(tpPctRaw) ?? pct(tpm, tpa),
     };
@@ -127,6 +139,8 @@ export default function FinalsMvpReveal({
   const strokeOffset = circleCircumference * (1 - fillPercent);
 
   const isModal = mode === "modal";
+
+  const titleButtonClass = `${isModal ? "px-4 py-2 text-[12px]" : "px-5 py-2 text-sm"} rounded-lg font-bold shadow-lg transition-all duration-200 hover:-translate-y-1 active:translate-y-0`;
 
   const modalBackgroundStyle = isModal
     ? {
@@ -160,15 +174,40 @@ export default function FinalsMvpReveal({
     <div
       className={`text-white ${
         isModal
-          ? "w-[min(820px,94vw)] max-h-[84vh] overflow-hidden rounded-xl bg-neutral-800/95 p-0 shadow-[0_22px_65px_rgba(0,0,0,0.62)]"
-          : "max-w-5xl mx-auto px-4"
+          ? "bmFmvpPanelIn w-[min(820px,94vw)] max-h-[84vh] overflow-hidden rounded-xl bg-neutral-800/95 p-0 shadow-[0_22px_65px_rgba(0,0,0,0.62)]"
+          : "bmFmvpPanelIn max-w-5xl mx-auto px-4"
       }`}
       style={modalBackgroundStyle}
     >
-      {/* Title */}
-      <div className={`${isModal ? "pt-5 pb-1" : "mb-5"} text-center`}>
+      <style>{`
+        @keyframes bmFmvpPanelIn {
+          from { opacity: 0; transform: translateY(18px) scale(0.985); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .bmFmvpPanelIn { animation: bmFmvpPanelIn 220ms ease-out both; }
+      `}</style>
+
+      {/* Title + actions */}
+      <div className={`relative ${isModal ? "px-5 pt-5 pb-1" : "mb-5 pt-1"} flex items-center justify-center`}>
+        {onContinue && (
+          <button
+            className={`absolute left-0 ${isModal ? "left-5 top-5" : "top-1"} ${titleButtonClass} bg-orange-600 hover:bg-orange-500 text-white`}
+            onClick={onContinue}
+          >
+            {continueLabel}
+          </button>
+        )}
+
         <h1 className={`${isModal ? "text-[28px]" : "text-4xl"} font-extrabold leading-tight text-orange-500`}>FINALS MVP</h1>
 
+        {onBack && (
+          <button
+            className={`absolute right-0 ${isModal ? "right-5 top-5" : "top-1"} ${titleButtonClass} bg-neutral-800 hover:bg-neutral-700 text-white border border-white/10`}
+            onClick={onBack}
+          >
+            {backLabel}
+          </button>
+        )}
       </div>
 
       {/* Header Card */}
@@ -240,17 +279,22 @@ export default function FinalsMvpReveal({
 
       {/* Table */}
       <div className={`${styles.tablePanel} overflow-x-auto mt-[-1px] ${isModal ? "" : "rounded-b-xl"}`} style={isModal ? { background: "transparent" } : undefined}>
-        <table className={`w-full border-collapse text-center ${isModal ? "text-[14px]" : "text-[16px]"} font-medium`} style={isModal ? { background: "transparent" } : undefined}>
+        <table className={`w-full min-w-[980px] border-collapse text-center ${isModal ? "text-[13px]" : "text-[15px]"} font-medium`} style={isModal ? { background: "transparent" } : undefined}>
           <thead className={`${isModal ? "bg-neutral-900/35" : "bg-neutral-800"} text-gray-300 font-semibold`}>
             <tr>
               <th className="w-[68px] py-2">TEAM</th>
               <th className="py-2">POS</th>
               <th className="py-2">GP</th>
+              <th className="py-2">MIN</th>
               <th className="py-2">PTS</th>
               <th className="py-2">REB</th>
               <th className="py-2">AST</th>
               <th className="py-2">STL</th>
               <th className="py-2">BLK</th>
+              <th className="py-2">TOV</th>
+              <th className="py-2">FGA</th>
+              <th className="py-2">3PA</th>
+              <th className="py-2">FTA</th>
               <th className="py-2">FG%</th>
               <th className="py-2">3P%</th>
             </tr>
@@ -271,11 +315,16 @@ export default function FinalsMvpReveal({
 
               <td className="py-2">{playerMeta?.pos}</td>
               <td className="py-2">{finalsRow?.gp}</td>
+              <td className="py-2">{fmt1(finalsRow?.mpg)}</td>
               <td className="py-2">{fmt1(finalsRow?.ppg)}</td>
               <td className="py-2">{fmt1(finalsRow?.rpg)}</td>
               <td className="py-2">{fmt1(finalsRow?.apg)}</td>
               <td className="py-2">{fmt1(finalsRow?.spg)}</td>
               <td className="py-2">{fmt1(finalsRow?.bpg)}</td>
+              <td className="py-2">{fmt1(finalsRow?.tov)}</td>
+              <td className="py-2">{fmt1(finalsRow?.fga)}</td>
+              <td className="py-2">{fmt1(finalsRow?.tpa)}</td>
+              <td className="py-2">{fmt1(finalsRow?.fta)}</td>
               <td className="py-2">{fmt1(finalsRow?.fg)}</td>
               <td className="py-2">{fmt1(finalsRow?.tp)}</td>
             </tr>
@@ -283,15 +332,6 @@ export default function FinalsMvpReveal({
         </table>
       </div>
 
-      {/* Buttons */}
-      <div className={`${isModal ? "py-4" : "mt-7"} flex justify-center gap-4`} style={isModal ? { background: "transparent" } : undefined}>
-        <button
-          className={`${isModal ? "px-5 py-2" : "px-6 py-3"} bg-orange-600 hover:bg-orange-500 rounded-lg text-sm font-bold transition`}
-          onClick={onContinue}
-        >
-          {continueLabel}
-        </button>
-      </div>
     </div>
   );
 }

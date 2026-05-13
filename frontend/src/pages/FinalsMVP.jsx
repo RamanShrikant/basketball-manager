@@ -1,4 +1,5 @@
 // src/pages/FinalsMvp.jsx
+// FMVP page wrapper surgical patch v4
 import React, { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
@@ -32,7 +33,9 @@ export default function FinalsMvp() {
         leagueData={leagueData}
         fmvpRaw={fmvpRaw}
         onContinue={continueToOffseasonHub}
-        continueLabel="Continue"
+        continueLabel="Continue to Offseason"
+        onBack={() => navigate("/playoffs")}
+        backLabel="Back"
         mode="page"
       />
     </div>

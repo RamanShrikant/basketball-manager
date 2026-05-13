@@ -1,4 +1,5 @@
 // src/pages/Playoffs.jsx
+// FMVP/boxscore surgical patch v5_2_RENDERLOOPFIX - 2026-05-13
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
@@ -100,6 +101,31 @@ const SCHED_KEY = "bm_schedule_v3";
 const POSTSEASON_KEY = "bm_postseason_v2";
 const CHAMP_KEY = "bm_champ_v1";
 const FINALS_MVP_KEY = "bm_finals_mvp_v1"; // ✅ PATCH (Finals MVP)
+const FINALS_MVP_SEEN_KEY = "bm_finals_mvp_seen_v1";
+
+function readFinalsMvpSeenFor(seasonYear, championTeam) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(FINALS_MVP_SEEN_KEY) || "null");
+    return (
+      !!saved?.seen &&
+      Number(saved?.seasonYear) === Number(seasonYear) &&
+      saved?.championTeam === championTeam
+    );
+  } catch {
+    return false;
+  }
+}
+
+function saveFinalsMvpSeenFor(seasonYear, championTeam) {
+  if (!seasonYear || !championTeam) return;
+
+  try {
+    localStorage.setItem(
+      FINALS_MVP_SEEN_KEY,
+      JSON.stringify({ seasonYear, championTeam, seen: true })
+    );
+  } catch {}
+}
 
 function safeReadCompressedJSON(key, fallback = null) {
   try {
@@ -827,6 +853,8 @@ function buildFinalsAggregatePlayers(post, resultsById) {
         fga: 0,
         tpm: 0,
         tpa: 0,
+        ftm: 0,
+        fta: 0,
       };
     }
 
@@ -843,11 +871,14 @@ function buildFinalsAggregatePlayers(post, resultsById) {
     // row.fg and row["3p"] are strings like "M-A"
     const fg = parseMA(row.fg);
     const tp = parseMA(row["3p"]);
+    const ft = parseMA(row.ft);
 
     a.fgm += fg.m;
     a.fga += fg.a;
     a.tpm += tp.m;
     a.tpa += tp.a;
+    a.ftm += ft.m;
+    a.fta += ft.a;
   };
 
   const order = homeOrderForBestOf7HigherSeedHome();
@@ -1052,8 +1083,43 @@ export default function Playoffs() {
   // ✅ PATCH (Finals MVP)
   const [fmvpLoading, setFmvpLoading] = useState(false);
   const [showFinalsMvpModal, setShowFinalsMvpModal] = useState(false);
+  const [finalsMvpSeen, setFinalsMvpSeen] = useState(false);
+
+  // v5.2 render-loop fix: do not re-hydrate/persist the same saved postseason every render.
+  // The old effect called setPost + setLeagueData repeatedly after a completed playoff run,
+  // which React reported as "Maximum update depth exceeded" when opening old box scores.
+  const hydratedPostseasonSeasonRef = useRef(null);
+
+  useEffect(() => {
+    const championTeam = champModal?.team || finalsChampionName(post?.finals);
+
+    if (!championTeam) {
+      setFinalsMvpSeen(false);
+      return;
+    }
+
+    setFinalsMvpSeen(readFinalsMvpSeenFor(seasonYear, championTeam));
+  }, [seasonYear, champModal?.team, post?.finals?.complete]);
+
+  const markFinalsMvpSeen = () => {
+    const championTeam = champModal?.team || finalsChampionName(post?.finals);
+    saveFinalsMvpSeenFor(seasonYear, championTeam);
+    setFinalsMvpSeen(true);
+  };
+
+  const openFinalsMvpModal = () => {
+    markFinalsMvpSeen();
+    setShowFinalsMvpModal(true);
+  };
+
+  const closeFinalsMvpModal = () => {
+    markFinalsMvpSeen();
+    setShowFinalsMvpModal(false);
+  };
 
   const continueFromFinalsMvpModal = () => {
+    markFinalsMvpSeen();
+
     let fmvpRaw = null;
 
     try {
@@ -1093,6 +1159,28 @@ export default function Playoffs() {
         savePlayoffResults(pendingResultsRef.current);
       }
     }, 250); // tweak: 150-400ms is usually good
+  }
+
+  function flushPendingResults() {
+    if (resultsSaveTimerRef.current) {
+      clearTimeout(resultsSaveTimerRef.current);
+      resultsSaveTimerRef.current = null;
+    }
+
+    if (pendingResultsRef.current) {
+      savePlayoffResults(pendingResultsRef.current);
+      pendingResultsRef.current = null;
+    }
+  }
+
+  function getPlayoffResult(gameId) {
+    if (!gameId) return null;
+
+    const live = resultsRef.current?.[gameId];
+    if (live) return live;
+
+    const stored = loadPlayoffResults();
+    return stored?.[gameId] || null;
   }
 
   // (kept; not used here yet)
@@ -1152,31 +1240,57 @@ export default function Playoffs() {
     if (!champModal?.team) return;
     if (!post?.finals?.complete) return;
 
+    // v5.1 scope fix: this must live in the whole useEffect scope, not inside try/catch.
+    const EXPECTED_AWARDS_PY_VERSION = "2026-05-13_fmvp_boxscores_v5_1_SCOPEFIX";
+
     try {
-const EXPECTED_AWARDS_PY_VERSION = "2025-12-26_fmvp_eff_v1";
-
-const existing = JSON.parse(localStorage.getItem(FINALS_MVP_KEY) || "null");
-if (
-  existing?.season === seasonYear &&
-  existing?.champion_team === champModal.team &&
-  existing?.awards_py_version === EXPECTED_AWARDS_PY_VERSION
-) {
-  return;
-}
-
+      const existing = JSON.parse(localStorage.getItem(FINALS_MVP_KEY) || "null");
+      if (
+        existing?.season === seasonYear &&
+        existing?.champion_team === champModal.team &&
+        existing?.awards_py_version === EXPECTED_AWARDS_PY_VERSION
+      ) {
+        return;
+      }
     } catch {}
 
     const run = async () => {
       try {
         setFmvpLoading(true);
 
-        const finalsPlayers = buildFinalsAggregatePlayers(post, resultsRef.current);
+        // Merge live + saved playoff results so FMVP can recompute correctly after refresh/back navigation.
+        const allPlayoffResultsForFmvp = {
+          ...loadPlayoffResults(),
+          ...(resultsRef.current || {}),
+        };
+
+        const finalsPlayers = buildFinalsAggregatePlayers(post, allPlayoffResultsForFmvp);
         const payload = await computeFinalsMvp(finalsPlayers, {
           seasonYear,
           championTeam: champModal.team,
         });
 
-        safeSetSmallJSON(FINALS_MVP_KEY, payload);
+        // The Python award result may only return the score fields it used.
+        // Re-attach the raw Finals aggregate so the UI can show MIN/TOV/FGA/3PA/FTA too.
+        const winnerKey = `${payload?.finals_mvp?.player || ""}__${payload?.finals_mvp?.team || ""}`;
+        const winnerAggregate = finalsPlayers.find(
+          (row) => `${row.player}__${row.team}` === winnerKey
+        );
+
+        const enrichedPayload = {
+          ...payload,
+          season: seasonYear,
+          champion_team: champModal.team,
+          awards_py_version: EXPECTED_AWARDS_PY_VERSION,
+          finals_mvp: payload?.finals_mvp
+            ? {
+                ...winnerAggregate,
+                ...payload.finals_mvp,
+              }
+            : payload?.finals_mvp,
+        };
+
+        safeSetSmallJSON(FINALS_MVP_KEY, enrichedPayload);
       } catch (e) {
         console.warn("[playoffs] Finals MVP compute failed", e);
         safeSetSmallJSON(FINALS_MVP_KEY, {
@@ -1257,6 +1371,7 @@ if (
   }
 
   function persistPost(next) {
+    flushPendingResults();
     setPost(next);
     savePostseasonState(next);
 
@@ -1365,8 +1480,11 @@ if (
     // clear regular-season results/schedule after the bracket is created.
     const loaded = loadPostseasonState();
     if (loaded?.seasonYear === seasonYear) {
-      setPost(loaded);
-      persistSeasonHistorySnapshot(loaded);
+      if (hydratedPostseasonSeasonRef.current !== seasonYear) {
+        hydratedPostseasonSeasonRef.current = seasonYear;
+        setPost(loaded);
+        persistSeasonHistorySnapshot(loaded);
+      }
       return;
     }
 
@@ -1640,7 +1758,7 @@ if (
   }
 
   function openBoxScore(gameId, homeName, awayName) {
-    const r = resultsRef.current?.[gameId];
+    const r = getPlayoffResult(gameId);
     if (!r) return;
     setBoxModal({ gameId, homeName, awayName, result: r });
   }
@@ -1658,11 +1776,14 @@ if (
     localStorage.removeItem(SCHED_KEY);
     localStorage.removeItem(CHAMP_KEY);
     localStorage.removeItem(FINALS_MVP_KEY); // ✅ PATCH (Finals MVP)
+    localStorage.removeItem(FINALS_MVP_SEEN_KEY);
 
     // bump year marker (if you use window.__seasonYear)
     try {
       window.__seasonYear = (seasonYear || new Date().getFullYear()) + 1;
     } catch {}
+
+    hydratedPostseasonSeasonRef.current = null;
 
     setModal(null);
     setBoxModal(null);
@@ -1701,7 +1822,7 @@ if (
   };
   const allPlayInsComplete = playInCompleteFor(left) && playInCompleteFor(right);
 
-  const seriesHasAnyResult = (series) => (series?.gameIds || []).some((gid) => !!resultsLive?.[gid]);
+  const seriesHasAnyResult = (series) => (series?.gameIds || []).some((gid) => !!getPlayoffResult(gid));
 
   const listAllSeriesRefs = (cur = post) => {
     const refs = [];
@@ -2204,7 +2325,7 @@ if (
   }
 
   function openBoxScoreLine(gameId, homeName, awayName) {
-    const r = resultsRef.current?.[gameId];
+    const r = getPlayoffResult(gameId);
     if (!r) return null;
 
     const hs = Number(r?.winner?.home ?? r?.totals?.home ?? 0);
@@ -2555,6 +2676,16 @@ ${disabled ? "opacity-60" : ""}
       <style>{`
   .noScrollbar::-webkit-scrollbar { display: none; }
   .noScrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  @keyframes bmPlayoffFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes bmPlayoffPanelRise {
+    from { opacity: 0; transform: translateY(18px) scale(0.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .bmPlayoffFadeIn { animation: bmPlayoffFadeIn 170ms ease-out both; }
+  .bmPlayoffPanelRise { animation: bmPlayoffPanelRise 220ms ease-out both; }
 `}</style>
 
       {/* top bar */}
@@ -2594,6 +2725,16 @@ ${disabled ? "opacity-60" : ""}
           >
             {simStopping ? "Stopping..." : "Stop"}
           </button>
+
+          {finalsMvpSeen && champModal?.team && (
+            <button
+              disabled={fmvpLoading}
+              onClick={openFinalsMvpModal}
+              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm font-bold border border-orange-500/40 text-orange-200 transition-all duration-200 hover:-translate-y-1 disabled:opacity-50"
+            >
+              Finals MVP
+            </button>
+          )}
         </div>
 
         <div className="absolute left-1/2 -translate-x-1/2 text-[28px] font-extrabold tracking-wide text-white/90 select-none">
@@ -2684,7 +2825,8 @@ ${disabled ? "opacity-60" : ""}
                     const node =
                       modal.which === "78" ? pi.g78 : modal.which === "910" ? pi.g910 : pi.gFinal;
 
-                    const played = !!node?.played && !!resultsRef.current?.[node.id];
+                    const savedResult = getPlayoffResult(node?.id);
+                    const played = !!node?.played && !!savedResult;
                     if (!node?.id) return null;
 
                     return (
@@ -2731,8 +2873,8 @@ ${disabled ? "opacity-60" : ""}
 
                 const gameList = (s.gameIds || []).map((gid, idx) => {
                   const { home, away } = seriesGameMeta(s, idx);
-                  const played = !!resultsLive?.[gid];
-                  const r = resultsLive?.[gid];
+                  const r = getPlayoffResult(gid);
+                  const played = !!r;
                   const hs = Number(r?.winner?.home ?? r?.totals?.home ?? 0);
                   const as = Number(r?.winner?.away ?? r?.totals?.away ?? 0);
                   return { gid, idx, home, away, played, hs, as, ot: !!r?.winner?.ot };
@@ -2788,9 +2930,9 @@ ${disabled ? "opacity-60" : ""}
       )}
 
       {/* ✅ PATCH: CHAMPIONS MODAL is OUTSIDE the series/play-in modal */}
-      {champModal && !showFinalsMvpModal && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]">
-          <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-6 w-[520px] text-center">
+      {champModal && !finalsMvpSeen && !showFinalsMvpModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] bmPlayoffFadeIn">
+          <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-6 w-[520px] text-center bmPlayoffPanelRise">
             <div className="text-2xl font-extrabold text-white mb-2">CHAMPIONS</div>
 
             <div className="flex justify-center my-4">
@@ -2804,9 +2946,9 @@ ${disabled ? "opacity-60" : ""}
 
             {/* Finals MVP reveal opens as an in-page modal instead of leaving Playoffs */}
             <button
-              className="w-full px-4 py-3 bg-orange-600 hover:bg-orange-500 rounded font-bold disabled:opacity-50"
+              className="w-full px-4 py-3 bg-orange-600 hover:bg-orange-500 rounded font-bold disabled:opacity-50 transition-all duration-200 hover:-translate-y-1"
               disabled={fmvpLoading}
-              onClick={() => setShowFinalsMvpModal(true)}
+              onClick={openFinalsMvpModal}
             >
               {fmvpLoading ? "Computing Finals MVP..." : "Reveal Finals MVP"}
             </button>
@@ -2820,7 +2962,7 @@ ${disabled ? "opacity-60" : ""}
 
       {/* Finals MVP Reveal Modal */}
       {showFinalsMvpModal && (
-        <div className="fixed inset-0 z-[80] bg-black/30 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[80] bg-black/30 flex items-center justify-center p-4 bmPlayoffFadeIn">
           <FinalsMvpReveal
             leagueData={leagueData}
             fmvpRaw={(() => {
@@ -2832,6 +2974,8 @@ ${disabled ? "opacity-60" : ""}
             })()}
             onContinue={continueFromFinalsMvpModal}
             continueLabel="Continue to Offseason"
+            onBack={closeFinalsMvpModal}
+            backLabel="Back"
             mode="modal"
           />
         </div>
