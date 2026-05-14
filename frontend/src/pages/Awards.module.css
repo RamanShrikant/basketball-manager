@@ -1,3 +1,4 @@
+/* src/pages/Awards.module.css */
 :root {
   --accent: #ffa500;
 }
@@ -26,4 +27,116 @@
 
 :global(body) {
   background-color: #0d0d0d;
+}
+
+.mvpPartyLayer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 9999;
+  background: transparent;
+}
+
+.mvpPartyLogo {
+  position: absolute;
+  top: -70px;
+  width: var(--size);
+  height: var(--size);
+  object-fit: contain;
+  opacity: 0;
+  filter: drop-shadow(0 0 10px rgba(255, 165, 0, 0.55));
+  animation: mvpLogoConfetti var(--dur) ease-in forwards;
+  animation-delay: var(--delay);
+  transform: translate3d(var(--x-start), -80px, 0) rotate(0deg) scale(0.8);
+}
+
+.mvpPartyPulse {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(255, 165, 0, 0.18), transparent 34%),
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.08), transparent 42%);
+  opacity: 0;
+  animation: mvpPulseFlash 950ms ease-out forwards;
+}
+
+.mvpContentShake {
+  animation: mvpScreenShake 520ms ease-in-out;
+}
+
+@keyframes mvpLogoConfetti {
+  0% {
+    opacity: 0;
+    transform: translate3d(var(--x-start), -80px, 0) rotate(0deg) scale(0.75);
+  }
+
+  12% {
+    opacity: var(--logo-opacity);
+  }
+
+  70% {
+    opacity: var(--logo-opacity);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--x-end), 115vh, 0) rotate(var(--spin)) scale(1);
+  }
+}
+
+@keyframes mvpPulseFlash {
+  0% {
+    opacity: 0;
+  }
+
+  20% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes mvpScreenShake {
+  0% {
+    transform: translate(0, 0);
+  }
+
+  10% {
+    transform: translate(-5px, 3px);
+  }
+
+  20% {
+    transform: translate(6px, -3px);
+  }
+
+  30% {
+    transform: translate(-4px, 2px);
+  }
+
+  40% {
+    transform: translate(4px, -2px);
+  }
+
+  50% {
+    transform: translate(-2px, 1px);
+  }
+
+  60% {
+    transform: translate(2px, -1px);
+  }
+
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mvpPartyLogo,
+  .mvpPartyPulse,
+  .mvpContentShake {
+    animation: none;
+  }
 }

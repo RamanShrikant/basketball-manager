@@ -1,5 +1,5 @@
 // src/pages/Awards.jsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import AllNbaTeams from "./AllNbaTeams";
@@ -16,6 +16,7 @@ console.log("✅ Awards.jsx NEW loaded");
 /* -------------------------------------------------------------------------- */
 
 const AWARD_ORDER = ["mvp", "dpoy", "sixth_man", "roty"];
+const PARTY_AWARD_KEYS = ["mvp", "dpoy", "sixth_man"];
 
 const AWARD_META = {
   mvp: {
@@ -255,6 +256,9 @@ export default function Awards() {
 
 const [awardIndex, setAwardIndex] = useState(0);
 const [showAllNba, setShowAllNba] = useState(false);
+const [mvpPartyActive, setMvpPartyActive] = useState(false);
+const [mvpPartyShakeActive, setMvpPartyShakeActive] = useState(false);
+const [mvpPartyPieces, setMvpPartyPieces] = useState([]);
   const currentKey = AWARD_ORDER[awardIndex];
   const meta = AWARD_META[currentKey];
   const season = getAwardsDisplaySeason(awards);
@@ -299,49 +303,124 @@ const goNext = () => {
 
   const hasWinner = !!winner && !!winnerRow;
 
-  /* ------- WINNER STATS BULLETS (font-size / spacing controlled here) ----- */
-  function renderWinnerStatsBullets() {
-    if (!hasWinner) return null;
+  const mvpPartyLogo = useMemo(() => {
+    if (!PARTY_AWARD_KEYS.includes(currentKey) || !winner?.team) return null;
+    return teamLogosIndex[winner.team] || null;
+  }, [currentKey, winner, teamLogosIndex]);
 
-    const bullets = [];
-
-    bullets.push({ label: "GP", value: winnerRow.gp });
-    bullets.push({ label: "MIN", value: winnerRow.min });
-    bullets.push({ label: "PPG", value: winnerRow.pts });
-    bullets.push({ label: "RPG", value: winnerRow.reb });
-    bullets.push({ label: "APG", value: winnerRow.ast });
-    bullets.push({ label: "SPG", value: winnerRow.stl });
-    bullets.push({ label: "BPG", value: winnerRow.blk });
-
-    if (currentKey === "dpoy") {
-      const stocks = Number((winnerRow.stl + winnerRow.blk).toFixed(1));
+  useEffect(() => {
+    if (!PARTY_AWARD_KEYS.includes(currentKey)) {
+      setMvpPartyActive(false);
+      setMvpPartyShakeActive(false);
+      setMvpPartyPieces([]);
+      return;
     }
 
-    bullets.push({ label: "FG%", value: `${winnerRow.fgPct}%` });
-    bullets.push({ label: "3P%", value: `${winnerRow.tpPct}%` });
-    bullets.push({ label: "FT%", value: `${winnerRow.ftPct}%` });
+    if (!hasWinner || !mvpPartyLogo) {
+      setMvpPartyActive(false);
+      setMvpPartyShakeActive(false);
+      setMvpPartyPieces([]);
+      return;
+    }
+
+    const pieces = Array.from({ length: 48 }, (_, i) => ({
+      id: `${Date.now()}-${i}`,
+      left: Math.random() * 100,
+      xStart: Math.random() * 80 - 40,
+      xEnd: Math.random() * 360 - 180,
+      delay: Math.random() * 500,
+      duration: 1600 + Math.random() * 1100,
+      spin: 360 + Math.random() * 900,
+      size: 22 + Math.random() * 28,
+      opacity: 0.55 + Math.random() * 0.45,
+    }));
+
+    const longestPieceMs = Math.max(
+      ...pieces.map((piece) => piece.delay + piece.duration)
+    );
+
+    setMvpPartyActive(false);
+    setMvpPartyShakeActive(false);
+
+    const startTimer = setTimeout(() => {
+      setMvpPartyPieces(pieces);
+      setMvpPartyActive(true);
+      setMvpPartyShakeActive(true);
+    }, 20);
+
+    const shakeTimer = setTimeout(() => {
+      setMvpPartyShakeActive(false);
+    }, 650);
+
+    const stopTimer = setTimeout(() => {
+      setMvpPartyActive(false);
+      setMvpPartyPieces([]);
+    }, longestPieceMs + 350);
+
+    return () => {
+      clearTimeout(startTimer);
+      clearTimeout(shakeTimer);
+      clearTimeout(stopTimer);
+    };
+  }, [currentKey, hasWinner, mvpPartyLogo]);
+
+  /* ------- WINNER STAT RIBBON (bottom of winner card) -------------------- */
+  function renderWinnerStatRibbon() {
+    if (!hasWinner) return null;
+
+    const statsForAward =
+      currentKey === "dpoy"
+        ? [
+            { label: "GP", value: winnerRow.gp },
+            { label: "MIN", value: winnerRow.min },
+            { label: "RPG", value: winnerRow.reb },
+            { label: "SPG", value: winnerRow.stl },
+            { label: "BPG", value: winnerRow.blk },
+            { label: "FG%", value: `${winnerRow.fgPct}%` },
+            { label: "FT%", value: `${winnerRow.ftPct}%` },
+          ]
+        : [
+            { label: "GP", value: winnerRow.gp },
+            { label: "PPG", value: winnerRow.pts },
+            { label: "RPG", value: winnerRow.reb },
+            { label: "APG", value: winnerRow.ast },
+            { label: "SPG", value: winnerRow.stl },
+            { label: "BPG", value: winnerRow.blk },
+            { label: "FG%", value: `${winnerRow.fgPct}%` },
+            { label: "3P%", value: `${winnerRow.tpPct}%` },
+          ];
+
+    const statGridCols = statsForAward.length >= 8 ? "sm:grid-cols-8" : "sm:grid-cols-7";
 
     return (
-      // STATS FONT SIZE + LINE SPACING:
-      // - text-base  => change to text-sm, text-lg, etc. to shrink / grow stats
-      // - space-y-2  => vertical gap between each stat row
-      <ul className="space-y-2 text-base text-neutral-200 text-right">
-        {bullets.map((b, idx) => (
-          <li key={idx}>
-            {/* LABEL STYLE:
-                 - font-semibold / text-white → boldness / color of label
-                 - min-w-[3.5rem] → width of label column
-                 - you can bump to min-w-[4rem] if labels wrap */}
-            <span className="font-semibold text-white mr-2 inline-block min-w-[3.5rem] text-right">
-              {b.label}:
-            </span>
-            {/* VALUE STYLE:
-                 - currently inherits from <ul> (text-base)
-                 - if you want bigger numbers, wrap in <span className="text-lg"> */}
-            <span>{b.value}</span>
-          </li>
+      <div className={`grid grid-cols-4 ${statGridCols} gap-2 text-center`}>
+        {statsForAward.map((stat) => (
+          <div
+            key={stat.label}
+            className="rounded-lg bg-neutral-950/70 border border-white/10 px-2 py-2"
+          >
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-orange-300/80">
+              {stat.label}
+            </div>
+            <div className="text-base font-extrabold leading-tight text-white">
+              {stat.value}
+            </div>
+          </div>
         ))}
-      </ul>
+      </div>
+    );
+  }
+
+  function renderRaceStat(label, value) {
+    return (
+      <span className="text-right whitespace-nowrap">
+        <span className="text-white/75 font-semibold mr-1">
+          {label}
+        </span>
+        <span className="text-white font-extrabold">
+          {value}
+        </span>
+      </span>
     );
   }
 if (showAllNba) {
@@ -352,6 +431,31 @@ if (showAllNba) {
   return (
     <PageFade>
       <div className={`${styles.awardsPage} min-h-screen text-white py-10`}>
+        {mvpPartyActive && mvpPartyLogo && (
+          <div className={styles.mvpPartyLayer} aria-hidden="true">
+            <div className={styles.mvpPartyPulse} />
+
+            {mvpPartyPieces.map((piece) => (
+              <img
+                key={piece.id}
+                src={mvpPartyLogo}
+                alt=""
+                draggable="false"
+                className={styles.mvpPartyLogo}
+                style={{
+                  left: `${piece.left}%`,
+                  "--x-start": `${piece.xStart}px`,
+                  "--x-end": `${piece.xEnd}px`,
+                  "--delay": `${piece.delay}ms`,
+                  "--dur": `${piece.duration}ms`,
+                  "--spin": `${piece.spin}deg`,
+                  "--size": `${piece.size}px`,
+                  "--logo-opacity": piece.opacity,
+                }}
+              />
+            ))}
+          </div>
+        )}
         <style>{`
           @keyframes bmAwardStepEnter {
             from {
@@ -378,7 +482,11 @@ if (showAllNba) {
           }
         `}</style>
 
-      <div className="max-w-6xl mx-auto px-4">
+      <div
+        className={`max-w-6xl mx-auto px-4 ${
+          mvpPartyShakeActive ? styles.mvpContentShake : ""
+        }`}
+      >
         {/* TITLE (global page title) 
             - text-3xl: change to text-4xl to make "2025 Season Awards" bigger */}
         <h1 className="text-3xl font-extrabold text-center text-orange-500 mb-10">
@@ -393,7 +501,7 @@ if (showAllNba) {
                - flex-1 lg:flex-[1.6]   → relative width vs ladder card
                - px-6 pt-3 pb-2        → inner padding; increase/decrease to move content away from edges
                - border-orange-500/80  → change thickness/color here (add border-2, etc.) */}
-          <div className="flex-1 lg:flex-[1.6] bg-neutral-900 border border-orange-500/80 rounded-xl px-6 pt-3 pb-0 shadow-lg flex flex-col h-full">
+          <div className="flex-1 lg:flex-[1.6] bg-neutral-900 border border-orange-500/80 rounded-xl px-6 pt-3 pb-0 shadow-lg flex flex-col h-full overflow-hidden">
             {/* Header block (award label + player name + team) */}
             <div>
               {/* AWARD LABEL TEXT ("MOST VALUABLE PLAYER")
@@ -421,37 +529,30 @@ if (showAllNba) {
               )}
             </div>
 
-            {/* Bottom: headshot + stats */}
-            {/* POSITIONING OF HEADSHOT VS STATS:
-                - mt-auto pushes this block to the bottom of the card
-                - items-end keeps headshot & stats aligned on their bottom edges
-                - gap-6 is spacing between headshot and stats column */}
-<div className="mt-auto pt-4 flex items-end justify-between gap-6">
-  {/* HEADSHOT BLOCK
-     - max-h-72 = controls how tall the portrait can be
-     - object-contain = show full image without cropping
-     - remove overflow-hidden so we don't clip anything */}
-  <div className="flex-shrink-0 flex items-end">
-    {hasWinner && portraitSrc ? (
-      <img
-        src={portraitSrc}
-        alt={winner.player}
-        className="max-h-72 w-auto object-contain"
-      />
-    ) : (
-      <span className="text-xs text-neutral-500 flex items-center justify-center w-full h-full">
-        No portrait
-      </span>
-    )}
-  </div>
+            {/* Winner image + bottom stat ribbon */}
+            <div className="mt-auto pt-3 flex flex-col">
+              {/* HEADSHOT BLOCK
+                  - max-h-72 controls portrait height
+                  - centered so stats no longer feel stuck on one side */}
+              <div className="flex justify-center items-end min-h-[270px]">
+                {hasWinner && portraitSrc ? (
+                  <img
+                    src={portraitSrc}
+                    alt={winner.player}
+                    className="max-h-72 w-auto object-contain"
+                  />
+                ) : (
+                  <span className="text-xs text-neutral-500 flex items-center justify-center w-full h-full">
+                    No portrait
+                  </span>
+                )}
+              </div>
 
-  {/* Stats block stays the same */}
-  <div className="flex-1 flex justify-end">
-    <div className="max-w-[260px] w-full">
-      {renderWinnerStatsBullets()}
-    </div>
-  </div>
-</div>
+              {/* Bottom stat ribbon */}
+              <div className="-mx-6 border-t border-orange-500/25 bg-black/25 px-4 py-3">
+                {renderWinnerStatRibbon()}
+              </div>
+            </div>
 
           </div>
 
@@ -489,7 +590,7 @@ if (showAllNba) {
                     return (
                       <div
                         key={idx}
-                        className={`flex items-center justify-between text-xs px-2 py-1.5 rounded ${
+                        className={`flex items-center justify-between text-xs px-2 py-2.5 rounded ${
                           isWinner
                             ? "bg-orange-500/20 text-orange-200"
                             : "bg-neutral-800 text-neutral-200"
@@ -504,7 +605,7 @@ if (showAllNba) {
                             <img
                               src={logoSrc}
                               alt={p.team}
-                              className="w-6 h-6 rounded-full object-contain bg-neutral-900 flex-shrink-0"
+                              className="w-8 h-8 object-contain flex-shrink-0"
                             />
                           )}
 
@@ -518,30 +619,22 @@ if (showAllNba) {
                           </div>
                         </div>
 
-                        <div className="flex gap-2 text-[10px] text-neutral-400 flex-shrink-0 ml-3">
+                        <div className="grid grid-cols-5 gap-x-4 text-[11px] flex-shrink-0 ml-4 w-[400px]">
                           {currentKey === "dpoy" ? (
                             <>
-                              <span className="w-16 text-right">
-                                REB {row.reb}
-                              </span>
-                              <span className="w-16 text-right">
-                                STL {row.stl}
-                              </span>
-                              <span className="w-16 text-right">
-                                BLK {row.blk}
-                              </span>
+                              {renderRaceStat("REB", row.reb)}
+                              {renderRaceStat("STL", row.stl)}
+                              {renderRaceStat("BLK", row.blk)}
+                              {renderRaceStat("FG%", `${row.fgPct}%`)}
+                              {renderRaceStat("3P%", `${row.tpPct}%`)}
                             </>
                           ) : (
                             <>
-                              <span className="w-16 text-right">
-                                PTS {row.pts}
-                              </span>
-                              <span className="w-16 text-right">
-                                REB {row.reb}
-                              </span>
-                              <span className="w-16 text-right">
-                                AST {row.ast}
-                              </span>
+                              {renderRaceStat("PTS", row.pts)}
+                              {renderRaceStat("REB", row.reb)}
+                              {renderRaceStat("AST", row.ast)}
+                              {renderRaceStat("FG%", `${row.fgPct}%`)}
+                              {renderRaceStat("3P%", `${row.tpPct}%`)}
                             </>
                           )}
                         </div>
