@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import LZString from "lz-string";
 import styles from "../components/TeamHub.module.css";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
@@ -9,8 +10,19 @@ const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const POSTSEASON_KEY = "bm_postseason_v2";
 
 function safeJSON(raw, fallback = null) {
+  if (!raw) return fallback;
+
   try {
     const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch {}
+
+  try {
+    const source = raw.startsWith("lz:") ? raw.slice(3) : raw;
+    const decompressed = LZString.decompressFromUTF16(source);
+    if (!decompressed) return fallback;
+
+    const parsed = JSON.parse(decompressed);
     return parsed ?? fallback;
   } catch {
     return fallback;

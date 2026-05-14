@@ -313,6 +313,7 @@ export default function FreeAgents() {
   const [offersViewData, setOffersViewData] = useState(null);
   const [daySummary, setDaySummary] = useState(null);
   const [rosterActionError, setRosterActionError] = useState("");
+  const [capInfoModal, setCapInfoModal] = useState(null);
   const [offseasonState, setOffseasonState] = useState(() =>
     safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), null) || {}
   );
@@ -1223,6 +1224,121 @@ const isOffseasonMode =
     return "bg-neutral-800 border-neutral-700 text-neutral-300";
   };
 
+  const CapMetricLabel = ({ label, type }) => (
+    <div className="flex items-center gap-1 text-xs text-gray-400 mb-1">
+      <span>{label}</span>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setCapInfoModal(type);
+        }}
+        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-orange-500/40 bg-orange-500/10 text-[10px] font-extrabold leading-none text-orange-300 hover:bg-orange-500/20 hover:text-orange-100 transition"
+        title={`Explain ${label}`}
+        aria-label={`Explain ${label}`}
+      >
+        ?
+      </button>
+    </div>
+  );
+
+  const formatPayrollZoneLabel = (zone) => {
+    if (!zone) return "-";
+    return String(zone)
+      .replaceAll("_", " ")
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  };
+
+  const getCapInfoContent = (type) => {
+    const dashboard = userCapDashboard || {};
+
+    if (type === "capHolds") {
+      return {
+        title: "Cap Holds",
+        description:
+          "Temporary cap charges for your own free agents when you still hold their rights. They protect the cap system so a team cannot use all of its cap room first and then re-sign its own players for free.",
+        rows: [
+          ["Payroll", formatDollars(dashboard.payroll)],
+          ["Cap holds total", formatDollars(dashboard.capHoldTotal)],
+          ["Practical payroll", formatDollars(dashboard.practicalPayroll)],
+        ],
+        note:
+          "In this model, RFA qualifying offers count as the QO amount. Bird holds use the larger of previous salary, expected year-one salary, or minimum. Early Bird uses about 130% of previous salary, and Non-Bird uses about 120% of previous salary.",
+      };
+    }
+
+    if (type === "practicalCap") {
+      return {
+        title: "Practical Cap",
+        description:
+          "The cap room you realistically have after accounting for payroll and cap holds. Active offers are shown separately under Offer Commit and only become real cap hits if they sign.",
+        rows: [
+          ["Salary cap", formatDollars(dashboard.salaryCap)],
+          ["Payroll", `- ${formatDollars(dashboard.payroll)}`],
+          ["Cap holds", `- ${formatDollars(dashboard.capHoldTotal)}`],
+          ["Practical cap room", formatDollars(dashboard.practicalCapRoom)],
+        ],
+        note:
+          "Formula: salary cap - payroll - cap holds. This is why Practical Cap can be lower than basic Cap Space.",
+      };
+    }
+
+    if (type === "hardCapRoom") {
+      return {
+        title: "Hard Cap Room",
+        description:
+          "The amount of space left below your hard cap line if your team has triggered a hard cap. If no hard cap is active, this shows None.",
+        rows: [
+          ["Hard cap status", dashboard.hardCap === null ? "Not triggered" : "Triggered"],
+          ["Hard cap line", dashboard.hardCap === null ? "None" : formatDollars(dashboard.hardCap)],
+          ["Practical payroll", dashboard.hardCap === null ? "-" : `- ${formatDollars(dashboard.practicalPayroll)}`],
+          ["Hard cap room", dashboard.hardCap === null ? "None" : formatDollars(dashboard.hardCapRoom)],
+        ],
+        note:
+          "Formula when active: hard cap line - practical payroll. The model usually uses the team hard-cap value if saved, otherwise the second apron style line.",
+      };
+    }
+
+    if (type === "bestException") {
+      return {
+        title: "Best Exception",
+        description:
+          "The best non-cap-room signing tool your team currently has available based on payroll zone and remaining exception usage.",
+        rows: [
+          ["Payroll zone", formatPayrollZoneLabel(dashboard.payrollZone)],
+          ["Room exception left", formatDollars(dashboard.roomException)],
+          ["Non-taxpayer MLE left", formatDollars(dashboard.nonTaxpayerMLE)],
+          ["Taxpayer MLE left", formatDollars(dashboard.taxpayerMLE)],
+          ["Best available", getBestExceptionLabel(dashboard)],
+        ],
+        note:
+          "Logic: second apron teams are minimum-only. Tax or first-apron teams use taxpayer MLE. Teams with practical cap room show the room exception. Otherwise the non-taxpayer MLE is shown if available.",
+      };
+    }
+
+    if (type === "offerCommit") {
+      return {
+        title: "Offer Commit",
+        description:
+          "The total first-year salary tied up in your active offers. These are pending offers, not completed contracts yet.",
+        rows: [
+          ["Active offer commit", formatDollars(dashboard.activeOfferSalary)],
+          ["Practical cap room", formatDollars(dashboard.practicalCapRoom)],
+          ["Room if every active offer signed", formatDollars(Number(dashboard.practicalCapRoom || 0) - Number(dashboard.activeOfferSalary || 0))],
+        ],
+        note:
+          "Formula: sum of first-year salary from active offers submitted by your team. It helps you avoid accidentally overcommitting while the live market is still running.",
+      };
+    }
+
+    return {
+      title: "Cap Info",
+      description: "No explanation available for this item.",
+      rows: [],
+      note: "",
+    };
+  };
+
   useEffect(() => {
     if (!selectedTeam && typeof setSelectedTeam === "function") {
       const saved = localStorage.getItem("selectedTeam");
@@ -2067,7 +2183,7 @@ updateOffseasonState({
               </div>
 
               <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <div className="text-xs text-gray-400 mb-1">Cap Holds</div>
+                <CapMetricLabel label="Cap Holds" type="capHolds" />
                 <div className="text-base font-semibold text-orange-200">
                   {formatDollars(userCapDashboard.capHoldTotal)}
                 </div>
@@ -2081,29 +2197,29 @@ updateOffseasonState({
               </div>
 
               <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <div className="text-xs text-gray-400 mb-1">Practical Cap</div>
+                <CapMetricLabel label="Practical Cap" type="practicalCap" />
                 <div className={`text-base font-semibold ${userCapDashboard.practicalCapRoom < 0 ? "text-red-300" : "text-emerald-300"}`}>
                   {formatDollars(userCapDashboard.practicalCapRoom)}
                 </div>
-                <div className="text-[11px] text-gray-500 mt-1">holds + offers</div>
+                <div className="text-[11px] text-gray-500 mt-1">payroll + holds</div>
               </div>
 
               <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <div className="text-xs text-gray-400 mb-1">Hard Cap Room</div>
+                <CapMetricLabel label="Hard Cap Room" type="hardCapRoom" />
                 <div className={`text-base font-semibold ${userCapDashboard.hardCapRoom !== null && userCapDashboard.hardCapRoom < 0 ? "text-red-300" : "text-white"}`}>
                   {userCapDashboard.hardCapRoom === null ? "None" : formatDollars(userCapDashboard.hardCapRoom)}
                 </div>
               </div>
 
               <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <div className="text-xs text-gray-400 mb-1">Best Exception</div>
+                <CapMetricLabel label="Best Exception" type="bestException" />
                 <div className="text-base font-semibold text-orange-200">
                   {getBestExceptionLabel(userCapDashboard)}
                 </div>
               </div>
 
               <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <div className="text-xs text-gray-400 mb-1">Offer Commit</div>
+                <CapMetricLabel label="Offer Commit" type="offerCommit" />
                 <div className="text-base font-semibold text-orange-200">
                   {formatDollars(userCapDashboard.activeOfferSalary)}
                 </div>
@@ -2913,6 +3029,61 @@ updateOffseasonState({
           </div>
         </div>
       )}
+
+      {capInfoModal && userCapDashboard && (() => {
+        const info = getCapInfoContent(capInfoModal);
+
+        return (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4 py-6">
+            <div className="fa-modal-scroll w-full max-w-lg max-h-[88vh] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5">
+              <div className="flex items-start justify-between gap-4 mb-3">
+                <div>
+                  <h2 className="text-xl font-bold text-orange-400">
+                    {info.title}
+                  </h2>
+                  <p className="text-sm text-gray-300 mt-2 leading-relaxed">
+                    {info.description}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setCapInfoModal(null)}
+                  className="px-3 py-1.5 rounded-lg bg-neutral-700 hover:bg-neutral-600 text-white text-sm font-semibold transition"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="bg-neutral-900 rounded-xl border border-neutral-700 p-4 mt-4">
+                <div className="text-sm font-semibold text-gray-300 mb-3">
+                  Current calculation
+                </div>
+
+                <div className="space-y-2">
+                  {info.rows.map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="flex items-center justify-between gap-4 text-sm"
+                    >
+                      <span className="text-gray-400">{label}</span>
+                      <span className="text-white font-semibold text-right">
+                        {value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {info.note && (
+                <div className="mt-4 text-xs text-gray-400 leading-relaxed">
+                  {info.note}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       <PlayerCardModal
         open={!!playerCardPlayer}

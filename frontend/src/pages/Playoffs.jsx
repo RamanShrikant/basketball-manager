@@ -2704,13 +2704,18 @@ ${disabled ? "opacity-60" : ""}
           </button>
 
           <button
-            disabled={simLock || simsDisabled}
+            disabled={simLock || fmvpLoading || (simsDisabled && !champModal?.team)}
             onClick={async () => {
+              if (simsDisabled) {
+                continueFromFinalsMvpModal();
+                return;
+              }
+
               await simTopPlayoffsToChampion();
             }}
             className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded text-sm font-bold disabled:opacity-50"
           >
-            {simsDisabled ? "Playoffs Complete" : "Simulate Playoffs"}
+            {simsDisabled ? "Continue to Offseason" : "Simulate Playoffs"}
           </button>
 
           {/* ✅ PATCH: STOP BUTTON */}

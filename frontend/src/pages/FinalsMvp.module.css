@@ -24,12 +24,77 @@
   z-index: 1;
 }
 
-/* Solid table backing so the background pattern does not show under the stat row. */
+/* Keep the panel shadow, but do not force a solid table/body background. */
 .tablePanel {
-  background: rgba(12, 12, 12, 0.92);
+  background: transparent !important;
+  background-color: transparent !important;
   box-shadow: 0 18px 55px rgba(0, 0, 0, 0.28);
 }
 
-.tablePanel table {
-  background: rgba(12, 12, 12, 0.92);
+.tablePanel > div,
+.tablePanel table,
+.tablePanel tbody,
+.tablePanel tfoot,
+.tablePanel tbody tr,
+.tablePanel tbody th,
+.tablePanel tbody td {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* Only the column-header band gets the player-stats-style grey backing. */
+.tablePanel table thead,
+.tablePanel table thead tr,
+.tablePanel table thead th {
+  background: rgba(38, 38, 38, 0.94) !important;
+  background-color: rgba(38, 38, 38, 0.94) !important;
+}
+
+/* Keep header text readable and aligned with the Player Stats feel. */
+.tablePanel table thead th {
+  color: rgba(229, 231, 235, 0.95) !important;
+  font-weight: 800;
+}
+
+/* Catch only body bg-* classes so the row does not turn orange/black again. */
+.tablePanel tbody [class*="bg-"] {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+.tablePanel tbody tr:hover,
+.tablePanel tbody tr:hover > th,
+.tablePanel tbody tr:hover > td {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* Orange horizontal scrollbar for Finals MVP stat table */
+.tablePanel,
+.tablePanel * {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(234, 88, 12, 0.95) rgba(20, 20, 20, 0.85);
+}
+
+.tablePanel::-webkit-scrollbar,
+.tablePanel *::-webkit-scrollbar {
+  height: 10px;
+}
+
+.tablePanel::-webkit-scrollbar-track,
+.tablePanel *::-webkit-scrollbar-track {
+  background: rgba(20, 20, 20, 0.85);
+  border-radius: 999px;
+}
+
+.tablePanel::-webkit-scrollbar-thumb,
+.tablePanel *::-webkit-scrollbar-thumb {
+  background: linear-gradient(90deg, #c95f00, #ff8a00, #ffb347);
+  border-radius: 999px;
+  border: 2px solid rgba(20, 20, 20, 0.85);
+}
+
+.tablePanel::-webkit-scrollbar-thumb:hover,
+.tablePanel *::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(90deg, #e66f00, #ff9f1a, #ffc466);
 }

@@ -390,19 +390,24 @@ const goNext = () => {
             { label: "3P%", value: `${winnerRow.tpPct}%` },
           ];
 
-    const statGridCols = statsForAward.length >= 8 ? "sm:grid-cols-8" : "sm:grid-cols-7";
+    const statGridStyle = {
+      gridTemplateColumns:
+        statsForAward.length >= 8
+          ? "repeat(6, minmax(0, 1fr)) 1.25fr 1.25fr"
+          : "repeat(5, minmax(0, 1fr)) 1.25fr 1.25fr",
+    };
 
     return (
-      <div className={`grid grid-cols-4 ${statGridCols} gap-2 text-center`}>
+      <div className="grid gap-1.5 text-center" style={statGridStyle}>
         {statsForAward.map((stat) => (
           <div
             key={stat.label}
-            className="rounded-lg bg-neutral-950/70 border border-white/10 px-2 py-2"
+            className="rounded-lg bg-neutral-950/70 border border-white/10 px-1 py-2 min-w-0 overflow-hidden"
           >
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-orange-300/80">
+            <div className="text-[9px] font-semibold uppercase tracking-wide text-orange-300/80">
               {stat.label}
             </div>
-            <div className="text-base font-extrabold leading-tight text-white">
+            <div className="text-[15px] font-extrabold leading-tight text-white whitespace-nowrap">
               {stat.value}
             </div>
           </div>
@@ -483,7 +488,7 @@ if (showAllNba) {
         `}</style>
 
       <div
-        className={`max-w-6xl mx-auto px-4 ${
+        className={`max-w-[1320px] mx-auto px-6 ${
           mvpPartyShakeActive ? styles.mvpContentShake : ""
         }`}
       >
@@ -495,13 +500,13 @@ if (showAllNba) {
 
         <div key={currentKey} className="bmAwardStepEnter">
         {/* TOP ROW */}
-        <div className="flex flex-col lg:flex-row gap-6 mb-6">
+        <div className="flex flex-col xl:flex-row gap-7 mb-6">
           {/* WINNER CARD ----------------------------------------------------- */}
           {/* CARD SIZE / PADDING / BORDER:
                - flex-1 lg:flex-[1.6]   → relative width vs ladder card
                - px-6 pt-3 pb-2        → inner padding; increase/decrease to move content away from edges
                - border-orange-500/80  → change thickness/color here (add border-2, etc.) */}
-          <div className="flex-1 lg:flex-[1.6] bg-neutral-900 border border-orange-500/80 rounded-xl px-6 pt-3 pb-0 shadow-lg flex flex-col h-full overflow-hidden">
+          <div className="flex-1 xl:flex-[1.15] bg-neutral-900 border border-orange-500/80 rounded-xl px-6 pt-3 pb-0 shadow-lg flex flex-col h-full overflow-hidden">
             {/* Header block (award label + player name + team) */}
             <div>
               {/* AWARD LABEL TEXT ("MOST VALUABLE PLAYER")
@@ -549,7 +554,7 @@ if (showAllNba) {
               </div>
 
               {/* Bottom stat ribbon */}
-              <div className="-mx-6 border-t border-orange-500/25 bg-black/25 px-4 py-3">
+              <div className="-mx-6 border-t border-orange-500/25 bg-black/25 px-3 py-3">
                 {renderWinnerStatRibbon()}
               </div>
             </div>
@@ -558,7 +563,7 @@ if (showAllNba) {
 
           {/* LADDER CARD ----------------------------------------------------- */}
           {/* Similar pattern: you can tweak ladder card border, padding, etc. here. */}
-          <div className="w-full lg:flex-[1.4] bg-neutral-900 border border-orange-500/80 rounded-xl px-6 py-4 flex flex-col justify-between shadow-lg">
+          <div className="w-full xl:flex-[1.85] bg-neutral-900 border border-orange-500/80 rounded-xl px-6 py-4 flex flex-col justify-between shadow-lg">
             <div>
               {/* Ladder title ("Most Valuable Player") */}
               <div className="text-lg font-bold mb-1">{meta.label}</div>
@@ -610,16 +615,16 @@ if (showAllNba) {
                           )}
 
                           <div className="flex flex-col min-w-0">
-                            <span className="font-semibold truncate max-w-[190px]">
+                            <span className="font-semibold truncate max-w-[230px]">
                               {p.player}
                             </span>
-                            <span className="text-[10px] text-neutral-400 truncate max-w-[190px]">
+                            <span className="text-[10px] text-neutral-400 truncate max-w-[230px]">
                               {p.team}
                             </span>
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-5 gap-x-4 text-[11px] flex-shrink-0 ml-4 w-[400px]">
+                        <div className="grid grid-cols-5 gap-x-3 text-[11px] flex-shrink-0 ml-4 w-[430px]">
                           {currentKey === "dpoy" ? (
                             <>
                               {renderRaceStat("REB", row.reb)}
