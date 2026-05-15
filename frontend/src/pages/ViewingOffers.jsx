@@ -1457,106 +1457,223 @@
       setActionError("");
     };
 
-    const selectionPreview = useMemo(() => {
-      if (!pendingUserTeamSnapshot?.ok) {
-        return null;
-      }
+    const getPendingRowCurrentYearSalary = (row) => {
+    const summary = getContractSummary(
+      row?.contract || row?.chosenOffer?.contract || row?.offerSheet?.contract,
+      row?.totalValue || row?.chosenOffer?.totalValue || row?.offerSheet?.totalValue,
+      row?.years || row?.chosenOffer?.years || row?.offerSheet?.years
+    );
 
-      const selectedCurrentYearTotal = selectedPendingRows.reduce((sum, row) => {
-        const summary = getContractSummary(
-          row?.contract,
-          row?.totalValue,
-          row?.years
-        );
-        return sum + Number(summary.currentYearSalary || row?.currentYearSalary || 0);
-      }, 0);
+    return Number(
+      summary.currentYearSalary ||
+      row?.currentYearSalary ||
+      row?.chosenOffer?.currentYearSalary ||
+      row?.chosenOffer?.salaryByYear?.[0] ||
+      row?.chosenOffer?.contract?.salaryByYear?.[0] ||
+      row?.offerSheet?.currentYearSalary ||
+      row?.offerSheet?.salaryByYear?.[0] ||
+      row?.offerSheet?.contract?.salaryByYear?.[0] ||
+      row?.salaryByYear?.[0] ||
+      0
+    );
+  };
 
-      const selectedTotalValue = selectedPendingRows.reduce((sum, row) => {
-        const summary = getContractSummary(
-          row?.contract,
-          row?.totalValue,
-          row?.years
-        );
-        return sum + Number(summary.totalValue || 0);
-      }, 0);
+  const getPendingRowSpendingText = (row) => {
+    const chosenOffer = row?.chosenOffer || {};
+    const offerSheet = row?.offerSheet || {};
+    const story = row?.storyContext || chosenOffer?.storyContext || offerSheet?.storyContext || {};
 
-      const selectedCount = selectedPendingRows.length;
-      const payrollBefore = Number(pendingUserTeamSnapshot?.payroll || 0);
-      const capRoomBefore = Number(pendingUserTeamSnapshot?.capRoom || 0);
-      const hardCapRoomBefore =
-        pendingUserTeamSnapshot?.hardCapRoom === null ||
-        pendingUserTeamSnapshot?.hardCapRoom === undefined
-          ? null
-          : Number(pendingUserTeamSnapshot.hardCapRoom);
-      const rosterBefore = Number(pendingUserTeamSnapshot?.rosterCount || 0);
-      const rosterLimit = Number(pendingUserTeamSnapshot?.rosterLimit || 15);
+    return String([
+      row?.spendingType,
+      row?.exceptionType,
+      row?.payrollZone,
+      chosenOffer?.spendingType,
+      chosenOffer?.exceptionType,
+      chosenOffer?.payrollZone,
+      offerSheet?.spendingType,
+      offerSheet?.exceptionType,
+      offerSheet?.payrollZone,
+      story?.spendingType,
+      story?.exceptionType,
+      story?.payrollZone,
+    ].filter(Boolean).join(" "))
+      .toLowerCase()
+      .replaceAll("-", "_");
+  };
 
-      const payrollAfter = payrollBefore + selectedCurrentYearTotal;
-      const capRoomAfter = capRoomBefore - selectedCurrentYearTotal;
-      const capHoldTotal = Number(pendingUserTeamSnapshot?.capHoldTotal || 0);
-      const practicalPayrollAfter =
-        Number(pendingUserTeamSnapshot?.practicalPayroll || payrollBefore + capHoldTotal)
-        - selectedCapHoldClearance
-        + selectedCurrentYearTotal;
-      const practicalCapRoomAfter =
-        Number(pendingUserTeamSnapshot?.practicalCapRoom ?? capRoomBefore - capHoldTotal)
-        + selectedCapHoldClearance
-        - selectedCurrentYearTotal;
-      const firstApron = Number(pendingUserTeamSnapshot?.firstApron || 0);
-      const secondApron = Number(pendingUserTeamSnapshot?.secondApron || 0);
-      const hardCapRoomAfter =
-        hardCapRoomBefore === null
-          ? null
-          : hardCapRoomBefore + selectedCapHoldClearance - selectedCurrentYearTotal;
-      const rosterAfter = rosterBefore + selectedCount;
+  const pendingRowIsMinimum = (row) => {
+    const spendingText = getPendingRowSpendingText(row);
+    const currentYearSalary = getPendingRowCurrentYearSalary(row);
 
-      const warnings = [];  
-      const apronNotes = [];
+    return (
+      currentYearSalary > 0 && currentYearSalary <= 1_200_000
+    ) || spendingText.includes("minimum");
+  };
 
+  const pendingRowUsesOwnRights = (row) => {
+    const spendingText = getPendingRowSpendingText(row);
 
-      if (selectedCount > 0 && practicalCapRoomAfter < 0) {
-        warnings.push(
-          `Selected signings are short by ${formatDollars(Math.abs(practicalCapRoomAfter))}. Renounce enough rights below to clear the cap holds before confirming.`
-        );
-      }
+    return (
+      spendingText.includes("bird_rights") ||
+      spendingText.includes("bird rights") ||
+      spendingText.includes("rfa_match") ||
+      spendingText.includes("rfa match")
+    );
+  };
 
-      if (hardCapRoomAfter !== null && hardCapRoomAfter < 0) {
-        warnings.push("Selected signings put you over the hard cap.");
-      }
+  const pendingRowUsesException = (row) => {
+    const spendingText = getPendingRowSpendingText(row);
 
-      if (rosterAfter > rosterLimit) {
-        warnings.push(`Selected signings would take you over the ${rosterLimit}-man roster limit.`);
-      }
-  if (secondApron > 0 && payrollAfter >= secondApron) {
-    apronNotes.push("Selected signings would leave you at or above the second apron.");
-  } else if (firstApron > 0 && payrollAfter >= firstApron) {
-    apronNotes.push("Selected signings would leave you at or above the first apron.");
-  }
+    return (
+      spendingText.includes("room_exception") ||
+      spendingText.includes("room exception") ||
+      spendingText.includes("taxpayer_mle") ||
+      spendingText.includes("taxpayer mle") ||
+      spendingText.includes("non_taxpayer_mle") ||
+      spendingText.includes("non_taxpayer") ||
+      spendingText.includes("mid_level") ||
+      spendingText.includes("mid level") ||
+      spendingText.includes("mle")
+    );
+  };
 
-      return {
-        selectedCount,
-        selectedCurrentYearTotal,
-        selectedTotalValue,
-        payrollBefore,
-        payrollAfter,
-        capRoomBefore,
-        capRoomAfter,
-        capHoldTotal,
-        selectedCapHoldClearance,
-        capRoomShortfall: Math.max(0, -practicalCapRoomAfter),
-        practicalPayrollAfter,
-        practicalCapRoomAfter,
-        firstApron,
-        secondApron,
-        hardCapRoomBefore,
-        hardCapRoomAfter,
-        rosterBefore,
-        rosterAfter,
-        rosterLimit,
-        warnings,
-        hasBlockingIssue: warnings.length > 0,
-      };
-    }, [pendingUserTeamSnapshot, selectedPendingRows, selectedCapHoldClearance]);
+  const pendingRowConsumesCapSpace = (row) => {
+    if (pendingRowIsMinimum(row)) return false;
+    if (pendingRowUsesOwnRights(row)) return false;
+    if (pendingRowUsesException(row)) return false;
+    return true;
+  };
+
+  const selectionPreview = useMemo(() => {
+    if (!pendingUserTeamSnapshot?.ok) {
+      return null;
+    }
+
+    const selectedCurrentYearTotal = selectedPendingRows.reduce((sum, row) => {
+      return sum + getPendingRowCurrentYearSalary(row);
+    }, 0);
+
+    const selectedCapSpaceCurrentYearTotal = selectedPendingRows.reduce((sum, row) => {
+      if (!pendingRowConsumesCapSpace(row)) return sum;
+      return sum + getPendingRowCurrentYearSalary(row);
+    }, 0);
+
+    const selectedMinimumCurrentYearTotal = selectedPendingRows.reduce((sum, row) => {
+      if (!pendingRowIsMinimum(row)) return sum;
+      return sum + getPendingRowCurrentYearSalary(row);
+    }, 0);
+
+    const selectedExceptionCurrentYearTotal = selectedPendingRows.reduce((sum, row) => {
+      if (!pendingRowUsesException(row)) return sum;
+      return sum + getPendingRowCurrentYearSalary(row);
+    }, 0);
+
+    const selectedRightsCurrentYearTotal = selectedPendingRows.reduce((sum, row) => {
+      if (!pendingRowUsesOwnRights(row)) return sum;
+      return sum + getPendingRowCurrentYearSalary(row);
+    }, 0);
+
+    const selectedTotalValue = selectedPendingRows.reduce((sum, row) => {
+      const summary = getContractSummary(
+        row?.contract || row?.chosenOffer?.contract || row?.offerSheet?.contract,
+        row?.totalValue || row?.chosenOffer?.totalValue || row?.offerSheet?.totalValue,
+        row?.years || row?.chosenOffer?.years || row?.offerSheet?.years
+      );
+      return sum + Number(summary.totalValue || 0);
+    }, 0);
+
+    const selectedCount = selectedPendingRows.length;
+    const payrollBefore = Number(pendingUserTeamSnapshot?.payroll || 0);
+    const capRoomBefore = Number(pendingUserTeamSnapshot?.capRoom || 0);
+    const practicalCapRoomBefore = Number(
+      pendingUserTeamSnapshot?.practicalCapRoom ?? capRoomBefore
+    );
+    const practicalPayrollBefore = Number(
+      pendingUserTeamSnapshot?.practicalPayroll || payrollBefore
+    );
+    const hardCapRoomBefore =
+      pendingUserTeamSnapshot?.hardCapRoom === null ||
+      pendingUserTeamSnapshot?.hardCapRoom === undefined
+        ? null
+        : Number(pendingUserTeamSnapshot.hardCapRoom);
+    const rosterBefore = Number(pendingUserTeamSnapshot?.rosterCount || 0);
+    const rosterLimit = Number(pendingUserTeamSnapshot?.rosterLimit || 15);
+    const capHoldTotal = Number(pendingUserTeamSnapshot?.capHoldTotal || 0);
+    const firstApron = Number(pendingUserTeamSnapshot?.firstApron || 0);
+    const secondApron = Number(pendingUserTeamSnapshot?.secondApron || 0);
+
+    // All selected signings still add to payroll and hard-cap math. The key
+    // fix is that minimum contracts, Bird/RFA matches, and MLE/room-exception
+    // deals do not require practical cap room just to be confirmed.
+    const payrollAfter = payrollBefore - selectedCapHoldClearance + selectedCurrentYearTotal;
+    const capRoomAfter = capRoomBefore + selectedCapHoldClearance - selectedCurrentYearTotal;
+    const practicalPayrollAfter =
+      practicalPayrollBefore - selectedCapHoldClearance + selectedCurrentYearTotal;
+    const practicalCapRoomAfter =
+      practicalCapRoomBefore + selectedCapHoldClearance - selectedCurrentYearTotal;
+
+    const capSpacePracticalCapRoomAfter =
+      practicalCapRoomBefore + selectedCapHoldClearance - selectedCapSpaceCurrentYearTotal;
+    const capSpaceShortfall = Math.max(0, -capSpacePracticalCapRoomAfter);
+
+    const hardCapRoomAfter =
+      hardCapRoomBefore === null
+        ? null
+        : hardCapRoomBefore + selectedCapHoldClearance - selectedCurrentYearTotal;
+    const rosterAfter = rosterBefore + selectedCount;
+
+    const warnings = [];
+    const apronNotes = [];
+
+    if (selectedCount > 0 && selectedCapSpaceCurrentYearTotal > 0 && capSpaceShortfall > 0) {
+      warnings.push(
+        `Selected cap-space signings are short by ${formatDollars(capSpaceShortfall)}. Renounce enough rights below to clear the cap holds before confirming.`
+      );
+    }
+
+    if (hardCapRoomAfter !== null && hardCapRoomAfter < 0) {
+      warnings.push("Selected signings put you over the hard cap.");
+    }
+
+    if (rosterAfter > rosterLimit) {
+      warnings.push(`Selected signings would take you over the ${rosterLimit}-man roster limit.`);
+    }
+
+    if (secondApron > 0 && payrollAfter >= secondApron) {
+      apronNotes.push("Selected signings would leave you at or above the second apron.");
+    } else if (firstApron > 0 && payrollAfter >= firstApron) {
+      apronNotes.push("Selected signings would leave you at or above the first apron.");
+    }
+
+    return {
+      selectedCount,
+      selectedCurrentYearTotal,
+      selectedCapSpaceCurrentYearTotal,
+      selectedMinimumCurrentYearTotal,
+      selectedExceptionCurrentYearTotal,
+      selectedRightsCurrentYearTotal,
+      selectedTotalValue,
+      payrollBefore,
+      payrollAfter,
+      capRoomBefore,
+      capRoomAfter,
+      capHoldTotal,
+      selectedCapHoldClearance,
+      capRoomShortfall: capSpaceShortfall,
+      practicalPayrollAfter,
+      practicalCapRoomAfter,
+      firstApron,
+      secondApron,
+      hardCapRoomBefore,
+      hardCapRoomAfter,
+      rosterBefore,
+      rosterAfter,
+      rosterLimit,
+      warnings,
+      apronNotes,
+      hasBlockingIssue: warnings.length > 0,
+    };
+  }, [pendingUserTeamSnapshot, selectedPendingRows, selectedCapHoldClearance]);
 
     const toggleDecision = (playerKey) => {
       setSelectedDecisionMap((prev) => ({

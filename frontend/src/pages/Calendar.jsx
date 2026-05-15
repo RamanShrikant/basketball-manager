@@ -1248,6 +1248,10 @@ export default function Calendar() {
   console.log("🔥 Calendar leagueData =", leagueData);
   window.__leagueData = leagueData;
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, []);
+
 
 
   /* -------------------------------- Season Window ------------------------------- */
@@ -1899,6 +1903,9 @@ useEffect(() => {
   /* -------------------------------------------------------------------------- */
   const [focusedDate, setFocusedDate] = useState(null);
   const monthRefs = useRef({});
+  const calendarScrollRef = useRef(null);
+  const restoredCursorRef = useRef(false);
+  const restoredCursorKeyRef = useRef("");
 
   const readCalendarCursor = () => {
     try {
@@ -1954,58 +1961,70 @@ useEffect(() => {
     [allDays]
   );
 
+  const scrollCalendarToMonth = (monthStr, behavior = "smooth") => {
+    requestAnimationFrame(() => {
+      const container = calendarScrollRef.current;
+      const el = monthRefs.current[monthStr];
+
+      if (!container || !el) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const top = container.scrollTop + (elRect.top - containerRect.top);
+
+      container.scrollTo({
+        top: Math.max(0, top),
+        behavior,
+      });
+    });
+  };
+
   useEffect(() => {
     const dates = Object.keys(myGames).sort();
-    const saved = readCalendarCursor();
+    const restoreKey = `${CALENDAR_CURSOR_KEY}|${selectedTeam?.name || ""}`;
 
-    if (saved?.date || saved?.month) {
-      const savedMonth =
-        saved?.month ||
-        (saved?.date ? monthKey(new Date(saved.date)) : monthKey(seasonStart));
-
-      setFocusedDate(saved?.date || dates[0] || fmt(seasonStart));
-      setMonth(savedMonth);
-
-      requestAnimationFrame(() => {
-        const el = monthRefs.current[savedMonth];
-        if (el) {
-          el.scrollIntoView({
-            behavior: "auto",
-            block: "start",
-          });
-        }
-      });
-
-      return;
+    if (restoredCursorKeyRef.current !== restoreKey) {
+      restoredCursorKeyRef.current = restoreKey;
+      restoredCursorRef.current = false;
     }
 
     if (!dates.length) {
       const fallbackDate = fmt(seasonStart);
-      setFocusedDate(fallbackDate);
-      setMonth(monthKey(seasonStart));
+      setFocusedDate((prev) => prev || fallbackDate);
+      setMonth((prev) => prev || monthKey(seasonStart));
       return;
     }
 
+    // Important: only restore/scroll once per team-season page load.
+    // During live simulation, scheduleByDate updates many times, which changes
+    // myGames. Re-running scroll restore on every update was pulling the page
+    // down into the calendar and making the header feel stuck off-screen.
+    if (restoredCursorRef.current) {
+      setFocusedDate((prev) => prev || dates[0] || fmt(seasonStart));
+      return;
+    }
+
+    restoredCursorRef.current = true;
+
+    const saved = readCalendarCursor();
     const firstUnplayedDate =
       dates.find((date) => myGames[date] && !myGames[date].played) || dates[0];
+    const savedDateIsValid = saved?.date && myGames[saved.date];
+    const targetDate = savedDateIsValid ? saved.date : firstUnplayedDate;
+    const targetMonth =
+      saved?.month && months.includes(saved.month)
+        ? saved.month
+        : monthKey(new Date(targetDate || seasonStart));
 
-    setFocusedDate(firstUnplayedDate);
-    setMonth(monthKey(new Date(firstUnplayedDate)));
-  }, [myGames, seasonStart, CALENDAR_CURSOR_KEY]);
+    setFocusedDate(targetDate || fmt(seasonStart));
+    setMonth(targetMonth);
+    scrollCalendarToMonth(targetMonth, "auto");
+  }, [myGames, seasonStart, CALENDAR_CURSOR_KEY, selectedTeam?.name, months]);
 
 const scrollToMonth = (monthStr) => {
   setMonth(monthStr);
   saveCalendarCursor(focusedDate, monthStr);
-
-  requestAnimationFrame(() => {
-    const el = monthRefs.current[monthStr];
-    if (el) {
-      el.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-    }
-  });
+  scrollCalendarToMonth(monthStr, "smooth");
 };
 
 const buildVisibleDaysForMonth = (monthStr) => {
@@ -2272,6 +2291,9 @@ const handleSimOnlyGame = async (dateStr, game) => {
   saveSchedule(upd);
   saveOneResultV3(game.id, result, game, seasonYear);
   setResultsById((prev) => ({ ...prev, [game.id]: result }));
+  saveCalendarCursor(dateStr, monthKey(new Date(dateStr)));
+  setFocusedDate(dateStr);
+  setMonth(monthKey(new Date(dateStr)));
 
   setActionModal(null);
   setBoxModal({ game, result });
@@ -3294,7 +3316,7 @@ return (
         </div>
 
         {/* SCROLLABLE CALENDAR AREA */}
-        <div className="flex-1 min-h-0 overflow-y-auto pr-2 orange-scrollbar">
+        <div ref={calendarScrollRef} className="flex-1 min-h-0 overflow-y-auto pr-2 orange-scrollbar">
           <div className="space-y-6 pb-6">
             {months.map((monthStr) => {
               const monthDays = visibleDaysByMonth[monthStr] || [];
@@ -3463,7 +3485,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
   onClick={() => handleSimToDate(actionModal.dateStr)}
   title={
     !selectedTeamCanSim
-      ? `${selectedTeam.name} doesn't have enough players. Minimum 5 required to simulate games.`
+      ? `${selectedTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`
       : ""
   }
 >
@@ -3479,7 +3501,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
   onClick={handleSimSeason}
   title={
     !selectedTeamCanSim
-      ? `${selectedTeam.name} doesn't have enough players. Minimum 5 required to simulate games.`
+      ? `${selectedTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`
       : ""
   }
 >

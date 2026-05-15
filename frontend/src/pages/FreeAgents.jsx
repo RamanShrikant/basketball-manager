@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { createPortal } from "react-dom";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import * as simEngine from "../api/simEnginePy.js";
@@ -10,7 +9,6 @@ import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
-const FREE_AGENCY_LENGTH_DAYS = 10;
 
 function compactStorySideForStorage(side) {
   if (!side || typeof side !== "object") return null;
@@ -256,12 +254,39 @@ function compactFreeAgencyStateForStorage(state, emergency = false) {
   };
 }
 
-function compactLeagueDataForStorage(leagueData, emergency = false) {
+function syncLeagueTeamCollections(leagueData) {
   if (!leagueData || typeof leagueData !== "object") return leagueData;
+
+  const conferences = leagueData.conferences;
+  if (!conferences || typeof conferences !== "object") return leagueData;
+
+  const orderedKeys = ["East", "West", "east", "west", ...Object.keys(conferences)]
+    .filter((key, index, arr) => key && arr.indexOf(key) === index);
+
+  const flatTeams = [];
+  for (const key of orderedKeys) {
+    const teams = conferences[key];
+    if (Array.isArray(teams)) {
+      flatTeams.push(...teams);
+    }
+  }
+
+  if (!flatTeams.length) return leagueData;
 
   return {
     ...leagueData,
-    freeAgencyState: compactFreeAgencyStateForStorage(leagueData.freeAgencyState, emergency),
+    teams: flatTeams,
+  };
+}
+
+function compactLeagueDataForStorage(leagueData, emergency = false) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+
+  const syncedLeagueData = syncLeagueTeamCollections(leagueData);
+
+  return {
+    ...syncedLeagueData,
+    freeAgencyState: compactFreeAgencyStateForStorage(syncedLeagueData.freeAgencyState, emergency),
   };
 }
 
@@ -566,19 +591,21 @@ const isOffseasonMode =
   const applyLeagueUpdate = (updated) => {
     if (!updated) return;
 
-    setWorkingLeagueData(updated);
+    const syncedUpdated = syncLeagueTeamCollections(updated);
+
+    setWorkingLeagueData(syncedUpdated);
 
     if (typeof setLeagueData === "function") {
-      setLeagueData(updated);
+      setLeagueData(syncedUpdated);
     }
 
-    persistLeagueData(updated);
+    persistLeagueData(syncedUpdated);
 
     if (typeof setSelectedTeam === "function" && selectedTeam?.name) {
       let nextSelectedTeam = null;
 
-      for (const confKey of Object.keys(updated.conferences || {})) {
-        const team = (updated.conferences[confKey] || []).find(
+      for (const confKey of Object.keys(syncedUpdated.conferences || {})) {
+        const team = (syncedUpdated.conferences[confKey] || []).find(
           (t) => t.name === selectedTeam.name
         );
         if (team) {
@@ -976,6 +1003,10 @@ const isOffseasonMode =
       payroll,
       capHoldTotal,
       activeOfferSalary,
+      rawPayrollWithoutHolds: payroll,
+      rawCapRoomWithoutHolds: salaryCap - payroll,
+      basicCapRoom: salaryCap - payroll,
+      capSpace: salaryCap - payroll,
       capRoom: salaryCap - payroll,
       practicalPayroll,
       practicalCapRoom: salaryCap - practicalPayroll,
@@ -1108,6 +1139,21 @@ const isOffseasonMode =
         title: isRfa
           ? "Fits using practical cap room, but the original team may still match the offer sheet."
           : "Fits using practical cap room after holds and active offers.",
+      };
+    }
+
+    if (
+      userCapDashboard.capRoom >= ask &&
+      userCapDashboard.practicalCapRoom < ask &&
+      userCapDashboard.capHoldTotal > 0
+    ) {
+      return {
+        label: isRfa ? "HOLD/RFA" : "HOLDS",
+        tone: "orange",
+        sortValue: isRfa ? 66 : 70,
+        title: isRfa
+          ? "You have raw cap room, but cap holds are temporarily reducing practical cap. You can submit the offer, but rights may need to be renounced before the signing is finalized and the original team may match."
+          : "You have raw cap room, but cap holds are temporarily reducing practical cap. You can submit the offer, but rights may need to be renounced before the signing is finalized.",
       };
     }
 
@@ -1707,25 +1753,37 @@ const isOffseasonMode =
     return { percent, label: "Not Interested", barClass: "bg-red-500" };
   }, [offerEvaluation, offerEvalLoading]);
 
-  const localOfferYear1Salary = parseMillionsText(offerSalaryText);
+  const offerNeedsCapHoldClearance = useMemo(() => {
+    if (!canSubmitLiveOffer || !userCapDashboard || !signTargetPlayer) {
+      return false;
+    }
 
-  const localCapHoldClearanceNeeded = useMemo(() => {
-    if (!canSubmitLiveOffer || !userCapDashboard || !localOfferYear1Salary) return 0;
+    const year1Salary = parseMillionsText(offerSalaryText);
+    if (!year1Salary) {
+      return false;
+    }
 
-    const rawCapRoom = Number(userCapDashboard.capRoom || 0);
     const practicalCapRoom = Number(userCapDashboard.practicalCapRoom || 0);
+    const rawCapRoom = Number(
+      userCapDashboard.rawCapRoomWithoutHolds ??
+      userCapDashboard.basicCapRoom ??
+      userCapDashboard.capSpace ??
+      userCapDashboard.capRoom ??
+      0
+    );
+    const capHoldTotal = Number(userCapDashboard.capHoldTotal || 0);
 
-    if (rawCapRoom < localOfferYear1Salary) return 0;
-    if (practicalCapRoom >= localOfferYear1Salary) return 0;
-
-    return Math.max(0, localOfferYear1Salary - practicalCapRoom);
+    return (
+      capHoldTotal > 0 &&
+      practicalCapRoom < year1Salary &&
+      rawCapRoom >= year1Salary
+    );
   }, [
     canSubmitLiveOffer,
     userCapDashboard,
-    localOfferYear1Salary,
+    signTargetPlayer,
+    offerSalaryText,
   ]);
-
-  const offerNeedsCapHoldClearance = localCapHoldClearanceNeeded > 0;
 
 const handleContinueToProgression = () => {
   if (userRosterInvalid) {
@@ -1744,7 +1802,7 @@ const handleContinueToProgression = () => {
 
   navigate("/player-progression");
 };
-  const buildCleanFreeAgencyStateForInit = (seasonYear, userTeamName = null, maxDays = FREE_AGENCY_LENGTH_DAYS) => {
+  const buildCleanFreeAgencyStateForInit = (seasonYear, userTeamName = null, maxDays = 7) => {
   return {
     seasonYear,
     isActive: false,
@@ -1811,7 +1869,7 @@ const handleContinueToProgression = () => {
 const cleanFreeAgencyState = buildCleanFreeAgencyStateForInit(
   currentSeasonYear,
   selectedTeam?.name || null,
-  FREE_AGENCY_LENGTH_DAYS
+  7
 );
 
 const leagueForInit = {
@@ -1824,7 +1882,7 @@ applyLeagueUpdate(leagueForInit);
 const res = await initializeFreeAgencyPeriod(
   leagueForInit,
   selectedTeam?.name || null,
-  FREE_AGENCY_LENGTH_DAYS
+  7
 );
 
       if (!res?.ok || !res?.leagueData) {
@@ -2639,9 +2697,18 @@ updateOffseasonState({
         </button>
       </div>
 
-      {signModalOpen && signTargetPlayer && createPortal((
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-[9999] px-4 py-4">
-          <div className="fa-modal-scroll w-full max-w-xl max-h-[90vh] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5 sm:p-4">
+      {signModalOpen && signTargetPlayer && (
+        <div
+          className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-50 px-4 py-6"
+          onClick={closeSignModal}
+          role="presentation"
+        >
+          <div
+            className="fa-modal-scroll w-full max-w-xl max-h-[calc(100vh-3rem)] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5 sm:p-4"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
             <h2 className="text-xl font-bold text-orange-400 mb-1.5">
               {isOffseasonMode ? "Submit Offer" : "Offer Contract"}
             </h2>
@@ -2672,25 +2739,47 @@ updateOffseasonState({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
-                <div className="text-xs text-gray-400 mb-1">Roster Payroll</div>
+                <div className="text-xs text-gray-400 mb-1">Payroll</div>
                 <div className="text-base font-semibold text-white">
-                  {formatDollars(userCapDashboard?.payroll || offerEvaluation?.teamSnapshot?.rosterPayroll || 0)}
+                  {formatDollars(
+                    offerEvaluation?.teamSnapshot?.rawPayrollWithoutHolds ??
+                    offerEvaluation?.teamSnapshot?.basicPayroll ??
+                    offerEvaluation?.teamSnapshot?.playerPayroll ??
+                    0
+                  )}
                 </div>
               </div>
 
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
-                <div className="text-xs text-gray-400 mb-1">Raw Cap Room</div>
-                <div className={`text-base font-semibold ${(userCapDashboard?.capRoom || 0) < 0 ? "text-red-300" : "text-emerald-300"}`}>
-                  {formatDollars(userCapDashboard?.capRoom || offerEvaluation?.teamSnapshot?.capRoom || 0)}
+                <div className="text-xs text-gray-400 mb-1">Cap Space</div>
+                <div className="text-base font-semibold text-emerald-300">
+                  {formatDollars(
+                    offerEvaluation?.teamSnapshot?.rawCapRoomWithoutHolds ??
+                    offerEvaluation?.teamSnapshot?.basicCapRoom ??
+                    offerEvaluation?.teamSnapshot?.capSpace ??
+                    offerEvaluation?.teamSnapshot?.capRoom ??
+                    0
+                  )}
                 </div>
               </div>
 
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
-                <div className="text-xs text-gray-400 mb-1">Cap After Holds</div>
-                <div className={`text-base font-semibold ${(userCapDashboard?.practicalCapRoom || 0) < 0 ? "text-red-300" : "text-emerald-300"}`}>
-                  {formatDollars(userCapDashboard?.practicalCapRoom || offerEvaluation?.teamSnapshot?.practicalCapRoom || 0)}
+                <div className="text-xs text-gray-400 mb-1">Practical Cap</div>
+                <div className="text-base font-semibold text-orange-200">
+                  {formatDollars(
+                    offerEvaluation?.teamSnapshot?.practicalCapRoom ??
+                    offerEvaluation?.teamSnapshot?.capRoom ??
+                    0
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                <div className="text-xs text-gray-400 mb-1">Cap Holds</div>
+                <div className="text-base font-semibold text-orange-200">
+                  {formatDollars(offerEvaluation?.teamSnapshot?.capHoldTotal || 0)}
                 </div>
               </div>
             </div>
@@ -2826,7 +2915,7 @@ updateOffseasonState({
               </div>
             )}
 
-            {!offerEvalLoading && offerEvaluation?.reason && !offerEvaluation?.ok && !(offerEvaluation?.pendingCapHoldClearance || offerNeedsCapHoldClearance) && (
+            {!offerEvalLoading && offerEvaluation?.reason && !offerEvaluation?.ok && (
               <div className="mb-4 text-red-300 text-sm font-semibold">
                 {offerEvaluation.reason}
               </div>
@@ -2844,15 +2933,15 @@ updateOffseasonState({
               </div>
             )}
 
-            {(offerEvaluation?.pendingCapHoldClearance || offerNeedsCapHoldClearance) && (
-              <div className="mb-4 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-yellow-200 text-sm font-semibold">
-                This offer can be submitted, but it will require clearing {formatDollars(offerEvaluation?.capHoldClearanceNeeded || localCapHoldClearanceNeeded || 0)} in cap holds if the player becomes ready to sign. You can renounce rights on the Viewing Offers screen.
-              </div>
-            )}
-
             {canSubmitLiveOffer && (
               <div className="mb-4 text-blue-300 text-sm font-semibold">
                 In offseason mode, this submits a live market offer. The player may wait and compare it to CPU offers.
+              </div>
+            )}
+
+            {canSubmitLiveOffer && (offerEvaluation?.pendingCapHoldClearance || offerNeedsCapHoldClearance) && (
+              <div className="mb-4 text-yellow-300 text-sm font-semibold">
+                You have enough raw cap space for this offer, but cap holds are lowering practical cap. The offer can still be submitted. If the player chooses you, clear the needed holds from the pending-signings screen before finalizing.
               </div>
             )}
 
@@ -2889,11 +2978,20 @@ updateOffseasonState({
             </div>
           </div>
         </div>
-      ), document.body)}
+      )}
 
-      {offersModalOpen && createPortal((
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-[9999] px-4 py-4">
-          <div className="fa-modal-scroll w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5 sm:p-4">
+      {offersModalOpen && (
+        <div
+          className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-50 px-4 py-6"
+          onClick={closeOffersModal}
+          role="presentation"
+        >
+          <div
+            className="fa-modal-scroll w-full max-w-2xl max-h-[calc(100vh-3rem)] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5 sm:p-4"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
             <h2 className="text-xl font-bold text-orange-400 mb-1.5">
               View Offers
             </h2>
@@ -3056,14 +3154,23 @@ updateOffseasonState({
             </div>
           </div>
         </div>
-      ), document.body)}
+      )}
 
       {capInfoModal && userCapDashboard && (() => {
         const info = getCapInfoContent(capInfoModal);
 
         return (
-          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4 py-6">
-            <div className="fa-modal-scroll w-full max-w-lg max-h-[88vh] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5">
+          <div
+            className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-50 px-4 py-6"
+            onClick={() => setCapInfoModal(null)}
+            role="presentation"
+          >
+            <div
+              className="fa-modal-scroll w-full max-w-lg max-h-[calc(100vh-3rem)] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+            >
               <div className="flex items-start justify-between gap-4 mb-3">
                 <div>
                   <h2 className="text-xl font-bold text-orange-400">
