@@ -1430,24 +1430,41 @@
       });
     }, [capHoldRenounceRows]);
 
+    const selectedPendingPlayerKeySet = useMemo(() => {
+      return new Set(
+        selectedPendingRows
+          .map((row) => row?.playerKey || getOfferPlayerKeyFromParts(row?.playerId || row?.id, row?.playerName || row?.name))
+          .filter(Boolean)
+      );
+    }, [selectedPendingRows]);
+
     const selectedCapHoldClearance = useMemo(() => {
       return capHoldRenounceRows.reduce((sum, row) => {
         if (!selectedRightsRenounceMap[row.playerKey]) return sum;
+
+        // Do not let the UI treat the selected player's own cap hold as a
+        // renounce. Own-rights signings automatically replace that player's hold
+        // with the new salary. Renouncing the same player would destroy the Bird/RFA path.
+        if (selectedPendingPlayerKeySet.has(row.playerKey)) return sum;
+
         return sum + Number(row.capHold || 0);
       }, 0);
-    }, [capHoldRenounceRows, selectedRightsRenounceMap]);
+    }, [capHoldRenounceRows, selectedRightsRenounceMap, selectedPendingPlayerKeySet]);
 
     const selectedRightsDecisions = useMemo(() => {
       const out = {};
 
       for (const row of capHoldRenounceRows) {
-        if (selectedRightsRenounceMap[row.playerKey]) {
-          out[row.playerKey] = "renounce";
-        }
+        if (!selectedRightsRenounceMap[row.playerKey]) continue;
+
+        // Selected own free agents should be signed through their rights, not renounced.
+        if (selectedPendingPlayerKeySet.has(row.playerKey)) continue;
+
+        out[row.playerKey] = "renounce";
       }
 
       return out;
-    }, [capHoldRenounceRows, selectedRightsRenounceMap]);
+    }, [capHoldRenounceRows, selectedRightsRenounceMap, selectedPendingPlayerKeySet]);
 
     const toggleRightsRenounce = (playerKey) => {
       setSelectedRightsRenounceMap((prev) => ({
@@ -1573,6 +1590,36 @@
       return sum + getPendingRowCurrentYearSalary(row);
     }, 0);
 
+    const capHoldByPlayerKey = new Map(
+      capHoldRenounceRows.map((row) => [row.playerKey, Number(row.capHold || 0)])
+    );
+
+    const selectedOwnCapHoldReplacement = selectedPendingRows.reduce((sum, row) => {
+      const playerKey = row?.playerKey || getOfferPlayerKeyFromParts(row?.playerId || row?.id, row?.playerName || row?.name);
+      if (!playerKey) return sum;
+
+      const spendingText = getPendingRowSpendingText(row);
+      const rightsTeamName =
+        row?.chosenOffer?.rightsTeamName ||
+        row?.chosenOffer?.birdRights?.heldByTeam ||
+        row?.storyContext?.rightsTeamName ||
+        row?.player?.rights?.heldByTeam ||
+        "";
+
+      const usesOwnRights =
+        pendingRowUsesOwnRights(row) ||
+        spendingText.includes("bird") ||
+        spendingText.includes("rfa_match") ||
+        spendingText.includes("rfa match") ||
+        Boolean(selectedTeam?.name && rightsTeamName === selectedTeam.name);
+
+      if (!usesOwnRights) return sum;
+
+      return sum + Number(capHoldByPlayerKey.get(playerKey) || 0);
+    }, 0);
+
+    const totalCapHoldRelief = selectedCapHoldClearance + selectedOwnCapHoldReplacement;
+
     const selectedTotalValue = selectedPendingRows.reduce((sum, row) => {
       const summary = getContractSummary(
         row?.contract || row?.chosenOffer?.contract || row?.offerSheet?.contract,
@@ -1605,21 +1652,21 @@
     // All selected signings still add to payroll and hard-cap math. The key
     // fix is that minimum contracts, Bird/RFA matches, and MLE/room-exception
     // deals do not require practical cap room just to be confirmed.
-    const payrollAfter = payrollBefore - selectedCapHoldClearance + selectedCurrentYearTotal;
-    const capRoomAfter = capRoomBefore + selectedCapHoldClearance - selectedCurrentYearTotal;
+    const payrollAfter = payrollBefore - totalCapHoldRelief + selectedCurrentYearTotal;
+    const capRoomAfter = capRoomBefore + totalCapHoldRelief - selectedCurrentYearTotal;
     const practicalPayrollAfter =
-      practicalPayrollBefore - selectedCapHoldClearance + selectedCurrentYearTotal;
+      practicalPayrollBefore - totalCapHoldRelief + selectedCurrentYearTotal;
     const practicalCapRoomAfter =
-      practicalCapRoomBefore + selectedCapHoldClearance - selectedCurrentYearTotal;
+      practicalCapRoomBefore + totalCapHoldRelief - selectedCurrentYearTotal;
 
     const capSpacePracticalCapRoomAfter =
-      practicalCapRoomBefore + selectedCapHoldClearance - selectedCapSpaceCurrentYearTotal;
+      practicalCapRoomBefore + totalCapHoldRelief - selectedCapSpaceCurrentYearTotal;
     const capSpaceShortfall = Math.max(0, -capSpacePracticalCapRoomAfter);
 
     const hardCapRoomAfter =
       hardCapRoomBefore === null
         ? null
-        : hardCapRoomBefore + selectedCapHoldClearance - selectedCurrentYearTotal;
+        : hardCapRoomBefore + totalCapHoldRelief - selectedCurrentYearTotal;
     const rosterAfter = rosterBefore + selectedCount;
 
     const warnings = [];
@@ -1652,6 +1699,8 @@
       selectedMinimumCurrentYearTotal,
       selectedExceptionCurrentYearTotal,
       selectedRightsCurrentYearTotal,
+      selectedOwnCapHoldReplacement,
+      totalCapHoldRelief,
       selectedTotalValue,
       payrollBefore,
       payrollAfter,
@@ -1673,7 +1722,13 @@
       apronNotes,
       hasBlockingIssue: warnings.length > 0,
     };
-  }, [pendingUserTeamSnapshot, selectedPendingRows, selectedCapHoldClearance]);
+  }, [
+    pendingUserTeamSnapshot,
+    selectedPendingRows,
+    selectedCapHoldClearance,
+    capHoldRenounceRows,
+    selectedTeam?.name,
+  ]);
 
     const toggleDecision = (playerKey) => {
       setSelectedDecisionMap((prev) => ({
@@ -2296,17 +2351,23 @@
                           </div>
                         </div>
                         <div className="rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2">
-                          <div className="text-xs text-gray-400 mb-1">Selected Clear</div>
+                          <div className="text-xs text-gray-400 mb-1">Hold Relief</div>
                           <div className="font-bold text-emerald-300">
-                            {formatDollars(selectionPreview?.selectedCapHoldClearance || 0)}
+                            {formatDollars(selectionPreview?.totalCapHoldRelief || 0)}
                           </div>
+                          {(selectionPreview?.selectedOwnCapHoldReplacement || 0) > 0 && (
+                            <div className="text-[10px] text-emerald-200/80 mt-1">
+                              incl. own hold replacement {formatDollars(selectionPreview.selectedOwnCapHoldReplacement)}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
 
                     <div className="bm-orange-scroll max-h-[240px] overflow-y-auto pr-2 space-y-2">
                       {capHoldRenounceRows.map((row) => {
-                        const isRenounced = Boolean(selectedRightsRenounceMap[row.playerKey]);
+                        const isSelectedPendingPlayer = selectedPendingPlayerKeySet.has(row.playerKey);
+                        const isRenounced = Boolean(selectedRightsRenounceMap[row.playerKey]) && !isSelectedPendingPlayer;
 
                         return (
                           <div
@@ -2338,14 +2399,20 @@
 
                             <button
                               type="button"
-                              onClick={() => toggleRightsRenounce(row.playerKey)}
-                              className={`px-4 py-2 rounded-lg font-bold transition ${
-                                isRenounced
+                              onClick={() => {
+                                if (!isSelectedPendingPlayer) toggleRightsRenounce(row.playerKey);
+                              }}
+                              disabled={isSelectedPendingPlayer}
+                              title={isSelectedPendingPlayer ? "This player's own hold is replaced automatically when you sign him through Bird/RFA rights." : "Renounce rights"}
+                              className={`px-4 py-2 rounded-lg font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                isSelectedPendingPlayer
+                                  ? "bg-emerald-700/70 text-white"
+                                  : isRenounced
                                   ? "bg-red-600 hover:bg-red-500 text-white"
                                   : "bg-neutral-700 hover:bg-neutral-600 text-white"
                               }`}
                             >
-                              {isRenounced ? "Undo Renounce" : "Renounce Rights"}
+                              {isSelectedPendingPlayer ? "Auto Replaced" : isRenounced ? "Undo Renounce" : "Renounce Rights"}
                             </button>
                           </div>
                         );

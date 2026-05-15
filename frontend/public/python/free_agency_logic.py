@@ -5320,10 +5320,40 @@ def process_pending_user_decisions(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None,
     selected_player_keys: Optional[List[str]] = None,
+    rights_decisions: Optional[Dict[str, Any]] = None,
+    declined_player_keys: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
     normalize_all_player_rights(updated)
     state = ensure_free_agency_state(updated)
+
+    if not user_team_name:
+        user_team_name = state.get("pendingUserTeamName")
+
+    # Safety valve: if the frontend already applied rights management before
+    # calling this helper, this is a no-op. If the JS bridge passes the decisions
+    # directly, this keeps the backend and frontend in sync.
+    rights_decisions = rights_decisions or {}
+    if rights_decisions and user_team_name:
+        rights_res = apply_rights_management(
+            league_data = updated,
+            team_name = user_team_name,
+            rights_decisions = rights_decisions,
+        )
+        if not rights_res.get("ok"):
+            return {
+                "ok": False,
+                "reason": rights_res.get("reason", "Failed to apply rights decisions."),
+                "leagueData": rights_res.get("leagueData", updated),
+                "processedSignings": [],
+                "generatedOffers": [],
+                "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
+                "stateSummary": build_free_agency_state_summary(updated),
+                "teamSnapshot": state.get("pendingUserTeamSnapshot"),
+            }
+        updated = rights_res.get("leagueData", updated)
+        normalize_all_player_rights(updated)
+        state = ensure_free_agency_state(updated)
 
     pending_rows = list(state.get("pendingUserDecisions", []))
     if not pending_rows:
@@ -5337,10 +5367,8 @@ def process_pending_user_decisions(
             "teamSnapshot": state.get("pendingUserTeamSnapshot"),
         }
 
-    if not user_team_name:
-        user_team_name = state.get("pendingUserTeamName")
-
     selected_set = {str(x) for x in (selected_player_keys or [])}
+    declined_set = {str(x) for x in (declined_player_keys or [])}
 
     preview = copy.deepcopy(updated)
     preview_state = ensure_free_agency_state(preview)
@@ -5348,14 +5376,43 @@ def process_pending_user_decisions(
     max_days = int(num(preview_state.get("maxDays"), DEFAULT_FREE_AGENCY_DAYS))
 
     processed_signings = []
+    remaining_pending_rows = []
 
     for row in pending_rows:
         player_key = row.get("playerKey") or get_player_key(
             row.get("playerId"),
             row.get("playerName"),
-        )       
+        )
+        player_key = str(player_key)
+
+        # Explicitly delayed / declined user choices should stop being treated as
+        # ready-to-sign wins. The player's market remains alive, and CPU offers can
+        # win on a later advance.
+        if player_key in declined_set:
+            offers = preview_state.get("offersByPlayer", {}).get(player_key, [])
+            for offer in offers:
+                if offer.get("teamName") == user_team_name and offer.get("source") == "user":
+                    offer["status"] = "declined_by_user"
+            preview_state.setdefault("userOfferOutcomeLog", []).append({
+                "id": f"{player_key}|{user_team_name}|{current_day}|declined_by_user",
+                "day": current_day,
+                "playerId": row.get("playerId"),
+                "playerName": row.get("playerName"),
+                "playerKey": player_key,
+                "userTeamName": user_team_name,
+                "status": "declined_by_user",
+                "offerStatus": "declined_by_user",
+                "signedWith": "",
+                "userOfferContract": row.get("contract") or (row.get("chosenOffer") or {}).get("contract"),
+                "userOfferTotalValue": row.get("totalValue") or (row.get("chosenOffer") or {}).get("totalValue", 0),
+                "userOfferYears": row.get("years") or (row.get("chosenOffer") or {}).get("years", 0),
+                "detail": f"You delayed or declined the ready-to-sign offer for {row.get('playerName', 'this player')}.",
+                "storyContext": row.get("storyContext"),
+            })
+            continue
 
         if player_key not in selected_set:
+            remaining_pending_rows.append(row)
             continue
 
         free_agents = preview.setdefault("freeAgents", [])
@@ -5422,48 +5479,44 @@ def process_pending_user_decisions(
         processed_signings.append(signed)
 
     preview_state = ensure_free_agency_state(preview)
-    clear_pending_user_decisions(preview_state)
+    preview_state["pendingUserDecisions"] = remaining_pending_rows
     preview_state["pendingUserTeamName"] = user_team_name
 
     generated_offers = []
 
+    # Do not generate the next CPU-offer wave inside this confirmation helper.
+    # That expensive step belongs to advance_free_agency_day. Keeping this helper
+    # focused prevents Pyodide request timeouts and avoids double-advancing the market.
     if current_day >= max_days or len(preview.get("freeAgents", [])) == 0:
-        final_cleanup_target = get_min_roster_target(preview)
+        if not remaining_pending_rows:
+            final_cleanup_target = get_min_roster_target(preview)
 
-        final_cleanup_signings = finalize_cpu_min_roster_cleanup(
-            league_data = preview,
-            current_day = current_day,
-            user_team_name = user_team_name,
-            min_roster_target_override = final_cleanup_target,
-        )
+            final_cleanup_signings = finalize_cpu_min_roster_cleanup(
+                league_data = preview,
+                current_day = current_day,
+                user_team_name = user_team_name,
+                min_roster_target_override = final_cleanup_target,
+            )
 
-        if final_cleanup_signings:
-            processed_signings.extend(final_cleanup_signings)
-            preview_state["dailyLog"].append({
-                "day": current_day,
-                "type": "cpu_final_min_roster_cleanup",
-                "signings": len(final_cleanup_signings),
-                "targetRosterSize": final_cleanup_target,
-            })
+            if final_cleanup_signings:
+                processed_signings.extend(final_cleanup_signings)
+                preview_state.setdefault("dailyLog", []).append({
+                    "day": current_day,
+                    "type": "cpu_final_min_roster_cleanup",
+                    "signings": len(final_cleanup_signings),
+                    "targetRosterSize": final_cleanup_target,
+                })
 
-        preview_state["isActive"] = False
-        preview_state["pendingUserTeamSnapshot"] = None
+            preview_state["isActive"] = False
+            preview_state["pendingUserTeamSnapshot"] = None
+        else:
+            snapshot = get_team_cap_snapshot(preview, user_team_name) if user_team_name else None
+            preview_state["pendingUserTeamSnapshot"] = snapshot if snapshot and snapshot.get("ok") else None
     else:
-        preview_state["currentDay"] = current_day + 1
-
-        generated_offers = generate_cpu_offers_for_day(
-            league_data = preview,
-            user_team_name = user_team_name,
-        )
-
-        preview_state["dailyLog"].append({
-            "day": preview_state["currentDay"],
-            "type": "offer_generation",
-            "offersGenerated": len(generated_offers),
-        })
-
         snapshot = get_team_cap_snapshot(preview, user_team_name) if user_team_name else None
         preview_state["pendingUserTeamSnapshot"] = snapshot if snapshot and snapshot.get("ok") else None
+
+    sync_flat_teams_from_conferences(preview)
 
     return {
         "ok": True,
@@ -5474,7 +5527,6 @@ def process_pending_user_decisions(
         "stateSummary": build_free_agency_state_summary(preview),
         "teamSnapshot": preview_state.get("pendingUserTeamSnapshot"),
     }
-
 
 def get_contract_option_player_score_adjustment(contract: Optional[Dict[str, Any]]) -> float:
     contract = normalize_contract(contract)
@@ -7931,6 +7983,17 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
             league_data = league_data,
             user_team_name = payload.get("userTeamName"),
             selected_player_keys = payload.get("selectedPlayerKeys", []) or [],
+            rights_decisions = (
+                payload.get("rightsDecisions")
+                or payload.get("selectedRightsDecisions")
+                or payload.get("rights_decisions")
+                or {}
+            ),
+            declined_player_keys = (
+                payload.get("declinedPlayerKeys")
+                or payload.get("declined_player_keys")
+                or []
+            ),
         )
 
     if action == "process_pending_rfa_match_decision":
