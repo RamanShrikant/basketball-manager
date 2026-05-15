@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import * as simEngine from "../api/simEnginePy.js";
@@ -1705,6 +1706,26 @@ const isOffseasonMode =
     return { percent, label: "Not Interested", barClass: "bg-red-500" };
   }, [offerEvaluation, offerEvalLoading]);
 
+  const localOfferYear1Salary = parseMillionsText(offerSalaryText);
+
+  const localCapHoldClearanceNeeded = useMemo(() => {
+    if (!canSubmitLiveOffer || !userCapDashboard || !localOfferYear1Salary) return 0;
+
+    const rawCapRoom = Number(userCapDashboard.capRoom || 0);
+    const practicalCapRoom = Number(userCapDashboard.practicalCapRoom || 0);
+
+    if (rawCapRoom < localOfferYear1Salary) return 0;
+    if (practicalCapRoom >= localOfferYear1Salary) return 0;
+
+    return Math.max(0, localOfferYear1Salary - practicalCapRoom);
+  }, [
+    canSubmitLiveOffer,
+    userCapDashboard,
+    localOfferYear1Salary,
+  ]);
+
+  const offerNeedsCapHoldClearance = localCapHoldClearanceNeeded > 0;
+
 const handleContinueToProgression = () => {
   if (userRosterInvalid) {
     setRosterActionError(rosterValidationMessage);
@@ -2617,9 +2638,9 @@ updateOffseasonState({
         </button>
       </div>
 
-      {signModalOpen && signTargetPlayer && (
-        <div className="fixed inset-0 bg-black/60 flex items-start justify-center overflow-y-auto z-50 px-4 py-6">
-          <div className="fa-modal-scroll w-full max-w-xl max-h-[88vh] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5 sm:p-4">
+      {signModalOpen && signTargetPlayer && createPortal((
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-[9999] px-4 py-4">
+          <div className="fa-modal-scroll w-full max-w-xl max-h-[90vh] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5 sm:p-4">
             <h2 className="text-xl font-bold text-orange-400 mb-1.5">
               {isOffseasonMode ? "Submit Offer" : "Offer Contract"}
             </h2>
@@ -2652,23 +2673,23 @@ updateOffseasonState({
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
-                <div className="text-xs text-gray-400 mb-1">Current Payroll</div>
+                <div className="text-xs text-gray-400 mb-1">Roster Payroll</div>
                 <div className="text-base font-semibold text-white">
-                  {formatDollars(offerEvaluation?.teamSnapshot?.payroll || 0)}
+                  {formatDollars(userCapDashboard?.payroll || offerEvaluation?.teamSnapshot?.rosterPayroll || 0)}
                 </div>
               </div>
 
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
-                <div className="text-xs text-gray-400 mb-1">Cap Room</div>
-                <div className="text-base font-semibold text-white">
-                  {formatDollars(offerEvaluation?.teamSnapshot?.capRoom || 0)}
+                <div className="text-xs text-gray-400 mb-1">Raw Cap Room</div>
+                <div className={`text-base font-semibold ${(userCapDashboard?.capRoom || 0) < 0 ? "text-red-300" : "text-emerald-300"}`}>
+                  {formatDollars(userCapDashboard?.capRoom || offerEvaluation?.teamSnapshot?.capRoom || 0)}
                 </div>
               </div>
 
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
-                <div className="text-xs text-gray-400 mb-1">Dead Cap</div>
-                <div className="text-base font-semibold text-white">
-                  {formatDollars(offerEvaluation?.teamSnapshot?.deadCap || 0)}
+                <div className="text-xs text-gray-400 mb-1">Cap After Holds</div>
+                <div className={`text-base font-semibold ${(userCapDashboard?.practicalCapRoom || 0) < 0 ? "text-red-300" : "text-emerald-300"}`}>
+                  {formatDollars(userCapDashboard?.practicalCapRoom || offerEvaluation?.teamSnapshot?.practicalCapRoom || 0)}
                 </div>
               </div>
             </div>
@@ -2804,7 +2825,7 @@ updateOffseasonState({
               </div>
             )}
 
-            {!offerEvalLoading && offerEvaluation?.reason && !offerEvaluation?.ok && (
+            {!offerEvalLoading && offerEvaluation?.reason && !offerEvaluation?.ok && !(offerEvaluation?.pendingCapHoldClearance || offerNeedsCapHoldClearance) && (
               <div className="mb-4 text-red-300 text-sm font-semibold">
                 {offerEvaluation.reason}
               </div>
@@ -2819,6 +2840,12 @@ updateOffseasonState({
             {!offerEvalLoading && offerEvaluation?.ok && offerEvaluation.accepted && !isOffseasonMode && (
               <div className="mb-4 text-green-300 text-sm font-semibold">
                 This player is ready to sign this offer.
+              </div>
+            )}
+
+            {(offerEvaluation?.pendingCapHoldClearance || offerNeedsCapHoldClearance) && (
+              <div className="mb-4 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-yellow-200 text-sm font-semibold">
+                This offer can be submitted, but it will require clearing {formatDollars(offerEvaluation?.capHoldClearanceNeeded || localCapHoldClearanceNeeded || 0)} in cap holds if the player becomes ready to sign. You can renounce rights on the Viewing Offers screen.
               </div>
             )}
 
@@ -2861,11 +2888,11 @@ updateOffseasonState({
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
 
-      {offersModalOpen && (
-        <div className="fixed inset-0 bg-black/60 flex items-start justify-center overflow-y-auto z-50 px-4 py-6">
-          <div className="fa-modal-scroll w-full max-w-2xl max-h-[88vh] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5 sm:p-4">
+      {offersModalOpen && createPortal((
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-[9999] px-4 py-4">
+          <div className="fa-modal-scroll w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5 sm:p-4">
             <h2 className="text-xl font-bold text-orange-400 mb-1.5">
               View Offers
             </h2>
@@ -3028,7 +3055,7 @@ updateOffseasonState({
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {capInfoModal && userCapDashboard && (() => {
         const info = getCapInfoContent(capInfoModal);
