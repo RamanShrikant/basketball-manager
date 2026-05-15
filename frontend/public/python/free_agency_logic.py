@@ -14,7 +14,7 @@ MIN_DEAL = 1_200_000
 MAX_SALARY = 54_000_000
 YEARLY_RAISE = 0.05
 
-DEFAULT_FREE_AGENCY_DAYS = 7
+DEFAULT_FREE_AGENCY_DAYS = 10
 MAX_ACTIVE_OFFERS_PER_TEAM = 5
 DEFAULT_ROOM_EXCEPTION = 8_781_000
 DEFAULT_NON_TAXPAYER_MLE = 14_104_000
@@ -6306,6 +6306,12 @@ def should_match_restricted_free_agent_offer(
 
     _, _, rights_team = find_team_entry(league_data, rights_team_name)
     if rights_team is None:
+        return False
+
+    # Do not let a CPU rights team "match" an RFA offer sheet if it has no roster spot.
+    # Without this guard, the engine can decide to match, then fail during final signing,
+    # which blocks the user even though the user's team has cap and roster room.
+    if len(get_team_players(rights_team)) >= get_roster_limit(league_data):
         return False
 
     contract = normalize_contract(chosen_offer.get("contract"))

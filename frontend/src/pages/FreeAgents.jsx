@@ -9,6 +9,7 @@ import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
+const FREE_AGENCY_LENGTH_DAYS = 10;
 
 function compactStorySideForStorage(side) {
   if (!side || typeof side !== "object") return null;
@@ -1722,7 +1723,7 @@ const handleContinueToProgression = () => {
 
   navigate("/player-progression");
 };
-  const buildCleanFreeAgencyStateForInit = (seasonYear, userTeamName = null, maxDays = 7) => {
+  const buildCleanFreeAgencyStateForInit = (seasonYear, userTeamName = null, maxDays = FREE_AGENCY_LENGTH_DAYS) => {
   return {
     seasonYear,
     isActive: false,
@@ -1789,7 +1790,7 @@ const handleContinueToProgression = () => {
 const cleanFreeAgencyState = buildCleanFreeAgencyStateForInit(
   currentSeasonYear,
   selectedTeam?.name || null,
-  7
+  FREE_AGENCY_LENGTH_DAYS
 );
 
 const leagueForInit = {
@@ -1802,7 +1803,7 @@ applyLeagueUpdate(leagueForInit);
 const res = await initializeFreeAgencyPeriod(
   leagueForInit,
   selectedTeam?.name || null,
-  7
+  FREE_AGENCY_LENGTH_DAYS
 );
 
       if (!res?.ok || !res?.leagueData) {
