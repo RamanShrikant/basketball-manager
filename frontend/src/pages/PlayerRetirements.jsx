@@ -73,6 +73,144 @@ function fmt1(value) {
   return n.toFixed(1);
 }
 
+
+function compactRetiredPlayer(player) {
+  if (!player || typeof player !== "object") return null;
+
+  return {
+    id: player.id ?? null,
+    name: player.name || player.playerName || "",
+    pos: player.pos || player.position || "",
+    age: player.age ?? null,
+    overall: player.overall ?? player.ovr ?? null,
+    ovr: player.ovr ?? player.overall ?? null,
+    potential: player.potential ?? player.pot ?? null,
+    retiredSeasonYear: player.retiredSeasonYear ?? null,
+    retiredFromTeam: player.retiredFromTeam || player.currentTeam || player.teamName || player.team || "",
+    lastKnownTeam: player.lastKnownTeam || "",
+    retirementSource: player.retirementSource || "",
+    retirementProbability: player.retirementProbability ?? player.retirementSnapshot?.retirementProbability ?? 0,
+    retirementRoll: player.retirementRoll ?? null,
+    headshot: player.headshot || player.portrait || player.image || player.photo || player.face || "",
+  };
+}
+
+function compactRetirementResult(result) {
+  if (!result || typeof result !== "object") return result;
+
+  return {
+    ok: Boolean(result.ok),
+    skipped: Boolean(result.skipped),
+    disabled: Boolean(result.disabled),
+    seasonYear: result.seasonYear ?? result.summary?.seasonYear ?? null,
+    retiredPlayers: Array.isArray(result.retiredPlayers)
+      ? result.retiredPlayers.map(compactRetiredPlayer).filter(Boolean)
+      : [],
+    summary: result.summary || {
+      retiredCount: 0,
+      averageAge: 0,
+      averageOverall: 0,
+      teamsAffected: 0,
+    },
+  };
+}
+
+function saveRetirementResult(result) {
+  const compact = compactRetirementResult(result);
+
+  try {
+    localStorage.setItem(RETIREMENT_RESULTS_KEY, JSON.stringify(compact));
+    return compact;
+  } catch (err) {
+    console.warn("[Retirements] Compact retirement save failed. Saving ultra-light result.", err);
+  }
+
+  const ultraLight = {
+    ok: Boolean(result?.ok),
+    skipped: Boolean(result?.skipped),
+    disabled: Boolean(result?.disabled),
+    seasonYear: result?.seasonYear ?? result?.summary?.seasonYear ?? null,
+    retiredPlayers: Array.isArray(result?.retiredPlayers)
+      ? result.retiredPlayers.map((player) => ({
+          id: player?.id ?? null,
+          name: player?.name || player?.playerName || "",
+          pos: player?.pos || player?.position || "",
+          age: player?.age ?? null,
+          overall: player?.overall ?? player?.ovr ?? null,
+          retiredFromTeam: player?.retiredFromTeam || player?.currentTeam || player?.teamName || player?.team || "",
+          retirementProbability: player?.retirementProbability ?? 0,
+        }))
+      : [],
+    summary: result?.summary || null,
+  };
+
+  localStorage.setItem(RETIREMENT_RESULTS_KEY, JSON.stringify(ultraLight));
+  return ultraLight;
+}
+
+function compactFreeAgencyStateForRetirementStorage(state) {
+  if (!state || typeof state !== "object") return state;
+
+  return {
+    ...state,
+    latestResults: null,
+    offerHistory: Array.isArray(state.offerHistory) ? state.offerHistory.slice(-40) : [],
+    dailyLog: Array.isArray(state.dailyLog) ? state.dailyLog.slice(-8) : [],
+    signedPlayersLog: Array.isArray(state.signedPlayersLog)
+      ? state.signedPlayersLog.slice(-80).map((row) => ({
+          day: row?.day ?? null,
+          playerId: row?.playerId ?? null,
+          playerName: row?.playerName || "",
+          teamName: row?.teamName || row?.signedWith || "",
+          signedWith: row?.signedWith || row?.teamName || "",
+          contract: row?.contract || row?.signedContract || null,
+          totalValue: row?.totalValue || row?.signedTotalValue || 0,
+          aav: row?.aav || 0,
+          spendingType: row?.spendingType || "",
+          exceptionType: row?.exceptionType || "",
+          rfaMatched: Boolean(row?.rfaMatched),
+        }))
+      : [],
+    userOfferOutcomeLog: Array.isArray(state.userOfferOutcomeLog)
+      ? state.userOfferOutcomeLog.slice(-80).map((row) => ({
+          day: row?.day ?? null,
+          playerId: row?.playerId ?? null,
+          playerName: row?.playerName || "",
+          status: row?.status || row?.offerStatus || "",
+          signedWith: row?.signedWith || "",
+        }))
+      : [],
+  };
+}
+
+function compactLeagueDataForRetirementStorage(leagueData) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+
+  return {
+    ...leagueData,
+    freeAgencyState: compactFreeAgencyStateForRetirementStorage(leagueData.freeAgencyState),
+    retiredPlayersHistory: Array.isArray(leagueData.retiredPlayersHistory)
+      ? leagueData.retiredPlayersHistory.map(compactRetiredPlayer).filter(Boolean)
+      : [],
+  };
+}
+
+function saveLeagueDataAfterRetirements(updated) {
+  if (!updated) return;
+
+  try {
+    localStorage.setItem("leagueData", JSON.stringify(updated));
+    return;
+  } catch (err) {
+    console.warn("[Retirements] Full leagueData save was too large. Retrying compact save.", err);
+  }
+
+  localStorage.setItem(
+    "leagueData",
+    JSON.stringify(compactLeagueDataForRetirementStorage(updated))
+  );
+}
+
 function SummaryCard({ label, value, tone = "neutral" }) {
   const toneClass =
     tone === "orange"
@@ -152,10 +290,10 @@ const finalizeRetirementsAsSkipped = ({ disabled = false } = {}) => {
   }
 
   if (workingLeagueData) {
-    localStorage.setItem("leagueData", JSON.stringify(workingLeagueData));
+    saveLeagueDataAfterRetirements(workingLeagueData);
   }
 
-  localStorage.setItem(RETIREMENT_RESULTS_KEY, JSON.stringify(res));
+  saveRetirementResult(res);
 
   const nextOffseasonState = {
     ...readOffseasonState(seasonYear),
@@ -222,15 +360,16 @@ setError("");
       }
 
       const updated = res.leagueData;
+      const compactResult = saveRetirementResult(res);
+
       setWorkingLeagueData(updated);
-      setRetirementResult(res);
+      setRetirementResult(compactResult);
 
       if (typeof setLeagueData === "function") {
         setLeagueData(updated);
       }
 
-      localStorage.setItem("leagueData", JSON.stringify(updated));
-      localStorage.setItem(RETIREMENT_RESULTS_KEY, JSON.stringify(res));
+      saveLeagueDataAfterRetirements(updated);
 
       if (selectedTeam?.name && typeof setSelectedTeam === "function") {
         let nextSelectedTeam = null;

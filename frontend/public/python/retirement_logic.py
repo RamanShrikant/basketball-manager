@@ -284,6 +284,29 @@ def get_free_agent_pool_refs(
     return refs
 
 
+
+def compact_retired_player_record(player: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = player.get("retirementSnapshot") if isinstance(player.get("retirementSnapshot"), dict) else {}
+
+    return {
+        "id": player.get("id"),
+        "name": player.get("name") or player.get("playerName") or player.get("player") or "Unknown",
+        "pos": player.get("pos") or player.get("position") or "",
+        "age": int(num(player.get("age"), snapshot.get("age", 0))),
+        "overall": int(num(player.get("overall", player.get("ovr")), snapshot.get("overall", 0))),
+        "ovr": int(num(player.get("overall", player.get("ovr")), snapshot.get("overall", 0))),
+        "potential": int(num(player.get("potential", player.get("pot")), snapshot.get("potential", 0))),
+        "retired": True,
+        "retiredSeasonYear": player.get("retiredSeasonYear"),
+        "retiredFromTeam": player.get("retiredFromTeam") or player.get("currentTeam") or player.get("teamName") or "",
+        "lastKnownTeam": player.get("lastKnownTeam") or "",
+        "retirementSource": player.get("retirementSource") or "",
+        "retirementProbability": float(num(player.get("retirementProbability"), snapshot.get("retirementProbability", 0))),
+        "retirementRoll": player.get("retirementRoll"),
+        "headshot": player.get("headshot") or player.get("portrait") or player.get("image") or player.get("photo") or player.get("face") or "",
+    }
+
+
 def compute_retirement_probability(
     player: Dict[str, Any],
     team_name: str,
@@ -385,7 +408,7 @@ def apply_player_retirements(
                 retired_record["retirementRoll"] = round(roll, 4)
                 retired_record["retirementSnapshot"] = retirement_eval
 
-                retired_players.append(retired_record)
+                retired_players.append(compact_retired_player_record(retired_record))
                 teams_affected.add(team_name)
             else:
                 kept_players.append(player)
@@ -437,7 +460,7 @@ def apply_player_retirements(
                 retired_record["retirementRoll"] = round(roll, 4)
                 retired_record["retirementSnapshot"] = retirement_eval
 
-                retired_players.append(retired_record)
+                retired_players.append(compact_retired_player_record(retired_record))
                 teams_affected.add("Free Agency")
             else:
                 kept_free_agents.append(player)
