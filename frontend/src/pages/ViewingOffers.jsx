@@ -938,6 +938,7 @@ export default function ViewingOffers() {
   const [hideLeagueEvents, setHideLeagueEvents] = useState(false);
   const [hideCpuOffers, setHideCpuOffers] = useState(false);
   const [selectedDecisionMap, setSelectedDecisionMap] = useState({});
+  const [selectedRightsRenounceMap, setSelectedRightsRenounceMap] = useState({});
   const [actionError, setActionError] = useState("");
   const [processingBack, setProcessingBack] = useState(false);
   const [processingAdvance, setProcessingAdvance] = useState(false);
@@ -958,6 +959,7 @@ export default function ViewingOffers() {
     simEngine.processPendingUserFreeAgencyDecisions;
   const processPendingRfaMatchDecision =
     simEngine.processPendingRfaMatchDecision;
+  const applyRightsManagement = simEngine.applyRightsManagement;
 
   const freeAgencyState = leagueData?.freeAgencyState || {};
   const latestResults = freeAgencyState?.latestResults || null;
@@ -1317,6 +1319,144 @@ export default function ViewingOffers() {
     return pendingUserDecisions.filter((row) => selectedDecisionMap[row.playerKey]);
   }, [pendingUserDecisions, selectedDecisionMap]);
 
+  const getRightsFromPlayer = (player) => {
+    return player?.rights && typeof player.rights === "object"
+      ? player.rights
+      : {
+          heldByTeam: null,
+          birdLevel: "none",
+          seasonsTowardBird: 0,
+          restrictedFreeAgent: false,
+          rookieScale: false,
+        };
+  };
+
+  const getPreviousSalaryForCapHold = (player) => {
+    const previousSalaryByYear = Array.isArray(player?.previousContract?.salaryByYear)
+      ? player.previousContract.salaryByYear
+      : [];
+    const currentSalaryByYear = Array.isArray(player?.contract?.salaryByYear)
+      ? player.contract.salaryByYear
+      : [];
+
+    if (previousSalaryByYear.length) {
+      return Number(previousSalaryByYear[previousSalaryByYear.length - 1] || 0);
+    }
+
+    if (currentSalaryByYear.length) {
+      return Number(currentSalaryByYear[currentSalaryByYear.length - 1] || 0);
+    }
+
+    return Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+  };
+
+  const getCapHoldForPlayer = (player, teamName) => {
+    const rights = getRightsFromPlayer(player);
+
+    if (player?.rightsRenounced) return 0;
+    if (!teamName || rights?.heldByTeam !== teamName) return 0;
+    if (!rights?.birdLevel || rights.birdLevel === "none") return 0;
+
+    if (
+      rights?.restrictedFreeAgent &&
+      player?.qualifyingOffer?.amount &&
+      player?.qualifyingOffer?.status !== "withdrawn"
+    ) {
+      return Math.max(1_200_000, Number(player.qualifyingOffer.amount || 0));
+    }
+
+    const previousSalary = getPreviousSalaryForCapHold(player);
+    const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+
+    if (rights.birdLevel === "bird") {
+      return Math.max(previousSalary, marketYearOne, 1_200_000);
+    }
+
+    if (rights.birdLevel === "early_bird") {
+      return Math.max(previousSalary * 1.3, 1_200_000);
+    }
+
+    if (rights.birdLevel === "non_bird") {
+      return Math.max(previousSalary * 1.2, 1_200_000);
+    }
+
+    return 0;
+  };
+
+  const formatBirdLevel = (level) => {
+    if (level === "bird") return "Bird";
+    if (level === "early_bird") return "Early Bird";
+    if (level === "non_bird") return "Non-Bird";
+    return "Rights";
+  };
+
+  const capHoldRenounceRows = useMemo(() => {
+    const teamName = selectedTeam?.name;
+    if (!teamName) return [];
+
+    return (leagueData?.freeAgents || [])
+      .map((player) => {
+        const capHold = getCapHoldForPlayer(player, teamName);
+        const rights = getRightsFromPlayer(player);
+        return {
+          player,
+          playerKey: getOfferPlayerKeyFromParts(player?.id, player?.name),
+          playerName: player?.name || "Unknown Player",
+          position: player?.pos || player?.position || "-",
+          age: player?.age ?? null,
+          overall: player?.overall ?? null,
+          birdLevel: rights?.birdLevel || "none",
+          restrictedFreeAgent: Boolean(rights?.restrictedFreeAgent || player?.qualifyingOffer?.amount),
+          capHold,
+          marketValue: player?.marketValue || null,
+        };
+      })
+      .filter((row) => row.capHold > 0)
+      .sort((a, b) => Number(b.capHold || 0) - Number(a.capHold || 0));
+  }, [leagueData, selectedTeam?.name]);
+
+  useEffect(() => {
+    setSelectedRightsRenounceMap((prev) => {
+      const validKeys = new Set(capHoldRenounceRows.map((row) => row.playerKey));
+      const next = {};
+
+      for (const [key, value] of Object.entries(prev || {})) {
+        if (value && validKeys.has(key)) {
+          next[key] = true;
+        }
+      }
+
+      return next;
+    });
+  }, [capHoldRenounceRows]);
+
+  const selectedCapHoldClearance = useMemo(() => {
+    return capHoldRenounceRows.reduce((sum, row) => {
+      if (!selectedRightsRenounceMap[row.playerKey]) return sum;
+      return sum + Number(row.capHold || 0);
+    }, 0);
+  }, [capHoldRenounceRows, selectedRightsRenounceMap]);
+
+  const selectedRightsDecisions = useMemo(() => {
+    const out = {};
+
+    for (const row of capHoldRenounceRows) {
+      if (selectedRightsRenounceMap[row.playerKey]) {
+        out[row.playerKey] = "renounce";
+      }
+    }
+
+    return out;
+  }, [capHoldRenounceRows, selectedRightsRenounceMap]);
+
+  const toggleRightsRenounce = (playerKey) => {
+    setSelectedRightsRenounceMap((prev) => ({
+      ...prev,
+      [playerKey]: !prev[playerKey],
+    }));
+    setActionError("");
+  };
+
   const selectionPreview = useMemo(() => {
     if (!pendingUserTeamSnapshot?.ok) {
       return null;
@@ -1354,17 +1494,31 @@ export default function ViewingOffers() {
     const payrollAfter = payrollBefore + selectedCurrentYearTotal;
     const capRoomAfter = capRoomBefore - selectedCurrentYearTotal;
     const capHoldTotal = Number(pendingUserTeamSnapshot?.capHoldTotal || 0);
-    const practicalPayrollAfter = Number(pendingUserTeamSnapshot?.practicalPayroll || payrollBefore + capHoldTotal) + selectedCurrentYearTotal;
-    const practicalCapRoomAfter = Number(pendingUserTeamSnapshot?.practicalCapRoom ?? capRoomBefore - capHoldTotal) - selectedCurrentYearTotal;
+    const practicalPayrollAfter =
+      Number(pendingUserTeamSnapshot?.practicalPayroll || payrollBefore + capHoldTotal)
+      - selectedCapHoldClearance
+      + selectedCurrentYearTotal;
+    const practicalCapRoomAfter =
+      Number(pendingUserTeamSnapshot?.practicalCapRoom ?? capRoomBefore - capHoldTotal)
+      + selectedCapHoldClearance
+      - selectedCurrentYearTotal;
     const firstApron = Number(pendingUserTeamSnapshot?.firstApron || 0);
     const secondApron = Number(pendingUserTeamSnapshot?.secondApron || 0);
     const hardCapRoomAfter =
-      hardCapRoomBefore === null ? null : hardCapRoomBefore - selectedCurrentYearTotal;
+      hardCapRoomBefore === null
+        ? null
+        : hardCapRoomBefore + selectedCapHoldClearance - selectedCurrentYearTotal;
     const rosterAfter = rosterBefore + selectedCount;
 
     const warnings = [];  
     const apronNotes = [];
 
+
+    if (selectedCount > 0 && practicalCapRoomAfter < 0) {
+      warnings.push(
+        `Selected signings are short by ${formatDollars(Math.abs(practicalCapRoomAfter))}. Renounce enough rights below to clear the cap holds before confirming.`
+      );
+    }
 
     if (hardCapRoomAfter !== null && hardCapRoomAfter < 0) {
       warnings.push("Selected signings put you over the hard cap.");
@@ -1388,6 +1542,8 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       capRoomBefore,
       capRoomAfter,
       capHoldTotal,
+      selectedCapHoldClearance,
+      capRoomShortfall: Math.max(0, -practicalCapRoomAfter),
       practicalPayrollAfter,
       practicalCapRoomAfter,
       firstApron,
@@ -1400,7 +1556,7 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       warnings,
       hasBlockingIssue: warnings.length > 0,
     };
-  }, [pendingUserTeamSnapshot, selectedPendingRows]);
+  }, [pendingUserTeamSnapshot, selectedPendingRows, selectedCapHoldClearance]);
 
   const toggleDecision = (playerKey) => {
     setSelectedDecisionMap((prev) => ({
@@ -1455,7 +1611,7 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
     }
   };
 
-  const processSelections = async () => {
+  const processSelections = async ({ declineUnselected = false } = {}) => {
     if (!selectedTeam?.name) {
       return { ok: false, reason: "No team selected." };
     }
@@ -1471,10 +1627,46 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       .filter((row) => selectedDecisionMap[row.playerKey])
       .map((row) => row.playerKey);
 
+    const declinedPlayerKeys = declineUnselected
+      ? pendingUserDecisions
+          .filter((row) => !selectedDecisionMap[row.playerKey])
+          .map((row) => row.playerKey)
+      : [];
+
+    let leagueForProcessing = leagueData;
+    const rightsDecisionKeys = Object.keys(selectedRightsDecisions || {});
+
+    if (rightsDecisionKeys.length > 0) {
+      if (typeof applyRightsManagement !== "function") {
+        return {
+          ok: false,
+          reason: "Rights management helper is not wired in simEnginePy.js.",
+        };
+      }
+
+      const rightsRes = await applyRightsManagement(
+        leagueData,
+        selectedTeam.name,
+        selectedRightsDecisions
+      );
+
+      if (!rightsRes?.ok || !rightsRes?.leagueData) {
+        return {
+          ok: false,
+          reason: rightsRes?.reason || "Failed to renounce selected rights.",
+          leagueData: rightsRes?.leagueData || leagueData,
+        };
+      }
+
+      leagueForProcessing = rightsRes.leagueData;
+    }
+
     return await processPendingUserFreeAgencyDecisions(
-      leagueData,
+      leagueForProcessing,
       selectedTeam.name,
-      selectedPlayerKeys
+      selectedPlayerKeys,
+      selectedRightsDecisions,
+      declinedPlayerKeys
     );
   };
 
@@ -1552,7 +1744,7 @@ const handleReturnToOffseasonHub = async () => {
       setProcessingAdvance(true);
       setActionError("");
 
-      const processRes = await processSelections();
+      const processRes = await processSelections({ declineUnselected: true });
       if (!processRes?.ok) {
         if (processRes?.leagueData) {
           applyLeagueUpdate(processRes.leagueData);
@@ -1892,6 +2084,12 @@ return (
                 </div>
               </div>
 
+              {pendingUserDecisions.length > 0 && (
+                <div className="mb-4 rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
+                  If you leave a ready-to-sign player unchecked and press Advance Day, he will treat that as you delaying the agreement. Your offer loses priority and he can quickly sign with another team.
+                </div>
+              )}
+
               {pendingUserTeamSnapshot?.ok && (
                 <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-5">
                   <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
@@ -1952,6 +2150,89 @@ return (
                 <div className="mb-4 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3">
                   <div className="text-sm font-semibold text-red-200">
                     {selectionPreview.warnings.join(" ")}
+                  </div>
+                </div>
+              )}
+
+              {capHoldRenounceRows.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-4">
+                  <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-3">
+                    <div>
+                      <div className="text-base font-bold text-yellow-200">
+                        Cap Hold Clearance
+                      </div>
+                      <div className="text-sm text-yellow-100/90 mt-1">
+                        You can renounce your own free-agent rights here before confirming the selected signing. Renouncing clears the hold, but you lose that player's Bird/RFA control.
+                      </div>
+                      {selectedPendingRows.length === 0 && (
+                        <div className="mt-2 rounded-lg border border-neutral-700 bg-neutral-900/80 px-3 py-2 text-xs text-gray-300">
+                          No pending signing is selected right now. You can still select rights to renounce, then click Back to Free Agency or Advance Day to apply the clearance before the next market step.
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-sm shrink-0">
+                      <div className="rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2">
+                        <div className="text-xs text-gray-400 mb-1">Short By</div>
+                        <div className={`font-bold ${(selectionPreview?.capRoomShortfall || 0) > 0 ? "text-red-300" : "text-emerald-300"}`}>
+                          {formatDollars(selectionPreview?.capRoomShortfall || 0)}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2">
+                        <div className="text-xs text-gray-400 mb-1">Selected Clear</div>
+                        <div className="font-bold text-emerald-300">
+                          {formatDollars(selectionPreview?.selectedCapHoldClearance || 0)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bm-orange-scroll max-h-[240px] overflow-y-auto pr-2 space-y-2">
+                    {capHoldRenounceRows.map((row) => {
+                      const isRenounced = Boolean(selectedRightsRenounceMap[row.playerKey]);
+
+                      return (
+                        <div
+                          key={row.playerKey}
+                          className={`flex flex-col md:flex-row md:items-center md:justify-between gap-3 rounded-xl border px-3 py-3 ${
+                            isRenounced
+                              ? "border-red-500/40 bg-red-500/10"
+                              : "border-neutral-700 bg-neutral-900"
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="text-white font-semibold">
+                              <PlayerNameButton onClick={() => openPlayerCardFromRow(row.player, selectedTeam?.name || "Free Agent")}>
+                                {row.playerName}
+                              </PlayerNameButton>
+                            </div>
+                            <div className="text-xs text-gray-400 mt-1">
+                              {row.position} {row.age ? `• Age ${row.age}` : ""} {row.overall ? `• OVR ${row.overall}` : ""}
+                            </div>
+                            <div className="flex flex-wrap gap-2 mt-2">
+                              <InfoChip tone="orange">{formatBirdLevel(row.birdLevel)}</InfoChip>
+                              {row.restrictedFreeAgent && <InfoChip tone="green">RFA</InfoChip>}
+                              <InfoChip tone="red">Hold {formatDollars(row.capHold)}</InfoChip>
+                              {row.marketValue?.expectedYear1Salary && (
+                                <InfoChip>Market {formatDollars(row.marketValue.expectedYear1Salary)}</InfoChip>
+                              )}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => toggleRightsRenounce(row.playerKey)}
+                            className={`px-4 py-2 rounded-lg font-bold transition ${
+                              isRenounced
+                                ? "bg-red-600 hover:bg-red-500 text-white"
+                                : "bg-neutral-700 hover:bg-neutral-600 text-white"
+                            }`}
+                          >
+                            {isRenounced ? "Undo Renounce" : "Renounce Rights"}
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

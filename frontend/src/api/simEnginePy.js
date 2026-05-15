@@ -1612,10 +1612,10 @@ export function advanceFreeAgencyDay(
 export function processPendingUserFreeAgencyDecisions(
   leagueData,
   userTeamName = null,
-  selectedPlayerKeys = []
-) 
-
-{
+  selectedPlayerKeys = [],
+  rightsDecisions = {},
+  declinedPlayerKeys = []
+) {
   startWorker();
 
   const requestId = "FAPD" + counter++;
@@ -1647,6 +1647,8 @@ export function processPendingUserFreeAgencyDecisions(
       payload: {
         userTeamName,
         selectedPlayerKeys: deepSanitize(selectedPlayerKeys),
+        rightsDecisions: deepSanitize(rightsDecisions),
+        declinedPlayerKeys: deepSanitize(declinedPlayerKeys),
       },
     });
   });
