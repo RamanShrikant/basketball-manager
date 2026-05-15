@@ -1266,6 +1266,8 @@ export default function Calendar() {
       ? storedSeasonYear
       : (today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1);
 
+  const CALENDAR_CURSOR_KEY = `bm_calendar_cursor_v1_${seasonYear}`;
+
   const seasonStart = useMemo(
     () => new Date(seasonYear, 9, 21),
     [seasonYear]
@@ -1898,23 +1900,102 @@ useEffect(() => {
   const [focusedDate, setFocusedDate] = useState(null);
   const monthRefs = useRef({});
 
-  useEffect(() => {
-    const firstGameDate = Object.keys(myGames).sort()[0];
-    setFocusedDate(firstGameDate || fmt(seasonStart));
-  }, [myGames, seasonStart]);
+  const readCalendarCursor = () => {
+    try {
+      const raw = localStorage.getItem(CALENDAR_CURSOR_KEY);
+      const saved = raw ? JSON.parse(raw) : null;
+      return saved && typeof saved === "object" ? saved : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const saveCalendarCursor = (dateStr, monthStr = null) => {
+    try {
+      const resolvedMonth =
+        monthStr || (dateStr ? monthKey(new Date(dateStr)) : monthKey(seasonStart));
+
+      localStorage.setItem(
+        CALENDAR_CURSOR_KEY,
+        JSON.stringify({
+          date: dateStr || null,
+          month: resolvedMonth,
+        })
+      );
+    } catch {}
+  };
+
+  const getLastPlayedDateFromSchedule = (schedule) => {
+    const dates = Object.keys(schedule || {}).sort();
+    let lastPlayedDate = null;
+
+    for (const date of dates) {
+      const games = schedule?.[date] || [];
+      if (games.some((g) => g?.played)) {
+        lastPlayedDate = date;
+      }
+    }
+
+    return lastPlayedDate;
+  };
 
   /* -------------------------------------------------------------------------- */
   /*                              Month & Visible Days                           */
   /* -------------------------------------------------------------------------- */
-  const [month, setMonth] = useState(() => monthKey(seasonStart));
+  const [month, setMonth] = useState(() => {
+    const saved = readCalendarCursor();
+    if (saved?.month) return saved.month;
+
+    return monthKey(seasonStart);
+  });
 
   const months = useMemo(
     () => Array.from(new Set(allDays.map(monthKey))),
     [allDays]
   );
 
+  useEffect(() => {
+    const dates = Object.keys(myGames).sort();
+    const saved = readCalendarCursor();
+
+    if (saved?.date || saved?.month) {
+      const savedMonth =
+        saved?.month ||
+        (saved?.date ? monthKey(new Date(saved.date)) : monthKey(seasonStart));
+
+      setFocusedDate(saved?.date || dates[0] || fmt(seasonStart));
+      setMonth(savedMonth);
+
+      requestAnimationFrame(() => {
+        const el = monthRefs.current[savedMonth];
+        if (el) {
+          el.scrollIntoView({
+            behavior: "auto",
+            block: "start",
+          });
+        }
+      });
+
+      return;
+    }
+
+    if (!dates.length) {
+      const fallbackDate = fmt(seasonStart);
+      setFocusedDate(fallbackDate);
+      setMonth(monthKey(seasonStart));
+      return;
+    }
+
+    const firstUnplayedDate =
+      dates.find((date) => myGames[date] && !myGames[date].played) || dates[0];
+
+    setFocusedDate(firstUnplayedDate);
+    setMonth(monthKey(new Date(firstUnplayedDate)));
+  }, [myGames, seasonStart, CALENDAR_CURSOR_KEY]);
+
 const scrollToMonth = (monthStr) => {
   setMonth(monthStr);
+  saveCalendarCursor(focusedDate, monthStr);
 
   requestAnimationFrame(() => {
     const el = monthRefs.current[monthStr];
@@ -2318,6 +2399,15 @@ const awayRoles = loadTeamRoleMap(g.away);
     }
 
     // final saves (even if stopped, we save progress)
+    const lastPlayedDate =
+      getLastPlayedDateFromSchedule(upd) || dateStr;
+
+    if (lastPlayedDate) {
+      saveCalendarCursor(lastPlayedDate, monthKey(new Date(lastPlayedDate)));
+      setFocusedDate(lastPlayedDate);
+      setMonth(monthKey(new Date(lastPlayedDate)));
+    }
+
     savePlayerStats(playerStats);
     cleanupGhostGames(upd, newResults);
     saveSchedule(upd);
@@ -2539,6 +2629,15 @@ const awayRoles = loadTeamRoleMap(g.away);
     );
   } finally {
     // persist what we have so far
+    const lastPlayedDate =
+      getLastPlayedDateFromSchedule(upd) || lastDateProcessed;
+
+    if (lastPlayedDate) {
+      saveCalendarCursor(lastPlayedDate, monthKey(new Date(lastPlayedDate)));
+      setFocusedDate(lastPlayedDate);
+      setMonth(monthKey(new Date(lastPlayedDate)));
+    }
+
     saveSchedule(upd);
     saveResults(results);
     savePlayerStats(playerStats);
@@ -2677,6 +2776,7 @@ if (
   // keep your player stats wipe
   localStorage.removeItem(PLAYER_STATS_KEY);
   localStorage.removeItem("bm_all_stars_v1");
+  localStorage.removeItem(CALENDAR_CURSOR_KEY);
 
   for (let i = localStorage.length - 1; i >= 0; i--) {
     const k = localStorage.key(i);
@@ -2699,6 +2799,8 @@ setMiniAwardTab("mvp");
 
   const firstGameDate = Object.keys(byDate).sort()[0];
   setFocusedDate(firstGameDate);
+  setMonth(monthKey(new Date(firstGameDate || seasonStart)));
+  saveCalendarCursor(firstGameDate, monthKey(new Date(firstGameDate || seasonStart)));
 };
 
 
@@ -3276,6 +3378,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                           onClick={() => {
                             setFocusedDate(dateStr);
                             setMonth(monthStr);
+                            saveCalendarCursor(dateStr, monthStr);
                             if (game) setActionModal({ dateStr, game });
                           }}
                         >

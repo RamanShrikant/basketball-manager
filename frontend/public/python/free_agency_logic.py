@@ -2469,6 +2469,35 @@ def validate_offer_spending_rules(
         spending_type = "cap_or_exception"
         exception_type = "room_exception"
         legal_reason = "Offer is legal using remaining room exception."
+    elif cap_room > 0:
+        cap_space_room = cap_room + int(replaced_cap_hold)
+        room_exception_room = remaining["roomException"] + int(replaced_cap_hold)
+
+        if cap_space_room >= room_exception_room:
+            available_room = cap_space_room
+            spending_type = "cap_space"
+            exception_type = None
+            path_label = "cap room"
+        else:
+            available_room = room_exception_room
+            spending_type = "cap_or_exception"
+            exception_type = "room_exception"
+            path_label = "room exception"
+
+        over_by = needed_room - available_room
+
+        return {
+            "ok": False,
+            "reason": f"{team_name} does not have enough {path_label} for this offer. Over by ${int(over_by):,}.",
+            "teamSnapshot": snapshot,
+            "exceptionRoom": available_room,
+            "spendingType": "room_blocked",
+            "exceptionType": exception_type,
+            "birdRights": rights,
+            "payrollZone": payroll_zone,
+            "projectedPayroll": projected_payroll,
+            "exceptionRemaining": remaining,
+        }
     else:
         if payroll_zone == "second_apron":
             return {
