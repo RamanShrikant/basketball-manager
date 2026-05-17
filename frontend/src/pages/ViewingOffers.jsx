@@ -1375,6 +1375,15 @@ export default function ViewingOffers() {
     ? freeAgencyState.pendingRfaMatchDecisions
     : [];
 
+  // Surgical recovery guard:
+  // A pending-signing state can exist without latestResults after a saved reload,
+  // compact backend payload, or partial update. Do not show the empty-results
+  // dead-end in that case. Let the pending-signings UI render so the user can
+  // sign/decline the waiting players and continue the market.
+  const hasPendingUserAction =
+    pendingUserDecisions.length > 0 || pendingRfaMatchDecisions.length > 0;
+  const shouldShowEmptyResults = !latestResults && !hasPendingUserAction;
+
   const teamLogoMap = useMemo(() => {
     const map = new Map();
 
@@ -2217,7 +2226,7 @@ return (
           </p>
         </div>
 
-        {!latestResults ? (
+        {shouldShowEmptyResults ? (
           <div className="bg-neutral-800 border border-neutral-700 rounded-2xl p-6 shadow-lg">
             <p className="text-lg text-gray-300">
               No daily results available yet.
