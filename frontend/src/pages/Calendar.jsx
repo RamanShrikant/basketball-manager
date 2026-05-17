@@ -3011,6 +3011,275 @@ setMiniAwardTab("mvp");
 };
 
 
+// --------------------------------------------------------------------------
+// DEV QUICK SIM TOOLS
+// --------------------------------------------------------------------------
+// Testing free agency/offseason bugs is painful if every run needs a real
+// 82-game sim + All-Star pause + awards clickthrough. These dev-only buttons
+// build a deterministic fake regular season from the current rosters, save the
+// same schedule/result/player-stat keys the Calendar and Playoffs pages already
+// read, then jump to the requested checkpoint.
+const DEV_QUICK_SIM_TOOLS = true;
+
+function devStableNumber(text) {
+  let out = 0;
+  const raw = String(text || "");
+  for (let i = 0; i < raw.length; i++) {
+    out = (out + raw.charCodeAt(i) * (i + 17)) % 1000003;
+  }
+  return out;
+}
+
+function devGetTeamStrength(teamName) {
+  const team = teams.find((t) => t?.name === teamName);
+  const players = Array.isArray(team?.players) ? team.players : [];
+  const topEight = [...players]
+    .map((p) => Number(p?.overall || p?.ovr || 65))
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => b - a)
+    .slice(0, 8);
+
+  if (!topEight.length) return 72;
+  return topEight.reduce((sum, value) => sum + value, 0) / topEight.length;
+}
+
+function devBuildSlimResult(game) {
+  const homeStrength = devGetTeamStrength(game.home);
+  const awayStrength = devGetTeamStrength(game.away);
+  const seed = devStableNumber(game.id || `${game.home}-${game.away}`);
+
+  let homeScore = 106 + Math.round((homeStrength - 75) * 0.72) + 3 + (seed % 13);
+  let awayScore = 104 + Math.round((awayStrength - 75) * 0.72) + (Math.floor(seed / 13) % 13);
+
+  if (homeScore === awayScore) {
+    if (homeStrength >= awayStrength) homeScore += 1;
+    else awayScore += 1;
+  }
+
+  const side = homeScore > awayScore ? "home" : "away";
+
+  return {
+    winner: {
+      score: `${homeScore}-${awayScore}`,
+      home: homeScore,
+      away: awayScore,
+      ot: 0,
+      side,
+    },
+    totals: {
+      home: homeScore,
+      away: awayScore,
+    },
+    box: {
+      home: [],
+      away: [],
+    },
+    hasBoxScore: false,
+  };
+}
+
+function devBuildPlayerStatsFromSchedule(schedule) {
+  const gamesPlayedByTeam = {};
+
+  for (const games of Object.values(schedule || {})) {
+    for (const game of games || []) {
+      if (!game?.played) continue;
+      gamesPlayedByTeam[game.home] = (gamesPlayedByTeam[game.home] || 0) + 1;
+      gamesPlayedByTeam[game.away] = (gamesPlayedByTeam[game.away] || 0) + 1;
+    }
+  }
+
+  const stats = {};
+  const minutesByRole = [35, 33, 31, 29, 27, 24, 18, 14, 10, 8, 5, 4, 3, 2, 1];
+
+  for (const team of teams || []) {
+    const teamName = team?.name;
+    if (!teamName) continue;
+
+    const gp = Math.max(1, Number(gamesPlayedByTeam[teamName] || 0));
+    const players = [...(team.players || [])].sort(
+      (a, b) => Number(b?.overall || 0) - Number(a?.overall || 0)
+    );
+
+    players.forEach((player, idx) => {
+      const name = player?.name || player?.player;
+      if (!name) return;
+
+      const overall = Number(player?.overall || player?.ovr || 70);
+      const off = Number(player?.offRating || player?.off_rating || overall);
+      const def = Number(player?.defRating || player?.def_rating || overall);
+      const pos = String(player?.pos || player?.position || "").toUpperCase();
+      const mpg = minutesByRole[idx] || 1;
+      const starterBump = idx < 2 ? 3.5 : idx < 5 ? 1.4 : idx === 5 ? 2.2 : 0;
+
+      const ppg = Math.max(
+        1.2,
+        2.5 + starterBump + (off - 60) * 0.35 + (overall - 70) * 0.12
+      );
+
+      const rpgBase = pos === "C" ? 8.8 : pos === "PF" ? 6.7 : pos === "SF" ? 4.8 : 3.0;
+      const apgBase = pos === "PG" ? 6.4 : pos === "SG" ? 3.4 : pos === "SF" ? 2.7 : 1.6;
+      const spg = Math.max(0.2, 0.5 + (def - 65) * 0.018);
+      const bpg = Math.max(0.1, (pos === "C" ? 0.9 : pos === "PF" ? 0.55 : 0.25) + (def - 65) * 0.012);
+
+      const pts = Math.round(ppg * gp);
+      const reb = Math.round((rpgBase + Math.max(0, overall - 75) * 0.05) * gp);
+      const ast = Math.round((apgBase + Math.max(0, off - 75) * 0.035) * gp);
+      const stl = Math.round(spg * gp);
+      const blk = Math.round(bpg * gp);
+
+      const fga = Math.max(1, Math.round((ppg * 0.82 + 2.2) * gp));
+      const fgm = Math.round(fga * Math.max(0.39, Math.min(0.57, 0.43 + (off - 70) * 0.003)));
+      const tpa = Math.max(0, Math.round((pos === "C" ? 1.4 : pos === "PF" ? 2.4 : 4.4) * gp));
+      const tpm = Math.round(tpa * Math.max(0.28, Math.min(0.43, 0.33 + (off - 72) * 0.0025)));
+      const fta = Math.max(0, Math.round(ppg * 0.28 * gp));
+      const ftm = Math.round(fta * 0.77);
+
+      stats[`${name}__${teamName}`] = {
+        player: name,
+        team: teamName,
+        gp,
+        min: Math.round(mpg * gp),
+        pts,
+        reb,
+        ast,
+        stl,
+        blk,
+        fgm,
+        fga,
+        tpm,
+        tpa,
+        ftm,
+        fta,
+        started: idx < 5 ? gp : 0,
+        sixth: idx === 5 ? gp : 0,
+      };
+    });
+  }
+
+  return stats;
+}
+
+function devClearSeasonCheckpointState() {
+  clearAllResultsV3();
+  clearBoxScoresFromDB().catch(() => {});
+
+  localStorage.removeItem(PLAYER_STATS_KEY);
+  localStorage.removeItem("bm_all_stars_v1");
+  localStorage.removeItem("bm_awards_latest");
+  localStorage.removeItem("bm_awards_v1");
+  localStorage.removeItem("bm_postseason_v2");
+  localStorage.removeItem("bm_champ_v1");
+  localStorage.removeItem("bm_finals_mvp_v1");
+  localStorage.removeItem("bm_finals_mvp_seen_v1");
+
+  localStorage.setItem(ALL_STAR_HANDLED_KEY, "true");
+  allStarHandledRef.current = true;
+}
+
+async function handleDevQuickSeasonJump(mode) {
+  if (simLock) return;
+
+  const label =
+    mode === "last_game"
+      ? "jump to the last user-team regular-season game"
+      : mode === "awards"
+      ? "jump to the awards page with a completed fake regular season"
+      : "jump straight to the playoffs with a completed fake regular season";
+
+  if (!window.confirm(`Dev quick sim will wipe current season results and ${label}. Continue?`)) {
+    return;
+  }
+
+  setSimLock(true);
+  setActionModal(null);
+  setBoxModal(null);
+  setAllStarPromptOpen(false);
+  setAllStarOpen(false);
+
+  try {
+    devClearSeasonCheckpointState();
+
+    const baseSchedule = Object.keys(scheduleByDate || {}).length
+      ? structuredClone(scheduleByDate)
+      : generateFullSeasonSchedule(teams, seasonStart, seasonEnd).byDate;
+
+    const dates = Object.keys(baseSchedule || {}).sort();
+    const myId = selectedTeam?.name ? slugifyId(selectedTeam.name) : "";
+    let holdGameId = null;
+    let targetDate = dates[dates.length - 1] || fmt(seasonEnd);
+
+    if (mode === "last_game") {
+      for (let i = dates.length - 1; i >= 0; i--) {
+        const date = dates[i];
+        const games = baseSchedule?.[date] || [];
+        const userGame = [...games]
+          .reverse()
+          .find((game) => game?.homeId === myId || game?.awayId === myId);
+
+        if (userGame) {
+          holdGameId = userGame.id;
+          targetDate = date;
+          break;
+        }
+      }
+    }
+
+    const nextSchedule = {};
+    const nextResults = {};
+    let gamesCompleted = 0;
+
+    for (const date of dates) {
+      nextSchedule[date] = (baseSchedule[date] || []).map((game) => {
+        if (!game?.id) return game;
+
+        const leaveUnplayed = mode === "last_game" && game.id === holdGameId;
+        if (leaveUnplayed) {
+          return { ...game, played: false };
+        }
+
+        const result = devBuildSlimResult(game);
+        nextResults[game.id] = result;
+        gamesCompleted += 1;
+        return { ...game, played: true };
+      });
+    }
+
+    const playerStats = devBuildPlayerStatsFromSchedule(nextSchedule);
+    savePlayerStats(playerStats);
+    saveSchedule(nextSchedule);
+    saveResults(nextResults);
+
+    setScheduleByDate(structuredClone(nextSchedule));
+    setResultsById(structuredClone(nextResults));
+    setFocusedDate(targetDate);
+    setMonth(monthKey(new Date(targetDate || seasonEnd)));
+    saveCalendarCursor(targetDate, monthKey(new Date(targetDate || seasonEnd)));
+
+    if (mode === "awards") {
+      await computeAndSaveCalendarAwards({
+        playerStats,
+        schedule: nextSchedule,
+        results: nextResults,
+        staticTeams: teams,
+        gamesSimmed: gamesCompleted,
+      });
+      navigate("/awards");
+      return;
+    }
+
+    if (mode === "playoffs") {
+      navigate("/playoffs");
+    }
+  } catch (err) {
+    console.error("[DevQuickSim] failed", err);
+    openSimError(err?.message || "Dev quick sim failed.", "Dev quick sim failed");
+  } finally {
+    setSimLock(false);
+  }
+}
+
+
 
 
 /* -------------------------------------------------------------------------- */
@@ -3420,6 +3689,38 @@ return (
 >
   Reset Season
 </button>
+
+
+{DEV_QUICK_SIM_TOOLS && (
+  <>
+    <button
+      className="px-3 py-2 bg-purple-800 hover:bg-purple-700 rounded text-xs font-bold disabled:opacity-50"
+      disabled={simLock}
+      onClick={() => handleDevQuickSeasonJump("last_game")}
+      title="Dev only: fake-sim to the final user-team regular-season game and leave that game unplayed."
+    >
+      Dev Last Game
+    </button>
+
+    <button
+      className="px-3 py-2 bg-purple-700 hover:bg-purple-600 rounded text-xs font-bold disabled:opacity-50"
+      disabled={simLock}
+      onClick={() => handleDevQuickSeasonJump("playoffs")}
+      title="Dev only: fake-complete the regular season and jump straight to playoffs."
+    >
+      Dev Playoffs
+    </button>
+
+    <button
+      className="px-3 py-2 bg-purple-600 hover:bg-purple-500 rounded text-xs font-bold disabled:opacity-50"
+      disabled={simLock}
+      onClick={() => handleDevQuickSeasonJump("awards")}
+      title="Dev only: fake-complete the regular season, compute awards, and jump to awards."
+    >
+      Dev Awards
+    </button>
+  </>
+)}
 
 
             
