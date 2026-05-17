@@ -1025,6 +1025,145 @@ function buildUserOfferPopup({ row, chipLabel, leagueData, selectedTeamName }) {
   };
 }
 
+function getFirstFiniteNumber(...values) {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+
+  return null;
+}
+
+function getPreviewSalaryCap(leagueData, snapshot) {
+  const direct = getFirstFiniteNumber(
+    snapshot?.salaryCap,
+    snapshot?.cap,
+    snapshot?.softCap,
+    snapshot?.capRules?.salaryCap,
+    snapshot?.settings?.salaryCap,
+    leagueData?.salaryCap,
+    leagueData?.cap,
+    leagueData?.softCap,
+    leagueData?.capRules?.salaryCap,
+    leagueData?.settings?.salaryCap,
+    leagueData?.financialSettings?.salaryCap,
+    leagueData?.freeAgencyState?.salaryCap,
+    leagueData?.freeAgencyState?.cap,
+    leagueData?.freeAgencyState?.capRules?.salaryCap,
+    leagueData?.freeAgencyState?.settings?.salaryCap
+  );
+
+  if (direct && direct > 0) return direct;
+
+  // Current cap fallback used by the FA screens.
+  return 154_647_000;
+}
+
+function getPlayerCurrentYearSalaryForPreview(player = {}) {
+  const contract = player?.contract || player?.currentContract || {};
+  const salaryByYear = Array.isArray(contract?.salaryByYear)
+    ? contract.salaryByYear
+    : Array.isArray(player?.salaryByYear)
+    ? player.salaryByYear
+    : [];
+
+  const salary = getFirstFiniteNumber(
+    salaryByYear[0],
+    contract?.currentYearSalary,
+    contract?.salary,
+    contract?.amount,
+    player?.currentYearSalary,
+    player?.salary,
+    player?.capHit
+  );
+
+  return Math.max(0, Number(salary || 0));
+}
+
+function getPreviewTeamPayroll(team = {}) {
+  const players = Array.isArray(team?.players) ? team.players : [];
+
+  return players.reduce((sum, player) => {
+    return sum + getPlayerCurrentYearSalaryForPreview(player);
+  }, 0);
+}
+
+function getPreviewRights(player = {}) {
+  return player?.rights && typeof player.rights === "object"
+    ? player.rights
+    : {
+        heldByTeam: null,
+        birdLevel: "none",
+        seasonsTowardBird: 0,
+        restrictedFreeAgent: false,
+        rookieScale: false,
+      };
+}
+
+function getPreviewPreviousSalary(player = {}) {
+  const previousSalaryByYear = Array.isArray(player?.previousContract?.salaryByYear)
+    ? player.previousContract.salaryByYear
+    : [];
+
+  const currentSalaryByYear = Array.isArray(player?.contract?.salaryByYear)
+    ? player.contract.salaryByYear
+    : [];
+
+  if (previousSalaryByYear.length) {
+    return Number(previousSalaryByYear[previousSalaryByYear.length - 1] || 0);
+  }
+
+  if (currentSalaryByYear.length) {
+    return Number(currentSalaryByYear[currentSalaryByYear.length - 1] || 0);
+  }
+
+  return Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+}
+
+function getPreviewCapHoldForPlayer(player = {}, teamName = "") {
+  const rights = getPreviewRights(player);
+  const birdLevel = String(rights?.birdLevel || "").toLowerCase();
+
+  if (player?.rightsRenounced || player?.rights?.renounced) return 0;
+  if (!teamName || rights?.heldByTeam !== teamName) return 0;
+  if (!birdLevel || birdLevel === "none" || birdLevel === "no rights" || birdLevel === "no_rights") return 0;
+
+  if (
+    rights?.restrictedFreeAgent &&
+    player?.qualifyingOffer?.amount &&
+    player?.qualifyingOffer?.status !== "withdrawn"
+  ) {
+    return Math.max(1_200_000, Number(player.qualifyingOffer.amount || 0));
+  }
+
+  const previousSalary = getPreviewPreviousSalary(player);
+  const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+
+  if (birdLevel === "bird") {
+    return Math.max(previousSalary, marketYearOne, 1_200_000);
+  }
+
+  if (birdLevel === "early_bird") {
+    return Math.max(previousSalary * 1.3, 1_200_000);
+  }
+
+  if (birdLevel === "non_bird") {
+    return Math.max(previousSalary * 1.2, 1_200_000);
+  }
+
+  return 0;
+}
+
+function getPreviewCapHoldTotal(leagueData, teamName) {
+  const freeAgents = Array.isArray(leagueData?.freeAgents)
+    ? leagueData.freeAgents
+    : [];
+
+  return freeAgents.reduce((sum, player) => {
+    return sum + getPreviewCapHoldForPlayer(player, teamName);
+  }, 0);
+}
+
 export default function ViewingOffers() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam, setLeagueData, setSelectedTeam } = useGame();
@@ -1080,12 +1219,31 @@ export default function ViewingOffers() {
     if (!selectedTeam?.name) return pendingUserTeamSnapshot;
 
     const liveTeam = getTeamByName(leagueData, selectedTeam.name) || selectedTeam;
+
     const liveRosterCount = Array.isArray(liveTeam?.players)
       ? liveTeam.players.length
       : pendingUserTeamSnapshot?.rosterCount;
 
+    const calculatedPayroll = getPreviewTeamPayroll(liveTeam);
+    const payroll = calculatedPayroll > 0
+      ? calculatedPayroll
+      : Number(pendingUserTeamSnapshot?.payroll || 0);
+
+    const salaryCap = getPreviewSalaryCap(leagueData, pendingUserTeamSnapshot);
+    const capHoldTotal = getPreviewCapHoldTotal(leagueData, selectedTeam.name);
+
+    const capRoom = salaryCap - payroll;
+    const practicalPayroll = payroll + capHoldTotal;
+    const practicalCapRoom = salaryCap - practicalPayroll;
+
     return {
       ...pendingUserTeamSnapshot,
+      salaryCap,
+      payroll,
+      capRoom,
+      capHoldTotal,
+      practicalPayroll,
+      practicalCapRoom,
       rosterCount: Number(liveRosterCount || 0),
     };
   }, [pendingUserTeamSnapshot, leagueData, selectedTeam]);
@@ -1627,22 +1785,28 @@ export default function ViewingOffers() {
         : hardCapRoomBefore + selectedCapHoldClearance - selectedCurrentYearTotal;
     const rosterAfter = rosterBefore + selectedCount;
 
-    const warnings = [];  
+    const warnings = [];
+    const blockingWarnings = [];
     const apronNotes = [];
 
+    const selectedNeedsNormalCapRoom = selectedCapRoomImpactTotal > 0;
 
-    if (selectedCount > 0 && practicalCapRoomAfter < 0) {
+    if (selectedCount > 0 && selectedNeedsNormalCapRoom && practicalCapRoomAfter < 0) {
       warnings.push(
-        `Selected signings are short by ${formatDollars(Math.abs(practicalCapRoomAfter))}. Renounce enough rights below to clear the cap holds before confirming.`
+        `Selected signings appear short by ${formatDollars(Math.abs(practicalCapRoomAfter))}. Renounce enough rights below to clear the cap holds before confirming.`
       );
     }
 
     if (hardCapRoomAfter !== null && hardCapRoomAfter < 0) {
-      warnings.push("Selected signings put you over the hard cap.");
+      const msg = "Selected signings put you over the hard cap.";
+      warnings.push(msg);
+      blockingWarnings.push(msg);
     }
 
     if (rosterAfter > rosterLimit) {
-      warnings.push(`Selected signings would take you over the ${rosterLimit}-man roster limit.`);
+      const msg = `Selected signings would take you over the ${rosterLimit}-man roster limit.`;
+      warnings.push(msg);
+      blockingWarnings.push(msg);
     }
 if (secondApron > 0 && payrollAfter >= secondApron) {
   apronNotes.push("Selected signings would leave you at or above the second apron.");
@@ -1661,7 +1825,7 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       capRoomAfter,
       capHoldTotal,
       selectedCapHoldClearance,
-      capRoomShortfall: Math.max(0, -practicalCapRoomAfter),
+      capRoomShortfall: selectedNeedsNormalCapRoom ? Math.max(0, -practicalCapRoomAfter) : 0,
       practicalPayrollAfter,
       practicalCapRoomAfter,
       firstApron,
@@ -1672,7 +1836,8 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       rosterAfter,
       rosterLimit,
       warnings,
-      hasBlockingIssue: warnings.length > 0,
+      blockingWarnings,
+      hasBlockingIssue: blockingWarnings.length > 0,
     };
   }, [livePendingUserTeamSnapshot, selectedPendingRows, selectedCapHoldClearance]);
 
@@ -1738,9 +1903,15 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
     }
 
     if (selectionPreview?.hasBlockingIssue) {
+      const blockingReason = (
+        selectionPreview?.blockingWarnings?.length
+          ? selectionPreview.blockingWarnings
+          : selectionPreview.warnings || []
+      ).join(" ");
+
       return {
         ok: false,
-        reason: selectionPreview.warnings.join(" "),
+        reason: blockingReason || "Selected signings have a blocking issue.",
       };
     }
 
