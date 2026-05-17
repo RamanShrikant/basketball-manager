@@ -1059,7 +1059,42 @@ function getPreviewSalaryCap(leagueData, snapshot) {
   return 154_647_000;
 }
 
-function getPlayerCurrentYearSalaryForPreview(player = {}) {
+function getPreviewCurrentSeasonYear(leagueData) {
+  return Number(
+    leagueData?.seasonYear ||
+    leagueData?.currentSeasonYear ||
+    2026
+  );
+}
+
+function getPreviewOperatingSeasonYear(leagueData) {
+  const state = leagueData?.freeAgencyState || {};
+  const freeAgencyWindowActive = Boolean(
+    state?.isActive ||
+    Number(state?.currentDay || 0) > 0 ||
+    Number(state?.maxDays || 0) > 0 ||
+    state?.latestResults
+  );
+
+  return getPreviewCurrentSeasonYear(leagueData) + (freeAgencyWindowActive ? 1 : 0);
+}
+
+function getPreviewContractSalaryForYear(contract = {}, seasonYear = 0) {
+  const salaryByYear = Array.isArray(contract?.salaryByYear)
+    ? contract.salaryByYear
+    : [];
+
+  const startYear = Number(contract?.startYear || 0);
+  const idx = Number(seasonYear || 0) - startYear;
+
+  if (startYear > 0 && idx >= 0 && idx < salaryByYear.length) {
+    return Math.max(0, Number(salaryByYear[idx] || 0));
+  }
+
+  return 0;
+}
+
+function getPlayerCurrentYearSalaryForPreview(player = {}, seasonYear = 0) {
   const contract = player?.contract || player?.currentContract || {};
   const salaryByYear = Array.isArray(contract?.salaryByYear)
     ? contract.salaryByYear
@@ -1067,25 +1102,105 @@ function getPlayerCurrentYearSalaryForPreview(player = {}) {
     ? player.salaryByYear
     : [];
 
+  const yearSalary = getPreviewContractSalaryForYear(contract, seasonYear);
+  if (yearSalary > 0) return yearSalary;
+
+  // If the contract has a real startYear but no salary in the operating year,
+  // it should not count toward this offseason payroll.
+  if (Number(contract?.startYear || 0) > 0) return 0;
+
   const salary = getFirstFiniteNumber(
-    salaryByYear[0],
     contract?.currentYearSalary,
+    player?.currentYearSalary,
+    player?.capHit,
     contract?.salary,
     contract?.amount,
-    player?.currentYearSalary,
     player?.salary,
-    player?.capHit
+    salaryByYear[0]
   );
 
   return Math.max(0, Number(salary || 0));
 }
 
-function getPreviewTeamPayroll(team = {}) {
-  const players = Array.isArray(team?.players) ? team.players : [];
+function getPreviewTeamDeadCapForYear(leagueData, teamName = "", seasonYear = 0) {
+  const deadCapMap = leagueData?.deadCapByTeam || {};
+  const rows = Array.isArray(deadCapMap?.[teamName]) ? deadCapMap[teamName] : [];
 
-  return players.reduce((sum, player) => {
-    return sum + getPlayerCurrentYearSalaryForPreview(player);
+  return rows.reduce((sum, row) => {
+    if (Number(row?.seasonYear || -1) !== Number(seasonYear)) return sum;
+    return sum + Number(row?.amount || 0);
   }, 0);
+}
+
+function getPreviewTeamPayroll(leagueData, team = {}, teamName = "") {
+  const players = Array.isArray(team?.players) ? team.players : [];
+  const seasonYear = getPreviewOperatingSeasonYear(leagueData);
+
+  const playerPayroll = players.reduce((sum, player) => {
+    return sum + getPlayerCurrentYearSalaryForPreview(player, seasonYear);
+  }, 0);
+
+  return playerPayroll + getPreviewTeamDeadCapForYear(leagueData, teamName, seasonYear);
+}
+
+function isPreviewTeamHardCapped(leagueData, teamName = "", team = {}) {
+  if (!teamName) return false;
+
+  if (team?.isHardCapped || team?.hardCapped || team?.hardCapTriggered || team?.triggeredHardCap) {
+    return true;
+  }
+
+  if (leagueData?.hardCappedByTeam?.[teamName]) return true;
+  if (leagueData?.hardCapTriggeredByTeam?.[teamName]) return true;
+
+  if (Array.isArray(leagueData?.hardCappedTeams) && leagueData.hardCappedTeams.includes(teamName)) {
+    return true;
+  }
+
+  return false;
+}
+
+function getPreviewHardCapForTeam(leagueData, teamName = "", team = {}) {
+  if (!isPreviewTeamHardCapped(leagueData, teamName, team)) return null;
+
+  const teamHardCap = getFirstFiniteNumber(
+    team?.hardCap,
+    team?.hardCapValue,
+    team?.hardCapAmount,
+    team?.hardCapLine,
+    team?.hardCapLimit,
+    team?.secondApron,
+    team?.secondApronValue,
+    team?.secondApronAmount,
+    team?.secondApronLine,
+    team?.apron2
+  );
+  if (teamHardCap && teamHardCap > 0) return teamHardCap;
+
+  for (const mapKey of [
+    "hardCapByTeam",
+    "teamHardCaps",
+    "hardCapMap",
+    "secondApronByTeam",
+    "teamSecondAprons",
+  ]) {
+    const value = getFirstFiniteNumber(leagueData?.[mapKey]?.[teamName]);
+    if (value && value > 0) return value;
+  }
+
+  return getFirstFiniteNumber(
+    leagueData?.hardCap,
+    leagueData?.hardCapValue,
+    leagueData?.hardCapAmount,
+    leagueData?.hardCapLine,
+    leagueData?.hardCapLimit,
+    leagueData?.secondApron,
+    leagueData?.secondApronValue,
+    leagueData?.secondApronAmount,
+    leagueData?.secondApronLine,
+    leagueData?.apron2,
+    207_824_000
+  );
 }
 
 function getPreviewRights(player = {}) {
@@ -1224,8 +1339,8 @@ export default function ViewingOffers() {
       ? liveTeam.players.length
       : pendingUserTeamSnapshot?.rosterCount;
 
-    const calculatedPayroll = getPreviewTeamPayroll(liveTeam);
-    const payroll = calculatedPayroll > 0
+    const calculatedPayroll = getPreviewTeamPayroll(leagueData, liveTeam, selectedTeam.name);
+    const payroll = calculatedPayroll >= 0
       ? calculatedPayroll
       : Number(pendingUserTeamSnapshot?.payroll || 0);
 
@@ -1235,15 +1350,23 @@ export default function ViewingOffers() {
     const capRoom = salaryCap - payroll;
     const practicalPayroll = payroll + capHoldTotal;
     const practicalCapRoom = salaryCap - practicalPayroll;
+    const hardCap = getPreviewHardCapForTeam(leagueData, selectedTeam.name, liveTeam);
+    const hardCapRoom = hardCap === null ? null : hardCap - practicalPayroll;
 
     return {
       ...pendingUserTeamSnapshot,
       salaryCap,
       payroll,
+      rawPayrollWithoutHolds: payroll,
       capRoom,
+      rawCapRoomWithoutHolds: capRoom,
+      capHolds: capHoldTotal,
       capHoldTotal,
       practicalPayroll,
       practicalCapRoom,
+      hardCap,
+      hardCapRoom,
+      isHardCapped: hardCap !== null,
       rosterCount: Number(liveRosterCount || 0),
     };
   }, [pendingUserTeamSnapshot, leagueData, selectedTeam]);
