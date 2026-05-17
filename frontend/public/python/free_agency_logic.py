@@ -1,7 +1,6 @@
 import copy
 import json
 import random
-import re
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -537,110 +536,9 @@ def get_free_agency_min_roster_target(league_data: Dict[str, Any]) -> int:
 
 def iter_teams(league_data: Dict[str, Any]):
     conferences = league_data.get("conferences", {})
-    yielded_from_conferences = False
-
-    if isinstance(conferences, dict) and conferences:
-        preferred_order = ["East", "West", "east", "west", "Eastern", "Western"]
-        ordered_names = []
-
-        for name in preferred_order:
-            if name in conferences and name not in ordered_names:
-                ordered_names.append(name)
-
-        for name in conferences.keys():
-            if name not in ordered_names:
-                ordered_names.append(name)
-
-        for conf_name in ordered_names:
-            teams = conferences.get(conf_name, [])
-            if not isinstance(teams, list):
-                continue
-
-            for idx, team in enumerate(teams):
-                if isinstance(team, dict):
-                    yielded_from_conferences = True
-                    yield conf_name, idx, team
-
-    if yielded_from_conferences:
-        return
-
-    flat_teams = league_data.get("teams", [])
-    if isinstance(flat_teams, list):
-        for idx, team in enumerate(flat_teams):
-            if isinstance(team, dict):
-                yield "teams", idx, team
-
-
-def sync_flat_teams_from_conferences(league_data: Dict[str, Any]) -> None:
-    conferences = league_data.get("conferences", {})
-    if not isinstance(conferences, dict) or not conferences:
-        return
-
-    flat = []
-    preferred_order = ["East", "West", "east", "west", "Eastern", "Western"]
-    ordered_names = []
-
-    for name in preferred_order:
-        if name in conferences and name not in ordered_names:
-            ordered_names.append(name)
-
-    for name in conferences.keys():
-        if name not in ordered_names:
-            ordered_names.append(name)
-
-    for conf_name in ordered_names:
-        teams = conferences.get(conf_name, [])
-        if not isinstance(teams, list):
-            continue
-        for team in teams:
-            if isinstance(team, dict):
-                flat.append(team)
-
-    if flat:
-        league_data["teams"] = flat
-
-
-def get_explicit_free_agency_year(player: Dict[str, Any], contract: Optional[Dict[str, Any]] = None) -> Optional[int]:
-    sources = []
-    if isinstance(contract, dict):
-        sources.append(contract)
-    if isinstance(player.get("contract"), dict):
-        sources.append(player.get("contract"))
-    if isinstance(player, dict):
-        sources.append(player)
-
-    keys = [
-        "freeAgencyYear",
-        "faYear",
-        "expiryYear",
-        "expirationYear",
-        "contractExpiryYear",
-        "expYear",
-        "expiresYear",
-        "exp",
-        "expires",
-        "expiry",
-        "expiration",
-    ]
-
-    for source in sources:
-        for key in keys:
-            raw = source.get(key)
-            if raw in [None, ""]:
-                continue
-
-            match = re.search(r"(20\d{2})", str(raw))
-            if match:
-                return int(match.group(1))
-
-            try:
-                year = int(float(raw))
-                if 2000 <= year <= 2100:
-                    return year
-            except (TypeError, ValueError):
-                continue
-
-    return None
+    for conf_name in ["East", "West"]:
+        for idx, team in enumerate(conferences.get(conf_name, [])):
+            yield conf_name, idx, team
 
 
 def find_team_entry(
@@ -1153,6 +1051,89 @@ def get_team_cap_hold_total(
     return int(total)
 
 
+def auto_renounce_cpu_cap_holds_for_room(
+    league_data: Dict[str, Any],
+    team_name: str,
+    clearance_needed: int,
+    protected_player_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    # CPU-only helper. It clears lower-priority holds when a CPU team has enough
+    # raw cap room for a real target but temporary holds are blocking the signing.
+    needed = int(num(clearance_needed, 0))
+    if needed <= 0:
+        return {"ok": True, "renounced": [], "capHoldCleared": 0}
+
+    rows = [
+        row for row in get_team_cap_hold_rows(league_data, team_name)
+        if not protected_player_key or row.get("playerKey") != protected_player_key
+    ]
+
+    rows.sort(
+        key = lambda row: (
+            int(num(row.get("overall"), 0)),
+            -int(num(row.get("age"), 27)),
+            int(num(row.get("capHoldAmount"), 0)),
+            str(row.get("playerName", "")),
+        )
+    )
+
+    cleared = 0
+    renounced = []
+
+    for row in rows:
+        if cleared >= needed:
+            break
+
+        player_idx = find_free_agent_index(
+            league_data.get("freeAgents", []),
+            row.get("playerId"),
+            row.get("playerName"),
+        )
+        if player_idx == -1:
+            continue
+
+        player = league_data["freeAgents"][player_idx]
+        rights = get_player_rights(player)
+        if rights.get("heldByTeam") != team_name:
+            continue
+
+        hold_amount = get_player_cap_hold_amount(
+            league_data = league_data,
+            player = player,
+            team_name = team_name,
+        )
+        if hold_amount <= 0:
+            continue
+
+        set_player_rights(
+            player = player,
+            held_by_team = None,
+            seasons_toward_bird = 0,
+            rookie_scale = rights.get("rookieScale", False),
+            restricted_free_agent = False,
+        )
+        player["rightsRenounced"] = True
+        player.pop("qualifyingOffer", None)
+        player.pop("qualifyingOfferEligible", None)
+
+        cleared += int(hold_amount)
+        renounced.append({
+            "playerKey": get_cap_hold_player_key(player),
+            "playerId": player.get("id"),
+            "playerName": player.get("name"),
+            "teamName": team_name,
+            "capHoldCleared": int(hold_amount),
+            "reason": "cpu_cleared_cap_hold_for_signing",
+        })
+
+    return {
+        "ok": cleared >= needed,
+        "renounced": renounced,
+        "capHoldCleared": cleared,
+        "clearanceNeeded": needed,
+    }
+
+
 def _optional_int(value: Any) -> Optional[int]:
     try:
         if value in [None, "", False]:
@@ -1307,9 +1288,6 @@ def get_team_cap_snapshot(
 
         "rawPayrollWithoutHolds": raw_payroll_without_holds,
         "rawCapRoomWithoutHolds": salary_cap - raw_payroll_without_holds,
-        "basicPayroll": raw_payroll_without_holds,
-        "basicCapRoom": salary_cap - raw_payroll_without_holds,
-        "capSpace": salary_cap - raw_payroll_without_holds,
 
         "capHolds": cap_hold_total,
         "capHoldTotal": cap_hold_total,
@@ -2239,6 +2217,7 @@ def validate_offer_spending_rules(
     contract: Dict[str, Any],
     outstanding_current_salary: int = 0,
     snapshot: Optional[Dict[str, Any]] = None,
+    allow_pending_cap_hold_clearance: bool = True,
 ) -> Dict[str, Any]:
     snapshot = snapshot or get_team_cap_snapshot(league_data, team_name)
     if not snapshot.get("ok"):
@@ -2292,7 +2271,57 @@ def validate_offer_spending_rules(
     own_rights = is_rights_team(player, team_name)
     payroll_zone = get_payroll_zone_for_amount(league_data, int(num(snapshot.get("payroll"), 0)))
     cap_room = max(0, int(num(snapshot.get("capRoom"), 0)))
+    practical_cap_room = int(num(snapshot.get("capRoom"), 0))
+    raw_cap_room_without_holds = int(num(snapshot.get("rawCapRoomWithoutHolds"), 0))
+    raw_payroll_without_holds = int(num(snapshot.get("rawPayrollWithoutHolds"), 0))
+    cap_hold_total = int(num(snapshot.get("capHoldTotal") or snapshot.get("capHolds"), 0))
     remaining = get_team_remaining_exceptions(league_data, team_name)
+    needed_room = outstanding_current_salary + offered_current_salary
+
+    # Live free-agency offer rule:
+    # If a team has enough raw cap room after clearing cap holds, the offer is
+    # legal to submit. The final signing still needs those holds cleared before
+    # the player is added to the roster.
+    if (
+        allow_pending_cap_hold_clearance
+        and not own_rights
+        and cap_hold_total > 0
+        and raw_cap_room_without_holds >= needed_room
+        and practical_cap_room < needed_room
+    ):
+        raw_projected_payroll = raw_payroll_without_holds + needed_room
+        if is_hard_capped and hard_cap is not None and raw_projected_payroll > int(num(hard_cap, 0)):
+            over_by = raw_projected_payroll - int(num(hard_cap, 0))
+            return {
+                "ok": False,
+                "reason": f"{team_name} would exceed its hard cap by ${int(over_by):,} even after clearing cap holds.",
+                "teamSnapshot": snapshot,
+                "exceptionRoom": raw_cap_room_without_holds,
+                "spendingType": "hard_cap_blocked",
+                "exceptionType": None,
+                "birdRights": rights,
+                "payrollZone": payroll_zone,
+                "exceptionRemaining": remaining,
+            }
+
+        clearance_needed = max(0, needed_room - practical_cap_room)
+        return {
+            "ok": True,
+            "reason": "Offer can be submitted using raw cap room after clearing cap holds.",
+            "teamSnapshot": snapshot,
+            "exceptionRoom": raw_cap_room_without_holds,
+            "spendingType": "cap_space",
+            "exceptionType": None,
+            "birdRights": rights,
+            "payrollZone": "below_cap",
+            "projectedPayroll": raw_projected_payroll,
+            "exceptionRemaining": remaining,
+            "pendingCapHoldClearance": True,
+            "capHoldClearanceNeeded": clearance_needed,
+            "rawCapRoomWithoutHolds": raw_cap_room_without_holds,
+            "rawPayrollWithoutHolds": raw_payroll_without_holds,
+            "capHoldTotal": cap_hold_total,
+        }
 
     if own_rights and rights.get("birdLevel") in ["bird", "early_bird", "non_bird"]:
         bird_ceiling = get_bird_rights_salary_ceiling(
@@ -2835,11 +2864,6 @@ def build_contract_status_row(
     re_sign_interest = estimate_team_re_sign_interest(team, player, league_data = league_data)
 
     upcoming_year = season_year + 1
-    explicit_free_agency_year = get_explicit_free_agency_year(player, contract)
-    expired_by_exp_label = bool(
-        explicit_free_agency_year is not None
-        and explicit_free_agency_year < upcoming_year
-    )
 
     salary_this_year = get_contract_salary_for_year(contract, upcoming_year)
     salary_next_year = get_contract_salary_for_year(contract, upcoming_year + 1) if contract else 0
@@ -2866,7 +2890,7 @@ def build_contract_status_row(
     status = "signed"
     if not contract:
         status = "no_contract"
-    elif expired_by_exp_label or salary_this_year <= 0:
+    elif salary_this_year <= 0:
         status = "expired"
     elif active_option:
         status = f"{active_option['type']}_option"
@@ -2884,8 +2908,6 @@ def build_contract_status_row(
         "salaryThisYear": int(salary_this_year),
         "salaryNextYear": int(salary_next_year),
         "contractLastYear": contract_last_year,
-        "explicitFreeAgencyYear": explicit_free_agency_year,
-        "expiredByExpLabel": expired_by_exp_label,
         "marketValue": market_value,
         "teamDirection": team_direction["direction"],
         "reSignInterestScore": re_sign_interest["reSignInterestScore"],
@@ -3065,11 +3087,6 @@ def apply_offseason_contract_decisions(
         for player in original_players:
             contract = normalize_contract(player.get("contract"))
             upcoming_year = season_year + 1
-            explicit_free_agency_year = get_explicit_free_agency_year(player, contract)
-            expired_by_exp_label = bool(
-                explicit_free_agency_year is not None
-                and explicit_free_agency_year < upcoming_year
-            )
             salary_this_year = get_contract_salary_for_year(contract, upcoming_year)
             active_option = get_active_option_for_player_for_year(
                 player = player,
@@ -3112,7 +3129,7 @@ def apply_offseason_contract_decisions(
                 teams_affected.add(team_name)
                 continue
 
-            if contract is None or ((salary_this_year <= 0 or expired_by_exp_label) and not active_option):
+            if contract is None or (salary_this_year <= 0 and not active_option):
                 fa_player = add_player_to_free_agency(
                     updated = updated,
                     player = player,
@@ -3250,7 +3267,6 @@ def apply_offseason_contract_decisions(
         team["players"] = kept_players
 
     normalize_all_player_rights(updated)
-    sync_flat_teams_from_conferences(updated)
 
     for player in updated.setdefault("freeAgents", []):
         player["marketValue"] = estimate_market_value(player)
@@ -5316,6 +5332,314 @@ def process_pending_rfa_match_decision(
     }
 
 
+
+def get_rights_decision_keys_for_player(player: Dict[str, Any]) -> set:
+    keys = {get_cap_hold_player_key(player)}
+
+    player_id = player.get("id")
+    player_name = player.get("name")
+
+    if player_id not in [None, ""]:
+        keys.add(str(player_id))
+    if player_name not in [None, ""]:
+        keys.add(str(player_name))
+
+    return {str(key) for key in keys if key not in [None, ""]}
+
+
+def filter_rights_decisions_excluding_player(
+    rights_decisions: Optional[Dict[str, Any]],
+    protected_player: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if not isinstance(rights_decisions, dict):
+        return {}
+
+    protected_keys = get_rights_decision_keys_for_player(protected_player or {}) if protected_player else set()
+
+    out = {}
+    for key, value in rights_decisions.items():
+        key_text = str(key)
+        if key_text in protected_keys:
+            continue
+        out[key_text] = value
+
+    return out
+
+
+def apply_user_rights_clearance_plan(
+    league_data: Dict[str, Any],
+    team_name: Optional[str],
+    rights_decisions: Optional[Dict[str, Any]],
+    protected_player: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if not team_name:
+        return {
+            "ok": False,
+            "reason": "No user team was available for cap-hold clearance.",
+            "leagueData": league_data,
+            "decisionLog": [],
+            "capHoldCleared": 0,
+        }
+
+    safe_decisions = filter_rights_decisions_excluding_player(
+        rights_decisions = rights_decisions,
+        protected_player = protected_player,
+    )
+
+    if not safe_decisions:
+        return {
+            "ok": True,
+            "leagueData": league_data,
+            "decisionLog": [],
+            "capHoldCleared": 0,
+            "skipped": True,
+        }
+
+    result = apply_rights_management(
+        league_data = league_data,
+        team_name = team_name,
+        rights_decisions = safe_decisions,
+    )
+
+    decision_log = result.get("decisionLog", []) if isinstance(result, dict) else []
+    cap_hold_cleared = int(sum(
+        int(num(row.get("capHoldCleared"), 0))
+        for row in decision_log
+        if row.get("decision") == "renounce"
+    ))
+
+    return {
+        "ok": bool(result.get("ok")) if isinstance(result, dict) else False,
+        "reason": result.get("reason") if isinstance(result, dict) else "Unable to apply rights clearance.",
+        "leagueData": result.get("leagueData", league_data) if isinstance(result, dict) else league_data,
+        "decisionLog": decision_log,
+        "capHoldCleared": cap_hold_cleared,
+        "teamSnapshot": result.get("teamSnapshot") if isinstance(result, dict) else None,
+    }
+
+
+def mark_pending_user_decision_delayed(
+    league_data: Dict[str, Any],
+    row: Dict[str, Any],
+    user_team_name: Optional[str],
+    current_day: int,
+) -> Dict[str, Any]:
+    state = ensure_free_agency_state(league_data)
+    player_key = row.get("playerKey") or get_player_key(
+        row.get("playerId"),
+        row.get("playerName"),
+    )
+
+    touched = []
+    for offer in state.get("offersByPlayer", {}).get(player_key, []):
+        if user_team_name and offer.get("teamName") != user_team_name:
+            continue
+        if offer.get("source") != "user":
+            continue
+        if offer.get("status", "active") != "active":
+            continue
+
+        old_count = int(num(offer.get("userDecisionDelayCount"), 0))
+        offer["userDecisionDelayCount"] = old_count + 1
+        offer["lastUserDecisionDelayDay"] = current_day
+        offer["userDelayedDecision"] = True
+        offer["playerViewScorePenalty"] = min(0.35, 0.16 * offer["userDecisionDelayCount"])
+        touched.append(copy.deepcopy(offer))
+
+    if touched:
+        state.setdefault("dailyLog", []).append({
+            "day": current_day,
+            "type": "user_delayed_pending_signing",
+            "playerKey": player_key,
+            "playerName": row.get("playerName"),
+            "teamName": user_team_name,
+            "delayCount": max(int(num(offer.get("userDecisionDelayCount"), 0)) for offer in touched),
+        })
+
+    return {
+        "playerKey": player_key,
+        "playerName": row.get("playerName"),
+        "teamName": user_team_name,
+        "delayedOffers": touched,
+    }
+
+
+def prepare_user_offer_for_conditional_finalization(
+    league_data: Dict[str, Any],
+    user_team_name: Optional[str],
+    player: Dict[str, Any],
+    chosen_offer: Dict[str, Any],
+    rights_decisions: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if not user_team_name:
+        return {
+            "ok": False,
+            "reason": "No user team was available for this pending signing.",
+            "leagueData": league_data,
+            "chosenOffer": chosen_offer,
+            "player": player,
+        }
+
+    working = league_data
+    player_key = get_player_key_from_player(player)
+    normalized_offer = copy.deepcopy(chosen_offer)
+    normalized_offer["teamName"] = user_team_name
+    normalized_offer["contract"] = normalize_contract(normalized_offer.get("contract"))
+
+    # Important RFA order of operations:
+    # First check whether the original team matches the offer sheet. If the
+    # original team matches, the user's cap-hold clearance plan must NOT fire,
+    # because the user never completes the signing.
+    matched_offer, would_be_matched = maybe_apply_rfa_match(
+        league_data = working,
+        player = player,
+        chosen_offer = copy.deepcopy(normalized_offer),
+    )
+
+    if would_be_matched and matched_offer.get("teamName") != user_team_name:
+        matched_offer["forceRfaMatch"] = True
+        matched_offer["source"] = "rfa_match"
+        matched_offer["originalOfferTeamName"] = normalized_offer.get("teamName")
+        matched_offer["matchedOriginalTeamName"] = matched_offer.get("teamName")
+        matched_offer["contract"] = normalize_contract(matched_offer.get("contract"))
+        return {
+            "ok": True,
+            "leagueData": working,
+            "chosenOffer": matched_offer,
+            "player": player,
+            "rfaMatchedBeforeUserClearance": True,
+            "rightsClearanceApplied": False,
+            "rightsDecisionLog": [],
+            "capHoldCleared": 0,
+        }
+
+    snapshot = get_team_cap_snapshot(working, user_team_name)
+    if not snapshot.get("ok"):
+        return {
+            "ok": False,
+            "reason": snapshot.get("reason", "Unable to read user team cap snapshot."),
+            "leagueData": working,
+            "chosenOffer": normalized_offer,
+            "player": player,
+        }
+
+    spending_check = validate_offer_spending_rules(
+        league_data = working,
+        team_name = user_team_name,
+        player = player,
+        contract = normalized_offer.get("contract"),
+        outstanding_current_salary = 0,
+        snapshot = snapshot,
+        allow_pending_cap_hold_clearance = True,
+    )
+
+    if not spending_check.get("ok"):
+        return {
+            "ok": False,
+            "reason": spending_check.get("reason", "This offer is no longer legal."),
+            "leagueData": working,
+            "chosenOffer": normalized_offer,
+            "player": player,
+            "spendingCheck": spending_check,
+        }
+
+    if not spending_check.get("pendingCapHoldClearance"):
+        return {
+            "ok": True,
+            "leagueData": working,
+            "chosenOffer": normalized_offer,
+            "player": player,
+            "rightsClearanceApplied": False,
+            "rightsDecisionLog": [],
+            "capHoldCleared": 0,
+            "spendingCheck": spending_check,
+        }
+
+    clearance_needed = int(num(spending_check.get("capHoldClearanceNeeded"), 0))
+    clearance_result = apply_user_rights_clearance_plan(
+        league_data = working,
+        team_name = user_team_name,
+        rights_decisions = rights_decisions,
+        protected_player = player,
+    )
+
+    if not clearance_result.get("ok"):
+        return {
+            "ok": False,
+            "reason": clearance_result.get("reason", "Unable to apply selected cap-hold clearance."),
+            "leagueData": working,
+            "chosenOffer": normalized_offer,
+            "player": player,
+            "spendingCheck": spending_check,
+        }
+
+    working = clearance_result.get("leagueData", working)
+    refreshed_free_agents = working.setdefault("freeAgents", [])
+    refreshed_player_idx = find_free_agent_index(
+        refreshed_free_agents,
+        player.get("id"),
+        player.get("name"),
+    )
+
+    if refreshed_player_idx == -1:
+        return {
+            "ok": False,
+            "reason": f"{player.get('name', 'Player')} is no longer available after cap-hold clearance.",
+            "leagueData": working,
+            "chosenOffer": normalized_offer,
+            "player": player,
+            "spendingCheck": spending_check,
+        }
+
+    refreshed_player = refreshed_free_agents[refreshed_player_idx]
+    snapshot_after = get_team_cap_snapshot(working, user_team_name)
+    final_check = validate_offer_spending_rules(
+        league_data = working,
+        team_name = user_team_name,
+        player = refreshed_player,
+        contract = normalized_offer.get("contract"),
+        outstanding_current_salary = 0,
+        snapshot = snapshot_after if snapshot_after.get("ok") else None,
+        allow_pending_cap_hold_clearance = False,
+    )
+
+    if not final_check.get("ok"):
+        cleared = int(num(clearance_result.get("capHoldCleared"), 0))
+        return {
+            "ok": False,
+            "reason": (
+                f"Selected cap-hold clearance was not enough for {player.get('name', 'this signing')}. "
+                f"Needed about ${clearance_needed:,}; selected clearance removed ${cleared:,}. "
+                f"{final_check.get('reason', '')}".strip()
+            ),
+            "leagueData": working,
+            "chosenOffer": normalized_offer,
+            "player": refreshed_player,
+            "spendingCheck": spending_check,
+            "finalCheck": final_check,
+            "capHoldClearanceNeeded": clearance_needed,
+            "capHoldCleared": cleared,
+        }
+
+    normalized_offer["manualRenouncedCapHolds"] = [
+        row for row in clearance_result.get("decisionLog", [])
+        if row.get("decision") == "renounce"
+    ]
+    normalized_offer["manualRenouncedCapHoldAmount"] = int(num(clearance_result.get("capHoldCleared"), 0))
+    normalized_offer["capHoldClearanceNeeded"] = clearance_needed
+
+    return {
+        "ok": True,
+        "leagueData": working,
+        "chosenOffer": normalized_offer,
+        "player": refreshed_player,
+        "rightsClearanceApplied": True,
+        "rightsDecisionLog": clearance_result.get("decisionLog", []),
+        "capHoldCleared": int(num(clearance_result.get("capHoldCleared"), 0)),
+        "spendingCheck": final_check,
+    }
+
+
 def process_pending_user_decisions(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None,
@@ -5326,34 +5650,6 @@ def process_pending_user_decisions(
     updated = copy.deepcopy(league_data)
     normalize_all_player_rights(updated)
     state = ensure_free_agency_state(updated)
-
-    if not user_team_name:
-        user_team_name = state.get("pendingUserTeamName")
-
-    # Safety valve: if the frontend already applied rights management before
-    # calling this helper, this is a no-op. If the JS bridge passes the decisions
-    # directly, this keeps the backend and frontend in sync.
-    rights_decisions = rights_decisions or {}
-    if rights_decisions and user_team_name:
-        rights_res = apply_rights_management(
-            league_data = updated,
-            team_name = user_team_name,
-            rights_decisions = rights_decisions,
-        )
-        if not rights_res.get("ok"):
-            return {
-                "ok": False,
-                "reason": rights_res.get("reason", "Failed to apply rights decisions."),
-                "leagueData": rights_res.get("leagueData", updated),
-                "processedSignings": [],
-                "generatedOffers": [],
-                "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
-                "stateSummary": build_free_agency_state_summary(updated),
-                "teamSnapshot": state.get("pendingUserTeamSnapshot"),
-            }
-        updated = rights_res.get("leagueData", updated)
-        normalize_all_player_rights(updated)
-        state = ensure_free_agency_state(updated)
 
     pending_rows = list(state.get("pendingUserDecisions", []))
     if not pending_rows:
@@ -5367,8 +5663,12 @@ def process_pending_user_decisions(
             "teamSnapshot": state.get("pendingUserTeamSnapshot"),
         }
 
+    if not user_team_name:
+        user_team_name = state.get("pendingUserTeamName")
+
     selected_set = {str(x) for x in (selected_player_keys or [])}
     declined_set = {str(x) for x in (declined_player_keys or [])}
+    rights_decisions = rights_decisions or {}
 
     preview = copy.deepcopy(updated)
     preview_state = ensure_free_agency_state(preview)
@@ -5376,43 +5676,25 @@ def process_pending_user_decisions(
     max_days = int(num(preview_state.get("maxDays"), DEFAULT_FREE_AGENCY_DAYS))
 
     processed_signings = []
-    remaining_pending_rows = []
+    delayed_decisions = []
+    rights_clearance_logs = []
 
     for row in pending_rows:
         player_key = row.get("playerKey") or get_player_key(
             row.get("playerId"),
             row.get("playerName"),
         )
-        player_key = str(player_key)
-
-        # Explicitly delayed / declined user choices should stop being treated as
-        # ready-to-sign wins. The player's market remains alive, and CPU offers can
-        # win on a later advance.
-        if player_key in declined_set:
-            offers = preview_state.get("offersByPlayer", {}).get(player_key, [])
-            for offer in offers:
-                if offer.get("teamName") == user_team_name and offer.get("source") == "user":
-                    offer["status"] = "declined_by_user"
-            preview_state.setdefault("userOfferOutcomeLog", []).append({
-                "id": f"{player_key}|{user_team_name}|{current_day}|declined_by_user",
-                "day": current_day,
-                "playerId": row.get("playerId"),
-                "playerName": row.get("playerName"),
-                "playerKey": player_key,
-                "userTeamName": user_team_name,
-                "status": "declined_by_user",
-                "offerStatus": "declined_by_user",
-                "signedWith": "",
-                "userOfferContract": row.get("contract") or (row.get("chosenOffer") or {}).get("contract"),
-                "userOfferTotalValue": row.get("totalValue") or (row.get("chosenOffer") or {}).get("totalValue", 0),
-                "userOfferYears": row.get("years") or (row.get("chosenOffer") or {}).get("years", 0),
-                "detail": f"You delayed or declined the ready-to-sign offer for {row.get('playerName', 'this player')}.",
-                "storyContext": row.get("storyContext"),
-            })
-            continue
 
         if player_key not in selected_set:
-            remaining_pending_rows.append(row)
+            if player_key in declined_set:
+                delayed_decisions.append(
+                    mark_pending_user_decision_delayed(
+                        league_data = preview,
+                        row = row,
+                        user_team_name = user_team_name,
+                        current_day = current_day,
+                    )
+                )
             continue
 
         free_agents = preview.setdefault("freeAgents", [])
@@ -5460,6 +5742,41 @@ def process_pending_user_decisions(
             chosen_offer.get("contract") or row.get("contract")
         )
 
+        prepared = prepare_user_offer_for_conditional_finalization(
+            league_data = preview,
+            user_team_name = user_team_name,
+            player = player,
+            chosen_offer = chosen_offer,
+            rights_decisions = rights_decisions,
+        )
+
+        if not prepared.get("ok"):
+            return {
+                "ok": False,
+                "reason": prepared.get("reason") or f"Unable to prepare {row.get('playerName', 'player')} for signing.",
+                "leagueData": updated,
+                "blockedPlayerKey": player_key,
+                "stateSummary": build_free_agency_state_summary(updated),
+                "teamSnapshot": state.get("pendingUserTeamSnapshot"),
+                "spendingCheck": prepared.get("spendingCheck"),
+                "finalCheck": prepared.get("finalCheck"),
+                "capHoldClearanceNeeded": prepared.get("capHoldClearanceNeeded"),
+                "capHoldCleared": prepared.get("capHoldCleared"),
+            }
+
+        preview = prepared.get("leagueData", preview)
+        preview_state = ensure_free_agency_state(preview)
+        player = prepared.get("player", player)
+        chosen_offer = prepared.get("chosenOffer", chosen_offer)
+
+        if prepared.get("rightsClearanceApplied"):
+            rights_clearance_logs.append({
+                "playerKey": player_key,
+                "playerName": row.get("playerName"),
+                "capHoldCleared": prepared.get("capHoldCleared", 0),
+                "decisionLog": prepared.get("rightsDecisionLog", []),
+            })
+
         signed = finalize_free_agent_signing_from_offer(
             league_data = preview,
             player = player,
@@ -5479,54 +5796,67 @@ def process_pending_user_decisions(
         processed_signings.append(signed)
 
     preview_state = ensure_free_agency_state(preview)
-    preview_state["pendingUserDecisions"] = remaining_pending_rows
+    clear_pending_user_decisions(preview_state)
     preview_state["pendingUserTeamName"] = user_team_name
+
+    if delayed_decisions:
+        preview_state.setdefault("delayedUserDecisionLog", []).extend(copy.deepcopy(delayed_decisions))
+
+    if rights_clearance_logs:
+        preview_state.setdefault("manualRightsClearanceLog", []).extend(copy.deepcopy(rights_clearance_logs))
 
     generated_offers = []
 
-    # Do not generate the next CPU-offer wave inside this confirmation helper.
-    # That expensive step belongs to advance_free_agency_day. Keeping this helper
-    # focused prevents Pyodide request timeouts and avoids double-advancing the market.
     if current_day >= max_days or len(preview.get("freeAgents", [])) == 0:
-        if not remaining_pending_rows:
-            final_cleanup_target = get_min_roster_target(preview)
+        final_cleanup_target = get_min_roster_target(preview)
 
-            final_cleanup_signings = finalize_cpu_min_roster_cleanup(
-                league_data = preview,
-                current_day = current_day,
-                user_team_name = user_team_name,
-                min_roster_target_override = final_cleanup_target,
-            )
+        final_cleanup_signings = finalize_cpu_min_roster_cleanup(
+            league_data = preview,
+            current_day = current_day,
+            user_team_name = user_team_name,
+            min_roster_target_override = final_cleanup_target,
+        )
 
-            if final_cleanup_signings:
-                processed_signings.extend(final_cleanup_signings)
-                preview_state.setdefault("dailyLog", []).append({
-                    "day": current_day,
-                    "type": "cpu_final_min_roster_cleanup",
-                    "signings": len(final_cleanup_signings),
-                    "targetRosterSize": final_cleanup_target,
-                })
+        if final_cleanup_signings:
+            processed_signings.extend(final_cleanup_signings)
+            preview_state["dailyLog"].append({
+                "day": current_day,
+                "type": "cpu_final_min_roster_cleanup",
+                "signings": len(final_cleanup_signings),
+                "targetRosterSize": final_cleanup_target,
+            })
 
-            preview_state["isActive"] = False
-            preview_state["pendingUserTeamSnapshot"] = None
-        else:
-            snapshot = get_team_cap_snapshot(preview, user_team_name) if user_team_name else None
-            preview_state["pendingUserTeamSnapshot"] = snapshot if snapshot and snapshot.get("ok") else None
+        preview_state["isActive"] = False
+        preview_state["pendingUserTeamSnapshot"] = None
     else:
+        preview_state["currentDay"] = current_day + 1
+
+        generated_offers = generate_cpu_offers_for_day(
+            league_data = preview,
+            user_team_name = user_team_name,
+        )
+
+        preview_state["dailyLog"].append({
+            "day": preview_state["currentDay"],
+            "type": "offer_generation",
+            "offersGenerated": len(generated_offers),
+        })
+
         snapshot = get_team_cap_snapshot(preview, user_team_name) if user_team_name else None
         preview_state["pendingUserTeamSnapshot"] = snapshot if snapshot and snapshot.get("ok") else None
-
-    sync_flat_teams_from_conferences(preview)
 
     return {
         "ok": True,
         "leagueData": preview,
         "processedSignings": processed_signings,
         "generatedOffers": generated_offers,
+        "delayedUserDecisions": delayed_decisions,
+        "manualRightsClearanceLog": rights_clearance_logs,
         "pendingRfaMatchDecisions": preview_state.get("pendingRfaMatchDecisions", []),
         "stateSummary": build_free_agency_state_summary(preview),
         "teamSnapshot": preview_state.get("pendingUserTeamSnapshot"),
     }
+
 
 def get_contract_option_player_score_adjustment(contract: Optional[Dict[str, Any]]) -> float:
     contract = normalize_contract(contract)
@@ -5681,6 +6011,11 @@ def evaluate_market_offer_submission(
         "exceptionRemaining": spending_res.get("exceptionRemaining"),
         "birdRights": spending_res.get("birdRights"),
         "payrollZone": spending_res.get("payrollZone"),
+        "pendingCapHoldClearance": spending_res.get("pendingCapHoldClearance", False),
+        "capHoldClearanceNeeded": spending_res.get("capHoldClearanceNeeded", 0),
+        "rawCapRoomWithoutHolds": spending_res.get("rawCapRoomWithoutHolds"),
+        "rawPayrollWithoutHolds": spending_res.get("rawPayrollWithoutHolds"),
+        "capHoldTotal": spending_res.get("capHoldTotal"),
         "details": {
             "offeredYears": offered_years,
             "offeredAAV": offered_aav,
@@ -5766,6 +6101,14 @@ def score_offer_for_player(
 
     if age >= 34 and offered_years >= 3:
         score -= 0.06
+
+    delay_count = int(num(offer.get("userDecisionDelayCount"), 0))
+    if delay_count > 0:
+        score -= min(0.35, 0.16 * delay_count)
+
+    explicit_penalty = num(offer.get("playerViewScorePenalty"), 0)
+    if explicit_penalty > 0:
+        score -= min(0.35, explicit_penalty)
 
     return round(score, 3)
 
@@ -6422,6 +6765,11 @@ def submit_user_free_agent_offer(
     offer_record["payrollZone"] = eval_res.get("payrollZone")
     offer_record["exceptionRoom"] = eval_res.get("exceptionRoom")
     offer_record["birdRights"] = eval_res.get("birdRights")
+    offer_record["pendingCapHoldClearance"] = bool(eval_res.get("pendingCapHoldClearance", False))
+    offer_record["capHoldClearanceNeeded"] = int(num(eval_res.get("capHoldClearanceNeeded"), 0))
+    offer_record["rawCapRoomWithoutHolds"] = eval_res.get("rawCapRoomWithoutHolds")
+    offer_record["rawPayrollWithoutHolds"] = eval_res.get("rawPayrollWithoutHolds")
+    offer_record["capHoldTotal"] = eval_res.get("capHoldTotal")
     _, _, offer_team = find_team_entry(updated, team_name)
     offer_profile = build_team_roster_profile(offer_team, league_data = updated) if offer_team else None
     offer_record["storyContext"] = build_free_agency_story_context(
@@ -6447,7 +6795,6 @@ def submit_user_free_agent_offer(
         player_id = player.get("id"),
         player_name = player.get("name"),
     )
-    sync_flat_teams_from_conferences(updated)
 
     return {
         "ok": True,
@@ -6621,15 +6968,24 @@ def finalize_free_agent_signing_from_offer(
     contract = apply_free_agency_start_year(league_data, chosen_offer.get("contract"))
 
     if chosen_offer.get("forceRfaMatch"):
-        spending_res = {
-            "ok": True,
-            "reason": "Offer matched using restricted free agent matching rights.",
-            "teamSnapshot": snapshot,
-            "exceptionRoom": get_team_exception_room(league_data, signing_team_name, player),
-            "spendingType": "rfa_match",
-            "birdRights": get_player_rights(player),
-            "payrollZone": get_payroll_zone_for_amount(league_data, int(num(snapshot.get("payroll"), 0))),
-        }
+        spending_res = validate_offer_spending_rules(
+            league_data = league_data,
+            team_name = signing_team_name,
+            player = player,
+            contract = contract,
+            outstanding_current_salary = 0,
+            snapshot = snapshot,
+            allow_pending_cap_hold_clearance = False,
+        )
+        if spending_res.get("ok"):
+            spending_res["reason"] = "Offer matched using restricted free agent matching rights."
+            spending_res["spendingType"] = "rfa_match"
+            spending_res["exceptionType"] = None
+            spending_res["birdRights"] = get_player_rights(player)
+            spending_res["payrollZone"] = get_payroll_zone_for_amount(
+                league_data,
+                int(num(snapshot.get("payroll"), 0)),
+            )
     else:
         spending_res = validate_offer_spending_rules(
             league_data = league_data,
@@ -6642,6 +6998,42 @@ def finalize_free_agent_signing_from_offer(
 
     if not spending_res.get("ok"):
         return None
+
+    if spending_res.get("pendingCapHoldClearance"):
+        user_team_name = state.get("pendingUserTeamName")
+
+        if user_team_name and signing_team_name == user_team_name:
+            return None
+
+        auto_res = auto_renounce_cpu_cap_holds_for_room(
+            league_data = league_data,
+            team_name = signing_team_name,
+            clearance_needed = int(num(spending_res.get("capHoldClearanceNeeded"), 0)),
+            protected_player_key = player_key,
+        )
+
+        if not auto_res.get("ok"):
+            return None
+
+        snapshot = get_team_cap_snapshot(league_data, signing_team_name)
+        if not snapshot.get("ok"):
+            return None
+
+        spending_res = validate_offer_spending_rules(
+            league_data = league_data,
+            team_name = signing_team_name,
+            player = player,
+            contract = contract,
+            outstanding_current_salary = 0,
+            snapshot = snapshot,
+            allow_pending_cap_hold_clearance = False,
+        )
+
+        if not spending_res.get("ok"):
+            return None
+
+        spending_res["autoRenouncedCapHolds"] = auto_res.get("renounced", [])
+        spending_res["autoRenouncedCapHoldAmount"] = auto_res.get("capHoldCleared", 0)
 
     if len(get_team_players(team)) >= get_roster_limit(league_data):
         return None
@@ -6786,6 +7178,10 @@ def finalize_free_agent_signing_from_offer(
         "exceptionUsage": exception_usage,
         "exceptionRemaining": get_team_remaining_exceptions(league_data, signing_team_name),
         "payrollZone": spending_res.get("payrollZone"),
+        "autoRenouncedCapHolds": spending_res.get("autoRenouncedCapHolds", []),
+        "autoRenouncedCapHoldAmount": spending_res.get("autoRenouncedCapHoldAmount", 0),
+        "manualRenouncedCapHolds": chosen_offer.get("manualRenouncedCapHolds", []),
+        "manualRenouncedCapHoldAmount": chosen_offer.get("manualRenouncedCapHoldAmount", 0),
         "allOffers": sorted_all_offers,
         "userOfferOutcomes": user_offer_outcomes,
         "rfaMatched": matched_rfa,
@@ -6816,6 +7212,10 @@ def finalize_free_agent_signing_from_offer(
         "exceptionUsage": exception_usage,
         "exceptionRemaining": get_team_remaining_exceptions(league_data, signing_team_name),
         "payrollZone": spending_res.get("payrollZone"),
+        "autoRenouncedCapHolds": spending_res.get("autoRenouncedCapHolds", []),
+        "autoRenouncedCapHoldAmount": spending_res.get("autoRenouncedCapHoldAmount", 0),
+        "manualRenouncedCapHolds": chosen_offer.get("manualRenouncedCapHolds", []),
+        "manualRenouncedCapHoldAmount": chosen_offer.get("manualRenouncedCapHoldAmount", 0),
         "allOffers": sorted_all_offers,
         "userOfferOutcomes": user_offer_outcomes,
         "rfaMatched": matched_rfa,
@@ -7051,8 +7451,6 @@ def initialize_free_agency_period(
         "fullMinTarget": offseason_min_target,
     })
 
-    sync_flat_teams_from_conferences(updated)
-
     return {
         "ok": True,
         "leagueData": updated,
@@ -7112,7 +7510,6 @@ def advance_free_agency_day(
     })
 
     if state.get("pendingUserDecisions") or state.get("pendingRfaMatchDecisions"):
-        sync_flat_teams_from_conferences(updated)
         return {
             "ok": True,
             "leagueData": updated,
@@ -7144,7 +7541,6 @@ def advance_free_agency_day(
 
         state["isActive"] = False
         state["pendingUserTeamSnapshot"] = None
-        sync_flat_teams_from_conferences(updated)
 
         return {
             "ok": True,
@@ -7170,7 +7566,6 @@ def advance_free_agency_day(
     })
 
     state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, user_team_name) if user_team_name else None
-    sync_flat_teams_from_conferences(updated)
 
     return {
         "ok": True,
@@ -7351,6 +7746,11 @@ def evaluate_offer(
             "exceptionRemaining": spending_res.get("exceptionRemaining"),
             "birdRights": spending_res.get("birdRights"),
             "payrollZone": spending_res.get("payrollZone"),
+            "pendingCapHoldClearance": spending_res.get("pendingCapHoldClearance", False),
+            "capHoldClearanceNeeded": spending_res.get("capHoldClearanceNeeded", 0),
+            "rawCapRoomWithoutHolds": spending_res.get("rawCapRoomWithoutHolds"),
+            "rawPayrollWithoutHolds": spending_res.get("rawPayrollWithoutHolds"),
+            "capHoldTotal": spending_res.get("capHoldTotal"),
         }
 
     market_value = player.get("marketValue") or estimate_market_value(player)
@@ -7389,6 +7789,11 @@ def evaluate_offer(
         "exceptionRemaining": spending_res.get("exceptionRemaining"),
         "birdRights": spending_res.get("birdRights"),
         "payrollZone": spending_res.get("payrollZone"),
+        "pendingCapHoldClearance": spending_res.get("pendingCapHoldClearance", False),
+        "capHoldClearanceNeeded": spending_res.get("capHoldClearanceNeeded", 0),
+        "rawCapRoomWithoutHolds": spending_res.get("rawCapRoomWithoutHolds"),
+        "rawPayrollWithoutHolds": spending_res.get("rawPayrollWithoutHolds"),
+        "capHoldTotal": spending_res.get("capHoldTotal"),
         "details": {
             "offeredYears": offered_years,
             "offeredAAV": offered_aav,
@@ -7498,7 +7903,6 @@ def sign_free_agent(
 
     free_agents.pop(player_idx)
     team.setdefault("players", []).append(signed_player)
-    sync_flat_teams_from_conferences(updated)
 
     return {
         "ok": True,
@@ -7568,7 +7972,6 @@ def release_player(
     }
 
     updated.setdefault("freeAgents", []).append(released_player)
-    sync_flat_teams_from_conferences(updated)
 
     return {
         "ok": True,
@@ -7821,8 +8224,6 @@ def apply_rights_management(
                 ),
             })
 
-    sync_flat_teams_from_conferences(updated)
-
     preview_after = preview_rights_management(
         league_data = updated,
         team_name = team_name,
@@ -7886,8 +8287,6 @@ def repair_cpu_teams_to_min_roster(
                 "playerCount": player_count,
                 "minPlayers": min_target,
             })
-
-    sync_flat_teams_from_conferences(updated)
 
     return {
         "ok": len(failed_teams) == 0,
@@ -7983,17 +8382,8 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
             league_data = league_data,
             user_team_name = payload.get("userTeamName"),
             selected_player_keys = payload.get("selectedPlayerKeys", []) or [],
-            rights_decisions = (
-                payload.get("rightsDecisions")
-                or payload.get("selectedRightsDecisions")
-                or payload.get("rights_decisions")
-                or {}
-            ),
-            declined_player_keys = (
-                payload.get("declinedPlayerKeys")
-                or payload.get("declined_player_keys")
-                or []
-            ),
+            rights_decisions = payload.get("rightsDecisions", {}) or {},
+            declined_player_keys = payload.get("declinedPlayerKeys", []) or [],
         )
 
     if action == "process_pending_rfa_match_decision":

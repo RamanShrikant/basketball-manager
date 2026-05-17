@@ -1574,6 +1574,58 @@ function loadResults() {
   return loadAllResultsV3();
 }
 
+function hasUsableStoredResult(result) {
+  if (!result || result.error) return false;
+
+  const totals = result.totals || {};
+  const home = Number(totals.home ?? result?.winner?.home ?? 0);
+  const away = Number(totals.away ?? result?.winner?.away ?? 0);
+
+  if ((home > 0 || away > 0) && Number.isFinite(home) && Number.isFinite(away)) {
+    return true;
+  }
+
+  if (result.hasBoxScore) return true;
+
+  const homeBox = result?.box?.home;
+  const awayBox = result?.box?.away;
+
+  return (
+    (Array.isArray(homeBox) && homeBox.length > 0) ||
+    (Array.isArray(awayBox) && awayBox.length > 0)
+  );
+}
+
+function hydrateSchedulePlayedFlagsFromResults(schedule, results) {
+  const hydrated = {};
+  let changed = false;
+  let hydratedCount = 0;
+
+  for (const [date, games] of Object.entries(schedule || {})) {
+    hydrated[date] = Array.isArray(games)
+      ? games.map((game) => {
+          if (!game?.id) return game;
+
+          const hasResult = hasUsableStoredResult(results?.[game.id]);
+
+          if (hasResult && !game.played) {
+            changed = true;
+            hydratedCount += 1;
+            return { ...game, played: true };
+          }
+
+          return game;
+        })
+      : games;
+  }
+
+  return {
+    schedule: hydrated,
+    changed,
+    hydratedCount,
+  };
+}
+
 function loadPlayerStats() {
   return readCompressedOrJson(PLAYER_STATS_KEY, {});
 }
@@ -1766,6 +1818,103 @@ function saveResults(results) {
 }
 
 
+function countCompletedRegularSeasonGames(schedule, results) {
+  let completed = 0;
+
+  for (const games of Object.values(schedule || {})) {
+    for (const g of games || []) {
+      if (!g?.id) continue;
+      if (g.played || hasUsableStoredResult(results?.[g.id])) completed += 1;
+    }
+  }
+
+  return completed;
+}
+
+function isRegularSeasonComplete(schedule, results) {
+  let total = 0;
+  let completed = 0;
+
+  for (const games of Object.values(schedule || {})) {
+    for (const g of games || []) {
+      if (!g?.id) continue;
+      total += 1;
+      if (g.played || hasUsableStoredResult(results?.[g.id])) completed += 1;
+    }
+  }
+
+  return total > 0 && completed === total;
+}
+
+async function computeAndSaveCalendarAwards({
+  playerStats,
+  schedule,
+  results,
+  staticTeams,
+  gamesSimmed,
+}) {
+  try {
+    const currentStats =
+      playerStats && Object.keys(playerStats || {}).length
+        ? playerStats
+        : loadPlayerStats();
+
+    const defMap = {};
+    for (const t of staticTeams || []) {
+      const teamName = t?.name || t?.team;
+      for (const pl of t?.players || []) {
+        const playerName = pl?.name || pl?.player;
+
+        const def =
+          pl?.def_rating ??
+          pl?.defRating ??
+          pl?.defensive_rating ??
+          pl?.defensiveRating ??
+          pl?.drtg ??
+          pl?.defrtg;
+
+        if (playerName && teamName && def != null && Number.isFinite(Number(def))) {
+          defMap[`${playerName}__${teamName}`] = Number(def);
+        }
+      }
+    }
+
+    const playersArray = Object.values(currentStats || {}).map((p) => {
+      const key = `${p.player}__${p.team}`;
+      const def = defMap[key];
+      return {
+        ...p,
+        def_rating: Number.isFinite(Number(def)) ? Number(def) : 110,
+      };
+    });
+
+    console.log("[Calendar] computing awards from sim-to-date for", playersArray.length, "players");
+
+    const teamsWithWins = buildTeamsWithWinsForAwards(staticTeams, schedule, results);
+
+    const awardsRaw = await computeSeasonAwards(playersArray, {
+      seasonYear,
+      gamesSimmed,
+      teams: teamsWithWins,
+    });
+
+    const deepUnpair = (x) => {
+      if (Array.isArray(x) && x.length && Array.isArray(x[0]) && x[0].length === 2) {
+        return Object.fromEntries(x.map(([k, v]) => [k, deepUnpair(v)]));
+      }
+      if (Array.isArray(x)) return x.map(deepUnpair);
+      return x;
+    };
+
+    const awards = deepUnpair(awardsRaw) || {};
+    localStorage.setItem("bm_awards_latest", JSON.stringify(awards));
+    localStorage.setItem("bm_awards_v1", JSON.stringify(awards));
+  } catch (e) {
+    console.error("[Calendar] awards computation failed after sim-to-date:", e);
+  }
+}
+
+
 
 
 
@@ -1845,12 +1994,11 @@ useEffect(() => {
   if (!scheduleValid) {
     const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
 
-    // if we already have results, mark those games as played in the regenerated schedule
-    const rebuilt = {};
-    for (const [d, games] of Object.entries(byDate)) {
-      rebuilt[d] = (games || []).map((g) =>
-        parsedResults && parsedResults[g.id] ? { ...g, played: true } : g
-      );
+    const hydrated = hydrateSchedulePlayedFlagsFromResults(byDate, parsedResults);
+    const rebuilt = hydrated.schedule;
+
+    if (hydrated.hydratedCount > 0) {
+      console.log("[Calendar] restored played flags from stored results:", hydrated.hydratedCount);
     }
 
     saveSchedule(rebuilt);          // writes storage + sets state
@@ -1865,7 +2013,16 @@ useEffect(() => {
   }
 
   // ----- normal path: reuse stored schedule -----
-  setScheduleByDate(parsedSched);
+  const hydrated = hydrateSchedulePlayedFlagsFromResults(parsedSched, parsedResults);
+  const scheduleToUse = hydrated.schedule;
+
+  if (hydrated.changed) {
+    console.log("[Calendar] restored played flags from stored results:", hydrated.hydratedCount);
+    saveSchedule(scheduleToUse);
+  } else {
+    setScheduleByDate(scheduleToUse);
+  }
+
   setResultsById(parsedResults);
 
   if (hasValidResults && (!hasPlayerStats || !hasRoleFields)) {
@@ -2352,6 +2509,7 @@ setBoxModal(null);
 
   const staticLeagueData = repairedLeagueData;
   const staticTeams = repairedTeams;
+  let shouldGoToAwards = false;
 
   try {
 for (const d of sorted) {
@@ -2380,7 +2538,14 @@ for (const d of sorted) {
         if (stopRef.current) break;
 
         const g = dayGames[i];
-        if (!g || g.played) continue;
+        if (!g) continue;
+
+        if (g.played || hasUsableStoredResult(newResults?.[g.id])) {
+          if (!g.played && hasUsableStoredResult(newResults?.[g.id])) {
+            dayGames[i] = { ...g, played: true };
+          }
+          continue;
+        }
 
         try {
           const full = await runGameWithRetries(g, staticLeagueData, staticTeams);
@@ -2437,10 +2602,25 @@ const awayRoles = loadTeamRoleMap(g.away);
 
     setScheduleByDate(structuredClone(upd));
     setResultsById(structuredClone(newResults));
+
+    if (!stopRef.current && isRegularSeasonComplete(upd, newResults)) {
+      await computeAndSaveCalendarAwards({
+        playerStats,
+        schedule: upd,
+        results: newResults,
+        staticTeams,
+        gamesSimmed: countCompletedRegularSeasonGames(upd, newResults),
+      });
+      shouldGoToAwards = true;
+    }
   } finally {
     setActionModal(null);
     setSimLock(false);
     console.log("◀ SimToDate EXIT:", dateStr);
+
+    if (shouldGoToAwards) {
+      navigate("/awards");
+    }
   }
 };
 
@@ -2599,7 +2779,12 @@ for (let di = 0; di < dates.length; di++) {
           stopped = true;
           break;
         }
-        if (g.played) continue;
+        if (g.played || hasUsableStoredResult(results?.[g.id])) {
+          if (!g.played && hasUsableStoredResult(results?.[g.id])) {
+            dayGames[i] = { ...g, played: true };
+          }
+          continue;
+        }
 
         try {
           const full = await runGameWithRetries(g, staticLeagueData, staticTeams);

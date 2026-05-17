@@ -1098,10 +1098,10 @@ const renderKeyInterestExtraNode = (row) => {
             Offseason Event
           </p>
           <h1 className="text-5xl font-extrabold text-orange-500">
-            PLAYER / TEAM OPTIONS
+            PLAYER / TEAM OPTIONS & RIGHTS
           </h1>
           <p className="text-white/60 mt-3">
-            Settle contract options before free agency opens.
+            Settle contract options, qualifying offers, Bird rights, and cap holds before free agency opens.
           </p>
         </div>
 
@@ -1109,13 +1109,13 @@ const renderKeyInterestExtraNode = (row) => {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
             <div>
               <div className="text-sm text-white/45 uppercase tracking-[0.2em] mb-2">
-                Options Phase
+                Pre-Free Agency Control
               </div>
               <h2 className="text-3xl font-extrabold text-white">
                 {seasonYear} Offseason
               </h2>
               <p className="text-white/60 mt-2 max-w-2xl">
-                This stage resolves expired deals, player options, and team options before the market opens.
+                This single panel resolves expired deals, player options, team options, rights, qualifying offers, and cap holds before the market opens.
               </p>
             </div>
 
@@ -1144,12 +1144,20 @@ const renderKeyInterestExtraNode = (row) => {
                 >
                   {loadingApply ? "Resolving Options..." : "Resolve Options"}
                 </button>
-              ) : (
+              ) : rightsManagementComplete ? (
                 <button
-                  onClick={() => navigate("/offseason")}
+                  onClick={() => navigate("/free-agents")}
                   className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl font-bold transition"
                 >
-                  Continue to Offseason Hub
+                  Open Free Agency
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  className="px-5 py-3 bg-neutral-700 text-white/45 cursor-not-allowed rounded-xl font-bold transition"
+                >
+                  Finalize Rights Below
                 </button>
               )}
             </div>
@@ -1409,7 +1417,7 @@ const renderKeyInterestExtraNode = (row) => {
 
   {optionsComplete && (
     <SectionShell
-      title="Rights Management / Cap Holds"
+      title="Your Rights / Cap Holds"
       subtitle="Keep Bird/RFA control or renounce rights to clear cap holds before free agency."
       rightNode={
         <div className="flex items-center gap-2 flex-wrap">

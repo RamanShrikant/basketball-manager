@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import * as simEngine from "../api/simEnginePy.js";
@@ -254,39 +255,12 @@ function compactFreeAgencyStateForStorage(state, emergency = false) {
   };
 }
 
-function syncLeagueTeamCollections(leagueData) {
-  if (!leagueData || typeof leagueData !== "object") return leagueData;
-
-  const conferences = leagueData.conferences;
-  if (!conferences || typeof conferences !== "object") return leagueData;
-
-  const orderedKeys = ["East", "West", "east", "west", ...Object.keys(conferences)]
-    .filter((key, index, arr) => key && arr.indexOf(key) === index);
-
-  const flatTeams = [];
-  for (const key of orderedKeys) {
-    const teams = conferences[key];
-    if (Array.isArray(teams)) {
-      flatTeams.push(...teams);
-    }
-  }
-
-  if (!flatTeams.length) return leagueData;
-
-  return {
-    ...leagueData,
-    teams: flatTeams,
-  };
-}
-
 function compactLeagueDataForStorage(leagueData, emergency = false) {
   if (!leagueData || typeof leagueData !== "object") return leagueData;
 
-  const syncedLeagueData = syncLeagueTeamCollections(leagueData);
-
   return {
-    ...syncedLeagueData,
-    freeAgencyState: compactFreeAgencyStateForStorage(syncedLeagueData.freeAgencyState, emergency),
+    ...leagueData,
+    freeAgencyState: compactFreeAgencyStateForStorage(leagueData.freeAgencyState, emergency),
   };
 }
 
@@ -591,21 +565,19 @@ const isOffseasonMode =
   const applyLeagueUpdate = (updated) => {
     if (!updated) return;
 
-    const syncedUpdated = syncLeagueTeamCollections(updated);
-
-    setWorkingLeagueData(syncedUpdated);
+    setWorkingLeagueData(updated);
 
     if (typeof setLeagueData === "function") {
-      setLeagueData(syncedUpdated);
+      setLeagueData(updated);
     }
 
-    persistLeagueData(syncedUpdated);
+    persistLeagueData(updated);
 
     if (typeof setSelectedTeam === "function" && selectedTeam?.name) {
       let nextSelectedTeam = null;
 
-      for (const confKey of Object.keys(syncedUpdated.conferences || {})) {
-        const team = (syncedUpdated.conferences[confKey] || []).find(
+      for (const confKey of Object.keys(updated.conferences || {})) {
+        const team = (updated.conferences[confKey] || []).find(
           (t) => t.name === selectedTeam.name
         );
         if (team) {
@@ -1142,8 +1114,16 @@ const isOffseasonMode =
       };
     }
 
+    const rawCapRoom = Number(
+      userCapDashboard.rawCapRoomWithoutHolds ??
+      userCapDashboard.basicCapRoom ??
+      userCapDashboard.capSpace ??
+      userCapDashboard.capRoom ??
+      0
+    );
+
     if (
-      userCapDashboard.capRoom >= ask &&
+      rawCapRoom >= ask &&
       userCapDashboard.practicalCapRoom < ask &&
       userCapDashboard.capHoldTotal > 0
     ) {
@@ -1152,8 +1132,8 @@ const isOffseasonMode =
         tone: "orange",
         sortValue: isRfa ? 66 : 70,
         title: isRfa
-          ? "You have raw cap room, but cap holds are temporarily reducing practical cap. You can submit the offer, but rights may need to be renounced before the signing is finalized and the original team may match."
-          : "You have raw cap room, but cap holds are temporarily reducing practical cap. You can submit the offer, but rights may need to be renounced before the signing is finalized.",
+          ? "You have enough raw cap room after clearing cap holds. You can submit the offer, but if he chooses you, you must clear enough holds before finalizing and the original team may match."
+          : "You have enough raw cap room after clearing cap holds. You can submit the offer, but if he chooses you, you must clear enough holds before finalizing.",
       };
     }
 
@@ -1718,6 +1698,38 @@ const isOffseasonMode =
     evaluateFreeAgencyOffer,
   ]);
 
+  const offerNeedsCapHoldClearance = useMemo(() => {
+    if (!canSubmitLiveOffer || !userCapDashboard || !signTargetPlayer) {
+      return false;
+    }
+
+    const year1Salary = parseMillionsText(offerSalaryText);
+    if (!year1Salary) {
+      return false;
+    }
+
+    const practicalCapRoom = Number(userCapDashboard.practicalCapRoom || 0);
+    const rawCapRoom = Number(
+      userCapDashboard.rawCapRoomWithoutHolds ??
+      userCapDashboard.basicCapRoom ??
+      userCapDashboard.capSpace ??
+      userCapDashboard.capRoom ??
+      0
+    );
+    const capHoldTotal = Number(userCapDashboard.capHoldTotal || 0);
+
+    return (
+      capHoldTotal > 0 &&
+      practicalCapRoom < year1Salary &&
+      rawCapRoom >= year1Salary
+    );
+  }, [
+    canSubmitLiveOffer,
+    userCapDashboard,
+    signTargetPlayer,
+    offerSalaryText,
+  ]);
+
   const interestDisplay = useMemo(() => {
     if (offerEvalLoading) {
       return {
@@ -1752,38 +1764,6 @@ const isOffseasonMode =
     }
     return { percent, label: "Not Interested", barClass: "bg-red-500" };
   }, [offerEvaluation, offerEvalLoading]);
-
-  const offerNeedsCapHoldClearance = useMemo(() => {
-    if (!canSubmitLiveOffer || !userCapDashboard || !signTargetPlayer) {
-      return false;
-    }
-
-    const year1Salary = parseMillionsText(offerSalaryText);
-    if (!year1Salary) {
-      return false;
-    }
-
-    const practicalCapRoom = Number(userCapDashboard.practicalCapRoom || 0);
-    const rawCapRoom = Number(
-      userCapDashboard.rawCapRoomWithoutHolds ??
-      userCapDashboard.basicCapRoom ??
-      userCapDashboard.capSpace ??
-      userCapDashboard.capRoom ??
-      0
-    );
-    const capHoldTotal = Number(userCapDashboard.capHoldTotal || 0);
-
-    return (
-      capHoldTotal > 0 &&
-      practicalCapRoom < year1Salary &&
-      rawCapRoom >= year1Salary
-    );
-  }, [
-    canSubmitLiveOffer,
-    userCapDashboard,
-    signTargetPlayer,
-    offerSalaryText,
-  ]);
 
 const handleContinueToProgression = () => {
   if (userRosterInvalid) {
@@ -2082,7 +2062,7 @@ updateOffseasonState({
     <PageFade>
     <div className={`${styles.freeAgentsPage} flex flex-col items-center justify-center min-h-screen text-white px-4`}>
       <p className="text-lg mb-4 text-center">
-        Complete Player / Team Options and Rights Management before opening free agency.
+        Complete the combined Options / Rights page before opening free agency.
       </p>
 
       <div className="flex gap-3 flex-wrap justify-center">
@@ -2697,14 +2677,14 @@ updateOffseasonState({
         </button>
       </div>
 
-      {signModalOpen && signTargetPlayer && (
+      {signModalOpen && signTargetPlayer && createPortal(
         <div
-          className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-50 px-4 py-6"
+          className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-[9999] px-4 py-4"
           onClick={closeSignModal}
           role="presentation"
         >
           <div
-            className="fa-modal-scroll w-full max-w-xl max-h-[calc(100vh-3rem)] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5 sm:p-4"
+            className="fa-modal-scroll w-full max-w-6xl max-h-[calc(100vh-1.5rem)] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-6"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
@@ -2739,52 +2719,39 @@ updateOffseasonState({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
                 <div className="text-xs text-gray-400 mb-1">Payroll</div>
                 <div className="text-base font-semibold text-white">
-                  {formatDollars(
-                    offerEvaluation?.teamSnapshot?.rawPayrollWithoutHolds ??
-                    offerEvaluation?.teamSnapshot?.basicPayroll ??
-                    offerEvaluation?.teamSnapshot?.playerPayroll ??
-                    0
-                  )}
+                  {formatDollars(offerEvaluation?.teamSnapshot?.payroll || 0)}
                 </div>
               </div>
 
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
-                <div className="text-xs text-gray-400 mb-1">Cap Space</div>
-                <div className="text-base font-semibold text-emerald-300">
-                  {formatDollars(
-                    offerEvaluation?.teamSnapshot?.rawCapRoomWithoutHolds ??
-                    offerEvaluation?.teamSnapshot?.basicCapRoom ??
-                    offerEvaluation?.teamSnapshot?.capSpace ??
-                    offerEvaluation?.teamSnapshot?.capRoom ??
-                    0
-                  )}
+                <div className="text-xs text-gray-400 mb-1">Cap Room</div>
+                <div className="text-base font-semibold text-white">
+                  {formatDollars(offerEvaluation?.teamSnapshot?.capRoom || 0)}
                 </div>
               </div>
 
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
-                <div className="text-xs text-gray-400 mb-1">Practical Cap</div>
-                <div className="text-base font-semibold text-orange-200">
-                  {formatDollars(
-                    offerEvaluation?.teamSnapshot?.practicalCapRoom ??
-                    offerEvaluation?.teamSnapshot?.capRoom ??
-                    0
-                  )}
+                <div className="text-xs text-gray-400 mb-1">Dead Cap</div>
+                <div className="text-base font-semibold text-white">
+                  {formatDollars(offerEvaluation?.teamSnapshot?.deadCap || 0)}
                 </div>
               </div>
 
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
                 <div className="text-xs text-gray-400 mb-1">Cap Holds</div>
                 <div className="text-base font-semibold text-orange-200">
-                  {formatDollars(offerEvaluation?.teamSnapshot?.capHoldTotal || 0)}
+                  {formatDollars(offerEvaluation?.teamSnapshot?.capHoldTotal || offerEvaluation?.teamSnapshot?.capHolds || 0)}
                 </div>
               </div>
             </div>
 
-            <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700 mb-4">
+            <div className="grid grid-cols-1 xl:grid-cols-[1.05fr_0.95fr] gap-4 items-start mb-4">
+              <div className="space-y-4">
+                <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700">
               <div className="text-sm font-semibold text-gray-300 mb-2.5">Money</div>
 
               <div className="flex flex-col gap-2.5">
@@ -2822,8 +2789,8 @@ updateOffseasonState({
               </div>
             </div>
 
-            <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700 mb-4">
-              <div className="text-sm font-semibold text-gray-300 mb-2.5">Years</div>
+                <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700">
+                  <div className="text-sm font-semibold text-gray-300 mb-2.5">Years</div>
               <div className="flex gap-2 flex-wrap">
                 {[1, 2, 3, 4].map((y) => (
                   <button
@@ -2844,8 +2811,8 @@ updateOffseasonState({
               </div>
             </div>
 
-            <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700 mb-4">
-              <div className="text-sm font-semibold text-gray-300 mb-2.5">Option</div>
+                <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700">
+                  <div className="text-sm font-semibold text-gray-300 mb-2.5">Option</div>
 
               <div className="space-y-2">
                 <select
@@ -2867,8 +2834,11 @@ updateOffseasonState({
               </div>
             </div>
 
-            <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700 mb-4">
-              <div className="text-sm font-semibold text-gray-300 mb-2.5">Contract Preview</div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700">
+                  <div className="text-sm font-semibold text-gray-300 mb-2.5">Contract Preview</div>
 
               <div className="space-y-1 text-sm text-gray-300">
                 {(offerEvaluation?.contract?.salaryByYear || []).map((amount, idx) => {
@@ -2890,8 +2860,8 @@ updateOffseasonState({
               </div>
             </div>
 
-            <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700 mb-4">
-              <div className="text-sm font-semibold text-gray-300 mb-2">Market View</div>
+                <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700">
+                  <div className="text-sm font-semibold text-gray-300 mb-2">Market View</div>
 
               <div className="space-y-1 text-sm text-gray-300">
                 <div className="flex justify-between gap-4">
@@ -2906,6 +2876,8 @@ updateOffseasonState({
                   <span>Minimum Acceptable AAV</span>
                   <span>{formatDollars(offerEvaluation?.marketValue?.minAcceptableAAV || 0)}</span>
                 </div>
+              </div>
+            </div>
               </div>
             </div>
 
@@ -2940,7 +2912,7 @@ updateOffseasonState({
             )}
 
             {canSubmitLiveOffer && (offerEvaluation?.pendingCapHoldClearance || offerNeedsCapHoldClearance) && (
-              <div className="mb-4 text-yellow-300 text-sm font-semibold">
+              <div className="mb-4 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-yellow-200 text-sm font-semibold">
                 You have enough raw cap space for this offer, but cap holds are lowering practical cap. The offer can still be submitted. If the player chooses you, clear the needed holds from the pending-signings screen before finalizing.
               </div>
             )}
@@ -2977,17 +2949,18 @@ updateOffseasonState({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {offersModalOpen && (
         <div
-          className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-50 px-4 py-6"
+          className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-50 px-4 py-4"
           onClick={closeOffersModal}
           role="presentation"
         >
           <div
-            className="fa-modal-scroll w-full max-w-2xl max-h-[calc(100vh-3rem)] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5 sm:p-4"
+            className="fa-modal-scroll w-full max-w-4xl max-h-[calc(100vh-1.5rem)] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-6"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
@@ -3160,17 +3133,8 @@ updateOffseasonState({
         const info = getCapInfoContent(capInfoModal);
 
         return (
-          <div
-            className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-50 px-4 py-6"
-            onClick={() => setCapInfoModal(null)}
-            role="presentation"
-          >
-            <div
-              className="fa-modal-scroll w-full max-w-lg max-h-[calc(100vh-3rem)] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5"
-              onClick={(e) => e.stopPropagation()}
-              role="dialog"
-              aria-modal="true"
-            >
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4 py-6">
+            <div className="fa-modal-scroll w-full max-w-lg max-h-[88vh] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-5">
               <div className="flex items-start justify-between gap-4 mb-3">
                 <div>
                   <h2 className="text-xl font-bold text-orange-400">
