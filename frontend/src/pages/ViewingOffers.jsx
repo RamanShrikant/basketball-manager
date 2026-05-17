@@ -5,6 +5,8 @@ import * as simEngine from "../api/simEnginePy.js";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./ViewingOffers.module.css";
 
+const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
+
 function compactStorySideForStorage(side) {
   if (!side || typeof side !== "object") return null;
 
@@ -281,6 +283,61 @@ function persistLeagueData(updated) {
 }
 
 
+// Surgical timeout guard for Pyodide free-agency actions.
+// The backend does not need the large story objects from the results screen,
+// and sending those through the worker can make process-pending calls time out.
+function stripFreeAgencyStoryPayload(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripFreeAgencyStoryPayload(item));
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const heavyStoryKeys = new Set([
+    "storyContext",
+    "teamSide",
+    "playerSide",
+    "otherOffers",
+    "rosterContext",
+    "sections",
+    "voice",
+    "summary",
+    "bullets",
+  ]);
+
+  const out = {};
+
+  for (const [key, item] of Object.entries(value)) {
+    if (heavyStoryKeys.has(key)) continue;
+    out[key] = stripFreeAgencyStoryPayload(item);
+  }
+
+  return out;
+}
+
+function buildLeagueDataForFreeAgencyBackendAction(leagueData) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+
+  const state = leagueData.freeAgencyState && typeof leagueData.freeAgencyState === "object"
+    ? leagueData.freeAgencyState
+    : {};
+
+  const safeState = stripFreeAgencyStoryPayload(state);
+
+  // latestResults is only for this UI page. Keeping it in the worker payload is
+  // the biggest timeout risk on later offseasons because it can contain hundreds
+  // of generated offers and signing story objects.
+  safeState.latestResults = null;
+
+  return {
+    ...leagueData,
+    freeAgencyState: safeState,
+  };
+}
+
+
 function formatDollars(amount) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -315,6 +372,43 @@ function getContractSummary(contract, fallbackTotal = 0, fallbackYears = 0) {
     totalValue,
     currentYearSalary,
   };
+}
+
+
+function getPendingSigningCurrentYearSalary(row = {}) {
+  const summary = getContractSummary(
+    row?.contract,
+    row?.totalValue,
+    row?.years
+  );
+
+  return Number(summary.currentYearSalary || row?.currentYearSalary || 0);
+}
+
+function getPendingSigningCapRoomImpact(row = {}) {
+  const currentYearSalary = getPendingSigningCurrentYearSalary(row);
+  const spendingType = String(row?.spendingType || row?.chosenOffer?.spendingType || "").toLowerCase();
+  const exceptionType = String(row?.exceptionType || row?.chosenOffer?.exceptionType || "").toLowerCase();
+  const payrollZone = String(row?.payrollZone || row?.chosenOffer?.payrollZone || "").toLowerCase();
+  const raw = `${spendingType} ${exceptionType} ${payrollZone}`;
+
+  // Surgical FA preview fix:
+  // Minimum / exception / Bird pending signings still add to payroll and hard-cap math,
+  // but they should not consume normal cap room on this confirmation screen.
+  if (raw.includes("bird") || raw.includes("rfa_match") || raw.includes("minimum")) return 0;
+  if (raw.includes("mle") || raw.includes("mid_level") || raw.includes("taxpayer")) return 0;
+  if (raw.includes("exception") && !raw.includes("cap_space")) return 0;
+
+  // Some old saved pending rows did not preserve spendingType = "minimum".
+  // Treat near-minimum one-year depth deals as minimum-exception previews so a
+  // cap-space signing does not incorrectly block a follow-up minimum signing.
+  if (currentYearSalary > 0 && currentYearSalary <= 1_500_000) return 0;
+
+  if (spendingType === "cap_space" || spendingType === "below_cap" || raw.includes("cap space")) {
+    return currentYearSalary;
+  }
+
+  return currentYearSalary;
 }
 
 function formatContractLine(contract, fallbackTotal = 0, fallbackYears = 0) {
@@ -954,6 +1048,10 @@ export default function ViewingOffers() {
   const [playerCardView, setPlayerCardView] = useState(null);
   const [infoPopup, setInfoPopup] = useState(null);
 
+  useEffect(() => {
+    localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+  }, []);
+
   const advanceFreeAgencyDay = simEngine.advanceFreeAgencyDay;
   const processPendingUserFreeAgencyDecisions =
     simEngine.processPendingUserFreeAgencyDecisions;
@@ -976,6 +1074,21 @@ export default function ViewingOffers() {
 
   const pendingUserTeamSnapshot =
     freeAgencyState?.pendingUserTeamSnapshot || null;
+
+  const livePendingUserTeamSnapshot = useMemo(() => {
+    if (!pendingUserTeamSnapshot?.ok) return pendingUserTeamSnapshot;
+    if (!selectedTeam?.name) return pendingUserTeamSnapshot;
+
+    const liveTeam = getTeamByName(leagueData, selectedTeam.name) || selectedTeam;
+    const liveRosterCount = Array.isArray(liveTeam?.players)
+      ? liveTeam.players.length
+      : pendingUserTeamSnapshot?.rosterCount;
+
+    return {
+      ...pendingUserTeamSnapshot,
+      rosterCount: Number(liveRosterCount || 0),
+    };
+  }, [pendingUserTeamSnapshot, leagueData, selectedTeam]);
 
   const pendingRfaMatchDecisions = Array.isArray(freeAgencyState?.pendingRfaMatchDecisions)
     ? freeAgencyState.pendingRfaMatchDecisions
@@ -1458,7 +1571,7 @@ export default function ViewingOffers() {
   };
 
   const selectionPreview = useMemo(() => {
-    if (!pendingUserTeamSnapshot?.ok) {
+    if (!livePendingUserTeamSnapshot?.ok) {
       return null;
     }
 
@@ -1480,30 +1593,34 @@ export default function ViewingOffers() {
       return sum + Number(summary.totalValue || 0);
     }, 0);
 
+    const selectedCapRoomImpactTotal = selectedPendingRows.reduce((sum, row) => {
+      return sum + getPendingSigningCapRoomImpact(row);
+    }, 0);
+
     const selectedCount = selectedPendingRows.length;
-    const payrollBefore = Number(pendingUserTeamSnapshot?.payroll || 0);
-    const capRoomBefore = Number(pendingUserTeamSnapshot?.capRoom || 0);
+    const payrollBefore = Number(livePendingUserTeamSnapshot?.payroll || 0);
+    const capRoomBefore = Number(livePendingUserTeamSnapshot?.capRoom || 0);
     const hardCapRoomBefore =
-      pendingUserTeamSnapshot?.hardCapRoom === null ||
-      pendingUserTeamSnapshot?.hardCapRoom === undefined
+      livePendingUserTeamSnapshot?.hardCapRoom === null ||
+      livePendingUserTeamSnapshot?.hardCapRoom === undefined
         ? null
-        : Number(pendingUserTeamSnapshot.hardCapRoom);
-    const rosterBefore = Number(pendingUserTeamSnapshot?.rosterCount || 0);
-    const rosterLimit = Number(pendingUserTeamSnapshot?.rosterLimit || 15);
+        : Number(livePendingUserTeamSnapshot.hardCapRoom);
+    const rosterBefore = Number(livePendingUserTeamSnapshot?.rosterCount || 0);
+    const rosterLimit = Number(livePendingUserTeamSnapshot?.rosterLimit || 15);
 
     const payrollAfter = payrollBefore + selectedCurrentYearTotal;
-    const capRoomAfter = capRoomBefore - selectedCurrentYearTotal;
-    const capHoldTotal = Number(pendingUserTeamSnapshot?.capHoldTotal || 0);
+    const capRoomAfter = capRoomBefore - selectedCapRoomImpactTotal;
+    const capHoldTotal = Number(livePendingUserTeamSnapshot?.capHoldTotal || 0);
     const practicalPayrollAfter =
-      Number(pendingUserTeamSnapshot?.practicalPayroll || payrollBefore + capHoldTotal)
+      Number(livePendingUserTeamSnapshot?.practicalPayroll || payrollBefore + capHoldTotal)
       - selectedCapHoldClearance
       + selectedCurrentYearTotal;
     const practicalCapRoomAfter =
-      Number(pendingUserTeamSnapshot?.practicalCapRoom ?? capRoomBefore - capHoldTotal)
+      Number(livePendingUserTeamSnapshot?.practicalCapRoom ?? capRoomBefore - capHoldTotal)
       + selectedCapHoldClearance
-      - selectedCurrentYearTotal;
-    const firstApron = Number(pendingUserTeamSnapshot?.firstApron || 0);
-    const secondApron = Number(pendingUserTeamSnapshot?.secondApron || 0);
+      - selectedCapRoomImpactTotal;
+    const firstApron = Number(livePendingUserTeamSnapshot?.firstApron || 0);
+    const secondApron = Number(livePendingUserTeamSnapshot?.secondApron || 0);
     const hardCapRoomAfter =
       hardCapRoomBefore === null
         ? null
@@ -1536,6 +1653,7 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
     return {
       selectedCount,
       selectedCurrentYearTotal,
+      selectedCapRoomImpactTotal,
       selectedTotalValue,
       payrollBefore,
       payrollAfter,
@@ -1556,7 +1674,7 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       warnings,
       hasBlockingIssue: warnings.length > 0,
     };
-  }, [pendingUserTeamSnapshot, selectedPendingRows, selectedCapHoldClearance]);
+  }, [livePendingUserTeamSnapshot, selectedPendingRows, selectedCapHoldClearance]);
 
   const toggleDecision = (playerKey) => {
     setSelectedDecisionMap((prev) => ({
@@ -1581,11 +1699,14 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       setProcessingBack(true);
       setActionError("");
 
+      const backendLeagueData = buildLeagueDataForFreeAgencyBackendAction(leagueData);
+
       const res = await processPendingRfaMatchDecision(
-        leagueData,
+        backendLeagueData,
         selectedTeam.name,
         row.playerKey,
-        decision
+        decision,
+        selectedRightsDecisions
       );
 
       if (!res?.ok) {
@@ -1611,7 +1732,7 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
     }
   };
 
-  const processSelections = async () => {
+  const processSelections = async ({ requireSelected = false, declineUnselected = false } = {}) => {
     if (!selectedTeam?.name) {
       return { ok: false, reason: "No team selected." };
     }
@@ -1627,108 +1748,59 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       .filter((row) => selectedDecisionMap[row.playerKey])
       .map((row) => row.playerKey);
 
-    let leagueForProcessing = leagueData;
-    const rightsDecisionKeys = Object.keys(selectedRightsDecisions || {});
-
-    if (rightsDecisionKeys.length > 0) {
-      if (typeof applyRightsManagement !== "function") {
-        return {
-          ok: false,
-          reason: "Rights management helper is not wired in simEnginePy.js.",
-        };
-      }
-
-      const rightsRes = await applyRightsManagement(
-        leagueData,
-        selectedTeam.name,
-        selectedRightsDecisions
-      );
-
-      if (!rightsRes?.ok || !rightsRes?.leagueData) {
-        return {
-          ok: false,
-          reason: rightsRes?.reason || "Failed to renounce selected rights.",
-          leagueData: rightsRes?.leagueData || leagueData,
-        };
-      }
-
-      leagueForProcessing = rightsRes.leagueData;
+    if (requireSelected && pendingUserDecisions.length > 0 && selectedPlayerKeys.length === 0) {
+      return {
+        ok: false,
+        reason:
+          "You have pending signings waiting. Select at least one player to sign, or go back without advancing the day.",
+      };
     }
 
+    // Navigating back never declines anyone. Pressing the advance/finalize button
+    // is the explicit decision point: checked rows sign, unchecked rows are declined.
+    const declinedPlayerKeys = declineUnselected
+      ? pendingUserDecisions
+          .filter((row) => !selectedDecisionMap[row.playerKey])
+          .map((row) => row.playerKey)
+      : [];
+
+    const backendLeagueData = buildLeagueDataForFreeAgencyBackendAction(leagueData);
+
     return await processPendingUserFreeAgencyDecisions(
-      leagueForProcessing,
+      backendLeagueData,
       selectedTeam.name,
       selectedPlayerKeys,
-      selectedRightsDecisions
+      selectedRightsDecisions,
+      declinedPlayerKeys
     );
   };
 
-const handleBackToFreeAgency = async () => {
+const handleBackToFreeAgency = () => {
   try {
-    setProcessingBack(true);
     setActionError("");
+    localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
 
-    const processRes = await processSelections();
-    if (!processRes?.ok) {
-      if (processRes?.leagueData) {
-        applyLeagueUpdate(processRes.leagueData);
-      }
-      setActionError(processRes?.reason || "Failed to process pending signings.");
-      return;
-    }
-
-    const finalLeague = processRes?.leagueData || leagueData;
-    const finalStateSummary = processRes?.stateSummary || stateSummary;
-    const finalLatestResults =
-      finalLeague?.freeAgencyState?.latestResults || latestResults || null;
-
-    if (finalStateSummary && !finalStateSummary.isActive) {
-      finalizeFreeAgencyComplete(finalLeague, finalLatestResults);
-      navigate("/offseason");
-      return;
-    }
-
-    if (finalLeague) {
-      applyLeagueUpdate(finalLeague);
+    if (leagueData) {
+      applyLeagueUpdate(leagueData);
     }
 
     navigate("/free-agents");
   } catch (err) {
-    setActionError(err?.message || "Failed to process pending signings.");
-  } finally {
-    setProcessingBack(false);
+    setActionError(err?.message || "Failed to return to free agency.");
   }
 };
-const handleReturnToOffseasonHub = async () => {
+const handleReturnToOffseasonHub = () => {
   try {
-    setProcessingBack(true);
     setActionError("");
+    localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
 
-    const processRes = await processSelections();
-    if (!processRes?.ok) {
-      if (processRes?.leagueData) {
-        applyLeagueUpdate(processRes.leagueData);
-      }
-      setActionError(processRes?.reason || "Failed to process pending signings.");
-      return;
-    }
-
-    const finalLeague = processRes?.leagueData || leagueData;
-    const finalStateSummary = processRes?.stateSummary || stateSummary;
-    const finalLatestResults =
-      finalLeague?.freeAgencyState?.latestResults || latestResults || null;
-
-    if (finalStateSummary && !finalStateSummary.isActive) {
-      finalizeFreeAgencyComplete(finalLeague, finalLatestResults);
-    } else if (finalLeague) {
-      applyLeagueUpdate(finalLeague);
+    if (leagueData) {
+      applyLeagueUpdate(leagueData);
     }
 
     navigate("/offseason");
   } catch (err) {
     setActionError(err?.message || "Failed to return to offseason hub.");
-  } finally {
-    setProcessingBack(false);
   }
 };
 
@@ -1737,7 +1809,11 @@ const handleReturnToOffseasonHub = async () => {
       setProcessingAdvance(true);
       setActionError("");
 
-      const processRes = await processSelections();
+      const hadPendingUserDecisions = pendingUserDecisions.length > 0;
+      const processRes = await processSelections({
+        requireSelected: false,
+        declineUnselected: hadPendingUserDecisions,
+      });
       if (!processRes?.ok) {
         if (processRes?.leagueData) {
           applyLeagueUpdate(processRes.leagueData);
@@ -1749,20 +1825,41 @@ const handleReturnToOffseasonHub = async () => {
       const baseLeague = processRes?.leagueData || leagueData;
       const baseStateSummary = processRes?.stateSummary || null;
 
-if (baseStateSummary && !baseStateSummary.isActive) {
-  const latest = {
-    dayResolved: dayResolved ?? null,
-    signings: processRes?.processedSignings || [],
-    generatedOffers: processRes?.generatedOffers || [],
-    stateSummary: baseStateSummary,
-  };
+      // If this screen already had user decisions, the backend processes those
+      // selections and moves the FA state forward. Do not immediately call
+      // advanceFreeAgencyDay again, or the market can skip an extra day.
+      if (hadPendingUserDecisions) {
+        const latest = {
+          dayResolved: dayResolved ?? baseLeague?.freeAgencyState?.currentDay ?? null,
+          signings: processRes?.processedSignings || [],
+          generatedOffers: processRes?.generatedOffers || [],
+          stateSummary: baseStateSummary,
+        };
 
-  finalizeFreeAgencyComplete(baseLeague, latest);
-  return;
-}
+        if (baseStateSummary && !baseStateSummary.isActive) {
+          finalizeFreeAgencyComplete(baseLeague, latest);
+        } else {
+          applyLeagueUpdateWithLatestResults(baseLeague, latest);
+        }
+        return;
+      }
+
+      if (baseStateSummary && !baseStateSummary.isActive) {
+        const latest = {
+          dayResolved: dayResolved ?? null,
+          signings: processRes?.processedSignings || [],
+          generatedOffers: processRes?.generatedOffers || [],
+          stateSummary: baseStateSummary,
+        };
+
+        finalizeFreeAgencyComplete(baseLeague, latest);
+        return;
+      }
+
+      const backendLeagueData = buildLeagueDataForFreeAgencyBackendAction(baseLeague);
 
       const res = await advanceFreeAgencyDay(
-        baseLeague,
+        backendLeagueData,
         selectedTeam?.name || null
       );
 
@@ -2077,26 +2174,32 @@ return (
                 </div>
               </div>
 
-              {pendingUserTeamSnapshot?.ok && (
+              {pendingUserDecisions.length > 0 && (
+                <div className="mb-4 rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
+                  Select a pending player only when you want to finalize the signing. Going back to Free Agency or the Offseason Hub only saves the current state. Pressing Sign Selected / Decline Rest advances the market, signs checked players, and declines unchecked players.
+                </div>
+              )}
+
+              {livePendingUserTeamSnapshot?.ok && (
                 <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-5">
                   <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
                     <div className="text-xs text-gray-400 mb-1">Payroll</div>
                     <div className="text-base font-semibold text-white">
-                      {formatDollars(selectionPreview?.payrollAfter ?? pendingUserTeamSnapshot?.payroll ?? 0)}
+                      {formatDollars(selectionPreview?.payrollAfter ?? livePendingUserTeamSnapshot?.payroll ?? 0)}
                     </div>
                   </div>
 
                   <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
                     <div className="text-xs text-gray-400 mb-1">Cap Space</div>
-                    <div className={`text-base font-semibold ${(selectionPreview?.capRoomAfter ?? pendingUserTeamSnapshot?.capRoom ?? 0) < 0 ? "text-red-300" : "text-white"}`}>
-                      {formatDollars(selectionPreview?.capRoomAfter ?? pendingUserTeamSnapshot?.capRoom ?? 0)}
+                    <div className={`text-base font-semibold ${(selectionPreview?.capRoomAfter ?? livePendingUserTeamSnapshot?.capRoom ?? 0) < 0 ? "text-red-300" : "text-white"}`}>
+                      {formatDollars(selectionPreview?.capRoomAfter ?? livePendingUserTeamSnapshot?.capRoom ?? 0)}
                     </div>
                   </div>
 
                   <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
                     <div className="text-xs text-gray-400 mb-1">Practical Cap</div>
-                    <div className={`text-base font-semibold ${(selectionPreview?.practicalCapRoomAfter ?? pendingUserTeamSnapshot?.practicalCapRoom ?? 0) < 0 ? "text-red-300" : "text-white"}`}>
-                      {formatDollars(selectionPreview?.practicalCapRoomAfter ?? pendingUserTeamSnapshot?.practicalCapRoom ?? 0)}
+                    <div className={`text-base font-semibold ${(selectionPreview?.practicalCapRoomAfter ?? livePendingUserTeamSnapshot?.practicalCapRoom ?? 0) < 0 ? "text-red-300" : "text-white"}`}>
+                      {formatDollars(selectionPreview?.practicalCapRoomAfter ?? livePendingUserTeamSnapshot?.practicalCapRoom ?? 0)}
                     </div>
                     <div className="text-[11px] text-gray-500 mt-1">incl. holds</div>
                   </div>
@@ -2119,8 +2222,8 @@ return (
 
                   <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
                     <div className="text-xs text-gray-400 mb-1">Roster</div>
-                    <div className={`text-base font-semibold ${(selectionPreview?.rosterAfter ?? pendingUserTeamSnapshot?.rosterCount ?? 0) > (selectionPreview?.rosterLimit ?? pendingUserTeamSnapshot?.rosterLimit ?? 15) ? "text-red-300" : "text-white"}`}>
-                      {(selectionPreview?.rosterAfter ?? pendingUserTeamSnapshot?.rosterCount ?? 0)} / {(selectionPreview?.rosterLimit ?? pendingUserTeamSnapshot?.rosterLimit ?? 15)}
+                    <div className={`text-base font-semibold ${(selectionPreview?.rosterAfter ?? livePendingUserTeamSnapshot?.rosterCount ?? 0) > (selectionPreview?.rosterLimit ?? livePendingUserTeamSnapshot?.rosterLimit ?? 15) ? "text-red-300" : "text-white"}`}>
+                      {(selectionPreview?.rosterAfter ?? livePendingUserTeamSnapshot?.rosterCount ?? 0)} / {(selectionPreview?.rosterLimit ?? livePendingUserTeamSnapshot?.rosterLimit ?? 15)}
                     </div>
                   </div>
 
@@ -2141,7 +2244,7 @@ return (
                 </div>
               )}
 
-              {selectedPendingRows.length > 0 && capHoldRenounceRows.length > 0 && (
+              {(selectedPendingRows.length > 0 || pendingRfaMatchDecisions.length > 0) && capHoldRenounceRows.length > 0 && (
                 <div className="mb-4 rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-4">
                   <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-3">
                     <div>
@@ -2572,7 +2675,7 @@ return (
     disabled={processingBack || processingAdvance || marketClosed}
     className="px-6 py-3 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
   >
-    {marketClosed ? "Free Agency Complete" : processingAdvance ? "Advancing..." : "Advance Day"}
+    {marketClosed ? "Free Agency Complete" : processingAdvance ? "Advancing..." : pendingUserDecisions.length > 0 ? "Sign Selected / Decline Rest" : "Advance Day"}
   </button>
 
 <button

@@ -11,6 +11,7 @@ DEFAULT_ROSTER_LIMIT = REGULAR_SEASON_MAX_ROSTER
 DEFAULT_SEASON_YEAR = 2026
 
 MIN_DEAL = 1_200_000
+DEFAULT_MINIMUM_EXCEPTION = 1_500_000
 MAX_SALARY = 54_000_000
 YEARLY_RAISE = 0.05
 
@@ -54,6 +55,16 @@ def get_taxpayer_mle_amount(league_data: Dict[str, Any]) -> int:
         or league_data.get("taxpayerMidLevelException")
         or DEFAULT_TAXPAYER_MLE
     )
+
+
+def get_minimum_exception_amount(league_data: Dict[str, Any]) -> int:
+    return int(max(
+        MIN_DEAL,
+        league_data.get("minimumException")
+        or league_data.get("minimumSalary")
+        or league_data.get("veteranMinimum")
+        or DEFAULT_MINIMUM_EXCEPTION,
+    ))
 OFFSEASON_MIN_ROSTER = REGULAR_SEASON_MIN_ROSTER
 
 def num(value: Any, fallback: float = 0.0) -> float:
@@ -1525,7 +1536,7 @@ def is_minimum_contract_for_current_year(
 ) -> bool:
     season_year = get_operating_season_year(league_data)
     offered_current_salary = get_contract_salary_for_year(contract, season_year)
-    return int(offered_current_salary) <= int(MIN_DEAL)
+    return int(offered_current_salary) <= int(get_minimum_exception_amount(league_data))
 
 def is_emergency_fill_candidate(player: Dict[str, Any]) -> bool:
     overall = int(round(num(player.get("overall"), 0)))
@@ -3339,6 +3350,53 @@ def ensure_free_agency_state(league_data: Dict[str, Any]) -> Dict[str, Any]:
     state.setdefault("exceptionUsageByTeam", {})
     state.setdefault("teamNeedProfiles", {})
     return state
+
+
+def should_enforce_post_market_cleanup_rules(
+    league_data: Dict[str, Any],
+    state: Dict[str, Any],
+) -> bool:
+    """Return True only for the narrow late-offseason roster-fill window.
+
+    A completed free-agency state can remain on leagueData after the new season
+    starts. Regular-season direct FA signings should not inherit the offseason
+    emergency-cleanup restriction.
+    """
+    if not bool(state.get("maxDays")):
+        return False
+
+    if bool(state.get("isActive")):
+        return False
+
+    if bool(state.get("regularSeasonSigningMode")):
+        return False
+
+    if bool(state.get("skipPostMarketCleanupRules")):
+        return False
+
+    if state.get("postMarketCleanupOpen") is False:
+        return False
+
+    current_season = get_current_season_year(league_data)
+    state_season = int(num(state.get("seasonYear"), current_season))
+    if state_season < current_season:
+        return False
+
+    phase_text = " ".join([
+        str(league_data.get("seasonPhase") or ""),
+        str(league_data.get("phase") or ""),
+        str(league_data.get("currentPhase") or ""),
+        str(league_data.get("stage") or ""),
+        str(league_data.get("mode") or ""),
+    ]).lower()
+
+    if "offseason" not in phase_text and any(
+        token in phase_text
+        for token in ["regular", "in-season", "inseason", "playoff", "postseason", "preseason"]
+    ):
+        return False
+
+    return True
 
 
 # ------------------------------------------------------------
@@ -5180,6 +5238,7 @@ def process_pending_rfa_match_decision(
     user_team_name: Optional[str] = None,
     player_key: Optional[str] = None,
     decision: str = "decline",
+    rights_decisions: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
     normalize_all_player_rights(updated)
@@ -5280,6 +5339,36 @@ def process_pending_rfa_match_decision(
         chosen_offer["rfaMatchDeclined"] = True
         chosen_offer["skipRfaAutoMatch"] = True
         final_decision = "decline"
+
+    if match_offer:
+        prepared = prepare_user_offer_for_conditional_finalization(
+            league_data = updated,
+            user_team_name = rights_team_name,
+            player = player,
+            chosen_offer = chosen_offer,
+            rights_decisions = rights_decisions,
+        )
+
+        if not prepared.get("ok"):
+            return {
+                "ok": False,
+                "reason": prepared.get("reason") or f"Unable to prepare RFA match for {target_row.get('playerName', 'player')}.",
+                "leagueData": updated,
+                "blockedPlayerKey": row_player_key,
+                "pendingRfaMatchDecision": target_row,
+                "stateSummary": build_free_agency_state_summary(updated),
+                "teamSnapshot": state.get("pendingUserTeamSnapshot"),
+                "spendingCheck": prepared.get("spendingCheck"),
+                "finalCheck": prepared.get("finalCheck"),
+                "capHoldClearanceNeeded": prepared.get("capHoldClearanceNeeded"),
+                "capHoldCleared": prepared.get("capHoldCleared"),
+            }
+
+        updated = prepared.get("leagueData", updated)
+        state = ensure_free_agency_state(updated)
+        player = prepared.get("player", player)
+        chosen_offer = prepared.get("chosenOffer", chosen_offer)
+        chosen_offer["rfaMatchPreparedWithRightsClearance"] = bool(prepared.get("rightsClearanceApplied"))
 
     signed = finalize_free_agent_signing_from_offer(
         league_data = updated,
@@ -5666,6 +5755,13 @@ def process_pending_user_decisions(
     if not user_team_name:
         user_team_name = state.get("pendingUserTeamName")
 
+    # Refresh the pending dashboard snapshot from the current leagueData. This
+    # keeps the confirmation screen/backend aligned after the user leaves to
+    # release players or otherwise edit the roster before finalizing signings.
+    if user_team_name:
+        refreshed_snapshot = get_team_cap_snapshot(updated, user_team_name)
+        state["pendingUserTeamSnapshot"] = refreshed_snapshot if refreshed_snapshot.get("ok") else None
+
     selected_set = {str(x) for x in (selected_player_keys or [])}
     declined_set = {str(x) for x in (declined_player_keys or [])}
     rights_decisions = rights_decisions or {}
@@ -5677,7 +5773,37 @@ def process_pending_user_decisions(
 
     processed_signings = []
     delayed_decisions = []
+    declined_decisions = []
+    remaining_pending_rows = []
     rights_clearance_logs = []
+
+    def mark_user_offer_declined(row: Dict[str, Any], player_key: str) -> Dict[str, Any]:
+        touched = []
+        for offer in preview_state.get("offersByPlayer", {}).get(player_key, []):
+            if user_team_name and offer.get("teamName") != user_team_name:
+                continue
+            if offer.get("source") != "user":
+                continue
+            if offer.get("status", "active") != "active":
+                continue
+            offer["status"] = "declined_by_user"
+            offer["userDeclinedDecisionDay"] = current_day
+            touched.append(copy.deepcopy(offer))
+
+        preview_state.setdefault("dailyLog", []).append({
+            "day": current_day,
+            "type": "user_declined_pending_signing",
+            "playerKey": player_key,
+            "playerName": row.get("playerName"),
+            "teamName": user_team_name,
+        })
+
+        return {
+            "playerKey": player_key,
+            "playerName": row.get("playerName"),
+            "teamName": user_team_name,
+            "declinedOffers": touched,
+        }
 
     for row in pending_rows:
         player_key = row.get("playerKey") or get_player_key(
@@ -5685,16 +5811,27 @@ def process_pending_user_decisions(
             row.get("playerName"),
         )
 
+        if player_key in declined_set:
+            declined_decisions.append(mark_user_offer_declined(row, player_key))
+            continue
+
         if player_key not in selected_set:
-            if player_key in declined_set:
-                delayed_decisions.append(
-                    mark_pending_user_decision_delayed(
-                        league_data = preview,
-                        row = row,
-                        user_team_name = user_team_name,
-                        current_day = current_day,
-                    )
+            # Non-selected rows are not silent declines. Before the final market
+            # close, keep the offer live with a delay penalty. On the final day,
+            # keep the decision pending and block the close so a ready-to-sign
+            # player cannot disappear into free agency by accident.
+            if current_day >= max_days:
+                remaining_pending_rows.append(copy.deepcopy(row))
+                continue
+
+            delayed_decisions.append(
+                mark_pending_user_decision_delayed(
+                    league_data = preview,
+                    row = row,
+                    user_team_name = user_team_name,
+                    current_day = current_day,
                 )
+            )
             continue
 
         free_agents = preview.setdefault("freeAgents", [])
@@ -5796,11 +5933,47 @@ def process_pending_user_decisions(
         processed_signings.append(signed)
 
     preview_state = ensure_free_agency_state(preview)
+    preview_state["pendingUserTeamName"] = user_team_name
+
+    if remaining_pending_rows:
+        preview_state["pendingUserDecisions"] = remaining_pending_rows
+        snapshot = get_team_cap_snapshot(preview, user_team_name) if user_team_name else None
+        preview_state["pendingUserTeamSnapshot"] = snapshot if snapshot and snapshot.get("ok") else None
+
+        if delayed_decisions:
+            preview_state.setdefault("delayedUserDecisionLog", []).extend(copy.deepcopy(delayed_decisions))
+        if declined_decisions:
+            preview_state.setdefault("declinedUserDecisionLog", []).extend(copy.deepcopy(declined_decisions))
+        if rights_clearance_logs:
+            preview_state.setdefault("manualRightsClearanceLog", []).extend(copy.deepcopy(rights_clearance_logs))
+
+        names = ", ".join(str(row.get("playerName") or "player") for row in remaining_pending_rows[:3])
+        more = len(remaining_pending_rows) - 3
+        if more > 0:
+            names += f" and {more} more"
+
+        return {
+            "ok": False,
+            "reason": f"Final free agency day: resolve pending signing decisions before closing the market ({names}). Select the player to sign him, or use an explicit decline path if you add one later.",
+            "leagueData": preview,
+            "processedSignings": processed_signings,
+            "generatedOffers": [],
+            "delayedUserDecisions": delayed_decisions,
+            "declinedUserDecisions": declined_decisions,
+            "manualRightsClearanceLog": rights_clearance_logs,
+            "pendingRfaMatchDecisions": preview_state.get("pendingRfaMatchDecisions", []),
+            "stateSummary": build_free_agency_state_summary(preview),
+            "teamSnapshot": preview_state.get("pendingUserTeamSnapshot"),
+        }
+
     clear_pending_user_decisions(preview_state)
     preview_state["pendingUserTeamName"] = user_team_name
 
     if delayed_decisions:
         preview_state.setdefault("delayedUserDecisionLog", []).extend(copy.deepcopy(delayed_decisions))
+
+    if declined_decisions:
+        preview_state.setdefault("declinedUserDecisionLog", []).extend(copy.deepcopy(declined_decisions))
 
     if rights_clearance_logs:
         preview_state.setdefault("manualRightsClearanceLog", []).extend(copy.deepcopy(rights_clearance_logs))
@@ -5851,12 +6024,12 @@ def process_pending_user_decisions(
         "processedSignings": processed_signings,
         "generatedOffers": generated_offers,
         "delayedUserDecisions": delayed_decisions,
+        "declinedUserDecisions": declined_decisions,
         "manualRightsClearanceLog": rights_clearance_logs,
         "pendingRfaMatchDecisions": preview_state.get("pendingRfaMatchDecisions", []),
         "stateSummary": build_free_agency_state_summary(preview),
         "teamSnapshot": preview_state.get("pendingUserTeamSnapshot"),
     }
-
 
 def get_contract_option_player_score_adjustment(contract: Optional[Dict[str, Any]]) -> float:
     contract = normalize_contract(contract)
@@ -6077,13 +6250,13 @@ def score_offer_for_player(
         score = max(score, 1.08)
 
     if previous_team and previous_team == team_name:
-        score += 0.05
+        score += 0.07
 
     if is_rights_team(player, team_name):
-        score += 0.06
+        score += 0.08
 
     if get_player_rights(player).get("restrictedFreeAgent") and is_rights_team(player, team_name):
-        score += 0.04
+        score += 0.05
 
     if age >= 30 and direction in ["contending", "win now"]:
         score += 0.08
@@ -6268,7 +6441,7 @@ def build_cpu_offer_contract(
         multiplier += 0.03
 
     if is_returning_team_target:
-        multiplier += 0.08
+        multiplier += 0.12
 
     if direction in ["rebuilding"] and cap_room >= 15_000_000 and overall >= 83:
         multiplier += 0.06
@@ -6349,6 +6522,44 @@ def build_cpu_offer_contract(
         "option": None,
     })
 
+
+def is_incumbent_retention_priority(player: Dict[str, Any], team_name: Optional[str]) -> bool:
+    if not team_name:
+        return False
+
+    rights = get_player_rights(player)
+    previous_team = None
+    if isinstance(player.get("freeAgencyMeta"), dict):
+        previous_team = player["freeAgencyMeta"].get("fromTeam")
+
+    is_own_rights_player = bool(
+        rights.get("heldByTeam") == team_name
+        and (
+            rights.get("birdLevel") in ["bird", "early_bird", "non_bird"]
+            or rights.get("restrictedFreeAgent")
+        )
+    )
+    is_previous_team_player = bool(previous_team and previous_team == team_name)
+
+    if not is_own_rights_player and not is_previous_team_player:
+        return False
+
+    overall = int(round(num(player.get("overall"), 0)))
+    age = int(num(player.get("age"), 27))
+    potential = int(round(num(player.get("potential"), overall)))
+    upside = max(0, potential - overall)
+
+    if rights.get("restrictedFreeAgent") and overall >= 76:
+        return True
+    if overall >= 82:
+        return True
+    if overall >= 79 and age <= 33:
+        return True
+    if overall >= 77 and age <= 27 and upside >= 2:
+        return True
+
+    return False
+
 def generate_cpu_offers_for_day(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None
@@ -6403,6 +6614,29 @@ def generate_cpu_offers_for_day(
             desired_offer_count += 1
 
         target_new_offers = max(0, desired_offer_count - len(active_offers))
+
+        rights = get_player_rights(player)
+        rights_team_name = rights.get("heldByTeam")
+        previous_team_name = None
+        if isinstance(player.get("freeAgencyMeta"), dict):
+            previous_team_name = player["freeAgencyMeta"].get("fromTeam")
+
+        incumbent_team_names = []
+        for possible_team_name in [rights_team_name, previous_team_name]:
+            if not possible_team_name or possible_team_name in incumbent_team_names:
+                continue
+            incumbent_team_names.append(possible_team_name)
+
+        missing_incumbent_offer = any(
+            incumbent_team_name not in existing_team_names
+            and not (user_team_name and incumbent_team_name == user_team_name)
+            and is_incumbent_retention_priority(player, incumbent_team_name)
+            for incumbent_team_name in incumbent_team_names
+        )
+
+        if missing_incumbent_offer:
+            target_new_offers = max(1, target_new_offers)
+
         if target_new_offers <= 0:
             continue
 
@@ -6416,6 +6650,8 @@ def generate_cpu_offers_for_day(
                 continue
             if team_name in existing_team_names:
                 continue
+
+            incumbent_priority = is_incumbent_retention_priority(player, team_name)
 
             actual_roster_count = len(get_team_players(team))
             actual_roster_deficit = max(0, offseason_min_target - actual_roster_count)
@@ -6435,7 +6671,7 @@ def generate_cpu_offers_for_day(
                 team_name = team_name,
                 state = None,
             )
-            if remaining_roster_slots <= 0:
+            if remaining_roster_slots <= 0 and not incumbent_priority:
                 continue
 
             snapshot = get_team_cap_snapshot(league_data, team_name)
@@ -6489,6 +6725,13 @@ def generate_cpu_offers_for_day(
                 min_fit_threshold -= 0.06
             elif position_bucket in weakest_positions[:2]:
                 min_fit_threshold -= 0.03
+
+            if incumbent_priority:
+                min_fit_threshold -= 0.12
+                if overall >= 82:
+                    min_fit_threshold -= 0.04
+                if get_player_rights(player).get("restrictedFreeAgent"):
+                    min_fit_threshold -= 0.04
 
             min_fit_threshold = max(0.04, min_fit_threshold)
             if fit["interestScore"] < min_fit_threshold:
@@ -6563,9 +6806,11 @@ def generate_cpu_offers_for_day(
             if isinstance(player.get("freeAgencyMeta"), dict):
                 previous_team = player["freeAgencyMeta"].get("fromTeam")
             if previous_team and previous_team == team_name:
-                candidate_score += 0.18
+                candidate_score += 0.22
             if is_rights_team(player, team_name):
-                candidate_score += 0.18
+                candidate_score += 0.24
+            if incumbent_priority and get_player_rights(player).get("restrictedFreeAgent"):
+                candidate_score += 0.04
 
             if current_day >= max_days - 1:
                 candidate_score += 0.10
@@ -7852,7 +8097,7 @@ def sign_free_agent(
     state = ensure_free_agency_state(updated)
     offer = offer or {}
 
-    post_market_cleanup_mode = bool(state.get("maxDays")) and not state.get("isActive")
+    post_market_cleanup_mode = should_enforce_post_market_cleanup_rules(updated, state)
     if post_market_cleanup_mode:
         preview_contract = build_contract_from_offer(
             updated,
@@ -8392,6 +8637,7 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
             user_team_name = payload.get("userTeamName"),
             player_key = payload.get("playerKey"),
             decision = payload.get("decision", "decline"),
+            rights_decisions = payload.get("rightsDecisions", {}) or {},
         )
 
     if action == "evaluate_offer":

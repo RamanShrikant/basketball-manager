@@ -4,6 +4,7 @@ import { useGame } from "../context/GameContext";
 import styles from "./OffseasonHub.module.css";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
+const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
 
 function safeJSON(raw, fallback = null) {
   try {
@@ -59,6 +60,59 @@ function readOffseasonState(seasonYear) {
 
 function saveOffseasonState(state) {
   localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(state));
+}
+
+function getLeagueDataSnapshot(leagueData) {
+  if (leagueData && typeof leagueData === "object") return leagueData;
+  return safeJSON(localStorage.getItem("leagueData"), {}) || {};
+}
+
+function shouldResumeViewingOffers(leagueData) {
+  const snapshot = getLeagueDataSnapshot(leagueData);
+  const state = snapshot?.freeAgencyState || {};
+
+  if (!state || typeof state !== "object") return false;
+
+  const pendingUserDecisions = Array.isArray(state.pendingUserDecisions)
+    ? state.pendingUserDecisions.length
+    : 0;
+  const pendingRfaMatchDecisions = Array.isArray(state.pendingRfaMatchDecisions)
+    ? state.pendingRfaMatchDecisions.length
+    : 0;
+
+  const latestResults = state.latestResults || null;
+  const latestHasContent = Boolean(
+    latestResults &&
+    ((latestResults.dayResolved !== null &&
+      latestResults.dayResolved !== undefined) ||
+      (Array.isArray(latestResults.signings) && latestResults.signings.length > 0) ||
+      (Array.isArray(latestResults.generatedOffers) && latestResults.generatedOffers.length > 0) ||
+      latestResults.stateSummary)
+  );
+
+  return Boolean(
+    pendingUserDecisions > 0 ||
+      pendingRfaMatchDecisions > 0 ||
+      latestHasContent
+  );
+}
+
+function getFreeAgencyResumeRoute(leagueData) {
+  const savedRoute = localStorage.getItem(FREE_AGENCY_LAST_ROUTE_KEY);
+
+  if (savedRoute === "/viewing-offers" && shouldResumeViewingOffers(leagueData)) {
+    return "/viewing-offers";
+  }
+
+  if (savedRoute === "/free-agents") {
+    return "/free-agents";
+  }
+
+  if (shouldResumeViewingOffers(leagueData)) {
+    return "/viewing-offers";
+  }
+
+  return "/free-agents";
 }
 
 
@@ -218,7 +272,7 @@ const handleAdvanceToNewSeason = () => {
         accent: freeAgencyComplete ? "green" : optionsComplete ? "orange" : "neutral",
         buttonLabel: optionsComplete ? "Open Free Agency" : "Locked",
         disabled: !optionsComplete,
-        onClick: () => navigate("/free-agents"),
+        onClick: () => navigate(getFreeAgencyResumeRoute(leagueData)),
       },
       {
         step: "4",

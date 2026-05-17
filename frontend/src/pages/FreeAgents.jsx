@@ -10,6 +10,7 @@ import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
+const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
 
 function compactStorySideForStorage(side) {
   if (!side || typeof side !== "object") return null;
@@ -321,6 +322,10 @@ export default function FreeAgents() {
 
   const navigate = useNavigate();
 
+  useEffect(() => {
+    localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+  }, []);
+
   const evaluateFreeAgencyOffer = simEngine.evaluateFreeAgencyOffer;
   const signFreeAgent = simEngine.signFreeAgent;
   const generateFreeAgencyMarket = simEngine.generateFreeAgencyMarket;
@@ -486,9 +491,56 @@ const isOffseasonMode =
   const currentDay = Number(liveFreeAgencyState?.currentDay || 0);
   const maxDays = Number(liveFreeAgencyState?.maxDays || 0);
   const signedPlayersLog = liveFreeAgencyState?.signedPlayersLog || [];
+  const dailyLog = Array.isArray(liveFreeAgencyState?.dailyLog)
+    ? liveFreeAgencyState.dailyLog
+    : [];
+  const offerHistory = Array.isArray(liveFreeAgencyState?.offerHistory)
+    ? liveFreeAgencyState.offerHistory
+    : [];
+  const offersByPlayerSnapshot =
+    liveFreeAgencyState?.offersByPlayer && typeof liveFreeAgencyState.offersByPlayer === "object"
+      ? liveFreeAgencyState.offersByPlayer
+      : {};
+
+  // Completion recovery: some backend paths end the market with free agents
+  // still available, but without immediately writing the offseasonComplete flag.
+  // Treat an inactive market that reached maxDays as complete instead of
+  // showing Start Live Market again and wiping the finished market state.
+  const freeAgencyMarketStarted =
+    isOffseasonMode &&
+    optionsComplete &&
+    rightsManagementComplete &&
+    maxDays > 0 &&
+    (currentDay > 0 ||
+      signedPlayersLog.length > 0 ||
+      dailyLog.length > 0 ||
+      offerHistory.length > 0 ||
+      Object.keys(offersByPlayerSnapshot).length > 0);
+
+  const freeAgencyMarketReachedEnd =
+    freeAgencyMarketStarted &&
+    !isLiveFreeAgencyActive &&
+    currentDay >= maxDays;
+
+  const backendMarkedFreeAgencyComplete =
+    isOffseasonMode &&
+    optionsComplete &&
+    rightsManagementComplete &&
+    !isLiveFreeAgencyActive &&
+    Boolean(
+      liveFreeAgencyState?.marketComplete ||
+      liveFreeAgencyState?.freeAgencyComplete ||
+      liveFreeAgencyState?.completed ||
+      liveFreeAgencyState?.isComplete ||
+      liveFreeAgencyState?.status === "complete"
+    );
+
+  const freeAgencyMarketComplete =
+    freeAgencyMarketReachedEnd || backendMarkedFreeAgencyComplete;
 
   const effectiveFreeAgencyFinished =
     freeAgencyFinished ||
+    freeAgencyMarketComplete ||
     (isOffseasonMode &&
       optionsComplete &&
       !isLiveFreeAgencyActive &&
@@ -1433,34 +1485,41 @@ const isOffseasonMode =
     if (!optionsComplete) return;
     if (freeAgencyFinished) return;
     if (isLiveFreeAgencyActive) return;
-    if (freeAgents.length > 0) return;
+    if (!freeAgencyMarketComplete && freeAgents.length > 0) return;
 
     updateOffseasonState({
       active: true,
+      seasonYear: currentSeasonYear,
       optionsComplete: true,
+      rightsManagementComplete: true,
       freeAgencyComplete: true,
     });
 
     setDaySummary((prev) => {
       if (prev) return prev;
       return {
-        dayResolved: 0,
+        dayResolved: currentDay || maxDays || 0,
         signings: [],
         generatedOffers: [],
         stateSummary: {
           isActive: false,
-          currentDay: 0,
-          maxDays: 0,
-          freeAgentCount: 0,
+          currentDay: currentDay || 0,
+          maxDays: maxDays || 0,
+          freeAgentCount: freeAgents.length,
         },
       };
     });
   }, [
     isOffseasonMode,
     optionsComplete,
+    rightsManagementComplete,
     freeAgencyFinished,
     isLiveFreeAgencyActive,
+    freeAgencyMarketComplete,
     freeAgents.length,
+    currentDay,
+    maxDays,
+    currentSeasonYear,
   ]);
 
   const positionOrder = ["PG", "SG", "SF", "PF", "C"];
@@ -1639,6 +1698,36 @@ const isOffseasonMode =
     setOffersViewData(null);
   };
 
+  const buildRegularSeasonSigningLeagueData = (baseLeagueData) => {
+    if (!baseLeagueData || isOffseasonMode) return baseLeagueData;
+
+    const oldState =
+      baseLeagueData.freeAgencyState && typeof baseLeagueData.freeAgencyState === "object"
+        ? baseLeagueData.freeAgencyState
+        : {};
+
+    // When the offseason live market is over, the old freeAgencyState can still
+    // sit on leagueData for history. During the regular season, direct free-agent
+    // signings should not be treated as late-offseason emergency cleanup.
+    if (!oldState?.maxDays && !oldState?.isActive) return baseLeagueData;
+
+    return {
+      ...baseLeagueData,
+      freeAgencyState: {
+        ...oldState,
+        isActive: false,
+        maxDays: 0,
+        currentDay: 0,
+        offersByPlayer: {},
+        pendingUserDecisions: [],
+        pendingRfaMatchDecisions: [],
+        pendingUserTeamSnapshot: null,
+        regularSeasonSigningMode: true,
+        skipPostMarketCleanupRules: true,
+      },
+    };
+  };
+
   useEffect(() => {
     if (!signModalOpen || !signTargetPlayer || !selectedTeam || !workingLeagueData) {
       setOfferEvaluation(null);
@@ -1663,8 +1752,10 @@ const isOffseasonMode =
 
     const timer = setTimeout(async () => {
       try {
+        const evaluationLeagueData = buildRegularSeasonSigningLeagueData(workingLeagueData);
+
         const res = await evaluateFreeAgencyOffer?.(
-          workingLeagueData,
+          evaluationLeagueData,
           selectedTeam.name,
           signTargetPlayer,
           offer
@@ -1814,6 +1905,29 @@ const handleContinueToProgression = () => {
       return;
     }
 
+    if (effectiveFreeAgencyFinished || freeAgencyMarketComplete) {
+      updateOffseasonState({
+        active: true,
+        seasonYear: currentSeasonYear,
+        optionsComplete: true,
+        rightsManagementComplete: true,
+        freeAgencyComplete: true,
+      });
+
+      setDaySummary({
+        dayResolved: currentDay || maxDays || 0,
+        signings: [],
+        generatedOffers: [],
+        stateSummary: {
+          isActive: false,
+          currentDay: currentDay || 0,
+          maxDays: maxDays || 0,
+          freeAgentCount: freeAgents.length,
+        },
+      });
+      return;
+    }
+
     if (typeof initializeFreeAgencyPeriod !== "function") {
       setDaySummary({
         error: "Free agency preseason wiring is not fully connected in simEnginePy.js yet.",
@@ -1901,6 +2015,29 @@ updateOffseasonState({
 
   const handleAdvanceDay = async () => {
     if (!workingLeagueData) return;
+
+    if (effectiveFreeAgencyFinished || freeAgencyMarketComplete) {
+      updateOffseasonState({
+        active: true,
+        seasonYear: currentSeasonYear,
+        optionsComplete: true,
+        rightsManagementComplete: true,
+        freeAgencyComplete: true,
+      });
+      return;
+    }
+
+    const pendingUserDecisionCount = Array.isArray(
+      workingLeagueData?.freeAgencyState?.pendingUserDecisions
+    )
+      ? workingLeagueData.freeAgencyState.pendingUserDecisions.length
+      : 0;
+
+    if (pendingUserDecisionCount > 0) {
+      localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+      navigate("/viewing-offers");
+      return;
+    }
 
     if (typeof advanceFreeAgencyDay !== "function") {
       setDaySummary({
@@ -2038,8 +2175,10 @@ updateOffseasonState({
         return;
       }
 
+      const regularSeasonLeagueData = buildRegularSeasonSigningLeagueData(workingLeagueData);
+
       const res = await signFreeAgent(
-        workingLeagueData,
+        regularSeasonLeagueData,
         selectedTeam.name,
         signTargetPlayer.id || null,
         signTargetPlayer.name || null,

@@ -39,6 +39,60 @@ export function deepSanitize(obj, seen = new WeakSet()) {
 
   return null;
 }
+// ------------------------------------------------------------
+// FREE AGENCY BACKEND PAYLOAD GUARD
+// ------------------------------------------------------------
+function stripFreeAgencyStoryPayload(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripFreeAgencyStoryPayload(item));
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const heavyStoryKeys = new Set([
+    "storyContext",
+    "teamSide",
+    "playerSide",
+    "otherOffers",
+    "rosterContext",
+    "sections",
+    "voice",
+    "summary",
+    "bullets",
+  ]);
+
+  const out = {};
+
+  for (const [key, item] of Object.entries(value)) {
+    if (heavyStoryKeys.has(key)) continue;
+    out[key] = stripFreeAgencyStoryPayload(item);
+  }
+
+  return out;
+}
+
+function buildLeagueDataForFreeAgencyBackendAction(leagueData) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+
+  const state =
+    leagueData.freeAgencyState && typeof leagueData.freeAgencyState === "object"
+      ? leagueData.freeAgencyState
+      : {};
+
+  const safeState = stripFreeAgencyStoryPayload(state);
+
+  // latestResults is UI/display history. It is not needed by the backend
+  // when processing pending signings, RFA decisions, or advancing a day.
+  // Removing it prevents Year 2+ FA payloads from timing out in Pyodide.
+  safeState.latestResults = null;
+
+  return {
+    ...leagueData,
+    freeAgencyState: safeState,
+  };
+}
 
 // ------------------------------------------------------------
 // WORKER INIT
@@ -1602,7 +1656,7 @@ export function advanceFreeAgencyDay(
     worker.postMessage({
       type: "advance-free-agency-day",
       requestId,
-      leagueData: deepSanitize(leagueData),
+      leagueData: deepSanitize(buildLeagueDataForFreeAgencyBackendAction(leagueData)),
       payload: {
         userTeamName,
       },
@@ -1619,7 +1673,7 @@ export function processPendingUserFreeAgencyDecisions(
   startWorker();
 
   const requestId = "FAPD" + counter++;
-  const TIMEOUT_MS = 15000;
+  const TIMEOUT_MS = 65000;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -1643,7 +1697,7 @@ export function processPendingUserFreeAgencyDecisions(
     worker.postMessage({
       type: "process-pending-user-free-agency-decisions",
       requestId,
-      leagueData: deepSanitize(leagueData),
+      leagueData: deepSanitize(buildLeagueDataForFreeAgencyBackendAction(leagueData)),
       payload: {
         userTeamName,
         selectedPlayerKeys: deepSanitize(selectedPlayerKeys),
@@ -1657,12 +1711,13 @@ export function processPendingRfaMatchDecision(
   leagueData,
   userTeamName = null,
   playerKey = null,
-  decision = "decline"
+  decision = "decline",
+  rightsDecisions = {}
 ) {
   startWorker();
 
   const requestId = "FARFA" + counter++;
-  const TIMEOUT_MS = 15000;
+  const TIMEOUT_MS = 65000;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -1682,15 +1737,15 @@ export function processPendingRfaMatchDecision(
       },
       timer,
     });
-
     worker.postMessage({
       type: "process-pending-rfa-match-decision",
       requestId,
-      leagueData: deepSanitize(leagueData),
+      leagueData: deepSanitize(buildLeagueDataForFreeAgencyBackendAction(leagueData)),
       payload: {
         userTeamName,
         playerKey,
         decision,
+        rightsDecisions: deepSanitize(rightsDecisions),
       },
     });
   });
