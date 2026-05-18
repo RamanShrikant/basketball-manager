@@ -389,6 +389,8 @@ def update_player_rights_after_signing(
         meta["yearsWithCurrentTeam"] = 1
 
     player.pop("qualifyingOffer", None)
+    player.pop("qualifyingOfferEligible", None)
+    player.pop("rightsRenounced", None)
     player.pop("freeAgencyMeta", None)
 
 
@@ -5591,16 +5593,33 @@ def prepare_user_offer_for_conditional_finalization(
         matched_offer["originalOfferTeamName"] = normalized_offer.get("teamName")
         matched_offer["matchedOriginalTeamName"] = matched_offer.get("teamName")
         matched_offer["contract"] = normalize_contract(matched_offer.get("contract"))
-        return {
-            "ok": True,
-            "leagueData": working,
-            "chosenOffer": matched_offer,
-            "player": player,
-            "rfaMatchedBeforeUserClearance": True,
-            "rightsClearanceApplied": False,
-            "rightsDecisionLog": [],
-            "capHoldCleared": 0,
-        }
+
+        match_fit = can_finalize_rfa_match_offer(
+            league_data = working,
+            player = player,
+            matched_offer = matched_offer,
+        )
+
+        if match_fit.get("ok"):
+            return {
+                "ok": True,
+                "leagueData": working,
+                "chosenOffer": matched_offer,
+                "player": player,
+                "rfaMatchedBeforeUserClearance": True,
+                "rightsClearanceApplied": False,
+                "rightsDecisionLog": [],
+                "capHoldCleared": 0,
+                "rfaMatchCheck": match_fit,
+            }
+
+        # If the CPU rights team wants to match but cannot legally complete the
+        # match because of roster/cap state, treat the match as declined. This
+        # prevents a user offer sheet from getting stuck behind an impossible
+        # CPU RFA match and then failing with a generic cap / roster error.
+        normalized_offer["skipRfaAutoMatch"] = True
+        normalized_offer["rfaMatchDeclined"] = True
+        normalized_offer["rfaMatchBypassReason"] = match_fit.get("reason")
 
     snapshot = get_team_cap_snapshot(working, user_team_name)
     if not snapshot.get("ok"):
@@ -7185,6 +7204,72 @@ def maybe_apply_rfa_match(
     return matched_offer, True
 
 
+def can_finalize_rfa_match_offer(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    matched_offer: Dict[str, Any],
+) -> Dict[str, Any]:
+    signing_team_name = matched_offer.get("teamName")
+    if not signing_team_name:
+        return {
+            "ok": False,
+            "reason": "No RFA matching team was available.",
+        }
+
+    _, _, team = find_team_entry(league_data, signing_team_name)
+    if team is None:
+        return {
+            "ok": False,
+            "reason": f"RFA rights team '{signing_team_name}' was not found.",
+        }
+
+    if len(get_team_players(team)) >= get_roster_limit(league_data):
+        return {
+            "ok": False,
+            "reason": f"{signing_team_name} does not have an open roster spot to match the RFA offer sheet.",
+        }
+
+    snapshot = get_team_cap_snapshot(league_data, signing_team_name)
+    if not snapshot.get("ok"):
+        return {
+            "ok": False,
+            "reason": snapshot.get("reason", "Unable to read the RFA rights team's cap snapshot."),
+            "teamSnapshot": snapshot,
+        }
+
+    contract = apply_free_agency_start_year(league_data, matched_offer.get("contract"))
+    if not contract:
+        return {
+            "ok": False,
+            "reason": "Invalid RFA offer-sheet contract.",
+            "teamSnapshot": snapshot,
+        }
+
+    spending_res = validate_offer_spending_rules(
+        league_data = league_data,
+        team_name = signing_team_name,
+        player = player,
+        contract = contract,
+        outstanding_current_salary = 0,
+        snapshot = snapshot,
+        allow_pending_cap_hold_clearance = False,
+    )
+
+    if not spending_res.get("ok"):
+        return {
+            "ok": False,
+            "reason": spending_res.get("reason", "The RFA rights team could not legally match this offer sheet."),
+            "teamSnapshot": snapshot,
+            "spendingCheck": spending_res,
+        }
+
+    return {
+        "ok": True,
+        "teamSnapshot": snapshot,
+        "spendingCheck": spending_res,
+    }
+
+
 def finalize_free_agent_signing_from_offer(
     league_data: Dict[str, Any],
     player: Dict[str, Any],
@@ -7194,11 +7279,26 @@ def finalize_free_agent_signing_from_offer(
     player_key = get_player_key_from_player(player)
     state = ensure_free_agency_state(league_data)
 
+    original_chosen_offer = copy.deepcopy(chosen_offer)
     chosen_offer, matched_rfa = maybe_apply_rfa_match(
         league_data = league_data,
         player = player,
         chosen_offer = chosen_offer,
     )
+
+    if matched_rfa and not chosen_offer.get("forceRfaMatch"):
+        match_fit = can_finalize_rfa_match_offer(
+            league_data = league_data,
+            player = player,
+            matched_offer = chosen_offer,
+        )
+
+        if not match_fit.get("ok"):
+            chosen_offer = copy.deepcopy(original_chosen_offer)
+            chosen_offer["skipRfaAutoMatch"] = True
+            chosen_offer["rfaMatchDeclined"] = True
+            chosen_offer["rfaMatchBypassReason"] = match_fit.get("reason")
+            matched_rfa = False
 
     signing_team_name = chosen_offer.get("teamName")
 
@@ -7248,12 +7348,15 @@ def finalize_free_agent_signing_from_offer(
         user_team_name = state.get("pendingUserTeamName")
 
         if user_team_name and signing_team_name == user_team_name:
-            # The user confirmation screen may already have applied manual cap-hold
-            # clearance in prepare_user_offer_for_conditional_finalization(...).
-            # If some holds still exist, do not immediately fail here. Re-check the
-            # signing without the raw-cap-room/pending-clearance shortcut so normal
-            # exception paths like the room exception / MLE can finish the signing.
-            retry_res = validate_offer_spending_rules(
+            # User-selected cap-hold clearance may already have been applied by
+            # prepare_user_offer_for_conditional_finalization. Do one final strict
+            # validation instead of auto-failing just because a stale pending
+            # clearance flag appears again.
+            snapshot = get_team_cap_snapshot(league_data, signing_team_name)
+            if not snapshot.get("ok"):
+                return None
+
+            spending_res = validate_offer_spending_rules(
                 league_data = league_data,
                 team_name = signing_team_name,
                 player = player,
@@ -7263,12 +7366,8 @@ def finalize_free_agent_signing_from_offer(
                 allow_pending_cap_hold_clearance = False,
             )
 
-            if not retry_res.get("ok"):
+            if not spending_res.get("ok"):
                 return None
-
-            retry_res["resolvedUserPendingCapHoldClearance"] = True
-            retry_res["previousPendingCapHoldClearanceNeeded"] = int(num(spending_res.get("capHoldClearanceNeeded"), 0))
-            spending_res = retry_res
         else:
             auto_res = auto_renounce_cpu_cap_holds_for_room(
                 league_data = league_data,
