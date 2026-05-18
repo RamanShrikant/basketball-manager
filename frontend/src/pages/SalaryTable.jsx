@@ -442,6 +442,123 @@ export default function SalaryTable() {
     return deadCapRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
   }, [deadCapRows]);
 
+  const DISPLAY_YEARS = 5;
+
+  const deadCapPlayerRows = useMemo(() => {
+    if (!deadCapRows.length) return [];
+
+    const allPlayers = [
+      ...(leagueData?.freeAgents || []),
+      ...Object.values(leagueData?.conferences || {}).flatMap((teams) =>
+        (teams || []).flatMap((team) => team?.players || [])
+      ),
+    ];
+
+    const findPlayerProfile = (row) => {
+      const playerId = row?.playerId;
+      const playerName = row?.playerName;
+
+      return allPlayers.find((player) => {
+        if (
+          playerId !== undefined &&
+          playerId !== null &&
+          playerId !== "" &&
+          String(player?.id) === String(playerId)
+        ) {
+          return true;
+        }
+
+        return Boolean(playerName && player?.name === playerName);
+      }) || null;
+    };
+
+    const grouped = new Map();
+
+    for (const row of deadCapRows) {
+      const key =
+        row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
+          ? `id:${row.playerId}`
+          : `name:${row.playerName || "Released Player"}`;
+
+      const profile = findPlayerProfile(row);
+      const sourceRow = row?.sourceRow || {};
+
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          id: `dead-cap-${selectedTeam?.name || "team"}-${key}`,
+          playerId: row?.playerId ?? null,
+          playerName: row?.playerName || "Released Player",
+          pos: sourceRow?.pos || sourceRow?.position || profile?.pos || profile?.position || "-",
+          overall: sourceRow?.overall ?? profile?.overall ?? "-",
+          headshot:
+            sourceRow?.headshot ||
+            sourceRow?.playerHeadshot ||
+            sourceRow?.image ||
+            profile?.headshot ||
+            profile?.playerHeadshot ||
+            profile?.image ||
+            "",
+          salaryBySeason: {},
+          seasons: [],
+          totalRemaining: 0,
+          reason: row?.reason || "release",
+          sourceRows: [],
+        });
+      }
+
+      const item = grouped.get(key);
+      const seasonYear = Number(row?.seasonYear || 0);
+      const amount = Number(row?.amount || 0);
+
+      item.salaryBySeason[seasonYear] =
+        Number(item.salaryBySeason[seasonYear] || 0) + amount;
+
+      if (!item.seasons.includes(seasonYear)) {
+        item.seasons.push(seasonYear);
+      }
+
+      item.totalRemaining += amount;
+      item.sourceRows.push(row);
+
+      if (!item.headshot && profile?.headshot) {
+        item.headshot = profile.headshot;
+      }
+      if ((item.overall === "-" || item.overall === undefined) && profile?.overall !== undefined) {
+        item.overall = profile.overall;
+      }
+      if ((!item.pos || item.pos === "-") && (profile?.pos || profile?.position)) {
+        item.pos = profile.pos || profile.position;
+      }
+    }
+
+    return Array.from(grouped.values())
+      .map((row) => {
+        const seasons = [...row.seasons].sort((a, b) => a - b);
+        const firstSeason = seasons[0] || currentSeasonYear;
+        const lastSeason = seasons[seasons.length - 1] || currentSeasonYear;
+
+        return {
+          ...row,
+          seasons,
+          firstSeason,
+          lastSeason,
+          seasonRange:
+            firstSeason === lastSeason
+              ? String(firstSeason)
+              : `${firstSeason}-${lastSeason}`,
+          salaryByYear: Array.from({ length: DISPLAY_YEARS }, (_, i) => {
+            const seasonYear = currentSeasonYear + i;
+            return Number(row.salaryBySeason[seasonYear] || 0);
+          }),
+        };
+      })
+      .sort((a, b) => {
+        const amountDiff = Number(b.totalRemaining || 0) - Number(a.totalRemaining || 0);
+        if (amountDiff !== 0) return amountDiff;
+        return String(a.playerName || "").localeCompare(String(b.playerName || ""));
+      });
+  }, [deadCapRows, leagueData, selectedTeam?.name, currentSeasonYear]);
+
   const players = useMemo(() => {
     const pls = selectedTeam?.players || [];
 
@@ -500,33 +617,31 @@ export default function SalaryTable() {
       capHoldInfo: row,
     }));
 
-    const deadRows = deadCapRows.map((row) => ({
+    const deadRows = deadCapPlayerRows.map((row) => ({
       id: row.id,
       name: row.playerName,
-      pos: "-",
-      overall: "-",
-      headshot: "",
+      pos: row.pos || "-",
+      overall: row.overall ?? "-",
+      headshot: row.headshot || "",
       contract: {
-        startYear: row.seasonYear,
-        salaryByYear: [Number(row.amount || 0)],
+        startYear: currentSeasonYear,
+        salaryByYear: row.salaryByYear,
         option: null,
       },
-      years: 1,
-      endYear: row.seasonYear,
-      totalRemaining: Number(row.amount || 0),
+      years: Math.max(1, row.seasons?.length || 1),
+      endYear: row.lastSeason || currentSeasonYear,
+      totalRemaining: Number(row.totalRemaining || 0),
       optionLabel: "Released Player Dead Cap",
       expType: "DEAD CAP",
-      expNote: `${row.playerName} was released, but this salary still counts against ${selectedTeam?.name || "the team"}'s cap for ${row.seasonYear}.`,
+      expNote: `${row.playerName} was released, but this salary still counts against ${selectedTeam?.name || "the team"}'s cap from ${row.seasonRange}.`,
       isCapHold: false,
       isDeadCap: true,
-      deadCapAmount: Number(row.amount || 0),
+      deadCapAmount: Number(row.totalRemaining || 0),
       deadCapInfo: row,
     }));
 
     return [...rosterRows, ...deadRows, ...holdRows];
-  }, [selectedTeam, currentSeasonYear, capHoldRows, deadCapRows]);
-
-  const DISPLAY_YEARS = 5;
+  }, [selectedTeam, currentSeasonYear, capHoldRows, deadCapPlayerRows]);
 
   const yearColumns = useMemo(() => {
     return Array.from({ length: DISPLAY_YEARS }, (_, i) => currentSeasonYear + i);
@@ -647,7 +762,7 @@ export default function SalaryTable() {
                       <div className="text-2xl font-extrabold">{selectedTeam.name} Salary Table</div>
                       <div className="text-white/60 text-sm">
                         {selectedTeam?.players?.length || 0} roster players
-                        {deadCapRows.length > 0 ? ` + ${deadCapRows.length} dead cap` : ""}
+                        {deadCapPlayerRows.length > 0 ? ` + ${deadCapPlayerRows.length} dead cap` : ""}
                         {capHoldRows.length > 0 ? ` + ${capHoldRows.length} cap holds` : ""}
                       </div>
                     </div>
@@ -656,7 +771,7 @@ export default function SalaryTable() {
                   <div className={`px-3 py-2 rounded-xl border text-sm ${toneClass(capStatus.tone)}`}>
                     <div className="font-semibold">{capStatus.label}</div>
                     <div className="text-xs opacity-80">
-                      {deadCapRows.length > 0 || capHoldRows.length > 0 ? "Payroll + Adjustments" : "Payroll"} {yearColumns[0]}: {fmtM(payrollThisYear)}
+                      {deadCapPlayerRows.length > 0 || capHoldRows.length > 0 ? "Payroll + Adjustments" : "Payroll"} {yearColumns[0]}: {fmtM(payrollThisYear)}
                     </div>
                   </div>
                 </div>
@@ -667,7 +782,7 @@ export default function SalaryTable() {
                   <Chip label={`1st Apron: ${fmtM(FIRST_APRON)}`} />
                   <Chip label={`2nd Apron: ${fmtM(SECOND_APRON)}`} />
                   <Chip label={`Hard Cap: ${fmtM(HARD_CAP)}`} />
-                  {deadCapRows.length > 0 && <Chip label={`Dead Cap: ${fmtM(deadCapTotal)}`} />}
+                  {deadCapPlayerRows.length > 0 && <Chip label={`Dead Cap: ${fmtM(deadCapTotal)}`} />}
                   {capHoldRows.length > 0 && <Chip label={`Cap Holds: ${fmtM(capHoldTotal)}`} />}
                 </div>
               </div>
@@ -853,8 +968,8 @@ export default function SalaryTable() {
                 </div>
 
                 <div className="mt-5 grid grid-cols-1 gap-2 text-sm">
-                  <InfoRow label="Dead cap amount" value={fmtMoney(deadCapInfo.deadCapAmount)} />
-                  <InfoRow label="Season" value={deadCapInfo.deadCapInfo?.seasonYear || deadCapInfo.endYear} />
+                  <InfoRow label="Total dead cap remaining" value={fmtMoney(deadCapInfo.deadCapAmount)} />
+                  <InfoRow label="Seasons" value={deadCapInfo.deadCapInfo?.seasonRange || deadCapInfo.endYear} />
                   <InfoRow label="Reason" value={String(deadCapInfo.deadCapInfo?.reason || "Released player salary").replaceAll("_", " ")} />
                 </div>
               </div>
