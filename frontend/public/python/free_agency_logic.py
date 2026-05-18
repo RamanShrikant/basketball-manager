@@ -7248,37 +7248,57 @@ def finalize_free_agent_signing_from_offer(
         user_team_name = state.get("pendingUserTeamName")
 
         if user_team_name and signing_team_name == user_team_name:
-            return None
+            # The user confirmation screen may already have applied manual cap-hold
+            # clearance in prepare_user_offer_for_conditional_finalization(...).
+            # If some holds still exist, do not immediately fail here. Re-check the
+            # signing without the raw-cap-room/pending-clearance shortcut so normal
+            # exception paths like the room exception / MLE can finish the signing.
+            retry_res = validate_offer_spending_rules(
+                league_data = league_data,
+                team_name = signing_team_name,
+                player = player,
+                contract = contract,
+                outstanding_current_salary = 0,
+                snapshot = snapshot,
+                allow_pending_cap_hold_clearance = False,
+            )
 
-        auto_res = auto_renounce_cpu_cap_holds_for_room(
-            league_data = league_data,
-            team_name = signing_team_name,
-            clearance_needed = int(num(spending_res.get("capHoldClearanceNeeded"), 0)),
-            protected_player_key = player_key,
-        )
+            if not retry_res.get("ok"):
+                return None
 
-        if not auto_res.get("ok"):
-            return None
+            retry_res["resolvedUserPendingCapHoldClearance"] = True
+            retry_res["previousPendingCapHoldClearanceNeeded"] = int(num(spending_res.get("capHoldClearanceNeeded"), 0))
+            spending_res = retry_res
+        else:
+            auto_res = auto_renounce_cpu_cap_holds_for_room(
+                league_data = league_data,
+                team_name = signing_team_name,
+                clearance_needed = int(num(spending_res.get("capHoldClearanceNeeded"), 0)),
+                protected_player_key = player_key,
+            )
 
-        snapshot = get_team_cap_snapshot(league_data, signing_team_name)
-        if not snapshot.get("ok"):
-            return None
+            if not auto_res.get("ok"):
+                return None
 
-        spending_res = validate_offer_spending_rules(
-            league_data = league_data,
-            team_name = signing_team_name,
-            player = player,
-            contract = contract,
-            outstanding_current_salary = 0,
-            snapshot = snapshot,
-            allow_pending_cap_hold_clearance = False,
-        )
+            snapshot = get_team_cap_snapshot(league_data, signing_team_name)
+            if not snapshot.get("ok"):
+                return None
 
-        if not spending_res.get("ok"):
-            return None
+            spending_res = validate_offer_spending_rules(
+                league_data = league_data,
+                team_name = signing_team_name,
+                player = player,
+                contract = contract,
+                outstanding_current_salary = 0,
+                snapshot = snapshot,
+                allow_pending_cap_hold_clearance = False,
+            )
 
-        spending_res["autoRenouncedCapHolds"] = auto_res.get("renounced", [])
-        spending_res["autoRenouncedCapHoldAmount"] = auto_res.get("capHoldCleared", 0)
+            if not spending_res.get("ok"):
+                return None
+
+            spending_res["autoRenouncedCapHolds"] = auto_res.get("renounced", [])
+            spending_res["autoRenouncedCapHoldAmount"] = auto_res.get("capHoldCleared", 0)
 
     if len(get_team_players(team)) >= get_roster_limit(league_data):
         return None

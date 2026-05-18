@@ -1306,7 +1306,6 @@ export default function ViewingOffers() {
     localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
   }, []);
 
-  const advanceFreeAgencyDay = simEngine.advanceFreeAgencyDay;
   const processPendingUserFreeAgencyDecisions =
     simEngine.processPendingUserFreeAgencyDecisions;
   const processPendingRfaMatchDecision =
@@ -2078,20 +2077,6 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
     );
   };
 
-const handleBackToFreeAgency = () => {
-  try {
-    setActionError("");
-    localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
-
-    if (leagueData) {
-      applyLeagueUpdate(leagueData);
-    }
-
-    navigate("/free-agents");
-  } catch (err) {
-    setActionError(err?.message || "Failed to return to free agency.");
-  }
-};
 const handleReturnToOffseasonHub = () => {
   try {
     setActionError("");
@@ -2112,11 +2097,27 @@ const handleReturnToOffseasonHub = () => {
       setProcessingAdvance(true);
       setActionError("");
 
+      // Cleaner flow: ViewingOffers is only a review/decision screen.
+      // FreeAgents advances the market, this page resolves user decisions,
+      // then returns to FreeAgents for the next day. Do not advance another day here.
       const hadPendingUserDecisions = pendingUserDecisions.length > 0;
+
+      if (!hadPendingUserDecisions) {
+        localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+
+        if (leagueData) {
+          applyLeagueUpdate(leagueData);
+        }
+
+        navigate("/free-agents");
+        return;
+      }
+
       const processRes = await processSelections({
         requireSelected: false,
-        declineUnselected: hadPendingUserDecisions,
+        declineUnselected: true,
       });
+
       if (!processRes?.ok) {
         if (processRes?.leagueData) {
           applyLeagueUpdate(processRes.leagueData);
@@ -2127,63 +2128,23 @@ const handleReturnToOffseasonHub = () => {
 
       const baseLeague = processRes?.leagueData || leagueData;
       const baseStateSummary = processRes?.stateSummary || null;
-
-      // If this screen already had user decisions, the backend processes those
-      // selections and moves the FA state forward. Do not immediately call
-      // advanceFreeAgencyDay again, or the market can skip an extra day.
-      if (hadPendingUserDecisions) {
-        const latest = {
-          dayResolved: dayResolved ?? baseLeague?.freeAgencyState?.currentDay ?? null,
-          signings: processRes?.processedSignings || [],
-          generatedOffers: processRes?.generatedOffers || [],
-          stateSummary: baseStateSummary,
-        };
-
-        if (baseStateSummary && !baseStateSummary.isActive) {
-          finalizeFreeAgencyComplete(baseLeague, latest);
-        } else {
-          applyLeagueUpdateWithLatestResults(baseLeague, latest);
-        }
-        return;
-      }
-
-      if (baseStateSummary && !baseStateSummary.isActive) {
-        const latest = {
-          dayResolved: dayResolved ?? null,
-          signings: processRes?.processedSignings || [],
-          generatedOffers: processRes?.generatedOffers || [],
-          stateSummary: baseStateSummary,
-        };
-
-        finalizeFreeAgencyComplete(baseLeague, latest);
-        return;
-      }
-
-      const backendLeagueData = buildLeagueDataForFreeAgencyBackendAction(baseLeague);
-
-      const res = await advanceFreeAgencyDay(
-        backendLeagueData,
-        selectedTeam?.name || null
-      );
-
-      if (!res?.ok || !res?.leagueData) {
-        if (res?.leagueData) {
-          applyLeagueUpdate(res.leagueData);
-        }
-        setActionError(res?.reason || "Failed to advance free agency day.");
-        return;
-      }
-
       const latest = {
-        dayResolved: res?.dayResolved ?? null,
-        signings: res?.signings || [],
-        generatedOffers: res?.generatedOffers || [],
-        stateSummary: res?.stateSummary || null,
+        dayResolved: dayResolved ?? baseLeague?.freeAgencyState?.currentDay ?? null,
+        signings: processRes?.processedSignings || [],
+        generatedOffers: processRes?.generatedOffers || [],
+        stateSummary: baseStateSummary,
       };
 
-      applyLeagueUpdateWithLatestResults(res.leagueData, latest);
+      if (baseStateSummary && !baseStateSummary.isActive) {
+        finalizeFreeAgencyComplete(baseLeague, latest);
+      } else {
+        applyLeagueUpdateWithLatestResults(baseLeague, latest);
+      }
+
+      localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+      navigate("/free-agents");
     } catch (err) {
-      setActionError(err?.message || "Failed to advance free agency day.");
+      setActionError(err?.message || "Failed to continue free agency.");
     } finally {
       setProcessingAdvance(false);
     }
@@ -2234,14 +2195,7 @@ return (
 
             <div className="mt-6 flex gap-3 flex-wrap">
               <button
-                onClick={() => navigate("/free-agents")}
-                className="px-5 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
-              >
-                Back to Free Agency
-              </button>
-
-              <button
-                onClick={() => navigate("/offseason")}
+                onClick={handleReturnToOffseasonHub}
                 className="px-5 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
               >
                 Back to Offseason Hub
@@ -2479,7 +2433,7 @@ return (
 
               {pendingUserDecisions.length > 0 && (
                 <div className="mb-4 rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
-                  Select a pending player only when you want to finalize the signing. Going back to Free Agency or the Offseason Hub only saves the current state. Pressing Sign Selected / Decline Rest advances the market, signs checked players, and declines unchecked players.
+                  Select the pending players you want to finalize. Pressing Sign Selected / Decline Rest signs checked players, declines unchecked players, and returns you to Free Agency for the next day. Returning to the Offseason Hub only saves the current state.
                 </div>
               )}
 
@@ -2962,23 +2916,19 @@ return (
 
 <div className="flex gap-3 flex-wrap">
   <button
-    onClick={handleBackToFreeAgency}
-    disabled={processingBack || processingAdvance}
-    className="px-6 py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
-  >
-    {processingBack
-      ? "Processing..."
-      : marketClosed
-      ? "Free Agency Complete"
-      : "Back to Free Agency"}
-  </button>
-
-  <button
     onClick={handleAdvanceFromResults}
-    disabled={processingBack || processingAdvance || marketClosed}
+    disabled={processingBack || processingAdvance || marketClosed || pendingRfaMatchDecisions.length > 0}
     className="px-6 py-3 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
   >
-    {marketClosed ? "Free Agency Complete" : processingAdvance ? "Advancing..." : pendingUserDecisions.length > 0 ? "Sign Selected / Decline Rest" : "Advance Day"}
+    {marketClosed
+      ? "Free Agency Complete"
+      : processingAdvance
+      ? "Processing..."
+      : pendingRfaMatchDecisions.length > 0
+      ? "Resolve RFA Decisions First"
+      : pendingUserDecisions.length > 0
+      ? "Sign Selected / Decline Rest"
+      : "Continue to Free Agency"}
   </button>
 
 <button
