@@ -2862,14 +2862,32 @@ updateOffseasonState({
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
                 <div className="text-xs text-gray-400 mb-1">Payroll</div>
                 <div className="text-base font-semibold text-white">
-                  {formatDollars(offerEvaluation?.teamSnapshot?.payroll || 0)}
+                  {formatDollars(
+                    offerEvaluation?.teamSnapshot?.rawPayrollWithoutHolds ??
+                    userCapDashboard?.payroll ??
+                    offerEvaluation?.teamSnapshot?.playerPayroll ??
+                    offerEvaluation?.teamSnapshot?.payroll ??
+                    0
+                  )}
                 </div>
               </div>
 
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
                 <div className="text-xs text-gray-400 mb-1">Cap Room</div>
-                <div className="text-base font-semibold text-white">
-                  {formatDollars(offerEvaluation?.teamSnapshot?.capRoom || 0)}
+                <div className={`text-base font-semibold ${(
+                  offerEvaluation?.teamSnapshot?.rawCapRoomWithoutHolds ??
+                  userCapDashboard?.capRoom ??
+                  offerEvaluation?.teamSnapshot?.capSpace ??
+                  offerEvaluation?.teamSnapshot?.capRoom ??
+                  0
+                ) < 0 ? "text-red-300" : "text-emerald-300"}`}>
+                  {formatDollars(
+                    offerEvaluation?.teamSnapshot?.rawCapRoomWithoutHolds ??
+                    userCapDashboard?.capRoom ??
+                    offerEvaluation?.teamSnapshot?.capSpace ??
+                    offerEvaluation?.teamSnapshot?.capRoom ??
+                    0
+                  )}
                 </div>
               </div>
 
