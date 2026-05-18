@@ -437,12 +437,16 @@ export default function FreeAgents() {
   const renderRightsChips = (player, evaluation = null) => {
     const rights = getRights(player);
     const chips = [];
+    const evalBlocked = evaluation && evaluation.ok === false;
+    const spendingText = String(evaluation?.spendingType || "").toLowerCase();
+    const blockedTone = evalBlocked || spendingText.includes("blocked") ? "red" : "green";
+
     chips.push(rights.restrictedFreeAgent ? <Chip key="rfa" tone="green">RFA</Chip> : <Chip key="ufa">UFA</Chip>);
     if (rights.heldByTeam) chips.push(<Chip key="rights" tone="orange">{formatBirdLabel(rights.birdLevel)}: {rights.heldByTeam}</Chip>);
     if (player?.qualifyingOffer?.amount) chips.push(<Chip key="qo" tone="green">QO {formatDollars(player.qualifyingOffer.amount)}</Chip>);
-    if (evaluation?.spendingType) chips.push(<Chip key="tool" tone={evaluation.spendingType === "bird_rights" ? "orange" : "green"}>Using {String(evaluation.spendingType).replaceAll("_", " ")}</Chip>);
-    if (evaluation?.exceptionType) chips.push(<Chip key="ex" tone="green">{String(evaluation.exceptionType).replaceAll("_", " ")}</Chip>);
-    if (evaluation?.payrollZone) chips.push(<Chip key="zone">{String(evaluation.payrollZone).replaceAll("_", " ")}</Chip>);
+    if (evaluation?.spendingType) chips.push(<Chip key="tool" tone={blockedTone}>{String(evaluation.spendingType).replaceAll("_", " ")}</Chip>);
+    if (evaluation?.exceptionType) chips.push(<Chip key="ex" tone={blockedTone}>{String(evaluation.exceptionType).replaceAll("_", " ")}</Chip>);
+    if (evaluation?.payrollZone) chips.push(<Chip key="zone" tone={evalBlocked ? "red" : "neutral"}>{String(evaluation.payrollZone).replaceAll("_", " ")}</Chip>);
     return chips;
   };
 
@@ -1821,6 +1825,44 @@ const isOffseasonMode =
     offerSalaryText,
   ]);
 
+  const formatOfferEvaluationReason = (evaluation) => {
+    if (!evaluation?.reason) return "";
+
+    const spendingType = String(evaluation?.spendingType || "").toLowerCase();
+    const exceptionType = String(evaluation?.exceptionType || "").toLowerCase();
+    const offeredFirstYearSalary = parseMillionsText(offerSalaryText);
+    const exceptionRoom = Math.max(0, Number(evaluation?.exceptionRoom || 0));
+    const minimumOffer = Number(
+      workingLeagueData?.minimumException ||
+      workingLeagueData?.minimumSalary ||
+      workingLeagueData?.veteranMinimum ||
+      1_500_000
+    );
+
+    if (!evaluation?.ok && spendingType.includes("room_blocked")) {
+      let toolLabel = "available signing room";
+      if (exceptionType.includes("taxpayer")) toolLabel = "taxpayer MLE";
+      else if (exceptionType.includes("non_taxpayer")) toolLabel = "non-taxpayer MLE";
+      else if (exceptionType.includes("room")) toolLabel = "room exception";
+
+      if (offeredFirstYearSalary > minimumOffer && minimumOffer > 0) {
+        return `${selectedTeam?.name || "This team"} can still submit a minimum offer up to ${formatDollars(minimumOffer)}, but this offer is above the minimum. The above-minimum path only has ${formatDollars(exceptionRoom)} of ${toolLabel} left, so the offer needs to be lowered to ${formatDollars(minimumOffer)} or less unless another spending tool opens up.`;
+      }
+
+      return `${selectedTeam?.name || "This team"} only has ${formatDollars(exceptionRoom)} of ${toolLabel} left for this offer.`;
+    }
+
+    if (!evaluation?.ok && spendingType.includes("first_apron_blocked")) {
+      return `${selectedTeam?.name || "This team"} cannot use the non-taxpayer MLE here because this offer would push the team over the first apron.`;
+    }
+
+    if (!evaluation?.ok && spendingType.includes("second_apron_blocked")) {
+      return `${selectedTeam?.name || "This team"} is above the second apron, so outside free agents are minimum-only in this model.`;
+    }
+
+    return evaluation.reason;
+  };
+
   const interestDisplay = useMemo(() => {
     if (offerEvalLoading) {
       return {
@@ -1873,7 +1915,7 @@ const handleContinueToProgression = () => {
 
   navigate("/player-progression");
 };
-  const buildCleanFreeAgencyStateForInit = (seasonYear, userTeamName = null, maxDays = 7) => {
+  const buildCleanFreeAgencyStateForInit = (seasonYear, userTeamName = null, maxDays = 10) => {
   return {
     seasonYear,
     isActive: false,
@@ -1963,7 +2005,7 @@ const handleContinueToProgression = () => {
 const cleanFreeAgencyState = buildCleanFreeAgencyStateForInit(
   currentSeasonYear,
   selectedTeam?.name || null,
-  7
+  10
 );
 
 const leagueForInit = {
@@ -1976,7 +2018,7 @@ applyLeagueUpdate(leagueForInit);
 const res = await initializeFreeAgencyPeriod(
   leagueForInit,
   selectedTeam?.name || null,
-  7
+  10
 );
 
       if (!res?.ok || !res?.leagueData) {
@@ -2256,9 +2298,10 @@ updateOffseasonState({
         {isOffseasonMode && effectiveFreeAgencyFinished && (
           <button
             onClick={handleContinueToProgression}
-            className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
+            disabled={userRosterInvalid}
+            className={`px-6 py-3 rounded-lg font-semibold transition ${userRosterInvalid ? "bg-neutral-700 text-white/45 cursor-not-allowed" : "bg-green-600 hover:bg-green-500"}`}
           >
-            Continue to Progression
+            {userRosterInvalid ? "Fix Roster Before Progression" : "Continue to Progression"}
           </button>
         )}
         {isOffseasonMode && (
@@ -2437,9 +2480,10 @@ updateOffseasonState({
             {effectiveFreeAgencyFinished ? (
               <button
                 onClick={handleContinueToProgression}
-                className="px-5 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
+                disabled={userRosterInvalid}
+                className={`px-5 py-2 rounded-lg font-semibold transition ${userRosterInvalid ? "bg-neutral-700 text-white/45 cursor-not-allowed" : "bg-green-600 hover:bg-green-500"}`}
               >
-                Continue to Progression
+                {userRosterInvalid ? "Fix Roster Before Progression" : "Continue to Progression"}
               </button>
             ) : !isLiveFreeAgencyActive ? (
               <button
@@ -2803,9 +2847,10 @@ updateOffseasonState({
         {isOffseasonMode && effectiveFreeAgencyFinished && (
           <button
             onClick={handleContinueToProgression}
-            className="px-8 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
+            disabled={userRosterInvalid}
+            className={`px-8 py-3 rounded-lg font-semibold transition ${userRosterInvalid ? "bg-neutral-700 text-white/45 cursor-not-allowed" : "bg-green-600 hover:bg-green-500"}`}
           >
-            Continue to Progression
+            {userRosterInvalid ? "Fix Roster Before Progression" : "Continue to Progression"}
           </button>
         )}
         <button
@@ -2862,32 +2907,14 @@ updateOffseasonState({
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
                 <div className="text-xs text-gray-400 mb-1">Payroll</div>
                 <div className="text-base font-semibold text-white">
-                  {formatDollars(
-                    offerEvaluation?.teamSnapshot?.rawPayrollWithoutHolds ??
-                    userCapDashboard?.payroll ??
-                    offerEvaluation?.teamSnapshot?.playerPayroll ??
-                    offerEvaluation?.teamSnapshot?.payroll ??
-                    0
-                  )}
+                  {formatDollars(offerEvaluation?.teamSnapshot?.payroll || 0)}
                 </div>
               </div>
 
               <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
                 <div className="text-xs text-gray-400 mb-1">Cap Room</div>
-                <div className={`text-base font-semibold ${(
-                  offerEvaluation?.teamSnapshot?.rawCapRoomWithoutHolds ??
-                  userCapDashboard?.capRoom ??
-                  offerEvaluation?.teamSnapshot?.capSpace ??
-                  offerEvaluation?.teamSnapshot?.capRoom ??
-                  0
-                ) < 0 ? "text-red-300" : "text-emerald-300"}`}>
-                  {formatDollars(
-                    offerEvaluation?.teamSnapshot?.rawCapRoomWithoutHolds ??
-                    userCapDashboard?.capRoom ??
-                    offerEvaluation?.teamSnapshot?.capSpace ??
-                    offerEvaluation?.teamSnapshot?.capRoom ??
-                    0
-                  )}
+                <div className="text-base font-semibold text-white">
+                  {formatDollars(offerEvaluation?.teamSnapshot?.capRoom || 0)}
                 </div>
               </div>
 
@@ -3046,7 +3073,7 @@ updateOffseasonState({
 
             {!offerEvalLoading && offerEvaluation?.reason && !offerEvaluation?.ok && (
               <div className="mb-4 text-red-300 text-sm font-semibold">
-                {offerEvaluation.reason}
+                {formatOfferEvaluationReason(offerEvaluation)}
               </div>
             )}
 

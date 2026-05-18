@@ -8,6 +8,7 @@ import "../styles/BMAnimations.css";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const POSTSEASON_KEY = "bm_postseason_v2";
+const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
 
 function safeJSON(raw, fallback = null) {
   if (!raw) return fallback;
@@ -27,6 +28,49 @@ function safeJSON(raw, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+
+function getOffseasonFreeAgencyReturnPath() {
+  const lastRoute = localStorage.getItem(FREE_AGENCY_LAST_ROUTE_KEY);
+
+  if (lastRoute !== "/viewing-offers") {
+    return "/free-agents";
+  }
+
+  const leagueData = safeJSON(localStorage.getItem("leagueData"), null);
+  const freeAgencyState = leagueData?.freeAgencyState || {};
+
+  const pendingUserDecisionCount = Array.isArray(freeAgencyState?.pendingUserDecisions)
+    ? freeAgencyState.pendingUserDecisions.length
+    : 0;
+
+  const pendingRfaDecisionCount = Array.isArray(freeAgencyState?.pendingRfaMatchDecisions)
+    ? freeAgencyState.pendingRfaMatchDecisions.length
+    : 0;
+
+  const hasLatestResults = Boolean(freeAgencyState?.latestResults);
+  const marketIsActive = Boolean(freeAgencyState?.isActive);
+  const currentDay = Number(freeAgencyState?.currentDay || 0);
+  const maxDays = Number(freeAgencyState?.maxDays || 0);
+  const marketComplete = Boolean(
+    freeAgencyState?.marketComplete ||
+      freeAgencyState?.freeAgencyComplete ||
+      freeAgencyState?.completed ||
+      freeAgencyState?.isComplete ||
+      freeAgencyState?.status === "complete" ||
+      (!marketIsActive && maxDays > 0 && currentDay >= maxDays)
+  );
+
+  if (marketComplete && pendingUserDecisionCount === 0 && pendingRfaDecisionCount === 0) {
+    return "/free-agents";
+  }
+
+  if (pendingUserDecisionCount > 0 || pendingRfaDecisionCount > 0 || hasLatestResults) {
+    return "/viewing-offers";
+  }
+
+  return "/free-agents";
 }
 
 export default function TeamHub() {
@@ -60,6 +104,7 @@ export default function TeamHub() {
 
   const offseasonReturnTo = location.state?.returnTo || "/offseason";
   const playoffReturnTo = location.state?.playoffReturnTo || "/playoffs";
+  const offseasonFreeAgentsPath = getOffseasonFreeAgencyReturnPath();
 
   if (!selectedTeam) {
     return (
@@ -99,7 +144,7 @@ export default function TeamHub() {
     { name: "Return to Offseason Hub", path: offseasonReturnTo, enabled: true },
     { name: "View Roster", path: "/roster-view", enabled: true },
     { name: "Trades", path: "#", enabled: false },
-    { name: "Free Agents", path: "/free-agents", enabled: true },
+    { name: "Free Agents", path: offseasonFreeAgentsPath, enabled: true },
     { name: "Salary Table", path: "/salary-table", enabled: true },
     { name: "Coach Gameplan", path: "#", enabled: false },
     { name: "Schedule", path: "#", enabled: false },

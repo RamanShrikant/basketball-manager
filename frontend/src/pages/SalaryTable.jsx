@@ -1,3 +1,4 @@
+
 // src/pages/SalaryTable.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
@@ -12,6 +13,8 @@ export default function SalaryTable() {
 
   const [leagueData, setLeagueData] = useState(null);
   const [selectedTeamKey, setSelectedTeamKey] = useState("");
+  const [capHoldInfo, setCapHoldInfo] = useState(null);
+  const [deadCapInfo, setDeadCapInfo] = useState(null);
 
   const rawSeasonYear = Number(
     leagueData?.seasonYear ??
@@ -41,6 +44,14 @@ export default function SalaryTable() {
   const fmtM = (n) => {
     const v = Number(n) || 0;
     return `$${(v / 1_000_000).toFixed(1)}M`.replace(".0M", "M");
+  };
+
+  const fmtMoney = (n) => {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    }).format(Number(n || 0));
   };
 
   const safeJSON = (raw) => {
@@ -151,6 +162,14 @@ export default function SalaryTable() {
     return leagueData.conferences?.[conf]?.[idx] || null;
   }, [leagueData, selectedTeamKey]);
 
+  const freeAgencyState = leagueData?.freeAgencyState || {};
+  const isFreeAgencyMode = Boolean(
+    freeAgencyState?.isActive ||
+    Number(freeAgencyState?.currentDay || 0) > 0 ||
+    Number(freeAgencyState?.maxDays || 0) > 0 ||
+    freeAgencyState?.latestResults
+  );
+
   const normalizeContract = (p) => {
     const contract = p?.contract || null;
 
@@ -241,10 +260,26 @@ export default function SalaryTable() {
       return "Projected restricted free agent because this player has RFA or qualifying-offer control saved in the league file.";
     }
 
+    if (String(expType || "").includes("DEAD")) {
+      return "This is dead cap from a released player. The player is no longer on the roster, but the team still owes this salary against the cap.";
+    }
+
+    if (String(expType || "").includes("HOLD")) {
+      return "This is a temporary cap hold, not a real signed contract.";
+    }
+
     return "Projected unrestricted free agent based on the saved rights data.";
   };
 
   const getExpChipClass = (type) => {
+    if (String(type || "").includes("DEAD")) {
+      return "bg-red-500/20 border-red-400/45 text-red-100";
+    }
+
+    if (String(type || "").includes("HOLD")) {
+      return "bg-red-500/15 border-red-500/35 text-red-200";
+    }
+
     if (type === "RFA") {
       return "bg-emerald-500/15 border-emerald-500/30 text-emerald-200";
     }
@@ -252,10 +287,165 @@ export default function SalaryTable() {
     return "bg-white/5 border-white/10 text-white/65";
   };
 
+  const getPlayerKey = (player) => {
+    if (player?.id !== undefined && player?.id !== null && player?.id !== "") {
+      return `id:${player.id}`;
+    }
+    return `name:${player?.name || ""}`;
+  };
+
+  const getRights = (player) => {
+    return player?.rights && typeof player.rights === "object"
+      ? player.rights
+      : {
+          heldByTeam: null,
+          birdLevel: "none",
+          seasonsTowardBird: 0,
+          restrictedFreeAgent: false,
+          rookieScale: false,
+        };
+  };
+
+  const getPreviousSalaryForCapHold = (player) => {
+    const previousSalaryByYear = Array.isArray(player?.previousContract?.salaryByYear)
+      ? player.previousContract.salaryByYear
+      : [];
+    const currentSalaryByYear = Array.isArray(player?.contract?.salaryByYear)
+      ? player.contract.salaryByYear
+      : [];
+
+    if (previousSalaryByYear.length) {
+      return Number(previousSalaryByYear[previousSalaryByYear.length - 1] || 0);
+    }
+
+    if (currentSalaryByYear.length) {
+      return Number(currentSalaryByYear[currentSalaryByYear.length - 1] || 0);
+    }
+
+    return Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+  };
+
+  const getCapHoldForPlayer = (player, teamName) => {
+    const rights = getRights(player);
+    const birdLevel = String(rights?.birdLevel || "").toLowerCase();
+
+    if (player?.rightsRenounced || player?.rights?.renounced) return 0;
+    if (!teamName || rights?.heldByTeam !== teamName) return 0;
+    if (!birdLevel || birdLevel === "none" || birdLevel === "no rights" || birdLevel === "no_rights") return 0;
+
+    if (
+      rights?.restrictedFreeAgent &&
+      player?.qualifyingOffer?.amount &&
+      player?.qualifyingOffer?.status !== "withdrawn"
+    ) {
+      return Math.max(1_200_000, Number(player.qualifyingOffer.amount || 0));
+    }
+
+    const previousSalary = getPreviousSalaryForCapHold(player);
+    const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+
+    if (birdLevel === "bird") {
+      return Math.max(previousSalary, marketYearOne, 1_200_000);
+    }
+
+    if (birdLevel === "early_bird") {
+      return Math.max(previousSalary * 1.3, 1_200_000);
+    }
+
+    if (birdLevel === "non_bird") {
+      return Math.max(previousSalary * 1.2, 1_200_000);
+    }
+
+    return 0;
+  };
+
+  const formatBirdLabel = (level) => {
+    if (level === "bird") return "Bird";
+    if (level === "early_bird") return "Early Bird";
+    if (level === "non_bird") return "Non-Bird";
+    return "Rights";
+  };
+
+  const capHoldRows = useMemo(() => {
+    const teamName = selectedTeam?.name;
+    if (!teamName || !isFreeAgencyMode) return [];
+
+    return (leagueData?.freeAgents || [])
+      .map((player) => {
+        const rights = getRights(player);
+        const capHold = getCapHoldForPlayer(player, teamName);
+        const birdLevel = rights?.birdLevel || "none";
+        const restrictedFreeAgent = Boolean(rights?.restrictedFreeAgent || player?.qualifyingOffer?.amount);
+        const previousSalary = getPreviousSalaryForCapHold(player);
+        const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+        const rightsLabel = formatBirdLabel(birdLevel);
+        const note = restrictedFreeAgent
+          ? `${player?.name || "This player"} is on a cap hold because ${teamName} still controls his RFA rights. The hold counts against practical cap room until you re-sign him, he signs elsewhere, or you renounce his rights.`
+          : `${player?.name || "This player"} is on a cap hold because ${teamName} still holds ${rightsLabel} rights. The hold counts against practical cap room until you re-sign him, he signs elsewhere, or you renounce his rights.`;
+
+        return {
+          player,
+          playerKey: getPlayerKey(player),
+          playerName: player?.name || "Unknown",
+          position: player?.pos || player?.position || "",
+          overall: player?.overall ?? "-",
+          headshot: player?.headshot || "",
+          capHold,
+          birdLevel,
+          rightsLabel,
+          restrictedFreeAgent,
+          previousSalary,
+          marketYearOne,
+          note,
+        };
+      })
+      .filter((row) => row.capHold > 0)
+      .sort((a, b) => Number(b.capHold || 0) - Number(a.capHold || 0));
+  }, [leagueData, selectedTeam?.name, isFreeAgencyMode]);
+
+  const capHoldTotal = useMemo(() => {
+    return capHoldRows.reduce((sum, row) => sum + Number(row.capHold || 0), 0);
+  }, [capHoldRows]);
+
+  const deadCapRows = useMemo(() => {
+    const teamName = selectedTeam?.name;
+    if (!teamName) return [];
+
+    const rawRows = Array.isArray(leagueData?.deadCapByTeam?.[teamName])
+      ? leagueData.deadCapByTeam[teamName]
+      : [];
+
+    return rawRows
+      .map((row, idx) => {
+        const amount = Number(row?.amount || 0);
+        const seasonYear = Number(row?.seasonYear || 0);
+
+        return {
+          id: `dead-cap-${teamName}-${row?.playerId || row?.playerName || idx}-${seasonYear}`,
+          playerId: row?.playerId ?? null,
+          playerName: row?.playerName || row?.name || "Released Player",
+          seasonYear,
+          amount,
+          reason: row?.reason || "release",
+          sourceRow: row,
+        };
+      })
+      .filter((row) => row.amount > 0 && row.seasonYear >= currentSeasonYear)
+      .sort((a, b) => {
+        const yearDiff = Number(a.seasonYear || 0) - Number(b.seasonYear || 0);
+        if (yearDiff !== 0) return yearDiff;
+        return String(a.playerName || "").localeCompare(String(b.playerName || ""));
+      });
+  }, [leagueData, selectedTeam?.name, currentSeasonYear]);
+
+  const deadCapTotal = useMemo(() => {
+    return deadCapRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  }, [deadCapRows]);
+
   const players = useMemo(() => {
     const pls = selectedTeam?.players || [];
 
-    return pls.map((p) => {
+    const rosterRows = pls.map((p) => {
       const c = normalizeContract(p);
       const years = Math.max(1, c.salaryByYear.length || 1);
       const endYear = c.salaryByYear.length
@@ -284,9 +474,57 @@ export default function SalaryTable() {
         optionLabel: getOptionLabel(c),
         expType,
         expNote,
+        isCapHold: false,
       };
     });
-  }, [selectedTeam, currentSeasonYear]);
+
+    const holdRows = capHoldRows.map((row) => ({
+      id: `cap-hold-${row.playerKey}`,
+      name: row.playerName,
+      pos: row.position,
+      overall: row.overall,
+      headshot: row.headshot,
+      contract: {
+        startYear: currentSeasonYear,
+        salaryByYear: [Number(row.capHold || 0)],
+        option: null,
+      },
+      years: 1,
+      endYear: currentSeasonYear,
+      totalRemaining: Number(row.capHold || 0),
+      optionLabel: `${row.restrictedFreeAgent ? "RFA" : row.rightsLabel} Cap Hold`,
+      expType: row.restrictedFreeAgent ? "RFA HOLD" : "HOLD",
+      expNote: row.note,
+      isCapHold: true,
+      capHoldAmount: Number(row.capHold || 0),
+      capHoldInfo: row,
+    }));
+
+    const deadRows = deadCapRows.map((row) => ({
+      id: row.id,
+      name: row.playerName,
+      pos: "-",
+      overall: "-",
+      headshot: "",
+      contract: {
+        startYear: row.seasonYear,
+        salaryByYear: [Number(row.amount || 0)],
+        option: null,
+      },
+      years: 1,
+      endYear: row.seasonYear,
+      totalRemaining: Number(row.amount || 0),
+      optionLabel: "Released Player Dead Cap",
+      expType: "DEAD CAP",
+      expNote: `${row.playerName} was released, but this salary still counts against ${selectedTeam?.name || "the team"}'s cap for ${row.seasonYear}.`,
+      isCapHold: false,
+      isDeadCap: true,
+      deadCapAmount: Number(row.amount || 0),
+      deadCapInfo: row,
+    }));
+
+    return [...rosterRows, ...deadRows, ...holdRows];
+  }, [selectedTeam, currentSeasonYear, capHoldRows, deadCapRows]);
 
   const DISPLAY_YEARS = 5;
 
@@ -407,14 +645,18 @@ export default function SalaryTable() {
 
                     <div>
                       <div className="text-2xl font-extrabold">{selectedTeam.name} Salary Table</div>
-                      <div className="text-white/60 text-sm">{players.length} players</div>
+                      <div className="text-white/60 text-sm">
+                        {selectedTeam?.players?.length || 0} roster players
+                        {deadCapRows.length > 0 ? ` + ${deadCapRows.length} dead cap` : ""}
+                        {capHoldRows.length > 0 ? ` + ${capHoldRows.length} cap holds` : ""}
+                      </div>
                     </div>
                   </div>
 
                   <div className={`px-3 py-2 rounded-xl border text-sm ${toneClass(capStatus.tone)}`}>
                     <div className="font-semibold">{capStatus.label}</div>
                     <div className="text-xs opacity-80">
-                      Payroll {yearColumns[0]}: {fmtM(payrollThisYear)}
+                      {deadCapRows.length > 0 || capHoldRows.length > 0 ? "Payroll + Adjustments" : "Payroll"} {yearColumns[0]}: {fmtM(payrollThisYear)}
                     </div>
                   </div>
                 </div>
@@ -425,6 +667,8 @@ export default function SalaryTable() {
                   <Chip label={`1st Apron: ${fmtM(FIRST_APRON)}`} />
                   <Chip label={`2nd Apron: ${fmtM(SECOND_APRON)}`} />
                   <Chip label={`Hard Cap: ${fmtM(HARD_CAP)}`} />
+                  {deadCapRows.length > 0 && <Chip label={`Dead Cap: ${fmtM(deadCapTotal)}`} />}
+                  {capHoldRows.length > 0 && <Chip label={`Cap Holds: ${fmtM(capHoldTotal)}`} />}
                 </div>
               </div>
 
@@ -447,25 +691,61 @@ export default function SalaryTable() {
 
                   <tbody>
                     {players.map((p) => (
-                      <tr key={p.id} className="border-b border-white/5 hover:bg-white/5 transition">
+                      <tr
+                        key={p.id}
+                        className={`${p.isDeadCap ? "border-b border-red-500/45 bg-red-500/10 hover:bg-red-500/15" : p.isCapHold ? "border-b border-red-500/35 bg-red-500/5 hover:bg-red-500/10" : "border-b border-white/5 hover:bg-white/5"} transition`}
+                        style={p.isDeadCap || p.isCapHold ? { boxShadow: "inset 0 0 0 1px rgba(248, 113, 113, 0.35)" } : undefined}
+                      >
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-3">
                             {p.headshot ? (
                               <img
                                 src={p.headshot}
                                 alt={p.name}
-                                className="w-14 h-14 rounded-full object-cover border border-white/10 bg-white/5"
+                                className={`w-14 h-14 rounded-full object-cover border bg-white/5 ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`}
                                 onError={(e) => {
                                   e.currentTarget.style.display = "none";
                                 }}
                               />
                             ) : (
-                              <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10" />
+                              <div className={`w-14 h-14 rounded-full bg-white/5 border ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`} />
                             )}
 
                             <div className="leading-tight">
-                              <div className="font-semibold">{p.name}</div>
-                              <div className="text-xs text-white/50">{p.optionLabel}</div>
+                              <div className="font-semibold flex items-center gap-2">
+                                <span>{p.name}</span>
+                                {p.isDeadCap && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setDeadCapInfo(p);
+                                    }}
+                                    className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-red-400/45 bg-red-500/20 text-[11px] font-extrabold text-red-100 hover:bg-red-500/30 transition"
+                                    title="Explain dead cap"
+                                    aria-label={`Explain ${p.name} dead cap`}
+                                  >
+                                    ?
+                                  </button>
+                                )}
+                                {p.isCapHold && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setCapHoldInfo(p);
+                                    }}
+                                    className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-red-400/45 bg-red-500/15 text-[11px] font-extrabold text-red-100 hover:bg-red-500/25 transition"
+                                    title="Explain cap hold"
+                                    aria-label={`Explain ${p.name} cap hold`}
+                                  >
+                                    ?
+                                  </button>
+                                )}
+                              </div>
+                              <div className={p.isDeadCap || p.isCapHold ? "text-xs text-red-200/75" : "text-xs text-white/50"}>
+                                {p.optionLabel}
+                              </div>
                             </div>
                           </div>
                         </td>
@@ -477,7 +757,7 @@ export default function SalaryTable() {
                           const idx = seasonYear - p.contract.startYear;
                           const sal = idx >= 0 ? Number(p.contract.salaryByYear[idx] || 0) : 0;
                           const isBig = sal >= 25_000_000;
-                          const salClass = isBig ? "text-emerald-300" : "text-white/85";
+                          const salClass = p.isDeadCap || p.isCapHold ? "text-red-200 font-extrabold" : isBig ? "text-emerald-300" : "text-white/85";
 
                           return (
                             <td
@@ -491,7 +771,7 @@ export default function SalaryTable() {
                           );
                         })}
 
-                        <td className="text-right px-3 py-3 whitespace-nowrap font-extrabold text-emerald-300">
+                        <td className={`text-right px-3 py-3 whitespace-nowrap font-extrabold ${p.isDeadCap || p.isCapHold ? "text-red-200" : "text-emerald-300"}`}>
                           {fmtM(p.totalRemaining)}
                         </td>
 
@@ -540,6 +820,88 @@ export default function SalaryTable() {
             </div>
           )}
 
+          {deadCapInfo && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+              onClick={() => setDeadCapInfo(null)}
+            >
+              <div
+                className="w-full max-w-lg rounded-3xl border border-red-400/25 bg-neutral-950 p-6 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-xs font-extrabold uppercase tracking-[0.2em] text-red-300">Dead Cap</div>
+                    <div className="mt-1 text-2xl font-extrabold text-white">{deadCapInfo.name}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDeadCapInfo(null)}
+                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-sm font-bold text-white/70 hover:bg-white/10 hover:text-white transition"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div className="mt-4 space-y-3 text-sm text-white/75">
+                  <p>
+                    This player was released and is no longer on the roster, but the team is still responsible for the guaranteed salary shown here.
+                  </p>
+                  <p>
+                    Dead cap should still count against team payroll and cap room. Releasing a player should not instantly clear his salary unless your game later adds separate waiver-claim or partial-guarantee logic.
+                  </p>
+                </div>
+
+                <div className="mt-5 grid grid-cols-1 gap-2 text-sm">
+                  <InfoRow label="Dead cap amount" value={fmtMoney(deadCapInfo.deadCapAmount)} />
+                  <InfoRow label="Season" value={deadCapInfo.deadCapInfo?.seasonYear || deadCapInfo.endYear} />
+                  <InfoRow label="Reason" value={String(deadCapInfo.deadCapInfo?.reason || "Released player salary").replaceAll("_", " ")} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {capHoldInfo && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+              onClick={() => setCapHoldInfo(null)}
+            >
+              <div
+                className="w-full max-w-lg rounded-3xl border border-red-400/25 bg-neutral-950 p-6 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-xs font-extrabold uppercase tracking-[0.2em] text-red-300">Cap Hold</div>
+                    <div className="mt-1 text-2xl font-extrabold text-white">{capHoldInfo.name}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCapHoldInfo(null)}
+                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-sm font-bold text-white/70 hover:bg-white/10 hover:text-white transition"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div className="mt-4 space-y-3 text-sm text-white/75">
+                  <p>
+                    This player is not currently signed to your roster. He is shown here because your team still holds his rights, so the game places a temporary cap hold on your salary table during free agency.
+                  </p>
+                  <p>
+                    This is not a real contract. It only represents money temporarily blocking practical cap room until you re-sign him, he signs somewhere else, or you renounce his rights.
+                  </p>
+                </div>
+
+                <div className="mt-5 grid grid-cols-1 gap-2 text-sm">
+                  <InfoRow label="Cap hold amount" value={fmtMoney(capHoldInfo.capHoldAmount)} />
+                  <InfoRow label="Rights type" value={capHoldInfo.capHoldInfo?.rightsLabel || "Rights"} />
+                  <InfoRow label="RFA status" value={capHoldInfo.capHoldInfo?.restrictedFreeAgent ? "Restricted free agent" : "Not RFA"} />
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-center pt-2">
             <button
               onClick={() => navigate("/team-hub")}
@@ -558,6 +920,15 @@ function Chip({ label }) {
   return (
     <div className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-sm text-white/80">
       {label}
+    </div>
+  );
+}
+
+function InfoRow({ label, value }) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+      <div className="text-white/55">{label}</div>
+      <div className="font-extrabold text-white text-right">{value}</div>
     </div>
   );
 }

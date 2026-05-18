@@ -115,6 +115,85 @@ function getFreeAgencyResumeRoute(leagueData) {
   return "/free-agents";
 }
 
+function getAllTeamsFromLeague(leagueData) {
+  const snapshot = getLeagueDataSnapshot(leagueData);
+
+  if (Array.isArray(snapshot?.teams)) return snapshot.teams;
+  if (snapshot?.conferences) return Object.values(snapshot.conferences).flat();
+
+  return [];
+}
+
+function getSelectedTeamName(selectedTeam) {
+  if (selectedTeam?.name) return selectedTeam.name;
+
+  const saved = safeJSON(localStorage.getItem("selectedTeam"), null);
+  if (typeof saved === "string") return saved;
+  if (saved?.name) return saved.name;
+
+  return "";
+}
+
+function getSelectedTeamFromLeague(leagueData, selectedTeam) {
+  const teamName = getSelectedTeamName(selectedTeam);
+  if (!teamName) return null;
+
+  return getAllTeamsFromLeague(leagueData).find((team) => team?.name === teamName) || null;
+}
+
+function getRosterStatus(leagueData, selectedTeam) {
+  const snapshot = getLeagueDataSnapshot(leagueData);
+  const teamName = getSelectedTeamName(selectedTeam);
+  const liveTeam = getSelectedTeamFromLeague(snapshot, selectedTeam);
+
+  if (!teamName || !liveTeam) {
+    return {
+      hasTeam: false,
+      teamName,
+      rosterCount: 0,
+      minRoster: 14,
+      maxRoster: 15,
+      isValid: true,
+      message: "",
+    };
+  }
+
+  const minRoster = Number(
+    snapshot?.minRosterSize ||
+    snapshot?.minRosterLimit ||
+    snapshot?.freeAgencyMinRosterSize ||
+    snapshot?.offseasonMinRosterSize ||
+    14
+  );
+
+  const maxRoster = Number(
+    snapshot?.rosterLimit ||
+    snapshot?.maxRosterSize ||
+    15
+  );
+
+  const rosterCount = Array.isArray(liveTeam?.players)
+    ? liveTeam.players.length
+    : 0;
+
+  let message = "";
+  if (rosterCount < minRoster) {
+    message = `${teamName} has ${rosterCount} players. You need at least ${minRoster} players before progression.`;
+  } else if (rosterCount > maxRoster) {
+    message = `${teamName} has ${rosterCount} players. You must get down to ${maxRoster} players before progression.`;
+  }
+
+  return {
+    hasTeam: true,
+    teamName,
+    rosterCount,
+    minRoster,
+    maxRoster,
+    isValid: !message,
+    message,
+  };
+}
+
 
 function StatPill({ label, value }) {
   return (
@@ -232,11 +311,18 @@ const handleAdvanceToNewSeason = () => {
 
   const retiredCount = retirementResults?.summary?.retiredCount || 0;
 
+  const rosterStatus = useMemo(() => {
+    return getRosterStatus(leagueData, selectedTeam);
+  }, [leagueData, selectedTeam]);
+
+  const rosterBlocksProgression = rosterStatus.hasTeam && !rosterStatus.isValid;
+
   const cards = useMemo(() => {
     const retirementsComplete = !!offseasonState.retirementsComplete;
     const optionsComplete = !!offseasonState.optionsComplete;
     const freeAgencyComplete = !!offseasonState.freeAgencyComplete;
     const progressionComplete = !!offseasonState.progressionComplete;
+    const freeAgencyReadyForProgression = freeAgencyComplete && !rosterBlocksProgression;
 
     return [
       {
@@ -266,23 +352,25 @@ const handleAdvanceToNewSeason = () => {
       {
         step: "3",
         title: "Free Agency",
-        description:
-          "Negotiate with available players and reshape your roster once all option decisions are settled and the offseason market is ready.",
-        status: freeAgencyComplete ? "Complete" : optionsComplete ? "Current" : "Locked",
-        accent: freeAgencyComplete ? "green" : optionsComplete ? "orange" : "neutral",
+        description: rosterBlocksProgression
+          ? "Your roster is still below or above the legal roster range. Sign or cut players here before progression unlocks."
+          : "Negotiate with available players and reshape your roster once all option decisions are settled and the offseason market is ready.",
+        status: freeAgencyComplete && rosterBlocksProgression ? "Current" : freeAgencyComplete ? "Complete" : optionsComplete ? "Current" : "Locked",
+        accent: freeAgencyComplete && rosterBlocksProgression ? "orange" : freeAgencyComplete ? "green" : optionsComplete ? "orange" : "neutral",
         buttonLabel: optionsComplete ? "Open Free Agency" : "Locked",
         disabled: !optionsComplete,
-        onClick: () => navigate(getFreeAgencyResumeRoute(leagueData)),
+        onClick: () => navigate(rosterBlocksProgression ? "/free-agents" : getFreeAgencyResumeRoute(leagueData)),
       },
       {
         step: "4",
         title: "Player Progression",
-        description:
-          "Apply offseason development once roster moves are finished so your updated squads grow into the next year together.",
-        status: progressionComplete ? "Complete" : freeAgencyComplete ? "Current" : "Locked",
-        accent: progressionComplete ? "green" : freeAgencyComplete ? "orange" : "neutral",
-        buttonLabel: freeAgencyComplete ? "Open Progression" : "Locked",
-        disabled: !freeAgencyComplete,
+        description: rosterBlocksProgression
+          ? "Progression stays locked until your team has a legal roster after free agency."
+          : "Apply offseason development once roster moves are finished so your updated squads grow into the next year together.",
+        status: progressionComplete ? "Complete" : freeAgencyReadyForProgression ? "Current" : "Locked",
+        accent: progressionComplete ? "green" : freeAgencyReadyForProgression ? "orange" : "neutral",
+        buttonLabel: freeAgencyReadyForProgression ? "Open Progression" : "Locked",
+        disabled: !freeAgencyReadyForProgression,
         onClick: () => navigate("/player-progression"),
       },
 {
@@ -297,7 +385,7 @@ const handleAdvanceToNewSeason = () => {
   onClick: handleAdvanceToNewSeason,
 },
     ];
-  }, [navigate, offseasonState]);
+  }, [navigate, offseasonState, leagueData, rosterBlocksProgression]);
 
   return (
     <div className={`${styles.offseasonPage} min-h-screen text-white py-10 px-4`}>
@@ -315,6 +403,12 @@ const handleAdvanceToNewSeason = () => {
         </div>
 
         <div className="bg-neutral-800/85 border border-white/10 rounded-3xl shadow-2xl p-6 md:p-7 mb-8">
+          {rosterBlocksProgression && (
+            <div className="mb-5 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">
+              {rosterStatus.message}
+            </div>
+          )}
+
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
             <div>
               <p className="text-sm uppercase tracking-[0.2em] text-white/40 mb-2">
@@ -351,7 +445,7 @@ const handleAdvanceToNewSeason = () => {
                 value={
                   offseasonState.progressionComplete
                     ? "Start"
-                    : offseasonState.freeAgencyComplete
+                    : offseasonState.freeAgencyComplete && !rosterBlocksProgression
                     ? "Progression"
                     : offseasonState.optionsComplete
                     ? "Free Agency"
