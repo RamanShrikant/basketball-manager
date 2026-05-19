@@ -504,8 +504,8 @@ export default function SalaryTable() {
           originalAmount,
           setOffAmount,
           offsetAmount: setOffAmount,
-          signedOffsetTeamName: row?.setOffTeamName || row?.offsetTeamName || signedInfo?.teamName || "",
-          signedOffsetSalary: Number(row?.setOffSignedSalary || row?.offsetSignedSalary || signedInfo?.signedSalary || 0),
+          signedOffsetTeamName: row?.setOffTeamName || row?.setOffSignedWith || row?.offsetTeamName || signedInfo?.teamName || "",
+          signedOffsetSalary: Number(row?.setOffSignedSalary || row?.setOffReplacementSalary || row?.offsetSignedSalary || signedInfo?.signedSalary || 0),
           reason: row?.reason || "release",
           sourceRow: {
             ...row,
@@ -513,8 +513,10 @@ export default function SalaryTable() {
             originalAmount,
             setOffAmount,
             offsetAmount: setOffAmount,
-            setOffTeamName: row?.setOffTeamName || row?.offsetTeamName || signedInfo?.teamName || "",
-            setOffSignedSalary: Number(row?.setOffSignedSalary || row?.offsetSignedSalary || signedInfo?.signedSalary || 0),
+            setOffTeamName: row?.setOffTeamName || row?.setOffSignedWith || row?.offsetTeamName || signedInfo?.teamName || "",
+            setOffSignedWith: row?.setOffSignedWith || row?.setOffTeamName || row?.offsetTeamName || signedInfo?.teamName || "",
+            setOffSignedSalary: Number(row?.setOffSignedSalary || row?.setOffReplacementSalary || row?.offsetSignedSalary || signedInfo?.signedSalary || 0),
+            setOffReplacementSalary: Number(row?.setOffReplacementSalary || row?.setOffSignedSalary || row?.offsetSignedSalary || signedInfo?.signedSalary || 0),
           },
         };
       })
@@ -1097,7 +1099,7 @@ export default function SalaryTable() {
                     If stretch provision was applied, the total money owed did not disappear. The cap hit was spread across extra seasons to lower the yearly cap hit. The table stays fixed to the next five seasons, and this popup shows the full remaining obligation.
                   </p>
                   <p>
-                    If another team signs the released player above a minimum deal, this table applies a small set-off credit and shows the net dead cap. Minimum pickups usually create no meaningful reduction.
+                    If another team signs the released player above a minimum deal, this table applies NBA-lite set-off: half of the new salary above the minimum baseline gets credited back against the old team's dead cap for that season. Minimum pickups usually create no meaningful reduction.
                   </p>
                 </div>
 
@@ -1111,6 +1113,9 @@ export default function SalaryTable() {
                     <InfoRow label="Table view" value={deadCapInfo.deadCapInfo.displaySeasonNote} />
                   )}
                   <InfoRow label="Set-off credit" value={fmtMoney(deadCapInfo.deadCapInfo?.totalSetOff || 0)} />
+                  {deadCapInfo.deadCapInfo?.totalSetOff > 0 && (
+                    <InfoRow label="Set-off formula" value="50% of new salary above the minimum baseline, capped by that season's original dead cap" />
+                  )}
                   {deadCapInfo.deadCapInfo?.offsetTeamNames?.length > 0 && (
                     <InfoRow label="Set-off from" value={deadCapInfo.deadCapInfo.offsetTeamNames.join(", ")} />
                   )}

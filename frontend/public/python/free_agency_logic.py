@@ -920,14 +920,18 @@ def get_team_dead_cap_for_year(league_data: Dict[str, Any], team_name: str, seas
 
 
 def get_dead_cap_setoff_minimum(league_data: Dict[str, Any]) -> int:
-    # NBA-lite set-off baseline. Minimum signings should usually create no credit.
-    return int(MIN_DEAL)
+    # NBA-lite set-off baseline.
+    # Real NBA set-off is based on salary above a minimum-style baseline.
+    # Use the same minimum amount the rest of the free-agency engine reads,
+    # not the hardcoded MIN_DEAL, so backend cap math and Salary Table match.
+    return int(get_minimum_exception_amount(league_data))
 
 
 def get_dead_cap_setoff_credit(league_data: Dict[str, Any], replacement_salary: int) -> int:
     salary = int(num(replacement_salary, 0))
     baseline = get_dead_cap_setoff_minimum(league_data)
-    return int(max(0, (salary - baseline) * 0.5))
+    raw_credit = max(0, (salary - baseline) * 0.5)
+    return int(round_to_nearest(raw_credit, base = 1_000))
 
 
 def apply_dead_cap_setoff_for_signed_player(
@@ -938,7 +942,7 @@ def apply_dead_cap_setoff_for_signed_player(
 ) -> List[Dict[str, Any]]:
     meta = player.get("freeAgencyMeta") if isinstance(player.get("freeAgencyMeta"), dict) else {}
     from_team_name = meta.get("fromTeam") or player.get("releasedFromTeam")
-    reason = str(meta.get("reason") or "").lower()
+    reason = str(meta.get("reason") or player.get("releaseReason") or "").lower()
 
     if not from_team_name or from_team_name == signing_team_name:
         return []
@@ -970,26 +974,47 @@ def apply_dead_cap_setoff_for_signed_player(
         if replacement_salary <= 0:
             continue
 
-        credit = get_dead_cap_setoff_credit(league_data, replacement_salary)
-        if credit <= 0:
+        original_amount = int(num(row.get("originalAmount"), row.get("amount")))
+        if original_amount <= 0:
             continue
 
-        original_amount = int(num(row.get("originalAmount"), row.get("amount")))
-        already_credited = int(num(row.get("setOffCredit"), 0))
-        remaining_credit_room = max(0, original_amount - already_credited)
-        applied_credit = min(credit, remaining_credit_room)
-        if applied_credit <= 0:
+        credit = get_dead_cap_setoff_credit(league_data, replacement_salary)
+        target_credit = min(credit, original_amount)
+        already_credited = int(num(
+            row.get("setOffCredit")
+            or row.get("setOffAmount")
+            or row.get("offsetAmount"),
+            0,
+        ))
+
+        # Idempotent set-off:
+        # the credit for a season should be the formula result, not a value that
+        # gets added again every time the same signing is processed or re-saved.
+        final_credit = max(already_credited, target_credit)
+        if final_credit <= 0:
             continue
 
         row["originalAmount"] = original_amount
-        row["setOffCredit"] = already_credited + applied_credit
-        row["amount"] = max(0, original_amount - row["setOffCredit"])
+        row["setOffCredit"] = final_credit
+        row["setOffAmount"] = final_credit
+        row["offsetAmount"] = final_credit
+        row["amount"] = max(0, original_amount - final_credit)
+        row["netAmount"] = row["amount"]
+
+        # Save both old/new field names so every existing frontend table and
+        # popup can read the same set-off result without extra migration work.
         row["setOffSignedWith"] = signing_team_name
+        row["setOffTeamName"] = signing_team_name
+        row["offsetTeamName"] = signing_team_name
         row["setOffReplacementSalary"] = int(replacement_salary)
-        row["setOffFormula"] = "50% of replacement salary above minimum, capped by original dead cap"
+        row["setOffSignedSalary"] = int(replacement_salary)
+        row["offsetSignedSalary"] = int(replacement_salary)
+        row["setOffMinimumBaseline"] = get_dead_cap_setoff_minimum(league_data)
+        row["setOffFormula"] = "50% of replacement salary above minimum salary, capped by original dead cap"
         updated_rows.append(copy.deepcopy(row))
 
     return updated_rows
+
 
 
 def build_release_dead_cap_rows(
