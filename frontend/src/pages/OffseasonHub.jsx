@@ -141,6 +141,42 @@ function getSelectedTeamFromLeague(leagueData, selectedTeam) {
   return getAllTeamsFromLeague(leagueData).find((team) => team?.name === teamName) || null;
 }
 
+function freeAgencyHasRealMarketEvidence(leagueData) {
+  const snapshot = getLeagueDataSnapshot(leagueData);
+  const state = snapshot?.freeAgencyState || {};
+
+  if (!state || typeof state !== "object") return false;
+
+  const offersByPlayer =
+    state.offersByPlayer && typeof state.offersByPlayer === "object"
+      ? state.offersByPlayer
+      : {};
+
+  return Boolean(
+    state.isActive ||
+      Number(state.currentDay || 0) > 0 ||
+      Number(state.signedCount || 0) > 0 ||
+      (Array.isArray(state.dailyLog) && state.dailyLog.length > 0) ||
+      (Array.isArray(state.signedPlayersLog) && state.signedPlayersLog.length > 0) ||
+      (Array.isArray(state.offerHistory) && state.offerHistory.length > 0) ||
+      (Array.isArray(state.pendingUserDecisions) && state.pendingUserDecisions.length > 0) ||
+      (Array.isArray(state.pendingRfaMatchDecisions) && state.pendingRfaMatchDecisions.length > 0) ||
+      Object.keys(offersByPlayer).length > 0 ||
+      Boolean(state.latestResults)
+  );
+}
+
+function hasStaleFreeAgencyComplete(leagueData, offseasonState) {
+  const snapshot = getLeagueDataSnapshot(leagueData);
+  const freeAgents = Array.isArray(snapshot?.freeAgents) ? snapshot.freeAgents : [];
+
+  return Boolean(
+    offseasonState?.freeAgencyComplete &&
+      freeAgents.length > 0 &&
+      !freeAgencyHasRealMarketEvidence(snapshot)
+  );
+}
+
 function getRosterStatus(leagueData, selectedTeam) {
   const snapshot = getLeagueDataSnapshot(leagueData);
   const teamName = getSelectedTeamName(selectedTeam);
@@ -301,9 +337,14 @@ const handleAdvanceToNewSeason = () => {
 
   useEffect(() => {
     const next = readOffseasonState(seasonYear);
+
+    if (hasStaleFreeAgencyComplete(leagueData, next)) {
+      next.freeAgencyComplete = false;
+    }
+
     setOffseasonState(next);
     saveOffseasonState(next);
-  }, [seasonYear]);
+  }, [seasonYear, leagueData]);
 
   const retirementResults = useMemo(() => {
     return safeJSON(localStorage.getItem("bm_retirement_results_v1"), null);
@@ -320,7 +361,9 @@ const handleAdvanceToNewSeason = () => {
   const cards = useMemo(() => {
     const retirementsComplete = !!offseasonState.retirementsComplete;
     const optionsComplete = !!offseasonState.optionsComplete;
-    const freeAgencyComplete = !!offseasonState.freeAgencyComplete;
+    const freeAgencyComplete =
+      !!offseasonState.freeAgencyComplete &&
+      !hasStaleFreeAgencyComplete(leagueData, offseasonState);
     const progressionComplete = !!offseasonState.progressionComplete;
     const freeAgencyReadyForProgression = freeAgencyComplete && !rosterBlocksProgression;
 

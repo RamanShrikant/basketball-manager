@@ -190,6 +190,18 @@ def get_player_rights(player: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
 
+    # Surgical RFA/UFA guard:
+    # Once rights are renounced, the player must be treated as a true UFA
+    # even if an older save still has stale RFA/QO fields on the object.
+    if bool(player.get("rightsRenounced")):
+        return {
+            "heldByTeam": None,
+            "seasonsTowardBird": 0,
+            "birdLevel": "none",
+            "rookieScale": bool(raw.get("rookieScale", False)),
+            "restrictedFreeAgent": False,
+        }
+
     seasons = int(num(raw.get("seasonsTowardBird"), 0))
     seasons = max(0, min(3, seasons))
     level = normalize_bird_level(raw.get("birdLevel"), seasons)
@@ -298,7 +310,22 @@ def normalize_player_rights_for_location(
     player: Dict[str, Any],
     current_team_name: Optional[str] = None,
 ) -> Dict[str, Any]:
+    # A renounced free agent should not silently regain rights from
+    # freeAgencyMeta.fromTeam during later normalization passes.
+    # If he is already back on a roster, clear the stale renounced flag first.
+    if current_team_name and player.get("rightsRenounced"):
+        player.pop("rightsRenounced", None)
+
     rights = get_player_rights(player)
+
+    if player.get("rightsRenounced") and not current_team_name:
+        return set_player_rights(
+            player = player,
+            held_by_team = None,
+            seasons_toward_bird = 0,
+            rookie_scale = rights["rookieScale"],
+            restricted_free_agent = False,
+        )
 
     if current_team_name:
         held_by_team = current_team_name
@@ -370,6 +397,7 @@ def update_player_rights_after_signing(
         rookie_scale = old_rights["rookieScale"],
         restricted_free_agent = False,
     )
+    player.pop("rightsRenounced", None)
 
     meta = player.setdefault("meta", {})
     if not isinstance(meta, dict):
@@ -891,6 +919,183 @@ def get_team_dead_cap_for_year(league_data: Dict[str, Any], team_name: str, seas
     return total
 
 
+def get_dead_cap_setoff_minimum(league_data: Dict[str, Any]) -> int:
+    # NBA-lite set-off baseline. Minimum signings should usually create no credit.
+    return int(MIN_DEAL)
+
+
+def get_dead_cap_setoff_credit(league_data: Dict[str, Any], replacement_salary: int) -> int:
+    salary = int(num(replacement_salary, 0))
+    baseline = get_dead_cap_setoff_minimum(league_data)
+    return int(max(0, (salary - baseline) * 0.5))
+
+
+def apply_dead_cap_setoff_for_signed_player(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    signing_team_name: str,
+    contract: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    meta = player.get("freeAgencyMeta") if isinstance(player.get("freeAgencyMeta"), dict) else {}
+    from_team_name = meta.get("fromTeam") or player.get("releasedFromTeam")
+    reason = str(meta.get("reason") or "").lower()
+
+    if not from_team_name or from_team_name == signing_team_name:
+        return []
+
+    if reason not in ["released", "release", "release_to_free_agency", "waived"]:
+        return []
+
+    normalized_contract = normalize_contract(contract)
+    if not normalized_contract:
+        return []
+
+    rows = get_team_dead_cap_rows(league_data, from_team_name)
+    updated_rows = []
+    player_id = player.get("id")
+    player_name = player.get("name")
+
+    for row in rows:
+        same_player = False
+        if player_id not in [None, ""] and row.get("playerId") == player_id:
+            same_player = True
+        elif player_name and row.get("playerName") == player_name:
+            same_player = True
+
+        if not same_player:
+            continue
+
+        season_year = int(num(row.get("seasonYear"), -1))
+        replacement_salary = get_contract_salary_for_year(normalized_contract, season_year)
+        if replacement_salary <= 0:
+            continue
+
+        credit = get_dead_cap_setoff_credit(league_data, replacement_salary)
+        if credit <= 0:
+            continue
+
+        original_amount = int(num(row.get("originalAmount"), row.get("amount")))
+        already_credited = int(num(row.get("setOffCredit"), 0))
+        remaining_credit_room = max(0, original_amount - already_credited)
+        applied_credit = min(credit, remaining_credit_room)
+        if applied_credit <= 0:
+            continue
+
+        row["originalAmount"] = original_amount
+        row["setOffCredit"] = already_credited + applied_credit
+        row["amount"] = max(0, original_amount - row["setOffCredit"])
+        row["setOffSignedWith"] = signing_team_name
+        row["setOffReplacementSalary"] = int(replacement_salary)
+        row["setOffFormula"] = "50% of replacement salary above minimum, capped by original dead cap"
+        updated_rows.append(copy.deepcopy(row))
+
+    return updated_rows
+
+
+def build_release_dead_cap_rows(
+    player: Dict[str, Any],
+    team_name: str,
+    contract: Dict[str, Any],
+    current_season_year: int,
+    reason: str = "release",
+) -> List[Dict[str, Any]]:
+    """Build dead-cap rows for a release using an NBA-lite stretch provision.
+
+    Multi-year remaining guaranteed salary is not erased. It is spread across
+    2x remaining seasons + 1. One-year remaining salary stays on the current
+    cap year because stretching one season is optional and usually not worth it
+    in this simplified game model.
+    """
+    remaining_rows = []
+
+    for idx, amount in enumerate(contract["salaryByYear"]):
+        original_season_year = contract["startYear"] + idx
+        amount_int = int(num(amount, 0))
+
+        if original_season_year < current_season_year:
+            continue
+        if amount_int <= 0:
+            continue
+
+        remaining_rows.append({
+            "seasonYear": int(original_season_year),
+            "amount": amount_int,
+        })
+
+    if not remaining_rows:
+        return []
+
+    remaining_years = len(remaining_rows)
+    total_guaranteed = int(sum(row["amount"] for row in remaining_rows))
+    stretch_applied = remaining_years > 1
+    stretch_years = (remaining_years * 2) + 1 if stretch_applied else remaining_years
+    first_dead_cap_year = int(current_season_year)
+    last_dead_cap_year = first_dead_cap_year + stretch_years - 1
+    group_id = f"release-stretch:{player.get('id') or player.get('name')}:{team_name}:{current_season_year}"
+
+    if stretch_applied:
+        annual_amount = int(round_to_nearest(total_guaranteed / max(1, stretch_years), base = 1_000))
+        cap_rows = []
+
+        for offset in range(stretch_years):
+            season_year = first_dead_cap_year + offset
+            if offset == stretch_years - 1:
+                amount = max(0, total_guaranteed - sum(row["amount"] for row in cap_rows))
+            else:
+                amount = annual_amount
+
+            if amount <= 0:
+                continue
+
+            cap_rows.append({
+                "seasonYear": season_year,
+                "amount": int(amount),
+            })
+    else:
+        annual_amount = total_guaranteed
+        cap_rows = [
+            {
+                "seasonYear": int(row["seasonYear"]),
+                "amount": int(row["amount"]),
+            }
+            for row in remaining_rows
+        ]
+
+    created_rows = []
+
+    for row in cap_rows:
+        amount_int = int(num(row.get("amount"), 0))
+        season_year = int(num(row.get("seasonYear"), current_season_year))
+
+        created_rows.append({
+            "playerName": player.get("name"),
+            "playerId": player.get("id"),
+            "teamName": team_name,
+            "seasonYear": season_year,
+            "amount": amount_int,
+            "originalAmount": amount_int,
+            "setOffCredit": 0,
+            "reason": reason,
+            "source": "released_player_stretch_provision" if stretch_applied else "released_player_contract",
+            "deadCapMethod": "stretch_provision" if stretch_applied else "normal_release",
+            "stretchApplied": bool(stretch_applied),
+            "stretchYears": int(stretch_years),
+            "stretchAnnualAmount": int(annual_amount),
+            "remainingContractYears": int(remaining_years),
+            "totalGuaranteedOwed": int(total_guaranteed),
+            "originalRemainingRows": remaining_rows,
+            "firstDeadCapSeason": int(first_dead_cap_year),
+            "lastDeadCapSeason": int(last_dead_cap_year),
+            "deadCapGroupId": group_id,
+            "pos": player.get("pos") or player.get("position"),
+            "position": player.get("pos") or player.get("position"),
+            "overall": player.get("overall"),
+            "headshot": player.get("headshot") or player.get("playerHeadshot") or player.get("image"),
+        })
+
+    return created_rows
+
+
 def add_dead_cap_from_player_contract(
     league_data: Dict[str, Any],
     team_name: str,
@@ -904,33 +1109,31 @@ def add_dead_cap_from_player_contract(
 
     rows = get_team_dead_cap_rows(league_data, team_name)
     created = []
+    candidate_rows = build_release_dead_cap_rows(
+        player = player,
+        team_name = team_name,
+        contract = contract,
+        current_season_year = current_season_year,
+        reason = reason,
+    )
 
-    for idx, amount in enumerate(contract["salaryByYear"]):
-        season_year = contract["startYear"] + idx
-        if season_year < current_season_year:
-            continue
-        if int(num(amount, 0)) <= 0:
-            continue
+    for row in candidate_rows:
+        amount_int = int(num(row.get("originalAmount", row.get("amount")), 0))
+        season_year = int(num(row.get("seasonYear"), -1))
+        group_id = row.get("deadCapGroupId")
 
-        row = {
-            "playerName": player.get("name"),
-            "playerId": player.get("id"),
-            "teamName": team_name,
-            "seasonYear": season_year,
-            "amount": int(num(amount, 0)),
-            "reason": reason,
-            "source": "released_player_contract",
-        }
-
-        # Surgical release/dead-cap guard:
-        # releasing a player should not erase the salary obligation, but repeated
-        # UI clicks or stale retries also should not duplicate the same dead cap row.
+        # Guard against repeated UI clicks / stale retries duplicating dead cap.
         already_exists = any(
             existing.get("playerId") == row.get("playerId")
             and existing.get("playerName") == row.get("playerName")
             and int(num(existing.get("seasonYear"), -1)) == int(season_year)
-            and int(num(existing.get("amount"), 0)) == int(num(amount, 0))
+            and int(num(existing.get("originalAmount", existing.get("amount")), 0)) == amount_int
             and existing.get("reason") == reason
+            and (
+                not group_id
+                or existing.get("deadCapGroupId") == group_id
+                or existing.get("source") == row.get("source")
+            )
             for existing in rows
         )
 
@@ -941,6 +1144,8 @@ def add_dead_cap_from_player_contract(
         created.append(row)
 
     return created
+
+
 
 
 def get_team_player_payroll(team: Dict[str, Any], season_year: int) -> int:
@@ -1260,19 +1465,8 @@ def get_team_cap_snapshot(
     season_year = get_operating_season_year(league_data)
     state = league_data.get("freeAgencyState", {})
     if not (isinstance(state, dict) and state.get("isActive")):
-        # A regular-season release also creates freeAgencyMeta, but it should not
-        # make every cap snapshot jump to next offseason. Only offseason-created
-        # free agents should move the operating cap year forward when FA is not live.
-        offseason_free_agent_reasons = {
-            "expired_contract",
-            "no_contract",
-            "declined_player_option",
-            "declined_team_option",
-            "expired_rookie_scale_contract",
-        }
         has_offseason_free_agents = any(
             isinstance(player.get("freeAgencyMeta"), dict)
-            and str(player.get("freeAgencyMeta", {}).get("reason") or "") in offseason_free_agent_reasons
             for player in league_data.get("freeAgents", [])
         )
         if has_offseason_free_agents:
@@ -2464,34 +2658,11 @@ def validate_offer_spending_rules(
 
     if needed_room > available_room:
         over_by = needed_room - available_room
-        minimum_offer = get_minimum_exception_amount(league_data)
-
-        tool_label = "available signing room"
-        if exception_type == "taxpayer_mle":
-            tool_label = "taxpayer MLE"
-        elif exception_type == "non_taxpayer_mle":
-            tool_label = "non-taxpayer MLE"
-        elif exception_type == "room_exception":
-            tool_label = "room exception"
-
-        if offered_current_salary > minimum_offer:
-            reason = (
-                f"{team_name} can still offer a minimum deal up to ${int(minimum_offer):,}, "
-                f"but this above-minimum offer needs ${int(needed_room):,}. "
-                f"Only ${int(available_room):,} of {tool_label} is left, so the above-minimum path is short by ${int(over_by):,}."
-            )
-        else:
-            reason = (
-                f"{team_name} only has ${int(available_room):,} of {tool_label} left for this offer. "
-                f"The offer is short by ${int(over_by):,}."
-            )
-
         return {
             "ok": False,
-            "reason": reason,
+            "reason": f"{team_name} does not have enough remaining room for this offer. Over by ${int(over_by):,}.",
             "teamSnapshot": snapshot,
             "exceptionRoom": available_room,
-            "minimumException": minimum_offer,
             "spendingType": "room_blocked",
             "exceptionType": exception_type,
             "birdRights": rights,
@@ -7209,6 +7380,11 @@ def maybe_apply_rfa_match(
         return chosen_offer, False
 
     if chosen_offer.get("forceRfaMatch"):
+        if not rights_team_name or not rights.get("restrictedFreeAgent"):
+            # Stale pending RFA rows can survive after rights are renounced.
+            # A renounced RFA is now a UFA, so there is no match right to force.
+            return chosen_offer, False
+
         matched_offer = copy.deepcopy(chosen_offer)
         matched_offer["matchedOriginalTeamName"] = rights_team_name or chosen_offer.get("teamName")
         matched_offer["originalOfferTeamName"] = chosen_offer.get("originalOfferTeamName")
@@ -7359,6 +7535,13 @@ def finalize_free_agent_signing_from_offer(
         matched_rfa = matched_rfa,
     )
 
+    setoff_rows = apply_dead_cap_setoff_for_signed_player(
+        league_data = league_data,
+        player = player,
+        signing_team_name = signing_team_name,
+        contract = contract,
+    )
+
     free_agents.pop(player_idx)
     team.setdefault("players", []).append(signed_player)
 
@@ -7477,6 +7660,7 @@ def finalize_free_agent_signing_from_offer(
         "payrollZone": spending_res.get("payrollZone"),
         "autoRenouncedCapHolds": spending_res.get("autoRenouncedCapHolds", []),
         "autoRenouncedCapHoldAmount": spending_res.get("autoRenouncedCapHoldAmount", 0),
+        "deadCapSetoffRows": setoff_rows,
         "manualRenouncedCapHolds": chosen_offer.get("manualRenouncedCapHolds", []),
         "manualRenouncedCapHoldAmount": chosen_offer.get("manualRenouncedCapHoldAmount", 0),
         "allOffers": sorted_all_offers,
@@ -7511,6 +7695,7 @@ def finalize_free_agent_signing_from_offer(
         "payrollZone": spending_res.get("payrollZone"),
         "autoRenouncedCapHolds": spending_res.get("autoRenouncedCapHolds", []),
         "autoRenouncedCapHoldAmount": spending_res.get("autoRenouncedCapHoldAmount", 0),
+        "deadCapSetoffRows": setoff_rows,
         "manualRenouncedCapHolds": chosen_offer.get("manualRenouncedCapHolds", []),
         "manualRenouncedCapHoldAmount": chosen_offer.get("manualRenouncedCapHoldAmount", 0),
         "allOffers": sorted_all_offers,
@@ -7715,6 +7900,7 @@ def initialize_free_agency_period(
     refresh_free_agent_market_values(updated)
 
     state = ensure_free_agency_state(updated)
+    state["seasonYear"] = get_current_season_year(updated)
     state["isActive"] = True
     state["currentDay"] = 1
     state["maxDays"] = int(clamp(max_days, 1, 30))
@@ -8198,6 +8384,13 @@ def sign_free_agent(
         matched_rfa = False,
     )
 
+    setoff_rows = apply_dead_cap_setoff_for_signed_player(
+        league_data = updated,
+        player = player,
+        signing_team_name = team_name,
+        contract = signed_player.get("contract"),
+    )
+
     free_agents.pop(player_idx)
     team.setdefault("players", []).append(signed_player)
 
@@ -8207,340 +8400,8 @@ def sign_free_agent(
         "leagueData": updated,
         "signedPlayer": signed_player,
         "teamName": team_name,
+        "deadCapSetoffRows": setoff_rows,
         "teamSnapshot": get_team_cap_snapshot(updated, team_name),
-    }
-
-
-def is_regular_season_cpu_pickup_candidate(player: Dict[str, Any]) -> bool:
-    meta = player.get("freeAgencyMeta") if isinstance(player.get("freeAgencyMeta"), dict) else {}
-    reason = str(meta.get("reason") or "").strip().lower()
-    overall = int(round(num(player.get("overall"), 0)))
-    age = int(num(player.get("age"), 27))
-    potential = int(round(num(player.get("potential"), overall)))
-
-    if reason not in ["released", "release", "release_to_free_agency", "regular_season_release"]:
-        return False
-
-    # Keep this narrow: released stars / high-end rotation players create a real
-    # league-wide scramble. Fringe players can sit in the pool unless the user signs them.
-    if overall >= 82:
-        return True
-
-    if overall >= 79 and age <= 30 and potential >= overall:
-        return True
-
-    return False
-
-
-def get_regular_season_cpu_pickup_salary_options(
-    league_data: Dict[str, Any],
-    team_name: str,
-    player: Dict[str, Any],
-) -> List[int]:
-    snapshot = get_team_cap_snapshot(league_data, team_name)
-    if not snapshot.get("ok"):
-        return []
-
-    minimum = int(get_minimum_exception_amount(league_data))
-    market_value = player.get("marketValue") or estimate_market_value(player)
-    expected_year_one = int(num(market_value.get("expectedYear1Salary"), MIN_DEAL))
-    expected_year_one = int(clamp(expected_year_one, minimum, MAX_SALARY))
-
-    raw_cap_room = max(0, int(num(snapshot.get("rawCapRoomWithoutHolds"), snapshot.get("capRoom", 0))))
-    practical_cap_room = max(0, int(num(snapshot.get("capRoom"), 0)))
-    exception_room = max(0, int(get_team_exception_room(league_data, team_name, player)))
-
-    salary_options = []
-
-    # True cap room offer.
-    cap_offer_room = max(raw_cap_room, practical_cap_room)
-    if cap_offer_room >= minimum:
-        salary_options.append(min(expected_year_one, cap_offer_room, MAX_SALARY))
-
-    # MLE / room exception type offer.
-    if exception_room >= minimum:
-        salary_options.append(min(expected_year_one, exception_room, MAX_SALARY))
-
-    # Released stars should still be willing to take a one-year minimum if that is
-    # the only legal way back onto the court, but it should lose to real money.
-    salary_options.append(minimum)
-
-    clean = []
-    seen = set()
-    for salary in salary_options:
-        rounded = int(round_to_nearest(max(minimum, salary), base = 1_000))
-        if rounded in seen:
-            continue
-        seen.add(rounded)
-        clean.append(rounded)
-
-    clean.sort(reverse = True)
-    return clean
-
-
-def build_regular_season_cpu_pickup_offer(
-    league_data: Dict[str, Any],
-    team_name: str,
-    player: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
-    season_year = get_current_season_year(league_data)
-
-    for salary in get_regular_season_cpu_pickup_salary_options(
-        league_data = league_data,
-        team_name = team_name,
-        player = player,
-    ):
-        contract = normalize_contract({
-            "startYear": season_year,
-            "salaryByYear": [int(salary)],
-            "option": None,
-        })
-
-        snapshot = get_team_cap_snapshot(league_data, team_name)
-        spending_res = validate_offer_spending_rules(
-            league_data = league_data,
-            team_name = team_name,
-            player = player,
-            contract = contract,
-            outstanding_current_salary = 0,
-            snapshot = snapshot if snapshot.get("ok") else None,
-            allow_pending_cap_hold_clearance = False,
-        )
-
-        if not spending_res.get("ok"):
-            continue
-
-        return {
-            "offerId": f"regular-season-pickup:{get_player_key_from_player(player)}:{team_name}:{season_year}",
-            "playerId": player.get("id"),
-            "playerName": player.get("name"),
-            "playerKey": get_player_key_from_player(player),
-            "teamName": team_name,
-            "source": "cpu_regular_season_pickup",
-            "status": "accepted",
-            "submittedDay": "regular_season",
-            "day": "regular_season",
-            "contract": contract,
-            "salaryByYear": contract.get("salaryByYear", []),
-            "years": 1,
-            "totalValue": int(sum(contract.get("salaryByYear", []))),
-            "aav": int(sum(contract.get("salaryByYear", []))),
-            "currentYearSalary": int(contract.get("salaryByYear", [0])[0]),
-            "spendingType": spending_res.get("spendingType"),
-            "exceptionType": spending_res.get("exceptionType"),
-            "payrollZone": spending_res.get("payrollZone"),
-            "exceptionRemaining": spending_res.get("exceptionRemaining"),
-            "spendingResult": spending_res,
-        }
-
-    return None
-
-
-def score_regular_season_cpu_pickup_landing(
-    league_data: Dict[str, Any],
-    team: Dict[str, Any],
-    player: Dict[str, Any],
-    offer: Dict[str, Any],
-) -> float:
-    profile = build_team_roster_profile(team, league_data = league_data)
-    fit = estimate_team_free_agent_fit(team, player, league_data = league_data)
-    overall = int(round(num(player.get("overall"), 0)))
-    salary = int(num(offer.get("currentYearSalary"), 0))
-    market_value = player.get("marketValue") or estimate_market_value(player)
-    expected_salary = int(num(market_value.get("expectedYear1Salary"), max(MIN_DEAL, salary)))
-
-    score = 0.0
-    score += min(1.35, salary / max(1, expected_salary)) * 1.70
-    score += float(fit.get("interestScore", 0.0)) * 1.10
-    score += float(fit.get("needScore", 0.0)) * 0.55
-    score += max(0.0, (overall - 78.0) * 0.045)
-
-    direction = str(profile.get("direction") or "").lower()
-    if direction in ["contending", "win now"]:
-        score += 0.36
-    elif direction == "retooling":
-        score += 0.18
-    elif direction == "rebuilding" and overall >= 90:
-        score -= 0.08
-
-    if len(get_team_players(team)) >= get_roster_limit(league_data):
-        score -= 999
-
-    return round(score, 5)
-
-
-def run_regular_season_released_player_cpu_pickup(
-    league_data: Dict[str, Any],
-    player_id: Optional[str] = None,
-    player_name: Optional[str] = None,
-    releasing_team_name: Optional[str] = None,
-) -> Dict[str, Any]:
-    state = ensure_free_agency_state(league_data)
-
-    # Do not interfere with the existing offseason live-market logic.
-    if bool(state.get("isActive")):
-        return {
-            "ok": True,
-            "leagueData": league_data,
-            "signings": [],
-            "reason": "Live offseason free agency is active, so regular-season pickup logic was skipped.",
-        }
-
-    free_agents = league_data.setdefault("freeAgents", [])
-    player_idx = find_free_agent_index(free_agents, player_id, player_name)
-    if player_idx == -1:
-        return {
-            "ok": True,
-            "leagueData": league_data,
-            "signings": [],
-            "reason": "Released player was not found in free agency.",
-        }
-
-    player = free_agents[player_idx]
-    player["marketValue"] = estimate_market_value(player)
-
-    if not is_regular_season_cpu_pickup_candidate(player):
-        return {
-            "ok": True,
-            "leagueData": league_data,
-            "signings": [],
-            "reason": "Released player did not trigger regular-season CPU pickup interest.",
-        }
-
-    candidates = []
-    for _, _, team in iter_teams(league_data):
-        team_name = team.get("name")
-        if not team_name:
-            continue
-        if releasing_team_name and team_name == releasing_team_name:
-            continue
-        if len(get_team_players(team)) >= get_roster_limit(league_data):
-            continue
-
-        offer = build_regular_season_cpu_pickup_offer(
-            league_data = league_data,
-            team_name = team_name,
-            player = player,
-        )
-        if not offer:
-            continue
-
-        candidates.append({
-            "teamName": team_name,
-            "team": team,
-            "offer": offer,
-            "score": score_regular_season_cpu_pickup_landing(
-                league_data = league_data,
-                team = team,
-                player = player,
-                offer = offer,
-            ),
-        })
-
-    if not candidates:
-        return {
-            "ok": True,
-            "leagueData": league_data,
-            "signings": [],
-            "reason": "No CPU team had a legal roster/cap path to sign the released player.",
-        }
-
-    candidates.sort(
-        key = lambda row: (
-            -float(row.get("score", 0.0)),
-            -int(num(row.get("offer", {}).get("currentYearSalary"), 0)),
-            str(row.get("teamName", "")),
-        )
-    )
-    chosen = candidates[0]
-    team = chosen["team"]
-    team_name = chosen["teamName"]
-    offer = chosen["offer"]
-    spending_res = offer.get("spendingResult") or {}
-    contract = normalize_contract(offer.get("contract"))
-
-    # Re-find because candidate scoring may have touched data and we want the live index.
-    player_idx = find_free_agent_index(
-        league_data.setdefault("freeAgents", []),
-        player.get("id"),
-        player.get("name"),
-    )
-    if player_idx == -1:
-        return {
-            "ok": True,
-            "leagueData": league_data,
-            "signings": [],
-            "reason": "Released player was already removed from free agency.",
-        }
-
-    signed_player = copy.deepcopy(league_data["freeAgents"][player_idx])
-    signed_player["contract"] = contract
-    signed_player["marketValue"] = estimate_market_value(signed_player)
-    update_player_rights_after_signing(
-        player = signed_player,
-        team_name = team_name,
-        signing_source = "regular_season_released_player_pickup",
-        matched_rfa = False,
-    )
-
-    league_data["freeAgents"].pop(player_idx)
-    team.setdefault("players", []).append(signed_player)
-
-    current_year_salary = get_contract_salary_for_year(contract, get_current_season_year(league_data))
-    exception_usage = record_exception_usage_for_signing(
-        league_data = league_data,
-        team_name = team_name,
-        spending_res = spending_res,
-        current_year_salary = current_year_salary,
-    )
-
-    story_context = build_free_agency_story_context(
-        league_data = league_data,
-        player = signed_player,
-        team_name = team_name,
-        contract = contract,
-        row = offer,
-        offer = offer,
-        all_offers = [candidate.get("offer") for candidate in candidates[:5]],
-        spending_res = spending_res,
-        event_type = "regular_season_released_player_pickup",
-        current_day = "regular_season",
-        exception_usage = exception_usage,
-        roster_need = offer.get("rosterNeed"),
-    )
-
-    signing_row = {
-        "day": "regular_season",
-        "playerId": signed_player.get("id"),
-        "playerName": signed_player.get("name"),
-        "teamName": team_name,
-        "signedWith": team_name,
-        "contract": contract,
-        "totalValue": int(sum(contract.get("salaryByYear", []))),
-        "aav": int(sum(contract.get("salaryByYear", [])) / max(1, len(contract.get("salaryByYear", [])))),
-        "spendingType": spending_res.get("spendingType"),
-        "exceptionType": spending_res.get("exceptionType"),
-        "exceptionUsage": exception_usage,
-        "exceptionRemaining": get_team_remaining_exceptions(league_data, team_name),
-        "payrollZone": spending_res.get("payrollZone"),
-        "source": "regular_season_released_player_pickup",
-        "releasedPickup": True,
-        "releasedFromTeam": releasing_team_name,
-        "allOffers": [candidate.get("offer") for candidate in candidates[:5]],
-        "storyContext": story_context,
-    }
-
-    state.setdefault("signedPlayersLog", []).append(copy.deepcopy(signing_row))
-
-    return {
-        "ok": True,
-        "leagueData": league_data,
-        "signings": [signing_row],
-        "signedPlayer": signed_player,
-        "teamName": team_name,
-        "reason": f"{signed_player.get('name', 'Player')} was picked up by {team_name} after being released.",
-        "candidateCount": len(candidates),
-        "topOffers": [candidate.get("offer") for candidate in candidates[:5]],
     }
 
 def release_player(
@@ -8585,11 +8446,7 @@ def release_player(
         reason = "release_to_free_agency",
     )
 
-    released_contract = normalize_contract(released_player.get("contract"))
-    released_player["previousContract"] = released_contract
-    released_player["releasedContract"] = copy.deepcopy(released_contract)
-    released_player["releasedFromTeam"] = team_name
-    released_player["releasedDeadCapRows"] = copy.deepcopy(dead_cap_rows)
+    released_player["previousContract"] = normalize_contract(released_player.get("contract"))
     released_player["contract"] = None
     set_player_rights(
         player = released_player,
@@ -8607,27 +8464,12 @@ def release_player(
 
     updated.setdefault("freeAgents", []).append(released_player)
 
-    pickup_res = run_regular_season_released_player_cpu_pickup(
-        league_data = updated,
-        player_id = released_player.get("id"),
-        player_name = released_player.get("name"),
-        releasing_team_name = team_name,
-    )
-    pickup_signings = pickup_res.get("signings", []) if pickup_res.get("ok") else []
-
-    reason = f"{released_player.get('name', 'Player')} released to free agency with ${sum(int(num(row.get('amount'), 0)) for row in dead_cap_rows):,} in dead cap remaining."
-    if pickup_signings:
-        signed_with = pickup_signings[0].get("signedWith") or pickup_signings[0].get("teamName")
-        reason += f" {released_player.get('name', 'Player')} was then picked up by {signed_with} on a one-year deal."
-
     return {
         "ok": True,
-        "reason": reason,
+        "reason": f"{released_player.get('name', 'Player')} released to free agency.",
         "leagueData": updated,
         "releasedPlayer": released_player,
         "deadCapRows": dead_cap_rows,
-        "regularSeasonPickup": pickup_res,
-        "regularSeasonPickupSignings": pickup_signings,
         "teamName": team_name,
         "teamSnapshot": get_team_cap_snapshot(updated, team_name),
     }
@@ -9075,15 +8917,6 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
             user_team_name = payload.get("userTeamName"),
             min_players = payload.get("minPlayers"),
             current_day = int(num(payload.get("currentDay"), 0)),
-        )
-
-    if action == "run_regular_season_released_player_cpu_pickup":
-        updated = copy.deepcopy(league_data)
-        return run_regular_season_released_player_cpu_pickup(
-            league_data = updated,
-            player_id = payload.get("playerId"),
-            player_name = payload.get("playerName"),
-            releasing_team_name = payload.get("releasingTeamName"),
         )
 
     return {

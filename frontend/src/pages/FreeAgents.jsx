@@ -488,8 +488,32 @@ const isOffseasonMode =
   }, [workingLeagueData]);
 
   const liveFreeAgencyState = useMemo(() => {
-    return workingLeagueData?.freeAgencyState || {};
-  }, [workingLeagueData]);
+    const rawState = workingLeagueData?.freeAgencyState || {};
+    const stateSeasonYear = Number(rawState?.seasonYear || 0);
+
+    // Surgical year-rollover guard:
+    // A completed FA state can stay on leagueData after advancing to the next
+    // offseason. If we trust that old Day 10 state, the new offseason opens
+    // directly in cleanup mode and looks like the live market auto-simmed.
+    // Only use a saved FA state when it belongs to the current offseason year.
+    if (
+      isOffseasonMode &&
+      optionsComplete &&
+      rightsManagementComplete &&
+      stateSeasonYear > 0 &&
+      stateSeasonYear !== currentSeasonYear
+    ) {
+      return {};
+    }
+
+    return rawState;
+  }, [
+    workingLeagueData,
+    isOffseasonMode,
+    optionsComplete,
+    rightsManagementComplete,
+    currentSeasonYear,
+  ]);
 
   const isLiveFreeAgencyActive = !!liveFreeAgencyState?.isActive;
   const currentDay = Number(liveFreeAgencyState?.currentDay || 0);
@@ -526,24 +550,53 @@ const isOffseasonMode =
     !isLiveFreeAgencyActive &&
     currentDay >= maxDays;
 
+  const backendFreeAgencyCompleteFlag = Boolean(
+    liveFreeAgencyState?.marketComplete ||
+      liveFreeAgencyState?.freeAgencyComplete ||
+      liveFreeAgencyState?.completed ||
+      liveFreeAgencyState?.isComplete ||
+      liveFreeAgencyState?.status === "complete"
+  );
+
+  const backendHasRealMarketEvidence = Boolean(
+    currentDay > 0 ||
+      signedPlayersLog.length > 0 ||
+      dailyLog.length > 0 ||
+      offerHistory.length > 0 ||
+      Object.keys(offersByPlayerSnapshot).length > 0 ||
+      freeAgents.length === 0
+  );
+
   const backendMarkedFreeAgencyComplete =
     isOffseasonMode &&
     optionsComplete &&
     rightsManagementComplete &&
     !isLiveFreeAgencyActive &&
-    Boolean(
-      liveFreeAgencyState?.marketComplete ||
-      liveFreeAgencyState?.freeAgencyComplete ||
-      liveFreeAgencyState?.completed ||
-      liveFreeAgencyState?.isComplete ||
-      liveFreeAgencyState?.status === "complete"
-    );
+    backendFreeAgencyCompleteFlag &&
+    backendHasRealMarketEvidence;
 
   const freeAgencyMarketComplete =
     freeAgencyMarketReachedEnd || backendMarkedFreeAgencyComplete;
 
+  // Stale-state guard:
+  // If bm_offseason_state_v1 says free agency is complete, but the live market
+  // has no real evidence of ever starting and free agents still exist, do NOT
+  // unlock cleanup signing. That was making offseason FA behave like midseason FA.
+  const staleOffseasonFreeAgencyComplete =
+    freeAgencyFinished &&
+    isOffseasonMode &&
+    optionsComplete &&
+    rightsManagementComplete &&
+    !isLiveFreeAgencyActive &&
+    !freeAgencyMarketStarted &&
+    !freeAgencyMarketComplete &&
+    freeAgents.length > 0;
+
+  const trustedFreeAgencyFinished =
+    freeAgencyFinished && !staleOffseasonFreeAgencyComplete;
+
   const effectiveFreeAgencyFinished =
-    freeAgencyFinished ||
+    trustedFreeAgencyFinished ||
     freeAgencyMarketComplete ||
     (isOffseasonMode &&
       optionsComplete &&
@@ -1487,6 +1540,19 @@ const isOffseasonMode =
   useEffect(() => {
     if (!isOffseasonMode) return;
     if (!optionsComplete) return;
+
+    if (staleOffseasonFreeAgencyComplete) {
+      updateOffseasonState({
+        active: true,
+        seasonYear: currentSeasonYear,
+        optionsComplete: true,
+        rightsManagementComplete: true,
+        freeAgencyComplete: false,
+      });
+      setDaySummary(null);
+      return;
+    }
+
     if (freeAgencyFinished) return;
     if (isLiveFreeAgencyActive) return;
     if (!freeAgencyMarketComplete && freeAgents.length > 0) return;
@@ -1518,6 +1584,7 @@ const isOffseasonMode =
     optionsComplete,
     rightsManagementComplete,
     freeAgencyFinished,
+    staleOffseasonFreeAgencyComplete,
     isLiveFreeAgencyActive,
     freeAgencyMarketComplete,
     freeAgents.length,

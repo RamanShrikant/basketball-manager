@@ -11,7 +11,7 @@ import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
     
     
-    const GAMEPLAN_VERSION = 2;
+    const GAMEPLAN_VERSION = 3;
 
 function getRosterSignature(teamPlayers = []) {
     return [...teamPlayers]
@@ -44,6 +44,9 @@ function buildGameplanPayload(teamName, teamPlayers, sortedPlayers, minutesObj) 
         rosterSignature: getRosterSignature(teamPlayers),
         order: sortedPlayers.map((p) => p.name),
         minutes: orderedMinutes,
+        manualLocked: true,
+        userEdited: true,
+        source: "coach_gameplan",
         updatedAt: Date.now(),
     };
 }
@@ -409,25 +412,33 @@ useEffect(() => {
   }
 }, [selectedTeam]);
 
-const handleSave = () => {
-  if (!selectedTeam) return;
+const getMinutesTotal = (minutesObj) => {
+  return Object.values(minutesObj || {}).reduce((sum, value) => {
+    return sum + Number(value || 0);
+  }, 0);
+};
 
-  const payload = {
-    version: 2,
-    teamName: selectedTeam.name,
-    rosterSignature: getRosterSignatureForGameplan(selectedTeam.players || []),
-    order: players.map((p) => p.name),
-    minutes: { ...minutes },
-    updatedAt: Date.now(),
-  };
+const persistCurrentGameplan = (nextPlayers = players, nextMinutes = minutes, showToast = false) => {
+  if (!selectedTeam?.name) return false;
+  if (getMinutesTotal(nextMinutes) !== 240) return false;
 
-  localStorage.setItem(
-    `gameplan_${selectedTeam.name}`,
-    JSON.stringify(payload)
+  saveGameplanToStorage(
+    selectedTeam.name,
+    selectedTeam.players || [],
+    nextPlayers,
+    nextMinutes
   );
 
-  setToast(true);
-  setTimeout(() => setToast(false), 2000);
+  if (showToast) {
+    setToast(true);
+    setTimeout(() => setToast(false), 2000);
+  }
+
+  return true;
+};
+
+const handleSave = () => {
+  persistCurrentGameplan(players, minutes, true);
 };
 
 
@@ -453,12 +464,13 @@ const handleAutoRebuild = () => {
 
         const totalNow = Object.entries(minutes)
         .filter(([k]) => k !== name)
-        .reduce((a, [, v]) => a + v, 0);
+        .reduce((a, [, v]) => a + Number(v || 0), 0);
         if (totalNow + num > 240) return;
 
         const updated = { ...minutes, [name]: num };
         setMinutes(updated);
         setTeamRatings(calculateTeamRatings(players, updated));
+        persistCurrentGameplan(players, updated, false);
     };
 
     const handleSquareClick = (player) => {
@@ -468,22 +480,19 @@ const handleAutoRebuild = () => {
         setSwapSelection(null);
         } else {
         const p1 = swapSelection, p2 = player;
-        let newPlayers = [];
-        setPlayers((prev) => {
-            const arr = [...prev];
-            const i1 = arr.findIndex((x) => x.name === p1.name);
-            const i2 = arr.findIndex((x) => x.name === p2.name);
-            if (i1 !== -1 && i2 !== -1) [arr[i1], arr[i2]] = [arr[i2], arr[i1]];
-            newPlayers = arr;
-            return arr;
-        });
+        const arr = [...players];
+        const i1 = arr.findIndex((x) => x.name === p1.name);
+        const i2 = arr.findIndex((x) => x.name === p2.name);
 
-        setMinutes((prev) => {
-            const adjusted = enforceStarterMinimums(newPlayers.length ? newPlayers : players, prev);
-            setTeamRatings(calculateTeamRatings(newPlayers.length ? newPlayers : players, adjusted));
-            return adjusted;
-        });
+        if (i1 !== -1 && i2 !== -1) {
+            [arr[i1], arr[i2]] = [arr[i2], arr[i1]];
+        }
 
+        const adjusted = enforceStarterMinimums(arr, minutes);
+        setPlayers(arr);
+        setMinutes(adjusted);
+        setTeamRatings(calculateTeamRatings(arr, adjusted));
+        persistCurrentGameplan(arr, adjusted, false);
         setSwapSelection(null);
         }
     };
@@ -726,7 +735,10 @@ const handleAutoRebuild = () => {
                 Save Gameplan
                 </button>
                 <button
-                onClick={() => navigate("/team-hub")}
+                onClick={() => {
+                    persistCurrentGameplan(players, minutes, false);
+                    navigate("/team-hub");
+                }}
                 disabled={total < 240}
                 className={`px-5 py-2 rounded-lg font-semibold transition ${
                     total < 240

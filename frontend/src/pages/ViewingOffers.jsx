@@ -1059,7 +1059,42 @@ function getPreviewSalaryCap(leagueData, snapshot) {
   return 154_647_000;
 }
 
-function getPlayerCurrentYearSalaryForPreview(player = {}) {
+function getPreviewCurrentSeasonYear(leagueData) {
+  return Number(
+    leagueData?.seasonYear ||
+    leagueData?.currentSeasonYear ||
+    2026
+  );
+}
+
+function getPreviewOperatingSeasonYear(leagueData) {
+  const state = leagueData?.freeAgencyState || {};
+  const freeAgencyWindowActive = Boolean(
+    state?.isActive ||
+    Number(state?.currentDay || 0) > 0 ||
+    Number(state?.maxDays || 0) > 0 ||
+    state?.latestResults
+  );
+
+  return getPreviewCurrentSeasonYear(leagueData) + (freeAgencyWindowActive ? 1 : 0);
+}
+
+function getPreviewContractSalaryForYear(contract = {}, seasonYear = 0) {
+  const salaryByYear = Array.isArray(contract?.salaryByYear)
+    ? contract.salaryByYear
+    : [];
+
+  const startYear = Number(contract?.startYear || 0);
+  const idx = Number(seasonYear || 0) - startYear;
+
+  if (startYear > 0 && idx >= 0 && idx < salaryByYear.length) {
+    return Math.max(0, Number(salaryByYear[idx] || 0));
+  }
+
+  return 0;
+}
+
+function getPlayerCurrentYearSalaryForPreview(player = {}, seasonYear = 0) {
   const contract = player?.contract || player?.currentContract || {};
   const salaryByYear = Array.isArray(contract?.salaryByYear)
     ? contract.salaryByYear
@@ -1067,25 +1102,105 @@ function getPlayerCurrentYearSalaryForPreview(player = {}) {
     ? player.salaryByYear
     : [];
 
+  const yearSalary = getPreviewContractSalaryForYear(contract, seasonYear);
+  if (yearSalary > 0) return yearSalary;
+
+  // If the contract has a real startYear but no salary in the operating year,
+  // it should not count toward this offseason payroll.
+  if (Number(contract?.startYear || 0) > 0) return 0;
+
   const salary = getFirstFiniteNumber(
-    salaryByYear[0],
     contract?.currentYearSalary,
+    player?.currentYearSalary,
+    player?.capHit,
     contract?.salary,
     contract?.amount,
-    player?.currentYearSalary,
     player?.salary,
-    player?.capHit
+    salaryByYear[0]
   );
 
   return Math.max(0, Number(salary || 0));
 }
 
-function getPreviewTeamPayroll(team = {}) {
-  const players = Array.isArray(team?.players) ? team.players : [];
+function getPreviewTeamDeadCapForYear(leagueData, teamName = "", seasonYear = 0) {
+  const deadCapMap = leagueData?.deadCapByTeam || {};
+  const rows = Array.isArray(deadCapMap?.[teamName]) ? deadCapMap[teamName] : [];
 
-  return players.reduce((sum, player) => {
-    return sum + getPlayerCurrentYearSalaryForPreview(player);
+  return rows.reduce((sum, row) => {
+    if (Number(row?.seasonYear || -1) !== Number(seasonYear)) return sum;
+    return sum + Number(row?.amount || 0);
   }, 0);
+}
+
+function getPreviewTeamPayroll(leagueData, team = {}, teamName = "") {
+  const players = Array.isArray(team?.players) ? team.players : [];
+  const seasonYear = getPreviewOperatingSeasonYear(leagueData);
+
+  const playerPayroll = players.reduce((sum, player) => {
+    return sum + getPlayerCurrentYearSalaryForPreview(player, seasonYear);
+  }, 0);
+
+  return playerPayroll + getPreviewTeamDeadCapForYear(leagueData, teamName, seasonYear);
+}
+
+function isPreviewTeamHardCapped(leagueData, teamName = "", team = {}) {
+  if (!teamName) return false;
+
+  if (team?.isHardCapped || team?.hardCapped || team?.hardCapTriggered || team?.triggeredHardCap) {
+    return true;
+  }
+
+  if (leagueData?.hardCappedByTeam?.[teamName]) return true;
+  if (leagueData?.hardCapTriggeredByTeam?.[teamName]) return true;
+
+  if (Array.isArray(leagueData?.hardCappedTeams) && leagueData.hardCappedTeams.includes(teamName)) {
+    return true;
+  }
+
+  return false;
+}
+
+function getPreviewHardCapForTeam(leagueData, teamName = "", team = {}) {
+  if (!isPreviewTeamHardCapped(leagueData, teamName, team)) return null;
+
+  const teamHardCap = getFirstFiniteNumber(
+    team?.hardCap,
+    team?.hardCapValue,
+    team?.hardCapAmount,
+    team?.hardCapLine,
+    team?.hardCapLimit,
+    team?.secondApron,
+    team?.secondApronValue,
+    team?.secondApronAmount,
+    team?.secondApronLine,
+    team?.apron2
+  );
+  if (teamHardCap && teamHardCap > 0) return teamHardCap;
+
+  for (const mapKey of [
+    "hardCapByTeam",
+    "teamHardCaps",
+    "hardCapMap",
+    "secondApronByTeam",
+    "teamSecondAprons",
+  ]) {
+    const value = getFirstFiniteNumber(leagueData?.[mapKey]?.[teamName]);
+    if (value && value > 0) return value;
+  }
+
+  return getFirstFiniteNumber(
+    leagueData?.hardCap,
+    leagueData?.hardCapValue,
+    leagueData?.hardCapAmount,
+    leagueData?.hardCapLine,
+    leagueData?.hardCapLimit,
+    leagueData?.secondApron,
+    leagueData?.secondApronValue,
+    leagueData?.secondApronAmount,
+    leagueData?.secondApronLine,
+    leagueData?.apron2,
+    207_824_000
+  );
 }
 
 function getPreviewRights(player = {}) {
@@ -1191,7 +1306,6 @@ export default function ViewingOffers() {
     localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
   }, []);
 
-  const advanceFreeAgencyDay = simEngine.advanceFreeAgencyDay;
   const processPendingUserFreeAgencyDecisions =
     simEngine.processPendingUserFreeAgencyDecisions;
   const processPendingRfaMatchDecision =
@@ -1224,8 +1338,8 @@ export default function ViewingOffers() {
       ? liveTeam.players.length
       : pendingUserTeamSnapshot?.rosterCount;
 
-    const calculatedPayroll = getPreviewTeamPayroll(liveTeam);
-    const payroll = calculatedPayroll > 0
+    const calculatedPayroll = getPreviewTeamPayroll(leagueData, liveTeam, selectedTeam.name);
+    const payroll = calculatedPayroll >= 0
       ? calculatedPayroll
       : Number(pendingUserTeamSnapshot?.payroll || 0);
 
@@ -1235,15 +1349,23 @@ export default function ViewingOffers() {
     const capRoom = salaryCap - payroll;
     const practicalPayroll = payroll + capHoldTotal;
     const practicalCapRoom = salaryCap - practicalPayroll;
+    const hardCap = getPreviewHardCapForTeam(leagueData, selectedTeam.name, liveTeam);
+    const hardCapRoom = hardCap === null ? null : hardCap - practicalPayroll;
 
     return {
       ...pendingUserTeamSnapshot,
       salaryCap,
       payroll,
+      rawPayrollWithoutHolds: payroll,
       capRoom,
+      rawCapRoomWithoutHolds: capRoom,
+      capHolds: capHoldTotal,
       capHoldTotal,
       practicalPayroll,
       practicalCapRoom,
+      hardCap,
+      hardCapRoom,
+      isHardCapped: hardCap !== null,
       rosterCount: Number(liveRosterCount || 0),
     };
   }, [pendingUserTeamSnapshot, leagueData, selectedTeam]);
@@ -1251,6 +1373,15 @@ export default function ViewingOffers() {
   const pendingRfaMatchDecisions = Array.isArray(freeAgencyState?.pendingRfaMatchDecisions)
     ? freeAgencyState.pendingRfaMatchDecisions
     : [];
+
+  // Surgical recovery guard:
+  // A pending-signing state can exist without latestResults after a saved reload,
+  // compact backend payload, or partial update. Do not show the empty-results
+  // dead-end in that case. Let the pending-signings UI render so the user can
+  // sign/decline the waiting players and continue the market.
+  const hasPendingUserAction =
+    pendingUserDecisions.length > 0 || pendingRfaMatchDecisions.length > 0;
+  const shouldShowEmptyResults = !latestResults && !hasPendingUserAction;
 
   const teamLogoMap = useMemo(() => {
     const map = new Map();
@@ -1376,49 +1507,6 @@ export default function ViewingOffers() {
       }
     };
 
-    const addUserOfferOutcomeRow = (outcome = {}) => {
-      const outcomeTeamName = outcome?.userTeamName || outcome?.teamName;
-      if (outcomeTeamName !== teamName) return;
-
-      const status = String(outcome?.status || outcome?.offerStatus || "");
-      if (!status) return;
-
-      const playerKey = outcome?.playerKey || getOfferPlayerKeyFromParts(outcome?.playerId, outcome?.playerName);
-      const signedWith = outcome?.signedWith || outcome?.teamName || null;
-      const playerName = outcome?.playerName || "Unknown Player";
-      const signedContractSummary = getContractSummary(outcome?.signedContract, outcome?.signedTotalValue, outcome?.signedYears);
-      const userOfferContractSummary = getContractSummary(outcome?.userOfferContract, outcome?.userOfferTotalValue, outcome?.userOfferYears);
-      const matchedByOriginal = status === "matched_by_original_team" || Boolean(outcome?.rfaMatched && outcome?.originalOfferTeamName === teamName && signedWith !== teamName);
-      const won = status === "won" || signedWith === teamName;
-      const cleanStatus = won ? "won" : matchedByOriginal ? "matched_by_original_team" : "lost";
-
-      addRow({
-        id: outcome?.id || `outcome|${cleanStatus}|${playerKey}|${signedWith || ""}|${outcome?.day || ""}`,
-        playerKey,
-        playerName,
-        status: cleanStatus,
-        teamName,
-        signedWith,
-        contract: outcome?.signedContract || outcome?.userOfferContract || null,
-        totalValue: signedContractSummary.totalValue || userOfferContractSummary.totalValue || outcome?.signedTotalValue || outcome?.userOfferTotalValue || 0,
-        years: signedContractSummary.years || userOfferContractSummary.years || outcome?.signedYears || outcome?.userOfferYears || 0,
-        userOfferContract: outcome?.userOfferContract || null,
-        userOfferTotalValue: userOfferContractSummary.totalValue || outcome?.userOfferTotalValue || 0,
-        userOfferYears: userOfferContractSummary.years || outcome?.userOfferYears || 0,
-        signedContract: outcome?.signedContract || null,
-        signedTotalValue: signedContractSummary.totalValue || outcome?.signedTotalValue || 0,
-        signedYears: signedContractSummary.years || outcome?.signedYears || 0,
-        day: outcome?.day,
-        detail: won
-          ? `${playerName} signed with ${teamName}. Your offer won.`
-          : matchedByOriginal
-          ? `${signedWith || "The rights team"} matched your RFA offer sheet. ${playerName} signed with ${signedWith || "the rights team"}.`
-          : `${playerName} signed with ${signedWith || "another team"} instead of accepting your offer.`,
-        storyContext: outcome?.storyContext || null,
-        popupEligible: !won,
-      });
-    };
-
     for (const row of state.pendingUserDecisions || []) {
       if (!row?.playerKey) continue;
       addRow({
@@ -1435,16 +1523,6 @@ export default function ViewingOffers() {
         detail: "Your offer is currently waiting for your final approval on this screen.",
         popupEligible: false,
       });
-    }
-
-    for (const outcome of state.userOfferOutcomeLog || []) {
-      addUserOfferOutcomeRow(outcome);
-    }
-
-    for (const signing of latestResults?.signings || []) {
-      for (const outcome of signing?.userOfferOutcomes || []) {
-        addUserOfferOutcomeRow(outcome);
-      }
     }
 
     const offersByPlayer = state.offersByPlayer || {};
@@ -1472,17 +1550,7 @@ export default function ViewingOffers() {
       }
     }
 
-    const signingLogRows = [
-      ...(Array.isArray(latestResults?.signings) ? latestResults.signings : []),
-      ...(Array.isArray(state.signedPlayersLog) ? state.signedPlayersLog : []),
-    ];
-    const seenSigningRows = new Set();
-
-    for (const log of signingLogRows) {
-      const signingKey = `${log?.day || ""}|${log?.playerId || ""}|${log?.playerName || ""}|${log?.teamName || log?.signedWith || ""}`;
-      if (seenSigningRows.has(signingKey)) continue;
-      seenSigningRows.add(signingKey);
-
+    for (const log of state.signedPlayersLog || []) {
       const allOffers = Array.isArray(log?.allOffers) ? log.allOffers : [];
       const userOffer = allOffers.find((offer) => offer?.teamName === teamName && offer?.source === "user");
       if (!userOffer) continue;
@@ -1533,7 +1601,7 @@ export default function ViewingOffers() {
       if (diff !== 0) return diff;
       return String(a.playerName || "").localeCompare(String(b.playerName || ""));
     });
-  }, [leagueData, selectedTeam?.name, latestResults]);
+  }, [leagueData, selectedTeam?.name]);
 
   const offerPopupRows = useMemo(() => {
     const dismissed = new Set(dismissedOfferStatusIds || []);
@@ -2009,20 +2077,6 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
     );
   };
 
-const handleBackToFreeAgency = () => {
-  try {
-    setActionError("");
-    localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
-
-    if (leagueData) {
-      applyLeagueUpdate(leagueData);
-    }
-
-    navigate("/free-agents");
-  } catch (err) {
-    setActionError(err?.message || "Failed to return to free agency.");
-  }
-};
 const handleReturnToOffseasonHub = () => {
   try {
     setActionError("");
@@ -2043,11 +2097,35 @@ const handleReturnToOffseasonHub = () => {
       setProcessingAdvance(true);
       setActionError("");
 
+      // Cleaner flow: ViewingOffers is only a review/decision screen.
+      // FreeAgents advances the market, this page resolves user decisions,
+      // then returns to FreeAgents for the next day. Once the market is closed,
+      // this button should finish FA and move directly into progression.
       const hadPendingUserDecisions = pendingUserDecisions.length > 0;
+
+      if (marketClosed && !hadPendingUserDecisions) {
+        finalizeFreeAgencyComplete(leagueData, latestResults);
+        localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+        navigate("/player-progression");
+        return;
+      }
+
+      if (!hadPendingUserDecisions) {
+        localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+
+        if (leagueData) {
+          applyLeagueUpdate(leagueData);
+        }
+
+        navigate("/free-agents");
+        return;
+      }
+
       const processRes = await processSelections({
         requireSelected: false,
-        declineUnselected: hadPendingUserDecisions,
+        declineUnselected: true,
       });
+
       if (!processRes?.ok) {
         if (processRes?.leagueData) {
           applyLeagueUpdate(processRes.leagueData);
@@ -2058,63 +2136,26 @@ const handleReturnToOffseasonHub = () => {
 
       const baseLeague = processRes?.leagueData || leagueData;
       const baseStateSummary = processRes?.stateSummary || null;
-
-      // If this screen already had user decisions, the backend processes those
-      // selections and moves the FA state forward. Do not immediately call
-      // advanceFreeAgencyDay again, or the market can skip an extra day.
-      if (hadPendingUserDecisions) {
-        const latest = {
-          dayResolved: dayResolved ?? baseLeague?.freeAgencyState?.currentDay ?? null,
-          signings: processRes?.processedSignings || [],
-          generatedOffers: processRes?.generatedOffers || [],
-          stateSummary: baseStateSummary,
-        };
-
-        if (baseStateSummary && !baseStateSummary.isActive) {
-          finalizeFreeAgencyComplete(baseLeague, latest);
-        } else {
-          applyLeagueUpdateWithLatestResults(baseLeague, latest);
-        }
-        return;
-      }
-
-      if (baseStateSummary && !baseStateSummary.isActive) {
-        const latest = {
-          dayResolved: dayResolved ?? null,
-          signings: processRes?.processedSignings || [],
-          generatedOffers: processRes?.generatedOffers || [],
-          stateSummary: baseStateSummary,
-        };
-
-        finalizeFreeAgencyComplete(baseLeague, latest);
-        return;
-      }
-
-      const backendLeagueData = buildLeagueDataForFreeAgencyBackendAction(baseLeague);
-
-      const res = await advanceFreeAgencyDay(
-        backendLeagueData,
-        selectedTeam?.name || null
-      );
-
-      if (!res?.ok || !res?.leagueData) {
-        if (res?.leagueData) {
-          applyLeagueUpdate(res.leagueData);
-        }
-        setActionError(res?.reason || "Failed to advance free agency day.");
-        return;
-      }
-
       const latest = {
-        dayResolved: res?.dayResolved ?? null,
-        signings: res?.signings || [],
-        generatedOffers: res?.generatedOffers || [],
-        stateSummary: res?.stateSummary || null,
+        dayResolved: dayResolved ?? baseLeague?.freeAgencyState?.currentDay ?? null,
+        signings: processRes?.processedSignings || [],
+        generatedOffers: processRes?.generatedOffers || [],
+        stateSummary: baseStateSummary,
       };
 
-      applyLeagueUpdateWithLatestResults(res.leagueData, latest);
+      if (baseStateSummary && !baseStateSummary.isActive) {
+        finalizeFreeAgencyComplete(baseLeague, latest);
+        localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+        navigate("/player-progression");
+        return;
+      } else {
+        applyLeagueUpdateWithLatestResults(baseLeague, latest);
+      }
+
+      localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+      navigate("/free-agents");
     } catch (err) {
-      setActionError(err?.message || "Failed to advance free agency day.");
+      setActionError(err?.message || "Failed to continue free agency.");
     } finally {
       setProcessingAdvance(false);
     }
@@ -2157,7 +2198,7 @@ return (
           </p>
         </div>
 
-        {!latestResults ? (
+        {shouldShowEmptyResults ? (
           <div className="bg-neutral-800 border border-neutral-700 rounded-2xl p-6 shadow-lg">
             <p className="text-lg text-gray-300">
               No daily results available yet.
@@ -2165,14 +2206,7 @@ return (
 
             <div className="mt-6 flex gap-3 flex-wrap">
               <button
-                onClick={() => navigate("/free-agents")}
-                className="px-5 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
-              >
-                Back to Free Agency
-              </button>
-
-              <button
-                onClick={() => navigate("/offseason")}
+                onClick={handleReturnToOffseasonHub}
                 className="px-5 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
               >
                 Back to Offseason Hub
@@ -2410,7 +2444,7 @@ return (
 
               {pendingUserDecisions.length > 0 && (
                 <div className="mb-4 rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
-                  Select a pending player only when you want to finalize the signing. Going back to Free Agency or the Offseason Hub only saves the current state. Pressing Sign Selected / Decline Rest advances the market, signs checked players, and declines unchecked players.
+                  Select the pending players you want to finalize. Pressing Sign Selected / Decline Rest signs checked players, declines unchecked players, and returns you to Free Agency for the next day. Returning to the Offseason Hub only saves the current state.
                 </div>
               )}
 
@@ -2893,23 +2927,19 @@ return (
 
 <div className="flex gap-3 flex-wrap">
   <button
-    onClick={handleBackToFreeAgency}
-    disabled={processingBack || processingAdvance}
-    className="px-6 py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
-  >
-    {processingBack
-      ? "Processing..."
-      : marketClosed
-      ? "Free Agency Complete"
-      : "Back to Free Agency"}
-  </button>
-
-  <button
     onClick={handleAdvanceFromResults}
-    disabled={processingBack || processingAdvance || marketClosed}
+    disabled={processingBack || processingAdvance || pendingRfaMatchDecisions.length > 0}
     className="px-6 py-3 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
   >
-    {marketClosed ? "Free Agency Complete" : processingAdvance ? "Advancing..." : pendingUserDecisions.length > 0 ? "Sign Selected / Decline Rest" : "Advance Day"}
+    {processingAdvance
+      ? "Processing..."
+      : pendingRfaMatchDecisions.length > 0
+      ? "Resolve RFA Decisions First"
+      : marketClosed
+      ? "Continue to Progression"
+      : pendingUserDecisions.length > 0
+      ? "Sign Selected / Decline Rest"
+      : "Continue to Free Agency"}
   </button>
 
 <button

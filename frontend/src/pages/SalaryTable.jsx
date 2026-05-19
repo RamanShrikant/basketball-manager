@@ -407,6 +407,64 @@ export default function SalaryTable() {
     return capHoldRows.reduce((sum, row) => sum + Number(row.capHold || 0), 0);
   }, [capHoldRows]);
 
+  const getMinimumExceptionAmount = () => getLeagueAmount(
+    ["minimumException", "minimumSalary", "veteranMinimum"],
+    1_500_000
+  );
+
+  const getContractSalaryForYear = (contract, seasonYear) => {
+    const startYear = Number(contract?.startYear || 0);
+    const salaryByYear = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+    const idx = Number(seasonYear) - startYear;
+
+    if (idx < 0 || idx >= salaryByYear.length) return 0;
+    return Number(salaryByYear[idx] || 0);
+  };
+
+  const sameDeadCapPlayer = (row, player) => {
+    const rowId = row?.playerId;
+    const playerId = player?.id;
+
+    if (rowId !== undefined && rowId !== null && rowId !== "" && playerId !== undefined && playerId !== null && playerId !== "") {
+      return String(rowId) === String(playerId);
+    }
+
+    const rowName = row?.playerName || row?.name;
+    return Boolean(rowName && player?.name && rowName === player.name);
+  };
+
+  const findSignedPlayerForDeadCapRow = (row, deadCapTeamName) => {
+    const seasonYear = Number(row?.seasonYear || 0);
+    const teams = Object.values(leagueData?.conferences || {}).flatMap((items) => items || []);
+
+    for (const team of teams) {
+      const signedTeamName = team?.name;
+      if (!signedTeamName || signedTeamName === deadCapTeamName) continue;
+
+      for (const player of team?.players || []) {
+        if (!sameDeadCapPlayer(row, player)) continue;
+
+        const signedSalary = getContractSalaryForYear(player?.contract, seasonYear);
+        if (signedSalary <= 0) continue;
+
+        return {
+          teamName: signedTeamName,
+          player,
+          signedSalary,
+        };
+      }
+    }
+
+    return null;
+  };
+
+  const calculateDeadCapSetOff = (originalAmount, signedSalary) => {
+    const minimum = Number(getMinimumExceptionAmount() || 1_500_000);
+    const rawSetOff = Math.max(0, Math.floor((Number(signedSalary || 0) - minimum) / 2));
+    const rounded = Math.round(rawSetOff / 1000) * 1000;
+    return Math.min(Number(originalAmount || 0), rounded);
+  };
+
   const deadCapRows = useMemo(() => {
     const teamName = selectedTeam?.name;
     if (!teamName) return [];
@@ -417,8 +475,25 @@ export default function SalaryTable() {
 
     return rawRows
       .map((row, idx) => {
-        const amount = Number(row?.amount || 0);
         const seasonYear = Number(row?.seasonYear || 0);
+        const savedSetOff = Number(row?.setOffCredit || row?.setOffAmount || row?.offsetAmount || 0);
+        const savedAmount = Number(row?.amount ?? row?.netAmount ?? 0);
+        const originalAmount = Number(
+          row?.originalAmount ||
+          row?.guaranteedAmount ||
+          row?.grossAmount ||
+          (savedSetOff > 0 ? savedAmount + savedSetOff : savedAmount) ||
+          0
+        );
+        const signedInfo = findSignedPlayerForDeadCapRow(
+          { ...row, seasonYear },
+          teamName
+        );
+        const calculatedSetOff = signedInfo
+          ? calculateDeadCapSetOff(originalAmount, signedInfo.signedSalary)
+          : 0;
+        const setOffAmount = Math.max(savedSetOff, calculatedSetOff);
+        const amount = Math.max(0, originalAmount - setOffAmount);
 
         return {
           id: `dead-cap-${teamName}-${row?.playerId || row?.playerName || idx}-${seasonYear}`,
@@ -426,8 +501,21 @@ export default function SalaryTable() {
           playerName: row?.playerName || row?.name || "Released Player",
           seasonYear,
           amount,
+          originalAmount,
+          setOffAmount,
+          offsetAmount: setOffAmount,
+          signedOffsetTeamName: row?.setOffTeamName || row?.offsetTeamName || signedInfo?.teamName || "",
+          signedOffsetSalary: Number(row?.setOffSignedSalary || row?.offsetSignedSalary || signedInfo?.signedSalary || 0),
           reason: row?.reason || "release",
-          sourceRow: row,
+          sourceRow: {
+            ...row,
+            amount,
+            originalAmount,
+            setOffAmount,
+            offsetAmount: setOffAmount,
+            setOffTeamName: row?.setOffTeamName || row?.offsetTeamName || signedInfo?.teamName || "",
+            setOffSignedSalary: Number(row?.setOffSignedSalary || row?.offsetSignedSalary || signedInfo?.signedSalary || 0),
+          },
         };
       })
       .filter((row) => row.amount > 0 && row.seasonYear >= currentSeasonYear)
@@ -499,9 +587,21 @@ export default function SalaryTable() {
             profile?.image ||
             "",
           salaryBySeason: {},
+          grossBySeason: {},
+          setOffBySeason: {},
           seasons: [],
           totalRemaining: 0,
+          grossTotalRemaining: 0,
+          totalSetOff: 0,
+          offsetTeamNames: [],
           reason: row?.reason || "release",
+          stretchApplied: false,
+          stretchYears: 0,
+          stretchAnnualAmount: 0,
+          remainingContractYears: 0,
+          totalGuaranteedOwed: 0,
+          firstDeadCapSeason: null,
+          lastDeadCapSeason: null,
           sourceRows: [],
         });
       }
@@ -509,15 +609,40 @@ export default function SalaryTable() {
       const item = grouped.get(key);
       const seasonYear = Number(row?.seasonYear || 0);
       const amount = Number(row?.amount || 0);
+      const originalAmount = Number(row?.originalAmount || amount);
+      const setOffAmount = Number(row?.setOffCredit || row?.setOffAmount || row?.offsetAmount || 0);
+
+      if (row?.stretchApplied || sourceRow?.stretchApplied) {
+        item.stretchApplied = true;
+        item.stretchYears = Math.max(item.stretchYears || 0, Number(row?.stretchYears || sourceRow?.stretchYears || 0));
+        item.stretchAnnualAmount = Math.max(item.stretchAnnualAmount || 0, Number(row?.stretchAnnualAmount || sourceRow?.stretchAnnualAmount || originalAmount || 0));
+        item.remainingContractYears = Math.max(item.remainingContractYears || 0, Number(row?.remainingContractYears || sourceRow?.remainingContractYears || 0));
+        item.totalGuaranteedOwed = Math.max(item.totalGuaranteedOwed || 0, Number(row?.totalGuaranteedOwed || sourceRow?.totalGuaranteedOwed || 0));
+        item.firstDeadCapSeason = item.firstDeadCapSeason === null
+          ? Number(row?.firstDeadCapSeason || sourceRow?.firstDeadCapSeason || seasonYear)
+          : Math.min(item.firstDeadCapSeason, Number(row?.firstDeadCapSeason || sourceRow?.firstDeadCapSeason || seasonYear));
+        item.lastDeadCapSeason = item.lastDeadCapSeason === null
+          ? Number(row?.lastDeadCapSeason || sourceRow?.lastDeadCapSeason || seasonYear)
+          : Math.max(item.lastDeadCapSeason, Number(row?.lastDeadCapSeason || sourceRow?.lastDeadCapSeason || seasonYear));
+      }
 
       item.salaryBySeason[seasonYear] =
         Number(item.salaryBySeason[seasonYear] || 0) + amount;
+      item.grossBySeason[seasonYear] =
+        Number(item.grossBySeason[seasonYear] || 0) + originalAmount;
+      item.setOffBySeason[seasonYear] =
+        Number(item.setOffBySeason[seasonYear] || 0) + setOffAmount;
 
       if (!item.seasons.includes(seasonYear)) {
         item.seasons.push(seasonYear);
       }
 
       item.totalRemaining += amount;
+      item.grossTotalRemaining += originalAmount;
+      item.totalSetOff += setOffAmount;
+      if (setOffAmount > 0 && row?.signedOffsetTeamName && !item.offsetTeamNames.includes(row.signedOffsetTeamName)) {
+        item.offsetTeamNames.push(row.signedOffsetTeamName);
+      }
       item.sourceRows.push(row);
 
       if (!item.headshot && profile?.headshot) {
@@ -546,6 +671,10 @@ export default function SalaryTable() {
             firstSeason === lastSeason
               ? String(firstSeason)
               : `${firstSeason}-${lastSeason}`,
+          displaySeasonNote:
+            lastSeason > currentSeasonYear + DISPLAY_YEARS - 1
+              ? `Table shows next ${DISPLAY_YEARS} seasons. Dead cap continues through ${lastSeason}.`
+              : "",
           salaryByYear: Array.from({ length: DISPLAY_YEARS }, (_, i) => {
             const seasonYear = currentSeasonYear + i;
             return Number(row.salaryBySeason[seasonYear] || 0);
@@ -631,9 +760,11 @@ export default function SalaryTable() {
       years: Math.max(1, row.seasons?.length || 1),
       endYear: row.lastSeason || currentSeasonYear,
       totalRemaining: Number(row.totalRemaining || 0),
-      optionLabel: "Released Player Dead Cap",
+      optionLabel: row.stretchApplied ? "Stretched Released Salary" : "Released Player Dead Cap",
       expType: "DEAD CAP",
-      expNote: `${row.playerName} was released, but this salary still counts against ${selectedTeam?.name || "the team"}'s cap from ${row.seasonRange}.`,
+      expNote: row.stretchApplied
+        ? `${row.playerName} was released and stretched. The total owed is spread over ${row.stretchYears} seasons, but only the next ${DISPLAY_YEARS} seasons are shown in the table.`
+        : `${row.playerName} was released, but this salary still counts against ${selectedTeam?.name || "the team"}'s cap from ${row.seasonRange}.`,
       isCapHold: false,
       isDeadCap: true,
       deadCapAmount: Number(row.totalRemaining || 0),
@@ -963,12 +1094,26 @@ export default function SalaryTable() {
                     This player was released and is no longer on the roster, but the team is still responsible for the guaranteed salary shown here.
                   </p>
                   <p>
-                    Dead cap should still count against team payroll and cap room. Releasing a player should not instantly clear his salary unless your game later adds separate waiver-claim or partial-guarantee logic.
+                    If stretch provision was applied, the total money owed did not disappear. The cap hit was spread across extra seasons to lower the yearly cap hit. The table stays fixed to the next five seasons, and this popup shows the full remaining obligation.
+                  </p>
+                  <p>
+                    If another team signs the released player above a minimum deal, this table applies a small set-off credit and shows the net dead cap. Minimum pickups usually create no meaningful reduction.
                   </p>
                 </div>
 
                 <div className="mt-5 grid grid-cols-1 gap-2 text-sm">
-                  <InfoRow label="Total dead cap remaining" value={fmtMoney(deadCapInfo.deadCapAmount)} />
+                  <InfoRow label="Net dead cap remaining" value={fmtMoney(deadCapInfo.deadCapAmount)} />
+                  <InfoRow label="Original guaranteed amount" value={fmtMoney(deadCapInfo.deadCapInfo?.grossTotalRemaining || deadCapInfo.deadCapAmount)} />
+                  {deadCapInfo.deadCapInfo?.stretchApplied && (
+                    <InfoRow label="Stretch provision" value={`${deadCapInfo.deadCapInfo.stretchYears || 0} seasons at about ${fmtMoney(deadCapInfo.deadCapInfo.stretchAnnualAmount || 0)} per year`} />
+                  )}
+                  {deadCapInfo.deadCapInfo?.displaySeasonNote && (
+                    <InfoRow label="Table view" value={deadCapInfo.deadCapInfo.displaySeasonNote} />
+                  )}
+                  <InfoRow label="Set-off credit" value={fmtMoney(deadCapInfo.deadCapInfo?.totalSetOff || 0)} />
+                  {deadCapInfo.deadCapInfo?.offsetTeamNames?.length > 0 && (
+                    <InfoRow label="Set-off from" value={deadCapInfo.deadCapInfo.offsetTeamNames.join(", ")} />
+                  )}
                   <InfoRow label="Seasons" value={deadCapInfo.deadCapInfo?.seasonRange || deadCapInfo.endYear} />
                   <InfoRow label="Reason" value={String(deadCapInfo.deadCapInfo?.reason || "Released player salary").replaceAll("_", " ")} />
                 </div>

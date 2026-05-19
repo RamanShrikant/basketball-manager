@@ -71,6 +71,27 @@ function hasValidOrder(order, rosterNames) {
   return setsMatch(rosterNames, orderNames);
 }
 
+function isManualLockedGameplan(savedPlan) {
+  return Boolean(
+    savedPlan?.manualLocked ||
+      savedPlan?.userEdited ||
+      savedPlan?.source === "coach_gameplan"
+  );
+}
+
+function hasValidManualGameplanForRoster(team, savedPlan) {
+  if (!team?.name) return false;
+  if (!savedPlan || typeof savedPlan !== "object") return false;
+  if (!isManualLockedGameplan(savedPlan)) return false;
+  if (savedPlan.teamName !== team.name) return false;
+
+  const liveNames = getRosterNames(team?.players || []);
+  if (!hasValidOrder(savedPlan.order, liveNames)) return false;
+  if (!hasValidMinutesMap(savedPlan.minutes, liveNames)) return false;
+
+  return true;
+}
+
 function shouldRebuildGameplan(team, savedPlan) {
   if (!team?.name) return false;
   if (!savedPlan || typeof savedPlan !== "object") return true;
@@ -78,6 +99,11 @@ function shouldRebuildGameplan(team, savedPlan) {
   const teamPlayers = team?.players || [];
   const liveSignature = getRosterSignature(teamPlayers);
   const liveNames = getRosterNames(teamPlayers);
+
+  // Preserve user-edited rotations during sim. OVR/progression changes can
+  // change the full roster signature, but that should not wipe custom minutes
+  // as long as the actual roster names still match.
+  if (hasValidManualGameplanForRoster(team, savedPlan)) return false;
 
   if (savedPlan.version !== GAMEPLAN_VERSION) return true;
   if (savedPlan.teamName !== team.name) return true;
@@ -320,6 +346,9 @@ function buildGameplanPayload(team) {
     rosterSignature: getRosterSignature(teamPlayers),
     order: sorted.map((p) => p.name),
     minutes: obj,
+    manualLocked: false,
+    userEdited: false,
+    source: "auto_rotation",
     updatedAt: Date.now(),
   };
 }
@@ -375,26 +404,45 @@ export function ensureGameplansForLeague(leagueData) {
   return { created, rebuilt, skipped };
 }
 
-// force rebuilds ALL teams, overwriting stale plans
+// force rebuilds ALL teams, but preserve user-edited rotations by default
 export function rebuildGameplansForLeague(leagueData, options = {}) {
   const teams = getAllTeamsFromLeague(leagueData);
-  if (!teams.length) return { rebuilt: 0 };
+  if (!teams.length) return { rebuilt: 0, skipped: 0 };
 
   const skipUserTeamName = options.skipUserTeamName || null;
+  const preserveManual = options.preserveManual !== false;
   let rebuilt = 0;
+  let skipped = 0;
 
   for (const t of teams) {
     if (!t?.name) continue;
-    if (skipUserTeamName && t.name === skipUserTeamName) continue;
+    if (skipUserTeamName && t.name === skipUserTeamName) {
+      skipped++;
+      continue;
+    }
+
+    if (preserveManual) {
+      const saved = safeParseGameplan(localStorage.getItem(`gameplan_${t.name}`));
+      if (hasValidManualGameplanForRoster(t, saved)) {
+        skipped++;
+        continue;
+      }
+    }
 
     if (saveGameplan(t)) rebuilt++;
   }
 
-  return { rebuilt };
+  return { rebuilt, skipped };
 }
 
-export function rebuildSingleTeamGameplan(team) {
+export function rebuildSingleTeamGameplan(team, options = {}) {
   if (!team?.name) return false;
+
+  if (options.preserveManual !== false) {
+    const saved = safeParseGameplan(localStorage.getItem(`gameplan_${team.name}`));
+    if (hasValidManualGameplanForRoster(team, saved)) return false;
+  }
+
   return saveGameplan(team);
 }
 

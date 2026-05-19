@@ -88,6 +88,47 @@ export default function RosterView() {
     return `${startYear}-${endYY}`;
   };
 
+  const buildStretchPreviewRows = (remainingRows) => {
+    const safeRows = Array.isArray(remainingRows) ? remainingRows : [];
+    const remainingYears = safeRows.length;
+    const totalOwed = safeRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const stretchApplied = remainingYears > 1;
+    const stretchYears = stretchApplied ? remainingYears * 2 + 1 : remainingYears;
+
+    if (!stretchApplied || totalOwed <= 0) {
+      return {
+        stretchApplied: false,
+        stretchYears,
+        annualAmount: totalOwed,
+        capRows: safeRows,
+      };
+    }
+
+    const firstSeasonYear = safeRows[0]?.seasonYear || getCurrentSeasonYear();
+    const annualAmount = Math.round(totalOwed / stretchYears / 1000) * 1000;
+    const capRows = [];
+
+    for (let i = 0; i < stretchYears; i++) {
+      const seasonYear = firstSeasonYear + i;
+      const amount = i === stretchYears - 1
+        ? Math.max(0, totalOwed - capRows.reduce((sum, row) => sum + Number(row.amount || 0), 0))
+        : annualAmount;
+
+      capRows.push({
+        seasonYear,
+        label: formatSeasonLabel(seasonYear),
+        amount,
+      });
+    }
+
+    return {
+      stretchApplied: true,
+      stretchYears,
+      annualAmount,
+      capRows,
+    };
+  };
+
   const getCurrentSeasonYear = () => {
     return Number(
       workingLeagueData?.seasonYear ||
@@ -127,14 +168,16 @@ export default function RosterView() {
       .filter((row) => row.amount > 0);
 
     const totalOwed = remainingRows.reduce((sum, row) => sum + row.amount, 0);
-    const untilSeason = remainingRows.length
-      ? remainingRows[remainingRows.length - 1].label
+    const stretchPreview = buildStretchPreviewRows(remainingRows);
+    const untilSeason = stretchPreview.capRows.length
+      ? stretchPreview.capRows[stretchPreview.capRows.length - 1].label
       : null;
 
     return {
       totalOwed,
       untilSeason,
       remainingRows,
+      stretchPreview,
     };
   };
 
@@ -672,7 +715,7 @@ export default function RosterView() {
                     <div className="mt-1 text-sm font-semibold text-neutral-400">
                       {isAllView
                         ? "Switch to a team roster first before releasing a player."
-                        : "Move him to free agency and keep guaranteed salary as dead money."}
+                        : "Move him to free agency and apply stretch-dead-cap logic when multi-year salary remains."}
                     </div>
                   </div>
                   <div className="ml-4 rounded-full bg-red-600 px-3 py-1 text-sm font-black text-white">
@@ -711,25 +754,58 @@ export default function RosterView() {
             </p>
 
             <p className="text-gray-300 mb-4 leading-relaxed">
-              Releasing this player will move him into free agency immediately.
-              In this game, the remaining guaranteed contract is kept on your books as dead money.
+              Releasing this player will move him into free agency immediately. If he has more than one guaranteed season left, the game applies an NBA-style stretch provision: you still owe the full amount, but the cap hit is spread across extra seasons.
             </p>
 
             {releaseInfo?.totalOwed > 0 ? (
               <div className="bg-neutral-900 rounded-xl p-4 border border-neutral-700 mb-5">
                 <p className="text-red-300 font-semibold mb-2">
-                  Warning: You will still owe {formatDollars(releaseInfo.totalOwed)}
-                  {releaseInfo.untilSeason ? ` through ${releaseInfo.untilSeason}` : ""}.
+                  Warning: You will still owe {formatDollars(releaseInfo.totalOwed)}.
                 </p>
 
-                <div className="space-y-1 text-sm text-gray-300">
+                {releaseInfo.stretchPreview?.stretchApplied ? (
+                  <div className="mb-3 rounded-lg border border-orange-400/25 bg-orange-500/10 p-3 text-sm text-orange-100">
+                    Stretch provision preview: cap hit becomes about {formatDollars(releaseInfo.stretchPreview.annualAmount)} per season over {releaseInfo.stretchPreview.stretchYears} seasons
+                    {releaseInfo.untilSeason ? `, through ${releaseInfo.untilSeason}` : ""}. The salary table still only shows the normal visible year columns.
+                  </div>
+                ) : (
+                  <div className="mb-3 rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-gray-300">
+                    No multi-year stretch is applied because only one guaranteed season remains.
+                  </div>
+                )}
+
+                <div className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-2">
+                  Original guaranteed salary owed
+                </div>
+                <div className="space-y-1 text-sm text-gray-300 mb-4">
                   {releaseInfo.remainingRows.map((row) => (
-                    <div key={row.label} className="flex justify-between">
+                    <div key={`original-${row.label}`} className="flex justify-between">
                       <span>{row.label}</span>
                       <span>{formatDollars(row.amount)}</span>
                     </div>
                   ))}
                 </div>
+
+                {releaseInfo.stretchPreview?.stretchApplied && (
+                  <>
+                    <div className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-2">
+                      Stretched cap hit preview
+                    </div>
+                    <div className="space-y-1 text-sm text-gray-300">
+                      {releaseInfo.stretchPreview.capRows.slice(0, 5).map((row) => (
+                        <div key={`stretch-${row.label}`} className="flex justify-between">
+                          <span>{row.label}</span>
+                          <span>{formatDollars(row.amount)}</span>
+                        </div>
+                      ))}
+                      {releaseInfo.stretchPreview.capRows.length > 5 && (
+                        <div className="pt-1 text-xs text-gray-500">
+                          + {releaseInfo.stretchPreview.capRows.length - 5} more stretched dead-cap seasons
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               <div className="bg-neutral-900 rounded-xl p-4 border border-neutral-700 mb-5">
