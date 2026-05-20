@@ -88,44 +88,18 @@ export default function RosterView() {
     return `${startYear}-${endYY}`;
   };
 
-  const buildStretchPreviewRows = (remainingRows) => {
+  const buildReleasePreviewRows = (remainingRows = []) => {
     const safeRows = Array.isArray(remainingRows) ? remainingRows : [];
-    const remainingYears = safeRows.length;
-    const totalOwed = safeRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
-    const stretchApplied = remainingYears > 1;
-    const stretchYears = stretchApplied ? remainingYears * 2 + 1 : remainingYears;
-
-    if (!stretchApplied || totalOwed <= 0) {
-      return {
-        stretchApplied: false,
-        stretchYears,
-        annualAmount: totalOwed,
-        capRows: safeRows,
-      };
-    }
-
-    const firstSeasonYear = safeRows[0]?.seasonYear || getCurrentSeasonYear();
-    const annualAmount = Math.round(totalOwed / stretchYears / 1000) * 1000;
-    const capRows = [];
-
-    for (let i = 0; i < stretchYears; i++) {
-      const seasonYear = firstSeasonYear + i;
-      const amount = i === stretchYears - 1
-        ? Math.max(0, totalOwed - capRows.reduce((sum, row) => sum + Number(row.amount || 0), 0))
-        : annualAmount;
-
-      capRows.push({
-        seasonYear,
-        label: formatSeasonLabel(seasonYear),
-        amount,
-      });
-    }
+    const capRows = safeRows
+      .map((row) => ({
+        label: row.label,
+        amount: Number(row.amount || 0),
+      }))
+      .filter((row) => row.amount > 0);
 
     return {
-      stretchApplied: true,
-      stretchYears,
-      annualAmount,
       capRows,
+      totalOwed: capRows.reduce((sum, row) => sum + Number(row.amount || 0), 0),
     };
   };
 
@@ -168,16 +142,16 @@ export default function RosterView() {
       .filter((row) => row.amount > 0);
 
     const totalOwed = remainingRows.reduce((sum, row) => sum + row.amount, 0);
-    const stretchPreview = buildStretchPreviewRows(remainingRows);
-    const untilSeason = stretchPreview.capRows.length
-      ? stretchPreview.capRows[stretchPreview.capRows.length - 1].label
+    const releasePreview = buildReleasePreviewRows(remainingRows);
+    const untilSeason = releasePreview.capRows.length
+      ? releasePreview.capRows[releasePreview.capRows.length - 1].label
       : null;
 
     return {
       totalOwed,
       untilSeason,
       remainingRows,
-      stretchPreview,
+      releasePreview,
     };
   };
 
@@ -715,7 +689,7 @@ export default function RosterView() {
                     <div className="mt-1 text-sm font-semibold text-neutral-400">
                       {isAllView
                         ? "Switch to a team roster first before releasing a player."
-                        : "Move him to free agency and apply stretch-dead-cap logic when multi-year salary remains."}
+                        : "Move him to free agency and keep the original remaining guaranteed salary as dead cap."}
                     </div>
                   </div>
                   <div className="ml-4 rounded-full bg-red-600 px-3 py-1 text-sm font-black text-white">
@@ -754,7 +728,7 @@ export default function RosterView() {
             </p>
 
             <p className="text-gray-300 mb-4 leading-relaxed">
-              Releasing this player will move him into free agency immediately. If he has more than one guaranteed season left, the game applies an NBA-style stretch provision: you still owe the full amount, but the cap hit is spread across extra seasons.
+              Releasing this player will move him into free agency immediately. You still owe the original remaining guaranteed salary as dead cap on the original contract years. If another team signs him later, a set-off credit may reduce the old team's dead cap.
             </p>
 
             {releaseInfo?.totalOwed > 0 ? (
@@ -763,16 +737,10 @@ export default function RosterView() {
                   Warning: You will still owe {formatDollars(releaseInfo.totalOwed)}.
                 </p>
 
-                {releaseInfo.stretchPreview?.stretchApplied ? (
-                  <div className="mb-3 rounded-lg border border-orange-400/25 bg-orange-500/10 p-3 text-sm text-orange-100">
-                    Stretch provision preview: cap hit becomes about {formatDollars(releaseInfo.stretchPreview.annualAmount)} per season over {releaseInfo.stretchPreview.stretchYears} seasons
-                    {releaseInfo.untilSeason ? `, through ${releaseInfo.untilSeason}` : ""}. The salary table still only shows the normal visible year columns.
-                  </div>
-                ) : (
-                  <div className="mb-3 rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-gray-300">
-                    No multi-year stretch is applied because only one guaranteed season remains.
-                  </div>
-                )}
+                <div className="mb-3 rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-gray-300">
+                  No stretch is applied. The dead cap follows the player's original remaining contract years
+                  {releaseInfo.untilSeason ? ` through ${releaseInfo.untilSeason}` : ""}.
+                </div>
 
                 <div className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-2">
                   Original guaranteed salary owed
@@ -786,23 +754,18 @@ export default function RosterView() {
                   ))}
                 </div>
 
-                {releaseInfo.stretchPreview?.stretchApplied && (
+                {releaseInfo.releasePreview?.capRows?.length > 0 && (
                   <>
                     <div className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-2">
-                      Stretched cap hit preview
+                      Dead-cap hits after release
                     </div>
                     <div className="space-y-1 text-sm text-gray-300">
-                      {releaseInfo.stretchPreview.capRows.slice(0, 5).map((row) => (
-                        <div key={`stretch-${row.label}`} className="flex justify-between">
+                      {releaseInfo.releasePreview.capRows.map((row) => (
+                        <div key={`release-dead-cap-${row.label}`} className="flex justify-between">
                           <span>{row.label}</span>
                           <span>{formatDollars(row.amount)}</span>
                         </div>
                       ))}
-                      {releaseInfo.stretchPreview.capRows.length > 5 && (
-                        <div className="pt-1 text-xs text-gray-500">
-                          + {releaseInfo.stretchPreview.capRows.length - 5} more stretched dead-cap seasons
-                        </div>
-                      )}
                     </div>
                   </>
                 )}

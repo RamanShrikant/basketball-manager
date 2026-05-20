@@ -908,6 +908,14 @@ def get_team_dead_cap_rows(league_data: Dict[str, Any], team_name: str) -> List[
     if not isinstance(rows, list):
         dead_cap_map[team_name] = []
         rows = dead_cap_map[team_name]
+
+    # Recovery for old saves from the stretch-test build. The active game rule
+    # is now normal release dead cap, so stale stretched rows are converted back
+    # before payroll/cap snapshots read them.
+    if any(isinstance(row, dict) and row.get("stretchApplied") and row.get("originalRemainingRows") for row in rows):
+        normalize_dead_cap_rows_no_stretch_for_team(league_data, team_name)
+        rows = dead_cap_map.setdefault(team_name, [])
+
     return rows
 
 
@@ -1024,26 +1032,27 @@ def build_release_dead_cap_rows(
     current_season_year: int,
     reason: str = "release",
 ) -> List[Dict[str, Any]]:
-    """Build dead-cap rows for a release using an NBA-lite stretch provision.
+    """Build normal released-player dead-cap rows.
 
-    Multi-year remaining guaranteed salary is not erased. It is spread across
-    2x remaining seasons + 1. One-year remaining salary stays on the current
-    cap year because stretching one season is optional and usually not worth it
-    in this simplified game model.
+    This game now treats a standard Release to Free Agency as a normal release,
+    not a stretch-waive. The old team keeps the player's original remaining
+    guaranteed salary on the original contract seasons. If another team signs
+    the released player later, apply_dead_cap_setoff_for_signed_player(...) can
+    reduce those rows using the saved set-off formula.
     """
     remaining_rows = []
 
     for idx, amount in enumerate(contract["salaryByYear"]):
-        original_season_year = contract["startYear"] + idx
+        season_year = int(contract["startYear"] + idx)
         amount_int = int(num(amount, 0))
 
-        if original_season_year < current_season_year:
+        if season_year < int(current_season_year):
             continue
         if amount_int <= 0:
             continue
 
         remaining_rows.append({
-            "seasonYear": int(original_season_year),
+            "seasonYear": season_year,
             "amount": amount_int,
         })
 
@@ -1052,43 +1061,13 @@ def build_release_dead_cap_rows(
 
     remaining_years = len(remaining_rows)
     total_guaranteed = int(sum(row["amount"] for row in remaining_rows))
-    stretch_applied = remaining_years > 1
-    stretch_years = (remaining_years * 2) + 1 if stretch_applied else remaining_years
-    first_dead_cap_year = int(current_season_year)
-    last_dead_cap_year = first_dead_cap_year + stretch_years - 1
-    group_id = f"release-stretch:{player.get('id') or player.get('name')}:{team_name}:{current_season_year}"
-
-    if stretch_applied:
-        annual_amount = int(round_to_nearest(total_guaranteed / max(1, stretch_years), base = 1_000))
-        cap_rows = []
-
-        for offset in range(stretch_years):
-            season_year = first_dead_cap_year + offset
-            if offset == stretch_years - 1:
-                amount = max(0, total_guaranteed - sum(row["amount"] for row in cap_rows))
-            else:
-                amount = annual_amount
-
-            if amount <= 0:
-                continue
-
-            cap_rows.append({
-                "seasonYear": season_year,
-                "amount": int(amount),
-            })
-    else:
-        annual_amount = total_guaranteed
-        cap_rows = [
-            {
-                "seasonYear": int(row["seasonYear"]),
-                "amount": int(row["amount"]),
-            }
-            for row in remaining_rows
-        ]
+    first_dead_cap_year = int(remaining_rows[0]["seasonYear"])
+    last_dead_cap_year = int(remaining_rows[-1]["seasonYear"])
+    group_id = f"release-normal:{player.get('id') or player.get('name')}:{team_name}:{current_season_year}"
 
     created_rows = []
 
-    for row in cap_rows:
+    for row in remaining_rows:
         amount_int = int(num(row.get("amount"), 0))
         season_year = int(num(row.get("seasonYear"), current_season_year))
 
@@ -1100,12 +1079,15 @@ def build_release_dead_cap_rows(
             "amount": amount_int,
             "originalAmount": amount_int,
             "setOffCredit": 0,
+            "setOffAmount": 0,
+            "offsetAmount": 0,
+            "netAmount": amount_int,
             "reason": reason,
-            "source": "released_player_stretch_provision" if stretch_applied else "released_player_contract",
-            "deadCapMethod": "stretch_provision" if stretch_applied else "normal_release",
-            "stretchApplied": bool(stretch_applied),
-            "stretchYears": int(stretch_years),
-            "stretchAnnualAmount": int(annual_amount),
+            "source": "released_player_contract",
+            "deadCapMethod": "normal_release",
+            "stretchApplied": False,
+            "stretchYears": int(remaining_years),
+            "stretchAnnualAmount": 0,
             "remainingContractYears": int(remaining_years),
             "totalGuaranteedOwed": int(total_guaranteed),
             "originalRemainingRows": remaining_rows,
@@ -1120,6 +1102,104 @@ def build_release_dead_cap_rows(
 
     return created_rows
 
+
+def normalize_dead_cap_rows_no_stretch_for_team(
+    league_data: Dict[str, Any],
+    team_name: str,
+) -> None:
+    """Convert old saved stretch rows back to normal original-contract rows.
+
+    Earlier test builds saved stretched dead-cap rows with originalRemainingRows.
+    This keeps old saves from continuing to show stretched salary after the
+    release model was changed back to normal dead cap.
+    """
+    dead_cap_map = get_dead_cap_map(league_data)
+    rows = dead_cap_map.setdefault(team_name, [])
+    if not isinstance(rows, list):
+        dead_cap_map[team_name] = []
+        return
+
+    next_rows = []
+    converted_groups = set()
+    existing_keys = set()
+
+    def add_row_once(row: Dict[str, Any]) -> None:
+        key = (
+            row.get("playerId"),
+            row.get("playerName"),
+            int(num(row.get("seasonYear"), -1)),
+            int(num(row.get("originalAmount", row.get("amount")), 0)),
+            row.get("reason"),
+        )
+        if key in existing_keys:
+            return
+        existing_keys.add(key)
+        next_rows.append(row)
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        original_rows = row.get("originalRemainingRows")
+        should_convert = bool(row.get("stretchApplied")) and isinstance(original_rows, list) and len(original_rows) > 0
+
+        if not should_convert:
+            add_row_once(row)
+            continue
+
+        group_id = row.get("deadCapGroupId") or f"{row.get('playerId')}|{row.get('playerName')}|{row.get('reason')}"
+        if group_id in converted_groups:
+            continue
+        converted_groups.add(group_id)
+
+        clean_original_rows = []
+        for original in original_rows:
+            if not isinstance(original, dict):
+                continue
+            season_year = int(num(original.get("seasonYear"), -1))
+            amount = int(num(original.get("amount"), 0))
+            if season_year < 0 or amount <= 0:
+                continue
+            clean_original_rows.append({"seasonYear": season_year, "amount": amount})
+
+        if not clean_original_rows:
+            continue
+
+        clean_original_rows.sort(key = lambda item: int(item.get("seasonYear", 0)))
+        total_guaranteed = int(sum(item["amount"] for item in clean_original_rows))
+        remaining_years = len(clean_original_rows)
+        first_dead_cap_year = int(clean_original_rows[0]["seasonYear"])
+        last_dead_cap_year = int(clean_original_rows[-1]["seasonYear"])
+        normal_group_id = str(group_id).replace("release-stretch:", "release-normal:")
+
+        for original in clean_original_rows:
+            amount = int(original["amount"])
+            season_year = int(original["seasonYear"])
+            rebuilt = {
+                **row,
+                "teamName": team_name,
+                "seasonYear": season_year,
+                "amount": amount,
+                "originalAmount": amount,
+                "setOffCredit": 0,
+                "setOffAmount": 0,
+                "offsetAmount": 0,
+                "netAmount": amount,
+                "source": "released_player_contract",
+                "deadCapMethod": "normal_release",
+                "stretchApplied": False,
+                "stretchYears": remaining_years,
+                "stretchAnnualAmount": 0,
+                "remainingContractYears": remaining_years,
+                "totalGuaranteedOwed": total_guaranteed,
+                "originalRemainingRows": clean_original_rows,
+                "firstDeadCapSeason": first_dead_cap_year,
+                "lastDeadCapSeason": last_dead_cap_year,
+                "deadCapGroupId": normal_group_id,
+            }
+            add_row_once(rebuilt)
+
+    dead_cap_map[team_name] = next_rows
 
 def add_dead_cap_from_player_contract(
     league_data: Dict[str, Any],
@@ -5212,25 +5292,38 @@ def upsert_offer_record(
     state = ensure_free_agency_state(league_data)
     offers_by_player = state.setdefault("offersByPlayer", {})
     offers = offers_by_player.setdefault(player_key, [])
+    team_name = offer_record.get("teamName")
 
-    replaced = False
-    for idx, existing in enumerate(offers):
-        if (
-            existing.get("status", "active") == "active"
-            and existing.get("teamName") == offer_record.get("teamName")
-        ):
+    kept_offers = []
+    replaced_any = False
+
+    for existing in offers:
+        same_team = bool(team_name) and existing.get("teamName") == team_name
+        if same_team:
             old = copy.deepcopy(existing)
             old["status"] = "replaced"
-            state["offerHistory"].append(old)
-            offers[idx] = offer_record
-            replaced = True
-            break
+            old["replacedByOfferId"] = offer_record.get("offerId")
+            old["replacedOnDay"] = offer_record.get("submittedDay") or offer_record.get("day")
+            state.setdefault("offerHistory", []).append(old)
+            replaced_any = True
+            continue
 
-    if not replaced:
-        offers.append(offer_record)
+        kept_offers.append(existing)
+
+    kept_offers.append(offer_record)
+    offers_by_player[player_key] = kept_offers
+
+    if replaced_any:
+        state.setdefault("dailyLog", []).append({
+            "day": offer_record.get("submittedDay") or offer_record.get("day"),
+            "type": "offer_replaced",
+            "playerKey": player_key,
+            "playerName": offer_record.get("playerName"),
+            "teamName": team_name,
+            "newOfferId": offer_record.get("offerId"),
+        })
 
     return offer_record
-
 
 def sort_offers_for_display(offers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(
@@ -7165,6 +7258,8 @@ def get_free_agent_offers(
 
     offers = []
     for offer in state.get("offersByPlayer", {}).get(player_key, []):
+        if offer.get("status", "active") != "active":
+            continue
         enriched = copy.deepcopy(offer)
         enriched["playerViewScore"] = score_offer_for_player(league_data, player, offer)
         offers.append(enriched)

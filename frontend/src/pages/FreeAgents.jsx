@@ -437,16 +437,12 @@ export default function FreeAgents() {
   const renderRightsChips = (player, evaluation = null) => {
     const rights = getRights(player);
     const chips = [];
-    const evalBlocked = evaluation && evaluation.ok === false;
-    const spendingText = String(evaluation?.spendingType || "").toLowerCase();
-    const blockedTone = evalBlocked || spendingText.includes("blocked") ? "red" : "green";
-
     chips.push(rights.restrictedFreeAgent ? <Chip key="rfa" tone="green">RFA</Chip> : <Chip key="ufa">UFA</Chip>);
     if (rights.heldByTeam) chips.push(<Chip key="rights" tone="orange">{formatBirdLabel(rights.birdLevel)}: {rights.heldByTeam}</Chip>);
     if (player?.qualifyingOffer?.amount) chips.push(<Chip key="qo" tone="green">QO {formatDollars(player.qualifyingOffer.amount)}</Chip>);
-    if (evaluation?.spendingType) chips.push(<Chip key="tool" tone={blockedTone}>{String(evaluation.spendingType).replaceAll("_", " ")}</Chip>);
-    if (evaluation?.exceptionType) chips.push(<Chip key="ex" tone={blockedTone}>{String(evaluation.exceptionType).replaceAll("_", " ")}</Chip>);
-    if (evaluation?.payrollZone) chips.push(<Chip key="zone" tone={evalBlocked ? "red" : "neutral"}>{String(evaluation.payrollZone).replaceAll("_", " ")}</Chip>);
+    if (evaluation?.spendingType) chips.push(<Chip key="tool" tone={evaluation.spendingType === "bird_rights" ? "orange" : "green"}>Using {String(evaluation.spendingType).replaceAll("_", " ")}</Chip>);
+    if (evaluation?.exceptionType) chips.push(<Chip key="ex" tone="green">{String(evaluation.exceptionType).replaceAll("_", " ")}</Chip>);
+    if (evaluation?.payrollZone) chips.push(<Chip key="zone">{String(evaluation.payrollZone).replaceAll("_", " ")}</Chip>);
     return chips;
   };
 
@@ -488,32 +484,8 @@ const isOffseasonMode =
   }, [workingLeagueData]);
 
   const liveFreeAgencyState = useMemo(() => {
-    const rawState = workingLeagueData?.freeAgencyState || {};
-    const stateSeasonYear = Number(rawState?.seasonYear || 0);
-
-    // Surgical year-rollover guard:
-    // A completed FA state can stay on leagueData after advancing to the next
-    // offseason. If we trust that old Day 10 state, the new offseason opens
-    // directly in cleanup mode and looks like the live market auto-simmed.
-    // Only use a saved FA state when it belongs to the current offseason year.
-    if (
-      isOffseasonMode &&
-      optionsComplete &&
-      rightsManagementComplete &&
-      stateSeasonYear > 0 &&
-      stateSeasonYear !== currentSeasonYear
-    ) {
-      return {};
-    }
-
-    return rawState;
-  }, [
-    workingLeagueData,
-    isOffseasonMode,
-    optionsComplete,
-    rightsManagementComplete,
-    currentSeasonYear,
-  ]);
+    return workingLeagueData?.freeAgencyState || {};
+  }, [workingLeagueData]);
 
   const isLiveFreeAgencyActive = !!liveFreeAgencyState?.isActive;
   const currentDay = Number(liveFreeAgencyState?.currentDay || 0);
@@ -550,53 +522,24 @@ const isOffseasonMode =
     !isLiveFreeAgencyActive &&
     currentDay >= maxDays;
 
-  const backendFreeAgencyCompleteFlag = Boolean(
-    liveFreeAgencyState?.marketComplete ||
-      liveFreeAgencyState?.freeAgencyComplete ||
-      liveFreeAgencyState?.completed ||
-      liveFreeAgencyState?.isComplete ||
-      liveFreeAgencyState?.status === "complete"
-  );
-
-  const backendHasRealMarketEvidence = Boolean(
-    currentDay > 0 ||
-      signedPlayersLog.length > 0 ||
-      dailyLog.length > 0 ||
-      offerHistory.length > 0 ||
-      Object.keys(offersByPlayerSnapshot).length > 0 ||
-      freeAgents.length === 0
-  );
-
   const backendMarkedFreeAgencyComplete =
     isOffseasonMode &&
     optionsComplete &&
     rightsManagementComplete &&
     !isLiveFreeAgencyActive &&
-    backendFreeAgencyCompleteFlag &&
-    backendHasRealMarketEvidence;
+    Boolean(
+      liveFreeAgencyState?.marketComplete ||
+      liveFreeAgencyState?.freeAgencyComplete ||
+      liveFreeAgencyState?.completed ||
+      liveFreeAgencyState?.isComplete ||
+      liveFreeAgencyState?.status === "complete"
+    );
 
   const freeAgencyMarketComplete =
     freeAgencyMarketReachedEnd || backendMarkedFreeAgencyComplete;
 
-  // Stale-state guard:
-  // If bm_offseason_state_v1 says free agency is complete, but the live market
-  // has no real evidence of ever starting and free agents still exist, do NOT
-  // unlock cleanup signing. That was making offseason FA behave like midseason FA.
-  const staleOffseasonFreeAgencyComplete =
-    freeAgencyFinished &&
-    isOffseasonMode &&
-    optionsComplete &&
-    rightsManagementComplete &&
-    !isLiveFreeAgencyActive &&
-    !freeAgencyMarketStarted &&
-    !freeAgencyMarketComplete &&
-    freeAgents.length > 0;
-
-  const trustedFreeAgencyFinished =
-    freeAgencyFinished && !staleOffseasonFreeAgencyComplete;
-
   const effectiveFreeAgencyFinished =
-    trustedFreeAgencyFinished ||
+    freeAgencyFinished ||
     freeAgencyMarketComplete ||
     (isOffseasonMode &&
       optionsComplete &&
@@ -1540,19 +1483,6 @@ const isOffseasonMode =
   useEffect(() => {
     if (!isOffseasonMode) return;
     if (!optionsComplete) return;
-
-    if (staleOffseasonFreeAgencyComplete) {
-      updateOffseasonState({
-        active: true,
-        seasonYear: currentSeasonYear,
-        optionsComplete: true,
-        rightsManagementComplete: true,
-        freeAgencyComplete: false,
-      });
-      setDaySummary(null);
-      return;
-    }
-
     if (freeAgencyFinished) return;
     if (isLiveFreeAgencyActive) return;
     if (!freeAgencyMarketComplete && freeAgents.length > 0) return;
@@ -1584,7 +1514,6 @@ const isOffseasonMode =
     optionsComplete,
     rightsManagementComplete,
     freeAgencyFinished,
-    staleOffseasonFreeAgencyComplete,
     isLiveFreeAgencyActive,
     freeAgencyMarketComplete,
     freeAgents.length,
@@ -1892,44 +1821,6 @@ const isOffseasonMode =
     offerSalaryText,
   ]);
 
-  const formatOfferEvaluationReason = (evaluation) => {
-    if (!evaluation?.reason) return "";
-
-    const spendingType = String(evaluation?.spendingType || "").toLowerCase();
-    const exceptionType = String(evaluation?.exceptionType || "").toLowerCase();
-    const offeredFirstYearSalary = parseMillionsText(offerSalaryText);
-    const exceptionRoom = Math.max(0, Number(evaluation?.exceptionRoom || 0));
-    const minimumOffer = Number(
-      workingLeagueData?.minimumException ||
-      workingLeagueData?.minimumSalary ||
-      workingLeagueData?.veteranMinimum ||
-      1_500_000
-    );
-
-    if (!evaluation?.ok && spendingType.includes("room_blocked")) {
-      let toolLabel = "available signing room";
-      if (exceptionType.includes("taxpayer")) toolLabel = "taxpayer MLE";
-      else if (exceptionType.includes("non_taxpayer")) toolLabel = "non-taxpayer MLE";
-      else if (exceptionType.includes("room")) toolLabel = "room exception";
-
-      if (offeredFirstYearSalary > minimumOffer && minimumOffer > 0) {
-        return `${selectedTeam?.name || "This team"} can still submit a minimum offer up to ${formatDollars(minimumOffer)}, but this offer is above the minimum. The above-minimum path only has ${formatDollars(exceptionRoom)} of ${toolLabel} left, so the offer needs to be lowered to ${formatDollars(minimumOffer)} or less unless another spending tool opens up.`;
-      }
-
-      return `${selectedTeam?.name || "This team"} only has ${formatDollars(exceptionRoom)} of ${toolLabel} left for this offer.`;
-    }
-
-    if (!evaluation?.ok && spendingType.includes("first_apron_blocked")) {
-      return `${selectedTeam?.name || "This team"} cannot use the non-taxpayer MLE here because this offer would push the team over the first apron.`;
-    }
-
-    if (!evaluation?.ok && spendingType.includes("second_apron_blocked")) {
-      return `${selectedTeam?.name || "This team"} is above the second apron, so outside free agents are minimum-only in this model.`;
-    }
-
-    return evaluation.reason;
-  };
-
   const interestDisplay = useMemo(() => {
     if (offerEvalLoading) {
       return {
@@ -1965,6 +1856,65 @@ const isOffseasonMode =
     return { percent, label: "Not Interested", barClass: "bg-red-500" };
   }, [offerEvaluation, offerEvalLoading]);
 
+
+  const getOfferInterestDisplay = (offer = {}) => {
+    const directPercent = Number(
+      offer?.playerInterestPercent ??
+      offer?.interestPercent ??
+      offer?.interestPct ??
+      offer?.playerInterest ??
+      NaN
+    );
+
+    let percent = Number.isFinite(directPercent) ? directPercent : NaN;
+
+    if (!Number.isFinite(percent)) {
+      const score = Number(
+        offer?.playerViewScore ??
+        offer?.details?.acceptanceScore ??
+        offer?.acceptanceScore ??
+        offer?.interestScore ??
+        0
+      );
+
+      if (Number.isFinite(score) && score > 0) {
+        // Match the Submit Offer modal scale:
+        // 0.65 = fringe interest, 1.10+ = extremely strong interest.
+        percent = score > 1.5 ? score : ((score - 0.65) / 0.45) * 100;
+      }
+    }
+
+    percent = clamp(Number.isFinite(percent) ? percent : 0, 0, 100);
+
+    let label = "Unavailable";
+    let barClass = "bg-red-500";
+
+    if (percent >= 85) {
+      label = "Ready to Sign";
+      barClass = "bg-green-500";
+    } else if (percent >= 65) {
+      label = "Very Interested";
+      barClass = "bg-green-500";
+    } else if (percent >= 40) {
+      label = "Interested";
+      barClass = "bg-lime-500";
+    } else if (percent >= 20) {
+      label = "Low Interest";
+      barClass = "bg-yellow-500";
+    } else if (percent > 0) {
+      label = "Not Interested";
+      barClass = "bg-red-500";
+    }
+
+    return {
+      percent,
+      roundedPercent: Math.round(percent),
+      label,
+      barClass,
+    };
+  };
+
+
 const handleContinueToProgression = () => {
   if (userRosterInvalid) {
     setRosterActionError(rosterValidationMessage);
@@ -1982,7 +1932,7 @@ const handleContinueToProgression = () => {
 
   navigate("/player-progression");
 };
-  const buildCleanFreeAgencyStateForInit = (seasonYear, userTeamName = null, maxDays = 10) => {
+  const buildCleanFreeAgencyStateForInit = (seasonYear, userTeamName = null, maxDays = 7) => {
   return {
     seasonYear,
     isActive: false,
@@ -2072,7 +2022,7 @@ const handleContinueToProgression = () => {
 const cleanFreeAgencyState = buildCleanFreeAgencyStateForInit(
   currentSeasonYear,
   selectedTeam?.name || null,
-  10
+  7
 );
 
 const leagueForInit = {
@@ -2085,7 +2035,7 @@ applyLeagueUpdate(leagueForInit);
 const res = await initializeFreeAgencyPeriod(
   leagueForInit,
   selectedTeam?.name || null,
-  10
+  7
 );
 
       if (!res?.ok || !res?.leagueData) {
@@ -2365,10 +2315,9 @@ updateOffseasonState({
         {isOffseasonMode && effectiveFreeAgencyFinished && (
           <button
             onClick={handleContinueToProgression}
-            disabled={userRosterInvalid}
-            className={`px-6 py-3 rounded-lg font-semibold transition ${userRosterInvalid ? "bg-neutral-700 text-white/45 cursor-not-allowed" : "bg-green-600 hover:bg-green-500"}`}
+            className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
           >
-            {userRosterInvalid ? "Fix Roster Before Progression" : "Continue to Progression"}
+            Continue to Progression
           </button>
         )}
         {isOffseasonMode && (
@@ -2547,10 +2496,9 @@ updateOffseasonState({
             {effectiveFreeAgencyFinished ? (
               <button
                 onClick={handleContinueToProgression}
-                disabled={userRosterInvalid}
-                className={`px-5 py-2 rounded-lg font-semibold transition ${userRosterInvalid ? "bg-neutral-700 text-white/45 cursor-not-allowed" : "bg-green-600 hover:bg-green-500"}`}
+                className="px-5 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
               >
-                {userRosterInvalid ? "Fix Roster Before Progression" : "Continue to Progression"}
+                Continue to Progression
               </button>
             ) : !isLiveFreeAgencyActive ? (
               <button
@@ -2914,10 +2862,9 @@ updateOffseasonState({
         {isOffseasonMode && effectiveFreeAgencyFinished && (
           <button
             onClick={handleContinueToProgression}
-            disabled={userRosterInvalid}
-            className={`px-8 py-3 rounded-lg font-semibold transition ${userRosterInvalid ? "bg-neutral-700 text-white/45 cursor-not-allowed" : "bg-green-600 hover:bg-green-500"}`}
+            className="px-8 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
           >
-            {userRosterInvalid ? "Fix Roster Before Progression" : "Continue to Progression"}
+            Continue to Progression
           </button>
         )}
         <button
@@ -3140,7 +3087,7 @@ updateOffseasonState({
 
             {!offerEvalLoading && offerEvaluation?.reason && !offerEvaluation?.ok && (
               <div className="mb-4 text-red-300 text-sm font-semibold">
-                {formatOfferEvaluationReason(offerEvaluation)}
+                {offerEvaluation.reason}
               </div>
             )}
 
@@ -3300,7 +3247,10 @@ updateOffseasonState({
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {offersViewData.offers.map((offer, idx) => (
+                    {offersViewData.offers.map((offer, idx) => {
+                      const offerInterest = getOfferInterestDisplay(offer);
+
+                      return (
                       <div
                         key={`${offer.offerId || offer.teamName}-${idx}`}
                         className={`rounded-xl border p-4 ${
@@ -3324,6 +3274,23 @@ updateOffseasonState({
                                 Best Offer
                               </span>
                             )}
+                          </div>
+                        </div>
+
+                        <div className="mb-3 rounded-xl border border-neutral-700/80 bg-black/20 px-3 py-2.5">
+                          <div className="flex items-center justify-between gap-3 mb-1.5">
+                            <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                              Player Interest
+                            </div>
+                            <div className="text-xs font-bold text-white">
+                              {offerInterest.label} • {offerInterest.roundedPercent}%
+                            </div>
+                          </div>
+                          <div className="h-2.5 w-full overflow-hidden rounded-full bg-neutral-700">
+                            <div
+                              className={`h-full rounded-full transition-all ${offerInterest.barClass}`}
+                              style={{ width: `${offerInterest.percent}%` }}
+                            />
                           </div>
                         </div>
 
@@ -3362,7 +3329,8 @@ updateOffseasonState({
                           </div>
                         )}
                       </div>
-                    ))}
+                    );
+                    })}
                   </div>
                 )}
               </>

@@ -465,13 +465,94 @@ export default function SalaryTable() {
     return Math.min(Number(originalAmount || 0), rounded);
   };
 
+
+  const normalizeDeadCapRowsForNoStretch = (rawRows, teamName) => {
+    const rows = Array.isArray(rawRows) ? rawRows : [];
+    const out = [];
+    const seen = new Set();
+    const convertedGroups = new Set();
+
+    const addOnce = (row) => {
+      const key = [
+        row?.playerId ?? "",
+        row?.playerName || row?.name || "",
+        Number(row?.seasonYear || 0),
+        Number(row?.originalAmount ?? row?.amount ?? 0),
+        row?.reason || "release",
+      ].join("|");
+
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(row);
+    };
+
+    for (const row of rows) {
+      const originalRows = Array.isArray(row?.originalRemainingRows)
+        ? row.originalRemainingRows
+        : [];
+
+      if (!row?.stretchApplied || originalRows.length === 0) {
+        addOnce(row);
+        continue;
+      }
+
+      const groupKey = row?.deadCapGroupId || `${row?.playerId || ""}|${row?.playerName || row?.name || ""}|${row?.reason || "release"}`;
+      if (convertedGroups.has(groupKey)) continue;
+      convertedGroups.add(groupKey);
+
+      const cleanOriginalRows = originalRows
+        .map((item) => ({
+          seasonYear: Number(item?.seasonYear || 0),
+          amount: Number(item?.amount || 0),
+        }))
+        .filter((item) => item.seasonYear > 0 && item.amount > 0)
+        .sort((a, b) => a.seasonYear - b.seasonYear);
+
+      if (!cleanOriginalRows.length) continue;
+
+      const totalGuaranteed = cleanOriginalRows.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const firstSeason = cleanOriginalRows[0].seasonYear;
+      const lastSeason = cleanOriginalRows[cleanOriginalRows.length - 1].seasonYear;
+      const normalGroupId = String(groupKey).replace("release-stretch:", "release-normal:");
+
+      for (const item of cleanOriginalRows) {
+        const amount = Number(item.amount || 0);
+        addOnce({
+          ...row,
+          teamName,
+          seasonYear: item.seasonYear,
+          amount,
+          originalAmount: amount,
+          setOffCredit: 0,
+          setOffAmount: 0,
+          offsetAmount: 0,
+          netAmount: amount,
+          source: "released_player_contract",
+          deadCapMethod: "normal_release",
+          stretchApplied: false,
+          stretchYears: cleanOriginalRows.length,
+          stretchAnnualAmount: 0,
+          remainingContractYears: cleanOriginalRows.length,
+          totalGuaranteedOwed: totalGuaranteed,
+          originalRemainingRows: cleanOriginalRows,
+          firstDeadCapSeason: firstSeason,
+          lastDeadCapSeason: lastSeason,
+          deadCapGroupId: normalGroupId,
+        });
+      }
+    }
+
+    return out;
+  };
+
   const deadCapRows = useMemo(() => {
     const teamName = selectedTeam?.name;
     if (!teamName) return [];
 
-    const rawRows = Array.isArray(leagueData?.deadCapByTeam?.[teamName])
+    const savedDeadCapRows = Array.isArray(leagueData?.deadCapByTeam?.[teamName])
       ? leagueData.deadCapByTeam[teamName]
       : [];
+    const rawRows = normalizeDeadCapRowsForNoStretch(savedDeadCapRows, teamName);
 
     return rawRows
       .map((row, idx) => {
@@ -762,11 +843,9 @@ export default function SalaryTable() {
       years: Math.max(1, row.seasons?.length || 1),
       endYear: row.lastSeason || currentSeasonYear,
       totalRemaining: Number(row.totalRemaining || 0),
-      optionLabel: row.stretchApplied ? "Stretched Released Salary" : "Released Player Dead Cap",
+      optionLabel: "Released Player Dead Cap",
       expType: "DEAD CAP",
-      expNote: row.stretchApplied
-        ? `${row.playerName} was released and stretched. The total owed is spread over ${row.stretchYears} seasons, but only the next ${DISPLAY_YEARS} seasons are shown in the table.`
-        : `${row.playerName} was released, but this salary still counts against ${selectedTeam?.name || "the team"}'s cap from ${row.seasonRange}.`,
+      expNote: `${row.playerName} was released, but the original remaining guaranteed salary still counts against ${selectedTeam?.name || "the team"}'s cap from ${row.seasonRange}.`,
       isCapHold: false,
       isDeadCap: true,
       deadCapAmount: Number(row.totalRemaining || 0),
@@ -1096,7 +1175,7 @@ export default function SalaryTable() {
                     This player was released and is no longer on the roster, but the team is still responsible for the guaranteed salary shown here.
                   </p>
                   <p>
-                    If stretch provision was applied, the total money owed did not disappear. The cap hit was spread across extra seasons to lower the yearly cap hit. The table stays fixed to the next five seasons, and this popup shows the full remaining obligation.
+                    A normal release does not stretch the cap hit. The dead cap follows the player's original remaining guaranteed contract years, and later set-off can reduce it if another team signs him above the minimum baseline.
                   </p>
                   <p>
                     If another team signs the released player above a minimum deal, this table applies NBA-lite set-off: half of the new salary above the minimum baseline gets credited back against the old team's dead cap for that season. Minimum pickups usually create no meaningful reduction.
@@ -1106,9 +1185,6 @@ export default function SalaryTable() {
                 <div className="mt-5 grid grid-cols-1 gap-2 text-sm">
                   <InfoRow label="Net dead cap remaining" value={fmtMoney(deadCapInfo.deadCapAmount)} />
                   <InfoRow label="Original guaranteed amount" value={fmtMoney(deadCapInfo.deadCapInfo?.grossTotalRemaining || deadCapInfo.deadCapAmount)} />
-                  {deadCapInfo.deadCapInfo?.stretchApplied && (
-                    <InfoRow label="Stretch provision" value={`${deadCapInfo.deadCapInfo.stretchYears || 0} seasons at about ${fmtMoney(deadCapInfo.deadCapInfo.stretchAnnualAmount || 0)} per year`} />
-                  )}
                   {deadCapInfo.deadCapInfo?.displaySeasonNote && (
                     <InfoRow label="Table view" value={deadCapInfo.deadCapInfo.displaySeasonNote} />
                   )}
