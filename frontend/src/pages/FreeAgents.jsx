@@ -1857,30 +1857,89 @@ const isOffseasonMode =
   }, [offerEvaluation, offerEvalLoading]);
 
 
-  const getOfferInterestDisplay = (offer = {}) => {
-    const directPercent = Number(
-      offer?.playerInterestPercent ??
-      offer?.interestPercent ??
-      offer?.interestPct ??
-      offer?.playerInterest ??
-      NaN
-    );
+  const getOfferInterestDisplay = (offer = {}, modalPlayer = null) => {
+    const getOfferSalaryByYearForInterest = (row = {}) => {
+      if (Array.isArray(row?.contract?.salaryByYear) && row.contract.salaryByYear.length) {
+        return row.contract.salaryByYear.map((value) => Number(value || 0));
+      }
 
-    let percent = Number.isFinite(directPercent) ? directPercent : NaN;
+      if (Array.isArray(row?.salaryByYear) && row.salaryByYear.length) {
+        return row.salaryByYear.map((value) => Number(value || 0));
+      }
 
-    if (!Number.isFinite(percent)) {
-      const score = Number(
-        offer?.playerViewScore ??
-        offer?.details?.acceptanceScore ??
-        offer?.acceptanceScore ??
-        offer?.interestScore ??
+      const years = Math.max(1, Number(row?.years || 1));
+      const aav = Number(row?.aav || row?.currentYearSalary || 0);
+      return Array.from({ length: years }, () => aav);
+    };
+
+    const getOfferOptionAdjustmentForInterest = (row = {}, years = 1) => {
+      if (Number(years || 1) <= 1) return 0;
+
+      const optionType = String(row?.contract?.option?.type || row?.option?.type || "").toLowerCase();
+      if (optionType === "player") return 0.075;
+      if (optionType === "team") return -0.08;
+      return 0;
+    };
+
+    const getSubmitModalAcceptanceScoreForOffer = (row = {}, playerForOffer = null) => {
+      const marketValue = playerForOffer?.marketValue || row?.player?.marketValue || row?.marketValue || {};
+      const expectedAAV = Number(
+        marketValue?.expectedAAV ||
+        marketValue?.expectedYear1Salary ||
+        marketValue?.minAcceptableAAV ||
         0
       );
 
-      if (Number.isFinite(score) && score > 0) {
-        // Match the Submit Offer modal scale:
-        // 0.65 = fringe interest, 1.10+ = extremely strong interest.
-        percent = score > 1.5 ? score : ((score - 0.65) / 0.45) * 100;
+      if (!expectedAAV || expectedAAV <= 0) return NaN;
+
+      const salaryByYear = getOfferSalaryByYearForInterest(row);
+      const offeredYears = salaryByYear.length || Number(row?.years || 1);
+      const offeredTotal = salaryByYear.reduce((sum, value) => sum + Number(value || 0), 0) || Number(row?.totalValue || 0);
+      const offeredAAV = offeredTotal / Math.max(1, offeredYears);
+      const expectedYears = Number(marketValue?.expectedYears || offeredYears || 1);
+      const yearPenalty = Math.abs(offeredYears - expectedYears) * 0.06;
+      const optionAdjustment = getOfferOptionAdjustmentForInterest(row, offeredYears);
+
+      let acceptanceScore = offeredAAV / Math.max(1, expectedAAV);
+      acceptanceScore -= yearPenalty;
+      acceptanceScore += optionAdjustment;
+
+      const rightsTeamName =
+        playerForOffer?.rights?.heldByTeam ||
+        row?.rightsTeamName ||
+        row?.player?.rights?.heldByTeam ||
+        "";
+
+      if (rightsTeamName && row?.teamName && rightsTeamName === row.teamName) {
+        acceptanceScore += 0.04;
+      }
+
+      return acceptanceScore;
+    };
+
+    const scoreToSubmitModalPercent = (score) => {
+      const n = Number(score);
+      if (!Number.isFinite(n)) return NaN;
+      return ((n - 0.65) / 0.45) * 100;
+    };
+
+    let percent = scoreToSubmitModalPercent(
+      offer?.details?.acceptanceScore ??
+      offer?.acceptanceScore
+    );
+
+    if (!Number.isFinite(percent)) {
+      percent = scoreToSubmitModalPercent(
+        getSubmitModalAcceptanceScoreForOffer(offer, modalPlayer)
+      );
+    }
+
+    // Fallback only for old saves that do not have enough market-value data.
+    // Current offers should use the same acceptance-score formula as the Submit Offer modal.
+    if (!Number.isFinite(percent)) {
+      const fallbackScore = Number(offer?.playerViewScore ?? offer?.interestScore ?? offer?.score);
+      if (Number.isFinite(fallbackScore) && fallbackScore > 0) {
+        percent = fallbackScore <= 1.5 ? fallbackScore * 100 : fallbackScore;
       }
     }
 
@@ -3248,7 +3307,7 @@ updateOffseasonState({
                 ) : (
                   <div className="space-y-3">
                     {offersViewData.offers.map((offer, idx) => {
-                      const offerInterest = getOfferInterestDisplay(offer);
+                      const offerInterest = getOfferInterestDisplay(offer, offersViewData?.player || selectedPlayer || null);
 
                       return (
                       <div
