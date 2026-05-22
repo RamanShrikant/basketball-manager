@@ -422,6 +422,25 @@ export default function FreeAgents() {
     return "No Rights";
   };
 
+  const formatTeamDirectionLabel = (value) => {
+    const raw = String(value || "").replaceAll("_", " ").trim();
+    if (!raw) return "";
+    return raw
+      .split(/\s+/)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(" ");
+  };
+
+  const getOfferTeamDirectionLabel = (offer = {}) => {
+    return formatTeamDirectionLabel(
+      offer?.teamDirection ||
+      offer?.rosterNeed?.teamDirection ||
+      offer?.storyContext?.teamDirection ||
+      offer?.storyContext?.rosterContext?.teamDirection ||
+      ""
+    );
+  };
+
   const Chip = ({ children, tone = "neutral" }) => {
     const cls =
       tone === "orange"
@@ -3433,10 +3452,23 @@ updateOffseasonState({
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {offersViewData.offers.map((offer, idx) => {
-                      const offerInterest = getOfferInterestDisplay(offer, offersViewData?.player || selectedPlayer || null);
+                    {(() => {
+                      const modalPlayerForOffers = offersViewData?.player || selectedPlayer || null;
+                      const sortedOfferRows = [...(offersViewData.offers || [])]
+                        .map((offer) => ({
+                          offer,
+                          offerInterest: getOfferInterestDisplay(offer, modalPlayerForOffers),
+                        }))
+                        .sort((a, b) => {
+                          const interestDiff = Number(b.offerInterest?.percent || 0) - Number(a.offerInterest?.percent || 0);
+                          if (interestDiff !== 0) return interestDiff;
+                          return Number(b.offer?.totalValue || 0) - Number(a.offer?.totalValue || 0);
+                        });
 
-                      return (
+                      return sortedOfferRows.map(({ offer, offerInterest }, idx) => {
+                        const offerTeamDirectionLabel = getOfferTeamDirectionLabel(offer);
+
+                        return (
                       <div
                         key={`${offer.offerId || offer.teamName}-${idx}`}
                         className={`rounded-xl border p-4 ${
@@ -3465,8 +3497,15 @@ updateOffseasonState({
 
                         <div className="mb-3 rounded-xl border border-neutral-700/80 bg-black/20 px-3 py-2.5">
                           <div className="flex items-center justify-between gap-3 mb-1.5">
-                            <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
-                              Player Interest
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                                Player Interest
+                              </div>
+                              {offerTeamDirectionLabel && (
+                                <span className="px-2 py-0.5 rounded-full border border-blue-400/30 bg-blue-400/10 text-[10px] font-bold uppercase tracking-wide text-blue-200">
+                                  Direction: {offerTeamDirectionLabel}
+                                </span>
+                              )}
                             </div>
                             <div className="text-xs font-bold text-white">
                               {offerInterest.label} • {offerInterest.roundedPercent}%
@@ -3516,7 +3555,8 @@ updateOffseasonState({
                         )}
                       </div>
                     );
-                    })}
+                      });
+                    })()}
                   </div>
                 )}
               </>
