@@ -162,6 +162,8 @@ export default function SalaryTable() {
     return leagueData.conferences?.[conf]?.[idx] || null;
   }, [leagueData, selectedTeamKey]);
 
+  const isAllTeamsView = selectedTeamKey === "__ALL__";
+
   const freeAgencyState = leagueData?.freeAgencyState || {};
   const isFreeAgencyMode = Boolean(
     freeAgencyState?.isActive ||
@@ -896,6 +898,587 @@ export default function SalaryTable() {
     return "bg-white/10 text-white/80 border-white/15";
   };
 
+
+  const buildCapHoldRowsForTeam = (teamName) => {
+    if (!teamName || !isFreeAgencyMode) return [];
+
+    return (leagueData?.freeAgents || [])
+      .map((player) => {
+        const rights = getRights(player);
+        const capHold = getCapHoldForPlayer(player, teamName);
+        const birdLevel = rights?.birdLevel || "none";
+        const restrictedFreeAgent = Boolean(rights?.restrictedFreeAgent || player?.qualifyingOffer?.amount);
+        const previousSalary = getPreviousSalaryForCapHold(player);
+        const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+        const rightsLabel = formatBirdLabel(birdLevel);
+        const note = restrictedFreeAgent
+          ? `${player?.name || "This player"} is on a cap hold because ${teamName} still controls his RFA rights. The hold counts against practical cap room until you re-sign him, he signs elsewhere, or you renounce his rights.`
+          : `${player?.name || "This player"} is on a cap hold because ${teamName} still holds ${rightsLabel} rights. The hold counts against practical cap room until you re-sign him, he signs elsewhere, or you renounce his rights.`;
+
+        return {
+          player,
+          playerKey: getPlayerKey(player),
+          playerName: player?.name || "Unknown",
+          position: player?.pos || player?.position || "",
+          overall: player?.overall ?? "-",
+          headshot: player?.headshot || "",
+          capHold,
+          birdLevel,
+          rightsLabel,
+          restrictedFreeAgent,
+          previousSalary,
+          marketYearOne,
+          note,
+        };
+      })
+      .filter((row) => row.capHold > 0)
+      .sort((a, b) => Number(b.capHold || 0) - Number(a.capHold || 0));
+  };
+
+  const buildDeadCapRowsForTeam = (teamName) => {
+    if (!teamName) return [];
+
+    const savedDeadCapRows = Array.isArray(leagueData?.deadCapByTeam?.[teamName])
+      ? leagueData.deadCapByTeam[teamName]
+      : [];
+    const rawRows = normalizeDeadCapRowsForNoStretch(savedDeadCapRows, teamName);
+
+    return rawRows
+      .map((row, idx) => {
+        const seasonYear = Number(row?.seasonYear || 0);
+        const savedSetOff = Number(row?.setOffCredit || row?.setOffAmount || row?.offsetAmount || 0);
+        const savedAmount = Number(row?.amount ?? row?.netAmount ?? 0);
+        const originalAmount = Number(
+          row?.originalAmount ||
+          row?.guaranteedAmount ||
+          row?.grossAmount ||
+          (savedSetOff > 0 ? savedAmount + savedSetOff : savedAmount) ||
+          0
+        );
+        const signedInfo = findSignedPlayerForDeadCapRow(
+          { ...row, seasonYear },
+          teamName
+        );
+        const calculatedSetOff = signedInfo
+          ? calculateDeadCapSetOff(originalAmount, signedInfo.signedSalary)
+          : 0;
+        const setOffAmount = Math.max(savedSetOff, calculatedSetOff);
+        const amount = Math.max(0, originalAmount - setOffAmount);
+
+        return {
+          id: `dead-cap-${teamName}-${row?.playerId || row?.playerName || idx}-${seasonYear}`,
+          playerId: row?.playerId ?? null,
+          playerName: row?.playerName || row?.name || "Released Player",
+          seasonYear,
+          amount,
+          originalAmount,
+          setOffAmount,
+          offsetAmount: setOffAmount,
+          signedOffsetTeamName: row?.setOffTeamName || row?.setOffSignedWith || row?.offsetTeamName || signedInfo?.teamName || "",
+          signedOffsetSalary: Number(row?.setOffSignedSalary || row?.setOffReplacementSalary || row?.offsetSignedSalary || signedInfo?.signedSalary || 0),
+          reason: row?.reason || "release",
+          sourceRow: {
+            ...row,
+            amount,
+            originalAmount,
+            setOffAmount,
+            offsetAmount: setOffAmount,
+            setOffTeamName: row?.setOffTeamName || row?.setOffSignedWith || row?.offsetTeamName || signedInfo?.teamName || "",
+            setOffSignedWith: row?.setOffSignedWith || row?.setOffTeamName || row?.offsetTeamName || signedInfo?.teamName || "",
+            setOffSignedSalary: Number(row?.setOffSignedSalary || row?.setOffReplacementSalary || row?.offsetSignedSalary || signedInfo?.signedSalary || 0),
+            setOffReplacementSalary: Number(row?.setOffReplacementSalary || row?.setOffSignedSalary || row?.offsetSignedSalary || signedInfo?.signedSalary || 0),
+          },
+        };
+      })
+      .filter((row) => row.amount > 0 && row.seasonYear >= currentSeasonYear)
+      .sort((a, b) => {
+        const yearDiff = Number(a.seasonYear || 0) - Number(b.seasonYear || 0);
+        if (yearDiff !== 0) return yearDiff;
+        return String(a.playerName || "").localeCompare(String(b.playerName || ""));
+      });
+  };
+
+  const buildDeadCapPlayerRowsForTeam = (teamName, rows) => {
+    if (!rows.length) return [];
+
+    const allPlayers = [
+      ...(leagueData?.freeAgents || []),
+      ...Object.values(leagueData?.conferences || {}).flatMap((teams) =>
+        (teams || []).flatMap((team) => team?.players || [])
+      ),
+    ];
+
+    const findPlayerProfile = (row) => {
+      const playerId = row?.playerId;
+      const playerName = row?.playerName;
+
+      return allPlayers.find((player) => {
+        if (
+          playerId !== undefined &&
+          playerId !== null &&
+          playerId !== "" &&
+          String(player?.id) === String(playerId)
+        ) {
+          return true;
+        }
+
+        return Boolean(playerName && player?.name === playerName);
+      }) || null;
+    };
+
+    const grouped = new Map();
+
+    for (const row of rows) {
+      const key =
+        row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
+          ? `id:${row.playerId}`
+          : `name:${row.playerName || "Released Player"}`;
+
+      const profile = findPlayerProfile(row);
+      const sourceRow = row?.sourceRow || {};
+
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          id: `dead-cap-${teamName || "team"}-${key}`,
+          playerId: row?.playerId ?? null,
+          playerName: row?.playerName || "Released Player",
+          pos: sourceRow?.pos || sourceRow?.position || profile?.pos || profile?.position || "-",
+          overall: sourceRow?.overall ?? profile?.overall ?? "-",
+          headshot:
+            sourceRow?.headshot ||
+            sourceRow?.playerHeadshot ||
+            sourceRow?.image ||
+            profile?.headshot ||
+            profile?.playerHeadshot ||
+            profile?.image ||
+            "",
+          salaryBySeason: {},
+          grossBySeason: {},
+          setOffBySeason: {},
+          seasons: [],
+          totalRemaining: 0,
+          grossTotalRemaining: 0,
+          totalSetOff: 0,
+          offsetTeamNames: [],
+          reason: row?.reason || "release",
+          stretchApplied: false,
+          stretchYears: 0,
+          stretchAnnualAmount: 0,
+          remainingContractYears: 0,
+          totalGuaranteedOwed: 0,
+          firstDeadCapSeason: null,
+          lastDeadCapSeason: null,
+          sourceRows: [],
+        });
+      }
+
+      const item = grouped.get(key);
+      const seasonYear = Number(row?.seasonYear || 0);
+      const amount = Number(row?.amount || 0);
+      const originalAmount = Number(row?.originalAmount || amount);
+      const setOffAmount = Number(row?.setOffCredit || row?.setOffAmount || row?.offsetAmount || 0);
+
+      if (row?.stretchApplied || sourceRow?.stretchApplied) {
+        item.stretchApplied = true;
+        item.stretchYears = Math.max(item.stretchYears || 0, Number(row?.stretchYears || sourceRow?.stretchYears || 0));
+        item.stretchAnnualAmount = Math.max(item.stretchAnnualAmount || 0, Number(row?.stretchAnnualAmount || sourceRow?.stretchAnnualAmount || originalAmount || 0));
+        item.remainingContractYears = Math.max(item.remainingContractYears || 0, Number(row?.remainingContractYears || sourceRow?.remainingContractYears || 0));
+        item.totalGuaranteedOwed = Math.max(item.totalGuaranteedOwed || 0, Number(row?.totalGuaranteedOwed || sourceRow?.totalGuaranteedOwed || 0));
+        item.firstDeadCapSeason = item.firstDeadCapSeason === null
+          ? Number(row?.firstDeadCapSeason || sourceRow?.firstDeadCapSeason || seasonYear)
+          : Math.min(item.firstDeadCapSeason, Number(row?.firstDeadCapSeason || sourceRow?.firstDeadCapSeason || seasonYear));
+        item.lastDeadCapSeason = item.lastDeadCapSeason === null
+          ? Number(row?.lastDeadCapSeason || sourceRow?.lastDeadCapSeason || seasonYear)
+          : Math.max(item.lastDeadCapSeason, Number(row?.lastDeadCapSeason || sourceRow?.lastDeadCapSeason || seasonYear));
+      }
+
+      item.salaryBySeason[seasonYear] =
+        Number(item.salaryBySeason[seasonYear] || 0) + amount;
+      item.grossBySeason[seasonYear] =
+        Number(item.grossBySeason[seasonYear] || 0) + originalAmount;
+      item.setOffBySeason[seasonYear] =
+        Number(item.setOffBySeason[seasonYear] || 0) + setOffAmount;
+
+      if (!item.seasons.includes(seasonYear)) {
+        item.seasons.push(seasonYear);
+      }
+
+      item.totalRemaining += amount;
+      item.grossTotalRemaining += originalAmount;
+      item.totalSetOff += setOffAmount;
+      if (setOffAmount > 0 && row?.signedOffsetTeamName && !item.offsetTeamNames.includes(row.signedOffsetTeamName)) {
+        item.offsetTeamNames.push(row.signedOffsetTeamName);
+      }
+      item.sourceRows.push(row);
+
+      if (!item.headshot && profile?.headshot) {
+        item.headshot = profile.headshot;
+      }
+      if ((item.overall === "-" || item.overall === undefined) && profile?.overall !== undefined) {
+        item.overall = profile.overall;
+      }
+      if ((!item.pos || item.pos === "-") && (profile?.pos || profile?.position)) {
+        item.pos = profile.pos || profile.position;
+      }
+    }
+
+    return Array.from(grouped.values())
+      .map((row) => {
+        const seasons = [...row.seasons].sort((a, b) => a - b);
+        const firstSeason = seasons[0] || currentSeasonYear;
+        const lastSeason = seasons[seasons.length - 1] || currentSeasonYear;
+
+        return {
+          ...row,
+          seasons,
+          firstSeason,
+          lastSeason,
+          seasonRange:
+            firstSeason === lastSeason
+              ? String(firstSeason)
+              : `${firstSeason}-${lastSeason}`,
+          displaySeasonNote:
+            lastSeason > currentSeasonYear + DISPLAY_YEARS - 1
+              ? `Table shows next ${DISPLAY_YEARS} seasons. Dead cap continues through ${lastSeason}.`
+              : "",
+          salaryByYear: Array.from({ length: DISPLAY_YEARS }, (_, i) => {
+            const seasonYear = currentSeasonYear + i;
+            return Number(row.salaryBySeason[seasonYear] || 0);
+          }),
+        };
+      })
+      .sort((a, b) => {
+        const amountDiff = Number(b.totalRemaining || 0) - Number(a.totalRemaining || 0);
+        if (amountDiff !== 0) return amountDiff;
+        return String(a.playerName || "").localeCompare(String(b.playerName || ""));
+      });
+  };
+
+  const buildPlayerRowsForTeam = (team, teamCapHoldRows, teamDeadCapPlayerRows) => {
+    const rosterRows = (team?.players || []).map((p) => {
+      const c = normalizeContract(p);
+      const years = Math.max(1, c.salaryByYear.length || 1);
+      const endYear = c.salaryByYear.length
+        ? c.startYear + c.salaryByYear.length - 1
+        : c.startYear;
+
+      const totalRemaining = c.salaryByYear.reduce((s, v, idx) => {
+        const seasonYear = c.startYear + idx;
+        if (seasonYear < currentSeasonYear) return s;
+        return s + (Number(v) || 0);
+      }, 0);
+
+      const expType = getExpType(p);
+      const expNote = getExpNote(p, expType);
+
+      return {
+        id: p?.id || `${p?.name || "player"}-${p?.pos || "pos"}`,
+        name: p?.name || "Unknown",
+        pos: p?.pos || "",
+        overall: p?.overall ?? "-",
+        headshot: p?.headshot || "",
+        contract: c,
+        years,
+        endYear,
+        totalRemaining,
+        optionLabel: getOptionLabel(c),
+        expType,
+        expNote,
+        isCapHold: false,
+      };
+    });
+
+    const holdRows = teamCapHoldRows.map((row) => ({
+      id: `cap-hold-${row.playerKey}`,
+      name: row.playerName,
+      pos: row.position,
+      overall: row.overall,
+      headshot: row.headshot,
+      contract: {
+        startYear: currentSeasonYear,
+        salaryByYear: [Number(row.capHold || 0)],
+        option: null,
+      },
+      years: 1,
+      endYear: currentSeasonYear,
+      totalRemaining: Number(row.capHold || 0),
+      optionLabel: `${row.restrictedFreeAgent ? "RFA" : row.rightsLabel} Cap Hold`,
+      expType: row.restrictedFreeAgent ? "RFA HOLD" : "HOLD",
+      expNote: row.note,
+      isCapHold: true,
+      capHoldAmount: Number(row.capHold || 0),
+      capHoldInfo: row,
+    }));
+
+    const deadRows = teamDeadCapPlayerRows.map((row) => ({
+      id: row.id,
+      name: row.playerName,
+      pos: row.pos || "-",
+      overall: row.overall ?? "-",
+      headshot: row.headshot || "",
+      contract: {
+        startYear: currentSeasonYear,
+        salaryByYear: row.salaryByYear,
+        option: null,
+      },
+      years: row.salaryByYear.length || 1,
+      endYear: row.lastSeason || currentSeasonYear,
+      totalRemaining: Number(row.totalRemaining || 0),
+      optionLabel: row.stretchApplied ? "Stretched Released Salary" : "Released Player Dead Cap",
+      expType: `${row.lastSeason || currentSeasonYear} DEAD CAP`,
+      expNote: row.displaySeasonNote || getExpNote({ rights: {} }, "DEAD"),
+      isDeadCap: true,
+      deadCapAmount: Number(row.totalRemaining || 0),
+      deadCapInfo: row,
+    }));
+
+    return [...rosterRows, ...deadRows, ...holdRows];
+  };
+
+  const buildSalaryTableSnapshotForTeam = (team) => {
+    const teamName = team?.name || "Unknown Team";
+    const teamCapHoldRows = buildCapHoldRowsForTeam(teamName);
+    const teamDeadCapRows = buildDeadCapRowsForTeam(teamName);
+    const teamDeadCapPlayerRows = buildDeadCapPlayerRowsForTeam(teamName, teamDeadCapRows);
+    const teamPlayers = buildPlayerRowsForTeam(team, teamCapHoldRows, teamDeadCapPlayerRows);
+    const totalsByYear = yearColumns.map((seasonYear) => {
+      return teamPlayers.reduce((sum, player) => {
+        const idx = seasonYear - player.contract.startYear;
+        const sal = idx >= 0 ? Number(player.contract.salaryByYear[idx] || 0) : 0;
+        return sum + sal;
+      }, 0);
+    });
+    const payroll = totalsByYear?.[0] ?? 0;
+    const status = (() => {
+      if (payroll >= HARD_CAP) return { label: "Hard Cap", tone: "danger" };
+      if (payroll >= SECOND_APRON) return { label: "2nd Apron", tone: "danger" };
+      if (payroll >= FIRST_APRON) return { label: "1st Apron", tone: "warn" };
+      if (payroll >= TAX_LINE) return { label: "Luxury Tax", tone: "warn" };
+      if (payroll >= SALARY_CAP) return { label: "Over Cap", tone: "neutral" };
+      return { label: "Below Cap", tone: "good" };
+    })();
+
+    return {
+      team,
+      teamName,
+      players: teamPlayers,
+      capHoldRows: teamCapHoldRows,
+      capHoldTotal: teamCapHoldRows.reduce((sum, row) => sum + Number(row.capHold || 0), 0),
+      deadCapPlayerRows: teamDeadCapPlayerRows,
+      deadCapTotal: teamDeadCapRows.reduce((sum, row) => sum + Number(row.amount || 0), 0),
+      totalsByYear,
+      totalAllYears: totalsByYear.reduce((sum, value) => sum + Number(value || 0), 0),
+      payrollThisYear: payroll,
+      capStatus: status,
+      logo: team?.logo || team?.teamLogo || team?.logoUrl || "",
+      rosterCount: Array.isArray(team?.players) ? team.players.length : 0,
+    };
+  };
+
+  const allTeamSalaryTables = useMemo(() => {
+    if (!isAllTeamsView) return [];
+
+    return allTeamsFlat
+      .map((meta) => leagueData?.conferences?.[meta.conf]?.[meta.teamIdx])
+      .filter(Boolean)
+      .map((team) => buildSalaryTableSnapshotForTeam(team));
+  }, [isAllTeamsView, allTeamsFlat, leagueData, currentSeasonYear, isFreeAgencyMode, yearColumns]);
+
+  const renderSalaryTablePanel = (snapshot, compact = false) => {
+    if (!snapshot?.team) return null;
+
+    return (
+      <div
+        key={`salary-table-${snapshot.teamName}`}
+        className={`${styles.bmTablePanel} border border-white/10 rounded-2xl shadow-2xl overflow-hidden ${compact ? "scroll-mt-6" : ""}`}
+      >
+        <div className={`${compact ? "p-4" : "p-5"} border-b border-white/10 flex flex-col gap-3`}>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              {snapshot.logo ? (
+                <img src={snapshot.logo} alt="" className="w-10 h-10 object-contain" />
+              ) : (
+                <div className="w-10 h-10 rounded-lg bg-white/5 border border-white/10" />
+              )}
+
+              <div>
+                <div className={`${compact ? "text-xl" : "text-2xl"} font-extrabold`}>{snapshot.teamName} Salary Table</div>
+                <div className="text-white/60 text-sm">
+                  {snapshot.rosterCount} roster players
+                  {snapshot.deadCapPlayerRows.length > 0 ? ` + ${snapshot.deadCapPlayerRows.length} dead cap` : ""}
+                  {snapshot.capHoldRows.length > 0 ? ` + ${snapshot.capHoldRows.length} cap holds` : ""}
+                </div>
+              </div>
+            </div>
+
+            <div className={`px-3 py-2 rounded-xl border text-sm ${toneClass(snapshot.capStatus.tone)}`}>
+              <div className="font-semibold">{snapshot.capStatus.label}</div>
+              <div className="text-xs opacity-80">
+                {snapshot.deadCapPlayerRows.length > 0 || snapshot.capHoldRows.length > 0 ? "Payroll + Adjustments" : "Payroll"} {yearColumns[0]}: {fmtM(snapshot.payrollThisYear)}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Chip label={`Salary Cap: ${fmtM(SALARY_CAP)}`} />
+            <Chip label={`Luxury Tax: ${fmtM(TAX_LINE)}`} />
+            <Chip label={`1st Apron: ${fmtM(FIRST_APRON)}`} />
+            <Chip label={`2nd Apron: ${fmtM(SECOND_APRON)}`} />
+            <Chip label={`Hard Cap: ${fmtM(HARD_CAP)}`} />
+            {snapshot.deadCapPlayerRows.length > 0 && <Chip label={`Dead Cap: ${fmtM(snapshot.deadCapTotal)}`} />}
+            {snapshot.capHoldRows.length > 0 && <Chip label={`Cap Holds: ${fmtM(snapshot.capHoldTotal)}`} />}
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px]">
+            <thead className="bg-white/5 border-b border-white/10">
+              <tr className="text-white/70 text-sm">
+                <th className="text-left px-4 py-3">Player</th>
+                <th className="text-center px-3 py-3">Pos</th>
+                <th className="text-center px-3 py-3">OVR</th>
+                {yearColumns.map((y) => (
+                  <th key={y} className="text-right px-3 py-3 whitespace-nowrap">
+                    {y}
+                  </th>
+                ))}
+                <th className="text-right px-3 py-3 whitespace-nowrap">Total Remaining</th>
+                <th className="text-center px-3 py-3 whitespace-nowrap">Exp.</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {snapshot.players.map((p) => (
+                <tr
+                  key={`${snapshot.teamName}-${p.id}`}
+                  className={`${p.isDeadCap ? "border-b border-red-500/45 bg-red-500/10 hover:bg-red-500/15" : p.isCapHold ? "border-b border-red-500/35 bg-red-500/5 hover:bg-red-500/10" : "border-b border-white/5 hover:bg-white/5"} transition`}
+                  style={p.isDeadCap || p.isCapHold ? { boxShadow: "inset 0 0 0 1px rgba(248, 113, 113, 0.35)" } : undefined}
+                >
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      {p.headshot ? (
+                        <img
+                          src={p.headshot}
+                          alt={p.name}
+                          className={`w-12 h-12 rounded-full object-cover border bg-white/5 ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`}
+                          onError={(e) => {
+                            e.currentTarget.style.display = "none";
+                          }}
+                        />
+                      ) : (
+                        <div className={`w-12 h-12 rounded-full bg-white/5 border ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`} />
+                      )}
+
+                      <div className="leading-tight">
+                        <div className="font-semibold flex items-center gap-2">
+                          <span>{p.name}</span>
+                          {p.isDeadCap && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeadCapInfo(p);
+                              }}
+                              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-red-400/45 bg-red-500/20 text-[11px] font-extrabold text-red-100 hover:bg-red-500/30 transition"
+                              title="Explain dead cap"
+                              aria-label={`Explain ${p.name} dead cap`}
+                            >
+                              ?
+                            </button>
+                          )}
+                          {p.isCapHold && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCapHoldInfo(p);
+                              }}
+                              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-red-400/45 bg-red-500/15 text-[11px] font-extrabold text-red-100 hover:bg-red-500/25 transition"
+                              title="Explain cap hold"
+                              aria-label={`Explain ${p.name} cap hold`}
+                            >
+                              ?
+                            </button>
+                          )}
+                        </div>
+                        <div className={p.isDeadCap || p.isCapHold ? "text-xs text-red-200/75" : "text-xs text-white/50"}>
+                          {p.optionLabel}
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+
+                  <td className="text-center px-3 py-3 text-white/85">{p.pos}</td>
+                  <td className="text-center px-3 py-3 font-semibold text-orange-300">{p.overall}</td>
+
+                  {yearColumns.map((seasonYear) => {
+                    const idx = seasonYear - p.contract.startYear;
+                    const sal = idx >= 0 ? Number(p.contract.salaryByYear[idx] || 0) : 0;
+                    const isBig = sal >= 25_000_000;
+                    const salClass = p.isDeadCap || p.isCapHold ? "text-red-200 font-extrabold" : isBig ? "text-emerald-300" : "text-white/85";
+
+                    return (
+                      <td
+                        key={`${snapshot.teamName}-${p.id}-${seasonYear}`}
+                        className={`text-right px-3 py-3 whitespace-nowrap ${
+                          sal > 0 ? salClass : "text-white/35"
+                        }`}
+                      >
+                        {sal > 0 ? fmtM(sal) : "-"}
+                      </td>
+                    );
+                  })}
+
+                  <td className={`text-right px-3 py-3 whitespace-nowrap font-extrabold ${p.isDeadCap || p.isCapHold ? "text-red-200" : "text-emerald-300"}`}>
+                    {fmtM(p.totalRemaining)}
+                  </td>
+
+                  <td className="text-center px-3 py-3 whitespace-nowrap">
+                    <span
+                      className={`inline-flex items-center justify-center gap-1 rounded-full border px-2.5 py-1 text-xs font-extrabold ${getExpChipClass(p.expType)}`}
+                      title={p.expNote}
+                    >
+                      {p.endYear} {p.expType}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+
+              <tr className="bg-white/5">
+                <td className="px-4 py-3 font-extrabold text-white/90" colSpan={3}>
+                  Team Totals:
+                </td>
+
+                {yearColumns.map((y, i) => {
+                  const total = snapshot.totalsByYear[i] || 0;
+                  const overTax = i === 0 && total >= TAX_LINE;
+                  const overCap = i === 0 && total >= SALARY_CAP;
+
+                  return (
+                    <td
+                      key={`${snapshot.teamName}-tot-${y}`}
+                      className={`text-right px-3 py-3 whitespace-nowrap font-extrabold ${
+                        overTax ? "text-red-300" : overCap ? "text-orange-300" : "text-white/85"
+                      }`}
+                    >
+                      {fmtM(total)}
+                    </td>
+                  );
+                })}
+
+                <td className="text-right px-3 py-3 whitespace-nowrap font-extrabold text-emerald-300">
+                  {fmtM(snapshot.totalAllYears)}
+                </td>
+
+                <td className="text-center px-3 py-3 whitespace-nowrap text-white/40">-</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
   const emptyTeams =
     (leagueData?.conferences?.East?.length || 0) +
     (leagueData?.conferences?.West?.length || 0) === 0;
@@ -921,7 +1504,7 @@ export default function SalaryTable() {
   return (
     <PageFade>
       <div className={`${styles.bmCourtPage} min-h-screen text-white p-6`}>
-        <div className="max-w-6xl mx-auto space-y-5">
+        <div className={`${isAllTeamsView ? "max-w-[1600px]" : "max-w-6xl"} mx-auto space-y-5`}>
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
               <h1 className="text-4xl font-extrabold text-orange-500 leading-tight">Salary Table</h1>
@@ -936,6 +1519,7 @@ export default function SalaryTable() {
                   value={selectedTeamKey}
                   onChange={(e) => setSelectedTeamKey(e.target.value)}
                 >
+                  <option value="__ALL__">All Teams (Full League)</option>
                   {allTeamsFlat.map((t) => (
                     <option key={t.key} value={t.key}>
                       {t.name} ({t.conf})
@@ -959,7 +1543,20 @@ export default function SalaryTable() {
             </div>
           )}
 
-          {selectedTeam && (
+          {isAllTeamsView && (
+            <div className="space-y-5">
+              <div className={`${styles.bmSolidPanel} border border-orange-500/20 rounded-2xl p-4 text-white/75`}>
+                <div className="text-lg font-extrabold text-orange-300">Full League Salary Table</div>
+                <div className="mt-1 text-sm text-white/60">
+                  Showing every team one after another on the same page. Player contracts, cap holds, dead cap, and team totals use the same display rules as the single-team salary table.
+                </div>
+              </div>
+
+              {allTeamSalaryTables.map((snapshot) => renderSalaryTablePanel(snapshot, true))}
+            </div>
+          )}
+
+          {!isAllTeamsView && selectedTeam && (
             <div className={`${styles.bmTablePanel} border border-white/10 rounded-2xl shadow-2xl overflow-hidden`}>
               <div className="p-5 border-b border-white/10 flex flex-col gap-3">
                 <div className="flex items-center justify-between gap-4 flex-wrap">
