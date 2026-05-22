@@ -1390,36 +1390,519 @@ def get_team_cap_hold_total(
     return int(total)
 
 
+
+def get_player_asset_value_score(player: Optional[Dict[str, Any]]) -> float:
+    if not player:
+        return 0.0
+
+    overall = float(num(player.get("overall"), 0))
+    potential = float(num(player.get("potential"), overall))
+    age = int(num(player.get("age"), 27))
+    upside = max(0.0, potential - overall)
+
+    score = (overall * 0.105) + (potential * 0.045) + min(1.15, upside * 0.18)
+
+    if overall >= 88:
+        score += 2.20
+    elif overall >= 85:
+        score += 1.45
+    elif overall >= 82:
+        score += 0.85
+    elif overall >= 80:
+        score += 0.45
+
+    if age <= 23:
+        score += 0.70
+    elif age <= 26:
+        score += 0.42
+    elif age >= 33:
+        score -= 0.38
+    elif age >= 31:
+        score -= 0.20
+
+    return round(score, 3)
+
+
+def get_cap_hold_row_asset_value_score(row: Dict[str, Any]) -> float:
+    player_like = {
+        "overall": row.get("overall"),
+        "potential": row.get("potential"),
+        "age": row.get("age"),
+    }
+    value = get_player_asset_value_score(player_like)
+    rights = row.get("rights") if isinstance(row.get("rights"), dict) else {}
+
+    if rights.get("restrictedFreeAgent"):
+        value += 0.85
+    if rights.get("rookieScale"):
+        value += 0.55
+    if rights.get("birdLevel") == "bird":
+        value += 0.20
+
+    return round(value, 3)
+
+
+def get_projected_team_rank_with_cap_hold(
+    league_data: Dict[str, Any],
+    team_name: str,
+    row: Dict[str, Any],
+) -> int:
+    _, _, team = find_team_entry(league_data, team_name)
+    candidates = []
+
+    if team:
+        for roster_player in team.get("players", []):
+            candidates.append({
+                "key": get_player_key(roster_player.get("id"), roster_player.get("name")),
+                "overall": num(roster_player.get("overall"), 0),
+                "potential": num(roster_player.get("potential"), num(roster_player.get("overall"), 0)),
+                "age": num(roster_player.get("age"), 27),
+            })
+
+    for hold_row in get_team_cap_hold_rows(league_data, team_name):
+        candidates.append({
+            "key": hold_row.get("playerKey"),
+            "overall": num(hold_row.get("overall"), 0),
+            "potential": num(hold_row.get("potential"), num(hold_row.get("overall"), 0)),
+            "age": num(hold_row.get("age"), 27),
+        })
+
+    target_key = row.get("playerKey")
+    candidates.sort(
+        key = lambda item: (
+            -float(num(item.get("overall"), 0)),
+            -float(num(item.get("potential"), num(item.get("overall"), 0))),
+            float(num(item.get("age"), 27)),
+        )
+    )
+
+    for idx, item in enumerate(candidates, start = 1):
+        if item.get("key") == target_key:
+            return idx
+
+    return len(candidates) + 1
+
+
+def get_cpu_cap_hold_protection_reason(
+    league_data: Dict[str, Any],
+    team_name: str,
+    row: Dict[str, Any],
+    target_player: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    overall = int(round(num(row.get("overall"), 0)))
+    age = int(num(row.get("age"), 27))
+    potential = int(round(num(row.get("potential"), overall)))
+    rights = row.get("rights") if isinstance(row.get("rights"), dict) else {}
+    upside = potential - overall
+
+    if target_player is not None:
+        target_key = get_player_key(target_player.get("id"), target_player.get("name"))
+        if row.get("playerKey") == target_key:
+            return "target_player_cap_hold"
+
+    if rights.get("restrictedFreeAgent") and age <= 27 and (overall >= 74 or potential >= 78):
+        return "protected_rfa_or_qo_player"
+    if overall >= 88:
+        return "protected_franchise_player"
+    if overall >= 85 and age <= 31:
+        return "protected_star_player"
+    if age <= 25 and overall >= 80:
+        return "protected_young_core_player"
+    if age <= 26 and potential >= 84:
+        return "protected_high_potential_player"
+    if rights.get("rookieScale") and age <= 26 and (overall >= 76 or potential >= 80 or upside >= 3):
+        return "protected_rookie_scale_asset"
+
+    projected_rank = get_projected_team_rank_with_cap_hold(
+        league_data = league_data,
+        team_name = team_name,
+        row = row,
+    )
+    if projected_rank <= 3 and overall >= 78:
+        target_overall = int(round(num(target_player.get("overall"), 0))) if target_player is not None else 0
+        if not (target_overall >= 84 and target_overall >= overall + 3):
+            return "protected_projected_top_three_player"
+
+    return None
+
+
+def should_allow_cpu_cap_hold_renounce_for_target(
+    league_data: Dict[str, Any],
+    team_name: str,
+    row: Dict[str, Any],
+    target_player: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    hold_value = get_cap_hold_row_asset_value_score(row)
+    protection_reason = get_cpu_cap_hold_protection_reason(
+        league_data = league_data,
+        team_name = team_name,
+        row = row,
+        target_player = target_player,
+    )
+
+    if protection_reason:
+        return {
+            "allow": False,
+            "blockedReason": protection_reason,
+            "holdValueScore": hold_value,
+            "targetValueScore": get_player_asset_value_score(target_player),
+        }
+
+    if target_player is None:
+        return {
+            "allow": True,
+            "blockedReason": None,
+            "holdValueScore": hold_value,
+            "targetValueScore": None,
+        }
+
+    target_value = get_player_asset_value_score(target_player)
+    row_overall = int(round(num(row.get("overall"), 0)))
+    row_age = int(num(row.get("age"), 27))
+    row_potential = int(round(num(row.get("potential"), row_overall)))
+    target_overall = int(round(num(target_player.get("overall"), 0)))
+    target_age = int(num(target_player.get("age"), 27))
+    target_potential = int(round(num(target_player.get("potential"), target_overall)))
+
+    # Never sacrifice a clearly better useful hold for a weaker target.
+    if row_overall >= 76 and row_overall >= target_overall + 2:
+        return {
+            "allow": False,
+            "blockedReason": "renounced_player_is_better_than_target",
+            "holdValueScore": hold_value,
+            "targetValueScore": target_value,
+        }
+
+    # Do not dump a young asset to chase an older non-star who is not a real upgrade.
+    if row_age <= 26 and target_age >= 30 and row_potential >= target_potential - 1 and target_overall < 84:
+        return {
+            "allow": False,
+            "blockedReason": "young_asset_for_older_non_upgrade",
+            "holdValueScore": hold_value,
+            "targetValueScore": target_value,
+        }
+
+    # If the hold is close to the target in value, keep the hold unless the target is a strong starter/star upgrade.
+    if row_overall >= 77 and target_overall < 82 and hold_value >= target_value - 0.10:
+        return {
+            "allow": False,
+            "blockedReason": "target_not_enough_of_an_upgrade",
+            "holdValueScore": hold_value,
+            "targetValueScore": target_value,
+        }
+
+    if row_overall >= 78 and hold_value >= target_value + 0.45:
+        return {
+            "allow": False,
+            "blockedReason": "hold_value_exceeds_target_value",
+            "holdValueScore": hold_value,
+            "targetValueScore": target_value,
+        }
+
+    return {
+        "allow": True,
+        "blockedReason": None,
+        "holdValueScore": hold_value,
+        "targetValueScore": target_value,
+    }
+
+
+def get_return_team_interest_bonus(
+    league_data: Dict[str, Any],
+    team_name: Optional[str],
+    player: Dict[str, Any],
+    rights_bonus: bool = False,
+) -> float:
+    if not team_name:
+        return 0.0
+
+    profile = build_recent_team_results_profile(league_data, team_name)
+    overall = int(round(num(player.get("overall"), 0)))
+    age = int(num(player.get("age"), 27))
+
+    if not profile.get("historyAvailable"):
+        base = 0.035
+    elif profile.get("lastSeasonChampion") or profile.get("lastSeasonFinals"):
+        base = 0.058
+    elif profile.get("lastSeasonConferenceFinals"):
+        base = 0.050
+    elif profile.get("lastSeasonWins") is not None and int(num(profile.get("lastSeasonWins"), 0)) >= 50:
+        base = 0.045
+    elif profile.get("lastSeasonWins") is not None and int(num(profile.get("lastSeasonWins"), 0)) >= 42:
+        base = 0.036
+    elif profile.get("recentWinPct") is not None and float(num(profile.get("recentWinPct"), 0)) < 0.34:
+        base = 0.016
+    else:
+        base = 0.028
+
+    if overall >= 84:
+        base += 0.010
+    if age <= 25 and overall >= 77:
+        base += 0.006
+    if age >= 33 and profile.get("recentWinPct") is not None and float(num(profile.get("recentWinPct"), 0)) < 0.40:
+        base -= 0.008
+    if rights_bonus:
+        base += 0.026
+
+    return round(clamp(base, 0.000, 0.085), 3)
+
+
+
+
+def find_player_for_rights_context(
+    league_data: Dict[str, Any],
+    player_id: Optional[Any] = None,
+    player_name: str = "",
+    player_key: str = "",
+) -> Optional[Dict[str, Any]]:
+    """UI-only lookup for rights-renounced context rows."""
+    if not league_data:
+        return None
+
+    pools = [league_data.get("freeAgents", [])]
+    for _, _, team in iter_teams(league_data):
+        pools.append(team.get("players", []))
+
+    for pool in pools:
+        if not isinstance(pool, list):
+            continue
+        for player in pool:
+            if not isinstance(player, dict):
+                continue
+            if player_id not in [None, ""] and player.get("id") == player_id:
+                return player
+            if player_name and player.get("name") == player_name:
+                return player
+            if player_key and get_player_key(player.get("id"), player.get("name")) == player_key:
+                return player
+
+    return None
+
+
+def build_rights_renounce_context(
+    league_data: Dict[str, Any],
+    team_name: str,
+    row: Dict[str, Any],
+    target_player: Optional[Dict[str, Any]] = None,
+    target_player_name: str = "",
+    target_player_key: str = "",
+) -> Dict[str, Any]:
+    """Add frontend explanation metadata for a rights-renounced row.
+
+    This is deliberately UI-only. It does not change cap math, offer selection,
+    player movement, CPU pacing, signings, or rights decisions.
+    """
+    try:
+        _, _, team = find_team_entry(league_data, team_name)
+        team_profile = build_team_roster_profile(team, league_data = league_data) if team else {}
+        results_profile = team_profile.get("resultsProfile", {}) if isinstance(team_profile, dict) else {}
+        weakest_positions = team_profile.get("weakestPositions", []) if isinstance(team_profile, dict) else []
+        direction_reasons = team_profile.get("directionReasons", []) if isinstance(team_profile, dict) else []
+
+        renounced_player = find_player_for_rights_context(
+            league_data = league_data,
+            player_id = row.get("playerId"),
+            player_name = row.get("playerName") or row.get("name") or "",
+            player_key = row.get("playerKey") or "",
+        ) or {}
+
+        if target_player is None:
+            target_player = find_player_for_rights_context(
+                league_data = league_data,
+                player_name = target_player_name or row.get("targetPlayerName") or row.get("triggerPlayerName") or "",
+                player_key = target_player_key or row.get("targetPlayerKey") or "",
+            )
+        target_player = target_player or {}
+
+        resolved_target_name = (
+            target_player.get("name")
+            or target_player_name
+            or row.get("targetPlayerName")
+            or row.get("triggerPlayerName")
+            or ""
+        )
+        resolved_target_key = (
+            target_player_key
+            or row.get("targetPlayerKey")
+            or (get_player_key(target_player.get("id"), target_player.get("name")) if target_player else "")
+        )
+
+        wins = results_profile.get("lastSeasonWins")
+        losses = results_profile.get("lastSeasonLosses")
+        recent_record = ""
+        if wins is not None and losses is not None:
+            recent_record = f"{int(num(wins, 0))}-{int(num(losses, 0))}"
+
+        return {
+            "source": row.get("source") or "CPU auto-renounce",
+            "triggerPlayerName": row.get("triggerPlayerName") or resolved_target_name,
+            "targetPlayerName": resolved_target_name,
+            "targetPlayerKey": resolved_target_key,
+            "targetPlayerPosition": target_player.get("pos") or target_player.get("position") or row.get("targetPlayerPosition") or "",
+            "targetPlayerOverall": target_player.get("overall") if target_player.get("overall") is not None else row.get("targetPlayerOverall"),
+            "targetPlayerAge": target_player.get("age") if target_player.get("age") is not None else row.get("targetPlayerAge"),
+            "teamDirection": team_profile.get("direction", row.get("teamDirection", "")) if isinstance(team_profile, dict) else row.get("teamDirection", ""),
+            "directionConfidence": team_profile.get("directionConfidence", row.get("directionConfidence")) if isinstance(team_profile, dict) else row.get("directionConfidence"),
+            "directionReasons": list(direction_reasons)[:4] if isinstance(direction_reasons, list) else [],
+            "recentRecord": recent_record or row.get("recentRecord", ""),
+            "lastSeasonWins": wins if wins is not None else row.get("lastSeasonWins"),
+            "lastSeasonLosses": losses if losses is not None else row.get("lastSeasonLosses"),
+            "lastSeasonSeed": results_profile.get("lastSeasonSeed", row.get("lastSeasonSeed")) if isinstance(results_profile, dict) else row.get("lastSeasonSeed"),
+            "lastSeasonPlayoffResult": results_profile.get("lastSeasonPlayoffResult", row.get("lastSeasonPlayoffResult", "")) if isinstance(results_profile, dict) else row.get("lastSeasonPlayoffResult", ""),
+            "lastSeasonRoundReached": results_profile.get("lastSeasonRoundReached", row.get("lastSeasonRoundReached")) if isinstance(results_profile, dict) else row.get("lastSeasonRoundReached"),
+            "teamNeedPositions": list(weakest_positions)[:3] if isinstance(weakest_positions, list) else [],
+            "weakestPositions": list(weakest_positions)[:3] if isinstance(weakest_positions, list) else [],
+            "renouncedPlayerPosition": row.get("renouncedPlayerPosition") or row.get("position") or row.get("pos") or renounced_player.get("pos") or renounced_player.get("position") or "",
+            "renouncedPlayerOverall": row.get("renouncedPlayerOverall") if row.get("renouncedPlayerOverall") is not None else (row.get("overall") if row.get("overall") is not None else renounced_player.get("overall")),
+            "renouncedPlayerAge": row.get("renouncedPlayerAge") if row.get("renouncedPlayerAge") is not None else (row.get("age") if row.get("age") is not None else renounced_player.get("age")),
+            "renouncedPlayerPotential": row.get("renouncedPlayerPotential") if row.get("renouncedPlayerPotential") is not None else (row.get("potential") if row.get("potential") is not None else renounced_player.get("potential")),
+        }
+    except Exception:
+        return {}
+
+def record_cpu_cap_hold_renounce_audit(
+    league_data: Dict[str, Any],
+    team_name: str,
+    current_day: Optional[int],
+    target_player: Optional[Dict[str, Any]],
+    plan: Dict[str, Any],
+    renounced: Optional[List[Dict[str, Any]]] = None,
+) -> None:
+    state = ensure_free_agency_state(league_data)
+    day = int(num(current_day, state.get("currentDay", 0))) if current_day is not None else int(num(state.get("currentDay"), 0))
+    target_name = target_player.get("name") if target_player is not None else plan.get("targetPlayerName")
+    target_key = get_player_key(target_player.get("id"), target_player.get("name")) if target_player is not None else plan.get("targetPlayerKey")
+
+    existing_keys = set()
+    for item in state.setdefault("rightsRenounceLog", []):
+        existing_keys.add((
+            int(num(item.get("day"), 0)),
+            item.get("teamName"),
+            item.get("playerKey"),
+            item.get("targetPlayerKey"),
+            int(num(item.get("capHoldCleared"), 0)),
+            item.get("type"),
+        ))
+
+    for row in renounced or []:
+        key = (
+            day,
+            team_name,
+            row.get("playerKey"),
+            target_key,
+            int(num(row.get("capHoldCleared") or row.get("capHoldAmount"), 0)),
+            "cpu_auto_renounce",
+        )
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        state.setdefault("rightsRenounceLog", []).append({
+            "day": day,
+            "type": "cpu_auto_renounce",
+            "teamName": team_name,
+            "playerKey": row.get("playerKey"),
+            "playerId": row.get("playerId"),
+            "playerName": row.get("playerName"),
+            "capHoldCleared": int(num(row.get("capHoldCleared") or row.get("capHoldAmount"), 0)),
+            "targetPlayerName": target_name,
+            "targetPlayerKey": target_key,
+            "targetValueScore": row.get("targetValueScore") or plan.get("targetValueScore"),
+            "holdValueScore": row.get("holdValueScore"),
+            "holdCategory": row.get("holdCategory") or row.get("holdValue", {}).get("category"),
+            "reason": row.get("reason") or "cpu_cleared_cap_hold_for_signing",
+        })
+        state["rightsRenounceLog"][-1].update(build_rights_renounce_context(
+            league_data = league_data,
+            team_name = team_name,
+            row = state["rightsRenounceLog"][-1],
+            target_player = target_player,
+            target_player_name = target_name or "",
+            target_player_key = target_key or "",
+        ))
+
+    blocked_existing_keys = set()
+    for item in state.setdefault("blockedCapHoldRenounceLog", []):
+        blocked_existing_keys.add((
+            int(num(item.get("day"), 0)),
+            item.get("teamName"),
+            item.get("playerKey"),
+            item.get("targetPlayerKey"),
+            item.get("blockedReason"),
+        ))
+
+    for row in plan.get("blockedRows", []) or []:
+        key = (day, team_name, row.get("playerKey"), target_key, row.get("blockedReason"))
+        if key in blocked_existing_keys:
+            continue
+        blocked_existing_keys.add(key)
+        state.setdefault("blockedCapHoldRenounceLog", []).append({
+            "day": day,
+            "type": "cpu_auto_renounce_blocked",
+            "teamName": team_name,
+            "playerKey": row.get("playerKey"),
+            "playerId": row.get("playerId"),
+            "playerName": row.get("playerName"),
+            "capHoldAmount": int(num(row.get("capHoldAmount"), 0)),
+            "targetPlayerName": target_name,
+            "targetPlayerKey": target_key,
+            "targetValueScore": row.get("targetValueScore") or plan.get("targetValueScore"),
+            "holdValueScore": row.get("holdValueScore"),
+            "blockedReason": row.get("blockedReason"),
+        })
+
 def auto_renounce_cpu_cap_holds_for_room(
     league_data: Dict[str, Any],
     team_name: str,
     clearance_needed: int,
     protected_player_key: Optional[str] = None,
+    target_player: Optional[Dict[str, Any]] = None,
+    current_day: Optional[int] = None,
 ) -> Dict[str, Any]:
-    # CPU-only helper. It clears lower-priority holds when a CPU team has enough
-    # raw cap room for a real target but temporary holds are blocking the signing.
+    # CPU-only helper. Keep the good pacing engine intact, but make the final
+    # cap-hold clearance smarter: clear low-priority holds for real upgrades,
+    # and refuse to sacrifice protected young/core players or better holds.
     needed = int(num(clearance_needed, 0))
     if needed <= 0:
-        return {"ok": True, "renounced": [], "capHoldCleared": 0}
+        return {
+            "ok": True,
+            "renounced": [],
+            "blockedRenounces": [],
+            "capHoldCleared": 0,
+            "clearanceNeeded": 0,
+        }
 
-    rows = [
-        row for row in get_team_cap_hold_rows(league_data, team_name)
-        if not protected_player_key or row.get("playerKey") != protected_player_key
-    ]
-
-    rows.sort(
-        key = lambda row: (
-            int(num(row.get("overall"), 0)),
-            -int(num(row.get("age"), 27)),
-            int(num(row.get("capHoldAmount"), 0)),
-            str(row.get("playerName", "")),
-        )
+    plan = get_cpu_cap_hold_clearance_plan(
+        league_data = league_data,
+        team_name = team_name,
+        clearance_needed = needed,
+        protected_player_key = protected_player_key,
+        target_player = target_player,
     )
+
+    if not plan.get("ok"):
+        record_cpu_cap_hold_renounce_audit(
+            league_data = league_data,
+            team_name = team_name,
+            current_day = current_day,
+            target_player = target_player,
+            plan = plan,
+            renounced = [],
+        )
+        return {
+            "ok": False,
+            "renounced": [],
+            "blockedRenounces": plan.get("blockedRows", []),
+            "capHoldCleared": int(num(plan.get("capHoldCleared"), 0)),
+            "clearanceNeeded": needed,
+            "targetPlayerName": plan.get("targetPlayerName"),
+            "targetValueScore": plan.get("targetValueScore"),
+            "reason": "CPU could not clear cap holds without sacrificing protected or higher-value rights.",
+        }
 
     cleared = 0
     renounced = []
 
-    for row in rows:
+    for row in plan.get("renounceRows", []):
         if cleared >= needed:
             break
 
@@ -1456,76 +1939,49 @@ def auto_renounce_cpu_cap_holds_for_room(
         player.pop("qualifyingOfferEligible", None)
 
         cleared += int(hold_amount)
-        renounce_row = {
+        renounced.append({
             "playerKey": get_cap_hold_player_key(player),
             "playerId": player.get("id"),
             "playerName": player.get("name"),
             "teamName": team_name,
             "capHoldCleared": int(hold_amount),
+            "holdValueScore": row.get("holdValueScore"),
+            "targetValueScore": row.get("targetValueScore"),
+            "targetPlayerName": row.get("targetPlayerName"),
+            "holdCategory": row.get("holdValue", {}).get("category") if isinstance(row.get("holdValue"), dict) else None,
             "reason": "cpu_cleared_cap_hold_for_signing",
-        }
-        renounced.append(renounce_row)
-        record_rights_renounce_log(
+        })
+        renounced[-1].update(build_rights_renounce_context(
             league_data = league_data,
-            row = renounce_row,
-            source = "CPU auto-renounce",
-            reason = "Cleared cap hold to create room for a signing",
-            trigger_player_name = "",
-        )
+            team_name = team_name,
+            row = renounced[-1],
+            target_player = target_player,
+            target_player_name = row.get("targetPlayerName") or "",
+            target_player_key = row.get("targetPlayerKey") or "",
+        ))
+
+    result_plan = copy.deepcopy(plan)
+    result_plan["renounceRows"] = renounced
+    record_cpu_cap_hold_renounce_audit(
+        league_data = league_data,
+        team_name = team_name,
+        current_day = current_day,
+        target_player = target_player,
+        plan = result_plan,
+        renounced = renounced,
+    )
 
     return {
         "ok": cleared >= needed,
         "renounced": renounced,
+        "blockedRenounces": plan.get("blockedRows", []),
         "capHoldCleared": cleared,
         "clearanceNeeded": needed,
+        "targetPlayerName": plan.get("targetPlayerName"),
+        "targetPlayerKey": plan.get("targetPlayerKey"),
+        "targetValueScore": plan.get("targetValueScore"),
     }
 
-
-
-def record_rights_renounce_log(
-    league_data: Dict[str, Any],
-    row: Dict[str, Any],
-    source: str = "rights_renounced",
-    reason: str = "renounced rights",
-    trigger_player_name: str = "",
-) -> None:
-    state = ensure_free_agency_state(league_data)
-    log = state.setdefault("rightsRenounceLog", [])
-
-    item = {
-        "day": int(num(state.get("currentDay"), 0)),
-        "playerKey": row.get("playerKey"),
-        "playerId": row.get("playerId"),
-        "playerName": row.get("playerName") or row.get("name"),
-        "teamName": row.get("teamName") or row.get("heldByTeam"),
-        "capHoldCleared": int(num(row.get("capHoldCleared") or row.get("capHoldAmount") or row.get("capHold"), 0)),
-        "source": source,
-        "reason": reason,
-        "triggerPlayerName": trigger_player_name,
-    }
-
-    key = (
-        item.get("day"),
-        item.get("playerId"),
-        item.get("playerName"),
-        item.get("teamName"),
-        item.get("capHoldCleared"),
-        item.get("source"),
-    )
-
-    for existing in log:
-        existing_key = (
-            existing.get("day"),
-            existing.get("playerId"),
-            existing.get("playerName"),
-            existing.get("teamName"),
-            int(num(existing.get("capHoldCleared"), 0)),
-            existing.get("source"),
-        )
-        if existing_key == key:
-            return
-
-    log.append(item)
 
 
 def _optional_int(value: Any) -> Optional[int]:
@@ -3010,7 +3466,12 @@ def estimate_team_free_agent_fit(
 # ------------------------------------------------------------
 # OFFSEASON CONTRACT DECISIONS
 # ------------------------------------------------------------
-def decide_player_option(player: Dict[str, Any], season_year: int) -> Dict[str, Any]:
+def decide_player_option(
+    player: Dict[str, Any],
+    season_year: int,
+    team: Optional[Dict[str, Any]] = None,
+    league_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     contract = normalize_contract(player.get("contract"))
     active_option = get_active_option_for_year(contract, season_year)
     market_value = player.get("marketValue") or estimate_market_value(player)
@@ -3030,22 +3491,48 @@ def decide_player_option(player: Dict[str, Any], season_year: int) -> Dict[str, 
     age = int(num(player.get("age"), 27))
     overall = num(player.get("overall"), 75)
     potential = num(player.get("potential"), overall)
+    upside = max(0.0, potential - overall)
 
-    score = 0.0
-    score += option_salary / max(1.0, float(expected_aav))
+    market_gap = (expected_aav - option_salary) / max(1.0, float(option_salary))
+
+    decline_threshold = 0.16
 
     if age >= 32:
-        score += 0.12
+        decline_threshold += 0.06
     if age >= 35:
-        score += 0.18
-    if potential - overall >= 3:
-        score -= 0.10
+        decline_threshold += 0.08
+    if upside >= 3:
+        decline_threshold -= 0.04
     if age <= 26 and overall >= 78:
-        score -= 0.08
+        decline_threshold -= 0.04
     if expected_years >= 3:
-        score -= 0.05
+        decline_threshold -= 0.03
 
-    exercise = score >= 1.0
+    if team is not None and league_data is not None:
+        team_name = get_team_name_from_team(team)
+        results_profile = build_recent_team_results_profile(league_data, team_name)
+
+        if results_profile.get("historyAvailable"):
+            last_wins = results_profile.get("lastSeasonWins")
+            recent_win_pct = results_profile.get("recentWinPct")
+
+            if results_profile.get("lastSeasonChampion") or results_profile.get("lastSeasonFinals"):
+                decline_threshold += 0.04
+            elif results_profile.get("lastSeasonConferenceFinals"):
+                decline_threshold += 0.03
+            elif last_wins is not None and last_wins >= 50:
+                decline_threshold += 0.025
+            elif last_wins is not None and last_wins >= 42:
+                decline_threshold += 0.015
+
+            if last_wins is not None and last_wins <= 25:
+                decline_threshold -= 0.035
+            elif recent_win_pct is not None and recent_win_pct < 0.32:
+                decline_threshold -= 0.025
+
+    decline_threshold = clamp(decline_threshold, 0.08, 0.32)
+    score = 1.0 + decline_threshold - market_gap
+    exercise = market_gap < decline_threshold
 
     return {
         "hasDecision": True,
@@ -3087,78 +3574,95 @@ def decide_cpu_team_option(
     direction = direction_info["direction"]
 
     value_ratio = expected_aav / max(1.0, float(option_salary))
-    score = value_ratio
-    score += max(0.0, (overall - 74.0) * 0.025)
-    score += max(0.0, upside * 0.04)
+    salary_cap = get_salary_cap(league_data or {})
 
-    if overall >= 78:
-        score += 0.30
+    # Young team-control contracts should be treated like assets, not like
+    # normal veteran option years. NBA teams almost always keep cheap rookie /
+    # young-player options unless the salary is genuinely painful.
+    cheap_young_option_limit = int(round_to_nearest(max(6_500_000, salary_cap * 0.045), base = 1_000))
+    small_young_option_limit = int(round_to_nearest(max(12_500_000, salary_cap * 0.080), base = 1_000))
+    rookie_asset_option_limit = int(round_to_nearest(max(18_500_000, salary_cap * 0.120), base = 1_000))
+
+    rights = get_player_rights(player)
+    rookie_scale_control = bool(rights.get("rookieScale"))
+
+    cheap_young_control = (
+        age <= 24
+        and option_salary <= cheap_young_option_limit
+        and (overall >= 64 or potential >= 68)
+    )
+    small_young_control = (
+        age <= 25
+        and option_salary <= small_young_option_limit
+        and (overall >= 68 or potential >= 71 or upside >= 2)
+    )
+    rookie_asset_control = (
+        rookie_scale_control
+        and age <= 25
+        and option_salary <= rookie_asset_option_limit
+        and (overall >= 66 or potential >= 70 or upside >= 2)
+    )
+    young_asset_control = bool(
+        cheap_young_control
+        or small_young_control
+        or rookie_asset_control
+    )
+
+    score = value_ratio
+    score += max(0.0, (overall - 74.0) * 0.020)
+    score += max(0.0, upside * 0.025)
+
+    if overall >= 82:
+        score += 0.18
+    elif overall >= 78:
+        score += 0.12
     elif overall >= 75:
-        score += 0.16
-    elif overall >= 72:
         score += 0.06
 
     if age <= 25 and overall >= 72:
-        score += 0.22
-    if age <= 27 and upside >= 2:
-        score += 0.18
-    if age <= 24 and upside >= 3:
-        score += 0.14
+        score += 0.10
+    if age <= 27 and upside >= 3:
+        score += 0.08
+    if young_asset_control:
+        score += 0.28
 
-    if direction in ["contending", "win now"]:
+    if direction == "contending":
         if overall >= 76:
-            score += 0.16
-        if age >= 29 and overall >= 78:
-            score += 0.08
-    elif direction in ["rebuilding"]:
-        if age <= 27:
-            score += 0.14
-        if upside >= 3:
-            score += 0.14
-        if age >= 31 and overall <= 78 and upside <= 1:
-            score -= 0.20
-    elif direction == "retooling":
-        if age <= 29:
-            score += 0.08
-        if upside >= 2:
-            score += 0.08
-    else:
-        if 24 <= age <= 31:
-            score += 0.05
-        if overall >= 77:
+            score += 0.10
+        if age >= 29 and overall >= 76:
             score += 0.05
 
-    if option_salary <= int(round(expected_aav * 0.90)):
-        score += 0.12
-    elif option_salary <= int(round(expected_aav * 1.00)):
-        score += 0.06
-    elif option_salary >= int(round(expected_aav * 1.20)):
-        score -= 0.14
-
-    if age >= 34 and overall <= 79:
-        score -= 0.12
-    if age >= 36 and overall <= 81:
-        score -= 0.16
+    if option_salary <= expected_aav:
+        score += 0.10
+    elif value_ratio < 0.50:
+        score -= 0.20
+    elif value_ratio < 0.65:
+        score -= 0.10
 
     exercise = False
 
-    if overall >= 78:
+    if young_asset_control:
         exercise = True
-    elif age <= 25 and overall >= 72:
+    elif expected_aav >= option_salary:
         exercise = True
-    elif age <= 27 and upside >= 3 and overall >= 71:
+    elif value_ratio >= 0.80:
         exercise = True
-    elif option_salary <= int(round(expected_aav * 1.08)) and overall >= 75:
+    elif value_ratio >= 0.65 and overall >= 74:
         exercise = True
-    elif option_salary <= int(round(expected_aav * 0.95)) and overall >= 72:
+    elif value_ratio >= 0.58 and overall >= 78:
+        exercise = True
+    elif value_ratio >= 0.55 and age <= 25 and overall >= 72:
+        exercise = True
+    elif value_ratio >= 0.55 and age <= 27 and upside >= 3 and overall >= 71:
+        exercise = True
+    elif direction == "contending" and value_ratio >= 0.55 and overall >= 75:
+        exercise = True
+    elif direction == "contending" and value_ratio >= 0.50 and overall >= 78:
+        exercise = True
+    elif value_ratio >= 0.50 and overall >= 82:
         exercise = True
     else:
-        threshold = 1.02
-        if age >= 32 and overall <= 77 and upside <= 1:
-            threshold = 1.08
-        if age >= 35 and overall <= 80:
-            threshold = 1.12
-        exercise = score >= threshold
+        exercise = score >= 1.05
 
     return {
         "hasDecision": True,
@@ -3317,7 +3821,12 @@ def build_contract_status_row(
         row["option"] = active_option
 
         if active_option["type"] == "player":
-            row["playerOptionDecision"] = decide_player_option(player, upcoming_year)
+            row["playerOptionDecision"] = decide_player_option(
+                player = player,
+                season_year = upcoming_year,
+                team = team,
+                league_data = league_data,
+            )
         elif active_option["type"] == "team":
             row["cpuTeamOptionDecision"] = decide_cpu_team_option(
                 team,
@@ -3550,7 +4059,12 @@ def apply_offseason_contract_decisions(
                 continue
 
             if active_option and active_option.get("type") == "player":
-                decision = decide_player_option(player, upcoming_year)
+                decision = decide_player_option(
+                    player = player,
+                    season_year = upcoming_year,
+                    team = team,
+                    league_data = updated,
+                )
                 if decision["exerciseOption"]:
                     kept_player = copy.deepcopy(player)
                     kept_player["contract"] = apply_option_exercise_to_contract(
@@ -3728,11 +4242,12 @@ def ensure_free_agency_state(league_data: Dict[str, Any]) -> Dict[str, Any]:
     state.setdefault("userOfferOutcomeLog", [])
     state.setdefault("pendingUserDecisions", [])
     state.setdefault("pendingRfaMatchDecisions", [])
-    state.setdefault("rightsRenounceLog", [])
     state.setdefault("pendingUserTeamName", None)
     state.setdefault("pendingUserTeamSnapshot", None)
     state.setdefault("exceptionUsageByTeam", {})
     state.setdefault("teamNeedProfiles", {})
+    state.setdefault("rightsRenounceLog", [])
+    state.setdefault("blockedCapHoldRenounceLog", [])
     return state
 
 
@@ -5290,25 +5805,50 @@ def get_active_offer_limit_for_team(
     roster_deficit = max(0, roster_target - current_roster_count)
     snapshot = get_team_cap_snapshot(league_data, team_name)
     cap_room = int(snapshot.get("capRoom", 0)) if snapshot.get("ok") else 0
+    raw_room = int(snapshot.get("rawCapRoomWithoutHolds", cap_room)) if snapshot.get("ok") else cap_room
+    planning_room = max(cap_room, raw_room)
+    current_day = int(num(state.get("currentDay"), 1)) if isinstance(state, dict) else 1
 
-    if roster_deficit >= 4:
-        desired_limit = 14
-    elif roster_deficit >= 3:
-        desired_limit = 12
-    elif roster_deficit >= 2:
-        desired_limit = 11
-    elif roster_deficit >= 1:
-        desired_limit = 9
-    elif cap_room >= 20_000_000:
-        desired_limit = 8
-    elif cap_room >= 8_000_000:
-        desired_limit = 7
-    elif current_roster_count <= roster_target + 1:
-        desired_limit = 6
-    else:
+    # Live offers are conditional paths, not completed signings. Teams with real
+    # raw cap room should be willing to keep multiple star/starter offers alive,
+    # then decide which holds to renounce only after players accept.
+    if current_day <= 1:
         desired_limit = 4
+        if planning_room >= 55_000_000:
+            desired_limit = 9
+        elif planning_room >= 40_000_000:
+            desired_limit = 8
+        elif planning_room >= 28_000_000:
+            desired_limit = 7
+        elif planning_room >= 18_000_000 or roster_deficit >= 3:
+            desired_limit = 5
+    elif current_day <= 2:
+        desired_limit = 5
+        if planning_room >= 55_000_000:
+            desired_limit = 10
+        elif planning_room >= 40_000_000:
+            desired_limit = 9
+        elif planning_room >= 28_000_000:
+            desired_limit = 8
+        elif planning_room >= 18_000_000 or roster_deficit >= 3:
+            desired_limit = 6
+    elif current_day <= 4:
+        desired_limit = 6
+        if planning_room >= 55_000_000:
+            desired_limit = 10
+        elif planning_room >= 40_000_000:
+            desired_limit = 9
+        elif planning_room >= 28_000_000 or roster_deficit >= 3:
+            desired_limit = 8
+    else:
+        desired_limit = 7
+        if planning_room >= 40_000_000 or roster_deficit >= 3:
+            desired_limit = 9
 
-    return int(clamp(desired_limit, 0, 16))
+    if current_roster_count >= get_roster_limit(league_data):
+        desired_limit = 0
+
+    return int(clamp(desired_limit, 0, 10))
 
 def get_outstanding_offer_year1_total(
     state: Dict[str, Any],
@@ -6437,15 +6977,14 @@ def get_contract_option_player_score_adjustment(contract: Optional[Dict[str, Any
     option_type = option.get("type")
     years = len(contract.get("salaryByYear", []))
 
-    # Options only matter meaningfully on multi-year deals. A player option is
-    # valuable to the player; a team option is less attractive unless the salary
-    # is strong enough to compensate elsewhere in the offer.
+    # Options should be a small preference nudge, not a major driver.
+    # Money and years should decide most of the player's interest.
     if years <= 1:
         return 0.0
     if option_type == "player":
-        return 0.075
+        return 0.020
     if option_type == "team":
-        return -0.080
+        return -0.025
     return 0.0
 
 
@@ -6458,12 +6997,14 @@ def get_option_required_aav_multiplier(contract: Optional[Dict[str, Any]]) -> fl
     option_type = option.get("type")
     years = len(contract.get("salaryByYear", []))
 
+    # Keep option impact light. A player option helps, a team option hurts,
+    # but neither should turn a fair-market offer into an automatic yes/no.
     if years <= 1:
         return 1.0
     if option_type == "player":
-        return 0.965
+        return 0.985
     if option_type == "team":
-        return 1.065
+        return 1.020
     return 1.0
 
 
@@ -6603,6 +7144,7 @@ def score_offer_for_player(
     offer: Dict[str, Any]
 ) -> float:
     market_value = player.get("marketValue") or estimate_market_value(player)
+    expected_aav = int(max(MIN_DEAL, num(market_value.get("expectedAAV"), MIN_DEAL)))
     expected_years = int(market_value["expectedYears"])
 
     offered_aav = int(num(offer.get("aav"), 0))
@@ -6617,14 +7159,8 @@ def score_offer_for_player(
             "option": None,
         })
 
-    threshold = get_market_acceptance_threshold(
-        league_data = league_data,
-        player = player,
-        contract = contract,
-        exclude_offer_id = offer.get("offerId"),
-    )
-
-    required_aav = int(max(MIN_DEAL, num(threshold.get("requiredAAV"), MIN_DEAL)))
+    salary_ratio = offered_aav / max(1.0, float(expected_aav))
+    score = get_offer_money_interest_score(salary_ratio)
 
     _, _, team = find_team_entry(league_data, team_name)
     direction = classify_team_direction(team, league_data = league_data)["direction"] if team else "balanced"
@@ -6638,39 +7174,48 @@ def score_offer_for_player(
         else None
     )
 
-    score = 0.0
-    score += offered_aav / max(1.0, float(required_aav))
-    score -= abs(offered_years - expected_years) * 0.05
+    # Years/security matter, but less than money.
+    if offered_years == expected_years:
+        score += 0.015
+    else:
+        score -= min(0.080, abs(offered_years - expected_years) * 0.025)
+        if age >= 33 and offered_years > expected_years:
+            score -= 0.020
+        if age <= 26 and offered_years >= expected_years:
+            score += 0.015
+
     score += get_contract_option_player_score_adjustment(contract)
 
-    if threshold.get("autoAccept"):
-        score = max(score, 1.08)
-
+    # Familiarity and rights are modest finishing touches, not major overrides.
+    # Keep this close to the known-good pacing version so return teams do not
+    # create an early Day 2/Day 3 signing avalanche by themselves.
     if previous_team and previous_team == team_name:
-        score += 0.07
-
+        score += 0.035
     if is_rights_team(player, team_name):
-        score += 0.08
-
+        score += 0.035
     if get_player_rights(player).get("restrictedFreeAgent") and is_rights_team(player, team_name):
-        score += 0.05
+        score += 0.020
 
     if age >= 30 and direction in ["contending", "win now"]:
-        score += 0.08
-    if age >= 34 and direction in ["contending", "win now"]:
-        score += 0.04
+        score += 0.025
     if age <= 25 and direction in ["rebuilding", "retooling"]:
-        score += 0.07
+        score += 0.025
     if potential - overall >= 2 and direction in ["rebuilding", "retooling"]:
-        score += 0.05
+        score += 0.018
+
     if team:
         fit = estimate_team_free_agent_fit(team, player, league_data = league_data)
-        score += float(fit.get("needScore", 0.0)) * 0.035
-        if fit.get("positionBucket") in (fit.get("weakestPositions", []) or [])[:2]:
-            score += 0.025
+        need_score = float(num(fit.get("needScore"), 0.0))
+        score += need_score * 0.040
+        if fit.get("positionBucket") in (fit.get("weakestPositions", []) or [])[:1]:
+            score += 0.018
+        elif fit.get("positionBucket") in (fit.get("weakestPositions", []) or [])[:2]:
+            score += 0.010
 
-    if age >= 34 and offered_years >= 3:
-        score -= 0.06
+    if age >= 35 and offered_years >= 3:
+        score -= 0.050
+    elif age >= 33 and offered_years >= 3 and overall < 84:
+        score -= 0.035
 
     delay_count = int(num(offer.get("userDecisionDelayCount"), 0))
     if delay_count > 0:
@@ -6680,7 +7225,7 @@ def score_offer_for_player(
     if explicit_penalty > 0:
         score -= min(0.35, explicit_penalty)
 
-    return round(score, 3)
+    return round(clamp(score, 0.02, 1.05), 3)
 
 
 def build_free_agency_state_summary(league_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -6707,7 +7252,603 @@ def build_free_agency_state_summary(league_data: Dict[str, Any]) -> Dict[str, An
         "pendingUserDecisionCount": len(state.get("pendingUserDecisions", [])),
         "pendingRfaMatchDecisionCount": len(state.get("pendingRfaMatchDecisions", [])),
         "exceptionUsageByTeam": copy.deepcopy(state.get("exceptionUsageByTeam", {})),
+        "rightsRenounceLog": copy.deepcopy(state.get("rightsRenounceLog", [])),
+        "blockedCapHoldRenounceLog": copy.deepcopy(state.get("blockedCapHoldRenounceLog", [])),
+        "rightsRenouncedCount": len(state.get("rightsRenounceLog", [])),
+        "blockedCapHoldRenounceCount": len(state.get("blockedCapHoldRenounceLog", [])),
     }
+
+def get_cpu_serious_offer_floor_ratio(
+    player: Dict[str, Any],
+    current_day: int,
+    max_days: int,
+    incumbent_priority: bool = False,
+) -> float:
+    overall = int(round(num(player.get("overall"), 0)))
+    age = int(num(player.get("age"), 27))
+    potential = int(round(num(player.get("potential"), overall)))
+    upside = max(0, potential - overall)
+    max_days = max(1, int(num(max_days, DEFAULT_FREE_AGENCY_DAYS)))
+    day_progress = clamp((current_day - 1) / max(1.0, float(max_days - 1)), 0.0, 1.0)
+
+    if overall >= 90:
+        floor = 0.93 - (0.08 * day_progress)
+    elif overall >= 87:
+        floor = 0.89 - (0.08 * day_progress)
+    elif overall >= 84:
+        floor = 0.82 - (0.09 * day_progress)
+    elif overall >= 81:
+        floor = 0.75 - (0.10 * day_progress)
+    elif overall >= 78:
+        floor = 0.66 - (0.10 * day_progress)
+    elif overall >= 75:
+        floor = 0.54 - (0.10 * day_progress)
+    else:
+        floor = 0.40 - (0.06 * day_progress)
+
+    if age <= 25 and upside >= 3 and overall >= 77:
+        floor += 0.025
+    if age >= 32 and overall <= 80:
+        floor -= 0.040
+    if incumbent_priority:
+        floor -= 0.035
+
+    if overall >= 87:
+        floor = max(0.80, floor)
+    elif overall >= 82:
+        floor = max(0.68, floor)
+    elif overall >= 78:
+        floor = max(0.56, floor)
+    else:
+        floor = max(0.34, floor)
+
+    return round(clamp(floor, 0.34, 0.96), 3)
+
+
+def is_cpu_serious_offer_for_player(
+    player: Dict[str, Any],
+    contract: Dict[str, Any],
+    current_day: int,
+    max_days: int,
+    incumbent_priority: bool = False,
+    target_tier: str = "value",
+) -> bool:
+    contract = normalize_contract(contract)
+    if not contract:
+        return False
+
+    market_value = player.get("marketValue") or estimate_market_value(player)
+    expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
+    min_acceptable_aav = int(num(market_value.get("minAcceptableAAV"), MIN_DEAL))
+    salary_by_year = contract.get("salaryByYear", [])
+    offered_years = len(salary_by_year)
+    offered_aav = int(sum(salary_by_year) / max(1, offered_years))
+    overall = int(round(num(player.get("overall"), 0)))
+
+    # Minimum offers are serious only for true depth/fringe players. This blocks
+    # apron teams from fake-bidding on star or starter-level free agents.
+    if offered_aav <= int(MIN_DEAL * 1.25):
+        if expected_aav > int(MIN_DEAL * 1.55) and overall >= 75:
+            return False
+        if current_day <= 2 and target_tier != "depth" and not incumbent_priority:
+            return False
+        return True
+
+    floor_ratio = get_cpu_serious_offer_floor_ratio(
+        player = player,
+        current_day = current_day,
+        max_days = max_days,
+        incumbent_priority = incumbent_priority,
+    )
+    serious_floor = max(MIN_DEAL, int(expected_aav * floor_ratio))
+
+    if overall >= 84:
+        serious_floor = max(serious_floor, int(min_acceptable_aav * 0.90))
+    elif overall >= 78:
+        serious_floor = max(serious_floor, int(min_acceptable_aav * 0.82))
+
+    return offered_aav >= serious_floor
+
+
+def get_cpu_rights_hold_value_score(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+    team_name: str,
+) -> Dict[str, Any]:
+    rights = get_player_rights(player)
+    market_value = player.get("marketValue") or estimate_market_value(player)
+    expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
+    cap_hold = int(get_player_cap_hold_amount(
+        league_data = league_data,
+        player = player,
+        team_name = team_name,
+    ))
+
+    overall = int(round(num(player.get("overall"), 0)))
+    age = int(num(player.get("age"), 27))
+    potential = int(round(num(player.get("potential"), overall)))
+    upside = max(0, potential - overall)
+
+    fit = estimate_team_free_agent_fit(team, player, league_data = league_data)
+    direction = fit.get("teamDirection") or classify_team_direction(team, league_data = league_data).get("direction", "balanced")
+    need_score = float(num(fit.get("needScore"), 0.0))
+
+    hold_to_market = cap_hold / max(1.0, float(expected_aav))
+    score = 0.28
+    score += max(0.0, (overall - 74.0) * 0.045)
+    score += max(0.0, upside * 0.045)
+    score += need_score * 0.18
+
+    if rights.get("restrictedFreeAgent"):
+        score += 0.32
+    if rights.get("rookieScale"):
+        score += 0.18
+    if rights.get("birdLevel") == "bird":
+        score += 0.12
+    elif rights.get("birdLevel") == "early_bird":
+        score += 0.08
+    elif rights.get("birdLevel") == "non_bird":
+        score += 0.03
+
+    if direction in ["contending", "win now"]:
+        if overall >= 79:
+            score += 0.12
+        if age >= 29 and overall >= 77:
+            score += 0.06
+        if age <= 24 and overall <= 74:
+            score -= 0.04
+    elif direction == "rebuilding":
+        if age <= 26:
+            score += 0.12
+        if upside >= 3:
+            score += 0.10
+        if age >= 30 and overall <= 79:
+            score -= 0.18
+    elif direction == "retooling":
+        if age <= 28:
+            score += 0.08
+        if upside >= 2:
+            score += 0.07
+
+    if expected_aav >= cap_hold:
+        score += 0.18
+    elif hold_to_market >= 3.00:
+        score -= 0.78
+    elif hold_to_market >= 2.25:
+        score -= 0.56
+    elif hold_to_market >= 1.70:
+        score -= 0.36
+    elif hold_to_market >= 1.35:
+        score -= 0.18
+
+    high_hold_role_player = bool(
+        cap_hold >= 12_000_000
+        and expected_aav <= cap_hold * 0.70
+        and overall <= 79
+        and not rights.get("restrictedFreeAgent")
+    )
+    if high_hold_role_player:
+        score -= 0.35
+    if cap_hold >= 20_000_000 and expected_aav <= 12_000_000 and overall <= 80:
+        score -= 0.28
+    if overall <= 74 and age >= 28 and cap_hold >= 5_000_000:
+        score -= 0.18
+
+    if rights.get("restrictedFreeAgent") and age <= 26 and (overall >= 76 or potential >= 79):
+        category = "must_keep"
+        score = max(score, 1.05)
+    elif overall >= 83 and age <= 31:
+        category = "must_keep"
+        score = max(score, 0.96)
+    elif score >= 0.82:
+        category = "want_back"
+    elif score >= 0.48:
+        category = "keep_if_cheap"
+    elif high_hold_role_player or hold_to_market >= 1.70:
+        category = "easy_renounce"
+    else:
+        category = "renounce_candidate"
+
+    return {
+        "score": round(score, 3),
+        "category": category,
+        "capHold": cap_hold,
+        "expectedAAV": expected_aav,
+        "holdToMarket": round(hold_to_market, 3),
+        "needScore": round(need_score, 3),
+        "teamDirection": direction,
+        "highHoldRolePlayer": high_hold_role_player,
+    }
+
+
+def get_cpu_cap_hold_clearance_plan(
+    league_data: Dict[str, Any],
+    team_name: str,
+    clearance_needed: int,
+    protected_player_key: Optional[str] = None,
+    target_player: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    needed = int(num(clearance_needed, 0))
+    if needed <= 0:
+        return {
+            "ok": True,
+            "renounceRows": [],
+            "blockedRows": [],
+            "candidateRows": [],
+            "capHoldCleared": 0,
+            "clearanceNeeded": needed,
+        }
+
+    _, _, team = find_team_entry(league_data, team_name)
+    if team is None:
+        return {
+            "ok": False,
+            "renounceRows": [],
+            "blockedRows": [],
+            "candidateRows": [],
+            "capHoldCleared": 0,
+            "clearanceNeeded": needed,
+        }
+
+    target_name = target_player.get("name") if target_player is not None else None
+    target_key = get_player_key(target_player.get("id"), target_player.get("name")) if target_player is not None else None
+    target_value = get_player_asset_value_score(target_player) if target_player is not None else None
+
+    rows = [
+        row for row in get_team_cap_hold_rows(league_data, team_name)
+        if not protected_player_key or row.get("playerKey") != protected_player_key
+    ]
+
+    scored_rows = []
+    blocked_rows = []
+    candidate_rows = []
+
+    for row in rows:
+        player_idx = find_free_agent_index(
+            league_data.get("freeAgents", []),
+            row.get("playerId"),
+            row.get("playerName"),
+        )
+        if player_idx == -1:
+            continue
+
+        player = league_data["freeAgents"][player_idx]
+        rights = get_player_rights(player)
+        if rights.get("heldByTeam") != team_name:
+            continue
+
+        value = get_cpu_rights_hold_value_score(
+            league_data = league_data,
+            team = team,
+            player = player,
+            team_name = team_name,
+        )
+        category = value.get("category")
+        cap_hold = int(num(value.get("capHold"), row.get("capHoldAmount")))
+        hold_to_market = float(num(value.get("holdToMarket"), 1.0))
+        score = float(num(value.get("score"), 0.0))
+
+        enriched_row = copy.deepcopy(row)
+        enriched_row["holdValue"] = value
+        enriched_row["holdValueScore"] = get_cap_hold_row_asset_value_score(row)
+        enriched_row["targetPlayerName"] = target_name
+        enriched_row["targetPlayerKey"] = target_key
+        enriched_row["targetValueScore"] = target_value
+
+        renounce_check = should_allow_cpu_cap_hold_renounce_for_target(
+            league_data = league_data,
+            team_name = team_name,
+            row = row,
+            target_player = target_player,
+        )
+        enriched_row["holdValueScore"] = renounce_check.get("holdValueScore", enriched_row.get("holdValueScore"))
+        enriched_row["targetValueScore"] = renounce_check.get("targetValueScore", target_value)
+
+        if category == "must_keep":
+            enriched_row["blockedReason"] = "must_keep_hold"
+            blocked_rows.append(enriched_row)
+            continue
+
+        if not renounce_check.get("allow"):
+            enriched_row["blockedReason"] = renounce_check.get("blockedReason")
+            blocked_rows.append(enriched_row)
+            continue
+
+        sacrifice_score = score
+        sacrifice_score -= min(0.40, cap_hold / 60_000_000)
+        if value.get("highHoldRolePlayer"):
+            sacrifice_score -= 0.45
+        if hold_to_market >= 2.25:
+            sacrifice_score -= 0.30
+        elif hold_to_market >= 1.70:
+            sacrifice_score -= 0.18
+        if category == "easy_renounce":
+            sacrifice_score -= 0.30
+        elif category == "renounce_candidate":
+            sacrifice_score -= 0.12
+
+        candidate_rows.append(enriched_row)
+        scored_rows.append((
+            sacrifice_score,
+            -cap_hold,
+            str(row.get("playerName", "")),
+            enriched_row,
+            player,
+            value,
+        ))
+
+    scored_rows.sort(key = lambda item: (item[0], item[1], item[2]))
+
+    cleared = 0
+    chosen = []
+    for _, _, _, row, player, value in scored_rows:
+        if cleared >= needed:
+            break
+        cap_hold = int(num(value.get("capHold"), row.get("capHoldAmount")))
+        if cap_hold <= 0:
+            continue
+        cleared += cap_hold
+        chosen.append({
+            "playerKey": get_cap_hold_player_key(player),
+            "playerId": player.get("id"),
+            "playerName": player.get("name"),
+            "teamName": team_name,
+            "capHoldCleared": cap_hold,
+            "holdValue": value,
+            "holdValueScore": row.get("holdValueScore"),
+            "targetPlayerName": target_name,
+            "targetPlayerKey": target_key,
+            "targetValueScore": row.get("targetValueScore"),
+            "reason": "cpu_cleared_cap_hold_for_signing",
+        })
+
+    return {
+        "ok": cleared >= needed,
+        "renounceRows": chosen,
+        "blockedRows": blocked_rows,
+        "candidateRows": candidate_rows,
+        "capHoldCleared": cleared,
+        "clearanceNeeded": needed,
+        "targetPlayerName": target_name,
+        "targetPlayerKey": target_key,
+        "targetValueScore": target_value,
+    }
+
+
+
+def get_player_required_interest_for_day(
+    player: Dict[str, Any],
+    current_day: int,
+    max_days: int,
+) -> float:
+    max_days = max(1, int(num(max_days, DEFAULT_FREE_AGENCY_DAYS)))
+    current_day = int(clamp(current_day, 1, max_days))
+
+    # Surgical pacing patch:
+    # Offers are soft market signals. Players should be interested early, but
+    # most should not be ready to close until the market has had time to breathe.
+    # This keeps Days 1-3 from swallowing the whole class while still allowing
+    # elite overpay/perfect-fit offers to close before the late market.
+    if max_days == 1:
+        base = 0.50
+    else:
+        scaled_day = 1.0 + ((current_day - 1) * 9.0 / max(1.0, float(max_days - 1)))
+        curve = [
+            (1.0, 0.980),
+            (2.0, 0.955),
+            (3.0, 0.925),
+            (4.0, 0.890),
+            (5.0, 0.840),
+            (6.0, 0.775),
+            (7.0, 0.700),
+            (8.0, 0.625),
+            (9.0, 0.560),
+            (10.0, 0.500),
+        ]
+        base = curve[-1][1]
+        for idx in range(1, len(curve)):
+            x0, y0 = curve[idx - 1]
+            x1, y1 = curve[idx]
+            if scaled_day <= x1:
+                t = (scaled_day - x0) / max(0.0001, x1 - x0)
+                base = y0 + ((y1 - y0) * t)
+                break
+
+    overall = int(round(num(player.get("overall"), 0)))
+    age = int(num(player.get("age"), 27))
+    potential = int(round(num(player.get("potential"), overall)))
+
+    patience = 1.0 - ((current_day - 1) / max(1.0, float(max_days)))
+    if overall >= 88:
+        base += 0.025 * patience
+    elif overall >= 83:
+        base += 0.014 * patience
+    elif overall <= 74 and (age >= 27 or potential <= overall + 1):
+        base -= 0.025
+    elif overall <= 77:
+        base -= 0.012
+
+    if current_day >= max_days:
+        base = min(base, 0.51)
+
+    return round(clamp(base, 0.50, 1.05), 3)
+
+
+def withdraw_stale_cpu_offers_for_day(
+    league_data: Dict[str, Any],
+    refreshed_offer_ids: set,
+    current_day: int,
+    user_team_name: Optional[str] = None,
+) -> int:
+    state = ensure_free_agency_state(league_data)
+    withdrawn = 0
+
+    for player_key, offers in list(state.get("offersByPlayer", {}).items()):
+        for offer in offers:
+            if offer.get("status", "active") != "active":
+                continue
+            if offer.get("source") != "cpu":
+                continue
+            if user_team_name and offer.get("teamName") == user_team_name:
+                continue
+            if offer.get("offerId") in refreshed_offer_ids:
+                continue
+
+            old = copy.deepcopy(offer)
+            old["status"] = "withdrawn"
+            old["withdrawnOnDay"] = current_day
+            old["withdrawReason"] = "cpu_daily_board_refresh"
+            state.setdefault("offerHistory", []).append(old)
+
+            offer["status"] = "withdrawn"
+            offer["withdrawnOnDay"] = current_day
+            offer["withdrawReason"] = "cpu_daily_board_refresh"
+            withdrawn += 1
+
+    if withdrawn > 0:
+        state.setdefault("dailyLog", []).append({
+            "day": current_day,
+            "type": "cpu_daily_offer_withdrawals",
+            "withdrawnOffers": withdrawn,
+        })
+
+    return withdrawn
+
+
+def classify_cpu_target_tier(
+    player: Dict[str, Any],
+    team: Dict[str, Any],
+    league_data: Dict[str, Any],
+    fit: Dict[str, Any],
+    target_score: float,
+    incumbent_priority: bool,
+    own_rights: bool,
+    previous_team_player: bool,
+) -> str:
+    overall = int(round(num(player.get("overall"), 0)))
+    age = int(num(player.get("age"), 27))
+    potential = int(round(num(player.get("potential"), overall)))
+    upside = max(0, potential - overall)
+    market_value = player.get("marketValue") or estimate_market_value(player)
+    expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
+    need_score = float(num(fit.get("needScore"), 0.0))
+    rights = get_player_rights(player)
+
+    if incumbent_priority or (own_rights and rights.get("restrictedFreeAgent") and overall >= 75):
+        return "incumbent"
+
+    if overall >= 86:
+        return "primary"
+    if overall >= 82 and (need_score >= 0.36 or age <= 27 or upside >= 2):
+        return "primary"
+    if target_score >= 0.88 and overall >= 80:
+        return "primary"
+
+    if overall >= 78:
+        return "backup"
+    if overall >= 75 and (need_score >= 0.45 or age <= 25 or upside >= 2):
+        return "backup"
+
+    if expected_aav <= int(MIN_DEAL * 1.55) or overall <= 74:
+        return "depth"
+
+    return "value"
+
+
+def get_cpu_daily_offer_caps(
+    current_day: int,
+    max_days: int,
+    roster_deficit: int,
+    active_offer_limit: int,
+    planning_room: int = 0,
+) -> Dict[str, int]:
+    current_day = int(num(current_day, 1))
+    max_days = max(1, int(num(max_days, DEFAULT_FREE_AGENCY_DAYS)))
+
+    planning_room = int(num(planning_room, 0))
+
+    if current_day <= 1:
+        total = 4
+        depth = 0
+        value = 0
+        if planning_room >= 55_000_000:
+            total = 9
+        elif planning_room >= 40_000_000:
+            total = 8
+        elif planning_room >= 28_000_000:
+            total = 7
+        elif planning_room >= 18_000_000:
+            total = 5
+    elif current_day <= 2:
+        total = 5
+        depth = 0 if roster_deficit < 2 else 1
+        value = 1
+        if planning_room >= 55_000_000:
+            total = 10
+        elif planning_room >= 40_000_000:
+            total = 9
+        elif planning_room >= 28_000_000:
+            total = 8
+        elif planning_room >= 18_000_000:
+            total = 6
+    elif current_day <= max(3, int(max_days * 0.55)):
+        total = 6
+        depth = 1 if current_day <= 3 else 2
+        value = 2
+        if planning_room >= 55_000_000:
+            total = 10
+        elif planning_room >= 40_000_000:
+            total = 9
+        elif planning_room >= 28_000_000:
+            total = 8
+    else:
+        total = 7
+        depth = 3
+        value = 3
+        if planning_room >= 40_000_000:
+            total = 9
+
+    if roster_deficit >= 3:
+        total += 1
+        if current_day >= 3:
+            depth += 1
+    elif roster_deficit <= 0 and current_day <= 2 and planning_room < 28_000_000:
+        total = max(3, total - 1)
+
+    return {
+        "total": int(clamp(total, 0, active_offer_limit)),
+        "depth": int(clamp(depth, 0, active_offer_limit)),
+        "value": int(clamp(value, 0, active_offer_limit)),
+    }
+
+
+def get_offer_money_interest_score(ratio: float) -> float:
+    ratio = float(num(ratio, 0.0))
+
+    points = [
+        (0.00, 0.05),
+        (0.50, 0.25),
+        (0.70, 0.46),
+        (0.80, 0.58),
+        (0.90, 0.68),
+        (1.00, 0.78),
+        (1.10, 0.87),
+        (1.20, 0.94),
+        (1.30, 0.99),
+        (1.50, 1.03),
+    ]
+
+    for idx in range(1, len(points)):
+        x0, y0 = points[idx - 1]
+        x1, y1 = points[idx]
+        if ratio <= x1:
+            t = (ratio - x0) / max(0.0001, x1 - x0)
+            return y0 + ((y1 - y0) * t)
+
+    return 1.04
+
+
 
 def build_cpu_offer_contract(
     league_data: Dict[str, Any],
@@ -6715,7 +7856,10 @@ def build_cpu_offer_contract(
     player: Dict[str, Any],
     current_day: int,
     max_days: int,
-    rng: random.Random
+    rng: random.Random,
+    target_score: float = 0.0,
+    incumbent_priority: bool = False,
+    target_tier: str = "value",
 ) -> Dict[str, Any]:
     market_value = player.get("marketValue") or estimate_market_value(player)
     profile = build_team_roster_profile(team, league_data = league_data)
@@ -6736,18 +7880,29 @@ def build_cpu_offer_contract(
     team_name = team.get("name")
     snapshot = get_team_cap_snapshot(league_data, team_name) if team_name else {"ok": False, "capRoom": 0, "rosterCount": 0}
     cap_room = int(snapshot.get("capRoom", 0)) if snapshot.get("ok") else 0
+    raw_cap_room_without_holds = int(snapshot.get("rawCapRoomWithoutHolds", cap_room)) if snapshot.get("ok") else cap_room
     exception_room = get_team_exception_room(
         league_data = league_data,
         team_name = team_name,
         player = player,
     ) if team_name else cap_room
 
+    own_rights = bool(team_name and is_rights_team(player, team_name))
+    planning_room = max(cap_room, raw_cap_room_without_holds)
+    if own_rights:
+        available_room = exception_room
+    elif planning_room > 0:
+        available_room = max(exception_room, planning_room)
+    else:
+        available_room = exception_room
+
     actual_roster_count = len(get_team_players(team))
     offseason_min_target = get_free_agency_min_roster_target(league_data)
     roster_deficit = max(0, offseason_min_target - actual_roster_count)
-    day_progress = current_day / max(1, max_days)
+    max_days = max(1, int(num(max_days, DEFAULT_FREE_AGENCY_DAYS)))
+    day_progress = clamp((current_day - 1) / max(1.0, float(max_days - 1)), 0.0, 1.0)
 
-    need_score = get_player_need_score_for_team(team, player)
+    need_score = get_player_need_score_for_team(team, player, league_data = league_data)
     previous_team = None
     if isinstance(player.get("freeAgencyMeta"), dict):
         previous_team = player["freeAgencyMeta"].get("fromTeam")
@@ -6755,22 +7910,18 @@ def build_cpu_offer_contract(
         team_name
         and (
             previous_team == team_name
-            or is_rights_team(player, team_name)
+            or own_rights
         )
     )
-
-    premium_talent = overall >= 84
-    high_end_talent = overall >= 81
 
     fringe_player = (
         overall <= 74
         or (overall <= 75 and (age >= 23 or potential <= overall + 1))
-        or (overall <= 76 and (age >= 25 or potential <= overall + 2))
-        or (overall <= 77 and (age >= 27 or potential <= overall + 2))
-        or (overall <= 78 and age >= 30 and potential <= overall + 2)
+        or (overall <= 76 and (age >= 26 or potential <= overall + 2))
+        or (overall <= 77 and age >= 30 and potential <= overall + 2)
     )
 
-    if fringe_player:
+    if fringe_player and target_tier == "depth":
         years = 1 if age >= 29 else 2
         return normalize_contract({
             "startYear": get_operating_season_year(league_data),
@@ -6778,86 +7929,133 @@ def build_cpu_offer_contract(
             "option": None,
         })
 
-    multiplier = 0.94 + (0.05 * rng.random()) + (0.07 * day_progress)
-    multiplier += max(0.0, (overall - 79.0) * 0.012)
+    # Build realistic offers around market value. The goal is not to force
+    # 100% interest on Day 1; players can wait while thresholds fall later.
+    if target_tier in ["incumbent", "primary"]:
+        multiplier = 0.96 + (0.035 * rng.random())
+    elif target_tier == "backup":
+        multiplier = 0.88 + (0.035 * rng.random())
+    elif target_tier == "value":
+        multiplier = 0.80 + (0.040 * rng.random())
+    else:
+        multiplier = 0.72 + (0.035 * rng.random())
 
-    if overall >= 84:
-        multiplier += 0.04
-    if overall >= 88:
-        multiplier += 0.04
+    # Teams that miss their first path can become a bit more aggressive as the
+    # board thins, but not wildly above market.
+    if current_day >= 2 and target_tier in ["primary", "backup"]:
+        multiplier += min(0.065, 0.020 + (0.045 * day_progress))
+    elif current_day >= 4 and target_tier == "value":
+        multiplier += 0.035
+
+    if target_tier == "primary" and planning_room >= int(expected_year1 * 0.90):
+        multiplier += 0.025
+    if target_tier == "incumbent" and incumbent_priority:
+        multiplier += 0.025
 
     if direction in ["contending", "win now"]:
-        if overall >= 79:
-            multiplier += 0.05
-        if age >= 28:
-            multiplier += 0.03
-        if def_rating >= 84:
-            multiplier += 0.02
-
-    elif direction in ["rebuilding"]:
+        if overall >= 80 and age >= 27:
+            multiplier += 0.025
+        if def_rating >= 84 and overall >= 78:
+            multiplier += 0.012
+        if age <= 24 and overall < 78:
+            multiplier -= 0.020
+    elif direction == "rebuilding":
         if age <= 26:
-            multiplier += 0.05
-        if upside >= 2:
-            multiplier += 0.05
-        if upside >= 4:
-            multiplier += 0.03
-
-        veteran_penalty = max(0.0, (age - 29) * 0.015)
-        veteran_penalty -= max(0.0, (overall - 81) * 0.012)
-        multiplier -= max(0.0, veteran_penalty)
-
+            multiplier += 0.025
+        if upside >= 3:
+            multiplier += 0.025
+        if age >= 30 and overall <= 80:
+            multiplier -= 0.055
     elif direction == "retooling":
         if age <= 29:
-            multiplier += 0.03
+            multiplier += 0.018
         if upside >= 2:
-            multiplier += 0.04
-
+            multiplier += 0.020
     else:
-        if 24 <= age <= 31:
-            multiplier += 0.02
+        if 24 <= age <= 31 and overall >= 78:
+            multiplier += 0.012
 
     if need_score >= 0.70:
-        multiplier += 0.06
+        multiplier += 0.025
     elif need_score >= 0.45:
-        multiplier += 0.03
+        multiplier += 0.012
+    elif need_score <= 0.20 and target_tier not in ["primary", "incumbent"]:
+        multiplier -= 0.025
 
-    if roster_deficit >= 4:
-        multiplier += 0.12
-    elif roster_deficit >= 2:
-        multiplier += 0.08
-    elif roster_deficit >= 1:
-        multiplier += 0.05
-
-    if cap_room >= 30_000_000 and overall >= 79:
-        multiplier += 0.12
-    elif cap_room >= 20_000_000 and overall >= 78:
-        multiplier += 0.09
-    elif cap_room >= 12_000_000 and overall >= 76:
-        multiplier += 0.05
-    elif exception_room >= 8_000_000 and overall >= 78:
-        multiplier += 0.03
+    if roster_deficit >= 4 and target_tier in ["backup", "value", "depth"]:
+        multiplier += 0.035
+    elif roster_deficit >= 2 and target_tier in ["backup", "value"]:
+        multiplier += 0.020
 
     if is_returning_team_target:
-        multiplier += 0.12
+        # Rights should boost priority and confidence, not create huge overpays.
+        multiplier += 0.020
 
-    if direction in ["rebuilding"] and cap_room >= 15_000_000 and overall >= 83:
-        multiplier += 0.06
-    if direction in ["contending", "win now"] and overall >= 80 and age >= 28:
-        multiplier += 0.05
-    if off_rating >= 87 and scoring_rating >= 86 and age <= 30:
-        multiplier += 0.03
-    if age >= 34 and overall <= 79:
-        multiplier -= 0.04
+        # If outside teams are trying to pull away a real starter/star, the original
+        # team can nudge its offer a little. This is intentionally tiny so Bird
+        # teams do not automatically crush the market.
+        state = ensure_free_agency_state(league_data)
+        player_key = get_player_key_from_player(player)
+        outside_pressure = False
+        for live_offer in state.get("offersByPlayer", {}).get(player_key, []):
+            if live_offer.get("status", "active") != "active":
+                continue
+            if live_offer.get("teamName") == team_name:
+                continue
+            if int(num(live_offer.get("aav"), 0)) >= int(expected_year1 * 0.82):
+                outside_pressure = True
+                break
+        if outside_pressure and overall >= 80:
+            multiplier += 0.014 if overall < 86 else 0.020
+    else:
+        perfect_outside_fit = bool(
+            target_tier == "primary"
+            and overall >= 80
+            and planning_room >= int(expected_year1 * 0.88)
+            and need_score >= 0.70
+            and age <= 31
+        )
+        if perfect_outside_fit:
+            multiplier += 0.016
 
-    if roster_deficit == 0 and cap_room < 5_000_000 and overall <= 77 and age >= 29:
-        multiplier = min(multiplier, 0.92)
+    if off_rating >= 87 and scoring_rating >= 86 and age <= 30 and overall >= 80:
+        multiplier += 0.015
 
-    if overall >= 85:
-        multiplier = max(multiplier, 1.06)
-    elif overall >= 82:
-        multiplier = max(multiplier, 1.01)
-    elif roster_deficit >= 2 and overall >= 77:
-        multiplier = max(multiplier, 0.97)
+    # Market discipline caps. Only true stars should get major over-market bids.
+    if overall >= 90:
+        max_multiplier = 1.16
+        min_primary_multiplier = 0.98
+    elif overall >= 87:
+        max_multiplier = 1.12
+        min_primary_multiplier = 0.95
+    elif overall >= 84:
+        max_multiplier = 1.08
+        min_primary_multiplier = 0.92
+    elif overall >= 81:
+        max_multiplier = 1.05
+        min_primary_multiplier = 0.88
+    elif overall >= 78:
+        max_multiplier = 1.02
+        min_primary_multiplier = 0.82
+    else:
+        max_multiplier = 0.98
+        min_primary_multiplier = 0.72
+
+    if age >= 35 and overall < 86:
+        max_multiplier = min(max_multiplier, 0.92)
+    elif age >= 33 and overall < 84:
+        max_multiplier = min(max_multiplier, 0.96)
+    elif age >= 31 and overall < 82:
+        max_multiplier = min(max_multiplier, 0.98)
+
+    if target_tier in ["incumbent", "primary"]:
+        multiplier = max(multiplier, min_primary_multiplier)
+    elif target_tier == "backup":
+        multiplier = min(multiplier, max_multiplier - 0.025)
+    elif target_tier == "value":
+        multiplier = min(multiplier, max_multiplier - 0.070)
+
+    multiplier = clamp(multiplier, 0.55, max_multiplier)
 
     year1_salary = int(
         round_to_nearest(
@@ -6866,52 +8064,42 @@ def build_cpu_offer_contract(
         )
     )
 
+    # Contract length discipline. Older players should not get long deals unless
+    # they are still star-level.
     years = expected_years
-
-    if overall <= 77:
-        years = 2 if age <= 27 else 1
-    elif overall <= 81:
-        years = 3 if age <= 29 else 2
-    elif overall <= 85:
-        years = max(expected_years, 4 if age <= 29 else 3)
+    if age >= 35:
+        years = 1 if overall < 86 else min(2, expected_years)
+    elif age >= 33:
+        years = min(2, expected_years) if overall < 84 else min(3, expected_years)
+    elif age >= 31:
+        years = min(2, expected_years) if overall < 82 else min(3, expected_years)
+    elif age >= 29:
+        years = min(3, expected_years)
     else:
-        years = max(expected_years, 4 if age <= 31 else 3)
+        years = expected_years
 
-    if direction == "contending" and age >= 32:
-        years = max(1, years - 1)
-    elif direction in ["rebuilding"]:
-        if age <= 25 and upside >= 3:
-            years = min(4, years + 1)
-        elif age >= 29:
-            years = min(years, 2)
-
-    if is_returning_team_target and age <= 31 and overall >= 79:
+    if target_tier in ["value", "depth"] and overall < 79:
+        years = min(years, 2 if age <= 26 and upside >= 2 else 1)
+    if target_tier == "primary" and overall >= 84 and age <= 30:
+        years = max(years, min(4, expected_years))
+    if target_tier == "incumbent" and overall >= 80 and age <= 30:
         years = max(years, min(4, expected_years))
 
     years = int(clamp(years, 1, 4))
 
-    available_room = exception_room
-
+    # Cap offer at actual possible spending. If that makes it unserious, the
+    # serious-bidder filter will drop the offer instead of creating fake bids.
     if available_room <= MIN_DEAL:
         year1_salary = MIN_DEAL
         years = 1 if age >= 29 else min(2, years)
     else:
-        if premium_talent and cap_room >= int(expected_year1 * 0.90):
-            affordable_share = 1.00
-        elif premium_talent:
-            affordable_share = 0.95
-        elif high_end_talent:
-            affordable_share = 0.88
-        else:
-            affordable_share = 0.82
         affordable_year1 = int(
             round_to_nearest(
-                clamp(max(MIN_DEAL, available_room * affordable_share), MIN_DEAL, MAX_SALARY),
+                clamp(available_room, MIN_DEAL, MAX_SALARY),
                 base = 1_000,
             )
         )
-        if year1_salary > affordable_year1:
-            year1_salary = max(MIN_DEAL, affordable_year1)
+        year1_salary = min(year1_salary, affordable_year1)
 
     return normalize_contract({
         "startYear": get_operating_season_year(league_data),
@@ -6959,8 +8147,7 @@ def is_incumbent_retention_priority(player: Dict[str, Any], team_name: Optional[
 
 def generate_cpu_offers_for_day(
     league_data: Dict[str, Any],
-    user_team_name: Optional[str] = None,
-    include_story_context: bool = True,
+    user_team_name: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     state = ensure_free_agency_state(league_data)
     refresh_free_agent_market_values(league_data)
@@ -6970,173 +8157,238 @@ def generate_cpu_offers_for_day(
     offseason_min_target = get_free_agency_min_roster_target(league_data)
 
     generated = []
+    refreshed_offer_ids = set()
+
+    # Each day is a fresh front-office board. CPU offers are conditional paths,
+    # so old CPU offers are replaced instead of stacking forever.
+    withdraw_stale_cpu_offers_for_day(
+        league_data = league_data,
+        refreshed_offer_ids = refreshed_offer_ids,
+        current_day = current_day,
+        user_team_name = user_team_name,
+    )
+
     state["teamNeedProfiles"] = {
         team.get("name"): build_team_roster_profile(team, league_data = league_data)
         for _, _, team in iter_teams(league_data)
         if team.get("name")
     }
-    free_agents = sorted(
-        league_data.get("freeAgents", []),
-        key = lambda p: (
-            -num(p.get("overall"), 0),
-            -num((p.get("marketValue") or {}).get("expectedAAV"), 0),
-            int(num(p.get("age"), 27)),
-        ),
-    )
 
-    for player in free_agents:
-        player_key = get_player_key_from_player(player)
-        active_offers = get_active_offers_for_player(state, player_key)
-        existing_team_names = {offer.get("teamName") for offer in active_offers}
+    free_agents = list(league_data.get("freeAgents", []))
 
-        overall = int(round(num(player.get("overall"), 0)))
-        age = int(num(player.get("age"), 27))
-        potential = int(round(num(player.get("potential"), overall)))
-        upside = max(0, potential - overall)
+    for _, _, team in iter_teams(league_data):
+        team_name = team.get("name")
+        if not team_name:
+            continue
+        if user_team_name and team_name == user_team_name:
+            continue
 
-        desired_offer_count = 2
-        if overall >= 90:
-            desired_offer_count = 8
-        elif overall >= 86:
-            desired_offer_count = 7
-        elif overall >= 82:
-            desired_offer_count = 6
-        elif overall >= 79:
-            desired_offer_count = 5
-        elif overall >= 76:
-            desired_offer_count = 4
-        elif overall >= 73:
-            desired_offer_count = 3
-
-        if current_day >= max_days - 1:
-            desired_offer_count += 1
-
-        target_new_offers = max(0, desired_offer_count - len(active_offers))
-
-        rights = get_player_rights(player)
-        rights_team_name = rights.get("heldByTeam")
-        previous_team_name = None
-        if isinstance(player.get("freeAgencyMeta"), dict):
-            previous_team_name = player["freeAgencyMeta"].get("fromTeam")
-
-        incumbent_team_names = []
-        for possible_team_name in [rights_team_name, previous_team_name]:
-            if not possible_team_name or possible_team_name in incumbent_team_names:
-                continue
-            incumbent_team_names.append(possible_team_name)
-
-        missing_incumbent_offer = any(
-            incumbent_team_name not in existing_team_names
-            and not (user_team_name and incumbent_team_name == user_team_name)
-            and is_incumbent_retention_priority(player, incumbent_team_name)
-            for incumbent_team_name in incumbent_team_names
+        actual_roster_count = len(get_team_players(team))
+        remaining_roster_slots = get_team_remaining_roster_slots(
+            league_data = league_data,
+            team_name = team_name,
+            state = None,
         )
+        if remaining_roster_slots <= 0:
+            continue
 
-        if missing_incumbent_offer:
-            target_new_offers = max(1, target_new_offers)
+        actual_roster_deficit = max(0, offseason_min_target - actual_roster_count)
+        active_offer_limit = get_active_offer_limit_for_team(
+            league_data = league_data,
+            team_name = team_name,
+            state = state,
+            target_override = offseason_min_target,
+        )
+        if active_offer_limit <= 0:
+            continue
 
-        if target_new_offers <= 0:
+        profile = state.get("teamNeedProfiles", {}).get(team_name) or build_team_roster_profile(team, league_data = league_data)
+        direction = profile.get("direction", "balanced")
+        snapshot = get_team_cap_snapshot(league_data, team_name)
+        cap_room = int(snapshot.get("capRoom", 0)) if snapshot.get("ok") else 0
+        raw_cap_room_without_holds = int(snapshot.get("rawCapRoomWithoutHolds", cap_room)) if snapshot.get("ok") else cap_room
+        planning_room = max(cap_room, raw_cap_room_without_holds)
+
+        caps = get_cpu_daily_offer_caps(
+            current_day = current_day,
+            max_days = max_days,
+            roster_deficit = actual_roster_deficit,
+            active_offer_limit = active_offer_limit,
+            planning_room = planning_room,
+        )
+        # Offers are conditional, so teams with real cap room can carry extra
+        # top-target offers beyond exact open roster slots. Final signings still
+        # enforce roster/cap rules after players accept.
+        soft_offer_slots = remaining_roster_slots
+        if planning_room >= 50_000_000:
+            soft_offer_slots += 5
+        elif planning_room >= 35_000_000:
+            soft_offer_slots += 4
+        elif planning_room >= 20_000_000:
+            soft_offer_slots += 3
+        elif actual_roster_deficit >= 2:
+            soft_offer_slots += 2
+        max_offers_today = min(caps["total"], max(1, soft_offer_slots))
+        if max_offers_today <= 0:
             continue
 
         candidates = []
 
-        for _, _, team in iter_teams(league_data):
-            team_name = team.get("name")
-            if not team_name:
-                continue
-            if user_team_name and team_name == user_team_name:
-                continue
-            if team_name in existing_team_names:
-                continue
+        for player in free_agents:
+            player_key = get_player_key_from_player(player)
 
+            overall = int(round(num(player.get("overall"), 0)))
+            age = int(num(player.get("age"), 27))
+            potential = int(round(num(player.get("potential"), overall)))
+            upside = max(0, potential - overall)
+            market_value = player.get("marketValue") or estimate_market_value(player)
+            expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
+
+            rights = get_player_rights(player)
+            previous_team = None
+            if isinstance(player.get("freeAgencyMeta"), dict):
+                previous_team = player["freeAgencyMeta"].get("fromTeam")
+            own_rights = is_rights_team(player, team_name)
+            previous_team_player = bool(previous_team and previous_team == team_name)
             incumbent_priority = is_incumbent_retention_priority(player, team_name)
 
-            actual_roster_count = len(get_team_players(team))
-            actual_roster_deficit = max(0, offseason_min_target - actual_roster_count)
-            active_offer_count = get_active_offer_count_for_team(state, team_name)
-
-            active_offer_limit = get_active_offer_limit_for_team(
-                league_data = league_data,
-                team_name = team_name,
-                state = state,
-                target_override = offseason_min_target,
-            )
-            if active_offer_count >= active_offer_limit:
-                continue
-
-            remaining_roster_slots = get_team_remaining_roster_slots(
-                league_data = league_data,
-                team_name = team_name,
-                state = None,
-            )
-            if remaining_roster_slots <= 0 and not incumbent_priority:
-                continue
-
-            snapshot = get_team_cap_snapshot(league_data, team_name)
-            cap_room = int(snapshot.get("capRoom", 0)) if snapshot.get("ok") else 0
-            exception_room = get_team_exception_room(
-                league_data = league_data,
-                team_name = team_name,
-                player = player,
-            )
-
-            if exception_room < MIN_DEAL:
-                continue
-
             fit = estimate_team_free_agent_fit(team, player, league_data = league_data)
-
-            min_fit_threshold = 0.42
-            if actual_roster_deficit >= 3:
-                min_fit_threshold = 0.12
-            elif actual_roster_deficit >= 1:
-                min_fit_threshold = 0.18
-            elif cap_room >= 18_000_000:
-                min_fit_threshold = 0.26
-            elif cap_room >= 8_000_000:
-                min_fit_threshold = 0.32
-
-            min_fit_threshold -= max(0.0, (overall - 78.0) * 0.015)
-
-            if exception_room >= 12_000_000:
-                min_fit_threshold -= 0.06
-            elif exception_room >= 8_000_000:
-                min_fit_threshold -= 0.03
-
-            if current_day >= max_days - 1:
-                min_fit_threshold -= 0.10
-            elif current_day >= max_days - 2:
-                min_fit_threshold -= 0.06
-
-            min_fit_threshold = max(0.06, min_fit_threshold)
-            need_score = float(fit.get("needScore", 0.0))
+            fit_score = float(num(fit.get("interestScore"), 0.0))
+            need_score = float(num(fit.get("needScore"), 0.0))
             position_bucket = fit.get("positionBucket")
             weakest_positions = fit.get("weakestPositions", []) or []
 
-            if need_score >= 0.70:
-                min_fit_threshold -= 0.10
-            elif need_score >= 0.50:
-                min_fit_threshold -= 0.06
-            elif need_score <= 0.22 and actual_roster_deficit <= 0 and overall < 82:
-                min_fit_threshold += 0.08
+            min_fit_threshold = 0.46
+            if own_rights or previous_team_player:
+                min_fit_threshold = 0.24
+            elif actual_roster_deficit >= 3:
+                min_fit_threshold = 0.22
+            elif actual_roster_deficit >= 1:
+                min_fit_threshold = 0.28
+            elif planning_room >= 22_000_000:
+                min_fit_threshold = 0.34
+            elif planning_room >= 10_000_000:
+                min_fit_threshold = 0.39
 
-            if position_bucket in weakest_positions[:1]:
-                min_fit_threshold -= 0.06
-            elif position_bucket in weakest_positions[:2]:
-                min_fit_threshold -= 0.03
+            min_fit_threshold -= max(0.0, (overall - 80.0) * 0.010)
+            if need_score >= 0.70:
+                min_fit_threshold -= 0.060
+            elif need_score >= 0.50:
+                min_fit_threshold -= 0.030
+            elif need_score <= 0.20 and actual_roster_deficit <= 0 and not incumbent_priority and overall < 82:
+                min_fit_threshold += 0.070
 
             if incumbent_priority:
-                min_fit_threshold -= 0.12
-                if overall >= 82:
-                    min_fit_threshold -= 0.04
-                if get_player_rights(player).get("restrictedFreeAgent"):
-                    min_fit_threshold -= 0.04
+                min_fit_threshold -= 0.120
+            if rights.get("restrictedFreeAgent") and own_rights:
+                min_fit_threshold -= 0.050
+            raw_cap_star_path = bool(
+                not own_rights
+                and overall >= 80
+                and expected_aav >= 8_000_000
+                and raw_cap_room_without_holds >= int(expected_aav * (0.72 if overall >= 85 else 0.66))
+            )
+            if raw_cap_star_path:
+                # For real 80+ talent, raw-cap teams should at least put a
+                # reasonable offer on the board, even if player interest is only
+                # around the 50%-60% range. Need still matters, but it should not
+                # completely hide stars from teams with room.
+                if overall >= 88:
+                    min_fit_threshold -= 0.180
+                elif overall >= 85:
+                    min_fit_threshold -= 0.135
+                else:
+                    min_fit_threshold -= 0.090
+            if current_day >= max_days - 1:
+                min_fit_threshold -= 0.060
+            elif current_day >= max_days - 2:
+                min_fit_threshold -= 0.030
 
-            min_fit_threshold = max(0.04, min_fit_threshold)
-            if fit["interestScore"] < min_fit_threshold:
+            min_fit_threshold = max(0.05, min_fit_threshold)
+            if fit_score < min_fit_threshold:
                 continue
 
-            seed = stable_text_seed(f"{season_year}|{current_day}|{team_name}|{player_key}")
+            target_score = fit_score
+            target_score += max(0.0, (overall - 75.0) * 0.012)
+            target_score += max(0.0, (overall - 82.0) * 0.018)
+            target_score += need_score * 0.28
+            target_score += min(0.26, actual_roster_deficit * 0.080)
+
+            if position_bucket in weakest_positions[:1]:
+                target_score += 0.110
+            elif position_bucket in weakest_positions[:2]:
+                target_score += 0.060
+
+            if planning_room >= 25_000_000:
+                target_score += max(0.0, (overall - 78.0) * 0.017)
+            elif planning_room >= 15_000_000:
+                target_score += max(0.0, (overall - 79.0) * 0.012)
+            elif planning_room >= 8_000_000:
+                target_score += max(0.0, (overall - 80.0) * 0.008)
+
+            # Raw-cap star path: cap-space teams may keep several serious offers
+            # alive for high-rated players even when practical cap is reduced by
+            # holds. The actual hold-renounce decision is made only if a player
+            # accepts later.
+            if raw_cap_star_path:
+                if overall >= 88:
+                    target_score += 0.260
+                elif overall >= 85:
+                    target_score += 0.190
+                else:
+                    target_score += 0.120
+                if planning_room >= 50_000_000:
+                    target_score += 0.045
+                elif planning_room >= 35_000_000:
+                    target_score += 0.025
+
+            if direction in ["contending", "win now"] and overall >= 79 and age >= 27:
+                target_score += 0.070
+            if direction == "rebuilding" and age <= 27 and upside >= 2:
+                target_score += 0.085
+            if direction == "retooling" and age <= 29 and overall >= 78:
+                target_score += 0.055
+
+            if previous_team_player:
+                target_score += 0.160
+            if own_rights:
+                target_score += 0.180
+            if incumbent_priority:
+                target_score += 0.120
+            if incumbent_priority and rights.get("restrictedFreeAgent"):
+                target_score += 0.060
+
+            # As days pass, teams that missed Plan A become more open to the
+            # best remaining Plan B players.
+            if current_day >= 2 and planning_room >= 12_000_000 and overall >= 78:
+                target_score += min(0.080, 0.025 * (current_day - 1))
+            if current_day >= max_days - 1:
+                target_score += 0.050
+            elif current_day >= max_days - 2:
+                target_score += 0.025
+
+            target_tier = classify_cpu_target_tier(
+                player = player,
+                team = team,
+                league_data = league_data,
+                fit = fit,
+                target_score = target_score,
+                incumbent_priority = incumbent_priority,
+                own_rights = own_rights,
+                previous_team_player = previous_team_player,
+            )
+
+            # Opening day should be best-case chasing, not backup/depth dumping.
+            if current_day <= 1 and target_tier in ["value", "depth"]:
+                continue
+            if current_day <= 1 and target_tier == "backup" and not incumbent_priority and target_score < 0.82:
+                continue
+            if current_day <= 2 and target_tier == "depth" and actual_roster_deficit < 2:
+                continue
+
+            seed = stable_text_seed(f"{season_year}|{current_day}|{team_name}|{player_key}|team_board")
             rng = random.Random(seed)
+            target_score += rng.random() * 0.025
 
             contract = build_cpu_offer_contract(
                 league_data = league_data,
@@ -7145,81 +8397,115 @@ def generate_cpu_offers_for_day(
                 current_day = current_day,
                 max_days = max_days,
                 rng = rng,
+                target_score = target_score,
+                incumbent_priority = incumbent_priority,
+                target_tier = target_tier,
             )
 
-            existing_offer = find_existing_offer_for_team_player(state, player_key, team_name)
-            exclude_offer_id = existing_offer.get("offerId") if existing_offer else None
+            if not is_cpu_serious_offer_for_player(
+                player = player,
+                contract = contract,
+                current_day = current_day,
+                max_days = max_days,
+                incumbent_priority = incumbent_priority,
+                target_tier = target_tier,
+            ):
+                continue
 
             eval_res = evaluate_market_offer_submission(
                 league_data = league_data,
                 team_name = team_name,
                 player = player,
                 contract = contract,
-                exclude_offer_id = exclude_offer_id,
+                exclude_offer_id = None,
             )
             if not eval_res.get("ok"):
                 continue
 
-            profile = build_team_roster_profile(team, league_data = league_data)
-            candidate_score = fit["interestScore"] + (rng.random() * 0.05)
-            candidate_score += max(0.0, (overall - 75.0) * 0.010)
-            candidate_score += max(0.0, (overall - 82.0) * 0.018)
-            need_score = float(fit.get("needScore", 0.0))
-            position_bucket = fit.get("positionBucket")
-            weakest_positions = fit.get("weakestPositions", []) or []
+            if eval_res.get("pendingCapHoldClearance"):
+                clearance_plan = get_cpu_cap_hold_clearance_plan(
+                    league_data = league_data,
+                    team_name = team_name,
+                    clearance_needed = int(num(eval_res.get("capHoldClearanceNeeded"), 0)),
+                    protected_player_key = player_key,
+                    target_player = player,
+                )
+                # Soft-offer rule: do not block the offer board here. A team can
+                # make multiple conditional offers using raw cap room. Only when
+                # the player accepts do we force the front office to choose which
+                # holds to renounce, and the final signing can still fail there.
+                if clearance_plan.get("ok"):
+                    eval_res["plannedCapHoldRenounces"] = clearance_plan.get("renounceRows", [])
+                    eval_res["plannedCapHoldClearanceAmount"] = clearance_plan.get("capHoldCleared", 0)
+                else:
+                    eval_res["plannedCapHoldRenounces"] = []
+                    eval_res["plannedCapHoldClearanceAmount"] = 0
+                eval_res["blockedCapHoldRenounces"] = clearance_plan.get("blockedRows", [])
+                eval_res["capHoldClearanceDeferredUntilAcceptance"] = True
 
-            candidate_score += need_score * 0.36
-            candidate_score += min(0.45, actual_roster_deficit * 0.13)
+            candidates.append({
+                "score": target_score,
+                "targetTier": target_tier,
+                "teamName": team_name,
+                "player": player,
+                "playerKey": player_key,
+                "contract": contract,
+                "evalRes": eval_res,
+                "fit": fit,
+                "profile": profile,
+                "incumbentPriority": incumbent_priority,
+                "ownRights": own_rights,
+                "previousTeamPlayer": previous_team_player,
+                "rawCapStarPath": raw_cap_star_path,
+            })
 
-            if position_bucket in weakest_positions[:1]:
-                candidate_score += 0.16
-            elif position_bucket in weakest_positions[:2]:
-                candidate_score += 0.09
+        tier_order = {
+            "incumbent": 0,
+            "primary": 1,
+            "backup": 2,
+            "value": 3,
+            "depth": 4,
+        }
 
-            if need_score >= 0.75:
-                candidate_score += 0.16
-            elif need_score >= 0.55:
-                candidate_score += 0.09
-            elif need_score <= 0.22 and actual_roster_deficit <= 0 and overall < 82:
-                candidate_score -= 0.10
+        candidates.sort(
+            key = lambda item: (
+                tier_order.get(str(item.get("targetTier")), 9),
+                0 if item.get("rawCapStarPath") else 1,
+                -float(num(item.get("score"), 0.0)),
+                -int(num((item.get("player", {}).get("marketValue") or {}).get("expectedAAV"), 0)),
+                str(item.get("player", {}).get("name", "")),
+            )
+        )
 
-            if cap_room >= 25_000_000:
-                candidate_score += max(0.0, (overall - 77.0) * 0.022)
-            elif cap_room >= 15_000_000:
-                candidate_score += max(0.0, (overall - 78.0) * 0.016)
-            elif cap_room >= 8_000_000 or exception_room >= 8_000_000:
-                candidate_score += max(0.0, (overall - 79.0) * 0.010)
+        active_offer_count = get_active_offer_count_for_team(state, team_name)
+        offers_used = 0
+        depth_used = 0
+        value_used = 0
 
-            if overall >= 85 and cap_room >= 12_000_000:
-                candidate_score += 0.14
-            elif overall >= 85 and cap_room >= 8_000_000:
-                candidate_score += 0.08
+        for item in candidates:
+            if active_offer_count >= active_offer_limit:
+                break
+            if offers_used >= max_offers_today:
+                break
 
-            if profile["direction"] in ["contending", "win now"] and overall >= 79 and age >= 27:
-                candidate_score += 0.08
-            if profile["direction"] in ["rebuilding"] and age <= 27 and upside >= 2:
-                candidate_score += 0.08
+            target_tier = str(item.get("targetTier") or "value")
+            if target_tier == "depth":
+                if depth_used >= caps["depth"]:
+                    continue
+                depth_used += 1
+            if target_tier == "value":
+                if value_used >= caps["value"]:
+                    continue
+                value_used += 1
 
-            previous_team = None
-            if isinstance(player.get("freeAgencyMeta"), dict):
-                previous_team = player["freeAgencyMeta"].get("fromTeam")
-            if previous_team and previous_team == team_name:
-                candidate_score += 0.22
-            if is_rights_team(player, team_name):
-                candidate_score += 0.24
-            if incumbent_priority and get_player_rights(player).get("restrictedFreeAgent"):
-                candidate_score += 0.04
+            player = item["player"]
+            player_key = item["playerKey"]
+            contract = item["contract"]
+            eval_res = item["evalRes"]
+            fit = item["fit"]
+            profile = item["profile"]
+            team_name = item["teamName"]
 
-            if current_day >= max_days - 1:
-                candidate_score += 0.10
-            elif current_day >= max_days - 2:
-                candidate_score += 0.05
-
-            candidates.append((candidate_score, team_name, contract, eval_res, fit, profile))
-
-        candidates.sort(key = lambda x: x[0], reverse = True)
-
-        for _, team_name, contract, eval_res, fit, profile in candidates[:target_new_offers]:
             offer_record = build_offer_record(
                 league_data = league_data,
                 team_name = team_name,
@@ -7234,7 +8520,16 @@ def generate_cpu_offers_for_day(
             offer_record["exceptionRoom"] = eval_res.get("exceptionRoom")
             offer_record["exceptionRemaining"] = eval_res.get("exceptionRemaining")
             offer_record["birdRights"] = eval_res.get("birdRights")
+            offer_record["pendingCapHoldClearance"] = eval_res.get("pendingCapHoldClearance", False)
+            offer_record["capHoldClearanceNeeded"] = eval_res.get("capHoldClearanceNeeded", 0)
+            offer_record["plannedCapHoldRenounces"] = eval_res.get("plannedCapHoldRenounces", [])
+            offer_record["plannedCapHoldClearanceAmount"] = eval_res.get("plannedCapHoldClearanceAmount", 0)
             offer_record["teamDirection"] = profile.get("direction")
+            offer_record["teamBoardScore"] = round(float(num(item.get("score"), 0.0)), 3)
+            offer_record["targetTier"] = target_tier
+            offer_record["incumbentPriority"] = bool(item.get("incumbentPriority"))
+            offer_record["ownRightsOffer"] = bool(item.get("ownRights"))
+            offer_record["previousTeamOffer"] = bool(item.get("previousTeamPlayer"))
             offer_record["needScore"] = fit.get("needScore")
             offer_record["positionBucket"] = fit.get("positionBucket")
             offer_record["weakestPositions"] = fit.get("weakestPositions")
@@ -7244,33 +8539,33 @@ def generate_cpu_offers_for_day(
                 "weakestPositions": fit.get("weakestPositions"),
                 "teamDirection": profile.get("direction"),
             }
-            # Day 1 can generate hundreds of CPU offers. Building full narrative
-            # story objects for every opening offer makes Year 2+ initialization
-            # slow enough to trip the Pyodide worker timeout. Keep the core offer
-            # logic identical, but allow the opening market to store lightweight
-            # offers. The UI already has fallback context builders when this field
-            # is missing.
-            if include_story_context:
-                offer_record["storyContext"] = build_free_agency_story_context(
-                    league_data = league_data,
-                    player = player,
-                    team_name = team_name,
-                    contract = offer_record.get("contract"),
-                    row = offer_record,
-                    offer = offer_record,
-                    spending_res = eval_res,
-                    event_type = "cpu_offer",
-                    current_day = current_day,
-                    roster_need = offer_record.get("rosterNeed"),
-                    team_profile = profile,
-                )
-            else:
-                offer_record.pop("storyContext", None)
+            offer_record["playerViewScore"] = score_offer_for_player(
+                league_data = league_data,
+                player = player,
+                offer = offer_record,
+            )
+            offer_record["storyContext"] = build_free_agency_story_context(
+                league_data = league_data,
+                player = player,
+                team_name = team_name,
+                contract = offer_record.get("contract"),
+                row = offer_record,
+                offer = offer_record,
+                spending_res = eval_res,
+                event_type = "cpu_offer",
+                current_day = current_day,
+                roster_need = offer_record.get("rosterNeed"),
+                team_profile = profile,
+            )
             upsert_offer_record(
                 league_data = league_data,
                 player_key = player_key,
                 offer_record = offer_record,
             )
+            refreshed_offer_ids.add(offer_record.get("offerId"))
+            active_offer_count += 1
+            offers_used += 1
+
             generated.append({
                 "playerName": player.get("name"),
                 "playerId": player.get("id"),
@@ -7283,12 +8578,20 @@ def generate_cpu_offers_for_day(
                 "payrollZone": offer_record.get("payrollZone"),
                 "exceptionRoom": offer_record.get("exceptionRoom"),
                 "exceptionRemaining": offer_record.get("exceptionRemaining"),
+                "pendingCapHoldClearance": offer_record.get("pendingCapHoldClearance"),
+                "capHoldClearanceNeeded": offer_record.get("capHoldClearanceNeeded"),
+                "plannedCapHoldRenounces": offer_record.get("plannedCapHoldRenounces", []),
                 "teamDirection": offer_record.get("teamDirection"),
+                "teamBoardScore": offer_record.get("teamBoardScore"),
+                "targetTier": offer_record.get("targetTier"),
+                "playerViewScore": offer_record.get("playerViewScore"),
+                "incumbentPriority": offer_record.get("incumbentPriority"),
+                "ownRightsOffer": offer_record.get("ownRightsOffer"),
                 "needScore": offer_record.get("needScore"),
                 "positionBucket": offer_record.get("positionBucket"),
                 "weakestPositions": offer_record.get("weakestPositions"),
                 "rosterNeed": offer_record.get("rosterNeed"),
-                "storyContext": offer_record.get("storyContext") if include_story_context else None,
+                "storyContext": offer_record.get("storyContext"),
                 "rfaOfferSheet": bool(get_player_rights(player).get("restrictedFreeAgent") and not is_rights_team(player, team_name)),
                 "rightsTeamName": get_player_rights(player).get("heldByTeam"),
             })
@@ -7669,6 +8972,8 @@ def finalize_free_agent_signing_from_offer(
             team_name = signing_team_name,
             clearance_needed = int(num(spending_res.get("capHoldClearanceNeeded"), 0)),
             protected_player_key = player_key,
+            target_player = player,
+            current_day = current_day,
         )
 
         if not auto_res.get("ok"):
@@ -7693,6 +8998,9 @@ def finalize_free_agent_signing_from_offer(
 
         spending_res["autoRenouncedCapHolds"] = auto_res.get("renounced", [])
         spending_res["autoRenouncedCapHoldAmount"] = auto_res.get("capHoldCleared", 0)
+        spending_res["blockedCapHoldRenounces"] = auto_res.get("blockedRenounces", [])
+        spending_res["capHoldRenounceTargetPlayerName"] = auto_res.get("targetPlayerName")
+        spending_res["capHoldRenounceTargetValueScore"] = auto_res.get("targetValueScore")
 
     if len(get_team_players(team)) >= get_roster_limit(league_data):
         return None
@@ -7927,15 +9235,12 @@ def resolve_signings_for_day(
 
         offers = sort_offers_for_display(offers)
         best_offer = offers[0]
-        second_score = offers[1]["playerViewScore"] if len(offers) > 1 else None
         best_score = num(best_offer.get("playerViewScore"), 0)
-
-        overall = int(round(num(player.get("overall"), 0)))
-        age = int(num(player.get("age"), 27))
-        offer_count = len(offers)
-        market_value = player.get("marketValue") or estimate_market_value(player)
-        expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
-        best_offer_aav = int(num(best_offer.get("aav"), 0))
+        required_interest = get_player_required_interest_for_day(
+            player = player,
+            current_day = current_day,
+            max_days = max_days,
+        )
 
         best_market = get_market_acceptance_threshold(
             league_data = league_data,
@@ -7945,131 +9250,91 @@ def resolve_signings_for_day(
         )
 
         should_sign = False
-
         if current_day >= max_days:
             should_sign = True
         elif best_market.get("autoAccept"):
             should_sign = True
-        else:
-            if overall >= 87:
-                threshold = 1.02 if current_day <= 2 else 0.99 if current_day <= 4 else 0.94
-                margin_needed = 0.05 if current_day <= 3 else 0.02
-            elif overall >= 82:
-                threshold = 0.99 if current_day <= 2 else 0.95 if current_day <= 4 else 0.90
-                margin_needed = 0.04 if current_day <= 2 else 0.01
-            elif overall >= 78:
-                threshold = 0.95 if current_day <= 2 else 0.92 if current_day <= 4 else 0.87
-                margin_needed = 0.03 if current_day <= 2 else 0.01
-            else:
-                threshold = 0.89 if current_day <= 2 else 0.85 if current_day <= 4 else 0.81
-                margin_needed = 0.00
-
-            if current_day >= max_days:
-                threshold = min(threshold, 0.82)
-                margin_needed = 0.00
-
-            if current_day == 1 and overall >= 85 and offer_count < 2:
-                should_sign = False
-            elif best_score >= threshold:
-                if second_score is None:
-                    should_sign = current_day >= 2 or overall <= 83 or best_score >= threshold + 0.03
-                elif best_score - num(second_score, 0) >= margin_needed:
-                    should_sign = True
-                elif offer_count >= 3:
-                    should_sign = True
-                elif current_day >= 3 and best_score >= threshold + 0.01:
-                    should_sign = True
-
-            if not should_sign and current_day >= max_days - 1:
-                if overall >= 82 and best_score >= 0.84:
-                    should_sign = True
-                elif overall >= 76 and best_score >= 0.80:
-                    should_sign = True
-                elif best_score >= 0.77:
-                    should_sign = True
-
-            if not should_sign and current_day >= max_days - 1:
-                strong_late_market_offer = (
-                    overall >= 80
-                    and offer_count >= 2
-                    and best_offer_aav >= int(round(expected_aav * 0.88))
-                    and best_score >= 0.79
-                )
-                veteran_good_money = (
-                    age >= 32
-                    and offer_count >= 3
-                    and best_offer_aav >= int(round(expected_aav * 0.90))
-                    and best_score >= 0.80
-                )
-                if strong_late_market_offer or veteran_good_money:
-                    should_sign = True
-
-            if not should_sign and current_day >= max_days:
-                general_last_call = (
-                    overall >= 78
-                    and offer_count >= 2
-                    and best_offer_aav >= int(round(expected_aav * 0.84))
-                    and best_score >= 0.77
-                )
-                veteran_last_call = (
-                    age >= 30
-                    and offer_count >= 2
-                    and best_offer_aav >= int(round(expected_aav * 0.86))
-                    and best_score >= 0.78
-                )
-                if general_last_call or veteran_last_call:
-                    should_sign = True
+        elif best_score >= required_interest:
+            should_sign = True
 
         if not should_sign:
             continue
 
-        if should_create_user_rfa_match_decision(
-            league_data = league_data,
-            player = player,
-            chosen_offer = best_offer,
-            user_team_name = user_team_name,
-        ):
-            pending_entry = upsert_pending_rfa_match_decision(
+        for candidate_offer in offers:
+            candidate_score = num(candidate_offer.get("playerViewScore"), 0)
+            if current_day < max_days and not best_market.get("autoAccept") and candidate_score + 0.025 < required_interest:
+                break
+
+            if should_create_user_rfa_match_decision(
                 league_data = league_data,
                 player = player,
-                chosen_offer = best_offer,
-                all_offers = offers,
-                current_day = current_day,
-            )
-            state.setdefault("dailyLog", []).append({
-                "day": current_day,
-                "type": "rfa_offer_sheet_pending",
-                "playerName": player.get("name"),
-                "rightsTeamName": pending_entry.get("rightsTeamName"),
-                "offeringTeamName": pending_entry.get("offeringTeamName"),
-                "totalValue": pending_entry.get("totalValue"),
-                "years": pending_entry.get("years"),
-            })
-            continue
+                chosen_offer = candidate_offer,
+                user_team_name = user_team_name,
+            ):
+                pending_entry = upsert_pending_rfa_match_decision(
+                    league_data = league_data,
+                    player = player,
+                    chosen_offer = candidate_offer,
+                    all_offers = offers,
+                    current_day = current_day,
+                )
+                state.setdefault("dailyLog", []).append({
+                    "day": current_day,
+                    "type": "rfa_offer_sheet_pending",
+                    "playerName": player.get("name"),
+                    "rightsTeamName": pending_entry.get("rightsTeamName"),
+                    "offeringTeamName": pending_entry.get("offeringTeamName"),
+                    "totalValue": pending_entry.get("totalValue"),
+                    "years": pending_entry.get("years"),
+                })
+                break
 
-        if (
-            user_team_name
-            and best_offer.get("teamName") == user_team_name
-            and best_offer.get("source") == "user"
-        ):
-            upsert_pending_user_decision(
+            if (
+                user_team_name
+                and candidate_offer.get("teamName") == user_team_name
+                and candidate_offer.get("source") == "user"
+            ):
+                upsert_pending_user_decision(
+                    league_data = league_data,
+                    team_name = user_team_name,
+                    player = player,
+                    chosen_offer = candidate_offer,
+                    all_offers = offers,
+                    current_day = current_day,
+                )
+                break
+
+            signed = finalize_free_agent_signing_from_offer(
                 league_data = league_data,
-                team_name = user_team_name,
                 player = player,
-                chosen_offer = best_offer,
-                all_offers = offers,
+                chosen_offer = candidate_offer,
                 current_day = current_day,
             )
-            continue
+            if signed:
+                signings.append(signed)
+                break
 
-        signed = finalize_free_agent_signing_from_offer(
-            league_data = league_data,
-            player = player,
-            chosen_offer = best_offer,
-            current_day = current_day,
-        )
-        if signed:
-            signings.append(signed)
+            # Offers are soft commitments. If one CPU signing used the cap room
+            # or roster slot first, this offer fails final validation and the
+            # player can look at the next offer on his board.
+            original_offers = state.get("offersByPlayer", {}).get(player_key, [])
+            for original_offer in original_offers:
+                if original_offer.get("offerId") != candidate_offer.get("offerId"):
+                    continue
+                if original_offer.get("source") == "user":
+                    continue
+                original_offer["status"] = "failed_legal_check"
+                original_offer["failedOnDay"] = current_day
+                original_offer["failedReason"] = "Offer could not be finalized under current cap/roster rules."
+                state.setdefault("offerHistory", []).append(copy.deepcopy(original_offer))
+                state.setdefault("dailyLog", []).append({
+                    "day": current_day,
+                    "type": "cpu_offer_failed_final_validation",
+                    "playerName": player.get("name"),
+                    "teamName": candidate_offer.get("teamName"),
+                    "offerId": candidate_offer.get("offerId"),
+                })
+                break
 
     return signings
 
@@ -8100,11 +9365,7 @@ def initialize_free_agency_period(
     state["exceptionUsageByTeam"] = {}
     state["teamNeedProfiles"] = {}
     state["rightsRenounceLog"] = []
-    state["marketComplete"] = False
-    state["freeAgencyComplete"] = False
-    state["completed"] = False
-    state["isComplete"] = False
-    state["status"] = "active"
+    state["blockedCapHoldRenounceLog"] = []
     state["pendingUserTeamName"] = user_team_name
     state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, user_team_name) if user_team_name else None
 
@@ -8115,7 +9376,6 @@ def initialize_free_agency_period(
     opening_offers = generate_cpu_offers_for_day(
         league_data = updated,
         user_team_name = user_team_name,
-        include_story_context = False,
     )
 
     state["dailyLog"].append({
@@ -8304,7 +9564,13 @@ def get_market_acceptance_threshold(
         or (overall <= 77 and age >= 31 and potential <= overall + 1)
     )
 
-    if fringe_player and offer_count == 0 and offered_years <= 2 and offered_aav >= MIN_DEAL:
+    if (
+        fringe_player
+        and offer_count == 0
+        and offered_years <= 2
+        and offered_aav >= MIN_DEAL
+        and current_day >= max(5, int(max_days * 0.50))
+    ):
         return {
             "requiredAAV": MIN_DEAL,
             "autoAccept": True,
@@ -8820,21 +10086,20 @@ def apply_rights_management(
             player.pop("qualifyingOffer", None)
             player.pop("qualifyingOfferEligible", None)
 
-            renounce_row = {
+            decision_log.append({
                 "playerKey": get_cap_hold_player_key(player),
                 "playerId": player.get("id"),
                 "playerName": player.get("name"),
                 "teamName": team_name,
                 "decision": "renounce",
                 "capHoldCleared": old_cap_hold,
-            }
-            decision_log.append(renounce_row)
-            record_rights_renounce_log(
+            })
+            decision_log[-1].update(build_rights_renounce_context(
                 league_data = updated,
-                row = renounce_row,
-                source = "Rights management",
-                reason = "Team renounced its own free-agent rights",
-            )
+                team_name = team_name,
+                row = decision_log[-1],
+            ))
+            decision_log[-1]["source"] = "User clearance"
 
         elif decision == "extend_qo":
             eligible = player.get("qualifyingOfferEligible") if isinstance(player.get("qualifyingOfferEligible"), dict) else None

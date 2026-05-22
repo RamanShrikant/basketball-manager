@@ -933,6 +933,70 @@ function buildFocusedPopup({ fullPopup, row = {}, chipLabel = "Context", focusTy
 }
 
 
+
+function formatListText(values, formatter = (value) => value) {
+  const items = Array.isArray(values)
+    ? values.filter(Boolean).map(formatter).filter(Boolean)
+    : [];
+
+  if (!items.length) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function formatPlayoffResultLabel(value) {
+  const raw = String(value || "").replaceAll("_", " ").trim();
+  if (!raw) return "";
+  return raw;
+}
+
+function buildRightsRenouncedPopup({ row, leagueData }) {
+  const teamName = row?.teamName || "Unknown Team";
+  const playerName = row?.playerName || "Unknown Player";
+  const teamContext = formatTeamContext(leagueData, teamName);
+  const direction = formatToolLabel(row?.teamDirection) || "not clearly tagged";
+  const recentRecord = row?.recentRecord || teamContext.label || "record unavailable";
+  const playoffResult = formatPlayoffResultLabel(row?.lastSeasonPlayoffResult);
+  const needText = formatListText(row?.teamNeedPositions || row?.weakestPositions, formatPositionChipLabel);
+  const triggerPlayerName = row?.targetPlayerName || row?.triggerPlayerName || "";
+  const triggerPlayerPosition = row?.targetPlayerPosition ? formatPositionChipLabel(row.targetPlayerPosition) : "";
+  const renouncedPosition = row?.renouncedPlayerPosition ? formatPositionChipLabel(row.renouncedPlayerPosition) : "";
+  const capHoldText = formatDollars(row?.capHoldCleared || 0);
+
+  const replacementLine = triggerPlayerName
+    ? `${teamName} cleared this hold while trying to create room for ${triggerPlayerName}${triggerPlayerPosition ? ` at ${triggerPlayerPosition}` : ""}.`
+    : `${teamName} cleared this hold to open cap flexibility for the rest of the market.`;
+
+  const directionLine = direction !== "not clearly tagged"
+    ? `${teamName} is being read as ${direction}. That changes the logic: contenders usually clear holds for immediate rotation help, while rebuilding teams usually clear holds to protect flexibility and chase better timeline fits.`
+    : `${teamName}'s exact direction tag was not saved on this row, so this read leans on roster fit, cap flexibility, and recent team context.`;
+
+  const targetLine = needText
+    ? `${teamName}'s weakest roster areas were tagged around ${needText}. The renounce decision is probably connected to those needs or to making room for a stronger target.`
+    : `No specific weak-position list was saved, so the safest read is cap flexibility rather than a single position replacement.`;
+
+  const playerAffectedLine = `${playerName}${renouncedPosition ? ` (${renouncedPosition})` : ""} was still counting as a cap hold because ${teamName} held his free-agent rights. Renouncing him removes that hold, but the team loses Bird/RFA control over him.`;
+
+  return {
+    title: `${teamName} - Rights Renounced`,
+    subtitle: `${playerName} • ${capHoldText} cleared`,
+    playerSource: {
+      ...row,
+      playerName,
+      teamName,
+    },
+    sections: [
+      { label: "What happened", value: `${teamName} renounced rights on ${playerName}, clearing ${capHoldText} from its cap-hold sheet.` },
+      { label: "Why the team did it", value: replacementLine },
+      { label: "Team direction", value: directionLine },
+      { label: "Last season context", value: `${teamName} is coming off ${recentRecord}${playoffResult ? ` with a ${playoffResult} playoff result` : ""}. ${teamContext.short ? `This reads like ${teamContext.short}.` : ""}` },
+      { label: "Roster target", value: targetLine },
+      { label: "Who got replaced", value: playerAffectedLine },
+    ],
+  };
+}
+
 function buildSigningPopup({ row, chipLabel, leagueData, selectedTeamName }) {
   const backendPopup = buildPopupFromStoryContext(row, chipLabel);
   if (backendPopup) return backendPopup;
@@ -1352,7 +1416,25 @@ export default function ViewingOffers() {
         capHoldCleared,
         reason: raw.reason || fallback.reason || "renounced rights",
         source: fallback.source || raw.source || "rights_clearance",
-        triggerPlayerName: fallback.triggerPlayerName || raw.triggerPlayerName || "",
+        triggerPlayerName: fallback.triggerPlayerName || raw.triggerPlayerName || raw.targetPlayerName || "",
+        teamDirection: raw.teamDirection || fallback.teamDirection || "",
+        directionConfidence: raw.directionConfidence ?? fallback.directionConfidence ?? null,
+        directionReasons: raw.directionReasons || fallback.directionReasons || [],
+        recentRecord: raw.recentRecord || fallback.recentRecord || "",
+        lastSeasonWins: raw.lastSeasonWins ?? fallback.lastSeasonWins ?? null,
+        lastSeasonLosses: raw.lastSeasonLosses ?? fallback.lastSeasonLosses ?? null,
+        lastSeasonSeed: raw.lastSeasonSeed ?? fallback.lastSeasonSeed ?? null,
+        lastSeasonPlayoffResult: raw.lastSeasonPlayoffResult || fallback.lastSeasonPlayoffResult || "",
+        lastSeasonRoundReached: raw.lastSeasonRoundReached ?? fallback.lastSeasonRoundReached ?? null,
+        teamNeedPositions: raw.teamNeedPositions || raw.weakestPositions || fallback.teamNeedPositions || [],
+        weakestPositions: raw.weakestPositions || raw.teamNeedPositions || fallback.weakestPositions || [],
+        targetPlayerName: raw.targetPlayerName || fallback.targetPlayerName || raw.triggerPlayerName || fallback.triggerPlayerName || "",
+        targetPlayerPosition: raw.targetPlayerPosition || fallback.targetPlayerPosition || "",
+        targetPlayerOverall: raw.targetPlayerOverall ?? fallback.targetPlayerOverall ?? null,
+        targetPlayerAge: raw.targetPlayerAge ?? fallback.targetPlayerAge ?? null,
+        renouncedPlayerPosition: raw.renouncedPlayerPosition || raw.position || raw.pos || fallback.renouncedPlayerPosition || "",
+        renouncedPlayerOverall: raw.renouncedPlayerOverall ?? raw.overall ?? fallback.renouncedPlayerOverall ?? null,
+        renouncedPlayerAge: raw.renouncedPlayerAge ?? raw.age ?? fallback.renouncedPlayerAge ?? null,
       });
     };
 
@@ -1546,6 +1628,13 @@ export default function ViewingOffers() {
       row,
       chipLabel,
       focusType,
+      leagueData,
+    }));
+  };
+
+  const openRightsRenouncedInfo = (row) => {
+    setInfoPopup(buildRightsRenouncedPopup({
+      row,
       leagueData,
     }));
   };
@@ -2998,10 +3087,12 @@ return (
                                   Renounced rights on {row.playerName || "Unknown Player"}
                                 </div>
                                 <div className="flex flex-wrap gap-2 mt-2">
+                                  <InfoChip tone="orange" onClick={() => openRightsRenouncedInfo(row)}>Click For Context</InfoChip>
                                   <InfoChip tone="red">{formatDollars(row.capHoldCleared || 0)} cleared</InfoChip>
                                   {row.day !== null && row.day !== undefined && <InfoChip>Day {row.day}</InfoChip>}
                                   {row.source && <InfoChip>{row.source}</InfoChip>}
-                                  {row.triggerPlayerName && <InfoChip tone="orange">For {row.triggerPlayerName}</InfoChip>}
+                                  {(row.targetPlayerName || row.triggerPlayerName) && <InfoChip tone="orange">For {row.targetPlayerName || row.triggerPlayerName}</InfoChip>}
+                                  {row.teamDirection && <InfoChip onClick={() => openRightsRenouncedInfo(row)}>{formatToolLabel(row.teamDirection)}</InfoChip>}
                                 </div>
                               </div>
                             </div>
