@@ -1460,7 +1460,7 @@ export function initializeFreeAgencyPeriod(
   startWorker();
 
   const requestId = "FAI" + counter++;
-  const TIMEOUT_MS = 120000;
+  const TIMEOUT_MS = 180000;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -1632,7 +1632,7 @@ export function advanceFreeAgencyDay(
   startWorker();
 
   const requestId = "FAD" + counter++;
-  const TIMEOUT_MS = 65000;
+  const TIMEOUT_MS = 180000;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -1673,7 +1673,7 @@ export function processPendingUserFreeAgencyDecisions(
   startWorker();
 
   const requestId = "FAPD" + counter++;
-  const TIMEOUT_MS = 65000;
+  const TIMEOUT_MS = 180000;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -1717,7 +1717,7 @@ export function processPendingRfaMatchDecision(
   startWorker();
 
   const requestId = "FARFA" + counter++;
-  const TIMEOUT_MS = 65000;
+  const TIMEOUT_MS = 180000;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
