@@ -97,8 +97,13 @@ function shouldResumeViewingOffers(leagueData) {
   );
 }
 
-function getFreeAgencyResumeRoute(leagueData) {
+function getFreeAgencyResumeRoute(leagueData, offseasonState = {}) {
   const savedRoute = localStorage.getItem(FREE_AGENCY_LAST_ROUTE_KEY);
+
+  if (!isFreeAgencyStateCurrentForOffseason(leagueData, offseasonState)) {
+    localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+    return "/free-agents";
+  }
 
   if (savedRoute === "/viewing-offers" && shouldResumeViewingOffers(leagueData)) {
     return "/viewing-offers";
@@ -175,6 +180,51 @@ function hasStaleFreeAgencyComplete(leagueData, offseasonState) {
       freeAgents.length > 0 &&
       !freeAgencyHasRealMarketEvidence(snapshot)
   );
+}
+
+function isFreeAgencyStateCurrentForOffseason(leagueData, offseasonState) {
+  const snapshot = getLeagueDataSnapshot(leagueData);
+  const state = snapshot?.freeAgencyState || {};
+  if (!state || typeof state !== "object") return true;
+
+  const currentSeasonYear = Number(
+    snapshot?.seasonYear ||
+      snapshot?.currentSeasonYear ||
+      offseasonState?.seasonYear ||
+      2026
+  );
+  const stateSeasonYear = Number(state?.seasonYear || 0);
+
+  if (stateSeasonYear > 0 && stateSeasonYear !== currentSeasonYear) {
+    return false;
+  }
+
+  const currentDay = Number(state?.currentDay || 0);
+  const maxDays = Number(state?.maxDays || 0);
+  const completeFlag = Boolean(
+    state?.marketComplete ||
+      state?.freeAgencyComplete ||
+      state?.completed ||
+      state?.isComplete ||
+      state?.status === "complete"
+  );
+
+  const looksLikeClosedOldMarket =
+    !state?.isActive &&
+    maxDays > 0 &&
+    (currentDay >= maxDays || completeFlag);
+
+  const currentOffseasonHasNotStartedFA =
+    offseasonState?.active &&
+    Number(offseasonState?.seasonYear || currentSeasonYear) === currentSeasonYear &&
+    !!offseasonState?.optionsComplete &&
+    !offseasonState?.freeAgencyComplete;
+
+  if (stateSeasonYear <= 0 && currentOffseasonHasNotStartedFA && looksLikeClosedOldMarket) {
+    return false;
+  }
+
+  return true;
 }
 
 function getRosterStatus(leagueData, selectedTeam) {
@@ -342,6 +392,10 @@ const handleAdvanceToNewSeason = () => {
       next.freeAgencyComplete = false;
     }
 
+    if (!isFreeAgencyStateCurrentForOffseason(leagueData, next)) {
+      localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+    }
+
     setOffseasonState(next);
     saveOffseasonState(next);
   }, [seasonYear, leagueData]);
@@ -402,7 +456,7 @@ const handleAdvanceToNewSeason = () => {
         accent: freeAgencyComplete && rosterBlocksProgression ? "orange" : freeAgencyComplete ? "green" : optionsComplete ? "orange" : "neutral",
         buttonLabel: optionsComplete ? "Open Free Agency" : "Locked",
         disabled: !optionsComplete,
-        onClick: () => navigate(rosterBlocksProgression ? "/free-agents" : getFreeAgencyResumeRoute(leagueData)),
+        onClick: () => navigate(rosterBlocksProgression ? "/free-agents" : getFreeAgencyResumeRoute(leagueData, offseasonState)),
       },
       {
         step: "4",

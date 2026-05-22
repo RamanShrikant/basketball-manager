@@ -1285,6 +1285,7 @@ export default function ViewingOffers() {
 
   const [hideLeagueEvents, setHideLeagueEvents] = useState(false);
   const [hideCpuOffers, setHideCpuOffers] = useState(false);
+  const [hideRightsRenounced, setHideRightsRenounced] = useState(false);
   const [selectedDecisionMap, setSelectedDecisionMap] = useState({});
   const [selectedRightsRenounceMap, setSelectedRightsRenounceMap] = useState({});
   const [actionError, setActionError] = useState("");
@@ -1320,6 +1321,83 @@ export default function ViewingOffers() {
   const signings = latestResults?.signings || [];
   const generatedOffers = latestResults?.generatedOffers || [];
   const dayResolved = latestResults?.dayResolved;
+
+  const rightsRenounceRows = useMemo(() => {
+    const rows = [];
+    const seen = new Set();
+
+    const addRow = (raw = {}, fallback = {}) => {
+      const playerName = raw.playerName || raw.name || fallback.playerName || "Unknown Player";
+      const teamName = raw.teamName || raw.heldByTeam || fallback.teamName || "Unknown Team";
+      const day = raw.day ?? fallback.day ?? dayResolved ?? null;
+      const capHoldCleared = Number(
+        raw.capHoldCleared ??
+          raw.capHoldAmount ??
+          raw.capHold ??
+          raw.amount ??
+          fallback.capHoldCleared ??
+          0
+      );
+
+      const key = [day ?? "", teamName, playerName, capHoldCleared, fallback.source || raw.source || raw.reason || ""].join("|");
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      rows.push({
+        day,
+        teamName,
+        playerName,
+        playerId: raw.playerId ?? raw.id ?? null,
+        playerKey: raw.playerKey || fallback.playerKey || "",
+        capHoldCleared,
+        reason: raw.reason || fallback.reason || "renounced rights",
+        source: fallback.source || raw.source || "rights_clearance",
+        triggerPlayerName: fallback.triggerPlayerName || raw.triggerPlayerName || "",
+      });
+    };
+
+    const signingSources = [
+      ...(Array.isArray(signings) ? signings : []),
+      ...(Array.isArray(freeAgencyState?.signedPlayersLog) ? freeAgencyState.signedPlayersLog : []),
+    ];
+
+    for (const signing of signingSources) {
+      const fallback = {
+        day: signing?.day ?? dayResolved ?? null,
+        teamName: signing?.teamName || signing?.signedWith || "",
+        triggerPlayerName: signing?.playerName || "",
+      };
+
+      for (const row of signing?.autoRenouncedCapHolds || []) {
+        addRow(row, {
+          ...fallback,
+          source: "CPU auto-renounce",
+          reason: `Cleared cap hold to sign ${fallback.triggerPlayerName || "a player"}`,
+        });
+      }
+
+      for (const row of signing?.manualRenouncedCapHolds || []) {
+        addRow(row, {
+          ...fallback,
+          source: "User clearance",
+          reason: `Cleared cap hold to sign ${fallback.triggerPlayerName || "a player"}`,
+        });
+      }
+    }
+
+    for (const row of freeAgencyState?.rightsRenounceLog || []) {
+      addRow(row, {
+        source: row?.source || "Rights management",
+        reason: row?.reason || "Renounced rights",
+      });
+    }
+
+    return rows.sort((a, b) => {
+      const dayDiff = Number(b.day || 0) - Number(a.day || 0);
+      if (dayDiff !== 0) return dayDiff;
+      return String(a.teamName).localeCompare(String(b.teamName));
+    });
+  }, [signings, freeAgencyState, dayResolved]);
 
   const pendingUserDecisions = Array.isArray(freeAgencyState?.pendingUserDecisions)
     ? freeAgencyState.pendingUserDecisions
@@ -2869,7 +2947,73 @@ return (
                 </div>
               )}
 
-              {(hideLeagueEvents || hideCpuOffers) && (
+              {!hideRightsRenounced && (
+                <div className="bg-neutral-800 border border-neutral-700 rounded-2xl p-6 shadow-lg xl:col-span-2">
+                  <div className="flex items-center justify-between gap-4 mb-4">
+                    <div>
+                      <div className="text-lg font-semibold text-orange-400">
+                        Rights Renounced
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Shows teams that cleared their own cap holds during this free-agency day or earlier saved market activity.
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => setHideRightsRenounced(true)}
+                      className="px-3 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg text-sm font-semibold transition"
+                    >
+                      Hide Rights Renounced
+                    </button>
+                  </div>
+
+                  {!rightsRenounceRows.length ? (
+                    <p className="text-gray-400">No teams renounced rights in the available market log.</p>
+                  ) : (
+                    <div className="bm-orange-scroll max-h-[300px] overflow-y-auto pr-2 space-y-3">
+                      {rightsRenounceRows.map((row, idx) => {
+                        const logo = getTeamLogo(row?.teamName);
+
+                        return (
+                          <div
+                            key={`${row.teamName || "team"}-${row.playerName || "player"}-${idx}`}
+                            className="bg-neutral-900 border border-red-500/25 rounded-xl px-4 py-3"
+                          >
+                            <div className="flex items-start gap-3">
+                              {logo ? (
+                                <img
+                                  src={logo}
+                                  alt={row?.teamName || "Team logo"}
+                                  className="w-9 h-9 object-contain mt-1"
+                                />
+                              ) : (
+                                <div className="w-9 h-9 rounded-full bg-neutral-700 mt-1" />
+                              )}
+
+                              <div className="min-w-0 flex-1">
+                                <div className="text-white font-semibold">
+                                  {row.teamName || "Unknown Team"}
+                                </div>
+                                <div className="text-sm text-gray-300 mt-1">
+                                  Renounced rights on {row.playerName || "Unknown Player"}
+                                </div>
+                                <div className="flex flex-wrap gap-2 mt-2">
+                                  <InfoChip tone="red">{formatDollars(row.capHoldCleared || 0)} cleared</InfoChip>
+                                  {row.day !== null && row.day !== undefined && <InfoChip>Day {row.day}</InfoChip>}
+                                  {row.source && <InfoChip>{row.source}</InfoChip>}
+                                  {row.triggerPlayerName && <InfoChip tone="orange">For {row.triggerPlayerName}</InfoChip>}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {(hideLeagueEvents || hideCpuOffers || hideRightsRenounced) && (
                 <div className="xl:col-span-2 flex gap-3 flex-wrap">
                   {hideLeagueEvents && (
                     <button
@@ -2886,6 +3030,15 @@ return (
                       className="px-4 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg text-sm font-semibold transition"
                     >
                       Show New CPU Offers
+                    </button>
+                  )}
+
+                  {hideRightsRenounced && (
+                    <button
+                      onClick={() => setHideRightsRenounced(false)}
+                      className="px-4 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg text-sm font-semibold transition"
+                    >
+                      Show Rights Renounced
                     </button>
                   )}
                 </div>

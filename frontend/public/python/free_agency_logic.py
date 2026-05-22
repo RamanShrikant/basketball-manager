@@ -1456,14 +1456,22 @@ def auto_renounce_cpu_cap_holds_for_room(
         player.pop("qualifyingOfferEligible", None)
 
         cleared += int(hold_amount)
-        renounced.append({
+        renounce_row = {
             "playerKey": get_cap_hold_player_key(player),
             "playerId": player.get("id"),
             "playerName": player.get("name"),
             "teamName": team_name,
             "capHoldCleared": int(hold_amount),
             "reason": "cpu_cleared_cap_hold_for_signing",
-        })
+        }
+        renounced.append(renounce_row)
+        record_rights_renounce_log(
+            league_data = league_data,
+            row = renounce_row,
+            source = "CPU auto-renounce",
+            reason = "Cleared cap hold to create room for a signing",
+            trigger_player_name = "",
+        )
 
     return {
         "ok": cleared >= needed,
@@ -1471,6 +1479,53 @@ def auto_renounce_cpu_cap_holds_for_room(
         "capHoldCleared": cleared,
         "clearanceNeeded": needed,
     }
+
+
+
+def record_rights_renounce_log(
+    league_data: Dict[str, Any],
+    row: Dict[str, Any],
+    source: str = "rights_renounced",
+    reason: str = "renounced rights",
+    trigger_player_name: str = "",
+) -> None:
+    state = ensure_free_agency_state(league_data)
+    log = state.setdefault("rightsRenounceLog", [])
+
+    item = {
+        "day": int(num(state.get("currentDay"), 0)),
+        "playerKey": row.get("playerKey"),
+        "playerId": row.get("playerId"),
+        "playerName": row.get("playerName") or row.get("name"),
+        "teamName": row.get("teamName") or row.get("heldByTeam"),
+        "capHoldCleared": int(num(row.get("capHoldCleared") or row.get("capHoldAmount") or row.get("capHold"), 0)),
+        "source": source,
+        "reason": reason,
+        "triggerPlayerName": trigger_player_name,
+    }
+
+    key = (
+        item.get("day"),
+        item.get("playerId"),
+        item.get("playerName"),
+        item.get("teamName"),
+        item.get("capHoldCleared"),
+        item.get("source"),
+    )
+
+    for existing in log:
+        existing_key = (
+            existing.get("day"),
+            existing.get("playerId"),
+            existing.get("playerName"),
+            existing.get("teamName"),
+            int(num(existing.get("capHoldCleared"), 0)),
+            existing.get("source"),
+        )
+        if existing_key == key:
+            return
+
+    log.append(item)
 
 
 def _optional_int(value: Any) -> Optional[int]:
@@ -3673,6 +3728,7 @@ def ensure_free_agency_state(league_data: Dict[str, Any]) -> Dict[str, Any]:
     state.setdefault("userOfferOutcomeLog", [])
     state.setdefault("pendingUserDecisions", [])
     state.setdefault("pendingRfaMatchDecisions", [])
+    state.setdefault("rightsRenounceLog", [])
     state.setdefault("pendingUserTeamName", None)
     state.setdefault("pendingUserTeamSnapshot", None)
     state.setdefault("exceptionUsageByTeam", {})
@@ -6903,7 +6959,8 @@ def is_incumbent_retention_priority(player: Dict[str, Any], team_name: Optional[
 
 def generate_cpu_offers_for_day(
     league_data: Dict[str, Any],
-    user_team_name: Optional[str] = None
+    user_team_name: Optional[str] = None,
+    include_story_context: bool = True,
 ) -> List[Dict[str, Any]]:
     state = ensure_free_agency_state(league_data)
     refresh_free_agent_market_values(league_data)
@@ -7187,19 +7244,28 @@ def generate_cpu_offers_for_day(
                 "weakestPositions": fit.get("weakestPositions"),
                 "teamDirection": profile.get("direction"),
             }
-            offer_record["storyContext"] = build_free_agency_story_context(
-                league_data = league_data,
-                player = player,
-                team_name = team_name,
-                contract = offer_record.get("contract"),
-                row = offer_record,
-                offer = offer_record,
-                spending_res = eval_res,
-                event_type = "cpu_offer",
-                current_day = current_day,
-                roster_need = offer_record.get("rosterNeed"),
-                team_profile = profile,
-            )
+            # Day 1 can generate hundreds of CPU offers. Building full narrative
+            # story objects for every opening offer makes Year 2+ initialization
+            # slow enough to trip the Pyodide worker timeout. Keep the core offer
+            # logic identical, but allow the opening market to store lightweight
+            # offers. The UI already has fallback context builders when this field
+            # is missing.
+            if include_story_context:
+                offer_record["storyContext"] = build_free_agency_story_context(
+                    league_data = league_data,
+                    player = player,
+                    team_name = team_name,
+                    contract = offer_record.get("contract"),
+                    row = offer_record,
+                    offer = offer_record,
+                    spending_res = eval_res,
+                    event_type = "cpu_offer",
+                    current_day = current_day,
+                    roster_need = offer_record.get("rosterNeed"),
+                    team_profile = profile,
+                )
+            else:
+                offer_record.pop("storyContext", None)
             upsert_offer_record(
                 league_data = league_data,
                 player_key = player_key,
@@ -7222,7 +7288,7 @@ def generate_cpu_offers_for_day(
                 "positionBucket": offer_record.get("positionBucket"),
                 "weakestPositions": offer_record.get("weakestPositions"),
                 "rosterNeed": offer_record.get("rosterNeed"),
-                "storyContext": offer_record.get("storyContext"),
+                "storyContext": offer_record.get("storyContext") if include_story_context else None,
                 "rfaOfferSheet": bool(get_player_rights(player).get("restrictedFreeAgent") and not is_rights_team(player, team_name)),
                 "rightsTeamName": get_player_rights(player).get("heldByTeam"),
             })
@@ -8033,6 +8099,12 @@ def initialize_free_agency_period(
     state["pendingRfaMatchDecisions"] = []
     state["exceptionUsageByTeam"] = {}
     state["teamNeedProfiles"] = {}
+    state["rightsRenounceLog"] = []
+    state["marketComplete"] = False
+    state["freeAgencyComplete"] = False
+    state["completed"] = False
+    state["isComplete"] = False
+    state["status"] = "active"
     state["pendingUserTeamName"] = user_team_name
     state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, user_team_name) if user_team_name else None
 
@@ -8043,6 +8115,7 @@ def initialize_free_agency_period(
     opening_offers = generate_cpu_offers_for_day(
         league_data = updated,
         user_team_name = user_team_name,
+        include_story_context = False,
     )
 
     state["dailyLog"].append({
@@ -8747,14 +8820,21 @@ def apply_rights_management(
             player.pop("qualifyingOffer", None)
             player.pop("qualifyingOfferEligible", None)
 
-            decision_log.append({
+            renounce_row = {
                 "playerKey": get_cap_hold_player_key(player),
                 "playerId": player.get("id"),
                 "playerName": player.get("name"),
                 "teamName": team_name,
                 "decision": "renounce",
                 "capHoldCleared": old_cap_hold,
-            })
+            }
+            decision_log.append(renounce_row)
+            record_rights_renounce_log(
+                league_data = updated,
+                row = renounce_row,
+                source = "Rights management",
+                reason = "Team renounced its own free-agent rights",
+            )
 
         elif decision == "extend_qo":
             eligible = player.get("qualifyingOfferEligible") if isinstance(player.get("qualifyingOfferEligible"), dict) else None

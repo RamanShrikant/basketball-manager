@@ -1460,7 +1460,7 @@ export function initializeFreeAgencyPeriod(
   startWorker();
 
   const requestId = "FAI" + counter++;
-  const TIMEOUT_MS = 65000;
+  const TIMEOUT_MS = 120000;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -1484,7 +1484,7 @@ export function initializeFreeAgencyPeriod(
     worker.postMessage({
       type: "initialize-free-agency-period",
       requestId,
-      leagueData: deepSanitize(leagueData),
+      leagueData: deepSanitize(buildLeagueDataForFreeAgencyBackendAction(leagueData)),
       payload: {
         userTeamName,
         maxDays,

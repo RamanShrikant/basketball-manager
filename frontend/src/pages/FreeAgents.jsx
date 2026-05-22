@@ -484,8 +484,63 @@ const isOffseasonMode =
   }, [workingLeagueData]);
 
   const liveFreeAgencyState = useMemo(() => {
-    return workingLeagueData?.freeAgencyState || {};
-  }, [workingLeagueData]);
+    const rawState = workingLeagueData?.freeAgencyState || {};
+    if (!rawState || typeof rawState !== "object") return {};
+
+    const stateSeasonYear = Number(rawState?.seasonYear || 0);
+    const rawCurrentDay = Number(rawState?.currentDay || 0);
+    const rawMaxDays = Number(rawState?.maxDays || 0);
+    const rawIsActive = Boolean(rawState?.isActive);
+    const rawCompleteFlag = Boolean(
+      rawState?.marketComplete ||
+        rawState?.freeAgencyComplete ||
+        rawState?.completed ||
+        rawState?.isComplete ||
+        rawState?.status === "complete"
+    );
+
+    const currentOffseasonReadyForFreshFA =
+      isOffseasonMode &&
+      optionsComplete &&
+      rightsManagementComplete &&
+      !freeAgencyFinished;
+
+    const rawLooksLikeClosedOldMarket =
+      !rawIsActive &&
+      rawMaxDays > 0 &&
+      (rawCurrentDay >= rawMaxDays || rawCompleteFlag);
+
+    // Surgical year-rollover guard:
+    // Do not let last offseason's closed Day 10 state open the next offseason
+    // already completed. This is what made Year 2 FA look like it auto-ran.
+    if (
+      currentOffseasonReadyForFreshFA &&
+      stateSeasonYear > 0 &&
+      stateSeasonYear !== currentSeasonYear
+    ) {
+      return {};
+    }
+
+    // Recovery for older saves created before seasonYear was stamped onto
+    // freeAgencyState. If it is closed, inactive, and the new offseason has not
+    // started FA yet, treat it as stale instead of a completed current market.
+    if (
+      currentOffseasonReadyForFreshFA &&
+      stateSeasonYear <= 0 &&
+      rawLooksLikeClosedOldMarket
+    ) {
+      return {};
+    }
+
+    return rawState;
+  }, [
+    workingLeagueData,
+    isOffseasonMode,
+    optionsComplete,
+    rightsManagementComplete,
+    freeAgencyFinished,
+    currentSeasonYear,
+  ]);
 
   const isLiveFreeAgencyActive = !!liveFreeAgencyState?.isActive;
   const currentDay = Number(liveFreeAgencyState?.currentDay || 0);
@@ -522,24 +577,49 @@ const isOffseasonMode =
     !isLiveFreeAgencyActive &&
     currentDay >= maxDays;
 
+  const backendFreeAgencyCompleteFlag = Boolean(
+    liveFreeAgencyState?.marketComplete ||
+      liveFreeAgencyState?.freeAgencyComplete ||
+      liveFreeAgencyState?.completed ||
+      liveFreeAgencyState?.isComplete ||
+      liveFreeAgencyState?.status === "complete"
+  );
+
+  const backendHasRealMarketEvidence = Boolean(
+    currentDay > 0 ||
+      signedPlayersLog.length > 0 ||
+      dailyLog.length > 0 ||
+      offerHistory.length > 0 ||
+      Object.keys(offersByPlayerSnapshot).length > 0 ||
+      freeAgents.length === 0
+  );
+
   const backendMarkedFreeAgencyComplete =
     isOffseasonMode &&
     optionsComplete &&
     rightsManagementComplete &&
     !isLiveFreeAgencyActive &&
-    Boolean(
-      liveFreeAgencyState?.marketComplete ||
-      liveFreeAgencyState?.freeAgencyComplete ||
-      liveFreeAgencyState?.completed ||
-      liveFreeAgencyState?.isComplete ||
-      liveFreeAgencyState?.status === "complete"
-    );
+    backendFreeAgencyCompleteFlag &&
+    backendHasRealMarketEvidence;
 
   const freeAgencyMarketComplete =
     freeAgencyMarketReachedEnd || backendMarkedFreeAgencyComplete;
 
+  const staleOffseasonFreeAgencyComplete =
+    freeAgencyFinished &&
+    isOffseasonMode &&
+    optionsComplete &&
+    rightsManagementComplete &&
+    !isLiveFreeAgencyActive &&
+    !freeAgencyMarketStarted &&
+    !freeAgencyMarketComplete &&
+    freeAgents.length > 0;
+
+  const trustedFreeAgencyFinished =
+    freeAgencyFinished && !staleOffseasonFreeAgencyComplete;
+
   const effectiveFreeAgencyFinished =
-    freeAgencyFinished ||
+    trustedFreeAgencyFinished ||
     freeAgencyMarketComplete ||
     (isOffseasonMode &&
       optionsComplete &&
@@ -1991,7 +2071,7 @@ const handleContinueToProgression = () => {
 
   navigate("/player-progression");
 };
-  const buildCleanFreeAgencyStateForInit = (seasonYear, userTeamName = null, maxDays = 7) => {
+  const buildCleanFreeAgencyStateForInit = (seasonYear, userTeamName = null, maxDays = 10) => {
   return {
     seasonYear,
     isActive: false,
@@ -2009,6 +2089,11 @@ const handleContinueToProgression = () => {
     pendingUserTeamName: userTeamName,
     pendingUserTeamSnapshot: null,
     latestResults: null,
+    marketComplete: false,
+    freeAgencyComplete: false,
+    completed: false,
+    isComplete: false,
+    status: "not_started",
   };
 };
   const handleInitializeFreeAgency = async () => {
@@ -2060,7 +2145,9 @@ const handleContinueToProgression = () => {
       if (!(workingLeagueData?.freeAgents || []).length) {
         updateOffseasonState({
           active: true,
+          seasonYear: currentSeasonYear,
           optionsComplete: true,
+          rightsManagementComplete: true,
           freeAgencyComplete: true,
         });
 
@@ -2081,7 +2168,7 @@ const handleContinueToProgression = () => {
 const cleanFreeAgencyState = buildCleanFreeAgencyStateForInit(
   currentSeasonYear,
   selectedTeam?.name || null,
-  7
+  10
 );
 
 const leagueForInit = {
@@ -2094,7 +2181,7 @@ applyLeagueUpdate(leagueForInit);
 const res = await initializeFreeAgencyPeriod(
   leagueForInit,
   selectedTeam?.name || null,
-  7
+  10
 );
 
       if (!res?.ok || !res?.leagueData) {
@@ -2123,8 +2210,46 @@ updateOffseasonState({
 
       setDaySummary(latestResults);
     } catch (err) {
+      const message = err?.message || "Failed to start free agency.";
+
+      // If a heavy Year 2+ opening market barely misses the JS timeout but the
+      // saved league state already shows an active Day 1 market, treat that as
+      // recovered instead of leaving a scary FREE_AGENCY_INIT_TIMEOUT banner.
+      let recoveredLeague = null;
+      try {
+        const savedLeague = JSON.parse(localStorage.getItem("leagueData") || "null");
+        const savedState = savedLeague?.freeAgencyState || {};
+        const savedSeasonYear = Number(savedState?.seasonYear || 0);
+        if (
+          savedLeague &&
+          savedState?.isActive &&
+          Number(savedState?.currentDay || 0) > 0 &&
+          (!savedSeasonYear || savedSeasonYear === currentSeasonYear)
+        ) {
+          recoveredLeague = savedLeague;
+        }
+      } catch {
+        recoveredLeague = null;
+      }
+
+      if (message === "FREE_AGENCY_INIT_TIMEOUT" && recoveredLeague) {
+        applyLeagueUpdate(recoveredLeague);
+        setDaySummary({
+          dayResolved: Number(recoveredLeague?.freeAgencyState?.currentDay || 1),
+          signings: [],
+          generatedOffers: [],
+          stateSummary: {
+            isActive: true,
+            currentDay: Number(recoveredLeague?.freeAgencyState?.currentDay || 1),
+            maxDays: Number(recoveredLeague?.freeAgencyState?.maxDays || 10),
+            freeAgentCount: Number(recoveredLeague?.freeAgents?.length || 0),
+          },
+        });
+        return;
+      }
+
       setDaySummary({
-        error: err?.message || "Failed to start free agency.",
+        error: message,
       });
     } finally {
       setMarketInitLoading(false);
@@ -2190,7 +2315,9 @@ updateOffseasonState({
       if (!res?.stateSummary?.isActive) {
         updateOffseasonState({
           active: true,
+          seasonYear: currentSeasonYear,
           optionsComplete: true,
+          rightsManagementComplete: true,
           freeAgencyComplete: true,
         });
       }
@@ -2605,13 +2732,13 @@ updateOffseasonState({
             </div>
           )}
 
-          {daySummary?.error && (
+          {daySummary?.error && !(daySummary.error === "FREE_AGENCY_INIT_TIMEOUT" && isLiveFreeAgencyActive && currentDay > 0) && (
             <div className="mt-4 text-red-300 text-sm font-semibold">
               {daySummary.error}
             </div>
           )}
 
-          {!daySummary?.error && daySummary && (
+          {(!daySummary?.error || (daySummary.error === "FREE_AGENCY_INIT_TIMEOUT" && isLiveFreeAgencyActive && currentDay > 0)) && daySummary && (
             <div className="mt-4 bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
               <div className="text-sm font-semibold text-orange-300 mb-2">
                 Latest Market Update
