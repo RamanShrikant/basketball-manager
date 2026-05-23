@@ -441,6 +441,31 @@ export default function FreeAgents() {
     );
   };
 
+  const getOfferOptionTypeLabel = (offer = {}) => {
+    const raw = String(
+      offer?.contract?.option?.type ||
+      offer?.option?.type ||
+      offer?.optionType ||
+      offer?.contractOptionType ||
+      ""
+    ).toLowerCase();
+
+    if (raw === "player" || raw === "player_option") return "Player Option";
+    if (raw === "team" || raw === "team_option") return "Team Option";
+    return "No Option";
+  };
+
+  const getOfferOptionChipClass = (label = "") => {
+    const raw = String(label || "").toLowerCase();
+    if (raw.includes("player")) {
+      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+    }
+    if (raw.includes("team")) {
+      return "border-orange-500/30 bg-orange-500/10 text-orange-200";
+    }
+    return "border-neutral-600 bg-neutral-800 text-neutral-300";
+  };
+
   const Chip = ({ children, tone = "neutral" }) => {
     const cls =
       tone === "orange"
@@ -3467,12 +3492,14 @@ updateOffseasonState({
 
                       return sortedOfferRows.map(({ offer, offerInterest }, idx) => {
                         const offerTeamDirectionLabel = getOfferTeamDirectionLabel(offer);
+                        const offerOptionTypeLabel = getOfferOptionTypeLabel(offer);
+                        const isBestVisibleOffer = idx === 0;
 
                         return (
                       <div
                         key={`${offer.offerId || offer.teamName}-${idx}`}
                         className={`rounded-xl border p-4 ${
-                          offer.isBestOffer
+                          isBestVisibleOffer
                             ? "border-orange-500 bg-orange-500/10"
                             : "border-neutral-700 bg-neutral-900"
                         }`}
@@ -3487,7 +3514,7 @@ updateOffseasonState({
                                 {String(offer.source).toUpperCase()}
                               </span>
                             )}
-                            {offer.isBestOffer && (
+                            {isBestVisibleOffer && (
                               <span className="px-2 py-1 rounded-full text-xs font-semibold bg-orange-600 text-white">
                                 Best Offer
                               </span>
@@ -3519,10 +3546,16 @@ updateOffseasonState({
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
                           <div>
                             <div className="text-gray-400 mb-1">Years</div>
                             <div className="text-white font-semibold">{offer.years || "-"}</div>
+                          </div>
+                          <div>
+                            <div className="text-gray-400 mb-1">Option</div>
+                            <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-bold uppercase tracking-wide ${getOfferOptionChipClass(offerOptionTypeLabel)}`}>
+                              {offerOptionTypeLabel}
+                            </span>
                           </div>
                           <div>
                             <div className="text-gray-400 mb-1">AAV</div>

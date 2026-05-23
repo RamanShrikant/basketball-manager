@@ -296,11 +296,8 @@ async function runFreeAgencyRequest(requestId, action, leagueData, payload, okTy
       payload: payload || {},
     }));
 
-    const pyJson = await pyodide.runPythonAsync(`
-import importlib, json
-import free_agency_logic
-importlib.reload(free_agency_logic)
-
+const pyJson = await pyodide.runPythonAsync(`
+import json
 from free_agency_logic import handle_request
 
 res = handle_request(fa_request_js)
