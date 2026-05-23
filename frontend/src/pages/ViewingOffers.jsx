@@ -2423,8 +2423,9 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       };
     }
 
-    // Navigating back never declines anyone. Pressing the advance/finalize button
-    // is the explicit decision point: checked rows sign, unchecked rows are declined.
+    // Navigating back never declines anyone.
+    // Main advance now keeps unchecked rows alive. Only the explicit
+    // "Decline Unchecked & Advance" path sends unchecked rows as declines.
     const declinedPlayerKeys = declineUnselected
       ? pendingUserDecisions
           .filter((row) => !selectedDecisionMap[row.playerKey])
@@ -2457,7 +2458,8 @@ const handleReturnToOffseasonHub = () => {
   }
 };
 
-  const handleAdvanceFromResults = async () => {
+  const handleAdvanceFromResults = async (options = {}) => {
+    const shouldDeclineUnselected = Boolean(options?.declineUnselected);
     try {
       setProcessingAdvance(true);
       setActionError("");
@@ -2488,7 +2490,7 @@ const handleReturnToOffseasonHub = () => {
 
       const processRes = await processSelections({
         requireSelected: false,
-        declineUnselected: true,
+        declineUnselected: shouldDeclineUnselected,
       });
 
       if (!processRes?.ok) {
@@ -2811,7 +2813,7 @@ return (
 
               {pendingUserDecisions.length > 0 && (
                 <div className="mb-4 rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
-                  Select the pending players you want to finalize. Pressing Sign Selected / Decline Rest signs checked players, declines unchecked players, and returns you to Free Agency for the next day. Returning to the Offseason Hub only saves the current state.
+                  Select the pending players you want to finalize now. Pressing Sign Selected signs checked players and keeps unchecked players waiting for the next day. Unchecked players may lose interest if you delay too long. Use Decline Unchecked & Advance only when you intentionally want to decline the unchecked offers. Returning to the Offseason Hub only saves the current state.
                 </div>
               )}
 
@@ -3383,7 +3385,7 @@ return (
 
 <div className="flex gap-3 flex-wrap">
   <button
-    onClick={handleAdvanceFromResults}
+    onClick={() => handleAdvanceFromResults({ declineUnselected: false })}
     disabled={
       processingBack ||
       processingAdvance ||
@@ -3402,9 +3404,25 @@ return (
       : marketClosed
       ? "Continue to Progression"
       : pendingUserDecisions.length > 0
-      ? "Sign Selected / Decline Rest"
+      ? "Sign Selected / Keep Rest Waiting"
       : "Continue to Free Agency"}
   </button>
+
+  {pendingUserDecisions.length > 0 && (
+    <button
+      onClick={() => handleAdvanceFromResults({ declineUnselected: true })}
+      disabled={
+        processingBack ||
+        processingAdvance ||
+        pendingRfaMatchDecisions.length > 0 ||
+        Boolean(selectionPreview?.hasBlockingIssue)
+      }
+      title="Explicitly decline every unchecked ready-to-sign offer, then advance."
+      className="px-6 py-3 bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
+    >
+      Decline Unchecked & Advance
+    </button>
+  )}
 
 <button
   onClick={handleReturnToOffseasonHub}
