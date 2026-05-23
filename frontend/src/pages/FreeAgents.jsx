@@ -3345,6 +3345,12 @@ updateOffseasonState({
               </div>
             )}
 
+            {canSubmitLiveOffer && userRosterCount >= maxRosterSize && (
+              <div className="mb-4 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-yellow-200 text-sm font-semibold">
+                Your roster is full ({userRosterCount}/{maxRosterSize}). You can still submit this live offer, but if the player accepts you may need to waive, trade, or otherwise clear a roster spot before finalizing the signing.
+              </div>
+            )}
+
             {canManualCleanupSign && (
               <div className="mb-4 text-yellow-300 text-sm font-semibold">
                 The live market is over. Because your team is below the minimum roster size, you can still sign remaining free agents directly until you reach {minRosterSize} players.

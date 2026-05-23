@@ -353,6 +353,29 @@ function withTeamArticle(teamName) {
   return `the ${name}`;
 }
 
+function buildBackendFreeAgencyError(res, fallback = "Failed to process pending signings.") {
+  if (!res || typeof res !== "object") return fallback;
+
+  const parts = [];
+  if (res.reason) parts.push(String(res.reason));
+
+  const needed = Number(res.capHoldClearanceNeeded);
+  const cleared = Number(res.capHoldCleared);
+  if (Number.isFinite(needed) && needed > 0 && Number.isFinite(cleared)) {
+    parts.push(`Backend clearance check: needed ${formatDollars(needed)}, selected clearance actually applied ${formatDollars(cleared)}.`);
+  }
+
+  const finalReason = res?.finalCheck?.reason;
+  const spendingReason = res?.spendingCheck?.reason;
+  if (finalReason && !parts.join(" ").includes(finalReason)) {
+    parts.push(`Final check: ${finalReason}`);
+  } else if (spendingReason && !parts.join(" ").includes(spendingReason)) {
+    parts.push(`Spending check: ${spendingReason}`);
+  }
+
+  return parts.length ? parts.join(" ") : fallback;
+}
+
 function getContractSummary(contract, fallbackTotal = 0, fallbackYears = 0) {
   const salaryByYear = Array.isArray(contract?.salaryByYear)
     ? contract.salaryByYear
@@ -563,6 +586,54 @@ function getOfferPlayerKeyFromParts(playerId, playerName) {
     return `id:${playerId}`;
   }
   return `name:${playerName || ""}`;
+}
+
+function getRightsDecisionKeysFromSource(source = {}) {
+  const keys = new Set();
+
+  const add = (value) => {
+    if (value === undefined || value === null || value === "") return;
+    keys.add(String(value));
+  };
+
+  const player = source?.player && typeof source.player === "object" ? source.player : {};
+  const playerId = source?.playerId ?? source?.id ?? player?.id;
+  const playerName = source?.playerName || source?.name || player?.name;
+  const playerKey = source?.playerKey || getOfferPlayerKeyFromParts(playerId, playerName);
+
+  add(playerKey);
+  add(playerId);
+  add(playerName);
+
+  return keys;
+}
+
+function sourcesShareRightsDecisionKey(a = {}, b = {}) {
+  const aKeys = getRightsDecisionKeysFromSource(a);
+  const bKeys = getRightsDecisionKeysFromSource(b);
+
+  for (const key of aKeys) {
+    if (bKeys.has(key)) return true;
+  }
+
+  return false;
+}
+
+function getSelectedCapHoldClearanceAmount({
+  rows = [],
+  selectedMap = {},
+  protectedRows = [],
+} = {}) {
+  return rows.reduce((sum, row) => {
+    if (!selectedMap[row.playerKey]) return sum;
+
+    const isProtected = protectedRows.some((protectedRow) =>
+      sourcesShareRightsDecisionKey(row, protectedRow)
+    );
+
+    if (isProtected) return sum;
+    return sum + Number(row.capHold || 0);
+  }, 0);
 }
 
 function getOfferStatusTone(status) {
@@ -2086,7 +2157,12 @@ export default function ViewingOffers() {
 
     for (const row of capHoldRenounceRows) {
       if (selectedRightsRenounceMap[row.playerKey]) {
-        out[row.playerKey] = "renounce";
+        // Send every backend-supported key shape. This prevents the UI from
+        // showing selected clearance while the Python side applies $0 because
+        // an older save used a different player key shape.
+        for (const key of getRightsDecisionKeysFromSource(row)) {
+          out[key] = "renounce";
+        }
       }
     }
 
@@ -2128,9 +2204,25 @@ export default function ViewingOffers() {
       return sum + getPendingSigningCapRoomImpact(row);
     }, 0);
 
+    const selectedEffectiveCapHoldClearance = getSelectedCapHoldClearanceAmount({
+      rows: capHoldRenounceRows,
+      selectedMap: selectedRightsRenounceMap,
+      protectedRows: selectedPendingRows,
+    });
+    const ignoredProtectedCapHoldClearance = Math.max(
+      0,
+      Number(selectedCapHoldClearance || 0) - Number(selectedEffectiveCapHoldClearance || 0)
+    );
+
     const selectedCount = selectedPendingRows.length;
     const payrollBefore = Number(livePendingUserTeamSnapshot?.payroll || 0);
+    const rawCapRoomBefore = Number(livePendingUserTeamSnapshot?.rawCapRoomWithoutHolds ?? livePendingUserTeamSnapshot?.capRoom ?? 0);
     const capRoomBefore = Number(livePendingUserTeamSnapshot?.capRoom || 0);
+    const practicalCapRoomBefore = Number(
+      livePendingUserTeamSnapshot?.practicalCapRoom ??
+        livePendingUserTeamSnapshot?.capRoom ??
+        0
+    );
     const hardCapRoomBefore =
       livePendingUserTeamSnapshot?.hardCapRoom === null ||
       livePendingUserTeamSnapshot?.hardCapRoom === undefined
@@ -2144,18 +2236,18 @@ export default function ViewingOffers() {
     const capHoldTotal = Number(livePendingUserTeamSnapshot?.capHoldTotal || 0);
     const practicalPayrollAfter =
       Number(livePendingUserTeamSnapshot?.practicalPayroll || payrollBefore + capHoldTotal)
-      - selectedCapHoldClearance
+      - selectedEffectiveCapHoldClearance
       + selectedCurrentYearTotal;
     const practicalCapRoomAfter =
-      Number(livePendingUserTeamSnapshot?.practicalCapRoom ?? capRoomBefore - capHoldTotal)
-      + selectedCapHoldClearance
+      practicalCapRoomBefore
+      + selectedEffectiveCapHoldClearance
       - selectedCapRoomImpactTotal;
     const firstApron = Number(livePendingUserTeamSnapshot?.firstApron || 0);
     const secondApron = Number(livePendingUserTeamSnapshot?.secondApron || 0);
     const hardCapRoomAfter =
       hardCapRoomBefore === null
         ? null
-        : hardCapRoomBefore + selectedCapHoldClearance - selectedCurrentYearTotal;
+        : hardCapRoomBefore + selectedEffectiveCapHoldClearance - selectedCurrentYearTotal;
     const rosterAfter = rosterBefore + selectedCount;
 
     const warnings = [];
@@ -2163,15 +2255,35 @@ export default function ViewingOffers() {
     const apronNotes = [];
 
     const selectedNeedsNormalCapRoom = selectedCapRoomImpactTotal > 0;
+    const requiredCapHoldClearance = selectedNeedsNormalCapRoom
+      ? Math.max(0, selectedCapRoomImpactTotal - practicalCapRoomBefore)
+      : 0;
+    const capRoomShortfall = Math.max(
+      0,
+      requiredCapHoldClearance - selectedEffectiveCapHoldClearance
+    );
+    const rawCapRoomShortfall = selectedNeedsNormalCapRoom
+      ? Math.max(0, selectedCapRoomImpactTotal - rawCapRoomBefore)
+      : 0;
 
-    if (selectedCount > 0 && selectedNeedsNormalCapRoom && practicalCapRoomAfter < 0) {
+    if (ignoredProtectedCapHoldClearance > 0) {
       warnings.push(
-        `Selected signings appear short by ${formatDollars(Math.abs(practicalCapRoomAfter))}. Renounce enough rights below to clear the cap holds before confirming.`
+        `${formatDollars(ignoredProtectedCapHoldClearance)} of selected clearance cannot count because it belongs to a player you are also trying to sign.`
       );
     }
 
+    if (selectedCount > 0 && selectedNeedsNormalCapRoom && rawCapRoomShortfall > 0) {
+      const msg = `Selected cap-space signings exceed true raw cap room by ${formatDollars(rawCapRoomShortfall)}. Cap-hold clearance cannot fix this part.`;
+      warnings.push(msg);
+      blockingWarnings.push(msg);
+    } else if (selectedCount > 0 && selectedNeedsNormalCapRoom && capRoomShortfall > 0) {
+      const msg = `Selected cap-hold clearance is short by ${formatDollars(capRoomShortfall)}. Renounce enough rights below before confirming.`;
+      warnings.push(msg);
+      blockingWarnings.push(msg);
+    }
+
     if (hardCapRoomAfter !== null && hardCapRoomAfter < 0) {
-      const msg = "Selected signings put you over the hard cap.";
+      const msg = `Selected signings put you over the hard cap by ${formatDollars(Math.abs(hardCapRoomAfter))}.`;
       warnings.push(msg);
       blockingWarnings.push(msg);
     }
@@ -2194,11 +2306,16 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       selectedTotalValue,
       payrollBefore,
       payrollAfter,
+      rawCapRoomBefore,
       capRoomBefore,
       capRoomAfter,
       capHoldTotal,
       selectedCapHoldClearance,
-      capRoomShortfall: selectedNeedsNormalCapRoom ? Math.max(0, -practicalCapRoomAfter) : 0,
+      selectedEffectiveCapHoldClearance,
+      ignoredProtectedCapHoldClearance,
+      requiredCapHoldClearance,
+      capRoomShortfall,
+      rawCapRoomShortfall,
       practicalPayrollAfter,
       practicalCapRoomAfter,
       firstApron,
@@ -2212,7 +2329,13 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       blockingWarnings,
       hasBlockingIssue: blockingWarnings.length > 0,
     };
-  }, [livePendingUserTeamSnapshot, selectedPendingRows, selectedCapHoldClearance]);
+  }, [
+    livePendingUserTeamSnapshot,
+    selectedPendingRows,
+    selectedCapHoldClearance,
+    capHoldRenounceRows,
+    selectedRightsRenounceMap,
+  ]);
 
   const toggleDecision = (playerKey) => {
     setSelectedDecisionMap((prev) => ({
@@ -2251,7 +2374,7 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
         if (res?.leagueData) {
           applyLeagueUpdate(res.leagueData);
         }
-        setActionError(res?.reason || "Failed to process RFA match decision.");
+        setActionError(buildBackendFreeAgencyError(res, "Failed to process RFA match decision."));
         return;
       }
 
@@ -2372,7 +2495,7 @@ const handleReturnToOffseasonHub = () => {
         if (processRes?.leagueData) {
           applyLeagueUpdate(processRes.leagueData);
         }
-        setActionError(processRes?.reason || "Failed to process pending signings.");
+        setActionError(buildBackendFreeAgencyError(processRes, "Failed to process pending signings."));
         return;
       }
 
@@ -2702,14 +2825,15 @@ return (
                   </div>
 
                   <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
-                    <div className="text-xs text-gray-400 mb-1">Cap Space</div>
+                    <div className="text-xs text-gray-400 mb-1">Raw Cap Room</div>
                     <div className={`text-base font-semibold ${(selectionPreview?.capRoomAfter ?? livePendingUserTeamSnapshot?.capRoom ?? 0) < 0 ? "text-red-300" : "text-white"}`}>
                       {formatDollars(selectionPreview?.capRoomAfter ?? livePendingUserTeamSnapshot?.capRoom ?? 0)}
                     </div>
+                    <div className="text-[11px] text-gray-500 mt-1">before holds</div>
                   </div>
 
                   <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
-                    <div className="text-xs text-gray-400 mb-1">Practical Cap</div>
+                    <div className="text-xs text-gray-400 mb-1">Practical Room</div>
                     <div className={`text-base font-semibold ${(selectionPreview?.practicalCapRoomAfter ?? livePendingUserTeamSnapshot?.practicalCapRoom ?? 0) < 0 ? "text-red-300" : "text-white"}`}>
                       {formatDollars(selectionPreview?.practicalCapRoomAfter ?? livePendingUserTeamSnapshot?.practicalCapRoom ?? 0)}
                     </div>
@@ -2770,7 +2894,7 @@ return (
 
                     <div className="grid grid-cols-2 gap-2 text-sm shrink-0">
                       <div className="rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2">
-                        <div className="text-xs text-gray-400 mb-1">Short By</div>
+                        <div className="text-xs text-gray-400 mb-1">Still Short</div>
                         <div className={`font-bold ${(selectionPreview?.capRoomShortfall || 0) > 0 ? "text-red-300" : "text-emerald-300"}`}>
                           {formatDollars(selectionPreview?.capRoomShortfall || 0)}
                         </div>
@@ -2778,8 +2902,13 @@ return (
                       <div className="rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2">
                         <div className="text-xs text-gray-400 mb-1">Selected Clear</div>
                         <div className="font-bold text-emerald-300">
-                          {formatDollars(selectionPreview?.selectedCapHoldClearance || 0)}
+                          {formatDollars(selectionPreview?.selectedEffectiveCapHoldClearance ?? selectionPreview?.selectedCapHoldClearance ?? 0)}
                         </div>
+                        {selectionPreview?.ignoredProtectedCapHoldClearance > 0 && (
+                          <div className="text-[11px] text-yellow-200 mt-1">
+                            {formatDollars(selectionPreview.ignoredProtectedCapHoldClearance)} ignored
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2954,6 +3083,9 @@ return (
 
       <div className="text-sm text-gray-500 mt-1">
         Current year cap hit: {formatDollars(contractSummary.currentYearSalary || row?.currentYearSalary || 0)}
+      </div>
+      <div className={`text-sm mt-1 ${getPendingSigningCapRoomImpact(row) > 0 ? "text-orange-200" : "text-emerald-300"}`}>
+        Normal room impact: {formatDollars(getPendingSigningCapRoomImpact(row))}
       </div>
       <div className="flex flex-wrap gap-2 mt-3">
         <InfoChip tone="orange" onClick={() => openSigningInfo(row, "Full Transaction Context", "full")}>Click For Context</InfoChip>
@@ -3252,13 +3384,21 @@ return (
 <div className="flex gap-3 flex-wrap">
   <button
     onClick={handleAdvanceFromResults}
-    disabled={processingBack || processingAdvance || pendingRfaMatchDecisions.length > 0}
+    disabled={
+      processingBack ||
+      processingAdvance ||
+      pendingRfaMatchDecisions.length > 0 ||
+      Boolean(selectionPreview?.hasBlockingIssue)
+    }
+    title={selectionPreview?.hasBlockingIssue ? selectionPreview.blockingWarnings.join(" ") : ""}
     className="px-6 py-3 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
   >
     {processingAdvance
       ? "Processing..."
       : pendingRfaMatchDecisions.length > 0
       ? "Resolve RFA Decisions First"
+      : selectionPreview?.hasBlockingIssue
+      ? "Fix Cap / Roster Issue First"
       : marketClosed
       ? "Continue to Progression"
       : pendingUserDecisions.length > 0

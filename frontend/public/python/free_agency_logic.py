@@ -5978,8 +5978,9 @@ def get_active_offer_limit_for_team(
         if planning_room >= 40_000_000 or roster_deficit >= 3:
             desired_limit = 9
 
-    if current_roster_count >= get_roster_limit(league_data):
-        desired_limit = 0
+    # Live offers are conditional and do not immediately occupy roster spots.
+    # A full roster can still submit offers, but finalizing the accepted signing
+    # screen must force the team to clear a roster spot if needed.
 
     return int(clamp(desired_limit, 0, 10))
 

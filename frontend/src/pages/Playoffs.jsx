@@ -1532,11 +1532,10 @@ export default function Playoffs() {
     // don't save bad results — force resim next time instead of getting stuck
     if (isBadSlimResult(slim)) return slim;
 
-    setResultsLive((prev) => {
-      const merged = { ...prev, [gameId]: slim };
-      scheduleSaveResults(merged); // ✅ fast: save later, not every game
-      return merged;
-    });
+    const mergedResults = { ...(resultsRef.current || {}), [gameId]: slim };
+    resultsRef.current = mergedResults;
+    setResultsLive(mergedResults);
+    scheduleSaveResults(mergedResults); // ✅ fast: save later, not every game
 
     return slim;
   }
@@ -2324,6 +2323,123 @@ export default function Playoffs() {
     }
   }
 
+  // ✅ DEV PATCH: instant playoff sim path.
+  // Same game engine, but skips live bracket flushes and saves the final bracket once.
+  async function simDevInstantPlayoffsToChampion() {
+    if (simLock) return;
+    if (post?.finals?.complete) return;
+
+    setSimLock(true);
+    stopRequestedRef.current = false;
+    setSimStopping(false);
+
+    try {
+      setModal(null);
+
+      const cur = structuredClone(post);
+      const confs = [cur.layout.left, cur.layout.right];
+
+      let safety = 0;
+      const MAX_LOOPS = 80;
+
+      while (!cur.finals?.complete && safety < MAX_LOOPS && !stopRequestedRef.current) {
+        safety += 1;
+
+        const stage = findNextStage(cur);
+        if (!stage) break;
+
+        let progressed = false;
+
+        if (stage === "playin") {
+          for (const ck of confs) {
+            if (stopRequestedRef.current) break;
+
+            const pi = cur?.conf?.[ck]?.playIn;
+            if (!pi) continue;
+
+            if (!pi.g78.played && !stopRequestedRef.current) {
+              const wasPlayed = Boolean(pi.g78.played);
+              await simPlayInGameInCur(cur, ck, "78");
+              progressed = progressed || (!wasPlayed && Boolean(pi.g78.played));
+            }
+
+            if (!pi.g910.played && !stopRequestedRef.current) {
+              const wasPlayed = Boolean(pi.g910.played);
+              await simPlayInGameInCur(cur, ck, "910");
+              progressed = progressed || (!wasPlayed && Boolean(pi.g910.played));
+            }
+
+            if (!pi.gFinal.played && !stopRequestedRef.current) {
+              const wasPlayed = Boolean(pi.gFinal.played);
+              await simPlayInGameInCur(cur, ck, "final");
+              progressed = progressed || (!wasPlayed && Boolean(pi.gFinal.played));
+            }
+          }
+
+          if (!progressed) {
+            console.warn("[playoffs] Dev instant sim made no play-in progress; stopping.");
+            break;
+          }
+
+          continue;
+        }
+
+        if (stage === "r1") {
+          for (const ck of confs) {
+            for (const sk of ["s1v8", "s4v5", "s3v6", "s2v7"]) {
+              if (stopRequestedRef.current) break;
+              const s = getSeriesNode(cur, ck, "r1", sk);
+              if (seriesReadyForNextGame(s)) {
+                const did = await simSeriesToCompletionInCur(cur, ck, "r1", sk, { flush: false });
+                progressed = progressed || did;
+              }
+            }
+          }
+        } else if (stage === "r2") {
+          for (const ck of confs) {
+            for (const sk of ["top", "bot"]) {
+              if (stopRequestedRef.current) break;
+              const s = getSeriesNode(cur, ck, "r2", sk);
+              if (seriesReadyForNextGame(s)) {
+                const did = await simSeriesToCompletionInCur(cur, ck, "r2", sk, { flush: false });
+                progressed = progressed || did;
+              }
+            }
+          }
+        } else if (stage === "r3") {
+          for (const ck of confs) {
+            if (stopRequestedRef.current) break;
+            const s = getSeriesNode(cur, ck, "r3", "confFinals");
+            if (seriesReadyForNextGame(s)) {
+              const did = await simSeriesToCompletionInCur(cur, ck, "r3", "confFinals", { flush: false });
+              progressed = progressed || did;
+            }
+          }
+        } else if (stage === "finals") {
+          const s = cur.finals;
+          if (seriesReadyForNextGame(s) && !stopRequestedRef.current) {
+            const did = await simSeriesToCompletionInCur(cur, "NBA", "finals", "FINALS", { flush: false });
+            progressed = progressed || did;
+          }
+        }
+
+        if (!progressed) {
+          console.warn("[playoffs] Dev instant sim made no progress; stopping to avoid infinite loop.");
+          break;
+        }
+
+        await new Promise((r) => setTimeout(r, 0));
+      }
+
+      persistPost(structuredClone(cur));
+    } finally {
+      setSimLock(false);
+      stopRequestedRef.current = false;
+      setSimStopping(false);
+    }
+  }
+
+
   function openBoxScoreLine(gameId, homeName, awayName) {
     const r = getPlayoffResult(gameId);
     if (!r) return null;
@@ -2716,6 +2832,17 @@ ${disabled ? "opacity-60" : ""}
             className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded text-sm font-bold disabled:opacity-50"
           >
             {simsDisabled ? "Continue to Offseason" : "Simulate Playoffs"}
+          </button>
+
+          <button
+            disabled={simLock || fmvpLoading || simsDisabled}
+            onClick={async () => {
+              await simDevInstantPlayoffsToChampion();
+            }}
+            className="px-4 py-2 bg-purple-700 hover:bg-purple-600 rounded text-sm font-bold disabled:opacity-50"
+            title="Dev shortcut: simulates the rest of playoffs with one final bracket save"
+          >
+            Dev Instant Playoffs
           </button>
 
           {/* ✅ PATCH: STOP BUTTON */}
