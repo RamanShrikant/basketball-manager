@@ -375,6 +375,71 @@ function getContractSummary(contract, fallbackTotal = 0, fallbackYears = 0) {
 }
 
 
+
+function getContractOptionInfo(source = {}) {
+  const contract =
+    source?.contract ||
+    source?.signedContract ||
+    source?.userOfferContract ||
+    source?.offerSheet?.contract ||
+    source?.chosenOffer?.contract ||
+    {};
+
+  const option =
+    contract?.option ||
+    source?.option ||
+    source?.offerSheet?.option ||
+    source?.chosenOffer?.option ||
+    null;
+
+  const salaryByYear = Array.isArray(contract?.salaryByYear)
+    ? contract.salaryByYear
+    : [];
+
+  const years = salaryByYear.length || Number(
+    source?.years ||
+      source?.signedYears ||
+      source?.userOfferYears ||
+      source?.offerSheet?.years ||
+      0
+  );
+
+  const optionType = String(option?.type || "").toLowerCase();
+  const validOption = option && ["player", "team"].includes(optionType) && years > 1;
+
+  if (!validOption) {
+    return {
+      label: "No Option",
+      tone: "neutral",
+      title: "This offer does not include a player option or team option.",
+    };
+  }
+
+  const rawYearIndices = Array.isArray(option?.yearIndices)
+    ? option.yearIndices
+    : option?.yearIndex !== undefined && option?.yearIndex !== null
+    ? [option.yearIndex]
+    : [];
+
+  const optionYear = rawYearIndices.length
+    ? Math.max(...rawYearIndices.map((value) => Number(value || 0))) + 1
+    : years;
+
+  if (optionType === "player") {
+    return {
+      label: "Player Option",
+      tone: "green",
+      title: `Player option attached${optionYear ? ` in year ${optionYear}` : ""}.`,
+    };
+  }
+
+  return {
+    label: "Team Option",
+    tone: "orange",
+    title: `Team option attached${optionYear ? ` in year ${optionYear}` : ""}.`,
+  };
+}
+
 function getPendingSigningCurrentYearSalary(row = {}) {
   const summary = getContractSummary(
     row?.contract,
@@ -456,7 +521,17 @@ function InfoChip({ children, tone = "neutral", onClick, title = "" }) {
     );
   }
 
-  return <span className={commonClass}>{children}</span>;
+  return <span title={title || ""} className={commonClass}>{children}</span>;
+}
+
+function ContractOptionChip({ source }) {
+  const optionInfo = getContractOptionInfo(source);
+
+  return (
+    <InfoChip tone={optionInfo.tone} title={optionInfo.title}>
+      {optionInfo.label}
+    </InfoChip>
+  );
 }
 
 function PlayerNameButton({ children, onClick, className = "" }) {
@@ -2483,6 +2558,7 @@ return (
 
                         <div className="flex flex-wrap gap-2 md:justify-end">
                           <InfoChip tone="orange" onClick={() => openUserOfferInfo(row, "Full Transaction Context", "full")}>Click For Context</InfoChip>
+                          <ContractOptionChip source={row} />
                           <InfoChip
                             tone={getOfferStatusTone(row.status)}
                             onClick={() => openUserOfferInfo(row, getOfferStatusLabel(row.status, row.signedWith, selectedTeam?.name), "cba")}
@@ -2569,6 +2645,7 @@ return (
 
                               <div className="flex flex-wrap gap-2 mt-3">
                                 <InfoChip tone="orange" onClick={() => openSigningInfo(row, "Full Transaction Context", "full")}>Click For Context</InfoChip>
+                                <ContractOptionChip source={row} />
                                 <InfoChip tone="orange" onClick={() => openSigningInfo(row, "RFA Offer Sheet", "cba")}>RFA Offer Sheet</InfoChip>
                                 {row?.deadlineDay && <InfoChip onClick={() => openSigningInfo(row, `Deadline Day ${row.deadlineDay}`, "cba")}>Deadline Day {row.deadlineDay}</InfoChip>}
                               </div>
@@ -2880,6 +2957,7 @@ return (
       </div>
       <div className="flex flex-wrap gap-2 mt-3">
         <InfoChip tone="orange" onClick={() => openSigningInfo(row, "Full Transaction Context", "full")}>Click For Context</InfoChip>
+                                <ContractOptionChip source={row} />
         {row?.spendingType && <InfoChip tone={row.spendingType === "bird_rights" ? "orange" : "green"} onClick={() => openSigningInfo(row, formatToolLabel(row.spendingType), "cba")}>{formatToolLabel(row.spendingType)}</InfoChip>}
         {row?.exceptionType && <InfoChip tone="green" onClick={() => openSigningInfo(row, formatToolLabel(row.exceptionType), "cba")}>{formatToolLabel(row.exceptionType)}</InfoChip>}
         {row?.payrollZone && <InfoChip onClick={() => openSigningInfo(row, formatToolLabel(row.payrollZone), "cba")}>{formatToolLabel(row.payrollZone)}</InfoChip>}
@@ -2952,6 +3030,7 @@ return (
                                 </div>
                                 <div className="flex flex-wrap gap-2 mt-2">
                                   <InfoChip tone="orange" onClick={() => openSigningInfo(signing, "Full Transaction Context", "full")}>Click For Context</InfoChip>
+                                  <ContractOptionChip source={signing} />
                                   {signing?.spendingType && <InfoChip tone={signing.spendingType === "bird_rights" ? "orange" : "green"} onClick={() => openSigningInfo(signing, formatToolLabel(signing.spendingType), "cba")}>{formatToolLabel(signing.spendingType)}</InfoChip>}
                                   {signing?.exceptionType && <InfoChip tone="green" onClick={() => openSigningInfo(signing, formatToolLabel(signing.exceptionType), "cba")}>{formatToolLabel(signing.exceptionType)}</InfoChip>}
                                   {signing?.exceptionUsage?.amountUsed > 0 && <InfoChip tone="orange" onClick={() => openSigningInfo(signing, `Used ${formatDollars(signing.exceptionUsage.amountUsed)}`, "cba")}>Used {formatDollars(signing.exceptionUsage.amountUsed)}</InfoChip>}
@@ -3020,6 +3099,7 @@ return (
                                 </div>
                                 <div className="flex flex-wrap gap-2 mt-2">
                                   <InfoChip tone="orange" onClick={() => openOfferInfo(offer, "Full Transaction Context", "full")}>Click For Context</InfoChip>
+                                  <ContractOptionChip source={offer} />
                                   {offer?.spendingType && <InfoChip tone={offer.spendingType === "bird_rights" ? "orange" : "green"} onClick={() => openOfferInfo(offer, formatToolLabel(offer.spendingType), "cba")}>{formatToolLabel(offer.spendingType)}</InfoChip>}
                                   {offer?.exceptionType && <InfoChip tone="green" onClick={() => openOfferInfo(offer, formatToolLabel(offer.exceptionType), "cba")}>{formatToolLabel(offer.exceptionType)}</InfoChip>}
                                   {offer?.rosterNeed?.position && <InfoChip tone="orange" onClick={() => openOfferInfo(offer, `Need ${formatPositionChipLabel(offer.rosterNeed.position)}`, "need")}>Need {formatPositionChipLabel(offer.rosterNeed.position)} {formatNeedScore(offer.rosterNeed.needScore)}</InfoChip>}
@@ -3257,6 +3337,7 @@ return (
 
                     <div className="flex flex-wrap gap-2 md:justify-end">
                       <InfoChip tone="orange" onClick={() => openUserOfferInfo(row, "Full Transaction Context", "full")}>Click For Context</InfoChip>
+                          <ContractOptionChip source={row} />
                       <InfoChip
                         tone={getOfferStatusTone(row.status)}
                         onClick={() => openUserOfferInfo(row, getOfferStatusLabel(row.status, row.signedWith, selectedTeam?.name), "cba")}
