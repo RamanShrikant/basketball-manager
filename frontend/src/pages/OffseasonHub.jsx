@@ -475,7 +475,7 @@ const handleAdvanceToNewSeason = () => {
         accent: freeAgencyComplete && rosterBlocksProgression ? "orange" : freeAgencyComplete ? "green" : optionsComplete ? "orange" : "neutral",
         buttonLabel: optionsComplete ? "Open Free Agency" : "Locked",
         disabled: !optionsComplete,
-        onClick: () => navigate(rosterBlocksProgression ? "/free-agents" : getFreeAgencyResumeRoute(leagueData, offseasonState)),
+        onClick: () => navigate(getFreeAgencyResumeRoute(leagueData, offseasonState)),
       },
       {
         step: "4",

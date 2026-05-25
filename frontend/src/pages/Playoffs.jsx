@@ -103,12 +103,50 @@ const CHAMP_KEY = "bm_champ_v1";
 const FINALS_MVP_KEY = "bm_finals_mvp_v1"; // ✅ PATCH (Finals MVP)
 const FINALS_MVP_SEEN_KEY = "bm_finals_mvp_seen_v1";
 
-function readFinalsMvpSeenFor(seasonYear, championTeam) {
+
+function safeReadSmallJSON(key, fallback = null) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function getFinalsDisplaySeasonYear(leagueData, fallbackYear = 2026) {
+  const validYear = (value) => {
+    const y = Number(value);
+    return Number.isFinite(y) && y >= 2020 && y <= 2100 ? y : null;
+  };
+
+  const meta = safeReadSmallJSON("bm_league_meta_v1", {}) || {};
+  const savedLeague = safeReadSmallJSON("leagueData", null);
+  const snapshot = leagueData && typeof leagueData === "object" ? leagueData : savedLeague || {};
+
+  // Calendar stores bm_league_meta_v1.seasonYear as the START year of the NBA season.
+  // Finals MVP should show the title/offseason year, so 2025-26 => 2026,
+  // 2026-27 => 2027, etc. Do not use seasonHistory here because Playoffs writes
+  // the current season into seasonHistory before FMVP renders, which was pushing
+  // the first title year from 2026 to 2027.
+  const metaStartYear = validYear(meta?.seasonYear ?? meta?.seasonStartYear);
+  if (metaStartYear !== null) return metaStartYear + 1;
+
+  return (
+    validYear(fallbackYear) ??
+    validYear(snapshot?.seasonYear) ??
+    validYear(snapshot?.currentSeasonYear) ??
+    validYear(snapshot?.seasonStartYear) ??
+    validYear(meta?.currentSeasonYear) ??
+    2026
+  );
+}
+
+function readFinalsMvpSeenFor(fmvpSeasonYear, championTeam) {
   try {
     const saved = JSON.parse(localStorage.getItem(FINALS_MVP_SEEN_KEY) || "null");
     return (
       !!saved?.seen &&
-      Number(saved?.seasonYear) === Number(seasonYear) &&
+      Number(saved?.seasonYear) === Number(fmvpSeasonYear) &&
       saved?.championTeam === championTeam
     );
   } catch {
@@ -116,13 +154,13 @@ function readFinalsMvpSeenFor(seasonYear, championTeam) {
   }
 }
 
-function saveFinalsMvpSeenFor(seasonYear, championTeam) {
-  if (!seasonYear || !championTeam) return;
+function saveFinalsMvpSeenFor(fmvpSeasonYear, championTeam) {
+  if (!fmvpSeasonYear || !championTeam) return;
 
   try {
     localStorage.setItem(
       FINALS_MVP_SEEN_KEY,
-      JSON.stringify({ seasonYear, championTeam, seen: true })
+      JSON.stringify({ seasonYear: fmvpSeasonYear, championTeam, seen: true })
     );
   } catch {}
 }
@@ -1038,6 +1076,10 @@ export default function Playoffs() {
     return new Date().getFullYear();
   }, [leagueData]);
 
+  const fmvpSeasonYear = useMemo(() => {
+    return getFinalsDisplaySeasonYear(leagueData, seasonYear);
+  }, [leagueData, seasonYear]);
+
   const seeds = useMemo(() => {
     const out = {};
     const confs = confKeys.length ? confKeys : ["West", "East"];
@@ -1098,12 +1140,12 @@ export default function Playoffs() {
       return;
     }
 
-    setFinalsMvpSeen(readFinalsMvpSeenFor(seasonYear, championTeam));
-  }, [seasonYear, champModal?.team, post?.finals?.complete]);
+    setFinalsMvpSeen(readFinalsMvpSeenFor(fmvpSeasonYear, championTeam));
+  }, [fmvpSeasonYear, champModal?.team, post?.finals?.complete]);
 
   const markFinalsMvpSeen = () => {
     const championTeam = champModal?.team || finalsChampionName(post?.finals);
-    saveFinalsMvpSeenFor(seasonYear, championTeam);
+    saveFinalsMvpSeenFor(fmvpSeasonYear, championTeam);
     setFinalsMvpSeen(true);
   };
 
@@ -1231,9 +1273,15 @@ export default function Playoffs() {
   useEffect(() => {
     try {
       const stored = JSON.parse(localStorage.getItem(CHAMP_KEY) || "null");
-      if (stored?.seasonYear === seasonYear) setChampModal(stored);
+      if (stored?.team) {
+        const normalized = { ...stored, seasonYear: fmvpSeasonYear };
+        if (Number(stored.seasonYear) !== Number(fmvpSeasonYear)) {
+          safeSetSmallJSON(CHAMP_KEY, normalized);
+        }
+        setChampModal(normalized);
+      }
     } catch {}
-  }, [seasonYear]);
+  }, [fmvpSeasonYear]);
 
   // ✅ PATCH (Finals MVP): compute once when finals complete + champModal exists
   useEffect(() => {
@@ -1246,7 +1294,7 @@ export default function Playoffs() {
     try {
       const existing = JSON.parse(localStorage.getItem(FINALS_MVP_KEY) || "null");
       if (
-        existing?.season === seasonYear &&
+        existing?.season === fmvpSeasonYear &&
         existing?.champion_team === champModal.team &&
         existing?.awards_py_version === EXPECTED_AWARDS_PY_VERSION
       ) {
@@ -1266,7 +1314,7 @@ export default function Playoffs() {
 
         const finalsPlayers = buildFinalsAggregatePlayers(post, allPlayoffResultsForFmvp);
         const payload = await computeFinalsMvp(finalsPlayers, {
-          seasonYear,
+          seasonYear: fmvpSeasonYear,
           championTeam: champModal.team,
         });
 
@@ -1279,7 +1327,7 @@ export default function Playoffs() {
 
         const enrichedPayload = {
           ...payload,
-          season: seasonYear,
+          season: fmvpSeasonYear,
           champion_team: champModal.team,
           awards_py_version: EXPECTED_AWARDS_PY_VERSION,
           finals_mvp: payload?.finals_mvp
@@ -1294,7 +1342,7 @@ export default function Playoffs() {
       } catch (e) {
         console.warn("[playoffs] Finals MVP compute failed", e);
         safeSetSmallJSON(FINALS_MVP_KEY, {
-          season: seasonYear,
+          season: fmvpSeasonYear,
           champion_team: champModal.team,
           finals_mvp: null,
           error: String(e?.message || e),
@@ -1305,7 +1353,7 @@ export default function Playoffs() {
     };
 
     run();
-  }, [champModal, post, seasonYear]);
+  }, [champModal, post, fmvpSeasonYear]);
 
   function finalsChampionName(series) {
     if (!series?.complete) return null;
@@ -1380,7 +1428,7 @@ export default function Playoffs() {
 
     // ALWAYS show champion popup once finals completes (and store it)
     if (champ) {
-      const payload = { seasonYear: next.seasonYear, team: champ };
+      const payload = { seasonYear: fmvpSeasonYear, team: champ };
       safeSetSmallJSON(CHAMP_KEY, payload);
       setChampModal(payload);
     }

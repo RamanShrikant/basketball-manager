@@ -717,6 +717,33 @@ const isOffseasonMode =
   const canManualCleanupSign = isOffseasonMode && effectiveFreeAgencyFinished && userRosterTooFew;
   const canUseFreeAgencyAction = !isOffseasonMode || canSubmitLiveOffer || canManualCleanupSign;
 
+  // Surgical pending-decision guard:
+  // If the user leaves Viewing Offers to manage roster spots and then returns
+  // to Free Agency, do not show the normal FA table while a player is still
+  // waiting to sign. Route them back to the decision screen first.
+  useEffect(() => {
+    if (!isOffseasonMode) return;
+    if (!isLiveFreeAgencyActive) return;
+
+    const pendingUserDecisionCount = Array.isArray(liveFreeAgencyState?.pendingUserDecisions)
+      ? liveFreeAgencyState.pendingUserDecisions.length
+      : 0;
+
+    const pendingRfaMatchDecisionCount = Array.isArray(liveFreeAgencyState?.pendingRfaMatchDecisions)
+      ? liveFreeAgencyState.pendingRfaMatchDecisions.length
+      : 0;
+
+    if (pendingUserDecisionCount > 0 || pendingRfaMatchDecisionCount > 0) {
+      localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+      navigate("/viewing-offers");
+    }
+  }, [
+    isOffseasonMode,
+    isLiveFreeAgencyActive,
+    liveFreeAgencyState,
+    navigate,
+  ]);
+
   const rosterValidationMessage = useMemo(() => {
     if (!selectedTeam?.name) return "";
 
