@@ -353,29 +353,6 @@ function withTeamArticle(teamName) {
   return `the ${name}`;
 }
 
-function buildBackendFreeAgencyError(res, fallback = "Failed to process pending signings.") {
-  if (!res || typeof res !== "object") return fallback;
-
-  const parts = [];
-  if (res.reason) parts.push(String(res.reason));
-
-  const needed = Number(res.capHoldClearanceNeeded);
-  const cleared = Number(res.capHoldCleared);
-  if (Number.isFinite(needed) && needed > 0 && Number.isFinite(cleared)) {
-    parts.push(`Backend clearance check: needed ${formatDollars(needed)}, selected clearance actually applied ${formatDollars(cleared)}.`);
-  }
-
-  const finalReason = res?.finalCheck?.reason;
-  const spendingReason = res?.spendingCheck?.reason;
-  if (finalReason && !parts.join(" ").includes(finalReason)) {
-    parts.push(`Final check: ${finalReason}`);
-  } else if (spendingReason && !parts.join(" ").includes(spendingReason)) {
-    parts.push(`Spending check: ${spendingReason}`);
-  }
-
-  return parts.length ? parts.join(" ") : fallback;
-}
-
 function getContractSummary(contract, fallbackTotal = 0, fallbackYears = 0) {
   const salaryByYear = Array.isArray(contract?.salaryByYear)
     ? contract.salaryByYear
@@ -586,54 +563,6 @@ function getOfferPlayerKeyFromParts(playerId, playerName) {
     return `id:${playerId}`;
   }
   return `name:${playerName || ""}`;
-}
-
-function getRightsDecisionKeysFromSource(source = {}) {
-  const keys = new Set();
-
-  const add = (value) => {
-    if (value === undefined || value === null || value === "") return;
-    keys.add(String(value));
-  };
-
-  const player = source?.player && typeof source.player === "object" ? source.player : {};
-  const playerId = source?.playerId ?? source?.id ?? player?.id;
-  const playerName = source?.playerName || source?.name || player?.name;
-  const playerKey = source?.playerKey || getOfferPlayerKeyFromParts(playerId, playerName);
-
-  add(playerKey);
-  add(playerId);
-  add(playerName);
-
-  return keys;
-}
-
-function sourcesShareRightsDecisionKey(a = {}, b = {}) {
-  const aKeys = getRightsDecisionKeysFromSource(a);
-  const bKeys = getRightsDecisionKeysFromSource(b);
-
-  for (const key of aKeys) {
-    if (bKeys.has(key)) return true;
-  }
-
-  return false;
-}
-
-function getSelectedCapHoldClearanceAmount({
-  rows = [],
-  selectedMap = {},
-  protectedRows = [],
-} = {}) {
-  return rows.reduce((sum, row) => {
-    if (!selectedMap[row.playerKey]) return sum;
-
-    const isProtected = protectedRows.some((protectedRow) =>
-      sourcesShareRightsDecisionKey(row, protectedRow)
-    );
-
-    if (isProtected) return sum;
-    return sum + Number(row.capHold || 0);
-  }, 0);
 }
 
 function getOfferStatusTone(status) {
@@ -1489,6 +1418,150 @@ function getPreviewCapHoldTotal(leagueData, teamName) {
   }, 0);
 }
 
+
+function getFullSummaryContractLine(row = {}) {
+  return formatContractLine(
+    row?.contract || row?.signedContract || row?.userOfferContract,
+    row?.totalValue || row?.signedTotalValue || row?.userOfferTotalValue,
+    row?.years || row?.signedYears || row?.userOfferYears
+  );
+}
+
+function normalizeFreeAgencySummaryEntry(entry = {}) {
+  const dayResolved = entry?.dayResolved ?? entry?.day ?? null;
+  const offerDay = entry?.offerDay ?? entry?.generatedOfferDay ?? null;
+  const signings = Array.isArray(entry?.signings) ? entry.signings : [];
+  const generatedOffers = Array.isArray(entry?.generatedOffers)
+    ? entry.generatedOffers
+    : Array.isArray(entry?.cpuOffers)
+    ? entry.cpuOffers
+    : [];
+
+  return {
+    ...entry,
+    id: entry?.id || `${entry?.eventType || "market_update"}|${dayResolved ?? ""}|${offerDay ?? ""}`,
+    eventType: entry?.eventType || "market_update",
+    dayResolved,
+    offerDay,
+    signings,
+    generatedOffers,
+  };
+}
+
+function buildFallbackFreeAgencySummaryEntries(freeAgencyState = {}, latestResults = null) {
+  const byKey = new Map();
+
+  const ensureEntry = (dayResolved, offerDay = null, eventType = "fallback_market_update") => {
+    const key = `${eventType}|${dayResolved ?? ""}|${offerDay ?? ""}`;
+    if (!byKey.has(key)) {
+      byKey.set(key, {
+        id: key,
+        eventType,
+        dayResolved,
+        offerDay,
+        signings: [],
+        generatedOffers: [],
+      });
+    }
+    return byKey.get(key);
+  };
+
+  for (const signing of freeAgencyState?.signedPlayersLog || []) {
+    const day = signing?.day ?? null;
+    ensureEntry(day, null, "fallback_signings").signings.push(signing);
+  }
+
+  const addOffer = (offer = {}) => {
+    if (offer?.source && offer.source !== "cpu") return;
+    const offerDay = offer?.submittedDay ?? offer?.day ?? offer?.withdrawnOnDay ?? null;
+    const entry = ensureEntry(null, offerDay, "fallback_cpu_offers");
+    entry.generatedOffers.push(offer);
+  };
+
+  for (const offer of freeAgencyState?.offerHistory || []) {
+    addOffer(offer);
+  }
+
+  const offersByPlayer = freeAgencyState?.offersByPlayer || {};
+  for (const offers of Object.values(offersByPlayer)) {
+    for (const offer of offers || []) {
+      addOffer(offer);
+    }
+  }
+
+  if (latestResults) {
+    const dayResolved = latestResults?.dayResolved ?? null;
+    const latestEntry = ensureEntry(dayResolved, null, "latest_results");
+    latestEntry.signings.push(...(latestResults?.signings || []));
+    latestEntry.generatedOffers.push(...(latestResults?.generatedOffers || []));
+  }
+
+  return Array.from(byKey.values());
+}
+
+function buildFreeAgencySummaryText(entries = []) {
+  if (!entries.length) return "No full free agency action summary is available yet.";
+
+  return entries
+    .map((entry) => {
+      const lines = [];
+      const dayLabel = entry?.dayResolved
+        ? `Day ${entry.dayResolved} Results`
+        : entry?.offerDay
+        ? `Day ${entry.offerDay} Offer Board`
+        : "Opening Market";
+
+      const offerDaySuffix = entry?.offerDay && entry?.dayResolved !== entry?.offerDay
+        ? ` / Day ${entry.offerDay} CPU offers`
+        : "";
+
+      lines.push(`${dayLabel}${offerDaySuffix}`);
+      lines.push("-".repeat(Math.min(58, lines[0].length)));
+
+      const signings = Array.isArray(entry?.signings) ? entry.signings : [];
+      const generatedOffers = Array.isArray(entry?.generatedOffers) ? entry.generatedOffers : [];
+
+      if (signings.length) {
+        lines.push(`Signings (${signings.length}):`);
+        for (const signing of signings) {
+          const teamName = signing?.teamName || signing?.signedWith || "Unknown Team";
+          const playerName = signing?.playerName || signing?.player?.name || "Unknown Player";
+          const contractLine = getFullSummaryContractLine(signing);
+          const tags = [
+            signing?.rfaMatched ? "RFA matched" : "",
+            signing?.spendingType ? formatToolLabel(signing.spendingType) : "",
+            signing?.exceptionType ? formatToolLabel(signing.exceptionType) : "",
+          ].filter(Boolean);
+          lines.push(`  • ${teamName} signed ${playerName}: ${contractLine}${tags.length ? ` (${tags.join(" / ")})` : ""}`);
+        }
+      } else {
+        lines.push("Signings: none");
+      }
+
+      if (generatedOffers.length) {
+        lines.push(`CPU Offers (${generatedOffers.length}):`);
+        for (const offer of generatedOffers) {
+          const teamName = offer?.teamName || "Unknown Team";
+          const playerName = offer?.playerName || offer?.player?.name || "Unknown Player";
+          const contractLine = getFullSummaryContractLine(offer);
+          const tags = [
+            offer?.targetTier ? formatToolLabel(offer.targetTier) : "",
+            offer?.teamDirection ? formatToolLabel(offer.teamDirection) : "",
+            offer?.spendingType ? formatToolLabel(offer.spendingType) : "",
+            offer?.exceptionType ? formatToolLabel(offer.exceptionType) : "",
+            offer?.rfaOfferSheet ? "RFA offer sheet" : "",
+          ].filter(Boolean);
+          lines.push(`  • ${teamName} offered ${playerName}: ${contractLine}${tags.length ? ` (${tags.join(" / ")})` : ""}`);
+        }
+      } else {
+        lines.push("CPU Offers: none");
+      }
+
+      return lines.join("\n");
+    })
+    .join("\n\n");
+}
+
 export default function ViewingOffers() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam, setLeagueData, setSelectedTeam } = useGame();
@@ -1512,6 +1585,7 @@ export default function ViewingOffers() {
   });
   const [playerCardView, setPlayerCardView] = useState(null);
   const [infoPopup, setInfoPopup] = useState(null);
+  const [fullSummaryCopied, setFullSummaryCopied] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
@@ -1522,7 +1596,6 @@ export default function ViewingOffers() {
   const processPendingRfaMatchDecision =
     simEngine.processPendingRfaMatchDecision;
   const applyRightsManagement = simEngine.applyRightsManagement;
-  const advanceFreeAgencyDay = simEngine.advanceFreeAgencyDay;
 
   const freeAgencyState = leagueData?.freeAgencyState || {};
   const latestResults = freeAgencyState?.latestResults || null;
@@ -1532,6 +1605,64 @@ export default function ViewingOffers() {
   const signings = latestResults?.signings || [];
   const generatedOffers = latestResults?.generatedOffers || [];
   const dayResolved = latestResults?.dayResolved;
+
+
+  const fullFreeAgencySummaryEntries = useMemo(() => {
+    const savedLog = Array.isArray(freeAgencyState?.fullActionLog)
+      ? freeAgencyState.fullActionLog
+      : [];
+
+    const sourceEntries = savedLog.length
+      ? savedLog
+      : buildFallbackFreeAgencySummaryEntries(freeAgencyState, latestResults);
+
+    const seen = new Set();
+
+    return sourceEntries
+      .map(normalizeFreeAgencySummaryEntry)
+      .filter((entry) => {
+        const key = entry?.id || `${entry?.eventType || ""}|${entry?.dayResolved ?? ""}|${entry?.offerDay ?? ""}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return (entry?.signings?.length || 0) > 0 || (entry?.generatedOffers?.length || 0) > 0;
+      })
+      .sort((a, b) => {
+        const aDay = Number(a?.dayResolved ?? a?.offerDay ?? 0);
+        const bDay = Number(b?.dayResolved ?? b?.offerDay ?? 0);
+        if (aDay !== bDay) return aDay - bDay;
+        const aOfferDay = Number(a?.offerDay ?? 0);
+        const bOfferDay = Number(b?.offerDay ?? 0);
+        if (aOfferDay !== bOfferDay) return aOfferDay - bOfferDay;
+        return String(a?.eventType || "").localeCompare(String(b?.eventType || ""));
+      });
+  }, [freeAgencyState, latestResults]);
+
+  const fullFreeAgencySummaryText = useMemo(() => {
+    return buildFreeAgencySummaryText(fullFreeAgencySummaryEntries);
+  }, [fullFreeAgencySummaryEntries]);
+
+  const freeAgencyMaxDaysForSummary = Number(
+    freeAgencyState?.maxDays || stateSummary?.maxDays || 10
+  );
+
+  const showFullFreeAgencySummary = Boolean(
+    fullFreeAgencySummaryEntries.length > 0 &&
+      (
+        marketClosed ||
+        Number(dayResolved || 0) >= freeAgencyMaxDaysForSummary ||
+        (!freeAgencyState?.isActive && Number(freeAgencyState?.currentDay || 0) >= freeAgencyMaxDaysForSummary)
+      )
+  );
+
+  const copyFullFreeAgencySummary = async () => {
+    try {
+      await navigator.clipboard.writeText(fullFreeAgencySummaryText);
+      setFullSummaryCopied(true);
+      setTimeout(() => setFullSummaryCopied(false), 1400);
+    } catch (err) {
+      setActionError("Unable to copy full free agency summary. You can still select the text manually from the box.");
+    }
+  };
 
   const rightsRenounceRows = useMemo(() => {
     const rows = [];
@@ -2158,12 +2289,7 @@ export default function ViewingOffers() {
 
     for (const row of capHoldRenounceRows) {
       if (selectedRightsRenounceMap[row.playerKey]) {
-        // Send every backend-supported key shape. This prevents the UI from
-        // showing selected clearance while the Python side applies $0 because
-        // an older save used a different player key shape.
-        for (const key of getRightsDecisionKeysFromSource(row)) {
-          out[key] = "renounce";
-        }
+        out[row.playerKey] = "renounce";
       }
     }
 
@@ -2205,25 +2331,9 @@ export default function ViewingOffers() {
       return sum + getPendingSigningCapRoomImpact(row);
     }, 0);
 
-    const selectedEffectiveCapHoldClearance = getSelectedCapHoldClearanceAmount({
-      rows: capHoldRenounceRows,
-      selectedMap: selectedRightsRenounceMap,
-      protectedRows: selectedPendingRows,
-    });
-    const ignoredProtectedCapHoldClearance = Math.max(
-      0,
-      Number(selectedCapHoldClearance || 0) - Number(selectedEffectiveCapHoldClearance || 0)
-    );
-
     const selectedCount = selectedPendingRows.length;
     const payrollBefore = Number(livePendingUserTeamSnapshot?.payroll || 0);
-    const rawCapRoomBefore = Number(livePendingUserTeamSnapshot?.rawCapRoomWithoutHolds ?? livePendingUserTeamSnapshot?.capRoom ?? 0);
     const capRoomBefore = Number(livePendingUserTeamSnapshot?.capRoom || 0);
-    const practicalCapRoomBefore = Number(
-      livePendingUserTeamSnapshot?.practicalCapRoom ??
-        livePendingUserTeamSnapshot?.capRoom ??
-        0
-    );
     const hardCapRoomBefore =
       livePendingUserTeamSnapshot?.hardCapRoom === null ||
       livePendingUserTeamSnapshot?.hardCapRoom === undefined
@@ -2237,18 +2347,18 @@ export default function ViewingOffers() {
     const capHoldTotal = Number(livePendingUserTeamSnapshot?.capHoldTotal || 0);
     const practicalPayrollAfter =
       Number(livePendingUserTeamSnapshot?.practicalPayroll || payrollBefore + capHoldTotal)
-      - selectedEffectiveCapHoldClearance
+      - selectedCapHoldClearance
       + selectedCurrentYearTotal;
     const practicalCapRoomAfter =
-      practicalCapRoomBefore
-      + selectedEffectiveCapHoldClearance
+      Number(livePendingUserTeamSnapshot?.practicalCapRoom ?? capRoomBefore - capHoldTotal)
+      + selectedCapHoldClearance
       - selectedCapRoomImpactTotal;
     const firstApron = Number(livePendingUserTeamSnapshot?.firstApron || 0);
     const secondApron = Number(livePendingUserTeamSnapshot?.secondApron || 0);
     const hardCapRoomAfter =
       hardCapRoomBefore === null
         ? null
-        : hardCapRoomBefore + selectedEffectiveCapHoldClearance - selectedCurrentYearTotal;
+        : hardCapRoomBefore + selectedCapHoldClearance - selectedCurrentYearTotal;
     const rosterAfter = rosterBefore + selectedCount;
 
     const warnings = [];
@@ -2256,35 +2366,15 @@ export default function ViewingOffers() {
     const apronNotes = [];
 
     const selectedNeedsNormalCapRoom = selectedCapRoomImpactTotal > 0;
-    const requiredCapHoldClearance = selectedNeedsNormalCapRoom
-      ? Math.max(0, selectedCapRoomImpactTotal - practicalCapRoomBefore)
-      : 0;
-    const capRoomShortfall = Math.max(
-      0,
-      requiredCapHoldClearance - selectedEffectiveCapHoldClearance
-    );
-    const rawCapRoomShortfall = selectedNeedsNormalCapRoom
-      ? Math.max(0, selectedCapRoomImpactTotal - rawCapRoomBefore)
-      : 0;
 
-    if (ignoredProtectedCapHoldClearance > 0) {
+    if (selectedCount > 0 && selectedNeedsNormalCapRoom && practicalCapRoomAfter < 0) {
       warnings.push(
-        `${formatDollars(ignoredProtectedCapHoldClearance)} of selected clearance cannot count because it belongs to a player you are also trying to sign.`
+        `Selected signings appear short by ${formatDollars(Math.abs(practicalCapRoomAfter))}. Renounce enough rights below to clear the cap holds before confirming.`
       );
     }
 
-    if (selectedCount > 0 && selectedNeedsNormalCapRoom && rawCapRoomShortfall > 0) {
-      const msg = `Selected cap-space signings exceed true raw cap room by ${formatDollars(rawCapRoomShortfall)}. Cap-hold clearance cannot fix this part.`;
-      warnings.push(msg);
-      blockingWarnings.push(msg);
-    } else if (selectedCount > 0 && selectedNeedsNormalCapRoom && capRoomShortfall > 0) {
-      const msg = `Selected cap-hold clearance is short by ${formatDollars(capRoomShortfall)}. Renounce enough rights below before confirming.`;
-      warnings.push(msg);
-      blockingWarnings.push(msg);
-    }
-
     if (hardCapRoomAfter !== null && hardCapRoomAfter < 0) {
-      const msg = `Selected signings put you over the hard cap by ${formatDollars(Math.abs(hardCapRoomAfter))}.`;
+      const msg = "Selected signings put you over the hard cap.";
       warnings.push(msg);
       blockingWarnings.push(msg);
     }
@@ -2307,16 +2397,11 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       selectedTotalValue,
       payrollBefore,
       payrollAfter,
-      rawCapRoomBefore,
       capRoomBefore,
       capRoomAfter,
       capHoldTotal,
       selectedCapHoldClearance,
-      selectedEffectiveCapHoldClearance,
-      ignoredProtectedCapHoldClearance,
-      requiredCapHoldClearance,
-      capRoomShortfall,
-      rawCapRoomShortfall,
+      capRoomShortfall: selectedNeedsNormalCapRoom ? Math.max(0, -practicalCapRoomAfter) : 0,
       practicalPayrollAfter,
       practicalCapRoomAfter,
       firstApron,
@@ -2330,13 +2415,7 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       blockingWarnings,
       hasBlockingIssue: blockingWarnings.length > 0,
     };
-  }, [
-    livePendingUserTeamSnapshot,
-    selectedPendingRows,
-    selectedCapHoldClearance,
-    capHoldRenounceRows,
-    selectedRightsRenounceMap,
-  ]);
+  }, [livePendingUserTeamSnapshot, selectedPendingRows, selectedCapHoldClearance]);
 
   const toggleDecision = (playerKey) => {
     setSelectedDecisionMap((prev) => ({
@@ -2375,7 +2454,7 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
         if (res?.leagueData) {
           applyLeagueUpdate(res.leagueData);
         }
-        setActionError(buildBackendFreeAgencyError(res, "Failed to process RFA match decision."));
+        setActionError(res?.reason || "Failed to process RFA match decision.");
         return;
       }
 
@@ -2424,9 +2503,8 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
       };
     }
 
-    // Navigating back never declines anyone.
-    // Main advance now keeps unchecked rows alive. Only a caller that explicitly
-    // passes declineUnselected=true sends unchecked rows as declines.
+    // Navigating back never declines anyone. Pressing the advance/finalize button
+    // is the explicit decision point: checked rows sign, unchecked rows are declined.
     const declinedPlayerKeys = declineUnselected
       ? pendingUserDecisions
           .filter((row) => !selectedDecisionMap[row.playerKey])
@@ -2459,8 +2537,7 @@ const handleReturnToOffseasonHub = () => {
   }
 };
 
-  const handleAdvanceFromResults = async (options = {}) => {
-    const shouldDeclineUnselected = Boolean(options?.declineUnselected);
+  const handleAdvanceFromResults = async () => {
     try {
       setProcessingAdvance(true);
       setActionError("");
@@ -2491,14 +2568,14 @@ const handleReturnToOffseasonHub = () => {
 
       const processRes = await processSelections({
         requireSelected: false,
-        declineUnselected: shouldDeclineUnselected,
+        declineUnselected: true,
       });
 
       if (!processRes?.ok) {
         if (processRes?.leagueData) {
           applyLeagueUpdate(processRes.leagueData);
         }
-        setActionError(buildBackendFreeAgencyError(processRes, "Failed to process pending signings."));
+        setActionError(processRes?.reason || "Failed to process pending signings.");
         return;
       }
 
@@ -2524,123 +2601,6 @@ const handleReturnToOffseasonHub = () => {
       navigate("/free-agents");
     } catch (err) {
       setActionError(err?.message || "Failed to continue free agency.");
-    } finally {
-      setProcessingAdvance(false);
-    }
-  };
-
-  const handleDevAdvanceDayFromResults = async () => {
-    if (!selectedTeam?.name) {
-      setActionError("No team selected.");
-      return;
-    }
-
-    if (typeof advanceFreeAgencyDay !== "function") {
-      setActionError("Advance day is not wired in simEnginePy.js yet.");
-      return;
-    }
-
-    if (pendingRfaMatchDecisions.length > 0) {
-      setActionError("Resolve RFA match decisions before using Dev Advance Day.");
-      return;
-    }
-
-    try {
-      setProcessingAdvance(true);
-      setActionError("");
-
-      if (marketClosed) {
-        finalizeFreeAgencyComplete(leagueData, latestResults);
-        localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
-        navigate("/player-progression");
-        return;
-      }
-
-      let leagueForAdvance = leagueData;
-
-      if (pendingUserDecisions.length > 0) {
-        const processRes = await processSelections({
-          requireSelected: false,
-          declineUnselected: false,
-        });
-
-        if (!processRes?.ok) {
-          if (processRes?.leagueData) {
-            applyLeagueUpdate(processRes.leagueData);
-          }
-          setActionError(buildBackendFreeAgencyError(processRes, "Failed to process pending signings before dev advancing."));
-          return;
-        }
-
-        leagueForAdvance = processRes?.leagueData || leagueData;
-      }
-
-      const stateBeforeAdvance = leagueForAdvance?.freeAgencyState || {};
-      const pendingUserAfterProcess = Array.isArray(stateBeforeAdvance?.pendingUserDecisions)
-        ? stateBeforeAdvance.pendingUserDecisions
-        : [];
-      const pendingRfaAfterProcess = Array.isArray(stateBeforeAdvance?.pendingRfaMatchDecisions)
-        ? stateBeforeAdvance.pendingRfaMatchDecisions
-        : [];
-
-      // Dev-only shortcut: if unchecked decisions are still waiting, skip them so
-      // the backend can actually move to the next day from this screen.
-      if (pendingUserAfterProcess.length > 0 || pendingRfaAfterProcess.length > 0) {
-        leagueForAdvance = {
-          ...leagueForAdvance,
-          freeAgencyState: {
-            ...stateBeforeAdvance,
-            pendingUserDecisions: [],
-            pendingRfaMatchDecisions: [],
-            devSkippedPendingUserDecisions: [
-              ...(Array.isArray(stateBeforeAdvance?.devSkippedPendingUserDecisions)
-                ? stateBeforeAdvance.devSkippedPendingUserDecisions
-                : []),
-              ...pendingUserAfterProcess,
-            ],
-            devSkippedPendingRfaMatchDecisions: [
-              ...(Array.isArray(stateBeforeAdvance?.devSkippedPendingRfaMatchDecisions)
-                ? stateBeforeAdvance.devSkippedPendingRfaMatchDecisions
-                : []),
-              ...pendingRfaAfterProcess,
-            ],
-          },
-        };
-      }
-
-      const backendLeagueData = buildLeagueDataForFreeAgencyBackendAction(leagueForAdvance);
-      const res = await advanceFreeAgencyDay(
-        backendLeagueData,
-        selectedTeam.name
-      );
-
-      if (!res?.ok || !res?.leagueData) {
-        if (res?.leagueData) {
-          applyLeagueUpdate(res.leagueData);
-        }
-        setActionError(res?.reason || "Dev Advance Day failed.");
-        return;
-      }
-
-      const latest = {
-        dayResolved: res?.dayResolved ?? null,
-        signings: res?.signings || [],
-        generatedOffers: res?.generatedOffers || [],
-        stateSummary: res?.stateSummary || null,
-      };
-
-      if (!res?.stateSummary?.isActive) {
-        finalizeFreeAgencyComplete(res.leagueData, latest);
-        localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
-        navigate("/player-progression");
-        return;
-      }
-
-      applyLeagueUpdateWithLatestResults(res.leagueData, latest);
-      localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
-      navigate("/viewing-offers");
-    } catch (err) {
-      setActionError(err?.message || "Dev Advance Day failed.");
     } finally {
       setProcessingAdvance(false);
     }
@@ -2742,6 +2702,33 @@ return (
                 </div>
               </div>
             </div>
+
+            {showFullFreeAgencySummary && (
+              <div className="bg-neutral-800 border border-orange-500/30 rounded-2xl p-6 mb-6 shadow-lg">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+                  <div>
+                    <div className="text-lg font-semibold text-orange-400">
+                      Full Free Agency Summary
+                    </div>
+                    <div className="text-sm text-gray-400 mt-1">
+                      Copy-friendly recap of every saved signing and CPU offer from the full market.
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={copyFullFreeAgencySummary}
+                    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-sm font-bold transition"
+                  >
+                    {fullSummaryCopied ? "Copied" : "Copy All"}
+                  </button>
+                </div>
+
+                <pre className="bm-orange-scroll max-h-[420px] overflow-y-auto whitespace-pre-wrap rounded-xl border border-neutral-700 bg-neutral-950/90 p-4 text-sm leading-6 text-gray-200 select-text">
+                  {fullFreeAgencySummaryText}
+                </pre>
+              </div>
+            )}
 
 
             {userOfferActivity.length > 0 && (
@@ -2931,7 +2918,7 @@ return (
 
               {pendingUserDecisions.length > 0 && (
                 <div className="mb-4 rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
-                  Select the pending players you want to finalize now. Pressing Sign Selected signs checked players and keeps unchecked players waiting for the next day. Unchecked players may lose interest if you delay too long. Returning to the Offseason Hub only saves the current state.
+                  Select the pending players you want to finalize. Pressing Sign Selected / Decline Rest signs checked players, declines unchecked players, and returns you to Free Agency for the next day. Returning to the Offseason Hub only saves the current state.
                 </div>
               )}
 
@@ -2945,15 +2932,14 @@ return (
                   </div>
 
                   <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
-                    <div className="text-xs text-gray-400 mb-1">Raw Cap Room</div>
+                    <div className="text-xs text-gray-400 mb-1">Cap Space</div>
                     <div className={`text-base font-semibold ${(selectionPreview?.capRoomAfter ?? livePendingUserTeamSnapshot?.capRoom ?? 0) < 0 ? "text-red-300" : "text-white"}`}>
                       {formatDollars(selectionPreview?.capRoomAfter ?? livePendingUserTeamSnapshot?.capRoom ?? 0)}
                     </div>
-                    <div className="text-[11px] text-gray-500 mt-1">before holds</div>
                   </div>
 
                   <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
-                    <div className="text-xs text-gray-400 mb-1">Practical Room</div>
+                    <div className="text-xs text-gray-400 mb-1">Practical Cap</div>
                     <div className={`text-base font-semibold ${(selectionPreview?.practicalCapRoomAfter ?? livePendingUserTeamSnapshot?.practicalCapRoom ?? 0) < 0 ? "text-red-300" : "text-white"}`}>
                       {formatDollars(selectionPreview?.practicalCapRoomAfter ?? livePendingUserTeamSnapshot?.practicalCapRoom ?? 0)}
                     </div>
@@ -3014,7 +3000,7 @@ return (
 
                     <div className="grid grid-cols-2 gap-2 text-sm shrink-0">
                       <div className="rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2">
-                        <div className="text-xs text-gray-400 mb-1">Still Short</div>
+                        <div className="text-xs text-gray-400 mb-1">Short By</div>
                         <div className={`font-bold ${(selectionPreview?.capRoomShortfall || 0) > 0 ? "text-red-300" : "text-emerald-300"}`}>
                           {formatDollars(selectionPreview?.capRoomShortfall || 0)}
                         </div>
@@ -3022,13 +3008,8 @@ return (
                       <div className="rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2">
                         <div className="text-xs text-gray-400 mb-1">Selected Clear</div>
                         <div className="font-bold text-emerald-300">
-                          {formatDollars(selectionPreview?.selectedEffectiveCapHoldClearance ?? selectionPreview?.selectedCapHoldClearance ?? 0)}
+                          {formatDollars(selectionPreview?.selectedCapHoldClearance || 0)}
                         </div>
-                        {selectionPreview?.ignoredProtectedCapHoldClearance > 0 && (
-                          <div className="text-[11px] text-yellow-200 mt-1">
-                            {formatDollars(selectionPreview.ignoredProtectedCapHoldClearance)} ignored
-                          </div>
-                        )}
                       </div>
                     </div>
                   </div>
@@ -3203,9 +3184,6 @@ return (
 
       <div className="text-sm text-gray-500 mt-1">
         Current year cap hit: {formatDollars(contractSummary.currentYearSalary || row?.currentYearSalary || 0)}
-      </div>
-      <div className={`text-sm mt-1 ${getPendingSigningCapRoomImpact(row) > 0 ? "text-orange-200" : "text-emerald-300"}`}>
-        Normal room impact: {formatDollars(getPendingSigningCapRoomImpact(row))}
       </div>
       <div className="flex flex-wrap gap-2 mt-3">
         <InfoChip tone="orange" onClick={() => openSigningInfo(row, "Full Transaction Context", "full")}>Click For Context</InfoChip>
@@ -3503,41 +3481,19 @@ return (
 
 <div className="flex gap-3 flex-wrap">
   <button
-    onClick={() => handleAdvanceFromResults({ declineUnselected: false })}
-    disabled={
-      processingBack ||
-      processingAdvance ||
-      pendingRfaMatchDecisions.length > 0 ||
-      Boolean(selectionPreview?.hasBlockingIssue)
-    }
-    title={selectionPreview?.hasBlockingIssue ? selectionPreview.blockingWarnings.join(" ") : ""}
+    onClick={handleAdvanceFromResults}
+    disabled={processingBack || processingAdvance || pendingRfaMatchDecisions.length > 0}
     className="px-6 py-3 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
   >
     {processingAdvance
       ? "Processing..."
       : pendingRfaMatchDecisions.length > 0
       ? "Resolve RFA Decisions First"
-      : selectionPreview?.hasBlockingIssue
-      ? "Fix Cap / Roster Issue First"
       : marketClosed
       ? "Continue to Progression"
       : pendingUserDecisions.length > 0
-      ? "Sign Selected / Keep Rest Waiting"
+      ? "Sign Selected / Decline Rest"
       : "Continue to Free Agency"}
-  </button>
-
-  <button
-    onClick={handleDevAdvanceDayFromResults}
-    disabled={
-      processingBack ||
-      processingAdvance ||
-      pendingRfaMatchDecisions.length > 0 ||
-      Boolean(selectionPreview?.hasBlockingIssue)
-    }
-    title="Dev shortcut: processes selected signings, skips any still-waiting decisions, and advances directly to the next free-agency day."
-    className="px-6 py-3 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
-  >
-    {processingAdvance ? "Processing..." : "Dev Advance Day"}
   </button>
 
 <button

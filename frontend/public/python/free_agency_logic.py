@@ -4380,7 +4380,124 @@ def ensure_free_agency_state(league_data: Dict[str, Any]) -> Dict[str, Any]:
     state.setdefault("teamNeedProfiles", {})
     state.setdefault("rightsRenounceLog", [])
     state.setdefault("blockedCapHoldRenounceLog", [])
+    state.setdefault("fullActionLog", [])
     return state
+
+
+def compact_contract_for_free_agency_action_log(contract: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(contract, dict):
+        return None
+
+    salary_by_year = contract.get("salaryByYear") if isinstance(contract.get("salaryByYear"), list) else []
+    option = contract.get("option") if isinstance(contract.get("option"), dict) else None
+
+    return {
+        "startYear": contract.get("startYear"),
+        "salaryByYear": [int(num(value, 0)) for value in salary_by_year],
+        "option": copy.deepcopy(option) if option else None,
+    }
+
+
+def compact_offer_for_free_agency_action_log(offer: Dict[str, Any]) -> Dict[str, Any]:
+    contract = compact_contract_for_free_agency_action_log(offer.get("contract"))
+    salary_by_year = contract.get("salaryByYear", []) if contract else []
+    years = len(salary_by_year) or int(num(offer.get("years"), 0))
+    total_value = int(num(offer.get("totalValue"), sum(salary_by_year)))
+
+    return {
+        "offerId": offer.get("offerId"),
+        "day": offer.get("submittedDay") or offer.get("day"),
+        "submittedDay": offer.get("submittedDay") or offer.get("day"),
+        "playerId": offer.get("playerId"),
+        "playerName": offer.get("playerName"),
+        "playerKey": offer.get("playerKey"),
+        "teamName": offer.get("teamName"),
+        "source": offer.get("source", "cpu"),
+        "status": offer.get("status", "active"),
+        "contract": contract,
+        "totalValue": total_value,
+        "years": years,
+        "aav": int(num(offer.get("aav"), total_value / max(1, years))) if years else int(num(offer.get("aav"), 0)),
+        "currentYearSalary": int(num(offer.get("currentYearSalary"), salary_by_year[0] if salary_by_year else 0)),
+        "spendingType": offer.get("spendingType"),
+        "exceptionType": offer.get("exceptionType"),
+        "payrollZone": offer.get("payrollZone"),
+        "teamDirection": offer.get("teamDirection"),
+        "targetTier": offer.get("targetTier"),
+        "playerViewScore": offer.get("playerViewScore"),
+        "teamBoardScore": offer.get("teamBoardScore"),
+        "rfaOfferSheet": bool(offer.get("rfaOfferSheet")),
+        "rightsTeamName": offer.get("rightsTeamName"),
+        "rosterNeed": copy.deepcopy(offer.get("rosterNeed")) if isinstance(offer.get("rosterNeed"), dict) else None,
+    }
+
+
+def compact_signing_for_free_agency_action_log(signing: Dict[str, Any]) -> Dict[str, Any]:
+    contract = compact_contract_for_free_agency_action_log(signing.get("contract") or signing.get("signedContract"))
+    salary_by_year = contract.get("salaryByYear", []) if contract else []
+    years = len(salary_by_year) or int(num(signing.get("years") or signing.get("signedYears"), 0))
+    total_value = int(num(signing.get("totalValue") or signing.get("signedTotalValue"), sum(salary_by_year)))
+
+    return {
+        "day": signing.get("day"),
+        "playerId": signing.get("playerId"),
+        "playerName": signing.get("playerName"),
+        "playerKey": signing.get("playerKey"),
+        "teamName": signing.get("teamName") or signing.get("signedWith"),
+        "signedWith": signing.get("signedWith") or signing.get("teamName"),
+        "contract": contract,
+        "totalValue": total_value,
+        "years": years,
+        "aav": int(num(signing.get("aav"), total_value / max(1, years))) if years else int(num(signing.get("aav"), 0)),
+        "spendingType": signing.get("spendingType"),
+        "exceptionType": signing.get("exceptionType"),
+        "payrollZone": signing.get("payrollZone"),
+        "rfaMatched": bool(signing.get("rfaMatched")),
+        "originalOfferTeamName": signing.get("originalOfferTeamName"),
+        "matchedOriginalTeamName": signing.get("matchedOriginalTeamName"),
+        "declinedRightsTeamName": signing.get("declinedRightsTeamName"),
+    }
+
+
+def append_free_agency_full_action_log(
+    league_data: Dict[str, Any],
+    day_resolved: Optional[int] = None,
+    offer_day: Optional[int] = None,
+    signings: Optional[List[Dict[str, Any]]] = None,
+    generated_offers: Optional[List[Dict[str, Any]]] = None,
+    event_type: str = "market_update",
+) -> None:
+    state = ensure_free_agency_state(league_data)
+    rows = state.setdefault("fullActionLog", [])
+    signings = signings or []
+    generated_offers = generated_offers or []
+
+    if not signings and not generated_offers:
+        return
+
+    resolved_day = int(num(day_resolved, 0)) if day_resolved not in [None, ""] else None
+    generated_offer_day = int(num(offer_day, 0)) if offer_day not in [None, ""] else None
+    entry_id = f"{event_type}|{resolved_day if resolved_day is not None else ''}|{generated_offer_day if generated_offer_day is not None else ''}"
+
+    entry = {
+        "id": entry_id,
+        "eventType": event_type,
+        "dayResolved": resolved_day,
+        "offerDay": generated_offer_day,
+        "signings": [compact_signing_for_free_agency_action_log(row) for row in signings],
+        "generatedOffers": [compact_offer_for_free_agency_action_log(row) for row in generated_offers],
+        "signingCount": len(signings),
+        "generatedOfferCount": len(generated_offers),
+    }
+
+    kept = [row for row in rows if row.get("id") != entry_id]
+    kept.append(entry)
+    kept.sort(key = lambda row: (
+        int(num(row.get("dayResolved"), row.get("offerDay") or 0)),
+        int(num(row.get("offerDay"), 0)),
+        str(row.get("eventType", "")),
+    ))
+    state["fullActionLog"] = kept[-60:]
 
 
 def should_enforce_post_market_cleanup_rules(
@@ -5978,9 +6095,8 @@ def get_active_offer_limit_for_team(
         if planning_room >= 40_000_000 or roster_deficit >= 3:
             desired_limit = 9
 
-    # Live offers are conditional and do not immediately occupy roster spots.
-    # A full roster can still submit offers, but finalizing the accepted signing
-    # screen must force the team to clear a roster spot if needed.
+    if current_roster_count >= get_roster_limit(league_data):
+        desired_limit = 0
 
     return int(clamp(desired_limit, 0, 10))
 
@@ -6472,6 +6588,15 @@ def process_pending_rfa_match_decision(
         "decision": final_decision,
         "signedWith": signed.get("signedWith"),
     })
+
+    append_free_agency_full_action_log(
+        league_data = updated,
+        day_resolved = current_day,
+        offer_day = None,
+        signings = [signed],
+        generated_offers = [],
+        event_type = "rfa_match_decision",
+    )
 
     return {
         "ok": True,
@@ -7088,6 +7213,15 @@ def process_pending_user_decisions(
 
         snapshot = get_team_cap_snapshot(preview, user_team_name) if user_team_name else None
         preview_state["pendingUserTeamSnapshot"] = snapshot if snapshot and snapshot.get("ok") else None
+
+    append_free_agency_full_action_log(
+        league_data = preview,
+        day_resolved = current_day,
+        offer_day = preview_state.get("currentDay") if generated_offers else None,
+        signings = processed_signings,
+        generated_offers = generated_offers,
+        event_type = "user_decision_update",
+    )
 
     return {
         "ok": True,
@@ -9621,6 +9755,7 @@ def initialize_free_agency_period(
     state["teamNeedProfiles"] = {}
     state["rightsRenounceLog"] = []
     state["blockedCapHoldRenounceLog"] = []
+    state["fullActionLog"] = []
     state["pendingUserTeamName"] = user_team_name
     state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, user_team_name) if user_team_name else None
 
@@ -9641,6 +9776,15 @@ def initialize_free_agency_period(
         "openingCleanupTarget": opening_cleanup_target,
         "fullMinTarget": offseason_min_target,
     })
+
+    append_free_agency_full_action_log(
+        league_data = updated,
+        day_resolved = 0,
+        offer_day = 1,
+        signings = opening_cleanup_signings,
+        generated_offers = opening_offers,
+        event_type = "opening_market",
+    )
 
     return {
         "ok": True,
@@ -9701,6 +9845,15 @@ def advance_free_agency_day(
     })
 
     if state.get("pendingUserDecisions") or state.get("pendingRfaMatchDecisions"):
+        append_free_agency_full_action_log(
+            league_data = updated,
+            day_resolved = current_day,
+            offer_day = None,
+            signings = signings,
+            generated_offers = [],
+            event_type = "daily_resolution_pending_user",
+        )
+
         return {
             "ok": True,
             "leagueData": updated,
@@ -9733,6 +9886,15 @@ def advance_free_agency_day(
         state["isActive"] = False
         state["pendingUserTeamSnapshot"] = None
 
+        append_free_agency_full_action_log(
+            league_data = updated,
+            day_resolved = current_day,
+            offer_day = None,
+            signings = signings,
+            generated_offers = [],
+            event_type = "final_market_resolution",
+        )
+
         return {
             "ok": True,
             "leagueData": updated,
@@ -9755,6 +9917,15 @@ def advance_free_agency_day(
         "type": "offer_generation",
         "offersGenerated": len(generated_offers),
     })
+
+    append_free_agency_full_action_log(
+        league_data = updated,
+        day_resolved = current_day,
+        offer_day = state["currentDay"],
+        signings = signings,
+        generated_offers = generated_offers,
+        event_type = "daily_market_update",
+    )
 
     state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, user_team_name) if user_team_name else None
 
