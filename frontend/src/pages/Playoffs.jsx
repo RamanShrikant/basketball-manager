@@ -2323,8 +2323,8 @@ export default function Playoffs() {
     }
   }
 
-  // ✅ DEV PATCH: instant playoff sim path.
-  // Same game engine, but skips live bracket flushes and saves the final bracket once.
+  // ✅ DEV PATCH: true instant playoff sim path.
+  // Dev-only shortcut: bypasses the worker game sim and writes synthetic playoff results.
   async function simDevInstantPlayoffsToChampion() {
     if (simLock) return;
     if (post?.finals?.complete) return;
@@ -2332,6 +2332,245 @@ export default function Playoffs() {
     setSimLock(true);
     stopRequestedRef.current = false;
     setSimStopping(false);
+
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+    const playerNameOf = (player) => player?.name || player?.player || "Unknown";
+
+    const playerOvrOf = (player) => {
+      const n = Number(
+        player?.ovr ??
+          player?.overall ??
+          player?.rating ??
+          player?.overallRating ??
+          72
+      );
+      return Number.isFinite(n) ? n : 72;
+    };
+
+    const getTeamRoster = (teamName) => {
+      const roster = (teamsByName?.[teamName]?.players || [])
+        .filter((player) => player && playerNameOf(player))
+        .map((player) => ({ ...player }))
+        .sort((a, b) => playerOvrOf(b) - playerOvrOf(a));
+
+      if (roster.length) return roster;
+
+      return [
+        { name: `${teamName || "Team"} Player 1`, ovr: 78 },
+        { name: `${teamName || "Team"} Player 2`, ovr: 76 },
+        { name: `${teamName || "Team"} Player 3`, ovr: 74 },
+        { name: `${teamName || "Team"} Player 4`, ovr: 72 },
+        { name: `${teamName || "Team"} Player 5`, ovr: 70 },
+      ];
+    };
+
+    const getTeamPower = (teamName) => {
+      const roster = getTeamRoster(teamName).slice(0, 9);
+      const weights = [1.35, 1.18, 1.05, 0.93, 0.82, 0.62, 0.52, 0.43, 0.35];
+
+      let weighted = 0;
+      let totalWeight = 0;
+
+      for (let i = 0; i < roster.length; i++) {
+        const weight = weights[i] || 0.3;
+        weighted += playerOvrOf(roster[i]) * weight;
+        totalWeight += weight;
+      }
+
+      return totalWeight > 0 ? weighted / totalWeight : 72;
+    };
+
+    const pickDevWinnerSide = (homeName, awayName) => {
+      const homePower = getTeamPower(homeName) + 2.5;
+      const awayPower = getTeamPower(awayName);
+      const homeWinChance = clamp(0.5 + (homePower - awayPower) / 34, 0.18, 0.82);
+
+      return Math.random() < homeWinChance ? "home" : "away";
+    };
+
+    const buildDevBox = (teamName, teamPoints, wonGame) => {
+      const roster = getTeamRoster(teamName).slice(0, 9);
+      const usageWeights = roster.map((player, index) => {
+        const ovrBoost = Math.max(1, playerOvrOf(player) - 58);
+        const roleBoost = index === 0 ? 1.55 : index === 1 ? 1.28 : index < 5 ? 1.0 : 0.56;
+        return ovrBoost * roleBoost;
+      });
+
+      const totalUsage = usageWeights.reduce((sum, value) => sum + value, 0) || 1;
+      let assignedPoints = 0;
+
+      return roster.map((player, index) => {
+        const isLast = index === roster.length - 1;
+        const rawShare = usageWeights[index] / totalUsage;
+        const jitter = 0.86 + Math.random() * 0.28;
+
+        let pts = isLast
+          ? Math.max(0, teamPoints - assignedPoints)
+          : Math.max(0, Math.round(teamPoints * rawShare * jitter));
+
+        if (index === 0 && wonGame) pts += Math.round(2 + Math.random() * 5);
+        if (!isLast && assignedPoints + pts > teamPoints) pts = Math.max(0, teamPoints - assignedPoints);
+
+        assignedPoints += pts;
+
+        const minutes =
+          index < 5
+            ? Math.round(30 + Math.random() * 9)
+            : Math.round(10 + Math.random() * 16);
+
+        const fga = Math.max(1, Math.round(pts / (1.25 + Math.random() * 0.35)));
+        const fgm = clamp(Math.round(fga * (0.41 + Math.random() * 0.15)), 0, fga);
+        const tpa = Math.max(0, Math.round((index < 5 ? 2 : 0) + Math.random() * (index < 4 ? 6 : 4)));
+        const tpm = clamp(Math.round(tpa * (0.28 + Math.random() * 0.18)), 0, tpa);
+        const ftm = Math.max(0, Math.round(Math.random() * (index < 3 ? 6 : 3)));
+        const fta = ftm + Math.round(Math.random() * 2);
+
+        return {
+          player: playerNameOf(player),
+          min: minutes,
+          pts,
+          reb: Math.round(Math.random() * (index < 5 ? 9 : 5)),
+          ast: Math.round(Math.random() * (index < 3 ? 9 : 4)),
+          stl: Math.round(Math.random() * 3),
+          blk: Math.round(Math.random() * (index < 5 ? 3 : 1)),
+          fg: `${fgm}-${fga}`,
+          "3p": `${tpm}-${tpa}`,
+          ft: `${ftm}-${fta}`,
+          to: Math.round(Math.random() * 4),
+          pf: Math.round(Math.random() * 4),
+        };
+      });
+    };
+
+    const buildDevSlimResult = (homeName, awayName, forcedSide = null) => {
+      const side = forcedSide || pickDevWinnerSide(homeName, awayName);
+      const homePower = getTeamPower(homeName);
+      const awayPower = getTeamPower(awayName);
+      const baseScore = Math.round(102 + Math.random() * 23);
+      const powerBump = Math.round(Math.max(homePower, awayPower) * 0.09);
+      const winnerScore = baseScore + powerBump;
+      const loserScore = Math.max(82, winnerScore - Math.round(3 + Math.random() * 16));
+
+      const homeScore = side === "home" ? winnerScore : loserScore;
+      const awayScore = side === "away" ? winnerScore : loserScore;
+
+      return {
+        winner: {
+          score: `${homeScore}-${awayScore}`,
+          home: homeScore,
+          away: awayScore,
+          ot: 0,
+          side,
+        },
+        totals: {
+          home: homeScore,
+          away: awayScore,
+        },
+        box: {
+          home: buildDevBox(homeName, homeScore, side === "home"),
+          away: buildDevBox(awayName, awayScore, side === "away"),
+        },
+      };
+    };
+
+    const saveDevGameResult = (gameId, homeName, awayName) => {
+      const cached = resultsRef.current?.[gameId] || loadPlayoffResults()?.[gameId];
+      if (cached && !isBadSlimResult(cached)) return cached;
+
+      const slim = buildDevSlimResult(homeName, awayName);
+
+      resultsRef.current = {
+        ...(resultsRef.current || {}),
+        [gameId]: slim,
+      };
+
+      return slim;
+    };
+
+    const applyDevPlayInGame = (cur, confKey, which) => {
+      const pi = cur.conf[confKey].playIn;
+      const node = which === "78" ? pi.g78 : which === "910" ? pi.g910 : pi.gFinal;
+      if (node.played) return false;
+      if (!node.home || !node.away) return false;
+
+      const slim = saveDevGameResult(node.id, node.home, node.away);
+      const side = winnerFromSlim(slim);
+      if (!side) return false;
+
+      const winner = side === "home" ? node.home : node.away;
+      const loser = side === "home" ? node.away : node.home;
+
+      node.played = true;
+      node.winner = winner;
+      node.loser = loser;
+
+      if (which === "78") {
+        pi.seed7 = winner;
+        if (pi.g910.played) {
+          pi.gFinal.home = loser;
+          pi.gFinal.away = pi.g910.winner;
+        }
+      } else if (which === "910") {
+        if (pi.g78.played) {
+          pi.gFinal.home = pi.g78.loser;
+          pi.gFinal.away = winner;
+        }
+      } else {
+        pi.seed8 = winner;
+        cur.conf[confKey].rounds.r1.s1v8.lowSeedTeam = pi.seed8;
+        cur.conf[confKey].rounds.r1.s2v7.lowSeedTeam = pi.seed7;
+      }
+
+      wireForward(cur, confKey);
+      return true;
+    };
+
+    const applyDevSeriesGame = (cur, confKey, roundName, seriesKey) => {
+      const series = getSeriesNode(cur, confKey, roundName, seriesKey);
+      if (!seriesReadyForNextGame(series)) return false;
+
+      const idx = series.nextGameIndex;
+      const gid = series.gameIds[idx];
+      const { home, away } = seriesGameMeta(series, idx);
+
+      const slim = saveDevGameResult(gid, home, away);
+      const side = winnerFromSlim(slim);
+      if (!side) return false;
+
+      if (side === "home") {
+        if (home === series.highSeedTeam) series.winsHigh++;
+        else series.winsLow++;
+      } else if (side === "away") {
+        if (away === series.highSeedTeam) series.winsHigh++;
+        else series.winsLow++;
+      }
+
+      series.nextGameIndex++;
+
+      if (series.winsHigh >= 4 || series.winsLow >= 4) {
+        series.complete = true;
+      }
+
+      if (roundName !== "finals") wireForward(cur, confKey);
+      return true;
+    };
+
+    const devSeriesToCompletion = (cur, confKey, roundName, seriesKey) => {
+      const series = getSeriesNode(cur, confKey, roundName, seriesKey);
+      if (!series || !series.highSeedTeam || !series.lowSeedTeam) return false;
+
+      let didAdvance = false;
+
+      while (!series.complete && !stopRequestedRef.current) {
+        const advanced = applyDevSeriesGame(cur, confKey, roundName, seriesKey);
+        if (!advanced) break;
+        didAdvance = true;
+      }
+
+      if (roundName !== "finals") wireForward(cur, confKey);
+      return didAdvance;
+    };
 
     try {
       setModal(null);
@@ -2358,21 +2597,15 @@ export default function Playoffs() {
             if (!pi) continue;
 
             if (!pi.g78.played && !stopRequestedRef.current) {
-              const wasPlayed = Boolean(pi.g78.played);
-              await simPlayInGameInCur(cur, ck, "78");
-              progressed = progressed || (!wasPlayed && Boolean(pi.g78.played));
+              progressed = applyDevPlayInGame(cur, ck, "78") || progressed;
             }
 
             if (!pi.g910.played && !stopRequestedRef.current) {
-              const wasPlayed = Boolean(pi.g910.played);
-              await simPlayInGameInCur(cur, ck, "910");
-              progressed = progressed || (!wasPlayed && Boolean(pi.g910.played));
+              progressed = applyDevPlayInGame(cur, ck, "910") || progressed;
             }
 
             if (!pi.gFinal.played && !stopRequestedRef.current) {
-              const wasPlayed = Boolean(pi.gFinal.played);
-              await simPlayInGameInCur(cur, ck, "final");
-              progressed = progressed || (!wasPlayed && Boolean(pi.gFinal.played));
+              progressed = applyDevPlayInGame(cur, ck, "final") || progressed;
             }
           }
 
@@ -2388,49 +2621,34 @@ export default function Playoffs() {
           for (const ck of confs) {
             for (const sk of ["s1v8", "s4v5", "s3v6", "s2v7"]) {
               if (stopRequestedRef.current) break;
-              const s = getSeriesNode(cur, ck, "r1", sk);
-              if (seriesReadyForNextGame(s)) {
-                const did = await simSeriesToCompletionInCur(cur, ck, "r1", sk, { flush: false });
-                progressed = progressed || did;
-              }
+              progressed = devSeriesToCompletion(cur, ck, "r1", sk) || progressed;
             }
           }
         } else if (stage === "r2") {
           for (const ck of confs) {
             for (const sk of ["top", "bot"]) {
               if (stopRequestedRef.current) break;
-              const s = getSeriesNode(cur, ck, "r2", sk);
-              if (seriesReadyForNextGame(s)) {
-                const did = await simSeriesToCompletionInCur(cur, ck, "r2", sk, { flush: false });
-                progressed = progressed || did;
-              }
+              progressed = devSeriesToCompletion(cur, ck, "r2", sk) || progressed;
             }
           }
         } else if (stage === "r3") {
           for (const ck of confs) {
             if (stopRequestedRef.current) break;
-            const s = getSeriesNode(cur, ck, "r3", "confFinals");
-            if (seriesReadyForNextGame(s)) {
-              const did = await simSeriesToCompletionInCur(cur, ck, "r3", "confFinals", { flush: false });
-              progressed = progressed || did;
-            }
+            progressed = devSeriesToCompletion(cur, ck, "r3", "confFinals") || progressed;
           }
         } else if (stage === "finals") {
-          const s = cur.finals;
-          if (seriesReadyForNextGame(s) && !stopRequestedRef.current) {
-            const did = await simSeriesToCompletionInCur(cur, "NBA", "finals", "FINALS", { flush: false });
-            progressed = progressed || did;
-          }
+          progressed = devSeriesToCompletion(cur, "NBA", "finals", "FINALS") || progressed;
         }
 
         if (!progressed) {
           console.warn("[playoffs] Dev instant sim made no progress; stopping to avoid infinite loop.");
           break;
         }
-
-        await new Promise((r) => setTimeout(r, 0));
       }
 
+      const finalResults = resultsRef.current || {};
+      setResultsLive(finalResults);
+      scheduleSaveResults(finalResults);
       persistPost(structuredClone(cur));
     } finally {
       setSimLock(false);
@@ -2438,7 +2656,6 @@ export default function Playoffs() {
       setSimStopping(false);
     }
   }
-
 
   function openBoxScoreLine(gameId, homeName, awayName) {
     const r = getPlayoffResult(gameId);

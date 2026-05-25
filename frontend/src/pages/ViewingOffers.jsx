@@ -1522,6 +1522,7 @@ export default function ViewingOffers() {
   const processPendingRfaMatchDecision =
     simEngine.processPendingRfaMatchDecision;
   const applyRightsManagement = simEngine.applyRightsManagement;
+  const advanceFreeAgencyDay = simEngine.advanceFreeAgencyDay;
 
   const freeAgencyState = leagueData?.freeAgencyState || {};
   const latestResults = freeAgencyState?.latestResults || null;
@@ -2424,8 +2425,8 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
     }
 
     // Navigating back never declines anyone.
-    // Main advance now keeps unchecked rows alive. Only the explicit
-    // "Decline Unchecked & Advance" path sends unchecked rows as declines.
+    // Main advance now keeps unchecked rows alive. Only a caller that explicitly
+    // passes declineUnselected=true sends unchecked rows as declines.
     const declinedPlayerKeys = declineUnselected
       ? pendingUserDecisions
           .filter((row) => !selectedDecisionMap[row.playerKey])
@@ -2523,6 +2524,123 @@ const handleReturnToOffseasonHub = () => {
       navigate("/free-agents");
     } catch (err) {
       setActionError(err?.message || "Failed to continue free agency.");
+    } finally {
+      setProcessingAdvance(false);
+    }
+  };
+
+  const handleDevAdvanceDayFromResults = async () => {
+    if (!selectedTeam?.name) {
+      setActionError("No team selected.");
+      return;
+    }
+
+    if (typeof advanceFreeAgencyDay !== "function") {
+      setActionError("Advance day is not wired in simEnginePy.js yet.");
+      return;
+    }
+
+    if (pendingRfaMatchDecisions.length > 0) {
+      setActionError("Resolve RFA match decisions before using Dev Advance Day.");
+      return;
+    }
+
+    try {
+      setProcessingAdvance(true);
+      setActionError("");
+
+      if (marketClosed) {
+        finalizeFreeAgencyComplete(leagueData, latestResults);
+        localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+        navigate("/player-progression");
+        return;
+      }
+
+      let leagueForAdvance = leagueData;
+
+      if (pendingUserDecisions.length > 0) {
+        const processRes = await processSelections({
+          requireSelected: false,
+          declineUnselected: false,
+        });
+
+        if (!processRes?.ok) {
+          if (processRes?.leagueData) {
+            applyLeagueUpdate(processRes.leagueData);
+          }
+          setActionError(buildBackendFreeAgencyError(processRes, "Failed to process pending signings before dev advancing."));
+          return;
+        }
+
+        leagueForAdvance = processRes?.leagueData || leagueData;
+      }
+
+      const stateBeforeAdvance = leagueForAdvance?.freeAgencyState || {};
+      const pendingUserAfterProcess = Array.isArray(stateBeforeAdvance?.pendingUserDecisions)
+        ? stateBeforeAdvance.pendingUserDecisions
+        : [];
+      const pendingRfaAfterProcess = Array.isArray(stateBeforeAdvance?.pendingRfaMatchDecisions)
+        ? stateBeforeAdvance.pendingRfaMatchDecisions
+        : [];
+
+      // Dev-only shortcut: if unchecked decisions are still waiting, skip them so
+      // the backend can actually move to the next day from this screen.
+      if (pendingUserAfterProcess.length > 0 || pendingRfaAfterProcess.length > 0) {
+        leagueForAdvance = {
+          ...leagueForAdvance,
+          freeAgencyState: {
+            ...stateBeforeAdvance,
+            pendingUserDecisions: [],
+            pendingRfaMatchDecisions: [],
+            devSkippedPendingUserDecisions: [
+              ...(Array.isArray(stateBeforeAdvance?.devSkippedPendingUserDecisions)
+                ? stateBeforeAdvance.devSkippedPendingUserDecisions
+                : []),
+              ...pendingUserAfterProcess,
+            ],
+            devSkippedPendingRfaMatchDecisions: [
+              ...(Array.isArray(stateBeforeAdvance?.devSkippedPendingRfaMatchDecisions)
+                ? stateBeforeAdvance.devSkippedPendingRfaMatchDecisions
+                : []),
+              ...pendingRfaAfterProcess,
+            ],
+          },
+        };
+      }
+
+      const backendLeagueData = buildLeagueDataForFreeAgencyBackendAction(leagueForAdvance);
+      const res = await advanceFreeAgencyDay(
+        backendLeagueData,
+        selectedTeam.name
+      );
+
+      if (!res?.ok || !res?.leagueData) {
+        if (res?.leagueData) {
+          applyLeagueUpdate(res.leagueData);
+        }
+        setActionError(res?.reason || "Dev Advance Day failed.");
+        return;
+      }
+
+      const latest = {
+        dayResolved: res?.dayResolved ?? null,
+        signings: res?.signings || [],
+        generatedOffers: res?.generatedOffers || [],
+        stateSummary: res?.stateSummary || null,
+      };
+
+      if (!res?.stateSummary?.isActive) {
+        finalizeFreeAgencyComplete(res.leagueData, latest);
+        localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+        navigate("/player-progression");
+        return;
+      }
+
+      applyLeagueUpdateWithLatestResults(res.leagueData, latest);
+      localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+      navigate("/viewing-offers");
+    } catch (err) {
+      setActionError(err?.message || "Dev Advance Day failed.");
     } finally {
       setProcessingAdvance(false);
     }
@@ -2813,7 +2931,7 @@ return (
 
               {pendingUserDecisions.length > 0 && (
                 <div className="mb-4 rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
-                  Select the pending players you want to finalize now. Pressing Sign Selected signs checked players and keeps unchecked players waiting for the next day. Unchecked players may lose interest if you delay too long. Use Decline Unchecked & Advance only when you intentionally want to decline the unchecked offers. Returning to the Offseason Hub only saves the current state.
+                  Select the pending players you want to finalize now. Pressing Sign Selected signs checked players and keeps unchecked players waiting for the next day. Unchecked players may lose interest if you delay too long. Returning to the Offseason Hub only saves the current state.
                 </div>
               )}
 
@@ -3408,21 +3526,19 @@ return (
       : "Continue to Free Agency"}
   </button>
 
-  {pendingUserDecisions.length > 0 && (
-    <button
-      onClick={() => handleAdvanceFromResults({ declineUnselected: true })}
-      disabled={
-        processingBack ||
-        processingAdvance ||
-        pendingRfaMatchDecisions.length > 0 ||
-        Boolean(selectionPreview?.hasBlockingIssue)
-      }
-      title="Explicitly decline every unchecked ready-to-sign offer, then advance."
-      className="px-6 py-3 bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
-    >
-      Decline Unchecked & Advance
-    </button>
-  )}
+  <button
+    onClick={handleDevAdvanceDayFromResults}
+    disabled={
+      processingBack ||
+      processingAdvance ||
+      pendingRfaMatchDecisions.length > 0 ||
+      Boolean(selectionPreview?.hasBlockingIssue)
+    }
+    title="Dev shortcut: processes selected signings, skips any still-waiting decisions, and advances directly to the next free-agency day."
+    className="px-6 py-3 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
+  >
+    {processingAdvance ? "Processing..." : "Dev Advance Day"}
+  </button>
 
 <button
   onClick={handleReturnToOffseasonHub}
