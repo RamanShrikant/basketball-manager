@@ -444,21 +444,29 @@ function getSeasonYearFromMeta() {
 }
 
 function inferSeasonYear(leagueData) {
-  const y1 = Number(leagueData?.seasonYear);
-  if (Number.isFinite(y1)) return y1;
+  const candidates = [];
 
-  const y2 = Number(leagueData?.currentSeasonYear);
-  if (Number.isFinite(y2)) return y2;
+  const pushYear = (value) => {
+    const y = Number(value);
+    if (Number.isFinite(y) && y >= 2020 && y <= 2100) {
+      candidates.push(y);
+    }
+  };
 
-  const y3 = Number(leagueData?.seasonStartYear);
-  if (Number.isFinite(y3)) return y3;
-
+  const meta = readJsonSafe(META_KEY, null);
   const offseasonState = readJsonSafe(OFFSEASON_STATE_KEY, null);
-  const offY = Number(offseasonState?.seasonYear);
-  if (Number.isFinite(offY)) return offY;
 
-  const metaYear = getSeasonYearFromMeta();
-  if (metaYear != null) return metaYear;
+  pushYear(meta?.seasonYear);
+  pushYear(meta?.currentSeasonYear);
+  pushYear(meta?.seasonStartYear);
+  pushYear(offseasonState?.seasonYear);
+  pushYear(leagueData?.seasonYear);
+  pushYear(leagueData?.currentSeasonYear);
+  pushYear(leagueData?.seasonStartYear);
+
+  if (candidates.length) {
+    return Math.max(...candidates);
+  }
 
   const today = new Date();
   return today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
@@ -995,13 +1003,7 @@ export default function PlayerProgression() {
   }
 
   function handleReturnToOffseasonHub() {
-    const resolvedSeasonYear = Number(
-      leagueData?.seasonYear ??
-      leagueData?.currentSeasonYear ??
-      leagueData?.seasonStartYear ??
-      readJsonSafe(OFFSEASON_STATE_KEY, null)?.seasonYear ??
-      2026
-    );
+    const resolvedSeasonYear = inferSeasonYear(leagueData);
 
     const savedDeltas = readJsonSafe(DELTAS_KEY, {});
     const savedDeltaCount =

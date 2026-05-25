@@ -16,12 +16,31 @@ function safeJSON(raw, fallback = null) {
 }
 
 function getSeasonYear(leagueData) {
-  return Number(
-    leagueData?.seasonYear ||
-    leagueData?.currentSeasonYear ||
-    safeJSON(localStorage.getItem("bm_league_meta_v1"), {})?.seasonYear ||
-    2026
-  );
+  const candidates = [];
+
+  const pushYear = (value) => {
+    const y = Number(value);
+    if (Number.isFinite(y) && y >= 2020 && y <= 2100) {
+      candidates.push(y);
+    }
+  };
+
+  const meta = safeJSON(localStorage.getItem("bm_league_meta_v1"), {});
+  const offseasonState = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {});
+
+  pushYear(meta?.seasonYear);
+  pushYear(meta?.currentSeasonYear);
+  pushYear(meta?.seasonStartYear);
+  pushYear(offseasonState?.seasonYear);
+  pushYear(leagueData?.seasonYear);
+  pushYear(leagueData?.currentSeasonYear);
+  pushYear(leagueData?.seasonStartYear);
+
+  if (candidates.length) {
+    return Math.max(...candidates);
+  }
+
+  return 2026;
 }
 
 function getChampionName() {

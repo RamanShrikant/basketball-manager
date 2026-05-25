@@ -17,12 +17,31 @@ function safeJSON(raw, fallback = null) {
 }
 
 function getSeasonYear(leagueData) {
-  return Number(
-    leagueData?.seasonYear ||
-    leagueData?.currentSeasonYear ||
-    safeJSON(localStorage.getItem("bm_league_meta_v1"), {})?.seasonYear ||
-    2026
-  );
+  const candidates = [];
+
+  const pushYear = (value) => {
+    const y = Number(value);
+    if (Number.isFinite(y) && y >= 2020 && y <= 2100) {
+      candidates.push(y);
+    }
+  };
+
+  const meta = safeJSON(localStorage.getItem("bm_league_meta_v1"), {});
+  const offseasonState = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {});
+
+  pushYear(meta?.seasonYear);
+  pushYear(meta?.currentSeasonYear);
+  pushYear(meta?.seasonStartYear);
+  pushYear(offseasonState?.seasonYear);
+  pushYear(leagueData?.seasonYear);
+  pushYear(leagueData?.currentSeasonYear);
+  pushYear(leagueData?.seasonStartYear);
+
+  if (candidates.length) {
+    return Math.max(...candidates);
+  }
+
+  return 2026;
 }
 
 function getAllTeamsFromLeague(leagueData) {
@@ -53,13 +72,13 @@ return {
 
 return {
   active: true,
-  seasonYear,
   retirementsComplete: false,
   retirementsSkipped: false,
   retirementsDisabled: false,
   freeAgencyComplete: false,
   progressionComplete: false,
   ...stored,
+  seasonYear,
 };
 }
 
@@ -268,12 +287,21 @@ const alreadyRan = !!retirementResult?.ok || !!offseasonState.retirementsComplet
 const retirementsDisabled = !!offseasonState.retirementsDisabled;
 
 const finalizeRetirementsAsSkipped = ({ disabled = false } = {}) => {
+  const skippedLeagueData = workingLeagueData
+    ? {
+        ...workingLeagueData,
+        seasonYear,
+        currentSeasonYear: seasonYear,
+        seasonStartYear: seasonYear,
+      }
+    : workingLeagueData;
+
   const res = {
     ok: true,
     skipped: true,
     disabled,
     seasonYear,
-    leagueData: workingLeagueData,
+    leagueData: skippedLeagueData,
     retiredPlayers: [],
     summary: {
       retiredCount: 0,
@@ -285,12 +313,12 @@ const finalizeRetirementsAsSkipped = ({ disabled = false } = {}) => {
 
   setRetirementResult(res);
 
-  if (typeof setLeagueData === "function" && workingLeagueData) {
-    setLeagueData(workingLeagueData);
+  if (typeof setLeagueData === "function" && skippedLeagueData) {
+    setLeagueData(skippedLeagueData);
   }
 
-  if (workingLeagueData) {
-    saveLeagueDataAfterRetirements(workingLeagueData);
+  if (skippedLeagueData) {
+    saveLeagueDataAfterRetirements(skippedLeagueData);
   }
 
   saveRetirementResult(res);
@@ -359,8 +387,21 @@ setError("");
         return;
       }
 
-      const updated = res.leagueData;
-      const compactResult = saveRetirementResult(res);
+      const updated = {
+        ...res.leagueData,
+        seasonYear,
+        currentSeasonYear: seasonYear,
+        seasonStartYear: seasonYear,
+      };
+      const compactResult = saveRetirementResult({
+        ...res,
+        leagueData: updated,
+        seasonYear,
+        summary: {
+          ...(res.summary || {}),
+          seasonYear,
+        },
+      });
 
       setWorkingLeagueData(updated);
       setRetirementResult(compactResult);
