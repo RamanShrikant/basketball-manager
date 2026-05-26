@@ -3185,6 +3185,7 @@ def validate_offer_spending_rules(
     outstanding_current_salary: int = 0,
     snapshot: Optional[Dict[str, Any]] = None,
     allow_pending_cap_hold_clearance: bool = True,
+    allow_rfa_match_rights: bool = False,
 ) -> Dict[str, Any]:
     snapshot = snapshot or get_team_cap_snapshot(league_data, team_name)
     if not snapshot.get("ok"):
@@ -3244,6 +3245,26 @@ def validate_offer_spending_rules(
     cap_hold_total = int(num(snapshot.get("capHoldTotal") or snapshot.get("capHolds"), 0))
     remaining = get_team_remaining_exceptions(league_data, team_name)
     needed_room = outstanding_current_salary + offered_current_salary
+
+    # Surgical RFA match rule:
+    # Matching an outside offer sheet is not the same as creating a normal
+    # Early Bird / Non-Bird return offer. If the original team still holds RFA
+    # rights, the match should not be blocked by the Bird-rights salary ceiling.
+    # Hard-cap legality was already checked above through projected_payroll.
+    if allow_rfa_match_rights and own_rights and rights.get("restrictedFreeAgent"):
+        return {
+            "ok": True,
+            "reason": "Offer is legal using restricted free agent matching rights.",
+            "teamSnapshot": snapshot,
+            "exceptionRoom": MAX_SALARY,
+            "spendingType": "rfa_match",
+            "exceptionType": None,
+            "birdRights": rights,
+            "payrollZone": payroll_zone,
+            "projectedPayroll": projected_payroll,
+            "exceptionRemaining": remaining,
+            "rfaMatchRights": True,
+        }
 
     # Live free-agency offer rule:
     # If a team has enough raw cap room after clearing cap holds, the offer is
@@ -4381,7 +4402,361 @@ def ensure_free_agency_state(league_data: Dict[str, Any]) -> Dict[str, Any]:
     state.setdefault("rightsRenounceLog", [])
     state.setdefault("blockedCapHoldRenounceLog", [])
     state.setdefault("fullActionLog", [])
+    state.setdefault("rfaDebugLog", [])
+    state.setdefault("cpuOfferDebugLog", [])
+    state.setdefault("rfaMatchDebugLog", [])
+    state.setdefault("finalizeDebugLog", [])
+    state.setdefault("freeAgencyDebugErrors", [])
     return state
+
+
+
+# ------------------------------------------------------------
+# DEBUG-ONLY RFA / CPU OFFER AUDIT HELPERS - LITE
+# ------------------------------------------------------------
+# Debug-only. No gameplay behavior changes.
+# This version is intentionally tiny because leagueData is already close to
+# localStorage quota during free agency. It records only flat, searchable facts.
+RFA_DEBUG_PLAYER_NAMES = {
+    "Stephon Castle",
+    "Alex Sarr",
+    "Matas Buzelis",
+    "Kel'el Ware",
+    "Jalen Duren",
+    "Cason Wallace",
+    "Tari Eason",
+}
+
+# Keep this low. Four/five buckets at 180 rows each is enough to trace the bug
+# without rebuilding the old 1MB+ debug payload problem.
+RFA_DEBUG_LOG_LIMIT = 180
+
+
+def _debug_str(value: Any) -> str:
+    return str(value or "")
+
+
+def is_rfa_debug_target(player: Optional[Dict[str, Any]], team_name: Optional[str] = None) -> bool:
+    if not isinstance(player, dict):
+        return False
+
+    name = player.get("name")
+    rights = get_player_rights(player)
+    overall = int(round(num(player.get("overall"), 0)))
+    age = int(num(player.get("age"), 99))
+    potential = int(round(num(player.get("potential"), overall)))
+
+    if name in RFA_DEBUG_PLAYER_NAMES:
+        return True
+
+    # Keep generic logging narrow. We mainly care about young good RFAs.
+    if rights.get("restrictedFreeAgent") and age <= 27 and (overall >= 78 or potential >= 82):
+        return True
+
+    if team_name and is_rights_team(player, team_name) and age <= 28 and (overall >= 78 or potential >= 82):
+        return True
+
+    return False
+
+
+def compact_debug_rights(player: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(player, dict):
+        return {}
+
+    rights = get_player_rights(player)
+    qualifying_offer = player.get("qualifyingOffer") if isinstance(player.get("qualifyingOffer"), dict) else None
+    qualifying_offer_eligible = player.get("qualifyingOfferEligible") if isinstance(player.get("qualifyingOfferEligible"), dict) else None
+    free_agency_meta = player.get("freeAgencyMeta") if isinstance(player.get("freeAgencyMeta"), dict) else None
+
+    return {
+        "heldByTeam": rights.get("heldByTeam"),
+        "birdLevel": rights.get("birdLevel"),
+        "seasonsTowardBird": rights.get("seasonsTowardBird"),
+        "rookieScale": bool(rights.get("rookieScale")),
+        "restrictedFreeAgent": bool(rights.get("restrictedFreeAgent")),
+        "rightsRenounced": bool(player.get("rightsRenounced")),
+        "qoAmount": int(num(qualifying_offer.get("amount"), 0)) if qualifying_offer else 0,
+        "qoStatus": qualifying_offer.get("status") if qualifying_offer else None,
+        "qoEligibleAmount": int(num(qualifying_offer_eligible.get("amount"), 0)) if qualifying_offer_eligible else 0,
+        "qoEligibleStatus": qualifying_offer_eligible.get("status") if qualifying_offer_eligible else None,
+        "fromTeam": free_agency_meta.get("fromTeam") if free_agency_meta else None,
+        "faReason": free_agency_meta.get("reason") if free_agency_meta else None,
+    }
+
+
+def compact_debug_player(player: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(player, dict):
+        return {}
+
+    rights = get_player_rights(player)
+
+    return {
+        "playerId": player.get("id"),
+        "playerName": player.get("name"),
+        "playerKey": get_player_key_from_player(player),
+        "age": int(num(player.get("age"), 0)),
+        "overall": int(round(num(player.get("overall"), 0))),
+        "potential": int(round(num(player.get("potential"), num(player.get("overall"), 0)))),
+        "pos": player.get("pos") or player.get("position"),
+        "rightsTeam": rights.get("heldByTeam"),
+        "isRfa": bool(rights.get("restrictedFreeAgent")),
+        "birdLevel": rights.get("birdLevel"),
+        "rookieScale": bool(rights.get("rookieScale")),
+        "rightsRenounced": bool(player.get("rightsRenounced")),
+    }
+
+
+def compact_debug_contract(contract: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    normalized = normalize_contract(contract)
+    if not normalized:
+        return {}
+
+    salary_by_year = [int(num(x, 0)) for x in normalized.get("salaryByYear", [])]
+    years = len(salary_by_year)
+    total = int(sum(salary_by_year))
+    option = normalized.get("option") if isinstance(normalized.get("option"), dict) else None
+
+    return {
+        "startYear": normalized.get("startYear"),
+        "years": years,
+        "year1": salary_by_year[0] if salary_by_year else 0,
+        "totalValue": total,
+        "aav": int(total / max(1, years)) if years else 0,
+        "optionType": option.get("type") if option else None,
+    }
+
+
+def compact_debug_offer(offer: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(offer, dict):
+        return {}
+
+    contract = compact_debug_contract(offer.get("contract"))
+    return {
+        "offerId": offer.get("offerId"),
+        "teamName": offer.get("teamName"),
+        "source": offer.get("source"),
+        "status": offer.get("status", "active"),
+        "playerName": offer.get("playerName"),
+        "playerKey": offer.get("playerKey"),
+        "day": offer.get("submittedDay") or offer.get("day"),
+        "years": contract.get("years") or int(num(offer.get("years"), 0)),
+        "year1": contract.get("year1") or int(num(offer.get("currentYearSalary"), 0)),
+        "totalValue": int(num(offer.get("totalValue"), contract.get("totalValue", 0))),
+        "aav": int(num(offer.get("aav"), contract.get("aav", 0))),
+        "spendingType": offer.get("spendingType"),
+        "exceptionType": offer.get("exceptionType"),
+        "payrollZone": offer.get("payrollZone"),
+        "targetTier": offer.get("targetTier"),
+        "playerViewScore": offer.get("playerViewScore"),
+        "teamBoardScore": offer.get("teamBoardScore"),
+        "rfaOfferSheet": bool(offer.get("rfaOfferSheet")),
+        "rightsTeamName": offer.get("rightsTeamName"),
+        "ownRightsOffer": bool(offer.get("ownRightsOffer")),
+        "incumbentPriority": bool(offer.get("incumbentPriority")),
+        "forceRfaMatch": bool(offer.get("forceRfaMatch")),
+        "skipRfaAutoMatch": bool(offer.get("skipRfaAutoMatch")),
+        "rfaMatchDeclined": bool(offer.get("rfaMatchDeclined")),
+    }
+
+
+def compact_debug_snapshot(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(snapshot, dict):
+        return {}
+
+    return {
+        "ok": bool(snapshot.get("ok")),
+        "reason": snapshot.get("reason"),
+        "seasonYear": snapshot.get("seasonYear"),
+        "payroll": int(num(snapshot.get("payroll"), 0)),
+        "capRoom": int(num(snapshot.get("capRoom"), 0)),
+        "rawCapRoomWithoutHolds": int(num(snapshot.get("rawCapRoomWithoutHolds"), 0)),
+        "capHoldTotal": int(num(snapshot.get("capHoldTotal") or snapshot.get("capHolds"), 0)),
+        "rosterCount": snapshot.get("rosterCount"),
+        "rosterLimit": snapshot.get("rosterLimit"),
+        "hardCapRoom": snapshot.get("hardCapRoom"),
+        "isHardCapped": bool(snapshot.get("isHardCapped")),
+    }
+
+
+def compact_debug_spending(spending_res: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(spending_res, dict):
+        return {}
+
+    return {
+        "ok": bool(spending_res.get("ok")),
+        "reason": spending_res.get("reason"),
+        "spendingType": spending_res.get("spendingType"),
+        "exceptionType": spending_res.get("exceptionType"),
+        "exceptionRoom": int(num(spending_res.get("exceptionRoom"), 0)),
+        "payrollZone": spending_res.get("payrollZone"),
+        "projectedPayroll": int(num(spending_res.get("projectedPayroll"), 0)),
+        "pendingCapHoldClearance": bool(spending_res.get("pendingCapHoldClearance")),
+        "capHoldClearanceNeeded": int(num(spending_res.get("capHoldClearanceNeeded"), 0)),
+        "autoRenouncedCapHoldAmount": int(num(spending_res.get("autoRenouncedCapHoldAmount"), 0)),
+    }
+
+
+def _debug_is_scalar(value: Any) -> bool:
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def _debug_compact_dict(value: Dict[str, Any], max_items: int = 18) -> Dict[str, Any]:
+    out = {}
+
+    for key, item in value.items():
+        if len(out) >= max_items:
+            out["_trimmed"] = True
+            break
+
+        if _debug_is_scalar(item):
+            out[key] = item
+        elif isinstance(item, list):
+            out[f"{key}Count"] = len(item)
+            names = []
+            for row in item[:4]:
+                if isinstance(row, dict):
+                    name = row.get("playerName") or row.get("name") or row.get("teamName")
+                    if name:
+                        names.append(name)
+            if names:
+                out[f"{key}Names"] = names
+        elif isinstance(item, dict):
+            scalar_child = {}
+            for child_key, child_value in item.items():
+                if len(scalar_child) >= 8:
+                    scalar_child["_trimmed"] = True
+                    break
+                if _debug_is_scalar(child_value):
+                    scalar_child[child_key] = child_value
+            out[key] = scalar_child if scalar_child else {"_dictKeys": list(item.keys())[:8]}
+        else:
+            out[key] = str(type(item).__name__)
+
+    return out
+
+
+def compact_debug_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    out = {}
+
+    for key, value in payload.items():
+        if key == "snapshot":
+            out["snapshot"] = compact_debug_snapshot(value)
+        elif key == "spending":
+            out["spending"] = compact_debug_spending(value)
+        elif key == "contract":
+            out["contract"] = compact_debug_contract(value)
+        elif key == "rights":
+            out["rights"] = _debug_compact_dict(value, max_items = 14) if isinstance(value, dict) else value
+        elif key == "autoRes":
+            if isinstance(value, dict):
+                out["autoRes"] = {
+                    "ok": bool(value.get("ok")),
+                    "reason": value.get("reason"),
+                    "capHoldCleared": int(num(value.get("capHoldCleared"), 0)),
+                    "clearanceNeeded": int(num(value.get("clearanceNeeded"), 0)),
+                    "targetPlayerName": value.get("targetPlayerName"),
+                    "renouncedCount": len(value.get("renounced", [])) if isinstance(value.get("renounced"), list) else 0,
+                    "blockedCount": len(value.get("blockedRenounces", [])) if isinstance(value.get("blockedRenounces"), list) else 0,
+                }
+        elif _debug_is_scalar(value):
+            out[key] = value
+        elif isinstance(value, dict):
+            out[key] = _debug_compact_dict(value)
+        elif isinstance(value, list):
+            out[f"{key}Count"] = len(value)
+        else:
+            out[key] = str(type(value).__name__)
+
+    return out
+
+
+def record_fa_debug(
+    league_data: Dict[str, Any],
+    bucket: str,
+    event: str,
+    payload: Optional[Dict[str, Any]] = None,
+    player: Optional[Dict[str, Any]] = None,
+    team_name: Optional[str] = None,
+    offer: Optional[Dict[str, Any]] = None,
+) -> None:
+    try:
+        # Hard filter: do not log every player. That caused the quota problem.
+        if player is not None and not is_rfa_debug_target(player, team_name):
+            return
+
+        state = ensure_free_agency_state(league_data)
+        key = str(bucket or "freeAgencyDebugLog")
+        rows = state.setdefault(key, [])
+        if not isinstance(rows, list):
+            state[key] = []
+            rows = state[key]
+
+        row = {
+            "day": int(num(state.get("currentDay"), 0)),
+            "event": str(event),
+            "teamName": team_name,
+        }
+
+        if player is not None:
+            row.update(compact_debug_player(player))
+
+        if offer is not None:
+            offer_row = compact_debug_offer(offer)
+            for offer_key, offer_value in offer_row.items():
+                row[f"offer_{offer_key}"] = offer_value
+
+        payload_row = compact_debug_payload(payload)
+        if payload_row:
+            row["payload"] = payload_row
+
+        # Final size guard so one accidental nested payload cannot bloat the save.
+        try:
+            if len(json.dumps(row, default = str)) > 2200:
+                row["payload"] = {"trimmedForSize": True}
+        except Exception:
+            row["payload"] = {"trimmedForSize": True}
+
+        rows.append(row)
+        if len(rows) > RFA_DEBUG_LOG_LIMIT:
+            del rows[:-RFA_DEBUG_LOG_LIMIT]
+
+    except Exception as exc:
+        # Debug logging must never change gameplay behavior.
+        try:
+            state = ensure_free_agency_state(league_data)
+            errors = state.setdefault("freeAgencyDebugErrors", [])
+            errors.append({
+                "day": int(num(state.get("currentDay"), 0)),
+                "event": str(event),
+                "error": str(exc)[:240],
+            })
+            if len(errors) > 25:
+                del errors[:-25]
+        except Exception:
+            pass
+
+
+def record_rfa_debug(
+    league_data: Dict[str, Any],
+    event: str,
+    player: Optional[Dict[str, Any]] = None,
+    team_name: Optional[str] = None,
+    offer: Optional[Dict[str, Any]] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    if player is None or is_rfa_debug_target(player, team_name):
+        record_fa_debug(
+            league_data = league_data,
+            bucket = "rfaDebugLog",
+            event = event,
+            payload = payload,
+            player = player,
+            team_name = team_name,
+            offer = offer,
+        )
 
 
 def compact_contract_for_free_agency_action_log(contract: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -8559,6 +8934,22 @@ def generate_cpu_offers_for_day(
             state = None,
         )
         if remaining_roster_slots <= 0:
+            for debug_player in free_agents:
+                if is_rfa_debug_target(debug_player, team_name):
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "cpuOfferDebugLog",
+                        event = "team_skipped_no_remaining_roster_slots_before_candidate_scan",
+                        player = debug_player,
+                        team_name = team_name,
+                        payload = {
+                            "actualRosterCount": actual_roster_count,
+                            "remainingRosterSlots": remaining_roster_slots,
+                            "rosterLimit": get_roster_limit(league_data),
+                            "rightsTeam": get_player_rights(debug_player).get("heldByTeam"),
+                            "ownRights": is_rights_team(debug_player, team_name),
+                        },
+                    )
             continue
 
         actual_roster_deficit = max(0, offseason_min_target - actual_roster_count)
@@ -8571,6 +8962,23 @@ def generate_cpu_offers_for_day(
             snapshot = snapshot,
         )
         if active_offer_limit <= 0:
+            for debug_player in free_agents:
+                if is_rfa_debug_target(debug_player, team_name):
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "cpuOfferDebugLog",
+                        event = "team_skipped_active_offer_limit_zero",
+                        player = debug_player,
+                        team_name = team_name,
+                        payload = {
+                            "activeOfferLimit": active_offer_limit,
+                            "snapshot": compact_debug_snapshot(snapshot),
+                            "actualRosterCount": actual_roster_count,
+                            "remainingRosterSlots": remaining_roster_slots,
+                            "rightsTeam": get_player_rights(debug_player).get("heldByTeam"),
+                            "ownRights": is_rights_team(debug_player, team_name),
+                        },
+                    )
             continue
 
         profile = state.get("teamNeedProfiles", {}).get(team_name) or build_team_roster_profile(team, league_data = league_data)
@@ -8600,6 +9008,23 @@ def generate_cpu_offers_for_day(
             soft_offer_slots += 2
         max_offers_today = min(caps["total"], max(1, soft_offer_slots))
         if max_offers_today <= 0:
+            for debug_player in free_agents:
+                if is_rfa_debug_target(debug_player, team_name):
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "cpuOfferDebugLog",
+                        event = "team_skipped_max_offers_today_zero",
+                        player = debug_player,
+                        team_name = team_name,
+                        payload = {
+                            "caps": copy.deepcopy(caps),
+                            "softOfferSlots": soft_offer_slots,
+                            "maxOffersToday": max_offers_today,
+                            "planningRoom": planning_room,
+                            "actualRosterDeficit": actual_roster_deficit,
+                            "remainingRosterSlots": remaining_roster_slots,
+                        },
+                    )
             continue
 
         active_offer_count = get_active_offer_count_for_team(state, team_name)
@@ -8622,6 +9047,7 @@ def generate_cpu_offers_for_day(
             own_rights = is_rights_team(player, team_name)
             previous_team_player = bool(previous_team and previous_team == team_name)
             incumbent_priority = is_incumbent_retention_priority(player, team_name)
+            debug_this_candidate = is_rfa_debug_target(player, team_name)
 
             fit = estimate_team_free_agent_fit_from_profile(
                 team = team,
@@ -8681,6 +9107,27 @@ def generate_cpu_offers_for_day(
 
             min_fit_threshold = max(0.05, min_fit_threshold)
             if fit_score < min_fit_threshold:
+                if debug_this_candidate:
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "cpuOfferDebugLog",
+                        event = "candidate_rejected_fit_threshold",
+                        player = player,
+                        team_name = team_name,
+                        payload = {
+                            "fitScore": round(fit_score, 3),
+                            "minFitThreshold": round(min_fit_threshold, 3),
+                            "needScore": round(need_score, 3),
+                            "positionBucket": position_bucket,
+                            "weakestPositions": copy.deepcopy(weakest_positions),
+                            "ownRights": own_rights,
+                            "previousTeamPlayer": previous_team_player,
+                            "incumbentPriority": incumbent_priority,
+                            "rawCapStarPath": raw_cap_star_path,
+                            "planningRoom": planning_room,
+                            "snapshot": compact_debug_snapshot(snapshot),
+                        },
+                    )
                 continue
 
             target_score = fit_score
@@ -8755,10 +9202,57 @@ def generate_cpu_offers_for_day(
 
             # Opening day should be best-case chasing, not backup/depth dumping.
             if current_day <= 1 and target_tier in ["value", "depth"]:
+                if debug_this_candidate:
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "cpuOfferDebugLog",
+                        event = "candidate_rejected_opening_day_value_depth_tier",
+                        player = player,
+                        team_name = team_name,
+                        payload = {
+                            "targetTier": target_tier,
+                            "targetScore": round(target_score, 3),
+                            "currentDay": current_day,
+                            "incumbentPriority": incumbent_priority,
+                            "ownRights": own_rights,
+                        },
+                    )
                 continue
             if current_day <= 1 and target_tier == "backup" and not incumbent_priority and target_score < 0.82:
+                if debug_this_candidate:
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "cpuOfferDebugLog",
+                        event = "candidate_rejected_opening_day_backup_score",
+                        player = player,
+                        team_name = team_name,
+                        payload = {
+                            "targetTier": target_tier,
+                            "targetScore": round(target_score, 3),
+                            "requiredScore": 0.82,
+                            "currentDay": current_day,
+                            "incumbentPriority": incumbent_priority,
+                            "ownRights": own_rights,
+                        },
+                    )
                 continue
             if current_day <= 2 and target_tier == "depth" and actual_roster_deficit < 2:
+                if debug_this_candidate:
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "cpuOfferDebugLog",
+                        event = "candidate_rejected_early_depth_no_roster_deficit",
+                        player = player,
+                        team_name = team_name,
+                        payload = {
+                            "targetTier": target_tier,
+                            "targetScore": round(target_score, 3),
+                            "actualRosterDeficit": actual_roster_deficit,
+                            "currentDay": current_day,
+                            "incumbentPriority": incumbent_priority,
+                            "ownRights": own_rights,
+                        },
+                    )
                 continue
 
             seed = stable_text_seed(f"{season_year}|{current_day}|{team_name}|{player_key}|team_board")
@@ -8788,6 +9282,22 @@ def generate_cpu_offers_for_day(
                 incumbent_priority = incumbent_priority,
                 target_tier = target_tier,
             ):
+                if debug_this_candidate:
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "cpuOfferDebugLog",
+                        event = "candidate_rejected_not_serious_offer",
+                        player = player,
+                        team_name = team_name,
+                        payload = {
+                            "targetTier": target_tier,
+                            "targetScore": round(target_score, 3),
+                            "contract": compact_debug_contract(contract),
+                            "marketValue": compact_debug_player(player).get("marketValue"),
+                            "incumbentPriority": incumbent_priority,
+                            "ownRights": own_rights,
+                        },
+                    )
                 continue
 
             eval_res = evaluate_market_offer_submission(
@@ -8802,7 +9312,48 @@ def generate_cpu_offers_for_day(
                 active_offer_limit = active_offer_limit,
             )
             if not eval_res.get("ok"):
+                if debug_this_candidate:
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "cpuOfferDebugLog",
+                        event = "candidate_rejected_spending_eval",
+                        player = player,
+                        team_name = team_name,
+                        payload = {
+                            "targetTier": target_tier,
+                            "targetScore": round(target_score, 3),
+                            "contract": compact_debug_contract(contract),
+                            "spending": compact_debug_spending(eval_res),
+                            "activeOfferCount": active_offer_count,
+                            "activeOfferLimit": active_offer_limit,
+                            "snapshot": compact_debug_snapshot(snapshot),
+                            "incumbentPriority": incumbent_priority,
+                            "ownRights": own_rights,
+                        },
+                    )
                 continue
+
+            if debug_this_candidate:
+                record_fa_debug(
+                    league_data = league_data,
+                    bucket = "cpuOfferDebugLog",
+                    event = "candidate_added_to_cpu_board",
+                    player = player,
+                    team_name = team_name,
+                    payload = {
+                        "targetTier": target_tier,
+                        "targetScore": round(target_score, 3),
+                        "fitScore": round(fit_score, 3),
+                        "needScore": round(need_score, 3),
+                        "contract": compact_debug_contract(contract),
+                        "spending": compact_debug_spending(eval_res),
+                        "activeOfferCount": active_offer_count,
+                        "activeOfferLimit": active_offer_limit,
+                        "maxOffersToday": max_offers_today,
+                        "incumbentPriority": incumbent_priority,
+                        "ownRights": own_rights,
+                    },
+                )
 
             if eval_res.get("pendingCapHoldClearance"):
                 # Soft-offer rule: do not block the offer board here. A team can
@@ -8854,17 +9405,67 @@ def generate_cpu_offers_for_day(
 
         for item in candidates:
             if active_offer_count >= active_offer_limit:
+                if is_rfa_debug_target(item.get("player"), team_name):
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "cpuOfferDebugLog",
+                        event = "candidate_not_selected_active_offer_limit_reached",
+                        player = item.get("player"),
+                        team_name = team_name,
+                        payload = {
+                            "activeOfferCount": active_offer_count,
+                            "activeOfferLimit": active_offer_limit,
+                            "offersUsed": offers_used,
+                            "maxOffersToday": max_offers_today,
+                            "targetTier": item.get("targetTier"),
+                            "targetScore": round(float(num(item.get("score"), 0.0)), 3),
+                        },
+                    )
                 break
             if offers_used >= max_offers_today:
+                if is_rfa_debug_target(item.get("player"), team_name):
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "cpuOfferDebugLog",
+                        event = "candidate_not_selected_max_offers_today_reached",
+                        player = item.get("player"),
+                        team_name = team_name,
+                        payload = {
+                            "activeOfferCount": active_offer_count,
+                            "activeOfferLimit": active_offer_limit,
+                            "offersUsed": offers_used,
+                            "maxOffersToday": max_offers_today,
+                            "targetTier": item.get("targetTier"),
+                            "targetScore": round(float(num(item.get("score"), 0.0)), 3),
+                        },
+                    )
                 break
 
             target_tier = str(item.get("targetTier") or "value")
             if target_tier == "depth":
                 if depth_used >= caps["depth"]:
+                    if is_rfa_debug_target(item.get("player"), team_name):
+                        record_fa_debug(
+                            league_data = league_data,
+                            bucket = "cpuOfferDebugLog",
+                            event = "candidate_not_selected_depth_cap_used",
+                            player = item.get("player"),
+                            team_name = team_name,
+                            payload = {"caps": copy.deepcopy(caps), "depthUsed": depth_used, "targetScore": round(float(num(item.get("score"), 0.0)), 3)},
+                        )
                     continue
                 depth_used += 1
             if target_tier == "value":
                 if value_used >= caps["value"]:
+                    if is_rfa_debug_target(item.get("player"), team_name):
+                        record_fa_debug(
+                            league_data = league_data,
+                            bucket = "cpuOfferDebugLog",
+                            event = "candidate_not_selected_value_cap_used",
+                            player = item.get("player"),
+                            team_name = team_name,
+                            payload = {"caps": copy.deepcopy(caps), "valueUsed": value_used, "targetScore": round(float(num(item.get("score"), 0.0)), 3)},
+                        )
                     continue
                 value_used += 1
 
@@ -8952,6 +9553,24 @@ def generate_cpu_offers_for_day(
                 offer_record = offer_record,
             )
             refreshed_offer_ids.add(offer_record.get("offerId"))
+            if is_rfa_debug_target(player, team_name):
+                record_fa_debug(
+                    league_data = league_data,
+                    bucket = "cpuOfferDebugLog",
+                    event = "cpu_offer_created",
+                    player = player,
+                    team_name = team_name,
+                    offer = offer_record,
+                    payload = {
+                        "targetTier": target_tier,
+                        "teamBoardScore": offer_record.get("teamBoardScore"),
+                        "playerViewScore": offer_record.get("playerViewScore"),
+                        "spending": compact_debug_spending(eval_res),
+                        "ownRights": bool(item.get("ownRights")),
+                        "previousTeamPlayer": bool(item.get("previousTeamPlayer")),
+                        "incumbentPriority": bool(item.get("incumbentPriority")),
+                    },
+                )
             active_offer_count += 1
             offers_used += 1
 
@@ -9159,21 +9778,59 @@ def should_match_restricted_free_agent_offer(
     chosen_offer: Dict[str, Any],
 ) -> bool:
     if not rights_team_name:
+        record_fa_debug(
+            league_data = league_data,
+            bucket = "rfaMatchDebugLog",
+            event = "match_rejected_no_rights_team_name",
+            player = player,
+            team_name = rights_team_name,
+            offer = chosen_offer,
+        )
         return False
 
     if chosen_offer.get("teamName") == rights_team_name:
+        record_rfa_debug(
+            league_data = league_data,
+            event = "match_not_needed_offer_from_rights_team",
+            player = player,
+            team_name = rights_team_name,
+            offer = chosen_offer,
+        )
         return False
 
     rights = get_player_rights(player)
     if not rights.get("restrictedFreeAgent"):
+        record_fa_debug(
+            league_data = league_data,
+            bucket = "rfaMatchDebugLog",
+            event = "match_rejected_player_not_restricted_at_should_match",
+            player = player,
+            team_name = rights_team_name,
+            offer = chosen_offer,
+            payload = {"rights": compact_debug_rights(player)},
+        )
         return False
 
     _, _, rights_team = find_team_entry(league_data, rights_team_name)
     if rights_team is None:
+        record_rfa_debug(
+            league_data = league_data,
+            event = "match_rejected_rights_team_not_found",
+            player = player,
+            team_name = rights_team_name,
+            offer = chosen_offer,
+        )
         return False
 
     contract = normalize_contract(chosen_offer.get("contract"))
     if not contract:
+        record_rfa_debug(
+            league_data = league_data,
+            event = "match_rejected_invalid_contract",
+            player = player,
+            team_name = rights_team_name,
+            offer = chosen_offer,
+        )
         return False
 
     # RFA matching is an actual signing by the rights team. Respect cap/hard-cap
@@ -9186,8 +9843,21 @@ def should_match_restricted_free_agent_offer(
         contract = contract,
         outstanding_current_salary = 0,
         snapshot = snapshot if snapshot.get("ok") else None,
+        allow_rfa_match_rights = True,
     )
     if not spending_res.get("ok"):
+        record_rfa_debug(
+            league_data = league_data,
+            event = "match_rejected_spending_rules",
+            player = player,
+            team_name = rights_team_name,
+            offer = chosen_offer,
+            payload = {
+                "contract": compact_debug_contract(contract),
+                "snapshot": compact_debug_snapshot(snapshot),
+                "spending": compact_debug_spending(spending_res),
+            },
+        )
         return False
 
     market_value = player.get("marketValue") or estimate_market_value(player)
@@ -9207,18 +9877,43 @@ def should_match_restricted_free_agent_offer(
 
     overpay_ratio = offered_aav / max(1, expected_aav)
 
+    base_payload = {
+        "contract": compact_debug_contract(contract),
+        "expectedAAV": expected_aav,
+        "offeredAAV": offered_aav,
+        "offeredYears": offered_years,
+        "overpayRatio": round(overpay_ratio, 3),
+        "overall": overall,
+        "age": age,
+        "potential": potential,
+        "upside": upside,
+        "teamDirection": direction,
+        "needScore": round(float(num(need_score, 0.0)), 3),
+        "spending": compact_debug_spending(spending_res),
+    }
+
     # Clear keeper tiers. This fixes cases like Tari Eason walking for a normal
     # role-player contract just because the old expected salary was too low.
     if overall >= 84:
-        return overpay_ratio <= 1.85
+        decision = overpay_ratio <= 1.85
+        record_rfa_debug(league_data, "match_decision_keeper_overall_84_plus", player, rights_team_name, chosen_offer, {**base_payload, "decision": decision, "keeperThreshold": 1.85})
+        return decision
     if overall >= 82:
-        return overpay_ratio <= 1.70
+        decision = overpay_ratio <= 1.70
+        record_rfa_debug(league_data, "match_decision_keeper_overall_82_plus", player, rights_team_name, chosen_offer, {**base_payload, "decision": decision, "keeperThreshold": 1.70})
+        return decision
     if overall >= 80 and age <= 27:
-        return overpay_ratio <= 1.62
+        decision = overpay_ratio <= 1.62
+        record_rfa_debug(league_data, "match_decision_keeper_young_80_plus", player, rights_team_name, chosen_offer, {**base_payload, "decision": decision, "keeperThreshold": 1.62})
+        return decision
     if overall >= 78 and age <= 26:
-        return overpay_ratio <= 1.55
+        decision = overpay_ratio <= 1.55
+        record_rfa_debug(league_data, "match_decision_keeper_young_78_plus", player, rights_team_name, chosen_offer, {**base_payload, "decision": decision, "keeperThreshold": 1.55})
+        return decision
     if age <= 24 and upside >= 4 and overall >= 74:
-        return overpay_ratio <= 1.52
+        decision = overpay_ratio <= 1.52
+        record_rfa_debug(league_data, "match_decision_keeper_upside_young", player, rights_team_name, chosen_offer, {**base_payload, "decision": decision, "keeperThreshold": 1.52})
+        return decision
 
     keep_score = 0.36
     keep_score += max(0.0, (overall - 73.0) * 0.045)
@@ -9236,6 +9931,7 @@ def should_match_restricted_free_agent_offer(
         keep_score += 0.08
 
     if overpay_ratio <= 1.08 and overall >= 74:
+        record_rfa_debug(league_data, "match_decision_keeper_low_overpay", player, rights_team_name, chosen_offer, {**base_payload, "decision": True, "keepScore": round(keep_score, 3), "reason": "overpay_ratio_low"})
         return True
 
     threshold = 0.64
@@ -9244,7 +9940,16 @@ def should_match_restricted_free_agent_offer(
     if overpay_ratio > 1.45:
         threshold += (overpay_ratio - 1.45) * 0.70
 
-    return keep_score >= threshold
+    decision = keep_score >= threshold
+    record_rfa_debug(
+        league_data,
+        "match_decision_score_threshold",
+        player,
+        rights_team_name,
+        chosen_offer,
+        {**base_payload, "decision": decision, "keepScore": round(keep_score, 3), "threshold": round(threshold, 3)},
+    )
+    return decision
 
 def maybe_apply_rfa_match(
     league_data: Dict[str, Any],
@@ -9254,7 +9959,28 @@ def maybe_apply_rfa_match(
     rights = get_player_rights(player)
     rights_team_name = rights.get("heldByTeam")
 
+    if is_rfa_debug_target(player, rights_team_name):
+        record_fa_debug(
+            league_data = league_data,
+            bucket = "rfaMatchDebugLog",
+            event = "maybe_match_entry",
+            player = player,
+            team_name = rights_team_name,
+            offer = chosen_offer,
+            payload = {"rights": compact_debug_rights(player)},
+        )
+
     if chosen_offer.get("skipRfaAutoMatch") or chosen_offer.get("rfaMatchDeclined"):
+        if is_rfa_debug_target(player, rights_team_name):
+            record_fa_debug(
+                league_data = league_data,
+                bucket = "rfaMatchDebugLog",
+                event = "maybe_match_skipped_by_offer_flags",
+                player = player,
+                team_name = rights_team_name,
+                offer = chosen_offer,
+                payload = {"skipRfaAutoMatch": bool(chosen_offer.get("skipRfaAutoMatch")), "rfaMatchDeclined": bool(chosen_offer.get("rfaMatchDeclined"))},
+            )
         return chosen_offer, False
 
     if chosen_offer.get("forceRfaMatch"):
@@ -9270,9 +9996,29 @@ def maybe_apply_rfa_match(
         return matched_offer, True
 
     if not rights.get("restrictedFreeAgent"):
+        if is_rfa_debug_target(player, rights_team_name):
+            record_fa_debug(
+                league_data = league_data,
+                bucket = "rfaMatchDebugLog",
+                event = "maybe_match_rejected_not_restricted_free_agent",
+                player = player,
+                team_name = rights_team_name,
+                offer = chosen_offer,
+                payload = {"rights": compact_debug_rights(player)},
+            )
         return chosen_offer, False
 
     if not rights_team_name or rights_team_name == chosen_offer.get("teamName"):
+        if is_rfa_debug_target(player, rights_team_name):
+            record_fa_debug(
+                league_data = league_data,
+                bucket = "rfaMatchDebugLog",
+                event = "maybe_match_not_applicable_no_rights_or_offer_from_rights_team",
+                player = player,
+                team_name = rights_team_name,
+                offer = chosen_offer,
+                payload = {"rightsTeamName": rights_team_name, "offerTeamName": chosen_offer.get("teamName")},
+            )
         return chosen_offer, False
 
     if not should_match_restricted_free_agent_offer(
@@ -9281,6 +10027,15 @@ def maybe_apply_rfa_match(
         player = player,
         chosen_offer = chosen_offer,
     ):
+        if is_rfa_debug_target(player, rights_team_name):
+            record_fa_debug(
+                league_data = league_data,
+                bucket = "rfaMatchDebugLog",
+                event = "maybe_match_decision_false",
+                player = player,
+                team_name = rights_team_name,
+                offer = chosen_offer,
+            )
         return chosen_offer, False
 
     matched_offer = copy.deepcopy(chosen_offer)
@@ -9288,6 +10043,17 @@ def maybe_apply_rfa_match(
     matched_offer["originalOfferTeamName"] = chosen_offer.get("teamName")
     matched_offer["teamName"] = rights_team_name
     matched_offer["source"] = "rfa_match"
+    matched_offer["forceRfaMatch"] = True
+    if is_rfa_debug_target(player, rights_team_name):
+        record_fa_debug(
+            league_data = league_data,
+            bucket = "rfaMatchDebugLog",
+            event = "maybe_match_applied",
+            player = player,
+            team_name = rights_team_name,
+            offer = matched_offer,
+            payload = {"originalOfferTeamName": chosen_offer.get("teamName")},
+        )
     return matched_offer, True
 
 
@@ -9299,6 +10065,16 @@ def finalize_free_agent_signing_from_offer(
 ) -> Optional[Dict[str, Any]]:
     player_key = get_player_key_from_player(player)
     state = ensure_free_agency_state(league_data)
+    if is_rfa_debug_target(player, chosen_offer.get("teamName")):
+        record_fa_debug(
+            league_data = league_data,
+            bucket = "finalizeDebugLog",
+            event = "finalize_entry_before_match_check",
+            player = player,
+            team_name = chosen_offer.get("teamName"),
+            offer = chosen_offer,
+            payload = {"rights": compact_debug_rights(player)},
+        )
 
     chosen_offer, matched_rfa = maybe_apply_rfa_match(
         league_data = league_data,
@@ -9307,18 +10083,30 @@ def finalize_free_agent_signing_from_offer(
     )
 
     signing_team_name = chosen_offer.get("teamName")
+    if is_rfa_debug_target(player, signing_team_name):
+        record_fa_debug(
+            league_data = league_data,
+            bucket = "finalizeDebugLog",
+            event = "finalize_after_match_check",
+            player = player,
+            team_name = signing_team_name,
+            offer = chosen_offer,
+            payload = {"matchedRfa": matched_rfa, "rights": compact_debug_rights(player)},
+        )
 
     _, _, team = find_team_entry(league_data, signing_team_name)
     if team is None:
+        record_rfa_debug(league_data, "finalize_failed_team_not_found", player, signing_team_name, chosen_offer, {"matchedRfa": matched_rfa})
         return None
 
     snapshot = get_team_cap_snapshot(league_data, signing_team_name)
     if not snapshot.get("ok"):
+        record_rfa_debug(league_data, "finalize_failed_team_snapshot", player, signing_team_name, chosen_offer, {"matchedRfa": matched_rfa, "snapshot": compact_debug_snapshot(snapshot)})
         return None
 
     contract = apply_free_agency_start_year(league_data, chosen_offer.get("contract"))
 
-    if chosen_offer.get("forceRfaMatch"):
+    if chosen_offer.get("forceRfaMatch") or matched_rfa:
         spending_res = validate_offer_spending_rules(
             league_data = league_data,
             team_name = signing_team_name,
@@ -9327,6 +10115,7 @@ def finalize_free_agent_signing_from_offer(
             outstanding_current_salary = 0,
             snapshot = snapshot,
             allow_pending_cap_hold_clearance = False,
+            allow_rfa_match_rights = True,
         )
         if spending_res.get("ok"):
             spending_res["reason"] = "Offer matched using restricted free agent matching rights."
@@ -9348,12 +10137,14 @@ def finalize_free_agent_signing_from_offer(
         )
 
     if not spending_res.get("ok"):
+        record_rfa_debug(league_data, "finalize_failed_spending_rules", player, signing_team_name, chosen_offer, {"matchedRfa": matched_rfa, "contract": compact_debug_contract(contract), "snapshot": compact_debug_snapshot(snapshot), "spending": compact_debug_spending(spending_res)})
         return None
 
     if spending_res.get("pendingCapHoldClearance"):
         user_team_name = state.get("pendingUserTeamName")
 
         if user_team_name and signing_team_name == user_team_name:
+            record_rfa_debug(league_data, "finalize_failed_user_team_pending_cap_hold_clearance", player, signing_team_name, chosen_offer, {"matchedRfa": matched_rfa, "spending": compact_debug_spending(spending_res)})
             return None
 
         auto_res = auto_renounce_cpu_cap_holds_for_room(
@@ -9366,10 +10157,12 @@ def finalize_free_agent_signing_from_offer(
         )
 
         if not auto_res.get("ok"):
+            record_rfa_debug(league_data, "finalize_failed_auto_cap_hold_clearance", player, signing_team_name, chosen_offer, {"matchedRfa": matched_rfa, "autoRes": copy.deepcopy(auto_res), "spending": compact_debug_spending(spending_res)})
             return None
 
         snapshot = get_team_cap_snapshot(league_data, signing_team_name)
         if not snapshot.get("ok"):
+            record_rfa_debug(league_data, "finalize_failed_snapshot_after_cap_hold_clearance", player, signing_team_name, chosen_offer, {"matchedRfa": matched_rfa, "snapshot": compact_debug_snapshot(snapshot)})
             return None
 
         spending_res = validate_offer_spending_rules(
@@ -9380,9 +10173,11 @@ def finalize_free_agent_signing_from_offer(
             outstanding_current_salary = 0,
             snapshot = snapshot,
             allow_pending_cap_hold_clearance = False,
+            allow_rfa_match_rights = bool(chosen_offer.get("forceRfaMatch") or matched_rfa),
         )
 
         if not spending_res.get("ok"):
+            record_rfa_debug(league_data, "finalize_failed_spending_after_cap_hold_clearance", player, signing_team_name, chosen_offer, {"matchedRfa": matched_rfa, "contract": compact_debug_contract(contract), "snapshot": compact_debug_snapshot(snapshot), "spending": compact_debug_spending(spending_res)})
             return None
 
         spending_res["autoRenouncedCapHolds"] = auto_res.get("renounced", [])
@@ -9392,6 +10187,7 @@ def finalize_free_agent_signing_from_offer(
         spending_res["capHoldRenounceTargetValueScore"] = auto_res.get("targetValueScore")
 
     if len(get_team_players(team)) >= get_roster_limit(league_data):
+        record_rfa_debug(league_data, "finalize_failed_roster_full", player, signing_team_name, chosen_offer, {"matchedRfa": matched_rfa, "rosterCount": len(get_team_players(team)), "rosterLimit": get_roster_limit(league_data)})
         return None
 
     free_agents = league_data.setdefault("freeAgents", [])
@@ -9405,6 +10201,7 @@ def finalize_free_agent_signing_from_offer(
             break
 
     if player_idx == -1:
+        record_rfa_debug(league_data, "finalize_failed_player_not_in_free_agents", player, signing_team_name, chosen_offer, {"matchedRfa": matched_rfa, "playerKey": player_key})
         return None
 
     signed_player = copy.deepcopy(player)
@@ -9427,6 +10224,19 @@ def finalize_free_agent_signing_from_offer(
 
     free_agents.pop(player_idx)
     team.setdefault("players", []).append(signed_player)
+    record_rfa_debug(
+        league_data,
+        "finalize_success_signed_player",
+        player,
+        signing_team_name,
+        chosen_offer,
+        {
+            "matchedRfa": matched_rfa,
+            "originalRights": compact_debug_rights(player),
+            "signedPlayerRightsAfterSigning": compact_debug_rights(signed_player),
+            "contract": compact_debug_contract(contract),
+        },
+    )
 
     current_year_salary = get_contract_salary_for_year(contract, get_operating_season_year(league_data))
     exception_usage = record_exception_usage_for_signing(
@@ -9620,6 +10430,15 @@ def resolve_signings_for_day(
             offers.append(enriched)
 
         if not offers:
+            if is_rfa_debug_target(player):
+                record_fa_debug(
+                    league_data = league_data,
+                    bucket = "rfaDebugLog",
+                    event = "resolve_no_active_offers_for_player",
+                    player = player,
+                    team_name = get_player_rights(player).get("heldByTeam"),
+                    payload = {"currentDay": current_day, "playerKey": player_key},
+                )
             continue
 
         offers = sort_offers_for_display(offers)
@@ -9645,6 +10464,26 @@ def resolve_signings_for_day(
             should_sign = True
         elif best_score >= required_interest:
             should_sign = True
+
+        if is_rfa_debug_target(player):
+            record_fa_debug(
+                league_data = league_data,
+                bucket = "rfaDebugLog",
+                event = "resolve_interest_decision",
+                player = player,
+                team_name = get_player_rights(player).get("heldByTeam"),
+                offer = best_offer,
+                payload = {
+                    "shouldSign": should_sign,
+                    "bestScore": round(float(num(best_score, 0)), 3),
+                    "requiredInterest": round(float(num(required_interest, 0)), 3),
+                    "currentDay": current_day,
+                    "maxDays": max_days,
+                    "bestMarket": copy.deepcopy(best_market),
+                    "offerTeams": [o.get("teamName") for o in offers],
+                    "offerCount": len(offers),
+                },
+            )
 
         if not should_sign:
             continue
@@ -9700,8 +10539,39 @@ def resolve_signings_for_day(
                 current_day = current_day,
             )
             if signed:
+                if is_rfa_debug_target(player):
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "rfaDebugLog",
+                        event = "resolve_finalized_signing",
+                        player = player,
+                        team_name = signed.get("teamName") or signed.get("signedWith"),
+                        offer = candidate_offer,
+                        payload = {
+                            "signed": {
+                                "teamName": signed.get("teamName") or signed.get("signedWith"),
+                                "rfaMatched": signed.get("rfaMatched"),
+                                "originalOfferTeamName": signed.get("originalOfferTeamName"),
+                                "matchedOriginalTeamName": signed.get("matchedOriginalTeamName"),
+                                "declinedRightsTeamName": signed.get("declinedRightsTeamName"),
+                                "totalValue": signed.get("totalValue"),
+                                "aav": signed.get("aav"),
+                            }
+                        },
+                    )
                 signings.append(signed)
                 break
+
+            if is_rfa_debug_target(player):
+                record_fa_debug(
+                    league_data = league_data,
+                    bucket = "rfaDebugLog",
+                    event = "resolve_candidate_offer_failed_finalize",
+                    player = player,
+                    team_name = candidate_offer.get("teamName"),
+                    offer = candidate_offer,
+                    payload = {"currentDay": current_day},
+                )
 
             # Offers are soft commitments. If one CPU signing used the cap room
             # or roster slot first, this offer fails final validation and the
@@ -9756,8 +10626,29 @@ def initialize_free_agency_period(
     state["rightsRenounceLog"] = []
     state["blockedCapHoldRenounceLog"] = []
     state["fullActionLog"] = []
+    state["rfaDebugLog"] = []
+    state["cpuOfferDebugLog"] = []
+    state["rfaMatchDebugLog"] = []
+    state["finalizeDebugLog"] = []
+    state["freeAgencyDebugErrors"] = []
     state["pendingUserTeamName"] = user_team_name
     state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, user_team_name) if user_team_name else None
+
+    for debug_player in updated.get("freeAgents", []):
+        if is_rfa_debug_target(debug_player):
+            record_fa_debug(
+                league_data = updated,
+                bucket = "rfaDebugLog",
+                event = "free_agency_period_init_debug_target",
+                player = debug_player,
+                team_name = get_player_rights(debug_player).get("heldByTeam"),
+                payload = {
+                    "seasonYear": state.get("seasonYear"),
+                    "maxDays": state.get("maxDays"),
+                    "rights": compact_debug_rights(debug_player),
+                    "marketValue": compact_debug_player(debug_player).get("marketValue"),
+                },
+            )
 
     offseason_min_target = get_free_agency_min_roster_target(updated)
     opening_cleanup_target = max(10, offseason_min_target - 4)

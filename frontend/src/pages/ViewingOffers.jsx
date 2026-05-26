@@ -202,71 +202,6 @@ function compactSigningForStorage(row, emergency = false) {
   };
 }
 
-function compactFreeAgencyStateSummaryForStorage(summary) {
-  if (!summary || typeof summary !== "object") return summary;
-
-  return {
-    currentDay: summary.currentDay ?? null,
-    maxDays: summary.maxDays ?? null,
-    freeAgentCount: summary.freeAgentCount ?? null,
-    activeOfferCount: summary.activeOfferCount ?? null,
-    signedCount: summary.signedCount ?? null,
-    generatedOfferCount: summary.generatedOfferCount ?? null,
-    pendingUserDecisionCount: summary.pendingUserDecisionCount ?? null,
-    pendingRfaMatchDecisionCount: summary.pendingRfaMatchDecisionCount ?? null,
-    marketComplete: Boolean(summary.marketComplete || summary.freeAgencyComplete || summary.completed || summary.isComplete),
-  };
-}
-
-function compactFreeAgencyActionLogEntryForStorage(entry, emergency = false) {
-  if (!entry || typeof entry !== "object") return entry;
-
-  return {
-    day: entry.day ?? entry.dayResolved ?? null,
-    dayResolved: entry.dayResolved ?? entry.day ?? null,
-    type: entry.type || entry.eventType || "",
-    title: entry.title || entry.headline || "",
-    summary: entry.summary || entry.message || "",
-    stateSummary: compactFreeAgencyStateSummaryForStorage(entry.stateSummary),
-    signings: Array.isArray(entry.signings)
-      ? entry.signings
-          .slice(0, emergency ? 40 : 120)
-          .map((row) => compactSigningForStorage(row, emergency))
-      : [],
-    generatedOffers: Array.isArray(entry.generatedOffers)
-      ? entry.generatedOffers
-          .slice(0, emergency ? 80 : 220)
-          .map((offer) => compactOfferForStorage(offer, false))
-      : [],
-    userOfferOutcomes: Array.isArray(entry.userOfferOutcomes)
-      ? entry.userOfferOutcomes.slice(0, emergency ? 20 : 80).map((row) => ({
-          id: row.id || "",
-          day: row.day ?? null,
-          playerId: row.playerId ?? null,
-          playerName: row.playerName || "",
-          playerKey: row.playerKey || "",
-          userTeamName: row.userTeamName || "",
-          status: row.status || "",
-          offerStatus: row.offerStatus || "",
-          signedWith: row.signedWith || "",
-          signedContract: row.signedContract || null,
-          signedTotalValue: row.signedTotalValue || 0,
-          signedYears: row.signedYears || 0,
-          userOfferTotalValue: row.userOfferTotalValue || 0,
-          userOfferYears: row.userOfferYears || 0,
-          rfaMatched: Boolean(row.rfaMatched),
-          originalOfferTeamName: row.originalOfferTeamName || "",
-        }))
-      : [],
-    rightsRenounceLog: Array.isArray(entry.rightsRenounceLog)
-      ? entry.rightsRenounceLog.slice(0, emergency ? 25 : 80)
-      : [],
-    blockedCapHoldRenounceLog: Array.isArray(entry.blockedCapHoldRenounceLog)
-      ? entry.blockedCapHoldRenounceLog.slice(0, emergency ? 25 : 80)
-      : [],
-  };
-}
-
 function compactFreeAgencyStateForStorage(state, emergency = false) {
   if (!state || typeof state !== "object") return state;
 
@@ -280,7 +215,7 @@ function compactFreeAgencyStateForStorage(state, emergency = false) {
   const latestResults = state.latestResults
     ? {
         dayResolved: state.latestResults.dayResolved ?? null,
-        stateSummary: compactFreeAgencyStateSummaryForStorage(state.latestResults.stateSummary),
+        stateSummary: state.latestResults.stateSummary || null,
         signings: Array.isArray(state.latestResults.signings)
           ? state.latestResults.signings
               .slice(0, emergency ? 40 : 120)
@@ -288,8 +223,8 @@ function compactFreeAgencyStateForStorage(state, emergency = false) {
           : [],
         generatedOffers: Array.isArray(state.latestResults.generatedOffers)
           ? state.latestResults.generatedOffers
-              .slice(0, emergency ? 80 : 220)
-              .map((offer) => compactOfferForStorage(offer, false))
+              .slice(0, emergency ? 120 : 420)
+              .map((offer) => compactOfferForStorage(offer, true))
           : [],
       }
     : null;
@@ -298,15 +233,8 @@ function compactFreeAgencyStateForStorage(state, emergency = false) {
     ...state,
     offersByPlayer,
     latestResults,
-    fullActionLog: Array.isArray(state.fullActionLog)
-      ? state.fullActionLog
-          .slice(-1 * (emergency ? 6 : 12))
-          .map((entry) => compactFreeAgencyActionLogEntryForStorage(entry, emergency))
-      : [],
     signedPlayersLog: Array.isArray(state.signedPlayersLog)
-      ? state.signedPlayersLog
-          .slice(-1 * (emergency ? 80 : 220))
-          .map((row) => compactSigningForStorage(row, emergency))
+      ? state.signedPlayersLog.map((row) => compactSigningForStorage(row, emergency))
       : [],
     offerHistory: Array.isArray(state.offerHistory)
       ? state.offerHistory.slice(-1 * (emergency ? 40 : 120)).map((offer) => compactOfferForStorage(offer, false))
@@ -1647,6 +1575,7 @@ export default function ViewingOffers() {
   const [processingBack, setProcessingBack] = useState(false);
   const [processingAdvance, setProcessingAdvance] = useState(false);
   const [processingDevAdvance, setProcessingDevAdvance] = useState(false);
+  const [processingDevSimToEnd, setProcessingDevSimToEnd] = useState(false);
   const [offerStatusPopupOpen, setOfferStatusPopupOpen] = useState(false);
   const [dismissedOfferStatusIds, setDismissedOfferStatusIds] = useState(() => {
     try {
@@ -1679,6 +1608,12 @@ export default function ViewingOffers() {
   const signings = latestResults?.signings || [];
   const generatedOffers = latestResults?.generatedOffers || [];
   const dayResolved = latestResults?.dayResolved;
+
+  const keepVisibleGeneratedOffers = (nextGeneratedOffers = []) => {
+    return Array.isArray(nextGeneratedOffers) && nextGeneratedOffers.length
+      ? nextGeneratedOffers
+      : generatedOffers;
+  };
 
 
   const fullFreeAgencySummaryEntries = useMemo(() => {
@@ -2532,14 +2467,31 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
         return;
       }
 
+      // Surgical RFA deadlock guard:
+      // The backend should remove the processed row, but older/local saves can
+      // leave it behind after Decline Match. Clean only this row so the page can
+      // unlock without touching any other pending RFA decisions.
+      const nextFreeAgencyState = res.leagueData?.freeAgencyState || {};
+      const cleanedPendingRfaMatchDecisions = Array.isArray(nextFreeAgencyState.pendingRfaMatchDecisions)
+        ? nextFreeAgencyState.pendingRfaMatchDecisions.filter((decisionRow) => decisionRow?.playerKey !== row.playerKey)
+        : [];
+
+      const cleanedLeagueData = {
+        ...res.leagueData,
+        freeAgencyState: {
+          ...nextFreeAgencyState,
+          pendingRfaMatchDecisions: cleanedPendingRfaMatchDecisions,
+        },
+      };
+
       const latest = {
         dayResolved: dayResolved ?? row?.day ?? null,
         signings: res?.processedSignings || (res?.processedSigning ? [res.processedSigning] : []),
-        generatedOffers: res?.generatedOffers || [],
-        stateSummary: res?.stateSummary || null,
+        generatedOffers: keepVisibleGeneratedOffers(res?.generatedOffers || []),
+        stateSummary: res?.stateSummary || latestResults?.stateSummary || null,
       };
 
-      applyLeagueUpdateWithLatestResults(res.leagueData, latest);
+      applyLeagueUpdateWithLatestResults(cleanedLeagueData, latest);
     } catch (err) {
       setActionError(err?.message || "Failed to process RFA match decision.");
     } finally {
@@ -2658,8 +2610,8 @@ const handleReturnToOffseasonHub = () => {
       const latest = {
         dayResolved: dayResolved ?? baseLeague?.freeAgencyState?.currentDay ?? null,
         signings: processRes?.processedSignings || [],
-        generatedOffers: processRes?.generatedOffers || [],
-        stateSummary: baseStateSummary,
+        generatedOffers: keepVisibleGeneratedOffers(processRes?.generatedOffers || []),
+        stateSummary: baseStateSummary || latestResults?.stateSummary || null,
       };
 
       if (baseStateSummary && !baseStateSummary.isActive) {
@@ -2679,7 +2631,6 @@ const handleReturnToOffseasonHub = () => {
       setProcessingAdvance(false);
     }
   };
-
 
   const handleDevAdvanceDayFromViewingOffers = async () => {
     if (!selectedTeam?.name) {
@@ -2705,8 +2656,9 @@ const handleReturnToOffseasonHub = () => {
       let processedSignings = [];
       let baseStateSummary = null;
 
-      // Dev shortcut: if pending user signings are on the screen, checked players
-      // sign and unchecked players are declined before advancing to the next FA day.
+      // Dev shortcut keeps the old behavior: if pending user signings are on
+      // the screen, checked players sign and unchecked players are declined
+      // before advancing to the next FA day.
       if (pendingUserDecisions.length > 0) {
         const processRes = await processSelections({
           requireSelected: false,
@@ -2729,7 +2681,7 @@ const handleReturnToOffseasonHub = () => {
           const latest = {
             dayResolved: dayResolved ?? baseLeague?.freeAgencyState?.currentDay ?? null,
             signings: processedSignings,
-            generatedOffers: processRes?.generatedOffers || [],
+            generatedOffers: keepVisibleGeneratedOffers(processRes?.generatedOffers || []),
             stateSummary: baseStateSummary,
           };
 
@@ -2740,10 +2692,8 @@ const handleReturnToOffseasonHub = () => {
         }
       }
 
-      const backendLeagueData = buildLeagueDataForFreeAgencyBackendAction(baseLeague);
-
       const res = await advanceFreeAgencyDay(
-        backendLeagueData,
+        baseLeague,
         selectedTeam.name
       );
 
@@ -2777,6 +2727,188 @@ const handleReturnToOffseasonHub = () => {
       setActionError(err?.message || "Failed to dev advance free agency day.");
     } finally {
       setProcessingDevAdvance(false);
+    }
+  };
+
+
+  const handleDevSimToEndFreeAgency = async () => {
+    if (!selectedTeam?.name) {
+      setActionError("No team selected.");
+      return;
+    }
+
+    if (typeof advanceFreeAgencyDay !== "function") {
+      setActionError("Advance day is not wired in simEnginePy.js yet.");
+      return;
+    }
+
+    if (pendingRfaMatchDecisions.length > 0) {
+      setActionError("Resolve RFA match decisions first, then use Dev Sim to End FA.");
+      return;
+    }
+
+    const processFuturePendingUserDecisions = async (workingLeague) => {
+      const futurePending = Array.isArray(workingLeague?.freeAgencyState?.pendingUserDecisions)
+        ? workingLeague.freeAgencyState.pendingUserDecisions
+        : [];
+
+      if (!futurePending.length) {
+        return {
+          ok: true,
+          leagueData: workingLeague,
+          processedSignings: [],
+          generatedOffers: [],
+          stateSummary: workingLeague?.freeAgencyState?.latestResults?.stateSummary || null,
+        };
+      }
+
+      const declinedPlayerKeys = futurePending
+        .map((row) => row?.playerKey)
+        .filter(Boolean);
+
+      const backendLeagueData = buildLeagueDataForFreeAgencyBackendAction(workingLeague);
+
+      return await processPendingUserFreeAgencyDecisions(
+        backendLeagueData,
+        selectedTeam.name,
+        [],
+        {},
+        declinedPlayerKeys
+      );
+    };
+
+    try {
+      setProcessingDevSimToEnd(true);
+      setActionError("");
+
+      let workingLeague = leagueData;
+      let latest = latestResults || null;
+      const safetyLimit = Number(workingLeague?.freeAgencyState?.maxDays || 10) + 6;
+
+      // First, resolve pending user signings currently visible on this page.
+      // Same rule as Dev Advance Day: checked players sign, unchecked players are declined.
+      if (pendingUserDecisions.length > 0) {
+        const processRes = await processSelections({
+          requireSelected: false,
+          declineUnselected: true,
+        });
+
+        if (!processRes?.ok) {
+          if (processRes?.leagueData) {
+            applyLeagueUpdate(processRes.leagueData);
+          }
+          setActionError(processRes?.reason || "Failed to process pending signings before dev simming to the end of free agency.");
+          return;
+        }
+
+        workingLeague = processRes?.leagueData || workingLeague;
+        latest = {
+          dayResolved: dayResolved ?? workingLeague?.freeAgencyState?.currentDay ?? null,
+          signings: processRes?.processedSignings || [],
+          generatedOffers: keepVisibleGeneratedOffers(processRes?.generatedOffers || []),
+          stateSummary: processRes?.stateSummary || latestResults?.stateSummary || null,
+        };
+
+        if (processRes?.stateSummary && !processRes.stateSummary.isActive) {
+          finalizeFreeAgencyComplete(workingLeague, latest);
+          localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+          navigate("/viewing-offers");
+          return;
+        }
+      }
+
+      for (let step = 0; step < safetyLimit; step += 1) {
+        const rfaPending = Array.isArray(workingLeague?.freeAgencyState?.pendingRfaMatchDecisions)
+          ? workingLeague.freeAgencyState.pendingRfaMatchDecisions
+          : [];
+
+        if (rfaPending.length > 0) {
+          applyLeagueUpdateWithLatestResults(workingLeague, latest);
+          localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+          setActionError("Dev sim stopped because an RFA match decision needs your manual choice.");
+          navigate("/viewing-offers");
+          return;
+        }
+
+        const pendingProcessRes = await processFuturePendingUserDecisions(workingLeague);
+
+        if (!pendingProcessRes?.ok) {
+          if (pendingProcessRes?.leagueData) {
+            applyLeagueUpdate(pendingProcessRes.leagueData);
+          }
+          setActionError(pendingProcessRes?.reason || "Failed to process future pending signings while dev simming to the end of free agency.");
+          return;
+        }
+
+        if (pendingProcessRes?.leagueData && pendingProcessRes.leagueData !== workingLeague) {
+          workingLeague = pendingProcessRes.leagueData;
+          latest = {
+            dayResolved: workingLeague?.freeAgencyState?.currentDay ?? latest?.dayResolved ?? null,
+            signings: pendingProcessRes?.processedSignings || [],
+            generatedOffers: pendingProcessRes?.generatedOffers || [],
+            stateSummary: pendingProcessRes?.stateSummary || latest?.stateSummary || null,
+          };
+
+          if (pendingProcessRes?.stateSummary && !pendingProcessRes.stateSummary.isActive) {
+            finalizeFreeAgencyComplete(workingLeague, latest);
+            localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+            navigate("/viewing-offers");
+            return;
+          }
+        }
+
+        const state = workingLeague?.freeAgencyState || {};
+        const stateSummaryFromLatest = latest?.stateSummary || state?.latestResults?.stateSummary || null;
+        const isActive = stateSummaryFromLatest?.isActive ?? state?.isActive;
+        const currentDay = Number(stateSummaryFromLatest?.currentDay ?? state?.currentDay ?? 0);
+        const maxDays = Number(stateSummaryFromLatest?.maxDays ?? state?.maxDays ?? 10);
+
+        if (isActive === false || currentDay >= maxDays) {
+          finalizeFreeAgencyComplete(workingLeague, latest);
+          localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+          navigate("/viewing-offers");
+          return;
+        }
+
+        const res = await advanceFreeAgencyDay(
+          workingLeague,
+          selectedTeam.name
+        );
+
+        if (!res?.ok || !res?.leagueData) {
+          if (res?.leagueData) {
+            applyLeagueUpdate(res.leagueData);
+          }
+          setActionError(res?.reason || "Failed to dev sim to the end of free agency.");
+          return;
+        }
+
+        workingLeague = res.leagueData;
+        latest = {
+          dayResolved: res?.dayResolved ?? res?.stateSummary?.currentDay ?? null,
+          signings: res?.signings || [],
+          generatedOffers: res?.generatedOffers || [],
+          stateSummary: res?.stateSummary || null,
+        };
+
+        applyLeagueUpdateWithLatestResults(workingLeague, latest);
+
+        if (!res?.stateSummary?.isActive) {
+          finalizeFreeAgencyComplete(workingLeague, latest);
+          localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+          navigate("/viewing-offers");
+          return;
+        }
+      }
+
+      applyLeagueUpdateWithLatestResults(workingLeague, latest);
+      localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+      setActionError("Dev sim stopped after the safety limit. The latest safe market state was saved.");
+      navigate("/viewing-offers");
+    } catch (err) {
+      setActionError(err?.message || "Failed to dev sim to the end of free agency.");
+    } finally {
+      setProcessingDevSimToEnd(false);
     }
   };
 
@@ -3656,7 +3788,7 @@ return (
 <div className="flex gap-3 flex-wrap">
   <button
     onClick={handleAdvanceFromResults}
-    disabled={processingBack || processingAdvance || processingDevAdvance || pendingRfaMatchDecisions.length > 0}
+    disabled={processingBack || processingAdvance || processingDevAdvance || processingDevSimToEnd || pendingRfaMatchDecisions.length > 0}
     className="px-6 py-3 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
   >
     {processingAdvance
@@ -3672,19 +3804,29 @@ return (
 
   <button
     onClick={handleDevAdvanceDayFromViewingOffers}
-    disabled={processingBack || processingAdvance || processingDevAdvance || pendingRfaMatchDecisions.length > 0}
-    className="px-6 py-3 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
+    disabled={processingBack || processingAdvance || processingDevAdvance || processingDevSimToEnd || marketClosed || pendingRfaMatchDecisions.length > 0}
+    className="px-6 py-3 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition shadow-lg shadow-purple-950/30"
+    title="Developer shortcut: process selected pending signings, decline the rest, then advance the free-agency day without leaving this screen."
   >
-    {processingDevAdvance
-      ? "Dev Advancing..."
+    {processingDevAdvance ? "Dev Advancing..." : "DEV: Advance Day"}
+  </button>
+
+  <button
+    onClick={handleDevSimToEndFreeAgency}
+    disabled={processingBack || processingAdvance || processingDevAdvance || processingDevSimToEnd || marketClosed || pendingRfaMatchDecisions.length > 0}
+    className="px-6 py-3 bg-purple-800 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition shadow-lg shadow-purple-950/30"
+    title="Developer shortcut: keep advancing free agency until the market closes. Future user pending signings are declined automatically; RFA match decisions still stop for manual review."
+  >
+    {processingDevSimToEnd
+      ? "Dev Simming..."
       : pendingRfaMatchDecisions.length > 0
       ? "Resolve RFA Decisions First"
-      : "Dev Advance Day"}
+      : "DEV: Sim to End FA"}
   </button>
 
 <button
   onClick={handleReturnToOffseasonHub}
-  disabled={processingBack || processingAdvance || processingDevAdvance}
+  disabled={processingBack || processingAdvance || processingDevAdvance || processingDevSimToEnd}
   className="px-6 py-3 bg-neutral-700 hover:bg-neutral-600 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
 >
   Back to Offseason Hub
