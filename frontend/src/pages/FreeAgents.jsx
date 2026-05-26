@@ -207,6 +207,71 @@ function compactSigningForStorage(row, emergency = false) {
   };
 }
 
+function compactFreeAgencyStateSummaryForStorage(summary) {
+  if (!summary || typeof summary !== "object") return summary;
+
+  return {
+    currentDay: summary.currentDay ?? null,
+    maxDays: summary.maxDays ?? null,
+    freeAgentCount: summary.freeAgentCount ?? null,
+    activeOfferCount: summary.activeOfferCount ?? null,
+    signedCount: summary.signedCount ?? null,
+    generatedOfferCount: summary.generatedOfferCount ?? null,
+    pendingUserDecisionCount: summary.pendingUserDecisionCount ?? null,
+    pendingRfaMatchDecisionCount: summary.pendingRfaMatchDecisionCount ?? null,
+    marketComplete: Boolean(summary.marketComplete || summary.freeAgencyComplete || summary.completed || summary.isComplete),
+  };
+}
+
+function compactFreeAgencyActionLogEntryForStorage(entry, emergency = false) {
+  if (!entry || typeof entry !== "object") return entry;
+
+  return {
+    day: entry.day ?? entry.dayResolved ?? null,
+    dayResolved: entry.dayResolved ?? entry.day ?? null,
+    type: entry.type || entry.eventType || "",
+    title: entry.title || entry.headline || "",
+    summary: entry.summary || entry.message || "",
+    stateSummary: compactFreeAgencyStateSummaryForStorage(entry.stateSummary),
+    signings: Array.isArray(entry.signings)
+      ? entry.signings
+          .slice(0, emergency ? 40 : 120)
+          .map((row) => compactSigningForStorage(row, emergency))
+      : [],
+    generatedOffers: Array.isArray(entry.generatedOffers)
+      ? entry.generatedOffers
+          .slice(0, emergency ? 80 : 220)
+          .map((offer) => compactOfferForStorage(offer, false))
+      : [],
+    userOfferOutcomes: Array.isArray(entry.userOfferOutcomes)
+      ? entry.userOfferOutcomes.slice(0, emergency ? 20 : 80).map((row) => ({
+          id: row.id || "",
+          day: row.day ?? null,
+          playerId: row.playerId ?? null,
+          playerName: row.playerName || "",
+          playerKey: row.playerKey || "",
+          userTeamName: row.userTeamName || "",
+          status: row.status || "",
+          offerStatus: row.offerStatus || "",
+          signedWith: row.signedWith || "",
+          signedContract: row.signedContract || null,
+          signedTotalValue: row.signedTotalValue || 0,
+          signedYears: row.signedYears || 0,
+          userOfferTotalValue: row.userOfferTotalValue || 0,
+          userOfferYears: row.userOfferYears || 0,
+          rfaMatched: Boolean(row.rfaMatched),
+          originalOfferTeamName: row.originalOfferTeamName || "",
+        }))
+      : [],
+    rightsRenounceLog: Array.isArray(entry.rightsRenounceLog)
+      ? entry.rightsRenounceLog.slice(0, emergency ? 25 : 80)
+      : [],
+    blockedCapHoldRenounceLog: Array.isArray(entry.blockedCapHoldRenounceLog)
+      ? entry.blockedCapHoldRenounceLog.slice(0, emergency ? 25 : 80)
+      : [],
+  };
+}
+
 function compactFreeAgencyStateForStorage(state, emergency = false) {
   if (!state || typeof state !== "object") return state;
 
@@ -220,7 +285,7 @@ function compactFreeAgencyStateForStorage(state, emergency = false) {
   const latestResults = state.latestResults
     ? {
         dayResolved: state.latestResults.dayResolved ?? null,
-        stateSummary: state.latestResults.stateSummary || null,
+        stateSummary: compactFreeAgencyStateSummaryForStorage(state.latestResults.stateSummary),
         signings: Array.isArray(state.latestResults.signings)
           ? state.latestResults.signings
               .slice(0, emergency ? 40 : 120)
@@ -228,8 +293,8 @@ function compactFreeAgencyStateForStorage(state, emergency = false) {
           : [],
         generatedOffers: Array.isArray(state.latestResults.generatedOffers)
           ? state.latestResults.generatedOffers
-              .slice(0, emergency ? 120 : 420)
-              .map((offer) => compactOfferForStorage(offer, true))
+              .slice(0, emergency ? 80 : 220)
+              .map((offer) => compactOfferForStorage(offer, false))
           : [],
       }
     : null;
@@ -238,8 +303,15 @@ function compactFreeAgencyStateForStorage(state, emergency = false) {
     ...state,
     offersByPlayer,
     latestResults,
+    fullActionLog: Array.isArray(state.fullActionLog)
+      ? state.fullActionLog
+          .slice(-1 * (emergency ? 6 : 12))
+          .map((entry) => compactFreeAgencyActionLogEntryForStorage(entry, emergency))
+      : [],
     signedPlayersLog: Array.isArray(state.signedPlayersLog)
-      ? state.signedPlayersLog.map((row) => compactSigningForStorage(row, emergency))
+      ? state.signedPlayersLog
+          .slice(-1 * (emergency ? 80 : 220))
+          .map((row) => compactSigningForStorage(row, emergency))
       : [],
     offerHistory: Array.isArray(state.offerHistory)
       ? state.offerHistory.slice(-1 * (emergency ? 40 : 120)).map((offer) => compactOfferForStorage(offer, false))
@@ -684,17 +756,20 @@ const isOffseasonMode =
   }, [liveFreeAgencyState]);
 
   const currentUserTeam = useMemo(() => {
-    if (!workingLeagueData?.conferences || !selectedTeam?.name) return null;
+    if (!workingLeagueData || !selectedTeam?.name) return null;
 
-    for (const confKey of Object.keys(workingLeagueData.conferences || {})) {
-      const found = (workingLeagueData.conferences[confKey] || []).find(
-        (team) => team.name === selectedTeam.name
-      );
-      if (found) return found;
+    const teams = [];
+
+    if (Array.isArray(workingLeagueData.teams)) {
+      teams.push(...workingLeagueData.teams);
     }
 
-    return null;
-  }, [workingLeagueData, selectedTeam]);
+    if (workingLeagueData.conferences) {
+      teams.push(...Object.values(workingLeagueData.conferences || {}).flat());
+    }
+
+    return teams.find((team) => team?.name === selectedTeam.name) || null;
+  }, [workingLeagueData, selectedTeam?.name]);
 
   const minRosterSize = Number(
     workingLeagueData?.minRosterSize ||
@@ -779,15 +854,17 @@ const isOffseasonMode =
     if (typeof setSelectedTeam === "function" && selectedTeam?.name) {
       let nextSelectedTeam = null;
 
-      for (const confKey of Object.keys(updated.conferences || {})) {
-        const team = (updated.conferences[confKey] || []).find(
-          (t) => t.name === selectedTeam.name
-        );
-        if (team) {
-          nextSelectedTeam = team;
-          break;
-        }
+      const updatedTeams = [];
+
+      if (Array.isArray(updated.teams)) {
+        updatedTeams.push(...updated.teams);
       }
+
+      if (updated.conferences) {
+        updatedTeams.push(...Object.values(updated.conferences || {}).flat());
+      }
+
+      nextSelectedTeam = updatedTeams.find((team) => team?.name === selectedTeam.name) || null;
 
       if (nextSelectedTeam) {
         setSelectedTeam(nextSelectedTeam);
@@ -1879,6 +1956,123 @@ const isOffseasonMode =
     };
   };
 
+  const buildLiveOfferSubmissionLeagueData = (baseLeagueData) => {
+    if (!baseLeagueData || !isOffseasonMode || !canSubmitLiveOffer || !selectedTeam?.name) {
+      return baseLeagueData;
+    }
+
+    const liveRosterCount = Number(currentUserTeam?.players?.length || userRosterCount || 0);
+    const liveRosterLimit = Number(maxRosterSize || baseLeagueData?.rosterLimit || baseLeagueData?.maxRosterSize || 15);
+
+    if (liveRosterCount < liveRosterLimit) {
+      return baseLeagueData;
+    }
+
+    // Surgical full-roster live-offer patch:
+    // The backend currently uses roster spots as the live-offer allowance, so a
+    // 15/15 roster becomes a 0-offer team. For live offers only, send a temporary
+    // roster limit so the offer can be recorded. The real limit is restored
+    // immediately after the backend returns, before anything is saved.
+    const temporaryRosterLimit = liveRosterCount + 5;
+
+    const patchTeam = (team) => {
+      if (!team || team.name !== selectedTeam.name) return team;
+
+      return {
+        ...team,
+        rosterLimit: Math.max(Number(team.rosterLimit || 0), temporaryRosterLimit),
+        maxRosterSize: Math.max(Number(team.maxRosterSize || 0), temporaryRosterLimit),
+      };
+    };
+
+    return {
+      ...baseLeagueData,
+      rosterLimit: Math.max(Number(baseLeagueData.rosterLimit || 0), temporaryRosterLimit),
+      maxRosterSize: Math.max(Number(baseLeagueData.maxRosterSize || 0), temporaryRosterLimit),
+      teams: Array.isArray(baseLeagueData.teams)
+        ? baseLeagueData.teams.map(patchTeam)
+        : baseLeagueData.teams,
+      conferences: baseLeagueData.conferences
+        ? Object.fromEntries(
+            Object.entries(baseLeagueData.conferences).map(([confName, teams]) => [
+              confName,
+              Array.isArray(teams) ? teams.map(patchTeam) : teams,
+            ])
+          )
+        : baseLeagueData.conferences,
+      freeAgencyState: {
+        ...(baseLeagueData.freeAgencyState || {}),
+        userLiveOfferFullRosterOverride: true,
+      },
+    };
+  };
+
+  const restoreLiveOfferSubmissionLeagueData = (updatedLeagueData, originalLeagueData) => {
+    if (!updatedLeagueData || !originalLeagueData) return updatedLeagueData;
+
+    const restoreField = (target, source, key) => {
+      if (!target) return target;
+      if (Object.prototype.hasOwnProperty.call(source || {}, key)) {
+        return {
+          ...target,
+          [key]: source[key],
+        };
+      }
+
+      const next = { ...target };
+      delete next[key];
+      return next;
+    };
+
+    const originalTeams = [];
+
+    if (Array.isArray(originalLeagueData.teams)) {
+      originalTeams.push(...originalLeagueData.teams);
+    }
+
+    if (originalLeagueData.conferences) {
+      originalTeams.push(...Object.values(originalLeagueData.conferences || {}).flat());
+    }
+
+    const originalUserTeam =
+      originalTeams.find((team) => team?.name === selectedTeam?.name) ||
+      currentUserTeam ||
+      null;
+
+    const restoreTeam = (team) => {
+      if (!team || team.name !== selectedTeam?.name) return team;
+
+      let restored = { ...team };
+      restored = restoreField(restored, originalUserTeam || {}, "rosterLimit");
+      restored = restoreField(restored, originalUserTeam || {}, "maxRosterSize");
+      return restored;
+    };
+
+    let nextLeagueData = { ...updatedLeagueData };
+    nextLeagueData = restoreField(nextLeagueData, originalLeagueData, "rosterLimit");
+    nextLeagueData = restoreField(nextLeagueData, originalLeagueData, "maxRosterSize");
+
+    nextLeagueData.teams = Array.isArray(updatedLeagueData.teams)
+      ? updatedLeagueData.teams.map(restoreTeam)
+      : updatedLeagueData.teams;
+
+    nextLeagueData.conferences = updatedLeagueData.conferences
+      ? Object.fromEntries(
+          Object.entries(updatedLeagueData.conferences).map(([confName, teams]) => [
+            confName,
+            Array.isArray(teams) ? teams.map(restoreTeam) : teams,
+          ])
+        )
+      : updatedLeagueData.conferences;
+
+    nextLeagueData.freeAgencyState = {
+      ...(updatedLeagueData.freeAgencyState || {}),
+    };
+    delete nextLeagueData.freeAgencyState.userLiveOfferFullRosterOverride;
+
+    return nextLeagueData;
+  };
+
   useEffect(() => {
     if (!signModalOpen || !signTargetPlayer || !selectedTeam || !workingLeagueData) {
       setOfferEvaluation(null);
@@ -2429,8 +2623,10 @@ updateOffseasonState({
             return;
           }
 
+          const offerSubmissionLeagueData = buildLiveOfferSubmissionLeagueData(workingLeagueData);
+
           const res = await submitUserFreeAgentOffer(
-            workingLeagueData,
+            offerSubmissionLeagueData,
             selectedTeam.name,
             signTargetPlayer.id || null,
             signTargetPlayer.name || null,
@@ -2442,14 +2638,19 @@ updateOffseasonState({
             return;
           }
 
-          applyLeagueUpdate(res.leagueData);
+          const restoredLeagueData = restoreLiveOfferSubmissionLeagueData(
+            res.leagueData,
+            workingLeagueData
+          );
+
+          applyLeagueUpdate(restoredLeagueData);
           closeSignModal();
 
           // Show the updated live ranking immediately using the fresh backend
           // response, so the user's new/replaced offer appears right away.
           await openOffersModal(
             signTargetPlayer,
-            res.leagueData,
+            restoredLeagueData,
             res.offersView || null
           );
 

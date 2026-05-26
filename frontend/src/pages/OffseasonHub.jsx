@@ -5,6 +5,8 @@ import styles from "./OffseasonHub.module.css";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
+const PROG_META_KEY = "bm_progression_meta_v1";
+const LEAGUE_KEY = "leagueData";
 
 function safeJSON(raw, fallback = null) {
   try {
@@ -147,6 +149,58 @@ function getAllTeamsFromLeague(leagueData) {
 
   return [];
 }
+
+
+function getProgressionAgeCompletionAudit(leagueData, seasonYear) {
+  const snapshot = getLeagueDataSnapshot(leagueData);
+  const teams = getAllTeamsFromLeague(snapshot);
+  const rows = [];
+
+  for (const team of teams || []) {
+    const teamName = team?.name || "";
+    for (const player of team?.players || []) {
+      const lastBirthdayYear = Number(player?.lastBirthdayYear);
+      rows.push({
+        name: player?.name || "",
+        team: teamName,
+        age: player?.age,
+        lastBirthdayYear: Number.isFinite(lastBirthdayYear) ? lastBirthdayYear : null,
+        stale:
+          !Number.isFinite(lastBirthdayYear) ||
+          lastBirthdayYear < Number(seasonYear || 0),
+      });
+    }
+  }
+
+  const staleRows = rows.filter((row) => row.stale);
+
+  return {
+    seasonYear: Number(seasonYear || 0),
+    totalPlayers: rows.length,
+    staleCount: staleRows.length,
+    staleExamples: staleRows.slice(0, 12),
+    ok:
+      rows.length > 0 &&
+      staleRows.length <= Math.max(2, Math.floor(rows.length * 0.01)),
+  };
+}
+
+function isProgressionReallyCompleteForSeason(seasonYear) {
+  const savedLeague = safeJSON(localStorage.getItem(LEAGUE_KEY), null);
+  const progressionMeta = safeJSON(localStorage.getItem(PROG_META_KEY), null);
+  const ageAudit = getProgressionAgeCompletionAudit(savedLeague, seasonYear);
+  const metaMatches = Number(progressionMeta?.appliedForSeasonYear) === Number(seasonYear);
+  const deltaCount = Number(progressionMeta?.deltaCount || 0);
+
+  return {
+    ok: metaMatches && deltaCount > 0 && ageAudit.ok,
+    metaMatches,
+    deltaCount,
+    progressionMeta,
+    ageAudit,
+  };
+}
+
 
 function getSelectedTeamName(selectedTeam) {
   if (selectedTeam?.name) return selectedTeam.name;
@@ -392,6 +446,32 @@ const toggleRetirementsDisabled = () => {
 };
 
 const handleAdvanceToNewSeason = () => {
+  const progressionCheck = isProgressionReallyCompleteForSeason(seasonYear);
+
+  if (!progressionCheck.ok) {
+    console.error("[OffseasonHub] Blocked season advance because progression completion is not valid.", progressionCheck);
+    alert(
+      "Progression did not save cleanly yet. Re-open Player Progression so the player ages and progression save can complete before advancing."
+    );
+
+    const nextBlocked = {
+      ...offseasonState,
+      active: true,
+      seasonYear,
+      progressionComplete: false,
+    };
+
+    setOffseasonState(nextBlocked);
+    saveOffseasonState(nextBlocked);
+
+    try {
+      localStorage.removeItem(PROG_META_KEY);
+    } catch {}
+
+    navigate("/player-progression");
+    return;
+  }
+
   const next = {
     ...offseasonState,
     active: false,

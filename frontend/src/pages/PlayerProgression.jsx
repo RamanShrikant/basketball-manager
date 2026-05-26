@@ -197,6 +197,329 @@ function ppDump(label, contextLeague = null, extra = {}) {
   return dump;
 }
 
+
+
+// -----------------------------------------------------------------------------
+// EXTREME AGE DEBUG - console only. No gameplay logic changes.
+// -----------------------------------------------------------------------------
+const PP_AGE_DEBUG_TRACKED_NAMES = [
+  "Paolo Banchero",
+  "Franz Wagner",
+  "Desmond Bane",
+  "Jalen Suggs",
+  "Anthony Black",
+  "Tristan Da Silva",
+  "Goga Bitadze",
+  "Bam Adebayo",
+  "Norman Powell",
+  "Tyler Herro",
+  "Derrick White",
+  "Anfernee Simons",
+];
+
+function ppPlayerStableKey(player = {}, teamName = "") {
+  if (player?.id !== undefined && player?.id !== null && player?.id !== "") {
+    return `id:${player.id}`;
+  }
+  return `name:${player?.name || ""}__team:${teamName || ""}`;
+}
+
+function ppBuildPlayerAgeMap(league) {
+  const map = new Map();
+  const teams = getAllTeamsFromLeague(league);
+
+  for (const team of teams || []) {
+    const teamName = team?.name || "";
+    for (const player of team?.players || []) {
+      const key = ppPlayerStableKey(player, teamName);
+      map.set(key, {
+        key,
+        id: player?.id ?? null,
+        name: player?.name || "",
+        team: teamName,
+        age: Number(player?.age),
+        rawAge: player?.age,
+        overall: player?.overall,
+        potential: player?.potential,
+        lastBirthdayYear: player?.lastBirthdayYear,
+        lastAgedSeasonYear: player?.lastAgedSeasonYear,
+        contractStartYear: player?.contract?.startYear ?? null,
+        contractYears: Array.isArray(player?.contract?.salaryByYear)
+          ? player.contract.salaryByYear.length
+          : 0,
+      });
+    }
+  }
+
+  return map;
+}
+
+function ppGetAgeRows(league, trackedNames = PP_AGE_DEBUG_TRACKED_NAMES) {
+  const wanted = new Set((trackedNames || []).map((name) => String(name || "").toLowerCase()));
+  const rows = [];
+  const teams = getAllTeamsFromLeague(league);
+
+  for (const team of teams || []) {
+    const teamName = team?.name || "";
+    for (const player of team?.players || []) {
+      if (wanted.size && !wanted.has(String(player?.name || "").toLowerCase())) continue;
+      rows.push({
+        name: player?.name,
+        team: teamName,
+        age: player?.age,
+        ovr: player?.overall,
+        pot: player?.potential,
+        lastBirthdayYear: player?.lastBirthdayYear,
+        lastAgedSeasonYear: player?.lastAgedSeasonYear,
+        contractStartYear: player?.contract?.startYear ?? null,
+        contractYears: Array.isArray(player?.contract?.salaryByYear)
+          ? player.contract.salaryByYear.length
+          : 0,
+      });
+    }
+  }
+
+  return rows.sort((a, b) => String(a.team).localeCompare(String(b.team)) || String(a.name).localeCompare(String(b.name)));
+}
+
+function ppAgeGuardSummary(league, seasonYear) {
+  const map = ppBuildPlayerAgeMap(league);
+  const rows = Array.from(map.values());
+
+  const bucket = {
+    total: rows.length,
+    missingLastBirthdayYear: 0,
+    birthdayBelowSeason: 0,
+    birthdayEqualsSeason: 0,
+    birthdayAboveSeason: 0,
+    missingLastAgedSeasonYear: 0,
+    agedEqualsSeason: 0,
+    agedBelowSeason: 0,
+    agedAboveSeason: 0,
+  };
+
+  for (const row of rows) {
+    const lb = Number(row.lastBirthdayYear);
+    const la = Number(row.lastAgedSeasonYear);
+
+    if (!Number.isFinite(lb)) bucket.missingLastBirthdayYear += 1;
+    else if (lb < seasonYear) bucket.birthdayBelowSeason += 1;
+    else if (lb === seasonYear) bucket.birthdayEqualsSeason += 1;
+    else bucket.birthdayAboveSeason += 1;
+
+    if (!Number.isFinite(la)) bucket.missingLastAgedSeasonYear += 1;
+    else if (la < seasonYear) bucket.agedBelowSeason += 1;
+    else if (la === seasonYear) bucket.agedEqualsSeason += 1;
+    else bucket.agedAboveSeason += 1;
+  }
+
+  return bucket;
+}
+
+function ppLogAgeGuards(label, league, seasonYear, extra = {}) {
+  const summary = ppAgeGuardSummary(league, Number(seasonYear || 0));
+  console.groupCollapsed(`%c[AGEDBG:GUARDS] ${label}`, "color:#a855f7;font-weight:bold");
+  console.log({ label, seasonYear, summary, extra });
+  try { console.table(ppGetAgeRows(league)); } catch {}
+  console.groupEnd();
+  return summary;
+}
+
+function ppAgeAudit(beforeLeague, afterLeague, label, extra = {}) {
+  const beforeMap = ppBuildPlayerAgeMap(beforeLeague);
+  const afterMap = ppBuildPlayerAgeMap(afterLeague);
+
+  const rows = [];
+  const missing = [];
+
+  for (const [key, before] of beforeMap.entries()) {
+    const after = afterMap.get(key);
+
+    if (!after) {
+      missing.push(before);
+      continue;
+    }
+
+    const beforeAge = Number(before.age);
+    const afterAge = Number(after.age);
+    const ageDiff =
+      Number.isFinite(beforeAge) && Number.isFinite(afterAge)
+        ? afterAge - beforeAge
+        : null;
+
+    rows.push({
+      key,
+      name: before.name,
+      beforeTeam: before.team,
+      afterTeam: after.team,
+      beforeAge,
+      afterAge,
+      ageDiff,
+      beforeOvr: before.overall,
+      afterOvr: after.overall,
+      ovrDiff: Number(after.overall || 0) - Number(before.overall || 0),
+      beforePot: before.potential,
+      afterPot: after.potential,
+      beforeLastBirthdayYear: before.lastBirthdayYear,
+      afterLastBirthdayYear: after.lastBirthdayYear,
+      beforeLastAgedSeasonYear: before.lastAgedSeasonYear,
+      afterLastAgedSeasonYear: after.lastAgedSeasonYear,
+    });
+  }
+
+  const summary = {
+    label,
+    comparedPlayers: rows.length,
+    missingPlayers: missing.length,
+    agedExactlyPlusOne: rows.filter((r) => r.ageDiff === 1).length,
+    unchangedAge: rows.filter((r) => r.ageDiff === 0).length,
+    agedMoreThanOne: rows.filter((r) => Number(r.ageDiff) > 1).length,
+    ageWentDown: rows.filter((r) => Number(r.ageDiff) < 0).length,
+    invalidAgeDiff: rows.filter((r) => r.ageDiff === null).length,
+    trackedRows: rows.filter((r) => PP_AGE_DEBUG_TRACKED_NAMES.includes(r.name)),
+    suspiciousUnchangedExamples: rows
+      .filter((r) => r.ageDiff === 0)
+      .slice(0, 25),
+    plusOneExamples: rows
+      .filter((r) => r.ageDiff === 1)
+      .slice(0, 12),
+    missingExamples: missing.slice(0, 12),
+    extra,
+  };
+
+  const bad =
+    summary.comparedPlayers > 0 &&
+    summary.agedExactlyPlusOne < Math.max(5, Math.floor(summary.comparedPlayers * 0.50));
+
+  const style = bad
+    ? "color:#ef4444;font-weight:bold"
+    : "color:#22c55e;font-weight:bold";
+
+  console.groupCollapsed(`%c[AGEDBG:AUDIT] ${label}`, style);
+  console.log(summary);
+  try { console.table(summary.trackedRows); } catch {}
+  if (bad) {
+    console.error("[AGEDBG:AGING_SUSPECT] Most players did not age +1 in this comparison.", summary);
+    try { console.table(summary.suspiciousUnchangedExamples); } catch {}
+  } else {
+    try { console.table(summary.plusOneExamples); } catch {}
+  }
+  console.groupEnd();
+
+  return summary;
+}
+
+function ppPersistenceAudit(expectedLeague, savedLeague, label, extra = {}) {
+  const expectedMap = ppBuildPlayerAgeMap(expectedLeague);
+  const savedMap = ppBuildPlayerAgeMap(savedLeague);
+
+  const mismatches = [];
+  let matched = 0;
+
+  for (const [key, expected] of expectedMap.entries()) {
+    const saved = savedMap.get(key);
+    if (!saved) {
+      mismatches.push({
+        key,
+        name: expected.name,
+        team: expected.team,
+        issue: "missing_in_saved_league",
+        expectedAge: expected.age,
+        savedAge: null,
+        expectedOvr: expected.overall,
+        savedOvr: null,
+      });
+      continue;
+    }
+
+    matched += 1;
+
+    if (
+      Number(expected.age) !== Number(saved.age) ||
+      Number(expected.overall || 0) !== Number(saved.overall || 0) ||
+      Number(expected.potential || 0) !== Number(saved.potential || 0)
+    ) {
+      mismatches.push({
+        key,
+        name: expected.name,
+        expectedTeam: expected.team,
+        savedTeam: saved.team,
+        issue: "value_mismatch",
+        expectedAge: expected.age,
+        savedAge: saved.age,
+        ageDiffSavedMinusExpected: Number(saved.age) - Number(expected.age),
+        expectedOvr: expected.overall,
+        savedOvr: saved.overall,
+        expectedPot: expected.potential,
+        savedPot: saved.potential,
+        expectedLastBirthdayYear: expected.lastBirthdayYear,
+        savedLastBirthdayYear: saved.lastBirthdayYear,
+      });
+    }
+  }
+
+  const summary = {
+    label,
+    matched,
+    expectedPlayers: expectedMap.size,
+    savedPlayers: savedMap.size,
+    mismatchCount: mismatches.length,
+    mismatchExamples: mismatches.slice(0, 25),
+    trackedExpected: ppGetAgeRows(expectedLeague),
+    trackedSaved: ppGetAgeRows(savedLeague),
+    extra,
+  };
+
+  console.groupCollapsed(
+    `%c[AGEDBG:PERSISTENCE] ${label}`,
+    mismatches.length ? "color:#ef4444;font-weight:bold" : "color:#22c55e;font-weight:bold"
+  );
+  console.log(summary);
+  try { console.table(summary.trackedExpected); } catch {}
+  try { console.table(summary.trackedSaved); } catch {}
+  if (mismatches.length) {
+    console.error("[AGEDBG:PERSISTENCE_MISMATCH] saved leagueData does not match expected updatedLeague", summary);
+    try { console.table(mismatches.slice(0, 25)); } catch {}
+  }
+  console.groupEnd();
+
+  return summary;
+}
+
+function ppDeltaAgeSummary(deltas = {}, label = "delta-age-summary", extra = {}) {
+  const entries = Object.entries(deltas || {});
+  const rows = entries.map(([key, delta]) => ({
+    key,
+    ageDelta: Number(delta?.age || 0),
+    overallDelta: Number(delta?.overall || 0),
+    offDelta: Number(delta?.offRating || 0),
+    defDelta: Number(delta?.defRating || 0),
+    staminaDelta: Number(delta?.stamina || 0),
+    potentialDelta: Number(delta?.potential || 0),
+  }));
+
+  const summary = {
+    label,
+    totalDeltaRows: rows.length,
+    rowsWithAgeDelta: rows.filter((r) => r.ageDelta !== 0).length,
+    agePlusOneRows: rows.filter((r) => r.ageDelta === 1).length,
+    ageZeroRows: rows.filter((r) => r.ageDelta === 0).length,
+    ageOtherRows: rows.filter((r) => r.ageDelta !== 0 && r.ageDelta !== 1).length,
+    trackedRows: rows.filter((r) => PP_AGE_DEBUG_TRACKED_NAMES.some((name) => r.key.includes(name))),
+    ageExamples: rows.filter((r) => r.ageDelta !== 0).slice(0, 20),
+    noAgeExamples: rows.filter((r) => r.ageDelta === 0).slice(0, 20),
+    extra,
+  };
+
+  console.groupCollapsed(`%c[AGEDBG:DELTAS] ${label}`, "color:#38bdf8;font-weight:bold");
+  console.log(summary);
+  try { console.table(summary.trackedRows); } catch {}
+  try { console.table(summary.ageExamples); } catch {}
+  console.groupEnd();
+
+  return summary;
+}
+
 function ppTrySetItem(key, value, label) {
   const raw = typeof value === "string" ? value : JSON.stringify(value);
   const kb = Number((ppByteSize(raw) / 1024).toFixed(1));
@@ -485,6 +808,268 @@ function stampAgingGuards(league, seasonYear) {
   }
   return league;
 }
+
+
+function compactProgressionStoryContext(story) {
+  if (!story || typeof story !== "object") return null;
+
+  return {
+    eventType: story.eventType || "",
+    headline: story.headline || "",
+    subtitle: story.subtitle || story.contractLine || "",
+    playerName: story.playerName || "",
+    teamName: story.teamName || story.teamDisplayName || "",
+    day: story.day ?? null,
+    contractLine: story.contractLine || "",
+    totalValue: story.totalValue || 0,
+    years: story.years || 0,
+    aav: story.aav || 0,
+    spendingType: story.spendingType || "",
+    exceptionType: story.exceptionType || "",
+    payrollZone: story.payrollZone || "",
+    teamDirection: story.teamDirection || "",
+    needScore: story.needScore ?? null,
+    positionBucket: story.positionBucket || "",
+    rfaMatched: Boolean(story.rfaMatched),
+    originalOfferTeamName: story.originalOfferTeamName || "",
+    rightsTeamName: story.rightsTeamName || "",
+  };
+}
+
+function compactProgressionOffer(offer = {}) {
+  if (!offer || typeof offer !== "object") return offer;
+
+  return {
+    offerId: offer.offerId || null,
+    playerId: offer.playerId ?? null,
+    playerName: offer.playerName || "",
+    playerKey: offer.playerKey || "",
+    teamName: offer.teamName || "",
+    source: offer.source || "",
+    status: offer.status || "",
+    submittedDay: offer.submittedDay ?? offer.day ?? null,
+    day: offer.day ?? offer.submittedDay ?? null,
+    contract: offer.contract || null,
+    salaryByYear: Array.isArray(offer.salaryByYear) ? offer.salaryByYear : undefined,
+    years: offer.years || offer.contract?.salaryByYear?.length || 0,
+    totalValue: offer.totalValue || 0,
+    aav: offer.aav || 0,
+    currentYearSalary:
+      offer.currentYearSalary ||
+      offer.contract?.salaryByYear?.[0] ||
+      offer.salaryByYear?.[0] ||
+      0,
+    playerViewScore: offer.playerViewScore || 0,
+    spendingType: offer.spendingType || "",
+    exceptionType: offer.exceptionType || "",
+    payrollZone: offer.payrollZone || "",
+    teamDirection: offer.teamDirection || "",
+    needScore: offer.needScore ?? offer.rosterNeed?.needScore ?? null,
+    positionBucket: offer.positionBucket || offer.rosterNeed?.position || "",
+    rfaOfferSheet: Boolean(offer.rfaOfferSheet),
+    rfaMatched: Boolean(offer.rfaMatched),
+    rightsTeamName: offer.rightsTeamName || "",
+    originalOfferTeamName: offer.originalOfferTeamName || "",
+    matchedOriginalTeamName: offer.matchedOriginalTeamName || "",
+  };
+}
+
+function compactProgressionSigning(row = {}, emergency = false) {
+  if (!row || typeof row !== "object") return row;
+
+  return {
+    day: row.day ?? null,
+    playerId: row.playerId ?? null,
+    playerName: row.playerName || "",
+    playerKey: row.playerKey || "",
+    teamName: row.teamName || row.signedWith || "",
+    signedWith: row.signedWith || row.teamName || "",
+    contract: row.contract || row.signedContract || null,
+    totalValue: row.totalValue || row.signedTotalValue || 0,
+    aav: row.aav || 0,
+    years: row.years || row.signedYears || row.contract?.salaryByYear?.length || 0,
+    spendingType: row.spendingType || "",
+    exceptionType: row.exceptionType || "",
+    payrollZone: row.payrollZone || "",
+    rfaMatched: Boolean(row.rfaMatched),
+    originalOfferTeamName: row.originalOfferTeamName || "",
+    matchedOriginalTeamName: row.matchedOriginalTeamName || "",
+    declinedRightsTeamName: row.declinedRightsTeamName || "",
+    exceptionUsage: row.exceptionUsage
+      ? {
+          type: row.exceptionUsage.type || "",
+          amountUsed: row.exceptionUsage.amountUsed || 0,
+        }
+      : null,
+    userOfferOutcomes: Array.isArray(row.userOfferOutcomes)
+      ? row.userOfferOutcomes.slice(0, emergency ? 4 : 8).map((outcome) => ({
+          id: outcome.id || "",
+          day: outcome.day ?? null,
+          playerId: outcome.playerId ?? null,
+          playerName: outcome.playerName || "",
+          playerKey: outcome.playerKey || "",
+          userTeamName: outcome.userTeamName || "",
+          status: outcome.status || "",
+          offerStatus: outcome.offerStatus || "",
+          signedWith: outcome.signedWith || "",
+          signedContract: outcome.signedContract || null,
+          signedTotalValue: outcome.signedTotalValue || 0,
+          signedYears: outcome.signedYears || 0,
+          userOfferTotalValue: outcome.userOfferTotalValue || 0,
+          userOfferYears: outcome.userOfferYears || 0,
+          rfaMatched: Boolean(outcome.rfaMatched),
+          originalOfferTeamName: outcome.originalOfferTeamName || "",
+        }))
+      : [],
+    allOffers: Array.isArray(row.allOffers)
+      ? row.allOffers.slice(0, emergency ? 3 : 5).map(compactProgressionOffer)
+      : [],
+    storyContext: compactProgressionStoryContext(row.storyContext),
+  };
+}
+
+function compactProgressionActionLogEntry(entry = {}, emergency = false) {
+  if (!entry || typeof entry !== "object") return entry;
+
+  return {
+    day: entry.day ?? entry.dayResolved ?? null,
+    dayResolved: entry.dayResolved ?? entry.day ?? null,
+    type: entry.type || entry.eventType || "",
+    title: entry.title || entry.headline || "",
+    summary: entry.summary || entry.message || "",
+    stateSummary: entry.stateSummary
+      ? {
+          currentDay: entry.stateSummary.currentDay ?? null,
+          maxDays: entry.stateSummary.maxDays ?? null,
+          freeAgentCount: entry.stateSummary.freeAgentCount ?? null,
+          activeOfferCount: entry.stateSummary.activeOfferCount ?? null,
+          signedCount: entry.stateSummary.signedCount ?? null,
+          generatedOfferCount: entry.stateSummary.generatedOfferCount ?? null,
+        }
+      : null,
+    signings: Array.isArray(entry.signings)
+      ? entry.signings.slice(0, emergency ? 40 : 120).map((row) => compactProgressionSigning(row, emergency))
+      : [],
+    generatedOffers: Array.isArray(entry.generatedOffers)
+      ? entry.generatedOffers.slice(0, emergency ? 80 : 180).map(compactProgressionOffer)
+      : [],
+    userOfferOutcomes: Array.isArray(entry.userOfferOutcomes)
+      ? entry.userOfferOutcomes.slice(0, emergency ? 20 : 60).map((row) => ({
+          id: row.id || "",
+          day: row.day ?? null,
+          playerId: row.playerId ?? null,
+          playerName: row.playerName || "",
+          playerKey: row.playerKey || "",
+          userTeamName: row.userTeamName || "",
+          status: row.status || "",
+          offerStatus: row.offerStatus || "",
+          signedWith: row.signedWith || "",
+          signedTotalValue: row.signedTotalValue || 0,
+          signedYears: row.signedYears || 0,
+          rfaMatched: Boolean(row.rfaMatched),
+          originalOfferTeamName: row.originalOfferTeamName || "",
+        }))
+      : [],
+    rightsRenounceLog: Array.isArray(entry.rightsRenounceLog)
+      ? entry.rightsRenounceLog.slice(0, emergency ? 20 : 60)
+      : [],
+    blockedCapHoldRenounceLog: Array.isArray(entry.blockedCapHoldRenounceLog)
+      ? entry.blockedCapHoldRenounceLog.slice(0, emergency ? 20 : 60)
+      : [],
+  };
+}
+
+function compactFreeAgencyStateForProgressionStorage(state, emergency = false) {
+  if (!state || typeof state !== "object") return state;
+
+  return {
+    ...state,
+    // These active-market structures are not needed once progression is running.
+    offersByPlayer: {},
+    latestResults: null,
+    pendingUserDecisions: [],
+    pendingRfaMatchDecisions: [],
+    pendingUserTeamSnapshot: null,
+    teamNeedProfiles: emergency ? {} : state.teamNeedProfiles || {},
+    signedPlayersLog: Array.isArray(state.signedPlayersLog)
+      ? state.signedPlayersLog
+          .slice(-1 * (emergency ? 80 : 220))
+          .map((row) => compactProgressionSigning(row, emergency))
+      : [],
+    offerHistory: Array.isArray(state.offerHistory)
+      ? state.offerHistory
+          .slice(-1 * (emergency ? 40 : 120))
+          .map(compactProgressionOffer)
+      : [],
+    fullActionLog: Array.isArray(state.fullActionLog)
+      ? state.fullActionLog
+          .slice(-1 * (emergency ? 6 : 12))
+          .map((entry) => compactProgressionActionLogEntry(entry, emergency))
+      : [],
+    rightsRenounceLog: Array.isArray(state.rightsRenounceLog)
+      ? state.rightsRenounceLog.slice(-1 * (emergency ? 40 : 120))
+      : [],
+    blockedCapHoldRenounceLog: Array.isArray(state.blockedCapHoldRenounceLog)
+      ? state.blockedCapHoldRenounceLog.slice(-1 * (emergency ? 40 : 120))
+      : [],
+    dailyLog: Array.isArray(state.dailyLog)
+      ? state.dailyLog.slice(-1 * (emergency ? 5 : 12))
+      : [],
+    userOfferOutcomeLog: Array.isArray(state.userOfferOutcomeLog)
+      ? state.userOfferOutcomeLog.slice(-1 * (emergency ? 40 : 120)).map((row) => ({
+          ...row,
+          storyContext: compactProgressionStoryContext(row.storyContext),
+        }))
+      : [],
+  };
+}
+
+function compactLeagueDataForProgressionStorage(league, emergency = false) {
+  if (!league || typeof league !== "object") return league;
+
+  return {
+    ...league,
+    freeAgencyState: compactFreeAgencyStateForProgressionStorage(league.freeAgencyState, emergency),
+  };
+}
+
+function getProgressionAgeCompletionAudit(league, seasonYear) {
+  const teams = getAllTeamsFromLeague(league);
+  const rows = [];
+
+  for (const team of teams || []) {
+    const teamName = team?.name || "";
+    for (const player of team?.players || []) {
+      const lastBirthdayYear = Number(player?.lastBirthdayYear);
+      rows.push({
+        name: player?.name || "",
+        team: teamName,
+        age: player?.age,
+        lastBirthdayYear: Number.isFinite(lastBirthdayYear) ? lastBirthdayYear : null,
+        stale:
+          !Number.isFinite(lastBirthdayYear) ||
+          lastBirthdayYear < Number(seasonYear || 0),
+      });
+    }
+  }
+
+  const staleRows = rows.filter((row) => row.stale);
+
+  return {
+    seasonYear: Number(seasonYear || 0),
+    totalPlayers: rows.length,
+    staleCount: staleRows.length,
+    staleExamples: staleRows.slice(0, 12),
+    ok:
+      rows.length > 0 &&
+      staleRows.length <= Math.max(2, Math.floor(rows.length * 0.01)),
+  };
+}
+
+function isProgressionLeagueValidForSeason(league, seasonYear) {
+  return getProgressionAgeCompletionAudit(league, seasonYear).ok;
+}
+
 
 function readJsonSafe(key, fallback) {
   try {
@@ -983,6 +1568,9 @@ export default function PlayerProgression() {
           : 0,
     });
 
+    ppDump(`HYDRATE_BEFORE_SET_STATE_${label}`, updatedLeague, { label });
+    ppPersistenceAudit(updatedLeague, readJsonSafe(LEAGUE_KEY, null), `HYDRATE_EXPECTED_vs_STORAGE_${label}`, { label });
+
     setDeltas(savedDeltas || {});
     setLeagueData(updatedLeague);
 
@@ -1030,8 +1618,12 @@ export default function PlayerProgression() {
       console.error("[PlayerProgression] failed to save league meta on return", err);
     }
 
+    const savedLeagueForReturn = readJsonSafe(LEAGUE_KEY, null);
+    const returnAgeAudit = getProgressionAgeCompletionAudit(savedLeagueForReturn, resolvedSeasonYear);
+    const returnProgressionValid = savedDeltaCount > 0 && returnAgeAudit.ok;
+
     try {
-      if (savedDeltaCount > 0) {
+      if (returnProgressionValid) {
         const existingProgMeta = readJsonSafe(PROG_META_KEY, {}) || {};
         localStorage.setItem(
           PROG_META_KEY,
@@ -1045,6 +1637,12 @@ export default function PlayerProgression() {
             stage: "DONE",
           })
         );
+      } else {
+        console.error("[PlayerProgression] refusing to mark progression done on return because saved leagueData failed validation.", {
+          resolvedSeasonYear,
+          savedDeltaCount,
+          returnAgeAudit,
+        });
       }
     } catch (err) {
       console.error("[PlayerProgression] failed to save progression meta on return", err);
@@ -1058,19 +1656,31 @@ export default function PlayerProgression() {
           ...existingOffseason,
           active: true,
           seasonYear: resolvedSeasonYear,
-          progressionComplete: savedDeltaCount > 0,
+          progressionComplete: returnProgressionValid,
         })
       );
     } catch (err) {
       console.error("[PlayerProgression] failed to save offseason completion on return", err);
     }
 
-    if (savedDeltaCount <= 0) {
-      console.warn("[PlayerProgression] returning to offseason without saved deltas", {
+    if (!returnProgressionValid) {
+      console.warn("[PlayerProgression] returning to offseason without valid saved progression", {
         resolvedSeasonYear,
         savedDeltaCount,
+        returnAgeAudit,
       });
     }
+
+    ppDump("RETURN_TO_OFFSEASON_PRE_NAV", leagueData, {
+      resolvedSeasonYear,
+      savedDeltaCount,
+    });
+    ppPersistenceAudit(leagueData, readJsonSafe(LEAGUE_KEY, null), "RETURN_TO_OFFSEASON_CONTEXT_vs_STORAGE", {
+      resolvedSeasonYear,
+      savedDeltaCount,
+    });
+    ppLogAgeGuards("RETURN_TO_OFFSEASON_CONTEXT_GUARDS", leagueData, resolvedSeasonYear);
+    ppLogAgeGuards("RETURN_TO_OFFSEASON_STORAGE_GUARDS", readJsonSafe(LEAGUE_KEY, null), resolvedSeasonYear);
 
     navigate("/offseason");
   }
@@ -1120,6 +1730,36 @@ export default function PlayerProgression() {
         storage: ppFindPlayer(readJsonSafe(LEAGUE_KEY, null), name),
         deltasByName: deltas?.[name] || null,
       }),
+      ageAudit: (label = "manual-age-audit") => {
+        const storageLeague = readJsonSafe(LEAGUE_KEY, null);
+        return ppAgeAudit(storageLeague, leagueData, label, {
+          note: "Compares saved localStorage leagueData to current React leagueData.",
+        });
+      },
+      persistenceAudit: (label = "manual-persistence-audit") => {
+        const storageLeague = readJsonSafe(LEAGUE_KEY, null);
+        return ppPersistenceAudit(leagueData, storageLeague, label, {
+          note: "Checks whether current React leagueData is exactly saved in localStorage.",
+        });
+      },
+      guards: (label = "manual-guards") => {
+        const seasonYear = inferSeasonYear(leagueData);
+        return {
+          context: ppLogAgeGuards(`${label}-context`, leagueData, seasonYear),
+          storage: ppLogAgeGuards(`${label}-storage`, readJsonSafe(LEAGUE_KEY, null), seasonYear),
+        };
+      },
+      deltasAge: (label = "manual-deltas-age") => ppDeltaAgeSummary(deltas, label),
+      trackedAges: () => {
+        const storageLeague = readJsonSafe(LEAGUE_KEY, null);
+        const rows = {
+          context: ppGetAgeRows(leagueData),
+          storage: ppGetAgeRows(storageLeague),
+        };
+        console.table(rows.context);
+        console.table(rows.storage);
+        return rows;
+      },
       clearProgressionOnly: () => {
         localStorage.removeItem(PROG_META_KEY);
         localStorage.removeItem(DELTAS_KEY);
@@ -1279,9 +1919,21 @@ export default function PlayerProgression() {
             try {
               const updatedLeague = readJsonSafe(LEAGUE_KEY, null);
               const savedDeltas = readJsonSafe(DELTAS_KEY, {});
+              const savedAgeAudit = getProgressionAgeCompletionAudit(updatedLeague, seasonYear);
 
-              if (updatedLeague) {
+              if (updatedLeague && savedAgeAudit.ok) {
                 hydrateProgressedLeagueIntoState(updatedLeague, savedDeltas || {}, "inflight-attached-done");
+              } else {
+                console.error("[PlayerProgression] Inflight run finished with invalid saved ages. Clearing bad progression cache.", {
+                  runId,
+                  seasonYear,
+                  savedAgeAudit,
+                });
+                try {
+                  localStorage.removeItem(PROG_META_KEY);
+                  localStorage.removeItem(DELTAS_KEY);
+                } catch {}
+                setTimeout(() => window.location.reload(), 0);
               }
             } finally {
               clearInterval(inflightInterval);
@@ -1310,28 +1962,33 @@ export default function PlayerProgression() {
       progMeta = null;
     }
 
-    // If already applied this season, only trust the lock if deltas actually exist.
+    // If already applied this season, only trust the lock if deltas exist AND saved leagueData proves players aged for this season.
     if (progMeta?.appliedForSeasonYear === seasonYear) {
       const savedDeltas = readJsonSafe(DELTAS_KEY, {});
       const savedDeltaCount =
         savedDeltas && typeof savedDeltas === "object"
           ? Object.keys(savedDeltas).length
           : 0;
+      const savedLeague = readJsonSafe(LEAGUE_KEY, null);
+      const savedAgeAudit = getProgressionAgeCompletionAudit(savedLeague, seasonYear);
+      const canTrustSavedProgression =
+        savedDeltaCount > 0 &&
+        progMeta?.deltasSaved !== false &&
+        savedAgeAudit.ok;
 
-      if (savedDeltaCount > 0 && progMeta?.deltasSaved !== false) {
-        ppDump("BRANCH_ALREADY_APPLIED", leagueData, { runId, seasonYear, savedDeltaCount, progMeta });
+      if (canTrustSavedProgression) {
+        ppDump("BRANCH_ALREADY_APPLIED", leagueData, { runId, seasonYear, savedDeltaCount, progMeta, savedAgeAudit });
         console.log("[PlayerProgression] Already applied this season. Loading saved deltas and saved league.", {
           seasonYear,
           savedDeltaCount,
           progMeta,
+          savedAgeAudit,
         });
 
         setDeltas(savedDeltas);
 
         if (!hasHydratedSavedProgressionRef.current) {
           hasHydratedSavedProgressionRef.current = true;
-
-          const savedLeague = readJsonSafe(LEAGUE_KEY, null);
 
           if (savedLeague) {
             const currentSig = leagueProgressionSignature(leagueData);
@@ -1360,10 +2017,12 @@ export default function PlayerProgression() {
         seasonYear,
         progMeta,
         savedDeltaCount,
+        savedAgeAudit,
       });
 
       try {
         localStorage.removeItem(PROG_META_KEY);
+        localStorage.removeItem(DELTAS_KEY);
       } catch {}
 
       progMeta = null;
@@ -1398,10 +2057,19 @@ export default function PlayerProgression() {
       try {
         const beforeSnapshot = snapshotLeague(leagueData);
 
+        ppDump("ASYNC_BEFORE_SNAPSHOT_CREATED", beforeSnapshot, { runId, seasonYear });
+        ppLogAgeGuards("BEFORE_SNAPSHOT_GUARDS", beforeSnapshot, seasonYear);
+        console.groupCollapsed("%c[AGEDBG:TRACKED_BEFORE_COMPUTE]", "color:#a855f7;font-weight:bold");
+        try { console.table(ppGetAgeRows(beforeSnapshot)); } catch {}
+        console.groupEnd();
+
         const leagueForProg = snapshotLeague(leagueData);
         leagueForProg.seasonYear = seasonYear;
         leagueForProg.currentSeasonYear = seasonYear;
         leagueForProg.seasonStartYear = seasonYear;
+
+        ppDump("ASYNC_LEAGUE_FOR_PROG_READY", leagueForProg, { runId, seasonYear });
+        ppLogAgeGuards("LEAGUE_FOR_PROG_GUARDS", leagueForProg, seasonYear);
 
         console.log("[PlayerProgression] computePlayerProgression POST", {
           seasonYear,
@@ -1462,10 +2130,34 @@ export default function PlayerProgression() {
         updatedLeague.currentSeasonYear = seasonYear;
         updatedLeague.seasonStartYear = seasonYear;
 
+        ppDump("PYTHON_RAW_UPDATED_LEAGUE_BEFORE_STAMP", updatedLeague, { runId, seasonYear });
+        ppAgeAudit(beforeSnapshot, updatedLeague, "BEFORE_vs_PYTHON_RAW_UPDATED_LEAGUE", {
+          runId,
+          seasonYear,
+          checkpoint: "immediately after worker return, before stampAgingGuards and recomputeDerivedRatingsInLeague",
+        });
+        ppLogAgeGuards("PYTHON_RAW_UPDATED_LEAGUE_GUARDS", updatedLeague, seasonYear);
+
         updatedLeague = stampAgingGuards(updatedLeague, seasonYear);
+
+        ppDump("AFTER_STAMP_AGING_GUARDS", updatedLeague, { runId, seasonYear });
+        ppAgeAudit(beforeSnapshot, updatedLeague, "BEFORE_vs_AFTER_STAMP_AGING_GUARDS", {
+          runId,
+          seasonYear,
+          checkpoint: "after stampAgingGuards",
+        });
+        ppLogAgeGuards("AFTER_STAMP_AGING_GUARDS", updatedLeague, seasonYear);
 
         // FORCE LeagueEditor formulas as the source of truth for derived ratings
         updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
+
+        ppDump("AFTER_RECOMPUTE_DERIVED_RATINGS", updatedLeague, { runId, seasonYear });
+        ppAgeAudit(beforeSnapshot, updatedLeague, "BEFORE_vs_FINAL_UPDATED_LEAGUE_AFTER_RECOMPUTE", {
+          runId,
+          seasonYear,
+          checkpoint: "final updatedLeague before deltas are built and before save",
+        });
+        ppLogAgeGuards("FINAL_UPDATED_LEAGUE_GUARDS", updatedLeague, seasonYear);
 
         // Build deltas from final values so the UI matches exactly
         const newDeltas = buildProgressionDeltas(beforeSnapshot, updatedLeague);
@@ -1492,7 +2184,18 @@ export default function PlayerProgression() {
         });
 
         const deltaCount = Object.keys(newDeltas || {}).length;
+        const ageDeltaDebugSummary = ppDeltaAgeSummary(newDeltas, "NEW_DELTAS_AFTER_BUILD", {
+          runId,
+          seasonYear,
+          deltaCount,
+        });
         console.log("[PlayerProgression] deltas count:", deltaCount);
+        console.log("[AGEDBG:AGE_DELTA_CHECKPOINT]", {
+          runId,
+          seasonYear,
+          deltaCount,
+          ageDeltaDebugSummary,
+        });
 
         if (deltaCount === 0) {
           throw new Error(`[PlayerProgression] deltaCount = 0 for seasonYear = ${seasonYear}. Refusing to lock season.`);
@@ -1540,6 +2243,10 @@ export default function PlayerProgression() {
 
         console.log("[PlayerProgression] cleared season stat keys before saving league:", statKeysToClearBeforeSave);
 
+        let leagueForSave = compactLeagueDataForProgressionStorage(updatedLeague, false);
+        let didSaveLeague = false;
+        let didSaveDeltas = false;
+
         try {
           console.log("[PPDBG] writing DELTAS_KEY", {
             runId,
@@ -1547,19 +2254,71 @@ export default function PlayerProgression() {
             deltaCount: Object.keys(newDeltas || {}).length,
           });
 
-          ppTrySetItem(DELTAS_KEY, newDeltas, "progression-deltas");
+          didSaveDeltas = ppTrySetItem(DELTAS_KEY, newDeltas, "progression-deltas");
 
           console.log("[PPDBG] writing LEAGUE_KEY", {
             runId,
             seasonYear,
+            compactedForProgressionSave: true,
           });
 
-          ppTrySetItem(LEAGUE_KEY, updatedLeague, "progressed-leagueData");
+          didSaveLeague = ppTrySetItem(LEAGUE_KEY, leagueForSave, "progressed-leagueData");
 
-          ppDump("AFTER_WRITING_LEAGUE_AND_DELTAS", leagueData, { runId, seasonYear, deltaCount });
+          if (!didSaveLeague) {
+            console.warn("[PlayerProgression] Normal compact progression save failed. Retrying emergency compact save.", {
+              runId,
+              seasonYear,
+            });
+            leagueForSave = compactLeagueDataForProgressionStorage(updatedLeague, true);
+            didSaveLeague = ppTrySetItem(LEAGUE_KEY, leagueForSave, "progressed-leagueData-emergency-compact");
+          }
+
+          const savedLeagueImmediately = readJsonSafe(LEAGUE_KEY, null);
+          const savedDeltasImmediately = readJsonSafe(DELTAS_KEY, {});
+          const savedAgeAudit = getProgressionAgeCompletionAudit(savedLeagueImmediately, seasonYear);
+
+          ppDump("AFTER_WRITING_LEAGUE_AND_DELTAS", leagueForSave, {
+            runId,
+            seasonYear,
+            deltaCount,
+            didSaveDeltas,
+            didSaveLeague,
+            savedAgeAudit,
+          });
+          ppPersistenceAudit(leagueForSave, savedLeagueImmediately, "UPDATED_LEAGUE_vs_LOCALSTORAGE_IMMEDIATELY_AFTER_SAVE", {
+            runId,
+            seasonYear,
+            didSaveDeltas,
+            didSaveLeague,
+            savedAgeAudit,
+          });
+          ppAgeAudit(beforeSnapshot, savedLeagueImmediately, "BEFORE_vs_SAVED_LOCALSTORAGE_AFTER_SAVE", {
+            runId,
+            seasonYear,
+            didSaveLeague,
+            savedAgeAudit,
+          });
+          ppLogAgeGuards("SAVED_LOCALSTORAGE_AFTER_SAVE_GUARDS", savedLeagueImmediately, seasonYear);
+          ppDeltaAgeSummary(savedDeltasImmediately, "SAVED_DELTAS_IMMEDIATELY_AFTER_SAVE", {
+            runId,
+            seasonYear,
+            didSaveDeltas,
+          });
+
+          if (!didSaveLeague || !didSaveDeltas) {
+            throw new Error(`[PlayerProgression] Refusing to mark progression complete because storage save failed. didSaveLeague=${didSaveLeague}, didSaveDeltas=${didSaveDeltas}`);
+          }
+
+          if (!savedAgeAudit.ok) {
+            throw new Error(`[PlayerProgression] Refusing to mark progression complete because saved leagueData failed age validation for ${seasonYear}. staleCount=${savedAgeAudit.staleCount}`);
+          }
+
           console.log("[PPDBG] saved progression league + deltas", {
             runId,
             seasonYear,
+            didSaveLeague,
+            didSaveDeltas,
+            savedAgeAudit,
             savedDeltaCount: Object.keys(readJsonSafe(DELTAS_KEY, {}) || {}).length,
           });
         } catch (e) {
@@ -1627,9 +2386,22 @@ export default function PlayerProgression() {
           })
         );
 
+        ppDump("AFTER_MARKING_PROGRESSION_DONE_AND_OFFSEASON_COMPLETE", leagueForSave, {
+          runId,
+          seasonYear,
+          deltaCount,
+          progMeta: readJsonSafe(PROG_META_KEY, null),
+          offseasonState: readJsonSafe(OFFSEASON_STATE_KEY, null),
+        });
+        ppPersistenceAudit(leagueForSave, readJsonSafe(LEAGUE_KEY, null), "UPDATED_LEAGUE_vs_STORAGE_AFTER_DONE_MARKERS", {
+          runId,
+          seasonYear,
+          deltaCount,
+        });
+
         if (shouldUpdateReactState) {
           ppDump("BEFORE_REACT_HYDRATE_OWNER", leagueData, { runId, seasonYear, deltaCount });
-          hydrateProgressedLeagueIntoState(updatedLeague, newDeltas, "owner-run-complete");
+          hydrateProgressedLeagueIntoState(leagueForSave, newDeltas, "owner-run-complete");
         } else {
           console.log("[PlayerProgression] Skipped React state update because owner effect was cleaned up. Attached run will load saved results.", {
             runId,
@@ -1637,7 +2409,7 @@ export default function PlayerProgression() {
           });
         }
 
-        ppDump("DONE_FINAL", updatedLeague, { runId, seasonYear, deltaCount, shouldUpdateReactState });
+        ppDump("DONE_FINAL", leagueForSave, { runId, seasonYear, deltaCount, shouldUpdateReactState });
         console.log("[PPDBG] DONE", {
           runId,
           seasonYear,
