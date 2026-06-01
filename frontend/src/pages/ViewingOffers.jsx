@@ -2582,6 +2582,62 @@ const handleReturnToOffseasonHub = () => {
       }
 
       if (!hadPendingUserDecisions) {
+        const shouldResumeAfterImmediateRfaMatch = Boolean(
+          leagueData?.freeAgencyState?.resumeAdvanceAfterImmediateRfaMatch ||
+            leagueData?.freeAgencyState?.forceViewingOffersReturnReason === "immediate_rfa_match"
+        );
+
+        if (shouldResumeAfterImmediateRfaMatch) {
+          if (!selectedTeam?.name) {
+            setActionError("No team selected.");
+            return;
+          }
+
+          if (typeof processPendingUserFreeAgencyDecisions !== "function") {
+            setActionError("Pending free-agency decisions are not wired in simEnginePy.js yet.");
+            return;
+          }
+
+          const backendLeagueData = buildLeagueDataForFreeAgencyBackendAction(leagueData);
+          const resumeRes = await processPendingUserFreeAgencyDecisions(
+            backendLeagueData,
+            selectedTeam.name,
+            [],
+            {},
+            []
+          );
+
+          if (!resumeRes?.ok || !resumeRes?.leagueData) {
+            if (resumeRes?.leagueData) {
+              applyLeagueUpdate(resumeRes.leagueData);
+            }
+            setActionError(resumeRes?.reason || "Failed to continue after the RFA match update.");
+            return;
+          }
+
+          const latest = {
+            dayResolved: resumeRes?.resumedAfterImmediateRfaMatch
+              ? dayResolved ?? leagueData?.freeAgencyState?.currentDay ?? null
+              : resumeRes?.dayResolved ?? resumeRes?.stateSummary?.currentDay ?? null,
+            signings: resumeRes?.processedSignings || [],
+            generatedOffers: resumeRes?.generatedOffers || [],
+            stateSummary: resumeRes?.stateSummary || null,
+          };
+
+          applyLeagueUpdateWithLatestResults(resumeRes.leagueData, latest);
+
+          if (!resumeRes?.stateSummary?.isActive) {
+            finalizeFreeAgencyComplete(resumeRes.leagueData, latest);
+            localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+            navigate("/player-progression");
+            return;
+          }
+
+          localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
+          navigate("/free-agents");
+          return;
+        }
+
         localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/free-agents");
 
         if (leagueData) {
@@ -2613,6 +2669,13 @@ const handleReturnToOffseasonHub = () => {
         generatedOffers: keepVisibleGeneratedOffers(processRes?.generatedOffers || []),
         stateSummary: baseStateSummary || latestResults?.stateSummary || null,
       };
+
+      if (processRes?.immediateRfaMatch) {
+        applyLeagueUpdateWithLatestResults(baseLeague, latest);
+        localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+        navigate("/viewing-offers");
+        return;
+      }
 
       if (baseStateSummary && !baseStateSummary.isActive) {
         finalizeFreeAgencyComplete(baseLeague, latest);

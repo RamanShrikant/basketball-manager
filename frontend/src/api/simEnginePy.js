@@ -124,6 +124,67 @@ function startWorker() {
       }
       return;
     }
+    if (msg.type === "draft-lottery-result") {
+  const entry = pending.get(msg.requestId);
+  if (!entry) return;
+  pending.delete(msg.requestId);
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.resolve(deepFromEntries(msg.payload));
+  return;
+}
+
+if (msg.type === "draft-lottery-error") {
+  const entry = pending.get(msg.requestId);
+  if (!entry) return;
+  pending.delete(msg.requestId);
+  if (entry.timer) clearTimeout(entry.timer);
+  const err = msg.error || "Draft lottery failed";
+  if (entry.reject) entry.reject(new Error(err));
+  else entry.resolve({ ok: false, reason: err });
+  return;
+}
+
+if (msg.type === "draft-action-result") {
+  const entry = pending.get(msg.requestId);
+  if (!entry) return;
+  pending.delete(msg.requestId);
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.resolve(deepFromEntries(msg.payload));
+  return;
+}
+
+if (msg.type === "draft-action-error") {
+  const entry = pending.get(msg.requestId);
+  if (!entry) return;
+  pending.delete(msg.requestId);
+  if (entry.timer) clearTimeout(entry.timer);
+  const err = msg.error || "Draft action failed";
+  if (entry.reject) entry.reject(new Error(err));
+  else entry.resolve({ ok: false, reason: err });
+  return;
+}
+
+if (msg.type === "team-roster-action-result") {
+  const entry = pending.get(msg.requestId);
+  if (!entry) return;
+  pending.delete(msg.requestId);
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.resolve(deepFromEntries(msg.payload));
+  return;
+}
+
+if (msg.type === "team-roster-action-error") {
+  const entry = pending.get(msg.requestId);
+  if (!entry) return;
+  pending.delete(msg.requestId);
+  if (entry.timer) clearTimeout(entry.timer);
+  const err = msg.error || "Team roster action failed";
+  if (entry.reject) entry.reject(new Error(err));
+  else entry.resolve({ ok: false, reason: err });
+  return;
+}
+
+
 
     // batch result
     if (msg.type === "result-batch") {
@@ -1835,6 +1896,147 @@ export function applyRightsManagement(
     });
   });
 }
+export function runDraftLottery(leagueData, payload = {}) {
+  startWorker();
+  const requestId = "DL" + counter++;
+  const TIMEOUT_MS = 20000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("DRAFT_LOTTERY_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "run-draft-lottery",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: deepSanitize(payload),
+    });
+  });
+}
+
+function runDraftAction(action, leagueData, payload = {}) {
+  startWorker();
+  const requestId = "DR" + counter++;
+  const TIMEOUT_MS = action === "sim_rest_of_draft" ? 180000 : 60000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("DRAFT_ACTION_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "run-draft-action",
+      requestId,
+      action,
+      leagueData: deepSanitize(leagueData),
+      payload: deepSanitize(payload),
+    });
+  });
+}
+
+export function initializeDraft(leagueData, payload = {}) {
+  return runDraftAction("initialize_draft", leagueData, payload);
+}
+
+export function makeUserDraftPick(leagueData, payload = {}) {
+  return runDraftAction("make_user_pick", leagueData, payload);
+}
+
+export function simOneDraftPick(leagueData, payload = {}) {
+  return runDraftAction("sim_one_pick", leagueData, payload);
+}
+
+export function simToUserDraftPick(leagueData, payload = {}) {
+  return runDraftAction("sim_to_user_pick", leagueData, payload);
+}
+
+export function simRestOfDraft(leagueData, payload = {}) {
+  return runDraftAction("sim_rest_of_draft", leagueData, payload);
+}
+
+function runTeamRosterAction(action, leagueData, payload = {}) {
+  startWorker();
+  const requestId = "TR" + counter++;
+  const TIMEOUT_MS = 60000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("TEAM_ROSTER_ACTION_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "run-team-roster-action",
+      requestId,
+      action,
+      leagueData: deepSanitize(leagueData),
+      payload: deepSanitize(payload),
+    });
+  });
+}
+
+export function previewRookieSignings(leagueData, payload = {}) {
+  return runTeamRosterAction("preview_rookie_signings", leagueData, payload);
+}
+
+export function applyRookieSignings(leagueData, payload = {}) {
+  return runTeamRosterAction("apply_rookie_signings", leagueData, payload);
+}
+
+export function getRosterRulesSummary(leagueData, payload = {}) {
+  return runTeamRosterAction("get_roster_rules_summary", leagueData, payload);
+}
+
+export function previewRosterFinalization(leagueData, payload = {}) {
+  return runTeamRosterAction("preview_roster_finalization", leagueData, payload);
+}
+
+export function applyRosterFinalization(leagueData, payload = {}) {
+  return runTeamRosterAction("apply_roster_finalization", leagueData, payload);
+}
+
 
 // ------------------------------------------------------------
 // PUBLIC API - PLAYER RETIREMENTS

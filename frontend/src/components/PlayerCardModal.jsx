@@ -192,6 +192,43 @@ function formatBirdLevel(level) {
   return String(level).replaceAll("_", " ");
 }
 
+function getContractType(player) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  return String(player?.contractType || player?.rosterStatus || contract?.type || "standard").toLowerCase();
+}
+
+function getContractTypeLabel(player) {
+  const type = getContractType(player);
+  if (type === "two_way" || type === "two-way") return "Two-Way Contract";
+  if (type === "rookie_scale") return "Rookie Scale";
+  if (type === "minimum") return "Minimum Contract";
+  if (type === "extension") return "Extension";
+  if (type === "free_agent") return "Free Agent";
+  if (type === "unsigned_rookie" || type === "rookie_pending") return "Unsigned Rookie";
+  if (type === "draft_rights") return "Draft Rights";
+  return "Standard Contract";
+}
+
+function getContractTypeTone(player) {
+  const type = getContractType(player);
+  if (type === "two_way" || type === "two-way") return "orange";
+  if (type === "free_agent" || type === "unsigned_rookie" || type === "rookie_pending") return "red";
+  return "green";
+}
+
+function getAssignmentLabel(player) {
+  const status = String(player?.assignmentStatus || "").toLowerCase();
+  if (status === "g_league") return "G League";
+  if (status === "nba") return "NBA Roster";
+  if (status === "free_agent") return "Free Agent";
+  if (status === "unsigned_rookie") return "Unsigned Rookie";
+  return "";
+}
+
+function getPlayerPortraitUrl(player) {
+  return player?.headshot || player?.image || player?.img || resolvePortrait(player) || "";
+}
+
 function getMoodLabel(value) {
   if (value >= 85) return "Very Happy";
   if (value >= 70) return "Happy";
@@ -1194,6 +1231,10 @@ export default function PlayerCardModal({
   const option = player?.contract?.option;
   const optionType = option?.type ? String(option.type).replaceAll("_", " ") : null;
   const rights = player?.rights || {};
+  const portraitUrl = getPlayerPortraitUrl(player);
+  const contractTypeLabel = getContractTypeLabel(player);
+  const contractTypeTone = getContractTypeTone(player);
+  const assignmentLabel = getAssignmentLabel(player);
   const fillPercent = clamp(safeNumber(player?.overall, 0) / 99, 0, 1);
 
   return (
@@ -1267,9 +1308,9 @@ export default function PlayerCardModal({
                   />
                 )}
 
-                {player?.headshot ? (
+                {portraitUrl ? (
                   <img
-                    src={player.headshot}
+                    src={portraitUrl}
                     alt={player.name}
                     className="relative z-10 h-full w-full object-contain object-bottom drop-shadow-2xl"
                     style={{
@@ -1285,11 +1326,11 @@ export default function PlayerCardModal({
               </div>
 
               <div className="relative top-3 min-w-0 flex-1 self-end pb-1 sm:top-4">
-                {rights?.restrictedFreeAgent && (
-                  <div className="mb-3 flex flex-wrap items-center gap-2">
-                    <Chip tone="green">RFA</Chip>
-                  </div>
-                )}
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <Chip tone={contractTypeTone}>{contractTypeLabel}</Chip>
+                  {assignmentLabel && <Chip>{assignmentLabel}</Chip>}
+                  {rights?.restrictedFreeAgent && <Chip tone="green">RFA</Chip>}
+                </div>
 
                 <h2
                   className={`max-w-[620px] break-words font-black leading-[0.92] tracking-tight ${
@@ -1396,10 +1437,12 @@ export default function PlayerCardModal({
                 <div className="pc-soft-border rounded-[28px] border border-white/15 bg-white/[0.04] p-5">
                   <div className="mb-4 flex items-center justify-between gap-4">
                     <h3 className="text-xl font-black">Contract</h3>
-                    <Chip tone={contractYears ? "green" : "neutral"}>{contractYears ? `${contractYears} years` : "No deal"}</Chip>
+                    <Chip tone={contractTypeTone}>{contractTypeLabel}</Chip>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
+                    <StatPill label="Type" value={contractTypeLabel} accent />
+                    <StatPill label="Years" value={contractYears ? `${contractYears}` : "No deal"} />
                     <StatPill label="AAV" value={formatMillions(contractAav)} accent />
                     <StatPill label="Start" value={player?.contract?.startYear || "-"} />
                   </div>
@@ -1433,6 +1476,7 @@ export default function PlayerCardModal({
                     {rights?.rookieScale && <Chip tone="green">Rookie Scale</Chip>}
                     {rights?.restrictedFreeAgent && <Chip tone="green">Restricted FA</Chip>}
                     {player?.meta?.acquiredVia && <Chip>Via {String(player.meta.acquiredVia).replaceAll("_", " ")}</Chip>}
+                    {assignmentLabel && <Chip>{assignmentLabel}</Chip>}
                   </div>
 
                   <div className="mt-4 grid grid-cols-2 gap-3">

@@ -37,6 +37,12 @@ function slugifyId(v) {
     .replace(/(^-|-$)/g, "");
 }
 window.__slug = slugifyId;
+function formatOTLabel(otCount) {
+  const n = Number(otCount || 0);
+  if (!n) return "";
+  return n === 1 ? " (OT)" : ` (${n}OT)`;
+}
+
 function readSavedGameplan(teamName) {
   try {
     const raw = localStorage.getItem(`gameplan_${teamName}`);
@@ -649,6 +655,130 @@ function slimResult(full) {
 
   const makePair = (m, a) => `${m || 0}-${a || 0}`;
 
+  const toNumArray = (value) => {
+    if (!value) return [];
+
+    if (value instanceof Map) {
+      return Array.from(value.values()).map((v) => Number(v) || 0);
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((v) => Number(v) || 0);
+    }
+
+    if (typeof value === "object") {
+      return Object.values(value).map((v) => Number(v) || 0);
+    }
+
+    return [];
+  };
+
+  const sumNums = (arr) =>
+    (arr || []).reduce((sum, value) => sum + (Number(value) || 0), 0);
+
+  const rawPeriods =
+    full.periods ||
+    full.lineScore ||
+    full.linescore ||
+    null;
+
+  const quartersHome = toNumArray(
+    full.quarters_home ||
+      full.quartersHome ||
+      full.home_quarters ||
+      full.homeQuarters ||
+      rawPeriods?.home ||
+      rawPeriods?.Home
+  );
+
+  const quartersAway = toNumArray(
+    full.quarters_away ||
+      full.quartersAway ||
+      full.away_quarters ||
+      full.awayQuarters ||
+      rawPeriods?.away ||
+      rawPeriods?.Away
+  );
+
+  const explicitOtCount = Number(
+    full.ot ??
+      full.overtime ??
+      full.otCount ??
+      rawPeriods?.otCount ??
+      rawPeriods?.ot ??
+      0
+  ) || 0;
+
+  const inferredOtCount = Math.max(
+    0,
+    quartersHome.length - 4,
+    quartersAway.length - 4
+  );
+
+  const rawOts = rawPeriods?.ots || rawPeriods?.otPeriods || {};
+  const rawOtsHome = toNumArray(
+    rawOts?.home ||
+      rawOts?.Home ||
+      rawPeriods?.ots_home ||
+      rawPeriods?.otsHome ||
+      quartersHome.slice(4)
+  );
+  const rawOtsAway = toNumArray(
+    rawOts?.away ||
+      rawOts?.Away ||
+      rawPeriods?.ots_away ||
+      rawPeriods?.otsAway ||
+      quartersAway.slice(4)
+  );
+
+  const otCount = Math.max(
+    explicitOtCount,
+    inferredOtCount,
+    rawOtsHome.length,
+    rawOtsAway.length
+  );
+
+  const fillOts = (arr, count) =>
+    Array.from({ length: count }, (_, idx) => Number(arr[idx] || 0));
+
+  const hasRawIndividualOts = rawOtsHome.length > 0 || rawOtsAway.length > 0;
+  const otsHome = hasRawIndividualOts ? fillOts(rawOtsHome, otCount) : [];
+  const otsAway = hasRawIndividualOts ? fillOts(rawOtsAway, otCount) : [];
+
+  const rawOtBreakdown = rawPeriods?.otBreakdown || {};
+  const otHome = Number(
+    rawOtBreakdown.home ??
+      rawOtBreakdown.Home ??
+      rawPeriods?.ot_home ??
+      rawPeriods?.otHome ??
+      sumNums(otsHome)
+  ) || 0;
+
+  const otAway = Number(
+    rawOtBreakdown.away ??
+      rawOtBreakdown.Away ??
+      rawPeriods?.ot_away ??
+      rawPeriods?.otAway ??
+      sumNums(otsAway)
+  ) || 0;
+
+  const periods =
+    quartersHome.length || quartersAway.length || rawPeriods
+      ? {
+          home: quartersHome.slice(0, 4),
+          away: quartersAway.slice(0, 4),
+          ots: {
+            home: otsHome,
+            away: otsAway,
+          },
+          otCount,
+          otBreakdown: {
+            home: otHome || undefined,
+            away: otAway || undefined,
+          },
+        }
+      : null;
+
   // 🔥 helper to pull makes/attempts from a variety of shapes
   function extractMA(obj, keysM, keysA, stringKeys = []) {
     let m, a;
@@ -761,13 +891,14 @@ const side =
       score: `${homeScore}-${awayScore}`,
       home: homeScore,
       away: awayScore,
-      ot: full.ot ?? 0,
+      ot: otCount,
       side,
     },
     totals: {
       home: homeScore,
       away: awayScore,
     },
+    periods,
     box: {
       home: boxHome,
       away: boxAway,
@@ -1238,6 +1369,47 @@ function buildDefRatingLookupFromLeague(allTeams) {
 }
 
 
+// ------------------------------------------------------------
+// AWARDS: attach rookie eligibility metadata to player stat objects
+// by looking it up from leagueData rosters
+// ------------------------------------------------------------
+function buildAwardRosterMetaLookup(allTeams) {
+  const map = {};
+
+  for (const t of (allTeams || [])) {
+    const teamName = t?.name || t?.team;
+    if (!teamName) continue;
+
+    for (const pl of (t.players || [])) {
+      const playerName = pl?.name || pl?.player;
+      if (!playerName) continue;
+
+      map[`${playerName}__${teamName}`] = {
+        age: pl?.age,
+        draftYear: pl?.draftYear ?? pl?.draft_year,
+        rookieYear: pl?.rookieYear ?? pl?.rookie_year,
+        rookieSeason: pl?.rookieSeason ?? pl?.rookie_season,
+        rookieSeasonYear: pl?.rookieSeasonYear ?? pl?.rookie_season_year,
+        isRookie: pl?.isRookie ?? pl?.is_rookie,
+        rookie: pl?.rookie,
+        rookieEligible: pl?.rookieEligible ?? pl?.rookie_eligible,
+        rotyEligible: pl?.rotyEligible ?? pl?.roty_eligible,
+        proSeasons: pl?.proSeasons ?? pl?.pro_seasons,
+        seasonsPro: pl?.seasonsPro ?? pl?.seasons_pro,
+        yearsPro: pl?.yearsPro ?? pl?.years_pro,
+        yearsOfExperience: pl?.yearsOfExperience ?? pl?.years_of_experience,
+        yoe: pl?.yoe,
+        contractType: pl?.contractType ?? pl?.contract_type,
+        rosterStatus: pl?.rosterStatus ?? pl?.roster_status,
+        contract: pl?.contract,
+        meta: pl?.meta,
+      };
+    }
+  }
+
+  return map;
+}
+
 /* -------------------------------------------------------------------------- */
 /*                           MAIN CALENDAR COMPONENT                          */
 /* -------------------------------------------------------------------------- */
@@ -1372,6 +1544,7 @@ function compactResultForCalendar(slim) {
       home: Number(slim?.winner?.home || 0),
       away: Number(slim?.winner?.away || 0),
     },
+    periods: slim.periods || null,
     box: {
       home: [],
       away: [],
@@ -1879,11 +2052,15 @@ async function computeAndSaveCalendarAwards({
       }
     }
 
+    const rookieMetaMap = buildAwardRosterMetaLookup(staticTeams);
+
     const playersArray = Object.values(currentStats || {}).map((p) => {
       const key = `${p.player}__${p.team}`;
       const def = defMap[key];
+      const rookieMeta = rookieMetaMap[key] || {};
       return {
         ...p,
+        ...rookieMeta,
         def_rating: Number.isFinite(Number(def)) ? Number(def) : 110,
       };
     });
@@ -2889,11 +3066,15 @@ for (const t of staticTeams || []) {
 }
 
 // build playersArray WITH def_rating attached (awards.py reads this)
+const rookieMetaMap = buildAwardRosterMetaLookup(staticTeams);
+
 const playersArray = Object.values(playerStats || {}).map((p) => {
   const key = `${p.player}__${p.team}`;
   const def = defMap[key];
+  const rookieMeta = rookieMetaMap[key] || {};
   return {
     ...p,
+    ...rookieMeta,
     def_rating: Number.isFinite(Number(def)) ? Number(def) : 110,
   };
 });
@@ -3922,7 +4103,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
 
                           {game && game.played && finalScore && (
                             <div className="absolute bottom-2 right-2 text-[11px] bg-green-700 px-2 py-1 rounded">
-                              Final {finalScore}
+                              Final {finalScore}{formatOTLabel(result?.winner?.ot ?? result?.periods?.otCount)}
                             </div>
                           )}
                         </div>
@@ -4078,14 +4259,14 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
       onClick={() => setBoxModal(null)}
     >
       <div
-        className="w-full max-w-[880px] max-h-[90vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-5 shadow-2xl text-white"
+        className="w-full max-w-[1240px] max-h-[90vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-5 shadow-2xl text-white"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex justify-between">
           <h3 className="text-xl font-bold">
             {boxModal.game.away} @ {boxModal.game.home} •{" "}
             {boxModal.result?.winner?.score}
-            {boxModal.result?.winner?.ot ? " (OT)" : ""}
+            {formatOTLabel(boxModal.result?.winner?.ot ?? boxModal.result?.periods?.otCount)}
           </h3>
 
           <button
@@ -4096,51 +4277,131 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        {boxModal.result?.periods &&
+          (() => {
+            const periods = boxModal.result.periods;
+            const awayQ = Array.isArray(periods.away) ? periods.away : [];
+            const homeQ = Array.isArray(periods.home) ? periods.home : [];
+            const awayOts = Array.isArray(periods.ots?.away) ? periods.ots.away : [];
+            const homeOts = Array.isArray(periods.ots?.home) ? periods.ots.home : [];
+            const otCount = Number(periods.otCount || Math.max(awayOts.length, homeOts.length, 0));
+            const hasIndividualOts = awayOts.length > 0 || homeOts.length > 0;
+            const displayOtCount = hasIndividualOts ? otCount : otCount > 0 ? 1 : 0;
+            const legacyOtAway = Number(periods.otBreakdown?.away || 0);
+            const legacyOtHome = Number(periods.otBreakdown?.home || 0);
+
+            const qVal = (arr, idx) =>
+              arr[idx] != null && Number.isFinite(Number(arr[idx]))
+                ? Number(arr[idx])
+                : "—";
+
+            const otVal = (arr, idx, legacyValue) => {
+              if (hasIndividualOts) return qVal(arr, idx);
+              return idx === 0 && legacyValue ? legacyValue : "—";
+            };
+
+            const otHeader = (idx) => (idx === 0 ? "OT" : `${idx + 1}OT`);
+
+            return (
+              <div className="mb-4 overflow-x-auto rounded-lg bg-neutral-800 p-3">
+                <table className="w-full min-w-[520px] text-center text-sm">
+                  <thead className="text-gray-300">
+                    <tr className="border-b border-neutral-700">
+                      <th className="py-1 text-left">Team</th>
+                      <th>Q1</th>
+                      <th>Q2</th>
+                      <th>Q3</th>
+                      <th>Q4</th>
+                      {Array.from({ length: displayOtCount }, (_, idx) => (
+                        <th key={`ot-head-${idx}`}>{otHeader(idx)}</th>
+                      ))}
+                      <th>Final</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b border-neutral-800">
+                      <td className="py-1 text-left font-semibold">
+                        {boxModal.game.away}
+                      </td>
+                      <td>{qVal(awayQ, 0)}</td>
+                      <td>{qVal(awayQ, 1)}</td>
+                      <td>{qVal(awayQ, 2)}</td>
+                      <td>{qVal(awayQ, 3)}</td>
+                      {Array.from({ length: displayOtCount }, (_, idx) => (
+                        <td key={`away-ot-${idx}`}>{otVal(awayOts, idx, legacyOtAway)}</td>
+                      ))}
+                      <td className="font-bold">
+                        {boxModal.result?.totals?.away ?? "—"}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="py-1 text-left font-semibold">
+                        {boxModal.game.home}
+                      </td>
+                      <td>{qVal(homeQ, 0)}</td>
+                      <td>{qVal(homeQ, 1)}</td>
+                      <td>{qVal(homeQ, 2)}</td>
+                      <td>{qVal(homeQ, 3)}</td>
+                      {Array.from({ length: displayOtCount }, (_, idx) => (
+                        <td key={`home-ot-${idx}`}>{otVal(homeOts, idx, legacyOtHome)}</td>
+                      ))}
+                      <td className="font-bold">
+                        {boxModal.result?.totals?.home ?? "—"}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           {["away", "home"].map((side) => {
             const name =
               side === "away" ? boxModal.game.away : boxModal.game.home;
             const rows = boxModal.result.box?.[side] || [];
 
             return (
-              <div key={side} className="bg-neutral-800 p-3 rounded-lg">
+              <div key={side} className="bg-neutral-800 p-4 rounded-lg overflow-hidden">
                 <h4 className="font-bold mb-2">{name}</h4>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left border-b border-neutral-700">
-                      <th className="py-1">Player</th>
-                      <th>MIN</th>
-                      <th>PTS</th>
-                      <th>REB</th>
-                      <th>AST</th>
-                      <th>STL</th>
-                      <th>BLK</th>
-                      <th>FG</th>
-                      <th>3P</th>
-                      <th>FT</th>
-                      <th>TO</th>
-                      <th>PF</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((p, i) => (
-                      <tr key={i} className="border-b border-neutral-800">
-                        <td className="py-1">{p.player}</td>
-                        <td>{p.min}</td>
-                        <td>{p.pts}</td>
-                        <td>{p.reb}</td>
-                        <td>{p.ast}</td>
-                        <td>{p.stl}</td>
-                        <td>{p.blk}</td>
-                        <td>{p.fg}</td>
-                        <td>{p["3p"]}</td>
-                        <td>{p.ft}</td>
-                        <td>{p.to}</td>
-                        <td>{p.pf}</td>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[680px] text-sm">
+                    <thead>
+                      <tr className="text-left border-b border-neutral-700">
+                        <th className="py-1 px-2 min-w-[150px]">Player</th>
+                        <th className="px-2 text-center">MIN</th>
+                        <th className="px-2 text-center">PTS</th>
+                        <th className="px-2 text-center">REB</th>
+                        <th className="px-2 text-center">AST</th>
+                        <th className="px-2 text-center">STL</th>
+                        <th className="px-2 text-center">BLK</th>
+                        <th className="px-2 text-center">FG</th>
+                        <th className="px-2 text-center">3P</th>
+                        <th className="px-2 text-center">FT</th>
+                        <th className="px-2 text-center">TO</th>
+                        <th className="px-2 text-center">PF</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {rows.map((p, i) => (
+                        <tr key={i} className="border-b border-neutral-800">
+                          <td className="py-1 px-2 min-w-[150px] whitespace-normal">{p.player}</td>
+                          <td className="px-2 text-center">{p.min}</td>
+                          <td className="px-2 text-center">{p.pts}</td>
+                          <td className="px-2 text-center">{p.reb}</td>
+                          <td className="px-2 text-center">{p.ast}</td>
+                          <td className="px-2 text-center">{p.stl}</td>
+                          <td className="px-2 text-center">{p.blk}</td>
+                          <td className="px-2 text-center whitespace-nowrap">{p.fg}</td>
+                          <td className="px-2 text-center whitespace-nowrap">{p["3p"]}</td>
+                          <td className="px-2 text-center whitespace-nowrap">{p.ft}</td>
+                          <td className="px-2 text-center">{p.to}</td>
+                          <td className="px-2 text-center">{p.pf}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             );
           })}

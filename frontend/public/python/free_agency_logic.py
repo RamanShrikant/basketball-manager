@@ -660,15 +660,17 @@ def build_salary_by_year(year1_salary: int, years: int) -> List[int]:
 # FREE AGENCY CONTRACT LENGTH / OPTION SHAPE HELPERS
 # ------------------------------------------------------------
 def get_realistic_expected_contract_years(player: Dict[str, Any]) -> int:
-    """NBA-lite expected free-agency contract length, capped at 4 years.
+    """More aggressive NBA-lite expected free-agency contract length, capped at 4 years.
 
     Surgical contract-shape rule:
-    - Slightly longer deals across the playable market.
-    - One-year deals stay mostly for fringe players, minimum players, and old
-      low-end vets.
-    - 35-37 year old players can still expect 2 years when they remain useful.
+    - 76+ OVR players in their 20s can get 4-year deals.
+    - 81+ OVR players through age 31 can still expect 4-year deals.
+    - 85+ OVR players through age 34 can still expect 4-year deals.
+    - Useful 2-year cases become 3 years more often.
+    - Useful older 1-year cases become 2 years more often.
+    - True fringe/minimum players and old low-end vets stay short.
     - This helper is shared by market-value expectations and CPU offer building
-      so realistic offers are not punished for being longer than old expectedYears.
+      so realistic offers are not punished for matching the new expectedYears.
     """
     overall = float(num(player.get("overall"), 75))
     age = int(num(player.get("age"), 27))
@@ -677,15 +679,47 @@ def get_realistic_expected_contract_years(player: Dict[str, Any]) -> int:
 
     minimum_bucket = (
         overall <= 72
-        or (overall <= 73 and age >= 27 and upside <= 1)
-        or (overall <= 74 and age >= 30 and upside <= 1)
+        or (overall <= 73 and age >= 30 and upside <= 1)
+        or (overall <= 74 and age >= 32 and upside <= 1)
     )
 
     if minimum_bucket:
-        return 1 if age >= 29 else 2
+        if age <= 25 and upside >= 4:
+            return 2
+        return 1 if age >= 30 else 2
 
-    if overall >= 88:
-        if age <= 32:
+    if overall >= 90:
+        if age <= 34:
+            years = 4
+        elif age <= 36:
+            years = 3
+        elif age <= 38:
+            years = 2
+        else:
+            years = 1
+
+    elif overall >= 88:
+        if age <= 34:
+            years = 4
+        elif age <= 35:
+            years = 3
+        elif age <= 38:
+            years = 2
+        else:
+            years = 1
+
+    elif overall >= 85:
+        if age <= 34:
+            years = 4
+        elif age <= 36:
+            years = 2
+        elif age <= 37 and overall >= 87:
+            years = 2
+        else:
+            years = 1
+
+    elif overall >= 81:
+        if age <= 31:
             years = 4
         elif age <= 34:
             years = 3
@@ -694,50 +728,42 @@ def get_realistic_expected_contract_years(player: Dict[str, Any]) -> int:
         else:
             years = 1
 
-    elif overall >= 84:
-        if age <= 30:
+    elif overall >= 78:
+        if age <= 29:
             years = 4
+        elif age <= 31:
+            years = 3
         elif age <= 34:
-            years = 3
-        elif age <= 35:
             years = 2
-        elif age <= 37:
-            years = 2 if overall >= 85 else 1
+        elif age <= 36 and overall >= 80:
+            years = 2
         else:
             years = 1
 
-    elif overall >= 80:
-        if age <= 24:
-            years = 4 if upside >= 3 else 3
-        elif age <= 30:
+    elif overall >= 76:
+        if age <= 29:
+            years = 4
+        elif age <= 31:
             years = 3
-        elif age <= 32:
-            years = 3 if overall >= 82 else 2
-        elif age <= 35:
+        elif age <= 33:
             years = 2
-        elif age <= 37:
-            years = 2 if overall >= 82 else 1
         else:
             years = 1
 
-    elif overall >= 77:
-        if age <= 25:
-            years = 3 if upside >= 3 else 2
-        elif age <= 30:
+    elif overall >= 74:
+        if age <= 25 and upside >= 3:
             years = 3
-        elif age <= 32:
+        elif age <= 28:
             years = 2
-        elif age <= 35:
-            years = 2 if overall >= 78 else 1
+        elif age <= 31 and overall >= 75:
+            years = 2
         else:
             years = 1
 
     elif overall >= 73:
-        if age <= 28:
-            years = 2
-        elif age <= 32 and overall >= 75:
-            years = 2
-        elif age <= 26 and upside >= 2:
+        if age <= 25 and upside >= 3:
+            years = 3
+        elif age <= 29:
             years = 2
         else:
             years = 1
@@ -745,11 +771,28 @@ def get_realistic_expected_contract_years(player: Dict[str, Any]) -> int:
     else:
         years = 1
 
-    if age <= 24 and upside >= 4 and overall >= 77:
+    # Young upside players should get more team commitment.
+    if age <= 24 and upside >= 4 and overall >= 74:
         years = min(4, years + 1)
 
-    return int(clamp(years, 1, 4))
+    # Prime/near-prime players who are already good should not be stuck short.
+    if age <= 29 and overall >= 76:
+        years = max(years, 4)
 
+    if age <= 31 and overall >= 81:
+        years = max(years, 4)
+
+    if age <= 34 and overall >= 85:
+        years = max(years, 4)
+
+    # Useful older players should not all collapse to one-year deals.
+    if 35 <= age <= 37 and overall >= 82:
+        years = max(years, 2)
+
+    if 36 <= age <= 38 and overall >= 90:
+        years = max(years, 2)
+
+    return int(clamp(years, 1, 4))
 
 def build_cpu_offer_option(
     player: Dict[str, Any],
@@ -760,9 +803,9 @@ def build_cpu_offer_option(
 ) -> Optional[Dict[str, Any]]:
     """Choose a light, realistic final-year option for CPU FA offers.
 
-    Player options go to high-leverage older stars/vets. Team options go to
-    young depth/reclamation players where the team is taking risk. Most normal
-    starter/core contracts remain clean guaranteed deals with no option.
+    Player options go to high-leverage targets when the team is making a real
+    multi-year push, and to older stars/vets. Team options stay limited to
+    young depth/reclamation players where the team is taking risk.
     """
     years = int(num(years, 1))
     if years <= 1:
@@ -774,25 +817,59 @@ def build_cpu_offer_option(
     upside = max(0, potential - overall)
     target_tier = str(target_tier or "value")
     salary_ratio = float(num(salary_ratio, 1.0))
+    rights = get_player_rights(player)
 
-    # High-leverage veteran/star structures: 2nd-year player option is common.
+    premium_multi_year_target = bool(
+        years >= 3
+        and target_tier in ["primary", "incumbent"]
+    )
+    rfa_core_target = bool(
+        premium_multi_year_target
+        and rights.get("restrictedFreeAgent")
+        and age <= 27
+        and (overall >= 78 or potential >= 84 or upside >= 4)
+    )
+
+    # Premium target structures:
+    # If a team is chasing one of its top multi-year targets, especially a star,
+    # young core piece, or RFA/core player, it should be willing to include a
+    # final-year player option as a selling point.
     player_option_chance = 0.0
-    if overall >= 88 and age >= 34:
-        player_option_chance = 0.44
-    if overall >= 86 and age >= 35:
-        player_option_chance = max(player_option_chance, 0.58)
-    if overall >= 84 and age >= 36:
-        player_option_chance = max(player_option_chance, 0.50)
-    if overall >= 82 and age >= 36 and years == 2:
-        player_option_chance = max(player_option_chance, 0.34)
-    if overall >= 84 and salary_ratio < 0.965 and target_tier in ["primary", "incumbent", "backup"]:
-        player_option_chance = max(player_option_chance, 0.30)
+    if premium_multi_year_target:
+        if overall >= 90 or potential >= 92:
+            player_option_chance = 0.90
+        elif overall >= 86 or potential >= 89:
+            player_option_chance = 0.80
+        elif overall >= 82 or potential >= 86:
+            player_option_chance = 0.68
+        elif overall >= 80 and (upside >= 4 or rfa_core_target):
+            player_option_chance = 0.55
+        elif overall >= 78 and potential >= 84 and years >= 4:
+            player_option_chance = 0.42
 
-    # Avoid giving player options to young team-control/core-player offers.
-    if age <= 28:
+        if rfa_core_target:
+            player_option_chance = max(player_option_chance, 0.66)
+
+        if salary_ratio < 0.985 and player_option_chance > 0:
+            player_option_chance += 0.06
+
+    # High-leverage veteran/star structures: final-year player option is common.
+    if overall >= 88 and age >= 34:
+        player_option_chance = max(player_option_chance, 0.50)
+    if overall >= 86 and age >= 35:
+        player_option_chance = max(player_option_chance, 0.64)
+    if overall >= 84 and age >= 36:
+        player_option_chance = max(player_option_chance, 0.56)
+    if overall >= 82 and age >= 36 and years == 2:
+        player_option_chance = max(player_option_chance, 0.40)
+    if overall >= 84 and salary_ratio < 0.965 and target_tier in ["primary", "incumbent", "backup"]:
+        player_option_chance = max(player_option_chance, 0.36)
+
+    # Young non-premium offers should still usually stay clean guaranteed deals.
+    if age <= 28 and not premium_multi_year_target and not rfa_core_target:
         player_option_chance = 0.0
 
-    if player_option_chance > 0 and rng.random() < player_option_chance:
+    if player_option_chance > 0 and rng.random() < min(0.92, player_option_chance):
         return {
             "type": "player",
             "yearIndices": [years - 1],
@@ -2320,20 +2397,23 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
             "minAcceptableAAV": MIN_DEAL,
         }
 
-    # Salary curve tuned for a $150M cap. This makes 77-83 overall players
-    # meaningfully expensive instead of letting rotation players sign for scraps.
+    # Salary curve tuned for a $150M cap.
+    # Surgical market-value tuning:
+    # - Keep true fringe/minimum players cheap.
+    # - Raise 75-83 OVR players modestly, especially real 77-83 rotation/starter talent.
+    # - Smooth the 84-88 jump so high-end starters do not cliff into star pricing too abruptly.
     if overall <= 75:
-        base_salary = 2_800_000 + max(0.0, overall - 74.0) * 1_100_000
+        base_salary = 3_100_000 + max(0.0, overall - 74.0) * 1_250_000
     elif overall <= 78:
-        base_salary = 4_200_000 + (overall - 76.0) * 1_900_000
+        base_salary = 4_800_000 + (overall - 76.0) * 2_050_000
     elif overall <= 81:
-        base_salary = 9_800_000 + (overall - 79.0) * 2_750_000
+        base_salary = 10_800_000 + (overall - 79.0) * 3_000_000
     elif overall <= 84:
-        base_salary = 17_500_000 + (overall - 82.0) * 3_500_000
-    elif overall <= 87:
-        base_salary = 28_000_000 + (overall - 85.0) * 3_600_000
+        base_salary = 19_000_000 + (overall - 82.0) * 3_500_000
+    elif overall <= 88:
+        base_salary = 26_000_000 + (overall - 84.0) * 2_850_000
     else:
-        base_salary = 38_000_000 + (overall - 88.0) * 3_000_000
+        base_salary = 37_400_000 + (overall - 88.0) * 3_200_000
 
     # Upside/age modifiers. Young RFAs and young rotation players cost more,
     # while older role players are still discounted realistically.
@@ -2346,16 +2426,32 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
     elif age <= 30:
         base_salary *= 1.00
     elif age <= 33:
-        base_salary *= max(0.84, 1.0 - ((age - 30) * 0.045))
+        base_salary *= max(0.85, 1.0 - ((age - 30) * 0.043))
     else:
-        base_salary *= max(0.58, 0.84 - ((age - 33) * 0.075))
+        # Surgical old-player tuning:
+        # Elite older stars should still be paid like elite current-value players.
+        # 84+ OVR players use a softer age curve that improves as the player remains
+        # more elite, while sub-84 older players keep the normal stronger age discount.
+        if overall >= 84:
+            star_score = clamp((overall - 84.0) / 8.0, 0.0, 1.0)
+
+            starting_mult = 0.88 + (star_score * 0.10)
+            yearly_drop = 0.040 - (star_score * 0.018)
+            floor_mult = 0.68 + (star_score * 0.14)
+
+            base_salary *= max(
+                floor_mult,
+                starting_mult - ((age - 34) * yearly_drop),
+            )
+        else:
+            base_salary *= max(0.62, 0.84 - ((age - 33) * 0.062))
 
     if age >= 31 and overall <= 80:
-        base_salary *= 0.92
+        base_salary *= 0.94 if overall >= 77 else 0.92
     if age >= 34 and overall <= 79:
-        base_salary *= 0.86
+        base_salary *= 0.91 if overall >= 77 else 0.88
     if age >= 36 and overall <= 82:
-        base_salary *= 0.88
+        base_salary *= 0.93 if overall >= 80 else 0.90
 
     # Skill boosts for players who are clearly valuable despite only moderate OVR.
     if off_rating >= 88:
@@ -2366,6 +2462,10 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
         base_salary *= 1.03
     if overall <= 83 and max(off_rating, def_rating) >= overall + 7:
         base_salary *= 1.05
+    if age >= 34 and 77 <= overall <= 82 and (
+        max(off_rating, def_rating) >= 86 or scoring_rating >= 82
+    ):
+        base_salary *= 1.025
 
     year1_salary = int(
         round_to_nearest(
@@ -2393,9 +2493,9 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
     if age <= 25 and upside >= 3 and overall >= 77:
         min_accept_mult += 0.04
     if age >= 31 and overall <= 80:
-        min_accept_mult -= 0.03
+        min_accept_mult -= 0.015 if overall >= 77 else 0.03
     if age >= 34 and overall <= 79:
-        min_accept_mult -= 0.05
+        min_accept_mult -= 0.025 if overall >= 77 else 0.04
 
     min_accept_mult = clamp(min_accept_mult, 0.78, 0.995)
 
@@ -3202,6 +3302,16 @@ def validate_offer_spending_rules(
     season_year = get_operating_season_year(league_data)
     offered_current_salary = get_contract_salary_for_year(contract, season_year)
     outstanding_current_salary = int(num(outstanding_current_salary, 0))
+
+    if offered_current_salary > MAX_SALARY:
+        over_by = offered_current_salary - MAX_SALARY
+        return {
+            "ok": False,
+            "reason": f"Offer exceeds the maximum first-year salary by ${int(over_by):,}.",
+            "teamSnapshot": snapshot,
+            "exceptionRoom": MAX_SALARY,
+            "spendingType": "max_salary_blocked",
+        }
 
     replaced_cap_hold = 0
     if is_rights_team(player, team_name):
@@ -4020,6 +4130,20 @@ def preview_offseason_contracts(
             else:
                 signed_players.append(row)
 
+        for player in team.get("twoWayPlayers", []):
+            row = build_contract_status_row(
+                team,
+                player,
+                season_year,
+                league_data = league_data,
+            )
+            row["twoWayContract"] = True
+
+            if row["status"] in ["expired", "no_contract"]:
+                expired_contracts.append(row)
+            else:
+                signed_players.append(row)
+
     def sort_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return sorted(
             rows,
@@ -4327,6 +4451,45 @@ def apply_offseason_contract_decisions(
 
         team["players"] = kept_players
 
+        original_two_way_players = list(team.get("twoWayPlayers", [])) if isinstance(team.get("twoWayPlayers"), list) else []
+        kept_two_way_players = []
+
+        for player in original_two_way_players:
+            contract = normalize_contract(player.get("contract"))
+            upcoming_year = season_year + 1
+            salary_this_year = get_contract_salary_for_year(contract, upcoming_year)
+
+            if contract is None or salary_this_year <= 0:
+                fa_player = add_player_to_free_agency(
+                    updated = updated,
+                    player = player,
+                    from_team_name = team_name,
+                    season_year = season_year,
+                    reason = "expired_two_way_contract" if contract else "no_two_way_contract",
+                )
+                process_qualifying_offer_after_entry(
+                    league_data = updated,
+                    team = team,
+                    player = fa_player,
+                    team_name = team_name,
+                    season_year = season_year,
+                    reason = "expired_two_way_contract" if contract else "no_two_way_contract",
+                    user_team_name = user_team_name,
+                )
+                decision_log.append({
+                    "type": "expired_two_way_contract",
+                    "playerName": player.get("name"),
+                    "teamName": team_name,
+                    "result": "entered_free_agency",
+                })
+                teams_affected.add(team_name)
+                continue
+
+            kept_two_way_players.append(player)
+
+        if original_two_way_players or isinstance(team.get("twoWayPlayers"), list):
+            team["twoWayPlayers"] = kept_two_way_players
+
     normalize_all_player_rights(updated)
 
     for player in updated.setdefault("freeAgents", []):
@@ -4397,6 +4560,10 @@ def ensure_free_agency_state(league_data: Dict[str, Any]) -> Dict[str, Any]:
     state.setdefault("pendingRfaMatchDecisions", [])
     state.setdefault("pendingUserTeamName", None)
     state.setdefault("pendingUserTeamSnapshot", None)
+    state.setdefault("forceViewingOffersReturn", False)
+    state.setdefault("forceViewingOffersReturnReason", None)
+    state.setdefault("resumeAdvanceAfterImmediateRfaMatch", False)
+    state.setdefault("resumeAdvanceAfterImmediateRfaMatchDay", None)
     state.setdefault("exceptionUsageByTeam", {})
     state.setdefault("teamNeedProfiles", {})
     state.setdefault("rightsRenounceLog", [])
@@ -6471,7 +6638,10 @@ def get_active_offer_limit_for_team(
             desired_limit = 9
 
     if current_roster_count >= get_roster_limit(league_data):
-        desired_limit = 0
+        # Live FA offers are soft paths, not completed signings. Do not hard-block
+        # a full roster from making a small number of offers; final signing still
+        # enforces roster legality before any player is added.
+        desired_limit = min(desired_limit, 2)
 
     return int(clamp(desired_limit, 0, 10))
 
@@ -7313,6 +7483,101 @@ def process_pending_user_decisions(
 
     pending_rows = list(state.get("pendingUserDecisions", []))
     if not pending_rows:
+        resume_after_immediate_rfa_match = bool(
+            state.get("resumeAdvanceAfterImmediateRfaMatch")
+            or state.get("forceViewingOffersReturnReason") == "immediate_rfa_match"
+        )
+
+        if resume_after_immediate_rfa_match and state.get("isActive"):
+            if not user_team_name:
+                user_team_name = state.get("pendingUserTeamName")
+
+            current_day = int(num(
+                state.get("resumeAdvanceAfterImmediateRfaMatchDay")
+                or state.get("currentDay"),
+                1,
+            ))
+            max_days = int(num(state.get("maxDays"), DEFAULT_FREE_AGENCY_DAYS))
+
+            state["forceViewingOffersReturn"] = False
+            state["forceViewingOffersReturnReason"] = None
+            state["resumeAdvanceAfterImmediateRfaMatch"] = False
+            state["resumeAdvanceAfterImmediateRfaMatchDay"] = None
+
+            generated_offers = []
+            processed_signings = []
+
+            if current_day >= max_days or len(updated.get("freeAgents", [])) == 0:
+                final_cleanup_target = get_min_roster_target(updated)
+
+                final_cleanup_signings = finalize_cpu_min_roster_cleanup(
+                    league_data = updated,
+                    current_day = current_day,
+                    user_team_name = user_team_name,
+                    min_roster_target_override = final_cleanup_target,
+                )
+
+                if final_cleanup_signings:
+                    processed_signings.extend(final_cleanup_signings)
+                    state["dailyLog"].append({
+                        "day": current_day,
+                        "type": "cpu_final_min_roster_cleanup",
+                        "signings": len(final_cleanup_signings),
+                        "targetRosterSize": final_cleanup_target,
+                    })
+
+                state["isActive"] = False
+                state["pendingUserTeamSnapshot"] = None
+
+                append_free_agency_full_action_log(
+                    league_data = updated,
+                    day_resolved = current_day,
+                    offer_day = None,
+                    signings = processed_signings,
+                    generated_offers = generated_offers,
+                    event_type = "user_rfa_match_resume_close",
+                )
+            else:
+                state["currentDay"] = current_day + 1
+
+                generated_offers = generate_cpu_offers_for_day(
+                    league_data = updated,
+                    user_team_name = user_team_name,
+                )
+
+                state["dailyLog"].append({
+                    "day": state["currentDay"],
+                    "type": "offer_generation",
+                    "offersGenerated": len(generated_offers),
+                })
+
+                state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, user_team_name) if user_team_name else None
+
+                append_free_agency_full_action_log(
+                    league_data = updated,
+                    day_resolved = current_day,
+                    offer_day = state.get("currentDay"),
+                    signings = processed_signings,
+                    generated_offers = generated_offers,
+                    event_type = "user_rfa_match_resume_advance",
+                )
+
+            return {
+                "ok": True,
+                "leagueData": updated,
+                "processedSignings": processed_signings,
+                "generatedOffers": generated_offers,
+                "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
+                "stateSummary": build_free_agency_state_summary(updated),
+                "teamSnapshot": state.get("pendingUserTeamSnapshot"),
+                "resumedAfterImmediateRfaMatch": True,
+            }
+
+        state["forceViewingOffersReturn"] = False
+        state["forceViewingOffersReturnReason"] = None
+        state["resumeAdvanceAfterImmediateRfaMatch"] = False
+        state["resumeAdvanceAfterImmediateRfaMatchDay"] = None
+
         return {
             "ok": True,
             "leagueData": updated,
@@ -7346,7 +7611,38 @@ def process_pending_user_decisions(
     delayed_decisions = []
     declined_decisions = []
     remaining_pending_rows = []
+    non_selected_pending_rows = []
     rights_clearance_logs = []
+
+    def build_user_chosen_offer_from_pending_row(row: Dict[str, Any], player_key: str) -> Dict[str, Any]:
+        chosen_offer = copy.deepcopy(row.get("chosenOffer") or {})
+
+        if not chosen_offer:
+            contract = normalize_contract(row.get("contract"))
+            total_value = int(num(row.get("totalValue"), 0))
+            years = int(num(row.get("years"), 1))
+            chosen_offer = {
+                "offerId": f"{player_key}|{user_team_name}",
+                "playerId": row.get("playerId"),
+                "playerName": row.get("playerName"),
+                "playerKey": player_key,
+                "teamName": user_team_name,
+                "source": "user",
+                "submittedDay": current_day,
+                "status": "active",
+                "contract": contract,
+                "salaryByYear": list(contract.get("salaryByYear", [])) if contract else [],
+                "currentYearSalary": int((contract.get("salaryByYear") or [0])[0]) if contract else 0,
+                "years": years,
+                "totalValue": total_value,
+                "aav": int(total_value / max(1, years)),
+            }
+
+        chosen_offer["teamName"] = user_team_name
+        chosen_offer["contract"] = normalize_contract(
+            chosen_offer.get("contract") or row.get("contract")
+        )
+        return chosen_offer
 
     def mark_user_offer_declined(row: Dict[str, Any], player_key: str) -> Dict[str, Any]:
         touched = []
@@ -7376,7 +7672,129 @@ def process_pending_user_decisions(
             "declinedOffers": touched,
         }
 
+    # If any selected outside RFA offer sheet is matched, treat that match as
+    # an interruption before committing the rest of the user's selected batch.
+    # Only the matched RFA is removed. Every other pending signing and cap-hold
+    # choice stays available so the user can rethink the screen.
     for row in pending_rows:
+        player_key = row.get("playerKey") or get_player_key(
+            row.get("playerId"),
+            row.get("playerName"),
+        )
+
+        if player_key not in selected_set or player_key in declined_set:
+            continue
+
+        free_agents = preview.setdefault("freeAgents", [])
+        player_idx = find_free_agent_index(
+            free_agents,
+            row.get("playerId"),
+            row.get("playerName"),
+        )
+        if player_idx == -1:
+            continue
+
+        player = free_agents[player_idx]
+        rights = get_player_rights(player)
+        rights_team_name = rights.get("heldByTeam")
+        if not rights.get("restrictedFreeAgent") or not rights_team_name or rights_team_name == user_team_name:
+            continue
+
+        chosen_offer = build_user_chosen_offer_from_pending_row(row, player_key)
+        matched_offer, would_be_matched = maybe_apply_rfa_match(
+            league_data = preview,
+            player = player,
+            chosen_offer = copy.deepcopy(chosen_offer),
+        )
+
+        if not would_be_matched or matched_offer.get("teamName") == user_team_name:
+            continue
+
+        matched_offer["forceRfaMatch"] = True
+        matched_offer["source"] = "rfa_match"
+        matched_offer["originalOfferTeamName"] = chosen_offer.get("teamName")
+        matched_offer["matchedOriginalTeamName"] = matched_offer.get("teamName")
+        matched_offer["contract"] = normalize_contract(matched_offer.get("contract"))
+
+        signed = finalize_free_agent_signing_from_offer(
+            league_data = preview,
+            player = player,
+            chosen_offer = matched_offer,
+            current_day = current_day,
+        )
+        if not signed:
+            return {
+                "ok": False,
+                "reason": f"Unable to process the matched RFA offer for {row.get('playerName', 'player')}.",
+                "leagueData": updated,
+                "blockedPlayerKey": player_key,
+                "stateSummary": build_free_agency_state_summary(updated),
+                "teamSnapshot": state.get("pendingUserTeamSnapshot"),
+            }
+
+        signed_with = signed.get("signedWith") or signed.get("teamName")
+        if not (
+            signed.get("rfaMatched")
+            and signed.get("originalOfferTeamName") == user_team_name
+            and signed_with != user_team_name
+        ):
+            continue
+
+        processed_signings.append(signed)
+        preview_state = ensure_free_agency_state(preview)
+        remaining_after_match = [
+            copy.deepcopy(pending_row)
+            for pending_row in pending_rows
+            if (
+                pending_row.get("playerKey")
+                or get_player_key(pending_row.get("playerId"), pending_row.get("playerName"))
+            ) != player_key
+        ]
+        preview_state["pendingUserDecisions"] = remaining_after_match
+        preview_state["pendingUserTeamName"] = user_team_name
+
+        snapshot = get_team_cap_snapshot(preview, user_team_name) if user_team_name else None
+        preview_state["pendingUserTeamSnapshot"] = snapshot if snapshot and snapshot.get("ok") else None
+
+        preview_state["forceViewingOffersReturn"] = True
+        preview_state["forceViewingOffersReturnReason"] = "immediate_rfa_match"
+        preview_state["resumeAdvanceAfterImmediateRfaMatch"] = True
+        preview_state["resumeAdvanceAfterImmediateRfaMatchDay"] = current_day
+
+        preview_state.setdefault("dailyLog", []).append({
+            "day": current_day,
+            "type": "user_rfa_match_batch_interrupted",
+            "playerName": signed.get("playerName"),
+            "matchedByTeamName": signed_with,
+            "originalOfferTeamName": signed.get("originalOfferTeamName"),
+            "remainingPendingUserDecisions": len(remaining_after_match),
+        })
+
+        append_free_agency_full_action_log(
+            league_data = preview,
+            day_resolved = current_day,
+            offer_day = None,
+            signings = processed_signings,
+            generated_offers = [],
+            event_type = "user_rfa_match_batch_interrupted",
+        )
+
+        return {
+            "ok": True,
+            "leagueData": preview,
+            "processedSignings": processed_signings,
+            "generatedOffers": [],
+            "delayedUserDecisions": [],
+            "declinedUserDecisions": [],
+            "manualRightsClearanceLog": [],
+            "pendingRfaMatchDecisions": preview_state.get("pendingRfaMatchDecisions", []),
+            "stateSummary": build_free_agency_state_summary(preview),
+            "teamSnapshot": preview_state.get("pendingUserTeamSnapshot"),
+            "immediateRfaMatch": True,
+            "batchInterruptedByImmediateRfaMatch": True,
+        }
+
+    for row_index, row in enumerate(pending_rows):
         player_key = row.get("playerKey") or get_player_key(
             row.get("playerId"),
             row.get("playerName"),
@@ -7387,22 +7805,10 @@ def process_pending_user_decisions(
             continue
 
         if player_key not in selected_set:
-            # Non-selected rows are not silent declines. Before the final market
-            # close, keep the offer live with a delay penalty. On the final day,
-            # keep the decision pending and block the close so a ready-to-sign
-            # player cannot disappear into free agency by accident.
-            if current_day >= max_days:
-                remaining_pending_rows.append(copy.deepcopy(row))
-                continue
-
-            delayed_decisions.append(
-                mark_pending_user_decision_delayed(
-                    league_data = preview,
-                    row = row,
-                    user_team_name = user_team_name,
-                    current_day = current_day,
-                )
-            )
+            # Non-selected rows are not silent declines. Defer the delay/hold
+            # handling until selected rows are resolved, so an immediate RFA
+            # match can leave the user on the same decision screen cleanly.
+            non_selected_pending_rows.append(copy.deepcopy(row))
             continue
 
         free_agents = preview.setdefault("freeAgents", [])
@@ -7422,33 +7828,7 @@ def process_pending_user_decisions(
             }
 
         player = free_agents[player_idx]
-        chosen_offer = copy.deepcopy(row.get("chosenOffer") or {})
-
-        if not chosen_offer:
-            contract = normalize_contract(row.get("contract"))
-            total_value = int(num(row.get("totalValue"), 0))
-            years = int(num(row.get("years"), 1))
-            chosen_offer = {
-                "offerId": f"{player_key}|{user_team_name}",
-                "playerId": row.get("playerId"),
-                "playerName": row.get("playerName"),
-                "playerKey": player_key,
-                "teamName": user_team_name,
-                "source": "user",
-                "submittedDay": current_day,
-                "status": "active",
-                "contract": contract,
-                "salaryByYear": list(contract.get("salaryByYear", [])) if contract else [],
-                "currentYearSalary": int((contract.get("salaryByYear") or [0])[0]) if contract else 0,
-                "years": years,
-                "totalValue": total_value,
-                "aav": int(total_value / max(1, years)),
-            }
-
-        chosen_offer["teamName"] = user_team_name
-        chosen_offer["contract"] = normalize_contract(
-            chosen_offer.get("contract") or row.get("contract")
-        )
+        chosen_offer = build_user_chosen_offer_from_pending_row(row, player_key)
 
         prepared = prepare_user_offer_for_conditional_finalization(
             league_data = preview,
@@ -7503,6 +7883,85 @@ def process_pending_user_decisions(
 
         processed_signings.append(signed)
 
+        signed_with = signed.get("signedWith") or signed.get("teamName")
+        if (
+            signed.get("rfaMatched")
+            and user_team_name
+            and signed.get("originalOfferTeamName") == user_team_name
+            and signed_with != user_team_name
+        ):
+            preview_state = ensure_free_agency_state(preview)
+            remaining_after_match = non_selected_pending_rows + [
+                copy.deepcopy(future_row)
+                for future_row in pending_rows[row_index + 1:]
+            ]
+            preview_state["pendingUserDecisions"] = remaining_after_match
+            preview_state["pendingUserTeamName"] = user_team_name
+
+            snapshot = get_team_cap_snapshot(preview, user_team_name) if user_team_name else None
+            preview_state["pendingUserTeamSnapshot"] = snapshot if snapshot and snapshot.get("ok") else None
+
+            if declined_decisions:
+                preview_state.setdefault("declinedUserDecisionLog", []).extend(copy.deepcopy(declined_decisions))
+            if rights_clearance_logs:
+                preview_state.setdefault("manualRightsClearanceLog", []).extend(copy.deepcopy(rights_clearance_logs))
+
+            preview_state["forceViewingOffersReturn"] = True
+            preview_state["forceViewingOffersReturnReason"] = "immediate_rfa_match"
+            preview_state["resumeAdvanceAfterImmediateRfaMatch"] = True
+            preview_state["resumeAdvanceAfterImmediateRfaMatchDay"] = current_day
+
+            preview_state.setdefault("dailyLog", []).append({
+                "day": current_day,
+                "type": "user_rfa_match_immediate_return",
+                "playerName": signed.get("playerName"),
+                "matchedByTeamName": signed_with,
+                "originalOfferTeamName": signed.get("originalOfferTeamName"),
+                "remainingPendingUserDecisions": len(remaining_after_match),
+            })
+
+            append_free_agency_full_action_log(
+                league_data = preview,
+                day_resolved = current_day,
+                offer_day = None,
+                signings = processed_signings,
+                generated_offers = [],
+                event_type = "user_rfa_match_immediate_return",
+            )
+
+            return {
+                "ok": True,
+                "leagueData": preview,
+                "processedSignings": processed_signings,
+                "generatedOffers": [],
+                "delayedUserDecisions": [],
+                "declinedUserDecisions": declined_decisions,
+                "manualRightsClearanceLog": rights_clearance_logs,
+                "pendingRfaMatchDecisions": preview_state.get("pendingRfaMatchDecisions", []),
+                "stateSummary": build_free_agency_state_summary(preview),
+                "teamSnapshot": preview_state.get("pendingUserTeamSnapshot"),
+                "immediateRfaMatch": True,
+            }
+
+    if non_selected_pending_rows:
+        for pending_row in non_selected_pending_rows:
+            # Non-selected rows are not silent declines. Before the final market
+            # close, keep the offer live with a delay penalty. On the final day,
+            # keep the decision pending and block the close so a ready-to-sign
+            # player cannot disappear into free agency by accident.
+            if current_day >= max_days:
+                remaining_pending_rows.append(copy.deepcopy(pending_row))
+                continue
+
+            delayed_decisions.append(
+                mark_pending_user_decision_delayed(
+                    league_data = preview,
+                    row = pending_row,
+                    user_team_name = user_team_name,
+                    current_day = current_day,
+                )
+            )
+
     preview_state = ensure_free_agency_state(preview)
     preview_state["pendingUserTeamName"] = user_team_name
 
@@ -7539,6 +7998,10 @@ def process_pending_user_decisions(
 
     clear_pending_user_decisions(preview_state)
     preview_state["pendingUserTeamName"] = user_team_name
+    preview_state["forceViewingOffersReturn"] = False
+    preview_state["forceViewingOffersReturnReason"] = None
+    preview_state["resumeAdvanceAfterImmediateRfaMatch"] = False
+    preview_state["resumeAdvanceAfterImmediateRfaMatchDay"] = None
 
     if delayed_decisions:
         preview_state.setdefault("delayedUserDecisionLog", []).extend(copy.deepcopy(delayed_decisions))
@@ -7625,9 +8088,9 @@ def get_contract_option_player_score_adjustment(contract: Optional[Dict[str, Any
     if years <= 1:
         return 0.0
     if option_type == "player":
-        return 0.020
+        return 0.040
     if option_type == "team":
-        return -0.025
+        return -0.050
     return 0.0
 
 
@@ -8325,22 +8788,21 @@ def get_player_required_interest_for_day(
     max_days = max(1, int(num(max_days, DEFAULT_FREE_AGENCY_DAYS)))
     current_day = int(clamp(current_day, 1, max_days))
 
-    # Surgical pacing patch:
-    # Offers are soft market signals. Players should be interested early, but
-    # most should not be ready to close until the market has had time to breathe.
-    # This keeps Days 1-3 from swallowing the whole class while still allowing
-    # elite overpay/perfect-fit offers to close before the late market.
+    # Surgical pacing patch v2:
+    # Keep free agency patient, but avoid empty early days. Days 1-2 are just a
+    # touch easier to clear, while Days 5-6 are slightly firmer so the whole
+    # market does not collapse into the middle of the period.
     if max_days == 1:
         base = 0.50
     else:
         scaled_day = 1.0 + ((current_day - 1) * 9.0 / max(1.0, float(max_days - 1)))
         curve = [
-            (1.0, 0.980),
-            (2.0, 0.955),
-            (3.0, 0.925),
-            (4.0, 0.890),
-            (5.0, 0.840),
-            (6.0, 0.775),
+            (1.0, 0.948),
+            (2.0, 0.920),
+            (3.0, 0.900),
+            (4.0, 0.875),
+            (5.0, 0.858),
+            (6.0, 0.812),
             (7.0, 0.700),
             (8.0, 0.625),
             (9.0, 0.560),
@@ -8919,6 +9381,11 @@ def generate_cpu_offers_for_day(
     }
 
     free_agents = list(league_data.get("freeAgents", []))
+    pending_user_player_keys = {
+        row.get("playerKey") or get_player_key(row.get("playerId"), row.get("playerName"))
+        for row in state.get("pendingUserDecisions", [])
+        if isinstance(row, dict)
+    }
 
     for _, _, team in iter_teams(league_data):
         team_name = team.get("name")
@@ -9032,6 +9499,8 @@ def generate_cpu_offers_for_day(
 
         for player in free_agents:
             player_key = get_player_key_from_player(player)
+            if player_key in pending_user_player_keys:
+                continue
 
             overall = int(round(num(player.get("overall"), 0)))
             age = int(num(player.get("age"), 27))
@@ -10719,6 +11188,11 @@ def advance_free_agency_day(
             "stateSummary": build_free_agency_state_summary(updated),
         }
 
+    state["forceViewingOffersReturn"] = False
+    state["forceViewingOffersReturnReason"] = None
+    state["resumeAdvanceAfterImmediateRfaMatch"] = False
+    state["resumeAdvanceAfterImmediateRfaMatchDay"] = None
+
     current_day = int(num(state.get("currentDay"), 1))
     max_days = int(num(state.get("maxDays"), DEFAULT_FREE_AGENCY_DAYS))
     offseason_min_target = get_free_agency_min_roster_target(updated)
@@ -10736,12 +11210,32 @@ def advance_free_agency_day(
     })
 
     if state.get("pendingUserDecisions") or state.get("pendingRfaMatchDecisions"):
+        generated_offers = []
+
+        # The Day Complete screen should still show the next wave of CPU offers
+        # while the user is deciding which accepted offers to finalize. Generate
+        # those offers for display/market continuity, but restore currentDay so
+        # the pending user decisions are still resolved as this completed day.
+        if current_day < max_days and len(updated.get("freeAgents", [])) > 0:
+            original_day = state.get("currentDay")
+            state["currentDay"] = current_day + 1
+            generated_offers = generate_cpu_offers_for_day(
+                league_data = updated,
+                user_team_name = user_team_name,
+            )
+            state["dailyLog"].append({
+                "day": current_day + 1,
+                "type": "offer_generation_preview_pending_user",
+                "offersGenerated": len(generated_offers),
+            })
+            state["currentDay"] = original_day
+
         append_free_agency_full_action_log(
             league_data = updated,
             day_resolved = current_day,
-            offer_day = None,
+            offer_day = current_day + 1 if generated_offers else None,
             signings = signings,
-            generated_offers = [],
+            generated_offers = generated_offers,
             event_type = "daily_resolution_pending_user",
         )
 
@@ -10750,7 +11244,7 @@ def advance_free_agency_day(
             "leagueData": updated,
             "dayResolved": current_day,
             "signings": signings,
-            "generatedOffers": [],
+            "generatedOffers": generated_offers,
             "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
             "stateSummary": build_free_agency_state_summary(updated),
         }

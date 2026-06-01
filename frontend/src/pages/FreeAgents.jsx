@@ -11,6 +11,8 @@ import "../styles/BMAnimations.css";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
+const MAX_CONTRACT_AMOUNT = 54_000_000;
+const MAX_CONTRACT_MILLIONS = MAX_CONTRACT_AMOUNT / 1_000_000;
 
 function compactStorySideForStorage(side) {
   if (!side || typeof side !== "object") return null;
@@ -808,7 +810,31 @@ const isOffseasonMode =
       ? liveFreeAgencyState.pendingRfaMatchDecisions.length
       : 0;
 
+    const forceViewingOffersReturn = !!liveFreeAgencyState?.forceViewingOffersReturn;
+
     if (pendingUserDecisionCount > 0 || pendingRfaMatchDecisionCount > 0) {
+      localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+      navigate("/viewing-offers");
+      return;
+    }
+
+    if (forceViewingOffersReturn && workingLeagueData?.freeAgencyState) {
+      const clearedLeagueData = {
+        ...workingLeagueData,
+        freeAgencyState: {
+          ...workingLeagueData.freeAgencyState,
+          forceViewingOffersReturn: false,
+          forceViewingOffersReturnReason: null,
+        },
+      };
+
+      setWorkingLeagueData(clearedLeagueData);
+
+      if (typeof setLeagueData === "function") {
+        setLeagueData(clearedLeagueData);
+      }
+
+      persistLeagueData(clearedLeagueData);
       localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
       navigate("/viewing-offers");
     }
@@ -817,6 +843,8 @@ const isOffseasonMode =
     isLiveFreeAgencyActive,
     liveFreeAgencyState,
     navigate,
+    setLeagueData,
+    workingLeagueData,
   ]);
 
   const rosterValidationMessage = useMemo(() => {
@@ -1845,8 +1873,10 @@ const isOffseasonMode =
   };
 
   const openSignModal = (player) => {
-    const defaultYear1Salary =
-      player?.marketValue?.expectedYear1Salary || 5_000_000;
+    const defaultYear1Salary = Math.min(
+      player?.marketValue?.expectedYear1Salary || 5_000_000,
+      MAX_CONTRACT_AMOUNT
+    );
     const defaultYears =
       player?.marketValue?.expectedYears || 2;
 
@@ -2085,6 +2115,15 @@ const isOffseasonMode =
       setOfferEvaluation({
         ok: false,
         reason: "Enter a valid first-year salary.",
+      });
+      setOfferEvalLoading(false);
+      return;
+    }
+
+    if (year1Salary > MAX_CONTRACT_AMOUNT) {
+      setOfferEvaluation({
+        ok: false,
+        reason: `Maximum first-year salary is ${formatDollars(MAX_CONTRACT_AMOUNT)}.`,
       });
       setOfferEvalLoading(false);
       return;
@@ -2541,7 +2580,31 @@ updateOffseasonState({
       ? workingLeagueData.freeAgencyState.pendingUserDecisions.length
       : 0;
 
-    if (pendingUserDecisionCount > 0) {
+    const pendingRfaMatchDecisionCount = Array.isArray(
+      workingLeagueData?.freeAgencyState?.pendingRfaMatchDecisions
+    )
+      ? workingLeagueData.freeAgencyState.pendingRfaMatchDecisions.length
+      : 0;
+
+    const forceViewingOffersReturn = !!workingLeagueData?.freeAgencyState?.forceViewingOffersReturn;
+
+    if (pendingUserDecisionCount > 0 || pendingRfaMatchDecisionCount > 0) {
+      localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
+      navigate("/viewing-offers");
+      return;
+    }
+
+    if (forceViewingOffersReturn && workingLeagueData?.freeAgencyState) {
+      const clearedLeagueData = {
+        ...workingLeagueData,
+        freeAgencyState: {
+          ...workingLeagueData.freeAgencyState,
+          forceViewingOffersReturn: false,
+          forceViewingOffersReturnReason: null,
+        },
+      };
+
+      applyLeagueUpdate(clearedLeagueData);
       localStorage.setItem(FREE_AGENCY_LAST_ROUTE_KEY, "/viewing-offers");
       navigate("/viewing-offers");
       return;
@@ -2610,6 +2673,11 @@ updateOffseasonState({
     const year1Salary = parseMillionsText(offerSalaryText);
     if (!year1Salary) {
       setSignError("Enter a valid first-year salary.");
+      return;
+    }
+
+    if (year1Salary > MAX_CONTRACT_AMOUNT) {
+      setSignError(`Maximum first-year salary is ${formatDollars(MAX_CONTRACT_AMOUNT)}.`);
       return;
     }
 
@@ -3415,7 +3483,14 @@ updateOffseasonState({
                   type="text"
                   value={offerSalaryText}
                   onChange={(e) => {
-                    setOfferSalaryText(e.target.value);
+                    const nextText = e.target.value;
+                    const parsedSalary = parseMillionsText(nextText);
+                    if (parsedSalary > MAX_CONTRACT_AMOUNT) {
+                      setOfferSalaryText(formatMillionsInput(MAX_CONTRACT_AMOUNT));
+                      setSignError(`Maximum first-year salary is ${formatDollars(MAX_CONTRACT_AMOUNT)}.`);
+                      return;
+                    }
+                    setOfferSalaryText(nextText);
                     setSignError("");
                   }}
                   placeholder="First-year salary in millions"
@@ -3425,9 +3500,9 @@ updateOffseasonState({
                 <input
                   type="range"
                   min="1.2"
-                  max="50"
+                  max={MAX_CONTRACT_MILLIONS}
                   step="0.01"
-                  value={Number(offerSalaryText) || 1.2}
+                  value={Math.min(Number(offerSalaryText) || 1.2, MAX_CONTRACT_MILLIONS)}
                   onChange={(e) => {
                     const val = Number(e.target.value);
                     setOfferSalaryText(val.toFixed(2));

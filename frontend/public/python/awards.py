@@ -38,6 +38,83 @@ def _defr(p) -> float:
     except Exception:
         return 0.0
 
+def _rookie_value(p, key):
+    if p.get(key) not in [None, ""]:
+        return p.get(key)
+    meta = p.get("meta") if isinstance(p.get("meta"), dict) else {}
+    if meta.get(key) not in [None, ""]:
+        return meta.get(key)
+    contract = p.get("contract") if isinstance(p.get("contract"), dict) else {}
+    return contract.get(key)
+
+def _rookie_int(value, default=None):
+    try:
+        if value in [None, ""]:
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+def _rookie_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value in [None, ""]:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in ["true", "yes", "y", "1", "rookie"]
+
+def _season_close(value, season_js):
+    year = _rookie_int(value)
+    season = _rookie_int(season_js)
+    if year is None or season is None:
+        return False
+    return year == season
+
+def _is_rookie_candidate(p, season_js=None):
+    season = _rookie_int(season_js)
+    explicit_year_found = False
+
+    for key in ["draftYear", "rookieYear", "rookieSeason", "rookieSeasonYear"]:
+        value = _rookie_value(p, key)
+        year = _rookie_int(value)
+        if year is None:
+            continue
+        explicit_year_found = True
+        if season is not None and year == season:
+            return True
+
+    if explicit_year_found:
+        return False
+
+    for key in ["isRookie", "rookie", "rookieEligible", "rotyEligible"]:
+        value = _rookie_value(p, key)
+        if value not in [None, ""] and _rookie_bool(value):
+            return True
+
+    contract = p.get("contract") if isinstance(p.get("contract"), dict) else {}
+    meta = p.get("meta") if isinstance(p.get("meta"), dict) else {}
+    source_text = " ".join(str(x or "").lower() for x in [
+        p.get("contractType"), p.get("rosterStatus"), contract.get("type"),
+        contract.get("source"), meta.get("acquiredVia"), meta.get("rookieSigningDecision"),
+    ])
+
+    if "rookie" in source_text:
+        start_year = contract.get("startYear") or meta.get("draftYear") or p.get("draftYear")
+        if season_js is None or _season_close(start_year, season_js):
+            return True
+
+    for key in ["proSeasons", "seasonsPro", "yearsPro", "yearsOfExperience", "yoe"]:
+        pro_seasons = _rookie_int(_rookie_value(p, key))
+        if pro_seasons is not None:
+            return pro_seasons <= 1
+
+    return False
+
+def _is_young_roty_fallback(p):
+    age = _rookie_int(_rookie_value(p, "age"))
+    return age is not None and age <= 22
+
 # ---------------------------------------------------------------------------
 # NORMALIZATION
 # ---------------------------------------------------------------------------
@@ -114,6 +191,19 @@ def _impact_6moy(p, c):
         0.10 * _norm(_spg(p), c["spg"]) +
         0.10 * _norm(_bpg(p), c["bpg"]) +
         0.05 * _norm_range_hi(_defr(p), c["def_lo"], c["def_hi"])
+    )
+
+# ROTY: heavy box-score production, with minutes and team wins as smaller tiebreakers
+def _impact_roty(p, c, max_mpg):
+    return (
+        0.08 * _norm_wins(p["_team_wins"], c["wins"], gamma=2.0) +
+        0.34 * _norm(_ppg(p), c["ppg"]) +
+        0.14 * _norm(_apg(p), c["apg"]) +
+        0.14 * _norm(_rpg(p), c["rpg"]) +
+        0.07 * _norm(_spg(p), c["spg"]) +
+        0.07 * _norm(_bpg(p), c["bpg"]) +
+        0.12 * _norm(_mpg(p), max_mpg) +
+        0.04 * _norm_range_hi(_defr(p), c["def_lo"], c["def_hi"])
     )
 
 # Finals MVP weights unchanged, but def_rating direction is fixed (higher is better)
@@ -247,6 +337,22 @@ def compute_awards(players_js, teams_js, season_js=None):
 
     sixth_sorted = sorted(sixth, key=lambda p: p.get("_6m", 0.0), reverse=True)
 
+    # ROTY ladder
+    rookie_candidates = [p for p in eligible if _is_rookie_candidate(p, season_js)]
+    if not rookie_candidates:
+        rookie_candidates = [p for p in eligible if _is_young_roty_fallback(p)]
+
+    MIN_ROOKIE_GAMES = 30
+    rookies = [p for p in rookie_candidates if _gp(p) >= MIN_ROOKIE_GAMES] or rookie_candidates
+    ctx_roty = _ctx(rookies) if rookies else ctx
+    max_roty_mpg = max((_mpg(p) for p in rookies), default=0)
+
+    for p in rookies:
+        p["_roty"] = _impact_roty(p, ctx_roty, max_roty_mpg)
+        p["_rookieEligible"] = True
+
+    roty_sorted = sorted(rookies, key=lambda p: p.get("_roty", 0.0), reverse=True)
+
     # --- DEBUG: MVP race with wins + impact ---
     dbg_mvp = [(p.get("player"), p.get("team"), p.get("_team_wins"), p.get("_impact")) for p in mvp_race]
     print("[awards] MVP race (player, team, wins, impact):", dbg_mvp)
@@ -258,6 +364,10 @@ def compute_awards(players_js, teams_js, season_js=None):
     # --- DEBUG: DPOY race with wins + dpoy score ---
     dbg_dpoy = [(p.get("player"), p.get("team"), p.get("_team_wins"), p.get("_dpoy")) for p in dpoy_race]
     print("[awards] DPOY race (player, team, wins, dpoy):", dbg_dpoy)
+
+    # --- DEBUG: ROTY race with wins + roty score ---
+    dbg_roty = [(p.get("player"), p.get("team"), p.get("_team_wins"), p.get("_roty")) for p in roty_sorted[:5]]
+    print("[awards] ROTY race (player, team, wins, roty):", dbg_roty)
 
     return {
         "season": season_js,
@@ -274,6 +384,9 @@ def compute_awards(players_js, teams_js, season_js=None):
 
         "sixth_man": sixth_sorted[0] if sixth_sorted else None,
         "sixth_man_race": sixth_sorted[:5],
+
+        "roty": roty_sorted[0] if roty_sorted else None,
+        "roty_race": roty_sorted[:5],
 
         "awards_py_version": AWARDS_PY_VERSION,
     }

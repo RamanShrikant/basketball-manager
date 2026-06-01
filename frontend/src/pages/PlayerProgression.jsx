@@ -52,7 +52,7 @@ function ppFindPlayer(league, playerName) {
   const teams = getAllTeamsFromLeague(league);
   for (const t of teams || []) {
     const teamName = t?.name || "";
-    for (const p of t?.players || []) {
+    for (const p of getProgressionPlayersFromTeam(t)) {
       if (p?.name === playerName) {
         return {
           name: p?.name,
@@ -230,7 +230,7 @@ function ppBuildPlayerAgeMap(league) {
 
   for (const team of teams || []) {
     const teamName = team?.name || "";
-    for (const player of team?.players || []) {
+    for (const player of getProgressionPlayersFromTeam(team)) {
       const key = ppPlayerStableKey(player, teamName);
       map.set(key, {
         key,
@@ -261,7 +261,7 @@ function ppGetAgeRows(league, trackedNames = PP_AGE_DEBUG_TRACKED_NAMES) {
 
   for (const team of teams || []) {
     const teamName = team?.name || "";
-    for (const player of team?.players || []) {
+    for (const player of getProgressionPlayersFromTeam(team)) {
       if (wanted.size && !wanted.has(String(player?.name || "").toLowerCase())) continue;
       rows.push({
         name: player?.name,
@@ -555,6 +555,47 @@ function getAllTeamsFromLeague(leagueData) {
   return [];
 }
 
+function progressionPlayerKey(player = {}) {
+  return String(player?.id || player?.name || "");
+}
+
+function isTwoWayRosterPlayer(player = {}) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const type = String(player?.contractType || player?.rosterStatus || contract?.type || "").toLowerCase();
+  return type === "two_way" || type === "two-way" || player?.assignmentStatus === "g_league";
+}
+
+function stripProgressionBucketMarker(player = {}) {
+  if (!player || typeof player !== "object") return player;
+  const next = { ...player };
+  delete next.__progressionRosterBucket;
+  return next;
+}
+
+function getProgressionPlayersFromTeam(team, includeTwoWay = true) {
+  const standardPlayers = Array.isArray(team?.players) ? team.players : [];
+  if (!includeTwoWay) return standardPlayers;
+
+  const twoWayPlayers = Array.isArray(team?.twoWayPlayers) ? team.twoWayPlayers : [];
+  if (!twoWayPlayers.length) return standardPlayers;
+
+  const seen = new Set(standardPlayers.map(progressionPlayerKey));
+  const merged = [...standardPlayers];
+
+  for (const player of twoWayPlayers) {
+    const key = progressionPlayerKey(player);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    merged.push(player);
+  }
+
+  return merged;
+}
+
+function getTeamNameForProgression(team = {}) {
+  return team?.name || team?.teamName || "";
+}
+
 function resolvePortrait(p) {
   return (
     p?.portrait ||
@@ -638,7 +679,7 @@ function buildProgressionDeltas(beforeLeague, afterLeague) {
     const m = {};
     for (const t of teams || []) {
       const teamName = t?.name || "";
-      for (const p of t?.players || []) {
+      for (const p of getProgressionPlayersFromTeam(t)) {
         if (!p?.name || !teamName) continue;
         m[`${p.name}__${teamName}`] = p;
       }
@@ -730,7 +771,7 @@ function normalizeDeltasFromPython(league, pythonDeltas) {
 
   for (const t of teams || []) {
     const teamName = t?.name || "";
-    for (const p of t?.players || []) {
+    for (const p of getProgressionPlayersFromTeam(t)) {
       const name = p?.name;
       if (!name || !teamName) continue;
 
@@ -753,6 +794,208 @@ function snapshotLeague(obj) {
   } catch {
     return obj;
   }
+}
+
+
+function isCurrentDraftClassRookie(player = {}, seasonYear = null) {
+  const resolvedSeasonYear = Number(seasonYear || 0);
+  if (!Number.isFinite(resolvedSeasonYear) || resolvedSeasonYear <= 0) return false;
+
+  const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+  const draftYear = Number(
+    meta?.draftYear ??
+      player?.draftYear ??
+      player?.draftClassYear ??
+      player?.draftedYear ??
+      0
+  );
+
+  if (!Number.isFinite(draftYear) || draftYear !== resolvedSeasonYear) return false;
+
+  const acquiredVia = String(meta?.acquiredVia || player?.acquiredVia || "").toLowerCase();
+  const playerId = String(player?.id || "").toLowerCase();
+
+  return (
+    acquiredVia.includes("draft") ||
+    playerId.startsWith(`rookie_${resolvedSeasonYear}_`) ||
+    Boolean(player?.rights?.rookieScale) ||
+    Boolean(player?.rookieSigningPending)
+  );
+}
+
+function makeCurrentDraftRookieMap(beforeLeague, seasonYear) {
+  const byTeam = new Map();
+
+  for (const team of getAllTeamsFromLeague(beforeLeague) || []) {
+    const teamName = getTeamNameForProgression(team);
+    if (!teamName) continue;
+
+    const teamMap = {
+      players: new Map(),
+      twoWayPlayers: new Map(),
+      any: new Map(),
+    };
+
+    for (const player of team.players || []) {
+      if (!isCurrentDraftClassRookie(player, seasonYear)) continue;
+      const key = progressionPlayerKey(player);
+      if (!key) continue;
+      const cleanPlayer = snapshotLeague(player);
+      teamMap.players.set(key, cleanPlayer);
+      teamMap.any.set(key, cleanPlayer);
+    }
+
+    for (const player of team.twoWayPlayers || []) {
+      if (!isCurrentDraftClassRookie(player, seasonYear)) continue;
+      const key = progressionPlayerKey(player);
+      if (!key) continue;
+      const cleanPlayer = snapshotLeague(player);
+      teamMap.twoWayPlayers.set(key, cleanPlayer);
+      teamMap.any.set(key, cleanPlayer);
+    }
+
+    if (teamMap.any.size) byTeam.set(teamName, teamMap);
+  }
+
+  return byTeam;
+}
+
+function restoreCurrentDraftClassRookiesAfterProgression(updatedLeague, beforeLeague, seasonYear) {
+  if (!updatedLeague || !beforeLeague) return updatedLeague;
+
+  const rookieMapByTeam = makeCurrentDraftRookieMap(beforeLeague, seasonYear);
+  if (!rookieMapByTeam.size) return updatedLeague;
+
+  const league = snapshotLeague(updatedLeague);
+
+  for (const team of getAllTeamsFromLeague(league) || []) {
+    const teamName = getTeamNameForProgression(team);
+    const rookieMaps = rookieMapByTeam.get(teamName);
+    if (!rookieMaps) continue;
+
+    const restoreBucket = (players = [], bucketName = "players") => {
+      const restored = [];
+      const seen = new Set();
+      const bucketMap = rookieMaps[bucketName] || new Map();
+
+      for (const player of players || []) {
+        const key = progressionPlayerKey(player);
+        const replacement = key ? bucketMap.get(key) || rookieMaps.any.get(key) : null;
+        const nextPlayer = replacement ? snapshotLeague(replacement) : player;
+        const nextKey = progressionPlayerKey(nextPlayer);
+        if (nextKey && seen.has(nextKey)) continue;
+        if (nextKey) seen.add(nextKey);
+        restored.push(nextPlayer);
+      }
+
+      for (const [key, rookie] of bucketMap.entries()) {
+        if (key && seen.has(key)) continue;
+        if (key) seen.add(key);
+        restored.push(snapshotLeague(rookie));
+      }
+
+      return restored;
+    };
+
+    team.players = restoreBucket(Array.isArray(team.players) ? team.players : [], "players");
+    team.twoWayPlayers = restoreBucket(Array.isArray(team.twoWayPlayers) ? team.twoWayPlayers : [], "twoWayPlayers");
+  }
+
+  return league;
+}
+
+function prepareLeagueForProgressionWorker(league, seasonYear = null) {
+  const cloned = snapshotLeague(league);
+  const teams = getAllTeamsFromLeague(cloned);
+
+  for (const team of teams || []) {
+    if (!Array.isArray(team.players)) team.players = [];
+    if (!Array.isArray(team.twoWayPlayers)) team.twoWayPlayers = [];
+
+    // Brand-new draft picks should not receive a progression roll before
+    // they have played their first NBA season. Remove them from the worker
+    // payload, then restore the exact original objects before saving.
+    team.players = team.players.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
+    team.twoWayPlayers = team.twoWayPlayers.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
+
+    const existing = new Set(team.players.map(progressionPlayerKey));
+
+    for (const player of team.twoWayPlayers) {
+      const key = progressionPlayerKey(player);
+      if (key && existing.has(key)) continue;
+      if (key) existing.add(key);
+      team.players.push({
+        ...player,
+        __progressionRosterBucket: "twoWayPlayers",
+        contractType: player?.contractType || "two_way",
+        rosterStatus: player?.rosterStatus || "two_way",
+        assignmentStatus: player?.assignmentStatus || "g_league",
+      });
+    }
+  }
+
+  return cloned;
+}
+
+function restoreTwoWayBucketsAfterProgression(workerLeague, fallbackLeague) {
+  const league = snapshotLeague(workerLeague);
+  const fallbackTeams = getAllTeamsFromLeague(fallbackLeague);
+  const fallbackByName = new Map();
+
+  for (const team of fallbackTeams || []) {
+    const teamName = getTeamNameForProgression(team);
+    if (teamName) fallbackByName.set(teamName, team);
+  }
+
+  for (const team of getAllTeamsFromLeague(league) || []) {
+    const teamName = getTeamNameForProgression(team);
+    const fallbackTeam = fallbackByName.get(teamName);
+    const originalTwoWayIds = new Set((fallbackTeam?.twoWayPlayers || []).map(progressionPlayerKey));
+
+    const standardPlayers = [];
+    const twoWayPlayers = [];
+    const seenStandard = new Set();
+    const seenTwoWay = new Set();
+
+    for (const rawPlayer of team.players || []) {
+      const player = stripProgressionBucketMarker(rawPlayer);
+      const key = progressionPlayerKey(player);
+      const belongsTwoWay =
+        rawPlayer?.__progressionRosterBucket === "twoWayPlayers" ||
+        originalTwoWayIds.has(key) ||
+        isTwoWayRosterPlayer(player);
+
+      if (belongsTwoWay) {
+        player.contractType = player.contractType || "two_way";
+        player.rosterStatus = player.rosterStatus || "two_way";
+        player.assignmentStatus = player.assignmentStatus || "g_league";
+        if (!seenTwoWay.has(key)) {
+          seenTwoWay.add(key);
+          twoWayPlayers.push(player);
+        }
+        continue;
+      }
+
+      if (!seenStandard.has(key)) {
+        seenStandard.add(key);
+        standardPlayers.push(player);
+      }
+    }
+
+    for (const rawPlayer of team.twoWayPlayers || []) {
+      const player = stripProgressionBucketMarker(rawPlayer);
+      const key = progressionPlayerKey(player);
+      if (!seenTwoWay.has(key)) {
+        seenTwoWay.add(key);
+        twoWayPlayers.push(player);
+      }
+    }
+
+    team.players = standardPlayers;
+    team.twoWayPlayers = twoWayPlayers;
+  }
+
+  return league;
 }
 
 function getSeasonYearFromMeta() {
@@ -799,13 +1042,107 @@ function stampAgingGuards(league, seasonYear) {
   if (!league) return league;
   const teams = getAllTeamsFromLeague(league);
   for (const t of teams) {
-    for (const p of t?.players || []) {
+    for (const p of getProgressionPlayersFromTeam(t)) {
       if (!p || typeof p !== "object") continue;
       if (!Number.isFinite(Number(p.lastBirthdayYear))) {
         p.lastBirthdayYear = seasonYear;
       }
     }
   }
+  return league;
+}
+
+function stampCareerSeasonCounters(league, seasonYear) {
+  if (!league) return league;
+
+  const resolvedSeasonYear = Number(seasonYear || 0);
+  if (!Number.isFinite(resolvedSeasonYear) || resolvedSeasonYear <= 0) return league;
+
+  const teams = getAllTeamsFromLeague(league);
+
+  for (const team of teams || []) {
+    const teamName = getTeamNameForProgression(team);
+
+    for (const player of getProgressionPlayersFromTeam(team)) {
+      if (!player || typeof player !== "object") continue;
+
+      const meta = player.meta && typeof player.meta === "object" ? { ...player.meta } : {};
+      const rights = player.rights && typeof player.rights === "object" ? { ...player.rights } : {};
+
+      const alreadyCounted =
+        Number(meta.lastProSeasonCountedYear) === resolvedSeasonYear ||
+        Number(player.lastProSeasonCountedYear) === resolvedSeasonYear;
+
+      if (alreadyCounted) continue;
+
+      const draftYear = Number(meta.draftYear ?? player.draftYear ?? 0);
+      const currentProSeasons = Math.max(
+        0,
+        Number(meta.proSeasons ?? player.proSeasons ?? 0) || 0
+      );
+
+      const isBrandNewDraftRookie =
+        Number.isFinite(draftYear) &&
+        draftYear === resolvedSeasonYear &&
+        currentProSeasons <= 0 &&
+        String(meta.acquiredVia || player.acquiredVia || "").toLowerCase().includes("draft");
+
+      // Draft picks created in this same offseason have not played an NBA season yet.
+      // They should progress visually if the page includes them, but they should not
+      // gain a pro-season/RFA counter until the next completed season.
+      if (isBrandNewDraftRookie) {
+        meta.lastProSeasonCountedYear = resolvedSeasonYear;
+        player.lastProSeasonCountedYear = resolvedSeasonYear;
+        player.meta = meta;
+        player.rights = rights;
+        continue;
+      }
+
+      const nextProSeasons = currentProSeasons + 1;
+      meta.proSeasons = nextProSeasons;
+      player.proSeasons = nextProSeasons;
+      meta.lastProSeasonCountedYear = resolvedSeasonYear;
+      player.lastProSeasonCountedYear = resolvedSeasonYear;
+
+      const contractStartYear = Number(player.contract?.startYear ?? 0);
+      const currentYearsWithTeam = Math.max(
+        0,
+        Number(meta.yearsWithCurrentTeam ?? player.yearsWithCurrentTeam ?? 0) || 0
+      );
+
+      const likelyNewToTeamThisOffseason =
+        contractStartYear === resolvedSeasonYear &&
+        currentYearsWithTeam <= 0 &&
+        !(Number.isFinite(draftYear) && draftYear > 0 && draftYear < resolvedSeasonYear);
+
+      if (!likelyNewToTeamThisOffseason) {
+        const nextYearsWithTeam = currentYearsWithTeam + 1;
+        meta.yearsWithCurrentTeam = nextYearsWithTeam;
+        player.yearsWithCurrentTeam = nextYearsWithTeam;
+
+        const currentBirdSeasons = Math.max(
+          0,
+          Number(rights.seasonsTowardBird ?? 0) || 0
+        );
+        const nextBirdSeasons = Math.max(currentBirdSeasons + 1, nextYearsWithTeam);
+        rights.seasonsTowardBird = nextBirdSeasons;
+
+        if (teamName && !rights.heldByTeam) {
+          rights.heldByTeam = teamName;
+        }
+
+        if (!rights.birdLevel || rights.birdLevel === "none" || rights.birdLevel === "non_bird" || rights.birdLevel === "early_bird" || rights.birdLevel === "bird") {
+          if (nextBirdSeasons >= 3) rights.birdLevel = "bird";
+          else if (nextBirdSeasons >= 2) rights.birdLevel = "early_bird";
+          else if (nextBirdSeasons >= 1) rights.birdLevel = "non_bird";
+        }
+      }
+
+      player.meta = meta;
+      player.rights = rights;
+    }
+  }
+
   return league;
 }
 
@@ -1039,7 +1376,7 @@ function getProgressionAgeCompletionAudit(league, seasonYear) {
 
   for (const team of teams || []) {
     const teamName = team?.name || "";
-    for (const player of team?.players || []) {
+    for (const player of getProgressionPlayersFromTeam(team)) {
       const lastBirthdayYear = Number(player?.lastBirthdayYear);
       rows.push({
         name: player?.name || "",
@@ -1094,7 +1431,7 @@ function leagueProgressionSignature(league) {
   let potentialSum = 0;
 
   for (const t of teams || []) {
-    for (const p of t?.players || []) {
+    for (const p of getProgressionPlayersFromTeam(t)) {
       count += 1;
       ageSum += Number(p?.age || 0);
       overallSum += Number(p?.overall || 0);
@@ -1227,7 +1564,7 @@ function buildRatingBaselinesFromLeague(leagueData) {
   const teams = getAllTeamsFromLeague(leagueData);
   const allPlayers = [];
   for (const t of teams || []) {
-    for (const p of t?.players || []) {
+    for (const p of getProgressionPlayersFromTeam(t)) {
       const pos = POS.includes(p?.pos) ? p.pos : "SF";
       allPlayers.push({ pos, attrs: padAttrs(p?.attrs) });
     }
@@ -1511,7 +1848,7 @@ function recomputeDerivedRatingsInLeague(leagueData) {
   const teams = getAllTeamsFromLeague(leagueData);
 
   for (const t of teams || []) {
-    for (const p of t?.players || []) {
+    for (const p of getProgressionPlayersFromTeam(t)) {
       const pos = ["PG", "SG", "SF", "PF", "C"].includes(p?.pos) ? p.pos : "SF";
       const name = p?.name || p?.player || "";
       const attrs = padAttrs(p?.attrs);
@@ -1852,7 +2189,7 @@ export default function PlayerProgression() {
       for (const t of teams || []) {
         const teamName = t?.name || "";
 
-        for (const p of t?.players || []) {
+        for (const p of getProgressionPlayersFromTeam(t)) {
           if (p?.name === playerName) {
             return {
               team: teamName,
@@ -2063,7 +2400,7 @@ export default function PlayerProgression() {
         try { console.table(ppGetAgeRows(beforeSnapshot)); } catch {}
         console.groupEnd();
 
-        const leagueForProg = snapshotLeague(leagueData);
+        const leagueForProg = prepareLeagueForProgressionWorker(leagueData, seasonYear);
         leagueForProg.seasonYear = seasonYear;
         leagueForProg.currentSeasonYear = seasonYear;
         leagueForProg.seasonStartYear = seasonYear;
@@ -2124,7 +2461,7 @@ export default function PlayerProgression() {
           throw new Error("[PlayerProgression] Progression returned no league. Check worker response shape.");
         }
 
-        let updatedLeague = res.league;
+        let updatedLeague = restoreTwoWayBucketsAfterProgression(res.league, beforeSnapshot);
 
         updatedLeague.seasonYear = seasonYear;
         updatedLeague.currentSeasonYear = seasonYear;
@@ -2148,8 +2485,14 @@ export default function PlayerProgression() {
         });
         ppLogAgeGuards("AFTER_STAMP_AGING_GUARDS", updatedLeague, seasonYear);
 
+        updatedLeague = stampCareerSeasonCounters(updatedLeague, seasonYear);
+
         // FORCE LeagueEditor formulas as the source of truth for derived ratings
         updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
+
+        // Current-year draft picks have not played a season yet, so keep their
+        // draft-night ratings/age/counters exactly unchanged this offseason.
+        updatedLeague = restoreCurrentDraftClassRookiesAfterProgression(updatedLeague, beforeSnapshot, seasonYear);
 
         ppDump("AFTER_RECOMPUTE_DERIVED_RATINGS", updatedLeague, { runId, seasonYear });
         ppAgeAudit(beforeSnapshot, updatedLeague, "BEFORE_vs_FINAL_UPDATED_LEAGUE_AFTER_RECOMPUTE", {
@@ -2469,7 +2812,7 @@ export default function PlayerProgression() {
     const rows = [];
     for (const t of teams || []) {
       const teamName = t?.name || "Team";
-      for (const p of t.players || []) {
+      for (const p of getProgressionPlayersFromTeam(t)) {
         rows.push({ ...p, team: teamName, __key: playerKey(p?.name, teamName) });
       }
     }

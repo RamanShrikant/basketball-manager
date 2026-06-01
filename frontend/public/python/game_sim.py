@@ -144,16 +144,162 @@ def sigma_total(d):
     return clamp(14.0 - 0.10 * abs(d), 7.5, 11.0)
 
 # ------------------------------------------------------------
-# QUARTER SPLITTER
+# QUARTER / OT / MINUTES HELPERS
 # ------------------------------------------------------------
 
-def qsplit(total):
-    weights = [random.random()*0.06 + 0.22 for _ in range(4)]
-    s = sum(weights)
-    scaled = [int(w*total/s) for w in weights]
+def _weighted_pick(items, weights):
+    total = sum(max(0, w) for w in weights)
+    if total <= 0:
+        return random.choice(items)
+
+    roll = random.random() * total
+    running = 0
+    for item, weight in zip(items, weights):
+        running += max(0, weight)
+        if roll <= running:
+            return item
+
+    return items[-1]
+
+def _split_total_by_weights(total, weights):
+    if total <= 0:
+        return [0, 0, 0, 0]
+
+    s = sum(weights) or 1
+    scaled = [max(0, int(round(w * total / s))) for w in weights]
     diff = total - sum(scaled)
-    scaled[3] += diff
+
+    while diff != 0:
+        if diff > 0:
+            i = random.randrange(4)
+            scaled[i] += 1
+            diff -= 1
+        else:
+            eligible = [i for i, value in enumerate(scaled) if value > 0]
+            if not eligible:
+                break
+            i = random.choice(eligible)
+            scaled[i] -= 1
+            diff += 1
+
     return scaled
+
+def qsplit(total):
+    # Fallback single-team splitter. The paired splitter below is used for games.
+    weights = [max(0.12, random.gauss(0.25, 0.055)) for _ in range(4)]
+    return _split_total_by_weights(total, weights)
+
+def split_regulation_quarters(home_total, away_total):
+    # Shared pace creates game-flow quarters where both teams can run hot/cold.
+    shared_pace = [max(0.15, random.gauss(1.0, 0.12)) for _ in range(4)]
+
+    # Team noise creates individual quarter swings and comebacks.
+    home_weights = [max(0.10, shared_pace[i] * random.gauss(1.0, 0.14)) for i in range(4)]
+    away_weights = [max(0.10, shared_pace[i] * random.gauss(1.0, 0.14)) for i in range(4)]
+
+    return (
+        _split_total_by_weights(home_total, home_weights),
+        _split_total_by_weights(away_total, away_weights),
+    )
+
+def simulate_ot_period(total_mu, margin_mu, dOvr):
+    ot_scale = 5.0 / 48.0
+
+    ot_total_mu = clamp(total_mu * ot_scale, 16, 34)
+    ot_margin_mu = margin_mu * ot_scale
+
+    sigmaT = clamp(sigma_total(dOvr) * 0.35, 2.8, 5.8)
+    sigmaM = clamp(sigma_margin(dOvr) * 0.30, 2.8, 5.8)
+
+    sampled_total = clamp(round(gauss(ot_total_mu, sigmaT)), 10, 44)
+    sampled_margin = gauss(ot_margin_mu, sigmaM)
+
+    otH = clamp(round((sampled_total + sampled_margin) / 2), 4, 24)
+    otA = clamp(round(sampled_total - otH), 4, 24)
+
+    return otH, otA
+
+def _safe_int_minutes(value):
+    try:
+        return int(round(float(value)))
+    except Exception:
+        return 0
+
+def _minute_variance(base_minutes):
+    if base_minutes >= 30:
+        return 3
+    if base_minutes >= 20:
+        return 3
+    if base_minutes >= 10:
+        return 2
+    return 1
+
+def vary_game_minutes(team, base_mins, ot_count):
+    target_total = 240 + 25 * int(ot_count or 0)
+    players = team.get("players", []) or []
+
+    actual = {}
+    active_names = []
+    base_by_name = {}
+
+    for p in players:
+        name = p.get("name")
+        if not name:
+            continue
+
+        base = _safe_int_minutes(base_mins.get(name, 0))
+        base_by_name[name] = base
+
+        if base > 0:
+            active_names.append(name)
+        else:
+            actual[name] = 0
+
+    if not active_names:
+        return actual
+
+    starters = set(
+        sorted(
+            active_names,
+            key=lambda name: base_by_name.get(name, 0),
+            reverse=True,
+        )[:5]
+    )
+
+    for name in active_names:
+        base = base_by_name.get(name, 0)
+        ot_bonus = 5 * int(ot_count or 0) if name in starters else 0
+        delta = random.randint(-_minute_variance(base), _minute_variance(base))
+        actual[name] = max(1, base + ot_bonus + delta)
+
+    diff = target_total - sum(actual[name] for name in active_names)
+    guard = 0
+
+    while diff != 0 and guard < 2000:
+        guard += 1
+
+        if diff > 0:
+            weights = [max(1, actual[name]) for name in active_names]
+            name = _weighted_pick(active_names, weights)
+            actual[name] += 1
+            diff -= 1
+            continue
+
+        removable = [name for name in active_names if actual[name] > 1]
+        if not removable:
+            break
+
+        preferred = [
+            name for name in removable
+            if actual[name] > max(1, base_by_name.get(name, 1))
+        ]
+        pool = preferred or removable
+        weights = [max(1, actual[name]) for name in pool]
+        name = _weighted_pick(pool, weights)
+        actual[name] -= 1
+        diff += 1
+
+    return actual
 # ------------------------------------------------------------
 # GRAIL SHOOTING ENGINE (per-player line)  🔥
 # ------------------------------------------------------------
@@ -562,12 +708,12 @@ async def build_box(team, mins, team_points, ratings):
     active = []
     inactive = []
 
-    for p in players:
+    for order, p in enumerate(players):
         m = mins.get(p["name"], 0)
         if m > 0:
-            active.append({**p, "minutes": m})
+            active.append({**p, "minutes": m, "_box_order": order})
         else:
-            inactive.append(p)
+            inactive.append({**p, "_box_order": order})
 
     expected = []
     for p in active:
@@ -618,7 +764,8 @@ async def build_box(team, mins, team_points, ratings):
             "stl": 0,
             "blk": 0,
             "to": 0,
-            "pf": 0
+            "pf": 0,
+            "_box_order": p.get("_box_order", i)
         })
 
 
@@ -675,7 +822,17 @@ async def build_box(team, mins, team_points, ratings):
             "blk": 0,
             "to": 0,
             "pf": 0,
+            "_box_order": p.get("_box_order", 9999),
         })
+
+    rows.sort(key=lambda r: (
+        int(r.get("min", 0) or 0) <= 0,
+        -int(r.get("min", 0) or 0),
+        int(r.get("_box_order", 9999) or 9999),
+    ))
+
+    for r in rows:
+        r.pop("_box_order", None)
 
     return rows
 
@@ -746,23 +903,32 @@ async def simulate_game(home, away):
     Hscore = clamp(round((sampled_total + sampled_margin) / 2), 85, 150)
     Ascore = clamp(round(sampled_total - Hscore), 85, 150)
 
-    HQ = qsplit(Hscore)
-    AQ = qsplit(Ascore)
+    HQ, AQ = split_regulation_quarters(Hscore, Ascore)
     ot_count = 0
 
-    while sum(HQ[:4]) == sum(AQ[:4]):
+    while sum(HQ) == sum(AQ):
         await asyncio.sleep(0)
-        otH = clamp(round(gauss(12, 3)), 6, 22)
-        otA = clamp(round(gauss(12, 3)), 6, 22)
+        otH, otA = simulate_ot_period(total_mu, margin_mu, dOvr)
         HQ.append(otH)
         AQ.append(otA)
         ot_count += 1
 
+        # Extreme safety guard only. Normal games should never reach this.
+        if ot_count >= 8 and sum(HQ) == sum(AQ):
+            if dOvr >= 0:
+                HQ[-1] += 1
+            else:
+                AQ[-1] += 1
+            break
+
     finalH = sum(HQ)
     finalA = sum(AQ)
 
-    home_box = await build_box(home, minsH, finalH, rateH)
-    away_box = await build_box(away, minsA, finalA, rateA)
+    actualMinsH = vary_game_minutes(home, minsH, ot_count)
+    actualMinsA = vary_game_minutes(away, minsA, ot_count)
+
+    home_box = await build_box(home, actualMinsH, finalH, rateH)
+    away_box = await build_box(away, actualMinsA, finalA, rateA)
 
     print("✅ PY finished:", home["name"], "vs", away["name"])
 

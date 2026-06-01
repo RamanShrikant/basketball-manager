@@ -24,9 +24,10 @@ import PlayerRetirements from "./pages/PlayerRetirements";
 import PlayerTeamOptions from "./pages/PlayerTeamOptions";
 import AwardTracker from "./pages/AwardTracker.jsx";
 import ViewingOffers from "./pages/ViewingOffers.jsx";
-
-
-
+import DraftLottery from "./pages/DraftLottery.jsx";
+import Draft from "./pages/Draft.jsx";
+import RookieSignings from "./pages/RookieSignings.jsx";
+import RosterFinalization from "./pages/RosterFinalization.jsx";
 
 function App() {
   return (
@@ -42,7 +43,6 @@ function App() {
           <Route path="league-editor" element={<LeagueEditor />} />
           <Route path="awards" element={<Awards />} />  {/* ✅ no leading slash */}
           <Route path="/finals-mvp" element={<FinalsMvp />} />
-
         </Route>
 
         {/* ✅ Standalone full-screen routes */}
@@ -53,6 +53,10 @@ function App() {
         <Route path="/coach-gameplan" element={<CoachGameplan />} />
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/player-stats" element={<PlayerStats />} />
+        <Route path="/draft-lottery" element={<DraftLottery />} />
+        <Route path="/draft" element={<Draft />} />
+        <Route path="/rookie-signings" element={<RookieSignings />} />
+        <Route path="/roster-finalization" element={<RosterFinalization />} />
         <Route path="/standings" element={<Standings />} />
         <Route path="/playoffs" element={<Playoffs />} />
         <Route path="/player-progression" element={<PlayerProgression />} />
@@ -60,12 +64,10 @@ function App() {
         <Route path="/free-agents" element={<FreeAgents />} />
         <Route path="/award-tracker" element={<AwardTracker />} />
         <Route path="/offseason" element={<OffseasonHub />} />
-        <Route path="/offseason" element={<OffseasonHub />} />
-<Route path="/offseason-hub" element={<Navigate to="/offseason" replace />} />
+        <Route path="/offseason-hub" element={<Navigate to="/offseason" replace />} />
         <Route path="/player-team-options" element={<PlayerTeamOptions />} />
-<Route path="/player-retirements" element={<PlayerRetirements />} />
-<Route path="/viewing-offers" element={<ViewingOffers />} />
-
+        <Route path="/player-retirements" element={<PlayerRetirements />} />
+        <Route path="/viewing-offers" element={<ViewingOffers />} />
       </Routes>
     </BrowserRouter>
   );

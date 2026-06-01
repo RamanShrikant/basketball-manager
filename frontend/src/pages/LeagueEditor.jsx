@@ -1,6 +1,18 @@
 // LeagueEditor.jsx
 import React, { useState, useEffect, useMemo } from "react";
 
+const DRAFT_CLASSES_STORAGE_KEY = "bm_custom_draft_classes_v1";
+const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
+
+function safeJSON(raw, fallback = null) {
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 /* ------------------------------------------------------------
    League Editor v5.1 (v19 OFF/DEF parity + live table render)
    - OFF/DEF table cells now compute from live formula (no lag)
@@ -42,6 +54,11 @@ export default function LeagueEditor() {
   const [tradeB, setTradeB] = useState({ pool: "TEAMS", conf: "West", teamIdx: 0 });
   const [sendAIds, setSendAIds] = useState([]);
   const [sendBIds, setSendBIds] = useState([]);
+
+  // Draft class creator state. This only stores custom classes and does not decide draft mode.
+  const [draftClassYear, setDraftClassYear] = useState(2026);
+  const [draftClasses, setDraftClasses] = useState({});
+  const [draftClassStatus, setDraftClassStatus] = useState("");
 
   const allTeamsFlat = useMemo(() => {
     const out = [];
@@ -945,6 +962,268 @@ const normalizePlayer = (p) => {
     return 50;
   }
 
+  function safeDraftIdText(value = "") {
+    return String(value || "prospect")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "prospect";
+  }
+
+  function getDraftClassStorageKey(seasonYear) {
+    return `${CUSTOM_DRAFT_CLASS_PREFIX}${Number(seasonYear || draftClassYear || 2026)}`;
+  }
+
+  function getDraftClassForYear(year = draftClassYear) {
+    return draftClasses[String(Number(year || 2026))] || [];
+  }
+
+  function getDraftSourceForProspect(row = {}) {
+    return (
+      row.college ||
+      row.school ||
+      row.university ||
+      row.academy ||
+      row.academyName ||
+      row.sourceName ||
+      row.draftSource ||
+      row.nationality ||
+      ""
+    );
+  }
+
+  function normalizeDraftProspect(row = {}, index = 0, seasonYear = draftClassYear) {
+    const rank = Number(row.trueRank || row.rank || row.draftProjection || index + 1);
+    const name = String(row.name || row.playerName || `Custom Prospect ${index + 1}`).trim();
+    const pos = ["PG", "SG", "SF", "PF", "C"].includes(row.pos || row.position)
+      ? row.pos || row.position
+      : "SF";
+    const secondaryPos = ["PG", "SG", "SF", "PF", "C"].includes(row.secondaryPos || row.secondaryPosition)
+      ? row.secondaryPos || row.secondaryPosition
+      : "";
+
+    const attrs = Array.isArray(row.attrs)
+      ? row.attrs.map((x) => clamp(Number(x) || 75, 25, 99)).slice(0, 15)
+      : Array.isArray(row.attributes)
+      ? row.attributes.map((x) => clamp(Number(x) || 75, 25, 99)).slice(0, 15)
+      : Array(15).fill(75);
+
+    while (attrs.length < 15) attrs.push(75);
+
+    const age = clamp(Number(row.age || 19), 18, 23);
+    const height = clamp(Number(row.height || 78), 65, 90);
+    const overall = clamp(
+      Number(row.overall ?? row.ovr ?? calcOverall(attrs, pos)),
+      50,
+      99
+    );
+    const potential = clamp(Number(row.potential ?? row.pot ?? overall), overall, 99);
+    const offDef = calcOffDef(attrs, pos, name, height);
+    const scoringRating = Number.isFinite(Number(row.scoringRating))
+      ? Number(row.scoringRating)
+      : calcScoringRating(pos, attrs[0], attrs[1], attrs[2]);
+    const stamina = clamp(Number(row.stamina ?? calcStamina(age, attrs[ATH])), 40, 99);
+    const source = getDraftSourceForProspect(row);
+    const headshot = row.headshot || row.image || row.img || "";
+    const resolvedSeasonYear = Number(seasonYear || row.draftClassYear || row.seasonYear || draftClassYear || 2026);
+
+    return normalizePlayer({
+      ...row,
+      id: row.id || `custom_${resolvedSeasonYear}_${String(rank).padStart(3, "0")}_${safeDraftIdText(name)}`,
+      draftClassYear: Number(row.draftClassYear || resolvedSeasonYear),
+      name,
+      portraitId: row.portraitId || "",
+      portraitFamilyId: row.portraitFamilyId || row.portraitId || "",
+      portraitVariant: row.portraitVariant || "custom",
+      headshot,
+      image: row.image || headshot,
+      img: row.img || headshot,
+      age,
+      birthMonth: clamp(Number(row.birthMonth || 1), 1, 12),
+      birthDay: clamp(Number(row.birthDay || 1), 1, 28),
+      pos,
+      secondaryPos,
+      height,
+      weight: clamp(Number(row.weight || 215), 150, 320),
+      college: row.college || source,
+      school: row.school || source,
+      university: row.university || source,
+      academy: row.academy || source,
+      academyName: row.academyName || source,
+      sourceName: row.sourceName || source,
+      draftSource: row.draftSource || source,
+      sourceType: row.sourceType || row.collegeBucket || "custom",
+      collegeBucket: row.collegeBucket || row.sourceType || "custom",
+      nationality: row.nationality || "USA",
+      ethnicityGroup: row.ethnicityGroup || "custom",
+      subgroup: row.subgroup || "custom",
+      skinTone: row.skinTone || "custom",
+      identityKey: row.identityKey || "custom",
+      region: row.region || "custom",
+      archetype: row.archetype || row.type || "Custom Prospect",
+      tier: row.tier || "Custom",
+      overall,
+      potential,
+      floor: clamp(Number(row.floor || overall - 4), 45, overall),
+      ceiling: clamp(Number(row.ceiling || potential), potential, 99),
+      attrs,
+      offRating: Number.isFinite(Number(row.offRating)) ? Number(row.offRating) : offDef.off,
+      defRating: Number.isFinite(Number(row.defRating)) ? Number(row.defRating) : offDef.def,
+      stamina,
+      scoringRating,
+      draftProjection: clamp(Number(row.draftProjection || rank), 1, 110),
+      trueRank: clamp(Number(row.trueRank || rank), 1, 110),
+      contract: null,
+      rights: buildDefaultRights({ rookieScale: true }),
+      meta: buildDefaultMeta({
+        draftYear: resolvedSeasonYear,
+        acquiredVia: "draft_class_editor",
+        proSeasons: 0,
+        yearsWithCurrentTeam: 0,
+      }),
+      scouting: row.scouting || {
+        projectedRangeLow: clamp(rank - 3, 1, 110),
+        projectedRangeHigh: clamp(rank + 8, 1, 110),
+        scoutedOverallRange: [clamp(overall - 2, 45, 99), clamp(overall + 2, 45, 99)],
+        scoutedPotentialRange: [clamp(potential - 4, overall, 99), clamp(potential + 3, overall, 99)],
+      },
+      traits: {
+        nbaReady: Number(row.traits?.nbaReady ?? Math.max(0.05, Math.min(0.98, (overall - 55) / 32))),
+        boomBust: Number(row.traits?.boomBust ?? 0.3),
+        workEthic: Number(row.traits?.workEthic ?? 0.7),
+        injuryRisk: Number(row.traits?.injuryRisk ?? 0.12),
+        starUpside: Number(row.traits?.starUpside ?? Math.max(0.02, Math.min(0.98, (potential - 70) / 29))),
+      },
+    });
+  }
+
+  function normalizeDraftClassPayload(rawPayload, fallbackSeasonYear = draftClassYear) {
+    const payload = rawPayload || {};
+    const rows = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload.draftClass)
+      ? payload.draftClass
+      : Array.isArray(payload.prospects)
+      ? payload.prospects
+      : Array.isArray(payload.players)
+      ? payload.players
+      : [];
+
+    const seasonYear = Number(payload.seasonYear || payload.draftClassYear || fallbackSeasonYear || 2026);
+    const draftClass = rows.map((row, index) => normalizeDraftProspect(row, index, seasonYear));
+
+    return {
+      ok: true,
+      version: "league_editor_draft_class_creator_v1",
+      seasonYear,
+      classType: "custom",
+      count: draftClass.length,
+      draftClass,
+      classMeta: {
+        seasonYear,
+        classType: "custom",
+        prospectCount: draftClass.length,
+        summary: `${seasonYear} custom draft class`,
+        source: "LeagueEditor draft class creator",
+      },
+    };
+  }
+
+  function persistDraftClasses(nextClasses) {
+    localStorage.setItem(DRAFT_CLASSES_STORAGE_KEY, JSON.stringify(nextClasses || {}));
+
+    for (const [year, rows] of Object.entries(nextClasses || {})) {
+      const seasonYear = Number(year);
+      if (!Number.isFinite(seasonYear)) continue;
+
+      const payload = normalizeDraftClassPayload({ seasonYear, draftClass: rows || [] }, seasonYear);
+      localStorage.setItem(getDraftClassStorageKey(seasonYear), JSON.stringify(payload));
+    }
+  }
+
+  function updateDraftClassYear(year, updater) {
+    const seasonYear = Number(year || draftClassYear || 2026);
+    setDraftClasses((prev) => {
+      const copy = JSON.parse(JSON.stringify(prev || {}));
+      const key = String(seasonYear);
+      const current = copy[key] || [];
+      copy[key] = typeof updater === "function" ? updater(current) : updater;
+      persistDraftClasses(copy);
+      return copy;
+    });
+  }
+
+  function exportDraftClassYear(year = draftClassYear) {
+    const seasonYear = Number(year || draftClassYear || 2026);
+    const payload = normalizeDraftClassPayload(
+      {
+        seasonYear,
+        draftClass: getDraftClassForYear(seasonYear),
+      },
+      seasonYear
+    );
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `custom_draft_class_${seasonYear}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importDraftClassYear(file) {
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target.result);
+        const normalized = normalizeDraftClassPayload(parsed, draftClassYear);
+
+        if (!normalized.draftClass.length) {
+          throw new Error("Draft class JSON has no prospects.");
+        }
+
+        const seasonYear = Number(normalized.seasonYear || draftClassYear || 2026);
+
+        setDraftClasses((prev) => {
+          const copy = JSON.parse(JSON.stringify(prev || {}));
+          copy[String(seasonYear)] = normalized.draftClass.map((row, index) =>
+            normalizeDraftProspect(row, index, seasonYear)
+          );
+          persistDraftClasses(copy);
+          return copy;
+        });
+
+        setDraftClassYear(seasonYear);
+        setDraftClassStatus(
+          `Imported ${normalized.draftClass.length} prospects into the ${seasonYear} draft class.`
+        );
+      } catch (err) {
+        const message = err?.message || "Failed to import draft class JSON.";
+        setDraftClassStatus(message);
+        alert(message);
+      }
+    };
+
+    reader.readAsText(file);
+  }
+
+  function clearDraftClassYear(year = draftClassYear) {
+    const seasonYear = Number(year || draftClassYear || 2026);
+    if (!window.confirm(`Clear the ${seasonYear} custom draft class?`)) return;
+
+    setDraftClasses((prev) => {
+      const copy = JSON.parse(JSON.stringify(prev || {}));
+      delete copy[String(seasonYear)];
+      persistDraftClasses(copy);
+      localStorage.removeItem(getDraftClassStorageKey(seasonYear));
+      return copy;
+    });
+    setDraftClassStatus(`Cleared custom draft class ${seasonYear}.`);
+  }
+
   /* ---------------- Auto-Save + Load ---------------- */
   useEffect(() => {
     const saved = localStorage.getItem("leagueData");
@@ -982,6 +1261,39 @@ const normalizePlayer = (p) => {
     } catch (err) {
       console.error(err);
     }
+  }, []);
+
+  useEffect(() => {
+    const savedClasses = safeJSON(localStorage.getItem(DRAFT_CLASSES_STORAGE_KEY), {});
+    const loaded = {};
+
+    for (const [year, value] of Object.entries(savedClasses || {})) {
+      const seasonYear = Number(year);
+      if (!Number.isFinite(seasonYear)) continue;
+
+      const rows = Array.isArray(value)
+        ? value
+        : Array.isArray(value?.draftClass)
+        ? value.draftClass
+        : [];
+
+      loaded[String(seasonYear)] = rows.map((row, index) => normalizeDraftProspect(row, index, seasonYear));
+    }
+
+    for (let year = 2026; year <= 2035; year++) {
+      const savedPayload = safeJSON(localStorage.getItem(getDraftClassStorageKey(year)), null);
+      if (savedPayload?.draftClass?.length && !loaded[String(year)]) {
+        loaded[String(year)] = savedPayload.draftClass.map((row, index) => normalizeDraftProspect(row, index, year));
+      }
+    }
+
+    setDraftClasses(loaded);
+    const years = Object.keys(loaded).sort();
+    if (years.length) {
+      setDraftClassYear(Number(years[0]));
+      setDraftClassStatus(`Loaded ${years.length} saved custom draft class${years.length === 1 ? "" : "es"}.`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1047,6 +1359,8 @@ const normalizePlayer = (p) => {
       const ex =
         pool === "FA"
           ? freeAgents[pIdx]
+          : pool === "DRAFT"
+          ? getDraftClassForYear(draftClassYear)[pIdx]
           : conferences[selectedConf][tIdx].players[pIdx];
 
       const safe = normalizePlayer({
@@ -1062,14 +1376,37 @@ const normalizePlayer = (p) => {
     } else {
       setEditingPlayer(null);
       const fresh = initPlayer();
-      setPlayerForm(fresh);
-      setSalaryText(formatSalaryText(fresh.contract?.salaryByYear || []));
-      setOptionYearsText(formatOptionYearsText(fresh.contract?.option));
+      const next =
+        pool === "FA"
+          ? { ...fresh, contract: null }
+          : pool === "DRAFT"
+          ? normalizeDraftProspect(
+              {
+                ...fresh,
+                name: "",
+                age: 19,
+                potential: 75,
+                contract: null,
+                school: "",
+                college: "",
+                academy: "",
+                draftClassYear,
+                draftProjection: getDraftClassForYear(draftClassYear).length + 1,
+                trueRank: getDraftClassForYear(draftClassYear).length + 1,
+              },
+              getDraftClassForYear(draftClassYear).length,
+              draftClassYear
+            )
+          : fresh;
+
+      setPlayerForm(next);
+      setSalaryText(formatSalaryText(next.contract?.salaryByYear || []));
+      setOptionYearsText(formatOptionYearsText(next.contract?.option));
     }
     setShowPlayerForm(true);
   };
     const getEditingRightsHolder = () => {
-    if (editingPool === "FA") return null;
+    if (editingPool === "FA" || editingPool === "DRAFT") return null;
     return conferences?.[selectedConf]?.[editingTeam]?.name || null;
   };
 
@@ -1098,12 +1435,15 @@ const normalizePlayer = (p) => {
         ...(playerForm.rights ?? buildDefaultRights()),
         heldByTeam: rightsHolder,
       }),
-      contract: {
-        ...(playerForm.contract ?? {}),
-        startYear: playerForm.contract?.startYear ?? 2026,
-        salaryByYear,
-        option: builtOption,
-      },
+      contract:
+        editingPool === "DRAFT"
+          ? null
+          : {
+              ...(playerForm.contract ?? {}),
+              startYear: playerForm.contract?.startYear ?? 2026,
+              salaryByYear,
+              option: builtOption,
+            },
     });
 
     const { off, def } = calcOffDef(p.attrs, p.pos, p.name, p.height);
@@ -1120,6 +1460,16 @@ const normalizePlayer = (p) => {
         else copy.push(p);
         return copy;
       });
+    } else if (editingPool === "DRAFT") {
+      updateDraftClassYear(draftClassYear, (current) => {
+        const copy = JSON.parse(JSON.stringify(current || []));
+        const index = editingPlayer !== null ? editingPlayer : copy.length;
+        const prospect = normalizeDraftProspect(p, index, draftClassYear);
+        if (editingPlayer !== null) copy[editingPlayer] = prospect;
+        else copy.push(prospect);
+        return copy.map((row, i) => normalizeDraftProspect(row, i, draftClassYear));
+      });
+      setDraftClassStatus(`Saved ${p.name || "prospect"} to the ${draftClassYear} draft class.`);
     } else {
       setConferences((prev) => {
         const copy = JSON.parse(JSON.stringify(prev));
@@ -1287,7 +1637,7 @@ const normalizePlayer = (p) => {
 
       {/* FIX 5: Pool Toggle */}
       <div className="flex justify-center gap-4">
-        {["TEAMS", "FA"].map((p) => (
+        {["TEAMS", "FA", "DRAFT"].map((p) => (
           <button
             key={p}
             onClick={() => setSelectedPool(p)}
@@ -1295,7 +1645,7 @@ const normalizePlayer = (p) => {
               selectedPool === p ? "bg-orange-600 text-white" : "bg-gray-200"
             }`}
           >
-            {p === "TEAMS" ? "Teams" : "Free Agents"}
+            {p === "TEAMS" ? "Teams" : p === "FA" ? "Free Agents" : "Draft Classes"}
           </button>
         ))}
       </div>
@@ -1453,6 +1803,166 @@ const normalizePlayer = (p) => {
                 <tr>
                   <td colSpan={11} className="text-center text-slate-500 py-6">
                     No free agents yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+
+      {selectedPool === "DRAFT" && (
+        <div className="border rounded-2xl p-8 bg-white shadow-lg">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-4">
+            <div>
+              <h2 className="text-2xl font-bold">Draft Class Creator</h2>
+              <p className="text-sm text-slate-600 mt-1">
+                Build custom rookie classes here. The calendar/draft flow can later ask whether to use one.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2 items-center">
+              <select
+                className="border p-2 rounded bg-white"
+                value={draftClassYear}
+                onChange={(e) => setDraftClassYear(Number(e.target.value))}
+              >
+                {[2026, 2027, 2028, 2029, 2030, 2031, 2032, 2033, 2034, 2035].map((year) => (
+                  <option key={year} value={year}>
+                    Class of {year}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                onClick={() => openPlayerForm(null, null, "DRAFT")}
+                className="bg-blue-600 text-white px-3 py-2 rounded hover:bg-blue-700"
+              >
+                Add Prospect
+              </button>
+
+              <label className="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700 cursor-pointer">
+                Import Class JSON
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={(e) => {
+                    importDraftClassYear(e.target.files?.[0]);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+
+              <button
+                onClick={() => exportDraftClassYear(draftClassYear)}
+                className="bg-purple-600 text-white px-3 py-2 rounded hover:bg-purple-700"
+              >
+                Export Class JSON
+              </button>
+
+              <button
+                onClick={() => clearDraftClassYear(draftClassYear)}
+                className="bg-gray-200 px-3 py-2 rounded hover:bg-gray-300"
+              >
+                Clear Class
+              </button>
+            </div>
+          </div>
+
+          <div className="text-sm text-slate-700 mb-3">
+            Class of <span className="font-bold">{draftClassYear}</span> | Prospects: {getDraftClassForYear(draftClassYear).length}
+          </div>
+
+          {draftClassStatus && (
+            <div className="mb-4 rounded-xl border border-purple-200 bg-purple-50 px-4 py-2 text-sm text-purple-900">
+              {draftClassStatus}
+            </div>
+          )}
+
+          <table className="w-full text-base">
+            <thead>
+              <tr className="border-b">
+                <th className="text-left font-semibold">Prospect</th>
+                <th className="text-center font-semibold">School / Academy</th>
+                <th className="text-center font-semibold">Pos</th>
+                <th className="text-center font-semibold">Age</th>
+                <th className="text-center font-semibold">Height</th>
+                <th className="text-center font-semibold">OVR</th>
+                <th className="text-center font-semibold">OFF</th>
+                <th className="text-center font-semibold">DEF</th>
+                <th className="text-center font-semibold">POT</th>
+                <th></th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {getDraftClassForYear(draftClassYear).map((p0, i) => {
+                const p = normalizeDraftProspect(p0, i, draftClassYear);
+                const live = calcOffDef(p.attrs, p.pos, p.name, p.height);
+                const source = getDraftSourceForProspect(p) || "—";
+
+                return (
+                  <tr key={p.id || i} className="border-b align-middle py-4">
+                    <td className="flex items-center gap-4 py-4">
+                      {p.headshot && (
+                        <div
+                          className="w-16 h-16 rounded-full bg-white border border-slate-200"
+                          style={{
+                            backgroundImage: `url(${p.headshot})`,
+                            backgroundSize: "80%",
+                            backgroundPosition: "center 10%",
+                            backgroundRepeat: "no-repeat",
+                          }}
+                        />
+                      )}
+                      <div>
+                        <div className="font-semibold text-base">#{i + 1} {p.name}</div>
+                        <div className="text-[0.8rem] text-slate-600">Class of {draftClassYear}</div>
+                      </div>
+                    </td>
+
+                    <td className="text-center">{source}</td>
+                    <td className="text-center">
+                      {p.pos}
+                      {p.secondaryPos ? ` / ${p.secondaryPos}` : ""}
+                    </td>
+                    <td className="text-center">{p.age}</td>
+                    <td className="text-center">{formatHeight(p.height)}</td>
+                    <td className="text-center font-bold">{p.overall}</td>
+                    <td className="text-center">{live.off}</td>
+                    <td className="text-center">{live.def}</td>
+                    <td className="text-center">{p.potential}</td>
+
+                    <td className="text-right">
+                      <button
+                        onClick={() => openPlayerForm(null, i, "DRAFT")}
+                        className="text-blue-600 text-sm hover:underline mr-2"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => {
+                          updateDraftClassYear(draftClassYear, (current) => {
+                            const copy = JSON.parse(JSON.stringify(current || []));
+                            copy.splice(i, 1);
+                            return copy.map((row, index) => normalizeDraftProspect(row, index, draftClassYear));
+                          });
+                        }}
+                        className="text-red-600 text-xl hover:opacity-75"
+                      >
+                        🗑️
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {!getDraftClassForYear(draftClassYear).length && (
+                <tr>
+                  <td colSpan={10} className="text-center text-slate-500 py-6">
+                    No prospects in this class yet.
                   </td>
                 </tr>
               )}
@@ -1793,7 +2303,7 @@ const normalizePlayer = (p) => {
       {showPlayerForm && (
         <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50">
           <div className="bg-white rounded-lg p-6 w-[650px] max-h-[90vh] overflow-y-auto">
-            <h2 className="text-xl font-bold mb-4">{editingPlayer !== null ? "Edit Player" : "Add Player"}</h2>
+            <h2 className="text-xl font-bold mb-4">{editingPool === "DRAFT" ? editingPlayer !== null ? "Edit Prospect" : "Add Prospect" : editingPlayer !== null ? "Edit Player" : "Add Player"}</h2>
 
             <div className="flex flex-col gap-2 mb-3">
               <input
@@ -1809,6 +2319,26 @@ const normalizePlayer = (p) => {
                 value={playerForm.headshot}
                 onChange={(e) => setPlayerForm({ ...playerForm, headshot: e.target.value })}
               />
+
+              {editingPool === "DRAFT" && (
+                <input
+                  className="border p-2 rounded"
+                  placeholder="School / Academy"
+                  value={playerForm.school || playerForm.college || playerForm.academy || ""}
+                  onChange={(e) => {
+                    const source = e.target.value;
+                    setPlayerForm({
+                      ...playerForm,
+                      school: source,
+                      college: source,
+                      academy: source,
+                      academyName: source,
+                      sourceName: source,
+                      draftSource: source,
+                    });
+                  }}
+                />
+              )}
 
               {/* Bio */}
               <div className="mt-2">
@@ -1852,9 +2382,11 @@ const normalizePlayer = (p) => {
               <div className="mt-4">
                 <div className="text-sm font-semibold text-slate-700 mb-1">Contract</div>
 
-                {editingPool === "FA" && (
+                {(editingPool === "FA" || editingPool === "DRAFT") && (
                   <div className="text-xs text-slate-500 mb-2">
-                    Free agents are unsigned. Contract is set when they sign with a team.
+                    {editingPool === "DRAFT"
+                      ? "Draft prospects are unsigned. Rookie contracts are handled after the draft."
+                      : "Free agents are unsigned. Contract is set when they sign with a team."}
                   </div>
                 )}
 
@@ -1878,7 +2410,7 @@ const normalizePlayer = (p) => {
                           },
                         });
                       }}
-                      disabled={editingPool === "FA"}
+                      disabled={editingPool === "FA" || editingPool === "DRAFT"}
                     />
                   </div>
 
@@ -1889,6 +2421,7 @@ const normalizePlayer = (p) => {
                       type="text"
                       placeholder="8, 8.5, 9"
                       value={salaryText}
+                      disabled={editingPool === "DRAFT"}
                       onChange={(e) => {
                         const raw = e.target.value;
                         setSalaryText(raw);
@@ -2011,6 +2544,8 @@ const normalizePlayer = (p) => {
                     <div className="border p-2 rounded w-full bg-slate-50 text-slate-700">
                       {editingPool === "FA"
                         ? "None - Free Agent"
+                        : editingPool === "DRAFT"
+                        ? "None - Draft Prospect"
                         : conferences?.[selectedConf]?.[editingTeam]?.name || "Current Team"}
                     </div>
                     <div className="text-[0.7rem] text-slate-500 mt-1">
@@ -2108,7 +2643,7 @@ const normalizePlayer = (p) => {
 
                         setOptionYearsText(type === "none" ? "" : nextYears.map((i) => String(i + 1)).join(", "));
                       }}
-                      disabled={editingPool === "FA"}
+                      disabled={editingPool === "FA" || editingPool === "DRAFT"}
                     >
                       <option value="none">None</option>
                       <option value="team">Team Option</option>
@@ -2148,7 +2683,7 @@ const normalizePlayer = (p) => {
                           },
                         });
                       }}
-                      disabled={!playerForm.contract?.option || editingPool === "FA"}
+                      disabled={!playerForm.contract?.option || editingPool === "FA" || editingPool === "DRAFT"}
                     />
                   </div>
                 </div>
