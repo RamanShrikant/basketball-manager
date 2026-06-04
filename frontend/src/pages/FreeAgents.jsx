@@ -361,6 +361,51 @@ function persistLeagueData(updated) {
   }
 }
 
+function buildDefaultOffseasonState(seasonYear) {
+  return {
+    active: true,
+    seasonYear: Number(seasonYear || 2026),
+    retirementsComplete: false,
+    retirementsSkipped: false,
+    retirementsDisabled: false,
+    draftLotteryComplete: false,
+    draftComplete: false,
+    rookieSigningsComplete: false,
+    optionsComplete: false,
+    rightsManagementComplete: false,
+    preFreeAgencyResolved: false,
+    freeAgencyComplete: false,
+    rosterFinalizationComplete: false,
+    progressionComplete: false,
+  };
+}
+
+function normalizeOffseasonStateForSeason(rawState, seasonYear) {
+  const resolvedSeasonYear = Number(seasonYear || 2026);
+
+  if (!rawState || typeof rawState !== "object") {
+    return buildDefaultOffseasonState(resolvedSeasonYear);
+  }
+
+  const storedSeasonYear = Number(rawState?.seasonYear || 0);
+
+  if (storedSeasonYear > 0 && storedSeasonYear !== resolvedSeasonYear) {
+    const fresh = buildDefaultOffseasonState(resolvedSeasonYear);
+    try {
+      localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(fresh));
+      localStorage.removeItem(FREE_AGENCY_LAST_ROUTE_KEY);
+    } catch {}
+    return fresh;
+  }
+
+  return {
+    ...buildDefaultOffseasonState(resolvedSeasonYear),
+    ...rawState,
+    seasonYear: resolvedSeasonYear,
+  };
+}
+
+
 
 export default function FreeAgents() {
   const { leagueData, selectedTeam, setSelectedTeam, setLeagueData } = useGame();
@@ -413,9 +458,14 @@ export default function FreeAgents() {
   }, [leagueData]);
 
   useEffect(() => {
-    setOffseasonState(
-      safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), null) || {}
+    const raw = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), null) || {};
+    const seasonYearForState = Number(
+      workingLeagueData?.seasonYear ||
+        workingLeagueData?.currentSeasonYear ||
+        2026
     );
+    const normalized = normalizeOffseasonStateForSeason(raw, seasonYearForState);
+    setOffseasonState(normalized);
   }, [workingLeagueData]);
 
   const attrColumns = [
@@ -445,8 +495,11 @@ export default function FreeAgents() {
   }
 
   const updateOffseasonState = (patch) => {
-    const current = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {}) || {};
-    const next = { ...current, ...patch };
+    const current = normalizeOffseasonStateForSeason(
+      safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {}) || {},
+      currentSeasonYear
+    );
+    const next = { ...current, ...patch, seasonYear: currentSeasonYear };
     localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(next));
     setOffseasonState(next);
   };
@@ -708,8 +761,7 @@ const isOffseasonMode =
       signedPlayersLog.length > 0 ||
       dailyLog.length > 0 ||
       offerHistory.length > 0 ||
-      Object.keys(offersByPlayerSnapshot).length > 0 ||
-      freeAgents.length === 0
+      Object.keys(offersByPlayerSnapshot).length > 0
   );
 
   const backendMarkedFreeAgencyComplete =
@@ -738,11 +790,7 @@ const isOffseasonMode =
 
   const effectiveFreeAgencyFinished =
     trustedFreeAgencyFinished ||
-    freeAgencyMarketComplete ||
-    (isOffseasonMode &&
-      optionsComplete &&
-      !isLiveFreeAgencyActive &&
-      freeAgents.length === 0);
+    freeAgencyMarketComplete;
 
   const activeOfferCount = useMemo(() => {
     const offersByPlayer = liveFreeAgencyState?.offersByPlayer || {};
@@ -788,14 +836,10 @@ const isOffseasonMode =
   const userRosterCount = Number(currentUserTeam?.players?.length || 0);
   const userRosterTooFew = !!selectedTeam?.name && userRosterCount < minRosterSize;
   const userRosterTooMany = !!selectedTeam?.name && userRosterCount > maxRosterSize;
-
-  // Offseason/free-agency roster flexibility:
-  // teams can temporarily carry more than 15 standard players. The hard
-  // 14-15 standard-player limit is enforced later when games are simulated.
-  const userRosterInvalid = userRosterTooFew;
+  const userRosterInvalid = userRosterTooFew || userRosterTooMany;
 
   const canSubmitLiveOffer = isOffseasonMode && optionsComplete && rightsManagementComplete && isLiveFreeAgencyActive;
-  const canManualCleanupSign = isOffseasonMode && effectiveFreeAgencyFinished;
+  const canManualCleanupSign = isOffseasonMode && effectiveFreeAgencyFinished && userRosterTooFew;
   const canUseFreeAgencyAction = !isOffseasonMode || canSubmitLiveOffer || canManualCleanupSign;
 
   // Surgical pending-decision guard:
@@ -859,7 +903,7 @@ const isOffseasonMode =
     }
 
     if (userRosterTooMany) {
-      return `${selectedTeam.name} has ${userRosterCount} standard-contract players. You can carry extra players during the offseason, but you must get back to ${maxRosterSize} or fewer before simulating games.`;
+      return `${selectedTeam.name} has ${userRosterCount} players. You must get down to ${maxRosterSize} players before leaving free agency.`;
     }
 
     return "";
@@ -1363,7 +1407,7 @@ const isOffseasonMode =
     const ask = getExpectedYearOneSalary(player);
     const projectedPayroll = Number(userCapDashboard.practicalPayroll || 0) + ask;
 
-    if (!isOffseasonMode && !isLiveFreeAgencyActive && userCapDashboard.rosterCount >= userCapDashboard.rosterLimit) {
+    if (!isLiveFreeAgencyActive && userCapDashboard.rosterCount >= userCapDashboard.rosterLimit) {
       return {
         label: "NO",
         tone: "red",
@@ -2392,29 +2436,6 @@ const handleContinueToProgression = () => {
       setMarketInitLoading(true);
       setDaySummary(null);
 
-      if (!(workingLeagueData?.freeAgents || []).length) {
-        updateOffseasonState({
-          active: true,
-          seasonYear: currentSeasonYear,
-          optionsComplete: true,
-          rightsManagementComplete: true,
-          freeAgencyComplete: true,
-        });
-
-        setDaySummary({
-          dayResolved: 0,
-          signings: [],
-          generatedOffers: [],
-          stateSummary: {
-            isActive: false,
-            currentDay: 0,
-            maxDays: 0,
-            freeAgentCount: 0,
-          },
-        });
-        return;
-      }
-
 const cleanFreeAgencyState = buildCleanFreeAgencyStateForInit(
   currentSeasonYear,
   selectedTeam?.name || null,
@@ -2435,6 +2456,17 @@ const res = await initializeFreeAgencyPeriod(
 );
 
       if (!res?.ok || !res?.leagueData) {
+        if (res?.code === "pre_free_agency_contract_decisions_required") {
+          updateOffseasonState({
+            active: true,
+            seasonYear: currentSeasonYear,
+            optionsComplete: false,
+            rightsManagementComplete: false,
+            preFreeAgencyResolved: false,
+            freeAgencyComplete: false,
+          });
+        }
+
         setDaySummary({
           error: res?.reason || "Failed to start free agency.",
         });
@@ -2695,6 +2727,13 @@ updateOffseasonState({
           return;
         }
 
+        if (userRosterTooMany) {
+          setSignError(
+            `${selectedTeam.name} has ${userRosterCount} players. You must get down to ${maxRosterSize} before leaving free agency.`
+          );
+          return;
+        }
+
         setSignError("The live market is closed.");
         return;
       }
@@ -2809,7 +2848,7 @@ updateOffseasonState({
     return optionsLockedView;
   }
 
-  if (!freeAgents.length && (!isOffseasonMode || optionsComplete || effectiveFreeAgencyFinished)) {
+  if (!freeAgents.length && (!isOffseasonMode || effectiveFreeAgencyFinished)) {
     return noFreeAgentsView;
   }
 
@@ -3595,7 +3634,7 @@ updateOffseasonState({
 
             {canManualCleanupSign && (
               <div className="mb-4 text-yellow-300 text-sm font-semibold">
-                The live market is over. You can still sign remaining free agents directly, but any extra standard contracts must be cleaned up before simulating regular-season games.
+                The live market is over. Because your team is below the minimum roster size, you can still sign remaining free agents directly until you reach {minRosterSize} players.
               </div>
             )}
 

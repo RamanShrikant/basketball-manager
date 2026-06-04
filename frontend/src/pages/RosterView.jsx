@@ -307,13 +307,6 @@ export default function RosterView() {
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   }, [workingLeagueData]);
 
-  // Always render/count from the freshest team object in workingLeagueData.
-  // selectedTeam can lag after roster moves, FA signings, or bucket changes.
-  const liveSelectedTeam = useMemo(() => {
-    if (!selectedTeam?.name) return selectedTeam || null;
-    return teamsSorted.find((team) => team?.name === selectedTeam.name) || selectedTeam || null;
-  }, [teamsSorted, selectedTeam]);
-
   // all players list
   const allLeaguePlayers = useMemo(
     () =>
@@ -398,9 +391,9 @@ export default function RosterView() {
   const viewPlayers = isAllView
     ? allLeaguePlayers
     : [
-        ...(liveSelectedTeam?.players || []),
-        ...getTwoWayPlayers(liveSelectedTeam).map(markTwoWayPlayer),
-        ...getStashPlayers(liveSelectedTeam).map(markStashPlayer),
+        ...(selectedTeam?.players || []),
+        ...getTwoWayPlayers(selectedTeam).map(markTwoWayPlayer),
+        ...getStashPlayers(selectedTeam).map(markStashPlayer),
       ];
 
   useEffect(() => {
@@ -574,7 +567,7 @@ export default function RosterView() {
   const handleAssignStandardToTwoWay = (player) => {
     if (!player || isAllView) return;
 
-    const blockReason = getTwoWayAssignmentBlockReason(player, liveSelectedTeam);
+    const blockReason = getTwoWayAssignmentBlockReason(player, selectedTeam);
     if (blockReason) {
       console.warn("[RosterView] two-way assignment blocked:", blockReason);
       return;
@@ -782,18 +775,18 @@ export default function RosterView() {
   }
 
   const player = selectedPlayer || viewPlayers[0] || {};
-  const headerTitle = isAllView ? "All Players" : `${liveSelectedTeam?.name || selectedTeam?.name || "Team"} Roster`;
+  const headerTitle = isAllView ? "All Players" : `${selectedTeam.name} Roster`;
   const showTeamCol = isAllView; // logo column only in All Players view
   const regularSeasonStandardRosterLimit = Number(
     workingLeagueData?.rosterLimit ||
     workingLeagueData?.maxRosterSize ||
     15
   );
-  const standardRosterCount = !isAllView && liveSelectedTeam?.players
-    ? liveSelectedTeam.players.length
+  const standardRosterCount = !isAllView && selectedTeam?.players
+    ? selectedTeam.players.length
     : 0;
-  const twoWayRosterCount = !isAllView ? getTwoWayPlayers(liveSelectedTeam).length : 0;
-  const stashRosterCount = !isAllView ? getStashPlayers(liveSelectedTeam).length : 0;
+  const twoWayRosterCount = !isAllView ? getTwoWayPlayers(selectedTeam).length : 0;
+  const stashRosterCount = !isAllView ? getStashPlayers(selectedTeam).length : 0;
   const rosterOverRegularSeasonLimit =
     !isAllView && standardRosterCount > regularSeasonStandardRosterLimit;
 
@@ -1190,7 +1183,7 @@ export default function RosterView() {
                 ) : (
                   <>
                     {(() => {
-                      const blockReason = getTwoWayAssignmentBlockReason(actionTargetPlayer, liveSelectedTeam);
+                      const blockReason = getTwoWayAssignmentBlockReason(actionTargetPlayer, selectedTeam);
                       const disabled = Boolean(blockReason);
 
                       return (
@@ -1253,8 +1246,8 @@ export default function RosterView() {
         open={playerCardOpen}
         player={cardTargetPlayer}
         team={getTeamForPlayer(cardTargetPlayer)}
-        teamName={getTeamForPlayer(cardTargetPlayer)?.name || (isAllView ? teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.teamName : liveSelectedTeam?.name || selectedTeam?.name)}
-        teamLogo={getTeamForPlayer(cardTargetPlayer)?.logo || teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.logo || liveSelectedTeam?.logo || selectedTeam?.logo}
+        teamName={getTeamForPlayer(cardTargetPlayer)?.name || (isAllView ? teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.teamName : selectedTeam?.name)}
+        teamLogo={getTeamForPlayer(cardTargetPlayer)?.logo || teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.logo || selectedTeam?.logo}
         leagueData={workingLeagueData}
         onClose={closePlayerCard}
       />
