@@ -23,7 +23,7 @@ try:
 except Exception:
     generate_draft_class = None
 
-DRAFT_LOGIC_VERSION = "2026-05-28_draft_logic_v2_rookie_headshots"
+DRAFT_LOGIC_VERSION = "2026-06-04_draft_logic_all_picks_rookie_signings_v4"
 
 POSITION_ORDER = ["PG", "SG", "SF", "PF", "C"]
 POSITION_BUCKETS = {
@@ -459,29 +459,33 @@ def _rookie_salary_for_pick(round_num: int, pick_num: int) -> int:
 def _rookie_contract(round_num: int, pick_num: int, season_year: int) -> Dict[str, Any]:
     first_salary = _rookie_salary_for_pick(round_num, pick_num)
 
+    # All drafted players now go through the Rookie Signings event first.
+    # First-rounders keep a projected rookie-scale contract, but it is not
+    # applied to the 15-man roster until Rookie Signings resolves them.
     if round_num == 1:
-        salary_by_year = [
+        projected_salary_by_year = [
             first_salary,
             int(first_salary * 1.05),
             int(first_salary * 1.10),
             int(first_salary * 1.22),
         ]
+        projected_option = {
+            "type": "team",
+            "yearIndices": [2, 3],
+            "picked": None,
+        }
         return {
-            "type": "standard",
+            "type": "unsigned_rookie",
             "startYear": season_year,
-            "salaryByYear": salary_by_year,
-            "option": {
-                "type": "team",
-                "yearIndices": [2, 3],
-                "picked": None,
-            },
-            "source": "first_round_rookie_scale",
-            "countsAgainstStandardRoster": True,
+            "salaryByYear": [],
+            "projectedSalaryByYear": projected_salary_by_year,
+            "projectedOption": projected_option,
+            "option": None,
+            "pendingRookieSigning": True,
+            "source": "first_round_pending_rookie_signing",
+            "countsAgainstStandardRoster": False,
         }
 
-    # Second-round rookies do not become automatic standard contracts.
-    # They move to the Rookie Signings event where the team can choose
-    # standard contract, two-way contract, draft rights, or release.
     projected_salary_by_year = [first_salary, int(first_salary * 1.08)]
     return {
         "type": "unsigned_rookie",
@@ -490,7 +494,7 @@ def _rookie_contract(round_num: int, pick_num: int, season_year: int) -> Dict[st
         "projectedSalaryByYear": projected_salary_by_year,
         "option": None,
         "pendingRookieSigning": True,
-        "source": "second_round_pending_rookie_signing",
+        "source": "draft_pick_pending_rookie_signing",
         "countsAgainstStandardRoster": False,
     }
 
@@ -609,11 +613,7 @@ def _prospect_to_player(
     rights_team = team_name if drafted else None
     acquired_via = "draft" if drafted else "undrafted_free_agent"
     contract_type = contract.get("type") if isinstance(contract, dict) else "standard"
-    if drafted and round_num == 1:
-        roster_status = "standard"
-        assignment_status = "nba"
-        rookie_pending = False
-    elif drafted and round_num == 2:
+    if drafted:
         roster_status = "rookie_pending"
         assignment_status = "unsigned_rookie"
         rookie_pending = True

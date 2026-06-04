@@ -111,6 +111,7 @@ function loadTeamRoleMap(teamName) {
 
 const REGULAR_SEASON_MIN_STANDARD_PLAYERS = 14;
 const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 15;
+const REGULAR_SEASON_MAX_TWO_WAY_PLAYERS = 3;
 
 function getTeamPlayerCount(team) {
   return Array.isArray(team?.players)
@@ -118,17 +119,39 @@ function getTeamPlayerCount(team) {
     : 0;
 }
 
+function getTeamTwoWayCount(team) {
+  return Array.isArray(team?.twoWayPlayers)
+    ? team.twoWayPlayers.filter((p) => p && (p.name || p.player)).length
+    : 0;
+}
+
+function getTeamPendingRookieCount(team) {
+  return Array.isArray(team?.pendingRookieSignings)
+    ? team.pendingRookieSignings.filter((p) => p && (p.name || p.player)).length
+    : 0;
+}
+
 function getUserRosterSimBlockMessage(team) {
   if (!team) return "";
 
   const count = getTeamPlayerCount(team);
+  const twoWayCount = getTeamTwoWayCount(team);
+  const pendingRookieCount = getTeamPendingRookieCount(team);
+
+  if (pendingRookieCount > 0) {
+    return `${team.name} still has ${pendingRookieCount} unresolved rookie signing decision${pendingRookieCount === 1 ? "" : "s"}. Resolve rookie signings before simulating games.`;
+  }
 
   if (count < REGULAR_SEASON_MIN_STANDARD_PLAYERS) {
     return `${team.name} doesn't have enough standard-contract players. Minimum ${REGULAR_SEASON_MIN_STANDARD_PLAYERS} required to simulate games.`;
   }
 
   if (count > REGULAR_SEASON_MAX_STANDARD_PLAYERS) {
-    return `${team.name} has ${count} standard-contract players. You can carry extra players outside of simming, but before simulating you must either release players or assign eligible first-3-season players to two-way contracts until you have ${REGULAR_SEASON_MAX_STANDARD_PLAYERS} or fewer standard contracts.`;
+    return `${team.name} has ${count} standard-contract players. You can carry extra players during the offseason, but before simulating you must release players or assign eligible first-3-season players to two-way contracts until you have ${REGULAR_SEASON_MAX_STANDARD_PLAYERS} or fewer standard contracts.`;
+  }
+
+  if (twoWayCount > REGULAR_SEASON_MAX_TWO_WAY_PLAYERS) {
+    return `${team.name} has ${twoWayCount} two-way players. Maximum ${REGULAR_SEASON_MAX_TWO_WAY_PLAYERS} two-way contracts are allowed when simulating games. Having 0, 1, or 2 two-way players is fine.`;
   }
 
   return "";
@@ -142,24 +165,11 @@ function getSimulationBlockMessageForGame(game, teams) {
     return `Team lookup failed: ${game?.homeId} / ${game?.awayId}`;
   }
 
-  const homeCount = getTeamPlayerCount(homeTeam);
-  const awayCount = getTeamPlayerCount(awayTeam);
+  const homeMessage = getUserRosterSimBlockMessage(homeTeam);
+  if (homeMessage) return homeMessage;
 
-  if (homeCount < REGULAR_SEASON_MIN_STANDARD_PLAYERS) {
-    return `${homeTeam.name} doesn't have enough standard-contract players. Minimum ${REGULAR_SEASON_MIN_STANDARD_PLAYERS} required to simulate games.`;
-  }
-
-  if (homeCount > REGULAR_SEASON_MAX_STANDARD_PLAYERS) {
-    return `${homeTeam.name} has ${homeCount} standard-contract players. Maximum ${REGULAR_SEASON_MAX_STANDARD_PLAYERS} allowed when simulating games.`;
-  }
-
-  if (awayCount < REGULAR_SEASON_MIN_STANDARD_PLAYERS) {
-    return `${awayTeam.name} doesn't have enough standard-contract players. Minimum ${REGULAR_SEASON_MIN_STANDARD_PLAYERS} required to simulate games.`;
-  }
-
-  if (awayCount > REGULAR_SEASON_MAX_STANDARD_PLAYERS) {
-    return `${awayTeam.name} has ${awayCount} standard-contract players. Maximum ${REGULAR_SEASON_MAX_STANDARD_PLAYERS} allowed when simulating games.`;
-  }
+  const awayMessage = getUserRosterSimBlockMessage(awayTeam);
+  if (awayMessage) return awayMessage;
 
   return "";
 }

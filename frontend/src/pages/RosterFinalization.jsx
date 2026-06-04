@@ -79,7 +79,7 @@ function TeamStatusRow({ row }) {
         <div>
           <div className="text-base font-black text-white">{row?.teamName || "Unknown Team"}</div>
           <div className="mt-1 text-xs font-semibold text-white/45">
-            Standard {row?.standardCount}/{row?.standardMax} · Two-Way {row?.twoWayCount}/{row?.twoWayMax} · Pending {row?.pendingRookiesCount || 0}
+            Standard {row?.standardCount}/{row?.standardMax} · Two-Way {row?.twoWayCount}/{row?.twoWayMax} · Stash {row?.stashCount || 0} · Pending {row?.pendingRookiesCount || 0}
           </div>
         </div>
         <span className={`rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.14em] ${ok ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200" : "border-red-400/30 bg-red-500/10 text-red-200"}`}>
@@ -190,7 +190,7 @@ export default function RosterFinalization() {
             <p className="text-xs font-black uppercase tracking-[0.24em] text-orange-300/80">Offseason</p>
             <h1 className="mt-2 text-4xl font-black tracking-tight text-orange-500">Roster Finalization</h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-white/60">
-              Lock the season-start roster. Your team must be legal before progression. CPU teams will auto-cut fringe extras, promote useful two-way players when needed, and sign emergency minimum players if they are short.
+              Lock the season-start roster. Your team must be legal before progression. CPU teams will first move eligible young fringe players to two-way, then cut only if still over 15, and sign emergency minimum players if they are short. Carrying 0-3 two-way players is legal.
             </p>
           </div>
 

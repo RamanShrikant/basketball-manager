@@ -565,6 +565,19 @@ function isTwoWayRosterPlayer(player = {}) {
   return type === "two_way" || type === "two-way" || player?.assignmentStatus === "g_league";
 }
 
+function isStashRosterPlayer(player = {}) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const type = String(player?.contractType || player?.rosterStatus || contract?.type || "").toLowerCase();
+  return (
+    type === "stash" ||
+    type === "stashed" ||
+    type === "draft_stash" ||
+    type === "g_league_stash" ||
+    type === "overseas_stash" ||
+    player?.assignmentStatus === "stash"
+  );
+}
+
 function stripProgressionBucketMarker(player = {}) {
   if (!player || typeof player !== "object") return player;
   const next = { ...player };
@@ -572,12 +585,14 @@ function stripProgressionBucketMarker(player = {}) {
   return next;
 }
 
-function getProgressionPlayersFromTeam(team, includeTwoWay = true) {
+function getProgressionPlayersFromTeam(team, includeDevelopmentBuckets = true) {
   const standardPlayers = Array.isArray(team?.players) ? team.players : [];
-  if (!includeTwoWay) return standardPlayers;
+  if (!includeDevelopmentBuckets) return standardPlayers;
 
   const twoWayPlayers = Array.isArray(team?.twoWayPlayers) ? team.twoWayPlayers : [];
-  if (!twoWayPlayers.length) return standardPlayers;
+  const stashPlayers = Array.isArray(team?.stashPlayers) ? team.stashPlayers : [];
+
+  if (!twoWayPlayers.length && !stashPlayers.length) return standardPlayers;
 
   const seen = new Set(standardPlayers.map(progressionPlayerKey));
   const merged = [...standardPlayers];
@@ -586,7 +601,26 @@ function getProgressionPlayersFromTeam(team, includeTwoWay = true) {
     const key = progressionPlayerKey(player);
     if (key && seen.has(key)) continue;
     if (key) seen.add(key);
-    merged.push(player);
+    merged.push({
+      ...player,
+      __progressionRosterBucket: player?.__progressionRosterBucket || "twoWayPlayers",
+      contractType: player?.contractType || "two_way",
+      rosterStatus: player?.rosterStatus || "two_way",
+      assignmentStatus: player?.assignmentStatus || "g_league",
+    });
+  }
+
+  for (const player of stashPlayers) {
+    const key = progressionPlayerKey(player);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    merged.push({
+      ...player,
+      __progressionRosterBucket: player?.__progressionRosterBucket || "stashPlayers",
+      contractType: player?.contractType || "stash",
+      rosterStatus: player?.rosterStatus || "stashed",
+      assignmentStatus: player?.assignmentStatus || "stash",
+    });
   }
 
   return merged;
@@ -833,6 +867,7 @@ function makeCurrentDraftRookieMap(beforeLeague, seasonYear) {
     const teamMap = {
       players: new Map(),
       twoWayPlayers: new Map(),
+      stashPlayers: new Map(),
       any: new Map(),
     };
 
@@ -851,6 +886,15 @@ function makeCurrentDraftRookieMap(beforeLeague, seasonYear) {
       if (!key) continue;
       const cleanPlayer = snapshotLeague(player);
       teamMap.twoWayPlayers.set(key, cleanPlayer);
+      teamMap.any.set(key, cleanPlayer);
+    }
+
+    for (const player of team.stashPlayers || []) {
+      if (!isCurrentDraftClassRookie(player, seasonYear)) continue;
+      const key = progressionPlayerKey(player);
+      if (!key) continue;
+      const cleanPlayer = snapshotLeague(player);
+      teamMap.stashPlayers.set(key, cleanPlayer);
       teamMap.any.set(key, cleanPlayer);
     }
 
@@ -899,6 +943,7 @@ function restoreCurrentDraftClassRookiesAfterProgression(updatedLeague, beforeLe
 
     team.players = restoreBucket(Array.isArray(team.players) ? team.players : [], "players");
     team.twoWayPlayers = restoreBucket(Array.isArray(team.twoWayPlayers) ? team.twoWayPlayers : [], "twoWayPlayers");
+    team.stashPlayers = restoreBucket(Array.isArray(team.stashPlayers) ? team.stashPlayers : [], "stashPlayers");
   }
 
   return league;
@@ -911,12 +956,16 @@ function prepareLeagueForProgressionWorker(league, seasonYear = null) {
   for (const team of teams || []) {
     if (!Array.isArray(team.players)) team.players = [];
     if (!Array.isArray(team.twoWayPlayers)) team.twoWayPlayers = [];
+    if (!Array.isArray(team.stashPlayers)) team.stashPlayers = [];
 
     // Brand-new draft picks should not receive a progression roll before
-    // they have played their first NBA season. Remove them from the worker
-    // payload, then restore the exact original objects before saving.
+    // they have played their first NBA/development season. Remove them from
+    // the worker payload, then restore the exact original objects before saving.
+    // Older two-way and stash players are intentionally included below so they
+    // still develop during their G-League/overseas season.
     team.players = team.players.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
     team.twoWayPlayers = team.twoWayPlayers.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
+    team.stashPlayers = team.stashPlayers.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
 
     const existing = new Set(team.players.map(progressionPlayerKey));
 
@@ -930,6 +979,19 @@ function prepareLeagueForProgressionWorker(league, seasonYear = null) {
         contractType: player?.contractType || "two_way",
         rosterStatus: player?.rosterStatus || "two_way",
         assignmentStatus: player?.assignmentStatus || "g_league",
+      });
+    }
+
+    for (const player of team.stashPlayers) {
+      const key = progressionPlayerKey(player);
+      if (key && existing.has(key)) continue;
+      if (key) existing.add(key);
+      team.players.push({
+        ...player,
+        __progressionRosterBucket: "stashPlayers",
+        contractType: player?.contractType || "stash",
+        rosterStatus: player?.rosterStatus || "stashed",
+        assignmentStatus: player?.assignmentStatus || "stash",
       });
     }
   }
@@ -951,19 +1013,38 @@ function restoreTwoWayBucketsAfterProgression(workerLeague, fallbackLeague) {
     const teamName = getTeamNameForProgression(team);
     const fallbackTeam = fallbackByName.get(teamName);
     const originalTwoWayIds = new Set((fallbackTeam?.twoWayPlayers || []).map(progressionPlayerKey));
+    const originalStashIds = new Set((fallbackTeam?.stashPlayers || []).map(progressionPlayerKey));
 
     const standardPlayers = [];
     const twoWayPlayers = [];
+    const stashPlayers = [];
     const seenStandard = new Set();
     const seenTwoWay = new Set();
+    const seenStash = new Set();
 
     for (const rawPlayer of team.players || []) {
       const player = stripProgressionBucketMarker(rawPlayer);
       const key = progressionPlayerKey(player);
+      const belongsStash =
+        rawPlayer?.__progressionRosterBucket === "stashPlayers" ||
+        originalStashIds.has(key) ||
+        isStashRosterPlayer(player);
+
       const belongsTwoWay =
         rawPlayer?.__progressionRosterBucket === "twoWayPlayers" ||
         originalTwoWayIds.has(key) ||
         isTwoWayRosterPlayer(player);
+
+      if (belongsStash) {
+        player.contractType = player.contractType || "stash";
+        player.rosterStatus = player.rosterStatus || "stashed";
+        player.assignmentStatus = player.assignmentStatus || "stash";
+        if (!seenStash.has(key)) {
+          seenStash.add(key);
+          stashPlayers.push(player);
+        }
+        continue;
+      }
 
       if (belongsTwoWay) {
         player.contractType = player.contractType || "two_way";
@@ -991,8 +1072,18 @@ function restoreTwoWayBucketsAfterProgression(workerLeague, fallbackLeague) {
       }
     }
 
+    for (const rawPlayer of team.stashPlayers || []) {
+      const player = stripProgressionBucketMarker(rawPlayer);
+      const key = progressionPlayerKey(player);
+      if (!seenStash.has(key)) {
+        seenStash.add(key);
+        stashPlayers.push(player);
+      }
+    }
+
     team.players = standardPlayers;
     team.twoWayPlayers = twoWayPlayers;
+    team.stashPlayers = stashPlayers;
   }
 
   return league;
@@ -1065,6 +1156,12 @@ function stampCareerSeasonCounters(league, seasonYear) {
 
     for (const player of getProgressionPlayersFromTeam(team)) {
       if (!player || typeof player !== "object") continue;
+
+      // Stash seasons are development seasons, not NBA/pro seasons.
+      // They can still progress visually/rating-wise, but they should not
+      // advance rookie-year, Bird-rights, or years-with-team counters until
+      // they are signed to a standard or two-way NBA contract.
+      if (isStashRosterPlayer(player)) continue;
 
       const meta = player.meta && typeof player.meta === "object" ? { ...player.meta } : {};
       const rights = player.rights && typeof player.rights === "object" ? { ...player.rights } : {};

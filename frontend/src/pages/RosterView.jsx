@@ -124,11 +124,24 @@ export default function RosterView() {
     return Array.isArray(team?.twoWayPlayers) ? team.twoWayPlayers : [];
   };
 
+  const getStashPlayers = (team) => {
+    return Array.isArray(team?.stashPlayers) ? team.stashPlayers : [];
+  };
+
   const markTwoWayPlayer = (player) => ({
     ...player,
     isTwoWay: true,
+    isStash: false,
     contractType: player?.contractType || "two_way",
     rosterStatus: player?.rosterStatus || "two_way",
+  });
+
+  const markStashPlayer = (player) => ({
+    ...player,
+    isStash: true,
+    isTwoWay: false,
+    contractType: player?.contractType || "stash",
+    rosterStatus: player?.rosterStatus || "stashed",
   });
 
   const samePlayer = (a, b) => {
@@ -193,7 +206,7 @@ export default function RosterView() {
   };
 
   const isPlayerTwoWayEligible = (player) => {
-    if (!player || player.isTwoWay) return false;
+    if (!player || player.isTwoWay || player.isStash) return false;
 
     const currentSeasonYear = getCurrentSeasonYear();
     const rookieYear = getPlayerRookieReferenceYear(player);
@@ -212,6 +225,7 @@ export default function RosterView() {
     if (!player) return "No player selected.";
     if (isAllView) return "Switch to a team roster first before assigning a two-way.";
     if (player.isTwoWay) return "This player is already on a two-way contract.";
+    if (player.isStash) return "Stashed players are team-controlled but cannot be assigned again until their offseason return decision.";
 
     const twoWayCount = getTwoWayPlayers(team).length;
     if (twoWayCount >= 3) {
@@ -293,12 +307,20 @@ export default function RosterView() {
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   }, [workingLeagueData]);
 
+  // Always render/count from the freshest team object in workingLeagueData.
+  // selectedTeam can lag after roster moves, FA signings, or bucket changes.
+  const liveSelectedTeam = useMemo(() => {
+    if (!selectedTeam?.name) return selectedTeam || null;
+    return teamsSorted.find((team) => team?.name === selectedTeam.name) || selectedTeam || null;
+  }, [teamsSorted, selectedTeam]);
+
   // all players list
   const allLeaguePlayers = useMemo(
     () =>
       teamsSorted.flatMap((t) => [
         ...(t.players || []),
         ...getTwoWayPlayers(t).map(markTwoWayPlayer),
+        ...getStashPlayers(t).map(markStashPlayer),
       ]),
     [teamsSorted]
   );
@@ -311,6 +333,7 @@ export default function RosterView() {
       const teamPlayers = [
         ...(t.players || []),
         ...getTwoWayPlayers(t).map(markTwoWayPlayer),
+        ...getStashPlayers(t).map(markStashPlayer),
       ];
       for (const p of teamPlayers) {
         const row = { teamName: t.name, logo, team: t };
@@ -337,6 +360,7 @@ export default function RosterView() {
       const teamPlayers = [
         ...(team.players || []),
         ...getTwoWayPlayers(team),
+        ...getStashPlayers(team),
       ];
 
       return teamPlayers.some((row) => {
@@ -374,8 +398,9 @@ export default function RosterView() {
   const viewPlayers = isAllView
     ? allLeaguePlayers
     : [
-        ...(selectedTeam?.players || []),
-        ...getTwoWayPlayers(selectedTeam).map(markTwoWayPlayer),
+        ...(liveSelectedTeam?.players || []),
+        ...getTwoWayPlayers(liveSelectedTeam).map(markTwoWayPlayer),
+        ...getStashPlayers(liveSelectedTeam).map(markStashPlayer),
       ];
 
   useEffect(() => {
@@ -549,7 +574,7 @@ export default function RosterView() {
   const handleAssignStandardToTwoWay = (player) => {
     if (!player || isAllView) return;
 
-    const blockReason = getTwoWayAssignmentBlockReason(player, selectedTeam);
+    const blockReason = getTwoWayAssignmentBlockReason(player, liveSelectedTeam);
     if (blockReason) {
       console.warn("[RosterView] two-way assignment blocked:", blockReason);
       return;
@@ -757,17 +782,18 @@ export default function RosterView() {
   }
 
   const player = selectedPlayer || viewPlayers[0] || {};
-  const headerTitle = isAllView ? "All Players" : `${selectedTeam.name} Roster`;
+  const headerTitle = isAllView ? "All Players" : `${liveSelectedTeam?.name || selectedTeam?.name || "Team"} Roster`;
   const showTeamCol = isAllView; // logo column only in All Players view
   const regularSeasonStandardRosterLimit = Number(
     workingLeagueData?.rosterLimit ||
     workingLeagueData?.maxRosterSize ||
     15
   );
-  const standardRosterCount = !isAllView && selectedTeam?.players
-    ? selectedTeam.players.length
+  const standardRosterCount = !isAllView && liveSelectedTeam?.players
+    ? liveSelectedTeam.players.length
     : 0;
-  const twoWayRosterCount = !isAllView ? getTwoWayPlayers(selectedTeam).length : 0;
+  const twoWayRosterCount = !isAllView ? getTwoWayPlayers(liveSelectedTeam).length : 0;
+  const stashRosterCount = !isAllView ? getStashPlayers(liveSelectedTeam).length : 0;
   const rosterOverRegularSeasonLimit =
     !isAllView && standardRosterCount > regularSeasonStandardRosterLimit;
 
@@ -817,6 +843,9 @@ export default function RosterView() {
             <span className="text-emerald-200">
               Two-way contracts: {twoWayRosterCount}/3
             </span>
+            <span className="text-amber-200">
+              Stashes: {stashRosterCount}
+            </span>
           </div>
           {rosterOverRegularSeasonLimit && (
             <p className="mt-2 text-orange-100">
@@ -853,12 +882,18 @@ export default function RosterView() {
                       2W
                     </span>
                   )}
+                  {player?.isStash && (
+                    <span className="inline-flex items-center rounded-full border border-amber-400/25 bg-amber-500/15 px-2 py-1 text-[12px] font-extrabold text-amber-200">
+                      STASH
+                    </span>
+                  )}
                 </h2>
                 <p className="text-gray-400 text-[24px] mt-1">
                   {player?.pos || "-"}
                   {player?.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age{" "}
                   {player?.age ?? "-"}
                   {player?.isTwoWay ? " • Two-Way Contract" : ""}
+                  {player?.isStash ? " • Stashed" : ""}
                 </p>
               </div>
             </div>
@@ -951,6 +986,8 @@ export default function RosterView() {
                           ? "bg-orange-600 text-white"
                           : p.isTwoWay
                           ? "bg-emerald-500/5 hover:bg-emerald-500/10"
+                          : p.isStash
+                          ? "bg-amber-500/5 hover:bg-amber-500/10"
                           : "hover:bg-neutral-800"
                       }`}
                     >
@@ -975,6 +1012,11 @@ export default function RosterView() {
                         {p.isTwoWay && (
                           <span className="ml-2 inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-200">
                             2W
+                          </span>
+                        )}
+                        {p.isStash && (
+                          <span className="ml-2 inline-flex items-center rounded-full border border-amber-400/25 bg-amber-500/15 px-2 py-0.5 text-[10px] font-extrabold text-amber-200">
+                            STASH
                           </span>
                         )}
                       </td>
@@ -1055,6 +1097,11 @@ export default function RosterView() {
                         2W
                       </span>
                     )}
+                    {actionTargetPlayer?.isStash && (
+                      <span className="ml-2 align-middle inline-flex items-center rounded-full border border-amber-400/25 bg-amber-500/15 px-2 py-0.5 text-[10px] font-extrabold text-amber-200">
+                        STASH
+                      </span>
+                    )}
                   </h2>
                   <div className="mt-1 text-sm font-semibold text-neutral-400">
                     {actionTargetPlayer?.pos || "-"}
@@ -1062,6 +1109,7 @@ export default function RosterView() {
                     {" • "}Age {actionTargetPlayer?.age ?? "-"}
                     {" • "}OVR {actionTargetPlayer?.overall ?? "-"}
                     {actionTargetPlayer?.isTwoWay ? " • Two-Way" : ""}
+                    {actionTargetPlayer?.isStash ? " • Stashed" : ""}
                   </div>
                 </div>
 
@@ -1090,7 +1138,14 @@ export default function RosterView() {
                   </div>
                 </button>
 
-                {actionTargetPlayer?.isTwoWay ? (
+                {actionTargetPlayer?.isStash ? (
+                  <div className="rounded-2xl border border-amber-400/25 bg-amber-500/10 px-5 py-4">
+                    <div className="text-lg font-black text-white">Stashed Player</div>
+                    <div className="mt-1 text-sm font-semibold text-neutral-300">
+                      This player is controlled by the team but is not on the 15-man roster, cannot receive minutes, and returns on the next offseason options screen.
+                    </div>
+                  </div>
+                ) : actionTargetPlayer?.isTwoWay ? (
                   <>
                     <button
                       onClick={() => handleUpgradeTwoWayToStandard(actionTargetPlayer)}
@@ -1135,7 +1190,7 @@ export default function RosterView() {
                 ) : (
                   <>
                     {(() => {
-                      const blockReason = getTwoWayAssignmentBlockReason(actionTargetPlayer, selectedTeam);
+                      const blockReason = getTwoWayAssignmentBlockReason(actionTargetPlayer, liveSelectedTeam);
                       const disabled = Boolean(blockReason);
 
                       return (
@@ -1198,8 +1253,8 @@ export default function RosterView() {
         open={playerCardOpen}
         player={cardTargetPlayer}
         team={getTeamForPlayer(cardTargetPlayer)}
-        teamName={getTeamForPlayer(cardTargetPlayer)?.name || (isAllView ? teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.teamName : selectedTeam?.name)}
-        teamLogo={getTeamForPlayer(cardTargetPlayer)?.logo || teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.logo || selectedTeam?.logo}
+        teamName={getTeamForPlayer(cardTargetPlayer)?.name || (isAllView ? teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.teamName : liveSelectedTeam?.name || selectedTeam?.name)}
+        teamLogo={getTeamForPlayer(cardTargetPlayer)?.logo || teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.logo || liveSelectedTeam?.logo || selectedTeam?.logo}
         leagueData={workingLeagueData}
         onClose={closePlayerCard}
       />

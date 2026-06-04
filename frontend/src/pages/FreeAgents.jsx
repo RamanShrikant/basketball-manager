@@ -788,10 +788,14 @@ const isOffseasonMode =
   const userRosterCount = Number(currentUserTeam?.players?.length || 0);
   const userRosterTooFew = !!selectedTeam?.name && userRosterCount < minRosterSize;
   const userRosterTooMany = !!selectedTeam?.name && userRosterCount > maxRosterSize;
-  const userRosterInvalid = userRosterTooFew || userRosterTooMany;
+
+  // Offseason/free-agency roster flexibility:
+  // teams can temporarily carry more than 15 standard players. The hard
+  // 14-15 standard-player limit is enforced later when games are simulated.
+  const userRosterInvalid = userRosterTooFew;
 
   const canSubmitLiveOffer = isOffseasonMode && optionsComplete && rightsManagementComplete && isLiveFreeAgencyActive;
-  const canManualCleanupSign = isOffseasonMode && effectiveFreeAgencyFinished && userRosterTooFew;
+  const canManualCleanupSign = isOffseasonMode && effectiveFreeAgencyFinished;
   const canUseFreeAgencyAction = !isOffseasonMode || canSubmitLiveOffer || canManualCleanupSign;
 
   // Surgical pending-decision guard:
@@ -855,7 +859,7 @@ const isOffseasonMode =
     }
 
     if (userRosterTooMany) {
-      return `${selectedTeam.name} has ${userRosterCount} players. You must get down to ${maxRosterSize} players before leaving free agency.`;
+      return `${selectedTeam.name} has ${userRosterCount} standard-contract players. You can carry extra players during the offseason, but you must get back to ${maxRosterSize} or fewer before simulating games.`;
     }
 
     return "";
@@ -1359,7 +1363,7 @@ const isOffseasonMode =
     const ask = getExpectedYearOneSalary(player);
     const projectedPayroll = Number(userCapDashboard.practicalPayroll || 0) + ask;
 
-    if (!isLiveFreeAgencyActive && userCapDashboard.rosterCount >= userCapDashboard.rosterLimit) {
+    if (!isOffseasonMode && !isLiveFreeAgencyActive && userCapDashboard.rosterCount >= userCapDashboard.rosterLimit) {
       return {
         label: "NO",
         tone: "red",
@@ -2691,13 +2695,6 @@ updateOffseasonState({
           return;
         }
 
-        if (userRosterTooMany) {
-          setSignError(
-            `${selectedTeam.name} has ${userRosterCount} players. You must get down to ${maxRosterSize} before leaving free agency.`
-          );
-          return;
-        }
-
         setSignError("The live market is closed.");
         return;
       }
@@ -3598,7 +3595,7 @@ updateOffseasonState({
 
             {canManualCleanupSign && (
               <div className="mb-4 text-yellow-300 text-sm font-semibold">
-                The live market is over. Because your team is below the minimum roster size, you can still sign remaining free agents directly until you reach {minRosterSize} players.
+                The live market is over. You can still sign remaining free agents directly, but any extra standard contracts must be cleaned up before simulating regular-season games.
               </div>
             )}
 

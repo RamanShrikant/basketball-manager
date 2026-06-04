@@ -1359,7 +1359,11 @@ const renderKeyInterestExtraNode = (row) => {
             />
             <SummaryCard
               label="Your Decisions"
-              value={(previewSummary?.pendingUserTeamOptionCount || 0) + (previewSummary?.pendingUserTwoWayDecisionCount || 0)}
+              value={
+                (previewSummary?.pendingUserTeamOptionCount || 0) +
+                (previewSummary?.pendingUserTwoWayDecisionCount || 0) +
+                (previewSummary?.pendingUserStashDecisionCount || 0)
+              }
               tone="green"
             />
           </div>

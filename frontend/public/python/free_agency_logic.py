@@ -5123,16 +5123,55 @@ def append_free_agency_full_action_log(
     state["fullActionLog"] = kept[-60:]
 
 
+def is_offseason_flexible_roster_signing_context(
+    league_data: Dict[str, Any],
+    state: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Allow offseason FA signings to temporarily exceed the 15-man roster.
+
+    The playable-season limits are enforced at roster finalization / calendar sim.
+    This helper keeps regular-season direct signings strict while letting both
+    live and completed offseason free agency remain flexible for the user.
+    """
+    if state is None or not isinstance(state, dict):
+        state = league_data.get("freeAgencyState", {}) if isinstance(league_data.get("freeAgencyState"), dict) else {}
+
+    if bool(state.get("regularSeasonSigningMode")):
+        return False
+
+    # If there is no free-agency state at all, this is likely regular-season direct signing.
+    if not bool(state.get("isActive")) and not bool(state.get("maxDays")):
+        return False
+
+    phase_text = " ".join([
+        str(league_data.get("seasonPhase") or ""),
+        str(league_data.get("phase") or ""),
+        str(league_data.get("currentPhase") or ""),
+        str(league_data.get("stage") or ""),
+        str(league_data.get("mode") or ""),
+    ]).lower()
+
+    if any(
+        token in phase_text
+        for token in ["regular", "in-season", "inseason", "playoff", "postseason", "preseason"]
+    ):
+        return False
+
+    return True
+
+
 def should_enforce_post_market_cleanup_rules(
     league_data: Dict[str, Any],
     state: Dict[str, Any],
 ) -> bool:
-    """Return True only for the narrow late-offseason roster-fill window.
+    """Return True only for strict non-offseason emergency roster-fill paths.
 
-    A completed free-agency state can remain on leagueData after the new season
-    starts. Regular-season direct FA signings should not inherit the offseason
-    emergency-cleanup restriction.
+    Offseason free agency is now roster-flexible: teams may temporarily exceed
+    15 standard contracts, then must legalize before simming games.
     """
+    if is_offseason_flexible_roster_signing_context(league_data, state):
+        return False
+
     if not bool(state.get("maxDays")):
         return False
 
@@ -11545,7 +11584,11 @@ def evaluate_offer(
     roster_limit = get_roster_limit(league_data)
     state = ensure_free_agency_state(league_data)
     live_market_mode = bool(state.get("isActive"))
-    if roster_count >= roster_limit and not live_market_mode:
+    if (
+        roster_count >= roster_limit
+        and not live_market_mode
+        and not is_offseason_flexible_roster_signing_context(league_data, state)
+    ):
         return {
             "ok": False,
             "reason": f"{team_name} already has {roster_count} players.",

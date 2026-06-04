@@ -286,6 +286,10 @@ export default function SalaryTable() {
       return "bg-emerald-500/15 border-emerald-500/30 text-emerald-200";
     }
 
+    if (type === "STASH") {
+      return "bg-amber-500/15 border-amber-500/30 text-amber-200";
+    }
+
     if (type === "RFA") {
       return "bg-emerald-500/15 border-emerald-500/30 text-emerald-200";
     }
@@ -306,6 +310,10 @@ export default function SalaryTable() {
 
   const getTwoWayPlayers = (team) => {
     return Array.isArray(team?.twoWayPlayers) ? team.twoWayPlayers : [];
+  };
+
+  const getStashPlayers = (team) => {
+    return Array.isArray(team?.stashPlayers) ? team.stashPlayers : [];
   };
 
   const buildTwoWaySalaryRow = (player) => {
@@ -336,6 +344,33 @@ export default function SalaryTable() {
       expNote: "Two-way players are kept separate from the 15-man standard roster and do not count against standard salary-table totals in this version.",
       isCapHold: false,
       isTwoWay: true,
+      excludeFromPayroll: true,
+    };
+  };
+
+  const buildStashSalaryRow = (player) => {
+    const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+    const startYear = Number(contract?.startYear || currentSeasonYear);
+
+    return {
+      id: player?.id || `stash-${player?.name || "player"}-${player?.pos || "pos"}`,
+      name: player?.name || "Unknown",
+      pos: player?.pos || "",
+      overall: player?.overall ?? "-",
+      headshot: getPlayerImage(player),
+      contract: {
+        startYear,
+        salaryByYear: [],
+        option: null,
+      },
+      years: 1,
+      endYear: startYear,
+      totalRemaining: 0,
+      optionLabel: "One-Year Stash",
+      expType: "STASH",
+      expNote: "Stashed players are controlled by the team but are not on the 15-man roster, do not receive minutes, and do not count against salary-table payroll totals.",
+      isCapHold: false,
+      isStash: true,
       excludeFromPayroll: true,
     };
   };
@@ -854,6 +889,7 @@ export default function SalaryTable() {
     });
 
     const twoWayRows = getTwoWayPlayers(selectedTeam).map(buildTwoWaySalaryRow);
+    const stashRows = getStashPlayers(selectedTeam).map(buildStashSalaryRow);
 
     const holdRows = capHoldRows.map((row) => ({
       id: `cap-hold-${row.playerKey}`,
@@ -900,7 +936,7 @@ export default function SalaryTable() {
       deadCapInfo: row,
     }));
 
-    return [...rosterRows, ...twoWayRows, ...deadRows, ...holdRows];
+    return [...rosterRows, ...twoWayRows, ...stashRows, ...deadRows, ...holdRows];
   }, [selectedTeam, currentSeasonYear, capHoldRows, deadCapPlayerRows]);
 
   const yearColumns = useMemo(() => {
@@ -1236,6 +1272,7 @@ export default function SalaryTable() {
     });
 
     const twoWayRows = getTwoWayPlayers(team).map(buildTwoWaySalaryRow);
+    const stashRows = getStashPlayers(team).map(buildStashSalaryRow);
 
     const holdRows = teamCapHoldRows.map((row) => ({
       id: `cap-hold-${row.playerKey}`,
@@ -1281,7 +1318,7 @@ export default function SalaryTable() {
       deadCapInfo: row,
     }));
 
-    return [...rosterRows, ...twoWayRows, ...deadRows, ...holdRows];
+    return [...rosterRows, ...twoWayRows, ...stashRows, ...deadRows, ...holdRows];
   };
 
   const buildSalaryTableSnapshotForTeam = (team) => {
@@ -1323,6 +1360,7 @@ export default function SalaryTable() {
       logo: team?.logo || team?.teamLogo || team?.logoUrl || "",
       rosterCount: Array.isArray(team?.players) ? team.players.length : 0,
       twoWayCount: getTwoWayPlayers(team).length,
+      stashCount: getStashPlayers(team).length,
     };
   };
 
@@ -1355,7 +1393,7 @@ export default function SalaryTable() {
               <div>
                 <div className={`${compact ? "text-xl" : "text-2xl"} font-extrabold`}>{snapshot.teamName} Salary Table</div>
                 <div className="text-white/60 text-sm">
-                  {snapshot.rosterCount} standard + {snapshot.twoWayCount || 0} two-way
+                  {snapshot.rosterCount} standard + {snapshot.twoWayCount || 0} two-way + {snapshot.stashCount || 0} stash
                   {snapshot.deadCapPlayerRows.length > 0 ? ` + ${snapshot.deadCapPlayerRows.length} dead cap` : ""}
                   {snapshot.capHoldRows.length > 0 ? ` + ${snapshot.capHoldRows.length} cap holds` : ""}
                 </div>
@@ -1378,6 +1416,7 @@ export default function SalaryTable() {
             <Chip label={`Hard Cap: ${fmtM(HARD_CAP)}`} />
             {snapshot.deadCapPlayerRows.length > 0 && <Chip label={`Dead Cap: ${fmtM(snapshot.deadCapTotal)}`} />}
             {(snapshot.twoWayCount || 0) > 0 && <Chip label={`Two-Way: ${snapshot.twoWayCount}/3`} />}
+            {(snapshot.stashCount || 0) > 0 && <Chip label={`Stash: ${snapshot.stashCount}`} />}
             {snapshot.capHoldRows.length > 0 && <Chip label={`Cap Holds: ${fmtM(snapshot.capHoldTotal)}`} />}
           </div>
         </div>
@@ -1403,7 +1442,7 @@ export default function SalaryTable() {
               {snapshot.players.map((p) => (
                 <tr
                   key={`${snapshot.teamName}-${p.id}`}
-                  className={`${p.isDeadCap ? "border-b border-red-500/45 bg-red-500/10 hover:bg-red-500/15" : p.isCapHold ? "border-b border-red-500/35 bg-red-500/5 hover:bg-red-500/10" : p.isTwoWay ? "border-b border-emerald-400/10 bg-emerald-500/5 hover:bg-emerald-500/10" : "border-b border-white/5 hover:bg-white/5"} transition`}
+                  className={`${p.isDeadCap ? "border-b border-red-500/45 bg-red-500/10 hover:bg-red-500/15" : p.isCapHold ? "border-b border-red-500/35 bg-red-500/5 hover:bg-red-500/10" : p.isTwoWay ? "border-b border-emerald-400/10 bg-emerald-500/5 hover:bg-emerald-500/10" : p.isStash ? "border-b border-amber-400/10 bg-amber-500/5 hover:bg-amber-500/10" : "border-b border-white/5 hover:bg-white/5"} transition`}
                   style={p.isDeadCap || p.isCapHold ? { boxShadow: "inset 0 0 0 1px rgba(248, 113, 113, 0.35)" } : undefined}
                 >
                   <td className="px-4 py-3">
@@ -1427,6 +1466,11 @@ export default function SalaryTable() {
                           {p.isTwoWay && (
                             <span className="inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-200">
                               2W
+                            </span>
+                          )}
+                          {p.isStash && (
+                            <span className="inline-flex items-center rounded-full border border-amber-400/25 bg-amber-500/15 px-2 py-0.5 text-[10px] font-extrabold text-amber-200">
+                              STASH
                             </span>
                           )}
                           {p.isDeadCap && (
@@ -1627,7 +1671,7 @@ export default function SalaryTable() {
                     <div>
                       <div className="text-2xl font-extrabold">{selectedTeam.name} Salary Table</div>
                       <div className="text-white/60 text-sm">
-                        {selectedTeam?.players?.length || 0} standard + {getTwoWayPlayers(selectedTeam).length} two-way
+                        {selectedTeam?.players?.length || 0} standard + {getTwoWayPlayers(selectedTeam).length} two-way + {getStashPlayers(selectedTeam).length} stash
                         {deadCapPlayerRows.length > 0 ? ` + ${deadCapPlayerRows.length} dead cap` : ""}
                         {capHoldRows.length > 0 ? ` + ${capHoldRows.length} cap holds` : ""}
                       </div>
@@ -1650,6 +1694,7 @@ export default function SalaryTable() {
                   <Chip label={`Hard Cap: ${fmtM(HARD_CAP)}`} />
                   {deadCapPlayerRows.length > 0 && <Chip label={`Dead Cap: ${fmtM(deadCapTotal)}`} />}
                   {getTwoWayPlayers(selectedTeam).length > 0 && <Chip label={`Two-Way: ${getTwoWayPlayers(selectedTeam).length}/3`} />}
+                  {getStashPlayers(selectedTeam).length > 0 && <Chip label={`Stash: ${getStashPlayers(selectedTeam).length}`} />}
                   {capHoldRows.length > 0 && <Chip label={`Cap Holds: ${fmtM(capHoldTotal)}`} />}
                 </div>
               </div>
@@ -1675,7 +1720,7 @@ export default function SalaryTable() {
                     {players.map((p) => (
                       <tr
                         key={p.id}
-                        className={`${p.isDeadCap ? "border-b border-red-500/45 bg-red-500/10 hover:bg-red-500/15" : p.isCapHold ? "border-b border-red-500/35 bg-red-500/5 hover:bg-red-500/10" : p.isTwoWay ? "border-b border-emerald-400/10 bg-emerald-500/5 hover:bg-emerald-500/10" : "border-b border-white/5 hover:bg-white/5"} transition`}
+                        className={`${p.isDeadCap ? "border-b border-red-500/45 bg-red-500/10 hover:bg-red-500/15" : p.isCapHold ? "border-b border-red-500/35 bg-red-500/5 hover:bg-red-500/10" : p.isTwoWay ? "border-b border-emerald-400/10 bg-emerald-500/5 hover:bg-emerald-500/10" : p.isStash ? "border-b border-amber-400/10 bg-amber-500/5 hover:bg-amber-500/10" : "border-b border-white/5 hover:bg-white/5"} transition`}
                         style={p.isDeadCap || p.isCapHold ? { boxShadow: "inset 0 0 0 1px rgba(248, 113, 113, 0.35)" } : undefined}
                       >
                         <td className="px-4 py-3">
@@ -1699,6 +1744,11 @@ export default function SalaryTable() {
                                 {p.isTwoWay && (
                                   <span className="inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-200">
                                     2W
+                                  </span>
+                                )}
+                                {p.isStash && (
+                                  <span className="inline-flex items-center rounded-full border border-amber-400/25 bg-amber-500/15 px-2 py-0.5 text-[10px] font-extrabold text-amber-200">
+                                    STASH
                                   </span>
                                 )}
                                 {p.isDeadCap && (

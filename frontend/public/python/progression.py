@@ -865,6 +865,55 @@ def _rare_event_adjustment(age: int, overall: int, rng: random.Random, settings:
     return 0.0
 
 
+def _development_bucket(player: Dict[str, Any]) -> str:
+    contract = player.get("contract") if isinstance(player.get("contract"), dict) else {}
+    raw = " ".join([
+        str(player.get("__progressionRosterBucket") or ""),
+        str(player.get("contractType") or ""),
+        str(player.get("rosterStatus") or ""),
+        str(player.get("assignmentStatus") or ""),
+        str(contract.get("type") or ""),
+    ]).lower().replace("-", "_")
+
+    if "stash" in raw or "stashed" in raw or "overseas" in raw:
+        return "stash"
+    if "two_way" in raw or "two way" in raw or "g_league" in raw:
+        return "two_way"
+    return ""
+
+
+def _apply_development_contract_floor(
+    delta: int,
+    raw: float,
+    bucket: str,
+    age: int,
+    overall: int,
+    potential: int,
+) -> int:
+    """Small safety net so two-way/stash players actually develop.
+
+    These players do not receive sim minutes, so they often have no stat signal.
+    The floor is intentionally conservative: only young/upside development
+    players get protected from a flat/negative roll. Older or capped-out players
+    can still stay flat or decline.
+    """
+    if bucket not in ["two_way", "stash"]:
+        return delta
+
+    upside = max(0, int(potential) - int(overall))
+
+    if age <= 23 and upside >= 3 and delta < 1:
+        return 1
+
+    if age <= 25 and upside >= 5 and delta < 1:
+        return 1
+
+    if bucket == "stash" and age <= 24 and upside >= 2 and delta < 1:
+        return 1
+
+    return delta
+
+
 def _target_delta_for_player(
     p: Dict[str, Any],
     stats: Optional[Dict[str, Any]],
@@ -874,11 +923,20 @@ def _target_delta_for_player(
     age = _safe_int(p.get("age"), 25)
     overall = _safe_int(p.get("overall"), 70)
     potential = _safe_int(p.get("potential"), overall)
+    development_bucket = _development_bucket(p)
 
     min_fac, prod_adj = _stat_context(stats, settings)
 
     expected = _age_expected_delta(age)
     expected += _potential_gap_effect(age, overall, potential)
+
+    # Two-way and stash players train/develop even though they are not in
+    # coach gameplans or sim rotations. Give them a small development signal
+    # instead of treating missing NBA minutes as an empty season.
+    if development_bucket == "two_way" and age <= 25 and potential > overall:
+        expected += 0.18 + min(0.30, max(0, potential - overall) * 0.035)
+    elif development_bucket == "stash" and age <= 25 and potential > overall:
+        expected += 0.24 + min(0.36, max(0, potential - overall) * 0.045)
 
     if expected > 0:
         expected *= (0.72 + 0.28 * min_fac)
@@ -897,6 +955,15 @@ def _target_delta_for_player(
 
     lo, hi = _delta_bounds(age, overall)
     delta = _stoch_round(raw, rng)
+    delta = int(_clamp(delta, lo, hi))
+    delta = _apply_development_contract_floor(
+        delta = delta,
+        raw = raw,
+        bucket = development_bucket,
+        age = age,
+        overall = overall,
+        potential = potential,
+    )
 
     return int(_clamp(delta, lo, hi))
 
@@ -1290,32 +1357,68 @@ def apply_end_of_season_progression(
 
 def _all_players(league: Dict[str, Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
+    seen = set()
+
+    def add_player(p: Dict[str, Any]) -> None:
+        if not isinstance(p, dict):
+            return
+        key = str(p.get("id") or p.get("name") or len(out))
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(p)
 
     for t in _iter_teams(league):
-        for p in (t.get("players") or []):
-            if isinstance(p, dict):
-                out.append(p)
+        for bucket in ["players", "twoWayPlayers", "stashPlayers"]:
+            for p in (t.get(bucket) or []):
+                add_player(p)
 
     for p in _iter_free_agents(league):
-        out.append(p)
+        add_player(p)
 
     return out
 
 
 def _all_players_with_team(league: Dict[str, Any]) -> List[Tuple[Dict[str, Any], str]]:
     out: List[Tuple[Dict[str, Any], str]] = []
+    seen = set()
+
+    def add_player(p: Dict[str, Any], team_name: str, bucket: str = "players") -> None:
+        if not isinstance(p, dict):
+            return
+
+        key = str(p.get("id") or p.get("name") or len(out))
+        scoped_key = (team_name, key)
+        if scoped_key in seen:
+            return
+        seen.add(scoped_key)
+
+        if bucket == "twoWayPlayers":
+            p.setdefault("__progressionRosterBucket", "twoWayPlayers")
+            p.setdefault("contractType", "two_way")
+            p.setdefault("rosterStatus", "two_way")
+            p.setdefault("assignmentStatus", "g_league")
+        elif bucket == "stashPlayers":
+            p.setdefault("__progressionRosterBucket", "stashPlayers")
+            p.setdefault("contractType", "stash")
+            p.setdefault("rosterStatus", "stashed")
+            p.setdefault("assignmentStatus", "stash")
+
+        out.append((p, team_name))
 
     for t in _iter_teams(league):
         tname = _team_name(t)
         for p in (t.get("players") or []):
-            if isinstance(p, dict):
-                out.append((p, tname))
+            add_player(p, tname, "players")
+        for p in (t.get("twoWayPlayers") or []):
+            add_player(p, tname, "twoWayPlayers")
+        for p in (t.get("stashPlayers") or []):
+            add_player(p, tname, "stashPlayers")
 
     for p in _iter_free_agents(league):
-        out.append((p, "__FREE_AGENCY__"))
+        add_player(p, "__FREE_AGENCY__", "freeAgents")
 
     return out
-
 
 def apply_jan1_age_up_all_players(league: Dict[str, Any], season_year: Optional[int] = None) -> Dict[str, Any]:
     """

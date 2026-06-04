@@ -45,14 +45,15 @@ function getRosterCounts(leagueData, teamName) {
 
 function normalizeDecisionForSlots(decision, counts) {
   let next = decision || "two_way";
-  if (next === "draft_rights") next = counts.controlledSlotsOpen > 0 ? "stash" : "release";
+  const controlledReplacementBlocked = Number(counts.controlledCount || 0) > OFFSEASON_CONTROLLED_MAX;
+  if (next === "draft_rights") next = controlledReplacementBlocked ? "release" : "stash";
 
-  // Offseason rule: standard contracts can go above 15 temporarily as long as
-  // the team stays under the 20-player controlled limit. Stashes are cap-free
-  // but still use one controlled-player spot.
-  if (next === "standard" && counts.controlledSlotsOpen <= 0) next = counts.twoWaySlotsOpen > 0 ? "two_way" : "release";
-  if (next === "two_way" && (counts.twoWaySlotsOpen <= 0 || counts.controlledSlotsOpen <= 0)) next = counts.controlledSlotsOpen > 0 ? "stash" : "release";
-  if (next === "stash" && counts.controlledSlotsOpen <= 0) next = "release";
+  // Each pending rookie already uses a controlled slot. A standard/two-way/stash
+  // decision replaces that pending slot, so only teams already above 20 should
+  // be forced into release from this screen.
+  if (next === "standard" && controlledReplacementBlocked) next = counts.twoWaySlotsOpen > 0 ? "two_way" : "release";
+  if (next === "two_way" && (counts.twoWaySlotsOpen <= 0 || controlledReplacementBlocked)) next = controlledReplacementBlocked ? "release" : "stash";
+  if (next === "stash" && controlledReplacementBlocked) next = "release";
   if (!["standard", "two_way", "stash", "release"].includes(next)) next = "release";
   return next;
 }
@@ -65,13 +66,8 @@ function buildInitialDecisions(rows, counts) {
     const decision = normalizeDecisionForSlots(row.recommendedDecision, running);
     initial[row.playerId] = decision;
 
-    if (decision === "standard") running.controlledSlotsOpen = Math.max(0, running.controlledSlotsOpen - 1);
     if (decision === "two_way") {
       running.twoWaySlotsOpen = Math.max(0, running.twoWaySlotsOpen - 1);
-      running.controlledSlotsOpen = Math.max(0, running.controlledSlotsOpen - 1);
-    }
-    if (decision === "stash") {
-      running.controlledSlotsOpen = Math.max(0, running.controlledSlotsOpen - 1);
     }
   }
 
@@ -137,9 +133,14 @@ function formatPick(row) {
 
 function RookieCard({ row, decision, onDecisionChange, rosterCounts, animationIndex = 0 }) {
   const imageUrl = getImageUrl(row);
-  const standardBlocked = rosterCounts.controlledSlotsOpen <= 0 && decision !== "standard";
-  const twoWayBlocked = (rosterCounts.twoWaySlotsOpen <= 0 || rosterCounts.controlledSlotsOpen <= 0) && decision !== "two_way";
-  const stashBlocked = rosterCounts.controlledSlotsOpen <= 0 && decision !== "stash";
+  // Each pending rookie already counts toward the 20-player offseason control
+  // number. Picking standard/two-way/stash replaces the pending slot instead of
+  // adding a brand-new controlled player, so only teams already above 20 should
+  // block controlled choices here.
+  const controlledReplacementBlocked = rosterCounts.controlledCount > OFFSEASON_CONTROLLED_MAX;
+  const standardBlocked = controlledReplacementBlocked && decision !== "standard";
+  const twoWayBlocked = (rosterCounts.twoWaySlotsOpen <= 0 || controlledReplacementBlocked) && decision !== "two_way";
+  const stashBlocked = controlledReplacementBlocked && decision !== "stash";
 
   return (
     <div
@@ -332,7 +333,7 @@ export default function RookieSignings() {
             <p className="text-sm uppercase tracking-[0.25em] text-white/40 mb-2">Offseason Event</p>
             <h1 className="text-5xl font-extrabold text-orange-500">Rookie Signings</h1>
             <p className="text-white/60 mt-3">
-              Sign second-round picks to standard deals, use two-way contracts, stash late picks for one year, or release them.
+              Resolve every drafted rookie. First-rounders usually sign standard deals, while late firsts and second-rounders can be placed on standard, two-way, stash, or release paths.
             </p>
           </div>
 
@@ -426,7 +427,7 @@ export default function RookieSignings() {
         <div className="bmTablePanel rounded-3xl border border-white/10 bg-neutral-900/80 shadow-2xl overflow-hidden">
           <div className="p-5 border-b border-white/10 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
-              <h2 className="text-2xl font-extrabold">Your Second-Round Picks</h2>
+              <h2 className="text-2xl font-extrabold">Your Draft Picks</h2>
               <p className="text-white/55 text-sm mt-1">CPU teams are resolved automatically when you apply decisions. Stash is only available immediately after the draft and returns next offseason.</p>
             </div>
             <div className="flex gap-3">
@@ -463,7 +464,7 @@ export default function RookieSignings() {
               ))
             ) : (
               <div className="col-span-full text-white/50 py-10 text-center">
-                No user-controlled second-round rookie signing decisions are pending.
+                No user-controlled rookie signing decisions are pending.
               </div>
             )}
           </div>
@@ -473,7 +474,7 @@ export default function RookieSignings() {
           <h2 className="text-xl font-extrabold mb-2">CPU Teams</h2>
           <p className="text-white/55 text-sm">
             {cpuRows.length
-              ? `${cpuRows.length} CPU second-round rookie decisions will be auto-resolved.`
+              ? `${cpuRows.length} CPU rookie signing decisions will be auto-resolved.`
               : "No CPU rookie signing decisions are pending."}
           </p>
         </div>

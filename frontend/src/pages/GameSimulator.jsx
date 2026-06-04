@@ -13,6 +13,38 @@ export default function GameSimulator() {
     return Object.values(leagueData.conferences).flat();
   }, [leagueData]);
 
+  const getRosterBlockMessage = (team) => {
+    if (!team) return "Team not found.";
+
+    const standardCount = Array.isArray(team.players)
+      ? team.players.filter((p) => p && (p.name || p.player)).length
+      : 0;
+    const twoWayCount = Array.isArray(team.twoWayPlayers)
+      ? team.twoWayPlayers.filter((p) => p && (p.name || p.player)).length
+      : 0;
+    const pendingRookieCount = Array.isArray(team.pendingRookieSignings)
+      ? team.pendingRookieSignings.filter((p) => p && (p.name || p.player)).length
+      : 0;
+
+    if (pendingRookieCount > 0) {
+      return `${team.name} still has unresolved rookie signing decisions.`;
+    }
+
+    if (standardCount < 14) {
+      return `${team.name} needs at least 14 standard-contract players before simming.`;
+    }
+
+    if (standardCount > 15) {
+      return `${team.name} has ${standardCount} standard-contract players. Reduce to 15 before simming.`;
+    }
+
+    if (twoWayCount > 3) {
+      return `${team.name} has ${twoWayCount} two-way players. Maximum 3 allowed before simming.`;
+    }
+
+    return "";
+  };
+
   const [home, setHome] = useState(selectedTeam?.name || "");
   const [away, setAway] = useState("");
   const [result, setResult] = useState(null);
@@ -37,14 +69,31 @@ export default function GameSimulator() {
     );
   }
 
-  const handleSim = () => {
+  const handleSim = async () => {
     if (!home || !away || home === away) return;
+
+    const homeTeam = teams.find((t) => t.name === home);
+    const awayTeam = teams.find((t) => t.name === away);
+
+    const homeBlock = getRosterBlockMessage(homeTeam);
+    if (homeBlock) {
+      alert(homeBlock);
+      return;
+    }
+
+    const awayBlock = getRosterBlockMessage(awayTeam);
+    if (awayBlock) {
+      alert(awayBlock);
+      return;
+    }
+
     setRunning(true);
     try {
-      simulateOneGame({
-  homeTeam: window.leagueData.conferences.East[0],
-  awayTeam: window.leagueData.conferences.West[0]
-})
+      const out = await simulateOneGame({
+        homeTeam,
+        awayTeam,
+        leagueData,
+      });
 
       setResult(out);
     } catch (e) {

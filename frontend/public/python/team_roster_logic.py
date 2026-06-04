@@ -15,7 +15,7 @@ import copy
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
-TEAM_ROSTER_LOGIC_VERSION = "2026-06-03_team_roster_logic_rookie_twoway_stash_v1"
+TEAM_ROSTER_LOGIC_VERSION = "2026-06-04_team_roster_logic_roster_flex_dev_v4"
 
 STANDARD_ROSTER_MIN = 14
 STANDARD_ROSTER_MAX = 15
@@ -128,15 +128,11 @@ def is_stash_player(player: Dict[str, Any]) -> bool:
 
 
 def is_pending_rookie(player: Dict[str, Any]) -> bool:
-    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
     contract = player.get("contract") if isinstance(player.get("contract"), dict) else {}
     return bool(
-        _safe_int(meta.get("draftRound"), 0) == 2
-        and (
-            contract.get("pendingRookieSigning")
-            or player.get("rookieSigningPending")
-            or _contract_type(player) in DRAFT_RIGHTS_TYPES
-        )
+        contract.get("pendingRookieSigning")
+        or player.get("rookieSigningPending")
+        or _contract_type(player) in DRAFT_RIGHTS_TYPES
     )
 
 
@@ -286,7 +282,28 @@ def _rookie_salary_for_pick(round_num: int, pick_num: int) -> int:
 def _standard_second_round_contract(player: Dict[str, Any], season_year: int) -> Dict[str, Any]:
     meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
     pick_num = _safe_int(meta.get("draftPick"), 60)
-    first_salary = _rookie_salary_for_pick(2, pick_num)
+    round_num = _safe_int(meta.get("draftRound"), 2)
+    first_salary = _rookie_salary_for_pick(round_num, pick_num)
+
+    if round_num == 1:
+        return {
+            "type": "standard",
+            "startYear": season_year + 1,
+            "salaryByYear": [
+                first_salary,
+                int(first_salary * 1.05),
+                int(first_salary * 1.10),
+                int(first_salary * 1.22),
+            ],
+            "option": {
+                "type": "team",
+                "yearIndices": [2, 3],
+                "picked": None,
+            },
+            "source": "first_round_rookie_scale_contract",
+            "countsAgainstStandardRoster": True,
+        }
+
     return {
         "type": "standard",
         "startYear": season_year + 1,
@@ -358,42 +375,59 @@ def _player_summary(player: Dict[str, Any], team_name: str) -> Dict[str, Any]:
 def _recommended_rookie_decision(player: Dict[str, Any], team: Dict[str, Any]) -> str:
     counts = roster_counts(team)
     overall = _safe_int(player.get("overall"), 0)
-    potential = _safe_int(player.get("potential"), 0)
+    potential = _safe_int(player.get("potential"), overall)
     meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
     pick = _safe_int(meta.get("draftPick"), 60)
-    pick_in_round = _safe_int(meta.get("draftPickInRound"), pick - 30 if pick > 30 else pick)
     upside = potential - overall
+    two_way_open = counts["twoWayCount"] < TWO_WAY_MAX
+    # Pending rookies already occupy one controlled slot before this decision.
+    # A standard/two-way/stash decision replaces that pending slot, so a team at
+    # exactly 20 controlled players can still resolve the rookie without needing
+    # to release someone first.
+    effective_controlled_before_decision = max(0, counts["controlledCount"] - 1)
+    controlled_open = effective_controlled_before_decision < OFFSEASON_CONTROLLED_MAX
 
-    # One-year stashes are mainly for late second-round developmental picks.
-    if counts["controlledCount"] >= OFFSEASON_CONTROLLED_MAX:
-        if pick >= 48 and potential >= 68:
-            return "stash"
-        if counts["twoWayCount"] < TWO_WAY_MAX and (overall >= 58 or potential >= 70 or pick <= 55):
-            return "two_way"
+    if not controlled_open:
         return "release"
 
-    if (overall >= 68 or potential >= 84 or pick <= 38):
+    # Pick-range driven rookie-contract behavior:
+    # 1-24: normal first-round standard contracts.
+    # 25-45: default to two-way for non-outliers at 71 OVR or lower.
+    # 46-60: default to stash for 69 OVR or lower, two-way for useful 70-73s.
+    # Only clear OVR/POT outliers jump straight to standard contracts.
+    if pick <= 24:
+        if overall <= 63 and two_way_open:
+            return "two_way"
         return "standard"
 
-    if pick >= 50 and potential >= 68 and overall <= 63:
-        return "stash"
-
-    if pick_in_round >= 16 and potential >= 70 and overall <= 64:
-        return "stash"
-
-    if counts["twoWayCount"] < TWO_WAY_MAX and (overall >= 58 or potential >= 70 or pick <= 55):
-        return "two_way"
-
-    if overall >= 64 or potential >= 78:
+    if 25 <= pick <= 45:
+        if overall >= 74 or potential >= 86:
+            return "standard"
+        if overall <= 71:
+            if two_way_open:
+                return "two_way"
+            return "stash" if controlled_open else "release"
+        if overall <= 73 and two_way_open and potential < 84:
+            return "two_way"
         return "standard"
 
-    if pick >= 45 and upside >= 4:
-        return "stash"
+    # Picks 46-60 should usually be developmental holds, not automatic standard deals.
+    if pick >= 46:
+        if overall >= 74 or potential >= 86:
+            return "standard"
+        if overall <= 69:
+            return "stash"
+        if two_way_open:
+            return "two_way"
+        if upside >= 3 or potential >= 72:
+            return "stash"
+        return "release"
 
-    if counts["twoWayCount"] < TWO_WAY_MAX:
+    if overall >= 74 or potential >= 84:
+        return "standard"
+    if two_way_open:
         return "two_way"
-
-    return "release"
+    return "stash" if controlled_open else "release"
 
 
 def _decision_label(decision: str) -> str:
@@ -687,22 +721,28 @@ def _apply_decision_to_player(
     _clear_resolved_rookie_pending_markers(player)
 
     if decision == "standard":
+        draft_round = _get_player_draft_round(player)
         player["contract"] = _standard_second_round_contract(player, season_year)
         player["contractType"] = "standard"
         player["rosterStatus"] = "standard"
         player["assignmentStatus"] = "nba"
         player["team"] = team_name
         player["rookieSigningPending"] = False
-        player.setdefault("meta", {})["rookieSigningDecision"] = "standard"
+        meta = player.setdefault("meta", {})
+        if isinstance(meta, dict):
+            meta["rookieSigningDecision"] = "standard"
+            meta["nbaRookieSeasonYear"] = season_year + 1
+        rights_path = "first_round_rookie_scale_rfa_path" if draft_round == 1 else "second_round_standard_rfa_path"
         _set_rookie_team_control_rights(
             player = player,
             team_name = team_name,
             season_year = season_year,
             rookie_scale_control = True,
-            rights_path = "second_round_standard_rfa_path",
+            rights_path = rights_path,
             seasons_toward_bird = 1,
         )
-        _add_transaction(player, season_year, "Signed second-round rookie standard contract", team_name, "rookie_signing_standard")
+        label = "Signed first-round rookie standard contract" if draft_round == 1 else "Signed second-round rookie standard contract"
+        _add_transaction(player, season_year, label, team_name, "rookie_signing_standard")
         _append_unique(team["players"], player)
 
     elif decision == "two_way":
@@ -712,7 +752,10 @@ def _apply_decision_to_player(
         player["assignmentStatus"] = "g_league"
         player["team"] = team_name
         player["rookieSigningPending"] = False
-        player.setdefault("meta", {})["rookieSigningDecision"] = "two_way"
+        meta = player.setdefault("meta", {})
+        if isinstance(meta, dict):
+            meta["rookieSigningDecision"] = "two_way"
+            meta["nbaRookieSeasonYear"] = season_year + 1
         player["twoWayMeta"] = {
             **(player.get("twoWayMeta") if isinstance(player.get("twoWayMeta"), dict) else {}),
             "assignedByTeam": team_name,
@@ -810,15 +853,19 @@ def _auto_cpu_decision(player: Dict[str, Any], team: Dict[str, Any], season_year
     recommended = _recommended_rookie_decision(player, team)
     rng = random.Random(_stable_seed(season_year, _team_name(team), player.get("id"), "rookie_signing"))
     overall = _safe_int(player.get("overall"), 0)
-    potential = _safe_int(player.get("potential"), 0)
+    potential = _safe_int(player.get("potential"), overall)
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    pick = _safe_int(meta.get("draftPick"), 60)
 
-    # Keep CPU decisions mostly rational with a tiny amount of variance.
-    if recommended == "standard" and rng.random() < 0.12 and potential < 82:
-        return "two_way" if roster_counts(team)["twoWayCount"] < TWO_WAY_MAX else "stash"
-    if recommended == "two_way" and rng.random() < 0.10 and overall >= 65 and can_add_standard_contract(team, phase = "offseason"):
-        return "standard"
-    if recommended == "two_way" and rng.random() < 0.10 and overall <= 62 and potential >= 70:
+    # Keep CPU behavior pick-slot driven. Randomness should move developmental
+    # players between stash and two-way, not upgrade normal late picks into
+    # standard deals too often.
+    if recommended == "two_way" and pick >= 46 and overall <= 69 and potential >= 70 and rng.random() < 0.35:
         return "stash"
+    if recommended == "stash" and overall >= 70 and roster_counts(team)["twoWayCount"] < TWO_WAY_MAX and rng.random() < 0.25:
+        return "two_way"
+    if recommended == "standard" and pick >= 25 and overall <= 71 and roster_counts(team)["twoWayCount"] < TWO_WAY_MAX:
+        return "two_way"
     return recommended
 
 
@@ -1321,54 +1368,115 @@ def _resolve_cpu_pending_rookies_for_finalization(
         if not isinstance(player, dict):
             continue
 
-        counts = roster_counts(team)
-        decision = "release"
-        if counts["standardCount"] < STANDARD_ROSTER_MAX and (_safe_int(player.get("overall"), 0) >= 66 or _safe_int(player.get("potential"), 0) >= 80):
-            decision = "standard"
-        elif counts["twoWayCount"] < TWO_WAY_MAX and (_safe_int(player.get("overall"), 0) >= 58 or _safe_int(player.get("potential"), 0) >= 70):
-            decision = "two_way"
+        decision = _recommended_rookie_decision(player, team)
+        if decision == "standard" and not can_add_standard_contract(team, phase = "offseason"):
+            decision = "two_way" if can_add_two_way_contract(team, phase = "offseason") else "stash"
+        if decision == "two_way" and not can_add_two_way_contract(team, phase = "offseason"):
+            decision = "stash"
+        if decision == "stash" and roster_counts(team)["controlledCount"] >= OFFSEASON_CONTROLLED_MAX:
+            decision = "release"
 
-        if decision == "standard":
-            player = _set_player_as_standard(player, _team_name(team), season_year, source = "rookie_finalization_standard")
-            team["players"].append(player)
-            actions.append({
-                "playerId": player.get("id"),
-                "playerName": player.get("name"),
-                "teamName": _team_name(team),
-                "action": "signed_pending_rookie_standard",
-            })
-        elif decision == "two_way":
-            _clear_resolved_rookie_pending_markers(player)
-            player["contract"] = _two_way_contract(season_year)
-            player["contractType"] = "two_way"
-            player["rosterStatus"] = "two_way"
-            player["assignmentStatus"] = "g_league"
-            player["team"] = _team_name(team)
-            _set_rookie_team_control_rights(
-                player = player,
-                team_name = _team_name(team),
-                season_year = season_year,
-                rookie_scale_control = False,
-                rights_path = "rookie_two_way_team_control",
-                seasons_toward_bird = 0,
-            )
-            team["twoWayPlayers"].append(player)
-            actions.append({
-                "playerId": player.get("id"),
-                "playerName": player.get("name"),
-                "teamName": _team_name(team),
-                "action": "signed_pending_rookie_two_way",
-            })
-        else:
-            actions.append(_release_player_to_free_agency(
-                league = league,
-                team_name = _team_name(team),
-                player = player,
-                season_year = season_year,
-                reason = "unresolved_pending_rookie_release",
-            ))
+        result = _apply_decision_to_player(
+            league = league,
+            team = team,
+            player = player,
+            decision = decision,
+            season_year = season_year,
+        )
+        result["action"] = f"resolved_pending_rookie_{decision}"
+        actions.append(result)
 
     return actions
+
+
+def _is_standard_two_way_eligible_for_finalization(player: Dict[str, Any], season_year: int) -> bool:
+    if not isinstance(player, dict):
+        return False
+
+    overall = _safe_int(player.get("overall"), 0)
+    potential = _safe_int(player.get("potential"), overall)
+    age = _safe_int(player.get("age"), 22)
+    upside = potential - overall
+
+    if overall >= 76:
+        return False
+    if overall >= 74 and potential >= 82:
+        return False
+    if age >= 25 and overall >= 72:
+        return False
+
+    rookie_year = None
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    for value in [
+        meta.get("nbaRookieSeasonYear"),
+        player.get("nbaRookieSeasonYear"),
+        meta.get("rookieYear"),
+        player.get("rookieYear"),
+        meta.get("rookieSeasonYear"),
+        player.get("rookieSeasonYear"),
+        meta.get("draftYear"),
+        player.get("draftYear"),
+        player.get("draftClassYear"),
+    ]:
+        year = _safe_int(value, 0)
+        if 2020 <= year <= 2100:
+            rookie_year = year
+            break
+
+    if rookie_year is not None:
+        if int(season_year) - int(rookie_year) >= 3:
+            return False
+    elif _safe_int(meta.get("proSeasons") or player.get("proSeasons") or player.get("yearsPro"), 0) >= 3:
+        return False
+
+    return bool(overall <= 73 or (age <= 23 and overall <= 75 and upside <= 3))
+
+
+def _move_standard_to_two_way_for_finalization(
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+    season_year: int,
+) -> Dict[str, Any]:
+    team_name = _team_name(team)
+    key = player.get("id") or player.get("name")
+    moved = copy.deepcopy(player)
+    moved["previousStandardContract"] = copy.deepcopy(player.get("contract")) if isinstance(player.get("contract"), dict) else None
+    moved["contract"] = _two_way_contract(season_year)
+    moved["contractType"] = "two_way"
+    moved["rosterStatus"] = "two_way"
+    moved["assignmentStatus"] = "g_league"
+    moved["team"] = team_name
+
+    meta = moved.setdefault("meta", {})
+    if isinstance(meta, dict):
+        meta["cpuRosterFinalizationTwoWay"] = True
+        meta["twoWayAssignedSeasonYear"] = season_year + 1
+
+    moved["twoWayMeta"] = {
+        **(moved.get("twoWayMeta") if isinstance(moved.get("twoWayMeta"), dict) else {}),
+        "currentTwoWaySeasonYear": season_year + 1,
+        "assignedSeasonYear": season_year + 1,
+        "twoWayYearsUsed": max(1, _safe_int(moved.get("twoWayYearsUsed"), 1)),
+        "maxTwoWayYears": 2,
+        "source": "cpu_roster_finalization_two_way_conversion",
+    }
+    moved["twoWayYearsUsed"] = moved["twoWayMeta"]["twoWayYearsUsed"]
+    moved["maxTwoWayYears"] = 2
+
+    team["players"] = [
+        p for p in (team.get("players") or [])
+        if (p.get("id") or p.get("name")) != key
+    ]
+    _append_unique(team.setdefault("twoWayPlayers", []), moved)
+
+    return {
+        "playerId": moved.get("id"),
+        "playerName": moved.get("name"),
+        "teamName": team_name,
+        "action": "standard_to_two_way",
+        "overall": moved.get("overall"),
+        "reason": "cpu_roster_finalization_two_way_conversion",
+    }
 
 
 def _auto_finalize_cpu_team(
@@ -1396,21 +1504,50 @@ def _auto_finalize_cpu_team(
             reason = "two_way_roster_limit_release",
         ))
 
-    # Too many standard players: keep the best 15, release the fringe extras.
-    standard = sorted(team.get("players") or [], key = _player_keep_score, reverse = True)
-    keep_standard = standard[:STANDARD_ROSTER_MAX]
-    cut_standard = standard[STANDARD_ROSTER_MAX:]
-    team["players"] = keep_standard
-    for player in cut_standard:
-        actions.append(_release_player_to_free_agency(
-            league = league,
-            team_name = _team_name(team),
-            player = player,
-            season_year = season_year,
-            reason = "standard_roster_limit_release",
-        ))
-
     normalize_team_roster_lists(team)
+
+    # Too many standard players: first convert eligible young fringe players to
+    # two-way, then cut only if the team is still over 15. This preserves useful
+    # RFAs/Bird-rights signings while still making the team season-legal.
+    safety = 0
+    while (
+        roster_counts(team)["standardCount"] > STANDARD_ROSTER_MAX
+        and roster_counts(team)["twoWayCount"] < TWO_WAY_MAX
+        and safety < 12
+    ):
+        safety += 1
+        candidates = [
+            player for player in (team.get("players") or [])
+            if _is_standard_two_way_eligible_for_finalization(player, season_year)
+        ]
+        if not candidates:
+            break
+
+        candidates.sort(
+            key = lambda player: (
+                _player_keep_score(player),
+                _safe_int(player.get("overall"), 0),
+                _safe_int(player.get("potential"), 0),
+            )
+        )
+        actions.append(_move_standard_to_two_way_for_finalization(team, candidates[0], season_year))
+        normalize_team_roster_lists(team)
+
+    # If still over 15, release the lowest-value fringe extras.
+    while roster_counts(team)["standardCount"] > STANDARD_ROSTER_MAX:
+        standard = sorted(team.get("players") or [], key = _player_keep_score, reverse = True)
+        keep_standard = standard[:STANDARD_ROSTER_MAX]
+        cut_standard = standard[STANDARD_ROSTER_MAX:]
+        team["players"] = keep_standard
+        for player in cut_standard:
+            actions.append(_release_player_to_free_agency(
+                league = league,
+                team_name = _team_name(team),
+                player = player,
+                season_year = season_year,
+                reason = "standard_roster_limit_release",
+            ))
+        normalize_team_roster_lists(team)
 
     # Too few standard players: promote best two-way first, then emergency-sign FAs.
     while roster_counts(team)["standardCount"] < STANDARD_ROSTER_MIN and team.get("twoWayPlayers"):
@@ -1429,7 +1566,6 @@ def _auto_finalize_cpu_team(
         normalize_team_roster_lists(team)
 
     return actions
-
 
 def _build_finalization_report(league: Dict[str, Any], user_team_name: Optional[str] = None) -> Dict[str, Any]:
     normalize_league_roster_lists(league)

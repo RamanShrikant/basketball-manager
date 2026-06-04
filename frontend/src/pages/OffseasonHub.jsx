@@ -168,15 +168,33 @@ function buildDefaultOffseasonState(seasonYear) {
 }
 
 function readOffseasonState(seasonYear) {
+  const resolvedSeasonYear = Number(seasonYear || 2026);
   const stored = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), null);
+
   if (!stored || typeof stored !== "object") {
-    return buildDefaultOffseasonState(seasonYear);
+    return buildDefaultOffseasonState(resolvedSeasonYear);
+  }
+
+  const storedSeasonYear = Number(stored?.seasonYear || 0);
+
+  // Surgical year-rollover guard:
+  // Never carry completed offseason flags into a different season. This was
+  // causing Year 2+ to skip Options/Rights, skip expired-contract cleanup, and
+  // open free agency with no newly-added free agents.
+  if (storedSeasonYear > 0 && storedSeasonYear !== resolvedSeasonYear) {
+    const fresh = buildDefaultOffseasonState(resolvedSeasonYear);
+    try {
+      localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(fresh));
+      localStorage.removeItem(FREE_AGENCY_LAST_ROUTE_KEY);
+      localStorage.removeItem(OPTIONS_RESULTS_KEY);
+    } catch {}
+    return fresh;
   }
 
   return {
-    ...buildDefaultOffseasonState(seasonYear),
+    ...buildDefaultOffseasonState(resolvedSeasonYear),
     ...stored,
-    seasonYear,
+    seasonYear: resolvedSeasonYear,
   };
 }
 
@@ -206,6 +224,92 @@ function getAllTeamsFromLeague(leagueData) {
   if (snapshot?.conferences) return Object.values(snapshot.conferences).flat();
 
   return [];
+}
+
+function getOptionYearIndicesLocal(option) {
+  if (!option || typeof option !== "object") return [];
+
+  const raw = Array.isArray(option.yearIndices)
+    ? option.yearIndices
+    : option.yearIndex !== undefined && option.yearIndex !== null
+    ? [option.yearIndex]
+    : [];
+
+  return raw
+    .map((value) => Number(value))
+    .filter((value, index, arr) => Number.isFinite(value) && value >= 0 && arr.indexOf(value) === index)
+    .sort((a, b) => a - b);
+}
+
+function getOptionPickValueLocal(option, yearIndex) {
+  if (!option || typeof option !== "object") return null;
+
+  const picked = option.picked;
+  if (picked && typeof picked === "object" && !Array.isArray(picked)) {
+    if (String(yearIndex) in picked) return picked[String(yearIndex)];
+    if ("default" in picked) return picked.default;
+    return null;
+  }
+
+  return picked;
+}
+
+function getSalaryForSeasonLocal(contract, seasonYear) {
+  if (!contract || typeof contract !== "object") return 0;
+
+  const startYear = Number(contract.startYear || 0);
+  const salaryByYear = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
+  const idx = Number(seasonYear) - startYear;
+
+  if (idx < 0 || idx >= salaryByYear.length) return 0;
+  return Number(salaryByYear[idx] || 0);
+}
+
+function hasPendingOptionForSeasonLocal(player, seasonYear) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : null;
+  if (!contract) return false;
+
+  const option = contract.option && typeof contract.option === "object" ? contract.option : null;
+  if (!option?.type) return false;
+
+  const startYear = Number(contract.startYear || 0);
+  const salaryByYear = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
+  const targetIdx = Number(seasonYear) - startYear;
+  const optionYears = getOptionYearIndicesLocal(option);
+
+  if (targetIdx >= 0 && targetIdx < salaryByYear.length && optionYears.includes(targetIdx)) {
+    return getOptionPickValueLocal(option, targetIdx) === null || getOptionPickValueLocal(option, targetIdx) === undefined;
+  }
+
+  const bridgeSourceIdx = targetIdx - 1;
+  if (salaryByYear.length === 1 && bridgeSourceIdx === 0 && optionYears.includes(bridgeSourceIdx)) {
+    return getOptionPickValueLocal(option, bridgeSourceIdx) === null || getOptionPickValueLocal(option, bridgeSourceIdx) === undefined;
+  }
+
+  return false;
+}
+
+function hasUnresolvedPreFreeAgencyContracts(leagueData, seasonYear) {
+  const snapshot = getLeagueDataSnapshot(leagueData);
+  const targetSeasonYear = Number(seasonYear || snapshot?.seasonYear || snapshot?.currentSeasonYear || 2026) + 1;
+
+  for (const team of getAllTeamsFromLeague(snapshot) || []) {
+    const rosterBuckets = [team?.players || [], team?.twoWayPlayers || []];
+
+    for (const players of rosterBuckets) {
+      for (const player of players || []) {
+        if (!player || typeof player !== "object") continue;
+
+        const contract = player.contract && typeof player.contract === "object" ? player.contract : null;
+        if (!contract) return true;
+
+        if (hasPendingOptionForSeasonLocal(player, targetSeasonYear)) return true;
+        if (getSalaryForSeasonLocal(contract, targetSeasonYear) <= 0) return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function getSelectedTeamFromLeague(leagueData, selectedTeam) {
@@ -2061,7 +2165,14 @@ export default function OffseasonHub() {
   };
 
   const runDevOptionsAndRights = async (workingLeague, userTeamName) => {
-    if (readOffseasonState(seasonYear).optionsComplete && readOffseasonState(seasonYear).rightsManagementComplete) {
+    const currentOffseasonState = readOffseasonState(seasonYear);
+    const unresolvedPreFreeAgencyContracts = hasUnresolvedPreFreeAgencyContracts(workingLeague, seasonYear);
+
+    if (
+      currentOffseasonState.optionsComplete &&
+      currentOffseasonState.rightsManagementComplete &&
+      !unresolvedPreFreeAgencyContracts
+    ) {
       return workingLeague;
     }
 
@@ -2168,7 +2279,7 @@ export default function OffseasonHub() {
         state?.latestResults
     );
 
-    if (!alreadyStarted && Array.isArray(nextLeague?.freeAgents) && nextLeague.freeAgents.length > 0) {
+    if (!alreadyStarted) {
       const leagueForInit = {
         ...nextLeague,
         freeAgencyState: buildCleanFreeAgencyStateForDev(seasonYear, userTeamName, 10),
@@ -2208,8 +2319,15 @@ export default function OffseasonHub() {
     }
 
     let nextLeague = workingLeague;
+    const startState = nextLeague?.freeAgencyState || {};
+    const alreadyStarted = Boolean(
+      startState?.isActive ||
+        Number(startState?.currentDay || 0) > 0 ||
+        (Array.isArray(startState?.dailyLog) && startState.dailyLog.length > 0) ||
+        (Array.isArray(startState?.offerHistory) && startState.offerHistory.length > 0)
+    );
 
-    if (Array.isArray(nextLeague?.freeAgents) && nextLeague.freeAgents.length > 0) {
+    if (!alreadyStarted) {
       const leagueForInit = {
         ...nextLeague,
         freeAgencyState: buildCleanFreeAgencyStateForDev(seasonYear, userTeamName, 10),
