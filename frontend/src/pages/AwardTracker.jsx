@@ -33,6 +33,11 @@ const TAB_META = {
     short: "6MOY",
     description: "Top 10 bench players based on role and production.",
   },
+  roty: {
+    title: "ROTY Ladder",
+    short: "ROTY",
+    description: "Top 10 rookies based on production, minutes, defense, and team wins.",
+  },
 };
 
 function loadResultsIndexV3() {
@@ -105,6 +110,137 @@ function statsKey(player, team) {
   return `${player}__${team}`;
 }
 
+function toInt(value, fallback = null) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.trunc(n);
+}
+
+function getTrackerSeasonYear(leagueData) {
+  const candidates = [];
+
+  const pushYear = (value) => {
+    const y = Number(value);
+    if (Number.isFinite(y) && y >= 2020 && y <= 2100) {
+      candidates.push(y);
+    }
+  };
+
+  try {
+    const raw = localStorage.getItem(META_KEY);
+    const meta = raw ? JSON.parse(raw) : {};
+    pushYear(meta?.seasonYear);
+    pushYear(meta?.currentSeasonYear);
+    pushYear(meta?.seasonStartYear);
+  } catch {}
+
+  pushYear(leagueData?.seasonYear);
+  pushYear(leagueData?.currentSeasonYear);
+  pushYear(leagueData?.seasonStartYear);
+
+  if (candidates.length) return Math.max(...candidates);
+
+  const today = new Date();
+  return today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
+}
+
+function firstPresent(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return null;
+}
+
+function boolish(value) {
+  if (typeof value === "boolean") return value;
+  if (value === undefined || value === null || value === "") return false;
+  if (typeof value === "number") return value !== 0;
+  return ["true", "yes", "y", "1", "rookie"].includes(String(value).trim().toLowerCase());
+}
+
+function isRookieCandidate(player, seasonYear) {
+  const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+
+  const explicitYears = [
+    player?.draftYear,
+    player?.rookieYear,
+    player?.rookieSeason,
+    player?.rookieSeasonYear,
+    meta?.draftYear,
+    meta?.rookieYear,
+    meta?.rookieSeason,
+    meta?.rookieSeasonYear,
+    contract?.draftYear,
+    contract?.rookieYear,
+    contract?.rookieSeason,
+    contract?.rookieSeasonYear,
+  ]
+    .map((value) => toInt(value, null))
+    .filter((value) => value !== null);
+
+  if (explicitYears.length) {
+    return explicitYears.some((year) => Number(year) === Number(seasonYear));
+  }
+
+  const explicitFlags = [
+    player?.isRookie,
+    player?.rookie,
+    player?.rookieEligible,
+    player?.rotyEligible,
+    meta?.isRookie,
+    meta?.rookie,
+    meta?.rookieEligible,
+    meta?.rotyEligible,
+    contract?.rookieEligible,
+  ];
+
+  if (explicitFlags.some((value) => boolish(value))) {
+    return true;
+  }
+
+  const sourceText = [
+    player?.contractType,
+    player?.rosterStatus,
+    contract?.type,
+    contract?.source,
+    meta?.acquiredVia,
+    meta?.rookieSigningDecision,
+  ]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+
+  if (sourceText.includes("rookie")) {
+    const startYear = toInt(contract?.startYear ?? meta?.draftYear ?? player?.draftYear, null);
+    return startYear === null || Number(startYear) === Number(seasonYear);
+  }
+
+  const proSeasons = firstPresent(
+    player?.proSeasons,
+    player?.seasonsPro,
+    player?.yearsPro,
+    player?.yearsOfExperience,
+    player?.yoe,
+    meta?.proSeasons,
+    meta?.seasonsPro,
+    meta?.yearsPro,
+    meta?.yearsOfExperience,
+    meta?.yoe
+  );
+
+  const proSeasonsInt = toInt(proSeasons, null);
+  if (proSeasonsInt !== null) {
+    return proSeasonsInt <= 1;
+  }
+
+  return false;
+}
+
+function isYoungRotyFallback(player) {
+  const age = toInt(player?.age, null);
+  return age !== null && age <= 22;
+}
+
 function fmt1(x) {
   return Number.isFinite(Number(x)) ? Number(Number(x).toFixed(1)) : 0;
 }
@@ -142,9 +278,14 @@ function norm(v, vmax) {
   return Math.max(0, Math.min(1, v / vmax));
 }
 
-function normDef(v, lo, hi) {
+function normDefHi(v, lo, hi) {
   if (hi <= lo) return 0;
-  return Math.max(0, Math.min(1, (hi - v) / (hi - lo)));
+  return Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+}
+
+function normWins(wins) {
+  const floor = 0.30;
+  return floor + (1 - floor) * norm(Number(wins || 0), 82);
 }
 
 function buildCtx(players) {
@@ -156,8 +297,8 @@ function buildCtx(players) {
       spg: 1,
       bpg: 1,
       wins: 82,
-      def_lo: 90,
-      def_hi: 120,
+      def_lo: 0,
+      def_hi: 100,
     };
   }
 
@@ -167,41 +308,55 @@ function buildCtx(players) {
     rpg: Math.max(...players.map((p) => rpg(p)), 1),
     spg: Math.max(...players.map((p) => spg(p)), 1),
     bpg: Math.max(...players.map((p) => bpg(p)), 1),
-    wins: Math.max(...players.map((p) => Number(p._team_wins || 0)), 1),
-    def_lo: Math.min(...players.map((p) => Number(p.def_rating ?? 110))),
-    def_hi: Math.max(...players.map((p) => Number(p.def_rating ?? 110))),
+    wins: 82,
+    def_lo: Math.min(...players.map((p) => Number(p.def_rating ?? 0))),
+    def_hi: Math.max(...players.map((p) => Number(p.def_rating ?? 0))),
   };
 }
 
 function impactMvp(p, c) {
   return (
-    0.30 * norm(ppg(p), c.ppg) +
-    0.15 * norm(apg(p), c.apg) +
-    0.15 * norm(rpg(p), c.rpg) +
-    0.20 * norm(Number(p._team_wins || 0), c.wins) +
-    0.075 * norm(spg(p), c.spg) +
-    0.075 * norm(bpg(p), c.bpg) +
-    0.05 * normDef(Number(p.def_rating ?? c.def_hi), c.def_lo, c.def_hi)
+    0.28 * normWins(p._team_wins) +
+    0.27 * norm(ppg(p), c.ppg) +
+    0.11 * norm(apg(p), c.apg) +
+    0.11 * norm(rpg(p), c.rpg) +
+    0.09 * norm(spg(p), c.spg) +
+    0.09 * norm(bpg(p), c.bpg) +
+    0.05 * normDefHi(Number(p.def_rating ?? 0), c.def_lo, c.def_hi)
   );
 }
 
 function impactDpoy(p, c) {
   return (
-    0.35 * norm(spg(p), c.spg) +
-    0.35 * norm(bpg(p), c.bpg) +
-    0.20 * normDef(Number(p.def_rating ?? c.def_hi), c.def_lo, c.def_hi) +
-    0.10 * norm(Number(p._team_wins || 0), c.wins)
+    0.325 * norm(spg(p), c.spg) +
+    0.325 * norm(bpg(p), c.bpg) +
+    0.25 * normDefHi(Number(p.def_rating ?? 0), c.def_lo, c.def_hi) +
+    0.10 * normWins(p._team_wins)
   );
 }
 
 function impact6Moy(p, c) {
   return (
-    0.35 * norm(ppg(p), c.ppg) +
-    0.20 * norm(apg(p), c.apg) +
-    0.20 * norm(rpg(p), c.rpg) +
+    0.15 * normWins(p._team_wins) +
+    0.30 * norm(ppg(p), c.ppg) +
+    0.15 * norm(apg(p), c.apg) +
+    0.15 * norm(rpg(p), c.rpg) +
     0.10 * norm(spg(p), c.spg) +
     0.10 * norm(bpg(p), c.bpg) +
-    0.05 * normDef(Number(p.def_rating ?? c.def_hi), c.def_lo, c.def_hi)
+    0.05 * normDefHi(Number(p.def_rating ?? 0), c.def_lo, c.def_hi)
+  );
+}
+
+function impactRoty(p, c, maxMpg) {
+  return (
+    0.08 * normWins(p._team_wins) +
+    0.34 * norm(ppg(p), c.ppg) +
+    0.14 * norm(apg(p), c.apg) +
+    0.14 * norm(rpg(p), c.rpg) +
+    0.07 * norm(spg(p), c.spg) +
+    0.07 * norm(bpg(p), c.bpg) +
+    0.12 * norm(mpg(p), maxMpg) +
+    0.04 * normDefHi(Number(p.def_rating ?? 0), c.def_lo, c.def_hi)
   );
 }
 
@@ -268,6 +423,9 @@ function buildRosterInfoIndex(leagueData) {
       const playerName = p?.name || p?.player;
       if (!playerName || !teamName) continue;
 
+      const meta = p?.meta && typeof p.meta === "object" ? p.meta : {};
+      const contract = p?.contract && typeof p.contract === "object" ? p.contract : {};
+
       idx[statsKey(playerName, teamName)] = {
         headshot:
           p?.portrait ||
@@ -299,7 +457,24 @@ function buildRosterInfoIndex(leagueData) {
           p?.defensiveRating ??
           p?.drtg ??
           p?.defrtg ??
-          110,
+          0,
+        contract,
+        meta,
+        contractType: p?.contractType ?? contract?.type ?? null,
+        rosterStatus: p?.rosterStatus ?? null,
+        draftYear: firstPresent(p?.draftYear, meta?.draftYear, contract?.draftYear),
+        rookieYear: firstPresent(p?.rookieYear, meta?.rookieYear, contract?.rookieYear),
+        rookieSeason: firstPresent(p?.rookieSeason, meta?.rookieSeason, contract?.rookieSeason),
+        rookieSeasonYear: firstPresent(p?.rookieSeasonYear, meta?.rookieSeasonYear, contract?.rookieSeasonYear),
+        isRookie: firstPresent(p?.isRookie, meta?.isRookie, contract?.isRookie),
+        rookie: firstPresent(p?.rookie, meta?.rookie, contract?.rookie),
+        rookieEligible: firstPresent(p?.rookieEligible, meta?.rookieEligible, contract?.rookieEligible),
+        rotyEligible: firstPresent(p?.rotyEligible, meta?.rotyEligible, contract?.rotyEligible),
+        proSeasons: firstPresent(p?.proSeasons, meta?.proSeasons),
+        seasonsPro: firstPresent(p?.seasonsPro, meta?.seasonsPro),
+        yearsPro: firstPresent(p?.yearsPro, meta?.yearsPro),
+        yearsOfExperience: firstPresent(p?.yearsOfExperience, meta?.yearsOfExperience),
+        yoe: firstPresent(p?.yoe, meta?.yoe),
       };
     }
   }
@@ -330,7 +505,7 @@ function getColumnsForTab(tab) {
       { key: "REB", label: "REB" },
       { key: "STL", label: "STL" },
       { key: "BLK", label: "BLK" },
-      { key: "DRTG", label: "DRTG" },
+      { key: "DRTG", label: "DEF" },
       { key: "Impact", label: "Impact" },
     ];
   }
@@ -346,6 +521,21 @@ function getColumnsForTab(tab) {
       { key: "AST", label: "AST" },
       { key: "Starts", label: "Starts" },
       { key: "Sixth", label: "Sixth" },
+      { key: "Impact", label: "Impact" },
+    ];
+  }
+
+  if (tab === "roty") {
+    return [
+      { key: "team", label: "Team" },
+      { key: "name", label: "Name" },
+      { key: "OVR", label: "OVR" },
+      { key: "GP", label: "GP" },
+      { key: "PTS", label: "PTS" },
+      { key: "REB", label: "REB" },
+      { key: "AST", label: "AST" },
+      { key: "MPG", label: "MPG" },
+      { key: "Impact", label: "Impact" },
     ];
   }
 
@@ -373,6 +563,8 @@ export default function AwardTracker() {
     loadMaybeCompressedJSON(PLAYER_STATS_KEY, {})
   );
 
+  const trackerSeasonYear = useMemo(() => getTrackerSeasonYear(leagueData), [leagueData]);
+
   useEffect(() => {
     const refreshStats = () => {
       setStatsMap(loadMaybeCompressedJSON(PLAYER_STATS_KEY, {}));
@@ -393,17 +585,9 @@ export default function AwardTracker() {
   }, []);
 
   const seasonLabel = useMemo(() => {
-    try {
-      const raw = localStorage.getItem(META_KEY);
-      const meta = raw ? JSON.parse(raw) : null;
-      const y = Number(meta?.seasonYear);
-      if (Number.isFinite(y)) return `${y}-${y + 1}`;
-    } catch {}
-
-    const today = new Date();
-    const y = today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
+    const y = Number(trackerSeasonYear);
     return `${y}-${y + 1}`;
-  }, []);
+  }, [trackerSeasonYear]);
 
   const scheduleByDate = useMemo(() => {
     try {
@@ -456,7 +640,7 @@ export default function AwardTracker() {
           blk: Number(s.blk || 0),
           started: Number(s.started || 0),
           sixth: Number(s.sixth || 0),
-          def_rating: Number(info.def_rating ?? 110),
+          def_rating: Number(info.def_rating ?? 0),
           overall: info.overall ?? null,
           potential: info.potential ?? null,
           headshot: info.headshot || null,
@@ -464,6 +648,23 @@ export default function AwardTracker() {
           pos: info.pos || "",
           secondaryPos: info.secondaryPos || "",
           age: info.age ?? null,
+          contract: info.contract || null,
+          meta: info.meta || {},
+          contractType: info.contractType,
+          rosterStatus: info.rosterStatus,
+          draftYear: info.draftYear,
+          rookieYear: info.rookieYear,
+          rookieSeason: info.rookieSeason,
+          rookieSeasonYear: info.rookieSeasonYear,
+          isRookie: info.isRookie,
+          rookie: info.rookie,
+          rookieEligible: info.rookieEligible,
+          rotyEligible: info.rotyEligible,
+          proSeasons: info.proSeasons,
+          seasonsPro: info.seasonsPro,
+          yearsPro: info.yearsPro,
+          yearsOfExperience: info.yearsOfExperience,
+          yoe: info.yoe,
           _team_wins: Number(teamWinsMap[teamName] || 0),
         });
       }
@@ -517,11 +718,29 @@ export default function AwardTracker() {
       .slice(0, TRACKER_LIMIT);
   }, [sixthPool, eligiblePool]);
 
+  const rookiePool = useMemo(() => {
+    const strict = eligiblePool.filter((p) => isRookieCandidate(p, trackerSeasonYear));
+    if (strict.length) return strict;
+    return eligiblePool.filter((p) => isYoungRotyFallback(p));
+  }, [eligiblePool, trackerSeasonYear]);
+
+  const rotyTop10 = useMemo(() => {
+    const base = rookiePool.length ? rookiePool : [];
+    const ctx = buildCtx(base.length ? base : eligiblePool);
+    const maxRotyMpg = Math.max(...base.map((p) => mpg(p)), 1);
+
+    return base
+      .map((p) => buildDisplayRow({ ...p, _score: impactRoty(p, ctx, maxRotyMpg) }))
+      .sort((a, b) => b._score - a._score)
+      .slice(0, TRACKER_LIMIT);
+  }, [rookiePool, eligiblePool]);
+
   const activeRows = useMemo(() => {
     if (currentTab === "dpoy") return dpoyTop10;
     if (currentTab === "sixth_man") return sixthTop10;
+    if (currentTab === "roty") return rotyTop10;
     return mvpTop10;
-  }, [currentTab, mvpTop10, dpoyTop10, sixthTop10]);
+  }, [currentTab, mvpTop10, dpoyTop10, sixthTop10, rotyTop10]);
 
   useEffect(() => {
     if (!activeRows.length) {
@@ -580,6 +799,7 @@ export default function AwardTracker() {
           { k: "mvp", label: "MVP" },
           { k: "dpoy", label: "DPOY" },
           { k: "sixth_man", label: "6MOY" },
+          { k: "roty", label: "ROTY" },
         ].map((tab) => (
           <button
             key={tab.k}
@@ -785,6 +1005,10 @@ export default function AwardTracker() {
 
                       if (col.key === "DRTG") {
                         return <td key={col.key}>{fmt1(p.def_rating)}</td>;
+                      }
+
+                      if (col.key === "MPG") {
+                        return <td key={col.key}>{p.mpg}</td>;
                       }
 
                       if (col.key === "Impact") {

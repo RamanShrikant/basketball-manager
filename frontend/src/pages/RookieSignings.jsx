@@ -27,12 +27,14 @@ function getRosterCounts(leagueData, teamName) {
   const team = findTeamByName(leagueData, teamName);
   const standardCount = Array.isArray(team?.players) ? team.players.length : 0;
   const twoWayCount = Array.isArray(team?.twoWayPlayers) ? team.twoWayPlayers.length : 0;
+  const stashCount = Array.isArray(team?.stashPlayers) ? team.stashPlayers.length : 0;
   const pendingCount = Array.isArray(team?.pendingRookieSignings) ? team.pendingRookieSignings.length : 0;
-  const controlledCount = standardCount + twoWayCount + pendingCount;
+  const controlledCount = standardCount + twoWayCount + stashCount + pendingCount;
 
   return {
     standardCount,
     twoWayCount,
+    stashCount,
     pendingCount,
     controlledCount,
     standardSlotsOpen: Math.max(0, STANDARD_ROSTER_MAX - standardCount),
@@ -43,13 +45,15 @@ function getRosterCounts(leagueData, teamName) {
 
 function normalizeDecisionForSlots(decision, counts) {
   let next = decision || "two_way";
-  if (next === "draft_rights") next = counts.twoWaySlotsOpen > 0 && counts.controlledSlotsOpen > 0 ? "two_way" : "release";
+  if (next === "draft_rights") next = counts.controlledSlotsOpen > 0 ? "stash" : "release";
 
   // Offseason rule: standard contracts can go above 15 temporarily as long as
-  // the team stays under the 20-player controlled roster limit.
+  // the team stays under the 20-player controlled limit. Stashes are cap-free
+  // but still use one controlled-player spot.
   if (next === "standard" && counts.controlledSlotsOpen <= 0) next = counts.twoWaySlotsOpen > 0 ? "two_way" : "release";
-  if (next === "two_way" && (counts.twoWaySlotsOpen <= 0 || counts.controlledSlotsOpen <= 0)) next = "release";
-  if (!["standard", "two_way", "release"].includes(next)) next = "release";
+  if (next === "two_way" && (counts.twoWaySlotsOpen <= 0 || counts.controlledSlotsOpen <= 0)) next = counts.controlledSlotsOpen > 0 ? "stash" : "release";
+  if (next === "stash" && counts.controlledSlotsOpen <= 0) next = "release";
+  if (!["standard", "two_way", "stash", "release"].includes(next)) next = "release";
   return next;
 }
 
@@ -64,6 +68,9 @@ function buildInitialDecisions(rows, counts) {
     if (decision === "standard") running.controlledSlotsOpen = Math.max(0, running.controlledSlotsOpen - 1);
     if (decision === "two_way") {
       running.twoWaySlotsOpen = Math.max(0, running.twoWaySlotsOpen - 1);
+      running.controlledSlotsOpen = Math.max(0, running.controlledSlotsOpen - 1);
+    }
+    if (decision === "stash") {
       running.controlledSlotsOpen = Math.max(0, running.controlledSlotsOpen - 1);
     }
   }
@@ -118,6 +125,7 @@ function updateOffseasonState(patch) {
 function formatDecision(decision) {
   if (decision === "standard") return "Standard Contract";
   if (decision === "two_way") return "Two-Way Contract";
+  if (decision === "stash") return "1-Year Stash";
   if (decision === "release") return "Release to Free Agency";
   return decision || "-";
 }
@@ -131,6 +139,7 @@ function RookieCard({ row, decision, onDecisionChange, rosterCounts, animationIn
   const imageUrl = getImageUrl(row);
   const standardBlocked = rosterCounts.controlledSlotsOpen <= 0 && decision !== "standard";
   const twoWayBlocked = (rosterCounts.twoWaySlotsOpen <= 0 || rosterCounts.controlledSlotsOpen <= 0) && decision !== "two_way";
+  const stashBlocked = rosterCounts.controlledSlotsOpen <= 0 && decision !== "stash";
 
   return (
     <div
@@ -181,6 +190,9 @@ function RookieCard({ row, decision, onDecisionChange, rosterCounts, animationIn
             <option value="two_way" disabled={twoWayBlocked}>
               Two-Way Contract{twoWayBlocked ? " - Full" : ""}
             </option>
+            <option value="stash" disabled={stashBlocked}>
+              1-Year Stash{stashBlocked ? " - Offseason Full" : ""}
+            </option>
             <option value="release">Release to Free Agency</option>
           </select>
         </div>
@@ -216,10 +228,11 @@ export default function RookieSignings() {
 
   const projectedStandardCount = rosterCounts.standardCount + Object.values(decisions).filter((x) => x === "standard").length;
   const projectedTwoWayCount = rosterCounts.twoWayCount + Object.values(decisions).filter((x) => x === "two_way").length;
-  const projectedControlledCount = rosterCounts.controlledCount - rosterCounts.pendingCount + Object.values(decisions).filter((x) => x === "standard" || x === "two_way").length;
+  const projectedStashCount = rosterCounts.stashCount + Object.values(decisions).filter((x) => x === "stash").length;
+  const projectedControlledCount = rosterCounts.controlledCount - rosterCounts.pendingCount + Object.values(decisions).filter((x) => x === "standard" || x === "two_way" || x === "stash").length;
 
   const decisionSummary = useMemo(() => {
-    const counts = { standard: 0, two_way: 0, release: 0 };
+    const counts = { standard: 0, two_way: 0, stash: 0, release: 0 };
     for (const row of userRows) {
       const decision = decisions[row.playerId] || row.recommendedDecision || "two_way";
       counts[decision] = (counts[decision] || 0) + 1;
@@ -319,7 +332,7 @@ export default function RookieSignings() {
             <p className="text-sm uppercase tracking-[0.25em] text-white/40 mb-2">Offseason Event</p>
             <h1 className="text-5xl font-extrabold text-orange-500">Rookie Signings</h1>
             <p className="text-white/60 mt-3">
-              Sign second-round picks to standard deals, convert them to two-way contracts, or release them.
+              Sign second-round picks to standard deals, use two-way contracts, stash late picks for one year, or release them.
             </p>
           </div>
 
@@ -331,7 +344,7 @@ export default function RookieSignings() {
           </button>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-7 gap-3 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-8 gap-3 mb-6">
           <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
             <div className="text-xs uppercase tracking-wide text-white/40">Season</div>
             <div className="text-2xl font-extrabold">{seasonYear}</div>
@@ -347,6 +360,10 @@ export default function RookieSignings() {
             <div className={`text-2xl font-extrabold ${projectedTwoWayCount > TWO_WAY_MAX ? "text-red-300" : ""}`}>
               {projectedTwoWayCount}/{TWO_WAY_MAX}
             </div>
+          </div>
+          <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
+            <div className="text-xs uppercase tracking-wide text-white/40">Projected Stash</div>
+            <div className="text-2xl font-extrabold">{projectedStashCount}</div>
           </div>
           <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
             <div className="text-xs uppercase tracking-wide text-white/40">Projected Controlled</div>
@@ -365,6 +382,10 @@ export default function RookieSignings() {
           <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
             <div className="text-xs uppercase tracking-wide text-white/40">Two-Way Choices</div>
             <div className="text-2xl font-extrabold">{decisionSummary.two_way || 0}</div>
+          </div>
+          <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
+            <div className="text-xs uppercase tracking-wide text-white/40">Stash Choices</div>
+            <div className="text-2xl font-extrabold">{decisionSummary.stash || 0}</div>
           </div>
           <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
             <div className="text-xs uppercase tracking-wide text-white/40">Standard Choices</div>
@@ -406,7 +427,7 @@ export default function RookieSignings() {
           <div className="p-5 border-b border-white/10 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
               <h2 className="text-2xl font-extrabold">Your Second-Round Picks</h2>
-              <p className="text-white/55 text-sm mt-1">CPU teams are resolved automatically when you apply decisions. No draft-rights stash is used in this version.</p>
+              <p className="text-white/55 text-sm mt-1">CPU teams are resolved automatically when you apply decisions. Stash is only available immediately after the draft and returns next offseason.</p>
             </div>
             <div className="flex gap-3">
               <button

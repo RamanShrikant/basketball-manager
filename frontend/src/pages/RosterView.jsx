@@ -139,6 +139,92 @@ export default function RosterView() {
     return Boolean(a.name && b.name && a.name === b.name);
   };
 
+  const getPlayerProSeasons = (player) => {
+    const keys = [
+      "proSeasons",
+      "seasonsPro",
+      "yearsPro",
+      "yearsOfExperience",
+      "yoe",
+    ];
+
+    for (const key of keys) {
+      const value = player?.[key];
+      if (value !== undefined && value !== null && value !== "") {
+        return Number(value) || 0;
+      }
+    }
+
+    const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+    for (const key of keys) {
+      const value = meta?.[key];
+      if (value !== undefined && value !== null && value !== "") {
+        return Number(value) || 0;
+      }
+    }
+
+    return 0;
+  };
+
+  const getPlayerRookieReferenceYear = (player) => {
+    const keys = [
+      "rookieYear",
+      "rookie_year",
+      "rookieSeason",
+      "rookie_season",
+      "rookieSeasonYear",
+      "rookie_season_year",
+      "draftYear",
+      "draft_year",
+    ];
+
+    for (const key of keys) {
+      const value = Number(player?.[key]);
+      if (Number.isFinite(value) && value > 1900) return value;
+    }
+
+    const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+    for (const key of keys) {
+      const value = Number(meta?.[key]);
+      if (Number.isFinite(value) && value > 1900) return value;
+    }
+
+    return null;
+  };
+
+  const isPlayerTwoWayEligible = (player) => {
+    if (!player || player.isTwoWay) return false;
+
+    const currentSeasonYear = getCurrentSeasonYear();
+    const rookieYear = getPlayerRookieReferenceYear(player);
+
+    if (rookieYear !== null) {
+      return Math.max(0, currentSeasonYear - rookieYear) <= 2;
+    }
+
+    // Fallback for saves that only track years/pro seasons. Keep this forgiving
+    // because some rosters store completed seasons, while others store current
+    // season number.
+    return getPlayerProSeasons(player) <= 3;
+  };
+
+  const getTwoWayAssignmentBlockReason = (player, team = selectedTeam) => {
+    if (!player) return "No player selected.";
+    if (isAllView) return "Switch to a team roster first before assigning a two-way.";
+    if (player.isTwoWay) return "This player is already on a two-way contract.";
+
+    const twoWayCount = getTwoWayPlayers(team).length;
+    if (twoWayCount >= 3) {
+      return "This team already has the maximum 3 two-way players.";
+    }
+
+    if (!isPlayerTwoWayEligible(player)) {
+      return "Only players in their first 3 seasons can be assigned to a two-way contract.";
+    }
+
+    return "";
+  };
+
   const getReleaseSalaryInfo = (player) => {
     const contract = player?.contract;
     const currentSeasonYear = getCurrentSeasonYear();
@@ -420,6 +506,25 @@ export default function RosterView() {
 
   const buildStandardContractFromTwoWay = (player) => {
     const minimumSalary = getStandardMinimumSalary();
+    const storedStandardContract =
+      player?.previousStandardContract ||
+      player?.standardContractBeforeTwoWay ||
+      null;
+
+    if (
+      storedStandardContract &&
+      Array.isArray(storedStandardContract.salaryByYear) &&
+      storedStandardContract.salaryByYear.length
+    ) {
+      return {
+        ...storedStandardContract,
+        salaryByYear: storedStandardContract.salaryByYear.map((amount) =>
+          Math.max(minimumSalary, Number(amount || 0))
+        ),
+        option: storedStandardContract.option || null,
+      };
+    }
+
     const originalSalaries = Array.isArray(player?.contract?.salaryByYear)
       ? player.contract.salaryByYear
       : [];
@@ -433,6 +538,67 @@ export default function RosterView() {
       ),
       option: player?.contract?.option || null,
     };
+  };
+
+  const buildTwoWayContractFromStandard = () => ({
+    startYear: getCurrentSeasonYear(),
+    salaryByYear: [0],
+    option: null,
+  });
+
+  const handleAssignStandardToTwoWay = (player) => {
+    if (!player || isAllView) return;
+
+    const blockReason = getTwoWayAssignmentBlockReason(player, selectedTeam);
+    if (blockReason) {
+      console.warn("[RosterView] two-way assignment blocked:", blockReason);
+      return;
+    }
+
+    let assignedPlayer = null;
+    const result = updateSelectedTeamInLeague((team) => {
+      const standardPlayers = Array.isArray(team.players) ? team.players : [];
+      const twoWayPlayers = getTwoWayPlayers(team);
+
+      const previousStandardContract = player?.previousStandardContract || player?.contract || null;
+      const previousTwoWayYearsUsed = Number(player?.twoWayMeta?.twoWayYearsUsed || 0) || 0;
+
+      const cleanedPlayer = {
+        ...player,
+        isTwoWay: true,
+        rosterStatus: "two_way",
+        contractType: "two_way",
+        previousStandardContract,
+        previousContract: player?.previousContract || previousStandardContract,
+        contract: buildTwoWayContractFromStandard(player),
+        twoWayMeta: {
+          ...(player?.twoWayMeta || {}),
+          assignedByTeam: team.name,
+          assignedSeasonYear: getCurrentSeasonYear(),
+          twoWayYearsUsed: Math.max(1, previousTwoWayYearsUsed || 1),
+          source: "manual_roster_assignment",
+        },
+      };
+
+      assignedPlayer = cleanedPlayer;
+
+      return {
+        ...team,
+        players: standardPlayers.filter((row) => !samePlayer(row, player)),
+        twoWayPlayers: twoWayPlayers.some((row) => samePlayer(row, player))
+          ? twoWayPlayers.map((row) => (samePlayer(row, player) ? cleanedPlayer : row))
+          : [...twoWayPlayers, cleanedPlayer],
+      };
+    });
+
+    if (!result) return;
+
+    if (assignedPlayer) {
+      setSelectedPlayer(assignedPlayer);
+      setActionTargetPlayer(assignedPlayer);
+    }
+
+    closePlayerActions();
   };
 
   const handleUpgradeTwoWayToStandard = (player) => {
@@ -593,6 +759,17 @@ export default function RosterView() {
   const player = selectedPlayer || viewPlayers[0] || {};
   const headerTitle = isAllView ? "All Players" : `${selectedTeam.name} Roster`;
   const showTeamCol = isAllView; // logo column only in All Players view
+  const regularSeasonStandardRosterLimit = Number(
+    workingLeagueData?.rosterLimit ||
+    workingLeagueData?.maxRosterSize ||
+    15
+  );
+  const standardRosterCount = !isAllView && selectedTeam?.players
+    ? selectedTeam.players.length
+    : 0;
+  const twoWayRosterCount = !isAllView ? getTwoWayPlayers(selectedTeam).length : 0;
+  const rosterOverRegularSeasonLimit =
+    !isAllView && standardRosterCount > regularSeasonStandardRosterLimit;
 
   // OVR circle
   const fillPercent = Math.min((player.overall || 0) / 99, 1);
@@ -626,6 +803,28 @@ export default function RosterView() {
           </button>
         </div>
       </div>
+
+      {!isAllView && (
+        <div className={`mb-5 w-full max-w-5xl rounded-xl border px-5 py-3 text-sm ${
+          rosterOverRegularSeasonLimit
+            ? "border-orange-400/40 bg-orange-500/10 text-orange-100"
+            : "border-neutral-700 bg-neutral-900/65 text-neutral-300"
+        }`}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="font-semibold">
+              Standard contracts: {standardRosterCount}/{regularSeasonStandardRosterLimit}
+            </span>
+            <span className="text-emerald-200">
+              Two-way contracts: {twoWayRosterCount}/3
+            </span>
+          </div>
+          {rosterOverRegularSeasonLimit && (
+            <p className="mt-2 text-orange-100">
+              You can carry extra players for now, but before simulating you must either release players or assign eligible first-3-season players to two-way contracts until you are at {regularSeasonStandardRosterLimit} or fewer standard contracts.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Player Card */}
       <div className="relative w-full flex justify-center">
@@ -934,27 +1133,56 @@ export default function RosterView() {
                     </button>
                   </>
                 ) : (
-                  <button
-                    onClick={() => openReleaseFromActions(actionTargetPlayer)}
-                    disabled={isAllView}
-                    className={`flex items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
-                      isAllView
-                        ? "cursor-not-allowed border-white/10 bg-white/[0.03] opacity-50"
-                        : "border-red-400/25 bg-red-500/10 hover:-translate-y-0.5 hover:border-red-300/50 hover:bg-red-500/20 hover:shadow-[0_18px_40px_rgba(239,68,68,0.16)]"
-                    }`}
-                  >
-                    <div>
-                      <div className="text-lg font-black text-white">Release to Free Agency</div>
-                      <div className="mt-1 text-sm font-semibold text-neutral-400">
-                        {isAllView
-                          ? "Switch to a team roster first before releasing a player."
-                          : "Move him to free agency and keep the original remaining guaranteed salary as dead cap."}
+                  <>
+                    {(() => {
+                      const blockReason = getTwoWayAssignmentBlockReason(actionTargetPlayer, selectedTeam);
+                      const disabled = Boolean(blockReason);
+
+                      return (
+                        <button
+                          onClick={() => handleAssignStandardToTwoWay(actionTargetPlayer)}
+                          disabled={disabled}
+                          className={`flex items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
+                            disabled
+                              ? "cursor-not-allowed border-white/10 bg-white/[0.03] opacity-50"
+                              : "border-emerald-400/25 bg-emerald-500/10 hover:-translate-y-0.5 hover:border-emerald-300/50 hover:bg-emerald-500/20 hover:shadow-[0_18px_40px_rgba(16,185,129,0.16)]"
+                          }`}
+                        >
+                          <div>
+                            <div className="text-lg font-black text-white">Assign to Two-Way Contract</div>
+                            <div className="mt-1 text-sm font-semibold text-neutral-400">
+                              {blockReason || "Move him out of the 15-man standard roster for the rest of the season. Two-way players do not count against team salary cap."}
+                            </div>
+                          </div>
+                          <div className="ml-4 rounded-full bg-emerald-600 px-3 py-1 text-sm font-black text-white">
+                            2-Way
+                          </div>
+                        </button>
+                      );
+                    })()}
+
+                    <button
+                      onClick={() => openReleaseFromActions(actionTargetPlayer)}
+                      disabled={isAllView}
+                      className={`flex items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
+                        isAllView
+                          ? "cursor-not-allowed border-white/10 bg-white/[0.03] opacity-50"
+                          : "border-red-400/25 bg-red-500/10 hover:-translate-y-0.5 hover:border-red-300/50 hover:bg-red-500/20 hover:shadow-[0_18px_40px_rgba(239,68,68,0.16)]"
+                      }`}
+                    >
+                      <div>
+                        <div className="text-lg font-black text-white">Release to Free Agency</div>
+                        <div className="mt-1 text-sm font-semibold text-neutral-400">
+                          {isAllView
+                            ? "Switch to a team roster first before releasing a player."
+                            : "Move him to free agency and keep the original remaining guaranteed salary as dead cap."}
+                        </div>
                       </div>
-                    </div>
-                    <div className="ml-4 rounded-full bg-red-600 px-3 py-1 text-sm font-black text-white">
-                      Release
-                    </div>
-                  </button>
+                      <div className="ml-4 rounded-full bg-red-600 px-3 py-1 text-sm font-black text-white">
+                        Release
+                      </div>
+                    </button>
+                  </>
                 )}
               </div>
 

@@ -363,6 +363,8 @@ export default function PlayerTeamOptions() {
   const [previewData, setPreviewData] = useState(null);
   const [appliedData, setAppliedData] = useState(null);
   const [userTeamOptionChoices, setUserTeamOptionChoices] = useState({});
+  const [userTwoWayChoices, setUserTwoWayChoices] = useState({});
+  const [userStashChoices, setUserStashChoices] = useState({});
  const [loadingPreview, setLoadingPreview] = useState(false);
 const [loadingApply, setLoadingApply] = useState(false);
 const [error, setError] = useState("");
@@ -378,6 +380,8 @@ const [sectionVisibility, setSectionVisibility] = useState({
   playerOptions: true,
   teamOptions: true,
   expiredContracts: true,
+  twoWayDecisions: true,
+  stashDecisions: true,
   resolutionLog: true,
   rightsManagement: true,
 });
@@ -387,6 +391,8 @@ const [sectionTeamFilters, setSectionTeamFilters] = useState({
   playerOptions: "ALL",
   teamOptions: "ALL",
   expiredContracts: "ALL",
+  twoWayDecisions: "ALL",
+  stashDecisions: "ALL",
   resolutionLog: "ALL",
   rightsManagement: "ALL",
 });
@@ -461,6 +467,52 @@ const [sectionTeamFilters, setSectionTeamFilters] = useState({
 
         if (!(key in next)) {
           next[key] = null;
+        }
+      }
+
+      return next;
+    });
+  }, [previewData]);
+
+  useEffect(() => {
+    const pendingRows = previewData?.pendingUserTwoWayDecisions || [];
+    if (!pendingRows.length) return;
+
+    setUserTwoWayChoices((prev) => {
+      const next = { ...prev };
+
+      for (const row of pendingRows) {
+        const key = row?.playerKey || (
+          row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
+            ? String(row.playerId)
+            : String(row.playerName || "")
+        );
+
+        if (!(key in next)) {
+          next[key] = row?.recommendedDecision || (row?.availableDecisions || [])[0] || "release";
+        }
+      }
+
+      return next;
+    });
+  }, [previewData]);
+
+  useEffect(() => {
+    const pendingRows = previewData?.pendingUserStashDecisions || [];
+    if (!pendingRows.length) return;
+
+    setUserStashChoices((prev) => {
+      const next = { ...prev };
+
+      for (const row of pendingRows) {
+        const key = row?.playerKey || (
+          row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
+            ? String(row.playerId)
+            : String(row.playerName || "")
+        );
+
+        if (!(key in next)) {
+          next[key] = row?.recommendedDecision || (row?.availableDecisions || [])[0] || "release";
         }
       }
 
@@ -548,6 +600,10 @@ const [sectionTeamFilters, setSectionTeamFilters] = useState({
   }, [workingLeagueData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pendingUserTeamOptions = previewData?.pendingUserTeamOptions || [];
+  const pendingUserTwoWayDecisions = previewData?.pendingUserTwoWayDecisions || [];
+  const twoWayDecisions = previewData?.twoWayDecisions || [];
+  const pendingUserStashDecisions = previewData?.pendingUserStashDecisions || [];
+  const stashDecisions = previewData?.stashDecisions || [];
   const expiredContracts = previewData?.expiredContracts || [];
   const playerOptions = previewData?.playerOptions || [];
   const teamOptions = previewData?.teamOptions || [];
@@ -571,9 +627,7 @@ const filteredDecisionLog = useMemo(() => {
 }, [decisionLog, sectionTeamFilters.resolutionLog]);
 
   const allUserChoicesMade = useMemo(() => {
-    if (!pendingUserTeamOptions.length) return true;
-
-    return pendingUserTeamOptions.every((row) => {
+    const teamOptionsDone = pendingUserTeamOptions.every((row) => {
       const key =
         row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
           ? String(row.playerId)
@@ -581,7 +635,33 @@ const filteredDecisionLog = useMemo(() => {
 
       return userTeamOptionChoices[key] === true || userTeamOptionChoices[key] === false;
     });
-  }, [pendingUserTeamOptions, userTeamOptionChoices]);
+
+    const twoWayDone = pendingUserTwoWayDecisions.every((row) => {
+      const key = row?.playerKey || (
+        row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
+          ? String(row.playerId)
+          : String(row.playerName || "")
+      );
+      const choice = userTwoWayChoices[key];
+      const available = Array.isArray(row?.availableDecisions) ? row.availableDecisions : ["convert", "release"];
+
+      return available.includes(choice);
+    });
+
+    const stashDone = pendingUserStashDecisions.every((row) => {
+      const key = row?.playerKey || (
+        row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
+          ? String(row.playerId)
+          : String(row.playerName || "")
+      );
+      const choice = userStashChoices[key];
+      const available = Array.isArray(row?.availableDecisions) ? row.availableDecisions : ["two_way", "standard", "release"];
+
+      return available.includes(choice);
+    });
+
+    return teamOptionsDone && twoWayDone && stashDone;
+  }, [pendingUserTeamOptions, pendingUserTwoWayDecisions, pendingUserStashDecisions, userTeamOptionChoices, userTwoWayChoices, userStashChoices]);
 
 const previewSummary = previewData?.summary || {};
 const appliedSummary = appliedData?.summary || {};
@@ -705,6 +785,10 @@ const cpuTeamOptions = useMemo(() => {
   return (teamOptions || []).filter((row) => row?.teamName !== selectedTeamName);
 }, [teamOptions, selectedTeamName]);
 
+const cpuTwoWayDecisions = useMemo(() => {
+  return (twoWayDecisions || []).filter((row) => row?.teamName !== selectedTeamName);
+}, [twoWayDecisions, selectedTeamName]);
+
 const keyInterestRows = useMemo(() => {
   return buildKeyInterestRows(expiredContracts, playerOptions, teamOptions);
 }, [expiredContracts, playerOptions, teamOptions]);
@@ -753,7 +837,7 @@ const filteredExpiredContracts = useMemo(() => {
     }
 
     if (!allUserChoicesMade) {
-      setError("Choose exercise or decline for every pending team option on your team.");
+      setError("Choose every pending team option, two-way decision, and stash decision for your team.");
       return;
     }
 
@@ -775,6 +859,54 @@ const filteredExpiredContracts = useMemo(() => {
         if (idKey) decisionsPayload[idKey] = !!choice;
         if (nameKey) decisionsPayload[nameKey] = !!choice;
       }
+
+      const twoWayDecisionsPayload = {};
+
+      for (const row of pendingUserTwoWayDecisions) {
+        const key = row?.playerKey || (
+          row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
+            ? String(row.playerId)
+            : String(row.playerName || "")
+        );
+
+        const choice = userTwoWayChoices[key] || row?.recommendedDecision || "release";
+
+        if (row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== "") {
+          twoWayDecisionsPayload[String(row.playerId)] = choice;
+        }
+        if (row?.playerName) {
+          twoWayDecisionsPayload[String(row.playerName)] = choice;
+        }
+        if (row?.playerKey) {
+          twoWayDecisionsPayload[String(row.playerKey)] = choice;
+        }
+      }
+
+      decisionsPayload.__twoWayDecisions = twoWayDecisionsPayload;
+
+      const stashDecisionsPayload = {};
+
+      for (const row of pendingUserStashDecisions) {
+        const key = row?.playerKey || (
+          row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
+            ? String(row.playerId)
+            : String(row.playerName || "")
+        );
+
+        const choice = userStashChoices[key] || row?.recommendedDecision || "release";
+
+        if (row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== "") {
+          stashDecisionsPayload[String(row.playerId)] = choice;
+        }
+        if (row?.playerName) {
+          stashDecisionsPayload[String(row.playerName)] = choice;
+        }
+        if (row?.playerKey) {
+          stashDecisionsPayload[String(row.playerKey)] = choice;
+        }
+      }
+
+      decisionsPayload.__stashDecisions = stashDecisionsPayload;
 
       const res = await applyPlayerTeamOptions(
         workingLeagueData,
@@ -839,6 +971,46 @@ const filteredExpiredContracts = useMemo(() => {
       ...prev,
       [key]: value,
     }));
+  };
+
+  const setTwoWayChoiceForRow = (row, value) => {
+    const key = row?.playerKey || (
+      row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
+        ? String(row.playerId)
+        : String(row.playerName || "")
+    );
+
+    setUserTwoWayChoices((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  };
+
+  const setStashChoiceForRow = (row, value) => {
+    const key = row?.playerKey || (
+      row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
+        ? String(row.playerId)
+        : String(row.playerName || "")
+    );
+
+    setUserStashChoices((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  };
+
+  const formatStashDecision = (decision) => {
+    if (decision === "two_way") return "Give Two-Way";
+    if (decision === "standard") return "Convert to Standard";
+    if (decision === "release") return "Release to Free Agency";
+    return decision || "-";
+  };
+
+  const formatTwoWayDecision = (decision) => {
+    if (decision === "extend") return "Extend Two-Way";
+    if (decision === "convert") return "Convert to Standard";
+    if (decision === "release") return "Release to Free Agency";
+    return decision || "-";
   };
   const showSection = (sectionKey) => {
   setSectionVisibility((prev) => ({
@@ -1187,7 +1359,7 @@ const renderKeyInterestExtraNode = (row) => {
             />
             <SummaryCard
               label="Your Decisions"
-              value={previewSummary?.pendingUserTeamOptionCount || 0}
+              value={(previewSummary?.pendingUserTeamOptionCount || 0) + (previewSummary?.pendingUserTwoWayDecisionCount || 0)}
               tone="green"
             />
           </div>
@@ -1269,6 +1441,133 @@ const renderKeyInterestExtraNode = (row) => {
                       >
                         Decline
                       </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </SectionShell>
+          <SectionShell
+            title="Your Two-Way Decisions"
+            subtitle={
+              pendingUserTwoWayDecisions.length
+                ? "Choose whether to extend, convert, or release each two-way player before free agency."
+                : "No pending two-way decisions for your team."
+            }
+            rightNode={
+              pendingUserTwoWayDecisions.length ? (
+                <DataPill tone="orange">{pendingUserTwoWayDecisions.length} Pending</DataPill>
+              ) : null
+            }
+          >
+            {!pendingUserTwoWayDecisions.length ? (
+              <div className="px-6 py-14 text-center text-white/50">
+                No user-controlled two-way decisions this offseason.
+              </div>
+            ) : (
+              <div className="divide-y divide-white/5">
+                {pendingUserTwoWayDecisions.map((row, idx) => {
+                  const key = row?.playerKey || (
+                    row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
+                      ? String(row.playerId)
+                      : String(row.playerName || "")
+                  );
+
+                  const choice = userTwoWayChoices[key];
+                  const available = Array.isArray(row?.availableDecisions) ? row.availableDecisions : ["convert", "release"];
+
+                  return renderRow(
+                    row,
+                    idx,
+                    <div className="flex gap-2 flex-wrap">
+                      {["extend", "convert", "release"].map((decision) => {
+                        if (!available.includes(decision)) return null;
+
+                        const active = choice === decision;
+                        const toneClass =
+                          decision === "release"
+                            ? active ? "bg-red-600 text-white" : "bg-neutral-700 hover:bg-neutral-600 text-white"
+                            : decision === "convert"
+                            ? active ? "bg-emerald-600 text-white" : "bg-neutral-700 hover:bg-neutral-600 text-white"
+                            : active ? "bg-orange-600 text-white" : "bg-neutral-700 hover:bg-neutral-600 text-white";
+
+                        return (
+                          <button
+                            key={decision}
+                            onClick={() => setTwoWayChoiceForRow(row, decision)}
+                            className={`px-4 py-2 rounded-lg font-semibold transition ${toneClass}`}
+                          >
+                            {formatTwoWayDecision(decision)}
+                          </button>
+                        );
+                      })}
+
+                      {!row?.canExtendTwoWay && (
+                        <DataPill tone="orange">Must Convert or Release</DataPill>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </SectionShell>
+
+          <SectionShell
+            title="Your Stash Decisions"
+            subtitle={
+              pendingUserStashDecisions.length
+                ? "Choose whether to bring each stashed rookie back on a two-way, convert him to standard, or release him before free agency."
+                : "No pending stash decisions for your team."
+            }
+            rightNode={
+              pendingUserStashDecisions.length ? (
+                <DataPill tone="orange">{pendingUserStashDecisions.length} Pending</DataPill>
+              ) : null
+            }
+          >
+            {!pendingUserStashDecisions.length ? (
+              <div className="px-6 py-14 text-center text-white/50">
+                No user-controlled stash decisions this offseason.
+              </div>
+            ) : (
+              <div className="divide-y divide-white/5">
+                {pendingUserStashDecisions.map((row, idx) => {
+                  const key = row?.playerKey || (
+                    row?.playerId !== undefined && row?.playerId !== null && row?.playerId !== ""
+                      ? String(row.playerId)
+                      : String(row.playerName || "")
+                  );
+
+                  const choice = userStashChoices[key];
+                  const available = Array.isArray(row?.availableDecisions) ? row.availableDecisions : ["two_way", "standard", "release"];
+
+                  return renderRow(
+                    row,
+                    idx,
+                    <div className="flex gap-2 flex-wrap">
+                      {["two_way", "standard", "release"].map((decision) => {
+                        if (!available.includes(decision)) return null;
+
+                        const active = choice === decision;
+                        const toneClass =
+                          decision === "release"
+                            ? active ? "bg-red-600 text-white" : "bg-neutral-700 hover:bg-neutral-600 text-white"
+                            : decision === "standard"
+                            ? active ? "bg-emerald-600 text-white" : "bg-neutral-700 hover:bg-neutral-600 text-white"
+                            : active ? "bg-orange-600 text-white" : "bg-neutral-700 hover:bg-neutral-600 text-white";
+
+                        return (
+                          <button
+                            key={decision}
+                            onClick={() => setStashChoiceForRow(row, decision)}
+                            className={`px-4 py-2 rounded-lg font-semibold transition ${toneClass}`}
+                          >
+                            {formatStashDecision(decision)}
+                          </button>
+                        );
+                      })}
+
+                      <DataPill tone="orange">Rookie year starts if signed</DataPill>
                     </div>
                   );
                 })}

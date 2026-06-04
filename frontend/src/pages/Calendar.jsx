@@ -109,10 +109,29 @@ function loadTeamRoleMap(teamName) {
   return buildRoleMapFromMinutes(minutesObj, orderedNames);
 }
 
+const REGULAR_SEASON_MIN_STANDARD_PLAYERS = 14;
+const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 15;
+
 function getTeamPlayerCount(team) {
   return Array.isArray(team?.players)
     ? team.players.filter((p) => p && (p.name || p.player)).length
     : 0;
+}
+
+function getUserRosterSimBlockMessage(team) {
+  if (!team) return "";
+
+  const count = getTeamPlayerCount(team);
+
+  if (count < REGULAR_SEASON_MIN_STANDARD_PLAYERS) {
+    return `${team.name} doesn't have enough standard-contract players. Minimum ${REGULAR_SEASON_MIN_STANDARD_PLAYERS} required to simulate games.`;
+  }
+
+  if (count > REGULAR_SEASON_MAX_STANDARD_PLAYERS) {
+    return `${team.name} has ${count} standard-contract players. You can carry extra players outside of simming, but before simulating you must either release players or assign eligible first-3-season players to two-way contracts until you have ${REGULAR_SEASON_MAX_STANDARD_PLAYERS} or fewer standard contracts.`;
+  }
+
+  return "";
 }
 
 function getSimulationBlockMessageForGame(game, teams) {
@@ -126,12 +145,20 @@ function getSimulationBlockMessageForGame(game, teams) {
   const homeCount = getTeamPlayerCount(homeTeam);
   const awayCount = getTeamPlayerCount(awayTeam);
 
-  if (homeCount < 14) {
-    return `${homeTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`;
+  if (homeCount < REGULAR_SEASON_MIN_STANDARD_PLAYERS) {
+    return `${homeTeam.name} doesn't have enough standard-contract players. Minimum ${REGULAR_SEASON_MIN_STANDARD_PLAYERS} required to simulate games.`;
   }
 
-  if (awayCount < 14) {
-    return `${awayTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`;
+  if (homeCount > REGULAR_SEASON_MAX_STANDARD_PLAYERS) {
+    return `${homeTeam.name} has ${homeCount} standard-contract players. Maximum ${REGULAR_SEASON_MAX_STANDARD_PLAYERS} allowed when simulating games.`;
+  }
+
+  if (awayCount < REGULAR_SEASON_MIN_STANDARD_PLAYERS) {
+    return `${awayTeam.name} doesn't have enough standard-contract players. Minimum ${REGULAR_SEASON_MIN_STANDARD_PLAYERS} required to simulate games.`;
+  }
+
+  if (awayCount > REGULAR_SEASON_MAX_STANDARD_PLAYERS) {
+    return `${awayTeam.name} has ${awayCount} standard-contract players. Maximum ${REGULAR_SEASON_MAX_STANDARD_PLAYERS} allowed when simulating games.`;
   }
 
   return "";
@@ -1475,7 +1502,11 @@ const selectedTeamPlayerCount = useMemo(() => {
   return getTeamPlayerCount(selectedTeam);
 }, [selectedTeam]);
 
-const selectedTeamCanSim = selectedTeamPlayerCount >= 14;
+const selectedTeamSimBlockMessage = useMemo(() => {
+  return getUserRosterSimBlockMessage(selectedTeam);
+}, [selectedTeam, selectedTeamPlayerCount]);
+
+const selectedTeamCanSim = !selectedTeamSimBlockMessage;
 
 
   /* ---------------------------- Team Switch Controls ---------------------------- */
@@ -2515,7 +2546,10 @@ async function repairCpuRostersBeforeSimulation({
 
   console.log("[CPU Repair] raw result =", repairRes);
   console.log("[CPU Repair] signings =", repairRes?.signings || []);
+  console.log("[CPU Repair] droppedPlayers =", repairRes?.droppedPlayers || []);
+  console.log("[CPU Repair] twoWayAssignments =", repairRes?.twoWayAssignments || []);
   console.log("[CPU Repair] failedTeams =", repairRes?.failedTeams || []);
+  console.log("[CPU Repair] overMaxTeams =", repairRes?.overMaxTeams || []);
 
   const repairedLeagueData = repairRes?.leagueData || leagueData;
   const repairedTeams = buildTeamsFromLeagueForSim(repairedLeagueData);
@@ -2530,10 +2564,16 @@ async function repairCpuRostersBeforeSimulation({
   try {
     localStorage.setItem("leagueData", JSON.stringify(repairedLeagueData));
   } catch {}
-  if (repairRes?.signings?.length) {
+  const rosterMoves = [
+    ...(repairRes?.signings || []),
+    ...(repairRes?.droppedPlayers || []),
+    ...(repairRes?.twoWayAssignments || []),
+  ];
+
+  if (rosterMoves.length) {
   const touchedTeams = Array.from(
     new Set(
-      repairRes.signings
+      rosterMoves
         .map((s) => s.teamName || s.team)
         .filter(Boolean)
     )
@@ -2569,13 +2609,10 @@ const handleSimOnlyGame = async (dateStr, game) => {
   });
 
   const userTeamLive = repairedTeams.find((t) => t.name === selectedTeam?.name);
-  const userCount = getTeamPlayerCount(userTeamLive);
+  const userRosterMessage = getUserRosterSimBlockMessage(userTeamLive || selectedTeam);
 
-  if (userCount < 14) {
-    openSimError(
-      `${selectedTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`,
-      "Roster issue"
-    );
+  if (userRosterMessage) {
+    openSimError(userRosterMessage, "Roster issue");
     return;
   }
 
@@ -2585,8 +2622,10 @@ const handleSimOnlyGame = async (dateStr, game) => {
     return;
   }
 
-  if (repairRes?.signings?.length) {
-    console.log("[CPU Roster Repair] auto-signings before single game:", repairRes.signings);
+  if (repairRes?.signings?.length || repairRes?.droppedPlayers?.length || repairRes?.twoWayAssignments?.length) {
+    console.log("[CPU Roster Repair] auto-signings before single game:", repairRes?.signings || []);
+    console.log("[CPU Roster Repair] auto-drops before single game:", repairRes?.droppedPlayers || []);
+    console.log("[CPU Roster Repair] auto-two-way assignments before single game:", repairRes?.twoWayAssignments || []);
   }
 
   const upd = { ...scheduleByDate };
@@ -2649,13 +2688,10 @@ const handleSimToDate = async (dateStr) => {
   });
 
   const userTeamLive = repairedTeams.find((t) => t.name === selectedTeam?.name);
-  const userCount = getTeamPlayerCount(userTeamLive);
+  const userRosterMessage = getUserRosterSimBlockMessage(userTeamLive || selectedTeam);
 
-if (userCount < 14) {
-  openSimError(
-    `${selectedTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`,
-    "Roster issue"
-  );
+if (userRosterMessage) {
+  openSimError(userRosterMessage, "Roster issue");
   return;
 }
 
@@ -2872,12 +2908,9 @@ const handleSimSeason = async () => {
   });
 
   const userTeamLive = repairedTeams.find((t) => t.name === selectedTeam?.name);
-  const userCount = getTeamPlayerCount(userTeamLive);
-if (userCount < 14) {
-  openSimError(
-    `${selectedTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`,
-    "Roster issue"
-  );
+  const userRosterMessage = getUserRosterSimBlockMessage(userTeamLive || selectedTeam);
+if (userRosterMessage) {
+  openSimError(userRosterMessage, "Roster issue");
   return;
 }
 
@@ -4152,7 +4185,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
   onClick={() => handleSimToDate(actionModal.dateStr)}
   title={
     !selectedTeamCanSim
-      ? `${selectedTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`
+      ? selectedTeamSimBlockMessage
       : ""
   }
 >
@@ -4168,7 +4201,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
   onClick={handleSimSeason}
   title={
     !selectedTeamCanSim
-      ? `${selectedTeam.name} doesn't have enough players. Minimum 14 required to simulate games.`
+      ? selectedTeamSimBlockMessage
       : ""
   }
 >

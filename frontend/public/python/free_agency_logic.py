@@ -3838,32 +3838,60 @@ def decide_cpu_team_option(
 
     value_ratio = expected_aav / max(1.0, float(option_salary))
     salary_cap = get_salary_cap(league_data or {})
+    roster_limit = get_roster_limit(league_data or {})
+    standard_count = len(get_team_players(team))
+    roster_pressure = max(0, standard_count - roster_limit)
 
-    # Young team-control contracts should be treated like assets, not like
-    # normal veteran option years. NBA teams almost always keep cheap rookie /
-    # young-player options unless the salary is genuinely painful.
-    cheap_young_option_limit = int(round_to_nearest(max(6_500_000, salary_cap * 0.045), base = 1_000))
-    small_young_option_limit = int(round_to_nearest(max(12_500_000, salary_cap * 0.080), base = 1_000))
-    rookie_asset_option_limit = int(round_to_nearest(max(18_500_000, salary_cap * 0.120), base = 1_000))
+    # Surgical team-option tuning:
+    # Old logic was too generous to low-OVR young players. Keep real cheap
+    # rookie-control assets, but stop picking up weak depth options just because
+    # the player is young.
+    cheap_young_option_limit = int(round_to_nearest(max(5_500_000, salary_cap * 0.035), base = 1_000))
+    small_young_option_limit = int(round_to_nearest(max(9_500_000, salary_cap * 0.060), base = 1_000))
+    rookie_asset_option_limit = int(round_to_nearest(max(15_000_000, salary_cap * 0.095), base = 1_000))
 
     rights = get_player_rights(player)
     rookie_scale_control = bool(rights.get("rookieScale"))
 
+    very_low_young_depth = (
+        age <= 25
+        and overall <= 66
+        and potential <= 73
+    )
+    low_floor_low_upside = (
+        overall <= 69
+        and potential <= 74
+        and upside <= 2
+    )
+    roster_crunch_fringe = (
+        roster_pressure > 0
+        and overall <= 74
+        and potential <= 78
+        and upside <= 3
+    )
+    overpaid_depth_option = (
+        overall <= 72
+        and option_salary > max(expected_aav * 1.18, salary_cap * 0.025)
+    )
+
     cheap_young_control = (
         age <= 24
         and option_salary <= cheap_young_option_limit
-        and (overall >= 64 or potential >= 68)
+        and not very_low_young_depth
+        and (overall >= 68 or potential >= 75 or upside >= 4)
     )
     small_young_control = (
         age <= 25
         and option_salary <= small_young_option_limit
-        and (overall >= 68 or potential >= 71 or upside >= 2)
+        and not low_floor_low_upside
+        and (overall >= 72 or potential >= 78 or upside >= 4)
     )
     rookie_asset_control = (
         rookie_scale_control
         and age <= 25
         and option_salary <= rookie_asset_option_limit
-        and (overall >= 66 or potential >= 70 or upside >= 2)
+        and not very_low_young_depth
+        and (overall >= 70 or potential >= 76 or upside >= 4)
     )
     young_asset_control = bool(
         cheap_young_control
@@ -3884,48 +3912,97 @@ def decide_cpu_team_option(
 
     if age <= 25 and overall >= 72:
         score += 0.10
+    elif age <= 25 and overall <= 69:
+        score -= 0.10
+
     if age <= 27 and upside >= 3:
         score += 0.08
     if young_asset_control:
-        score += 0.28
+        score += 0.20
+
+    if very_low_young_depth:
+        score -= 0.28
+    if low_floor_low_upside:
+        score -= 0.18
+    if roster_crunch_fringe:
+        score -= 0.22
+    if overpaid_depth_option:
+        score -= 0.18
 
     if direction == "contending":
         if overall >= 76:
             score += 0.10
         if age >= 29 and overall >= 76:
             score += 0.05
+        if overall <= 72 and age <= 25:
+            score -= 0.05
+
+    elif direction == "rebuilding":
+        if age <= 24 and potential >= 78:
+            score += 0.08
+        if overall <= 69 and potential <= 74:
+            score -= 0.10
+
+    if roster_pressure >= 2 and overall <= 75 and not young_asset_control:
+        score -= 0.12
 
     if option_salary <= expected_aav:
-        score += 0.10
+        score += 0.08
     elif value_ratio < 0.50:
         score -= 0.20
     elif value_ratio < 0.65:
         score -= 0.10
 
     exercise = False
+    decision_reason = "CPU team declined team option."
 
-    if young_asset_control:
+    # Hard decline guards for the exact issue your friend found.
+    if very_low_young_depth and value_ratio < 1.15:
+        exercise = False
+        decision_reason = "CPU declined low-OVR young depth option."
+    elif low_floor_low_upside and value_ratio < 1.05:
+        exercise = False
+        decision_reason = "CPU declined low-upside depth option."
+    elif roster_crunch_fringe and value_ratio < 1.15:
+        exercise = False
+        decision_reason = "CPU declined fringe option to create roster space."
+    elif overpaid_depth_option:
+        exercise = False
+        decision_reason = "CPU declined overpaid depth option."
+    elif young_asset_control:
         exercise = True
-    elif expected_aav >= option_salary:
+        decision_reason = "CPU exercised young asset team option."
+    elif expected_aav >= option_salary and overall >= 70:
         exercise = True
-    elif value_ratio >= 0.80:
+        decision_reason = "CPU exercised value team option."
+    elif value_ratio >= 0.88 and overall >= 72:
         exercise = True
-    elif value_ratio >= 0.65 and overall >= 74:
+        decision_reason = "CPU exercised fair-value team option."
+    elif value_ratio >= 0.72 and overall >= 75:
         exercise = True
-    elif value_ratio >= 0.58 and overall >= 78:
+        decision_reason = "CPU exercised rotation-value team option."
+    elif value_ratio >= 0.60 and overall >= 78:
         exercise = True
-    elif value_ratio >= 0.55 and age <= 25 and overall >= 72:
+        decision_reason = "CPU exercised quality-player team option."
+    elif value_ratio >= 0.58 and age <= 25 and overall >= 73 and potential >= 78:
         exercise = True
-    elif value_ratio >= 0.55 and age <= 27 and upside >= 3 and overall >= 71:
+        decision_reason = "CPU exercised young upside team option."
+    elif value_ratio >= 0.58 and age <= 27 and upside >= 4 and overall >= 72:
         exercise = True
-    elif direction == "contending" and value_ratio >= 0.55 and overall >= 75:
+        decision_reason = "CPU exercised upside team option."
+    elif direction == "contending" and value_ratio >= 0.58 and overall >= 76:
         exercise = True
-    elif direction == "contending" and value_ratio >= 0.50 and overall >= 78:
+        decision_reason = "CPU exercised contender depth team option."
+    elif value_ratio >= 0.52 and overall >= 83:
         exercise = True
-    elif value_ratio >= 0.50 and overall >= 82:
-        exercise = True
+        decision_reason = "CPU exercised high-talent discount team option."
     else:
-        exercise = score >= 1.05
+        exercise = score >= 1.12
+        decision_reason = (
+            "CPU exercised team option by value score."
+            if exercise
+            else "CPU declined team option by value score."
+        )
 
     return {
         "hasDecision": True,
@@ -3934,7 +4011,11 @@ def decide_cpu_team_option(
         "optionSalary": option_salary,
         "expectedAAV": expected_aav,
         "teamDirection": direction,
-        "reason": "CPU team exercised team option." if exercise else "CPU team declined team option.",
+        "valueRatio": round(value_ratio, 3),
+        "standardCount": standard_count,
+        "rosterPressure": roster_pressure,
+        "youngAssetControl": bool(young_asset_control),
+        "reason": decision_reason,
     }
 
 def build_free_agent_record(

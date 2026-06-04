@@ -566,6 +566,95 @@
     );
   }
 
+  const DEFAULT_DRAFT_SORT = { key: null, direction: null };
+
+  function safeDraftSortNumber(value, fallback) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function getProspectSortValue(prospect = {}, key = "") {
+    if (key === "overall") {
+      return safeDraftSortNumber(prospect.overall ?? prospect.ovr ?? prospect.rating, -1);
+    }
+
+    if (key === "potential") {
+      return safeDraftSortNumber(prospect.potential ?? prospect.pot ?? prospect.potential_rating, -1);
+    }
+
+    if (key === "age") {
+      return safeDraftSortNumber(prospect.age, 99);
+    }
+
+    if (key === "position") {
+      return String(prospect.pos || prospect.position || "").toUpperCase();
+    }
+
+    return "";
+  }
+
+  function sortDraftProspects(prospects = [], sortState = DEFAULT_DRAFT_SORT) {
+    const key = sortState?.key;
+    const direction = sortState?.direction;
+
+    if (!key || !direction) {
+      return [...prospects].sort(prospectSort);
+    }
+
+    const multiplier = direction === "desc" ? -1 : 1;
+
+    return [...prospects].sort((a, b) => {
+      const aValue = getProspectSortValue(a, key);
+      const bValue = getProspectSortValue(b, key);
+
+      let result = 0;
+
+      if (typeof aValue === "number" && typeof bValue === "number") {
+        result = aValue - bValue;
+      } else {
+        result = String(aValue || "").localeCompare(String(bValue || ""));
+      }
+
+      if (result !== 0) return result * multiplier;
+
+      return prospectSort(a, b);
+    });
+  }
+
+  function getNextDraftSortState(currentSort = DEFAULT_DRAFT_SORT, key = "") {
+    if (currentSort?.key !== key) {
+      return { key, direction: "asc" };
+    }
+
+    if (currentSort?.direction === "asc") {
+      return { key, direction: "desc" };
+    }
+
+    return DEFAULT_DRAFT_SORT;
+  }
+
+  function SortableDraftHeader({ label, sortKey, sortState, onSortChange, className = "" }) {
+    const active = sortState?.key === sortKey;
+    const arrow = !active ? "↕" : sortState.direction === "asc" ? "▲" : "▼";
+
+    return (
+      <th className={className}>
+        <button
+          type="button"
+          onClick={() => onSortChange(sortKey)}
+          className={`inline-flex items-center justify-center gap-1 rounded-md px-2 py-1 font-extrabold transition ${
+            active
+              ? "bg-orange-600/25 text-orange-200"
+              : "text-white/70 hover:bg-white/10 hover:text-white"
+          }`}
+        >
+          <span>{label}</span>
+          <span className="text-[10px] opacity-80">{arrow}</span>
+        </button>
+      </th>
+    );
+  }
+
   function attrLetter(value) {
     const n = Number(value || 0);
     if (n >= 94) return "A+";
@@ -716,6 +805,8 @@
     draftCompleted = false,
     workingLeagueData = null,
     draftState = null,
+    sortState = DEFAULT_DRAFT_SORT,
+    onSortChange = () => {},
   }) {
     const orderedPicks = [...draftedPicks].sort(
       (a, b) => Number(a.pick || 0) - Number(b.pick || 0)
@@ -876,7 +967,34 @@
               <tr>
                 <th className="px-4 py-3 text-left">Rank</th>
                 <th className="px-4 py-3 text-left">Player</th>
-                <th className="px-4 py-3">Age</th>
+                <SortableDraftHeader
+                  label="POS"
+                  sortKey="position"
+                  sortState={sortState}
+                  onSortChange={onSortChange}
+                  className="px-4 py-3 text-center"
+                />
+                <SortableDraftHeader
+                  label="OVR"
+                  sortKey="overall"
+                  sortState={sortState}
+                  onSortChange={onSortChange}
+                  className="px-4 py-3 text-center"
+                />
+                <SortableDraftHeader
+                  label="POT"
+                  sortKey="potential"
+                  sortState={sortState}
+                  onSortChange={onSortChange}
+                  className="px-4 py-3 text-center"
+                />
+                <SortableDraftHeader
+                  label="Age"
+                  sortKey="age"
+                  sortState={sortState}
+                  onSortChange={onSortChange}
+                  className="px-4 py-3 text-center"
+                />
                 <th className="px-4 py-3 text-left">Type</th>
               </tr>
             </thead>
@@ -915,6 +1033,18 @@
                           </div>
                         </div>
                       </div>
+                    </td>
+
+                    <td className="px-4 py-5 text-center font-black text-white/75">
+                      {prospect.pos || prospect.position || "-"}
+                    </td>
+
+                    <td className="px-4 py-5 text-center font-black text-orange-200">
+                      {prospect.overall ?? prospect.ovr ?? "-"}
+                    </td>
+
+                    <td className="px-4 py-5 text-center font-black text-white/75">
+                      {prospect.potential ?? prospect.pot ?? "-"}
                     </td>
 
                     <td className="px-4 py-5 text-center font-bold text-white/75">{prospect.age}</td>
@@ -1076,6 +1206,7 @@
     const [workingLeagueData, setWorkingLeagueData] = useState(leagueData || null);
     const [draftState, setDraftState] = useState(() => readDraftState(seasonYear));
     const [selectedProspectId, setSelectedProspectId] = useState(null);
+    const [draftBoardSort, setDraftBoardSort] = useState(DEFAULT_DRAFT_SORT);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const availableStartRef = useRef(null);
@@ -1100,8 +1231,12 @@
     const userOnClock = Boolean(currentPick && selectedTeamName && currentTeamName === selectedTeamName);
 
     const availableProspects = useMemo(() => {
-      return [...(draftState?.availableProspects || [])].sort(prospectSort);
-    }, [draftState]);
+      return sortDraftProspects(draftState?.availableProspects || [], draftBoardSort);
+    }, [draftState, draftBoardSort]);
+
+    const handleDraftBoardSortChange = (key) => {
+      setDraftBoardSort((prev) => getNextDraftSortState(prev, key));
+    };
 
     const draftedProspectCards = useMemo(() => {
       return (draftState?.draftedPicks || [])
@@ -1503,6 +1638,8 @@
               draftCompleted={completed}
               workingLeagueData={workingLeagueData}
               draftState={draftState}
+              sortState={draftBoardSort}
+              onSortChange={handleDraftBoardSortChange}
             />
 
             <div className="flex flex-col gap-6">

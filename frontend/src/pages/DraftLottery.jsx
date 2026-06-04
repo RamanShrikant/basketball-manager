@@ -332,6 +332,87 @@ function formatChance(value) {
   return `${num.toFixed(1)}%`;
 }
 
+function getTeamKey(row = {}) {
+  return normalizeTeamName(row.currentOwnerTeamName || row.teamName || row.name || "");
+}
+
+function getPickOddsFromMap(row = {}, pickNumber) {
+  const oddsByPick = row?.oddsByPick || {};
+  const direct = oddsByPick?.[String(pickNumber)] ?? oddsByPick?.[Number(pickNumber)];
+  return Number(direct || 0);
+}
+
+function formatPickChange(value) {
+  const change = Number(value || 0);
+  if (!Number.isFinite(change) || change === 0) return "No move";
+  if (change > 0) return `Moved up ${change}`;
+  return `Moved down ${Math.abs(change)}`;
+}
+
+function normalizeOddsRows(result = null, leagueData = null) {
+  const backendRows = Array.isArray(result?.preLotteryOdds)
+    ? result.preLotteryOdds
+    : Array.isArray(result?.lotteryOdds)
+    ? result.lotteryOdds
+    : [];
+
+  if (backendRows.length) {
+    return backendRows.map((row) => {
+      const clean = normalizePreviewRow(row, leagueData);
+      const finalPick = Number(row?.finalPick || 0);
+      const actualPickOddsPct = row?.actualPickOddsPct !== undefined && row?.actualPickOddsPct !== null
+        ? Number(row.actualPickOddsPct || 0)
+        : finalPick
+        ? getPickOddsFromMap(row, finalPick)
+        : 0;
+
+      return {
+        ...clean,
+        oddsByPick: row?.oddsByPick || {},
+        firstPickOddsPct: Number(row?.firstPickOddsPct ?? row?.firstPickOdds ?? 0),
+        topFourOddsPct: Number(row?.topFourOddsPct ?? row?.top4OddsPct ?? 0),
+        finalPick,
+        actualPickOddsPct,
+        pickChange: Number(row?.pickChange || 0),
+        simulationCount: Number(row?.simulationCount || result?.oddsSimulationCount || result?.meta?.oddsSimulationCount || 0),
+      };
+    });
+  }
+
+  const fallbackRows = Array.isArray(result?.lotteryTeams) ? result.lotteryTeams : [];
+
+  return fallbackRows.map((row) => {
+    const clean = normalizePreviewRow(row, leagueData);
+    const chanceText = String(row?.chanceLabel || "");
+    const parsedChance = Number(chanceText.match(/[0-9.]+/)?.[0] || 0);
+    const combinations = Number(row?.combinations || row?.lotteryBalls || row?.balls || 0);
+
+    return {
+      ...clean,
+      firstPickOddsPct: Number(row?.firstPickOddsPct ?? parsedChance ?? 0),
+      topFourOddsPct: Number(row?.topFourOddsPct || 0),
+      finalPick: Number(row?.finalPick || 0),
+      actualPickOddsPct: Number(row?.actualPickOddsPct || 0),
+      pickChange: Number(row?.pickChange || 0),
+      combinations,
+      simulationCount: Number(result?.oddsSimulationCount || result?.meta?.oddsSimulationCount || 0),
+    };
+  });
+}
+
+function getFinalPickOddsLabel(oddsRow = {}, pickNumber) {
+  const finalPick = Number(pickNumber || oddsRow?.finalPick || 0);
+  const directOdds = oddsRow?.actualPickOddsPct !== undefined && oddsRow?.actualPickOddsPct !== null
+    ? Number(oddsRow.actualPickOddsPct || 0)
+    : getPickOddsFromMap(oddsRow, finalPick);
+
+  if (!finalPick || !Number.isFinite(directOdds) || directOdds <= 0) {
+    return "Lottery result";
+  }
+
+  return `${formatChance(directOdds)} odds at #${finalPick}`;
+}
+
 function makePreviewPickRow(pick, round, pickInRound, team, source, chanceLabel) {
   const cleanTeam = normalizePreviewRow(team);
 
@@ -483,6 +564,22 @@ function buildLotteryPreviewState(leagueData, seasonYear, requestedSystem) {
       seasonYear,
       source: "reset_preview_inverse_record",
       lotteryTeams: lotterySummary,
+      preLotteryOdds: lotterySummary.map((row) => ({
+        ...row,
+        firstPickOddsPct: Number(String(row.chanceLabel || "").match(/[0-9.]+/)?.[0] || 0),
+        topFourOddsPct: 0,
+        finalPick: null,
+        actualPickOddsPct: 0,
+        pickChange: 0,
+      })),
+      lotteryOdds: lotterySummary.map((row) => ({
+        ...row,
+        firstPickOddsPct: Number(String(row.chanceLabel || "").match(/[0-9.]+/)?.[0] || 0),
+        topFourOddsPct: 0,
+        finalPick: null,
+        actualPickOddsPct: 0,
+        pickChange: 0,
+      })),
       topFourDrawn: [],
       firstRoundOrder,
       secondRoundOrder,
@@ -512,7 +609,7 @@ function PickRow({ pick, revealRank = false, animationIndex = 0 }) {
 
   return (
     <div
-      className="bmRowEnter grid grid-cols-[70px_1fr_90px_110px] items-center gap-3 px-4 py-3 border-b border-white/10 hover:bg-white/5"
+      className="bmRowEnter grid grid-cols-[70px_1fr_90px_140px] items-center gap-3 px-4 py-3 border-b border-white/10 hover:bg-white/5"
       style={{ animationDelay: `${Math.min(animationIndex, 18) * 18}ms` }}
     >
       <div className="font-extrabold text-orange-300">
@@ -525,6 +622,80 @@ function PickRow({ pick, revealRank = false, animationIndex = 0 }) {
       <div className="text-sm text-white/65 text-center">{formatRecord(pick)}</div>
       <div className="text-xs text-white/45 text-right capitalize">
         {detailText}
+      </div>
+    </div>
+  );
+}
+
+function LotteryOddsTable({ rows = [], isPreview = false, firstRoundRevealed = false }) {
+  if (!rows.length) return null;
+
+  const simulationCount = rows.find((row) => Number(row?.simulationCount || 0) > 0)?.simulationCount;
+
+  return (
+    <div className="bmTablePanel rounded-3xl bg-neutral-900 border border-white/10 overflow-hidden shadow-2xl mb-6">
+      <div className="px-5 py-4 bg-neutral-800/80 border-b border-white/10 flex items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-extrabold">Lottery Odds</h2>
+          <p className="text-sm text-white/50">
+            {isPreview
+              ? "Pre-lottery odds preview before the order is locked."
+              : firstRoundRevealed
+              ? "Final lottery result with each team's odds of landing its actual pick."
+              : "Pre-lottery odds before the first round reveal."}
+          </p>
+        </div>
+        {simulationCount ? (
+          <div className="text-xs text-white/45 font-bold text-right">
+            {Number(simulationCount).toLocaleString()} sims
+          </div>
+        ) : null}
+      </div>
+
+      <div className="bmOrangeScrollbar max-h-[420px] overflow-auto">
+        <div className="grid grid-cols-[70px_1fr_90px_90px_90px_110px] gap-3 px-4 py-3 bg-black/20 border-b border-white/10 text-xs text-white/45 uppercase tracking-wide font-bold sticky top-0 z-10">
+          <div>Seed</div>
+          <div>Team</div>
+          <div className="text-center">Record</div>
+          <div className="text-right">#1 Odds</div>
+          <div className="text-right">Top 4</div>
+          <div className="text-right">Result</div>
+        </div>
+
+        {rows.map((row, index) => {
+          const finalPick = Number(row?.finalPick || 0);
+          const resultLabel = finalPick
+            ? `#${finalPick} - ${formatChance(row?.actualPickOddsPct || getPickOddsFromMap(row, finalPick))}`
+            : row?.chanceLabel || "Pending";
+
+          return (
+            <div
+              key={`${row?.teamName || "team"}-${index}`}
+              className="bmRowEnter grid grid-cols-[70px_1fr_90px_90px_90px_110px] items-center gap-3 px-4 py-3 border-b border-white/10 hover:bg-white/5"
+              style={{ animationDelay: `${Math.min(index, 18) * 18}ms` }}
+            >
+              <div className="font-extrabold text-orange-300">#{row?.lotterySeed || index + 1}</div>
+              <div className="flex items-center gap-3 min-w-0">
+                <TeamLogo src={row?.logo} name={row?.teamName} />
+                <div className="min-w-0">
+                  <div className="font-bold text-white truncate">{row?.teamName || "Unknown Team"}</div>
+                  <div className="text-[11px] text-white/35 truncate">
+                    {String(row?.lotteryCategory || "Lottery").replaceAll("_", " ")}
+                  </div>
+                </div>
+              </div>
+              <div className="text-sm text-white/65 text-center">{formatRecord(row)}</div>
+              <div className="text-sm text-white/75 text-right font-bold">{formatChance(row?.firstPickOddsPct)}</div>
+              <div className="text-sm text-white/75 text-right font-bold">
+                {Number(row?.topFourOddsPct || 0) > 0 ? formatChance(row?.topFourOddsPct) : "-"}
+              </div>
+              <div className="text-xs text-white/50 text-right">
+                <div className="font-bold text-white/75">{resultLabel}</div>
+                {finalPick ? <div>{formatPickChange(row?.pickChange)}</div> : null}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -722,7 +893,29 @@ export default function DraftLottery() {
 
   const secondRound = result?.secondRoundOrder || [];
   const firstRound = result?.firstRoundOrder || [];
-  const firstRoundRevealOrder = firstRound;
+  const oddsRows = useMemo(() => normalizeOddsRows(result, leagueData), [result, leagueData]);
+  const oddsByTeam = useMemo(() => {
+    const map = new Map();
+    for (const row of oddsRows) {
+      const key = getTeamKey(row);
+      if (key) map.set(key, row);
+    }
+    return map;
+  }, [oddsRows]);
+  const firstRoundRevealOrder = useMemo(() => {
+    return (firstRound || []).map((pick) => {
+      const key = getTeamKey(pick);
+      const oddsRow = key ? oddsByTeam.get(key) : null;
+      if (!oddsRow) return pick;
+
+      return {
+        ...pick,
+        chanceLabel: getFinalPickOddsLabel(oddsRow, pick?.pick),
+        actualPickOddsPct: oddsRow.actualPickOddsPct,
+        pickChange: oddsRow.pickChange,
+      };
+    });
+  }, [firstRound, oddsByTeam]);
   const resultSystemLabel = getResultSystemLabel(result, seasonYear);
   const devSystemLabel = getLotterySystemLabel(lotterySystem, seasonYear);
 
@@ -859,6 +1052,12 @@ export default function DraftLottery() {
             {error}
           </div>
         )}
+
+        <LotteryOddsTable
+          rows={oddsRows}
+          isPreview={isPreview}
+          firstRoundRevealed={firstRoundRevealed}
+        />
 
         <div className="flex flex-wrap gap-3 mb-8">
           <button

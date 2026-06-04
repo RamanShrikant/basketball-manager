@@ -2,15 +2,23 @@
 
 from typing import Any, Dict, List, Optional
 
-AWARDS_PY_VERSION = "2026-01-09_mvp_dpoy_weight_updates_v2"
+AWARDS_PY_VERSION = "2026-06-04_roty_tracker_alignment_v1"
 
 # ---------------------------------------------------------------------------
 # UTILITIES
 # ---------------------------------------------------------------------------
 
 def _to_py_players(players_js) -> List[Dict[str, Any]]:
+    if players_js is None:
+        return []
+
     out = []
-    for p in list(players_js):
+    try:
+        iterable = list(players_js)
+    except Exception:
+        iterable = []
+
+    for p in iterable:
         try:
             out.append(dict(p))
         except Exception:
@@ -32,11 +40,15 @@ def _started(p): return int(p.get("started", 0) or 0)
 def _sixth(p): return int(p.get("sixth", 0) or 0)
 
 def _defr(p) -> float:
-    # In YOUR game: def_rating is a 0-100 rating where higher is better.
+    # In this game: defense rating is a 0-100 rating where higher is better.
     try:
-        return float(p.get("def_rating", 0) or 0)
+        for key in ["def_rating", "defRating", "defensive_rating", "defensiveRating", "drtg", "defrtg"]:
+            value = p.get(key)
+            if value not in [None, ""]:
+                return float(value or 0)
     except Exception:
-        return 0.0
+        pass
+    return 0.0
 
 def _rookie_value(p, key):
     if p.get(key) not in [None, ""]:
@@ -141,13 +153,26 @@ def _norm_wins(wins: float, cap: float, gamma: float = 2.0) -> float:
 # ---------------------------------------------------------------------------
 
 def _ctx(players):
-    # NOTE: ctx["wins"] stays 82 by design (cap normalization)
+    # NOTE: ctx["wins"] stays 82 by design (cap normalization).
+    # Safe defaults keep the awards page from crashing before stats exist.
+    if not players:
+        return {
+            "ppg": 1,
+            "apg": 1,
+            "rpg": 1,
+            "spg": 1,
+            "bpg": 1,
+            "wins": 82,
+            "def_lo": 0,
+            "def_hi": 100,
+        }
+
     return {
-        "ppg": max(_ppg(p) for p in players),
-        "apg": max(_apg(p) for p in players),
-        "rpg": max(_rpg(p) for p in players),
-        "spg": max(_spg(p) for p in players),
-        "bpg": max(_bpg(p) for p in players),
+        "ppg": max(max(_ppg(p) for p in players), 1),
+        "apg": max(max(_apg(p) for p in players), 1),
+        "rpg": max(max(_rpg(p) for p in players), 1),
+        "spg": max(max(_spg(p) for p in players), 1),
+        "bpg": max(max(_bpg(p) for p in players), 1),
         "wins": 82,
         "def_lo": min(_defr(p) for p in players),
         "def_hi": max(_defr(p) for p in players),
@@ -246,26 +271,21 @@ def compute_finals_mvp(finals_players_js, champion_team=None, season_js=None):
 
 def compute_awards(players_js, teams_js, season_js=None):
     # --- DEBUG: what did we receive? ---
-    print("[awards] AWARDS_PY_VERSION:", AWARDS_PY_VERSION)
-    print("[awards] types:", type(players_js), type(teams_js), type(season_js))
 
     players = _to_py_players(players_js)
 
     # ✅ GUARDRAIL:
     # If teams_js is actually the season year (int), Calendar is calling compute_awards wrong.
     if isinstance(teams_js, (int, float)) and season_js is None:
-        print("[awards] WARNING: teams_js is a number. Treating it as season year. teams_js will be empty.")
         season_js = int(teams_js)
         teams_js = []
 
     if isinstance(teams_js, dict):
-        print("[awards] NOTE: teams_js is a dict; using its values().")
         teams_js = list(teams_js.values())
 
     teams = _to_py_players(teams_js)
 
     # --- DEBUG: teams payload sanity ---
-    print("[awards] players:", len(players), "teams:", len(teams), "season:", season_js)
 
     team_wins: Dict[str, int] = {}
     for t in teams:
@@ -276,8 +296,6 @@ def compute_awards(players_js, teams_js, season_js=None):
 
     sample = list(team_wins.items())[:5]
     nonzero = sum(1 for _, w in team_wins.items() if w > 0)
-    print("[awards] team_wins sample:", sample)
-    print("[awards] team_wins nonzero count:", nonzero, "out of", len(team_wins))
 
     MIN_GAMES = 40
     eligible = [p for p in players if _gp(p) >= MIN_GAMES] or players
@@ -288,7 +306,6 @@ def compute_awards(players_js, teams_js, season_js=None):
     # --- DEBUG: show team wins for current top few PPG players ---
     top_ppg = sorted(eligible, key=lambda x: _ppg(x), reverse=True)[:5]
     dbg = [(x.get("player"), x.get("team"), _ppg(x), x.get("_team_wins")) for x in top_ppg]
-    print("[awards] top PPG players (player, team, ppg, _team_wins):", dbg)
 
     # Build context from ALL eligible players
     ctx = _ctx(eligible)
@@ -355,19 +372,15 @@ def compute_awards(players_js, teams_js, season_js=None):
 
     # --- DEBUG: MVP race with wins + impact ---
     dbg_mvp = [(p.get("player"), p.get("team"), p.get("_team_wins"), p.get("_impact")) for p in mvp_race]
-    print("[awards] MVP race (player, team, wins, impact):", dbg_mvp)
 
     # --- DEBUG: All-NBA top 5 with _allnba score ---
     dbg_allnba = [(p.get("player"), p.get("team"), p.get("_team_wins"), p.get("_allnba")) for p in all_nba_first]
-    print("[awards] All-NBA (6MOY weights) top 5 (player, team, wins, score):", dbg_allnba)
 
     # --- DEBUG: DPOY race with wins + dpoy score ---
     dbg_dpoy = [(p.get("player"), p.get("team"), p.get("_team_wins"), p.get("_dpoy")) for p in dpoy_race]
-    print("[awards] DPOY race (player, team, wins, dpoy):", dbg_dpoy)
 
     # --- DEBUG: ROTY race with wins + roty score ---
     dbg_roty = [(p.get("player"), p.get("team"), p.get("_team_wins"), p.get("_roty")) for p in roty_sorted[:5]]
-    print("[awards] ROTY race (player, team, wins, roty):", dbg_roty)
 
     return {
         "season": season_js,

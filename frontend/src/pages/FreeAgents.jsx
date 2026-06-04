@@ -2242,88 +2242,29 @@ const isOffseasonMode =
 
 
   const getOfferInterestDisplay = (offer = {}, modalPlayer = null) => {
-    const getOfferSalaryByYearForInterest = (row = {}) => {
-      if (Array.isArray(row?.contract?.salaryByYear) && row.contract.salaryByYear.length) {
-        return row.contract.salaryByYear.map((value) => Number(value || 0));
-      }
-
-      if (Array.isArray(row?.salaryByYear) && row.salaryByYear.length) {
-        return row.salaryByYear.map((value) => Number(value || 0));
-      }
-
-      const years = Math.max(1, Number(row?.years || 1));
-      const aav = Number(row?.aav || row?.currentYearSalary || 0);
-      return Array.from({ length: years }, () => aav);
-    };
-
-    const getOfferOptionAdjustmentForInterest = (row = {}, years = 1) => {
-      if (Number(years || 1) <= 1) return 0;
-
-      const optionType = String(row?.contract?.option?.type || row?.option?.type || "").toLowerCase();
-      if (optionType === "player") return 0.075;
-      if (optionType === "team") return -0.08;
-      return 0;
-    };
-
-    const getSubmitModalAcceptanceScoreForOffer = (row = {}, playerForOffer = null) => {
-      const marketValue = playerForOffer?.marketValue || row?.player?.marketValue || row?.marketValue || {};
-      const expectedAAV = Number(
-        marketValue?.expectedAAV ||
-        marketValue?.expectedYear1Salary ||
-        marketValue?.minAcceptableAAV ||
-        0
-      );
-
-      if (!expectedAAV || expectedAAV <= 0) return NaN;
-
-      const salaryByYear = getOfferSalaryByYearForInterest(row);
-      const offeredYears = salaryByYear.length || Number(row?.years || 1);
-      const offeredTotal = salaryByYear.reduce((sum, value) => sum + Number(value || 0), 0) || Number(row?.totalValue || 0);
-      const offeredAAV = offeredTotal / Math.max(1, offeredYears);
-      const expectedYears = Number(marketValue?.expectedYears || offeredYears || 1);
-      const yearPenalty = Math.abs(offeredYears - expectedYears) * 0.06;
-      const optionAdjustment = getOfferOptionAdjustmentForInterest(row, offeredYears);
-
-      let acceptanceScore = offeredAAV / Math.max(1, expectedAAV);
-      acceptanceScore -= yearPenalty;
-      acceptanceScore += optionAdjustment;
-
-      const rightsTeamName =
-        playerForOffer?.rights?.heldByTeam ||
-        row?.rightsTeamName ||
-        row?.player?.rights?.heldByTeam ||
-        "";
-
-      if (rightsTeamName && row?.teamName && rightsTeamName === row.teamName) {
-        acceptanceScore += 0.04;
-      }
-
-      return acceptanceScore;
-    };
-
-    const scoreToSubmitModalPercent = (score) => {
-      const n = Number(score);
-      if (!Number.isFinite(n)) return NaN;
-      return ((n - 0.65) / 0.45) * 100;
-    };
-
-    let percent = scoreToSubmitModalPercent(
-      offer?.details?.acceptanceScore ??
-      offer?.acceptanceScore
+    // Backend is the source of truth for live-market offer interest.
+    // getFreeAgentOffers recalculates this as playerViewScore using
+    // score_offer_for_player(...) before the frontend receives the offers.
+    const backendScore = Number(
+      offer?.playerViewScore ??
+      offer?.details?.playerViewScore ??
+      offer?.interestScore ??
+      offer?.score
     );
 
-    if (!Number.isFinite(percent)) {
-      percent = scoreToSubmitModalPercent(
-        getSubmitModalAcceptanceScoreForOffer(offer, modalPlayer)
-      );
-    }
+    let percent = 0;
 
-    // Fallback only for old saves that do not have enough market-value data.
-    // Current offers should use the same acceptance-score formula as the Submit Offer modal.
-    if (!Number.isFinite(percent)) {
-      const fallbackScore = Number(offer?.playerViewScore ?? offer?.interestScore ?? offer?.score);
+    if (Number.isFinite(backendScore) && backendScore > 0) {
+      percent = backendScore <= 1.5 ? backendScore * 100 : backendScore;
+    } else {
+      // Old-save fallback only. New/current offers should always have playerViewScore.
+      const fallbackScore = Number(
+        offer?.details?.acceptanceScore ??
+        offer?.acceptanceScore
+      );
+
       if (Number.isFinite(fallbackScore) && fallbackScore > 0) {
-        percent = fallbackScore <= 1.5 ? fallbackScore * 100 : fallbackScore;
+        percent = ((fallbackScore - 0.65) / 0.45) * 100;
       }
     }
 
@@ -2354,6 +2295,7 @@ const isOffseasonMode =
       roundedPercent: Math.round(percent),
       label,
       barClass,
+      backendScore: Number.isFinite(backendScore) ? backendScore : null,
     };
   };
 
@@ -3792,17 +3734,12 @@ updateOffseasonState({
                         .map((offer) => ({
                           offer,
                           offerInterest: getOfferInterestDisplay(offer, modalPlayerForOffers),
-                        }))
-                        .sort((a, b) => {
-                          const interestDiff = Number(b.offerInterest?.percent || 0) - Number(a.offerInterest?.percent || 0);
-                          if (interestDiff !== 0) return interestDiff;
-                          return Number(b.offer?.totalValue || 0) - Number(a.offer?.totalValue || 0);
-                        });
+                        }));
 
                       return sortedOfferRows.map(({ offer, offerInterest }, idx) => {
                         const offerTeamDirectionLabel = getOfferTeamDirectionLabel(offer);
                         const offerOptionTypeLabel = getOfferOptionTypeLabel(offer);
-                        const isBestVisibleOffer = idx === 0;
+                        const isBestVisibleOffer = Boolean(offer.isBestOffer) || idx === 0;
 
                         return (
                       <div
