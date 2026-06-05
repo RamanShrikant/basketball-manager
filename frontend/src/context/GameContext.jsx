@@ -1,6 +1,7 @@
 // GameContext.jsx
 import { createContext, useContext, useState, useEffect, useMemo } from "react";
 import { ensureGameplansForLeague } from "../utils/ensureGameplans.js";
+import { loadLeagueData, saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 
 const GameContext = createContext();
 
@@ -68,21 +69,22 @@ export function GameProvider({ children }) {
   const setLeagueData = (nextLeagueData) => {
     const normalized = normalizeLeagueFinancials(nextLeagueData);
     setLeagueDataRaw(normalized);
+
+    if (normalized && leagueHasTeams(normalized)) {
+      saveLeagueDataInBackground(normalized);
+    }
   };
 
-  // Load league from localStorage at startup and keep trying until populated.
+  // Load league from IndexedDB first, then migrate old localStorage saves.
   useEffect(() => {
+    let cancelled = false;
     let intervalId = null;
 
-    const tryHydrateLeague = () => {
+    const tryHydrateLeague = async () => {
       try {
-        const saved = localStorage.getItem("leagueData");
-        if (!saved) return false;
-
-        const parsed = normalizeLeagueFinancials(JSON.parse(saved));
-
-        // If league exists but has 0 teams, don't lock it in forever.
-        if (!leagueHasTeams(parsed)) return false;
+        const parsed = normalizeLeagueFinancials(await loadLeagueData());
+        if (!parsed || !leagueHasTeams(parsed)) return false;
+        if (cancelled) return true;
 
         console.log("🔥 Loaded populated leagueData into GameContext:", parsed);
 
@@ -95,24 +97,29 @@ export function GameProvider({ children }) {
         }
 
         setLeagueDataRaw(parsed);
-        localStorage.setItem("leagueData", JSON.stringify(parsed));
+        saveLeagueDataInBackground(parsed);
         return true;
       } catch (err) {
-        console.error("Failed to parse leagueData:", err);
+        console.error("Failed to load leagueData:", err);
         return false;
       }
     };
 
-    const ok = tryHydrateLeague();
+    tryHydrateLeague().then((ok) => {
+      if (ok || cancelled) return;
 
-    if (!ok) {
       intervalId = setInterval(() => {
-        const done = tryHydrateLeague();
-        if (done) clearInterval(intervalId);
+        tryHydrateLeague().then((done) => {
+          if (done && intervalId) {
+            clearInterval(intervalId);
+            intervalId = null;
+          }
+        });
       }, 250);
-    }
+    });
 
     return () => {
+      cancelled = true;
       if (intervalId) clearInterval(intervalId);
     };
   }, []);

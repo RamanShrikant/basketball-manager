@@ -8,6 +8,7 @@ import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./FreeAgents.module.css";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
+import { saveLeagueData, loadLeagueData } from "../utils/leagueStorage.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -342,23 +343,14 @@ function compactLeagueDataForStorage(leagueData, emergency = false) {
 function persistLeagueData(updated) {
   if (!updated) return;
 
-  const primary = compactLeagueDataForStorage(updated, false);
+  saveLeagueData(updated).catch((err) => {
+    console.error("[FreeAgencyStorage] IndexedDB leagueData save failed. Retrying emergency compact save.", err);
 
-  try {
-    localStorage.setItem("leagueData", JSON.stringify(primary));
-    return;
-  } catch (err) {
-    console.warn("[FreeAgencyStorage] Primary leagueData save was too large. Retrying compact save.", err);
-  }
-
-  const emergency = compactLeagueDataForStorage(updated, true);
-
-  try {
-    localStorage.setItem("leagueData", JSON.stringify(emergency));
-  } catch (err) {
-    console.error("[FreeAgencyStorage] Emergency leagueData save failed.", err);
-    throw err;
-  }
+    const emergency = compactLeagueDataForStorage(updated, true);
+    saveLeagueData(emergency).catch((finalErr) => {
+      console.error("[FreeAgencyStorage] Emergency IndexedDB leagueData save failed.", finalErr);
+    });
+  });
 }
 
 function buildDefaultOffseasonState(seasonYear) {
@@ -944,7 +936,7 @@ const isOffseasonMode =
 
       if (nextSelectedTeam) {
         setSelectedTeam(nextSelectedTeam);
-        localStorage.setItem("selectedTeam", JSON.stringify(nextSelectedTeam));
+        localStorage.setItem("selectedTeam", JSON.stringify(nextSelectedTeam.name));
       }
     }
   };
@@ -1738,7 +1730,7 @@ const isOffseasonMode =
 
   useEffect(() => {
     if (selectedTeam) {
-      localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam));
+      localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam.name));
     }
   }, [selectedTeam]);
 
@@ -2499,7 +2491,7 @@ updateOffseasonState({
       // recovered instead of leaving a scary FREE_AGENCY_INIT_TIMEOUT banner.
       let recoveredLeague = null;
       try {
-        const savedLeague = JSON.parse(localStorage.getItem("leagueData") || "null");
+        const savedLeague = await loadLeagueData();
         const savedState = savedLeague?.freeAgencyState || {};
         const savedSeasonYear = Number(savedState?.seasonYear || 0);
         if (

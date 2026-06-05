@@ -4,6 +4,7 @@ import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./ViewingOffers.module.css";
+import { saveLeagueData } from "../utils/leagueStorage.js";
 
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
 
@@ -263,23 +264,14 @@ function compactLeagueDataForStorage(leagueData, emergency = false) {
 function persistLeagueData(updated) {
   if (!updated) return;
 
-  const primary = compactLeagueDataForStorage(updated, false);
+  saveLeagueData(updated).catch((err) => {
+    console.error("[FreeAgencyStorage] IndexedDB leagueData save failed. Retrying emergency compact save.", err);
 
-  try {
-    localStorage.setItem("leagueData", JSON.stringify(primary));
-    return;
-  } catch (err) {
-    console.warn("[FreeAgencyStorage] Primary leagueData save was too large. Retrying compact save.", err);
-  }
-
-  const emergency = compactLeagueDataForStorage(updated, true);
-
-  try {
-    localStorage.setItem("leagueData", JSON.stringify(emergency));
-  } catch (err) {
-    console.error("[FreeAgencyStorage] Emergency leagueData save failed.", err);
-    throw err;
-  }
+    const emergency = compactLeagueDataForStorage(updated, true);
+    saveLeagueData(emergency).catch((finalErr) => {
+      console.error("[FreeAgencyStorage] Emergency IndexedDB leagueData save failed.", finalErr);
+    });
+  });
 }
 
 
@@ -2099,7 +2091,7 @@ export default function ViewingOffers() {
 
       if (nextSelectedTeam) {
         setSelectedTeam(nextSelectedTeam);
-        localStorage.setItem("selectedTeam", JSON.stringify(nextSelectedTeam));
+        localStorage.setItem("selectedTeam", JSON.stringify(nextSelectedTeam.name));
       }
     }
   };

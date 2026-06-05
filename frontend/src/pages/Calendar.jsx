@@ -19,6 +19,7 @@ import {
 } from "../utils/indexedDbStorage";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
+import { saveLeagueData } from "../utils/leagueStorage.js";
 
 window.LZString = LZString;
 
@@ -1545,7 +1546,7 @@ const selectedTeamCanSim = !selectedTeamSimBlockMessage;
 
   useEffect(() => {
     if (selectedTeam)
-      localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam));
+      localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam.name));
   }, [selectedTeam]);
 
   /* ----------------------------- LOCAL STORAGE KEYS ----------------------------- */
@@ -2571,9 +2572,9 @@ async function repairCpuRostersBeforeSimulation({
     setLeagueData(repairedLeagueData);
   }
 
-  try {
-    localStorage.setItem("leagueData", JSON.stringify(repairedLeagueData));
-  } catch {}
+  saveLeagueData(repairedLeagueData).catch((err) => {
+    console.warn("[Calendar] Failed to save repaired leagueData to IndexedDB.", err);
+  });
   const rosterMoves = [
     ...(repairRes?.signings || []),
     ...(repairRes?.droppedPlayers || []),

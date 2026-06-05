@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
 import styles from "./OffseasonHub.module.css";
+import { saveLeagueData } from "../utils/leagueStorage.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -1758,22 +1759,9 @@ export default function OffseasonHub() {
 
     const compact = compactLeagueDataForDevStorage(updated);
 
-    const saveLeagueDataWithQuotaFallback = (value) => {
-      const serialized = JSON.stringify(value);
-      try {
-        localStorage.setItem(LEAGUE_KEY, serialized);
-        return;
-      } catch (err) {
-        console.warn("[OffseasonHub Dev] leagueData save hit quota. Removing old leagueData and retrying compact save.", err);
-        localStorage.removeItem(LEAGUE_KEY);
-        localStorage.setItem(LEAGUE_KEY, serialized);
-      }
-    };
+    saveLeagueData(compact).catch((err) => {
+      console.error("[OffseasonHub Dev] IndexedDB compact leagueData save failed. Retrying ultra-light FA state.", err);
 
-    try {
-      saveLeagueDataWithQuotaFallback(compact);
-    } catch (err) {
-      console.warn("[OffseasonHub Dev] compact leagueData save failed, retrying ultra-light FA state", err);
       const emergency = {
         ...compact,
         freeAgencyState: compact.freeAgencyState
@@ -1802,8 +1790,11 @@ export default function OffseasonHub() {
             }
           : compact.freeAgencyState,
       };
-      saveLeagueDataWithQuotaFallback(emergency);
-    }
+
+      saveLeagueData(emergency).catch((finalErr) => {
+        console.error("[OffseasonHub Dev] Emergency IndexedDB leagueData save failed.", finalErr);
+      });
+    });
 
     if (typeof setLeagueData === "function") {
       setLeagueData(updated);
@@ -1912,7 +1903,9 @@ export default function OffseasonHub() {
         }
 
         finalizedLeagueData = result.leagueData || finalizedLeagueData;
-        localStorage.setItem(LEAGUE_KEY, JSON.stringify(finalizedLeagueData));
+        saveLeagueData(finalizedLeagueData).catch((err) => {
+          console.warn("[OffseasonHub] Failed to save finalized leagueData to IndexedDB.", err);
+        });
 
         if (typeof setLeagueData === "function") {
           setLeagueData(finalizedLeagueData);
