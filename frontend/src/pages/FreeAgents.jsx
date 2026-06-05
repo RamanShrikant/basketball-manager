@@ -353,6 +353,7 @@ function persistLeagueData(updated) {
   });
 }
 
+
 function buildDefaultOffseasonState(seasonYear) {
   return {
     active: true,
@@ -372,17 +373,41 @@ function buildDefaultOffseasonState(seasonYear) {
   };
 }
 
+function buildInactiveOffseasonState(seasonYear) {
+  return {
+    ...buildDefaultOffseasonState(seasonYear),
+    active: false,
+  };
+}
+
+function hasRealOffseasonEvidence(state = {}) {
+  return Boolean(
+    state.retirementsComplete ||
+      state.retirementsSkipped ||
+      state.retirementsDisabled ||
+      state.draftLotteryComplete ||
+      state.draftComplete ||
+      state.rookieSigningsComplete ||
+      state.optionsComplete ||
+      state.rightsManagementComplete ||
+      state.preFreeAgencyResolved ||
+      state.freeAgencyComplete ||
+      state.rosterFinalizationComplete ||
+      state.progressionComplete
+  );
+}
+
 function normalizeOffseasonStateForSeason(rawState, seasonYear) {
   const resolvedSeasonYear = Number(seasonYear || 2026);
 
-  if (!rawState || typeof rawState !== "object") {
-    return buildDefaultOffseasonState(resolvedSeasonYear);
+  if (!rawState || typeof rawState !== "object" || Object.keys(rawState).length === 0) {
+    return buildInactiveOffseasonState(resolvedSeasonYear);
   }
 
   const storedSeasonYear = Number(rawState?.seasonYear || 0);
 
   if (storedSeasonYear > 0 && storedSeasonYear !== resolvedSeasonYear) {
-    const fresh = buildDefaultOffseasonState(resolvedSeasonYear);
+    const fresh = buildInactiveOffseasonState(resolvedSeasonYear);
     try {
       localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(fresh));
       localStorage.removeItem(FREE_AGENCY_LAST_ROUTE_KEY);
@@ -391,12 +416,12 @@ function normalizeOffseasonStateForSeason(rawState, seasonYear) {
   }
 
   return {
-    ...buildDefaultOffseasonState(resolvedSeasonYear),
+    ...buildInactiveOffseasonState(resolvedSeasonYear),
     ...rawState,
     seasonYear: resolvedSeasonYear,
+    active: Boolean(rawState.active),
   };
 }
-
 
 
 export default function FreeAgents() {
@@ -404,7 +429,7 @@ export default function FreeAgents() {
   const [workingLeagueData, setWorkingLeagueData] = useState(leagueData || null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [playerCardPlayer, setPlayerCardPlayer] = useState(null);
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
+  const [sortConfig, setSortConfig] = useState({ key: "overall", direction: "desc" });
   const [showLetters, setShowLetters] = useState(
     localStorage.getItem("showLetters") === "true"
   );
@@ -487,11 +512,8 @@ export default function FreeAgents() {
   }
 
   const updateOffseasonState = (patch) => {
-    const current = normalizeOffseasonStateForSeason(
-      safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {}) || {},
-      currentSeasonYear
-    );
-    const next = { ...current, ...patch, seasonYear: currentSeasonYear };
+    const current = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {}) || {};
+    const next = { ...current, ...patch };
     localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(next));
     setOffseasonState(next);
   };
@@ -635,9 +657,25 @@ export default function FreeAgents() {
 
   const currentSeasonYear = getCurrentSeasonYear();
 
+const freeAgencyStateForMode =
+  workingLeagueData?.freeAgencyState && typeof workingLeagueData.freeAgencyState === "object"
+    ? workingLeagueData.freeAgencyState
+    : {};
+
+const hasLiveFreeAgencyEvidence = Boolean(
+  freeAgencyStateForMode?.isActive ||
+    Number(freeAgencyStateForMode?.currentDay || 0) > 0 ||
+    Number(freeAgencyStateForMode?.maxDays || 0) > 0 ||
+    freeAgencyStateForMode?.latestResults ||
+    freeAgencyStateForMode?.marketComplete ||
+    freeAgencyStateForMode?.freeAgencyComplete ||
+    freeAgencyStateForMode?.status === "complete"
+);
+
 const isOffseasonMode =
   !!offseasonState?.active &&
-  Number(offseasonState?.seasonYear || currentSeasonYear) === currentSeasonYear;
+  Number(offseasonState?.seasonYear || currentSeasonYear) === currentSeasonYear &&
+  (hasRealOffseasonEvidence(offseasonState) || hasLiveFreeAgencyEvidence);
   const optionsComplete = !!offseasonState?.optionsComplete;
   const rightsManagementComplete = !!offseasonState?.rightsManagementComplete;
   const freeAgencyFinished = !!offseasonState?.freeAgencyComplete;
@@ -753,7 +791,8 @@ const isOffseasonMode =
       signedPlayersLog.length > 0 ||
       dailyLog.length > 0 ||
       offerHistory.length > 0 ||
-      Object.keys(offersByPlayerSnapshot).length > 0
+      Object.keys(offersByPlayerSnapshot).length > 0 ||
+      freeAgents.length === 0
   );
 
   const backendMarkedFreeAgencyComplete =
@@ -782,7 +821,11 @@ const isOffseasonMode =
 
   const effectiveFreeAgencyFinished =
     trustedFreeAgencyFinished ||
-    freeAgencyMarketComplete;
+    freeAgencyMarketComplete ||
+    (isOffseasonMode &&
+      optionsComplete &&
+      !isLiveFreeAgencyActive &&
+      freeAgents.length === 0);
 
   const activeOfferCount = useMemo(() => {
     const offersByPlayer = liveFreeAgencyState?.offersByPlayer || {};
@@ -2428,6 +2471,29 @@ const handleContinueToProgression = () => {
       setMarketInitLoading(true);
       setDaySummary(null);
 
+      if (!(workingLeagueData?.freeAgents || []).length) {
+        updateOffseasonState({
+          active: true,
+          seasonYear: currentSeasonYear,
+          optionsComplete: true,
+          rightsManagementComplete: true,
+          freeAgencyComplete: true,
+        });
+
+        setDaySummary({
+          dayResolved: 0,
+          signings: [],
+          generatedOffers: [],
+          stateSummary: {
+            isActive: false,
+            currentDay: 0,
+            maxDays: 0,
+            freeAgentCount: 0,
+          },
+        });
+        return;
+      }
+
 const cleanFreeAgencyState = buildCleanFreeAgencyStateForInit(
   currentSeasonYear,
   selectedTeam?.name || null,
@@ -2448,17 +2514,6 @@ const res = await initializeFreeAgencyPeriod(
 );
 
       if (!res?.ok || !res?.leagueData) {
-        if (res?.code === "pre_free_agency_contract_decisions_required") {
-          updateOffseasonState({
-            active: true,
-            seasonYear: currentSeasonYear,
-            optionsComplete: false,
-            rightsManagementComplete: false,
-            preFreeAgencyResolved: false,
-            freeAgencyComplete: false,
-          });
-        }
-
         setDaySummary({
           error: res?.reason || "Failed to start free agency.",
         });
@@ -2840,7 +2895,7 @@ updateOffseasonState({
     return optionsLockedView;
   }
 
-  if (!freeAgents.length && (!isOffseasonMode || effectiveFreeAgencyFinished)) {
+  if (!freeAgents.length && (!isOffseasonMode || optionsComplete || effectiveFreeAgencyFinished)) {
     return noFreeAgentsView;
   }
 
