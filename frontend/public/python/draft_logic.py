@@ -23,7 +23,7 @@ try:
 except Exception:
     generate_draft_class = None
 
-DRAFT_LOGIC_VERSION = "2026-06-04_draft_logic_all_picks_rookie_signings_v4"
+DRAFT_LOGIC_VERSION = "2026-06-08_draft_logic_v19_off_def_source_truth_v6"
 
 POSITION_ORDER = ["PG", "SG", "SF", "PF", "C"]
 POSITION_BUCKETS = {
@@ -140,11 +140,28 @@ def _calc_overall_from_attrs(attrs: List[int], pos: str) -> int:
     return int(overall)
 
 
+def _has_source_truth_attrs(raw_attrs: Any) -> bool:
+    # The current source-of-truth calculator expects the 15-attribute model.
+    # Only force formula-based OVR when a prospect actually carries real attrs.
+    return isinstance(raw_attrs, list) and len(raw_attrs) >= 15
+
+
 def _resolve_prospect_overall(prospect: Dict[str, Any], default: int = 65) -> int:
+    raw_attrs = prospect.get("attrs") if isinstance(prospect.get("attrs"), list) else prospect.get("attributes")
+    if _has_source_truth_attrs(raw_attrs):
+        return _calc_overall_from_attrs(
+            _normalize_attrs(raw_attrs),
+            prospect.get("pos") or prospect.get("position") or "SF",
+        )
+
     for key in ["overall", "ovr", "rating"]:
         if prospect.get(key) is not None:
             return _safe_int(prospect.get(key), default)
-    return _calc_overall_from_attrs(_normalize_attrs(prospect.get("attrs") or prospect.get("attributes") or []), prospect.get("pos") or prospect.get("position") or "SF")
+
+    return _calc_overall_from_attrs(
+        _normalize_attrs(prospect.get("attrs") or prospect.get("attributes") or []),
+        prospect.get("pos") or prospect.get("position") or "SF",
+    )
 
 
 def _calc_stamina_from_attrs(age: Any, attrs: List[int]) -> int:
@@ -521,6 +538,340 @@ def _scoring_rating(attrs: List[int]) -> float:
     )
 
 
+# LeagueEditor.jsx v19 OFF/DEF parity helpers.
+# These intentionally mirror the advanced player editor math so draft-generated
+# rookies do not enter the league with correct OVR but stale OFF/DEF.
+T3, MID, CLOSE, FT, BH, PAS, SPD, ATH = 0, 1, 2, 3, 4, 5, 6, 7
+PERD, INTD, BLK, STL, REB, OIQ, DIQ = 8, 9, 10, 11, 12, 13, 14
+
+OFF_WEIGHTS_POSZ = {
+    "PG": {T3: 0.18, MID: 0.18, CLOSE: 0.18, BH: 0.20, PAS: 0.20, SPD: 0.04, ATH: 0.02, OIQ: 0.00},
+    "SG": {T3: 0.18, MID: 0.18, CLOSE: 0.18, BH: 0.14, PAS: 0.14, SPD: 0.06, ATH: 0.06, OIQ: 0.02},
+    "SF": {T3: 0.18, MID: 0.18, CLOSE: 0.18, BH: 0.10, PAS: 0.10, SPD: 0.08, ATH: 0.10, OIQ: 0.08},
+    "PF": {T3: 0.18, MID: 0.18, CLOSE: 0.18, BH: 0.10, PAS: 0.12, SPD: 0.08, ATH: 0.08, OIQ: 0.08},
+    "C": {T3: 0.18, MID: 0.18, CLOSE: 0.18, BH: 0.04, PAS: 0.10, SPD: 0.06, ATH: 0.16, OIQ: 0.10},
+}
+
+DEF_WEIGHTS_POSZ = {
+    "PG": {PERD: 0.58, STL: 0.32, SPD: 0.06, ATH: 0.04},
+    "SG": {PERD: 0.46, STL: 0.26, INTD: 0.12, BLK: 0.08, SPD: 0.04, ATH: 0.04},
+    "SF": {PERD: 0.28, STL: 0.18, INTD: 0.28, BLK: 0.18, ATH: 0.05, SPD: 0.03},
+    "PF": {INTD: 0.45, BLK: 0.35, PERD: 0.08, STL: 0.08, ATH: 0.04},
+    "C": {INTD: 0.52, BLK: 0.40, ATH: 0.06, PERD: 0.01, STL: 0.01},
+}
+
+V19_OFF_IDX = [T3, MID, CLOSE, BH, PAS, SPD, ATH, OIQ]
+V19_DEF_IDX = [PERD, STL, INTD, BLK, SPD, ATH]
+V19_POSITIONS = ["PG", "SG", "SF", "PF", "C"]
+
+
+def _clamp_float(value: float, lo: float, hi: float) -> float:
+    return float(max(lo, min(hi, value)))
+
+
+def _three_penalty_mult(pos: str) -> float:
+    return {"PG": 1.10, "SG": 1.00, "SF": 0.75, "PF": 0.80, "C": 0.30}.get(pos, 1.0)
+
+
+def _close_penalty_mult(pos: str) -> float:
+    return {"PG": 0.30, "SG": 0.45, "SF": 0.70, "PF": 0.85, "C": 1.10}.get(pos, 1.0)
+
+
+def _bankers_round_js(n: float) -> int:
+    f = math.floor(float(n))
+    diff = float(n) - f
+    if abs(diff - 0.5) < 1e-9:
+        return int(f if f % 2 == 0 else f + 1)
+    return int(math.floor(float(n) + 0.5))
+
+
+def _v19_jitter(name: str = "", attrs: Optional[List[int]] = None) -> float:
+    safe_attrs = attrs or []
+    s_attrs = 0.0
+    for i, value in enumerate(safe_attrs):
+        s_attrs += (i + 1) * _safe_float(value, 0.0)
+
+    s_name = 0.0
+    for ch in str(name or ""):
+        s_name += ord(ch)
+
+    seed = (s_attrs + 0.13 * s_name) * 12.9898
+    raw = math.sin(seed) * 43758.5453
+    frac = raw - math.floor(raw)
+    return (frac - 0.5) * 0.7
+
+
+def _sample_std(values: List[float]) -> float:
+    n = len(values)
+    if n < 2:
+        return 1.0
+    mean = sum(values) / n
+    variance = sum((value - mean) * (value - mean) for value in values) / (n - 1)
+    return max(1.0, math.sqrt(variance))
+
+
+def _safe_std(value: Any) -> float:
+    value = _safe_float(value, 1.0)
+    return value if value > 1e-6 else 1.0
+
+
+def _v19_pf_bridged_weights() -> Dict[int, float]:
+    pf = OFF_WEIGHTS_POSZ["PF"]
+    sf = OFF_WEIGHTS_POSZ["SF"]
+    keys = set(pf.keys()) | set(sf.keys())
+    return {key: 0.7 * pf.get(key, 0.0) + 0.3 * sf.get(key, 0.0) for key in keys}
+
+
+def _league_players_for_v19_baselines(league: Dict[str, Any]) -> List[Dict[str, Any]]:
+    conferences = league.get("conferences") or {}
+    teams: List[Dict[str, Any]] = []
+
+    if isinstance(conferences, dict):
+        if "East" in conferences or "West" in conferences:
+            for side in ["East", "West"]:
+                teams.extend([team for team in conferences.get(side, []) if isinstance(team, dict)])
+        else:
+            for conf_teams in conferences.values():
+                teams.extend([team for team in conf_teams or [] if isinstance(team, dict)])
+    elif isinstance(league.get("teams"), list):
+        teams = [team for team in league.get("teams") or [] if isinstance(team, dict)]
+
+    players: List[Dict[str, Any]] = []
+    for team in teams:
+        for player in team.get("players") or []:
+            if isinstance(player, dict):
+                players.append(player)
+    return players
+
+
+def _empty_v19_baselines() -> Dict[str, Any]:
+    pos_mean = {pos: {idx: 75.0 for idx in set(V19_OFF_IDX + V19_DEF_IDX)} for pos in V19_POSITIONS}
+    pos_std = {pos: {idx: 1.0 for idx in set(V19_OFF_IDX + V19_DEF_IDX)} for pos in V19_POSITIONS}
+    abs_mean = {idx: 75.0 for idx in V19_OFF_IDX}
+    abs_std = {idx: 1.0 for idx in V19_OFF_IDX}
+    return {
+        "posMean": pos_mean,
+        "posStd": pos_std,
+        "absMean": abs_mean,
+        "absStd": abs_std,
+        "offShift": 0.0,
+        "defShift": 0.0,
+    }
+
+
+def _calc_off_def_v19_preview(attrs: List[int], pos: str, baselines: Dict[str, Any]) -> Tuple[float, float]:
+    p = pos if pos in V19_POSITIONS else "SF"
+    safe_attrs = _normalize_attrs(attrs)
+    pos_mean = baselines.get("posMean") or {}
+    pos_std = baselines.get("posStd") or {}
+    abs_mean = baselines.get("absMean") or {}
+    abs_std = baselines.get("absStd") or {}
+
+    def z_pos(idx: int) -> float:
+        return (_safe_float(safe_attrs[idx], 75.0) - _safe_float((pos_mean.get(p) or {}).get(idx), 75.0)) / _safe_std((pos_std.get(p) or {}).get(idx))
+
+    def z_abs(idx: int) -> float:
+        return (_safe_float(safe_attrs[idx], 75.0) - _safe_float(abs_mean.get(idx), 75.0)) / _safe_std(abs_std.get(idx))
+
+    def z_to_rating(z: float) -> float:
+        return _clamp_float(75 + 12 * z, 50, 99)
+
+    abs_mix = {"PF": 0.70, "SF": 0.20, "PG": 0.10, "SG": 0.10, "C": 0.10}
+    off_weights = _v19_pf_bridged_weights() if p == "PF" else OFF_WEIGHTS_POSZ.get(p, OFF_WEIGHTS_POSZ["SF"])
+
+    z_pos_sum = 0.0
+    z_abs_sum = 0.0
+    for idx, weight in off_weights.items():
+        z_pos_sum += float(weight) * z_pos(idx)
+        z_abs_sum += float(weight) * z_abs(idx)
+
+    mix = abs_mix.get(p, 0.10)
+    off = z_to_rating((1 - mix) * z_pos_sum + mix * z_abs_sum)
+
+    t3_gap = max(0.0, 50 - _safe_float(safe_attrs[T3], 0.0) - 2)
+    close_gap = max(0.0, 60 - _safe_float(safe_attrs[CLOSE], 0.0) - 2)
+    off -= min(6.0, 0.07 * _three_penalty_mult(p) * t3_gap)
+    off -= min(6.0, 0.07 * _close_penalty_mult(p) * close_gap)
+    off = _clamp_float(off, 50, 99)
+
+    def_weights = DEF_WEIGHTS_POSZ.get(p, {})
+    zsum_d = 0.0
+    for idx, weight in def_weights.items():
+        zsum_d += float(weight) * z_pos(idx)
+    defense = z_to_rating(zsum_d)
+
+    athleticism = _safe_float(safe_attrs[ATH], 75.0)
+    abs_pen = max(0.0, 78 - athleticism) * 0.08
+    rel_pen = max(0.0, _safe_float((pos_mean.get(p) or {}).get(ATH), 75.0) - athleticism) * 0.05
+
+    if p == "SF":
+        abs_pen *= 0.8
+        rel_pen *= 0.8
+        defense += 2.5
+        perimeter_d = _safe_float(safe_attrs[PERD], 75.0)
+        interior_d = _safe_float(safe_attrs[INTD], 75.0)
+        high = max(perimeter_d, interior_d)
+        low = min(perimeter_d, interior_d)
+        if perimeter_d >= 88 and interior_d >= 88:
+            defense += min(1.0, (min(perimeter_d, interior_d) - 88) * 0.05)
+        tier = 0.0
+        if perimeter_d >= 90 or interior_d >= 90:
+            tier += 0.5
+        if perimeter_d >= 85 and interior_d >= 85:
+            tier += 0.5
+        if high >= 93 and low >= 84:
+            tier += 0.5
+        if high >= 94 and low >= 90:
+            tier += 0.5
+        defense += min(2.0, tier)
+
+    defense -= min(4.0, abs_pen + rel_pen)
+    def_cap = 99 if p == "C" else 98 if p == "PF" else 96
+    defense = _clamp_float(defense, 50, def_cap)
+
+    return off, defense
+
+
+def _build_v19_rating_baselines(league: Dict[str, Any]) -> Dict[str, Any]:
+    players = _league_players_for_v19_baselines(league or {})
+    baselines = _empty_v19_baselines()
+
+    pos_buckets = {
+        pos: {idx: [] for idx in set(V19_OFF_IDX + V19_DEF_IDX)}
+        for pos in V19_POSITIONS
+    }
+    abs_buckets = {idx: [] for idx in V19_OFF_IDX}
+
+    for player in players:
+        pos = str(player.get("pos") or player.get("position") or "SF").upper()
+        if pos not in V19_POSITIONS:
+            pos = "SF"
+        attrs = _normalize_attrs(player.get("attrs") or player.get("attributes") or [])
+
+        # This mirrors LeagueEditor.jsx, including the duplicate SPD/ATH pushes
+        # created by concatenating offensive and defensive index arrays.
+        for idx in V19_OFF_IDX + V19_DEF_IDX:
+            pos_buckets[pos][idx].append(_safe_float(attrs[idx], 75.0))
+        for idx in V19_OFF_IDX:
+            abs_buckets[idx].append(_safe_float(attrs[idx], 75.0))
+
+    for pos in V19_POSITIONS:
+        for idx in set(V19_OFF_IDX + V19_DEF_IDX):
+            arr = pos_buckets[pos][idx]
+            baselines["posMean"][pos][idx] = sum(arr) / len(arr) if arr else 75.0
+            baselines["posStd"][pos][idx] = _sample_std(arr) if arr else 1.0
+
+    for idx in V19_OFF_IDX:
+        arr = abs_buckets[idx]
+        baselines["absMean"][idx] = sum(arr) / len(arr) if arr else 75.0
+        baselines["absStd"][idx] = _sample_std(arr) if arr else 1.0
+
+    if not players:
+        return baselines
+
+    sum_ovr = 0.0
+    sum_off = 0.0
+    sum_def = 0.0
+    n = 0
+    for player in players:
+        pos = str(player.get("pos") or player.get("position") or "SF").upper()
+        if pos not in V19_POSITIONS:
+            pos = "SF"
+        attrs = _normalize_attrs(player.get("attrs") or player.get("attributes") or [])
+        sum_ovr += _calc_overall_from_attrs(attrs, pos)
+        off_preview, def_preview = _calc_off_def_v19_preview(attrs, pos, baselines)
+        sum_off += off_preview
+        sum_def += def_preview
+        n += 1
+
+    if n:
+        ov_mean = sum_ovr / n
+        off_mean = sum_off / n
+        def_mean = sum_def / n
+        baselines["offShift"] = _clamp_float(ov_mean - off_mean, -1.5, 1.5)
+        baselines["defShift"] = _clamp_float(ov_mean - def_mean, -1.5, 1.5)
+
+    return baselines
+
+
+def _calc_off_def_v19(
+    attrs: List[int],
+    pos: str,
+    name: str = "",
+    height: Any = 78,
+    baselines: Optional[Dict[str, Any]] = None,
+) -> Tuple[int, int]:
+    # height is accepted for exact call-shape parity with LeagueEditor.jsx. The
+    # current v19 formula does not use height directly.
+    _ = height
+    p = str(pos or "SF").upper()
+    if p not in V19_POSITIONS:
+        p = "SF"
+
+    safe_attrs = _normalize_attrs(attrs)
+    active_baselines = baselines or _empty_v19_baselines()
+    off, defense = _calc_off_def_v19_preview(safe_attrs, p, active_baselines)
+
+    jitter = _v19_jitter(name, safe_attrs)
+    off = _clamp_float(off + _safe_float(active_baselines.get("offShift"), 0.0) + jitter, 50, 99)
+    def_cap = 99 if p == "C" else 98 if p == "PF" else 96
+    defense = _clamp_float(
+        defense + _safe_float(active_baselines.get("defShift"), 0.0) + 0.7 * jitter,
+        50,
+        def_cap,
+    )
+
+    return _bankers_round_js(off), _bankers_round_js(defense)
+
+
+
+def _explode_v19(value: Any, power: float) -> float:
+    return (_safe_float(value, 0.0) / 100.0) ** power
+
+
+def _close_penalty_v19(close: Any) -> float:
+    close_value = _safe_float(close, 0.0)
+    if close_value >= 70:
+        return 0.0
+    return ((70 - close_value) / 30.0) ** 2.3
+
+
+def _calc_scoring_rating_v19(pos: str, three: Any, mid: Any, close: Any) -> float:
+    p = str(pos or "SF").upper()
+    three_value = _safe_float(three, 75.0)
+    mid_value = _safe_float(mid, 75.0)
+    close_value = _safe_float(close, 75.0)
+
+    if p in {"PG", "SG"}:
+        three_term = _explode_v19(three_value, 7) * 1.2
+        mid_term = _explode_v19(mid_value, 7) * 1.55
+        close_term = _explode_v19(close_value, 6) * 1.1
+        base = 0.38 * (three_value / 100.0) + 0.4 * (mid_value / 100.0) + 0.22 * (close_value / 100.0)
+        penalty = _close_penalty_v19(close_value) * 1.7
+        raw = base + three_term + mid_term + close_term - penalty
+        return float(raw * 14.75 + 43.5)
+
+    if p == "SF":
+        three_term = _explode_v19(three_value, 7) * 1.05
+        mid_term = _explode_v19(mid_value, 7) * 1.4
+        close_term = _explode_v19(close_value, 7) * 1.5
+        base = 0.32 * (three_value / 100.0) + 0.35 * (mid_value / 100.0) + 0.33 * (close_value / 100.0)
+        penalty = _close_penalty_v19(close_value) * 1.2
+        raw = base + three_term + mid_term + close_term - penalty
+        return float(raw * 14.75 + 43.5)
+
+    if p in {"PF", "C"}:
+        close_term = _explode_v19(close_value, 8) * 1.95
+        mid_term = _explode_v19(mid_value, 6) * 1.3
+        three_term = _explode_v19(three_value, 5) * 0.6
+        base = 0.58 * (close_value / 100.0) + 0.27 * (mid_value / 100.0) + 0.15 * (three_value / 100.0)
+        penalty = _close_penalty_v19(close_value) * 2.0
+        raw = base + three_term + mid_term + close_term - penalty
+        return float(raw * 14.75 + 43.5)
+
+    return 50.0
+
+
 def _ratings_from_attrs(attrs: List[int]) -> Tuple[int, int]:
     if len(attrs) < 15:
         return 70, 70
@@ -531,10 +882,27 @@ def _ratings_from_attrs(attrs: List[int]) -> Tuple[int, int]:
     return int(off_rating), int(def_rating)
 
 
-def _normalize_draft_prospect_for_state(prospect: Dict[str, Any], season_year: int, index: int = 0) -> Dict[str, Any]:
+def _normalize_draft_prospect_for_state(
+    prospect: Dict[str, Any],
+    season_year: int,
+    index: int = 0,
+    rating_baselines: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     p = copy.deepcopy(prospect or {})
-    attrs = _normalize_attrs(p.get("attrs") or p.get("attributes") or [])
+    raw_attrs = p.get("attrs") if isinstance(p.get("attrs"), list) else p.get("attributes")
+    has_source_truth_attrs = _has_source_truth_attrs(raw_attrs)
+    attrs = _normalize_attrs(raw_attrs or [])
     p["attrs"] = attrs
+
+    if has_source_truth_attrs:
+        source_truth_overall = _calc_overall_from_attrs(
+            attrs,
+            p.get("pos") or p.get("position") or "SF",
+        )
+        p["overall"] = source_truth_overall
+        p["ovr"] = source_truth_overall
+        p["rating"] = source_truth_overall
+        p["overallSource"] = "attrs_source_truth"
 
     if not p.get("name") and p.get("playerName"):
         p["name"] = p.get("playerName")
@@ -555,16 +923,31 @@ def _normalize_draft_prospect_for_state(prospect: Dict[str, Any], season_year: i
     overall = _resolve_prospect_overall(p, 65)
     if p.get("potential") is None or _safe_int(p.get("potential"), 0) <= 0:
         p["potential"] = overall
+    else:
+        p["potential"] = max(overall, _safe_int(p.get("potential"), overall))
 
-    off_rating, def_rating = _ratings_from_attrs(attrs)
-    if p.get("offRating") is None and p.get("off_rating") is None:
-        p["offRating"] = off_rating
-    if p.get("defRating") is None and p.get("def_rating") is None:
-        p["defRating"] = def_rating
-    if p.get("stamina") is None:
-        p["stamina"] = _calc_stamina_from_attrs(p.get("age"), attrs)
-    if p.get("scoringRating") is None:
-        p["scoringRating"] = _scoring_rating(attrs)
+    off_rating, def_rating = _calc_off_def_v19(
+        attrs,
+        p.get("pos") or p.get("position") or "SF",
+        p.get("name") or p.get("playerName") or "",
+        p.get("height") or 78,
+        rating_baselines,
+    )
+    p["offRating"] = off_rating
+    p["defRating"] = def_rating
+    p["offense"] = off_rating
+    p["defense"] = def_rating
+    p["offRatingSource"] = "v19_attrs_source_truth"
+    p["defRatingSource"] = "v19_attrs_source_truth"
+    p["stamina"] = _calc_stamina_from_attrs(p.get("age"), attrs)
+    p["staminaSource"] = "attrs_age_source_truth"
+    p["scoringRating"] = _calc_scoring_rating_v19(
+        p.get("pos") or p.get("position") or "SF",
+        attrs[T3],
+        attrs[MID],
+        attrs[CLOSE],
+    )
+    p["scoringRatingSource"] = "v19_attrs_source_truth"
 
     source = (
         p.get("college") or p.get("school") or p.get("university") or p.get("academy") or
@@ -587,16 +970,20 @@ def _prospect_to_player(
     pick: Optional[Dict[str, Any]],
     season_year: int,
     drafted: bool = True,
+    rating_baselines: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     attrs = [int(x) for x in (prospect.get("attrs") or [])]
     while len(attrs) < 15:
         attrs.append(60)
 
     overall_rating = _resolve_prospect_overall(prospect, 65)
-    off_rating = _safe_int(prospect.get("offRating") or prospect.get("off_rating"), 0)
-    def_rating = _safe_int(prospect.get("defRating") or prospect.get("def_rating"), 0)
-    if not off_rating or not def_rating:
-        off_rating, def_rating = _ratings_from_attrs(attrs)
+    off_rating, def_rating = _calc_off_def_v19(
+        attrs,
+        prospect.get("pos") or prospect.get("position") or "SF",
+        prospect.get("name") or prospect.get("playerName") or "",
+        prospect.get("height") or 78,
+        rating_baselines,
+    )
 
     overall_pick = _safe_int(pick.get("pick"), 0) if pick else None
     round_num = _safe_int(pick.get("round"), 0) if pick else None
@@ -638,12 +1025,23 @@ def _prospect_to_player(
         "age": _safe_int(prospect.get("age"), 20),
         "height": _safe_int(prospect.get("height"), 78),
         "weight": _safe_int(prospect.get("weight"), 215),
-        "potential": _safe_int(prospect.get("potential"), overall_rating),
+        "potential": max(overall_rating, _safe_int(prospect.get("potential"), overall_rating)),
         "overall": overall_rating,
         "offRating": off_rating,
         "defRating": def_rating,
-        "stamina": _safe_int(prospect.get("stamina"), _calc_stamina_from_attrs(_safe_int(prospect.get("age"), 20), attrs)),
-        "scoringRating": _safe_float(prospect.get("scoringRating"), _scoring_rating(attrs)),
+        "offense": off_rating,
+        "defense": def_rating,
+        "offRatingSource": "v19_attrs_source_truth",
+        "defRatingSource": "v19_attrs_source_truth",
+        "stamina": _calc_stamina_from_attrs(_safe_int(prospect.get("age"), 20), attrs),
+        "staminaSource": "attrs_age_source_truth",
+        "scoringRating": _calc_scoring_rating_v19(
+            prospect.get("pos") or prospect.get("position") or "SF",
+            attrs[T3],
+            attrs[MID],
+            attrs[CLOSE],
+        ),
+        "scoringRatingSource": "v19_attrs_source_truth",
         "attrs": attrs,
         "portraitId": prospect.get("portraitId") or "",
         "headshot": portrait_url,
@@ -730,11 +1128,19 @@ def _add_undrafted_to_free_agents(league: Dict[str, Any], state: Dict[str, Any],
 
     existing_ids = {p.get("id") for p in league["freeAgents"] if isinstance(p, dict)}
     undrafted_added = []
+    rating_baselines = _build_v19_rating_baselines(league)
 
     # Keep the top remaining undrafted prospects available. This gives the FA pool life
     # without bloating localStorage too aggressively.
     for prospect in available[:24]:
-        player = _prospect_to_player(prospect, "Free Agent", None, season_year, drafted = False)
+        player = _prospect_to_player(
+            prospect,
+            "Free Agent",
+            None,
+            season_year,
+            drafted = False,
+            rating_baselines = rating_baselines,
+        )
         if player.get("id") in existing_ids:
             continue
         league["freeAgents"].append(player)
@@ -836,8 +1242,9 @@ def initialize_draft(league_data: Dict[str, Any], payload: Dict[str, Any]) -> Di
             "prospectCount": len(draft_class),
         }
 
+    rating_baselines = _build_v19_rating_baselines(league)
     draft_class = [
-        _normalize_draft_prospect_for_state(p, season_year, index)
+        _normalize_draft_prospect_for_state(p, season_year, index, rating_baselines)
         for index, p in enumerate(draft_class or [])
     ]
 
@@ -968,7 +1375,15 @@ def make_pick(
     else:
         prospect = _choose_cpu_prospect(state, league, pick, season_year)
 
-    player = _prospect_to_player(prospect, team_name, pick, season_year, drafted = True)
+    rating_baselines = _build_v19_rating_baselines(league)
+    player = _prospect_to_player(
+        prospect,
+        team_name,
+        pick,
+        season_year,
+        drafted = True,
+        rating_baselines = rating_baselines,
+    )
     added = _add_player_to_team(league, team_name, player)
 
     pick_record = {

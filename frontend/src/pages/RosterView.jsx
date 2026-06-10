@@ -11,7 +11,7 @@ export default function RosterView() {
   const { leagueData, selectedTeam, setSelectedTeam, setLeagueData } = useGame();
   const [workingLeagueData, setWorkingLeagueData] = useState(leagueData || null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
+  const [sortConfig, setSortConfig] = useState({ key: "overall", direction: "desc" });
   const [showLetters, setShowLetters] = useState(
     localStorage.getItem("showLetters") === "true"
   );
@@ -396,16 +396,6 @@ export default function RosterView() {
         ...getStashPlayers(selectedTeam).map(markStashPlayer),
       ];
 
-  useEffect(() => {
-    if (!viewPlayers?.length) {
-      setSelectedPlayer(null);
-      return;
-    }
-    if (!selectedPlayer || !viewPlayers.some((p) => p.name === selectedPlayer.name)) {
-      setSelectedPlayer(viewPlayers[0]);
-    }
-  }, [viewPlayers, selectedPlayer]);
-
   // sorting
   const positionOrder = ["PG", "SG", "SF", "PF", "C"];
 
@@ -445,6 +435,16 @@ export default function RosterView() {
     });
     return rows;
   }, [viewPlayers, sortConfig]);
+
+  useEffect(() => {
+    if (!sortedPlayers?.length) {
+      setSelectedPlayer(null);
+      return;
+    }
+    if (!selectedPlayer || !sortedPlayers.some((p) => p.name === selectedPlayer.name)) {
+      setSelectedPlayer(sortedPlayers[0]);
+    }
+  }, [sortedPlayers, selectedPlayer]);
 
   const openPlayerActions = (player, e) => {
     e?.stopPropagation?.();

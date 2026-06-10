@@ -869,12 +869,25 @@ const isOffseasonMode =
   );
 
   const userRosterCount = Number(currentUserTeam?.players?.length || 0);
+  const userTwoWayCount = Number(currentUserTeam?.twoWayPlayers?.length || 0);
+  const userStashCount = Number(currentUserTeam?.stashPlayers?.length || 0);
+  const userPendingRookieCount = Number(currentUserTeam?.pendingRookieSignings?.length || 0);
+  const offseasonControlledMax = Number(
+    workingLeagueData?.offseasonControlledMax ||
+      workingLeagueData?.offseasonControlledLimit ||
+      20
+  );
+  const userOffseasonControlledCount =
+    userRosterCount + userTwoWayCount + userStashCount + userPendingRookieCount;
+  const userOffseasonControlledFull =
+    !!selectedTeam?.name && userOffseasonControlledCount >= offseasonControlledMax;
   const userRosterTooFew = !!selectedTeam?.name && userRosterCount < minRosterSize;
   const userRosterTooMany = !!selectedTeam?.name && userRosterCount > maxRosterSize;
   const userRosterInvalid = userRosterTooFew || userRosterTooMany;
 
   const canSubmitLiveOffer = isOffseasonMode && optionsComplete && rightsManagementComplete && isLiveFreeAgencyActive;
-  const canManualCleanupSign = isOffseasonMode && effectiveFreeAgencyFinished && userRosterTooFew;
+  const canManualCleanupSign =
+    isOffseasonMode && effectiveFreeAgencyFinished && !userOffseasonControlledFull;
   const canUseFreeAgencyAction = !isOffseasonMode || canSubmitLiveOffer || canManualCleanupSign;
 
   // Surgical pending-decision guard:
@@ -2774,9 +2787,9 @@ updateOffseasonState({
           return;
         }
 
-        if (userRosterTooMany) {
+        if (userOffseasonControlledFull) {
           setSignError(
-            `${selectedTeam.name} has ${userRosterCount} players. You must get down to ${maxRosterSize} before leaving free agency.`
+            `${selectedTeam.name} is at the offseason controlled-player limit (${userOffseasonControlledCount}/${offseasonControlledMax}). Release or move a player before signing another free agent.`
           );
           return;
         }
@@ -3085,7 +3098,7 @@ updateOffseasonState({
 
               {effectiveFreeAgencyFinished && userRosterTooFew && (
                 <div className="text-xs text-red-300 mt-1">
-                  The live market is over, but you can still sign remaining free agents directly on this page until you reach {minRosterSize} players.
+                  The live market is over, so you can still sign remaining free agents directly on this page. You must reach {minRosterSize} standard players and trim to {maxRosterSize} before advancing.
                 </div>
               )}
             </div>
@@ -3681,7 +3694,7 @@ updateOffseasonState({
 
             {canManualCleanupSign && (
               <div className="mb-4 text-yellow-300 text-sm font-semibold">
-                The live market is over. Because your team is below the minimum roster size, you can still sign remaining free agents directly until you reach {minRosterSize} players.
+                The live market is over. You can still sign remaining free agents directly until your offseason controlled list reaches {offseasonControlledMax} players. You will still need to trim the standard roster to {minRosterSize}-{maxRosterSize} before advancing.
               </div>
             )}
 

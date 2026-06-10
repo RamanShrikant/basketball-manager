@@ -2096,7 +2096,7 @@ export default function PlayerProgression() {
   const [teamFilter, setTeamFilter] = useState("ALL");
   const [hasDefaultedTeamFilter, setHasDefaultedTeamFilter] = useState(false);
   const [featuredKey, setFeaturedKey] = useState(null);
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
+  const [sortConfig, setSortConfig] = useState({ key: "overall", direction: "desc" });
   const [deltas, setDeltas] = useState(() => readJsonSafe(DELTAS_KEY, {}));
 
 
@@ -2895,7 +2895,7 @@ export default function PlayerProgression() {
 
     setTeamFilter(selectedTeamName);
     setFeaturedKey(null);
-    setSortConfig({ key: null, direction: "desc" });
+    setSortConfig({ key: "overall", direction: "desc" });
     setHasDefaultedTeamFilter(true);
   }, [hasDefaultedTeamFilter, selectedTeam?.name, teamOptions]);
 
@@ -3035,7 +3035,7 @@ export default function PlayerProgression() {
               onChange={(e) => {
                 setTeamFilter(e.target.value);
                 setFeaturedKey(null);
-                setSortConfig({ key: null, direction: "desc" });
+                setSortConfig({ key: "overall", direction: "desc" });
                 setHasDefaultedTeamFilter(true);
               }}
               className="px-3 py-2 bg-neutral-800 rounded border border-neutral-700"

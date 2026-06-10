@@ -1036,13 +1036,21 @@ def apply_rookie_signings(league_data: Dict[str, Any], payload: Dict[str, Any]) 
     for team in _get_all_teams(league):
         normalize_team_roster_lists(team)
         team_name = _team_name(team)
-        pending_ids = [p.get("id") for p in team.get("pendingRookieSignings") or [] if isinstance(p, dict)]
 
-        for player_id in pending_ids:
-            player = _remove_from_pending(team, player_id)
-            if not player:
-                continue
+        # Rookie signing decisions are a batch replacement. Pending rookies
+        # already count as controlled players before this screen. Remove all
+        # pending rookies first, then add back only the standard/two-way/stash
+        # choices. This prevents a team at 21 raw controlled players with two
+        # pending rookies from being forced to release both when one signing and
+        # one release would legally finish at 20.
+        pending_players = [
+            p for p in (team.get("pendingRookieSignings") or [])
+            if isinstance(p, dict)
+        ]
+        team["pendingRookieSignings"] = []
 
+        for player in pending_players:
+            player_id = player.get("id")
             is_user_team = bool(user_team_name and team_name == user_team_name)
             decision = decisions.get(player_id)
 
@@ -1053,18 +1061,18 @@ def apply_rookie_signings(league_data: Dict[str, Any], payload: Dict[str, Any]) 
             if not is_user_team:
                 decision = _auto_cpu_decision(player, team, season_year)
 
-            # Enforce slot availability at apply-time.
-            # Standard rookie deals are allowed during the offseason until the
-            # team reaches 20 controlled players. The 15-man standard limit
-            # is enforced later by season-start roster validation.
-            counts = roster_counts(team)
+            decision = str(decision or "release").lower()
             if decision == "draft_rights":
                 decision = "stash"
-            if decision == "standard" and not can_add_standard_contract(team, phase = "offseason"):
-                decision = "two_way" if can_add_two_way_contract(team, phase = "offseason") else "stash"
-            if decision == "two_way" and not can_add_two_way_contract(team, phase = "offseason"):
+            if decision not in ["standard", "two_way", "stash", "release"]:
+                decision = "release"
+
+            # Enforce final batch availability after pending rookies have been
+            # removed. Standard contracts may go above 15 in the offseason, but
+            # controlled players cannot exceed 20 and two-ways cannot exceed 3.
+            if decision == "two_way" and roster_counts(team)["twoWayCount"] >= TWO_WAY_MAX:
                 decision = "stash"
-            if decision == "stash" and roster_counts(team)["controlledCount"] >= OFFSEASON_CONTROLLED_MAX:
+            if decision in ["standard", "two_way", "stash"] and roster_counts(team)["controlledCount"] >= OFFSEASON_CONTROLLED_MAX:
                 decision = "release"
 
             result = _apply_decision_to_player(league, team, player, decision, season_year)

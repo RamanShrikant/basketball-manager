@@ -1,82 +1,530 @@
 [
-    {
-        "id":  "rookie_face_0003",
-        "url":  "/assets/rookie_faces/rookie_face_0003.png"
-    },
-    {
-        "id":  "rookie_face_0004",
-        "url":  "/assets/rookie_faces/rookie_face_0004.png"
-    },
-    {
-        "id":  "rookie_face_0005",
-        "url":  "/assets/rookie_faces/rookie_face_0005.png"
-    },
-    {
-        "id":  "rookie_face_0006",
-        "url":  "/assets/rookie_faces/rookie_face_0006.png"
-    },
-    {
-        "id":  "rookie_face_0033",
-        "url":  "/assets/rookie_faces/rookie_face_0033.png"
-    },
-    {
-        "id":  "rookie_face_0034",
-        "url":  "/assets/rookie_faces/rookie_face_0034.png"
-    },
-    {
-        "id":  "rookie_face_0035",
-        "url":  "/assets/rookie_faces/rookie_face_0035.png"
-    },
-    {
-        "id":  "rookie_face_0036",
-        "url":  "/assets/rookie_faces/rookie_face_0036.png"
-    },
-    {
-        "id":  "rookie_face_0047",
-        "url":  "/assets/rookie_faces/rookie_face_0047.png"
-    },
-    {
-        "id":  "rookie_face_0048",
-        "url":  "/assets/rookie_faces/rookie_face_0048.png"
-    },
-    {
-        "id":  "rookie_face_0059",
-        "url":  "/assets/rookie_faces/rookie_face_0059.png"
-    },
-    {
-        "id":  "rookie_face_0060",
-        "url":  "/assets/rookie_faces/rookie_face_0060.png"
-    },
-    {
-        "id":  "rookie_face_0061",
-        "url":  "/assets/rookie_faces/rookie_face_0061.png"
-    },
-    {
-        "id":  "rookie_face_0062",
-        "url":  "/assets/rookie_faces/rookie_face_0062.png"
-    },
-    {
-        "id":  "rookie_face_0063",
-        "url":  "/assets/rookie_faces/rookie_face_0063.png"
-    },
-    {
-        "id":  "rookie_face_0064",
-        "url":  "/assets/rookie_faces/rookie_face_0064.png"
-    },
-    {
-        "id":  "rookie_face_0084",
-        "url":  "/assets/rookie_faces/rookie_face_0084.png"
-    },
-    {
-        "id":  "rookie_face_0085",
-        "url":  "/assets/rookie_faces/rookie_face_0085.png"
-    },
-    {
-        "id":  "rookie_face_0094",
-        "url":  "/assets/rookie_faces/rookie_face_0094.png"
-    },
-    {
-        "id":  "rookie_face_0095",
-        "url":  "/assets/rookie_faces/rookie_face_0095.png"
-    }
+  {
+    "id": "rookie_face_0003",
+    "url": "/assets/rookie_faces/rookie_face_0003.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "medium-dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "short fade",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0004",
+    "url": "/assets/rookie_faces/rookie_face_0004.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "short twists",
+    "defaultFacialHair": "light goatee",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0005",
+    "url": "/assets/rookie_faces/rookie_face_0005.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "buzz cut",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0006",
+    "url": "/assets/rookie_faces/rookie_face_0006.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "medium-dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "short twists",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0033",
+    "url": "/assets/rookie_faces/rookie_face_0033.png",
+    "status": "keep",
+    "appearancePool": "Mixed / Black",
+    "skinTone": "light-brown",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "braids",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0034",
+    "url": "/assets/rookie_faces/rookie_face_0034.png",
+    "status": "keep",
+    "appearancePool": "Latino / Mixed",
+    "skinTone": "tan",
+    "hairTextureGroup": "curly/coily",
+    "defaultHairStyle": "short curls",
+    "defaultFacialHair": "light stubble",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0035",
+    "url": "/assets/rookie_faces/rookie_face_0035.png",
+    "status": "keep",
+    "appearancePool": "Mixed / Black",
+    "skinTone": "light-brown",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "braids",
+    "defaultFacialHair": "light goatee",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0036",
+    "url": "/assets/rookie_faces/rookie_face_0036.png",
+    "status": "keep",
+    "appearancePool": "Latino / Mixed",
+    "skinTone": "tan",
+    "hairTextureGroup": "curly/coily",
+    "defaultHairStyle": "short curls",
+    "defaultFacialHair": "light beard",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0047",
+    "url": "/assets/rookie_faces/rookie_face_0047.png",
+    "status": "keep",
+    "appearancePool": "African / International",
+    "skinTone": "dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "close-cropped hair",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0048",
+    "url": "/assets/rookie_faces/rookie_face_0048.png",
+    "status": "keep",
+    "appearancePool": "African / International",
+    "skinTone": "dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "close-cropped hair",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0059",
+    "url": "/assets/rookie_faces/rookie_face_0059.png",
+    "status": "keep",
+    "appearancePool": "White",
+    "skinTone": "light",
+    "hairTextureGroup": "straight/wavy",
+    "defaultHairStyle": "short brown hair",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0060",
+    "url": "/assets/rookie_faces/rookie_face_0060.png",
+    "status": "keep",
+    "appearancePool": "White",
+    "skinTone": "light",
+    "hairTextureGroup": "straight/wavy",
+    "defaultHairStyle": "short blond hair",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0061",
+    "url": "/assets/rookie_faces/rookie_face_0061.png",
+    "status": "keep",
+    "appearancePool": "White",
+    "skinTone": "light",
+    "hairTextureGroup": "straight/wavy",
+    "defaultHairStyle": "medium brown hair",
+    "defaultFacialHair": "light beard",
+    "expression": "neutral",
+    "quality": "usable - crop slightly larger"
+  },
+  {
+    "id": "rookie_face_0062",
+    "url": "/assets/rookie_faces/rookie_face_0062.png",
+    "status": "keep",
+    "appearancePool": "White",
+    "skinTone": "light",
+    "hairTextureGroup": "straight/wavy",
+    "defaultHairStyle": "short brown hair",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0063",
+    "url": "/assets/rookie_faces/rookie_face_0063.png",
+    "status": "keep",
+    "appearancePool": "White",
+    "skinTone": "light",
+    "hairTextureGroup": "straight/wavy",
+    "defaultHairStyle": "short brown hair",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0064",
+    "url": "/assets/rookie_faces/rookie_face_0064.png",
+    "status": "keep",
+    "appearancePool": "White",
+    "skinTone": "light",
+    "hairTextureGroup": "straight/wavy",
+    "defaultHairStyle": "short brown hair",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0084",
+    "url": "/assets/rookie_faces/rookie_face_0084.png",
+    "status": "keep",
+    "appearancePool": "Mixed / Pacific Islander",
+    "skinTone": "medium",
+    "hairTextureGroup": "straight/wavy",
+    "defaultHairStyle": "short black hair",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0085",
+    "url": "/assets/rookie_faces/rookie_face_0085.png",
+    "status": "keep",
+    "appearancePool": "Mixed / Black",
+    "skinTone": "light-brown",
+    "hairTextureGroup": "curly/coily",
+    "defaultHairStyle": "short curls",
+    "defaultFacialHair": "light mustache",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0094",
+    "url": "/assets/rookie_faces/rookie_face_0094.png",
+    "status": "keep",
+    "appearancePool": "East Asian",
+    "skinTone": "light-medium",
+    "hairTextureGroup": "straight",
+    "defaultHairStyle": "short black hair",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0095",
+    "url": "/assets/rookie_faces/rookie_face_0095.png",
+    "status": "keep",
+    "appearancePool": "East Asian",
+    "skinTone": "light-medium",
+    "hairTextureGroup": "straight",
+    "defaultHairStyle": "short black hair",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0106",
+    "url": "/assets/rookie_faces/rookie_face_0106.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "medium-dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "short locs/twists",
+    "defaultFacialHair": "light facial hair",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0107",
+    "url": "/assets/rookie_faces/rookie_face_0107.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "short fade",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0108",
+    "url": "/assets/rookie_faces/rookie_face_0108.png",
+    "status": "keep",
+    "appearancePool": "Mixed / Black",
+    "skinTone": "light-brown",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "cornrows/braids",
+    "defaultFacialHair": "light goatee",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0109",
+    "url": "/assets/rookie_faces/rookie_face_0109.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "medium-dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "high curls",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0110",
+    "url": "/assets/rookie_faces/rookie_face_0110.png",
+    "status": "keep",
+    "appearancePool": "African / International",
+    "skinTone": "very-dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "close-cropped hair",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0111",
+    "url": "/assets/rookie_faces/rookie_face_0111.png",
+    "status": "keep",
+    "appearancePool": "White",
+    "skinTone": "light",
+    "hairTextureGroup": "straight/wavy",
+    "defaultHairStyle": "short brown hair",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0112",
+    "url": "/assets/rookie_faces/rookie_face_0112.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "light-brown",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "short fade",
+    "defaultFacialHair": "goatee",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0113",
+    "url": "/assets/rookie_faces/rookie_face_0113.png",
+    "status": "keep",
+    "appearancePool": "White",
+    "skinTone": "light",
+    "hairTextureGroup": "straight/wavy",
+    "defaultHairStyle": "dyed blond messy hair",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0114",
+    "url": "/assets/rookie_faces/rookie_face_0114.png",
+    "status": "keep",
+    "appearancePool": "East Asian",
+    "skinTone": "light-medium",
+    "hairTextureGroup": "straight",
+    "defaultHairStyle": "medium black hair",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0115",
+    "url": "/assets/rookie_faces/rookie_face_0115.png",
+    "status": "keep",
+    "appearancePool": "East Asian",
+    "skinTone": "light-medium",
+    "hairTextureGroup": "straight",
+    "defaultHairStyle": "medium black hair",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0121",
+    "url": "/assets/rookie_faces/rookie_face_0121.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "medium-dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "short dreads/twists",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "realistic - average/rougher face"
+  },
+  {
+    "id": "rookie_face_0122",
+    "url": "/assets/rookie_faces/rookie_face_0122.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "short dreads/twists",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "realistic - average/rougher face"
+  },
+  {
+    "id": "rookie_face_0123",
+    "url": "/assets/rookie_faces/rookie_face_0123.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "medium-dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "freeform dreads",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "realistic - average/rougher face"
+  },
+  {
+    "id": "rookie_face_0124",
+    "url": "/assets/rookie_faces/rookie_face_0124.png",
+    "status": "keep",
+    "appearancePool": "Mixed / Black",
+    "skinTone": "light-brown",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "cornrows",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "realistic - average/rougher face"
+  },
+  {
+    "id": "rookie_face_0125",
+    "url": "/assets/rookie_faces/rookie_face_0125.png",
+    "status": "keep",
+    "appearancePool": "African / International",
+    "skinTone": "dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "medium twists",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "realistic - average/rougher face"
+  },
+  {
+    "id": "rookie_face_0126",
+    "url": "/assets/rookie_faces/rookie_face_0126.png",
+    "status": "keep",
+    "appearancePool": "Latino / Mixed",
+    "skinTone": "tan",
+    "hairTextureGroup": "curly/wavy",
+    "defaultHairStyle": "messy curls",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "realistic - average/rougher face"
+  },
+  {
+    "id": "rookie_face_0127",
+    "url": "/assets/rookie_faces/rookie_face_0127.png",
+    "status": "keep",
+    "appearancePool": "White",
+    "skinTone": "light",
+    "hairTextureGroup": "straight/wavy",
+    "defaultHairStyle": "messy brown hair",
+    "defaultFacialHair": "light stubble",
+    "expression": "neutral",
+    "quality": "realistic - average/rougher face"
+  },
+  {
+    "id": "rookie_face_0128",
+    "url": "/assets/rookie_faces/rookie_face_0128.png",
+    "status": "keep",
+    "appearancePool": "White",
+    "skinTone": "light",
+    "hairTextureGroup": "straight/wavy",
+    "defaultHairStyle": "messy brown hair",
+    "defaultFacialHair": "light stubble",
+    "expression": "neutral",
+    "quality": "realistic - average/rougher face"
+  },
+  {
+    "id": "rookie_face_0129",
+    "url": "/assets/rookie_faces/rookie_face_0129.png",
+    "status": "keep",
+    "appearancePool": "Latino / Mixed",
+    "skinTone": "tan",
+    "hairTextureGroup": "curly/wavy",
+    "defaultHairStyle": "short curls",
+    "defaultFacialHair": "faint stubble",
+    "expression": "neutral",
+    "quality": "realistic - average/rougher face"
+  },
+  {
+    "id": "rookie_face_0130",
+    "url": "/assets/rookie_faces/rookie_face_0130.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "medium-dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "short fade",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "realistic - average/rougher face"
+  },
+  {
+    "id": "rookie_face_0131",
+    "url": "/assets/rookie_faces/rookie_face_0131.png",
+    "status": "keep",
+    "appearancePool": "Black",
+    "skinTone": "medium-dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "short fade",
+    "defaultFacialHair": "none",
+    "expression": "neutral",
+    "quality": "realistic - average/rougher face"
+  },
+  {
+    "id": "rookie_face_0132",
+    "url": "/assets/rookie_faces/rookie_face_0132.png",
+    "status": "keep",
+    "appearancePool": "Mixed / Black",
+    "skinTone": "light-brown",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "cornrows",
+    "defaultFacialHair": "light goatee",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0133",
+    "url": "/assets/rookie_faces/rookie_face_0133.png",
+    "status": "keep",
+    "appearancePool": "White",
+    "skinTone": "light",
+    "hairTextureGroup": "straight/wavy",
+    "defaultHairStyle": "dyed blond messy hair",
+    "defaultFacialHair": "none",
+    "expression": "smile",
+    "quality": "strong"
+  },
+  {
+    "id": "rookie_face_0134",
+    "url": "/assets/rookie_faces/rookie_face_0134.png",
+    "status": "keep",
+    "appearancePool": "African / International",
+    "skinTone": "dark",
+    "hairTextureGroup": "coily",
+    "defaultHairStyle": "starter locs/twists",
+    "defaultFacialHair": "light facial hair",
+    "expression": "smile",
+    "quality": "strong"
+  }
 ]

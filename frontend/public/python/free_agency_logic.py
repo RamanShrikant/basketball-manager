@@ -4135,10 +4135,13 @@ def build_contract_status_row(
     status = "signed"
     if not contract:
         status = "no_contract"
+    elif active_option:
+        # Source-of-truth parity with apply_offseason_contract_decisions:
+        # an active option must always surface as an option decision row,
+        # even if the saved salary slot is missing/zero in an older contract shape.
+        status = f"{active_option['type']}_option"
     elif salary_this_year <= 0:
         status = "expired"
-    elif active_option:
-        status = f"{active_option['type']}_option"
 
     row = {
         "playerId": player.get("id"),
@@ -4716,7 +4719,10 @@ def preview_offseason_contracts(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None
 ) -> Dict[str, Any]:
-    season_year = get_operating_season_year(league_data)
+    # Player/team options are a pre-free-agency step. Keep preview aligned
+    # with apply_offseason_contract_decisions by resolving the current
+    # offseason year, even if a stale freeAgencyState is still marked active.
+    season_year = get_current_season_year(league_data)
 
     expired_contracts = []
     player_options = []
@@ -5090,6 +5096,7 @@ def apply_offseason_contract_decisions(
                         return {
                             "ok": False,
                             "reason": f"Missing team option decision for {player.get('name')}.",
+                            "preview": preview,
                         }
                     decision = {
                         "exerciseOption": exercise,
@@ -12611,31 +12618,14 @@ def sign_free_agent(
 
     post_market_cleanup_mode = should_enforce_post_market_cleanup_rules(updated, state)
     if post_market_cleanup_mode:
-        preview_contract = build_contract_from_offer(
-            updated,
-            offer or {
-                "startYear": get_operating_season_year(updated),
-                "salaryByYear": [MIN_DEAL],
-                "option": None,
-            },
-        )
-
-        if len(get_team_players(team)) >= get_min_roster_target(updated):
+        # Post-market free agency should still behave like offseason team building.
+        # Teams may temporarily overfill until the offseason controlled-player limit,
+        # then the roster must be trimmed before progression / season start.
+        controlled_count = get_team_controlled_player_count(team)
+        if controlled_count >= OFFSEASON_CONTROLLED_MAX:
             return {
                 "ok": False,
-                "reason": f"{team_name} is already at or above the minimum roster size.",
-            }
-
-        if not is_emergency_fill_candidate(player):
-            return {
-                "ok": False,
-                "reason": "After the live market closes, only low-end emergency roster-fill players can be signed directly.",
-            }
-
-        if not is_minimum_contract_for_current_year(updated, preview_contract):
-            return {
-                "ok": False,
-                "reason": "After the live market closes, only minimum contracts are allowed.",
+                "reason": f"{team_name} is at the offseason controlled-player limit ({OFFSEASON_CONTROLLED_MAX}).",
             }
 
     evaluation = evaluate_offer(updated, team_name, player, offer)

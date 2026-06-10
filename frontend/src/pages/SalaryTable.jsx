@@ -852,6 +852,35 @@ export default function SalaryTable() {
       });
   }, [deadCapRows, leagueData, selectedTeam?.name, currentSeasonYear]);
 
+
+  const getSalaryRowCurrentDisplayValue = (row) => {
+    const contract = row?.contract || {};
+    const startYear = Number(contract?.startYear || currentSeasonYear);
+    const salaryByYear = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+    const idx = currentSeasonYear - startYear;
+
+    if (idx >= 0 && idx < salaryByYear.length) {
+      return Number(salaryByYear[idx] || 0);
+    }
+
+    return Number(salaryByYear?.[0] || 0);
+  };
+
+  const sortSalaryRowsByContractValue = (rows = []) => {
+    return [...rows].sort((a, b) => {
+      const currentSalaryDiff = getSalaryRowCurrentDisplayValue(b) - getSalaryRowCurrentDisplayValue(a);
+      if (currentSalaryDiff !== 0) return currentSalaryDiff;
+
+      const totalDiff = Number(b?.totalRemaining || 0) - Number(a?.totalRemaining || 0);
+      if (totalDiff !== 0) return totalDiff;
+
+      const overallDiff = Number(b?.overall || 0) - Number(a?.overall || 0);
+      if (overallDiff !== 0) return overallDiff;
+
+      return String(a?.name || "").localeCompare(String(b?.name || ""));
+    });
+  };
+
   const players = useMemo(() => {
     const pls = selectedTeam?.players || [];
 
@@ -936,7 +965,7 @@ export default function SalaryTable() {
       deadCapInfo: row,
     }));
 
-    return [...rosterRows, ...twoWayRows, ...stashRows, ...deadRows, ...holdRows];
+    return sortSalaryRowsByContractValue([...rosterRows, ...twoWayRows, ...stashRows, ...deadRows, ...holdRows]);
   }, [selectedTeam, currentSeasonYear, capHoldRows, deadCapPlayerRows]);
 
   const yearColumns = useMemo(() => {
@@ -1318,7 +1347,7 @@ export default function SalaryTable() {
       deadCapInfo: row,
     }));
 
-    return [...rosterRows, ...twoWayRows, ...stashRows, ...deadRows, ...holdRows];
+    return sortSalaryRowsByContractValue([...rosterRows, ...twoWayRows, ...stashRows, ...deadRows, ...holdRows]);
   };
 
   const buildSalaryTableSnapshotForTeam = (team) => {

@@ -43,32 +43,50 @@ function getRosterCounts(leagueData, teamName) {
   };
 }
 
-function normalizeDecisionForSlots(decision, counts) {
-  let next = decision || "two_way";
-  const controlledReplacementBlocked = Number(counts.controlledCount || 0) > OFFSEASON_CONTROLLED_MAX;
-  if (next === "draft_rights") next = controlledReplacementBlocked ? "release" : "stash";
+const CONTROLLED_ROOKIE_DECISIONS = new Set(["standard", "two_way", "stash"]);
 
-  // Each pending rookie already uses a controlled slot. A standard/two-way/stash
-  // decision replaces that pending slot, so only teams already above 20 should
-  // be forced into release from this screen.
-  if (next === "standard" && controlledReplacementBlocked) next = counts.twoWaySlotsOpen > 0 ? "two_way" : "release";
-  if (next === "two_way" && (counts.twoWaySlotsOpen <= 0 || controlledReplacementBlocked)) next = controlledReplacementBlocked ? "release" : "stash";
-  if (next === "stash" && controlledReplacementBlocked) next = "release";
+function normalizeDecisionValue(decision) {
+  let next = String(decision || "two_way").toLowerCase();
+  if (next === "draft_rights") next = "stash";
   if (!["standard", "two_way", "stash", "release"].includes(next)) next = "release";
+  return next;
+}
+
+function normalizeDecisionForSlots(decision, runningCounts) {
+  let next = normalizeDecisionValue(decision);
+
+  // Rookie decisions are a batch replacement. Pending rookies already occupy
+  // controlled slots, so availability should be based on the roster after all
+  // pending rookies are removed, not the raw pre-resolution controlled count.
+  const controlledFull = Number(runningCounts.controlledCount || 0) >= OFFSEASON_CONTROLLED_MAX;
+  const twoWayFull = Number(runningCounts.twoWayCount || 0) >= TWO_WAY_MAX;
+
+  if (next === "two_way" && twoWayFull) next = "stash";
+  if (CONTROLLED_ROOKIE_DECISIONS.has(next) && controlledFull) next = "release";
+
   return next;
 }
 
 function buildInitialDecisions(rows, counts) {
   const initial = {};
-  const running = { ...counts };
+  const running = {
+    standardCount: Number(counts.standardCount || 0),
+    twoWayCount: Number(counts.twoWayCount || 0),
+    stashCount: Number(counts.stashCount || 0),
+    controlledCount: Math.max(
+      0,
+      Number(counts.controlledCount || 0) - Number(counts.pendingCount || 0)
+    ),
+  };
 
   for (const row of rows || []) {
     const decision = normalizeDecisionForSlots(row.recommendedDecision, running);
     initial[row.playerId] = decision;
 
-    if (decision === "two_way") {
-      running.twoWaySlotsOpen = Math.max(0, running.twoWaySlotsOpen - 1);
-    }
+    if (decision === "standard") running.standardCount += 1;
+    if (decision === "two_way") running.twoWayCount += 1;
+    if (decision === "stash") running.stashCount += 1;
+    if (CONTROLLED_ROOKIE_DECISIONS.has(decision)) running.controlledCount += 1;
   }
 
   return initial;
@@ -131,16 +149,27 @@ function formatPick(row) {
   return `#${row.draftPick}`;
 }
 
-function RookieCard({ row, decision, onDecisionChange, rosterCounts, animationIndex = 0 }) {
+function RookieCard({
+  row,
+  decision,
+  onDecisionChange,
+  rosterCounts,
+  getProjectedCountsForDecision,
+  animationIndex = 0,
+}) {
   const imageUrl = getImageUrl(row);
-  // Each pending rookie already counts toward the 20-player offseason control
-  // number. Picking standard/two-way/stash replaces the pending slot instead of
-  // adding a brand-new controlled player, so only teams already above 20 should
-  // block controlled choices here.
-  const controlledReplacementBlocked = rosterCounts.controlledCount > OFFSEASON_CONTROLLED_MAX;
-  const standardBlocked = controlledReplacementBlocked && decision !== "standard";
-  const twoWayBlocked = (rosterCounts.twoWaySlotsOpen <= 0 || controlledReplacementBlocked) && decision !== "two_way";
-  const stashBlocked = controlledReplacementBlocked && decision !== "stash";
+  const standardProjection = getProjectedCountsForDecision(row.playerId, "standard");
+  const twoWayProjection = getProjectedCountsForDecision(row.playerId, "two_way");
+  const stashProjection = getProjectedCountsForDecision(row.playerId, "stash");
+
+  // Options are blocked only when that specific choice would make the final
+  // projected rookie-signing batch illegal. This lets a team at 21 raw controlled
+  // players sign/stash one rookie while releasing another to finish at 20.
+  const standardBlocked = standardProjection.controlledCount > OFFSEASON_CONTROLLED_MAX;
+  const twoWayBlocked =
+    twoWayProjection.twoWayCount > TWO_WAY_MAX ||
+    twoWayProjection.controlledCount > OFFSEASON_CONTROLLED_MAX;
+  const stashBlocked = stashProjection.controlledCount > OFFSEASON_CONTROLLED_MAX;
 
   return (
     <div
@@ -227,10 +256,41 @@ export default function RookieSignings() {
     return getRosterCounts(workingLeagueData, selectedTeamName);
   }, [workingLeagueData, selectedTeamName]);
 
-  const projectedStandardCount = rosterCounts.standardCount + Object.values(decisions).filter((x) => x === "standard").length;
-  const projectedTwoWayCount = rosterCounts.twoWayCount + Object.values(decisions).filter((x) => x === "two_way").length;
-  const projectedStashCount = rosterCounts.stashCount + Object.values(decisions).filter((x) => x === "stash").length;
-  const projectedControlledCount = rosterCounts.controlledCount - rosterCounts.pendingCount + Object.values(decisions).filter((x) => x === "standard" || x === "two_way" || x === "stash").length;
+  const getProjectedCountsFromDecisions = (nextDecisions = decisions) => {
+    const selectedDecisions = userRows.map((row) =>
+      normalizeDecisionValue(nextDecisions[row.playerId] || row.recommendedDecision || "two_way")
+    );
+
+    const standardChoices = selectedDecisions.filter((x) => x === "standard").length;
+    const twoWayChoices = selectedDecisions.filter((x) => x === "two_way").length;
+    const stashChoices = selectedDecisions.filter((x) => x === "stash").length;
+    const controlledChoices = selectedDecisions.filter((x) =>
+      CONTROLLED_ROOKIE_DECISIONS.has(x)
+    ).length;
+
+    return {
+      standardCount: rosterCounts.standardCount + standardChoices,
+      twoWayCount: rosterCounts.twoWayCount + twoWayChoices,
+      stashCount: rosterCounts.stashCount + stashChoices,
+      controlledCount: Math.max(
+        0,
+        rosterCounts.controlledCount - rosterCounts.pendingCount
+      ) + controlledChoices,
+    };
+  };
+
+  const getProjectedCountsForDecision = (playerId, nextDecision) => {
+    return getProjectedCountsFromDecisions({
+      ...decisions,
+      [playerId]: normalizeDecisionValue(nextDecision),
+    });
+  };
+
+  const projectedCounts = getProjectedCountsFromDecisions(decisions);
+  const projectedStandardCount = projectedCounts.standardCount;
+  const projectedTwoWayCount = projectedCounts.twoWayCount;
+  const projectedStashCount = projectedCounts.stashCount;
+  const projectedControlledCount = projectedCounts.controlledCount;
 
   const decisionSummary = useMemo(() => {
     const counts = { standard: 0, two_way: 0, stash: 0, release: 0 };
@@ -460,6 +520,7 @@ export default function RookieSignings() {
                   decision={decisions[row.playerId]}
                   onDecisionChange={updateDecision}
                   rosterCounts={rosterCounts}
+                  getProjectedCountsForDecision={getProjectedCountsForDecision}
                 />
               ))
             ) : (

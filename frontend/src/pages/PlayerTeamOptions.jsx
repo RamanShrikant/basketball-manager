@@ -915,6 +915,9 @@ const filteredExpiredContracts = useMemo(() => {
       );
 
       if (!res?.ok || !res?.leagueData) {
+        if (res?.preview) {
+          setPreviewData(res.preview);
+        }
         setError(res?.reason || "Failed to apply option decisions.");
         return;
       }

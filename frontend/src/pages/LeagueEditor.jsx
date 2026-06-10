@@ -1,5 +1,6 @@
 // LeagueEditor.jsx
 import React, { useState, useEffect, useMemo } from "react";
+import FaceDNAEditor from "../components/FaceDNAEditor";
 
 const DRAFT_CLASSES_STORAGE_KEY = "bm_custom_draft_classes_v1";
 const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
@@ -11,6 +12,73 @@ function safeJSON(raw, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+
+// PLAYER_CREATOR_FACE_LIBRARY_V1
+// Free, local-only portrait creator. It loads your realistic PNG face library from public/assets/rookie_faces.
+const PLAYER_CREATOR_STORAGE_KEY = "bm_realistic_face_library_presets_v1";
+const ROOKIE_FACE_MANIFEST_URL = "/assets/rookie_faces/rookie_faces_manifest.json";
+const FACE_DNA_VERSION = "bm_face_library_dna_v1";
+
+const APPEARANCE_POOL_OPTIONS = [
+  "Black",
+  "White",
+  "Latino",
+  "East Asian",
+  "South Asian",
+  "Middle Eastern / North African",
+  "Mixed Black/White",
+  "Mixed Black/Latino",
+  "Mixed White/Asian",
+  "Mixed / Flexible",
+  "Unknown",
+];
+
+const FACE_STAGE_OPTIONS = ["rookie", "young", "prime", "veteran", "old"];
+
+function createDefaultFaceLibraryCreator(overrides = {}) {
+  return {
+    name: "",
+    age: 19,
+    position: "SF",
+    height: 79,
+    school: "",
+    faceId: "",
+    stage: "rookie",
+    appearancePool: "Unknown",
+    skinTone: "",
+    hairStyle: "",
+    facialHair: "",
+    expression: "",
+    notes: "",
+    ...overrides,
+  };
+}
+
+function normalizeFaceManifestRow(row = {}) {
+  const id = String(row.id || row.faceId || row.portraitId || "").trim();
+  const url = String(row.url || row.file || row.path || "").trim();
+
+  if (!id || !url) return null;
+
+  return {
+    id,
+    url,
+    status: row.status || "keep",
+    appearancePool: row.appearancePool || row.pool || row.ethnicityGroup || "Unknown",
+    skinTone: row.skinTone || "",
+    hairStyle: row.hairStyle || row.hair || "",
+    facialHair: row.facialHair || row.beard || "",
+    expression: row.expression || "",
+    notes: row.notes || "",
+  };
+}
+
+function creatorNumber(value, fallback, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
 }
 
 /* ------------------------------------------------------------
@@ -59,6 +127,21 @@ export default function LeagueEditor() {
   const [draftClassYear, setDraftClassYear] = useState(2026);
   const [draftClasses, setDraftClasses] = useState({});
   const [draftClassStatus, setDraftClassStatus] = useState("");
+
+  // Realistic face-library player creator. This is separate from teams and uses your local PNG manifest.
+  const [rookieFaces, setRookieFaces] = useState([]);
+  const [creatorForm, setCreatorForm] = useState(createDefaultFaceLibraryCreator());
+  const [creatorSaved, setCreatorSaved] = useState([]);
+  const [creatorStatus, setCreatorStatus] = useState("");
+
+  const selectedCreatorFace = useMemo(() => {
+    if (!rookieFaces.length) return null;
+    return rookieFaces.find((face) => face.id === creatorForm.faceId) || rookieFaces[0];
+  }, [rookieFaces, creatorForm.faceId]);
+
+  const updateCreatorForm = (patch = {}) => {
+    setCreatorForm((prev) => createDefaultFaceLibraryCreator({ ...prev, ...patch }));
+  };
 
   const allTeamsFlat = useMemo(() => {
     const out = [];
@@ -357,6 +440,7 @@ function initPlayer() {
     stamina: 75,
     potential: 75,
     headshot: "",
+    appearanceDNA: null,
     scoringRating: 50,
 
     // birthdays
@@ -1224,6 +1308,257 @@ const normalizePlayer = (p) => {
     setDraftClassStatus(`Cleared custom draft class ${seasonYear}.`);
   }
 
+
+  function syncCreatorFaceTags(face = selectedCreatorFace) {
+    if (!face) return;
+    setCreatorForm((prev) =>
+      createDefaultFaceLibraryCreator({
+        ...prev,
+        faceId: face.id,
+        appearancePool: prev.appearancePool && prev.appearancePool !== "Unknown" ? prev.appearancePool : face.appearancePool || "Unknown",
+        skinTone: prev.skinTone || face.skinTone || "",
+        hairStyle: prev.hairStyle || face.hairStyle || "",
+        facialHair: prev.facialHair || face.facialHair || "",
+        expression: prev.expression || face.expression || "",
+        notes: prev.notes || face.notes || "",
+      })
+    );
+  }
+
+  function randomizeCreatorFace() {
+    if (!rookieFaces.length) {
+      setCreatorStatus("No rookie faces loaded yet. Check /assets/rookie_faces/rookie_faces_manifest.json.");
+      return;
+    }
+
+    const face = rookieFaces[Math.floor(Math.random() * rookieFaces.length)];
+    setCreatorForm((prev) =>
+      createDefaultFaceLibraryCreator({
+        ...prev,
+        faceId: face.id,
+        appearancePool: face.appearancePool || prev.appearancePool || "Unknown",
+        skinTone: face.skinTone || prev.skinTone || "",
+        hairStyle: face.hairStyle || prev.hairStyle || "",
+        facialHair: face.facialHair || prev.facialHair || "",
+        expression: face.expression || prev.expression || "",
+        notes: face.notes || prev.notes || "",
+      })
+    );
+    setCreatorStatus(`Selected ${face.id}.`);
+  }
+
+  function buildPlayerFromCreator(destination = "creator") {
+    const face = selectedCreatorFace;
+
+    if (!face) {
+      alert("No face selected. Make sure the rookie face manifest loaded correctly.");
+      return null;
+    }
+
+    const base = initPlayer();
+    const age = creatorNumber(creatorForm.age, 19, 18, 45);
+    const height = creatorNumber(creatorForm.height, 79, 65, 90);
+    const pos = ["PG", "SG", "SF", "PF", "C"].includes(creatorForm.position)
+      ? creatorForm.position
+      : "SF";
+    const name = String(creatorForm.name || "Created Rookie").trim() || "Created Rookie";
+
+    const raw = {
+      ...base,
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      age,
+      height,
+      pos,
+      headshot: face.url,
+      image: face.url,
+      img: face.url,
+      portraitId: face.id,
+      portraitFamilyId: face.id,
+      portraitVariant: creatorForm.stage || "rookie",
+      appearanceDNA: {
+        version: FACE_DNA_VERSION,
+        source: "realistic_face_library",
+        faceId: face.id,
+        stage: creatorForm.stage || "rookie",
+        imageUrl: face.url,
+        appearancePool: creatorForm.appearancePool || face.appearancePool || "Unknown",
+        skinTone: creatorForm.skinTone || face.skinTone || "",
+        hairStyle: creatorForm.hairStyle || face.hairStyle || "",
+        facialHair: creatorForm.facialHair || face.facialHair || "",
+        expression: creatorForm.expression || face.expression || "",
+        notes: creatorForm.notes || face.notes || "",
+      },
+      meta: buildDefaultMeta({
+        acquiredVia: destination,
+        proSeasons: 0,
+        yearsWithCurrentTeam: 0,
+      }),
+      rights: buildDefaultRights(),
+    };
+
+    const p = normalizePlayer(raw);
+    const { off, def } = calcOffDef(p.attrs, p.pos, p.name, p.height);
+
+    return {
+      ...p,
+      overall: calcOverall(p.attrs, p.pos),
+      offRating: off,
+      defRating: def,
+      stamina: calcStamina(p.age, p.attrs[ATH]),
+      scoringRating: calcScoringRating(p.pos, p.attrs[0], p.attrs[1], p.attrs[2]),
+    };
+  }
+
+  function saveCreatorPreset() {
+    const face = selectedCreatorFace;
+
+    if (!face) {
+      setCreatorStatus("No face selected. Check the rookie face manifest path.");
+      return;
+    }
+
+    const nextPreset = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      savedAt: new Date().toISOString(),
+      ...creatorForm,
+      faceId: face.id,
+      headshot: face.url,
+      appearanceDNA: {
+        version: FACE_DNA_VERSION,
+        source: "realistic_face_library",
+        faceId: face.id,
+        stage: creatorForm.stage || "rookie",
+        imageUrl: face.url,
+        appearancePool: creatorForm.appearancePool || face.appearancePool || "Unknown",
+        skinTone: creatorForm.skinTone || face.skinTone || "",
+        hairStyle: creatorForm.hairStyle || face.hairStyle || "",
+        facialHair: creatorForm.facialHair || face.facialHair || "",
+        expression: creatorForm.expression || face.expression || "",
+        notes: creatorForm.notes || face.notes || "",
+      },
+    };
+
+    const next = [nextPreset, ...(creatorSaved || [])].slice(0, 80);
+    setCreatorSaved(next);
+    localStorage.setItem(PLAYER_CREATOR_STORAGE_KEY, JSON.stringify(next));
+    setCreatorStatus(`Saved face-library preset${creatorForm.name ? ` for ${creatorForm.name}` : ""}.`);
+  }
+
+  function addCreatorPlayerToFreeAgents() {
+    const p = buildPlayerFromCreator("free_agency");
+    if (!p) return;
+
+    const faPlayer = normalizePlayer({
+      ...p,
+      contract: null,
+      rights: buildDefaultRights({ heldByTeam: null }),
+      meta: buildDefaultMeta({
+        ...(p.meta || {}),
+        acquiredVia: "free_agency",
+        proSeasons: 0,
+        yearsWithCurrentTeam: 0,
+      }),
+    });
+
+    setFreeAgents((prev) => [faPlayer, ...(prev || [])]);
+    setCreatorStatus(`Added ${faPlayer.name} to Free Agents with ${faPlayer.appearanceDNA?.faceId || "selected face"}.`);
+  }
+
+  function addCreatorPlayerToDraftClass() {
+    const p = buildPlayerFromCreator("draft_class_editor");
+    if (!p) return;
+
+    updateDraftClassYear(draftClassYear, (current) => {
+      const copy = JSON.parse(JSON.stringify(current || []));
+      const index = copy.length;
+      const source = creatorForm.school || p.school || "";
+
+      copy.push(
+        normalizeDraftProspect(
+          {
+            ...p,
+            contract: null,
+            school: source,
+            college: source,
+            academy: source,
+            academyName: source,
+            sourceName: source,
+            draftSource: source,
+            draftClassYear,
+            draftProjection: index + 1,
+            trueRank: index + 1,
+            rights: buildDefaultRights({ rookieScale: true }),
+            meta: buildDefaultMeta({
+              draftYear: draftClassYear,
+              acquiredVia: "draft_class_editor",
+              proSeasons: 0,
+              yearsWithCurrentTeam: 0,
+            }),
+          },
+          index,
+          draftClassYear
+        )
+      );
+
+      return copy.map((row, i) => normalizeDraftProspect(row, i, draftClassYear));
+    });
+
+    setDraftClassStatus(`Added ${p.name} to the ${draftClassYear} draft class.`);
+    setCreatorStatus(`Added ${p.name} to the ${draftClassYear} draft class.`);
+  }
+
+  useEffect(() => {
+    const saved = safeJSON(localStorage.getItem(PLAYER_CREATOR_STORAGE_KEY), []);
+    setCreatorSaved(Array.isArray(saved) ? saved : []);
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+
+    fetch(ROOKIE_FACE_MANIFEST_URL)
+      .then((res) => {
+        if (!res.ok) throw new Error(`Could not load ${ROOKIE_FACE_MANIFEST_URL}`);
+        return res.json();
+      })
+      .then((data) => {
+        if (!alive) return;
+
+        const rows = Array.isArray(data)
+          ? data.map(normalizeFaceManifestRow).filter(Boolean)
+          : [];
+
+        setRookieFaces(rows);
+
+        if (rows.length) {
+          setCreatorForm((prev) =>
+            createDefaultFaceLibraryCreator({
+              ...prev,
+              faceId: prev.faceId || rows[0].id,
+              appearancePool: prev.appearancePool && prev.appearancePool !== "Unknown" ? prev.appearancePool : rows[0].appearancePool || "Unknown",
+              skinTone: prev.skinTone || rows[0].skinTone || "",
+              hairStyle: prev.hairStyle || rows[0].hairStyle || "",
+              facialHair: prev.facialHair || rows[0].facialHair || "",
+              expression: prev.expression || rows[0].expression || "",
+              notes: prev.notes || rows[0].notes || "",
+            })
+          );
+          setCreatorStatus(`Loaded ${rows.length} rookie face assets from the manifest.`);
+        } else {
+          setCreatorStatus("Manifest loaded, but it did not contain any usable face rows.");
+        }
+      })
+      .catch((err) => {
+        if (!alive) return;
+        setRookieFaces([]);
+        setCreatorStatus(`${err?.message || "Could not load rookie face manifest."} Make sure it is saved at public/assets/rookie_faces/rookie_faces_manifest.json.`);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   /* ---------------- Auto-Save + Load ---------------- */
   useEffect(() => {
     const saved = localStorage.getItem("leagueData");
@@ -1636,8 +1971,8 @@ const normalizePlayer = (p) => {
       </div>
 
       {/* FIX 5: Pool Toggle */}
-      <div className="flex justify-center gap-4">
-        {["TEAMS", "FA", "DRAFT"].map((p) => (
+      <div className="flex justify-center gap-4 flex-wrap">
+        {["TEAMS", "PLAYER_CREATOR", "FA", "DRAFT"].map((p) => (
           <button
             key={p}
             onClick={() => setSelectedPool(p)}
@@ -1645,7 +1980,13 @@ const normalizePlayer = (p) => {
               selectedPool === p ? "bg-orange-600 text-white" : "bg-gray-200"
             }`}
           >
-            {p === "TEAMS" ? "Teams" : p === "FA" ? "Free Agents" : "Draft Classes"}
+            {p === "TEAMS"
+              ? "Teams"
+              : p === "PLAYER_CREATOR"
+              ? "Player Creator"
+              : p === "FA"
+              ? "Free Agents"
+              : "Draft Classes"}
           </button>
         ))}
       </div>
@@ -1688,6 +2029,12 @@ const normalizePlayer = (p) => {
           >
             Add Team
           </button>
+        </div>
+      )}
+
+      {selectedPool === "PLAYER_CREATOR" && (
+        <div className="max-w-7xl mx-auto border rounded-2xl p-8 bg-white shadow-lg">
+          <FaceDNAEditor />
         </div>
       )}
 
