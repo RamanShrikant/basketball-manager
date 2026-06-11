@@ -10214,14 +10214,18 @@ def is_incumbent_retention_priority(player: Dict[str, Any], team_name: Optional[
 
 
 def get_team_controlled_player_count(team: Dict[str, Any]) -> int:
-    """Standard + two-way + stash + pending rookies for offseason carrying capacity."""
+    """Standard + two-way + pending rookies for display/CPU planning.
+
+    Stashes are unlimited draft-rights style holds and do not consume the old
+    offseason controlled count. User signings are also allowed to exceed this
+    planning count until Calendar simulation starts.
+    """
     if not isinstance(team, dict):
         return 0
 
     return (
         len(team.get("players") or [])
         + len(team.get("twoWayPlayers") or [])
-        + len(team.get("stashPlayers") or [])
         + len(team.get("pendingRookieSignings") or [])
     )
 
@@ -10290,21 +10294,21 @@ def can_add_standard_player_during_free_agency(
 ) -> Tuple[bool, str]:
     """Roster-add guard for live/offseason free agency.
 
-    User signings can temporarily overfill up to the offseason controlled max.
-    CPU teams can overfill only for priority assets. Game simulation/finalization
-    remains the hard enforcement point.
+    User signings have no offseason roster-count blocker anymore. CPU teams keep
+    the conservative 20-player planning guard unless the target is a priority
+    asset. Game simulation remains the hard enforcement point.
     """
     standard_count = len(get_team_players(team))
     controlled_count = get_team_controlled_player_count(team)
 
+    if str(source or "").lower() == "user":
+        return True, "User offseason overfill allowed until Calendar simulation."
+
     if controlled_count >= OFFSEASON_CONTROLLED_MAX:
-        return False, f"{team_name} is at the offseason controlled-player limit ({OFFSEASON_CONTROLLED_MAX})."
+        return False, f"{team_name} is at the offseason controlled-player planning limit ({OFFSEASON_CONTROLLED_MAX})."
 
     if standard_count < get_roster_limit(league_data):
         return True, "Roster spot available."
-
-    if str(source or "").lower() == "user":
-        return True, "User offseason overfill allowed until season simulation."
 
     if is_priority_offseason_overfill_candidate(
         player = player,
@@ -12618,15 +12622,10 @@ def sign_free_agent(
 
     post_market_cleanup_mode = should_enforce_post_market_cleanup_rules(updated, state)
     if post_market_cleanup_mode:
-        # Post-market free agency should still behave like offseason team building.
-        # Teams may temporarily overfill until the offseason controlled-player limit,
-        # then the roster must be trimmed before progression / season start.
-        controlled_count = get_team_controlled_player_count(team)
-        if controlled_count >= OFFSEASON_CONTROLLED_MAX:
-            return {
-                "ok": False,
-                "reason": f"{team_name} is at the offseason controlled-player limit ({OFFSEASON_CONTROLLED_MAX}).",
-            }
+        # Post-market free agency is still offseason team building. The user can
+        # keep signing without roster-count blockers; Calendar will require a
+        # legal standard/two-way roster before any games are simulated.
+        pass
 
     evaluation = evaluate_offer(updated, team_name, player, offer)
     if not evaluation.get("ok"):

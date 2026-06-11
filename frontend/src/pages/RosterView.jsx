@@ -7,6 +7,17 @@ import styles from "./RosterView.module.css";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 
+const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
+
+function isOffseasonRosterRelaxed() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(OFFSEASON_STATE_KEY) || "{}");
+    return Boolean(raw?.active);
+  } catch {
+    return false;
+  }
+}
+
 export default function RosterView() {
   const { leagueData, selectedTeam, setSelectedTeam, setLeagueData } = useGame();
   const [workingLeagueData, setWorkingLeagueData] = useState(leagueData || null);
@@ -152,73 +163,193 @@ export default function RosterView() {
     return Boolean(a.name && b.name && a.name === b.name);
   };
 
+  const readNumberFromObject = (source, keys = []) => {
+    if (!source || typeof source !== "object") return null;
+
+    for (const key of keys) {
+      const value = Number(source?.[key]);
+      if (Number.isFinite(value)) return value;
+    }
+
+    return null;
+  };
+
   const getPlayerProSeasons = (player) => {
     const keys = [
       "proSeasons",
       "seasonsPro",
       "yearsPro",
       "yearsOfExperience",
+      "experience",
+      "nbaExperience",
+      "nbaServiceYears",
+      "serviceYears",
       "yoe",
     ];
 
-    for (const key of keys) {
-      const value = player?.[key];
-      if (value !== undefined && value !== null && value !== "") {
-        return Number(value) || 0;
-      }
-    }
+    const direct = readNumberFromObject(player, keys);
+    if (direct !== null) return direct;
 
     const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
-    for (const key of keys) {
-      const value = meta?.[key];
-      if (value !== undefined && value !== null && value !== "") {
-        return Number(value) || 0;
-      }
-    }
+    const fromMeta = readNumberFromObject(meta, keys);
+    if (fromMeta !== null) return fromMeta;
 
     return 0;
   };
 
-  const getPlayerRookieReferenceYear = (player) => {
-    const keys = [
+  const getTwoWayUsageInfo = (player) => {
+    const meta = player?.twoWayMeta && typeof player.twoWayMeta === "object" ? player.twoWayMeta : {};
+    const playerMeta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+
+    const used =
+      readNumberFromObject(meta, [
+        "twoWayYearsUsed",
+        "yearsUsed",
+        "seasonsUsed",
+        "twoWaySeasonsUsed",
+      ]) ??
+      readNumberFromObject(player, [
+        "twoWayYearsUsed",
+        "twoWaySeasonsUsed",
+      ]) ??
+      readNumberFromObject(playerMeta, [
+        "twoWayYearsUsed",
+        "twoWaySeasonsUsed",
+      ]) ??
+      0;
+
+    const max =
+      readNumberFromObject(meta, [
+        "maxTwoWayYears",
+        "maxYears",
+        "twoWayMaxYears",
+      ]) ??
+      readNumberFromObject(player, [
+        "maxTwoWayYears",
+        "twoWayMaxYears",
+      ]) ??
+      2;
+
+    return {
+      used: Math.max(0, Number(used || 0)),
+      max: Math.max(1, Number(max || 2)),
+      convertedToStandard:
+        Boolean(meta.convertedToStandardSeasonYear) ||
+        Boolean(meta.convertedToStandardByTeam) ||
+        Boolean(meta.forcedStandardSeasonYear) ||
+        Boolean(playerMeta.twoWayConvertedToStandard) ||
+        Boolean(player.twoWayConvertedToStandard),
+      forcedIneligible:
+        Boolean(player.twoWayIneligible) ||
+        Boolean(meta.twoWayIneligible) ||
+        Boolean(playerMeta.twoWayIneligible) ||
+        Boolean(meta.mustConvertToStandard) ||
+        Boolean(playerMeta.mustConvertToStandard),
+    };
+  };
+
+  const hasExhaustedTwoWayEligibility = (player) => {
+    const usage = getTwoWayUsageInfo(player);
+
+    if (usage.forcedIneligible || usage.convertedToStandard) return true;
+
+    return usage.used > 0 && usage.used >= usage.max;
+  };
+
+  const readSeasonYear = (source, keys) => {
+    if (!source || typeof source !== "object") return null;
+
+    for (const key of keys) {
+      const value = Number(source?.[key]);
+      if (Number.isFinite(value) && value > 1900) {
+        return { year: value, key };
+      }
+    }
+
+    return null;
+  };
+
+  const getPlayerTwoWayReference = (player) => {
+    const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+
+    // These fields represent the first NBA season. If the current season is
+    // two years after that display/start year, the player is still in his
+    // third season and should remain two-way eligible.
+    const rookieSeasonKeys = [
+      "nbaRookieSeasonYear",
+      "nba_rookie_season_year",
       "rookieYear",
       "rookie_year",
       "rookieSeason",
       "rookie_season",
       "rookieSeasonYear",
       "rookie_season_year",
-      "draftYear",
-      "draft_year",
     ];
 
-    for (const key of keys) {
-      const value = Number(player?.[key]);
-      if (Number.isFinite(value) && value > 1900) return value;
-    }
+    // Draft year is one year earlier than the first NBA display season for
+    // real-player imports such as Emoni Bates: draftYear 2023 maps to the
+    // 2023-24 season, which displays as 2024. So draftYear gets one extra year
+    // of offset compared with rookieSeasonYear.
+    const draftYearKeys = [
+      "draftYear",
+      "draft_year",
+      "draftClassYear",
+      "draft_class_year",
+      "draftSeasonYear",
+      "draft_season_year",
+    ];
 
-    const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
-    for (const key of keys) {
-      const value = Number(meta?.[key]);
-      if (Number.isFinite(value) && value > 1900) return value;
-    }
+    const rookieDirect = readSeasonYear(player, rookieSeasonKeys);
+    if (rookieDirect) return { ...rookieDirect, isDraftYear: false };
+
+    const rookieMeta = readSeasonYear(meta, rookieSeasonKeys);
+    if (rookieMeta) return { ...rookieMeta, isDraftYear: false };
+
+    const draftDirect = readSeasonYear(player, draftYearKeys);
+    if (draftDirect) return { ...draftDirect, isDraftYear: true };
+
+    const draftMeta = readSeasonYear(meta, draftYearKeys);
+    if (draftMeta) return { ...draftMeta, isDraftYear: true };
 
     return null;
   };
 
+  const getCompletedHistorySeasonCount = (player) => {
+    const seasons = Array.isArray(player?.history?.seasons) ? player.history.seasons : [];
+
+    return seasons.filter((row) => {
+      if (!row || row.rowType === "total") return false;
+      const gp = Number(row.games ?? row.gp ?? row.GP ?? 0);
+      return Number.isFinite(gp) && gp > 0;
+    }).length;
+  };
+
   const isPlayerTwoWayEligible = (player) => {
     if (!player || player.isTwoWay || player.isStash) return false;
+    if (hasExhaustedTwoWayEligibility(player)) return false;
+
+    const proSeasons = getPlayerProSeasons(player);
+    if (proSeasons > 0 && proSeasons > 3) return false;
+
+    const completedHistorySeasons = getCompletedHistorySeasonCount(player);
+    if (completedHistorySeasons > 0 && completedHistorySeasons > 3) return false;
 
     const currentSeasonYear = getCurrentSeasonYear();
-    const rookieYear = getPlayerRookieReferenceYear(player);
+    const reference = getPlayerTwoWayReference(player);
 
-    if (rookieYear !== null) {
-      return Math.max(0, currentSeasonYear - rookieYear) <= 2;
+    if (reference?.year) {
+      const elapsed = Math.max(0, currentSeasonYear - Number(reference.year));
+
+      // In this app, offseason `seasonYear` represents the season just completed.
+      // A 2023 draft player in the 2026 offseason has already completed three NBA
+      // seasons and is entering year four, so he should no longer be two-way eligible.
+      const maxElapsed = reference.isDraftYear ? 2 : 1;
+      return elapsed <= maxElapsed;
     }
 
-    // Fallback for saves that only track years/pro seasons. Keep this forgiving
-    // because some rosters store completed seasons, while others store current
-    // season number.
-    return getPlayerProSeasons(player) <= 3;
+    // If the save has no reliable experience metadata, stay permissive so the
+    // user can use the roster-management tool instead of getting hard-blocked.
+    return true;
   };
 
   const getTwoWayAssignmentBlockReason = (player, team = selectedTeam) => {
@@ -228,12 +359,16 @@ export default function RosterView() {
     if (player.isStash) return "Stashed players are team-controlled but cannot be assigned again until their offseason return decision.";
 
     const twoWayCount = getTwoWayPlayers(team).length;
-    if (twoWayCount >= 3) {
+    if (!isOffseasonRosterRelaxed() && twoWayCount >= 3) {
       return "This team already has the maximum 3 two-way players.";
     }
 
+    if (hasExhaustedTwoWayEligibility(player)) {
+      return "This player has already used or expired his two-way eligibility. He must stay on a standard contract or be released.";
+    }
+
     if (!isPlayerTwoWayEligible(player)) {
-      return "Only players in their first 3 seasons can be assigned to a two-way contract.";
+      return "Only players still inside their two-way eligibility window can be assigned to a two-way contract.";
     }
 
     return "";
@@ -559,9 +694,12 @@ export default function RosterView() {
   };
 
   const buildTwoWayContractFromStandard = () => ({
+    type: "two_way",
     startYear: getCurrentSeasonYear(),
     salaryByYear: [0],
     option: null,
+    source: "manual_roster_assignment",
+    countsAgainstStandardRoster: false,
   });
 
   const handleAssignStandardToTwoWay = (player) => {
@@ -579,11 +717,17 @@ export default function RosterView() {
       const twoWayPlayers = getTwoWayPlayers(team);
 
       const previousStandardContract = player?.previousStandardContract || player?.contract || null;
-      const previousTwoWayYearsUsed = Number(player?.twoWayMeta?.twoWayYearsUsed || 0) || 0;
+      const usage = getTwoWayUsageInfo(player);
+      const nextTwoWayYearsUsed = Math.min(
+        usage.max,
+        usage.used > 0 ? usage.used + 1 : 1
+      );
 
       const cleanedPlayer = {
         ...player,
         isTwoWay: true,
+        isStash: false,
+        twoWayIneligible: false,
         rosterStatus: "two_way",
         contractType: "two_way",
         previousStandardContract,
@@ -593,7 +737,12 @@ export default function RosterView() {
           ...(player?.twoWayMeta || {}),
           assignedByTeam: team.name,
           assignedSeasonYear: getCurrentSeasonYear(),
-          twoWayYearsUsed: Math.max(1, previousTwoWayYearsUsed || 1),
+          currentTwoWaySeasonYear: getCurrentSeasonYear(),
+          twoWayYearsUsed: nextTwoWayYearsUsed,
+          maxTwoWayYears: usage.max,
+          twoWayIneligible: false,
+          convertedToStandardSeasonYear: null,
+          convertedToStandardByTeam: null,
           source: "manual_roster_assignment",
         },
       };
@@ -627,12 +776,26 @@ export default function RosterView() {
       const twoWayPlayers = getTwoWayPlayers(team).filter((row) => !samePlayer(row, player));
       const standardPlayers = Array.isArray(team.players) ? team.players : [];
 
+      const usage = getTwoWayUsageInfo(player);
+
       const cleanedPlayer = {
         ...player,
         isTwoWay: false,
+        isStash: false,
+        twoWayEligible: false,
+        twoWayIneligible: true,
         rosterStatus: "standard",
         contractType: "standard",
         contract: buildStandardContractFromTwoWay(player),
+        twoWayMeta: {
+          ...(player?.twoWayMeta || {}),
+          twoWayYearsUsed: Math.max(usage.used, usage.max),
+          maxTwoWayYears: usage.max,
+          twoWayIneligible: true,
+          convertedToStandardByTeam: team.name,
+          convertedToStandardSeasonYear: getCurrentSeasonYear(),
+          source: "manual_two_way_upgrade_to_standard",
+        },
       };
 
       upgradedPlayer = cleanedPlayer;

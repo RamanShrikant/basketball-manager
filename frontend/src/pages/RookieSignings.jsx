@@ -7,7 +7,7 @@ const LEAGUE_KEY = "leagueData";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const STANDARD_ROSTER_MAX = 15;
 const TWO_WAY_MAX = 3;
-const OFFSEASON_CONTROLLED_MAX = 20;
+const OFFSEASON_CONTROLLED_MAX = Number.POSITIVE_INFINITY;
 
 function getAllTeams(leagueData) {
   if (Array.isArray(leagueData?.teams)) return leagueData.teams;
@@ -29,7 +29,12 @@ function getRosterCounts(leagueData, teamName) {
   const twoWayCount = Array.isArray(team?.twoWayPlayers) ? team.twoWayPlayers.length : 0;
   const stashCount = Array.isArray(team?.stashPlayers) ? team.stashPlayers.length : 0;
   const pendingCount = Array.isArray(team?.pendingRookieSignings) ? team.pendingRookieSignings.length : 0;
-  const controlledCount = standardCount + twoWayCount + stashCount + pendingCount;
+
+  // Stashes are unlimited draft-rights style holds. They still display in the
+  // stash count, but they do not consume the 20-player offseason controlled cap
+  // and should never block another rookie from being stashed.
+  const controlledCount = standardCount + twoWayCount + pendingCount;
+  const totalWithStashCount = controlledCount + stashCount;
 
   return {
     standardCount,
@@ -37,13 +42,14 @@ function getRosterCounts(leagueData, teamName) {
     stashCount,
     pendingCount,
     controlledCount,
+    totalWithStashCount,
     standardSlotsOpen: Math.max(0, STANDARD_ROSTER_MAX - standardCount),
     twoWaySlotsOpen: Math.max(0, TWO_WAY_MAX - twoWayCount),
     controlledSlotsOpen: Math.max(0, OFFSEASON_CONTROLLED_MAX - controlledCount),
   };
 }
 
-const CONTROLLED_ROOKIE_DECISIONS = new Set(["standard", "two_way", "stash"]);
+const CONTROLLED_ROOKIE_DECISIONS = new Set(["standard", "two_way"]);
 
 function normalizeDecisionValue(decision) {
   let next = String(decision || "two_way").toLowerCase();
@@ -52,41 +58,18 @@ function normalizeDecisionValue(decision) {
   return next;
 }
 
-function normalizeDecisionForSlots(decision, runningCounts) {
-  let next = normalizeDecisionValue(decision);
-
-  // Rookie decisions are a batch replacement. Pending rookies already occupy
-  // controlled slots, so availability should be based on the roster after all
-  // pending rookies are removed, not the raw pre-resolution controlled count.
-  const controlledFull = Number(runningCounts.controlledCount || 0) >= OFFSEASON_CONTROLLED_MAX;
-  const twoWayFull = Number(runningCounts.twoWayCount || 0) >= TWO_WAY_MAX;
-
-  if (next === "two_way" && twoWayFull) next = "stash";
-  if (CONTROLLED_ROOKIE_DECISIONS.has(next) && controlledFull) next = "release";
-
-  return next;
+function normalizeDecisionForSlots(decision) {
+  // Offseason signing is intentionally permissive. The user can overfill
+  // standard contracts, two-way slots, and the old 20-man controlled count.
+  // Calendar simulation is the hard gate that forces trimming before games.
+  return normalizeDecisionValue(decision);
 }
 
-function buildInitialDecisions(rows, counts) {
+function buildInitialDecisions(rows) {
   const initial = {};
-  const running = {
-    standardCount: Number(counts.standardCount || 0),
-    twoWayCount: Number(counts.twoWayCount || 0),
-    stashCount: Number(counts.stashCount || 0),
-    controlledCount: Math.max(
-      0,
-      Number(counts.controlledCount || 0) - Number(counts.pendingCount || 0)
-    ),
-  };
 
   for (const row of rows || []) {
-    const decision = normalizeDecisionForSlots(row.recommendedDecision, running);
-    initial[row.playerId] = decision;
-
-    if (decision === "standard") running.standardCount += 1;
-    if (decision === "two_way") running.twoWayCount += 1;
-    if (decision === "stash") running.stashCount += 1;
-    if (CONTROLLED_ROOKIE_DECISIONS.has(decision)) running.controlledCount += 1;
+    initial[row.playerId] = normalizeDecisionForSlots(row.recommendedDecision);
   }
 
   return initial;
@@ -154,22 +137,14 @@ function RookieCard({
   decision,
   onDecisionChange,
   rosterCounts,
-  getProjectedCountsForDecision,
   animationIndex = 0,
 }) {
   const imageUrl = getImageUrl(row);
-  const standardProjection = getProjectedCountsForDecision(row.playerId, "standard");
-  const twoWayProjection = getProjectedCountsForDecision(row.playerId, "two_way");
-  const stashProjection = getProjectedCountsForDecision(row.playerId, "stash");
-
-  // Options are blocked only when that specific choice would make the final
-  // projected rookie-signing batch illegal. This lets a team at 21 raw controlled
-  // players sign/stash one rookie while releasing another to finish at 20.
-  const standardBlocked = standardProjection.controlledCount > OFFSEASON_CONTROLLED_MAX;
-  const twoWayBlocked =
-    twoWayProjection.twoWayCount > TWO_WAY_MAX ||
-    twoWayProjection.controlledCount > OFFSEASON_CONTROLLED_MAX;
-  const stashBlocked = stashProjection.controlledCount > OFFSEASON_CONTROLLED_MAX;
+  // No offseason roster-count blockers here. Counts are warnings only until
+  // the user tries to simulate games from Calendar.
+  const standardBlocked = false;
+  const twoWayBlocked = false;
+  const stashBlocked = false;
 
   return (
     <div
@@ -215,13 +190,13 @@ function RookieCard({
             className="mt-3 w-full rounded-xl bg-neutral-800 border border-white/10 px-3 py-3 text-white font-bold outline-none focus:border-orange-500"
           >
             <option value="standard" disabled={standardBlocked}>
-              Standard Contract{standardBlocked ? " - Offseason Full" : rosterCounts.standardSlotsOpen <= 0 ? " - Over 15 by Season Start" : ""}
+              Standard Contract{rosterCounts.standardSlotsOpen <= 0 ? " - Must Trim Before Sim" : ""}
             </option>
             <option value="two_way" disabled={twoWayBlocked}>
-              Two-Way Contract{twoWayBlocked ? " - Full" : ""}
+              Two-Way Contract{rosterCounts.twoWaySlotsOpen <= 0 ? " - Must Trim Before Sim" : ""}
             </option>
             <option value="stash" disabled={stashBlocked}>
-              1-Year Stash{stashBlocked ? " - Offseason Full" : ""}
+              1-Year Stash
             </option>
             <option value="release">Release to Free Agency</option>
           </select>
@@ -276,14 +251,11 @@ export default function RookieSignings() {
         0,
         rosterCounts.controlledCount - rosterCounts.pendingCount
       ) + controlledChoices,
+      totalWithStashCount: Math.max(
+        0,
+        rosterCounts.controlledCount - rosterCounts.pendingCount
+      ) + controlledChoices + rosterCounts.stashCount + stashChoices,
     };
-  };
-
-  const getProjectedCountsForDecision = (playerId, nextDecision) => {
-    return getProjectedCountsFromDecisions({
-      ...decisions,
-      [playerId]: normalizeDecisionValue(nextDecision),
-    });
   };
 
   const projectedCounts = getProjectedCountsFromDecisions(decisions);
@@ -324,8 +296,7 @@ export default function RookieSignings() {
       persistLeagueData(nextLeague, setLeagueData);
       setPreview(result);
 
-      const nextCounts = getRosterCounts(nextLeague, selectedTeamName);
-      setDecisions(buildInitialDecisions(result.userPendingRookies || [], nextCounts));
+      setDecisions(buildInitialDecisions(result.userPendingRookies || []));
     } catch (err) {
       console.error("[RookieSignings] preview failed", err);
       setError(err?.message || String(err));
@@ -427,9 +398,9 @@ export default function RookieSignings() {
             <div className="text-2xl font-extrabold">{projectedStashCount}</div>
           </div>
           <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-white/40">Projected Controlled</div>
-            <div className={`text-2xl font-extrabold ${projectedControlledCount > OFFSEASON_CONTROLLED_MAX ? "text-red-300" : ""}`}>
-              {projectedControlledCount}/{OFFSEASON_CONTROLLED_MAX}
+            <div className="text-xs uppercase tracking-wide text-white/40">Projected Non-Stash Controlled</div>
+            <div className="text-2xl font-extrabold text-white">
+              {projectedControlledCount}
             </div>
           </div>
           <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
@@ -454,21 +425,9 @@ export default function RookieSignings() {
           </div>
         </div>
 
-        {projectedStandardCount > STANDARD_ROSTER_MAX && projectedControlledCount <= OFFSEASON_CONTROLLED_MAX && userRows.length > 0 && (
+        {(projectedStandardCount > STANDARD_ROSTER_MAX || projectedTwoWayCount > TWO_WAY_MAX) && userRows.length > 0 && (
           <div className="mb-5 rounded-2xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-orange-100 font-semibold">
-            Your projected standard roster is {projectedStandardCount}/{STANDARD_ROSTER_MAX} after these rookie decisions. This is allowed during the offseason while you are under {OFFSEASON_CONTROLLED_MAX} controlled players, but roster finalization will require cuts before the season starts.
-          </div>
-        )}
-
-        {projectedControlledCount > OFFSEASON_CONTROLLED_MAX && userRows.length > 0 && (
-          <div className="mb-5 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-100 font-semibold">
-            Your projected offseason controlled roster is {projectedControlledCount}/{OFFSEASON_CONTROLLED_MAX}. Change a rookie decision to Release before resolving signings.
-          </div>
-        )}
-
-        {projectedTwoWayCount > TWO_WAY_MAX && userRows.length > 0 && (
-          <div className="mb-5 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-100 font-semibold">
-            Your projected two-way slots are {projectedTwoWayCount}/{TWO_WAY_MAX}. Change one of the two-way decisions before resolving signings.
+            Offseason overfill is allowed. Before simulating games, Calendar will require standard contracts at {STANDARD_ROSTER_MAX} or fewer and two-way contracts at {TWO_WAY_MAX} or fewer.
           </div>
         )}
 
@@ -488,7 +447,7 @@ export default function RookieSignings() {
           <div className="p-5 border-b border-white/10 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
               <h2 className="text-2xl font-extrabold">Your Draft Picks</h2>
-              <p className="text-white/55 text-sm mt-1">CPU teams are resolved automatically when you apply decisions. Stash is only available immediately after the draft and returns next offseason.</p>
+              <p className="text-white/55 text-sm mt-1">CPU teams are resolved automatically when you apply decisions. Your team can overfill during the offseason; Calendar will enforce the final legal roster before games.</p>
             </div>
             <div className="flex gap-3">
               <button
@@ -520,7 +479,6 @@ export default function RookieSignings() {
                   decision={decisions[row.playerId]}
                   onDecisionChange={updateDecision}
                   rosterCounts={rosterCounts}
-                  getProjectedCountsForDecision={getProjectedCountsForDecision}
                 />
               ))
             ) : (

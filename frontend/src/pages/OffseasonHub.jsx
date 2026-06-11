@@ -17,6 +17,7 @@ const CUSTOM_DRAFT_CLASS_MODE_BY_YEAR_KEY = "bm_draft_class_mode_by_year_v1";
 const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
 const OPTIONS_RESULTS_KEY = "bm_option_decision_results_v1";
 const LEAGUE_KEY = "leagueData";
+const FREE_AGENTS_TEAM_LABEL = "Free Agents";
 const DEV_SIM_STOPPED = "DEV_SIM_STOPPED";
 const DEV_SIM_PAUSED = "DEV_SIM_PAUSED";
 const DEV_SIM_TARGET_OPTIONS = [
@@ -377,23 +378,20 @@ function getFreeAgencyResumeRoute(leagueData, offseasonState = {}) {
 
 function getProgressionAgeCompletionAudit(leagueData, seasonYear) {
   const snapshot = getLeagueDataSnapshot(leagueData);
-  const teams = getAllTeamsFromLeague(snapshot);
   const rows = [];
 
-  for (const team of teams || []) {
-    const teamName = team?.name || "";
-    for (const player of team?.players || []) {
-      const lastBirthdayYear = Number(player?.lastBirthdayYear);
-      rows.push({
-        name: player?.name || "",
-        team: teamName,
-        age: player?.age,
-        lastBirthdayYear: Number.isFinite(lastBirthdayYear) ? lastBirthdayYear : null,
-        stale:
-          !Number.isFinite(lastBirthdayYear) ||
-          lastBirthdayYear < Number(seasonYear || 0),
-      });
-    }
+  for (const row of getProgressionPlayerRowsFromLeague(snapshot, true)) {
+    const player = row.player;
+    const lastBirthdayYear = Number(player?.lastBirthdayYear);
+    rows.push({
+      name: player?.name || "",
+      team: row.teamName,
+      age: player?.age,
+      lastBirthdayYear: Number.isFinite(lastBirthdayYear) ? lastBirthdayYear : null,
+      stale:
+        !Number.isFinite(lastBirthdayYear) ||
+        lastBirthdayYear < Number(seasonYear || 0),
+    });
   }
 
   const staleRows = rows.filter((row) => row.stale);
@@ -401,6 +399,7 @@ function getProgressionAgeCompletionAudit(leagueData, seasonYear) {
   return {
     seasonYear: Number(seasonYear || 0),
     totalPlayers: rows.length,
+    freeAgentPlayers: rows.filter((row) => row.team === FREE_AGENTS_TEAM_LABEL).length,
     staleCount: staleRows.length,
     staleExamples: staleRows.slice(0, 12),
     ok:
@@ -543,9 +542,9 @@ function getRosterStatus(leagueData, selectedTeam) {
 
   let message = "";
   if (rosterCount < minRoster) {
-    message = `${teamName} has ${rosterCount} players. You need at least ${minRoster} players before progression.`;
+    message = `${teamName} has ${rosterCount} standard players. You need at least ${minRoster} before simulating games.`;
   } else if (rosterCount > maxRoster) {
-    message = `${teamName} has ${rosterCount} players. You must get down to ${maxRoster} players before progression.`;
+    message = `${teamName} has ${rosterCount} standard players. You can keep extra players during the offseason, but must trim to ${maxRoster} before simulating games.`;
   }
 
   return {
@@ -606,8 +605,8 @@ function buildAutoRookieDecisions(rows = []) {
     const key = row?.playerId ?? row?.id;
     if (key === undefined || key === null || key === "") continue;
     let decision = row?.recommendedDecision || row?.recommendation || row?.defaultDecision || "two_way";
-    if (decision === "draft_rights") decision = "two_way";
-    if (!["standard", "two_way", "release"].includes(decision)) decision = "two_way";
+    if (decision === "draft_rights") decision = "stash";
+    if (!["standard", "two_way", "stash", "release"].includes(decision)) decision = "stash";
     decisions[key] = decision;
   }
   return decisions;
@@ -877,7 +876,7 @@ function getProgressionPlayersFromTeam(team, includeTwoWay = true) {
   if (!includeTwoWay) return standardPlayers;
 
   const twoWayPlayers = Array.isArray(team?.twoWayPlayers) ? team.twoWayPlayers : [];
-  if (!twoWayPlayers.length) return standardPlayers;
+  const stashPlayers = Array.isArray(team?.stashPlayers) ? team.stashPlayers : [];
 
   const seen = new Set(standardPlayers.map(progressionPlayerKey));
   const merged = [...standardPlayers];
@@ -889,7 +888,41 @@ function getProgressionPlayersFromTeam(team, includeTwoWay = true) {
     merged.push(player);
   }
 
+  for (const player of stashPlayers) {
+    const key = progressionPlayerKey(player);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    merged.push(player);
+  }
+
   return merged;
+}
+
+
+function getFreeAgentsFromLeague(leagueData) {
+  return Array.isArray(leagueData?.freeAgents)
+    ? leagueData.freeAgents.filter((player) => player && typeof player === "object")
+    : [];
+}
+
+function getProgressionPlayerRowsFromLeague(leagueData, includeFreeAgents = true) {
+  const rows = [];
+
+  for (const team of getAllTeamsFromLeague(leagueData) || []) {
+    const teamName = getTeamNameForProgression(team) || "Team";
+    for (const player of getProgressionPlayersFromTeam(team)) {
+      if (!player || typeof player !== "object") continue;
+      rows.push({ player, teamName, isFreeAgent: false });
+    }
+  }
+
+  if (includeFreeAgents) {
+    for (const player of getFreeAgentsFromLeague(leagueData)) {
+      rows.push({ player, teamName: FREE_AGENTS_TEAM_LABEL, isFreeAgent: true });
+    }
+  }
+
+  return rows;
 }
 
 function isCurrentDraftClassRookie(player = {}, seasonYear = null) {
@@ -921,35 +954,40 @@ function isCurrentDraftClassRookie(player = {}, seasonYear = null) {
 function makeCurrentDraftRookieMap(beforeLeague, seasonYear) {
   const byTeam = new Map();
 
+  const ensureTeamMap = (teamName) => {
+    if (!byTeam.has(teamName)) {
+      byTeam.set(teamName, {
+        players: new Map(),
+        twoWayPlayers: new Map(),
+        stashPlayers: new Map(),
+        freeAgents: new Map(),
+        any: new Map(),
+      });
+    }
+    return byTeam.get(teamName);
+  };
+
+  const addRookie = (teamName, bucketName, player) => {
+    if (!isCurrentDraftClassRookie(player, seasonYear)) return;
+    const key = progressionPlayerKey(player);
+    if (!key) return;
+    const cleanPlayer = snapshotLeague(player);
+    const teamMap = ensureTeamMap(teamName);
+    teamMap[bucketName].set(key, cleanPlayer);
+    teamMap.any.set(key, cleanPlayer);
+  };
+
   for (const team of getAllTeamsFromLeague(beforeLeague) || []) {
     const teamName = getTeamNameForProgression(team);
     if (!teamName) continue;
 
-    const teamMap = {
-      players: new Map(),
-      twoWayPlayers: new Map(),
-      any: new Map(),
-    };
+    for (const player of team.players || []) addRookie(teamName, "players", player);
+    for (const player of team.twoWayPlayers || []) addRookie(teamName, "twoWayPlayers", player);
+    for (const player of team.stashPlayers || []) addRookie(teamName, "stashPlayers", player);
+  }
 
-    for (const player of team.players || []) {
-      if (!isCurrentDraftClassRookie(player, seasonYear)) continue;
-      const key = progressionPlayerKey(player);
-      if (!key) continue;
-      const cleanPlayer = snapshotLeague(player);
-      teamMap.players.set(key, cleanPlayer);
-      teamMap.any.set(key, cleanPlayer);
-    }
-
-    for (const player of team.twoWayPlayers || []) {
-      if (!isCurrentDraftClassRookie(player, seasonYear)) continue;
-      const key = progressionPlayerKey(player);
-      if (!key) continue;
-      const cleanPlayer = snapshotLeague(player);
-      teamMap.twoWayPlayers.set(key, cleanPlayer);
-      teamMap.any.set(key, cleanPlayer);
-    }
-
-    if (teamMap.any.size) byTeam.set(teamName, teamMap);
+  for (const player of getFreeAgentsFromLeague(beforeLeague)) {
+    addRookie(FREE_AGENTS_TEAM_LABEL, "freeAgents", player);
   }
 
   return byTeam;
@@ -963,37 +1001,49 @@ function restoreCurrentDraftClassRookiesAfterProgression(updatedLeague, beforeLe
 
   const league = snapshotLeague(updatedLeague);
 
+  const restoreBucket = (players = [], bucketName = "players", rookieMaps = null) => {
+    if (!rookieMaps) return Array.isArray(players) ? players : [];
+
+    const restored = [];
+    const seen = new Set();
+    const bucketMap = rookieMaps[bucketName] || new Map();
+
+    for (const player of players || []) {
+      const key = progressionPlayerKey(player);
+      const replacement = key ? bucketMap.get(key) || rookieMaps.any.get(key) : null;
+      const nextPlayer = replacement ? snapshotLeague(replacement) : player;
+      const nextKey = progressionPlayerKey(nextPlayer);
+      if (nextKey && seen.has(nextKey)) continue;
+      if (nextKey) seen.add(nextKey);
+      restored.push(nextPlayer);
+    }
+
+    for (const [key, rookie] of bucketMap.entries()) {
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      restored.push(snapshotLeague(rookie));
+    }
+
+    return restored;
+  };
+
   for (const team of getAllTeamsFromLeague(league) || []) {
     const teamName = getTeamNameForProgression(team);
     const rookieMaps = rookieMapByTeam.get(teamName);
     if (!rookieMaps) continue;
 
-    const restoreBucket = (players = [], bucketName = "players") => {
-      const restored = [];
-      const seen = new Set();
-      const bucketMap = rookieMaps[bucketName] || new Map();
+    team.players = restoreBucket(Array.isArray(team.players) ? team.players : [], "players", rookieMaps);
+    team.twoWayPlayers = restoreBucket(Array.isArray(team.twoWayPlayers) ? team.twoWayPlayers : [], "twoWayPlayers", rookieMaps);
+    team.stashPlayers = restoreBucket(Array.isArray(team.stashPlayers) ? team.stashPlayers : [], "stashPlayers", rookieMaps);
+  }
 
-      for (const player of players || []) {
-        const key = progressionPlayerKey(player);
-        const replacement = key ? bucketMap.get(key) || rookieMaps.any.get(key) : null;
-        const nextPlayer = replacement ? snapshotLeague(replacement) : player;
-        const nextKey = progressionPlayerKey(nextPlayer);
-        if (nextKey && seen.has(nextKey)) continue;
-        if (nextKey) seen.add(nextKey);
-        restored.push(nextPlayer);
-      }
-
-      for (const [key, rookie] of bucketMap.entries()) {
-        if (key && seen.has(key)) continue;
-        if (key) seen.add(key);
-        restored.push(snapshotLeague(rookie));
-      }
-
-      return restored;
-    };
-
-    team.players = restoreBucket(Array.isArray(team.players) ? team.players : [], "players");
-    team.twoWayPlayers = restoreBucket(Array.isArray(team.twoWayPlayers) ? team.twoWayPlayers : [], "twoWayPlayers");
+  const freeAgentRookieMaps = rookieMapByTeam.get(FREE_AGENTS_TEAM_LABEL);
+  if (freeAgentRookieMaps) {
+    league.freeAgents = restoreBucket(
+      Array.isArray(league.freeAgents) ? league.freeAgents : [],
+      "freeAgents",
+      freeAgentRookieMaps
+    );
   }
 
   return league;
@@ -1006,9 +1056,11 @@ function prepareLeagueForProgressionWorker(league, seasonYear = null) {
   for (const team of teams || []) {
     if (!Array.isArray(team.players)) team.players = [];
     if (!Array.isArray(team.twoWayPlayers)) team.twoWayPlayers = [];
+    if (!Array.isArray(team.stashPlayers)) team.stashPlayers = [];
 
     team.players = team.players.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
     team.twoWayPlayers = team.twoWayPlayers.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
+    team.stashPlayers = team.stashPlayers.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
 
     const existing = new Set(team.players.map(progressionPlayerKey));
 
@@ -1024,7 +1076,23 @@ function prepareLeagueForProgressionWorker(league, seasonYear = null) {
         assignmentStatus: player?.assignmentStatus || "g_league",
       });
     }
+
+    for (const player of team.stashPlayers) {
+      const key = progressionPlayerKey(player);
+      if (key && existing.has(key)) continue;
+      if (key) existing.add(key);
+      team.players.push({
+        ...player,
+        __progressionRosterBucket: "stashPlayers",
+        contractType: player?.contractType || "stash",
+        rosterStatus: player?.rosterStatus || "stashed",
+        assignmentStatus: player?.assignmentStatus || "stash",
+      });
+    }
   }
+
+  if (!Array.isArray(cloned.freeAgents)) cloned.freeAgents = [];
+  cloned.freeAgents = cloned.freeAgents.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
 
   return cloned;
 }
@@ -1043,15 +1111,35 @@ function restoreTwoWayBucketsAfterProgression(workerLeague, fallbackLeague) {
     const teamName = getTeamNameForProgression(team);
     const fallbackTeam = fallbackByName.get(teamName);
     const originalTwoWayIds = new Set((fallbackTeam?.twoWayPlayers || []).map(progressionPlayerKey));
+    const originalStashIds = new Set((fallbackTeam?.stashPlayers || []).map(progressionPlayerKey));
 
     const standardPlayers = [];
     const twoWayPlayers = [];
+    const stashPlayers = [];
     const seenStandard = new Set();
     const seenTwoWay = new Set();
+    const seenStash = new Set();
 
     for (const rawPlayer of team.players || []) {
       const player = stripProgressionBucketMarker(rawPlayer);
       const key = progressionPlayerKey(player);
+      const belongsStash =
+        rawPlayer?.__progressionRosterBucket === "stashPlayers" ||
+        originalStashIds.has(key) ||
+        player?.contractType === "stash" ||
+        player?.rosterStatus === "stashed";
+
+      if (belongsStash) {
+        player.contractType = player.contractType || "stash";
+        player.rosterStatus = player.rosterStatus || "stashed";
+        player.assignmentStatus = player.assignmentStatus || "stash";
+        if (!seenStash.has(key)) {
+          seenStash.add(key);
+          stashPlayers.push(player);
+        }
+        continue;
+      }
+
       const belongsTwoWay =
         rawPlayer?.__progressionRosterBucket === "twoWayPlayers" ||
         originalTwoWayIds.has(key) ||
@@ -1083,8 +1171,18 @@ function restoreTwoWayBucketsAfterProgression(workerLeague, fallbackLeague) {
       }
     }
 
+    for (const rawPlayer of team.stashPlayers || []) {
+      const player = stripProgressionBucketMarker(rawPlayer);
+      const key = progressionPlayerKey(player);
+      if (!seenStash.has(key)) {
+        seenStash.add(key);
+        stashPlayers.push(player);
+      }
+    }
+
     team.players = standardPlayers;
     team.twoWayPlayers = twoWayPlayers;
+    team.stashPlayers = stashPlayers;
   }
 
   return league;
@@ -1092,13 +1190,11 @@ function restoreTwoWayBucketsAfterProgression(workerLeague, fallbackLeague) {
 
 function stampAgingGuards(league, seasonYear) {
   if (!league) return league;
-  const teams = getAllTeamsFromLeague(league);
-  for (const t of teams) {
-    for (const p of getProgressionPlayersFromTeam(t)) {
-      if (!p || typeof p !== "object") continue;
-      if (!Number.isFinite(Number(p.lastBirthdayYear))) {
-        p.lastBirthdayYear = seasonYear;
-      }
+  for (const row of getProgressionPlayerRowsFromLeague(league, true)) {
+    const p = row.player;
+    if (!p || typeof p !== "object") continue;
+    if (!Number.isFinite(Number(p.lastBirthdayYear))) {
+      p.lastBirthdayYear = seasonYear;
     }
   }
   return league;
@@ -1111,109 +1207,109 @@ function stampCareerSeasonCounters(league, seasonYear) {
   const resolvedSeasonYear = Number(seasonYear || 0);
   if (!Number.isFinite(resolvedSeasonYear) || resolvedSeasonYear <= 0) return league;
 
-  const teams = getAllTeamsFromLeague(league);
+  const rows = getProgressionPlayerRowsFromLeague(league, true);
 
-  for (const team of teams || []) {
-    const teamName = getTeamNameForProgression(team);
+  for (const row of rows) {
+    const player = row.player;
+    const teamName = row.isFreeAgent ? "" : row.teamName;
+    if (!player || typeof player !== "object") continue;
 
-    for (const player of getProgressionPlayersFromTeam(team)) {
-      if (!player || typeof player !== "object") continue;
+    const meta = player.meta && typeof player.meta === "object" ? { ...player.meta } : {};
+    const rights = player.rights && typeof player.rights === "object" ? { ...player.rights } : {};
 
-      const meta = player.meta && typeof player.meta === "object" ? { ...player.meta } : {};
-      const rights = player.rights && typeof player.rights === "object" ? { ...player.rights } : {};
+    const alreadyCounted =
+      Number(meta.lastProSeasonCountedYear) === resolvedSeasonYear ||
+      Number(player.lastProSeasonCountedYear) === resolvedSeasonYear;
 
-      const alreadyCounted =
-        Number(meta.lastProSeasonCountedYear) === resolvedSeasonYear ||
-        Number(player.lastProSeasonCountedYear) === resolvedSeasonYear;
+    if (alreadyCounted) continue;
 
-      if (alreadyCounted) continue;
+    const draftYear = Number(meta.draftYear ?? player.draftYear ?? 0);
+    const currentProSeasons = Math.max(
+      0,
+      Number(meta.proSeasons ?? player.proSeasons ?? 0) || 0
+    );
 
-      const draftYear = Number(meta.draftYear ?? player.draftYear ?? 0);
-      const currentProSeasons = Math.max(
-        0,
-        Number(meta.proSeasons ?? player.proSeasons ?? 0) || 0
-      );
+    const isBrandNewDraftRookie =
+      Number.isFinite(draftYear) &&
+      draftYear === resolvedSeasonYear &&
+      currentProSeasons <= 0 &&
+      String(meta.acquiredVia || player.acquiredVia || "").toLowerCase().includes("draft");
 
-      const isBrandNewDraftRookie =
-        Number.isFinite(draftYear) &&
-        draftYear === resolvedSeasonYear &&
-        currentProSeasons <= 0 &&
-        String(meta.acquiredVia || player.acquiredVia || "").toLowerCase().includes("draft");
-
-      if (isBrandNewDraftRookie) {
-        meta.lastProSeasonCountedYear = resolvedSeasonYear;
-        player.lastProSeasonCountedYear = resolvedSeasonYear;
-        player.meta = meta;
-        player.rights = rights;
-        continue;
-      }
-
-      const nextProSeasons = currentProSeasons + 1;
-      meta.proSeasons = nextProSeasons;
-      player.proSeasons = nextProSeasons;
+    if (isBrandNewDraftRookie) {
       meta.lastProSeasonCountedYear = resolvedSeasonYear;
       player.lastProSeasonCountedYear = resolvedSeasonYear;
-
-      const contractStartYear = Number(player.contract?.startYear ?? 0);
-      const currentYearsWithTeam = Math.max(
-        0,
-        Number(meta.yearsWithCurrentTeam ?? player.yearsWithCurrentTeam ?? 0) || 0
-      );
-
-      const likelyNewToTeamThisOffseason =
-        contractStartYear === resolvedSeasonYear &&
-        currentYearsWithTeam <= 0 &&
-        !(Number.isFinite(draftYear) && draftYear > 0 && draftYear < resolvedSeasonYear);
-
-      if (!likelyNewToTeamThisOffseason) {
-        const nextYearsWithTeam = currentYearsWithTeam + 1;
-        meta.yearsWithCurrentTeam = nextYearsWithTeam;
-        player.yearsWithCurrentTeam = nextYearsWithTeam;
-
-        const currentBirdSeasons = Math.max(
-          0,
-          Number(rights.seasonsTowardBird ?? 0) || 0
-        );
-        const nextBirdSeasons = Math.max(currentBirdSeasons + 1, nextYearsWithTeam);
-        rights.seasonsTowardBird = nextBirdSeasons;
-
-        if (teamName && !rights.heldByTeam) {
-          rights.heldByTeam = teamName;
-        }
-
-        if (!rights.birdLevel || ["none", "non_bird", "early_bird", "bird"].includes(rights.birdLevel)) {
-          if (nextBirdSeasons >= 3) rights.birdLevel = "bird";
-          else if (nextBirdSeasons >= 2) rights.birdLevel = "early_bird";
-          else if (nextBirdSeasons >= 1) rights.birdLevel = "non_bird";
-        }
-      }
-
       player.meta = meta;
       player.rights = rights;
+      continue;
     }
+
+    const nextProSeasons = currentProSeasons + 1;
+    meta.proSeasons = nextProSeasons;
+    player.proSeasons = nextProSeasons;
+    meta.lastProSeasonCountedYear = resolvedSeasonYear;
+    player.lastProSeasonCountedYear = resolvedSeasonYear;
+
+    if (!teamName) {
+      player.meta = meta;
+      player.rights = rights;
+      continue;
+    }
+
+    const contractStartYear = Number(player.contract?.startYear ?? 0);
+    const currentYearsWithTeam = Math.max(
+      0,
+      Number(meta.yearsWithCurrentTeam ?? player.yearsWithCurrentTeam ?? 0) || 0
+    );
+
+    const likelyNewToTeamThisOffseason =
+      contractStartYear === resolvedSeasonYear &&
+      currentYearsWithTeam <= 0 &&
+      !(Number.isFinite(draftYear) && draftYear > 0 && draftYear < resolvedSeasonYear);
+
+    if (!likelyNewToTeamThisOffseason) {
+      const nextYearsWithTeam = currentYearsWithTeam + 1;
+      meta.yearsWithCurrentTeam = nextYearsWithTeam;
+      player.yearsWithCurrentTeam = nextYearsWithTeam;
+
+      const currentBirdSeasons = Math.max(
+        0,
+        Number(rights.seasonsTowardBird ?? 0) || 0
+      );
+      const nextBirdSeasons = Math.max(currentBirdSeasons + 1, nextYearsWithTeam);
+      rights.seasonsTowardBird = nextBirdSeasons;
+
+      if (teamName && !rights.heldByTeam) {
+        rights.heldByTeam = teamName;
+      }
+
+      if (!rights.birdLevel || ["none", "non_bird", "early_bird", "bird"].includes(rights.birdLevel)) {
+        if (nextBirdSeasons >= 3) rights.birdLevel = "bird";
+        else if (nextBirdSeasons >= 2) rights.birdLevel = "early_bird";
+        else if (nextBirdSeasons >= 1) rights.birdLevel = "non_bird";
+      }
+    }
+
+    player.meta = meta;
+    player.rights = rights;
   }
 
   return league;
 }
 
 function buildProgressionDeltas(beforeLeague, afterLeague) {
-  const teamsA = getAllTeamsFromLeague(beforeLeague);
-  const teamsB = getAllTeamsFromLeague(afterLeague);
-
-  const mapPlayers = (teams) => {
+  const mapPlayers = (league) => {
     const m = {};
-    for (const t of teams || []) {
-      const teamName = t?.name || "";
-      for (const p of getProgressionPlayersFromTeam(t)) {
-        if (!p?.name || !teamName) continue;
-        m[`${p.name}__${teamName}`] = p;
-      }
+    for (const row of getProgressionPlayerRowsFromLeague(league, true)) {
+      const p = row.player;
+      const teamName = row.teamName || FREE_AGENTS_TEAM_LABEL;
+      if (!p?.name || !teamName) continue;
+      m[`${p.name}__${teamName}`] = p;
     }
     return m;
   };
 
-  const A = mapPlayers(teamsA);
-  const B = mapPlayers(teamsB);
+  const A = mapPlayers(beforeLeague);
+  const B = mapPlayers(afterLeague);
 
   const deltas = {};
 
@@ -1879,11 +1975,8 @@ export default function OffseasonHub() {
       return;
     }
 
-    if (rosterBlocksProgression) {
-      alert(rosterStatus.message || "Your roster must be legal before advancing to the new season.");
-      navigate("/roster-view");
-      return;
-    }
+    // User roster overfill is allowed into the calendar. Calendar simulation is
+    // now the hard gate that forces standard/two-way trimming before games.
 
     let finalizedLeagueData = getLeagueDataSnapshot(leagueData);
 
@@ -2756,18 +2849,18 @@ export default function OffseasonHub() {
     return getRosterStatus(leagueData, selectedTeam);
   }, [leagueData, selectedTeam]);
 
-  const rosterBlocksProgression = rosterStatus.hasTeam && !rosterStatus.isValid;
+  const rosterWarningBeforeSim = rosterStatus.hasTeam && !rosterStatus.isValid;
 
   const currentStepLabel = useMemo(() => {
     if (offseasonState.progressionComplete) return "Start";
-    if (offseasonState.freeAgencyComplete && !rosterBlocksProgression) return "Progression";
+    if (offseasonState.freeAgencyComplete) return "Progression";
     if (offseasonState.optionsComplete) return "Free Agency";
     if (offseasonState.rookieSigningsComplete) return "Options";
     if (offseasonState.draftComplete) return "Rookie Signings";
     if (offseasonState.draftLotteryComplete) return "Draft";
     if (offseasonState.retirementsComplete) return "Lottery";
     return "Retirements";
-  }, [offseasonState, rosterBlocksProgression]);
+  }, [offseasonState]);
 
   const cards = useMemo(() => {
     const retirementsComplete = !!offseasonState.retirementsComplete;
@@ -2779,7 +2872,7 @@ export default function OffseasonHub() {
       !!offseasonState.freeAgencyComplete &&
       !hasStaleFreeAgencyComplete(leagueData, offseasonState);
     const progressionComplete = !!offseasonState.progressionComplete;
-    const freeAgencyReadyForProgression = freeAgencyComplete && !rosterBlocksProgression;
+    const freeAgencyReadyForProgression = freeAgencyComplete;
 
     return [
       {
@@ -2852,8 +2945,8 @@ export default function OffseasonHub() {
       {
         step: "7",
         title: "Player Progression",
-        description: rosterBlocksProgression
-          ? "Progression stays locked until your team has a legal season-start roster. CPU teams will be cleaned up automatically when you advance."
+        description: rosterWarningBeforeSim
+          ? "Apply offseason development now if you want. Your roster can stay overfilled until Calendar simulation, where you will be prompted to trim it."
           : "Apply offseason development once roster moves are finished so your updated squads grow into the next year together.",
         status: progressionComplete ? "Complete" : freeAgencyReadyForProgression ? "Current" : "Locked",
         accent: progressionComplete ? "green" : freeAgencyReadyForProgression ? "orange" : "neutral",
@@ -2873,7 +2966,7 @@ export default function OffseasonHub() {
         onClick: handleAdvanceToNewSeason,
       },
     ];
-  }, [navigate, offseasonState, leagueData, rosterBlocksProgression]);
+  }, [navigate, offseasonState, leagueData, rosterWarningBeforeSim]);
 
   return (
     <div className={`${styles.offseasonPage} min-h-screen text-white py-10 px-4`}>
@@ -2891,9 +2984,9 @@ export default function OffseasonHub() {
         </div>
 
         <div className="bg-neutral-800/85 border border-white/10 rounded-3xl shadow-2xl p-6 md:p-7 mb-8">
-          {rosterBlocksProgression && (
-            <div className="mb-5 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">
-              {rosterStatus.message}
+          {rosterWarningBeforeSim && (
+            <div className="mb-5 rounded-2xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm font-semibold text-orange-100">
+              {rosterStatus.message} This will not block offseason steps, but it will block game simulation until fixed.
             </div>
           )}
 

@@ -15,7 +15,7 @@ import copy
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
-TEAM_ROSTER_LOGIC_VERSION = "2026-06-04_team_roster_logic_roster_flex_dev_v4"
+TEAM_ROSTER_LOGIC_VERSION = "2026-06-11_team_roster_logic_user_offseason_overfill_v6"
 
 STANDARD_ROSTER_MIN = 14
 STANDARD_ROSTER_MAX = 15
@@ -208,7 +208,13 @@ def roster_counts(team: Dict[str, Any]) -> Dict[str, int]:
     draft_rights_count = len(team.get("draftRights") or [])
     stash_count = len(team.get("stashPlayers") or [])
     pending_rookies_count = len(team.get("pendingRookieSignings") or [])
-    controlled_count = standard_count + two_way_count + stash_count + pending_rookies_count
+
+    # Stashes are unlimited draft-rights style holds in this game flow. They
+    # should not consume the offseason controlled-player cap and should never
+    # block rookie signing decisions. The season-start legality check only cares
+    # about standard roster size and two-way slots.
+    controlled_count = standard_count + two_way_count + pending_rookies_count
+    total_with_stash_count = controlled_count + stash_count
 
     return {
         "standardCount": standard_count,
@@ -217,6 +223,7 @@ def roster_counts(team: Dict[str, Any]) -> Dict[str, int]:
         "stashCount": stash_count,
         "pendingRookiesCount": pending_rookies_count,
         "controlledCount": controlled_count,
+        "totalWithStashCount": total_with_stash_count,
         "standardMin": STANDARD_ROSTER_MIN,
         "standardMax": STANDARD_ROSTER_MAX,
         "twoWayMax": TWO_WAY_MAX,
@@ -229,23 +236,23 @@ def roster_counts(team: Dict[str, Any]) -> Dict[str, int]:
 def can_add_standard_contract(team: Dict[str, Any], phase: str = "offseason") -> bool:
     counts = roster_counts(team)
 
-    # In the offseason, teams can carry more standard contracts temporarily.
-    # The hard 15-man standard limit is enforced by season-start validation.
+    # Offseason user flow is intentionally permissive. The hard 15-man standard
+    # roster limit is enforced only by season-start / Calendar simulation checks.
     if str(phase or "offseason").lower() == "offseason":
-        return counts["controlledCount"] < OFFSEASON_CONTROLLED_MAX
+        return True
 
     return counts["standardCount"] < STANDARD_ROSTER_MAX
 
 
 def can_add_two_way_contract(team: Dict[str, Any], phase: str = "offseason") -> bool:
     counts = roster_counts(team)
-    if counts["twoWayCount"] >= TWO_WAY_MAX:
-        return False
 
+    # Same idea for two-ways: allow offseason overfill, then block simulation
+    # until the team is back at 3 or fewer two-way contracts.
     if str(phase or "offseason").lower() == "offseason":
-        return counts["controlledCount"] < OFFSEASON_CONTROLLED_MAX
+        return True
 
-    return True
+    return counts["twoWayCount"] < TWO_WAY_MAX
 
 
 def needs_season_start_standard_cut(team: Dict[str, Any]) -> bool:
@@ -257,11 +264,14 @@ def validate_team_for_season_start(team: Dict[str, Any]) -> Dict[str, Any]:
     errors = []
 
     if counts["standardCount"] < STANDARD_ROSTER_MIN:
-        errors.append(f"Needs at least {STANDARD_ROSTER_MIN} standard contracts.")
+        need = STANDARD_ROSTER_MIN - counts["standardCount"]
+        errors.append(f"Standard roster: {counts['standardCount']} / {STANDARD_ROSTER_MIN} minimum — sign {need} standard player{'s' if need != 1 else ''}.")
     if counts["standardCount"] > STANDARD_ROSTER_MAX:
-        errors.append(f"Has more than {STANDARD_ROSTER_MAX} standard contracts.")
+        remove = counts["standardCount"] - STANDARD_ROSTER_MAX
+        errors.append(f"Standard roster: {counts['standardCount']} / {STANDARD_ROSTER_MAX} maximum — remove {remove} standard player{'s' if remove != 1 else ''}.")
     if counts["twoWayCount"] > TWO_WAY_MAX:
-        errors.append(f"Has more than {TWO_WAY_MAX} two-way contracts.")
+        remove = counts["twoWayCount"] - TWO_WAY_MAX
+        errors.append(f"Two-way roster: {counts['twoWayCount']} / {TWO_WAY_MAX} maximum — remove {remove} two-way player{'s' if remove != 1 else ''}.")
 
     return {
         "ok": not errors,
@@ -388,7 +398,9 @@ def _recommended_rookie_decision(player: Dict[str, Any], team: Dict[str, Any]) -
     controlled_open = effective_controlled_before_decision < OFFSEASON_CONTROLLED_MAX
 
     if not controlled_open:
-        return "release"
+        # A full non-stash controlled roster should not force teams to lose a
+        # newly drafted player. Stash is unlimited and can be cleaned up later.
+        return "stash"
 
     # Pick-range driven rookie-contract behavior:
     # 1-24: normal first-round standard contracts.
@@ -1067,13 +1079,14 @@ def apply_rookie_signings(league_data: Dict[str, Any], payload: Dict[str, Any]) 
             if decision not in ["standard", "two_way", "stash", "release"]:
                 decision = "release"
 
-            # Enforce final batch availability after pending rookies have been
-            # removed. Standard contracts may go above 15 in the offseason, but
-            # controlled players cannot exceed 20 and two-ways cannot exceed 3.
-            if decision == "two_way" and roster_counts(team)["twoWayCount"] >= TWO_WAY_MAX:
-                decision = "stash"
-            if decision in ["standard", "two_way", "stash"] and roster_counts(team)["controlledCount"] >= OFFSEASON_CONTROLLED_MAX:
-                decision = "release"
+            # User-controlled rookie signings have no offseason roster-count
+            # blockers. CPU teams keep the old conservative behavior so they do
+            # not deliberately overfill unless finalization later repairs them.
+            if not is_user_team:
+                if decision == "two_way" and roster_counts(team)["twoWayCount"] >= TWO_WAY_MAX:
+                    decision = "stash"
+                if decision in ["standard", "two_way"] and roster_counts(team)["controlledCount"] >= OFFSEASON_CONTROLLED_MAX:
+                    decision = "stash"
 
             result = _apply_decision_to_player(league, team, player, decision, season_year)
             result["userControlled"] = is_user_team
@@ -1643,18 +1656,10 @@ def apply_roster_finalization(league_data: Dict[str, Any], payload: Dict[str, An
 
     normalize_league_roster_lists(league)
     before = _build_finalization_report(league, user_team_name)
-    user_row = before.get("userTeam")
 
-    if user_row is not None and not user_row.get("ok"):
-        return {
-            "ok": False,
-            "reason": "USER_ROSTER_ILLEGAL",
-            "version": TEAM_ROSTER_LOGIC_VERSION,
-            "leagueData": league,
-            "summary": before,
-            "message": "Your roster is not legal for season start yet.",
-        }
-
+    # User roster overfill is allowed to carry into Calendar. We still finalize
+    # CPU teams here, but the user's standard/two-way legality is enforced only
+    # when they try to simulate games.
     actions = []
     for team in _get_all_teams(league):
         team_name = _team_name(team)
@@ -1695,7 +1700,7 @@ def apply_roster_finalization(league_data: Dict[str, Any], payload: Dict[str, An
         "summary": after,
         "actions": actions,
         "complete": True,
-        "message": "Roster finalization complete.",
+        "message": "CPU roster finalization complete. User roster legality will be checked before Calendar simulation.",
     }
 
 

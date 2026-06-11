@@ -135,27 +135,39 @@ function getTeamPendingRookieCount(team) {
 function getUserRosterSimBlockMessage(team) {
   if (!team) return "";
 
+  const teamName = team.name || team.teamName || "This team";
   const count = getTeamPlayerCount(team);
   const twoWayCount = getTeamTwoWayCount(team);
   const pendingRookieCount = getTeamPendingRookieCount(team);
+  const issues = [];
 
   if (pendingRookieCount > 0) {
-    return `${team.name} still has ${pendingRookieCount} unresolved rookie signing decision${pendingRookieCount === 1 ? "" : "s"}. Resolve rookie signings before simulating games.`;
+    issues.push(
+      `Pending rookie signings: ${pendingRookieCount} unresolved — resolve rookie signings first.`
+    );
   }
 
   if (count < REGULAR_SEASON_MIN_STANDARD_PLAYERS) {
-    return `${team.name} doesn't have enough standard-contract players. Minimum ${REGULAR_SEASON_MIN_STANDARD_PLAYERS} required to simulate games.`;
+    issues.push(
+      `Standard roster: ${count} / ${REGULAR_SEASON_MIN_STANDARD_PLAYERS} minimum — sign ${REGULAR_SEASON_MIN_STANDARD_PLAYERS - count} standard player${REGULAR_SEASON_MIN_STANDARD_PLAYERS - count === 1 ? "" : "s"}.`
+    );
   }
 
   if (count > REGULAR_SEASON_MAX_STANDARD_PLAYERS) {
-    return `${team.name} has ${count} standard-contract players. You can carry extra players during the offseason, but before simulating you must release players or assign eligible first-3-season players to two-way contracts until you have ${REGULAR_SEASON_MAX_STANDARD_PLAYERS} or fewer standard contracts.`;
+    issues.push(
+      `Standard roster: ${count} / ${REGULAR_SEASON_MAX_STANDARD_PLAYERS} maximum — remove ${count - REGULAR_SEASON_MAX_STANDARD_PLAYERS} standard player${count - REGULAR_SEASON_MAX_STANDARD_PLAYERS === 1 ? "" : "s"}.`
+    );
   }
 
   if (twoWayCount > REGULAR_SEASON_MAX_TWO_WAY_PLAYERS) {
-    return `${team.name} has ${twoWayCount} two-way players. Maximum ${REGULAR_SEASON_MAX_TWO_WAY_PLAYERS} two-way contracts are allowed when simulating games. Having 0, 1, or 2 two-way players is fine.`;
+    issues.push(
+      `Two-way roster: ${twoWayCount} / ${REGULAR_SEASON_MAX_TWO_WAY_PLAYERS} maximum — remove ${twoWayCount - REGULAR_SEASON_MAX_TWO_WAY_PLAYERS} two-way player${twoWayCount - REGULAR_SEASON_MAX_TWO_WAY_PLAYERS === 1 ? "" : "s"}.`
+    );
   }
 
-  return "";
+  if (!issues.length) return "";
+
+  return `${teamName} must trim the roster before simulating games. ${issues.join(" ")}`;
 }
 
 function getSimulationBlockMessageForGame(game, teams) {

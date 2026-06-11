@@ -2381,9 +2381,9 @@ export default function ViewingOffers() {
     }
 
     if (rosterAfter > rosterLimit) {
-      const msg = `Selected signings would take you over the ${rosterLimit}-man roster limit.`;
-      warnings.push(msg);
-      blockingWarnings.push(msg);
+      warnings.push(
+        `Roster will be ${rosterAfter} / ${rosterLimit} after these signings. This is allowed during the offseason, but Calendar will block game simulation until you trim to ${rosterLimit} standard contracts.`
+      );
     }
 if (secondApron > 0 && payrollAfter >= secondApron) {
   apronNotes.push("Selected signings would leave you at or above the second apron.");
@@ -3340,8 +3340,18 @@ return (
               )}
 
               {selectionPreview?.warnings?.length > 0 && (
-                <div className="mb-4 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3">
-                  <div className="text-sm font-semibold text-red-200">
+                <div
+                  className={`mb-4 rounded-xl px-4 py-3 ${
+                    selectionPreview?.hasBlockingIssue
+                      ? "bg-red-500/10 border border-red-500/30"
+                      : "bg-orange-500/10 border border-orange-500/30"
+                  }`}
+                >
+                  <div
+                    className={`text-sm font-semibold ${
+                      selectionPreview?.hasBlockingIssue ? "text-red-200" : "text-orange-100"
+                    }`}
+                  >
                     {selectionPreview.warnings.join(" ")}
                   </div>
                 </div>

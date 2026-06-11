@@ -872,22 +872,13 @@ const isOffseasonMode =
   const userTwoWayCount = Number(currentUserTeam?.twoWayPlayers?.length || 0);
   const userStashCount = Number(currentUserTeam?.stashPlayers?.length || 0);
   const userPendingRookieCount = Number(currentUserTeam?.pendingRookieSignings?.length || 0);
-  const offseasonControlledMax = Number(
-    workingLeagueData?.offseasonControlledMax ||
-      workingLeagueData?.offseasonControlledLimit ||
-      20
-  );
-  const userOffseasonControlledCount =
-    userRosterCount + userTwoWayCount + userStashCount + userPendingRookieCount;
-  const userOffseasonControlledFull =
-    !!selectedTeam?.name && userOffseasonControlledCount >= offseasonControlledMax;
   const userRosterTooFew = !!selectedTeam?.name && userRosterCount < minRosterSize;
   const userRosterTooMany = !!selectedTeam?.name && userRosterCount > maxRosterSize;
   const userRosterInvalid = userRosterTooFew || userRosterTooMany;
 
   const canSubmitLiveOffer = isOffseasonMode && optionsComplete && rightsManagementComplete && isLiveFreeAgencyActive;
   const canManualCleanupSign =
-    isOffseasonMode && effectiveFreeAgencyFinished && !userOffseasonControlledFull;
+    isOffseasonMode && effectiveFreeAgencyFinished;
   const canUseFreeAgencyAction = !isOffseasonMode || canSubmitLiveOffer || canManualCleanupSign;
 
   // Surgical pending-decision guard:
@@ -947,11 +938,11 @@ const isOffseasonMode =
     if (!selectedTeam?.name) return "";
 
     if (userRosterTooFew) {
-      return `${selectedTeam.name} has ${userRosterCount} players. You need at least ${minRosterSize} players before leaving free agency.`;
+      return `${selectedTeam.name} has ${userRosterCount} standard players. You need at least ${minRosterSize} before simulating games.`;
     }
 
     if (userRosterTooMany) {
-      return `${selectedTeam.name} has ${userRosterCount} players. You must get down to ${maxRosterSize} players before leaving free agency.`;
+      return `${selectedTeam.name} has ${userRosterCount} standard players. You can keep extra players during the offseason, but must trim to ${maxRosterSize} before simulating games.`;
     }
 
     return "";
@@ -1455,7 +1446,7 @@ const isOffseasonMode =
     const ask = getExpectedYearOneSalary(player);
     const projectedPayroll = Number(userCapDashboard.practicalPayroll || 0) + ask;
 
-    if (!isLiveFreeAgencyActive && userCapDashboard.rosterCount >= userCapDashboard.rosterLimit) {
+    if (!isOffseasonMode && !isLiveFreeAgencyActive && userCapDashboard.rosterCount >= userCapDashboard.rosterLimit) {
       return {
         label: "NO",
         tone: "red",
@@ -2397,10 +2388,9 @@ const isOffseasonMode =
 
 
 const handleContinueToProgression = () => {
-  if (userRosterInvalid) {
-    setRosterActionError(rosterValidationMessage);
-    return;
-  }
+  // Offseason roster overfill is allowed past free agency. Calendar simulation
+  // is the hard gate that forces the user to trim before playing games.
+  setRosterActionError("");
 
   try {
     const result = rebuildGameplansForLeague(workingLeagueData, {
@@ -2787,13 +2777,6 @@ updateOffseasonState({
           return;
         }
 
-        if (userOffseasonControlledFull) {
-          setSignError(
-            `${selectedTeam.name} is at the offseason controlled-player limit (${userOffseasonControlledCount}/${offseasonControlledMax}). Release or move a player before signing another free agent.`
-          );
-          return;
-        }
-
         setSignError("The live market is closed.");
         return;
       }
@@ -2864,8 +2847,8 @@ updateOffseasonState({
       </p>
 
       {rosterValidationMessage && (
-        <div className="mb-4 max-w-2xl w-full bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 text-red-200 text-sm font-semibold text-center">
-          {rosterValidationMessage}
+        <div className="mb-4 max-w-2xl w-full bg-orange-500/10 border border-orange-500/30 rounded-xl px-4 py-3 text-orange-100 text-sm font-semibold text-center">
+          {rosterValidationMessage} This is allowed until game simulation starts.
         </div>
       )}
 
@@ -2962,7 +2945,7 @@ updateOffseasonState({
               <p className="text-lg font-semibold text-white mt-1">
                 {effectiveFreeAgencyFinished
                   ? userRosterInvalid
-                    ? "Roster action required"
+                    ? "Free agency complete - roster warning"
                     : "Free agency complete"
                   : isLiveFreeAgencyActive
                   ? `Day ${currentDay} of ${maxDays || 7}`
@@ -3091,14 +3074,14 @@ updateOffseasonState({
           </div>
 
           {rosterValidationMessage && (
-            <div className="mt-4 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3">
-              <div className="text-sm font-semibold text-red-200">
-                {rosterValidationMessage}
+            <div className="mt-4 bg-orange-500/10 border border-orange-500/30 rounded-xl px-4 py-3">
+              <div className="text-sm font-semibold text-orange-100">
+                {rosterValidationMessage} This will not block offseason progress, but it will block Calendar simulation until fixed.
               </div>
 
               {effectiveFreeAgencyFinished && userRosterTooFew && (
-                <div className="text-xs text-red-300 mt-1">
-                  The live market is over, so you can still sign remaining free agents directly on this page. You must reach {minRosterSize} standard players and trim to {maxRosterSize} before advancing.
+                <div className="text-xs text-orange-200 mt-1">
+                  The live market is over, so you can still sign remaining free agents directly on this page.
                 </div>
               )}
             </div>
@@ -3694,7 +3677,7 @@ updateOffseasonState({
 
             {canManualCleanupSign && (
               <div className="mb-4 text-yellow-300 text-sm font-semibold">
-                The live market is over. You can still sign remaining free agents directly until your offseason controlled list reaches {offseasonControlledMax} players. You will still need to trim the standard roster to {minRosterSize}-{maxRosterSize} before advancing.
+                The live market is over. You can still sign remaining free agents directly, even if your offseason roster is over normal limits. Calendar will require a legal roster before games can be simulated.
               </div>
             )}
 

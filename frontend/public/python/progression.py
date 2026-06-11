@@ -6,7 +6,7 @@ import random
 import math
 import datetime as _dt
 
-PROGRESSION_PY_VERSION = "2026-01-10_progression_v5_dynamic_potential_blend"
+PROGRESSION_PY_VERSION = "2026-06-11_progression_v6_free_agent_display_and_bucket_safe"
 
 
 # -------------------------
@@ -1314,15 +1314,26 @@ def _all_players(league: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _all_players_with_team(league: Dict[str, Any]) -> List[Tuple[Dict[str, Any], str]]:
     out: List[Tuple[Dict[str, Any], str]] = []
+    seen = set()
+
+    def add_player(p: Dict[str, Any], team_name: str) -> None:
+        if not isinstance(p, dict):
+            return
+        key = str(p.get("id") or p.get("name") or len(out))
+        scoped_key = (team_name, key)
+        if scoped_key in seen:
+            return
+        seen.add(scoped_key)
+        out.append((p, team_name))
 
     for t in _iter_teams(league):
         tname = _team_name(t)
-        for p in (t.get("players") or []):
-            if isinstance(p, dict):
-                out.append((p, tname))
+        for bucket in ["players", "twoWayPlayers", "stashPlayers"]:
+            for p in (t.get(bucket) or []):
+                add_player(p, tname)
 
     for p in _iter_free_agents(league):
-        out.append((p, "__FREE_AGENCY__"))
+        add_player(p, "__FREE_AGENCY__")
 
     return out
 
