@@ -94,6 +94,80 @@ function buildLeagueDataForFreeAgencyBackendAction(leagueData) {
   };
 }
 
+
+// ------------------------------------------------------------
+// PLAYER PROGRESSION PAYLOAD GUARD
+// ------------------------------------------------------------
+function countProgressionPayloadPlayers(leagueData) {
+  if (!leagueData || typeof leagueData !== "object") return 0;
+
+  let total = 0;
+  const teams = [];
+
+  if (Array.isArray(leagueData.teams)) {
+    teams.push(...leagueData.teams);
+  }
+
+  if (leagueData.conferences && typeof leagueData.conferences === "object") {
+    for (const rows of Object.values(leagueData.conferences)) {
+      if (Array.isArray(rows)) teams.push(...rows);
+    }
+  }
+
+  for (const team of teams) {
+    if (!team || typeof team !== "object") continue;
+    total += Array.isArray(team.players) ? team.players.length : 0;
+    total += Array.isArray(team.twoWayPlayers) ? team.twoWayPlayers.length : 0;
+    total += Array.isArray(team.stashPlayers) ? team.stashPlayers.length : 0;
+  }
+
+  total += Array.isArray(leagueData.freeAgents) ? leagueData.freeAgents.length : 0;
+  return total;
+}
+
+function buildLeagueDataForProgressionWorker(leagueData) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+
+  const state =
+    leagueData.freeAgencyState && typeof leagueData.freeAgencyState === "object"
+      ? leagueData.freeAgencyState
+      : null;
+
+  // Progression only needs the actual player pools. Passing full FA offer logs,
+  // story payloads, and debug arrays makes the JS -> Pyodide conversion much
+  // slower and can trip the dev full-offseason timeout even when the worker is
+  // still healthy.
+  const safeFreeAgencyState = state
+    ? {
+        seasonYear: state.seasonYear ?? leagueData.seasonYear ?? leagueData.currentSeasonYear ?? null,
+        isActive: Boolean(state.isActive),
+        currentDay: Number(state.currentDay || 0),
+        maxDays: Number(state.maxDays || 0),
+        pendingUserTeamName: state.pendingUserTeamName || null,
+        pendingUserDecisions: Array.isArray(state.pendingUserDecisions) ? state.pendingUserDecisions : [],
+        pendingRfaMatchDecisions: Array.isArray(state.pendingRfaMatchDecisions) ? state.pendingRfaMatchDecisions : [],
+        marketComplete: Boolean(state.marketComplete),
+        freeAgencyComplete: Boolean(state.freeAgencyComplete),
+        completed: Boolean(state.completed),
+        isComplete: Boolean(state.isComplete),
+        status: state.status || (state.freeAgencyComplete ? "complete" : "not_started"),
+        latestResults: null,
+        offersByPlayer: {},
+        dailyLog: [],
+        signedPlayersLog: [],
+        offerHistory: [],
+        userOfferOutcomeLog: [],
+        exceptionUsageByTeam: {},
+        teamNeedProfiles: {},
+      }
+    : state;
+
+  return {
+    ...leagueData,
+    freeAgencyState: safeFreeAgencyState,
+  };
+}
+
 // ------------------------------------------------------------
 // WORKER INIT
 // ------------------------------------------------------------
@@ -1140,7 +1214,11 @@ export function computePlayerProgression(leagueData, statsByKey = {}, meta = {})
     hasStats: !!statsByKey && Object.keys(statsByKey || {}).length > 0,
   });
 
-  const PROGRESSION_TIMEOUT_MS = 15000;
+  const progressionPlayerCount = countProgressionPayloadPlayers(leagueData);
+  const PROGRESSION_TIMEOUT_MS = Math.max(
+    120000,
+    Math.min(300000, 45000 + progressionPlayerCount * 300)
+  );
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -1166,9 +1244,13 @@ export function computePlayerProgression(leagueData, statsByKey = {}, meta = {})
     worker.postMessage({
       type: "compute-progression",
       requestId,
-      leagueData: deepSanitize(leagueData),
+      leagueData: deepSanitize(buildLeagueDataForProgressionWorker(leagueData)),
       statsByKey: deepSanitize(statsByKey),
-      meta,
+      meta: {
+        ...meta,
+        progressionTimeoutMs: PROGRESSION_TIMEOUT_MS,
+        progressionPayloadPlayerCount: progressionPlayerCount,
+      },
     });
   });
 }

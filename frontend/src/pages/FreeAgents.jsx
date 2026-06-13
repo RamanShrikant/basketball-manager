@@ -2309,8 +2309,32 @@ const isOffseasonMode =
       };
     }
 
-    const score = Number(offerEvaluation?.details?.acceptanceScore ?? 0);
-    const percent = clamp(((score - 0.65) / 0.45) * 100, 0, 100);
+    // Use the same live-market player interest scale as the View Offers modal.
+    // Backend evaluation now returns playerViewScore, which is the same score
+    // used to rank/resolve real live offers. acceptanceScore is kept only as an
+    // old-save / older-backend fallback.
+    const backendScore = Number(
+      offerEvaluation?.playerViewScore ??
+      offerEvaluation?.details?.playerViewScore ??
+      offerEvaluation?.interestScore ??
+      offerEvaluation?.score
+    );
+
+    let percent = 0;
+    if (Number.isFinite(backendScore) && backendScore > 0) {
+      percent = backendScore <= 1.5 ? backendScore * 100 : backendScore;
+    } else {
+      const fallbackScore = Number(
+        offerEvaluation?.details?.acceptanceScore ??
+        offerEvaluation?.acceptanceScore
+      );
+
+      if (Number.isFinite(fallbackScore) && fallbackScore > 0) {
+        percent = ((fallbackScore - 0.65) / 0.45) * 100;
+      }
+    }
+
+    percent = clamp(Number.isFinite(percent) ? percent : 0, 0, 100);
 
     if (percent >= 85) {
       return { percent, label: "Ready to Sign", barClass: "bg-green-500" };
@@ -2324,7 +2348,7 @@ const isOffseasonMode =
     if (percent >= 20) {
       return { percent, label: "Low Interest", barClass: "bg-yellow-500" };
     }
-    return { percent, label: "Not Interested", barClass: "bg-red-500" };
+    return { percent, label: percent > 0 ? "Not Interested" : "Unavailable", barClass: "bg-red-500" };
   }, [offerEvaluation, offerEvalLoading]);
 
 

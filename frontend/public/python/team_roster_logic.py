@@ -1233,12 +1233,31 @@ def _set_player_as_standard(player: Dict[str, Any], team_name: str, season_year:
     player["assignmentStatus"] = "nba"
     player["team"] = team_name
 
+    # A player signed as a standard replacement is on a resolved veteran path.
+    # Clear stale QO/RFA metadata so old free-agent records cannot become
+    # permanent RFAs after roster finalization. Rookie/two-way promotion paths
+    # can still restore rookie control immediately after this helper returns.
+    for key in [
+        "qualifyingOffer",
+        "qualifyingOfferEligible",
+        "offerSheet",
+        "rfaOfferSheet",
+        "rfaMatched",
+        "rfaMatch",
+        "rfaStatus",
+        "tenderedQO",
+        "rightsRenounced",
+        "freeAgencyMeta",
+    ]:
+        player.pop(key, None)
+
     rights = player.get("rights") if isinstance(player.get("rights"), dict) else {}
     player["rights"] = {
         **rights,
         "heldByTeam": team_name,
         "seasonsTowardBird": max(1, _safe_int(rights.get("seasonsTowardBird"), 1)),
         "birdLevel": rights.get("birdLevel") or "non_bird",
+        "rookieScale": False,
         "restrictedFreeAgent": False,
     }
 
@@ -1334,34 +1353,75 @@ def _promote_two_way_to_standard(team: Dict[str, Any], player: Dict[str, Any], s
     }
 
 
+def _build_generated_replacement_player(team_name: str, season_year: int, index: int) -> Dict[str, Any]:
+    positions = ["PG", "SG", "SF", "PF", "C"]
+    pos = positions[index % len(positions)]
+    overall = 62 + (index % 5)
+    safe_team = "".join(ch if ch.isalnum() else "_" for ch in str(team_name or "CPU"))
+
+    return {
+        "id": f"cpu_roster_finalization_filler_{season_year}_{safe_team}_{index}",
+        "name": f"Emergency {pos} {index + 1}",
+        "pos": pos,
+        "age": 24 + (index % 8),
+        "overall": overall,
+        "potential": overall + 1,
+        "offRating": overall,
+        "defRating": overall,
+        "stamina": 70,
+        "attrs": [overall for _ in range(15)],
+        "team": "Free Agent",
+        "contractType": "free_agent",
+        "rosterStatus": "free_agent",
+        "assignmentStatus": "free_agent",
+        "generatedEmergencyFiller": True,
+        "generatedForTeamName": team_name,
+        "generatedSeasonYear": season_year,
+    }
+
+
 def _sign_replacement_free_agent(
     league: Dict[str, Any],
     team: Dict[str, Any],
     season_year: int,
 ) -> Optional[Dict[str, Any]]:
+    if not isinstance(league.get("freeAgents"), list):
+        league["freeAgents"] = []
+
     free_agents = [p for p in (league.get("freeAgents") or []) if isinstance(p, dict)]
-    if not free_agents:
-        return None
-
-    # CPU emergency filler: take the best available low-to-mid-level option.
-    free_agents.sort(
-        key = lambda p: (
-            _player_keep_score(p),
-            _safe_int(p.get("overall"), 0),
-            _safe_int(p.get("potential"), 0),
-        ),
-        reverse = True,
-    )
-
-    chosen = free_agents[0]
-    chosen_key = chosen.get("id") or chosen.get("name")
-    league["freeAgents"] = [
-        p for p in free_agents
-        if (p.get("id") or p.get("name")) != chosen_key
-    ]
-
-    signed = copy.deepcopy(chosen)
     team_name = _team_name(team)
+
+    if free_agents:
+        # CPU emergency filler: take the best available low-to-mid-level option.
+        free_agents.sort(
+            key = lambda p: (
+                _player_keep_score(p),
+                _safe_int(p.get("overall"), 0),
+                _safe_int(p.get("potential"), 0),
+            ),
+            reverse = True,
+        )
+
+        chosen = free_agents[0]
+        chosen_key = chosen.get("id") or chosen.get("name")
+        league["freeAgents"] = [
+            p for p in (league.get("freeAgents") or [])
+            if (not isinstance(p, dict)) or (p.get("id") or p.get("name")) != chosen_key
+        ]
+
+        signed = copy.deepcopy(chosen)
+        action = "signed_replacement_free_agent"
+    else:
+        # Last-resort code safety net. Free agency should normally leave enough
+        # low-end bodies, but roster finalization should not hard-crash a save if
+        # the pool is exhausted.
+        signed = _build_generated_replacement_player(
+            team_name = team_name,
+            season_year = season_year,
+            index = roster_counts(team)["standardCount"],
+        )
+        action = "generated_replacement_free_agent"
+
     signed = _set_player_as_standard(signed, team_name, season_year, source = "cpu_roster_finalization_minimum")
     signed["contract"] = _minimum_standard_contract(season_year)
     team["players"].append(signed)
@@ -1370,7 +1430,7 @@ def _sign_replacement_free_agent(
         "playerId": signed.get("id"),
         "playerName": signed.get("name"),
         "teamName": team_name,
-        "action": "signed_replacement_free_agent",
+        "action": action,
         "overall": signed.get("overall"),
     }
 
@@ -1578,7 +1638,7 @@ def _auto_finalize_cpu_team(
         normalize_team_roster_lists(team)
 
     safety = 0
-    while roster_counts(team)["standardCount"] < STANDARD_ROSTER_MIN and safety < 8:
+    while roster_counts(team)["standardCount"] < STANDARD_ROSTER_MIN and safety < 30:
         safety += 1
         signed = _sign_replacement_free_agent(league, team, season_year)
         if not signed:

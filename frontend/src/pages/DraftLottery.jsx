@@ -205,26 +205,120 @@ function buildFallbackTeamRecordsFromSchedule(leagueData) {
   return sortedBest;
 }
 
-function getLatestSeasonHistoryEntry(leagueData, seasonYear) {
-  const history = Array.isArray(leagueData?.seasonHistory) ? leagueData.seasonHistory : [];
-  if (!history.length) return null;
+function getRecordTeamName(row = {}) {
+  return row.teamName || row.team || row.name || row.team_name || "";
+}
 
-  const matching = history.filter((row) => Number(row?.seasonYear) === Number(seasonYear));
-  if (matching.length) {
-    const complete = matching.filter((row) => row?.status === "complete");
-    return complete.at(-1) || matching.at(-1);
+function getRecordWins(row = {}) {
+  return Number(row.wins ?? row.w ?? row.record?.wins ?? row.teamRecord?.wins ?? row.standings?.wins ?? 0);
+}
+
+function getRecordLosses(row = {}) {
+  return Number(row.losses ?? row.l ?? row.record?.losses ?? row.teamRecord?.losses ?? row.standings?.losses ?? 0);
+}
+
+function hasUsableLotteryRecord(row = {}) {
+  const teamName = getRecordTeamName(row);
+  const wins = getRecordWins(row);
+  const losses = getRecordLosses(row);
+  return Boolean(teamName) && Number.isFinite(wins) && Number.isFinite(losses) && wins + losses > 0;
+}
+
+function normalizeLotteryRecord(row = {}, leagueData = null, index = 0) {
+  const teamName = getRecordTeamName(row) || `Team ${index + 1}`;
+  const wins = getRecordWins(row);
+  const losses = getRecordLosses(row);
+  const gamesPlayed = wins + losses;
+
+  return {
+    ...row,
+    teamName,
+    name: row.name || teamName,
+    currentOwnerTeamName: row.currentOwnerTeamName || teamName,
+    originalTeamName: row.originalTeamName || teamName,
+    wins,
+    losses,
+    gamesPlayed,
+    winPct: gamesPlayed ? Number((wins / gamesPlayed).toFixed(3)) : 0,
+    pointDifferential: Number(row.pointDifferential || row.netRating || 0),
+    madePlayoffs: Boolean(row.madePlayoffs),
+    madePlayIn: Boolean(row.madePlayIn),
+    playoffResult: row.playoffResult || (row.madePlayoffs ? "playoffs" : "missed_playoffs"),
+    leagueRank: Number(row.leagueRank || index + 1),
+    logo: resolveLogo(row) || resolveTeamLogoFromLeague(leagueData, teamName),
+  };
+}
+
+function getUsableLotteryRows(rows = [], leagueData = null) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row, index) => normalizeLotteryRecord(row, leagueData, index))
+    .filter(hasUsableLotteryRecord);
+}
+
+function getSeasonHistoryCandidates(leagueData, seasonYear) {
+  const history = Array.isArray(leagueData?.seasonHistory) ? leagueData.seasonHistory : [];
+  if (!history.length) return [];
+
+  const resolvedSeasonYear = Number(seasonYear);
+  const targetYears = [
+    resolvedSeasonYear - 1,
+    resolvedSeasonYear,
+  ].filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
+
+  const out = [];
+  const seenRows = new Set();
+
+  const pushEntry = (entry) => {
+    if (!entry || typeof entry !== "object" || seenRows.has(entry)) return;
+    if (!Array.isArray(entry.teams)) return;
+    seenRows.add(entry);
+    out.push(entry);
+  };
+
+  for (const targetYear of targetYears) {
+    const matches = history.filter(
+      (row) =>
+        row &&
+        typeof row === "object" &&
+        Number(row.seasonYear) === Number(targetYear) &&
+        Array.isArray(row.teams)
+    );
+
+    const complete = matches.filter((row) => row.status === "complete");
+    [...complete, ...matches].reverse().forEach(pushEntry);
   }
 
-  return [...history].sort((a, b) => Number(a?.seasonYear || 0) - Number(b?.seasonYear || 0)).at(-1);
+  [...history]
+    .filter((row) => row && typeof row === "object" && Array.isArray(row.teams))
+    .filter((row) => Number(row.seasonYear || 0) <= resolvedSeasonYear)
+    .sort((a, b) => Number(b.seasonYear || 0) - Number(a.seasonYear || 0))
+    .forEach(pushEntry);
+
+  return out;
+}
+
+function getLatestSeasonHistoryEntry(leagueData, seasonYear) {
+  for (const entry of getSeasonHistoryCandidates(leagueData, seasonYear)) {
+    const usableRows = getUsableLotteryRows(entry?.teams || [], leagueData);
+    if (usableRows.length >= 30) {
+      return entry;
+    }
+  }
+
+  return null;
 }
 
 function getTeamRecordsForLottery(leagueData, seasonYear) {
   const latest = getLatestSeasonHistoryEntry(leagueData, seasonYear);
-  if (Array.isArray(latest?.teams) && latest.teams.length) {
-    return latest.teams;
+  if (latest) {
+    const rows = getUsableLotteryRows(latest.teams, leagueData);
+    if (rows.length >= 30) return rows.slice(0, 30);
   }
 
-  return buildFallbackTeamRecordsFromSchedule(leagueData);
+  const fallbackRows = getUsableLotteryRows(buildFallbackTeamRecordsFromSchedule(leagueData), leagueData);
+  if (fallbackRows.length >= 30) return fallbackRows.slice(0, 30);
+
+  return [];
 }
 
 function readDraftLottery(seasonYear) {
@@ -779,6 +873,14 @@ export default function DraftLottery() {
     }
 
     const teamRecords = getTeamRecordsForLottery(leagueData, seasonYear);
+
+    if (!Array.isArray(teamRecords) || teamRecords.length < 30) {
+      throw new Error(
+        `NO_USABLE_TEAM_RECORDS_FOR_LOTTERY: found ${teamRecords?.length || 0}. ` +
+        `Need previous completed season standings for the ${seasonYear} draft.`
+      );
+    }
+
     const payload = await simEngine.runDraftLottery(leagueData, {
       seasonYear,
       teamRecords,

@@ -239,6 +239,57 @@ def set_player_rights(
     return player["rights"]
 
 
+
+
+def clear_rfa_state_after_standard_signing(player: Dict[str, Any]) -> None:
+    """Remove stale RFA/QO/team-control flags after a real standard FA signing.
+
+    Rookie-scale control is only supposed to create one RFA/QO window at the end
+    of the rookie-control path. Once the player signs or is matched to a new
+    standard contract, he should not keep looping back into RFA in future years.
+    """
+    if not isinstance(player, dict):
+        return
+
+    rights = player.get("rights") if isinstance(player.get("rights"), dict) else {}
+    player["rights"] = {
+        **rights,
+        "rookieScale": False,
+        "restrictedFreeAgent": False,
+    }
+
+    for key in [
+        "qualifyingOffer",
+        "qualifyingOfferEligible",
+        "rfaOfferSheet",
+        "offerSheet",
+        "rfaMatched",
+        "rfaMatch",
+        "rfaStatus",
+        "tenderedQO",
+        "freeAgencyMeta",
+    ]:
+        player.pop(key, None)
+
+    meta = player.get("meta")
+    if isinstance(meta, dict):
+        meta["rookieTeamControl"] = False
+        meta["rookieRightsConsumed"] = True
+        meta.pop("rookieRightsPath", None)
+
+    contract = player.get("contract")
+    if isinstance(contract, dict):
+        for key in [
+            "restrictedFreeAgent",
+            "rfa",
+            "isRFA",
+            "rfaMatched",
+            "offerSheet",
+            "qualifyingOffer",
+        ]:
+            contract.pop(key, None)
+
+
 def get_rights_team(player: Dict[str, Any]) -> Optional[str]:
     rights = get_player_rights(player)
     held_by = rights.get("heldByTeam")
@@ -397,7 +448,17 @@ def update_player_rights_after_signing(
         player = player,
         held_by_team = team_name,
         seasons_toward_bird = seasons,
-        rookie_scale = old_rights["rookieScale"],
+        rookie_scale = False,
+        restricted_free_agent = False,
+    )
+    clear_rfa_state_after_standard_signing(player)
+    # clear_rfa_state_after_standard_signing intentionally resets only the RFA/QO
+    # flags. Restore the correct rights holder / Bird clock after cleanup.
+    set_player_rights(
+        player = player,
+        held_by_team = team_name,
+        seasons_toward_bird = seasons,
+        rookie_scale = False,
         restricted_free_agent = False,
     )
     player.pop("rightsRenounced", None)
@@ -2600,11 +2661,101 @@ def is_emergency_fill_candidate(player: Dict[str, Any]) -> bool:
         or (overall <= 77 and (age >= 27 or potential <= overall + 2))
         or (overall <= 78 and age >= 30 and potential <= overall + 2)
     )
+
+
+def is_min_roster_cleanup_eligible_free_agent(
+    player: Dict[str, Any],
+    team_name: str,
+) -> bool:
+    """Return whether a player can be used as a CPU minimum-roster cleanup body.
+
+    This pass is only for emergency roster legality. It should not steal another
+    team's active RFA, and it should prefer real low-end free agents before
+    generated replacement bodies.
+    """
+    if not isinstance(player, dict):
+        return False
+
+    rights = get_player_rights(player)
+    rights_team = rights.get("heldByTeam")
+    is_rfa = bool(
+        rights.get("restrictedFreeAgent")
+        or player.get("qualifyingOffer")
+        or player.get("rfaOfferSheet")
+        or player.get("offerSheet")
+    )
+
+    # Outside teams should not bypass another team's RFA match rights through
+    # the emergency minimum cleanup path.
+    if is_rfa and rights_team and rights_team != team_name:
+        return False
+
+    return True
+
+
+def get_min_roster_cleanup_candidate_score(
+    player: Dict[str, Any],
+    team_name: str,
+) -> float:
+    rights = get_player_rights(player)
+    rights_team = rights.get("heldByTeam")
+    meta = player.get("freeAgencyMeta") if isinstance(player.get("freeAgencyMeta"), dict) else {}
+    previous_team = meta.get("fromTeam") or player.get("formerTeamName") or player.get("previousTeam")
+
+    overall = float(num(player.get("overall"), 0))
+    potential = float(num(player.get("potential"), overall))
+    age = float(num(player.get("age"), 27))
+
+    score = overall * 100.0 + potential - (age * 0.10)
+
+    # Re-signing your own/previous low-end players is the least disruptive way
+    # to fix mass roster deficits after options/expired-contract cleanup.
+    if rights_team and rights_team == team_name:
+        score += 10000.0
+    if previous_team and previous_team == team_name:
+        score += 5000.0
+
+    return score
+
+
+def build_generated_cpu_min_roster_filler(
+    team_name: str,
+    season_year: int,
+    index: int,
+) -> Dict[str, Any]:
+    """Create a low-impact emergency body only when the real FA pool cannot fill CPU teams."""
+    positions = ["PG", "SG", "SF", "PF", "C"]
+    pos = positions[index % len(positions)]
+    base = 62 + (index % 5)
+    safe_team = "".join(ch if ch.isalnum() else "_" for ch in str(team_name or "CPU"))
+
+    return {
+        "id": f"cpu_min_roster_filler_{season_year}_{safe_team}_{index}",
+        "name": f"Emergency {pos} {index + 1}",
+        "pos": pos,
+        "age": 24 + (index % 8),
+        "overall": base,
+        "potential": base + 1,
+        "offRating": base,
+        "defRating": base,
+        "stamina": 70,
+        "attrs": [base for _ in range(15)],
+        "team": "Free Agent",
+        "contractType": "free_agent",
+        "rosterStatus": "free_agent",
+        "assignmentStatus": "free_agent",
+        "generatedEmergencyFiller": True,
+        "generatedForTeamName": team_name,
+        "generatedSeasonYear": season_year,
+    }
+
+
 def finalize_cpu_min_roster_cleanup(
     league_data: Dict[str, Any],
     current_day: int,
     user_team_name: Optional[str] = None,
     min_roster_target_override: Optional[int] = None,
+    allow_generated_replacements: bool = True,
 ) -> List[Dict[str, Any]]:
     cleanup_signings = []
     min_roster_target = (
@@ -2704,18 +2855,17 @@ def finalize_cpu_min_roster_cleanup(
 
                 emergency_rows = []
                 for fa in league_data.get("freeAgents", []):
+                    if not is_min_roster_cleanup_eligible_free_agent(fa, team_name):
+                        continue
                     if not is_emergency_fill_candidate(fa):
                         continue
 
                     emergency_rows.append((
-                        -int(round(num(fa.get("overall"), 0))),
+                        -get_min_roster_cleanup_candidate_score(fa, team_name),
                         int(num(fa.get("age"), 27)),
                         str(fa.get("name", "")),
                         fa,
                     ))
-
-                if not emergency_rows:
-                    break
 
                 emergency_rows.sort(key = lambda x: (x[0], x[1], x[2]))
 
@@ -2755,6 +2905,39 @@ def finalize_cpu_min_roster_cleanup(
                     )
                     made_move = True
                     break
+
+                if signed_this_round:
+                    continue
+
+                if allow_generated_replacements:
+                    generated_index = len(cleanup_signings) + len(get_team_players(live_team))
+                    signed_player = build_generated_cpu_min_roster_filler(
+                        team_name = team_name,
+                        season_year = season_year,
+                        index = generated_index,
+                    )
+                    signed_player["contract"] = normalize_contract({
+                        "startYear": season_year,
+                        "salaryByYear": [MIN_DEAL],
+                        "option": None,
+                    })
+                    signed_player["marketValue"] = estimate_market_value(signed_player)
+
+                    update_player_rights_after_signing(
+                        player = signed_player,
+                        team_name = team_name,
+                        signing_source = "generated_minimum_cleanup",
+                        matched_rfa = False,
+                    )
+
+                    live_team.setdefault("players", []).append(signed_player)
+                    signed_this_round = _record_cleanup_signing(
+                        signed_player = signed_player,
+                        team_name = team_name,
+                        source = "cpu_generated_min_roster_cleanup",
+                    )
+                    made_move = True
+                    continue
 
                 if not signed_this_round:
                     break
@@ -9090,6 +9273,24 @@ def evaluate_market_offer_submission(
     if is_rights_team(player, team_name):
         acceptance_score += 0.04
 
+    # Keep the negotiation preview on the exact same player-view scale as the
+    # live offer board. The old preview used acceptanceScore, while View Offers
+    # used playerViewScore, which made a user offer look stronger in the modal
+    # than it did once it entered the live market.
+    preview_offer_record = build_offer_record(
+        league_data = league_data,
+        team_name = team_name,
+        player = player,
+        contract = contract,
+        source = "evaluation",
+        current_day = int(num(state.get("currentDay"), 0)),
+    )
+    player_view_score = score_offer_for_player(
+        league_data = league_data,
+        player = player,
+        offer = preview_offer_record,
+    )
+
     return {
         "ok": True,
         "reason": spending_res.get("reason", "Offer can be submitted to the live market."),
@@ -9107,6 +9308,8 @@ def evaluate_market_offer_submission(
         "rawCapRoomWithoutHolds": spending_res.get("rawCapRoomWithoutHolds"),
         "rawPayrollWithoutHolds": spending_res.get("rawPayrollWithoutHolds"),
         "capHoldTotal": spending_res.get("capHoldTotal"),
+        "playerViewScore": player_view_score,
+        "interestScore": player_view_score,
         "details": {
             "offeredYears": offered_years,
             "offeredAAV": offered_aav,
@@ -9115,6 +9318,7 @@ def evaluate_market_offer_submission(
             "minAcceptableAAV": min_acceptable_aav,
             "optionAdjustment": round(option_adjustment, 3),
             "acceptanceScore": round(acceptance_score, 3),
+            "playerViewScore": player_view_score,
         },
     }
 
@@ -11198,6 +11402,10 @@ def submit_user_free_agent_offer(
     offer_record["rawCapRoomWithoutHolds"] = eval_res.get("rawCapRoomWithoutHolds")
     offer_record["rawPayrollWithoutHolds"] = eval_res.get("rawPayrollWithoutHolds")
     offer_record["capHoldTotal"] = eval_res.get("capHoldTotal")
+    offer_record["playerViewScore"] = float(num(
+        eval_res.get("playerViewScore") or eval_res.get("interestScore"),
+        score_offer_for_player(updated, player, offer_record),
+    ))
     _, _, offer_team = find_team_entry(updated, team_name)
     offer_profile = build_team_roster_profile(offer_team, league_data = updated) if offer_team else None
     offer_record["storyContext"] = build_free_agency_story_context(
@@ -11354,6 +11562,7 @@ def should_match_restricted_free_agent_offer(
         "needScore": round(float(num(need_score, 0.0)), 3),
         "spending": compact_debug_spending(spending_res),
     }
+
 
     # Clear keeper tiers. This fixes cases like Tari Eason walking for a normal
     # role-player contract just because the old expected salary was too low.
@@ -12115,6 +12324,11 @@ def initialize_free_agency_period(
     state["rfaMatchDebugLog"] = []
     state["finalizeDebugLog"] = []
     state["freeAgencyDebugErrors"] = []
+    state["marketComplete"] = False
+    state["freeAgencyComplete"] = False
+    state["completed"] = False
+    state["isComplete"] = False
+    state["status"] = "active"
     state["pendingUserTeamName"] = user_team_name
     state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, user_team_name) if user_team_name else None
 
@@ -12136,7 +12350,20 @@ def initialize_free_agency_period(
 
     offseason_min_target = get_free_agency_min_roster_target(updated)
     opening_cleanup_target = max(10, offseason_min_target - 4)
-    opening_cleanup_signings = []
+
+    # CPU teams can lose a large chunk of their roster during expired-contract
+    # and option cleanup. Before Day 1 offers are generated, use real low-end
+    # free agents to bring severely short CPU teams back to a basic skeleton.
+    # This prevents the live market from starting with half the league at 4-8
+    # standard players. Do not generate fake bodies here; generated fillers are
+    # reserved only for final emergency cleanup.
+    opening_cleanup_signings = finalize_cpu_min_roster_cleanup(
+        league_data = updated,
+        current_day = 0,
+        user_team_name = user_team_name,
+        min_roster_target_override = opening_cleanup_target,
+        allow_generated_replacements = False,
+    )
 
     opening_offers = generate_cpu_offers_for_day(
         league_data = updated,
@@ -12147,7 +12374,7 @@ def initialize_free_agency_period(
         "day": 1,
         "type": "opening_market",
         "offersGenerated": len(opening_offers),
-        "openingCleanupSignings": 0,
+        "openingCleanupSignings": len(opening_cleanup_signings),
         "openingCleanupTarget": opening_cleanup_target,
         "fullMinTarget": offseason_min_target,
     })
@@ -12272,6 +12499,7 @@ def advance_free_agency_day(
             current_day = current_day,
             user_team_name = user_team_name,
             min_roster_target_override = final_cleanup_target,
+            allow_generated_replacements = True,
         )
 
         if final_cleanup_signings:
@@ -12284,6 +12512,11 @@ def advance_free_agency_day(
             })
 
         state["isActive"] = False
+        state["marketComplete"] = True
+        state["freeAgencyComplete"] = True
+        state["completed"] = True
+        state["isComplete"] = True
+        state["status"] = "complete"
         state["pendingUserTeamSnapshot"] = None
 
         append_free_agency_full_action_log(
@@ -13293,6 +13526,7 @@ def repair_cpu_teams_to_min_roster(
         league_data = updated,
         current_day = int(num(current_day, 0)),
         user_team_name = user_team_name,
+        allow_generated_replacements = True,
     )
 
     # Emergency signings may make the roster legal, but run one more light pass

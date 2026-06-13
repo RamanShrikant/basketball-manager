@@ -20,6 +20,18 @@ const LEAGUE_KEY = "leagueData";
 const FREE_AGENTS_TEAM_LABEL = "Free Agents";
 const DEV_SIM_STOPPED = "DEV_SIM_STOPPED";
 const DEV_SIM_PAUSED = "DEV_SIM_PAUSED";
+
+// Stage 1 dev-sim rule: the full-offseason shortcut should behave like an
+// untouched CPU simulation. The selected team is handed back to the user after
+// the sim, but every backend offseason step receives no user team so it drafts,
+// resolves rookie/stash decisions, options/rights, free agency, RFA matching,
+// and final roster cleanup using CPU logic.
+const DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU = true;
+
+function getDevBackendUserTeamName(userTeamName = "") {
+  return DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU ? null : userTeamName || null;
+}
+
 const DEV_SIM_TARGET_OPTIONS = [
   { value: "retirements", label: "Retirements" },
   { value: "lottery", label: "Draft Lottery" },
@@ -558,39 +570,171 @@ function getRosterStatus(leagueData, selectedTeam) {
   };
 }
 
-function getLatestSeasonHistoryEntry(leagueData, seasonYear) {
-  const history = Array.isArray(leagueData?.seasonHistory) ? leagueData.seasonHistory : [];
-  if (!history.length) return null;
+function resolveLotteryLogo(team = {}) {
+  return (
+    team.logo ||
+    team.teamLogo ||
+    team.newTeamLogo ||
+    team.logoUrl ||
+    team.image ||
+    team.img ||
+    ""
+  );
+}
 
-  const matching = history.filter((row) => Number(row?.seasonYear) === Number(seasonYear));
-  if (matching.length) {
-    const complete = matching.filter((row) => row?.status === "complete");
-    return complete.at(-1) || matching.at(-1);
+function normalizeLotteryTeamName(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+
+function resolveLotteryTeamLogoFromLeague(leagueData, teamName) {
+  const target = normalizeLotteryTeamName(teamName);
+  if (!target) return "";
+
+  for (const team of getAllTeamsFromLeague(leagueData)) {
+    const names = [
+      team.name,
+      team.teamName,
+      team.currentOwnerTeamName,
+      team.originalTeamName,
+    ];
+
+    if (names.some((name) => normalizeLotteryTeamName(name) === target)) {
+      return resolveLotteryLogo(team);
+    }
   }
 
-  return [...history].sort((a, b) => Number(a?.seasonYear || 0) - Number(b?.seasonYear || 0)).at(-1);
+  return "";
+}
+
+function getRecordTeamName(row = {}) {
+  return row.teamName || row.team || row.name || row.team_name || "";
+}
+
+function getRecordWins(row = {}) {
+  return Number(row.wins ?? row.w ?? row.record?.wins ?? row.teamRecord?.wins ?? row.standings?.wins ?? 0);
+}
+
+function getRecordLosses(row = {}) {
+  return Number(row.losses ?? row.l ?? row.record?.losses ?? row.teamRecord?.losses ?? row.standings?.losses ?? 0);
+}
+
+function hasUsableLotteryRecord(row = {}) {
+  const teamName = getRecordTeamName(row);
+  const wins = getRecordWins(row);
+  const losses = getRecordLosses(row);
+  return Boolean(teamName) && Number.isFinite(wins) && Number.isFinite(losses) && wins + losses > 0;
+}
+
+function normalizeLotteryRecord(row = {}, leagueData = null, index = 0) {
+  const teamName = getRecordTeamName(row) || `Team ${index + 1}`;
+  const wins = getRecordWins(row);
+  const losses = getRecordLosses(row);
+  const gamesPlayed = wins + losses;
+
+  return {
+    ...row,
+    teamName,
+    name: row.name || teamName,
+    currentOwnerTeamName: row.currentOwnerTeamName || teamName,
+    originalTeamName: row.originalTeamName || teamName,
+    wins,
+    losses,
+    gamesPlayed,
+    winPct: gamesPlayed ? Number((wins / gamesPlayed).toFixed(3)) : 0,
+    pointDifferential: Number(row.pointDifferential || row.netRating || 0),
+    madePlayoffs: Boolean(row.madePlayoffs),
+    madePlayIn: Boolean(row.madePlayIn),
+    playoffResult: row.playoffResult || (row.madePlayoffs ? "playoffs" : "missed_playoffs"),
+    leagueRank: Number(row.leagueRank || index + 1),
+    logo: resolveLotteryLogo(row) || resolveLotteryTeamLogoFromLeague(leagueData, teamName),
+  };
+}
+
+function getUsableLotteryRows(rows = [], leagueData = null) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row, index) => normalizeLotteryRecord(row, leagueData, index))
+    .filter(hasUsableLotteryRecord);
+}
+
+function getSeasonHistoryCandidates(leagueData, seasonYear) {
+  const history = Array.isArray(leagueData?.seasonHistory) ? leagueData.seasonHistory : [];
+  if (!history.length) return [];
+
+  const resolvedSeasonYear = Number(seasonYear);
+  const targetYears = [
+    resolvedSeasonYear - 1,
+    resolvedSeasonYear,
+  ].filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
+
+  const out = [];
+  const seenRows = new Set();
+
+  const pushEntry = (entry) => {
+    if (!entry || typeof entry !== "object" || seenRows.has(entry)) return;
+    if (!Array.isArray(entry.teams)) return;
+    seenRows.add(entry);
+    out.push(entry);
+  };
+
+  for (const targetYear of targetYears) {
+    const matches = history.filter(
+      (row) =>
+        row &&
+        typeof row === "object" &&
+        Number(row.seasonYear) === Number(targetYear) &&
+        Array.isArray(row.teams)
+    );
+
+    const complete = matches.filter((row) => row.status === "complete");
+    [...complete, ...matches].reverse().forEach(pushEntry);
+  }
+
+  [...history]
+    .filter((row) => row && typeof row === "object" && Array.isArray(row.teams))
+    .filter((row) => Number(row.seasonYear || 0) <= resolvedSeasonYear)
+    .sort((a, b) => Number(b.seasonYear || 0) - Number(a.seasonYear || 0))
+    .forEach(pushEntry);
+
+  return out;
+}
+
+function getLatestSeasonHistoryEntry(leagueData, seasonYear) {
+  for (const entry of getSeasonHistoryCandidates(leagueData, seasonYear)) {
+    const usableRows = getUsableLotteryRows(entry?.teams || [], leagueData);
+    if (usableRows.length >= 30) {
+      return entry;
+    }
+  }
+
+  return null;
 }
 
 function getTeamRecordsForDevLottery(leagueData, seasonYear) {
   const latest = getLatestSeasonHistoryEntry(leagueData, seasonYear);
-  if (Array.isArray(latest?.teams) && latest.teams.length) {
-    return latest.teams;
+  if (latest) {
+    const rows = getUsableLotteryRows(latest.teams, leagueData);
+    if (rows.length >= 30) return rows.slice(0, 30);
   }
 
-  return getAllTeamsFromLeague(leagueData).map((team, index) => ({
-    teamName: team?.name || team?.teamName || `Team ${index + 1}`,
-    name: team?.name || team?.teamName || `Team ${index + 1}`,
-    wins: Number(team?.wins || team?.w || 0),
-    losses: Number(team?.losses || team?.l || 0),
-    winPct: Number(team?.wins || team?.w || 0) + Number(team?.losses || team?.l || 0) > 0
-      ? Number(team?.wins || team?.w || 0) / (Number(team?.wins || team?.w || 0) + Number(team?.losses || team?.l || 0))
-      : 0,
-    pointDifferential: Number(team?.pointDifferential || 0),
-    madePlayoffs: Boolean(team?.madePlayoffs),
-    madePlayIn: Boolean(team?.madePlayIn),
-    playoffResult: team?.playoffResult || "unknown",
-    leagueRank: index + 1,
-  }));
+  const currentTeamRows = getUsableLotteryRows(
+    getAllTeamsFromLeague(leagueData).map((team, index) => ({
+      teamName: team?.name || team?.teamName || `Team ${index + 1}`,
+      name: team?.name || team?.teamName || `Team ${index + 1}`,
+      wins: team?.wins ?? team?.w ?? 0,
+      losses: team?.losses ?? team?.l ?? 0,
+      pointDifferential: team?.pointDifferential || 0,
+      madePlayoffs: Boolean(team?.madePlayoffs),
+      madePlayIn: Boolean(team?.madePlayIn),
+      playoffResult: team?.playoffResult || "unknown",
+      leagueRank: index + 1,
+      logo: resolveLotteryLogo(team),
+    })),
+    leagueData
+  );
+
+  if (currentTeamRows.length >= 30) return currentTeamRows.slice(0, 30);
+
+  return [];
 }
 
 function getPlayerKeyFromAny(row = {}) {
@@ -675,7 +819,7 @@ function buildAutoRightsDecisions(rows = []) {
   return decisions;
 }
 
-function buildCleanFreeAgencyStateForDev(seasonYear, userTeamName = null, maxDays = 10) {
+function buildCleanFreeAgencyStateForDev(seasonYear, userTeamName = null, maxDays = 10, originalUserTeamName = null) {
   return {
     seasonYear,
     isActive: false,
@@ -692,6 +836,8 @@ function buildCleanFreeAgencyStateForDev(seasonYear, userTeamName = null, maxDay
     teamNeedProfiles: {},
     pendingUserTeamName: userTeamName,
     pendingUserTeamSnapshot: null,
+    devSimTreatSelectedTeamAsCpu: DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU,
+    devOriginalSelectedTeamName: originalUserTeamName || null,
     latestResults: null,
     marketComplete: false,
     freeAgencyComplete: false,
@@ -1612,157 +1758,10 @@ function releaseWorstUserPlayersForDev(leagueData, userTeamName) {
 }
 
 
-function getDevRfaNormalizedKeys(row = {}) {
-  const keys = new Set();
-
-  const addKey = (value) => {
-    const raw = String(value || "").trim();
-    if (!raw) return;
-
-    keys.add(raw);
-
-    if (raw.startsWith("id:")) {
-      keys.add(raw.slice(3));
-    } else {
-      keys.add(`id:${raw}`);
-    }
-  };
-
-  addKey(row.playerKey);
-  addKey(row.playerId);
-  addKey(row.id);
-  addKey(row.playerName || row.name);
-
-  return keys;
-}
-
-function isDevSameRfaPlayer(row = {}, targetKeys = new Set(), targetName = "") {
-  const rowKeys = getDevRfaNormalizedKeys(row);
-
-  for (const key of rowKeys) {
-    if (targetKeys.has(key)) return true;
-  }
-
-  const rowName = String(row.playerName || row.name || "").toLowerCase();
-  return Boolean(targetName && rowName && rowName === targetName);
-}
-
-function isDevSamePlayerObject(player = {}, targetKeys = new Set(), targetName = "") {
-  const playerKeys = getDevRfaNormalizedKeys(player);
-
-  for (const key of playerKeys) {
-    if (targetKeys.has(key)) return true;
-  }
-
-  const playerName = String(player.name || player.playerName || "").toLowerCase();
-  return Boolean(targetName && playerName && playerName === targetName);
-}
-
-function clearDevRfaStatusFromPlayer(player = {}, userTeamName = "") {
-  if (!player || typeof player !== "object") return player;
-
-  const next = { ...player };
-  const rights = next.rights && typeof next.rights === "object" ? { ...next.rights } : {};
-
-  rights.restrictedFreeAgent = false;
-  rights.isRestrictedFreeAgent = false;
-  rights.rfa = false;
-  rights.rfaEligible = false;
-
-  if (rights.heldByTeam === userTeamName) {
-    rights.heldByTeam = "";
-  }
-
-  next.rights = rights;
-  next.qualifyingOffer = null;
-  next.qualifyingOfferEligible = null;
-  next.rfaOfferSheet = null;
-  next.offerSheet = null;
-  next.rfaMatched = false;
-
-  if (String(next.team || "").toLowerCase() === "free agent") {
-    next.rosterStatus = "free_agent";
-    next.assignmentStatus = "free_agent";
-    next.contractType = next.contractType === "two_way" ? next.contractType : "free_agent";
-  }
-
-  return next;
-}
-
-function forceResolveDevRfaDeadlockForDev(leagueData, row = {}, userTeamName = "", failedResult = null) {
-  const league = snapshotLeague(leagueData);
-  const playerName = row?.playerName || row?.name || "this RFA";
-  const targetName = String(playerName || "").toLowerCase();
-  const targetKeys = getDevRfaNormalizedKeys(row);
-
-  if (!league.freeAgencyState || typeof league.freeAgencyState !== "object") {
-    league.freeAgencyState = {};
-  }
-
-  const state = league.freeAgencyState;
-  const oldPending = Array.isArray(state.pendingRfaMatchDecisions)
-    ? state.pendingRfaMatchDecisions
-    : [];
-
-  state.pendingRfaMatchDecisions = oldPending.filter(
-    (candidate) => !isDevSameRfaPlayer(candidate, targetKeys, targetName)
-  );
-
-  if (state.offersByPlayer && typeof state.offersByPlayer === "object") {
-    for (const [offerKey, offers] of Object.entries(state.offersByPlayer)) {
-      const normalizedOfferKey = offerKey.startsWith("id:") ? offerKey.slice(3) : `id:${offerKey}`;
-      const keyMatches = targetKeys.has(offerKey) || targetKeys.has(normalizedOfferKey);
-      const filteredOffers = Array.isArray(offers)
-        ? offers.filter((offer) => {
-            const offerMatches = keyMatches || isDevSameRfaPlayer(offer, targetKeys, targetName);
-            return !offerMatches;
-          })
-        : offers;
-
-      if (Array.isArray(filteredOffers) && filteredOffers.length === 0) {
-        delete state.offersByPlayer[offerKey];
-      } else {
-        state.offersByPlayer[offerKey] = filteredOffers;
-      }
-    }
-  }
-
-  if (Array.isArray(league.freeAgents)) {
-    league.freeAgents = league.freeAgents.map((player) => {
-      if (!isDevSamePlayerObject(player, targetKeys, targetName)) return player;
-      return clearDevRfaStatusFromPlayer(player, userTeamName);
-    });
-  }
-
-  for (const team of getAllTeamsFromLeague(league) || []) {
-    for (const bucket of ["players", "twoWayPlayers", "pendingRookieSignings", "draftRights"]) {
-      if (!Array.isArray(team?.[bucket])) continue;
-
-      team[bucket] = team[bucket].map((player) => {
-        if (!isDevSamePlayerObject(player, targetKeys, targetName)) return player;
-        return clearDevRfaStatusFromPlayer(player, userTeamName);
-      });
-    }
-  }
-
-  state.forceViewingOffersReturn = false;
-  state.forceViewingOffersReturnReason = null;
-  state.devRfaFallbackLog = [
-    ...(Array.isArray(state.devRfaFallbackLog) ? state.devRfaFallbackLog.slice(-12) : []),
-    {
-      ts: Date.now(),
-      seasonYear: league?.seasonYear || league?.currentSeasonYear || null,
-      playerName,
-      playerKey: row?.playerKey || getPlayerKeyFromAny(row),
-      rightsTeamName: row?.rightsTeamName || row?.teamName || "",
-      offeringTeamName: row?.offeringTeamName || row?.offerSheet?.teamName || row?.chosenOffer?.teamName || "",
-      action: "cleared_invalid_rfa_offer_sheet_for_dev_sim",
-      reason: failedResult?.reason || "Both dev RFA decline and match fallback failed.",
-    },
-  ];
-
-  return league;
-}
+// Dev sim intentionally does not force-clear RFA state. In CPU-mode dev sim,
+// the selected team is passed to the backend as null, so the normal manual/CPU
+// backend path should resolve free agency and RFA matching without any frontend
+// decline-first or deadlock-clearing shortcut.
 
 function StatPill({ label, value }) {
   return (
@@ -2113,6 +2112,14 @@ export default function OffseasonHub() {
     }
 
     const teamRecords = getTeamRecordsForDevLottery(workingLeague, seasonYear);
+
+    if (!Array.isArray(teamRecords) || teamRecords.length < 30) {
+      throw new Error(
+        `NO_USABLE_TEAM_RECORDS_FOR_DEV_LOTTERY: found ${teamRecords?.length || 0}. ` +
+        `The ${seasonYear} draft needs the previous completed season standings.`
+      );
+    }
+
     const lotterySystem = Number(seasonYear) >= 2027 ? "three_two_one" : "legacy_14";
 
     const payload = await simEngine.runDraftLottery(workingLeague, {
@@ -2156,6 +2163,8 @@ export default function OffseasonHub() {
   const runDevDraft = async (workingLeague, userTeamName) => {
     if (readOffseasonState(seasonYear).draftComplete) return workingLeague;
 
+    const backendUserTeamName = getDevBackendUserTeamName(userTeamName);
+
     if (typeof simEngine.initializeDraft !== "function" || typeof simEngine.simRestOfDraft !== "function") {
       throw new Error("Draft backend is not fully wired in simEnginePy.js yet.");
     }
@@ -2178,7 +2187,9 @@ export default function OffseasonHub() {
 
     const draftPayload = {
       seasonYear,
-      userTeamName,
+      userTeamName: backendUserTeamName,
+      devTreatUserTeamAsCpu: DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU,
+      originalUserTeamName: userTeamName || null,
       draftOrder,
     };
 
@@ -2198,7 +2209,9 @@ export default function OffseasonHub() {
 
     const finished = await simEngine.simRestOfDraft(initializedLeague, {
       seasonYear,
-      userTeamName,
+      userTeamName: backendUserTeamName,
+      devTreatUserTeamAsCpu: DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU,
+      originalUserTeamName: userTeamName || null,
       draftState: initializedDraftState,
     });
 
@@ -2224,9 +2237,13 @@ export default function OffseasonHub() {
       throw new Error("Rookie signing backend is not fully wired in simEnginePy.js yet.");
     }
 
+    const backendUserTeamName = getDevBackendUserTeamName(userTeamName);
+
     const preview = await simEngine.previewRookieSignings(workingLeague, {
       seasonYear,
-      userTeamName,
+      userTeamName: backendUserTeamName,
+      devTreatUserTeamAsCpu: DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU,
+      originalUserTeamName: userTeamName || null,
     });
 
     if (!preview?.ok) {
@@ -2234,11 +2251,16 @@ export default function OffseasonHub() {
     }
 
     const previewLeague = preview.leagueData || workingLeague;
-    const decisions = buildAutoRookieDecisions(preview.userPendingRookies || []);
+    const decisionRows = DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU
+      ? preview.pendingRookies || []
+      : preview.userPendingRookies || [];
+    const decisions = buildAutoRookieDecisions(decisionRows);
 
     const result = await simEngine.applyRookieSignings(previewLeague, {
       seasonYear,
-      userTeamName,
+      userTeamName: backendUserTeamName,
+      devTreatUserTeamAsCpu: DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU,
+      originalUserTeamName: userTeamName || null,
       decisions,
     });
 
@@ -2253,6 +2275,7 @@ export default function OffseasonHub() {
   const runDevOptionsAndRights = async (workingLeague, userTeamName) => {
     const currentOffseasonState = readOffseasonState(seasonYear);
     const unresolvedPreFreeAgencyContracts = hasUnresolvedPreFreeAgencyContracts(workingLeague, seasonYear);
+    const backendUserTeamName = getDevBackendUserTeamName(userTeamName);
 
     if (
       currentOffseasonState.optionsComplete &&
@@ -2266,7 +2289,7 @@ export default function OffseasonHub() {
       throw new Error("Option backend is not fully wired in simEnginePy.js yet.");
     }
 
-    const preview = await simEngine.previewOffseasonContracts(workingLeague, userTeamName);
+    const preview = await simEngine.previewOffseasonContracts(workingLeague, backendUserTeamName);
 
     if (!preview?.ok) {
       throw new Error(preview?.reason || "Failed to preview player/team options.");
@@ -2285,7 +2308,7 @@ export default function OffseasonHub() {
 
     const applied = await simEngine.applyOffseasonContractDecisions(
       previewLeague,
-      userTeamName,
+      backendUserTeamName,
       decisions
     );
 
@@ -2320,14 +2343,14 @@ export default function OffseasonHub() {
       progressionComplete: false,
     });
 
-    if (typeof simEngine.previewRightsManagement === "function" && typeof simEngine.applyRightsManagement === "function") {
-      const rightsPreview = await simEngine.previewRightsManagement(nextLeague, userTeamName);
+    if (!DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU && backendUserTeamName && typeof simEngine.previewRightsManagement === "function" && typeof simEngine.applyRightsManagement === "function") {
+      const rightsPreview = await simEngine.previewRightsManagement(nextLeague, backendUserTeamName);
 
       if (rightsPreview?.ok) {
         const rightsRows = rightsPreview?.rightsRows || rightsPreview?.rows || rightsPreview?.teamSnapshot?.capHoldRows || [];
         const rightsDecisions = buildAutoRightsDecisions(Array.isArray(rightsRows) ? rightsRows : []);
 
-        const rightsApplied = await simEngine.applyRightsManagement(nextLeague, userTeamName, rightsDecisions);
+        const rightsApplied = await simEngine.applyRightsManagement(nextLeague, backendUserTeamName, rightsDecisions);
 
         if (!rightsApplied?.ok || !rightsApplied?.leagueData) {
           throw new Error(rightsApplied?.reason || "Failed to apply rights management.");
@@ -2351,6 +2374,8 @@ export default function OffseasonHub() {
   const runDevFreeAgencyStart = async (workingLeague, userTeamName) => {
     if (readOffseasonState(seasonYear).freeAgencyComplete) return workingLeague;
 
+    const backendUserTeamName = getDevBackendUserTeamName(userTeamName);
+
     if (typeof simEngine.initializeFreeAgencyPeriod !== "function") {
       throw new Error("Free agency backend is not fully wired in simEnginePy.js yet.");
     }
@@ -2368,14 +2393,14 @@ export default function OffseasonHub() {
     if (!alreadyStarted) {
       const leagueForInit = {
         ...nextLeague,
-        freeAgencyState: buildCleanFreeAgencyStateForDev(seasonYear, userTeamName, 10),
+        freeAgencyState: buildCleanFreeAgencyStateForDev(seasonYear, backendUserTeamName, 10, userTeamName || null),
       };
 
       persistDevLeagueData(leagueForInit);
 
       const init = await simEngine.initializeFreeAgencyPeriod(
         leagueForInit,
-        userTeamName,
+        backendUserTeamName,
         10
       );
 
@@ -2400,6 +2425,8 @@ export default function OffseasonHub() {
   const runDevFreeAgencyToEnd = async (workingLeague, userTeamName) => {
     if (readOffseasonState(seasonYear).freeAgencyComplete) return workingLeague;
 
+    const backendUserTeamName = getDevBackendUserTeamName(userTeamName);
+
     if (typeof simEngine.initializeFreeAgencyPeriod !== "function" || typeof simEngine.advanceFreeAgencyDay !== "function") {
       throw new Error("Free agency backend is not fully wired in simEnginePy.js yet.");
     }
@@ -2416,14 +2443,14 @@ export default function OffseasonHub() {
     if (!alreadyStarted) {
       const leagueForInit = {
         ...nextLeague,
-        freeAgencyState: buildCleanFreeAgencyStateForDev(seasonYear, userTeamName, 10),
+        freeAgencyState: buildCleanFreeAgencyStateForDev(seasonYear, backendUserTeamName, 10, userTeamName || null),
       };
 
       persistDevLeagueData(leagueForInit);
 
       const init = await simEngine.initializeFreeAgencyPeriod(
         leagueForInit,
-        userTeamName,
+        backendUserTeamName,
         10
       );
 
@@ -2443,74 +2470,10 @@ export default function OffseasonHub() {
       const pendingRfa = Array.isArray(state.pendingRfaMatchDecisions) ? state.pendingRfaMatchDecisions : [];
       const pendingUser = Array.isArray(state.pendingUserDecisions) ? state.pendingUserDecisions : [];
 
-      if (pendingRfa.length > 0 && typeof simEngine.processPendingRfaMatchDecision === "function") {
-        for (const row of pendingRfa) {
-          const playerKey = row?.playerKey || getPlayerKeyFromAny(row);
-          if (!playerKey) continue;
-
-          let rfaRes = await simEngine.processPendingRfaMatchDecision(
-            nextLeague,
-            userTeamName,
-            playerKey,
-            "decline",
-            {}
-          );
-
-          if (!rfaRes?.ok || !rfaRes?.leagueData) {
-            console.warn("[OffseasonHub Dev] Auto-decline RFA failed. Trying match fallback.", {
-              row,
-              result: rfaRes,
-            });
-
-            rfaRes = await simEngine.processPendingRfaMatchDecision(
-              nextLeague,
-              userTeamName,
-              playerKey,
-              "match",
-              {}
-            );
-          }
-
-          if (!rfaRes?.ok || !rfaRes?.leagueData) {
-            const playerName = row?.playerName || row?.name || "this RFA";
-            console.warn("[OffseasonHub Dev] Both RFA auto paths failed. Clearing invalid RFA offer sheet and continuing dev sim.", {
-              row,
-              result: rfaRes,
-            });
-
-            nextLeague = forceResolveDevRfaDeadlockForDev(nextLeague, row, userTeamName, rfaRes);
-            nextLeague = persistDevLeagueData(nextLeague);
-            setDevStatus(`Auto-cleared invalid RFA deadlock for ${playerName}; continuing dev sim.`);
-            continue;
-          }
-
-          nextLeague = rfaRes.leagueData;
-          persistDevLeagueData(nextLeague);
-        }
-
-        continue;
-      }
-
-      if (pendingUser.length > 0 && typeof simEngine.processPendingUserFreeAgencyDecisions === "function") {
-        const declinedPlayerKeys = pendingUser
-          .map((row) => row?.playerKey || getPlayerKeyFromAny(row))
-          .filter(Boolean);
-
-        const processRes = await simEngine.processPendingUserFreeAgencyDecisions(
-          nextLeague,
-          userTeamName,
-          [],
-          {},
-          declinedPlayerKeys
+      if (pendingRfa.length > 0 || pendingUser.length > 0) {
+        throw new Error(
+          `DEV_SIM_PENDING_MANUAL_DECISIONS: backend produced ${pendingUser.length} pending user signing decision(s) and ${pendingRfa.length} pending RFA match decision(s). Dev sim is supposed to run the same backend path as manual FA with the selected team treated as CPU, so this is a real backend/wiring problem instead of something the frontend should auto-decline or force-clear.`
         );
-
-        if (!processRes?.ok || !processRes?.leagueData) {
-          throw new Error(processRes?.reason || "Failed to auto-decline pending free agency decisions.");
-        }
-
-        nextLeague = processRes.leagueData;
-        persistDevLeagueData(nextLeague);
-        continue;
       }
 
       const completeFlag = Boolean(
@@ -2523,11 +2486,17 @@ export default function OffseasonHub() {
       const currentDay = Number(state?.currentDay || 0);
       const maxDays = Number(state?.maxDays || 0);
 
-      if (!state?.isActive || completeFlag || (maxDays > 0 && currentDay >= maxDays)) {
+      if (!state?.isActive || completeFlag) {
         break;
       }
 
-      const advance = await simEngine.advanceFreeAgencyDay(nextLeague, userTeamName);
+      if (maxDays > 0 && currentDay > maxDays) {
+        throw new Error(
+          `DEV_SIM_FREE_AGENCY_DAY_OVERFLOW: currentDay=${currentDay} maxDays=${maxDays}.`
+        );
+      }
+
+      const advance = await simEngine.advanceFreeAgencyDay(nextLeague, backendUserTeamName);
 
       if (!advance?.ok || !advance?.leagueData) {
         throw new Error(advance?.reason || "Failed to advance free agency day.");
@@ -2535,6 +2504,29 @@ export default function OffseasonHub() {
 
       nextLeague = advance.leagueData;
       persistDevLeagueData(nextLeague);
+    }
+
+    const finalState = nextLeague?.freeAgencyState || {};
+    const finalPendingRfa = Array.isArray(finalState.pendingRfaMatchDecisions) ? finalState.pendingRfaMatchDecisions : [];
+    const finalPendingUser = Array.isArray(finalState.pendingUserDecisions) ? finalState.pendingUserDecisions : [];
+    const finalCompleteFlag = Boolean(
+      finalState?.marketComplete ||
+        finalState?.freeAgencyComplete ||
+        finalState?.completed ||
+        finalState?.isComplete ||
+        finalState?.status === "complete"
+    );
+
+    if (finalPendingRfa.length > 0 || finalPendingUser.length > 0) {
+      throw new Error(
+        `DEV_SIM_FREE_AGENCY_LEFT_PENDING_DECISIONS: ${finalPendingUser.length} pending user signing decision(s), ${finalPendingRfa.length} pending RFA match decision(s).`
+      );
+    }
+
+    if (!finalCompleteFlag) {
+      throw new Error(
+        `DEV_SIM_FREE_AGENCY_DID_NOT_COMPLETE: stopped before backend marked FA complete. isActive=${Boolean(finalState?.isActive)} currentDay=${Number(finalState?.currentDay || 0)} maxDays=${Number(finalState?.maxDays || 0)}.`
+      );
     }
 
     updateDevOffseasonState({
@@ -2683,9 +2675,13 @@ export default function OffseasonHub() {
       return workingLeague;
     }
 
+    const backendUserTeamName = getDevBackendUserTeamName(userTeamName);
+
     const result = await simEngine.applyRosterFinalization(workingLeague, {
       seasonYear,
-      userTeamName,
+      userTeamName: backendUserTeamName,
+      devTreatUserTeamAsCpu: DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU,
+      originalUserTeamName: userTeamName || null,
     });
 
     if (!result?.ok) {
@@ -2738,6 +2734,10 @@ export default function OffseasonHub() {
       const userTeamName = getSelectedTeamName(selectedTeam);
       let workingLeague = getLeagueDataSnapshot(leagueData);
 
+      if (DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU && userTeamName) {
+        setDevStatus(`Dev CPU mode active: ${userTeamName} will be controlled by CPU logic for draft, options, rookie/stash decisions, free agency, RFA matching, and roster finalization.`);
+      }
+
       if (!workingLeague || !Object.keys(workingLeague || {}).length) {
         throw new Error("No league data found.");
       }
@@ -2752,17 +2752,17 @@ export default function OffseasonHub() {
       assertDevNotStopped();
       if (stopAtDevTarget(target, "lottery", "Stopped after draft lottery.")) return;
 
-      setDevStatus("Simulating NBA Draft...");
+      setDevStatus(DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU ? "Simulating NBA Draft with selected team as CPU..." : "Simulating NBA Draft...");
       workingLeague = await runDevDraft(workingLeague, userTeamName);
       assertDevNotStopped();
       if (stopAtDevTarget(target, "draft", "Stopped after the NBA Draft.")) return;
 
-      setDevStatus("Resolving rookie signings...");
+      setDevStatus(DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU ? "Resolving rookie/stash signings with selected team as CPU..." : "Resolving rookie signings...");
       workingLeague = await runDevRookieSignings(workingLeague, userTeamName);
       assertDevNotStopped();
       if (stopAtDevTarget(target, "rookie_signings", "Stopped after rookie signings.")) return;
 
-      setDevStatus("Resolving player/team options and rights...");
+      setDevStatus(DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU ? "Resolving options, two-way, stash, and rights with selected team as CPU..." : "Resolving player/team options and rights...");
       workingLeague = await runDevOptionsAndRights(workingLeague, userTeamName);
       assertDevNotStopped();
       if (stopAtDevTarget(target, "options", "Stopped after options and rights.")) return;
@@ -2775,22 +2775,26 @@ export default function OffseasonHub() {
         return;
       }
 
-      setDevStatus("Simulating free agency to the end...");
+      setDevStatus(DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU ? "Simulating free agency to the end with selected team as CPU..." : "Simulating free agency to the end...");
       workingLeague = await runDevFreeAgencyToEnd(workingLeague, userTeamName);
       assertDevNotStopped();
       if (stopAtDevTarget(target, "free_agency_complete", "Stopped after free agency completed.")) return;
 
-      setDevStatus("Fixing user roster legality if needed...");
-      workingLeague = await runDevTrimUserRoster(workingLeague, userTeamName);
-      assertDevNotStopped();
+      if (!DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU) {
+        setDevStatus("Fixing user roster legality if needed...");
+        workingLeague = await runDevTrimUserRoster(workingLeague, userTeamName);
+        assertDevNotStopped();
+      }
 
-      setDevStatus("Finalizing rosters...");
+      setDevStatus(DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU ? "Finalizing all rosters with selected team as CPU..." : "Finalizing rosters...");
       workingLeague = await runDevRosterFinalization(workingLeague, userTeamName);
       assertDevNotStopped();
 
-      setDevStatus("Re-checking user roster legality...");
-      workingLeague = await runDevTrimUserRoster(workingLeague, userTeamName);
-      assertDevNotStopped();
+      if (!DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU) {
+        setDevStatus("Re-checking user roster legality...");
+        workingLeague = await runDevTrimUserRoster(workingLeague, userTeamName);
+        assertDevNotStopped();
+      }
       if (stopAtDevTarget(target, "roster_ready", "Stopped after roster cleanup.")) return;
 
       setDevStatus("Running player progression...");
