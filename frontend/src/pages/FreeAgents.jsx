@@ -9,11 +9,10 @@ import styles from "./FreeAgents.module.css";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import { saveLeagueData, loadLeagueData } from "../utils/leagueStorage.js";
+import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
-const MAX_CONTRACT_AMOUNT = 54_000_000;
-const MAX_CONTRACT_MILLIONS = MAX_CONTRACT_AMOUNT / 1_000_000;
 
 function compactStorySideForStorage(side) {
   if (!side || typeof side !== "object") return null;
@@ -1052,18 +1051,14 @@ const isOffseasonMode =
   // ------------------------------------------------------------
   // User team cap dashboard + affordability model
   // ------------------------------------------------------------
-  const MIN_CONTRACT_AMOUNT = 1_200_000;
-  const DEFAULT_SALARY_CAP = 154_647_000;
-  const DEFAULT_LUXURY_TAX_LINE = 187_895_000;
-  const DEFAULT_FIRST_APRON = 195_945_000;
-  const DEFAULT_SECOND_APRON = 207_824_000;
-  const DEFAULT_ROOM_EXCEPTION = 8_781_000;
-  const DEFAULT_NON_TAXPAYER_MLE = 14_104_000;
-  const DEFAULT_TAXPAYER_MLE = 5_685_000;
-
   const getOperatingSeasonYear = () => {
     return getCurrentSeasonYear() + (isOffseasonMode ? 1 : 0);
   };
+
+  const financialRules = getLeagueFinancialRules(workingLeagueData || {}, getOperatingSeasonYear());
+  const MIN_CONTRACT_AMOUNT = Number(financialRules.minimumSalary || 1_200_000);
+  const MAX_CONTRACT_AMOUNT = Number(financialRules.maxSalary || 54_000_000);
+  const MAX_CONTRACT_MILLIONS = MAX_CONTRACT_AMOUNT / 1_000_000;
 
   const getLeagueAmount = (keys, fallback) => {
     for (const key of keys) {
@@ -1073,13 +1068,13 @@ const isOffseasonMode =
     return fallback;
   };
 
-  const getSalaryCapAmount = () => getLeagueAmount(["salaryCap", "capLimit"], DEFAULT_SALARY_CAP);
-  const getLuxuryTaxLineAmount = () => getLeagueAmount(["luxuryTaxLine", "taxLine"], DEFAULT_LUXURY_TAX_LINE);
-  const getFirstApronAmount = () => getLeagueAmount(["firstApron", "apron1"], DEFAULT_FIRST_APRON);
-  const getSecondApronAmount = () => getLeagueAmount(["secondApron", "apron2"], DEFAULT_SECOND_APRON);
-  const getRoomExceptionAmount = () => getLeagueAmount(["roomException", "roomExceptionAmount"], DEFAULT_ROOM_EXCEPTION);
-  const getNonTaxpayerMleAmount = () => getLeagueAmount(["midLevelException", "nonTaxpayerMLE", "nonTaxpayerMidLevelException"], DEFAULT_NON_TAXPAYER_MLE);
-  const getTaxpayerMleAmount = () => getLeagueAmount(["taxpayerMLE", "taxpayerMidLevelException"], DEFAULT_TAXPAYER_MLE);
+  const getSalaryCapAmount = () => getLeagueAmount(["salaryCap", "capLimit"], financialRules.salaryCap);
+  const getLuxuryTaxLineAmount = () => getLeagueAmount(["luxuryTaxLine", "taxLine"], financialRules.luxuryTaxLine);
+  const getFirstApronAmount = () => getLeagueAmount(["firstApron", "apron1"], financialRules.firstApron);
+  const getSecondApronAmount = () => getLeagueAmount(["secondApron", "apron2"], financialRules.secondApron);
+  const getRoomExceptionAmount = () => getLeagueAmount(["roomException", "roomExceptionAmount"], financialRules.roomException);
+  const getNonTaxpayerMleAmount = () => getLeagueAmount(["midLevelException", "nonTaxpayerMLE", "nonTaxpayerMidLevelException"], financialRules.nonTaxpayerMLE);
+  const getTaxpayerMleAmount = () => getLeagueAmount(["taxpayerMLE", "taxpayerMidLevelException"], financialRules.taxpayerMLE);
 
   const getContractSalaryForYear = (contract, seasonYear) => {
     const startYear = Number(contract?.startYear || 0);

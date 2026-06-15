@@ -5,6 +5,7 @@ import * as simEngine from "../api/simEnginePy.js";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./ViewingOffers.module.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
 
@@ -459,7 +460,8 @@ function getPendingSigningCapRoomImpact(row = {}) {
   // Some old saved pending rows did not preserve spendingType = "minimum".
   // Treat near-minimum one-year depth deals as minimum-exception previews so a
   // cap-space signing does not incorrectly block a follow-up minimum signing.
-  if (currentYearSalary > 0 && currentYearSalary <= 1_500_000) return 0;
+  const nearMinimumThreshold = Number(row?.minimumException || row?.teamSnapshot?.minimumException || row?.snapshot?.minimumException || 1_500_000);
+  if (currentYearSalary > 0 && currentYearSalary <= nearMinimumThreshold) return 0;
 
   if (spendingType === "cap_space" || spendingType === "below_cap" || raw.includes("cap space")) {
     return currentYearSalary;
@@ -1186,8 +1188,7 @@ function getPreviewSalaryCap(leagueData, snapshot) {
 
   if (direct && direct > 0) return direct;
 
-  // Current cap fallback used by the FA screens.
-  return 154_647_000;
+  return Number(getPreviewFinancialRules(leagueData).salaryCap || 154_647_000);
 }
 
 function getPreviewCurrentSeasonYear(leagueData) {
@@ -1208,6 +1209,14 @@ function getPreviewOperatingSeasonYear(leagueData) {
   );
 
   return getPreviewCurrentSeasonYear(leagueData) + (freeAgencyWindowActive ? 1 : 0);
+}
+
+function getPreviewFinancialRules(leagueData) {
+  return getLeagueFinancialRules(leagueData || {}, getPreviewOperatingSeasonYear(leagueData));
+}
+
+function getPreviewMinimumSalary(leagueData) {
+  return Number(getPreviewFinancialRules(leagueData).minimumSalary || 1_200_000);
 }
 
 function getPreviewContractSalaryForYear(contract = {}, seasonYear = 0) {
@@ -1330,7 +1339,7 @@ function getPreviewHardCapForTeam(leagueData, teamName = "", team = {}) {
     leagueData?.secondApronAmount,
     leagueData?.secondApronLine,
     leagueData?.apron2,
-    207_824_000
+    getPreviewFinancialRules(leagueData).secondApron
   );
 }
 
@@ -1346,7 +1355,7 @@ function getPreviewRights(player = {}) {
       };
 }
 
-function getPreviewPreviousSalary(player = {}) {
+function getPreviewPreviousSalary(player = {}, leagueData = {}) {
   const previousSalaryByYear = Array.isArray(player?.previousContract?.salaryByYear)
     ? player.previousContract.salaryByYear
     : [];
@@ -1363,10 +1372,10 @@ function getPreviewPreviousSalary(player = {}) {
     return Number(currentSalaryByYear[currentSalaryByYear.length - 1] || 0);
   }
 
-  return Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+  return Number(player?.marketValue?.expectedYear1Salary || getPreviewMinimumSalary(leagueData));
 }
 
-function getPreviewCapHoldForPlayer(player = {}, teamName = "") {
+function getPreviewCapHoldForPlayer(player = {}, teamName = "", leagueData = {}) {
   const rights = getPreviewRights(player);
   const birdLevel = String(rights?.birdLevel || "").toLowerCase();
 
@@ -1379,22 +1388,23 @@ function getPreviewCapHoldForPlayer(player = {}, teamName = "") {
     player?.qualifyingOffer?.amount &&
     player?.qualifyingOffer?.status !== "withdrawn"
   ) {
-    return Math.max(1_200_000, Number(player.qualifyingOffer.amount || 0));
+    return Math.max(getPreviewMinimumSalary(leagueData), Number(player.qualifyingOffer.amount || 0));
   }
 
-  const previousSalary = getPreviewPreviousSalary(player);
-  const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+  const minimumSalary = getPreviewMinimumSalary(leagueData);
+  const previousSalary = getPreviewPreviousSalary(player, leagueData);
+  const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || minimumSalary);
 
   if (birdLevel === "bird") {
-    return Math.max(previousSalary, marketYearOne, 1_200_000);
+    return Math.max(previousSalary, marketYearOne, minimumSalary);
   }
 
   if (birdLevel === "early_bird") {
-    return Math.max(previousSalary * 1.3, 1_200_000);
+    return Math.max(previousSalary * 1.3, minimumSalary);
   }
 
   if (birdLevel === "non_bird") {
-    return Math.max(previousSalary * 1.2, 1_200_000);
+    return Math.max(previousSalary * 1.2, minimumSalary);
   }
 
   return 0;
@@ -1406,7 +1416,7 @@ function getPreviewCapHoldTotal(leagueData, teamName) {
     : [];
 
   return freeAgents.reduce((sum, player) => {
-    return sum + getPreviewCapHoldForPlayer(player, teamName);
+    return sum + getPreviewCapHoldForPlayer(player, teamName, leagueData);
   }, 0);
 }
 
@@ -2195,11 +2205,12 @@ export default function ViewingOffers() {
       return Number(currentSalaryByYear[currentSalaryByYear.length - 1] || 0);
     }
 
-    return Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+    return Number(player?.marketValue?.expectedYear1Salary || getPreviewMinimumSalary(leagueData));
   };
 
   const getCapHoldForPlayer = (player, teamName) => {
     const rights = getRightsFromPlayer(player);
+    const minimumSalary = getPreviewMinimumSalary(leagueData);
 
     if (player?.rightsRenounced) return 0;
     if (!teamName || rights?.heldByTeam !== teamName) return 0;
@@ -2210,22 +2221,22 @@ export default function ViewingOffers() {
       player?.qualifyingOffer?.amount &&
       player?.qualifyingOffer?.status !== "withdrawn"
     ) {
-      return Math.max(1_200_000, Number(player.qualifyingOffer.amount || 0));
+      return Math.max(getPreviewMinimumSalary(leagueData), Number(player.qualifyingOffer.amount || 0));
     }
 
     const previousSalary = getPreviousSalaryForCapHold(player);
-    const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+    const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || getPreviewMinimumSalary(leagueData));
 
     if (rights.birdLevel === "bird") {
-      return Math.max(previousSalary, marketYearOne, 1_200_000);
+      return Math.max(previousSalary, marketYearOne, minimumSalary);
     }
 
     if (rights.birdLevel === "early_bird") {
-      return Math.max(previousSalary * 1.3, 1_200_000);
+      return Math.max(previousSalary * 1.3, minimumSalary);
     }
 
     if (rights.birdLevel === "non_bird") {
-      return Math.max(previousSalary * 1.2, 1_200_000);
+      return Math.max(previousSalary * 1.2, minimumSalary);
     }
 
     return 0;

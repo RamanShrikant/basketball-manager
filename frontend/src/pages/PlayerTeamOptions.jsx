@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
 import styles from "./PlayerTeamOptions.module.css";
+import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const OPTIONS_RESULTS_KEY = "bm_option_decision_results_v1";
@@ -23,6 +24,14 @@ function getSeasonYear(leagueData) {
     safeJSON(localStorage.getItem("bm_league_meta_v1"), {})?.seasonYear ||
     2026
   );
+}
+
+function getOperatingFinancialSeasonYear(leagueData) {
+  return getSeasonYear(leagueData) + 1;
+}
+
+function getMinimumCapHoldSalary(leagueData) {
+  return Number(getLeagueFinancialRules(leagueData || {}, getOperatingFinancialSeasonYear(leagueData)).minimumSalary || 1_200_000);
 }
 
 function getAllTeamsFromLeague(leagueData) {
@@ -157,15 +166,16 @@ function getPreviousSalary(player) {
   return Number(player?.marketValue?.expectedYear1Salary || 0);
 }
 
-function getCapHold(player) {
+function getCapHold(player, leagueData) {
   const rights = getRights(player);
   if (!rights?.heldByTeam || rights?.birdLevel === "none") return 0;
-  if (rights?.restrictedFreeAgent && player?.qualifyingOffer?.amount) return Number(player.qualifyingOffer.amount || 0);
+  const minimumSalary = getMinimumCapHoldSalary(leagueData);
+  if (rights?.restrictedFreeAgent && player?.qualifyingOffer?.amount) return Math.max(minimumSalary, Number(player.qualifyingOffer.amount || 0));
   const previousSalary = getPreviousSalary(player);
-  const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || 0);
-  if (rights.birdLevel === "bird") return Math.max(previousSalary, marketYearOne, 1200000);
-  if (rights.birdLevel === "early_bird") return Math.max(previousSalary * 1.3, 1200000);
-  if (rights.birdLevel === "non_bird") return Math.max(previousSalary * 1.2, 1200000);
+  const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || minimumSalary);
+  if (rights.birdLevel === "bird") return Math.max(previousSalary, marketYearOne, minimumSalary);
+  if (rights.birdLevel === "early_bird") return Math.max(previousSalary * 1.3, minimumSalary);
+  if (rights.birdLevel === "non_bird") return Math.max(previousSalary * 1.2, minimumSalary);
   return 0;
 }
 
@@ -175,7 +185,7 @@ function getUserRightsRows(leagueData, teamName) {
   for (const player of leagueData.freeAgents || []) {
     const rights = getRights(player);
     if (rights?.heldByTeam !== teamName) continue;
-    const capHold = getCapHold(player);
+    const capHold = getCapHold(player, leagueData);
     if (capHold <= 0) continue;
     rows.push({
       playerId: player?.id,
@@ -730,7 +740,7 @@ const salaryCap = Number(
   rightsPreviewData?.teamSnapshot?.salaryCap ||
   (workingLeagueData || leagueData)?.salaryCap ||
   (workingLeagueData || leagueData)?.capLimit ||
-  150000000
+  getLeagueFinancialRules(workingLeagueData || leagueData || {}, getOperatingFinancialSeasonYear(workingLeagueData || leagueData)).salaryCap
 );
 
 const practicalCapRoomBeforeRenounce = Number(

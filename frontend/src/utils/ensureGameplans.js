@@ -1,4 +1,6 @@
-const GAMEPLAN_VERSION = 3;
+import { computeTeamRatings } from "../api/teamRatings";
+
+export const GAMEPLAN_VERSION = 7;
 
 // Helpers to support both league shapes: { teams: [...] } or { conferences: { ... } }
 function getAllTeamsFromLeague(leagueData) {
@@ -83,6 +85,7 @@ function hasValidManualGameplanForRoster(team, savedPlan) {
   if (!team?.name) return false;
   if (!savedPlan || typeof savedPlan !== "object") return false;
   if (!isManualLockedGameplan(savedPlan)) return false;
+  if (savedPlan.version !== GAMEPLAN_VERSION) return false;
   if (savedPlan.teamName !== team.name) return false;
 
   const liveNames = getRosterNames(team?.players || []);
@@ -114,223 +117,657 @@ function shouldRebuildGameplan(team, savedPlan) {
   return false;
 }
 
-function fatiguePenalty(mins, stamina) {
-  const threshold = 0.359 * stamina + 2.46;
-  const over = Math.max(0, mins - threshold);
-  return Math.max(0.7, 1 - 0.0075 * over);
+const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
+const STARTER_MINUTES = 24;
+const BENCH_MINUTES = [17, 14, 12, 11, 10];
+const ROTATION_SIZE = 10;
+const STARTER_MAX_MINUTES = 42;
+const BENCH_MAX_MINUTES = 30;
+const HARD_MAX_MINUTES = 48;
+const BENCH_SEARCH_LIMIT = 20;
+const BENCH_FINALIST_LIMIT = 64;
+
+function playerValue(p) {
+  const overall = Number(p?.overall ?? 75);
+  const off = Number(p?.offRating ?? overall);
+  const def = Number(p?.defRating ?? overall);
+  const stamina = Number(p?.stamina ?? 75);
+
+  return (
+    overall * 1.0 +
+    off * 0.18 +
+    def * 0.18 +
+    (stamina - 70) * 0.08
+  );
+}
+
+function comparePlayers(a, b) {
+  const diff = playerValue(b) - playerValue(a);
+  if (Math.abs(diff) > 1e-9) return diff;
+
+  const ovrDiff = Number(b?.overall ?? 0) - Number(a?.overall ?? 0);
+  if (ovrDiff !== 0) return ovrDiff;
+
+  return String(a?.name || "").localeCompare(String(b?.name || ""));
+}
+
+function uniquePlayers(players) {
+  const seen = new Set();
+  const out = [];
+
+  for (const p of players || []) {
+    if (!p?.name || seen.has(p.name)) continue;
+    seen.add(p.name);
+    out.push(p);
+  }
+
+  return out;
+}
+
+function combos(arr, k) {
+  const res = [];
+  const go = (start, path) => {
+    if (path.length === k) {
+      res.push(path.slice());
+      return;
+    }
+
+    for (let j = start; j < arr.length; j++) {
+      path.push(arr[j]);
+      go(j + 1, path);
+      path.pop();
+    }
+  };
+
+  go(0, []);
+  return res;
+}
+
+function buildBenchPool(valid, starterNames) {
+  const remaining = valid.filter((p) => !starterNames.has(p.name));
+  if (remaining.length <= BENCH_SEARCH_LIMIT) return remaining;
+
+  const locked = [];
+
+  for (const pos of POSITIONS) {
+    const bestAtPos = remaining
+      .filter((p) => p.pos === pos || p.secondaryPos === pos)
+      .sort(comparePlayers)
+      .slice(0, 2);
+
+    locked.push(...bestAtPos);
+  }
+
+  return uniquePlayers([
+    ...locked,
+    ...remaining.sort(comparePlayers),
+  ]).slice(0, BENCH_SEARCH_LIMIT);
+}
+
+function isEligibleForPosition(player, pos) {
+  return player?.pos === pos || player?.secondaryPos === pos;
+}
+
+function compareStarterForSlot(pos) {
+  return (a, b) => {
+    const ovrDiff = Number(b?.overall ?? 0) - Number(a?.overall ?? 0);
+    if (ovrDiff !== 0) return ovrDiff;
+
+    const primaryDiff = Number(b?.pos === pos) - Number(a?.pos === pos);
+    if (primaryDiff !== 0) return primaryDiff;
+
+    const secondaryDiff = Number(b?.secondaryPos === pos) - Number(a?.secondaryPos === pos);
+    if (secondaryDiff !== 0) return secondaryDiff;
+
+    const valueDiff = playerValue(b) - playerValue(a);
+    if (Math.abs(valueDiff) > 1e-9) return valueDiff;
+
+    return String(a?.name || "").localeCompare(String(b?.name || ""));
+  };
+}
+
+function starterScoreFromMap(mapping) {
+  let totalOvr = 0;
+  let primaryHits = 0;
+  let secondaryUses = 0;
+  let totalValue = 0;
+
+  for (const pos of POSITIONS) {
+    const p = mapping[pos];
+    if (!p) return -Infinity;
+
+    totalOvr += Number(p.overall ?? 0);
+    totalValue += playerValue(p);
+
+    if (p.pos === pos) primaryHits += 1;
+    else if (p.secondaryPos === pos) secondaryUses += 1;
+  }
+
+  // Hard priority order:
+  // 1) highest possible starter OVR total while legally filling PG/SG/SF/PF/C
+  // 2) most players in their primary position
+  // 3) fewest secondary-position starts
+  // 4) better all-around value as a final tie-breaker
+  return (
+    totalOvr * 1_000_000_000 +
+    primaryHits * 1_000_000 +
+    (POSITIONS.length - secondaryUses) * 10_000 +
+    totalValue
+  );
+}
+
+function emergencyStarterFallback(valid) {
+  const used = new Set();
+  const starters = [];
+
+  for (const pos of POSITIONS) {
+    const legal = valid
+      .filter((p) => !used.has(p.name) && isEligibleForPosition(p, pos))
+      .sort(compareStarterForSlot(pos));
+
+    const pool = legal.length
+      ? legal
+      : valid
+          .filter((p) => !used.has(p.name))
+          .sort(compareStarterForSlot(pos));
+
+    if (!pool.length) break;
+
+    const picked = pool[0];
+    used.add(picked.name);
+    starters.push(picked);
+  }
+
+  return starters;
+}
+
+function chooseStarters(valid) {
+  const roster = uniquePlayers(valid).filter(
+    (p) => p && p.name && Number.isFinite(Number(p.overall))
+  );
+
+  if (roster.length <= 5) {
+    return emergencyStarterFallback(roster);
+  }
+
+  const candidatesByPos = {};
+  for (const pos of POSITIONS) {
+    candidatesByPos[pos] = roster
+      .filter((p) => isEligibleForPosition(p, pos))
+      .sort(compareStarterForSlot(pos));
+  }
+
+  // If the roster truly cannot fill every position legally, only then use the
+  // emergency fallback. Normal NBA rosters should take the exhaustive legal path.
+  if (POSITIONS.some((pos) => candidatesByPos[pos].length === 0)) {
+    return emergencyStarterFallback(roster);
+  }
+
+  let bestMap = null;
+  let bestScore = -Infinity;
+  const used = new Set();
+  const mapping = {};
+
+  const search = (slotIdx) => {
+    if (slotIdx >= POSITIONS.length) {
+      const score = starterScoreFromMap(mapping);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMap = { ...mapping };
+      }
+      return;
+    }
+
+    const pos = POSITIONS[slotIdx];
+    for (const player of candidatesByPos[pos]) {
+      if (used.has(player.name)) continue;
+
+      used.add(player.name);
+      mapping[pos] = player;
+      search(slotIdx + 1);
+      delete mapping[pos];
+      used.delete(player.name);
+    }
+  };
+
+  search(0);
+
+  if (!bestMap) {
+    return emergencyStarterFallback(roster);
+  }
+
+  return POSITIONS.map((pos) => bestMap[pos]).filter(Boolean);
+}
+
+function makeZeroMinutes(valid) {
+  const obj = {};
+  for (const p of valid) obj[p.name] = 0;
+  return obj;
+}
+
+function localFatiguePenaltyForTie(mins, stamina) {
+  const threshold = 0.359 * (Number(stamina ?? 75)) + 2.46;
+  const over = Math.max(0, (mins || 0) - threshold);
+  return Math.max(0.68, 1 - 0.010 * over);
+}
+
+function continuousTieScore(valid, minutesObj) {
+  const POS_TARGET = 48;
+  const SECONDARY_POS_CREDIT = 0.55;
+  const posMin = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
+  let weighted = 0;
+
+  for (const p of valid) {
+    const m = Math.max(0, Number(minutesObj?.[p.name] || 0));
+    if (m <= 0) continue;
+
+    const overall = Number(p.overall ?? 75);
+    const off = Number(p.offRating ?? overall);
+    const def = Number(p.defRating ?? overall);
+    const pen = localFatiguePenaltyForTie(m, p.stamina ?? 75);
+    weighted += (m / 240) * ((overall * 0.5 + off * 0.25 + def * 0.25) * pen);
+
+    if (p.pos && posMin[p.pos] !== undefined) {
+      posMin[p.pos] += m;
+    }
+
+    // Match teamRatings.js: secondary positions are simple flexible-position
+    // credit. This keeps the optimizer from over-favoring lower-rated primary
+    // fits when a better player can reasonably cover the spot as a secondary.
+    if (
+      p.secondaryPos &&
+      p.secondaryPos !== p.pos &&
+      posMin[p.secondaryPos] !== undefined
+    ) {
+      posMin[p.secondaryPos] += m * SECONDARY_POS_CREDIT;
+    }
+  }
+
+  const coverageError = POSITIONS.reduce(
+    (sum, pos) => sum + Math.abs((posMin[pos] || 0) - POS_TARGET),
+    0
+  );
+
+  return weighted - coverageError * 0.018;
+}
+
+function scoreMinutes(valid, minutesObj) {
+  const ratings = computeTeamRatings({ players: valid }, minutesObj);
+
+  // Primary objective is displayed team OVR. OFF/DEF and a continuous local
+  // tie-breaker only decide between rotations with the same displayed OVR.
+  return (
+    (ratings.overall || 0) * 1_000_000 +
+    (ratings.off || 0) * 10_000 +
+    (ratings.def || 0) * 100 +
+    continuousTieScore(valid, minutesObj)
+  );
+}
+
+function getMinuteCap(p, starterNames, relaxed = false) {
+  if (relaxed) return HARD_MAX_MINUTES;
+  return starterNames.has(p.name) ? STARTER_MAX_MINUTES : BENCH_MAX_MINUTES;
+}
+
+function seedRotation(valid, starters, benchPlayers) {
+  const rotation = [...starters, ...benchPlayers];
+  const minByName = {};
+  const minutesObj = makeZeroMinutes(valid);
+
+  for (const p of starters) {
+    minutesObj[p.name] = STARTER_MINUTES;
+    minByName[p.name] = STARTER_MINUTES;
+  }
+
+  benchPlayers.forEach((p, idx) => {
+    const min = BENCH_MINUTES[idx] ?? 10;
+    minutesObj[p.name] = min;
+    minByName[p.name] = min;
+  });
+
+  return {
+    starters,
+    bench: benchPlayers,
+    rotation,
+    minutesObj,
+    minByName,
+    score: scoreMinutes(valid, minutesObj),
+  };
+}
+
+function optimizeSeededRotation(valid, seeded) {
+  const starters = seeded.starters;
+  const benchPlayers = seeded.bench;
+  const rotation = seeded.rotation;
+  const starterNames = new Set(starters.map((p) => p.name));
+  const minByName = { ...seeded.minByName };
+  const minutesObj = { ...seeded.minutesObj };
+
+  let used = Object.values(minutesObj).reduce((sum, value) => sum + Number(value || 0), 0);
+  let remain = Math.max(0, 240 - used);
+
+  const addBestMinute = (relaxed = false) => {
+    let best = null;
+    let bestScore = -Infinity;
+
+    for (const p of rotation) {
+      const cap = getMinuteCap(p, starterNames, relaxed);
+      if ((minutesObj[p.name] || 0) >= cap) continue;
+
+      minutesObj[p.name] += 1;
+      const score = scoreMinutes(valid, minutesObj);
+      minutesObj[p.name] -= 1;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+
+    if (!best) return false;
+
+    minutesObj[best.name] += 1;
+    return true;
+  };
+
+  while (remain > 0) {
+    if (!addBestMinute(false)) break;
+    remain--;
+  }
+
+  // Safety valve for unusual rosters where normal caps cannot reach 240.
+  while (remain > 0) {
+    if (!addBestMinute(true)) break;
+    remain--;
+  }
+
+  let currentScore = scoreMinutes(valid, minutesObj);
+  let improved = true;
+  let passes = 0;
+
+  while (improved && passes < 60) {
+    improved = false;
+    passes++;
+
+    let bestMove = null;
+    let bestScore = currentScore;
+
+    for (const from of rotation) {
+      if ((minutesObj[from.name] || 0) <= (minByName[from.name] || 0)) continue;
+
+      for (const to of rotation) {
+        if (from.name === to.name) continue;
+        if ((minutesObj[to.name] || 0) >= getMinuteCap(to, starterNames, false)) continue;
+
+        minutesObj[from.name] -= 1;
+        minutesObj[to.name] += 1;
+
+        const testScore = scoreMinutes(valid, minutesObj);
+
+        minutesObj[from.name] += 1;
+        minutesObj[to.name] -= 1;
+
+        if (testScore > bestScore + 1e-9) {
+          bestScore = testScore;
+          bestMove = { from, to };
+        }
+      }
+    }
+
+    if (bestMove) {
+      minutesObj[bestMove.from.name] -= 1;
+      minutesObj[bestMove.to.name] += 1;
+      currentScore = bestScore;
+      improved = true;
+    }
+  }
+
+  return {
+    starters,
+    bench: benchPlayers,
+    rotation,
+    minutesObj,
+    score: currentScore,
+  };
+}
+
+
+function displayedRatings(valid, minutesObj) {
+  const ratings = computeTeamRatings({ players: valid }, minutesObj);
+  return {
+    overall: Number(ratings?.overall || 0),
+    off: Number(ratings?.off || 0),
+    def: Number(ratings?.def || 0),
+  };
+}
+
+function acceptsRealismSwap(baseRatings, testRatings) {
+  if (testRatings.overall > baseRatings.overall) return true;
+  if (testRatings.overall < baseRatings.overall) return false;
+
+  // When displayed OVR is unchanged, allow the higher-OVR bench player to win
+  // as long as the OFF/DEF profile is not meaningfully worse.
+  const baseSides = baseRatings.off + baseRatings.def;
+  const testSides = testRatings.off + testRatings.def;
+  return testSides >= baseSides - 1;
+}
+
+function playerOverall(p) {
+  return Number(p?.overall ?? 0);
+}
+
+function playablePositions(p) {
+  return new Set([p?.pos, p?.secondaryPos].filter(Boolean));
+}
+
+function sharesPlayablePosition(a, b) {
+  const aPos = playablePositions(a);
+  for (const pos of playablePositions(b)) {
+    if (aPos.has(pos)) return true;
+  }
+  return false;
+}
+
+function applyBenchRealismPass(valid, optimized) {
+  if (!optimized?.rotation?.length) return optimized;
+
+  const starters = optimized.starters || [];
+  const starterNames = new Set(starters.map((p) => p.name));
+  let bench = (optimized.bench || []).filter((p) => p?.name && !starterNames.has(p.name));
+  let rotation = [...starters, ...bench];
+  let minutesObj = { ...optimized.minutesObj };
+  let currentRatings = displayedRatings(valid, minutesObj);
+
+  const getBenchWithMinutes = () =>
+    bench.filter((p) => Number(minutesObj[p.name] || 0) > 0);
+
+  const getZeroBenchCandidates = () => {
+    const benchNames = new Set(bench.map((p) => p.name));
+    return valid
+      .filter(
+        (p) =>
+          p?.name &&
+          !starterNames.has(p.name) &&
+          !benchNames.has(p.name) &&
+          Number(minutesObj[p.name] || 0) === 0
+      )
+      .sort((a, b) => {
+        const ovrDiff = playerOverall(b) - playerOverall(a);
+        if (ovrDiff !== 0) return ovrDiff;
+        return comparePlayers(a, b);
+      });
+  };
+
+  // Pass 1: if a better same-role player is currently at 0 minutes, try giving
+  // them a lower-rated bench player's role. If displayed OVR stays the same or
+  // improves, keep the higher-OVR player.
+  let changed = true;
+  let passes = 0;
+  while (changed && passes < 10) {
+    changed = false;
+    passes++;
+
+    const zeroCandidates = getZeroBenchCandidates();
+    const currentBench = getBenchWithMinutes()
+      .slice()
+      .sort((a, b) => playerOverall(a) - playerOverall(b));
+
+    for (const incoming of zeroCandidates) {
+      let accepted = false;
+
+      for (const outgoing of currentBench) {
+        if (playerOverall(incoming) <= playerOverall(outgoing)) continue;
+        if (!sharesPlayablePosition(incoming, outgoing)) continue;
+
+        const outgoingMinutes = Number(minutesObj[outgoing.name] || 0);
+        if (outgoingMinutes <= 0) continue;
+
+        const testMinutes = { ...minutesObj };
+        testMinutes[incoming.name] = outgoingMinutes;
+        testMinutes[outgoing.name] = 0;
+
+        const testRatings = displayedRatings(valid, testMinutes);
+        if (!acceptsRealismSwap(currentRatings, testRatings)) continue;
+
+        minutesObj = testMinutes;
+        currentRatings = testRatings;
+        bench = bench.map((p) => (p.name === outgoing.name ? incoming : p));
+        changed = true;
+        accepted = true;
+        break;
+      }
+
+      if (accepted) break;
+    }
+  }
+
+  // Pass 2: if a higher-rated bench player has fewer minutes than a lower-rated
+  // bench player, try flipping their minutes. If displayed OVR does not drop,
+  // prefer the higher-rated player receiving the larger role.
+  changed = true;
+  passes = 0;
+  while (changed && passes < 30) {
+    changed = false;
+    passes++;
+
+    const currentBench = getBenchWithMinutes();
+    let bestFlip = null;
+    let bestFlipRatings = null;
+    let bestOvrGain = 0;
+
+    for (const higher of currentBench) {
+      for (const lower of currentBench) {
+        if (higher.name === lower.name) continue;
+        if (playerOverall(higher) <= playerOverall(lower)) continue;
+
+        const higherMinutes = Number(minutesObj[higher.name] || 0);
+        const lowerMinutes = Number(minutesObj[lower.name] || 0);
+        if (higherMinutes >= lowerMinutes) continue;
+
+        const testMinutes = { ...minutesObj };
+        testMinutes[higher.name] = lowerMinutes;
+        testMinutes[lower.name] = higherMinutes;
+
+        const testRatings = displayedRatings(valid, testMinutes);
+        if (!acceptsRealismSwap(currentRatings, testRatings)) continue;
+
+        const ovrGain = playerOverall(higher) - playerOverall(lower);
+        if (!bestFlip || ovrGain > bestOvrGain) {
+          bestFlip = { higher, lower, testMinutes };
+          bestFlipRatings = testRatings;
+          bestOvrGain = ovrGain;
+        }
+      }
+    }
+
+    if (bestFlip) {
+      minutesObj = bestFlip.testMinutes;
+      currentRatings = bestFlipRatings;
+      changed = true;
+    }
+  }
+
+  rotation = [...starters, ...bench];
+
+  return {
+    ...optimized,
+    bench,
+    rotation,
+    minutesObj,
+    score: scoreMinutes(valid, minutesObj),
+  };
 }
 
 // FULL smart rotation builder - returns BOTH sorted players and minutes obj
-function buildSmartRotation(teamPlayers) {
-  const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
+export function buildSmartRotation(teamPlayers) {
   const valid = (teamPlayers || []).filter(
     (p) => p && p.name && Number.isFinite(Number(p.overall))
   );
 
   if (valid.length === 0) return { sorted: [], obj: {} };
 
-  const score = (p) =>
-    (Number(p.overall) || 0) + ((Number(p.stamina) || 70) - 70) * 0.15;
+  const starters = chooseStarters(valid);
+  const starterNames = new Set(starters.map((p) => p.name));
+  const benchNeeded = Math.max(0, Math.min(ROTATION_SIZE, valid.length) - starters.length);
+  const benchCandidates = buildBenchPool(valid, starterNames);
 
-  const chosen = [];
+  let best = null;
 
-  for (const pos of POSITIONS) {
-    const posPlayers = valid
-      .filter((p) => p.pos === pos || p.secondaryPos === pos)
-      .sort((a, b) => score(b) - score(a));
+  if (benchNeeded > 0 && benchCandidates.length >= benchNeeded) {
+    const seededCandidates = [];
 
-    if (posPlayers.length) {
-      const best = posPlayers[0];
-      if (!chosen.find((c) => c.name === best.name)) chosen.push(best);
-    }
-  }
-
-  for (const p of [...valid].sort((a, b) => score(b) - score(a))) {
-    if (chosen.length >= Math.min(10, valid.length)) break;
-    if (!chosen.find((c) => c.name === p.name)) chosen.push(p);
-  }
-
-  const work = chosen.map((p) => ({ ...p, minutes: 0 }));
-
-  for (const w of work) w.minutes = 12;
-
-  let remain = 240 - 12 * work.length;
-  let i = 0;
-  while (remain > 0 && work.length > 0) {
-    work[i % work.length].minutes += 1;
-    i++;
-    remain--;
-  }
-
-  const teamTotal = (arr) => {
-    let ovr = 0;
-    const posTot = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
-
-    for (const p of arr) {
-      const m = p.minutes || 0;
-      if (m <= 0) continue;
-
-      const pen = fatiguePenalty(m, p.stamina || 70);
-      const w = m / 240;
-
-      ovr += w * ((p.overall || 0) * pen);
-
-      if (p.pos) posTot[p.pos] += m;
-      if (p.secondaryPos) posTot[p.secondaryPos] += m * 0.2;
+    for (const benchCombo of combos(benchCandidates, benchNeeded)) {
+      // Stronger bench players get the larger mandatory bench roles first:
+      // 17, 14, 12, 11, 10.
+      const benchOrdered = [...benchCombo].sort(comparePlayers);
+      seededCandidates.push(seedRotation(valid, starters, benchOrdered));
     }
 
-    const missing =
-      Math.max(0, 48 - (posTot.PG || 0)) +
-      Math.max(0, 48 - (posTot.SG || 0)) +
-      Math.max(0, 48 - (posTot.SF || 0)) +
-      Math.max(0, 48 - (posTot.PF || 0)) +
-      Math.max(0, 48 - (posTot.C || 0));
+    seededCandidates.sort((a, b) => b.score - a.score);
 
-    const coveragePenalty = 1 - 0.02 * (missing / 240);
-    return { ovr: ovr * coveragePenalty };
-  };
+    for (const seeded of seededCandidates.slice(0, BENCH_FINALIST_LIMIT)) {
+      const candidate = optimizeSeededRotation(valid, seeded);
 
-  const coreSet = new Set(work.slice(0, 5).map((p) => p.name));
-  let improved = true;
-
-  while (improved) {
-    improved = false;
-    let base = teamTotal(work).ovr;
-
-    for (let a = 0; a < work.length; a++) {
-      for (let b = 0; b < work.length; b++) {
-        if (a === b) continue;
-
-        const A = work[a];
-        const B = work[b];
-
-        if ((A.minutes || 0) <= 12) continue;
-        if ((B.minutes || 0) >= 24 && !coreSet.has(B.name)) continue;
-
-        A.minutes -= 1;
-        B.minutes += 1;
-
-        const test = teamTotal(work).ovr;
-        if (test > base) {
-          base = test;
-          improved = true;
-        } else {
-          A.minutes += 1;
-          B.minutes -= 1;
-        }
+      if (!best || candidate.score > best.score) {
+        best = candidate;
       }
     }
   }
 
-  const permute = (arr) => {
-    const out = [];
-    const rec = (path, rest) => {
-      if (rest.length === 0) {
-        out.push(path.slice());
-        return;
-      }
-      for (let j = 0; j < rest.length; j++) {
-        path.push(rest[j]);
-        rec(path, [...rest.slice(0, j), ...rest.slice(j + 1)]);
-        path.pop();
-      }
-    };
-    rec([], arr.slice());
-    return out;
-  };
+  if (!best) {
+    const benchFallback = benchCandidates
+      .slice()
+      .sort(comparePlayers)
+      .slice(0, benchNeeded);
 
-  const combos = (arr, k) => {
-    const res = [];
-    const go = (start, path) => {
-      if (path.length === k) {
-        res.push(path.slice());
-        return;
-      }
-      for (let j = start; j < arr.length; j++) {
-        path.push(arr[j]);
-        go(j + 1, path);
-        path.pop();
-      }
-    };
-    go(0, []);
-    return res;
-  };
-
-  const posPerms = permute(POSITIONS);
-  let bestMap = null;
-  let bestScore = -Infinity;
-
-  const PRIMARY_BONUS = 0.02;
-  const SECONDARY_PEN = 0.01;
-
-  for (const five of combos(work, Math.min(5, work.length))) {
-    for (const perm of posPerms) {
-      let ok = true;
-      let primaryHits = 0;
-      let secUses = 0;
-      let sumOvr = 0;
-      const mapping = {};
-
-      for (let k = 0; k < five.length; k++) {
-        const pl = five[k];
-        const pos = perm[k];
-        const eligible = pl.pos === pos || pl.secondaryPos === pos;
-
-        if (!eligible) {
-          ok = false;
-          break;
-        }
-
-        mapping[pos] = pl;
-        sumOvr += pl.overall || 0;
-
-        if (pos === pl.pos) primaryHits += 1;
-        else if (pl.secondaryPos === pos) secUses += 1;
-      }
-
-      if (!ok) continue;
-
-      const avgOvr = sumOvr / 5;
-      const score = avgOvr + PRIMARY_BONUS * primaryHits - SECONDARY_PEN * secUses;
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestMap = mapping;
-      }
-    }
+    best = optimizeSeededRotation(
+      valid,
+      seedRotation(valid, starters, benchFallback)
+    );
   }
 
-  if (!bestMap) {
-    const top5 = [...work]
-      .sort((a, b) => (b.overall || 0) - (a.overall || 0))
-      .slice(0, 5);
+  best = applyBenchRealismPass(valid, best);
 
-    bestMap = {};
-    const POS = ["PG", "SG", "SF", "PF", "C"];
-    for (let j = 0; j < POS.length; j++) {
-      if (top5[j]) bestMap[POS[j]] = top5[j];
-    }
-  }
+  const starterIds = new Set(best.starters.map((p) => p.name));
+  const rotationIds = new Set(best.rotation.map((p) => p.name));
 
-  const starters = ["PG", "SG", "SF", "PF", "C"]
-    .map((p) => bestMap[p])
-    .filter(Boolean);
-
-  const starterIds = new Set(starters.map((p) => p.name));
-
-  const bench = work
+  const bench = best.bench
     .filter((p) => !starterIds.has(p.name))
-    .sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
+    .sort((a, b) => {
+      const minDiff = (best.minutesObj[b.name] || 0) - (best.minutesObj[a.name] || 0);
+      if (minDiff !== 0) return minDiff;
+      return comparePlayers(a, b);
+    });
 
-  const usedNames = new Set(work.map((w) => w.name));
-  const others = valid.filter((p) => !usedNames.has(p.name));
+  const others = valid
+    .filter((p) => !rotationIds.has(p.name))
+    .sort(comparePlayers);
 
-  const sorted = [...starters, ...bench, ...others];
+  const sorted = [...best.starters, ...bench, ...others];
 
-  const obj = {};
-  for (const p of sorted) obj[p.name] = p.minutes || 0;
-  for (const p of valid) {
-    if (!(p.name in obj)) obj[p.name] = 0;
+  const obj = makeZeroMinutes(valid);
+  for (const p of best.rotation) {
+    obj[p.name] = Number(best.minutesObj[p.name] || 0);
   }
 
   return { sorted, obj };

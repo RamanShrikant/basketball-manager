@@ -1,5 +1,5 @@
 // src/api/teamRatings.js
-// Extracted cleanly from your old simEngine.js (NO logic changes)
+// Team rating formula used by Coach Gameplan and rotation optimization.
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
@@ -10,11 +10,14 @@ const TR_STAR_EXP_OFF = 1.20;
 const TR_STAR_EXP_DEF = 1.20;
 const TR_STAR_SHARE_EXP = 0.45;
 const TR_STAR_OUT_EXP = 0.85;
-const TR_COV_ALPHA = 15.0;
-const TR_OVERPOS_MAXPT = 6.0;
+const TR_COV_ALPHA = 9.0;
+const TR_OVERPOS_MAXPT = 3.0;
 const TR_EMPTY_MIN_PTS = 35.0;
 const TR_FATIGUE_FLOOR = 0.68;
 const TR_FATIGUE_K = 0.010;
+const TR_POS_TARGET = 48;
+const TR_SECONDARY_POS_CREDIT = 0.55;
+const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
 
 const fatigueThreshold = (sta) => 0.359 * (sta ?? 75) + 2.46;
 const fatiguePenalty = (mins, sta) => {
@@ -33,8 +36,21 @@ function minutesWeighted(team, minsObj) {
 
     total += m;
 
-    if (p.pos) posMin[p.pos] += m;
-    if (p.secondaryPos) posMin[p.secondaryPos] += m * 0.20;
+    if (p.pos && posMin[p.pos] !== undefined) {
+      posMin[p.pos] += m;
+    }
+
+    // Secondary positions create simple flexible-position credit. This is
+    // intentionally not equal to primary-position credit, but it is strong
+    // enough that better players who can reasonably play their secondary
+    // position are not over-punished by the coverage formula.
+    if (
+      p.secondaryPos &&
+      p.secondaryPos !== p.pos &&
+      posMin[p.secondaryPos] !== undefined
+    ) {
+      posMin[p.secondaryPos] += m * TR_SECONDARY_POS_CREDIT;
+    }
 
     roster.push({
       name: p.name,
@@ -87,11 +103,8 @@ function starBoost(effList, starExp) {
 }
 
 function coveragePenaltyPts(posMin) {
-  const POS = ["PG", "SG", "SF", "PF", "C"];
-  const target = 48;
-
-  const coverageError = POS.reduce(
-    (sum, pos) => sum + Math.abs((posMin[pos] || 0) - target),
+  const coverageError = POSITIONS.reduce(
+    (sum, pos) => sum + Math.abs((posMin[pos] || 0) - TR_POS_TARGET),
     0
   );
 
@@ -99,7 +112,7 @@ function coveragePenaltyPts(posMin) {
 
   const worstOver = Math.max(
     0,
-    Math.max(...POS.map(pos => (posMin[pos] || 0) - target))
+    Math.max(...POSITIONS.map(pos => (posMin[pos] || 0) - TR_POS_TARGET))
   );
 
   const overPen = (worstOver / 192) * TR_OVERPOS_MAXPT;

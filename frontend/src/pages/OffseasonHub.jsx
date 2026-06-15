@@ -4,6 +4,7 @@ import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
 import styles from "./OffseasonHub.module.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import { applyLeagueInflationForOffseason, getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -169,6 +170,8 @@ function buildDefaultOffseasonState(seasonYear) {
     retirementsComplete: false,
     retirementsSkipped: false,
     retirementsDisabled: false,
+    leagueInflationComplete: false,
+    leagueInflationSeasonYear: null,
     draftLotteryComplete: false,
     draftComplete: false,
     rookieSigningsComplete: false,
@@ -1937,6 +1940,44 @@ export default function OffseasonHub() {
     return true;
   };
 
+  useEffect(() => {
+    if (!leagueData || !offseasonState.retirementsComplete) return;
+    if (offseasonState.leagueInflationComplete) return;
+
+    const targetFinancialSeasonYear = Number(seasonYear) + 1;
+    const inflatedLeague = applyLeagueInflationForOffseason(leagueData, targetFinancialSeasonYear);
+    const rules = getLeagueFinancialRules(inflatedLeague, targetFinancialSeasonYear);
+
+    const nextState = {
+      ...readOffseasonState(seasonYear),
+      active: true,
+      seasonYear,
+      leagueInflationComplete: true,
+      leagueInflationSeasonYear: targetFinancialSeasonYear,
+      leagueInflationSummary: {
+        seasonYear: targetFinancialSeasonYear,
+        inflationIndex: rules.inflationIndex,
+        salaryCap: rules.salaryCap,
+        luxuryTaxLine: rules.luxuryTaxLine,
+        firstApron: rules.firstApron,
+        secondApron: rules.secondApron,
+        minimumSalary: rules.minimumSalary,
+        maxSalary: rules.maxSalary,
+      },
+    };
+
+    saveOffseasonState(nextState);
+    setOffseasonState(nextState);
+
+    if (typeof setLeagueData === "function") {
+      setLeagueData(inflatedLeague);
+    }
+
+    saveLeagueData(inflatedLeague).catch((err) => {
+      console.warn("[OffseasonHub] Failed to save league inflation update.", err);
+    });
+  }, [leagueData, offseasonState.retirementsComplete, offseasonState.leagueInflationComplete, seasonYear, setLeagueData]);
+
   const toggleRetirementsDisabled = () => {
     const next = {
       ...readOffseasonState(seasonYear),
@@ -2102,6 +2143,35 @@ export default function OffseasonHub() {
 
     updateDevOffseasonState({ retirementsComplete: true });
     return persistDevLeagueData(updated);
+  };
+
+  const runDevLeagueInflation = async (workingLeague) => {
+    const targetFinancialSeasonYear = Number(seasonYear) + 1;
+    const state = readOffseasonState(seasonYear);
+
+    if (state.leagueInflationComplete && Number(state.leagueInflationSeasonYear || 0) >= targetFinancialSeasonYear) {
+      return workingLeague;
+    }
+
+    const inflatedLeague = applyLeagueInflationForOffseason(workingLeague, targetFinancialSeasonYear);
+    const rules = getLeagueFinancialRules(inflatedLeague, targetFinancialSeasonYear);
+
+    updateDevOffseasonState({
+      leagueInflationComplete: true,
+      leagueInflationSeasonYear: targetFinancialSeasonYear,
+      leagueInflationSummary: {
+        seasonYear: targetFinancialSeasonYear,
+        inflationIndex: rules.inflationIndex,
+        salaryCap: rules.salaryCap,
+        luxuryTaxLine: rules.luxuryTaxLine,
+        firstApron: rules.firstApron,
+        secondApron: rules.secondApron,
+        minimumSalary: rules.minimumSalary,
+        maxSalary: rules.maxSalary,
+      },
+    });
+
+    return persistDevLeagueData(inflatedLeague);
   };
 
   const runDevDraftLottery = async (workingLeague) => {
@@ -2698,6 +2768,8 @@ export default function OffseasonHub() {
       active: false,
       seasonYear,
       retirementsComplete: true,
+      leagueInflationComplete: true,
+      leagueInflationSeasonYear: Number(seasonYear) + 1,
       draftLotteryComplete: true,
       draftComplete: true,
       rookieSigningsComplete: true,
@@ -2746,6 +2818,10 @@ export default function OffseasonHub() {
       workingLeague = await runDevRetirements(workingLeague, userTeamName);
       assertDevNotStopped();
       if (stopAtDevTarget(target, "retirements", "Stopped after retirements.")) return;
+
+      setDevStatus("Applying league financial inflation...");
+      workingLeague = await runDevLeagueInflation(workingLeague);
+      assertDevNotStopped();
 
       setDevStatus("Running draft lottery...");
       workingLeague = await runDevDraftLottery(workingLeague);
@@ -2862,12 +2938,13 @@ export default function OffseasonHub() {
     if (offseasonState.rookieSigningsComplete) return "Options";
     if (offseasonState.draftComplete) return "Rookie Signings";
     if (offseasonState.draftLotteryComplete) return "Draft";
-    if (offseasonState.retirementsComplete) return "Lottery";
+    if (offseasonState.retirementsComplete) return offseasonState.leagueInflationComplete ? "Lottery" : "Apply Inflation";
     return "Retirements";
   }, [offseasonState]);
 
   const cards = useMemo(() => {
     const retirementsComplete = !!offseasonState.retirementsComplete;
+    const leagueInflationComplete = !!offseasonState.leagueInflationComplete;
     const draftLotteryComplete = !!offseasonState.draftLotteryComplete;
     const draftComplete = !!offseasonState.draftComplete;
     const rookieSigningsComplete = !!offseasonState.rookieSigningsComplete;
@@ -2896,10 +2973,10 @@ export default function OffseasonHub() {
         title: "Draft Lottery",
         description:
           "Reveal the second round, then reveal the first round lottery order using the completed season standings and modern NBA lottery-style odds.",
-        status: draftLotteryComplete ? "Complete" : retirementsComplete ? "Current" : "Locked",
-        accent: draftLotteryComplete ? "green" : retirementsComplete ? "orange" : "neutral",
-        buttonLabel: retirementsComplete ? "Open Draft Lottery" : "Locked",
-        disabled: !retirementsComplete,
+        status: draftLotteryComplete ? "Complete" : leagueInflationComplete ? "Current" : retirementsComplete ? "Preparing" : "Locked",
+        accent: draftLotteryComplete ? "green" : leagueInflationComplete ? "orange" : retirementsComplete ? "orange" : "neutral",
+        buttonLabel: leagueInflationComplete ? "Open Draft Lottery" : retirementsComplete ? "Applying Inflation..." : "Locked",
+        disabled: !leagueInflationComplete,
         onClick: () => navigate("/draft-lottery"),
       },
       {

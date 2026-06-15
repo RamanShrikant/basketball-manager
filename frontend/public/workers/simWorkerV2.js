@@ -28,6 +28,7 @@ const pythonFiles = [
   "blocks.py",
   "shooting_model.py",
   "progression.py",
+  "league_financials.py",
   "free_agency_logic.py",
   "retirement_logic.py",
   "all_star_logic.py",

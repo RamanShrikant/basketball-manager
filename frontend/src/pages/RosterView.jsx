@@ -6,6 +6,7 @@ import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./RosterView.module.css";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
+import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 
@@ -123,7 +124,11 @@ export default function RosterView() {
   };
 
   const getStandardMinimumSalary = () => {
+    const rules = getLeagueFinancialRules(workingLeagueData || {}, getCurrentSeasonYear() + 1);
     return Number(
+      rules.minimumException ||
+      rules.veteranMinimum ||
+      rules.minimumSalary ||
       workingLeagueData?.minimumSalary ||
       workingLeagueData?.veteranMinimum ||
       workingLeagueData?.minimumException ||

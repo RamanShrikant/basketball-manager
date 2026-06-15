@@ -4,6 +4,17 @@ import random
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from league_financials import (
+        ensure_league_financials,
+        get_financial_rules,
+        get_rookie_salary_for_pick,
+    )
+except Exception:
+    ensure_league_financials = None
+    get_financial_rules = None
+    get_rookie_salary_for_pick = None
+
 DEFAULT_SALARY_CAP = 154_647_000
 REGULAR_SEASON_MIN_ROSTER = 14
 REGULAR_SEASON_MAX_ROSTER = 15
@@ -35,39 +46,77 @@ NON_BIRD_RAISE_MULT = 1.20
 EARLY_BIRD_RAISE_MULT = 1.75
 
 
+def sync_financial_constants(league_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Synchronize legacy module constants with the current league economy.
+
+    This preserves the existing free-agency code paths while letting the same
+    logic run against inflated cap/min/max/MLE/apron values.
+    """
+    global DEFAULT_SALARY_CAP, TWO_WAY_SALARY, MIN_DEAL, DEFAULT_MINIMUM_EXCEPTION
+    global MAX_SALARY, DEFAULT_ROOM_EXCEPTION, DEFAULT_NON_TAXPAYER_MLE
+    global DEFAULT_TAXPAYER_MLE, DEFAULT_LUXURY_TAX_LINE, DEFAULT_FIRST_APRON
+    global DEFAULT_SECOND_APRON
+
+    if not isinstance(league_data, dict) or get_financial_rules is None:
+        return league_data
+
+    try:
+        if ensure_league_financials is not None:
+            ensure_league_financials(league_data)
+        rules = get_financial_rules(league_data)
+    except Exception:
+        return league_data
+
+    DEFAULT_SALARY_CAP = int(rules.get("salaryCap") or DEFAULT_SALARY_CAP)
+    TWO_WAY_SALARY = int(rules.get("twoWaySalary") or TWO_WAY_SALARY)
+    MIN_DEAL = int(rules.get("minimumSalary") or MIN_DEAL)
+    DEFAULT_MINIMUM_EXCEPTION = int(rules.get("minimumException") or DEFAULT_MINIMUM_EXCEPTION)
+    MAX_SALARY = int(rules.get("maxSalary") or MAX_SALARY)
+    DEFAULT_ROOM_EXCEPTION = int(rules.get("roomException") or DEFAULT_ROOM_EXCEPTION)
+    DEFAULT_NON_TAXPAYER_MLE = int(rules.get("nonTaxpayerMLE") or rules.get("midLevelException") or DEFAULT_NON_TAXPAYER_MLE)
+    DEFAULT_TAXPAYER_MLE = int(rules.get("taxpayerMLE") or DEFAULT_TAXPAYER_MLE)
+    DEFAULT_LUXURY_TAX_LINE = int(rules.get("luxuryTaxLine") or DEFAULT_LUXURY_TAX_LINE)
+    DEFAULT_FIRST_APRON = int(rules.get("firstApron") or DEFAULT_FIRST_APRON)
+    DEFAULT_SECOND_APRON = int(rules.get("secondApron") or DEFAULT_SECOND_APRON)
+    return league_data
+
+
 def get_room_exception_amount(league_data: Dict[str, Any]) -> int:
-    return int(
-        league_data.get("roomException")
-        or league_data.get("roomExceptionAmount")
-        or DEFAULT_ROOM_EXCEPTION
-    )
+    if get_financial_rules is not None:
+        try:
+            return int(get_financial_rules(league_data).get("roomException") or DEFAULT_ROOM_EXCEPTION)
+        except Exception:
+            pass
+    return int(league_data.get("roomException") or league_data.get("roomExceptionAmount") or DEFAULT_ROOM_EXCEPTION)
 
 
 def get_non_taxpayer_mle_amount(league_data: Dict[str, Any]) -> int:
-    return int(
-        league_data.get("midLevelException")
-        or league_data.get("nonTaxpayerMLE")
-        or league_data.get("nonTaxpayerMidLevelException")
-        or DEFAULT_NON_TAXPAYER_MLE
-    )
+    if get_financial_rules is not None:
+        try:
+            rules = get_financial_rules(league_data)
+            return int(rules.get("nonTaxpayerMLE") or rules.get("midLevelException") or DEFAULT_NON_TAXPAYER_MLE)
+        except Exception:
+            pass
+    return int(league_data.get("midLevelException") or league_data.get("nonTaxpayerMLE") or league_data.get("nonTaxpayerMidLevelException") or DEFAULT_NON_TAXPAYER_MLE)
 
 
 def get_taxpayer_mle_amount(league_data: Dict[str, Any]) -> int:
-    return int(
-        league_data.get("taxpayerMLE")
-        or league_data.get("taxpayerMidLevelException")
-        or DEFAULT_TAXPAYER_MLE
-    )
+    if get_financial_rules is not None:
+        try:
+            return int(get_financial_rules(league_data).get("taxpayerMLE") or DEFAULT_TAXPAYER_MLE)
+        except Exception:
+            pass
+    return int(league_data.get("taxpayerMLE") or league_data.get("taxpayerMidLevelException") or DEFAULT_TAXPAYER_MLE)
 
 
 def get_minimum_exception_amount(league_data: Dict[str, Any]) -> int:
-    return int(max(
-        MIN_DEAL,
-        league_data.get("minimumException")
-        or league_data.get("minimumSalary")
-        or league_data.get("veteranMinimum")
-        or DEFAULT_MINIMUM_EXCEPTION,
-    ))
+    if get_financial_rules is not None:
+        try:
+            rules = get_financial_rules(league_data)
+            return int(max(rules.get("minimumSalary") or MIN_DEAL, rules.get("minimumException") or DEFAULT_MINIMUM_EXCEPTION))
+        except Exception:
+            pass
+    return int(max(MIN_DEAL, league_data.get("minimumException") or league_data.get("minimumSalary") or league_data.get("veteranMinimum") or DEFAULT_MINIMUM_EXCEPTION))
 OFFSEASON_MIN_ROSTER = REGULAR_SEASON_MIN_ROSTER
 
 def num(value: Any, fallback: float = 0.0) -> float:
@@ -108,35 +157,39 @@ def get_operating_season_year(league_data: Dict[str, Any]) -> int:
 
 
 def get_salary_cap(league_data: Dict[str, Any]) -> int:
-    return int(
-        league_data.get("salaryCap")
-        or league_data.get("capLimit")
-        or DEFAULT_SALARY_CAP
-    )
+    if get_financial_rules is not None:
+        try:
+            return int(get_financial_rules(league_data).get("salaryCap") or DEFAULT_SALARY_CAP)
+        except Exception:
+            pass
+    return int(league_data.get("salaryCap") or league_data.get("capLimit") or DEFAULT_SALARY_CAP)
 
 
 def get_luxury_tax_line(league_data: Dict[str, Any]) -> int:
-    return int(
-        league_data.get("luxuryTaxLine")
-        or league_data.get("taxLine")
-        or DEFAULT_LUXURY_TAX_LINE
-    )
+    if get_financial_rules is not None:
+        try:
+            return int(get_financial_rules(league_data).get("luxuryTaxLine") or DEFAULT_LUXURY_TAX_LINE)
+        except Exception:
+            pass
+    return int(league_data.get("luxuryTaxLine") or league_data.get("taxLine") or DEFAULT_LUXURY_TAX_LINE)
 
 
 def get_first_apron(league_data: Dict[str, Any]) -> int:
-    return int(
-        league_data.get("firstApron")
-        or league_data.get("apron1")
-        or DEFAULT_FIRST_APRON
-    )
+    if get_financial_rules is not None:
+        try:
+            return int(get_financial_rules(league_data).get("firstApron") or DEFAULT_FIRST_APRON)
+        except Exception:
+            pass
+    return int(league_data.get("firstApron") or league_data.get("apron1") or DEFAULT_FIRST_APRON)
 
 
 def get_second_apron(league_data: Dict[str, Any]) -> int:
-    return int(
-        league_data.get("secondApron")
-        or league_data.get("apron2")
-        or DEFAULT_SECOND_APRON
-    )
+    if get_financial_rules is not None:
+        try:
+            return int(get_financial_rules(league_data).get("secondApron") or DEFAULT_SECOND_APRON)
+        except Exception:
+            pass
+    return int(league_data.get("secondApron") or league_data.get("apron2") or DEFAULT_SECOND_APRON)
 
 
 def get_payroll_zone_for_amount(league_data: Dict[str, Any], payroll: int) -> str:
@@ -2445,9 +2498,9 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
         base_salary = MIN_DEAL
 
         if overall >= 73 and age <= 26:
-            base_salary = 1_900_000
+            base_salary = max(MIN_DEAL, int(round(1_900_000 * (float(MAX_SALARY) / 54_000_000.0))))
         elif overall >= 73:
-            base_salary = 1_500_000
+            base_salary = max(MIN_DEAL, int(round(DEFAULT_MINIMUM_EXCEPTION)))
 
         salary_by_year = build_salary_by_year(
             int(round_to_nearest(base_salary, base = 1_000)),
@@ -2478,6 +2531,12 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
         base_salary = 26_000_000 + (overall - 84.0) * 2_850_000
     else:
         base_salary = 37_400_000 + (overall - 88.0) * 3_200_000
+
+    # Convert the existing 2026-dollar market curve into a percentage of the
+    # base max salary, then re-expand it through the current inflated max. This
+    # keeps the current market logic shape while making future FA expectations
+    # grow with the league economy.
+    base_salary *= (float(MAX_SALARY) / 54_000_000.0)
 
     # Upside/age modifiers. Young RFAs and young rotation players cost more,
     # while older role players are still discounted realistically.
@@ -4441,15 +4500,24 @@ def get_player_rookie_reference_year(player: Dict[str, Any]) -> Optional[int]:
     return None
 
 
-def build_rookie_salary_for_pick(round_num: int, pick_num: int) -> int:
+def build_rookie_salary_for_pick(round_num: int, pick_num: int, league_data: Optional[Dict[str, Any]] = None) -> int:
     round_num = int(num(round_num, 2))
     pick_num = int(num(pick_num, 60))
 
-    if round_num == 1:
-        return max(2_400_000, int(11_800_000 - (pick_num - 1) * 315_000))
+    if get_rookie_salary_for_pick is not None and isinstance(league_data, dict):
+        try:
+            return int(get_rookie_salary_for_pick(league_data, round_num, pick_num))
+        except Exception:
+            pass
 
-    pick_in_round = max(1, pick_num - 30)
-    return max(1_250_000, int(2_250_000 - (pick_in_round - 1) * 28_000))
+    scale = float(MAX_SALARY) / 54_000_000.0
+    if round_num == 1:
+        base_salary = max(2_400_000, int(11_800_000 - (pick_num - 1) * 315_000))
+    else:
+        pick_in_round = max(1, pick_num - 30)
+        base_salary = max(1_250_000, int(2_250_000 - (pick_in_round - 1) * 28_000))
+
+    return int(round_to_nearest(base_salary * scale, base = 1_000))
 
 
 def build_two_way_contract_for_season(start_year: int, source: str) -> Dict[str, Any]:
@@ -13600,6 +13668,7 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
     action = request.get("action")
     league_data = request.get("leagueData", {})
     payload = request.get("payload", {}) or {}
+    sync_financial_constants(league_data)
 
     if action == "get_team_cap_snapshot":
         return get_team_cap_snapshot(

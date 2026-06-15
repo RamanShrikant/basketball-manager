@@ -23,7 +23,13 @@ try:
 except Exception:
     generate_draft_class = None
 
-DRAFT_LOGIC_VERSION = "2026-06-13_draft_logic_fresh_autoclass_v20"
+try:
+    from league_financials import ensure_league_financials, get_rookie_salary_for_pick
+except Exception:
+    ensure_league_financials = None
+    get_rookie_salary_for_pick = None
+
+DRAFT_LOGIC_VERSION = "2026-06-13_draft_logic_cpu_bpa_v21"
 
 POSITION_ORDER = ["PG", "SG", "SF", "PF", "C"]
 POSITION_BUCKETS = {
@@ -399,81 +405,37 @@ def _prospect_score(
     pick: Dict[str, Any],
     rng: random.Random,
 ) -> float:
+    # CPU draft board philosophy, v21:
+    # - Keep CPU picks simple and best-player-available driven.
+    # - Normal prospects are scored about 50% OVR, 40% POT, 10% roster fit.
+    # - 75+ OVR prospects are protected as obvious NBA-ready talent: the CPU
+    #   should not overthink an 81 vs. 80 with similar potential because of fit.
+    _ = history_row, pick, rng
     overall = _resolve_prospect_overall(prospect, 60)
-    potential = _safe_int(prospect.get("potential"), overall)
-    age = _safe_int(prospect.get("age"), 20)
+    potential = max(overall, _safe_int(prospect.get("potential"), overall))
     pos = prospect.get("pos") or "SF"
-    pick_num = _safe_int(pick.get("pick"), 60)
-    round_num = _safe_int(pick.get("round"), 1)
-    direction = _team_direction(team, history_row)
 
-    if pick_num <= 5:
-        ovr_w, pot_w, need_w, ready_w = 0.56, 0.70, 0.10, 0.05
-    elif pick_num <= 14:
-        ovr_w, pot_w, need_w, ready_w = 0.54, 0.50, 0.20, 0.07
-    elif round_num == 1:
-        ovr_w, pot_w, need_w, ready_w = 0.54, 0.34, 0.36, 0.12
-    else:
-        ovr_w, pot_w, need_w, ready_w = 0.38, 0.44, 0.28, 0.10
+    # _need_score is 0-18, so normalize it to a 0-100 fit component before
+    # applying the requested 10% weight.
+    fit_score = (_need_score(team, pos) / 18.0) * 100.0
 
-    if direction == "rebuilding":
-        pot_w += 0.16
-        need_w -= 0.04
-    elif direction == "contending":
-        ovr_w += 0.10
-        need_w += 0.08
-        ready_w += 0.10
-        pot_w -= 0.06
+    if overall >= 75:
+        # OVR-first lock for real first-round level prospects. One OVR point is
+        # intentionally worth more than any potential/fit tiebreak swing.
+        return float(
+            100.0
+            + overall * 10.0
+            + potential * 0.40
+            + fit_score * 0.05
+            - _safe_int(prospect.get("draftProjection"), 999) * 0.001
+        )
 
-    need = _need_score(team, pos)
-    upside_gap = max(0, potential - overall)
-    nba_ready = _safe_float((prospect.get("traits") or {}).get("nbaReady"), max(0.0, (overall - 55) / 35))
-    boom_bust = _safe_float((prospect.get("traits") or {}).get("boomBust"), 0.35)
-    work_ethic = _safe_float((prospect.get("traits") or {}).get("workEthic"), 0.65)
-    injury_risk = _safe_float((prospect.get("traits") or {}).get("injuryRisk"), 0.12)
-
-    specialist_bonus = 0.0
-    attrs = prospect.get("attrs") or []
-    if len(attrs) >= 15:
-        if round_num == 2:
-            if attrs[0] >= 82:
-                specialist_bonus += 2.2
-            if attrs[8] >= 82 or attrs[10] >= 82 or attrs[12] >= 84:
-                specialist_bonus += 2.0
-            if attrs[13] >= 82 or attrs[14] >= 82:
-                specialist_bonus += 1.2
-
-    age_bonus = 0.0
-    if direction == "rebuilding" and age <= 20:
-        age_bonus += 1.5
-    if direction == "contending" and age >= 21:
-        age_bonus += 1.1
-
-    risk_penalty = 0.0
-    if direction == "contending":
-        risk_penalty += boom_bust * 2.2
-    else:
-        risk_penalty += boom_bust * 0.9
-    risk_penalty += injury_risk * 3.0
-
-    randomness = rng.uniform(-2.8, 2.8)
-    if round_num == 2:
-        randomness = rng.uniform(-4.5, 4.5)
-
-    score = (
-        overall * ovr_w
-        + potential * pot_w
-        + need * need_w
-        + upside_gap * 0.20
-        + nba_ready * 6.0 * ready_w
-        + work_ethic * 2.8
-        + specialist_bonus
-        + age_bonus
-        - risk_penalty
-        + randomness
+    return float(
+        overall * 0.50
+        + potential * 0.40
+        + fit_score * 0.10
+        - _safe_int(prospect.get("draftProjection"), 999) * 0.001
     )
-
-    return float(score)
 
 
 def _choose_cpu_prospect(
@@ -488,11 +450,21 @@ def _choose_cpu_prospect(
     available = state.get("availableProspects") or []
 
     pick_num = _safe_int(pick.get("pick"), 60)
-    candidate_pool_size = 18 if pick_num <= 10 else 26 if pick_num <= 30 else 34
-    pool = sorted(
+    candidate_pool_size = 22 if pick_num <= 10 else 34 if pick_num <= 30 else 50
+    projected_pool = sorted(
         available,
         key = lambda p: (_safe_int(p.get("draftProjection"), 999), _safe_int(p.get("trueRank"), 999)),
     )[:candidate_pool_size]
+
+    # Always include 75+ OVR available prospects in the CPU's decision pool so
+    # a genuinely better current player does not get ignored just because his
+    # visible draft projection is a few slots lower.
+    high_ovr_pool = [p for p in available if _resolve_prospect_overall(p, 60) >= 75]
+    pool_by_id: Dict[str, Dict[str, Any]] = {}
+    for prospect in projected_pool + high_ovr_pool:
+        key = str(prospect.get("id") or id(prospect))
+        pool_by_id[key] = prospect
+    pool = list(pool_by_id.values())
 
     rng = random.Random(_stable_seed(season_year, pick_num, team_name, "cpu_pick"))
     scored = []
@@ -503,7 +475,13 @@ def _choose_cpu_prospect(
     return scored[0][1] if scored else available[0]
 
 
-def _rookie_salary_for_pick(round_num: int, pick_num: int) -> int:
+def _rookie_salary_for_pick(round_num: int, pick_num: int, league_data: Optional[Dict[str, Any]] = None) -> int:
+    if get_rookie_salary_for_pick is not None and isinstance(league_data, dict):
+        try:
+            return int(get_rookie_salary_for_pick(league_data, round_num, pick_num))
+        except Exception:
+            pass
+
     if round_num == 1:
         # Rough rookie scale approximation. It is intentionally simple for v1.
         return max(2_400_000, int(11_800_000 - (pick_num - 1) * 315_000))
@@ -512,8 +490,8 @@ def _rookie_salary_for_pick(round_num: int, pick_num: int) -> int:
     return max(1_250_000, int(2_250_000 - (pick_in_round - 1) * 28_000))
 
 
-def _rookie_contract(round_num: int, pick_num: int, season_year: int) -> Dict[str, Any]:
-    first_salary = _rookie_salary_for_pick(round_num, pick_num)
+def _rookie_contract(round_num: int, pick_num: int, season_year: int, league_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    first_salary = _rookie_salary_for_pick(round_num, pick_num, league_data)
 
     # All drafted players now go through the Rookie Signings event first.
     # First-rounders keep a projected rookie-scale contract, but it is not
@@ -1010,6 +988,7 @@ def _prospect_to_player(
     season_year: int,
     drafted: bool = True,
     rating_baselines: Optional[Dict[str, Any]] = None,
+    league_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     attrs = [int(x) for x in (prospect.get("attrs") or [])]
     while len(attrs) < 15:
@@ -1030,7 +1009,7 @@ def _prospect_to_player(
     player_id_suffix = _safe_id_text(prospect.get("name") or prospect.get("id") or "rookie")
     player_id = f"rookie_{season_year}_{overall_pick or 'udfa'}_{player_id_suffix}"
 
-    contract = _rookie_contract(round_num, overall_pick or 60, season_year) if drafted and pick else {
+    contract = _rookie_contract(round_num, overall_pick or 60, season_year, league_data) if drafted and pick else {
         "startYear": season_year,
         "salaryByYear": [],
         "option": None,
@@ -1179,6 +1158,7 @@ def _add_undrafted_to_free_agents(league: Dict[str, Any], state: Dict[str, Any],
             season_year,
             drafted = False,
             rating_baselines = rating_baselines,
+            league_data = league,
         )
         if player.get("id") in existing_ids:
             continue
@@ -1439,6 +1419,7 @@ def make_pick(
         season_year,
         drafted = True,
         rating_baselines = rating_baselines,
+        league_data = league,
     )
     added = _add_player_to_team(league, team_name, player)
 
@@ -1575,6 +1556,11 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
     action = req.get("action") or "initialize_draft"
     league_data = req.get("leagueData") or req.get("league") or {}
     payload = req.get("payload") or {}
+    if ensure_league_financials is not None and isinstance(league_data, dict):
+        try:
+            ensure_league_financials(league_data)
+        except Exception:
+            pass
 
     if action == "initialize_draft":
         return initialize_draft(league_data, payload)

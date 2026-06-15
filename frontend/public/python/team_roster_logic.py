@@ -15,6 +15,13 @@ import copy
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from league_financials import ensure_league_financials, get_financial_rules, get_rookie_salary_for_pick
+except Exception:
+    ensure_league_financials = None
+    get_financial_rules = None
+    get_rookie_salary_for_pick = None
+
 TEAM_ROSTER_LOGIC_VERSION = "2026-06-11_team_roster_logic_user_offseason_overfill_v6"
 
 STANDARD_ROSTER_MIN = 14
@@ -69,6 +76,20 @@ def _stable_seed(*parts: Any) -> int:
     for i, ch in enumerate(text):
         total = (total + (i + 1) * ord(ch)) % 2_147_483_647
     return total or 20260528
+
+
+def _financial_rules(league: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if get_financial_rules is not None and isinstance(league, dict):
+        try:
+            if ensure_league_financials is not None:
+                ensure_league_financials(league)
+            return get_financial_rules(league)
+        except Exception:
+            pass
+    return {
+        "minimumSalary": 1_500_000,
+        "twoWaySalary": 580_000,
+    }
 
 
 def _get_all_teams(league: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -281,7 +302,13 @@ def validate_team_for_season_start(team: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _rookie_salary_for_pick(round_num: int, pick_num: int) -> int:
+def _rookie_salary_for_pick(round_num: int, pick_num: int, league: Optional[Dict[str, Any]] = None) -> int:
+    if get_rookie_salary_for_pick is not None and isinstance(league, dict):
+        try:
+            return int(get_rookie_salary_for_pick(league, round_num, pick_num))
+        except Exception:
+            pass
+
     if round_num == 1:
         return max(2_400_000, int(11_800_000 - (pick_num - 1) * 315_000))
 
@@ -289,11 +316,11 @@ def _rookie_salary_for_pick(round_num: int, pick_num: int) -> int:
     return max(1_250_000, int(2_250_000 - (pick_in_round - 1) * 28_000))
 
 
-def _standard_second_round_contract(player: Dict[str, Any], season_year: int) -> Dict[str, Any]:
+def _standard_second_round_contract(player: Dict[str, Any], season_year: int, league: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
     pick_num = _safe_int(meta.get("draftPick"), 60)
     round_num = _safe_int(meta.get("draftRound"), 2)
-    first_salary = _rookie_salary_for_pick(round_num, pick_num)
+    first_salary = _rookie_salary_for_pick(round_num, pick_num, league)
 
     if round_num == 1:
         return {
@@ -323,11 +350,12 @@ def _standard_second_round_contract(player: Dict[str, Any], season_year: int) ->
     }
 
 
-def _two_way_contract(season_year: int) -> Dict[str, Any]:
+def _two_way_contract(season_year: int, league: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    rules = _financial_rules(league)
     return {
         "type": "two_way",
         "startYear": season_year + 1,
-        "salaryByYear": [580_000],
+        "salaryByYear": [int(rules.get("twoWaySalary") or 580_000)],
         "option": None,
         "source": "rookie_two_way_contract",
         "countsAgainstStandardRoster": False,
@@ -734,7 +762,7 @@ def _apply_decision_to_player(
 
     if decision == "standard":
         draft_round = _get_player_draft_round(player)
-        player["contract"] = _standard_second_round_contract(player, season_year)
+        player["contract"] = _standard_second_round_contract(player, season_year, league)
         player["contractType"] = "standard"
         player["rosterStatus"] = "standard"
         player["assignmentStatus"] = "nba"
@@ -758,7 +786,7 @@ def _apply_decision_to_player(
         _append_unique(team["players"], player)
 
     elif decision == "two_way":
-        player["contract"] = _two_way_contract(season_year)
+        player["contract"] = _two_way_contract(season_year, league)
         player["contractType"] = "two_way"
         player["rosterStatus"] = "two_way"
         player["assignmentStatus"] = "g_league"
@@ -947,7 +975,7 @@ def _auto_manage_cpu_two_way_players_after_rookie_signings(
             continue
 
         _remove_two_way_player(team, player)
-        actions.append(_promote_two_way_to_standard(team, player, season_year))
+        actions.append(_promote_two_way_to_standard(team, player, season_year, league))
         normalize_team_roster_lists(team)
 
     two_way_sorted = sorted(
@@ -1205,22 +1233,23 @@ def _player_keep_score(player: Dict[str, Any]) -> float:
     return float(score)
 
 
-def _minimum_standard_contract(season_year: int) -> Dict[str, Any]:
+def _minimum_standard_contract(season_year: int, league: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    rules = _financial_rules(league)
     return {
         "type": "standard",
         "startYear": season_year,
-        "salaryByYear": [1_500_000],
+        "salaryByYear": [int(rules.get("minimumException") or rules.get("minimumSalary") or 1_500_000)],
         "option": None,
         "source": "roster_finalization_minimum",
     }
 
 
-def _set_player_as_standard(player: Dict[str, Any], team_name: str, season_year: int, source: str = "roster_finalization") -> Dict[str, Any]:
+def _set_player_as_standard(player: Dict[str, Any], team_name: str, season_year: int, source: str = "roster_finalization", league: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     contract = player.get("contract") if isinstance(player.get("contract"), dict) else {}
     salary_by_year = contract.get("salaryByYear") if isinstance(contract.get("salaryByYear"), list) else []
 
     if not salary_by_year:
-        contract = _minimum_standard_contract(season_year)
+        contract = _minimum_standard_contract(season_year, league)
     else:
         contract = {
             **contract,
@@ -1330,10 +1359,10 @@ def _release_player_to_free_agency(
     }
 
 
-def _promote_two_way_to_standard(team: Dict[str, Any], player: Dict[str, Any], season_year: int) -> Dict[str, Any]:
+def _promote_two_way_to_standard(team: Dict[str, Any], player: Dict[str, Any], season_year: int, league: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     team_name = _team_name(team)
     promoted = copy.deepcopy(player)
-    promoted = _set_player_as_standard(promoted, team_name, season_year, source = "two_way_promotion")
+    promoted = _set_player_as_standard(promoted, team_name, season_year, source = "two_way_promotion", league = league)
     if _get_player_draft_round(promoted) in [1, 2] or _contract_type(player) in TWO_WAY_TYPES:
         _set_rookie_team_control_rights(
             player = promoted,
@@ -1422,8 +1451,8 @@ def _sign_replacement_free_agent(
         )
         action = "generated_replacement_free_agent"
 
-    signed = _set_player_as_standard(signed, team_name, season_year, source = "cpu_roster_finalization_minimum")
-    signed["contract"] = _minimum_standard_contract(season_year)
+    signed = _set_player_as_standard(signed, team_name, season_year, source = "cpu_roster_finalization_minimum", league = league)
+    signed["contract"] = _minimum_standard_contract(season_year, league)
     team["players"].append(signed)
 
     return {
@@ -1514,6 +1543,7 @@ def _is_standard_two_way_eligible_for_finalization(player: Dict[str, Any], seaso
 
 
 def _move_standard_to_two_way_for_finalization(
+    league: Dict[str, Any],
     team: Dict[str, Any],
     player: Dict[str, Any],
     season_year: int,
@@ -1522,7 +1552,7 @@ def _move_standard_to_two_way_for_finalization(
     key = player.get("id") or player.get("name")
     moved = copy.deepcopy(player)
     moved["previousStandardContract"] = copy.deepcopy(player.get("contract")) if isinstance(player.get("contract"), dict) else None
-    moved["contract"] = _two_way_contract(season_year)
+    moved["contract"] = _two_way_contract(season_year, league)
     moved["contractType"] = "two_way"
     moved["rosterStatus"] = "two_way"
     moved["assignmentStatus"] = "g_league"
@@ -1611,7 +1641,7 @@ def _auto_finalize_cpu_team(
                 _safe_int(player.get("potential"), 0),
             )
         )
-        actions.append(_move_standard_to_two_way_for_finalization(team, candidates[0], season_year))
+        actions.append(_move_standard_to_two_way_for_finalization(league, team, candidates[0], season_year))
         normalize_team_roster_lists(team)
 
     # If still over 15, release the lowest-value fringe extras.
@@ -1634,7 +1664,7 @@ def _auto_finalize_cpu_team(
     while roster_counts(team)["standardCount"] < STANDARD_ROSTER_MIN and team.get("twoWayPlayers"):
         team["twoWayPlayers"].sort(key = _player_keep_score, reverse = True)
         player = team["twoWayPlayers"].pop(0)
-        actions.append(_promote_two_way_to_standard(team, player, season_year))
+        actions.append(_promote_two_way_to_standard(team, player, season_year, league))
         normalize_team_roster_lists(team)
 
     safety = 0
@@ -1769,6 +1799,11 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
     action = req.get("action") or "preview_rookie_signings"
     league_data = req.get("leagueData") or req.get("league") or {}
     payload = req.get("payload") or {}
+    if ensure_league_financials is not None and isinstance(league_data, dict):
+        try:
+            ensure_league_financials(league_data)
+        except Exception:
+            pass
 
     if action == "preview_rookie_signings":
         return preview_rookie_signings(league_data, payload)

@@ -355,6 +355,21 @@ def compute_retirement_probability(
     }
 
 
+
+def apply_free_agent_low_overall_retirement_override(
+    retirement_eval: Dict[str, Any],
+) -> Dict[str, Any]:
+    overall = num(retirement_eval.get("overall"), 0)
+    current_probability = num(retirement_eval.get("retirementProbability"), 0)
+
+    if overall <= 65:
+        retirement_eval["freeAgentLowOverallRetirementOverride"] = True
+        retirement_eval["retirementProbabilityBeforeFreeAgentOverride"] = round(current_probability, 4)
+        retirement_eval["retirementProbability"] = round(max(current_probability, 0.99), 4)
+
+    return retirement_eval
+
+
 def apply_player_retirements(
     league_data: Dict[str, Any],
     stats_by_key: Optional[Dict[str, Any]] = None,
@@ -440,6 +455,7 @@ def apply_player_retirements(
             retirement_eval["currentTeam"] = "Free Agency"
             retirement_eval["lastKnownTeam"] = last_team_name
             retirement_eval["freeAgentPoolKey"] = free_agent_key
+            retirement_eval = apply_free_agent_low_overall_retirement_override(retirement_eval)
 
             probability = retirement_eval["retirementProbability"]
             roll = rng.random()
@@ -555,6 +571,7 @@ def preview_player_retirements(
             preview["lastKnownTeam"] = last_team_name
             preview["freeAgentPoolKey"] = free_agent_key
             preview["retirementSource"] = pool_label
+            preview = apply_free_agent_low_overall_retirement_override(preview)
 
             previews.append(preview)
 

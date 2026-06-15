@@ -1,6 +1,7 @@
 // LeagueEditor.jsx
 import React, { useState, useEffect, useMemo } from "react";
 import FaceDNAEditor from "../components/FaceDNAEditor";
+import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 
 const DRAFT_CLASSES_STORAGE_KEY = "bm_custom_draft_classes_v1";
 const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
@@ -73,6 +74,28 @@ function normalizeFaceManifestRow(row = {}) {
     expression: row.expression || "",
     notes: row.notes || "",
   };
+}
+
+
+function getEditorLeagueSnapshot() {
+  return safeJSON(localStorage.getItem("leagueData"), {}) || {};
+}
+
+function getEditorContractStartYear() {
+  const league = getEditorLeagueSnapshot();
+  return Number(league?.currentFinancialSeasonYear || league?.seasonYear || league?.currentSeasonYear || 2026);
+}
+
+function getEditorDefaultSalary() {
+  const league = getEditorLeagueSnapshot();
+  const rules = getLeagueFinancialRules(league, getEditorContractStartYear());
+  return Math.round(Number(rules.salaryCap || 154_647_000) * 0.052 / 1_000) * 1_000;
+}
+
+function getEditorDefaultSalaryByYear(years = 2) {
+  const first = getEditorDefaultSalary();
+  const count = Math.max(1, Number(years || 1));
+  return Array.from({ length: count }, (_, idx) => Math.round(first * Math.pow(1.05, idx) / 1_000) * 1_000);
 }
 
 function creatorNumber(value, fallback, min, max) {
@@ -449,8 +472,8 @@ function initPlayer() {
 
     // contract
     contract: {
-      startYear: 2026,
-      salaryByYear: [8_000_000, 8_500_000],
+      startYear: getEditorContractStartYear(),
+      salaryByYear: getEditorDefaultSalaryByYear(2),
       option: null,
     },
 
@@ -502,25 +525,25 @@ const normalizePlayer = (p) => {
     p?.contract ??
     (p?.salary != null || p?.contractYears != null
       ? {
-          startYear: 2026,
+          startYear: getEditorContractStartYear(),
           salaryByYear: Array(Math.max(1, Number(p.contractYears ?? 1))).fill(
-            Number(p.salary ?? 8) * 1_000_000
+            Number(p.salary ?? (getEditorDefaultSalary() / 1_000_000)) * 1_000_000
           ),
           option: null,
         }
       : {
-          startYear: 2026,
-          salaryByYear: [8_000_000, 8_500_000],
+          startYear: getEditorContractStartYear(),
+          salaryByYear: getEditorDefaultSalaryByYear(2),
           option: null,
         });
 
   const rawOption = contract?.option ?? null;
 
   const safeContract = {
-    startYear: Number(contract?.startYear ?? 2026),
+    startYear: Number(contract?.startYear ?? getEditorContractStartYear()),
     salaryByYear: Array.isArray(contract?.salaryByYear)
       ? contract.salaryByYear.map((x) => Number(x) || 0)
-      : [8_000_000],
+      : getEditorDefaultSalaryByYear(1),
     option: rawOption
       ? {
           type: rawOption?.type === "player" ? "player" : "team",
@@ -561,7 +584,7 @@ const normalizePlayer = (p) => {
       .map((s) => Math.round(Number(s) * 1_000_000))
       .filter((n) => Number.isFinite(n) && n >= 0);
 
-    return vals.length ? vals : [8_000_000];
+    return vals.length ? vals : getEditorDefaultSalaryByYear(1);
   };
 
   function getOptionYearIndices(option) {
@@ -1775,7 +1798,7 @@ const normalizePlayer = (p) => {
           ? null
           : {
               ...(playerForm.contract ?? {}),
-              startYear: playerForm.contract?.startYear ?? 2026,
+              startYear: playerForm.contract?.startYear ?? getEditorContractStartYear(),
               salaryByYear,
               option: builtOption,
             },
@@ -2743,8 +2766,8 @@ const normalizePlayer = (p) => {
                     <input
                       className="border p-2 rounded w-full"
                       type="number"
-                      placeholder="2026"
-                      value={playerForm.contract?.startYear ?? 2026}
+                      placeholder={String(getEditorContractStartYear())}
+                      value={playerForm.contract?.startYear ?? getEditorContractStartYear()}
                       onChange={(e) => {
                         const startYear = Number(e.target.value);
                         setPlayerForm({
@@ -2752,7 +2775,7 @@ const normalizePlayer = (p) => {
                           contract: {
                             ...(playerForm.contract ?? {}),
                             startYear,
-                            salaryByYear: playerForm.contract?.salaryByYear ?? [8_000_000],
+                            salaryByYear: playerForm.contract?.salaryByYear ?? getEditorDefaultSalaryByYear(1),
                             option: playerForm.contract?.option ?? null,
                           },
                         });
@@ -2777,7 +2800,7 @@ const normalizePlayer = (p) => {
                           ...playerForm,
                           contract: {
                             ...(playerForm.contract ?? {}),
-                            startYear: playerForm.contract?.startYear ?? 2026,
+                            startYear: playerForm.contract?.startYear ?? getEditorContractStartYear(),
                             salaryByYear: parseSalaryText(raw),
                             option: playerForm.contract?.option ?? null,
                           },
@@ -2959,8 +2982,8 @@ const normalizePlayer = (p) => {
                       onChange={(e) => {
                         const type = e.target.value;
                         const cur = playerForm.contract ?? {
-                          startYear: 2026,
-                          salaryByYear: [8_000_000],
+                          startYear: getEditorContractStartYear(),
+                          salaryByYear: getEditorDefaultSalaryByYear(1),
                           option: null,
                         };
 
@@ -3010,8 +3033,8 @@ const normalizePlayer = (p) => {
                         setOptionYearsText(raw);
 
                         const cur = playerForm.contract ?? {
-                          startYear: 2026,
-                          salaryByYear: [8_000_000],
+                          startYear: getEditorContractStartYear(),
+                          salaryByYear: getEditorDefaultSalaryByYear(1),
                           option: null,
                         };
                         if (!cur.option) return;
@@ -3040,7 +3063,7 @@ const normalizePlayer = (p) => {
                   {(() => {
                     const c = playerForm.contract;
                     if (!c) return "—";
-                    const start = c.startYear ?? 2026;
+                    const start = c.startYear ?? getEditorContractStartYear();
                     const years = c.salaryByYear ?? [];
                     const parts = years.map((v, i) => {
                       const yr = start + i;
@@ -3102,7 +3125,7 @@ const normalizePlayer = (p) => {
           <input
             className="border p-2 rounded text-sm w-full"
             type="number"
-            placeholder="2026"
+            placeholder={String(getEditorContractStartYear())}
             value={row.seasonYear ?? ""}
             onChange={(e) => {
               const seasons = [...(playerForm.history?.seasons ?? [])];

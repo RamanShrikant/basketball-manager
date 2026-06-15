@@ -1,17 +1,18 @@
-   import {
+import {
+  GAMEPLAN_VERSION,
   rebuildSingleTeamGameplan,
   getRosterSignatureForGameplan,
+  buildSmartRotation,
 } from "../utils/ensureGameplans";
-   import { computeTeamRatings } from "../api/teamRatings";
-    import React, { useState, useEffect, useMemo } from "react";
-    import { useGame } from "../context/GameContext";
-    import { useNavigate } from "react-router-dom";
+import { computeTeamRatings } from "../api/teamRatings";
+import React, { useState, useEffect, useMemo } from "react";
+import { useGame } from "../context/GameContext";
+import { useNavigate } from "react-router-dom";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
-    
-    
-    const GAMEPLAN_VERSION = 3;
+
+const STARTER_MINUTES = 24;
 
 function getRosterSignature(teamPlayers = []) {
     return [...teamPlayers]
@@ -27,7 +28,7 @@ function getRosterSignature(teamPlayers = []) {
         .join("||");
 }
 
-function buildGameplanPayload(teamName, teamPlayers, sortedPlayers, minutesObj) {
+function buildGameplanPayload(teamName, teamPlayers, sortedPlayers, minutesObj, options = {}) {
     const orderedMinutes = {};
     for (const p of sortedPlayers) {
         orderedMinutes[p.name] = Number(minutesObj[p.name] || 0);
@@ -38,27 +39,32 @@ function buildGameplanPayload(teamName, teamPlayers, sortedPlayers, minutesObj) 
         }
     }
 
+    const source = options.source || "coach_gameplan";
+    const manualLocked = options.manualLocked ?? source === "coach_gameplan";
+    const userEdited = options.userEdited ?? source === "coach_gameplan";
+
     return {
         version: GAMEPLAN_VERSION,
         teamName,
         rosterSignature: getRosterSignature(teamPlayers),
         order: sortedPlayers.map((p) => p.name),
         minutes: orderedMinutes,
-        manualLocked: true,
-        userEdited: true,
-        source: "coach_gameplan",
+        manualLocked,
+        userEdited,
+        source,
         updatedAt: Date.now(),
     };
 }
 
-function saveGameplanToStorage(teamName, teamPlayers, sortedPlayers, minutesObj) {
+function saveGameplanToStorage(teamName, teamPlayers, sortedPlayers, minutesObj, options = {}) {
     if (!teamName) return;
 
     const payload = buildGameplanPayload(
         teamName,
         teamPlayers,
         sortedPlayers,
-        minutesObj
+        minutesObj,
+        options
     );
 
     localStorage.setItem(`gameplan_${teamName}`, JSON.stringify(payload));
@@ -110,12 +116,6 @@ function readGameplanFromStorage(teamName) {
     };
 
     // --- Helper functions ---
-    const fatiguePenalty = (mins, stamina) => {
-        const threshold = 0.359 * stamina + 2.46;
-        const over = Math.max(0, mins - threshold);
-        return Math.max(0.7, 1 - 0.0075 * over);
-    };
-
     const calculateTeamRatings = (playersArr, minutesObj) => {
   try {
     // exact parity with the sim: pass a team-like object with a players field
@@ -128,187 +128,16 @@ function readGameplanFromStorage(teamName) {
 };
 
 
-    // === AUTO-SORT – parity with the Python "average OVR w/ primary preference" ===
-    const buildSmartRotation = (teamPlayers) => {
-        const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
-        const valid = (teamPlayers || []).filter(
-        (p) => p && p.name && Number.isFinite(p.overall)
-        );
-        if (valid.length === 0) return { sorted: [], obj: {} };
-
-        const score = (p) => (p.overall || 0) + ((p.stamina || 70) - 70) * 0.15;
-
-        // ---- choose ~10 and baseline minutes (unchanged from your version) ----
-        const chosen = [];
-        for (const pos of POSITIONS) {
-        const posPlayers = valid
-            .filter((p) => p.pos === pos || p.secondaryPos === pos)
-            .sort((a, b) => score(b) - score(a));
-        if (posPlayers.length) {
-            const best = posPlayers[0];
-            if (!chosen.find((c) => c.name === best.name)) chosen.push(best);
-        }
-        }
-        for (const p of [...valid].sort((a, b) => score(b) - score(a))) {
-        if (chosen.length >= Math.min(10, valid.length)) break;
-        if (!chosen.find((c) => c.name === p.name)) chosen.push(p);
-        }
-
-        const work = chosen.map((p) => ({ ...p, minutes: 0 }));
-
-        // give everyone minutes, then smooth (unchanged)
-        for (const w of work) w.minutes = 12;
-        let remain = 240 - 12 * work.length;
-        let i = 0;
-        while (remain > 0 && work.length > 0) {
-        work[i % work.length].minutes += 1;
-        i++;
-        remain--;
-        }
-
-        const teamTotal = (arr) => {
-        let off = 0, deff = 0, ovr = 0;
-        const posTot = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
-        for (const p of arr) {
-            const m = p.minutes || 0;
-            if (m <= 0) continue;
-            const pen = fatiguePenalty(m, p.stamina || 70);
-            const w = m / 240;
-            off += w * ((p.offRating || 0) * pen);
-            deff += w * ((p.defRating || 0) * pen);
-            ovr += w * ((p.overall || 0) * pen);
-            if (p.pos) posTot[p.pos] += m;
-            if (p.secondaryPos) posTot[p.secondaryPos] += m * 0.2;
-        }
-        const missing =
-            Math.max(0, 48 - (posTot.PG || 0)) +
-            Math.max(0, 48 - (posTot.SG || 0)) +
-            Math.max(0, 48 - (posTot.SF || 0)) +
-            Math.max(0, 48 - (posTot.PF || 0)) +
-            Math.max(0, 48 - (posTot.C  || 0));
-        const coveragePenalty = 1 - 0.02 * (missing / 240);
-        return { off: off * coveragePenalty, deff: deff * coveragePenalty, ovr: ovr * coveragePenalty };
-        };
-
-        // small minute hill-climb (unchanged)
-        const coreSet = new Set(work.slice(0, 5).map((p) => p.name));
-        let improved = true;
-        while (improved) {
-        improved = false;
-        let base = teamTotal(work).ovr;
-
-        for (let a = 0; a < work.length; a++) {
-            for (let b = 0; b < work.length; b++) {
-            if (a === b) continue;
-            const A = work[a], B = work[b];
-            if ((A.minutes || 0) <= 12) continue;
-            if ((B.minutes || 0) >= 24 && !coreSet.has(B.name)) continue;
-
-            A.minutes -= 1;
-            B.minutes += 1;
-
-            const test = teamTotal(work).ovr;
-            if (test > base) {
-                base = test;
-                improved = true;
-            } else {
-                A.minutes += 1;
-                B.minutes -= 1;
-            }
-            }
-        }
-        }
-
-        // --- Python parity: starters chosen by MAX AVERAGE OVR with primary bonus & secondary penalty
-        const permute = (arr) => {
-        const out = [];
-        const rec = (path, rest) => {
-            if (rest.length === 0) { out.push(path.slice()); return; }
-            for (let i = 0; i < rest.length; i++) {
-            path.push(rest[i]);
-            rec(path, [...rest.slice(0, i), ...rest.slice(i + 1)]);
-            path.pop();
-            }
-        };
-        rec([], arr.slice());
-        return out;
-        };
-        const combos = (arr, k) => {
-        const res = [];
-        const go = (start, path) => {
-            if (path.length === k) { res.push(path.slice()); return; }
-            for (let i = start; i < arr.length; i++) {
-            path.push(arr[i]);
-            go(i + 1, path);
-            path.pop();
-            }
-        };
-        go(0, []);
-        return res;
-        };
-
-        const posPerms = permute(POSITIONS);
-        let bestMap = null, bestScore = -Infinity;
-
-        const PRIMARY_BONUS = 0.02; // tiny nudge toward primaries
-        const SECONDARY_PEN = 0.01; // tiny nudge against secondaries
-
-        for (const five of combos(work, Math.min(5, work.length))) {
-        for (const perm of posPerms) {
-            let ok = true;
-            let primaryHits = 0;
-            let secUses = 0;
-            let sumOvr = 0;
-            const mapping = {};
-            for (let k = 0; k < five.length; k++) {
-            const pl = five[k], pos = perm[k];
-            const eligible = (pl.pos === pos) || (pl.secondaryPos === pos);
-            if (!eligible) { ok = false; break; }
-            mapping[pos] = pl;
-            sumOvr += (pl.overall || 0);
-            if (pos === pl.pos) primaryHits += 1;
-            else if (pl.secondaryPos === pos) secUses += 1;
-            }
-            if (!ok) continue;
-            const avgOvr = sumOvr / 5;
-            const score = avgOvr + PRIMARY_BONUS * primaryHits - SECONDARY_PEN * secUses;
-            if (score > bestScore) { bestScore = score; bestMap = mapping; }
-        }
-        }
-
-        if (!bestMap) {
-        const top5 = [...work].sort((a, b) => (b.overall || 0) - (a.overall || 0)).slice(0, 5);
-        bestMap = {};
-        const POS = ["PG", "SG", "SF", "PF", "C"];
-        for (let i = 0; i < POS.length; i++) if (top5[i]) bestMap[POS[i]] = top5[i];
-        }
-
-        const starters = ["PG", "SG", "SF", "PF", "C"].map((p) => bestMap[p]).filter(Boolean);
-        const starterIds = new Set(starters.map((p) => p.name));
-        const bench = work
-        .filter((p) => !starterIds.has(p.name))
-        .sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
-        const usedNames = new Set(work.map((w) => w.name));
-        const others = valid.filter((p) => !usedNames.has(p.name));
-        const sorted = [...starters, ...bench, ...others];
-
-        // minutes remain exactly as allocated above (Python parity)
-        const obj = {};
-        for (const p of sorted) obj[p.name] = p.minutes || 0;
-        for (const p of valid) if (!(p.name in obj)) obj[p.name] = 0;
-
-        return { sorted, obj };
-    };
-
     const enforceStarterMinimums = (arr, minsObj) => {
         const updated = { ...minsObj };
         let added = 0;
 
         for (let i = 0; i < Math.min(5, arr.length); i++) {
         const nm = arr[i].name;
-        if ((updated[nm] ?? 0) < 1) {
-            updated[nm] = 1;
-            added += 1;
+        const current = Number(updated[nm] || 0);
+        if (current < STARTER_MINUTES) {
+            updated[nm] = STARTER_MINUTES;
+            added += STARTER_MINUTES - current;
         }
         }
         if (added === 0) return updated;
@@ -327,7 +156,7 @@ function readGameplanFromStorage(teamName) {
         const starters = arr.slice(0, 5).sort((a, b) => (updated[b.name] || 0) - (updated[a.name] || 0));
         for (const p of starters) {
             if (remain <= 0) break;
-            const extra = Math.max(0, (updated[p.name] || 0) - 1);
+            const extra = Math.max(0, (updated[p.name] || 0) - STARTER_MINUTES);
             const take = Math.min(extra, remain);
             if (take > 0) {
             updated[p.name] -= take;
@@ -359,7 +188,11 @@ useEffect(() => {
         saved.minutes &&
         Array.isArray(saved.order);
 
-      if (isNewFormat && saved.rosterSignature === currentRosterSignature) {
+      if (
+        isNewFormat &&
+        saved.version === GAMEPLAN_VERSION &&
+        saved.rosterSignature === currentRosterSignature
+      ) {
         const orderedPlayers = [
           ...saved.order
             .map((name) => teamPlayers.find((p) => p.name === name))
@@ -383,7 +216,7 @@ useEffect(() => {
   }
 
   if (!loaded) {
-    rebuildSingleTeamGameplan(selectedTeam);
+    rebuildSingleTeamGameplan(selectedTeam, { preserveManual: false });
 
     const freshRaw = localStorage.getItem(key);
     if (!freshRaw) return;
@@ -452,14 +285,18 @@ const handleAutoRebuild = () => {
     setMinutes(obj);
     setTeamRatings(calculateTeamRatings(sorted, obj));
 
-    // important: rebuild should persist immediately
-    saveGameplanToStorage(selectedTeam.name, teamPlayers, sorted, obj);
+    // Auto rebuild should not be protected as a manual/user-edited gameplan.
+    saveGameplanToStorage(selectedTeam.name, teamPlayers, sorted, obj, {
+        manualLocked: false,
+        userEdited: false,
+        source: "auto_rotation",
+    });
 };
 
     const handleMinuteChange = (name, value) => {
         const numRaw = Math.round(Number(value));
         const idx = players.findIndex((p) => p.name === name);
-        const minAllowed = idx > -1 && idx < 5 ? 1 : 0;
+        const minAllowed = idx > -1 && idx < 5 ? STARTER_MINUTES : 0;
         const num = Math.max(minAllowed, numRaw);
 
         const totalNow = Object.entries(minutes)
@@ -698,7 +535,7 @@ const handleAutoRebuild = () => {
                         <div className="flex items-center gap-3 justify-center">
                             <input
                             type="range"
-                            min={i < 5 ? 1 : 0}
+                            min="0"
                             max="48"
                             step="1"
                             value={minutes[p.name] ?? 0}

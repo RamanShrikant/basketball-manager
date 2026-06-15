@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import styles from "./SalaryTable.module.css";
+import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 
 export default function SalaryTable() {
   const navigate = useNavigate();
@@ -27,6 +28,8 @@ export default function SalaryTable() {
     ? rawSeasonYear + 1
     : 2026;
 
+  const financialRules = getLeagueFinancialRules(leagueData || {}, currentSeasonYear);
+
   const getLeagueAmount = (keys, fallback) => {
     for (const key of keys) {
       const value = Number(leagueData?.[key] || 0);
@@ -35,11 +38,12 @@ export default function SalaryTable() {
     return fallback;
   };
 
-  const SALARY_CAP = getLeagueAmount(["salaryCap", "capLimit"], 154_647_000);
-  const TAX_LINE = getLeagueAmount(["luxuryTaxLine", "taxLine"], 187_895_000);
-  const FIRST_APRON = getLeagueAmount(["firstApron", "apron1"], 195_945_000);
-  const SECOND_APRON = getLeagueAmount(["secondApron", "apron2"], 207_824_000);
-  const HARD_CAP = getLeagueAmount(["hardCap", "hardCapLimit"], SECOND_APRON);
+  const SALARY_CAP = getLeagueAmount(["salaryCap", "capLimit"], financialRules.salaryCap);
+  const TAX_LINE = getLeagueAmount(["luxuryTaxLine", "taxLine"], financialRules.luxuryTaxLine);
+  const FIRST_APRON = getLeagueAmount(["firstApron", "apron1"], financialRules.firstApron);
+  const SECOND_APRON = getLeagueAmount(["secondApron", "apron2"], financialRules.secondApron);
+  const HARD_CAP = getLeagueAmount(["hardCap", "hardCapLimit"], financialRules.hardCap || SECOND_APRON);
+  const MIN_CONTRACT_AMOUNT = Number(financialRules.minimumSalary || 1_200_000);
 
   const fmtM = (n) => {
     const v = Number(n) || 0;
@@ -403,7 +407,7 @@ export default function SalaryTable() {
       return Number(currentSalaryByYear[currentSalaryByYear.length - 1] || 0);
     }
 
-    return Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+    return Number(player?.marketValue?.expectedYear1Salary || MIN_CONTRACT_AMOUNT);
   };
 
   const getCapHoldForPlayer = (player, teamName) => {
@@ -419,22 +423,22 @@ export default function SalaryTable() {
       player?.qualifyingOffer?.amount &&
       player?.qualifyingOffer?.status !== "withdrawn"
     ) {
-      return Math.max(1_200_000, Number(player.qualifyingOffer.amount || 0));
+      return Math.max(MIN_CONTRACT_AMOUNT, Number(player.qualifyingOffer.amount || 0));
     }
 
     const previousSalary = getPreviousSalaryForCapHold(player);
-    const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+    const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || MIN_CONTRACT_AMOUNT);
 
     if (birdLevel === "bird") {
-      return Math.max(previousSalary, marketYearOne, 1_200_000);
+      return Math.max(previousSalary, marketYearOne, MIN_CONTRACT_AMOUNT);
     }
 
     if (birdLevel === "early_bird") {
-      return Math.max(previousSalary * 1.3, 1_200_000);
+      return Math.max(previousSalary * 1.3, MIN_CONTRACT_AMOUNT);
     }
 
     if (birdLevel === "non_bird") {
-      return Math.max(previousSalary * 1.2, 1_200_000);
+      return Math.max(previousSalary * 1.2, MIN_CONTRACT_AMOUNT);
     }
 
     return 0;
@@ -458,7 +462,7 @@ export default function SalaryTable() {
         const birdLevel = rights?.birdLevel || "none";
         const restrictedFreeAgent = Boolean(rights?.restrictedFreeAgent || player?.qualifyingOffer?.amount);
         const previousSalary = getPreviousSalaryForCapHold(player);
-        const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+        const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || MIN_CONTRACT_AMOUNT);
         const rightsLabel = formatBirdLabel(birdLevel);
         const note = restrictedFreeAgent
           ? `${player?.name || "This player"} is on a cap hold because ${teamName} still controls his RFA rights. The hold counts against practical cap room until you re-sign him, he signs elsewhere, or you renounce his rights.`
@@ -490,7 +494,7 @@ export default function SalaryTable() {
 
   const getMinimumExceptionAmount = () => getLeagueAmount(
     ["minimumException", "minimumSalary", "veteranMinimum"],
-    1_500_000
+    financialRules.minimumException
   );
 
   const getContractSalaryForYear = (contract, seasonYear) => {
@@ -540,7 +544,7 @@ export default function SalaryTable() {
   };
 
   const calculateDeadCapSetOff = (originalAmount, signedSalary) => {
-    const minimum = Number(getMinimumExceptionAmount() || 1_500_000);
+    const minimum = Number(getMinimumExceptionAmount() || financialRules.minimumException);
     const rawSetOff = Math.max(0, Math.floor((Number(signedSalary || 0) - minimum) / 2));
     const rounded = Math.round(rawSetOff / 1000) * 1000;
     return Math.min(Number(originalAmount || 0), rounded);
@@ -1021,7 +1025,7 @@ export default function SalaryTable() {
         const birdLevel = rights?.birdLevel || "none";
         const restrictedFreeAgent = Boolean(rights?.restrictedFreeAgent || player?.qualifyingOffer?.amount);
         const previousSalary = getPreviousSalaryForCapHold(player);
-        const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || 1_200_000);
+        const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || MIN_CONTRACT_AMOUNT);
         const rightsLabel = formatBirdLabel(birdLevel);
         const note = restrictedFreeAgent
           ? `${player?.name || "This player"} is on a cap hold because ${teamName} still controls his RFA rights. The hold counts against practical cap room until you re-sign him, he signs elsewhere, or you renounce his rights.`
