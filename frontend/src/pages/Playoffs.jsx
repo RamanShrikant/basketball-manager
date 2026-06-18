@@ -498,6 +498,14 @@ function buildPlayoffResultMap(post) {
         champion: false,
         finals: false,
         conferenceFinals: false,
+        wonSevenEightGame: false,
+        lostSevenEightGame: false,
+        wonNineTenGame: false,
+        lostNineTenGame: false,
+        wonPlayInFinal: false,
+        lostPlayInFinal: false,
+        playInPath: "",
+        playInFinalResult: "",
       };
     }
     return resultByTeam[teamName];
@@ -508,6 +516,14 @@ function buildPlayoffResultMap(post) {
     if (!row) return;
     row.madePlayIn = true;
     if (!row.madePlayoffs) row.playoffResult = "play_in";
+  };
+
+  const markPlayInPath = (teamName, patch = {}) => {
+    const row = ensure(teamName);
+    if (!row) return;
+    row.madePlayIn = true;
+    Object.assign(row, patch);
+    if (!row.madePlayoffs && !row.playoffResult) row.playoffResult = "play_in";
   };
 
   const markRound = (teamName, round) => {
@@ -550,6 +566,53 @@ function buildPlayoffResultMap(post) {
       markPlayIn(pi?.g910?.away);
       markPlayIn(pi?.gFinal?.home);
       markPlayIn(pi?.gFinal?.away);
+
+      if (pi?.g78?.played) {
+        if (pi.g78.winner) {
+          markPlayInPath(pi.g78.winner, {
+            wonSevenEightGame: true,
+            playInPath: "won_7v8_game",
+            playInFinalResult: "advanced_as_seed_7",
+          });
+        }
+        if (pi.g78.loser) {
+          markPlayInPath(pi.g78.loser, {
+            lostSevenEightGame: true,
+            playInPath: "lost_7v8_game",
+          });
+        }
+      }
+
+      if (pi?.g910?.played) {
+        if (pi.g910.winner) {
+          markPlayInPath(pi.g910.winner, {
+            wonNineTenGame: true,
+            playInPath: "won_9v10_game",
+          });
+        }
+        if (pi.g910.loser) {
+          markPlayInPath(pi.g910.loser, {
+            lostNineTenGame: true,
+            playInPath: "lost_9v10_game",
+            playInFinalResult: "eliminated_in_9v10",
+          });
+        }
+      }
+
+      if (pi?.gFinal?.played) {
+        if (pi.gFinal.winner) {
+          markPlayInPath(pi.gFinal.winner, {
+            wonPlayInFinal: true,
+            playInFinalResult: "advanced_as_seed_8",
+          });
+        }
+        if (pi.gFinal.loser) {
+          markPlayInPath(pi.gFinal.loser, {
+            lostPlayInFinal: true,
+            playInFinalResult: "eliminated_in_play_in_final",
+          });
+        }
+      }
     }
 
     const r1 = conf?.rounds?.r1 || {};
@@ -613,6 +676,14 @@ function buildSeasonHistoryEntry({ seasonYear, teams, regularSeasonSnapshot, pos
       champion: false,
       finals: false,
       conferenceFinals: false,
+      wonSevenEightGame: false,
+      lostSevenEightGame: false,
+      wonNineTenGame: false,
+      lostNineTenGame: false,
+      wonPlayInFinal: false,
+      lostPlayInFinal: false,
+      playInPath: "",
+      playInFinalResult: "",
     };
 
     return {
@@ -624,6 +695,14 @@ function buildSeasonHistoryEntry({ seasonYear, teams, regularSeasonSnapshot, pos
       champion: Boolean(playoff.champion),
       finals: Boolean(playoff.finals),
       conferenceFinals: Boolean(playoff.conferenceFinals),
+      wonSevenEightGame: Boolean(playoff.wonSevenEightGame),
+      lostSevenEightGame: Boolean(playoff.lostSevenEightGame),
+      wonNineTenGame: Boolean(playoff.wonNineTenGame),
+      lostNineTenGame: Boolean(playoff.lostNineTenGame),
+      wonPlayInFinal: Boolean(playoff.wonPlayInFinal),
+      lostPlayInFinal: Boolean(playoff.lostPlayInFinal),
+      playInPath: playoff.playInPath || "",
+      playInFinalResult: playoff.playInFinalResult || "",
     };
   });
 

@@ -1,6 +1,6 @@
 import { computeTeamRatings } from "../api/teamRatings";
 
-export const GAMEPLAN_VERSION = 7;
+export const GAMEPLAN_VERSION = 9;
 
 // Helpers to support both league shapes: { teams: [...] } or { conferences: { ... } }
 function getAllTeamsFromLeague(leagueData) {
@@ -355,6 +355,7 @@ function continuousTieScore(valid, minutesObj) {
   const POS_TARGET = 48;
   const SECONDARY_POS_CREDIT = 0.55;
   const posMin = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
+  const active = [];
   let weighted = 0;
 
   for (const p of valid) {
@@ -367,20 +368,34 @@ function continuousTieScore(valid, minutesObj) {
     const pen = localFatiguePenaltyForTie(m, p.stamina ?? 75);
     weighted += (m / 240) * ((overall * 0.5 + off * 0.25 + def * 0.25) * pen);
 
-    if (p.pos && posMin[p.pos] !== undefined) {
-      posMin[p.pos] += m;
+    const primaryPos = p.pos || "SG";
+    const secondaryPos = p.secondaryPos || null;
+
+    if (primaryPos && posMin[primaryPos] !== undefined) {
+      posMin[primaryPos] += m;
     }
 
-    // Match teamRatings.js: secondary positions are simple flexible-position
-    // credit. This keeps the optimizer from over-favoring lower-rated primary
-    // fits when a better player can reasonably cover the spot as a secondary.
-    if (
-      p.secondaryPos &&
-      p.secondaryPos !== p.pos &&
-      posMin[p.secondaryPos] !== undefined
-    ) {
-      posMin[p.secondaryPos] += m * SECONDARY_POS_CREDIT;
+    active.push({
+      minutes: m,
+      pos: primaryPos,
+      secondaryPos,
+    });
+  }
+
+  // Match teamRatings.js: secondary positions are flex credit only. They fill
+  // a shortage but never create extra overage, so a PG/SG is never worse than a
+  // pure PG just because SG is already full.
+  for (const p of active) {
+    const secondary = p.secondaryPos;
+    if (!secondary || secondary === p.pos || posMin[secondary] === undefined) {
+      continue;
     }
+
+    const shortage = Math.max(0, POS_TARGET - (posMin[secondary] || 0));
+    if (shortage <= 0) continue;
+
+    const flexCredit = Math.min(p.minutes * SECONDARY_POS_CREDIT, shortage);
+    posMin[secondary] += flexCredit;
   }
 
   const coverageError = POSITIONS.reduce(
@@ -556,6 +571,28 @@ function playerOverall(p) {
   return Number(p?.overall ?? 0);
 }
 
+function playerOffRating(p) {
+  return Number(p?.offRating ?? p?.overall ?? 0);
+}
+
+function playerDefRating(p) {
+  return Number(p?.defRating ?? p?.overall ?? 0);
+}
+
+function isSamePrimaryStrictUpgrade(incoming, outgoing) {
+  if (!incoming?.pos || incoming.pos !== outgoing?.pos) return false;
+
+  return (
+    playerOverall(incoming) > playerOverall(outgoing) &&
+    playerOffRating(incoming) >= playerOffRating(outgoing) &&
+    playerDefRating(incoming) >= playerDefRating(outgoing)
+  );
+}
+
+function acceptsSamePrimaryUpgrade(currentRatings, testRatings) {
+  return testRatings.overall >= currentRatings.overall;
+}
+
 function playablePositions(p) {
   return new Set([p?.pos, p?.secondaryPos].filter(Boolean));
 }
@@ -627,7 +664,11 @@ function applyBenchRealismPass(valid, optimized) {
         testMinutes[outgoing.name] = 0;
 
         const testRatings = displayedRatings(valid, testMinutes);
-        if (!acceptsRealismSwap(currentRatings, testRatings)) continue;
+        const samePrimaryUpgrade = isSamePrimaryStrictUpgrade(incoming, outgoing);
+        const acceptedByRatings = samePrimaryUpgrade
+          ? acceptsSamePrimaryUpgrade(currentRatings, testRatings)
+          : acceptsRealismSwap(currentRatings, testRatings);
+        if (!acceptedByRatings) continue;
 
         minutesObj = testMinutes;
         currentRatings = testRatings;
@@ -669,7 +710,11 @@ function applyBenchRealismPass(valid, optimized) {
         testMinutes[lower.name] = higherMinutes;
 
         const testRatings = displayedRatings(valid, testMinutes);
-        if (!acceptsRealismSwap(currentRatings, testRatings)) continue;
+        const samePrimaryUpgrade = isSamePrimaryStrictUpgrade(higher, lower);
+        const acceptedByRatings = samePrimaryUpgrade
+          ? acceptsSamePrimaryUpgrade(currentRatings, testRatings)
+          : acceptsRealismSwap(currentRatings, testRatings);
+        if (!acceptedByRatings) continue;
 
         const ovrGain = playerOverall(higher) - playerOverall(lower);
         if (!bestFlip || ovrGain > bestOvrGain) {

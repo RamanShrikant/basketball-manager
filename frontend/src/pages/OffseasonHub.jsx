@@ -633,6 +633,12 @@ function normalizeLotteryRecord(row = {}, leagueData = null, index = 0) {
   const wins = getRecordWins(row);
   const losses = getRecordLosses(row);
   const gamesPlayed = wins + losses;
+  const rawConferenceSeed = Number(
+    row.conferenceSeed ?? row.confSeed ?? row.seed ?? row.regularSeasonConferenceSeed ?? row.playInSeed ?? 0
+  );
+  const conferenceSeed = Number.isFinite(rawConferenceSeed) && rawConferenceSeed >= 1 && rawConferenceSeed <= 15
+    ? rawConferenceSeed
+    : null;
 
   return {
     ...row,
@@ -645,8 +651,11 @@ function normalizeLotteryRecord(row = {}, leagueData = null, index = 0) {
     gamesPlayed,
     winPct: gamesPlayed ? Number((wins / gamesPlayed).toFixed(3)) : 0,
     pointDifferential: Number(row.pointDifferential || row.netRating || 0),
+    conferenceSeed,
     madePlayoffs: Boolean(row.madePlayoffs),
-    madePlayIn: Boolean(row.madePlayIn),
+    madePlayIn: Boolean(row.madePlayIn || (conferenceSeed && conferenceSeed >= 7 && conferenceSeed <= 10)),
+    lostSevenEightGame: Boolean(row.lostSevenEightGame || row.lost78Game || row.lost7v8Game),
+    wonSevenEightGame: Boolean(row.wonSevenEightGame || row.won78Game || row.won7v8Game),
     playoffResult: row.playoffResult || (row.madePlayoffs ? "playoffs" : "missed_playoffs"),
     leagueRank: Number(row.leagueRank || index + 1),
     logo: resolveLotteryLogo(row) || resolveLotteryTeamLogoFromLeague(leagueData, teamName),
@@ -2972,7 +2981,7 @@ export default function OffseasonHub() {
         step: "2",
         title: "Draft Lottery",
         description:
-          "Reveal the second round, then reveal the first round lottery order using the completed season standings and modern NBA lottery-style odds.",
+          "Review the lottery odds and draft matrix, reveal the first round, then reveal the second round to lock the full draft order.",
         status: draftLotteryComplete ? "Complete" : leagueInflationComplete ? "Current" : retirementsComplete ? "Preparing" : "Locked",
         accent: draftLotteryComplete ? "green" : leagueInflationComplete ? "orange" : retirementsComplete ? "orange" : "neutral",
         buttonLabel: leagueInflationComplete ? "Open Draft Lottery" : retirementsComplete ? "Applying Inflation..." : "Locked",
