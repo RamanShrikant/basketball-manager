@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 
 const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
 const CUSTOM_DRAFT_CLASSES_INDEX_KEY = "bm_custom_draft_classes_v1";
@@ -166,9 +167,9 @@ export default function Play() {
       try {
         const parsed = JSON.parse(event.target.result);
 
-        // React state
+        // React state + IndexedDB save. localStorage only keeps a tiny pointer.
         setLeagueData(parsed);
-        localStorage.setItem("leagueData", JSON.stringify(parsed));
+        saveLeagueDataInBackground(parsed);
 
         // 🔥 GLOBAL version (Python worker needs this)
         window.leagueData = parsed;

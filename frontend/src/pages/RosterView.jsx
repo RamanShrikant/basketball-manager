@@ -7,6 +7,7 @@ import styles from "./RosterView.module.css";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
+import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 
@@ -436,7 +437,7 @@ export default function RosterView() {
   }, [selectedTeam, setSelectedTeam]);
 
   useEffect(() => {
-    if (selectedTeam) localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam));
+    if (selectedTeam?.name) localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam.name));
   }, [selectedTeam]);
 
   // teams sorted
@@ -633,10 +634,10 @@ export default function RosterView() {
 
     if (updatedTeam) {
       setSelectedTeam(updatedTeam);
-      localStorage.setItem("selectedTeam", JSON.stringify(updatedTeam));
+      localStorage.setItem("selectedTeam", JSON.stringify(updatedTeam.name));
     }
 
-    localStorage.setItem("leagueData", JSON.stringify(updated));
+    saveLeagueDataInBackground(updated);
     return updatedTeam;
   };
 
@@ -916,10 +917,10 @@ export default function RosterView() {
 
       if (updatedTeam) {
         setSelectedTeam(updatedTeam);
-        localStorage.setItem("selectedTeam", JSON.stringify(updatedTeam));
+        localStorage.setItem("selectedTeam", JSON.stringify(updatedTeam.name));
       }
 
-      localStorage.setItem("leagueData", JSON.stringify(updated));
+      saveLeagueDataInBackground(updated);
 
       closeReleaseModal();
     } catch (err) {

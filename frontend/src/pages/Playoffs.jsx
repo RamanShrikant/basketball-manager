@@ -10,6 +10,7 @@ import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import styles from "./Playoffs.module.css";
 import FinalsMvpReveal from "../components/FinalsMvpReveal";
 import { finalizeFinalsMvpAndGoOffseason } from "../utils/finalsMvpSeasonActions";
+import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 
 /* ---------------- utils ---------------- */
 function getAllTeamsFromLeague(leagueData) {
@@ -1361,15 +1362,9 @@ export default function Playoffs() {
   }
 
   function getLeagueDataForHistoryWrite() {
-    try {
-      const raw = localStorage.getItem("leagueData");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object") return parsed;
-      }
-    } catch {}
-
-    return leagueData;
+    // Full leagueData now lives in React context + IndexedDB. Do not read the
+    // localStorage pointer as if it were the full league object.
+    return leagueData || window.__leagueData || null;
   }
 
   function persistSeasonHistorySnapshot(next, { force = false } = {}) {
@@ -1411,11 +1406,7 @@ export default function Playoffs() {
       setLeagueData(leagueWithHistory);
     }
 
-    try {
-      localStorage.setItem("leagueData", JSON.stringify(leagueWithHistory));
-    } catch (err) {
-      console.warn("[Playoffs] Failed to save seasonHistory to leagueData", err);
-    }
+    saveLeagueDataInBackground(leagueWithHistory);
   }
 
   function persistPost(next) {

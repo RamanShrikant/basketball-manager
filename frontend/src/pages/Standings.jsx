@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
+import "../styles/BMPageBackground.css";
 
 /* -----------------------------
    Results V3 (per-game storage)
@@ -186,12 +187,16 @@ export default function Standings() {
 
   return (
     <PageFade>
-    <div className="min-h-screen bg-neutral-900 text-white py-10 px-6">
+    <div className="bmCourtPage min-h-screen text-white py-10 px-6">
       <div className="max-w-5xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-3xl font-bold text-orange-500">Standings</h1>
           <div className="flex gap-2">
-            {["all", "east", "west"].map((mode) => (
+            {[
+              "all",
+              "east",
+              "west"
+            ].map((mode) => (
               <button
                 key={mode}
                 onClick={() => setViewMode(mode)}

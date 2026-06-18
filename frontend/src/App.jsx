@@ -28,6 +28,8 @@ import DraftLottery from "./pages/DraftLottery.jsx";
 import Draft from "./pages/Draft.jsx";
 import RookieSignings from "./pages/RookieSignings.jsx";
 import RosterFinalization from "./pages/RosterFinalization.jsx";
+import PowerRankings from "./pages/PowerRankings.jsx";
+import DraftPicks from "./pages/DraftPicks.jsx";
 
 function App() {
   return (
@@ -35,7 +37,7 @@ function App() {
       <Routes>
         {/* ✅ Routes that use your shared Layout */}
         <Route element={<Layout />}>
-          <Route index element={<LeagueEditor  />} />
+          <Route index element={<LeagueEditor />} />
           <Route path="players" element={<PlayerEditor />} />
           <Route path="players/:playerId" element={<PlayerEditor />} />
           <Route path="trade" element={<TradeSimulator />} />
@@ -58,6 +60,8 @@ function App() {
         <Route path="/rookie-signings" element={<RookieSignings />} />
         <Route path="/roster-finalization" element={<RosterFinalization />} />
         <Route path="/standings" element={<Standings />} />
+        <Route path="/power-rankings" element={<PowerRankings />} />
+        <Route path="/draft-picks" element={<DraftPicks />} />
         <Route path="/playoffs" element={<Playoffs />} />
         <Route path="/player-progression" element={<PlayerProgression />} />
         <Route path="salary-table" element={<SalaryTable />} />

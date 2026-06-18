@@ -1,5 +1,6 @@
 // src/utils/finalsMvpSeasonActions.js
 import { archiveCurrentSeasonIntoPlayerCards } from "./playerCareerHistory";
+import { saveLeagueDataInBackground } from "./leagueStorage.js";
 
 const META_KEY = "bm_league_meta_v1";
 const SCHED_KEY = "bm_schedule_v3";
@@ -35,6 +36,8 @@ function bumpSeasonYearMeta() {
 
   const cur = Number.isFinite(Number(meta.seasonYear)) ? Number(meta.seasonYear) : fallback;
   meta.seasonYear = cur + 1;
+  meta.currentSeasonYear = meta.seasonYear;
+  meta.seasonStartYear = meta.seasonYear;
 
   localStorage.setItem(META_KEY, JSON.stringify(meta));
   return meta.seasonYear;
@@ -155,17 +158,18 @@ export function finalizeFinalsMvpAndGoOffseason({
   );
   localStorage.removeItem(RETIREMENT_RESULTS_KEY);
 
-  // 7) update leagueData season year in memory/localStorage so hub/pages read the right year
+  // 7) update leagueData season year in memory + IndexedDB. localStorage only keeps a tiny pointer.
   if (archivedLeagueData) {
     const updatedLeague = safeClone(archivedLeagueData);
     updatedLeague.seasonYear = nextSeasonYear;
     updatedLeague.currentSeasonYear = nextSeasonYear;
+    updatedLeague.seasonStartYear = nextSeasonYear;
 
     if (typeof setLeagueData === "function") {
       setLeagueData(updatedLeague);
     }
 
-    localStorage.setItem("leagueData", JSON.stringify(updatedLeague));
+    saveLeagueDataInBackground(updatedLeague);
 
     if (selectedTeam?.name && typeof setSelectedTeam === "function") {
       let updatedSelectedTeam = null;
@@ -182,8 +186,8 @@ export function finalizeFinalsMvpAndGoOffseason({
       }
 
       if (updatedSelectedTeam) {
-        setSelectedTeam(updatedSelectedTeam);
-        localStorage.setItem("selectedTeam", JSON.stringify(updatedSelectedTeam));
+        setSelectedTeam(updatedSelectedTeam.name);
+        localStorage.setItem("selectedTeam", JSON.stringify(updatedSelectedTeam.name));
       }
     }
   }

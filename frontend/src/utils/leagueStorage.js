@@ -11,8 +11,35 @@ const STORAGE_MODE_KEY = "leagueDataStorageMode";
 const STORAGE_POINTER_KEY = "leagueDataIndexedDbPointer";
 const LAST_SAVED_KEY = "leagueDataLastSavedAt";
 
+let originalLocalStorageSetItem = null;
+let leagueDataSaveInProgress = false;
+
 function hasIndexedDB() {
   return typeof indexedDB !== "undefined";
+}
+
+function hasLocalStorage() {
+  try {
+    return typeof localStorage !== "undefined" && !!localStorage;
+  } catch {
+    return false;
+  }
+}
+
+function rawSetLocalStorageItem(key, value) {
+  if (!hasLocalStorage()) return;
+
+  if (originalLocalStorageSetItem) {
+    originalLocalStorageSetItem.call(localStorage, key, value);
+    return;
+  }
+
+  localStorage.setItem(key, value);
+}
+
+function rawRemoveLocalStorageItem(key) {
+  if (!hasLocalStorage()) return;
+  localStorage.removeItem(key);
 }
 
 function safeJsonParse(raw, fallback = null) {
@@ -36,6 +63,61 @@ function leagueHasTeams(leagueData) {
   return getAllTeamsFromLeague(leagueData).length > 0;
 }
 
+function getSeasonYearForPointer(leagueData = null) {
+  const y = Number(
+    leagueData?.seasonYear ||
+      leagueData?.currentSeasonYear ||
+      leagueData?.seasonStartYear ||
+      leagueData?.year ||
+      0
+  );
+
+  return Number.isFinite(y) && y > 0 ? y : null;
+}
+
+function buildStoragePointer(leagueData = null, savedAt = Date.now()) {
+  return {
+    __storageMode: "indexedDB",
+    __indexedDbKey: ACTIVE_LEAGUE_KEY,
+    __indexedDbDbName: DB_NAME,
+    __indexedDbStoreName: STORE_NAME,
+    seasonYear: getSeasonYearForPointer(leagueData),
+    savedAt,
+  };
+}
+
+function writeLocalStoragePointerOnly(leagueData = null, savedAt = Date.now()) {
+  try {
+    const pointer = buildStoragePointer(leagueData, savedAt);
+    rawSetLocalStorageItem("leagueData", JSON.stringify(pointer));
+    return pointer;
+  } catch {
+    // IndexedDB remains the real save. Markers are helpful, not required.
+    return null;
+  }
+}
+
+function updateStorageMarkers(leagueData = null, savedAt = Date.now()) {
+  try {
+    const seasonYear = getSeasonYearForPointer(leagueData);
+
+    rawSetLocalStorageItem(STORAGE_MODE_KEY, "indexedDB");
+    rawSetLocalStorageItem(LAST_SAVED_KEY, String(savedAt));
+    rawSetLocalStorageItem(
+      STORAGE_POINTER_KEY,
+      JSON.stringify({
+        dbName: DB_NAME,
+        storeName: STORE_NAME,
+        key: ACTIVE_LEAGUE_KEY,
+        savedAt,
+        seasonYear,
+      })
+    );
+  } catch {
+    // Markers are helpful, but not required.
+  }
+}
+
 function openLeagueDatabase() {
   return new Promise((resolve, reject) => {
     if (!hasIndexedDB()) {
@@ -56,9 +138,6 @@ function openLeagueDatabase() {
     request.onsuccess = () => {
       const db = request.result;
 
-      // Extra guard:
-      // If a browser somehow opens the DB without the store, fail cleanly so
-      // the app can fall back to localStorage instead of crashing.
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.close();
         reject(new Error(`IndexedDB store missing: ${STORE_NAME}`));
@@ -121,6 +200,8 @@ function runStoreTransaction(mode, callback) {
 }
 
 function readLeagueDataFromLocalStorage() {
+  if (!hasLocalStorage()) return null;
+
   const parsed = safeJsonParse(localStorage.getItem("leagueData"), null);
 
   if (!parsed || typeof parsed !== "object") return null;
@@ -170,9 +251,7 @@ async function readLeagueDataFromLegacyIndexedDB() {
         request.onblocked = () => resolve(null);
       });
 
-      if (leagueHasTeams(legacy)) {
-        return legacy;
-      }
+      if (leagueHasTeams(legacy)) return legacy;
     } catch {
       // Ignore legacy read failures. The current DB or localStorage can still work.
     }
@@ -302,16 +381,14 @@ function compactFreeAgencyStateForMirror(state) {
   };
 }
 
-function buildLocalStorageMirror(leagueData) {
+function buildLocalStorageFallbackMirror(leagueData) {
   if (!leagueData || typeof leagueData !== "object") return leagueData;
 
   const mirror = {
     ...leagueData,
     freeAgencyState: compactFreeAgencyStateForMirror(leagueData.freeAgencyState),
-    __storageMode: "indexedDB_mirror",
-    __indexedDbKey: ACTIVE_LEAGUE_KEY,
-    __indexedDbDbName: DB_NAME,
-    __mirrorSavedAt: Date.now(),
+    __storageMode: "localStorage_fallback",
+    __fallbackSavedAt: Date.now(),
   };
 
   delete mirror.fullActionLog;
@@ -320,79 +397,52 @@ function buildLocalStorageMirror(leagueData) {
   return mirror;
 }
 
-function writeLocalStoragePointerOnly(leagueData = null) {
-  try {
-    const pointer = {
-      __storageMode: "indexedDB",
-      __indexedDbKey: ACTIVE_LEAGUE_KEY,
-      __indexedDbDbName: DB_NAME,
-      seasonYear: leagueData?.seasonYear || leagueData?.currentSeasonYear || null,
-      savedAt: Date.now(),
-    };
-
-    localStorage.setItem("leagueData", JSON.stringify(pointer));
-  } catch {
-    // Nothing else to do. IndexedDB remains the real save.
-  }
-}
-
-function updateStorageMarkers(leagueData = null) {
-  try {
-    const savedAt = Date.now();
-    localStorage.setItem(STORAGE_MODE_KEY, "indexedDB");
-    localStorage.setItem(LAST_SAVED_KEY, String(savedAt));
-    localStorage.setItem(
-      STORAGE_POINTER_KEY,
-      JSON.stringify({
-        dbName: DB_NAME,
-        storeName: STORE_NAME,
-        key: ACTIVE_LEAGUE_KEY,
-        savedAt,
-        seasonYear: leagueData?.seasonYear || leagueData?.currentSeasonYear || null,
-      })
-    );
-  } catch {
-    // Markers are helpful, but not required.
-  }
-}
-
-function writeLocalStorageMirror(leagueData) {
-  const mirror = buildLocalStorageMirror(leagueData);
-
-  try {
-    localStorage.setItem("leagueData", JSON.stringify(mirror));
-  } catch (err) {
-    console.warn("[leagueStorage] Local mirror was too large. Falling back to pointer only.", err);
-    try {
-      localStorage.removeItem("leagueData");
-    } catch {}
-    writeLocalStoragePointerOnly(leagueData);
-  }
+function writeLocalStorageFallbackMirror(leagueData) {
+  const mirror = buildLocalStorageFallbackMirror(leagueData);
+  rawSetLocalStorageItem("leagueData", JSON.stringify(mirror));
 }
 
 export async function saveLeagueData(leagueData) {
   if (!leagueData || typeof leagueData !== "object") return leagueData;
 
   try {
+    leagueDataSaveInProgress = true;
+
     await runStoreTransaction("readwrite", (store) =>
       store.put({
         id: ACTIVE_LEAGUE_KEY,
         leagueData,
         updatedAt: Date.now(),
-        version: 2,
+        version: 3,
       })
     );
 
-    updateStorageMarkers(leagueData);
-    writeLocalStorageMirror(leagueData);
+    const savedAt = Date.now();
+    updateStorageMarkers(leagueData, savedAt);
+    writeLocalStoragePointerOnly(leagueData, savedAt);
+
+    try {
+      if (typeof window !== "undefined") {
+        window.__leagueData = leagueData;
+        window.__basketballManagerLeagueData = leagueData;
+      }
+    } catch {}
+
     return leagueData;
   } catch (err) {
     console.error("[leagueStorage] IndexedDB save failed. Falling back to compact localStorage mirror.", err);
 
-    // Last-resort fallback so old browsers or private-mode failures do not
-    // make the whole app unusable.
-    writeLocalStorageMirror(leagueData);
+    // Last-resort fallback only. Normal browsers should keep the real save in IndexedDB
+    // and only a tiny pointer in localStorage.
+    try {
+      writeLocalStorageFallbackMirror(leagueData);
+    } catch (fallbackErr) {
+      console.error("[leagueStorage] localStorage fallback mirror also failed.", fallbackErr);
+    }
+
     return leagueData;
+  } finally {
+    leagueDataSaveInProgress = false;
   }
 }
 
@@ -404,14 +454,24 @@ export async function loadLeagueData() {
     );
 
     if (leagueHasTeams(saved?.leagueData)) {
-      updateStorageMarkers(saved.leagueData);
+      const savedAt = Date.now();
+      updateStorageMarkers(saved.leagueData, savedAt);
+      writeLocalStoragePointerOnly(saved.leagueData, savedAt);
+
+      try {
+        if (typeof window !== "undefined") {
+          window.__leagueData = saved.leagueData;
+          window.__basketballManagerLeagueData = saved.leagueData;
+        }
+      } catch {}
+
       return saved.leagueData;
     }
   } catch (err) {
     console.warn("[leagueStorage] IndexedDB v2 load failed. Trying fallbacks.", err);
   }
 
-  // 2. Try old localStorage leagueData.
+  // 2. Try old full localStorage leagueData, then migrate it to IndexedDB and shrink localStorage.
   const localLeague = readLeagueDataFromLocalStorage();
   if (leagueHasTeams(localLeague)) {
     saveLeagueData(localLeague).catch((err) => {
@@ -452,9 +512,9 @@ export async function clearLeagueDataFromIndexedDB() {
   }
 
   try {
-    localStorage.removeItem(STORAGE_MODE_KEY);
-    localStorage.removeItem(STORAGE_POINTER_KEY);
-    localStorage.removeItem(LAST_SAVED_KEY);
+    rawRemoveLocalStorageItem(STORAGE_MODE_KEY);
+    rawRemoveLocalStorageItem(STORAGE_POINTER_KEY);
+    rawRemoveLocalStorageItem(LAST_SAVED_KEY);
   } catch {}
 }
 
@@ -463,3 +523,54 @@ export function saveLeagueDataInBackground(leagueData) {
     console.error("[leagueStorage] Failed to save leagueData.", err);
   });
 }
+
+function installLeagueDataLocalStorageWriteGuard() {
+  try {
+    if (!hasLocalStorage()) return;
+    if (typeof Storage === "undefined") return;
+
+    const proto = Storage.prototype;
+    if (proto.setItem?.__bmLeagueDataGuardInstalled) return;
+
+    originalLocalStorageSetItem = proto.setItem;
+
+    const guardedSetItem = function guardedSetItem(key, value) {
+      if (String(key) !== "leagueData") {
+        return originalLocalStorageSetItem.call(this, key, value);
+      }
+
+      const parsed = safeJsonParse(value, null);
+
+      if (!leagueDataSaveInProgress && leagueHasTeams(parsed)) {
+        const savedAt = Date.now();
+        const pointer = buildStoragePointer(parsed, savedAt);
+
+        // Keep the actual browser localStorage value tiny immediately.
+        originalLocalStorageSetItem.call(this, key, JSON.stringify(pointer));
+        updateStorageMarkers(parsed, savedAt);
+
+        saveLeagueData(parsed).catch((err) => {
+          console.warn("[leagueStorage] Redirected direct leagueData localStorage write could not save to IndexedDB.", err);
+          try {
+            writeLocalStorageFallbackMirror(parsed);
+          } catch {}
+        });
+
+        return;
+      }
+
+      return originalLocalStorageSetItem.call(this, key, value);
+    };
+
+    Object.defineProperty(guardedSetItem, "__bmLeagueDataGuardInstalled", {
+      value: true,
+      enumerable: false,
+    });
+
+    proto.setItem = guardedSetItem;
+  } catch (err) {
+    console.warn("[leagueStorage] Could not install localStorage leagueData guard.", err);
+  }
+}
+
+installLeagueDataLocalStorageWriteGuard();

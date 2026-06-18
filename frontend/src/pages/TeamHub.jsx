@@ -30,7 +30,6 @@ function safeJSON(raw, fallback = null) {
   }
 }
 
-
 function getOffseasonFreeAgencyReturnPath() {
   const lastRoute = localStorage.getItem(FREE_AGENCY_LAST_ROUTE_KEY);
 
@@ -131,6 +130,8 @@ export default function TeamHub() {
   const normalTiles = [
     { name: "View Roster", path: "/roster-view", enabled: true },
     { name: "Trades", path: "#", enabled: false },
+    { name: "Power Rankings", path: "/power-rankings", enabled: true },
+    { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
     { name: "Free Agents", path: "/free-agents", enabled: true },
     { name: "Schedule", path: "/calendar", enabled: true },
@@ -144,6 +145,8 @@ export default function TeamHub() {
     { name: "Return to Offseason Hub", path: offseasonReturnTo, enabled: true },
     { name: "View Roster", path: "/roster-view", enabled: true },
     { name: "Trades", path: "#", enabled: false },
+    { name: "Power Rankings", path: "/power-rankings", enabled: true },
+    { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Free Agents", path: offseasonFreeAgentsPath, enabled: true },
     { name: "Salary Table", path: "/salary-table", enabled: true },
     { name: "Coach Gameplan", path: "#", enabled: false },
@@ -157,6 +160,8 @@ export default function TeamHub() {
     { name: "Return to Playoffs", path: playoffReturnTo, enabled: true },
     { name: "View Roster", path: "/roster-view", enabled: true },
     { name: "Trades", path: "#", enabled: false },
+    { name: "Power Rankings", path: "/power-rankings", enabled: true },
+    { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
     { name: "Statistics", path: "/player-stats", enabled: true },
     { name: "Standings", path: "/standings", enabled: true },
@@ -263,6 +268,10 @@ export default function TeamHub() {
                       ? "Resume offseason flow"
                       : tile.name === "Return to Playoffs"
                       ? "Resume playoff bracket"
+                      : tile.name === "Power Rankings"
+                      ? "League-wide team ratings"
+                      : tile.name === "Draft Picks"
+                      ? "Team draft assets"
                       : selectedTeam.name}
                   </div>
                 </div>

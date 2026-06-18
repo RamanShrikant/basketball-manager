@@ -38,6 +38,184 @@ const APPEARANCE_POOL_OPTIONS = [
 
 const FACE_STAGE_OPTIONS = ["rookie", "young", "prime", "veteran", "old"];
 
+
+const DRAFT_PICK_STATUS_OPTIONS = ["active", "conveyed", "resolved", "void"];
+
+const DRAFT_PICK_COMMON_PROTECTION_OPTIONS = [
+  {
+    value: "Unprotected",
+    label: "Unprotected",
+    description: "The pick conveys normally with no protection.",
+  },
+  {
+    value: "Other / see notes",
+    label: "Other / see notes",
+    description: "Use this for a weird real-life condition and explain it in Notes.",
+  },
+];
+
+const DRAFT_PICK_FIRST_ROUND_PROTECTION_OPTIONS = [
+  { value: "Top 1 protected", label: "Top 1 protected", description: "Conveys unless it lands #1." },
+  { value: "Top 3 protected", label: "Top 3 protected", description: "Conveys unless it lands #1-3." },
+  { value: "Top 4 protected", label: "Top 4 protected", description: "Conveys unless it lands #1-4." },
+  { value: "Top 5 protected", label: "Top 5 protected", description: "Conveys unless it lands #1-5." },
+  { value: "Top 6 protected", label: "Top 6 protected", description: "Conveys unless it lands #1-6." },
+  { value: "Top 8 protected", label: "Top 8 protected", description: "Conveys unless it lands #1-8." },
+  { value: "Top 10 protected", label: "Top 10 protected", description: "Conveys unless it lands #1-10." },
+  { value: "Top 12 protected", label: "Top 12 protected", description: "Conveys unless it lands #1-12." },
+  { value: "Lottery protected (1-14)", label: "Lottery protected (1-14)", description: "Conveys only if it lands outside the lottery." },
+  { value: "Top 18 protected", label: "Top 18 protected", description: "Conveys only if it lands #19-30." },
+  { value: "Top 20 protected", label: "Top 20 protected", description: "Conveys only if it lands #21-30." },
+  { value: "Protected 1-30 / does not convey", label: "Protected 1-30 / does not convey", description: "The pick is fully protected and may vanish or convert later." },
+  { value: "Converts to 2nd-round pick", label: "Converts to 2nd-round pick", description: "If it does not convey, it becomes a 2nd." },
+  { value: "Converts to two 2nd-round picks", label: "Converts to two 2nd-round picks", description: "If it does not convey, it becomes two 2nds." },
+  { value: "Rolling protection next year", label: "Rolling protection next year", description: "Protection carries forward to a future draft year." },
+];
+
+const DRAFT_PICK_SECOND_ROUND_PROTECTION_OPTIONS = [
+  { value: "Unprotected 2nd", label: "Unprotected 2nd", description: "Second-round pick conveys normally." },
+  { value: "31-40 protected", label: "31-40 protected", description: "Does not convey if it lands #31-40." },
+  { value: "31-45 protected", label: "31-45 protected", description: "Does not convey if it lands #31-45." },
+  { value: "31-50 protected", label: "31-50 protected", description: "Does not convey if it lands #31-50." },
+  { value: "Top 45 protected", label: "Top 45 protected", description: "Conveys only if it lands #46-60." },
+  { value: "Top 50 protected", label: "Top 50 protected", description: "Conveys only if it lands #51-60." },
+  { value: "Top 55 protected", label: "Top 55 protected", description: "Conveys only if it lands #56-60." },
+  { value: "56-60 protected", label: "56-60 protected", description: "Does not convey if it lands #56-60." },
+  { value: "More favorable 2nd", label: "More favorable 2nd", description: "Owner receives the better of multiple 2nd-rounders." },
+  { value: "Less favorable 2nd", label: "Less favorable 2nd", description: "Owner receives the worse of multiple 2nd-rounders." },
+];
+
+const DRAFT_PICK_SWAP_PROTECTION_OPTIONS = [
+  { value: "Unprotected swap right", label: "Unprotected swap right", description: "Holder can swap if the other pick is better." },
+  { value: "More favorable pick", label: "More favorable pick", description: "Holder gets the better pick between the listed teams." },
+  { value: "Less favorable pick", label: "Less favorable pick", description: "Holder gets the worse pick between the listed teams." },
+  { value: "Best of two picks", label: "Best of two picks", description: "Holder gets the best pick from two options." },
+  { value: "Worst of two picks", label: "Worst of two picks", description: "Holder gets the worst pick from two options." },
+  { value: "Best of multiple picks", label: "Best of multiple picks", description: "Holder gets the best pick from several teams/picks." },
+  { value: "Least favorable of multiple picks", label: "Least favorable of multiple picks", description: "Holder gets the least favorable pick from several teams/picks." },
+  { value: "Swap if pick lands outside protected range", label: "Swap if outside protected range", description: "Swap applies only if the affected pick is not protected." },
+  { value: "Top 4 protected swap", label: "Top 4 protected swap", description: "No swap if the affected pick lands #1-4." },
+  { value: "Top 10 protected swap", label: "Top 10 protected swap", description: "No swap if the affected pick lands #1-10." },
+  { value: "Lottery protected swap", label: "Lottery protected swap", description: "No swap if the affected pick lands #1-14." },
+  { value: "No swap if original team keeps protected pick", label: "No swap if protected", description: "Swap disappears if the original team keeps its protected pick." },
+];
+
+function getDraftPickProtectionOptions(asset = {}) {
+  const type = asset.type === "swap" ? "swap" : "pick";
+  const round = Number(asset.round || 1) === 2 ? 2 : 1;
+
+  if (type === "swap") {
+    return [
+      ...DRAFT_PICK_COMMON_PROTECTION_OPTIONS,
+      ...DRAFT_PICK_SWAP_PROTECTION_OPTIONS,
+    ];
+  }
+
+  if (round === 2) {
+    return [
+      ...DRAFT_PICK_COMMON_PROTECTION_OPTIONS,
+      ...DRAFT_PICK_SECOND_ROUND_PROTECTION_OPTIONS,
+    ];
+  }
+
+  return [
+    ...DRAFT_PICK_COMMON_PROTECTION_OPTIONS,
+    ...DRAFT_PICK_FIRST_ROUND_PROTECTION_OPTIONS,
+  ];
+}
+
+function createDefaultDraftPickForm(overrides = {}) {
+  return {
+    type: "pick",
+    year: 2026,
+    round: 1,
+    originalTeam: "",
+    ownerTeam: "",
+    swapWithTeam: "",
+    protections: "Unprotected",
+    status: "active",
+    notes: "",
+    ...overrides,
+  };
+}
+
+function safePickText(value = "") {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function makeTeamCode(name = "") {
+  const clean = safePickText(name);
+  if (!clean) return "TEAM";
+
+  const parts = clean.split(" ").filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 3).toUpperCase();
+
+  return parts
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 4)
+    .toUpperCase();
+}
+
+function makeDraftPickAssetId(asset = {}) {
+  const type = asset.type === "swap" ? "SWAP" : "PICK";
+  const year = Number(asset.year || 2026);
+  const round = Number(asset.round || 1);
+  const original = makeTeamCode(asset.originalTeam || "ORIG");
+  const owner = makeTeamCode(asset.ownerTeam || "OWNER");
+  const random = Math.random().toString(36).slice(2, 7).toUpperCase();
+
+  return `${year}_${original}_${round}_${type}_${owner}_${random}`;
+}
+
+function normalizeDraftPickAsset(row = {}, index = 0) {
+  const type = row.type === "swap" || row.assetType === "swap" || row.isSwap ? "swap" : "pick";
+  const year = Number(row.year || row.draftYear || 2026);
+  const round = Number(row.round || row.draftRound || 1);
+
+  const normalized = {
+    id: row.id || "",
+    type,
+    year: Number.isFinite(year) ? year : 2026,
+    round: round === 2 ? 2 : 1,
+    originalTeam: safePickText(row.originalTeam || row.originalTeamName || row.teamName || row.team || ""),
+    ownerTeam: safePickText(row.ownerTeam || row.currentOwner || row.currentOwnerTeamName || row.holderTeam || ""),
+    swapWithTeam: safePickText(row.swapWithTeam || row.swapTeam || row.swapTargetTeam || ""),
+    protections: safePickText(row.protections || row.protectionText || row.protection || "") || "Unprotected",
+    status: DRAFT_PICK_STATUS_OPTIONS.includes(row.status) ? row.status : "active",
+    notes: safePickText(row.notes || row.description || ""),
+  };
+
+  if (!normalized.id) {
+    normalized.id = makeDraftPickAssetId({ ...normalized, index });
+  }
+
+  return normalized;
+}
+
+function normalizeDraftPickAssets(rows = []) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row, index) => normalizeDraftPickAsset(row, index))
+    .filter((row) => row.originalTeam || row.ownerTeam);
+}
+
+function formatDraftPickAsset(row = {}) {
+  const year = Number(row.year || 2026);
+  const round = Number(row.round || 1);
+  const roundText = round === 1 ? "1st" : "2nd";
+
+  if (row.type === "swap") {
+    const swapText = row.swapWithTeam
+      ? `swap with ${row.swapWithTeam}`
+      : "swap right";
+    return `${year} ${roundText} round ${row.originalTeam || "pick"} ${swapText}`;
+  }
+
+  return `${year} ${roundText} round ${row.originalTeam || "pick"}`;
+}
+
 function createDefaultFaceLibraryCreator(overrides = {}) {
   return {
     name: "",
@@ -119,7 +297,9 @@ export default function LeagueEditor() {
 
   // FIX 1: free agents pool + pool toggle
   const [freeAgents, setFreeAgents] = useState([]);
-  const [selectedPool, setSelectedPool] = useState("TEAMS"); // "TEAMS" | "FA"
+  const [draftPicks, setDraftPicks] = useState([]);
+  const [hasLoadedLeague, setHasLoadedLeague] = useState(false);
+  const [selectedPool, setSelectedPool] = useState("TEAMS"); // "TEAMS" | "PLAYER_CREATOR" | "FA" | "DRAFT"
 
   const [selectedConf, setSelectedConf] = useState("East");
   const [newTeamName, setNewTeamName] = useState("");
@@ -138,6 +318,11 @@ export default function LeagueEditor() {
   const [sortedTeams, setSortedTeams] = useState({});
   const [originalOrders, setOriginalOrders] = useState({});
   const [editTeamModal, setEditTeamModal] = useState(null);
+
+  // Draft pick / swap ownership editor state
+  const [selectedPickTeam, setSelectedPickTeam] = useState("ALL");
+  const [editingPickId, setEditingPickId] = useState(null);
+  const [pickForm, setPickForm] = useState(createDefaultDraftPickForm());
 
   // Trades modal state (teams + free agents bucket)
   const [showTradeModal, setShowTradeModal] = useState(false);
@@ -197,6 +382,233 @@ export default function LeagueEditor() {
       },
     ];
   }, [allTeamsFlat]);
+
+  const teamNameOptions = useMemo(
+    () => allTeamsFlat.map((team) => team.name).filter(Boolean),
+    [allTeamsFlat]
+  );
+
+  const getDefaultPickTeamName = () => {
+    if (selectedPickTeam && selectedPickTeam !== "ALL") return selectedPickTeam;
+    return teamNameOptions[0] || "";
+  };
+
+  const resetPickForm = (overrides = {}) => {
+    const defaultTeam = getDefaultPickTeamName();
+
+    setEditingPickId(null);
+    setPickForm(
+      createDefaultDraftPickForm({
+        originalTeam: defaultTeam,
+        ownerTeam: defaultTeam,
+        swapWithTeam: "",
+        ...overrides,
+      })
+    );
+  };
+
+  const updatePickForm = (patch = {}) => {
+    setPickForm((prev) => createDefaultDraftPickForm({ ...prev, ...patch }));
+  };
+
+  const saveDraftPickAsset = () => {
+    const originalTeam = safePickText(pickForm.originalTeam);
+    const ownerTeam = safePickText(pickForm.ownerTeam);
+
+    if (!originalTeam) {
+      alert("Pick the original / affected team.");
+      return;
+    }
+
+    if (!ownerTeam) {
+      alert("Pick the owner / swap-right holder.");
+      return;
+    }
+
+    const normalized = normalizeDraftPickAsset({
+      ...pickForm,
+      id: editingPickId || pickForm.id || "",
+      originalTeam,
+      ownerTeam,
+    });
+
+    setDraftPicks((prev) => {
+      const current = normalizeDraftPickAssets(prev || []);
+
+      if (editingPickId) {
+        return current.map((row) => (row.id === editingPickId ? normalized : row));
+      }
+
+      return [...current, normalized].sort(
+        (a, b) =>
+          Number(a.year || 0) - Number(b.year || 0) ||
+          Number(a.round || 0) - Number(b.round || 0) ||
+          String(a.originalTeam || "").localeCompare(String(b.originalTeam || ""))
+      );
+    });
+
+    resetPickForm();
+  };
+
+  const editDraftPickAsset = (asset) => {
+    const normalized = normalizeDraftPickAsset(asset);
+    setEditingPickId(normalized.id);
+    setPickForm(createDefaultDraftPickForm(normalized));
+  };
+
+  const deleteDraftPickAsset = (assetId) => {
+    if (!window.confirm("Delete this draft pick asset?")) return;
+    setDraftPicks((prev) => normalizeDraftPickAssets(prev).filter((row) => row.id !== assetId));
+    if (editingPickId === assetId) resetPickForm();
+  };
+
+  const fillMissingDefaultDraftPicks = () => {
+    const years = [2026, 2027, 2028, 2029, 2030, 2031, 2032];
+    const existing = new Set(
+      normalizeDraftPickAssets(draftPicks).map(
+        (row) =>
+          `${Number(row.year)}|${Number(row.round)}|${safePickText(row.originalTeam).toLowerCase()}|${row.type}`
+      )
+    );
+
+    const additions = [];
+
+    for (const teamName of teamNameOptions) {
+      for (const year of years) {
+        for (const round of [1, 2]) {
+          const key = `${year}|${round}|${teamName.toLowerCase()}|pick`;
+          if (existing.has(key)) continue;
+
+          additions.push(
+            normalizeDraftPickAsset({
+              type: "pick",
+              year,
+              round,
+              originalTeam: teamName,
+              ownerTeam: teamName,
+              protections: "Unprotected",
+              status: "active",
+              notes: "",
+            })
+          );
+        }
+      }
+    }
+
+    if (!additions.length) {
+      alert("Default future picks already exist.");
+      return;
+    }
+
+    setDraftPicks((prev) =>
+      [...normalizeDraftPickAssets(prev), ...additions].sort(
+        (a, b) =>
+          Number(a.year || 0) - Number(b.year || 0) ||
+          Number(a.round || 0) - Number(b.round || 0) ||
+          String(a.originalTeam || "").localeCompare(String(b.originalTeam || ""))
+      )
+    );
+  };
+
+  const fillMissingDefaultDraftPicksForTeam = (teamNameInput) => {
+    const teamName = safePickText(teamNameInput);
+    if (!teamName) return;
+
+    const years = [2026, 2027, 2028, 2029, 2030, 2031, 2032];
+    const existing = new Set(
+      normalizeDraftPickAssets(draftPicks).map(
+        (row) =>
+          `${Number(row.year)}|${Number(row.round)}|${safePickText(row.originalTeam).toLowerCase()}|${safePickText(row.ownerTeam).toLowerCase()}|${row.type}`
+      )
+    );
+
+    const additions = [];
+
+    for (const year of years) {
+      for (const round of [1, 2]) {
+        const key = `${year}|${round}|${teamName.toLowerCase()}|${teamName.toLowerCase()}|pick`;
+        if (existing.has(key)) continue;
+
+        additions.push(
+          normalizeDraftPickAsset({
+            type: "pick",
+            year,
+            round,
+            originalTeam: teamName,
+            ownerTeam: teamName,
+            protections: "Unprotected",
+            status: "active",
+            notes: "Auto-added default own pick from team editor.",
+          })
+        );
+      }
+    }
+
+    if (!additions.length) {
+      alert(`${teamName} already has default own 1st/2nd round picks for 2026-2032.`);
+      return;
+    }
+
+    setDraftPicks((prev) =>
+      [...normalizeDraftPickAssets(prev), ...additions].sort(
+        (a, b) =>
+          Number(a.year || 0) - Number(b.year || 0) ||
+          Number(a.round || 0) - Number(b.round || 0) ||
+          String(a.originalTeam || "").localeCompare(String(b.originalTeam || ""))
+      )
+    );
+  };
+
+  const getDraftPickAssetsForTeam = (teamNameInput) => {
+    const teamName = safePickText(teamNameInput);
+    if (!teamName) return [];
+
+    return normalizeDraftPickAssets(draftPicks)
+      .filter((pick) => safePickText(pick.ownerTeam) === teamName)
+      .sort(
+        (a, b) =>
+          Number(a.year || 0) - Number(b.year || 0) ||
+          Number(a.round || 0) - Number(b.round || 0) ||
+          String(a.originalTeam || "").localeCompare(String(b.originalTeam || "")) ||
+          String(a.type || "pick").localeCompare(String(b.type || "pick"))
+      );
+  };
+
+  const startDraftPickForEditedTeam = (overrides = {}) => {
+    const teamName = safePickText(editTeamModal?.name || editTeamModal?.originalName || "");
+    setSelectedPickTeam(teamName || "ALL");
+    setEditingPickId(null);
+    setPickForm(
+      createDefaultDraftPickForm({
+        originalTeam: teamName,
+        ownerTeam: teamName,
+        swapWithTeam: "",
+        ...overrides,
+      })
+    );
+  };
+
+  const visibleDraftPicks = useMemo(() => {
+    const rows = normalizeDraftPickAssets(draftPicks);
+
+    const filtered =
+      selectedPickTeam === "ALL"
+        ? rows
+        : rows.filter(
+            (row) =>
+              row.ownerTeam === selectedPickTeam ||
+              row.originalTeam === selectedPickTeam ||
+              row.swapWithTeam === selectedPickTeam
+          );
+
+    return [...filtered].sort(
+      (a, b) =>
+        Number(a.year || 0) - Number(b.year || 0) ||
+        Number(a.round || 0) - Number(b.round || 0) ||
+        String(a.originalTeam || "").localeCompare(String(b.originalTeam || "")) ||
+        String(a.ownerTeam || "").localeCompare(String(b.ownerTeam || ""))
+    );
+  }, [draftPicks, selectedPickTeam]);
 
   const getTeam = (ref) => {
     if (!ref || ref.pool !== "TEAMS") return null;
@@ -1585,7 +1997,10 @@ const normalizePlayer = (p) => {
   /* ---------------- Auto-Save + Load ---------------- */
   useEffect(() => {
     const saved = localStorage.getItem("leagueData");
-    if (!saved) return;
+    if (!saved) {
+      setHasLoadedLeague(true);
+      return;
+    }
 
     try {
       const data = JSON.parse(saved);
@@ -1613,11 +2028,16 @@ const normalizePlayer = (p) => {
         return normalizePlayer({ ...p, scoringRating });
       });
 
+      updated.draftPicks = normalizeDraftPickAssets(data.draftPicks || data.picks || []);
+
       setLeagueName(updated.leagueName);
       setConferences(updated.conferences);
       setFreeAgents(updated.freeAgents || []);
+      setDraftPicks(updated.draftPicks || []);
     } catch (err) {
       console.error(err);
+    } finally {
+      setHasLoadedLeague(true);
     }
   }, []);
 
@@ -1655,9 +2075,20 @@ const normalizePlayer = (p) => {
   }, []);
 
   useEffect(() => {
+    if (!hasLoadedLeague) return;
+
     // FIX 2: save free agents too
-    localStorage.setItem("leagueData", JSON.stringify({ leagueName, conferences, freeAgents }));
-  }, [leagueName, conferences, freeAgents]);
+    // Draft picks are central league assets, not stored inside team objects.
+    localStorage.setItem(
+      "leagueData",
+      JSON.stringify({
+        leagueName,
+        conferences,
+        freeAgents,
+        draftPicks: normalizeDraftPickAssets(draftPicks),
+      })
+    );
+  }, [hasLoadedLeague, leagueName, conferences, freeAgents, draftPicks]);
 
   /* ---------------- Live Recalc in Modal ---------------- */
   useEffect(() => {
@@ -1694,15 +2125,43 @@ const normalizePlayer = (p) => {
     setNewTeamLogo("");
   };
 
-  const openEditTeam = (idx) => setEditTeamModal({ idx, ...conferences[selectedConf][idx] });
+  const openEditTeam = (idx) => {
+    const team = conferences[selectedConf][idx];
+    const teamName = safePickText(team?.name || "");
+
+    setEditTeamModal({ idx, originalName: teamName, ...team });
+    setSelectedPickTeam(teamName || "ALL");
+    setEditingPickId(null);
+    setPickForm(
+      createDefaultDraftPickForm({
+        originalTeam: teamName,
+        ownerTeam: teamName,
+      })
+    );
+  };
 
   const saveEditTeam = () => {
+    const oldName = safePickText(editTeamModal?.originalName || "");
+    const newName = safePickText(editTeamModal?.name || "");
+
     setConferences((prev) => {
       const copy = JSON.parse(JSON.stringify(prev));
       copy[selectedConf][editTeamModal.idx].name = editTeamModal.name;
       copy[selectedConf][editTeamModal.idx].logo = editTeamModal.logo;
       return copy;
     });
+
+    if (oldName && newName && oldName !== newName) {
+      setDraftPicks((prev) =>
+        normalizeDraftPickAssets(prev).map((pick) => ({
+          ...pick,
+          originalTeam: pick.originalTeam === oldName ? newName : pick.originalTeam,
+          ownerTeam: pick.ownerTeam === oldName ? newName : pick.ownerTeam,
+          swapWithTeam: pick.swapWithTeam === oldName ? newName : pick.swapWithTeam,
+        }))
+      );
+    }
+
     setEditTeamModal(null);
   };
 
@@ -1949,13 +2408,16 @@ const normalizePlayer = (p) => {
                         return normalizePlayer({ ...p, scoringRating });
                       });
 
+                      updated.draftPicks = normalizeDraftPickAssets(d.draftPicks || d.picks || []);
+
                       setLeagueName(updated.leagueName);
                       setConferences(updated.conferences);
                       setFreeAgents(updated.freeAgents || []);
+                      setDraftPicks(updated.draftPicks || []);
 
                       localStorage.setItem("leagueData", JSON.stringify(updated));
 
-                      alert(`✅ Imported ${updated.leagueName} (birthdays + contracts + free agents kept / added)`);
+                      alert(`✅ Imported ${updated.leagueName} (birthdays + contracts + free agents + draft picks kept / added)`);
                     } else alert("⚠️ Invalid JSON");
                   } catch {
                     alert("❌ Failed to parse JSON");
@@ -1977,7 +2439,12 @@ const normalizePlayer = (p) => {
             onClick={() => {
               // FIX 3: export includes free agents, recalced
               const snapshot = buildExportSnapshot();
-              const json = { leagueName, conferences: snapshot.conferences, freeAgents: snapshot.freeAgents };
+              const json = {
+                leagueName,
+                conferences: snapshot.conferences,
+                freeAgents: snapshot.freeAgents,
+                draftPicks: normalizeDraftPickAssets(draftPicks),
+              };
               const blob = new Blob([JSON.stringify(json, null, 2)], { type: "application/json" });
               const url = URL.createObjectURL(blob);
               const a = document.createElement("a");
@@ -2009,7 +2476,9 @@ const normalizePlayer = (p) => {
               ? "Player Creator"
               : p === "FA"
               ? "Free Agents"
-              : "Draft Classes"}
+              : p === "DRAFT"
+              ? "Draft Classes"
+              : "Draft Picks"}
           </button>
         ))}
       </div>
@@ -2340,6 +2809,7 @@ const normalizePlayer = (p) => {
           </table>
         </div>
       )}
+
 
       {/* Teams view stays the same, but only renders when TEAMS */}
       {selectedPool === "TEAMS" && (
@@ -3642,39 +4112,328 @@ const normalizePlayer = (p) => {
       )}
 
       {/* Edit Team Modal */}
-      {editTeamModal && (
-        <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50">
-          <div className="bg-white rounded-lg p-6 w-[400px]">
-            <h2 className="text-xl font-bold mb-4">Edit Team</h2>
-            <input
-              className="border p-2 rounded w-full mb-2"
-              placeholder="Team Name"
-              value={editTeamModal.name}
-              onChange={(e) => setEditTeamModal({ ...editTeamModal, name: e.target.value })}
-            />
-            <input
-              className="border p-2 rounded w-full mb-4"
-              placeholder="Logo URL"
-              value={editTeamModal.logo}
-              onChange={(e) => setEditTeamModal({ ...editTeamModal, logo: e.target.value })}
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setEditTeamModal(null)}
-                className="px-3 py-2 rounded bg-gray-300 hover:bg-gray-400"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={saveEditTeam}
-                className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
-              >
-                Save
-              </button>
+      {editTeamModal && (() => {
+        const modalTeamName = safePickText(editTeamModal.name || editTeamModal.originalName || "");
+        const teamOwnedPicks = getDraftPickAssetsForTeam(modalTeamName);
+        const protectionOptionsForForm = getDraftPickProtectionOptions(pickForm);
+        const selectedProtectionOption =
+          protectionOptionsForForm.find((option) => option.value === pickForm.protections) ||
+          protectionOptionsForForm[0];
+
+        return (
+          <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50">
+            <div className="bg-white rounded-lg p-6 w-[980px] max-w-[96vw] max-h-[92vh] overflow-y-auto">
+              <h2 className="text-xl font-bold mb-4">Edit Team</h2>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Team Name</label>
+                  <input
+                    className="border p-2 rounded w-full"
+                    placeholder="Team Name"
+                    value={editTeamModal.name}
+                    onChange={(e) => {
+                      const nextName = e.target.value;
+                      setEditTeamModal({ ...editTeamModal, name: nextName });
+
+                      if (!editingPickId) {
+                        setPickForm((prev) =>
+                          createDefaultDraftPickForm({
+                            ...prev,
+                            ownerTeam: safePickText(nextName),
+                            originalTeam: prev.originalTeam || safePickText(nextName),
+                          })
+                        );
+                      }
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Logo URL</label>
+                  <input
+                    className="border p-2 rounded w-full"
+                    placeholder="Logo URL"
+                    value={editTeamModal.logo}
+                    onChange={(e) => setEditTeamModal({ ...editTeamModal, logo: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="border rounded-2xl p-4 bg-slate-50 mb-5">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+                  <div>
+                    <h3 className="text-lg font-bold">Draft Picks Owned by {modalTeamName || "This Team"}</h3>
+                    <p className="text-xs text-slate-600 mt-1">
+                      Add the picks this team owns here. These save to <span className="font-mono">leagueData.draftPicks</span> for lottery, draft, and future trades.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => startDraftPickForEditedTeam()}
+                      className="bg-gray-200 px-3 py-2 rounded hover:bg-gray-300 text-sm"
+                    >
+                      Clear Pick Form
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => fillMissingDefaultDraftPicksForTeam(modalTeamName)}
+                      className="bg-slate-800 text-white px-3 py-2 rounded hover:bg-slate-700 text-sm"
+                    >
+                      Add Default Own Picks
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4">
+                  <div className="border rounded-xl p-4 bg-white">
+                    <div className="font-bold mb-3">
+                      {editingPickId ? "Edit Pick / Swap" : "Add Pick / Swap"}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="col-span-2">
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Asset Type</label>
+                        <select
+                          className="border p-2 rounded w-full bg-white"
+                          value={pickForm.type}
+                          onChange={(e) => updatePickForm({ type: e.target.value })}
+                        >
+                          <option value="pick">Normal Pick</option>
+                          <option value="swap">Swap Right</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Year</label>
+                        <input
+                          className="border p-2 rounded w-full"
+                          type="number"
+                          min="2026"
+                          max="2045"
+                          value={pickForm.year}
+                          onChange={(e) => updatePickForm({ year: Number(e.target.value) })}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Round</label>
+                        <select
+                          className="border p-2 rounded w-full bg-white"
+                          value={pickForm.round}
+                          onChange={(e) => updatePickForm({ round: Number(e.target.value) })}
+                        >
+                          <option value={1}>1st Round</option>
+                          <option value={2}>2nd Round</option>
+                        </select>
+                      </div>
+
+                      <div className="col-span-2">
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                          Original / Affected Team
+                        </label>
+                        <select
+                          className="border p-2 rounded w-full bg-white"
+                          value={pickForm.originalTeam}
+                          onChange={(e) => updatePickForm({ originalTeam: e.target.value })}
+                        >
+                          <option value="">Select team</option>
+                          {teamNameOptions.map((teamName) => (
+                            <option key={`team-modal-orig-${teamName}`} value={teamName}>
+                              {teamName}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="col-span-2">
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                          {pickForm.type === "swap" ? "Swap Right Holder / Owner" : "Current Owner"}
+                        </label>
+                        <select
+                          className="border p-2 rounded w-full bg-white"
+                          value={pickForm.ownerTeam || modalTeamName}
+                          onChange={(e) => updatePickForm({ ownerTeam: e.target.value })}
+                        >
+                          <option value="">Select team</option>
+                          {teamNameOptions.map((teamName) => (
+                            <option key={`team-modal-owner-${teamName}`} value={teamName}>
+                              {teamName}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="text-[11px] text-slate-500 mt-1">
+                          Leave this as {modalTeamName || "this team"} when you are adding picks owned by this team.
+                        </div>
+                      </div>
+
+                      {pickForm.type === "swap" && (
+                        <div className="col-span-2">
+                          <label className="block text-xs font-semibold text-slate-600 mb-1">Swap With Team</label>
+                          <select
+                            className="border p-2 rounded w-full bg-white"
+                            value={pickForm.swapWithTeam}
+                            onChange={(e) => updatePickForm({ swapWithTeam: e.target.value })}
+                          >
+                            <option value="">Optional / not specified</option>
+                            {teamNameOptions.map((teamName) => (
+                              <option key={`team-modal-swap-${teamName}`} value={teamName}>
+                                {teamName}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      <div className="col-span-2">
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                          Protections / Conditions
+                        </label>
+                        <div className="border rounded-xl bg-white max-h-64 overflow-y-auto divide-y">
+                          {protectionOptionsForForm.map((option) => {
+                            const selected = pickForm.protections === option.value;
+
+                            return (
+                              <button
+                                key={`team-modal-protection-${option.value}`}
+                                type="button"
+                                onClick={() => updatePickForm({ protections: option.value })}
+                                className={`w-full text-left px-3 py-2 hover:bg-orange-50 ${
+                                  selected ? "bg-orange-100 text-orange-900" : "bg-white text-slate-800"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="font-semibold text-sm">{option.label}</span>
+                                  {selected && <span className="text-xs font-bold">Selected</span>}
+                                </div>
+                                <div className="text-[11px] text-slate-500 mt-0.5">{option.description}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-2">
+                          Selected: <span className="font-semibold">{selectedProtectionOption?.label || "Unprotected"}</span>. For unusual real-life language, choose <span className="font-semibold">Other / see notes</span> and write the exact details below.
+                        </div>
+                      </div>
+
+                      <div className="col-span-2">
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Notes</label>
+                        <textarea
+                          className="border p-2 rounded w-full min-h-[80px]"
+                          placeholder="Optional details, source, conditions, etc."
+                          value={pickForm.notes}
+                          onChange={(e) => updatePickForm({ notes: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={saveDraftPickAsset}
+                      className="mt-4 w-full bg-orange-600 text-white px-4 py-2 rounded hover:bg-orange-700 font-bold"
+                    >
+                      {editingPickId ? "Save Pick Changes" : "Add Pick to Team"}
+                    </button>
+                  </div>
+
+                  <div className="border rounded-xl overflow-hidden bg-white">
+                    <div className="px-4 py-3 border-b bg-slate-100 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-bold">Owned Picks / Swap Rights</div>
+                        <div className="text-xs text-slate-600">
+                          {teamOwnedPicks.length} asset{teamOwnedPicks.length === 1 ? "" : "s"} owned by this team
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+                      <table className="w-full min-w-[760px] text-sm">
+                        <thead className="sticky top-0 bg-white">
+                          <tr className="border-b">
+                            <th className="text-left p-3 font-semibold">Asset</th>
+                            <th className="text-center p-3 font-semibold">Type</th>
+                            <th className="text-center p-3 font-semibold">Year</th>
+                            <th className="text-center p-3 font-semibold">Round</th>
+                            <th className="text-left p-3 font-semibold">Protections</th>
+                            <th className="text-right p-3 font-semibold">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {teamOwnedPicks.map((pick) => (
+                            <tr key={pick.id} className="border-b align-top hover:bg-slate-50">
+                              <td className="p-3">
+                                <div className="font-bold text-slate-900">{formatDraftPickAsset(pick)}</div>
+                                <div className="text-xs text-slate-500 mt-1">
+                                  Original: {pick.originalTeam || "—"}
+                                  {pick.type === "swap" ? ` | Swap with: ${pick.swapWithTeam || "not specified"}` : ""}
+                                  {pick.notes ? ` | ${pick.notes}` : ""}
+                                </div>
+                              </td>
+                              <td className="p-3 text-center">
+                                <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                                  pick.type === "swap"
+                                    ? "bg-purple-100 text-purple-800"
+                                    : "bg-blue-100 text-blue-800"
+                                }`}>
+                                  {pick.type === "swap" ? "Swap" : "Pick"}
+                                </span>
+                              </td>
+                              <td className="p-3 text-center font-semibold">{pick.year}</td>
+                              <td className="p-3 text-center">{pick.round === 1 ? "1st" : "2nd"}</td>
+                              <td className="p-3">{pick.protections || "Unprotected / none"}</td>
+                              <td className="p-3 text-right whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={() => editDraftPickAsset(pick)}
+                                  className="text-blue-600 text-sm hover:underline mr-3"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteDraftPickAsset(pick.id)}
+                                  className="text-red-600 text-sm hover:underline"
+                                >
+                                  Delete
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+
+                          {!teamOwnedPicks.length && (
+                            <tr>
+                              <td colSpan={6} className="text-center text-slate-500 py-8">
+                                No draft pick assets owned by this team yet. Add one using the form on the left.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setEditTeamModal(null)}
+                  className="px-3 py-2 rounded bg-gray-300 hover:bg-gray-400"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveEditTeam}
+                  className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
+                >
+                  Save Team
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 

@@ -26,7 +26,7 @@ function normalizeLeagueFinancials(leagueData) {
 export function GameProvider({ children }) {
   const [leagueData, setLeagueDataRaw] = useState(null);
 
-  // Store only the team name. This prevents stale roster objects.
+  // Store only the team name. This prevents stale roster objects and localStorage bloat.
   const [selectedTeamName, setSelectedTeamName] = useState(null);
 
   const setLeagueData = (nextLeagueData) => {
@@ -50,6 +50,12 @@ export function GameProvider({ children }) {
         if (cancelled) return true;
 
         console.log("🔥 Loaded populated leagueData into GameContext:", parsed);
+
+        // Expose for older code paths that still expect a global in-memory league.
+        try {
+          window.__leagueData = parsed;
+          window.leagueData = parsed;
+        } catch {}
 
         // Seed missing CPU gameplans automatically. Does not overwrite existing ones.
         try {
@@ -97,6 +103,7 @@ export function GameProvider({ children }) {
 
       if (parsed && typeof parsed === "object" && parsed.name) {
         setSelectedTeamName(parsed.name);
+        localStorage.setItem("selectedTeam", JSON.stringify(parsed.name));
       } else if (typeof parsed === "string") {
         setSelectedTeamName(parsed);
       }
@@ -119,7 +126,10 @@ export function GameProvider({ children }) {
 
     setSelectedTeamName(name);
 
-    if (name) localStorage.setItem("selectedTeam", JSON.stringify(name));
+    try {
+      if (name) localStorage.setItem("selectedTeam", JSON.stringify(name));
+      else localStorage.removeItem("selectedTeam");
+    } catch {}
   };
 
   return (
