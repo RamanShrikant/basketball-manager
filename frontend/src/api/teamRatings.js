@@ -2,8 +2,17 @@
 // Team rating formula used by Coach Gameplan and rotation optimization.
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+const round4 = (x) => Math.round(Number(x || 0) * 10000) / 10000;
 
-const TR_GAIN = 1.30;
+const TR_GAIN_OVR = 1.48;
+const TR_GAIN_SIDE = 1.15;
+const TR_SCALE_CENTER_RAW_OVR = 84;
+const TR_SCALE_CENTER_OUT_OVR = 81;
+const TR_SCALE_CENTER_RAW_SIDE = 84;
+const TR_SCALE_CENTER_OUT_SIDE = 82;
+const TR_STAR_MULT_OVR = 1.0;
+const TR_STAR_MULT_OFF = 0.95;
+const TR_STAR_MULT_DEF = 0.75;
 const TR_STAR_REF = 84.0;
 const TR_STAR_EXP_OVR = 1.22;
 const TR_STAR_EXP_OFF = 1.20;
@@ -25,6 +34,25 @@ const fatiguePenalty = (mins, sta) => {
   return Math.max(TR_FATIGUE_FLOOR, 1 - TR_FATIGUE_K * over);
 };
 
+function applySecondaryFlexCredits(roster, posMin) {
+  // Primary position minutes are the real minutes. Secondary position credit is
+  // only a flexibility helper: it can fill a shortage, but it can never create
+  // extra overage. This prevents PG/SG players from being punished compared to
+  // pure PG players when SG is already over the 48-minute target.
+  for (const p of roster) {
+    const secondary = p.secondaryPos;
+    if (!secondary || secondary === p.pos || posMin[secondary] === undefined) {
+      continue;
+    }
+
+    const shortage = Math.max(0, TR_POS_TARGET - (posMin[secondary] || 0));
+    if (shortage <= 0) continue;
+
+    const flexCredit = Math.min(p.minutes * TR_SECONDARY_POS_CREDIT, shortage);
+    posMin[secondary] += flexCredit;
+  }
+}
+
 function minutesWeighted(team, minsObj) {
   const posMin = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
   const roster = [];
@@ -36,20 +64,11 @@ function minutesWeighted(team, minsObj) {
 
     total += m;
 
-    if (p.pos && posMin[p.pos] !== undefined) {
-      posMin[p.pos] += m;
-    }
+    const primaryPos = p.pos || "SG";
+    const secondaryPos = p.secondaryPos || null;
 
-    // Secondary positions create simple flexible-position credit. This is
-    // intentionally not equal to primary-position credit, but it is strong
-    // enough that better players who can reasonably play their secondary
-    // position are not over-punished by the coverage formula.
-    if (
-      p.secondaryPos &&
-      p.secondaryPos !== p.pos &&
-      posMin[p.secondaryPos] !== undefined
-    ) {
-      posMin[p.secondaryPos] += m * TR_SECONDARY_POS_CREDIT;
+    if (primaryPos && posMin[primaryPos] !== undefined) {
+      posMin[primaryPos] += m;
     }
 
     roster.push({
@@ -59,11 +78,13 @@ function minutesWeighted(team, minsObj) {
       overall: p.overall ?? 75,
       offRating: p.offRating ?? 75,
       defRating: p.defRating ?? 75,
-      pos: p.pos || "SG",
-      secondaryPos: p.secondaryPos || null,
+      pos: primaryPos,
+      secondaryPos,
       attrs: Array.isArray(p.attrs) ? p.attrs : null
     });
   });
+
+  applySecondaryFlexCredits(roster, posMin);
 
   return { roster, posMin, total };
 }
@@ -84,14 +105,20 @@ function aggWithFatigue(roster, key) {
   return { wavg, effList };
 }
 
-function starBoost(effList, starExp) {
+function starBoost(effList, starExp, key = "overall") {
   if (!effList.length) return 0;
 
   const top2 = [...effList].sort((a, b) => b.eff - a.eff).slice(0, 2);
   let pull = 0;
 
   for (const { p } of top2) {
-    const base = p.overall ?? p.offRating ?? p.defRating ?? 75;
+    const base =
+      key === "offRating"
+        ? Number(p.offRating ?? p.overall ?? 75)
+        : key === "defRating"
+        ? Number(p.defRating ?? p.overall ?? 75)
+        : Number(p.overall ?? 75);
+
     const gap = Math.max(0, base - TR_STAR_REF);
     if (gap <= 0) continue;
 
@@ -99,7 +126,7 @@ function starBoost(effList, starExp) {
     pull += (gap ** starExp) * share;
   }
 
-  return (pull ** TR_STAR_OUT_EXP);
+  return pull ** TR_STAR_OUT_EXP;
 }
 
 function coveragePenaltyPts(posMin) {
@@ -120,23 +147,36 @@ function coveragePenaltyPts(posMin) {
   return covPen + overPen;
 }
 
-const scaleRange = (raw) =>
-  clamp((raw - 75) * TR_GAIN + 75, 25, 99);
+const scaleRange = (raw, kind = "overall") => {
+  const gain = kind === "overall" ? TR_GAIN_OVR : TR_GAIN_SIDE;
+  const centerRaw = kind === "overall" ? TR_SCALE_CENTER_RAW_OVR : TR_SCALE_CENTER_RAW_SIDE;
+  const centerOut = kind === "overall" ? TR_SCALE_CENTER_OUT_OVR : TR_SCALE_CENTER_OUT_SIDE;
+
+  return clamp((raw - centerRaw) * gain + centerOut, 25, 99);
+};
 
 export function computeTeamRatings(team, minsObj) {
   const { roster, posMin, total } = minutesWeighted(team, minsObj);
 
   if (!total) {
-    return { overall: 0, off: 0, def: 0, rosterOut: roster };
+    return {
+      overall: 0,
+      off: 0,
+      def: 0,
+      exactOverall: 0,
+      exactOff: 0,
+      exactDef: 0,
+      rosterOut: roster,
+    };
   }
 
   const { wavg: baseOvr, effList: effOvr } = aggWithFatigue(roster, "overall");
   const { wavg: baseOff, effList: effOff } = aggWithFatigue(roster, "offRating");
   const { wavg: baseDef, effList: effDef } = aggWithFatigue(roster, "defRating");
 
-  const sOvr = starBoost(effOvr, TR_STAR_EXP_OVR);
-  const sOff = starBoost(effOff, TR_STAR_EXP_OFF);
-  const sDef = starBoost(effDef, TR_STAR_EXP_DEF);
+  const sOvr = starBoost(effOvr, TR_STAR_EXP_OVR, "overall") * TR_STAR_MULT_OVR;
+  const sOff = starBoost(effOff, TR_STAR_EXP_OFF, "offRating") * TR_STAR_MULT_OFF;
+  const sDef = starBoost(effDef, TR_STAR_EXP_DEF, "defRating") * TR_STAR_MULT_DEF;
 
   const cov = coveragePenaltyPts(posMin);
 
@@ -150,10 +190,20 @@ export function computeTeamRatings(team, minsObj) {
   const rawDef = baseDef + sDef - cov - emptyPen;
   const rawOvr = baseOvr + sOvr - cov - emptyPen;
 
+  const exactOverall = round4(scaleRange(rawOvr, "overall"));
+  const exactOff = round4(scaleRange(rawOff, "side"));
+  const exactDef = round4(scaleRange(rawDef, "side"));
+
   return {
-    overall: Math.round(scaleRange(rawOvr)),
-    off: Math.round(scaleRange(rawOff)),
-    def: Math.round(scaleRange(rawDef)),
+    // Whole-number values are for UI display.
+    overall: Math.round(exactOverall),
+    off: Math.round(exactOff),
+    def: Math.round(exactDef),
+
+    // Exact values are for internal logic, optimization, and any future sim use.
+    exactOverall,
+    exactOff,
+    exactDef,
     rosterOut: roster,
   };
 }

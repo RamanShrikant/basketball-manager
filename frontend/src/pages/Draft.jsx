@@ -152,6 +152,18 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     return saved;
   }
 
+
+  function isLotteryDraftOrderLocked(lottery) {
+    if (!lottery || typeof lottery !== "object") return false;
+    if (lottery.isPreview || lottery?.result?.meta?.isPreview) return false;
+    return Boolean(
+      lottery.firstRoundRevealed &&
+      lottery.secondRoundRevealed &&
+      Array.isArray(lottery?.result?.fullDraftOrder) &&
+      lottery.result.fullDraftOrder.length >= 60
+    );
+  }
+
   function readDraftState(seasonYear) {
     const saved = safeJSON(localStorage.getItem(DRAFT_STATE_KEY), null);
     if (!saved || typeof saved !== "object") return null;
@@ -1339,7 +1351,12 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     }, [leagueData, seasonYear, setLeagueData]);
 
     const lottery = useMemo(() => readDraftLottery(seasonYear), [seasonYear]);
-    const draftOrder = lottery?.result?.fullDraftOrder || workingLeagueData?.draftState?.draftOrder || [];
+    const lotteryOrderLocked = isLotteryDraftOrderLocked(lottery);
+    const draftOrder = lotteryOrderLocked
+      ? lottery?.result?.fullDraftOrder || []
+      : workingLeagueData?.draftState?.draftLotteryComplete
+      ? workingLeagueData?.draftState?.draftOrder || []
+      : [];
 
     const teamLogoByName = useMemo(() => {
       return buildTeamLogoMap(workingLeagueData, draftOrder);

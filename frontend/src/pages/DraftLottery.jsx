@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
@@ -8,7 +8,6 @@ const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const LEAGUE_KEY = "leagueData";
 const DEV_LOTTERY_SYSTEM_KEY = "bm_dev_lottery_system_v1";
-
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const SCHEDULE_KEY = "bm_schedule_v3";
@@ -24,12 +23,9 @@ function safeJSON(raw, fallback = null) {
 
 function getSeasonYear(leagueData) {
   const candidates = [];
-
   const pushYear = (value) => {
     const y = Number(value);
-    if (Number.isFinite(y) && y >= 2020 && y <= 2100) {
-      candidates.push(y);
-    }
+    if (Number.isFinite(y) && y >= 2020 && y <= 2100) candidates.push(y);
   };
 
   const meta = safeJSON(localStorage.getItem("bm_league_meta_v1"), {}) || {};
@@ -66,6 +62,21 @@ function resolveLogo(team = {}) {
   );
 }
 
+function normalizeTeamName(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+
+function resolveTeamLogoFromLeague(leagueData, teamName) {
+  const target = normalizeTeamName(teamName);
+  if (!target) return "";
+
+  for (const team of getAllTeamsFromLeague(leagueData)) {
+    const names = [team.name, team.teamName, team.currentOwnerTeamName, team.originalTeamName];
+    if (names.some((name) => normalizeTeamName(name) === target)) return resolveLogo(team);
+  }
+  return "";
+}
+
 function loadResultsIndexV3() {
   const parsed = safeJSON(localStorage.getItem(RESULT_V3_INDEX_KEY), []);
   return Array.isArray(parsed) ? parsed.map(String) : [];
@@ -76,8 +87,7 @@ function loadOneResultV3(gameId) {
     const stored = localStorage.getItem(`${RESULT_V3_PREFIX}${gameId}`);
     if (!stored) return null;
     const decompressed = LZString.decompressFromUTF16(stored);
-    const json = decompressed || stored;
-    return JSON.parse(json);
+    return JSON.parse(decompressed || stored);
   } catch {
     return null;
   }
@@ -133,36 +143,22 @@ function buildFallbackTeamRecordsFromSchedule(leagueData) {
     const homePts = Number(result.totals.home || 0);
     const awayPts = Number(result.totals.away || 0);
 
-    if (!stats[homeName]) {
-      stats[homeName] = {
-        teamName: homeName,
-        conference: meta.confHome || null,
-        wins: 0,
-        losses: 0,
-        pointsFor: 0,
-        pointsAgainst: 0,
-        pointDifferential: 0,
-        madePlayoffs: false,
-        madePlayIn: false,
-        playoffResult: "unknown",
-        logo: "",
-      };
-    }
-
-    if (!stats[awayName]) {
-      stats[awayName] = {
-        teamName: awayName,
-        conference: meta.confAway || null,
-        wins: 0,
-        losses: 0,
-        pointsFor: 0,
-        pointsAgainst: 0,
-        pointDifferential: 0,
-        madePlayoffs: false,
-        madePlayIn: false,
-        playoffResult: "unknown",
-        logo: "",
-      };
+    for (const [name, conf] of [[homeName, meta.confHome], [awayName, meta.confAway]]) {
+      if (!stats[name]) {
+        stats[name] = {
+          teamName: name,
+          conference: conf || null,
+          wins: 0,
+          losses: 0,
+          pointsFor: 0,
+          pointsAgainst: 0,
+          pointDifferential: 0,
+          madePlayoffs: false,
+          madePlayIn: false,
+          playoffResult: "unknown",
+          logo: "",
+        };
+      }
     }
 
     stats[homeName].pointsFor += homePts;
@@ -217,6 +213,14 @@ function getRecordLosses(row = {}) {
   return Number(row.losses ?? row.l ?? row.record?.losses ?? row.teamRecord?.losses ?? row.standings?.losses ?? 0);
 }
 
+function extractConferenceSeed(row = {}) {
+  for (const key of ["conferenceSeed", "confSeed", "seed", "regularSeasonConferenceSeed", "playInSeed"]) {
+    const value = Number(row?.[key] || 0);
+    if (Number.isFinite(value) && value >= 1 && value <= 15) return value;
+  }
+  return null;
+}
+
 function hasUsableLotteryRecord(row = {}) {
   const teamName = getRecordTeamName(row);
   const wins = getRecordWins(row);
@@ -229,6 +233,7 @@ function normalizeLotteryRecord(row = {}, leagueData = null, index = 0) {
   const wins = getRecordWins(row);
   const losses = getRecordLosses(row);
   const gamesPlayed = wins + losses;
+  const conferenceSeed = extractConferenceSeed(row);
 
   return {
     ...row,
@@ -241,8 +246,9 @@ function normalizeLotteryRecord(row = {}, leagueData = null, index = 0) {
     gamesPlayed,
     winPct: gamesPlayed ? Number((wins / gamesPlayed).toFixed(3)) : 0,
     pointDifferential: Number(row.pointDifferential || row.netRating || 0),
+    conferenceSeed,
     madePlayoffs: Boolean(row.madePlayoffs),
-    madePlayIn: Boolean(row.madePlayIn),
+    madePlayIn: Boolean(row.madePlayIn || (conferenceSeed && conferenceSeed >= 7 && conferenceSeed <= 10)),
     playoffResult: row.playoffResult || (row.madePlayoffs ? "playoffs" : "missed_playoffs"),
     leagueRank: Number(row.leagueRank || index + 1),
     logo: resolveLogo(row) || resolveTeamLogoFromLeague(leagueData, teamName),
@@ -260,14 +266,12 @@ function getSeasonHistoryCandidates(leagueData, seasonYear) {
   if (!history.length) return [];
 
   const resolvedSeasonYear = Number(seasonYear);
-  const targetYears = [
-    resolvedSeasonYear - 1,
-    resolvedSeasonYear,
-  ].filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
+  const targetYears = [resolvedSeasonYear - 1, resolvedSeasonYear].filter(
+    (year) => Number.isFinite(year) && year >= 2020 && year <= 2100
+  );
 
   const out = [];
   const seenRows = new Set();
-
   const pushEntry = (entry) => {
     if (!entry || typeof entry !== "object" || seenRows.has(entry)) return;
     if (!Array.isArray(entry.teams)) return;
@@ -277,13 +281,8 @@ function getSeasonHistoryCandidates(leagueData, seasonYear) {
 
   for (const targetYear of targetYears) {
     const matches = history.filter(
-      (row) =>
-        row &&
-        typeof row === "object" &&
-        Number(row.seasonYear) === Number(targetYear) &&
-        Array.isArray(row.teams)
+      (row) => row && typeof row === "object" && Number(row.seasonYear) === Number(targetYear) && Array.isArray(row.teams)
     );
-
     const complete = matches.filter((row) => row.status === "complete");
     [...complete, ...matches].reverse().forEach(pushEntry);
   }
@@ -300,11 +299,8 @@ function getSeasonHistoryCandidates(leagueData, seasonYear) {
 function getLatestSeasonHistoryEntry(leagueData, seasonYear) {
   for (const entry of getSeasonHistoryCandidates(leagueData, seasonYear)) {
     const usableRows = getUsableLotteryRows(entry?.teams || [], leagueData);
-    if (usableRows.length >= 30) {
-      return entry;
-    }
+    if (usableRows.length >= 30) return entry;
   }
-
   return null;
 }
 
@@ -342,7 +338,11 @@ function updateOffseasonState(patch) {
 function persistLeagueData(updated, setLeagueData) {
   if (!updated) return;
   setLeagueData(updated);
-  localStorage.setItem(LEAGUE_KEY, JSON.stringify(updated));
+  try {
+    localStorage.setItem(LEAGUE_KEY, JSON.stringify(updated));
+  } catch (err) {
+    console.warn("[DraftLottery] localStorage save failed", err);
+  }
 }
 
 function formatRecord(row = {}) {
@@ -352,10 +352,15 @@ function formatRecord(row = {}) {
   return `${wins}-${losses}`;
 }
 
+function getResolvedLotterySystem(system, seasonYear) {
+  if (system === "legacy_14" || system === "three_two_one") return system;
+  return Number(seasonYear) >= 2027 ? "three_two_one" : "legacy_14";
+}
+
 function getLotterySystemLabel(system, seasonYear) {
-  if (system === "legacy_14") return "2026 Old System";
-  if (system === "three_two_one") return "3-2-1 System";
-  return `Auto (${seasonYear >= 2027 ? "3-2-1" : "2026 Old"})`;
+  const resolved = getResolvedLotterySystem(system, seasonYear);
+  if (resolved === "legacy_14") return "2026 Old System";
+  return "3-2-1 System";
 }
 
 function getResultSystemLabel(result, seasonYear) {
@@ -363,66 +368,11 @@ function getResultSystemLabel(result, seasonYear) {
   return getLotterySystemLabel(system || "auto", seasonYear);
 }
 
-function getResolvedLotterySystem(system, seasonYear) {
-  if (system === "legacy_14" || system === "three_two_one") return system;
-  return Number(seasonYear) >= 2027 ? "three_two_one" : "legacy_14";
-}
-
-function sortWorstFirst(rows = []) {
-  return [...rows].sort((a, b) => {
-    const aGames = Number(a.wins || 0) + Number(a.losses || 0);
-    const bGames = Number(b.wins || 0) + Number(b.losses || 0);
-    const aPct = aGames ? Number(a.wins || 0) / aGames : 0;
-    const bPct = bGames ? Number(b.wins || 0) / bGames : 0;
-
-    return (
-      aPct - bPct ||
-      Number(a.pointDifferential || 0) - Number(b.pointDifferential || 0) ||
-      String(a.teamName || a.name || "").localeCompare(String(b.teamName || b.name || ""))
-    );
-  });
-}
-
-function normalizeTeamName(value = "") {
-  return String(value || "").trim().toLowerCase();
-}
-
-function resolveTeamLogoFromLeague(leagueData, teamName) {
-  const target = normalizeTeamName(teamName);
-  if (!target) return "";
-
-  for (const team of getAllTeamsFromLeague(leagueData)) {
-    const names = [
-      team.name,
-      team.teamName,
-      team.currentOwnerTeamName,
-      team.originalTeamName,
-    ];
-
-    if (names.some((name) => normalizeTeamName(name) === target)) {
-      return resolveLogo(team);
-    }
-  }
-
-  return "";
-}
-
-function normalizePreviewRow(row = {}, leagueData = null) {
-  const teamName = row.teamName || row.name || "Unknown Team";
-
-  return {
-    ...row,
-    teamName,
-    currentOwnerTeamName: row.currentOwnerTeamName || teamName,
-    originalTeamName: row.originalTeamName || teamName,
-    logo: resolveLogo(row) || resolveTeamLogoFromLeague(leagueData, teamName),
-  };
-}
-
 function formatChance(value) {
   const num = Number(value || 0);
   if (!Number.isFinite(num)) return "-";
   if (num >= 99.95) return "100%";
+  if (num > 0 && num < 0.1) return "<0.1%";
   return `${num.toFixed(1)}%`;
 }
 
@@ -439,8 +389,62 @@ function getPickOddsFromMap(row = {}, pickNumber) {
 function formatPickChange(value) {
   const change = Number(value || 0);
   if (!Number.isFinite(change) || change === 0) return "No move";
+  if (change > 0) return `+${change}`;
+  return `${change}`;
+}
+
+function formatPickChangeLong(value) {
+  const change = Number(value || 0);
+  if (!Number.isFinite(change) || change === 0) return "Held expected slot";
   if (change > 0) return `Moved up ${change}`;
   return `Moved down ${Math.abs(change)}`;
+}
+
+function formatRecordRank(row = {}) {
+  const rank = Number(row?.leagueRank || 0);
+  if (Number.isFinite(rank) && rank > 0) return `#${rank}`;
+  return "-";
+}
+
+function formatExpectedPick(row = {}) {
+  const pick = Number(row?.expectedPick || row?.projectedPick || row?.lotterySeed || 0);
+  if (Number.isFinite(pick) && pick > 0) return `#${Math.round(pick)}`;
+  return "-";
+}
+
+function resultSummaryText(row = {}) {
+  const finalPick = Number(row?.finalPick || 0);
+  if (!finalPick) return "Pending";
+  return `Actual #${finalPick}`;
+}
+
+function resultOddsText(row = {}) {
+  const finalPick = Number(row?.finalPick || 0);
+  const odds = Number(row?.actualPickOddsPct || 0);
+  if (!finalPick || !Number.isFinite(odds) || odds <= 0) return "Final result";
+  return `${formatChance(odds)} chance`;
+}
+
+function secondRoundExplanation(pick = {}, resolvedSystem = "legacy_14") {
+  const pickNumber = Number(pick?.pick || 0);
+  if (resolvedSystem === "three_two_one") {
+    if (pickNumber >= 31 && pickNumber <= 46) {
+      return `Inverted from R1 lottery #${47 - pickNumber}`;
+    }
+    return "Non-lottery inverse record";
+  }
+  return "Round 2 inverse record";
+}
+
+function normalizePreviewRow(row = {}, leagueData = null) {
+  const teamName = row.teamName || row.name || "Unknown Team";
+  return {
+    ...row,
+    teamName,
+    currentOwnerTeamName: row.currentOwnerTeamName || teamName,
+    originalTeamName: row.originalTeamName || teamName,
+    logo: resolveLogo(row) || resolveTeamLogoFromLeague(leagueData, teamName),
+  };
 }
 
 function normalizeOddsRows(result = null, leagueData = null) {
@@ -448,6 +452,8 @@ function normalizeOddsRows(result = null, leagueData = null) {
     ? result.preLotteryOdds
     : Array.isArray(result?.lotteryOdds)
     ? result.lotteryOdds
+    : Array.isArray(result?.oddsMatrix)
+    ? result.oddsMatrix
     : [];
 
   if (backendRows.length) {
@@ -465,33 +471,22 @@ function normalizeOddsRows(result = null, leagueData = null) {
         oddsByPick: row?.oddsByPick || {},
         firstPickOddsPct: Number(row?.firstPickOddsPct ?? row?.firstPickOdds ?? 0),
         topFourOddsPct: Number(row?.topFourOddsPct ?? row?.top4OddsPct ?? 0),
+        expectedPick: Number(row?.expectedPick || 0),
+        mostLikelyPick: Number(row?.mostLikelyPick || 0),
+        mostLikelyPickOddsPct: Number(row?.mostLikelyPickOddsPct || 0),
+        projectedPick: Number(row?.projectedPick || row?.lotterySeed || 0),
+        bestPick: Number(row?.bestPick || 0),
+        worstPick: Number(row?.worstPick || 0),
         finalPick,
         actualPickOddsPct,
         pickChange: Number(row?.pickChange || 0),
+        resultTag: row?.resultTag || "",
         simulationCount: Number(row?.simulationCount || result?.oddsSimulationCount || result?.meta?.oddsSimulationCount || 0),
       };
     });
   }
 
-  const fallbackRows = Array.isArray(result?.lotteryTeams) ? result.lotteryTeams : [];
-
-  return fallbackRows.map((row) => {
-    const clean = normalizePreviewRow(row, leagueData);
-    const chanceText = String(row?.chanceLabel || "");
-    const parsedChance = Number(chanceText.match(/[0-9.]+/)?.[0] || 0);
-    const combinations = Number(row?.combinations || row?.lotteryBalls || row?.balls || 0);
-
-    return {
-      ...clean,
-      firstPickOddsPct: Number(row?.firstPickOddsPct ?? parsedChance ?? 0),
-      topFourOddsPct: Number(row?.topFourOddsPct || 0),
-      finalPick: Number(row?.finalPick || 0),
-      actualPickOddsPct: Number(row?.actualPickOddsPct || 0),
-      pickChange: Number(row?.pickChange || 0),
-      combinations,
-      simulationCount: Number(result?.oddsSimulationCount || result?.meta?.oddsSimulationCount || 0),
-    };
-  });
+  return (Array.isArray(result?.lotteryTeams) ? result.lotteryTeams : []).map((row) => normalizePreviewRow(row, leagueData));
 }
 
 function getFinalPickOddsLabel(oddsRow = {}, pickNumber) {
@@ -499,301 +494,231 @@ function getFinalPickOddsLabel(oddsRow = {}, pickNumber) {
   const directOdds = oddsRow?.actualPickOddsPct !== undefined && oddsRow?.actualPickOddsPct !== null
     ? Number(oddsRow.actualPickOddsPct || 0)
     : getPickOddsFromMap(oddsRow, finalPick);
-
-  if (!finalPick || !Number.isFinite(directOdds) || directOdds <= 0) {
-    return "Lottery result";
-  }
-
+  if (!finalPick || !Number.isFinite(directOdds) || directOdds <= 0) return "Lottery result";
   return `${formatChance(directOdds)} odds at #${finalPick}`;
 }
 
-function makePreviewPickRow(pick, round, pickInRound, team, source, chanceLabel) {
-  const cleanTeam = normalizePreviewRow(team);
-
-  return {
-    pick,
-    round,
-    pickInRound,
-    teamName: cleanTeam.teamName,
-    currentOwnerTeamName: cleanTeam.currentOwnerTeamName,
-    originalTeamName: cleanTeam.originalTeamName,
-    wins: Number(cleanTeam.wins || 0),
-    losses: Number(cleanTeam.losses || 0),
-    winPct: cleanTeam.winPct,
-    madePlayoffs: Boolean(cleanTeam.madePlayoffs),
-    madePlayIn: Boolean(cleanTeam.madePlayIn),
-    playoffResult: cleanTeam.playoffResult || "",
-    leagueRank: cleanTeam.leagueRank,
-    conferenceSeed: cleanTeam.conferenceSeed,
-    logo: cleanTeam.logo || "",
-    source,
-    chanceLabel,
-    isPreview: true,
-  };
+function categoryLabel(row = {}) {
+  const raw = String(row.lotteryCategoryLabel || row.lotteryCategory || row.source || "");
+  if (raw.includes("draft_relegated")) return "Draft relegated";
+  if (raw.includes("7_8")) return "7/8 play-in loser";
+  if (raw.includes("9_10")) return "9/10 play-in seed";
+  if (raw.includes("non_play_in")) return "Missed play-in";
+  if (raw.includes("legacy")) return "Legacy lottery";
+  return raw ? raw.replaceAll("_", " ") : "Lottery team";
 }
 
-function getThreeTwoOneBallCount(team = {}, draftRelegatedNames = new Set()) {
-  const name = team.teamName || team.name || "";
-  const seed = Number(team.conferenceSeed || team.seed || team.playInSeed || 0);
-  const madePlayIn = Boolean(team.madePlayIn);
-  const playoffResult = String(team.playoffResult || "").toLowerCase();
-
-  if (draftRelegatedNames.has(name)) return 2;
-
-  if (madePlayIn && (seed === 7 || seed === 8 || playoffResult.includes("7") || playoffResult.includes("8"))) {
-    return 1;
-  }
-
-  if (madePlayIn && (seed === 9 || seed === 10 || playoffResult.includes("9") || playoffResult.includes("10"))) {
-    return 2;
-  }
-
-  return 3;
-}
-
-function buildLotteryPreviewState(leagueData, seasonYear, requestedSystem) {
-  const records = sortWorstFirst(
-    getTeamRecordsForLottery(leagueData, seasonYear).map((row) => normalizePreviewRow(row, leagueData))
-  );
-  const resolvedSystem = getResolvedLotterySystem(requestedSystem, seasonYear);
-  const allTeamNames = new Set(records.map((row) => row.teamName));
-
-  let firstRoundTeams = [];
-  let lotteryTeams = [];
-  let lotterySummary = [];
-
-  if (resolvedSystem === "three_two_one") {
-    const nonPlayoffTeams = records.filter((row) => !row.madePlayoffs);
-    lotteryTeams = (nonPlayoffTeams.length >= 16 ? nonPlayoffTeams : records).slice(0, 16);
-    const lotteryNames = new Set(lotteryTeams.map((row) => row.teamName));
-    const playoffTeams = records.filter((row) => !lotteryNames.has(row.teamName));
-    const draftRelegatedNames = new Set(sortWorstFirst(lotteryTeams).slice(0, 3).map((row) => row.teamName));
-    const ballRows = lotteryTeams.map((team) => ({
-      team,
-      balls: getThreeTwoOneBallCount(team, draftRelegatedNames),
-    }));
-    const totalBalls = ballRows.reduce((sum, row) => sum + row.balls, 0) || 1;
-
-    lotterySummary = ballRows.map((row, index) => ({
-      lotterySeed: index + 1,
-      teamName: row.team.teamName,
-      wins: row.team.wins,
-      losses: row.team.losses,
-      winPct: row.team.winPct,
-      balls: row.balls,
-      combinations: row.balls,
-      chanceLabel: `${formatChance((row.balls / totalBalls) * 100)} #1 odds`,
-      logo: row.team.logo || "",
-    }));
-
-    firstRoundTeams = [...ballRows.map((row) => ({
-      ...row.team,
-      chanceLabel: `${formatChance((row.balls / totalBalls) * 100)} #1 odds`,
-      previewSource: "3-2-1 odds",
-    })), ...playoffTeams.map((team) => ({
-      ...team,
-      chanceLabel: "100%",
-      previewSource: "Locked by record",
-    }))].slice(0, 30);
-  } else {
-    const legacyOdds = [14, 14, 14, 12.5, 10.5, 9, 7.5, 6, 4.5, 3, 2, 1.5, 1, 0.5];
-    const nonPlayoffTeams = records.filter((row) => !row.madePlayoffs);
-    lotteryTeams = (nonPlayoffTeams.length >= 14 ? nonPlayoffTeams : records).slice(0, 14);
-    const lotteryNames = new Set(lotteryTeams.map((row) => row.teamName));
-    const playoffTeams = records.filter((row) => !lotteryNames.has(row.teamName));
-
-    lotterySummary = lotteryTeams.map((team, index) => ({
-      lotterySeed: index + 1,
-      teamName: team.teamName,
-      wins: team.wins,
-      losses: team.losses,
-      winPct: team.winPct,
-      combinations: legacyOdds[index] || 0,
-      chanceLabel: `${formatChance(legacyOdds[index] || 0)} #1 odds`,
-      logo: team.logo || "",
-    }));
-
-    firstRoundTeams = [...lotteryTeams.map((team, index) => ({
-      ...team,
-      chanceLabel: `${formatChance(legacyOdds[index] || 0)} #1 odds`,
-      previewSource: "Lottery odds",
-    })), ...playoffTeams.map((team) => ({
-      ...team,
-      chanceLabel: "100%",
-      previewSource: "Locked by record",
-    }))].slice(0, 30);
-  }
-
-  const firstRoundOrder = firstRoundTeams.map((team, index) => makePreviewPickRow(
-    index + 1,
-    1,
-    index + 1,
-    team,
-    team.previewSource || "Preview",
-    team.chanceLabel || "100%"
-  ));
-
-  const secondRoundOrder = records
-    .filter((team) => allTeamNames.has(team.teamName))
-    .slice(0, 30)
-    .map((team, index) => makePreviewPickRow(
-      index + 31,
-      2,
-      index + 1,
-      team,
-      "Second round inverse record",
-      "100%"
-    ));
-
-  return {
-    seasonYear,
-    generatedAt: new Date().toISOString(),
-    isPreview: true,
-    lotterySystem: resolvedSystem,
-    requestedLotterySystem: requestedSystem,
-    secondRoundRevealed: true,
-    firstRoundRevealed: true,
-    result: {
-      ok: true,
-      seasonYear,
-      source: "reset_preview_inverse_record",
-      lotteryTeams: lotterySummary,
-      preLotteryOdds: lotterySummary.map((row) => ({
-        ...row,
-        firstPickOddsPct: Number(String(row.chanceLabel || "").match(/[0-9.]+/)?.[0] || 0),
-        topFourOddsPct: 0,
-        finalPick: null,
-        actualPickOddsPct: 0,
-        pickChange: 0,
-      })),
-      lotteryOdds: lotterySummary.map((row) => ({
-        ...row,
-        firstPickOddsPct: Number(String(row.chanceLabel || "").match(/[0-9.]+/)?.[0] || 0),
-        topFourOddsPct: 0,
-        finalPick: null,
-        actualPickOddsPct: 0,
-        pickChange: 0,
-      })),
-      topFourDrawn: [],
-      firstRoundOrder,
-      secondRoundOrder,
-      fullDraftOrder: [...firstRoundOrder, ...secondRoundOrder],
-      meta: {
-        system: resolvedSystem,
-        autoResolvedSystem: resolvedSystem,
-        isPreview: true,
-        rules: resolvedSystem === "three_two_one"
-          ? "Preview only: inverse-record reset with 3-2-1 #1 lottery odds shown. Dev Resim Both performs the actual draw."
-          : "Preview only: inverse-record reset with legacy #1 lottery odds shown. Dev Resim Both performs the actual draw.",
-      },
-    },
-  };
+function sourceLabel(value = "") {
+  const raw = String(value || "");
+  if (raw === "lottery_drawn_top_4") return "Lottery draw";
+  if (raw === "lottery_inverse_record") return "Lottery order by record";
+  if (raw === "playoff_inverse_record") return "Playoff inverse record";
+  if (raw === "second_round_inverse_record") return "Round 2 inverse record";
+  if (raw === "second_round_inverse_lottery_result") return "Round 2 inverted lottery";
+  if (raw === "second_round_non_lottery_inverse_record") return "Round 2 non-lottery record";
+  if (raw.includes("three_two_one")) return categoryLabel({ lotteryCategory: raw });
+  return raw.replaceAll("_", " ");
 }
 
 function TeamLogo({ src, name, size = 28 }) {
   if (!src) {
     return <div className="rounded-full bg-neutral-700" style={{ width: size, height: size }} />;
   }
-
   return <img src={src} alt={name || "Team"} className="object-contain" style={{ width: size, height: size }} />;
 }
 
-function PickRow({ pick, revealRank = false, animationIndex = 0 }) {
-  const detailText = pick.chanceLabel || String(pick.source || "").replaceAll("_", " ");
+function PickRow({ pick, animationIndex = 0, oddsRow = null, showMovement = true }) {
+  const teamName = pick.teamName || pick.currentOwnerTeamName || "Unknown Team";
+  const movement = Number(oddsRow?.pickChange ?? pick.pickChange ?? 0);
+  const resultTag = showMovement ? (oddsRow?.resultTag || pick.resultTag || "") : "";
+  const chanceLabel = oddsRow ? `${resultOddsText({ ...oddsRow, finalPick: pick.pick })}` : pick.chanceLabel || sourceLabel(pick.source);
+  const sourceText = pick.round === 2 ? (pick.chanceLabel || sourceLabel(pick.source)) : sourceLabel(pick.source);
 
   return (
     <div
-      className="bmRowEnter grid grid-cols-[70px_1fr_90px_140px] items-center gap-3 px-4 py-3 border-b border-white/10 hover:bg-white/5"
-      style={{ animationDelay: `${Math.min(animationIndex, 18) * 18}ms` }}
+      className="bmRowEnter px-4 py-4 border-b border-white/10 hover:bg-white/[0.035]"
+      style={{ animationDelay: `${Math.min(animationIndex * 22, 500)}ms` }}
     >
-      <div className="font-extrabold text-orange-300">
-        {revealRank ? `#${pick.pick}` : pick.pick}
-      </div>
-      <div className="flex items-center gap-3 min-w-0">
-        <TeamLogo src={pick.logo} name={pick.teamName} />
-        <div className="font-bold text-white truncate">{pick.currentOwnerTeamName || pick.teamName}</div>
-      </div>
-      <div className="text-sm text-white/65 text-center">{formatRecord(pick)}</div>
-      <div className="text-xs text-white/45 text-right capitalize">
-        {detailText}
+      <div className="flex items-start gap-3">
+        <div className="w-14 shrink-0 text-orange-300 font-black text-lg leading-8">#{pick.pick}</div>
+        <TeamLogo src={pick.logo} name={teamName} size={30} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <div className="font-extrabold text-base leading-tight break-words">{teamName}</div>
+            <div className="text-sm text-white/65">{formatRecord(pick)}</div>
+          </div>
+          <div className="mt-1 text-xs text-white/45 leading-snug break-words">{sourceText}</div>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            <span className="font-black text-white/75">{chanceLabel}</span>
+            {showMovement && Number.isFinite(movement) && movement !== 0 ? (
+              <span className={movement > 0 ? "font-bold text-emerald-300" : "font-bold text-red-300"}>
+                {formatPickChangeLong(movement)}
+              </span>
+            ) : null}
+            {resultTag ? <span className="font-extrabold text-white/45">{resultTag}</span> : null}
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-function LotteryOddsTable({ rows = [], isPreview = false, firstRoundRevealed = false }) {
+function LotteryOddsTable({ rows = [], firstRoundRevealed = false }) {
   if (!rows.length) return null;
-
   const simulationCount = rows.find((row) => Number(row?.simulationCount || 0) > 0)?.simulationCount;
 
   return (
     <div className="bmTablePanel rounded-3xl bg-neutral-900 border border-white/10 overflow-hidden shadow-2xl mb-6">
-      <div className="px-5 py-4 bg-neutral-800/80 border-b border-white/10 flex items-center justify-between gap-4">
+      <div className="px-5 py-4 bg-neutral-800/80 border-b border-white/10 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-2xl font-extrabold">Lottery Odds</h2>
           <p className="text-sm text-white/50">
-            {isPreview
-              ? "Pre-lottery odds preview before the order is locked."
-              : firstRoundRevealed
-              ? "Final lottery result with each team's odds of landing its actual pick."
-              : "Pre-lottery odds before the first round reveal."}
+            {firstRoundRevealed
+              ? "Final lottery result compared against each team's expected pick slot."
+              : "Pre-reveal odds. Green in the matrix marks each team's expected pick; actual results stay hidden until reveal."}
           </p>
         </div>
-        {simulationCount ? (
-          <div className="text-xs text-white/45 font-bold text-right">
-            {Number(simulationCount).toLocaleString()} sims
-          </div>
-        ) : null}
+        {simulationCount ? <div className="text-xs text-white/40">Matrix from {Number(simulationCount).toLocaleString()} sims</div> : null}
       </div>
 
-      <div className="bmOrangeScrollbar max-h-[420px] overflow-auto">
-        <div className="grid grid-cols-[70px_1fr_90px_90px_90px_110px] gap-3 px-4 py-3 bg-black/20 border-b border-white/10 text-xs text-white/45 uppercase tracking-wide font-bold sticky top-0 z-10">
-          <div>Seed</div>
-          <div>Team</div>
-          <div className="text-center">Record</div>
-          <div className="text-right">#1 Odds</div>
-          <div className="text-right">Top 4</div>
-          <div className="text-right">Result</div>
-        </div>
+      <div className="bmOrangeScrollbar overflow-auto max-h-[520px]">
+        <div className="min-w-[1040px]">
+          <div className="grid grid-cols-[92px_100px_minmax(230px,1fr)_90px_150px_90px_95px_150px] gap-3 px-5 py-3 bg-neutral-950/80 text-[11px] uppercase tracking-wide text-white/45 font-black border-b border-white/10 sticky top-0 z-10">
+            <div>Record Rank</div>
+            <div className="text-right">Expected Pick</div>
+            <div>Team</div>
+            <div className="text-center">Record</div>
+            <div>Path</div>
+            <div className="text-right">#1 Odds</div>
+            <div className="text-right">Range</div>
+            <div className="text-right">Result</div>
+          </div>
 
-        {rows.map((row, index) => {
-          const finalPick = Number(row?.finalPick || 0);
-          const resultLabel = finalPick
-            ? `#${finalPick} - ${formatChance(row?.actualPickOddsPct || getPickOddsFromMap(row, finalPick))}`
-            : row?.chanceLabel || "Pending";
-
-          return (
-            <div
-              key={`${row?.teamName || "team"}-${index}`}
-              className="bmRowEnter grid grid-cols-[70px_1fr_90px_90px_90px_110px] items-center gap-3 px-4 py-3 border-b border-white/10 hover:bg-white/5"
-              style={{ animationDelay: `${Math.min(index, 18) * 18}ms` }}
-            >
-              <div className="font-extrabold text-orange-300">#{row?.lotterySeed || index + 1}</div>
-              <div className="flex items-center gap-3 min-w-0">
-                <TeamLogo src={row?.logo} name={row?.teamName} />
-                <div className="min-w-0">
-                  <div className="font-bold text-white truncate">{row?.teamName || "Unknown Team"}</div>
-                  <div className="text-[11px] text-white/35 truncate">
-                    {String(row?.lotteryCategory || "Lottery").replaceAll("_", " ")}
+          {rows.map((row, index) => {
+            const finalPick = firstRoundRevealed ? Number(row.finalPick || 0) : 0;
+            const movement = finalPick ? Number(row.pickChange || 0) : 0;
+            return (
+              <div
+                key={`${row.teamName}-${index}`}
+                className="grid grid-cols-[92px_100px_minmax(230px,1fr)_90px_150px_90px_95px_150px] gap-3 px-5 py-4 border-b border-white/10 items-center hover:bg-white/[0.035]"
+              >
+                <div className="text-orange-300 font-black">{formatRecordRank(row)}</div>
+                <div className="text-sm text-right font-black text-emerald-300">{formatExpectedPick(row)}</div>
+                <div className="flex items-center gap-3 min-w-0">
+                  <TeamLogo src={row.logo} name={row.teamName} size={26} />
+                  <div className="min-w-0">
+                    <div className="font-extrabold truncate">{row.teamName}</div>
+                    <div className="text-xs text-white/40 truncate">
+                      {row.conferenceSeed ? `Conf seed ${row.conferenceSeed}` : "League-wide record"}
+                    </div>
                   </div>
                 </div>
+                <div className="text-sm text-white/70 text-center">{formatRecord(row)}</div>
+                <div className="text-xs text-white/50 truncate">
+                  {categoryLabel(row)}{row.lotteryBalls ? ` · ${row.lotteryBalls} ${Number(row.lotteryBalls) === 1 ? "ball" : "balls"}` : ""}
+                </div>
+                <div className="text-sm text-white/80 text-right font-black">{formatChance(row.firstPickOddsPct)}</div>
+                <div className="text-sm text-white/65 text-right">
+                  {row.bestPick && row.worstPick ? `#${row.bestPick}-#${row.worstPick}` : "-"}
+                </div>
+                <div className="text-xs text-right">
+                  {finalPick ? (
+                    <>
+                      <div className="font-black text-white/90">{resultSummaryText(row)}</div>
+                      <div className="text-white/50">{resultOddsText(row)}</div>
+                      <div className={movement > 0 ? "text-emerald-300" : movement < 0 ? "text-red-300" : "text-white/45"}>
+                        {formatPickChangeLong(movement)}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="font-black text-white/45">Pending</div>
+                  )}
+                </div>
               </div>
-              <div className="text-sm text-white/65 text-center">{formatRecord(row)}</div>
-              <div className="text-sm text-white/75 text-right font-bold">{formatChance(row?.firstPickOddsPct)}</div>
-              <div className="text-sm text-white/75 text-right font-bold">
-                {Number(row?.topFourOddsPct || 0) > 0 ? formatChance(row?.topFourOddsPct) : "-"}
-              </div>
-              <div className="text-xs text-white/50 text-right">
-                <div className="font-bold text-white/75">{resultLabel}</div>
-                {finalPick ? <div>{formatPickChange(row?.pickChange)}</div> : null}
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );
 }
+
+
+function DraftMatrix({ rows = [], system, firstRoundRevealed = false }) {
+  if (!rows.length) return null;
+  const maxPick = system === "three_two_one" ? 16 : 14;
+  const pickColumns = Array.from({ length: maxPick }, (_, index) => index + 1);
+
+  return (
+    <div className="bmTablePanel rounded-3xl bg-neutral-900 border border-white/10 overflow-hidden shadow-2xl mb-8">
+      <div className="px-5 py-4 bg-neutral-800/80 border-b border-white/10">
+        <h2 className="text-2xl font-extrabold">Draft Probability Matrix</h2>
+        <p className="text-sm text-white/50">
+          Green marks the expected pick. {firstRoundRevealed ? "Gold marks the actual revealed pick." : "Actual results are hidden until the first-round reveal."}
+        </p>
+      </div>
+      <div className="overflow-x-hidden">
+        <div className="w-full">
+          <div
+            className="grid gap-1 px-3 py-3 bg-neutral-950/80 text-[10px] uppercase tracking-wide text-white/45 font-black border-b border-white/10 sticky top-0 z-10"
+            style={{ gridTemplateColumns: `210px repeat(${maxPick}, minmax(44px, 1fr))` }}
+          >
+            <div>Team</div>
+            {pickColumns.map((pick) => <div key={pick} className="text-center">#{pick}</div>)}
+          </div>
+
+          {rows.map((row, rowIndex) => {
+            const expectedPick = Number(row.expectedPick || row.projectedPick || row.lotterySeed || 0);
+            const finalPick = firstRoundRevealed ? Number(row.finalPick || 0) : 0;
+            return (
+              <div
+                key={`${row.teamName}-matrix-${rowIndex}`}
+                className="grid gap-1 px-3 py-2 border-b border-white/10 items-center hover:bg-white/[0.035]"
+                style={{ gridTemplateColumns: `210px repeat(${maxPick}, minmax(44px, 1fr))` }}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <TeamLogo src={row.logo} name={row.teamName} size={24} />
+                  <div className="min-w-0">
+                    <div className="font-bold truncate">{row.teamName}</div>
+                    <div className="text-[11px] text-white/40 truncate">
+                      Record Rank {formatRecordRank(row)} · Expected {formatExpectedPick(row)}
+                    </div>
+                  </div>
+                </div>
+                {pickColumns.map((pick) => {
+                  const pct = getPickOddsFromMap(row, pick);
+                  const intensity = Math.min(0.66, Math.max(0.035, pct / 45));
+                  const isExpected = Number(expectedPick) === pick;
+                  const isFinal = Number(finalPick) === pick;
+                  const bg = isExpected
+                    ? `rgba(16, 185, 129, ${Math.max(0.24, intensity)})`
+                    : `rgba(249, 115, 22, ${intensity})`;
+                  const borderClass = isFinal
+                    ? "border-amber-300 ring-2 ring-amber-300/80 text-amber-50"
+                    : isExpected
+                    ? "border-emerald-300/80 text-emerald-50"
+                    : "border-white/5 text-white/75";
+                  return (
+                    <div
+                      key={pick}
+                      className={`relative rounded-md px-1 py-2 text-center text-[11px] font-black border ${borderClass}`}
+                      style={{ background: bg }}
+                      title={`${row.teamName} odds at #${pick}: ${formatChance(pct)}`}
+                    >
+                      {pct > 0 ? formatChance(pct) : "-"}
+                      {isFinal ? <div className="mt-1 text-[8px] tracking-wide text-amber-100">FINAL</div> : null}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 export default function DraftLottery() {
   const navigate = useNavigate();
@@ -801,79 +726,68 @@ export default function DraftLottery() {
 
   const seasonYear = getSeasonYear(leagueData);
   const [lotteryState, setLotteryState] = useState(() => readDraftLottery(seasonYear));
-  const [lotterySystem, setLotterySystem] = useState(() => {
-    return localStorage.getItem(DEV_LOTTERY_SYSTEM_KEY) || "auto";
-  });
+  const [lotterySystem, setLotterySystem] = useState(() => localStorage.getItem(DEV_LOTTERY_SYSTEM_KEY) || "auto");
   const [loading, setLoading] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState("");
+  const preparingRef = useRef(false);
 
   useEffect(() => {
     setLotteryState(readDraftLottery(seasonYear));
   }, [seasonYear]);
 
-  const latestHistory = useMemo(() => {
-    return getLatestSeasonHistoryEntry(leagueData, seasonYear);
-  }, [leagueData, seasonYear]);
+  const latestHistory = useMemo(() => getLatestSeasonHistoryEntry(leagueData, seasonYear), [leagueData, seasonYear]);
 
   const result = lotteryState?.result || null;
   const secondRoundRevealed = Boolean(lotteryState?.secondRoundRevealed);
   const firstRoundRevealed = Boolean(lotteryState?.firstRoundRevealed);
-  const isPreview = Boolean(lotteryState?.isPreview || result?.meta?.isPreview);
+  const lotteryComplete = Boolean(firstRoundRevealed && secondRoundRevealed && !lotteryState?.isPreview);
+  const resolvedSystem = result?.meta?.system || result?.meta?.autoResolvedSystem || getResolvedLotterySystem(lotterySystem, seasonYear);
 
-  const setDevLotterySystem = (system) => {
-    setLotterySystem(system);
-    localStorage.setItem(DEV_LOTTERY_SYSTEM_KEY, system);
-  };
-
-  const persistLotteryResult = (nextLotteryState, draftLotteryComplete = false) => {
+  const persistLotteryResult = (nextLotteryState) => {
+    const complete = Boolean(nextLotteryState.firstRoundRevealed && nextLotteryState.secondRoundRevealed && !nextLotteryState.isPreview);
     const updatedLeague = {
       ...(leagueData || {}),
       draftState: {
         ...(leagueData?.draftState || {}),
         seasonYear,
         lottery: nextLotteryState.result,
-        draftOrder: nextLotteryState.result?.fullDraftOrder || [],
-        draftLotteryComplete,
+        draftOrder: complete ? nextLotteryState.result?.fullDraftOrder || [] : [],
+        draftLotteryComplete: complete,
       },
     };
 
     saveDraftLottery(nextLotteryState);
     persistLeagueData(updatedLeague, setLeagueData);
     setLotteryState(nextLotteryState);
-
-    if (draftLotteryComplete) {
-      updateOffseasonState({ draftLotteryComplete: true });
-    }
-
+    updateOffseasonState({ draftLotteryComplete: complete });
     return nextLotteryState;
   };
 
-  const generateLottery = async ({
-    forceNew = false,
-    revealSecond = false,
-    revealFirst = false,
-    systemOverride = lotterySystem,
-  } = {}) => {
+  const runLotteryBackend = async ({ forceNew = false, revealFirst = false, revealSecond = false, systemOverride = lotterySystem } = {}) => {
     const existing = readDraftLottery(seasonYear);
-    if (!forceNew && existing?.result?.fullDraftOrder?.length) {
+    const existingRequest = existing?.requestedLotterySystem || "auto";
+    const requestMatches = String(existingRequest) === String(systemOverride || "auto");
+    const existingAlreadyRevealed = Boolean(existing?.firstRoundRevealed || existing?.secondRoundRevealed);
+
+    if (
+      !forceNew &&
+      existing?.result?.fullDraftOrder?.length &&
+      !existing?.isPreview &&
+      (requestMatches || existingAlreadyRevealed)
+    ) {
       const nextExisting = {
         ...existing,
-        secondRoundRevealed: revealSecond || revealFirst || existing.secondRoundRevealed,
-        firstRoundRevealed: revealFirst || existing.firstRoundRevealed,
+        firstRoundRevealed: Boolean(revealFirst || existing.firstRoundRevealed),
+        secondRoundRevealed: Boolean(revealSecond || existing.secondRoundRevealed),
       };
-      return persistLotteryResult(nextExisting, Boolean(nextExisting.firstRoundRevealed));
+      return persistLotteryResult(nextExisting);
     }
 
-    if (!leagueData) {
-      throw new Error("League data is still loading.");
-    }
-
-    if (typeof simEngine.runDraftLottery !== "function") {
-      throw new Error("runDraftLottery is not wired in simEnginePy.js yet.");
-    }
+    if (!leagueData) throw new Error("League data is still loading.");
+    if (typeof simEngine.runDraftLottery !== "function") throw new Error("runDraftLottery is not wired in simEnginePy.js yet.");
 
     const teamRecords = getTeamRecordsForLottery(leagueData, seasonYear);
-
     if (!Array.isArray(teamRecords) || teamRecords.length < 30) {
       throw new Error(
         `NO_USABLE_TEAM_RECORDS_FOR_LOTTERY: found ${teamRecords?.length || 0}. ` +
@@ -889,45 +803,69 @@ export default function DraftLottery() {
       seed: `${seasonYear}_${systemOverride}_draft_lottery_${Date.now()}_${Math.random()}`,
     });
 
-    if (!payload?.ok) {
-      throw new Error(payload?.reason || "Draft lottery failed.");
-    }
+    if (!payload?.ok) throw new Error(payload?.reason || "Draft lottery failed.");
 
     const nextLotteryState = {
       seasonYear,
       generatedAt: new Date().toISOString(),
       lotterySystem: payload?.meta?.system || payload?.meta?.autoResolvedSystem || systemOverride,
       requestedLotterySystem: systemOverride,
-      secondRoundRevealed: revealSecond || revealFirst,
-      firstRoundRevealed: revealFirst,
+      isPreview: false,
+      firstRoundRevealed: Boolean(revealFirst),
+      secondRoundRevealed: Boolean(revealSecond),
       result: payload,
     };
 
-    return persistLotteryResult(nextLotteryState, revealFirst);
+    return persistLotteryResult(nextLotteryState);
   };
 
-  const revealSecondRound = async () => {
-    setLoading(true);
+  useEffect(() => {
+    if (!leagueData) return;
+    const saved = readDraftLottery(seasonYear);
+    if (saved?.result?.fullDraftOrder?.length && !saved?.isPreview) return;
+    if (preparingRef.current) return;
+
+    preparingRef.current = true;
+    setPreparing(true);
     setError("");
 
+    runLotteryBackend({ forceNew: true, revealFirst: false, revealSecond: false, systemOverride: lotterySystem })
+      .catch((err) => {
+        console.error("[DraftLottery] prepare hidden lottery failed", err);
+        setError(String(err?.message || err));
+      })
+      .finally(() => {
+        preparingRef.current = false;
+        setPreparing(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leagueData, seasonYear]);
+
+  const setDevLotterySystem = (system) => {
+    setLotterySystem(system);
+    localStorage.setItem(DEV_LOTTERY_SYSTEM_KEY, system);
+  };
+
+  const revealFirstRound = async () => {
+    setLoading(true);
+    setError("");
     try {
-      await generateLottery({ revealSecond: true });
+      await runLotteryBackend({ revealFirst: true, revealSecond: secondRoundRevealed });
     } catch (err) {
-      console.error("[DraftLottery] revealSecondRound failed", err);
+      console.error("[DraftLottery] revealFirstRound failed", err);
       setError(String(err?.message || err));
     } finally {
       setLoading(false);
     }
   };
 
-  const revealFirstRound = async () => {
+  const revealSecondRound = async () => {
     setLoading(true);
     setError("");
-
     try {
-      await generateLottery({ revealSecond: true, revealFirst: true });
+      await runLotteryBackend({ revealFirst: true, revealSecond: true });
     } catch (err) {
-      console.error("[DraftLottery] revealFirstRound failed", err);
+      console.error("[DraftLottery] revealSecondRound failed", err);
       setError(String(err?.message || err));
     } finally {
       setLoading(false);
@@ -937,9 +875,8 @@ export default function DraftLottery() {
   const simAll = async () => {
     setLoading(true);
     setError("");
-
     try {
-      await generateLottery({ revealSecond: true, revealFirst: true });
+      await runLotteryBackend({ revealFirst: true, revealSecond: true });
     } catch (err) {
       console.error("[DraftLottery] simAll failed", err);
       setError(String(err?.message || err));
@@ -948,10 +885,12 @@ export default function DraftLottery() {
     }
   };
 
-  const resetLotteryPreview = () => {
+  const resetLottery = async () => {
+    setLoading(true);
+    setError("");
     try {
       localStorage.removeItem(DRAFT_LOTTERY_KEY);
-      const preview = buildLotteryPreviewState(leagueData, seasonYear, lotterySystem);
+      updateOffseasonState({ draftLotteryComplete: false });
       const updatedLeague = {
         ...(leagueData || {}),
         draftState: {
@@ -962,29 +901,22 @@ export default function DraftLottery() {
           draftLotteryComplete: false,
         },
       };
-
-      updateOffseasonState({ draftLotteryComplete: false });
       persistLeagueData(updatedLeague, setLeagueData);
-      setLotteryState(preview);
-      setError("");
+      await runLotteryBackend({ forceNew: true, revealFirst: false, revealSecond: false, systemOverride: lotterySystem });
     } catch (err) {
-      console.error("[DraftLottery] resetLotteryPreview failed", err);
+      console.error("[DraftLottery] resetLottery failed", err);
       setError(String(err?.message || err));
+    } finally {
+      setLoading(false);
     }
   };
 
   const devResimAll = async () => {
     setLoading(true);
     setError("");
-
     try {
       localStorage.removeItem(DRAFT_LOTTERY_KEY);
-      await generateLottery({
-        forceNew: true,
-        revealSecond: true,
-        revealFirst: true,
-        systemOverride: lotterySystem,
-      });
+      await runLotteryBackend({ forceNew: true, revealFirst: true, revealSecond: true, systemOverride: lotterySystem });
     } catch (err) {
       console.error("[DraftLottery] devResimAll failed", err);
       setError(String(err?.message || err));
@@ -993,8 +925,6 @@ export default function DraftLottery() {
     }
   };
 
-  const secondRound = result?.secondRoundOrder || [];
-  const firstRound = result?.firstRoundOrder || [];
   const oddsRows = useMemo(() => normalizeOddsRows(result, leagueData), [result, leagueData]);
   const oddsByTeam = useMemo(() => {
     const map = new Map();
@@ -1004,68 +934,64 @@ export default function DraftLottery() {
     }
     return map;
   }, [oddsRows]);
+
+  const firstRound = result?.firstRoundOrder || [];
+  const secondRound = result?.secondRoundOrder || [];
+
   const firstRoundRevealOrder = useMemo(() => {
     return (firstRound || []).map((pick) => {
       const key = getTeamKey(pick);
       const oddsRow = key ? oddsByTeam.get(key) : null;
-      if (!oddsRow) return pick;
-
-      return {
-        ...pick,
-        chanceLabel: getFinalPickOddsLabel(oddsRow, pick?.pick),
-        actualPickOddsPct: oddsRow.actualPickOddsPct,
-        pickChange: oddsRow.pickChange,
-      };
+      return oddsRow
+        ? {
+            ...pick,
+            chanceLabel: getFinalPickOddsLabel(oddsRow, pick?.pick),
+            actualPickOddsPct: oddsRow.actualPickOddsPct,
+            pickChange: oddsRow.pickChange,
+            resultTag: oddsRow.resultTag,
+          }
+        : pick;
     });
   }, [firstRound, oddsByTeam]);
-  const resultSystemLabel = getResultSystemLabel(result, seasonYear);
-  const devSystemLabel = getLotterySystemLabel(lotterySystem, seasonYear);
+
+  const secondRoundRevealOrder = useMemo(() => {
+    return (secondRound || []).map((pick) => ({
+      ...pick,
+      chanceLabel: secondRoundExplanation(pick, resolvedSystem),
+    }));
+  }, [secondRound, resolvedSystem]);
+
+  const statusLabel = preparing
+    ? "Preparing"
+    : lotteryComplete
+    ? "Locked"
+    : firstRoundRevealed
+    ? "Round 1 Revealed"
+    : result
+    ? "Ready"
+    : "Loading";
 
   if (!leagueData) {
-    return (
-      <div className="min-h-screen bmCourtPage text-white flex items-center justify-center">
-        Loading draft lottery...
-      </div>
-    );
+    return <div className="min-h-screen bmCourtPage text-white flex items-center justify-center">Loading draft lottery...</div>;
   }
 
   return (
     <div className="min-h-screen bmCourtPage text-white py-8 px-4">
       <style>{`
-        .bmOrangeScrollbar {
-          scrollbar-width: thin;
-          scrollbar-color: rgba(249, 115, 22, 0.92) rgba(12, 12, 12, 0.78);
-        }
-
-        .bmOrangeScrollbar::-webkit-scrollbar {
-          width: 12px;
-          height: 12px;
-        }
-
-        .bmOrangeScrollbar::-webkit-scrollbar-track {
-          background: rgba(12, 12, 12, 0.78);
-          border-left: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 999px;
-        }
-
-        .bmOrangeScrollbar::-webkit-scrollbar-thumb {
-          background: linear-gradient(180deg, #fb923c 0%, #f97316 55%, #ea580c 100%);
-          border: 3px solid rgba(12, 12, 12, 0.92);
-          border-radius: 999px;
-          box-shadow: 0 0 14px rgba(249, 115, 22, 0.22);
-        }
-
-        .bmOrangeScrollbar::-webkit-scrollbar-thumb:hover {
-          background: linear-gradient(180deg, #fdba74 0%, #fb923c 45%, #f97316 100%);
-        }
+        .bmOrangeScrollbar { scrollbar-width: thin; scrollbar-color: rgba(249, 115, 22, 0.92) rgba(12, 12, 12, 0.78); }
+        .bmOrangeScrollbar::-webkit-scrollbar { width: 12px; height: 12px; }
+        .bmOrangeScrollbar::-webkit-scrollbar-track { background: rgba(12, 12, 12, 0.78); border-left: 1px solid rgba(255,255,255,0.08); border-radius: 999px; }
+        .bmOrangeScrollbar::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #fb923c 0%, #f97316 55%, #ea580c 100%); border: 3px solid rgba(12,12,12,0.92); border-radius: 999px; box-shadow: 0 0 14px rgba(249,115,22,0.22); }
+        .bmOrangeScrollbar::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #fdba74 0%, #fb923c 45%, #f97316 100%); }
       `}</style>
-      <div className="max-w-6xl mx-auto">
+
+      <div className="max-w-7xl mx-auto">
         <div className="flex items-center justify-between gap-4 mb-8">
           <div>
             <p className="text-xs text-white/40 tracking-[0.25em] uppercase mb-2">Offseason</p>
             <h1 className="text-4xl md:text-5xl font-extrabold text-orange-500">NBA Draft Lottery</h1>
             <p className="text-white/60 mt-2">
-              {seasonYear} draft order. Auto uses the old system for 2026 and 3-2-1 from 2027 onward.
+              {seasonYear} draft order. First round reveals first; second round locks the full draft order.
             </p>
           </div>
 
@@ -1092,13 +1018,11 @@ export default function DraftLottery() {
           </div>
           <div className="bmSolidPanel rounded-2xl bg-neutral-900 border border-white/10 p-4">
             <div className="text-xs text-white/45 uppercase tracking-wide">System</div>
-            <div className="text-lg font-bold mt-1">{result ? resultSystemLabel : devSystemLabel}</div>
+            <div className="text-lg font-bold mt-1">{result ? getResultSystemLabel(result, seasonYear) : getLotterySystemLabel(lotterySystem, seasonYear)}</div>
           </div>
           <div className="bmSolidPanel rounded-2xl bg-neutral-900 border border-white/10 p-4">
             <div className="text-xs text-white/45 uppercase tracking-wide">Status</div>
-            <div className="text-lg font-bold mt-1">
-              {isPreview ? "Reset Preview" : firstRoundRevealed ? "Locked" : secondRoundRevealed ? "Round 2 Revealed" : "Ready"}
-            </div>
+            <div className="text-lg font-bold mt-1">{statusLabel}</div>
           </div>
         </div>
 
@@ -1107,7 +1031,7 @@ export default function DraftLottery() {
             <div>
               <div className="text-xs text-purple-200/70 uppercase tracking-[0.18em] font-bold">Dev Lottery Tool</div>
               <div className="text-sm text-white/55 mt-1">
-                Choose the lottery system, then resimulate both rounds.
+                Choose the lottery system, reset for a hidden fresh draw, or resimulate both rounds instantly.
               </div>
             </div>
 
@@ -1120,19 +1044,20 @@ export default function DraftLottery() {
                 <button
                   key={value}
                   onClick={() => setDevLotterySystem(value)}
+                  disabled={loading || preparing}
                   className={`bmSmoothButton px-4 py-2 rounded-xl text-sm font-extrabold border ${
                     lotterySystem === value
                       ? "bg-purple-600 border-purple-300 text-white"
                       : "bg-purple-950/40 border-purple-400/20 text-purple-100/70 hover:bg-purple-800/50"
-                  }`}
+                  } disabled:bg-neutral-700 disabled:text-white/45`}
                 >
                   {label}
                 </button>
               ))}
 
               <button
-                onClick={resetLotteryPreview}
-                disabled={loading}
+                onClick={resetLottery}
+                disabled={loading || preparing}
                 className="bmSmoothButton px-5 py-2 rounded-xl bg-purple-950/60 hover:bg-purple-800/70 border border-purple-300/30 disabled:bg-neutral-700 disabled:text-white/45 font-extrabold"
               >
                 Reset
@@ -1140,7 +1065,7 @@ export default function DraftLottery() {
 
               <button
                 onClick={devResimAll}
-                disabled={loading}
+                disabled={loading || preparing}
                 className="bmSmoothButton px-5 py-2 rounded-xl bg-purple-700 hover:bg-purple-600 disabled:bg-neutral-700 disabled:text-white/45 font-extrabold"
               >
                 Dev Resim Both
@@ -1155,32 +1080,35 @@ export default function DraftLottery() {
           </div>
         )}
 
-        <LotteryOddsTable
-          rows={oddsRows}
-          isPreview={isPreview}
-          firstRoundRevealed={firstRoundRevealed}
-        />
+        {(preparing || !result) && !error ? (
+          <div className="mb-6 rounded-2xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-orange-100 font-semibold">
+            Preparing lottery odds and draft matrix...
+          </div>
+        ) : null}
+
+        <LotteryOddsTable rows={oddsRows} firstRoundRevealed={firstRoundRevealed} />
+        <DraftMatrix rows={oddsRows} system={resolvedSystem} firstRoundRevealed={firstRoundRevealed} />
 
         <div className="flex flex-wrap gap-3 mb-8">
           <button
-            onClick={revealSecondRound}
-            disabled={loading || secondRoundRevealed}
+            onClick={revealFirstRound}
+            disabled={loading || preparing || !result || firstRoundRevealed}
             className="bmSmoothButton px-6 py-3 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:bg-neutral-700 disabled:text-white/45 font-extrabold"
           >
-            {loading && !secondRoundRevealed ? "Generating..." : secondRoundRevealed ? "Second Round Revealed" : "Reveal Second Round"}
+            {loading && !firstRoundRevealed ? "Generating..." : firstRoundRevealed ? "First Round Revealed" : "Reveal First Round"}
           </button>
 
           <button
-            onClick={revealFirstRound}
-            disabled={loading || !secondRoundRevealed || firstRoundRevealed}
+            onClick={revealSecondRound}
+            disabled={loading || preparing || !firstRoundRevealed || secondRoundRevealed}
             className="bmSmoothButton px-6 py-3 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:bg-neutral-700 disabled:text-white/45 font-extrabold"
           >
-            {firstRoundRevealed ? "First Round Revealed" : "Reveal First Round"}
+            {secondRoundRevealed ? "Second Round Revealed" : "Reveal Second Round"}
           </button>
 
           <button
             onClick={simAll}
-            disabled={loading || (firstRoundRevealed && !isPreview)}
+            disabled={loading || preparing || lotteryComplete}
             className="bmSmoothButton px-6 py-3 rounded-xl bg-orange-700 hover:bg-orange-600 disabled:bg-neutral-700 disabled:text-white/45 font-extrabold"
           >
             Sim All
@@ -1188,7 +1116,7 @@ export default function DraftLottery() {
 
           <button
             onClick={() => navigate("/draft")}
-            disabled={!firstRoundRevealed || isPreview}
+            disabled={!lotteryComplete}
             className="bmSmoothButton px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-neutral-700 disabled:text-white/45 font-extrabold"
           >
             Continue to Draft
@@ -1208,12 +1136,12 @@ export default function DraftLottery() {
             {firstRoundRevealed ? (
               <div className="bmOrangeScrollbar max-h-[640px] overflow-auto">
                 {firstRoundRevealOrder.map((pick, index) => (
-                  <PickRow key={`r1-${pick.pick}`} pick={pick} revealRank animationIndex={index} />
+                  <PickRow key={`r1-${pick.pick}`} pick={pick} oddsRow={oddsByTeam.get(getTeamKey(pick))} animationIndex={index} />
                 ))}
               </div>
             ) : (
               <div className="p-8 text-white/50 text-center">
-                Reveal the first round after the second round, use Sim All, or use Reset for odds preview.
+                Review the odds and matrix, then reveal the first round before the second round.
               </div>
             )}
           </div>
@@ -1222,19 +1150,25 @@ export default function DraftLottery() {
             <div className="px-5 py-4 bg-neutral-800/80 border-b border-white/10 flex items-center justify-between">
               <div>
                 <h2 className="text-2xl font-extrabold">Second Round</h2>
-                <p className="text-sm text-white/50">Picks 31-60 by inverse record.</p>
+                <p className="text-sm text-white/50">
+                  {resolvedSystem === "three_two_one"
+                    ? "Picks 31-46 invert Round 1 lottery picks 1-16; picks 47-60 use inverse record."
+                    : "Picks 31-60 by league-wide inverse record."}
+                </p>
               </div>
               <div className="text-sm font-bold text-white/50">{secondRoundRevealed ? "Visible" : "Hidden"}</div>
             </div>
 
             {secondRoundRevealed ? (
               <div className="bmOrangeScrollbar max-h-[640px] overflow-auto">
-                {secondRound.map((pick, index) => (
-                  <PickRow key={`r2-${pick.pick}`} pick={pick} animationIndex={index} />
+                {secondRoundRevealOrder.map((pick, index) => (
+                  <PickRow key={`r2-${pick.pick}`} pick={pick} animationIndex={index} showMovement={false} />
                 ))}
               </div>
             ) : (
-              <div className="p-8 text-white/50 text-center">Reveal the second round to lock the full draft order.</div>
+              <div className="p-8 text-white/50 text-center">
+                Reveal the second round after the first round to lock the full draft order.
+              </div>
             )}
           </div>
         </div>
