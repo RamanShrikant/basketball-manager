@@ -18,7 +18,7 @@ import random
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-DRAFT_LOTTERY_VERSION = "2026-06-18_lottery_clarity_expected_slots_v3"
+DRAFT_LOTTERY_VERSION = "2026-06-18_lottery_clean_display_rank_v6"
 
 # Legacy 14-team NBA lottery odds by combinations.
 # Top 4 picks are drawn, picks 5-14 fall by inverse record.
@@ -759,44 +759,54 @@ def _build_321_lottery_context(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _expected_321_order(lottery_teams: List[Dict[str, Any]], draft_relegated_names: set) -> List[Dict[str, Any]]:
-    """Build the user-facing 3-2-1 Expected Pick order.
+def _expected_pick_from_clean_321_rank(display_rank: int) -> int:
+    """Return the clean 3-2-1 expected pick for a displayed lottery rank.
 
-    Expected #1-#7: 3-ball promotion-zone teams, worst record first.
-    Expected #8-#10: draft-relegated bottom-three teams, worst record first.
-    Expected #11-#14: 9/10 play-in seed teams, worst record first.
-    Expected #15-#16: 7/8 play-in losers, worst record first.
-
-    Any malformed/fallback extras are appended by worst record so every team
-    still receives a unique expected slot.
+    The UI intentionally shows the 16 lottery teams as clean Record Rank #30
+    through #15, even when raw save data has play-in ranks that skip around.
+    Expected picks form the three visual bridges Raman wanted:
+      - display ranks #27-#21 -> expected picks #1-#7
+      - display ranks #30-#28 -> expected picks #8-#10
+      - display ranks #20-#15 -> expected picks #11-#16
+    Odds, lottery balls, and actual drawing logic remain untouched.
     """
-    rows = list(lottery_teams or [])
+    rank = _safe_int(display_rank, 0)
+    if 21 <= rank <= 27:
+        return 28 - rank
+    if 28 <= rank <= 30:
+        return 38 - rank
+    if 15 <= rank <= 20:
+        return 31 - rank
+    return 0
 
-    def category(row: Dict[str, Any]) -> str:
-        raw = str(row.get("lotteryCategory") or "")
-        name = _team_name(row)
-        if "non_play_in" in raw and name not in draft_relegated_names:
-            return "promotion"
-        if "draft_relegated" in raw or name in draft_relegated_names:
-            return "relegated"
-        if "9_10" in raw:
-            return "nine_ten"
-        if "7_8" in raw:
-            return "seven_eight"
-        return "other"
 
-    order = []
-    used = set()
-    for bucket in ["promotion", "relegated", "nine_ten", "seven_eight", "other"]:
-        bucket_rows = sorted([row for row in rows if category(row) == bucket], key=_record_sort_key_worst_first)
-        for row in bucket_rows:
-            name = _team_name(row)
-            if not name or name in used:
-                continue
-            used.add(name)
-            order.append(row)
+def _clean_321_display_rows(lottery_teams: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = sorted(_dedupe_by_team(list(lottery_teams or [])), key=_record_sort_key_worst_first)[:16]
+    out = []
+    for index, team in enumerate(rows):
+        display_rank = 30 - index
+        expected_pick = _expected_pick_from_clean_321_rank(display_rank)
+        out.append(
+            {
+                **team,
+                "actualLeagueRank": team.get("actualLeagueRank") or team.get("leagueRank"),
+                "displayLeagueRank": display_rank,
+                "leagueRank": display_rank,
+                "lotterySeed": expected_pick,
+                "projectedPick": expected_pick,
+                "expectedPick": expected_pick,
+                "expectedPickMode": "clean_321_record_bridge",
+            }
+        )
+    return out
 
-    return order[:16]
+
+def _apply_clean_321_display_slots(lottery_teams: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    display_by_name = {_team_name(team): team for team in _clean_321_display_rows(lottery_teams)}
+    return [
+        {**team, **{k: v for k, v in (display_by_name.get(_team_name(team)) or {}).items() if k not in {"teamName", "currentOwnerTeamName", "originalTeamName"}}}
+        for team in lottery_teams
+    ]
 
 
 def _draw_321_order(
@@ -818,8 +828,8 @@ def _simulate_321_odds(
     seed_number: int,
     simulations: int = ODDS_SIMULATION_COUNT,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[int, int]]]:
-    display_order = _expected_321_order(lottery_teams, draft_relegated_names)
-    projected_by_name = {_team_name(team): i + 1 for i, team in enumerate(display_order)}
+    clean_display_order = _clean_321_display_rows(lottery_teams)
+    projected_by_name = {_team_name(team): _safe_int(team.get("projectedPick"), 0) for team in clean_display_order}
     team_names = [_team_name(team) for team in lottery_teams]
     counts = _empty_counts(team_names, 16)
     rng = random.Random(_stable_seed(seed_number, "321_odds_matrix", len(lottery_teams)))
@@ -830,13 +840,15 @@ def _simulate_321_odds(
             counts[_team_name(team)][index + 1] += 1
 
     rows = []
-    # Display odds/matrix rows by league record, worst to best. Expected Pick
-    # remains the 3-2-1 advantage-group slot, but row order should feel like
-    # standings/draft-order context instead of #1 odds or expected-pick order.
-    for team in sorted(lottery_teams, key=_record_sort_key_worst_first):
-        name = _team_name(team)
+    # Display odds/matrix rows as a clean Record Rank #30 -> #15 bridge.
+    # This keeps the real 3-2-1 odds while preventing raw play-in ranks from
+    # skipping numbers or breaking the visual expected-pick pattern.
+    team_by_name = {_team_name(team): team for team in lottery_teams}
+    for display_team in clean_display_order:
+        name = _team_name(display_team)
+        base_team = {**(team_by_name.get(name) or display_team), **display_team}
         projected = projected_by_name.get(name, 0)
-        rows.append(_matrix_row_from_counts(team, counts[name], simulations, 16, projected))
+        rows.append(_matrix_row_from_counts(base_team, counts[name], simulations, 16, projected))
     return rows, counts
 
 
@@ -861,12 +873,20 @@ def _run_legacy_14_lottery(
     weights = LOTTERY_COMBINATIONS[: len(lottery_teams)]
     # Add exact first-pick odds from combinations into the lottery teams before
     # running the matrix so the #1 column remains clean even with low sims.
+    # User-facing legacy display uses clean lottery record ranks #30 -> #17.
+    # This prevents raw saved league/play-in ranks from skipping numbers in the
+    # odds table and matrix while leaving the actual lottery/order logic intact.
     total_combos = sum(weights) or 1
     lottery_teams = [
         {
             **team,
+            "actualLeagueRank": team.get("actualLeagueRank") or team.get("leagueRank"),
+            "displayLeagueRank": 30 - i,
+            "leagueRank": 30 - i,
             "lotterySeed": i + 1,
             "projectedPick": i + 1,
+            "expectedPick": i + 1,
+            "expectedPickMode": "clean_legacy_lottery_rank",
             "combinations": weights[i] if i < len(weights) else 1,
             "lotteryBalls": weights[i] if i < len(weights) else 1,
             "lotteryCategory": "legacy_14",
@@ -981,19 +1001,10 @@ def _run_three_two_one_lottery(
     pool_names = context["poolNames"]
     draft_relegated_names = context["draftRelegatedNames"]
 
-    # User-facing 3-2-1 Expected Pick order is based on lottery advantage
-    # groups, not pure reverse record: 3-ball promotion zone first, then
-    # draft-relegated teams, then 9/10 play-in seeds, then 7/8 losers.
-    display_order = _expected_321_order(lottery_teams, draft_relegated_names)
-    projected_by_name = {_team_name(team): i + 1 for i, team in enumerate(display_order)}
-    lottery_teams = [
-        {**team, "lotterySeed": projected_by_name.get(_team_name(team)), "projectedPick": projected_by_name.get(_team_name(team))}
-        for team in lottery_teams
-    ]
-    display_order = [
-        {**team, "lotterySeed": projected_by_name.get(_team_name(team)), "projectedPick": projected_by_name.get(_team_name(team))}
-        for team in display_order
-    ]
+    # User-facing 3-2-1 display uses clean lottery record ranks #30 -> #15.
+    # Expected picks are a visual record bridge, while actual odds/draw logic
+    # still use the true 3-2-1 ball weights and path categories.
+    lottery_teams = _apply_clean_321_display_slots(lottery_teams)
 
     drawn_16 = _draw_321_order(lottery_teams, weights, draft_relegated_names, rng)
 

@@ -1,6 +1,6 @@
 import { computeTeamRatings } from "../api/teamRatings";
 
-export const GAMEPLAN_VERSION = 9;
+export const GAMEPLAN_VERSION = 10;
 
 // Helpers to support both league shapes: { teams: [...] } or { conferences: { ... } }
 function getAllTeamsFromLeague(leagueData) {
@@ -120,12 +120,52 @@ function shouldRebuildGameplan(team, savedPlan) {
 const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
 const STARTER_MINUTES = 24;
 const BENCH_MINUTES = [17, 14, 12, 11, 10];
+const FULL_TEAM_MINUTES = 5;
 const ROTATION_SIZE = 10;
 const STARTER_MAX_MINUTES = 42;
 const BENCH_MAX_MINUTES = 30;
 const HARD_MAX_MINUTES = 48;
 const BENCH_SEARCH_LIMIT = 20;
 const BENCH_FINALIST_LIMIT = 64;
+
+const POT_FUTURE_WINDOWS = [
+  { years: 3, weight: 0.30 },
+  { years: 5, weight: 0.35 },
+  { years: 7, weight: 0.35 },
+];
+
+const POT_SCALE_BASE = 77.8156;
+const POT_SCALE_FLOOR_VALUE = 70;
+const POT_SCALE_MULTIPLIER = 2.0199;
+const POT_PROOF_BASE_OVERALL = 84;
+const POT_PROOF_MULTIPLIER = 0.20;
+const POT_ELITE_PROOF_BASE_OVERALL = 92;
+const POT_ELITE_PROOF_MULTIPLIER = 1.10;
+
+const POT_AGE_POINTS = [
+  [18, 1.10],
+  [20, 1.10],
+  [22, 1.09],
+  [24, 1.06],
+  [26, 1.02],
+  [27, 1.00],
+  [28, 0.98],
+  [29, 0.95],
+  [30, 0.92],
+  [31, 0.89],
+  [32, 0.85],
+  [33, 0.80],
+  [34, 0.74],
+  [35, 0.68],
+  [36, 0.60],
+  [37, 0.50],
+  [38, 0.40],
+  [39, 0.30],
+  [40, 0.22],
+  [41, 0.15],
+  [42, 0.10],
+  [45, 0.04],
+];
 
 function playerValue(p) {
   const overall = Number(p?.overall ?? 75);
@@ -409,12 +449,16 @@ function continuousTieScore(valid, minutesObj) {
 function scoreMinutes(valid, minutesObj) {
   const ratings = computeTeamRatings({ players: valid }, minutesObj);
 
-  // Primary objective is displayed team OVR. OFF/DEF and a continuous local
-  // tie-breaker only decide between rotations with the same displayed OVR.
+  // Use exact 4-decimal ratings internally so rotations/sim-adjacent logic do
+  // not treat two rounded display ratings as identical.
+  const overall = Number(ratings.exactOverall ?? ratings.overall ?? 0);
+  const off = Number(ratings.exactOff ?? ratings.off ?? 0);
+  const def = Number(ratings.exactDef ?? ratings.def ?? 0);
+
   return (
-    (ratings.overall || 0) * 1_000_000 +
-    (ratings.off || 0) * 10_000 +
-    (ratings.def || 0) * 100 +
+    overall * 1_000_000 +
+    off * 10_000 +
+    def * 100 +
     continuousTieScore(valid, minutesObj)
   );
 }
@@ -553,18 +597,29 @@ function displayedRatings(valid, minutesObj) {
     overall: Number(ratings?.overall || 0),
     off: Number(ratings?.off || 0),
     def: Number(ratings?.def || 0),
+    exactOverall: Number(ratings?.exactOverall ?? ratings?.overall ?? 0),
+    exactOff: Number(ratings?.exactOff ?? ratings?.off ?? 0),
+    exactDef: Number(ratings?.exactDef ?? ratings?.def ?? 0),
   };
 }
 
-function acceptsRealismSwap(baseRatings, testRatings) {
-  if (testRatings.overall > baseRatings.overall) return true;
-  if (testRatings.overall < baseRatings.overall) return false;
+function ratingOverall(ratings) {
+  return Number(ratings?.exactOverall ?? ratings?.overall ?? 0);
+}
 
-  // When displayed OVR is unchanged, allow the higher-OVR bench player to win
-  // as long as the OFF/DEF profile is not meaningfully worse.
-  const baseSides = baseRatings.off + baseRatings.def;
-  const testSides = testRatings.off + testRatings.def;
-  return testSides >= baseSides - 1;
+function ratingSideSum(ratings) {
+  const off = Number(ratings?.exactOff ?? ratings?.off ?? 0);
+  const def = Number(ratings?.exactDef ?? ratings?.def ?? 0);
+  return off + def;
+}
+
+function acceptsRealismSwap(baseRatings, testRatings) {
+  if (ratingOverall(testRatings) > ratingOverall(baseRatings)) return true;
+  if (ratingOverall(testRatings) < ratingOverall(baseRatings)) return false;
+
+  // When exact OVR is unchanged, allow the higher-OVR bench player to win as
+  // long as the OFF/DEF profile is not meaningfully worse.
+  return ratingSideSum(testRatings) >= ratingSideSum(baseRatings) - 1;
 }
 
 function playerOverall(p) {
@@ -590,7 +645,7 @@ function isSamePrimaryStrictUpgrade(incoming, outgoing) {
 }
 
 function acceptsSamePrimaryUpgrade(currentRatings, testRatings) {
-  return testRatings.overall >= currentRatings.overall;
+  return ratingOverall(testRatings) >= ratingOverall(currentRatings);
 }
 
 function playablePositions(p) {
@@ -743,6 +798,133 @@ function applyBenchRealismPass(valid, optimized) {
   };
 }
 
+
+function seedFullTeamRotation(valid, starters, benchPlayers) {
+  const starterNames = new Set(starters.map((p) => p.name));
+  const benchNames = new Set(benchPlayers.map((p) => p.name));
+  const others = valid
+    .filter((p) => !starterNames.has(p.name) && !benchNames.has(p.name))
+    .sort(comparePlayers);
+  const rotation = uniquePlayers([...starters, ...benchPlayers, ...others]);
+  const minutesObj = makeZeroMinutes(valid);
+  const minByName = {};
+
+  for (const p of starters) {
+    minutesObj[p.name] = STARTER_MINUTES;
+    minByName[p.name] = STARTER_MINUTES;
+  }
+
+  benchPlayers.forEach((p, idx) => {
+    const min = BENCH_MINUTES[idx] ?? 10;
+    minutesObj[p.name] = min;
+    minByName[p.name] = min;
+  });
+
+  for (const p of others) {
+    minutesObj[p.name] = FULL_TEAM_MINUTES;
+    minByName[p.name] = FULL_TEAM_MINUTES;
+  }
+
+  const used = Object.values(minutesObj).reduce((sum, value) => sum + Number(value || 0), 0);
+
+  // Normal rosters fit the starter/bench floors plus 5 minutes for everyone
+  // else. This fallback only protects odd offseason/test rosters.
+  if (used > 240) {
+    for (const p of valid) {
+      minutesObj[p.name] = FULL_TEAM_MINUTES;
+      minByName[p.name] = FULL_TEAM_MINUTES;
+    }
+  }
+
+  return {
+    starters,
+    bench: benchPlayers,
+    rotation,
+    minutesObj,
+    minByName,
+    score: scoreMinutes(valid, minutesObj),
+  };
+}
+
+function buildOptimizedFullTeamRotation(teamPlayers) {
+  const valid = (teamPlayers || []).filter(
+    (p) => p && p.name && Number.isFinite(Number(p.overall))
+  );
+
+  if (valid.length === 0) return null;
+
+  const starters = chooseStarters(valid);
+  const starterNames = new Set(starters.map((p) => p.name));
+  const benchNeeded = Math.max(0, Math.min(ROTATION_SIZE, valid.length) - starters.length);
+  const benchCandidates = buildBenchPool(valid, starterNames);
+
+  let best = null;
+
+  if (benchNeeded > 0 && benchCandidates.length >= benchNeeded) {
+    const seededCandidates = [];
+
+    for (const benchCombo of combos(benchCandidates, benchNeeded)) {
+      const benchOrdered = [...benchCombo].sort(comparePlayers);
+      seededCandidates.push(seedFullTeamRotation(valid, starters, benchOrdered));
+    }
+
+    seededCandidates.sort((a, b) => b.score - a.score);
+
+    for (const seeded of seededCandidates.slice(0, BENCH_FINALIST_LIMIT)) {
+      const candidate = optimizeSeededRotation(valid, seeded);
+
+      if (!best || candidate.score > best.score) {
+        best = candidate;
+      }
+    }
+  }
+
+  if (!best) {
+    const benchFallback = benchCandidates
+      .slice()
+      .sort(comparePlayers)
+      .slice(0, benchNeeded);
+
+    best = optimizeSeededRotation(
+      valid,
+      seedFullTeamRotation(valid, starters, benchFallback)
+    );
+  }
+
+  return { valid, ...best };
+}
+
+export function buildFullTeamRating(teamPlayers) {
+  const built = buildOptimizedFullTeamRotation(teamPlayers);
+
+  if (!built) {
+    return {
+      ftr: 0,
+      ftrOff: 0,
+      ftrDef: 0,
+      exactFtr: 0,
+      exactFtrOff: 0,
+      exactFtrDef: 0,
+      minutes: {},
+    };
+  }
+
+  const ratings = computeTeamRatings({ players: built.valid }, built.minutesObj);
+
+  return {
+    // Whole-number values are display-only.
+    ftr: Number(ratings.overall || 0),
+    ftrOff: Number(ratings.off || 0),
+    ftrDef: Number(ratings.def || 0),
+
+    // Exact 4-decimal values are available internally/debugging/future use.
+    exactFtr: Number(ratings.exactOverall ?? ratings.overall ?? 0),
+    exactFtrOff: Number(ratings.exactOff ?? ratings.off ?? 0),
+    exactFtrDef: Number(ratings.exactDef ?? ratings.def ?? 0),
+    minutes: built.minutesObj,
+  };
+}
+
 // FULL smart rotation builder - returns BOTH sorted players and minutes obj
 export function buildSmartRotation(teamPlayers) {
   const valid = (teamPlayers || []).filter(
@@ -816,6 +998,168 @@ export function buildSmartRotation(teamPlayers) {
   }
 
   return { sorted, obj };
+}
+
+
+function round4(value) {
+  return Math.round(Number(value || 0) * 10000) / 10000;
+}
+
+function hasFiniteRating(value) {
+  return Number.isFinite(Number(value));
+}
+
+function getPlayerPotentialValue(player) {
+  if (hasFiniteRating(player?.potential)) return Number(player.potential);
+  if (hasFiniteRating(player?.overall)) return Number(player.overall);
+  return 75;
+}
+
+function getPlayerOverallValue(player) {
+  if (hasFiniteRating(player?.overall)) return Number(player.overall);
+  return getPlayerPotentialValue(player);
+}
+
+function potentialAgeMultiplier(age) {
+  const numericAge = Number(age || 0);
+
+  if (numericAge <= POT_AGE_POINTS[0][0]) return POT_AGE_POINTS[0][1];
+
+  for (let i = 1; i < POT_AGE_POINTS.length; i += 1) {
+    const [prevAge, prevValue] = POT_AGE_POINTS[i - 1];
+    const [nextAge, nextValue] = POT_AGE_POINTS[i];
+
+    if (numericAge <= nextAge) {
+      const t = (numericAge - prevAge) / (nextAge - prevAge);
+      return prevValue + (nextValue - prevValue) * t;
+    }
+  }
+
+  return 0.04;
+}
+
+function playerPotentialWindowScore(player, yearsAhead) {
+  const potential = getPlayerPotentialValue(player);
+  const overall = getPlayerOverallValue(player);
+  const futureAge = Number(player?.age ?? 25) + yearsAhead;
+  const ageMultiplier = potentialAgeMultiplier(futureAge);
+
+  // A raw prospect still gets rewarded heavily, but a huge POT/OVR gap is
+  // discounted slightly because that ceiling is less certain than an already
+  // realized young star.
+  const upsideGap = Math.max(0, potential - overall);
+  const uncertaintyPenalty = Math.min(5, upsideGap * 0.35) * ageMultiplier;
+
+  // Elite ceilings should separate from normal good young players.
+  const eliteBonus = Math.max(0, potential - 92) * 0.12 * ageMultiplier;
+
+  return 58 + (potential - 58) * ageMultiplier + eliteBonus - uncertaintyPenalty;
+}
+
+function averageTop(scores, count) {
+  const usableCount = Math.min(count, scores.length);
+  if (usableCount <= 0) return 0;
+
+  return scores.slice(0, usableCount).reduce((sum, value) => sum + value, 0) / usableCount;
+}
+
+function weightedFullRosterAverage(scores) {
+  let numerator = 0;
+  let denominator = 0;
+
+  scores.forEach((score, index) => {
+    const weight = Math.pow(0.86, index);
+    numerator += score * weight;
+    denominator += weight;
+  });
+
+  return denominator > 0 ? numerator / denominator : 0;
+}
+
+function potentialWindowTeamScore(players, yearsAhead) {
+  const scores = (players || [])
+    .map((player) => playerPotentialWindowScore(player, yearsAhead))
+    .filter((score) => Number.isFinite(score))
+    .sort((a, b) => b - a);
+
+  if (scores.length === 0) return 0;
+
+  return (
+    0.48 * averageTop(scores, 2) +
+    0.37 * averageTop(scores, 5) +
+    0.15 * weightedFullRosterAverage(scores)
+  );
+}
+
+function getAutoBuiltExactOverallForPotential(teamPlayers) {
+  try {
+    const built = buildSmartRotation(teamPlayers);
+    const ratings = computeTeamRatings({ players: teamPlayers || [] }, built.obj || {});
+    return Number(ratings.exactOverall ?? ratings.overall ?? 0);
+  } catch (error) {
+    console.warn("Team POT proof bonus fallback:", error);
+    return 0;
+  }
+}
+
+export function calculateTeamPotentialRating(teamPlayers) {
+  const valid = (teamPlayers || []).filter(
+    (player) => player && player.name && (hasFiniteRating(player.potential) || hasFiniteRating(player.overall))
+  );
+
+  if (valid.length === 0) {
+    return {
+      pot: 0,
+      exactPot: 0,
+      rawPot: 0,
+      adjustedRawPot: 0,
+      windows: { threeYear: 0, fiveYear: 0, sevenYear: 0 },
+    };
+  }
+
+  const windowScores = POT_FUTURE_WINDOWS.map((window) => ({
+    ...window,
+    score: potentialWindowTeamScore(valid, window.years),
+  }));
+
+  const rawPot = windowScores.reduce(
+    (sum, window) => sum + window.score * window.weight,
+    0
+  );
+
+  // Only teams that are already elite and also have a strong future raw score
+  // get a small proof bonus. This helps proven young cores without turning POT
+  // into another current-OVR rating.
+  const exactCurrentOverall = getAutoBuiltExactOverallForPotential(valid);
+  const futureStrength = Math.max(0, rawPot - 84) / 10;
+  const proofBonus =
+    Math.max(0, exactCurrentOverall - POT_PROOF_BASE_OVERALL) *
+      futureStrength *
+      POT_PROOF_MULTIPLIER +
+    Math.max(0, exactCurrentOverall - POT_ELITE_PROOF_BASE_OVERALL) *
+      futureStrength *
+      POT_ELITE_PROOF_MULTIPLIER;
+  const adjustedRawPot = rawPot + proofBonus;
+
+  // Scaled to be comparable to normal team OVR. The current league naturally
+  // lands around 96.4 to 70 with this curve, but those are not hard caps.
+  // The only hard cap is 99, so a generational roster cannot display 100+.
+  const exactPot = Math.min(
+    99,
+    POT_SCALE_FLOOR_VALUE + (adjustedRawPot - POT_SCALE_BASE) * POT_SCALE_MULTIPLIER
+  );
+
+  return {
+    pot: Math.round(exactPot),
+    exactPot: round4(exactPot),
+    rawPot: round4(rawPot),
+    adjustedRawPot: round4(adjustedRawPot),
+    windows: {
+      threeYear: round4(windowScores.find((window) => window.years === 3)?.score || 0),
+      fiveYear: round4(windowScores.find((window) => window.years === 5)?.score || 0),
+      sevenYear: round4(windowScores.find((window) => window.years === 7)?.score || 0),
+    },
+  };
 }
 
 function buildGameplanPayload(team) {

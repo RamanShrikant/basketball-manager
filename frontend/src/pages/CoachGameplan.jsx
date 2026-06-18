@@ -3,6 +3,8 @@ import {
   rebuildSingleTeamGameplan,
   getRosterSignatureForGameplan,
   buildSmartRotation,
+  buildFullTeamRating,
+  calculateTeamPotentialRating,
 } from "../utils/ensureGameplans";
 import { computeTeamRatings } from "../api/teamRatings";
 import React, { useState, useEffect, useMemo } from "react";
@@ -12,7 +14,10 @@ import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
-const STARTER_MINUTES = 24;
+const MANUAL_STARTER_MINUTES = 1;
+const MANUAL_STARTER_MAX_MINUTES = 48;
+const MANUAL_BENCH_MINUTES = 0;
+const MANUAL_BENCH_MAX_MINUTES = 47;
 
 function getRosterSignature(teamPlayers = []) {
     return [...teamPlayers]
@@ -90,7 +95,27 @@ function readGameplanFromStorage(teamName) {
     const [selectedPlayer, setSelectedPlayer] = useState(null);
     const [swapSelection, setSwapSelection] = useState(null);
     const [toast, setToast] = useState(false);
-    const [teamRatings, setTeamRatings] = useState({ overall: 0, off: 0, def: 0 });
+    const [teamRatings, setTeamRatings] = useState({
+        overall: 0,
+        off: 0,
+        def: 0,
+        exactOverall: 0,
+        exactOff: 0,
+        exactDef: 0,
+    });
+    const [ftrRatings, setFtrRatings] = useState({
+        ftr: 0,
+        exactFtr: 0,
+        ftrOff: 0,
+        ftrDef: 0,
+        exactFtrOff: 0,
+        exactFtrDef: 0,
+    });
+    const [potRatings, setPotRatings] = useState({
+        pot: 0,
+        exactPot: 0,
+    });
+    const [showRatingDetails, setShowRatingDetails] = useState(false);
     const navigate = useNavigate();
 
     // ---------- Team list + index for static arrows ----------
@@ -120,50 +145,104 @@ function readGameplanFromStorage(teamName) {
   try {
     // exact parity with the sim: pass a team-like object with a players field
     const out = computeTeamRatings({ players: playersArr }, minutesObj);
-    return { overall: out.overall, off: out.off, def: out.def };
+    return {
+      overall: out.overall,
+      off: out.off,
+      def: out.def,
+      exactOverall: out.exactOverall ?? out.overall ?? 0,
+      exactOff: out.exactOff ?? out.off ?? 0,
+      exactDef: out.exactDef ?? out.def ?? 0,
+    };
   } catch (e) {
     console.warn("calcTeamRatings fallback:", e);
-    return { overall: 0, off: 0, def: 0 };
+    return { overall: 0, off: 0, def: 0, exactOverall: 0, exactOff: 0, exactDef: 0 };
+  }
+};
+
+    const calculateFullTeamRating = (playersArr) => {
+  try {
+    return buildFullTeamRating(playersArr || []);
+  } catch (e) {
+    console.warn("calcFullTeamRating fallback:", e);
+    return {
+      ftr: 0,
+      exactFtr: 0,
+      ftrOff: 0,
+      ftrDef: 0,
+      exactFtrOff: 0,
+      exactFtrDef: 0,
+    };
+  }
+};
+
+    const calculatePotentialRating = (playersArr) => {
+  try {
+    return calculateTeamPotentialRating(playersArr || []);
+  } catch (e) {
+    console.warn("calcPotentialRating fallback:", e);
+    return { pot: 0, exactPot: 0 };
   }
 };
 
 
-    const enforceStarterMinimums = (arr, minsObj) => {
-        const updated = { ...minsObj };
-        let added = 0;
+    const clampManualMinutesForOrder = (arr, minsObj) => {
+        const updated = {};
+        const originalTotal = getMinutesTotal(minsObj);
+        const minRequired = Math.min(5, arr.length) * MANUAL_STARTER_MINUTES;
+        const targetTotal = Math.min(240, Math.max(minRequired, originalTotal));
 
-        for (let i = 0; i < Math.min(5, arr.length); i++) {
-        const nm = arr[i].name;
-        const current = Number(updated[nm] || 0);
-        if (current < STARTER_MINUTES) {
-            updated[nm] = STARTER_MINUTES;
-            added += STARTER_MINUTES - current;
+        for (let i = 0; i < arr.length; i++) {
+        const p = arr[i];
+        const raw = Math.round(Number(minsObj?.[p.name] || 0));
+        const minAllowed = i < 5 ? MANUAL_STARTER_MINUTES : MANUAL_BENCH_MINUTES;
+        const maxAllowed = i < 5 ? MANUAL_STARTER_MAX_MINUTES : MANUAL_BENCH_MAX_MINUTES;
+        updated[p.name] = Math.max(minAllowed, Math.min(maxAllowed, raw));
         }
-        }
-        if (added === 0) return updated;
 
-        const bench = arr.slice(5).sort((a, b) => (updated[b.name] || 0) - (updated[a.name] || 0));
-        let remain = added;
-        for (const p of bench) {
-        if (remain <= 0) break;
-        const take = Math.min(updated[p.name] || 0, remain);
-        if (take > 0) {
-            updated[p.name] -= take;
-            remain -= take;
-        }
-        }
-        if (remain > 0) {
-        const starters = arr.slice(0, 5).sort((a, b) => (updated[b.name] || 0) - (updated[a.name] || 0));
-        for (const p of starters) {
-            if (remain <= 0) break;
-            const extra = Math.max(0, (updated[p.name] || 0) - STARTER_MINUTES);
-            const take = Math.min(extra, remain);
+        let total = getMinutesTotal(updated);
+
+        if (total > targetTotal) {
+        let extra = total - targetTotal;
+        const reducePool = [...arr].sort((a, b) => {
+            const ia = arr.findIndex((x) => x.name === a.name);
+            const ib = arr.findIndex((x) => x.name === b.name);
+            const minA = ia < 5 ? MANUAL_STARTER_MINUTES : MANUAL_BENCH_MINUTES;
+            const minB = ib < 5 ? MANUAL_STARTER_MINUTES : MANUAL_BENCH_MINUTES;
+            return (updated[b.name] - minB) - (updated[a.name] - minA);
+        });
+
+        for (const p of reducePool) {
+            if (extra <= 0) break;
+            const idx = arr.findIndex((x) => x.name === p.name);
+            const minAllowed = idx < 5 ? MANUAL_STARTER_MINUTES : MANUAL_BENCH_MINUTES;
+            const canTake = Math.max(0, updated[p.name] - minAllowed);
+            const take = Math.min(canTake, extra);
             if (take > 0) {
             updated[p.name] -= take;
-            remain -= take;
+            extra -= take;
             }
         }
         }
+
+        total = getMinutesTotal(updated);
+
+        if (total < targetTotal) {
+        let missing = targetTotal - total;
+        const addPool = [...arr].sort((a, b) => (b.overall || 0) - (a.overall || 0));
+
+        for (const p of addPool) {
+            if (missing <= 0) break;
+            const idx = arr.findIndex((x) => x.name === p.name);
+            const maxAllowed = idx < 5 ? MANUAL_STARTER_MAX_MINUTES : MANUAL_BENCH_MAX_MINUTES;
+            const room = Math.max(0, maxAllowed - updated[p.name]);
+            const add = Math.min(room, missing);
+            if (add > 0) {
+            updated[p.name] += add;
+            missing -= add;
+            }
+        }
+        }
+
         return updated;
     };
 
@@ -175,6 +254,8 @@ useEffect(() => {
   const raw = localStorage.getItem(key);
   const teamPlayers = selectedTeam.players || [];
   const currentRosterSignature = getRosterSignatureForGameplan(teamPlayers);
+  setPotRatings(calculatePotentialRating(teamPlayers));
+  setFtrRatings(calculateFullTeamRating(teamPlayers));
 
   let loaded = false;
 
@@ -294,10 +375,12 @@ const handleAutoRebuild = () => {
 };
 
     const handleMinuteChange = (name, value) => {
-        const numRaw = Math.round(Number(value));
         const idx = players.findIndex((p) => p.name === name);
-        const minAllowed = idx > -1 && idx < 5 ? STARTER_MINUTES : 0;
-        const num = Math.max(minAllowed, numRaw);
+        const isStarter = idx > -1 && idx < 5;
+        const minAllowed = isStarter ? MANUAL_STARTER_MINUTES : MANUAL_BENCH_MINUTES;
+        const maxAllowed = isStarter ? MANUAL_STARTER_MAX_MINUTES : MANUAL_BENCH_MAX_MINUTES;
+        const numRaw = Math.round(Number(value));
+        const num = Math.max(minAllowed, Math.min(maxAllowed, numRaw));
 
         const totalNow = Object.entries(minutes)
         .filter(([k]) => k !== name)
@@ -325,7 +408,7 @@ const handleAutoRebuild = () => {
             [arr[i1], arr[i2]] = [arr[i2], arr[i1]];
         }
 
-        const adjusted = enforceStarterMinimums(arr, minutes);
+        const adjusted = clampManualMinutesForOrder(arr, minutes);
         setPlayers(arr);
         setMinutes(adjusted);
         setTeamRatings(calculateTeamRatings(arr, adjusted));
@@ -364,6 +447,7 @@ const handleAutoRebuild = () => {
     const fillPercent = Math.min(player.overall / 99, 1);
     const strokeOffset = circleCircumference * (1 - fillPercent);
     const lineupLabels = ["PG", "SG", "SF", "PF", "C", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"];
+    const formatExactRating = (value) => Number(value || 0).toFixed(4);
 
     return (
     <PageFade>
@@ -371,6 +455,57 @@ const handleAutoRebuild = () => {
         {toast && (
             <div className="fixed top-6 right-6 bg-neutral-800 border border-orange-500 text-orange-400 px-5 py-2 rounded-lg shadow-lg animate-pulse">
             Gameplan saved!
+            </div>
+        )}
+
+        {showRatingDetails && (
+            <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+            onClick={() => setShowRatingDetails(false)}
+            >
+            <div
+                className="w-full max-w-sm rounded-xl border border-neutral-700 bg-neutral-950 p-5 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-extrabold text-orange-400">Exact Team Ratings</h2>
+                <button
+                    type="button"
+                    onClick={() => setShowRatingDetails(false)}
+                    className="h-8 w-8 rounded-full bg-neutral-800 text-gray-200 hover:bg-orange-600 hover:text-white transition"
+                    aria-label="Close exact ratings popup"
+                >
+                    ×
+                </button>
+                </div>
+
+                <div className="space-y-3 text-[16px] font-semibold text-gray-200">
+                <div className="flex justify-between gap-4">
+                    <span className="text-gray-400">Team POT:</span>
+                    <span className="text-orange-400">{formatExactRating(potRatings.exactPot)}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                    <span className="text-gray-400">FTR:</span>
+                    <span className="text-orange-400">{formatExactRating(ftrRatings.exactFtr)}</span>
+                </div>
+
+                <div className="pt-2 border-t border-neutral-800">
+                    <p className="mb-2 text-white">Team Overall:</p>
+                    <div className="flex justify-between gap-4">
+                    <span className="text-gray-400">OVR</span>
+                    <span className="text-orange-400">{formatExactRating(teamRatings.exactOverall)}</span>
+                    </div>
+                    <div className="flex justify-between gap-4 mt-1">
+                    <span className="text-gray-400">OFF</span>
+                    <span className="text-orange-400">{formatExactRating(teamRatings.exactOff)}</span>
+                    </div>
+                    <div className="flex justify-between gap-4 mt-1">
+                    <span className="text-gray-400">DEF</span>
+                    <span className="text-orange-400">{formatExactRating(teamRatings.exactDef)}</span>
+                    </div>
+                </div>
+                </div>
+            </div>
             </div>
         )}
 
@@ -410,6 +545,15 @@ const handleAutoRebuild = () => {
         {/* Player Card */}
         <div className="relative w-full flex justify-center mb-0">
             <div className="relative bmSolidPanel w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
+            <button
+                type="button"
+                onClick={() => setShowRatingDetails(true)}
+                className="absolute right-5 top-4 z-10 flex h-7 w-7 items-center justify-center rounded-full border border-neutral-600 bg-neutral-900/90 text-[14px] font-extrabold text-gray-300 hover:border-orange-400 hover:bg-orange-600 hover:text-white transition"
+                title="Show exact team ratings"
+                aria-label="Show exact team ratings"
+            >
+                i
+            </button>
             <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
             <div className="flex items-end justify-between">
                 <div className="flex items-end gap-6">
@@ -470,6 +614,12 @@ const handleAutoRebuild = () => {
                 </span>
                 </span>
                 <div className="flex gap-6">
+                <span>
+                    POT: <span className="text-orange-400">{potRatings.pot}</span>
+                </span>
+                <span>
+                    FTR: <span className="text-orange-400">{ftrRatings.ftr}</span>
+                </span>
                 <span className="text-white">Team Overall:</span>
                 <span>
                     OVR <span className="text-orange-400">{teamRatings.overall}</span>
@@ -535,8 +685,8 @@ const handleAutoRebuild = () => {
                         <div className="flex items-center gap-3 justify-center">
                             <input
                             type="range"
-                            min="0"
-                            max="48"
+                            min={i < 5 ? MANUAL_STARTER_MINUTES : MANUAL_BENCH_MINUTES}
+                            max={i < 5 ? MANUAL_STARTER_MAX_MINUTES : MANUAL_BENCH_MAX_MINUTES}
                             step="1"
                             value={minutes[p.name] ?? 0}
                             onChange={(e) => handleMinuteChange(p.name, e.target.value)}
@@ -562,9 +712,9 @@ const handleAutoRebuild = () => {
                 </button>
                 <button
                 onClick={handleSave}
-                disabled={total < 240}
+                disabled={total !== 240}
                 className={`px-5 py-2 rounded-lg font-semibold transition ${
-                    total < 240
+                    total !== 240
                     ? "bg-neutral-700 text-gray-500 cursor-not-allowed"
                     : "bg-orange-600 hover:bg-orange-500"
                 }`}
@@ -576,9 +726,9 @@ const handleAutoRebuild = () => {
                     persistCurrentGameplan(players, minutes, false);
                     navigate("/team-hub");
                 }}
-                disabled={total < 240}
+                disabled={total !== 240}
                 className={`px-5 py-2 rounded-lg font-semibold transition ${
-                    total < 240
+                    total !== 240
                     ? "bg-neutral-700 text-gray-500 cursor-not-allowed"
                     : "bg-neutral-700 hover:bg-neutral-600"
                 }`}

@@ -2,6 +2,7 @@
 // Team rating formula used by Coach Gameplan and rotation optimization.
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+const round4 = (x) => Math.round(Number(x || 0) * 10000) / 10000;
 
 const TR_GAIN_OVR = 1.48;
 const TR_GAIN_SIDE = 1.15;
@@ -158,7 +159,15 @@ export function computeTeamRatings(team, minsObj) {
   const { roster, posMin, total } = minutesWeighted(team, minsObj);
 
   if (!total) {
-    return { overall: 0, off: 0, def: 0, rosterOut: roster };
+    return {
+      overall: 0,
+      off: 0,
+      def: 0,
+      exactOverall: 0,
+      exactOff: 0,
+      exactDef: 0,
+      rosterOut: roster,
+    };
   }
 
   const { wavg: baseOvr, effList: effOvr } = aggWithFatigue(roster, "overall");
@@ -181,10 +190,20 @@ export function computeTeamRatings(team, minsObj) {
   const rawDef = baseDef + sDef - cov - emptyPen;
   const rawOvr = baseOvr + sOvr - cov - emptyPen;
 
+  const exactOverall = round4(scaleRange(rawOvr, "overall"));
+  const exactOff = round4(scaleRange(rawOff, "side"));
+  const exactDef = round4(scaleRange(rawDef, "side"));
+
   return {
-    overall: Math.round(scaleRange(rawOvr, "overall")),
-    off: Math.round(scaleRange(rawOff, "side")),
-    def: Math.round(scaleRange(rawDef, "side")),
+    // Whole-number values are for UI display.
+    overall: Math.round(exactOverall),
+    off: Math.round(exactOff),
+    def: Math.round(exactDef),
+
+    // Exact values are for internal logic, optimization, and any future sim use.
+    exactOverall,
+    exactOff,
+    exactDef,
     rosterOut: roster,
   };
 }
