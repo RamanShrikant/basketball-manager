@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
+import { applyDraftPickOwnershipToLotteryResult } from "../utils/draftPicks.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
@@ -377,20 +378,21 @@ function formatChance(value) {
 }
 
 function getTeamKey(row = {}) {
-  return normalizeTeamName(row.currentOwnerTeamName || row.teamName || row.name || "");
+  return normalizeTeamName(
+    row.originalTeamName ||
+      row.originalPickTeamName ||
+      row.naturalLotteryTeamName ||
+      row.teamName ||
+      row.currentOwnerTeamName ||
+      row.name ||
+      ""
+  );
 }
 
 function getPickOddsFromMap(row = {}, pickNumber) {
   const oddsByPick = row?.oddsByPick || {};
   const direct = oddsByPick?.[String(pickNumber)] ?? oddsByPick?.[Number(pickNumber)];
   return Number(direct || 0);
-}
-
-function formatPickChange(value) {
-  const change = Number(value || 0);
-  if (!Number.isFinite(change) || change === 0) return "No move";
-  if (change > 0) return `+${change}`;
-  return `${change}`;
 }
 
 function formatPickChangeLong(value) {
@@ -533,6 +535,10 @@ function PickRow({ pick, animationIndex = 0, oddsRow = null, showMovement = true
   const resultTag = showMovement ? (oddsRow?.resultTag || pick.resultTag || "") : "";
   const chanceLabel = oddsRow ? `${resultOddsText({ ...oddsRow, finalPick: pick.pick })}` : pick.chanceLabel || sourceLabel(pick.source);
   const sourceText = pick.round === 2 ? (pick.chanceLabel || sourceLabel(pick.source)) : sourceLabel(pick.source);
+  const originalTeamName = pick.originalTeamName || pick.originalPickTeamName || pick.naturalLotteryTeamName || "";
+  const ownershipNote = originalTeamName && normalizeTeamName(originalTeamName) !== normalizeTeamName(teamName)
+    ? `Original: ${originalTeamName}`
+    : "";
 
   return (
     <div
@@ -541,13 +547,14 @@ function PickRow({ pick, animationIndex = 0, oddsRow = null, showMovement = true
     >
       <div className="flex items-start gap-3">
         <div className="w-14 shrink-0 text-orange-300 font-black text-lg leading-8">#{pick.pick}</div>
-        <TeamLogo src={pick.logo} name={teamName} size={30} />
+        <TeamLogo src={pick.logo || pick.currentOwnerTeamLogo || pick.ownerLogo} name={teamName} size={30} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <div className="font-extrabold text-base leading-tight break-words">{teamName}</div>
             <div className="text-sm text-white/65">{formatRecord(pick)}</div>
           </div>
           <div className="mt-1 text-xs text-white/45 leading-snug break-words">{sourceText}</div>
+          {ownershipNote ? <div className="mt-1 text-xs font-bold text-sky-200/80 leading-snug break-words">{ownershipNote}</div> : null}
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
             <span className="font-black text-white/75">{chanceLabel}</span>
             {showMovement && Number.isFinite(movement) && movement !== 0 ? (
@@ -643,7 +650,6 @@ function LotteryOddsTable({ rows = [], firstRoundRevealed = false }) {
   );
 }
 
-
 function DraftMatrix({ rows = [], system, firstRoundRevealed = false }) {
   if (!rows.length) return null;
   const maxPick = system === "three_two_one" ? 16 : 14;
@@ -719,7 +725,6 @@ function DraftMatrix({ rows = [], system, firstRoundRevealed = false }) {
   );
 }
 
-
 export default function DraftLottery() {
   const navigate = useNavigate();
   const { leagueData, setLeagueData } = useGame();
@@ -745,23 +750,37 @@ export default function DraftLottery() {
   const resolvedSystem = result?.meta?.system || result?.meta?.autoResolvedSystem || getResolvedLotterySystem(lotterySystem, seasonYear);
 
   const persistLotteryResult = (nextLotteryState) => {
-    const complete = Boolean(nextLotteryState.firstRoundRevealed && nextLotteryState.secondRoundRevealed && !nextLotteryState.isPreview);
+    const resolvedResult = nextLotteryState?.result
+      ? applyDraftPickOwnershipToLotteryResult(nextLotteryState.result, { leagueData, seasonYear })
+      : nextLotteryState?.result;
+
+    const resolvedLotteryState = {
+      ...nextLotteryState,
+      result: resolvedResult,
+    };
+
+    const complete = Boolean(
+      resolvedLotteryState.firstRoundRevealed &&
+        resolvedLotteryState.secondRoundRevealed &&
+        !resolvedLotteryState.isPreview
+    );
+
     const updatedLeague = {
       ...(leagueData || {}),
       draftState: {
         ...(leagueData?.draftState || {}),
         seasonYear,
-        lottery: nextLotteryState.result,
-        draftOrder: complete ? nextLotteryState.result?.fullDraftOrder || [] : [],
+        lottery: resolvedLotteryState.result,
+        draftOrder: complete ? resolvedLotteryState.result?.fullDraftOrder || [] : [],
         draftLotteryComplete: complete,
       },
     };
 
-    saveDraftLottery(nextLotteryState);
+    saveDraftLottery(resolvedLotteryState);
     persistLeagueData(updatedLeague, setLeagueData);
-    setLotteryState(nextLotteryState);
+    setLotteryState(resolvedLotteryState);
     updateOffseasonState({ draftLotteryComplete: complete });
-    return nextLotteryState;
+    return resolvedLotteryState;
   };
 
   const runLotteryBackend = async ({ forceNew = false, revealFirst = false, revealSecond = false, systemOverride = lotterySystem } = {}) => {
