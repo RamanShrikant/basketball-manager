@@ -6,6 +6,7 @@ import styles from "./RosterView.module.css";
 import {
   getAllTeamsFromLeague,
   getTeamLogoMap,
+  getDraftPickProtectionLabel,
   normalizeDraftPicks,
   normalizeTeamName,
   sortDraftPickAssets,
@@ -46,7 +47,37 @@ const TEAM_CODES = {
   "Multiple Teams": "",
 };
 
-const KNOWN_CODES = new Set(Object.values(TEAM_CODES).filter(Boolean));
+const CODE_ALIASES = {
+  BRK: "BKN",
+  BKN: "BKN",
+  PHL: "PHI",
+  PHI: "PHI",
+  PHO: "PHX",
+  PHX: "PHX",
+  SA: "SAS",
+  SAS: "SAS",
+  GS: "GSW",
+  GSW: "GSW",
+  WSH: "WAS",
+  WAS: "WAS",
+  CHO: "CHA",
+  CHA: "CHA",
+  NO: "NOP",
+  NOP: "NOP",
+  UTH: "UTA",
+  UTA: "UTA",
+};
+
+const KNOWN_CODES = new Set([
+  ...Object.values(TEAM_CODES).filter(Boolean),
+  ...Object.keys(CODE_ALIASES),
+  ...Object.values(CODE_ALIASES),
+]);
+
+function canonicalTeamCode(code) {
+  const upper = String(code || "").trim().toUpperCase();
+  return CODE_ALIASES[upper] || upper;
+}
 
 function getLogo(team) {
   return (
@@ -102,7 +133,7 @@ function getTeamCode(name) {
   if (TEAM_CODES[clean]) return TEAM_CODES[clean];
 
   const upper = clean.toUpperCase();
-  if (KNOWN_CODES.has(upper)) return upper;
+  if (KNOWN_CODES.has(upper)) return canonicalTeamCode(upper);
 
   return clean
     .split(" ")
@@ -113,6 +144,93 @@ function getTeamCode(name) {
 
 function uniqueList(values) {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+
+function safeJSON(raw, fallback = null) {
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function getSeasonYearFromLeague(leagueData) {
+  const offseasonState = safeJSON(localStorage.getItem("bm_offseason_state_v1"), {}) || {};
+  const candidates = [
+    offseasonState?.seasonYear,
+    leagueData?.seasonYear,
+    leagueData?.currentSeasonYear,
+    leagueData?.seasonStartYear,
+  ]
+    .map(Number)
+    .filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
+
+  return candidates.length ? Math.max(...candidates) : 2026;
+}
+
+function readLockedDraftOrder(leagueData, seasonYear) {
+  const direct = leagueData?.draftState?.draftOrder;
+  if (Array.isArray(direct) && direct.length) return direct;
+
+  const lotteryOrder = leagueData?.draftState?.lottery?.fullDraftOrder;
+  if (Array.isArray(lotteryOrder) && lotteryOrder.length) return lotteryOrder;
+
+  const savedLottery = safeJSON(localStorage.getItem("bm_draft_lottery_v1"), null);
+  if (
+    savedLottery &&
+    Number(savedLottery.seasonYear) === Number(seasonYear) &&
+    savedLottery.firstRoundRevealed &&
+    savedLottery.secondRoundRevealed &&
+    Array.isArray(savedLottery?.result?.fullDraftOrder)
+  ) {
+    return savedLottery.result.fullDraftOrder;
+  }
+
+  return [];
+}
+
+function isDraftCompleteForSeason(leagueData, seasonYear) {
+  const offseasonState = safeJSON(localStorage.getItem("bm_offseason_state_v1"), {}) || {};
+  const savedDraftState = safeJSON(localStorage.getItem("bm_draft_state_v1"), null);
+
+  return Boolean(
+    (Number(offseasonState?.seasonYear || seasonYear) === Number(seasonYear) && offseasonState?.draftComplete) ||
+      (Number(savedDraftState?.seasonYear || 0) === Number(seasonYear) && savedDraftState?.completed) ||
+      (Number(leagueData?.draftState?.seasonYear || seasonYear) === Number(seasonYear) && leagueData?.draftState?.completed)
+  );
+}
+
+function getPickOwnerName(row = {}) {
+  return row.currentOwnerTeamName || row.ownerTeamName || row.teamName || row.ownerTeam || "";
+}
+
+function getPickOriginalName(row = {}) {
+  return row.originalTeamName || row.originalPickTeamName || row.naturalLotteryTeamName || row.originalTeam || row.teamName || "";
+}
+
+function buildResolvedDraftAsset(row = {}, seasonYear) {
+  const pickNumber = Number(row.pick || row.pickNumber || row.overallPick || 0);
+  const round = Number(row.round || (pickNumber <= 30 ? 1 : 2));
+  const ownerTeam = getPickOwnerName(row);
+  const originalTeam = getPickOriginalName(row);
+
+  return {
+    id: `resolved_${seasonYear}_${round}_${pickNumber}_${ownerTeam}_${originalTeam}`,
+    assetType: "resolved",
+    type: "resolved",
+    year: Number(seasonYear),
+    round,
+    pickNumber,
+    overallPick: pickNumber,
+    originalTeam,
+    ownerTeam,
+    displayProtection: "Resolved",
+    protections: "Resolved",
+    status: "resolved",
+    notes: row.draftPickProtection || row.swapProtectionLabel || "Resolved draft pick",
+  };
 }
 
 function extractCodesFromText(text, teamNames = []) {
@@ -134,53 +252,40 @@ function extractCodesFromText(text, teamNames = []) {
 }
 
 function compactProtectionLabel(asset, teamNames = []) {
-  const raw = String(asset?.displayProtection || asset?.protections || "").trim();
-  const lower = raw.toLowerCase();
-
-  if (!raw || lower === "none" || lower === "null") return "Unprotected";
-
-  if (assetTypeLabel(asset) === "Swap") {
-    if (lower.includes("swap best") || lower.includes("best")) return "Swap Best";
-    if (lower.includes("swap worst") || lower.includes("worst")) return "Swap Worst";
-
-    const text = `${asset.protections || ""} ${asset.displayProtection || ""} ${asset.realLifeDetails?.originalProtections || ""} ${asset.realLifeDetails?.originalNotes || ""}`;
-    const textLower = text.toLowerCase();
-
-    if (textLower.includes("least favorable") || textLower.includes("less favorable")) return "Swap Worst";
-    return "Swap Best";
+  const type = assetTypeLabel(asset);
+  if (type === "Swap") {
+    const raw = String(asset?.displayProtection || asset?.protections || "").toLowerCase();
+    return raw.includes("worst") ? "Swap Worst" : "Swap Best";
   }
 
-  if (lower.includes("unprotected")) return "Unprotected";
-  if (lower.includes("lottery")) return "Lottery Protected";
-  if (lower.includes("top 10")) return "Top 10 Protected";
-  if (lower.includes("top 5")) return "Top 5 Protected";
-  if (lower.includes("top 3")) return "Top 3 Protected";
-
-  let clean = raw
-    .replace(/protected/gi, "Protected")
-    .replace(/unprotected\s*\/\s*none/gi, "Unprotected")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const topRangeMatch = clean.match(/\b([A-Z]{2,3})\s+(\d+)\s*-\s*(\d+)\b/i);
-  if (topRangeMatch) {
-    const start = Number(topRangeMatch[2]);
-    const end = Number(topRangeMatch[3]);
-    if (start <= 3 && end >= 30) return "Top 3 Protected";
-    if (start <= 5 && end >= 30) return "Top 5 Protected";
-    if (start <= 10 && end >= 30) return "Top 10 Protected";
-    if (start <= 15 && end >= 30) return "Lottery Protected";
+  if (String(asset?.assetType || asset?.type || "").toLowerCase() === "resolved") {
+    return "Resolved";
   }
 
-  if (clean.length > 34) clean = `${clean.slice(0, 31).trim()}...`;
-  return clean;
+  const label = getDraftPickProtectionLabel(asset);
+  if (!label || label === "none" || label === "null") return "Unprotected";
+  return label;
 }
 
 function getOriginLabel(asset, teamNames = []) {
   if (assetTypeLabel(asset) === "Swap") {
-    const text = `${asset.originalTeam || ""} ${asset.swapWithTeam || ""} ${asset.protections || ""} ${asset.notes || ""}`;
-    const codes = extractCodesFromText(text, teamNames).slice(0, 3);
-    return codes.length ? codes.join(" / ") : "Swap Rights";
+    const structuredParticipants = Array.isArray(asset?.realLifeDetails?.swapParticipants)
+      ? asset.realLifeDetails.swapParticipants
+      : Array.isArray(asset?.swapParticipants)
+      ? asset.swapParticipants
+      : [];
+
+    const structuredCodes = uniqueList(
+      structuredParticipants
+        .flatMap((participant) => extractCodesFromText(participant, teamNames))
+        .map(canonicalTeamCode)
+    ).slice(0, 2);
+
+    if (structuredCodes.length >= 2) return structuredCodes.join(" / ");
+
+    const text = `${asset.originalTeam || ""} ${asset.swapWithTeam || ""} ${structuredParticipants.join(" / ") || ""}`;
+    const codes = uniqueList(extractCodesFromText(text, teamNames).map(canonicalTeamCode)).slice(0, 2);
+    return codes.length ? codes.join(" / ") : asset.originalTeam || "Swap Rights";
   }
 
   return asset.originalTeam || "—";
@@ -272,14 +377,29 @@ export default function DraftPicks() {
     return teamsSorted[viewIndex] || selectedTeam || teamsSorted[0] || null;
   }, [teamsSorted, viewIndex, selectedTeam]);
 
+  const seasonYear = useMemo(() => getSeasonYearFromLeague(leagueData), [leagueData]);
+  const draftOrder = useMemo(() => readLockedDraftOrder(leagueData, seasonYear), [leagueData, seasonYear]);
+  const draftComplete = useMemo(() => isDraftCompleteForSeason(leagueData, seasonYear), [leagueData, seasonYear]);
+  const draftOrderLocked = draftOrder.length >= 60;
+
   const picks = useMemo(() => {
-    return normalizeDraftPicks(leagueData?.draftPicks || [], teamNames).sort(sortDraftPickAssets);
-  }, [leagueData?.draftPicks, teamNames]);
+    return normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
+      .filter((pick) => Number(pick.year || 0) >= Number(seasonYear))
+      .filter((pick) => !(draftComplete && Number(pick.year || 0) === Number(seasonYear)))
+      .filter((pick) => !(draftOrderLocked && !draftComplete && Number(pick.year || 0) === Number(seasonYear)))
+      .sort(sortDraftPickAssets);
+  }, [leagueData?.draftPicks, teamNames, seasonYear, draftComplete, draftOrderLocked]);
+
+  const resolvedCurrentYearPicks = useMemo(() => {
+    if (!draftOrderLocked || draftComplete) return [];
+    return draftOrder.map((row) => buildResolvedDraftAsset(row, seasonYear));
+  }, [draftOrder, draftOrderLocked, draftComplete, seasonYear]);
 
   const ownedPicks = useMemo(() => {
     if (!activeTeam?.name) return [];
-    return picks.filter((pick) => pick.ownerTeam === activeTeam.name);
-  }, [picks, activeTeam?.name]);
+    const activeKey = normalizeTeamName(activeTeam.name);
+    return [...resolvedCurrentYearPicks, ...picks].filter((pick) => normalizeTeamName(pick.ownerTeam) === activeKey);
+  }, [picks, resolvedCurrentYearPicks, activeTeam?.name]);
 
   const sortedPicks = useMemo(() => {
     const rows = [...ownedPicks];

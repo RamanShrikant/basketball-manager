@@ -5,6 +5,7 @@ import * as simEngine from "../api/simEnginePy.js";
 import styles from "./OffseasonHub.module.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { applyLeagueInflationForOffseason, getLeagueFinancialRules } from "../utils/leagueFinancials.js";
+import { rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -2095,7 +2096,7 @@ export default function OffseasonHub() {
           return;
         }
 
-        finalizedLeagueData = result.leagueData || finalizedLeagueData;
+        finalizedLeagueData = rollDraftPickAssetsForCompletedSeason(result.leagueData || finalizedLeagueData, seasonYear);
         saveLeagueData(finalizedLeagueData).catch((err) => {
           console.warn("[OffseasonHub] Failed to save finalized leagueData to IndexedDB.", err);
         });
@@ -2110,6 +2111,14 @@ export default function OffseasonHub() {
       console.error("[OffseasonHub] Automatic roster finalization error.", err);
       alert("Automatic roster finalization failed. Check the console, then try again.");
       return;
+    }
+
+    finalizedLeagueData = rollDraftPickAssetsForCompletedSeason(finalizedLeagueData, seasonYear);
+    saveLeagueData(finalizedLeagueData).catch((err) => {
+      console.warn("[OffseasonHub] Failed to save rolled draft assets to IndexedDB.", err);
+    });
+    if (typeof setLeagueData === "function") {
+      setLeagueData(finalizedLeagueData);
     }
 
     const next = {
@@ -2349,7 +2358,7 @@ export default function OffseasonHub() {
       throw new Error(finished?.reason || "Draft simulation failed.");
     }
 
-    const nextLeague = finished.leagueData || initializedLeague;
+    const nextLeague = rollDraftPickAssetsForCompletedSeason(finished.leagueData || initializedLeague, seasonYear);
     const nextDraftState = finished.draftState || initializedDraftState;
 
     if (nextDraftState) {

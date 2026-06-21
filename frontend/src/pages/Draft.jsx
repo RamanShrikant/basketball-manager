@@ -3,6 +3,7 @@
   import { useGame } from "../context/GameContext";
   import * as simEngine from "../api/simEnginePy.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import { rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
 
   const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
   const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
@@ -1450,9 +1451,13 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
         throw new Error(result?.reason || "Draft action failed.");
       }
 
-      const nextLeague = result.leagueData || workingLeagueData;
+      let nextLeague = result.leagueData || workingLeagueData;
       const rawNextState = result.draftState || draftState;
       const nextState = enrichDraftStateWithDraftSources(rawNextState, draftState, nextLeague);
+
+      if (nextState?.completed) {
+        nextLeague = rollDraftPickAssetsForCompletedSeason(nextLeague, seasonYear);
+      }
 
       setWorkingLeagueData(nextLeague);
       setDraftState(nextState);
@@ -1573,6 +1578,11 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     };
 
     const handleFinish = () => {
+      if (workingLeagueData) {
+        const rolledLeague = rollDraftPickAssetsForCompletedSeason(workingLeagueData, seasonYear);
+        setWorkingLeagueData(rolledLeague);
+        persistLeagueData(rolledLeague, setLeagueData);
+      }
       updateOffseasonState({ draftComplete: true });
       navigate("/offseason");
     };

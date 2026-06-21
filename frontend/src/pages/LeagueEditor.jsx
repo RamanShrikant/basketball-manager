@@ -175,15 +175,26 @@ function normalizeDraftPickAsset(row = {}, index = 0) {
   const year = Number(row.year || row.draftYear || 2026);
   const round = Number(row.round || row.draftRound || 1);
 
+  const protections = safePickText(row.protections || row.protectionText || row.protection || row.displayProtection || "") || "Unprotected";
+  const displayProtection = safePickText(row.displayProtection || protections) || protections;
+
   const normalized = {
+    ...row,
     id: row.id || "",
     type,
+    assetType: type,
     year: Number.isFinite(year) ? year : 2026,
     round: round === 2 ? 2 : 1,
     originalTeam: safePickText(row.originalTeam || row.originalTeamName || row.teamName || row.team || ""),
     ownerTeam: safePickText(row.ownerTeam || row.currentOwner || row.currentOwnerTeamName || row.holderTeam || ""),
     swapWithTeam: safePickText(row.swapWithTeam || row.swapTeam || row.swapTargetTeam || ""),
-    protections: safePickText(row.protections || row.protectionText || row.protection || "") || "Unprotected",
+    protections,
+    displayProtection,
+    protectionType: row.protectionType || row.protection_type || row.protectionKind || "",
+    logicType: row.logicType || row.logic_type || "",
+    source: row.source || "",
+    sourceAsOf: row.sourceAsOf || row.source_as_of || "",
+    realLifeDetails: row.realLifeDetails && typeof row.realLifeDetails === "object" ? row.realLifeDetails : undefined,
     status: DRAFT_PICK_STATUS_OPTIONS.includes(row.status) ? row.status : "active",
     notes: safePickText(row.notes || row.description || ""),
   };
