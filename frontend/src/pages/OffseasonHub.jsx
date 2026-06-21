@@ -219,6 +219,29 @@ function saveOffseasonState(state) {
   localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(state));
 }
 
+function isIndexedDbLeaguePointer(value = {}) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      value.__storageMode === "indexedDB" &&
+      !value.teams &&
+      !value.conferences
+  );
+}
+
+function makeUnavailableAgeAudit(seasonYear, reason = "NO_FULL_LEAGUE_OBJECT") {
+  return {
+    seasonYear: Number(seasonYear || 0),
+    totalPlayers: 0,
+    freeAgentPlayers: 0,
+    staleCount: 0,
+    staleExamples: [],
+    ok: false,
+    unavailable: true,
+    reason,
+  };
+}
+
 function getLeagueDataSnapshot(leagueData) {
   if (leagueData && typeof leagueData === "object") return leagueData;
   return safeJSON(localStorage.getItem("leagueData"), {}) || {};
@@ -423,19 +446,43 @@ function getProgressionAgeCompletionAudit(leagueData, seasonYear) {
   };
 }
 
-function isProgressionReallyCompleteForSeason(seasonYear) {
+function isProgressionReallyCompleteForSeason(seasonYear, leagueData = null, offseasonState = null) {
   const savedLeague = safeJSON(localStorage.getItem(LEAGUE_KEY), null);
   const progressionMeta = safeJSON(localStorage.getItem(PROG_META_KEY), null);
-  const ageAudit = getProgressionAgeCompletionAudit(savedLeague, seasonYear);
+  const savedDeltas = safeJSON(localStorage.getItem(PROG_DELTAS_KEY), {}) || {};
+  const storedDeltaCount =
+    savedDeltas && typeof savedDeltas === "object" && !Array.isArray(savedDeltas)
+      ? Object.keys(savedDeltas).length
+      : 0;
+  const deltaCount = Math.max(Number(progressionMeta?.deltaCount || 0), storedDeltaCount);
   const metaMatches = Number(progressionMeta?.appliedForSeasonYear) === Number(seasonYear);
-  const deltaCount = Number(progressionMeta?.deltaCount || 0);
+  const stageDone = progressionMeta?.stage === "DONE" || progressionMeta?.deltasSaved === true;
+  const offseasonSaysComplete = Boolean(offseasonState?.progressionComplete);
+
+  const liveAgeAudit =
+    leagueData && !isIndexedDbLeaguePointer(leagueData)
+      ? getProgressionAgeCompletionAudit(leagueData, seasonYear)
+      : makeUnavailableAgeAudit(seasonYear, "NO_LIVE_FULL_LEAGUE_OBJECT");
+  const savedAgeAudit =
+    savedLeague && !isIndexedDbLeaguePointer(savedLeague)
+      ? getProgressionAgeCompletionAudit(savedLeague, seasonYear)
+      : makeUnavailableAgeAudit(seasonYear, "LOCALSTORAGE_INDEXEDDB_POINTER");
+  const ageAudit = liveAgeAudit.ok ? liveAgeAudit : savedAgeAudit.ok ? savedAgeAudit : liveAgeAudit;
+
+  const markerOk = metaMatches && stageDone && deltaCount > 0;
 
   return {
-    ok: metaMatches && deltaCount > 0 && ageAudit.ok,
+    ok: markerOk && (ageAudit.ok || offseasonSaysComplete),
     metaMatches,
+    stageDone,
     deltaCount,
+    storedDeltaCount,
     progressionMeta,
     ageAudit,
+    liveAgeAudit,
+    savedAgeAudit,
+    offseasonSaysComplete,
+    localStorageIsPointer: isIndexedDbLeaguePointer(savedLeague),
   };
 }
 
@@ -1998,7 +2045,7 @@ export default function OffseasonHub() {
   };
 
   const handleAdvanceToNewSeason = async () => {
-    const progressionCheck = isProgressionReallyCompleteForSeason(seasonYear);
+    const progressionCheck = isProgressionReallyCompleteForSeason(seasonYear, leagueData, offseasonState);
 
     if (!progressionCheck.ok) {
       console.error("[OffseasonHub] Blocked season advance because progression completion is not valid.", progressionCheck);
@@ -2016,9 +2063,13 @@ export default function OffseasonHub() {
       setOffseasonState(nextBlocked);
       saveOffseasonState(nextBlocked);
 
-      try {
-        localStorage.removeItem(PROG_META_KEY);
-      } catch {}
+      if (!progressionCheck.metaMatches || progressionCheck.deltaCount <= 0) {
+        try {
+          localStorage.removeItem(PROG_META_KEY);
+        } catch {}
+      } else {
+        console.warn("[OffseasonHub] Kept progression meta because the marker/deltas exist; block was caused by validation context, not a missing progression run.", progressionCheck);
+      }
 
       navigate("/player-progression");
       return;

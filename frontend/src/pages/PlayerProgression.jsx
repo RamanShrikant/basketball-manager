@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { computePlayerProgression } from "../api/simEnginePy";
+import { saveLeagueData } from "../utils/leagueStorage.js";
 import styles from "./PlayerProgression.module.css";
 
 const DELTAS_KEY = "bm_progression_deltas_v1";
@@ -1507,6 +1508,29 @@ function isProgressionLeagueValidForSeason(league, seasonYear) {
   return getProgressionAgeCompletionAudit(league, seasonYear).ok;
 }
 
+function isIndexedDbLeaguePointer(value = {}) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      value.__storageMode === "indexedDB" &&
+      !value.teams &&
+      !value.conferences
+  );
+}
+
+function makeUnavailableAgeAudit(seasonYear, reason = "NO_FULL_LEAGUE_OBJECT") {
+  return {
+    seasonYear: Number(seasonYear || 0),
+    totalPlayers: 0,
+    freeAgentPlayers: 0,
+    staleCount: 0,
+    staleExamples: [],
+    ok: false,
+    unavailable: true,
+    reason,
+  };
+}
+
 
 function readJsonSafe(key, fallback) {
   try {
@@ -2049,12 +2073,21 @@ export default function PlayerProgression() {
     }
 
     const savedLeagueForReturn = readJsonSafe(LEAGUE_KEY, null);
-    const returnAgeAudit = getProgressionAgeCompletionAudit(savedLeagueForReturn, resolvedSeasonYear);
-    const returnProgressionValid = savedDeltaCount > 0 && returnAgeAudit.ok;
+    const savedLeagueIsPointer = isIndexedDbLeaguePointer(savedLeagueForReturn);
+    const contextAgeAudit = getProgressionAgeCompletionAudit(leagueData, resolvedSeasonYear);
+    const savedAgeAudit = savedLeagueIsPointer
+      ? makeUnavailableAgeAudit(resolvedSeasonYear, "LOCALSTORAGE_INDEXEDDB_POINTER")
+      : getProgressionAgeCompletionAudit(savedLeagueForReturn, resolvedSeasonYear);
+    const existingProgMeta = readJsonSafe(PROG_META_KEY, {}) || {};
+    const metaAlreadyDone =
+      Number(existingProgMeta?.appliedForSeasonYear) === Number(resolvedSeasonYear) &&
+      (existingProgMeta?.stage === "DONE" || existingProgMeta?.deltasSaved === true);
+    const returnAgeAudit = contextAgeAudit.ok ? contextAgeAudit : savedAgeAudit;
+    const returnProgressionValid =
+      savedDeltaCount > 0 && (contextAgeAudit.ok || savedAgeAudit.ok || metaAlreadyDone);
 
     try {
       if (returnProgressionValid) {
-        const existingProgMeta = readJsonSafe(PROG_META_KEY, {}) || {};
         localStorage.setItem(
           PROG_META_KEY,
           JSON.stringify({
@@ -2072,6 +2105,9 @@ export default function PlayerProgression() {
           resolvedSeasonYear,
           savedDeltaCount,
           returnAgeAudit,
+          contextAgeAudit,
+          savedAgeAudit,
+          savedLeagueIsPointer,
         });
       }
     } catch (err) {
@@ -2098,6 +2134,9 @@ export default function PlayerProgression() {
         resolvedSeasonYear,
         savedDeltaCount,
         returnAgeAudit,
+        contextAgeAudit,
+        savedAgeAudit,
+        savedLeagueIsPointer,
       });
     }
 
@@ -2347,23 +2386,25 @@ export default function PlayerProgression() {
 
           if (done) {
             try {
-              const updatedLeague = readJsonSafe(LEAGUE_KEY, null);
+              const savedLeague = readJsonSafe(LEAGUE_KEY, null);
               const savedDeltas = readJsonSafe(DELTAS_KEY, {});
-              const savedAgeAudit = getProgressionAgeCompletionAudit(updatedLeague, seasonYear);
+              const savedLeagueIsPointer = isIndexedDbLeaguePointer(savedLeague);
+              const candidateLeague = savedLeagueIsPointer ? leagueData : savedLeague;
+              const savedAgeAudit = candidateLeague
+                ? getProgressionAgeCompletionAudit(candidateLeague, seasonYear)
+                : makeUnavailableAgeAudit(seasonYear, "NO_CANDIDATE_LEAGUE_AFTER_INFLIGHT");
 
-              if (updatedLeague && savedAgeAudit.ok) {
-                hydrateProgressedLeagueIntoState(updatedLeague, savedDeltas || {}, "inflight-attached-done");
+              if (candidateLeague && savedAgeAudit.ok) {
+                hydrateProgressedLeagueIntoState(candidateLeague, savedDeltas || {}, "inflight-attached-done");
               } else {
-                console.error("[PlayerProgression] Inflight run finished with invalid saved ages. Clearing bad progression cache.", {
+                console.error("[PlayerProgression] Inflight run finished but no full saved league was available yet.", {
                   runId,
                   seasonYear,
                   savedAgeAudit,
+                  savedLeagueIsPointer,
+                  savedDeltaCount: Object.keys(savedDeltas || {}).length,
                 });
-                try {
-                  localStorage.removeItem(PROG_META_KEY);
-                  localStorage.removeItem(DELTAS_KEY);
-                } catch {}
-                setTimeout(() => window.location.reload(), 0);
+                setDeltas(savedDeltas || {});
               }
             } finally {
               clearInterval(inflightInterval);
@@ -2400,7 +2441,11 @@ export default function PlayerProgression() {
           ? Object.keys(savedDeltas).length
           : 0;
       const savedLeague = readJsonSafe(LEAGUE_KEY, null);
-      const savedAgeAudit = getProgressionAgeCompletionAudit(savedLeague, seasonYear);
+      const savedLeagueIsPointer = isIndexedDbLeaguePointer(savedLeague);
+      const contextAgeAudit = getProgressionAgeCompletionAudit(leagueData, seasonYear);
+      const savedAgeAudit = savedLeagueIsPointer
+        ? contextAgeAudit
+        : getProgressionAgeCompletionAudit(savedLeague, seasonYear);
       const canTrustSavedProgression =
         savedDeltaCount > 0 &&
         progMeta?.deltasSaved !== false &&
@@ -2420,7 +2465,7 @@ export default function PlayerProgression() {
         if (!hasHydratedSavedProgressionRef.current) {
           hasHydratedSavedProgressionRef.current = true;
 
-          if (savedLeague) {
+          if (savedLeague && !savedLeagueIsPointer) {
             const currentSig = leagueProgressionSignature(leagueData);
             const savedSig = leagueProgressionSignature(savedLeague);
 
@@ -2434,6 +2479,11 @@ export default function PlayerProgression() {
             if (currentSig !== savedSig) {
               hydrateProgressedLeagueIntoState(savedLeague, savedDeltas, "already-applied-hydration");
             }
+          } else if (savedLeagueIsPointer) {
+            console.log("[PlayerProgression] Saved leagueData is an IndexedDB pointer; trusting current React leagueData for already-applied progression.", {
+              seasonYear,
+              contextAgeAudit,
+            });
           } else {
             console.warn("[PlayerProgression] Deltas exist but saved leagueData was missing.");
           }
@@ -2696,24 +2746,28 @@ export default function PlayerProgression() {
 
           didSaveDeltas = ppTrySetItem(DELTAS_KEY, newDeltas, "progression-deltas");
 
-          console.log("[PPDBG] writing LEAGUE_KEY", {
+          console.log("[PPDBG] saving progressed leagueData through IndexedDB-aware storage", {
             runId,
             seasonYear,
             compactedForProgressionSave: true,
           });
 
-          didSaveLeague = ppTrySetItem(LEAGUE_KEY, leagueForSave, "progressed-leagueData");
-
-          if (!didSaveLeague) {
-            console.warn("[PlayerProgression] Normal compact progression save failed. Retrying emergency compact save.", {
+          try {
+            await saveLeagueData(leagueForSave);
+            didSaveLeague = true;
+          } catch (saveErr) {
+            console.warn("[PlayerProgression] Normal compact IndexedDB save failed. Retrying emergency compact save.", {
               runId,
               seasonYear,
+              saveErr,
             });
             leagueForSave = compactLeagueDataForProgressionStorage(updatedLeague, true);
-            didSaveLeague = ppTrySetItem(LEAGUE_KEY, leagueForSave, "progressed-leagueData-emergency-compact");
+            await saveLeagueData(leagueForSave);
+            didSaveLeague = true;
           }
 
-          const savedLeagueImmediately = readJsonSafe(LEAGUE_KEY, null);
+          const savedLeagueStorageMarker = readJsonSafe(LEAGUE_KEY, null);
+          const savedLeagueImmediately = leagueForSave;
           const savedDeltasImmediately = readJsonSafe(DELTAS_KEY, {});
           const savedAgeAudit = getProgressionAgeCompletionAudit(savedLeagueImmediately, seasonYear);
 
@@ -2724,21 +2778,22 @@ export default function PlayerProgression() {
             didSaveDeltas,
             didSaveLeague,
             savedAgeAudit,
+            savedLeagueStorageMode: savedLeagueStorageMarker?.__storageMode || "full_localStorage_or_unknown",
           });
-          ppPersistenceAudit(leagueForSave, savedLeagueImmediately, "UPDATED_LEAGUE_vs_LOCALSTORAGE_IMMEDIATELY_AFTER_SAVE", {
+          ppPersistenceAudit(leagueForSave, savedLeagueImmediately, "UPDATED_LEAGUE_vs_INDEXEDDB_SAVE_SOURCE", {
             runId,
             seasonYear,
             didSaveDeltas,
             didSaveLeague,
             savedAgeAudit,
           });
-          ppAgeAudit(beforeSnapshot, savedLeagueImmediately, "BEFORE_vs_SAVED_LOCALSTORAGE_AFTER_SAVE", {
+          ppAgeAudit(beforeSnapshot, savedLeagueImmediately, "BEFORE_vs_SAVED_INDEXEDDB_SOURCE_AFTER_SAVE", {
             runId,
             seasonYear,
             didSaveLeague,
             savedAgeAudit,
           });
-          ppLogAgeGuards("SAVED_LOCALSTORAGE_AFTER_SAVE_GUARDS", savedLeagueImmediately, seasonYear);
+          ppLogAgeGuards("SAVED_INDEXEDDB_SOURCE_AFTER_SAVE_GUARDS", savedLeagueImmediately, seasonYear);
           ppDeltaAgeSummary(savedDeltasImmediately, "SAVED_DELTAS_IMMEDIATELY_AFTER_SAVE", {
             runId,
             seasonYear,
