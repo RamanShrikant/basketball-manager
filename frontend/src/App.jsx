@@ -5,15 +5,15 @@ import PlayerEditor from "./pages/PlayerEditor.jsx";
 import TradeSimulator from "./pages/TradeSimulator.jsx";
 import GameSimulator from "./pages/GameSimulator.jsx";
 import LeagueEditor from "./pages/LeagueEditor.jsx";
-import Play from "./pages/Play.jsx"; // ✅ new
-import TeamSelector from "./components/TeamSelector.jsx"; // ✅ will add next
+import Play from "./pages/Play.jsx";
+import TeamSelector from "./components/TeamSelector.jsx";
 import TeamHub from "./pages/TeamHub.jsx";
 import RosterView from "./pages/RosterView.jsx";
 import CoachGameplan from "./pages/CoachGameplan.jsx";
 import Calendar from "./pages/Calendar.jsx";
 import PlayerStats from "./pages/PlayerStats.jsx";
 import Standings from "./pages/Standings.jsx";
-import Awards from "./pages/Awards"; // ⬅️ add this
+import Awards from "./pages/Awards";
 import Playoffs from "./pages/Playoffs.jsx";
 import FinalsMvp from "./pages/FinalsMVP.jsx";
 import PlayerProgression from "./pages/PlayerProgression";
@@ -30,6 +30,12 @@ import RookieSignings from "./pages/RookieSignings.jsx";
 import RosterFinalization from "./pages/RosterFinalization.jsx";
 import PowerRankings from "./pages/PowerRankings.jsx";
 import DraftPicks from "./pages/DraftPicks.jsx";
+import Trades from "./pages/Trades.jsx";
+import ProposeTrade from "./pages/ProposeTrade.jsx";
+import TradePlayerSelect from "./pages/TradePlayerSelect.jsx";
+import TradePickSelect from "./pages/TradePickSelect.jsx";
+import TradeFinder from "./pages/TradeFinder.jsx";
+import LockerRoom from "./pages/LockerRoom.jsx";
 
 function App() {
   return (
@@ -43,7 +49,7 @@ function App() {
           <Route path="trade" element={<TradeSimulator />} />
           <Route path="simulate" element={<GameSimulator />} />
           <Route path="league-editor" element={<LeagueEditor />} />
-          <Route path="awards" element={<Awards />} />  {/* ✅ no leading slash */}
+          <Route path="awards" element={<Awards />} />
           <Route path="/finals-mvp" element={<FinalsMvp />} />
         </Route>
 
@@ -62,6 +68,12 @@ function App() {
         <Route path="/standings" element={<Standings />} />
         <Route path="/power-rankings" element={<PowerRankings />} />
         <Route path="/draft-picks" element={<DraftPicks />} />
+        <Route path="/trades" element={<Trades />} />
+        <Route path="/propose-trade" element={<ProposeTrade />} />
+        <Route path="/trade-player-select" element={<TradePlayerSelect />} />
+        <Route path="/trade-pick-select" element={<TradePickSelect />} />
+        <Route path="/trade-finder" element={<TradeFinder />} />
+        <Route path="/locker-room" element={<LockerRoom />} />
         <Route path="/playoffs" element={<Playoffs />} />
         <Route path="/player-progression" element={<PlayerProgression />} />
         <Route path="salary-table" element={<SalaryTable />} />

@@ -129,7 +129,8 @@ export default function TeamHub() {
 
   const normalTiles = [
     { name: "View Roster", path: "/roster-view", enabled: true },
-    { name: "Trades", path: "#", enabled: false },
+    { name: "Locker Room", path: "/locker-room", enabled: true },
+    { name: "Trades", path: "/trades", enabled: true },
     { name: "Power Rankings", path: "/power-rankings", enabled: true },
     { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
@@ -144,7 +145,8 @@ export default function TeamHub() {
   const offseasonTiles = [
     { name: "Return to Offseason Hub", path: offseasonReturnTo, enabled: true },
     { name: "View Roster", path: "/roster-view", enabled: true },
-    { name: "Trades", path: "#", enabled: false },
+    { name: "Locker Room", path: "/locker-room", enabled: true },
+    { name: "Trades", path: "/trades", enabled: true },
     { name: "Power Rankings", path: "/power-rankings", enabled: true },
     { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Free Agents", path: offseasonFreeAgentsPath, enabled: true },
@@ -159,6 +161,7 @@ export default function TeamHub() {
   const playoffTiles = [
     { name: "Return to Playoffs", path: playoffReturnTo, enabled: true },
     { name: "View Roster", path: "/roster-view", enabled: true },
+    { name: "Locker Room", path: "/locker-room", enabled: true },
     { name: "Trades", path: "#", enabled: false },
     { name: "Power Rankings", path: "/power-rankings", enabled: true },
     { name: "Draft Picks", path: "/draft-picks", enabled: true },
@@ -272,6 +275,10 @@ export default function TeamHub() {
                       ? "League-wide team ratings"
                       : tile.name === "Draft Picks"
                       ? "Team draft assets"
+                      : tile.name === "Trades"
+                      ? "Propose and review trades"
+                      : tile.name === "Locker Room"
+                      ? "Player morale and role check"
                       : selectedTeam.name}
                   </div>
                 </div>

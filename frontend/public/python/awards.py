@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-AWARDS_PY_VERSION = "2026-06-04_roty_tracker_alignment_v1"
+AWARDS_PY_VERSION = "2026-06-21_mip_history_award_v1"
 
 # ---------------------------------------------------------------------------
 # UTILITIES
@@ -231,6 +231,160 @@ def _impact_roty(p, c, max_mpg):
         0.04 * _norm_range_hi(_defr(p), c["def_lo"], c["def_hi"])
     )
 
+# MIP: compares current simulated production to the real/saved previous season
+# attached by Calendar.jsx from player.history.seasons. This deliberately does
+# not require a worker or sim-engine change because it rides inside each row.
+def _safe_float(value, default=0.0):
+    try:
+        if value in [None, ""]:
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+def _mip_prev_row(p):
+    for key in ["mip_prev", "mipPrev", "previousSeasonStats", "prevSeasonStats"]:
+        row = p.get(key)
+        if isinstance(row, dict) and row:
+            return row
+    return {}
+
+def _mip_prev_games(prev):
+    return int(_safe_float(prev.get("games", prev.get("gp", 0)), 0))
+
+def _mip_prev_stat(prev, key):
+    aliases = {
+        "ppg": ["ppg", "pts", "PTS"],
+        "rpg": ["rpg", "reb", "REB"],
+        "apg": ["apg", "ast", "AST"],
+        "spg": ["spg", "stl", "STL"],
+        "bpg": ["bpg", "blk", "BLK"],
+        "fgPct": ["fgPct", "fg_pct", "FG", "fg"],
+        "threePct": ["threePct", "tpPct", "three_pct", "3P", "tp"],
+        "ftPct": ["ftPct", "ft_pct", "FT", "ft"],
+    }.get(key, [key])
+
+    for alias in aliases:
+        if alias in prev and prev.get(alias) not in [None, ""]:
+            return _safe_float(prev.get(alias), 0.0)
+    return 0.0
+
+def _mip_current_fg_pct(p):
+    fga = _safe_float(p.get("fga"), 0.0)
+    if fga <= 0:
+        return 0.0
+    return 100.0 * _safe_float(p.get("fgm"), 0.0) / fga
+
+def _mip_prod(ppg, rpg, apg, spg, bpg):
+    return (
+        ppg +
+        0.55 * rpg +
+        0.65 * apg +
+        1.35 * spg +
+        1.35 * bpg
+    )
+
+def _is_mip_candidate(p, season_js=None):
+    if _is_rookie_candidate(p, season_js):
+        return False
+
+    prev = _mip_prev_row(p)
+    if not prev:
+        return False
+
+    prev_games = _mip_prev_games(prev)
+    if _gp(p) < 40 or prev_games < 25:
+        return False
+
+    # Keeps pure garbage-time jumps out while still allowing real breakout bench-to-starter seasons.
+    if _mpg(p) < 18:
+        return False
+
+    prev_ppg = _mip_prev_stat(prev, "ppg")
+    prev_prod = _mip_prod(
+        prev_ppg,
+        _mip_prev_stat(prev, "rpg"),
+        _mip_prev_stat(prev, "apg"),
+        _mip_prev_stat(prev, "spg"),
+        _mip_prev_stat(prev, "bpg"),
+    )
+    curr_prod = _mip_prod(_ppg(p), _rpg(p), _apg(p), _spg(p), _bpg(p))
+
+    # Already-superstar seasons should stay in MVP/All-NBA instead of stealing MIP.
+    if prev_ppg >= 24.0 and prev_prod >= 32.0:
+        return False
+
+    # Require an actual improvement, not just a different stat shape.
+    if (curr_prod - prev_prod) < 1.0 and (_ppg(p) - prev_ppg) < 1.0:
+        return False
+
+    return True
+
+def _impact_mip(p):
+    prev = _mip_prev_row(p)
+
+    prev_ppg = _mip_prev_stat(prev, "ppg")
+    prev_rpg = _mip_prev_stat(prev, "rpg")
+    prev_apg = _mip_prev_stat(prev, "apg")
+    prev_spg = _mip_prev_stat(prev, "spg")
+    prev_bpg = _mip_prev_stat(prev, "bpg")
+    prev_fg = _mip_prev_stat(prev, "fgPct")
+
+    curr_ppg = _ppg(p)
+    curr_rpg = _rpg(p)
+    curr_apg = _apg(p)
+    curr_spg = _spg(p)
+    curr_bpg = _bpg(p)
+
+    prev_prod = _mip_prod(prev_ppg, prev_rpg, prev_apg, prev_spg, prev_bpg)
+    curr_prod = _mip_prod(curr_ppg, curr_rpg, curr_apg, curr_spg, curr_bpg)
+    prod_delta = curr_prod - prev_prod
+    relative_gain = prod_delta / max(prev_prod, 5.0)
+
+    ppg_delta = curr_ppg - prev_ppg
+    rpg_delta = curr_rpg - prev_rpg
+    apg_delta = curr_apg - prev_apg
+    spg_delta = curr_spg - prev_spg
+    bpg_delta = curr_bpg - prev_bpg
+
+    fg_delta = _mip_current_fg_pct(p) - prev_fg if prev_fg > 0 else 0.0
+    role_bonus = min(_mpg(p), 36.0) / 36.0
+    wins_bonus = _norm_wins(p.get("_team_wins", 0), 82, gamma=2.0)
+
+    score = (
+        3.25 * max(0.0, relative_gain) +
+        0.88 * max(0.0, ppg_delta) +
+        0.42 * max(0.0, rpg_delta) +
+        0.48 * max(0.0, apg_delta) +
+        1.10 * max(0.0, spg_delta) +
+        1.10 * max(0.0, bpg_delta) +
+        0.18 * max(0.0, fg_delta) +
+        0.35 * role_bonus +
+        0.18 * wins_bonus
+    )
+
+    # Tiny baselines can inflate relative_gain, so temper those cases.
+    if prev_prod < 6.0:
+        score *= 0.78
+
+    # Strong established scorers can still win, but they need a very real leap.
+    if prev_ppg >= 18.0:
+        score *= 0.88
+
+    p["_mip"] = score
+    p["_mipEligible"] = True
+    p["mip_prev_season_year"] = prev.get("seasonYear") or prev.get("season") or prev.get("year")
+    p["mip_prev_team"] = prev.get("teamName") or prev.get("team")
+    p["mip_prev_games"] = _mip_prev_games(prev)
+    p["mip_prev_ppg"] = round(prev_ppg, 3)
+    p["mip_prev_rpg"] = round(prev_rpg, 3)
+    p["mip_prev_apg"] = round(prev_apg, 3)
+    p["mip_ppg_delta"] = round(ppg_delta, 3)
+    p["mip_rpg_delta"] = round(rpg_delta, 3)
+    p["mip_apg_delta"] = round(apg_delta, 3)
+    p["mip_prod_delta"] = round(prod_delta, 3)
+    return score
+
 # Finals MVP weights unchanged, but def_rating direction is fixed (higher is better)
 def _impact_fmvp(p, c):
     return (
@@ -370,6 +524,13 @@ def compute_awards(players_js, teams_js, season_js=None):
 
     roty_sorted = sorted(rookies, key=lambda p: p.get("_roty", 0.0), reverse=True)
 
+    # MIP ladder: current simulated stats vs player.history.seasons previous row.
+    mip_candidates = [p for p in eligible if _is_mip_candidate(p, season_js)]
+    for p in mip_candidates:
+        _impact_mip(p)
+
+    mip_sorted = sorted(mip_candidates, key=lambda p: p.get("_mip", 0.0), reverse=True)
+
     # --- DEBUG: MVP race with wins + impact ---
     dbg_mvp = [(p.get("player"), p.get("team"), p.get("_team_wins"), p.get("_impact")) for p in mvp_race]
 
@@ -397,6 +558,9 @@ def compute_awards(players_js, teams_js, season_js=None):
 
         "sixth_man": sixth_sorted[0] if sixth_sorted else None,
         "sixth_man_race": sixth_sorted[:5],
+
+        "mip": mip_sorted[0] if mip_sorted else None,
+        "mip_race": mip_sorted[:5],
 
         "roty": roty_sorted[0] if roty_sorted else None,
         "roty_race": roty_sorted[:5],

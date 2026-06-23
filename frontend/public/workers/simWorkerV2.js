@@ -30,6 +30,7 @@ const pythonFiles = [
   "progression.py",
   "league_financials.py",
   "free_agency_logic.py",
+  "player_mood_logic.py",
   "retirement_logic.py",
   "all_star_logic.py",
   "draft_lottery.py",
@@ -521,6 +522,44 @@ async function repairCpuTeamsToMinRoster(requestId, leagueData, payload) {
 }
 
 // ------------------------------------------------------------
+// PLAYER MOOD / LOCKER ROOM REQUEST MODE
+// ------------------------------------------------------------
+async function runPlayerMoodRequest(requestId, leagueData, payload) {
+  try {
+    pyodide.globals.set("player_mood_request_js", pyodide.toPy({
+      action: "get_locker_room_moods",
+      leagueData: leagueData || {},
+      payload: payload || {},
+    }));
+
+    const pyJson = await pyodide.runPythonAsync(`
+import importlib, json
+import player_mood_logic
+importlib.reload(player_mood_logic)
+from player_mood_logic import handle_request
+
+res = handle_request(player_mood_request_js)
+json.dumps(res)
+    `);
+
+    const payloadOut = JSON.parse(pyJson);
+
+    postMessage({
+      type: "player-mood-result",
+      requestId,
+      payload: payloadOut,
+    });
+  } catch (err) {
+    console.error("[simWorkerV2] player mood request error:", err);
+    postMessage({
+      type: "player-mood-error",
+      requestId,
+      error: err.toString(),
+    });
+  }
+}
+
+// ------------------------------------------------------------
 // PLAYER RETIREMENT GENERIC REQUEST MODE
 // ------------------------------------------------------------
 async function runRetirementRequest(requestId, leagueData, payload, okType, errType) {
@@ -835,6 +874,12 @@ if (msg.type === "preview-rights-management") {
   if (msg.type === "apply-rights-management") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return applyRightsManagement(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  // locker room / player moods
+  if (msg.type === "get-locker-room-moods") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return runPlayerMoodRequest(msg.requestId, leaguePayload, msg.payload || {});
   }
 
   // player retirements

@@ -33,6 +33,11 @@ const TAB_META = {
     short: "6MOY",
     description: "Top 10 bench players based on role and production.",
   },
+  mip: {
+    title: "MIP Ladder",
+    short: "MIP",
+    description: "Top 10 season-to-season breakout players using saved player-card history.",
+  },
   roty: {
     title: "ROTY Ladder",
     short: "ROTY",
@@ -360,6 +365,101 @@ function impactRoty(p, c, maxMpg) {
   );
 }
 
+function prevMipStat(prev, key) {
+  if (!prev) return 0;
+
+  const aliases = {
+    ppg: ["ppg", "pts", "PTS"],
+    rpg: ["rpg", "reb", "REB"],
+    apg: ["apg", "ast", "AST"],
+    spg: ["spg", "stl", "STL"],
+    bpg: ["bpg", "blk", "BLK"],
+    fgPct: ["fgPct", "fg_pct", "FG", "fg"],
+  }[key] || [key];
+
+  for (const alias of aliases) {
+    if (prev?.[alias] !== undefined && prev?.[alias] !== null && prev?.[alias] !== "") {
+      const n = Number(prev[alias]);
+      return Number.isFinite(n) ? n : 0;
+    }
+  }
+
+  return 0;
+}
+
+function mipProdFromValues(ppgVal, rpgVal, apgVal, spgVal, bpgVal) {
+  return (
+    Number(ppgVal || 0) +
+    0.55 * Number(rpgVal || 0) +
+    0.65 * Number(apgVal || 0) +
+    1.35 * Number(spgVal || 0) +
+    1.35 * Number(bpgVal || 0)
+  );
+}
+
+function currentFgPct(p) {
+  const fga = Number(p.fga || 0);
+  if (!fga) return 0;
+  return (Number(p.fgm || 0) / fga) * 100;
+}
+
+function isMipEligible(p, seasonYear) {
+  if (isRookieCandidate(p, seasonYear)) return false;
+
+  const prev = p.mipPrev || p.mip_prev || p.previousSeasonStats;
+  if (!prev) return false;
+
+  const prevGames = Number(prev.games ?? prev.gp ?? 0);
+  if (Number(p.gp || 0) < TRACKER_MIN_GAMES || prevGames < 25) return false;
+  if (mpg(p) < 14) return false;
+
+  const prevPpg = prevMipStat(prev, "ppg");
+  const prevProd = mipProdFromValues(
+    prevPpg,
+    prevMipStat(prev, "rpg"),
+    prevMipStat(prev, "apg"),
+    prevMipStat(prev, "spg"),
+    prevMipStat(prev, "bpg")
+  );
+  const currProd = mipProdFromValues(ppg(p), rpg(p), apg(p), spg(p), bpg(p));
+
+  if (prevPpg >= 24 && prevProd >= 32) return false;
+  return (currProd - prevProd) >= 0.75 || (ppg(p) - prevPpg) >= 0.75;
+}
+
+function impactMip(p) {
+  const prev = p.mipPrev || p.mip_prev || p.previousSeasonStats || {};
+
+  const prevPpg = prevMipStat(prev, "ppg");
+  const prevRpg = prevMipStat(prev, "rpg");
+  const prevApg = prevMipStat(prev, "apg");
+  const prevSpg = prevMipStat(prev, "spg");
+  const prevBpg = prevMipStat(prev, "bpg");
+  const prevFg = prevMipStat(prev, "fgPct");
+
+  const currProd = mipProdFromValues(ppg(p), rpg(p), apg(p), spg(p), bpg(p));
+  const prevProd = mipProdFromValues(prevPpg, prevRpg, prevApg, prevSpg, prevBpg);
+  const prodDelta = currProd - prevProd;
+  const relativeGain = prodDelta / Math.max(prevProd, 5);
+  const fgDelta = prevFg > 0 ? currentFgPct(p) - prevFg : 0;
+
+  let score =
+    3.25 * Math.max(0, relativeGain) +
+    0.88 * Math.max(0, ppg(p) - prevPpg) +
+    0.42 * Math.max(0, rpg(p) - prevRpg) +
+    0.48 * Math.max(0, apg(p) - prevApg) +
+    1.10 * Math.max(0, spg(p) - prevSpg) +
+    1.10 * Math.max(0, bpg(p) - prevBpg) +
+    0.18 * Math.max(0, fgDelta) +
+    0.35 * norm(mpg(p), 36) +
+    0.18 * normWins(p._team_wins);
+
+  if (prevProd < 6) score *= 0.78;
+  if (prevPpg >= 18) score *= 0.88;
+
+  return score;
+}
+
 function isSixthManEligible(p) {
   const gp = Number(p.gp || 0);
   const starts = Number(p.started || 0);
@@ -404,7 +504,55 @@ function buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById) {
   }));
 }
 
-function buildRosterInfoIndex(leagueData) {
+function combineTrackerSeasonRows(rows) {
+  const clean = (rows || []).filter((row) => row && row.rowType !== "total");
+  const games = clean.reduce((sum, row) => sum + Number(row.games ?? row.gp ?? 0), 0);
+  const safeGames = games || 1;
+
+  const weighted = (key) =>
+    clean.reduce((sum, row) => sum + Number(row[key] || 0) * Number(row.games ?? row.gp ?? 0), 0) / safeGames;
+
+  const latest = [...clean].reverse().find(Boolean) || {};
+
+  return {
+    seasonYear: latest.seasonYear,
+    teamName: clean.length > 1 ? "Total" : latest.teamName,
+    teamLogo: clean.length > 1 ? "" : latest.teamLogo,
+    rowType: clean.length > 1 ? "total" : latest.rowType || "team",
+    games,
+    ppg: weighted("ppg"),
+    rpg: weighted("rpg"),
+    apg: weighted("apg"),
+    spg: weighted("spg"),
+    bpg: weighted("bpg"),
+    fgPct: weighted("fgPct"),
+    threePct: weighted("threePct"),
+    ftPct: weighted("ftPct"),
+  };
+}
+
+function getPreviousTrackerSeasonFromHistory(player, currentDisplaySeasonYear = null) {
+  const seasons = Array.isArray(player?.history?.seasons) ? player.history.seasons : [];
+  const grouped = new Map();
+
+  for (const row of seasons) {
+    if (!row || row.rowType === "total") continue;
+
+    const seasonYear = Number(row.seasonYear || 0);
+    if (!seasonYear) continue;
+    if (currentDisplaySeasonYear && seasonYear >= Number(currentDisplaySeasonYear)) continue;
+
+    if (!grouped.has(seasonYear)) grouped.set(seasonYear, []);
+    grouped.get(seasonYear).push(row);
+  }
+
+  if (!grouped.size) return null;
+
+  const latestYear = Math.max(...Array.from(grouped.keys()).map(Number));
+  return combineTrackerSeasonRows(grouped.get(latestYear) || []);
+}
+
+function buildRosterInfoIndex(leagueData, currentDisplaySeasonYear = null) {
   const teams = getAllTeamsFromLeague(leagueData);
   const idx = {};
 
@@ -460,6 +608,7 @@ function buildRosterInfoIndex(leagueData) {
           0,
         contract,
         meta,
+        mipPrev: getPreviousTrackerSeasonFromHistory(p, currentDisplaySeasonYear),
         contractType: p?.contractType ?? contract?.type ?? null,
         rosterStatus: p?.rosterStatus ?? null,
         draftYear: firstPresent(p?.draftYear, meta?.draftYear, contract?.draftYear),
@@ -483,6 +632,9 @@ function buildRosterInfoIndex(leagueData) {
 }
 
 function buildDisplayRow(p) {
+  const prev = p.mipPrev || p.mip_prev || p.previousSeasonStats || null;
+  const prevPpg = prevMipStat(prev, "ppg");
+
   return {
     ...p,
     ppg: fmt1(ppg(p)),
@@ -491,6 +643,8 @@ function buildDisplayRow(p) {
     spg: fmt1(spg(p)),
     bpg: fmt1(bpg(p)),
     mpg: fmt1(mpg(p)),
+    mipPrevPpg: fmt1(prevPpg),
+    mipDeltaPpg: fmt1(ppg(p) - prevPpg),
     impact: fmt1((p._score || 0) * 100),
   };
 }
@@ -521,6 +675,21 @@ function getColumnsForTab(tab) {
       { key: "AST", label: "AST" },
       { key: "Starts", label: "Starts" },
       { key: "Sixth", label: "Sixth" },
+      { key: "Impact", label: "Impact" },
+    ];
+  }
+
+  if (tab === "mip") {
+    return [
+      { key: "team", label: "Team" },
+      { key: "name", label: "Name" },
+      { key: "OVR", label: "OVR" },
+      { key: "GP", label: "GP" },
+      { key: "PTS", label: "PTS" },
+      { key: "PrevPTS", label: "Prev" },
+      { key: "DeltaPTS", label: "ΔPTS" },
+      { key: "REB", label: "REB" },
+      { key: "AST", label: "AST" },
       { key: "Impact", label: "Impact" },
     ];
   }
@@ -600,7 +769,7 @@ export default function AwardTracker() {
 
   const resultsById = useMemo(() => loadAllResultsV3(), []);
   const allTeams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
-  const rosterInfoIndex = useMemo(() => buildRosterInfoIndex(leagueData), [leagueData]);
+  const rosterInfoIndex = useMemo(() => buildRosterInfoIndex(leagueData, trackerSeasonYear + 1), [leagueData, trackerSeasonYear]);
 
   const teamWinsMap = useMemo(() => {
     const arr = buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById);
@@ -645,6 +814,7 @@ export default function AwardTracker() {
           potential: info.potential ?? null,
           headshot: info.headshot || null,
           teamLogo: info.teamLogo || null,
+          mipPrev: info.mipPrev || null,
           pos: info.pos || "",
           secondaryPos: info.secondaryPos || "",
           age: info.age ?? null,
@@ -735,12 +905,22 @@ export default function AwardTracker() {
       .slice(0, TRACKER_LIMIT);
   }, [rookiePool, eligiblePool]);
 
+  const mipTop10 = useMemo(() => {
+    const base = eligiblePool.filter((p) => isMipEligible(p, trackerSeasonYear));
+
+    return base
+      .map((p) => buildDisplayRow({ ...p, _score: impactMip(p) }))
+      .sort((a, b) => b._score - a._score)
+      .slice(0, TRACKER_LIMIT);
+  }, [eligiblePool, trackerSeasonYear]);
+
   const activeRows = useMemo(() => {
     if (currentTab === "dpoy") return dpoyTop10;
     if (currentTab === "sixth_man") return sixthTop10;
+    if (currentTab === "mip") return mipTop10;
     if (currentTab === "roty") return rotyTop10;
     return mvpTop10;
-  }, [currentTab, mvpTop10, dpoyTop10, sixthTop10, rotyTop10]);
+  }, [currentTab, mvpTop10, dpoyTop10, sixthTop10, mipTop10, rotyTop10]);
 
   useEffect(() => {
     if (!activeRows.length) {
@@ -799,6 +979,7 @@ export default function AwardTracker() {
           { k: "mvp", label: "MVP" },
           { k: "dpoy", label: "DPOY" },
           { k: "sixth_man", label: "6MOY" },
+          { k: "mip", label: "MIP" },
           { k: "roty", label: "ROTY" },
         ].map((tab) => (
           <button
@@ -985,6 +1166,15 @@ export default function AwardTracker() {
 
                       if (col.key === "PTS") {
                         return <td key={col.key}>{p.ppg}</td>;
+                      }
+
+                      if (col.key === "PrevPTS") {
+                        return <td key={col.key}>{p.mipPrevPpg}</td>;
+                      }
+
+                      if (col.key === "DeltaPTS") {
+                        const delta = Number(p.mipDeltaPpg || 0);
+                        return <td key={col.key}>{`${delta >= 0 ? "+" : ""}${delta.toFixed(1)}`}</td>;
                       }
 
                       if (col.key === "REB") {

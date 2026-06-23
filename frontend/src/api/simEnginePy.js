@@ -925,6 +925,35 @@ if (msg.type === "free-agency-process-rfa-match-error") {
       return;
     }
     // ------------------------------------------------------------
+    // PLAYER MOOD / LOCKER ROOM RESULT
+    // ------------------------------------------------------------
+    if (msg.type === "player-mood-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] player-mood-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "player-mood-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] player-mood-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Locker room mood check failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err, players: [] });
+      return;
+    }
+
+    // ------------------------------------------------------------
     // PLAYER RETIREMENTS RESULT
     // ------------------------------------------------------------
     if (msg.type === "player-retirements-result") {
@@ -1978,6 +2007,48 @@ export function applyRightsManagement(
     });
   });
 }
+// ------------------------------------------------------------
+// PUBLIC API - LOCKER ROOM / PLAYER MOODS
+// ------------------------------------------------------------
+export function getLockerRoomMoods(
+  leagueData,
+  teamName = null
+) {
+  startWorker();
+
+  const requestId = "PMOOD" + counter++;
+  const TIMEOUT_MS = 15000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("PLAYER_MOOD_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "get-locker-room-moods",
+      requestId,
+      leagueData: deepSanitize(leagueData),
+      payload: {
+        teamName,
+      },
+    });
+  });
+}
+
 export function runDraftLottery(leagueData, payload = {}) {
   startWorker();
   const requestId = "DL" + counter++;

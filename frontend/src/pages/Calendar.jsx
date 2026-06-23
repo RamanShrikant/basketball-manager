@@ -1423,7 +1423,76 @@ function buildDefRatingLookupFromLeague(allTeams) {
 // AWARDS: attach rookie eligibility metadata to player stat objects
 // by looking it up from leagueData rosters
 // ------------------------------------------------------------
-function buildAwardRosterMetaLookup(allTeams) {
+function safeAwardNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function weightedAwardAverage(total, games) {
+  return games > 0 ? total / games : 0;
+}
+
+function combineAwardSeasonRows(rows) {
+  const clean = (rows || []).filter((row) => row && row.rowType !== "total");
+  const games = clean.reduce((sum, row) => sum + safeAwardNumber(row.games ?? row.gp), 0);
+  const safeGames = games || 1;
+
+  const weighted = (key) =>
+    weightedAwardAverage(
+      clean.reduce((sum, row) => {
+        const rowGames = safeAwardNumber(row.games ?? row.gp);
+        return sum + safeAwardNumber(row[key]) * rowGames;
+      }, 0),
+      safeGames
+    );
+
+  const latest = [...clean].reverse().find(Boolean) || {};
+
+  return {
+    seasonYear: latest.seasonYear,
+    teamName: clean.length > 1 ? "Total" : latest.teamName,
+    teamLogo: clean.length > 1 ? "" : latest.teamLogo,
+    rowType: clean.length > 1 ? "total" : latest.rowType || "team",
+    games,
+    ppg: weighted("ppg"),
+    rpg: weighted("rpg"),
+    apg: weighted("apg"),
+    spg: weighted("spg"),
+    bpg: weighted("bpg"),
+    fgPct: weighted("fgPct"),
+    threePct: weighted("threePct"),
+    ftPct: weighted("ftPct"),
+  };
+}
+
+function getPreviousAwardSeasonFromHistory(player, currentDisplaySeasonYear = null) {
+  const seasons = Array.isArray(player?.history?.seasons)
+    ? player.history.seasons
+    : [];
+
+  const grouped = new Map();
+
+  for (const row of seasons) {
+    if (!row || row.rowType === "total") continue;
+
+    const seasonYear = safeAwardNumber(row.seasonYear, null);
+    if (!seasonYear) continue;
+
+    if (currentDisplaySeasonYear && seasonYear >= Number(currentDisplaySeasonYear)) {
+      continue;
+    }
+
+    if (!grouped.has(seasonYear)) grouped.set(seasonYear, []);
+    grouped.get(seasonYear).push(row);
+  }
+
+  if (!grouped.size) return null;
+
+  const latestYear = Math.max(...Array.from(grouped.keys()).map(Number));
+  return combineAwardSeasonRows(grouped.get(latestYear) || []);
+}
+
+function buildAwardRosterMetaLookup(allTeams, currentDisplaySeasonYear = null) {
   const map = {};
 
   for (const t of (allTeams || [])) {
@@ -1434,8 +1503,17 @@ function buildAwardRosterMetaLookup(allTeams) {
       const playerName = pl?.name || pl?.player;
       if (!playerName) continue;
 
+      const mipPrev = getPreviousAwardSeasonFromHistory(pl, currentDisplaySeasonYear);
+
       map[`${playerName}__${teamName}`] = {
         age: pl?.age,
+        overall: pl?.overall ?? pl?.ovr ?? pl?.rating ?? pl?.overall_rating,
+        potential: pl?.potential ?? pl?.pot ?? pl?.potential_rating,
+        offRating: pl?.offRating ?? pl?.off_rating,
+        defRating: pl?.defRating ?? pl?.def_rating,
+        mip_prev: mipPrev,
+        mipPrev,
+        previousSeasonStats: mipPrev,
         draftYear: pl?.draftYear ?? pl?.draft_year,
         rookieYear: pl?.rookieYear ?? pl?.rookie_year,
         rookieSeason: pl?.rookieSeason ?? pl?.rookie_season,
@@ -2106,7 +2184,7 @@ async function computeAndSaveCalendarAwards({
       }
     }
 
-    const rookieMetaMap = buildAwardRosterMetaLookup(staticTeams);
+    const rookieMetaMap = buildAwardRosterMetaLookup(staticTeams, seasonYear + 1);
 
     const playersArray = Object.values(currentStats || {}).map((p) => {
       const key = `${p.player}__${p.team}`;
@@ -2460,10 +2538,82 @@ const [simLock, setSimLock] = useState(false);
 const [allStarPromptOpen, setAllStarPromptOpen] = useState(false);
 const [allStarOpen, setAllStarOpen] = useState(false);
 const [allStarData, setAllStarData] = useState(null);
+const [tradeDeadlinePromptOpen, setTradeDeadlinePromptOpen] = useState(false);
 
 const ALL_STAR_DATE = fmt(new Date(seasonYear + 1, 1, 13));
 const ALL_STAR_HANDLED_KEY = `bm_all_star_handled_v1_${seasonYear}`;
 const allStarHandledRef = useRef(localStorage.getItem(ALL_STAR_HANDLED_KEY) === "true");
+
+const TRADE_DEADLINE_DATE = fmt(new Date(seasonYear + 1, 1, 4));
+const TRADE_DEADLINE_STATUS_KEY = "bm_trade_deadline_status_v1";
+const TRADE_DEADLINE_HANDLED_KEY = `bm_trade_deadline_handled_v1_${seasonYear}`;
+const tradeDeadlineHandledRef = useRef(
+  localStorage.getItem(TRADE_DEADLINE_HANDLED_KEY) === "true"
+);
+
+function writeTradeDeadlineStatus(updates = {}) {
+  try {
+    const existing = JSON.parse(
+      localStorage.getItem(TRADE_DEADLINE_STATUS_KEY) || "{}"
+    );
+
+    localStorage.setItem(
+      TRADE_DEADLINE_STATUS_KEY,
+      JSON.stringify({
+        ...existing,
+        seasonYear,
+        deadlineDate: TRADE_DEADLINE_DATE,
+        locked: false,
+        ...updates,
+      })
+    );
+  } catch {}
+}
+
+function refreshTradeDeadlineLockFromSchedule(schedule) {
+  const lastPlayedDate = getLastPlayedDateFromSchedule(schedule);
+  const locked = Boolean(lastPlayedDate && lastPlayedDate > TRADE_DEADLINE_DATE);
+
+  writeTradeDeadlineStatus({
+    locked,
+    lastPlayedDate: lastPlayedDate || null,
+    lockedAt: locked ? Date.now() : null,
+  });
+
+  return locked;
+}
+
+function openTradeDeadlinePrompt() {
+  writeTradeDeadlineStatus({
+    locked: false,
+    lastOfferDate: TRADE_DEADLINE_DATE,
+    promptOpen: true,
+    promptedAt: Date.now(),
+  });
+
+  setActionModal(null);
+  setBoxModal(null);
+  setTradeDeadlinePromptOpen(true);
+}
+
+function markTradeDeadlinePromptHandled(choice = "continue") {
+  try {
+    localStorage.setItem(TRADE_DEADLINE_HANDLED_KEY, "true");
+  } catch {}
+
+  tradeDeadlineHandledRef.current = true;
+  writeTradeDeadlineStatus({
+    locked: false,
+    promptOpen: false,
+    promptHandled: true,
+    promptChoice: choice,
+    promptedAt: Date.now(),
+  });
+}
+
+function shouldPauseForTradeDeadline(dateStr) {
+  return dateStr === TRADE_DEADLINE_DATE && !tradeDeadlineHandledRef.current;
+}
 
 useEffect(() => {
   allStarHandledRef.current = localStorage.getItem(ALL_STAR_HANDLED_KEY) === "true";
@@ -2475,6 +2625,13 @@ useEffect(() => {
     }
   } catch {}
 }, [ALL_STAR_HANDLED_KEY, seasonYear]);
+
+useEffect(() => {
+  tradeDeadlineHandledRef.current =
+    localStorage.getItem(TRADE_DEADLINE_HANDLED_KEY) === "true";
+
+  refreshTradeDeadlineLockFromSchedule(scheduleByDate);
+}, [TRADE_DEADLINE_HANDLED_KEY, TRADE_DEADLINE_DATE, scheduleByDate]);
 
 // ✅ stop control
 const stopRef = useRef(false);
@@ -2621,6 +2778,11 @@ async function repairCpuRostersBeforeSimulation({
 /*                           SIMULATION HANDLERS                               */
 /* -------------------------------------------------------------------------- */
 const handleSimOnlyGame = async (dateStr, game) => {
+  if (shouldPauseForTradeDeadline(dateStr)) {
+    openTradeDeadlinePrompt();
+    return;
+  }
+
   const {
     repairRes,
     repairedLeagueData,
@@ -2685,6 +2847,7 @@ const handleSimOnlyGame = async (dateStr, game) => {
   savePlayerStats(playerStats);
 
   saveSchedule(upd);
+  refreshTradeDeadlineLockFromSchedule(upd);
   saveOneResultV3(game.id, result, game, seasonYear);
   setResultsById((prev) => ({ ...prev, [game.id]: result }));
   saveCalendarCursor(dateStr, monthKey(new Date(dateStr)));
@@ -2753,6 +2916,19 @@ for (const d of sorted) {
   if (stopRef.current) break;
 
   if (d > dateStr) break;
+
+  if (shouldPauseForTradeDeadline(d)) {
+    savePlayerStats(playerStats);
+    cleanupGhostGames(upd, newResults);
+    saveSchedule(upd);
+    saveResults(newResults);
+    refreshTradeDeadlineLockFromSchedule(upd);
+
+    setScheduleByDate(structuredClone(upd));
+    setResultsById(structuredClone(newResults));
+    openTradeDeadlinePrompt();
+    return;
+  }
 
   if (d === ALL_STAR_DATE && !allStarHandledRef.current) {
     savePlayerStats(playerStats);
@@ -2974,6 +3150,7 @@ setBoxModal(null);
 // ✅ track if user stopped
 let stopped = false;
 let pausedForAllStar = false;
+let pausedForTradeDeadline = false;
 
   try {
 for (let di = 0; di < dates.length; di++) {
@@ -2981,6 +3158,11 @@ for (let di = 0; di < dates.length; di++) {
 
   const date = dates[di];
   lastDateProcessed = date;
+
+  if (shouldPauseForTradeDeadline(date)) {
+    pausedForTradeDeadline = true;
+    break;
+  }
 
   if (date === ALL_STAR_DATE && !allStarHandledRef.current) {
     pausedForAllStar = true;
@@ -3081,9 +3263,17 @@ const awayRoles = loadTeamRoleMap(g.away);
     saveSchedule(upd);
     saveResults(results);
     savePlayerStats(playerStats);
+    refreshTradeDeadlineLockFromSchedule(upd);
 
 setActionModal(null);
 setSimLock(false);
+
+if (pausedForTradeDeadline) {
+  setScheduleByDate(structuredClone(upd));
+  setResultsById(structuredClone(results));
+  openTradeDeadlinePrompt();
+  return;
+}
 
 if (pausedForAllStar) {
   setScheduleByDate(structuredClone(upd));
@@ -3122,7 +3312,7 @@ for (const t of staticTeams || []) {
 }
 
 // build playersArray WITH def_rating attached (awards.py reads this)
-const rookieMetaMap = buildAwardRosterMetaLookup(staticTeams);
+const rookieMetaMap = buildAwardRosterMetaLookup(staticTeams, seasonYear + 1);
 
 const playersArray = Object.values(playerStats || {}).map((p) => {
   const key = `${p.player}__${p.team}`;
@@ -3207,8 +3397,10 @@ if (
   k.startsWith("bm_results_") ||
   k.startsWith("bm_postseason_") ||
   k.startsWith("bm_champ_") ||
+  k.startsWith("bm_trade_deadline_handled_v1_") ||
   k.startsWith("bm_result_v3_") ||     // ✅ NEW
-  k === "bm_results_index_v3"          // ✅ NEW
+  k === "bm_results_index_v3" ||       // ✅ NEW
+  k === "bm_trade_deadline_status_v1"
 ) {
   localStorage.removeItem(k);
 }
@@ -3230,7 +3422,9 @@ if (
   }
 
   allStarHandledRef.current = false;
+tradeDeadlineHandledRef.current = false;
 setAllStarPromptOpen(false);
+setTradeDeadlinePromptOpen(false);
 setAllStarOpen(false);
 setAllStarData(null);
 setShowAwardsPanel(false);
@@ -3409,6 +3603,8 @@ function devClearSeasonCheckpointState() {
   localStorage.removeItem("bm_champ_v1");
   localStorage.removeItem("bm_finals_mvp_v1");
   localStorage.removeItem("bm_finals_mvp_seen_v1");
+  localStorage.removeItem(TRADE_DEADLINE_STATUS_KEY);
+  localStorage.removeItem(TRADE_DEADLINE_HANDLED_KEY);
 
   localStorage.setItem(ALL_STAR_HANDLED_KEY, "true");
   allStarHandledRef.current = true;
@@ -4466,6 +4662,52 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
     </div>,
     document.body
   )}
+{tradeDeadlinePromptOpen && (
+  <div className="fixed inset-0 z-[233] flex items-center justify-center bg-black/75 p-4">
+    <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-orange-400/35 bg-neutral-950 text-white shadow-2xl">
+      <div className="border-b border-orange-500/20 bg-gradient-to-r from-orange-600/20 to-neutral-900 px-6 py-5">
+        <div className="text-xs font-black uppercase tracking-[0.24em] text-orange-300">
+          Trade Deadline
+        </div>
+        <h2 className="mt-1 text-2xl font-black text-white">
+          Today is the last day for trade offers
+        </h2>
+      </div>
+
+      <div className="px-6 py-5">
+        <p className="text-sm font-semibold leading-6 text-neutral-300">
+          The trade deadline is February 4. After this date, new trade offers
+          will be locked for the rest of the season. Would you like to make
+          offers before continuing?
+        </p>
+
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+          <button
+            className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-black text-neutral-200 hover:bg-white/10"
+            onClick={() => {
+              markTradeDeadlinePromptHandled("continue");
+              setTradeDeadlinePromptOpen(false);
+            }}
+          >
+            Continue Season
+          </button>
+
+          <button
+            className="rounded-xl bg-orange-600 px-5 py-3 text-sm font-black text-white hover:bg-orange-500"
+            onClick={() => {
+              markTradeDeadlinePromptHandled("trade_center");
+              setTradeDeadlinePromptOpen(false);
+              navigate("/trades");
+            }}
+          >
+            Make Trade Offers
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+
 {allStarPromptOpen && (
   <div className="fixed inset-0 z-[235] flex items-center justify-center bg-black/75 p-4">
     <div className="w-full max-w-xl rounded-2xl border border-white/15 bg-neutral-900 p-6 text-white shadow-2xl">

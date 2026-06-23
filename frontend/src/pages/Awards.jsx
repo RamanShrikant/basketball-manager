@@ -15,7 +15,7 @@ console.log("✅ Awards.jsx NEW loaded");
 /*                               AWARD CONSTANTS                              */
 /* -------------------------------------------------------------------------- */
 
-const AWARD_ORDER = ["mvp", "dpoy", "sixth_man", "roty"];
+const AWARD_ORDER = ["mvp", "dpoy", "sixth_man", "mip", "roty"];
 const PARTY_AWARD_KEYS = ["mvp", "dpoy", "sixth_man"];
 
 const AWARD_META = {
@@ -35,6 +35,12 @@ const AWARD_META = {
     short: "6MOY",
     description:
       "Awarded to the league's most valuable player coming off the bench.",
+  },
+  mip: {
+    label: "Most Improved Player",
+    short: "MIP",
+    description:
+      "Awarded to the player with the strongest season-to-season breakout.",
   },
   roty: {
     label: "Rookie of the Year",
@@ -64,14 +70,14 @@ function normalizeAwards(raw) {
   }
 
   // Winners (single objects)
-  for (const key of ["mvp", "dpoy", "roty", "sixth_man"]) {
+  for (const key of ["mvp", "dpoy", "roty", "sixth_man", "mip"]) {
     if (awards[key] && Array.isArray(awards[key])) {
       awards[key] = fromEntriesMaybe(awards[key]);
     }
   }
 
   // Races (arrays of objects)
-  for (const key of ["mvp_race", "dpoy_race", "roty_race", "sixth_man_race"]) {
+  for (const key of ["mvp_race", "dpoy_race", "roty_race", "sixth_man_race", "mip_race"]) {
     if (Array.isArray(awards[key])) {
       awards[key] = awards[key].map((entry) =>
         Array.isArray(entry) ? Object.fromEntries(entry) : entry
@@ -160,6 +166,17 @@ function readCompressedOrJson(key, fallback = null) {
 
 function loadPlayerStatsFromStorage() {
   return readCompressedOrJson("bm_player_stats_v1", {});
+}
+
+function fmtAward1(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Number(n.toFixed(1)) : 0;
+}
+
+function fmtSignedAward1(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "+0.0";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(1)}`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -378,6 +395,17 @@ const goNext = () => {
             { label: "BPG", value: winnerRow.blk },
             { label: "FG%", value: `${winnerRow.fgPct}%` },
             { label: "FT%", value: `${winnerRow.ftPct}%` },
+          ]
+        : currentKey === "mip"
+        ? [
+            { label: "GP", value: winnerRow.gp },
+            { label: "PPG", value: winnerRow.pts },
+            { label: "ΔPPG", value: fmtSignedAward1(winner?.mip_ppg_delta) },
+            { label: "RPG", value: winnerRow.reb },
+            { label: "APG", value: winnerRow.ast },
+            { label: "ΔPROD", value: fmtSignedAward1(winner?.mip_prod_delta) },
+            { label: "FG%", value: `${winnerRow.fgPct}%` },
+            { label: "Prev", value: fmtAward1(winner?.mip_prev_ppg) },
           ]
         : [
             { label: "GP", value: winnerRow.gp },
@@ -632,6 +660,14 @@ if (showAllNba) {
                               {renderRaceStat("BLK", row.blk)}
                               {renderRaceStat("FG%", `${row.fgPct}%`)}
                               {renderRaceStat("3P%", `${row.tpPct}%`)}
+                            </>
+                          ) : currentKey === "mip" ? (
+                            <>
+                              {renderRaceStat("PTS", row.pts)}
+                              {renderRaceStat("Prev", fmtAward1(p.mip_prev_ppg))}
+                              {renderRaceStat("ΔPTS", fmtSignedAward1(p.mip_ppg_delta))}
+                              {renderRaceStat("REB", row.reb)}
+                              {renderRaceStat("AST", row.ast)}
                             </>
                           ) : (
                             <>
