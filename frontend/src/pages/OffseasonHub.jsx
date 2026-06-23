@@ -4,6 +4,7 @@ import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
 import styles from "./OffseasonHub.module.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import { recomputeDerivedRatingsInLeague } from "../utils/playerProgressionDerived_v1.js";
 import { applyLeagueInflationForOffseason, getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
 
@@ -2711,8 +2712,13 @@ export default function OffseasonHub() {
       throw new Error("computePlayerProgression is not wired in simEnginePy.js yet.");
     }
 
-    const beforeSnapshot = snapshotLeague(workingLeague);
-    const leagueForProg = prepareLeagueForProgressionWorker(workingLeague, seasonYear);
+    // Match the manual PlayerProgression page exactly: normalize derived
+    // ratings before the snapshot, then build visible deltas from the final
+    // post-recompute league. This prevents dev/full-offseason from saving
+    // Python-bumped OFF/DEF/STAM while manual progression saves V19 values.
+    const sourceLeague = recomputeDerivedRatingsInLeague(snapshotLeague(workingLeague));
+    const beforeSnapshot = snapshotLeague(sourceLeague);
+    const leagueForProg = prepareLeagueForProgressionWorker(sourceLeague, seasonYear);
 
     leagueForProg.seasonYear = seasonYear;
     leagueForProg.currentSeasonYear = seasonYear;
@@ -2749,6 +2755,12 @@ export default function OffseasonHub() {
 
     updatedLeague = stampAgingGuards(updatedLeague, seasonYear);
     updatedLeague = stampCareerSeasonCounters(updatedLeague, seasonYear);
+
+    // FORCE the same LeagueEditor/V19 derived-rating formulas used by the
+    // manual PlayerProgression page. Python owns attrs/OVR/POT/age; frontend
+    // V19 owns OFF/DEF/STAM/SCO display values.
+    updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
+
     updatedLeague = restoreCurrentDraftClassRookiesAfterProgression(updatedLeague, beforeSnapshot, seasonYear);
 
     const newDeltas = buildProgressionDeltas(beforeSnapshot, updatedLeague);

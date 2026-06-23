@@ -6,7 +6,7 @@ import random
 import math
 import datetime as _dt
 
-PROGRESSION_PY_VERSION = "2026-06-13_progression_v17_dynamic_core_shape_ceiling_hit"
+PROGRESSION_PY_VERSION = "2026-06-23_progression_v19_absolute_derived_formula"
 
 
 # -------------------------
@@ -289,7 +289,7 @@ def calc_overall_from_attrs(attrs: List[Any], pos: str) -> int:
     overall = max(60.0, min(99.0, overall))
     overall = int(math.floor(overall + 0.5))
 
-    num90 = sum(1 for v in a if float(v) >= 90.0)
+    num90 = sum(1 for v in a if float(v) > 90.0)
     if num90 >= 3:
         overall = min(99, overall + (num90 - 2))
 
@@ -2150,28 +2150,18 @@ def _apply_small_attribute_churn(p: Dict[str, Any], settings: Dict[str, Any], rn
 
 
 def _bump_derived_fields(p: Dict[str, Any], overall_delta: int, settings: Dict[str, Any], rng: random.Random) -> None:
-    derived = settings.get("derived_fields", {}) or {}
-    rmin = int(settings.get("min_rating", 25))
-    rmax = int(settings.get("max_rating", 99))
-    noise_sigma = float(derived.get("noise", 0.35))
+    """
+    Frontend-derived ratings source-of-truth guard.
 
-    def bump(field_key: str, mult_key: str, lo: float = 25.0, hi: float = 99.0) -> None:
-        if field_key not in p or p[field_key] is None:
-            return
-        old_val = _safe_float(p.get(field_key), 0.0)
-        mult = float(derived.get(mult_key, 0.50))
-        raw = old_val + (overall_delta * mult) + rng.gauss(0.0, noise_sigma)
-        p[field_key] = _stoch_round(_clamp(raw, lo, hi), rng)
-
-    bump("offRating", "off_mult", rmin, rmax)
-    bump("defRating", "def_mult", rmin, rmax)
-    bump("stamina", "stamina_mult", rmin, rmax)
-
-    if "scoringRating" in p and p["scoringRating"] is not None:
-        old_sr = _safe_float(p.get("scoringRating"), 0.0)
-        mult = float(derived.get("scoring_mult", 0.40))
-        raw_sr = old_sr + (overall_delta * mult) + rng.gauss(0.0, noise_sigma)
-        p["scoringRating"] = float(_clamp(raw_sr, 0.0, 100.0))
+    Python progression owns attrs, overall, age, potential, and shape locks.
+    The React LeagueEditor/V19 formulas own offRating, defRating, stamina,
+    and scoringRating. Older versions bumped those fields here with a noisy
+    overall-delta multiplier, which created fake OFF/DEF/STAM deltas whenever
+    a frontend path later recomputed V19 values. Leaving these fields untouched
+    keeps every progression route consistent: frontend recomputes them once
+    after Python returns and builds the visible deltas from final saved values.
+    """
+    return
 
 
 def _compute_raw_progression_plan(
@@ -4101,7 +4091,7 @@ def apply_end_of_season_progression(
     """
     Run once after playoffs/awards, before next season.
 
-    This only changes attributes, overall, and derived fields.
+    This only changes attributes and overall. Frontend V19 recomputes derived fields.
     Potential is updated after age-up in apply_end_of_season_progression_with_deltas.
     """
     if not isinstance(league, dict):
