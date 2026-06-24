@@ -131,6 +131,7 @@ export default function TeamHub() {
     { name: "View Roster", path: "/roster-view", enabled: true },
     { name: "Locker Room", path: "/locker-room", enabled: true },
     { name: "Trades", path: "/trades", enabled: true },
+    { name: "Intel", path: "/intel", enabled: true },
     { name: "Power Rankings", path: "/power-rankings", enabled: true },
     { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
@@ -147,6 +148,7 @@ export default function TeamHub() {
     { name: "View Roster", path: "/roster-view", enabled: true },
     { name: "Locker Room", path: "/locker-room", enabled: true },
     { name: "Trades", path: "/trades", enabled: true },
+    { name: "Intel", path: "/intel", enabled: true },
     { name: "Power Rankings", path: "/power-rankings", enabled: true },
     { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Free Agents", path: offseasonFreeAgentsPath, enabled: true },
@@ -163,6 +165,7 @@ export default function TeamHub() {
     { name: "View Roster", path: "/roster-view", enabled: true },
     { name: "Locker Room", path: "/locker-room", enabled: true },
     { name: "Trades", path: "#", enabled: false },
+    { name: "Intel", path: "/intel", enabled: true },
     { name: "Power Rankings", path: "/power-rankings", enabled: true },
     { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
@@ -277,6 +280,8 @@ export default function TeamHub() {
                       ? "Team draft assets"
                       : tile.name === "Trades"
                       ? "Propose and review trades"
+                      : tile.name === "Intel"
+                      ? "Front office team intel"
                       : tile.name === "Locker Room"
                       ? "Player morale and role check"
                       : selectedTeam.name}

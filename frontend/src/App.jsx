@@ -36,6 +36,7 @@ import TradePlayerSelect from "./pages/TradePlayerSelect.jsx";
 import TradePickSelect from "./pages/TradePickSelect.jsx";
 import TradeFinder from "./pages/TradeFinder.jsx";
 import LockerRoom from "./pages/LockerRoom.jsx";
+import Intel from "./pages/Intel_v1.jsx";
 
 function App() {
   return (
@@ -74,6 +75,7 @@ function App() {
         <Route path="/trade-pick-select" element={<TradePickSelect />} />
         <Route path="/trade-finder" element={<TradeFinder />} />
         <Route path="/locker-room" element={<LockerRoom />} />
+        <Route path="/intel" element={<Intel />} />
         <Route path="/playoffs" element={<Playoffs />} />
         <Route path="/player-progression" element={<PlayerProgression />} />
         <Route path="salary-table" element={<SalaryTable />} />
