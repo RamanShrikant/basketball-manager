@@ -3,18 +3,26 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
 import {
+  canAddCustomProtectionToPick,
+  canCreateSwapWithPick,
   getAllTeamsFromLeague,
-  getTeamLogoMap,
   getDraftPickProtectionLabel,
+  getTeamLogoMap,
+  getTradePickBaseProtectionLabel,
+  getTradeablePickOwnedRange,
+  isResolvedDraftPickAsset,
+  isSwapDraftPickAsset,
   normalizeDraftPicks,
   normalizeTeamName,
+  protectionDisplayForOwnedRange,
   sortDraftPickAssets,
+  validateCustomPickProtection,
 } from "../utils/draftPicks.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
 const TRADE_BUILDER_KEY = "bm_trade_builder_v1";
-const MAX_SIDE_ITEMS = 6;
+const MAX_SIDE_ITEMS = 8;
 
 function safeJSON(raw, fallback = null) {
   try {
@@ -59,6 +67,14 @@ function getSideItems(builder, side) {
 function setSideItems(builder, side, items) {
   if (side === "user") return { ...builder, userItems: items };
   return { ...builder, cpuItems: items };
+}
+
+function otherSideOf(side) {
+  return side === "user" ? "cpu" : "user";
+}
+
+function getBuilderTeamName(builder, side) {
+  return side === "user" ? builder.userTeamName || "" : builder.cpuTeamName || "";
 }
 
 function getSeasonYearFromLeague(leagueData) {
@@ -157,9 +173,25 @@ function pickKey(pick) {
 }
 
 function itemKey(item) {
-  if (item?.type === "pick") return `pick:${pickKey(item.pick)}`;
+  if (item?.type === "pick") {
+    const rule = item.tradeRule || item.pick?.tradeRule || {};
+    if (rule.swapId) return `swap:${rule.swapId}:${rule.mirror ? "mirror" : "primary"}`;
+    return `pick:${pickKey(item.pick)}:${rule.action || item.protection || "full"}`;
+  }
   if (item?.type === "player") return `player:${item.player?.id || item.player?.name}`;
   return JSON.stringify(item);
+}
+
+function isSamePickItem(item, pick) {
+  return item?.type === "pick" && pickKey(item.pick) === pickKey(pick);
+}
+
+function getAlreadyAddedPickKeys(items = []) {
+  const keys = new Set();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (item?.type === "pick" && item.pick) keys.add(pickKey(item.pick));
+  }
+  return keys;
 }
 
 function roundLabel(round) {
@@ -221,6 +253,7 @@ function collectTradeablePicks({ leagueData, teamName, teamNames }) {
   const draftOrderLocked = draftOrder.length >= 60;
 
   const normalizedFuturePicks = normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
+    .filter((pick) => String(pick.status || "active").toLowerCase() === "active")
     .filter((pick) => Number(pick.year || 0) >= Number(seasonYear))
     .filter((pick) => !(draftComplete && Number(pick.year || 0) === Number(seasonYear)))
     .filter((pick) => !(draftOrderLocked && !draftComplete && Number(pick.year || 0) === Number(seasonYear)));
@@ -244,7 +277,7 @@ function collectTradeablePicks({ leagueData, teamName, teamNames }) {
   });
 }
 
-function buildTradePickPayload(asset, protection) {
+function buildTradePickPayload(asset, protection, tradeRule = null) {
   const protectionLabel = protection || compactProtectionLabel(asset) || "Unprotected";
   const pickNumber = Number(asset?.pickNumber || asset?.overallPick || asset?.resolvedPickNumber || 0);
 
@@ -260,21 +293,32 @@ function buildTradePickPayload(asset, protection) {
     protection: protectionLabel,
     protections: protectionLabel,
     displayProtection: protectionLabel,
+    tradeRule: tradeRule || undefined,
   };
 }
 
-const PROTECTIONS = [
-  "Unprotected",
-  "Top 3 protected",
-  "Top 4 protected",
-  "Top 5 protected",
-  "Top 8 protected",
-  "Top 10 protected",
-  "Lottery protected",
-  "Top 14 protected",
-  "1-20 protected",
-  "31-55 protected",
-];
+function defaultProtectionEnd(asset) {
+  const owned = getTradeablePickOwnedRange(asset);
+  const round = Number(asset?.round || 1) === 2 ? 2 : 1;
+  const preferred = round === 1 && owned.start === 1 ? 14 : owned.start + 4;
+  return Math.max(owned.start, Math.min(owned.end - 1, preferred));
+}
+
+function inverseSwapDirection(direction) {
+  return direction === "worst" ? "best" : "worst";
+}
+
+function swapDirectionLabel(direction) {
+  return direction === "worst" ? "Swap Worst" : "Swap Best";
+}
+
+function buildSwapDisplayLabel(direction, sourcePick, swapPick) {
+  const label = swapDirectionLabel(direction);
+  const sourceOriginal = sourcePick?.originalTeam || sourcePick?.originalTeamName || "Pick A";
+  const swapOriginal = swapPick?.originalTeam || swapPick?.originalTeamName || "Pick B";
+  const suffix = Number(sourcePick?.round || 1) === 1 ? "1st" : "2nd";
+  return `${label} ${sourcePick?.year || "Future"} ${suffix} - ${sourceOriginal} / ${swapOriginal}`;
+}
 
 export default function TradePickSelect() {
   const navigate = useNavigate();
@@ -293,13 +337,45 @@ export default function TradePickSelect() {
   const team = teams.find((t) => (t?.name || t?.teamName) === tradeTeamName) || null;
   const teamLogo = logoMap[normalizeTeamName(tradeTeamName)] || teamLogoOf(team);
 
+  const builderSnapshot = useMemo(() => readBuilder(), []);
+  const currentSideItems = useMemo(
+    () => getSideItems(builderSnapshot, tradeSide),
+    [builderSnapshot, tradeSide]
+  );
+  const otherTradeSide = otherSideOf(tradeSide);
+  const otherSideItems = useMemo(
+    () => getSideItems(builderSnapshot, otherTradeSide),
+    [builderSnapshot, otherTradeSide]
+  );
+  const alreadyAddedPickKeys = useMemo(
+    () => getAlreadyAddedPickKeys(currentSideItems),
+    [currentSideItems]
+  );
+  const otherSideAddedPickKeys = useMemo(
+    () => getAlreadyAddedPickKeys(otherSideItems),
+    [otherSideItems]
+  );
+  const sideItemCount = currentSideItems.length;
+  const sideIsFull = sideItemCount >= MAX_SIDE_ITEMS;
+  const otherTeamName = getBuilderTeamName(builderSnapshot, otherTradeSide);
+
   const picks = useMemo(
     () => collectTradeablePicks({ leagueData, teamName: tradeTeamName, teamNames }),
     [leagueData, tradeTeamName, teamNames]
   );
 
+  const otherTeamPicks = useMemo(
+    () => collectTradeablePicks({ leagueData, teamName: otherTeamName, teamNames }),
+    [leagueData, otherTeamName, teamNames]
+  );
+
   const [selectedKey, setSelectedKey] = useState("");
-  const [protection, setProtection] = useState("Unprotected");
+  const [rulePickKey, setRulePickKey] = useState("");
+  const [ruleMode, setRuleMode] = useState("full");
+  const [protectEnd, setProtectEnd] = useState(0);
+  const [swapDirection, setSwapDirection] = useState("best");
+  const [selectedSwapKey, setSelectedSwapKey] = useState("");
+  const [ruleError, setRuleError] = useState("");
 
   useEffect(() => {
     if (!picks.length) {
@@ -308,33 +384,214 @@ export default function TradePickSelect() {
     }
 
     setSelectedKey((prev) => {
-      if (prev && picks.some((pick) => pickKey(pick) === prev)) return prev;
-      return pickKey(picks[0]);
+      const prevStillAvailable = prev && picks.some((pick) => pickKey(pick) === prev) && !alreadyAddedPickKeys.has(prev);
+      if (prevStillAvailable) return prev;
+      const firstAvailable = picks.find((pick) => !alreadyAddedPickKeys.has(pickKey(pick)));
+      return pickKey(firstAvailable || picks[0]);
     });
-  }, [picks]);
+  }, [alreadyAddedPickKeys, picks]);
 
   const selectedPick = picks.find((pick) => pickKey(pick) === selectedKey) || picks[0] || null;
+  const selectedPickAlreadyAdded = Boolean(selectedPick && alreadyAddedPickKeys.has(pickKey(selectedPick)));
+  const canOpenSelectedPick = Boolean(selectedPick && !selectedPickAlreadyAdded && !sideIsFull);
+  const rulePick = picks.find((pick) => pickKey(pick) === rulePickKey) || null;
+  const ownedRange = rulePick ? getTradeablePickOwnedRange(rulePick) : null;
+  const canProtect = rulePick ? canAddCustomProtectionToPick(rulePick) : false;
+  const baseCanSwap = rulePick ? canCreateSwapWithPick(rulePick) : false;
+  const swapCandidates = useMemo(() => {
+    if (!rulePick || !baseCanSwap || !otherTeamName) return [];
+    return otherTeamPicks.filter(
+      (pick) =>
+        Number(pick.year || 0) === Number(rulePick.year || 0) &&
+        Number(pick.round || 0) === Number(rulePick.round || 0) &&
+        canCreateSwapWithPick(pick) &&
+        !otherSideAddedPickKeys.has(pickKey(pick))
+    );
+  }, [baseCanSwap, otherSideAddedPickKeys, otherTeamName, otherTeamPicks, rulePick]);
+  const hasMatchingSwapPick = swapCandidates.length > 0;
+  const canSwap = Boolean(baseCanSwap && hasMatchingSwapPick);
+  const selectedSwapPick = swapCandidates.find((pick) => pickKey(pick) === selectedSwapKey) || swapCandidates[0] || null;
 
-  const addSelected = () => {
-    if (!selectedPick) return;
+  const openRuleModal = (pick) => {
+    if (!pick) return;
+    const key = pickKey(pick);
+    if (alreadyAddedPickKeys.has(key)) {
+      setRuleError("That pick is already in this trade package. Remove it from the builder before adding it again.");
+      return;
+    }
+    if (sideIsFull) {
+      setRuleError(`This side already has ${MAX_SIDE_ITEMS} trade items.`);
+      return;
+    }
+    setSelectedKey(key);
+    setRulePickKey(key);
+    setRuleMode("full");
+    setProtectEnd(defaultProtectionEnd(pick));
+    setSwapDirection("best");
+    setSelectedSwapKey("");
+    setRuleError("");
+  };
 
+  useEffect(() => {
+    if (!rulePick || !swapCandidates.length) {
+      setSelectedSwapKey("");
+      if (ruleMode === "swap") setRuleMode("full");
+      return;
+    }
+    setSelectedSwapKey((prev) => {
+      if (prev && swapCandidates.some((pick) => pickKey(pick) === prev)) return prev;
+      return pickKey(swapCandidates[0]);
+    });
+  }, [ruleMode, rulePick, swapCandidates]);
+
+  const addItemsToBuilder = (primaryItem, mirrorItem = null) => {
     const builder = readBuilder();
     const currentItems = getSideItems(builder, tradeSide);
-    const nextPick = buildTradePickPayload(selectedPick, protection);
+    const currentOtherItems = getSideItems(builder, otherTradeSide);
+
+    if (currentItems.some((item) => isSamePickItem(item, primaryItem.pick))) {
+      setRuleError("That pick is already in this trade package. Remove it from the builder before adding it again.");
+      return;
+    }
+    if (currentItems.length >= MAX_SIDE_ITEMS) {
+      setRuleError(`This side already has ${MAX_SIDE_ITEMS} trade items.`);
+      return;
+    }
+
+    const nextPrimaryItems = [...currentItems, primaryItem];
+
+    let nextOtherItems = currentOtherItems;
+    if (mirrorItem) {
+      if (currentOtherItems.some((item) => isSamePickItem(item, mirrorItem.pick))) {
+        setRuleError("The linked swap pick is already in the other side of this trade package.");
+        return;
+      }
+      if (currentOtherItems.length >= MAX_SIDE_ITEMS) {
+        setRuleError(`The other side already has ${MAX_SIDE_ITEMS} trade items, so the linked swap cannot be added.`);
+        return;
+      }
+      nextOtherItems = [...currentOtherItems, mirrorItem];
+    }
+
+    let nextBuilder = setSideItems(builder, tradeSide, nextPrimaryItems);
+    if (mirrorItem) nextBuilder = setSideItems(nextBuilder, otherTradeSide, nextOtherItems);
+    saveBuilder(nextBuilder);
+    navigate(returnTo);
+  };
+
+  const addConfiguredPick = () => {
+    if (!rulePick) return;
+    setRuleError("");
+
+    if (ruleMode === "protected") {
+      const validation = validateCustomPickProtection(rulePick, ownedRange?.start, protectEnd);
+      if (!validation.ok) {
+        setRuleError(validation.reason);
+        return;
+      }
+
+      const tradeRule = {
+        action: "protected",
+        protectStart: validation.retainedRange.start,
+        protectEnd: validation.retainedRange.end,
+        retainedRange: validation.retainedRange,
+        conveyedRange: validation.conveyedRange,
+        ownedRange: validation.ownedRange,
+        baseProtectionLabel: validation.baseProtectionLabel,
+        source: "trade_pick_select_v2",
+      };
+      const nextPick = buildTradePickPayload(rulePick, validation.baseProtectionLabel, tradeRule);
+      const nextItem = {
+        type: "pick",
+        teamName: tradeTeamName,
+        protection: validation.baseProtectionLabel,
+        tradeRule,
+        pick: nextPick,
+      };
+      addItemsToBuilder(nextItem);
+      return;
+    }
+
+    if (ruleMode === "swap") {
+      if (!baseCanSwap) {
+        setRuleError("Swaps are only available for fully unprotected picks.");
+        return;
+      }
+      if (!canSwap) {
+        setRuleError(`No matching fully unprotected ${rulePick.year} ${roundLabel(rulePick.round)} pick was found for ${otherTeamName}.`);
+        return;
+      }
+      if (!selectedSwapPick) {
+        setRuleError(`No matching fully unprotected ${rulePick.year} ${roundLabel(rulePick.round)} pick was found for ${otherTeamName}.`);
+        return;
+      }
+
+      const swapId = `swap_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      const primaryLabel = swapDirectionLabel(swapDirection);
+      const mirrorDirection = inverseSwapDirection(swapDirection);
+      const mirrorLabel = swapDirectionLabel(mirrorDirection);
+      const tradeRule = {
+        action: "swap",
+        swapId,
+        swapDirection,
+        swapRightHolder: otherTeamName,
+        fromTeamName: tradeTeamName,
+        toTeamName: otherTeamName,
+        sourcePick: rulePick,
+        swapPick: selectedSwapPick,
+        source: "trade_pick_select_v2",
+      };
+      const mirrorRule = {
+        ...tradeRule,
+        mirror: true,
+        swapDirection: mirrorDirection,
+        swapRightHolder: tradeTeamName,
+      };
+
+      const primaryPick = buildTradePickPayload(rulePick, primaryLabel, tradeRule);
+      const mirrorPick = buildTradePickPayload(selectedSwapPick, mirrorLabel, mirrorRule);
+      const primaryItem = {
+        type: "pick",
+        teamName: tradeTeamName,
+        protection: primaryLabel,
+        tradeRule,
+        displayLabel: buildSwapDisplayLabel(swapDirection, rulePick, selectedSwapPick),
+        pick: primaryPick,
+      };
+      const mirrorItem = {
+        type: "pick",
+        teamName: otherTeamName,
+        protection: mirrorLabel,
+        tradeRule: mirrorRule,
+        tradeValueExcluded: true,
+        displayOnlyLinkedSwap: true,
+        displayLabel: buildSwapDisplayLabel(mirrorDirection, selectedSwapPick, rulePick),
+        pick: mirrorPick,
+      };
+      addItemsToBuilder(primaryItem, mirrorItem);
+      return;
+    }
+
+    const baseProtection = getTradePickBaseProtectionLabel(rulePick) || compactProtectionLabel(rulePick);
+    const tradeRule = {
+      action: "full",
+      ownedRange: getTradeablePickOwnedRange(rulePick),
+      source: "trade_pick_select_v2",
+    };
+    const nextPick = buildTradePickPayload(rulePick, baseProtection, tradeRule);
     const nextItem = {
       type: "pick",
       teamName: tradeTeamName,
       protection: nextPick.protection,
+      tradeRule,
       pick: nextPick,
     };
-
-    const nextKey = itemKey(nextItem);
-    const withoutDupes = currentItems.filter((item) => itemKey(item) !== nextKey);
-    const nextItems = [...withoutDupes, nextItem].slice(0, MAX_SIDE_ITEMS);
-
-    saveBuilder(setSideItems(builder, tradeSide, nextItems));
-    navigate(returnTo);
+    addItemsToBuilder(nextItem);
   };
+
+  const modalProtectionValidation = rulePick && ownedRange
+    ? validateCustomPickProtection(rulePick, ownedRange.start, protectEnd)
+    : { ok: false, reason: "No pick selected." };
 
   return (
     <PageFade>
@@ -354,11 +611,11 @@ export default function TradePickSelect() {
             </div>
 
             <button
-              onClick={addSelected}
-              disabled={!selectedPick}
-              className="rounded-xl bg-orange-600 px-5 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:opacity-50"
+              onClick={() => openRuleModal(selectedPick)}
+              disabled={!canOpenSelectedPick}
+              className="rounded-xl bg-orange-600 px-5 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Add Pick
+              {selectedPickAlreadyAdded ? "Already Added" : sideIsFull ? "Limit Reached" : "Add Pick"}
             </button>
           </div>
 
@@ -371,22 +628,14 @@ export default function TradePickSelect() {
                   <div className="h-12 w-12 rounded-full bg-white/5" />
                 )}
                 <div>
-                  <div className="text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Pick Protection</div>
-                  <div className="text-xl font-black text-white">Attach rules before adding</div>
+                  <div className="text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Pick Rules</div>
+                  <div className="text-xl font-black text-white">Click a pick to choose unprotected, custom protection, or a valid swap.</div>
                 </div>
               </div>
 
-              <select
-                value={protection}
-                onChange={(e) => setProtection(e.target.value)}
-                className="rounded-xl border border-white/10 bg-black px-4 py-3 font-black text-white outline-none"
-              >
-                {PROTECTIONS.map((row) => (
-                  <option key={row} value={row}>
-                    {row}
-                  </option>
-                ))}
-              </select>
+              <div className="rounded-xl border border-white/10 bg-black px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-neutral-300">
+                {sideItemCount}/{MAX_SIDE_ITEMS} items used
+              </div>
             </div>
           </div>
 
@@ -394,7 +643,7 @@ export default function TradePickSelect() {
             <div className="rounded-2xl border border-white/10 bg-neutral-950/85 p-8 text-center">
               <div className="text-2xl font-black text-white">No draft assets found for this team</div>
               <p className="mt-2 text-sm font-semibold text-neutral-500">
-                This selector now reads the same normalized leagueData.draftPicks source used by the Draft Picks page.
+                This selector reads the same normalized leagueData.draftPicks source used by the Draft Picks page.
               </p>
             </div>
           ) : (
@@ -407,15 +656,23 @@ export default function TradePickSelect() {
               </div>
 
               {picks.map((pick, index) => {
-                const active = pickKey(pick) === selectedKey;
+                const key = pickKey(pick);
+                const active = key === selectedKey;
+                const alreadyAdded = alreadyAddedPickKeys.has(key);
                 const originalLogo = logoMap[normalizeTeamName(pick?.originalTeam || "")];
+                const range = getTradeablePickOwnedRange(pick);
                 return (
                   <button
-                    key={pickKey(pick)}
-                    onClick={() => setSelectedKey(pickKey(pick))}
-                    onDoubleClick={addSelected}
-                    className={`grid w-full grid-cols-[1fr_130px_180px_180px] items-center gap-0 px-4 py-4 text-left transition ${
-                      active
+                    key={key}
+                    type="button"
+                    disabled={alreadyAdded || sideIsFull}
+                    onClick={() => openRuleModal(pick)}
+                    className={`grid w-full grid-cols-[1fr_130px_180px_180px] items-center gap-0 px-4 py-4 text-left transition disabled:cursor-not-allowed ${
+                      alreadyAdded
+                        ? "bg-neutral-950/85 text-neutral-500 opacity-70"
+                        : sideIsFull
+                        ? "bg-neutral-950/85 text-neutral-500 opacity-60"
+                        : active
                         ? "bg-orange-600 text-white"
                         : index % 2 === 0
                         ? "bg-neutral-950/85 text-neutral-200 hover:bg-orange-500/10"
@@ -423,9 +680,21 @@ export default function TradePickSelect() {
                     }`}
                   >
                     <div>
-                      <div className="text-lg font-black">{formatPick(pick)}</div>
+                      <div className="flex flex-wrap items-center gap-2 text-lg font-black">
+                        <span>{formatPick(pick)}</span>
+                        {alreadyAdded && (
+                          <span className="rounded-full border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] text-orange-200">
+                            Already in package
+                          </span>
+                        )}
+                        {!alreadyAdded && sideIsFull && (
+                          <span className="rounded-full border border-red-400/40 bg-red-500/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] text-red-200">
+                            Limit reached
+                          </span>
+                        )}
+                      </div>
                       <div className="mt-1 text-xs font-bold uppercase tracking-[0.12em] opacity-70">
-                        {assetTypeLabel(pick)} • Owner: {pick.ownerTeam || pick.owner || tradeTeamName}
+                        {assetTypeLabel(pick)} • Owner: {pick.ownerTeam || pick.owner || tradeTeamName} • Owns {range.start}-{range.end}
                       </div>
                     </div>
 
@@ -447,6 +716,172 @@ export default function TradePickSelect() {
             </div>
           )}
         </div>
+
+        {rulePick && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setRulePickKey("");
+            }}
+          >
+            <div className="w-full max-w-2xl overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 shadow-2xl">
+              <div className="border-b border-white/10 bg-gradient-to-r from-orange-600/20 to-neutral-900 px-6 py-5">
+                <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Draft Pick Rule</div>
+                <div className="mt-1 text-2xl font-black text-white">{formatPick(rulePick)}</div>
+                <div className="mt-1 text-sm font-bold text-neutral-400">
+                  Current: {compactProtectionLabel(rulePick)} • Owns {ownedRange?.start}-{ownedRange?.end}
+                </div>
+              </div>
+
+              <div className="grid gap-4 p-5">
+                <button
+                  type="button"
+                  onClick={() => setRuleMode("full")}
+                  className={`rounded-2xl border px-5 py-4 text-left transition ${
+                    ruleMode === "full" ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black hover:border-orange-400/40"
+                  }`}
+                >
+                  <div className="text-lg font-black text-white">Trade full owned piece</div>
+                  <div className="mt-1 text-sm font-semibold text-neutral-400">
+                    Sends exactly what this team owns right now. Existing protections stay attached.
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!canProtect}
+                  onClick={() => canProtect && setRuleMode("protected")}
+                  className={`rounded-2xl border px-5 py-4 text-left transition ${
+                    ruleMode === "protected" ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black hover:border-orange-400/40"
+                  } ${!canProtect ? "opacity-45" : ""}`}
+                >
+                  <div className="text-lg font-black text-white">Add custom protection</div>
+                  <div className="mt-1 text-sm font-semibold text-neutral-400">
+                    {isSwapDraftPickAsset(rulePick)
+                      ? "Swap rights cannot be protected."
+                      : isResolvedDraftPickAsset(rulePick)
+                      ? "Resolved picks cannot receive new protections."
+                      : "Protect only the part this team owns. The protected range cannot cover the whole asset."}
+                  </div>
+                </button>
+
+                {ruleMode === "protected" && canProtect && (
+                  <div className="rounded-2xl border border-white/10 bg-black p-4">
+                    <div className="grid gap-3 sm:grid-cols-[1fr_1fr]">
+                      <label className="grid gap-2 text-sm font-black text-neutral-300">
+                        Protection starts at
+                        <input
+                          value={ownedRange?.start || ""}
+                          readOnly
+                          className="rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 font-black text-white outline-none"
+                        />
+                      </label>
+                      <label className="grid gap-2 text-sm font-black text-neutral-300">
+                        Protection ends at
+                        <input
+                          type="number"
+                          min={ownedRange?.start || 1}
+                          max={(ownedRange?.end || 2) - 1}
+                          value={protectEnd || ""}
+                          onChange={(event) => setProtectEnd(Number(event.target.value))}
+                          className="rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 font-black text-white outline-none"
+                        />
+                      </label>
+                    </div>
+                    <div className={`mt-3 text-sm font-bold ${modalProtectionValidation.ok ? "text-emerald-300" : "text-red-300"}`}>
+                      {modalProtectionValidation.ok
+                        ? `${protectionDisplayForOwnedRange(modalProtectionValidation.baseProtectionLabel, modalProtectionValidation.retainedRange)} retained; ${protectionDisplayForOwnedRange(modalProtectionValidation.baseProtectionLabel, modalProtectionValidation.conveyedRange)} conveys.`
+                        : modalProtectionValidation.reason}
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  disabled={!canSwap}
+                  onClick={() => canSwap && setRuleMode("swap")}
+                  className={`rounded-2xl border px-5 py-4 text-left transition ${
+                    !canSwap
+                      ? "cursor-not-allowed border-white/10 bg-neutral-900/70 opacity-45"
+                      : ruleMode === "swap"
+                      ? "border-orange-400 bg-orange-500/15"
+                      : "border-white/10 bg-black hover:border-orange-400/40"
+                  }`}
+                >
+                  <div className="text-lg font-black text-white">Create swap right</div>
+                  <div className="mt-1 text-sm font-semibold text-neutral-400">
+                    {canSwap
+                      ? "Only available when both picks are fully unprotected in the same year and round."
+                      : baseCanSwap
+                      ? `No matching fully unprotected ${rulePick?.year || "future"} ${roundLabel(rulePick?.round)} pick is available from ${otherTeamName || "the other team"}.`
+                      : "Swaps are only available for fully unprotected normal picks. Protected picks and swap rights cannot be swapped."}
+                  </div>
+                </button>
+
+                {ruleMode === "swap" && canSwap && (
+                  <div className="rounded-2xl border border-white/10 bg-black p-4">
+                    <div className="grid gap-3 sm:grid-cols-[180px_1fr]">
+                      <label className="grid gap-2 text-sm font-black text-neutral-300">
+                        Right being sent
+                        <select
+                          value={swapDirection}
+                          onChange={(event) => setSwapDirection(event.target.value)}
+                          className="rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 font-black text-white outline-none"
+                        >
+                          <option value="best">Swap Best</option>
+                          <option value="worst">Swap Worst</option>
+                        </select>
+                      </label>
+                      <label className="grid gap-2 text-sm font-black text-neutral-300">
+                        Matching {otherTeamName || "other team"} pick
+                        <select
+                          value={selectedSwapKey}
+                          onChange={(event) => setSelectedSwapKey(event.target.value)}
+                          className="rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 font-black text-white outline-none"
+                        >
+                          {swapCandidates.map((pick) => (
+                            <option key={pickKey(pick)} value={pickKey(pick)}>
+                              {formatPick(pick)} - {pick.originalTeam || pick.originalTeamName}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="mt-3 text-sm font-bold text-neutral-400">
+                      {swapCandidates.length
+                        ? `${swapDirectionLabel(swapDirection)} will be shown on this side, with the linked ${swapDirectionLabel(inverseSwapDirection(swapDirection))} item shown for ${otherTeamName}.`
+                        : `No valid fully unprotected ${rulePick.year} ${roundLabel(rulePick.round)} pick found for ${otherTeamName}.`}
+                    </div>
+                  </div>
+                )}
+
+                {ruleError ? (
+                  <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm font-bold text-red-200">
+                    {ruleError}
+                  </div>
+                ) : null}
+
+                <div className="flex justify-end gap-3 border-t border-white/10 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setRulePickKey("")}
+                    className="rounded-xl border border-white/10 bg-black px-5 py-3 text-sm font-black text-neutral-300 hover:bg-white/10"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={addConfiguredPick}
+                    disabled={Boolean(rulePick && alreadyAddedPickKeys.has(pickKey(rulePick))) || sideIsFull}
+                    className="rounded-xl bg-orange-600 px-5 py-3 text-sm font-black text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {rulePick && alreadyAddedPickKeys.has(pickKey(rulePick)) ? "Already Added" : sideIsFull ? "Limit Reached" : "Add Pick"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </PageFade>
   );

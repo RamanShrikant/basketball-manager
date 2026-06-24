@@ -127,7 +127,166 @@ function getTeamRatingsForPowerRankings(team) {
     overall: toNum(ratings?.overall, 0),
     off: toNum(ratings?.off, 0),
     def: toNum(ratings?.def, 0),
+    exactOverall: toNum(ratings?.exactOverall ?? ratings?.overall, 0),
   };
+}
+
+// Fast Team POT helper for this page. Coach Gameplan's exported POT helper also
+// auto-optimizes a full smart rotation for the proof bonus. That is fine for one
+// team, but very expensive when Power Rankings opens and asks for all 30 teams.
+// This keeps the same future-window formula and uses the already-computed team
+// OVR above as the proof bonus input, avoiding 30 full rotation rebuilds.
+const POT_FUTURE_WINDOWS = [
+  { years: 3, weight: 0.30 },
+  { years: 5, weight: 0.35 },
+  { years: 7, weight: 0.35 },
+];
+
+const POT_SCALE_BASE = 77.8156;
+const POT_SCALE_FLOOR_VALUE = 70;
+const POT_SCALE_MULTIPLIER = 2.0199;
+const POT_PROOF_BASE_OVERALL = 84;
+const POT_PROOF_MULTIPLIER = 0.20;
+const POT_ELITE_PROOF_BASE_OVERALL = 92;
+const POT_ELITE_PROOF_MULTIPLIER = 1.10;
+
+const POT_AGE_POINTS = [
+  [18, 1.10],
+  [20, 1.10],
+  [22, 1.09],
+  [24, 1.06],
+  [26, 1.02],
+  [27, 1.00],
+  [28, 0.98],
+  [29, 0.95],
+  [30, 0.92],
+  [31, 0.89],
+  [32, 0.85],
+  [33, 0.80],
+  [34, 0.74],
+  [35, 0.68],
+  [36, 0.60],
+  [37, 0.50],
+  [38, 0.40],
+  [39, 0.30],
+  [40, 0.22],
+  [41, 0.15],
+  [42, 0.10],
+  [45, 0.04],
+];
+
+function hasFiniteRating(value) {
+  return Number.isFinite(Number(value));
+}
+
+function getPlayerPotentialValue(player) {
+  if (hasFiniteRating(player?.potential)) return Number(player.potential);
+  if (hasFiniteRating(player?.overall)) return Number(player.overall);
+  return 75;
+}
+
+function getPlayerOverallValue(player) {
+  if (hasFiniteRating(player?.overall)) return Number(player.overall);
+  return getPlayerPotentialValue(player);
+}
+
+function potentialAgeMultiplier(age) {
+  const numericAge = Number(age || 0);
+
+  if (numericAge <= POT_AGE_POINTS[0][0]) return POT_AGE_POINTS[0][1];
+
+  for (let i = 1; i < POT_AGE_POINTS.length; i += 1) {
+    const [prevAge, prevValue] = POT_AGE_POINTS[i - 1];
+    const [nextAge, nextValue] = POT_AGE_POINTS[i];
+
+    if (numericAge <= nextAge) {
+      const t = (numericAge - prevAge) / (nextAge - prevAge);
+      return prevValue + (nextValue - prevValue) * t;
+    }
+  }
+
+  return 0.04;
+}
+
+function playerPotentialWindowScore(player, yearsAhead) {
+  const potential = getPlayerPotentialValue(player);
+  const overall = getPlayerOverallValue(player);
+  const futureAge = Number(player?.age ?? 25) + yearsAhead;
+  const ageMultiplier = potentialAgeMultiplier(futureAge);
+  const upsideGap = Math.max(0, potential - overall);
+  const uncertaintyPenalty = Math.min(5, upsideGap * 0.35) * ageMultiplier;
+  const eliteBonus = Math.max(0, potential - 92) * 0.12 * ageMultiplier;
+
+  return 58 + (potential - 58) * ageMultiplier + eliteBonus - uncertaintyPenalty;
+}
+
+function averageTop(scores, count) {
+  const usableCount = Math.min(count, scores.length);
+  if (usableCount <= 0) return 0;
+
+  return scores.slice(0, usableCount).reduce((sum, value) => sum + value, 0) / usableCount;
+}
+
+function weightedFullRosterAverage(scores) {
+  let numerator = 0;
+  let denominator = 0;
+
+  scores.forEach((score, index) => {
+    const weight = Math.pow(0.86, index);
+    numerator += score * weight;
+    denominator += weight;
+  });
+
+  return denominator > 0 ? numerator / denominator : 0;
+}
+
+function potentialWindowTeamScore(players, yearsAhead) {
+  const scores = (players || [])
+    .map((player) => playerPotentialWindowScore(player, yearsAhead))
+    .filter((score) => Number.isFinite(score))
+    .sort((a, b) => b - a);
+
+  if (scores.length === 0) return 0;
+
+  return (
+    0.48 * averageTop(scores, 2) +
+    0.37 * averageTop(scores, 5) +
+    0.15 * weightedFullRosterAverage(scores)
+  );
+}
+
+function getTeamPotentialForPowerRankings(team, exactCurrentOverall = 0) {
+  const valid = (team?.players || []).filter(
+    (player) => player && player.name && (hasFiniteRating(player.potential) || hasFiniteRating(player.overall))
+  );
+
+  if (valid.length === 0) return 0;
+
+  const windowScores = POT_FUTURE_WINDOWS.map((window) => ({
+    ...window,
+    score: potentialWindowTeamScore(valid, window.years),
+  }));
+
+  const rawPot = windowScores.reduce(
+    (sum, window) => sum + window.score * window.weight,
+    0
+  );
+
+  const futureStrength = Math.max(0, rawPot - 84) / 10;
+  const proofBonus =
+    Math.max(0, toNum(exactCurrentOverall, 0) - POT_PROOF_BASE_OVERALL) *
+      futureStrength *
+      POT_PROOF_MULTIPLIER +
+    Math.max(0, toNum(exactCurrentOverall, 0) - POT_ELITE_PROOF_BASE_OVERALL) *
+      futureStrength *
+      POT_ELITE_PROOF_MULTIPLIER;
+
+  const exactPot = Math.min(
+    99,
+    POT_SCALE_FLOOR_VALUE + (rawPot + proofBonus - POT_SCALE_BASE) * POT_SCALE_MULTIPLIER
+  );
+
+  return Math.round(toNum(exactPot, 0));
 }
 
 function loadSchedule() {
@@ -268,26 +427,46 @@ export default function PowerRankings() {
         overall: ratings.overall,
         off: ratings.off,
         def: ratings.def,
+        potential: getTeamPotentialForPowerRankings(team, ratings.exactOverall),
         w: toNum(record.w, 0),
         l: toNum(record.l, 0),
         gp,
         winPct: gp > 0 ? toNum(record.w, 0) / gp : 0,
         diff,
         pointDiff: gp > 0 ? diff / gp : 0,
-        rosterCount: Array.isArray(team?.players) ? team.players.length : 0,
         topPlayers: getTopPlayers(team),
       };
     });
 
-    baseRows.sort(
+    const useRecordPowerRankings =
+      baseRows.length > 0 && baseRows.every((row) => row.gp >= 20);
+
+    const rowsWithScores = baseRows.map((row) => {
+      const recordScore = row.winPct * 100;
+      const powerScore = useRecordPowerRankings
+        ? row.overall * 0.5 + recordScore * 0.5
+        : row.overall;
+
+      return {
+        ...row,
+        recordScore,
+        powerScore,
+        useRecordPowerRankings,
+      };
+    });
+
+    rowsWithScores.sort(
       (a, b) =>
+        b.powerScore - a.powerScore ||
+        (useRecordPowerRankings ? b.winPct - a.winPct : 0) ||
         b.overall - a.overall ||
         b.off + b.def - (a.off + a.def) ||
         b.pointDiff - a.pointDiff ||
+        b.w - a.w ||
         a.name.localeCompare(b.name)
     );
 
-    return baseRows.map((row, idx) => ({ ...row, rank: idx + 1 }));
+    return rowsWithScores.map((row, idx) => ({ ...row, rank: idx + 1 }));
   }, [teams, confMap]);
 
   const filteredRows = useMemo(() => {
@@ -341,8 +520,8 @@ export default function PowerRankings() {
         case "conference":
           diff = compareString(a.conference, b.conference);
           break;
-        case "roster":
-          diff = compareNumber(a.rosterCount, b.rosterCount);
+        case "potential":
+          diff = compareNumber(a.potential, b.potential);
           break;
         case "topPlayers":
           diff = compareString(a.topPlayers, b.topPlayers);
@@ -374,12 +553,6 @@ export default function PowerRankings() {
             <h1 className="text-3xl font-bold text-orange-500">Power Rankings</h1>
 
             <div className="flex gap-2">
-              <button
-                onClick={() => navigate("/standings")}
-                className="px-3 py-1 rounded bg-neutral-700 hover:bg-neutral-600 font-semibold"
-              >
-                Standings
-              </button>
               <button
                 onClick={() => navigate("/team-hub")}
                 className="px-3 py-1 rounded bg-neutral-700 hover:bg-neutral-600 font-semibold"
@@ -413,7 +586,7 @@ export default function PowerRankings() {
                   <SortHeader label="DEF" sortKey="def" sortConfig={sortConfig} onSort={handleSort} />
                   <SortHeader label="Record" sortKey="record" sortConfig={sortConfig} onSort={handleSort} />
                   <SortHeader label="Conf" sortKey="conference" sortConfig={sortConfig} onSort={handleSort} />
-                  <SortHeader label="Roster" sortKey="roster" sortConfig={sortConfig} onSort={handleSort} />
+                  <SortHeader label="POT" sortKey="potential" sortConfig={sortConfig} onSort={handleSort} />
                   <SortHeader label="Top Players" sortKey="topPlayers" sortConfig={sortConfig} onSort={handleSort} align="left" />
                 </tr>
               </thead>
@@ -448,7 +621,7 @@ export default function PowerRankings() {
                       <span className="text-red-400">{row.l}</span>
                     </td>
                     <td className="px-3 py-2">{row.conference || "—"}</td>
-                    <td className="px-3 py-2">{row.rosterCount}</td>
+                    <td className="px-3 py-2 font-semibold text-orange-300">{row.potential}</td>
                     <td className="px-3 py-2 text-left text-gray-300">{row.topPlayers || "—"}</td>
                   </tr>
                 ))}

@@ -5,9 +5,14 @@ import { findTradeOffers } from "../api/tradeNegotiationPy.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import PageFade from "../components/PageFade";
 import {
+  canAddCustomProtectionToPick,
+  getTradePickBaseProtectionLabel,
+  getTradeablePickOwnedRange,
   normalizeDraftPicks,
   normalizeTeamName,
+  protectionDisplayForOwnedRange,
   sortDraftPickAssets,
+  validateCustomPickProtection,
 } from "../utils/draftPicks.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
@@ -15,16 +20,12 @@ import "../styles/BMPageBackground.css";
 const TRADE_BUILDER_KEY = "bm_trade_builder_v1";
 const TRADE_FINDER_STATE_KEY = "bm_trade_finder_state_v1";
 const DEFAULT_PICK_PROTECTION = "Unprotected";
-const PICK_PROTECTION_OPTIONS = [
-  "Unprotected",
-  "Top 3 Protected",
-  "Top 5 Protected",
-  "Top 8 Protected",
-  "Top 10 Protected",
-  "Lottery Protected",
-  "1-14 Protected",
-  "Top 20 Protected",
-];
+const REGULAR_SEASON_MIN_STANDARD_PLAYERS = 14;
+const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 16;
+const TRADE_MATCHING_SMALL_OUTGOING = 7_500_000;
+const TRADE_MATCHING_MID_OUTGOING = 29_000_000;
+const TRADE_MATCHING_BUFFER = 250_000;
+const TRADE_SALARY_TOLERANCE = 1_000;
 
 // Manual scrollbar controls for the Trade Finder scroll areas.
 // This styles the tall vertical scrollbar/thumb on the package and offer panels.
@@ -390,16 +391,32 @@ function getCurrentSeasonYear(leagueData) {
   );
 }
 
+function getTradePayrollSeasonYear(leagueData) {
+  const rawYear = Number(getCurrentSeasonYear(leagueData));
+  return Number.isFinite(rawYear) ? rawYear + 1 : 2026;
+}
+
 function getPlayerSalary(player, leagueData) {
   const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
-  const salaries = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
+  const salaries = Array.isArray(contract.salaryByYear)
+    ? contract.salaryByYear.map((value) => Number(value) || 0)
+    : [];
+  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
 
   if (salaries.length) {
-    const startYear = Number(contract.startYear || getCurrentSeasonYear(leagueData));
-    let idx = getCurrentSeasonYear(leagueData) - startYear;
-    if (!Number.isFinite(idx) || idx < 0) idx = 0;
-    if (idx >= salaries.length) idx = salaries.length - 1;
-    return Number(salaries[idx] || 0);
+    let startYear = Number(contract.startYear || payrollSeasonYear);
+    let idx = payrollSeasonYear - startYear;
+    const lastYear = startYear + salaries.length - 1;
+    const hasPayrollSeasonSlot = idx >= 0 && idx < salaries.length;
+
+    if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && !hasPayrollSeasonSlot) {
+      startYear = payrollSeasonYear;
+      idx = 0;
+    }
+
+    if (idx >= 0 && idx < salaries.length) return Number(salaries[idx] || 0);
+    if (payrollSeasonYear > lastYear) return Number(salaries[salaries.length - 1] || 0);
+    return Number(salaries[0] || 0);
   }
 
   const fallback = Number(
@@ -438,6 +455,87 @@ function pickProtectionLabel(pick) {
   const label = String(raw || "").trim();
   if (!label || label.toLowerCase() === "none" || label.toLowerCase() === "null") return DEFAULT_PICK_PROTECTION;
   return label;
+}
+
+function defaultFinderProtectionEnd(pick) {
+  const owned = getTradeablePickOwnedRange(pick);
+  const round = Number(pick?.round || 1) === 2 ? 2 : 1;
+  const preferred = round === 1 && owned.start === 1 ? 14 : owned.start + 4;
+  return Math.max(owned.start, Math.min(owned.end - 1, preferred));
+}
+
+function normalizeFinderPickRule(pick, rawRule) {
+  if (rawRule && typeof rawRule === "object") {
+    const mode = rawRule.mode === "protected" ? "protected" : "full";
+    return {
+      mode,
+      protectEnd: Number(rawRule.protectEnd || defaultFinderProtectionEnd(pick)),
+    };
+  }
+
+  return {
+    mode: "full",
+    protectEnd: defaultFinderProtectionEnd(pick),
+  };
+}
+
+function buildFinderPickTradeRule(pick, rawRule) {
+  const rule = normalizeFinderPickRule(pick, rawRule);
+  if (rule.mode !== "protected") {
+    return {
+      action: "full",
+      ownedRange: getTradeablePickOwnedRange(pick),
+      source: "trade_finder_v2",
+    };
+  }
+
+  const owned = getTradeablePickOwnedRange(pick);
+  const validation = validateCustomPickProtection(pick, owned.start, rule.protectEnd);
+  if (!validation.ok) {
+    return {
+      action: "full",
+      ownedRange: owned,
+      source: "trade_finder_v2",
+      fallbackReason: validation.reason,
+    };
+  }
+
+  return {
+    action: "protected",
+    protectStart: validation.retainedRange.start,
+    protectEnd: validation.retainedRange.end,
+    retainedRange: validation.retainedRange,
+    conveyedRange: validation.conveyedRange,
+    ownedRange: validation.ownedRange,
+    baseProtectionLabel: validation.baseProtectionLabel,
+    source: "trade_finder_v2",
+  };
+}
+
+function finderPickProtectionLabel(pick, rawRule) {
+  const tradeRule = buildFinderPickTradeRule(pick, rawRule);
+  if (tradeRule.action === "protected") return tradeRule.baseProtectionLabel;
+  return getTradePickBaseProtectionLabel(pick) || pickProtectionLabel(pick);
+}
+
+function buildFinderPickItem(asset, rawRule) {
+  const tradeRule = buildFinderPickTradeRule(asset.pick, rawRule);
+  const protection = tradeRule.action === "protected"
+    ? tradeRule.baseProtectionLabel
+    : getTradePickBaseProtectionLabel(asset.pick) || pickProtectionLabel(asset.pick);
+
+  return {
+    ...asset,
+    protection,
+    tradeRule,
+    pick: {
+      ...asset.pick,
+      protection,
+      protections: protection,
+      displayProtection: protection,
+      tradeRule,
+    },
+  };
 }
 
 function getTeamPlayers(team) {
@@ -666,6 +764,7 @@ function pickValue(pick, protection = DEFAULT_PICK_PROTECTION, leagueData = null
   else if (protectionText.includes("top 8")) protectionPenalty = 6;
   else if (protectionText.includes("top 5")) protectionPenalty = 4;
   else if (protectionText.includes("top 3")) protectionPenalty = 3;
+  else if (protectionText.includes("protected")) protectionPenalty = round === 1 ? 7 : 1.5;
 
   return Math.max(2, base - futurePenalty - protectionPenalty);
 }
@@ -800,22 +899,25 @@ function getLeagueAmount(leagueData, rules, keys, fallback = 0) {
 }
 
 function getFinancialLimits(leagueData) {
-  const seasonYear = getCurrentSeasonYear(leagueData);
+  const seasonYear = getTradePayrollSeasonYear(leagueData);
   const rules = getLeagueFinancialRules(leagueData || {}, seasonYear);
   const salaryCap = getLeagueAmount(leagueData, rules, ["salaryCap", "capLimit"], rules.salaryCap);
+  const firstApron = getLeagueAmount(leagueData, rules, ["firstApron", "apron1"], rules.firstApron || salaryCap);
+  const secondApron = getLeagueAmount(leagueData, rules, ["secondApron", "apron2"], rules.secondApron || firstApron);
   const hardCap = getLeagueAmount(
     leagueData,
     rules,
     ["hardCap", "hardCapLimit", "secondApron", "apron2"],
-    rules.hardCap || rules.secondApron || salaryCap
+    rules.hardCap || rules.secondApron || secondApron || salaryCap
   );
+  const inflationIndex = Number(rules.inflationIndex || 1);
 
-  return { salaryCap, hardCap };
+  return { salaryCap, firstApron, secondApron, hardCap, inflationIndex, seasonYear };
 }
 
 function getCurrentDeadCapForTeam(team, leagueData) {
   const teamName = team?.name;
-  const seasonYear = getCurrentSeasonYear(leagueData);
+  const seasonYear = getTradePayrollSeasonYear(leagueData);
   const rows = Array.isArray(leagueData?.deadCapByTeam?.[teamName])
     ? leagueData.deadCapByTeam[teamName]
     : [];
@@ -843,13 +945,71 @@ function getTeamBasePayroll(team, leagueData) {
 }
 
 function getTeamCapInfo(team, leagueData, outgoingSalary = 0, incomingSalary = 0) {
-  const { salaryCap, hardCap } = getFinancialLimits(leagueData);
+  const limits = getFinancialLimits(leagueData);
+  const { salaryCap, firstApron, secondApron, hardCap } = limits;
   const basePayroll = getTeamBasePayroll(team, leagueData);
   const payroll = Math.max(0, basePayroll - Number(outgoingSalary || 0) + Number(incomingSalary || 0));
   const capRoom = salaryCap > 0 ? salaryCap - payroll : Number(team?.capRoom ?? team?.financials?.capRoom ?? 0);
+  const firstApronRoom = firstApron > 0 ? firstApron - payroll : 0;
+  const secondApronRoom = secondApron > 0 ? secondApron - payroll : 0;
   const hardCapRoom = hardCap > 0 ? hardCap - payroll : Number(team?.hardCapRoom ?? team?.financials?.hardCapRoom ?? 0);
 
-  return { capRoom, hardCapRoom, payroll, basePayroll, salaryCap, hardCap };
+  return {
+    capRoom,
+    firstApronRoom,
+    secondApronRoom,
+    hardCapRoom,
+    payroll,
+    basePayroll,
+    salaryCap,
+    firstApron,
+    secondApron,
+    hardCap,
+    seasonYear: limits.seasonYear,
+  };
+}
+
+function scaledTradeMatchingAmount(amount, leagueData) {
+  const { inflationIndex } = getFinancialLimits(leagueData);
+  return Number(amount || 0) * Math.max(0.5, Number(inflationIndex || 1));
+}
+
+function getBelowApronMatchingLimit(outgoingSalary, leagueData) {
+  const outgoing = Number(outgoingSalary || 0);
+  const smallBand = scaledTradeMatchingAmount(TRADE_MATCHING_SMALL_OUTGOING, leagueData);
+  const midBand = scaledTradeMatchingAmount(TRADE_MATCHING_MID_OUTGOING, leagueData);
+  const buffer = scaledTradeMatchingAmount(TRADE_MATCHING_BUFFER, leagueData);
+
+  if (outgoing <= 0) return 0;
+  if (outgoing <= smallBand) return outgoing * 2 + buffer;
+  if (outgoing <= midBand) return outgoing + smallBand;
+  return outgoing * 1.25 + buffer;
+}
+
+function isTradeFinanciallyLegal({ team, leagueData, outgoingSalary = 0, incomingSalary = 0 }) {
+  const outgoing = Number(outgoingSalary || 0);
+  const incoming = Number(incomingSalary || 0);
+  if (incoming <= outgoing + TRADE_SALARY_TOLERANCE) return true;
+
+  const cap = getTeamCapInfo(team, leagueData, outgoing, incoming);
+  const basePayroll = Number(cap.basePayroll || 0);
+  const projectedPayroll = Number(cap.payroll || 0);
+  const salaryCap = Number(cap.salaryCap || 0);
+  const firstApron = Number(cap.firstApron || 0);
+  const capRoomBefore = Math.max(0, salaryCap - basePayroll);
+
+  if (firstApron > 0 && basePayroll >= firstApron - TRADE_SALARY_TOLERANCE) return false;
+  if (salaryCap > 0 && basePayroll < salaryCap && incoming <= outgoing + capRoomBefore + TRADE_SALARY_TOLERANCE) return true;
+
+  const matchingLimit = getBelowApronMatchingLimit(outgoing, leagueData);
+  const withinMatching = incoming <= matchingLimit + TRADE_SALARY_TOLERANCE;
+  const projectedAtOrAboveFirstApron = firstApron > 0 && projectedPayroll >= firstApron - TRADE_SALARY_TOLERANCE;
+
+  return withinMatching && !projectedAtOrAboveFirstApron;
+}
+
+function getAllowedProjectedStandardRosterMax(team) {
+  return Math.max(REGULAR_SEASON_MAX_STANDARD_PLAYERS, getStandardRosterCount(team));
 }
 
 function sideSalary(items = [], leagueData) {
@@ -962,17 +1122,26 @@ function validateTradeFinderOffer({ leagueData, selectedTeam, offer }) {
   const offerOutgoingSalary = sideSalary(offerItems, leagueData);
   const offerIncomingSalary = sideSalary(selectedItems, leagueData);
 
-  const selectedCap = getTeamCapInfo(selectedTeam, leagueData, selectedOutgoingSalary, selectedIncomingSalary);
-  const offerCap = getTeamCapInfo(offerTeam, leagueData, offerOutgoingSalary, offerIncomingSalary);
+  const selectedFinancialOk = isTradeFinanciallyLegal({
+    team: selectedTeam,
+    leagueData,
+    outgoingSalary: selectedOutgoingSalary,
+    incomingSalary: selectedIncomingSalary,
+  });
+  const offerFinancialOk = isTradeFinanciallyLegal({
+    team: offerTeam,
+    leagueData,
+    outgoingSalary: offerOutgoingSalary,
+    incomingSalary: offerIncomingSalary,
+  });
 
-  if (Number(selectedCap.hardCapRoom || 0) < 0) return false;
-  if (Number(offerCap.hardCapRoom || 0) < 0) return false;
+  if (!selectedFinancialOk || !offerFinancialOk) return false;
 
   if (!isOffseasonTradeWindow(leagueData)) {
     const selectedProjected = getProjectedStandardRosterCount(selectedTeam, selectedItems, offerItems);
     const offerProjected = getProjectedStandardRosterCount(offerTeam, offerItems, selectedItems);
-    if (selectedProjected < 14 || selectedProjected > 15) return false;
-    if (offerProjected < 14 || offerProjected > 15) return false;
+    if (selectedProjected < REGULAR_SEASON_MIN_STANDARD_PLAYERS || selectedProjected > getAllowedProjectedStandardRosterMax(selectedTeam)) return false;
+    if (offerProjected < REGULAR_SEASON_MIN_STANDARD_PLAYERS || offerProjected > getAllowedProjectedStandardRosterMax(offerTeam)) return false;
   }
 
   return true;
@@ -994,12 +1163,24 @@ function filterLegalAcceptedTradeFinderOffers({ offers = [], leagueData, selecte
 function saveTradeBuilderFromOffer({ selectedTeam, offerTeam, selectedItems, offerItems }) {
   const userItems = selectedItems.map((item) => {
     if (item.type === "player") return { type: "player", player: item.player };
-    return { type: "pick", pick: item.pick, protection: item.protection || DEFAULT_PICK_PROTECTION };
+    return {
+      type: "pick",
+      pick: item.pick,
+      protection: item.protection || DEFAULT_PICK_PROTECTION,
+      tradeRule: item.tradeRule || item.pick?.tradeRule || undefined,
+      displayLabel: item.displayLabel || undefined,
+    };
   });
 
   const cpuItems = offerItems.map((item) => {
     if (item.type === "player") return { type: "player", player: item.player };
-    return { type: "pick", pick: item.pick, protection: item.protection || DEFAULT_PICK_PROTECTION };
+    return {
+      type: "pick",
+      pick: item.pick,
+      protection: item.protection || DEFAULT_PICK_PROTECTION,
+      tradeRule: item.tradeRule || item.pick?.tradeRule || undefined,
+      displayLabel: item.displayLabel || undefined,
+    };
   });
 
   localStorage.setItem(
@@ -1150,16 +1331,23 @@ function TradeFinderRatingRing({ player, variant = "packageRows" }) {
   );
 }
 
-function AssetRow({ asset, selected, onToggle, protection, onProtectionChange, leagueData, team }) {
+function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team }) {
   const isPlayer = asset.type === "player";
   const label = isPlayer ? playerNameOf(asset.player) : formatPick(asset.pick);
   const positionText = isPlayer
     ? `${asset.player?.pos || "-"}${asset.player?.secondaryPos ? ` / ${asset.player.secondaryPos}` : ""}`
     : "";
   const ageText = isPlayer && asset.player?.age ? `Age ${asset.player.age}` : "";
+  const normalizedPickRule = !isPlayer ? normalizeFinderPickRule(asset.pick, pickRule) : null;
+  const protection = !isPlayer ? finderPickProtectionLabel(asset.pick, pickRule) : DEFAULT_PICK_PROTECTION;
+  const ownedRange = !isPlayer ? getTradeablePickOwnedRange(asset.pick) : null;
+  const customProtectionAllowed = !isPlayer ? canAddCustomProtectionToPick(asset.pick) : false;
+  const customProtectionValidation = !isPlayer && normalizedPickRule?.mode === "protected"
+    ? validateCustomPickProtection(asset.pick, ownedRange.start, normalizedPickRule.protectEnd)
+    : null;
   const contractLine = isPlayer
     ? `Contract: ${formatMoney(getPlayerSalary(asset.player, leagueData))}`
-    : `${protection || DEFAULT_PICK_PROTECTION} • Round ${asset.pick?.round || "-"}`;
+    : `${protection || DEFAULT_PICK_PROTECTION} • Owns ${ownedRange?.start || "?"}-${ownedRange?.end || "?"}`;
   const headshotT = TRADE_FINDER_HEADSHOT_TUNING.packageRows;
   const ringT = TRADE_FINDER_RATING_RING_TUNING.packageRows;
   const rowT = TRADE_FINDER_PLAYER_ROW_TUNING.packageRows;
@@ -1287,15 +1475,50 @@ function AssetRow({ asset, selected, onToggle, protection, onProtectionChange, l
       </div>
 
       {!isPlayer && selected && (
-        <select
-          value={protection || DEFAULT_PICK_PROTECTION}
-          onChange={(event) => onProtectionChange(event.target.value)}
-          className="relative z-10 mt-3 w-full rounded-xl border border-white/10 bg-black px-3 py-2 text-xs font-black text-white outline-none"
-        >
-          {PICK_PROTECTION_OPTIONS.map((option) => (
-            <option key={option} value={option}>{option}</option>
-          ))}
-        </select>
+        <div className="relative z-10 mt-3 rounded-xl border border-white/10 bg-black p-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => onPickRuleChange?.({ mode: "full", protectEnd: normalizedPickRule.protectEnd })}
+              className={`rounded-lg px-3 py-2 text-xs font-black transition ${
+                normalizedPickRule.mode !== "protected" ? "bg-orange-600 text-white" : "bg-neutral-900 text-neutral-300 hover:bg-white/10"
+              }`}
+            >
+              Full Owned Piece
+            </button>
+            <button
+              type="button"
+              disabled={!customProtectionAllowed}
+              onClick={() => onPickRuleChange?.({ mode: "protected", protectEnd: normalizedPickRule.protectEnd })}
+              className={`rounded-lg px-3 py-2 text-xs font-black transition ${
+                normalizedPickRule.mode === "protected" ? "bg-orange-600 text-white" : "bg-neutral-900 text-neutral-300 hover:bg-white/10"
+              } ${!customProtectionAllowed ? "opacity-45" : ""}`}
+            >
+              Custom Protected
+            </button>
+          </div>
+
+          {normalizedPickRule.mode === "protected" && customProtectionAllowed && (
+            <div className="mt-3 grid gap-2">
+              <label className="text-xs font-black uppercase tracking-[0.12em] text-neutral-400">
+                Protects {ownedRange.start}-
+                <input
+                  type="number"
+                  min={ownedRange.start}
+                  max={ownedRange.end - 1}
+                  value={normalizedPickRule.protectEnd || ""}
+                  onChange={(event) => onPickRuleChange?.({ mode: "protected", protectEnd: Number(event.target.value) })}
+                  className="ml-2 w-24 rounded-lg border border-white/10 bg-neutral-900 px-2 py-1 font-black text-white outline-none"
+                />
+              </label>
+              <div className={`text-xs font-bold ${customProtectionValidation?.ok ? "text-emerald-300" : "text-red-300"}`}>
+                {customProtectionValidation?.ok
+                  ? `${protectionDisplayForOwnedRange(customProtectionValidation.baseProtectionLabel, customProtectionValidation.conveyedRange)} can be traded.`
+                  : customProtectionValidation?.reason || "Enter a valid owned protection range."}
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -1504,10 +1727,7 @@ export default function TradeFinder() {
       .filter((asset) => keys.has(asset.key))
       .map((asset) => {
         if (asset.type === "pick") {
-          return {
-            ...asset,
-            protection: pickProtections[asset.key] || pickProtectionLabel(asset.pick),
-          };
+          return buildFinderPickItem(asset, pickProtections[asset.key]);
         }
         return asset;
       });
@@ -1539,7 +1759,7 @@ export default function TradeFinder() {
     if (asset.type === "pick") {
       setPickProtections((prev) => ({
         ...prev,
-        [asset.key]: prev[asset.key] || pickProtectionLabel(asset.pick),
+        [asset.key]: prev[asset.key] || normalizeFinderPickRule(asset.pick, null),
       }));
     }
   };
@@ -1584,7 +1804,7 @@ export default function TradeFinder() {
         const filteredCount = rawOffers.length;
         setOfferSearchError(
           filteredCount
-            ? `${filteredCount} CPU idea${filteredCount === 1 ? " was" : "s were"} found, but none passed acceptance, hard-cap, roster, and ownership checks.`
+            ? `${filteredCount} CPU idea${filteredCount === 1 ? " was" : "s were"} found, but none passed acceptance, salary-matching, roster, and ownership checks.`
             : result?.message || "No fully legal accepted CPU offers were found for this package."
         );
       }
@@ -1668,7 +1888,7 @@ export default function TradeFinder() {
                     <div className="text-sm font-black uppercase tracking-[0.18em] text-orange-200">Your Package</div>
                     <div className="mt-1 text-2xl font-black text-white">{selectedTeam.name}</div>
                     <div className="mt-1 text-xs font-bold text-neutral-400">
-                      Select players and picks. Add protection to picks before searching.
+                      Select players and picks. Picks can be sent as full owned pieces or with valid custom protections.
                     </div>
                   </div>
                 </div>
@@ -1695,8 +1915,8 @@ export default function TradeFinder() {
                       asset={asset}
                       selected={selectedAssetKeys.includes(asset.key)}
                       onToggle={() => toggleAsset(asset)}
-                      protection={pickProtections[asset.key] || pickProtectionLabel(asset.pick)}
-                      onProtectionChange={(value) => {
+                      pickRule={pickProtections[asset.key] || normalizeFinderPickRule(asset.pick, null)}
+                      onPickRuleChange={(value) => {
                         setSearched(false);
                         setPythonOffers([]);
                         setOfferSearchError("");
@@ -1753,7 +1973,7 @@ export default function TradeFinder() {
 
                 {searched && isSearchingOffers && (
                   <div className="rounded-2xl border border-orange-400/25 bg-orange-500/10 p-5 text-sm font-bold leading-6 text-orange-100">
-                    CPU front offices are checking acceptance, salary, hard cap, roster count, and asset ownership...
+                    CPU front offices are checking acceptance, salary matching, roster count, and asset ownership...
                   </div>
                 )}
 
@@ -1765,7 +1985,7 @@ export default function TradeFinder() {
 
                 {searched && selectedItems.length > 0 && !isSearchingOffers && !offers.length && (
                   <div className="rounded-2xl border border-white/10 bg-black/35 p-5 text-sm font-bold leading-6 text-neutral-300">
-                    No fully legal accepted offers are available for this package. Trade Finder now hides offers that fail CPU acceptance, hard cap, roster-count, or asset-ownership checks.
+                    No fully legal accepted offers are available for this package. Trade Finder now hides offers that fail CPU acceptance, salary-matching, roster-count, or asset-ownership checks.
                   </div>
                 )}
 

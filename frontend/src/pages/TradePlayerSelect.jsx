@@ -7,7 +7,7 @@ import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
 const TRADE_BUILDER_KEY = "bm_trade_builder_v1";
-const MAX_SIDE_ITEMS = 6;
+const MAX_SIDE_ITEMS = 8;
 
 function getAllTeamsFromLeague(leagueData) {
   if (!leagueData) return [];
@@ -41,16 +41,32 @@ function getCurrentSeasonYear(leagueData) {
   );
 }
 
+function getTradePayrollSeasonYear(leagueData) {
+  const rawYear = Number(getCurrentSeasonYear(leagueData));
+  return Number.isFinite(rawYear) ? rawYear + 1 : 2026;
+}
+
 function getPlayerSalary(player, leagueData) {
   const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
-  const salaries = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
+  const salaries = Array.isArray(contract.salaryByYear)
+    ? contract.salaryByYear.map((value) => Number(value) || 0)
+    : [];
+  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
 
   if (salaries.length) {
-    const startYear = Number(contract.startYear || getCurrentSeasonYear(leagueData));
-    let idx = getCurrentSeasonYear(leagueData) - startYear;
-    if (!Number.isFinite(idx) || idx < 0) idx = 0;
-    if (idx >= salaries.length) idx = salaries.length - 1;
-    return Number(salaries[idx] || 0);
+    let startYear = Number(contract.startYear || payrollSeasonYear);
+    let idx = payrollSeasonYear - startYear;
+    const lastYear = startYear + salaries.length - 1;
+    const hasPayrollSeasonSlot = idx >= 0 && idx < salaries.length;
+
+    if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && !hasPayrollSeasonSlot) {
+      startYear = payrollSeasonYear;
+      idx = 0;
+    }
+
+    if (idx >= 0 && idx < salaries.length) return Number(salaries[idx] || 0);
+    if (payrollSeasonYear > lastYear) return Number(salaries[salaries.length - 1] || 0);
+    return Number(salaries[0] || 0);
   }
 
   const fallback = Number(
@@ -104,6 +120,19 @@ function itemKey(item) {
 
 function getSideItems(builder, side) {
   return side === "user" ? builder.userItems || [] : builder.cpuItems || [];
+}
+
+function isPlayerItemForPlayer(item, player) {
+  if (!item || item.type !== "player" || !player) return false;
+  return playerKey(item.player) === playerKey(player);
+}
+
+function getAlreadyAddedPlayerKeys(items = []) {
+  const keys = new Set();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (item?.type === "player" && item.player) keys.add(playerKey(item.player));
+  }
+  return keys;
 }
 
 function setSideItems(builder, side, items) {
@@ -179,6 +208,17 @@ export default function TradePlayerSelect() {
   const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
   const team = teams.find((t) => t?.name === tradeTeamName) || teams[0] || null;
   const players = useMemo(() => getTeamPlayers(team), [team]);
+  const builderSnapshot = useMemo(() => readBuilder(), []);
+  const currentSideItems = useMemo(
+    () => getSideItems(builderSnapshot, tradeSide),
+    [builderSnapshot, tradeSide]
+  );
+  const alreadyAddedPlayerKeys = useMemo(
+    () => getAlreadyAddedPlayerKeys(currentSideItems),
+    [currentSideItems]
+  );
+  const sideItemCount = currentSideItems.length;
+  const sideIsFull = sideItemCount >= MAX_SIDE_ITEMS;
 
   const [selectedKey, setSelectedKey] = useState("");
   const [sortConfig, setSortConfig] = useState({ key: "overall", direction: "desc" });
@@ -214,13 +254,23 @@ export default function TradePlayerSelect() {
   }, [players, sortConfig]);
 
   useEffect(() => {
-    if (!selectedKey && sortedPlayers[0]) {
-      setSelectedKey(playerKey(sortedPlayers[0]));
+    if (!sortedPlayers.length) {
+      if (selectedKey) setSelectedKey("");
+      return;
     }
-  }, [sortedPlayers, selectedKey]);
+
+    const selectedStillExists = selectedKey && sortedPlayers.some((p) => playerKey(p) === selectedKey);
+    const selectedIsAvailable = selectedStillExists && !alreadyAddedPlayerKeys.has(selectedKey);
+    if (selectedIsAvailable) return;
+
+    const firstAvailable = sortedPlayers.find((p) => !alreadyAddedPlayerKeys.has(playerKey(p)));
+    setSelectedKey(playerKey(firstAvailable || sortedPlayers[0]));
+  }, [alreadyAddedPlayerKeys, sortedPlayers, selectedKey]);
 
   const selectedPlayer =
     sortedPlayers.find((p) => playerKey(p) === selectedKey) || sortedPlayers[0] || null;
+  const selectedPlayerAlreadyAdded = Boolean(selectedPlayer && alreadyAddedPlayerKeys.has(playerKey(selectedPlayer)));
+  const canAddSelectedPlayer = Boolean(selectedPlayer && team && !selectedPlayerAlreadyAdded && !sideIsFull);
 
   const handleSort = (key) => {
     setSortConfig((prev) => {
@@ -238,23 +288,30 @@ export default function TradePlayerSelect() {
     return null;
   };
 
-  const addSelected = () => {
-    if (!selectedPlayer || !team) return;
+  const addPlayerToBuilder = (player) => {
+    if (!player || !team || sideIsFull || alreadyAddedPlayerKeys.has(playerKey(player))) return;
 
     const builder = readBuilder();
     const currentItems = getSideItems(builder, tradeSide);
+
+    if (currentItems.some((item) => isPlayerItemForPlayer(item, player))) return;
+    if (currentItems.length >= MAX_SIDE_ITEMS) return;
+
     const nextItem = {
       type: "player",
       teamName: team.name,
-      player: selectedPlayer,
+      player,
     };
 
-    const nextKey = itemKey(nextItem);
-    const withoutDupes = currentItems.filter((item) => itemKey(item) !== nextKey);
-    const nextItems = [...withoutDupes, nextItem].slice(0, MAX_SIDE_ITEMS);
+    const nextItems = [...currentItems, nextItem];
 
     saveBuilder(setSideItems(builder, tradeSide, nextItems));
     navigate(returnTo);
+  };
+
+  const addSelected = () => {
+    if (!selectedPlayer || !canAddSelectedPlayer) return;
+    addPlayerToBuilder(selectedPlayer);
   };
 
   return (
@@ -282,10 +339,10 @@ export default function TradePlayerSelect() {
           <div className="w-36 flex items-center justify-end">
             <button
               onClick={addSelected}
-              disabled={!selectedPlayer}
-              className="rounded-xl bg-orange-600 px-5 py-2 text-sm font-black text-white transition hover:bg-orange-500 disabled:opacity-50"
+              disabled={!canAddSelectedPlayer}
+              className="rounded-xl bg-orange-600 px-5 py-2 text-sm font-black text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Add Player
+              {selectedPlayerAlreadyAdded ? "Already Added" : sideIsFull ? "Limit Reached" : "Add Player"}
             </button>
           </div>
         </div>
@@ -329,6 +386,16 @@ export default function TradePlayerSelect() {
                       {selectedPlayer.pos || "-"}
                       {selectedPlayer.secondaryPos ? ` / ${selectedPlayer.secondaryPos}` : ""} • Age {selectedPlayer.age ?? "-"} • Salary {formatMoney(getPlayerSalary(selectedPlayer, leagueData))}
                     </p>
+                    {selectedPlayerAlreadyAdded && (
+                      <div className="mt-3 inline-flex w-fit items-center rounded-full border border-orange-400/40 bg-orange-500/15 px-3 py-1 text-xs font-black uppercase tracking-[0.14em] text-orange-200">
+                        Already in package
+                      </div>
+                    )}
+                    {!selectedPlayerAlreadyAdded && sideIsFull && (
+                      <div className="mt-3 inline-flex w-fit items-center rounded-full border border-red-400/40 bg-red-500/15 px-3 py-1 text-xs font-black uppercase tracking-[0.14em] text-red-200">
+                        Package limit reached
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -372,24 +439,39 @@ export default function TradePlayerSelect() {
                 {sortedPlayers.map((p) => {
                   const key = playerKey(p);
                   const active = key === selectedKey;
+                  const alreadyAdded = alreadyAddedPlayerKeys.has(key);
+                  const unavailable = alreadyAdded || (!active && sideIsFull);
 
                   return (
                     <tr
                       key={key}
-                      onClick={() => setSelectedKey(key)}
-                      onDoubleClick={addSelected}
-                      className={`cursor-pointer transition ${
-                        active
-                          ? "bg-orange-600 text-white"
+                      onClick={() => {
+                        if (!alreadyAdded) setSelectedKey(key);
+                      }}
+                      onDoubleClick={() => {
+                        if (!alreadyAdded && !sideIsFull) addPlayerToBuilder(p);
+                      }}
+                      aria-disabled={alreadyAdded}
+                      title={alreadyAdded ? "Already in this trade package" : ""}
+                      className={`transition ${
+                        alreadyAdded
+                          ? "cursor-not-allowed bg-neutral-950/80 text-neutral-500 opacity-70"
+                          : active
+                          ? "cursor-pointer bg-orange-600 text-white"
                           : p.isTwoWay
-                          ? "bg-emerald-500/5 hover:bg-emerald-500/10"
+                          ? "cursor-pointer bg-emerald-500/5 hover:bg-emerald-500/10"
                           : p.isStash
-                          ? "bg-amber-500/5 hover:bg-amber-500/10"
-                          : "hover:bg-neutral-800"
+                          ? "cursor-pointer bg-amber-500/5 hover:bg-amber-500/10"
+                          : "cursor-pointer hover:bg-neutral-800"
                       }`}
                     >
                       <td className="py-2 px-3 whitespace-nowrap text-left pl-4 font-semibold">
                         {playerNameOf(p)}
+                        {alreadyAdded && (
+                          <span className="ml-3 inline-flex items-center rounded-full border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-orange-200">
+                            Already in package
+                          </span>
+                        )}
                         {p.isTwoWay && (
                           <span className="ml-2 inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-200">
                             2W

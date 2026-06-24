@@ -3,7 +3,15 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { evaluateTradeProposal } from "../api/tradeNegotiationPy.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
-import { normalizeDraftPickAsset, normalizeTeamName } from "../utils/draftPicks.js";
+import {
+  buildTradeMachineSwapAssets,
+  getTradeablePickOwnedRange,
+  makeTradeGeneratedDraftPickId,
+  normalizeDraftPickAsset,
+  normalizeTeamName,
+  protectionDisplayForOwnedRange,
+  validateCustomPickProtection,
+} from "../utils/draftPicks.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
@@ -14,9 +22,13 @@ const TRADE_DEADLINE_STATUS_KEY = "bm_trade_deadline_status_v1";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
-const MAX_SIDE_ITEMS = 6;
+const MAX_SIDE_ITEMS = 8;
 const REGULAR_SEASON_MIN_STANDARD_PLAYERS = 14;
-const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 15;
+const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 16;
+const TRADE_MATCHING_SMALL_OUTGOING = 7_500_000;
+const TRADE_MATCHING_MID_OUTGOING = 29_000_000;
+const TRADE_MATCHING_BUFFER = 250_000;
+const TRADE_SALARY_TOLERANCE = 1_000;
 
 
 // Manual trade-card layout controls.
@@ -192,6 +204,18 @@ function playerNameOf(player) {
   return player?.name || player?.player || "Unknown Player";
 }
 
+function getTradeCardNameFontSize(name, baseSize = 30) {
+  const clean = String(name || "").replace(/\s+/g, " ").trim();
+  const len = clean.length;
+  if (!len) return baseSize;
+
+  // Selected trade cards reserve fixed space for the face art and OVR ring.
+  // Long names should shrink to fit inside that remaining text lane instead
+  // of widening the card and hiding the remove button.
+  const estimatedFit = 230 / Math.max(1, len * 0.62);
+  return Math.max(16, Math.min(baseSize, Math.round(estimatedFit)));
+}
+
 function getCurrentSeasonYear(leagueData) {
   return Number(
     leagueData?.seasonYear ||
@@ -201,16 +225,46 @@ function getCurrentSeasonYear(leagueData) {
   );
 }
 
+function getTradePayrollSeasonYear(leagueData) {
+  const rawYear = Number(getCurrentSeasonYear(leagueData));
+  return Number.isFinite(rawYear) ? rawYear + 1 : 2026;
+}
+
 function getPlayerSalary(player, leagueData) {
   const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
-  const salaries = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
-  if (!salaries.length) return 0;
+  const salaries = Array.isArray(contract.salaryByYear)
+    ? contract.salaryByYear.map((value) => Number(value) || 0)
+    : [];
+  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
 
-  const startYear = Number(contract.startYear || getCurrentSeasonYear(leagueData));
-  let idx = getCurrentSeasonYear(leagueData) - startYear;
-  if (!Number.isFinite(idx) || idx < 0) idx = 0;
-  if (idx >= salaries.length) idx = salaries.length - 1;
-  return Number(salaries[idx] || 0);
+  if (salaries.length) {
+    let startYear = Number(contract.startYear || payrollSeasonYear);
+    let idx = payrollSeasonYear - startYear;
+    const lastYear = startYear + salaries.length - 1;
+    const hasPayrollSeasonSlot = idx >= 0 && idx < salaries.length;
+
+    // SalaryTable treats one-year deals that were created in the prior offseason
+    // as active for the displayed payroll season. Keep trade screens aligned.
+    if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && !hasPayrollSeasonSlot) {
+      startYear = payrollSeasonYear;
+      idx = 0;
+    }
+
+    if (idx >= 0 && idx < salaries.length) return Number(salaries[idx] || 0);
+    if (payrollSeasonYear > lastYear) return Number(salaries[salaries.length - 1] || 0);
+    return Number(salaries[0] || 0);
+  }
+
+  const fallback = Number(
+    player?.salary ??
+      player?.currentSalary ??
+      player?.contractSalary ??
+      player?.capHit ??
+      player?.aav ??
+      0
+  );
+
+  return Number.isFinite(fallback) ? fallback : 0;
 }
 
 function getContractYearsRemaining(player, leagueData) {
@@ -218,8 +272,14 @@ function getContractYearsRemaining(player, leagueData) {
   const salaries = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
   if (!salaries.length) return 0;
 
-  const startYear = Number(contract.startYear || getCurrentSeasonYear(leagueData));
-  let idx = getCurrentSeasonYear(leagueData) - startYear;
+  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
+  let startYear = Number(contract.startYear || payrollSeasonYear);
+  let idx = payrollSeasonYear - startYear;
+  const hasPayrollSeasonSlot = idx >= 0 && idx < salaries.length;
+  if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && !hasPayrollSeasonSlot) {
+    startYear = payrollSeasonYear;
+    idx = 0;
+  }
   if (!Number.isFinite(idx) || idx < 0) idx = 0;
   if (idx >= salaries.length) idx = salaries.length - 1;
   return Math.max(1, salaries.length - idx);
@@ -471,6 +531,8 @@ function itemKey(item) {
   }
   if (item.type === "pick") {
     const pick = item.pick || {};
+    const rule = item.tradeRule || pick.tradeRule || {};
+    if (rule.swapId) return `swap:${rule.swapId}:${rule.mirror ? "mirror" : "primary"}`;
     return `pick:${pick.id || pick.pickId || `${pick.year}_${pick.round}_${pick.originalTeam || pick.team || pick.owner || ""}`}`;
   }
   return `${item.type}:${JSON.stringify(item)}`;
@@ -503,22 +565,25 @@ function getLeagueAmount(leagueData, rules, keys, fallback = 0) {
 }
 
 function getFinancialLimits(leagueData) {
-  const seasonYear = getCurrentSeasonYear(leagueData);
+  const seasonYear = getTradePayrollSeasonYear(leagueData);
   const rules = getLeagueFinancialRules(leagueData || {}, seasonYear);
   const salaryCap = getLeagueAmount(leagueData, rules, ["salaryCap", "capLimit"], rules.salaryCap);
+  const firstApron = getLeagueAmount(leagueData, rules, ["firstApron", "apron1"], rules.firstApron || salaryCap);
+  const secondApron = getLeagueAmount(leagueData, rules, ["secondApron", "apron2"], rules.secondApron || firstApron);
   const hardCap = getLeagueAmount(
     leagueData,
     rules,
     ["hardCap", "hardCapLimit", "secondApron", "apron2"],
-    rules.hardCap || rules.secondApron || salaryCap
+    rules.hardCap || rules.secondApron || secondApron || salaryCap
   );
+  const inflationIndex = Number(rules.inflationIndex || 1);
 
-  return { salaryCap, hardCap };
+  return { salaryCap, firstApron, secondApron, hardCap, inflationIndex, seasonYear };
 }
 
 function getCurrentDeadCapForTeam(team, leagueData) {
   const teamName = team?.name;
-  const seasonYear = getCurrentSeasonYear(leagueData);
+  const seasonYear = getTradePayrollSeasonYear(leagueData);
   const rows = Array.isArray(leagueData?.deadCapByTeam?.[teamName])
     ? leagueData.deadCapByTeam[teamName]
     : [];
@@ -546,13 +611,128 @@ function getTeamBasePayroll(team, leagueData) {
 }
 
 function getTeamCapInfo(team, leagueData, outgoingSalary = 0, incomingSalary = 0) {
-  const { salaryCap, hardCap } = getFinancialLimits(leagueData);
+  const limits = getFinancialLimits(leagueData);
+  const { salaryCap, firstApron, secondApron, hardCap } = limits;
   const basePayroll = getTeamBasePayroll(team, leagueData);
   const payroll = Math.max(0, basePayroll - Number(outgoingSalary || 0) + Number(incomingSalary || 0));
   const capRoom = salaryCap > 0 ? salaryCap - payroll : Number(team?.capRoom ?? team?.financials?.capRoom ?? 0);
+  const firstApronRoom = firstApron > 0 ? firstApron - payroll : 0;
+  const secondApronRoom = secondApron > 0 ? secondApron - payroll : 0;
   const hardCapRoom = hardCap > 0 ? hardCap - payroll : Number(team?.hardCapRoom ?? team?.financials?.hardCapRoom ?? 0);
 
-  return { capRoom, hardCapRoom, payroll, basePayroll, salaryCap, hardCap };
+  return {
+    capRoom,
+    firstApronRoom,
+    secondApronRoom,
+    hardCapRoom,
+    payroll,
+    basePayroll,
+    salaryCap,
+    firstApron,
+    secondApron,
+    hardCap,
+    seasonYear: limits.seasonYear,
+  };
+}
+
+function scaledTradeMatchingAmount(amount, leagueData) {
+  const { inflationIndex } = getFinancialLimits(leagueData);
+  return Number(amount || 0) * Math.max(0.5, Number(inflationIndex || 1));
+}
+
+function getBelowApronMatchingLimit(outgoingSalary, leagueData) {
+  const outgoing = Number(outgoingSalary || 0);
+  const smallBand = scaledTradeMatchingAmount(TRADE_MATCHING_SMALL_OUTGOING, leagueData);
+  const midBand = scaledTradeMatchingAmount(TRADE_MATCHING_MID_OUTGOING, leagueData);
+  const buffer = scaledTradeMatchingAmount(TRADE_MATCHING_BUFFER, leagueData);
+
+  if (outgoing <= 0) return 0;
+  if (outgoing <= smallBand) return outgoing * 2 + buffer;
+  if (outgoing <= midBand) return outgoing + smallBand;
+  return outgoing * 1.25 + buffer;
+}
+
+function evaluateTradeFinancialLegality({ team, leagueData, outgoingSalary = 0, incomingSalary = 0 }) {
+  const teamName = team?.name || team?.teamName || "This team";
+  const outgoing = Number(outgoingSalary || 0);
+  const incoming = Number(incomingSalary || 0);
+  const cap = getTeamCapInfo(team, leagueData, outgoing, incoming);
+  const basePayroll = Number(cap.basePayroll || 0);
+  const projectedPayroll = Number(cap.payroll || 0);
+  const netSalary = incoming - outgoing;
+  const capRoomBefore = Math.max(0, Number(cap.salaryCap || 0) - basePayroll);
+  const firstApron = Number(cap.firstApron || 0);
+  const atOrAboveFirstApron = firstApron > 0 && basePayroll >= firstApron - TRADE_SALARY_TOLERANCE;
+  const projectedAtOrAboveFirstApron = firstApron > 0 && projectedPayroll >= firstApron - TRADE_SALARY_TOLERANCE;
+
+  const baseRows = [
+    { label: "Current payroll", value: formatMoney(basePayroll) },
+    { label: "Outgoing salary", value: formatMoney(outgoing) },
+    { label: "Incoming salary", value: formatMoney(incoming) },
+    { label: "Net salary change", value: formatMoney(netSalary) },
+    { label: "Projected payroll", value: formatMoney(projectedPayroll) },
+    { label: "Salary cap", value: formatMoney(cap.salaryCap) },
+    { label: "First apron", value: formatMoney(cap.firstApron) },
+    { label: "Second apron", value: formatMoney(cap.secondApron) },
+  ];
+
+  if (incoming <= outgoing + TRADE_SALARY_TOLERANCE) {
+    return {
+      ok: true,
+      cap,
+      title: `${teamName} Trade Salary Valid`,
+      message: `${teamName} is not taking back more current-season salary than it sends out.`,
+      rows: baseRows,
+      statusLabel: "Valid Trade",
+    };
+  }
+
+  if (atOrAboveFirstApron) {
+    return {
+      ok: false,
+      cap,
+      title: `${teamName} Apron Salary Issue`,
+      message: `${teamName} is at/above the first apron and cannot take back more salary than it sends out.`,
+      rows: baseRows,
+      statusLabel: "Apron Issue",
+    };
+  }
+
+  if (basePayroll < Number(cap.salaryCap || 0) && incoming <= outgoing + capRoomBefore + TRADE_SALARY_TOLERANCE) {
+    return {
+      ok: true,
+      cap,
+      title: `${teamName} Trade Salary Valid`,
+      message: `${teamName} can absorb the added salary using cap room.`,
+      rows: [...baseRows, { label: "Cap room before trade", value: formatMoney(capRoomBefore) }],
+      statusLabel: "Valid Trade",
+    };
+  }
+
+  const matchingLimit = getBelowApronMatchingLimit(outgoing, leagueData);
+  const withinMatching = incoming <= matchingLimit + TRADE_SALARY_TOLERANCE;
+
+  if (withinMatching && !projectedAtOrAboveFirstApron) {
+    return {
+      ok: true,
+      cap,
+      title: `${teamName} Trade Salary Valid`,
+      message: `${teamName} is using below-apron salary matching.`,
+      rows: [...baseRows, { label: "Max incoming by matching", value: formatMoney(matchingLimit) }],
+      statusLabel: "Valid Trade",
+    };
+  }
+
+  return {
+    ok: false,
+    cap,
+    title: `${teamName} Salary Match Issue`,
+    message: withinMatching
+      ? `${teamName} would use extra salary matching while ending at/above the first apron.`
+      : `${teamName} can take back up to ${formatMoney(matchingLimit)} based on the outgoing salary in this trade.`,
+    rows: [...baseRows, { label: "Max incoming by matching", value: formatMoney(matchingLimit) }],
+    statusLabel: withinMatching ? "Apron Issue" : "Salary Match Issue",
+  };
 }
 
 function formatPick(pick) {
@@ -610,7 +790,7 @@ function getTradePlayers(items) {
 function getTradePicks(items, leagueData = null) {
   const seasonYear = getCurrentSeasonYear(leagueData || {});
   return (items || [])
-    .filter((item) => item?.type === "pick" && item.pick)
+    .filter((item) => item?.type === "pick" && item.pick && !item.tradeValueExcluded && !item.tradeRule?.mirror)
     .map((item) => {
       const pick = item.pick || {};
       const pickNumber = getPickNumberFromAny(pick);
@@ -625,6 +805,7 @@ function getTradePicks(items, leagueData = null) {
         protection,
         protections: protection,
         displayProtection: protection,
+        tradeRule: item.tradeRule || pick.tradeRule || undefined,
       };
     });
 }
@@ -863,6 +1044,185 @@ function pickIdentityMatches(normalizedRow = {}, targetPick = {}, fromTeamName =
   return sameTeamName(normalizedRow.ownerTeam, targetOwner) || sameTeamName(normalizedRow.ownerTeam, fromTeamName);
 }
 
+function pickRuleOf(pickItem = {}) {
+  return pickItem.tradeRule || pickItem.pick?.tradeRule || {};
+}
+
+function getPickDisplayProtection(item = {}) {
+  return item.protection || item.pick?.displayProtection || item.pick?.protections || item.pick?.protection || "Unprotected";
+}
+
+function makeOwnedRangeFields(range = null) {
+  if (!range) return {};
+  return {
+    ownedSlots: { start: Number(range.start), end: Number(range.end) },
+    ownedRange: { start: Number(range.start), end: Number(range.end) },
+  };
+}
+
+function rebuildProtectedSplitRow({ sourceRow = {}, normalized = {}, ownerTeam, ownerLogo = "", range, baseProtectionLabel, tradeStamp, seedKind }) {
+  const year = Number(normalized.year || sourceRow.year || 0);
+  const round = Number(normalized.round || sourceRow.round || 1);
+  const originalTeam = normalized.originalTeam || sourceRow.originalTeam || sourceRow.originalTeamName || "";
+  const displayProtection = protectionDisplayForOwnedRange(baseProtectionLabel, range);
+
+  return normalizeDraftPickAsset({
+    ...sourceRow,
+    id: makeTradeGeneratedDraftPickId({
+      year,
+      round,
+      originalTeam,
+      ownerTeam,
+      kind: seedKind || "protected",
+      range,
+    }),
+    assetType: "pick",
+    type: "pick",
+    year,
+    round,
+    originalTeam,
+    originalTeamName: originalTeam,
+    ownerTeam,
+    owner: ownerTeam,
+    currentOwner: ownerTeam,
+    currentOwnerTeamName: ownerTeam,
+    ownerTeamName: ownerTeam,
+    teamName: ownerTeam,
+    ownerLogo: ownerLogo || sourceRow.ownerLogo || "",
+    currentOwnerTeamLogo: ownerLogo || sourceRow.currentOwnerTeamLogo || "",
+    logo: ownerLogo || sourceRow.logo || "",
+    protection: baseProtectionLabel,
+    protections: baseProtectionLabel,
+    displayProtection,
+    protectionType: "protected_range",
+    logicType: "trade_machine_protected_split",
+    status: sourceRow.status || "active",
+    ...makeOwnedRangeFields(range),
+    lastTrade: tradeStamp,
+    tradeHistory: Array.isArray(sourceRow.tradeHistory)
+      ? [...sourceRow.tradeHistory, tradeStamp]
+      : [tradeStamp],
+  });
+}
+
+function transferProtectedDraftPick(nextLeague, fromTeamName, toTeamName, pickItem, rowIndex, normalized) {
+  const rows = Array.isArray(nextLeague?.draftPicks) ? nextLeague.draftPicks : [];
+  const rule = pickRuleOf(pickItem);
+  const pick = pickItem?.pick || {};
+  const validation = validateCustomPickProtection(
+    normalized,
+    rule.protectStart ?? rule.retainedRange?.start ?? rule.ownedRange?.start,
+    rule.protectEnd ?? rule.retainedRange?.end
+  );
+
+  if (!validation.ok) return { ok: false, reason: validation.reason };
+
+  const fromTeam = findTeamInLeague(nextLeague, fromTeamName);
+  const toTeam = findTeamInLeague(nextLeague, toTeamName);
+  const fromLogo = teamLogoOf(fromTeam);
+  const toLogo = teamLogoOf(toTeam);
+  const baseProtectionLabel = rule.baseProtectionLabel || validation.baseProtectionLabel;
+  const tradeStamp = {
+    fromTeam: fromTeamName,
+    toTeam: toTeamName,
+    protection: baseProtectionLabel,
+    retainedRange: validation.retainedRange,
+    conveyedRange: validation.conveyedRange,
+    seasonYear: getCurrentSeasonYear(nextLeague),
+    completedAt: new Date().toISOString(),
+    action: "protected_split",
+  };
+
+  const retainedRow = rebuildProtectedSplitRow({
+    sourceRow: rows[rowIndex],
+    normalized,
+    ownerTeam: fromTeamName,
+    ownerLogo: fromLogo,
+    range: validation.retainedRange,
+    baseProtectionLabel,
+    tradeStamp,
+    seedKind: "retain",
+  });
+  const conveyedRow = rebuildProtectedSplitRow({
+    sourceRow: rows[rowIndex],
+    normalized,
+    ownerTeam: toTeamName,
+    ownerLogo: toLogo,
+    range: validation.conveyedRange,
+    baseProtectionLabel,
+    tradeStamp,
+    seedKind: "convey",
+  });
+
+  rows.splice(rowIndex, 1, retainedRow, conveyedRow);
+
+  return {
+    ok: true,
+    pickLabel: `${baseProtectionLabel} ${formatPick(pick)} (${toTeamName} owns ${validation.conveyedRange.start}-${validation.conveyedRange.end})`,
+  };
+}
+
+function transferSwapDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
+  const rule = pickRuleOf(pickItem);
+  if (rule.mirror || pickItem.tradeValueExcluded || pickItem.displayOnlyLinkedSwap) {
+    return { ok: true, pickLabel: pickItem.displayLabel || `${getPickDisplayProtection(pickItem)} ${formatPick(pickItem.pick)}` };
+  }
+
+  const sourcePick = rule.sourcePick || pickItem.pick || {};
+  const swapPick = rule.swapPick || {};
+  if (!sourcePick?.year || !swapPick?.year) {
+    return { ok: false, reason: "This swap is missing one of the linked picks." };
+  }
+  if (Number(sourcePick.year) !== Number(swapPick.year) || Number(sourcePick.round || 1) !== Number(swapPick.round || 1)) {
+    return { ok: false, reason: "Swap picks must be in the same year and round." };
+  }
+
+  const teamNames = getTeamNamesForDraftPickMatch(nextLeague);
+  const rows = Array.isArray(nextLeague?.draftPicks) ? nextLeague.draftPicks : [];
+  const sourceRow = rows.find((row, rowIndex) => pickIdentityMatches(normalizeDraftPickAsset(row, rowIndex, teamNames), sourcePick, fromTeamName));
+  const swapRow = rows.find((row, rowIndex) => pickIdentityMatches(normalizeDraftPickAsset(row, rowIndex, teamNames), swapPick, toTeamName));
+  if (!sourceRow) return { ok: false, reason: `Could not find ${formatPick(sourcePick)} for the swap.` };
+  if (!swapRow) return { ok: false, reason: `Could not find ${formatPick(swapPick)} for the swap.` };
+
+  const normalizedSource = normalizeDraftPickAsset(sourceRow, 0, teamNames);
+  const normalizedSwap = normalizeDraftPickAsset(swapRow, 0, teamNames);
+  if (!sameTeamName(normalizedSource.ownerTeam, fromTeamName)) {
+    return { ok: false, reason: `${fromTeamName} no longer owns ${formatPick(sourcePick)}.` };
+  }
+  if (!sameTeamName(normalizedSwap.ownerTeam, toTeamName)) {
+    return { ok: false, reason: `${toTeamName} no longer owns ${formatPick(swapPick)}.` };
+  }
+
+  const tradeStamp = {
+    fromTeam: fromTeamName,
+    toTeam: toTeamName,
+    protection: rule.swapDirection === "worst" ? "Swap Worst" : "Swap Best",
+    seasonYear: getCurrentSeasonYear(nextLeague),
+    completedAt: new Date().toISOString(),
+    action: "swap_right",
+    swapId: rule.swapId || null,
+  };
+
+  const swapAssets = buildTradeMachineSwapAssets({
+    sourcePick: normalizedSource,
+    swapPick: normalizedSwap,
+    fromTeamName,
+    toTeamName,
+    direction: rule.swapDirection || "best",
+    tradeStamp,
+  });
+
+  const existingIds = new Set(rows.map((row) => String(row.id || "")));
+  for (const asset of swapAssets) {
+    if (!existingIds.has(String(asset.id || ""))) rows.push(asset);
+  }
+
+  return {
+    ok: true,
+    pickLabel: pickItem.displayLabel || `${tradeStamp.protection} ${formatPick(sourcePick)} / ${formatPick(swapPick)}`,
+  };
+}
+
 
 function transferResolvedDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
   const pick = pickItem?.pick || {};
@@ -965,7 +1325,12 @@ function transferResolvedDraftPick(nextLeague, fromTeamName, toTeamName, pickIte
 function transferDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
   const rows = Array.isArray(nextLeague?.draftPicks) ? nextLeague.draftPicks : [];
   const pick = pickItem?.pick || {};
+  const rule = pickRuleOf(pickItem);
   const type = String(pick?.assetType || pick?.type || "pick").toLowerCase();
+
+  if (rule.action === "swap") {
+    return transferSwapDraftPick(nextLeague, fromTeamName, toTeamName, pickItem);
+  }
 
   if (type === "resolved") {
     return transferResolvedDraftPick(nextLeague, fromTeamName, toTeamName, pickItem);
@@ -989,15 +1354,22 @@ function transferDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
     };
   }
 
+  if (rule.action === "protected") {
+    return transferProtectedDraftPick(nextLeague, fromTeamName, toTeamName, pickItem, index, normalized);
+  }
+
   const toTeam = findTeamInLeague(nextLeague, toTeamName);
   const ownerLogo = teamLogoOf(toTeam);
-  const protection = pickItem?.protection || pick?.protection || pick?.protections || normalized.protections || "Unprotected";
+  const protection = getPickDisplayProtection(pickItem) || normalized.displayProtection || normalized.protections || "Unprotected";
+  const ownedRange = getTradeablePickOwnedRange(normalized);
   const tradeStamp = {
     fromTeam: fromTeamName,
     toTeam: toTeamName,
     protection,
+    ownedRange,
     seasonYear: getCurrentSeasonYear(nextLeague),
     completedAt: new Date().toISOString(),
+    action: "full_pick_transfer",
   };
 
   rows[index] = {
@@ -1021,8 +1393,9 @@ function transferDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
       : [tradeStamp],
   };
 
-  return { ok: true, pickLabel: formatPick({ ...normalized, protection }) };
+  return { ok: true, pickLabel: pickItem.displayLabel || formatPick({ ...normalized, protection }) };
 }
+
 
 function summarizeTradeItems(items = []) {
   const players = items
@@ -1030,7 +1403,7 @@ function summarizeTradeItems(items = []) {
     .map((item) => playerNameOf(item.player));
   const picks = items
     .filter((item) => item?.type === "pick")
-    .map((item) => `${formatPick(item.pick)} (${item.protection || item.pick?.protection || "Unprotected"})`);
+    .map((item) => item.displayLabel || `${formatPick(item.pick)} (${item.protection || item.pick?.protection || "Unprotected"})`);
   return { players, picks };
 }
 
@@ -1047,7 +1420,11 @@ function refreshTeamFinancialSnapshot(team, leagueData) {
     totalSalary: cap.payroll,
     capRoom: cap.capRoom,
     hardCapRoom: cap.hardCapRoom,
+    firstApronRoom: cap.firstApronRoom,
+    secondApronRoom: cap.secondApronRoom,
     salaryCap: cap.salaryCap,
+    firstApron: cap.firstApron,
+    secondApron: cap.secondApron,
     hardCap: cap.hardCap,
   };
 }
@@ -1094,11 +1471,12 @@ function validateProjectedStandardRosterCount(team, outgoingItems = [], incoming
     };
   }
 
-  if (counts.projected > REGULAR_SEASON_MAX_STANDARD_PLAYERS) {
+  const allowedMax = Math.max(REGULAR_SEASON_MAX_STANDARD_PLAYERS, counts.current);
+  if (counts.projected > allowedMax) {
     return {
       ok: false,
-      reason: `Trade blocked: ${teamName} would have ${counts.projected} standard players after this trade. Maximum is ${REGULAR_SEASON_MAX_STANDARD_PLAYERS}.`,
-      counts,
+      reason: `Trade blocked: ${teamName} would have ${counts.projected} standard players after this trade. A team can temporarily reach ${REGULAR_SEASON_MAX_STANDARD_PLAYERS}, and teams already above that number cannot add more players.`,
+      counts: { ...counts, allowedMax },
     };
   }
 
@@ -1158,15 +1536,24 @@ function validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, c
     return { ok: false, reason: "Add at least one asset from each side before submitting." };
   }
 
-  const userCap = getTeamCapInfo(userTeam, leagueData, sideSalary(userItems, leagueData), sideSalary(cpuItems, leagueData));
-  const cpuCap = getTeamCapInfo(cpuTeam, leagueData, sideSalary(cpuItems, leagueData), sideSalary(userItems, leagueData));
-
-  if (Number(userCap.hardCapRoom || 0) < 0) {
-    return { ok: false, reason: `${userTeam.name} would be over the hard cap after this trade.` };
+  const userFinancial = evaluateTradeFinancialLegality({
+    team: userTeam,
+    leagueData,
+    outgoingSalary: sideSalary(userItems, leagueData),
+    incomingSalary: sideSalary(cpuItems, leagueData),
+  });
+  if (!userFinancial.ok) {
+    return { ok: false, reason: userFinancial.message || `${userTeam.name} cannot complete this trade under the salary matching rules.` };
   }
 
-  if (Number(cpuCap.hardCapRoom || 0) < 0) {
-    return { ok: false, reason: `${cpuTeam.name} would be over the hard cap after this trade.` };
+  const cpuFinancial = evaluateTradeFinancialLegality({
+    team: cpuTeam,
+    leagueData,
+    outgoingSalary: sideSalary(cpuItems, leagueData),
+    incomingSalary: sideSalary(userItems, leagueData),
+  });
+  if (!cpuFinancial.ok) {
+    return { ok: false, reason: cpuFinancial.message || `${cpuTeam.name} cannot complete this trade under the salary matching rules.` };
   }
 
   const rosterValidation = validateRosterLimitsForTrade({ leagueData, userTeam, cpuTeam, userItems, cpuItems });
@@ -1212,7 +1599,9 @@ function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, u
   for (const move of pickMoves) {
     const result = transferDraftPick(nextLeague, move.from, move.to, move.item);
     if (!result.ok) return result;
-    movedPicks.push({ label: result.pickLabel, fromTeam: move.from, toTeam: move.to });
+    if (!move.item?.tradeRule?.mirror && !move.item?.tradeValueExcluded) {
+      movedPicks.push({ label: result.pickLabel, fromTeam: move.from, toTeam: move.to });
+    }
   }
 
   const nextUserTeam = findTeamInLeague(nextLeague, userTeamName);
@@ -1370,13 +1759,15 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
 
   if (item.type === "player") {
     const player = item.player || {};
+    const playerName = playerNameOf(player);
     const yearsRemaining = getContractYearsRemaining(player, leagueData);
     const t = TRADE_PLAYER_CARD_TUNING;
+    const nameFontSize = getTradeCardNameFontSize(playerName, t.name.size);
 
     return (
       <div
-        className="relative isolate overflow-hidden rounded-2xl border border-white/15 bg-black pr-10"
-        style={{ height: t.cardHeight }}
+        className="relative isolate w-full max-w-full overflow-hidden rounded-2xl border border-white/15 bg-black pr-10"
+        style={{ height: t.cardHeight, minWidth: 0, boxSizing: "border-box" }}
       >
         <TeamLogoWatermark team={team} />
         <button
@@ -1397,7 +1788,7 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
             {player?.headshot ? (
               <img
                 src={player.headshot}
-                alt={playerNameOf(player)}
+                alt={playerName}
                 className="w-auto object-contain"
                 style={{
                   height: t.face.imageHeight,
@@ -1418,17 +1809,28 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
           />
 
           <div
-            className="min-w-0 flex-1"
-            style={{ transform: `translate(${t.textBlock.x}px, ${t.textBlock.y}px)` }}
+            className="min-w-0 flex-1 overflow-hidden pr-7"
+            style={{
+              width: 0,
+              maxWidth: "100%",
+              transform: `translate(${t.textBlock.x}px, ${t.textBlock.y}px)`,
+            }}
           >
             <div
-              className="truncate font-black leading-tight text-white"
+              className="font-black leading-tight text-white"
+              title={playerName}
               style={{
-                fontSize: t.name.size,
+                width: "100%",
+                maxWidth: "100%",
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                fontSize: nameFontSize,
                 transform: `translate(${t.name.x}px, ${t.name.y}px)`,
               }}
             >
-              {playerNameOf(player)}
+              {playerName}
             </div>
             <div
               className="mt-1 font-black uppercase tracking-[0.18em] text-white"
@@ -1461,7 +1863,7 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
   }
 
   const pickProtection = item.protection || item.pick?.protection || "Unprotected";
-  const pickLabel = formatPick(item.pick);
+  const pickLabel = item.displayLabel || `${pickProtection} ${formatPick(item.pick)}`;
   const pickOriginalTeam = getPickOriginalTeamLogoTeam(leagueData, item.pick, team);
 
   return (
@@ -1478,7 +1880,7 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
       </button>
       <div className="relative z-10 text-xs font-black uppercase tracking-[0.18em] text-orange-300">Draft Pick</div>
       <div className="relative z-10 mt-2 pr-8 text-lg font-black text-white">
-        {pickProtection} {pickLabel}
+        {pickLabel}
       </div>
     </div>
   );
@@ -1553,31 +1955,42 @@ function TradeFinancialRow({ label, value, tuning }) {
 }
 
 
-function buildHardCapIssueDetails({ team, cap, outgoingSalary = 0, incomingSalary = 0, netSalary = 0, playerCount = 0 }) {
+function buildHardCapIssueDetails({ team, cap, outgoingSalary = 0, incomingSalary = 0, netSalary = 0, playerCount = 0, financialCheck = null }) {
+  if (financialCheck) {
+    return {
+      title: financialCheck.title,
+      message: financialCheck.message,
+      rows: [
+        ...(financialCheck.rows || []),
+        { label: "Projected players", value: playerCount },
+      ],
+    };
+  }
+
   const teamName = team?.name || team?.teamName || "This team";
-  const overBy = Math.max(0, Math.abs(Number(cap?.hardCapRoom || 0)));
-  const hardCap = Number(cap?.hardCap || 0);
   const projectedPayroll = Number(cap?.payroll || 0);
   const basePayroll = Number(cap?.basePayroll || 0);
 
   return {
-    title: `${teamName} Hard Cap Issue`,
-    message: `${teamName} cannot complete this trade because the projected payroll would be ${formatMoney(overBy)} above the hard cap.`,
+    title: `${teamName} Trade Salary Details`,
+    message: `${teamName}'s projected payroll after this trade is ${formatMoney(projectedPayroll)}.`,
     rows: [
       { label: "Current payroll", value: formatMoney(basePayroll) },
       { label: "Outgoing salary", value: formatMoney(outgoingSalary) },
       { label: "Incoming salary", value: formatMoney(incomingSalary) },
       { label: "Net salary change", value: formatMoney(netSalary) },
       { label: "Projected payroll", value: formatMoney(projectedPayroll) },
-      { label: "Hard cap", value: hardCap > 0 ? formatMoney(hardCap) : "Not found" },
-      { label: "Over hard cap by", value: formatMoney(overBy) },
+      { label: "Salary cap", value: formatMoney(cap?.salaryCap) },
+      { label: "First apron", value: formatMoney(cap?.firstApron) },
+      { label: "Second apron", value: formatMoney(cap?.secondApron) },
+      { label: "Hard cap", value: formatMoney(cap?.hardCap) },
       { label: "Projected players", value: playerCount },
     ],
   };
 }
 
-function TradeFinancialFooter({ team, cap, netSalary, playerCount, hardCapDetails = null, onHardCapDetails = null }) {
-  const isHardCapOk = Number(cap?.hardCapRoom || 0) >= 0;
+function TradeFinancialFooter({ team, cap, netSalary, playerCount, hardCapDetails = null, onHardCapDetails = null, financialCheck = null }) {
+  const isFinancialOk = financialCheck ? Boolean(financialCheck.ok) : Number(cap?.hardCapRoom || 0) >= 0;
   const t = TRADE_FINANCIAL_FOOTER_TUNING;
 
   return (
@@ -1638,7 +2051,7 @@ function TradeFinancialFooter({ team, cap, netSalary, playerCount, hardCapDetail
 
           <div
             className={`flex items-center justify-center font-black tracking-wide ${
-              isHardCapOk ? "bg-emerald-500 text-white" : "bg-red-600 text-white"
+              isFinancialOk ? "bg-emerald-500 text-white" : "bg-red-600 text-white"
             }`}
             style={{
               height: t.statusBar.height,
@@ -1652,11 +2065,11 @@ function TradeFinancialFooter({ team, cap, netSalary, playerCount, hardCapDetail
               className="inline-flex items-center justify-center gap-2"
               style={{ transform: `translate(${t.statusBar.textX || 0}px, ${t.statusBar.textY || 0}px)` }}
             >
-              {isHardCapOk ? (
+              {isFinancialOk ? (
                 "Valid Trade"
               ) : (
                 <>
-                  Hard Cap Issue
+                  {financialCheck?.statusLabel || "Trade Salary Issue"}
                   <button
                     type="button"
                     onClick={(event) => {
@@ -1664,8 +2077,8 @@ function TradeFinancialFooter({ team, cap, netSalary, playerCount, hardCapDetail
                       onHardCapDetails?.(hardCapDetails);
                     }}
                     className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/80 bg-transparent text-[10px] font-black leading-none text-white transition hover:bg-white hover:text-red-700"
-                    title="Why is this a hard cap issue?"
-                    aria-label="View hard cap issue details"
+                    title="Why is this trade salary issue happening?"
+                    aria-label="View trade salary issue details"
                   >
                     ?
                   </button>
@@ -1682,6 +2095,12 @@ function TradeFinancialFooter({ team, cap, netSalary, playerCount, hardCapDetail
 function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incomingItems = [], onAdd, onRemove, onHardCapDetails }) {
   const salaryTotal = sideSalary(items, leagueData);
   const cap = getTeamCapInfo(team, leagueData, salaryTotal, incomingSalary);
+  const financialCheck = evaluateTradeFinancialLegality({
+    team,
+    leagueData,
+    outgoingSalary: salaryTotal,
+    incomingSalary,
+  });
   const hasItems = Array.isArray(items) && items.length > 0;
   const canAddMore = (items || []).length < MAX_SIDE_ITEMS;
   const netSalary = Number(incomingSalary || 0) - Number(salaryTotal || 0);
@@ -1696,6 +2115,7 @@ function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incoming
     incomingSalary,
     netSalary,
     playerCount,
+    financialCheck,
   });
 
   return (
@@ -1722,10 +2142,10 @@ function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incoming
         </div>
       </div>
 
-      <div className="grid gap-3 p-4">
+      <div className="grid min-w-0 gap-3 p-4">
         {hasItems ? (
           items.map((item, index) => (
-            <div key={`${side}-${itemKey(item)}-${index}`} className="w-full" style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}>
+            <div key={`${side}-${itemKey(item)}-${index}`} className="w-full min-w-0 overflow-hidden" style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}>
               <TradeItemCard
                 item={item}
                 team={team}
@@ -1735,7 +2155,7 @@ function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incoming
             </div>
           ))
         ) : (
-          <div className="w-full" style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}>
+          <div className="w-full min-w-0 overflow-hidden" style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}>
             <EmptySlot label="Add Trade Item" onClick={() => onAdd(side, 0)} />
           </div>
         )}
@@ -1758,6 +2178,7 @@ function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incoming
         playerCount={playerCount}
         hardCapDetails={hardCapDetails}
         onHardCapDetails={onHardCapDetails}
+        financialCheck={financialCheck}
       />
     </div>
   );
@@ -1858,8 +2279,19 @@ export default function ProposeTrade() {
   const removeItem = (side, index) => {
     updateBuilder((prev) => {
       const items = [...getSideItems(prev, side)];
+      const removed = items[index];
       items.splice(index, 1);
-      return setSideItems(prev, side, items);
+
+      const swapId = removed?.tradeRule?.swapId || removed?.pick?.tradeRule?.swapId || "";
+      let next = setSideItems(prev, side, items);
+      if (swapId) {
+        const otherSide = side === "user" ? "cpu" : "user";
+        const otherItems = getSideItems(next, otherSide).filter(
+          (item) => (item?.tradeRule?.swapId || item?.pick?.tradeRule?.swapId || "") !== swapId
+        );
+        next = setSideItems(next, otherSide, otherItems);
+      }
+      return next;
     });
   };
 
@@ -2189,7 +2621,7 @@ export default function ProposeTrade() {
                   <div>
                     <div className="text-xs font-black uppercase tracking-[0.2em] text-red-200">Hard Cap Details</div>
                     <div className="mt-1 text-2xl font-black text-white">
-                      {hardCapDetailModal.title || "Hard Cap Issue"}
+                      {hardCapDetailModal.title || "Trade Salary Issue"}
                     </div>
                   </div>
                   <button
@@ -2205,7 +2637,7 @@ export default function ProposeTrade() {
 
               <div className="p-5">
                 <div className="rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-sm font-bold leading-6 text-red-100">
-                  {hardCapDetailModal.message || "This trade would put the team over the hard cap."}
+                  {hardCapDetailModal.message || "This trade does not satisfy the trade salary rules."}
                 </div>
 
                 <div className="mt-4 rounded-2xl border border-white/10 bg-black p-4">
@@ -2255,7 +2687,7 @@ export default function ProposeTrade() {
                   className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-5 text-left transition hover:border-orange-400/40 hover:bg-orange-500/10"
                 >
                   <div className="text-lg font-black text-white">Pick</div>
-                  <div className="mt-1 text-sm font-semibold text-neutral-500">Open pick selector and attach protection.</div>
+                  <div className="mt-1 text-sm font-semibold text-neutral-500">Open pick selector and choose valid pick rules.</div>
                 </button>
                 <button
                   onClick={() => setSlotMenu(null)}

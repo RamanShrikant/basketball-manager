@@ -489,6 +489,211 @@ export function getOwnedPickRange(asset = {}) {
   return null;
 }
 
+export function getDefaultPickOwnedRange(round = 1) {
+  return Number(round || 1) === 1 ? { start: 1, end: 30 } : { start: 31, end: 60 };
+}
+
+export function getTradeablePickOwnedRange(asset = {}) {
+  const type = String(asset.assetType || asset.type || "pick").toLowerCase();
+  const round = Number(asset.round || 1) === 2 ? 2 : 1;
+  if (type === "resolved") {
+    const pickNumber = Number(
+      asset.pickNumber || asset.overallPick || asset.resolvedPickNumber || asset.draftPickNumber || 0
+    );
+    return pickNumber > 0 ? { start: pickNumber, end: pickNumber } : getDefaultPickOwnedRange(round);
+  }
+
+  const explicit = getOwnedPickRange(asset);
+  return explicit || getDefaultPickOwnedRange(round);
+}
+
+export function formatOwnedPickRange(range = null) {
+  if (!range) return "";
+  return `${Number(range.start)}-${Number(range.end)}`;
+}
+
+export function isFullOwnedPickRange(asset = {}) {
+  const range = getTradeablePickOwnedRange(asset);
+  const full = getDefaultPickOwnedRange(asset.round || 1);
+  return Number(range.start) === Number(full.start) && Number(range.end) === Number(full.end);
+}
+
+export function getTradePickBaseProtectionLabel(asset = {}) {
+  const raw = getProtectionText(asset);
+  const lower = raw.toLowerCase();
+  if (!raw || lower === "none" || lower === "null") return "Unprotected";
+  if (lower.includes("swap") && lower.includes("worst")) return "Swap Worst";
+  if (lower.includes("swap") && lower.includes("best")) return "Swap Best";
+  if (lower === "unprotected") return "Unprotected";
+
+  const topMatch = raw.match(/\btop\s*(\d{1,2})\s*protected\b/i);
+  if (topMatch) return `Top ${Number(topMatch[1])} Protected`;
+  if (/lottery\s*protected/i.test(raw)) return "Top 14 Protected";
+  const rangeMatch = raw.match(/\b(\d{1,2})\s*-\s*(\d{1,2})\s*protected\b/i);
+  if (rangeMatch) return `${Number(rangeMatch[1])}-${Number(rangeMatch[2])} Protected`;
+  return cleanProtectionLabelText(raw) || "Unprotected";
+}
+
+export function isSwapDraftPickAsset(asset = {}) {
+  const type = String(asset.assetType || asset.type || "pick").toLowerCase();
+  const label = getDraftPickProtectionLabel(asset).toLowerCase();
+  return type === "swap" || label.includes("swap best") || label.includes("swap worst");
+}
+
+export function isResolvedDraftPickAsset(asset = {}) {
+  return String(asset.assetType || asset.type || "pick").toLowerCase() === "resolved";
+}
+
+export function isProtectedDraftPickAsset(asset = {}) {
+  if (isSwapDraftPickAsset(asset) || isResolvedDraftPickAsset(asset)) return false;
+  const base = getTradePickBaseProtectionLabel(asset).toLowerCase();
+  if (base && base !== "unprotected") return true;
+  return !isFullOwnedPickRange(asset);
+}
+
+export function canAddCustomProtectionToPick(asset = {}) {
+  if (isSwapDraftPickAsset(asset) || isResolvedDraftPickAsset(asset)) return false;
+  const range = getTradeablePickOwnedRange(asset);
+  return Number(range.end) > Number(range.start);
+}
+
+export function canCreateSwapWithPick(asset = {}) {
+  if (isSwapDraftPickAsset(asset) || isResolvedDraftPickAsset(asset)) return false;
+  return !isProtectedDraftPickAsset(asset) && isFullOwnedPickRange(asset);
+}
+
+export function buildCustomProtectionBaseLabel(asset = {}, protectStart, protectEnd) {
+  const round = Number(asset.round || 1) === 2 ? 2 : 1;
+  const start = Number(protectStart);
+  const end = Number(protectEnd);
+  if (round === 1 && start === 1) return `Top ${end} Protected`;
+  return `${start}-${end} Protected`;
+}
+
+export function protectionDisplayForOwnedRange(baseLabel = "Protected", range = null) {
+  const clean = cleanProtectionLabelText(baseLabel || "Protected");
+  if (!range) return clean;
+  return `${clean} (Owns ${Number(range.start)}-${Number(range.end)})`;
+}
+
+export function validateCustomPickProtection(asset = {}, protectStart, protectEnd) {
+  if (isSwapDraftPickAsset(asset)) {
+    return { ok: false, reason: "Swap rights cannot be protected." };
+  }
+  if (isResolvedDraftPickAsset(asset)) {
+    return { ok: false, reason: "Resolved draft picks cannot receive new protections." };
+  }
+
+  const owned = getTradeablePickOwnedRange(asset);
+  const roundBounds = getDefaultPickOwnedRange(asset.round || 1);
+  const start = Number(protectStart);
+  const end = Number(protectEnd);
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return { ok: false, reason: "Enter a valid protection range." };
+  }
+  if (start !== Number(owned.start)) {
+    return { ok: false, reason: `Protection must start at ${owned.start}, because that is the first slot this asset owns.` };
+  }
+  if (end < start) {
+    return { ok: false, reason: "Protection end must be after the protection start." };
+  }
+  if (start < roundBounds.start || end > roundBounds.end) {
+    return { ok: false, reason: `Round ${Number(asset.round || 1)} protections must stay inside ${roundBounds.start}-${roundBounds.end}.` };
+  }
+  if (start < owned.start || end > owned.end) {
+    return { ok: false, reason: `Protection must stay inside the owned range ${owned.start}-${owned.end}.` };
+  }
+  if (end >= owned.end) {
+    return { ok: false, reason: `Protecting ${owned.start}-${owned.end} would protect the entire asset, so nothing could convey.` };
+  }
+
+  const retainedRange = { start, end };
+  const conveyedRange = { start: end + 1, end: owned.end };
+  return {
+    ok: true,
+    ownedRange: owned,
+    retainedRange,
+    conveyedRange,
+    baseProtectionLabel: buildCustomProtectionBaseLabel(asset, start, end),
+  };
+}
+
+export function makeTradeGeneratedDraftPickId({ year, round, originalTeam, ownerTeam, kind = "trade", range = null, swapWithTeam = "" } = {}) {
+  const rangeSeed = range ? `${range.start}_${range.end}` : "full";
+  return makeDraftPickId({
+    assetType: kind === "swap" ? "swap" : "pick",
+    year,
+    round,
+    originalTeam,
+    ownerTeam,
+    swapWithTeam,
+    seed: `${kind}_${rangeSeed}_${Date.now()}`,
+  });
+}
+
+export function buildTradeMachineSwapAssets({
+  sourcePick = {},
+  swapPick = {},
+  fromTeamName = "",
+  toTeamName = "",
+  direction = "best",
+  tradeStamp = {},
+} = {}) {
+  const year = Number(sourcePick.year || sourcePick.seasonYear || swapPick.year || swapPick.seasonYear || 0);
+  const round = Number(sourcePick.round || swapPick.round || 1) === 2 ? 2 : 1;
+  const sourceOriginal = String(sourcePick.originalTeam || sourcePick.originalTeamName || sourcePick.team || fromTeamName || "").trim();
+  const swapOriginal = String(swapPick.originalTeam || swapPick.originalTeamName || swapPick.team || toTeamName || "").trim();
+  const cleanDirection = String(direction || "best").toLowerCase().includes("worst") ? "worst" : "best";
+  const bestOwner = cleanDirection === "best" ? toTeamName : fromTeamName;
+  const worstOwner = cleanDirection === "best" ? fromTeamName : toTeamName;
+  const pairLabel = `${sourceOriginal} / ${swapOriginal}`;
+  const ownerPair = [fromTeamName, toTeamName].filter(Boolean);
+  const now = new Date().toISOString();
+
+  const makeSwapRow = (ownerTeam, label, seed) => normalizeDraftPickAsset({
+    id: makeDraftPickId({
+      assetType: "swap",
+      year,
+      round,
+      originalTeam: sourceOriginal,
+      ownerTeam,
+      swapWithTeam: swapOriginal,
+      seed: `trade_${seed}_${Date.now()}`,
+    }),
+    assetType: "swap",
+    type: "swap",
+    year,
+    round,
+    originalTeam: sourceOriginal,
+    originalTeamName: sourceOriginal,
+    ownerTeam,
+    owner: ownerTeam,
+    currentOwnerTeamName: ownerTeam,
+    swapWithTeam: swapOriginal,
+    protections: label,
+    protection: label,
+    displayProtection: label,
+    protectionType: label,
+    status: DEFAULT_PICK_STATUS,
+    logicType: "trade_machine_swap",
+    source: "Trade Machine",
+    notes: `${ownerTeam} receives ${label} rights between ${pairLabel}.`,
+    realLifeDetails: {
+      source: "Trade Machine",
+      tradeGenerated: true,
+      swapParticipants: [sourceOriginal, swapOriginal],
+      swapOwnerParticipants: ownerPair,
+      playableDisplayRule: `${label} between ${pairLabel}`,
+    },
+    lastTrade: { ...tradeStamp, completedAt: tradeStamp.completedAt || now, protection: label, assetType: "swap" },
+    tradeHistory: [{ ...tradeStamp, completedAt: tradeStamp.completedAt || now, protection: label, assetType: "swap" }],
+  });
+
+  return [makeSwapRow(bestOwner, "Swap Best", "best"), makeSwapRow(worstOwner, "Swap Worst", "worst")];
+}
+
+
 export function getDraftPickProtectionLabel(asset = {}) {
   const raw = getProtectionText(asset);
   const lower = raw.toLowerCase();
@@ -746,10 +951,22 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
     }
     if (uniqueInvolved.length !== 2) continue;
 
-    // A playable swap must be a two-team pair, and the owner should be one of
-    // those two teams. If imported data is messy, do not let a third team create
-    // a chained re-swap from free text.
-    if (!uniqueInvolved.some((team) => isSameTeamName(team, ownerTeam))) continue;
+    const tradeGeneratedSwap = String(asset.logicType || "") === "trade_machine_swap";
+    const ownerParticipants = Array.isArray(asset.realLifeDetails?.swapOwnerParticipants)
+      ? asset.realLifeDetails.swapOwnerParticipants.map(resolveTeamName).filter(Boolean)
+      : [];
+    const uniqueOwnerParticipants = [];
+    for (const team of ownerParticipants) {
+      if (!uniqueOwnerParticipants.some((name) => isSameTeamName(name, team))) uniqueOwnerParticipants.push(team);
+    }
+    const ownerPairNames = tradeGeneratedSwap && uniqueOwnerParticipants.length === 2
+      ? uniqueOwnerParticipants.slice(0, 2)
+      : uniqueInvolved;
+
+    // Imported playable swaps stay limited to the two involved natural teams.
+    // Trade-machine swaps can involve picks currently owned by two other teams,
+    // so their right holder can come from realLifeDetails.swapOwnerParticipants.
+    if (!ownerPairNames.some((team) => isSameTeamName(team, ownerTeam))) continue;
 
     const pairNames = uniqueInvolved;
     const pairKey = pairNames.map(normalizeTeamName).sort().join("|");
@@ -757,10 +974,14 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
     const current = groups.get(key) || {
       round,
       pairNames,
+      ownerPairNames,
       pairKey,
+      tradeGeneratedSwap,
       assets: [],
       firstIndex: Number.POSITIVE_INFINITY,
     };
+    current.ownerPairNames = ownerPairNames;
+    current.tradeGeneratedSwap = Boolean(current.tradeGeneratedSwap || tradeGeneratedSwap);
     current.assets.push({
       asset,
       ownerTeam,
@@ -794,25 +1015,28 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
     const sortedAssets = [...group.assets].sort((a, b) => a.inputIndex - b.inputIndex);
     const bestAsset = sortedAssets.find((row) => row.direction === "best") || null;
     const worstAsset = sortedAssets.find((row) => row.direction === "worst") || null;
+    const ownerPairNames = Array.isArray(group.ownerPairNames) && group.ownerPairNames.length === 2
+      ? group.ownerPairNames
+      : group.pairNames;
 
     let bestOwner = bestAsset?.ownerTeam || "";
     let worstOwner = worstAsset?.ownerTeam || "";
 
-    if (!bestOwner || !group.pairNames.some((team) => isSameTeamName(team, bestOwner))) bestOwner = "";
-    if (!worstOwner || !group.pairNames.some((team) => isSameTeamName(team, worstOwner))) worstOwner = "";
+    if (!bestOwner || !ownerPairNames.some((team) => isSameTeamName(team, bestOwner))) bestOwner = "";
+    if (!worstOwner || !ownerPairNames.some((team) => isSameTeamName(team, worstOwner))) worstOwner = "";
 
     if (bestOwner && (!worstOwner || isSameTeamName(bestOwner, worstOwner))) {
-      worstOwner = otherPairTeam(group.pairNames, bestOwner);
+      worstOwner = otherPairTeam(ownerPairNames, bestOwner);
     } else if (worstOwner && (!bestOwner || isSameTeamName(bestOwner, worstOwner))) {
-      bestOwner = otherPairTeam(group.pairNames, worstOwner);
+      bestOwner = otherPairTeam(ownerPairNames, worstOwner);
     } else if (!bestOwner && !worstOwner && sortedAssets.length) {
       const primary = sortedAssets[0];
       if (primary.direction === "worst") {
         worstOwner = primary.ownerTeam;
-        bestOwner = otherPairTeam(group.pairNames, worstOwner);
+        bestOwner = otherPairTeam(ownerPairNames, worstOwner);
       } else {
         bestOwner = primary.ownerTeam;
-        worstOwner = otherPairTeam(group.pairNames, bestOwner);
+        worstOwner = otherPairTeam(ownerPairNames, bestOwner);
       }
     }
 
@@ -861,7 +1085,7 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
     // simplified two-team swap overwrite that third-party ownership. The clean
     // v10 JSON avoids these conflicts, but this keeps older saves from creating
     // hidden swap-chain corruption.
-    const thirdPartyBlocked = candidates.some((row) => {
+    const thirdPartyBlocked = !group.tradeGeneratedSwap && candidates.some((row) => {
       const currentOwner = row.currentOwnerTeamName || row.ownerTeamName || row.teamName || "";
       const ownerInPair = group.pairNames.some((team) => isSameTeamName(team, currentOwner));
       const wasConcretePickAsset = Boolean(row.draftPickAssetId) || String(row.ownershipSource || "") === "draftPicks.pick";
