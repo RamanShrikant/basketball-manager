@@ -3,11 +3,7 @@ import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
 import { computeTeamRatings } from "../api/teamRatings.js";
-<<<<<<< Updated upstream
 import { GAMEPLAN_VERSION, buildSmartRotation } from "../utils/ensureGameplans";
-=======
-import { calculateTeamPotentialRating } from "../utils/ensureGameplans";
->>>>>>> Stashed changes
 import PageFade from "../components/PageFade";
 import "../styles/BMPageBackground.css";
 import "../styles/BMAnimations.css";
@@ -232,7 +228,6 @@ function normalizeRatingsForPowerRankings(ratings) {
   };
 }
 
-<<<<<<< Updated upstream
 function computeRatingsFromMinutes(team, minutes) {
   return normalizeRatingsForPowerRankings(computeTeamRatings(team, minutes));
 }
@@ -427,15 +422,6 @@ function getTeamPotentialForPowerRankings(team, exactCurrentOverall = 0) {
   );
 
   return Math.round(toNum(exactPot, 0));
-=======
-function getTeamPotentialForPowerRankings(team) {
-  try {
-    const ratings = calculateTeamPotentialRating(team?.players || []);
-    return Math.round(toNum(ratings?.exactPot ?? ratings?.pot, 0));
-  } catch {
-    return 0;
-  }
->>>>>>> Stashed changes
 }
 
 function loadSchedule() {
@@ -585,11 +571,7 @@ export default function PowerRankings() {
         overall: ratings.overall,
         off: ratings.off,
         def: ratings.def,
-<<<<<<< Updated upstream
         potential: getTeamPotentialForPowerRankings(team, ratings.exactOverall),
-=======
-        potential: getTeamPotentialForPowerRankings(team),
->>>>>>> Stashed changes
         w: toNum(record.w, 0),
         l: toNum(record.l, 0),
         gp,
@@ -600,13 +582,10 @@ export default function PowerRankings() {
       };
     });
 
-<<<<<<< Updated upstream
     if (autoRatingsCacheDirty) {
       writeAutoRatingsCache(autoRatingsCache);
     }
 
-=======
->>>>>>> Stashed changes
     const useRecordPowerRankings =
       baseRows.length > 0 && baseRows.every((row) => row.gp >= 20);
 
