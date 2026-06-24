@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
 import { computeTeamRatings } from "../api/teamRatings.js";
+import { GAMEPLAN_VERSION, buildSmartRotation } from "../utils/ensureGameplans";
 import PageFade from "../components/PageFade";
 import "../styles/BMPageBackground.css";
 import "../styles/BMAnimations.css";
@@ -10,6 +11,7 @@ import "../styles/BMAnimations.css";
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const SCHEDULE_KEY = "bm_schedule_v3";
+const POWER_RANKINGS_AUTO_RATINGS_CACHE_KEY = "bm_power_rankings_auto_ratings_v1";
 
 const toNum = (value, fallback = 0) => {
   const n = Number(value);
@@ -79,7 +81,71 @@ function parseMaybeCompressed(raw, fallback = null) {
   }
 }
 
-function readSavedGameplanMinutes(teamName) {
+function getLegacyGameplanRosterSignature(teamPlayers = []) {
+  return [...(teamPlayers || [])]
+    .map((p) =>
+      [
+        p.name || "",
+        p.pos || "",
+        p.secondaryPos || "",
+        p.overall || 0,
+      ].join("|")
+    )
+    .sort()
+    .join("||");
+}
+
+function getPowerRankingsRosterSignature(teamPlayers = []) {
+  return [...(teamPlayers || [])]
+    .map((p) =>
+      [
+        p.name || p.player || "",
+        p.pos || "",
+        p.secondaryPos || "",
+        toNum(p.overall ?? p.ovr, 0),
+        toNum(p.offRating ?? p.off ?? p.offense, 0),
+        toNum(p.defRating ?? p.def ?? p.defense, 0),
+        toNum(p.stamina, 75),
+        toNum(p.potential ?? p.pot, 0),
+        toNum(p.age, 0),
+      ].join("|")
+    )
+    .sort()
+    .join("||");
+}
+
+function getRosterNames(teamPlayers = []) {
+  return new Set(
+    (teamPlayers || [])
+      .map((p) => p?.name || p?.player)
+      .filter(Boolean)
+  );
+}
+
+function setsMatch(a, b) {
+  if (a.size !== b.size) return false;
+
+  for (const value of a) {
+    if (!b.has(value)) return false;
+  }
+
+  return true;
+}
+
+function hasValidMinutesMap(minutes, rosterNames) {
+  if (!minutes || typeof minutes !== "object" || Array.isArray(minutes)) return false;
+
+  const minuteNames = new Set(Object.keys(minutes));
+  if (!setsMatch(rosterNames, minuteNames)) return false;
+
+  for (const name of minuteNames) {
+    if (!Number.isFinite(Number(minutes[name]))) return false;
+  }
+
+  return true;
+}
+
+function readSavedGameplanPayload(teamName) {
   if (!teamName) return null;
 
   try {
@@ -87,20 +153,31 @@ function readSavedGameplanMinutes(teamName) {
     if (!raw) return null;
 
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return null;
-
-    if (
-      parsed.minutes &&
-      typeof parsed.minutes === "object" &&
-      !Array.isArray(parsed.minutes)
-    ) {
-      return { ...parsed.minutes };
-    }
-
-    return { ...parsed };
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : null;
   } catch {
     return null;
   }
+}
+
+function isUsableSavedAutoGameplan(team, savedPlan) {
+  if (!team?.name || !savedPlan || typeof savedPlan !== "object") return false;
+
+  // Power Rankings should represent the roster's rebuilt/default strength.
+  // User-edited Coach Gameplan minutes are strategy-only and should never move
+  // a team up/down this screen.
+  if (savedPlan.manualLocked || savedPlan.userEdited || savedPlan.source === "coach_gameplan") {
+    return false;
+  }
+
+  if (savedPlan.version !== GAMEPLAN_VERSION) return false;
+  if (savedPlan.teamName !== team.name) return false;
+  if (savedPlan.rosterSignature !== getLegacyGameplanRosterSignature(team?.players || [])) {
+    return false;
+  }
+
+  return hasValidMinutesMap(savedPlan.minutes, getRosterNames(team?.players || []));
 }
 
 function buildFallbackMinutes(team) {
@@ -119,16 +196,74 @@ function buildFallbackMinutes(team) {
   return minutes;
 }
 
-function getTeamRatingsForPowerRankings(team) {
-  const minutes = readSavedGameplanMinutes(team?.name) || buildFallbackMinutes(team);
-  const ratings = computeTeamRatings(team, minutes);
+function readAutoRatingsCache() {
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(POWER_RANKINGS_AUTO_RATINGS_CACHE_KEY) || "{}"
+    );
 
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeAutoRatingsCache(cache) {
+  try {
+    localStorage.setItem(
+      POWER_RANKINGS_AUTO_RATINGS_CACHE_KEY,
+      JSON.stringify(cache || {})
+    );
+  } catch {}
+}
+
+function normalizeRatingsForPowerRankings(ratings) {
   return {
     overall: toNum(ratings?.overall, 0),
     off: toNum(ratings?.off, 0),
     def: toNum(ratings?.def, 0),
     exactOverall: toNum(ratings?.exactOverall ?? ratings?.overall, 0),
   };
+}
+
+function computeRatingsFromMinutes(team, minutes) {
+  return normalizeRatingsForPowerRankings(computeTeamRatings(team, minutes));
+}
+
+function buildAutoRebuiltMinutes(team) {
+  try {
+    const built = buildSmartRotation(team?.players || []);
+    if (built?.obj && typeof built.obj === "object") return built.obj;
+  } catch (error) {
+    console.warn("Power Rankings auto rotation fallback:", error);
+  }
+
+  return buildFallbackMinutes(team);
+}
+
+function getTeamRatingsForPowerRankings(team, autoRatingsCache, markCacheDirty) {
+  const teamName = team?.name || "";
+  const signature = getPowerRankingsRosterSignature(team?.players || []);
+  const cached = teamName ? autoRatingsCache?.[teamName] : null;
+
+  if (cached?.signature === signature) {
+    return normalizeRatingsForPowerRankings(cached);
+  }
+
+  const savedPlan = readSavedGameplanPayload(teamName);
+  const minutes = isUsableSavedAutoGameplan(team, savedPlan)
+    ? savedPlan.minutes
+    : buildAutoRebuiltMinutes(team);
+  const ratings = computeRatingsFromMinutes(team, minutes);
+
+  if (teamName && autoRatingsCache) {
+    autoRatingsCache[teamName] = { signature, ...ratings };
+    markCacheDirty?.();
+  }
+
+  return ratings;
 }
 
 // Fast Team POT helper for this page. Coach Gameplan's exported POT helper also
@@ -411,9 +546,18 @@ export default function PowerRankings() {
 
   const rows = useMemo(() => {
     const records = buildRecordMap();
+    const autoRatingsCache = readAutoRatingsCache();
+    let autoRatingsCacheDirty = false;
+    const markAutoRatingsCacheDirty = () => {
+      autoRatingsCacheDirty = true;
+    };
 
     const baseRows = teams.map((team) => {
-      const ratings = getTeamRatingsForPowerRankings(team);
+      const ratings = getTeamRatingsForPowerRankings(
+        team,
+        autoRatingsCache,
+        markAutoRatingsCacheDirty
+      );
       const record = records?.[team.name] || { w: 0, l: 0, gp: 0, pf: 0, pa: 0 };
       const conference = confMap?.[team.name] || "";
       const diff = toNum(record.pf, 0) - toNum(record.pa, 0);
@@ -437,6 +581,10 @@ export default function PowerRankings() {
         topPlayers: getTopPlayers(team),
       };
     });
+
+    if (autoRatingsCacheDirty) {
+      writeAutoRatingsCache(autoRatingsCache);
+    }
 
     const useRecordPowerRankings =
       baseRows.length > 0 && baseRows.every((row) => row.gp >= 20);
