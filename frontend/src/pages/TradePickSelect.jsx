@@ -397,9 +397,9 @@ export default function TradePickSelect() {
   const rulePick = picks.find((pick) => pickKey(pick) === rulePickKey) || null;
   const ownedRange = rulePick ? getTradeablePickOwnedRange(rulePick) : null;
   const canProtect = rulePick ? canAddCustomProtectionToPick(rulePick) : false;
-  const baseCanSwap = rulePick ? canCreateSwapWithPick(rulePick) : false;
+  const canSwap = rulePick ? canCreateSwapWithPick(rulePick) : false;
   const swapCandidates = useMemo(() => {
-    if (!rulePick || !baseCanSwap || !otherTeamName) return [];
+    if (!rulePick || !canCreateSwapWithPick(rulePick) || !otherTeamName) return [];
     return otherTeamPicks.filter(
       (pick) =>
         Number(pick.year || 0) === Number(rulePick.year || 0) &&
@@ -407,9 +407,7 @@ export default function TradePickSelect() {
         canCreateSwapWithPick(pick) &&
         !otherSideAddedPickKeys.has(pickKey(pick))
     );
-  }, [baseCanSwap, otherSideAddedPickKeys, otherTeamName, otherTeamPicks, rulePick]);
-  const hasMatchingSwapPick = swapCandidates.length > 0;
-  const canSwap = Boolean(baseCanSwap && hasMatchingSwapPick);
+  }, [otherSideAddedPickKeys, otherTeamName, otherTeamPicks, rulePick]);
   const selectedSwapPick = swapCandidates.find((pick) => pickKey(pick) === selectedSwapKey) || swapCandidates[0] || null;
 
   const openRuleModal = (pick) => {
@@ -435,14 +433,13 @@ export default function TradePickSelect() {
   useEffect(() => {
     if (!rulePick || !swapCandidates.length) {
       setSelectedSwapKey("");
-      if (ruleMode === "swap") setRuleMode("full");
       return;
     }
     setSelectedSwapKey((prev) => {
       if (prev && swapCandidates.some((pick) => pickKey(pick) === prev)) return prev;
       return pickKey(swapCandidates[0]);
     });
-  }, [ruleMode, rulePick, swapCandidates]);
+  }, [rulePickKey, swapCandidates]);
 
   const addItemsToBuilder = (primaryItem, mirrorItem = null) => {
     const builder = readBuilder();
@@ -513,12 +510,8 @@ export default function TradePickSelect() {
     }
 
     if (ruleMode === "swap") {
-      if (!baseCanSwap) {
-        setRuleError("Swaps are only available for fully unprotected picks.");
-        return;
-      }
       if (!canSwap) {
-        setRuleError(`No matching fully unprotected ${rulePick.year} ${roundLabel(rulePick.round)} pick was found for ${otherTeamName}.`);
+        setRuleError("Swaps are only available for fully unprotected picks.");
         return;
       }
       if (!selectedSwapPick) {
@@ -719,12 +712,12 @@ export default function TradePickSelect() {
 
         {rulePick && (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm"
+            className="fixed inset-0 z-[90] flex items-center justify-center overflow-y-auto bg-black/75 px-4 py-8 backdrop-blur-sm"
             onMouseDown={(event) => {
               if (event.target === event.currentTarget) setRulePickKey("");
             }}
           >
-            <div className="w-full max-w-2xl overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 shadow-2xl">
+            <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 shadow-2xl">
               <div className="border-b border-white/10 bg-gradient-to-r from-orange-600/20 to-neutral-900 px-6 py-5">
                 <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Draft Pick Rule</div>
                 <div className="mt-1 text-2xl font-black text-white">{formatPick(rulePick)}</div>
@@ -733,7 +726,7 @@ export default function TradePickSelect() {
                 </div>
               </div>
 
-              <div className="grid gap-4 p-5">
+              <div className="grid gap-4 overflow-y-auto p-5">
                 <button
                   type="button"
                   onClick={() => setRuleMode("full")}
@@ -801,19 +794,13 @@ export default function TradePickSelect() {
                   disabled={!canSwap}
                   onClick={() => canSwap && setRuleMode("swap")}
                   className={`rounded-2xl border px-5 py-4 text-left transition ${
-                    !canSwap
-                      ? "cursor-not-allowed border-white/10 bg-neutral-900/70 opacity-45"
-                      : ruleMode === "swap"
-                      ? "border-orange-400 bg-orange-500/15"
-                      : "border-white/10 bg-black hover:border-orange-400/40"
-                  }`}
+                    ruleMode === "swap" ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black hover:border-orange-400/40"
+                  } ${!canSwap ? "opacity-45" : ""}`}
                 >
                   <div className="text-lg font-black text-white">Create swap right</div>
                   <div className="mt-1 text-sm font-semibold text-neutral-400">
                     {canSwap
                       ? "Only available when both picks are fully unprotected in the same year and round."
-                      : baseCanSwap
-                      ? `No matching fully unprotected ${rulePick?.year || "future"} ${roundLabel(rulePick?.round)} pick is available from ${otherTeamName || "the other team"}.`
                       : "Swaps are only available for fully unprotected normal picks. Protected picks and swap rights cannot be swapped."}
                   </div>
                 </button>

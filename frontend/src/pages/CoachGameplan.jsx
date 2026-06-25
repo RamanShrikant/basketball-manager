@@ -269,9 +269,15 @@ useEffect(() => {
         saved.minutes &&
         Array.isArray(saved.order);
 
+      const isManualSaved = Boolean(
+        saved?.manualLocked ||
+          saved?.userEdited ||
+          saved?.source === "coach_gameplan"
+      );
+
       if (
         isNewFormat &&
-        saved.version === GAMEPLAN_VERSION &&
+        (saved.version === GAMEPLAN_VERSION || isManualSaved) &&
         saved.rosterSignature === currentRosterSignature
       ) {
         const orderedPlayers = [
@@ -289,6 +295,19 @@ useEffect(() => {
         setMinutes(normalizedMinutes);
         setPlayers(orderedPlayers);
         setTeamRatings(calculateTeamRatings(orderedPlayers, normalizedMinutes));
+
+        // If a user manually edited a rotation on an older auto-rotation
+        // version, keep it instead of wiping it during this performance/logic
+        // upgrade. Auto rotations still rebuild because their version no longer
+        // matches GAMEPLAN_VERSION.
+        if (isManualSaved && saved.version !== GAMEPLAN_VERSION) {
+          saveGameplanToStorage(selectedTeam.name, teamPlayers, orderedPlayers, normalizedMinutes, {
+            manualLocked: true,
+            userEdited: true,
+            source: "coach_gameplan",
+          });
+        }
+
         loaded = true;
       }
     } catch (e) {

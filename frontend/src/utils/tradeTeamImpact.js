@@ -1,11 +1,13 @@
 import LZString from "lz-string";
 import { computeTeamRatings } from "../api/teamRatings.js";
 import {
+  GAMEPLAN_VERSION,
   buildFullTeamRating,
   buildSmartRotation,
   calculateTeamPotentialRating,
 } from "./ensureGameplans.js";
 import { evaluateCpuContractFriction } from "./tradeContractValue.js";
+import { evaluateTradePickImpact } from "./tradePickValue.js";
 
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
@@ -13,6 +15,8 @@ const SCHEDULE_KEY = "bm_schedule_v3";
 
 const TEAM_IMPACT_EPS = 0.015;
 const NO_DOWNSIDE_MIN_GAIN = 0.10;
+const CLEAN_PICK_UPGRADE_ACCEPT_LINE = 0.015;
+const NO_DOWNSIDE_PICK_SWEETENER_LINE = 0.075;
 const OVR_IMPACT_MULT = 10;
 const POT_IMPACT_MULT = 7;
 const FTR_FLAT_OVR_WINDOW = 0.15;
@@ -89,6 +93,20 @@ function playerRatingSignature(player = {}) {
 function rosterRatingSignature(players = []) {
   return (players || [])
     .map(playerRatingSignature)
+    .sort()
+    .join("||");
+}
+
+function gameplanRosterSignature(players = []) {
+  return [...(players || [])]
+    .map((p) =>
+      [
+        p?.name || p?.player || "",
+        p?.pos || "",
+        p?.secondaryPos || "",
+        toNum(p?.overall ?? p?.ovr, 0),
+      ].join("|")
+    )
     .sort()
     .join("||");
 }
@@ -193,6 +211,9 @@ function setMatches(a, b) {
 function getCachedAutoMinutes(teamName, players = []) {
   const saved = parseSavedGameplan(safeLocalStorageGet(`gameplan_${teamName}`));
   if (!saved || saved.manualLocked || saved.userEdited || saved.source === "coach_gameplan") return null;
+  if (saved.version !== GAMEPLAN_VERSION) return null;
+  if (saved.teamName && teamName && !sameTeamName(saved.teamName, teamName)) return null;
+  if (saved.rosterSignature !== gameplanRosterSignature(players)) return null;
   if (!saved.minutes || typeof saved.minutes !== "object") return null;
 
   const liveNames = namesSet(players);
@@ -318,7 +339,7 @@ function calculateTeamImpactRatings(players = []) {
 }
 
 function rateTeamRoster(players = []) {
-  const key = rosterRatingSignature(players);
+  const key = `${GAMEPLAN_VERSION}:${rosterRatingSignature(players)}`;
   const cached = getLimitedCache(rosterRatingCache, key);
   if (cached) return cached;
 
@@ -359,7 +380,7 @@ function calculateRankOnlyRatings(team = {}) {
 }
 
 function rateTeamForPowerRank(team = {}) {
-  const key = `${normalizeName(getTeamName(team))}:${rosterRatingSignature(team?.players || [])}`;
+  const key = `${GAMEPLAN_VERSION}:${normalizeName(getTeamName(team))}:${rosterRatingSignature(team?.players || [])}`;
   const cached = getLimitedCache(rankOnlyRatingCache, key);
   if (cached) return cached;
 
@@ -635,8 +656,8 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
     return makeRejectedResult("CPU evaluation failed because the CPU team could not be found.");
   }
 
-  if (!userItems.length || !cpuItems.length) {
-    return makeRejectedResult("Add at least one item from each side before evaluation.");
+  if (!userItems.length && !cpuItems.length) {
+    return makeRejectedResult("Add at least one trade item before evaluation.");
   }
 
   const beforePlayers = Array.isArray(cpuTeam?.players) ? cpuTeam.players : [];
@@ -651,7 +672,25 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
   const deltaFTR = round4(after.exactFtr - before.exactFtr);
   const positiveMovement = round4(Math.max(0, deltaOVR) + Math.max(0, deltaPOT) + Math.max(0, deltaFTR));
   const noDownsideMinGain = NO_DOWNSIDE_MIN_GAIN + (powerContext.isTopConferenceTeam ? 0.05 : 0);
-  const pickScore = genericPickScoreForCpu(userItems, cpuItems);
+  const pickImpact = evaluateTradePickImpact({
+    leagueData,
+    userItems,
+    cpuItems,
+    userTeamName: userName,
+    cpuTeamName: cpuName,
+  });
+
+  if (Array.isArray(pickImpact?.invalidSwapReasons) && pickImpact.invalidSwapReasons.length > 0) {
+    return makeRejectedResult(
+      "Trade has a stale pick swap that does not match the current two teams.",
+      [
+        "Pick swaps are tied to the exact two negotiating teams. Switch teams again or clear/re-add the swap.",
+        ...pickImpact.invalidSwapReasons,
+      ]
+    );
+  }
+
+  const pickScore = Number(pickImpact?.netPickScore || 0);
   const contractImpact = evaluateCpuContractFriction({
     leagueData,
     cpuIncomingPlayers: getTradePlayers(userItems),
@@ -680,21 +719,33 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
   );
   const threshold = round4(baseThreshold + Number(contractImpact?.friction || 0));
 
+  const hasPlayerMovement = getTradePlayers(userItems).length > 0 || getTradePlayers(cpuItems).length > 0;
+  const hasMeaningfulContractFriction = Number(contractImpact?.friction || 0) > 0.035;
+  const cleanPickUpgradeAccept =
+    !hasPlayerMovement &&
+    !hasMeaningfulContractFriction &&
+    pickScore >= CLEAN_PICK_UPGRADE_ACCEPT_LINE;
+  const noDownsidePickSweetenerAccept =
+    hasNoMeaningfulDownside &&
+    !hasMeaningfulContractFriction &&
+    pickScore >= NO_DOWNSIDE_PICK_SWEETENER_LINE;
   const noDownsideAccept =
     hasNoMeaningfulDownside &&
     positiveMovement >= noDownsideMinGain &&
     pickScore >= -TEAM_IMPACT_EPS &&
     mainScore >= threshold - 0.25;
   const tradeoffAccept = mainScore >= threshold;
-  const accepted = Boolean(noDownsideAccept || tradeoffAccept);
+  const accepted = Boolean(cleanPickUpgradeAccept || noDownsidePickSweetenerAccept || noDownsideAccept || tradeoffAccept);
 
   const reasons = [
     `${cpuName} power rank #${powerContext.rank}: values OVR ${(ovrWeight * 100).toFixed(1)}% / POT ${(potWeight * 100).toFixed(1)}%.`,
+    `Before trade: OVR ${before.exactOverall.toFixed(4)}, POT ${before.exactPot.toFixed(4)}, FTR ${before.exactFtr.toFixed(4)}.`,
+    `After trade: OVR ${after.exactOverall.toFixed(4)}, POT ${after.exactPot.toFixed(4)}, FTR ${after.exactFtr.toFixed(4)}.`,
     `Team impact: OVR ${formatDelta(deltaOVR)}, POT ${formatDelta(deltaPOT)}, FTR ${formatDelta(deltaFTR)}.`,
   ];
 
-  if (Math.abs(pickScore) > TEAM_IMPACT_EPS) {
-    reasons.push(`Generic pick placeholder impact: ${formatDelta(pickScore)}.`);
+  if (Array.isArray(pickImpact?.reasons) && pickImpact.reasons.length > 0) {
+    reasons.push(...pickImpact.reasons.slice(0, 5));
   }
 
   if (Array.isArray(contractImpact?.reasons) && contractImpact.reasons.length > 0) {
@@ -705,12 +756,22 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
     reasons.push(`${cpuName} is currently the top team in its conference, so it needs a clearer reason to move pieces.`);
   }
 
-  if (noDownsideAccept) {
+  if (cleanPickUpgradeAccept) {
+    reasons.push("Accepted because this is a clean draft-asset upgrade for the CPU with no player, roster, salary, or contract downside.");
+  } else if (noDownsidePickSweetenerAccept) {
+    reasons.push("Accepted because the CPU receives enough draft-pick value without taking a meaningful team-impact or contract downside.");
+  } else if (noDownsideAccept) {
     reasons.push("Accepted because the trade improves or holds every team-impact rating and stays close enough to the contract-adjusted threshold.");
   } else if (accepted) {
     reasons.push(`Accepted because the weighted team-impact score clears the ${threshold.toFixed(2)} contract-adjusted threshold.`);
   } else if (!hasNoMeaningfulDownside) {
     reasons.push(`Rejected because the gains do not justify the rating sacrifice for ${cpuName}'s current team direction.`);
+  } else if (pickImpact?.hasPicks && pickScore < CLEAN_PICK_UPGRADE_ACCEPT_LINE) {
+    reasons.push(
+      pickScore < -TEAM_IMPACT_EPS
+        ? `Rejected because ${cpuName} would lose net draft-pick value in a deal without enough team-impact compensation.`
+        : `Rejected because the draft-pick value is too small to justify anything beyond a no-downside asset cleanup.`
+    );
   } else {
     reasons.push("Rejected because the move is too close to neutral; CPU teams need a clear reason to trade.");
   }
@@ -748,6 +809,11 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
         potScore: round4(potWeight * deltaPOT * POT_IMPACT_MULT),
         ftrScore: round4(ftrScore),
         pickScore,
+        pickImpact,
+        incomingPickValue: pickImpact?.incomingValue || 0,
+        outgoingPickValue: pickImpact?.outgoingValue || 0,
+        cleanPickUpgradeAccept,
+        noDownsidePickSweetenerAccept,
         contractFriction: contractImpact?.friction || 0,
       },
     },

@@ -11,7 +11,7 @@ import "../styles/BMAnimations.css";
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const SCHEDULE_KEY = "bm_schedule_v3";
-const POWER_RANKINGS_AUTO_RATINGS_CACHE_KEY = "bm_power_rankings_auto_ratings_v1";
+const POWER_RANKINGS_AUTO_RATINGS_CACHE_KEY = "bm_power_rankings_auto_ratings_v5";
 
 const toNum = (value, fallback = 0) => {
   const n = Number(value);
@@ -96,22 +96,24 @@ function getLegacyGameplanRosterSignature(teamPlayers = []) {
 }
 
 function getPowerRankingsRosterSignature(teamPlayers = []) {
-  return [...(teamPlayers || [])]
-    .map((p) =>
-      [
-        p.name || p.player || "",
-        p.pos || "",
-        p.secondaryPos || "",
-        toNum(p.overall ?? p.ovr, 0),
-        toNum(p.offRating ?? p.off ?? p.offense, 0),
-        toNum(p.defRating ?? p.def ?? p.defense, 0),
-        toNum(p.stamina, 75),
-        toNum(p.potential ?? p.pot, 0),
-        toNum(p.age, 0),
-      ].join("|")
-    )
-    .sort()
-    .join("||");
+  return [
+    `auto-v${GAMEPLAN_VERSION}`,
+    ...[...(teamPlayers || [])]
+      .map((p) =>
+        [
+          p.name || p.player || "",
+          p.pos || "",
+          p.secondaryPos || "",
+          toNum(p.overall ?? p.ovr, 0),
+          toNum(p.offRating ?? p.off ?? p.offense, 0),
+          toNum(p.defRating ?? p.def ?? p.defense, 0),
+          toNum(p.stamina, 75),
+          toNum(p.potential ?? p.pot, 0),
+          toNum(p.age, 0),
+        ].join("|")
+      )
+      .sort(),
+  ].join("||");
 }
 
 function getRosterNames(teamPlayers = []) {
@@ -280,6 +282,8 @@ const POT_FUTURE_WINDOWS = [
 const POT_SCALE_BASE = 77.8156;
 const POT_SCALE_FLOOR_VALUE = 70;
 const POT_SCALE_MULTIPLIER = 2.0199;
+const POT_TOP_CURVE_START = 90;
+const POT_TOP_CURVE_MULTIPLIER = 0.74;
 const POT_PROOF_BASE_OVERALL = 84;
 const POT_PROOF_MULTIPLIER = 0.20;
 const POT_ELITE_PROOF_BASE_OVERALL = 92;
@@ -416,10 +420,15 @@ function getTeamPotentialForPowerRankings(team, exactCurrentOverall = 0) {
       futureStrength *
       POT_ELITE_PROOF_MULTIPLIER;
 
-  const exactPot = Math.min(
-    99,
-    POT_SCALE_FLOOR_VALUE + (rawPot + proofBonus - POT_SCALE_BASE) * POT_SCALE_MULTIPLIER
-  );
+  const scaledPot =
+    POT_SCALE_FLOOR_VALUE +
+    (rawPot + proofBonus - POT_SCALE_BASE) * POT_SCALE_MULTIPLIER;
+  const topCurvedPot =
+    scaledPot <= POT_TOP_CURVE_START
+      ? scaledPot
+      : POT_TOP_CURVE_START +
+        (scaledPot - POT_TOP_CURVE_START) * POT_TOP_CURVE_MULTIPLIER;
+  const exactPot = Math.min(99, topCurvedPot);
 
   return Math.round(toNum(exactPot, 0));
 }

@@ -1,6 +1,6 @@
 import { computeTeamRatings } from "../api/teamRatings";
 
-export const GAMEPLAN_VERSION = 10;
+export const GAMEPLAN_VERSION = 18;
 
 // Helpers to support both league shapes: { teams: [...] } or { conferences: { ... } }
 function getAllTeamsFromLeague(leagueData) {
@@ -85,7 +85,9 @@ function hasValidManualGameplanForRoster(team, savedPlan) {
   if (!team?.name) return false;
   if (!savedPlan || typeof savedPlan !== "object") return false;
   if (!isManualLockedGameplan(savedPlan)) return false;
-  if (savedPlan.version !== GAMEPLAN_VERSION) return false;
+  // Manual/user-edited rotations are the user's coaching choice. Preserve them
+  // across auto-rotation version bumps as long as the same roster is still
+  // present and the saved minutes/order are structurally valid.
   if (savedPlan.teamName !== team.name) return false;
 
   const liveNames = getRosterNames(team?.players || []);
@@ -125,8 +127,22 @@ const ROTATION_SIZE = 10;
 const STARTER_MAX_MINUTES = 42;
 const BENCH_MAX_MINUTES = 30;
 const HARD_MAX_MINUTES = 48;
+const MINUTE_OPTIMIZER_STEP = 4;
 const BENCH_SEARCH_LIMIT = 20;
-const BENCH_FINALIST_LIMIT = 64;
+const BENCH_FINALIST_LIMIT = 4;
+const BENCH_LINEUP_SECONDARY_CREDIT = 0.95;
+const BENCH_LINEUP_ASSIGNMENT_WEIGHT = 250_000;
+const BENCH_LINEUP_HOLE_PENALTY = 50;
+const BENCH_UNIT_CANDIDATES_PER_POSITION = 10;
+const BENCH_COMBO_POOL_LIMIT = 16;
+const BENCH_ACTUAL_SEARCH_POOL_LIMIT = 9;
+const SAME_ROLE_UPGRADE_OVR_TOLERANCE = 0.15;
+const SAME_ROLE_UPGRADE_SIDE_TOLERANCE = 2.0;
+const ROTATION_CACHE_MAX = 300;
+
+const smartRotationCache = new Map();
+const fullTeamRatingCache = new Map();
+const potentialRatingCache = new Map();
 
 const POT_FUTURE_WINDOWS = [
   { years: 3, weight: 0.30 },
@@ -137,6 +153,8 @@ const POT_FUTURE_WINDOWS = [
 const POT_SCALE_BASE = 77.8156;
 const POT_SCALE_FLOOR_VALUE = 70;
 const POT_SCALE_MULTIPLIER = 2.0199;
+const POT_TOP_CURVE_START = 90;
+const POT_TOP_CURVE_MULTIPLIER = 0.74;
 const POT_PROOF_BASE_OVERALL = 84;
 const POT_PROOF_MULTIPLIER = 0.20;
 const POT_ELITE_PROOF_BASE_OVERALL = 92;
@@ -202,6 +220,87 @@ function uniquePlayers(players) {
   }
 
   return out;
+}
+
+function touchLimitedCache(cache, key, value, maxSize = ROTATION_CACHE_MAX) {
+  if (!key) return value;
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+
+  while (cache.size > maxSize) {
+    const oldest = cache.keys().next().value;
+    cache.delete(oldest);
+  }
+
+  return value;
+}
+
+function getLimitedCache(cache, key) {
+  if (!key || !cache.has(key)) return null;
+  const value = cache.get(key);
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+}
+
+function getRatingRosterSignature(teamPlayers = []) {
+  return [...(teamPlayers || [])]
+    .map((p) =>
+      [
+        p?.id ?? p?.playerId ?? p?.player_id ?? p?.uuid ?? "",
+        p?.name || p?.player || "",
+        p?.pos || "",
+        p?.secondaryPos || "",
+        Number(p?.age ?? 0) || 0,
+        Number(p?.overall ?? p?.ovr ?? 0) || 0,
+        Number(p?.potential ?? p?.pot ?? 0) || 0,
+        Number(p?.offRating ?? p?.off ?? p?.overall ?? p?.ovr ?? 0) || 0,
+        Number(p?.defRating ?? p?.def ?? p?.overall ?? p?.ovr ?? 0) || 0,
+        Number(p?.stamina ?? p?.sta ?? 75) || 75,
+      ].join("|")
+    )
+    .sort()
+    .join("||");
+}
+
+function cacheSmartRotationResult(valid, result) {
+  const order = (result?.sorted || []).map((player) => player?.name).filter(Boolean);
+  const orderedNames = new Set(order);
+  const missing = (valid || [])
+    .filter((player) => player?.name && !orderedNames.has(player.name))
+    .sort(comparePlayers)
+    .map((player) => player.name);
+
+  return {
+    order: [...order, ...missing],
+    obj: { ...(result?.obj || {}) },
+  };
+}
+
+function inflateSmartRotationResult(valid, cached) {
+  const byName = new Map((valid || []).map((player) => [player.name, player]));
+  const used = new Set();
+  const sorted = [];
+
+  for (const name of cached?.order || []) {
+    const player = byName.get(name);
+    if (!player || used.has(name)) continue;
+    sorted.push(player);
+    used.add(name);
+  }
+
+  for (const player of valid || []) {
+    if (!player?.name || used.has(player.name)) continue;
+    sorted.push(player);
+    used.add(player.name);
+  }
+
+  const obj = makeZeroMinutes(valid || []);
+  for (const player of valid || []) {
+    obj[player.name] = Number(cached?.obj?.[player.name] || 0);
+  }
+
+  return { sorted, obj };
 }
 
 function combos(arr, k) {
@@ -379,6 +478,116 @@ function chooseStarters(valid) {
   return POSITIONS.map((pos) => bestMap[pos]).filter(Boolean);
 }
 
+
+function assignmentCreditForPosition(player, pos) {
+  if (!player || !pos) return 0;
+  if (player.pos === pos) return 1.0;
+  if (player.secondaryPos === pos) return BENCH_LINEUP_SECONDARY_CREDIT;
+  return 0;
+}
+
+function benchPlayerQuality(player) {
+  const overall = Number(player?.overall ?? 75);
+  const off = Number(player?.offRating ?? overall);
+  const def = Number(player?.defRating ?? overall);
+  const stamina = Number(player?.stamina ?? 75);
+
+  // Bench selection should mostly follow visible OVR. OFF/DEF/stamina still
+  // matter as tie-breakers, but they should not let a clearly worse same-role
+  // player steal minutes from a better, flexible player.
+  return overall * 10 + off * 0.16 + def * 0.16 + (stamina - 70) * 0.04;
+}
+
+function getBenchCoverageDetails(benchPlayers = []) {
+  const bench = uniquePlayers(benchPlayers).filter(
+    (p) => p && p.name && Number.isFinite(Number(p.overall))
+  );
+
+  if (!bench.length) {
+    return {
+      score: -POSITIONS.length * BENCH_LINEUP_HOLE_PENALTY,
+      holes: POSITIONS.length,
+      primaryHits: 0,
+      secondaryUses: 0,
+    };
+  }
+
+  let best = {
+    score: -Infinity,
+    holes: POSITIONS.length,
+    primaryHits: 0,
+    secondaryUses: 0,
+  };
+  const used = new Set();
+
+  const isBetter = (candidate, incumbent) => {
+    if (candidate.score !== incumbent.score) return candidate.score > incumbent.score;
+    if (candidate.holes !== incumbent.holes) return candidate.holes < incumbent.holes;
+    if (candidate.secondaryUses !== incumbent.secondaryUses) return candidate.secondaryUses < incumbent.secondaryUses;
+    return candidate.primaryHits > incumbent.primaryHits;
+  };
+
+  const search = (posIdx, score, holes, primaryHits, secondaryUses) => {
+    if (posIdx >= POSITIONS.length) {
+      const candidate = { score, holes, primaryHits, secondaryUses };
+      if (isBetter(candidate, best)) best = candidate;
+      return;
+    }
+
+    const pos = POSITIONS[posIdx];
+    for (const player of bench) {
+      if (used.has(player.name)) continue;
+
+      const credit = assignmentCreditForPosition(player, pos);
+      if (credit <= 0) continue;
+
+      used.add(player.name);
+      const isPrimary = player.pos === pos;
+      search(
+        posIdx + 1,
+        score + benchPlayerQuality(player) * credit + (isPrimary ? 0.15 : 0),
+        holes,
+        primaryHits + (isPrimary ? 1 : 0),
+        secondaryUses + (isPrimary ? 0 : 1)
+      );
+      used.delete(player.name);
+    }
+
+    // Missing a bench PG/SG/SF/PF/C slot is allowed for thin rosters, but it is
+    // a real cost. A secondary-position player filling the slot is much better
+    // than forcing a low-OVR primary-position specialist.
+    search(
+      posIdx + 1,
+      score - BENCH_LINEUP_HOLE_PENALTY,
+      holes + 1,
+      primaryHits,
+      secondaryUses
+    );
+  };
+
+  search(0, 0, 0, 0, 0);
+  return best;
+}
+
+function benchLineupAssignmentScore(benchPlayers = []) {
+  const details = getBenchCoverageDetails(benchPlayers);
+  return (
+    details.score -
+    details.holes * 8 -
+    details.secondaryUses * 0.35 +
+    details.primaryHits * 0.15
+  );
+}
+
+function rotationSelectionScore(valid, candidate) {
+  if (!candidate) return -Infinity;
+
+  const baseScore = scoreMinutes(valid, candidate.minutesObj);
+  const benchScore = benchLineupAssignmentScore(candidate.bench || []);
+
+  return baseScore + benchScore * BENCH_LINEUP_ASSIGNMENT_WEIGHT;
+}
+
 function makeZeroMinutes(valid) {
   const obj = {};
   for (const p of valid) obj[p.name] = 0;
@@ -392,58 +601,30 @@ function localFatiguePenaltyForTie(mins, stamina) {
 }
 
 function continuousTieScore(valid, minutesObj) {
-  const POS_TARGET = 48;
-  const SECONDARY_POS_CREDIT = 0.55;
-  const posMin = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
-  const active = [];
   let weighted = 0;
+  let activeCount = 0;
+  let benchQuality = 0;
 
   for (const p of valid) {
     const m = Math.max(0, Number(minutesObj?.[p.name] || 0));
     if (m <= 0) continue;
 
+    activeCount += 1;
     const overall = Number(p.overall ?? 75);
     const off = Number(p.offRating ?? overall);
     const def = Number(p.defRating ?? overall);
     const pen = localFatiguePenaltyForTie(m, p.stamina ?? 75);
     weighted += (m / 240) * ((overall * 0.5 + off * 0.25 + def * 0.25) * pen);
 
-    const primaryPos = p.pos || "SG";
-    const secondaryPos = p.secondaryPos || null;
-
-    if (primaryPos && posMin[primaryPos] !== undefined) {
-      posMin[primaryPos] += m;
+    // Tiny tie-breaker only. Position balance is handled by computeTeamRatings()
+    // now, using split primary/secondary allocation. Keeping another position
+    // model here would risk reintroducing the old Royce/Coffey style bias.
+    if (m <= BENCH_MAX_MINUTES) {
+      benchQuality += (overall * 0.002) + (playablePositions(p).size * 0.001);
     }
-
-    active.push({
-      minutes: m,
-      pos: primaryPos,
-      secondaryPos,
-    });
   }
 
-  // Match teamRatings.js: secondary positions are flex credit only. They fill
-  // a shortage but never create extra overage, so a PG/SG is never worse than a
-  // pure PG just because SG is already full.
-  for (const p of active) {
-    const secondary = p.secondaryPos;
-    if (!secondary || secondary === p.pos || posMin[secondary] === undefined) {
-      continue;
-    }
-
-    const shortage = Math.max(0, POS_TARGET - (posMin[secondary] || 0));
-    if (shortage <= 0) continue;
-
-    const flexCredit = Math.min(p.minutes * SECONDARY_POS_CREDIT, shortage);
-    posMin[secondary] += flexCredit;
-  }
-
-  const coverageError = POSITIONS.reduce(
-    (sum, pos) => sum + Math.abs((posMin[pos] || 0) - POS_TARGET),
-    0
-  );
-
-  return weighted - coverageError * 0.018;
+  return weighted + benchQuality + activeCount * 0.0001;
 }
 
 function scoreMinutes(valid, minutesObj) {
@@ -491,6 +672,7 @@ function seedRotation(valid, starters, benchPlayers) {
     minutesObj,
     minByName,
     score: scoreMinutes(valid, minutesObj),
+    selectionScore: rotationSelectionScore(valid, { bench: benchPlayers, minutesObj }),
   };
 }
 
@@ -505,46 +687,51 @@ function optimizeSeededRotation(valid, seeded) {
   let used = Object.values(minutesObj).reduce((sum, value) => sum + Number(value || 0), 0);
   let remain = Math.max(0, 240 - used);
 
-  const addBestMinute = (relaxed = false) => {
+  const addBestMinuteChunk = (relaxed = false) => {
     let best = null;
+    let bestAmount = 0;
     let bestScore = -Infinity;
 
     for (const p of rotation) {
       const cap = getMinuteCap(p, starterNames, relaxed);
-      if ((minutesObj[p.name] || 0) >= cap) continue;
+      const current = Number(minutesObj[p.name] || 0);
+      if (current >= cap) continue;
 
-      minutesObj[p.name] += 1;
+      const amount = Math.min(remain, MINUTE_OPTIMIZER_STEP, cap - current);
+      if (amount <= 0) continue;
+
+      minutesObj[p.name] = current + amount;
       const score = scoreMinutes(valid, minutesObj);
-      minutesObj[p.name] -= 1;
+      minutesObj[p.name] = current;
 
       if (score > bestScore) {
         bestScore = score;
         best = p;
+        bestAmount = amount;
       }
     }
 
-    if (!best) return false;
+    if (!best || bestAmount <= 0) return false;
 
-    minutesObj[best.name] += 1;
+    minutesObj[best.name] = Number(minutesObj[best.name] || 0) + bestAmount;
+    remain -= bestAmount;
     return true;
   };
 
   while (remain > 0) {
-    if (!addBestMinute(false)) break;
-    remain--;
+    if (!addBestMinuteChunk(false)) break;
   }
 
   // Safety valve for unusual rosters where normal caps cannot reach 240.
   while (remain > 0) {
-    if (!addBestMinute(true)) break;
-    remain--;
+    if (!addBestMinuteChunk(true)) break;
   }
 
   let currentScore = scoreMinutes(valid, minutesObj);
   let improved = true;
   let passes = 0;
 
-  while (improved && passes < 60) {
+  while (improved && passes < 3) {
     improved = false;
     passes++;
 
@@ -558,24 +745,31 @@ function optimizeSeededRotation(valid, seeded) {
         if (from.name === to.name) continue;
         if ((minutesObj[to.name] || 0) >= getMinuteCap(to, starterNames, false)) continue;
 
-        minutesObj[from.name] -= 1;
-        minutesObj[to.name] += 1;
+        const movable = Math.min(
+          MINUTE_OPTIMIZER_STEP,
+          Number(minutesObj[from.name] || 0) - Number(minByName[from.name] || 0),
+          getMinuteCap(to, starterNames, false) - Number(minutesObj[to.name] || 0)
+        );
+        if (movable <= 0) continue;
+
+        minutesObj[from.name] -= movable;
+        minutesObj[to.name] += movable;
 
         const testScore = scoreMinutes(valid, minutesObj);
 
-        minutesObj[from.name] += 1;
-        minutesObj[to.name] -= 1;
+        minutesObj[from.name] += movable;
+        minutesObj[to.name] -= movable;
 
         if (testScore > bestScore + 1e-9) {
           bestScore = testScore;
-          bestMove = { from, to };
+          bestMove = { from, to, amount: movable };
         }
       }
     }
 
     if (bestMove) {
-      minutesObj[bestMove.from.name] -= 1;
-      minutesObj[bestMove.to.name] += 1;
+      minutesObj[bestMove.from.name] -= bestMove.amount;
+      minutesObj[bestMove.to.name] += bestMove.amount;
       currentScore = bestScore;
       improved = true;
     }
@@ -587,6 +781,7 @@ function optimizeSeededRotation(valid, seeded) {
     rotation,
     minutesObj,
     score: currentScore,
+    selectionScore: rotationSelectionScore(valid, { bench: benchPlayers, minutesObj }),
   };
 }
 
@@ -660,6 +855,26 @@ function sharesPlayablePosition(a, b) {
   return false;
 }
 
+function coversAllPlayablePositions(incoming, outgoing) {
+  const incomingPositions = playablePositions(incoming);
+  const outgoingPositions = playablePositions(outgoing);
+
+  if (!incomingPositions.size || !outgoingPositions.size) return false;
+
+  for (const pos of outgoingPositions) {
+    if (!incomingPositions.has(pos)) return false;
+  }
+
+  return true;
+}
+
+function acceptsSameRoleUpgrade(currentRatings, testRatings) {
+  return (
+    ratingOverall(testRatings) >= ratingOverall(currentRatings) - SAME_ROLE_UPGRADE_OVR_TOLERANCE &&
+    ratingSideSum(testRatings) >= ratingSideSum(currentRatings) - SAME_ROLE_UPGRADE_SIDE_TOLERANCE
+  );
+}
+
 function applyBenchRealismPass(valid, optimized) {
   if (!optimized?.rotation?.length) return optimized;
 
@@ -695,7 +910,7 @@ function applyBenchRealismPass(valid, optimized) {
   // improves, keep the higher-OVR player.
   let changed = true;
   let passes = 0;
-  while (changed && passes < 10) {
+  while (changed && passes < 2) {
     changed = false;
     passes++;
 
@@ -709,7 +924,6 @@ function applyBenchRealismPass(valid, optimized) {
 
       for (const outgoing of currentBench) {
         if (playerOverall(incoming) <= playerOverall(outgoing)) continue;
-        if (!sharesPlayablePosition(incoming, outgoing)) continue;
 
         const outgoingMinutes = Number(minutesObj[outgoing.name] || 0);
         if (outgoingMinutes <= 0) continue;
@@ -720,7 +934,10 @@ function applyBenchRealismPass(valid, optimized) {
 
         const testRatings = displayedRatings(valid, testMinutes);
         const samePrimaryUpgrade = isSamePrimaryStrictUpgrade(incoming, outgoing);
-        const acceptedByRatings = samePrimaryUpgrade
+        const sameRoleUpgrade = coversAllPlayablePositions(incoming, outgoing);
+        const acceptedByRatings = sameRoleUpgrade
+          ? acceptsSameRoleUpgrade(currentRatings, testRatings)
+          : samePrimaryUpgrade
           ? acceptsSamePrimaryUpgrade(currentRatings, testRatings)
           : acceptsRealismSwap(currentRatings, testRatings);
         if (!acceptedByRatings) continue;
@@ -742,7 +959,7 @@ function applyBenchRealismPass(valid, optimized) {
   // prefer the higher-rated player receiving the larger role.
   changed = true;
   passes = 0;
-  while (changed && passes < 30) {
+  while (changed && passes < 4) {
     changed = false;
     passes++;
 
@@ -766,7 +983,10 @@ function applyBenchRealismPass(valid, optimized) {
 
         const testRatings = displayedRatings(valid, testMinutes);
         const samePrimaryUpgrade = isSamePrimaryStrictUpgrade(higher, lower);
-        const acceptedByRatings = samePrimaryUpgrade
+        const sameRoleUpgrade = coversAllPlayablePositions(higher, lower);
+        const acceptedByRatings = sameRoleUpgrade
+          ? acceptsSameRoleUpgrade(currentRatings, testRatings)
+          : samePrimaryUpgrade
           ? acceptsSamePrimaryUpgrade(currentRatings, testRatings)
           : acceptsRealismSwap(currentRatings, testRatings);
         if (!acceptedByRatings) continue;
@@ -795,9 +1015,373 @@ function applyBenchRealismPass(valid, optimized) {
     rotation,
     minutesObj,
     score: scoreMinutes(valid, minutesObj),
+    selectionScore: rotationSelectionScore(valid, { bench, minutesObj }),
   };
 }
 
+
+function compareBenchUnitCandidates(a, b) {
+  const ovrDiff = playerOverall(b) - playerOverall(a);
+  if (ovrDiff !== 0) return ovrDiff;
+
+  const qualityDiff = benchPlayerQuality(b) - benchPlayerQuality(a);
+  if (Math.abs(qualityDiff) > 1e-9) return qualityDiff;
+
+  const aFlex = playablePositions(a).size;
+  const bFlex = playablePositions(b).size;
+  if (aFlex !== bFlex) return bFlex - aFlex;
+
+  return String(a?.name || "").localeCompare(String(b?.name || ""));
+}
+
+function benchAssignmentValue(player, pos) {
+  const credit = assignmentCreditForPosition(player, pos);
+  if (credit <= 0) return -Infinity;
+
+  // Primary-position labels are a tie-breaker, not a trump card. A PF/C or C/PF
+  // should be able to cover the bench 5 without forcing a worse pure center into
+  // the rotation.
+  const primaryBonus = player.pos === pos ? 0.20 : 0;
+  return benchPlayerQuality(player) * credit + primaryBonus;
+}
+
+function scoreBenchUnitAssignment(mapping) {
+  const selectedNames = new Set();
+  let assignmentTotal = 0;
+  let primaryHits = 0;
+  let secondaryUses = 0;
+
+  for (const pos of POSITIONS) {
+    const player = mapping[pos];
+    if (!player) return -Infinity;
+
+    selectedNames.add(player.name);
+    assignmentTotal += benchAssignmentValue(player, pos);
+    if (player.pos === pos) primaryHits += 1;
+    else secondaryUses += 1;
+  }
+
+  const selectedPlayers = Object.values(mapping).filter(
+    (player, idx, arr) => player && arr.findIndex((p) => p?.name === player.name) === idx
+  );
+  const overallSum = selectedPlayers.reduce((sum, player) => sum + playerOverall(player), 0);
+  const qualitySum = selectedPlayers.reduce((sum, player) => sum + benchPlayerQuality(player), 0);
+
+  return (
+    overallSum * 100_000 +
+    qualitySum * 1_000 +
+    assignmentTotal * 250 +
+    primaryHits * 25 -
+    secondaryUses * 6 -
+    Math.max(0, POSITIONS.length - selectedNames.size) * 1_000_000
+  );
+}
+
+function scoreBenchCandidateCombo(combo = []) {
+  const uniqueCombo = uniquePlayers(combo);
+  const coverage = getBenchCoverageDetails(uniqueCombo);
+  const overallSum = uniqueCombo.reduce((sum, player) => sum + playerOverall(player), 0);
+  const qualitySum = uniqueCombo.reduce((sum, player) => sum + benchPlayerQuality(player), 0);
+  const bestOvr = Math.max(...uniqueCombo.map((player) => playerOverall(player)), 0);
+  const worstOvr = uniqueCombo.length
+    ? Math.min(...uniqueCombo.map((player) => playerOverall(player)))
+    : 0;
+
+  return (
+    overallSum * 100_000 +
+    qualitySum * 1_000 +
+    coverage.score * 500 +
+    bestOvr * 60 +
+    worstOvr * 30 -
+    coverage.holes * 230_000 -
+    coverage.secondaryUses * 300 +
+    coverage.primaryHits * 75
+  );
+}
+
+function buildBenchComboPool(pool = []) {
+  const byName = new Map();
+  const add = (player) => {
+    if (player?.name && !byName.has(player.name)) byName.set(player.name, player);
+  };
+
+  pool.slice().sort(compareBenchUnitCandidates).slice(0, BENCH_COMBO_POOL_LIMIT).forEach(add);
+
+  for (const pos of POSITIONS) {
+    pool
+      .filter((player) => isEligibleForPosition(player, pos))
+      .sort((a, b) => {
+        const scoreDiff = benchAssignmentValue(b, pos) - benchAssignmentValue(a, pos);
+        if (Math.abs(scoreDiff) > 1e-9) return scoreDiff;
+        return compareBenchUnitCandidates(a, b);
+      })
+      .slice(0, 3)
+      .forEach(add);
+  }
+
+  return [...byName.values()].sort(compareBenchUnitCandidates).slice(0, BENCH_COMBO_POOL_LIMIT);
+}
+
+function chooseBenchUnit(valid, starters, benchNeeded) {
+  if (benchNeeded <= 0) return [];
+
+  const starterNames = new Set((starters || []).map((p) => p.name));
+  const pool = buildBenchPool(valid, starterNames)
+    .filter((p) => !starterNames.has(p.name))
+    .sort(compareBenchUnitCandidates);
+
+  if (benchNeeded < POSITIONS.length || pool.length <= benchNeeded) {
+    return pool.slice(0, benchNeeded).sort(compareBenchUnitCandidates);
+  }
+
+  const comboPool = buildBenchComboPool(pool);
+  if (comboPool.length < benchNeeded) {
+    return pool.slice(0, benchNeeded).sort(compareBenchUnitCandidates);
+  }
+
+  let bestCombo = null;
+  let bestScore = -Infinity;
+  const path = [];
+
+  const search = (startIdx) => {
+    if (path.length === benchNeeded) {
+      const score = scoreBenchCandidateCombo(path);
+      if (score > bestScore) {
+        bestScore = score;
+        bestCombo = path.slice();
+      }
+      return;
+    }
+
+    const remainingNeeded = benchNeeded - path.length;
+    for (let idx = startIdx; idx <= comboPool.length - remainingNeeded; idx += 1) {
+      path.push(comboPool[idx]);
+      search(idx + 1);
+      path.pop();
+    }
+  };
+
+  search(0);
+
+  const bench = bestCombo?.length
+    ? bestCombo.slice().sort(compareBenchUnitCandidates)
+    : pool.slice(0, benchNeeded).sort(compareBenchUnitCandidates);
+
+  if (bench.length >= benchNeeded) return bench.slice(0, benchNeeded);
+
+  const picked = new Set(bench.map((p) => p.name));
+  return [
+    ...bench,
+    ...pool.filter((player) => !picked.has(player.name)).slice(0, benchNeeded - bench.length),
+  ].sort(compareBenchUnitCandidates);
+}
+
+
+function comboKey(players = []) {
+  return uniquePlayers(players)
+    .map((player) => player?.name || "")
+    .filter(Boolean)
+    .sort()
+    .join("||");
+}
+
+function buildBenchActualSearchPool(valid, starters) {
+  const starterNames = new Set((starters || []).map((p) => p.name));
+  const remaining = (valid || [])
+    .filter((p) => p?.name && !starterNames.has(p.name))
+    .sort(compareBenchUnitCandidates);
+
+  // Normal NBA rosters are usually 14-15 players, meaning 9-10 non-starters.
+  // In that normal case we can evaluate every possible 5-man bench group. That
+  // is the key fix: the sorter no longer has to guess that a new C/PF belongs in
+  // the rotation just because his label helps coverage.
+  if (remaining.length <= BENCH_ACTUAL_SEARCH_POOL_LIMIT) return remaining;
+
+  const byName = new Map();
+  const add = (player) => {
+    if (player?.name && !byName.has(player.name)) byName.set(player.name, player);
+  };
+
+  remaining.slice(0, 8).forEach(add);
+
+  for (const pos of POSITIONS) {
+    remaining
+      .filter((player) => isEligibleForPosition(player, pos))
+      .sort((a, b) => {
+        const scoreDiff = benchAssignmentValue(b, pos) - benchAssignmentValue(a, pos);
+        if (Math.abs(scoreDiff) > 1e-9) return scoreDiff;
+        return compareBenchUnitCandidates(a, b);
+      })
+      .slice(0, 4)
+      .forEach(add);
+  }
+
+  return [...byName.values()]
+    .sort(compareBenchUnitCandidates)
+    .slice(0, BENCH_ACTUAL_SEARCH_POOL_LIMIT);
+}
+
+function buildQuickFilledMinutes(valid, seeded) {
+  const starterNames = new Set((seeded?.starters || []).map((p) => p.name));
+  const minutesObj = { ...(seeded?.minutesObj || {}) };
+  const rotation = uniquePlayers(seeded?.rotation || []);
+  let used = Object.values(minutesObj).reduce((sum, value) => sum + Number(value || 0), 0);
+  let remain = Math.max(0, 240 - used);
+
+  // Cheap one-pass fill used only to rank candidate bench groups before running
+  // the expensive minute optimizer on the finalists. This gives stars and strong
+  // bench players realistic extra minutes, so the candidate ranking is based on
+  // the same team-rating formula instead of a position-label heuristic.
+  const priority = rotation.slice().sort((a, b) => {
+    const valueDiff = playerValue(b) - playerValue(a);
+    if (Math.abs(valueDiff) > 1e-9) return valueDiff;
+    return compareBenchUnitCandidates(a, b);
+  });
+
+  for (const player of priority) {
+    if (remain <= 0) break;
+    const cap = getMinuteCap(player, starterNames, false);
+    const current = Number(minutesObj[player.name] || 0);
+    const add = Math.min(remain, Math.max(0, cap - current));
+    if (add <= 0) continue;
+    minutesObj[player.name] = current + add;
+    remain -= add;
+  }
+
+  for (const player of priority) {
+    if (remain <= 0) break;
+    const current = Number(minutesObj[player.name] || 0);
+    const add = Math.min(remain, Math.max(0, HARD_MAX_MINUTES - current));
+    if (add <= 0) continue;
+    minutesObj[player.name] = current + add;
+    remain -= add;
+  }
+
+  return minutesObj;
+}
+
+function quickBenchCandidateScore(valid, starters, benchPlayers, seedBuilder = seedRotation) {
+  const seeded = seedBuilder(valid, starters, benchPlayers);
+  const quickMinutes = buildQuickFilledMinutes(valid, seeded);
+  return scoreMinutes(valid, quickMinutes);
+}
+
+function getBenchUnitFinalistsByActualRating(valid, starters, benchNeeded, seedBuilder = seedRotation) {
+  if (benchNeeded <= 0) return [[]];
+
+  const pool = buildBenchActualSearchPool(valid, starters);
+  if (pool.length <= benchNeeded) return [pool.slice(0, benchNeeded)];
+
+  const scored = [];
+  const seen = new Set();
+
+  const addCandidate = (players, source = "search", forced = false) => {
+    const combo = uniquePlayers(players);
+    if (combo.length !== benchNeeded) return;
+    const key = comboKey(combo);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+
+    scored.push({
+      bench: combo.slice().sort(compareBenchUnitCandidates),
+      score: quickBenchCandidateScore(valid, starters, combo, seedBuilder),
+      heuristicScore: scoreBenchCandidateCombo(combo),
+      source,
+      forced,
+    });
+  };
+
+  const fillWithBest = (locked = []) => {
+    const lockedNames = new Set(uniquePlayers(locked).map((p) => p.name));
+    return uniquePlayers([
+      ...locked,
+      ...pool.filter((player) => !lockedNames.has(player.name)),
+    ]).slice(0, benchNeeded);
+  };
+
+  const heuristicBench = chooseBenchUnit(valid, starters, benchNeeded);
+  const topQualityBench = pool.slice(0, benchNeeded);
+  addCandidate(heuristicBench, "heuristic", true);
+  addCandidate(topQualityBench, "top-quality", true);
+
+  // Position-anchored candidates: make sure the best playable PG/SG/SF/PF/C
+  // alternatives are tested without exploding into every possible combination.
+  for (const pos of POSITIONS) {
+    const bestAtPos = pool
+      .filter((player) => isEligibleForPosition(player, pos))
+      .sort((a, b) => {
+        const diff = benchAssignmentValue(b, pos) - benchAssignmentValue(a, pos);
+        if (Math.abs(diff) > 1e-9) return diff;
+        return compareBenchUnitCandidates(a, b);
+      })[0];
+    if (bestAtPos) addCandidate(fillWithBest([bestAtPos]), `anchor-${pos}`);
+  }
+
+  // One-for-one swaps around the heuristic bench catch cases like a flexible
+  // higher-OVR wing/big being better than the default positional pick.
+  const baseNames = new Set((heuristicBench || []).map((p) => p.name));
+  const outsiders = pool.filter((player) => !baseNames.has(player.name)).slice(0, 6);
+  for (const incoming of outsiders) {
+    for (const outgoing of heuristicBench || []) {
+      addCandidate(
+        [...heuristicBench.filter((player) => player.name !== outgoing.name), incoming],
+        "swap"
+      );
+    }
+  }
+
+  scored.sort(
+    (a, b) =>
+      b.score - a.score ||
+      b.heuristicScore - a.heuristicScore ||
+      comboKey(a.bench).localeCompare(comboKey(b.bench))
+  );
+
+  const finalists = [];
+  const finalistKeys = new Set();
+  const addFinalist = (row) => {
+    if (!row) return;
+    const key = comboKey(row.bench);
+    if (!key || finalistKeys.has(key)) return;
+    finalistKeys.add(key);
+    finalists.push(row);
+  };
+
+  scored.filter((row) => row.forced).forEach(addFinalist);
+  scored.forEach((row) => {
+    if (finalists.length < BENCH_FINALIST_LIMIT) addFinalist(row);
+  });
+
+  return finalists.slice(0, BENCH_FINALIST_LIMIT).map((row) => row.bench);
+}
+
+function buildOptimizedRotationFromBench(valid, starters, benchPlayers, seedBuilder = seedRotation) {
+  return optimizeSeededRotation(valid, seedBuilder(valid, starters, benchPlayers));
+}
+
+function buildBestOptimizedRotation(valid, starters, benchNeeded, seedBuilder = seedRotation) {
+  const finalists = getBenchUnitFinalistsByActualRating(valid, starters, benchNeeded, seedBuilder);
+  let best = null;
+  let bestScore = -Infinity;
+
+  for (const benchPlayers of finalists) {
+    let candidate = buildOptimizedRotationFromBench(valid, starters, benchPlayers, seedBuilder);
+    candidate = applyBenchRealismPass(valid, candidate);
+    const candidateScore = scoreMinutes(valid, candidate?.minutesObj || {});
+
+    if (
+      !best ||
+      candidateScore > bestScore + 1e-9 ||
+      (Math.abs(candidateScore - bestScore) <= 1e-9 &&
+        benchLineupAssignmentScore(candidate?.bench || []) > benchLineupAssignmentScore(best?.bench || []))
+    ) {
+      best = candidate;
+      bestScore = candidateScore;
+    }
+  }
+
+  return best;
+}
 
 function seedFullTeamRotation(valid, starters, benchPlayers) {
   const starterNames = new Set(starters.map((p) => p.name));
@@ -843,6 +1427,7 @@ function seedFullTeamRotation(valid, starters, benchPlayers) {
     minutesObj,
     minByName,
     score: scoreMinutes(valid, minutesObj),
+    selectionScore: rotationSelectionScore(valid, { bench: benchPlayers, minutesObj }),
   };
 }
 
@@ -854,48 +1439,34 @@ function buildOptimizedFullTeamRotation(teamPlayers) {
   if (valid.length === 0) return null;
 
   const starters = chooseStarters(valid);
-  const starterNames = new Set(starters.map((p) => p.name));
   const benchNeeded = Math.max(0, Math.min(ROTATION_SIZE, valid.length) - starters.length);
-  const benchCandidates = buildBenchPool(valid, starterNames);
+  let best = buildBestOptimizedRotation(valid, starters, benchNeeded, seedFullTeamRotation);
 
-  let best = null;
-
-  if (benchNeeded > 0 && benchCandidates.length >= benchNeeded) {
-    const seededCandidates = [];
-
-    for (const benchCombo of combos(benchCandidates, benchNeeded)) {
-      const benchOrdered = [...benchCombo].sort(comparePlayers);
-      seededCandidates.push(seedFullTeamRotation(valid, starters, benchOrdered));
-    }
-
-    seededCandidates.sort((a, b) => b.score - a.score);
-
-    for (const seeded of seededCandidates.slice(0, BENCH_FINALIST_LIMIT)) {
-      const candidate = optimizeSeededRotation(valid, seeded);
-
-      if (!best || candidate.score > best.score) {
-        best = candidate;
-      }
-    }
-  }
-
-  if (!best) {
-    const benchFallback = benchCandidates
+  // Tiny safety fallback for unusual offseason/test rosters. Normal 14-15 man
+  // rosters go through the actual-rating bench search above.
+  if (!best || (best.bench || []).length < benchNeeded) {
+    const starterNames = new Set(starters.map((p) => p.name));
+    const fallbackBench = buildBenchPool(valid, starterNames)
       .slice()
-      .sort(comparePlayers)
-      .slice(0, benchNeeded);
-
-    best = optimizeSeededRotation(
-      valid,
-      seedFullTeamRotation(valid, starters, benchFallback)
-    );
+      .sort(compareBenchUnitCandidates)
+      .slice(0, benchNeeded)
+      .sort(comparePlayers);
+    best = buildOptimizedRotationFromBench(valid, starters, fallbackBench, seedFullTeamRotation);
+    best = applyBenchRealismPass(valid, best);
   }
 
   return { valid, ...best };
 }
 
 export function buildFullTeamRating(teamPlayers) {
-  const built = buildOptimizedFullTeamRotation(teamPlayers);
+  const valid = (teamPlayers || []).filter(
+    (p) => p && p.name && Number.isFinite(Number(p.overall))
+  );
+  const cacheKey = `${GAMEPLAN_VERSION}:ftr:${getRatingRosterSignature(valid)}`;
+  const cached = getLimitedCache(fullTeamRatingCache, cacheKey);
+  if (cached) return { ...cached, minutes: { ...(cached.minutes || {}) } };
+
+  const built = buildOptimizedFullTeamRotation(valid);
 
   if (!built) {
     return {
@@ -910,8 +1481,7 @@ export function buildFullTeamRating(teamPlayers) {
   }
 
   const ratings = computeTeamRatings({ players: built.valid }, built.minutesObj);
-
-  return {
+  const result = {
     // Whole-number values are display-only.
     ftr: Number(ratings.overall || 0),
     ftrOff: Number(ratings.off || 0),
@@ -923,57 +1493,29 @@ export function buildFullTeamRating(teamPlayers) {
     exactFtrDef: Number(ratings.exactDef ?? ratings.def ?? 0),
     minutes: built.minutesObj,
   };
+
+  return touchLimitedCache(fullTeamRatingCache, cacheKey, result);
 }
 
-// FULL smart rotation builder - returns BOTH sorted players and minutes obj
-export function buildSmartRotation(teamPlayers) {
-  const valid = (teamPlayers || []).filter(
-    (p) => p && p.name && Number.isFinite(Number(p.overall))
-  );
-
+// Core smart rotation builder without low-end exclusion retries.
+function buildSmartRotationCore(valid) {
   if (valid.length === 0) return { sorted: [], obj: {} };
 
   const starters = chooseStarters(valid);
   const starterNames = new Set(starters.map((p) => p.name));
   const benchNeeded = Math.max(0, Math.min(ROTATION_SIZE, valid.length) - starters.length);
-  const benchCandidates = buildBenchPool(valid, starterNames);
+  let best = buildBestOptimizedRotation(valid, starters, benchNeeded, seedRotation);
 
-  let best = null;
-
-  if (benchNeeded > 0 && benchCandidates.length >= benchNeeded) {
-    const seededCandidates = [];
-
-    for (const benchCombo of combos(benchCandidates, benchNeeded)) {
-      // Stronger bench players get the larger mandatory bench roles first:
-      // 17, 14, 12, 11, 10.
-      const benchOrdered = [...benchCombo].sort(comparePlayers);
-      seededCandidates.push(seedRotation(valid, starters, benchOrdered));
-    }
-
-    seededCandidates.sort((a, b) => b.score - a.score);
-
-    for (const seeded of seededCandidates.slice(0, BENCH_FINALIST_LIMIT)) {
-      const candidate = optimizeSeededRotation(valid, seeded);
-
-      if (!best || candidate.score > best.score) {
-        best = candidate;
-      }
-    }
-  }
-
-  if (!best) {
-    const benchFallback = benchCandidates
+  if (!best || (best.bench || []).length < benchNeeded) {
+    const benchFallback = buildBenchPool(valid, starterNames)
       .slice()
-      .sort(comparePlayers)
-      .slice(0, benchNeeded);
+      .sort(compareBenchUnitCandidates)
+      .slice(0, benchNeeded)
+      .sort(comparePlayers);
 
-    best = optimizeSeededRotation(
-      valid,
-      seedRotation(valid, starters, benchFallback)
-    );
+    best = buildOptimizedRotationFromBench(valid, starters, benchFallback, seedRotation);
+    best = applyBenchRealismPass(valid, best);
   }
-
-  best = applyBenchRealismPass(valid, best);
 
   const starterIds = new Set(best.starters.map((p) => p.name));
   const rotationIds = new Set(best.rotation.map((p) => p.name));
@@ -1000,6 +1542,94 @@ export function buildSmartRotation(teamPlayers) {
   return { sorted, obj };
 }
 
+function getActiveRotationNames(minutesObj = {}) {
+  return new Set(
+    Object.entries(minutesObj || {})
+      .filter(([, minutes]) => Number(minutes || 0) > 0)
+      .map(([name]) => name)
+  );
+}
+
+function buildSmartRotationUncached(valid) {
+  if (valid.length === 0) return { sorted: [], obj: {} };
+
+  let best = buildSmartRotationCore(valid);
+  let bestScore = scoreMinutes(valid, best.obj || {});
+
+  const ranked = [...valid].sort(comparePlayers);
+  const rankByName = new Map(ranked.map((player, idx) => [player.name, idx]));
+  const activeNames = getActiveRotationNames(best.obj);
+
+  // If a low-end player sneaks into the 10-man group because his position label
+  // looks convenient, test the roster again without that one player in the
+  // active-choice pool. This is not trade-specific: it is the auto-sort proving
+  // that optional depth only plays when it actually helps the best lineup.
+  const zeroPlayers = valid.filter((player) => player?.name && !activeNames.has(player.name));
+  const bestZeroPlayer = zeroPlayers.sort(comparePlayers)[0] || null;
+  const bestZeroRank = bestZeroPlayer ? rankByName.get(bestZeroPlayer.name) ?? Infinity : Infinity;
+  const bestZeroValue = bestZeroPlayer ? playerValue(bestZeroPlayer) : -Infinity;
+
+  const exclusionCandidates = bestZeroPlayer && Number.isFinite(bestZeroRank)
+    ? valid
+        .filter((player) => {
+          if (!player?.name || !activeNames.has(player.name)) return false;
+          const rank = rankByName.get(player.name) ?? 0;
+          // Only retry when the first pass is playing a clearly lower-ranked
+          // player while a better-rated option is sitting at 0 minutes.
+          return (
+            rank > bestZeroRank &&
+            rank >= ROTATION_SIZE &&
+            bestZeroValue - playerValue(player) >= 1.25
+          );
+        })
+        .sort((a, b) => (rankByName.get(b.name) ?? 0) - (rankByName.get(a.name) ?? 0))
+        .slice(0, 1)
+    : [];
+
+  for (const excluded of exclusionCandidates) {
+    const reducedValid = valid.filter((player) => player.name !== excluded.name);
+    if (reducedValid.length < Math.min(ROTATION_SIZE, valid.length) - 1) continue;
+
+    const reduced = buildSmartRotationCore(reducedValid);
+    const candidateObj = makeZeroMinutes(valid);
+    for (const [name, minutes] of Object.entries(reduced.obj || {})) {
+      candidateObj[name] = Number(minutes || 0);
+    }
+    candidateObj[excluded.name] = 0;
+
+    const candidateScore = scoreMinutes(valid, candidateObj);
+    if (candidateScore > bestScore + 1e-9) {
+      const reducedNames = new Set((reduced.sorted || []).map((player) => player.name));
+      const excludedAndOthers = valid
+        .filter((player) => !reducedNames.has(player.name))
+        .sort(comparePlayers);
+      best = {
+        sorted: [...(reduced.sorted || []), ...excludedAndOthers],
+        obj: candidateObj,
+      };
+      bestScore = candidateScore;
+    }
+  }
+
+  return best;
+}
+
+// FULL smart rotation builder - returns BOTH sorted players and minutes obj
+export function buildSmartRotation(teamPlayers) {
+  const valid = (teamPlayers || []).filter(
+    (p) => p && p.name && Number.isFinite(Number(p.overall))
+  );
+
+  if (valid.length === 0) return { sorted: [], obj: {} };
+
+  const cacheKey = `${GAMEPLAN_VERSION}:smart:${getRatingRosterSignature(valid)}`;
+  const cached = getLimitedCache(smartRotationCache, cacheKey);
+  if (cached) return inflateSmartRotationResult(valid, cached);
+
+  const result = buildSmartRotationUncached(valid);
+  touchLimitedCache(smartRotationCache, cacheKey, cacheSmartRotationResult(valid, result));
+  return result;
+}
 
 function round4(value) {
   return Math.round(Number(value || 0) * 10000) / 10000;
@@ -1106,6 +1736,9 @@ export function calculateTeamPotentialRating(teamPlayers) {
   const valid = (teamPlayers || []).filter(
     (player) => player && player.name && (hasFiniteRating(player.potential) || hasFiniteRating(player.overall))
   );
+  const cacheKey = `${GAMEPLAN_VERSION}:pot:${getRatingRosterSignature(valid)}`;
+  const cached = getLimitedCache(potentialRatingCache, cacheKey);
+  if (cached) return { ...cached, windows: { ...(cached.windows || {}) } };
 
   if (valid.length === 0) {
     return {
@@ -1141,15 +1774,19 @@ export function calculateTeamPotentialRating(teamPlayers) {
       POT_ELITE_PROOF_MULTIPLIER;
   const adjustedRawPot = rawPot + proofBonus;
 
-  // Scaled to be comparable to normal team OVR. The current league naturally
-  // lands around 96.4 to 70 with this curve, but those are not hard caps.
-  // The only hard cap is 99, so a generational roster cannot display 100+.
-  const exactPot = Math.min(
-    99,
-    POT_SCALE_FLOOR_VALUE + (adjustedRawPot - POT_SCALE_BASE) * POT_SCALE_MULTIPLIER
-  );
+  // Scaled to be comparable to normal team OVR. A light top-end curve keeps
+  // elite young cores clearly separated without letting the top of the league
+  // spike too sharply compared with the normal team-OVR curve. This is a fixed
+  // formula curve, not a league-relative hard cap or rubber-band target.
+  const scaledPot = POT_SCALE_FLOOR_VALUE +
+    (adjustedRawPot - POT_SCALE_BASE) * POT_SCALE_MULTIPLIER;
+  const topCurvedPot = scaledPot <= POT_TOP_CURVE_START
+    ? scaledPot
+    : POT_TOP_CURVE_START +
+      (scaledPot - POT_TOP_CURVE_START) * POT_TOP_CURVE_MULTIPLIER;
+  const exactPot = Math.min(99, topCurvedPot);
 
-  return {
+  const result = {
     pot: Math.round(exactPot),
     exactPot: round4(exactPot),
     rawPot: round4(rawPot),
@@ -1160,6 +1797,8 @@ export function calculateTeamPotentialRating(teamPlayers) {
       sevenYear: round4(windowScores.find((window) => window.years === 7)?.score || 0),
     },
   };
+
+  return touchLimitedCache(potentialRatingCache, cacheKey, result);
 }
 
 function buildGameplanPayload(team) {

@@ -652,6 +652,16 @@ function itemKey(item) {
   return `${item.type}:${JSON.stringify(item)}`;
 }
 
+function isSwapTradeItem(item = {}) {
+  if (item?.type !== "pick") return false;
+  const rule = item.tradeRule || item.pick?.tradeRule || {};
+  return String(rule.action || "").toLowerCase() === "swap" || Boolean(rule.swapId);
+}
+
+function stripSwapTradeItems(items = []) {
+  return (items || []).filter((item) => !isSwapTradeItem(item));
+}
+
 function getSideItems(builder, side) {
   return side === "user" ? builder.userItems || [] : builder.cpuItems || [];
 }
@@ -1638,8 +1648,8 @@ function validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, c
     return { ok: false, reason: "Both teams must still exist in the league save." };
   }
 
-  if (!userItems.length || !cpuItems.length) {
-    return { ok: false, reason: "Add at least one asset from each side before submitting." };
+  if (!userItems.length && !cpuItems.length) {
+    return { ok: false, reason: "Add at least one trade asset before submitting." };
   }
 
   const userFinancial = evaluateTradeFinancialLegality({
@@ -2391,12 +2401,25 @@ export default function ProposeTrade() {
       return;
     }
 
-    updateBuilder((prev) => ({
-      ...prev,
-      cpuTeamName: name,
-      cpuItems: prev.cpuTeamName === name ? prev.cpuItems : [],
-      updatedAt: Date.now(),
-    }));
+    const swapCount = [...(builder.userItems || []), ...(builder.cpuItems || [])].filter(isSwapTradeItem).length;
+
+    updateBuilder((prev) => {
+      const sameCpuTeam = prev.cpuTeamName === name;
+      return {
+        ...prev,
+        cpuTeamName: name,
+        // Normal players, unprotected picks, and protected picks can stay when
+        // changing the negotiation partner. Pick swaps are different: they are
+        // tied to the exact two teams in the swap pair, so they must be rebuilt.
+        userItems: sameCpuTeam ? prev.userItems : stripSwapTradeItems(prev.userItems || []),
+        cpuItems: sameCpuTeam ? prev.cpuItems : [],
+        updatedAt: Date.now(),
+      };
+    });
+
+    if (swapCount > 0 && builder.cpuTeamName !== name) {
+      setNotice("CPU team changed; old pick swaps were removed because swaps are tied to the exact two teams.");
+    }
   };
 
   const removeItem = (side, index) => {
@@ -2492,11 +2515,11 @@ export default function ProposeTrade() {
       return;
     }
 
-    const hasBothSides = userItems.length > 0 && cpuItems.length > 0;
+    const hasAnyTradeItem = userItems.length > 0 || cpuItems.length > 0;
 
-    if (!hasBothSides) {
+    if (!hasAnyTradeItem) {
       setEvaluation(null);
-      setNotice("Add at least one item from each side before evaluation.");
+      setNotice("Add at least one trade item before evaluation.");
       return;
     }
 
@@ -2698,7 +2721,7 @@ export default function ProposeTrade() {
                   <div className="flex items-center justify-between gap-3 pr-8">
                     <span className="text-[10px] font-black uppercase tracking-[0.16em] opacity-70">CPU Decision</span>
                     <span className="rounded-full bg-black/25 px-2 py-1 text-[10px] font-black uppercase">
-                      Score {Number(evaluation.score || 0).toFixed(1)}
+                      Score {Number(evaluation.score || 0).toFixed(2)}
                     </span>
                   </div>
                   <div className="mt-2 text-lg font-black uppercase">
@@ -2707,7 +2730,7 @@ export default function ProposeTrade() {
 
                   {Array.isArray(evaluation.reasons) && evaluation.reasons.length > 0 && (
                     <div className="mt-3 space-y-1 opacity-90">
-                      {evaluation.reasons.slice(0, 4).map((reason, index) => (
+                      {evaluation.reasons.slice(0, 8).map((reason, index) => (
                         <div key={`reason-${index}`}>• {reason}</div>
                       ))}
                     </div>
