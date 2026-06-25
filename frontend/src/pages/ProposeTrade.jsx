@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
-import { evaluateTradeProposal } from "../api/tradeNegotiationPy.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
+import { evaluateTradeTeamImpact } from "../utils/tradeTeamImpact.js";
 import {
   buildTradeMachineSwapAssets,
   getTradeablePickOwnedRange,
@@ -23,7 +23,6 @@ const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
 const MAX_SIDE_ITEMS = 8;
-const REGULAR_SEASON_MIN_STANDARD_PLAYERS = 14;
 const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 16;
 const TRADE_MATCHING_SMALL_OUTGOING = 7_500_000;
 const TRADE_MATCHING_MID_OUTGOING = 29_000_000;
@@ -225,17 +224,42 @@ function getCurrentSeasonYear(leagueData) {
   );
 }
 
-function getTradePayrollSeasonYear(leagueData) {
-  const rawYear = Number(getCurrentSeasonYear(leagueData));
-  return Number.isFinite(rawYear) ? rawYear + 1 : 2026;
+function finitePositiveYear(value) {
+  const year = Number(value);
+  return Number.isFinite(year) && year >= 2000 && year <= 2100 ? year : null;
 }
 
-function getPlayerSalary(player, leagueData) {
+function pushUniqueYear(list, value) {
+  const year = finitePositiveYear(value);
+  if (year && !list.includes(year)) list.push(year);
+}
+
+function getLeagueLabelPayrollYear(leagueData) {
+  const label = [
+    leagueData?.name,
+    leagueData?.leagueName,
+    leagueData?.title,
+    leagueData?.fileName,
+    leagueData?.metadata?.name,
+    leagueData?.meta?.name,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const fullRange = label.match(/(?:^|\D)(20\d{2})\s*[\/-]\s*(20\d{2})(?:\D|$)/);
+  if (fullRange) return finitePositiveYear(fullRange[2]);
+
+  const shortRange = label.match(/(?:^|\D)(\d{2})\s*[\/-]\s*(\d{2})(?:\D|$)/);
+  if (shortRange) return finitePositiveYear(2000 + Number(shortRange[2]));
+
+  return null;
+}
+
+function getSalaryForPayrollYear(player, payrollSeasonYear) {
   const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
   const salaries = Array.isArray(contract.salaryByYear)
     ? contract.salaryByYear.map((value) => Number(value) || 0)
     : [];
-  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
 
   if (salaries.length) {
     let startYear = Number(contract.startYear || payrollSeasonYear);
@@ -267,6 +291,75 @@ function getPlayerSalary(player, leagueData) {
   return Number.isFinite(fallback) ? fallback : 0;
 }
 
+function getStoredTeamPayroll(team) {
+  const value = Number(
+    team?.payroll ??
+      team?.totalSalary ??
+      team?.salaryTotal ??
+      team?.financials?.payroll ??
+      team?.financials?.totalSalary ??
+      0
+  );
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function getRosterPayrollForYear(team, payrollSeasonYear) {
+  return (Array.isArray(team?.players) ? team.players : []).reduce(
+    (sum, player) => sum + getSalaryForPayrollYear(player, payrollSeasonYear),
+    0
+  );
+}
+
+function getTradePayrollSeasonYear(leagueData) {
+  const candidates = [];
+
+  // Explicit payroll fields win first if a future save adds them.
+  pushUniqueYear(candidates, leagueData?.payrollSeasonYear);
+  pushUniqueYear(candidates, leagueData?.salarySeasonYear);
+  pushUniqueYear(candidates, leagueData?.currentPayrollSeasonYear);
+
+  // Saved roster labels such as "final rosters 25/26" should map to 2026.
+  pushUniqueYear(candidates, getLeagueLabelPayrollYear(leagueData));
+
+  // SalaryTable displays raw season + 1. Prefer the stable season markers before
+  // any already-advanced runtime pointer, then include raw candidates as safety.
+  pushUniqueYear(candidates, Number(leagueData?.seasonStartYear) + 1);
+  pushUniqueYear(candidates, Number(leagueData?.seasonYear) + 1);
+  pushUniqueYear(candidates, Number(leagueData?.currentSeasonYear) + 1);
+  pushUniqueYear(candidates, leagueData?.seasonStartYear);
+  pushUniqueYear(candidates, leagueData?.seasonYear);
+  pushUniqueYear(candidates, leagueData?.currentSeasonYear);
+  pushUniqueYear(candidates, 2026);
+
+  const teams = getAllTeamsFromLeague(leagueData);
+  const teamsWithStoredPayroll = teams
+    .map((team) => ({ team, storedPayroll: getStoredTeamPayroll(team) }))
+    .filter((row) => row.storedPayroll > 0);
+
+  if (teamsWithStoredPayroll.length && candidates.length) {
+    let best = null;
+
+    for (const year of candidates) {
+      const totalError = teamsWithStoredPayroll.reduce((sum, row) => {
+        const rosterPayroll = getRosterPayrollForYear(row.team, year);
+        return sum + Math.abs(rosterPayroll - row.storedPayroll);
+      }, 0);
+
+      if (!best || totalError < best.totalError) {
+        best = { year, totalError };
+      }
+    }
+
+    if (best) return best.year;
+  }
+
+  return candidates[0] || 2026;
+}
+
+function getPlayerSalary(player, leagueData) {
+  return getSalaryForPayrollYear(player, getTradePayrollSeasonYear(leagueData));
+}
+
 function getContractYearsRemaining(player, leagueData) {
   const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
   const salaries = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
@@ -283,6 +376,27 @@ function getContractYearsRemaining(player, leagueData) {
   if (!Number.isFinite(idx) || idx < 0) idx = 0;
   if (idx >= salaries.length) idx = salaries.length - 1;
   return Math.max(1, salaries.length - idx);
+}
+
+function getContractTotalRemaining(player, leagueData) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const salaries = Array.isArray(contract.salaryByYear)
+    ? contract.salaryByYear.map((value) => Number(value) || 0)
+    : [];
+  if (!salaries.length) return getPlayerSalary(player, leagueData);
+
+  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
+  let startYear = Number(contract.startYear || payrollSeasonYear);
+  let idx = payrollSeasonYear - startYear;
+  const hasPayrollSeasonSlot = idx >= 0 && idx < salaries.length;
+  if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && !hasPayrollSeasonSlot) {
+    startYear = payrollSeasonYear;
+    idx = 0;
+  }
+  if (!Number.isFinite(idx) || idx < 0) idx = 0;
+  if (idx >= salaries.length) idx = salaries.length - 1;
+
+  return salaries.slice(idx).reduce((sum, value) => sum + Number(value || 0), 0);
 }
 
 function formatMoney(amount) {
@@ -1463,14 +1577,6 @@ function validateProjectedStandardRosterCount(team, outgoingItems = [], incoming
   const teamName = team?.name || team?.teamName || "This team";
   const counts = getProjectedStandardRosterCount(team, outgoingItems, incomingItems);
 
-  if (counts.projected < REGULAR_SEASON_MIN_STANDARD_PLAYERS) {
-    return {
-      ok: false,
-      reason: `Trade blocked: ${teamName} would have ${counts.projected} standard players after this trade. Minimum is ${REGULAR_SEASON_MIN_STANDARD_PLAYERS}.`,
-      counts,
-    };
-  }
-
   const allowedMax = Math.max(REGULAR_SEASON_MAX_STANDARD_PLAYERS, counts.current);
   if (counts.projected > allowedMax) {
     return {
@@ -1634,7 +1740,6 @@ function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, u
 
 function decisionTone(decision) {
   if (decision === "accept") return "border-emerald-400/30 bg-emerald-500/10 text-emerald-100";
-  if (decision === "counter") return "border-amber-400/30 bg-amber-500/10 text-amber-100";
   return "border-red-400/30 bg-red-500/10 text-red-100";
 }
 
@@ -2238,16 +2343,34 @@ export default function ProposeTrade() {
   useEffect(() => {
     if (!userTeamName) return;
 
+    if (builder?.userTeamName && builder.userTeamName !== userTeamName) {
+      setEvaluation(null);
+      setSlotMenu(null);
+      setHardCapDetailModal(null);
+      setNotice("");
+    }
+
     setBuilder((prev) => {
-      const next = {
-        ...(prev || makeEmptyBuilder(userTeamName, firstCpu)),
-        userTeamName,
-        cpuTeamName: prev?.cpuTeamName && prev.cpuTeamName !== userTeamName ? prev.cpuTeamName : firstCpu,
-      };
+      const saved = prev || makeEmptyBuilder(userTeamName, firstCpu);
+      const userTeamChanged = Boolean(saved?.userTeamName && saved.userTeamName !== userTeamName);
+      const cpuTeamStillValid = Boolean(
+        saved?.cpuTeamName &&
+          saved.cpuTeamName !== userTeamName &&
+          teams.some((team) => team?.name === saved.cpuTeamName)
+      );
+
+      const next = userTeamChanged
+        ? makeEmptyBuilder(userTeamName, firstCpu)
+        : {
+            ...saved,
+            userTeamName,
+            cpuTeamName: cpuTeamStillValid ? saved.cpuTeamName : firstCpu,
+          };
+
       saveBuilder(next);
       return next;
     });
-  }, [userTeamName, firstCpu]);
+  }, [userTeamName, firstCpu, teams]);
 
   useEffect(() => {
     saveBuilder(builder);
@@ -2342,12 +2465,24 @@ export default function ProposeTrade() {
     });
   };
 
-  const clearProposal = () => {
-    const next = makeEmptyBuilder(userTeamName, firstCpu);
+  const resetProposalSession = (nextCpuTeamName = firstCpu, nextNotice = "") => {
+    const next = makeEmptyBuilder(userTeamName, nextCpuTeamName || firstCpu);
     setBuilder(next);
     saveBuilder(next);
     setEvaluation(null);
-    setNotice("Proposal cleared.");
+    setSlotMenu(null);
+    setHardCapDetailModal(null);
+    if (nextNotice) setNotice(nextNotice);
+  };
+
+  const clearProposal = () => {
+    const preservedCpuTeamName = cpuTeamName && cpuTeamName !== userTeamName ? cpuTeamName : firstCpu;
+    resetProposalSession(preservedCpuTeamName, "Proposal cleared.");
+  };
+
+  const leaveTradeBuilder = () => {
+    resetProposalSession(firstCpu, "");
+    navigate(topBackPath);
   };
 
   const evaluateWithCpu = async () => {
@@ -2380,12 +2515,20 @@ export default function ProposeTrade() {
     setNotice("CPU front office is reviewing the proposal...");
 
     try {
-      const result = await evaluateTradeProposal(proposal);
+      const result = evaluateTradeTeamImpact({
+        leagueData,
+        userTeam,
+        cpuTeam,
+        userTeamName,
+        cpuTeamName,
+        userItems,
+        cpuItems,
+      });
       setEvaluation(result);
-      setNotice(result?.message || "CPU negotiation complete.");
+      setNotice(result?.message || "CPU evaluation complete.");
     } catch (error) {
       setEvaluation(null);
-      setNotice(`CPU negotiation failed: ${error?.message || String(error || "Unknown error")}`);
+      setNotice(`CPU evaluation failed: ${error?.message || String(error || "Unknown error")}`);
     } finally {
       setIsEvaluating(false);
     }
@@ -2458,7 +2601,7 @@ export default function ProposeTrade() {
         <div className="mx-auto w-full max-w-7xl">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
             <button
-              onClick={() => navigate(topBackPath)}
+              onClick={leaveTradeBuilder}
               className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-neutral-200 hover:bg-white/10 hover:text-white"
             >
               {topBackLabel}
@@ -2564,17 +2707,12 @@ export default function ProposeTrade() {
 
                   {Array.isArray(evaluation.reasons) && evaluation.reasons.length > 0 && (
                     <div className="mt-3 space-y-1 opacity-90">
-                      {evaluation.reasons.slice(0, 3).map((reason, index) => (
+                      {evaluation.reasons.slice(0, 4).map((reason, index) => (
                         <div key={`reason-${index}`}>• {reason}</div>
                       ))}
                     </div>
                   )}
 
-                  {Array.isArray(evaluation.counterSuggestions) && evaluation.counterSuggestions.length > 0 && (
-                    <div className="mt-3 rounded-xl bg-black/25 p-2 text-[11px] opacity-95">
-                      {evaluation.counterSuggestions[0]?.message || "CPU wants more value."}
-                    </div>
-                  )}
                 </div>
               )}
             </div>

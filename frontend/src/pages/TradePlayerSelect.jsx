@@ -41,17 +41,42 @@ function getCurrentSeasonYear(leagueData) {
   );
 }
 
-function getTradePayrollSeasonYear(leagueData) {
-  const rawYear = Number(getCurrentSeasonYear(leagueData));
-  return Number.isFinite(rawYear) ? rawYear + 1 : 2026;
+function finitePositiveYear(value) {
+  const year = Number(value);
+  return Number.isFinite(year) && year >= 2000 && year <= 2100 ? year : null;
 }
 
-function getPlayerSalary(player, leagueData) {
+function pushUniqueYear(list, value) {
+  const year = finitePositiveYear(value);
+  if (year && !list.includes(year)) list.push(year);
+}
+
+function getLeagueLabelPayrollYear(leagueData) {
+  const label = [
+    leagueData?.name,
+    leagueData?.leagueName,
+    leagueData?.title,
+    leagueData?.fileName,
+    leagueData?.metadata?.name,
+    leagueData?.meta?.name,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const fullRange = label.match(/(?:^|\D)(20\d{2})\s*[\/-]\s*(20\d{2})(?:\D|$)/);
+  if (fullRange) return finitePositiveYear(fullRange[2]);
+
+  const shortRange = label.match(/(?:^|\D)(\d{2})\s*[\/-]\s*(\d{2})(?:\D|$)/);
+  if (shortRange) return finitePositiveYear(2000 + Number(shortRange[2]));
+
+  return null;
+}
+
+function getSalaryForPayrollYear(player, payrollSeasonYear) {
   const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
   const salaries = Array.isArray(contract.salaryByYear)
     ? contract.salaryByYear.map((value) => Number(value) || 0)
     : [];
-  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
 
   if (salaries.length) {
     let startYear = Number(contract.startYear || payrollSeasonYear);
@@ -59,6 +84,8 @@ function getPlayerSalary(player, leagueData) {
     const lastYear = startYear + salaries.length - 1;
     const hasPayrollSeasonSlot = idx >= 0 && idx < salaries.length;
 
+    // SalaryTable treats one-year deals that were created in the prior offseason
+    // as active for the displayed payroll season. Keep trade screens aligned.
     if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && !hasPayrollSeasonSlot) {
       startYear = payrollSeasonYear;
       idx = 0;
@@ -79,6 +106,114 @@ function getPlayerSalary(player, leagueData) {
   );
 
   return Number.isFinite(fallback) ? fallback : 0;
+}
+
+function getStoredTeamPayroll(team) {
+  const value = Number(
+    team?.payroll ??
+      team?.totalSalary ??
+      team?.salaryTotal ??
+      team?.financials?.payroll ??
+      team?.financials?.totalSalary ??
+      0
+  );
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function getRosterPayrollForYear(team, payrollSeasonYear) {
+  return (Array.isArray(team?.players) ? team.players : []).reduce(
+    (sum, player) => sum + getSalaryForPayrollYear(player, payrollSeasonYear),
+    0
+  );
+}
+
+function getTradePayrollSeasonYear(leagueData) {
+  const candidates = [];
+
+  // Explicit payroll fields win first if a future save adds them.
+  pushUniqueYear(candidates, leagueData?.payrollSeasonYear);
+  pushUniqueYear(candidates, leagueData?.salarySeasonYear);
+  pushUniqueYear(candidates, leagueData?.currentPayrollSeasonYear);
+
+  // Saved roster labels such as "final rosters 25/26" should map to 2026.
+  pushUniqueYear(candidates, getLeagueLabelPayrollYear(leagueData));
+
+  // SalaryTable displays raw season + 1. Prefer the stable season markers before
+  // any already-advanced runtime pointer, then include raw candidates as safety.
+  pushUniqueYear(candidates, Number(leagueData?.seasonStartYear) + 1);
+  pushUniqueYear(candidates, Number(leagueData?.seasonYear) + 1);
+  pushUniqueYear(candidates, Number(leagueData?.currentSeasonYear) + 1);
+  pushUniqueYear(candidates, leagueData?.seasonStartYear);
+  pushUniqueYear(candidates, leagueData?.seasonYear);
+  pushUniqueYear(candidates, leagueData?.currentSeasonYear);
+  pushUniqueYear(candidates, 2026);
+
+  const teams = getAllTeamsFromLeague(leagueData);
+  const teamsWithStoredPayroll = teams
+    .map((team) => ({ team, storedPayroll: getStoredTeamPayroll(team) }))
+    .filter((row) => row.storedPayroll > 0);
+
+  if (teamsWithStoredPayroll.length && candidates.length) {
+    let best = null;
+
+    for (const year of candidates) {
+      const totalError = teamsWithStoredPayroll.reduce((sum, row) => {
+        const rosterPayroll = getRosterPayrollForYear(row.team, year);
+        return sum + Math.abs(rosterPayroll - row.storedPayroll);
+      }, 0);
+
+      if (!best || totalError < best.totalError) {
+        best = { year, totalError };
+      }
+    }
+
+    if (best) return best.year;
+  }
+
+  return candidates[0] || 2026;
+}
+
+function getPlayerSalary(player, leagueData) {
+  return getSalaryForPayrollYear(player, getTradePayrollSeasonYear(leagueData));
+}
+
+function getContractYearsRemaining(player, leagueData) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const salaries = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
+  if (!salaries.length) return 0;
+
+  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
+  let startYear = Number(contract.startYear || payrollSeasonYear);
+  let idx = payrollSeasonYear - startYear;
+  const hasPayrollSeasonSlot = idx >= 0 && idx < salaries.length;
+  if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && !hasPayrollSeasonSlot) {
+    startYear = payrollSeasonYear;
+    idx = 0;
+  }
+  if (!Number.isFinite(idx) || idx < 0) idx = 0;
+  if (idx >= salaries.length) idx = salaries.length - 1;
+  return Math.max(1, salaries.length - idx);
+}
+
+function getContractTotalRemaining(player, leagueData) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const salaries = Array.isArray(contract.salaryByYear)
+    ? contract.salaryByYear.map((value) => Number(value) || 0)
+    : [];
+  if (!salaries.length) return getPlayerSalary(player, leagueData);
+
+  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
+  let startYear = Number(contract.startYear || payrollSeasonYear);
+  let idx = payrollSeasonYear - startYear;
+  const hasPayrollSeasonSlot = idx >= 0 && idx < salaries.length;
+  if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && !hasPayrollSeasonSlot) {
+    startYear = payrollSeasonYear;
+    idx = 0;
+  }
+  if (!Number.isFinite(idx) || idx < 0) idx = 0;
+  if (idx >= salaries.length) idx = salaries.length - 1;
+
+  return salaries.slice(idx).reduce((sum, value) => sum + Number(value || 0), 0);
 }
 
 function formatMoney(amount) {
@@ -243,6 +378,8 @@ export default function TradePlayerSelect() {
         diff = String(a.pos || "").localeCompare(String(b.pos || ""));
       } else if (key === "salary") {
         diff = getPlayerSalary(a, leagueData) - getPlayerSalary(b, leagueData);
+      } else if (key === "yearsRemaining") {
+        diff = getContractYearsRemaining(a, leagueData) - getContractYearsRemaining(b, leagueData);
       } else {
         diff = Number(a?.[key] || 0) - Number(b?.[key] || 0);
       }
@@ -251,7 +388,7 @@ export default function TradePlayerSelect() {
     });
 
     return rows;
-  }, [players, sortConfig]);
+  }, [players, sortConfig, leagueData]);
 
   useEffect(() => {
     if (!sortedPlayers.length) {
@@ -384,7 +521,7 @@ export default function TradePlayerSelect() {
                     </h2>
                     <p className="text-gray-400 text-[24px] mt-1">
                       {selectedPlayer.pos || "-"}
-                      {selectedPlayer.secondaryPos ? ` / ${selectedPlayer.secondaryPos}` : ""} • Age {selectedPlayer.age ?? "-"} • Salary {formatMoney(getPlayerSalary(selectedPlayer, leagueData))}
+                      {selectedPlayer.secondaryPos ? ` / ${selectedPlayer.secondaryPos}` : ""} • Age {selectedPlayer.age ?? "-"} • Contract {formatMoney(getContractTotalRemaining(selectedPlayer, leagueData))} / {getContractYearsRemaining(selectedPlayer, leagueData) || 1} yr{getContractYearsRemaining(selectedPlayer, leagueData) === 1 ? "" : "s"}
                     </p>
                     {selectedPlayerAlreadyAdded && (
                       <div className="mt-3 inline-flex w-fit items-center rounded-full border border-orange-400/40 bg-orange-500/15 px-3 py-1 text-xs font-black uppercase tracking-[0.14em] text-orange-200">
@@ -415,16 +552,17 @@ export default function TradePlayerSelect() {
                     { key: "pos", label: "POS" },
                     { key: "age", label: "AGE" },
                     { key: "salary", label: "SALARY" },
+                    { key: "yearsRemaining", label: "YRS" },
                     { key: "overall", label: "OVR" },
+                    { key: "potential", label: "POT" },
                     { key: "offRating", label: "OFF" },
                     { key: "defRating", label: "DEF" },
                     { key: "stamina", label: "STAM" },
-                    { key: "potential", label: "POT" },
                   ].map((col) => (
                     <th
                       key={col.key}
                       className={`py-3 px-3 min-w-[95px] cursor-pointer select-none ${
-                        col.key === "name" ? "min-w-[180px] text-left pl-4" : col.key === "salary" ? "min-w-[110px] text-center" : "text-center"
+                        col.key === "name" ? "min-w-[180px] text-left pl-4" : col.key === "salary" ? "min-w-[110px] text-center" : col.key === "yearsRemaining" ? "min-w-[70px] text-center" : "text-center"
                       }`}
                       onClick={() => handleSort(col.key)}
                     >
@@ -486,11 +624,12 @@ export default function TradePlayerSelect() {
                       <td className="py-2 px-3">{p.pos || "-"}</td>
                       <td className="py-2 px-3">{p.age ?? "-"}</td>
                       <td className="py-2 px-3 font-black text-white">{formatMoney(getPlayerSalary(p, leagueData))}</td>
+                      <td className="py-2 px-3 font-black text-white">{getContractYearsRemaining(p, leagueData) || "-"}</td>
                       <td className="py-2 px-3">{p.overall ?? "-"}</td>
+                      <td className="py-2 px-3">{p.potential ?? "-"}</td>
                       <td className="py-2 px-3">{p.offRating ?? "-"}</td>
                       <td className="py-2 px-3">{p.defRating ?? "-"}</td>
                       <td className="py-2 px-3">{p.stamina ?? "-"}</td>
-                      <td className="py-2 px-3">{p.potential ?? "-"}</td>
                     </tr>
                   );
                 })}
