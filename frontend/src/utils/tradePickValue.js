@@ -9,17 +9,20 @@ const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const SCHEDULE_KEY = "bm_schedule_v3";
 
-const CPU_INCOMING_PICK_VALUE_MULT = 0.985;
-const CPU_OUTGOING_PICK_VALUE_MULT = 1.015;
+const CPU_INCOMING_PICK_VALUE_MULT = 1.05;
+const CPU_OUTGOING_PICK_VALUE_MULT = 1.12;
 
 const YEAR_BLEND_BY_OFFSET = [
+  // 2025-26 starts with 2026 draft picks. Offset 0 means the current draft class.
+  // Current-year picks should mostly follow Power Ranking order. Future picks slowly
+  // shift toward POT / long-term outlook without creating hard lottery cliffs.
   { power: 1.0, pot: 0.0, certainty: 1.0 },
-  { power: 0.85, pot: 0.15, certainty: 0.97 },
-  { power: 0.7, pot: 0.3, certainty: 0.94 },
-  { power: 0.55, pot: 0.45, certainty: 0.91 },
-  { power: 0.4, pot: 0.6, certainty: 0.88 },
-  { power: 0.2, pot: 0.8, certainty: 0.85 },
-  { power: 0.0, pot: 1.0, certainty: 0.82 },
+  { power: 0.82, pot: 0.18, certainty: 0.985 },
+  { power: 0.66, pot: 0.34, certainty: 0.97 },
+  { power: 0.50, pot: 0.50, certainty: 0.955 },
+  { power: 0.36, pot: 0.64, certainty: 0.94 },
+  { power: 0.24, pot: 0.76, certainty: 0.925 },
+  { power: 0.14, pot: 0.86, certainty: 0.91 },
 ];
 
 // Rank 1 is the best team / lowest-value pick. Rank 30 is the worst team / highest-value pick.
@@ -61,25 +64,29 @@ const FUTURE_POT_SECOND_VALUE_BY_RANK = {
 };
 
 const FIRST_SLOT_VALUE = {
-  1: 3.05, 2: 2.85, 3: 2.68, 4: 2.52, 5: 2.36,
-  6: 2.19, 7: 2.02, 8: 1.86, 9: 1.71, 10: 1.57,
-  11: 1.43, 12: 1.3, 13: 1.18, 14: 1.07, 15: 0.96,
-  16: 0.86, 17: 0.78, 18: 0.71, 19: 0.65, 20: 0.6,
-  21: 0.56, 22: 0.52, 23: 0.49, 24: 0.46, 25: 0.43,
-  26: 0.41, 27: 0.39, 28: 0.37, 29: 0.36, 30: 0.35,
+  // These values are trade-score units. This scale intentionally makes firsts
+  // feel like real NBA trade capital: bad-team firsts can bridge starter-level
+  // gaps, mid firsts matter, and late firsts are more than tiny throw-ins.
+  1: 8.9, 2: 8.3, 3: 7.75, 4: 7.2, 5: 6.65,
+  6: 6.15, 7: 5.7, 8: 5.25, 9: 4.85, 10: 4.5,
+  11: 4.15, 12: 3.8, 13: 3.5, 14: 3.2, 15: 2.9,
+  16: 2.65, 17: 2.43, 18: 2.23, 19: 2.05, 20: 1.88,
+  21: 1.72, 22: 1.58, 23: 1.45, 24: 1.33, 25: 1.22,
+  26: 1.12, 27: 1.03, 28: 0.95, 29: 0.88, 30: 0.82,
 };
 
 const SECOND_SLOT_VALUE = {
-  31: 0.27, 32: 0.255, 33: 0.241, 34: 0.228, 35: 0.215,
-  36: 0.203, 37: 0.192, 38: 0.181, 39: 0.171, 40: 0.161,
-  41: 0.151, 42: 0.142, 43: 0.133, 44: 0.124, 45: 0.116,
-  46: 0.108, 47: 0.1, 48: 0.092, 49: 0.085, 50: 0.078,
-  51: 0.071, 52: 0.064, 53: 0.058, 54: 0.052, 55: 0.047,
-  56: 0.042, 57: 0.038, 58: 0.034, 59: 0.03, 60: 0.027,
+  // Seconds are still sweeteners, but early seconds should be real assets.
+  31: 0.68, 32: 0.64, 33: 0.6, 34: 0.55, 35: 0.51,
+  36: 0.47, 37: 0.43, 38: 0.39, 39: 0.36, 40: 0.33,
+  41: 0.3, 42: 0.275, 43: 0.25, 44: 0.228, 45: 0.208,
+  46: 0.19, 47: 0.173, 48: 0.157, 49: 0.143, 50: 0.13,
+  51: 0.118, 52: 0.107, 53: 0.097, 54: 0.088, 55: 0.08,
+  56: 0.073, 57: 0.066, 58: 0.06, 59: 0.054, 60: 0.049,
 };
 
 const TRADE_PICK_EPS = 0.005;
-const FREE_SWAP_OPTION_VALUE = 0.02;
+const FREE_SWAP_OPTION_VALUE = 0.04;
 
 const round4 = (value) => Math.round(Number(value || 0) * 10000) / 10000;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -424,13 +431,29 @@ function buildPickRankContext(leagueData) {
 
 function getCurrentSeasonYear(leagueData = {}) {
   const candidates = [
+    leagueData?.draftYear,
+    leagueData?.currentDraftYear,
     leagueData?.seasonYear,
     leagueData?.currentSeasonYear,
-    leagueData?.seasonStartYear,
   ]
     .map(Number)
     .filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
-  return candidates.length ? Math.max(...candidates) : 2026;
+
+  let current = candidates.length ? Math.max(...candidates) : 2026;
+
+  // The game begins in the 2025-26 season with 2026 picks available. Some saves
+  // may store only seasonStartYear = 2025, so use the earliest active draft asset
+  // as the current draft year when needed. After a season rolls, 2033 is added
+  // and the old draft year is removed, so this also follows the rolling window.
+  const activePickYears = (Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : [])
+    .filter((row) => !["void", "deleted", "removed", "inactive"].includes(String(row?.status || "active").toLowerCase()))
+    .map((row) => Number(row?.year || row?.seasonYear || 0))
+    .filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
+  const minActivePickYear = activePickYears.length ? Math.min(...activePickYears) : 0;
+
+  if (minActivePickYear && current < minActivePickYear) current = minActivePickYear;
+
+  return current;
 }
 
 function getPickRound(pick = {}) {
@@ -493,20 +516,77 @@ function normalizeRange(range = null, round = 1) {
   return { start, end };
 }
 
+function protectionTextToConveyedRange(text = "", round = 1) {
+  const full = getFullSlotRange(round);
+  const raw = String(text || "").trim();
+  const lower = raw.toLowerCase();
+  if (!raw || lower === "none" || lower === "null" || lower.includes("unprotected")) return null;
+
+  const ownsMatch = raw.match(/\bowns\s*#?\s*(\d{1,2})\s*-\s*#?\s*(\d{1,2})\b/i);
+  if (ownsMatch) {
+    return normalizeRange({ start: Number(ownsMatch[1]), end: Number(ownsMatch[2]) }, round);
+  }
+
+  const topMatch = raw.match(/\btop\s*(\d{1,2})\s*protected\b/i);
+  if (topMatch) {
+    const protectedEnd = clamp(Number(topMatch[1]), full.start - 1, full.end);
+    if (protectedEnd >= full.end) return { start: full.end, end: full.end };
+    return normalizeRange({ start: protectedEnd + 1, end: full.end }, round);
+  }
+
+  if (/\blottery\s*protected\b/i.test(raw) || /\btop\s*14\b/i.test(raw)) {
+    const protectedEnd = Number(round) === 1 ? 14 : 44;
+    return normalizeRange({ start: protectedEnd + 1, end: full.end }, round);
+  }
+
+  const rangeProtected = raw.match(/\b(\d{1,2})\s*-\s*(\d{1,2})\s*protected\b/i);
+  if (rangeProtected) {
+    const protectedEnd = clamp(Number(rangeProtected[2]), full.start - 1, full.end);
+    if (protectedEnd >= full.end) return { start: full.end, end: full.end };
+    return normalizeRange({ start: protectedEnd + 1, end: full.end }, round);
+  }
+
+  return null;
+}
+
 function getRangeFromItem(item = {}, round = 1) {
   const pick = item.pick || item || {};
   const rule = item.tradeRule || pick.tradeRule || {};
   const pickNumber = getPickNumber(pick);
   if (pickNumber > 0) return { start: pickNumber, end: pickNumber };
 
-  const candidate =
+  const protectionText = [
+    item.protection,
+    pick.displayProtection,
+    pick.protections,
+    pick.protection,
+    pick.conditions,
+    pick.notes,
+  ]
+    .filter(Boolean)
+    .join(" | ");
+
+  const explicitCandidate =
     rule.conveyedRange ||
+    pick.conveyedRange ||
+    null;
+  if (explicitCandidate) return normalizeRange(explicitCandidate, round);
+
+  const ownedCandidate =
     rule.ownedRange ||
     pick.ownedRange ||
     pick.ownedSlots ||
     null;
+  if (ownedCandidate) {
+    const owned = normalizeRange(ownedCandidate, round);
+    const full = getFullSlotRange(round);
+    const textRange = protectionTextToConveyedRange(protectionText, round);
+    const ownedIsFull = owned.start === full.start && owned.end === full.end;
+    if (textRange && ownedIsFull) return textRange;
+    return owned;
+  }
 
-  return normalizeRange(candidate, round);
+  return protectionTextToConveyedRange(protectionText, round) || getFullSlotRange(round);
 }
 
 function expectedSlotFromRank(rank, round, yearOffset = 0) {
@@ -601,36 +681,37 @@ function projectSinglePickValue(item = {}, leagueData = {}, context = buildPickR
   const teamContext = context.byTeam.get(normalizeName(originalTeam)) || {};
   const powerRank = clamp(Number(teamContext.powerRank || 15), 1, 30);
   const potRank = clamp(Number(teamContext.potRank || powerRank || 15), 1, 30);
-  const tables = valueTablesForRound(round);
-  const powerValue = tableLookup(tables.power, powerRank);
-  const potValue = tableLookup(tables.pot, potRank);
-  let unprotectedValue = (powerValue * power + potValue * pot) * certainty;
   const blendedRank = clamp(powerRank * power + potRank * pot, 1, 30);
   const pickNumber = getPickNumber(pick);
   const expectedSlot = pickNumber || expectedSlotFromRank(blendedRank, round, offset);
   const range = getRangeFromItem(item, round);
   const rangeModel = distributionExpectedSlotValue({ round, expectedSlot, yearOffset: offset, range });
 
-  if (pickNumber > 0) {
-    unprotectedValue = slotValue(round, pickNumber) * certainty;
-  } else if (offset === 0 && round === 1 && powerRank >= 28) {
-    const lotteryMultiplier = powerRank >= 30 ? 0.978 : powerRank >= 29 ? 0.985 : 0.992;
-    unprotectedValue *= lotteryMultiplier;
-  }
-
-  const effectiveRangeRatio = pickNumber > 0 ? 1 : rangeModel.ratio;
-  const effectiveConveyanceChance = pickNumber > 0 ? 1 : rangeModel.conveyanceChance;
-  const value = round4(unprotectedValue * effectiveRangeRatio);
+  // Core pick value now comes from expected landing area, not a generic pick label.
+  // For protected picks, rangedSlotValue is weighted across only the slots the
+  // receiving team can actually get. That means a top-5 protected bad-team first
+  // loses the #1-5 upside and can only be valued from #6 onward.
+  const rawUnprotectedValue = pickNumber
+    ? slotValue(round, pickNumber) * certainty
+    : rangeModel.fullSlotValue * certainty;
+  const value = round4(pickNumber ? rawUnprotectedValue : rangeModel.rangedSlotValue * certainty);
+  const effectiveRangeRatio = pickNumber ? 1 : rangeModel.ratio;
+  const effectiveConveyanceChance = pickNumber ? 1 : rangeModel.conveyanceChance;
   const protectionText = String(item.protection || pick.displayProtection || pick.protections || pick.protection || "Unprotected");
-  const rangeIsFull = normalizeRange(range, round).start === getFullSlotRange(round).start && normalizeRange(range, round).end === getFullSlotRange(round).end;
+  const normalizedRange = normalizeRange(range, round);
+  const fullRange = getFullSlotRange(round);
+  const rangeIsFull = normalizedRange.start === fullRange.start && normalizedRange.end === fullRange.end;
   const rankSource = offset === 0 ? `Power Rank #${powerRank}` : `Power Rank #${powerRank} / POT Rank #${potRank}`;
   const blendLabel = offset === 0 ? "current-year Power Ranking" : `${Math.round(power * 100)}% Power Ranking / ${Math.round(pot * 100)}% POT`;
   const originalLabel = displayTeamName(originalTeam);
-  const reason = `${pickYear} ${originalLabel} ${formatRound(round)} valued at ${value.toFixed(3)} (${rankSource}, ${blendLabel}, ${formatRange(range, round)}${rangeIsFull ? "" : `, ${(effectiveConveyanceChance * 100).toFixed(0)}% convey chance`}).`;
+  const protectionNote = rangeIsFull
+    ? ""
+    : `, ${(effectiveConveyanceChance * 100).toFixed(0)}% expected conveyance, best conveyable ${formatRange(range, round)}`;
+  const reason = `${pickYear} ${originalLabel} ${formatRound(round)} valued at ${value.toFixed(3)} (${rankSource}, ${blendLabel}, expected pick #${round4(expectedSlot).toFixed(2)}, ${formatRange(range, round)}${protectionNote}).`;
 
   return {
     value,
-    rawUnprotectedValue: round4(unprotectedValue),
+    rawUnprotectedValue: round4(rawUnprotectedValue),
     rangeRatio: round4(effectiveRangeRatio),
     conveyanceChance: round4(effectiveConveyanceChance),
     expectedSlot: round4(expectedSlot),
@@ -657,14 +738,116 @@ function getPrimaryTradePickItems(items = []) {
   });
 }
 
+function pickAssetType(pick = {}) {
+  return String(pick?.assetType || pick?.type || "pick").toLowerCase();
+}
+
+function getSwapAssetDirection(asset = {}) {
+  const text = String(
+    asset?.protection ||
+      asset?.displayProtection ||
+      asset?.protections ||
+      asset?.protectionType ||
+      asset?.conditions ||
+      ""
+  ).toLowerCase();
+  return text.includes("worst") ? "worst" : "best";
+}
+
+function getSwapParticipantTeams(asset = {}) {
+  const details = asset?.realLifeDetails || {};
+  const participants = Array.isArray(details.swapParticipants)
+    ? details.swapParticipants
+    : Array.isArray(asset?.swapParticipants)
+    ? asset.swapParticipants
+    : [];
+
+  const out = [];
+  const push = (value) => {
+    const clean = String(value || "").trim();
+    if (!clean) return;
+    if (!out.some((row) => sameTeamName(row, clean))) out.push(clean);
+  };
+
+  for (const team of participants) push(team);
+  push(asset.originalTeam || asset.originalTeamName || asset.team || asset.teamName);
+  push(asset.swapWithTeam || asset.swap_with_team || asset.swapTeam || asset.otherTeam || asset.swap?.withTeam);
+
+  return out.slice(0, 2);
+}
+
+function buildSyntheticPick(originalTeam, basePick = {}) {
+  return {
+    ...basePick,
+    assetType: "pick",
+    type: "pick",
+    originalTeam,
+    originalTeamName: originalTeam,
+    teamName: originalTeam,
+    ownerTeam: originalTeam,
+    protection: "Unprotected",
+    protections: "Unprotected",
+    displayProtection: "Unprotected",
+  };
+}
+
+function getExistingSwapValue(item = {}, leagueData = {}, context = buildPickRankContext(leagueData)) {
+  const pick = item.pick || item || {};
+  const participants = getSwapParticipantTeams(pick);
+  const direction = getSwapAssetDirection({ ...pick, protection: item.protection || pick.protection });
+  const year = getPickYear(pick, leagueData);
+  const round = getPickRound(pick);
+
+  if (participants.length < 2) {
+    return {
+      value: 0,
+      year,
+      round,
+      recipientDirection: direction,
+      reason: `${year} ${formatRound(round)} swap could not be valued because the two involved picks were not clear.`,
+    };
+  }
+
+  const [teamA, teamB] = participants;
+  const pickA = projectSinglePickValue({ type: "pick", pick: buildSyntheticPick(teamA, pick), protection: "Unprotected" }, leagueData, context);
+  const pickB = projectSinglePickValue({ type: "pick", pick: buildSyntheticPick(teamB, pick), protection: "Unprotected" }, leagueData, context);
+  const holder = displayTeamName(item.teamName || pick.ownerTeam || pick.owner || pick.currentOwnerTeamName || "right holder");
+
+  // Existing swap assets are already actual draft rights in your save file.
+  // Trading away "Swap Best" means trading away the expected better pick in
+  // that two-pick group, not merely trading away the small upgrade over the
+  // holder's natural pick. Newly-created swap proposals still use upgrade-only
+  // value in getSwapValue(); this full-asset valuation is only for existing
+  // tradable swap assets.
+  const bestValue = Math.max(pickA.value, pickB.value);
+  const worstValue = Math.min(pickA.value, pickB.value);
+  const value = round4(direction === "best" ? bestValue : worstValue);
+
+  return {
+    value,
+    sourceValue: pickA.value,
+    baselineValue: pickB.value,
+    otherValue: pickB.value,
+    recipientDirection: direction,
+    year,
+    round,
+    freeOptionFloorApplied: false,
+    existingSwapAssetFullValue: true,
+    reason: `${holder} owns existing ${swapDirectionLabel(direction)} swap rights in ${year} ${formatRound(round)} between ${displayTeamName(teamA)} (${pickA.value.toFixed(3)}) and ${displayTeamName(teamB)} (${pickB.value.toFixed(3)}), so the asset is valued as the expected ${direction === "best" ? "better" : "worse"} pick at ${value.toFixed(3)}.`,
+  };
+}
+
 function getSwapValue(item = {}, leagueData = {}, context = buildPickRankContext(leagueData)) {
   const rule = item.tradeRule || item.pick?.tradeRule || {};
 
-  // TradePickSelect stores the displayed swap direction on the sending side.
-  // Example: if the user offers "Swap Worst", the CPU receives the linked "Swap Best" upside.
-  // For valuation, always price the right/obligation that the recipient is actually receiving.
-  const senderDirection = String(rule.swapDirection || "best").toLowerCase() === "worst" ? "worst" : "best";
-  const recipientDirection = inverseSwapDirection(senderDirection);
+  if (String(rule.action || "").toLowerCase() !== "swap") {
+    return getExistingSwapValue(item, leagueData, context);
+  }
+
+  // TradePickSelect creates one primary swap item on the sending side. The rule's
+  // swapDirection is the exact right/obligation the receiving side gets when the
+  // trade is completed, matching buildTradeMachineSwapAssets in draftPicks.js.
+  const recipientDirection = String(rule.swapDirection || "best").toLowerCase() === "worst" ? "worst" : "best";
   const sourcePick = rule.sourcePick || item.pick || {};
   const recipientPick = rule.swapPick || {};
 
@@ -676,9 +859,6 @@ function getSwapValue(item = {}, leagueData = {}, context = buildPickRankContext
   let value = recipientDirection === "best" ? Math.max(0, bestDelta) : Math.min(0, worstDelta);
   let freeOptionFloorApplied = false;
 
-  // A best-pick swap right can be nearly meaningless when the recipient already projects to have
-  // the better pick, but it is still free optional upside. Give it a tiny positive value so the
-  // no-downside path accepts it on its own, while keeping it far too small to pay for a player.
   if (recipientDirection === "best" && value < FREE_SWAP_OPTION_VALUE) {
     value = FREE_SWAP_OPTION_VALUE;
     freeOptionFloorApplied = true;
@@ -700,35 +880,51 @@ function getSwapValue(item = {}, leagueData = {}, context = buildPickRankContext
     value,
     sourceValue: source.value,
     baselineValue: recipientBaseline.value,
-    senderDirection,
     recipientDirection,
     freeOptionFloorApplied,
     year,
     round,
-    reason: `${recipient} receives ${swapDirectionLabel(recipientDirection)} swap value in ${year} ${formatRound(round)} worth ${value.toFixed(3)} from ${sender}'s ${swapDirectionLabel(senderDirection)} offer (${sourceLabel} ${source.value.toFixed(3)} vs ${recipientLabel} ${recipientBaseline.value.toFixed(3)}).${optionalText}`,
+    reason: `${recipient} receives ${swapDirectionLabel(recipientDirection)} swap value in ${year} ${formatRound(round)} worth ${value.toFixed(3)} from ${sender}'s offer (${sourceLabel} ${source.value.toFixed(3)} vs ${recipientLabel} ${recipientBaseline.value.toFixed(3)}).${optionalText}`,
   };
 }
 
 function evaluatePickItemValue(item = {}, leagueData = {}, context = buildPickRankContext(leagueData)) {
   const rule = item.tradeRule || item.pick?.tradeRule || {};
-  if (String(rule.action || "").toLowerCase() === "swap") {
-    return getSwapValue(item, leagueData, context);
-  }
+  const pick = item.pick || item || {};
+  const label = String(item.protection || pick.displayProtection || pick.protections || pick.protection || "").toLowerCase();
+  const isSwapItem =
+    String(rule.action || "").toLowerCase() === "swap" ||
+    pickAssetType(pick) === "swap" ||
+    label.includes("swap best") ||
+    label.includes("swap worst");
+
+  if (isSwapItem) return getSwapValue(item, leagueData, context);
   return projectSinglePickValue(item, leagueData, context);
 }
 
-function applyCpuSkew(value, side) {
-  const n = Number(value || 0);
-  if (side === "incoming") return round4(n >= 0 ? n * CPU_INCOMING_PICK_VALUE_MULT : n * CPU_OUTGOING_PICK_VALUE_MULT);
-  return round4(n >= 0 ? n * CPU_OUTGOING_PICK_VALUE_MULT : n * CPU_INCOMING_PICK_VALUE_MULT);
+function getCpuPickDirectionMultiplier(context, cpuTeamName = "") {
+  const row = context?.byTeam?.get?.(normalizeName(cpuTeamName)) || null;
+  const rank = clamp(Number(row?.powerRank || 15), 1, 30);
+  // Rebuilders treat picks as more important. Contenders discount pick assets
+  // because active OVR upgrades matter more to them right now.
+  return round4(clamp(0.86 + ((rank - 1) / 29) * 0.44, 0.86, 1.30));
 }
 
-function summarizeItem(itemValue, side) {
-  const adjusted = applyCpuSkew(itemValue.value, side);
+function applyCpuSkew(value, side, directionMultiplier = 1) {
+  const n = Number(value || 0);
+  const skew = side === "incoming"
+    ? (n >= 0 ? CPU_INCOMING_PICK_VALUE_MULT : CPU_OUTGOING_PICK_VALUE_MULT)
+    : (n >= 0 ? CPU_OUTGOING_PICK_VALUE_MULT : CPU_INCOMING_PICK_VALUE_MULT);
+  return round4(n * skew * Number(directionMultiplier || 1));
+}
+
+function summarizeItem(itemValue, side, directionMultiplier = 1) {
+  const adjusted = applyCpuSkew(itemValue.value, side, directionMultiplier);
   return {
     ...itemValue,
     adjustedValue: adjusted,
     cpuSkewSide: side,
+    cpuPickDirectionMultiplier: round4(directionMultiplier),
   };
 }
 
@@ -741,19 +937,23 @@ export function evaluateTradePickImpact({ leagueData, userItems = [], cpuItems =
   );
   const validIncomingItems = incomingItems.filter((item) => !invalidSwapItems.includes(item));
   const validOutgoingItems = outgoingItems.filter((item) => !invalidSwapItems.includes(item));
-  const incoming = validIncomingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, context), "incoming"));
-  const outgoing = validOutgoingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, context), "outgoing"));
+  const directionMultiplier = getCpuPickDirectionMultiplier(context, cpuTeamName);
+  const incoming = validIncomingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, context), "incoming", directionMultiplier));
+  const outgoing = validOutgoingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, context), "outgoing", directionMultiplier));
   const incomingValue = round4(incoming.reduce((sum, item) => sum + Number(item.adjustedValue || 0), 0));
   const outgoingValue = round4(outgoing.reduce((sum, item) => sum + Number(item.adjustedValue || 0), 0));
   const netPickScore = round4(incomingValue - outgoingValue);
 
   const reasons = [];
+  if (incoming.length || outgoing.length) {
+    reasons.push(`CPU draft-pick direction multiplier: ${directionMultiplier.toFixed(3)} (${displayTeamName(cpuTeamName)} values picks ${directionMultiplier >= 1 ? "more" : "less"} based on current Power Rank).`);
+  }
   if (incoming.length) {
-    const top = [...incoming].sort((a, b) => Math.abs(b.adjustedValue) - Math.abs(a.adjustedValue)).slice(0, 2);
+    const top = [...incoming].sort((a, b) => Math.abs(b.adjustedValue) - Math.abs(a.adjustedValue)).slice(0, 3);
     for (const item of top) reasons.push(`CPU receives pick asset: ${item.reason} CPU counts it as ${item.adjustedValue.toFixed(3)}.`);
   }
   if (outgoing.length) {
-    const top = [...outgoing].sort((a, b) => Math.abs(b.adjustedValue) - Math.abs(a.adjustedValue)).slice(0, 2);
+    const top = [...outgoing].sort((a, b) => Math.abs(b.adjustedValue) - Math.abs(a.adjustedValue)).slice(0, 3);
     for (const item of top) reasons.push(`CPU gives pick asset: ${item.reason} CPU treats losing it as ${item.adjustedValue.toFixed(3)}.`);
   }
   if (Math.abs(netPickScore) > TRADE_PICK_EPS) {
@@ -773,6 +973,7 @@ export function evaluateTradePickImpact({ leagueData, userItems = [], cpuItems =
     reasons,
     invalidSwaps: invalidSwapItems,
     invalidSwapReasons,
+    cpuPickDirectionMultiplier: directionMultiplier,
     hasPicks: incoming.length > 0 || outgoing.length > 0 || invalidSwapItems.length > 0,
   };
 }

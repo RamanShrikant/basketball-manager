@@ -964,9 +964,10 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
       : uniqueInvolved;
 
     // Imported playable swaps stay limited to the two involved natural teams.
-    // Trade-machine swaps can involve picks currently owned by two other teams,
-    // so their right holder can come from realLifeDetails.swapOwnerParticipants.
-    if (!ownerPairNames.some((team) => isSameTeamName(team, ownerTeam))) continue;
+    // Trade-machine swaps are tradable rights: after a later trade, the current
+    // ownerTeam on the Swap Best / Swap Worst asset is the real right holder,
+    // even if that owner is no longer one of the original owner participants.
+    if (!tradeGeneratedSwap && !ownerPairNames.some((team) => isSameTeamName(team, ownerTeam))) continue;
 
     const pairNames = uniqueInvolved;
     const pairKey = pairNames.map(normalizeTeamName).sort().join("|");
@@ -1022,8 +1023,14 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
     let bestOwner = bestAsset?.ownerTeam || "";
     let worstOwner = worstAsset?.ownerTeam || "";
 
-    if (!bestOwner || !ownerPairNames.some((team) => isSameTeamName(team, bestOwner))) bestOwner = "";
-    if (!worstOwner || !ownerPairNames.some((team) => isSameTeamName(team, worstOwner))) worstOwner = "";
+    const ownerIsAllowed = (teamName) => {
+      if (!teamName) return false;
+      if (group.tradeGeneratedSwap) return true;
+      return ownerPairNames.some((team) => isSameTeamName(team, teamName));
+    };
+
+    if (!bestOwner || !ownerIsAllowed(bestOwner)) bestOwner = "";
+    if (!worstOwner || !ownerIsAllowed(worstOwner)) worstOwner = "";
 
     if (bestOwner && (!worstOwner || isSameTeamName(bestOwner, worstOwner))) {
       worstOwner = otherPairTeam(ownerPairNames, bestOwner);
