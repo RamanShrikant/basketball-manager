@@ -9,8 +9,8 @@ const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const SCHEDULE_KEY = "bm_schedule_v3";
 
-const CPU_INCOMING_PICK_VALUE_MULT = 1.055;
-const CPU_OUTGOING_PICK_VALUE_MULT = 1.12;
+const CPU_INCOMING_PICK_VALUE_MULT = 1.06;
+const CPU_OUTGOING_PICK_VALUE_MULT = 1.125;
 
 const YEAR_BLEND_BY_OFFSET = [
   // 2025-26 starts with 2026 draft picks. Offset 0 means the current draft class.
