@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import LZString from "lz-string";
@@ -73,7 +73,7 @@ function getOffseasonFreeAgencyReturnPath() {
 }
 
 export default function TeamHub() {
-  const { selectedTeam } = useGame();
+  const { leagueData, selectedTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -104,6 +104,23 @@ export default function TeamHub() {
   const offseasonReturnTo = location.state?.returnTo || "/offseason";
   const playoffReturnTo = location.state?.playoffReturnTo || "/playoffs";
   const offseasonFreeAgentsPath = getOffseasonFreeAgencyReturnPath();
+
+  const teamsSorted = useMemo(() => {
+    const teams = Array.isArray(leagueData?.teams)
+      ? leagueData.teams
+      : Object.values(leagueData?.conferences || {}).flat();
+
+    return teams
+      .filter(Boolean)
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }, [leagueData]);
+
+  const handleControlledTeamChange = (event) => {
+    const nextTeamName = event.target.value;
+    const nextTeam = teamsSorted.find((team) => team?.name === nextTeamName);
+    if (!nextTeam) return;
+    setSelectedTeam(nextTeam);
+  };
 
   if (!selectedTeam) {
     return (
@@ -205,6 +222,61 @@ export default function TeamHub() {
   return (
     <PageFade>
       <div className={styles.wrapper}>
+      {teamsSorted.length > 0 && (
+        <div
+          style={{
+            position: "fixed",
+            top: "18px",
+            right: "22px",
+            zIndex: 30,
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            padding: "8px 10px",
+            borderRadius: "12px",
+            border: "1px solid rgba(255,255,255,0.12)",
+            background: "rgba(15, 15, 15, 0.86)",
+            boxShadow: "0 12px 30px rgba(0,0,0,0.35)",
+            backdropFilter: "blur(10px)",
+          }}
+        >
+          <span
+            style={{
+              color: "rgba(255,255,255,0.72)",
+              fontSize: "12px",
+              fontWeight: 800,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+            }}
+          >
+            Control
+          </span>
+          <select
+            value={selectedTeam?.name || ""}
+            onChange={handleControlledTeamChange}
+            title="Switch controlled team"
+            style={{
+              maxWidth: "210px",
+              padding: "7px 32px 7px 10px",
+              borderRadius: "10px",
+              border: "1px solid rgba(251,146,60,0.45)",
+              background: "rgba(23,23,23,0.96)",
+              color: "white",
+              fontSize: "13px",
+              fontWeight: 800,
+              outline: "none",
+              cursor: "pointer",
+            }}
+          >
+            {teamsSorted.map((team) => (
+              <option key={team.name} value={team.name}>
+                {team.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {isOffseasonMode && (
         <div
           style={{

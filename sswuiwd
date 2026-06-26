@@ -1,0 +1,172 @@
+warning: in the working copy of 'frontend/src/utils/tradePickValue.js', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/frontend/src/utils/tradePickValue.js b/frontend/src/utils/tradePickValue.js[m
+[1mindex 83df889..32de603 100644[m
+[1m--- a/frontend/src/utils/tradePickValue.js[m
+[1m+++ b/frontend/src/utils/tradePickValue.js[m
+[36m@@ -638,6 +638,39 @@[m [mfunction distributionExpectedSlotValue({ round, expectedSlot, yearOffset, range[m
+   };[m
+ }[m
+ [m
+[32m+[m[32mfunction getPickValueTuningMultiplier({ round, expectedSlot, yearOffset = 0, rangeIsFull = true, pickNumber = 0 } = {}) {[m
+[32m+[m[32m  if (Number(round) !== 1) return 1;[m
+[32m+[m
+[32m+[m[32m  const slot = clamp(Number(expectedSlot || 15), 1, 30);[m
+[32m+[m[32m  const offset = clamp(Number(yearOffset || 0), 0, 6);[m
+[32m+[m[32m  let bump = 0;[m
+[32m+[m
+[32m+[m[32m  // Premium current-year picks should hit a little harder because their landing[m
+[32m+[m[32m  // range is easier to project. Average/mid firsts get a smaller lift so teams[m
+[32m+[m[32m  // like Toronto still have meaningful 1sts without making late contender picks[m
+[32m+[m[32m  // overpowering.[m
+[32m+[m[32m  if (offset === 0) {[m
+[32m+[m[32m    if (slot <= 4.5) bump = 0.075;[m
+[32m+[m[32m    else if (slot <= 8.5) bump = 0.065;[m
+[32m+[m[32m    else if (slot <= 12.5) bump = 0.04;[m
+[32m+[m[32m    else if (slot <= 24.5) bump = 0.055;[m
+[32m+[m[32m    else bump = 0.025;[m
+[32m+[m[32m  } else {[m
+[32m+[m[32m    if (slot <= 8.5) bump = 0.04;[m
+[32m+[m[32m    else if (slot <= 24.5) bump = 0.045;[m
+[32m+[m[32m    else bump = 0.025;[m
+[32m+[m
+[32m+[m[32m    // Farther future 1sts carry a little uncertainty upside, but keep this small[m
+[32m+[m[32m    // so we do not create a new exploit around distant late picks.[m
+[32m+[m[32m    bump += Math.min(0.025, offset * 0.005);[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // If protections remove part of the pick range, keep the tuning more modest.[m
+[32m+[m[32m  if (!rangeIsFull && !pickNumber) bump *= 0.55;[m
+[32m+[m
+[32m+[m[32m  return round4(1 + bump);[m
+[32m+[m[32m}[m
+[32m+[m
+ function valueTablesForRound(round) {[m
+   if (Number(round) === 2) {[m
+     return {[m
+[36m@@ -686,28 +719,36 @@[m [mfunction projectSinglePickValue(item = {}, leagueData = {}, context = buildPickR[m
+   const expectedSlot = pickNumber || expectedSlotFromRank(blendedRank, round, offset);[m
+   const range = getRangeFromItem(item, round);[m
+   const rangeModel = distributionExpectedSlotValue({ round, expectedSlot, yearOffset: offset, range });[m
+[32m+[m[32m  const normalizedRange = normalizeRange(range, round);[m
+[32m+[m[32m  const fullRange = getFullSlotRange(round);[m
+[32m+[m[32m  const rangeIsFull = normalizedRange.start === fullRange.start && normalizedRange.end === fullRange.end;[m
+[32m+[m[32m  const valueTuningMultiplier = getPickValueTuningMultiplier({[m
+[32m+[m[32m    round,[m
+[32m+[m[32m    expectedSlot,[m
+[32m+[m[32m    yearOffset: offset,[m
+[32m+[m[32m    rangeIsFull,[m
+[32m+[m[32m    pickNumber,[m
+[32m+[m[32m  });[m
+ [m
+   // Core pick value now comes from expected landing area, not a generic pick label.[m
+   // For protected picks, rangedSlotValue is weighted across only the slots the[m
+   // receiving team can actually get. That means a top-5 protected bad-team first[m
+   // loses the #1-5 upside and can only be valued from #6 onward.[m
+   const rawUnprotectedValue = pickNumber[m
+[31m-    ? slotValue(round, pickNumber) * certainty[m
+[31m-    : rangeModel.fullSlotValue * certainty;[m
+[31m-  const value = round4(pickNumber ? rawUnprotectedValue : rangeModel.rangedSlotValue * certainty);[m
+[32m+[m[32m    ? slotValue(round, pickNumber) * certainty * valueTuningMultiplier[m
+[32m+[m[32m    : rangeModel.fullSlotValue * certainty * valueTuningMultiplier;[m
+[32m+[m[32m  const value = round4(pickNumber ? rawUnprotectedValue : rangeModel.rangedSlotValue * certainty * valueTuningMultiplier);[m
+   const effectiveRangeRatio = pickNumber ? 1 : rangeModel.ratio;[m
+   const effectiveConveyanceChance = pickNumber ? 1 : rangeModel.conveyanceChance;[m
+   const protectionText = String(item.protection || pick.displayProtection || pick.protections || pick.protection || "Unprotected");[m
+[31m-  const normalizedRange = normalizeRange(range, round);[m
+[31m-  const fullRange = getFullSlotRange(round);[m
+[31m-  const rangeIsFull = normalizedRange.start === fullRange.start && normalizedRange.end === fullRange.end;[m
+   const rankSource = offset === 0 ? `Power Rank #${powerRank}` : `Power Rank #${powerRank} / POT Rank #${potRank}`;[m
+   const blendLabel = offset === 0 ? "current-year Power Ranking" : `${Math.round(power * 100)}% Power Ranking / ${Math.round(pot * 100)}% POT`;[m
+   const originalLabel = displayTeamName(originalTeam);[m
+   const protectionNote = rangeIsFull[m
+     ? ""[m
+     : `, ${(effectiveConveyanceChance * 100).toFixed(0)}% expected conveyance, best conveyable ${formatRange(range, round)}`;[m
+[31m-  const reason = `${pickYear} ${originalLabel} ${formatRound(round)} valued at ${value.toFixed(3)} (${rankSource}, ${blendLabel}, expected pick #${round4(expectedSlot).toFixed(2)}, ${formatRange(range, round)}${protectionNote}).`;[m
+[32m+[m[32m  const tuningNote = valueTuningMultiplier > 1.0001 ? `, draft-capital tuning x${valueTuningMultiplier.toFixed(3)}` : "";[m
+[32m+[m[32m  const reason = `${pickYear} ${originalLabel} ${formatRound(round)} valued at ${value.toFixed(3)} (${rankSource}, ${blendLabel}, expected pick #${round4(expectedSlot).toFixed(2)}, ${formatRange(range, round)}${protectionNote}${tuningNote}).`;[m
+ [m
+   return {[m
+     value,[m
+[36m@@ -928,6 +969,52 @@[m [mfunction summarizeItem(itemValue, side, directionMultiplier = 1) {[m
+   };[m
+ }[m
+ [m
+[32m+[m[32mfunction getOutgoingDraftAssetExposureWeight(item = {}) {[m
+[32m+[m[32m  const adjustedValue = Math.abs(Number(item.adjustedValue ?? item.value ?? 0));[m
+[32m+[m[32m  if (adjustedValue <= TRADE_PICK_EPS) return 0;[m
+[32m+[m
+[32m+[m[32m  if (Number(item.round) !== 1) {[m
+[32m+[m[32m    // Seconds can clutter packages, but they should not trigger the same future[m
+[32m+[m[32m    // mortgage penalty as real first-round control.[m
+[32m+[m[32m    return round4(clamp(adjustedValue / 3, 0, 0.2));[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  const isSwapLike = Boolean(item.recipientDirection) || Boolean(item.existingSwapAssetFullValue) || Boolean(item.freeOptionFloorApplied);[m
+[32m+[m[32m  let weight = isSwapLike ? 0.7 : 1.0;[m
+[32m+[m
+[32m+[m[32m  if (item.freeOptionFloorApplied) weight = 0.15;[m
+[32m+[m
+[32m+[m[32m  const conveyanceChance = Number(item.conveyanceChance);[m
+[32m+[m[32m  if (Number.isFinite(conveyanceChance) && conveyanceChance > 0 && conveyanceChance < 1) {[m
+[32m+[m[32m    weight *= clamp(0.35 + conveyanceChance * 0.65, 0.35, 1);[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // Tiny protections / near-zero swaps should not count like a real full first.[m
+[32m+[m[32m  if (adjustedValue < 0.75) weight *= clamp(adjustedValue / 0.75, 0.15, 1);[m
+[32m+[m
+[32m+[m[32m  return round4(clamp(weight, 0, 1));[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mfunction calculateOutgoingDraftCapitalExposurePenalty(outgoing = []) {[m
+[32m+[m[32m  const exposure = round4((outgoing || []).reduce((sum, item) => sum + getOutgoingDraftAssetExposureWeight(item), 0));[m
+[32m+[m[32m  const firstAssetCount = (outgoing || []).filter((item) => Number(item.round) === 1 && Math.abs(Number(item.adjustedValue || 0)) > TRADE_PICK_EPS).length;[m
+[32m+[m
+[32m+[m[32m  if (exposure <= 1.1) {[m
+[32m+[m[32m    return { penalty: 0, exposure, firstAssetCount };[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // This is intentionally separate from base pick value. It represents the CPU's[m
+[32m+[m[32m  // reluctance to empty multiple future first-round paths in one deal. A single[m
+[32m+[m[32m  // first stays normal, two firsts are manageable, and the 3rd/4th/5th asset gets[m
+[32m+[m[32m  // increasingly painful.[m
+[32m+[m[32m  const penalty = round4(Math.pow(exposure - 1.05, 2) * 2.6 + Math.max(0, exposure - 2.5) * 2.2);[m
+[32m+[m[32m  return {[m
+[32m+[m[32m    penalty,[m
+[32m+[m[32m    exposure,[m
+[32m+[m[32m    firstAssetCount,[m
+[32m+[m[32m  };[m
+[32m+[m[32m}[m
+[32m+[m
+ export function evaluateTradePickImpact({ leagueData, userItems = [], cpuItems = [], userTeamName = "", cpuTeamName = "" } = {}) {[m
+   const context = buildPickRankContext(leagueData);[m
+   const incomingItems = getPrimaryTradePickItems(userItems);[m
+[36m@@ -941,13 +1028,18 @@[m [mexport function evaluateTradePickImpact({ leagueData, userItems = [], cpuItems =[m
+   const incoming = validIncomingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, context), "incoming", directionMultiplier));[m
+   const outgoing = validOutgoingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, context), "outgoing", directionMultiplier));[m
+   const incomingValue = round4(incoming.reduce((sum, item) => sum + Number(item.adjustedValue || 0), 0));[m
+[31m-  const outgoingValue = round4(outgoing.reduce((sum, item) => sum + Number(item.adjustedValue || 0), 0));[m
+[32m+[m[32m  const outgoingBaseValue = round4(outgoing.reduce((sum, item) => sum + Number(item.adjustedValue || 0), 0));[m
+[32m+[m[32m  const outgoingExposurePenalty = calculateOutgoingDraftCapitalExposurePenalty(outgoing);[m
+[32m+[m[32m  const outgoingValue = round4(outgoingBaseValue + Number(outgoingExposurePenalty.penalty || 0));[m
+   const netPickScore = round4(incomingValue - outgoingValue);[m
+ [m
+   const reasons = [];[m
+   if (incoming.length || outgoing.length) {[m
+     reasons.push(`CPU draft-pick direction multiplier: ${directionMultiplier.toFixed(3)} (${displayTeamName(cpuTeamName)} values picks ${directionMultiplier >= 1 ? "more" : "less"} based on current Power Rank).`);[m
+   }[m
+[32m+[m[32m  if (outgoingExposurePenalty.penalty > TRADE_PICK_EPS) {[m
+[32m+[m[32m    reasons.push(`CPU future-pick exposure penalty: -${outgoingExposurePenalty.penalty.toFixed(3)} because ${displayTeamName(cpuTeamName)} is sending about ${outgoingExposurePenalty.exposure.toFixed(2)} first-round-equivalent draft assets in one deal.`);[m
+[32m+[m[32m  }[m
+   if (incoming.length) {[m
+     const top = [...incoming].sort((a, b) => Math.abs(b.adjustedValue) - Math.abs(a.adjustedValue)).slice(0, 3);[m
+     for (const item of top) reasons.push(`CPU receives pick asset: ${item.reason} CPU counts it as ${item.adjustedValue.toFixed(3)}.`);[m
+[36m@@ -968,6 +1060,9 @@[m [mexport function evaluateTradePickImpact({ leagueData, userItems = [], cpuItems =[m
+     netPickScore,[m
+     incomingValue,[m
+     outgoingValue,[m
+[32m+[m[32m    outgoingBaseValue,[m
+[32m+[m[32m    outgoingFuturePickExposurePenalty: round4(outgoingExposurePenalty.penalty || 0),[m
+[32m+[m[32m    outgoingFirstRoundExposure: round4(outgoingExposurePenalty.exposure || 0),[m
+     incoming,[m
+     outgoing,[m
+     reasons,[m

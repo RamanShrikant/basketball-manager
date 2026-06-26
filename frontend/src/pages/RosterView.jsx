@@ -10,6 +10,7 @@ import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
+const ALL_PLAYERS_VIEW_KEY = "__ALL_PLAYERS__";
 
 function isOffseasonRosterRelaxed() {
   try {
@@ -34,6 +35,7 @@ export default function RosterView() {
   const [actionTargetPlayer, setActionTargetPlayer] = useState(null);
   const [playerCardOpen, setPlayerCardOpen] = useState(false);
   const [cardTargetPlayer, setCardTargetPlayer] = useState(null);
+  const [viewTeamName, setViewTeamName] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -358,9 +360,10 @@ export default function RosterView() {
     return true;
   };
 
-  const getTwoWayAssignmentBlockReason = (player, team = selectedTeam) => {
+  const getTwoWayAssignmentBlockReason = (player, team = activeRosterTeam || selectedTeam) => {
     if (!player) return "No player selected.";
     if (isAllView) return "Switch to a team roster first before assigning a two-way.";
+    if (!canManageCurrentRoster) return "You are only viewing this roster. Switch to this team from Team Hub before editing contracts.";
     if (player.isTwoWay) return "This player is already on a two-way contract.";
     if (player.isStash) return "Stashed players are team-controlled but cannot be assigned again until their offseason return decision.";
 
@@ -508,12 +511,36 @@ export default function RosterView() {
   const [viewIndex, setViewIndex] = useState(0);
 
   useEffect(() => {
-    const idx = teamsSorted.findIndex((t) => t.name === selectedTeam?.name);
+    if (viewTeamName === ALL_PLAYERS_VIEW_KEY) {
+      setViewIndex(teamsSorted.length);
+      return;
+    }
+
+    const targetTeamName = viewTeamName || selectedTeam?.name;
+    const idx = teamsSorted.findIndex((t) => t.name === targetTeamName);
     setViewIndex(idx >= 0 ? idx : 0);
-  }, [teamsSorted, selectedTeam]);
+  }, [teamsSorted, selectedTeam?.name, viewTeamName]);
 
   const totalSlots = teamsSorted.length + 1; // +1 for All Players
   const isAllView = viewIndex === teamsSorted.length;
+
+  const activeRosterTeam = useMemo(() => {
+    if (isAllView) return null;
+
+    const targetTeamName = viewTeamName === ALL_PLAYERS_VIEW_KEY
+      ? null
+      : viewTeamName || selectedTeam?.name;
+    const byName = teamsSorted.find((team) => team?.name === targetTeamName);
+
+    return byName || teamsSorted[viewIndex] || selectedTeam || null;
+  }, [isAllView, teamsSorted, viewTeamName, selectedTeam, viewIndex]);
+
+  const canManageCurrentRoster = Boolean(
+    !isAllView &&
+      activeRosterTeam?.name &&
+      selectedTeam?.name &&
+      activeRosterTeam.name === selectedTeam.name
+  );
 
   const handleTeamSwitch = (dir) => {
     if (!totalSlots) return;
@@ -522,7 +549,8 @@ export default function RosterView() {
         dir === "next"
           ? (prev + 1 + totalSlots) % totalSlots
           : (prev - 1 + totalSlots) % totalSlots;
-      if (next < teamsSorted.length) setSelectedTeam(teamsSorted[next]);
+
+      setViewTeamName(next < teamsSorted.length ? teamsSorted[next]?.name || null : ALL_PLAYERS_VIEW_KEY);
       setSelectedPlayer(null);
       return next;
     });
@@ -532,9 +560,9 @@ export default function RosterView() {
   const viewPlayers = isAllView
     ? allLeaguePlayers
     : [
-        ...(selectedTeam?.players || []),
-        ...getTwoWayPlayers(selectedTeam).map(markTwoWayPlayer),
-        ...getStashPlayers(selectedTeam).map(markStashPlayer),
+        ...(activeRosterTeam?.players || []),
+        ...getTwoWayPlayers(activeRosterTeam).map(markTwoWayPlayer),
+        ...getStashPlayers(activeRosterTeam).map(markStashPlayer),
       ];
 
   // sorting
@@ -709,9 +737,9 @@ export default function RosterView() {
   });
 
   const handleAssignStandardToTwoWay = (player) => {
-    if (!player || isAllView) return;
+    if (!player || isAllView || !canManageCurrentRoster) return;
 
-    const blockReason = getTwoWayAssignmentBlockReason(player, selectedTeam);
+    const blockReason = getTwoWayAssignmentBlockReason(player, activeRosterTeam);
     if (blockReason) {
       console.warn("[RosterView] two-way assignment blocked:", blockReason);
       return;
@@ -775,7 +803,7 @@ export default function RosterView() {
   };
 
   const handleUpgradeTwoWayToStandard = (player) => {
-    if (!player || isAllView) return;
+    if (!player || isAllView || !canManageCurrentRoster) return;
 
     let upgradedPlayer = null;
     const result = updateSelectedTeamInLeague((team) => {
@@ -826,7 +854,7 @@ export default function RosterView() {
   };
 
   const handleReleaseTwoWayToFreeAgency = (player) => {
-    if (!player || isAllView || !workingLeagueData?.conferences) return;
+    if (!player || isAllView || !canManageCurrentRoster || !workingLeagueData?.conferences) return;
 
     const releasedPlayer = {
       ...player,
@@ -870,7 +898,7 @@ export default function RosterView() {
   };
 
   const openReleaseFromActions = (player) => {
-    if (!player || isAllView) return;
+    if (!player || isAllView || !canManageCurrentRoster) return;
     setReleaseTargetPlayer(player);
     setReleaseModalOpen(true);
     closePlayerActions();
@@ -882,7 +910,7 @@ export default function RosterView() {
   };
 
   const handleReleaseToFreeAgency = async () => {
-    if (!releaseTargetPlayer || !selectedTeam || !workingLeagueData?.conferences) return;
+    if (!releaseTargetPlayer || !canManageCurrentRoster || !selectedTeam || !workingLeagueData?.conferences) return;
 
     try {
       const res = await releasePlayerToFreeAgency(
@@ -944,18 +972,18 @@ export default function RosterView() {
   }
 
   const player = selectedPlayer || viewPlayers[0] || {};
-  const headerTitle = isAllView ? "All Players" : `${selectedTeam.name} Roster`;
+  const headerTitle = isAllView ? "All Players" : `${activeRosterTeam?.name || selectedTeam?.name || "Team"} Roster`;
   const showTeamCol = isAllView; // logo column only in All Players view
   const regularSeasonStandardRosterLimit = Number(
     workingLeagueData?.rosterLimit ||
     workingLeagueData?.maxRosterSize ||
     15
   );
-  const standardRosterCount = !isAllView && selectedTeam?.players
-    ? selectedTeam.players.length
+  const standardRosterCount = !isAllView && activeRosterTeam?.players
+    ? activeRosterTeam.players.length
     : 0;
-  const twoWayRosterCount = !isAllView ? getTwoWayPlayers(selectedTeam).length : 0;
-  const stashRosterCount = !isAllView ? getStashPlayers(selectedTeam).length : 0;
+  const twoWayRosterCount = !isAllView ? getTwoWayPlayers(activeRosterTeam).length : 0;
+  const stashRosterCount = !isAllView ? getStashPlayers(activeRosterTeam).length : 0;
   const rosterOverRegularSeasonLimit =
     !isAllView && standardRosterCount > regularSeasonStandardRosterLimit;
 
@@ -1014,6 +1042,12 @@ export default function RosterView() {
               You can carry extra players for now, but before simulating you must either release players or assign eligible first-3-season players to two-way contracts until you are at {regularSeasonStandardRosterLimit} or fewer standard contracts.
             </p>
           )}
+        </div>
+      )}
+
+      {!isAllView && !canManageCurrentRoster && activeRosterTeam?.name && (
+        <div className="mb-5 w-full max-w-5xl rounded-xl border border-blue-400/30 bg-blue-500/10 px-5 py-3 text-sm font-semibold text-blue-100">
+          Viewing {activeRosterTeam.name}. Your controlled team is still {selectedTeam?.name || "your original team"}.
         </div>
       )}
 
@@ -1311,9 +1345,9 @@ export default function RosterView() {
                   <>
                     <button
                       onClick={() => handleUpgradeTwoWayToStandard(actionTargetPlayer)}
-                      disabled={isAllView}
+                      disabled={isAllView || !canManageCurrentRoster}
                       className={`flex items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
-                        isAllView
+                        isAllView || !canManageCurrentRoster
                           ? "cursor-not-allowed border-white/10 bg-white/[0.03] opacity-50"
                           : "border-emerald-400/25 bg-emerald-500/10 hover:-translate-y-0.5 hover:border-emerald-300/50 hover:bg-emerald-500/20 hover:shadow-[0_18px_40px_rgba(16,185,129,0.16)]"
                       }`}
@@ -1331,9 +1365,9 @@ export default function RosterView() {
 
                     <button
                       onClick={() => handleReleaseTwoWayToFreeAgency(actionTargetPlayer)}
-                      disabled={isAllView}
+                      disabled={isAllView || !canManageCurrentRoster}
                       className={`flex items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
-                        isAllView
+                        isAllView || !canManageCurrentRoster
                           ? "cursor-not-allowed border-white/10 bg-white/[0.03] opacity-50"
                           : "border-red-400/25 bg-red-500/10 hover:-translate-y-0.5 hover:border-red-300/50 hover:bg-red-500/20 hover:shadow-[0_18px_40px_rgba(239,68,68,0.16)]"
                       }`}
@@ -1352,7 +1386,7 @@ export default function RosterView() {
                 ) : (
                   <>
                     {(() => {
-                      const blockReason = getTwoWayAssignmentBlockReason(actionTargetPlayer, selectedTeam);
+                      const blockReason = getTwoWayAssignmentBlockReason(actionTargetPlayer, activeRosterTeam);
                       const disabled = Boolean(blockReason);
 
                       return (
@@ -1380,9 +1414,9 @@ export default function RosterView() {
 
                     <button
                       onClick={() => openReleaseFromActions(actionTargetPlayer)}
-                      disabled={isAllView}
+                      disabled={isAllView || !canManageCurrentRoster}
                       className={`flex items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
-                        isAllView
+                        isAllView || !canManageCurrentRoster
                           ? "cursor-not-allowed border-white/10 bg-white/[0.03] opacity-50"
                           : "border-red-400/25 bg-red-500/10 hover:-translate-y-0.5 hover:border-red-300/50 hover:bg-red-500/20 hover:shadow-[0_18px_40px_rgba(239,68,68,0.16)]"
                       }`}
@@ -1392,6 +1426,8 @@ export default function RosterView() {
                         <div className="mt-1 text-sm font-semibold text-neutral-400">
                           {isAllView
                             ? "Switch to a team roster first before releasing a player."
+                            : !canManageCurrentRoster
+                            ? "You are only viewing this roster. Switch to this team from Team Hub before editing contracts."
                             : "Move him to free agency and keep the original remaining guaranteed salary as dead cap."}
                         </div>
                       </div>
@@ -1415,8 +1451,8 @@ export default function RosterView() {
         open={playerCardOpen}
         player={cardTargetPlayer}
         team={getTeamForPlayer(cardTargetPlayer)}
-        teamName={getTeamForPlayer(cardTargetPlayer)?.name || (isAllView ? teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.teamName : selectedTeam?.name)}
-        teamLogo={getTeamForPlayer(cardTargetPlayer)?.logo || teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.logo || selectedTeam?.logo}
+        teamName={getTeamForPlayer(cardTargetPlayer)?.name || (isAllView ? teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.teamName : activeRosterTeam?.name || selectedTeam?.name)}
+        teamLogo={getTeamForPlayer(cardTargetPlayer)?.logo || teamOfPlayer[getPlayerKey(cardTargetPlayer)]?.logo || activeRosterTeam?.logo || selectedTeam?.logo}
         leagueData={workingLeagueData}
         onClose={closePlayerCard}
       />
