@@ -1,26 +1,18 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
-import { useGame } from "../context/GameContext";
-import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
-import { evaluateTradeTeamImpact } from "../utils/tradeTeamImpact.js";
-import { executeAcceptedTradeOnLeague as executeAcceptedTradeOnLeagueShared } from "../utils/tradeExecution.js";
+import { getLeagueFinancialRules } from "./leagueFinancials.js";
+import { evaluateTradeTeamImpact } from "./tradeTeamImpact.js";
 import {
   buildTradeMachineSwapAssets,
-  canCreateSwapWithPick,
-  getDraftPickConflictKey,
-  getDraftPickEncumbranceReason,
   getTradeablePickOwnedRange,
   makeTradeGeneratedDraftPickId,
   normalizeDraftPickAsset,
   normalizeTeamName,
   protectionDisplayForOwnedRange,
-  removeDirectPickRowsConsumedBySwap,
   validateCustomPickProtection,
-} from "../utils/draftPicks.js";
-import { saveLeagueData } from "../utils/leagueStorage.js";
-import PageFade from "../components/PageFade";
-import "../styles/BMAnimations.css";
-import "../styles/BMPageBackground.css";
+} from "./draftPicks.js";
+
+// Shared trade execution helpers.
+// ProposeTrade and CPU-to-CPU trades can use the same movement, salary, roster,
+// protected-pick, swap, and draft-order ownership logic.
 
 const TRADE_BUILDER_KEY = "bm_trade_builder_v1";
 const TRADE_DEADLINE_STATUS_KEY = "bm_trade_deadline_status_v1";
@@ -657,16 +649,6 @@ function itemKey(item) {
   return `${item.type}:${JSON.stringify(item)}`;
 }
 
-function isSwapTradeItem(item = {}) {
-  if (item?.type !== "pick") return false;
-  const rule = item.tradeRule || item.pick?.tradeRule || {};
-  return String(rule.action || "").toLowerCase() === "swap" || Boolean(rule.swapId);
-}
-
-function stripSwapTradeItems(items = []) {
-  return (items || []).filter((item) => !isSwapTradeItem(item));
-}
-
 function getSideItems(builder, side) {
   return side === "user" ? builder.userItems || [] : builder.cpuItems || [];
 }
@@ -674,53 +656,6 @@ function getSideItems(builder, side) {
 function setSideItems(builder, side, nextItems) {
   if (side === "user") return { ...builder, userItems: nextItems, updatedAt: Date.now() };
   return { ...builder, cpuItems: nextItems, updatedAt: Date.now() };
-}
-
-
-function getTradeItemRound(item = {}) {
-  if (item?.type !== "pick") return 0;
-  const pick = item.pick || item || {};
-  const round = Number(pick.round || pick.rnd || pick.pickRound || 0);
-  if (round === 1 || round === 2) return round;
-  const pickNumber = Number(pick.pickNumber || pick.overallPick || pick.resolvedPickNumber || pick.pick || 0);
-  return pickNumber && pickNumber <= 30 ? 1 : 2;
-}
-
-function getTradeItemYear(item = {}) {
-  const pick = item?.pick || item || {};
-  const year = Number(pick.year || pick.seasonYear || pick.season || 9999);
-  return Number.isFinite(year) ? year : 9999;
-}
-
-function getTradeItemOriginalTeamLabel(item = {}) {
-  const pick = item?.pick || item || {};
-  return String(pick.originalTeam || pick.originalTeamName || pick.team || pick.teamName || item.displayLabel || "");
-}
-
-function sortTradeItemsForDisplay(items = []) {
-  return [...(items || [])].sort((a, b) => {
-    const aIsPlayer = a?.type === "player";
-    const bIsPlayer = b?.type === "player";
-    if (aIsPlayer || bIsPlayer) {
-      if (aIsPlayer && !bIsPlayer) return -1;
-      if (!aIsPlayer && bIsPlayer) return 1;
-      const aOvr = Number(a?.player?.overall ?? a?.player?.ovr ?? 0);
-      const bOvr = Number(b?.player?.overall ?? b?.player?.ovr ?? 0);
-      return bOvr - aOvr || playerNameOf(a?.player).localeCompare(playerNameOf(b?.player));
-    }
-
-    const aRound = getTradeItemRound(a);
-    const bRound = getTradeItemRound(b);
-    const aGroup = aRound === 1 ? 1 : aRound === 2 ? 2 : 3;
-    const bGroup = bRound === 1 ? 1 : bRound === 2 ? 2 : 3;
-
-    return (
-      aGroup - bGroup ||
-      getTradeItemYear(a) - getTradeItemYear(b) ||
-      getTradeItemOriginalTeamLabel(a).localeCompare(getTradeItemOriginalTeamLabel(b)) ||
-      String(a?.displayLabel || "").localeCompare(String(b?.displayLabel || ""))
-    );
-  });
 }
 
 function sideSalary(items, leagueData) {
@@ -1369,25 +1304,6 @@ function transferSwapDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
     return { ok: false, reason: `${toTeamName} no longer owns ${formatPick(swapPick)}.` };
   }
 
-  if (!canCreateSwapWithPick(normalizedSource)) {
-    return { ok: false, reason: `${formatPick(normalizedSource)} cannot be used in a new swap because it is not a full unprotected normal pick.` };
-  }
-  if (!canCreateSwapWithPick(normalizedSwap)) {
-    return { ok: false, reason: `${formatPick(normalizedSwap)} cannot be used in a new swap because it is not a full unprotected normal pick.` };
-  }
-
-  const sourceConflictKey = getDraftPickConflictKey(normalizedSource, nextLeague);
-  const swapConflictKey = getDraftPickConflictKey(normalizedSwap, nextLeague);
-  if (!sourceConflictKey || !swapConflictKey || sourceConflictKey === swapConflictKey) {
-    return { ok: false, reason: "A swap must use two different original picks in the same year and round." };
-  }
-
-  const sourceEncumbrance = getDraftPickEncumbranceReason(normalizedSource, rows, nextLeague);
-  if (sourceEncumbrance) return { ok: false, reason: sourceEncumbrance };
-
-  const swapEncumbrance = getDraftPickEncumbranceReason(normalizedSwap, rows, nextLeague);
-  if (swapEncumbrance) return { ok: false, reason: swapEncumbrance };
-
   const tradeStamp = {
     fromTeam: fromTeamName,
     toTeam: toTeamName,
@@ -1407,15 +1323,9 @@ function transferSwapDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
     tradeStamp,
   });
 
-  const cleanedRows = removeDirectPickRowsConsumedBySwap(rows, normalizedSource, normalizedSwap, nextLeague);
-  rows.splice(0, rows.length, ...cleanedRows);
-
   const existingIds = new Set(rows.map((row) => String(row.id || "")));
   for (const asset of swapAssets) {
-    if (!existingIds.has(String(asset.id || ""))) {
-      rows.push(asset);
-      existingIds.add(String(asset.id || ""));
-    }
+    if (!existingIds.has(String(asset.id || ""))) rows.push(asset);
   }
 
   return {
@@ -1555,11 +1465,6 @@ function transferDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
     };
   }
 
-  const encumbranceReason = getDraftPickEncumbranceReason(normalized, rows, nextLeague, { ignoreAssetIds: [normalized.id] });
-  if (encumbranceReason) {
-    return { ok: false, reason: encumbranceReason };
-  }
-
   if (rule.action === "protected") {
     return transferProtectedDraftPick(nextLeague, fromTeamName, toTeamName, pickItem, index, normalized);
   }
@@ -1651,6 +1556,15 @@ function getUnsupportedRosterTradePlayer(items = []) {
   }) || null;
 }
 
+
+function countTradePlayers(items = []) {
+  return (items || []).filter((item) => item?.type === "player" && item.player).length;
+}
+
+function getStandardRosterCount(team) {
+  return Array.isArray(team?.players) ? team.players.length : 0;
+}
+
 function getProjectedStandardRosterCount(team, outgoingItems = [], incomingItems = []) {
   const current = getStandardRosterCount(team);
   const outgoingPlayers = countTradePlayers(outgoingItems);
@@ -1730,8 +1644,8 @@ function validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, c
     return { ok: false, reason: "Both teams must still exist in the league save." };
   }
 
-  if (!userItems.length && !cpuItems.length) {
-    return { ok: false, reason: "Add at least one trade asset before submitting." };
+  if (!userItems.length || !cpuItems.length) {
+    return { ok: false, reason: "Add at least one asset from each side before submitting." };
   }
 
   const userFinancial = evaluateTradeFinancialLegality({
@@ -1766,6 +1680,181 @@ function clearSavedGameplanForTeam(teamName = "") {
   try {
     localStorage.removeItem(`gameplan_${teamName}`);
   } catch {}
+}
+
+
+function getTradeTimingSnapshot(leagueData = {}) {
+  const date =
+    leagueData?.currentDate ||
+    leagueData?.leagueDate ||
+    leagueData?.today ||
+    leagueData?.date ||
+    leagueData?.calendar?.currentDate ||
+    leagueData?.calendar?.date ||
+    leagueData?.scheduleState?.currentDate ||
+    leagueData?.scheduleState?.date ||
+    leagueData?.seasonState?.currentDate ||
+    leagueData?.seasonState?.date ||
+    "";
+
+  const dayRaw =
+    leagueData?.currentDay ??
+    leagueData?.day ??
+    leagueData?.dayIndex ??
+    leagueData?.calendar?.currentDay ??
+    leagueData?.calendar?.day ??
+    leagueData?.calendar?.dayIndex ??
+    leagueData?.scheduleState?.currentDay ??
+    leagueData?.scheduleState?.day ??
+    leagueData?.scheduleState?.dayIndex ??
+    leagueData?.seasonState?.currentDay ??
+    leagueData?.seasonState?.day ??
+    leagueData?.seasonState?.dayIndex ??
+    null;
+
+  const dayNumber = Number(dayRaw);
+  const day = Number.isFinite(dayNumber) && dayNumber > 0 ? dayNumber : null;
+
+  return {
+    date: typeof date === "string" ? date : "",
+    currentDate: typeof date === "string" ? date : "",
+    day,
+    dayIndex: day,
+  };
+}
+
+function normalizeTradeReasonText(value = "") {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function firstEvaluationReason(evaluation = {}, fallback = "") {
+  const message = normalizeTradeReasonText(evaluation?.message);
+  if (message) return message;
+
+  const reason = Array.isArray(evaluation?.reasons)
+    ? evaluation.reasons.map(normalizeTradeReasonText).find(Boolean)
+    : "";
+  if (reason) return reason;
+
+  return normalizeTradeReasonText(fallback);
+}
+
+function summarizeAssetsForReason(items = []) {
+  const labels = (items || [])
+    .map((item) => {
+      if (item?.type === "player") return playerNameOf(item.player);
+      if (item?.type === "pick") return item.displayLabel || `${formatPick(item.pick)} (${item.protection || item.pick?.protection || "Unprotected"})`;
+      return "";
+    })
+    .filter(Boolean);
+
+  if (!labels.length) return "salary and roster pieces";
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels[0]}, ${labels[1]}, and ${labels.length - 2} more assets`;
+}
+
+function summarizeDetailedTradeItems(items = [], fromTeamName = "", leagueData = {}) {
+  return (items || [])
+    .map((item) => {
+      if (item?.type === "player" && item.player) {
+        const player = item.player || {};
+        return {
+          type: "player",
+          label: playerNameOf(player),
+          playerName: playerNameOf(player),
+          playerId: player?.id ?? player?.playerId ?? null,
+          teamName: fromTeamName,
+          pos: player?.pos || player?.position || "",
+          age: Number.isFinite(Number(player?.age)) ? Number(player.age) : null,
+          overall: Number.isFinite(Number(player?.overall ?? player?.ovr)) ? Number(player?.overall ?? player?.ovr) : null,
+          potential: Number.isFinite(Number(player?.potential ?? player?.pot)) ? Number(player?.potential ?? player?.pot) : null,
+          salary: getPlayerSalary(player, leagueData),
+        };
+      }
+
+      if (item?.type === "pick" && item.pick) {
+        const pick = item.pick || {};
+        const protection = item.protection || pick.displayProtection || pick.protections || pick.protection || "Unprotected";
+        return {
+          type: "pick",
+          label: item.displayLabel || `${formatPick(pick)} (${protection})`,
+          displayLabel: item.displayLabel || `${formatPick(pick)} (${protection})`,
+          pickId: pick?.id || pick?.pickId || null,
+          teamName: fromTeamName,
+          year: pick?.year || pick?.season || pick?.seasonYear || null,
+          round: pick?.round || pick?.rnd || null,
+          originalTeam: pick?.originalTeam || pick?.originalTeamName || pick?.original || pick?.team || "",
+          protection,
+        };
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+}
+
+function buildDefaultTradeReason({ teamName, receivedItems, sentItems, evaluation, cpuSide = false }) {
+  const evaluationReason = cpuSide
+    ? firstEvaluationReason(evaluation, "the incoming package matched its roster value, salary rules, and team direction")
+    : "";
+
+  if (evaluationReason) {
+    return `${teamName} accepted because ${evaluationReason.charAt(0).toLowerCase()}${evaluationReason.slice(1)}`;
+  }
+
+  return `${teamName} accepted the deal to bring in ${summarizeAssetsForReason(receivedItems)} while sending out ${summarizeAssetsForReason(sentItems)}.`;
+}
+
+function buildTradeRecordPackages({ userTeamName, cpuTeamName, userItems, cpuItems, evaluation, leagueData }) {
+  const userReceived = summarizeDetailedTradeItems(cpuItems, cpuTeamName, leagueData);
+  const userSent = summarizeDetailedTradeItems(userItems, userTeamName, leagueData);
+  const cpuReceived = summarizeDetailedTradeItems(userItems, userTeamName, leagueData);
+  const cpuSent = summarizeDetailedTradeItems(cpuItems, cpuTeamName, leagueData);
+
+  const userReason = buildDefaultTradeReason({
+    teamName: userTeamName,
+    receivedItems: cpuItems,
+    sentItems: userItems,
+    evaluation,
+    cpuSide: false,
+  });
+  const cpuReason = buildDefaultTradeReason({
+    teamName: cpuTeamName,
+    receivedItems: userItems,
+    sentItems: cpuItems,
+    evaluation,
+    cpuSide: true,
+  });
+
+  return {
+    userSentAssets: userSent,
+    cpuSentAssets: cpuSent,
+    teamPackages: [
+      {
+        teamName: userTeamName,
+        received: userReceived,
+        sent: userSent,
+        reason: userReason,
+      },
+      {
+        teamName: cpuTeamName,
+        received: cpuReceived,
+        sent: cpuSent,
+        reason: cpuReason,
+      },
+    ],
+    reasoning: {
+      [userTeamName]: userReason,
+      [cpuTeamName]: cpuReason,
+    },
+  };
+}
+
+function reasonFromTeamView(teamName = "", view = {}, fallback = "") {
+  const reason = firstEvaluationReason(view, fallback);
+  if (!reason) return `${teamName} accepted because the value, salary, and roster fit checked out.`;
+  return `${teamName} accepted because ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`;
 }
 
 function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, userItems, cpuItems, evaluation }) {
@@ -1807,18 +1896,40 @@ function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, u
   refreshTeamFinancialSnapshot(nextUserTeam, nextLeague);
   refreshTeamFinancialSnapshot(nextCpuTeam, nextLeague);
 
+  const timing = getTradeTimingSnapshot(leagueData);
+  const packageDetails = buildTradeRecordPackages({
+    userTeamName,
+    cpuTeamName,
+    userItems,
+    cpuItems,
+    evaluation,
+    leagueData: nextLeague,
+  });
+
   const tradeRecord = {
     id: `trade_${Date.now()}`,
     completedAt: new Date().toISOString(),
     seasonYear: getCurrentSeasonYear(nextLeague),
+    date: timing.date,
+    currentDate: timing.currentDate,
+    day: timing.day,
+    dayIndex: timing.dayIndex,
     userTeamName,
     cpuTeamName,
     userSent: summarizeTradeItems(userItems),
     cpuSent: summarizeTradeItems(cpuItems),
+    ...packageDetails,
     movedPlayers,
     movedPicks,
     cpuDecision: evaluation?.decision || "accept",
     cpuScore: Number(evaluation?.score || 0),
+    evaluationSummary: {
+      decision: evaluation?.decision || "accept",
+      accepted: hasAcceptedEvaluation(evaluation),
+      score: Number(evaluation?.score || 0),
+      message: evaluation?.message || "",
+      reasons: Array.isArray(evaluation?.reasons) ? evaluation.reasons.slice(0, 6) : [],
+    },
   };
 
   nextLeague.tradeHistory = [...(Array.isArray(nextLeague.tradeHistory) ? nextLeague.tradeHistory : []), tradeRecord];
@@ -1830,1132 +1941,167 @@ function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, u
   return { ok: true, leagueData: nextLeague, tradeRecord };
 }
 
-function decisionTone(decision) {
-  if (decision === "accept") return "border-emerald-400/30 bg-emerald-500/10 text-emerald-100";
-  return "border-red-400/30 bg-red-500/10 text-red-100";
-}
 
-function RatingRing({ overall, potential, size = 88, style = {}, textTuning = {} }) {
-  const safeOverall = Number(overall || 0);
-  const fillPercent = Math.min(Math.max(safeOverall, 0) / 99, 1);
-  const radius = 34;
-  const strokeWidth = 7;
-  const circumference = 2 * Math.PI * radius;
-  const strokeOffset = circumference * (1 - fillPercent);
-  const ovrLabel = textTuning.ovrLabel || {};
-  const ovrNumber = textTuning.ovrNumber || {};
-  const potLine = textTuning.potLine || {};
 
-  return (
-    <div className="relative flex shrink-0 items-center justify-center" style={{ width: size, height: size, ...style }}>
-      <svg width={size} height={size} viewBox="0 0 88 88">
-        <defs>
-          <linearGradient id="tradeOvrGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#FFA500" />
-            <stop offset="100%" stopColor="#FFD54F" />
-          </linearGradient>
-        </defs>
-        <circle
-          cx="44"
-          cy="44"
-          r={radius}
-          stroke="rgba(255,255,255,0.10)"
-          strokeWidth={strokeWidth}
-          fill="rgba(0,0,0,0.22)"
-        />
-        <circle
-          cx="44"
-          cy="44"
-          r={radius}
-          stroke="url(#tradeOvrGradient)"
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-          fill="none"
-          strokeDasharray={circumference}
-          strokeDashoffset={strokeOffset}
-          transform="rotate(-90 44 44)"
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center text-center leading-none">
-        <div
-          className="font-black uppercase tracking-wide text-neutral-300"
-          style={{
-            fontSize: ovrLabel.size ?? 8,
-            transform: `translate(${ovrLabel.x || 0}px, ${ovrLabel.y || 0}px)`,
-          }}
-        >
-          OVR
-        </div>
-        <div
-          className="mt-0.5 font-black text-orange-400"
-          style={{
-            fontSize: ovrNumber.size ?? 25,
-            transform: `translate(${ovrNumber.x || 0}px, ${ovrNumber.y || 0}px)`,
-          }}
-        >
-          {overall ?? "-"}
-        </div>
-        <div
-          className="mt-0.5 font-black uppercase text-neutral-400"
-          style={{
-            fontSize: potLine.size ?? 7,
-            transform: `translate(${potLine.x || 0}px, ${potLine.y || 0}px)`,
-          }}
-        >
-          POT <span className="text-orange-300">{potential ?? "-"}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
+export function executeCpuTradeCandidateOnLeague({ leagueData, candidate }) {
+  const fromTeamName = candidate?.fromTeamName || candidate?.sellerTeamName || candidate?.teamA || "";
+  const toTeamName = candidate?.toTeamName || candidate?.buyerTeamName || candidate?.teamB || "";
+  const fromItems = Array.isArray(candidate?.fromItems) ? candidate.fromItems : [];
+  const toItems = Array.isArray(candidate?.toItems) ? candidate.toItems : [];
 
-function getTradeItemLogoTuningForTeam(team) {
-  const teamName = team?.name || team?.teamName || "";
-  let override = null;
-
-  if (sameTeamName(teamName, "New Orleans Pelicans")) {
-    override = TRADE_ITEM_BACKGROUND_LOGO_TEAM_OVERRIDES.pelicans;
+  if (!leagueData || !fromTeamName || !toTeamName) {
+    return { ok: false, reason: "CPU trade candidate is missing one or both teams." };
   }
 
-  if (sameTeamName(teamName, "Portland Trail Blazers")) {
-    override = TRADE_ITEM_BACKGROUND_LOGO_TEAM_OVERRIDES.trailBlazers;
+  const fromTeam = findTeamInLeague(leagueData, fromTeamName);
+  const toTeam = findTeamInLeague(leagueData, toTeamName);
+
+  if (!fromTeam || !toTeam) {
+    return { ok: false, reason: "CPU trade candidate referenced a team that no longer exists." };
   }
 
-  return {
-    ...TRADE_ITEM_BACKGROUND_LOGO_TUNING,
-    ...(override || {}),
-  };
-}
-
-function TeamLogoWatermark({ team }) {
-  const logo = teamLogoOf(team);
-  const t = getTradeItemLogoTuningForTeam(team);
-
-  if (!t.enabled || !logo) return null;
-
-  return (
-    <img
-      src={logo}
-      alt=""
-      aria-hidden="true"
-      className="pointer-events-none absolute left-1/2 top-1/2 z-0 object-contain select-none"
-      style={{
-        width: t.size,
-        height: t.size,
-        opacity: t.opacity,
-        mixBlendMode: t.blendMode || "normal",
-        filter: `brightness(${t.brightness || 1}) contrast(${t.contrast || 1}) saturate(${t.saturate || 1}) blur(${t.blur || 0}px)`,
-        transform: `translate(-50%, -50%) translate(${t.x || 0}px, ${t.y || 0}px) rotate(${t.rotate || 0}deg)`,
-      }}
-    />
-  );
-}
-
-function TradeItemCard({ item, team, leagueData, onRemove }) {
-  if (!item) return null;
-
-  if (item.type === "player") {
-    const player = item.player || {};
-    const playerName = playerNameOf(player);
-    const yearsRemaining = getContractYearsRemaining(player, leagueData);
-    const t = TRADE_PLAYER_CARD_TUNING;
-    const nameFontSize = getTradeCardNameFontSize(playerName, t.name.size);
-
-    return (
-      <div
-        className="relative isolate w-full max-w-full overflow-hidden rounded-2xl border border-white/15 bg-black pr-10"
-        style={{ height: t.cardHeight, minWidth: 0, boxSizing: "border-box" }}
-      >
-        <TeamLogoWatermark team={team} />
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove?.();
-          }}
-          className="absolute right-2 top-2 z-20 rounded-full bg-black/70 px-2 py-0.5 text-xs font-black text-neutral-300 hover:bg-red-600 hover:text-white"
-        >
-          ✕
-        </button>
-
-        <div className="relative z-10 flex h-full items-center gap-4">
-          <div
-            className="relative flex h-full shrink-0 items-end justify-center overflow-hidden rounded-l-2xl"
-            style={{ width: t.face.boxWidth }}
-          >
-            {player?.headshot ? (
-              <img
-                src={player.headshot}
-                alt={playerName}
-                className="w-auto object-contain"
-                style={{
-                  height: t.face.imageHeight,
-                  transform: `translate(${t.face.x}px, ${t.face.y}px)`,
-                }}
-              />
-            ) : (
-              <div className="h-full w-full" />
-            )}
-          </div>
-
-          <RatingRing
-            overall={player.overall}
-            potential={player.potential}
-            size={t.ring.size}
-            style={{ transform: `translate(${t.ring.x}px, ${t.ring.y}px)` }}
-            textTuning={t.ringText}
-          />
-
-          <div
-            className="min-w-0 flex-1 overflow-hidden pr-7"
-            style={{
-              width: 0,
-              maxWidth: "100%",
-              transform: `translate(${t.textBlock.x}px, ${t.textBlock.y}px)`,
-            }}
-          >
-            <div
-              className="font-black leading-tight text-white"
-              title={playerName}
-              style={{
-                width: "100%",
-                maxWidth: "100%",
-                minWidth: 0,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                fontSize: nameFontSize,
-                transform: `translate(${t.name.x}px, ${t.name.y}px)`,
-              }}
-            >
-              {playerName}
-            </div>
-            <div
-              className="mt-1 font-black uppercase tracking-[0.18em] text-white"
-              style={{
-                fontSize: t.positionAge.size,
-                transform: `translate(${t.positionAge.x}px, ${t.positionAge.y}px)`,
-              }}
-            >
-              {player.pos || "-"}{player.secondaryPos ? ` / ${player.secondaryPos}` : ""}
-              <span className="mx-2 text-white">•</span>
-              Age {player.age ?? "-"}
-            </div>
-            <div
-              className="mt-1 font-black uppercase tracking-[0.12em] text-white"
-              style={{
-                fontSize: t.contract.size,
-                transform: `translate(${t.contract.x}px, ${t.contract.y}px)`,
-              }}
-            >
-              Contract: <span className="text-white">{formatMoney(getPlayerSalary(player, leagueData))}</span>
-              <span className="mx-2 text-white">•</span>
-              <span className="text-white">
-                {yearsRemaining || "—"} YR{yearsRemaining === 1 ? "" : "S"}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+  if (!fromItems.length || !toItems.length) {
+    return { ok: false, reason: "CPU trade candidate needs assets from both teams." };
   }
 
-  const pickProtection = item.protection || item.pick?.protection || "Unprotected";
-  const pickLabel = item.displayLabel || `${pickProtection} ${formatPick(item.pick)}`;
-  const pickOriginalTeam = getPickOriginalTeamLogoTeam(leagueData, item.pick, team);
-
-  return (
-    <div className="relative isolate h-full overflow-hidden rounded-2xl border border-white/15 bg-black p-4">
-      <TeamLogoWatermark team={pickOriginalTeam} />
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onRemove?.();
-        }}
-        className="absolute right-2 top-2 z-20 rounded-full bg-black/60 px-2 py-0.5 text-xs font-black text-neutral-300 hover:bg-red-600 hover:text-white"
-      >
-        ✕
-      </button>
-      <div className="relative z-10 text-xs font-black uppercase tracking-[0.18em] text-orange-300">Draft Pick</div>
-      <div className="relative z-10 mt-2 pr-8 text-lg font-black text-white">
-        {pickLabel}
-      </div>
-    </div>
-  );
-}
-
-function EmptySlot({ label, onClick }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="h-[126px] w-full rounded-2xl border border-white/15 bg-black p-6 text-left transition hover:border-orange-400/45"
-    >
-      <div className="text-xl font-black text-white">{label}</div>
-      <div className="mt-2 text-sm font-semibold text-neutral-500">Player or Pick</div>
-    </button>
-  );
-}
-
-function AddAssetButton({ onClick, disabled }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="h-[126px] w-full rounded-2xl border border-white/15 bg-black p-6 text-left transition hover:border-orange-400/45 disabled:cursor-not-allowed disabled:opacity-40"
-    >
-      <div className="text-xl font-black text-white">Add Trade Item</div>
-      <div className="mt-2 text-sm font-semibold text-neutral-500">Player or Pick</div>
-    </button>
-  );
-}
-
-
-function countTradePlayers(items = []) {
-  return (items || []).filter((item) => item?.type === "player" && item.player).length;
-}
-
-function getStandardRosterCount(team) {
-  return Array.isArray(team?.players) ? team.players.length : 0;
-}
-
-function TradeFinancialRow({ label, value, tuning }) {
-  const labelT = tuning?.label || {};
-  const valueT = tuning?.value || {};
-
-  return (
-    <div
-      className="grid grid-cols-[1fr_auto] items-center gap-5"
-      style={{ paddingTop: tuning?.rows?.gap ?? 2, paddingBottom: tuning?.rows?.gap ?? 2 }}
-    >
-      <div
-        className="font-black uppercase text-white"
-        style={{
-          fontSize: labelT.size ?? 14,
-          letterSpacing: labelT.letterSpacing ?? "0.08em",
-          transform: `translate(${labelT.x || 0}px, ${labelT.y || 0}px)`,
-        }}
-      >
-        {label}
-      </div>
-      <div
-        className="text-right font-black text-white"
-        style={{
-          fontSize: valueT.size ?? 14,
-          transform: `translate(${valueT.x || 0}px, ${valueT.y || 0}px)`,
-        }}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-
-function buildHardCapIssueDetails({ team, cap, outgoingSalary = 0, incomingSalary = 0, netSalary = 0, playerCount = 0, financialCheck = null }) {
-  if (financialCheck) {
+  const fromRosterProjection = getProjectedStandardRosterCount(fromTeam, fromItems, toItems);
+  const toRosterProjection = getProjectedStandardRosterCount(toTeam, toItems, fromItems);
+  if (fromRosterProjection.projected < 14 || toRosterProjection.projected < 14) {
     return {
-      title: financialCheck.title,
-      message: financialCheck.message,
-      rows: [
-        ...(financialCheck.rows || []),
-        { label: "Projected players", value: playerCount },
-      ],
+      ok: false,
+      reason: "CPU trade rejected because it would leave a team below the 14-player regular-season minimum.",
+      fromRosterProjection,
+      toRosterProjection,
     };
   }
 
-  const teamName = team?.name || team?.teamName || "This team";
-  const projectedPayroll = Number(cap?.payroll || 0);
-  const basePayroll = Number(cap?.basePayroll || 0);
+  const toTeamView = evaluateTradeTeamImpact({
+    leagueData,
+    userTeam: fromTeam,
+    cpuTeam: toTeam,
+    userTeamName: fromTeamName,
+    cpuTeamName: toTeamName,
+    userItems: fromItems,
+    cpuItems: toItems,
+    evaluationMode: "cpu_cpu_trade",
+    cpuTradeRole: "buyer",
+    cpuTradeContext: candidate?.debug || {},
+  });
+
+  if (!hasAcceptedEvaluation(toTeamView)) {
+    return {
+      ok: false,
+      reason: toTeamView?.message || `${toTeamName} rejected the CPU trade candidate.`,
+      toTeamView,
+    };
+  }
+
+  const fromTeamView = evaluateTradeTeamImpact({
+    leagueData,
+    userTeam: toTeam,
+    cpuTeam: fromTeam,
+    userTeamName: toTeamName,
+    cpuTeamName: fromTeamName,
+    userItems: toItems,
+    cpuItems: fromItems,
+    evaluationMode: "cpu_cpu_trade",
+    cpuTradeRole: "seller",
+    cpuTradeContext: candidate?.debug || {},
+  });
+
+  if (!hasAcceptedEvaluation(fromTeamView)) {
+    return {
+      ok: false,
+      reason: fromTeamView?.message || `${fromTeamName} rejected the CPU trade candidate.`,
+      fromTeamView,
+      toTeamView,
+    };
+  }
+
+  const execution = executeAcceptedTradeOnLeague({
+    leagueData,
+    userTeamName: fromTeamName,
+    cpuTeamName: toTeamName,
+    userItems: fromItems,
+    cpuItems: toItems,
+    evaluation: {
+      accepted: true,
+      decision: "accept",
+      score: Number(toTeamView?.score || 0) + Number(fromTeamView?.score || 0),
+      reasons: [
+        candidate?.motive || "CPU-to-CPU trade matched both teams' direction.",
+        ...(Array.isArray(toTeamView?.reasons) ? toTeamView.reasons.slice(0, 2) : []),
+        ...(Array.isArray(fromTeamView?.reasons) ? fromTeamView.reasons.slice(0, 2) : []),
+      ],
+    },
+  });
+
+  if (!execution.ok) {
+    return { ...execution, fromTeamView, toTeamView };
+  }
+
+  const cpuTiming = getTradeTimingSnapshot(leagueData);
+  const buyerReason = reasonFromTeamView(
+    toTeamName,
+    toTeamView,
+    candidate?.motive || `${toTeamName} wanted to add ${summarizeAssetsForReason(fromItems)}.`
+  );
+  const sellerReason = reasonFromTeamView(
+    fromTeamName,
+    fromTeamView,
+    candidate?.motive || `${fromTeamName} wanted to add ${summarizeAssetsForReason(toItems)}.`
+  );
+  const cpuReasoning = {
+    ...((execution.tradeRecord || {}).reasoning || {}),
+    [fromTeamName]: sellerReason,
+    [toTeamName]: buyerReason,
+  };
+
+  const tradeRecord = {
+    ...(execution.tradeRecord || {}),
+    source: "cpu_cpu_trade",
+    cpuCpuTrade: true,
+    fromTeamName,
+    toTeamName,
+    date: candidate?.currentDate || candidate?.date || (execution.tradeRecord || {}).date || cpuTiming.date,
+    currentDate: candidate?.currentDate || candidate?.date || (execution.tradeRecord || {}).currentDate || cpuTiming.currentDate,
+    day: candidate?.day || candidate?.currentDay || candidate?.dayIndex || (execution.tradeRecord || {}).day || cpuTiming.day,
+    dayIndex: candidate?.dayIndex || candidate?.day || candidate?.currentDay || (execution.tradeRecord || {}).dayIndex || cpuTiming.dayIndex,
+    motive: candidate?.motive || "",
+    reasoning: cpuReasoning,
+    teamPackages: Array.isArray((execution.tradeRecord || {}).teamPackages)
+      ? (execution.tradeRecord || {}).teamPackages.map((side) => ({
+          ...side,
+          reason: cpuReasoning[side.teamName] || side.reason,
+        }))
+      : (execution.tradeRecord || {}).teamPackages,
+    fromTeamView,
+    toTeamView,
+  };
 
   return {
-    title: `${teamName} Trade Salary Details`,
-    message: `${teamName}'s projected payroll after this trade is ${formatMoney(projectedPayroll)}.`,
-    rows: [
-      { label: "Current payroll", value: formatMoney(basePayroll) },
-      { label: "Outgoing salary", value: formatMoney(outgoingSalary) },
-      { label: "Incoming salary", value: formatMoney(incomingSalary) },
-      { label: "Net salary change", value: formatMoney(netSalary) },
-      { label: "Projected payroll", value: formatMoney(projectedPayroll) },
-      { label: "Salary cap", value: formatMoney(cap?.salaryCap) },
-      { label: "First apron", value: formatMoney(cap?.firstApron) },
-      { label: "Second apron", value: formatMoney(cap?.secondApron) },
-      { label: "Hard cap", value: formatMoney(cap?.hardCap) },
-      { label: "Projected players", value: playerCount },
-    ],
+    ...execution,
+    leagueData: {
+      ...execution.leagueData,
+      tradeHistory: [
+        ...(Array.isArray(execution.leagueData?.tradeHistory)
+          ? execution.leagueData.tradeHistory.slice(0, -1)
+          : []),
+        tradeRecord,
+      ],
+      lastTrade: tradeRecord,
+    },
+    tradeRecord,
+    fromTeamView,
+    toTeamView,
   };
 }
 
-function TradeFinancialFooter({ team, cap, netSalary, playerCount, hardCapDetails = null, onHardCapDetails = null, financialCheck = null }) {
-  const isFinancialOk = financialCheck ? Boolean(financialCheck.ok) : Number(cap?.hardCapRoom || 0) >= 0;
-  const t = TRADE_FINANCIAL_FOOTER_TUNING;
-
-  return (
-    <div
-      className="border-t border-white/20 bg-black"
-      style={{
-        paddingLeft: t.footer.paddingX,
-        paddingRight: t.footer.paddingX,
-        paddingTop: t.footer.paddingY,
-        paddingBottom: t.footer.paddingY,
-        transform: `translate(${t.footer.x || 0}px, ${t.footer.y || 0}px)`,
-      }}
-    >
-      <div
-        className="grid items-center"
-        style={{
-          gridTemplateColumns: `${t.footer.logoColumnWidth}px 1fr`,
-          columnGap: t.footer.gap,
-        }}
-      >
-        <div className="flex items-center justify-center">
-          {teamLogoOf(team) ? (
-            <img
-              src={teamLogoOf(team)}
-              alt={team?.name || "Team"}
-              className="object-contain"
-              style={{
-                width: t.logo.size,
-                height: t.logo.size,
-                transform: `translate(${t.logo.x || 0}px, ${t.logo.y || 0}px)`,
-              }}
-            />
-          ) : (
-            <div
-              className="border border-white/15 bg-black"
-              style={{
-                width: t.logo.size,
-                height: t.logo.size,
-                transform: `translate(${t.logo.x || 0}px, ${t.logo.y || 0}px)`,
-              }}
-            />
-          )}
-        </div>
-
-        <div
-          className="min-w-0"
-          style={{
-            width: t.rowsBlock.width,
-            transform: `translate(${t.rowsBlock.x || 0}px, ${t.rowsBlock.y || 0}px)`,
-          }}
-        >
-          <div>
-            <TradeFinancialRow label="Salary Cap Room" value={formatMoney(cap.capRoom)} tuning={t} />
-            <TradeFinancialRow label="Hard Cap Room" value={formatMoney(cap.hardCapRoom)} tuning={t} />
-            <TradeFinancialRow label="Net Salary" value={formatMoney(netSalary)} tuning={t} />
-            <TradeFinancialRow label="Players" value={playerCount} tuning={t} />
-          </div>
-
-          <div
-            className={`flex items-center justify-center font-black tracking-wide ${
-              isFinancialOk ? "bg-emerald-500 text-white" : "bg-red-600 text-white"
-            }`}
-            style={{
-              height: t.statusBar.height,
-              marginTop: t.statusBar.marginTop,
-              width: t.statusBar.width,
-              fontSize: t.statusBar.fontSize,
-              transform: `translate(${t.statusBar.x || 0}px, ${t.statusBar.y || 0}px)`,
-            }}
-          >
-            <span
-              className="inline-flex items-center justify-center gap-2"
-              style={{ transform: `translate(${t.statusBar.textX || 0}px, ${t.statusBar.textY || 0}px)` }}
-            >
-              {isFinancialOk ? (
-                "Valid Trade"
-              ) : (
-                <>
-                  {financialCheck?.statusLabel || "Trade Salary Issue"}
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onHardCapDetails?.(hardCapDetails);
-                    }}
-                    className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/80 bg-transparent text-[10px] font-black leading-none text-white transition hover:bg-white hover:text-red-700"
-                    title="Why is this trade salary issue happening?"
-                    aria-label="View trade salary issue details"
-                  >
-                    ?
-                  </button>
-                </>
-              )}
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incomingItems = [], onAdd, onRemove, onHardCapDetails }) {
-  const salaryTotal = sideSalary(items, leagueData);
-  const cap = getTeamCapInfo(team, leagueData, salaryTotal, incomingSalary);
-  const financialCheck = evaluateTradeFinancialLegality({
-    team,
-    leagueData,
-    outgoingSalary: salaryTotal,
-    incomingSalary,
-  });
-  const hasItems = Array.isArray(items) && items.length > 0;
-  const canAddMore = (items || []).length < MAX_SIDE_ITEMS;
-  const netSalary = Number(incomingSalary || 0) - Number(salaryTotal || 0);
-  const playerCount = Math.max(
-    0,
-    getStandardRosterCount(team) - countTradePlayers(items) + countTradePlayers(incomingItems)
-  );
-  const hardCapDetails = buildHardCapIssueDetails({
-    team,
-    cap,
-    outgoingSalary: salaryTotal,
-    incomingSalary,
-    netSalary,
-    playerCount,
-    financialCheck,
-  });
-
-  return (
-    <div className="overflow-hidden rounded-[28px] border border-white/15 bg-black">
-      <div className="border-b border-white/20 bg-black px-5 py-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            {teamLogoOf(team) ? (
-              <img src={teamLogoOf(team)} alt={team?.name} className="h-12 w-12 shrink-0 object-contain" />
-            ) : (
-              <div className="h-12 w-12 rounded-xl bg-white/5" />
-            )}
-            <div className="min-w-0">
-              <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">
-                {side === "user" ? "Your Team" : "CPU Team"}
-              </div>
-              <div className="truncate text-xl font-black text-white">{team?.name || "Select Team"}</div>
-            </div>
-          </div>
-          <div className="rounded-xl border border-orange-400/25 bg-black px-3 py-2 text-right">
-            <div className="text-[10px] font-black uppercase text-orange-200">Incoming</div>
-            <div className="text-sm font-black text-white">{formatMoney(incomingSalary)}</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid min-w-0 gap-3 p-4">
-        {hasItems ? (
-          sortTradeItemsForDisplay(items).map((item) => {
-            const key = itemKey(item);
-            return (
-              <div key={`${side}-${key}`} className="w-full min-w-0 overflow-hidden" style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}>
-                <TradeItemCard
-                  item={item}
-                  team={team}
-                  leagueData={leagueData}
-                  onRemove={() => onRemove(side, key)}
-                />
-              </div>
-            );
-          })
-        ) : (
-          <div className="w-full min-w-0 overflow-hidden" style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}>
-            <EmptySlot label="Add Trade Item" onClick={() => onAdd(side, 0)} />
-          </div>
-        )}
-
-        {hasItems && canAddMore && (
-          <AddAssetButton onClick={() => onAdd(side, items.length)} />
-        )}
-
-        {hasItems && !canAddMore && (
-          <div className="rounded-2xl border border-white/15 bg-black px-5 py-4 text-xs font-bold text-neutral-500">
-            Maximum trade assets added for this side.
-          </div>
-        )}
-      </div>
-
-      <TradeFinancialFooter
-        team={team}
-        cap={cap}
-        netSalary={netSalary}
-        playerCount={playerCount}
-        hardCapDetails={hardCapDetails}
-        onHardCapDetails={onHardCapDetails}
-        financialCheck={financialCheck}
-      />
-    </div>
-  );
-}
-
-export default function ProposeTrade() {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const { leagueData, selectedTeam, setLeagueData } = useGame();
-  const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
-  const userTeamName = selectedTeam?.name || "";
-  const cpuTeamOptions = useMemo(
-    () =>
-      teams
-        .filter((team) => team?.name && team.name !== userTeamName)
-        .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))),
-    [teams, userTeamName]
-  );
-  const firstCpu = cpuTeamOptions[0]?.name || "";
-
-  const [builder, setBuilder] = useState(() => {
-    const saved = safeReadBuilder();
-    return saved || makeEmptyBuilder(userTeamName, firstCpu);
-  });
-  const [slotMenu, setSlotMenu] = useState(null);
-  const [notice, setNotice] = useState("");
-  const [evaluation, setEvaluation] = useState(null);
-  const [isEvaluating, setIsEvaluating] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [deadlineStatus, setDeadlineStatus] = useState(() => readTradeDeadlineStatus());
-  const [hardCapDetailModal, setHardCapDetailModal] = useState(null);
-
-  useEffect(() => {
-    const syncDeadlineStatus = () => setDeadlineStatus(readTradeDeadlineStatus());
-    syncDeadlineStatus();
-
-    window.addEventListener("storage", syncDeadlineStatus);
-    const intervalId = window.setInterval(syncDeadlineStatus, 1500);
-
-    return () => {
-      window.removeEventListener("storage", syncDeadlineStatus);
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
-  const tradeDeadlineLocked = isTradeDeadlineLocked(deadlineStatus);
-  const tradeDeadlineMessage = tradeDeadlineLocked
-    ? "The trade deadline has passed. New trade offers are locked until the offseason."
-    : "";
-
-  const cpuTeamName = builder.cpuTeamName || firstCpu;
-  const userTeam = teams.find((t) => t?.name === userTeamName) || selectedTeam;
-  const cpuTeam = teams.find((t) => t?.name === cpuTeamName) || cpuTeamOptions[0] || null;
-  const userItems = builder.userItems || [];
-  const cpuItems = builder.cpuItems || [];
-  const cameFromTradeFinder = Boolean(
-    builder?.returnToTradeFinder ||
-      builder?.source === "tradeFinder" ||
-      location?.state?.fromTradeFinder
-  );
-  const topBackLabel = cameFromTradeFinder ? "← Trade Finder Results" : "← Trade Center";
-  const topBackPath = cameFromTradeFinder ? "/trade-finder" : "/trades";
-
-  useEffect(() => {
-    if (!userTeamName) return;
-
-    if (builder?.userTeamName && builder.userTeamName !== userTeamName) {
-      setEvaluation(null);
-      setSlotMenu(null);
-      setHardCapDetailModal(null);
-      setNotice("");
-    }
-
-    setBuilder((prev) => {
-      const saved = prev || makeEmptyBuilder(userTeamName, firstCpu);
-      const userTeamChanged = Boolean(saved?.userTeamName && saved.userTeamName !== userTeamName);
-      const cpuTeamStillValid = Boolean(
-        saved?.cpuTeamName &&
-          saved.cpuTeamName !== userTeamName &&
-          cpuTeamOptions.some((team) => team?.name === saved.cpuTeamName)
-      );
-
-      const next = userTeamChanged
-        ? makeEmptyBuilder(userTeamName, firstCpu)
-        : {
-            ...saved,
-            userTeamName,
-            cpuTeamName: cpuTeamStillValid ? saved.cpuTeamName : firstCpu,
-          };
-
-      saveBuilder(next);
-      return next;
-    });
-  }, [userTeamName, firstCpu, cpuTeamOptions]);
-
-  useEffect(() => {
-    saveBuilder(builder);
-  }, [builder]);
-
-  const updateBuilder = (updater) => {
-    setEvaluation(null);
-    setBuilder((prev) => {
-      const next = updater(prev || makeEmptyBuilder(userTeamName, firstCpu));
-      saveBuilder(next);
-      return next;
-    });
-  };
-
-  const handleCpuTeamChange = (name) => {
-    if (tradeDeadlineLocked) {
-      setNotice(tradeDeadlineMessage);
-      return;
-    }
-
-    const swapCount = [...(builder.userItems || []), ...(builder.cpuItems || [])].filter(isSwapTradeItem).length;
-
-    updateBuilder((prev) => {
-      const sameCpuTeam = prev.cpuTeamName === name;
-      return {
-        ...prev,
-        cpuTeamName: name,
-        // Normal players, unprotected picks, and protected picks can stay when
-        // changing the negotiation partner. Pick swaps are different: they are
-        // tied to the exact two teams in the swap pair, so they must be rebuilt.
-        userItems: sameCpuTeam ? prev.userItems : stripSwapTradeItems(prev.userItems || []),
-        cpuItems: sameCpuTeam ? prev.cpuItems : [],
-        updatedAt: Date.now(),
-      };
-    });
-
-    if (swapCount > 0 && builder.cpuTeamName !== name) {
-      setNotice("CPU team changed; old pick swaps were removed because swaps are tied to the exact two teams.");
-    }
-  };
-
-  const removeItem = (side, itemIdentity) => {
-    updateBuilder((prev) => {
-      const items = [...getSideItems(prev, side)];
-      const identityIsIndex = typeof itemIdentity === "number";
-      const removed = identityIsIndex
-        ? items[itemIdentity]
-        : items.find((item) => itemKey(item) === itemIdentity);
-      const nextItems = identityIsIndex
-        ? items.filter((_, index) => index !== itemIdentity)
-        : items.filter((item) => itemKey(item) !== itemIdentity);
-
-      const swapId = removed?.tradeRule?.swapId || removed?.pick?.tradeRule?.swapId || "";
-      let next = setSideItems(prev, side, nextItems);
-      if (swapId) {
-        const otherSide = side === "user" ? "cpu" : "user";
-        const otherItems = getSideItems(next, otherSide).filter(
-          (item) => (item?.tradeRule?.swapId || item?.pick?.tradeRule?.swapId || "") !== swapId
-        );
-        next = setSideItems(next, otherSide, otherItems);
-      }
-      return next;
-    });
-  };
-
-  const openAddMenu = (side, slotIndex) => {
-    if (tradeDeadlineLocked) {
-      setNotice(tradeDeadlineMessage);
-      return;
-    }
-
-    setSlotMenu({ side, slotIndex });
-  };
-
-  const goSelectPlayer = () => {
-    if (tradeDeadlineLocked) {
-      setSlotMenu(null);
-      setNotice(tradeDeadlineMessage);
-      return;
-    }
-
-    if (!slotMenu) return;
-    const teamName = slotMenu.side === "user" ? userTeamName : cpuTeamName;
-    saveBuilder(builder);
-    navigate("/trade-player-select", {
-      state: {
-        tradeSide: slotMenu.side,
-        tradeTeamName: teamName,
-        returnTo: "/propose-trade",
-      },
-    });
-  };
-
-  const goSelectPick = () => {
-    if (tradeDeadlineLocked) {
-      setSlotMenu(null);
-      setNotice(tradeDeadlineMessage);
-      return;
-    }
-
-    if (!slotMenu) return;
-    const teamName = slotMenu.side === "user" ? userTeamName : cpuTeamName;
-    saveBuilder(builder);
-    navigate("/trade-pick-select", {
-      state: {
-        tradeSide: slotMenu.side,
-        tradeTeamName: teamName,
-        returnTo: "/propose-trade",
-      },
-    });
-  };
-
-  const resetProposalSession = (nextCpuTeamName = firstCpu, nextNotice = "") => {
-    const next = makeEmptyBuilder(userTeamName, nextCpuTeamName || firstCpu);
-    setBuilder(next);
-    saveBuilder(next);
-    setEvaluation(null);
-    setSlotMenu(null);
-    setHardCapDetailModal(null);
-    if (nextNotice) setNotice(nextNotice);
-  };
-
-  const clearProposal = () => {
-    const preservedCpuTeamName = cpuTeamName && cpuTeamName !== userTeamName ? cpuTeamName : firstCpu;
-    resetProposalSession(preservedCpuTeamName, "Proposal cleared.");
-  };
-
-  const leaveTradeBuilder = () => {
-    resetProposalSession(firstCpu, "");
-    navigate(topBackPath);
-  };
-
-  const evaluateWithCpu = async () => {
-    if (tradeDeadlineLocked) {
-      setEvaluation(null);
-      setNotice(tradeDeadlineMessage);
-      return;
-    }
-
-    const hasAnyTradeItem = userItems.length > 0 || cpuItems.length > 0;
-
-    if (!hasAnyTradeItem) {
-      setEvaluation(null);
-      setNotice("Add at least one trade item before evaluation.");
-      return;
-    }
-
-    const proposal = buildTradeProposalPayload({
-      userTeamName,
-      cpuTeamName,
-      userTeam,
-      cpuTeam,
-      userItems,
-      cpuItems,
-      leagueData,
-    });
-
-    setIsEvaluating(true);
-    setEvaluation(null);
-    setNotice("CPU front office is reviewing the proposal...");
-
-    try {
-      const result = evaluateTradeTeamImpact({
-        leagueData,
-        userTeam,
-        cpuTeam,
-        userTeamName,
-        cpuTeamName,
-        userItems,
-        cpuItems,
-      });
-      setEvaluation(result);
-      setNotice(result?.message || "CPU evaluation complete.");
-    } catch (error) {
-      setEvaluation(null);
-      setNotice(`CPU evaluation failed: ${error?.message || String(error || "Unknown error")}`);
-    } finally {
-      setIsEvaluating(false);
-    }
-  };
-
-
-  const submitAcceptedTrade = () => {
-    if (tradeDeadlineLocked) {
-      setNotice(tradeDeadlineMessage);
-      return;
-    }
-
-    if (isSubmitting) return;
-
-    const result = executeAcceptedTradeOnLeagueShared({
-      leagueData,
-      userTeamName,
-      cpuTeamName,
-      userItems,
-      cpuItems,
-      evaluation,
-    });
-
-    if (!result.ok) {
-      setNotice(result.reason || "Trade could not be submitted.");
-      return;
-    }
-
-    setIsSubmitting(true);
-
-    try {
-      setLeagueData(result.leagueData);
-      saveLeagueData(result.leagueData).catch((err) => {
-        console.warn("[ProposeTrade] IndexedDB league save failed", err);
-      });
-      try {
-        window.__leagueData = result.leagueData;
-        window.leagueData = result.leagueData;
-        window.__basketballManagerLeagueData = result.leagueData;
-      } catch {}
-
-      const nextBuilder = makeEmptyBuilder(userTeamName, cpuTeamName || firstCpu);
-      setBuilder(nextBuilder);
-      saveBuilder(nextBuilder);
-      setEvaluation(null);
-      setNotice(`Trade completed: ${userTeamName} and ${cpuTeamName} have finalized the deal.`);
-    } catch (error) {
-      setNotice(`Trade save failed: ${error?.message || String(error || "Unknown error")}`);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  if (!selectedTeam || !leagueData) {
-    return (
-      <PageFade>
-        <div className="min-h-screen bmCourtPage text-white flex flex-col items-center justify-center px-4">
-          <p className="mb-4 text-lg font-semibold">No league/team loaded.</p>
-          <button onClick={() => navigate("/team-hub")} className="rounded-xl bg-orange-600 px-6 py-3 font-bold">
-            Team Hub
-          </button>
-        </div>
-      </PageFade>
-    );
-  }
-
-  return (
-    <PageFade>
-      <div className="min-h-screen bmCourtPage text-white px-4 py-8">
-        <div className="mx-auto w-full max-w-7xl">
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
-            <button
-              onClick={leaveTradeBuilder}
-              className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-neutral-200 hover:bg-white/10 hover:text-white"
-            >
-              {topBackLabel}
-            </button>
-
-            <div className="text-center">
-              <div className="text-xs font-black uppercase tracking-[0.24em] text-orange-300">
-                Propose Trades
-              </div>
-              <h1 className="mt-1 text-4xl font-black text-orange-500">Trade Builder</h1>
-            </div>
-
-            <button
-              onClick={clearProposal}
-              className="rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-2 text-sm font-bold text-red-200 hover:bg-red-500/20"
-            >
-              Clear
-            </button>
-          </div>
-
-          <div className="mb-5 grid gap-4 rounded-2xl border border-white/10 bg-black px-5 py-4 xl:grid-cols-[1fr_auto_1fr] xl:items-center">
-            <div className="text-sm font-semibold text-neutral-300">
-              Current Team: <span className="font-black text-white">{userTeamName}</span>
-            </div>
-
-            <div className="flex flex-col gap-3 sm:flex-row xl:justify-center">
-              <button
-                onClick={evaluateWithCpu}
-                disabled={isEvaluating || tradeDeadlineLocked}
-                className="rounded-2xl bg-orange-600 px-8 py-3 text-sm font-black text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isEvaluating ? "Evaluating..." : "Evaluate Trade"}
-              </button>
-              <button
-                onClick={submitAcceptedTrade}
-                disabled={isSubmitting || tradeDeadlineLocked}
-                className="rounded-2xl border border-white/15 bg-black px-8 py-3 text-sm font-black text-neutral-200 transition hover:border-orange-400/35 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isSubmitting ? "Submitting..." : "Submit Proposal"}
-              </button>
-            </div>
-
-            <label className="flex items-center gap-3 text-sm font-bold text-neutral-300 xl:justify-end">
-              CPU Team
-              <select
-                value={cpuTeamName}
-                onChange={(e) => handleCpuTeamChange(e.target.value)}
-                disabled={tradeDeadlineLocked}
-                className="rounded-xl border border-white/10 bg-black px-3 py-2 font-black text-white outline-none disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {cpuTeamOptions.map((team) => (
-                  <option key={team.name} value={team.name}>
-                    {team.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          {tradeDeadlineLocked && (
-            <div className="mb-5 rounded-2xl border border-red-400/30 bg-red-500/10 px-5 py-4 text-sm font-black text-red-100">
-              Trade deadline passed. New trade offers are locked until the offseason.
-            </div>
-          )}
-
-          {(notice || evaluation) && (
-            <div className="mb-5 grid gap-3 xl:grid-cols-[0.9fr_1.1fr]">
-              {notice && (
-                <div className="relative rounded-2xl border border-orange-400/25 bg-orange-500/10 p-3 pr-10 text-xs font-bold text-orange-100">
-                  <button
-                    type="button"
-                    onClick={() => setNotice("")}
-                    className="absolute right-2 top-2 rounded-full bg-black/35 px-2 py-0.5 text-[10px] font-black text-orange-100 transition hover:bg-red-600 hover:text-white"
-                    title="Dismiss message"
-                  >
-                    ✕
-                  </button>
-                  {notice}
-                </div>
-              )}
-
-              {evaluation && (
-                <div className={`relative rounded-2xl border p-3 pr-10 text-left text-xs font-bold ${decisionTone(evaluation.decision)}`}>
-                  <button
-                    type="button"
-                    onClick={() => setEvaluation(null)}
-                    className="absolute right-2 top-2 rounded-full bg-black/35 px-2 py-0.5 text-[10px] font-black text-white/80 transition hover:bg-red-600 hover:text-white"
-                    title="Dismiss CPU decision"
-                  >
-                    ✕
-                  </button>
-                  <div className="flex items-center justify-between gap-3 pr-8">
-                    <span className="text-[10px] font-black uppercase tracking-[0.16em] opacity-70">CPU Decision</span>
-                    <span className="rounded-full bg-black/25 px-2 py-1 text-[10px] font-black uppercase">
-                      Score {Number(evaluation.score || 0).toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="mt-2 text-lg font-black uppercase">
-                    {evaluation.decision || "reject"}
-                  </div>
-
-                  {Array.isArray(evaluation.reasons) && evaluation.reasons.length > 0 && (
-                    <div className="mt-3 space-y-1 opacity-90">
-                      {evaluation.reasons.slice(0, 8).map((reason, index) => (
-                        <div key={`reason-${index}`}>• {reason}</div>
-                      ))}
-                    </div>
-                  )}
-
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="grid gap-5 xl:grid-cols-2">
-            <SidePanel
-              side="user"
-              team={userTeam}
-              items={userItems}
-              leagueData={leagueData}
-              incomingSalary={sideSalary(cpuItems, leagueData)}
-              incomingItems={cpuItems}
-              onAdd={openAddMenu}
-              onRemove={removeItem}
-              onHardCapDetails={setHardCapDetailModal}
-            />
-
-            <SidePanel
-              side="cpu"
-              team={cpuTeam}
-              items={cpuItems}
-              leagueData={leagueData}
-              incomingSalary={sideSalary(userItems, leagueData)}
-              incomingItems={userItems}
-              onAdd={openAddMenu}
-              onRemove={removeItem}
-              onHardCapDetails={setHardCapDetailModal}
-            />
-          </div>
-
-        </div>
-
-        {hardCapDetailModal && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) setHardCapDetailModal(null);
-            }}
-          >
-            <div className="w-full max-w-lg overflow-hidden rounded-[28px] border border-red-400/30 bg-neutral-950 shadow-2xl">
-              <div className="border-b border-red-400/20 bg-gradient-to-r from-red-600/25 to-neutral-900 px-6 py-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-xs font-black uppercase tracking-[0.2em] text-red-200">Hard Cap Details</div>
-                    <div className="mt-1 text-2xl font-black text-white">
-                      {hardCapDetailModal.title || "Trade Salary Issue"}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setHardCapDetailModal(null)}
-                    className="rounded-full bg-black/40 px-3 py-1 text-sm font-black text-white/80 transition hover:bg-red-600 hover:text-white"
-                    title="Close"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-5">
-                <div className="rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-sm font-bold leading-6 text-red-100">
-                  {hardCapDetailModal.message || "This trade does not satisfy the trade salary rules."}
-                </div>
-
-                <div className="mt-4 rounded-2xl border border-white/10 bg-black p-4">
-                  {(hardCapDetailModal.rows || []).map((row, index) => (
-                    <div
-                      key={`${row.label}-${index}`}
-                      className="grid grid-cols-[1fr_auto] gap-4 border-b border-white/10 py-2 text-sm last:border-b-0"
-                    >
-                      <div className="font-black uppercase tracking-[0.12em] text-neutral-400">{row.label}</div>
-                      <div className="font-black text-white">{row.value}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="mt-4 text-xs font-semibold leading-5 text-neutral-400">
-                  Fix it by sending out more salary, taking back less salary, or choosing a different trade package.
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {slotMenu && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) setSlotMenu(null);
-            }}
-          >
-            <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 shadow-2xl">
-              <div className="border-b border-white/10 bg-gradient-to-r from-orange-600/20 to-neutral-900 px-6 py-5">
-                <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Add Trade Item</div>
-                <div className="mt-1 text-2xl font-black text-white">
-                  {slotMenu.side === "user" ? userTeamName : cpuTeamName}
-                </div>
-              </div>
-              <div className="grid gap-3 p-5">
-                <button
-                  onClick={goSelectPlayer}
-                  className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-5 text-left transition hover:border-orange-400/40 hover:bg-orange-500/10"
-                >
-                  <div className="text-lg font-black text-white">Player</div>
-                  <div className="mt-1 text-sm font-semibold text-neutral-500">Open trade player selector for this team.</div>
-                </button>
-                <button
-                  onClick={goSelectPick}
-                  className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-5 text-left transition hover:border-orange-400/40 hover:bg-orange-500/10"
-                >
-                  <div className="text-lg font-black text-white">Pick</div>
-                  <div className="mt-1 text-sm font-semibold text-neutral-500">Open pick selector and choose valid pick rules.</div>
-                </button>
-                <button
-                  onClick={() => setSlotMenu(null)}
-                  className="rounded-2xl border border-white/10 bg-black px-5 py-3 text-sm font-black text-neutral-400 hover:bg-white/10"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </PageFade>
-  );
-}
+export {
+  executeAcceptedTradeOnLeague,
+  validateTradeForExecution,
+  evaluateTradeFinancialLegality,
+  getPlayerSalary,
+  sideSalary,
+  summarizeTradeItems,
+};

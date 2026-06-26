@@ -7,7 +7,16 @@ import {
   computeSeasonAwards,
   computeAllStars,
   repairCpuTeamsToMinRoster,
-} from "@/api/simEnginePy";import { queueSim } from "@/api/simQueue";
+} from "@/api/simEnginePy";
+import { getCpuCpuTradeCandidates } from "../api/cpuTradeEngine.js";
+import { executeCpuTradeCandidateOnLeague } from "../utils/tradeExecution.js";
+import {
+  TRADE_DESK_FEED_KEY,
+  appendTradeDeskEntries,
+  buildCompletedCpuTradeDeskEntry,
+  buildRejectedCpuTradeDeskEntry,
+} from "../utils/tradeDeskFeed.js";
+import { queueSim } from "@/api/simQueue";
 import LZString from "lz-string";
 import { createPortal } from "react-dom";
 import AllStars from "./AllStars";
@@ -2155,7 +2164,7 @@ async function computeAndSaveCalendarAwards({
   playerStats,
   schedule,
   results,
-  staticTeams,
+  activeTeams,
   gamesSimmed,
 }) {
   try {
@@ -2165,7 +2174,7 @@ async function computeAndSaveCalendarAwards({
         : loadPlayerStats();
 
     const defMap = {};
-    for (const t of staticTeams || []) {
+    for (const t of activeTeams || []) {
       const teamName = t?.name || t?.team;
       for (const pl of t?.players || []) {
         const playerName = pl?.name || pl?.player;
@@ -2184,7 +2193,7 @@ async function computeAndSaveCalendarAwards({
       }
     }
 
-    const rookieMetaMap = buildAwardRosterMetaLookup(staticTeams, seasonYear + 1);
+    const rookieMetaMap = buildAwardRosterMetaLookup(activeTeams, seasonYear + 1);
 
     const playersArray = Object.values(currentStats || {}).map((p) => {
       const key = `${p.player}__${p.team}`;
@@ -2199,7 +2208,7 @@ async function computeAndSaveCalendarAwards({
 
     console.log("[Calendar] computing awards from sim-to-date for", playersArray.length, "players");
 
-    const teamsWithWins = buildTeamsWithWinsForAwards(staticTeams, schedule, results);
+    const teamsWithWins = buildTeamsWithWinsForAwards(activeTeams, schedule, results);
 
     const awardsRaw = await computeSeasonAwards(playersArray, {
       seasonYear,
@@ -2539,6 +2548,7 @@ const [allStarPromptOpen, setAllStarPromptOpen] = useState(false);
 const [allStarOpen, setAllStarOpen] = useState(false);
 const [allStarData, setAllStarData] = useState(null);
 const [tradeDeadlinePromptOpen, setTradeDeadlinePromptOpen] = useState(false);
+const [tradeToasts, setTradeToasts] = useState([]);
 
 const ALL_STAR_DATE = fmt(new Date(seasonYear + 1, 1, 13));
 const ALL_STAR_HANDLED_KEY = `bm_all_star_handled_v1_${seasonYear}`;
@@ -2651,6 +2661,29 @@ const requestStop = () => {
   stopRef.current = true;
   setStopRequested(true);
   console.log("[Sim] stop requested");
+};
+
+const handleTradeDeskEntries = (entries = []) => {
+  if (!Array.isArray(entries) || !entries.length) return [];
+  return appendTradeDeskEntries(entries);
+};
+
+const showCpuTradeToast = (entry) => {
+  if (!entry?.headline) return;
+
+  const id = `${entry.id || "trade_toast"}_${Date.now()}`;
+  const toast = {
+    id,
+    label: entry.label || "Trade Alert",
+    headline: entry.headline,
+    tag: entry.tag || "Completed",
+  };
+
+  setTradeToasts((prev) => [...prev.slice(-2), toast]);
+
+  window.setTimeout(() => {
+    setTradeToasts((prev) => prev.filter((row) => row.id !== id));
+  }, 5200);
 };
 
 const openAllStarTeams = async () => {
@@ -2768,11 +2801,239 @@ async function repairCpuRostersBeforeSimulation({
   ensureGameplansForLeague(repairedLeagueData);
 }
 
+
   return {
     repairRes,
     repairedLeagueData,
     repairedTeams,
   };
+}
+
+function getCpuTradePoints(result, side) {
+  if (!result) return NaN;
+  const totals = result.totals || result.score || {};
+  const winner = result.winner || {};
+  const value = side === "home"
+    ? totals.home ?? result.homeScore ?? winner.home
+    : totals.away ?? result.awayScore ?? winner.away;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function buildCpuTradeRecordsByTeam(scheduleSnapshot = {}, resultsSnapshot = {}) {
+  const map = {};
+
+  const ensure = (teamName) => {
+    if (!teamName) return null;
+    if (!map[teamName]) map[teamName] = { wins: 0, losses: 0, games: 0 };
+    return map[teamName];
+  };
+
+  for (const games of Object.values(scheduleSnapshot || {})) {
+    for (const game of games || []) {
+      if (!game?.id) continue;
+      const result = resultsSnapshot?.[game.id];
+      if (!game.played && !result) continue;
+
+      const homePts = getCpuTradePoints(result, "home");
+      const awayPts = getCpuTradePoints(result, "away");
+      if (!Number.isFinite(homePts) || !Number.isFinite(awayPts) || homePts === awayPts) continue;
+
+      const home = ensure(game.home);
+      const away = ensure(game.away);
+      if (!home || !away) continue;
+
+      home.games += 1;
+      away.games += 1;
+      if (homePts > awayPts) {
+        home.wins += 1;
+        away.losses += 1;
+      } else {
+        away.wins += 1;
+        home.losses += 1;
+      }
+    }
+  }
+
+  return map;
+}
+
+function daysBetweenDateStrings(fromDate, toDate) {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return 999;
+  return Math.ceil((to.getTime() - from.getTime()) / 86400000);
+}
+function shouldAskCpuTradeWorkerForDate(currentDate, dayIndex, totalDates, tradeDeadlineDate) {
+  const daysToDeadline = daysBetweenDateStrings(currentDate, tradeDeadlineDate);
+  const idx = Number(dayIndex || 0);
+  if (idx < 12) return false;
+  if (daysToDeadline <= 0) return false;
+
+  // Deadline week used to check every single day with up to 10 candidates.
+  // That created visible calendar pauses while most candidates were rejected.
+  // Keep the market active, but do not hammer the JS validation layer daily.
+  if (daysToDeadline <= 7) {
+    return daysToDeadline === 1 || idx % 2 === 0;
+  }
+
+  const progress = Math.max(0, Math.min(1, idx / Math.max(1, Number(totalDates || 1))));
+  const cadence = progress < 0.30 ? 10 : progress < 0.67 ? 6 : 4;
+  return idx % cadence === 0;
+}
+
+function getCpuTradeMaxCandidatesForDate(currentDate, dayIndex, tradeDeadlineDate) {
+  const daysToDeadline = daysBetweenDateStrings(currentDate, tradeDeadlineDate);
+  if (daysToDeadline <= 7) return 3;
+  if (Number(dayIndex || 0) % 2 === 0) return 2;
+  return 1;
+}
+
+function shouldWriteCpuTradeDeskItems({ candidates = [], tradeDeskItems = [], currentDate, dayIndex, tradeDeadlineDate }) {
+  if (!Array.isArray(tradeDeskItems) || !tradeDeskItems.length) return false;
+  if (Array.isArray(candidates) && candidates.length) return true;
+
+  const daysToDeadline = daysBetweenDateStrings(currentDate, tradeDeadlineDate);
+  const idx = Number(dayIndex || 0);
+
+  // Quiet-day rumor signals should not fill the feed every deadline-week date.
+  if (daysToDeadline <= 7) return idx % 2 === 0;
+  return idx % 12 === 0;
+}
+
+
+async function runCpuCpuTradePassForDate({
+  activeLeagueData,
+  currentDate,
+  dayIndex,
+  totalDates,
+  scheduleSnapshot,
+  resultsSnapshot,
+  selectedTeam,
+  setLeagueData,
+  tradeDeadlineDate,
+  onTradeDeskEntries,
+  onCpuTradeCompleted,
+}) {
+  if (!activeLeagueData || !currentDate || !tradeDeadlineDate) {
+    return { leagueData: activeLeagueData, tradesMade: [] };
+  }
+
+  if (!shouldAskCpuTradeWorkerForDate(currentDate, dayIndex, totalDates, tradeDeadlineDate)) {
+    return { leagueData: activeLeagueData, tradesMade: [] };
+  }
+
+  try {
+    const daysToDeadline = daysBetweenDateStrings(currentDate, tradeDeadlineDate);
+    const maxCandidates = getCpuTradeMaxCandidatesForDate(currentDate, dayIndex, tradeDeadlineDate);
+
+    const response = await getCpuCpuTradeCandidates(activeLeagueData, {
+      currentDate,
+      dayIndex,
+      totalDates,
+      tradeDeadlineDate,
+      daysToDeadline,
+      userTeamName: selectedTeam?.name || "",
+      recordsByTeam: buildCpuTradeRecordsByTeam(scheduleSnapshot, resultsSnapshot),
+      maxCandidates,
+    });
+
+    const candidates = Array.isArray(response?.candidates) ? response.candidates : [];
+    const tradeDeskItems = Array.isArray(response?.tradeDeskItems) ? response.tradeDeskItems : [];
+
+    if (window.__debugCpuTrades) {
+      console.log("[CPU Trades] pass", {
+        currentDate,
+        daysToDeadline,
+        maxCandidates,
+        candidateCount: candidates.length,
+        tradeDeskItemCount: tradeDeskItems.length,
+        skippedReason: response?.skippedReason || null,
+        activityChance: response?.activityChance,
+      });
+    }
+
+    if (
+      tradeDeskItems.length &&
+      typeof onTradeDeskEntries === "function" &&
+      shouldWriteCpuTradeDeskItems({ candidates, tradeDeskItems, currentDate, dayIndex, tradeDeadlineDate })
+    ) {
+      onTradeDeskEntries(tradeDeskItems.slice(0, candidates.length ? 4 : 2));
+    }
+
+    if (!candidates.length) return { leagueData: activeLeagueData, tradesMade: [] };
+
+    let nextLeagueData = activeLeagueData;
+    const tradesMade = [];
+    let rejectedDeskEntries = 0;
+
+    for (const candidate of candidates) {
+      const result = executeCpuTradeCandidateOnLeague({
+        leagueData: nextLeagueData,
+        candidate,
+      });
+
+      if (!result?.ok || !result.leagueData) {
+        if (window.__debugCpuTrades) {
+          console.log("[CPU Trades] candidate rejected", candidate, result);
+        }
+
+        if (rejectedDeskEntries < 1 && typeof onTradeDeskEntries === "function") {
+          const stalledEntry = buildRejectedCpuTradeDeskEntry({
+            candidate,
+            result,
+            currentDate,
+          });
+          if (stalledEntry) {
+            onTradeDeskEntries([stalledEntry]);
+            rejectedDeskEntries += 1;
+          }
+        }
+
+        continue;
+      }
+
+      nextLeagueData = result.leagueData;
+      tradesMade.push(result.tradeRecord);
+
+      const completedEntry = buildCompletedCpuTradeDeskEntry(result.tradeRecord, currentDate);
+      if (completedEntry && typeof onTradeDeskEntries === "function") {
+        onTradeDeskEntries([completedEntry]);
+      }
+      if (completedEntry && typeof onCpuTradeCompleted === "function") {
+        onCpuTradeCompleted(completedEntry, result.tradeRecord);
+      }
+
+      console.log("[CPU Trades] completed", result.tradeRecord);
+
+      // Natural pacing: never more than one CPU-to-CPU trade on a sim date.
+      break;
+    }
+
+    if (!tradesMade.length) return { leagueData: activeLeagueData, tradesMade: [] };
+
+    try {
+      ensureGameplansForLeague(nextLeagueData);
+    } catch (error) {
+      console.warn("[CPU Trades] ensure gameplans failed after trade", error);
+    }
+
+    if (typeof setLeagueData === "function") setLeagueData(nextLeagueData);
+    saveLeagueData(nextLeagueData).catch((error) => {
+      console.warn("[CPU Trades] failed to save CPU trade league data", error);
+    });
+
+    try {
+      window.__leagueData = nextLeagueData;
+      window.leagueData = nextLeagueData;
+      window.__basketballManagerLeagueData = nextLeagueData;
+    } catch {}
+
+    return { leagueData: nextLeagueData, tradesMade };
+  } catch (error) {
+    console.warn("[CPU Trades] pass failed", error);
+    return { leagueData: activeLeagueData, tradesMade: [] };
+  }
 }
 /* -------------------------------------------------------------------------- */
 /*                           SIMULATION HANDLERS                               */
@@ -2906,8 +3167,8 @@ setBoxModal(null);
 
   const sorted = Object.keys(upd).sort((a, b) => new Date(a) - new Date(b));
 
-  const staticLeagueData = repairedLeagueData;
-  const staticTeams = repairedTeams;
+  let activeLeagueData = repairedLeagueData;
+  let activeTeams = repairedTeams;
   let shouldGoToAwards = false;
 
   try {
@@ -2942,6 +3203,24 @@ for (const d of sorted) {
     return;
   }
 
+  const cpuTradePass = await runCpuCpuTradePassForDate({
+    activeLeagueData,
+    currentDate: d,
+    dayIndex: sorted.indexOf(d),
+    totalDates: sorted.length,
+    scheduleSnapshot: upd,
+    resultsSnapshot: newResults,
+    selectedTeam,
+    setLeagueData,
+    tradeDeadlineDate: TRADE_DEADLINE_DATE,
+    onTradeDeskEntries: handleTradeDeskEntries,
+    onCpuTradeCompleted: showCpuTradeToast,
+  });
+  if (cpuTradePass.leagueData !== activeLeagueData) {
+    activeLeagueData = cpuTradePass.leagueData;
+    activeTeams = buildTeamsFromLeagueForSim(activeLeagueData);
+  }
+
   const dayGames = upd[d];
   if (!Array.isArray(dayGames)) continue;
 
@@ -2960,7 +3239,7 @@ for (const d of sorted) {
         }
 
         try {
-          const full = await runGameWithRetries(g, staticLeagueData, staticTeams);
+          const full = await runGameWithRetries(g, activeLeagueData, activeTeams);
 
           // ✅ if user clicked stop while this game was running, bail after it finishes
           if (stopRef.current) break;
@@ -3020,7 +3299,7 @@ const awayRoles = loadTeamRoleMap(g.away);
         playerStats,
         schedule: upd,
         results: newResults,
-        staticTeams,
+        activeTeams: activeTeams,
         gamesSimmed: countCompletedRegularSeasonGames(upd, newResults),
       });
       shouldGoToAwards = true;
@@ -3140,8 +3419,8 @@ setBoxModal(null);
   let upd = structuredClone(scheduleByDate);
   let results = structuredClone(resultsById);
 
-  const staticLeagueData = repairedLeagueData;
-  const staticTeams = repairedTeams;
+  let activeLeagueData = repairedLeagueData;
+  let activeTeams = repairedTeams;
 
   const dates = Object.keys(upd).sort();
   let gamesSimmed = 0;
@@ -3167,6 +3446,24 @@ for (let di = 0; di < dates.length; di++) {
   if (date === ALL_STAR_DATE && !allStarHandledRef.current) {
     pausedForAllStar = true;
     break;
+  }
+
+  const cpuTradePass = await runCpuCpuTradePassForDate({
+    activeLeagueData,
+    currentDate: date,
+    dayIndex: di,
+    totalDates: dates.length,
+    scheduleSnapshot: upd,
+    resultsSnapshot: results,
+    selectedTeam,
+    setLeagueData,
+    tradeDeadlineDate: TRADE_DEADLINE_DATE,
+    onTradeDeskEntries: handleTradeDeskEntries,
+    onCpuTradeCompleted: showCpuTradeToast,
+  });
+  if (cpuTradePass.leagueData !== activeLeagueData) {
+    activeLeagueData = cpuTradePass.leagueData;
+    activeTeams = buildTeamsFromLeagueForSim(activeLeagueData);
   }
 
   const dayGames = upd[date];
@@ -3202,7 +3499,7 @@ for (let di = 0; di < dates.length; di++) {
         }
 
         try {
-          const full = await runGameWithRetries(g, staticLeagueData, staticTeams);
+          const full = await runGameWithRetries(g, activeLeagueData, activeTeams);
           if (!full) continue;
 
           if (stopRef.current) { stopped = true; break; }
@@ -3290,9 +3587,9 @@ if (stopped) {
 
     // 🔥 compute awards from final playerStats
     try {
-      // build def_rating lookup from rosters (staticTeams)
+      // build def_rating lookup from rosters (activeTeams)
 const defMap = {};
-for (const t of staticTeams || []) {
+for (const t of activeTeams || []) {
   const teamName = t?.name || t?.team;
   for (const pl of t?.players || []) {
     const playerName = pl?.name || pl?.player;
@@ -3312,7 +3609,7 @@ for (const t of staticTeams || []) {
 }
 
 // build playersArray WITH def_rating attached (awards.py reads this)
-const rookieMetaMap = buildAwardRosterMetaLookup(staticTeams, seasonYear + 1);
+const rookieMetaMap = buildAwardRosterMetaLookup(activeTeams, seasonYear + 1);
 
 const playersArray = Object.values(playerStats || {}).map((p) => {
   const key = `${p.player}__${p.team}`;
@@ -3335,7 +3632,7 @@ console.log(
 
       console.log("[Calendar] computing awards for", playersArray.length, "players");
 
-const teamsWithWins = buildTeamsWithWinsForAwards(staticTeams, upd, results);
+const teamsWithWins = buildTeamsWithWinsForAwards(activeTeams, upd, results);
 
 console.log("[Calendar] awards teamsWithWins sample:", teamsWithWins.slice(0, 5));
 console.log(
@@ -3412,6 +3709,7 @@ if (
   // keep your player stats wipe
   localStorage.removeItem(PLAYER_STATS_KEY);
   localStorage.removeItem("bm_all_stars_v1");
+  localStorage.removeItem(TRADE_DESK_FEED_KEY);
   localStorage.removeItem(CALENDAR_CURSOR_KEY);
 
   for (let i = localStorage.length - 1; i >= 0; i--) {
@@ -3603,6 +3901,7 @@ function devClearSeasonCheckpointState() {
   localStorage.removeItem("bm_champ_v1");
   localStorage.removeItem("bm_finals_mvp_v1");
   localStorage.removeItem("bm_finals_mvp_seen_v1");
+  localStorage.removeItem(TRADE_DESK_FEED_KEY);
   localStorage.removeItem(TRADE_DEADLINE_STATUS_KEY);
   localStorage.removeItem(TRADE_DEADLINE_HANDLED_KEY);
 
@@ -3694,7 +3993,7 @@ async function handleDevQuickSeasonJump(mode) {
         playerStats,
         schedule: nextSchedule,
         results: nextResults,
-        staticTeams: teams,
+        activeTeams: teams,
         gamesSimmed: gamesCompleted,
       });
       navigate("/awards");
@@ -4662,6 +4961,29 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
     </div>,
     document.body
   )}
+{tradeToasts.length > 0 && (
+  <div className="pointer-events-none fixed bottom-6 right-6 z-[260] flex w-[min(420px,calc(100vw-2rem))] flex-col gap-3">
+    {tradeToasts.map((toast) => (
+      <div
+        key={toast.id}
+        className="rounded-2xl border border-orange-400/35 bg-neutral-950/95 p-4 text-white shadow-[0_18px_55px_rgba(0,0,0,0.45)] backdrop-blur"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-orange-300">
+            Trade Alert
+          </div>
+          <div className="rounded-full border border-white/10 bg-black/35 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-400">
+            {toast.tag}
+          </div>
+        </div>
+        <div className="mt-2 text-sm font-black leading-relaxed text-neutral-100">
+          {toast.headline}
+        </div>
+      </div>
+    ))}
+  </div>
+)}
+
 {tradeDeadlinePromptOpen && (
   <div className="fixed inset-0 z-[233] flex items-center justify-center bg-black/75 p-4">
     <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-orange-400/35 bg-neutral-950 text-white shadow-2xl">
