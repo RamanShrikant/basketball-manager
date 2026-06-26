@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
@@ -378,6 +379,51 @@ function formatPick(asset) {
   return `${asset?.year || "Future"} ${roundLabel(asset?.round)}${numberSuffix}`;
 }
 
+
+function shortRoundLabel(round) {
+  return Number(round) === 1 ? "1st" : "2nd";
+}
+
+function defaultRoundRange(round = 1) {
+  return Number(round || 1) === 2 ? { start: 31, end: 60 } : { start: 1, end: 30 };
+}
+
+function isFullOwnedRangeForPick(asset = {}) {
+  const owned = getTradeablePickOwnedRange(asset);
+  const full = defaultRoundRange(asset?.round || 1);
+  return Number(owned?.start) === Number(full.start) && Number(owned?.end) === Number(full.end);
+}
+
+function buildPickShortName(asset = {}, teamNames = []) {
+  const year = asset?.year || "Future";
+  const teamCode = getTeamCode(asset?.originalTeam || asset?.originalTeamName || "Own", teamNames);
+  return `${year} ${teamCode} ${shortRoundLabel(asset?.round)}`;
+}
+
+function buildAddedProtectionDisplayLabel(asset = {}, validation = {}, teamNames = []) {
+  const conveyed = validation.conveyedRange || null;
+  const conveyText = conveyed ? ` — ${conveyed.start}-${conveyed.end} conveys` : "";
+  return `Add Protection: ${validation.baseProtectionLabel || "Protected"}${conveyText} (${buildPickShortName(asset, teamNames)})`;
+}
+
+function buildFullOwnedPieceDisplayLabel(asset = {}, teamNames = []) {
+  if (isSwapDraftPickAsset(asset)) return buildExistingSwapDisplayLabel(asset, teamNames);
+  const owned = getTradeablePickOwnedRange(asset);
+  const full = defaultRoundRange(asset?.round || 1);
+  const base = getTradePickBaseProtectionLabel(asset) || compactProtectionLabel(asset);
+  const pickName = buildPickShortName(asset, teamNames);
+
+  if (owned && (Number(owned.start) !== Number(full.start) || Number(owned.end) !== Number(full.end))) {
+    return `Range Rights: Owns ${owned.start}-${owned.end} (${pickName})`;
+  }
+
+  if (base && !["Unprotected", "Resolved"].includes(base)) {
+    return `Protected Pick: ${base} (${pickName})`;
+  }
+
+  return undefined;
+}
+
 function isDirectPickOccupiedBySwap(pick = {}, activeSwapKeys = new Set(), leagueData = null) {
   if (!pick || typeof pick !== "object") return false;
   if (isSwapDraftPickAsset(pick) || isResolvedDraftPickAsset(pick)) return false;
@@ -559,9 +605,9 @@ export default function TradePickSelect() {
   const ownedRange = rulePick ? getTradeablePickOwnedRange(rulePick) : null;
   const rulePickEncumbrance = rulePick ? getFastEncumbranceReason(rulePick, activeSwapKeys, leagueData) : "";
   const canProtect = rulePick ? canAddCustomProtectionToPick(rulePick) : false;
-  const canSwap = rulePick ? canCreateSwapWithPick(rulePick) && !rulePickEncumbrance : false;
+  const canSwapBase = rulePick ? canCreateSwapWithPick(rulePick) && !rulePickEncumbrance : false;
   const swapCandidates = useMemo(() => {
-    if (!rulePick || !canCreateSwapWithPick(rulePick) || rulePickEncumbrance || !otherTeamName) return [];
+    if (!rulePick || !canSwapBase || !otherTeamName) return [];
     return otherTeamPicks.filter(
       (pick) =>
         Number(pick.year || 0) === Number(rulePick.year || 0) &&
@@ -570,7 +616,13 @@ export default function TradePickSelect() {
         !isDirectPickOccupiedBySwap(pick, activeSwapKeys, leagueData) &&
         !otherSideAddedPickKeys.has(pickKey(pick))
     );
-  }, [activeSwapKeys, leagueData, otherSideAddedPickKeys, otherTeamName, otherTeamPicks, rulePick, rulePickEncumbrance]);
+  }, [activeSwapKeys, canSwapBase, leagueData, otherSideAddedPickKeys, otherTeamName, otherTeamPicks, rulePick]);
+  const canSwap = canSwapBase && swapCandidates.length > 0;
+  const swapUnavailableReason = rulePickEncumbrance
+    ? rulePickEncumbrance
+    : canSwapBase
+    ? `Unavailable: no valid fully unprotected matching ${rulePick?.year || "future"} ${roundLabel(rulePick?.round)} pick found for ${otherTeamName || "the other team"}.`
+    : "Swaps are only available for fully unprotected normal picks. Protected picks and swap rights cannot be swapped.";
   const selectedSwapPick = swapCandidates.find((pick) => pickKey(pick) === selectedSwapKey) || swapCandidates[0] || null;
 
   const openRuleModal = (pick) => {
@@ -608,6 +660,10 @@ export default function TradePickSelect() {
       return pickKey(swapCandidates[0]);
     });
   }, [rulePickKey, swapCandidates]);
+
+  useEffect(() => {
+    if (ruleMode === "swap" && !canSwap) setRuleMode("full");
+  }, [canSwap, ruleMode]);
 
   const addItemsToBuilder = (primaryItem, mirrorItem = null) => {
     const builder = readBuilder();
@@ -671,6 +727,7 @@ export default function TradePickSelect() {
         teamName: tradeTeamName,
         protection: validation.baseProtectionLabel,
         tradeRule,
+        displayLabel: buildAddedProtectionDisplayLabel(rulePick, validation, teamNames),
         pick: nextPick,
       };
       addItemsToBuilder(nextItem);
@@ -679,7 +736,7 @@ export default function TradePickSelect() {
 
     if (ruleMode === "swap") {
       if (!canSwap) {
-        setRuleError("Swaps are only available for fully unprotected picks.");
+        setRuleError(swapUnavailableReason);
         return;
       }
       if (!selectedSwapPick) {
@@ -750,7 +807,7 @@ export default function TradePickSelect() {
       teamName: tradeTeamName,
       protection: nextPick.protection,
       tradeRule,
-      displayLabel: isSwapDraftPickAsset(rulePick) ? buildExistingSwapDisplayLabel(rulePick, teamNames) : undefined,
+      displayLabel: buildFullOwnedPieceDisplayLabel(rulePick, teamNames),
       pick: nextPick,
     };
     addItemsToBuilder(nextItem);
@@ -885,23 +942,24 @@ export default function TradePickSelect() {
           )}
         </div>
 
-        {rulePick && (
+        {rulePick && typeof document !== "undefined" && createPortal((
           <div
-            className="fixed inset-0 z-[90] flex items-center justify-center overflow-y-auto bg-black/75 px-4 py-8 backdrop-blur-sm"
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
             onMouseDown={(event) => {
               if (event.target === event.currentTarget) setRulePickKey("");
             }}
           >
-            <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 shadow-2xl">
+            <div className="flex max-h-[min(820px,calc(100vh-2rem))] w-full max-w-2xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 shadow-2xl">
               <div className="border-b border-white/10 bg-gradient-to-r from-orange-600/20 to-neutral-900 px-6 py-5">
                 <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Draft Pick Rule</div>
                 <div className="mt-1 text-2xl font-black text-white">{formatPick(rulePick)}</div>
                 <div className="mt-1 text-sm font-bold text-neutral-400">
                   Current: {compactProtectionLabel(rulePick)} • Owns {ownedRange?.start}-{ownedRange?.end}
+                  {!isFullOwnedRangeForPick(rulePick) ? " • Range rights asset" : ""}
                 </div>
               </div>
 
-              <div className="grid gap-4 overflow-y-auto p-5">
+              <div className="grid flex-1 gap-4 overflow-y-auto p-5">
                 <button
                   type="button"
                   onClick={() => setRuleMode("full")}
@@ -909,9 +967,13 @@ export default function TradePickSelect() {
                     ruleMode === "full" ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black hover:border-orange-400/40"
                   }`}
                 >
-                  <div className="text-lg font-black text-white">Trade full owned piece</div>
+                  <div className="text-lg font-black text-white">
+                    {!isFullOwnedRangeForPick(rulePick) ? "Trade range rights" : "Trade full owned piece"}
+                  </div>
                   <div className="mt-1 text-sm font-semibold text-neutral-400">
-                    Sends exactly what this team owns right now. Existing protections stay attached.
+                    {!isFullOwnedRangeForPick(rulePick)
+                      ? `Sends only the owned slots ${ownedRange?.start}-${ownedRange?.end}; the original protection stays attached.`
+                      : "Sends exactly what this team owns right now. Existing protections stay attached."}
                   </div>
                 </button>
 
@@ -970,15 +1032,13 @@ export default function TradePickSelect() {
                   onClick={() => canSwap && setRuleMode("swap")}
                   className={`rounded-2xl border px-5 py-4 text-left transition ${
                     ruleMode === "swap" ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black hover:border-orange-400/40"
-                  } ${!canSwap ? "opacity-45" : ""}`}
+                  } ${!canSwap ? "cursor-not-allowed opacity-45 hover:border-white/10" : ""}`}
                 >
                   <div className="text-lg font-black text-white">Create swap right</div>
                   <div className="mt-1 text-sm font-semibold text-neutral-400">
                     {canSwap
                       ? "Only available when both picks are fully unprotected in the same year and round."
-                      : rulePickEncumbrance
-                      ? rulePickEncumbrance
-                      : "Swaps are only available for fully unprotected normal picks. Protected picks and swap rights cannot be swapped."}
+                      : swapUnavailableReason}
                   </div>
                 </button>
 
@@ -1025,7 +1085,7 @@ export default function TradePickSelect() {
                   </div>
                 ) : null}
 
-                <div className="flex justify-end gap-3 border-t border-white/10 pt-4">
+                <div className="sticky bottom-0 -mx-5 -mb-5 flex justify-end gap-3 border-t border-white/10 bg-neutral-950/95 px-5 py-4 backdrop-blur">
                   <button
                     type="button"
                     onClick={() => setRulePickKey("")}
@@ -1045,7 +1105,7 @@ export default function TradePickSelect() {
               </div>
             </div>
           </div>
-        )}
+        ), document.body)}
       </div>
     </PageFade>
   );

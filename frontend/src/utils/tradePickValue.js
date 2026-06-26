@@ -153,6 +153,82 @@ function getAllTeamsFromLeague(leagueData) {
   return [];
 }
 
+function getTeamByName(leagueData, teamName = "") {
+  const key = normalizeName(teamName);
+  if (!key) return null;
+  return getAllTeamsFromLeague(leagueData).find((team) => sameTeamName(getTeamName(team), teamName)) || null;
+}
+
+function getPlayerIdentity(player = {}) {
+  const id = player?.id ?? player?.playerId ?? player?.player_id ?? player?.uuid ?? null;
+  if (id !== null && id !== undefined && String(id).trim() !== "") return `id:${String(id)}`;
+  return `name:${normalizeName(player?.name || player?.player || "")}`;
+}
+
+function samePlayer(a = {}, b = {}) {
+  const aid = getPlayerIdentity(a);
+  const bid = getPlayerIdentity(b);
+  return Boolean(aid && bid && aid === bid);
+}
+
+function clonePlain(value) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return { ...(value || {}) };
+  }
+}
+
+function getTradePlayers(items = []) {
+  return (items || [])
+    .filter((item) => item?.type === "player" && item.player)
+    .map((item) => item.player);
+}
+
+function buildRosterAfterTrade(team, incomingPlayers = [], outgoingPlayers = [], newTeamName = "") {
+  const roster = (Array.isArray(team?.players) ? team.players : [])
+    .filter((player) => !outgoingPlayers.some((outgoing) => samePlayer(player, outgoing)))
+    .map(clonePlain);
+
+  for (const incoming of incomingPlayers || []) {
+    if (roster.some((row) => samePlayer(row, incoming))) continue;
+    const moved = clonePlain(incoming);
+    if (moved.teamName !== undefined) moved.teamName = newTeamName;
+    if (moved.currentTeam !== undefined) moved.currentTeam = newTeamName;
+    if (typeof moved.team === "string") moved.team = newTeamName;
+    roster.push(moved);
+  }
+
+  return roster;
+}
+
+function buildPostTradePickProjection(leagueData, userItems = [], cpuItems = [], userTeamName = "", cpuTeamName = "") {
+  const userTeam = getTeamByName(leagueData, userTeamName);
+  const cpuTeam = getTeamByName(leagueData, cpuTeamName);
+  const userOutgoingPlayers = getTradePlayers(userItems);
+  const cpuOutgoingPlayers = getTradePlayers(cpuItems);
+
+  if (!userOutgoingPlayers.length && !cpuOutgoingPlayers.length) return null;
+
+  const adjustedRostersByTeam = new Map();
+
+  if (userTeam && userTeamName) {
+    adjustedRostersByTeam.set(
+      normalizeName(userTeamName),
+      buildRosterAfterTrade(userTeam, cpuOutgoingPlayers, userOutgoingPlayers, userTeamName)
+    );
+  }
+
+  if (cpuTeam && cpuTeamName) {
+    adjustedRostersByTeam.set(
+      normalizeName(cpuTeamName),
+      buildRosterAfterTrade(cpuTeam, userOutgoingPlayers, cpuOutgoingPlayers, cpuTeamName)
+    );
+  }
+
+  return adjustedRostersByTeam.size ? { adjustedRostersByTeam } : null;
+}
+
 function parseMaybeCompressed(raw, fallback = null) {
   if (!raw) return fallback;
 
@@ -308,6 +384,12 @@ function getCachedAutoMinutes(teamName, players = []) {
 
 const rankCache = new Map();
 
+function getProjectedPlayersForTeam(team = {}, projection = null) {
+  const key = normalizeName(getTeamName(team));
+  const adjusted = projection?.adjustedRostersByTeam?.get?.(key);
+  return Array.isArray(adjusted) ? adjusted : null;
+}
+
 function calculatePowerOverall(team = {}) {
   const players = Array.isArray(team?.players) ? team.players : [];
   const valid = players.filter((p) => p && (p.name || p.player) && Number.isFinite(Number(p.overall ?? p.ovr)));
@@ -344,10 +426,15 @@ function calculatePot(team = {}) {
   }
 }
 
-function buildPickRankContext(leagueData) {
+function buildPickRankContext(leagueData, projection = null) {
   const teams = getAllTeamsFromLeague(leagueData);
   const signature = teams
-    .map((team) => `${normalizeName(getTeamName(team))}:${rosterRatingSignature(team?.players || [])}`)
+    .map((team) => {
+      const projectedPlayers = getProjectedPlayersForTeam(team, projection);
+      const players = projectedPlayers || team?.players || [];
+      const projectedFlag = projectedPlayers ? "projected" : "live";
+      return `${normalizeName(getTeamName(team))}:${projectedFlag}:${rosterRatingSignature(players)}`;
+    })
     .sort()
     .join("##");
   const cacheKey = `${signature}::${safeLocalStorageGet(RESULT_V3_INDEX_KEY) || ""}::${safeLocalStorageGet(SCHEDULE_KEY) || ""}`;
@@ -356,7 +443,9 @@ function buildPickRankContext(leagueData) {
   const records = buildRecordMap();
   const baseRows = teams.map((team) => {
     const name = getTeamName(team);
-    const ratings = calculatePowerOverall(team);
+    const projectedPlayers = getProjectedPlayersForTeam(team, projection);
+    const ratingTeam = projectedPlayers ? { ...team, players: projectedPlayers } : team;
+    const ratings = calculatePowerOverall(ratingTeam);
     const record = records?.[name] || { w: 0, l: 0, gp: 0, pf: 0, pa: 0 };
     const gp = toNum(record.gp, 0);
     const diff = toNum(record.pf, 0) - toNum(record.pa, 0);
@@ -366,7 +455,8 @@ function buildPickRankContext(leagueData) {
       name,
       exactOverall: ratings.exactOverall,
       offDef: ratings.exactOff + ratings.exactDef,
-      exactPot: calculatePot(team),
+      exactPot: calculatePot(ratingTeam),
+      postTradeProjected: Boolean(projectedPlayers),
       w: toNum(record.w, 0),
       l: toNum(record.l, 0),
       gp,
@@ -412,6 +502,7 @@ function buildPickRankContext(leagueData) {
       powerRank: row.powerRank,
       exactOverall: row.exactOverall,
       useRecordPowerRankings,
+      postTradeProjected: Boolean(row.postTradeProjected),
     });
   }
   for (const row of potRows) {
@@ -420,6 +511,7 @@ function buildPickRankContext(leagueData) {
       ...(byTeam.get(key) || { teamName: row.name }),
       potRank: row.potRank,
       exactPot: row.exactPot,
+      postTradeProjected: Boolean(row.postTradeProjected || byTeam.get(key)?.postTradeProjected),
     });
   }
 
@@ -639,7 +731,18 @@ function distributionExpectedSlotValue({ round, expectedSlot, yearOffset, range 
 }
 
 function getPickValueTuningMultiplier({ round, expectedSlot, yearOffset = 0, rangeIsFull = true, pickNumber = 0 } = {}) {
-  if (Number(round) !== 1) return 1;
+  if (Number(round) === 2) {
+    const slot = clamp(Number(expectedSlot || 45), 31, 60);
+    let bump = 0;
+    if (slot <= 35.5) bump = 0.18;
+    else if (slot <= 40.5) bump = 0.14;
+    else if (slot <= 45.5) bump = 0.10;
+    else if (slot <= 50.5) bump = 0.07;
+    else if (slot <= 55.5) bump = 0.04;
+    else bump = 0.02;
+    if (!rangeIsFull && !pickNumber) bump *= 0.65;
+    return round4(1 + bump);
+  }
 
   const slot = clamp(Number(expectedSlot || 15), 1, 30);
   const offset = clamp(Number(yearOffset || 0), 0, 6);
@@ -743,7 +846,9 @@ function projectSinglePickValue(item = {}, leagueData = {}, context = buildPickR
   const effectiveRangeRatio = pickNumber ? 1 : rangeModel.ratio;
   const effectiveConveyanceChance = pickNumber ? 1 : rangeModel.conveyanceChance;
   const protectionText = String(item.protection || pick.displayProtection || pick.protections || pick.protection || "Unprotected");
-  const rankSource = offset === 0 ? `Power Rank #${powerRank}` : `Power Rank #${powerRank} / POT Rank #${potRank}`;
+  const rankPrefix = teamContext.postTradeProjected ? "post-trade projected Power Rank" : "Power Rank";
+  const potPrefix = teamContext.postTradeProjected ? "post-trade projected POT Rank" : "POT Rank";
+  const rankSource = offset === 0 ? `${rankPrefix} #${powerRank}` : `${rankPrefix} #${powerRank} / ${potPrefix} #${potRank}`;
   const blendLabel = offset === 0 ? "current-year Power Ranking" : `${Math.round(power * 100)}% Power Ranking / ${Math.round(pot * 100)}% POT`;
   const originalLabel = displayTeamName(originalTeam);
   const protectionNote = rangeIsFull
@@ -978,7 +1083,7 @@ function getOutgoingDraftAssetExposureWeight(item = {}) {
   if (Number(item.round) !== 1) {
     // Seconds can clutter packages, but they should not trigger the same future
     // mortgage penalty as real first-round control.
-    return round4(clamp(adjustedValue / 3, 0, 0.2));
+    return round4(clamp(adjustedValue / 5, 0, 0.12));
   }
 
   const isSwapLike = Boolean(item.recipientDirection) || Boolean(item.existingSwapAssetFullValue) || Boolean(item.freeOptionFloorApplied);
@@ -997,49 +1102,103 @@ function getOutgoingDraftAssetExposureWeight(item = {}) {
   return round4(clamp(weight, 0, 1));
 }
 
+function getIncomingFirstBridgeWeight(item = {}) {
+  if (Number(item.round) !== 1) return 0;
+
+  const adjustedValue = Math.max(0, Number(item.adjustedValue || 0));
+  if (adjustedValue <= TRADE_PICK_EPS) return 0;
+
+  const slot = clamp(Number(item.expectedSlot || 16), 1, 30);
+  const conveyance = Number.isFinite(Number(item.conveyanceChance))
+    ? clamp(Number(item.conveyanceChance), 0, 1)
+    : 1;
+  const rangeRatio = Number.isFinite(Number(item.rangeRatio))
+    ? clamp(Number(item.rangeRatio), 0, 1)
+    : conveyance;
+
+  // Bridge credit should follow the actual strength of the first, not just the
+  // word "1st" on the asset card. This prevents packages of nearly impossible
+  // protections (ex: top-29 protected firsts) from exploiting the multi-first
+  // bridge while keeping premium unprotected firsts powerful.
+  const valueWeight = clamp(adjustedValue / 4.8, 0, 1.15);
+  const slotWeight = clamp((31 - slot) / 30, 0.05, 1);
+  const protectionWeight = clamp(conveyance * (0.25 + rangeRatio * 0.75), 0, 1);
+
+  const isSwapLike = Boolean(item.recipientDirection) || Boolean(item.existingSwapAssetFullValue) || Boolean(item.freeOptionFloorApplied);
+  const swapWeight = item.freeOptionFloorApplied ? 0.10 : isSwapLike ? 0.78 : 1;
+  const nearTermWeight = clamp(1 - Number(item.yearOffset || 0) * 0.035, 0.78, 1);
+
+  return round4(clamp(Math.max(valueWeight, slotWeight * 0.72) * protectionWeight * swapWeight * nearTermWeight, 0, 1.15));
+}
+
 function calculateIncomingDraftPackageBridge(incoming = []) {
-  const firsts = (incoming || []).filter(
-    (item) => Number(item.round) === 1 && Math.abs(Number(item.adjustedValue || 0)) > TRADE_PICK_EPS
+  const firsts = (incoming || [])
+    .filter((item) => Number(item.round) === 1 && Math.abs(Number(item.adjustedValue || 0)) > TRADE_PICK_EPS)
+    .map((item) => ({ ...item, bridgeWeight: getIncomingFirstBridgeWeight(item) }));
+  const seconds = (incoming || []).filter(
+    (item) => Number(item.round) === 2 && Math.abs(Number(item.adjustedValue || 0)) > TRADE_PICK_EPS
   );
   const firstAssetCount = firsts.length;
+  const firstEquivalentCount = round4(firsts.reduce((sum, item) => sum + Number(item.bridgeWeight || 0), 0));
+  const bridgeableFirstCount = firsts.filter((item) => Number(item.bridgeWeight || 0) >= 0.18).length;
+  const secondAssetCount = seconds.length;
+  const totalSecondValue = seconds.reduce((sum, item) => sum + Math.max(0, Number(item.adjustedValue || 0)), 0);
 
-  if (firstAssetCount <= 1) {
-    return { bonus: 0, firstAssetCount, premiumScore: 0, averageFirstValue: 0 };
+  let firstBonus = 0;
+  let premiumScore = 0;
+  let averageFirstValue = 0;
+
+  if (firstEquivalentCount > 1.15 && bridgeableFirstCount > 1) {
+    const totalFirstValue = firsts.reduce((sum, item) => sum + Math.max(0, Number(item.adjustedValue || 0)), 0);
+    averageFirstValue = totalFirstValue / Math.max(1, firstAssetCount);
+
+    // Star trades are not just the raw sum of unrelated picks. The bridge now
+    // uses first-round-equivalent weight instead of raw count, so a pile of weak
+    // or heavily protected firsts cannot act like a serious premium package.
+    const packageSizeBonus = Math.pow(Math.max(0, firstEquivalentCount - 1), 1.34) * 1.18;
+    premiumScore = firsts.reduce((sum, item) => {
+      const v = Math.max(0, Number(item.adjustedValue || 0));
+      const slot = Number(item.expectedSlot || 16);
+      const yearOffset = Number(item.yearOffset || 0);
+      const conveyance = Number.isFinite(Number(item.conveyanceChance)) ? Number(item.conveyanceChance) : 1;
+      const rangeRatio = Number.isFinite(Number(item.rangeRatio)) ? Number(item.rangeRatio) : conveyance;
+      const protectionFactor = clamp(conveyance * (0.30 + rangeRatio * 0.70), 0, 1);
+      const premiumByValue = clamp((v - 2.85) / 5.1, 0, 1);
+      const premiumBySlot = clamp((19 - slot) / 18, 0, 1);
+      const nearTermFactor = clamp(1 - yearOffset * 0.045, 0.78, 1);
+      const bridgeWeight = clamp(Number(item.bridgeWeight || 0), 0, 1.15);
+      return sum + Math.max(premiumByValue, premiumBySlot * 0.9) * protectionFactor * nearTermFactor * bridgeWeight;
+    }, 0);
+
+    // Real multi-first packages still get a meaningful bridge. Weak/protected
+    // packages get mostly their base value and little extra bridge pressure.
+    const premiumBonus = premiumScore * 1.32;
+    const rawFirstBonus = packageSizeBonus + premiumBonus;
+    const firstCap = 3.9 + firstEquivalentCount * 1.55;
+    firstBonus = clamp(rawFirstBonus, 0, firstCap);
   }
 
-  const totalFirstValue = firsts.reduce((sum, item) => sum + Math.max(0, Number(item.adjustedValue || 0)), 0);
-  const averageFirstValue = totalFirstValue / Math.max(1, firstAssetCount);
-
-  // Star trades are not just the raw sum of unrelated picks. When a CPU receives
-  // multiple firsts at once, that package should be treated as a serious rebuild
-  // bridge. This stays math-based and capped: one pick is normal, 2 picks get a
-  // small package lift, 3-5 picks can bridge star value, and weak/late picks get
-  // much less lift than premium bad-team picks.
-  const packageSizeBonus = Math.pow(firstAssetCount - 1, 1.34) * 1.18;
-  const premiumScore = firsts.reduce((sum, item) => {
-    const v = Math.max(0, Number(item.adjustedValue || 0));
-    const slot = Number(item.expectedSlot || 16);
-    const yearOffset = Number(item.yearOffset || 0);
-    const conveyance = Number.isFinite(Number(item.conveyanceChance)) ? Number(item.conveyanceChance) : 1;
-    const protectionFactor = clamp(0.58 + conveyance * 0.42, 0.58, 1);
-    const premiumByValue = clamp((v - 2.85) / 5.1, 0, 1);
-    const premiumBySlot = clamp((19 - slot) / 18, 0, 1);
-    const nearTermFactor = clamp(1 - yearOffset * 0.045, 0.78, 1);
-    return sum + Math.max(premiumByValue, premiumBySlot * 0.9) * protectionFactor * nearTermFactor;
-  }, 0);
-
-  // This bridge is the main star-trade pressure valve. It makes 2-4 real firsts
-  // feel like a meaningful package without changing one-pick role-player deals.
-  // It is still capped, so Giannis/franchise-player trades can require monster
-  // packages and late/weak firsts do not become automatic cheat codes.
-  const premiumBonus = premiumScore * 1.32;
-  const rawBonus = packageSizeBonus + premiumBonus;
-  const cap = 3.9 + firstAssetCount * 1.55;
-  const bonus = round4(clamp(rawBonus, 0, cap));
+  // Seconds should help like sweeteners, not like star-trade currency. A pile of
+  // good seconds can matter slightly, and seconds can support a first-round
+  // package, but the cap is intentionally tiny.
+  const secondQuality = clamp(totalSecondValue / 1.75, 0, 1);
+  const secondOnlyBridge = secondAssetCount >= 3
+    ? clamp((secondAssetCount - 2) * 0.075 + secondQuality * 0.18, 0, 0.45)
+    : 0;
+  const secondWithFirstBridge = firstEquivalentCount > 0.65 && secondAssetCount > 0
+    ? clamp(totalSecondValue * 0.07 + Math.max(0, secondAssetCount - 1) * 0.03, 0, 0.30)
+    : 0;
+  const secondBridge = firstEquivalentCount > 0.65 ? secondWithFirstBridge : secondOnlyBridge;
+  const bonus = round4(firstBonus + secondBridge);
 
   return {
     bonus,
+    firstBonus: round4(firstBonus),
+    secondBridge: round4(secondBridge),
     firstAssetCount,
+    firstEquivalentCount,
+    bridgeableFirstCount,
+    secondAssetCount,
     premiumScore: round4(premiumScore),
     averageFirstValue: round4(averageFirstValue),
   };
@@ -1048,9 +1207,15 @@ function calculateIncomingDraftPackageBridge(incoming = []) {
 function calculateOutgoingDraftCapitalExposurePenalty(outgoing = []) {
   const exposure = round4((outgoing || []).reduce((sum, item) => sum + getOutgoingDraftAssetExposureWeight(item), 0));
   const firstAssetCount = (outgoing || []).filter((item) => Number(item.round) === 1 && Math.abs(Number(item.adjustedValue || 0)) > TRADE_PICK_EPS).length;
+  const seconds = (outgoing || []).filter((item) => Number(item.round) === 2 && Math.abs(Number(item.adjustedValue || 0)) > TRADE_PICK_EPS);
+  const secondAssetCount = seconds.length;
+  const secondValue = seconds.reduce((sum, item) => sum + Math.abs(Number(item.adjustedValue || item.value || 0)), 0);
+  const secondPenalty = secondAssetCount >= 4
+    ? round4(clamp((secondAssetCount - 3) * 0.075 + secondValue * 0.055, 0, 0.65))
+    : 0;
 
-  if (exposure <= 1.1) {
-    return { penalty: 0, exposure, firstAssetCount, curvePenalty: 0, stackPenalty: 0 };
+  if (exposure <= 1.1 && secondPenalty <= TRADE_PICK_EPS) {
+    return { penalty: 0, exposure, firstAssetCount, secondAssetCount, curvePenalty: 0, stackPenalty: 0, secondPenalty: 0 };
   }
 
   // This is intentionally separate from base pick value. It represents the CPU's
@@ -1061,24 +1226,27 @@ function calculateOutgoingDraftCapitalExposurePenalty(outgoing = []) {
   // 5+ first packages almost impossible even when the base player/team score was
   // already huge. This version still makes the 3rd, 4th, 5th, etc. pick more
   // expensive, but each added pick increases the cost gradually instead of
-  // creating an artificial cliff.
+  // creating an artificial cliff. Seconds add only a tiny capped penalty.
   const exposureOverBase = Math.max(0, exposure - 1.1);
   const curvePenalty = Math.pow(exposureOverBase, 1.35) * 2.6;
   const stackPenalty = firstAssetCount >= 3
     ? (firstAssetCount - 2) * 2.1 + Math.max(0, firstAssetCount - 4) * 1.8
     : 0;
-  const penalty = round4(curvePenalty + stackPenalty);
+  const penalty = round4(curvePenalty + stackPenalty + secondPenalty);
   return {
     penalty,
     exposure,
     firstAssetCount,
+    secondAssetCount,
     curvePenalty: round4(curvePenalty),
     stackPenalty: round4(stackPenalty),
+    secondPenalty,
   };
 }
 
 export function evaluateTradePickImpact({ leagueData, userItems = [], cpuItems = [], userTeamName = "", cpuTeamName = "" } = {}) {
-  const context = buildPickRankContext(leagueData);
+  const projection = buildPostTradePickProjection(leagueData, userItems, cpuItems, userTeamName, cpuTeamName);
+  const context = buildPickRankContext(leagueData, projection);
   const incomingItems = getPrimaryTradePickItems(userItems);
   const outgoingItems = getPrimaryTradePickItems(cpuItems);
   const invalidSwapItems = [...incomingItems, ...outgoingItems].filter(
@@ -1101,14 +1269,22 @@ export function evaluateTradePickImpact({ leagueData, userItems = [], cpuItems =
   if (incoming.length || outgoing.length) {
     reasons.push(`CPU draft-pick direction multiplier: ${directionMultiplier.toFixed(3)} (${displayTeamName(cpuTeamName)} values picks ${directionMultiplier >= 1 ? "more" : "less"} based on current Power Rank).`);
   }
-  if (incomingPackageBridge.bonus > TRADE_PICK_EPS) {
-    reasons.push(`CPU multi-first package bridge: +${incomingPackageBridge.bonus.toFixed(3)} because ${displayTeamName(cpuTeamName)} is receiving ${incomingPackageBridge.firstAssetCount} first-round assets as one serious draft-capital package.`);
+  if (incomingPackageBridge.firstBonus > TRADE_PICK_EPS) {
+    const equivalentText = Number(incomingPackageBridge.firstEquivalentCount || 0).toFixed(2);
+    reasons.push(`CPU multi-first package bridge: +${incomingPackageBridge.firstBonus.toFixed(3)} because ${displayTeamName(cpuTeamName)} is receiving ${incomingPackageBridge.firstAssetCount} first-round assets worth about ${equivalentText} first-round-equivalent assets after protections, swap limits, slot quality, and timing.`);
+  }
+  if (incomingPackageBridge.secondBridge > TRADE_PICK_EPS) {
+    const label = incomingPackageBridge.firstAssetCount > 0 ? "second-round sweetener support" : "multi-second sweetener bridge";
+    reasons.push(`CPU ${label}: +${incomingPackageBridge.secondBridge.toFixed(3)} because ${displayTeamName(cpuTeamName)} is receiving ${incomingPackageBridge.secondAssetCount} second-round assets.`);
   }
   if (outgoingExposurePenalty.penalty > TRADE_PICK_EPS) {
     const stackText = outgoingExposurePenalty.stackPenalty > TRADE_PICK_EPS
       ? `, including a ${outgoingExposurePenalty.stackPenalty.toFixed(3)} stacked-firsts penalty`
       : "";
-    reasons.push(`CPU future-pick exposure penalty: -${outgoingExposurePenalty.penalty.toFixed(3)} because ${displayTeamName(cpuTeamName)} is sending about ${outgoingExposurePenalty.exposure.toFixed(2)} first-round-equivalent draft assets in one deal${stackText}.`);
+    const secondText = outgoingExposurePenalty.secondPenalty > TRADE_PICK_EPS
+      ? ` and a ${outgoingExposurePenalty.secondPenalty.toFixed(3)} second-round clutter penalty`
+      : "";
+    reasons.push(`CPU future-pick exposure penalty: -${outgoingExposurePenalty.penalty.toFixed(3)} because ${displayTeamName(cpuTeamName)} is sending about ${outgoingExposurePenalty.exposure.toFixed(2)} first-round-equivalent draft assets in one deal${stackText}${secondText}.`);
   }
   if (incoming.length) {
     const top = [...incoming].sort((a, b) => Math.abs(b.adjustedValue) - Math.abs(a.adjustedValue)).slice(0, 3);
@@ -1130,12 +1306,18 @@ export function evaluateTradePickImpact({ leagueData, userItems = [], cpuItems =
     netPickScore,
     incomingValue,
     incomingBaseValue,
-    incomingMultiFirstPackageBridge: round4(incomingPackageBridge.bonus || 0),
+    incomingMultiFirstPackageBridge: round4(incomingPackageBridge.firstBonus || 0),
+    incomingSecondRoundBridge: round4(incomingPackageBridge.secondBridge || 0),
     incomingFirstAssetCount: incomingPackageBridge.firstAssetCount || 0,
+    incomingFirstEquivalentCount: round4(incomingPackageBridge.firstEquivalentCount || 0),
+    incomingBridgeableFirstCount: incomingPackageBridge.bridgeableFirstCount || 0,
+    incomingSecondAssetCount: incomingPackageBridge.secondAssetCount || 0,
     outgoingValue,
     outgoingBaseValue,
     outgoingFuturePickExposurePenalty: round4(outgoingExposurePenalty.penalty || 0),
+    outgoingSecondRoundExposurePenalty: round4(outgoingExposurePenalty.secondPenalty || 0),
     outgoingFirstRoundExposure: round4(outgoingExposurePenalty.exposure || 0),
+    outgoingSecondAssetCount: outgoingExposurePenalty.secondAssetCount || 0,
     incoming,
     outgoing,
     reasons,

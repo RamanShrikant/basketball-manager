@@ -675,6 +675,53 @@ function setSideItems(builder, side, nextItems) {
   return { ...builder, cpuItems: nextItems, updatedAt: Date.now() };
 }
 
+
+function getTradeItemRound(item = {}) {
+  if (item?.type !== "pick") return 0;
+  const pick = item.pick || item || {};
+  const round = Number(pick.round || pick.rnd || pick.pickRound || 0);
+  if (round === 1 || round === 2) return round;
+  const pickNumber = Number(pick.pickNumber || pick.overallPick || pick.resolvedPickNumber || pick.pick || 0);
+  return pickNumber && pickNumber <= 30 ? 1 : 2;
+}
+
+function getTradeItemYear(item = {}) {
+  const pick = item?.pick || item || {};
+  const year = Number(pick.year || pick.seasonYear || pick.season || 9999);
+  return Number.isFinite(year) ? year : 9999;
+}
+
+function getTradeItemOriginalTeamLabel(item = {}) {
+  const pick = item?.pick || item || {};
+  return String(pick.originalTeam || pick.originalTeamName || pick.team || pick.teamName || item.displayLabel || "");
+}
+
+function sortTradeItemsForDisplay(items = []) {
+  return [...(items || [])].sort((a, b) => {
+    const aIsPlayer = a?.type === "player";
+    const bIsPlayer = b?.type === "player";
+    if (aIsPlayer || bIsPlayer) {
+      if (aIsPlayer && !bIsPlayer) return -1;
+      if (!aIsPlayer && bIsPlayer) return 1;
+      const aOvr = Number(a?.player?.overall ?? a?.player?.ovr ?? 0);
+      const bOvr = Number(b?.player?.overall ?? b?.player?.ovr ?? 0);
+      return bOvr - aOvr || playerNameOf(a?.player).localeCompare(playerNameOf(b?.player));
+    }
+
+    const aRound = getTradeItemRound(a);
+    const bRound = getTradeItemRound(b);
+    const aGroup = aRound === 1 ? 1 : aRound === 2 ? 2 : 3;
+    const bGroup = bRound === 1 ? 1 : bRound === 2 ? 2 : 3;
+
+    return (
+      aGroup - bGroup ||
+      getTradeItemYear(a) - getTradeItemYear(b) ||
+      getTradeItemOriginalTeamLabel(a).localeCompare(getTradeItemOriginalTeamLabel(b)) ||
+      String(a?.displayLabel || "").localeCompare(String(b?.displayLabel || ""))
+    );
+  });
+}
+
 function sideSalary(items, leagueData) {
   return (items || []).reduce((sum, item) => {
     if (item?.type !== "player") return sum;
@@ -2293,16 +2340,19 @@ function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incoming
 
       <div className="grid min-w-0 gap-3 p-4">
         {hasItems ? (
-          items.map((item, index) => (
-            <div key={`${side}-${itemKey(item)}-${index}`} className="w-full min-w-0 overflow-hidden" style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}>
-              <TradeItemCard
-                item={item}
-                team={team}
-                leagueData={leagueData}
-                onRemove={() => onRemove(side, index)}
-              />
-            </div>
-          ))
+          sortTradeItemsForDisplay(items).map((item) => {
+            const key = itemKey(item);
+            return (
+              <div key={`${side}-${key}`} className="w-full min-w-0 overflow-hidden" style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}>
+                <TradeItemCard
+                  item={item}
+                  team={team}
+                  leagueData={leagueData}
+                  onRemove={() => onRemove(side, key)}
+                />
+              </div>
+            );
+          })
         ) : (
           <div className="w-full min-w-0 overflow-hidden" style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}>
             <EmptySlot label="Add Trade Item" onClick={() => onAdd(side, 0)} />
@@ -2339,7 +2389,14 @@ export default function ProposeTrade() {
   const { leagueData, selectedTeam, setLeagueData } = useGame();
   const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
   const userTeamName = selectedTeam?.name || "";
-  const firstCpu = teams.find((t) => t?.name && t.name !== userTeamName)?.name || "";
+  const cpuTeamOptions = useMemo(
+    () =>
+      teams
+        .filter((team) => team?.name && team.name !== userTeamName)
+        .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))),
+    [teams, userTeamName]
+  );
+  const firstCpu = cpuTeamOptions[0]?.name || "";
 
   const [builder, setBuilder] = useState(() => {
     const saved = safeReadBuilder();
@@ -2373,7 +2430,7 @@ export default function ProposeTrade() {
 
   const cpuTeamName = builder.cpuTeamName || firstCpu;
   const userTeam = teams.find((t) => t?.name === userTeamName) || selectedTeam;
-  const cpuTeam = teams.find((t) => t?.name === cpuTeamName) || teams.find((t) => t?.name !== userTeamName) || null;
+  const cpuTeam = teams.find((t) => t?.name === cpuTeamName) || cpuTeamOptions[0] || null;
   const userItems = builder.userItems || [];
   const cpuItems = builder.cpuItems || [];
   const cameFromTradeFinder = Boolean(
@@ -2400,7 +2457,7 @@ export default function ProposeTrade() {
       const cpuTeamStillValid = Boolean(
         saved?.cpuTeamName &&
           saved.cpuTeamName !== userTeamName &&
-          teams.some((team) => team?.name === saved.cpuTeamName)
+          cpuTeamOptions.some((team) => team?.name === saved.cpuTeamName)
       );
 
       const next = userTeamChanged
@@ -2414,7 +2471,7 @@ export default function ProposeTrade() {
       saveBuilder(next);
       return next;
     });
-  }, [userTeamName, firstCpu, teams]);
+  }, [userTeamName, firstCpu, cpuTeamOptions]);
 
   useEffect(() => {
     saveBuilder(builder);
@@ -2456,14 +2513,19 @@ export default function ProposeTrade() {
     }
   };
 
-  const removeItem = (side, index) => {
+  const removeItem = (side, itemIdentity) => {
     updateBuilder((prev) => {
       const items = [...getSideItems(prev, side)];
-      const removed = items[index];
-      items.splice(index, 1);
+      const identityIsIndex = typeof itemIdentity === "number";
+      const removed = identityIsIndex
+        ? items[itemIdentity]
+        : items.find((item) => itemKey(item) === itemIdentity);
+      const nextItems = identityIsIndex
+        ? items.filter((_, index) => index !== itemIdentity)
+        : items.filter((item) => itemKey(item) !== itemIdentity);
 
       const swapId = removed?.tradeRule?.swapId || removed?.pick?.tradeRule?.swapId || "";
-      let next = setSideItems(prev, side, items);
+      let next = setSideItems(prev, side, nextItems);
       if (swapId) {
         const otherSide = side === "user" ? "cpu" : "user";
         const otherItems = getSideItems(next, otherSide).filter(
@@ -2709,13 +2771,11 @@ export default function ProposeTrade() {
                 disabled={tradeDeadlineLocked}
                 className="rounded-xl border border-white/10 bg-black px-3 py-2 font-black text-white outline-none disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {teams
-                  .filter((team) => team?.name && team.name !== userTeamName)
-                  .map((team) => (
-                    <option key={team.name} value={team.name}>
-                      {team.name}
-                    </option>
-                  ))}
+                {cpuTeamOptions.map((team) => (
+                  <option key={team.name} value={team.name}>
+                    {team.name}
+                  </option>
+                ))}
               </select>
             </label>
           </div>

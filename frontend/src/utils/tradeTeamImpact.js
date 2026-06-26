@@ -24,6 +24,22 @@ const FTR_TIEBREAKER_MULT = 0.45;
 const BASE_ACCEPT_THRESHOLD = 0.85;
 const TOP_CONFERENCE_THRESHOLD_TAX = 0.45;
 const ELITE_TEAM_THRESHOLD_TAX = 0.10;
+const STAR_RETENTION_TAX_CAP = 32.00;
+const STAR_RETENTION_TAX_BY_OVR = {
+  // Columns: age <=22, 23-25, 26-29, 30-32, 33-34, 35+.
+  // This is a threshold tax, not a direct score subtraction. It is intentionally
+  // aggressive for young franchise players so CPUs do not casually move a
+  // 95+ OVR cornerstone even when another star is coming back.
+  91: [0.50, 0.41, 0.27, 0.15, 0.09, 0.05],
+  92: [1.50, 1.23, 0.82, 0.45, 0.27, 0.13],
+  93: [3.00, 2.46, 1.64, 0.90, 0.54, 0.25],
+  94: [6.00, 4.92, 3.28, 1.80, 1.08, 0.50],
+  95: [10.00, 8.20, 5.47, 3.00, 1.80, 0.83],
+  96: [13.50, 11.07, 7.38, 4.05, 2.43, 1.12],
+  97: [17.50, 14.35, 9.57, 5.25, 3.15, 1.45],
+  98: [22.50, 18.45, 12.30, 6.75, 4.05, 1.87],
+  99: [28.00, 22.96, 15.31, 8.40, 5.04, 2.32],
+};
 const RATING_CACHE_MAX = 250;
 const POWER_CONTEXT_CACHE_MAX = 12;
 
@@ -522,6 +538,69 @@ function getTradePlayers(items = []) {
     .map((item) => item.player);
 }
 
+function getPlayerDisplayName(player = {}) {
+  return player?.name || player?.player || "Unknown Player";
+}
+
+function getStarRetentionAgeBucket(ageValue) {
+  const age = Math.round(toNum(ageValue, 27));
+  if (age <= 22) return 0;
+  if (age <= 25) return 1;
+  if (age <= 29) return 2;
+  if (age <= 32) return 3;
+  if (age <= 34) return 4;
+  return 5;
+}
+
+function getCpuOutgoingStarRetentionTaxForPlayer(player = {}) {
+  const overall = clamp(Math.round(toNum(player?.overall ?? player?.ovr, 0)), 0, 99);
+  if (overall < 91) return null;
+
+  const age = Math.round(toNum(player?.age, 27));
+  const bucket = getStarRetentionAgeBucket(age);
+  const row = STAR_RETENTION_TAX_BY_OVR[overall] || STAR_RETENTION_TAX_BY_OVR[99];
+  const tax = round4(Number(row?.[bucket] || 0));
+  if (tax <= TEAM_IMPACT_EPS) return null;
+
+  return {
+    playerName: getPlayerDisplayName(player),
+    overall,
+    age,
+    ageBucket: bucket,
+    tax,
+  };
+}
+
+function evaluateCpuOutgoingStarRetentionTax(players = [], cpuTeamName = "CPU team") {
+  const rows = (players || [])
+    .map(getCpuOutgoingStarRetentionTaxForPlayer)
+    .filter(Boolean)
+    .sort((a, b) => b.tax - a.tax);
+
+  if (!rows.length) {
+    return { tax: 0, rows, reasons: [] };
+  }
+
+  const weightedTax = rows.reduce((sum, row, idx) => {
+    const weight = idx === 0 ? 1 : idx === 1 ? 0.35 : idx === 2 ? 0.15 : 0;
+    return sum + row.tax * weight;
+  }, 0);
+  const tax = round4(clamp(weightedTax, 0, STAR_RETENTION_TAX_CAP));
+  const primary = rows[0];
+  const extraCount = Math.max(0, rows.length - 1);
+  const extraText = extraCount > 0
+    ? `, with reduced stacking credit for ${extraCount} other 91+ OVR outgoing player${extraCount === 1 ? "" : "s"}`
+    : "";
+
+  return {
+    tax,
+    rows,
+    reasons: [
+      `CPU star-retention tax: +${tax.toFixed(2)} threshold because ${cpuTeamName} is giving up ${primary.playerName}, a ${primary.overall} OVR age-${primary.age} star${extraText}.`,
+    ],
+  };
+}
+
 function getPrimaryTradePickItems(items = []) {
   return (items || []).filter((item) => {
     if (item?.type !== "pick" || !item.pick) return false;
@@ -691,11 +770,14 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
   }
 
   const pickScore = Number(pickImpact?.netPickScore || 0);
+  const cpuIncomingPlayers = getTradePlayers(userItems);
+  const cpuOutgoingPlayers = getTradePlayers(cpuItems);
   const contractImpact = evaluateCpuContractFriction({
     leagueData,
-    cpuIncomingPlayers: getTradePlayers(userItems),
-    cpuOutgoingPlayers: getTradePlayers(cpuItems),
+    cpuIncomingPlayers,
+    cpuOutgoingPlayers,
   });
+  const starRetentionImpact = evaluateCpuOutgoingStarRetentionTax(cpuOutgoingPlayers, cpuName);
   const hasNoMeaningfulDownside =
     deltaOVR >= -TEAM_IMPACT_EPS &&
     deltaPOT >= -TEAM_IMPACT_EPS &&
@@ -717,10 +799,15 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
       (powerContext.isTopConferenceTeam ? TOP_CONFERENCE_THRESHOLD_TAX : 0) +
       (powerContext.rank <= 5 ? ELITE_TEAM_THRESHOLD_TAX : 0)
   );
-  const threshold = round4(baseThreshold + Number(contractImpact?.friction || 0));
+  const threshold = round4(
+    baseThreshold +
+      Number(contractImpact?.friction || 0) +
+      Number(starRetentionImpact?.tax || 0)
+  );
 
   const hasPlayerMovement = getTradePlayers(userItems).length > 0 || getTradePlayers(cpuItems).length > 0;
   const hasMeaningfulContractFriction = Number(contractImpact?.friction || 0) > 0.035;
+  const hasMeaningfulStarRetentionTax = Number(starRetentionImpact?.tax || 0) > 0.035;
   const cleanPickUpgradeAccept =
     !hasPlayerMovement &&
     !hasMeaningfulContractFriction &&
@@ -728,6 +815,7 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
   const noDownsidePickSweetenerAccept =
     hasNoMeaningfulDownside &&
     !hasMeaningfulContractFriction &&
+    !hasMeaningfulStarRetentionTax &&
     pickScore >= NO_DOWNSIDE_PICK_SWEETENER_LINE;
   const noDownsideAccept =
     hasNoMeaningfulDownside &&
@@ -748,6 +836,10 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
     reasons.push(...pickImpact.reasons.slice(0, 5));
   }
 
+  if (Array.isArray(starRetentionImpact?.reasons) && starRetentionImpact.reasons.length > 0) {
+    reasons.push(...starRetentionImpact.reasons);
+  }
+
   if (Array.isArray(contractImpact?.reasons) && contractImpact.reasons.length > 0) {
     reasons.push(...contractImpact.reasons);
   }
@@ -761,9 +853,9 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
   } else if (noDownsidePickSweetenerAccept) {
     reasons.push("Accepted because the CPU receives enough draft-pick value without taking a meaningful team-impact or contract downside.");
   } else if (noDownsideAccept) {
-    reasons.push("Accepted because the trade improves or holds every team-impact rating and stays close enough to the contract-adjusted threshold.");
+    reasons.push("Accepted because the trade improves or holds every team-impact rating and stays close enough to the adjusted threshold.");
   } else if (accepted) {
-    reasons.push(`Accepted because the weighted team-impact score clears the ${threshold.toFixed(2)} contract-adjusted threshold.`);
+    reasons.push(`Accepted because the weighted team-impact score clears the ${threshold.toFixed(2)} adjusted threshold.`);
   } else if (!hasNoMeaningfulDownside) {
     reasons.push(`Rejected because the gains do not justify the rating sacrifice for ${cpuName}'s current team direction.`);
   } else if (pickImpact?.hasPicks && pickScore < CLEAN_PICK_UPGRADE_ACCEPT_LINE) {
@@ -796,6 +888,8 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
       baseThreshold,
       contractFriction: contractImpact?.friction || 0,
       contractImpact,
+      starRetentionTax: starRetentionImpact?.tax || 0,
+      starRetentionImpact,
       noDownsideMinGain,
       before,
       after,
@@ -814,7 +908,9 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
         outgoingPickValue: pickImpact?.outgoingValue || 0,
         cleanPickUpgradeAccept,
         noDownsidePickSweetenerAccept,
+        hasMeaningfulStarRetentionTax,
         contractFriction: contractImpact?.friction || 0,
+        starRetentionTax: starRetentionImpact?.tax || 0,
       },
     },
   };
