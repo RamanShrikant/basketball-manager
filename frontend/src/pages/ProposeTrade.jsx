@@ -5,11 +5,15 @@ import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { evaluateTradeTeamImpact } from "../utils/tradeTeamImpact.js";
 import {
   buildTradeMachineSwapAssets,
+  canCreateSwapWithPick,
+  getDraftPickConflictKey,
+  getDraftPickEncumbranceReason,
   getTradeablePickOwnedRange,
   makeTradeGeneratedDraftPickId,
   normalizeDraftPickAsset,
   normalizeTeamName,
   protectionDisplayForOwnedRange,
+  removeDirectPickRowsConsumedBySwap,
   validateCustomPickProtection,
 } from "../utils/draftPicks.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
@@ -1317,6 +1321,25 @@ function transferSwapDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
     return { ok: false, reason: `${toTeamName} no longer owns ${formatPick(swapPick)}.` };
   }
 
+  if (!canCreateSwapWithPick(normalizedSource)) {
+    return { ok: false, reason: `${formatPick(normalizedSource)} cannot be used in a new swap because it is not a full unprotected normal pick.` };
+  }
+  if (!canCreateSwapWithPick(normalizedSwap)) {
+    return { ok: false, reason: `${formatPick(normalizedSwap)} cannot be used in a new swap because it is not a full unprotected normal pick.` };
+  }
+
+  const sourceConflictKey = getDraftPickConflictKey(normalizedSource, nextLeague);
+  const swapConflictKey = getDraftPickConflictKey(normalizedSwap, nextLeague);
+  if (!sourceConflictKey || !swapConflictKey || sourceConflictKey === swapConflictKey) {
+    return { ok: false, reason: "A swap must use two different original picks in the same year and round." };
+  }
+
+  const sourceEncumbrance = getDraftPickEncumbranceReason(normalizedSource, rows, nextLeague);
+  if (sourceEncumbrance) return { ok: false, reason: sourceEncumbrance };
+
+  const swapEncumbrance = getDraftPickEncumbranceReason(normalizedSwap, rows, nextLeague);
+  if (swapEncumbrance) return { ok: false, reason: swapEncumbrance };
+
   const tradeStamp = {
     fromTeam: fromTeamName,
     toTeam: toTeamName,
@@ -1336,9 +1359,15 @@ function transferSwapDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
     tradeStamp,
   });
 
+  const cleanedRows = removeDirectPickRowsConsumedBySwap(rows, normalizedSource, normalizedSwap, nextLeague);
+  rows.splice(0, rows.length, ...cleanedRows);
+
   const existingIds = new Set(rows.map((row) => String(row.id || "")));
   for (const asset of swapAssets) {
-    if (!existingIds.has(String(asset.id || ""))) rows.push(asset);
+    if (!existingIds.has(String(asset.id || ""))) {
+      rows.push(asset);
+      existingIds.add(String(asset.id || ""));
+    }
   }
 
   return {
@@ -1476,6 +1505,11 @@ function transferDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
       ok: false,
       reason: `${fromTeamName} no longer owns ${formatPick(normalized)}. Current owner is ${normalized.ownerTeam}.`,
     };
+  }
+
+  const encumbranceReason = getDraftPickEncumbranceReason(normalized, rows, nextLeague, { ignoreAssetIds: [normalized.id] });
+  if (encumbranceReason) {
+    return { ok: false, reason: encumbranceReason };
   }
 
   if (rule.action === "protected") {

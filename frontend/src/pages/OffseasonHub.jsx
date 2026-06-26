@@ -2097,7 +2097,7 @@ export default function OffseasonHub() {
           return;
         }
 
-        finalizedLeagueData = rollDraftPickAssetsForCompletedSeason(result.leagueData || finalizedLeagueData, seasonYear);
+        finalizedLeagueData = rollDraftPickAssetsForCompletedSeason(result.leagueData || finalizedLeagueData, seasonYear, { draftComplete: true });
         saveLeagueData(finalizedLeagueData).catch((err) => {
           console.warn("[OffseasonHub] Failed to save finalized leagueData to IndexedDB.", err);
         });
@@ -2114,7 +2114,7 @@ export default function OffseasonHub() {
       return;
     }
 
-    finalizedLeagueData = rollDraftPickAssetsForCompletedSeason(finalizedLeagueData, seasonYear);
+    finalizedLeagueData = rollDraftPickAssetsForCompletedSeason(finalizedLeagueData, seasonYear, { draftComplete: true });
     saveLeagueData(finalizedLeagueData).catch((err) => {
       console.warn("[OffseasonHub] Failed to save rolled draft assets to IndexedDB.", err);
     });
@@ -2359,7 +2359,7 @@ export default function OffseasonHub() {
       throw new Error(finished?.reason || "Draft simulation failed.");
     }
 
-    const nextLeague = rollDraftPickAssetsForCompletedSeason(finished.leagueData || initializedLeague, seasonYear);
+    const nextLeague = rollDraftPickAssetsForCompletedSeason(finished.leagueData || initializedLeague, seasonYear, { draftComplete: true });
     const nextDraftState = finished.draftState || initializedDraftState;
 
     if (nextDraftState) {

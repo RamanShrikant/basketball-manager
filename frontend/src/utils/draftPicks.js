@@ -67,6 +67,7 @@ export function makeDraftPickId({ assetType = "pick", year, round, originalTeam,
 }
 
 export function normalizeDraftPickAsset(row = {}, index = 0, teamNames = []) {
+  row = row && typeof row === "object" ? row : {};
   const assetType = String(row.assetType || row.type || "pick").toLowerCase() === "swap" ? "swap" : "pick";
   const year = Number(row.year || row.seasonYear || DEFAULT_START_YEAR);
   const round = Math.max(1, Math.min(2, Number(row.round || 1)));
@@ -147,6 +148,7 @@ export function normalizeDraftPickAsset(row = {}, index = 0, teamNames = []) {
 
 export function normalizeDraftPicks(rows = [], teamNames = []) {
   return (Array.isArray(rows) ? rows : [])
+    .filter((row) => row && typeof row === "object")
     .map((row, index) => normalizeDraftPickAsset(row, index, teamNames))
     .filter((row) => row.year && row.round && row.originalTeam && row.ownerTeam);
 }
@@ -180,7 +182,14 @@ export function mergeDraftPicks(existingRows = [], defaultRows = []) {
   const normalizedExisting = normalizeDraftPicks(existingRows);
   const normalizedDefaults = normalizeDraftPicks(defaultRows);
   const seen = new Set();
+  const swapOccupiedKeys = new Set();
   const out = [];
+
+  for (const row of normalizedExisting) {
+    if (isSwapDraftPickAsset(row)) {
+      for (const key of getDraftAssetParticipantKeys(row)) swapOccupiedKeys.add(key);
+    }
+  }
 
   for (const row of normalizedExisting) {
     const key = `${row.assetType}|${row.year}|${row.round}|${normalizeTeamName(row.originalTeam)}|${normalizeTeamName(row.ownerTeam)}|${normalizeTeamName(row.swapWithTeam)}`;
@@ -191,6 +200,9 @@ export function mergeDraftPicks(existingRows = [], defaultRows = []) {
 
   for (const row of normalizedDefaults) {
     const defaultKey = `pick|${row.year}|${row.round}|${normalizeTeamName(row.originalTeam)}`;
+    const defaultConflictKey = getDraftPickConflictKey(row);
+    if (defaultConflictKey && swapOccupiedKeys.has(defaultConflictKey)) continue;
+
     const alreadyHasOriginalPick = out.some(
       (existing) =>
         existing.assetType === "pick" &&
@@ -244,19 +256,63 @@ function ownUnprotectedPickRow(teamName, year, round) {
   });
 }
 
-export function rollDraftPickAssetsForCompletedSeason(leagueData, completedSeasonYear = DEFAULT_START_YEAR) {
+function readDraftPickStorageJson(key, fallback = null) {
+  if (typeof localStorage === "undefined") return fallback;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "null");
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function isDraftCompleteForRollForward(leagueData, completedYear, options = {}) {
+  if (options?.draftComplete === true || options?.retireCompletedYear === true || options?.force === true) return true;
+
+  const seasonMatches = (value) => Number(value || completedYear) === Number(completedYear);
+  const draftState = leagueData?.draftState || {};
+  if (seasonMatches(draftState?.seasonYear) && (draftState?.completed || draftState?.draftComplete)) return true;
+
+  const offseasonState = readDraftPickStorageJson("bm_offseason_state_v1", {}) || {};
+  if (seasonMatches(offseasonState?.seasonYear) && offseasonState?.draftComplete) return true;
+
+  const savedDraftState = readDraftPickStorageJson("bm_draft_state_v1", {}) || {};
+  if (seasonMatches(savedDraftState?.seasonYear) && savedDraftState?.completed) return true;
+
+  return false;
+}
+
+export function rollDraftPickAssetsForCompletedSeason(leagueData, completedSeasonYear = DEFAULT_START_YEAR, options = {}) {
   if (!leagueData || typeof leagueData !== "object") return leagueData;
 
   const completedYear = Number(completedSeasonYear || DEFAULT_START_YEAR);
   if (!Number.isFinite(completedYear) || completedYear < 2020) return leagueData;
 
+  const draftComplete = isDraftCompleteForRollForward(leagueData, completedYear, options);
   const alreadyRolledYear = Number(leagueData?.draftPickMeta?.lastRolledCompletedSeasonYear || 0);
-  if (alreadyRolledYear >= completedYear) return leagueData;
+  if (draftComplete && alreadyRolledYear >= completedYear) return leagueData;
 
   const teamNames = getTeamNamesFromLeague(leagueData);
   if (!teamNames.length) return leagueData;
 
   const normalized = normalizeDraftPicks(leagueData.draftPicks || [], teamNames);
+
+  // Keep current draft-year ownership rows alive until the draft is actually finished.
+  // If these rows are removed right after the regular season, the lottery resolver
+  // falls back to natural ownership and traded current-year picks appear to revert.
+  if (!draftComplete) {
+    return {
+      ...leagueData,
+      draftPicks: normalized.sort(sortDraftPickAssets),
+      draftPickMeta: {
+        ...(leagueData.draftPickMeta || {}),
+        lastRollSkippedCompletedSeasonYear: completedYear,
+        lastRollSkippedReason: "draft_not_complete_keep_current_year_assets",
+        rollingWindowVersion: "draft_assets_roll_forward_v5_safe_until_draft_complete",
+      },
+    };
+  }
+
   const kept = normalized.filter((row) => Number(row.year || 0) > completedYear);
   const maxExistingYear = kept.reduce((max, row) => Math.max(max, Number(row.year || 0)), completedYear + 6);
   const nextFutureYear = maxExistingYear + 1;
@@ -284,7 +340,7 @@ export function rollDraftPickAssetsForCompletedSeason(leagueData, completedSeaso
       ...(leagueData.draftPickMeta || {}),
       lastRolledCompletedSeasonYear: completedYear,
       lastAutoAddedFutureYear: nextFutureYear,
-      rollingWindowVersion: "draft_assets_roll_forward_v4",
+      rollingWindowVersion: "draft_assets_roll_forward_v5_safe_until_draft_complete",
     },
   };
 }
@@ -416,15 +472,33 @@ function buildTeamResolver(leagueData) {
 }
 
 function getPickNumberFromRow(row = {}) {
+  const safeRow = row && typeof row === "object" ? row : {};
   const pick = Number(
-    row.pick ??
-      row.pickNumber ??
-      row.overallPick ??
-      row.draftPickNumber ??
-      row.resolvedPickNumber ??
+    safeRow.pick ??
+      safeRow.pickNumber ??
+      safeRow.overallPick ??
+      safeRow.draftPickNumber ??
+      safeRow.resolvedPickNumber ??
       0
   );
   return Number.isFinite(pick) && pick > 0 ? pick : 0;
+}
+
+function isUsableDraftOrderRow(row = null) {
+  if (!row || typeof row !== "object") return false;
+  if (getPickNumberFromRow(row) > 0) return true;
+  return Boolean(
+    row.teamName ||
+      row.name ||
+      row.originalTeamName ||
+      row.originalPickTeamName ||
+      row.currentOwnerTeamName ||
+      row.ownerTeamName
+  );
+}
+
+function sanitizeDraftOrderRows(rows = []) {
+  return (Array.isArray(rows) ? rows : []).filter(isUsableDraftOrderRow);
 }
 
 function getRoundFromPickRow(row = {}) {
@@ -560,6 +634,135 @@ export function canAddCustomProtectionToPick(asset = {}) {
 export function canCreateSwapWithPick(asset = {}) {
   if (isSwapDraftPickAsset(asset) || isResolvedDraftPickAsset(asset)) return false;
   return !isProtectedDraftPickAsset(asset) && isFullOwnedPickRange(asset);
+}
+
+
+function draftPickConflictKey({ year, round, originalTeam } = {}, leagueData = null) {
+  const y = Number(year || 0);
+  const r = Number(round || 0) === 2 ? 2 : 1;
+  if (!Number.isFinite(y) || y <= 0) return "";
+
+  const resolveTeamName = leagueData ? buildTeamResolver(leagueData) : (value) => String(value || "").trim();
+  const original = resolveTeamName(originalTeam || "");
+  const teamKey = normalizeTeamName(original);
+  if (!teamKey) return "";
+  return `${y}|${r}|${teamKey}`;
+}
+
+function splitSwapParticipantText(value = "") {
+  return String(value || "")
+    .split(/[\/,&]+/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function getSwapParticipantNames(asset = {}) {
+  const details = asset?.realLifeDetails && typeof asset.realLifeDetails === "object" ? asset.realLifeDetails : {};
+  const rawParticipants = Array.isArray(details.swapParticipants)
+    ? details.swapParticipants
+    : Array.isArray(asset.swapParticipants)
+    ? asset.swapParticipants
+    : Array.isArray(asset.swap?.participants)
+    ? asset.swap.participants
+    : [];
+
+  const participants = [];
+  for (const participant of rawParticipants) {
+    for (const piece of splitSwapParticipantText(participant)) participants.push(piece);
+  }
+
+  if (!participants.length) {
+    for (const value of [asset.originalTeam, asset.originalTeamName, asset.swapWithTeam, asset.swap?.withTeam]) {
+      for (const piece of splitSwapParticipantText(value)) participants.push(piece);
+    }
+  }
+
+  const seen = new Set();
+  return participants.filter((name) => {
+    const key = normalizeTeamName(name);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function getDraftPickConflictKey(asset = {}, leagueData = null) {
+  const row = asset && typeof asset === "object" ? asset : {};
+  return draftPickConflictKey(
+    {
+      year: row.year || row.seasonYear,
+      round: row.round,
+      originalTeam: row.originalTeam || row.originalTeamName || row.team || row.teamName,
+    },
+    leagueData
+  );
+}
+
+export function getDraftAssetParticipantKeys(asset = {}, leagueData = null) {
+  const row = asset && typeof asset === "object" ? asset : {};
+  if (!isActiveDraftPickAsset(row)) return [];
+
+  const type = String(row.assetType || row.type || "pick").toLowerCase();
+  const year = Number(row.year || row.seasonYear || 0);
+  const round = Number(row.round || 1) === 2 ? 2 : 1;
+  if (!Number.isFinite(year) || year <= 0) return [];
+
+  if (type === "swap" || isSwapDraftPickAsset(row)) {
+    const names = getSwapParticipantNames(row);
+    return names
+      .map((name) => draftPickConflictKey({ year, round, originalTeam: name }, leagueData))
+      .filter(Boolean);
+  }
+
+  const key = getDraftPickConflictKey(row, leagueData);
+  return key ? [key] : [];
+}
+
+export function getActiveSwapParticipantKeySet(rows = [], leagueData = null, options = {}) {
+  const ignoreIds = new Set((options?.ignoreAssetIds || []).map((id) => String(id || "")).filter(Boolean));
+  const keys = new Set();
+
+  for (const raw of Array.isArray(rows) ? rows : []) {
+    if (!raw || typeof raw !== "object") continue;
+    if (ignoreIds.has(String(raw.id || ""))) continue;
+    const normalized = normalizeDraftPickAsset(raw, 0, getTeamNamesFromLeague(leagueData));
+    if (!isActiveDraftPickAsset(normalized) || !isSwapDraftPickAsset(normalized)) continue;
+    for (const key of getDraftAssetParticipantKeys(normalized, leagueData)) keys.add(key);
+  }
+
+  return keys;
+}
+
+export function isDraftPickEncumberedByActiveSwap(asset = {}, rows = [], leagueData = null, options = {}) {
+  if (!asset || typeof asset !== "object") return false;
+  if (!isActiveDraftPickAsset(asset) || isSwapDraftPickAsset(asset) || isResolvedDraftPickAsset(asset)) return false;
+  const key = getDraftPickConflictKey(asset, leagueData);
+  if (!key) return false;
+  return getActiveSwapParticipantKeySet(rows, leagueData, options).has(key);
+}
+
+export function getDraftPickEncumbranceReason(asset = {}, rows = [], leagueData = null, options = {}) {
+  if (!isDraftPickEncumberedByActiveSwap(asset, rows, leagueData, options)) return "";
+  const roundText = Number(asset?.round || 1) === 1 ? "1st" : "2nd";
+  const original = asset?.originalTeam || asset?.originalTeamName || "this pick";
+  return `${asset?.year || "Future"} ${roundText} - ${original} is already tied to an active swap right.`;
+}
+
+export function removeDirectPickRowsConsumedBySwap(rows = [], sourcePick = {}, swapPick = {}, leagueData = null) {
+  const consumed = new Set([
+    getDraftPickConflictKey(sourcePick, leagueData),
+    getDraftPickConflictKey(swapPick, leagueData),
+  ].filter(Boolean));
+
+  if (!consumed.size) return Array.isArray(rows) ? rows : [];
+
+  return (Array.isArray(rows) ? rows : []).filter((row, index) => {
+    if (!row || typeof row !== "object") return false;
+    const normalized = normalizeDraftPickAsset(row, index, getTeamNamesFromLeague(leagueData));
+    if (isSwapDraftPickAsset(normalized) || isResolvedDraftPickAsset(normalized)) return true;
+    const key = getDraftPickConflictKey(normalized, leagueData);
+    return !consumed.has(key);
+  });
 }
 
 export function buildCustomProtectionBaseLabel(asset = {}, protectStart, protectEnd) {
@@ -1126,12 +1329,13 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
 }
 
 export function applyDraftPickOwnershipToOrder(order = [], { leagueData, seasonYear } = {}) {
-  if (!Array.isArray(order) || !order.length || !leagueData) return Array.isArray(order) ? order : [];
+  if (!Array.isArray(order) || !order.length || !leagueData) return Array.isArray(order) ? sanitizeDraftOrderRows(order) : [];
 
   const year = Number(seasonYear || leagueData?.seasonYear || leagueData?.currentSeasonYear || 2026);
   const resolveTeamName = buildTeamResolver(leagueData);
+  const cleanOrder = sanitizeDraftOrderRows(order);
 
-  const normallyResolved = order.map((row, index) => {
+  const normallyResolved = cleanOrder.map((row, index) => {
     const pickNumber = getPickNumberFromRow(row) || index + 1;
     const round = Number(row.round || getRoundFromPickRow({ ...row, pick: pickNumber }));
     const originalTeam = resolveTeamName(row.originalTeamName || row.originalPickTeamName || row.teamName || row.currentOwnerTeamName);

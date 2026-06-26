@@ -743,7 +743,10 @@ export default function DraftLottery() {
 
   const latestHistory = useMemo(() => getLatestSeasonHistoryEntry(leagueData, seasonYear), [leagueData, seasonYear]);
 
-  const result = lotteryState?.result || null;
+  const rawResult = lotteryState?.result || null;
+  const result = useMemo(() => {
+    return rawResult ? applyDraftPickOwnershipToLotteryResult(rawResult, { leagueData, seasonYear }) : null;
+  }, [rawResult, leagueData, seasonYear]);
   const secondRoundRevealed = Boolean(lotteryState?.secondRoundRevealed);
   const firstRoundRevealed = Boolean(lotteryState?.firstRoundRevealed);
   const lotteryComplete = Boolean(firstRoundRevealed && secondRoundRevealed && !lotteryState?.isPreview);
@@ -954,11 +957,11 @@ export default function DraftLottery() {
     return map;
   }, [oddsRows]);
 
-  const firstRound = result?.firstRoundOrder || [];
-  const secondRound = result?.secondRoundOrder || [];
+  const firstRound = Array.isArray(result?.firstRoundOrder) ? result.firstRoundOrder.filter(Boolean) : [];
+  const secondRound = Array.isArray(result?.secondRoundOrder) ? result.secondRoundOrder.filter(Boolean) : [];
 
   const firstRoundRevealOrder = useMemo(() => {
-    return (firstRound || []).map((pick) => {
+    return (firstRound || []).filter(Boolean).map((pick) => {
       const key = getTeamKey(pick);
       const oddsRow = key ? oddsByTeam.get(key) : null;
       return oddsRow
@@ -974,7 +977,7 @@ export default function DraftLottery() {
   }, [firstRound, oddsByTeam]);
 
   const secondRoundRevealOrder = useMemo(() => {
-    return (secondRound || []).map((pick) => ({
+    return (secondRound || []).filter(Boolean).map((pick) => ({
       ...pick,
       chanceLabel: secondRoundExplanation(pick, resolvedSystem),
     }));
@@ -1155,7 +1158,7 @@ export default function DraftLottery() {
             {firstRoundRevealed ? (
               <div className="bmOrangeScrollbar max-h-[640px] overflow-auto">
                 {firstRoundRevealOrder.map((pick, index) => (
-                  <PickRow key={`r1-${pick.pick}`} pick={pick} oddsRow={oddsByTeam.get(getTeamKey(pick))} animationIndex={index} />
+                  <PickRow key={`r1-${pick?.pick || index}`} pick={pick} oddsRow={oddsByTeam.get(getTeamKey(pick))} animationIndex={index} />
                 ))}
               </div>
             ) : (
@@ -1181,7 +1184,7 @@ export default function DraftLottery() {
             {secondRoundRevealed ? (
               <div className="bmOrangeScrollbar max-h-[640px] overflow-auto">
                 {secondRoundRevealOrder.map((pick, index) => (
-                  <PickRow key={`r2-${pick.pick}`} pick={pick} animationIndex={index} showMovement={false} />
+                  <PickRow key={`r2-${pick?.pick || index}`} pick={pick} animationIndex={index} showMovement={false} />
                 ))}
               </div>
             ) : (

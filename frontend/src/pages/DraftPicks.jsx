@@ -156,6 +156,22 @@ function safeJSON(raw, fallback = null) {
   }
 }
 
+function getDraftOrderPickNumber(row = null) {
+  if (!row || typeof row !== "object") return 0;
+  const value = Number(row.pick || row.pickNumber || row.overallPick || row.draftPickNumber || row.resolvedPickNumber || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function isUsableDraftOrderRow(row = null) {
+  if (!row || typeof row !== "object") return false;
+  if (getDraftOrderPickNumber(row) > 0) return true;
+  return Boolean(row.teamName || row.currentOwnerTeamName || row.ownerTeamName || row.originalTeamName || row.originalPickTeamName);
+}
+
+function sanitizeDraftOrderRows(rows = []) {
+  return (Array.isArray(rows) ? rows : []).filter(isUsableDraftOrderRow);
+}
+
 function getSeasonYearFromLeague(leagueData) {
   const offseasonState = safeJSON(localStorage.getItem("bm_offseason_state_v1"), {}) || {};
   const candidates = [
@@ -172,10 +188,10 @@ function getSeasonYearFromLeague(leagueData) {
 
 function readLockedDraftOrder(leagueData, seasonYear) {
   const direct = leagueData?.draftState?.draftOrder;
-  if (Array.isArray(direct) && direct.length) return direct;
+  if (Array.isArray(direct) && direct.length) return sanitizeDraftOrderRows(direct);
 
   const lotteryOrder = leagueData?.draftState?.lottery?.fullDraftOrder;
-  if (Array.isArray(lotteryOrder) && lotteryOrder.length) return lotteryOrder;
+  if (Array.isArray(lotteryOrder) && lotteryOrder.length) return sanitizeDraftOrderRows(lotteryOrder);
 
   const savedLottery = safeJSON(localStorage.getItem("bm_draft_lottery_v1"), null);
   if (
@@ -185,7 +201,7 @@ function readLockedDraftOrder(leagueData, seasonYear) {
     savedLottery.secondRoundRevealed &&
     Array.isArray(savedLottery?.result?.fullDraftOrder)
   ) {
-    return savedLottery.result.fullDraftOrder;
+    return sanitizeDraftOrderRows(savedLottery.result.fullDraftOrder);
   }
 
   return [];
@@ -211,10 +227,15 @@ function getPickOriginalName(row = {}) {
 }
 
 function buildResolvedDraftAsset(row = {}, seasonYear) {
-  const pickNumber = Number(row.pick || row.pickNumber || row.overallPick || 0);
+  if (!isUsableDraftOrderRow(row)) return null;
+
+  const pickNumber = getDraftOrderPickNumber(row);
+  if (!pickNumber) return null;
+
   const round = Number(row.round || (pickNumber <= 30 ? 1 : 2));
   const ownerTeam = getPickOwnerName(row);
   const originalTeam = getPickOriginalName(row);
+  if (!ownerTeam || !originalTeam) return null;
 
   return {
     id: `resolved_${seasonYear}_${round}_${pickNumber}_${ownerTeam}_${originalTeam}`,
@@ -380,7 +401,7 @@ export default function DraftPicks() {
   const seasonYear = useMemo(() => getSeasonYearFromLeague(leagueData), [leagueData]);
   const draftOrder = useMemo(() => readLockedDraftOrder(leagueData, seasonYear), [leagueData, seasonYear]);
   const draftComplete = useMemo(() => isDraftCompleteForSeason(leagueData, seasonYear), [leagueData, seasonYear]);
-  const draftOrderLocked = draftOrder.length >= 60;
+  const draftOrderLocked = draftOrder.length >= 50;
 
   const picks = useMemo(() => {
     return normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
@@ -392,13 +413,13 @@ export default function DraftPicks() {
 
   const resolvedCurrentYearPicks = useMemo(() => {
     if (!draftOrderLocked || draftComplete) return [];
-    return draftOrder.map((row) => buildResolvedDraftAsset(row, seasonYear));
+    return draftOrder.map((row) => buildResolvedDraftAsset(row, seasonYear)).filter(Boolean);
   }, [draftOrder, draftOrderLocked, draftComplete, seasonYear]);
 
   const ownedPicks = useMemo(() => {
     if (!activeTeam?.name) return [];
     const activeKey = normalizeTeamName(activeTeam.name);
-    return [...resolvedCurrentYearPicks, ...picks].filter((pick) => normalizeTeamName(pick.ownerTeam) === activeKey);
+    return [...resolvedCurrentYearPicks, ...picks].filter((pick) => pick && normalizeTeamName(pick.ownerTeam) === activeKey);
   }, [picks, resolvedCurrentYearPicks, activeTeam?.name]);
 
   const sortedPicks = useMemo(() => {

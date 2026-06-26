@@ -22,7 +22,7 @@ except Exception:
     get_financial_rules = None
     get_rookie_salary_for_pick = None
 
-TEAM_ROSTER_LOGIC_VERSION = "2026-06-11_team_roster_logic_user_offseason_overfill_v6"
+TEAM_ROSTER_LOGIC_VERSION = "2026-06-25_team_roster_logic_rookie_recommendation_v7"
 
 STANDARD_ROSTER_MIN = 14
 STANDARD_ROSTER_MAX = 15
@@ -411,32 +411,18 @@ def _player_summary(player: Dict[str, Any], team_name: str) -> Dict[str, Any]:
 
 
 def _recommended_rookie_decision(player: Dict[str, Any], team: Dict[str, Any]) -> str:
-    counts = roster_counts(team)
+    _ = team
     overall = _safe_int(player.get("overall"), 0)
     potential = _safe_int(player.get("potential"), overall)
     meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
     pick = _safe_int(meta.get("draftPick"), 60)
-    upside = potential - overall
-    two_way_open = counts["twoWayCount"] < TWO_WAY_MAX
-    # Pending rookies already occupy one controlled slot before this decision.
-    # A standard/two-way/stash decision replaces that pending slot, so a team at
-    # exactly 20 controlled players can still resolve the rookie without needing
-    # to release someone first.
-    effective_controlled_before_decision = max(0, counts["controlledCount"] - 1)
-    controlled_open = effective_controlled_before_decision < OFFSEASON_CONTROLLED_MAX
 
-    if not controlled_open:
-        # A full non-stash controlled roster should not force teams to lose a
-        # newly drafted player. Stash is unlimited and can be cleaned up later.
-        return "stash"
-
-    # Pick-range driven rookie-contract behavior:
-    # 1-24: normal first-round standard contracts.
-    # 25-45: default to two-way for non-outliers at 71 OVR or lower.
-    # 46-60: default to stash for 69 OVR or lower, two-way for useful 70-73s.
-    # Only clear OVR/POT outliers jump straight to standard contracts.
+    # Recommendation only reflects the player's draft slot / talent profile.
+    # Roster quantity is intentionally ignored here: offseason overfill is legal
+    # for the user flow, and final season-start roster legality is handled later
+    # by Calendar / roster finalization.
     if pick <= 24:
-        if overall <= 63 and two_way_open:
+        if overall <= 63:
             return "two_way"
         return "standard"
 
@@ -444,10 +430,8 @@ def _recommended_rookie_decision(player: Dict[str, Any], team: Dict[str, Any]) -
         if overall >= 74 or potential >= 86:
             return "standard"
         if overall <= 71:
-            if two_way_open:
-                return "two_way"
-            return "stash" if controlled_open else "release"
-        if overall <= 73 and two_way_open and potential < 84:
+            return "two_way"
+        if overall <= 73 and potential < 84:
             return "two_way"
         return "standard"
 
@@ -457,17 +441,11 @@ def _recommended_rookie_decision(player: Dict[str, Any], team: Dict[str, Any]) -
             return "standard"
         if overall <= 69:
             return "stash"
-        if two_way_open:
-            return "two_way"
-        if upside >= 3 or potential >= 72:
-            return "stash"
-        return "release"
+        return "two_way"
 
     if overall >= 74 or potential >= 84:
         return "standard"
-    if two_way_open:
-        return "two_way"
-    return "stash" if controlled_open else "release"
+    return "two_way"
 
 
 def _decision_label(decision: str) -> str:
@@ -1825,7 +1803,4 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
         "reason": f"UNKNOWN_TEAM_ROSTER_ACTION: {action}",
         "version": TEAM_ROSTER_LOGIC_VERSION,
     }
-
-
-
 

@@ -5,7 +5,9 @@ import PageFade from "../components/PageFade";
 import {
   canAddCustomProtectionToPick,
   canCreateSwapWithPick,
+  getActiveSwapParticipantKeySet,
   getAllTeamsFromLeague,
+  getDraftPickConflictKey,
   getDraftPickProtectionLabel,
   getTeamLogoMap,
   getTradePickBaseProtectionLabel,
@@ -43,6 +45,148 @@ function teamLogoOf(team) {
     team?.img ||
     ""
   );
+}
+
+const TEAM_CODES = {
+  "Atlanta Hawks": "ATL",
+  "Boston Celtics": "BOS",
+  "Brooklyn Nets": "BKN",
+  "Charlotte Hornets": "CHA",
+  "Chicago Bulls": "CHI",
+  "Cleveland Cavaliers": "CLE",
+  "Dallas Mavericks": "DAL",
+  "Denver Nuggets": "DEN",
+  "Detroit Pistons": "DET",
+  "Golden State Warriors": "GSW",
+  "Houston Rockets": "HOU",
+  "Indiana Pacers": "IND",
+  "Los Angeles Clippers": "LAC",
+  "Los Angeles Lakers": "LAL",
+  "Memphis Grizzlies": "MEM",
+  "Miami Heat": "MIA",
+  "Milwaukee Bucks": "MIL",
+  "Minnesota Timberwolves": "MIN",
+  "New Orleans Pelicans": "NOP",
+  "New York Knicks": "NYK",
+  "Oklahoma City Thunder": "OKC",
+  "Orlando Magic": "ORL",
+  "Philadelphia 76ers": "PHI",
+  "Phoenix Suns": "PHX",
+  "Portland Trail Blazers": "POR",
+  "Sacramento Kings": "SAC",
+  "San Antonio Spurs": "SAS",
+  "Toronto Raptors": "TOR",
+  "Utah Jazz": "UTA",
+  "Washington Wizards": "WAS",
+};
+
+const CODE_ALIASES = {
+  BRK: "BKN",
+  BKN: "BKN",
+  PHL: "PHI",
+  PHI: "PHI",
+  PHO: "PHX",
+  PHX: "PHX",
+  SA: "SAS",
+  SAS: "SAS",
+  GS: "GSW",
+  GSW: "GSW",
+  WSH: "WAS",
+  WAS: "WAS",
+  CHO: "CHA",
+  CHA: "CHA",
+  NO: "NOP",
+  NOP: "NOP",
+  UTH: "UTA",
+  UTA: "UTA",
+};
+
+const KNOWN_CODES = new Set([
+  ...Object.values(TEAM_CODES).filter(Boolean),
+  ...Object.keys(CODE_ALIASES),
+  ...Object.values(CODE_ALIASES),
+]);
+
+function canonicalTeamCode(code) {
+  const upper = String(code || "").trim().toUpperCase();
+  return CODE_ALIASES[upper] || upper;
+}
+
+function uniqueList(values = []) {
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = String(value || "").trim().toUpperCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function getTeamCode(teamName = "", teamNames = []) {
+  const raw = String(teamName || "").trim();
+  if (!raw) return "";
+
+  const directCode = canonicalTeamCode(raw);
+  if (KNOWN_CODES.has(directCode)) return directCode;
+
+  const exact = Object.entries(TEAM_CODES).find(([name]) => normalizeTeamName(name) === normalizeTeamName(raw));
+  if (exact) return exact[1];
+
+  const leagueHit = (teamNames || []).find((name) => normalizeTeamName(name) === normalizeTeamName(raw));
+  if (leagueHit && TEAM_CODES[leagueHit]) return TEAM_CODES[leagueHit];
+
+  return raw.length <= 4 ? raw.toUpperCase() : raw;
+}
+
+function extractCodesFromText(text = "", teamNames = []) {
+  const value = String(text || "");
+  const upper = value.toUpperCase();
+  const codes = [];
+
+  for (const code of KNOWN_CODES) {
+    const regex = new RegExp(`\\b${code}\\b`, "i");
+    if (regex.test(upper)) codes.push(canonicalTeamCode(code));
+  }
+
+  for (const teamName of teamNames || []) {
+    if (upper.includes(String(teamName || "").toUpperCase())) {
+      codes.push(getTeamCode(teamName, teamNames));
+    }
+  }
+
+  return uniqueList(codes.map(canonicalTeamCode));
+}
+
+function getSwapParticipantNamesForDisplay(asset = {}, teamNames = []) {
+  const structuredParticipants = Array.isArray(asset?.realLifeDetails?.swapParticipants)
+    ? asset.realLifeDetails.swapParticipants
+    : Array.isArray(asset?.swapParticipants)
+    ? asset.swapParticipants
+    : Array.isArray(asset?.swap?.participants)
+    ? asset.swap.participants
+    : [];
+
+  const structuredCodes = uniqueList(
+    structuredParticipants.flatMap((participant) => extractCodesFromText(participant, teamNames)).map(canonicalTeamCode)
+  ).slice(0, 2);
+
+  if (structuredCodes.length >= 2) return structuredCodes;
+
+  const text = [asset.originalTeam, asset.originalTeamName, asset.swapWithTeam, asset.swap?.withTeam, structuredParticipants.join(" / ")]
+    .filter(Boolean)
+    .join(" / ");
+  const codes = uniqueList(extractCodesFromText(text, teamNames).map(canonicalTeamCode)).slice(0, 2);
+  if (codes.length >= 2) return codes;
+
+  const fallback = [asset.originalTeam || asset.originalTeamName, asset.swapWithTeam || asset.swap?.withTeam]
+    .filter(Boolean)
+    .map((name) => getTeamCode(name, teamNames));
+  return uniqueList(fallback).slice(0, 2);
+}
+
+function formatSwapParticipants(asset = {}, teamNames = []) {
+  const parts = getSwapParticipantNamesForDisplay(asset, teamNames);
+  return parts.length ? parts.join(" / ") : asset?.originalTeam || asset?.originalTeamName || "Swap Rights";
 }
 
 function readBuilder() {
@@ -223,18 +367,8 @@ function compactProtectionLabel(asset) {
   return label;
 }
 
-function getOriginLabel(asset) {
-  if (assetTypeLabel(asset) === "Swap") {
-    const participants = Array.isArray(asset?.realLifeDetails?.swapParticipants)
-      ? asset.realLifeDetails.swapParticipants
-      : Array.isArray(asset?.swapParticipants)
-      ? asset.swapParticipants
-      : [];
-
-    if (participants.length) return participants.slice(0, 2).join(" / ");
-    return asset?.originalTeam || asset?.swapWithTeam || "Swap Rights";
-  }
-
+function getOriginLabel(asset, teamNames = []) {
+  if (assetTypeLabel(asset) === "Swap") return formatSwapParticipants(asset, teamNames);
   return asset?.originalTeam || asset?.originalTeamName || "Own";
 }
 
@@ -244,7 +378,21 @@ function formatPick(asset) {
   return `${asset?.year || "Future"} ${roundLabel(asset?.round)}${numberSuffix}`;
 }
 
-function collectTradeablePicks({ leagueData, teamName, teamNames }) {
+function isDirectPickOccupiedBySwap(pick = {}, activeSwapKeys = new Set(), leagueData = null) {
+  if (!pick || typeof pick !== "object") return false;
+  if (isSwapDraftPickAsset(pick) || isResolvedDraftPickAsset(pick)) return false;
+  const key = getDraftPickConflictKey(pick, leagueData);
+  return Boolean(key && activeSwapKeys?.has?.(key));
+}
+
+function getFastEncumbranceReason(pick = {}, activeSwapKeys = new Set(), leagueData = null) {
+  if (!isDirectPickOccupiedBySwap(pick, activeSwapKeys, leagueData)) return "";
+  const roundText = Number(pick?.round || 1) === 1 ? "1st" : "2nd";
+  const original = pick?.originalTeam || pick?.originalTeamName || "this pick";
+  return `${pick?.year || "Future"} ${roundText} - ${original} is already tied to an active swap right.`;
+}
+
+function collectTradeablePicks({ leagueData, teamName, teamNames, activeSwapKeys }) {
   if (!leagueData || !teamName) return [];
 
   const seasonYear = getSeasonYearFromLeague(leagueData);
@@ -256,7 +404,8 @@ function collectTradeablePicks({ leagueData, teamName, teamNames }) {
     .filter((pick) => String(pick.status || "active").toLowerCase() === "active")
     .filter((pick) => Number(pick.year || 0) >= Number(seasonYear))
     .filter((pick) => !(draftComplete && Number(pick.year || 0) === Number(seasonYear)))
-    .filter((pick) => !(draftOrderLocked && !draftComplete && Number(pick.year || 0) === Number(seasonYear)));
+    .filter((pick) => !(draftOrderLocked && !draftComplete && Number(pick.year || 0) === Number(seasonYear)))
+    .filter((pick) => !isDirectPickOccupiedBySwap(pick, activeSwapKeys, leagueData));
 
   const resolvedCurrentYearPicks =
     draftOrderLocked && !draftComplete
@@ -312,12 +461,20 @@ function swapDirectionLabel(direction) {
   return direction === "worst" ? "Swap Worst" : "Swap Best";
 }
 
-function buildSwapDisplayLabel(direction, sourcePick, swapPick) {
+function buildSwapDisplayLabel(direction, sourcePick, swapPick, teamNames = []) {
   const label = swapDirectionLabel(direction);
-  const sourceOriginal = sourcePick?.originalTeam || sourcePick?.originalTeamName || "Pick A";
-  const swapOriginal = swapPick?.originalTeam || swapPick?.originalTeamName || "Pick B";
   const suffix = Number(sourcePick?.round || 1) === 1 ? "1st" : "2nd";
-  return `${label} ${sourcePick?.year || "Future"} ${suffix} - ${sourceOriginal} / ${swapOriginal}`;
+  const participants = [sourcePick?.originalTeam || sourcePick?.originalTeamName, swapPick?.originalTeam || swapPick?.originalTeamName]
+    .filter(Boolean)
+    .map((name) => getTeamCode(name, teamNames))
+    .join(" / ");
+  return `${label} ${sourcePick?.year || "Future"} ${suffix} - ${participants || "Pick A / Pick B"}`;
+}
+
+function buildExistingSwapDisplayLabel(asset, teamNames = []) {
+  const label = compactProtectionLabel(asset);
+  const suffix = Number(asset?.round || 1) === 1 ? "1st" : "2nd";
+  return `${label} ${asset?.year || "Future"} ${suffix} - ${formatSwapParticipants(asset, teamNames)}`;
 }
 
 export default function TradePickSelect() {
@@ -358,15 +515,19 @@ export default function TradePickSelect() {
   const sideItemCount = currentSideItems.length;
   const sideIsFull = sideItemCount >= MAX_SIDE_ITEMS;
   const otherTeamName = getBuilderTeamName(builderSnapshot, otherTradeSide);
+  const activeSwapKeys = useMemo(
+    () => getActiveSwapParticipantKeySet(leagueData?.draftPicks || [], leagueData),
+    [leagueData]
+  );
 
   const picks = useMemo(
-    () => collectTradeablePicks({ leagueData, teamName: tradeTeamName, teamNames }),
-    [leagueData, tradeTeamName, teamNames]
+    () => collectTradeablePicks({ leagueData, teamName: tradeTeamName, teamNames, activeSwapKeys }),
+    [activeSwapKeys, leagueData, tradeTeamName, teamNames]
   );
 
   const otherTeamPicks = useMemo(
-    () => collectTradeablePicks({ leagueData, teamName: otherTeamName, teamNames }),
-    [leagueData, otherTeamName, teamNames]
+    () => collectTradeablePicks({ leagueData, teamName: otherTeamName, teamNames, activeSwapKeys }),
+    [activeSwapKeys, leagueData, otherTeamName, teamNames]
   );
 
   const [selectedKey, setSelectedKey] = useState("");
@@ -396,18 +557,20 @@ export default function TradePickSelect() {
   const canOpenSelectedPick = Boolean(selectedPick && !selectedPickAlreadyAdded && !sideIsFull);
   const rulePick = picks.find((pick) => pickKey(pick) === rulePickKey) || null;
   const ownedRange = rulePick ? getTradeablePickOwnedRange(rulePick) : null;
+  const rulePickEncumbrance = rulePick ? getFastEncumbranceReason(rulePick, activeSwapKeys, leagueData) : "";
   const canProtect = rulePick ? canAddCustomProtectionToPick(rulePick) : false;
-  const canSwap = rulePick ? canCreateSwapWithPick(rulePick) : false;
+  const canSwap = rulePick ? canCreateSwapWithPick(rulePick) && !rulePickEncumbrance : false;
   const swapCandidates = useMemo(() => {
-    if (!rulePick || !canCreateSwapWithPick(rulePick) || !otherTeamName) return [];
+    if (!rulePick || !canCreateSwapWithPick(rulePick) || rulePickEncumbrance || !otherTeamName) return [];
     return otherTeamPicks.filter(
       (pick) =>
         Number(pick.year || 0) === Number(rulePick.year || 0) &&
         Number(pick.round || 0) === Number(rulePick.round || 0) &&
         canCreateSwapWithPick(pick) &&
+        !isDirectPickOccupiedBySwap(pick, activeSwapKeys, leagueData) &&
         !otherSideAddedPickKeys.has(pickKey(pick))
     );
-  }, [otherSideAddedPickKeys, otherTeamName, otherTeamPicks, rulePick]);
+  }, [activeSwapKeys, leagueData, otherSideAddedPickKeys, otherTeamName, otherTeamPicks, rulePick, rulePickEncumbrance]);
   const selectedSwapPick = swapCandidates.find((pick) => pickKey(pick) === selectedSwapKey) || swapCandidates[0] || null;
 
   const openRuleModal = (pick) => {
@@ -419,6 +582,11 @@ export default function TradePickSelect() {
     }
     if (sideIsFull) {
       setRuleError(`This side already has ${MAX_SIDE_ITEMS} trade items.`);
+      return;
+    }
+    const encumbrance = getFastEncumbranceReason(pick, activeSwapKeys, leagueData);
+    if (encumbrance) {
+      setRuleError(encumbrance);
       return;
     }
     setSelectedKey(key);
@@ -518,6 +686,11 @@ export default function TradePickSelect() {
         setRuleError(`No matching fully unprotected ${rulePick.year} ${roundLabel(rulePick.round)} pick was found for ${otherTeamName}.`);
         return;
       }
+      const selectedSwapEncumbrance = getFastEncumbranceReason(selectedSwapPick, activeSwapKeys, leagueData);
+      if (selectedSwapEncumbrance) {
+        setRuleError(selectedSwapEncumbrance);
+        return;
+      }
 
       const swapId = `swap_${Date.now()}_${Math.random().toString(16).slice(2)}`;
       const primaryLabel = swapDirectionLabel(swapDirection);
@@ -548,7 +721,7 @@ export default function TradePickSelect() {
         teamName: tradeTeamName,
         protection: primaryLabel,
         tradeRule,
-        displayLabel: buildSwapDisplayLabel(swapDirection, rulePick, selectedSwapPick),
+        displayLabel: buildSwapDisplayLabel(swapDirection, rulePick, selectedSwapPick, teamNames),
         pick: primaryPick,
       };
       const mirrorItem = {
@@ -558,7 +731,7 @@ export default function TradePickSelect() {
         tradeRule: mirrorRule,
         tradeValueExcluded: true,
         displayOnlyLinkedSwap: true,
-        displayLabel: buildSwapDisplayLabel(mirrorDirection, selectedSwapPick, rulePick),
+        displayLabel: buildSwapDisplayLabel(mirrorDirection, selectedSwapPick, rulePick, teamNames),
         pick: mirrorPick,
       };
       addItemsToBuilder(primaryItem, mirrorItem);
@@ -577,6 +750,7 @@ export default function TradePickSelect() {
       teamName: tradeTeamName,
       protection: nextPick.protection,
       tradeRule,
+      displayLabel: isSwapDraftPickAsset(rulePick) ? buildExistingSwapDisplayLabel(rulePick, teamNames) : undefined,
       pick: nextPick,
     };
     addItemsToBuilder(nextItem);
@@ -652,7 +826,8 @@ export default function TradePickSelect() {
                 const key = pickKey(pick);
                 const active = key === selectedKey;
                 const alreadyAdded = alreadyAddedPickKeys.has(key);
-                const originalLogo = logoMap[normalizeTeamName(pick?.originalTeam || "")];
+                const isSwapRow = assetTypeLabel(pick) === "Swap";
+                const originalLogo = isSwapRow ? "" : logoMap[normalizeTeamName(pick?.originalTeam || "")];
                 const range = getTradeablePickOwnedRange(pick);
                 return (
                   <button
@@ -699,9 +874,9 @@ export default function TradePickSelect() {
 
                     <div className="flex items-center gap-3 text-sm font-bold opacity-90">
                       {originalLogo ? (
-                        <img src={originalLogo} alt={getOriginLabel(pick)} className="h-7 w-7 object-contain" />
+                        <img src={originalLogo} alt={getOriginLabel(pick, teamNames)} className="h-7 w-7 object-contain" />
                       ) : null}
-                      <span>{getOriginLabel(pick)}</span>
+                      <span>{getOriginLabel(pick, teamNames)}</span>
                     </div>
                   </button>
                 );
@@ -801,6 +976,8 @@ export default function TradePickSelect() {
                   <div className="mt-1 text-sm font-semibold text-neutral-400">
                     {canSwap
                       ? "Only available when both picks are fully unprotected in the same year and round."
+                      : rulePickEncumbrance
+                      ? rulePickEncumbrance
                       : "Swaps are only available for fully unprotected normal picks. Protected picks and swap rights cannot be swapped."}
                   </div>
                 </button>
@@ -828,7 +1005,7 @@ export default function TradePickSelect() {
                         >
                           {swapCandidates.map((pick) => (
                             <option key={pickKey(pick)} value={pickKey(pick)}>
-                              {formatPick(pick)} - {pick.originalTeam || pick.originalTeamName}
+                              {formatPick(pick)} - {getTeamCode(pick.originalTeam || pick.originalTeamName, teamNames)}
                             </option>
                           ))}
                         </select>
