@@ -1246,7 +1246,17 @@ function calculateOutgoingDraftCapitalExposurePenalty(outgoing = []) {
 
 export function evaluateTradePickImpact({ leagueData, userItems = [], cpuItems = [], userTeamName = "", cpuTeamName = "" } = {}) {
   const projection = buildPostTradePickProjection(leagueData, userItems, cpuItems, userTeamName, cpuTeamName);
-  const context = buildPickRankContext(leagueData, projection);
+
+  // Keep two separate rank contexts:
+  // - currentContext controls the CPU's negotiation mindset about draft capital.
+  //   A top team should not suddenly value picks like a rebuilder just because
+  //   the proposed trade would make it worse.
+  // - projectedContext controls what the actual picks are expected to become
+  //   after the trade. Own picks from a team acquiring/losing a star still move
+  //   up/down based on the post-trade roster projection.
+  const currentContext = buildPickRankContext(leagueData);
+  const projectedContext = buildPickRankContext(leagueData, projection);
+
   const incomingItems = getPrimaryTradePickItems(userItems);
   const outgoingItems = getPrimaryTradePickItems(cpuItems);
   const invalidSwapItems = [...incomingItems, ...outgoingItems].filter(
@@ -1254,9 +1264,11 @@ export function evaluateTradePickImpact({ leagueData, userItems = [], cpuItems =
   );
   const validIncomingItems = incomingItems.filter((item) => !invalidSwapItems.includes(item));
   const validOutgoingItems = outgoingItems.filter((item) => !invalidSwapItems.includes(item));
-  const directionMultiplier = getCpuPickDirectionMultiplier(context, cpuTeamName);
-  const incoming = validIncomingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, context), "incoming", directionMultiplier));
-  const outgoing = validOutgoingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, context), "outgoing", directionMultiplier));
+  const directionRow = currentContext?.byTeam?.get?.(normalizeName(cpuTeamName)) || null;
+  const directionRank = clamp(Number(directionRow?.powerRank || 15), 1, 30);
+  const directionMultiplier = getCpuPickDirectionMultiplier(currentContext, cpuTeamName);
+  const incoming = validIncomingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, projectedContext), "incoming", directionMultiplier));
+  const outgoing = validOutgoingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, projectedContext), "outgoing", directionMultiplier));
   const incomingBaseValue = round4(incoming.reduce((sum, item) => sum + Number(item.adjustedValue || 0), 0));
   const incomingPackageBridge = calculateIncomingDraftPackageBridge(incoming);
   const incomingValue = round4(incomingBaseValue + Number(incomingPackageBridge.bonus || 0));
@@ -1267,7 +1279,8 @@ export function evaluateTradePickImpact({ leagueData, userItems = [], cpuItems =
 
   const reasons = [];
   if (incoming.length || outgoing.length) {
-    reasons.push(`CPU draft-pick direction multiplier: ${directionMultiplier.toFixed(3)} (${displayTeamName(cpuTeamName)} values picks ${directionMultiplier >= 1 ? "more" : "less"} based on current Power Rank).`);
+    const currentRankLabel = directionRow?.powerRank ? `current Power Rank #${directionRank}` : "current team direction";
+    reasons.push(`CPU draft-pick direction multiplier: ${directionMultiplier.toFixed(3)} (${displayTeamName(cpuTeamName)} values picks ${directionMultiplier >= 1 ? "more" : "less"} based on ${currentRankLabel}, while individual pick expectations still use post-trade projections).`);
   }
   if (incomingPackageBridge.firstBonus > TRADE_PICK_EPS) {
     const equivalentText = Number(incomingPackageBridge.firstEquivalentCount || 0).toFixed(2);
@@ -1324,6 +1337,8 @@ export function evaluateTradePickImpact({ leagueData, userItems = [], cpuItems =
     invalidSwaps: invalidSwapItems,
     invalidSwapReasons,
     cpuPickDirectionMultiplier: directionMultiplier,
+    cpuPickDirectionRank: directionRank,
+    cpuPickDirectionBasis: "current_power_rank",
     hasPicks: incoming.length > 0 || outgoing.length > 0 || invalidSwapItems.length > 0,
   };
 }
