@@ -997,6 +997,241 @@ function ReasonCard({ reason }) {
   );
 }
 
+
+function readEventImpact(event) {
+  const raw =
+    event?.impact ??
+    event?.moodImpact ??
+    event?.moodDelta ??
+    event?.scoreDelta ??
+    event?.value ??
+    0;
+  const n = Number(raw || 0);
+  return Number.isFinite(n) ? Math.round(n * 10) / 10 : 0;
+}
+
+function readOriginalEventImpact(event, activeImpact) {
+  const raw =
+    event?.baseImpact ??
+    event?.originalImpact ??
+    event?.startingImpact ??
+    event?.initialImpact ??
+    activeImpact;
+  const n = Number(raw || 0);
+  return Number.isFinite(n) ? Math.round(n * 10) / 10 : activeImpact;
+}
+
+function formatSigned(value) {
+  const n = Number(value || 0);
+  const rounded = Number.isFinite(n) ? Math.round(n * 10) / 10 : 0;
+  return `${rounded > 0 ? "+" : ""}${rounded}`;
+}
+
+function formatMoodEventDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.toLowerCase() === "current" || raw.toLowerCase() === "current season") return "Oct 19, 2025";
+
+  const parsed = Date.parse(raw);
+  if (Number.isFinite(parsed)) {
+    try {
+      return new Date(parsed).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    } catch {}
+  }
+
+  return raw;
+}
+
+function readDecayPerWeek(event) {
+  const raw = event?.decayPerWeek ?? event?.weeklyDecay ?? event?.decay ?? 0;
+  const n = Number(raw || 0);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n * 10) / 10) : 0;
+}
+
+function buildMoodEventPills(player) {
+  const baseMood = Number(player?.baseMood ?? 50);
+  const targetMood = Math.round(Number(player?.moodScore ?? baseMood));
+  const rawEvents = Array.isArray(player?.eventLog) && player.eventLog.length
+    ? player.eventLog
+    : Array.isArray(player?.reasons)
+      ? player.reasons
+      : [];
+
+  const events = rawEvents
+    .map((event) => {
+      const impact = readEventImpact(event);
+      const originalImpact = readOriginalEventImpact(event, impact);
+      const decayPerWeek = readDecayPerWeek(event);
+      const text =
+        event?.label ||
+        event?.text ||
+        event?.headline ||
+        event?.category ||
+        "Mood event";
+      const detail =
+        event?.detail ||
+        event?.description ||
+        event?.reason ||
+        event?.duration ||
+        "";
+      const date = formatMoodEventDate(
+        event?.dateLabel ||
+        event?.displayDate ||
+        event?.date ||
+        event?.currentDate ||
+        event?.dayLabel ||
+        event?.season
+      );
+      const removalDate = decayPerWeek > 0
+        ? formatMoodEventDate(event?.expiresOnLabel || event?.expiresOn || event?.expiryDate || event?.removedOn)
+        : "";
+      const remainingWeeks = Number(event?.remainingWeeks ?? event?.weeksRemaining ?? 0);
+      const rawProgress = Number(event?.decayProgress);
+      const progress = Number.isFinite(rawProgress)
+        ? Math.max(0, Math.min(1, rawProgress))
+        : Math.abs(originalImpact) > 0
+          ? Math.max(0, Math.min(1, Math.abs(impact) / Math.abs(originalImpact)))
+          : 1;
+
+      return {
+        impact,
+        originalImpact,
+        decayPerWeek,
+        removalDate,
+        remainingWeeks: Number.isFinite(remainingWeeks) ? remainingWeeks : 0,
+        progress,
+        text,
+        detail,
+        date,
+      };
+    })
+    .filter((event) => event.text || event.impact !== 0);
+
+  const currentTotal = events.reduce((sum, event) => sum + Number(event.impact || 0), 0);
+  const missingImpact = Math.round((targetMood - baseMood - currentTotal) * 10) / 10;
+
+  if (Math.abs(missingImpact) >= 0.1) {
+    events.push({
+      impact: missingImpact,
+      originalImpact: missingImpact,
+      decayPerWeek: 0,
+      removalDate: "",
+      remainingWeeks: 0,
+      progress: 1,
+      text: "Other context",
+      detail: "Minor active factors keep the event total tied to the visible mood score.",
+      date: "Oct 19, 2025",
+    });
+  }
+
+  return {
+    baseMood,
+    targetMood,
+    events: events.slice(0, 12),
+  };
+}
+
+function MoodEventPill({ event }) {
+  const impact = Number(event?.impact || 0);
+  const originalImpact = Number(event?.originalImpact ?? impact);
+  const decayPerWeek = Number(event?.decayPerWeek || 0);
+  const progress = Math.max(0, Math.min(1, Number(event?.progress ?? 1)));
+  const toneClass = impact > 0
+    ? "border-emerald-300/25 bg-emerald-500/10 text-emerald-100"
+    : impact < 0
+      ? "border-red-300/25 bg-red-500/10 text-red-100"
+      : "border-white/10 bg-white/[0.04] text-neutral-200";
+  const barClass = impact > 0 ? "bg-emerald-300/70" : impact < 0 ? "bg-red-300/70" : "bg-neutral-300/45";
+
+  return (
+    <div className={`rounded-2xl border px-4 py-3 ${toneClass}`}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-orange-300">
+            {event?.date || "Oct 19, 2025"}
+          </div>
+          <div className="mt-1 text-sm font-black leading-5 text-white">
+            {event?.text || "Mood event"}
+          </div>
+          {event?.detail && (
+            <div className="mt-1 text-xs font-semibold leading-5 text-neutral-400">
+              {event.detail}
+            </div>
+          )}
+
+          <div className="mt-3 rounded-xl border border-white/10 bg-black/25 p-2">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-400">
+              <span>Original <span className={factorTone(originalImpact)}>{formatSigned(originalImpact)}</span></span>
+              <span>Now <span className={factorTone(impact)}>{formatSigned(impact)}</span></span>
+              {decayPerWeek > 0 ? (
+                <>
+                  <span>Decay {decayPerWeek}/week</span>
+                  <span>Removed {event?.removalDate || "at 0"}</span>
+                </>
+              ) : (
+                <span>Active while condition remains</span>
+              )}
+            </div>
+
+            {decayPerWeek > 0 && (
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className={`h-full rounded-full transition-all ${barClass}`}
+                  style={{ width: `${Math.round(progress * 100)}%` }}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+        <div className={`shrink-0 rounded-xl border border-white/10 bg-black/35 px-3 py-2 text-lg font-black ${factorTone(impact)}`}>
+          {formatSigned(impact)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SimpleMoodEventLog({ player }) {
+  const { baseMood, targetMood, events } = buildMoodEventPills(player);
+  const eventTotal = Math.round(events.reduce((sum, event) => sum + Number(event.impact || 0), 0) * 10) / 10;
+
+  return (
+    <div className="rounded-3xl border border-white/10 bg-black/70 p-4">
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <div>
+          <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Event Log</div>
+          <div className="mt-1 text-sm font-semibold text-neutral-500">Base mood starts at 50. Events explain the current mood.</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-center">
+            <div className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Base</div>
+            <div className="text-lg font-black text-white">{baseMood}</div>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-center">
+            <div className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Events</div>
+            <div className={`text-lg font-black ${factorTone(eventTotal)}`}>{eventTotal > 0 ? "+" : ""}{eventTotal}</div>
+          </div>
+          <div className="rounded-2xl border border-orange-400/30 bg-orange-500/15 px-3 py-2 text-center">
+            <div className="text-[9px] font-black uppercase tracking-[0.14em] text-orange-200">Mood</div>
+            <div className="text-lg font-black text-orange-300">{targetMood}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        {events.length ? (
+          events.map((event, index) => (
+            <MoodEventPill key={`${event.date}-${event.text}-${index}`} event={event} />
+          ))
+        ) : (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-sm font-bold text-neutral-400">
+            No mood events logged yet.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function LockerRoom() {
   const { leagueData, selectedTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
@@ -1276,56 +1511,7 @@ export default function LockerRoom() {
                       />
                     </div>
 
-                    <div className="grid gap-4 lg:grid-cols-3">
-                      <div className="rounded-3xl border border-white/10 bg-black/70 p-4">
-                        <div className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-orange-300">Role</div>
-                        <DetailRow label="Current Role" value={selectedPlayer.role?.actualRole || "-"} />
-                        <DetailRow label="Expected Role" value={selectedPlayer.role?.expectedRole || "-"} />
-                        <DetailRow label="Team Rank" value={selectedPlayer.role?.rank ? `#${selectedPlayer.role.rank}` : "-"} />
-                      </div>
-
-                      <div className="rounded-3xl border border-white/10 bg-black/70 p-4">
-                        <div className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-orange-300">Contract</div>
-                        <DetailRow label="Salary" value={formatMoney(selectedPlayer.contract?.salary)} />
-                        <DetailRow label="Years Left" value={selectedPlayer.contract?.yearsLeft ?? "-"} />
-                        <DetailRow label="Market AAV" value={formatMoney(selectedPlayer.contract?.estimatedMarketAAV)} />
-                      </div>
-
-                      <div className="rounded-3xl border border-white/10 bg-black/70 p-4">
-                        <div className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-orange-300">Stats Used</div>
-                        <DetailRow label="GP" value={selectedPlayer.stats?.games ?? "-"} />
-                        <DetailRow label="MPG" value={selectedPlayer.stats?.minutesPerGame ?? "-"} />
-                        <DetailRow label="PPG" value={selectedPlayer.stats?.pointsPerGame ?? "-"} />
-                      </div>
-                    </div>
-
-                    <div className="mt-6 rounded-3xl border border-white/10 bg-black/70 p-4">
-                      <div className="mb-4 flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Mood Factors</div>
-                          <div className="text-sm font-semibold text-neutral-500">Positive numbers help mood. Negative numbers hurt mood.</div>
-                        </div>
-                      </div>
-                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                        {Object.entries(selectedPlayer.factors || {}).map(([key, value]) => (
-                          <div key={key} className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
-                            <div className="text-[10px] font-black uppercase tracking-[0.13em] text-neutral-500">
-                              {key.replace(/([A-Z])/g, " $1")}
-                            </div>
-                            <div className={`mt-1 text-2xl font-black ${factorTone(value)}`}>{Number(value) > 0 ? "+" : ""}{value}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="mt-6">
-                      <div className="mb-3 text-xs font-black uppercase tracking-[0.2em] text-orange-300">What is getting to him?</div>
-                      <div className="grid gap-3 lg:grid-cols-2">
-                        {(selectedPlayer.reasons || []).map((reason, index) => (
-                          <ReasonCard key={`${reason.category}-${index}`} reason={reason} />
-                        ))}
-                      </div>
-                    </div>
+                    <SimpleMoodEventLog player={selectedPlayer} />
                   </div>
                 ) : (
                   <div className="relative z-10 p-10 text-center text-lg font-black text-neutral-400">
