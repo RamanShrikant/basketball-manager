@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
+import CpuTradeDiscoveryPanel from "../components/CpuTradeDiscoveryPanel.jsx";
 import {
   readTradeDeskFeed,
   mergeTradeDeskFeedWithLeague,
@@ -308,6 +309,7 @@ export default function Trades() {
   const [storedFeed, setStoredFeed] = useState(() => readTradeDeskFeed());
   const [activeDeskFilter, setActiveDeskFilter] = useState("all");
   const [activeDeskView, setActiveDeskView] = useState("live");
+  const [showCpuTradeScanner, setShowCpuTradeScanner] = useState(false);
 
   useEffect(() => {
     const refresh = () => setStoredFeed(readTradeDeskFeed());
@@ -437,6 +439,14 @@ export default function Trades() {
                   className="mt-4 w-full rounded-2xl border border-orange-400/25 bg-black px-6 py-5 text-xl font-black text-orange-100 transition hover:-translate-y-0.5 hover:border-orange-300/60 hover:bg-orange-500/10"
                 >
                   Trade Finder
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowCpuTradeScanner((prev) => !prev)}
+                  className="mt-4 w-full rounded-2xl border border-sky-300/25 bg-sky-500/10 px-6 py-5 text-xl font-black text-sky-100 transition hover:-translate-y-0.5 hover:border-sky-300/60 hover:bg-sky-500/20"
+                >
+                  All Possible CPU Trades
                 </button>
 
                 {hasSavedProposal && (
@@ -614,6 +624,13 @@ export default function Trades() {
               </div>
             </div>
           </div>
+
+          {showCpuTradeScanner && (
+            <CpuTradeDiscoveryPanel
+              leagueData={leagueData}
+              selectedTeam={selectedTeam}
+            />
+          )}
         </div>
       </div>
     </PageFade>
