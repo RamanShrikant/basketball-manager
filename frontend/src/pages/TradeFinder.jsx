@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
-import { findTradeOffers } from "../api/tradeNegotiationPy.js";
+import { findComfortableTradeFinderOffers, sortTradeFinderOfferItems } from "../utils/tradeFinderOfferEngine.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import PageFade from "../components/PageFade";
 import {
@@ -1776,42 +1776,30 @@ export default function TradeFinder() {
     setIsSearchingOffers(true);
 
     try {
-      const tradeFinderDraftPicks = collectAllTradeablePicksForTradeFinder(leagueData, teams);
-      const seasonYear = getSeasonYearFromLeague(leagueData);
-
-      const result = await findTradeOffers({
-        selectedTeamName: selectedTeam?.name || "",
-        selectedTeam,
-        selectedItems,
-        teams,
-        seasonYear,
-        currentSeasonYear: seasonYear,
-        draftPicks: tradeFinderDraftPicks,
-        teamContext: buildTradeFinderTeamContext(teams),
-        maxOffers: 30,
-      });
-
-      const rawOffers = Array.isArray(result?.offers) ? result.offers : [];
-      const nextOffers = filterLegalAcceptedTradeFinderOffers({
-        offers: rawOffers,
+      const result = findComfortableTradeFinderOffers({
         leagueData,
         selectedTeam,
         selectedItems,
+        teams,
       });
+
+      const nextOffers = Array.isArray(result?.offers)
+        ? result.offers.map((offer) => ({
+            ...offer,
+            offer: sortTradeFinderOfferItems(offer.offer, leagueData),
+          }))
+        : [];
       setPythonOffers(nextOffers);
 
       if (!nextOffers.length) {
-        const filteredCount = rawOffers.length;
         setOfferSearchError(
-          filteredCount
-            ? `${filteredCount} CPU idea${filteredCount === 1 ? " was" : "s were"} found, but none passed acceptance, salary-matching, roster, and ownership checks.`
-            : result?.message || "No fully legal accepted CPU offers were found for this package."
+          result?.message || "No CPU team found a Propose Trade-legal package it would comfortably accept."
         );
       }
     } catch (error) {
-      console.warn("[TradeFinder] Python offer search failed.", error);
+      console.warn("[TradeFinder] offer search failed.", error);
       setPythonOffers([]);
-      setOfferSearchError(error?.message || "Python Trade Finder failed. No offers shown because Trade Finder only displays fully legal accepted deals.");
+      setOfferSearchError(error?.message || "Trade Finder failed while checking Propose Trade-compatible CPU offers.");
     } finally {
       setIsSearchingOffers(false);
     }
@@ -1830,7 +1818,7 @@ export default function TradeFinder() {
       selectedTeam,
       offerTeam: offer.team,
       selectedItems,
-      offerItems: offer.offer,
+      offerItems: sortTradeFinderOfferItems(offer.offer, leagueData),
     });
 
     navigate("/propose-trade", { state: { fromTradeFinder: true } });
@@ -1943,7 +1931,7 @@ export default function TradeFinder() {
                       {selectedItems.length ? `${selectedItems.length} asset package` : "Build a package"}
                     </div>
                     <div className="mt-1 text-xs font-bold text-neutral-500">
-                      Package value: {selectedValue.toFixed(1)} • Legal accepted offers only • Teams checked: {Math.max(0, teams.length - 1)}
+                      Package value: {selectedValue.toFixed(1)} • One comfortable offer max per CPU team • Teams checked: {Math.max(0, teams.length - 1)}
                     </div>
                   </div>
 
@@ -1961,7 +1949,7 @@ export default function TradeFinder() {
               <div className="tradeFinderScroller max-h-[68vh] overflow-y-auto p-5">
                 {!searched && (
                   <div className="rounded-2xl border border-orange-400/25 bg-orange-500/10 p-5 text-sm font-bold leading-6 text-orange-100">
-                    Pick a package on the left, then press Search Offers. Results only show fully legal CPU-accepted trades.
+                    Pick a package on the left, then press Search Offers. Each CPU team can show one legal, comfortable offer using the same acceptance logic as Propose Trade.
                   </div>
                 )}
 
@@ -1973,7 +1961,7 @@ export default function TradeFinder() {
 
                 {searched && isSearchingOffers && (
                   <div className="rounded-2xl border border-orange-400/25 bg-orange-500/10 p-5 text-sm font-bold leading-6 text-orange-100">
-                    CPU front offices are checking acceptance, salary matching, roster count, and asset ownership...
+                    CPU front offices are building one comfortable package each, then checking Propose Trade acceptance, salary matching, and roster rules...
                   </div>
                 )}
 
@@ -1985,7 +1973,7 @@ export default function TradeFinder() {
 
                 {searched && selectedItems.length > 0 && !isSearchingOffers && !offers.length && (
                   <div className="rounded-2xl border border-white/10 bg-black/35 p-5 text-sm font-bold leading-6 text-neutral-300">
-                    No fully legal accepted offers are available for this package. Trade Finder now hides offers that fail CPU acceptance, salary-matching, roster-count, or asset-ownership checks.
+                    No CPU team found a legal package it would comfortably accept for this offer. Very weak packages may get no responses.
                   </div>
                 )}
 
@@ -2021,13 +2009,13 @@ export default function TradeFinder() {
                         </div>
 
                         <div className="mt-4 grid gap-3">
-                          {offer.offer.map((item, index) => (
+                          {sortTradeFinderOfferItems(offer.offer, leagueData).map((item, index) => (
                             <OfferAssetLine key={`${offer.team?.name}-${item.label}-${index}`} item={item} team={offer.team} />
                           ))}
                         </div>
 
                         <div className="mt-3 text-xs font-bold text-neutral-500">
-                          Finder estimate: {Number(offer.gap || 0) >= 0 ? "+" : ""}{Number(offer.gap || 0).toFixed(1)} value versus your package.
+                          Finder estimate: {Number(offer.gap || 0) >= 0 ? "+" : ""}{Number(offer.gap || 0).toFixed(1)} value versus your package • CPU comfort margin {Number(offer.comfortMargin || 0) >= 0 ? "+" : ""}{Number(offer.comfortMargin || 0).toFixed(2)}.
                         </div>
                       </div>
                     ))}
