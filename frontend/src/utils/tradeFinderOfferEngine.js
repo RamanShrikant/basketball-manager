@@ -32,6 +32,171 @@ const MAX_EVALUATIONS_PER_TEAM = 36;
 const BASE_EVAL_MIN_BEFORE_EARLY_STOP = 10;
 const GOOD_ENOUGH_SCORE = 9.0;
 
+
+const TRADE_FINDER_DEBUG_KEY = "bm_trade_finder_debug_v1";
+const TRADE_FINDER_SLOW_EVAL_MS = 80;
+const TRADE_FINDER_SLOW_TEAM_MS = 350;
+
+function isTradeFinderDebugEnabled() {
+  try {
+    return Boolean(
+      typeof window !== "undefined" &&
+        (window.__TF_DEBUG || window.__debugTradeFinder || localStorage.getItem(TRADE_FINDER_DEBUG_KEY) === "1")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function tfDebugNow() {
+  try {
+    return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  } catch {
+    return Date.now();
+  }
+}
+
+function tfRoundMs(value) {
+  const n = Number(value || 0);
+  return Math.round(n * 10) / 10;
+}
+
+function tfDebugLog(label, payload = null) {
+  if (!isTradeFinderDebugEnabled()) return;
+  if (payload === null || payload === undefined) console.log(`[TF DEBUG] ${label}`);
+  else console.log(`[TF DEBUG] ${label}`, payload);
+}
+
+function tfItemsLabel(items = []) {
+  const rows = Array.isArray(items) ? items : [];
+  const players = rows.filter((item) => item?.type === "player").length;
+  const picks = rows.filter((item) => item?.type === "pick").length;
+  return `${rows.length} assets (${players} players, ${picks} picks)`;
+}
+
+
+
+function countTradeFinderItemTypes(items = []) {
+  const rows = Array.isArray(items) ? items : [];
+  return {
+    assetCount: rows.length,
+    playerCount: rows.filter((item) => item?.type === "player").length,
+    pickCount: rows.filter((item) => item?.type === "pick").length,
+  };
+}
+
+function getTradeFinderSearchProfile(selectedItems = []) {
+  const counts = countTradeFinderItemTypes(selectedItems);
+
+  // Big multi-player packages are expensive because each evaluated CPU offer
+  // requires a full post-trade team-impact pass. Keep the same acceptance logic,
+  // but avoid over-refining after we already found a legal comfortable offer.
+  if (counts.playerCount >= 3 || counts.assetCount >= 4) {
+    return {
+      name: "large_package_fast",
+      reason: "3+ outgoing players/assets",
+      maxEvaluationsPerTeam: 8,
+      maxBasePackagesPerTeam: 12,
+      maxBalanceRounds: 0,
+      maxAcceptedBaseSeeds: 1,
+      baseEvalMinBeforeEarlyStop: 2,
+      goodEnoughScore: 20,
+      stopAfterFirstAccepted: true,
+      perTeamBudgetMs: 2500,
+      maxNoAcceptedEvaluations: 2,
+      hardRejectStopScore: -10,
+      weakRejectStopScore: 2,
+    };
+  }
+
+  if (counts.playerCount >= 2 || counts.assetCount >= 2) {
+    return {
+      name: "medium_package_balanced",
+      reason: "2 outgoing assets/players",
+      maxEvaluationsPerTeam: 26,
+      maxBasePackagesPerTeam: 24,
+      maxBalanceRounds: 1,
+      maxAcceptedBaseSeeds: 2,
+      baseEvalMinBeforeEarlyStop: 8,
+      goodEnoughScore: 12,
+      stopAfterFirstAccepted: false,
+      perTeamBudgetMs: 16000,
+    };
+  }
+
+  return {
+    name: "standard_deep",
+    reason: "single outgoing asset",
+    maxEvaluationsPerTeam: MAX_EVALUATIONS_PER_TEAM,
+    maxBasePackagesPerTeam: MAX_BASE_PACKAGES_PER_TEAM,
+    maxBalanceRounds: MAX_BALANCE_ROUNDS,
+    maxAcceptedBaseSeeds: MAX_ACCEPTED_BASE_SEEDS,
+    baseEvalMinBeforeEarlyStop: BASE_EVAL_MIN_BEFORE_EARLY_STOP,
+    goodEnoughScore: GOOD_ENOUGH_SCORE,
+    stopAfterFirstAccepted: false,
+    perTeamBudgetMs: 0,
+  };
+}
+
+function getEvalLimit(evalState = null) {
+  return Number(evalState?.profile?.maxEvaluationsPerTeam || MAX_EVALUATIONS_PER_TEAM);
+}
+
+function hasTeamTimeBudgetExpired(evalState = null) {
+  const budget = Number(evalState?.profile?.perTeamBudgetMs || 0);
+  const startedAt = Number(evalState?.teamStartedAt || 0);
+  return budget > 0 && startedAt > 0 && tfDebugNow() - startedAt >= budget;
+}
+
+function shouldStopNoOfferSearch(evalState = null, acceptedBases = []) {
+  if (!evalState?.profile || (Array.isArray(acceptedBases) && acceptedBases.length > 0)) return false;
+
+  const count = Number(evalState.count || 0);
+  if (count <= 0) return false;
+
+  const bestRawScore = Number(evalState?.metrics?.bestRawScore ?? -Infinity);
+  const hardRejectStopScore = Number(evalState.profile.hardRejectStopScore);
+  if (Number.isFinite(bestRawScore) && Number.isFinite(hardRejectStopScore) && bestRawScore <= hardRejectStopScore) {
+    if (evalState.metrics) evalState.metrics.noOfferEarlyStop = "hard_reject_score";
+    return true;
+  }
+
+  const maxNoAcceptedEvaluations = Number(evalState.profile.maxNoAcceptedEvaluations || 0);
+  const weakRejectStopScore = Number(evalState.profile.weakRejectStopScore);
+  if (
+    maxNoAcceptedEvaluations > 0 &&
+    count >= maxNoAcceptedEvaluations &&
+    (!Number.isFinite(weakRejectStopScore) || bestRawScore <= weakRejectStopScore)
+  ) {
+    if (evalState.metrics) evalState.metrics.noOfferEarlyStop = "no_accepted_eval_limit";
+    return true;
+  }
+
+  return false;
+}
+
+const TRADE_FINDER_YIELD_EVERY_EVALUATIONS = 1;
+
+function tfYieldToBrowser() {
+  return new Promise((resolve) => {
+    try {
+      if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(() => setTimeout(resolve, 0));
+        return;
+      }
+    } catch {}
+    setTimeout(resolve, 0);
+  });
+}
+
+function tfSafeProgress(callback, payload) {
+  if (typeof callback !== "function") return;
+  try {
+    callback(payload);
+  } catch {}
+}
+
+
 function safeJSON(raw, fallback = null) {
   try {
     const parsed = JSON.parse(raw);
@@ -748,12 +913,23 @@ function preValidatePackage({ leagueData, selectedTeam, cpuTeam, selectedItems, 
 }
 
 function evaluateCpuOfferPackage({ leagueData, selectedTeam, cpuTeam, selectedItems, cpuItems, evalState }) {
-  if (!preValidatePackage({ leagueData, selectedTeam, cpuTeam, selectedItems, cpuItems })) return null;
+  const __tfEvalStart = tfDebugNow();
+  const __tfTeamName = getTeamName(cpuTeam);
+  const __tfItemLabel = tfItemsLabel(cpuItems);
+
+  if (!preValidatePackage({ leagueData, selectedTeam, cpuTeam, selectedItems, cpuItems })) {
+    if (evalState?.metrics) evalState.metrics.preRejected = Number(evalState.metrics.preRejected || 0) + 1;
+    return null;
+  }
 
   const key = packageKey(cpuItems);
-  if (evalState?.cache?.has(key)) return evalState.cache.get(key);
+  if (evalState?.cache?.has(key)) {
+    if (evalState?.metrics) evalState.metrics.cacheHits = Number(evalState.metrics.cacheHits || 0) + 1;
+    return evalState.cache.get(key);
+  }
   if (evalState) evalState.count = Number(evalState.count || 0) + 1;
 
+  const __tfImpactStart = tfDebugNow();
   const evaluation = evaluateTradeTeamImpact({
     leagueData,
     userTeam: selectedTeam,
@@ -766,18 +942,46 @@ function evaluateCpuOfferPackage({ leagueData, selectedTeam, cpuTeam, selectedIt
     cpuTradeRole: "trade_finder",
     cpuTradeContext: { source: "trade_finder_offer_engine" },
   });
+  const __tfImpactMs = tfDebugNow() - __tfImpactStart;
+  if (evalState?.metrics) {
+    const __tfScore = Number(evaluation?.score || 0);
+    const __tfThreshold = Number(evaluation?.teamImpact?.threshold || 0);
+    evalState.metrics.impactMs = Number(evalState.metrics.impactMs || 0) + __tfImpactMs;
+    evalState.metrics.lastRawScore = __tfScore;
+    evalState.metrics.lastRawThreshold = __tfThreshold;
+    evalState.metrics.lastRawMargin = __tfScore - __tfThreshold;
+    if (!Number.isFinite(Number(evalState.metrics.bestRawScore)) || __tfScore > Number(evalState.metrics.bestRawScore)) {
+      evalState.metrics.bestRawScore = __tfScore;
+      evalState.metrics.bestRawThreshold = __tfThreshold;
+      evalState.metrics.bestRawMargin = __tfScore - __tfThreshold;
+    }
+  }
+  if (isTradeFinderDebugEnabled() && __tfImpactMs >= TRADE_FINDER_SLOW_EVAL_MS) {
+    tfDebugLog("slow evaluateTradeTeamImpact", {
+      team: __tfTeamName,
+      impactMs: tfRoundMs(__tfImpactMs),
+      totalEvalMs: tfRoundMs(tfDebugNow() - __tfEvalStart),
+      cpuItems: __tfItemLabel,
+      score: Number(evaluation?.score || 0),
+      threshold: Number(evaluation?.teamImpact?.threshold || 0),
+      accepted: hasAcceptedEvaluation(evaluation),
+    });
+  }
 
   if (!hasAcceptedEvaluation(evaluation)) {
+    if (evalState?.metrics) evalState.metrics.cpuRejected = Number(evalState.metrics.cpuRejected || 0) + 1;
     if (evalState?.cache) evalState.cache.set(key, null);
     return null;
   }
 
   const comfortMargin = getComfortMargin(evaluation);
   if (comfortMargin < COMFORT_FLOOR) {
+    if (evalState?.metrics) evalState.metrics.comfortRejected = Number(evalState.metrics.comfortRejected || 0) + 1;
     if (evalState?.cache) evalState.cache.set(key, null);
     return null;
   }
 
+  const __tfFinalValidationStart = tfDebugNow();
   const finalValidation = validateTradeForExecution({
     leagueData,
     userTeam: selectedTeam,
@@ -786,7 +990,10 @@ function evaluateCpuOfferPackage({ leagueData, selectedTeam, cpuTeam, selectedIt
     cpuItems,
     evaluation,
   });
+  const __tfFinalValidationMs = tfDebugNow() - __tfFinalValidationStart;
+  if (evalState?.metrics) evalState.metrics.finalValidationMs = Number(evalState.metrics.finalValidationMs || 0) + __tfFinalValidationMs;
   if (!finalValidation.ok) {
+    if (evalState?.metrics) evalState.metrics.finalRejected = Number(evalState.metrics.finalRejected || 0) + 1;
     if (evalState?.cache) evalState.cache.set(key, null);
     return null;
   }
@@ -809,6 +1016,7 @@ function evaluateCpuOfferPackage({ leagueData, selectedTeam, cpuTeam, selectedIt
     quality: comfortMargin <= TARGET_COMFORT_MARGIN + 0.22 ? "Comfort Offer" : "CPU-Lean Offer",
   };
 
+  if (evalState?.metrics) evalState.metrics.accepted = Number(evalState.metrics.accepted || 0) + 1;
   if (evalState?.cache) evalState.cache.set(key, result);
   return result;
 }
@@ -826,7 +1034,7 @@ function scoreOffer(result) {
   return closeness * 100 + assetCount * 0.28 + pickCount * 0.5 - playerCount * 0.28 + noPlayerPenalty + valueGap * 0.008;
 }
 
-function tryBalanceWithAdditionalAssets({
+async function tryBalanceWithAdditionalAssets({
   leagueData,
   selectedTeam,
   cpuTeam,
@@ -842,9 +1050,13 @@ function tryBalanceWithAdditionalAssets({
   let currentItems = clonePackage(startResult.offer);
   const selectedValue = packageValue(selectedItems, leagueData);
 
-  for (let round = 0; round < MAX_BALANCE_ROUNDS; round += 1) {
+  const maxBalanceRounds = Number(evalState?.profile?.maxBalanceRounds ?? MAX_BALANCE_ROUNDS);
+  if (maxBalanceRounds <= 0) return startResult;
+
+  for (let round = 0; round < maxBalanceRounds; round += 1) {
     if (currentItems.length >= MAX_SIDE_ITEMS) break;
-    if (Number(evalState?.count || 0) >= MAX_EVALUATIONS_PER_TEAM) break;
+    if (Number(evalState?.count || 0) >= getEvalLimit(evalState)) break;
+    if (hasTeamTimeBudgetExpired(evalState)) break;
 
     const used = new Set(currentItems.map(itemFamilyKey));
     const currentValue = packageValue(currentItems, leagueData);
@@ -865,9 +1077,13 @@ function tryBalanceWithAdditionalAssets({
     let bestAdditionScore = bestScore;
 
     for (const row of assetCandidates) {
-      if (Number(evalState?.count || 0) >= MAX_EVALUATIONS_PER_TEAM) break;
+      if (Number(evalState?.count || 0) >= getEvalLimit(evalState)) break;
+      if (hasTeamTimeBudgetExpired(evalState)) break;
       const nextItems = [...currentItems, row.asset];
       const evaluated = evaluateCpuOfferPackage({ leagueData, selectedTeam, cpuTeam, selectedItems, cpuItems: nextItems, evalState });
+      if (evalState?.count && evalState.count % TRADE_FINDER_YIELD_EVERY_EVALUATIONS === 0) {
+        await tfYieldToBrowser();
+      }
       if (!evaluated) continue;
       const nextScore = scoreOffer(evaluated);
 
@@ -888,21 +1104,66 @@ function tryBalanceWithAdditionalAssets({
   return best;
 }
 
-function findBestOfferForTeam({ leagueData, selectedTeam, cpuTeam, selectedItems }) {
+async function findBestOfferForTeam({ leagueData, selectedTeam, cpuTeam, selectedItems, onProgress = null, searchState = null }) {
+  const __tfTeamStart = tfDebugNow();
+  const __tfTeamName = getTeamName(cpuTeam);
+  const profile = getTradeFinderSearchProfile(selectedItems);
+  const __tfCandidateStart = tfDebugNow();
   const { players, picks, candidates, playerPool, balancePlayers, balancePicks } = getCandidateAssets(cpuTeam, leagueData);
-  if (!candidates.length) return null;
+  const __tfCandidateMs = tfDebugNow() - __tfCandidateStart;
+  if (!candidates.length) {
+    tfDebugLog("team skipped - no candidates", { team: __tfTeamName, candidateMs: tfRoundMs(__tfCandidateMs) });
+    return null;
+  }
 
-  const evalState = { cache: new Map(), count: 0 };
-  const basePackages = buildBasePackages({ leagueData, selectedTeam, cpuTeam, selectedItems, players, picks, candidates, playerPool });
+  const evalState = {
+    cache: new Map(),
+    count: 0,
+    profile,
+    teamStartedAt: __tfTeamStart,
+    metrics: {
+      candidateMs: __tfCandidateMs,
+      basePackageMs: 0,
+      impactMs: 0,
+      finalValidationMs: 0,
+      preRejected: 0,
+      cacheHits: 0,
+      cpuRejected: 0,
+      comfortRejected: 0,
+      finalRejected: 0,
+      accepted: 0,
+    },
+  };
+  const __tfBasePackageStart = tfDebugNow();
+  const allBasePackages = buildBasePackages({ leagueData, selectedTeam, cpuTeam, selectedItems, players, picks, candidates, playerPool });
+  const basePackages = allBasePackages.slice(0, Number(profile.maxBasePackagesPerTeam || MAX_BASE_PACKAGES_PER_TEAM));
+  evalState.metrics.basePackageMs = tfDebugNow() - __tfBasePackageStart;
   const acceptedBases = [];
   let best = null;
   let bestScore = Infinity;
 
   for (let i = 0; i < basePackages.length; i += 1) {
-    if (evalState.count >= MAX_EVALUATIONS_PER_TEAM) break;
+    if (evalState.count >= getEvalLimit(evalState)) break;
+    if (hasTeamTimeBudgetExpired(evalState)) break;
     const basePackage = basePackages[i];
     const evaluated = evaluateCpuOfferPackage({ leagueData, selectedTeam, cpuTeam, selectedItems, cpuItems: basePackage, evalState });
-    if (!evaluated) continue;
+
+    if (evalState.count && evalState.count % TRADE_FINDER_YIELD_EVERY_EVALUATIONS === 0) {
+      tfSafeProgress(onProgress, {
+        phase: "evaluating",
+        team: __tfTeamName,
+        teamIndex: searchState?.teamIndex || 0,
+        teamsToCheck: searchState?.teamsToCheck || 0,
+        evaluationsForTeam: evalState.count,
+        offersFound: searchState?.offersFound || 0,
+      });
+      await tfYieldToBrowser();
+    }
+
+    if (!evaluated) {
+      if (shouldStopNoOfferSearch(evalState, acceptedBases)) break;
+      continue;
+    }
 
     acceptedBases.push(evaluated);
     const evaluatedScore = scoreOffer(evaluated);
@@ -911,18 +1172,21 @@ function findBestOfferForTeam({ leagueData, selectedTeam, cpuTeam, selectedItems
       bestScore = evaluatedScore;
     }
 
-    if (i >= BASE_EVAL_MIN_BEFORE_EARLY_STOP && acceptedBases.length >= MAX_ACCEPTED_BASE_SEEDS) break;
-    if (i >= BASE_EVAL_MIN_BEFORE_EARLY_STOP && bestScore <= GOOD_ENOUGH_SCORE) break;
+    if (i >= profile.baseEvalMinBeforeEarlyStop && acceptedBases.length >= profile.maxAcceptedBaseSeeds) break;
+    if (i >= profile.baseEvalMinBeforeEarlyStop && bestScore <= profile.goodEnoughScore) break;
+    if (profile.stopAfterFirstAccepted && i >= profile.baseEvalMinBeforeEarlyStop && acceptedBases.length >= 1) break;
   }
 
   if (!acceptedBases.length) return null;
 
-  const balanceSeeds = acceptedBases.sort((a, b) => scoreOffer(a) - scoreOffer(b)).slice(0, MAX_ACCEPTED_BASE_SEEDS);
+  const balanceSeeds = acceptedBases.sort((a, b) => scoreOffer(a) - scoreOffer(b)).slice(0, profile.maxAcceptedBaseSeeds || MAX_ACCEPTED_BASE_SEEDS);
 
   for (const seed of balanceSeeds) {
-    if (evalState.count >= MAX_EVALUATIONS_PER_TEAM) break;
+    if (evalState.count >= getEvalLimit(evalState)) break;
+    if (hasTeamTimeBudgetExpired(evalState)) break;
+    if (profile.maxBalanceRounds <= 0) break;
 
-    const playerBalanced = tryBalanceWithAdditionalAssets({
+    const playerBalanced = await tryBalanceWithAdditionalAssets({
       leagueData,
       selectedTeam,
       cpuTeam,
@@ -931,7 +1195,7 @@ function findBestOfferForTeam({ leagueData, selectedTeam, cpuTeam, selectedItems
       additions: balancePlayers,
       evalState,
     });
-    const pickBalanced = tryBalanceWithAdditionalAssets({
+    const pickBalanced = await tryBalanceWithAdditionalAssets({
       leagueData,
       selectedTeam,
       cpuTeam,
@@ -948,19 +1212,50 @@ function findBestOfferForTeam({ leagueData, selectedTeam, cpuTeam, selectedItems
       bestScore = candidateScore;
     }
 
-    if (bestScore <= GOOD_ENOUGH_SCORE) break;
+    if (bestScore <= profile.goodEnoughScore) break;
+  }
+
+  const __tfTeamMs = tfDebugNow() - __tfTeamStart;
+  const __tfSummary = {
+    team: __tfTeamName,
+    totalMs: tfRoundMs(__tfTeamMs),
+    candidateMs: tfRoundMs(evalState.metrics.candidateMs),
+    basePackageMs: tfRoundMs(evalState.metrics.basePackageMs),
+    impactMs: tfRoundMs(evalState.metrics.impactMs),
+    finalValidationMs: tfRoundMs(evalState.metrics.finalValidationMs),
+    basePackages: basePackages.length,
+    basePackagesGenerated: allBasePackages.length,
+    searchProfile: profile.name,
+    evaluations: evalState.count,
+    acceptedCandidates: evalState.metrics.accepted,
+    preRejected: evalState.metrics.preRejected,
+    cpuRejected: evalState.metrics.cpuRejected,
+    comfortRejected: evalState.metrics.comfortRejected,
+    finalRejected: evalState.metrics.finalRejected,
+    cacheHits: evalState.metrics.cacheHits,
+    bestRawScore: Number.isFinite(Number(evalState.metrics.bestRawScore)) ? tfRoundMs(evalState.metrics.bestRawScore) : null,
+    bestRawMargin: Number.isFinite(Number(evalState.metrics.bestRawMargin)) ? tfRoundMs(evalState.metrics.bestRawMargin) : null,
+    noOfferEarlyStop: evalState.metrics.noOfferEarlyStop || "",
+    foundOffer: Boolean(best),
+    bestScore: Number.isFinite(bestScore) ? tfRoundMs(bestScore) : null,
+  };
+  if (isTradeFinderDebugEnabled() && (__tfTeamMs >= TRADE_FINDER_SLOW_TEAM_MS || best)) {
+    tfDebugLog("team checked", __tfSummary);
   }
 
   return best
     ? {
         ...best,
         offer: sortTradeFinderOfferItems(best.offer, leagueData),
-        searchStats: { evaluations: evalState.count },
+        searchStats: {
+          evaluations: evalState.count,
+          timings: __tfSummary,
+        },
       }
     : null;
 }
 
-export function findComfortableTradeFinderOffers({ leagueData, selectedTeam, selectedItems = [], teams = [] } = {}) {
+export async function findComfortableTradeFinderOffers({ leagueData, selectedTeam, selectedItems = [], teams = [], onProgress = null } = {}) {
   if (!leagueData || !selectedTeam) {
     return { offers: [], message: "Trade Finder needs a loaded league and selected team." };
   }
@@ -975,21 +1270,128 @@ export function findComfortableTradeFinderOffers({ leagueData, selectedTeam, sel
 
   const allTeams = Array.isArray(teams) && teams.length ? teams : getAllTeamsFromLeague(leagueData);
   const selectedName = getTeamName(selectedTeam);
+  const checkTeams = allTeams.filter((team) => {
+    const cpuName = getTeamName(team);
+    return Boolean(cpuName && !sameTeamName(cpuName, selectedName));
+  });
   const offers = [];
+  const __tfSearchStart = tfDebugNow();
+  const __tfTeamSummaries = [];
 
-  for (const cpuTeam of allTeams) {
+  tfDebugLog("search start", {
+    selectedTeam: selectedName,
+    selectedItems: tfItemsLabel(selectedItems),
+    selectedValue: tfRoundMs(packageValue(selectedItems, leagueData)),
+    teamsToCheck: checkTeams.length,
+    searchProfile: getTradeFinderSearchProfile(selectedItems),
+    maxEvaluationsPerTeam: getTradeFinderSearchProfile(selectedItems).maxEvaluationsPerTeam,
+    theoreticalWorstCaseEvaluations: checkTeams.length * getTradeFinderSearchProfile(selectedItems).maxEvaluationsPerTeam,
+    asyncChunked: true,
+  });
+
+  tfSafeProgress(onProgress, {
+    phase: "start",
+    team: "",
+    teamIndex: 0,
+    teamsToCheck: checkTeams.length,
+    offersFound: 0,
+    elapsedSec: 0,
+  });
+
+  for (let teamIndex = 0; teamIndex < checkTeams.length; teamIndex += 1) {
+    const cpuTeam = checkTeams[teamIndex];
     const cpuName = getTeamName(cpuTeam);
-    if (!cpuName || sameTeamName(cpuName, selectedName)) continue;
+    const __tfLoopStart = tfDebugNow();
 
-    const offer = findBestOfferForTeam({ leagueData, selectedTeam, cpuTeam, selectedItems });
+    tfSafeProgress(onProgress, {
+      phase: "team_start",
+      team: cpuName,
+      teamIndex: teamIndex + 1,
+      teamsToCheck: checkTeams.length,
+      offersFound: offers.length,
+      elapsedSec: tfRoundMs((tfDebugNow() - __tfSearchStart) / 1000),
+    });
+
+    await tfYieldToBrowser();
+
+    const offer = await findBestOfferForTeam({
+      leagueData,
+      selectedTeam,
+      cpuTeam,
+      selectedItems,
+      onProgress,
+      searchState: {
+        teamIndex: teamIndex + 1,
+        teamsToCheck: checkTeams.length,
+        offersFound: offers.length,
+      },
+    });
+
+    const __tfLoopMs = tfDebugNow() - __tfLoopStart;
+    const __tfLoopSummary = {
+      team: cpuName,
+      ms: tfRoundMs(__tfLoopMs),
+      foundOffer: Boolean(offer),
+      evaluations: Number(offer?.searchStats?.evaluations || 0),
+      timings: offer?.searchStats?.timings || null,
+    };
+    __tfTeamSummaries.push(__tfLoopSummary);
     if (offer) offers.push(offer);
+    if (isTradeFinderDebugEnabled() && __tfLoopMs >= TRADE_FINDER_SLOW_TEAM_MS) {
+      tfDebugLog("slow team loop", __tfLoopSummary);
+    }
+
+    tfSafeProgress(onProgress, {
+      phase: "team_done",
+      team: cpuName,
+      teamIndex: teamIndex + 1,
+      teamsToCheck: checkTeams.length,
+      offersFound: offers.length,
+      teamMs: tfRoundMs(__tfLoopMs),
+      evaluationsForTeam: __tfLoopSummary.evaluations,
+      elapsedSec: tfRoundMs((tfDebugNow() - __tfSearchStart) / 1000),
+    });
+
+    await tfYieldToBrowser();
   }
 
   offers.sort((a, b) => scoreOffer(a) - scoreOffer(b) || String(getTeamName(a.team)).localeCompare(getTeamName(b.team)));
 
+  const __tfTotalMs = tfDebugNow() - __tfSearchStart;
+  const __tfTotalEvaluations = __tfTeamSummaries.reduce((sum, row) => sum + Number(row.evaluations || 0), 0);
+  const __tfDebugResult = {
+    totalMs: tfRoundMs(__tfTotalMs),
+    totalSec: tfRoundMs(__tfTotalMs / 1000),
+    offersFound: offers.length,
+    teamsChecked: checkTeams.length,
+    totalEvaluations: __tfTotalEvaluations,
+    asyncChunked: true,
+    adaptiveFast: true,
+    noOfferFast: true,
+    searchProfile: getTradeFinderSearchProfile(selectedItems).name,
+    slowestTeams: __tfTeamSummaries.slice().sort((a, b) => b.ms - a.ms).slice(0, 8),
+    teamSummaries: __tfTeamSummaries,
+  };
+
+  try {
+    if (typeof window !== "undefined") window.__TF_LAST_DEBUG = __tfDebugResult;
+  } catch {}
+
+  tfDebugLog("search complete", __tfDebugResult);
+
+  tfSafeProgress(onProgress, {
+    phase: "complete",
+    team: "",
+    teamIndex: checkTeams.length,
+    teamsToCheck: checkTeams.length,
+    offersFound: offers.length,
+    elapsedSec: tfRoundMs(__tfTotalMs / 1000),
+  });
+
   return {
     offers,
-    checkedTeams: Math.max(0, allTeams.length - 1),
+    checkedTeams: checkTeams.length,
+    debug: __tfDebugResult,
     message: offers.length
       ? `Found ${offers.length} CPU-comfortable offer${offers.length === 1 ? "" : "s"}.`
       : "No CPU team found a Propose Trade-legal package it would comfortably accept.",

@@ -1705,6 +1705,7 @@ export default function TradeFinder() {
   );
   const [isSearchingOffers, setIsSearchingOffers] = useState(false);
   const [offerSearchError, setOfferSearchError] = useState("");
+  const [offerSearchProgress, setOfferSearchProgress] = useState("");
 
   const selectedTeamPlayers = useMemo(() => getTeamPlayers(selectedTeam), [selectedTeam]);
   const selectedTeamPicks = useMemo(() => getOwnedPicks(leagueData, selectedTeam?.name), [leagueData, selectedTeam]);
@@ -1751,6 +1752,7 @@ export default function TradeFinder() {
     setSearched(false);
     setPythonOffers([]);
     setOfferSearchError("");
+    setOfferSearchProgress("");
     setSelectedAssetKeys((prev) => {
       if (prev.includes(asset.key)) return prev.filter((key) => key !== asset.key);
       return [...prev, asset.key];
@@ -1767,6 +1769,7 @@ export default function TradeFinder() {
   const runSearchOffers = async () => {
     setSearched(true);
     setOfferSearchError("");
+    setOfferSearchProgress("");
 
     if (!selectedItems.length) {
       setPythonOffers([]);
@@ -1774,13 +1777,51 @@ export default function TradeFinder() {
     }
 
     setIsSearchingOffers(true);
+    setOfferSearchProgress("Starting Trade Finder search...");
 
     try {
-      const result = findComfortableTradeFinderOffers({
+      const result = await findComfortableTradeFinderOffers({
         leagueData,
         selectedTeam,
         selectedItems,
         teams,
+        onProgress: (progress = {}) => {
+          const teamIndex = Number(progress.teamIndex || 0);
+          const teamsToCheck = Number(progress.teamsToCheck || 0);
+          const offersFound = Number(progress.offersFound || 0);
+          const teamName = progress.team || "CPU teams";
+          const elapsed = Number(progress.elapsedSec || 0);
+
+          if (progress.phase === "complete") {
+            setOfferSearchProgress(
+              `Complete: checked ${teamsToCheck}/${teamsToCheck} teams, found ${offersFound} offer${offersFound === 1 ? "" : "s"} in ${elapsed.toFixed(1)}s.`
+            );
+            return;
+          }
+
+          if (progress.phase === "team_done") {
+            setOfferSearchProgress(
+              `Checked ${teamIndex}/${teamsToCheck}: ${teamName} (${Number(progress.teamMs || 0).toFixed(0)}ms, ${Number(progress.evaluationsForTeam || 0)} evals). Offers found: ${offersFound}.`
+            );
+            return;
+          }
+
+          if (progress.phase === "evaluating") {
+            setOfferSearchProgress(
+              `Checking ${teamIndex}/${teamsToCheck}: ${teamName} • ${Number(progress.evaluationsForTeam || 0)} evaluations • Offers found: ${offersFound}.`
+            );
+            return;
+          }
+
+          if (progress.phase === "team_start") {
+            setOfferSearchProgress(
+              `Checking ${teamIndex}/${teamsToCheck}: ${teamName}... Offers found: ${offersFound}.`
+            );
+            return;
+          }
+
+          setOfferSearchProgress("Searching CPU teams...");
+        },
       });
 
       const nextOffers = Array.isArray(result?.offers)
@@ -1800,6 +1841,7 @@ export default function TradeFinder() {
       console.warn("[TradeFinder] offer search failed.", error);
       setPythonOffers([]);
       setOfferSearchError(error?.message || "Trade Finder failed while checking Propose Trade-compatible CPU offers.");
+      setOfferSearchProgress("");
     } finally {
       setIsSearchingOffers(false);
     }
@@ -1908,6 +1950,7 @@ export default function TradeFinder() {
                         setSearched(false);
                         setPythonOffers([]);
                         setOfferSearchError("");
+                        setOfferSearchProgress("");
                         setPickProtections((prev) => ({ ...prev, [asset.key]: value }));
                       }}
                       leagueData={leagueData}
@@ -1961,7 +2004,14 @@ export default function TradeFinder() {
 
                 {searched && isSearchingOffers && (
                   <div className="rounded-2xl border border-orange-400/25 bg-orange-500/10 p-5 text-sm font-bold leading-6 text-orange-100">
-                    CPU front offices are building one comfortable package each, then checking Propose Trade acceptance, salary matching, and roster rules...
+                    <div>
+                      CPU front offices are building one comfortable package each, then checking Propose Trade acceptance, salary matching, and roster rules...
+                    </div>
+                    {offerSearchProgress && (
+                      <div className="mt-3 rounded-xl border border-orange-300/20 bg-black/25 px-3 py-2 text-xs text-orange-50">
+                        {offerSearchProgress}
+                      </div>
+                    )}
                   </div>
                 )}
 
