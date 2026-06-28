@@ -127,7 +127,7 @@ function fmtAvg(value) {
 /* -------------------------------------------------------------------------- */
 
 export default function PlayerStats() {
-  const { leagueData, selectedTeam, setSelectedTeam } = useGame();
+  const { leagueData, selectedTeam: controlledTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
 
   const [mode, setMode] = useState("players"); // players | league | teams
@@ -135,9 +135,10 @@ export default function PlayerStats() {
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [playerCardPlayer, setPlayerCardPlayer] = useState(null);
   const [selectedTeamRow, setSelectedTeamRow] = useState(null);
+  const [viewTeamName, setViewTeamName] = useState(null);
 
   useEffect(() => {
-    if (selectedTeam) return;
+    if (controlledTeam) return;
 
     try {
       const saved = localStorage.getItem("selectedTeam");
@@ -147,19 +148,28 @@ export default function PlayerStats() {
       if (typeof parsed === "string") setSelectedTeam(parsed);
       else if (parsed?.name) setSelectedTeam(parsed.name);
     } catch {}
-  }, [selectedTeam, setSelectedTeam]);
+  }, [controlledTeam, setSelectedTeam]);
 
   useEffect(() => {
-    if (selectedTeam?.name) {
-      localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam.name));
+    if (controlledTeam?.name) {
+      localStorage.setItem("selectedTeam", JSON.stringify(controlledTeam.name));
     }
-  }, [selectedTeam]);
+  }, [controlledTeam]);
 
   const allTeams = useMemo(() => {
     return getAllTeamsFromLeague(leagueData)
       .filter((team) => team?.name)
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [leagueData]);
+
+  useEffect(() => {
+    if (controlledTeam?.name) setViewTeamName(controlledTeam.name);
+  }, [controlledTeam?.name]);
+
+  const selectedTeam = useMemo(() => {
+    const targetName = viewTeamName || controlledTeam?.name;
+    return allTeams.find((team) => team.name === targetName) || controlledTeam || allTeams[0] || null;
+  }, [allTeams, viewTeamName, controlledTeam]);
 
   const teamLogo = useMemo(() => {
     const map = {};
@@ -404,7 +414,7 @@ export default function PlayerStats() {
     let newIndex = dir === "next" ? currentIndex + 1 : currentIndex - 1;
     newIndex = (newIndex + allTeams.length) % allTeams.length;
 
-    setSelectedTeam(allTeams[newIndex].name);
+    setViewTeamName(allTeams[newIndex]?.name || null);
     setSelectedPlayer(null);
   };
 

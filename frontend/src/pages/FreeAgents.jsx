@@ -1058,6 +1058,7 @@ const isOffseasonMode =
   const financialRules = getLeagueFinancialRules(workingLeagueData || {}, getOperatingSeasonYear());
   const MIN_CONTRACT_AMOUNT = Number(financialRules.minimumSalary || 1_200_000);
   const MAX_CONTRACT_AMOUNT = Number(financialRules.maxSalary || 54_000_000);
+  const MIN_CONTRACT_MILLIONS = MIN_CONTRACT_AMOUNT / 1_000_000;
   const MAX_CONTRACT_MILLIONS = MAX_CONTRACT_AMOUNT / 1_000_000;
 
   const getLeagueAmount = (keys, fallback) => {
@@ -1956,7 +1957,7 @@ const isOffseasonMode =
 
   const openSignModal = (player) => {
     const defaultYear1Salary = Math.min(
-      player?.marketValue?.expectedYear1Salary || 5_000_000,
+      Math.max(player?.marketValue?.expectedYear1Salary || MIN_CONTRACT_AMOUNT, MIN_CONTRACT_AMOUNT),
       MAX_CONTRACT_AMOUNT
     );
     const defaultYears =
@@ -2197,6 +2198,15 @@ const isOffseasonMode =
       setOfferEvaluation({
         ok: false,
         reason: "Enter a valid first-year salary.",
+      });
+      setOfferEvalLoading(false);
+      return;
+    }
+
+    if (year1Salary < MIN_CONTRACT_AMOUNT) {
+      setOfferEvaluation({
+        ok: false,
+        reason: `Minimum first-year salary is ${formatDollars(MIN_CONTRACT_AMOUNT)}.`,
       });
       setOfferEvalLoading(false);
       return;
@@ -2720,6 +2730,11 @@ updateOffseasonState({
     const year1Salary = parseMillionsText(offerSalaryText);
     if (!year1Salary) {
       setSignError("Enter a valid first-year salary.");
+      return;
+    }
+
+    if (year1Salary < MIN_CONTRACT_AMOUNT) {
+      setSignError(`Minimum first-year salary is ${formatDollars(MIN_CONTRACT_AMOUNT)}.`);
       return;
     }
 
@@ -3539,10 +3554,10 @@ updateOffseasonState({
 
                 <input
                   type="range"
-                  min="1.2"
+                  min={MIN_CONTRACT_MILLIONS}
                   max={MAX_CONTRACT_MILLIONS}
                   step="0.01"
-                  value={Math.min(Number(offerSalaryText) || 1.2, MAX_CONTRACT_MILLIONS)}
+                  value={Math.min(Math.max(Number(offerSalaryText) || MIN_CONTRACT_MILLIONS, MIN_CONTRACT_MILLIONS), MAX_CONTRACT_MILLIONS)}
                   onChange={(e) => {
                     const val = Number(e.target.value);
                     setOfferSalaryText(val.toFixed(2));

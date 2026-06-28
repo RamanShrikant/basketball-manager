@@ -1233,7 +1233,7 @@ function SimpleMoodEventLog({ player }) {
 }
 
 export default function LockerRoom() {
-  const { leagueData, selectedTeam, setSelectedTeam } = useGame();
+  const { leagueData, selectedTeam } = useGame();
   const navigate = useNavigate();
   const [viewIndex, setViewIndex] = useState(0);
   const [moodData, setMoodData] = useState(null);
@@ -1298,7 +1298,6 @@ export default function LockerRoom() {
     if (!teams.length) return;
     setViewIndex((prev) => {
       const next = dir === "next" ? (prev + 1) % teams.length : (prev - 1 + teams.length) % teams.length;
-      setSelectedTeam?.(teams[next]);
       setSelectedKey(null);
       return next;
     });

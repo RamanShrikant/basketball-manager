@@ -235,11 +235,21 @@ def _minute_variance(base_minutes):
     return 1
 
 def vary_game_minutes(team, base_mins, ot_count):
-    target_total = 240 + 25 * int(ot_count or 0)
+    """Create legal box-score minutes from a coach gameplan.
+
+    Regulation games cannot give any player more than 48 minutes. Overtime
+    adds five available minutes per OT period, so a player can only exceed 48
+    when the game actually went to OT. The team total is still balanced to the
+    real game length by pushing leftover minutes to other eligible players.
+    """
+    ot_count = int(ot_count or 0)
+    target_total = 240 + 25 * ot_count
+    max_player_minutes = 48 + 5 * ot_count
     players = team.get("players", []) or []
 
     actual = {}
     active_names = []
+    inactive_names = []
     base_by_name = {}
 
     for p in players:
@@ -249,14 +259,35 @@ def vary_game_minutes(team, base_mins, ot_count):
 
         base = _safe_int_minutes(base_mins.get(name, 0))
         base_by_name[name] = base
+        actual[name] = 0
 
         if base > 0:
             active_names.append(name)
         else:
-            actual[name] = 0
+            inactive_names.append(name)
+
+    if not active_names and inactive_names:
+        # Extremely defensive fallback for malformed gameplans. Use the best
+        # available roster players rather than creating an impossible 0-minute
+        # team total.
+        inactive_names = sorted(
+            inactive_names,
+            key=lambda name: next(
+                (_safe_int_minutes(p.get("overall", 0)) for p in players if p.get("name") == name),
+                0,
+            ),
+            reverse=True,
+        )
+        while inactive_names and len(active_names) < 5:
+            active_names.append(inactive_names.pop(0))
 
     if not active_names:
         return actual
+
+    # If the listed rotation cannot physically cover the game total under the
+    # per-player cap, promote deep bench players as emergency minute fillers.
+    while inactive_names and len(active_names) * max_player_minutes < target_total:
+        active_names.append(inactive_names.pop(0))
 
     starters = set(
         sorted(
@@ -268,33 +299,53 @@ def vary_game_minutes(team, base_mins, ot_count):
 
     for name in active_names:
         base = base_by_name.get(name, 0)
-        ot_bonus = 5 * int(ot_count or 0) if name in starters else 0
+        if base <= 0:
+            actual[name] = 0
+            continue
+
+        ot_bonus = 5 * ot_count if name in starters else 0
         delta = random.randint(-_minute_variance(base), _minute_variance(base))
-        actual[name] = max(1, base + ot_bonus + delta)
+        actual[name] = int(clamp(base + ot_bonus + delta, 1, max_player_minutes))
 
     diff = target_total - sum(actual[name] for name in active_names)
     guard = 0
 
-    while diff != 0 and guard < 2000:
+    while diff != 0 and guard < 5000:
         guard += 1
 
         if diff > 0:
-            weights = [max(1, actual[name]) for name in active_names]
-            name = _weighted_pick(active_names, weights)
+            eligible = [name for name in active_names if actual.get(name, 0) < max_player_minutes]
+            if not eligible and inactive_names:
+                name = inactive_names.pop(0)
+                active_names.append(name)
+                actual[name] = 0
+                eligible = [name]
+            if not eligible:
+                break
+
+            weights = [max(1, base_by_name.get(name, 0), actual.get(name, 0)) for name in eligible]
+            name = _weighted_pick(eligible, weights)
             actual[name] += 1
             diff -= 1
             continue
 
-        removable = [name for name in active_names if actual[name] > 1]
+        removable = []
+        for name in active_names:
+            # Normal rotation players should not be forced below 1 minute once
+            # activated; emergency fillers may return to 0.
+            floor = 1 if base_by_name.get(name, 0) > 0 else 0
+            if actual.get(name, 0) > floor:
+                removable.append(name)
+
         if not removable:
             break
 
         preferred = [
             name for name in removable
-            if actual[name] > max(1, base_by_name.get(name, 1))
+            if actual.get(name, 0) > max(1, base_by_name.get(name, 1))
         ]
         pool = preferred or removable
-        weights = [max(1, actual[name]) for name in pool]
+        weights = [max(1, actual.get(name, 0)) for name in pool]
         name = _weighted_pick(pool, weights)
         actual[name] -= 1
         diff += 1

@@ -146,18 +146,18 @@ export default function TeamHub() {
 
   const normalTiles = [
     { name: "View Roster", path: "/roster-view", enabled: true },
-    { name: "Locker Room", path: "/locker-room", enabled: true },
-    { name: "Trades", path: "/trades", enabled: true },
-    { name: "Intel", path: "/intel", enabled: true },
-    { name: "Power Rankings", path: "/power-rankings", enabled: true },
-    { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
-    { name: "Free Agents", path: "/free-agents", enabled: true },
     { name: "Schedule", path: "/calendar", enabled: true },
+    { name: "Free Agents", path: "/free-agents", enabled: true },
+    { name: "Trades", path: "/trades", enabled: true },
+    { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Statistics", path: "/player-stats", enabled: true },
     { name: "Standings", path: "/standings", enabled: true },
-    { name: "Salary Table", path: "/salary-table", enabled: true },
+    { name: "Power Rankings", path: "/power-rankings", enabled: true },
     { name: "Award Tracker", path: "/award-tracker", enabled: true },
+    { name: "Salary Table", path: "/salary-table", enabled: true },
+    { name: "Locker Room", path: "/locker-room", enabled: true },
+    { name: "Intel", path: "/intel", enabled: true },
   ];
 
   const offseasonTiles = [

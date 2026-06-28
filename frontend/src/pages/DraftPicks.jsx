@@ -340,7 +340,7 @@ function sortValue(asset, key, teamNames = []) {
 
 export default function DraftPicks() {
   const navigate = useNavigate();
-  const { leagueData, selectedTeam, setSelectedTeam } = useGame();
+  const { leagueData, selectedTeam } = useGame();
 
   const [viewIndex, setViewIndex] = useState(0);
   const [sortConfig, setSortConfig] = useState({ key: "year", direction: "asc" });
@@ -383,16 +383,8 @@ export default function DraftPicks() {
       (team) => (team?.name || team?.teamName) === selectedTeam?.name
     );
 
-    if (selectedIndex >= 0) {
-      setViewIndex(selectedIndex);
-      return;
-    }
-
-    if (!selectedTeam && teamsSorted[0]) {
-      setSelectedTeam(teamsSorted[0]);
-      setViewIndex(0);
-    }
-  }, [teamsSorted, selectedTeam, setSelectedTeam]);
+    setViewIndex(selectedIndex >= 0 ? selectedIndex : 0);
+  }, [teamsSorted, selectedTeam?.name]);
 
   const activeTeam = useMemo(() => {
     return teamsSorted[viewIndex] || selectedTeam || teamsSorted[0] || null;
@@ -452,8 +444,6 @@ export default function DraftPicks() {
           ? (prev + 1 + teamsSorted.length) % teamsSorted.length
           : (prev - 1 + teamsSorted.length) % teamsSorted.length;
 
-      const nextTeam = teamsSorted[next];
-      if (nextTeam) setSelectedTeam(nextTeam);
       return next;
     });
   };

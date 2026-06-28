@@ -109,6 +109,15 @@ def get_taxpayer_mle_amount(league_data: Dict[str, Any]) -> int:
     return int(league_data.get("taxpayerMLE") or league_data.get("taxpayerMidLevelException") or DEFAULT_TAXPAYER_MLE)
 
 
+def get_minimum_salary_amount(league_data: Dict[str, Any]) -> int:
+    if get_financial_rules is not None:
+        try:
+            return int(get_financial_rules(league_data).get("minimumSalary") or MIN_DEAL)
+        except Exception:
+            pass
+    return int(league_data.get("minimumSalary") or league_data.get("veteranMinimum") or MIN_DEAL)
+
+
 def get_minimum_exception_amount(league_data: Dict[str, Any]) -> int:
     if get_financial_rules is not None:
         try:
@@ -3547,6 +3556,17 @@ def validate_offer_spending_rules(
     season_year = get_operating_season_year(league_data)
     offered_current_salary = get_contract_salary_for_year(contract, season_year)
     outstanding_current_salary = int(num(outstanding_current_salary, 0))
+
+    minimum_salary = get_minimum_salary_amount(league_data)
+    if offered_current_salary < minimum_salary:
+        under_by = minimum_salary - offered_current_salary
+        return {
+            "ok": False,
+            "reason": f"Offer is below the minimum first-year salary by ${int(under_by):,}.",
+            "teamSnapshot": snapshot,
+            "exceptionRoom": minimum_salary,
+            "spendingType": "minimum_salary_blocked",
+        }
 
     if offered_current_salary > MAX_SALARY:
         over_by = offered_current_salary - MAX_SALARY
@@ -8222,6 +8242,53 @@ def process_pending_rfa_match_decision(
     )
 
     if not signed:
+        if not match_offer:
+            # Old saves could already contain impossible RFA decisions. Do not
+            # trap the user on Decline; clear the stale decision, fail the CPU
+            # offer sheet, and leave the player on the free-agent market. New
+            # decisions are prevented earlier by the pre-match preview.
+            state = ensure_free_agency_state(updated)
+            mark_cpu_offer_failed_final_validation(
+                league_data = updated,
+                player = player,
+                candidate_offer = chosen_offer,
+                current_day = current_day,
+                reason = "RFA offer sheet was declined but the offering team could not finalize it under current cap/roster rules.",
+                event_type = "rfa_offer_sheet_declined_failed_finalization",
+            )
+            clear_pending_rfa_match_decision_for_player(state, row_player_key)
+            state["pendingUserTeamName"] = rights_team_name
+            state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, rights_team_name) if rights_team_name else None
+            state.setdefault("dailyLog", []).append({
+                "day": current_day,
+                "type": "rfa_match_decision",
+                "playerName": target_row.get("playerName"),
+                "rightsTeamName": rights_team_name,
+                "offeringTeamName": target_row.get("offeringTeamName"),
+                "decision": final_decision,
+                "signedWith": None,
+                "returnedToMarket": True,
+            })
+            return {
+                "ok": True,
+                "reason": f"{target_row.get('playerName', 'Player')} returned to free agency because the outside offer could not be finalized.",
+                "leagueData": updated,
+                "processedDecision": {
+                    "playerKey": row_player_key,
+                    "playerId": target_row.get("playerId"),
+                    "playerName": target_row.get("playerName"),
+                    "rightsTeamName": rights_team_name,
+                    "offeringTeamName": target_row.get("offeringTeamName"),
+                    "decision": final_decision,
+                    "returnedToMarket": True,
+                },
+                "processedSigning": None,
+                "processedSignings": [],
+                "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
+                "stateSummary": build_free_agency_state_summary(updated),
+                "teamSnapshot": state.get("pendingUserTeamSnapshot"),
+            }
+
         return {
             "ok": False,
             "reason": f"Unable to process RFA decision for {target_row.get('playerName', 'player')} with the current cap / roster situation.",
@@ -11447,6 +11514,10 @@ def submit_user_free_agent_offer(
         player = player,
         contract = contract,
         exclude_offer_id = exclude_offer_id,
+        # User-controlled teams may send unlimited live-market offers. This only
+        # removes the offer-count blocker; final signings still enforce cap,
+        # hard-cap, rights, exception, and roster legality.
+        active_offer_limit = 1_000_000,
     )
     if not eval_res.get("ok"):
         return eval_res
@@ -12161,6 +12232,96 @@ def finalize_free_agent_signing_from_offer(
         "storyContext": story_context,
     }
 
+def mark_cpu_offer_failed_final_validation(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    candidate_offer: Dict[str, Any],
+    current_day: int,
+    reason: str = "Offer could not be finalized under current cap/roster rules.",
+    event_type: str = "cpu_offer_failed_final_validation",
+) -> bool:
+    state = ensure_free_agency_state(league_data)
+    player_key = get_player_key_from_player(player)
+    changed = False
+
+    original_offers = state.get("offersByPlayer", {}).get(player_key, [])
+    for original_offer in original_offers:
+        if original_offer.get("offerId") != candidate_offer.get("offerId"):
+            continue
+        if original_offer.get("source") == "user":
+            continue
+
+        original_offer["status"] = "failed_legal_check"
+        original_offer["failedOnDay"] = current_day
+        original_offer["failedReason"] = reason
+        state.setdefault("offerHistory", []).append(copy.deepcopy(original_offer))
+        state.setdefault("dailyLog", []).append({
+            "day": current_day,
+            "type": event_type,
+            "playerName": player.get("name"),
+            "teamName": candidate_offer.get("teamName"),
+            "offerId": candidate_offer.get("offerId"),
+            "reason": reason,
+        })
+        changed = True
+        break
+
+    return changed
+
+
+def preview_rfa_offer_sheet_can_finalize_after_decline(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    chosen_offer: Dict[str, Any],
+    current_day: int,
+) -> Dict[str, Any]:
+    """Dry-run an outside RFA offer sheet on a copy of the league.
+
+    The user should only see Match / Decline when the outside CPU team has a
+    realistic final path to complete the signing if the user declines. This
+    preview intentionally mutates only a deep copy, so CPU cap-hold renounces
+    are not applied to the real save unless the user actually declines later.
+    """
+    if not chosen_offer or not chosen_offer.get("teamName"):
+        return {"ok": False, "reason": "Offer sheet is missing an offering team."}
+
+    preview_league = copy.deepcopy(league_data)
+    preview_free_agents = preview_league.setdefault("freeAgents", [])
+    player_idx = find_free_agent_index(
+        preview_free_agents,
+        player.get("id"),
+        player.get("name"),
+    )
+    preview_player = preview_free_agents[player_idx] if player_idx != -1 else copy.deepcopy(player)
+
+    rights_team_name = get_player_rights(player).get("heldByTeam")
+    preview_offer = copy.deepcopy(chosen_offer)
+    preview_offer["contract"] = normalize_contract(preview_offer.get("contract"))
+    preview_offer["source"] = preview_offer.get("source") or "cpu"
+    preview_offer["declinedRightsTeamName"] = rights_team_name
+    preview_offer["rfaMatchDeclined"] = True
+    preview_offer["skipRfaAutoMatch"] = True
+
+    signed = finalize_free_agent_signing_from_offer(
+        league_data = preview_league,
+        player = preview_player,
+        chosen_offer = preview_offer,
+        current_day = current_day,
+    )
+
+    if signed:
+        return {
+            "ok": True,
+            "reason": "Offer sheet can be finalized if the rights team declines.",
+            "previewSigning": signed,
+        }
+
+    return {
+        "ok": False,
+        "reason": "Offer sheet could not be finalized by the offering team after a decline.",
+    }
+
+
 def resolve_signings_for_day(
     league_data: Dict[str, Any],
     current_day: int,
@@ -12260,6 +12421,34 @@ def resolve_signings_for_day(
                 chosen_offer = candidate_offer,
                 user_team_name = user_team_name,
             ):
+                offer_sheet_preview = preview_rfa_offer_sheet_can_finalize_after_decline(
+                    league_data = league_data,
+                    player = player,
+                    chosen_offer = candidate_offer,
+                    current_day = current_day,
+                )
+
+                if not offer_sheet_preview.get("ok"):
+                    reason = offer_sheet_preview.get("reason") or "RFA offer sheet could not be finalized by the offering team."
+                    mark_cpu_offer_failed_final_validation(
+                        league_data = league_data,
+                        player = player,
+                        candidate_offer = candidate_offer,
+                        current_day = current_day,
+                        reason = reason,
+                        event_type = "rfa_offer_sheet_failed_pre_match_validation",
+                    )
+                    record_fa_debug(
+                        league_data = league_data,
+                        bucket = "rfaDebugLog",
+                        event = "rfa_offer_sheet_skipped_before_user_decision",
+                        player = player,
+                        team_name = candidate_offer.get("teamName"),
+                        offer = candidate_offer,
+                        payload = {"reason": reason, "currentDay": current_day},
+                    )
+                    continue
+
                 pending_entry = upsert_pending_rfa_match_decision(
                     league_data = league_data,
                     player = player,
@@ -12337,24 +12526,14 @@ def resolve_signings_for_day(
             # Offers are soft commitments. If one CPU signing used the cap room
             # or roster slot first, this offer fails final validation and the
             # player can look at the next offer on his board.
-            original_offers = state.get("offersByPlayer", {}).get(player_key, [])
-            for original_offer in original_offers:
-                if original_offer.get("offerId") != candidate_offer.get("offerId"):
-                    continue
-                if original_offer.get("source") == "user":
-                    continue
-                original_offer["status"] = "failed_legal_check"
-                original_offer["failedOnDay"] = current_day
-                original_offer["failedReason"] = "Offer could not be finalized under current cap/roster rules."
-                state.setdefault("offerHistory", []).append(copy.deepcopy(original_offer))
-                state.setdefault("dailyLog", []).append({
-                    "day": current_day,
-                    "type": "cpu_offer_failed_final_validation",
-                    "playerName": player.get("name"),
-                    "teamName": candidate_offer.get("teamName"),
-                    "offerId": candidate_offer.get("offerId"),
-                })
-                break
+            mark_cpu_offer_failed_final_validation(
+                league_data = league_data,
+                player = player,
+                candidate_offer = candidate_offer,
+                current_day = current_day,
+                reason = "Offer could not be finalized under current cap/roster rules.",
+                event_type = "cpu_offer_failed_final_validation",
+            )
 
     return signings
 

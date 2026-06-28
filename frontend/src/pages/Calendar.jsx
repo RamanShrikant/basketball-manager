@@ -1553,7 +1553,7 @@ function buildAwardRosterMetaLookup(allTeams, currentDisplaySeasonYear = null) {
 export default function Calendar() {
   
   const navigate = useNavigate();
-  const { leagueData, setLeagueData, selectedTeam, setSelectedTeam } = useGame();
+  const { leagueData, setLeagueData, selectedTeam } = useGame();
   console.log("🔥 Calendar leagueData =", leagueData);
   window.__leagueData = leagueData;
 
@@ -1625,11 +1625,22 @@ const selectedTeamCanSim = !selectedTeamSimBlockMessage;
     [teams]
   );
 
+  const [viewTeamName, setViewTeamName] = useState(null);
+
+  useEffect(() => {
+    if (selectedTeam?.name) setViewTeamName(selectedTeam.name);
+  }, [selectedTeam?.name]);
+
+  const calendarViewTeam = useMemo(() => {
+    const targetName = viewTeamName || selectedTeam?.name;
+    return allTeamsSorted.find((team) => team.name === targetName) || selectedTeam || allTeamsSorted[0] || null;
+  }, [allTeamsSorted, viewTeamName, selectedTeam]);
+
   const currentIndex = useMemo(() => {
-    return selectedTeam
-      ? allTeamsSorted.findIndex((t) => t.name === selectedTeam.name)
+    return calendarViewTeam
+      ? allTeamsSorted.findIndex((t) => t.name === calendarViewTeam.name)
       : -1;
-  }, [selectedTeam, allTeamsSorted]);
+  }, [calendarViewTeam, allTeamsSorted]);
 
   const handleTeamSwitch = (dir) => {
     if (!allTeamsSorted.length || currentIndex < 0) return;
@@ -1640,7 +1651,7 @@ const selectedTeamCanSim = !selectedTeamSimBlockMessage;
         : (currentIndex - 1 + allTeamsSorted.length) %
           allTeamsSorted.length;
 
-    setSelectedTeam(allTeamsSorted[i]);
+    setViewTeamName(allTeamsSorted[i]?.name || null);
   };
 
   useEffect(() => {
@@ -2356,9 +2367,9 @@ useEffect(() => {
   /*                                My Team Games                               */
   /* -------------------------------------------------------------------------- */
   const myGames = useMemo(() => {
-    if (!selectedTeam) return {};
+    if (!calendarViewTeam) return {};
 
-    const myId = slugifyId(selectedTeam.name);
+    const myId = slugifyId(calendarViewTeam.name);
     const map = {};
 
     for (const [d, games] of Object.entries(scheduleByDate)) {
@@ -2371,7 +2382,7 @@ useEffect(() => {
     }
 
     return map;
-  }, [scheduleByDate, selectedTeam]);
+  }, [scheduleByDate, calendarViewTeam]);
 
   /* -------------------------------------------------------------------------- */
   /*                                 Focused Date                               */
@@ -2456,7 +2467,7 @@ useEffect(() => {
 
   useEffect(() => {
     const dates = Object.keys(myGames).sort();
-    const restoreKey = `${CALENDAR_CURSOR_KEY}|${selectedTeam?.name || ""}`;
+    const restoreKey = `${CALENDAR_CURSOR_KEY}|${calendarViewTeam?.name || ""}`;
 
     if (restoredCursorKeyRef.current !== restoreKey) {
       restoredCursorKeyRef.current = restoreKey;
@@ -2494,7 +2505,7 @@ useEffect(() => {
     setFocusedDate(targetDate || fmt(seasonStart));
     setMonth(targetMonth);
     scrollCalendarToMonth(targetMonth, "auto");
-  }, [myGames, seasonStart, CALENDAR_CURSOR_KEY, selectedTeam?.name, months]);
+  }, [myGames, seasonStart, CALENDAR_CURSOR_KEY, calendarViewTeam?.name, months]);
 
 const scrollToMonth = (monthStr) => {
   setMonth(monthStr);
@@ -4329,7 +4340,7 @@ return (
     <MiniStandingsPanel
       title="West"
       rows={conferenceStandings.west}
-      selectedTeamName={selectedTeam.name}
+      selectedTeamName={calendarViewTeam?.name || selectedTeam.name}
       hidden={!showWestStandings}
       onToggle={() => setShowWestStandings((v) => !v)}
       collapsedLabel="Show West"
@@ -4339,7 +4350,7 @@ return (
 <MiniStandingsPanel
   title="East"
   rows={conferenceStandings.east}
-  selectedTeamName={selectedTeam.name}
+  selectedTeamName={calendarViewTeam?.name || selectedTeam.name}
   hidden={!showEastStandings}
   onToggle={() => setShowEastStandings((v) => !v)}
   collapsedLabel="Show East"
@@ -4379,9 +4390,9 @@ return (
             </button>
 
             <div className="flex items-center gap-3">
-              <Logo team={selectedTeam} size={72} />
+              <Logo team={calendarViewTeam || selectedTeam} size={72} />
               <h1 className="text-2xl font-bold text-orange-500">
-                {selectedTeam.name}
+                {(calendarViewTeam || selectedTeam).name}
               </h1>
             </div>
           </div>
@@ -4594,7 +4605,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                           : null;
 
                       const iAmHome =
-                        game && game.homeId === slugifyId(selectedTeam.name);
+                        game && game.homeId === slugifyId((calendarViewTeam || selectedTeam).name);
 
                       const winnerSide = result?.winner?.side || null;
 

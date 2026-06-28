@@ -89,7 +89,7 @@ function readGameplanFromStorage(teamName) {
     }
 }
     export default function CoachGameplan() {
-    const { leagueData, selectedTeam, setSelectedTeam } = useGame(); // ⬅️ added leagueData + setSelectedTeam
+    const { leagueData, selectedTeam: controlledTeam } = useGame();
     const [players, setPlayers] = useState([]);
     const [minutes, setMinutes] = useState({});
     const [selectedPlayer, setSelectedPlayer] = useState(null);
@@ -124,6 +124,17 @@ function readGameplanFromStorage(teamName) {
         const confs = Object.values(leagueData.conferences);
         return confs.flat().sort((a, b) => a.name.localeCompare(b.name));
     }, [leagueData]);
+    const [viewTeamName, setViewTeamName] = useState(null);
+
+    useEffect(() => {
+        if (controlledTeam?.name) setViewTeamName(controlledTeam.name);
+    }, [controlledTeam?.name]);
+
+    const selectedTeam = useMemo(() => {
+        const targetName = viewTeamName || controlledTeam?.name;
+        return allTeams.find((t) => t.name === targetName) || controlledTeam || allTeams[0] || null;
+    }, [allTeams, viewTeamName, controlledTeam]);
+
     const currentIndex = useMemo(() => {
         if (!selectedTeam) return -1;
         return allTeams.findIndex((t) => t.name === selectedTeam.name);
@@ -135,7 +146,7 @@ function readGameplanFromStorage(teamName) {
         dir === "next"
             ? (currentIndex + 1) % allTeams.length
             : (currentIndex - 1 + allTeams.length) % allTeams.length;
-        setSelectedTeam(allTeams[next]);
+        setViewTeamName(allTeams[next]?.name || null);
         setSelectedPlayer(null);
         setSwapSelection(null);
     };
