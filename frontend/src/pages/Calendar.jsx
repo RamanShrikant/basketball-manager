@@ -1088,10 +1088,16 @@ function normalizeAwards(raw) {
 // ------------------------------------------------------------
 function buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById) {
   const wins = {};
+  const gamesPlayed = {};
 
-  const bump = (teamName) => {
+  const bumpWin = (teamName) => {
     if (!teamName) return;
     wins[teamName] = (wins[teamName] || 0) + 1;
+  };
+
+  const bumpGame = (teamName) => {
+    if (!teamName) return;
+    gamesPlayed[teamName] = (gamesPlayed[teamName] || 0) + 1;
   };
 
   for (const games of Object.values(scheduleByDate || {})) {
@@ -1101,22 +1107,25 @@ function buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById) {
       const r = resultsById?.[g.id];
       if (!r?.totals) continue;
 
+      bumpGame(g.home);
+      bumpGame(g.away);
+
       const homePts = Number(r.totals.home ?? 0);
       const awayPts = Number(r.totals.away ?? 0);
 
       // ignore ties
       if (homePts === awayPts) continue;
 
-      if (homePts > awayPts) bump(g.home);
-      else bump(g.away);
+      if (homePts > awayPts) bumpWin(g.home);
+      else bumpWin(g.away);
     }
   }
 
-  // Return a list that awards.py can consume:
-  // awards.py expects each item to have { team, wins }
+  // Return a list that awards.py can consume and the live ladders can use for 80% GP checks.
   return (allTeams || []).map((t) => ({
     team: t?.name,     // IMPORTANT: must match playerStats.team (your schedule uses team names)
     wins: wins[t?.name] || 0,
+    games: gamesPlayed[t?.name] || 0,
   }));
 }
 const MINI_AWARD_TABS = ["mvp", "dpoy", "sixth_man"];
@@ -1127,7 +1136,7 @@ const MINI_AWARD_LABELS = {
 };
 
 const MINI_AWARD_LIMIT = 10;
-const MINI_AWARD_MIN_GAMES = 10;
+const MINI_AWARD_MIN_GAME_SHARE = 0.8;
 
 function awardStatsKey(player, team) {
   return `${player}__${team}`;
@@ -1160,6 +1169,27 @@ function miniBpg(p) {
 
 function miniMpg(p) {
   return miniPerGame(p.min, p.gp);
+}
+
+function miniBenchGames(p) {
+  const gp = Number(p.gp || 0);
+  const starts = Number(p.started || 0);
+  const explicitBench = Number(p.sixth || 0);
+  if (p._hasRoleData || starts > 0 || explicitBench > 0) {
+    return Math.max(0, gp - starts);
+  }
+  return Math.max(0, explicitBench);
+}
+
+function miniRequiredTrackerGames(teamGames) {
+  const games = Number(teamGames || 0);
+  if (games <= 0) return 1;
+  return Math.max(1, Math.ceil(games * MINI_AWARD_MIN_GAME_SHARE));
+}
+
+function miniHasTrackerGames(p) {
+  const teamGames = Number(p._team_games || p.gp || 0);
+  return Number(p.gp || 0) >= miniRequiredTrackerGames(teamGames);
 }
 
 function miniNorm(v, vmax) {
@@ -1231,16 +1261,8 @@ function calcMiniSixthManScore(p, c) {
 }
 
 function isMiniSixthManEligible(p) {
-  const gp = Number(p.gp || 0);
   const starts = Number(p.started || 0);
-  const sixth = Number(p.sixth || 0);
-
-  return (
-    gp >= MINI_AWARD_MIN_GAMES &&
-    miniMpg(p) >= 14 &&
-    starts <= Math.floor(0.2 * gp) &&
-    sixth >= Math.max(5, Math.floor(0.25 * gp))
-  );
+  return miniMpg(p) >= 14 && miniBenchGames(p) > starts;
 }
 
 function buildMiniRosterInfoIndex(allTeams) {
@@ -1308,8 +1330,16 @@ function buildMiniAwardLadders(allTeams, statsMap, scheduleByDate, resultsById) 
   );
 
   const teamWinsMap = {};
+  const teamGamesMap = {};
   for (const t of teamWinsRows) {
     teamWinsMap[t.team] = Number(t.wins || 0);
+    teamGamesMap[t.team] = Number(t.games || 0);
+  }
+
+  for (const row of Object.values(statsMap || {})) {
+    const teamName = row?.team;
+    if (!teamName) continue;
+    teamGamesMap[teamName] = Math.max(Number(teamGamesMap[teamName] || 0), Number(row.gp || 0));
   }
 
   const playerPool = [];
@@ -1340,10 +1370,12 @@ function buildMiniAwardLadders(allTeams, statsMap, scheduleByDate, resultsById) 
         blk: Number(s.blk || 0),
         started: Number(s.started || 0),
         sixth: Number(s.sixth || 0),
+        _hasRoleData: Object.prototype.hasOwnProperty.call(s, "started") || Object.prototype.hasOwnProperty.call(s, "sixth"),
         def_rating: Number(info.def_rating ?? 110),
         headshot: info.headshot || null,
         teamLogo: info.teamLogo || null,
         _team_wins: Number(teamWinsMap[teamName] || 0),
+        _team_games: Number(teamGamesMap[teamName] || 0),
       });
     }
   }
@@ -1356,11 +1388,9 @@ function buildMiniAwardLadders(allTeams, statsMap, scheduleByDate, resultsById) 
     };
   }
 
-  const eligiblePool = playerPool.filter(
-    (p) => Number(p.gp || 0) >= MINI_AWARD_MIN_GAMES
-  );
+  const eligiblePool = playerPool.filter((p) => miniHasTrackerGames(p));
 
-  const basePool = eligiblePool.length ? eligiblePool : playerPool;
+  const basePool = eligiblePool;
   const baseCtx = buildMiniAwardContext(basePool);
 
   const mvp = basePool
@@ -1373,14 +1403,7 @@ function buildMiniAwardLadders(allTeams, statsMap, scheduleByDate, resultsById) 
     .sort((a, b) => b._score - a._score)
     .slice(0, MINI_AWARD_LIMIT);
 
-  const strictSixthPool = basePool.filter((p) => isMiniSixthManEligible(p));
-  const fallbackSixthPool = basePool.filter(
-    (p) =>
-      miniMpg(p) >= 14 &&
-      Number(p.started || 0) <= Math.floor(0.4 * Number(p.gp || 0))
-  );
-
-  const sixthPool = strictSixthPool.length ? strictSixthPool : fallbackSixthPool;
+  const sixthPool = basePool.filter((p) => isMiniSixthManEligible(p));
   const sixthCtx = buildMiniAwardContext(sixthPool.length ? sixthPool : basePool);
 
   const sixth_man = (sixthPool.length ? sixthPool : [])
@@ -2011,10 +2034,9 @@ function applyGameToPlayerStats(stats, slim, game) {
   const updateSide = (side, teamName) => {
     const rows = slim.box[side] || [];
 
-// Determine starters + ONE sixth man (either from role tag, or 6th-highest minutes fallback)
+// Determine starters. Every non-starter appearance counts as a bench appearance for 6MOY.
 const sortedByMin = [...rows].sort((a, b) => toNum(b.min) - toNum(a.min));
 const starters = new Set(sortedByMin.slice(0, 5).map((r) => r.player));
-const sixthManByMinutes = sortedByMin[5]?.player || null;
 
     for (const row of rows) {
       const key = `${row.player}__${teamName}`;
@@ -2058,15 +2080,14 @@ const sixthManByMinutes = sortedByMin[5]?.player || null;
       cur.ftm += ftm;
       cur.fta += fta;
 
-      // 🔥 starter vs bench counts
-// 🔥 role tracking (only ONE sixth man, not the whole bench)
-const role = row.role; // may exist if you annotated slim with roles
+      // Role tracking: starts vs bench appearances.
+const role = row.role; // may exist if slim was annotated from coach gameplan roles
 if (role === "starter") cur.started += 1;
-else if (role === "sixth_man") cur.sixth += 1;
+else if (role) cur.sixth += 1;
 else {
-  // if role isn't present (older saved results), fall back to minutes heuristic
+  // If role is missing from older results, fall back to top-five minutes as starters.
   if (starters.has(row.player)) cur.started += 1;
-  else if (sixthManByMinutes && row.player === sixthManByMinutes) cur.sixth += 1;
+  else cur.sixth += 1;
 }
 
       stats[key] = cur;
@@ -3892,7 +3913,7 @@ function devBuildPlayerStatsFromSchedule(schedule) {
         ftm,
         fta,
         started: idx < 5 ? gp : 0,
-        sixth: idx === 5 ? gp : 0,
+        sixth: idx >= 5 ? gp : 0,
       };
     });
   }

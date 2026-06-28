@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-AWARDS_PY_VERSION = "2026-06-21_mip_history_award_v1"
+AWARDS_PY_VERSION = "2026-06-28_awards_65gp_bench_6moy_v1"
 
 # ---------------------------------------------------------------------------
 # UTILITIES
@@ -38,6 +38,15 @@ def _mpg(p): return float(p.get("min", 0)) / max(_gp(p), 1)
 
 def _started(p): return int(p.get("started", 0) or 0)
 def _sixth(p): return int(p.get("sixth", 0) or 0)
+def _bench_games(p):
+    gp = _gp(p)
+    starts = _started(p)
+    if "started" in p or "sixth" in p:
+        return max(0, gp - starts)
+    return max(0, _sixth(p))
+
+def _has_role_data(p):
+    return "started" in p or "sixth" in p
 
 def _defr(p) -> float:
     # In this game: defense rating is a 0-100 rating where higher is better.
@@ -293,7 +302,7 @@ def _is_mip_candidate(p, season_js=None):
         return False
 
     prev_games = _mip_prev_games(prev)
-    if _gp(p) < 40 or prev_games < 25:
+    if _gp(p) < 65 or prev_games < 25:
         return False
 
     # Keeps pure garbage-time jumps out while still allowing real breakout bench-to-starter seasons.
@@ -451,8 +460,8 @@ def compute_awards(players_js, teams_js, season_js=None):
     sample = list(team_wins.items())[:5]
     nonzero = sum(1 for _, w in team_wins.items() if w > 0)
 
-    MIN_GAMES = 40
-    eligible = [p for p in players if _gp(p) >= MIN_GAMES] or players
+    MIN_GAMES = 65
+    eligible = [p for p in players if _gp(p) >= MIN_GAMES]
 
     for p in eligible:
         p["_team_wins"] = team_wins.get(p.get("team"), 0)
@@ -490,14 +499,13 @@ def compute_awards(players_js, teams_js, season_js=None):
     dpoy_sorted = sorted(eligible, key=lambda p: p["_dpoy"], reverse=True)
     dpoy_race = dpoy_sorted[:5]
 
-    # 6MOY eligibility (still unchanged rules)
+    # 6MOY eligibility: must come off the bench in more games than he starts.
     def is_6m(p):
         return (
             _gp(p) >= MIN_GAMES and
-            ("started" in p or "sixth" in p) and
+            _has_role_data(p) and
             _mpg(p) >= 14 and
-            _started(p) <= int(0.2 * _gp(p)) and
-            _sixth(p) >= max(10, int(0.25 * _gp(p)))
+            _bench_games(p) > _started(p)
         )
 
     sixth = [p for p in eligible if is_6m(p)]

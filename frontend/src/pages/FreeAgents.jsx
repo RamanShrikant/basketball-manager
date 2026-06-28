@@ -1805,13 +1805,8 @@ const isOffseasonMode =
     if (!freeAgents.length) {
       setSelectedPlayer(null);
       setPlayerCardPlayer(null);
-      return;
     }
-
-    if (!selectedPlayer || !freeAgents.some((p) => p.name === selectedPlayer.name)) {
-      setSelectedPlayer(freeAgents[0]);
-    }
-  }, [freeAgents, selectedPlayer]);
+  }, [freeAgents]);
 
   useEffect(() => {
     if (!userRosterInvalid) {
@@ -1925,6 +1920,20 @@ const isOffseasonMode =
 
     return rows;
   }, [freeAgents, sortConfig, affordabilityByPlayerKey]);
+
+  useEffect(() => {
+    if (!sortedPlayers.length) {
+      setSelectedPlayer(null);
+      return;
+    }
+
+    setSelectedPlayer((prev) => {
+      if (prev && sortedPlayers.some((p) => getPlayerKey(p) === getPlayerKey(prev))) {
+        return prev;
+      }
+      return sortedPlayers[0];
+    });
+  }, [sortedPlayers]);
 
   const getOfferSalaryByYear = (year1Salary, years) => {
     const out = [];
@@ -2929,7 +2938,7 @@ updateOffseasonState({
     return noFreeAgentsView;
   }
 
-  const player = selectedPlayer || freeAgents[0] || {};
+  const player = selectedPlayer || sortedPlayers[0] || {};
   const fillPercent = Math.min((player.overall || 0) / 99, 1);
   const circleCircumference = 2 * Math.PI * 50;
   const strokeOffset = circleCircumference * (1 - fillPercent);

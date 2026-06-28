@@ -169,9 +169,6 @@ export default function TeamSelector() {
               <h2 className={item.isPlaceholder ? styles.placeholderName : styles.name}>
                 {item.name}
               </h2>
-              {item.isPlaceholder && item.offset === 0 ? (
-                <p className={styles.placeholderHint}>Use ◄ / ►, A / D, or click the arrows</p>
-              ) : null}
             </button>
           ))}
         </div>

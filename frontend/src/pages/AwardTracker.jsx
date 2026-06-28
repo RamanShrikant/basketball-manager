@@ -12,7 +12,7 @@ const PLAYER_STATS_KEY = "bm_player_stats_v1";
 const SCHED_KEY = "bm_schedule_v3";
 const META_KEY = "bm_league_meta_v1";
 
-const TRACKER_MIN_GAMES = 10;
+const TRACKER_MIN_GAME_SHARE = 0.8;
 const TRACKER_LIMIT = 10;
 
 const resultV3Key = (gameId) => `${RESULT_V3_PREFIX}${gameId}`;
@@ -278,6 +278,27 @@ function mpg(p) {
   return perGame(Number(p.min || 0), Number(p.gp || 0));
 }
 
+function benchGames(p) {
+  const gp = Number(p.gp || 0);
+  const starts = Number(p.started || 0);
+  const explicitBench = Number(p.sixth || 0);
+  if (p._hasRoleData || starts > 0 || explicitBench > 0) {
+    return Math.max(0, gp - starts);
+  }
+  return Math.max(0, explicitBench);
+}
+
+function requiredTrackerGames(teamGames) {
+  const games = Number(teamGames || 0);
+  if (games <= 0) return 1;
+  return Math.max(1, Math.ceil(games * TRACKER_MIN_GAME_SHARE));
+}
+
+function hasTrackerGames(p) {
+  const teamGames = Number(p._team_games || p.gp || 0);
+  return Number(p.gp || 0) >= requiredTrackerGames(teamGames);
+}
+
 function norm(v, vmax) {
   if (vmax <= 0) return 0;
   return Math.max(0, Math.min(1, v / vmax));
@@ -410,7 +431,7 @@ function isMipEligible(p, seasonYear) {
   if (!prev) return false;
 
   const prevGames = Number(prev.games ?? prev.gp ?? 0);
-  if (Number(p.gp || 0) < TRACKER_MIN_GAMES || prevGames < 25) return false;
+  if (prevGames < 25) return false;
   if (mpg(p) < 14) return false;
 
   const prevPpg = prevMipStat(prev, "ppg");
@@ -461,24 +482,22 @@ function impactMip(p) {
 }
 
 function isSixthManEligible(p) {
-  const gp = Number(p.gp || 0);
   const starts = Number(p.started || 0);
-  const sixth = Number(p.sixth || 0);
-
-  return (
-    gp >= TRACKER_MIN_GAMES &&
-    mpg(p) >= 14 &&
-    starts <= Math.floor(0.2 * gp) &&
-    sixth >= Math.max(5, Math.floor(0.25 * gp))
-  );
+  return mpg(p) >= 14 && benchGames(p) > starts;
 }
 
 function buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById) {
   const wins = {};
+  const gamesPlayed = {};
 
-  const bump = (teamName) => {
+  const bumpWin = (teamName) => {
     if (!teamName) return;
     wins[teamName] = (wins[teamName] || 0) + 1;
+  };
+
+  const bumpGame = (teamName) => {
+    if (!teamName) return;
+    gamesPlayed[teamName] = (gamesPlayed[teamName] || 0) + 1;
   };
 
   for (const games of Object.values(scheduleByDate || {})) {
@@ -488,19 +507,23 @@ function buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById) {
       const r = resultsById?.[g.id];
       if (!r?.totals) continue;
 
+      bumpGame(g.home);
+      bumpGame(g.away);
+
       const homePts = Number(r.totals.home ?? 0);
       const awayPts = Number(r.totals.away ?? 0);
 
       if (homePts === awayPts) continue;
 
-      if (homePts > awayPts) bump(g.home);
-      else bump(g.away);
+      if (homePts > awayPts) bumpWin(g.home);
+      else bumpWin(g.away);
     }
   }
 
   return (allTeams || []).map((t) => ({
     team: t?.name || t?.team,
     wins: wins[t?.name || t?.team] || 0,
+    games: gamesPlayed[t?.name || t?.team] || 0,
   }));
 }
 
@@ -635,8 +658,12 @@ function buildDisplayRow(p) {
   const prev = p.mipPrev || p.mip_prev || p.previousSeasonStats || null;
   const prevPpg = prevMipStat(prev, "ppg");
 
+  const bench = benchGames(p);
+
   return {
     ...p,
+    bench,
+    sixth: bench,
     ppg: fmt1(ppg(p)),
     apg: fmt1(apg(p)),
     rpg: fmt1(rpg(p)),
@@ -674,7 +701,7 @@ function getColumnsForTab(tab) {
       { key: "REB", label: "REB" },
       { key: "AST", label: "AST" },
       { key: "Starts", label: "Starts" },
-      { key: "Sixth", label: "Sixth" },
+      { key: "Sixth", label: "Bench" },
       { key: "Impact", label: "Impact" },
     ];
   }
@@ -771,14 +798,32 @@ export default function AwardTracker() {
   const allTeams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
   const rosterInfoIndex = useMemo(() => buildRosterInfoIndex(leagueData, trackerSeasonYear + 1), [leagueData, trackerSeasonYear]);
 
+  const teamAwardRows = useMemo(() => {
+    return buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById);
+  }, [allTeams, scheduleByDate, resultsById]);
+
   const teamWinsMap = useMemo(() => {
-    const arr = buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById);
     const map = {};
-    for (const t of arr) {
+    for (const t of teamAwardRows) {
       map[t.team] = Number(t.wins || 0);
     }
     return map;
-  }, [allTeams, scheduleByDate, resultsById]);
+  }, [teamAwardRows]);
+
+  const teamGamesMap = useMemo(() => {
+    const map = {};
+    for (const t of teamAwardRows) {
+      map[t.team] = Number(t.games || 0);
+    }
+
+    for (const row of Object.values(statsMap || {})) {
+      const teamName = row?.team;
+      if (!teamName) continue;
+      map[teamName] = Math.max(Number(map[teamName] || 0), Number(row.gp || 0));
+    }
+
+    return map;
+  }, [teamAwardRows, statsMap]);
 
   const playerPool = useMemo(() => {
     const out = [];
@@ -809,6 +854,7 @@ export default function AwardTracker() {
           blk: Number(s.blk || 0),
           started: Number(s.started || 0),
           sixth: Number(s.sixth || 0),
+          _hasRoleData: Object.prototype.hasOwnProperty.call(s, "started") || Object.prototype.hasOwnProperty.call(s, "sixth"),
           def_rating: Number(info.def_rating ?? 0),
           overall: info.overall ?? null,
           potential: info.potential ?? null,
@@ -836,16 +882,16 @@ export default function AwardTracker() {
           yearsOfExperience: info.yearsOfExperience,
           yoe: info.yoe,
           _team_wins: Number(teamWinsMap[teamName] || 0),
+          _team_games: Number(teamGamesMap[teamName] || 0),
         });
       }
     }
 
     return out;
-  }, [allTeams, statsMap, rosterInfoIndex, teamWinsMap]);
+  }, [allTeams, statsMap, rosterInfoIndex, teamWinsMap, teamGamesMap]);
 
   const eligiblePool = useMemo(() => {
-    const filtered = playerPool.filter((p) => Number(p.gp || 0) >= TRACKER_MIN_GAMES);
-    return filtered.length ? filtered : playerPool;
+    return playerPool.filter((p) => hasTrackerGames(p));
   }, [playerPool]);
 
   const mvpTop10 = useMemo(() => {
@@ -867,15 +913,7 @@ export default function AwardTracker() {
   }, [eligiblePool]);
 
   const sixthPool = useMemo(() => {
-    const strict = eligiblePool.filter((p) => isSixthManEligible(p));
-
-    if (strict.length) return strict;
-
-    return eligiblePool.filter(
-      (p) =>
-        mpg(p) >= 14 &&
-        Number(p.started || 0) <= Math.floor(0.4 * Number(p.gp || 0))
-    );
+    return eligiblePool.filter((p) => isSixthManEligible(p));
   }, [eligiblePool]);
 
   const sixthTop10 = useMemo(() => {
@@ -1210,7 +1248,7 @@ export default function AwardTracker() {
                       }
 
                       if (col.key === "Sixth") {
-                        return <td key={col.key}>{p.sixth}</td>;
+                        return <td key={col.key}>{p.bench ?? p.sixth}</td>;
                       }
 
                       return <td key={col.key}>-</td>;
@@ -1230,7 +1268,7 @@ export default function AwardTracker() {
       </div>
 
       <div className="w-full max-w-5xl mt-4 text-sm text-neutral-400">
-        {meta.description} Live for {seasonLabel}. Minimum {TRACKER_MIN_GAMES} GP for the tracker.
+        {meta.description} Live for {seasonLabel}. Tracker requires players to have appeared in at least 80% of their team’s games so far.
       </div>
 
       <button

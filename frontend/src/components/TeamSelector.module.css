@@ -204,16 +204,6 @@
   letter-spacing: 0.01em;
 }
 
-.placeholderHint {
-  margin: 12px 28px 0;
-  color: rgba(255, 255, 255, 0.62);
-  font-family: monospace;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-align: center;
-  text-transform: uppercase;
-}
 
 .navArrow {
   position: absolute;

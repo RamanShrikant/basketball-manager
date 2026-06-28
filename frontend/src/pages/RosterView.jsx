@@ -1045,12 +1045,6 @@ export default function RosterView() {
         </div>
       )}
 
-      {!isAllView && !canManageCurrentRoster && activeRosterTeam?.name && (
-        <div className="mb-5 w-full max-w-5xl rounded-xl border border-blue-400/30 bg-blue-500/10 px-5 py-3 text-sm font-semibold text-blue-100">
-          Viewing {activeRosterTeam.name}. Your controlled team is still {selectedTeam?.name || "your original team"}.
-        </div>
-      )}
-
       {/* Player Card */}
       <div className="relative w-full flex justify-center">
         <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">

@@ -131,7 +131,7 @@ export default function PlayerStats() {
   const navigate = useNavigate();
 
   const [mode, setMode] = useState("players"); // players | league | teams
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: "desc" });
+  const [sortConfig, setSortConfig] = useState({ key: "PTS", direction: "desc" });
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [playerCardPlayer, setPlayerCardPlayer] = useState(null);
   const [selectedTeamRow, setSelectedTeamRow] = useState(null);
@@ -380,29 +380,6 @@ export default function PlayerStats() {
     return rows.sort((a, b) => a.teamName.localeCompare(b.teamName));
   }, [schedule, results, playerStatsMap, allTeams, teamLogo]);
 
-  useEffect(() => {
-    if (mode === "players") {
-      setSelectedPlayer((prev) => {
-        if (prev && teamPlayers.some((p) => p.name === prev.name)) return prev;
-        return teamPlayers[0] || null;
-      });
-    }
-
-    if (mode === "league") {
-      setSelectedPlayer((prev) => {
-        if (prev && leaguePlayers.some((p) => p.name === prev.name && p.teamName === prev.teamName)) return prev;
-        return leaguePlayers[0] || null;
-      });
-    }
-
-    if (mode === "teams") {
-      setSelectedTeamRow((prev) => {
-        if (prev && allTeamsAgg.some((row) => row.teamName === prev)) return prev;
-        return allTeamsAgg[0]?.teamName || null;
-      });
-    }
-  }, [mode, teamPlayers, leaguePlayers, allTeamsAgg]);
-
   const currentIndex = selectedTeam
     ? allTeams.findIndex((team) => team.name === selectedTeam.name)
     : -1;
@@ -428,6 +405,8 @@ export default function PlayerStats() {
     }
 
     setSortConfig({ key, direction });
+    setSelectedPlayer(null);
+    setSelectedTeamRow(null);
   };
 
   const positionOrder = ["PG", "SG", "SF", "PF", "C"];
@@ -511,6 +490,26 @@ export default function PlayerStats() {
 
   const rowsTeams = applySort(allTeamsAgg, "teams");
 
+  useEffect(() => {
+    if (mode !== "players" && mode !== "league") return;
+
+    setSelectedPlayer((prev) => {
+      const exists = rowsPlayers.some(
+        (p) => p.name === prev?.name && p.teamName === prev?.teamName
+      );
+      return exists ? prev : rowsPlayers[0] || null;
+    });
+  }, [mode, rowsPlayers]);
+
+  useEffect(() => {
+    if (mode !== "teams") return;
+
+    setSelectedTeamRow((prev) => {
+      const exists = rowsTeams.some((row) => row.teamName === prev);
+      return exists ? prev : rowsTeams[0]?.teamName || null;
+    });
+  }, [mode, rowsTeams]);
+
   const cardPlayer =
     mode === "players" || mode === "league"
       ? selectedPlayer || rowsPlayers[0] || null
@@ -593,7 +592,9 @@ export default function PlayerStats() {
             key={tab.k}
             onClick={() => {
               setMode(tab.k);
-              setSortConfig({ key: null, direction: "desc" });
+              setSortConfig({ key: "PTS", direction: "desc" });
+              setSelectedPlayer(null);
+              setSelectedTeamRow(null);
             }}
             className={`px-3 py-1 rounded-md text-sm font-semibold ${
               mode === tab.k
