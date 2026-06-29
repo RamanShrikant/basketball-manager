@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { findComfortableTradeFinderOffers, sortTradeFinderOfferItems } from "../utils/tradeFinderOfferEngine.js";
@@ -1706,6 +1706,8 @@ export default function TradeFinder() {
   const [isSearchingOffers, setIsSearchingOffers] = useState(false);
   const [offerSearchError, setOfferSearchError] = useState("");
   const [offerSearchProgress, setOfferSearchProgress] = useState("");
+  const [offerSearchStopped, setOfferSearchStopped] = useState(false);
+  const offerSearchAbortRef = useRef(null);
 
   const selectedTeamPlayers = useMemo(() => getTeamPlayers(selectedTeam), [selectedTeam]);
   const selectedTeamPicks = useMemo(() => getOwnedPicks(leagueData, selectedTeam?.name), [leagueData, selectedTeam]);
@@ -1738,6 +1740,15 @@ export default function TradeFinder() {
   const offers = searched ? pythonOffers : [];
 
   useEffect(() => {
+    return () => {
+      try {
+        offerSearchAbortRef.current?.abort?.();
+      } catch {}
+      offerSearchAbortRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!selectedTeam?.name) return;
     saveTradeFinderState({
       selectedTeamName: selectedTeam.name,
@@ -1753,6 +1764,7 @@ export default function TradeFinder() {
     setPythonOffers([]);
     setOfferSearchError("");
     setOfferSearchProgress("");
+    setOfferSearchStopped(false);
     setSelectedAssetKeys((prev) => {
       if (prev.includes(asset.key)) return prev.filter((key) => key !== asset.key);
       return [...prev, asset.key];
@@ -1766,10 +1778,32 @@ export default function TradeFinder() {
     }
   };
 
+  const stopSearchOffers = () => {
+    const controller = offerSearchAbortRef.current;
+    if (!controller) return;
+
+    try {
+      controller.abort();
+    } catch {}
+
+    setOfferSearchStopped(true);
+    setOfferSearchProgress("Stopping after the current CPU evaluation finishes...");
+  };
+
   const runSearchOffers = async () => {
+    try {
+      offerSearchAbortRef.current?.abort?.();
+    } catch {}
+
+    const controller = typeof AbortController !== "undefined"
+      ? new AbortController()
+      : { signal: { aborted: false }, abort() { this.signal.aborted = true; } };
+    offerSearchAbortRef.current = controller;
+
     setSearched(true);
     setOfferSearchError("");
     setOfferSearchProgress("");
+    setOfferSearchStopped(false);
 
     if (!selectedItems.length) {
       setPythonOffers([]);
@@ -1785,6 +1819,7 @@ export default function TradeFinder() {
         selectedTeam,
         selectedItems,
         teams,
+        signal: controller.signal,
         onProgress: (progress = {}) => {
           const teamIndex = Number(progress.teamIndex || 0);
           const teamsToCheck = Number(progress.teamsToCheck || 0);
@@ -1792,30 +1827,76 @@ export default function TradeFinder() {
           const teamName = progress.team || "CPU teams";
           const elapsed = Number(progress.elapsedSec || 0);
 
-          if (progress.phase === "complete") {
+          if (progress.phase === "complete" || progress.phase === "stopped") {
+            const wasStopped = progress.phase === "stopped";
+            setOfferSearchStopped(wasStopped);
             setOfferSearchProgress(
-              `Complete: checked ${teamsToCheck}/${teamsToCheck} teams, found ${offersFound} offer${offersFound === 1 ? "" : "s"} in ${elapsed.toFixed(1)}s.`
+              wasStopped
+                ? `Stopped: checked ${teamIndex}/${teamsToCheck} teams, found ${offersFound} offer${offersFound === 1 ? "" : "s"} in ${elapsed.toFixed(1)}s.`
+                : `Complete: checked ${teamsToCheck}/${teamsToCheck} teams, found ${offersFound} offer${offersFound === 1 ? "" : "s"} in ${elapsed.toFixed(1)}s.`
             );
             return;
           }
 
-          if (progress.phase === "team_done") {
+          if (progress.phase === "scan_start") {
             setOfferSearchProgress(
-              `Checked ${teamIndex}/${teamsToCheck}: ${teamName} (${Number(progress.teamMs || 0).toFixed(0)}ms, ${Number(progress.evaluationsForTeam || 0)} evals). Offers found: ${offersFound}.`
+              `Pass 1/2: quick scanning all ${teamsToCheck} CPU teams...`
             );
             return;
           }
 
-          if (progress.phase === "evaluating") {
+          if (progress.phase === "rescue_start") {
             setOfferSearchProgress(
-              `Checking ${teamIndex}/${teamsToCheck}: ${teamName} • ${Number(progress.evaluationsForTeam || 0)} evaluations • Offers found: ${offersFound}.`
+              `Pass 1 bonus: rescuing missed teams until about ${Number(progress.rescueTarget || 0)} offers are found. Current offers: ${offersFound}.`
             );
             return;
           }
 
-          if (progress.phase === "team_start") {
+          if (progress.phase === "refine_start") {
             setOfferSearchProgress(
-              `Checking ${teamIndex}/${teamsToCheck}: ${teamName}... Offers found: ${offersFound}.`
+              `Pass 2/2: refining the top ${teamsToCheck} promising offer${teamsToCheck === 1 ? "" : "s"}. Offers found: ${offersFound}.`
+            );
+            return;
+          }
+
+          if (["team_done", "scan_team_done", "rescue_team_done", "refine_team_done"].includes(progress.phase)) {
+            const phaseLabel = progress.phase.startsWith("scan")
+              ? "Scanned"
+              : progress.phase.startsWith("rescue")
+                ? "Rescued"
+                : progress.phase.startsWith("refine")
+                  ? "Refined"
+                  : "Checked";
+            setOfferSearchProgress(
+              `${phaseLabel} ${teamIndex}/${teamsToCheck}: ${teamName} (${Number(progress.teamMs || 0).toFixed(0)}ms, ${Number(progress.evaluationsForTeam || 0)} evals). Offers found: ${offersFound}.`
+            );
+            return;
+          }
+
+          if (["evaluating", "scan_evaluating", "rescue_evaluating", "refine_evaluating"].includes(progress.phase)) {
+            const phaseLabel = progress.phase.startsWith("scan")
+              ? "Quick scan"
+              : progress.phase.startsWith("rescue")
+                ? "Rescue scan"
+                : progress.phase.startsWith("refine")
+                  ? "Refining"
+                  : "Checking";
+            setOfferSearchProgress(
+              `${phaseLabel} ${teamIndex}/${teamsToCheck}: ${teamName} • ${Number(progress.evaluationsForTeam || 0)} evaluations • Offers found: ${offersFound}.`
+            );
+            return;
+          }
+
+          if (["team_start", "scan_team_start", "rescue_team_start", "refine_team_start"].includes(progress.phase)) {
+            const phaseLabel = progress.phase.startsWith("scan")
+              ? "Quick scanning"
+              : progress.phase.startsWith("rescue")
+                ? "Rescue scanning"
+                : progress.phase.startsWith("refine")
+                  ? "Refining"
+                  : "Checking";
+            setOfferSearchProgress(
+              `${phaseLabel} ${teamIndex}/${teamsToCheck}: ${teamName}... Offers found: ${offersFound}.`
             );
             return;
           }
@@ -1832,17 +1913,30 @@ export default function TradeFinder() {
         : [];
       setPythonOffers(nextOffers);
 
-      if (!nextOffers.length) {
+      if (result?.stopped) {
+        setOfferSearchStopped(true);
+        setOfferSearchError(result?.message || "Search stopped. Showing partial offers found so far.");
+      }
+
+      if (!nextOffers.length && !result?.stopped) {
         setOfferSearchError(
           result?.message || "No CPU team found a Propose Trade-legal package it would comfortably accept."
         );
       }
     } catch (error) {
-      console.warn("[TradeFinder] offer search failed.", error);
-      setPythonOffers([]);
-      setOfferSearchError(error?.message || "Trade Finder failed while checking Propose Trade-compatible CPU offers.");
-      setOfferSearchProgress("");
+      if (controller.signal?.aborted) {
+        setOfferSearchStopped(true);
+        setOfferSearchError("Search stopped. Showing any offers found before stopping.");
+      } else {
+        console.warn("[TradeFinder] offer search failed.", error);
+        setPythonOffers([]);
+        setOfferSearchError(error?.message || "Trade Finder failed while checking Propose Trade-compatible CPU offers.");
+        setOfferSearchProgress("");
+      }
     } finally {
+      if (offerSearchAbortRef.current === controller) {
+        offerSearchAbortRef.current = null;
+      }
       setIsSearchingOffers(false);
     }
   };
@@ -1951,6 +2045,7 @@ export default function TradeFinder() {
                         setPythonOffers([]);
                         setOfferSearchError("");
                         setOfferSearchProgress("");
+                        setOfferSearchStopped(false);
                         setPickProtections((prev) => ({ ...prev, [asset.key]: value }));
                       }}
                       leagueData={leagueData}
@@ -1978,14 +2073,26 @@ export default function TradeFinder() {
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={runSearchOffers}
-                    disabled={!selectedItems.length || isSearchingOffers}
-                    className="rounded-2xl bg-orange-600 px-7 py-3 text-sm font-black text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {isSearchingOffers ? "Searching..." : "Search Offers"}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={runSearchOffers}
+                      disabled={!selectedItems.length || isSearchingOffers}
+                      className="rounded-2xl bg-orange-600 px-7 py-3 text-sm font-black text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isSearchingOffers ? "Searching..." : "Search Offers"}
+                    </button>
+
+                    {isSearchingOffers && (
+                      <button
+                        type="button"
+                        onClick={stopSearchOffers}
+                        className="rounded-2xl border border-red-300/35 bg-red-500/15 px-5 py-3 text-sm font-black text-red-100 transition hover:bg-red-500/25"
+                      >
+                        Stop
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -2005,7 +2112,9 @@ export default function TradeFinder() {
                 {searched && isSearchingOffers && (
                   <div className="rounded-2xl border border-orange-400/25 bg-orange-500/10 p-5 text-sm font-bold leading-6 text-orange-100">
                     <div>
-                      CPU front offices are building one comfortable package each, then checking Propose Trade acceptance, salary matching, and roster rules...
+                      {offerSearchStopped
+                        ? "Stopping search after the current CPU evaluation finishes..."
+                        : "CPU front offices are building one comfortable package each, then checking Propose Trade acceptance, salary matching, and roster rules..."}
                     </div>
                     {offerSearchProgress && (
                       <div className="mt-3 rounded-xl border border-orange-300/20 bg-black/25 px-3 py-2 text-xs text-orange-50">

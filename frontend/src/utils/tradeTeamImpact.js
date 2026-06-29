@@ -50,12 +50,19 @@ const STAR_RETENTION_TAX_BY_OVR = {
   98: [22.50, 18.45, 12.30, 6.75, 4.05, 1.87],
   99: [28.00, 22.96, 15.31, 8.40, 5.04, 2.32],
 };
-const RATING_CACHE_MAX = 250;
-const POWER_CONTEXT_CACHE_MAX = 12;
+const RATING_CACHE_MAX = 900;
+const POWER_CONTEXT_CACHE_MAX = 24;
+const TRADE_FINDER_IMPACT_CACHE_MAX = 2600;
+const TRADE_FINDER_IMPACT_MODE_KEY = "bm_trade_finder_impact_mode_v1";
+const TRADE_FINDER_FAST_FTR_MODE = "fast-ftr";
+const TRADE_FINDER_FAST_SCAN_MODE = "fast-scan";
+const TRADE_FINDER_IMPACT_BREAKDOWN_KEY = "bm_trade_finder_impact_breakdown_v1";
+const TRADE_FINDER_IMPACT_BREAKDOWN_MAX_ROWS = 600;
 
 const rosterRatingCache = new Map();
 const rankOnlyRatingCache = new Map();
 const powerContextCache = new Map();
+const tradeFinderImpactCache = new Map();
 
 const round4 = (value) => Math.round(Number(value || 0) * 10000) / 10000;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -99,6 +106,108 @@ function getLimitedCache(cache, key) {
   cache.delete(key);
   cache.set(key, value);
   return value;
+}
+
+function stablePrimitive(value = "") {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
+  if (typeof value === "boolean") return value ? "1" : "0";
+  return String(value);
+}
+
+function stableTradeRuleSignature(rule = {}) {
+  if (!rule || typeof rule !== "object") return "";
+  return [
+    stablePrimitive(rule.action),
+    stablePrimitive(rule.swapId),
+    stablePrimitive(rule.mirror),
+    stablePrimitive(rule.protectStart),
+    stablePrimitive(rule.protectEnd),
+    stablePrimitive(rule.swapDirection),
+    stablePrimitive(rule.ownedRange?.start),
+    stablePrimitive(rule.ownedRange?.end),
+    stablePrimitive(rule.retainedRange?.start),
+    stablePrimitive(rule.retainedRange?.end),
+    stablePrimitive(rule.conveyedRange?.start),
+    stablePrimitive(rule.conveyedRange?.end),
+  ].join(":");
+}
+
+function tradeItemImpactSignature(item = {}) {
+  if (item?.type === "player") {
+    const player = item.player || {};
+    return [
+      "player",
+      getPlayerIdentity(player),
+      normalizeName(player?.name || player?.player || ""),
+      stablePrimitive(player?.pos),
+      stablePrimitive(player?.secondaryPos),
+      stablePrimitive(player?.age),
+      stablePrimitive(player?.overall ?? player?.ovr),
+      stablePrimitive(player?.potential ?? player?.pot),
+      stablePrimitive(player?.offRating ?? player?.off),
+      stablePrimitive(player?.defRating ?? player?.def),
+      stablePrimitive(player?.stamina ?? player?.sta),
+      stablePrimitive(player?.salary ?? player?.currentSalary ?? player?.contractSalary ?? player?.capHit ?? player?.aav),
+      Array.isArray(player?.contract?.salaryByYear) ? player.contract.salaryByYear.map(stablePrimitive).join(",") : "",
+      stablePrimitive(player?.contract?.startYear),
+    ].join("|");
+  }
+
+  if (item?.type === "pick") {
+    const pick = item.pick || {};
+    const rule = item.tradeRule || pick.tradeRule || {};
+    return [
+      "pick",
+      stablePrimitive(pick.id || pick.pickId),
+      stablePrimitive(pick.assetType || pick.type),
+      stablePrimitive(pick.year || pick.seasonYear),
+      stablePrimitive(pick.round || pick.rnd),
+      stablePrimitive(pick.pickNumber || pick.overallPick || pick.resolvedPickNumber || pick.draftPickNumber || pick.projectedRank),
+      normalizeName(pick.originalTeam || pick.originalTeamName || pick.team || ""),
+      normalizeName(pick.ownerTeam || pick.owner || pick.currentOwnerTeamName || ""),
+      stablePrimitive(item.protection || pick.displayProtection || pick.protections || pick.protection),
+      stableTradeRuleSignature(rule),
+    ].join("|");
+  }
+
+  return `${stablePrimitive(item?.type)}:${stablePrimitive(JSON.stringify(item || {}))}`;
+}
+
+function tradeItemsImpactSignature(items = []) {
+  return (items || []).map(tradeItemImpactSignature).sort().join("||");
+}
+
+function makeTradeFinderImpactCacheKey({
+  leagueData,
+  cpuTeam,
+  userTeamName = "",
+  cpuTeamName = "",
+  userItems = [],
+  cpuItems = [],
+  evaluationMode = "standard",
+  cpuTradeRole = "",
+  cpuTradeContext = null,
+} = {}) {
+  if (String(cpuTradeRole || "").toLowerCase() !== "trade_finder") return null;
+  const teams = getAllTeamsFromLeague(leagueData);
+  const leagueSignature = leaguePowerSignature(leagueData, teams);
+  const cpuName = cpuTeamName || getTeamName(cpuTeam) || "";
+  const fastScanKey = cpuTradeContext?.tradeFinderFastScan
+    ? `fastscan:${cpuTradeContext?.searchPhase || ""}`
+    : "normal";
+  return [
+    "tf-impact-v5",
+    stablePrimitive(getTradeFinderImpactMode()),
+    stablePrimitive(fastScanKey),
+    stablePrimitive(evaluationMode),
+    normalizeName(userTeamName),
+    normalizeName(cpuName),
+    leagueSignature,
+    rosterRatingSignature(cpuTeam?.players || []),
+    tradeItemsImpactSignature(userItems),
+    tradeItemsImpactSignature(cpuItems),
+  ].join("::");
 }
 
 function playerRatingSignature(player = {}) {
@@ -207,6 +316,161 @@ function safeLocalStorageGet(key) {
   } catch {
     return null;
   }
+}
+
+
+function tfImpactNow() {
+  try {
+    return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  } catch {
+    return Date.now();
+  }
+}
+
+function tfImpactRoundMs(value) {
+  const n = Number(value || 0);
+  return Math.round(n * 10) / 10;
+}
+
+function isTradeFinderImpactBreakdownEnabled() {
+  try {
+    return Boolean(
+      typeof window !== "undefined" &&
+        (window.__TF_IMPACT_BREAKDOWN_ENABLED || safeLocalStorageGet(TRADE_FINDER_IMPACT_BREAKDOWN_KEY) === "1")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function addBreakdownMetric(metrics, key, value) {
+  if (!metrics || !key) return;
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return;
+  metrics[key] = Number(metrics[key] || 0) + n;
+}
+
+function incrementBreakdownMetric(metrics, key, amount = 1) {
+  addBreakdownMetric(metrics, key, amount);
+}
+
+function getBreakdownRolePrefix(role = "rating") {
+  const raw = String(role || "rating").replace(/[^a-z0-9]+/gi, "");
+  return raw ? raw.charAt(0).toLowerCase() + raw.slice(1) : "rating";
+}
+
+function countBreakdownTradeItems(items = []) {
+  const rows = Array.isArray(items) ? items : [];
+  return {
+    assetCount: rows.length,
+    playerCount: rows.filter((item) => item?.type === "player").length,
+    pickCount: rows.filter((item) => item?.type === "pick").length,
+  };
+}
+
+function makeTradeFinderImpactBreakdownBase(args = {}) {
+  const cpuTeam = args?.cpuTeam || {};
+  const userTeam = args?.userTeam || {};
+  return {
+    team: args?.cpuTeamName || getTeamName(cpuTeam) || "CPU team",
+    userTeam: args?.userTeamName || getTeamName(userTeam) || "Your team",
+    evaluationMode: args?.evaluationMode || "standard",
+    cpuTradeRole: String(args?.cpuTradeRole || "").toLowerCase(),
+    impactMode: getTradeFinderImpactMode(),
+    userItems: countBreakdownTradeItems(args?.userItems || []),
+    cpuItems: countBreakdownTradeItems(args?.cpuItems || []),
+    cpuItemSignature: tradeItemsImpactSignature(args?.cpuItems || []),
+    userItemSignature: tradeItemsImpactSignature(args?.userItems || []),
+  };
+}
+
+function ensureTradeFinderImpactBreakdownStore() {
+  if (typeof window === "undefined") return null;
+  if (!window.__TF_IMPACT_BREAKDOWN || typeof window.__TF_IMPACT_BREAKDOWN !== "object" || !Array.isArray(window.__TF_IMPACT_BREAKDOWN.rows)) {
+    window.__TF_IMPACT_BREAKDOWN = {
+      rows: [],
+      totals: {},
+      byTeam: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: null,
+    };
+  }
+  if (!window.__TF_RESET_IMPACT_BREAKDOWN) {
+    window.__TF_RESET_IMPACT_BREAKDOWN = () => {
+      window.__TF_IMPACT_BREAKDOWN = {
+        rows: [],
+        totals: {},
+        byTeam: {},
+        createdAt: new Date().toISOString(),
+        updatedAt: null,
+      };
+      return window.__TF_IMPACT_BREAKDOWN;
+    };
+  }
+  return window.__TF_IMPACT_BREAKDOWN;
+}
+
+function recordTradeFinderImpactBreakdown(row = {}) {
+  if (!isTradeFinderImpactBreakdownEnabled()) return;
+  try {
+    const store = ensureTradeFinderImpactBreakdownStore();
+    if (!store) return;
+
+    const cleanRow = {
+      callIndex: Number(store.totals?.calls || 0) + 1,
+      ...row,
+    };
+    store.rows.push(cleanRow);
+    while (store.rows.length > TRADE_FINDER_IMPACT_BREAKDOWN_MAX_ROWS) store.rows.shift();
+
+    const totals = store.totals || {};
+    totals.calls = Number(totals.calls || 0) + 1;
+    totals.cacheHits = Number(totals.cacheHits || 0) + (cleanRow.cacheHit ? 1 : 0);
+    totals.cacheMisses = Number(totals.cacheMisses || 0) + (cleanRow.cacheHit ? 0 : 1);
+
+    for (const [key, value] of Object.entries(cleanRow.metrics || {})) {
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      totals[key] = Number(totals[key] || 0) + value;
+    }
+    totals.totalMs = Number(totals.totalMs || 0) + Number(cleanRow.totalMs || 0);
+    totals.updatedAtMs = tfImpactNow();
+
+    const teamKey = cleanRow.team || "Unknown";
+    const byTeam = store.byTeam || {};
+    const teamRow = byTeam[teamKey] || { team: teamKey, calls: 0, totalMs: 0, cacheHits: 0, metrics: {} };
+    teamRow.calls += 1;
+    teamRow.totalMs += Number(cleanRow.totalMs || 0);
+    teamRow.cacheHits += cleanRow.cacheHit ? 1 : 0;
+    for (const [key, value] of Object.entries(cleanRow.metrics || {})) {
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      teamRow.metrics[key] = Number(teamRow.metrics[key] || 0) + value;
+    }
+    byTeam[teamKey] = teamRow;
+
+    store.totals = totals;
+    store.byTeam = byTeam;
+    store.updatedAt = new Date().toISOString();
+  } catch {}
+}
+
+function getTradeFinderImpactMode() {
+  const mode = String(safeLocalStorageGet(TRADE_FINDER_IMPACT_MODE_KEY) || "exact").toLowerCase().trim();
+  return mode === TRADE_FINDER_FAST_FTR_MODE ? TRADE_FINDER_FAST_FTR_MODE : "exact";
+}
+
+function shouldUseTradeFinderFastFtr({ cpuTradeRole = "" } = {}) {
+  return (
+    String(cpuTradeRole || "").toLowerCase() === "trade_finder" &&
+    getTradeFinderImpactMode() === TRADE_FINDER_FAST_FTR_MODE
+  );
+}
+
+function shouldUseTradeFinderFastScanImpact({ cpuTradeRole = "", cpuTradeContext = null } = {}) {
+  return Boolean(
+    String(cpuTradeRole || "").toLowerCase() === "trade_finder" &&
+      cpuTradeContext &&
+      cpuTradeContext.tradeFinderFastScan
+  );
 }
 
 function parseSavedGameplan(raw) {
@@ -324,10 +588,279 @@ function buildRecordMap() {
   return map;
 }
 
-function calculateTeamImpactRatings(players = []) {
+function tradeFinderFastPlayerValue(player = {}) {
+  const overall = toNum(player?.overall ?? player?.ovr, 75);
+  const off = toNum(player?.offRating ?? player?.off ?? overall, overall);
+  const def = toNum(player?.defRating ?? player?.def ?? overall, overall);
+  const stamina = toNum(player?.stamina ?? player?.sta, 75);
+  return overall * 1.0 + off * 0.18 + def * 0.18 + (stamina - 70) * 0.08;
+}
+
+function compareTradeFinderFastPlayers(a = {}, b = {}) {
+  const diff = tradeFinderFastPlayerValue(b) - tradeFinderFastPlayerValue(a);
+  if (Math.abs(diff) > 1e-9) return diff;
+  const ovrDiff = toNum(b?.overall ?? b?.ovr, 0) - toNum(a?.overall ?? a?.ovr, 0);
+  if (ovrDiff !== 0) return ovrDiff;
+  return String(a?.name || a?.player || "").localeCompare(String(b?.name || b?.player || ""));
+}
+
+const TRADE_FINDER_FAST_SCAN_POSITIONS = ["PG", "SG", "SF", "PF", "C"];
+const TRADE_FINDER_FAST_SCAN_STARTER_MINUTES = [34, 34, 34, 34, 34];
+const TRADE_FINDER_FAST_SCAN_BENCH_MINUTES = [18, 16, 14, 12, 10];
+
+function tradeFinderFastPlayerName(player = {}) {
+  return player?.name || player?.player || "";
+}
+
+function tradeFinderFastPlayerOverall(player = {}) {
+  return toNum(player?.overall ?? player?.ovr, 0);
+}
+
+function tradeFinderFastPlayerPotential(player = {}) {
+  return toNum(player?.potential ?? player?.pot ?? player?.overall ?? player?.ovr, 75);
+}
+
+function tradeFinderFastCanPlayPosition(player = {}, pos = "") {
+  return player?.pos === pos || player?.secondaryPos === pos;
+}
+
+function chooseTradeFinderFastScanStarters(valid = []) {
+  const remaining = [...(valid || [])].sort(compareTradeFinderFastPlayers);
+  const starters = [];
+  const used = new Set();
+
+  for (const pos of TRADE_FINDER_FAST_SCAN_POSITIONS) {
+    const candidates = remaining
+      .filter((player) => {
+        const name = tradeFinderFastPlayerName(player);
+        return name && !used.has(name) && tradeFinderFastCanPlayPosition(player, pos);
+      })
+      .sort((a, b) => {
+        const primaryDiff = Number(b?.pos === pos) - Number(a?.pos === pos);
+        if (primaryDiff !== 0) return primaryDiff;
+        return compareTradeFinderFastPlayers(a, b);
+      });
+
+    const picked = candidates[0] || remaining.find((player) => {
+      const name = tradeFinderFastPlayerName(player);
+      return name && !used.has(name);
+    });
+
+    if (!picked) continue;
+    used.add(tradeFinderFastPlayerName(picked));
+    starters.push(picked);
+  }
+
+  return starters;
+}
+
+function buildTradeFinderFastScanMinutes(valid = []) {
+  const minutes = {};
+  for (const player of valid || []) {
+    const name = tradeFinderFastPlayerName(player);
+    if (name) minutes[name] = 0;
+  }
+
+  const starters = chooseTradeFinderFastScanStarters(valid);
+  const used = new Set(starters.map(tradeFinderFastPlayerName));
+  const bench = (valid || [])
+    .filter((player) => {
+      const name = tradeFinderFastPlayerName(player);
+      return name && !used.has(name);
+    })
+    .sort(compareTradeFinderFastPlayers)
+    .slice(0, TRADE_FINDER_FAST_SCAN_BENCH_MINUTES.length);
+
+  const active = [...starters, ...bench].filter(Boolean);
+  const minuteSlots = [
+    ...TRADE_FINDER_FAST_SCAN_STARTER_MINUTES.slice(0, starters.length),
+    ...TRADE_FINDER_FAST_SCAN_BENCH_MINUTES.slice(0, bench.length),
+  ];
+
+  for (let idx = 0; idx < active.length; idx += 1) {
+    const name = tradeFinderFastPlayerName(active[idx]);
+    if (!name) continue;
+    minutes[name] = Number(minuteSlots[idx] || 0);
+  }
+
+  let total = Object.values(minutes).reduce((sum, value) => sum + Number(value || 0), 0);
+  let remaining = Math.max(0, 240 - total);
+  const priority = active.slice().sort(compareTradeFinderFastPlayers);
+
+  while (remaining > 0 && priority.length) {
+    let moved = false;
+    for (const player of priority) {
+      if (remaining <= 0) break;
+      const name = tradeFinderFastPlayerName(player);
+      if (!name) continue;
+      const current = Number(minutes[name] || 0);
+      const add = Math.min(remaining, Math.max(0, 42 - current), 4);
+      if (add <= 0) continue;
+      minutes[name] = current + add;
+      remaining -= add;
+      moved = true;
+    }
+    if (!moved) break;
+  }
+
+  total = Object.values(minutes).reduce((sum, value) => sum + Number(value || 0), 0);
+  if (total > 240) {
+    let over = total - 240;
+    const donors = active.slice().reverse();
+    for (const player of donors) {
+      if (over <= 0) break;
+      const name = tradeFinderFastPlayerName(player);
+      const current = Number(minutes[name] || 0);
+      const take = Math.min(over, Math.max(0, current - 6));
+      if (take <= 0) continue;
+      minutes[name] = current - take;
+      over -= take;
+    }
+  }
+
+  return minutes;
+}
+
+function estimateTradeFinderFastScanPotential(valid = [], exactOverall = 0) {
+  const rows = (valid || [])
+    .map((player) => {
+      const overall = tradeFinderFastPlayerOverall(player);
+      const potential = tradeFinderFastPlayerPotential(player);
+      const age = toNum(player?.age, 27);
+      const upside = Math.max(0, potential - overall);
+      const youth = age <= 20 ? 1.16 : age <= 23 ? 1.10 : age <= 26 ? 1.02 : age <= 30 ? 0.94 : age <= 34 ? 0.82 : 0.66;
+      return overall * 0.44 + potential * 0.56 + upside * 0.20 * youth;
+    })
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => b - a);
+
+  if (!rows.length) return round4(exactOverall || 0);
+  const top2 = rows.slice(0, 2).reduce((sum, value) => sum + value, 0) / Math.max(1, Math.min(2, rows.length));
+  const top5 = rows.slice(0, 5).reduce((sum, value) => sum + value, 0) / Math.max(1, Math.min(5, rows.length));
+  const weighted = rows.reduce((sum, value, idx) => sum + value * Math.pow(0.86, idx), 0) /
+    rows.reduce((sum, _, idx) => sum + Math.pow(0.86, idx), 0);
+  const futureScore = top2 * 0.42 + top5 * 0.38 + weighted * 0.20;
+  const blended = exactOverall * 0.32 + futureScore * 0.68;
+  return round4(clamp(blended, 0, 99));
+}
+
+function calculateTradeFinderFastScanRatings(valid = [], metrics = null, rolePrefix = "rating") {
+  const totalStart = tfImpactNow();
+
+  const minutesStart = tfImpactNow();
+  const minutes = buildTradeFinderFastScanMinutes(valid);
+  addBreakdownMetric(metrics, `${rolePrefix}FastScanMinutesMs`, tfImpactNow() - minutesStart);
+
+  const ratingsStart = tfImpactNow();
+  const ratings = computeTeamRatings({ players: valid }, minutes);
+  addBreakdownMetric(metrics, `${rolePrefix}FastScanTeamRatingsMs`, tfImpactNow() - ratingsStart);
+
+  const exactOverall = round4(ratings?.exactOverall ?? ratings?.overall ?? 0);
+  const potentialStart = tfImpactNow();
+  const exactPot = estimateTradeFinderFastScanPotential(valid, exactOverall);
+  addBreakdownMetric(metrics, `${rolePrefix}FastScanPotentialMs`, tfImpactNow() - potentialStart);
+  addBreakdownMetric(metrics, `${rolePrefix}RatingTotalMs`, tfImpactNow() - totalStart);
+
+  return {
+    exactOverall,
+    exactOff: round4(ratings?.exactOff ?? ratings?.off ?? 0),
+    exactDef: round4(ratings?.exactDef ?? ratings?.def ?? 0),
+    exactPot,
+    exactFtr: exactOverall,
+    displayOverall: toNum(ratings?.overall, Math.round(exactOverall || 0)),
+    displayPot: Math.round(exactPot),
+    displayFtr: toNum(ratings?.overall, Math.round(exactOverall || 0)),
+    ratingMode: TRADE_FINDER_FAST_SCAN_MODE,
+  };
+}
+
+function buildTradeFinderFastFtrMinutes(valid = [], smartMinutes = {}) {
+  const minutes = {};
+  for (const player of valid || []) {
+    const name = player?.name || player?.player;
+    if (!name) continue;
+    minutes[name] = Math.max(0, Number(smartMinutes?.[name] || 0));
+  }
+
+  const activeNames = new Set(
+    Object.entries(minutes)
+      .filter(([, min]) => Number(min || 0) > 0)
+      .map(([name]) => name)
+  );
+  const depthPlayers = (valid || [])
+    .filter((player) => {
+      const name = player?.name || player?.player;
+      return name && !activeNames.has(name);
+    })
+    .sort(compareTradeFinderFastPlayers);
+
+  if (!depthPlayers.length) return minutes;
+
+  // Cheap FTR approximation for Trade Finder only. The exact full-team rating
+  // optimizer is very expensive because it rebuilds a 10-man group while also
+  // forcing deep bench minutes. For search scans, approximate that idea by
+  // giving non-rotation depth 5 minutes and taking those minutes from the lowest
+  // value active players above a safe floor. Propose Trade and normal ratings
+  // still use the exact buildFullTeamRating path.
+  const depthMinuteTarget = 5;
+  const minActiveFloor = 8;
+  let minutesNeeded = 0;
+  for (const player of depthPlayers) {
+    const name = player?.name || player?.player;
+    minutes[name] = depthMinuteTarget;
+    minutesNeeded += depthMinuteTarget;
+  }
+
+  const donors = (valid || [])
+    .filter((player) => {
+      const name = player?.name || player?.player;
+      return name && Number(minutes[name] || 0) > minActiveFloor && activeNames.has(name);
+    })
+    .sort((a, b) => tradeFinderFastPlayerValue(a) - tradeFinderFastPlayerValue(b));
+
+  for (const donor of donors) {
+    if (minutesNeeded <= 0) break;
+    const name = donor?.name || donor?.player;
+    const current = Number(minutes[name] || 0);
+    const take = Math.min(minutesNeeded, Math.max(0, current - minActiveFloor));
+    if (take <= 0) continue;
+    minutes[name] = current - take;
+    minutesNeeded -= take;
+  }
+
+  if (minutesNeeded > 0) {
+    const active = (valid || [])
+      .filter((player) => {
+        const name = player?.name || player?.player;
+        return name && Number(minutes[name] || 0) > 0 && activeNames.has(name);
+      })
+      .sort((a, b) => tradeFinderFastPlayerValue(a) - tradeFinderFastPlayerValue(b));
+
+    for (const donor of active) {
+      if (minutesNeeded <= 0) break;
+      const name = donor?.name || donor?.player;
+      const current = Number(minutes[name] || 0);
+      const take = Math.min(minutesNeeded, Math.max(0, current));
+      if (take <= 0) continue;
+      minutes[name] = current - take;
+      minutesNeeded -= take;
+    }
+  }
+
+  return minutes;
+}
+
+function calculateTeamImpactRatings(players = [], options = {}) {
+  const metrics = options?.breakdownMetrics || null;
+  const rolePrefix = getBreakdownRolePrefix(options?.ratingRole || "rating");
+  const totalStart = tfImpactNow();
+  const validStart = tfImpactNow();
   const valid = (players || []).filter((p) => p && (p.name || p.player) && Number.isFinite(Number(p.overall ?? p.ovr)));
+  addBreakdownMetric(metrics, `${rolePrefix}ValidFilterMs`, tfImpactNow() - validStart);
+  incrementBreakdownMetric(metrics, `${rolePrefix}PlayersRated`, valid.length);
 
   if (!valid.length) {
+    addBreakdownMetric(metrics, `${rolePrefix}RatingTotalMs`, tfImpactNow() - totalStart);
     return {
       exactOverall: 0,
       exactOff: 0,
@@ -340,17 +873,56 @@ function calculateTeamImpactRatings(players = []) {
     };
   }
 
+  if (options?.fastScan) {
+    return calculateTradeFinderFastScanRatings(valid, metrics, rolePrefix);
+  }
+
   let minutes = {};
+  const smartRotationStart = tfImpactNow();
   try {
     const built = buildSmartRotation(valid);
     minutes = built?.obj && typeof built.obj === "object" ? built.obj : {};
   } catch (error) {
     console.warn("Trade impact auto-rotation fallback:", error);
+  } finally {
+    addBreakdownMetric(metrics, `${rolePrefix}SmartRotationMs`, tfImpactNow() - smartRotationStart);
   }
 
+  const teamRatingsStart = tfImpactNow();
   const teamRatings = computeTeamRatings({ players: valid }, minutes);
+  addBreakdownMetric(metrics, `${rolePrefix}TeamRatingsMs`, tfImpactNow() - teamRatingsStart);
+
+  const potentialStart = tfImpactNow();
   const potentialRatings = calculateTeamPotentialRating(valid);
-  const fullTeamRatings = buildFullTeamRating(valid);
+  addBreakdownMetric(metrics, `${rolePrefix}PotentialMs`, tfImpactNow() - potentialStart);
+
+  let fullTeamRatings;
+
+  if (options?.fastFtr) {
+    const fastMinutesStart = tfImpactNow();
+    const fastFtrMinutes = buildTradeFinderFastFtrMinutes(valid, minutes);
+    addBreakdownMetric(metrics, `${rolePrefix}FastFtrMinutesMs`, tfImpactNow() - fastMinutesStart);
+
+    const fastFtrRatingsStart = tfImpactNow();
+    const fastFtrRatings = computeTeamRatings({ players: valid }, fastFtrMinutes);
+    addBreakdownMetric(metrics, `${rolePrefix}FastFtrRatingsMs`, tfImpactNow() - fastFtrRatingsStart);
+    fullTeamRatings = {
+      ftr: Number(fastFtrRatings?.overall || 0),
+      ftrOff: Number(fastFtrRatings?.off || 0),
+      ftrDef: Number(fastFtrRatings?.def || 0),
+      exactFtr: Number(fastFtrRatings?.exactOverall ?? fastFtrRatings?.overall ?? 0),
+      exactFtrOff: Number(fastFtrRatings?.exactOff ?? fastFtrRatings?.off ?? 0),
+      exactFtrDef: Number(fastFtrRatings?.exactDef ?? fastFtrRatings?.def ?? 0),
+      minutes: fastFtrMinutes,
+      fastApproximation: true,
+    };
+  } else {
+    const fullTeamStart = tfImpactNow();
+    fullTeamRatings = buildFullTeamRating(valid);
+    addBreakdownMetric(metrics, `${rolePrefix}FullTeamRatingMs`, tfImpactNow() - fullTeamStart);
+  }
+
+  addBreakdownMetric(metrics, `${rolePrefix}RatingTotalMs`, tfImpactNow() - totalStart);
 
   return {
     exactOverall: round4(teamRatings?.exactOverall ?? teamRatings?.overall ?? 0),
@@ -361,43 +933,75 @@ function calculateTeamImpactRatings(players = []) {
     displayOverall: toNum(teamRatings?.overall, Math.round(teamRatings?.exactOverall || 0)),
     displayPot: toNum(potentialRatings?.pot, Math.round(potentialRatings?.exactPot || 0)),
     displayFtr: toNum(fullTeamRatings?.ftr, Math.round(fullTeamRatings?.exactFtr || 0)),
+    ratingMode: options?.fastFtr ? TRADE_FINDER_FAST_FTR_MODE : "exact",
   };
 }
 
-function rateTeamRoster(players = []) {
-  const key = `${GAMEPLAN_VERSION}:${rosterRatingSignature(players)}`;
+function rateTeamRoster(players = [], options = {}) {
+  const metrics = options?.breakdownMetrics || null;
+  const rolePrefix = getBreakdownRolePrefix(options?.ratingRole || "rating");
+  const ratingMode = options?.fastScan ? TRADE_FINDER_FAST_SCAN_MODE : options?.fastFtr ? TRADE_FINDER_FAST_FTR_MODE : "exact";
+  const keyStart = tfImpactNow();
+  const key = `${GAMEPLAN_VERSION}:${ratingMode}:${rosterRatingSignature(players)}`;
+  addBreakdownMetric(metrics, `${rolePrefix}RatingKeyMs`, tfImpactNow() - keyStart);
+
+  const lookupStart = tfImpactNow();
   const cached = getLimitedCache(rosterRatingCache, key);
-  if (cached) return cached;
+  addBreakdownMetric(metrics, `${rolePrefix}RatingCacheLookupMs`, tfImpactNow() - lookupStart);
+  if (cached) {
+    incrementBreakdownMetric(metrics, `${rolePrefix}RatingCacheHits`);
+    return cached;
+  }
+
+  incrementBreakdownMetric(metrics, `${rolePrefix}RatingCacheMisses`);
+  const calcStart = tfImpactNow();
+  const calculated = calculateTeamImpactRatings(players, { ...options, breakdownMetrics: metrics, ratingRole: rolePrefix });
+  addBreakdownMetric(metrics, `${rolePrefix}RatingCalcMs`, tfImpactNow() - calcStart);
 
   return touchLimitedCache(
     rosterRatingCache,
     key,
-    calculateTeamImpactRatings(players),
+    calculated,
     RATING_CACHE_MAX
   );
 }
 
-function calculateRankOnlyRatings(team = {}) {
+function calculateRankOnlyRatings(team = {}, metrics = null) {
+  const totalStart = tfImpactNow();
   const players = Array.isArray(team?.players) ? team.players : [];
   const valid = players.filter((p) => p && (p.name || p.player) && Number.isFinite(Number(p.overall ?? p.ovr)));
+  incrementBreakdownMetric(metrics, "powerRankPlayersRated", valid.length);
 
   if (!valid.length) {
+    addBreakdownMetric(metrics, "powerRankRatingTotalMs", tfImpactNow() - totalStart);
     return { exactOverall: 0, exactOff: 0, exactDef: 0 };
   }
 
+  const cachedMinutesStart = tfImpactNow();
   let minutes = getCachedAutoMinutes(getTeamName(team), valid);
+  addBreakdownMetric(metrics, "powerRankCachedMinutesMs", tfImpactNow() - cachedMinutesStart);
 
   if (!minutes) {
+    const smartRotationStart = tfImpactNow();
     try {
       const built = buildSmartRotation(valid);
       minutes = built?.obj && typeof built.obj === "object" ? built.obj : {};
     } catch (error) {
       console.warn("Trade power-rank auto-rotation fallback:", error);
       minutes = {};
+    } finally {
+      addBreakdownMetric(metrics, "powerRankSmartRotationMs", tfImpactNow() - smartRotationStart);
     }
+  } else {
+    incrementBreakdownMetric(metrics, "powerRankCachedMinutesHits");
   }
 
+  const ratingsStart = tfImpactNow();
   const ratings = computeTeamRatings({ players: valid }, minutes);
+  addBreakdownMetric(metrics, "powerRankTeamRatingsMs", tfImpactNow() - ratingsStart);
+  addBreakdownMetric(metrics, "powerRankRatingTotalMs", tfImpactNow() - totalStart);
+  incrementBreakdownMetric(metrics, "powerRankTeamsRated");
+
   return {
     exactOverall: round4(ratings?.exactOverall ?? ratings?.overall ?? 0),
     exactOff: round4(ratings?.exactOff ?? ratings?.off ?? 0),
@@ -405,31 +1009,60 @@ function calculateRankOnlyRatings(team = {}) {
   };
 }
 
-function rateTeamForPowerRank(team = {}) {
+function rateTeamForPowerRank(team = {}, metrics = null) {
+  const keyStart = tfImpactNow();
   const key = `${GAMEPLAN_VERSION}:${normalizeName(getTeamName(team))}:${rosterRatingSignature(team?.players || [])}`;
-  const cached = getLimitedCache(rankOnlyRatingCache, key);
-  if (cached) return cached;
+  addBreakdownMetric(metrics, "powerRankKeyMs", tfImpactNow() - keyStart);
 
+  const lookupStart = tfImpactNow();
+  const cached = getLimitedCache(rankOnlyRatingCache, key);
+  addBreakdownMetric(metrics, "powerRankCacheLookupMs", tfImpactNow() - lookupStart);
+  if (cached) {
+    incrementBreakdownMetric(metrics, "powerRankCacheHits");
+    return cached;
+  }
+
+  incrementBreakdownMetric(metrics, "powerRankCacheMisses");
   return touchLimitedCache(
     rankOnlyRatingCache,
     key,
-    calculateRankOnlyRatings(team),
+    calculateRankOnlyRatings(team, metrics),
     RATING_CACHE_MAX
   );
 }
 
-function buildPowerRankingRows(leagueData) {
+function buildPowerRankingRows(leagueData, metrics = null) {
+  const totalStart = tfImpactNow();
+  const teamsStart = tfImpactNow();
   const teams = getAllTeamsFromLeague(leagueData);
+  addBreakdownMetric(metrics, "powerRowsGetTeamsMs", tfImpactNow() - teamsStart);
+
+  const cacheKeyStart = tfImpactNow();
   const cacheKey = leaguePowerSignature(leagueData, teams);
+  addBreakdownMetric(metrics, "powerRowsCacheKeyMs", tfImpactNow() - cacheKeyStart);
+
+  const lookupStart = tfImpactNow();
   const cached = getLimitedCache(powerContextCache, cacheKey);
-  if (cached) return cached;
+  addBreakdownMetric(metrics, "powerRowsCacheLookupMs", tfImpactNow() - lookupStart);
+  if (cached) {
+    incrementBreakdownMetric(metrics, "powerRowsCacheHits");
+    addBreakdownMetric(metrics, "powerRowsTotalMs", tfImpactNow() - totalStart);
+    return cached;
+  }
 
+  incrementBreakdownMetric(metrics, "powerRowsCacheMisses");
+  const recordsStart = tfImpactNow();
   const records = buildRecordMap();
-  const confMap = getTeamConferenceMap(leagueData, teams);
+  addBreakdownMetric(metrics, "powerRowsRecordMapMs", tfImpactNow() - recordsStart);
 
+  const confStart = tfImpactNow();
+  const confMap = getTeamConferenceMap(leagueData, teams);
+  addBreakdownMetric(metrics, "powerRowsConferenceMapMs", tfImpactNow() - confStart);
+
+  const baseRowsStart = tfImpactNow();
   const baseRows = teams.map((team) => {
     const name = getTeamName(team);
-    const ratings = rateTeamForPowerRank(team);
+    const ratings = rateTeamForPowerRank(team, metrics);
     const record = records?.[name] || { w: 0, l: 0, gp: 0, pf: 0, pa: 0 };
     const gp = toNum(record.gp, 0);
     const diff = toNum(record.pf, 0) - toNum(record.pa, 0);
@@ -447,7 +1080,9 @@ function buildPowerRankingRows(leagueData) {
       pointDiff: gp > 0 ? diff / gp : 0,
     };
   });
+  addBreakdownMetric(metrics, "powerRowsBaseRowsMs", tfImpactNow() - baseRowsStart);
 
+  const scoringStart = tfImpactNow();
   const useRecordPowerRankings = baseRows.length > 0 && baseRows.every((row) => row.gp >= 20);
 
   const rowsWithScores = baseRows.map((row) => {
@@ -476,17 +1111,23 @@ function buildPowerRankingRows(leagueData) {
   );
 
   const rankedRows = rowsWithScores.map((row, idx) => ({ ...row, rank: idx + 1 }));
+  addBreakdownMetric(metrics, "powerRowsScoringSortMs", tfImpactNow() - scoringStart);
+  addBreakdownMetric(metrics, "powerRowsTotalMs", tfImpactNow() - totalStart);
   return touchLimitedCache(powerContextCache, cacheKey, rankedRows, POWER_CONTEXT_CACHE_MAX);
 }
 
-function getTeamPowerContext(leagueData, cpuTeamName) {
-  const rows = buildPowerRankingRows(leagueData);
+function getTeamPowerContext(leagueData, cpuTeamName, metrics = null) {
+  const totalStart = tfImpactNow();
+  const rows = buildPowerRankingRows(leagueData, metrics);
+  const findStart = tfImpactNow();
   const cpuRow = rows.find((row) => sameTeamName(row.name, cpuTeamName)) || null;
   const conference = cpuRow?.conference || "";
   const conferenceRows = rows.filter(
     (row) => String(row.conference || "").toLowerCase() === String(conference || "").toLowerCase()
   );
   const topConferenceRow = conferenceRows[0] || null;
+  addBreakdownMetric(metrics, "powerContextFindTeamMs", tfImpactNow() - findStart);
+  addBreakdownMetric(metrics, "powerContextTotalMs", tfImpactNow() - totalStart);
 
   return {
     rows,
@@ -693,16 +1334,16 @@ function genericPickValue(item = {}) {
   if (round === 1) {
     if (slot > 0) {
       const firstRoundSlot = clamp(slot, 1, 30);
-      value = 0.25 + ((30 - firstRoundSlot) / 29) * 1.3;
+      value = 0.80 + ((30 - firstRoundSlot) / 29) * 7.40;
     } else {
-      value = 0.65;
+      value = 2.20;
     }
   } else {
     if (slot > 0) {
       const secondRoundSlot = clamp(slot, 31, 60);
-      value = 0.08 + ((60 - secondRoundSlot) / 29) * 0.18;
+      value = 0.05 + ((60 - secondRoundSlot) / 29) * 0.63;
     } else {
-      value = 0.14;
+      value = 0.22;
     }
   }
 
@@ -718,6 +1359,36 @@ function genericPickScoreForCpu(userItems = [], cpuItems = []) {
   const received = getPrimaryTradePickItems(userItems).reduce((sum, item) => sum + genericPickValue(item), 0);
   const sent = getPrimaryTradePickItems(cpuItems).reduce((sum, item) => sum + genericPickValue(item), 0);
   return round4(received - sent);
+}
+
+function genericPickImpactForCpu(userItems = [], cpuItems = []) {
+  const incomingItems = getPrimaryTradePickItems(userItems);
+  const outgoingItems = getPrimaryTradePickItems(cpuItems);
+  const incomingValue = round4(incomingItems.reduce((sum, item) => sum + genericPickValue(item), 0));
+  const outgoingValue = round4(outgoingItems.reduce((sum, item) => sum + genericPickValue(item), 0));
+  const netPickScore = round4(incomingValue - outgoingValue);
+
+  const reasons = [];
+  if (incomingItems.length || outgoingItems.length) {
+    reasons.push(
+      `Trade Finder fast-scan draft estimate: ${netPickScore >= 0 ? "+" : ""}${netPickScore.toFixed(3)} net pick score using cheap projected slot/protection values. Exact pick value is restored in rescue/refine/Propose Trade.`
+    );
+  }
+
+  return {
+    netPickScore,
+    incomingValue,
+    incomingBaseValue: incomingValue,
+    outgoingValue,
+    outgoingBaseValue: outgoingValue,
+    incoming: [],
+    outgoing: [],
+    reasons,
+    invalidSwaps: [],
+    invalidSwapReasons: [],
+    hasPicks: incomingItems.length > 0 || outgoingItems.length > 0,
+    fastScanApproximation: true,
+  };
 }
 
 function formatDelta(value) {
@@ -737,7 +1408,7 @@ function makeRejectedResult(message, reasons = []) {
   };
 }
 
-export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTeamName, cpuTeamName, userItems = [], cpuItems = [], evaluationMode = "standard", cpuTradeRole = "", cpuTradeContext = null }) {
+function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTeamName, cpuTeamName, userItems = [], cpuItems = [], evaluationMode = "standard", cpuTradeRole = "", cpuTradeContext = null, __tfBreakdownMetrics = null }) {
   const cpuName = cpuTeamName || getTeamName(cpuTeam) || "CPU team";
   const userName = userTeamName || getTeamName(userTeam) || "Your team";
   const isCpuCpuEvaluation = String(evaluationMode || "").toLowerCase() === "cpu_cpu_trade";
@@ -752,24 +1423,48 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
   }
 
   const beforePlayers = Array.isArray(cpuTeam?.players) ? cpuTeam.players : [];
+  const afterRosterStart = tfImpactNow();
   const afterPlayers = buildCpuRosterAfterTrade(cpuTeam, userItems, cpuItems, cpuName);
-  const before = rateTeamRoster(beforePlayers);
-  const after = rateTeamRoster(afterPlayers);
-  const powerContext = getTeamPowerContext(leagueData, cpuName);
+  addBreakdownMetric(__tfBreakdownMetrics, "afterRosterBuildMs", tfImpactNow() - afterRosterStart);
+
+  const useFastScanImpact = shouldUseTradeFinderFastScanImpact({
+    cpuTradeRole: normalizedCpuTradeRole,
+    cpuTradeContext,
+  });
+  const useFastFtr = !useFastScanImpact && shouldUseTradeFinderFastFtr({ cpuTradeRole: normalizedCpuTradeRole, cpuTradeContext });
+
+  const beforeRatingStart = tfImpactNow();
+  const before = rateTeamRoster(beforePlayers, { fastFtr: useFastFtr, fastScan: useFastScanImpact, breakdownMetrics: __tfBreakdownMetrics, ratingRole: "before" });
+  addBreakdownMetric(__tfBreakdownMetrics, "beforeRatingCallMs", tfImpactNow() - beforeRatingStart);
+
+  const afterRatingStart = tfImpactNow();
+  const after = rateTeamRoster(afterPlayers, { fastFtr: useFastFtr, fastScan: useFastScanImpact, breakdownMetrics: __tfBreakdownMetrics, ratingRole: "after" });
+  addBreakdownMetric(__tfBreakdownMetrics, "afterRatingCallMs", tfImpactNow() - afterRatingStart);
+
+  const powerContextStart = tfImpactNow();
+  const powerContext = getTeamPowerContext(leagueData, cpuName, __tfBreakdownMetrics);
+  addBreakdownMetric(__tfBreakdownMetrics, "powerContextCallMs", tfImpactNow() - powerContextStart);
+
+  const weightStart = tfImpactNow();
   const { ovrWeight, potWeight } = getOvrPotWeights(powerContext.rank);
+  addBreakdownMetric(__tfBreakdownMetrics, "weightMs", tfImpactNow() - weightStart);
 
   const deltaOVR = round4(after.exactOverall - before.exactOverall);
   const deltaPOT = round4(after.exactPot - before.exactPot);
   const deltaFTR = round4(after.exactFtr - before.exactFtr);
   const positiveMovement = round4(Math.max(0, deltaOVR) + Math.max(0, deltaPOT) + Math.max(0, deltaFTR));
   const noDownsideMinGain = NO_DOWNSIDE_MIN_GAIN + (powerContext.isTopConferenceTeam ? 0.05 : 0);
-  const pickImpact = evaluateTradePickImpact({
-    leagueData,
-    userItems,
-    cpuItems,
-    userTeamName: userName,
-    cpuTeamName: cpuName,
-  });
+  const pickImpactStart = tfImpactNow();
+  const pickImpact = useFastScanImpact
+    ? genericPickImpactForCpu(userItems, cpuItems)
+    : evaluateTradePickImpact({
+        leagueData,
+        userItems,
+        cpuItems,
+        userTeamName: userName,
+        cpuTeamName: cpuName,
+      });
+  addBreakdownMetric(__tfBreakdownMetrics, "pickImpactMs", tfImpactNow() - pickImpactStart);
 
   if (Array.isArray(pickImpact?.invalidSwapReasons) && pickImpact.invalidSwapReasons.length > 0) {
     return makeRejectedResult(
@@ -782,14 +1477,22 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
   }
 
   const pickScore = Number(pickImpact?.netPickScore || 0);
+  const tradePlayersStart = tfImpactNow();
   const cpuIncomingPlayers = getTradePlayers(userItems);
   const cpuOutgoingPlayers = getTradePlayers(cpuItems);
+  addBreakdownMetric(__tfBreakdownMetrics, "tradePlayersMs", tfImpactNow() - tradePlayersStart);
+
+  const contractStart = tfImpactNow();
   const contractImpact = evaluateCpuContractFriction({
     leagueData,
     cpuIncomingPlayers,
     cpuOutgoingPlayers,
   });
+  addBreakdownMetric(__tfBreakdownMetrics, "contractMs", tfImpactNow() - contractStart);
+
+  const starTaxStart = tfImpactNow();
   const starRetentionImpact = evaluateCpuOutgoingStarRetentionTax(cpuOutgoingPlayers, cpuName);
+  addBreakdownMetric(__tfBreakdownMetrics, "starTaxMs", tfImpactNow() - starTaxStart);
   const hasNoMeaningfulDownside =
     deltaOVR >= -TEAM_IMPACT_EPS &&
     deltaPOT >= -TEAM_IMPACT_EPS &&
@@ -879,6 +1582,12 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
     `Team impact: OVR ${formatDelta(deltaOVR)}, POT ${formatDelta(deltaPOT)}, FTR ${formatDelta(deltaFTR)}.`,
   ];
 
+  if (useFastScanImpact) {
+    reasons.push("Trade Finder fast-scan mode: using cheap OVR/POT/FTR and pick estimates only during the scan phase. Rescue, refine, and Propose Trade exact evaluation are unchanged.");
+  } else if (useFastFtr) {
+    reasons.push("Trade Finder speed mode: using fast full-roster rating approximation for FTR only; Propose Trade exact evaluation is unchanged.");
+  }
+
   if (isCpuCpuEvaluation) {
     const roleText = normalizedCpuTradeRole === "seller" ? "seller" : normalizedCpuTradeRole === "buyer" ? "buyer" : "CPU";
     reasons.push(
@@ -941,6 +1650,9 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
       evaluationMode,
       cpuTradeRole: normalizedCpuTradeRole,
       cpuTradeContext,
+      ratingMode: useFastScanImpact ? TRADE_FINDER_FAST_SCAN_MODE : useFastFtr ? TRADE_FINDER_FAST_FTR_MODE : "exact",
+      fastScan: Boolean(useFastScanImpact),
+      fastFtr: Boolean(useFastFtr),
       rank: powerContext.rank,
       isTopConferenceTeam: powerContext.isTopConferenceTeam,
       useRecordPowerRankings: powerContext.useRecordPowerRankings,
@@ -978,3 +1690,74 @@ export function evaluateTradeTeamImpact({ leagueData, userTeam, cpuTeam, userTea
     },
   };
 }
+
+export function evaluateTradeTeamImpact(args = {}) {
+  const totalStart = tfImpactNow();
+  const breakdownEnabled =
+    String(args?.cpuTradeRole || "").toLowerCase() === "trade_finder" && isTradeFinderImpactBreakdownEnabled();
+  const metrics = breakdownEnabled ? {} : null;
+  const baseBreakdown = breakdownEnabled ? makeTradeFinderImpactBreakdownBase(args) : null;
+
+  const cacheKeyStart = tfImpactNow();
+  const cacheKey = makeTradeFinderImpactCacheKey(args);
+  addBreakdownMetric(metrics, "impactCacheKeyMs", tfImpactNow() - cacheKeyStart);
+
+  if (cacheKey) {
+    const cacheLookupStart = tfImpactNow();
+    const cached = getLimitedCache(tradeFinderImpactCache, cacheKey);
+    addBreakdownMetric(metrics, "impactCacheLookupMs", tfImpactNow() - cacheLookupStart);
+    if (cached) {
+      const totalMs = tfImpactNow() - totalStart;
+      recordTradeFinderImpactBreakdown({
+        ...baseBreakdown,
+        cacheHit: true,
+        accepted: Boolean(cached?.accepted),
+        score: Number(cached?.score || 0),
+        threshold: Number(cached?.teamImpact?.threshold || 0),
+        totalMs: tfImpactRoundMs(totalMs),
+        metrics: Object.fromEntries(Object.entries(metrics || {}).map(([key, value]) => [key, tfImpactRoundMs(value)])),
+      });
+      return {
+        ...cached,
+        __tfImpactCacheHit: true,
+      };
+    }
+  }
+
+  const uncachedStart = tfImpactNow();
+  const result = evaluateTradeTeamImpactUncached({ ...args, __tfBreakdownMetrics: metrics });
+  addBreakdownMetric(metrics, "uncachedImpactMs", tfImpactNow() - uncachedStart);
+
+  if (cacheKey) {
+    const cacheStoreStart = tfImpactNow();
+    touchLimitedCache(tradeFinderImpactCache, cacheKey, result, TRADE_FINDER_IMPACT_CACHE_MAX);
+    addBreakdownMetric(metrics, "impactCacheStoreMs", tfImpactNow() - cacheStoreStart);
+  }
+
+  if (breakdownEnabled) {
+    const totalMs = tfImpactNow() - totalStart;
+    recordTradeFinderImpactBreakdown({
+      ...baseBreakdown,
+      cacheHit: false,
+      accepted: Boolean(result?.accepted),
+      score: Number(result?.score || 0),
+      threshold: Number(result?.teamImpact?.threshold || 0),
+      ratingMode: result?.teamImpact?.ratingMode || baseBreakdown?.impactMode || "exact",
+      rank: result?.teamImpact?.rank || null,
+      deltas: result?.teamImpact?.deltas || null,
+      totalMs: tfImpactRoundMs(totalMs),
+      metrics: Object.fromEntries(Object.entries(metrics || {}).map(([key, value]) => [key, tfImpactRoundMs(value)])),
+    });
+  }
+
+  return result;
+}
+
+export function clearTradeFinderImpactCache() {
+  tradeFinderImpactCache.clear();
+}
+
+export function getTradeFinderImpactCacheSize() {
+  return tradeFinderImpactCache.size;
+}
+

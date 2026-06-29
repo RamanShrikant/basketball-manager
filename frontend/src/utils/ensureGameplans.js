@@ -139,10 +139,103 @@ const BENCH_ACTUAL_SEARCH_POOL_LIMIT = 9;
 const SAME_ROLE_UPGRADE_OVR_TOLERANCE = 0.15;
 const SAME_ROLE_UPGRADE_SIDE_TOLERANCE = 2.0;
 const ROTATION_CACHE_MAX = 300;
+const SMART_ROTATION_BREAKDOWN_KEY = "bm_smart_rotation_breakdown_v1";
 
 const smartRotationCache = new Map();
 const fullTeamRatingCache = new Map();
 const potentialRatingCache = new Map();
+
+let activeSmartRotationBreakdownRow = null;
+let smartRotationBreakdownCallCounter = 0;
+
+function smartNow() {
+  try {
+    if (typeof performance !== "undefined" && typeof performance.now === "function") return performance.now();
+  } catch {}
+  return Date.now();
+}
+
+function safeLocalStorageReadForSmartDiag(key) {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function isSmartRotationBreakdownEnabled() {
+  try {
+    if (typeof window !== "undefined" && window.__TF_SMART_ROTATION_BREAKDOWN_ENABLED === true) return true;
+  } catch {}
+  return safeLocalStorageReadForSmartDiag(SMART_ROTATION_BREAKDOWN_KEY) === "1";
+}
+
+function getSmartRotationBreakdownStore() {
+  if (typeof window === "undefined") return null;
+  if (!window.__TF_SMART_ROTATION_BREAKDOWN || !Array.isArray(window.__TF_SMART_ROTATION_BREAKDOWN.rows)) {
+    window.__TF_SMART_ROTATION_BREAKDOWN = {
+      createdAt: new Date().toISOString(),
+      rows: [],
+      totals: {
+        calls: 0,
+        cacheHits: 0,
+        cacheMisses: 0,
+      },
+    };
+  }
+  return window.__TF_SMART_ROTATION_BREAKDOWN;
+}
+
+function addSmartMetric(row, key, value) {
+  if (!row || !key) return;
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return;
+  row.metrics[key] = round4(Number(row.metrics[key] || 0) + n);
+}
+
+function incSmartMetric(row, key, amount = 1) {
+  if (!row || !key) return;
+  row.metrics[key] = Number(row.metrics[key] || 0) + amount;
+}
+
+function measureSmart(row, key, fn) {
+  const start = smartNow();
+  try {
+    return fn();
+  } finally {
+    addSmartMetric(row, key, smartNow() - start);
+  }
+}
+
+function createSmartRotationBreakdownRow(teamPlayers = []) {
+  if (!isSmartRotationBreakdownEnabled()) return null;
+  smartRotationBreakdownCallCounter += 1;
+  return {
+    callIndex: smartRotationBreakdownCallCounter,
+    playerCount: Array.isArray(teamPlayers) ? teamPlayers.length : 0,
+    topPlayers: [...(teamPlayers || [])]
+      .filter((p) => p?.name)
+      .sort(comparePlayers)
+      .slice(0, 5)
+      .map((p) => `${p.name}:${Number(p.overall ?? 0)}`),
+    metrics: {},
+  };
+}
+
+function finalizeSmartRotationBreakdownRow(row) {
+  if (!row) return;
+  const store = getSmartRotationBreakdownStore();
+  if (!store) return;
+  store.rows.push(row);
+  while (store.rows.length > 500) store.rows.shift();
+  store.totals.calls = Number(store.totals.calls || 0) + 1;
+  if (row.cacheHit) store.totals.cacheHits = Number(store.totals.cacheHits || 0) + 1;
+  else store.totals.cacheMisses = Number(store.totals.cacheMisses || 0) + 1;
+  for (const [key, value] of Object.entries(row.metrics || {})) {
+    store.totals[key] = round4(Number(store.totals[key] || 0) + Number(value || 0));
+  }
+}
 
 const POT_FUTURE_WINDOWS = [
   { years: 3, weight: 0.30 },
@@ -628,20 +721,27 @@ function continuousTieScore(valid, minutesObj) {
 }
 
 function scoreMinutes(valid, minutesObj) {
-  const ratings = computeTeamRatings({ players: valid }, minutesObj);
+  const diag = activeSmartRotationBreakdownRow;
+  const start = smartNow();
+  try {
+    const ratings = computeTeamRatings({ players: valid }, minutesObj);
 
-  // Use exact 4-decimal ratings internally so rotations/sim-adjacent logic do
-  // not treat two rounded display ratings as identical.
-  const overall = Number(ratings.exactOverall ?? ratings.overall ?? 0);
-  const off = Number(ratings.exactOff ?? ratings.off ?? 0);
-  const def = Number(ratings.exactDef ?? ratings.def ?? 0);
+    // Use exact 4-decimal ratings internally so rotations/sim-adjacent logic do
+    // not treat two rounded display ratings as identical.
+    const overall = Number(ratings.exactOverall ?? ratings.overall ?? 0);
+    const off = Number(ratings.exactOff ?? ratings.off ?? 0);
+    const def = Number(ratings.exactDef ?? ratings.def ?? 0);
 
-  return (
-    overall * 1_000_000 +
-    off * 10_000 +
-    def * 100 +
-    continuousTieScore(valid, minutesObj)
-  );
+    return (
+      overall * 1_000_000 +
+      off * 10_000 +
+      def * 100 +
+      continuousTieScore(valid, minutesObj)
+    );
+  } finally {
+    incSmartMetric(diag, "scoreMinutesCalls");
+    addSmartMetric(diag, "scoreMinutesMs", smartNow() - start);
+  }
 }
 
 function getMinuteCap(p, starterNames, relaxed = false) {
@@ -677,6 +777,9 @@ function seedRotation(valid, starters, benchPlayers) {
 }
 
 function optimizeSeededRotation(valid, seeded) {
+  const diag = activeSmartRotationBreakdownRow;
+  const optimizeStart = smartNow();
+  incSmartMetric(diag, "optimizeSeededRotationCalls");
   const starters = seeded.starters;
   const benchPlayers = seeded.bench;
   const rotation = seeded.rotation;
@@ -775,7 +878,7 @@ function optimizeSeededRotation(valid, seeded) {
     }
   }
 
-  return {
+  const optimizedResult = {
     starters,
     bench: benchPlayers,
     rotation,
@@ -783,19 +886,28 @@ function optimizeSeededRotation(valid, seeded) {
     score: currentScore,
     selectionScore: rotationSelectionScore(valid, { bench: benchPlayers, minutesObj }),
   };
+  addSmartMetric(diag, "optimizeSeededRotationMs", smartNow() - optimizeStart);
+  return optimizedResult;
 }
 
 
 function displayedRatings(valid, minutesObj) {
-  const ratings = computeTeamRatings({ players: valid }, minutesObj);
-  return {
-    overall: Number(ratings?.overall || 0),
-    off: Number(ratings?.off || 0),
-    def: Number(ratings?.def || 0),
-    exactOverall: Number(ratings?.exactOverall ?? ratings?.overall ?? 0),
-    exactOff: Number(ratings?.exactOff ?? ratings?.off ?? 0),
-    exactDef: Number(ratings?.exactDef ?? ratings?.def ?? 0),
-  };
+  const diag = activeSmartRotationBreakdownRow;
+  const start = smartNow();
+  try {
+    const ratings = computeTeamRatings({ players: valid }, minutesObj);
+    return {
+      overall: Number(ratings?.overall || 0),
+      off: Number(ratings?.off || 0),
+      def: Number(ratings?.def || 0),
+      exactOverall: Number(ratings?.exactOverall ?? ratings?.overall ?? 0),
+      exactOff: Number(ratings?.exactOff ?? ratings?.off ?? 0),
+      exactDef: Number(ratings?.exactDef ?? ratings?.def ?? 0),
+    };
+  } finally {
+    incSmartMetric(diag, "displayedRatingsCalls");
+    addSmartMetric(diag, "displayedRatingsMs", smartNow() - start);
+  }
 }
 
 function ratingOverall(ratings) {
@@ -1267,9 +1379,10 @@ function quickBenchCandidateScore(valid, starters, benchPlayers, seedBuilder = s
 }
 
 function getBenchUnitFinalistsByActualRating(valid, starters, benchNeeded, seedBuilder = seedRotation) {
+  const diag = activeSmartRotationBreakdownRow;
   if (benchNeeded <= 0) return [[]];
 
-  const pool = buildBenchActualSearchPool(valid, starters);
+  const pool = measureSmart(diag, "benchActualSearchPoolMs", () => buildBenchActualSearchPool(valid, starters));
   if (pool.length <= benchNeeded) return [pool.slice(0, benchNeeded)];
 
   const scored = [];
@@ -1299,43 +1412,46 @@ function getBenchUnitFinalistsByActualRating(valid, starters, benchNeeded, seedB
     ]).slice(0, benchNeeded);
   };
 
-  const heuristicBench = chooseBenchUnit(valid, starters, benchNeeded);
-  const topQualityBench = pool.slice(0, benchNeeded);
-  addCandidate(heuristicBench, "heuristic", true);
-  addCandidate(topQualityBench, "top-quality", true);
+  let heuristicBench = [];
+  measureSmart(diag, "benchForcedCandidatesMs", () => {
+    heuristicBench = chooseBenchUnit(valid, starters, benchNeeded);
+    const topQualityBench = pool.slice(0, benchNeeded);
+    addCandidate(heuristicBench, "heuristic", true);
+    addCandidate(topQualityBench, "top-quality", true);
+  });
 
-  // Position-anchored candidates: make sure the best playable PG/SG/SF/PF/C
-  // alternatives are tested without exploding into every possible combination.
-  for (const pos of POSITIONS) {
-    const bestAtPos = pool
-      .filter((player) => isEligibleForPosition(player, pos))
-      .sort((a, b) => {
-        const diff = benchAssignmentValue(b, pos) - benchAssignmentValue(a, pos);
-        if (Math.abs(diff) > 1e-9) return diff;
-        return compareBenchUnitCandidates(a, b);
-      })[0];
-    if (bestAtPos) addCandidate(fillWithBest([bestAtPos]), `anchor-${pos}`);
-  }
-
-  // One-for-one swaps around the heuristic bench catch cases like a flexible
-  // higher-OVR wing/big being better than the default positional pick.
-  const baseNames = new Set((heuristicBench || []).map((p) => p.name));
-  const outsiders = pool.filter((player) => !baseNames.has(player.name)).slice(0, 6);
-  for (const incoming of outsiders) {
-    for (const outgoing of heuristicBench || []) {
-      addCandidate(
-        [...heuristicBench.filter((player) => player.name !== outgoing.name), incoming],
-        "swap"
-      );
+  measureSmart(diag, "benchAnchorCandidatesMs", () => {
+    for (const pos of POSITIONS) {
+      const bestAtPos = pool
+        .filter((player) => isEligibleForPosition(player, pos))
+        .sort((a, b) => {
+          const diff = benchAssignmentValue(b, pos) - benchAssignmentValue(a, pos);
+          if (Math.abs(diff) > 1e-9) return diff;
+          return compareBenchUnitCandidates(a, b);
+        })[0];
+      if (bestAtPos) addCandidate(fillWithBest([bestAtPos]), `anchor-${pos}`);
     }
-  }
+  });
 
-  scored.sort(
+  measureSmart(diag, "benchSwapCandidatesMs", () => {
+    const baseNames = new Set((heuristicBench || []).map((p) => p.name));
+    const outsiders = pool.filter((player) => !baseNames.has(player.name)).slice(0, 6);
+    for (const incoming of outsiders) {
+      for (const outgoing of heuristicBench || []) {
+        addCandidate(
+          [...heuristicBench.filter((player) => player.name !== outgoing.name), incoming],
+          "swap"
+        );
+      }
+    }
+  });
+
+  measureSmart(diag, "benchCandidateSortMs", () => scored.sort(
     (a, b) =>
       b.score - a.score ||
       b.heuristicScore - a.heuristicScore ||
       comboKey(a.bench).localeCompare(comboKey(b.bench))
-  );
+  ));
 
   const finalists = [];
   const finalistKeys = new Set();
@@ -1352,22 +1468,27 @@ function getBenchUnitFinalistsByActualRating(valid, starters, benchNeeded, seedB
     if (finalists.length < BENCH_FINALIST_LIMIT) addFinalist(row);
   });
 
+  incSmartMetric(diag, "benchCandidatesScored", scored.length);
+  incSmartMetric(diag, "benchFinalists", finalists.length);
+
   return finalists.slice(0, BENCH_FINALIST_LIMIT).map((row) => row.bench);
 }
+
 
 function buildOptimizedRotationFromBench(valid, starters, benchPlayers, seedBuilder = seedRotation) {
   return optimizeSeededRotation(valid, seedBuilder(valid, starters, benchPlayers));
 }
 
 function buildBestOptimizedRotation(valid, starters, benchNeeded, seedBuilder = seedRotation) {
-  const finalists = getBenchUnitFinalistsByActualRating(valid, starters, benchNeeded, seedBuilder);
+  const diag = activeSmartRotationBreakdownRow;
+  const finalists = measureSmart(diag, "getBenchUnitFinalistsMs", () => getBenchUnitFinalistsByActualRating(valid, starters, benchNeeded, seedBuilder));
   let best = null;
   let bestScore = -Infinity;
 
   for (const benchPlayers of finalists) {
-    let candidate = buildOptimizedRotationFromBench(valid, starters, benchPlayers, seedBuilder);
-    candidate = applyBenchRealismPass(valid, candidate);
-    const candidateScore = scoreMinutes(valid, candidate?.minutesObj || {});
+    let candidate = measureSmart(diag, "buildOptimizedRotationFromBenchMs", () => buildOptimizedRotationFromBench(valid, starters, benchPlayers, seedBuilder));
+    candidate = measureSmart(diag, "applyBenchRealismPassMs", () => applyBenchRealismPass(valid, candidate));
+    const candidateScore = measureSmart(diag, "finalCandidateScoreMs", () => scoreMinutes(valid, candidate?.minutesObj || {}));
 
     if (
       !best ||
@@ -1382,6 +1503,7 @@ function buildBestOptimizedRotation(valid, starters, benchNeeded, seedBuilder = 
 
   return best;
 }
+
 
 function seedFullTeamRotation(valid, starters, benchPlayers) {
   const starterNames = new Set(starters.map((p) => p.name));
@@ -1499,38 +1621,41 @@ export function buildFullTeamRating(teamPlayers) {
 
 // Core smart rotation builder without low-end exclusion retries.
 function buildSmartRotationCore(valid) {
+  const diag = activeSmartRotationBreakdownRow;
   if (valid.length === 0) return { sorted: [], obj: {} };
 
-  const starters = chooseStarters(valid);
+  const starters = measureSmart(diag, "chooseStartersMs", () => chooseStarters(valid));
   const starterNames = new Set(starters.map((p) => p.name));
   const benchNeeded = Math.max(0, Math.min(ROTATION_SIZE, valid.length) - starters.length);
-  let best = buildBestOptimizedRotation(valid, starters, benchNeeded, seedRotation);
+  let best = measureSmart(diag, "buildBestOptimizedRotationMs", () => buildBestOptimizedRotation(valid, starters, benchNeeded, seedRotation));
 
   if (!best || (best.bench || []).length < benchNeeded) {
-    const benchFallback = buildBenchPool(valid, starterNames)
-      .slice()
-      .sort(compareBenchUnitCandidates)
-      .slice(0, benchNeeded)
-      .sort(comparePlayers);
+    measureSmart(diag, "smartCoreFallbackMs", () => {
+      const benchFallback = buildBenchPool(valid, starterNames)
+        .slice()
+        .sort(compareBenchUnitCandidates)
+        .slice(0, benchNeeded)
+        .sort(comparePlayers);
 
-    best = buildOptimizedRotationFromBench(valid, starters, benchFallback, seedRotation);
-    best = applyBenchRealismPass(valid, best);
+      best = buildOptimizedRotationFromBench(valid, starters, benchFallback, seedRotation);
+      best = applyBenchRealismPass(valid, best);
+    });
   }
 
   const starterIds = new Set(best.starters.map((p) => p.name));
   const rotationIds = new Set(best.rotation.map((p) => p.name));
 
-  const bench = best.bench
+  const bench = measureSmart(diag, "smartCoreBenchSortMs", () => best.bench
     .filter((p) => !starterIds.has(p.name))
     .sort((a, b) => {
       const minDiff = (best.minutesObj[b.name] || 0) - (best.minutesObj[a.name] || 0);
       if (minDiff !== 0) return minDiff;
       return comparePlayers(a, b);
-    });
+    }));
 
-  const others = valid
+  const others = measureSmart(diag, "smartCoreOthersSortMs", () => valid
     .filter((p) => !rotationIds.has(p.name))
-    .sort(comparePlayers);
+    .sort(comparePlayers));
 
   const sorted = [...best.starters, ...bench, ...others];
 
@@ -1542,6 +1667,7 @@ function buildSmartRotationCore(valid) {
   return { sorted, obj };
 }
 
+
 function getActiveRotationNames(minutesObj = {}) {
   return new Set(
     Object.entries(minutesObj || {})
@@ -1551,12 +1677,13 @@ function getActiveRotationNames(minutesObj = {}) {
 }
 
 function buildSmartRotationUncached(valid) {
+  const diag = activeSmartRotationBreakdownRow;
   if (valid.length === 0) return { sorted: [], obj: {} };
 
-  let best = buildSmartRotationCore(valid);
-  let bestScore = scoreMinutes(valid, best.obj || {});
+  let best = measureSmart(diag, "uncachedInitialCoreMs", () => buildSmartRotationCore(valid));
+  let bestScore = measureSmart(diag, "uncachedInitialScoreMs", () => scoreMinutes(valid, best.obj || {}));
 
-  const ranked = [...valid].sort(comparePlayers);
+  const ranked = measureSmart(diag, "uncachedRankPlayersMs", () => [...valid].sort(comparePlayers));
   const rankByName = new Map(ranked.map((player, idx) => [player.name, idx]));
   const activeNames = getActiveRotationNames(best.obj);
 
@@ -1586,50 +1713,78 @@ function buildSmartRotationUncached(valid) {
         .slice(0, 1)
     : [];
 
-  for (const excluded of exclusionCandidates) {
-    const reducedValid = valid.filter((player) => player.name !== excluded.name);
-    if (reducedValid.length < Math.min(ROTATION_SIZE, valid.length) - 1) continue;
+  measureSmart(diag, "exclusionRetryTotalMs", () => {
+    for (const excluded of exclusionCandidates) {
+      const reducedValid = valid.filter((player) => player.name !== excluded.name);
+      if (reducedValid.length < Math.min(ROTATION_SIZE, valid.length) - 1) continue;
 
-    const reduced = buildSmartRotationCore(reducedValid);
-    const candidateObj = makeZeroMinutes(valid);
-    for (const [name, minutes] of Object.entries(reduced.obj || {})) {
-      candidateObj[name] = Number(minutes || 0);
-    }
-    candidateObj[excluded.name] = 0;
+      const reduced = buildSmartRotationCore(reducedValid);
+      const candidateObj = makeZeroMinutes(valid);
+      for (const [name, minutes] of Object.entries(reduced.obj || {})) {
+        candidateObj[name] = Number(minutes || 0);
+      }
+      candidateObj[excluded.name] = 0;
 
-    const candidateScore = scoreMinutes(valid, candidateObj);
-    if (candidateScore > bestScore + 1e-9) {
-      const reducedNames = new Set((reduced.sorted || []).map((player) => player.name));
-      const excludedAndOthers = valid
-        .filter((player) => !reducedNames.has(player.name))
-        .sort(comparePlayers);
-      best = {
-        sorted: [...(reduced.sorted || []), ...excludedAndOthers],
-        obj: candidateObj,
-      };
-      bestScore = candidateScore;
+      const candidateScore = scoreMinutes(valid, candidateObj);
+      if (candidateScore > bestScore + 1e-9) {
+        const reducedNames = new Set((reduced.sorted || []).map((player) => player.name));
+        const excludedAndOthers = valid
+          .filter((player) => !reducedNames.has(player.name))
+          .sort(comparePlayers);
+        best = {
+          sorted: [...(reduced.sorted || []), ...excludedAndOthers],
+          obj: candidateObj,
+        };
+        bestScore = candidateScore;
+      }
     }
-  }
+  });
 
   return best;
 }
 
 // FULL smart rotation builder - returns BOTH sorted players and minutes obj
 export function buildSmartRotation(teamPlayers) {
-  const valid = (teamPlayers || []).filter(
-    (p) => p && p.name && Number.isFinite(Number(p.overall))
-  );
+  const diagRow = createSmartRotationBreakdownRow(teamPlayers);
+  const previousDiagRow = activeSmartRotationBreakdownRow;
+  const totalStart = smartNow();
+  activeSmartRotationBreakdownRow = diagRow;
 
-  if (valid.length === 0) return { sorted: [], obj: {} };
+  try {
+    const valid = measureSmart(diagRow, "validFilterMs", () => (teamPlayers || []).filter(
+      (p) => p && p.name && Number.isFinite(Number(p.overall))
+    ));
 
-  const cacheKey = `${GAMEPLAN_VERSION}:smart:${getRatingRosterSignature(valid)}`;
-  const cached = getLimitedCache(smartRotationCache, cacheKey);
-  if (cached) return inflateSmartRotationResult(valid, cached);
+    if (valid.length === 0) return { sorted: [], obj: {} };
 
-  const result = buildSmartRotationUncached(valid);
-  touchLimitedCache(smartRotationCache, cacheKey, cacheSmartRotationResult(valid, result));
-  return result;
+    const cacheKey = measureSmart(diagRow, "smartCacheKeyMs", () => `${GAMEPLAN_VERSION}:smart:${getRatingRosterSignature(valid)}`);
+    const cached = measureSmart(diagRow, "smartCacheLookupMs", () => getLimitedCache(smartRotationCache, cacheKey));
+    if (cached) {
+      if (diagRow) diagRow.cacheHit = true;
+      const inflated = measureSmart(diagRow, "smartCacheInflateMs", () => inflateSmartRotationResult(valid, cached));
+      if (diagRow) {
+        diagRow.activeCount = Object.values(inflated?.obj || {}).filter((m) => Number(m || 0) > 0).length;
+      }
+      return inflated;
+    }
+
+    if (diagRow) diagRow.cacheHit = false;
+    const result = measureSmart(diagRow, "buildSmartRotationUncachedMs", () => buildSmartRotationUncached(valid));
+    measureSmart(diagRow, "smartCacheStoreMs", () => touchLimitedCache(smartRotationCache, cacheKey, cacheSmartRotationResult(valid, result)));
+    if (diagRow) {
+      diagRow.activeCount = Object.values(result?.obj || {}).filter((m) => Number(m || 0) > 0).length;
+    }
+    return result;
+  } finally {
+    if (diagRow) {
+      diagRow.totalMs = round4(smartNow() - totalStart);
+      addSmartMetric(diagRow, "buildSmartRotationTotalMs", diagRow.totalMs);
+      finalizeSmartRotationBreakdownRow(diagRow);
+    }
+    activeSmartRotationBreakdownRow = previousDiagRow;
+  }
 }
+
 
 function round4(value) {
   return Math.round(Number(value || 0) * 10000) / 10000;
