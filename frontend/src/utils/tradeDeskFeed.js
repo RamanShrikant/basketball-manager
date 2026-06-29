@@ -584,6 +584,46 @@ function moodPlayerTierFromOverall(overall = 72) {
   return "depth";
 }
 
+function explicitMoodTeamDirection(team = {}) {
+  const candidates = [
+    team?.teamDirection,
+    team?.direction,
+    team?.phase,
+    team?.teamPhase,
+    team?.strategy?.teamDirection,
+    team?.strategy?.direction,
+    team?.strategy?.phase,
+    team?.teamContext?.phase,
+    team?.teamContext?.direction,
+    team?.context?.phase,
+    team?.context?.direction,
+  ];
+
+  const raw = candidates.map(cleanText).find(Boolean) || "";
+  const key = norm(raw);
+  if (!key) return "";
+
+  if (key.includes("title") || key.includes("championship") || key.includes("champion")) return "title_favorite";
+  if (key.includes("contend") || key.includes("win_now") || key.includes("win_now")) return "contender";
+  if (key.includes("playoff")) return "playoff_team";
+  if (key.includes("play_in") || key.includes("playin")) return "play_in";
+  if (key.includes("retool")) return "retooling";
+  if (key.includes("rebuild") || key.includes("tank")) return "rebuilding";
+  if (key.includes("young_core") || key.includes("youngcore")) return "young_core";
+  return "";
+}
+
+function expectedWinsForMoodTier(tier = "balanced") {
+  if (tier === "title_favorite") return 57;
+  if (tier === "contender") return 52;
+  if (tier === "playoff_team") return 46;
+  if (tier === "play_in") return 39;
+  if (tier === "retooling") return 34;
+  if (tier === "rebuilding") return 26;
+  if (tier === "young_core") return 38;
+  return 41;
+}
+
 function teamQualityContextForMood(allTeams = [], teamName = "") {
   const ranked = safeArray(allTeams)
     .map((team) => ({
@@ -623,6 +663,12 @@ function teamQualityContextForMood(allTeams = [], teamName = "") {
     expectedWins = 26;
   }
 
+  const explicitTier = explicitMoodTeamDirection(teamRow?.team || {});
+  if (explicitTier) {
+    tier = explicitTier;
+    expectedWins = expectedWinsForMoodTier(explicitTier);
+  }
+
   return {
     team: teamRow?.team || null,
     teamName,
@@ -630,10 +676,29 @@ function teamQualityContextForMood(allTeams = [], teamName = "") {
     total,
     strength,
     tier,
+    explicitTier,
     expectedWins,
     isBadTeam: expectedWins <= 34 || rank >= Math.ceil(total * 0.68),
     isGoodTeam: expectedWins >= 46 || rank <= Math.ceil(total * 0.40),
     isEliteTeam: expectedWins >= 52 || rank <= Math.ceil(total * 0.20),
+  };
+}
+
+function underdogContextForMood(allTeams = [], teamName = "", opponentName = "") {
+  const quality = teamQualityContextForMood(allTeams, teamName);
+  const opponentQuality = teamQualityContextForMood(allTeams, opponentName);
+  const strengthGap = Number((opponentQuality.strength - quality.strength).toFixed(2));
+  const expectedWinsGap = Number((opponentQuality.expectedWins - quality.expectedWins).toFixed(1));
+  const isClearUnderdog = strengthGap >= 2.8 || expectedWinsGap >= 8 || (quality.isBadTeam && opponentQuality.isGoodTeam);
+  const isHugeUnderdog = strengthGap >= 5.2 || expectedWinsGap >= 16 || (quality.isBadTeam && opponentQuality.isEliteTeam);
+
+  return {
+    quality,
+    opponentQuality,
+    strengthGap,
+    expectedWinsGap,
+    isClearUnderdog,
+    isHugeUnderdog,
   };
 }
 
@@ -836,22 +901,37 @@ function buildTeamResultMoodEvents({ slim, game, currentDate, allTeams = [], sea
     const team = findMoodTeam(allTeams, ctx.teamName);
     if (!team) continue;
 
-    const quality = teamQualityContextForMood(allTeams, ctx.teamName);
+    const {
+      quality,
+      opponentQuality,
+      strengthGap,
+      expectedWinsGap,
+      isClearUnderdog,
+      isHugeUnderdog,
+    } = underdogContextForMood(allTeams, ctx.teamName, ctx.opponentName);
     const marginAbs = Math.abs(moodNum(ctx.margin, 0));
+    const closeGame = marginAbs <= 6;
+    const closeUnderdogLoss = !ctx.won && closeGame && isClearUnderdog;
 
     let teamImpact = 0;
     let text = "";
 
     if (ctx.won) {
-      const upsetBoost = quality.isBadTeam ? 1.1 : quality.isEliteTeam ? -0.35 : 0.25;
-      const marginBoost = Math.min(1.9, marginAbs * 0.07);
-      teamImpact = Math.max(0.6, Math.min(4.6, 1.15 + upsetBoost + marginBoost));
-      text = marginAbs >= 18 ? "Big win lifted the room." : quality.isBadTeam ? "A needed win boosted morale." : "Win helped the room.";
+      const upsetBoost = isHugeUnderdog ? 2.35 : isClearUnderdog ? 1.55 : quality.isBadTeam ? 1.15 : quality.isEliteTeam ? -0.35 : 0.30;
+      const marginBoost = Math.min(2.25, marginAbs * 0.075);
+      teamImpact = Math.max(0.8, Math.min(5.8, 1.30 + upsetBoost + marginBoost));
+      text = marginAbs >= 18 ? "Big win lifted the room." : isClearUnderdog ? "Underdog win boosted morale." : quality.isBadTeam ? "A needed win boosted morale." : "Win helped the room.";
+    } else if (closeUnderdogLoss) {
+      const respectBoost = isHugeUnderdog ? 1.55 : 0.95;
+      const marginRespect = Math.max(0, (7 - marginAbs) * 0.13);
+      teamImpact = Math.min(2.4, 0.45 + respectBoost + marginRespect);
+      text = "Close fight against a stronger team helped morale.";
     } else if (ctx.margin < 0) {
-      const contenderPenalty = quality.isEliteTeam ? 0.95 : quality.isGoodTeam ? 0.45 : 0;
-      const rebuildingRelief = quality.isBadTeam ? -0.45 : 0;
-      const marginPenalty = Math.min(2.5, marginAbs * 0.075);
-      teamImpact = -Math.max(0.4, Math.min(5.2, 0.95 + marginPenalty + contenderPenalty + rebuildingRelief));
+      const contenderPenalty = quality.isEliteTeam ? 0.58 : quality.isGoodTeam ? 0.25 : 0;
+      const rebuildingRelief = quality.isBadTeam ? -0.58 : 0;
+      const opponentRelief = opponentQuality.isEliteTeam && quality.isBadTeam ? -0.22 : 0;
+      const marginPenalty = Math.min(2.05, marginAbs * 0.055);
+      teamImpact = -Math.max(0.25, Math.min(4.15, 0.58 + marginPenalty + contenderPenalty + rebuildingRelief + opponentRelief));
       text = marginAbs >= 18 ? "Blowout loss hurt morale." : quality.isBadTeam ? "Loss stung less with lower expectations." : "Loss hurt morale.";
     }
 
@@ -876,16 +956,19 @@ function buildTeamResultMoodEvents({ slim, game, currentDate, allTeams = [], sea
         else if (tier === "depth") playerScale = 0.82;
       }
 
-      const impact = Math.max(-6.8, Math.min(5.5, teamImpact * playerScale));
+      const impact = Math.max(-5.25, Math.min(6.4, teamImpact * playerScale));
+      const positiveLoss = !ctx.won && impact > 0;
       const event = moodEventForPlayer({
         id: `team_result_recent_${seasonYear || "season"}_${moodNormPart(ctx.teamName)}_${moodNormPart(name)}`,
         playerName: name,
         teamName: ctx.teamName,
-        category: ctx.won ? "Team Win" : "Team Loss",
+        category: ctx.won ? "Team Win" : positiveLoss ? "Competitive Loss" : "Team Loss",
         impact,
         text,
-        detail: `${ctx.won ? "Won" : "Lost"} by ${marginAbs} vs ${ctx.opponentName}.`,
-        type: ctx.won ? "team_win_recent" : "team_loss_recent",
+        detail: positiveLoss
+          ? `Lost by ${marginAbs} vs stronger ${ctx.opponentName}.`
+          : `${ctx.won ? "Won" : "Lost"} by ${marginAbs} vs ${ctx.opponentName}.`,
+        type: ctx.won ? "team_win_recent" : positiveLoss ? "team_competitive_loss" : "team_loss_recent",
         date: currentDate,
         gameId: game.id,
         opponentName: ctx.opponentName,
@@ -916,13 +999,13 @@ function buildTeamStreakMoodEvents({ game, currentDate, allTeams = [], scheduleB
     let text = "";
 
     if (isWin) {
-      const badTeamBoost = quality.isBadTeam ? 1.25 : quality.isEliteTeam ? 0.85 : 1;
-      baseImpact = Math.min(10.5, (1.7 + streak.length * 0.72) * badTeamBoost);
+      const badTeamBoost = quality.isBadTeam ? 1.45 : quality.isEliteTeam ? 0.95 : 1.12;
+      baseImpact = Math.min(16.5, (2.65 + streak.length * 1.10) * badTeamBoost);
       text = `${streak.length}-game win streak.`;
     } else {
-      const elitePenalty = quality.isEliteTeam ? 1.28 : quality.isGoodTeam ? 1.13 : 1;
-      const badTeamRelief = quality.isBadTeam ? 0.82 : 1;
-      baseImpact = -Math.min(13.5, (1.9 + streak.length * 0.95) * elitePenalty * badTeamRelief);
+      const elitePenalty = quality.isEliteTeam ? 1.32 : quality.isGoodTeam ? 1.18 : 1;
+      const badTeamRelief = quality.isBadTeam ? 0.95 : 1;
+      baseImpact = -Math.min(22, (3.1 + streak.length * 1.65) * elitePenalty * badTeamRelief);
       text = `${streak.length}-game losing streak.`;
     }
 
@@ -941,7 +1024,7 @@ function buildTeamStreakMoodEvents({ game, currentDate, allTeams = [], scheduleB
         else if (overall <= 75 && quality.isBadTeam) playerScale = 0.72;
       }
 
-      const impact = Math.max(-15, Math.min(12, baseImpact * playerScale));
+      const impact = Math.max(-24, Math.min(18, baseImpact * playerScale));
       const event = moodEventForPlayer({
         id: `team_streak_${streak.type}_${seasonYear || "season"}_${moodNormPart(teamName)}_${moodNormPart(name)}`,
         playerName: name,
@@ -986,7 +1069,13 @@ function buildPerformanceMoodEvents({ slim, game, currentDate, allTeams = [], pl
 
   for (const ctx of sides) {
     const rows = safeArray(slim?.box?.[ctx.side]);
-    const teamQuality = teamQualityContextForMood(allTeams, ctx.teamName);
+    const {
+      quality: teamQuality,
+      isClearUnderdog,
+      isHugeUnderdog,
+    } = underdogContextForMood(allTeams, ctx.teamName, ctx.opponentName);
+    const marginAbs = Math.abs(moodNum(ctx.margin, 0));
+    const closeUnderdogLoss = !ctx.won && marginAbs <= 6 && isClearUnderdog;
 
     for (const row of rows) {
       const playerName = cleanText(row?.player);
@@ -1030,17 +1119,28 @@ function buildPerformanceMoodEvents({ slim, game, currentDate, allTeams = [], pl
 
       if (delta >= positiveThreshold) {
         const lowerPlayerBoost = overall <= 75 ? 1.55 : overall <= 79 ? 1.28 : overall >= 88 ? 0.74 : 1;
+        const winBoost = ctx.won ? 1.24 : closeUnderdogLoss ? 1.12 : 1;
+        const underdogWinBoost = ctx.won && isClearUnderdog ? (isHugeUnderdog ? 1.28 : 1.16) : 1;
         const badTeamWinBoost = ctx.won && teamQuality.isBadTeam ? 1.16 : 1;
-        positiveImpact = Math.min(7.5, (1.0 + delta / 5.4) * lowerPlayerBoost * badTeamWinBoost);
+        positiveImpact = Math.min(9.2, (1.0 + delta / 5.2) * lowerPlayerBoost * winBoost * underdogWinBoost * badTeamWinBoost);
         positiveText = isStar ? "Big game beat expectations." : "Great game boosted confidence.";
       } else if (
         ctx.won &&
         !isStar &&
         (pts >= Math.max(12, expected.pts + 5) || gameScore >= expectedScore + 5.5)
       ) {
-        const lowerPlayerBoost = overall <= 75 ? 1.35 : 1.1;
-        positiveImpact = Math.min(4.2, (1.1 + Math.max(0, delta) / 7) * lowerPlayerBoost);
+        const lowerPlayerBoost = overall <= 75 ? 1.45 : 1.18;
+        const underdogWinBoost = isClearUnderdog ? 1.16 : 1;
+        positiveImpact = Math.min(5.2, (1.25 + Math.max(0, delta) / 6.4) * lowerPlayerBoost * underdogWinBoost);
         positiveText = "Strong game in a win boosted confidence.";
+      } else if (
+        closeUnderdogLoss &&
+        delta >= (isStar ? 3.5 : 2.8) &&
+        (pts >= Math.max(10, expected.pts - 1) || gameScore >= expectedScore + 3)
+      ) {
+        const lowerPlayerBoost = overall <= 75 ? 1.25 : overall >= 88 ? 0.86 : 1;
+        positiveImpact = Math.min(3.8, (0.75 + Math.max(0, delta) / 7.2) * lowerPlayerBoost);
+        positiveText = "Strong game in a close loss earned belief.";
       }
 
       if (positiveImpact > 0) {
@@ -1065,29 +1165,36 @@ function buildPerformanceMoodEvents({ slim, game, currentDate, allTeams = [], pl
       let negativeText = "";
 
       if (delta <= negativeThreshold) {
-        const starBadTeamPenalty = isStar && teamQuality.isBadTeam && !ctx.won ? 1.32 : 1;
-        const depthRelief = overall <= 75 ? 0.78 : 1;
-        negativeImpact -= Math.min(6.5, (1.0 + Math.abs(delta) / 6.2) * starBadTeamPenalty * depthRelief);
+        const starBadTeamPenalty = isStar && teamQuality.isBadTeam && !ctx.won ? 1.12 : 1;
+        const depthRelief = overall <= 75 ? 0.72 : 1;
+        negativeImpact -= Math.min(5.4, (0.8 + Math.abs(delta) / 6.8) * starBadTeamPenalty * depthRelief);
         negativeText = isStar ? "Game fell below expectations." : "Quiet game caused a small dip.";
       }
 
       if (fg.a >= 10 && fgPct != null && fgPct <= 0.30 && pts <= Math.max(14, expected.pts - 2)) {
-        negativeImpact -= isStar ? 1.9 : 1.2;
+        negativeImpact -= isStar ? 1.35 : 0.85;
         negativeText = negativeText || "Rough shooting night caused frustration.";
       }
 
       if (turnovers >= 5 && minutes >= 18) {
-        negativeImpact -= isStar ? 1.5 : 1.0;
+        negativeImpact -= isStar ? 1.05 : 0.75;
         negativeText = negativeText || "Sloppy game caused frustration.";
       }
 
-      if (!ctx.won && isStar && teamQuality.isBadTeam && gameScore <= expectedScore + 3) {
-        negativeImpact -= 1.3;
+      if (!ctx.won && isStar && teamQuality.isBadTeam && gameScore <= expectedScore + 3 && !closeUnderdogLoss) {
+        negativeImpact -= 0.9;
         negativeText = negativeText || "Loss added pressure on a star.";
       }
 
       if (negativeImpact < 0) {
-        const capped = Math.max(-7.5, negativeImpact);
+        const contextRelief = ctx.won ? 0.32 : closeUnderdogLoss ? 0.46 : marginAbs <= 5 ? 0.78 : 0.88;
+        negativeImpact *= contextRelief;
+        if (ctx.won && Math.abs(negativeImpact) < 1.2) negativeImpact = 0;
+        if (closeUnderdogLoss && Math.abs(negativeImpact) < 1.0) negativeImpact = 0;
+      }
+
+      if (negativeImpact < 0) {
+        const capped = Math.max(-5.8, negativeImpact);
         const event = moodEventForPlayer({
           id: `game_perf_${game.id}_${moodNormPart(playerName)}_negative`,
           playerName,
