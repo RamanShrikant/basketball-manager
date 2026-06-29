@@ -13,6 +13,9 @@ import { executeCpuTradeCandidateOnLeague } from "../utils/tradeExecution.js";
 import {
   TRADE_DESK_FEED_KEY,
   appendTradeDeskEntries,
+  appendPlayerMoodEvents,
+  appendTradeDeskMoodEventsFromEntries,
+  buildRealisticGameMoodEvents,
   buildCompletedCpuTradeDeskEntry,
   buildRejectedCpuTradeDeskEntry,
 } from "../utils/tradeDeskFeed.js";
@@ -1686,6 +1689,7 @@ const selectedTeamCanSim = !selectedTeamSimBlockMessage;
   const SCHED_KEY = "bm_schedule_v3";
   const RESULT_KEY = "bm_results_v2";
   const PLAYER_STATS_KEY = "bm_player_stats_v1";
+  const CALENDAR_MOOD_CONTEXT_KEY = "bm_calendar_mood_context_v1";
   // ===============================
   // FAST RESULTS STORE (per-game)
   // ===============================
@@ -1999,6 +2003,183 @@ function parsePair(s) {
   const [m, a] = String(s || "0-0").split("-").map(Number);
   return { m: m || 0, a: a || 0 };
 }
+
+
+function normalizeMoodEventIdPart(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function rowNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function buildGamePerformanceMoodEvents(slim, game, currentDate, context = {}) {
+  return buildRealisticGameMoodEvents({
+    slim,
+    game,
+    currentDate,
+    ...context,
+  });
+}
+
+function collectMoodPlayerRefs(value, refs = [], context = {}) {
+  if (!value) return refs;
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectMoodPlayerRefs(item, refs, context);
+    return refs;
+  }
+
+  if (typeof value !== "object") return refs;
+
+  const name = String(
+    value.playerName ||
+      value.player ||
+      value.name ||
+      value.fullName ||
+      ""
+  ).trim();
+
+  const looksLikePlayer = Boolean(
+    value.playerName ||
+      value.player ||
+      value.pos ||
+      value.position ||
+      value.overall ||
+      value.ovr ||
+      value.pts ||
+      value.ppg ||
+      value.team
+  );
+
+  if (name && looksLikePlayer) {
+    refs.push({
+      playerName: name,
+      teamName: String(value.teamName || value.team || context.teamName || "").trim(),
+    });
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (["playerName", "player", "name", "fullName"].includes(key)) continue;
+    collectMoodPlayerRefs(child, refs, {
+      ...context,
+      teamName: value.teamName || value.team || context.teamName || "",
+    });
+  }
+
+  return refs;
+}
+
+function uniqueMoodPlayerRefs(refs = []) {
+  const byName = new Map();
+  for (const ref of refs) {
+    const playerName = String(ref?.playerName || "").trim();
+    if (!playerName) continue;
+    const key = normalizeMoodEventIdPart(playerName);
+    if (!key) continue;
+    byName.set(key, {
+      playerName,
+      teamName: String(ref?.teamName || "").trim(),
+    });
+  }
+  return [...byName.values()];
+}
+
+function moodMilestoneEvent({ idPrefix, playerName, teamName = "", category, impact, text, detail, type, date }) {
+  const cleanName = String(playerName || "").trim();
+  if (!cleanName) return null;
+  const cleanPrefix = normalizeMoodEventIdPart(idPrefix || type || category || "milestone");
+  return {
+    id: `${cleanPrefix}_${normalizeMoodEventIdPart(cleanName)}_${normalizeMoodEventIdPart(date || "date")}`,
+    playerName: cleanName,
+    playerKey: `name:${cleanName}`,
+    category,
+    modifierType: "temporary",
+    impact,
+    baseImpact: impact,
+    decayMode: "percent_of_original",
+    decayPctPerWeek: 5,
+    text,
+    detail,
+    type,
+    duration: "temporary",
+    date,
+    source: "calendar_milestone_event_bus",
+    teamName,
+    hideWhenExpired: true,
+  };
+}
+
+function buildAllStarMoodEvents(allStarResult, currentDate) {
+  const refs = uniqueMoodPlayerRefs(collectMoodPlayerRefs(allStarResult));
+  return refs
+    .map((ref) =>
+      moodMilestoneEvent({
+        idPrefix: "all_star_selection",
+        playerName: ref.playerName,
+        teamName: ref.teamName,
+        category: "All-Star Selection",
+        impact: 5,
+        text: "Being named an All-Star gave him a short-term mood boost.",
+        detail: ref.teamName ? `${ref.teamName} representative.` : "League recognition.",
+        type: "all_star_selection",
+        date: currentDate,
+      })
+    )
+    .filter(Boolean);
+}
+
+function buildAwardMoodEvents(awards = {}, currentDate) {
+  const events = [];
+  const awardLabels = {
+    mvp: ["MVP Award", 10],
+    dpoy: ["DPOY Award", 8],
+    roty: ["ROTY Award", 7],
+    sixth_man: ["Sixth Man Award", 6],
+    sixthMan: ["Sixth Man Award", 6],
+    mip: ["Most Improved Award", 6],
+    all_nba: ["All-NBA Selection", 7],
+    allNBA: ["All-NBA Selection", 7],
+    all_defense: ["All-Defense Selection", 6],
+    allDefense: ["All-Defense Selection", 6],
+  };
+
+  const visit = (value, keyHint = "award") => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      for (const row of value) visit(row, keyHint);
+      return;
+    }
+    if (typeof value !== "object") return;
+
+    const [category, impact] = awardLabels[keyHint] || ["League Award", 6];
+    const refs = uniqueMoodPlayerRefs(collectMoodPlayerRefs(value));
+    for (const ref of refs.slice(0, 20)) {
+      const event = moodMilestoneEvent({
+        idPrefix: `${keyHint}_award`,
+        playerName: ref.playerName,
+        teamName: ref.teamName,
+        category,
+        impact,
+        text: `${category} recognition gave him a major morale boost.`,
+        detail: ref.teamName ? `${ref.teamName} recognition.` : "League recognition.",
+        type: normalizeMoodEventIdPart(category),
+        date: currentDate,
+      });
+      if (event) events.push(event);
+    }
+  };
+
+  for (const [key, value] of Object.entries(awards || {})) {
+    visit(value, key);
+  }
+
+  return events;
+}
 // ------------------------------------------------------------
 // SIXTH MAN ROLE HELPERS (starter vs sixth vs bench)
 // ------------------------------------------------------------
@@ -2259,6 +2440,7 @@ async function computeAndSaveCalendarAwards({
     const awards = deepUnpair(awardsRaw) || {};
     localStorage.setItem("bm_awards_latest", JSON.stringify(awards));
     localStorage.setItem("bm_awards_v1", JSON.stringify(awards));
+    appendPlayerMoodEvents(buildAwardMoodEvents(awards, focusedDate || fmt(seasonEnd)));
   } catch (e) {
     console.error("[Calendar] awards computation failed after sim-to-date:", e);
   }
@@ -2424,6 +2606,27 @@ useEffect(() => {
     }
   };
 
+  const saveCalendarMoodContext = (dateStr, monthStr = null) => {
+    if (!dateStr) return;
+
+    try {
+      const resolvedMonth =
+        monthStr || (dateStr ? monthKey(new Date(dateStr)) : monthKey(seasonStart));
+
+      localStorage.setItem(
+        CALENDAR_MOOD_CONTEXT_KEY,
+        JSON.stringify({
+          date: dateStr,
+          currentDate: dateStr,
+          month: resolvedMonth,
+          seasonYear,
+          teamName: calendarViewTeam?.name || selectedTeam?.name || "",
+          updatedAt: Date.now(),
+        })
+      );
+    } catch {}
+  };
+
   const saveCalendarCursor = (dateStr, monthStr = null) => {
     try {
       const resolvedMonth =
@@ -2436,6 +2639,8 @@ useEffect(() => {
           month: resolvedMonth,
         })
       );
+
+      saveCalendarMoodContext(dateStr, resolvedMonth);
     } catch {}
   };
 
@@ -2533,6 +2738,10 @@ const scrollToMonth = (monthStr) => {
   saveCalendarCursor(focusedDate, monthStr);
   scrollCalendarToMonth(monthStr, "smooth");
 };
+
+useEffect(() => {
+  if (focusedDate) saveCalendarMoodContext(focusedDate, month);
+}, [focusedDate, month, seasonYear, calendarViewTeam?.name, selectedTeam?.name]);
 
 const buildVisibleDaysForMonth = (monthStr) => {
   const [y, m] = monthStr.split("-").map(Number);
@@ -2697,7 +2906,19 @@ const requestStop = () => {
 
 const handleTradeDeskEntries = (entries = []) => {
   if (!Array.isArray(entries) || !entries.length) return [];
-  return appendTradeDeskEntries(entries);
+
+  const savedFeed = appendTradeDeskEntries(entries);
+  appendTradeDeskMoodEventsFromEntries(entries, {
+    currentDate:
+      entries.find((entry) => entry?.date || entry?.currentDate)?.date ||
+      entries.find((entry) => entry?.date || entry?.currentDate)?.currentDate ||
+      focusedDate ||
+      getLastPlayedDateFromSchedule(scheduleByDate) ||
+      fmt(seasonStart),
+    seasonYear,
+  });
+
+  return savedFeed;
 };
 
 const showCpuTradeToast = (entry) => {
@@ -2743,6 +2964,7 @@ const openAllStarTeams = async () => {
 
     localStorage.setItem("bm_all_stars_v1", JSON.stringify(result));
     localStorage.setItem(ALL_STAR_HANDLED_KEY, "true");
+    appendPlayerMoodEvents(buildAllStarMoodEvents(result, ALL_STAR_DATE));
 
     setAllStarData(result);
     setAllStarOpen(true);
@@ -3136,7 +3358,15 @@ const handleSimOnlyGame = async (dateStr, game) => {
 
   newResults[game.id] = result;
   let playerStats = loadPlayerStats();
+  const playerStatsBeforeGame = playerStats;
   playerStats = applyGameToPlayerStats(playerStats, result, game);
+  appendPlayerMoodEvents(buildGamePerformanceMoodEvents(result, game, dateStr, {
+    teams: repairedTeams,
+    scheduleByDate: upd,
+    resultsById: newResults,
+    playerStatsBefore: playerStatsBeforeGame,
+    seasonYear,
+  }));
   savePlayerStats(playerStats);
 
   saveSchedule(upd);
@@ -3291,7 +3521,15 @@ const awayRoles = loadTeamRoleMap(g.away);
           dayGames[i] = { ...g, played: true };
 
           // 🔥 update player stats
+          const playerStatsBeforeGame = playerStats;
           playerStats = applyGameToPlayerStats(playerStats, slim, g);
+          appendPlayerMoodEvents(buildGamePerformanceMoodEvents(slim, g, d, {
+            teams: activeTeams,
+            scheduleByDate: upd,
+            resultsById: newResults,
+            playerStatsBefore: playerStatsBeforeGame,
+            seasonYear,
+          }));
 
           // ✅ LIVE UI UPDATE (optional but makes it feel instant)
           setResultsById((prev) => ({ ...prev, [g.id]: slim }));
@@ -3548,7 +3786,15 @@ const awayRoles = loadTeamRoleMap(g.away);
           dayGames[i] = { ...g, played: true };
           gamesSimmed++;
 
+          const playerStatsBeforeGame = playerStats;
           playerStats = applyGameToPlayerStats(playerStats, slim, g);
+          appendPlayerMoodEvents(buildGamePerformanceMoodEvents(slim, g, date, {
+            teams: activeTeams,
+            scheduleByDate: upd,
+            resultsById: results,
+            playerStatsBefore: playerStatsBeforeGame,
+            seasonYear,
+          }));
 
           // ✅ LIVE UI UPDATE (so W/L shows immediately, not in batches)
           setResultsById((prev) => ({ ...prev, [g.id]: slim }));
@@ -3692,6 +3938,7 @@ const awardsRaw = await computeSeasonAwards(playersArray, {
       const awards = deepUnpair(awardsRaw) || {};
       localStorage.setItem("bm_awards_latest", JSON.stringify(awards));
       localStorage.setItem("bm_awards_v1", JSON.stringify(awards));
+      appendPlayerMoodEvents(buildAwardMoodEvents(awards, lastDateProcessed || fmt(seasonEnd)));
     } catch (e) {
       console.error("[Calendar] awards computation failed:", e);
     }

@@ -454,8 +454,18 @@ function recordTradeFinderImpactBreakdown(row = {}) {
 }
 
 function getTradeFinderImpactMode() {
-  const mode = String(safeLocalStorageGet(TRADE_FINDER_IMPACT_MODE_KEY) || "exact").toLowerCase().trim();
-  return mode === TRADE_FINDER_FAST_FTR_MODE ? TRADE_FINDER_FAST_FTR_MODE : "exact";
+  const raw = safeLocalStorageGet(TRADE_FINDER_IMPACT_MODE_KEY);
+  const mode = String(raw || "").toLowerCase().trim();
+
+  // Default Trade Finder to the fast FTR approximation. Propose Trade and
+  // non-Trade-Finder evaluations still use exact logic because this mode is
+  // only checked when cpuTradeRole === "trade_finder".
+  if (!mode) return TRADE_FINDER_FAST_FTR_MODE;
+  if (["exact", "slow", "full", "standard"].includes(mode)) return "exact";
+  if ([TRADE_FINDER_FAST_FTR_MODE, "fast_ftr", "fast", "1", "on", "true"].includes(mode)) {
+    return TRADE_FINDER_FAST_FTR_MODE;
+  }
+  return TRADE_FINDER_FAST_FTR_MODE;
 }
 
 function shouldUseTradeFinderFastFtr({ cpuTradeRole = "" } = {}) {

@@ -51,13 +51,19 @@ function isTradeFinderDebugEnabled() {
 
 function getTradeFinderFastScanMode() {
   try {
-    if (typeof window === "undefined") return "off";
-    const raw = String(localStorage.getItem(TRADE_FINDER_FAST_SCAN_KEY) || "").toLowerCase().trim();
+    if (typeof window === "undefined") return "scan_rescue";
+    const stored = localStorage.getItem(TRADE_FINDER_FAST_SCAN_KEY);
+    const raw = String(stored || "").toLowerCase().trim();
+
+    // Default Trade Finder searches to the fast scan + rescue path.
+    // LocalStorage can still override this for debugging/comparison.
+    if (!raw) return "scan_rescue";
+    if (["0", "off", "false", "exact", "slow", "none"].includes(raw)) return "off";
     if (["1", "on", "true", "scan", "fast", "fast_scan"].includes(raw)) return "scan";
     if (["scan_rescue", "scan+rescue", "rescue"].includes(raw)) return "scan_rescue";
-    return "off";
+    return "scan_rescue";
   } catch {
-    return "off";
+    return "scan_rescue";
   }
 }
 
@@ -125,13 +131,17 @@ function getSearchModeName(searchMode = "accurate") {
 
 function getTradeFinderRefineMode() {
   try {
-    if (typeof window === "undefined") return "balanced";
-    const raw = String(localStorage.getItem("bm_trade_finder_refine_mode_v1") || "balanced").toLowerCase().trim();
+    if (typeof window === "undefined") return "ultra_fast";
+    const raw = String(localStorage.getItem("bm_trade_finder_refine_mode_v1") || "").toLowerCase().trim();
+
+    // Default to the speed-capped refine pass. The safer balanced refine path
+    // is still available by setting localStorage to "balanced" for testing.
+    if (!raw) return "ultra_fast";
     if (["ultra", "ultra_fast", "speed", "under60"].includes(raw)) return "ultra_fast";
     if (["off", "none", "scan_only"].includes(raw)) return "scan_only";
     return "balanced";
   } catch {
-    return "balanced";
+    return "ultra_fast";
   }
 }
 

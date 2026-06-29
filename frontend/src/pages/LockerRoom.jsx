@@ -45,6 +45,10 @@ const LOCKER_ROOM_SCROLLBAR_STYLE = `
   }
 `;
 
+const TRADE_DESK_FEED_KEY = "bm_trade_desk_feed_v1";
+const CALENDAR_MOOD_CONTEXT_KEY = "bm_calendar_mood_context_v1";
+const PLAYER_MOOD_EVENT_BUS_KEY = "bm_player_mood_event_bus_v1";
+
 function getAllTeamsFromLeague(leagueData) {
   if (!leagueData) return [];
   if (Array.isArray(leagueData.teams)) return leagueData.teams;
@@ -61,6 +65,132 @@ function teamLogoOf(team) {
     team?.image ||
     ""
   );
+}
+
+function safeJsonParse(value, fallback = null) {
+  try {
+    if (!value) return fallback;
+    const parsed = JSON.parse(value);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readCalendarMoodContextForLockerRoom() {
+  if (typeof localStorage === "undefined") return null;
+
+  const direct = safeJsonParse(localStorage.getItem(CALENDAR_MOOD_CONTEXT_KEY), null);
+  if (direct?.date || direct?.currentDate) return direct;
+
+  // Backward-compatible fallback: older calendar code only wrote season cursor keys.
+  try {
+    const cursorKeys = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith("bm_calendar_cursor_v1_")) cursorKeys.push(key);
+    }
+
+    cursorKeys.sort().reverse();
+    for (const key of cursorKeys) {
+      const row = safeJsonParse(localStorage.getItem(key), null);
+      if (row?.date) {
+        return {
+          date: row.date,
+          currentDate: row.date,
+          month: row.month || "",
+          source: key,
+        };
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+function readTradeDeskFeedForLockerRoom() {
+  if (typeof localStorage === "undefined") return [];
+
+  const rows = safeJsonParse(localStorage.getItem(TRADE_DESK_FEED_KEY), []);
+  return Array.isArray(rows) ? rows : [];
+}
+
+
+function normalizeMoodEventNameKey(value = "") {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function readPlayerMoodEventBusForLockerRoom() {
+  if (typeof localStorage === "undefined") return [];
+
+  const rows = safeJsonParse(localStorage.getItem(PLAYER_MOOD_EVENT_BUS_KEY), []);
+  return Array.isArray(rows) ? rows.filter((row) => row && typeof row === "object") : [];
+}
+
+function moodStateKeysForEvent(event = {}) {
+  const playerName = String(event.playerName || event.player || event.name || "").trim();
+
+  return Array.from(
+    new Set(
+      [
+        event.playerKey,
+        playerName,
+        playerName ? `name:${playerName}` : "",
+        normalizeMoodEventNameKey(playerName),
+      ].filter(Boolean)
+    )
+  );
+}
+
+function mergePlayerMoodEventBusIntoLeagueData(leagueData, eventBus = []) {
+  if (!leagueData || !Array.isArray(eventBus) || !eventBus.length) return leagueData;
+
+  const moodState = leagueData.playerMoodState && typeof leagueData.playerMoodState === "object"
+    ? leagueData.playerMoodState
+    : {};
+  const playersState = moodState.players && typeof moodState.players === "object"
+    ? { ...moodState.players }
+    : {};
+
+  for (const event of eventBus) {
+    const eventId = String(event?.id || "").trim();
+    if (!eventId) continue;
+
+    for (const key of moodStateKeysForEvent(event)) {
+      const existing = playersState[key] && typeof playersState[key] === "object"
+        ? playersState[key]
+        : {};
+      const existingEvents = Array.isArray(existing.events)
+        ? existing.events
+        : Array.isArray(existing.eventLog)
+          ? existing.eventLog
+          : [];
+
+      const byId = new Map();
+      for (const row of existingEvents) {
+        const rowId = String(row?.id || row?.sourceId || "").trim();
+        if (rowId) byId.set(rowId, row);
+      }
+
+      byId.set(eventId, {
+        ...event,
+        id: eventId,
+      });
+
+      playersState[key] = {
+        ...existing,
+        events: [...byId.values()].slice(-80),
+      };
+    }
+  }
+
+  return {
+    ...leagueData,
+    playerMoodState: {
+      ...moodState,
+      players: playersState,
+    },
+  };
 }
 
 
@@ -91,16 +221,46 @@ function readStoredGameplanForMood(teamName) {
 }
 
 function buildLeagueDataWithMoodGameplan(leagueData, teamName) {
-  const gameplan = readStoredGameplanForMood(teamName);
-  if (!leagueData || !gameplan) return leagueData;
+  if (!leagueData) return leagueData;
 
-  return {
+  const gameplan = readStoredGameplanForMood(teamName);
+  const calendarContext = readCalendarMoodContextForLockerRoom();
+  const tradeDeskFeed = readTradeDeskFeedForLockerRoom();
+  const playerMoodEventBus = readPlayerMoodEventBusForLockerRoom();
+
+  let nextLeagueData = {
     ...leagueData,
-    moodGameplansByTeam: {
+  };
+
+  if (gameplan) {
+    nextLeagueData.moodGameplansByTeam = {
       ...(leagueData.moodGameplansByTeam || {}),
       [teamName]: gameplan,
-    },
-  };
+    };
+  }
+
+  const currentDate = calendarContext?.date || calendarContext?.currentDate || "";
+  if (currentDate) {
+    nextLeagueData.currentDate = currentDate;
+    nextLeagueData.calendarDate = currentDate;
+    nextLeagueData.moodCalendarContext = calendarContext;
+    nextLeagueData.calendar = {
+      ...(leagueData.calendar || {}),
+      currentDate,
+      cursorDate: currentDate,
+      month: calendarContext?.month || leagueData.calendar?.month,
+    };
+  }
+
+  if (tradeDeskFeed.length) {
+    nextLeagueData.tradeDeskFeed = tradeDeskFeed;
+  }
+
+  if (playerMoodEventBus.length) {
+    nextLeagueData = mergePlayerMoodEventBusIntoLeagueData(nextLeagueData, playerMoodEventBus);
+  }
+
+  return nextLeagueData;
 }
 
 function formatMoney(value) {
@@ -1029,7 +1189,11 @@ function formatSigned(value) {
 
 function formatMoodEventDate(value) {
   const raw = String(value || "").trim();
-  if (!raw || raw.toLowerCase() === "current" || raw.toLowerCase() === "current season") return "Oct 19, 2025";
+  if (!raw || raw.toLowerCase() === "current" || raw.toLowerCase() === "current season") {
+    const context = readCalendarMoodContextForLockerRoom();
+    const fallbackDate = context?.date || context?.currentDate || "2025-10-19";
+    return formatMoodEventDate(fallbackDate);
+  }
 
   const parsed = Date.parse(raw);
   if (Number.isFinite(parsed)) {
@@ -1047,6 +1211,33 @@ function readDecayPerWeek(event) {
   return Number.isFinite(n) ? Math.max(0, Math.round(n * 10) / 10) : 0;
 }
 
+function readDecayPctPerWeek(event) {
+  const raw =
+    event?.decayPctPerWeek ??
+    event?.decayPercentPerWeek ??
+    event?.weeklyDecayPct ??
+    event?.decayRatePct ??
+    0;
+  const n = Number(raw || 0);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n * 10) / 10) : 0;
+}
+
+function readModifierType(event, decayPerWeek = 0, decayPctPerWeek = 0) {
+  const explicit = String(event?.modifierType || event?.moodModifierType || event?.persistence || "").toLowerCase();
+  if (explicit.includes("temp")) return "temporary";
+  if (explicit.includes("perm")) return "permanent";
+
+  const duration = String(event?.duration || event?.type || "").toLowerCase();
+  if (decayPerWeek > 0 || decayPctPerWeek > 0 || duration.includes("temporary")) return "temporary";
+  return "permanent";
+}
+
+function formatDecayLabel(event, decayPerWeek = 0, decayPctPerWeek = 0) {
+  if (decayPctPerWeek > 0) return `${decayPctPerWeek}%/week`;
+  if (decayPerWeek > 0) return `${decayPerWeek}/week`;
+  return "";
+}
+
 function buildMoodEventPills(player) {
   const baseMood = Number(player?.baseMood ?? 50);
   const targetMood = Math.round(Number(player?.moodScore ?? baseMood));
@@ -1061,6 +1252,8 @@ function buildMoodEventPills(player) {
       const impact = readEventImpact(event);
       const originalImpact = readOriginalEventImpact(event, impact);
       const decayPerWeek = readDecayPerWeek(event);
+      const decayPctPerWeek = readDecayPctPerWeek(event);
+      const modifierType = readModifierType(event, decayPerWeek, decayPctPerWeek);
       const text =
         event?.label ||
         event?.text ||
@@ -1096,6 +1289,9 @@ function buildMoodEventPills(player) {
         impact,
         originalImpact,
         decayPerWeek,
+        decayPctPerWeek,
+        modifierType,
+        decayLabel: formatDecayLabel(event, decayPerWeek, decayPctPerWeek),
         removalDate,
         remainingWeeks: Number.isFinite(remainingWeeks) ? remainingWeeks : 0,
         progress,
@@ -1104,24 +1300,20 @@ function buildMoodEventPills(player) {
         date,
       };
     })
-    .filter((event) => event.text || event.impact !== 0);
+    // Hide zero-impact baseline/context cards from the visible event log.
+    // Base mood is already explained in the header, so 0-value bubbles just add clutter.
+    .filter((event) => event.text && Math.abs(Number(event.impact || 0)) >= 0.1)
+    .sort((a, b) => {
+      const typeA = a.modifierType === "temporary" ? 1 : 0;
+      const typeB = b.modifierType === "temporary" ? 1 : 0;
+      if (typeA !== typeB) return typeA - typeB; // permanent modifiers first
 
-  const currentTotal = events.reduce((sum, event) => sum + Number(event.impact || 0), 0);
-  const missingImpact = Math.round((targetMood - baseMood - currentTotal) * 10) / 10;
+      const dateA = Date.parse(a.date || "") || 0;
+      const dateB = Date.parse(b.date || "") || 0;
+      if (dateA !== dateB) return dateB - dateA;
 
-  if (Math.abs(missingImpact) >= 0.1) {
-    events.push({
-      impact: missingImpact,
-      originalImpact: missingImpact,
-      decayPerWeek: 0,
-      removalDate: "",
-      remainingWeeks: 0,
-      progress: 1,
-      text: "Other context",
-      detail: "Minor active factors keep the event total tied to the visible mood score.",
-      date: "Oct 19, 2025",
+      return Math.abs(Number(b.impact || 0)) - Math.abs(Number(a.impact || 0));
     });
-  }
 
   return {
     baseMood,
@@ -1134,6 +1326,9 @@ function MoodEventPill({ event }) {
   const impact = Number(event?.impact || 0);
   const originalImpact = Number(event?.originalImpact ?? impact);
   const decayPerWeek = Number(event?.decayPerWeek || 0);
+  const decayPctPerWeek = Number(event?.decayPctPerWeek || 0);
+  const modifierType = event?.modifierType === "temporary" ? "temporary" : "permanent";
+  const isTemporary = modifierType === "temporary";
   const progress = Math.max(0, Math.min(1, Number(event?.progress ?? 1)));
   const toneClass = impact > 0
     ? "border-emerald-300/25 bg-emerald-500/10 text-emerald-100"
@@ -1146,8 +1341,17 @@ function MoodEventPill({ event }) {
     <div className={`rounded-2xl border px-4 py-3 ${toneClass}`}>
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-orange-300">
-            {event?.date || "Oct 19, 2025"}
+          <div className="flex flex-wrap items-center gap-2 text-[10px] font-black uppercase tracking-[0.16em] text-orange-300">
+            <span
+              className={`rounded-full border px-2 py-0.5 tracking-[0.14em] ${
+                isTemporary
+                  ? "border-orange-300/30 bg-orange-500/10 text-orange-200"
+                  : "border-emerald-300/25 bg-emerald-500/10 text-emerald-200"
+              }`}
+            >
+              {isTemporary ? "Temporary" : "Permanent"}
+            </span>
+            <span>{event?.date || (isTemporary ? "Current event" : "Season modifier")}</span>
           </div>
           <div className="mt-1 text-sm font-black leading-5 text-white">
             {event?.text || "Mood event"}
@@ -1158,29 +1362,23 @@ function MoodEventPill({ event }) {
             </div>
           )}
 
-          <div className="mt-3 rounded-xl border border-white/10 bg-black/25 p-2">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-400">
-              <span>Original <span className={factorTone(originalImpact)}>{formatSigned(originalImpact)}</span></span>
-              <span>Now <span className={factorTone(impact)}>{formatSigned(impact)}</span></span>
-              {decayPerWeek > 0 ? (
-                <>
-                  <span>Decay {decayPerWeek}/week</span>
-                  <span>Removed {event?.removalDate || "at 0"}</span>
-                </>
-              ) : (
-                <span>Active while condition remains</span>
-              )}
-            </div>
+          {isTemporary && (decayPerWeek > 0 || decayPctPerWeek > 0) && (
+            <div className="mt-3 rounded-xl border border-white/10 bg-black/25 p-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-400">
+                <span>Original <span className={factorTone(originalImpact)}>{formatSigned(originalImpact)}</span></span>
+                <span>Now <span className={factorTone(impact)}>{formatSigned(impact)}</span></span>
+                <span>Decay {event?.decayLabel || (decayPctPerWeek > 0 ? `${decayPctPerWeek}%/week` : `${decayPerWeek}/week`)}</span>
+                <span>Removed {event?.removalDate || "at 0"}</span>
+              </div>
 
-            {decayPerWeek > 0 && (
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
                 <div
                   className={`h-full rounded-full transition-all ${barClass}`}
                   style={{ width: `${Math.round(progress * 100)}%` }}
                 />
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
         <div className={`shrink-0 rounded-xl border border-white/10 bg-black/35 px-3 py-2 text-lg font-black ${factorTone(impact)}`}>
           {formatSigned(impact)}

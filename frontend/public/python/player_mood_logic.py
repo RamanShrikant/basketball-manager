@@ -867,11 +867,16 @@ HISTORICAL_PLAYER_TAGS: Dict[str, List[Dict[str, Any]]] = {
         {
             "id": "previous_trade_rumor_friction",
             "label": "Previous Trade Rumor Friction",
-            "impact": -2,
-            "category": "History",
-            "detail": "Past trade speculation makes new rumors hit harder.",
+            "impact": -20,
+            "category": "Trade Rumors",
+            "detail": "Past trade speculation makes new rumors hit harder, but the friction fades over time.",
             "tradeSensitivity": 8,
             "frontOfficeTrustPenalty": 3,
+            "modifierType": "temporary",
+            "duration": "temporary",
+            "decayPctPerWeek": 5,
+            "decayMode": "percent_of_original",
+            "date": "2025-10-19",
         }
     ],
     "damianlillard": [
@@ -1048,6 +1053,14 @@ def get_current_league_date(league_data: Dict[str, Any]) -> str:
         if parsed:
             return parsed.isoformat()
 
+    for context_key in ["moodCalendarContext", "calendarContext"]:
+        context = league_data.get(context_key)
+        if isinstance(context, dict):
+            for key in ["currentDate", "date", "cursorDate"]:
+                parsed = parse_iso_date(context.get(key))
+                if parsed:
+                    return parsed.isoformat()
+
     return season_opening_date(league_data)
 
 def weeks_since(event_date: Any, current_date: Any) -> int:
@@ -1063,6 +1076,24 @@ def decayed_impact(base_impact: float, event_date: Any, current_date: Any, decay
     if base == 0 or decay <= 0:
         return round(base, 1)
     remaining = max(0.0, abs(base) - weeks_since(event_date, current_date) * decay)
+    if remaining <= 0:
+        return 0.0
+    return round(remaining if base > 0 else -remaining, 1)
+
+
+def decayed_impact_pct(base_impact: float, event_date: Any, current_date: Any, decay_pct_per_week: float = 0.0) -> float:
+    """Decay by a fixed percent of the original impact each league week.
+
+    Example: -20 with 5%/week loses 1.0 point per week and reaches 0
+    after 20 weeks. This is intentionally linear so temporary mood events
+    can fully disappear instead of asymptotically lingering forever.
+    """
+    base = float(num(base_impact, 0))
+    pct = abs(float(num(decay_pct_per_week, 0)))
+    if base == 0 or pct <= 0:
+        return round(base, 1)
+    weekly_decay = abs(base) * (pct / 100.0)
+    remaining = max(0.0, abs(base) - weeks_since(event_date, current_date) * weekly_decay)
     if remaining <= 0:
         return 0.0
     return round(remaining if base > 0 else -remaining, 1)
@@ -1087,14 +1118,31 @@ def expiry_date_for_decay(event_date: Any, base_impact: float, decay_per_week: f
     return add_days_to_date(event_date, weeks_to_zero * 7)
 
 
+def expiry_date_for_pct_decay(event_date: Any, base_impact: float, decay_pct_per_week: float) -> Optional[str]:
+    pct = abs(float(num(decay_pct_per_week, 0)))
+    original = abs(float(num(base_impact, 0)))
+    if pct <= 0 or original <= 0:
+        return None
+    weekly_decay = original * (pct / 100.0)
+    if weekly_decay <= 0:
+        return None
+    weeks_to_zero = int(math.ceil(original / weekly_decay))
+    return add_days_to_date(event_date, weeks_to_zero * 7)
+
+
 def make_decay_text(event: Dict[str, Any]) -> str:
+    decay_pct = num(event.get("decayPctPerWeek") or event.get("decayPercentPerWeek") or event.get("weeklyDecayPct"), 0)
     decay = num(event.get("decayPerWeek"), 0)
-    if decay <= 0:
-        return clean_text(event.get("decayText") or event.get("decayLabel") or "Active while the condition remains.")
+    if decay_pct <= 0 and decay <= 0:
+        return clean_text(event.get("decayText") or event.get("decayLabel") or "Permanent modifier while its condition remains.")
 
     original = num(event.get("baseImpact", event.get("impact")), 0)
     current = num(event.get("impact"), 0)
     removal = clean_text(event.get("expiresOnLabel") or "")
+    if decay_pct > 0:
+        if removal:
+            return f"Original {original:+.1f}; now {current:+.1f}; decays {decay_pct:g}%/week; removed {removal}"
+        return f"Original {original:+.1f}; now {current:+.1f}; decays {decay_pct:g}%/week until 0"
     if removal:
         return f"Original {original:+.1f}; now {current:+.1f}; decays {decay:g}/week; removed {removal}"
     return f"Original {original:+.1f}; now {current:+.1f}; decays {decay:g}/week until 0"
@@ -1111,10 +1159,19 @@ def add_event(
     source: str = "mood_engine",
     base_impact: Optional[float] = None,
     decay_per_week: float = 0.0,
+    decay_pct_per_week: float = 0.0,
+    decay_mode: str = "flat",
+    modifier_type: Optional[str] = None,
 ) -> None:
     event_date = date or "2025-10-19"
     base_value = round(float(base_impact if base_impact is not None else impact), 1)
     current_value = round(float(impact), 1)
+    pct_decay_value = float(num(decay_pct_per_week, 0))
+    flat_decay_value = float(num(decay_per_week, 0))
+    resolved_modifier_type = clean_text(modifier_type or "")
+    if not resolved_modifier_type:
+        resolved_modifier_type = "temporary" if pct_decay_value > 0 or flat_decay_value > 0 or str(duration).lower() == "temporary" else "permanent"
+
     row = {
         "category": category,
         "impact": current_value,
@@ -1123,11 +1180,25 @@ def add_event(
         "detail": clean_text(detail),
         "type": event_type,
         "duration": duration,
+        "modifierType": resolved_modifier_type,
         "date": event_date,
         "dateLabel": format_date_label(event_date),
         "source": source,
     }
-    if decay_per_week and num(decay_per_week, 0) > 0:
+    if pct_decay_value > 0:
+        row["decayPctPerWeek"] = pct_decay_value
+        row["decayMode"] = decay_mode or "percent_of_original"
+        expiry = expiry_date_for_pct_decay(event_date, base_value, pct_decay_value)
+        if expiry:
+            row["expiresOn"] = expiry
+            row["expiresOnLabel"] = format_date_label(expiry)
+        original_abs = abs(base_value)
+        current_abs = abs(current_value)
+        if original_abs > 0:
+            row["decayProgress"] = round(clamp(current_abs / original_abs, 0, 1), 3)
+        row["remainingWeeks"] = int(math.ceil((current_abs / max(original_abs * (pct_decay_value / 100.0), 0.0001)))) if current_abs > 0 and original_abs > 0 else 0
+        row["decayText"] = make_decay_text(row)
+    elif decay_per_week and num(decay_per_week, 0) > 0:
         decay_value = float(num(decay_per_week, 0))
         row["decayPerWeek"] = decay_value
         expiry = expiry_date_for_decay(event_date, base_value, decay_value)
@@ -1147,7 +1218,12 @@ def add_event(
 def get_player_stored_mood_events(league_data: Dict[str, Any], player: Dict[str, Any]) -> List[Dict[str, Any]]:
     state = league_data.get("playerMoodState") if isinstance(league_data.get("playerMoodState"), dict) else {}
     players_state = state.get("players") if isinstance(state.get("players"), dict) else {}
-    keys = [player_key(player), player_name(player), normalize_name(player_name(player))]
+    keys = [
+        player_key(player),
+        player_name(player),
+        f"name:{player_name(player)}",
+        normalize_name(player_name(player)),
+    ]
 
     raw = None
     for key in keys:
@@ -1176,10 +1252,11 @@ def apply_stored_mood_events(
         event_date = row.get("date") or row.get("createdAt") or season_opening_date(league_data)
         base = num(row.get("baseImpact", row.get("impact", row.get("moodImpact", 0))), 0)
         decay = num(row.get("decayPerWeek", row.get("weeklyDecay", 0)), 0)
-        active = decayed_impact(base, event_date, current_date, decay)
+        decay_pct = num(row.get("decayPctPerWeek", row.get("decayPercentPerWeek", row.get("weeklyDecayPct", 0))), 0)
+        active = decayed_impact_pct(base, event_date, current_date, decay_pct) if decay_pct > 0 else decayed_impact(base, event_date, current_date, decay)
 
         # Temporary events automatically disappear once their decayed value hits zero.
-        if active == 0 and decay > 0 and row.get("hideWhenExpired", True):
+        if active == 0 and (decay > 0 or decay_pct > 0) and row.get("hideWhenExpired", True):
             continue
 
         add_event(
@@ -1194,6 +1271,9 @@ def apply_stored_mood_events(
             source=str(row.get("source") or "player_mood_state"),
             base_impact=base,
             decay_per_week=decay,
+            decay_pct_per_week=decay_pct,
+            decay_mode=str(row.get("decayMode") or ("percent_of_original" if decay_pct > 0 else "flat")),
+            modifier_type=str(row.get("modifierType") or ("temporary" if decay > 0 or decay_pct > 0 else "permanent")),
         )
         total += active
     return round(total, 1)
@@ -1681,6 +1761,7 @@ def trade_context_events(
         return 0.0
 
     total = 0.0
+    current_date = get_current_league_date(league_data)
     trade_sensitive_bonus = sum(num(tag.get("tradeSensitivity"), 0) for tag in historical_tags)
     sensitivity = 1.0 + (num(personality.get("mediaSensitivity"), 50) - 50) / 160 + trade_sensitive_bonus / 35
     overall = num(player.get("overall"), 70)
@@ -1719,6 +1800,7 @@ def trade_context_events(
 
         impact *= sensitivity
         total += impact
+        event_date = entry.get("date") or entry.get("currentDate") or entry.get("createdAt") or current_date
         add_event(
             events,
             category,
@@ -1726,8 +1808,13 @@ def trade_context_events(
             text,
             headline[:180],
             event_type="trade_context",
-            duration=duration,
+            duration="temporary",
+            date=str(event_date)[:10],
             source="trade_feed_or_history",
+            base_impact=impact,
+            decay_pct_per_week=5,
+            decay_mode="percent_of_original",
+            modifier_type="temporary",
         )
 
     return total
@@ -1745,6 +1832,7 @@ def evaluate_player_mood(
     player: Dict[str, Any],
 ) -> Dict[str, Any]:
     season_year = get_current_season_year(league_data)
+    current_date = get_current_league_date(league_data)
     team_name = get_team_name(team)
     status = str(player.get("moodRosterStatus") or player.get("rosterStatus") or "standard")
     overall = num(player.get("overall"), 0)
@@ -1842,9 +1930,15 @@ def evaluate_player_mood(
             impact,
             str(tag.get("label") or "Historical context"),
             str(tag.get("detail") or "Preloaded player context affects this player's reactions."),
-            event_type="historical_modifier",
-            duration="long_term",
+            event_type=str(tag.get("type") or "historical_modifier"),
+            duration=str(tag.get("duration") or ("temporary" if num(tag.get("decayPctPerWeek") or tag.get("decayPerWeek"), 0) > 0 else "long_term")),
+            date=str(tag.get("date") or season_opening_date(league_data)),
             source="preloaded_history",
+            base_impact=num(tag.get("baseImpact", impact), impact),
+            decay_per_week=num(tag.get("decayPerWeek"), 0),
+            decay_pct_per_week=num(tag.get("decayPctPerWeek") or tag.get("decayPercentPerWeek"), 0),
+            decay_mode=str(tag.get("decayMode") or "percent_of_original"),
+            modifier_type=str(tag.get("modifierType") or ("temporary" if num(tag.get("decayPctPerWeek") or tag.get("decayPerWeek"), 0) > 0 else "permanent")),
         )
 
     factors["history"] += apply_stored_mood_events(events, league_data, player)
@@ -2036,20 +2130,8 @@ def evaluate_player_mood(
     raw_score = baseline + sum(factors.values())
     mood_score = round_int(clamp(raw_score, 0, 100))
 
-    visible_gap = round((mood_score - 50 - visible_event_delta) * 10) / 10
-    if abs(visible_gap) >= 0.1:
-        add_event(
-            events,
-            "Other Context",
-            visible_gap,
-            "Small current-context factors round out the mood score.",
-            "This keeps the visible ledger equal to base 50 plus active modifiers.",
-            event_type="baseline_balance",
-            duration="active_condition",
-            date=get_current_league_date(league_data),
-        )
-        visible_event_delta += visible_gap
-
+    # Do not create a fake "Other Context" row only to force the visible event log
+    # to mathematically equal the final mood score. The UI should show real causes only.
     if mood_score >= 88:
         label, tone = "Thriving", "elite"
     elif mood_score >= 76:
@@ -2070,13 +2152,24 @@ def evaluate_player_mood(
     else:
         main_concern = "None"
 
-    active_delta = visible_event_delta
+    active_delta = round(raw_score - 50, 1)
     if active_delta >= 8:
         trend = "rising"
     elif active_delta <= -8:
         trend = "falling"
     else:
         trend = "stable"
+
+    # Calendar wiring: active engine-generated events should reflect the league's
+    # current calendar date instead of looking permanently stuck on opening night.
+    for event in events:
+        if (
+            event.get("source") == "mood_engine"
+            and event.get("duration") in ["active", "active_condition", "short_term", "30_days", "45_days", "temporary"]
+            and event.get("date") == "2025-10-19"
+        ):
+            event["date"] = current_date
+            event["dateLabel"] = format_date_label(current_date)
 
     # Current UI reads reasons. Make these the strongest ledger events so the
     # page immediately shows the story even without UI changes.
