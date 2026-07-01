@@ -1576,6 +1576,21 @@ function buildAwardRosterMetaLookup(allTeams, currentDisplaySeasonYear = null) {
 /* -------------------------------------------------------------------------- */
 /*                           MAIN CALENDAR COMPONENT                          */
 /* -------------------------------------------------------------------------- */
+const FIRST_PLAYABLE_SEASON_YEAR = 2025;
+
+function calendarValidSeasonYear(value) {
+  const y = Number(value);
+  return Number.isFinite(y) && y >= 2020 && y <= 2100 ? Math.trunc(y) : null;
+}
+
+function getCalendarLeagueSeasonYear(leagueData) {
+  return (
+    calendarValidSeasonYear(leagueData?.seasonYear) ??
+    calendarValidSeasonYear(leagueData?.currentSeasonYear) ??
+    calendarValidSeasonYear(leagueData?.seasonStartYear)
+  );
+}
+
 export default function Calendar() {
   
   const navigate = useNavigate();
@@ -1591,19 +1606,46 @@ export default function Calendar() {
 
   /* -------------------------------- Season Window ------------------------------- */
   const META_KEY = "bm_league_meta_v1";
-  const today = new Date();
+  const leagueSeasonYear = getCalendarLeagueSeasonYear(leagueData);
   let storedSeasonYear = null;
   try {
     const metaRaw = localStorage.getItem(META_KEY);
     const meta = metaRaw ? JSON.parse(metaRaw) : null;
-    const y = meta?.seasonYear;
-    if (Number.isFinite(Number(y))) storedSeasonYear = Number(y);
+    storedSeasonYear =
+      calendarValidSeasonYear(meta?.seasonYear) ??
+      calendarValidSeasonYear(meta?.currentSeasonYear) ??
+      calendarValidSeasonYear(meta?.seasonStartYear);
   } catch {}
 
   const seasonYear =
-    storedSeasonYear != null
-      ? storedSeasonYear
-      : (today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1);
+    leagueSeasonYear ??
+    (leagueData ? FIRST_PLAYABLE_SEASON_YEAR : storedSeasonYear ?? FIRST_PLAYABLE_SEASON_YEAR);
+
+  useEffect(() => {
+    const y = calendarValidSeasonYear(leagueSeasonYear ?? seasonYear);
+    if (!y) return;
+
+    try {
+      const raw = localStorage.getItem(META_KEY);
+      const meta = raw ? JSON.parse(raw) : {};
+      const currentMetaYear =
+        calendarValidSeasonYear(meta?.seasonYear) ??
+        calendarValidSeasonYear(meta?.currentSeasonYear) ??
+        calendarValidSeasonYear(meta?.seasonStartYear);
+
+      if (currentMetaYear !== y) {
+        localStorage.setItem(
+          META_KEY,
+          JSON.stringify({
+            ...meta,
+            seasonYear: y,
+            currentSeasonYear: y,
+            seasonStartYear: y,
+          })
+        );
+      }
+    } catch {}
+  }, [leagueSeasonYear, seasonYear]);
 
   const CALENDAR_CURSOR_KEY = `bm_calendar_cursor_v1_${seasonYear}`;
 
@@ -2515,6 +2557,23 @@ useEffect(() => {
 
   parsedResults = loadResults();
 
+  const scheduleValid = isScheduleValid(parsedSched);
+  const storedScheduleKeys = Object.keys(parsedSched || {}).sort();
+  const storedScheduleLooksLikeDifferentSeason =
+    storedScheduleKeys.length > 0 &&
+    (storedScheduleKeys[0] !== wantStart ||
+      storedScheduleKeys[storedScheduleKeys.length - 1] !== wantEnd);
+
+  if (!scheduleValid && storedScheduleLooksLikeDifferentSeason) {
+    clearAllResultsV3();
+    removeLegacyResultsBlob();
+    localStorage.removeItem(PLAYER_STATS_KEY);
+    localStorage.removeItem("bm_awards_latest");
+    localStorage.removeItem("bm_awards_v1");
+    parsedResults = {};
+    parsedPlayerStats = {};
+  }
+
   const hasValidResults = Object.values(parsedResults).some(
     (r) => r?.totals?.home != null && r?.totals?.away != null
   );
@@ -2523,8 +2582,6 @@ useEffect(() => {
   const hasRoleFields =
     parsedPlayerStats &&
     Object.values(parsedPlayerStats).some((p) => p && (("started" in p) || ("sixth" in p)));
-
-  const scheduleValid = isScheduleValid(parsedSched);
 
   // ✅ IMPORTANT: if schedule is missing/invalid, regenerate it EVEN IF results exist
   if (!scheduleValid) {

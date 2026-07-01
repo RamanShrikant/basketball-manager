@@ -2,9 +2,116 @@
 import React, { useState, useEffect, useMemo } from "react";
 import FaceDNAEditor from "../components/FaceDNAEditor";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
+import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 
 const DRAFT_CLASSES_STORAGE_KEY = "bm_custom_draft_classes_v1";
 const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
+const FIRST_PLAYABLE_SEASON_YEAR = 2025;
+const LEAGUE_META_KEY = "bm_league_meta_v1";
+const RESULT_V3_PREFIX = "bm_result_v3_";
+
+function validSeasonYear(value) {
+  const y = Number(value);
+  return Number.isFinite(y) && y >= 2020 && y <= 2100 ? Math.trunc(y) : null;
+}
+
+function resolveLeagueSeasonYear(league = {}, fallback = FIRST_PLAYABLE_SEASON_YEAR) {
+  return (
+    validSeasonYear(league?.seasonYear) ??
+    validSeasonYear(league?.currentSeasonYear) ??
+    validSeasonYear(league?.seasonStartYear) ??
+    fallback
+  );
+}
+
+function withLeagueTimingFields(league = {}, requestedSeasonYear = FIRST_PLAYABLE_SEASON_YEAR) {
+  const seasonYear = validSeasonYear(requestedSeasonYear) ?? FIRST_PLAYABLE_SEASON_YEAR;
+  const expectedFinancialYear = seasonYear + 1;
+  const existingFinancials =
+    league.financials && typeof league.financials === "object" ? league.financials : {};
+
+  const currentFinancialSeasonYear =
+    validSeasonYear(league.currentFinancialSeasonYear) ??
+    validSeasonYear(existingFinancials.currentFinancialSeasonYear) ??
+    validSeasonYear(existingFinancials.currentSeasonYear) ??
+    validSeasonYear(existingFinancials.appliedThroughSeasonYear) ??
+    expectedFinancialYear;
+
+  return {
+    ...league,
+    seasonYear,
+    currentSeasonYear: seasonYear,
+    seasonStartYear: seasonYear,
+    currentFinancialSeasonYear,
+    financials: {
+      ...existingFinancials,
+      baseSeasonYear:
+        validSeasonYear(existingFinancials.baseSeasonYear) ?? expectedFinancialYear,
+      currentSeasonYear: currentFinancialSeasonYear,
+      currentFinancialSeasonYear,
+      appliedThroughSeasonYear:
+        validSeasonYear(existingFinancials.appliedThroughSeasonYear) ??
+        validSeasonYear(existingFinancials.appliedInflationThroughSeason) ??
+        currentFinancialSeasonYear,
+    },
+  };
+}
+
+function writeLeagueMetaSeason(seasonYear) {
+  try {
+    const y = validSeasonYear(seasonYear) ?? FIRST_PLAYABLE_SEASON_YEAR;
+    localStorage.setItem(
+      LEAGUE_META_KEY,
+      JSON.stringify({
+        seasonYear: y,
+        currentSeasonYear: y,
+        seasonStartYear: y,
+      })
+    );
+  } catch {}
+}
+
+function clearRuntimeSeasonStores() {
+  const exactKeys = [
+    "bm_schedule_v3",
+    "bm_results_v2",
+    "bm_results_index_v3",
+    "bm_player_stats_v1",
+    "bm_awards_latest",
+    "bm_awards_v1",
+    "bm_postseason_v2",
+    "bm_champ_v1",
+    "bm_finals_mvp_latest",
+    "bm_finals_mvp_seen_v1",
+    "bm_all_stars_v1",
+    "bm_offseason_state_v1",
+    "bm_retirement_results_v1",
+    "bm_progression_deltas_v1",
+    "bm_progression_meta_v1",
+    "bm_draft_lottery_v1",
+  ];
+
+  for (const key of exactKeys) {
+    try {
+      localStorage.removeItem(key);
+    } catch {}
+  }
+
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (
+        key.startsWith(RESULT_V3_PREFIX) ||
+        key.startsWith("bm_calendar_cursor_v1_") ||
+        key.startsWith("bm_all_star_handled_v1_") ||
+        key.startsWith("bm_trade_deadline_handled_v1_")
+      ) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {}
+}
 
 function safeJSON(raw, fallback = null) {
   try {
@@ -309,6 +416,7 @@ export default function LeagueEditor() {
   // FIX 1: free agents pool + pool toggle
   const [freeAgents, setFreeAgents] = useState([]);
   const [draftPicks, setDraftPicks] = useState([]);
+  const [seasonYear, setSeasonYear] = useState(FIRST_PLAYABLE_SEASON_YEAR);
   const [hasLoadedLeague, setHasLoadedLeague] = useState(false);
   const [selectedPool, setSelectedPool] = useState("TEAMS"); // "TEAMS" | "PLAYER_CREATOR" | "FA" | "DRAFT"
 
@@ -2041,10 +2149,14 @@ const normalizePlayer = (p) => {
 
       updated.draftPicks = normalizeDraftPickAssets(data.draftPicks || data.picks || []);
 
-      setLeagueName(updated.leagueName);
-      setConferences(updated.conferences);
-      setFreeAgents(updated.freeAgents || []);
-      setDraftPicks(updated.draftPicks || []);
+      const resolvedSeasonYear = resolveLeagueSeasonYear(data);
+      const timed = withLeagueTimingFields(updated, resolvedSeasonYear);
+
+      setLeagueName(timed.leagueName);
+      setConferences(timed.conferences);
+      setFreeAgents(timed.freeAgents || []);
+      setDraftPicks(timed.draftPicks || []);
+      setSeasonYear(resolvedSeasonYear);
     } catch (err) {
       console.error(err);
     } finally {
@@ -2090,16 +2202,20 @@ const normalizePlayer = (p) => {
 
     // FIX 2: save free agents too
     // Draft picks are central league assets, not stored inside team objects.
-    localStorage.setItem(
-      "leagueData",
-      JSON.stringify({
+    const timedLeague = withLeagueTimingFields(
+      {
         leagueName,
         conferences,
         freeAgents,
         draftPicks: normalizeDraftPickAssets(draftPicks),
-      })
+      },
+      seasonYear
     );
-  }, [hasLoadedLeague, leagueName, conferences, freeAgents, draftPicks]);
+
+    writeLeagueMetaSeason(seasonYear);
+    localStorage.setItem("leagueData", JSON.stringify(timedLeague));
+    saveLeagueDataInBackground(timedLeague);
+  }, [hasLoadedLeague, leagueName, conferences, freeAgents, draftPicks, seasonYear]);
 
   /* ---------------- Live Recalc in Modal ---------------- */
   useEffect(() => {
@@ -2421,14 +2537,22 @@ const normalizePlayer = (p) => {
 
                       updated.draftPicks = normalizeDraftPickAssets(d.draftPicks || d.picks || []);
 
-                      setLeagueName(updated.leagueName);
-                      setConferences(updated.conferences);
-                      setFreeAgents(updated.freeAgents || []);
-                      setDraftPicks(updated.draftPicks || []);
+                      const resolvedSeasonYear = resolveLeagueSeasonYear(d);
+                      const timed = withLeagueTimingFields(updated, resolvedSeasonYear);
 
-                      localStorage.setItem("leagueData", JSON.stringify(updated));
+                      clearRuntimeSeasonStores();
+                      writeLeagueMetaSeason(resolvedSeasonYear);
 
-                      alert(`✅ Imported ${updated.leagueName} (birthdays + contracts + free agents + draft picks kept / added)`);
+                      setLeagueName(timed.leagueName);
+                      setConferences(timed.conferences);
+                      setFreeAgents(timed.freeAgents || []);
+                      setDraftPicks(timed.draftPicks || []);
+                      setSeasonYear(resolvedSeasonYear);
+
+                      localStorage.setItem("leagueData", JSON.stringify(timed));
+                      saveLeagueDataInBackground(timed);
+
+                      alert(`✅ Imported ${timed.leagueName} as ${resolvedSeasonYear}-${resolvedSeasonYear + 1} (birthdays + contracts + free agents + draft picks kept / added)`);
                     } else alert("⚠️ Invalid JSON");
                   } catch {
                     alert("❌ Failed to parse JSON");
@@ -2450,12 +2574,15 @@ const normalizePlayer = (p) => {
             onClick={() => {
               // FIX 3: export includes free agents, recalced
               const snapshot = buildExportSnapshot();
-              const json = {
-                leagueName,
-                conferences: snapshot.conferences,
-                freeAgents: snapshot.freeAgents,
-                draftPicks: normalizeDraftPickAssets(draftPicks),
-              };
+              const json = withLeagueTimingFields(
+                {
+                  leagueName,
+                  conferences: snapshot.conferences,
+                  freeAgents: snapshot.freeAgents,
+                  draftPicks: normalizeDraftPickAssets(draftPicks),
+                },
+                seasonYear
+              );
               const blob = new Blob([JSON.stringify(json, null, 2)], { type: "application/json" });
               const url = URL.createObjectURL(blob);
               const a = document.createElement("a");

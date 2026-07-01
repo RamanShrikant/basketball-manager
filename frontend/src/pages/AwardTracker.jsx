@@ -14,6 +14,7 @@ const META_KEY = "bm_league_meta_v1";
 
 const TRACKER_MIN_GAME_SHARE = 0.8;
 const TRACKER_LIMIT = 10;
+const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
 const resultV3Key = (gameId) => `${RESULT_V3_PREFIX}${gameId}`;
 
@@ -122,31 +123,37 @@ function toInt(value, fallback = null) {
 }
 
 function getTrackerSeasonYear(leagueData) {
-  const candidates = [];
+  const leagueCandidates = [];
+  const metaCandidates = [];
 
-  const pushYear = (value) => {
+  const pushYear = (bucket, value) => {
     const y = Number(value);
     if (Number.isFinite(y) && y >= 2020 && y <= 2100) {
-      candidates.push(y);
+      bucket.push(Math.trunc(y));
     }
   };
+
+  pushYear(leagueCandidates, leagueData?.seasonYear);
+  pushYear(leagueCandidates, leagueData?.currentSeasonYear);
+  pushYear(leagueCandidates, leagueData?.seasonStartYear);
+
+  if (leagueCandidates.length) return Math.max(...leagueCandidates);
+
+  if (getAllTeamsFromLeague(leagueData).length > 0) {
+    return FIRST_PLAYABLE_SEASON_YEAR;
+  }
 
   try {
     const raw = localStorage.getItem(META_KEY);
     const meta = raw ? JSON.parse(raw) : {};
-    pushYear(meta?.seasonYear);
-    pushYear(meta?.currentSeasonYear);
-    pushYear(meta?.seasonStartYear);
+    pushYear(metaCandidates, meta?.seasonYear);
+    pushYear(metaCandidates, meta?.currentSeasonYear);
+    pushYear(metaCandidates, meta?.seasonStartYear);
   } catch {}
 
-  pushYear(leagueData?.seasonYear);
-  pushYear(leagueData?.currentSeasonYear);
-  pushYear(leagueData?.seasonStartYear);
+  if (metaCandidates.length) return Math.max(...metaCandidates);
 
-  if (candidates.length) return Math.max(...candidates);
-
-  const today = new Date();
-  return today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
+  return FIRST_PLAYABLE_SEASON_YEAR;
 }
 
 function firstPresent(...values) {
@@ -241,9 +248,48 @@ function isRookieCandidate(player, seasonYear) {
   return false;
 }
 
+function hasExplicitRookieYearData(player) {
+  const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+
+  return [
+    player?.draftYear,
+    player?.rookieYear,
+    player?.rookieSeason,
+    player?.rookieSeasonYear,
+    meta?.draftYear,
+    meta?.rookieYear,
+    meta?.rookieSeason,
+    meta?.rookieSeasonYear,
+    contract?.draftYear,
+    contract?.rookieYear,
+    contract?.rookieSeason,
+    contract?.rookieSeasonYear,
+  ].some((value) => toInt(value, null) !== null);
+}
+
 function isYoungRotyFallback(player) {
   const age = toInt(player?.age, null);
   return age !== null && age <= 22;
+}
+
+function dateStringBelongsToTrackerSeason(dateString, seasonYear) {
+  const match = String(dateString || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return false;
+
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const sortable = Number(`${match[1]}${match[2]}${match[3]}`);
+  const start = Number(`${seasonYear}1021`);
+  const end = Number(`${seasonYear + 1}0412`);
+
+  if (!Number.isFinite(sortable)) return false;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  return sortable >= start && sortable <= end;
+}
+
+function resultIdBelongsToTrackerSeason(resultId, seasonYear) {
+  return dateStringBelongsToTrackerSeason(resultId, seasonYear);
 }
 
 function fmt1(x) {
@@ -795,6 +841,18 @@ export default function AwardTracker() {
   }, []);
 
   const resultsById = useMemo(() => loadAllResultsV3(), []);
+  const currentSeasonStatsMap = useMemo(() => {
+    const hasStats = statsMap && Object.keys(statsMap).length > 0;
+    if (!hasStats) return {};
+
+    const resultIds = Object.keys(resultsById || {});
+    const hasCurrentSeasonResults = resultIds.some((id) =>
+      resultIdBelongsToTrackerSeason(id, trackerSeasonYear)
+    );
+
+    return hasCurrentSeasonResults ? statsMap : {};
+  }, [statsMap, resultsById, trackerSeasonYear]);
+
   const allTeams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
   const rosterInfoIndex = useMemo(() => buildRosterInfoIndex(leagueData, trackerSeasonYear + 1), [leagueData, trackerSeasonYear]);
 
@@ -816,14 +874,14 @@ export default function AwardTracker() {
       map[t.team] = Number(t.games || 0);
     }
 
-    for (const row of Object.values(statsMap || {})) {
+    for (const row of Object.values(currentSeasonStatsMap || {})) {
       const teamName = row?.team;
       if (!teamName) continue;
       map[teamName] = Math.max(Number(map[teamName] || 0), Number(row.gp || 0));
     }
 
     return map;
-  }, [teamAwardRows, statsMap]);
+  }, [teamAwardRows, currentSeasonStatsMap]);
 
   const playerPool = useMemo(() => {
     const out = [];
@@ -837,7 +895,7 @@ export default function AwardTracker() {
         if (!playerName) continue;
 
         const key = statsKey(playerName, teamName);
-        const s = statsMap[key];
+        const s = currentSeasonStatsMap[key];
         const info = rosterInfoIndex[key] || {};
 
         if (!s || Number(s.gp || 0) <= 0) continue;
@@ -888,7 +946,7 @@ export default function AwardTracker() {
     }
 
     return out;
-  }, [allTeams, statsMap, rosterInfoIndex, teamWinsMap, teamGamesMap]);
+  }, [allTeams, currentSeasonStatsMap, rosterInfoIndex, teamWinsMap, teamGamesMap]);
 
   const eligiblePool = useMemo(() => {
     return playerPool.filter((p) => hasTrackerGames(p));
@@ -928,7 +986,8 @@ export default function AwardTracker() {
 
   const rookiePool = useMemo(() => {
     const strict = eligiblePool.filter((p) => isRookieCandidate(p, trackerSeasonYear));
-    if (strict.length) return strict;
+    const hasDraftYearData = eligiblePool.some((p) => hasExplicitRookieYearData(p));
+    if (strict.length || hasDraftYearData) return strict;
     return eligiblePool.filter((p) => isYoungRotyFallback(p));
   }, [eligiblePool, trackerSeasonYear]);
 

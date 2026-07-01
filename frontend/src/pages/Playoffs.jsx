@@ -12,6 +12,8 @@ import FinalsMvpReveal from "../components/FinalsMvpReveal";
 import { finalizeFinalsMvpAndGoOffseason } from "../utils/finalsMvpSeasonActions";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 
+const FIRST_PLAYABLE_SEASON_YEAR = 2025;
+
 /* ---------------- utils ---------------- */
 function getAllTeamsFromLeague(leagueData) {
   if (!leagueData) return [];
@@ -1155,7 +1157,7 @@ export default function Playoffs() {
     const y = window.__seasonYear;
     if (typeof y === "number") return y;
 
-    return new Date().getFullYear();
+    return FIRST_PLAYABLE_SEASON_YEAR;
   }, [leagueData]);
 
   const fmvpSeasonYear = useMemo(() => {
@@ -1899,7 +1901,7 @@ export default function Playoffs() {
 
     // bump year marker (if you use window.__seasonYear)
     try {
-      window.__seasonYear = (seasonYear || new Date().getFullYear()) + 1;
+      window.__seasonYear = (seasonYear || FIRST_PLAYABLE_SEASON_YEAR) + 1;
     } catch {}
 
     hydratedPostseasonSeasonRef.current = null;

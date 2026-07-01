@@ -10,6 +10,7 @@ const RESULT_V3_PREFIX = "bm_result_v3_";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
 const PLAYER_STATS_KEY = "bm_player_stats_v1";
+const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
 function safeClone(value) {
   try {
@@ -23,9 +24,13 @@ function safeClone(value) {
   }
 }
 
-function bumpSeasonYearMeta() {
-  const today = new Date();
-  const fallback = today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
+function safeSeasonYear(value, fallback = null) {
+  const y = Number(value);
+  return Number.isFinite(y) && y >= 2020 && y <= 2100 ? Math.trunc(y) : fallback;
+}
+
+function bumpSeasonYearMeta(currentSeasonStartYear = null) {
+  const fallback = FIRST_PLAYABLE_SEASON_YEAR;
 
   let meta = {};
   try {
@@ -34,7 +39,11 @@ function bumpSeasonYearMeta() {
     meta = {};
   }
 
-  const cur = Number.isFinite(Number(meta.seasonYear)) ? Number(meta.seasonYear) : fallback;
+  const cur =
+    safeSeasonYear(currentSeasonStartYear) ??
+    safeSeasonYear(meta.seasonYear) ??
+    fallback;
+
   meta.seasonYear = cur + 1;
   meta.currentSeasonYear = meta.seasonYear;
   meta.seasonStartYear = meta.seasonYear;
@@ -44,6 +53,17 @@ function bumpSeasonYearMeta() {
 }
 
 export function getCompletedSeasonYearForArchive(leagueData, fmvpRaw) {
+  const leagueYear = Number(
+    leagueData?.seasonYear ||
+      leagueData?.currentSeasonYear ||
+      leagueData?.seasonStartYear ||
+      0
+  );
+
+  if (Number.isFinite(leagueYear) && leagueYear > 1900) {
+    return leagueYear + 1;
+  }
+
   try {
     const meta = JSON.parse(localStorage.getItem(META_KEY) || "{}") || {};
     const metaStartYear = Number(meta?.seasonYear);
@@ -53,22 +73,12 @@ export function getCompletedSeasonYearForArchive(leagueData, fmvpRaw) {
     }
   } catch {}
 
-  const leagueYear = Number(
-    leagueData?.seasonYear ||
-      leagueData?.currentSeasonYear ||
-      0
-  );
-
-  if (Number.isFinite(leagueYear) && leagueYear > 1900) {
-    return leagueYear + 1;
-  }
-
   const fmvpSeason = Number(fmvpRaw?.season);
   if (Number.isFinite(fmvpSeason) && fmvpSeason > 1900) {
     return fmvpSeason;
   }
 
-  return 2026;
+  return FIRST_PLAYABLE_SEASON_YEAR + 1;
 }
 
 function clearSeasonStores() {
@@ -88,8 +98,10 @@ function clearSeasonStores() {
     if (k.startsWith(RESULT_V3_PREFIX)) localStorage.removeItem(k);
   }
 
-  // wipe season stats so the next season starts from 0
+  // wipe season stats/awards so the next season starts from 0
   localStorage.removeItem(PLAYER_STATS_KEY);
+  localStorage.removeItem("bm_awards_latest");
+  localStorage.removeItem("bm_awards_v1");
 }
 
 function pushFinalsMvpToHistory(fmvpRaw) {
@@ -146,7 +158,8 @@ export function finalizeFinalsMvpAndGoOffseason({
   );
 
   // 4) bump season year so offseason pages can read the next cycle
-  const nextSeasonYear = bumpSeasonYearMeta();
+  const currentSeasonStartYear = completedSeasonYear - 1;
+  const nextSeasonYear = bumpSeasonYearMeta(currentSeasonStartYear);
 
   // 5) clear season runtime keys so Calendar generates a fresh schedule/results later
   clearSeasonStores();

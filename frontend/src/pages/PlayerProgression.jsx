@@ -11,6 +11,7 @@ const PROG_META_KEY = "bm_progression_meta_v1";
 const LEAGUE_KEY = "leagueData";
 const META_KEY = "bm_league_meta_v1";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
+const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
 // If a run gets stuck INFLIGHT (worker failed / page refresh), clear after this long
 const INFLIGHT_STALE_MS = 75000;
@@ -1136,8 +1137,7 @@ function inferSeasonYear(leagueData) {
     return Math.max(...candidates);
   }
 
-  const today = new Date();
-  return today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
+  return FIRST_PLAYABLE_SEASON_YEAR;
 }
 
 function stampAgingGuards(league, seasonYear) {

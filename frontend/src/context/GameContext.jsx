@@ -18,9 +18,58 @@ function leagueHasTeams(leagueData) {
   return Array.isArray(teams) && teams.length > 0;
 }
 
+const FIRST_PLAYABLE_SEASON_YEAR = 2025;
+
+function validSeasonYear(value) {
+  const y = Number(value);
+  return Number.isFinite(y) && y >= 2020 && y <= 2100 ? Math.trunc(y) : null;
+}
+
+function normalizeLeagueTiming(leagueData) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+
+  const existingSeasonYear =
+    validSeasonYear(leagueData.seasonYear) ??
+    validSeasonYear(leagueData.currentSeasonYear) ??
+    validSeasonYear(leagueData.seasonStartYear);
+
+  const seasonYear = existingSeasonYear ?? FIRST_PLAYABLE_SEASON_YEAR;
+  const expectedFinancialYear = seasonYear + 1;
+  const existingFinancials =
+    leagueData.financials && typeof leagueData.financials === "object"
+      ? leagueData.financials
+      : {};
+
+  const currentFinancialSeasonYear =
+    validSeasonYear(leagueData.currentFinancialSeasonYear) ??
+    validSeasonYear(existingFinancials.currentFinancialSeasonYear) ??
+    validSeasonYear(existingFinancials.currentSeasonYear) ??
+    validSeasonYear(existingFinancials.appliedThroughSeasonYear) ??
+    expectedFinancialYear;
+
+  return {
+    ...leagueData,
+    seasonYear,
+    currentSeasonYear: seasonYear,
+    seasonStartYear: seasonYear,
+    currentFinancialSeasonYear,
+    financials: {
+      ...existingFinancials,
+      baseSeasonYear:
+        validSeasonYear(existingFinancials.baseSeasonYear) ?? expectedFinancialYear,
+      currentSeasonYear: currentFinancialSeasonYear,
+      currentFinancialSeasonYear,
+      appliedThroughSeasonYear:
+        validSeasonYear(existingFinancials.appliedThroughSeasonYear) ??
+        validSeasonYear(existingFinancials.appliedInflationThroughSeason) ??
+        currentFinancialSeasonYear,
+    },
+  };
+}
+
 function normalizeLeagueFinancials(leagueData) {
   if (!leagueData || typeof leagueData !== "object") return leagueData;
-  return ensureLeagueFinancials(leagueData);
+  return ensureLeagueFinancials(normalizeLeagueTiming(leagueData));
 }
 
 export function GameProvider({ children }) {
