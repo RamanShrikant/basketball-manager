@@ -160,21 +160,21 @@ export default function TeamHub() {
     { name: "Intel", path: "/intel", enabled: true },
   ];
 
+  const offseasonDisabledTiles = new Set([
+    "Coach Gameplan",
+    "Schedule",
+    "Statistics",
+    "Standings",
+    "Award Tracker",
+  ]);
+
   const offseasonTiles = [
     { name: "Return to Offseason Hub", path: offseasonReturnTo, enabled: true },
-    { name: "View Roster", path: "/roster-view", enabled: true },
-    { name: "Locker Room", path: "/locker-room", enabled: true },
-    { name: "Trades", path: "/trades", enabled: true },
-    { name: "Intel", path: "/intel", enabled: true },
-    { name: "Power Rankings", path: "/power-rankings", enabled: true },
-    { name: "Draft Picks", path: "/draft-picks", enabled: true },
-    { name: "Free Agents", path: offseasonFreeAgentsPath, enabled: true },
-    { name: "Salary Table", path: "/salary-table", enabled: true },
-    { name: "Coach Gameplan", path: "#", enabled: false },
-    { name: "Schedule", path: "#", enabled: false },
-    { name: "Statistics", path: "#", enabled: false },
-    { name: "Standings", path: "#", enabled: false },
-    { name: "Award Tracker", path: "#", enabled: false },
+    ...normalTiles.map((tile) => ({
+      ...tile,
+      path: tile.name === "Free Agents" ? offseasonFreeAgentsPath : offseasonDisabledTiles.has(tile.name) ? "#" : tile.path,
+      enabled: !offseasonDisabledTiles.has(tile.name),
+    })),
   ];
 
   const playoffTiles = [

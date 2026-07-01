@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
-import { applyDraftPickOwnershipToLotteryResult } from "../utils/draftPicks.js";
+import { applyDraftPickOwnershipToLotteryResult, applyDraftPickOwnershipToOrder } from "../utils/draftPicks.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
@@ -491,6 +491,81 @@ function normalizeOddsRows(result = null, leagueData = null) {
   return (Array.isArray(result?.lotteryTeams) ? result.lotteryTeams : []).map((row) => normalizePreviewRow(row, leagueData));
 }
 
+
+function getOriginalPickTeam(row = {}) {
+  return row.originalTeamName || row.originalPickTeamName || row.naturalLotteryTeamName || row.teamName || row.name || "";
+}
+
+function getCurrentOwnerPickTeam(row = {}) {
+  return row.currentOwnerTeamName || row.ownerTeamName || row.teamName || getOriginalPickTeam(row) || "";
+}
+
+function getLotteryOwnershipSubtext(row = {}) {
+  const original = getOriginalPickTeam(row);
+  const owner = getCurrentOwnerPickTeam(row);
+  const protection = row.swapProtectionLabel || row.draftPickProtection || row.protectionLabel || row.displayProtection || "Unprotected";
+  const protectedText = row.draftPickProtected ? "Reverted" : "";
+  const via = original ? `via ${original}` : "";
+  const clean = [protectedText, protection, via].filter(Boolean).join(" · ");
+  if (clean) return clean;
+  return normalizeTeamName(owner) === normalizeTeamName(original) ? "Own pick" : "Pick rights";
+}
+
+function buildProjectedLotteryOrderForMatrix(rows = []) {
+  const seenPicks = new Set();
+  return (Array.isArray(rows) ? rows : [])
+    .map((row, index) => {
+      const expected = Number(row.expectedPick || row.projectedPick || row.mostLikelyPick || row.lotterySeed || index + 1);
+      const pick = Number.isFinite(expected) && expected > 0 ? Math.round(expected) : index + 1;
+      seenPicks.add(pick);
+      const original = getOriginalPickTeam(row);
+      return {
+        ...row,
+        pick,
+        round: 1,
+        teamName: original,
+        currentOwnerTeamName: original,
+        originalTeamName: original,
+        originalPickTeamName: original,
+        naturalLotteryTeamName: original,
+      };
+    })
+    .sort((a, b) => Number(a.pick || 0) - Number(b.pick || 0));
+}
+
+function buildOwnerAwareMatrixRows({ oddsRows = [], firstRound = [], firstRoundRevealed = false, leagueData, seasonYear }) {
+  const orderSource = firstRoundRevealed && Array.isArray(firstRound) && firstRound.length
+    ? firstRound
+    : buildProjectedLotteryOrderForMatrix(oddsRows);
+
+  const resolvedOrder = applyDraftPickOwnershipToOrder(orderSource, { leagueData, seasonYear });
+  const byOriginal = new Map();
+  for (const row of resolvedOrder || []) {
+    const key = normalizeTeamName(getOriginalPickTeam(row));
+    if (key) byOriginal.set(key, row);
+  }
+
+  return (oddsRows || []).map((row, index) => {
+    const key = normalizeTeamName(getOriginalPickTeam(row));
+    const ownership = byOriginal.get(key) || null;
+    const ownerName = ownership ? getCurrentOwnerPickTeam(ownership) : getCurrentOwnerPickTeam(row);
+    const ownerLogo = ownership
+      ? (ownership.currentOwnerTeamLogo || ownership.ownerLogo || ownership.logo || resolveTeamLogoFromLeague(leagueData, ownerName))
+      : (resolveTeamLogoFromLeague(leagueData, ownerName) || row.logo);
+    const original = getOriginalPickTeam(row);
+
+    return {
+      ...row,
+      matrixOwnerTeamName: ownerName || row.teamName,
+      matrixOwnerLogo: ownerLogo || row.logo,
+      matrixOriginalTeamName: original,
+      matrixOwnershipSubtext: getLotteryOwnershipSubtext(ownership || row),
+      matrixOwnershipType: ownership?.ownershipType || row.ownershipType || "projected",
+      matrixPickNumber: ownership?.pick || row.finalPick || row.expectedPick || row.projectedPick || index + 1,
+    };
+  });
+}
+
 function getFinalPickOddsLabel(oddsRow = {}, pickNumber) {
   const finalPick = Number(pickNumber || oddsRow?.finalPick || 0);
   const directOdds = oddsRow?.actualPickOddsPct !== undefined && oddsRow?.actualPickOddsPct !== null
@@ -593,7 +668,7 @@ function LotteryOddsTable({ rows = [], firstRoundRevealed = false }) {
           <div className="grid grid-cols-[92px_100px_minmax(230px,1fr)_90px_150px_90px_95px_150px] gap-3 px-5 py-3 bg-neutral-950/80 text-[11px] uppercase tracking-wide text-white/45 font-black border-b border-white/10 sticky top-0 z-10">
             <div>Record Rank</div>
             <div className="text-right">Expected Pick</div>
-            <div>Team</div>
+            <div>Projected Owner</div>
             <div className="text-center">Record</div>
             <div>Path</div>
             <div className="text-right">#1 Odds</div>
@@ -660,7 +735,7 @@ function DraftMatrix({ rows = [], system, firstRoundRevealed = false }) {
       <div className="px-5 py-4 bg-neutral-800/80 border-b border-white/10">
         <h2 className="text-2xl font-extrabold">Draft Probability Matrix</h2>
         <p className="text-sm text-white/50">
-          Green marks the expected pick. {firstRoundRevealed ? "Gold marks the actual revealed pick." : "Actual results are hidden until the first-round reveal."}
+          Green marks the expected pick. Logos show the projected current owner before the reveal, then update to the actual resolved owner after the reveal.
         </p>
       </div>
       <div className="overflow-x-hidden">
@@ -683,11 +758,11 @@ function DraftMatrix({ rows = [], system, firstRoundRevealed = false }) {
                 style={{ gridTemplateColumns: `210px repeat(${maxPick}, minmax(44px, 1fr))` }}
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  <TeamLogo src={row.logo} name={row.teamName} size={24} />
+                  <TeamLogo src={row.matrixOwnerLogo || row.logo} name={row.matrixOwnerTeamName || row.teamName} size={24} />
                   <div className="min-w-0">
-                    <div className="font-bold truncate">{row.teamName}</div>
-                    <div className="text-[11px] text-white/40 truncate">
-                      Record Rank {formatRecordRank(row)} · Expected {formatExpectedPick(row)}
+                    <div className="font-bold truncate">{row.matrixOwnerTeamName || row.teamName}</div>
+                    <div className="text-[11px] text-white/40 truncate" title={row.matrixOwnershipSubtext}>
+                      {row.matrixOwnershipSubtext || "Pick rights"}
                     </div>
                   </div>
                 </div>
@@ -709,7 +784,7 @@ function DraftMatrix({ rows = [], system, firstRoundRevealed = false }) {
                       key={pick}
                       className={`relative rounded-md px-1 py-2 text-center text-[11px] font-black border ${borderClass}`}
                       style={{ background: bg }}
-                      title={`${row.teamName} odds at #${pick}: ${formatChance(pct)}`}
+                      title={`${row.matrixOriginalTeamName || row.teamName} odds at #${pick}: ${formatChance(pct)}`}
                     >
                       {pct > 0 ? formatChance(pct) : "-"}
                       {isFinal ? <div className="mt-1 text-[8px] tracking-wide text-amber-100">FINAL</div> : null}
@@ -959,6 +1034,10 @@ export default function DraftLottery() {
 
   const firstRound = Array.isArray(result?.firstRoundOrder) ? result.firstRoundOrder.filter(Boolean) : [];
   const secondRound = Array.isArray(result?.secondRoundOrder) ? result.secondRoundOrder.filter(Boolean) : [];
+  const matrixRows = useMemo(
+    () => buildOwnerAwareMatrixRows({ oddsRows, firstRound, firstRoundRevealed, leagueData, seasonYear }),
+    [oddsRows, firstRound, firstRoundRevealed, leagueData, seasonYear]
+  );
 
   const firstRoundRevealOrder = useMemo(() => {
     return (firstRound || []).filter(Boolean).map((pick) => {
@@ -1108,8 +1187,7 @@ export default function DraftLottery() {
           </div>
         ) : null}
 
-        <LotteryOddsTable rows={oddsRows} firstRoundRevealed={firstRoundRevealed} />
-        <DraftMatrix rows={oddsRows} system={resolvedSystem} firstRoundRevealed={firstRoundRevealed} />
+        <DraftMatrix rows={matrixRows} system={resolvedSystem} firstRoundRevealed={firstRoundRevealed} />
 
         <div className="flex flex-wrap gap-3 mb-8">
           <button

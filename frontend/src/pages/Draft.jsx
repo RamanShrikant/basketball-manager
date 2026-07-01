@@ -3,7 +3,7 @@
   import { useGame } from "../context/GameContext";
   import * as simEngine from "../api/simEnginePy.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
-import { rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
+import { applyDraftPickOwnershipToOrder, rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
 
   const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
   const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
@@ -929,6 +929,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     teamLogoByName = {},
     selectedProspectId,
     onSelect,
+    onOpenReport = () => {},
     disabled,
     availableStartRef,
     draftCompleted = false,
@@ -1046,14 +1047,14 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
                     <div className="flex items-center gap-4 min-w-0">
                       <ProspectHeadshot src={headshot} name={displayName} />
   <div className="min-w-0 -translate-y-1">
-    <div className="text-lg font-extrabold text-white truncate">
+    <div className="text-lg font-extrabold text-white leading-tight break-words">
       {displayName}
       {pick.userControlled ? (
         <span className="ml-2 text-xs text-emerald-300">Your pick</span>
       ) : null}
     </div>
     {displaySource ? (
-      <div className="mt-0.5 text-xs text-white/45 truncate">
+      <div className="mt-0.5 text-xs text-white/45 leading-snug break-words">
         {displaySource}
       </div>
     ) : null}
@@ -1091,11 +1092,11 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
             </div>
           </div>
 
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[1040px] text-sm">
             <thead className="sticky top-[61px] bg-neutral-800/95 text-white/70 z-10">
               <tr>
                 <th className="px-4 py-3 text-left">Rank</th>
-                <th className="px-4 py-3 text-left">Player</th>
+                <th className="px-4 py-3 text-left min-w-[310px]">Player</th>
                 <SortableDraftHeader
                   label="POS"
                   sortKey="position"
@@ -1136,6 +1137,12 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
                   <tr
                     key={prospect.id}
                     onClick={() => !disabled && onSelect(prospect.id)}
+                    onDoubleClick={() => {
+                      if (!disabled) {
+                        onSelect(prospect.id);
+                        onOpenReport(prospect.id);
+                      }
+                    }}
                     className={`bmRowEnter bmDraftBoardRow border-b border-white/10 transition ${
                       disabled
                         ? "opacity-70"
@@ -1152,14 +1159,25 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
                       #{prospect.draftProjection || prospect.trueRank || "-"}
                     </td>
 
-                    <td className="px-4 py-5">
+                    <td className="px-4 py-5 min-w-[310px]">
                       <div className="flex items-center gap-4 min-w-0">
                         <ProspectHeadshot src={getHeadshot(prospect)} name={prospect.name} />
-                        <div className="min-w-0">
-                          <div className="text-lg font-extrabold text-white truncate">{prospect.name}</div>
-                          <div className="text-xs text-white/45 truncate">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-lg font-extrabold text-white leading-tight break-words">{prospect.name}</div>
+                          <div className="text-xs text-white/45 leading-snug break-words">
                             {getDraftSource(prospect)}
                           </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelect(prospect.id);
+                              onOpenReport(prospect.id);
+                            }}
+                            className="mt-2 rounded-lg border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] font-black uppercase tracking-wide text-white/65 hover:border-orange-300/50 hover:bg-orange-500/15 hover:text-orange-100"
+                          >
+                            View Report
+                          </button>
                         </div>
                       </div>
                     </td>
@@ -1335,6 +1353,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     const [workingLeagueData, setWorkingLeagueData] = useState(leagueData || null);
     const [draftState, setDraftState] = useState(() => readDraftState(seasonYear));
     const [selectedProspectId, setSelectedProspectId] = useState(null);
+    const [scoutingReportOpen, setScoutingReportOpen] = useState(false);
     const [draftBoardSort, setDraftBoardSort] = useState(DEFAULT_DRAFT_SORT);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
@@ -1353,11 +1372,16 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
 
     const lottery = useMemo(() => readDraftLottery(seasonYear), [seasonYear]);
     const lotteryOrderLocked = isLotteryDraftOrderLocked(lottery);
-    const draftOrder = lotteryOrderLocked
-      ? lottery?.result?.fullDraftOrder || []
-      : workingLeagueData?.draftState?.draftLotteryComplete
-      ? workingLeagueData?.draftState?.draftOrder || []
-      : [];
+    const draftOrder = useMemo(() => {
+      const rawOrder = lotteryOrderLocked
+        ? lottery?.result?.fullDraftOrder || []
+        : workingLeagueData?.draftState?.draftLotteryComplete
+        ? workingLeagueData?.draftState?.draftOrder || []
+        : [];
+
+      if (!rawOrder?.length || !workingLeagueData) return rawOrder || [];
+      return applyDraftPickOwnershipToOrder(rawOrder, { leagueData: workingLeagueData, seasonYear });
+    }, [lotteryOrderLocked, lottery, workingLeagueData, seasonYear]);
 
     const teamLogoByName = useMemo(() => {
       return buildTeamLogoMap(workingLeagueData, draftOrder);
@@ -1431,6 +1455,11 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
         null
       );
     }, [reportProspects, selectedProspectId, draftState?.completed, draftedProspectCards, availableProspects]);
+
+    const openScoutingReport = (prospectId = selectedProspectId) => {
+      if (prospectId) setSelectedProspectId(prospectId);
+      setScoutingReportOpen(true);
+    };
 
     useEffect(() => {
       const selectedStillExists = reportProspects.some((p) => p.id === selectedProspectId);
@@ -1516,7 +1545,16 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     useEffect(() => {
       const saved = readDraftState(seasonYear);
       if (saved?.draftOrder?.length) {
-        setDraftState(saved);
+        const picksAlreadyMade = Array.isArray(saved.draftedPicks) && saved.draftedPicks.length > 0;
+        if (!picksAlreadyMade && !saved.completed && workingLeagueData) {
+          setDraftState({
+            ...saved,
+            draftOrder: applyDraftPickOwnershipToOrder(saved.draftOrder, { leagueData: workingLeagueData, seasonYear }),
+            pickOwnershipVersion: "draft_pick_ownership_v6",
+          });
+        } else {
+          setDraftState(saved);
+        }
         return;
       }
 
@@ -1778,7 +1816,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
             </div>
           )}
 
-          <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_0.9fr] gap-6">
+          <div className="flex flex-col gap-6">
             <CombinedDraftBoard
               prospects={availableProspects}
               draftedPicks={draftState?.draftedPicks || []}
@@ -1786,6 +1824,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
               teamLogoByName={teamLogoByName}
               selectedProspectId={selectedProspect?.id}
               onSelect={setSelectedProspectId}
+              onOpenReport={openScoutingReport}
               disabled={loading}
               availableStartRef={availableStartRef}
               draftCompleted={completed}
@@ -1795,22 +1834,39 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
               onSortChange={handleDraftBoardSortChange}
             />
 
-            <div className="flex flex-col gap-6">
-              <ProspectCard prospect={selectedProspect} />
-
-              {completed && (
-                <div className="bmSolidPanel bmRowEnter rounded-3xl bg-neutral-900 border border-white/10 p-6">
-                  <h2 className="text-2xl font-extrabold text-white mb-3">Undrafted Free Agents</h2>
-                  <p className="text-white/60 text-sm mb-4">
-                    Top undrafted prospects have been added to the free-agent pool.
-                  </p>
-                  <div className="text-sm text-white/50">
-                    Added: {draftState?.undraftedAddedToFreeAgency?.length || 0}
-                  </div>
+            {completed && (
+              <div className="bmSolidPanel bmRowEnter rounded-3xl bg-neutral-900 border border-white/10 p-6">
+                <h2 className="text-2xl font-extrabold text-white mb-3">Undrafted Free Agents</h2>
+                <p className="text-white/60 text-sm mb-4">
+                  Top undrafted prospects have been added to the free-agent pool.
+                </p>
+                <div className="text-sm text-white/50">
+                  Added: {draftState?.undraftedAddedToFreeAgency?.length || 0}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
+
+          {scoutingReportOpen && selectedProspect && (
+            <div
+              className="fixed inset-0 z-[220] flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-sm"
+              onClick={() => setScoutingReportOpen(false)}
+            >
+              <div
+                className="relative w-[min(760px,96vw)] max-h-[88vh] overflow-y-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => setScoutingReportOpen(false)}
+                  className="absolute right-4 top-4 z-10 rounded-lg bg-neutral-800/90 px-3 py-2 text-xs font-black uppercase tracking-wide text-white/80 hover:bg-neutral-700"
+                >
+                  Close
+                </button>
+                <ProspectCard prospect={selectedProspect} />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );

@@ -2237,6 +2237,8 @@ const starters = new Set(sortedByMin.slice(0, 5).map((r) => r.player));
         tpa: 0,
         ftm: 0,
         fta: 0,
+        to: 0,
+        pf: 0,
         // 🔥 role tracking
         started: 0,
         sixth: 0,
@@ -2249,6 +2251,8 @@ const starters = new Set(sortedByMin.slice(0, 5).map((r) => r.player));
       cur.ast += toNum(row.ast);
       cur.stl += toNum(row.stl);
       cur.blk += toNum(row.blk);
+      cur.to += toNum(row.to ?? row.tov ?? row.turnovers);
+      cur.pf += toNum(row.pf ?? row.fouls);
 
       const { m: fgm, a: fga } = parsePair(row.fg);
       const { m: tpm, a: tpa } = parsePair(row["3p"]);

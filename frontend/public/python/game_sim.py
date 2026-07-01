@@ -28,6 +28,61 @@ def clamp(x, lo, hi):
 def gauss(mu, sigma):
     return random.gauss(mu, sigma)
 
+
+def _iq_based_rate_per36(iq_value, floor=0.1, spread=4.4):
+    """Map IQ to an expected per-36 stat rate.
+
+    95 IQ => floor, 60 IQ => floor + spread. Values outside the design
+    range are clamped so bad data cannot create cartoonish box scores.
+    """
+    try:
+        iq = float(iq_value)
+    except Exception:
+        iq = 75.0
+    iq = clamp(iq, 60.0, 95.0)
+    return floor + ((95.0 - iq) / 35.0) * spread
+
+def _poisson_sample(expected):
+    """Small dependency-free Poisson sampler for box-score counting stats."""
+    try:
+        lam = float(expected)
+    except Exception:
+        return 0
+    if lam <= 0:
+        return 0
+    # Knuth is perfect here because player TOV/PF means are small.
+    limit = math.exp(-lam)
+    k = 0
+    product = 1.0
+    while product > limit and k < 30:
+        k += 1
+        product *= random.random()
+    return max(0, k - 1)
+
+def expected_turnovers_per36(offensive_iq):
+    return _iq_based_rate_per36(offensive_iq, floor=0.1, spread=4.4)
+
+def expected_fouls_per36(defensive_iq):
+    return _iq_based_rate_per36(defensive_iq, floor=0.1, spread=5.9)
+
+def generate_turnovers_and_fouls(player, minutes):
+    attrs = player.get("attrs") or []
+    offensive_iq = attrs[13] if len(attrs) > 13 else player.get("offensiveIQ", player.get("offIq", 75))
+    defensive_iq = attrs[14] if len(attrs) > 14 else player.get("defensiveIQ", player.get("defIq", 75))
+
+    try:
+        mins = max(0.0, float(minutes or 0))
+    except Exception:
+        mins = 0.0
+
+    tov_mean = expected_turnovers_per36(offensive_iq) * mins / 36.0
+    pf_mean = expected_fouls_per36(defensive_iq) * mins / 36.0
+
+    turnovers = _poisson_sample(tov_mean)
+    fouls = min(_poisson_sample(pf_mean), 6)
+
+    return turnovers, fouls
+
 # ------------------------------------------------------------
 # TEAM RATINGS
 # ------------------------------------------------------------
@@ -803,6 +858,8 @@ async def build_box(team, mins, team_points, ratings):
         # 🔥 Use grail shooting model for this player
         stats = simulate_one_game(p, p["minutes"], P)
 
+        turnovers, fouls = generate_turnovers_and_fouls(p, p["minutes"])
+
         rows.append({
             "player": p["name"],
             "min": p["minutes"],
@@ -814,8 +871,8 @@ async def build_box(team, mins, team_points, ratings):
             "ast": 0,
             "stl": 0,
             "blk": 0,
-            "to": 0,
-            "pf": 0,
+            "to": turnovers,
+            "pf": fouls,
             "_box_order": p.get("_box_order", i)
         })
 

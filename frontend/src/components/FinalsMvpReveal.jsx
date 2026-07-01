@@ -1,5 +1,5 @@
 // src/components/FinalsMvpReveal.jsx
-// FMVP reveal surgical patch v5_REAL - shows MIN/TOV/FGA/3PA/FTA
+// FMVP reveal surgical patch v5_REAL - shows MIN/TOV/PF/FGA/3PA/FTA
 import React, { useMemo } from "react";
 import { getCompletedSeasonYearForArchive } from "../utils/finalsMvpSeasonActions";
 import styles from "../pages/FinalsMvp.module.css";
@@ -99,6 +99,7 @@ export default function FinalsMvpReveal({
     const blk = pickNum(winner, ["blk", "blocks"], 0);
     const min = pickNum(winner, ["min", "minutes"], 0);
     const tov = pickNum(winner, ["to", "tov", "turnovers"], 0);
+    const pf = pickNum(winner, ["pf", "fouls", "personalFouls"], 0);
 
     const fgm = pickNum(winner, ["fgm", "fg_m"], 0);
     const fga = pickNum(winner, ["fga", "fg_a"], 0);
@@ -126,6 +127,7 @@ export default function FinalsMvpReveal({
       spg: winner.spg ?? perGame(stl),
       bpg: winner.bpg ?? perGame(blk),
       tov: winner.tov ?? perGame(tov),
+      pf: winner.pf_pg ?? winner.fouls_pg ?? perGame(pf),
       fga: winner.fga_pg ?? perGame(fga),
       tpa: winner.tpa_pg ?? perGame(tpa),
       fta: winner.fta_pg ?? perGame(fta),
@@ -292,6 +294,7 @@ export default function FinalsMvpReveal({
               <th className="py-2">STL</th>
               <th className="py-2">BLK</th>
               <th className="py-2">TOV</th>
+              <th className="py-2">PF</th>
               <th className="py-2">FGA</th>
               <th className="py-2">3PA</th>
               <th className="py-2">FTA</th>
@@ -322,6 +325,7 @@ export default function FinalsMvpReveal({
               <td className="py-2">{fmt1(finalsRow?.spg)}</td>
               <td className="py-2">{fmt1(finalsRow?.bpg)}</td>
               <td className="py-2">{fmt1(finalsRow?.tov)}</td>
+              <td className="py-2">{fmt1(finalsRow?.pf)}</td>
               <td className="py-2">{fmt1(finalsRow?.fga)}</td>
               <td className="py-2">{fmt1(finalsRow?.tpa)}</td>
               <td className="py-2">{fmt1(finalsRow?.fta)}</td>

@@ -965,6 +965,7 @@ function buildFinalsAggregatePlayers(post, resultsById) {
         stl: 0,
         blk: 0,
         to: 0,
+        pf: 0,
 
         // ✅ REQUIRED for awards.py FG% / 3P%
         fgm: 0,
@@ -984,7 +985,8 @@ function buildFinalsAggregatePlayers(post, resultsById) {
     a.ast += Number(row.ast || 0);
     a.stl += Number(row.stl || 0);
     a.blk += Number(row.blk || 0);
-    a.to += Number(row.to || 0);
+    a.to += Number(row.to ?? row.tov ?? row.turnovers ?? 0);
+    a.pf += Number(row.pf ?? row.fouls ?? 0);
 
     // row.fg and row["3p"] are strings like "M-A"
     const fg = parseMA(row.fg);

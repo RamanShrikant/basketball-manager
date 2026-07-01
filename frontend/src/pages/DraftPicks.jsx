@@ -9,6 +9,7 @@ import {
   getDraftPickProtectionLabel,
   normalizeDraftPicks,
   normalizeTeamName,
+  applyDraftPickOwnershipToOrder,
   sortDraftPickAssets,
 } from "../utils/draftPicks.js";
 import "../styles/BMAnimations.css";
@@ -391,7 +392,10 @@ export default function DraftPicks() {
   }, [teamsSorted, viewIndex, selectedTeam]);
 
   const seasonYear = useMemo(() => getSeasonYearFromLeague(leagueData), [leagueData]);
-  const draftOrder = useMemo(() => readLockedDraftOrder(leagueData, seasonYear), [leagueData, seasonYear]);
+  const draftOrder = useMemo(() => {
+    const locked = readLockedDraftOrder(leagueData, seasonYear);
+    return applyDraftPickOwnershipToOrder(locked, { leagueData, seasonYear });
+  }, [leagueData, seasonYear]);
   const draftComplete = useMemo(() => isDraftCompleteForSeason(leagueData, seasonYear), [leagueData, seasonYear]);
   const draftOrderLocked = draftOrder.length >= 50;
 

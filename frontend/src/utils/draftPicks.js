@@ -1072,7 +1072,9 @@ function getSwapInvolvedTeams(asset = {}, teamNames = [], resolveTeamName = (x) 
     ? asset.swapParticipants
     : [];
 
-  for (const participant of participants) push(participant);
+  for (const participant of participants) {
+    for (const piece of splitSwapParticipantText(participant)) push(piece);
+  }
   if (refs.length >= 2) return refs.slice(0, 2);
 
   const participantText = [asset.originalTeam, asset.swapWithTeam, asset.swap?.withTeam]
@@ -1101,6 +1103,16 @@ function getSwapInvolvedTeams(asset = {}, teamNames = [], resolveTeamName = (x) 
 
 function rowOriginalTeam(row = {}) {
   return row.originalTeamName || row.originalPickTeamName || row.naturalLotteryTeamName || row.originalTeam || row.teamName || "";
+}
+
+
+function wasDraftPickAssetTraded(asset = {}) {
+  return Boolean(
+    asset?.lastTrade ||
+      (Array.isArray(asset?.tradeHistory) && asset.tradeHistory.length > 0) ||
+      asset?.realLifeDetails?.tradeGenerated ||
+      asset?.tradeGenerated
+  );
 }
 
 function swapDirection(asset = {}) {
@@ -1155,6 +1167,7 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
     if (uniqueInvolved.length !== 2) continue;
 
     const tradeGeneratedSwap = String(asset.logicType || "") === "trade_machine_swap";
+    const tradedSwapRight = wasDraftPickAssetTraded(asset);
     const ownerParticipants = Array.isArray(asset.realLifeDetails?.swapOwnerParticipants)
       ? asset.realLifeDetails.swapOwnerParticipants.map(resolveTeamName).filter(Boolean)
       : [];
@@ -1166,11 +1179,10 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
       ? uniqueOwnerParticipants.slice(0, 2)
       : uniqueInvolved;
 
-    // Imported playable swaps stay limited to the two involved natural teams.
-    // Trade-machine swaps are tradable rights: after a later trade, the current
-    // ownerTeam on the Swap Best / Swap Worst asset is the real right holder,
-    // even if that owner is no longer one of the original owner participants.
-    if (!tradeGeneratedSwap && !ownerPairNames.some((team) => isSameTeamName(team, ownerTeam))) continue;
+    // Untouched imported swaps stay limited to the two involved natural teams.
+    // Once a swap right has trade metadata, the current ownerTeam is the legal
+    // right holder even if it is now a third-party team.
+    if (!tradeGeneratedSwap && !tradedSwapRight && !ownerPairNames.some((team) => isSameTeamName(team, ownerTeam))) continue;
 
     const pairNames = uniqueInvolved;
     const pairKey = pairNames.map(normalizeTeamName).sort().join("|");
@@ -1182,15 +1194,18 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
       pairKey,
       tradeGeneratedSwap,
       assets: [],
+      hasTradedSwapRight: false,
       firstIndex: Number.POSITIVE_INFINITY,
     };
     current.ownerPairNames = ownerPairNames;
     current.tradeGeneratedSwap = Boolean(current.tradeGeneratedSwap || tradeGeneratedSwap);
+    current.hasTradedSwapRight = Boolean(current.hasTradedSwapRight || tradedSwapRight);
     current.assets.push({
       asset,
       ownerTeam,
       direction: swapDirection(asset),
       inputIndex: Number(asset.__swapInputIndex || 0),
+      ownerCanBeThirdParty: Boolean(tradeGeneratedSwap || tradedSwapRight),
     });
     current.firstIndex = Math.min(current.firstIndex, Number(asset.__swapInputIndex || 0));
     groups.set(key, current);
@@ -1226,14 +1241,14 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
     let bestOwner = bestAsset?.ownerTeam || "";
     let worstOwner = worstAsset?.ownerTeam || "";
 
-    const ownerIsAllowed = (teamName) => {
+    const ownerIsAllowed = (assetRow, teamName) => {
       if (!teamName) return false;
-      if (group.tradeGeneratedSwap) return true;
+      if (assetRow?.ownerCanBeThirdParty || group.tradeGeneratedSwap || group.hasTradedSwapRight) return true;
       return ownerPairNames.some((team) => isSameTeamName(team, teamName));
     };
 
-    if (!bestOwner || !ownerIsAllowed(bestOwner)) bestOwner = "";
-    if (!worstOwner || !ownerIsAllowed(worstOwner)) worstOwner = "";
+    if (!bestOwner || !ownerIsAllowed(bestAsset, bestOwner)) bestOwner = "";
+    if (!worstOwner || !ownerIsAllowed(worstAsset, worstOwner)) worstOwner = "";
 
     if (bestOwner && (!worstOwner || isSameTeamName(bestOwner, worstOwner))) {
       worstOwner = otherPairTeam(ownerPairNames, bestOwner);
@@ -1295,7 +1310,7 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
     // simplified two-team swap overwrite that third-party ownership. The clean
     // v10 JSON avoids these conflicts, but this keeps older saves from creating
     // hidden swap-chain corruption.
-    const thirdPartyBlocked = !group.tradeGeneratedSwap && candidates.some((row) => {
+    const thirdPartyBlocked = !group.tradeGeneratedSwap && !group.hasTradedSwapRight && candidates.some((row) => {
       const currentOwner = row.currentOwnerTeamName || row.ownerTeamName || row.teamName || "";
       const ownerInPair = group.pairNames.some((team) => isSameTeamName(team, currentOwner));
       const wasConcretePickAsset = Boolean(row.draftPickAssetId) || String(row.ownershipSource || "") === "draftPicks.pick";
@@ -1313,7 +1328,7 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
       swapProtectionLabel: "Swap Best",
       swapGroup: pairLabel,
       ownershipType: "swap_best",
-      ownershipSource: "draftPicks.swap.v5",
+      ownershipSource: "draftPicks.swap.v6",
     });
 
     nextRows = setPickRowOwnerByIdentity(nextRows, worstRow, group.owners.worstOwner, leagueData, {
@@ -1321,7 +1336,7 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
       swapProtectionLabel: "Swap Worst",
       swapGroup: pairLabel,
       ownershipType: "swap_worst",
-      ownershipSource: "draftPicks.swap.v5",
+      ownershipSource: "draftPicks.swap.v6",
     });
   }
 
@@ -1380,7 +1395,7 @@ export function applyDraftPickOwnershipToLotteryResult(result = {}, { leagueData
     secondRoundOrder,
     fullDraftOrder,
     pickOwnershipResolved: true,
-    pickOwnershipVersion: "draft_pick_ownership_v5",
+    pickOwnershipVersion: "draft_pick_ownership_v6",
   };
 }
 

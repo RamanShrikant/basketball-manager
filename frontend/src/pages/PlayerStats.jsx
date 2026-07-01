@@ -215,6 +215,8 @@ export default function PlayerStats() {
         AST: "0.0",
         STL: "0.0",
         BLK: "0.0",
+        TOV: "0.0",
+        PF: "0.0",
         FG: "0.0",
         "3P": "0.0",
         FT: "0.0",
@@ -236,6 +238,8 @@ export default function PlayerStats() {
       AST: fmtAvg(Number(rec.ast || 0) / games),
       STL: fmtAvg(Number(rec.stl || 0) / games),
       BLK: fmtAvg(Number(rec.blk || 0) / games),
+      TOV: fmtAvg(Number(rec.to ?? rec.tov ?? rec.turnovers ?? 0) / games),
+      PF: fmtAvg(Number(rec.pf ?? rec.fouls ?? 0) / games),
       FG: fmtAvg(fgPct),
       "3P": fmtAvg(tpPct),
       FT: fmtAvg(ftPct),
@@ -280,6 +284,8 @@ export default function PlayerStats() {
           ast: 0,
           stl: 0,
           blk: 0,
+          to: 0,
+          pf: 0,
           fgm: 0,
           fga: 0,
           tpm: 0,
@@ -319,6 +325,8 @@ export default function PlayerStats() {
       row.ast += Number(rec.ast || 0);
       row.stl += Number(rec.stl || 0);
       row.blk += Number(rec.blk || 0);
+      row.to += Number(rec.to ?? rec.tov ?? rec.turnovers ?? 0);
+      row.pf += Number(rec.pf ?? rec.fouls ?? 0);
       row.fgm += Number(rec.fgm || 0);
       row.fga += Number(rec.fga || 0);
       row.tpm += Number(rec.tpm || 0);
@@ -343,6 +351,8 @@ export default function PlayerStats() {
           AST: fmtAvg(t.ast / safeGp),
           STL: fmtAvg(t.stl / safeGp),
           BLK: fmtAvg(t.blk / safeGp),
+          TOV: fmtAvg(t.to / safeGp),
+          PF: fmtAvg(t.pf / safeGp),
           FG: t.fga > 0 ? fmtAvg((t.fgm / t.fga) * 100) : "0.0",
           "3P": t.tpa > 0 ? fmtAvg((t.tpm / t.tpa) * 100) : "0.0",
           FT: t.fta > 0 ? fmtAvg((t.ftm / t.fta) * 100) : "0.0",
@@ -367,6 +377,8 @@ export default function PlayerStats() {
             AST: "0.0",
             STL: "0.0",
             BLK: "0.0",
+            TOV: "0.0",
+            PF: "0.0",
             FG: "0.0",
             "3P": "0.0",
             FT: "0.0",
@@ -421,6 +433,8 @@ export default function PlayerStats() {
     { key: "AST", label: "AST" },
     { key: "STL", label: "STL" },
     { key: "BLK", label: "BLK" },
+    { key: "TOV", label: "TOV" },
+    { key: "PF", label: "PF" },
     { key: "FG", label: "FG%" },
     { key: "3P", label: "3P%" },
     { key: "FT", label: "FT%" },
@@ -437,6 +451,8 @@ export default function PlayerStats() {
     { key: "AST", label: "AST" },
     { key: "STL", label: "STL" },
     { key: "BLK", label: "BLK" },
+    { key: "TOV", label: "TOV" },
+    { key: "PF", label: "PF" },
     { key: "FG", label: "FG%" },
     { key: "3P", label: "3P%" },
     { key: "FT", label: "FT%" },
@@ -732,7 +748,7 @@ export default function PlayerStats() {
       <div className="w-full flex justify-center mt-[-1px]">
         <div className="w-full max-w-5xl overflow-x-auto no-scrollbar bmTablePanel">
           {(mode === "players" || mode === "league") && (
-            <table className="w-full border-collapse text-center text-[17px] font-medium">
+            <table className="w-full min-w-[1260px] border-collapse text-center text-[17px] font-medium">
               <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
                 <tr>
                   {mode === "league" && <th className="py-3 px-2 min-w-[60px]">Team</th>}
@@ -808,6 +824,8 @@ export default function PlayerStats() {
                     <td>{player.stats.AST}</td>
                     <td>{player.stats.STL}</td>
                     <td>{player.stats.BLK}</td>
+                    <td>{player.stats.TOV}</td>
+                    <td>{player.stats.PF}</td>
                     <td>{player.stats.FG}</td>
                     <td>{player.stats["3P"]}</td>
                     <td>{player.stats.FT}</td>
@@ -820,7 +838,7 @@ export default function PlayerStats() {
           )}
 
           {mode === "teams" && (
-            <table className="w-full border-collapse text-center text-[17px] font-medium">
+            <table className="w-full min-w-[1260px] border-collapse text-center text-[17px] font-medium">
               <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
                 <tr>
                   {teamCols.map((col) => (
@@ -880,6 +898,8 @@ export default function PlayerStats() {
                     <td>{team.stats.AST}</td>
                     <td>{team.stats.STL}</td>
                     <td>{team.stats.BLK}</td>
+                    <td>{team.stats.TOV}</td>
+                    <td>{team.stats.PF}</td>
                     <td>{team.stats.FG}</td>
                     <td>{team.stats["3P"]}</td>
                     <td>{team.stats.FT}</td>
