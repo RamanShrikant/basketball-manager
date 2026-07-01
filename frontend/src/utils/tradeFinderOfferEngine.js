@@ -1132,6 +1132,62 @@ function getComfortMargin(evaluation = {}) {
   return score - threshold;
 }
 
+function getTradeFinderEvaluationPath(profile = null) {
+  const phase = String(profile?.searchPhase || "single").toLowerCase();
+  const fastScan = shouldUseTradeFinderFastScanImpactForProfile(profile);
+  return `${fastScan ? "fast_scan" : "exact"}:${phase}`;
+}
+
+function tradeFinderEvaluationCacheKey(items = [], profile = null) {
+  return `${getTradeFinderEvaluationPath(profile)}::${packageKey(items)}`;
+}
+
+function isApproximateTradeFinderOffer(offer = {}) {
+  return Boolean(
+    offer?.approximateEvaluation ||
+      offer?.finderEvaluationMode === "fast_scan" ||
+      String(offer?.evaluation?.teamImpact?.ratingMode || "").toLowerCase() === "fast-scan" ||
+      String(offer?.evaluation?.teamImpact?.after?.ratingMode || "").toLowerCase() === "fast-scan" ||
+      String(offer?.evaluation?.teamImpact?.before?.ratingMode || "").toLowerCase() === "fast-scan"
+  );
+}
+
+function makeExactRefineEvalState({ profile = {}, sharedCache = null, sharedFinancialCache = null, teamStartedAt = 0, searchStartedAt = 0 } = {}) {
+  return {
+    cache: sharedCache || new Map(),
+    financialCache: sharedFinancialCache || new Map(),
+    count: 0,
+    profile: {
+      ...(profile || {}),
+      searchPhase: "refine",
+      name: `${profile?.name || "trade_finder"}_exact_current_offer_check`,
+      maxEvaluationsPerTeam: 1,
+      maxBasePackagesPerTeam: 1,
+      maxBalanceRounds: 0,
+      forcePickRecovery: false,
+      maxPickRecoveryCandidates: 0,
+    },
+    teamStartedAt,
+    searchStartedAt,
+    metrics: {
+      candidateMs: 0,
+      basePackageMs: 0,
+      impactMs: 0,
+      finalValidationMs: 0,
+      financialMs: 0,
+      yieldMs: 0,
+      impactCacheHits: 0,
+      preRejected: 0,
+      cacheHits: 0,
+      financialCacheHits: 0,
+      cpuRejected: 0,
+      comfortRejected: 0,
+      finalRejected: 0,
+      accepted: 0,
+    },
+  };
+}
+
 function preValidatePackage({ leagueData, selectedTeam, cpuTeam, selectedItems, cpuItems, evalState = null }) {
   if (!Array.isArray(cpuItems) || !cpuItems.length || cpuItems.length > MAX_SIDE_ITEMS) return false;
   if (!Array.isArray(selectedItems) || !selectedItems.length || selectedItems.length > MAX_SIDE_ITEMS) return false;
@@ -1159,13 +1215,15 @@ function evaluateCpuOfferPackage({ leagueData, selectedTeam, cpuTeam, selectedIt
     return null;
   }
 
-  const key = packageKey(cpuItems);
+  const key = tradeFinderEvaluationCacheKey(cpuItems, evalState?.profile);
   if (evalState?.cache?.has(key)) {
     if (evalState?.metrics) evalState.metrics.cacheHits = Number(evalState.metrics.cacheHits || 0) + 1;
     return evalState.cache.get(key);
   }
   if (evalState) evalState.count = Number(evalState.count || 0) + 1;
 
+  const finderUsedFastScan = shouldUseTradeFinderFastScanImpactForProfile(evalState?.profile);
+  const finderEvaluationPath = getTradeFinderEvaluationPath(evalState?.profile);
   const __tfImpactStart = tfDebugNow();
   const evaluation = evaluateTradeTeamImpact({
     leagueData,
@@ -1180,7 +1238,7 @@ function evaluateCpuOfferPackage({ leagueData, selectedTeam, cpuTeam, selectedIt
     cpuTradeContext: {
       source: "trade_finder_offer_engine",
       searchPhase: evalState?.profile?.searchPhase || "single",
-      tradeFinderFastScan: shouldUseTradeFinderFastScanImpactForProfile(evalState?.profile),
+      tradeFinderFastScan: finderUsedFastScan,
     },
   });
   const __tfImpactMs = tfDebugNow() - __tfImpactStart;
@@ -1246,6 +1304,10 @@ function evaluateCpuOfferPackage({ leagueData, selectedTeam, cpuTeam, selectedIt
     targetValue,
     gap: offerValue - targetValue,
     quality: comfortMargin <= TARGET_COMFORT_MARGIN + 0.22 ? "Comfort Offer" : "CPU-Lean Offer",
+    finderEvaluationMode: finderUsedFastScan ? "fast_scan" : "exact",
+    finderEvaluationPath,
+    finderSearchPhase: evalState?.profile?.searchPhase || "single",
+    approximateEvaluation: Boolean(finderUsedFastScan),
   };
 
   if (evalState?.metrics) evalState.metrics.accepted = Number(evalState.metrics.accepted || 0) + 1;
@@ -1607,6 +1669,7 @@ async function runTwoPassTradeFinderSearch({
   let __tfBudgetStopped = false;
   let refinedOffers = 0;
   let replacedByRefine = 0;
+  let removedApproximateByExactRefine = 0;
   let scanMs = 0;
   let rescueMs = 0;
   let refineMs = 0;
@@ -1840,8 +1903,59 @@ async function runTwoPassTradeFinderSearch({
 
       await tfYieldToBrowser();
 
+      const teamKey = normalizeTeamName(cpuName);
+      let exactCurrentOffer = currentOffer;
+      let removedCurrentApproximateOffer = false;
+
+      // Scan/rescue can use the fast-scan impact approximation for speed.
+      // Before a scan/rescue offer is allowed to survive the final refine list,
+      // validate that exact same offer with the Builder-style exact path.
+      // This catches cases like Cavs Mitchell + Mobley where fast-scan says
+      // accept, but Propose Trade correctly rejects by a huge margin.
+      if (isApproximateTradeFinderOffer(currentOffer)) {
+        const exactValidationStart = tfDebugNow();
+        const exactValidationState = makeExactRefineEvalState({
+          profile,
+          sharedCache: teamCache.cache,
+          sharedFinancialCache: teamCache.financialCache,
+          teamStartedAt: loopStart,
+          searchStartedAt,
+        });
+
+        exactCurrentOffer = evaluateCpuOfferPackage({
+          leagueData,
+          selectedTeam,
+          cpuTeam,
+          selectedItems,
+          cpuItems: currentOffer.offer,
+          evalState: exactValidationState,
+        });
+
+        if (!exactCurrentOffer) {
+          offersByTeam.delete(teamKey);
+          removedCurrentApproximateOffer = true;
+          removedApproximateByExactRefine += 1;
+          tfDebugLog("two-pass refine removed scan-only offer after exact check", {
+            team: cpuName,
+            exactCheckMs: tfRoundMs(tfDebugNow() - exactValidationStart),
+            startGap: tfRoundMs(currentOffer?.gap),
+            startComfortMargin: tfRoundMs(currentOffer?.comfortMargin),
+            startEvaluationPath: currentOffer?.finderEvaluationPath || currentOffer?.finderEvaluationMode || "unknown",
+          });
+        } else {
+          offersByTeam.set(teamKey, exactCurrentOffer);
+          tfDebugLog("two-pass refine exact-check kept approximate offer", {
+            team: cpuName,
+            exactCheckMs: tfRoundMs(tfDebugNow() - exactValidationStart),
+            exactGap: tfRoundMs(exactCurrentOffer?.gap),
+            exactComfortMargin: tfRoundMs(exactCurrentOffer?.comfortMargin),
+            exactEvaluationPath: exactCurrentOffer?.finderEvaluationPath || exactCurrentOffer?.finderEvaluationMode || "exact",
+          });
+        }
+      }
+
       let teamTimingSummary = null;
-      const refined = await findBestOfferForTeam({
+      const refined = removedCurrentApproximateOffer ? null : await findBestOfferForTeam({
         leagueData,
         selectedTeam,
         cpuTeam,
@@ -1866,21 +1980,21 @@ async function runTwoPassTradeFinderSearch({
       const loopSummary = makeTwoPassLoopSummary({ teamName: cpuName, loopMs, offer: refined, phase: "refine", timings: teamTimingSummary });
       refineSummaries.push(loopSummary);
 
-      const teamKey = normalizeTeamName(cpuName);
-      const current = offersByTeam.get(teamKey) || currentOffer;
+      const current = offersByTeam.get(teamKey) || exactCurrentOffer || currentOffer;
       if (refined) refinedOffers += 1;
       const replaced = shouldReplaceWithRefinedOffer(current, refined, profile);
       if (replaced) {
         offersByTeam.set(teamKey, refined);
         replacedByRefine += 1;
       }
-      const finalForTeam = offersByTeam.get(teamKey) || current;
+      const finalForTeam = offersByTeam.get(teamKey) || (removedCurrentApproximateOffer ? null : current);
       refineDeltaSummaries.push({
         team: cpuName,
         ms: tfRoundMs(loopMs),
         evaluations: loopSummary.evaluations,
         foundOffer: Boolean(refined),
         replaced,
+        removedApproximateByExactRefine: removedCurrentApproximateOffer,
         startGap: tfRoundMs(current?.gap),
         finalGap: tfRoundMs(finalForTeam?.gap),
         startPickCount: offerPickCount(current),
@@ -1893,6 +2007,7 @@ async function runTwoPassTradeFinderSearch({
         tfDebugLog("two-pass refine team", {
           ...loopSummary,
           replaced: offersByTeam.get(teamKey) === refined,
+          removedApproximateByExactRefine: removedCurrentApproximateOffer,
           startGap: tfRoundMs(current?.gap),
           finalGap: tfRoundMs((offersByTeam.get(teamKey) || current)?.gap),
           startPickCount: offerPickCount(current),
@@ -1951,6 +2066,7 @@ async function runTwoPassTradeFinderSearch({
     refineTimeBudgetMs: refineSettings.refineTimeBudgetMs,
     refinedOffers,
     replacedByRefine,
+    removedApproximateByExactRefine,
     scanEvaluations,
     rescueEvaluations,
     refineEvaluations,

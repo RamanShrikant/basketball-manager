@@ -54,6 +54,7 @@ const RATING_CACHE_MAX = 900;
 const POWER_CONTEXT_CACHE_MAX = 24;
 const TRADE_FINDER_IMPACT_CACHE_MAX = 2600;
 const TRADE_FINDER_IMPACT_MODE_KEY = "bm_trade_finder_impact_mode_v1";
+const TRADE_DEBUG_KEY = "bm_trade_debug_v1";
 const TRADE_FINDER_FAST_FTR_MODE = "fast-ftr";
 const TRADE_FINDER_FAST_SCAN_MODE = "fast-scan";
 const TRADE_FINDER_IMPACT_BREAKDOWN_KEY = "bm_trade_finder_impact_breakdown_v1";
@@ -316,6 +317,91 @@ function safeLocalStorageGet(key) {
   } catch {
     return null;
   }
+}
+
+
+function isTradeDebugEnabled() {
+  try {
+    return Boolean(
+      typeof window !== "undefined" &&
+        (window.__BM_TRADE_DEBUG || safeLocalStorageGet(TRADE_DEBUG_KEY) === "1")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function debugTradeImpactItems(items = []) {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    if (item?.type === "player") {
+      const player = item.player || {};
+      return {
+        type: "player",
+        name: getPlayerDisplayName(player),
+        ovr: toNum(player?.overall ?? player?.ovr, 0),
+        pot: toNum(player?.potential ?? player?.pot ?? player?.overall ?? player?.ovr, 0),
+        age: toNum(player?.age, 0),
+      };
+    }
+    if (item?.type === "pick") {
+      const pick = item.pick || {};
+      return {
+        type: "pick",
+        year: pick.year,
+        round: pick.round,
+        originalTeam: pick.originalTeam || pick.originalTeamName,
+        ownerTeam: pick.ownerTeam || pick.owner || pick.currentOwnerTeamName,
+        protection: item.protection || pick.displayProtection || pick.protection || "Unprotected",
+        tradeRule: item.tradeRule || pick.tradeRule || null,
+      };
+    }
+    return { type: item?.type || "unknown" };
+  });
+}
+
+function debugTradeImpactEvaluation(args = {}, result = {}, extra = {}) {
+  if (!isTradeDebugEnabled()) return;
+
+  const impact = result?.teamImpact || {};
+  const breakdown = impact?.scoreBreakdown || {};
+  const accepted = Boolean(result?.accepted || ["accept", "accepted"].includes(String(result?.decision || "").toLowerCase()));
+  const payload = {
+    source: String(args?.cpuTradeRole || "").toLowerCase() === "trade_finder" ? "Trade Finder" : "Builder / exact",
+    userTeam: args?.userTeamName || getTeamName(args?.userTeam) || "Your team",
+    cpuTeam: args?.cpuTeamName || getTeamName(args?.cpuTeam) || "CPU team",
+    cpuTradeRole: args?.cpuTradeRole || "",
+    cpuTradeContext: args?.cpuTradeContext || null,
+    evaluationMode: args?.evaluationMode || "standard",
+    cacheHit: Boolean(extra.cacheHit),
+    totalMs: extra.totalMs,
+    accepted,
+    decision: result?.decision,
+    score: Number(result?.score ?? 0),
+    threshold: Number(impact?.threshold ?? 0),
+    margin: Number(result?.score ?? 0) - Number(impact?.threshold ?? 0),
+    ratingMode: impact?.ratingMode || "",
+    fastScan: Boolean(impact?.fastScan),
+    fastFtr: Boolean(impact?.fastFtr),
+    rank: impact?.rank,
+    deltas: impact?.deltas || null,
+    scoreBreakdown: {
+      ovrScore: breakdown?.ovrScore,
+      potScore: breakdown?.potScore,
+      ftrScore: breakdown?.ftrScore,
+      pickScore: breakdown?.pickScore,
+      contractFriction: impact?.contractFriction ?? breakdown?.contractFriction,
+      starRetentionTax: impact?.starRetentionTax ?? breakdown?.starRetentionTax,
+      incomingPickValue: breakdown?.incomingPickValue,
+      outgoingPickValue: breakdown?.outgoingPickValue,
+    },
+    userItems: debugTradeImpactItems(args?.userItems || []),
+    cpuItems: debugTradeImpactItems(args?.cpuItems || []),
+    reasons: Array.isArray(result?.reasons) ? result.reasons.slice(0, 12) : [],
+  };
+
+  const label = `[TRADE DEBUG][IMPACT ${accepted ? "ACCEPT" : "REJECT"}] ${payload.source} • ${payload.cpuTeam} • score ${payload.score} / threshold ${payload.threshold}`;
+  if (accepted) console.log(label, payload);
+  else console.warn(label, payload);
 }
 
 
@@ -1727,6 +1813,7 @@ export function evaluateTradeTeamImpact(args = {}) {
         totalMs: tfImpactRoundMs(totalMs),
         metrics: Object.fromEntries(Object.entries(metrics || {}).map(([key, value]) => [key, tfImpactRoundMs(value)])),
       });
+      debugTradeImpactEvaluation(args, cached, { cacheHit: true, totalMs: tfImpactRoundMs(totalMs) });
       return {
         ...cached,
         __tfImpactCacheHit: true,
@@ -1760,6 +1847,7 @@ export function evaluateTradeTeamImpact(args = {}) {
     });
   }
 
+  debugTradeImpactEvaluation(args, result, { cacheHit: false, totalMs: tfImpactRoundMs(tfImpactNow() - totalStart) });
   return result;
 }
 

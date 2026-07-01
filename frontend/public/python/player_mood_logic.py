@@ -263,6 +263,92 @@ def get_contract_option_label(contract: Optional[Dict[str, Any]]) -> Optional[st
     return None
 
 
+def is_rookie_scale_mood_exempt(
+    player: Dict[str, Any],
+    contract: Optional[Dict[str, Any]],
+    season_year: int,
+    salary: int = 0,
+    years_left: int = 0,
+) -> bool:
+    """Block veteran-market underpaid complaints for rookie-scale players.
+
+    Rookie deals are intentionally below open-market AAV. A Y1-Y4 player should
+    care about role, minutes, development, and future security before he cares
+    about being "underpaid" against a veteran market-value estimate.
+    """
+    if not isinstance(player, dict):
+        return False
+
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    rights = player.get("rights") if isinstance(player.get("rights"), dict) else {}
+    contract_obj = contract if isinstance(contract, dict) else {}
+
+    explicit_values = [
+        player.get("rookieScale"),
+        player.get("isRookieScale"),
+        player.get("rookieScaleContract"),
+        player.get("rookieContract"),
+        meta.get("rookieScale"),
+        meta.get("isRookieScale"),
+        rights.get("rookieScale"),
+        rights.get("rookieScaleContract"),
+        contract_obj.get("rookieScale"),
+        contract_obj.get("isRookieScale"),
+        contract_obj.get("rookieScaleContract"),
+    ]
+
+    if any(value is True for value in explicit_values):
+        return True
+
+    text_values = [
+        player.get("contractType"),
+        player.get("rosterStatus"),
+        player.get("acquiredVia"),
+        meta.get("contractType"),
+        meta.get("acquiredVia"),
+        contract_obj.get("type"),
+        contract_obj.get("source"),
+        contract_obj.get("contractType"),
+    ]
+
+    if any("rookie" in str(value or "").lower() for value in text_values):
+        return True
+
+    draft_year = int(
+        num(
+            meta.get("draftYear")
+            or player.get("draftYear")
+            or player.get("draftClassYear")
+            or player.get("draftedYear"),
+            0,
+        )
+    )
+
+    if draft_year > 0:
+        years_since_draft = int(season_year) - draft_year
+        if 0 <= years_since_draft <= 4:
+            return True
+
+    raw_pro_seasons = (
+        meta.get("proSeasons")
+        if meta.get("proSeasons") not in [None, ""]
+        else player.get("proSeasons")
+    )
+    if raw_pro_seasons not in [None, ""]:
+        pro_seasons = int(num(raw_pro_seasons, 99))
+        if 0 <= pro_seasons <= 4:
+            return True
+
+    # Conservative fallback for imported rosters that do not carry draft/proYears.
+    # This catches young rookie-scale contracts like Alex Sarr without affecting
+    # veteran bargain contracts.
+    age = int(num(player.get("age"), 99))
+    if age <= 23 and int(years_left or 0) >= 2 and int(salary or 0) <= 18_000_000:
+        return True
+
+    return False
+
+
 def fallback_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
     overall = num(player.get("overall") or player.get("ovr"), 75)
     age = int(num(player.get("age"), 27))
@@ -2042,9 +2128,10 @@ def evaluate_player_mood(
             add_event(events, "Development", -4, "He may want clarity on when he joins the NBA roster.", "Currently stashed", event_type="role", duration="active")
 
     # Contract / next deal pressure.
+    rookie_scale_mood_exempt = is_rookie_scale_mood_exempt(player, contract, season_year, salary, years_left)
     if salary > 0 and expected_aav > 0:
         salary_ratio = salary / max(1, expected_aav)
-        if salary_ratio <= 0.55 and overall >= 78:
+        if salary_ratio <= 0.55 and overall >= 78 and not rookie_scale_mood_exempt:
             impact = (-11 if years_left <= 2 else -7) * (0.75 + role_weight * 0.25)
             factors["contract"] += impact
             add_event(events, "Contract", impact, "He appears underpaid compared with his current market value.", f"Salary ${salary:,}; estimated market AAV ${expected_aav:,}", event_type="contract", duration="active")

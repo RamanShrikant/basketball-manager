@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { findComfortableTradeFinderOffers, sortTradeFinderOfferItems } from "../utils/tradeFinderOfferEngine.js";
+import { evaluateTradeTeamImpact } from "../utils/tradeTeamImpact.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import PageFade from "../components/PageFade";
 import {
@@ -19,6 +20,7 @@ import "../styles/BMPageBackground.css";
 
 const TRADE_BUILDER_KEY = "bm_trade_builder_v1";
 const TRADE_FINDER_STATE_KEY = "bm_trade_finder_state_v1";
+const TRADE_DEBUG_KEY = "bm_trade_debug_v1";
 const DEFAULT_PICK_PROTECTION = "Unprotected";
 const REGULAR_SEASON_MIN_STANDARD_PLAYERS = 14;
 const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 16;
@@ -886,6 +888,114 @@ function isTradeFinderOfferAccepted(offer = {}) {
       decision === "accept" ||
       decision === "accepted"
   );
+}
+
+function isTradeDebugEnabled() {
+  try {
+    return Boolean(
+      typeof window !== "undefined" &&
+        (window.__BM_TRADE_DEBUG || localStorage.getItem(TRADE_DEBUG_KEY) === "1")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function tradeDebugItemLabel(item = {}) {
+  if (item?.type === "player") return playerNameOf(item.player);
+  if (item?.type === "pick") return `${item.protection || item.pick?.displayProtection || item.pick?.protection || DEFAULT_PICK_PROTECTION} ${formatPick(item.pick || {})}`;
+  return item?.label || item?.type || "Unknown asset";
+}
+
+function tradeDebugItems(items = [], leagueData = null) {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    if (item?.type === "player") {
+      return {
+        type: "player",
+        name: playerNameOf(item.player),
+        ovr: Number(item.player?.overall ?? item.player?.ovr ?? 0),
+        pot: Number(item.player?.potential ?? item.player?.pot ?? item.player?.overall ?? 0),
+        salaryM: Math.round((getPlayerSalary(item.player, leagueData) / 1_000_000) * 10) / 10,
+      };
+    }
+    if (item?.type === "pick") {
+      return {
+        type: "pick",
+        label: tradeDebugItemLabel(item),
+        tradeRule: item.tradeRule || item.pick?.tradeRule || null,
+      };
+    }
+    return { type: item?.type || "unknown", label: tradeDebugItemLabel(item) };
+  });
+}
+
+function tradeDebugEvaluation(evaluation = {}) {
+  const impact = evaluation?.teamImpact || {};
+  const breakdown = impact?.scoreBreakdown || {};
+  return {
+    accepted: Boolean(evaluation?.accepted || ["accept", "accepted"].includes(String(evaluation?.decision || "").toLowerCase())),
+    decision: evaluation?.decision || "",
+    score: Number(evaluation?.score ?? 0),
+    threshold: Number(impact?.threshold ?? 0),
+    margin: Number(evaluation?.score ?? 0) - Number(impact?.threshold ?? 0),
+    ratingMode: impact?.ratingMode || "",
+    fastScan: Boolean(impact?.fastScan),
+    fastFtr: Boolean(impact?.fastFtr),
+    rank: impact?.rank,
+    deltas: impact?.deltas || null,
+    pickScore: breakdown?.pickScore,
+    contractFriction: impact?.contractFriction ?? breakdown?.contractFriction,
+    starRetentionTax: impact?.starRetentionTax ?? breakdown?.starRetentionTax,
+    topReasons: Array.isArray(evaluation?.reasons) ? evaluation.reasons.slice(0, 10) : [],
+  };
+}
+
+function debugTradeFinderLoadOffer({ leagueData, selectedTeam, selectedItems, offer }) {
+  if (!isTradeDebugEnabled()) return;
+
+  try {
+    const offerTeam = findTeamInLeague(leagueData, offer?.team?.name || offer?.team?.teamName || offer?.teamName) || offer?.team;
+    const offerItems = sortTradeFinderOfferItems(offer?.offer || [], leagueData);
+    const builderEvaluation = evaluateTradeTeamImpact({
+      leagueData,
+      userTeam: selectedTeam,
+      cpuTeam: offerTeam,
+      userTeamName: selectedTeam?.name || selectedTeam?.teamName || "",
+      cpuTeamName: offerTeam?.name || offerTeam?.teamName || offer?.teamName || "",
+      userItems: selectedItems,
+      cpuItems: offerItems,
+      evaluationMode: "standard",
+      cpuTradeRole: "",
+      cpuTradeContext: { source: "trade_finder_load_offer_debug" },
+    });
+
+    const finderSummary = tradeDebugEvaluation(offer?.evaluation || {});
+    const builderSummary = tradeDebugEvaluation(builderEvaluation);
+    const mismatch = Boolean(offer?.accepted) && !builderSummary.accepted;
+    const payload = {
+      selectedTeam: selectedTeam?.name || selectedTeam?.teamName || "",
+      cpuTeam: offerTeam?.name || offerTeam?.teamName || offer?.teamName || "",
+      finderOfferMeta: {
+        quality: offer?.quality,
+        offerValue: offer?.offerValue,
+        targetValue: offer?.targetValue,
+        gap: offer?.gap,
+        comfortMargin: offer?.comfortMargin,
+        score: offer?.score,
+        accepted: offer?.accepted,
+        decision: offer?.decision,
+      },
+      finderEvaluation: finderSummary,
+      builderEvaluation: builderSummary,
+      userPackage: tradeDebugItems(selectedItems, leagueData),
+      cpuPackage: tradeDebugItems(offerItems, leagueData),
+    };
+
+    if (mismatch) console.warn("[TRADE DEBUG][LOAD OFFER MISMATCH] Finder offer will be rejected by Builder", payload);
+    else console.log("[TRADE DEBUG][LOAD OFFER] Builder comparison before navigation", payload);
+  } catch (error) {
+    console.warn("[TRADE DEBUG][LOAD OFFER] Debug comparison failed", error);
+  }
 }
 
 function getLeagueAmount(leagueData, rules, keys, fallback = 0) {
@@ -1911,6 +2021,31 @@ export default function TradeFinder() {
             offer: sortTradeFinderOfferItems(offer.offer, leagueData),
           }))
         : [];
+
+      if (isTradeDebugEnabled()) {
+        console.log("[TRADE DEBUG][FINDER RESULTS] Search finished", {
+          selectedTeam: selectedTeam?.name || selectedTeam?.teamName || "",
+          selectedValue,
+          selectedItems: tradeDebugItems(selectedItems, leagueData),
+          offerCount: nextOffers.length,
+          resultMessage: result?.message,
+          stopped: Boolean(result?.stopped),
+          offers: nextOffers.map((offer) => ({
+            cpuTeam: offer?.team?.name || offer?.team?.teamName || offer?.teamName,
+            quality: offer?.quality,
+            offerValue: offer?.offerValue,
+            targetValue: offer?.targetValue,
+            gap: offer?.gap,
+            comfortMargin: offer?.comfortMargin,
+            score: offer?.score,
+            accepted: offer?.accepted,
+            decision: offer?.decision,
+            debugBuilderAccepted: offer?.debugBuilderAccepted,
+            assets: tradeDebugItems(offer?.offer || [], leagueData),
+          })),
+        });
+      }
+
       setPythonOffers(nextOffers);
 
       if (result?.stopped) {
@@ -1942,6 +2077,8 @@ export default function TradeFinder() {
   };
 
   const loadOffer = (offer) => {
+    debugTradeFinderLoadOffer({ leagueData, selectedTeam, selectedItems, offer });
+
     saveTradeFinderState({
       selectedTeamName: selectedTeam?.name || "",
       selectedAssetKeys,

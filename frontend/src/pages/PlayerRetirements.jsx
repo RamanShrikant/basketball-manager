@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import { saveLeagueData } from "../utils/leagueStorage.js";
+import {
+  captureOffseasonMoodBaseline,
+  recordRetirementMoodEvents,
+} from "../utils/offseasonMoodEvents.js";
 import styles from "./PlayerRetirements.module.css";
 
 const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
@@ -217,17 +222,12 @@ function compactLeagueDataForRetirementStorage(leagueData) {
 function saveLeagueDataAfterRetirements(updated) {
   if (!updated) return;
 
-  try {
-    localStorage.setItem("leagueData", JSON.stringify(updated));
-    return;
-  } catch (err) {
-    console.warn("[Retirements] Full leagueData save was too large. Retrying compact save.", err);
-  }
-
-  localStorage.setItem(
-    "leagueData",
-    JSON.stringify(compactLeagueDataForRetirementStorage(updated))
-  );
+  // Keep this surgical: retirements should use the central IndexedDB league save.
+  // Do not write full leagueData directly to localStorage here, because large
+  // saves can hit browser quota and trap the offseason on the retirement step.
+  saveLeagueData(compactLeagueDataForRetirementStorage(updated)).catch((err) => {
+    console.warn("[Retirements] IndexedDB leagueData save failed after retirements.", err);
+  });
 }
 
 function SummaryCard({ label, value, tone = "neutral" }) {
@@ -263,6 +263,16 @@ export default function PlayerRetirements() {
 
   const seasonYear = getSeasonYear(workingLeagueData || leagueData);
   const offseasonState = useMemo(() => readOffseasonState(seasonYear), [seasonYear]);
+
+  useEffect(() => {
+    if (!workingLeagueData) return;
+
+    try {
+      captureOffseasonMoodBaseline(workingLeagueData, { seasonYear });
+    } catch (err) {
+      console.warn("[Retirements] Failed to capture offseason mood baseline", err);
+    }
+  }, [workingLeagueData, seasonYear]);
 
   const teamLogoMap = useMemo(() => {
     const map = {};
@@ -371,6 +381,12 @@ setError("");
 
       const statsByKey = safeJSON(localStorage.getItem(PLAYER_STATS_KEY), {}) || {};
 
+      try {
+        captureOffseasonMoodBaseline(workingLeagueData, { seasonYear });
+      } catch (err) {
+        console.warn("[Retirements] Failed to capture offseason mood baseline before run", err);
+      }
+
       const res = await runPlayerRetirements(
         workingLeagueData,
         statsByKey,
@@ -403,6 +419,15 @@ setError("");
         },
       });
 
+      try {
+        recordRetirementMoodEvents(updated, compactResult, {
+          seasonYear,
+          source: "manual_retirements",
+        });
+      } catch (err) {
+        console.warn("[Retirements] Failed to record retirement mood events", err);
+      }
+
       setWorkingLeagueData(updated);
       setRetirementResult(compactResult);
 
@@ -427,7 +452,7 @@ setError("");
 
         if (nextSelectedTeam) {
           setSelectedTeam(nextSelectedTeam);
-          localStorage.setItem("selectedTeam", JSON.stringify(nextSelectedTeam));
+          localStorage.setItem("selectedTeam", JSON.stringify(nextSelectedTeam.name));
         }
       }
 

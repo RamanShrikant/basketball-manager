@@ -7,6 +7,12 @@ import { saveLeagueData } from "../utils/leagueStorage.js";
 import { recomputeDerivedRatingsInLeague } from "../utils/playerProgressionDerived_v1.js";
 import { applyLeagueInflationForOffseason, getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
+import {
+  captureOffseasonMoodBaseline,
+  recordCompletedDraftMoodEvents,
+  recordFullOffseasonMoodEvents,
+  recordRetirementMoodEvents,
+} from "../utils/offseasonMoodEvents.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -1999,6 +2005,16 @@ export default function OffseasonHub() {
   };
 
   useEffect(() => {
+    if (!leagueData || !offseasonState?.active) return;
+
+    try {
+      captureOffseasonMoodBaseline(leagueData, { seasonYear });
+    } catch (err) {
+      console.warn("[OffseasonHub] Failed to capture offseason mood baseline", err);
+    }
+  }, [leagueData, offseasonState?.active, seasonYear]);
+
+  useEffect(() => {
     if (!leagueData || !offseasonState.retirementsComplete) return;
     if (offseasonState.leagueInflationComplete) return;
 
@@ -2122,6 +2138,15 @@ export default function OffseasonHub() {
       setLeagueData(finalizedLeagueData);
     }
 
+    try {
+      recordFullOffseasonMoodEvents(finalizedLeagueData, {
+        seasonYear,
+        source: "manual_offseason_advance",
+      });
+    } catch (err) {
+      console.warn("[OffseasonHub] Failed to record full offseason mood events", err);
+    }
+
     const next = {
       ...offseasonState,
       active: false,
@@ -2136,6 +2161,12 @@ export default function OffseasonHub() {
   };
 
   const runDevRetirements = async (workingLeague, userTeamName) => {
+    try {
+      captureOffseasonMoodBaseline(workingLeague, { seasonYear });
+    } catch (err) {
+      console.warn("[OffseasonHub Dev] Failed to capture offseason mood baseline before retirements", err);
+    }
+
     if (readOffseasonState(seasonYear).retirementsComplete) return workingLeague;
 
     if (readOffseasonState(seasonYear).retirementsDisabled) {
@@ -2199,17 +2230,28 @@ export default function OffseasonHub() {
       seasonStartYear: seasonYear,
     };
 
+    const retirementResult = {
+      ok: Boolean(res.ok),
+      skipped: Boolean(res.skipped),
+      disabled: Boolean(res.disabled),
+      seasonYear,
+      retiredPlayers: Array.isArray(res.retiredPlayers) ? res.retiredPlayers : [],
+      summary: res.summary || {},
+    };
+
     localStorage.setItem(
       RETIREMENT_RESULTS_KEY,
-      JSON.stringify({
-        ok: Boolean(res.ok),
-        skipped: Boolean(res.skipped),
-        disabled: Boolean(res.disabled),
-        seasonYear,
-        retiredPlayers: Array.isArray(res.retiredPlayers) ? res.retiredPlayers : [],
-        summary: res.summary || {},
-      })
+      JSON.stringify(retirementResult)
     );
+
+    try {
+      recordRetirementMoodEvents(updated, retirementResult, {
+        seasonYear,
+        source: "dev_retirements",
+      });
+    } catch (err) {
+      console.warn("[OffseasonHub Dev] Failed to record retirement mood events", err);
+    }
 
     updateDevOffseasonState({ retirementsComplete: true });
     return persistDevLeagueData(updated);
@@ -2364,6 +2406,12 @@ export default function OffseasonHub() {
 
     if (nextDraftState) {
       localStorage.setItem(DRAFT_STATE_KEY, JSON.stringify(nextDraftState));
+    }
+
+    try {
+      recordCompletedDraftMoodEvents(nextLeague, nextDraftState, { seasonYear });
+    } catch (err) {
+      console.warn("[OffseasonHub Dev] Failed to record offseason draft mood events", err);
     }
 
     updateDevOffseasonState({ draftComplete: true });
@@ -2844,6 +2892,15 @@ export default function OffseasonHub() {
   };
 
   const finalizeDevAdvanceToCalendar = (workingLeague) => {
+    try {
+      recordFullOffseasonMoodEvents(workingLeague, {
+        seasonYear,
+        source: "dev_full_offseason",
+      });
+    } catch (err) {
+      console.warn("[OffseasonHub Dev] Failed to record full offseason mood events", err);
+    }
+
     const nextState = {
       ...readOffseasonState(seasonYear),
       active: false,
@@ -2886,6 +2943,12 @@ export default function OffseasonHub() {
 
       const userTeamName = getSelectedTeamName(selectedTeam);
       let workingLeague = getLeagueDataSnapshot(leagueData);
+
+      try {
+        captureOffseasonMoodBaseline(workingLeague, { seasonYear });
+      } catch (err) {
+        console.warn("[OffseasonHub Dev] Failed to capture offseason mood baseline", err);
+      }
 
       if (DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU && userTeamName) {
         setDevStatus(`Dev CPU mode active: ${userTeamName} will be controlled by CPU logic for draft, options, rookie/stash decisions, free agency, RFA matching, and roster finalization.`);

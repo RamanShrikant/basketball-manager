@@ -4,6 +4,7 @@
   import * as simEngine from "../api/simEnginePy.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { applyDraftPickOwnershipToOrder, rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
+import { recordCompletedDraftMoodEvents } from "../utils/offseasonMoodEvents.js";
 
   const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
   const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
@@ -1488,6 +1489,14 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
         nextLeague = rollDraftPickAssetsForCompletedSeason(nextLeague, seasonYear);
       }
 
+      if (nextState?.completed) {
+        try {
+          recordCompletedDraftMoodEvents(nextLeague, nextState, { seasonYear });
+        } catch (err) {
+          console.warn("[Draft] Failed to record offseason draft mood events", err);
+        }
+      }
+
       setWorkingLeagueData(nextLeague);
       setDraftState(nextState);
       saveDraftState(nextState);
@@ -1618,6 +1627,13 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     const handleFinish = () => {
       if (workingLeagueData) {
         const rolledLeague = rollDraftPickAssetsForCompletedSeason(workingLeagueData, seasonYear);
+        if (draftState?.completed) {
+          try {
+            recordCompletedDraftMoodEvents(rolledLeague, draftState, { seasonYear });
+          } catch (err) {
+            console.warn("[Draft] Failed to record offseason draft mood events", err);
+          }
+        }
         setWorkingLeagueData(rolledLeague);
         persistLeagueData(rolledLeague, setLeagueData);
       }

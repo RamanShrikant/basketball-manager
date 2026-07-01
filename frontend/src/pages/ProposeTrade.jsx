@@ -23,6 +23,7 @@ import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
 const TRADE_BUILDER_KEY = "bm_trade_builder_v1";
+const TRADE_DEBUG_KEY = "bm_trade_debug_v1";
 const TRADE_DEADLINE_STATUS_KEY = "bm_trade_deadline_status_v1";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
@@ -1082,6 +1083,86 @@ function hasAcceptedEvaluation(evaluation) {
       String(evaluation?.decision || "").toLowerCase() === "accept" ||
       String(evaluation?.decision || "").toLowerCase() === "accepted"
   );
+}
+
+function isTradeDebugEnabled() {
+  try {
+    return Boolean(
+      typeof window !== "undefined" &&
+        (window.__BM_TRADE_DEBUG || localStorage.getItem(TRADE_DEBUG_KEY) === "1")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function tradeDebugItemLabel(item = {}) {
+  if (item?.type === "player") return playerNameOf(item.player);
+  if (item?.type === "pick") return `${item.protection || item.pick?.displayProtection || item.pick?.protection || "Unprotected"} ${formatPick(item.pick || {})}`;
+  return item?.label || item?.type || "Unknown asset";
+}
+
+function tradeDebugItems(items = [], leagueData = null) {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    if (item?.type === "player") {
+      return {
+        type: "player",
+        name: playerNameOf(item.player),
+        ovr: Number(item.player?.overall ?? item.player?.ovr ?? 0),
+        pot: Number(item.player?.potential ?? item.player?.pot ?? item.player?.overall ?? 0),
+        salaryM: Math.round((getPlayerSalary(item.player, leagueData) / 1_000_000) * 10) / 10,
+      };
+    }
+    if (item?.type === "pick") {
+      return {
+        type: "pick",
+        label: tradeDebugItemLabel(item),
+        tradeRule: item.tradeRule || item.pick?.tradeRule || null,
+      };
+    }
+    return { type: item?.type || "unknown", label: tradeDebugItemLabel(item) };
+  });
+}
+
+function tradeDebugEvaluation(evaluation = {}) {
+  const impact = evaluation?.teamImpact || {};
+  const breakdown = impact?.scoreBreakdown || {};
+  return {
+    accepted: hasAcceptedEvaluation(evaluation),
+    decision: evaluation?.decision || "",
+    score: Number(evaluation?.score ?? 0),
+    threshold: Number(impact?.threshold ?? 0),
+    margin: Number(evaluation?.score ?? 0) - Number(impact?.threshold ?? 0),
+    ratingMode: impact?.ratingMode || "",
+    fastScan: Boolean(impact?.fastScan),
+    fastFtr: Boolean(impact?.fastFtr),
+    rank: impact?.rank,
+    deltas: impact?.deltas || null,
+    scoreBreakdown: impact?.scoreBreakdown || null,
+    contractFriction: impact?.contractFriction ?? breakdown?.contractFriction,
+    starRetentionTax: impact?.starRetentionTax ?? breakdown?.starRetentionTax,
+    topReasons: Array.isArray(evaluation?.reasons) ? evaluation.reasons.slice(0, 12) : [],
+  };
+}
+
+function debugProposeTradeEvaluation({ result, userTeamName, cpuTeamName, userItems, cpuItems, leagueData }) {
+  if (!isTradeDebugEnabled()) return;
+
+  const summary = tradeDebugEvaluation(result);
+  const payload = {
+    userTeam: userTeamName,
+    cpuTeam: cpuTeamName,
+    evaluation: summary,
+    userPackage: tradeDebugItems(userItems, leagueData),
+    cpuPackage: tradeDebugItems(cpuItems, leagueData),
+  };
+
+  if (summary.accepted) console.log("[TRADE DEBUG][BUILDER EVALUATION ACCEPT]", payload);
+  else console.warn("[TRADE DEBUG][BUILDER EVALUATION REJECT]", payload);
+
+  try {
+    console.table([{ path: "Builder", ...summary }]);
+  } catch {}
 }
 
 function cloneTeamForTrade(team = {}) {
@@ -2644,6 +2725,7 @@ export default function ProposeTrade() {
         userItems,
         cpuItems,
       });
+      debugProposeTradeEvaluation({ result, userTeamName, cpuTeamName, userItems, cpuItems, leagueData });
       setEvaluation(result);
       setNotice(result?.message || "CPU evaluation complete.");
     } catch (error) {
