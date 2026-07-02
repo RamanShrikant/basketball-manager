@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
+import { saveLeagueData } from "../utils/leagueStorage.js";
 
 const LEAGUE_KEY = "leagueData";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
@@ -108,8 +109,17 @@ function getSeasonYear(leagueData) {
 
 function persistLeagueData(updated, setLeagueData) {
   if (!updated) return;
-  if (typeof setLeagueData === "function") setLeagueData(updated);
-  localStorage.setItem(LEAGUE_KEY, JSON.stringify(updated));
+
+  if (typeof setLeagueData === "function") {
+    setLeagueData(updated);
+  }
+
+  // Never write the full league object into localStorage. Large saves belong
+  // in IndexedDB via leagueStorage; localStorage should only hold the tiny
+  // pointer written by saveLeagueData().
+  saveLeagueData(updated).catch((err) => {
+    console.warn("[RookieSignings] IndexedDB league save failed", err);
+  });
 }
 
 function updateOffseasonState(patch) {

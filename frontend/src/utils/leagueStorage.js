@@ -541,20 +541,31 @@ function installLeagueDataLocalStorageWriteGuard() {
 
       const parsed = safeJsonParse(value, null);
 
-      if (!leagueDataSaveInProgress && leagueHasTeams(parsed)) {
+      if (leagueHasTeams(parsed)) {
         const savedAt = Date.now();
         const pointer = buildStoragePointer(parsed, savedAt);
 
-        // Keep the actual browser localStorage value tiny immediately.
+        // Never let a full league save hit localStorage, even while an
+        // IndexedDB save is already in progress. This prevents quota crashes
+        // from pages that still call localStorage.setItem("leagueData", ...).
         originalLocalStorageSetItem.call(this, key, JSON.stringify(pointer));
         updateStorageMarkers(parsed, savedAt);
 
-        saveLeagueData(parsed).catch((err) => {
-          console.warn("[leagueStorage] Redirected direct leagueData localStorage write could not save to IndexedDB.", err);
-          try {
-            writeLocalStorageFallbackMirror(parsed);
-          } catch {}
-        });
+        try {
+          if (typeof window !== "undefined") {
+            window.__leagueData = parsed;
+            window.__basketballManagerLeagueData = parsed;
+          }
+        } catch {}
+
+        if (!leagueDataSaveInProgress) {
+          saveLeagueData(parsed).catch((err) => {
+            console.warn("[leagueStorage] Redirected direct leagueData localStorage write could not save to IndexedDB.", err);
+            try {
+              writeLocalStorageFallbackMirror(parsed);
+            } catch {}
+          });
+        }
 
         return;
       }
