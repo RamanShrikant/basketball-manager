@@ -52,36 +52,50 @@ const STAR_RETENTION_TAX_BY_OVR = {
   99: [28.00, 22.96, 15.31, 8.40, 5.04, 2.32],
 };
 
-// Extra threshold when the CPU is giving up young high-potential players.
-// This does not change player value; it raises the acceptance bar on top of
-// the existing OVR/POT/team-direction logic so elite prospects are harder to steal.
-const PROSPECT_RETENTION_TAX_CAP = 28.00;
+// Extra threshold when the CPU is giving up young high-potential players or
+// young already-good core players. This does not change player value; it raises
+// the acceptance bar on top of the existing OVR/POT/team-direction logic so
+// premium young assets are genuinely hard for the user to steal.
+const PROSPECT_RETENTION_TAX_CAP = 50.00;
 const PROSPECT_RETENTION_TAX_BY_POT = [
-  { min: 99, tax: [13.50, 12.00, 9.25, 5.25, 2.25, 0.50] },
-  { min: 97, tax: [11.00, 9.75, 7.50, 4.20, 1.75, 0.35] },
-  { min: 95, tax: [8.50, 7.50, 5.75, 3.10, 1.25, 0.20] },
-  { min: 93, tax: [6.25, 5.50, 4.20, 2.20, 0.85, 0.10] },
-  { min: 91, tax: [4.25, 3.75, 2.85, 1.45, 0.50, 0.00] },
-  { min: 89, tax: [2.75, 2.40, 1.80, 0.90, 0.30, 0.00] },
-  { min: 87, tax: [1.50, 1.30, 0.95, 0.45, 0.15, 0.00] },
-  { min: 85, tax: [0.75, 0.65, 0.45, 0.20, 0.05, 0.00] },
+  { min: 99, tax: [21.00, 18.00, 14.25, 9.00, 4.50, 0.90] },
+  { min: 97, tax: [16.50, 14.50, 11.50, 7.25, 3.35, 0.60] },
+  { min: 95, tax: [12.50, 11.00, 8.50, 5.25, 2.40, 0.35] },
+  { min: 93, tax: [9.00, 8.00, 6.10, 3.60, 1.55, 0.18] },
+  { min: 91, tax: [6.00, 5.25, 4.00, 2.35, 0.85, 0.05] },
+  { min: 89, tax: [3.90, 3.35, 2.50, 1.30, 0.45, 0.00] },
+  { min: 87, tax: [2.10, 1.75, 1.25, 0.62, 0.20, 0.00] },
+  { min: 85, tax: [0.95, 0.80, 0.58, 0.28, 0.08, 0.00] },
 ];
 const PROSPECT_GAP_TAX_BY_GAP = [
-  { min: 21, tax: 3.25 },
-  { min: 16, tax: 2.50 },
-  { min: 12, tax: 1.75 },
-  { min: 8, tax: 1.00 },
-  { min: 4, tax: 0.50 },
+  { min: 21, tax: 5.50 },
+  { min: 16, tax: 4.25 },
+  { min: 12, tax: 2.85 },
+  { min: 8, tax: 1.60 },
+  { min: 4, tax: 0.75 },
 ];
-const PROSPECT_RETENTION_STACK_WEIGHTS = [1.00, 0.50, 0.25];
-const PROSPECT_RETENTION_STACK_FALLBACK = 0.10;
+const YOUNG_CORE_RETENTION_TAX_BY_OVR = [
+  { min: 92, tax: [20.00, 18.25, 16.00, 13.25, 8.00, 2.25] },
+  { min: 90, tax: [15.25, 13.85, 12.15, 10.30, 6.25, 1.45] },
+  { min: 88, tax: [11.50, 10.50, 9.25, 7.95, 4.65, 0.95] },
+  { min: 86, tax: [7.25, 6.60, 5.85, 5.05, 2.80, 0.45] },
+  { min: 84, tax: [3.00, 2.55, 2.10, 1.60, 0.80, 0.00] },
+];
+const YOUNG_CORE_POT_KICKER_BY_POT = [
+  { min: 98, tax: 6.25 },
+  { min: 95, tax: 4.75 },
+  { min: 92, tax: 3.20 },
+  { min: 89, tax: 2.25 },
+];
+const PROSPECT_RETENTION_STACK_WEIGHTS = [1.00, 0.68, 0.38];
+const PROSPECT_RETENTION_STACK_FALLBACK = 0.16;
 
 // Extra threshold only for bad/rebuilding CPU teams sending their own valuable
-// first. Existing pick value/protection logic remains untouched; this is just
-// additional retention pain layered on top.
-const OWN_FIRST_RETENTION_TAX_CAP = 14.00;
-const OWN_FIRST_RETENTION_STACK_WEIGHTS = [1.00, 0.60, 0.30];
-const OWN_FIRST_RETENTION_STACK_FALLBACK = 0.10;
+// firsts or exposing their own first through swaps. Existing pick value/protection
+// logic remains untouched; this is just additional retention pain layered on top.
+const OWN_FIRST_RETENTION_TAX_CAP = 42.00;
+const OWN_FIRST_RETENTION_STACK_WEIGHTS = [1.00, 0.70, 0.45];
+const OWN_FIRST_RETENTION_STACK_FALLBACK = 0.20;
 const RATING_CACHE_MAX = 900;
 const POWER_CONTEXT_CACHE_MAX = 24;
 const TRADE_FINDER_IMPACT_CACHE_MAX = 2600;
@@ -1448,13 +1462,23 @@ function getProspectRetentionAgeBucket(ageValue) {
   return 5;
 }
 
+function getYoungCoreRetentionAgeBucket(ageValue) {
+  const age = Math.round(toNum(ageValue, 27));
+  if (age <= 21) return 0;
+  if (age <= 22) return 1;
+  if (age <= 23) return 2;
+  if (age <= 24) return 3;
+  if (age <= 25) return 4;
+  return 5;
+}
+
 function getProspectRetentionTeamMultiplier(rankValue) {
   const rank = clamp(Math.round(toNum(rankValue, 15)), 1, 30);
-  if (rank <= 5) return 0.85;
-  if (rank <= 10) return 0.95;
-  if (rank <= 18) return 1.00;
-  if (rank <= 24) return 1.25;
-  return 1.50;
+  if (rank <= 5) return 0.90;
+  if (rank <= 10) return 1.00;
+  if (rank <= 18) return 1.08;
+  if (rank <= 24) return 1.45;
+  return 1.90;
 }
 
 function getProspectRetentionTeamType(rankValue) {
@@ -1472,21 +1496,66 @@ function getProspectGapBonus(gapValue) {
   return row ? Number(row.tax || 0) : 0;
 }
 
-function getCpuOutgoingProspectRetentionTaxForPlayer(player = {}, powerRank = 15) {
-  const potential = clamp(Math.round(toNum(player?.potential ?? player?.pot ?? player?.overall ?? player?.ovr, 0)), 0, 99);
-  if (potential < 85) return null;
+function getPotentialKicker(potentialValue) {
+  const potential = clamp(Math.round(toNum(potentialValue, 0)), 0, 99);
+  const row = YOUNG_CORE_POT_KICKER_BY_POT.find((entry) => potential >= entry.min);
+  return row ? Number(row.tax || 0) : 0;
+}
 
-  const overall = clamp(Math.round(toNum(player?.overall ?? player?.ovr, 0)), 0, 99);
-  const age = Math.round(toNum(player?.age, 27));
-  const ageBucket = getProspectRetentionAgeBucket(age);
+function getHighPotentialRetentionSubtotal({ potential, overall, age }) {
   const potRow = PROSPECT_RETENTION_TAX_BY_POT.find((entry) => potential >= entry.min);
+  if (!potRow) return null;
+  const ageBucket = getProspectRetentionAgeBucket(age);
   const baseTax = Number(potRow?.tax?.[ageBucket] || 0);
   if (baseTax <= TEAM_IMPACT_EPS) return null;
-
   const gap = Math.max(0, potential - overall);
   const gapBonus = getProspectGapBonus(gap);
+  const subtotal = round4(baseTax + gapBonus);
+  if (subtotal <= TEAM_IMPACT_EPS) return null;
+  return {
+    taxType: "high-potential",
+    subtotal,
+    baseTax: round4(baseTax),
+    gapBonus: round4(gapBonus),
+    potKicker: 0,
+    potGap: gap,
+  };
+}
+
+function getYoungCoreRetentionSubtotal({ potential, overall, age }) {
+  const coreRow = YOUNG_CORE_RETENTION_TAX_BY_OVR.find((entry) => overall >= entry.min);
+  if (!coreRow) return null;
+  const ageBucket = getYoungCoreRetentionAgeBucket(age);
+  const baseTax = Number(coreRow?.tax?.[ageBucket] || 0);
+  if (baseTax <= TEAM_IMPACT_EPS) return null;
+  const potKicker = getPotentialKicker(potential);
+  const subtotal = round4(baseTax + potKicker);
+  if (subtotal <= TEAM_IMPACT_EPS) return null;
+  return {
+    taxType: "young-core",
+    subtotal,
+    baseTax: round4(baseTax),
+    gapBonus: 0,
+    potKicker: round4(potKicker),
+    potGap: Math.max(0, potential - overall),
+  };
+}
+
+function getCpuOutgoingProspectRetentionTaxForPlayer(player = {}, powerRank = 15) {
+  const potential = clamp(Math.round(toNum(player?.potential ?? player?.pot ?? player?.overall ?? player?.ovr, 0)), 0, 99);
+  const overall = clamp(Math.round(toNum(player?.overall ?? player?.ovr, 0)), 0, 99);
+  const age = Math.round(toNum(player?.age, 27));
+
+  const highPotential = getHighPotentialRetentionSubtotal({ potential, overall, age });
+  const youngCore = getYoungCoreRetentionSubtotal({ potential, overall, age });
+  const chosen = [highPotential, youngCore]
+    .filter(Boolean)
+    .sort((a, b) => b.subtotal - a.subtotal)[0] || null;
+
+  if (!chosen) return null;
+
   const teamMultiplier = getProspectRetentionTeamMultiplier(powerRank);
-  const tax = round4((baseTax + gapBonus) * teamMultiplier);
+  const tax = round4(chosen.subtotal * teamMultiplier);
   if (tax <= TEAM_IMPACT_EPS) return null;
 
   return {
@@ -1494,10 +1563,13 @@ function getCpuOutgoingProspectRetentionTaxForPlayer(player = {}, powerRank = 15
     overall,
     potential,
     age,
-    ageBucket,
-    potGap: gap,
-    baseTax: round4(baseTax),
-    gapBonus: round4(gapBonus),
+    ageBucket: chosen.taxType === "young-core" ? getYoungCoreRetentionAgeBucket(age) : getProspectRetentionAgeBucket(age),
+    potGap: Math.max(0, potential - overall),
+    taxType: chosen.taxType,
+    baseTax: round4(chosen.baseTax),
+    gapBonus: round4(chosen.gapBonus),
+    potKicker: round4(chosen.potKicker),
+    preMultiplierTax: round4(chosen.subtotal),
     teamMultiplier: round4(teamMultiplier),
     tax,
   };
@@ -1520,14 +1592,20 @@ function evaluateCpuOutgoingProspectRetentionTax(players = [], powerRank = 15, c
   const teamType = getProspectRetentionTeamType(powerRank);
   const extraCount = Math.max(0, rows.length - 1);
   const extraText = extraCount > 0
-    ? `, with reduced stacking credit for ${extraCount} other outgoing high-potential player${extraCount === 1 ? "" : "s"}`
+    ? `, with reduced stacking credit for ${extraCount} other outgoing premium young asset${extraCount === 1 ? "" : "s"}`
     : "";
+  const kindText = primary.taxType === "young-core" ? "core-player" : "high-potential prospect";
+  const kickerText = primary.taxType === "young-core" && primary.potKicker > TEAM_IMPACT_EPS
+    ? `, including a +${primary.potKicker.toFixed(2)} POT kicker`
+    : primary.gapBonus > TEAM_IMPACT_EPS
+      ? `, including a +${primary.gapBonus.toFixed(2)} POT-gap bonus`
+      : "";
 
   return {
     tax,
     rows,
     reasons: [
-      `CPU prospect-retention tax: +${tax.toFixed(2)} threshold because ${cpuTeamName} is a ${teamType} giving up ${primary.playerName}, a ${primary.overall} OVR / ${primary.potential} POT age-${primary.age} prospect${primary.potGap > 0 ? ` with a +${primary.potGap} POT gap` : ""}${extraText}.`,
+      `CPU ${kindText} retention tax: +${tax.toFixed(2)} threshold because ${cpuTeamName} is a ${teamType} giving up ${primary.playerName}, a ${primary.overall} OVR / ${primary.potential} POT age-${primary.age} ${kindText}${primary.potGap > 0 ? ` with a +${primary.potGap} POT gap` : ""}${kickerText}${extraText}.`,
     ],
   };
 }
@@ -1535,8 +1613,8 @@ function evaluateCpuOutgoingProspectRetentionTax(players = [], powerRank = 15, c
 function getOwnFirstRetentionTeamMultiplier(rankValue) {
   const rank = clamp(Math.round(toNum(rankValue, 15)), 1, 30);
   if (rank <= 18) return 0;
-  if (rank <= 24) return 1.25;
-  return 1.50;
+  if (rank <= 24) return 1.55;
+  return 2.00;
 }
 
 function getOwnFirstRetentionTeamType(rankValue) {
@@ -1550,19 +1628,111 @@ function getOwnFirstRetentionBaseTax(expectedSlotValue) {
   const rawSlot = Number(expectedSlotValue || 0);
   if (!Number.isFinite(rawSlot) || rawSlot <= 0) return 0;
   const slot = clamp(rawSlot, 1, 30);
-  if (slot <= 4) return 4.00;
-  if (slot <= 8) return 3.25;
-  if (slot <= 14) return 2.25;
-  if (slot <= 20) return 1.00;
-  if (slot <= 30) return 0.25;
+  if (slot <= 4) return 8.00;
+  if (slot <= 8) return 6.25;
+  if (slot <= 14) return 4.25;
+  if (slot <= 20) return 2.00;
+  if (slot <= 30) return 0.75;
   return 0;
+}
+
+function getOwnFirstRetentionBaseTaxFromValue(value) {
+  const n = Math.abs(Number(value || 0));
+  if (!Number.isFinite(n) || n <= TEAM_IMPACT_EPS) return 0;
+  if (n >= 7.00) return 8.00;
+  if (n >= 5.00) return 6.25;
+  if (n >= 3.00) return 4.25;
+  if (n >= 1.35) return 2.00;
+  return 0.75;
+}
+
+function estimateOwnFirstRetentionSlotFromValue(value) {
+  const n = Math.abs(Number(value || 0));
+  if (!Number.isFinite(n) || n <= TEAM_IMPACT_EPS) return 0;
+  if (n >= 7.00) return 3;
+  if (n >= 5.00) return 7;
+  if (n >= 3.00) return 12;
+  if (n >= 1.35) return 18;
+  return 25;
+}
+
+function isSwapLikeDraftAsset(row = {}) {
+  return Boolean(row?.recipientDirection) || Boolean(row?.existingSwapAssetFullValue) || Boolean(row?.freeOptionFloorApplied);
+}
+
+function getSwapRetentionRiskFactor(row = {}) {
+  if (row?.freeOptionFloorApplied) return 0.18;
+  const direction = String(row?.recipientDirection || "").toLowerCase();
+  if (direction === "best") return 0.65;
+  if (direction === "worst") return 0.40;
+  return row?.existingSwapAssetFullValue ? 0.40 : 0.25;
 }
 
 function isOutgoingOwnFirstPick(row = {}, cpuTeamName = "") {
   if (!row || Number(row.round) !== 1) return false;
-  if (row.recipientDirection || row.existingSwapAssetFullValue || row.freeOptionFloorApplied) return false;
+  if (isSwapLikeDraftAsset(row)) return false;
   const originalTeam = row.originalTeam || row.originalTeamName || row.teamName || row.team || "";
   return sameTeamName(originalTeam, cpuTeamName);
+}
+
+function isOutgoingOwnSwapExposure(row = {}, cpuTeamName = "") {
+  if (!row || Number(row.round) !== 1) return false;
+  if (!isSwapLikeDraftAsset(row)) return false;
+
+  const directTeams = [
+    row.originalTeam,
+    row.originalTeamName,
+    row.teamName,
+    row.team,
+    row.ownerTeam,
+    row.owner,
+  ].filter(Boolean);
+  if (directTeams.some((team) => sameTeamName(team, cpuTeamName))) return true;
+
+  const reasonNorm = normalizeName(row.reason || "");
+  const cpuNorm = normalizeName(cpuTeamName);
+  // Existing swap rows often only retain the reason text after valuation. If the
+  // bad CPU owns/sends the swap, tax it as future first exposure so swaps cannot
+  // become an easy workaround around the own-pick tax.
+  return Boolean(cpuNorm && reasonNorm.includes(cpuNorm));
+}
+
+function getRetentionRowForPickAsset(row = {}, teamMultiplier = 0, cpuTeamName = "CPU team") {
+  if (teamMultiplier <= 0 || Number(row?.round) !== 1) return null;
+
+  const isOwnFirst = isOutgoingOwnFirstPick(row, cpuTeamName);
+  const isOwnSwap = isOutgoingOwnSwapExposure(row, cpuTeamName);
+  if (!isOwnFirst && !isOwnSwap) return null;
+
+  const valueForEstimate = Math.abs(Number(row.adjustedValue ?? row.value ?? 0));
+  const rawExpectedSlot = Number(row.expectedSlot || row.pickNumber || row.slot || 0);
+  const expectedSlot = Number.isFinite(rawExpectedSlot) && rawExpectedSlot > 0
+    ? clamp(rawExpectedSlot, 1, 30)
+    : estimateOwnFirstRetentionSlotFromValue(valueForEstimate);
+  const slotBaseTax = getOwnFirstRetentionBaseTax(expectedSlot);
+  const valueBaseTax = getOwnFirstRetentionBaseTaxFromValue(valueForEstimate);
+  const baseBeforeRisk = Math.max(slotBaseTax, valueBaseTax);
+  const swapRiskFactor = isOwnSwap ? getSwapRetentionRiskFactor(row) : 1.00;
+  const baseTax = round4(baseBeforeRisk * swapRiskFactor);
+  const tax = round4(baseTax * teamMultiplier);
+  if (tax <= TEAM_IMPACT_EPS) return null;
+
+  return {
+    year: row.year,
+    round: row.round,
+    originalTeam: row.originalTeam || row.originalTeamName || row.teamName || row.team || cpuTeamName,
+    expectedSlot: round4(expectedSlot),
+    baseTax: round4(baseTax),
+    baseBeforeRisk: round4(baseBeforeRisk),
+    teamMultiplier: round4(teamMultiplier),
+    swapRiskFactor: round4(swapRiskFactor),
+    assetKind: isOwnSwap ? "own-swap exposure" : "own first",
+    tax,
+    protectionText: row.protectionText,
+    adjustedValue: row.adjustedValue,
+    value: row.value,
+    recipientDirection: row.recipientDirection,
+  };
 }
 
 function evaluateCpuOutgoingOwnFirstRetentionTax(pickImpact = {}, powerRank = 15, cpuTeamName = "CPU team") {
@@ -1570,25 +1740,8 @@ function evaluateCpuOutgoingOwnFirstRetentionTax(pickImpact = {}, powerRank = 15
   if (teamMultiplier <= 0) return { tax: 0, rows: [], reasons: [] };
 
   const rows = (Array.isArray(pickImpact?.outgoing) ? pickImpact.outgoing : [])
-    .filter((row) => isOutgoingOwnFirstPick(row, cpuTeamName))
-    .map((row) => {
-      const rawExpectedSlot = Number(row.expectedSlot || row.pickNumber || row.slot || 0);
-      const expectedSlot = Number.isFinite(rawExpectedSlot) && rawExpectedSlot > 0 ? clamp(rawExpectedSlot, 1, 30) : 0;
-      const baseTax = getOwnFirstRetentionBaseTax(expectedSlot);
-      const tax = round4(baseTax * teamMultiplier);
-      return {
-        year: row.year,
-        round: row.round,
-        originalTeam: row.originalTeam,
-        expectedSlot: round4(expectedSlot),
-        baseTax: round4(baseTax),
-        teamMultiplier: round4(teamMultiplier),
-        tax,
-        protectionText: row.protectionText,
-        adjustedValue: row.adjustedValue,
-      };
-    })
-    .filter((row) => row.tax > TEAM_IMPACT_EPS)
+    .map((row) => getRetentionRowForPickAsset(row, teamMultiplier, cpuTeamName))
+    .filter(Boolean)
     .sort((a, b) => b.tax - a.tax);
 
   if (!rows.length) return { tax: 0, rows, reasons: [] };
@@ -1602,14 +1755,18 @@ function evaluateCpuOutgoingOwnFirstRetentionTax(pickImpact = {}, powerRank = 15
   const teamType = getOwnFirstRetentionTeamType(powerRank);
   const extraCount = Math.max(0, rows.length - 1);
   const extraText = extraCount > 0
-    ? `, with reduced stacking credit for ${extraCount} other outgoing own first${extraCount === 1 ? "" : "s"}`
+    ? `, with reduced stacking credit for ${extraCount} other outgoing own future asset${extraCount === 1 ? "" : "s"}`
+    : "";
+  const kindText = primary.assetKind === "own-swap exposure" ? "own-swap retention" : "own-first retention";
+  const swapText = primary.assetKind === "own-swap exposure"
+    ? ` through ${primary.recipientDirection || "first-round"} swap exposure at a ${primary.swapRiskFactor.toFixed(2)}x swap-risk factor`
     : "";
 
   return {
     tax,
     rows,
     reasons: [
-      `CPU own-first retention tax: +${tax.toFixed(2)} threshold because ${cpuTeamName} is a ${teamType} giving up its own ${primary.year || "future"} 1st projected around pick #${primary.expectedSlot.toFixed(2)}${extraText}.`,
+      `CPU ${kindText} tax: +${tax.toFixed(2)} threshold because ${cpuTeamName} is a ${teamType} giving up its own ${primary.year || "future"} 1st${swapText}, projected around pick #${primary.expectedSlot.toFixed(2)}${extraText}.`,
     ],
   };
 }
