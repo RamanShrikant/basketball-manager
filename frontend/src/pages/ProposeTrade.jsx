@@ -2486,7 +2486,10 @@ export default function ProposeTrade() {
   });
   const [slotMenu, setSlotMenu] = useState(null);
   const [notice, setNotice] = useState("");
-  const [evaluation, setEvaluation] = useState(null);
+  const [evaluation, setEvaluation] = useState(() => {
+    const saved = safeReadBuilder();
+    return saved?.source === "tradeFinder" && saved?.tradeFinderEvaluation ? saved.tradeFinderEvaluation : null;
+  });
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deadlineStatus, setDeadlineStatus] = useState(() => readTradeDeadlineStatus());
@@ -2522,6 +2525,13 @@ export default function ProposeTrade() {
   );
   const topBackLabel = cameFromTradeFinder ? "← Trade Finder Results" : "← Trade Center";
   const topBackPath = cameFromTradeFinder ? "/trade-finder" : "/trades";
+
+  useEffect(() => {
+    if (builder?.source === "tradeFinder" && builder?.tradeFinderEvaluation) {
+      setEvaluation(builder.tradeFinderEvaluation);
+      setNotice("Loaded accepted Trade Finder offer. Change any asset to ask the CPU again.");
+    }
+  }, [builder?.source, builder?.updatedAt]);
 
   useEffect(() => {
     if (!userTeamName) return;

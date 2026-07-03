@@ -143,6 +143,10 @@ const SMART_ROTATION_BREAKDOWN_KEY = "bm_smart_rotation_breakdown_v1";
 
 const smartRotationCache = new Map();
 const fullTeamRatingCache = new Map();
+
+export function resetFullTeamRatingCache() {
+  fullTeamRatingCache.clear();
+}
 const potentialRatingCache = new Map();
 
 let activeSmartRotationBreakdownRow = null;

@@ -3,6 +3,7 @@ import { computeTeamRatings } from "../api/teamRatings.js";
 import {
   GAMEPLAN_VERSION,
   buildFullTeamRating,
+  resetFullTeamRatingCache,
   buildSmartRotation,
   calculateTeamPotentialRating,
 } from "./ensureGameplans.js";
@@ -64,6 +65,14 @@ const rosterRatingCache = new Map();
 const rankOnlyRatingCache = new Map();
 const powerContextCache = new Map();
 const tradeFinderImpactCache = new Map();
+
+export function resetTradeFinderImpactSearchCaches({ keepPowerContext = true } = {}) {
+  rosterRatingCache.clear();
+  rankOnlyRatingCache.clear();
+  tradeFinderImpactCache.clear();
+  try { resetFullTeamRatingCache(); } catch {}
+  if (!keepPowerContext) powerContextCache.clear();
+}
 
 const round4 = (value) => Math.round(Number(value || 0) * 10000) / 10000;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -843,29 +852,75 @@ function estimateTradeFinderFastScanPotential(valid = [], exactOverall = 0) {
 function calculateTradeFinderFastScanRatings(valid = [], metrics = null, rolePrefix = "rating") {
   const totalStart = tfImpactNow();
 
-  const minutesStart = tfImpactNow();
-  const minutes = buildTradeFinderFastScanMinutes(valid);
-  addBreakdownMetric(metrics, `${rolePrefix}FastScanMinutesMs`, tfImpactNow() - minutesStart);
+  // Trade Finder scan mode is allowed to be approximate because every displayed
+  // offer is exact-confirmed later. Avoid computeTeamRatings here: the old scan
+  // still rebuilt rotations/ratings for every candidate and made one leaguewide
+  // search take several minutes. This pure weighted-top-rotation estimate gives
+  // the package builder a stable ordering in milliseconds.
+  const rows = (valid || [])
+    .filter((player) => player && (player.name || player.player))
+    .map((player) => {
+      const overall = tradeFinderFastPlayerOverall(player);
+      const off = toNum(player?.offRating ?? player?.off ?? overall, overall);
+      const def = toNum(player?.defRating ?? player?.def ?? overall, overall);
+      const pot = tradeFinderFastPlayerPotential(player);
+      const stamina = toNum(player?.stamina ?? player?.sta, 75);
+      const blended = overall * 0.72 + off * 0.12 + def * 0.12 + (stamina - 75) * 0.04;
+      return { player, overall, off, def, pot, blended };
+    })
+    .sort((a, b) => b.blended - a.blended || b.overall - a.overall);
 
-  const ratingsStart = tfImpactNow();
-  const ratings = computeTeamRatings({ players: valid }, minutes);
-  addBreakdownMetric(metrics, `${rolePrefix}FastScanTeamRatingsMs`, tfImpactNow() - ratingsStart);
+  if (!rows.length) {
+    addBreakdownMetric(metrics, `${rolePrefix}RatingTotalMs`, tfImpactNow() - totalStart);
+    return {
+      exactOverall: 0,
+      exactOff: 0,
+      exactDef: 0,
+      exactPot: 0,
+      exactFtr: 0,
+      displayOverall: 0,
+      displayPot: 0,
+      displayFtr: 0,
+      ratingMode: TRADE_FINDER_FAST_SCAN_MODE,
+    };
+  }
 
-  const exactOverall = round4(ratings?.exactOverall ?? ratings?.overall ?? 0);
-  const potentialStart = tfImpactNow();
-  const exactPot = estimateTradeFinderFastScanPotential(valid, exactOverall);
-  addBreakdownMetric(metrics, `${rolePrefix}FastScanPotentialMs`, tfImpactNow() - potentialStart);
+  const weights = [1.0, 0.94, 0.88, 0.82, 0.76, 0.52, 0.44, 0.36, 0.30, 0.24];
+  const weightedAvg = (selector) => {
+    let sum = 0;
+    let weightSum = 0;
+    rows.slice(0, weights.length).forEach((row, idx) => {
+      const weight = weights[idx] || 0;
+      sum += Number(selector(row) || 0) * weight;
+      weightSum += weight;
+    });
+    return weightSum > 0 ? sum / weightSum : 0;
+  };
+
+  const top1 = Number(rows[0]?.overall || 0);
+  const top2 = weightedAvg((row) => row.overall);
+  const topOff = weightedAvg((row) => row.off);
+  const topDef = weightedAvg((row) => row.def);
+  const topPot = weightedAvg((row) => row.pot);
+  const depth = rows.slice(5, 10).reduce((sum, row) => sum + Number(row.overall || 0), 0) / Math.max(1, rows.slice(5, 10).length || 1);
+
+  const exactOverall = round4(clamp(top2 * 0.86 + top1 * 0.10 + depth * 0.04, 0, 99));
+  const exactOff = round4(clamp(topOff * 0.90 + exactOverall * 0.10, 0, 99));
+  const exactDef = round4(clamp(topDef * 0.90 + exactOverall * 0.10, 0, 99));
+  const exactPot = round4(clamp(topPot * 0.88 + exactOverall * 0.12, 0, 99));
+
+  addBreakdownMetric(metrics, `${rolePrefix}FastScanPureRows`, rows.length);
   addBreakdownMetric(metrics, `${rolePrefix}RatingTotalMs`, tfImpactNow() - totalStart);
 
   return {
     exactOverall,
-    exactOff: round4(ratings?.exactOff ?? ratings?.off ?? 0),
-    exactDef: round4(ratings?.exactDef ?? ratings?.def ?? 0),
+    exactOff,
+    exactDef,
     exactPot,
     exactFtr: exactOverall,
-    displayOverall: toNum(ratings?.overall, Math.round(exactOverall || 0)),
+    displayOverall: Math.round(exactOverall),
     displayPot: Math.round(exactPot),
-    displayFtr: toNum(ratings?.overall, Math.round(exactOverall || 0)),
+    displayFtr: Math.round(exactOverall),
     ratingMode: TRADE_FINDER_FAST_SCAN_MODE,
   };
 }
@@ -1460,8 +1515,13 @@ function genericPickScoreForCpu(userItems = [], cpuItems = []) {
 function genericPickImpactForCpu(userItems = [], cpuItems = []) {
   const incomingItems = getPrimaryTradePickItems(userItems);
   const outgoingItems = getPrimaryTradePickItems(cpuItems);
+  const bestIncomingPlayerOvr = (userItems || [])
+    .filter((item) => item?.type === "player")
+    .reduce((max, item) => Math.max(max, toNum(item.player?.overall ?? item.player?.ovr, 0)), 0);
+  const starPickCostDiscount = bestIncomingPlayerOvr >= 92 ? 0.42 : bestIncomingPlayerOvr >= 88 ? 0.62 : bestIncomingPlayerOvr >= 84 ? 0.78 : 1;
   const incomingValue = round4(incomingItems.reduce((sum, item) => sum + genericPickValue(item), 0));
-  const outgoingValue = round4(outgoingItems.reduce((sum, item) => sum + genericPickValue(item), 0));
+  const outgoingValue = round4(outgoingItems.reduce((sum, item) => sum + genericPickValue(item), 0) * starPickCostDiscount);
+  const outgoingBaseValue = round4(outgoingItems.reduce((sum, item) => sum + genericPickValue(item), 0));
   const netPickScore = round4(incomingValue - outgoingValue);
 
   const reasons = [];
@@ -1476,7 +1536,7 @@ function genericPickImpactForCpu(userItems = [], cpuItems = []) {
     incomingValue,
     incomingBaseValue: incomingValue,
     outgoingValue,
-    outgoingBaseValue: outgoingValue,
+    outgoingBaseValue,
     incoming: [],
     outgoing: [],
     reasons,

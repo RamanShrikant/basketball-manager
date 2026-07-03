@@ -722,11 +722,14 @@ function playerValue(player, leagueData) {
   const potential = Number(player?.potential || overall || 0);
   const age = Number(player?.age || 27);
   const salaryM = getPlayerSalary(player, leagueData) / 1_000_000;
-  const primeBonus = age <= 25 ? 10 : age <= 28 ? 6 : age <= 31 ? 2 : -3;
-  const contractPenalty = Math.max(0, salaryM - 18) * 0.45;
-  const starBonus = overall >= 90 ? 18 : overall >= 85 ? 8 : overall >= 80 ? 3 : 0;
+  const ratingValue = Math.max(2, (overall - 60) * 2.4);
+  const potentialBonus = Math.max(-8, potential - overall) * 1.2;
+  const ageBonus = age <= 22 ? 9 : age <= 25 ? 7 : age <= 28 ? 4 : age <= 31 ? 1.5 : age <= 34 ? -2 : -6;
+  const contractPenalty = Math.max(0, salaryM - 18) * 0.42;
+  const bargainBonus = overall >= 76 && salaryM > 0 && salaryM <= 8 ? 6 : 0;
+  const starBonus = overall >= 95 ? 42 : overall >= 92 ? 34 : overall >= 90 ? 26 : overall >= 85 ? 12 : overall >= 80 ? 5 : 0;
 
-  return Math.max(1, overall * 0.72 + potential * 0.42 + primeBonus + starBonus - contractPenalty);
+  return Math.max(1, ratingValue + potentialBonus + ageBonus + starBonus + bargainBonus - contractPenalty);
 }
 
 function pickValue(pick, protection = DEFAULT_PICK_PROTECTION, leagueData = null) {
@@ -1270,7 +1273,7 @@ function filterLegalAcceptedTradeFinderOffers({ offers = [], leagueData, selecte
   );
 }
 
-function saveTradeBuilderFromOffer({ selectedTeam, offerTeam, selectedItems, offerItems }) {
+function saveTradeBuilderFromOffer({ selectedTeam, offerTeam, selectedItems, offerItems, offer = null }) {
   const userItems = selectedItems.map((item) => {
     if (item.type === "player") return { type: "player", player: item.player };
     return {
@@ -1302,6 +1305,18 @@ function saveTradeBuilderFromOffer({ selectedTeam, offerTeam, selectedItems, off
       cpuTeamName: offerTeam?.name || "",
       userItems,
       cpuItems,
+      tradeFinderEvaluation: offer?.evaluation || null,
+      tradeFinderOfferMeta: offer
+        ? {
+            quality: offer.quality,
+            offerValue: offer.offerValue,
+            targetValue: offer.targetValue,
+            gap: offer.gap,
+            comfortMargin: offer.comfortMargin,
+            finderEvaluationMode: offer.finderEvaluationMode,
+            finderSearchPhase: offer.finderSearchPhase,
+          }
+        : null,
       updatedAt: Date.now(),
     })
   );
@@ -1441,7 +1456,7 @@ function TradeFinderRatingRing({ player, variant = "packageRows" }) {
   );
 }
 
-function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team }) {
+function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team, selectedActionLabel = "Added" }) {
   const isPlayer = asset.type === "player";
   const label = isPlayer ? playerNameOf(asset.player) : formatPick(asset.pick);
   const positionText = isPlayer
@@ -1580,7 +1595,7 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
             transform: `translate(${rowT.buttonX || 0}px, ${rowT.buttonY || 0}px)`,
           }}
         >
-          {selected ? "Added" : "Add"}
+          {selected ? selectedActionLabel : "Add"}
         </button>
       </div>
 
@@ -1823,7 +1838,17 @@ export default function TradeFinder() {
   const selectedTeamPicks = useMemo(() => getOwnedPicks(leagueData, selectedTeam?.name), [leagueData, selectedTeam]);
 
   const playerAssets = useMemo(
-    () => selectedTeamPlayers.map((player) => ({ type: "player", player, key: `player:${playerKey(player)}` })),
+    () => selectedTeamPlayers
+      .map((player) => ({ type: "player", player, key: `player:${playerKey(player)}` }))
+      .sort((a, b) => {
+        const aOvr = Number(a.player?.overall || 0);
+        const bOvr = Number(b.player?.overall || 0);
+        if (aOvr !== bOvr) return bOvr - aOvr;
+        const aPot = Number(a.player?.potential || aOvr);
+        const bPot = Number(b.player?.potential || bOvr);
+        if (aPot !== bPot) return bPot - aPot;
+        return playerNameOf(a.player).localeCompare(playerNameOf(b.player));
+      }),
     [selectedTeamPlayers]
   );
 
@@ -1833,18 +1858,28 @@ export default function TradeFinder() {
   );
 
   const allAssets = useMemo(() => [...playerAssets, ...pickAssets], [playerAssets, pickAssets]);
+  const selectedKeySet = useMemo(() => new Set(selectedAssetKeys), [selectedAssetKeys]);
+  const selectedPackageAssets = useMemo(
+    () => allAssets.filter((asset) => selectedKeySet.has(asset.key)),
+    [allAssets, selectedKeySet]
+  );
+  const availablePlayerAssets = useMemo(
+    () => playerAssets.filter((asset) => !selectedKeySet.has(asset.key)),
+    [playerAssets, selectedKeySet]
+  );
+  const availablePickAssets = useMemo(
+    () => pickAssets.filter((asset) => !selectedKeySet.has(asset.key)),
+    [pickAssets, selectedKeySet]
+  );
 
   const selectedItems = useMemo(() => {
-    const keys = new Set(selectedAssetKeys);
-    return allAssets
-      .filter((asset) => keys.has(asset.key))
-      .map((asset) => {
-        if (asset.type === "pick") {
-          return buildFinderPickItem(asset, pickProtections[asset.key]);
-        }
-        return asset;
-      });
-  }, [allAssets, pickProtections, selectedAssetKeys]);
+    return selectedPackageAssets.map((asset) => {
+      if (asset.type === "pick") {
+        return buildFinderPickItem(asset, pickProtections[asset.key]);
+      }
+      return asset;
+    });
+  }, [pickProtections, selectedPackageAssets]);
 
   const selectedValue = useMemo(() => packageValue(selectedItems, leagueData), [selectedItems, leagueData]);
   const offers = searched ? pythonOffers : [];
@@ -2092,6 +2127,7 @@ export default function TradeFinder() {
       offerTeam: offer.team,
       selectedItems,
       offerItems: sortTradeFinderOfferItems(offer.offer, leagueData),
+      offer,
     });
 
     navigate("/propose-trade", { state: { fromTradeFinder: true } });
@@ -2156,25 +2192,74 @@ export default function TradeFinder() {
               </div>
 
               <div className="tradeFinderScroller grid max-h-[68vh] gap-3 overflow-y-auto p-5">
-                <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Players</div>
-                {playerAssets.map((asset) => (
-                  <AssetRow
-                    key={asset.key}
-                    asset={asset}
-                    selected={selectedAssetKeys.includes(asset.key)}
-                    onToggle={() => toggleAsset(asset)}
-                    leagueData={leagueData}
-                    team={selectedTeam}
-                  />
-                ))}
+                <div className="rounded-2xl border border-orange-400/25 bg-orange-500/10 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Trade Package</div>
+                      <div className="mt-1 text-xs font-bold text-orange-100/80">
+                        Click an asset here to remove it from the finder package.
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-orange-300/25 bg-black/35 px-3 py-2 text-xs font-black text-orange-100">
+                      {selectedItems.length} / 8
+                    </div>
+                  </div>
 
-                <div className="mt-3 text-xs font-black uppercase tracking-[0.18em] text-orange-300">Draft Picks</div>
-                {pickAssets.length ? (
-                  pickAssets.map((asset) => (
+                  <div className="mt-3 grid gap-3">
+                    {selectedPackageAssets.length ? (
+                      selectedPackageAssets.map((asset) => (
+                        <AssetRow
+                          key={`selected:${asset.key}`}
+                          asset={asset}
+                          selected
+                          selectedActionLabel="Remove"
+                          onToggle={() => toggleAsset(asset)}
+                          pickRule={asset.type === "pick" ? pickProtections[asset.key] || normalizeFinderPickRule(asset.pick, null) : undefined}
+                          onPickRuleChange={asset.type === "pick" ? (value) => {
+                            setSearched(false);
+                            setPythonOffers([]);
+                            setOfferSearchError("");
+                            setOfferSearchProgress("");
+                            setOfferSearchStopped(false);
+                            setPickProtections((prev) => ({ ...prev, [asset.key]: value }));
+                          } : undefined}
+                          leagueData={leagueData}
+                          team={selectedTeam}
+                        />
+                      ))
+                    ) : (
+                      <div className="rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-bold text-neutral-400">
+                        No assets selected yet. Add players or picks below to build your package.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Players</div>
+                {availablePlayerAssets.length ? (
+                  availablePlayerAssets.map((asset) => (
                     <AssetRow
                       key={asset.key}
                       asset={asset}
-                      selected={selectedAssetKeys.includes(asset.key)}
+                      selected={false}
+                      onToggle={() => toggleAsset(asset)}
+                      leagueData={leagueData}
+                      team={selectedTeam}
+                    />
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-bold text-neutral-500">
+                    Every available player is already in the Trade Package.
+                  </div>
+                )}
+
+                <div className="mt-3 text-xs font-black uppercase tracking-[0.18em] text-orange-300">Draft Picks</div>
+                {availablePickAssets.length ? (
+                  availablePickAssets.map((asset) => (
+                    <AssetRow
+                      key={asset.key}
+                      asset={asset}
+                      selected={false}
                       onToggle={() => toggleAsset(asset)}
                       pickRule={pickProtections[asset.key] || normalizeFinderPickRule(asset.pick, null)}
                       onPickRuleChange={(value) => {
@@ -2191,7 +2276,7 @@ export default function TradeFinder() {
                   ))
                 ) : (
                   <div className="rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-bold text-neutral-500">
-                    No tradeable picks found for this team.
+                    {pickAssets.length ? "Every tradeable pick is already in the Trade Package." : "No tradeable picks found for this team."}
                   </div>
                 )}
               </div>
