@@ -248,28 +248,6 @@ function compareOvrVectors(aItems = [], bItems = []) {
   return 0;
 }
 
-function comparePlayerOvrLadder(aItems = [], bItems = []) {
-  const a = ovrVector(aItems);
-  const b = ovrVector(bItems);
-  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
-    const diff = Number(a[i] || 0) - Number(b[i] || 0);
-    if (diff) return diff;
-  }
-  return 0;
-}
-
-function pickCount(items = []) {
-  return (items || []).filter((item) => item?.type === "pick").length;
-}
-
-function playerIdentityVector(items = []) {
-  return (items || [])
-    .filter((item) => item?.type === "player")
-    .map((item) => String(item?.player?.id || item?.player?.name || item?.label || ""))
-    .sort()
-    .join("|");
-}
-
 function unnecessaryLowFillerCount({ context, cpuTeam, items = [], profile = {} }) {
   const minOvr = meaningfulSupportMinOvr(profile);
   let count = 0;
@@ -475,37 +453,47 @@ function buildSupportPickLadder({ board, currentItems = [], profile, leagueData 
   return all.slice(0, Math.max(8, supportPickLimit(profile) * 5));
 }
 
+function pickCount(items = []) {
+  return (items || []).filter((item) => item?.type === "pick").length;
+}
+
 function isBetterFinalOffer(candidate = null, current = null, context = {}) {
   if (!candidate) return false;
   if (!current) return true;
+
+  const profile = selectedProfile(context);
   const aItems = candidate.offer || [];
   const bItems = current.offer || [];
-  const ladderDiff = comparePlayerOvrLadder(aItems, bItems);
 
-  // Strict objective: once both packages are exact-accepted and comfortable,
-  // the Trade Finder is a best-player discovery tool. A lower-OVR package may
-  // not jump a higher-OVR package because it includes more picks or total value.
-  if (ladderDiff !== 0) return ladderDiff > 0;
-
-  const aPickCount = pickCount(aItems);
-  const bPickCount = pickCount(bItems);
-  if (aPickCount !== bPickCount) return aPickCount < bPickCount;
-
-  if (aItems.length !== bItems.length) return aItems.length < bItems.length;
-
-  const floor = Number(context.comfortFloor || TRADE_FINDER_COMFORT_FLOOR);
-  const aMargin = Number(candidate.comfortMargin || 0);
-  const bMargin = Number(current.comfortMargin || 0);
-  const aClose = Math.abs(aMargin - (floor + COMFORT_TARGET_BUFFER));
-  const bClose = Math.abs(bMargin - (floor + COMFORT_TARGET_BUFFER));
-  if (Math.abs(aClose - bClose) > 0.25) return aClose < bClose;
+  // Hard objective: among exact-accepted packages, the Finder is a best-player
+  // discovery tool. A lower-OVR player ladder cannot beat a higher-OVR ladder
+  // because it carries more picks/value.
+  const ovrDiff = compareOvrVectors(aItems, bItems);
+  if (ovrDiff !== 0) return ovrDiff < 0;
 
   const aValue = Number(candidate.offerValue || 0);
   const bValue = Number(current.offerValue || 0);
-  if (Math.abs(aValue - bValue) > 0.75) return aValue > bValue;
+  const aMargin = Number(candidate.comfortMargin || 0);
+  const bMargin = Number(current.comfortMargin || 0);
+  const floor = Number(context.comfortFloor || TRADE_FINDER_COMFORT_FLOOR);
+  const target = floor + COMFORT_TARGET_BUFFER;
+  const aClose = Math.abs(aMargin - target);
+  const bClose = Math.abs(bMargin - target);
+  const aStillCpuLean = aMargin > floor + (profile.star ? 8 : profile.strong ? 6 : 4);
+  const bStillCpuLean = bMargin > floor + (profile.star ? 8 : profile.strong ? 6 : 4);
 
-  const identityDiff = playerIdentityVector(aItems).localeCompare(playerIdentityVector(bItems));
-  if (identityDiff !== 0) return identityDiff < 0;
+  // Same player ladder: allow picks/swaps/seconds to bridge the gap toward the
+  // desired comfort zone. This is what lets ATL add picks after Jalen/Kuminga,
+  // while still preventing a Nickeil/Dyson/CJ pile from beating Jalen.
+  if (aStillCpuLean && bStillCpuLean && Math.abs(aValue - bValue) > 0.75) return aValue > bValue;
+  if (Math.abs(aClose - bClose) > 0.25) return aClose < bClose;
+  if (Math.abs(aValue - bValue) > (profile.star ? 3.0 : 1.5)) return aValue > bValue;
+
+  // Deep tie-breakers only after the player ladder, comfort, and value are tied.
+  const aPicks = pickCount(aItems);
+  const bPicks = pickCount(bItems);
+  if (aPicks !== bPicks) return aPicks > bPicks;
+  if (aItems.length !== bItems.length) return aItems.length < bItems.length;
   return compareOfferStrength(candidate, current) > 0;
 }
 
@@ -518,15 +506,18 @@ function evaluateCore({ context, cpuTeam, items, allowExactFallback = false }) {
 }
 
 
-function confirmAndTightenWithBuilderExact({ context, cpuTeam, candidateItems = [] }) {
+function confirmAndTightenWithBuilderExact({ context, cpuTeam, board, candidateItems = [], profile = {}, leagueData = null, signal = null }) {
+  const floor = Number(context.comfortFloor || TRADE_FINDER_COMFORT_FLOOR);
+  const stopBuffer = profile.star ? 2.75 : profile.strong ? 2.0 : profile.normal ? 1.35 : 1.0;
+  const supportLimit = Math.min(supportPickLimit(profile), TRADE_FINDER_MAX_SIDE_ITEMS - cleanPackage(candidateItems).length);
+
   const tryExact = (items) => evaluateCpuPackage({ context, cpuTeam, cpuItems: cleanPackage(items), mode: BUILDER_EXACT_MODE, requireFinalValidation: true });
 
   let currentItems = cleanPackage(candidateItems);
   let exact = tryExact(currentItems);
 
-  // Final displayed offers must pass the exact same builder evaluator as
-  // Propose Trade. If scan mode had a pick-heavy candidate, remove picks one at
-  // a time; never replace the accepted player core with lower-OVR value filler.
+  // If the fast scan over-added support and the real builder evaluator rejects,
+  // remove picks/swaps one at a time. Do not mutate the player core.
   while (!exact && currentItems.some((item) => item?.type === "pick")) {
     const idx = [...currentItems].map((item, index) => ({ item, index })).reverse().find((row) => row.item?.type === "pick")?.index;
     if (idx === undefined || idx < 0) break;
@@ -534,24 +525,103 @@ function confirmAndTightenWithBuilderExact({ context, cpuTeam, candidateItems = 
     exact = tryExact(currentItems);
   }
 
-  return { offer: exact || null, exactTightenAttempts: 1 };
+  if (!exact) return { offer: null, exactTightenAttempts: 1 };
+
+  let best = exact;
+  let attempts = 1;
+  if (Number(best.comfortMargin || 0) <= floor + stopBuffer) {
+    return { offer: best, exactTightenAttempts: attempts };
+  }
+
+  const supportPool = buildSupportPickLadder({ board, currentItems: best.offer, profile, leagueData });
+  let acceptedSupport = 0;
+  let rejectedSupport = 0;
+  currentItems = cleanPackage(best.offer || []);
+
+  for (const support of supportPool) {
+    if (isCancelled(signal)) break;
+    if (acceptedSupport >= supportLimit) break;
+    if (attempts >= 1 + Math.min(6, MAX_SUPPORT_EVALS_PER_TEAM)) break;
+    if (currentItems.length >= TRADE_FINDER_MAX_SIDE_ITEMS) break;
+    if (currentItems.some((item) => itemFamilyKey(item) === itemFamilyKey(support))) continue;
+
+    const candidate = cleanPackage([...currentItems, support]);
+    attempts += 1;
+    const supported = tryExact(candidate);
+    if (supported) {
+      acceptedSupport += 1;
+      currentItems = cleanPackage(supported.offer || candidate);
+      if (isBetterFinalOffer(supported, best, context)) best = supported;
+      if (Number(supported.comfortMargin || 0) <= floor + stopBuffer) break;
+    } else {
+      rejectedSupport += 1;
+      if (rejectedSupport >= 3 && Number(best.comfortMargin || 0) <= floor + stopBuffer + 1.5) break;
+    }
+  }
+
+  return { offer: best, exactTightenAttempts: attempts };
 }
 
-function optimizeAcceptedCoreWithSupport({ context, cpuTeam, coreResult }) {
-  // With strict highest-OVR ranking, support picks can only make a package less
-  // clean once an accepted player core exists. Exact-confirm the player core and
-  // avoid extra support probes; this improves speed and prevents lower-player
-  // value piles from replacing cleaner high-OVR returns.
+function optimizeAcceptedCoreWithSupport({ context, cpuTeam, board, coreResult, signal = null }) {
+  const profile = selectedProfile(context);
+  const leagueData = context.leagueData;
+  const maxSupport = Math.min(supportPickLimit(profile), TRADE_FINDER_MAX_SIDE_ITEMS - (coreResult.offer || []).filter(Boolean).length);
+  const supportPool = buildSupportPickLadder({ board, currentItems: coreResult.offer, profile, leagueData });
+  let currentItems = cleanPackage(coreResult.offer || []);
+  let best = coreResult;
+  let supportAttempts = 0;
+  let supportAccepted = 0;
+  let supportRejected = 0;
+  const startingMargin = Number(coreResult?.comfortMargin || 0);
+  const startingStopBuffer = profile.star ? 2.25 : profile.strong ? 1.65 : profile.normal ? 1.15 : 0.85;
+  if (startingMargin <= Number(context.comfortFloor || TRADE_FINDER_COMFORT_FLOOR) + startingStopBuffer) {
+    const confirmed = confirmAndTightenWithBuilderExact({ context, cpuTeam, board, candidateItems: best?.offer || currentItems, profile, leagueData, signal });
+    return { offer: confirmed.offer, supportAttempts: supportAttempts + Number(confirmed.exactTightenAttempts || 0), supportAccepted, supportRejected };
+  }
+
+  for (const support of supportPool) {
+    if (isCancelled(signal)) break;
+    if (supportAttempts >= MAX_SUPPORT_EVALS_PER_TEAM) break;
+    if (supportAccepted >= maxSupport) break;
+    if (currentItems.length >= TRADE_FINDER_MAX_SIDE_ITEMS) break;
+    if (currentItems.some((item) => itemFamilyKey(item) === itemFamilyKey(support))) continue;
+
+    const candidateItems = cleanPackage([...currentItems, support]);
+    supportAttempts += 1;
+    const supported = evaluateCpuPackage({ context, cpuTeam, cpuItems: candidateItems, mode: "scan", requireFinalValidation: true });
+    if (supported) {
+      currentItems = candidateItems;
+      supportAccepted += 1;
+      if (isBetterFinalOffer(supported, best, context)) best = supported;
+
+      // If we are now close to the desired comfort floor, one more support piece
+      // is usually unnecessary. If the CPU is still very comfortable, keep adding.
+      const margin = Number(supported.comfortMargin || 0);
+      const stopBuffer = profile.star ? 2.75 : profile.strong ? 2.0 : profile.normal ? 1.35 : 1.0;
+      if (margin <= Number(context.comfortFloor || TRADE_FINDER_COMFORT_FLOOR) + stopBuffer) break;
+    } else {
+      supportRejected += 1;
+      const currentMargin = Number(best?.comfortMargin || 0);
+      if (supportRejected >= 3 && currentMargin <= Number(context.comfortFloor || TRADE_FINDER_COMFORT_FLOOR) + 2.75) break;
+      // Do not salvage a rejected support package by changing players. Just try
+      // the next weaker pick/swap/second.
+    }
+  }
+
   const confirmed = confirmAndTightenWithBuilderExact({
     context,
     cpuTeam,
-    candidateItems: coreResult?.offer || [],
+    board,
+    candidateItems: best?.offer || currentItems,
+    profile,
+    leagueData,
+    signal,
   });
   return {
     offer: confirmed.offer,
-    supportAttempts: Number(confirmed.exactTightenAttempts || 0),
-    supportAccepted: 0,
-    supportRejected: 0,
+    supportAttempts: supportAttempts + Number(confirmed.exactTightenAttempts || 0),
+    supportAccepted,
+    supportRejected,
   };
 }
 
@@ -687,15 +757,19 @@ async function findBestOfferForTeam({ context, cpuTeam, teamIndex = 0, teamsToCh
     supportRejected += optimized.supportRejected;
     if (isBetterFinalOffer(optimized.offer, best, context)) best = optimized.offer;
 
-    // Strict best-player mode: anchors are sorted from highest OVR downward.
-    // Once the current accepted best starts with a higher OVR than the next
-    // available anchor, lower anchors cannot beat it by adding picks/value, so
-    // stop early for both better results and speed.
-    const nextAnchor = anchors[anchorsChecked] || null;
-    const bestTopOvr = ovrVector(best?.offer || [])[0] || 0;
-    const nextAnchorOvr = nextAnchor ? playerOvrOf(nextAnchor) : 0;
-    if (!nextAnchor || bestTopOvr > nextAnchorOvr) break;
-
+    // Keep checking a few more anchors if the current accepted offer is still too
+    // CPU-lean or low-value. This prevents early weak comfortable offers from
+    // hiding a stronger Aaron Gordon / Anthony Edwards type core.
+    const margin = Number(optimized.offer?.comfortMargin || 0);
+    const floor = Number(context.comfortFloor || TRADE_FINDER_COMFORT_FLOOR);
+    const stopBuffer = profile.star ? 2.75 : profile.strong ? 2.0 : profile.normal ? 1.35 : 1.0;
+    const goodEnoughNearFloor = margin <= floor + stopBuffer;
+    const starAnchor = playerOvrOf(anchor) >= 88;
+    if (goodEnoughNearFloor) {
+      // Once a high-priority anchor produces a strong exact-accepted offer close
+      // to the comfort range, do not keep hunting weaker anchors.
+      break;
+    }
     if (!profile.star && acceptedCores >= 4) break;
     if (profile.star && acceptedCores >= 5) break;
   }
@@ -731,27 +805,13 @@ async function findBestOfferForTeam({ context, cpuTeam, teamIndex = 0, teamsToCh
 
 function sortFinalOffers(offers = []) {
   return (offers || []).slice().sort((a, b) => {
-    const ladderDiff = comparePlayerOvrLadder(a?.offer || [], b?.offer || []);
-    if (ladderDiff !== 0) return ladderDiff > 0 ? -1 : 1;
-
-    const aPickCount = pickCount(a?.offer || []);
-    const bPickCount = pickCount(b?.offer || []);
-    if (aPickCount !== bPickCount) return aPickCount - bPickCount;
-
-    const aLen = (a?.offer || []).length;
-    const bLen = (b?.offer || []).length;
-    if (aLen !== bLen) return aLen - bLen;
-
+    const valueDiff = Number(b.offerValue || 0) - Number(a.offerValue || 0);
+    if (Math.abs(valueDiff) > 0.5) return valueDiff;
     const marginA = Number(a.comfortMargin || 0);
     const marginB = Number(b.comfortMargin || 0);
     const floorA = Number(a.searchStats?.comfortFloor ?? TRADE_FINDER_COMFORT_FLOOR);
     const floorB = Number(b.searchStats?.comfortFloor ?? TRADE_FINDER_COMFORT_FLOOR);
-    const closeDiff = Math.abs(marginA - floorA) - Math.abs(marginB - floorB);
-    if (Math.abs(closeDiff) > 0.25) return closeDiff;
-
-    const valueDiff = Number(b.offerValue || 0) - Number(a.offerValue || 0);
-    if (Math.abs(valueDiff) > 0.5) return valueDiff;
-    return getTeamName(a?.team).localeCompare(getTeamName(b?.team));
+    return Math.abs(marginA - floorA) - Math.abs(marginB - floorB);
   });
 }
 
@@ -865,7 +925,7 @@ export async function findComfortableTradeFinderOffers({
   const debugPayload = {
     engine: "v12_builder_exact_best_player_anchor",
     policy:
-      "builder-exact strict highest-OVR player anchor optimizer; displayed offers use same score as Propose Trade; lower-OVR value piles/picks cannot beat higher-OVR accepted player cores",
+      "builder-exact best-player anchor optimizer; displayed offers use same score as Propose Trade; support picks added only after accepted player core; rejected support is downgraded/removed",
     comfortFloor: baseContext.comfortFloor,
     teamsChecked: checkTeams.length,
     offersFound: finalOffers.length,
