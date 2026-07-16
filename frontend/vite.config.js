@@ -16,4 +16,9 @@ export default defineConfig({
   server: {
     port: 5173,
   },
+  // Trade Finder worker imports app modules, so production builds need ES module workers.
+  // Rollup/Vite's default iife worker format cannot code-split that worker graph.
+  worker: {
+    format: "es",
+  },
 });

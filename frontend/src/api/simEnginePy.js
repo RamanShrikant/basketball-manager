@@ -986,7 +986,8 @@ if (msg.type === "free-agency-process-rfa-match-error") {
   worker.postMessage({ type: "init" });
 }
 
-startWorker();
+// Worker is now lazy-started on first simulation/offseason action.
+// This keeps Pyodide from booting while users are only using Trade Finder.
 
 function isPairsArray(x) {
   return (
@@ -1077,6 +1078,7 @@ export function repairCpuTeamsToMinRoster(
   });
 }
 export function simulateOneGame({ homeTeam, awayTeam }) {
+  startWorker();
   return queueSim(() => {
     return new Promise((resolve) => {
       const id = counter++;
@@ -1110,6 +1112,7 @@ export function simulateOneGame({ homeTeam, awayTeam }) {
 // PUBLIC API - BATCH GAME SCHEDULING
 // ------------------------------------------------------------
 export function simulateBatchGames(games) {
+  startWorker();
   return new Promise((resolve) => {
     const batchId = "B" + counter++;
     batchPending.set(batchId, resolve);

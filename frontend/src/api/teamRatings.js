@@ -35,47 +35,44 @@ const fatiguePenalty = (mins, sta) => {
 };
 
 const posMinTemplate = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
+const POSITION_INDEX = { PG: 0, SG: 1, SF: 2, PF: 3, C: 4 };
+const positionOptionsCache = new WeakMap();
 
 function buildPositionOptions(player) {
-  const options = [];
-  const primary = player.pos && posMinTemplate[player.pos] !== undefined ? player.pos : null;
-  const secondary =
-    player.secondaryPos &&
-    player.secondaryPos !== primary &&
-    posMinTemplate[player.secondaryPos] !== undefined
+  const primaryPos = player?.pos && POSITION_INDEX[player.pos] !== undefined ? player.pos : "SG";
+  const secondaryPos =
+    player?.secondaryPos &&
+    player.secondaryPos !== primaryPos &&
+    POSITION_INDEX[player.secondaryPos] !== undefined
       ? player.secondaryPos
       : null;
 
-  if (primary) {
-    options.push({ pos: primary, credit: 1.0, isPrimary: true });
+  if (player && typeof player === "object") {
+    const cacheKey = `${player.pos || ""}|${player.secondaryPos || ""}`;
+    const cached = positionOptionsCache.get(player);
+    if (cached?.key === cacheKey) return cached;
+
+    const options = {
+      key: cacheKey,
+      primaryPos,
+      primaryIndex: POSITION_INDEX[primaryPos],
+      secondaryPos,
+      secondaryIndex: secondaryPos ? POSITION_INDEX[secondaryPos] : -1,
+    };
+    positionOptionsCache.set(player, options);
+    return options;
   }
 
-  if (secondary) {
-    options.push({ pos: secondary, credit: TR_SECONDARY_POS_CREDIT, isPrimary: false });
-  }
-
-  if (!options.length) {
-    options.push({ pos: "SG", credit: 1.0, isPrimary: true });
-  }
-
-  return options;
-}
-
-function clonePosMin(posMin) {
   return {
-    PG: Number(posMin?.PG || 0),
-    SG: Number(posMin?.SG || 0),
-    SF: Number(posMin?.SF || 0),
-    PF: Number(posMin?.PF || 0),
-    C: Number(posMin?.C || 0),
+    key: "",
+    primaryPos,
+    primaryIndex: POSITION_INDEX[primaryPos],
+    secondaryPos,
+    secondaryIndex: secondaryPos ? POSITION_INDEX[secondaryPos] : -1,
   };
 }
 
-function optionKey(option) {
-  return option?.pos || "";
-}
-
-function transferCandidateAmounts(posMin, fromOption, toOption, maxAmount) {
+function transferCandidateAmounts(posMin, fromIndex, toIndex, maxAmount) {
   const max = Math.max(0, Number(maxAmount || 0));
   if (max <= 0) return [];
 
@@ -88,6 +85,90 @@ function transferCandidateAmounts(posMin, fromOption, toOption, maxAmount) {
 
   // Breakpoints around 48 are enough because coveragePenaltyPts() is piecewise
   // linear. This avoids one-minute flow solving inside every rating call.
+  [max, 1, 4, 8, 12, 16, 24].forEach(add);
+
+  const fromNow = Number(posMin[fromIndex] || 0);
+  const toNow = Number(posMin[toIndex] || 0);
+
+  add(fromNow - TR_POS_TARGET);
+  add(fromNow - (TR_POS_TARGET + 1));
+  add(fromNow - (TR_POS_TARGET - 1));
+
+  add((TR_POS_TARGET - toNow) / TR_SECONDARY_POS_CREDIT);
+  add(((TR_POS_TARGET + 1) - toNow) / TR_SECONDARY_POS_CREDIT);
+  add(((TR_POS_TARGET - 1) - toNow) / TR_SECONDARY_POS_CREDIT);
+
+  return [...values]
+    .filter((value) => value > 1e-7 && value <= max + 1e-7)
+    .sort((a, b) => a - b);
+}
+
+function coveragePenaltyValues(posMin) {
+  let coverageError = 0;
+  let worstOver = 0;
+
+  for (let i = 0; i < 5; i += 1) {
+    const minutes = Number(posMin[i] || 0);
+    coverageError += Math.abs(minutes - TR_POS_TARGET);
+    worstOver = Math.max(worstOver, minutes - TR_POS_TARGET);
+  }
+
+  const covPen = (coverageError / 240) * TR_COV_ALPHA;
+  const overPen = (worstOver / 192) * TR_OVERPOS_MAXPT;
+  return covPen + overPen;
+}
+
+const legacyPositionOptionsCache = new WeakMap();
+
+function buildLegacyPositionOptions(player) {
+  if (player && typeof player === "object") {
+    const cacheKey = `${player.pos || ""}|${player.secondaryPos || ""}`;
+    const cached = legacyPositionOptionsCache.get(player);
+    if (cached?.key === cacheKey) return cached.options;
+
+    const options = [];
+    const primary = player.pos && posMinTemplate[player.pos] !== undefined ? player.pos : null;
+    const secondary =
+      player.secondaryPos &&
+      player.secondaryPos !== primary &&
+      posMinTemplate[player.secondaryPos] !== undefined
+        ? player.secondaryPos
+        : null;
+
+    if (primary) options.push({ pos: primary, credit: 1.0, isPrimary: true });
+    if (secondary) options.push({ pos: secondary, credit: TR_SECONDARY_POS_CREDIT, isPrimary: false });
+    if (!options.length) options.push({ pos: "SG", credit: 1.0, isPrimary: true });
+
+    legacyPositionOptionsCache.set(player, { key: cacheKey, options });
+    return options;
+  }
+
+  const options = [];
+  const primary = player.pos && posMinTemplate[player.pos] !== undefined ? player.pos : null;
+  const secondary =
+    player.secondaryPos &&
+    player.secondaryPos !== primary &&
+    posMinTemplate[player.secondaryPos] !== undefined
+      ? player.secondaryPos
+      : null;
+
+  if (primary) options.push({ pos: primary, credit: 1.0, isPrimary: true });
+  if (secondary) options.push({ pos: secondary, credit: TR_SECONDARY_POS_CREDIT, isPrimary: false });
+  if (!options.length) options.push({ pos: "SG", credit: 1.0, isPrimary: true });
+  return options;
+}
+
+function transferLegacyCandidateAmounts(posMin, fromOption, toOption, maxAmount) {
+  const max = Math.max(0, Number(maxAmount || 0));
+  if (max <= 0) return [];
+
+  const values = new Set();
+  const add = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return;
+    values.add(Math.min(max, Math.max(0, n)));
+  };
+
   [max, 1, 4, 8, 12, 16, 24].forEach(add);
 
   const fromCredit = Number(fromOption?.credit || 1);
@@ -112,21 +193,20 @@ function transferCandidateAmounts(posMin, fromOption, toOption, maxAmount) {
     .sort((a, b) => a - b);
 }
 
-function applyAllocationMove(allocation, posMin, fromOption, toOption, amount) {
-  const from = optionKey(fromOption);
-  const to = optionKey(toOption);
+function applyLegacyAllocationMove(allocation, posMin, fromOption, toOption, amount) {
+  const from = fromOption?.pos || "";
+  const to = toOption?.pos || "";
   const m = Number(amount || 0);
   if (!from || !to || from === to || m <= 0) return;
 
   allocation[from] = Number(allocation[from] || 0) - m;
   if (Math.abs(allocation[from]) < 1e-7) allocation[from] = 0;
   allocation[to] = Number(allocation[to] || 0) + m;
-
   posMin[from] -= m * Number(fromOption.credit || 1);
   posMin[to] += m * Number(toOption.credit || 1);
 }
 
-function chooseBestPositionAssignments(roster) {
+function chooseBestPositionAssignmentsLegacy(roster) {
   const active = (roster || []).filter((p) => p && p.minutes > 0);
   const posMin = { ...posMinTemplate };
   const assignedByName = {};
@@ -141,7 +221,7 @@ function chooseBestPositionAssignments(roster) {
   const secondaryByName = {};
 
   for (const player of active) {
-    const options = buildPositionOptions(player);
+    const options = buildLegacyPositionOptions(player);
     const primary = options.find((option) => option.isPrimary) || options[0];
     const secondary = options.find((option) => !option.isPrimary) || null;
     primaryByName[player.name] = primary;
@@ -154,15 +234,9 @@ function chooseBestPositionAssignments(roster) {
   let improved = true;
   let passes = 0;
 
-  // Fast split-position allocator. Start with every player at his primary spot,
-  // then move only the amount of minutes that improves the team's positional
-  // coverage. This allows split roles like Royce = some SF + some PF without
-  // the old all-or-nothing cliff, while staying cheap enough for Power Rankings
-  // and trade evaluation.
   while (improved && passes < 20) {
     improved = false;
     passes += 1;
-
     let bestMove = null;
 
     for (const player of active) {
@@ -174,14 +248,16 @@ function chooseBestPositionAssignments(roster) {
       const movable = Number(allocation[primary.pos] || 0);
       if (movable <= 1e-7) continue;
 
-      for (const amount of transferCandidateAmounts(posMin, primary, secondary, movable)) {
-        const testPosMin = clonePosMin(posMin);
-        testPosMin[primary.pos] -= amount * Number(primary.credit || 1);
-        testPosMin[secondary.pos] += amount * Number(secondary.credit || 1);
+      for (const amount of transferLegacyCandidateAmounts(posMin, primary, secondary, movable)) {
+        const primaryBefore = Number(posMin[primary.pos] || 0);
+        const secondaryBefore = Number(posMin[secondary.pos] || 0);
+        posMin[primary.pos] = primaryBefore - amount * Number(primary.credit || 1);
+        posMin[secondary.pos] = secondaryBefore + amount * Number(secondary.credit || 1);
+        const testPenalty = coveragePenaltyPts(posMin);
+        posMin[primary.pos] = primaryBefore;
+        posMin[secondary.pos] = secondaryBefore;
 
-        const testPenalty = coveragePenaltyPts(testPosMin);
         const penaltyGain = currentPenalty - testPenalty;
-
         if (!bestMove || penaltyGain > bestMove.penaltyGain + 1e-10) {
           bestMove = { player, primary, secondary, amount, penaltyGain, testPenalty };
         }
@@ -189,7 +265,7 @@ function chooseBestPositionAssignments(roster) {
     }
 
     if (bestMove && bestMove.penaltyGain > 1e-6) {
-      applyAllocationMove(
+      applyLegacyAllocationMove(
         allocationsByName[bestMove.player.name],
         posMin,
         bestMove.primary,
@@ -220,6 +296,149 @@ function chooseBestPositionAssignments(roster) {
   }
 
   return { posMin, assignedByName, assignedCreditsByName, allocationsByName };
+}
+
+function chooseBestPositionAssignments(roster) {
+  const active = [];
+  const seenNames = new Set();
+  let needsLegacyPath = false;
+  for (const player of roster || []) {
+    if (!player || player.minutes <= 0) continue;
+    active.push(player);
+    if (POSITION_INDEX[player.pos] === undefined || seenNames.has(player.name)) {
+      needsLegacyPath = true;
+    }
+    seenNames.add(player.name);
+  }
+
+  if (needsLegacyPath) {
+    return chooseBestPositionAssignmentsLegacy(roster);
+  }
+
+  const posValues = [0, 0, 0, 0, 0];
+  const assignedByName = {};
+  const assignedCreditsByName = {};
+  const allocationsByName = {};
+
+  if (!active.length) {
+    return {
+      posMin: { ...posMinTemplate },
+      assignedByName,
+      assignedCreditsByName,
+      allocationsByName,
+    };
+  }
+
+  const optionRows = new Array(active.length);
+  const primaryMinutes = new Array(active.length);
+  const secondaryMinutes = new Array(active.length).fill(0);
+
+  for (let i = 0; i < active.length; i += 1) {
+    const player = active[i];
+    const options = buildPositionOptions(player);
+    const minutes = Number(player.minutes || 0);
+    optionRows[i] = options;
+    primaryMinutes[i] = minutes;
+    posValues[options.primaryIndex] += minutes;
+  }
+
+  let currentPenalty = coveragePenaltyValues(posValues);
+  let improved = true;
+  let passes = 0;
+
+  // Fast split-position allocator. Start with every player at his primary spot,
+  // then move only the amount of minutes that improves the team's positional
+  // coverage. Candidate order and tie behavior intentionally match the original.
+  while (improved && passes < 20) {
+    improved = false;
+    passes += 1;
+
+    let bestPlayerIndex = -1;
+    let bestAmount = 0;
+    let bestPenaltyGain = 0;
+    let bestTestPenalty = currentPenalty;
+
+    for (let i = 0; i < active.length; i += 1) {
+      const options = optionRows[i];
+      if (options.secondaryIndex < 0) continue;
+
+      const movable = Number(primaryMinutes[i] || 0);
+      if (movable <= 1e-7) continue;
+
+      const primaryBefore = Number(posValues[options.primaryIndex] || 0);
+      const secondaryBefore = Number(posValues[options.secondaryIndex] || 0);
+
+      for (const amount of transferCandidateAmounts(
+        posValues,
+        options.primaryIndex,
+        options.secondaryIndex,
+        movable
+      )) {
+        posValues[options.primaryIndex] = primaryBefore - amount;
+        posValues[options.secondaryIndex] =
+          secondaryBefore + amount * TR_SECONDARY_POS_CREDIT;
+
+        const testPenalty = coveragePenaltyValues(posValues);
+
+        posValues[options.primaryIndex] = primaryBefore;
+        posValues[options.secondaryIndex] = secondaryBefore;
+
+        const penaltyGain = currentPenalty - testPenalty;
+        if (bestPlayerIndex < 0 || penaltyGain > bestPenaltyGain + 1e-10) {
+          bestPlayerIndex = i;
+          bestAmount = amount;
+          bestPenaltyGain = penaltyGain;
+          bestTestPenalty = testPenalty;
+        }
+      }
+    }
+
+    if (bestPlayerIndex >= 0 && bestPenaltyGain > 1e-6) {
+      const options = optionRows[bestPlayerIndex];
+      primaryMinutes[bestPlayerIndex] -= bestAmount;
+      if (Math.abs(primaryMinutes[bestPlayerIndex]) < 1e-7) {
+        primaryMinutes[bestPlayerIndex] = 0;
+      }
+      secondaryMinutes[bestPlayerIndex] += bestAmount;
+      posValues[options.primaryIndex] -= bestAmount;
+      posValues[options.secondaryIndex] += bestAmount * TR_SECONDARY_POS_CREDIT;
+      currentPenalty = bestTestPenalty;
+      improved = true;
+    }
+  }
+
+  for (let i = 0; i < active.length; i += 1) {
+    const player = active[i];
+    const options = optionRows[i];
+    const primaryMins = Number(primaryMinutes[i] || 0);
+    const secondaryMins = Number(secondaryMinutes[i] || 0);
+    const allocation = { [options.primaryPos]: primaryMins };
+    if (options.secondaryPos && secondaryMins > 0) {
+      allocation[options.secondaryPos] = secondaryMins;
+    }
+    allocationsByName[player.name] = allocation;
+
+    assignedByName[player.name] =
+      options.secondaryPos && secondaryMins > primaryMins
+        ? options.secondaryPos
+        : options.primaryPos;
+    assignedCreditsByName[player.name] = player.minutes > 0
+      ? (primaryMins + secondaryMins * TR_SECONDARY_POS_CREDIT) / player.minutes
+      : 1.0;
+  }
+
+  return {
+    posMin: {
+      PG: posValues[0],
+      SG: posValues[1],
+      SF: posValues[2],
+      PF: posValues[3],
+      C: posValues[4],
+    },
+    assignedByName,
+    assignedCreditsByName,
+    allocationsByName,
+  };
 }
 
 function minutesWeighted(team, minsObj) {
@@ -277,10 +496,20 @@ function aggWithFatigue(roster, key) {
 function starBoost(effList, starExp, key = "overall") {
   if (!effList.length) return 0;
 
-  const top2 = [...effList].sort((a, b) => b.eff - a.eff).slice(0, 2);
+  let first = null;
+  let second = null;
+  for (const entry of effList) {
+    if (!first || entry.eff > first.eff) {
+      second = first;
+      first = entry;
+    } else if (!second || entry.eff > second.eff) {
+      second = entry;
+    }
+  }
+
   let pull = 0;
 
-  for (const { p } of top2) {
+  for (const { p } of [first, second].filter(Boolean)) {
     const base =
       key === "offRating"
         ? Number(p.offRating ?? p.overall ?? 75)
@@ -299,18 +528,16 @@ function starBoost(effList, starExp, key = "overall") {
 }
 
 function coveragePenaltyPts(posMin) {
-  const coverageError = POSITIONS.reduce(
-    (sum, pos) => sum + Math.abs((posMin[pos] || 0) - TR_POS_TARGET),
-    0
-  );
+  let coverageError = 0;
+  let worstOver = 0;
+
+  for (const pos of POSITIONS) {
+    const minutes = Number(posMin[pos] || 0);
+    coverageError += Math.abs(minutes - TR_POS_TARGET);
+    worstOver = Math.max(worstOver, minutes - TR_POS_TARGET);
+  }
 
   const covPen = (coverageError / 240) * TR_COV_ALPHA;
-
-  const worstOver = Math.max(
-    0,
-    Math.max(...POSITIONS.map(pos => (posMin[pos] || 0) - TR_POS_TARGET))
-  );
-
   const overPen = (worstOver / 192) * TR_OVERPOS_MAXPT;
 
   return covPen + overPen;

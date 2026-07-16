@@ -1476,7 +1476,18 @@ export function evaluateTradePickImpact(args = {}) {
   activePickBreakdownRow = diagRow;
 
   try {
-    const projection = measurePick(diagRow, "buildPostTradePickProjectionMs", () => buildPostTradePickProjection(leagueData, userItems, cpuItems, userTeamName, cpuTeamName));
+    // Primary pick rows are the only assets that can affect draft-pick score.
+    // Resolve them before building post-trade roster projections so player-only
+    // exact checks do not recalculate two projected team ratings just to return
+    // the same zero pick result. Current team direction is still resolved so the
+    // returned debug payload remains byte-for-byte equivalent.
+    const incomingItems = measurePick(diagRow, "incomingItemsFilterMs", () => getPrimaryTradePickItems(userItems));
+    const outgoingItems = measurePick(diagRow, "outgoingItemsFilterMs", () => getPrimaryTradePickItems(cpuItems));
+    const invalidSwapItems = measurePick(diagRow, "invalidSwapFilterMs", () => [...incomingItems, ...outgoingItems].filter(
+      (item) => isSwapTradeItem(item) && !swapTeamPairMatches(item, userTeamName, cpuTeamName)
+    ));
+    const validIncomingItems = measurePick(diagRow, "validIncomingFilterMs", () => incomingItems.filter((item) => !invalidSwapItems.includes(item)));
+    const validOutgoingItems = measurePick(diagRow, "validOutgoingFilterMs", () => outgoingItems.filter((item) => !invalidSwapItems.includes(item)));
 
     // Keep two separate rank contexts:
     // - currentContext controls the CPU's negotiation mindset about draft capital.
@@ -1486,18 +1497,50 @@ export function evaluateTradePickImpact(args = {}) {
     //   after the trade. Own picks from a team acquiring/losing a star still move
     //   up/down based on the post-trade roster projection.
     const currentContext = measurePick(diagRow, "currentContextMs", () => buildPickRankContext(leagueData, null, "current"));
-    const projectedContext = measurePick(diagRow, "projectedContextMs", () => buildPickRankContext(leagueData, projection, "projected"));
-
-    const incomingItems = measurePick(diagRow, "incomingItemsFilterMs", () => getPrimaryTradePickItems(userItems));
-    const outgoingItems = measurePick(diagRow, "outgoingItemsFilterMs", () => getPrimaryTradePickItems(cpuItems));
-    const invalidSwapItems = measurePick(diagRow, "invalidSwapFilterMs", () => [...incomingItems, ...outgoingItems].filter(
-      (item) => isSwapTradeItem(item) && !swapTeamPairMatches(item, userTeamName, cpuTeamName)
-    ));
-    const validIncomingItems = measurePick(diagRow, "validIncomingFilterMs", () => incomingItems.filter((item) => !invalidSwapItems.includes(item)));
-    const validOutgoingItems = measurePick(diagRow, "validOutgoingFilterMs", () => outgoingItems.filter((item) => !invalidSwapItems.includes(item)));
     const directionRow = measurePick(diagRow, "directionRowMs", () => currentContext?.byTeam?.get?.(normalizeName(cpuTeamName)) || null);
     const directionRank = clamp(Number(directionRow?.powerRank || 15), 1, 30);
     const directionMultiplier = measurePick(diagRow, "directionMultiplierMs", () => getCpuPickDirectionMultiplier(currentContext, cpuTeamName));
+
+    if (!incomingItems.length && !outgoingItems.length) {
+      const result = {
+        netPickScore: 0,
+        incomingValue: 0,
+        incomingBaseValue: 0,
+        incomingMultiFirstPackageBridge: 0,
+        incomingSecondRoundBridge: 0,
+        incomingFirstAssetCount: 0,
+        incomingFirstEquivalentCount: 0,
+        incomingBridgeableFirstCount: 0,
+        incomingSecondAssetCount: 0,
+        outgoingValue: 0,
+        outgoingBaseValue: 0,
+        outgoingFuturePickExposurePenalty: 0,
+        outgoingSecondRoundExposurePenalty: 0,
+        outgoingFirstRoundExposure: 0,
+        outgoingSecondAssetCount: 0,
+        incoming: [],
+        outgoing: [],
+        reasons: [],
+        invalidSwaps: [],
+        invalidSwapReasons: [],
+        cpuPickDirectionMultiplier: directionMultiplier,
+        cpuPickDirectionRank: directionRank,
+        cpuPickDirectionBasis: "current_power_rank",
+        hasPicks: false,
+      };
+
+      if (diagRow) {
+        diagRow.netPickScore = 0;
+        diagRow.incomingPickCount = 0;
+        diagRow.outgoingPickCount = 0;
+        diagRow.invalidSwapCount = 0;
+      }
+
+      return result;
+    }
+
+    const projection = measurePick(diagRow, "buildPostTradePickProjectionMs", () => buildPostTradePickProjection(leagueData, userItems, cpuItems, userTeamName, cpuTeamName));
+    const projectedContext = measurePick(diagRow, "projectedContextMs", () => buildPickRankContext(leagueData, projection, "projected"));
     const incoming = measurePick(diagRow, "incomingPickItemValuesMs", () => validIncomingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, projectedContext), "incoming", directionMultiplier)));
     const outgoing = measurePick(diagRow, "outgoingPickItemValuesMs", () => validOutgoingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, projectedContext), "outgoing", directionMultiplier)));
     const incomingBaseValue = round4(incoming.reduce((sum, item) => sum + Number(item.adjustedValue || 0), 0));

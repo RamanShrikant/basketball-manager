@@ -80,12 +80,272 @@ function debugLog(label, payload = null) {
   else console.log(`[TF DEBUG] ${label}`, payload);
 }
 
+
+function addTimingMs(timing = {}, key, ms) {
+  if (!timing || !key) return timing;
+  const value = Number(ms || 0);
+  timing[key] = Number(timing[key] || 0) + value;
+  return timing;
+}
+
+function roundTimingMap(timing = {}) {
+  const out = {};
+  for (const [key, value] of Object.entries(timing || {})) out[key] = round1(value);
+  return out;
+}
+
+function cloneMetrics(metrics = {}) {
+  return Object.fromEntries(Object.entries(metrics || {}).map(([key, value]) => [key, Number(value || 0)]));
+}
+
+function diffMetrics(after = {}, before = {}) {
+  const out = {};
+  const keys = new Set([...Object.keys(after || {}), ...Object.keys(before || {})]);
+  for (const key of keys) out[key] = Number(after?.[key] || 0) - Number(before?.[key] || 0);
+  return out;
+}
+
+function offerSignatureFromSummary(offer = {}) {
+  const items = Array.isArray(offer?.items) ? offer.items : [];
+  return `${offer?.team || ""}::${items.join("||")}`;
+}
+
+function normalizeDebugOffer(offer = {}, index = 0) {
+  const items = Array.isArray(offer?.items) ? offer.items.slice() : [];
+  return {
+    rank: index + 1,
+    team: offer?.team || "",
+    value: round1(offer?.value),
+    gap: round1(offer?.gap),
+    comfortMargin: round1(offer?.comfortMargin),
+    assets: Number(offer?.assets || items.length || 0),
+    items,
+    signature: `${offer?.team || ""}::${items.join("||")}`,
+  };
+}
+
+function makeTradeFinderBaselineSnapshot(debugPayload = null) {
+  const debug = debugPayload || (typeof window !== "undefined" ? window.__TF_LAST_DEBUG : null);
+  if (!debug) return null;
+  const offers = (debug.offers || []).map(normalizeDebugOffer);
+  return {
+    snapshotVersion: 1,
+    createdAt: new Date().toISOString(),
+    engine: debug.engine,
+    policy: debug.policy,
+    selectedTeam: debug.selectedTeam || "",
+    selectedValue: round1(debug.selectedValue),
+    selectedAssets: Number(debug.selectedAssets || 0),
+    comfortFloor: Number(debug.comfortFloor || 0),
+    teamsChecked: Number(debug.teamsChecked || 0),
+    offersFound: Number(debug.offersFound || offers.length || 0),
+    elapsedSec: round1(debug.elapsedSec),
+    metrics: cloneMetrics(debug.metrics || {}),
+    timing: debug.timing || {},
+    offers,
+    teamSummaries: (debug.teamSummaries || []).map((team) => ({
+      team: team.team,
+      foundOffer: Boolean(team.foundOffer),
+      teamMs: round1(team.teamMs),
+      evaluationsForTeam: Number(team.evaluationsForTeam || 0),
+      offer: team.offer ? normalizeDebugOffer(team.offer, 0) : null,
+      stats: team.stats || null,
+      timing: team.timing || team.stats?.timing || null,
+      metrics: team.metrics || team.stats?.metrics || null,
+    })),
+  };
+}
+
+function compareTradeFinderSnapshots(currentSnapshot = null, baselineSnapshot = null) {
+  const current = currentSnapshot?.offers ? currentSnapshot : makeTradeFinderBaselineSnapshot(currentSnapshot);
+  const baseline = baselineSnapshot?.offers ? baselineSnapshot : makeTradeFinderBaselineSnapshot(baselineSnapshot);
+  if (!current || !baseline) return { ok: false, reason: "missing current or baseline snapshot", current, baseline };
+
+  const baselineByTeam = new Map((baseline.offers || []).map((offer) => [offer.team, offer]));
+  const currentByTeam = new Map((current.offers || []).map((offer) => [offer.team, offer]));
+  const rows = [];
+  const teams = Array.from(new Set([...(baseline.offers || []).map((o) => o.team), ...(current.offers || []).map((o) => o.team)]));
+
+  for (const team of teams) {
+    const before = baselineByTeam.get(team);
+    const after = currentByTeam.get(team);
+    if (!before || !after) {
+      rows.push({
+        team,
+        status: before ? "missing_after" : "added_after",
+        beforeItems: before?.items?.join(" | ") || "",
+        afterItems: after?.items?.join(" | ") || "",
+        beforeValue: before?.value ?? "",
+        afterValue: after?.value ?? "",
+        beforeMargin: before?.comfortMargin ?? "",
+        afterMargin: after?.comfortMargin ?? "",
+      });
+      continue;
+    }
+    const sameItems = before.signature === after.signature;
+    const sameValue = Math.abs(Number(before.value || 0) - Number(after.value || 0)) < 0.05;
+    const sameMargin = Math.abs(Number(before.comfortMargin || 0) - Number(after.comfortMargin || 0)) < 0.05;
+    const sameRank = Number(before.rank || 0) === Number(after.rank || 0);
+    if (!sameItems || !sameValue || !sameMargin || !sameRank) {
+      rows.push({
+        team,
+        status: sameItems && sameValue && sameMargin ? "rank_changed" : "changed",
+        beforeRank: before.rank,
+        afterRank: after.rank,
+        beforeValue: before.value,
+        afterValue: after.value,
+        beforeMargin: before.comfortMargin,
+        afterMargin: after.comfortMargin,
+        beforeItems: before.items.join(" | "),
+        afterItems: after.items.join(" | "),
+      });
+    }
+  }
+
+  const ok = rows.length === 0 && Number(current.offersFound || 0) === Number(baseline.offersFound || 0);
+  return {
+    ok,
+    changedCount: rows.length,
+    rows,
+    speed: {
+      baselineSec: Number(baseline.elapsedSec || 0),
+      currentSec: Number(current.elapsedSec || 0),
+      deltaSec: round1(Number(current.elapsedSec || 0) - Number(baseline.elapsedSec || 0)),
+      speedup: Number(current.elapsedSec || 0) > 0 ? round1(Number(baseline.elapsedSec || 0) / Number(current.elapsedSec || 1)) : null,
+    },
+    metricsDelta: diffMetrics(current.metrics || {}, baseline.metrics || {}),
+    current,
+    baseline,
+  };
+}
+
+function installTradeFinderBaselineTools(debugPayload = null) {
+  if (typeof window === "undefined") return;
+  const storagePrefix = "bm_trade_finder_baseline_v1:";
+  const tools = {
+    makeSnapshot(debug = window.__TF_LAST_DEBUG) {
+      return makeTradeFinderBaselineSnapshot(debug);
+    },
+    saveBaseline(name = "baseline", debug = window.__TF_LAST_DEBUG) {
+      const snapshot = makeTradeFinderBaselineSnapshot(debug);
+      if (!snapshot) {
+        console.warn("No Trade Finder debug payload available to save.");
+        return null;
+      }
+      localStorage.setItem(`${storagePrefix}${name}`, JSON.stringify(snapshot));
+      window.__TF_BASELINE = snapshot;
+      console.log(`[TF BASELINE] saved '${name}'`, snapshot);
+      return snapshot;
+    },
+    loadBaseline(name = "baseline") {
+      try {
+        const raw = localStorage.getItem(`${storagePrefix}${name}`);
+        const snapshot = raw ? JSON.parse(raw) : null;
+        if (snapshot) window.__TF_BASELINE = snapshot;
+        return snapshot;
+      } catch (error) {
+        console.warn("Failed to load Trade Finder baseline", error);
+        return null;
+      }
+    },
+    listBaselines() {
+      return Object.keys(localStorage)
+        .filter((key) => key.startsWith(storagePrefix))
+        .map((key) => key.slice(storagePrefix.length));
+    },
+    compareToBaseline(nameOrSnapshot = "baseline", debug = window.__TF_LAST_DEBUG) {
+      const baseline = typeof nameOrSnapshot === "string" ? tools.loadBaseline(nameOrSnapshot) : nameOrSnapshot;
+      const current = makeTradeFinderBaselineSnapshot(debug);
+      const diff = compareTradeFinderSnapshots(current, baseline);
+      console.log("[TF BASELINE] compare result", diff);
+      if (diff?.rows?.length) console.table(diff.rows);
+      else console.log("[TF BASELINE] exact match on teams, order, values, margins, and item lists.");
+      return diff;
+    },
+    printTiming(debug = window.__TF_LAST_DEBUG) {
+      if (!debug) return console.warn("No Trade Finder debug payload available.");
+      console.log("[TF TIMING] overall", debug.timing || {});
+      console.table(
+        (debug.teamSummaries || [])
+          .slice()
+          .sort((a, b) => Number(b.teamMs || 0) - Number(a.teamMs || 0))
+          .map((team) => ({
+            team: team.team,
+            teamMs: team.teamMs,
+            evals: team.evaluationsForTeam,
+            exact: team.metrics?.exactEvaluations ?? team.stats?.metrics?.exactEvaluations ?? team.stats?.exactEvaluations,
+            scan: team.metrics?.scanEvaluations ?? team.stats?.metrics?.scanEvaluations ?? team.stats?.scanEvaluations,
+            impactMs: round1(team.metrics?.impactMs ?? team.stats?.metrics?.impactMs ?? 0),
+            validationMs: round1(team.metrics?.validationMs ?? team.stats?.metrics?.validationMs ?? 0),
+            boardMs: round1(team.timing?.buildAssetBoardMs ?? team.stats?.timing?.buildAssetBoardMs ?? 0),
+            coreGenMs: round1(team.timing?.generateCoresMs ?? team.stats?.timing?.generateCoresMs ?? 0),
+            coreEvalMs: round1(team.timing?.coreEvaluateMs ?? team.stats?.timing?.coreEvaluateMs ?? 0),
+            supportMs: round1(team.timing?.supportOptimizeMs ?? team.stats?.timing?.supportOptimizeMs ?? 0),
+            offer: team.offer?.items?.join(" | ") || "",
+          }))
+      );
+      return debug.timing || {};
+    },
+    copySnapshot(debug = window.__TF_LAST_DEBUG) {
+      const snapshot = makeTradeFinderBaselineSnapshot(debug);
+      const text = JSON.stringify(snapshot, null, 2);
+      if (navigator?.clipboard?.writeText) navigator.clipboard.writeText(text).catch(() => {});
+      console.log(text);
+      return snapshot;
+    },
+    compareSnapshots: compareTradeFinderSnapshots,
+  };
+  window.__TF_BASELINE_TOOLS = tools;
+  window.saveTradeFinderBaseline = tools.saveBaseline;
+  window.compareTradeFinderBaseline = tools.compareToBaseline;
+  window.printTradeFinderTiming = tools.printTiming;
+}
+
 function isCancelled(signal) {
   return Boolean(signal?.aborted);
 }
 
 async function yieldToBrowser() {
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+
+function clampNumber(value, min, max, fallback) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(numeric)));
+}
+
+function getTradeFinderWorkerPoolSize(teamCount = 0) {
+  if (teamCount <= 1) return 0;
+  try {
+    if (typeof window === "undefined" || typeof Worker === "undefined") return 0;
+    const raw = window.localStorage?.getItem("bm_tf_worker_pool_size");
+    if (raw === "0" || String(raw || "").toLowerCase() === "off") return 0;
+
+    // Best confirmed local baseline:
+    // - Sabonis exact match: 8 workers in 75.4s
+    // - Tatum exact match: 8 workers in 37.1s
+    // Higher counts were slower on the tested machine, so default to 8 only
+    // when the browser reports enough cores. Users can still override with
+    // localStorage for testing.
+    const hardware = clampNumber(window.navigator?.hardwareConcurrency || 8, 2, 16, 8);
+    const defaultSize = Math.min(8, Math.max(2, hardware - 1), teamCount);
+    return clampNumber(raw, 1, Math.min(8, teamCount), defaultSize);
+  } catch {
+    return 0;
+  }
+}
+
+function chunkTeamsRoundRobin(teams = [], workerCount = 1) {
+  const chunks = Array.from({ length: Math.max(1, workerCount) }, () => ({ teams: [], teamIndices: [] }));
+  for (let index = 0; index < teams.length; index += 1) {
+    const bucket = index % chunks.length;
+    chunks[bucket].teams.push(teams[index]);
+    chunks[bucket].teamIndices.push(index + 1);
+  }
+  return chunks.filter((chunk) => chunk.teams.length);
 }
 
 function safeProgress(onProgress, payload = {}) {
@@ -670,9 +930,14 @@ function findBestPickOnlyOfferForTeam({ context, cpuTeam, board, signal = null }
 async function findBestOfferForTeam({ context, cpuTeam, teamIndex = 0, teamsToCheck = 0, onProgress = null, signal = null }) {
   const teamStartedAt = nowMs();
   const cpuName = getTeamName(cpuTeam);
-  const beforeMetrics = { ...context.metrics };
+  const teamTiming = {};
+  const beforeMetrics = cloneMetrics(context.metrics);
+  let phaseStartedAt = nowMs();
   const board = buildAssetBoard(cpuTeam, context.leagueData);
+  addTimingMs(teamTiming, "buildAssetBoardMs", nowMs() - phaseStartedAt);
+  phaseStartedAt = nowMs();
   const profile = selectedProfile(context);
+  addTimingMs(teamTiming, "selectedProfileMs", nowMs() - phaseStartedAt);
 
   if (profile.pickOnly) {
     const pickOnlyOffer = findBestPickOnlyOfferForTeam({ context, cpuTeam, board, signal });
@@ -688,7 +953,9 @@ async function findBestOfferForTeam({ context, cpuTeam, teamIndex = 0, teamsToCh
   safeProgress(onProgress, { phase: "team_start", team: cpuName, teamIndex, teamsToCheck, offersFound: 0 });
   safeProgress(onProgress, { phase: "evaluating", team: cpuName, teamIndex, teamsToCheck, evaluationsForTeam: 0 });
 
+  phaseStartedAt = nowMs();
   const anchors = makeAnchorPool(board, profile, context.leagueData);
+  addTimingMs(teamTiming, "makeAnchorPoolMs", nowMs() - phaseStartedAt);
   let best = null;
   let anchorsChecked = 0;
   let coreChecks = 0;
@@ -706,7 +973,9 @@ async function findBestOfferForTeam({ context, cpuTeam, teamIndex = 0, teamsToCh
     if (isCancelled(signal)) break;
     if (coreChecks >= maxCoreEvals) break;
     anchorsChecked += 1;
+    phaseStartedAt = nowMs();
     const coreRows = generateAnchorCoreCandidates({ context, cpuTeam, board, anchor, profile });
+    addTimingMs(teamTiming, "generateCoresMs", nowMs() - phaseStartedAt);
     generatedCores += coreRows.rawCount;
     illegalCores += coreRows.illegalCount;
     const legalCores = coreRows.legal;
@@ -732,7 +1001,9 @@ async function findBestOfferForTeam({ context, cpuTeam, teamIndex = 0, teamsToCh
         finalistCount: maxCoreEvals,
         items: coreItems.map((item) => item.label || item.player?.name || item.type),
       });
+      phaseStartedAt = nowMs();
       const coreResult = evaluateCore({ context, cpuTeam, items: coreItems, allowExactFallback: idx < 2 });
+      addTimingMs(teamTiming, "coreEvaluateMs", nowMs() - phaseStartedAt);
       if (coreResult) {
         acceptedForAnchor += 1;
         acceptedCores += 1;
@@ -751,7 +1022,9 @@ async function findBestOfferForTeam({ context, cpuTeam, teamIndex = 0, teamsToCh
       continue;
     }
 
+    phaseStartedAt = nowMs();
     const optimized = optimizeAcceptedCoreWithSupport({ context, cpuTeam, board, coreResult: anchorAccepted, signal });
+    addTimingMs(teamTiming, "supportOptimizeMs", nowMs() - phaseStartedAt);
     supportAttempts += optimized.supportAttempts;
     supportAccepted += optimized.supportAccepted;
     supportRejected += optimized.supportRejected;
@@ -775,10 +1048,14 @@ async function findBestOfferForTeam({ context, cpuTeam, teamIndex = 0, teamsToCh
   }
 
   const teamMs = nowMs() - teamStartedAt;
-  const exactEvals = Number(context.metrics.exactEvaluations || 0) - Number(beforeMetrics.exactEvaluations || 0);
-  const scanEvals = Number(context.metrics.scanEvaluations || 0) - Number(beforeMetrics.scanEvaluations || 0);
+  const metricDelta = diffMetrics(context.metrics, beforeMetrics);
+  const exactEvals = Number(metricDelta.exactEvaluations || 0);
+  const scanEvals = Number(metricDelta.scanEvaluations || 0);
   const stats = {
+    teamIndex,
     teamMs: round1(teamMs),
+    timing: roundTimingMap(teamTiming),
+    metrics: cloneMetrics(metricDelta),
     anchorsAvailable: anchors.length,
     anchorsChecked,
     generatedCores,
@@ -815,6 +1092,227 @@ function sortFinalOffers(offers = []) {
   });
 }
 
+
+export async function runTradeFinderTeamBatch({
+  leagueData,
+  selectedTeam,
+  selectedItems = [],
+  cpuTeams = [],
+  teamIndices = [],
+  teamsToCheck = 0,
+  comfortFloor = null,
+  searchMode = "accurate",
+  onTeamDone = null,
+  signal = null,
+} = {}) {
+  const batchStartedAt = nowMs();
+  const batchTiming = {};
+  const baseContext = makeTradeFinderEvalContext({ leagueData, selectedTeam, selectedItems, comfortFloor });
+  const offers = [];
+  const teamSummaries = [];
+  const aggregateMetrics = cloneMetrics(baseContext.metrics);
+
+  for (let localIndex = 0; localIndex < cpuTeams.length; localIndex += 1) {
+    if (isCancelled(signal)) break;
+    const cpuTeam = cpuTeams[localIndex];
+    const teamIndex = Number(teamIndices?.[localIndex] || localIndex + 1);
+    const teamStart = nowMs();
+    let phaseStartedAt = nowMs();
+    const context = makeTradeFinderEvalContext({
+      leagueData,
+      selectedTeam,
+      selectedItems,
+      comfortFloor: baseContext.comfortFloor,
+    });
+    addTimingMs(batchTiming, "makeTeamContextMs", nowMs() - phaseStartedAt);
+    const beforeMetrics = cloneMetrics(context.metrics);
+    phaseStartedAt = nowMs();
+    const offer = await findBestOfferForTeam({
+      context,
+      cpuTeam,
+      teamIndex,
+      teamsToCheck,
+      onProgress: null,
+      signal,
+    });
+    addTimingMs(batchTiming, "findBestOfferForTeamMs", nowMs() - phaseStartedAt);
+
+    if (offer) offers.push(offer);
+
+    const teamMs = nowMs() - teamStart;
+    const metricDelta = diffMetrics(context.metrics, beforeMetrics);
+    const evaluationsForTeam = Number(metricDelta.exactEvaluations || 0) + Number(metricDelta.scanEvaluations || 0);
+    const summary = {
+      teamIndex,
+      team: getTeamName(cpuTeam),
+      foundOffer: Boolean(offer),
+      teamMs: round1(teamMs),
+      evaluationsForTeam,
+      offer: makeOfferDebugSummary(offer),
+      stats: offer?.searchStats || null,
+      timing: offer?.searchStats?.timing || null,
+      metrics: cloneMetrics(metricDelta),
+    };
+    teamSummaries.push(summary);
+    for (const [metricKey, metricValue] of Object.entries(context.metrics || {})) {
+      aggregateMetrics[metricKey] = Number(aggregateMetrics[metricKey] || 0) + Number(metricValue || 0);
+    }
+
+    try {
+      if (typeof onTeamDone === "function") onTeamDone(summary);
+    } catch {}
+  }
+
+  batchTiming.totalMeasuredMs = nowMs() - batchStartedAt;
+  return {
+    offers,
+    teamSummaries,
+    metrics: cloneMetrics(aggregateMetrics),
+    timing: roundTimingMap(batchTiming),
+    elapsedMs: round1(nowMs() - batchStartedAt),
+    searchMode,
+  };
+}
+
+function mergeMetricTotals(target = {}, source = {}) {
+  for (const [key, value] of Object.entries(source || {})) {
+    target[key] = Number(target[key] || 0) + Number(value || 0);
+  }
+  return target;
+}
+
+async function runTradeFinderTeamsInWorkerPool({
+  leagueData,
+  selectedTeam,
+  selectedItems = [],
+  checkTeams = [],
+  baseComfortFloor = null,
+  searchMode = "accurate",
+  onProgress = null,
+  signal = null,
+  startedAt = nowMs(),
+} = {}) {
+  const workerCount = getTradeFinderWorkerPoolSize(checkTeams.length);
+  if (!workerCount) return null;
+
+  const chunks = chunkTeamsRoundRobin(checkTeams, workerCount);
+  const workerStartedAt = nowMs();
+  let completedTeams = 0;
+  let offersFound = 0;
+  const workers = [];
+  let abortHandler = null;
+
+  const terminateAll = () => {
+    for (const worker of workers) {
+      try {
+        worker.terminate();
+      } catch {}
+    }
+  };
+
+  try {
+    safeProgress(onProgress, {
+      phase: "worker_pool_start",
+      team: "",
+      teamIndex: 0,
+      teamsToCheck: checkTeams.length,
+      offersFound: 0,
+      elapsedSec: round1((nowMs() - startedAt) / 1000),
+      workerCount: chunks.length,
+      searchMode,
+      searchProfile: "v12_builder_exact_best_player_anchor_worker_pool",
+    });
+
+    if (signal) {
+      abortHandler = () => terminateAll();
+      signal.addEventListener?.("abort", abortHandler, { once: true });
+    }
+
+    const runChunk = (chunk, workerId) =>
+      new Promise((resolve, reject) => {
+        if (isCancelled(signal)) return resolve({ offers: [], teamSummaries: [], metrics: {}, timing: {}, stopped: true });
+        const worker = new Worker(new URL("../workers/tradeFinderTeamWorker.js", import.meta.url), { type: "module" });
+        workers.push(worker);
+        worker.onerror = (event) => {
+          reject(new Error(event?.message || `Trade Finder worker ${workerId} failed`));
+        };
+        worker.onmessage = (event) => {
+          const message = event?.data || {};
+          if (message.type === "team_done") {
+            completedTeams += 1;
+            if (message.summary?.foundOffer) offersFound += 1;
+            safeProgress(onProgress, {
+              phase: "team_done",
+              team: message.summary?.team || "",
+              teamIndex: Number(message.summary?.teamIndex || completedTeams),
+              teamsToCheck: checkTeams.length,
+              offersFound,
+              elapsedSec: round1((nowMs() - startedAt) / 1000),
+              teamMs: Number(message.summary?.teamMs || 0),
+              evaluationsForTeam: Number(message.summary?.evaluationsForTeam || 0),
+              workerId,
+              workerCount: chunks.length,
+            });
+            return;
+          }
+          if (message.type === "complete") {
+            try {
+              worker.terminate();
+            } catch {}
+            resolve(message.result || { offers: [], teamSummaries: [], metrics: {}, timing: {} });
+            return;
+          }
+          if (message.type === "error") {
+            reject(new Error(message.error?.message || message.error || `Trade Finder worker ${workerId} error`));
+          }
+        };
+        worker.postMessage({
+          type: "run_batch",
+          workerId,
+          payload: {
+            leagueData,
+            selectedTeam,
+            selectedItems,
+            cpuTeams: chunk.teams,
+            teamIndices: chunk.teamIndices,
+            teamsToCheck: checkTeams.length,
+            comfortFloor: baseComfortFloor,
+            searchMode,
+          },
+        });
+      });
+
+    const results = await Promise.all(chunks.map((chunk, index) => runChunk(chunk, index + 1)));
+    const merged = {
+      offers: [],
+      teamSummaries: [],
+      metrics: {},
+      timing: {
+        workerPoolMs: nowMs() - workerStartedAt,
+        workerCount: chunks.length,
+      },
+      workerResults: results,
+    };
+
+    for (const result of results) {
+      merged.offers.push(...(result.offers || []));
+      merged.teamSummaries.push(...(result.teamSummaries || []));
+      mergeMetricTotals(merged.metrics, result.metrics || {});
+      for (const [key, value] of Object.entries(result.timing || {})) {
+        if (key === "totalMeasuredMs") merged.timing.workerTotalMeasuredMs = Number(merged.timing.workerTotalMeasuredMs || 0) + Number(value || 0);
+        else if (typeof value === "number") merged.timing[`worker_${key}`] = Number(merged.timing[`worker_${key}`] || 0) + Number(value || 0);
+      }
+    }
+    merged.offers.sort((a, b) => Number(a?.searchStats?.teamIndex || 0) - Number(b?.searchStats?.teamIndex || 0));
+    merged.teamSummaries.sort((a, b) => Number(a.teamIndex || 0) - Number(b.teamIndex || 0));
+    merged.timing = roundTimingMap(merged.timing);
+    return merged;
+  } finally {
+    if (signal && abortHandler) signal.removeEventListener?.("abort", abortHandler);
+    terminateAll();
+  }
+}
+
 export async function findComfortableTradeFinderOffers({
   leagueData,
   selectedTeam,
@@ -825,12 +1323,17 @@ export async function findComfortableTradeFinderOffers({
   searchMode = "accurate",
 } = {}) {
   const startedAt = nowMs();
+  const searchTiming = {};
+  let phaseStartedAt = nowMs();
   const allTeams = teams?.length ? teams : getAllTeamsFromLeagueData(leagueData);
   const checkTeams = allTeams.filter((team) => !sameTeamName(getTeamName(team), getTeamName(selectedTeam)));
+  addTimingMs(searchTiming, "resolveTeamsMs", nowMs() - phaseStartedAt);
+  phaseStartedAt = nowMs();
   const baseContext = makeTradeFinderEvalContext({ leagueData, selectedTeam, selectedItems });
+  addTimingMs(searchTiming, "makeBaseContextMs", nowMs() - phaseStartedAt);
   const offers = [];
   const teamSummaries = [];
-  const aggregateMetrics = { ...baseContext.metrics };
+  const aggregateMetrics = cloneMetrics(baseContext.metrics);
 
   safeProgress(onProgress, {
     phase: "scan_start",
@@ -852,6 +1355,51 @@ export async function findComfortableTradeFinderOffers({
     teamsToCheck: checkTeams.length,
   });
 
+  // Patch 2 speed safety: clear impact/rating caches once per full search, not
+  // before every CPU team. The cache keys include roster/package/evaluation mode,
+  // so this preserves exact outputs while allowing repeated selected-team and
+  // league-power calculations to be reused across all 29 team searches.
+  phaseStartedAt = nowMs();
+  try {
+    resetTradeFinderImpactSearchCaches({ keepPowerContext: true });
+  } catch {}
+  addTimingMs(searchTiming, "resetImpactCachesMs", nowMs() - phaseStartedAt);
+
+  let usedWorkerPool = false;
+  phaseStartedAt = nowMs();
+  try {
+    const workerResult = await runTradeFinderTeamsInWorkerPool({
+      leagueData,
+      selectedTeam,
+      selectedItems,
+      checkTeams,
+      baseComfortFloor: baseContext.comfortFloor,
+      searchMode,
+      onProgress,
+      signal,
+      startedAt,
+    });
+    addTimingMs(searchTiming, "workerPoolDispatchMs", nowMs() - phaseStartedAt);
+    if (workerResult) {
+      usedWorkerPool = true;
+      offers.push(...(workerResult.offers || []));
+      teamSummaries.push(...(workerResult.teamSummaries || []));
+      for (const key of Object.keys(aggregateMetrics)) aggregateMetrics[key] = 0;
+      mergeMetricTotals(aggregateMetrics, workerResult.metrics || {});
+      for (const [timingKey, timingValue] of Object.entries(workerResult.timing || {})) {
+        searchTiming[timingKey] = Number(searchTiming[timingKey] || 0) + Number(timingValue || 0);
+      }
+    }
+  } catch (error) {
+    addTimingMs(searchTiming, "workerPoolDispatchMs", nowMs() - phaseStartedAt);
+    console.warn("[TF WORKER] Worker pool failed; falling back to serial Trade Finder search.", error);
+    usedWorkerPool = false;
+    offers.length = 0;
+    teamSummaries.length = 0;
+    for (const key of Object.keys(aggregateMetrics)) aggregateMetrics[key] = Number(baseContext.metrics?.[key] || 0);
+  }
+
+  if (!usedWorkerPool) {
   for (let index = 0; index < checkTeams.length; index += 1) {
     if (isCancelled(signal)) break;
     const cpuTeam = checkTeams[index];
@@ -864,18 +1412,17 @@ export async function findComfortableTradeFinderOffers({
       elapsedSec: round1((nowMs() - startedAt) / 1000),
     });
 
-    try {
-      resetTradeFinderImpactSearchCaches({ keepPowerContext: true });
-    } catch {}
-
     const teamStart = nowMs();
+    phaseStartedAt = nowMs();
     const context = makeTradeFinderEvalContext({
       leagueData,
       selectedTeam,
       selectedItems,
       comfortFloor: baseContext.comfortFloor,
     });
-    const beforeMetrics = { ...context.metrics };
+    addTimingMs(searchTiming, "makeTeamContextMs", nowMs() - phaseStartedAt);
+    const beforeMetrics = cloneMetrics(context.metrics);
+    phaseStartedAt = nowMs();
     const offer = await findBestOfferForTeam({
       context,
       cpuTeam,
@@ -885,13 +1432,13 @@ export async function findComfortableTradeFinderOffers({
         safeProgress(onProgress, { ...progress, offersFound: offers.length, elapsedSec: round1((nowMs() - startedAt) / 1000) }),
       signal,
     });
+    addTimingMs(searchTiming, "findBestOfferForTeamMs", nowMs() - phaseStartedAt);
 
     if (offer) offers.push(offer);
 
     const teamMs = nowMs() - teamStart;
-    const evaluationsForTeam =
-      Number(context.metrics.exactEvaluations || 0) - Number(beforeMetrics.exactEvaluations || 0) +
-      Number(context.metrics.scanEvaluations || 0) - Number(beforeMetrics.scanEvaluations || 0);
+    const metricDelta = diffMetrics(context.metrics, beforeMetrics);
+    const evaluationsForTeam = Number(metricDelta.exactEvaluations || 0) + Number(metricDelta.scanEvaluations || 0);
     const summary = {
       team: getTeamName(cpuTeam),
       foundOffer: Boolean(offer),
@@ -899,6 +1446,8 @@ export async function findComfortableTradeFinderOffers({
       evaluationsForTeam,
       offer: makeOfferDebugSummary(offer),
       stats: offer?.searchStats || null,
+      timing: offer?.searchStats?.timing || null,
+      metrics: cloneMetrics(metricDelta),
     };
     teamSummaries.push(summary);
     for (const [metricKey, metricValue] of Object.entries(context.metrics || {})) {
@@ -919,25 +1468,40 @@ export async function findComfortableTradeFinderOffers({
     if ((index + 1) % SEARCH_YIELD_EVERY_TEAMS === 0) await yieldToBrowser();
   }
 
+  }
+
+  phaseStartedAt = nowMs();
   const finalOffers = sortFinalOffers(offers).map((offer) => ({ ...offer, offer: sortTradeFinderOfferItems(offer.offer, leagueData) }));
+  addTimingMs(searchTiming, "sortFinalOffersMs", nowMs() - phaseStartedAt);
   const elapsedSec = round1((nowMs() - startedAt) / 1000);
+  searchTiming.totalMeasuredMs = nowMs() - startedAt;
   const stopped = isCancelled(signal);
   const debugPayload = {
     engine: "v12_builder_exact_best_player_anchor",
     policy:
       "builder-exact best-player anchor optimizer; displayed offers use same score as Propose Trade; support picks added only after accepted player core; rejected support is downgraded/removed",
     comfortFloor: baseContext.comfortFloor,
+    selectedTeam: getTeamName(selectedTeam),
+    selectedAssets: selectedItems.length,
+    workerPoolEnabled: usedWorkerPool,
+    workerPoolSize: usedWorkerPool ? getTradeFinderWorkerPoolSize(checkTeams.length) : 0,
     teamsChecked: checkTeams.length,
     offersFound: finalOffers.length,
     elapsedSec,
     selectedValue: round1(packageValue(selectedItems, leagueData)),
-    metrics: { ...aggregateMetrics },
+    metrics: cloneMetrics(aggregateMetrics),
+    timing: roundTimingMap(searchTiming),
     offers: finalOffers.map(makeOfferDebugSummary),
     teamSummaries,
   };
+  debugPayload.baselineSnapshot = makeTradeFinderBaselineSnapshot(debugPayload);
 
   try {
-    if (typeof window !== "undefined") window.__TF_LAST_DEBUG = debugPayload;
+    if (typeof window !== "undefined") {
+      window.__TF_LAST_DEBUG = debugPayload;
+      window.__TF_LAST_SNAPSHOT = debugPayload.baselineSnapshot;
+      installTradeFinderBaselineTools(debugPayload);
+    }
   } catch {}
   debugLog("search complete", debugPayload);
 
