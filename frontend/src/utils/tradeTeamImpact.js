@@ -1088,11 +1088,13 @@ function calculateTeamImpactRatings(players = [], options = {}) {
   }
 
   const teamRatingsStart = tfImpactNow();
-  const teamRatings = computeTeamRatings({ players: valid }, minutes);
+  const teamRatings = computeTeamRatings({ players: valid }, minutes, { includeRosterOut: false });
   addBreakdownMetric(metrics, `${rolePrefix}TeamRatingsMs`, tfImpactNow() - teamRatingsStart);
 
   const potentialStart = tfImpactNow();
-  const potentialRatings = calculateTeamPotentialRating(valid);
+  const potentialRatings = calculateTeamPotentialRating(valid, {
+    exactCurrentOverall: Number(teamRatings?.exactOverall ?? teamRatings?.overall ?? 0),
+  });
   addBreakdownMetric(metrics, `${rolePrefix}PotentialMs`, tfImpactNow() - potentialStart);
 
   let fullTeamRatings;
@@ -1103,7 +1105,7 @@ function calculateTeamImpactRatings(players = [], options = {}) {
     addBreakdownMetric(metrics, `${rolePrefix}FastFtrMinutesMs`, tfImpactNow() - fastMinutesStart);
 
     const fastFtrRatingsStart = tfImpactNow();
-    const fastFtrRatings = computeTeamRatings({ players: valid }, fastFtrMinutes);
+    const fastFtrRatings = computeTeamRatings({ players: valid }, fastFtrMinutes, { includeRosterOut: false });
     addBreakdownMetric(metrics, `${rolePrefix}FastFtrRatingsMs`, tfImpactNow() - fastFtrRatingsStart);
     fullTeamRatings = {
       ftr: Number(fastFtrRatings?.overall || 0),
@@ -1196,7 +1198,7 @@ function calculateRankOnlyRatings(team = {}, metrics = null) {
   }
 
   const ratingsStart = tfImpactNow();
-  const ratings = computeTeamRatings({ players: valid }, minutes);
+  const ratings = computeTeamRatings({ players: valid }, minutes, { includeRosterOut: false });
   addBreakdownMetric(metrics, "powerRankTeamRatingsMs", tfImpactNow() - ratingsStart);
   addBreakdownMetric(metrics, "powerRankRatingTotalMs", tfImpactNow() - totalStart);
   incrementBreakdownMetric(metrics, "powerRankTeamsRated");

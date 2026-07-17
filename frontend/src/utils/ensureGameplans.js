@@ -728,7 +728,7 @@ function scoreMinutes(valid, minutesObj) {
   const diag = activeSmartRotationBreakdownRow;
   const start = smartNow();
   try {
-    const ratings = computeTeamRatings({ players: valid }, minutesObj);
+    const ratings = computeTeamRatings({ players: valid }, minutesObj, { includeRosterOut: false });
 
     // Use exact 4-decimal ratings internally so rotations/sim-adjacent logic do
     // not treat two rounded display ratings as identical.
@@ -899,7 +899,7 @@ function displayedRatings(valid, minutesObj) {
   const diag = activeSmartRotationBreakdownRow;
   const start = smartNow();
   try {
-    const ratings = computeTeamRatings({ players: valid }, minutesObj);
+    const ratings = computeTeamRatings({ players: valid }, minutesObj, { includeRosterOut: false });
     return {
       overall: Number(ratings?.overall || 0),
       off: Number(ratings?.off || 0),
@@ -1606,7 +1606,7 @@ export function buildFullTeamRating(teamPlayers) {
     };
   }
 
-  const ratings = computeTeamRatings({ players: built.valid }, built.minutesObj);
+  const ratings = computeTeamRatings({ players: built.valid }, built.minutesObj, { includeRosterOut: false });
   const result = {
     // Whole-number values are display-only.
     ftr: Number(ratings.overall || 0),
@@ -1883,7 +1883,7 @@ function potentialWindowTeamScore(players, yearsAhead) {
 function getAutoBuiltExactOverallForPotential(teamPlayers) {
   try {
     const built = buildSmartRotation(teamPlayers);
-    const ratings = computeTeamRatings({ players: teamPlayers || [] }, built.obj || {});
+    const ratings = computeTeamRatings({ players: teamPlayers || [] }, built.obj || {}, { includeRosterOut: false });
     return Number(ratings.exactOverall ?? ratings.overall ?? 0);
   } catch (error) {
     console.warn("Team POT proof bonus fallback:", error);
@@ -1891,7 +1891,7 @@ function getAutoBuiltExactOverallForPotential(teamPlayers) {
   }
 }
 
-export function calculateTeamPotentialRating(teamPlayers) {
+export function calculateTeamPotentialRating(teamPlayers, options = {}) {
   const valid = (teamPlayers || []).filter(
     (player) => player && player.name && (hasFiniteRating(player.potential) || hasFiniteRating(player.overall))
   );
@@ -1922,7 +1922,10 @@ export function calculateTeamPotentialRating(teamPlayers) {
   // Only teams that are already elite and also have a strong future raw score
   // get a small proof bonus. This helps proven young cores without turning POT
   // into another current-OVR rating.
-  const exactCurrentOverall = getAutoBuiltExactOverallForPotential(valid);
+  const suppliedCurrentOverall = Number(options?.exactCurrentOverall);
+  const exactCurrentOverall = Number.isFinite(suppliedCurrentOverall)
+    ? suppliedCurrentOverall
+    : getAutoBuiltExactOverallForPotential(valid);
   const futureStrength = Math.max(0, rawPot - 84) / 10;
   const proofBonus =
     Math.max(0, exactCurrentOverall - POT_PROOF_BASE_OVERALL) *
