@@ -55,6 +55,61 @@ function safeJSON(raw, fallback = {}) {
   }
 }
 
+function getOptionYearIndices(option) {
+  if (!option || typeof option !== "object") return [];
+
+  const raw = Array.isArray(option.yearIndices)
+    ? option.yearIndices
+    : option.yearIndex !== undefined && option.yearIndex !== null
+    ? [option.yearIndex]
+    : [];
+
+  return raw
+    .map((value) => Number(value))
+    .filter((value, index, rows) => Number.isFinite(value) && value >= 0 && rows.indexOf(value) === index)
+    .sort((a, b) => a - b);
+}
+
+function getOptionPickValue(option, yearIndex) {
+  if (!option || typeof option !== "object") return null;
+
+  const picked = option.picked;
+  if (picked && typeof picked === "object" && !Array.isArray(picked)) {
+    if (String(yearIndex) in picked) return picked[String(yearIndex)];
+    if ("default" in picked) return picked.default;
+    return null;
+  }
+
+  return picked ?? null;
+}
+
+function isOptionDecisionWindow(leagueData) {
+  const saved = safeJSON(localStorage.getItem("bm_offseason_state_v1"), {}) || {};
+  const embedded = leagueData?.offseasonState || leagueData?.offseason || {};
+  const state = Object.keys(saved).length ? saved : embedded;
+
+  return Boolean(
+    state?.active &&
+    !state?.optionsComplete &&
+    !state?.preFreeAgencyResolved
+  );
+}
+
+function isPendingContractOptionYear(contract, yearIndex, currentSeasonYear, optionWindowActive) {
+  const option = contract?.option;
+  if (!option?.type) return false;
+
+  const normalizedYearIndex = Number(yearIndex);
+  if (!getOptionYearIndices(option).includes(normalizedYearIndex)) return false;
+
+  const pickedValue = getOptionPickValue(option, normalizedYearIndex);
+  if (pickedValue !== null && pickedValue !== undefined) return false;
+
+  const optionSeasonYear = safeNumber(contract?.startYear, 0) + normalizedYearIndex;
+  if (optionSeasonYear > currentSeasonYear) return true;
+  return optionSeasonYear === currentSeasonYear && optionWindowActive;
+}
+
 function readCompressedOrJson(key, fallback = {}) {
   try {
     const raw = localStorage.getItem(key);
@@ -206,12 +261,14 @@ function getContractTypeLabel(player) {
   if (type === "free_agent") return "Free Agent";
   if (type === "unsigned_rookie" || type === "rookie_pending") return "Unsigned Rookie";
   if (type === "draft_rights") return "Draft Rights";
+  if (["stash", "stashed", "draft_stash", "g_league_stash", "overseas_stash"].includes(type)) return "Stash Rights";
   return "Standard Contract";
 }
 
 function getContractTypeTone(player) {
   const type = getContractType(player);
   if (type === "two_way" || type === "two-way") return "orange";
+  if (["stash", "stashed", "draft_stash", "g_league_stash", "overseas_stash"].includes(type)) return "orange";
   if (type === "free_agent" || type === "unsigned_rookie" || type === "rookie_pending") return "red";
   return "green";
 }
@@ -1224,12 +1281,33 @@ export default function PlayerCardModal({
   const honorIndex = buildSeasonHonorIndex(accolades);
   const filteredAccolades = filterAccoladesByTab(accolades, accoladeFilter);
   const transactions = Array.isArray(player?.history?.transactions) ? player.history.transactions : [];
-  const salaryByYear = Array.isArray(player?.contract?.salaryByYear) ? player.contract.salaryByYear : [];
-  const contractYears = getContractYears(player?.contract);
-  const contractAav = getContractAav(player?.contract);
+  const resolvedContractType = getContractType(player);
+  const isTwoWayDevelopmentContract =
+    resolvedContractType === "two_way" || resolvedContractType === "two-way";
+  const isNonCapDevelopmentContract =
+    isTwoWayDevelopmentContract ||
+    ["stash", "stashed", "draft_stash", "g_league_stash", "overseas_stash"].includes(resolvedContractType);
+  const twoWayYearsUsed = isTwoWayDevelopmentContract
+    ? Math.max(1, safeNumber(player?.twoWayMeta?.twoWayYearsUsed ?? player?.twoWayYearsUsed, 1))
+    : 0;
+  const maxTwoWayYears = isTwoWayDevelopmentContract
+    ? Math.max(twoWayYearsUsed, safeNumber(player?.twoWayMeta?.maxTwoWayYears ?? player?.maxTwoWayYears, 3))
+    : 0;
+  const developmentYearsLabel = isTwoWayDevelopmentContract
+    ? `Year ${twoWayYearsUsed} of ${maxTwoWayYears}`
+    : "Development";
+  const salaryByYear = isNonCapDevelopmentContract
+    ? []
+    : Array.isArray(player?.contract?.salaryByYear)
+    ? player.contract.salaryByYear
+    : [];
+  const contractYears = isNonCapDevelopmentContract ? 0 : getContractYears(player?.contract);
+  const contractAav = isNonCapDevelopmentContract ? 0 : getContractAav(player?.contract);
   const moodTheme = MOOD_COLORS[mood.label] || MOOD_COLORS.Content;
   const option = player?.contract?.option;
   const optionType = option?.type ? String(option.type).replaceAll("_", " ") : null;
+  const contractDisplaySeasonYear = getCurrentSeasonDisplayYear(leagueData);
+  const optionWindowActive = isOptionDecisionWindow(leagueData);
   const rights = player?.rights || {};
   const portraitUrl = getPlayerPortraitUrl(player);
   const contractTypeLabel = getContractTypeLabel(player);
@@ -1442,8 +1520,8 @@ export default function PlayerCardModal({
 
                   <div className="grid grid-cols-2 gap-3">
                     <StatPill label="Type" value={contractTypeLabel} accent />
-                    <StatPill label="Years" value={contractYears ? `${contractYears}` : "No deal"} />
-                    <StatPill label="AAV" value={formatMillions(contractAav)} accent />
+                    <StatPill label="Years" value={isNonCapDevelopmentContract ? developmentYearsLabel : contractYears ? `${contractYears}` : "No deal"} />
+                    <StatPill label="AAV" value={isNonCapDevelopmentContract ? "No cap hit" : formatMillions(contractAav)} accent />
                     <StatPill label="Start" value={player?.contract?.startYear || "-"} />
                   </div>
 
@@ -1451,7 +1529,12 @@ export default function PlayerCardModal({
                     <div className="mt-4 space-y-2">
                       {salaryByYear.map((salary, index) => {
                         const seasonYear = safeNumber(player?.contract?.startYear, 0) + index;
-                        const optionYear = Array.isArray(option?.yearIndices) && option.yearIndices.includes(index);
+                        const optionYear = isPendingContractOptionYear(
+                          player?.contract,
+                          index,
+                          contractDisplaySeasonYear,
+                          optionWindowActive
+                        );
                         return (
                           <div key={`${seasonYear}-${index}`} className="pc-stat-pill flex items-center justify-between rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-sm">
                             <span className="font-bold text-zinc-300">
@@ -1464,7 +1547,16 @@ export default function PlayerCardModal({
                       })}
                     </div>
                   ) : (
-                    <EmptyState title="No active contract" subtitle="This player is currently showing without salary years." />
+                    <EmptyState
+                      title={isNonCapDevelopmentContract ? "No salary-cap contract" : "No active contract"}
+                      subtitle={
+                        isNonCapDevelopmentContract
+                          ? isTwoWayDevelopmentContract
+                            ? `This is a one-season zero-cap two-way contract (development year ${twoWayYearsUsed} of ${maxTwoWayYears}). A standard salary and term begin only after conversion.`
+                            : "Stash players carry no salary-table payroll. Standard salary begins only after conversion."
+                          : "This player is currently showing without salary years."
+                      }
+                    />
                   )}
                 </div>
 

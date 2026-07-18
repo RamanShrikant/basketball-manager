@@ -329,11 +329,8 @@ function hasPendingOptionForSeasonLocal(player, seasonYear) {
     return getOptionPickValueLocal(option, targetIdx) === null || getOptionPickValueLocal(option, targetIdx) === undefined;
   }
 
-  const bridgeSourceIdx = targetIdx - 1;
-  if (salaryByYear.length === 1 && bridgeSourceIdx === 0 && optionYears.includes(bridgeSourceIdx)) {
-    return getOptionPickValueLocal(option, bridgeSourceIdx) === null || getOptionPickValueLocal(option, bridgeSourceIdx) === undefined;
-  }
-
+  // Options only apply to real salary slots in the contract. A completed
+  // one-year option must not be bridged into another identical salary year.
   return false;
 }
 

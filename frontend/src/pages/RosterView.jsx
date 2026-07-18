@@ -6,7 +6,7 @@ import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./RosterView.module.css";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
-import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
+import { getLeagueFinancialRules, getRookieSalaryForPick } from "../utils/leagueFinancials.js";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
@@ -236,11 +236,11 @@ export default function RosterView() {
         "maxTwoWayYears",
         "twoWayMaxYears",
       ]) ??
-      2;
+      3;
 
     return {
       used: Math.max(0, Number(used || 0)),
-      max: Math.max(1, Number(max || 2)),
+      max: Math.max(1, Number(max || 3)),
       convertedToStandard:
         Boolean(meta.convertedToStandardSeasonYear) ||
         Boolean(meta.convertedToStandardByTeam) ||
@@ -691,49 +691,184 @@ export default function RosterView() {
     return { updated, updatedTeam };
   };
 
+  const rebaseStandardContractFromSeason = (
+    contract,
+    targetStartYear,
+    { guaranteeFirstSeason = false } = {}
+  ) => {
+    if (!contract || typeof contract !== "object") return null;
+
+    const originalStartYear = Number(contract?.startYear || 0);
+    const originalSalaries = Array.isArray(contract?.salaryByYear)
+      ? contract.salaryByYear.map((amount) => Number(amount || 0))
+      : [];
+
+    if (!Number.isFinite(originalStartYear) || !originalSalaries.length) return null;
+
+    const effectiveStartYear = Math.max(Number(targetStartYear), originalStartYear);
+    const offset = effectiveStartYear - originalStartYear;
+    const remainingSalaries = originalSalaries.slice(offset);
+    if (!remainingSalaries.length) return null;
+
+    const oldOption = contract?.option && typeof contract.option === "object"
+      ? contract.option
+      : null;
+    const oldOptionIndices = Array.isArray(oldOption?.yearIndices)
+      ? oldOption.yearIndices.map(Number).filter(Number.isFinite)
+      : [];
+    const oldPicked = oldOption?.picked && typeof oldOption.picked === "object"
+      ? oldOption.picked
+      : {};
+
+    const nextOptionIndices = [];
+    const nextPicked = {};
+
+    for (const oldIndex of oldOptionIndices) {
+      const absoluteYear = originalStartYear + oldIndex;
+      if (absoluteYear < effectiveStartYear) continue;
+
+      const nextIndex = absoluteYear - effectiveStartYear;
+      if (nextIndex < 0 || nextIndex >= remainingSalaries.length) continue;
+
+      // Converting to a standard contract guarantees the conversion season.
+      // Only later unresolved option seasons should remain marked as options.
+      if (guaranteeFirstSeason && nextIndex === 0) continue;
+
+      nextOptionIndices.push(nextIndex);
+      if (Object.prototype.hasOwnProperty.call(oldPicked, String(oldIndex))) {
+        nextPicked[String(nextIndex)] = oldPicked[String(oldIndex)];
+      }
+    }
+
+    const nextOption = oldOption && nextOptionIndices.length
+      ? {
+          ...oldOption,
+          yearIndices: nextOptionIndices,
+          picked: Object.keys(nextPicked).length ? nextPicked : null,
+        }
+      : null;
+
+    return {
+      ...contract,
+      type: "standard",
+      startYear: effectiveStartYear,
+      salaryByYear: remainingSalaries,
+      option: nextOption,
+      countsAgainstStandardRoster: true,
+      countsAgainstSalaryCap: true,
+    };
+  };
+
+  const buildRemainingRookieContract = (player, targetStartYear) => {
+    const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+    const draftRound = Number(meta?.draftRound || player?.draftRound || 0);
+    const draftPick = Math.max(1, Number(meta?.draftPick || player?.draftPick || 60));
+    const draftYear = Number(meta?.draftYear || player?.draftYear || 0);
+    const rookieStartYear = Number(
+      meta?.nbaRookieSeasonYear ||
+      meta?.rookieSeasonYear ||
+      player?.rookieSeasonYear ||
+      (draftYear ? draftYear + 1 : targetStartYear)
+    );
+    const elapsedSeasons = Math.max(0, targetStartYear - rookieStartYear);
+
+    if (draftRound === 1 && elapsedSeasons < 4) {
+      const firstSalary = getRookieSalaryForPick(
+        workingLeagueData || {},
+        1,
+        draftPick,
+        rookieStartYear
+      );
+      const fullScale = [
+        firstSalary,
+        Math.round(firstSalary * 1.05),
+        Math.round(firstSalary * 1.1),
+        Math.round(firstSalary * 1.22),
+      ];
+      const salaryByYear = fullScale.slice(elapsedSeasons);
+      const optionIndices = [2, 3]
+        .filter((originalIndex) => originalIndex >= elapsedSeasons)
+        .map((originalIndex) => originalIndex - elapsedSeasons)
+        // The act of converting guarantees the first standard season.
+        .filter((nextIndex) => nextIndex > 0);
+
+      return {
+        type: "standard",
+        startYear: targetStartYear,
+        salaryByYear,
+        option: optionIndices.length
+          ? { type: "team", yearIndices: optionIndices, picked: null }
+          : null,
+        source: "two_way_upgrade_remaining_first_round_scale",
+        countsAgainstStandardRoster: true,
+        countsAgainstSalaryCap: true,
+      };
+    }
+
+    if (draftRound === 2 && elapsedSeasons < 2) {
+      const firstSalary = getRookieSalaryForPick(
+        workingLeagueData || {},
+        2,
+        draftPick,
+        rookieStartYear
+      );
+      return {
+        type: "standard",
+        startYear: targetStartYear,
+        salaryByYear: [firstSalary, Math.round(firstSalary * 1.08)].slice(elapsedSeasons),
+        option: null,
+        source: "two_way_upgrade_remaining_second_round_contract",
+        countsAgainstStandardRoster: true,
+        countsAgainstSalaryCap: true,
+      };
+    }
+
+    return null;
+  };
+
   const buildStandardContractFromTwoWay = (player) => {
-    const minimumSalary = getStandardMinimumSalary();
+    const targetStartYear = getCurrentSeasonYear() + 1;
     const storedStandardContract =
       player?.previousStandardContract ||
       player?.standardContractBeforeTwoWay ||
       null;
 
-    if (
-      storedStandardContract &&
-      Array.isArray(storedStandardContract.salaryByYear) &&
-      storedStandardContract.salaryByYear.length
-    ) {
+    const restoredRemainingContract = rebaseStandardContractFromSeason(
+      storedStandardContract,
+      targetStartYear,
+      { guaranteeFirstSeason: true }
+    );
+
+    if (restoredRemainingContract) {
       return {
-        ...storedStandardContract,
-        salaryByYear: storedStandardContract.salaryByYear.map((amount) =>
-          Math.max(minimumSalary, Number(amount || 0))
-        ),
-        option: storedStandardContract.option || null,
+        ...restoredRemainingContract,
+        source: "manual_two_way_upgrade_restored_remaining_standard_contract",
       };
     }
 
-    const originalSalaries = Array.isArray(player?.contract?.salaryByYear)
-      ? player.contract.salaryByYear
-      : [];
-    const years = Math.max(1, originalSalaries.length || 1);
+    const remainingRookieContract = buildRemainingRookieContract(player, targetStartYear);
+    if (remainingRookieContract) return remainingRookieContract;
 
+    const minimumSalary = getStandardMinimumSalary();
     return {
-      ...(player?.contract || {}),
-      startYear: Number(player?.contract?.startYear || getCurrentSeasonYear()),
-      salaryByYear: Array.from({ length: years }, (_, idx) =>
-        Math.max(minimumSalary, Number(originalSalaries[idx] || 0))
-      ),
-      option: player?.contract?.option || null,
+      type: "standard",
+      startYear: targetStartYear,
+      salaryByYear: [minimumSalary],
+      option: null,
+      source: "manual_two_way_upgrade_new_standard_minimum",
+      countsAgainstStandardRoster: true,
+      countsAgainstSalaryCap: true,
     };
   };
 
   const buildTwoWayContractFromStandard = () => ({
     type: "two_way",
-    startYear: getCurrentSeasonYear(),
-    salaryByYear: [0],
+    startYear: getCurrentSeasonYear() + 1,
+    salaryByYear: [],
     option: null,
     source: "manual_roster_assignment",
     countsAgainstStandardRoster: false,
+    countsAgainstSalaryCap: false,
   });
 
   const handleAssignStandardToTwoWay = (player) => {
@@ -750,7 +885,11 @@ export default function RosterView() {
       const standardPlayers = Array.isArray(team.players) ? team.players : [];
       const twoWayPlayers = getTwoWayPlayers(team);
 
-      const previousStandardContract = player?.previousStandardContract || player?.contract || null;
+      const targetTwoWaySeasonYear = getCurrentSeasonYear() + 1;
+      const previousStandardContract =
+        player?.previousStandardContract ||
+        rebaseStandardContractFromSeason(player?.contract, targetTwoWaySeasonYear) ||
+        null;
       const usage = getTwoWayUsageInfo(player);
       const nextTwoWayYearsUsed = Math.min(
         usage.max,
@@ -823,7 +962,7 @@ export default function RosterView() {
         contract: buildStandardContractFromTwoWay(player),
         twoWayMeta: {
           ...(player?.twoWayMeta || {}),
-          twoWayYearsUsed: Math.max(usage.used, usage.max),
+          twoWayYearsUsed: Math.max(1, usage.used),
           maxTwoWayYears: usage.max,
           twoWayIneligible: true,
           convertedToStandardByTeam: team.name,
@@ -1349,7 +1488,7 @@ export default function RosterView() {
                       <div>
                         <div className="text-lg font-black text-white">Upgrade to Standard Contract</div>
                         <div className="mt-1 text-sm font-semibold text-neutral-400">
-                          Move him from the two-way list to the 15-man roster on a minimum standard contract.
+                          Move him from the two-way list to the 15-man roster on the correct rookie-slot salary or standard minimum, with the salary beginning only after conversion.
                         </div>
                       </div>
                       <div className="ml-4 rounded-full bg-emerald-600 px-3 py-1 text-sm font-black text-white">

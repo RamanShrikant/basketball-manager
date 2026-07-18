@@ -3,6 +3,7 @@ import { createContext, useContext, useState, useEffect, useMemo } from "react";
 import { ensureGameplansForLeague } from "../utils/ensureGameplans.js";
 import { loadLeagueData, saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 import { ensureLeagueFinancials } from "../utils/leagueFinancials.js";
+import { normalizeDevelopmentContracts } from "../utils/developmentContractUtils.js";
 
 const GameContext = createContext();
 
@@ -69,7 +70,7 @@ function normalizeLeagueTiming(leagueData) {
 
 function normalizeLeagueFinancials(leagueData) {
   if (!leagueData || typeof leagueData !== "object") return leagueData;
-  return ensureLeagueFinancials(normalizeLeagueTiming(leagueData));
+  return normalizeDevelopmentContracts(ensureLeagueFinancials(normalizeLeagueTiming(leagueData)));
 }
 
 export function GameProvider({ children }) {

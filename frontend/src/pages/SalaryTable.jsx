@@ -221,20 +221,81 @@ export default function SalaryTable() {
     return [];
   };
 
+  const getOptionPickValue = (option, yearIndex) => {
+    if (!option || typeof option !== "object") return null;
+
+    const picked = option.picked;
+    if (picked && typeof picked === "object" && !Array.isArray(picked)) {
+      if (String(yearIndex) in picked) return picked[String(yearIndex)];
+      if ("default" in picked) return picked.default;
+      return null;
+    }
+
+    return picked ?? null;
+  };
+
+  const savedOffseasonState = safeJSON(localStorage.getItem("bm_offseason_state_v1")) || {};
+  const embeddedOffseasonState = leagueData?.offseasonState || leagueData?.offseason || {};
+  const offseasonState = Object.keys(savedOffseasonState).length
+    ? savedOffseasonState
+    : embeddedOffseasonState;
+  const isOptionDecisionWindow = Boolean(
+    offseasonState?.active &&
+    !offseasonState?.optionsComplete &&
+    !offseasonState?.preFreeAgencyResolved
+  );
+
+  const isPendingOptionContractYear = (contract, yearIndex) => {
+    if (!contract?.option?.type || !Number.isFinite(Number(yearIndex))) return false;
+
+    const normalizedYearIndex = Number(yearIndex);
+    if (!getOptionYearIndices(contract.option).includes(normalizedYearIndex)) return false;
+
+    const pickedValue = getOptionPickValue(contract.option, normalizedYearIndex);
+    if (pickedValue !== null && pickedValue !== undefined) return false;
+
+    const optionSeasonYear = Number(contract?.startYear || 0) + normalizedYearIndex;
+    if (optionSeasonYear > currentSeasonYear) return true;
+
+    // During the offseason options step, the upcoming season can equal the
+    // first displayed salary-table year. Outside that decision window, the
+    // current displayed season is already guaranteed and must not show PO/TO.
+    return optionSeasonYear === currentSeasonYear && isOptionDecisionWindow;
+  };
+
   const getOptionLabel = (contract) => {
     const option = contract?.option || null;
     if (!option?.type) return "None";
 
-    const optionYears = getOptionYearIndices(option);
-    const type = String(option.type).toUpperCase();
+    const pendingOptionYears = getOptionYearIndices(option)
+      .filter((yearIndex) => isPendingOptionContractYear(contract, yearIndex))
+      .map((yearIndex) => Number(contract?.startYear || 0) + Number(yearIndex));
 
-    if (optionYears.length) {
-      return `${type} ${optionYears
-        .map((y) => `Y${Number(y) + 1}`)
-        .join(", ")}`;
+    if (!pendingOptionYears.length) return "None";
+
+    const optionType = String(option.type).toLowerCase();
+    const shortType = optionType === "player" ? "PO" : optionType === "team" ? "TO" : optionType.toUpperCase();
+    return `${shortType}: ${pendingOptionYears.join(", ")}`;
+  };
+
+  const getOptionTypeForContractYear = (contract, yearIndex) => {
+    if (!isPendingOptionContractYear(contract, yearIndex)) return null;
+
+    const type = String(contract.option.type).toLowerCase();
+    return type === "player" || type === "team" ? type : null;
+  };
+
+  const getOptionSalaryClass = (optionType) => {
+    if (optionType === "player") return "text-emerald-300 font-extrabold";
+    if (optionType === "team") return "text-sky-300 font-extrabold";
+    return "text-white/85";
+  };
+
+  const getOptionBadgeClass = (optionType) => {
+    if (optionType === "player") {
+      return "border-emerald-400/30 bg-emerald-500/15 text-emerald-200";
     }
-
-    return type;
+    return "border-sky-400/30 bg-sky-500/15 text-sky-200";
   };
 
   const getExpType = (player) => {
@@ -321,17 +382,21 @@ export default function SalaryTable() {
   };
 
   const buildTwoWaySalaryRow = (player) => {
-    const c = normalizeContract(player);
-    const years = Math.max(1, c.salaryByYear.length || 1);
-    const endYear = c.salaryByYear.length
-      ? c.startYear + c.salaryByYear.length - 1
-      : c.startYear;
-
-    const totalRemaining = c.salaryByYear.reduce((sum, value, idx) => {
-      const seasonYear = c.startYear + idx;
-      if (seasonYear < currentSeasonYear) return sum;
-      return sum + (Number(value) || 0);
-    }, 0);
+    const normalized = normalizeContract(player);
+    const startYear = Number(
+      player?.twoWayMeta?.currentTwoWaySeasonYear ||
+      player?.twoWayMeta?.assignedSeasonYear ||
+      normalized.startYear ||
+      currentSeasonYear
+    );
+    const twoWayYearsUsed = Math.max(
+      1,
+      Number(player?.twoWayMeta?.twoWayYearsUsed || player?.twoWayYearsUsed || 1)
+    );
+    const maxTwoWayYears = Math.max(
+      twoWayYearsUsed,
+      Number(player?.twoWayMeta?.maxTwoWayYears || player?.maxTwoWayYears || 3)
+    );
 
     return {
       id: player?.id || `two-way-${player?.name || "player"}-${player?.pos || "pos"}`,
@@ -339,13 +404,21 @@ export default function SalaryTable() {
       pos: player?.pos || "",
       overall: player?.overall ?? "-",
       headshot: getPlayerImage(player),
-      contract: c,
-      years,
-      endYear,
-      totalRemaining,
-      optionLabel: "Two-Way Contract",
+      contract: {
+        ...normalized,
+        type: "two_way",
+        startYear,
+        salaryByYear: [],
+        option: null,
+        countsAgainstStandardRoster: false,
+        countsAgainstSalaryCap: false,
+      },
+      years: 1,
+      endYear: startYear,
+      totalRemaining: 0,
+      optionLabel: `Two-Way Contract — No Cap Hit • Year ${twoWayYearsUsed} of ${maxTwoWayYears}`,
       expType: "2-WAY",
-      expNote: "Two-way players are kept separate from the 15-man standard roster and do not count against standard salary-table totals in this version.",
+      expNote: `This is a one-season, zero-cap two-way contract (development year ${twoWayYearsUsed} of ${maxTwoWayYears}). If the player is extended, the next season remains a zero-cap two-way year. If converted, this row is replaced by the player's real standard contract salary and remaining term.`,
       isCapHold: false,
       isTwoWay: true,
       excludeFromPayroll: true,
@@ -1548,8 +1621,12 @@ export default function SalaryTable() {
                   {yearColumns.map((seasonYear) => {
                     const idx = seasonYear - p.contract.startYear;
                     const sal = idx >= 0 ? Number(p.contract.salaryByYear[idx] || 0) : 0;
-                    const isBig = sal >= 25_000_000;
-                    const salClass = p.isDeadCap || p.isCapHold ? "text-red-200 font-extrabold" : isBig ? "text-emerald-300" : "text-white/85";
+                    const optionType = sal > 0 && !p.isDeadCap && !p.isCapHold
+                      ? getOptionTypeForContractYear(p.contract, idx)
+                      : null;
+                    const salClass = p.isDeadCap || p.isCapHold
+                      ? "text-red-200 font-extrabold"
+                      : getOptionSalaryClass(optionType);
 
                     return (
                       <td
@@ -1557,13 +1634,23 @@ export default function SalaryTable() {
                         className={`text-right px-3 py-3 whitespace-nowrap ${
                           sal > 0 ? salClass : "text-white/35"
                         }`}
+                        title={optionType === "player" ? "Player option year" : optionType === "team" ? "Team option year" : undefined}
                       >
-                        {sal > 0 ? fmtM(sal) : "-"}
+                        {sal > 0 ? (
+                          <div className="flex items-center justify-end gap-1.5">
+                            <span>{fmtM(sal)}</span>
+                            {optionType && (
+                              <span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[9px] font-black tracking-wide ${getOptionBadgeClass(optionType)}`}>
+                                {optionType === "player" ? "PO" : "TO"}
+                              </span>
+                            )}
+                          </div>
+                        ) : "-"}
                       </td>
                     );
                   })}
 
-                  <td className={`text-right px-3 py-3 whitespace-nowrap font-extrabold ${p.isDeadCap || p.isCapHold ? "text-red-200" : "text-emerald-300"}`}>
+                  <td className={`text-right px-3 py-3 whitespace-nowrap font-extrabold ${p.isDeadCap || p.isCapHold ? "text-red-200" : "text-white/90"}`}>
                     {fmtM(p.totalRemaining)}
                   </td>
 
@@ -1826,8 +1913,12 @@ export default function SalaryTable() {
                         {yearColumns.map((seasonYear) => {
                           const idx = seasonYear - p.contract.startYear;
                           const sal = idx >= 0 ? Number(p.contract.salaryByYear[idx] || 0) : 0;
-                          const isBig = sal >= 25_000_000;
-                          const salClass = p.isDeadCap || p.isCapHold ? "text-red-200 font-extrabold" : isBig ? "text-emerald-300" : "text-white/85";
+                          const optionType = sal > 0 && !p.isDeadCap && !p.isCapHold
+                            ? getOptionTypeForContractYear(p.contract, idx)
+                            : null;
+                          const salClass = p.isDeadCap || p.isCapHold
+                            ? "text-red-200 font-extrabold"
+                            : getOptionSalaryClass(optionType);
 
                           return (
                             <td
@@ -1835,13 +1926,23 @@ export default function SalaryTable() {
                               className={`text-right px-3 py-3 whitespace-nowrap ${
                                 sal > 0 ? salClass : "text-white/35"
                               }`}
+                              title={optionType === "player" ? "Player option year" : optionType === "team" ? "Team option year" : undefined}
                             >
-                              {sal > 0 ? fmtM(sal) : "-"}
+                              {sal > 0 ? (
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <span>{fmtM(sal)}</span>
+                                  {optionType && (
+                                    <span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[9px] font-black tracking-wide ${getOptionBadgeClass(optionType)}`}>
+                                      {optionType === "player" ? "PO" : "TO"}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : "-"}
                             </td>
                           );
                         })}
 
-                        <td className={`text-right px-3 py-3 whitespace-nowrap font-extrabold ${p.isDeadCap || p.isCapHold ? "text-red-200" : "text-emerald-300"}`}>
+                        <td className={`text-right px-3 py-3 whitespace-nowrap font-extrabold ${p.isDeadCap || p.isCapHold ? "text-red-200" : "text-white/90"}`}>
                           {fmtM(p.totalRemaining)}
                         </td>
 

@@ -133,6 +133,10 @@ function DataPill({ children, tone = "neutral" }) {
       ? "border-orange-500/30 bg-orange-500/10 text-orange-200"
       : tone === "green"
       ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+      : tone === "red"
+      ? "border-red-500/30 bg-red-500/10 text-red-200"
+      : tone === "blue"
+      ? "border-sky-500/30 bg-sky-500/10 text-sky-200"
       : "border-white/10 bg-white/5 text-white/75";
 
   return (
@@ -679,6 +683,31 @@ const appliedSummary = appliedData?.summary || {};
 const selectedTeamName = selectedTeam?.name || null;
 const optionsComplete = !!offseasonState?.optionsComplete || !!appliedData?.ok;
 
+const userPlayerOptions = useMemo(() => {
+  if (!selectedTeamName) return [];
+  return (playerOptions || []).filter((row) => row?.teamName === selectedTeamName);
+}, [playerOptions, selectedTeamName]);
+
+const userPlayerOptionResults = useMemo(() => {
+  if (!selectedTeamName) return [];
+
+  return (decisionLog || [])
+    .filter(
+      (row) =>
+        row?.teamName === selectedTeamName &&
+        String(row?.type || "").toLowerCase() === "player_option"
+    )
+    .sort((a, b) => String(a?.playerName || "").localeCompare(String(b?.playerName || "")));
+}, [decisionLog, selectedTeamName]);
+
+const userPlayerOptionAcceptedCount = useMemo(() => {
+  return userPlayerOptionResults.filter(
+    (row) => String(row?.result || "").toLowerCase() === "accepted_option"
+  ).length;
+}, [userPlayerOptionResults]);
+
+const userPlayerOptionDeclinedCount = userPlayerOptionResults.length - userPlayerOptionAcceptedCount;
+
 useEffect(() => {
   if (!optionsComplete) return;
   if (!selectedTeamName) return;
@@ -1201,6 +1230,24 @@ const renderKeyInterestExtraNode = (row) => {
   return null;
 };
 
+  const renderPlayerOptionResultNode = (row) => {
+    const accepted = String(row?.result || "").toLowerCase() === "accepted_option";
+    const optionSeason = Number(row?.optionSeasonYear || seasonYear + 1);
+
+    return (
+      <>
+        <DataPill tone={accepted ? "green" : "red"}>
+          {accepted ? "Accepted Player Option" : "Declined Player Option"}
+        </DataPill>
+        <DataPill tone={accepted ? "green" : "orange"}>
+          {accepted
+            ? `Guaranteed for ${optionSeason}`
+            : "Entered Free Agency"}
+        </DataPill>
+      </>
+    );
+  };
+
   const renderRow = (row, idx, extraNode = null) => {
     const logo = teamLogoMap[row?.teamName] || "";
 
@@ -1406,6 +1453,46 @@ const renderKeyInterestExtraNode = (row) => {
         <div className="space-y-7">
   {!optionsComplete && (
     <>
+          <SectionShell
+            title="Your Player Options"
+            subtitle={
+              userPlayerOptions.length
+                ? "These decisions belong to the player. Review the likely outcome now; the final result will appear here after you resolve options."
+                : `No players on ${selectedTeamName || "your team"} have a player option for the upcoming season.`
+            }
+            rightNode={
+              userPlayerOptions.length ? (
+                <DataPill tone="blue">{userPlayerOptions.length} Player Decision{userPlayerOptions.length === 1 ? "" : "s"}</DataPill>
+              ) : null
+            }
+          >
+            {!userPlayerOptions.length ? (
+              <div className="px-6 py-14 text-center text-white/50">
+                No player options are pending for your roster this offseason.
+              </div>
+            ) : (
+              <div className="divide-y divide-white/5">
+                {userPlayerOptions.map((row, idx) =>
+                  renderRow(
+                    row,
+                    idx,
+                    <>
+                      <DataPill tone="blue">
+                        {Number(row?.option?.seasonYear || seasonYear + 1)} Player Option
+                      </DataPill>
+                      <DataPill tone={row?.playerOptionDecision?.exerciseOption ? "green" : "orange"}>
+                        {row?.playerOptionDecision?.exerciseOption
+                          ? "Projected: Accept"
+                          : "Projected: Decline"}
+                      </DataPill>
+                      <DataPill>Player Decides</DataPill>
+                    </>
+                  )
+                )}
+              </div>
+            )}
+          </SectionShell>
+
           <SectionShell
             title="Your Team Options"
             subtitle={
@@ -1622,8 +1709,8 @@ const renderKeyInterestExtraNode = (row) => {
   )}
 </SectionShell>
 <SectionShell
-  title="Player Options"
-  subtitle="These are auto-resolved by the Python logic when you finalize this stage."
+  title="League Player Options"
+  subtitle="Review every player option around the league. Your own roster is highlighted separately above."
   rightNode={
     <SectionControls
       isShown={sectionVisibility.playerOptions}
@@ -1729,6 +1816,37 @@ const renderKeyInterestExtraNode = (row) => {
   )}
 </SectionShell>
     </>
+  )}
+
+  {optionsComplete && (
+    <SectionShell
+      title="Your Player Option Results"
+      subtitle={
+        userPlayerOptionResults.length
+          ? `Final player-option decisions for ${selectedTeamName || "your team"}.`
+          : `No player-option decisions were required for ${selectedTeamName || "your team"} this offseason.`
+      }
+      rightNode={
+        userPlayerOptionResults.length ? (
+          <div className="flex items-center gap-2 flex-wrap">
+            <DataPill tone="green">{userPlayerOptionAcceptedCount} Accepted</DataPill>
+            <DataPill tone="red">{userPlayerOptionDeclinedCount} Declined</DataPill>
+          </div>
+        ) : null
+      }
+    >
+      {!userPlayerOptionResults.length ? (
+        <div className="px-6 py-14 text-center text-white/50">
+          Your roster had no player options to resolve.
+        </div>
+      ) : (
+        <div className="divide-y divide-white/5">
+          {userPlayerOptionResults.map((row, idx) =>
+            renderRow(row, idx, renderPlayerOptionResultNode(row))
+          )}
+        </div>
+      )}
+    </SectionShell>
   )}
 
   {optionsComplete && (

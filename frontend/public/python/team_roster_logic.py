@@ -22,7 +22,7 @@ except Exception:
     get_financial_rules = None
     get_rookie_salary_for_pick = None
 
-TEAM_ROSTER_LOGIC_VERSION = "2026-06-25_team_roster_logic_rookie_recommendation_v7"
+TEAM_ROSTER_LOGIC_VERSION = "2026-07-17_two_way_contract_continuity_v9"
 
 STANDARD_ROSTER_MIN = 14
 STANDARD_ROSTER_MAX = 15
@@ -351,14 +351,18 @@ def _standard_second_round_contract(player: Dict[str, Any], season_year: int, le
 
 
 def _two_way_contract(season_year: int, league: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    rules = _financial_rules(league)
+    # Two-way compensation is outside Basketball Manager's standard salary-cap
+    # accounting. Keep the contract season/type for eligibility, but never put a
+    # nominal two-way amount into salaryByYear where cap/trade/table code could
+    # accidentally treat it as standard salary.
     return {
         "type": "two_way",
         "startYear": season_year + 1,
-        "salaryByYear": [int(rules.get("twoWaySalary") or 580_000)],
+        "salaryByYear": [],
         "option": None,
         "source": "rookie_two_way_contract",
         "countsAgainstStandardRoster": False,
+        "countsAgainstSalaryCap": False,
     }
 
 
@@ -780,7 +784,7 @@ def _apply_decision_to_player(
             "assignedSeasonYear": season_year + 1,
             "currentTwoWaySeasonYear": season_year + 1,
             "twoWayYearsUsed": 1,
-            "maxTwoWayYears": 2,
+            "maxTwoWayYears": 3,
             "source": "rookie_signing_two_way",
         }
         _set_rookie_team_control_rights(
@@ -1337,11 +1341,210 @@ def _release_player_to_free_agency(
     }
 
 
+def _rebase_standard_contract_from_season(
+    contract: Optional[Dict[str, Any]],
+    target_start_year: int,
+    guarantee_first_season: bool = False,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(contract, dict):
+        return None
+
+    original_start_year = _safe_int(contract.get("startYear"), 0)
+    original_salaries = contract.get("salaryByYear") if isinstance(contract.get("salaryByYear"), list) else []
+    original_salaries = [_safe_int(value, 0) for value in original_salaries]
+    if original_start_year <= 0 or not original_salaries:
+        return None
+
+    effective_start_year = max(int(target_start_year), original_start_year)
+    offset = effective_start_year - original_start_year
+    remaining_salaries = original_salaries[offset:]
+    if not remaining_salaries:
+        return None
+
+    old_option = contract.get("option") if isinstance(contract.get("option"), dict) else None
+    old_indices = old_option.get("yearIndices") if isinstance(old_option, dict) and isinstance(old_option.get("yearIndices"), list) else []
+    old_picked = old_option.get("picked") if isinstance(old_option, dict) and isinstance(old_option.get("picked"), dict) else {}
+
+    next_indices = []
+    next_picked = {}
+    for raw_index in old_indices:
+        old_index = _safe_int(raw_index, -1)
+        if old_index < 0:
+            continue
+        absolute_year = original_start_year + old_index
+        if absolute_year < effective_start_year:
+            continue
+        next_index = absolute_year - effective_start_year
+        if next_index < 0 or next_index >= len(remaining_salaries):
+            continue
+        if guarantee_first_season and next_index == 0:
+            continue
+        next_indices.append(next_index)
+        if str(old_index) in old_picked:
+            next_picked[str(next_index)] = old_picked[str(old_index)]
+
+    next_option = None
+    if isinstance(old_option, dict) and next_indices:
+        next_option = {
+            **old_option,
+            "yearIndices": next_indices,
+            "picked": next_picked or None,
+        }
+
+    return {
+        **contract,
+        "type": "standard",
+        "startYear": effective_start_year,
+        "salaryByYear": remaining_salaries,
+        "option": next_option,
+        "countsAgainstStandardRoster": True,
+        "countsAgainstSalaryCap": True,
+    }
+
+
+def _rookie_reference_start_year(player: Dict[str, Any], target_start_year: int) -> int:
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    for value in [
+        meta.get("nbaRookieSeasonYear"),
+        meta.get("rookieSeasonYear"),
+        player.get("rookieSeasonYear"),
+        (_safe_int(meta.get("draftYear"), 0) + 1) if _safe_int(meta.get("draftYear"), 0) else None,
+        (_safe_int(player.get("draftYear"), 0) + 1) if _safe_int(player.get("draftYear"), 0) else None,
+    ]:
+        year = _safe_int(value, 0)
+        if 2020 <= year <= 2100:
+            return year
+    return int(target_start_year)
+
+
+def _remaining_rookie_standard_contract(
+    player: Dict[str, Any],
+    target_start_year: int,
+    league: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    round_num = _get_player_draft_round(player)
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    pick_num = max(1, _safe_int(meta.get("draftPick") or player.get("draftPick"), 60))
+    rookie_start_year = _rookie_reference_start_year(player, target_start_year)
+    elapsed_seasons = max(0, int(target_start_year) - rookie_start_year)
+
+    if round_num == 1 and elapsed_seasons < 4:
+        first_salary = _rookie_salary_for_pick(1, pick_num, league)
+        full_scale = [
+            first_salary,
+            int(round(first_salary * 1.05)),
+            int(round(first_salary * 1.10)),
+            int(round(first_salary * 1.22)),
+        ]
+        remaining = full_scale[elapsed_seasons:]
+        option_indices = [
+            original_index - elapsed_seasons
+            for original_index in [2, 3]
+            if original_index >= elapsed_seasons and original_index - elapsed_seasons > 0
+        ]
+        return {
+            "type": "standard",
+            "startYear": int(target_start_year),
+            "salaryByYear": remaining,
+            "option": {
+                "type": "team",
+                "yearIndices": option_indices,
+                "picked": None,
+            } if option_indices else None,
+            "source": "two_way_promotion_remaining_first_round_scale",
+            "countsAgainstStandardRoster": True,
+            "countsAgainstSalaryCap": True,
+        }
+
+    if round_num == 2 and elapsed_seasons < 2:
+        first_salary = _rookie_salary_for_pick(2, pick_num, league)
+        full_scale = [first_salary, int(round(first_salary * 1.08))]
+        return {
+            "type": "standard",
+            "startYear": int(target_start_year),
+            "salaryByYear": full_scale[elapsed_seasons:],
+            "option": None,
+            "source": "two_way_promotion_remaining_second_round_contract",
+            "countsAgainstStandardRoster": True,
+            "countsAgainstSalaryCap": True,
+        }
+
+    return None
+
+
+def _build_standard_contract_after_two_way(
+    player: Dict[str, Any],
+    season_year: int,
+    league: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    target_start_year = int(season_year) + 1
+    stored = (
+        player.get("previousStandardContract")
+        if isinstance(player.get("previousStandardContract"), dict)
+        else player.get("standardContractBeforeTwoWay")
+        if isinstance(player.get("standardContractBeforeTwoWay"), dict)
+        else None
+    )
+    restored = _rebase_standard_contract_from_season(
+        stored,
+        target_start_year,
+        guarantee_first_season = True,
+    )
+    if restored:
+        restored["source"] = "two_way_promotion_restored_remaining_standard_contract"
+        return restored
+
+    rookie_contract = _remaining_rookie_standard_contract(player, target_start_year, league)
+    if rookie_contract:
+        return rookie_contract
+
+    rules = _financial_rules(league)
+    return {
+        "type": "standard",
+        "startYear": target_start_year,
+        "salaryByYear": [int(rules.get("minimumException") or rules.get("minimumSalary") or 1_500_000)],
+        "option": None,
+        "source": "two_way_promotion_new_standard_minimum",
+        "countsAgainstStandardRoster": True,
+        "countsAgainstSalaryCap": True,
+    }
+
+
 def _promote_two_way_to_standard(team: Dict[str, Any], player: Dict[str, Any], season_year: int, league: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     team_name = _team_name(team)
     promoted = copy.deepcopy(player)
-    promoted = _set_player_as_standard(promoted, team_name, season_year, source = "two_way_promotion", league = league)
-    if _get_player_draft_round(promoted) in [1, 2] or _contract_type(player) in TWO_WAY_TYPES:
+
+    # Restore only genuinely unelapsed standard years when they still exist.
+    # Otherwise create the remaining rookie-scale path or a new minimum deal.
+    # Never reuse a two-way placeholder salary or resurrect already elapsed years.
+    promoted["contract"] = _build_standard_contract_after_two_way(
+        promoted,
+        season_year,
+        league,
+    )
+
+    previous_two_way_meta = copy.deepcopy(promoted.get("twoWayMeta")) if isinstance(promoted.get("twoWayMeta"), dict) else None
+    promoted = _set_player_as_standard(promoted, team_name, season_year + 1, source = "two_way_promotion", league = league)
+    promoted.pop("isTwoWay", None)
+    promoted.pop("twoWayMeta", None)
+    if previous_two_way_meta:
+        history = promoted.get("developmentContractHistory") if isinstance(promoted.get("developmentContractHistory"), list) else []
+        promoted["developmentContractHistory"] = [
+            *history,
+            {
+                "type": "two_way",
+                "twoWayMeta": previous_two_way_meta,
+                "convertedSeasonYear": int(season_year) + 1,
+                "source": "two_way_promotion",
+            },
+        ]
+    target_start_year = int(season_year) + 1
+    rookie_reference_year = _rookie_reference_start_year(promoted, target_start_year)
+    rookie_scale_control = (
+        _get_player_draft_round(promoted) in [1, 2]
+        and target_start_year - rookie_reference_year < 4
+    )
+    if rookie_scale_control:
         _set_rookie_team_control_rights(
             player = promoted,
             team_name = team_name,
@@ -1350,6 +1553,15 @@ def _promote_two_way_to_standard(team: Dict[str, Any], player: Dict[str, Any], s
             rights_path = "two_way_upgraded_standard_rfa_path",
             seasons_toward_bird = 1,
         )
+    else:
+        rights = promoted.get("rights") if isinstance(promoted.get("rights"), dict) else {}
+        promoted["rights"] = {
+            **rights,
+            "heldByTeam": team_name,
+            "seasonsTowardBird": max(1, _safe_int(rights.get("seasonsTowardBird"), 0)),
+            "rookieScale": False,
+            "restrictedFreeAgent": False,
+        }
     team["players"].append(promoted)
     return {
         "playerId": promoted.get("id"),
@@ -1546,11 +1758,11 @@ def _move_standard_to_two_way_for_finalization(
         "currentTwoWaySeasonYear": season_year + 1,
         "assignedSeasonYear": season_year + 1,
         "twoWayYearsUsed": max(1, _safe_int(moved.get("twoWayYearsUsed"), 1)),
-        "maxTwoWayYears": 2,
+        "maxTwoWayYears": 3,
         "source": "cpu_roster_finalization_two_way_conversion",
     }
     moved["twoWayYearsUsed"] = moved["twoWayMeta"]["twoWayYearsUsed"]
-    moved["maxTwoWayYears"] = 2
+    moved["maxTwoWayYears"] = 3
 
     team["players"] = [
         p for p in (team.get("players") or [])
