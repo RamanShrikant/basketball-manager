@@ -244,9 +244,56 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     };
   }
 
+  function getDraftOrderSignature(order = []) {
+    if (!Array.isArray(order) || !order.length) return "";
+    return order
+      .map((pick, index) => {
+        const number = Number(pick?.pick || index + 1);
+        const owner = pick?.currentOwnerTeamName || pick?.teamName || "";
+        const original = pick?.originalTeamName || pick?.originalOwnerTeamName || "";
+        return `${number}:${owner}:${original}`;
+      })
+      .join("|");
+  }
+
+  function normalizeSavedDraftState(saved, currentOrder = [], seasonYear) {
+    if (!saved || typeof saved !== "object") return null;
+    if (Number(saved.seasonYear) !== Number(seasonYear)) return null;
+    if (!Array.isArray(saved.draftOrder) || !saved.draftOrder.length) return null;
+
+    const savedSignature = saved.draftOrderSignature || getDraftOrderSignature(saved.draftOrder);
+    const currentSignature = getDraftOrderSignature(currentOrder);
+    if (currentSignature && savedSignature && savedSignature !== currentSignature) return null;
+
+    const draftedPicks = Array.isArray(saved.draftedPicks) ? saved.draftedPicks : [];
+    const currentPickIndex = Math.max(0, Math.min(
+      Number(saved.currentPickIndex ?? draftedPicks.length) || 0,
+      saved.draftOrder.length
+    ));
+    const completed = Boolean(
+      saved.completed &&
+      draftedPicks.length >= saved.draftOrder.length &&
+      currentPickIndex >= saved.draftOrder.length
+    );
+
+    return {
+      ...saved,
+      seasonYear: Number(seasonYear),
+      draftedPicks,
+      currentPickIndex,
+      completed,
+      draftOrderSignature: savedSignature,
+    };
+  }
+
   function saveDraftState(draftState) {
     if (!draftState) return;
-    localStorage.setItem(DRAFT_STATE_KEY, JSON.stringify(draftState));
+    const next = {
+      ...draftState,
+      draftOrderSignature:
+        draftState.draftOrderSignature || getDraftOrderSignature(draftState.draftOrder || []),
+    };
+    localStorage.setItem(DRAFT_STATE_KEY, JSON.stringify(next));
   }
 
   function updateOffseasonState(patch) {
@@ -256,21 +303,15 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     return next;
   }
 
-  function persistLeagueData(updated, setLeagueData) {
+  async function persistLeagueData(updated, setLeagueData) {
     if (!updated) return;
     setLeagueData(updated);
 
-    try {
-      localStorage.setItem(LEAGUE_KEY, JSON.stringify(updated));
-    } catch (err) {
-      console.warn("[Draft] localStorage league save failed", err);
-    }
-
-    // Important for large saves: when the app is in IndexedDB storage mode,
-    // localStorage-only edits can be overwritten by the IndexedDB copy on reload.
-    saveLeagueData(updated).catch((err) => {
-      console.warn("[Draft] IndexedDB league save failed", err);
-    });
+    // The draft state is stored in localStorage, while the full league lives in
+    // IndexedDB. Await the league write before marking a pick or the whole draft
+    // complete so a fast navigation/reload cannot leave a 60/60 draft with zero
+    // rookie rights in the league save.
+    await saveLeagueData(updated);
   }
 
   function formatMoney(amount) {
@@ -293,6 +334,54 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     if (Array.isArray(leagueData.teams)) return leagueData.teams;
     if (leagueData.conferences) return Object.values(leagueData.conferences).flat();
     return [];
+  }
+
+  function getLeagueDraftedPlayerIds(leagueData) {
+    const ids = new Set();
+    const addPlayers = (rows) => {
+      for (const player of rows || []) {
+        if (player?.id) ids.add(String(player.id));
+      }
+    };
+
+    for (const team of getAllTeamsFromLeague(leagueData)) {
+      addPlayers(team?.players);
+      addPlayers(team?.twoWayPlayers);
+      addPlayers(team?.stashPlayers);
+      addPlayers(team?.pendingRookieSignings);
+    }
+    addPlayers(leagueData?.freeAgents);
+    return ids;
+  }
+
+  function getDraftStatePlayerIds(draftState) {
+    return (draftState?.draftedPicks || [])
+      .map((pick) => pick?.playerId)
+      .filter(Boolean)
+      .map(String);
+  }
+
+  function isDraftStateConsistentWithLeague(draftState, leagueData) {
+    if (!draftState || typeof draftState !== "object") return false;
+    const draftedIds = getDraftStatePlayerIds(draftState);
+    if (!draftedIds.length) return !draftState.completed;
+
+    const leagueIds = getLeagueDraftedPlayerIds(leagueData);
+    if (!leagueIds.size) return false;
+
+    return draftedIds.every((id) => leagueIds.has(id));
+  }
+
+  function removeInvalidDraftCompletionFromLeague(leagueData) {
+    if (!leagueData || typeof leagueData !== "object") return leagueData;
+    const next = { ...leagueData };
+    const currentDraftState = next.draftState && typeof next.draftState === "object"
+      ? { ...next.draftState }
+      : {};
+    delete currentDraftState.draft;
+    currentDraftState.draftComplete = false;
+    next.draftState = currentDraftState;
+    return next;
   }
 
   function resolveTeamLogo(source = {}) {
@@ -639,10 +728,10 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
   function ProspectHeadshot({ src, name, size = "sm" }) {
     const sizeClass =
       size === "lg"
-        ? "h-32 w-28"
+        ? "h-28 w-24"
         : size === "md"
         ? "h-16 w-14"
-        : "h-28 w-27";
+        : "h-16 w-14";
 
     if (!src) {
       return (
@@ -655,11 +744,11 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     }
 
     return (
-      <div className={`${sizeClass} shrink-0 overflow-visible flex items-end justify-center`}>
+      <div className={`${sizeClass} shrink-0 overflow-hidden flex items-end justify-center`}>
         <img
           src={src}
           alt={name || "Prospect"}
-          className="h-full w-full object-contain object-bottom translate-y-5 drop-shadow-[0_10px_14px_rgba(0,0,0,0.55)]"
+          className="h-full w-full object-contain object-bottom drop-shadow-[0_8px_12px_rgba(0,0,0,0.5)]"
           loading="lazy"
         />
       </div>
@@ -668,18 +757,16 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
 
   function ProspectHeroHeadshot({ src, name }) {
     return (
-      <div className="relative h-40 w-44 shrink-0 self-end overflow-visible flex items-end justify-center">
-        <div className="absolute bottom-[2px] left-1/2 z-20 h-[3px] w-40 -translate-x-1/2 rounded-full bg-white/65 shadow-[0_0_16px_rgba(255,255,255,0.16)]" />
-        <div className="absolute bottom-0 left-1/2 h-5 w-36 -translate-x-1/2 rounded-full bg-black/35 blur-md" />
+      <div className="relative flex h-40 w-44 shrink-0 self-end items-end justify-center overflow-hidden">
         {src ? (
           <img
             src={src}
             alt={name || "Prospect"}
-            className="relative z-10 mb-[5px] h-[187px] w-[193px] object-contain object-bottom drop-shadow-[0_18px_18px_rgba(0,0,0,0.55)]"
+            className="h-full w-full object-contain object-bottom drop-shadow-[0_16px_18px_rgba(0,0,0,0.5)]"
             loading="lazy"
           />
         ) : (
-          <div className="relative z-10 mb-[5px] h-28 w-24 flex items-center justify-center text-[10px] font-black text-white/25">
+          <div className="flex h-28 w-24 items-center justify-center text-[10px] font-black text-white/25">
             IMG
           </div>
         )}
@@ -861,64 +948,12 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     );
   }
   function DraftBoardPlayerMeta({ overall, potential, age, pos }) {
-    const ovr = Number(overall || 0);
-    const fillPercent = Math.min(ovr / 99, 1);
-    const circleCircumference = 2 * Math.PI * 50;
-    const strokeOffset = circleCircumference * (1 - fillPercent);
-
     return (
-      <div className="mt-2 flex items-center gap-4 text-xs text-white/55 translate-y-5">
-<div className="relative flex h-[76px] w-[76px] shrink-0 items-center justify-center">
-  <svg width="76" height="76" viewBox="0 0 120 120">
-            <defs>
-              <linearGradient id="draftBoardOvrGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="#FFA500" />
-                <stop offset="100%" stopColor="#FFD54F" />
-              </linearGradient>
-            </defs>
-
-            <circle
-              cx="60"
-              cy="60"
-              r="50"
-              stroke="rgba(255,255,255,0.10)"
-              strokeWidth="8"
-              fill="none"
-            />
-
-            <circle
-              cx="60"
-              cy="60"
-              r="50"
-              stroke="url(#draftBoardOvrGradient)"
-              strokeWidth="8"
-              strokeLinecap="round"
-              fill="none"
-              strokeDasharray={circleCircumference}
-              strokeDashoffset={strokeOffset}
-              transform="rotate(-90 60 60)"
-            />
-          </svg>
-
-          <div className="absolute flex flex-col items-center justify-center text-center">
-           <p className="text-[9px] text-gray-300 tracking-wide leading-none">OVR</p>
-<p className="text-[24px] font-extrabold text-orange-400 leading-none mt-[-2px]">
-  {overall ?? "-"}
-</p>
-<p className="text-[9px] text-gray-400 leading-none mt-[1px]">
-  POT <span className="text-orange-400 font-bold">{potential ?? "-"}</span>
-</p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-bold">
-          <span>
-            Age <span className="text-white/80">{age ?? "-"}</span>
-          </span>
-          <span>
-            Pos <span className="text-white/80">{pos || "-"}</span>
-          </span>
-        </div>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-bold text-white/55">
+        <span>OVR <b className="text-orange-300">{overall ?? "-"}</b></span>
+        <span>POT <b className="text-orange-300">{potential ?? "-"}</b></span>
+        <span>{pos || "-"}</span>
+        <span>Age {age ?? "-"}</span>
       </div>
     );
   }
@@ -938,6 +973,8 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     draftState = null,
     sortState = DEFAULT_DRAFT_SORT,
     onSortChange = () => {},
+    canDraft = false,
+    onDraft = () => {},
   }) {
     const orderedPicks = [...draftedPicks].sort(
       (a, b) => Number(a.pick || 0) - Number(b.pick || 0)
@@ -954,6 +991,10 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     const availableCountText = draftCompleted
       ? `${prospects.length} undrafted`
       : `${prospects.length} left`;
+
+    const selectedAvailableProspect = (prospects || []).find(
+      (row) => String(row?.id) === String(selectedProspectId || "")
+    );
 
     // Manual team-logo background controls.
     // x: positive = right, negative = left.
@@ -974,18 +1015,28 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
       : "";
 
     return (
-      <div className="bmTablePanel bmDraftBoardPanel rounded-3xl bg-neutral-900 border border-white/10 overflow-hidden shadow-2xl">
-        <div className="px-5 py-4 bg-neutral-800/90 border-b border-white/10 flex items-center justify-between">
+      <div className="bmTablePanel bmDraftBoardPanel flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl">
+        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-white/10 bg-neutral-800/90 px-4 py-2.5">
           <div>
             <h2 className="text-2xl font-extrabold">Draft Board</h2>
-            <p className="text-sm text-white/50">
-              Scroll up to review previous picks. Scroll down to choose from available prospects.
-            </p>
+            <p className="text-xs text-white/50">Drafted players and available prospects.</p>
           </div>
-          <div className="text-sm text-white/50 font-bold">{boardCountText}</div>
+          <div className="flex items-center gap-3">
+            <div className="text-sm font-bold text-white/50">{boardCountText}</div>
+            {!draftCompleted && (
+              <button
+                type="button"
+                onClick={onDraft}
+                disabled={!canDraft}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-extrabold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-white/40"
+              >
+                {selectedAvailableProspect ? `Draft ${selectedAvailableProspect.name}` : "Select a Prospect"}
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="bmOrangeScrollbar max-h-[760px] overflow-auto">
+        <div className="bmOrangeScrollbar min-h-0 flex-1 overflow-auto">
           {orderedPicks.length > 0 && (
             <div className="bg-black/10 border-b border-white/10">
               <div className="sticky top-0 z-20 bg-neutral-800/95 px-5 py-3 border-b border-white/10">
@@ -1031,7 +1082,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
                   <div
                     key={`${pick.pick}-${pick.playerId}`}
                     onClick={() => onSelect(draftedSelectId)}
-                    className={`bmRowEnter bmDraftBoardRow grid grid-cols-[22px_minmax(0,1fr)] items-center gap-4 px-5 py-5 border-b border-white/10 transition cursor-pointer ${
+                    className={`bmRowEnter bmDraftBoardRow grid grid-cols-[22px_minmax(0,1fr)] items-center gap-3 px-4 py-2.5 border-b border-white/10 transition cursor-pointer ${
                       active
                         ? "bmDraftBoardRowActive"
                         : pick.userControlled
@@ -1077,15 +1128,13 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
 
           <div ref={availableStartRef} />
 
-          <div className="sticky top-0 z-20 bg-neutral-800/95 px-5 py-3 border-b border-white/10">
+          <div className="shrink-0 bg-neutral-800/95 px-5 py-3 border-b border-white/10">
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-xs uppercase tracking-[0.2em] text-white/45">
                   Available Prospects
                 </div>
-                <div className="text-sm text-white/50">
-                  Click a prospect when your team is on the clock.
-                </div>
+                <div className="text-xs text-white/50">Select a prospect to view or draft.</div>
               </div>
               <div className="text-xs text-white/45 font-bold">
                 {availableCountText}
@@ -1094,7 +1143,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
           </div>
 
           <table className="w-full min-w-[1040px] text-sm">
-            <thead className="sticky top-[61px] bg-neutral-800/95 text-white/70 z-10">
+            <thead className="sticky top-0 bg-neutral-800/95 text-white/70 z-10">
               <tr>
                 <th className="px-4 py-3 text-left">Rank</th>
                 <th className="px-4 py-3 text-left min-w-[310px]">Player</th>
@@ -1156,15 +1205,20 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
                       ...draftTeamLogoRowBackground(nextPickLogo, draftBoardTeamLogo),
                     }}
                   >
-                    <td className="px-4 py-5 font-bold text-orange-200">
+                    <td className="px-4 py-2.5 font-bold text-orange-200">
                       #{prospect.draftProjection || prospect.trueRank || "-"}
                     </td>
 
-                    <td className="px-4 py-5 min-w-[310px]">
+                    <td className="px-4 py-2.5 min-w-[310px]">
                       <div className="flex items-center gap-4 min-w-0">
                         <ProspectHeadshot src={getHeadshot(prospect)} name={prospect.name} />
                         <div className="min-w-0 flex-1">
-                          <div className="text-lg font-extrabold text-white leading-tight break-words">{prospect.name}</div>
+                          <div className="flex flex-wrap items-center gap-2 text-lg font-extrabold text-white leading-tight break-words">
+                            <span>{prospect.name}</span>
+                            <span className="bmDraftSelectedBadge hidden rounded-full border border-orange-300/70 bg-orange-500/20 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.14em] text-orange-100">
+                              Selected
+                            </span>
+                          </div>
                           <div className="text-xs text-white/45 leading-snug break-words">
                             {getDraftSource(prospect)}
                           </div>
@@ -1183,21 +1237,21 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
                       </div>
                     </td>
 
-                    <td className="px-4 py-5 text-center font-black text-white/75">
+                    <td className="px-4 py-2.5 text-center font-black text-white/75">
                       {prospect.pos || prospect.position || "-"}
                     </td>
 
-                    <td className="px-4 py-5 text-center font-black text-orange-200">
+                    <td className="px-4 py-2.5 text-center font-black text-orange-200">
                       {prospect.overall ?? prospect.ovr ?? "-"}
                     </td>
 
-                    <td className="px-4 py-5 text-center font-black text-white/75">
+                    <td className="px-4 py-2.5 text-center font-black text-white/75">
                       {prospect.potential ?? prospect.pot ?? "-"}
                     </td>
 
-                    <td className="px-4 py-5 text-center font-bold text-white/75">{prospect.age}</td>
+                    <td className="px-4 py-2.5 text-center font-bold text-white/75">{prospect.age}</td>
 
-                    <td className="px-4 py-5 text-left">
+                    <td className="px-4 py-2.5 text-left">
                       <div className="font-semibold text-white/80">{prospect.archetype}</div>
                       <div className="text-xs text-white/45">{prospect.tier}</div>
                     </td>
@@ -1352,7 +1406,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
       "";
 
     const [workingLeagueData, setWorkingLeagueData] = useState(leagueData || null);
-    const [draftState, setDraftState] = useState(() => readDraftState(seasonYear));
+    const [draftState, setDraftState] = useState(null);
     const [selectedProspectId, setSelectedProspectId] = useState(null);
     const [scoutingReportOpen, setScoutingReportOpen] = useState(false);
     const [draftBoardSort, setDraftBoardSort] = useState(DEFAULT_DRAFT_SORT);
@@ -1395,6 +1449,12 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
 
     const currentTeamName = getPickTeam(currentPick || {});
     const userOnClock = Boolean(currentPick && selectedTeamName && currentTeamName === selectedTeamName);
+    const remainingUserPicks = useMemo(() => {
+      if (!selectedTeamName || !Array.isArray(draftState?.draftOrder)) return [];
+      const start = Math.max(0, Number(draftState?.currentPickIndex || 0));
+      return draftState.draftOrder.slice(start).filter((pick) => getPickTeam(pick) === selectedTeamName);
+    }, [draftState?.draftOrder, draftState?.currentPickIndex, selectedTeamName]);
+    const hasRemainingUserPick = remainingUserPicks.length > 0;
 
     const availableProspects = useMemo(() => {
       return sortDraftProspects(draftState?.availableProspects || [], draftBoardSort);
@@ -1476,14 +1536,21 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
       }
     }, [reportProspects, selectedProspectId, draftState?.completed, draftedProspectCards, availableProspects]);
 
-    const applyDraftResult = (result) => {
+    const applyDraftResult = async (result) => {
       if (!result?.ok) {
         throw new Error(result?.reason || "Draft action failed.");
       }
 
       let nextLeague = result.leagueData || workingLeagueData;
       const rawNextState = result.draftState || draftState;
-      const nextState = enrichDraftStateWithDraftSources(rawNextState, draftState, nextLeague);
+      const enrichedState = enrichDraftStateWithDraftSources(rawNextState, draftState, nextLeague);
+      const nextState = enrichedState
+        ? {
+            ...enrichedState,
+            seasonYear: Number(seasonYear),
+            draftOrderSignature: getDraftOrderSignature(enrichedState.draftOrder || draftOrder || []),
+          }
+        : enrichedState;
 
       if (nextState?.completed) {
         nextLeague = rollDraftPickAssetsForCompletedSeason(nextLeague, seasonYear);
@@ -1499,11 +1566,12 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
 
       setWorkingLeagueData(nextLeague);
       setDraftState(nextState);
+
+      await persistLeagueData(nextLeague, setLeagueData);
       saveDraftState(nextState);
-      persistLeagueData(nextLeague, setLeagueData);
 
       if (nextState?.completed) {
-        updateOffseasonState({ draftComplete: true });
+        updateOffseasonState({ draftComplete: true, rookieSigningsComplete: false });
       }
 
       return result;
@@ -1542,7 +1610,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
 
         const result = await simEngine.initializeDraft(leagueForDraftInit, draftPayload);
 
-        applyDraftResult(result);
+        await applyDraftResult(result);
       } catch (err) {
         console.error("[Draft] initializeDraft failed", err);
         setError(String(err?.message || err));
@@ -1552,13 +1620,38 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     };
 
     useEffect(() => {
-      const saved = readDraftState(seasonYear);
+      if (!workingLeagueData || !draftOrder?.length || loading) return;
+
+      const rawSaved = readDraftState(seasonYear);
+      const saved = normalizeSavedDraftState(rawSaved, draftOrder, seasonYear);
+
       if (saved?.draftOrder?.length) {
         const picksAlreadyMade = Array.isArray(saved.draftedPicks) && saved.draftedPicks.length > 0;
-        if (!picksAlreadyMade && !saved.completed && workingLeagueData) {
+
+        if (picksAlreadyMade && !isDraftStateConsistentWithLeague(saved, workingLeagueData)) {
+          // A completed/partial local draft without matching rookie records in the
+          // IndexedDB league is stale or was interrupted mid-save. Never show a
+          // fake 60/60 board; clear it and rebuild the draft from the locked order.
+          localStorage.removeItem(DRAFT_STATE_KEY);
+          updateOffseasonState({ draftComplete: false, rookieSigningsComplete: false });
+          const cleanedLeague = removeInvalidDraftCompletionFromLeague(workingLeagueData);
+          setWorkingLeagueData(cleanedLeague);
+          setDraftState(null);
+          persistLeagueData(cleanedLeague, setLeagueData).catch((err) => {
+            console.warn("[Draft] Failed to persist stale-draft cleanup", err);
+          });
+          return;
+        }
+
+        if (!picksAlreadyMade && !saved.completed) {
+          const ownedOrder = applyDraftPickOwnershipToOrder(saved.draftOrder, {
+            leagueData: workingLeagueData,
+            seasonYear,
+          });
           setDraftState({
             ...saved,
-            draftOrder: applyDraftPickOwnershipToOrder(saved.draftOrder, { leagueData: workingLeagueData, seasonYear }),
+            draftOrder: ownedOrder,
+            draftOrderSignature: getDraftOrderSignature(ownedOrder),
             pickOwnershipVersion: "draft_pick_ownership_v6",
           });
         } else {
@@ -1567,11 +1660,16 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
         return;
       }
 
-      if (workingLeagueData && draftOrder?.length && !draftState && !loading) {
+      if (rawSaved?.draftOrder?.length) {
+        localStorage.removeItem(DRAFT_STATE_KEY);
+        updateOffseasonState({ draftComplete: false, rookieSigningsComplete: false });
+      }
+
+      if (!draftState) {
         initializeDraft();
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [workingLeagueData, draftOrder?.length, seasonYear]);
+    }, [workingLeagueData, draftOrder?.length, seasonYear, loading]);
 
     const scrollToAvailableProspects = () => {
       window.setTimeout(() => {
@@ -1601,7 +1699,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
           ...backendPayload,
         });
 
-        const applied = applyDraftResult(result);
+        const applied = await applyDraftResult(result);
 
         if (scrollToAvailable) {
           scrollToAvailableProspects();
@@ -1624,21 +1722,31 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
       await runDraftAction("makeUserDraftPick", { prospectId: selectedProspect.id });
     };
 
-    const handleFinish = () => {
-      if (workingLeagueData) {
-        const rolledLeague = rollDraftPickAssetsForCompletedSeason(workingLeagueData, seasonYear);
-        if (draftState?.completed) {
-          try {
-            recordCompletedDraftMoodEvents(rolledLeague, draftState, { seasonYear });
-          } catch (err) {
-            console.warn("[Draft] Failed to record offseason draft mood events", err);
-          }
+    const handleFinish = async () => {
+      setError("");
+      setLoading(true);
+      try {
+        if (!draftState?.completed || !isDraftStateConsistentWithLeague(draftState, workingLeagueData)) {
+          throw new Error("Draft results are out of sync with the league save. Reopen the draft to rebuild the current class.");
         }
+
+        const rolledLeague = rollDraftPickAssetsForCompletedSeason(workingLeagueData, seasonYear);
+        try {
+          recordCompletedDraftMoodEvents(rolledLeague, draftState, { seasonYear });
+        } catch (err) {
+          console.warn("[Draft] Failed to record offseason draft mood events", err);
+        }
+
         setWorkingLeagueData(rolledLeague);
-        persistLeagueData(rolledLeague, setLeagueData);
+        await persistLeagueData(rolledLeague, setLeagueData);
+        saveDraftState(draftState);
+        updateOffseasonState({ draftComplete: true, rookieSigningsComplete: false });
+        navigate("/offseason");
+      } catch (err) {
+        setError(String(err?.message || err));
+      } finally {
+        setLoading(false);
       }
-      updateOffseasonState({ draftComplete: true });
-      navigate("/offseason");
     };
 
     if (!workingLeagueData) {
@@ -1670,7 +1778,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     const totalPicks = draftState?.draftOrder?.length || draftOrder.length || 60;
 
     return (
-      <div className="min-h-screen bmCourtPage text-white py-8 px-4">
+      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white">
         <style>{`
           .bmOrangeScrollbar {
             scrollbar-width: thin;
@@ -1734,19 +1842,23 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
   }
 
   .bmDraftBoardRowActive {
-    background-color: rgba(255, 255, 255, 0.08);
+    background: linear-gradient(90deg, rgba(249, 115, 22, 0.28), rgba(249, 115, 22, 0.08)) !important;
+    box-shadow: inset 5px 0 0 #f97316, inset 0 0 0 1px rgba(251, 146, 60, 0.55);
+  }
+  .bmDraftBoardRowActive .bmDraftSelectedBadge {
+    display: inline-flex;
   }
 
           .bmDraftBoardRowUser:not(.bmDraftBoardRowActive) {
             background: rgba(5, 150, 105, 0.14);
           }
         `}</style>
-        <div className="max-w-7xl mx-auto">
-          <div className="flex items-center justify-between gap-4 mb-8">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col">
+          <div className="mb-2 flex shrink-0 items-center justify-between gap-4">
             <div>
-              <p className="text-xs text-white/40 tracking-[0.25em] uppercase mb-2">Offseason</p>
-              <h1 className="text-4xl md:text-5xl font-extrabold text-orange-500">NBA Draft</h1>
-              <p className="text-white/60 mt-2">
+              <p className="mb-1 text-[10px] uppercase tracking-[0.25em] text-white/40">Offseason</p>
+              <h1 className="text-3xl font-extrabold text-orange-500">NBA Draft</h1>
+              <p className="mt-1 text-xs text-white/55">
                 {completed ? "Draft complete." : `Pick ${pickNumber} - Round ${pickRound} - ${currentTeamName} is on the clock.`}
               </p>
             </div>
@@ -1763,7 +1875,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
 
               <button
                 onClick={() => navigate("/offseason")}
-                className="bmSmoothButton px-5 py-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 font-bold"
+                className="bmLegacyRouteBack bmSmoothButton rounded-lg bg-neutral-800 px-4 py-2 text-sm font-bold hover:bg-neutral-700"
               >
                 Back to Offseason
               </button>
@@ -1776,7 +1888,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
             </div>
           )}
 
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+          <div className="mb-2 grid shrink-0 grid-cols-5 gap-2">
             <SmallPill label="Season" value={seasonYear} />
             <SmallPill label="Progress" value={`${picksMade}/${totalPicks}`} />
             <SmallPill label="Current Pick" value={completed ? "Done" : `#${pickNumber}`} />
@@ -1785,7 +1897,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
           </div>
 
           {!completed && (
-            <div className="flex flex-wrap gap-3 mb-8">
+            <div className="mb-2 flex shrink-0 flex-wrap gap-2">
               <button
                 disabled={loading || userOnClock}
                 onClick={() => runDraftAction("simOneDraftPick")}
@@ -1795,11 +1907,12 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
               </button>
 
               <button
-                disabled={loading || userOnClock}
+                disabled={loading || userOnClock || !hasRemainingUserPick}
                 onClick={() => runDraftAction("simToUserDraftPick", { scrollToAvailable: true })}
                 className="bmSmoothButton px-5 py-3 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:bg-neutral-700 disabled:text-white/45 font-extrabold"
+                title={hasRemainingUserPick ? `Next user pick: #${remainingUserPicks[0]?.pick || "-"}` : "Your team has no remaining picks"}
               >
-                Sim To User Pick
+                {hasRemainingUserPick ? "Sim To User Pick" : "No User Picks"}
               </button>
 
               <button
@@ -1821,18 +1934,18 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
           )}
 
           {loading && (
-            <div className="mb-6 rounded-2xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-orange-100 font-semibold">
+            <div className="mb-2 shrink-0 rounded-xl border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-sm font-semibold text-orange-100">
               Processing draft action...
             </div>
           )}
 
           {userOnClock && !completed && (
-            <div className="mb-6 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-emerald-100 font-semibold">
-              You are on the clock. Select a prospect and click Draft Selected Player.
+            <div className="mb-2 shrink-0 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-100">
+              You are on the clock.
             </div>
           )}
 
-          <div className="flex flex-col gap-6">
+          <div className="min-h-0 flex-1">
             <CombinedDraftBoard
               prospects={availableProspects}
               draftedPicks={draftState?.draftedPicks || []}
@@ -1848,6 +1961,8 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
               draftState={draftState}
               sortState={draftBoardSort}
               onSortChange={handleDraftBoardSortChange}
+              canDraft={userOnClock && !!selectedProspect?.id && !loading}
+              onDraft={handleUserPick}
             />
 
             {completed && (

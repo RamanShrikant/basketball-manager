@@ -472,226 +472,130 @@ setError("");
   };
 
   return (
-    <div className={`${styles.retirementsPage} min-h-screen text-white py-10 px-4`}>
-      <div className="max-w-6xl mx-auto">
-        <div className="text-center mb-7">
-          <p className="text-sm uppercase tracking-[0.28em] text-white/40 mb-3">
-            Offseason Event
-          </p>
-          <h1 className="text-5xl font-extrabold text-orange-500">PLAYER RETIREMENTS</h1>
-          <p className="text-white/60 mt-3">
-            Process veteran retirements before free agency opens.
-          </p>
-        </div>
-
-        <div className="bg-neutral-800/85 border border-white/10 rounded-3xl shadow-2xl p-6 md:p-7 mb-7">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
-            <div>
-              <div className="text-sm text-white/45 uppercase tracking-[0.2em] mb-2">
-                Retirement Phase
-              </div>
-              <h2 className="text-3xl font-extrabold text-white">
-                {seasonYear} Offseason
-              </h2>
-              <p className="text-white/60 mt-2 max-w-2xl">
-                Run this once to remove retired players from active rosters and push them into
-                league retirement history.
-              </p>
+    <div className={`${styles.retirementsPage} bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white`}>
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-3">
+        <header className="flex shrink-0 items-center justify-between gap-5 rounded-2xl border border-white/10 bg-neutral-800/85 px-5 py-3 shadow-xl">
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">Offseason Event</div>
+            <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <h1 className="text-3xl font-extrabold text-orange-500">Player Retirements</h1>
+              <span className="text-sm font-bold text-white/60">{seasonYear} Offseason</span>
             </div>
-
-<div className="flex gap-3 flex-wrap">
-  <button
-    onClick={() => navigate("/offseason")}
-    className="px-5 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-xl font-semibold transition"
-  >
-    Back to Hub
-  </button>
-
-  <button
-    onClick={toggleRetirementsDisabled}
-    disabled={alreadyRan}
-    className={`px-5 py-3 rounded-xl font-bold transition ${
-      alreadyRan
-        ? "bg-neutral-700 text-white/45 cursor-not-allowed"
-        : retirementsDisabled
-        ? "bg-emerald-700 hover:bg-emerald-600 text-white"
-        : "bg-neutral-700 hover:bg-neutral-600 text-white"
-    }`}
-  >
-    {retirementsDisabled ? "Retirements: OFF" : "Retirements: ON"}
-  </button>
-
-  <button
-    onClick={() => finalizeRetirementsAsSkipped({ disabled: retirementsDisabled })}
-    disabled={loading || alreadyRan}
-    className={`px-5 py-3 rounded-xl font-bold transition ${
-      loading || alreadyRan
-        ? "bg-neutral-700 text-white/45 cursor-not-allowed"
-        : "bg-blue-600 hover:bg-blue-500 text-white"
-    }`}
-  >
-    Skip This Offseason
-  </button>
-
-  <button
-    onClick={runRetirements}
-    disabled={loading || alreadyRan || retirementsDisabled}
-    className={`px-5 py-3 rounded-xl font-bold transition ${
-      loading || alreadyRan || retirementsDisabled
-        ? "bg-neutral-700 text-white/45 cursor-not-allowed"
-        : "bg-orange-600 hover:bg-orange-500 text-white"
-    }`}
-  >
-    {loading
-      ? "Running Retirements..."
-      : alreadyRan
-      ? "Retirements Complete"
-      : retirementsDisabled
-      ? "Retirements Disabled"
-      : "Run Player Retirements"}
-  </button>
-</div>
           </div>
-        </div>
+
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            <button
+              onClick={toggleRetirementsDisabled}
+              disabled={alreadyRan}
+              className={`rounded-lg px-4 py-2 text-sm font-bold transition ${
+                alreadyRan
+                  ? "cursor-not-allowed bg-neutral-700 text-white/45"
+                  : retirementsDisabled
+                  ? "bg-emerald-700 hover:bg-emerald-600"
+                  : "bg-neutral-700 hover:bg-neutral-600"
+              }`}
+            >
+              {retirementsDisabled ? "Retirements Off" : "Retirements On"}
+            </button>
+
+            {!alreadyRan && (
+              <>
+                <button
+                  onClick={() => finalizeRetirementsAsSkipped({ disabled: retirementsDisabled })}
+                  disabled={loading}
+                  className="rounded-lg bg-neutral-700 px-4 py-2 text-sm font-bold transition hover:bg-neutral-600 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Skip
+                </button>
+                <button
+                  onClick={runRetirements}
+                  disabled={loading || retirementsDisabled}
+                  className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-white/45"
+                >
+                  {loading ? "Processing..." : retirementsDisabled ? "Disabled" : "Run Retirements"}
+                </button>
+              </>
+            )}
+
+            {alreadyRan && (
+              <button
+                onClick={() => navigate("/offseason")}
+                className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold transition hover:bg-orange-500"
+              >
+                Continue
+              </button>
+            )}
+          </div>
+        </header>
 
         {error && (
-          <div className="mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-red-200 font-semibold">
+          <div className="shrink-0 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-200">
             {error}
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-7">
-          <SummaryCard label="Retired Players" value={summary.retiredCount || 0} tone="orange" />
+        <div className="grid shrink-0 grid-cols-2 gap-2 md:grid-cols-4">
+          <SummaryCard label="Retired" value={summary.retiredCount || 0} tone="orange" />
           <SummaryCard label="Average Age" value={fmt1(summary.averageAge || 0)} />
           <SummaryCard label="Average OVR" value={fmt1(summary.averageOverall || 0)} />
           <SummaryCard label="Teams Hit" value={summary.teamsAffected || 0} tone="green" />
         </div>
 
-        <div className="bg-neutral-800/85 border border-white/10 rounded-3xl shadow-2xl overflow-hidden">
-          <div className="px-6 py-5 border-b border-white/10 flex items-center justify-between gap-4 flex-wrap">
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-800/85 shadow-xl">
+          <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-5 py-3">
             <div>
-              <h3 className="text-2xl font-extrabold text-white">Retirement Results</h3>
-              <p className="text-white/55 mt-1">
-                {alreadyRan
-                  ? "These players have been removed from active league rosters."
-                  : "Run retirements to generate this offseason result list."}
+              <h2 className="text-xl font-extrabold">Retirement Results</h2>
+              <p className="text-xs text-white/50">
+                {alreadyRan ? `${retiredPlayers.length} players retired.` : "Run retirements to generate the league result."}
               </p>
             </div>
-
-            {alreadyRan && (
-              <button
-                onClick={() => navigate("/offseason")}
-                className="px-5 py-3 bg-orange-600 hover:bg-orange-500 rounded-xl font-semibold transition"
-              >
-                Continue to Offseason Hub
-              </button>
-            )}
           </div>
 
-          {!alreadyRan ? (
-            <div className="px-6 py-16 text-center text-white/50">
-              No retirement results yet.
-            </div>
-          ) : retiredPlayers.length === 0 ? (
-<div className="px-6 py-16 text-center">
-  <p className="text-2xl font-bold text-white">
-    {retirementResult?.disabled ? "Retirements are disabled." : "No retirements this offseason."}
-  </p>
-  <p className="text-white/55 mt-2">
-    {retirementResult?.disabled
-      ? "Veteran players will remain active in the league until you turn retirements back on."
-      : "The league rolls forward with every player still active."}
-  </p>
-</div>
-          ) : (
-            <div className="divide-y divide-white/5">
-              {retiredPlayers.map((player, idx) => {
-                const logo = teamLogoMap[player?.retiredFromTeam] || "";
-                const headshot =
-                  player?.headshot ||
-                  player?.portrait ||
-                  player?.image ||
-                  player?.photo ||
-                  player?.face ||
-                  null;
-
-                return (
-                  <div
-                    key={`${player?.name || "retired"}-${idx}`}
-                    className="px-6 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4 hover:bg-white/5 transition"
-                  >
-                    <div className="flex items-center gap-4 min-w-0">
-                      {headshot ? (
-                        <img
-                          src={headshot}
-                          alt={player?.name || "Retired Player"}
-                          className="w-14 h-14 rounded-full object-cover border border-white/10 bg-white/5"
-                        />
-                      ) : (
-                        <div className="w-14 h-14 rounded-full border border-white/10 bg-white/5" />
-                      )}
-
-                      <div className="min-w-0">
-                        <div className="text-lg font-bold text-white truncate">
-                          {player?.name || "Unknown Player"}
-                        </div>
-                        <div className="text-sm text-white/55 mt-1">
-                          {player?.pos || "-"} • Age {player?.age ?? "-"} • OVR {player?.overall ?? player?.ovr ?? "-"}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-4 md:gap-8 flex-wrap md:flex-nowrap">
-                      <div className="flex items-center gap-2">
-                        {logo ? (
-                          <img
-                            src={logo}
-                            alt={player?.retiredFromTeam || "Team"}
-                            className="h-7 w-7 object-contain"
-                          />
+          <div className="bmTableScroller min-h-0 flex-1 overflow-y-auto">
+            {!alreadyRan ? (
+              <div className="flex h-full min-h-[220px] items-center justify-center text-white/45">No results yet.</div>
+            ) : retiredPlayers.length === 0 ? (
+              <div className="flex h-full min-h-[220px] flex-col items-center justify-center text-center">
+                <p className="text-xl font-bold">{retirementResult?.disabled ? "Retirements are disabled." : "No retirements this offseason."}</p>
+                <p className="mt-1 text-sm text-white/50">Every player remains active.</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-white/5">
+                {retiredPlayers.map((player, idx) => {
+                  const logo = teamLogoMap[player?.retiredFromTeam] || "";
+                  const headshot = player?.headshot || player?.portrait || player?.image || player?.photo || player?.face || null;
+                  return (
+                    <div key={`${player?.name || "retired"}-${idx}`} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-4 px-5 py-2.5 transition hover:bg-white/5">
+                      <div className="flex min-w-0 items-center gap-3">
+                        {headshot ? (
+                          <img src={headshot} alt={player?.name || "Retired Player"} className="h-10 w-10 shrink-0 rounded-full border border-white/10 bg-white/5 object-cover" />
                         ) : (
-                          <div className="h-7 w-7 rounded bg-white/5 border border-white/10" />
+                          <div className="h-10 w-10 shrink-0 rounded-full border border-white/10 bg-white/5" />
                         )}
-
-                        <div className="text-sm text-white/70">
-                          {player?.retiredFromTeam || "Unknown Team"}
+                        <div className="min-w-0">
+                          <div className="truncate font-bold">{player?.name || "Unknown Player"}</div>
+                          <div className="text-xs text-white/50">{player?.pos || "-"} • Age {player?.age ?? "-"} • OVR {player?.overall ?? player?.ovr ?? "-"}</div>
                         </div>
                       </div>
 
-                      <div className="text-sm text-white/55">
-                        Chance:{" "}
-                        <span className="font-semibold text-orange-300">
-                          {`${Math.round((Number(player?.retirementProbability || 0)) * 100)}%`}
-                        </span>
+                      <div className="flex items-center gap-2 text-sm text-white/70">
+                        {logo ? <img src={logo} alt="" className="h-6 w-6 object-contain" /> : null}
+                        <span className="hidden whitespace-nowrap lg:inline">{player?.retiredFromTeam || "Free Agency"}</span>
                       </div>
 
-                      <div className="px-3 py-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-200 text-xs font-bold uppercase tracking-wide">
-                        Retired
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-white/50">{Math.round(Number(player?.retirementProbability || 0) * 100)}%</span>
+                        <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-200">Retired</span>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <div className="mt-8 flex justify-center gap-4 flex-wrap">
-          <button
-            onClick={() => navigate("/offseason")}
-            className="px-6 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-semibold transition"
-          >
-            Back to Offseason Hub
-          </button>
-
-          <button
-            onClick={() => navigate("/team-hub")}
-            className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-xl font-semibold transition"
-          >
-            Back to Team Hub
-          </button>
-        </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );
+
 }

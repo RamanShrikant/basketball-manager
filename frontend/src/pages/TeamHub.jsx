@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import LZString from "lz-string";
@@ -76,11 +76,21 @@ export default function TeamHub() {
   const { leagueData, selectedTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
   const location = useLocation();
+  const [activeTileIndex, setActiveTileIndex] = useState(0);
+  const hubRef = useRef(null);
+  const scrollRowRef = useRef(null);
+  const tileRefs = useRef([]);
 
   useEffect(() => {
     document.body.classList.add("th-no-scroll");
     return () => document.body.classList.remove("th-no-scroll");
   }, []);
+
+  useEffect(() => {
+    if (!selectedTeam) return undefined;
+    const frame = window.requestAnimationFrame(() => hubRef.current?.focus?.());
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedTeam?.name]);
 
   const offseasonState = safeJSON(
     localStorage.getItem(OFFSEASON_STATE_KEY),
@@ -152,6 +162,7 @@ export default function TeamHub() {
     { name: "Trades", path: "/trades", enabled: true },
     { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Statistics", path: "/player-stats", enabled: true },
+    { name: "Playoff Statistics", path: "#", enabled: false },
     { name: "Standings", path: "/standings", enabled: true },
     { name: "Power Rankings", path: "/power-rankings", enabled: true },
     { name: "Award Tracker", path: "/award-tracker", enabled: true },
@@ -163,8 +174,6 @@ export default function TeamHub() {
   const offseasonDisabledTiles = new Set([
     "Coach Gameplan",
     "Schedule",
-    "Statistics",
-    "Standings",
     "Award Tracker",
   ]);
 
@@ -172,8 +181,15 @@ export default function TeamHub() {
     { name: "Return to Offseason Hub", path: offseasonReturnTo, enabled: true },
     ...normalTiles.map((tile) => ({
       ...tile,
-      path: tile.name === "Free Agents" ? offseasonFreeAgentsPath : offseasonDisabledTiles.has(tile.name) ? "#" : tile.path,
-      enabled: !offseasonDisabledTiles.has(tile.name),
+      path:
+        tile.name === "Free Agents"
+          ? offseasonFreeAgentsPath
+          : tile.name === "Playoff Statistics"
+          ? "/playoff-stats"
+          : offseasonDisabledTiles.has(tile.name)
+          ? "#"
+          : tile.path,
+      enabled: tile.name === "Playoff Statistics" || !offseasonDisabledTiles.has(tile.name),
     })),
   ];
 
@@ -187,6 +203,7 @@ export default function TeamHub() {
     { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
     { name: "Statistics", path: "/player-stats", enabled: true },
+    { name: "Playoff Statistics", path: "/playoff-stats", enabled: true },
     { name: "Standings", path: "/standings", enabled: true },
     { name: "Salary Table", path: "/salary-table", enabled: true },
     { name: "Award Tracker", path: "/award-tracker", enabled: true },
@@ -219,9 +236,54 @@ export default function TeamHub() {
     });
   };
 
+  const scrollToTile = (index, behavior = "smooth") => {
+    if (!tiles.length) return;
+    const nextIndex = Math.max(0, Math.min(tiles.length - 1, index));
+    setActiveTileIndex(nextIndex);
+    tileRefs.current[nextIndex]?.scrollIntoView?.({
+      behavior,
+      inline: "center",
+      block: "nearest",
+    });
+  };
+
+  const moveTileFocus = (direction) => {
+    if (!tiles.length) return;
+    const nextIndex = (activeTileIndex + direction + tiles.length) % tiles.length;
+    scrollToTile(nextIndex);
+  };
+
+  const handleHubKeyDown = (event) => {
+    const tagName = String(event.target?.tagName || "").toLowerCase();
+    if (["input", "select", "textarea"].includes(tagName)) return;
+
+    if (event.key === "ArrowRight" || event.key === "d" || event.key === "D") {
+      event.preventDefault();
+      moveTileFocus(1);
+      return;
+    }
+
+    if (event.key === "ArrowLeft" || event.key === "a" || event.key === "A") {
+      event.preventDefault();
+      moveTileFocus(-1);
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      handleTileClick(tiles[activeTileIndex]);
+    }
+  };
+
   return (
     <PageFade>
-      <div className={styles.wrapper}>
+      <div
+        ref={hubRef}
+        className={styles.wrapper}
+        tabIndex={0}
+        onKeyDown={handleHubKeyDown}
+        aria-label="Team Hub navigation"
+      >
       {teamsSorted.length > 0 && (
         <div
           style={{
@@ -277,92 +339,86 @@ export default function TeamHub() {
         </div>
       )}
 
-      {isOffseasonMode && (
-        <div
-          style={{
-            width: "min(1200px, 94vw)",
-            margin: "0 auto 18px auto",
-            padding: "14px 18px",
-            borderRadius: "14px",
-            border: "1px solid rgba(251, 146, 60, 0.35)",
-            background: "rgba(234, 88, 12, 0.14)",
-            color: "white",
-            fontWeight: 700,
-            textAlign: "center",
-            boxShadow: "0 10px 30px rgba(0, 0, 0, 0.25)",
-          }}
-        >
-          Offseason mode is active. Manage your roster here, then return to the
-          Offseason Hub to continue.
+      {(isOffseasonMode || isPlayoffMode) && (
+        <div className={styles.modeBadge}>
+          {isOffseasonMode ? "Offseason" : "Playoffs"}
         </div>
       )}
 
-      {isPlayoffMode && !isOffseasonMode && (
-        <div
-          style={{
-            width: "min(1200px, 94vw)",
-            margin: "0 auto 18px auto",
-            padding: "14px 18px",
-            borderRadius: "14px",
-            border: "1px solid rgba(251, 146, 60, 0.35)",
-            background: "rgba(234, 88, 12, 0.14)",
-            color: "white",
-            fontWeight: 700,
-            textAlign: "center",
-            boxShadow: "0 10px 30px rgba(0, 0, 0, 0.25)",
-          }}
+      <div className={styles.carouselShell}>
+        <button
+          type="button"
+          className={styles.railArrow}
+          onClick={() => moveTileFocus(-1)}
+          aria-label="Previous Team Hub option"
         >
-          Playoff mode is active. Manage your team here, then return to the
-          playoff bracket to continue the postseason.
-        </div>
-      )}
+          ◄
+        </button>
 
-      <div className={styles.scrollRow}>
-        {tiles.map((tile) => {
-          const enabled = tile.enabled && tile.path !== "#";
+        <div ref={scrollRowRef} className={styles.scrollRow}>
+          {tiles.map((tile, index) => {
+            const enabled = tile.enabled && tile.path !== "#";
+            const active = index === activeTileIndex;
 
-          return (
-            <div
-              key={tile.name}
-              onClick={() => handleTileClick(tile)}
-              className={`${styles.card} ${enabled ? "bmRouteCardClickable" : styles.disabled}`}
-              style={{
-                opacity: enabled ? 1 : 0.55,
-                cursor: enabled ? "pointer" : "not-allowed",
-              }}
-            >
-              <img
-                src={selectedTeam.logo}
-                alt={selectedTeam.name}
-                className={styles.logo}
-              />
+            return (
+              <div
+                key={tile.name}
+                ref={(node) => { tileRefs.current[index] = node; }}
+                onClick={() => {
+                  setActiveTileIndex(index);
+                  handleTileClick(tile);
+                }}
+                onMouseEnter={() => setActiveTileIndex(index)}
+                onFocus={() => scrollToTile(index)}
+                tabIndex={enabled ? 0 : -1}
+                aria-current={active ? "true" : undefined}
+                className={`${styles.card} ${active ? styles.activeCard : ""} ${enabled ? "bmRouteCardClickable" : styles.disabled}`}
+                style={{ cursor: enabled ? "pointer" : "not-allowed" }}
+              >
+                <img
+                  src={selectedTeam.logo}
+                  alt={selectedTeam.name}
+                  className={styles.logo}
+                />
 
-              <div className={styles.labelBar}>
-                <div className={styles.labelBg} />
-                <div className={styles.labelText}>
-                  <div className={styles.tileName}>{tile.name}</div>
-                  <div className={styles.teamName}>
-                    {tile.name === "Return to Offseason Hub"
-                      ? "Resume offseason flow"
-                      : tile.name === "Return to Playoffs"
-                      ? "Resume playoff bracket"
-                      : tile.name === "Power Rankings"
-                      ? "League-wide team ratings"
-                      : tile.name === "Draft Picks"
-                      ? "Team draft assets"
-                      : tile.name === "Trades"
-                      ? "Propose and review trades"
-                      : tile.name === "Intel"
-                      ? "Front office team intel"
-                      : tile.name === "Locker Room"
-                      ? "Player morale and role check"
-                      : selectedTeam.name}
+                <div className={styles.labelBar}>
+                  <div className={styles.labelBg} />
+                  <div className={styles.labelText}>
+                    <div className={styles.tileName}>{tile.name}</div>
+                    <div className={styles.teamName}>
+                      {tile.name === "Return to Offseason Hub"
+                        ? "Resume offseason flow"
+                        : tile.name === "Return to Playoffs"
+                        ? "Resume playoff bracket"
+                        : tile.name === "Power Rankings"
+                        ? "League-wide team ratings"
+                        : tile.name === "Draft Picks"
+                        ? "Team draft assets"
+                        : tile.name === "Trades"
+                        ? "Propose and review trades"
+                        : tile.name === "Intel"
+                        ? "Front office team intel"
+                        : tile.name === "Locker Room"
+                        ? "Player morale and role check"
+                        : tile.name === "Playoff Statistics"
+                        ? isOffseasonMode ? "Previous postseason" : "Current postseason"
+                        : selectedTeam.name}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
+
+        <button
+          type="button"
+          className={styles.railArrow}
+          onClick={() => moveTileFocus(1)}
+          aria-label="Next Team Hub option"
+        >
+          ►
+        </button>
       </div>
     </div>
     </PageFade>

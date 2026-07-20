@@ -105,20 +105,20 @@ function SummaryCard({ label, value, tone = "neutral" }) {
       : "border-white/10 bg-white/5 text-white";
 
   return (
-    <div className={`rounded-2xl border p-4 ${toneClass}`}>
-      <div className="text-xs uppercase tracking-[0.18em] text-white/45 mb-2">{label}</div>
-      <div className="text-3xl font-extrabold">{value}</div>
+    <div className={`rounded-xl border px-4 py-3 ${toneClass}`}>
+      <div className="text-[10px] uppercase tracking-[0.18em] text-white/45 mb-1">{label}</div>
+      <div className="text-2xl font-extrabold">{value}</div>
     </div>
   );
 }
 
 function SectionShell({ title, subtitle, children, rightNode = null }) {
   return (
-    <div className="bg-neutral-800/85 border border-white/10 rounded-3xl shadow-2xl overflow-hidden">
-      <div className="px-6 py-5 border-b border-white/10 flex items-start justify-between gap-4 flex-wrap">
+    <div className="bg-neutral-800/85 border border-white/10 rounded-2xl shadow-xl overflow-hidden">
+      <div className="px-5 py-3 border-b border-white/10 flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h3 className="text-2xl font-extrabold text-white">{title}</h3>
-          {subtitle && <p className="text-white/55 mt-1">{subtitle}</p>}
+          <h3 className="text-xl font-extrabold text-white">{title}</h3>
+          {subtitle && <p className="text-xs text-white/55 mt-0.5">{subtitle}</p>}
         </div>
         {rightNode}
       </div>
@@ -1254,7 +1254,7 @@ const renderKeyInterestExtraNode = (row) => {
     return (
       <div
         key={`${row?.playerName || "row"}-${idx}`}
-        className="px-6 py-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 hover:bg-white/5 transition"
+        className="px-5 py-2.5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 hover:bg-white/5 transition"
       >
         <div className="flex items-center gap-4 min-w-0">
           {logo ? (
@@ -1297,7 +1297,7 @@ const renderKeyInterestExtraNode = (row) => {
   };
 
   return (
-    <div className={`${styles.optionsPage} min-h-screen text-white py-10 px-4`}>
+    <div className={`${styles.optionsPage} bmCourtPage h-full min-h-0 overflow-hidden text-white px-4 py-3`}>
 
       <style>{`
         .bm-orange-scroll {
@@ -1324,29 +1324,29 @@ const renderKeyInterestExtraNode = (row) => {
           background: linear-gradient(to bottom, #fb923c, #ea580c);
         }
       `}</style>
-      <div className="max-w-6xl mx-auto">
-        <div className="text-center mb-7">
-          <p className="text-sm uppercase tracking-[0.28em] text-white/40 mb-3">
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col">
+        <div className="mb-2 shrink-0 text-center">
+          <p className="text-[10px] uppercase tracking-[0.25em] text-white/40 mb-1">
             Offseason Event
           </p>
-          <h1 className="text-5xl font-extrabold text-orange-500">
+          <h1 className="text-3xl font-extrabold text-orange-500">
             PLAYER / TEAM OPTIONS & RIGHTS
           </h1>
-          <p className="text-white/60 mt-3">
+          <p className="text-xs text-white/55 mt-1">
             Settle contract options, qualifying offers, Bird rights, and cap holds before free agency opens.
           </p>
         </div>
 
-        <div className="bg-neutral-800/85 border border-white/10 rounded-3xl shadow-2xl p-6 md:p-7 mb-7">
+        <div className="mb-3 shrink-0 rounded-2xl border border-white/10 bg-neutral-800/85 px-5 py-3 shadow-xl">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
             <div>
-              <div className="text-sm text-white/45 uppercase tracking-[0.2em] mb-2">
+              <div className="text-[10px] text-white/45 uppercase tracking-[0.2em] mb-1">
                 Pre-Free Agency Control
               </div>
-              <h2 className="text-3xl font-extrabold text-white">
+              <h2 className="text-2xl font-extrabold text-white">
                 {seasonYear} Offseason
               </h2>
-              <p className="text-white/60 mt-2 max-w-2xl">
+              <p className="text-xs text-white/55 mt-1 max-w-2xl">
                 This single panel resolves expired deals, player options, team options, rights, qualifying offers, and cap holds before the market opens.
               </p>
             </div>
@@ -1355,7 +1355,7 @@ const renderKeyInterestExtraNode = (row) => {
               <button
                 onClick={loadPreview}
                 disabled={loadingPreview || loadingApply}
-                className={`px-5 py-3 rounded-xl font-bold transition ${
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition ${
                   loadingPreview || loadingApply
                     ? "bg-neutral-700 text-white/45 cursor-not-allowed"
                     : "bg-neutral-700 hover:bg-neutral-600 text-white"
@@ -1368,7 +1368,7 @@ const renderKeyInterestExtraNode = (row) => {
                 <button
                   onClick={resolveOptions}
                   disabled={loadingApply || loadingPreview || !allUserChoicesMade}
-                  className={`px-5 py-3 rounded-xl font-bold transition ${
+                  className={`px-4 py-2 rounded-lg text-sm font-bold transition ${
                     loadingApply || loadingPreview || !allUserChoicesMade
                       ? "bg-neutral-700 text-white/45 cursor-not-allowed"
                       : "bg-orange-600 hover:bg-orange-500 text-white"
@@ -1379,17 +1379,22 @@ const renderKeyInterestExtraNode = (row) => {
               ) : rightsManagementComplete ? (
                 <button
                   onClick={() => navigate("/free-agents")}
-                  className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl font-bold transition"
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-bold transition"
                 >
                   Open Free Agency
                 </button>
               ) : (
                 <button
                   type="button"
-                  disabled
-                  className="px-5 py-3 bg-neutral-700 text-white/45 cursor-not-allowed rounded-xl font-bold transition"
+                  onClick={finalizeRightsManagement}
+                  disabled={rightsApplyLoading || rightsPreviewLoading}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold transition ${
+                    rightsApplyLoading || rightsPreviewLoading
+                      ? "bg-neutral-700 text-white/45 cursor-not-allowed"
+                      : "bg-orange-600 hover:bg-orange-500 text-white"
+                  }`}
                 >
-                  Finalize Rights Below
+                  {rightsApplyLoading ? "Saving Rights..." : "Finalize Rights Management"}
                 </button>
               )}
             </div>
@@ -1397,13 +1402,13 @@ const renderKeyInterestExtraNode = (row) => {
         </div>
 
         {error && (
-          <div className="mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-red-200 font-semibold">
+          <div className="mb-2 shrink-0 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-200 font-semibold">
             {error}
           </div>
         )}
 
         {!optionsComplete ? (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-7">
+          <div className="mb-3 grid shrink-0 grid-cols-2 gap-2 md:grid-cols-4">
             <SummaryCard
               label="Expired Contracts"
               value={previewSummary?.expiredContractCount || 0}
@@ -1428,7 +1433,7 @@ const renderKeyInterestExtraNode = (row) => {
             />
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-7">
+          <div className="mb-3 grid shrink-0 grid-cols-2 gap-2 md:grid-cols-4">
             <SummaryCard
               label="Entered Free Agency"
               value={appliedSummary?.enteredFreeAgencyCount || 0}
@@ -1450,9 +1455,15 @@ const renderKeyInterestExtraNode = (row) => {
           </div>
         )}
 
-        <div className="space-y-7">
+        <div className="bmTableScroller min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
   {!optionsComplete && (
     <>
+          {!userPlayerOptions.length && !pendingUserTeamOptions.length && !pendingUserTwoWayDecisions.length && !pendingUserStashDecisions.length && (
+            <div className="rounded-xl border border-white/10 bg-white/[0.035] px-4 py-3 text-sm font-bold text-white/65">
+              No decisions are pending for your roster. Review league options below, then resolve the offseason.
+            </div>
+          )}
+          {userPlayerOptions.length > 0 && (
           <SectionShell
             title="Your Player Options"
             subtitle={
@@ -1467,7 +1478,7 @@ const renderKeyInterestExtraNode = (row) => {
             }
           >
             {!userPlayerOptions.length ? (
-              <div className="px-6 py-14 text-center text-white/50">
+              <div className="px-5 py-8 text-center text-sm text-white/50">
                 No player options are pending for your roster this offseason.
               </div>
             ) : (
@@ -1492,7 +1503,9 @@ const renderKeyInterestExtraNode = (row) => {
               </div>
             )}
           </SectionShell>
+          )}
 
+          {pendingUserTeamOptions.length > 0 && (
           <SectionShell
             title="Your Team Options"
             subtitle={
@@ -1507,7 +1520,7 @@ const renderKeyInterestExtraNode = (row) => {
             }
           >
             {!pendingUserTeamOptions.length ? (
-              <div className="px-6 py-14 text-center text-white/50">
+              <div className="px-5 py-8 text-center text-sm text-white/50">
                 No user-controlled team options this offseason.
               </div>
             ) : (
@@ -1551,6 +1564,8 @@ const renderKeyInterestExtraNode = (row) => {
               </div>
             )}
           </SectionShell>
+          )}
+          {pendingUserTwoWayDecisions.length > 0 && (
           <SectionShell
             title="Your Two-Way Decisions"
             subtitle={
@@ -1565,7 +1580,7 @@ const renderKeyInterestExtraNode = (row) => {
             }
           >
             {!pendingUserTwoWayDecisions.length ? (
-              <div className="px-6 py-14 text-center text-white/50">
+              <div className="px-5 py-8 text-center text-sm text-white/50">
                 No user-controlled two-way decisions this offseason.
               </div>
             ) : (
@@ -1615,7 +1630,9 @@ const renderKeyInterestExtraNode = (row) => {
               </div>
             )}
           </SectionShell>
+          )}
 
+          {pendingUserStashDecisions.length > 0 && (
           <SectionShell
             title="Your Stash Decisions"
             subtitle={
@@ -1630,7 +1647,7 @@ const renderKeyInterestExtraNode = (row) => {
             }
           >
             {!pendingUserStashDecisions.length ? (
-              <div className="px-6 py-14 text-center text-white/50">
+              <div className="px-5 py-8 text-center text-sm text-white/50">
                 No user-controlled stash decisions this offseason.
               </div>
             ) : (
@@ -1678,6 +1695,7 @@ const renderKeyInterestExtraNode = (row) => {
               </div>
             )}
           </SectionShell>
+          )}
           <SectionShell
   title="Players of Key Interest"
   subtitle="High-impact players (85+ OVR) who are expiring, on a player option, or on a team option this offseason."
@@ -1693,11 +1711,11 @@ const renderKeyInterestExtraNode = (row) => {
   }
 >
   {!sectionVisibility.keyInterest ? (
-    <div className="px-6 py-14 text-center text-white/50">
+    <div className="px-5 py-8 text-center text-sm text-white/50">
       Section hidden. Click Show All to expand.
     </div>
   ) : !filteredKeyInterestRows.length ? (
-    <div className="px-6 py-14 text-center text-white/50">
+    <div className="px-5 py-8 text-center text-sm text-white/50">
       No key interest players match this filter.
     </div>
   ) : (
@@ -1723,11 +1741,11 @@ const renderKeyInterestExtraNode = (row) => {
   }
 >
   {!sectionVisibility.playerOptions ? (
-    <div className="px-6 py-14 text-center text-white/50">
+    <div className="px-5 py-8 text-center text-sm text-white/50">
       Section hidden. Click Show All to expand.
     </div>
   ) : !filteredPlayerOptions.length ? (
-    <div className="px-6 py-14 text-center text-white/50">
+    <div className="px-5 py-8 text-center text-sm text-white/50">
       No player options match this filter.
     </div>
   ) : (
@@ -1759,11 +1777,11 @@ const renderKeyInterestExtraNode = (row) => {
   }
 >
   {!sectionVisibility.teamOptions ? (
-    <div className="px-6 py-14 text-center text-white/50">
+    <div className="px-5 py-8 text-center text-sm text-white/50">
       Section hidden. Click Show All to expand.
     </div>
   ) : !filteredCpuTeamOptions.length ? (
-    <div className="px-6 py-14 text-center text-white/50">
+    <div className="px-5 py-8 text-center text-sm text-white/50">
       No CPU team options match this filter.
     </div>
   ) : (
@@ -1796,11 +1814,11 @@ const renderKeyInterestExtraNode = (row) => {
   }
 >
   {!sectionVisibility.expiredContracts ? (
-    <div className="px-6 py-14 text-center text-white/50">
+    <div className="px-5 py-8 text-center text-sm text-white/50">
       Section hidden. Click Show All to expand.
     </div>
   ) : !filteredExpiredContracts.length ? (
-    <div className="px-6 py-14 text-center text-white/50">
+    <div className="px-5 py-8 text-center text-sm text-white/50">
       No expired contracts match this filter.
     </div>
   ) : (
@@ -1836,7 +1854,7 @@ const renderKeyInterestExtraNode = (row) => {
       }
     >
       {!userPlayerOptionResults.length ? (
-        <div className="px-6 py-14 text-center text-white/50">
+        <div className="px-5 py-8 text-center text-sm text-white/50">
           Your roster had no player options to resolve.
         </div>
       ) : (
@@ -1866,7 +1884,7 @@ const renderKeyInterestExtraNode = (row) => {
           <button
             onClick={finalizeRightsManagement}
             disabled={rightsManagementComplete || rightsApplyLoading || rightsPreviewLoading}
-            className={`px-5 py-3 rounded-xl font-bold transition ${
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition ${
               (rightsManagementComplete || rightsApplyLoading || rightsPreviewLoading)
                 ? "bg-neutral-700 text-white/45 cursor-not-allowed"
                 : "bg-orange-600 hover:bg-orange-500 text-white"
@@ -2015,11 +2033,6 @@ Keeping rights preserves Bird control, but the cap hold stays on your books. For
               );
             })}
           </div>
-          <div className="flex justify-end">
-            <button onClick={finalizeRightsManagement} disabled={rightsManagementComplete || rightsApplyLoading || rightsPreviewLoading} className={`px-5 py-3 rounded-xl font-bold transition ${(rightsManagementComplete || rightsApplyLoading || rightsPreviewLoading) ? "bg-neutral-700 text-white/45 cursor-not-allowed" : "bg-orange-600 hover:bg-orange-500 text-white"}`}>
-              {rightsApplyLoading ? "Saving Rights..." : rightsManagementComplete ? "Rights Finalized" : "Finalize Rights Management"}
-            </button>
-          </div>
         </div>
       )}
     </SectionShell>
@@ -2041,11 +2054,11 @@ Keeping rights preserves Bird control, but the cap hold stays on your books. For
     }
   >
     {!sectionVisibility.resolutionLog ? (
-      <div className="px-6 py-14 text-center text-white/50">
+      <div className="px-5 py-8 text-center text-sm text-white/50">
         Section hidden. Click Show All to expand.
       </div>
     ) : !filteredDecisionLog.length ? (
-      <div className="px-6 py-14 text-center text-white/50">
+      <div className="px-5 py-8 text-center text-sm text-white/50">
         No decision log available for this filter.
       </div>
     ) : (
@@ -2093,7 +2106,7 @@ Keeping rights preserves Bird control, but the cap hold stays on your books. For
 )}
         </div>
 
-        <div className="mt-8 flex justify-center gap-4 flex-wrap">
+        <div className="bmLegacyRouteBack mt-8 flex justify-center gap-4 flex-wrap">
           <button
             onClick={() => navigate("/offseason")}
             className="px-6 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-semibold transition"

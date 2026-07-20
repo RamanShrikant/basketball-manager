@@ -463,7 +463,7 @@ if (showAllNba) {
 
   return (
     <PageFade>
-      <div className={`${styles.awardsPage} min-h-screen text-white py-10`}>
+      <div className={`${styles.awardsPage} bmCourtPage h-full min-h-0 overflow-hidden p-3 text-white`}>
         {mvpPartyActive && mvpPartyLogo && (
           <div className={styles.mvpPartyLayer} aria-hidden="true">
             <div className={styles.mvpPartyPulse} />

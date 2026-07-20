@@ -32,6 +32,8 @@ import {
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
+import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
 
 window.LZString = LZString;
 
@@ -66,6 +68,48 @@ function readSavedGameplan(teamName) {
   } catch {
     return null;
   }
+}
+
+function readGameplanOrder(teamName, teamObj = null) {
+  const saved = readSavedGameplan(teamName);
+  const savedOrder = Array.isArray(saved?.order)
+    ? saved.order.filter(Boolean)
+    : [];
+
+  const minutes =
+    saved?.minutes && typeof saved.minutes === "object" && !Array.isArray(saved.minutes)
+      ? saved.minutes
+      : saved && typeof saved === "object"
+      ? saved
+      : {};
+
+  const minuteOrder = Object.entries(minutes || {})
+    .filter(([name]) => name)
+    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+    .map(([name]) => name);
+
+  const rosterOrder = (teamObj?.players || [])
+    .map((player) => player?.name || player?.player)
+    .filter(Boolean);
+
+  return Array.from(new Set([...savedOrder, ...minuteOrder, ...rosterOrder]));
+}
+
+function sortBoxRowsByFrozenRotation(rows = [], frozenOrder = [], fallbackOrder = []) {
+  const order = Array.from(new Set([...(frozenOrder || []), ...(fallbackOrder || [])]));
+  const index = new Map(order.map((name, i) => [String(name), i]));
+
+  return [...(rows || [])].sort((a, b) => {
+    const aName = String(a?.player || "");
+    const bName = String(b?.player || "");
+    const aIdx = index.has(aName) ? index.get(aName) : Number.MAX_SAFE_INTEGER;
+    const bIdx = index.has(bName) ? index.get(bName) : Number.MAX_SAFE_INTEGER;
+    if (aIdx !== bIdx) return aIdx - bIdx;
+
+    const minDiff = Number(b?.min || 0) - Number(a?.min || 0);
+    if (minDiff !== 0) return minDiff;
+    return aName.localeCompare(bName);
+  });
 }
 
 function readFlatMinutesFromGameplan(teamName) {
@@ -441,8 +485,8 @@ const MiniStandingsPanel = ({
   }
 
   return (
-    <div className={`group fixed top-28 ${sideClass} z-40 w-52`}>
-      <div className="overflow-hidden rounded-xl border-2 border-white/60 bg-neutral-900 shadow-2xl">
+    <div className={`group fixed top-24 ${sideClass} z-40 h-[min(74vh,720px)] w-44 xl:w-48`}>
+      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border-2 border-white/60 bg-neutral-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-neutral-700 bg-neutral-800 px-3 py-2">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-bold text-gray-200">
@@ -494,21 +538,24 @@ const MiniStandingsPanel = ({
         </div>
 
         {!showAwards ? (
-          <div className="standings-scrollbar max-h-[74vh] overflow-y-auto pr-1">
+          <div
+            className="grid min-h-0 flex-1 overflow-hidden"
+            style={{ gridTemplateRows: `repeat(${Math.max(rows.length, 1)}, minmax(0, 1fr))` }}
+          >
             {rows.map((row, index) => (
               <div
                 key={row.team}
                 title={row.team}
-                className={`flex items-center gap-2 border-b border-neutral-800 px-3 py-2 last:border-b-0 ${
+                className={`flex min-h-0 items-center gap-2 border-b border-neutral-800 px-2 last:border-b-0 ${
                   selectedTeamName === row.team
                     ? "bg-orange-600/20"
                     : "hover:bg-neutral-800/70"
                 }`}
               >
-                <span className="w-4 text-xs text-gray-400">{index + 1}</span>
-                <Logo team={{ name: row.team, logo: row.logo }} size={32} />
+                <span className="w-4 shrink-0 text-[11px] text-gray-400">{index + 1}</span>
+                <Logo team={{ name: row.team, logo: row.logo }} size={23} />
 
-                <div className="flex items-center gap-1 text-sm font-semibold">
+                <div className="flex min-w-0 items-center gap-1 text-[12px] font-semibold">
                   <span className="text-green-400">{row.w}</span>
                   <span className="text-gray-500">-</span>
                   <span className="text-red-400">{row.l}</span>
@@ -517,28 +564,31 @@ const MiniStandingsPanel = ({
             ))}
           </div>
         ) : (
-          <div className="standings-scrollbar max-h-[74vh] overflow-y-auto pr-1">
+          <div
+            className="grid min-h-0 flex-1 overflow-hidden"
+            style={{ gridTemplateRows: `repeat(${Math.max(awardRows.length, 1)}, minmax(0, 1fr))` }}
+          >
             {!awardRows.length ? (
-              <div className="px-3 py-4 text-sm text-neutral-400">
+              <div className="flex items-center px-3 py-4 text-sm text-neutral-400">
                 No ladder data yet.
               </div>
             ) : (
               awardRows.map((row, index) => (
                 <div
                   key={`${awardTab}_${row.player}_${row.team}`}
-                  className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2 last:border-b-0 hover:bg-neutral-800/70"
+                  className="flex min-h-0 items-center gap-1.5 border-b border-neutral-800 px-2 last:border-b-0 hover:bg-neutral-800/70"
                   title={`${index + 1}. ${row.player}`}
                 >
-                  <span className="w-4 shrink-0 text-xs text-gray-400">
+                  <span className="w-4 shrink-0 text-[11px] text-gray-400">
                     {index + 1}
                   </span>
 
-                  <div className="h-8 w-8 shrink-0 overflow-hidden rounded-full border border-neutral-700 bg-neutral-950">
+                  <div className="h-7 w-7 shrink-0 overflow-hidden rounded-full border border-neutral-700 bg-neutral-950">
                     {row.headshot ? (
                       <img
                         src={row.headshot}
                         alt={row.player}
-                        className="h-full w-full object-cover"
+                        className="h-full w-full object-cover object-top"
                       />
                     ) : (
                       <div className="h-full w-full" />
@@ -546,14 +596,11 @@ const MiniStandingsPanel = ({
                   </div>
 
                   <div className="shrink-0">
-                    <Logo
-                      team={{ name: row.team, logo: row.teamLogo }}
-                      size={18}
-                    />
+                    <Logo team={{ name: row.team, logo: row.teamLogo }} size={16} />
                   </div>
 
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold text-gray-200">
+                    <div className="truncate text-[11px] font-semibold text-gray-200">
                       {row.player}
                     </div>
                   </div>
@@ -1722,6 +1769,12 @@ const selectedTeamCanSim = !selectedTeamSimBlockMessage;
     setViewTeamName(allTeamsSorted[i]?.name || null);
   };
 
+  useKeyboardTeamNavigation({
+    enabled: allTeamsSorted.length > 1,
+    onPrevious: () => handleTeamSwitch("prev"),
+    onNext: () => handleTeamSwitch("next"),
+  });
+
   useEffect(() => {
     if (selectedTeam)
       localStorage.setItem("selectedTeam", JSON.stringify(selectedTeam.name));
@@ -1771,6 +1824,8 @@ function compactResultForCalendar(slim) {
       away: [],
     },
     hasBoxScore: hasBoxRows(slim),
+    rotationOrder: slim?.rotationOrder || null,
+    lockedAt: slim?.lockedAt || null,
   };
 }
 
@@ -1827,6 +1882,33 @@ function saveResultsIndexV3(ids) {
   }
 }
 
+const resultWriteQueueRef = useRef(Promise.resolve());
+
+function enqueueBoxScoreWrite(task) {
+  resultWriteQueueRef.current = resultWriteQueueRef.current
+    .catch(() => {})
+    .then(task);
+  return resultWriteQueueRef.current;
+}
+
+async function flushPendingResultWrites() {
+  try {
+    await resultWriteQueueRef.current;
+  } catch (error) {
+    console.warn("[ResultsV3] pending box-score write failed", error);
+  }
+}
+
+function sameLockedScore(a, b) {
+  if (!a || !b) return true;
+  return (
+    Number(a?.totals?.home ?? a?.winner?.home ?? 0) ===
+      Number(b?.totals?.home ?? b?.winner?.home ?? 0) &&
+    Number(a?.totals?.away ?? a?.winner?.away ?? 0) ===
+      Number(b?.totals?.away ?? b?.winner?.away ?? 0)
+  );
+}
+
 function loadOneResultV3(gameId) {
   try {
     const stored = localStorage.getItem(resultV3Key(gameId));
@@ -1864,14 +1946,33 @@ function loadOneResultV3(gameId) {
 }
 
 function saveOneResultV3(gameId, slim, game = null, seasonYearValue = null) {
-  if (!gameId || !slim) return;
+  if (!gameId || !slim) return Promise.resolve(null);
+
+  const existing = loadOneResultV3(gameId);
+  if (existing?.totals && !sameLockedScore(existing, slim)) {
+    console.error("[ResultsV3] refused to overwrite locked completed game", {
+      gameId,
+      existing: existing.totals,
+      incoming: slim?.totals,
+    });
+    return Promise.resolve(existing);
+  }
+
+  if (!slim.lockedAt) slim.lockedAt = Date.now();
+
+  let boxWrite = Promise.resolve();
 
   if (hasBoxRows(slim)) {
-    saveBoxScoreToDB(gameId, slim, {
-      seasonYear: seasonYearValue,
-      home: game?.home,
-      away: game?.away,
-    }).catch((e) => console.warn("[IndexedDB] failed saving box score", gameId, e));
+    boxWrite = enqueueBoxScoreWrite(() =>
+      saveBoxScoreToDB(gameId, slim, {
+        seasonYear: seasonYearValue,
+        home: game?.home,
+        away: game?.away,
+      }).catch((e) => {
+        console.warn("[IndexedDB] failed saving box score", gameId, e);
+        throw e;
+      })
+    );
   }
 
   try {
@@ -1889,6 +1990,8 @@ function saveOneResultV3(gameId, slim, game = null, seasonYearValue = null) {
     console.error("[ResultsV3] failed saving compact game", gameId, e);
     if (isQuotaError(e)) removeLegacyResultsBlob();
   }
+
+  return boxWrite;
 }
 
 function deleteOneResultV3(gameId) {
@@ -2188,6 +2291,10 @@ function buildAwardMoodEvents(awards = {}, currentDate) {
     allNBA: ["All-NBA Selection", 7],
     all_defense: ["All-Defense Selection", 6],
     allDefense: ["All-Defense Selection", 6],
+    all_defensive_first: ["All-Defensive First Team", 7],
+    all_defensive_second: ["All-Defensive Second Team", 6],
+    all_rookie_first: ["All-Rookie First Team", 6],
+    all_rookie_second: ["All-Rookie Second Team", 5],
   };
 
   const visit = (value, keyHint = "award") => {
@@ -2227,7 +2334,13 @@ function buildAwardMoodEvents(awards = {}, currentDate) {
 // ------------------------------------------------------------
 
 // Mutates slim.box rows by adding row.role = "starter" | "sixth_man" | "bench"
-function annotateSlimWithRoles(slim, homeRoleMap, awayRoleMap) {
+function annotateSlimWithRoles(
+  slim,
+  homeRoleMap,
+  awayRoleMap,
+  homeOrder = [],
+  awayOrder = []
+) {
   if (!slim || !slim.box) return slim;
 
   const apply = (side, roleMap) => {
@@ -2240,6 +2353,11 @@ function annotateSlimWithRoles(slim, homeRoleMap, awayRoleMap) {
 
   apply("home", homeRoleMap);
   apply("away", awayRoleMap);
+
+  slim.rotationOrder = {
+    home: Array.isArray(homeOrder) ? [...homeOrder] : [],
+    away: Array.isArray(awayOrder) ? [...awayOrder] : [],
+  };
 
   return slim;
 }
@@ -2371,23 +2489,46 @@ window.__results = resultsById;
   };
 
 
-function saveResults(results) {
-  const compactResults = {};
-
+async function saveResults(results, { persistBoxes = false } = {}) {
   try {
-    const ids = Object.keys(results || {});
+    const ids = Object.keys(results || {}).filter((id) => results?.[id]);
+    const existingIds = new Set(loadResultsIndexV3());
+    const pendingWrites = [];
+
     for (const id of ids) {
       const slim = results[id];
-      if (!slim) continue;
-      compactResults[id] = compactResultForCalendar(slim);
-      saveOneResultV3(id, slim, null, seasonYear);
+      const existing = loadOneResultV3(id);
+
+      if (existing?.totals && !sameLockedScore(existing, slim)) {
+        console.error("[ResultsV3] bulk checkpoint refused score mutation", {
+          gameId: id,
+          existing: existing.totals,
+          incoming: slim?.totals,
+        });
+        continue;
+      }
+
+      try {
+        const compact = compactResultForCalendar(slim);
+        localStorage.setItem(
+          resultV3Key(id),
+          LZString.compressToUTF16(JSON.stringify(compact))
+        );
+        existingIds.add(id);
+      } catch (error) {
+        console.warn("[ResultsV3] failed saving compact checkpoint", id, error);
+      }
+
+      if (persistBoxes && hasBoxRows(slim)) {
+        pendingWrites.push(saveOneResultV3(id, slim, null, seasonYear));
+      }
     }
-    saveResultsIndexV3(ids);
+
+    saveResultsIndexV3([...existingIds]);
+    if (pendingWrites.length) await Promise.allSettled(pendingWrites);
   } catch (e) {
     console.error("[ResultsV3] bulk save failed", e);
   }
-
-  setResultsById(compactResults);
 }
 
 
@@ -2402,6 +2543,67 @@ function countCompletedRegularSeasonGames(schedule, results) {
   }
 
   return completed;
+}
+
+function snapshotLockedRegularSeasonGames(schedule, results) {
+  const locked = {};
+
+  for (const [date, games] of Object.entries(schedule || {})) {
+    for (const game of games || []) {
+      const result = results?.[game?.id];
+      if (!game?.id || !hasUsableStoredResult(result)) continue;
+      locked[game.id] = {
+        date,
+        home: game.home,
+        away: game.away,
+        homeScore: Number(result?.totals?.home ?? result?.winner?.home ?? 0),
+        awayScore: Number(result?.totals?.away ?? result?.winner?.away ?? 0),
+      };
+    }
+  }
+
+  return locked;
+}
+
+function assertLockedRegularSeasonGamesUnchanged(snapshot, schedule, results, label) {
+  const currentLocation = new Map();
+  for (const [date, games] of Object.entries(schedule || {})) {
+    for (const game of games || []) {
+      if (game?.id) currentLocation.set(game.id, { date, game });
+    }
+  }
+
+  const mutations = [];
+  for (const [gameId, before] of Object.entries(snapshot || {})) {
+    const located = currentLocation.get(gameId);
+    const result = results?.[gameId];
+    const after = {
+      date: located?.date,
+      home: located?.game?.home,
+      away: located?.game?.away,
+      homeScore: Number(result?.totals?.home ?? result?.winner?.home ?? 0),
+      awayScore: Number(result?.totals?.away ?? result?.winner?.away ?? 0),
+    };
+
+    if (
+      !located ||
+      !result ||
+      before.date !== after.date ||
+      before.home !== after.home ||
+      before.away !== after.away ||
+      before.homeScore !== after.homeScore ||
+      before.awayScore !== after.awayScore
+    ) {
+      mutations.push({ gameId, before, after });
+    }
+  }
+
+  if (mutations.length) {
+    console.error(`[Calendar integrity] ${label}: locked games changed`, mutations);
+    throw new Error(
+      `Season integrity protection stopped the simulation because ${mutations.length} completed game${mutations.length === 1 ? "" : "s"} changed.`
+    );
+  }
 }
 
 function isRegularSeasonComplete(schedule, results) {
@@ -2511,6 +2713,18 @@ async function computeAndSaveCalendarAwards({
   /* -------------------------------------------------------------------------- */
   /*                          Schedule + Results Loader                         */
   /* -------------------------------------------------------------------------- */
+const scheduleTeamIdentitySignature = useMemo(
+  () =>
+    (teams || [])
+      .map((team) => slugifyId(team?.name))
+      .filter(Boolean)
+      .sort()
+      .join("|"),
+  [teams]
+);
+
+const scheduleSeasonIdentity = `${fmt(seasonStart)}::${fmt(seasonEnd)}`;
+
 useEffect(() => {
   if (!teams || teams.length < 2) return;
 
@@ -2583,6 +2797,33 @@ useEffect(() => {
     parsedPlayerStats &&
     Object.values(parsedPlayerStats).some((p) => p && (("started" in p) || ("sixth" in p)));
 
+  const storedScheduleHasGames = Object.values(parsedSched || {}).some(
+    (games) => Array.isArray(games) && games.some((game) => game?.id)
+  );
+
+  // A completed season schedule is immutable. Roster trades and other league-data
+  // changes must never cause previously played games to be regenerated or moved.
+  // If the stored schedule belongs to this season and already has results, preserve
+  // it even if a legacy validation rule no longer considers it perfectly shaped.
+  if (
+    !scheduleValid &&
+    !storedScheduleLooksLikeDifferentSeason &&
+    storedScheduleHasGames &&
+    hasValidResults
+  ) {
+    console.error(
+      "[Calendar] preserving same-season schedule with completed results instead of regenerating it"
+    );
+    const hydrated = hydrateSchedulePlayedFlagsFromResults(parsedSched, parsedResults);
+    setScheduleByDate(hydrated.schedule);
+    setResultsById(parsedResults);
+
+    if (!hasPlayerStats || !hasRoleFields) {
+      recomputePlayerSeasonStatsFromResults(hydrated.schedule, parsedResults);
+    }
+    return;
+  }
+
   // ✅ IMPORTANT: if schedule is missing/invalid, regenerate it EVEN IF results exist
   if (!scheduleValid) {
     const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
@@ -2622,7 +2863,7 @@ useEffect(() => {
     const rebuiltStats = recomputePlayerSeasonStatsFromResults(parsedSched, parsedResults);
     console.log("[Calendar] auto-rebuilt player stats (role-aware); players =", Object.keys(rebuiltStats).length);
   }
-}, [teams, seasonStart, seasonEnd]);
+}, [scheduleTeamIdentitySignature, scheduleSeasonIdentity]);
 
 
 
@@ -2952,7 +3193,7 @@ const [showWestStandings, setShowWestStandings] = useState(true);
 const [showEastStandings, setShowEastStandings] = useState(true);
 const [showAwardsPanel, setShowAwardsPanel] = useState(false);
 const [miniAwardTab, setMiniAwardTab] = useState("mvp");
-const CALENDAR_SCALE = 0.97;
+const CALENDAR_SCALE = 1;
 
 const openSimError = (message, title = "Cannot simulate") => {
   setSimErrorModal({ title, message });
@@ -3411,7 +3652,15 @@ const handleSimOnlyGame = async (dateStr, game) => {
   const result = slimResult(full);
   const homeRoles = loadTeamRoleMap(game.home);
   const awayRoles = loadTeamRoleMap(game.away);
-  annotateSlimWithRoles(result, homeRoles, awayRoles);
+  const homeOrder = readGameplanOrder(
+    game.home,
+    repairedTeams.find((team) => team?.name === game.home)
+  );
+  const awayOrder = readGameplanOrder(
+    game.away,
+    repairedTeams.find((team) => team?.name === game.away)
+  );
+  annotateSlimWithRoles(result, homeRoles, awayRoles, homeOrder, awayOrder);
 
   upd[dateStr] = upd[dateStr].map((g) =>
     g.id === game.id ? { ...g, played: true } : g
@@ -3432,7 +3681,8 @@ const handleSimOnlyGame = async (dateStr, game) => {
 
   saveSchedule(upd);
   refreshTradeDeadlineLockFromSchedule(upd);
-  saveOneResultV3(game.id, result, game, seasonYear);
+  await saveOneResultV3(game.id, result, game, seasonYear);
+  await flushPendingResultWrites();
   setResultsById((prev) => ({ ...prev, [game.id]: result }));
   saveCalendarCursor(dateStr, monthKey(new Date(dateStr)));
   setFocusedDate(dateStr);
@@ -3487,6 +3737,7 @@ setBoxModal(null);
 
   let upd = structuredClone(scheduleByDate);
   let newResults = structuredClone(resultsById);
+  const lockedGamesAtStart = snapshotLockedRegularSeasonGames(upd, newResults);
 
   const sorted = Object.keys(upd).sort((a, b) => new Date(a) - new Date(b));
 
@@ -3502,10 +3753,17 @@ for (const d of sorted) {
   if (d > dateStr) break;
 
   if (shouldPauseForTradeDeadline(d)) {
+    assertLockedRegularSeasonGamesUnchanged(
+      lockedGamesAtStart,
+      upd,
+      newResults,
+      "trade-deadline checkpoint"
+    );
     savePlayerStats(playerStats);
     cleanupGhostGames(upd, newResults);
     saveSchedule(upd);
-    saveResults(newResults);
+    await saveResults(newResults);
+    await flushPendingResultWrites();
     refreshTradeDeadlineLockFromSchedule(upd);
 
     setScheduleByDate(structuredClone(upd));
@@ -3518,7 +3776,8 @@ for (const d of sorted) {
     savePlayerStats(playerStats);
     cleanupGhostGames(upd, newResults);
     saveSchedule(upd);
-    saveResults(newResults);
+    await saveResults(newResults);
+    await flushPendingResultWrites();
 
     setScheduleByDate(structuredClone(upd));
     setResultsById(structuredClone(newResults));
@@ -3574,7 +3833,13 @@ for (const d of sorted) {
 
 const homeRoles = loadTeamRoleMap(g.home);
 const awayRoles = loadTeamRoleMap(g.away);
-          annotateSlimWithRoles(slim, homeRoles, awayRoles);
+          annotateSlimWithRoles(
+            slim,
+            homeRoles,
+            awayRoles,
+            readGameplanOrder(g.home, activeTeams.find((team) => team?.name === g.home)),
+            readGameplanOrder(g.away, activeTeams.find((team) => team?.name === g.away))
+          );
 
           newResults[g.id] = slim;
           saveOneResultV3(g.id, slim, g, seasonYear);
@@ -3618,9 +3883,16 @@ const awayRoles = loadTeamRoleMap(g.away);
     }
 
     savePlayerStats(playerStats);
+    assertLockedRegularSeasonGamesUnchanged(
+      lockedGamesAtStart,
+      upd,
+      newResults,
+      "simulation completion"
+    );
     cleanupGhostGames(upd, newResults);
     saveSchedule(upd);
-    saveResults(newResults);
+    await saveResults(newResults);
+    await flushPendingResultWrites();
 
     setScheduleByDate(structuredClone(upd));
     setResultsById(structuredClone(newResults));
@@ -3749,6 +4021,7 @@ setBoxModal(null);
 
   let upd = structuredClone(scheduleByDate);
   let results = structuredClone(resultsById);
+  const lockedGamesAtStart = snapshotLockedRegularSeasonGames(upd, results);
 
   let activeLeagueData = repairedLeagueData;
   let activeTeams = repairedTeams;
@@ -3839,7 +4112,13 @@ for (let di = 0; di < dates.length; di++) {
 
 const homeRoles = loadTeamRoleMap(g.home);
 const awayRoles = loadTeamRoleMap(g.away);
-          annotateSlimWithRoles(slim, homeRoles, awayRoles);
+          annotateSlimWithRoles(
+            slim,
+            homeRoles,
+            awayRoles,
+            readGameplanOrder(g.home, activeTeams.find((team) => team?.name === g.home)),
+            readGameplanOrder(g.away, activeTeams.find((team) => team?.name === g.away))
+          );
 
           results[g.id] = slim;
           saveOneResultV3(g.id, slim, g, seasonYear);
@@ -3896,8 +4175,15 @@ const awayRoles = loadTeamRoleMap(g.away);
       setMonth(monthKey(new Date(lastPlayedDate)));
     }
 
+    assertLockedRegularSeasonGamesUnchanged(
+      lockedGamesAtStart,
+      upd,
+      results,
+      pausedForTradeDeadline ? "trade-deadline checkpoint" : "full-season checkpoint"
+    );
     saveSchedule(upd);
-    saveResults(results);
+    await saveResults(results);
+    await flushPendingResultWrites();
     savePlayerStats(playerStats);
     refreshTradeDeadlineLockFromSchedule(upd);
 
@@ -4071,7 +4357,7 @@ setMiniAwardTab("mvp");
   const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
 
   saveSchedule(byDate);
-  saveResults({});
+  void saveResults({});
 
   const firstGameDate = Object.keys(byDate).sort()[0];
   setFocusedDate(firstGameDate);
@@ -4320,7 +4606,8 @@ async function handleDevQuickSeasonJump(mode) {
     const playerStats = devBuildPlayerStatsFromSchedule(nextSchedule);
     savePlayerStats(playerStats);
     saveSchedule(nextSchedule);
-    saveResults(nextResults);
+    await saveResults(nextResults, { persistBoxes: true });
+    await flushPendingResultWrites();
 
     setScheduleByDate(structuredClone(nextSchedule));
     setResultsById(structuredClone(nextResults));
@@ -4632,37 +4919,29 @@ return (
     }
 
     .standings-scrollbar {
-      scrollbar-width: none;
-    }
-
-    .group:hover .standings-scrollbar {
       scrollbar-width: auto;
       scrollbar-color: #f97316 #171717;
+      scrollbar-gutter: stable;
     }
 
     .standings-scrollbar::-webkit-scrollbar {
-      width: 0px;
-      height: 0px;
+      width: 10px;
+      height: 10px;
     }
 
-    .group:hover .standings-scrollbar::-webkit-scrollbar {
-      width: 16px;
-      height: 16px;
-    }
-
-    .group:hover .standings-scrollbar::-webkit-scrollbar-track {
+    .standings-scrollbar::-webkit-scrollbar-track {
       background: #171717;
       border-radius: 8px;
     }
 
-    .group:hover .standings-scrollbar::-webkit-scrollbar-thumb {
+    .standings-scrollbar::-webkit-scrollbar-thumb {
       background: #f97316;
       border-radius: 6px;
       border: 2px solid #171717;
     }
 
-    .group:hover .standings-scrollbar::-webkit-scrollbar-thumb:hover {
-      background: #ea580c;
+    .standings-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #fb923c;
     }
   `}
 </style>
@@ -4694,9 +4973,9 @@ return (
 />
 
 <div
-  className="relative z-10 max-w-6xl mx-auto px-4 h-full flex flex-col"
+  className="relative z-10 mx-auto h-full flex flex-col px-3"
   style={{
-    zoom: CALENDAR_SCALE,
+    width: "min(72vw, 1320px)",
     transformOrigin: "top center",
   }}
 >
@@ -4728,12 +5007,6 @@ return (
 
           {/* right: controls */}
           <div className="flex items-center gap-2">
-            <button
-              className="px-3 py-2 bg-neutral-700 rounded"
-              onClick={() => navigate("/team-hub")}
-            >
-              Team Hub
-            </button>
             {simLock && (
   <>
     <button
@@ -4874,8 +5147,8 @@ return (
         </div>
 
         {/* SCROLLABLE CALENDAR AREA */}
-        <div ref={calendarScrollRef} className="flex-1 min-h-0 overflow-y-auto pr-2 orange-scrollbar">
-          <div className="space-y-6 pb-6">
+        <div ref={calendarScrollRef} className="flex-1 min-h-0 overflow-y-auto orange-scrollbar pr-1">
+          <div className="space-y-4 pb-4">
             {months.map((monthStr) => {
               const monthDays = visibleDaysByMonth[monthStr] || [];
               const [y, m] = monthStr.split("-").map(Number);
@@ -4913,13 +5186,13 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                     ))}
                   </div>
 
-                  <div className="grid grid-cols-7 gap-1">
+                  <div className="grid grid-cols-7 gap-1.5">
                     {monthDays.map((d, idx) => {
                       if (!d) {
                         return (
                           <div
                             key={"pad-" + monthStr + "-" + idx}
-                            className="h-28 bg-neutral-800/40 rounded border border-neutral-800"
+                            className="h-36 bg-neutral-800/40 rounded-lg border border-neutral-800"
                           />
                         );
                       }
@@ -4948,7 +5221,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                       return (
                         <div
                           key={monthStr + "-" + dateStr}
-                          className={`relative h-28 p-2 rounded border cursor-pointer overflow-visible ${
+                          className={`relative h-36 rounded-lg border cursor-pointer overflow-hidden px-2.5 pb-2 pt-2 ${
                             game
                               ? iAmHome
                                 ? "border-blue-400"
@@ -4965,36 +5238,46 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                           <div className="text-xs text-gray-400">{d.getDate()}</div>
 
                           {game && (
-                            <div className="mt-2 flex items-center gap-2 overflow-visible">
-                              <div className="shrink-0">
+                            <div className="mt-2 flex min-h-[54px] items-center gap-2.5 pr-1">
+                              <div className="shrink-0 rounded-md bg-black/20 p-1">
                                 <Logo
                                   team={{
                                     name: iAmHome ? game.away : game.home,
                                     logo: iAmHome ? game.awayLogo : game.homeLogo,
                                   }}
-                                  size={26}
+                                  size={28}
                                 />
                               </div>
 
-                              <span className="text-sm">
-                                {iAmHome ? game.away : game.home}
+                              <span
+                                className="text-[14px] font-black tracking-wide text-white/90"
+                                title={iAmHome ? game.away : game.home}
+                              >
+                                {getTeamAbbreviation(iAmHome ? game.away : game.home)}
                               </span>
                             </div>
                           )}
 
-                          {game && game.played && outcome && (
-                            <div
-                              className={`absolute bottom-2 left-2 text-[11px] font-bold px-2 py-1 rounded ${
-                                outcome === "W" ? "bg-green-700" : "bg-red-700"
-                              }`}
-                            >
-                              {outcome}
-                            </div>
-                          )}
+                          {game && game.played && (outcome || finalScore) && (
+                            <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between gap-2">
+                              {outcome ? (
+                                <div
+                                  className={`flex h-6 min-w-6 items-center justify-center rounded-md px-1.5 text-[11px] font-black ${
+                                    outcome === "W" ? "bg-green-700" : "bg-red-700"
+                                  }`}
+                                >
+                                  {outcome}
+                                </div>
+                              ) : <span />}
 
-                          {game && game.played && finalScore && (
-                            <div className="absolute bottom-2 right-2 text-[11px] bg-green-700 px-2 py-1 rounded">
-                              Final {finalScore}{formatOTLabel(result?.winner?.ot ?? result?.periods?.otCount)}
+                              {finalScore ? (
+                                <div className="shrink-0 whitespace-nowrap rounded-md bg-emerald-700/90 px-2 py-1 text-[10px] font-bold">
+                                  {finalScore}
+                                  {Number(result?.winner?.ot ?? result?.periods?.otCount ?? 0) > 0
+                                    ? ` · ${Number(result?.winner?.ot ?? result?.periods?.otCount) === 1 ? "OT" : `${Number(result?.winner?.ot ?? result?.periods?.otCount)}OT`}`
+                                    : ""}
+                                </div>
+                              ) : null}
                             </div>
                           )}
                         </div>
@@ -5146,22 +5429,22 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
 {boxModal &&
   createPortal(
     <div
-      className="fixed inset-0 z-[210] bg-black/70 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[210] flex items-center justify-center bg-black/78 p-2"
       onClick={() => setBoxModal(null)}
     >
       <div
-        className="w-full max-w-[1240px] max-h-[90vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-5 shadow-2xl text-white"
+        className="flex w-[97vw] max-w-[1700px] flex-col overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900 p-3 text-white shadow-2xl"
+        style={{ maxHeight: "calc(100dvh - 20px)" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex justify-between">
-          <h3 className="text-xl font-bold">
-            {boxModal.game.away} @ {boxModal.game.home} •{" "}
-            {boxModal.result?.winner?.score}
+        <div className="mb-2 flex shrink-0 items-center justify-between gap-4">
+          <h3 className="min-w-0 truncate text-lg font-black">
+            {boxModal.game.away} @ {boxModal.game.home} • {boxModal.result?.winner?.score}
             {formatOTLabel(boxModal.result?.winner?.ot ?? boxModal.result?.periods?.otCount)}
           </h3>
 
           <button
-            className="px-2 py-1 bg-neutral-700 rounded hover:bg-neutral-600"
+            className="shrink-0 rounded bg-neutral-700 px-3 py-1.5 text-sm font-bold hover:bg-neutral-600"
             onClick={() => setBoxModal(null)}
           >
             Close
@@ -5177,32 +5460,25 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
             const homeOts = Array.isArray(periods.ots?.home) ? periods.ots.home : [];
             const otCount = Number(periods.otCount || Math.max(awayOts.length, homeOts.length, 0));
             const hasIndividualOts = awayOts.length > 0 || homeOts.length > 0;
-            const displayOtCount = hasIndividualOts ? otCount : otCount > 0 ? 1 : 0;
+            const displayOtCount = Math.min(hasIndividualOts ? otCount : otCount > 0 ? 1 : 0, 6);
             const legacyOtAway = Number(periods.otBreakdown?.away || 0);
             const legacyOtHome = Number(periods.otBreakdown?.home || 0);
 
             const qVal = (arr, idx) =>
-              arr[idx] != null && Number.isFinite(Number(arr[idx]))
-                ? Number(arr[idx])
-                : "—";
-
+              arr[idx] != null && Number.isFinite(Number(arr[idx])) ? Number(arr[idx]) : "—";
             const otVal = (arr, idx, legacyValue) => {
               if (hasIndividualOts) return qVal(arr, idx);
               return idx === 0 && legacyValue ? legacyValue : "—";
             };
-
             const otHeader = (idx) => (idx === 0 ? "OT" : `${idx + 1}OT`);
 
             return (
-              <div className="mb-4 overflow-x-auto rounded-lg bg-neutral-800 p-3">
-                <table className="w-full min-w-[520px] text-center text-sm">
+              <div className="mb-2 shrink-0 rounded-lg bg-neutral-800 px-3 py-2">
+                <table className="w-full table-fixed text-center text-[11px]">
                   <thead className="text-gray-300">
                     <tr className="border-b border-neutral-700">
-                      <th className="py-1 text-left">Team</th>
-                      <th>Q1</th>
-                      <th>Q2</th>
-                      <th>Q3</th>
-                      <th>Q4</th>
+                      <th className="w-[24%] py-1 text-left">Team</th>
+                      <th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th>
                       {Array.from({ length: displayOtCount }, (_, idx) => (
                         <th key={`ot-head-${idx}`}>{otHeader(idx)}</th>
                       ))}
@@ -5210,89 +5486,76 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                     </tr>
                   </thead>
                   <tbody>
-                    <tr className="border-b border-neutral-800">
-                      <td className="py-1 text-left font-semibold">
-                        {boxModal.game.away}
-                      </td>
-                      <td>{qVal(awayQ, 0)}</td>
-                      <td>{qVal(awayQ, 1)}</td>
-                      <td>{qVal(awayQ, 2)}</td>
-                      <td>{qVal(awayQ, 3)}</td>
-                      {Array.from({ length: displayOtCount }, (_, idx) => (
-                        <td key={`away-ot-${idx}`}>{otVal(awayOts, idx, legacyOtAway)}</td>
-                      ))}
-                      <td className="font-bold">
-                        {boxModal.result?.totals?.away ?? "—"}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="py-1 text-left font-semibold">
-                        {boxModal.game.home}
-                      </td>
-                      <td>{qVal(homeQ, 0)}</td>
-                      <td>{qVal(homeQ, 1)}</td>
-                      <td>{qVal(homeQ, 2)}</td>
-                      <td>{qVal(homeQ, 3)}</td>
-                      {Array.from({ length: displayOtCount }, (_, idx) => (
-                        <td key={`home-ot-${idx}`}>{otVal(homeOts, idx, legacyOtHome)}</td>
-                      ))}
-                      <td className="font-bold">
-                        {boxModal.result?.totals?.home ?? "—"}
-                      </td>
-                    </tr>
+                    {[
+                      ["away", boxModal.game.away, awayQ, awayOts, legacyOtAway, boxModal.result?.totals?.away],
+                      ["home", boxModal.game.home, homeQ, homeOts, legacyOtHome, boxModal.result?.totals?.home],
+                    ].map(([side, name, quarters, ots, legacyOt, total]) => (
+                      <tr key={side} className="border-b border-neutral-800 last:border-0">
+                        <td className="truncate py-1 text-left font-bold" title={name}>{name}</td>
+                        <td>{qVal(quarters, 0)}</td><td>{qVal(quarters, 1)}</td>
+                        <td>{qVal(quarters, 2)}</td><td>{qVal(quarters, 3)}</td>
+                        {Array.from({ length: displayOtCount }, (_, idx) => (
+                          <td key={`${side}-ot-${idx}`}>{otVal(ots, idx, legacyOt)}</td>
+                        ))}
+                        <td className="font-black">{total ?? "—"}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
             );
           })()}
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="grid min-h-0 grid-cols-2 gap-3">
           {["away", "home"].map((side) => {
-            const name =
-              side === "away" ? boxModal.game.away : boxModal.game.home;
-            const rows = boxModal.result.box?.[side] || [];
+            const name = side === "away" ? boxModal.game.away : boxModal.game.home;
+            const fallbackTeam = teams.find((team) => team?.name === name);
+            const fallbackOrder = readGameplanOrder(name, fallbackTeam);
+            const rows = sortBoxRowsByFrozenRotation(
+              boxModal.result?.box?.[side] || [],
+              boxModal.result?.rotationOrder?.[side] || [],
+              fallbackOrder
+            );
 
             return (
-              <div key={side} className="bg-neutral-800 p-4 rounded-lg overflow-hidden">
-                <h4 className="font-bold mb-2">{name}</h4>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[680px] text-sm">
-                    <thead>
-                      <tr className="text-left border-b border-neutral-700">
-                        <th className="py-1 px-2 min-w-[150px]">Player</th>
-                        <th className="px-2 text-center">MIN</th>
-                        <th className="px-2 text-center">PTS</th>
-                        <th className="px-2 text-center">REB</th>
-                        <th className="px-2 text-center">AST</th>
-                        <th className="px-2 text-center">STL</th>
-                        <th className="px-2 text-center">BLK</th>
-                        <th className="px-2 text-center">FG</th>
-                        <th className="px-2 text-center">3P</th>
-                        <th className="px-2 text-center">FT</th>
-                        <th className="px-2 text-center">TO</th>
-                        <th className="px-2 text-center">PF</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((p, i) => (
-                        <tr key={i} className="border-b border-neutral-800">
-                          <td className="py-1 px-2 min-w-[150px] whitespace-normal">{p.player}</td>
-                          <td className="px-2 text-center">{p.min}</td>
-                          <td className="px-2 text-center">{p.pts}</td>
-                          <td className="px-2 text-center">{p.reb}</td>
-                          <td className="px-2 text-center">{p.ast}</td>
-                          <td className="px-2 text-center">{p.stl}</td>
-                          <td className="px-2 text-center">{p.blk}</td>
-                          <td className="px-2 text-center whitespace-nowrap">{p.fg}</td>
-                          <td className="px-2 text-center whitespace-nowrap">{p["3p"]}</td>
-                          <td className="px-2 text-center whitespace-nowrap">{p.ft}</td>
-                          <td className="px-2 text-center">{p.to}</td>
-                          <td className="px-2 text-center">{p.pf}</td>
-                        </tr>
+              <div key={side} className="flex min-h-0 flex-col overflow-hidden rounded-lg bg-neutral-800 p-2">
+                <h4 className="mb-1 shrink-0 truncate text-sm font-black" title={name}>{name}</h4>
+                <table className="w-full table-fixed text-[10px] leading-tight">
+                  <colgroup>
+                    <col style={{ width: "27%" }} />
+                    {Array.from({ length: 11 }, (_, idx) => <col key={idx} />)}
+                  </colgroup>
+                  <thead>
+                    <tr className="border-b border-neutral-700 text-white/70">
+                      <th className="px-1 py-1 text-left">Player</th>
+                      {['MIN','PTS','REB','AST','STL','BLK','FG','3P','FT','TO','PF'].map((label) => (
+                        <th key={label} className="px-0.5 text-center">{label}</th>
                       ))}
-                    </tbody>
-                  </table>
-                </div>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((player, index) => {
+                      const dnp = Number(player?.min || 0) <= 0;
+                      const stat = (value) => (dnp ? "—" : value ?? 0);
+                      return (
+                        <tr key={`${player?.player || "player"}-${index}`} className="border-b border-neutral-700/35 last:border-0">
+                          <td className="truncate px-1 py-[2px] font-semibold" title={player?.player}>{player?.player}</td>
+                          <td className="px-0.5 text-center font-bold">{dnp ? "DNP" : player?.min}</td>
+                          <td className="px-0.5 text-center">{stat(player?.pts)}</td>
+                          <td className="px-0.5 text-center">{stat(player?.reb)}</td>
+                          <td className="px-0.5 text-center">{stat(player?.ast)}</td>
+                          <td className="px-0.5 text-center">{stat(player?.stl)}</td>
+                          <td className="px-0.5 text-center">{stat(player?.blk)}</td>
+                          <td className="px-0.5 text-center whitespace-nowrap">{stat(player?.fg)}</td>
+                          <td className="px-0.5 text-center whitespace-nowrap">{stat(player?.["3p"])}</td>
+                          <td className="px-0.5 text-center whitespace-nowrap">{stat(player?.ft)}</td>
+                          <td className="px-0.5 text-center">{stat(player?.to)}</td>
+                          <td className="px-0.5 text-center">{stat(player?.pf)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             );
           })}

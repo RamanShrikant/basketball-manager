@@ -1,11 +1,12 @@
 // Standings.jsx
 import React, { useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
+import { getArchivedStatsSnapshot, getLatestSeasonHistoryEntry, seasonLabelFromStartYear } from "../utils/seasonStatsArchive.js";
 
 /* -----------------------------
    Results V3 (per-game storage)
@@ -65,7 +66,28 @@ export default function Standings() {
 
   const { leagueData, selectedTeam } = useGame();
   const navigate = useNavigate();
+  const location = useLocation();
   const [viewMode, setViewMode] = useState("all");
+
+  const offseasonState = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("bm_offseason_state_v1") || "{}");
+    } catch {
+      return {};
+    }
+  }, []);
+  const isOffseasonMode = Boolean(location.state?.offseasonMode || offseasonState?.active);
+  const archivedSeason = useMemo(
+    () => (isOffseasonMode ? getLatestSeasonHistoryEntry(leagueData) : null),
+    [isOffseasonMode, leagueData]
+  );
+  const archivedSnapshot = useMemo(
+    () => (isOffseasonMode ? getArchivedStatsSnapshot(leagueData, "regular") : null),
+    [isOffseasonMode, leagueData]
+  );
+  const archivedSeasonLabel = (archivedSnapshot?.seasonYear ?? archivedSeason?.seasonYear)
+    ? seasonLabelFromStartYear(archivedSnapshot?.seasonYear ?? archivedSeason?.seasonYear)
+    : "";
 
   // ✅ load V3 per-game results once
   const results = useMemo(() => loadAllResultsV3(), []);
@@ -94,6 +116,49 @@ export default function Standings() {
   }, [schedule]);
 
   const teamStats = useMemo(() => {
+    if (isOffseasonMode && Array.isArray(archivedSnapshot?.teamRows) && archivedSnapshot.teamRows.length) {
+      return archivedSnapshot.teamRows.map((row) => {
+        const wins = Number(row?.wins ?? 0);
+        const losses = Number(row?.losses ?? 0);
+        const pf = Number(row?.stats?.PTS || 0) * Number(row?.stats?.GP || 0);
+        const pa = Number(row?.stats?.PA || 0) * Number(row?.stats?.GP || 0);
+        return {
+          team: row?.teamName || "Unknown Team",
+          conf: row?.conference || "",
+          logo: row?.logo || "",
+          w: wins,
+          l: losses,
+          pf: Math.round(pf),
+          pa: Math.round(pa),
+          pct: wins + losses > 0 ? (wins / (wins + losses)).toFixed(3) : "0.000",
+          diff: Number(row?.pointDifferential ?? pf - pa),
+        };
+      });
+    }
+
+    if (isOffseasonMode && Array.isArray(archivedSeason?.teams) && archivedSeason.teams.length) {
+      const liveByName = new Map(allTeams.map((team) => [team.name, team]));
+      return archivedSeason.teams.map((row) => {
+        const teamName = row?.teamName || row?.team || "Unknown Team";
+        const live = liveByName.get(teamName);
+        const wins = Number(row?.wins ?? row?.w ?? 0);
+        const losses = Number(row?.losses ?? row?.l ?? 0);
+        const pf = Number(row?.pointsFor ?? row?.pf ?? 0);
+        const pa = Number(row?.pointsAgainst ?? row?.pa ?? 0);
+        return {
+          team: teamName,
+          conf: row?.conference || row?.conf || live?.conf || "",
+          logo: live?.logo || "",
+          w: wins,
+          l: losses,
+          pf,
+          pa,
+          pct: wins + losses > 0 ? (wins / (wins + losses)).toFixed(3) : "0.000",
+          diff: Number(row?.pointDifferential ?? row?.diff ?? pf - pa),
+        };
+      });
+    }
+
     const stats = {};
 
     // start every team at 0
@@ -167,7 +232,7 @@ export default function Standings() {
       pct: t.w + t.l > 0 ? (t.w / (t.w + t.l)).toFixed(3) : "0.000",
       diff: t.pf - t.pa,
     }));
-  }, [results, allTeams, scheduleById]);
+  }, [results, allTeams, scheduleById, isOffseasonMode, archivedSeason, archivedSnapshot]);
 
   const filtered = useMemo(() => {
     if (viewMode === "east")
@@ -187,10 +252,13 @@ export default function Standings() {
 
   return (
     <PageFade>
-    <div className="bmCourtPage min-h-screen text-white py-10 px-6">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-3xl font-bold text-orange-500">Standings</h1>
+    <div className="bmCourtPage h-screen min-h-0 overflow-hidden text-white px-4 py-3">
+      <div className="mx-auto flex h-full min-h-0 max-w-7xl flex-col">
+        <div className="flex shrink-0 items-center justify-between mb-3">
+          <div>
+            <h1 className="text-3xl font-bold text-orange-500 leading-none">Standings</h1>
+            {archivedSeasonLabel && <div className="mt-1 text-xs font-bold uppercase tracking-[0.14em] text-white/45">{archivedSeasonLabel} Final</div>}
+          </div>
           <div className="flex gap-2">
             {[
               "all",
@@ -212,9 +280,9 @@ export default function Standings() {
           </div>
         </div>
 
-        <div className="overflow-auto rounded-xl border border-neutral-800">
+        <div className="bmTableScroller min-h-0 flex-1 overflow-auto rounded-xl border border-neutral-800">
           <table className="w-full text-sm text-center">
-            <thead className="bg-neutral-800 text-gray-300">
+            <thead className="sticky top-0 z-10 bg-neutral-800 text-gray-300">
               <tr>
                 <th className="px-3 py-2 text-left pl-4">Team</th>
                 <th className="px-3 py-2">W</th>
@@ -261,7 +329,7 @@ export default function Standings() {
 
         <button
           onClick={() => navigate("/team-hub")}
-          className="mt-8 px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold"
+          className="hidden mt-4 px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold lg:hidden"
         >
           Back to Team Hub
         </button>

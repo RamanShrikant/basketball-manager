@@ -28,16 +28,18 @@ export default function FinalsMvp() {
   };
 
   return (
-    <div className={`${styles.finalsMvpPage} min-h-screen text-white py-10`}>
+    <div className={`${styles.finalsMvpPage} bmCourtPage h-full min-h-0 overflow-hidden p-3 text-white`}>
+      <div className="h-full min-h-0 overflow-hidden rounded-2xl flex items-center justify-center">
       <FinalsMvpReveal
         leagueData={leagueData}
         fmvpRaw={fmvpRaw}
         onContinue={continueToOffseasonHub}
         continueLabel="Continue to Offseason"
         onBack={() => navigate("/playoffs")}
-        backLabel="Back"
+        backLabel="View Bracket"
         mode="page"
       />
+      </div>
     </div>
   );
 }

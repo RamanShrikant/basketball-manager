@@ -1,0 +1,672 @@
+/*
+ * Basketball Manager desktop density system
+ *
+ * The game was originally authored around browser zoom below 100%. This layer
+ * keeps browser zoom at 100% and normalizes the UI with real CSS sizing instead
+ * of transform/zoom tricks. It intentionally targets the shared Tailwind scale
+ * and the recurring large fixed dimensions used by roster/table hero layouts.
+ */
+
+:root {
+  --bm-page-inline: clamp(0.85rem, 1.6vw, 1.75rem);
+  --bm-page-block: clamp(0.8rem, 1.45vh, 1.35rem);
+  --bm-panel-radius: 0.9rem;
+}
+
+html {
+  min-width: 320px;
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+body,
+#root {
+  width: 100%;
+  min-width: 0;
+}
+
+/* A compact, readable desktop scale. Unlike CSS zoom, remapping the root size
+   preserves crisp text, correct pointer coordinates, fixed positioning, and
+   normal viewport math. */
+@media (min-width: 1024px) {
+  html {
+    font-size: clamp(12.25px, calc(10.5px + 0.145vw), 13.5px);
+  }
+
+  main {
+    min-width: 0;
+    min-height: calc(100vh - 3.25rem);
+  }
+
+  /* Large route containers should use the screen made available by the denser
+     type scale instead of becoming artificially narrow. */
+  .max-w-6xl {
+    max-width: min(94vw, 1500px) !important;
+  }
+
+  .max-w-7xl {
+    max-width: min(96vw, 1640px) !important;
+  }
+
+  .max-w-5xl {
+    max-width: min(93vw, 1320px) !important;
+  }
+
+  /* Recurring selected-player / prospect hero rows. */
+  .h-\[165px\] { height: 120px !important; }
+  .h-\[170px\] { height: 124px !important; }
+  .h-\[175px\] { height: 128px !important; }
+  .h-\[187px\] { height: 136px !important; }
+
+  /* Recurring portraits and fixed hero columns. */
+  .w-\[120px\] { width: 94px !important; }
+  .w-\[130px\] { width: 100px !important; }
+  .w-\[160px\] { width: 124px !important; }
+  .w-\[193px\] { width: 146px !important; }
+  .w-\[250px\] { width: 190px !important; }
+
+  /* Dense tables keep all useful columns visible at 100% browser zoom. */
+  .min-w-\[1420px\] { min-width: 1120px !important; }
+  .min-w-\[1300px\] { min-width: 1050px !important; }
+  .min-w-\[1260px\] { min-width: 1030px !important; }
+  .min-w-\[1200px\] { min-width: 990px !important; }
+  .min-w-\[1040px\] { min-width: 900px !important; }
+  .min-w-\[1020px\] { min-width: 885px !important; }
+  .min-w-\[980px\] { min-width: 850px !important; }
+  .min-w-\[860px\] { min-width: 760px !important; }
+  .min-w-\[760px\] { min-width: 680px !important; }
+  .min-w-\[720px\] { min-width: 640px !important; }
+
+  /* Prevent wide controls and cards from forcing page-level overflow. */
+  [class*="w-[min("] {
+    max-width: calc(100vw - (2 * var(--bm-page-inline)));
+  }
+
+  table {
+    line-height: 1.25;
+  }
+
+  th,
+  td {
+    vertical-align: middle;
+  }
+
+  button,
+  select,
+  input,
+  textarea {
+    max-width: 100%;
+  }
+}
+
+/* Standard laptop: a little more aggressive so 1366x768 remains genuinely
+   playable without browser zoom. */
+@media (min-width: 1024px) and (max-width: 1499px) {
+  html {
+    font-size: 12.25px;
+  }
+
+  .max-w-6xl,
+  .max-w-7xl,
+  .max-w-5xl {
+    max-width: 96vw !important;
+  }
+
+  .h-\[165px\],
+  .h-\[170px\],
+  .h-\[175px\],
+  .h-\[187px\] {
+    height: 116px !important;
+  }
+}
+
+/* Route-specific viewport normalization. The route attribute is maintained in
+   App.jsx and lets us fix full-screen experiences without coupling page logic
+   to CSS implementation details. */
+html[data-bm-route="calendar"] .max-w-6xl {
+  max-width: min(78vw, 1320px) !important;
+}
+
+html[data-bm-route="calendar"] .h-28 {
+  height: clamp(5.4rem, 11.5vh, 6.5rem) !important;
+}
+
+html[data-bm-route="calendar"] .space-y-6 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 1rem !important;
+}
+
+html[data-bm-route="coach-gameplan"] .max-h-\[480px\] {
+  max-height: min(52vh, 430px) !important;
+}
+
+html[data-bm-route="locker-room"] .h-\[680px\] {
+  height: min(72vh, 590px) !important;
+}
+
+html[data-bm-route="locker-room"] .h-\[460px\] {
+  height: min(52vh, 400px) !important;
+}
+
+html[data-bm-route="trades"] .max-h-\[610px\],
+html[data-bm-route="player-progression"] .max-h-\[610px\] {
+  max-height: min(68vh, 540px) !important;
+}
+
+html[data-bm-route="draft"] .max-h-\[760px\] {
+  max-height: min(78vh, 660px) !important;
+}
+
+html[data-bm-route="free-agents"] .max-h-\[62vh\] {
+  max-height: 68vh !important;
+}
+
+html[data-bm-route="player-team-options"] .py-14,
+html[data-bm-route="player-team-options"] .py-12,
+html[data-bm-route="player-retirements"] .py-16 {
+  padding-top: 2.5rem !important;
+  padding-bottom: 2.5rem !important;
+}
+
+/* Full-screen modals must stay inside the viewport at 100% zoom. */
+.fixed.inset-0 > [class*="max-h-[88vh]"],
+.fixed.inset-0 > [class*="max-h-[90vh]"],
+.fixed.inset-0 > [class*="max-h-[92vh]"] {
+  max-height: calc(100vh - 2rem) !important;
+}
+
+/* Narrow screens remain responsive rather than inheriting desktop density. */
+@media (max-width: 1023px) {
+  html {
+    font-size: 14px;
+  }
+
+  .bmCourtPage {
+    overflow-x: clip;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* 2K-style fixed navigation + visible desktop scrollbars                     */
+/* -------------------------------------------------------------------------- */
+.bmGlobalRouteNav {
+  position: fixed;
+  left: 14px;
+  bottom: 12px;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.bmGlobalRouteNavButton {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 7px 12px 7px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  background: rgba(8, 8, 8, 0.9);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.01em;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(10px);
+  transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
+}
+
+.bmGlobalRouteNavButton:hover {
+  border-color: rgba(249, 115, 22, 0.72);
+  background: rgba(34, 18, 8, 0.95);
+  transform: translateY(-1px);
+}
+
+.bmGlobalRouteNavButtonSecondary {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.bmGlobalRouteNavKey {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 31px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fb923c;
+  font-size: 9px;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+}
+
+.bmGameScroller,
+.bmTableScroller,
+.bmRouteScroller,
+.bmTablePanel,
+.bmCourtPage,
+.tradeFinderScroller {
+  scrollbar-width: auto;
+  scrollbar-color: #f97316 rgba(18, 18, 18, 0.95);
+  scrollbar-gutter: stable;
+}
+
+.bmGameScroller::-webkit-scrollbar,
+.bmTableScroller::-webkit-scrollbar,
+.bmRouteScroller::-webkit-scrollbar,
+.bmTablePanel::-webkit-scrollbar,
+.bmCourtPage::-webkit-scrollbar,
+.tradeFinderScroller::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.bmGameScroller::-webkit-scrollbar-track,
+.bmTableScroller::-webkit-scrollbar-track,
+.bmRouteScroller::-webkit-scrollbar-track,
+.bmTablePanel::-webkit-scrollbar-track,
+.bmCourtPage::-webkit-scrollbar-track,
+.tradeFinderScroller::-webkit-scrollbar-track {
+  background: rgba(18, 18, 18, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+}
+
+.bmGameScroller::-webkit-scrollbar-thumb,
+.bmTableScroller::-webkit-scrollbar-thumb,
+.bmRouteScroller::-webkit-scrollbar-thumb,
+.bmTablePanel::-webkit-scrollbar-thumb,
+.bmCourtPage::-webkit-scrollbar-thumb,
+.tradeFinderScroller::-webkit-scrollbar-thumb {
+  background: linear-gradient(90deg, #ea580c, #fb923c);
+  border: 2px solid rgba(18, 18, 18, 0.95);
+  border-radius: 999px;
+}
+
+.bmGameScroller::-webkit-scrollbar-thumb:hover,
+.bmTableScroller::-webkit-scrollbar-thumb:hover,
+.bmRouteScroller::-webkit-scrollbar-thumb:hover,
+.bmTablePanel::-webkit-scrollbar-thumb:hover,
+.bmCourtPage::-webkit-scrollbar-thumb:hover,
+.tradeFinderScroller::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(90deg, #f97316, #fdba74);
+}
+
+@media (min-width: 1024px) {
+  body[data-bm-route]:not([data-bm-route="team-hub"]):not([data-bm-route="team-selector"]):not([data-bm-route="league-editor"]):not([data-bm-route="play"]) {
+    overflow: hidden;
+  }
+
+  body[data-bm-route]:not([data-bm-route="team-hub"]):not([data-bm-route="team-selector"]):not([data-bm-route="league-editor"]):not([data-bm-route="play"]) .bm-page-fade {
+    height: 100vh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  body[data-bm-route]:not([data-bm-route="team-hub"]):not([data-bm-route="team-selector"]):not([data-bm-route="league-editor"]):not([data-bm-route="play"]) .bm-page-fade > .bmCourtPage {
+    height: 100vh;
+    min-height: 0 !important;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-bottom: 5rem !important;
+  }
+
+  html[data-bm-route="trade-finder"] .bmCourtPage,
+  html[data-bm-route="propose-trade"] .bmCourtPage,
+  html[data-bm-route="trade-player-select"] .bmCourtPage,
+  html[data-bm-route="trade-pick-select"] .bmCourtPage {
+    padding-bottom: 4.25rem !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .bmGlobalRouteNav {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .bmGlobalRouteNavButton {
+    min-height: 34px;
+    padding: 6px 9px 6px 6px;
+    font-size: 11px;
+  }
+}
+
+/* Trade Builder: show a full 8-for-8 comparison without page scrolling. */
+.bmTradeSideAssetGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  scrollbar-gutter: stable;
+}
+
+@media (max-width: 1199px) {
+  .bmTradeSideAssetGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 1024px) {
+  html[data-bm-route="propose-trade"] .bmCourtPage {
+    overflow: hidden !important;
+    padding-bottom: 3.65rem !important;
+  }
+}
+
+
+/* Route-local legacy navigation is replaced by the always-visible 2K nav. */
+@media (min-width: 1024px) {
+  .bmLegacyRouteBack {
+    display: none !important;
+  }
+}
+
+/* Some older tables intentionally used no-scrollbar. The game now exposes
+   horizontal scroll controls so keyboard/touchpad-only users can still browse. */
+.bmTablePanel.no-scrollbar,
+.no-scrollbar.bmTablePanel {
+  -ms-overflow-style: auto !important;
+  scrollbar-width: auto !important;
+}
+
+.bmTablePanel.no-scrollbar::-webkit-scrollbar,
+.no-scrollbar.bmTablePanel::-webkit-scrollbar {
+  display: block !important;
+  width: 12px !important;
+  height: 12px !important;
+}
+
+/* Full-screen event pages scroll inside their own route shell, never the
+   browser document. The persistent navigation remains visible throughout. */
+.bmRouteScroller {
+  overscroll-behavior: contain;
+  scroll-padding-bottom: 5rem;
+}
+
+/* ========================================================================== */
+/* Game-ready desktop shell                                                   */
+/* ========================================================================== */
+:root {
+  --bm-footer-height: 48px;
+  --bm-route-height: calc(100dvh - var(--bm-footer-height));
+}
+
+.bmGlobalRouteNav {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--bm-footer-height);
+  padding: 0 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(7, 7, 7, 0.96);
+  box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
+}
+
+.bmGlobalRouteNavInner {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  gap: 8px;
+}
+
+.bmGlobalRouteNavButton {
+  min-height: 32px;
+  padding: 6px 12px;
+  border-radius: 9px;
+  box-shadow: none;
+  font-size: 12px;
+}
+
+.bmGlobalRouteNavButtonSecondary {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.bmGlobalRouteNavKey {
+  display: none !important;
+}
+
+@media (min-width: 1024px) {
+  body[data-bm-route]:not([data-bm-route="team-hub"]):not([data-bm-route="team-selector"]):not([data-bm-route="league-editor"]):not([data-bm-route="play"]) {
+    height: 100dvh;
+    overflow: hidden !important;
+  }
+
+  body[data-bm-route]:not([data-bm-route="team-hub"]):not([data-bm-route="team-selector"]):not([data-bm-route="league-editor"]):not([data-bm-route="play"]) #root,
+  body[data-bm-route]:not([data-bm-route="team-hub"]):not([data-bm-route="team-selector"]):not([data-bm-route="league-editor"]):not([data-bm-route="play"]) .bm-page-fade {
+    height: var(--bm-route-height) !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  body[data-bm-route]:not([data-bm-route="team-hub"]):not([data-bm-route="team-selector"]):not([data-bm-route="league-editor"]):not([data-bm-route="play"]) .bm-page-fade > .bmCourtPage,
+  body[data-bm-route]:not([data-bm-route="team-hub"]):not([data-bm-route="team-selector"]):not([data-bm-route="league-editor"]):not([data-bm-route="play"]) > #root > .bmCourtPage,
+  body[data-bm-route]:not([data-bm-route="team-hub"]):not([data-bm-route="team-selector"]):not([data-bm-route="league-editor"]):not([data-bm-route="play"]) .bmRouteScroller {
+    height: var(--bm-route-height) !important;
+    min-height: 0 !important;
+    padding-bottom: 0 !important;
+  }
+
+  .bmLegacyRouteBack {
+    display: none !important;
+  }
+
+  /* A route's content is responsible for scrolling inside its main panel. */
+  html[data-bm-route="power-rankings"] .bmCourtPage,
+  html[data-bm-route="draft-picks"] .bmCourtPage,
+  html[data-bm-route="roster-view"] .bmCourtPage,
+  html[data-bm-route="coach-gameplan"] .bmCourtPage,
+  html[data-bm-route="player-stats"] .bmCourtPage,
+  html[data-bm-route="standings"] .bmCourtPage,
+  html[data-bm-route="trade-finder"] .bmCourtPage,
+  html[data-bm-route="propose-trade"] .bmCourtPage,
+  html[data-bm-route="calendar"] .bmCourtPage,
+  html[data-bm-route="free-agents"] .bmCourtPage {
+    overflow: hidden !important;
+  }
+
+  /* Roster-style lists occupy the usable height instead of leaving a dead lower half. */
+  html[data-bm-route="roster-view"] tbody tr,
+  html[data-bm-route="coach-gameplan"] tbody tr,
+  html[data-bm-route="player-stats"] tbody tr {
+    height: clamp(30px, 3.65vh, 39px);
+  }
+
+  html[data-bm-route="roster-view"] tbody td,
+  html[data-bm-route="coach-gameplan"] tbody td,
+  html[data-bm-route="player-stats"] tbody td {
+    padding-top: 0.35rem !important;
+    padding-bottom: 0.35rem !important;
+  }
+
+  html[data-bm-route="roster-view"] thead th,
+  html[data-bm-route="player-stats"] thead th {
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+  }
+
+  html[data-bm-route="power-rankings"] tbody tr {
+    height: 29px;
+  }
+
+  html[data-bm-route="power-rankings"] thead th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  /* Calendar keeps every month in one internal scroll area. */
+  html[data-bm-route="calendar"] .bmCourtPage {
+    padding-bottom: 0 !important;
+  }
+
+  /* Trade Builder supports a true 8-for-8 comparison at common desktop sizes. */
+  html[data-bm-route="propose-trade"] .bmTradeSideAssetGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-auto-rows: minmax(0, auto);
+    align-content: start;
+  }
+
+  html[data-bm-route="propose-trade"] .bmTradeSideAssetGrid > * {
+    min-height: 0;
+  }
+
+  /* Offseason routes use the route shell; long data sets scroll in their list panel. */
+  html[data-bm-route="player-retirements"] .bmRouteScroller,
+  html[data-bm-route="player-team-options"] .bmRouteScroller,
+  html[data-bm-route="player-progression"] .bmRouteScroller,
+  html[data-bm-route="viewing-offers"] .bmRouteScroller,
+  html[data-bm-route="roster-finalization"] .bmRouteScroller {
+    overflow: hidden !important;
+  }
+}
+
+@media (min-width: 1024px) and (max-height: 820px) {
+  :root {
+    --bm-footer-height: 44px;
+  }
+
+  html[data-bm-route="roster-view"] tbody tr,
+  html[data-bm-route="coach-gameplan"] tbody tr,
+  html[data-bm-route="player-stats"] tbody tr {
+    height: 29px;
+  }
+}
+
+/* ========================================================================== */
+/* Final usability pass                                                       */
+/* ========================================================================== */
+@media (min-width: 1024px) {
+  /* A standard 14-15 player roster should visually occupy the working panel;
+     deeper rosters remain internally scrollable. */
+  html[data-bm-route="roster-view"] tbody tr,
+  html[data-bm-route="coach-gameplan"] tbody tr,
+  html[data-bm-route="player-stats"] tbody tr {
+    height: clamp(34px, calc((100dvh - 252px) / 15), 52px) !important;
+  }
+
+  html[data-bm-route="roster-view"] tbody td,
+  html[data-bm-route="coach-gameplan"] tbody td,
+  html[data-bm-route="player-stats"] tbody td {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+    vertical-align: middle;
+  }
+
+  html[data-bm-route="roster-view"] tbody td:first-child,
+  html[data-bm-route="player-stats"] tbody td:first-child,
+  html[data-bm-route="award-tracker"] tbody td:first-child {
+    white-space: nowrap !important;
+  }
+
+  /* All fixed-screen routes own the area above the footer and scroll only in
+     their explicit data viewport. */
+  html[data-bm-route="locker-room"] .bmCourtPage,
+  html[data-bm-route="intel"] .bmCourtPage,
+  html[data-bm-route="trade-player-select"] .bmCourtPage,
+  html[data-bm-route="trade-pick-select"] .bmCourtPage,
+  html[data-bm-route="game-simulator"] .bmCourtPage,
+  html[data-bm-route="simulate"] .bmCourtPage,
+  html[data-bm-route="awards"] .bmCourtPage,
+  html[data-bm-route="finals-mvp"] .bmCourtPage,
+  html[data-bm-route="offseason"] .bmCourtPage,
+  html[data-bm-route="draft-lottery"] .bmCourtPage,
+  html[data-bm-route="draft"] .bmCourtPage,
+  html[data-bm-route="rookie-signings"] .bmCourtPage,
+  html[data-bm-route="roster-finalization"] .bmCourtPage,
+  html[data-bm-route="player-retirements"] .bmCourtPage,
+  html[data-bm-route="player-team-options"] .bmCourtPage,
+  html[data-bm-route="player-progression"] .bmCourtPage,
+  html[data-bm-route="viewing-offers"] .bmCourtPage {
+    overflow: hidden !important;
+  }
+
+  /* The trade builder is an aligned comparison board. Exactly eight asset
+     cells remain visible per side without relying on document scrolling. */
+  html[data-bm-route="propose-trade"] .bmTradeSideAssetGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-rows: repeat(4, minmax(72px, 1fr)) !important;
+    height: min(392px, calc(100dvh - 390px));
+    overflow: hidden !important;
+  }
+
+  html[data-bm-route="propose-trade"] .bmTradeSideAssetGrid > * {
+    height: 100% !important;
+    max-height: 92px;
+  }
+
+  /* Keep controls and headings anchored while data beneath them scrolls. */
+  .bmTableScroller thead {
+    position: sticky;
+    top: 0;
+    z-index: 15;
+  }
+
+  html[data-bm-route="player-team-options"] .bmTableScroller,
+  html[data-bm-route="player-retirements"] .bmTableScroller,
+  html[data-bm-route="player-progression"] .bmTableScroller,
+  html[data-bm-route="viewing-offers"] .bmTableScroller,
+  html[data-bm-route="rookie-signings"] .bmTableScroller,
+  html[data-bm-route="roster-finalization"] .bmTableScroller,
+  html[data-bm-route="draft-lottery"] .bmTableScroller,
+  html[data-bm-route="draft"] .bmTableScroller {
+    overscroll-behavior: contain;
+  }
+
+  /* Footer navigation is one consistent back surface; route-local copies are
+     removed by GlobalGameNav and never cover table content. */
+  .bmGlobalRouteNav {
+    z-index: 120;
+  }
+}
+
+@media (min-width: 1024px) and (max-height: 820px) {
+  html[data-bm-route="roster-view"] tbody tr,
+  html[data-bm-route="coach-gameplan"] tbody tr,
+  html[data-bm-route="player-stats"] tbody tr {
+    height: clamp(30px, calc((100dvh - 228px) / 15), 36px) !important;
+  }
+
+  html[data-bm-route="propose-trade"] .bmTradeSideAssetGrid {
+    height: min(330px, calc(100dvh - 355px));
+    grid-template-rows: repeat(4, minmax(62px, 1fr)) !important;
+  }
+}
+
+/* Calendar keeps the full viewport and uses one compact Team Hub control under
+   the West standings instead of reserving a full-width footer. */
+html[data-bm-route="calendar"] {
+  --bm-footer-height: 0px;
+}
+
+html[data-bm-route="calendar"] .bmGlobalRouteNavCalendar {
+  left: 14px;
+  right: auto;
+  bottom: 10px;
+  width: auto;
+  height: auto;
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  pointer-events: none;
+}
+
+html[data-bm-route="calendar"] .bmGlobalRouteNavCalendar .bmGlobalRouteNavInner {
+  height: auto;
+}
+
+html[data-bm-route="calendar"] .bmGlobalRouteNavCalendar .bmGlobalRouteNavButton {
+  min-height: 34px;
+  background: rgba(7, 7, 7, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.36);
+  pointer-events: auto;
+}

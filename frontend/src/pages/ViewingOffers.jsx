@@ -2979,7 +2979,7 @@ const handleReturnToOffseasonHub = () => {
   };
 
 return (
-  <div className={`${styles.viewingOffersPage} min-h-screen text-white px-6 py-8`}>
+  <div className={`${styles.viewingOffersPage} bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white`}>
     <style>{`
       .bm-orange-scroll {
         scrollbar-width: thin;
@@ -3005,16 +3005,33 @@ return (
         background: linear-gradient(to bottom, #fb923c, #ea580c);
       }
     `}</style>
-      <div className="max-w-6xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-4xl font-extrabold text-orange-500 mb-2">
-            Viewing Offers
-          </h1>
-          <p className="text-gray-400 text-base">
-            Review the latest free agency activity before moving on.
-          </p>
+      <div className="mx-auto flex h-full min-h-0 max-w-[1600px] flex-col">
+        <div className="mb-3 flex shrink-0 items-center justify-between gap-4">
+          <div>
+            <div className="text-[10px] font-black uppercase tracking-[0.22em] text-white/40">Free Agency</div>
+            <h1 className="text-2xl font-black text-orange-500">Market Decisions</h1>
+          </div>
+
+          {!shouldShowEmptyResults && (
+            <button
+              onClick={handleAdvanceFromResults}
+              disabled={processingBack || processingAdvance || processingDevAdvance || processingDevSimToEnd || pendingRfaMatchDecisions.length > 0}
+              className="rounded-lg bg-orange-600 px-5 py-2.5 text-sm font-black transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-neutral-700"
+            >
+              {processingAdvance
+                ? "Processing..."
+                : pendingRfaMatchDecisions.length > 0
+                ? "Resolve RFA Decisions"
+                : marketClosed
+                ? "Continue to Progression"
+                : pendingUserDecisions.length > 0
+                ? "Confirm Decisions"
+                : "Continue Free Agency"}
+            </button>
+          )}
         </div>
 
+        <div className="bmTableScroller min-h-0 flex-1 overflow-y-auto pb-6 pr-1">
         {shouldShowEmptyResults ? (
           <div className="bg-neutral-800 border border-neutral-700 rounded-2xl p-6 shadow-lg">
             <p className="text-lg text-gray-300">
@@ -3024,7 +3041,7 @@ return (
             <div className="mt-6 flex gap-3 flex-wrap">
               <button
                 onClick={handleReturnToOffseasonHub}
-                className="px-5 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
+                className="bmLegacyRouteBack px-5 py-3 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
               >
                 Back to Offseason Hub
               </button>
@@ -3032,40 +3049,38 @@ return (
           </div>
         ) : (
           <>
-            <div className="bg-neutral-800 border border-neutral-700 rounded-2xl p-6 mb-6 shadow-lg">
+            <div className="mb-3 rounded-xl border border-neutral-700 bg-neutral-900 p-4">
               <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
                 <div>
-                  <div className="text-sm text-gray-400 mb-1">
-                    Free Agency Daily Results
-                  </div>
-                  <div className="text-2xl font-bold text-white">
+                  <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-500">Results</div>
+                  <div className="text-xl font-black text-white">
                     {dayResolved ? `Day ${dayResolved} Complete` : "Opening Market Results"}
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full lg:w-auto">
-                  <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
+                <div className="grid w-full grid-cols-2 gap-2 lg:w-auto lg:grid-cols-4">
+                  <div className="rounded-lg border border-neutral-700 bg-black/30 px-3 py-2">
                     <div className="text-xs text-gray-400 mb-1">Signings</div>
                     <div className="text-base font-semibold text-white">
                       {signings.length}
                     </div>
                   </div>
 
-                  <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
+                  <div className="rounded-lg border border-neutral-700 bg-black/30 px-3 py-2">
                     <div className="text-xs text-gray-400 mb-1">New CPU Offers</div>
                     <div className="text-base font-semibold text-white">
                       {generatedOffers.length}
                     </div>
                   </div>
 
-                  <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
+                  <div className="rounded-lg border border-neutral-700 bg-black/30 px-3 py-2">
                     <div className="text-xs text-gray-400 mb-1">Free Agents Left</div>
                     <div className="text-base font-semibold text-white">
                       {stateSummary?.freeAgentCount ?? "-"}
                     </div>
                   </div>
 
-                  <div className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3">
+                  <div className="rounded-lg border border-neutral-700 bg-black/30 px-3 py-2">
                     <div className="text-xs text-gray-400 mb-1">Pending User Decisions</div>
                     <div className="text-base font-semibold text-white">
                       {stateSummary?.pendingUserDecisionCount ?? 0}
@@ -3903,13 +3918,14 @@ return (
 <button
   onClick={handleReturnToOffseasonHub}
   disabled={processingBack || processingAdvance || processingDevAdvance || processingDevSimToEnd}
-  className="px-6 py-3 bg-neutral-700 hover:bg-neutral-600 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
+  className="bmLegacyRouteBack px-6 py-3 bg-neutral-700 hover:bg-neutral-600 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
 >
   Back to Offseason Hub
 </button>
 </div>
           </>
         )}
+        </div>
       </div>
       {offerStatusPopupOpen && offerPopupRows.length > 0 && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] px-4 py-6">

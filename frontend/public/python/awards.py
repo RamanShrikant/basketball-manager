@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-AWARDS_PY_VERSION = "2026-06-28_awards_65gp_bench_6moy_v1"
+AWARDS_PY_VERSION = "2026-07-20_all_defensive_top10_v2"
 
 # ---------------------------------------------------------------------------
 # UTILITIES
@@ -563,6 +563,9 @@ def compute_awards(players_js, teams_js, season_js=None):
 
         "dpoy": dpoy_race[0] if dpoy_race else None,
         "dpoy_race": dpoy_race,
+        "dpoy_top10": dpoy_sorted[:10],
+        "all_defensive_first": dpoy_sorted[:5],
+        "all_defensive_second": dpoy_sorted[5:10],
 
         "sixth_man": sixth_sorted[0] if sixth_sorted else None,
         "sixth_man_race": sixth_sorted[:5],
@@ -572,6 +575,10 @@ def compute_awards(players_js, teams_js, season_js=None):
 
         "roty": roty_sorted[0] if roty_sorted else None,
         "roty_race": roty_sorted[:5],
+        "roty_top10": roty_sorted[:10],
+        # All-Rookie teams follow the final ROTY ladder: ranks 1-5 and 6-10.
+        "all_rookie_first": roty_sorted[:5],
+        "all_rookie_second": roty_sorted[5:10],
 
         "awards_py_version": AWARDS_PY_VERSION,
     }

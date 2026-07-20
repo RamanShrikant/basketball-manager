@@ -40,3 +40,46 @@
   margin: 0;
   background-color: #0d0d0d;
 }
+
+.viewportShell {
+  min-height: 0;
+}
+
+.rosterScroller {
+  scrollbar-width: auto;
+  scrollbar-color: #f97316 rgba(18,18,18,0.96);
+  scrollbar-gutter: stable both-edges;
+  overscroll-behavior: contain;
+}
+
+.rosterScroller::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.rosterScroller::-webkit-scrollbar-track {
+  background: rgba(18,18,18,0.96);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.rosterScroller::-webkit-scrollbar-thumb {
+  background: linear-gradient(90deg, #ea580c, #fb923c);
+  border: 2px solid rgba(18,18,18,0.96);
+  border-radius: 999px;
+}
+
+.legacyBackButton {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .viewportShell {
+    height: auto !important;
+    min-height: 100vh;
+    overflow: visible !important;
+  }
+
+  .legacyBackButton {
+    display: inline-flex;
+  }
+}

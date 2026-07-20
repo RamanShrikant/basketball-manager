@@ -7,12 +7,25 @@ import { rebuildGameplansForLeague } from "../utils/ensureGameplans";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./FreeAgents.module.css";
 import PageFade from "../components/PageFade";
+import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
 import "../styles/BMAnimations.css";
 import { saveLeagueData, loadLeagueData } from "../utils/leagueStorage.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
+
+function resolvePlayerPortrait(player = {}) {
+  return (
+    player?.headshot ||
+    player?.portrait ||
+    player?.image ||
+    player?.photo ||
+    player?.img ||
+    player?.face ||
+    ""
+  );
+}
 
 function compactStorySideForStorage(side) {
   if (!side || typeof side !== "object") return null;
@@ -451,6 +464,7 @@ export default function FreeAgents() {
   const [daySummary, setDaySummary] = useState(null);
   const [rosterActionError, setRosterActionError] = useState("");
   const [capInfoModal, setCapInfoModal] = useState(null);
+  const [capDetailsOpen, setCapDetailsOpen] = useState(false);
   const [offseasonState, setOffseasonState] = useState(() =>
     safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), null) || {}
   );
@@ -2945,7 +2959,7 @@ updateOffseasonState({
 
   return (
     <PageFade>
-    <div className={`${styles.freeAgentsPage} min-h-screen text-white flex flex-col items-center py-10`}>
+    <div className={`${styles.freeAgentsPage} ${styles.viewportShell} h-full min-h-0 overflow-hidden text-white flex flex-col items-center px-4 py-3`}>
       <style>{`
         .fa-modal-scroll {
           scrollbar-width: thin;
@@ -2972,242 +2986,136 @@ updateOffseasonState({
         }
       `}</style>
 
-      <div className="w-full max-w-5xl flex items-center justify-center mb-4 select-none">
-        <h1 className="text-4xl font-extrabold text-orange-500 text-center">
+      <div className="w-full max-w-7xl flex shrink-0 items-center justify-center mb-2 select-none">
+        <h1 className="text-3xl font-extrabold text-orange-500 text-center leading-none">
           {isOffseasonMode ? "Free Agency - Live Market" : "Free Agents"}
         </h1>
       </div>
 
       {isOffseasonMode && (
-        <div className="w-full max-w-5xl bg-neutral-800 border border-neutral-700 rounded-2xl shadow-lg px-5 py-4 mb-6">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-            <div>
-              <p className="text-sm text-gray-400">
-                Mode: Offseason Free Agency
-              </p>
-              <p className="text-lg font-semibold text-white mt-1">
+        <div className={`${styles.offseasonDashboard} w-full max-w-7xl shrink-0 overflow-hidden rounded-xl border border-neutral-700 bg-neutral-800 shadow-lg px-3 py-2 mb-2`}>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="mr-auto min-w-[170px]">
+              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/40">Offseason Free Agency</div>
+              <div className="text-sm font-black text-white">
                 {effectiveFreeAgencyFinished
                   ? userRosterInvalid
-                    ? "Free agency complete - roster warning"
-                    : "Free agency complete"
+                    ? "Market complete · roster warning"
+                    : "Market complete"
                   : isLiveFreeAgencyActive
                   ? `Day ${currentDay} of ${maxDays || 7}`
-                  : "Live market ready to start"}
-              </p>
-              {isOffseasonMode && optionsComplete && !rightsManagementComplete && (
-                <p className="text-sm text-orange-300 mt-2">Finalize Rights Management before starting the market.</p>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full lg:w-auto">
-              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <div className="text-xs text-gray-400 mb-1">Free Agents</div>
-                <div className="text-base font-semibold text-white">{freeAgents.length}</div>
-              </div>
-              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <div className="text-xs text-gray-400 mb-1">Active Offers</div>
-                <div className="text-base font-semibold text-white">{activeOfferCount}</div>
-              </div>
-              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <div className="text-xs text-gray-400 mb-1">Signed</div>
-                <div className="text-base font-semibold text-white">{signedPlayersLog.length}</div>
-              </div>
-              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <div className="text-xs text-gray-400 mb-1">Your Team</div>
-                <div className="text-base font-semibold text-white">
-                  {selectedTeam?.name || "-"}
-                </div>
+                  : "Market ready"}
               </div>
             </div>
-          </div>
 
-          {userCapDashboard && (
-            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 mt-4">
-              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <div className="text-xs text-gray-400 mb-1">Payroll</div>
-                <div className="text-base font-semibold text-white">
-                  {formatDollars(userCapDashboard.payroll)}
-                </div>
+            {[
+              ["Free Agents", freeAgents.length],
+              ["Offers", activeOfferCount],
+              ["Signed", signedPlayersLog.length],
+              ["Roster", userCapDashboard ? `${userCapDashboard.rosterCount}/${userCapDashboard.rosterLimit}` : "-"],
+            ].map(([label, value]) => (
+              <div key={label} className="min-w-[82px] rounded-lg border border-white/10 bg-neutral-900 px-2.5 py-1.5">
+                <div className="text-[9px] font-black uppercase tracking-wide text-white/40">{label}</div>
+                <div className="text-sm font-black text-white truncate">{value}</div>
               </div>
+            ))}
 
-              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <CapMetricLabel label="Cap Holds" type="capHolds" />
-                <div className="text-base font-semibold text-orange-200">
-                  {formatDollars(userCapDashboard.capHoldTotal)}
-                </div>
-              </div>
-
-              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <div className="text-xs text-gray-400 mb-1">Cap Space</div>
-                <div className={`text-base font-semibold ${userCapDashboard.capRoom < 0 ? "text-red-300" : "text-emerald-300"}`}>
-                  {formatDollars(userCapDashboard.capRoom)}
-                </div>
-              </div>
-
-              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <CapMetricLabel label="Practical Cap" type="practicalCap" />
-                <div className={`text-base font-semibold ${userCapDashboard.practicalCapRoom < 0 ? "text-red-300" : "text-emerald-300"}`}>
-                  {formatDollars(userCapDashboard.practicalCapRoom)}
-                </div>
-                <div className="text-[11px] text-gray-500 mt-1">payroll + holds</div>
-              </div>
-
-              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <CapMetricLabel label="Hard Cap Room" type="hardCapRoom" />
-                <div className={`text-base font-semibold ${userCapDashboard.hardCapRoom !== null && userCapDashboard.hardCapRoom < 0 ? "text-red-300" : "text-white"}`}>
-                  {userCapDashboard.hardCapRoom === null ? "None" : formatDollars(userCapDashboard.hardCapRoom)}
-                </div>
-              </div>
-
-              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <CapMetricLabel label="Best Exception" type="bestException" />
-                <div className="text-base font-semibold text-orange-200">
-                  {getBestExceptionLabel(userCapDashboard)}
-                </div>
-              </div>
-
-              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <CapMetricLabel label="Offer Commit" type="offerCommit" />
-                <div className="text-base font-semibold text-orange-200">
-                  {formatDollars(userCapDashboard.activeOfferSalary)}
-                </div>
-              </div>
-
-              <div className="bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-                <div className="text-xs text-gray-400 mb-1">Roster</div>
-                <div className={`text-base font-semibold ${userCapDashboard.rosterCount > userCapDashboard.rosterLimit ? "text-red-300" : "text-white"}`}>
-                  {userCapDashboard.rosterCount} / {userCapDashboard.rosterLimit}
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-wrap gap-3 mt-4">
             {effectiveFreeAgencyFinished ? (
-              <button
-                onClick={handleContinueToProgression}
-                className="px-5 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition"
-              >
+              <button onClick={handleContinueToProgression} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-black hover:bg-green-500">
                 Continue to Progression
               </button>
             ) : !isLiveFreeAgencyActive ? (
-              <button
-                onClick={handleInitializeFreeAgency}
-                disabled={marketInitLoading}
-                className="px-5 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
-              >
-                {marketInitLoading ? "Starting..." : "Start Live Market"}
+              <button onClick={handleInitializeFreeAgency} disabled={marketInitLoading} className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-black hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed">
+                {marketInitLoading ? "Starting..." : "Start Market"}
               </button>
             ) : (
-              <button
-                onClick={handleAdvanceDay}
-                disabled={advanceDayLoading}
-                className="px-5 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition"
-              >
+              <button onClick={handleAdvanceDay} disabled={advanceDayLoading} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-black hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed">
                 {advanceDayLoading ? "Advancing..." : "Advance Day"}
               </button>
             )}
-
-            <button
-              onClick={() => navigate("/offseason")}
-              className="px-5 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
-            >
-              Back to Offseason Hub
-            </button>
           </div>
 
-          {rosterValidationMessage && (
-            <div className="mt-4 bg-orange-500/10 border border-orange-500/30 rounded-xl px-4 py-3">
-              <div className="text-sm font-semibold text-orange-100">
-                {rosterValidationMessage} This will not block offseason progress, but it will block Calendar simulation until fixed.
-              </div>
-
-              {effectiveFreeAgencyFinished && userRosterTooFew && (
-                <div className="text-xs text-orange-200 mt-1">
-                  The live market is over, so you can still sign remaining free agents directly on this page.
+          {userCapDashboard && (
+            <div className="mt-2 grid grid-cols-2 gap-2 lg:grid-cols-4">
+              {[
+                ["Payroll", formatDollars(userCapDashboard.payroll), "text-white"],
+                ["Cap Space", formatDollars(userCapDashboard.capRoom), userCapDashboard.capRoom < 0 ? "text-red-300" : "text-emerald-300"],
+                ["Practical Cap", formatDollars(userCapDashboard.practicalCapRoom), userCapDashboard.practicalCapRoom < 0 ? "text-red-300" : "text-emerald-300"],
+                ["Best Exception", getBestExceptionLabel(userCapDashboard), "text-orange-200"],
+              ].map(([label, value, tone]) => (
+                <div key={label} className="flex min-w-0 items-center justify-between gap-2 rounded-lg border border-white/10 bg-neutral-900 px-3 py-1.5">
+                  <div className="text-[10px] font-black uppercase tracking-wide text-white/45">{label}</div>
+                  <div className={`truncate text-sm font-black ${tone}`}>{value}</div>
                 </div>
-              )}
+              ))}
             </div>
           )}
 
-          {rosterActionError && rosterActionError !== rosterValidationMessage && (
-            <div className="mt-4 text-red-300 text-sm font-semibold">
-              {rosterActionError}
-            </div>
-          )}
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <button onClick={() => setCapDetailsOpen((open) => !open)} className="rounded-md border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-black text-white/70 hover:bg-white/10">
+              {capDetailsOpen ? "Hide Cap Details" : "Cap Details"}
+            </button>
+            {isOffseasonMode && optionsComplete && !rightsManagementComplete && (
+              <span className="text-xs font-bold text-orange-300">Finalize rights before starting the market.</span>
+            )}
+            {rosterValidationMessage && (
+              <span className="truncate text-xs font-bold text-orange-200" title={rosterValidationMessage}>{rosterValidationMessage}</span>
+            )}
+            {rosterActionError && rosterActionError !== rosterValidationMessage && (
+              <span className="text-xs font-bold text-red-300">{rosterActionError}</span>
+            )}
+            {daySummary?.error && !(daySummary.error === "FREE_AGENCY_INIT_TIMEOUT" && isLiveFreeAgencyActive && currentDay > 0) && (
+              <span className="text-xs font-bold text-red-300">{daySummary.error}</span>
+            )}
+          </div>
 
-          {daySummary?.error && !(daySummary.error === "FREE_AGENCY_INIT_TIMEOUT" && isLiveFreeAgencyActive && currentDay > 0) && (
-            <div className="mt-4 text-red-300 text-sm font-semibold">
-              {daySummary.error}
-            </div>
-          )}
-
-          {(!daySummary?.error || (daySummary.error === "FREE_AGENCY_INIT_TIMEOUT" && isLiveFreeAgencyActive && currentDay > 0)) && daySummary && (
-            <div className="mt-4 bg-neutral-900 rounded-xl border border-neutral-700 px-4 py-3">
-              <div className="text-sm font-semibold text-orange-300 mb-2">
-                Latest Market Update
-              </div>
-              <div className="text-sm text-gray-300 space-y-1">
-                {daySummary?.prepSummary && (
-                  <>
-                    <div>
-                      Entered free agency after cleanup: {daySummary.prepSummary.enteredFreeAgencyCount || 0}
-                    </div>
-                    <div>
-                      Team options declined: {daySummary.prepSummary.teamOptionDeclinedCount || 0}
-                    </div>
-                  </>
-                )}
-                {daySummary?.dayResolved ? (
-                  <div>Resolved Day {daySummary.dayResolved}</div>
-                ) : (
-                  <div>Opening market initialized.</div>
-                )}
-                <div>New CPU offers: {daySummary?.generatedOffers?.length || 0}</div>
-                <div>Signings today: {daySummary?.signings?.length || 0}</div>
-                {effectiveFreeAgencyFinished && (
-                  <div className="text-green-300 font-semibold pt-1">
-                    Free agency is complete.
-                  </div>
-                )}
-              </div>
+          {capDetailsOpen && userCapDashboard && (
+            <div className="mt-2 grid grid-cols-2 gap-2 border-t border-white/10 pt-2 lg:grid-cols-4">
+              {[
+                ["Cap Holds", formatDollars(userCapDashboard.capHoldTotal)],
+                ["Hard Cap Room", userCapDashboard.hardCapRoom === null ? "None" : formatDollars(userCapDashboard.hardCapRoom)],
+                ["Offer Commit", formatDollars(userCapDashboard.activeOfferSalary)],
+                ["Team", selectedTeam?.name || "-"],
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-center justify-between gap-2 rounded-md bg-black/20 px-3 py-1.5">
+                  <div className="text-[10px] font-black uppercase tracking-wide text-white/40">{label}</div>
+                  <div className="truncate text-xs font-black text-white/85">{value}</div>
+                </div>
+              ))}
             </div>
           )}
         </div>
       )}
 
       <div className="w-full flex justify-center px-4">
-        <div className="relative bg-neutral-800/95 backdrop-blur-md border border-neutral-700 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-2xl">
+        <div className="relative bg-neutral-800/95 backdrop-blur-md border border-neutral-700 w-full max-w-7xl px-5 pt-3 pb-1 rounded-t-xl shadow-2xl">
           <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
 
           <div className="flex items-end justify-between relative">
             <div className="flex items-end gap-6">
-              <div className="relative -mb-[9px]">
-                {player?.headshot ? (
-                  <img
-                    src={player.headshot}
-                    alt={player.name}
-                    className="h-[175px] w-auto object-contain"
-                  />
-                ) : (
-                  <div className="h-[175px] w-[130px] bg-neutral-700 rounded flex items-center justify-center text-neutral-300">
+              <PlayerPortraitFrame
+                src={resolvePlayerPortrait(player)}
+                alt={player?.name || "Free agent"}
+                className="h-[100px] w-[142px]"
+                fallback={(
+                  <div className="flex h-full w-full items-center justify-center rounded-t-lg bg-neutral-700 text-neutral-300">
                     No Image
                   </div>
                 )}
-              </div>
+              />
 
               <div className="flex flex-col justify-end mb-3">
-                <h2 className="text-[44px] font-bold leading-tight">
+                <h2 className="text-[26px] font-bold leading-tight">
                   {player?.name || "-"}
                 </h2>
-                <p className="text-gray-400 text-[24px] mt-1">
+                <p className="text-gray-400 text-[16px] mt-0.5">
                   {player?.pos || "-"}
                   {player?.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age{" "}
                   {player?.age ?? "-"}
                 </p>
-                <p className="text-gray-500 text-[18px] mt-1">Unsigned Free Agent</p>
+                <p className="text-gray-500 text-[13px] mt-0.5">Unsigned Free Agent</p>
 
-                <div className="mt-4 flex flex-wrap gap-3">
+                <div className="mt-2 flex flex-wrap gap-2">
                   <button
                     onClick={() => openSignModal(player)}
                     disabled={
@@ -3247,8 +3155,8 @@ updateOffseasonState({
               </div>
             </div>
 
-            <div className="relative flex flex-col items-center justify-center mr-4 mb-2">
-              <svg width="110" height="110" viewBox="0 0 120 120">
+            <div className="relative flex flex-col items-center justify-center mr-3 mb-1">
+              <svg width="72" height="72" viewBox="0 0 120 120">
                 <defs>
                   <linearGradient id="ovrGradientFA" x1="0%" y1="0%" x2="100%" y2="0%">
                     <stop offset="0%" stopColor="#FFA500" />
@@ -3281,7 +3189,7 @@ updateOffseasonState({
 
               <div className="absolute flex flex-col items-center justify-center text-center">
                 <p className="text-sm text-gray-300 tracking-wide mb-1">OVR</p>
-                <p className="text-[47px] font-extrabold text-orange-400 leading-none mt-[-11px]">
+                <p className="text-[34px] font-extrabold text-orange-400 leading-none mt-[-8px]">
                   {player?.overall ?? "-"}
                 </p>
                 <p className="text-[10px] text-gray-400 mt-[-2px]">
@@ -3293,11 +3201,11 @@ updateOffseasonState({
         </div>
       </div>
 
-<div className="w-full flex justify-center transition-opacity duration-300 ease-in-out mt-[-1px] px-4">
-  <div className="w-full max-w-5xl max-h-[62vh] overflow-auto rounded-b-xl border border-neutral-700 border-t-0 bg-neutral-900 no-scrollbar">
-    <div className="min-w-[1420px] w-max">
+<div className="w-full flex flex-1 min-h-0 justify-center transition-opacity duration-300 ease-in-out mt-[-1px]">
+  <div className={`${styles.tableViewport} bmTableScroller w-full max-w-7xl min-h-0 overflow-auto rounded-b-xl border border-neutral-700 border-t-0 bg-neutral-900`}>
+    <div className="min-w-[1580px] w-max">
             <table className="w-full border-collapse text-center">
-              <thead className="sticky top-0 z-20 bg-neutral-800 text-gray-300 text-[16px] font-semibold">
+              <thead className="sticky top-0 z-20 bg-neutral-800 text-gray-300 text-[13px] font-semibold">
                 <tr>
                   {[{ key: "name", label: "Name" },
                     { key: "pos", label: "POS" },
@@ -3313,8 +3221,8 @@ updateOffseasonState({
                     ...attrColumns].map((col) => (
                     <th
                       key={col.key}
-                      className={`py-3 px-3 min-w-[95px] ${
-                        col.key === "name" ? "min-w-[150px] text-left pl-4" : "text-center"
+                      className={`py-2 px-3 min-w-[88px] ${
+                        col.key === "name" ? "min-w-[210px] text-left pl-4" : "text-center"
                       } cursor-pointer select-none`}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -3336,7 +3244,7 @@ updateOffseasonState({
                 </tr>
               </thead>
 
-              <tbody className="text-[17px] font-medium">
+              <tbody className="text-[14px] font-medium">
                 {sortedPlayers.map((p, idx) => {
                   const affordability = affordabilityByPlayerKey[getPlayerKey(p)] || buildAffordabilityForPlayer(p);
 
@@ -3440,7 +3348,7 @@ updateOffseasonState({
         </div>
       </div>
 
-      <div className="flex gap-3 flex-wrap justify-center mt-10">
+      <div className={`${styles.legacyBackRow} flex gap-3 flex-wrap justify-center mt-3`}>
         {isOffseasonMode && (
           <button
             onClick={() => navigate("/offseason")}

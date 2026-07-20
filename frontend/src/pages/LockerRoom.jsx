@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { getLockerRoomMoods } from "../api/simEnginePy.js";
 import PageFade from "../components/PageFade";
+import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
+import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
@@ -1501,9 +1503,23 @@ export default function LockerRoom() {
     });
   };
 
+  useKeyboardTeamNavigation({
+    enabled: teams.length > 1,
+    onPrevious: () => handleTeamSwitch("prev"),
+    onNext: () => handleTeamSwitch("next"),
+  });
+
   const players = moodData?.players || [];
   const sortedPlayers = useMemo(() => sortMoodRowsByOverall(players), [players]);
   const selectedPlayer = sortedPlayers.find((row) => row.playerKey === selectedKey) || sortedPlayers[0] || null;
+
+  useKeyboardListNavigation({
+    items: sortedPlayers,
+    selectedItem: selectedPlayer,
+    onSelect: (row) => setSelectedKey(row.playerKey),
+    getKey: (row) => row?.playerKey,
+    rowSelector: "[data-bm-locker-row-index]",
+  });
   const logo = moodData?.teamLogo || teamLogoOf(activeTeam);
   const reportHeaderT = LOCKER_ROOM_REPORT_HEADER_TUNING;
 
@@ -1523,9 +1539,9 @@ export default function LockerRoom() {
   return (
     <PageFade>
       <style>{LOCKER_ROOM_SCROLLBAR_STYLE}</style>
-      <div className="bmCourtPage min-h-screen px-4 py-8 text-white">
-        <div className="mx-auto w-full max-w-7xl">
-          <div className="mb-6 flex items-center justify-between gap-4 select-none">
+      <div className="bmCourtPage h-full min-h-0 overflow-hidden p-3 text-white">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1680px] flex-col">
+          <div className="mb-2 flex h-[58px] shrink-0 items-center justify-between gap-4 select-none">
             <button
               onClick={() => handleTeamSwitch("prev")}
               className="w-20 text-left text-4xl font-black text-white transition hover:text-orange-400 active:scale-95"
@@ -1537,8 +1553,8 @@ export default function LockerRoom() {
             <div className="min-w-0 text-center">
               <div className="text-xs font-black uppercase tracking-[0.24em] text-orange-300">Locker Room</div>
               <div className="mt-2 flex items-center justify-center gap-4">
-                {logo ? <img src={logo} alt={activeTeam?.name || "Team"} className="h-16 w-16 object-contain" /> : null}
-                <h1 className="truncate text-4xl font-black text-orange-500">{activeTeam?.name || "Team"}</h1>
+                {logo ? <img src={logo} alt={activeTeam?.name || "Team"} className="h-12 w-12 object-contain" /> : null}
+                <h1 className="truncate text-3xl font-black text-orange-500">{activeTeam?.name || "Team"}</h1>
               </div>
             </div>
 
@@ -1551,8 +1567,6 @@ export default function LockerRoom() {
             </button>
           </div>
 
-          <div className="mb-8" />
-
           {error && (
             <div className="mb-5 rounded-2xl border border-red-400/30 bg-red-500/10 px-5 py-4 text-sm font-black text-red-100">
               {error}
@@ -1564,8 +1578,8 @@ export default function LockerRoom() {
               Checking the locker room...
             </div>
           ) : (
-            <div className="grid items-start gap-5 xl:grid-cols-[560px_1fr]">
-              <div className="flex h-[680px] max-h-[74vh] min-h-0 flex-col rounded-[28px] border border-white/10 bg-neutral-950/90 p-4 shadow-2xl">
+            <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[430px_1fr]">
+              <div className="flex h-full min-h-0 flex-col rounded-2xl border border-white/10 bg-neutral-950/90 p-3 shadow-2xl">
                 <div className="mb-4 flex items-center justify-between gap-3 px-1">
                   <div>
                     <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Players</div>
@@ -1576,20 +1590,21 @@ export default function LockerRoom() {
                   </div>
                 </div>
 
-                <div className="locker-room-player-scroll min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-                  {sortedPlayers.map((row) => (
+                <div className="locker-room-player-scroll min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                  {sortedPlayers.map((row, rowIndex) => (
+                    <div key={row.playerKey || row.playerName} data-bm-locker-row-index={rowIndex}>
                     <PlayerMoodRow
-                      key={row.playerKey || row.playerName}
                       row={row}
                       team={activeTeam}
                       active={selectedPlayer?.playerKey === row.playerKey}
                       onClick={() => setSelectedKey(row.playerKey)}
                     />
+                    </div>
                   ))}
                 </div>
               </div>
 
-              <div className="locker-room-detail-scroll relative isolate h-[680px] max-h-[74vh] overflow-y-auto overflow-x-hidden rounded-[28px] border border-white/10 bg-neutral-950/95 shadow-2xl">
+              <div className="locker-room-detail-scroll relative isolate h-full min-h-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-white/10 bg-neutral-950/95 shadow-2xl">
                 {logo ? (
                   <img
                     src={logo}
@@ -1600,7 +1615,7 @@ export default function LockerRoom() {
                 ) : null}
 
                 {selectedPlayer ? (
-                  <div className="relative z-10 p-6">
+                  <div className="relative z-10 p-4">
                     <div
                       className="relative mb-6 border border-white/10 bg-transparent shadow-[0_18px_45px_rgba(0,0,0,0.32)]"
                       style={{

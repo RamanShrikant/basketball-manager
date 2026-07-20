@@ -462,7 +462,14 @@ function pickProtectionLabel(pick) {
 function defaultFinderProtectionEnd(pick) {
   const owned = getTradeablePickOwnedRange(pick);
   const round = Number(pick?.round || 1) === 2 ? 2 : 1;
-  const preferred = round === 1 && owned.start === 1 ? 14 : owned.start + 4;
+  // First-round custom protection defaults to lottery protection. Second-round
+  // custom protection defaults to top-55, which is a much more familiar NBA
+  // convention than the old 31-35 default.
+  const preferred = round === 1 && owned.start === 1
+    ? 14
+    : round === 2
+      ? 55
+      : owned.start + 4;
   return Math.max(owned.start, Math.min(owned.end - 1, preferred));
 }
 
@@ -1815,19 +1822,10 @@ export default function TradeFinder() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam } = useGame();
   const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
-  const savedFinderState = useMemo(() => safeReadTradeFinderState(), []);
-  const [selectedAssetKeys, setSelectedAssetKeys] = useState(() =>
-    Array.isArray(savedFinderState?.selectedAssetKeys) ? savedFinderState.selectedAssetKeys : []
-  );
-  const [pickProtections, setPickProtections] = useState(() =>
-    savedFinderState?.pickProtections && typeof savedFinderState.pickProtections === "object"
-      ? savedFinderState.pickProtections
-      : {}
-  );
-  const [searched, setSearched] = useState(() => Boolean(savedFinderState?.searched));
-  const [pythonOffers, setPythonOffers] = useState(() =>
-    Array.isArray(savedFinderState?.offers) ? savedFinderState.offers : []
-  );
+  const [selectedAssetKeys, setSelectedAssetKeys] = useState([]);
+  const [pickProtections, setPickProtections] = useState({});
+  const [searched, setSearched] = useState(false);
+  const [pythonOffers, setPythonOffers] = useState([]);
   const [isSearchingOffers, setIsSearchingOffers] = useState(false);
   const [offerSearchError, setOfferSearchError] = useState("");
   const [offerSearchProgress, setOfferSearchProgress] = useState("");
@@ -1894,15 +1892,12 @@ export default function TradeFinder() {
   }, []);
 
   useEffect(() => {
-    if (!selectedTeam?.name) return;
-    saveTradeFinderState({
-      selectedTeamName: selectedTeam.name,
-      selectedAssetKeys,
-      pickProtections,
-      searched,
-      offers: pythonOffers,
-    });
-  }, [selectedTeam?.name, selectedAssetKeys, pickProtections, searched, pythonOffers]);
+    // Trade Finder is intentionally a fresh workspace on every visit.
+    // The loaded offer is stored in Trade Builder, but the Finder itself should
+    // never reopen with a stale package or old result list.
+    localStorage.removeItem(TRADE_FINDER_STATE_KEY);
+    return () => localStorage.removeItem(TRADE_FINDER_STATE_KEY);
+  }, []);
 
   const toggleAsset = (asset) => {
     setSearched(false);
@@ -2113,14 +2108,6 @@ export default function TradeFinder() {
 
   const loadOffer = (offer) => {
     debugTradeFinderLoadOffer({ leagueData, selectedTeam, selectedItems, offer });
-
-    saveTradeFinderState({
-      selectedTeamName: selectedTeam?.name || "",
-      selectedAssetKeys,
-      pickProtections,
-      searched: true,
-      offers: pythonOffers.length ? pythonOffers : offers,
-    });
 
     saveTradeBuilderFromOffer({
       selectedTeam,

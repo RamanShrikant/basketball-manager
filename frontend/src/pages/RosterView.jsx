@@ -5,9 +5,12 @@ import { releasePlayerToFreeAgency } from "../api/simEnginePy.js";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./RosterView.module.css";
 import PageFade from "../components/PageFade";
+import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
 import "../styles/BMAnimations.css";
 import { getLeagueFinancialRules, getRookieSalaryForPick } from "../utils/leagueFinancials.js";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
+import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
+import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const ALL_PLAYERS_VIEW_KEY = "__ALL_PLAYERS__";
@@ -556,6 +559,12 @@ export default function RosterView() {
     });
   };
 
+  useKeyboardTeamNavigation({
+    enabled: totalSlots > 1 && !releaseModalOpen && !playerActionOpen && !playerCardOpen,
+    onPrevious: () => handleTeamSwitch("prev"),
+    onNext: () => handleTeamSwitch("next"),
+  });
+
   // active rows
   const viewPlayers = isAllView
     ? allLeaguePlayers
@@ -614,6 +623,14 @@ export default function RosterView() {
       setSelectedPlayer(sortedPlayers[0]);
     }
   }, [sortedPlayers, selectedPlayer]);
+
+  useKeyboardListNavigation({
+    items: sortedPlayers,
+    selectedItem: selectedPlayer,
+    onSelect: setSelectedPlayer,
+    enabled: !playerActionOpen && !playerCardOpen && !releaseModalOpen,
+    getKey: (row) => row?.id || row?.playerId || row?.name,
+  });
 
   const openPlayerActions = (player, e) => {
     e?.stopPropagation?.();
@@ -1133,25 +1150,25 @@ export default function RosterView() {
 
   return (
     <PageFade>
-    <div className={`${styles.rosterPage} min-h-screen text-white flex flex-col items-center py-10`}>
+    <div className={`${styles.rosterPage} ${styles.viewportShell} h-full min-h-0 overflow-hidden text-white flex flex-col items-center px-4 py-3`}>
       {/* Static header with pinned arrows */}
-      <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
+      <div className="w-full max-w-7xl flex shrink-0 items-center justify-between mb-2 select-none">
         <div className="w-24 flex items-center justify-start">
           <button
             onClick={() => handleTeamSwitch("prev")}
-            className="text-4xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
+            className="text-2xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
             title="Previous Team"
           >
             ◄
           </button>
         </div>
-        <h1 className="text-4xl font-extrabold text-orange-500 text-center">
+        <h1 className="text-3xl font-extrabold text-orange-500 text-center leading-none">
           {headerTitle}
         </h1>
         <div className="w-24 flex items-center justify-end">
           <button
             onClick={() => handleTeamSwitch("next")}
-            className="text-4xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
+            className="text-2xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
             title="Next Team"
           >
             ►
@@ -1160,7 +1177,7 @@ export default function RosterView() {
       </div>
 
       {!isAllView && (
-        <div className={`mb-5 w-full max-w-5xl rounded-xl border px-5 py-3 text-sm ${
+        <div className={`mb-2 w-full max-w-7xl shrink-0 rounded-xl border px-4 py-2 text-xs ${
           rosterOverRegularSeasonLimit
             ? "border-orange-400/40 bg-orange-500/10 text-orange-100"
             : "border-neutral-700 bg-neutral-900/65 text-neutral-300"
@@ -1185,26 +1202,23 @@ export default function RosterView() {
       )}
 
       {/* Player Card */}
-      <div className="relative w-full flex justify-center">
-        <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
+      <div className="relative w-full flex shrink-0 justify-center">
+        <div className="relative bg-neutral-800 w-full max-w-7xl px-5 pt-3 pb-1 rounded-t-xl shadow-lg">
           <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
           <div className="flex items-end justify-between relative">
             <div className="flex items-end gap-6">
-              <div className="relative -mb-[9px]">
-                {player?.headshot ? (
-                  <img
-                    src={player.headshot}
-                    alt={player.name}
-                    className="h-[175px] w-auto object-contain"
-                  />
-                ) : (
-                  <div className="h-[175px] w-[130px] bg-neutral-700 rounded flex items-center justify-center text-neutral-300">
+              <PlayerPortraitFrame
+                src={player?.headshot}
+                alt={player?.name || "Player"}
+                className="h-[116px] w-[150px]"
+                fallback={(
+                  <div className="flex h-full w-full items-center justify-center rounded-t-lg bg-neutral-700 text-neutral-300">
                     No Image
                   </div>
                 )}
-              </div>
+              />
               <div className="flex flex-col justify-end mb-3">
-                <h2 className="text-[44px] font-bold leading-tight flex items-center gap-3">
+                <h2 className="text-[30px] font-bold leading-tight flex items-center gap-3">
                   <span>{player?.name || "-"}</span>
                   {player?.isTwoWay && (
                     <span className="inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-1 text-[12px] font-extrabold text-emerald-200">
@@ -1217,7 +1231,7 @@ export default function RosterView() {
                     </span>
                   )}
                 </h2>
-                <p className="text-gray-400 text-[24px] mt-1">
+                <p className="text-gray-400 text-[16px] mt-0.5">
                   {player?.pos || "-"}
                   {player?.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age{" "}
                   {player?.age ?? "-"}
@@ -1228,7 +1242,7 @@ export default function RosterView() {
             </div>
 
             <div className="relative flex flex-col items-center justify-center mr-4 mb-2">
-              <svg width="110" height="110" viewBox="0 0 120 120">
+              <svg width="82" height="82" viewBox="0 0 120 120">
                 <defs>
                   <linearGradient id="ovrGradient" x1="0%" y1="0%" x2="100%" y2="0%">
                     <stop offset="0%" stopColor="#FFA500" />
@@ -1251,7 +1265,7 @@ export default function RosterView() {
               </svg>
               <div className="absolute flex flex-col items-center justify-center text-center">
                 <p className="text-sm text-gray-300 tracking-wide mb-1">OVR</p>
-                <p className="text-[47px] font-extrabold text-orange-400 leading-none mt-[-11px]">
+                <p className="text-[34px] font-extrabold text-orange-400 leading-none mt-[-8px]">
                   {player?.overall ?? "-"}
                 </p>
                 <p className="text-[10px] text-gray-400 mt-[-2px]">
@@ -1264,11 +1278,11 @@ export default function RosterView() {
       </div>
 
       {/* Table */}
-      <div className="w-full flex justify-center transition-opacity duration-300 ease-in-out mt-[-1px]">
-        <div className={`${styles.tablePanel} w-full max-w-5xl overflow-x-auto no-scrollbar`}>
-          <div className="min-w-[1200px] max-w-max mx-auto">
+      <div className="w-full flex flex-1 min-h-0 justify-center transition-opacity duration-300 ease-in-out mt-[-1px]">
+        <div className={`${styles.tablePanel} ${styles.rosterScroller} bmTableScroller w-full max-w-7xl min-h-0 overflow-auto rounded-b-xl`}>
+          <div className="min-w-[1540px] w-max">
             <table className="w-full border-collapse text-center">
-              <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
+              <thead className="sticky top-0 z-20 bg-neutral-800 text-gray-300 text-[13px] font-semibold">
                 <tr>
                   {showTeamCol && <th className="py-3 px-3 min-w-[60px]">Team</th>}
                   {[
@@ -1284,8 +1298,8 @@ export default function RosterView() {
                   ].map((col) => (
                     <th
                       key={col.key}
-                      className={`py-3 px-3 min-w-[95px] ${
-                        col.key === "name" ? "min-w-[150px] text-left pl-4" : "text-center"
+                      className={`py-2 px-3 min-w-[88px] ${
+                        col.key === "name" ? "min-w-[210px] text-left pl-4" : "text-center"
                       } cursor-pointer select-none`}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1303,12 +1317,13 @@ export default function RosterView() {
                 </tr>
               </thead>
 
-              <tbody className="text-[17px] font-medium">
+              <tbody className="text-[14px] font-medium">
                 {sortedPlayers.map((p, idx) => {
                   const tinfo = teamOfPlayer[getPlayerKey(p)] || teamOfPlayer[`name:${p.name || ""}`] || {};
                   return (
                     <tr
                       key={`${p.name}-${idx}`}
+                      data-bm-nav-row-index={idx}
                       onClick={() => setSelectedPlayer(p)}
                       className={`cursor-pointer transition ${
                         selectedPlayer && selectedPlayer.name === p.name
@@ -1321,7 +1336,7 @@ export default function RosterView() {
                       }`}
                     >
                       {showTeamCol && (
-                        <td className="py-2 px-3">
+                        <td className="py-1.5 px-3">
                           {tinfo.logo ? (
                             <img
                               src={tinfo.logo}
@@ -1333,7 +1348,7 @@ export default function RosterView() {
                       )}
 
                       <td
-                        className="py-2 px-3 whitespace-nowrap text-left pl-4"
+                        className="py-1.5 px-3 whitespace-nowrap text-left pl-4"
                         onDoubleClick={(e) => openPlayerActions(p, e)}
                         title="Double click for player actions"
                       >
@@ -1349,25 +1364,25 @@ export default function RosterView() {
                           </span>
                         )}
                       </td>
-                      <td className="py-2 px-3">{p.pos}</td>
-                      <td className="py-2 px-3">{p.age}</td>
-                      <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                      <td className="py-1.5 px-3">{p.pos}</td>
+                      <td className="py-1.5 px-3">{p.age}</td>
+                      <td className="py-1.5 px-3" onDoubleClick={handleCellDoubleClick}>
                         {showLetters ? toLetter(p.overall) : p.overall}
                       </td>
-                      <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                      <td className="py-1.5 px-3" onDoubleClick={handleCellDoubleClick}>
                         {showLetters ? toLetter(p.offRating) : p.offRating}
                       </td>
-                      <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                      <td className="py-1.5 px-3" onDoubleClick={handleCellDoubleClick}>
                         {showLetters ? toLetter(p.defRating) : p.defRating}
                       </td>
-                      <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                      <td className="py-1.5 px-3" onDoubleClick={handleCellDoubleClick}>
                         {showLetters ? toLetter(p.stamina) : p.stamina}
                       </td>
-                      <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                      <td className="py-1.5 px-3" onDoubleClick={handleCellDoubleClick}>
                         {showLetters ? toLetter(p.potential) : p.potential}
                       </td>
                       {attrColumns.map((a) => (
-                        <td key={a.key} className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
+                        <td key={a.key} className="py-1.5 px-3" onDoubleClick={handleCellDoubleClick}>
                           {showLetters ? toLetter(p.attrs?.[a.index] ?? 0) : p.attrs?.[a.index] ?? "-"}
                         </td>
                       ))}
@@ -1382,7 +1397,7 @@ export default function RosterView() {
 
       <button
         onClick={() => navigate("/team-hub")}
-        className="mt-10 px-8 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
+        className={`${styles.legacyBackButton} bmLegacyRouteBack mt-4 px-8 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition`}
       >
         Back to Team Hub
       </button>

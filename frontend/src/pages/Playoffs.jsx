@@ -247,14 +247,19 @@ function loadPlayoffResults() {
     const stored = localStorage.getItem(RESULT_KEY);
     if (!stored) return {};
     const decompressed = LZString.decompressFromUTF16(stored);
-    if (decompressed) return JSON.parse(decompressed);
-    return JSON.parse(stored);
+    const parsed = decompressed ? JSON.parse(decompressed) : JSON.parse(stored);
+    return Object.fromEntries(
+      Object.entries(parsed || {}).filter(([gameId]) => !String(gameId).startsWith("PI_"))
+    );
   } catch {
     return {};
   }
 }
 function savePlayoffResults(results) {
-  safeSetCompressedJSON(RESULT_KEY, results, cleanupOldSeasonStorageForPostseasonSave);
+  const playoffOnly = Object.fromEntries(
+    Object.entries(results || {}).filter(([gameId]) => String(gameId).startsWith("PO_"))
+  );
+  safeSetCompressedJSON(RESULT_KEY, playoffOnly, cleanupOldSeasonStorageForPostseasonSave);
 }
 
 function loadSchedule() {
@@ -1201,6 +1206,7 @@ export default function Playoffs() {
   const [boxModal, setBoxModal] = useState(null);
   const [simLock, setSimLock] = useState(false);
   const [champModal, setChampModal] = useState(null);
+  const [postseasonView, setPostseasonView] = useState("playin");
 
   // ✅ PATCH: stop button support (calendar-style stop behavior)
   const stopRequestedRef = useRef(false);
@@ -1328,7 +1334,9 @@ export default function Playoffs() {
   const SIDE_W = (BOX_W + BRACKET_GAP) * 2 + BOX_W; // width of one conference bracket
   const FINALS_W = BOX_W; // finals should match series box width
   const BASE_W = SIDE_W * 2 + FINALS_W; // true content width
-  const BASE_H = 980;
+  // The play-in now has its own full-screen stage. Once it is complete, the
+  // playoff bracket only needs to contain rounds one through the Finals.
+  const BASE_H = 820;
 
   const [uiScale, setUiScale] = useState(1);
 
@@ -1338,13 +1346,14 @@ export default function Playoffs() {
       const vh = window.innerHeight;
 
       const PAD_X = 48; // px-6 left + right (24 + 24)
-      const TOPBAR_H = 72;
+      const TOPBAR_H = 64;
+      const FOOTER_H = 48;
 
       const usableW = vw - PAD_X;
-      const usableH = vh - TOPBAR_H - 12; // tiny breathing room
+      const usableH = vh - TOPBAR_H - FOOTER_H - 12; // tiny breathing room
 
       const s = Math.min(usableW / BASE_W, usableH / BASE_H);
-      const clamped = Math.max(0.68, Math.min(1.0, s));
+      const clamped = Math.max(0.42, Math.min(1.0, s));
 
       setUiScale(clamped);
     };
@@ -1682,6 +1691,25 @@ export default function Playoffs() {
     return null;
   }
 
+  async function safeSimTransientPlayIn(homeName, awayName, { retries = 1, backoffMs = 75 } = {}) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const full = await simOneSafe({ homeName, awayName, leagueData, teamsByName });
+        const slim = slimResult(full);
+        if (slim && !isBadSlimResult(slim)) return slim;
+        throw new Error("bad play-in sim result (tie/0-0/null)");
+      } catch (err) {
+        console.warn(
+          `[playoffs] transient play-in sim failed ${homeName} vs ${awayName} attempt ${attempt + 1}/${retries + 1}`,
+          err
+        );
+        if (attempt === retries) return null;
+        await sleep(backoffMs * (attempt + 1));
+      }
+    }
+    return null;
+  }
+
   async function simPlayInGame(confKey, which) {
     if (simLock) return;
     setSimLock(true);
@@ -1982,7 +2010,7 @@ export default function Playoffs() {
     if (node.played) return;
     if (!node.home || !node.away) return;
 
-    const slim = await safeSimGameId(node.id, node.home, node.away, { retries: 1 });
+    const slim = await safeSimTransientPlayIn(node.home, node.away, { retries: 1 });
     if (!slim) return;
 
     const side = winnerFromSlim(slim);
@@ -1994,6 +2022,13 @@ export default function Playoffs() {
     node.played = true;
     node.winner = winner;
     node.loser = loser;
+    node.homeScore = Number(slim?.totals?.home ?? slim?.winner?.home ?? 0);
+    node.awayScore = Number(slim?.totals?.away ?? slim?.winner?.away ?? 0);
+    node.otCount = Number(slim?.winner?.ot ?? slim?.periods?.otCount ?? 0);
+    // Keep the box score with the play-in node so it can be reviewed later,
+    // while deliberately excluding it from bm_playoff_results and playoff
+    // player/team stat aggregation.
+    node.boxScore = slim;
 
     if (which === "78") {
       pi.seed7 = winner;
@@ -2013,6 +2048,48 @@ export default function Playoffs() {
     }
 
     wireForward(cur, confKey);
+  }
+
+  async function simGlobalOnePlayInGame() {
+    if (simLock || allPlayInsComplete) return;
+    setSimLock(true);
+
+    try {
+      const cur = structuredClone(post);
+      const confs = [left, right].filter(Boolean);
+      const hasOpeningGames = confs.some((ck) => {
+        const pi = cur?.conf?.[ck]?.playIn;
+        return pi && (!pi.g78?.played || !pi.g910?.played);
+      });
+
+      const targets = [];
+      for (const ck of confs) {
+        const pi = cur?.conf?.[ck]?.playIn;
+        if (!pi) continue;
+
+        if (hasOpeningGames) {
+          if (!pi.g78?.played) targets.push({ confKey: ck, which: "78" });
+          if (!pi.g910?.played) targets.push({ confKey: ck, which: "910" });
+        } else if (!pi.gFinal?.played && pi.gFinal?.home && pi.gFinal?.away) {
+          targets.push({ confKey: ck, which: "final" });
+        }
+      }
+
+      // The target list is frozen before any game is simulated. That means the
+      // final-seed games never begin on the same click that finishes 7/8 and
+      // 9/10, matching the round-by-round playoff Sim One Game behavior.
+      for (const target of targets) {
+        await simPlayInGameInCur(cur, target.confKey, target.which);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      persistPost(cur);
+      if (playInCompleteFor(left, cur) && playInCompleteFor(right, cur)) {
+        setPostseasonView("bracket");
+      }
+    } finally {
+      setSimLock(false);
+    }
   }
 
   async function simAllPlayInsBothConferences() {
@@ -2043,6 +2120,10 @@ export default function Playoffs() {
         } catch (e) {
           console.warn(`[playoffs] play-in sim failed for conf=${ck}, continuing`, e);
         }
+      }
+
+      if (playInCompleteFor(left, cur) && playInCompleteFor(right, cur)) {
+        setPostseasonView("bracket");
       }
     } finally {
       setSimLock(false);
@@ -2616,7 +2697,7 @@ export default function Playoffs() {
       if (node.played) return false;
       if (!node.home || !node.away) return false;
 
-      const slim = saveDevGameResult(node.id, node.home, node.away);
+      const slim = buildDevSlimResult(node.home, node.away);
       const side = winnerFromSlim(slim);
       if (!side) return false;
 
@@ -2626,6 +2707,9 @@ export default function Playoffs() {
       node.played = true;
       node.winner = winner;
       node.loser = loser;
+      node.homeScore = Number(slim?.totals?.home ?? slim?.winner?.home ?? 0);
+      node.awayScore = Number(slim?.totals?.away ?? slim?.winner?.away ?? 0);
+      node.otCount = Number(slim?.winner?.ot ?? 0);
 
       if (which === "78") {
         pi.seed7 = winner;
@@ -3004,19 +3088,7 @@ ${disabled ? "opacity-60" : ""}
     const boxMidY = (y) => y + BOX_H / 2;
     const dir = mirror ? "left" : "right";
 
-    // ===== PLAY-IN (same exact sizing as SeriesBox) =====
-    const PLAYIN_TOP = Y_R1[3] + BOX_H + 38;
-
-    const PI_STEP = BOX_W + BRACKET_GAP;
-    const PI_WRAP_W = BOX_W * 2 + BRACKET_GAP;
-    const PI_Y = [0, BOX_H + pairGap];
-    const PI_YF = Math.round((PI_Y[0] + PI_Y[1]) / 2);
-    const PI_WRAP_H = PI_Y[1] + BOX_H;
-
-    const PI_X1 = mirror ? PI_STEP : 0;
-    const PI_X2 = mirror ? 0 : PI_STEP;
-
-    const SIDE_H = PLAYIN_TOP + PI_WRAP_H + 40;
+    const SIDE_H = Y_R1[3] + BOX_H + 30;
 
     return (
       <div className="relative" style={{ width: SIDE_W, height: SIDE_H }}>
@@ -3093,31 +3165,65 @@ ${disabled ? "opacity-60" : ""}
           />
         </div>
 
-        {/* PLAY-IN */}
-        <div style={{ position: "absolute", left: 0, right: 0, top: PLAYIN_TOP }}>
-          <div className="text-[11px] text-neutral-400 mb-2">PLAY-IN</div>
+
+      </div>
+    );
+  };
+
+  const PlayInTournamentStage = () => {
+    const ConferencePlayIn = ({ confKey }) => {
+      const pi = post?.conf?.[confKey]?.playIn;
+      if (!pi) return null;
+
+      return (
+        <section className="rounded-2xl border border-white/15 bg-neutral-900/85 p-4 shadow-2xl">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-[0.22em] text-orange-300/70">{confKey}</div>
+              <h2 className="text-xl font-black text-white">Play-In Tournament</h2>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-black/25 px-3 py-1 text-xs font-bold text-white/55">
+              Seeds 7–10
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="min-w-0">
+              <div className="mb-1.5 text-center text-[10px] font-black uppercase tracking-wider text-white/45">7 vs 8</div>
+              <PlayInBox confKey={confKey} which="78" node={pi.g78} />
+            </div>
+            <div className="min-w-0">
+              <div className="mb-1.5 text-center text-[10px] font-black uppercase tracking-wider text-white/45">9 vs 10</div>
+              <PlayInBox confKey={confKey} which="910" node={pi.g910} />
+            </div>
+          </div>
+
+          <div className="my-3 flex items-center justify-center gap-3 text-center text-xs font-bold text-white/45">
+            <span className="h-px flex-1 bg-white/10" />
+            <span>Loser of 7/8 vs Winner of 9/10</span>
+            <span className="h-px flex-1 bg-white/10" />
+          </div>
 
           <div className="flex justify-center">
-            <div className="relative" style={{ width: PI_WRAP_W, height: PI_WRAP_H }}>
-              <div style={{ position: "absolute", left: PI_X1, top: PI_Y[0] }}>
-                <PlayInBox confKey={confKey} which="78" node={pi.g78} mirror={mirror} />
-              </div>
-
-              <div style={{ position: "absolute", left: PI_X1, top: PI_Y[1] }}>
-                <PlayInBox confKey={confKey} which="910" node={pi.g910} mirror={mirror} />
-              </div>
-
-              <Connector
-                x={mirror ? PI_X1 : PI_X1 + BOX_W}
-                y1={boxMidY(PI_Y[0])}
-                y2={boxMidY(PI_Y[1])}
-                dir={dir}
-              />
-
-              <div style={{ position: "absolute", left: PI_X2, top: PI_YF }}>
-                <PlayInBox confKey={confKey} which="final" node={pi.gFinal} mirror={mirror} />
-              </div>
+            <div>
+              <div className="mb-1.5 text-center text-[10px] font-black uppercase tracking-wider text-orange-300/80">Final Seed Game</div>
+              <PlayInBox confKey={confKey} which="final" node={pi.gFinal} />
             </div>
+          </div>
+        </section>
+      );
+    };
+
+    return (
+      <div className="absolute inset-x-0 top-[64px] bottom-0 overflow-hidden px-6 pb-4 pt-3">
+        <div className="mx-auto flex h-full max-w-[1320px] min-h-0 flex-col">
+          <div className="mb-3 shrink-0 text-center">
+            <div className="text-[10px] font-black uppercase tracking-[0.26em] text-orange-300/70">Postseason Opening Stage</div>
+            <h2 className="text-2xl font-black text-white">Win and advance to the 16-team bracket</h2>
+          </div>
+          <div className="grid min-h-0 flex-1 grid-cols-2 items-center gap-5">
+            <ConferencePlayIn confKey={left} />
+            <ConferencePlayIn confKey={right} />
           </div>
         </div>
       </div>
@@ -3125,9 +3231,10 @@ ${disabled ? "opacity-60" : ""}
   };
 
   const simsDisabled = !!post?.finals?.complete;
+  const showingPlayIn = !allPlayInsComplete || postseasonView === "playin";
 
   return (
-    <div className={`fixed inset-0 overflow-hidden ${styles.wrapper}`}>
+    <div className={`fixed inset-x-0 top-0 bottom-[48px] overflow-hidden ${styles.wrapper}`}>
       <style>{`
   .noScrollbar::-webkit-scrollbar { display: none; }
   .noScrollbar { -ms-overflow-style: none; scrollbar-width: none; }
@@ -3144,10 +3251,21 @@ ${disabled ? "opacity-60" : ""}
 `}</style>
 
       {/* top bar */}
-      <div className="absolute left-0 right-0 top-0 h-[72px] px-8 flex items-center justify-between z-20">
+      <div className="absolute left-0 right-0 top-0 h-[64px] px-6 flex items-center justify-between z-20">
         <div className="flex gap-2">
 
-          {/* ✅ PATCH: TOP BUTTONS ONLY (Simulate Round + Simulate Playoffs) */}
+          <button
+            disabled={simLock || simsDisabled}
+            onClick={async () => {
+              if (allPlayInsComplete) await simGlobalOneGameAllSeries();
+              else await simGlobalOnePlayInGame();
+            }}
+            className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm font-bold disabled:opacity-50"
+          >
+            Sim One Game
+          </button>
+
+          {/* Full-stage controls */}
           <button
             disabled={simLock || simsDisabled}
             onClick={async () => {
@@ -3155,23 +3273,25 @@ ${disabled ? "opacity-60" : ""}
             }}
             className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm font-bold disabled:opacity-50"
           >
-            Simulate Round
+            {allPlayInsComplete ? "Simulate Round" : "Simulate Play-In"}
           </button>
 
-          <button
-            disabled={simLock || fmvpLoading || (simsDisabled && !champModal?.team)}
-            onClick={async () => {
-              if (simsDisabled) {
-                continueFromFinalsMvpModal();
-                return;
-              }
+          {(allPlayInsComplete || simsDisabled) && (
+            <button
+              disabled={simLock || fmvpLoading || (simsDisabled && !champModal?.team)}
+              onClick={async () => {
+                if (simsDisabled) {
+                  continueFromFinalsMvpModal();
+                  return;
+                }
 
-              await simTopPlayoffsToChampion();
-            }}
-            className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded text-sm font-bold disabled:opacity-50"
-          >
-            {simsDisabled ? "Continue to Offseason" : "Simulate Playoffs"}
-          </button>
+                await simTopPlayoffsToChampion();
+              }}
+              className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded text-sm font-bold disabled:opacity-50"
+            >
+              {simsDisabled ? "Continue to Offseason" : "Simulate Playoffs"}
+            </button>
+          )}
 
           <button
             disabled={simLock || fmvpLoading || simsDisabled}
@@ -3209,70 +3329,84 @@ ${disabled ? "opacity-60" : ""}
         </div>
 
         <div className="absolute left-1/2 -translate-x-1/2 text-[28px] font-extrabold tracking-wide text-white/90 select-none">
-          PLAYOFFS
+          {showingPlayIn ? "PLAY-IN TOURNAMENT" : "PLAYOFFS"}
         </div>
 
-        <button
-  onClick={() =>
-    navigate("/team-hub", {
-      state: {
-        playoffMode: true,
-        playoffReturnTo: "/playoffs",
-      },
-    })
-  }
-  className="w-[220px] px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm font-bold"
->
-  Back to Team Hub
-</button>
+        <div className="flex w-[300px] justify-end gap-2">
+          {allPlayInsComplete && (
+            <>
+              <button
+                type="button"
+                onClick={() => setPostseasonView("playin")}
+                className={`rounded px-3 py-2 text-xs font-black ${showingPlayIn ? "bg-orange-600" : "bg-neutral-800 hover:bg-neutral-700"}`}
+              >
+                View Play-In
+              </button>
+              <button
+                type="button"
+                onClick={() => setPostseasonView("bracket")}
+                className={`rounded px-3 py-2 text-xs font-black ${!showingPlayIn ? "bg-orange-600" : "bg-neutral-800 hover:bg-neutral-700"}`}
+              >
+                View Bracket
+              </button>
+            </>
+          )}
+          <button
+            onClick={() =>
+              navigate("/team-hub", {
+                state: { playoffMode: true, playoffReturnTo: "/playoffs" },
+              })
+            }
+            className="bmLegacyRouteBack rounded bg-neutral-800 px-3 py-2 text-xs font-bold hover:bg-neutral-700"
+          >
+            Team Hub
+          </button>
+        </div>
       </div>
 
-      {/* stage (scaled) */}
-      <div className="absolute inset-x-0 top-[72px] bottom-0 px-6 pb-[520px] flex items-start justify-center overflow-x-hidden overflow-y-auto noScrollbar">
-        <div
-          className="relative"
-          style={{
-            width: `${BASE_W}px`,
-            height: `${BASE_H}px`,
-            transform: `scale(${uiScale})`,
-            transformOrigin: "top center",
-          }}
-        >
-          {/* bracket layout */}
-          <div className="flex items-start justify-between w-full h-full pt-6">
-            {/* WEST */}
-            <div>
-              <div className="text-white/80 font-extrabold text-xl mb-3 select-none">{left}</div>
-              <BracketSide2K confKey={left} mirror={false} />
-            </div>
+      {/* Play-in gets a dedicated screen; the full bracket appears after both conferences are settled. */}
+      {showingPlayIn ? (
+        <PlayInTournamentStage />
+      ) : (
+        <div className="absolute inset-x-0 top-[64px] bottom-0 flex items-start justify-center overflow-hidden px-6">
+          <div
+            className="relative"
+            style={{
+              width: `${BASE_W}px`,
+              height: `${BASE_H}px`,
+              transform: `scale(${uiScale})`,
+              transformOrigin: "top center",
+            }}
+          >
+            <div className="flex items-start justify-between w-full h-full pt-6">
+              <div>
+                <div className="text-white/80 font-extrabold text-xl mb-3 select-none">{left}</div>
+                <BracketSide2K confKey={left} mirror={false} />
+              </div>
 
-            {/* FINALS */}
-            <div className="flex flex-col items-center mt-[110px]" style={{ width: BOX_W }}>
-              <div className="text-white/80 font-extrabold text-xl mb-3 select-none">FINALS</div>
+              <div className="flex flex-col items-center mt-[110px]" style={{ width: BOX_W }}>
+                <div className="text-white/80 font-extrabold text-xl mb-3 select-none">FINALS</div>
+                <SeriesBox
+                  topSeed={null}
+                  botSeed={null}
+                  topLogo={teamLogo[post.finals.highSeedTeam]}
+                  botLogo={teamLogo[post.finals.lowSeedTeam]}
+                  topWins={post.finals.winsHigh ?? 0}
+                  botWins={post.finals.winsLow ?? 0}
+                  mirror={false}
+                  onClick={() => setModal({ type: "series", roundName: "finals" })}
+                  disabled={!post.finals.highSeedTeam || !post.finals.lowSeedTeam}
+                />
+              </div>
 
-              <SeriesBox
-                topSeed={null}
-                botSeed={null}
-                topLogo={teamLogo[post.finals.highSeedTeam]}
-                botLogo={teamLogo[post.finals.lowSeedTeam]}
-                topWins={post.finals.winsHigh ?? 0}
-                botWins={post.finals.winsLow ?? 0}
-                mirror={false}
-                onClick={() => setModal({ type: "series", roundName: "finals" })}
-                disabled={!post.finals.highSeedTeam || !post.finals.lowSeedTeam}
-              />
-
-              <div className="text-xs text-neutral-400 mt-2 text-center"></div>
-            </div>
-
-            {/* EAST */}
-            <div>
-              <div className="text-white/80 font-extrabold text-xl mb-3 select-none text-right">{right}</div>
-              <BracketSide2K confKey={right} mirror={true} />
+              <div>
+                <div className="text-white/80 font-extrabold text-xl mb-3 select-none text-right">{right}</div>
+                <BracketSide2K confKey={right} mirror={true} />
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Series / Play-In Modal */}
       {modal && (
@@ -3296,34 +3430,52 @@ ${disabled ? "opacity-60" : ""}
                     const node =
                       modal.which === "78" ? pi.g78 : modal.which === "910" ? pi.g910 : pi.gFinal;
 
-                    const savedResult = getPlayoffResult(node?.id);
-                    const played = !!node?.played && !!savedResult;
+                    const played = !!node?.played;
                     if (!node?.id) return null;
+
+                    const otLabel = Number(node?.otCount || 0) > 0
+                      ? ` · ${Number(node.otCount) === 1 ? "OT" : `${Number(node.otCount)}OT`}`
+                      : "";
 
                     return (
                       <div className="mt-2 border border-neutral-800 rounded-lg overflow-hidden">
                         <div className="px-3 py-2 bg-neutral-800 text-xs text-neutral-300">This Game</div>
-                        <button
-                          disabled={!played}
-                          onClick={() => openBoxScore(node.id, node.home, node.away)}
-                          className={`w-full px-3 py-2 flex items-center justify-between border-t border-neutral-800 ${
-                            played ? "hover:bg-neutral-800" : "opacity-40 cursor-not-allowed"
-                          }`}
-                        >
+                        <div className="w-full px-3 py-2 flex items-center justify-between border-t border-neutral-800">
                           <div className="flex items-center gap-3">
                             <Logo src={teamLogo[node.away]} size={26} title={node.away} />
                             <span className="text-neutral-600 text-xs">vs</span>
                             <Logo src={teamLogo[node.home]} size={26} title={node.home} />
                           </div>
                           <div className="text-xs text-neutral-300">
-                            {played ? openBoxScoreLine(node.id, node.home, node.away) : "—"}
+                            {played
+                              ? `${Number(node?.awayScore || 0)}–${Number(node?.homeScore || 0)}${otLabel}`
+                              : "—"}
                           </div>
-                        </button>
+                        </div>
                       </div>
                     );
                   })()}
-                  Tip: Use the top bar “Simulate Round” to advance (Play-In → R1 → R2 → R3 → Finals).
                 </div>
+                {(() => {
+                  const pi = post?.conf?.[modal.confKey]?.playIn;
+                  const node = modal.which === "78" ? pi?.g78 : modal.which === "910" ? pi?.g910 : pi?.gFinal;
+                  if (!node?.played || !node?.boxScore) return null;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => setBoxModal({
+                        gameId: node.id,
+                        homeName: node.home,
+                        awayName: node.away,
+                        result: node.boxScore,
+                        isPlayIn: true,
+                      })}
+                      className="mt-3 w-full rounded-lg bg-orange-600 px-4 py-2 text-sm font-black hover:bg-orange-500"
+                    >
+                      View Box Score
+                    </button>
+                  );
+                })()}
               </div>
             )}
 
@@ -3446,7 +3598,7 @@ ${disabled ? "opacity-60" : ""}
             onContinue={continueFromFinalsMvpModal}
             continueLabel="Continue to Offseason"
             onBack={closeFinalsMvpModal}
-            backLabel="Back"
+            backLabel="View Bracket"
             mode="modal"
           />
         </div>

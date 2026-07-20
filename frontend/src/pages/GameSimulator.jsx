@@ -107,10 +107,10 @@ export default function GameSimulator() {
   const teamLogo = (name) => teams.find(t => t.name === name)?.logo;
 
   return (
-    <div className="min-h-screen bg-neutral-900 text-white px-4 py-8">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-3xl font-extrabold text-orange-500">Game Simulator</h1>
+    <div className="bmCourtPage h-full min-h-0 overflow-hidden bg-neutral-900 p-3 text-white">
+      <div className="bmTableScroller mx-auto h-full min-h-0 max-w-6xl overflow-y-auto pr-1">
+        <div className="mb-3 flex items-center justify-between">
+          <h1 className="text-2xl font-extrabold text-orange-500">Game Simulator</h1>
           <button onClick={() => navigate("/team-hub")}
                   className="px-4 py-2 bg-neutral-700 rounded-lg hover:bg-neutral-600">
             Back to Team Hub

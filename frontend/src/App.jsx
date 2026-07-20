@@ -1,4 +1,5 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { useLayoutEffect } from "react";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import Layout from "./components/Layout.jsx";
 import Home from "./pages/Home.jsx";
 import PlayerEditor from "./pages/PlayerEditor.jsx";
@@ -37,10 +38,38 @@ import TradePickSelect from "./pages/TradePickSelect.jsx";
 import TradeFinder from "./pages/TradeFinder.jsx";
 import LockerRoom from "./pages/LockerRoom.jsx";
 import Intel from "./pages/Intel_v1.jsx";
+import GlobalGameNav from "./components/GlobalGameNav.jsx";
+
+function RouteDensitySync() {
+  const { pathname } = useLocation();
+
+  useLayoutEffect(() => {
+    const routeName =
+      pathname === "/"
+        ? "league-editor"
+        : pathname.replace(/^\/+|\/+$/g, "").replace(/\//g, "-") || "home";
+
+    document.documentElement.dataset.bmRoute = routeName;
+    document.body.dataset.bmRoute = routeName;
+
+    return () => {
+      if (document.documentElement.dataset.bmRoute === routeName) {
+        delete document.documentElement.dataset.bmRoute;
+      }
+      if (document.body.dataset.bmRoute === routeName) {
+        delete document.body.dataset.bmRoute;
+      }
+    };
+  }, [pathname]);
+
+  return null;
+}
 
 function App() {
   return (
     <BrowserRouter>
+      <RouteDensitySync />
+      <GlobalGameNav />
       <Routes>
         {/* ✅ Routes that use your shared Layout */}
         <Route element={<Layout />}>
@@ -61,7 +90,8 @@ function App() {
         <Route path="/roster-view" element={<RosterView />} />
         <Route path="/coach-gameplan" element={<CoachGameplan />} />
         <Route path="/calendar" element={<Calendar />} />
-        <Route path="/player-stats" element={<PlayerStats />} />
+        <Route path="/player-stats" element={<PlayerStats scope="regular" />} />
+        <Route path="/playoff-stats" element={<PlayerStats scope="playoffs" />} />
         <Route path="/draft-lottery" element={<DraftLottery />} />
         <Route path="/draft" element={<Draft />} />
         <Route path="/rookie-signings" element={<RookieSignings />} />

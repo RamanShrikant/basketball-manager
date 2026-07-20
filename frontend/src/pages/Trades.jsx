@@ -377,9 +377,9 @@ export default function Trades() {
 
   return (
     <PageFade>
-      <div className="min-h-screen bmCourtPage text-white px-4 py-10">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
-          <div className="flex items-center justify-between gap-4">
+      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1700px] flex-col gap-3">
+          <div className="flex shrink-0 items-center justify-between gap-4">
             <button
               onClick={() => navigate("/team-hub")}
               className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
@@ -391,7 +391,7 @@ export default function Trades() {
               <div className="text-xs font-black uppercase tracking-[0.24em] text-orange-300">
                 Trade Center
               </div>
-              <h1 className="mt-1 text-4xl font-black text-orange-500">
+              <h1 className="mt-0.5 text-2xl font-black text-orange-500">
                 {selectedTeam.name} Trades
               </h1>
             </div>
@@ -399,24 +399,24 @@ export default function Trades() {
             <div className="w-[108px]" />
           </div>
 
-          <div className="grid gap-5 lg:grid-cols-[1.08fr_0.92fr]">
-            <div className="overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950/85 shadow-2xl">
-              <div className="border-b border-white/10 bg-gradient-to-r from-orange-600/25 via-neutral-900 to-neutral-900 px-6 py-5">
+          <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[1.02fr_0.98fr]">
+            <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/85 shadow-2xl">
+              <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-orange-600/25 via-neutral-900 to-neutral-900 px-5 py-4">
                 <div className="flex items-center gap-4">
                   {teamLogoOf(selectedTeam) ? (
                     <img
                       src={teamLogoOf(selectedTeam)}
                       alt={selectedTeam.name}
-                      className="h-16 w-16 object-contain"
+                      className="h-12 w-12 object-contain"
                     />
                   ) : (
-                    <div className="h-16 w-16 rounded-2xl bg-white/5" />
+                    <div className="h-12 w-12 rounded-xl bg-white/5" />
                   )}
                   <div>
                     <div className="text-sm font-black uppercase tracking-[0.18em] text-orange-200">
                       Ready to negotiate
                     </div>
-                    <div className="mt-1 text-2xl font-black text-white">
+                    <div className="mt-1 text-xl font-black text-white">
                       Build a proposal package
                     </div>
                     <div className="mt-1 text-sm font-semibold text-neutral-400">
@@ -426,17 +426,17 @@ export default function Trades() {
                 </div>
               </div>
 
-              <div className="p-6">
+              <div className="flex min-h-0 flex-1 flex-col justify-center p-5">
                 <button
                   onClick={() => navigate("/propose-trade")}
-                  className="w-full rounded-2xl bg-orange-600 px-6 py-5 text-xl font-black text-white shadow-[0_18px_45px_rgba(234,88,12,0.24)] transition hover:-translate-y-0.5 hover:bg-orange-500"
+                  className="w-full rounded-xl bg-orange-600 px-6 py-4 text-lg font-black text-white shadow-[0_18px_45px_rgba(234,88,12,0.24)] transition hover:-translate-y-0.5 hover:bg-orange-500"
                 >
                   Propose Trade
                 </button>
 
                 <button
                   onClick={() => navigate("/trade-finder")}
-                  className="mt-4 w-full rounded-2xl border border-orange-400/25 bg-black px-6 py-5 text-xl font-black text-orange-100 transition hover:-translate-y-0.5 hover:border-orange-300/60 hover:bg-orange-500/10"
+                  className="mt-3 w-full rounded-xl border border-orange-400/25 bg-black px-6 py-4 text-lg font-black text-orange-100 transition hover:-translate-y-0.5 hover:border-orange-300/60 hover:bg-orange-500/10"
                 >
                   Trade Finder
                 </button>
@@ -444,7 +444,7 @@ export default function Trades() {
                 <button
                   type="button"
                   onClick={() => setShowCpuTradeScanner((prev) => !prev)}
-                  className="mt-4 w-full rounded-2xl border border-sky-300/25 bg-sky-500/10 px-6 py-5 text-xl font-black text-sky-100 transition hover:-translate-y-0.5 hover:border-sky-300/60 hover:bg-sky-500/20"
+                  className="mt-3 w-full rounded-xl border border-sky-300/25 bg-sky-500/10 px-6 py-4 text-lg font-black text-sky-100 transition hover:-translate-y-0.5 hover:border-sky-300/60 hover:bg-sky-500/20"
                 >
                   All Possible CPU Trades
                 </button>
@@ -457,8 +457,8 @@ export default function Trades() {
               </div>
             </div>
 
-            <div className="overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950/75 shadow-2xl">
-              <div className="border-b border-white/10 bg-gradient-to-r from-neutral-900 to-black px-6 py-5">
+            <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/75 shadow-2xl">
+              <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-neutral-900 to-black px-5 py-4">
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <div className="text-sm font-black uppercase tracking-[0.2em] text-orange-300">
@@ -482,7 +482,7 @@ export default function Trades() {
                 </div>
               </div>
 
-              <div className="grid gap-3 p-6">
+              <div className="bmTableScroller grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-4">
                 <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/25 p-2 text-center">
                   <button
                     type="button"
@@ -618,18 +618,22 @@ export default function Trades() {
                   Open Trade Builder
                 </button>
 
-                <div className="rounded-2xl border border-white/10 bg-black/30 p-4 text-xs font-semibold text-neutral-500">
-                  Trade desk refresh: live local feed • League teams available: {teams.length} • History trades: {tradeHistoryRows.length}
-                </div>
               </div>
             </div>
           </div>
 
           {showCpuTradeScanner && (
-            <CpuTradeDiscoveryPanel
-              leagueData={leagueData}
-              selectedTeam={selectedTeam}
-            />
+            <div className="fixed inset-x-0 top-0 bottom-[48px] z-[90] bg-black/85 p-4 backdrop-blur-sm">
+              <div className="mx-auto flex h-full max-w-[1800px] min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-950">
+                <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
+                  <div className="font-black text-orange-300">All Possible CPU Trades</div>
+                  <button type="button" onClick={() => setShowCpuTradeScanner(false)} className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-black hover:bg-white/10">Close</button>
+                </div>
+                <div className="bmTableScroller min-h-0 flex-1 overflow-auto p-3">
+                  <CpuTradeDiscoveryPanel leagueData={leagueData} selectedTeam={selectedTeam} />
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </div>

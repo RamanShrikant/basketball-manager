@@ -3,8 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import LZString from "lz-string";
 import PageFade from "../components/PageFade";
+import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
+import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
 
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
@@ -1043,301 +1045,98 @@ export default function AwardTracker() {
   const circleCircumference = 2 * Math.PI * 50;
   const strokeOffset = circleCircumference * (1 - fillPercent);
 
-  const columns = getColumnsForTab(currentTab);
+  const columns = [{ key: "rank", label: "Rank" }, ...getColumnsForTab(currentTab)];
   const meta = TAB_META[currentTab];
+
+  useKeyboardListNavigation({
+    items: activeRows,
+    selectedItem: cardPlayer,
+    onSelect: (row) => setSelectedPlayerKey(statsKey(row.player, row.team)),
+    enabled: true,
+    getKey: (row) => statsKey(row.player, row.team),
+  });
 
   if (!leagueData || !selectedTeam) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bmCourtPage text-white">
+      <div className="bmCourtPage flex h-full flex-col items-center justify-center text-white">
         <p className="mb-3 text-lg">No team selected or league missing.</p>
-        <button
-          onClick={() => navigate("/team-selector")}
-          className="rounded-lg bg-orange-600 px-6 py-3 font-semibold hover:bg-orange-500"
-        >
-          Back to Team Select
-        </button>
+        <button onClick={() => navigate("/team-selector")} className="rounded-lg bg-orange-600 px-6 py-3 font-semibold hover:bg-orange-500">Team Select</button>
       </div>
     );
   }
 
   return (
     <PageFade>
-    <div className="min-h-screen bmCourtPage text-white flex flex-col items-center py-10">
-      <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
-        <div className="w-24" />
-        <h1 className="text-3xl md:text-4xl font-extrabold text-orange-500 text-center">
-          Award Tracker
-        </h1>
-        <div className="w-24" />
-      </div>
-
-      <div className="w-full max-w-5xl flex items-center justify-end gap-2 mb-3">
-        {[
-          { k: "mvp", label: "MVP" },
-          { k: "dpoy", label: "DPOY" },
-          { k: "sixth_man", label: "6MOY" },
-          { k: "mip", label: "MIP" },
-          { k: "roty", label: "ROTY" },
-        ].map((tab) => (
-          <button
-            key={tab.k}
-            onClick={() => setCurrentTab(tab.k)}
-            className={`px-3 py-1 rounded-md text-sm font-semibold ${
-              currentTab === tab.k
-                ? "bg-orange-600 text-white"
-                : "bg-neutral-800 text-gray-300 hover:bg-neutral-700"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {cardPlayer && (
-        <div className="relative w-full flex justify-center">
-          <div className="relative bmSolidPanel w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
-            <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
-
-            <div className="flex items-end justify-between relative">
-              <div className="flex items-end gap-6">
-                <div className="relative -mb-[9px]">
-                  {cardPlayer.headshot ? (
-                    <img
-                      src={cardPlayer.headshot}
-                      alt={cardPlayer.player}
-                      className="h-[175px] w-auto object-contain"
-                    />
-                  ) : (
-                    <div className="flex h-[175px] w-[130px] items-center justify-center text-sm text-neutral-500">
-                      No image
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex flex-col justify-end mb-3">
-                  <div className="text-sm font-semibold uppercase tracking-wide text-orange-400">
-                    {meta.title}
-                  </div>
-
-                  <h2 className="text-[44px] font-bold leading-tight">
-                    {cardPlayer.player}
-                  </h2>
-
-                  <p className="text-gray-400 text-[24px] mt-1">
-                    {cardPlayer.pos}
-                    {cardPlayer.secondaryPos ? ` / ${cardPlayer.secondaryPos}` : ""}
-                    {cardPlayer.age != null ? ` • Age ${cardPlayer.age}` : ""}
-                  </p>
-
-                  <div className="mt-2 flex items-center gap-2 text-sm text-neutral-300">
-                    {cardPlayer.teamLogo ? (
-                      <img
-                        src={cardPlayer.teamLogo}
-                        alt={cardPlayer.team}
-                        className="h-6 w-6 object-contain"
-                      />
-                    ) : null}
-                    <span>{cardPlayer.team}</span>
-                    <span>•</span>
-                    <span>{cardPlayer._team_wins} wins</span>
-                    <span>•</span>
-                    <span>#{activeRows.findIndex((p) => p.player === cardPlayer.player && p.team === cardPlayer.team) + 1}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="relative flex flex-col items-center justify-center mr-4 mb-2">
-                <svg width="110" height="110" viewBox="0 0 120 120">
-                  <defs>
-                    <linearGradient id="ovrGradientTracker" x1="0%" y1="0%" x2="100%" y2="0%">
-                      <stop offset="0%" stopColor="#FFA500" />
-                      <stop offset="100%" stopColor="#FFD54F" />
-                    </linearGradient>
-                  </defs>
-
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r="50"
-                    stroke="rgba(255,255,255,0.08)"
-                    strokeWidth="8"
-                    fill="none"
-                  />
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r="50"
-                    stroke="url(#ovrGradientTracker)"
-                    strokeWidth="8"
-                    strokeLinecap="round"
-                    fill="none"
-                    strokeDasharray={circleCircumference}
-                    strokeDashoffset={strokeOffset}
-                    transform="rotate(-90 60 60)"
-                  />
-                </svg>
-
-                <div className="absolute flex flex-col items-center justify-center text-center">
-                  <p className="text-sm text-gray-300 tracking-wide mb-1">OVR</p>
-                  <p className="text-[47px] font-extrabold text-orange-400 leading-none mt-[-11px]">
-                    {cardPlayer.overall ?? "--"}
-                  </p>
-                  <p className="text-[10px] text-gray-400 mt-[-2px]">
-                    POT <span className="text-orange-400 font-semibold">{cardPlayer.potential ?? "--"}</span>
-                  </p>
-                </div>
-              </div>
+      <div className="bmCourtPage h-full overflow-hidden px-4 py-3 text-white">
+        <div className="mx-auto flex h-full min-h-0 max-w-[1500px] flex-col gap-2">
+          <div className="flex shrink-0 items-center justify-between gap-4">
+            <h1 className="text-2xl font-black text-orange-500">Award Tracker</h1>
+            <div className="flex items-center gap-1.5">
+              {[
+                { k: "mvp", label: "MVP" },
+                { k: "dpoy", label: "DPOY" },
+                { k: "sixth_man", label: "6MOY" },
+                { k: "mip", label: "MIP" },
+                { k: "roty", label: "ROTY" },
+              ].map((tab)=><button key={tab.k} onClick={()=>setCurrentTab(tab.k)} className={`rounded-md px-3 py-1.5 text-sm font-black ${currentTab===tab.k?"bg-orange-600":"bg-neutral-800 text-gray-300 hover:bg-neutral-700"}`}>{tab.label}</button>)}
             </div>
           </div>
-        </div>
-      )}
 
-      <div className="w-full flex justify-center mt-[-1px]">
-        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar bmTablePanel">
-          <table className="w-full border-collapse text-center text-[17px] font-medium">
-            <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
-              <tr>
-                {columns.map((col) => (
-                  <th
-                    key={col.key}
-                    className={`py-3 px-3 min-w-[90px] ${
-                      col.key === "name"
-                        ? "min-w-[180px] text-left pl-4"
-                        : col.key === "team"
-                        ? "min-w-[70px]"
-                        : "text-center"
-                    }`}
-                  >
-                    {col.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-
-            <tbody>
-              {activeRows.map((p) => {
-                const rowKey = statsKey(p.player, p.team);
-                const isSelected = (cardPlayer ? statsKey(cardPlayer.player, cardPlayer.team) : "") === rowKey;
-
-                return (
-                  <tr
-                    key={rowKey}
-                    onClick={() => setSelectedPlayerKey(rowKey)}
-                    className={`cursor-pointer transition ${
-                      isSelected ? "bg-orange-600 text-white" : "hover:bg-neutral-800"
-                    }`}
-                  >
-                    {columns.map((col) => {
-                      if (col.key === "team") {
-                        return (
-                          <td key={col.key} className="py-2 px-2">
-                            {p.teamLogo ? (
-                              <img
-                                src={p.teamLogo}
-                                alt={p.team}
-                                className="inline-block h-[36px] w-[36px] object-contain"
-                                title={p.team}
-                              />
-                            ) : (
-                              <span className="text-xs text-neutral-400">-</span>
-                            )}
-                          </td>
-                        );
-                      }
-
-                      if (col.key === "name") {
-                        return (
-                          <td key={col.key} className="py-2 px-3 text-left pl-4">
-                            {p.player}
-                          </td>
-                        );
-                      }
-
-                      if (col.key === "OVR") {
-                        return <td key={col.key}>{p.overall ?? "--"}</td>;
-                      }
-
-                      if (col.key === "GP") {
-                        return <td key={col.key}>{p.gp}</td>;
-                      }
-
-                      if (col.key === "PTS") {
-                        return <td key={col.key}>{p.ppg}</td>;
-                      }
-
-                      if (col.key === "PrevPTS") {
-                        return <td key={col.key}>{p.mipPrevPpg}</td>;
-                      }
-
-                      if (col.key === "DeltaPTS") {
-                        const delta = Number(p.mipDeltaPpg || 0);
-                        return <td key={col.key}>{`${delta >= 0 ? "+" : ""}${delta.toFixed(1)}`}</td>;
-                      }
-
-                      if (col.key === "REB") {
-                        return <td key={col.key}>{p.rpg}</td>;
-                      }
-
-                      if (col.key === "AST") {
-                        return <td key={col.key}>{p.apg}</td>;
-                      }
-
-                      if (col.key === "STL") {
-                        return <td key={col.key}>{p.spg}</td>;
-                      }
-
-                      if (col.key === "BLK") {
-                        return <td key={col.key}>{p.bpg}</td>;
-                      }
-
-                      if (col.key === "DRTG") {
-                        return <td key={col.key}>{fmt1(p.def_rating)}</td>;
-                      }
-
-                      if (col.key === "MPG") {
-                        return <td key={col.key}>{p.mpg}</td>;
-                      }
-
-                      if (col.key === "Impact") {
-                        return <td key={col.key}>{p.impact}</td>;
-                      }
-
-                      if (col.key === "Starts") {
-                        return <td key={col.key}>{p.started}</td>;
-                      }
-
-                      if (col.key === "Sixth") {
-                        return <td key={col.key}>{p.bench ?? p.sixth}</td>;
-                      }
-
-                      return <td key={col.key}>-</td>;
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-
-          {activeRows.length === 0 && (
-            <div className="bg-neutral-800 text-neutral-400 text-center py-8">
-              No player stats loaded yet.
+          {cardPlayer && (
+            <div className="flex h-[116px] shrink-0 items-end justify-between overflow-hidden rounded-xl border border-white/10 bg-neutral-900 px-5">
+              <div className="flex min-w-0 items-end gap-4">
+                <PlayerPortraitFrame src={cardPlayer.headshot} alt={cardPlayer.player} className="h-[108px] w-[104px]" />
+                <div className="min-w-0 pb-4">
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">{meta.title}</div>
+                  <h2 className="truncate text-3xl font-black">{cardPlayer.player}</h2>
+                  <div className="mt-1 flex items-center gap-2 text-sm font-bold text-white/45">
+                    {cardPlayer.teamLogo && <img src={cardPlayer.teamLogo} alt="" className="h-5 w-5 object-contain" />}
+                    <span>{cardPlayer.team}</span><span>•</span><span>{cardPlayer.pos}</span><span>•</span><span>Age {cardPlayer.age ?? "-"}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="mb-3 rounded-xl border border-orange-400/25 bg-black/30 px-5 py-2 text-center">
+                <div className="text-[9px] font-black uppercase tracking-wider text-white/45">Overall</div>
+                <div className="text-3xl font-black text-orange-300">{cardPlayer.overall ?? "--"}</div>
+              </div>
             </div>
           )}
+
+          <div className="bmTableScroller min-h-0 flex-1 overflow-auto rounded-xl border border-white/10 bg-neutral-950">
+            <table className="h-full w-full min-w-[900px] border-collapse text-center text-sm font-semibold">
+              <thead className="sticky top-0 z-20 bg-neutral-800 text-xs font-black uppercase tracking-wide text-gray-300"><tr>{columns.map((col)=><th key={col.key} className={`px-3 py-2 ${col.key==="name"?"min-w-[190px] text-left":col.key==="rank"?"w-[58px] min-w-[58px]":"min-w-[74px]"}`}>{col.label}</th>)}</tr></thead>
+              <tbody>
+                {activeRows.map((p,index)=>{
+                  const rowKey=statsKey(p.player,p.team); const isSelected=(cardPlayer?statsKey(cardPlayer.player,cardPlayer.team):"")===rowKey;
+                  return <tr key={rowKey} data-bm-nav-row-index={index} onClick={()=>setSelectedPlayerKey(rowKey)} className={`cursor-pointer border-t border-white/[0.035] ${isSelected?"bg-orange-600 text-white":"hover:bg-neutral-800"}`}>
+                    {columns.map((col)=>{
+                      if(col.key==="rank") return <td key={col.key} className="px-2 py-1.5 font-black text-orange-200">{index + 1}</td>;
+                      if(col.key==="team") return <td key={col.key} className="px-2 py-1.5">{p.teamLogo?<img src={p.teamLogo} alt={p.team} className="mx-auto h-6 w-6 object-contain"/>:"-"}</td>;
+                      if(col.key==="name") return <td key={col.key} className="whitespace-nowrap px-3 py-1.5 text-left font-black">{p.player}</td>;
+                      if(col.key==="OVR") return <td key={col.key}>{p.overall??"--"}</td>;
+                      if(col.key==="GP") return <td key={col.key}>{p.gp}</td>;
+                      if(col.key==="PTS") return <td key={col.key}>{p.ppg}</td>;
+                      if(col.key==="PrevPTS") return <td key={col.key}>{p.mipPrevPpg}</td>;
+                      if(col.key==="DeltaPTS"){const d=Number(p.mipDeltaPpg||0);return <td key={col.key}>{`${d>=0?"+":""}${d.toFixed(1)}`}</td>}
+                      if(col.key==="REB") return <td key={col.key}>{p.rpg}</td>;
+                      if(col.key==="AST") return <td key={col.key}>{p.apg}</td>;
+                      if(col.key==="STL") return <td key={col.key}>{p.spg}</td>;
+                      if(col.key==="BLK") return <td key={col.key}>{p.bpg}</td>;
+                      if(col.key==="DRTG") return <td key={col.key}>{fmt1(p.def_rating)}</td>;
+                      if(col.key==="MPG") return <td key={col.key}>{p.mpg}</td>;
+                      if(col.key==="Impact") return <td key={col.key}>{p.impact}</td>;
+                      if(col.key==="Starts") return <td key={col.key}>{p.started}</td>;
+                      if(col.key==="Sixth") return <td key={col.key}>{p.bench??p.sixth}</td>;
+                      return <td key={col.key}>-</td>;
+                    })}
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+            {!activeRows.length && <div className="py-8 text-center text-neutral-400">No player stats loaded yet.</div>}
+          </div>
         </div>
       </div>
-
-      <div className="w-full max-w-5xl mt-4 text-sm text-neutral-400">
-        {meta.description} Live for {seasonLabel}. Tracker requires players to have appeared in at least 80% of their team’s games so far.
-      </div>
-
-      <button
-        onClick={() => navigate("/team-hub")}
-        className="mt-10 px-8 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
-      >
-        Back to Team Hub
-      </button>
-    </div>
-  
     </PageFade>
   );
 }

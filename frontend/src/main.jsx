@@ -4,6 +4,7 @@ import "@/api/simEnginePy.js";
 import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
 import "./index.css";
+import "./styles/BMResponsiveDensity.css";
 import { GameProvider } from "./context/GameContext.jsx"; // ✅ import provider
 import { simulateOneGame as pySimOneGame } from "./api/simEnginePy";
 

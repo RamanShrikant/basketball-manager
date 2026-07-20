@@ -5,6 +5,7 @@ import { useGame } from "../context/GameContext";
 import LZString from "lz-string";
 import styles from "./AllNbaTeams.module.css";
 import PageFade from "../components/PageFade";
+import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
 import "../styles/BMAnimations.css";
 
 /* -------------------------------------------------------------------------- */
@@ -35,7 +36,7 @@ function normalizeAwards(raw) {
   }
 
   // Races
-  for (const key of ["mvp_race", "dpoy_race", "roty_race", "sixth_man_race"]) {
+  for (const key of ["mvp_race", "dpoy_race", "dpoy_top10", "roty_race", "roty_top10", "sixth_man_race"]) {
     if (Array.isArray(awards[key])) {
       awards[key] = awards[key].map((entry) =>
         Array.isArray(entry) ? Object.fromEntries(entry) : entry
@@ -43,8 +44,16 @@ function normalizeAwards(raw) {
     }
   }
 
-  // 🔥 All-NBA teams: arrays of players
-  for (const key of ["all_nba_first", "all_nba_second", "all_nba_third"]) {
+  // All-NBA and All-Rookie teams: arrays of players
+  for (const key of [
+    "all_nba_first",
+    "all_nba_second",
+    "all_nba_third",
+    "all_rookie_first",
+    "all_rookie_second",
+    "all_defensive_first",
+    "all_defensive_second",
+  ]) {
     if (Array.isArray(awards[key])) {
       awards[key] = awards[key].map((entry) =>
         Array.isArray(entry) ? Object.fromEntries(entry) : entry
@@ -246,16 +255,63 @@ export default function AllNbaTeams({ leagueDataProp }) {
     [awards, playerIndex, teamLogo, playerStatsMap]
   );
 
+  const rotyRaceRows = useMemo(
+    () => buildAllNbaRows(awards?.roty_top10 || awards?.roty_race || []),
+    [awards, playerIndex, teamLogo, playerStatsMap]
+  );
+
+  const allRookieFirst = useMemo(() => {
+    const explicit = buildAllNbaRows(awards?.all_rookie_first || []);
+    return explicit.length ? explicit.slice(0, 5) : rotyRaceRows.slice(0, 5);
+  }, [awards, playerIndex, teamLogo, playerStatsMap, rotyRaceRows]);
+
+  const allRookieSecond = useMemo(() => {
+    const explicit = buildAllNbaRows(awards?.all_rookie_second || []);
+    return explicit.length ? explicit.slice(0, 5) : rotyRaceRows.slice(5, 10);
+  }, [awards, playerIndex, teamLogo, playerStatsMap, rotyRaceRows]);
+
+  const dpoyRaceRows = useMemo(
+    () => buildAllNbaRows(awards?.dpoy_top10 || awards?.dpoy_race || []),
+    [awards, playerIndex, teamLogo, playerStatsMap]
+  );
+
+  const allDefensiveFirst = useMemo(() => {
+    const explicit = buildAllNbaRows(awards?.all_defensive_first || []);
+    return explicit.length ? explicit.slice(0, 5) : dpoyRaceRows.slice(0, 5);
+  }, [awards, playerIndex, teamLogo, playerStatsMap, dpoyRaceRows]);
+
+  const allDefensiveSecond = useMemo(() => {
+    const explicit = buildAllNbaRows(awards?.all_defensive_second || []);
+    return explicit.length ? explicit.slice(0, 5) : dpoyRaceRows.slice(5, 10);
+  }, [awards, playerIndex, teamLogo, playerStatsMap, dpoyRaceRows]);
+
   /* ----------------------------- UI state (tabs) ---------------------------- */
 
-  const [tier, setTier] = useState("first"); // "first" | "second" | "third"
+  const [section, setSection] = useState("all_nba");
+  const [tier, setTier] = useState("first");
   const [selectedPlayer, setSelectedPlayer] = useState(null);
 
   const currentRows = useMemo(() => {
+    if (section === "all_rookie") {
+      return tier === "second" ? allRookieSecond : allRookieFirst;
+    }
+    if (section === "all_defensive") {
+      return tier === "second" ? allDefensiveSecond : allDefensiveFirst;
+    }
     if (tier === "first") return allNbaFirst;
     if (tier === "second") return allNbaSecond;
     return allNbaThird;
-  }, [tier, allNbaFirst, allNbaSecond, allNbaThird]);
+  }, [
+    section,
+    tier,
+    allNbaFirst,
+    allNbaSecond,
+    allNbaThird,
+    allRookieFirst,
+    allRookieSecond,
+    allDefensiveFirst,
+    allDefensiveSecond,
+  ]);
 
   useEffect(() => {
     // when changing team tier, reset selected player to first in that list
@@ -339,19 +395,32 @@ export default function AllNbaTeams({ leagueDataProp }) {
 
   return (
     <PageFade>
-      <div className={`${styles.allNbaPage} min-h-screen text-white flex flex-col items-center py-10`}>
+      <div className={`${styles.allNbaPage} h-full min-h-0 overflow-hidden text-white flex flex-col items-center px-4 py-3`}>
      {/* Title row (no arrows) */}
-<div className="w-full max-w-5xl flex items-center justify-between mt-6 mb-6 select-none">
-  <h1 className="text-3xl md:text-4xl font-extrabold text-orange-500">
-    All-NBA Teams
-  </h1>
+<div className="w-full max-w-5xl flex items-center justify-between mt-3 mb-4 select-none">
+  <div>
+    <div className="text-[10px] font-black uppercase tracking-[0.24em] text-orange-300/70">Season Honors</div>
+    <h1 className="text-3xl md:text-4xl font-extrabold text-orange-500">
+      {section === "all_rookie"
+        ? "All-Rookie Teams"
+        : section === "all_defensive"
+        ? "All-Defensive Teams"
+        : "All-NBA Teams"}
+    </h1>
+  </div>
 
   <div className="flex items-center gap-2">
-    {[
-      { k: "first", label: "First Team" },
-      { k: "second", label: "Second Team" },
-      { k: "third", label: "Third Team" },
-    ].map((tab) => (
+    {((section === "all_rookie" || section === "all_defensive")
+      ? [
+          { k: "first", label: "First Team" },
+          { k: "second", label: "Second Team" },
+        ]
+      : [
+          { k: "first", label: "First Team" },
+          { k: "second", label: "Second Team" },
+          { k: "third", label: "Third Team" },
+        ]
+    ).map((tab) => (
       <button
         key={tab.k}
         onClick={() => {
@@ -372,22 +441,20 @@ export default function AllNbaTeams({ leagueDataProp }) {
 
       {cardPlayer && (
         <div className="relative w-full flex justify-center">
-          <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
+          <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-4 pb-2 rounded-t-xl shadow-lg">
             <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
             <div className="flex items-end justify-between relative">
               <div className="flex items-end gap-6">
-                <div className="relative -mb-[9px]">
-                  <img
-                    src={cardPlayer.headshot}
-                    alt={cardPlayer.name}
-                    className="h-[175px] w-auto object-contain"
-                  />
-                </div>
+                <PlayerPortraitFrame
+                  src={cardPlayer.headshot}
+                  alt={cardPlayer.name}
+                  className="h-[166px] w-[190px]"
+                />
                 <div className="flex flex-col justify-end mb-3">
-                  <h2 className="text-[44px] font-bold leading-tight">
+                  <h2 className="text-[38px] font-bold leading-tight">
                     {cardPlayer.name}
                   </h2>
-                  <p className="text-gray-400 text-[24px] mt-1">
+                  <p className="text-gray-400 text-[20px] mt-1">
                     {cardPlayer.pos}
                     {cardPlayer.secondaryPos
                       ? ` / ${cardPlayer.secondaryPos}`
@@ -524,13 +591,61 @@ export default function AllNbaTeams({ leagueDataProp }) {
         </div>
       </div>
 
-<div className="flex justify-end w-full max-w-5xl mt-6">
-  <button
-    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-semibold"
-    onClick={goToPlayoffs}
-  >
-    Playoffs ▶
-  </button>
+<div className="flex w-full max-w-5xl items-center justify-between mt-5">
+  {section === "all_rookie" ? (
+    <button
+      className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded font-semibold"
+      onClick={() => {
+        setSection("all_nba");
+        setTier("first");
+        setSortConfig({ key: null, direction: "desc" });
+      }}
+    >
+      ◀ All-NBA Teams
+    </button>
+  ) : section === "all_defensive" ? (
+    <button
+      className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded font-semibold"
+      onClick={() => {
+        setSection("all_rookie");
+        setTier("first");
+        setSortConfig({ key: null, direction: "desc" });
+      }}
+    >
+      ◀ All-Rookie Teams
+    </button>
+  ) : <span />}
+
+  {section === "all_nba" ? (
+    <button
+      className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-semibold"
+      onClick={() => {
+        setSection("all_rookie");
+        setTier("first");
+        setSortConfig({ key: null, direction: "desc" });
+      }}
+    >
+      All-Rookie Teams ▶
+    </button>
+  ) : section === "all_rookie" ? (
+    <button
+      className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-semibold"
+      onClick={() => {
+        setSection("all_defensive");
+        setTier("first");
+        setSortConfig({ key: null, direction: "desc" });
+      }}
+    >
+      All-Defensive Teams ▶
+    </button>
+  ) : (
+    <button
+      className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-semibold"
+      onClick={goToPlayoffs}
+    >
+      Playoffs ▶
+    </button>
+  )}
 </div>
 
         {playoffsTransitioning && (

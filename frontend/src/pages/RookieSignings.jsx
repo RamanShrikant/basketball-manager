@@ -6,6 +6,7 @@ import { saveLeagueData } from "../utils/leagueStorage.js";
 
 const LEAGUE_KEY = "leagueData";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
+const DRAFT_STATE_KEY = "bm_draft_state_v1";
 const STANDARD_ROSTER_MAX = 15;
 const TWO_WAY_MAX = 3;
 const OFFSEASON_CONTROLLED_MAX = Number.POSITIVE_INFINITY;
@@ -18,6 +19,42 @@ function getAllTeams(leagueData) {
 function findTeamByName(leagueData, teamName) {
   if (!teamName) return null;
   return getAllTeams(leagueData).find((team) => team?.name === teamName || team?.teamName === teamName) || null;
+}
+
+function getLeaguePlayerIds(leagueData) {
+  const ids = new Set();
+  const addRows = (rows) => {
+    for (const player of rows || []) {
+      if (player?.id) ids.add(String(player.id));
+    }
+  };
+
+  for (const team of getAllTeams(leagueData)) {
+    addRows(team?.players);
+    addRows(team?.twoWayPlayers);
+    addRows(team?.stashPlayers);
+    addRows(team?.pendingRookieSignings);
+  }
+  addRows(leagueData?.freeAgents);
+  return ids;
+}
+
+function getDraftIntegrityIssue(leagueData, seasonYear) {
+  const savedDraft = safeJSON(localStorage.getItem(DRAFT_STATE_KEY), null);
+  if (!savedDraft || Number(savedDraft?.seasonYear) !== Number(seasonYear)) return "";
+  if (!savedDraft?.completed) return "";
+
+  const draftedIds = (savedDraft?.draftedPicks || [])
+    .map((pick) => pick?.playerId)
+    .filter(Boolean)
+    .map(String);
+  if (!draftedIds.length) return "";
+
+  const leagueIds = getLeaguePlayerIds(leagueData);
+  const missing = draftedIds.filter((id) => !leagueIds.has(id));
+  if (!missing.length) return "";
+
+  return `Draft results are out of sync with the league save (${missing.length} drafted players are missing). Return to the NBA Draft to rebuild this class before continuing.`;
 }
 
 function getImageUrl(player) {
@@ -229,6 +266,7 @@ export default function RookieSignings() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [applied, setApplied] = useState(null);
+  const [draftIntegrityIssue, setDraftIntegrityIssue] = useState("");
 
   useEffect(() => {
     if (leagueData) setWorkingLeagueData(leagueData);
@@ -236,6 +274,8 @@ export default function RookieSignings() {
 
   const userRows = preview?.userPendingRookies || [];
   const cpuRows = preview?.cpuPendingRookies || [];
+  const totalPending = userRows.length + cpuRows.length;
+  const stageComplete = Boolean(!draftIntegrityIssue && (applied?.complete || (preview && totalPending === 0)));
 
   const rosterCounts = useMemo(() => {
     return getRosterCounts(workingLeagueData, selectedTeamName);
@@ -288,6 +328,16 @@ export default function RookieSignings() {
     setError("");
 
     try {
+      const integrityIssue = getDraftIntegrityIssue(workingLeagueData, seasonYear);
+      setDraftIntegrityIssue(integrityIssue);
+      if (integrityIssue) {
+        updateOffseasonState({ draftComplete: false, rookieSigningsComplete: false });
+        setApplied(null);
+        setPreview({ userPendingRookies: [], cpuPendingRookies: [], summary: null });
+        setError(integrityIssue);
+        return;
+      }
+
       if (typeof simEngine.previewRookieSignings !== "function") {
         throw new Error("previewRookieSignings is not wired in simEnginePy.js yet.");
       }
@@ -302,11 +352,26 @@ export default function RookieSignings() {
       }
 
       const nextLeague = result.leagueData || workingLeagueData;
+      setDraftIntegrityIssue("");
       setWorkingLeagueData(nextLeague);
       persistLeagueData(nextLeague, setLeagueData);
       setPreview(result);
 
-      setDecisions(buildInitialDecisions(result.userPendingRookies || []));
+      const nextUserRows = result.userPendingRookies || [];
+      const nextCpuRows = result.cpuPendingRookies || [];
+      setDecisions(buildInitialDecisions(nextUserRows));
+
+      if (nextUserRows.length === 0 && nextCpuRows.length === 0) {
+        const completeResult = {
+          complete: true,
+          summary: { appliedCount: 0, remainingCount: 0 },
+          autoCompleted: true,
+        };
+        setApplied(completeResult);
+        updateOffseasonState({ rookieSigningsComplete: true });
+      } else {
+        setApplied(null);
+      }
     } catch (err) {
       console.error("[RookieSignings] preview failed", err);
       setError(err?.message || String(err));
@@ -348,14 +413,19 @@ export default function RookieSignings() {
       persistLeagueData(nextLeague, setLeagueData);
       setApplied(result);
 
-      if (result.complete) {
+      const remainingUser = result.remainingPendingRookies?.filter((row) => row.userControlled) || [];
+      const remainingCpu = result.remainingPendingRookies?.filter((row) => !row.userControlled) || [];
+      const isComplete = Boolean(result.complete || (remainingUser.length === 0 && remainingCpu.length === 0));
+
+      if (isComplete) {
         updateOffseasonState({ rookieSigningsComplete: true });
+        setApplied({ ...result, complete: true });
       }
 
       setPreview({
         ...(preview || {}),
-        userPendingRookies: result.remainingPendingRookies?.filter((row) => row.userControlled) || [],
-        cpuPendingRookies: result.remainingPendingRookies?.filter((row) => !row.userControlled) || [],
+        userPendingRookies: remainingUser,
+        cpuPendingRookies: remainingCpu,
         summary: result.summary,
       });
     } catch (err) {
@@ -367,146 +437,87 @@ export default function RookieSignings() {
   };
 
   return (
-    <div className="min-h-screen bmCourtPage text-white py-10 px-4">
-      <div className="max-w-6xl mx-auto">
-        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-5 mb-8">
+    <div className="bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white">
+      <div className="mx-auto flex h-full min-h-0 max-w-[1700px] flex-col gap-3">
+        <div className="flex shrink-0 items-center justify-between gap-4">
           <div>
-            <p className="text-sm uppercase tracking-[0.25em] text-white/40 mb-2">Offseason Event</p>
-            <h1 className="text-5xl font-extrabold text-orange-500">Rookie Signings</h1>
-            <p className="text-white/60 mt-3">
-              Resolve every drafted rookie. First-rounders usually sign standard deals, while late firsts and second-rounders can be placed on standard, two-way, stash, or release paths.
-            </p>
+            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-white/40">Offseason</p>
+            <h1 className="text-2xl font-black text-orange-500">Rookie Signings</h1>
           </div>
-
-          <button
-            onClick={() => navigate("/offseason")}
-            className="bmSmoothButton px-6 py-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 font-bold border border-white/10"
-          >
-            Back to Offseason
-          </button>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-8 gap-3 mb-6">
-          <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-white/40">Season</div>
-            <div className="text-2xl font-extrabold">{seasonYear}</div>
-          </div>
-          <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-white/40">Projected Standard</div>
-            <div className={`text-2xl font-extrabold ${projectedStandardCount > STANDARD_ROSTER_MAX ? "text-orange-300" : ""}`}>
-              {projectedStandardCount}/{STANDARD_ROSTER_MAX}
-            </div>
-          </div>
-          <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-white/40">Projected Two-Way</div>
-            <div className={`text-2xl font-extrabold ${projectedTwoWayCount > TWO_WAY_MAX ? "text-red-300" : ""}`}>
-              {projectedTwoWayCount}/{TWO_WAY_MAX}
-            </div>
-          </div>
-          <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-white/40">Projected Stash</div>
-            <div className="text-2xl font-extrabold">{projectedStashCount}</div>
-          </div>
-          <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-white/40">Projected Non-Stash Controlled</div>
-            <div className="text-2xl font-extrabold text-white">
-              {projectedControlledCount}
-            </div>
-          </div>
-          <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-white/40">Your Pending</div>
-            <div className="text-2xl font-extrabold">{userRows.length}</div>
-          </div>
-          <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-white/40">CPU Pending</div>
-            <div className="text-2xl font-extrabold">{cpuRows.length}</div>
-          </div>
-          <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-white/40">Two-Way Choices</div>
-            <div className="text-2xl font-extrabold">{decisionSummary.two_way || 0}</div>
-          </div>
-          <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-white/40">Stash Choices</div>
-            <div className="text-2xl font-extrabold">{decisionSummary.stash || 0}</div>
-          </div>
-          <div className="bmSolidPanel rounded-2xl bg-white/5 border border-white/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-white/40">Standard Choices</div>
-            <div className="text-2xl font-extrabold">{decisionSummary.standard || 0}</div>
-          </div>
-        </div>
-
-        {(projectedStandardCount > STANDARD_ROSTER_MAX || projectedTwoWayCount > TWO_WAY_MAX) && userRows.length > 0 && (
-          <div className="mb-5 rounded-2xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-orange-100 font-semibold">
-            Offseason overfill is allowed. Before simulating games, Calendar will require standard contracts at {STANDARD_ROSTER_MAX} or fewer and two-way contracts at {TWO_WAY_MAX} or fewer.
-          </div>
-        )}
-
-        {error && (
-          <div className="mb-5 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-200 font-semibold">
-            {error}
-          </div>
-        )}
-
-        {applied?.summary && (
-          <div className="mb-5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-emerald-200 font-semibold">
-            Applied {applied.summary.appliedCount} rookie signing decisions. Remaining: {applied.summary.remainingCount}.
-          </div>
-        )}
-
-        <div className="bmTablePanel rounded-3xl border border-white/10 bg-neutral-900/80 shadow-2xl overflow-hidden">
-          <div className="p-5 border-b border-white/10 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div>
-              <h2 className="text-2xl font-extrabold">Your Draft Picks</h2>
-              <p className="text-white/55 text-sm mt-1">CPU teams are resolved automatically when you apply decisions. Your team can overfill during the offseason; Calendar will enforce the final legal roster before games.</p>
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={loadPreview}
-                disabled={loading}
-                className="bmSmoothButton px-5 py-3 rounded-xl bg-neutral-700 hover:bg-neutral-600 disabled:opacity-50 font-bold"
-              >
-                Refresh Preview
+          <div className="flex items-center gap-2">
+            <button onClick={loadPreview} disabled={loading} className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-black hover:bg-white/10 disabled:opacity-50">Refresh</button>
+            {draftIntegrityIssue ? (
+              <button onClick={() => navigate("/draft")} className="rounded-lg bg-orange-600 px-5 py-2 text-sm font-black hover:bg-orange-500">
+                Return to NBA Draft
               </button>
-              <button
-                onClick={applyDecisions}
-                disabled={loading}
-                className="bmSmoothButton px-5 py-3 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 font-bold"
-              >
-                Resolve Rookie Signings
+            ) : !stageComplete ? (
+              <button onClick={applyDecisions} disabled={loading || totalPending === 0} className="rounded-lg bg-orange-600 px-5 py-2 text-sm font-black hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-neutral-700">
+                {loading ? "Processing..." : userRows.length === 0 && cpuRows.length > 0 ? "Resolve CPU Signings" : "Resolve Signings"}
               </button>
-            </div>
-          </div>
-
-          <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {loading && !preview ? (
-              <div className="col-span-full text-white/50 py-10 text-center">Loading rookie signings...</div>
-            ) : userRows.length ? (
-              userRows.map((row, index) => (
-                <RookieCard
-                  key={row.playerId}
-                  row={row}
-                  animationIndex={index}
-                  decision={decisions[row.playerId]}
-                  onDecisionChange={updateDecision}
-                  rosterCounts={rosterCounts}
-                />
-              ))
             ) : (
-              <div className="col-span-full text-white/50 py-10 text-center">
-                No user-controlled rookie signing decisions are pending.
-              </div>
+              <button onClick={() => navigate("/player-team-options")} className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-black hover:bg-emerald-500">
+                Continue to Player / Team Options
+              </button>
             )}
           </div>
         </div>
 
-        <div className="bmSolidPanel mt-6 rounded-3xl border border-white/10 bg-neutral-900/70 p-5">
-          <h2 className="text-xl font-extrabold mb-2">CPU Teams</h2>
-          <p className="text-white/55 text-sm">
-            {cpuRows.length
-              ? `${cpuRows.length} CPU rookie signing decisions will be auto-resolved.`
-              : "No CPU rookie signing decisions are pending."}
-          </p>
+        <div className="grid shrink-0 grid-cols-3 gap-2 lg:grid-cols-6">
+          {[
+            ["Standard", `${projectedStandardCount}/${STANDARD_ROSTER_MAX}`, projectedStandardCount > STANDARD_ROSTER_MAX],
+            ["Two-Way", `${projectedTwoWayCount}/${TWO_WAY_MAX}`, projectedTwoWayCount > TWO_WAY_MAX],
+            ["Stash", projectedStashCount, false],
+            ["Your Pending", userRows.length, false],
+            ["CPU Pending", cpuRows.length, false],
+            ["Season", seasonYear, false],
+          ].map(([label,value,warn]) => (
+            <div key={label} className={`rounded-lg border px-3 py-2 ${warn ? "border-orange-500/35 bg-orange-500/10" : "border-white/10 bg-white/[0.04]"}`}>
+              <div className="text-[9px] font-black uppercase tracking-wider text-white/45">{label}</div>
+              <div className="mt-0.5 text-lg font-black">{value}</div>
+            </div>
+          ))}
         </div>
+
+        {(error || applied?.summary || projectedStandardCount > STANDARD_ROSTER_MAX || projectedTwoWayCount > TWO_WAY_MAX) && (
+          <div className={`shrink-0 rounded-lg border px-4 py-2 text-sm font-bold ${error ? "border-red-500/30 bg-red-500/10 text-red-200" : applied?.summary ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-orange-500/30 bg-orange-500/10 text-orange-100"}`}>
+            {error || (applied?.summary ? `Applied ${applied.summary.appliedCount} decisions. ${applied.summary.remainingCount} remain.` : "Offseason overfill is allowed. Final roster limits are enforced before games.")}
+          </div>
+        )}
+
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-neutral-900/80">
+          <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
+            <div>
+              <h2 className="font-black">Your Draft Picks</h2>
+              <div className="text-xs font-semibold text-white/45">Choose standard, two-way, stash, or release.</div>
+            </div>
+            <div className="flex gap-2 text-xs font-black">
+              <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-emerald-200">Standard {decisionSummary.standard || 0}</span>
+              <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-cyan-200">2W {decisionSummary.two_way || 0}</span>
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-amber-200">Stash {decisionSummary.stash || 0}</span>
+            </div>
+          </div>
+          <div className="bmTableScroller grid min-h-0 flex-1 grid-cols-1 content-start gap-3 overflow-y-auto p-3 lg:grid-cols-2">
+            {loading && !preview ? (
+              <div className="col-span-full flex h-full items-center justify-center text-white/50">Loading rookie signings...</div>
+            ) : userRows.length ? (
+              userRows.map((row,index)=><RookieCard key={row.playerId} row={row} animationIndex={index} decision={decisions[row.playerId]} onDecisionChange={updateDecision} rosterCounts={rosterCounts} />)
+            ) : draftIntegrityIssue ? (
+              <div className="col-span-full flex h-full flex-col items-center justify-center gap-4 px-6 text-center text-orange-100">
+                <div className="max-w-2xl font-bold">{draftIntegrityIssue}</div>
+                <button onClick={() => navigate("/draft")} className="rounded-lg bg-orange-600 px-5 py-2 text-sm font-black text-white hover:bg-orange-500">
+                  Return to NBA Draft
+                </button>
+              </div>
+            ) : (
+              <div className="col-span-full flex h-full flex-col items-center justify-center gap-4 text-white/55">
+                <div>No rookie decisions are pending. This stage is complete.</div>
+                <button onClick={() => navigate("/player-team-options")} className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-black text-white hover:bg-emerald-500">
+                  Continue to Player / Team Options
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );

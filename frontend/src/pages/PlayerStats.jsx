@@ -1,10 +1,21 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import PageFade from "../components/PageFade";
+import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
 import "../styles/BMPageBackground.css";
+import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
+import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
+import {
+  expandSnapshotTeamRows,
+  getArchivedStatsSnapshot,
+  getLivePlayoffStatsSnapshot,
+  getSnapshotPlayerRows,
+  getSnapshotTeams,
+  seasonLabelFromStartYear,
+} from "../utils/seasonStatsArchive.js";
 
 /* -------------------------------------------------------------------------- */
 /*                              STORAGE HELPERS                               */
@@ -126,9 +137,27 @@ function fmtAvg(value) {
 /*                                 COMPONENT                                  */
 /* -------------------------------------------------------------------------- */
 
-export default function PlayerStats() {
+export default function PlayerStats({ scope = "regular" }) {
   const { leagueData, selectedTeam: controlledTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  const isPlayoffStats = scope === "playoffs";
+  const offseasonState = useMemo(() => readCompressedOrJson("bm_offseason_state_v1", {}), []);
+  const isOffseasonMode = Boolean(location.state?.offseasonMode || offseasonState?.active);
+  const archivedSnapshot = useMemo(() => {
+    if (!leagueData) return null;
+    if (isPlayoffStats) {
+      return isOffseasonMode
+        ? getArchivedStatsSnapshot(leagueData, "playoffs")
+        : getLivePlayoffStatsSnapshot(leagueData);
+    }
+    return isOffseasonMode ? getArchivedStatsSnapshot(leagueData, "regular") : null;
+  }, [leagueData, isPlayoffStats, isOffseasonMode]);
+
+  const archiveSeasonLabel = archivedSnapshot?.seasonYear
+    ? seasonLabelFromStartYear(archivedSnapshot.seasonYear)
+    : "";
 
   const [mode, setMode] = useState("players"); // players | league | teams
   const [sortConfig, setSortConfig] = useState({ key: "PTS", direction: "desc" });
@@ -157,10 +186,14 @@ export default function PlayerStats() {
   }, [controlledTeam]);
 
   const allTeams = useMemo(() => {
-    return getAllTeamsFromLeague(leagueData)
+    const sourceTeams = archivedSnapshot
+      ? getSnapshotTeams(archivedSnapshot)
+      : getAllTeamsFromLeague(leagueData);
+
+    return sourceTeams
       .filter((team) => team?.name)
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [leagueData]);
+  }, [leagueData, archivedSnapshot]);
 
   useEffect(() => {
     if (controlledTeam?.name) setViewTeamName(controlledTeam.name);
@@ -180,6 +213,8 @@ export default function PlayerStats() {
   }, [allTeams]);
 
   const allPlayers = useMemo(() => {
+    if (archivedSnapshot) return getSnapshotPlayerRows(archivedSnapshot);
+
     return allTeams.flatMap((team) =>
       (team.players || []).map((player) => ({
         ...player,
@@ -190,7 +225,7 @@ export default function PlayerStats() {
         teamLogo: teamLogoOf(team),
       }))
     );
-  }, [allTeams]);
+  }, [allTeams, archivedSnapshot]);
 
   const playerStatsMap = useMemo(() => {
     return readCompressedOrJson(PLAYER_STATS_KEY, {});
@@ -249,8 +284,13 @@ export default function PlayerStats() {
   };
 
   const teamPlayers = useMemo(() => {
-    if (!selectedTeam?.players) return [];
+    if (!selectedTeam?.name) return [];
 
+    if (archivedSnapshot) {
+      return allPlayers.filter((player) => player?.teamName === selectedTeam.name);
+    }
+
+    if (!selectedTeam?.players) return [];
     return (selectedTeam.players || []).map((player) => ({
       ...player,
       name: playerNameOf(player),
@@ -260,16 +300,19 @@ export default function PlayerStats() {
       teamLogo: teamLogoOf(selectedTeam),
       stats: computePlayerStats(playerNameOf(player), selectedTeam.name),
     }));
-  }, [selectedTeam, playerStatsMap]);
+  }, [selectedTeam, playerStatsMap, archivedSnapshot, allPlayers]);
 
   const leaguePlayers = useMemo(() => {
+    if (archivedSnapshot) return allPlayers;
     return allPlayers.map((player) => ({
       ...player,
       stats: computePlayerStats(player.name, player.teamName),
     }));
-  }, [allPlayers, playerStatsMap]);
+  }, [allPlayers, playerStatsMap, archivedSnapshot]);
 
   const allTeamsAgg = useMemo(() => {
+    if (archivedSnapshot) return expandSnapshotTeamRows(archivedSnapshot);
+
     const totals = {};
 
     const ensure = (teamName) => {
@@ -390,7 +433,7 @@ export default function PlayerStats() {
     }
 
     return rows.sort((a, b) => a.teamName.localeCompare(b.teamName));
-  }, [schedule, results, playerStatsMap, allTeams, teamLogo]);
+  }, [schedule, results, playerStatsMap, allTeams, teamLogo, archivedSnapshot]);
 
   const currentIndex = selectedTeam
     ? allTeams.findIndex((team) => team.name === selectedTeam.name)
@@ -406,6 +449,12 @@ export default function PlayerStats() {
     setViewTeamName(allTeams[newIndex]?.name || null);
     setSelectedPlayer(null);
   };
+
+  useKeyboardTeamNavigation({
+    enabled: mode === "players" && allTeams.length > 1,
+    onPrevious: () => handleTeamSwitch("prev"),
+    onNext: () => handleTeamSwitch("next"),
+  });
 
   const handleSort = (key) => {
     let direction = "desc";
@@ -531,6 +580,14 @@ export default function PlayerStats() {
       ? selectedPlayer || rowsPlayers[0] || null
       : null;
 
+  useKeyboardListNavigation({
+    items: rowsPlayers,
+    selectedItem: cardPlayer,
+    onSelect: setSelectedPlayer,
+    enabled: (mode === "players" || mode === "league") && !playerCardPlayer,
+    getKey: (row) => `${row?.teamName || ""}::${row?.name || ""}`,
+  });
+
   const cardTeam = useMemo(() => {
     return rowsTeams.find((row) => row.teamName === selectedTeamRow) || rowsTeams[0] || null;
   }, [rowsTeams, selectedTeamRow]);
@@ -557,13 +614,13 @@ export default function PlayerStats() {
 
   return (
     <PageFade>
-      <div className="min-h-screen bmCourtPage text-white flex flex-col items-center py-10">
-      <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
+      <div className="h-screen min-h-0 overflow-hidden bmCourtPage text-white flex flex-col items-center px-4 py-3">
+      <div className="w-full max-w-7xl flex shrink-0 items-center justify-between mb-2 select-none">
         <div className="w-24 flex items-center justify-start">
           <button
             onClick={() => handleTeamSwitch("prev")}
             disabled={mode !== "players"}
-            className={`text-4xl font-bold transition-transform active:scale-90 ${
+            className={`text-2xl font-bold transition-transform active:scale-90 ${
               mode === "players"
                 ? "text-white hover:text-orange-400"
                 : "text-neutral-600 cursor-not-allowed"
@@ -574,19 +631,19 @@ export default function PlayerStats() {
           </button>
         </div>
 
-        <h1 className="text-3xl md:text-4xl font-extrabold text-orange-500 text-center">
+        <h1 className="text-3xl font-extrabold text-orange-500 text-center leading-none">
           {mode === "players"
-            ? `${selectedTeam.name} Stats`
+            ? `${selectedTeam.name} ${isPlayoffStats ? "Playoff Stats" : "Stats"}`
             : mode === "league"
-            ? "All League Players"
-            : "All Teams"}
+            ? isPlayoffStats ? "All League Playoff Players" : "All League Players"
+            : isPlayoffStats ? "Playoff Team Stats" : "All Teams"}
         </h1>
 
         <div className="w-24 flex items-center justify-end">
           <button
             onClick={() => handleTeamSwitch("next")}
             disabled={mode !== "players"}
-            className={`text-4xl font-bold transition-transform active:scale-90 ${
+            className={`text-2xl font-bold transition-transform active:scale-90 ${
               mode === "players"
                 ? "text-white hover:text-orange-400"
                 : "text-neutral-600 cursor-not-allowed"
@@ -598,7 +655,11 @@ export default function PlayerStats() {
         </div>
       </div>
 
-      <div className="w-full max-w-5xl flex items-center justify-end gap-2 mb-3">
+      <div className="w-full max-w-7xl flex shrink-0 items-center justify-between gap-2 mb-2">
+        <div className="text-xs font-bold uppercase tracking-[0.14em] text-white/45">
+          {archiveSeasonLabel ? `${archiveSeasonLabel} ${isPlayoffStats ? "Playoffs" : "Final"}` : isPlayoffStats ? "Current Playoffs" : "Current Season"}
+        </div>
+        <div className="flex items-center gap-2">
         {[
           { k: "players", label: "Players" },
           { k: "league", label: "All League" },
@@ -621,30 +682,25 @@ export default function PlayerStats() {
             {tab.label}
           </button>
         ))}
+        </div>
       </div>
 
       {mode !== "teams" && cardPlayer && (
         <div className="relative w-full flex justify-center">
-          <div className="relative bmSolidPanel w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
+          <div className="relative bmSolidPanel w-full max-w-7xl px-5 pt-3 pb-1 rounded-t-xl shadow-lg">
             <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60" />
 
             <div className="flex items-end justify-between relative">
               <div className="flex items-end gap-6">
-                <div className="relative -mb-[9px]">
-                  {cardPlayer.headshot ? (
-                    <img
-                      src={cardPlayer.headshot}
-                      alt={cardPlayer.name}
-                      className="h-[175px] w-auto object-contain"
-                    />
-                  ) : (
-                    <div className="h-[175px] w-[120px]" />
-                  )}
-                </div>
+                <PlayerPortraitFrame
+                  src={cardPlayer.headshot}
+                  alt={cardPlayer.name}
+                  className="h-[116px] w-[150px]"
+                />
 
                 <div className="flex flex-col justify-end mb-3">
-                  <h2 className="text-[44px] font-bold leading-tight">{cardPlayer.name}</h2>
-                  <p className="text-gray-400 text-[24px] mt-1">
+                  <h2 className="text-[30px] font-bold leading-tight">{cardPlayer.name}</h2>
+                  <p className="text-gray-400 text-[16px] mt-0.5">
                     {cardPlayer.pos}
                     {cardPlayer.secondaryPos ? ` / ${cardPlayer.secondaryPos}` : ""} • Age{" "}
                     {cardPlayer.age ?? "-"}
@@ -652,7 +708,7 @@ export default function PlayerStats() {
                   <button
                     type="button"
                     onClick={() => setPlayerCardPlayer(cardPlayer)}
-                    className="mt-4 w-fit px-5 py-2 bg-white/[0.06] hover:bg-orange-500/15 border border-white/10 hover:border-orange-400/40 rounded-lg text-sm font-semibold transition"
+                    className="mt-2 w-fit px-4 py-1.5 bg-white/[0.06] hover:bg-orange-500/15 border border-white/10 hover:border-orange-400/40 rounded-lg text-sm font-semibold transition"
                   >
                     Open Player Card
                   </button>
@@ -660,7 +716,7 @@ export default function PlayerStats() {
               </div>
 
               <div className="relative flex flex-col items-center justify-center mr-4 mb-2">
-                <svg width="110" height="110" viewBox="0 0 120 120">
+                <svg width="82" height="82" viewBox="0 0 120 120">
                   <defs>
                     <linearGradient id="ovrGradient" x1="0%" y1="0%" x2="100%" y2="0%">
                       <stop offset="0%" stopColor="#FFA500" />
@@ -693,7 +749,7 @@ export default function PlayerStats() {
 
                 <div className="absolute flex flex-col items-center justify-center text-center">
                   <p className="text-sm text-gray-300 tracking-wide mb-1">OVR</p>
-                  <p className="text-[47px] font-extrabold text-orange-400 leading-none mt-[-11px]">
+                  <p className="text-[34px] font-extrabold text-orange-400 leading-none mt-[-8px]">
                     {cardPlayer.overall ?? "-"}
                   </p>
                   <p className="text-[10px] text-gray-400 mt-[-2px]">
@@ -711,7 +767,7 @@ export default function PlayerStats() {
 
       {mode === "teams" && cardTeam && (
         <div className="relative w-full flex justify-center">
-          <div className="relative bmSolidPanel w-full max-w-5xl px-8 pt-8 pb-4 rounded-t-xl shadow-lg">
+          <div className="relative bmSolidPanel w-full max-w-7xl px-5 pt-3 pb-2 rounded-t-xl shadow-lg">
             <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60" />
 
             <div className="flex items-center justify-between">
@@ -720,13 +776,13 @@ export default function PlayerStats() {
                   <img
                     src={cardTeam.logo}
                     alt={cardTeam.teamName}
-                    className="h-[90px] w-[90px] object-contain"
+                    className="h-[64px] w-[64px] object-contain"
                   />
                 ) : (
-                  <div className="h-[90px] w-[90px]" />
+                  <div className="h-[64px] w-[64px]" />
                 )}
 
-                <h2 className="text-[40px] font-bold leading-tight">{cardTeam.teamName}</h2>
+                <h2 className="text-[28px] font-bold leading-tight">{cardTeam.teamName}</h2>
               </div>
 
               <div className="text-right text-gray-300 text-lg">
@@ -745,11 +801,11 @@ export default function PlayerStats() {
         </div>
       )}
 
-      <div className="w-full flex justify-center mt-[-1px]">
-        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar bmTablePanel">
+      <div className="w-full flex flex-1 min-h-0 justify-center mt-[-1px]">
+        <div className="bmTableScroller w-full max-w-7xl min-h-0 overflow-auto rounded-b-xl bmTablePanel">
           {(mode === "players" || mode === "league") && (
-            <table className="w-full min-w-[1260px] border-collapse text-center text-[17px] font-medium">
-              <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
+            <table className="w-full min-w-[1540px] border-collapse text-center text-[14px] font-medium">
+              <thead className="bg-neutral-800 text-gray-300 text-[13px] font-semibold">
                 <tr>
                   {mode === "league" && <th className="py-3 px-2 min-w-[60px]">Team</th>}
 
@@ -757,7 +813,7 @@ export default function PlayerStats() {
                     <th
                       key={col.key}
                       className={`py-3 px-3 min-w-[90px] ${
-                        col.key === "name" ? "min-w-[150px] text-left pl-4" : "text-center"
+                        col.key === "name" ? "min-w-[210px] whitespace-nowrap text-left pl-4" : "text-center"
                       } cursor-pointer select-none`}
                       onClick={() => handleSort(col.key)}
                     >
@@ -777,9 +833,10 @@ export default function PlayerStats() {
               </thead>
 
               <tbody>
-                {rowsPlayers.map((player) => (
+                {rowsPlayers.map((player, rowIndex) => (
                   <tr
                     key={`${player.teamName || selectedTeam.name}-${player.name}`}
+                    data-bm-nav-row-index={rowIndex}
                     onClick={() => setSelectedPlayer(player)}
                     className={`cursor-pointer transition ${
                       (selectedPlayer || rowsPlayers[0])?.name === player.name &&
@@ -802,7 +859,7 @@ export default function PlayerStats() {
                       </td>
                     )}
 
-                    <td className="py-2 px-3 text-left pl-4">
+                    <td className="py-1.5 px-3 whitespace-nowrap text-left pl-4">
                       <button
                         type="button"
                         onClick={(e) => {
@@ -838,8 +895,8 @@ export default function PlayerStats() {
           )}
 
           {mode === "teams" && (
-            <table className="w-full min-w-[1260px] border-collapse text-center text-[17px] font-medium">
-              <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
+            <table className="w-full min-w-[1540px] border-collapse text-center text-[14px] font-medium">
+              <thead className="bg-neutral-800 text-gray-300 text-[13px] font-semibold">
                 <tr>
                   {teamCols.map((col) => (
                     <th
@@ -875,7 +932,7 @@ export default function PlayerStats() {
                         : "hover:bg-neutral-800"
                     }`}
                   >
-                    <td className="py-2 px-3 text-left pl-4">
+                    <td className="py-1.5 px-3 whitespace-nowrap text-left pl-4">
                       <div className="flex items-center gap-3">
                         {team.logo ? (
                           <img
@@ -926,7 +983,7 @@ export default function PlayerStats() {
 
       <button
         onClick={() => navigate("/team-hub")}
-        className="mt-10 px-8 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
+        className="hidden mt-4 px-8 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition lg:hidden"
       >
         Back to Team Hub
       </button>

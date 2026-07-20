@@ -306,3 +306,64 @@
   height: 100vh;
   background-color: #0d0d0d;
 }
+
+/* 100%-zoom desktop density */
+@media (min-width: 1024px) {
+  .title {
+    font-size: clamp(34px, 4.5vw, 58px);
+    margin-bottom: 20px;
+  }
+
+  .carouselShell {
+    width: min(1640px, 97vw);
+    min-height: 0;
+  }
+
+  .carouselTrack {
+    height: clamp(350px, 56vh, 410px);
+  }
+
+  .card {
+    width: clamp(245px, 19vw, 292px);
+    height: clamp(330px, 52vh, 380px);
+  }
+
+  .card[data-offset="-2"] { transform: translateX(-540px) scale(0.76); }
+  .card[data-offset="-1"] { transform: translateX(-290px) scale(0.87); }
+  .card[data-offset="1"] { transform: translateX(290px) scale(0.87); }
+  .card[data-offset="2"] { transform: translateX(540px) scale(0.76); }
+
+  .logo {
+    height: clamp(9rem, 21vh, 11.5rem);
+  }
+
+  .nbaLogo {
+    height: clamp(10rem, 23vh, 13rem);
+  }
+
+  .name,
+  .placeholderName {
+    font-size: clamp(21px, 1.7vw, 26px);
+  }
+
+  .navArrow {
+    width: 52px;
+    height: 52px;
+    font-size: 25px;
+  }
+}
+
+@media (min-width: 1024px) and (max-height: 820px) {
+  .title {
+    font-size: clamp(32px, 4vw, 48px);
+    margin-bottom: 12px;
+  }
+
+  .carouselTrack {
+    height: min(350px, 56vh);
+  }
+
+  .card {
+    height: min(330px, 52vh);
+  }
+}

@@ -13,6 +13,7 @@ import {
   recordFullOffseasonMoodEvents,
   recordRetirementMoodEvents,
 } from "../utils/offseasonMoodEvents.js";
+import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -164,11 +165,28 @@ function getSeasonYear(leagueData) {
 }
 
 function getChampionName() {
-  const champ = safeJSON(localStorage.getItem("bm_champ_v1"), null);
-  if (!champ) return null;
+  const candidates = [
+    safeJSON(localStorage.getItem("bm_last_champion_v1"), null),
+    safeJSON(localStorage.getItem("bm_champ_v1"), null),
+    safeJSON(localStorage.getItem("bm_finals_mvp_latest"), null),
+  ];
 
-  if (typeof champ === "string") return champ;
-  return champ.team || champ.teamName || champ.name || null;
+  for (const champ of candidates) {
+    if (!champ) continue;
+    if (typeof champ === "string") return champ;
+
+    const name =
+      champ.team ||
+      champ.teamName ||
+      champ.name ||
+      champ.champion_team ||
+      champ.finals_mvp?.team ||
+      null;
+
+    if (name) return name;
+  }
+
+  return null;
 }
 
 function buildDefaultOffseasonState(seasonYear) {
@@ -1829,9 +1847,9 @@ function releaseWorstUserPlayersForDev(leagueData, userTeamName) {
 
 function StatPill({ label, value }) {
   return (
-    <div className="px-4 py-3 rounded-xl bg-white/5 border border-white/10">
-      <div className="text-xs text-white/50 uppercase tracking-wide">{label}</div>
-      <div className="text-lg font-bold text-white mt-1">{value}</div>
+    <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+      <div className="text-[9px] text-white/50 uppercase tracking-wide">{label}</div>
+      <div className="mt-0.5 text-sm font-bold text-white">{value}</div>
     </div>
   );
 }
@@ -1848,9 +1866,9 @@ function EventCard({
 }) {
   const outerClass =
     accent === "orange"
-      ? "border-orange-500/50 bg-gradient-to-br from-orange-600/20 to-neutral-800"
+      ? "border-orange-500/50 bg-gradient-to-r from-orange-600/20 to-neutral-900"
       : accent === "green"
-      ? "border-emerald-500/35 bg-gradient-to-br from-emerald-600/10 to-neutral-800"
+      ? "border-emerald-500/35 bg-gradient-to-r from-emerald-600/10 to-neutral-900"
       : "border-white/10 bg-neutral-800/85";
 
   const statusClass =
@@ -1858,40 +1876,39 @@ function EventCard({
       ? "bg-orange-500/15 text-orange-200 border-orange-400/30"
       : status === "Complete"
       ? "bg-emerald-500/15 text-emerald-200 border-emerald-400/30"
-      : "bg-white/5 text-white/60 border-white/10";
+      : "bg-white/5 text-white/50 border-white/10";
 
   return (
     <div
-      className={`rounded-2xl border shadow-2xl p-6 min-h-[250px] flex flex-col justify-between transition ${outerClass} ${
-        disabled ? "opacity-70" : "hover:-translate-y-1 hover:border-orange-500/40"
+      className={`grid min-h-[104px] grid-cols-[42px_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border px-4 py-3 shadow-xl transition ${outerClass} ${
+        disabled ? "opacity-65" : "hover:border-orange-500/45"
       }`}
     >
-      <div>
-        <div className="flex items-center justify-between gap-3 mb-5">
-          <div className="h-12 w-12 rounded-2xl bg-black/25 border border-white/10 flex items-center justify-center text-xl font-extrabold text-orange-400">
-            {step}
-          </div>
+      <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-black/25 text-lg font-extrabold text-orange-400">
+        {step}
+      </div>
 
-          <div className={`px-3 py-1 rounded-full border text-xs font-semibold ${statusClass}`}>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="truncate text-lg font-extrabold text-white">{title}</h2>
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusClass}`}>
             {status}
-          </div>
+          </span>
         </div>
-
-        <h2 className="text-2xl font-extrabold text-white mb-3">{title}</h2>
-        <p className="text-sm leading-6 text-white/70">{description}</p>
+        <p className="mt-1 line-clamp-2 text-xs leading-4 text-white/55">{description}</p>
       </div>
 
       <button
         onClick={onClick}
         disabled={disabled}
-        className={`mt-6 w-full py-3 rounded-xl font-bold transition ${
+        className={`min-w-[124px] rounded-lg px-3 py-2 text-sm font-bold transition ${
           disabled
-            ? "bg-neutral-700 text-white/45 cursor-not-allowed"
+            ? "cursor-not-allowed bg-neutral-700 text-white/40"
             : accent === "green"
-            ? "bg-emerald-600 hover:bg-emerald-500 text-white"
+            ? "bg-emerald-600 text-white hover:bg-emerald-500"
             : accent === "orange"
-            ? "bg-orange-600 hover:bg-orange-500 text-white"
-            : "bg-neutral-700 hover:bg-neutral-600 text-white"
+            ? "bg-orange-600 text-white hover:bg-orange-500"
+            : "bg-neutral-700 text-white hover:bg-neutral-600"
         }`}
       >
         {buttonLabel}
@@ -1906,6 +1923,7 @@ export default function OffseasonHub() {
 
   const seasonYear = getSeasonYear(leagueData);
   const champion = getChampionName();
+  const championAbbreviation = champion ? getTeamAbbreviation(champion, champion) : null;
   const [offseasonState, setOffseasonState] = useState(() => readOffseasonState(seasonYear));
   const [devOffseasonRunning, setDevOffseasonRunning] = useState(false);
   const [devOffseasonStatus, setDevOffseasonStatus] = useState("");
@@ -3191,41 +3209,41 @@ export default function OffseasonHub() {
   }, [navigate, offseasonState, leagueData, rosterWarningBeforeSim]);
 
   return (
-    <div className={`${styles.offseasonPage} min-h-screen text-white py-10 px-4`}>
-      <div className="max-w-6xl mx-auto">
-        <div className="text-center mb-8">
-          <p className="text-sm text-white/45 tracking-[0.25em] uppercase mb-3">
+    <div className={`${styles.offseasonPage} bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white`}>
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col">
+        <div className="mb-2 shrink-0 text-center">
+          <p className="text-[10px] text-white/45 tracking-[0.25em] uppercase mb-1">
             Basketball Manager
           </p>
-          <h1 className="text-5xl font-extrabold text-orange-500 tracking-tight">
+          <h1 className="text-3xl font-extrabold text-orange-500 tracking-tight">
             OFFSEASON HUB
           </h1>
-          <p className="text-white/60 mt-3 text-base">
+          <p className="text-xs text-white/55 mt-1">
             Move through each offseason stage one event at a time.
           </p>
         </div>
 
-        <div className="bg-neutral-800/85 border border-white/10 rounded-3xl shadow-2xl p-6 md:p-7 mb-8">
+        <div className="mb-3 shrink-0 rounded-2xl border border-white/10 bg-neutral-800/85 px-5 py-3 shadow-xl">
           {rosterWarningBeforeSim && (
-            <div className="mb-5 rounded-2xl border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm font-semibold text-orange-100">
+            <div className="mb-2 rounded-xl border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-xs font-semibold text-orange-100">
               {rosterStatus.message} This will not block offseason steps, but it will block game simulation until fixed.
             </div>
           )}
 
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
             <div>
-              <p className="text-sm uppercase tracking-[0.2em] text-white/40 mb-2">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-1">
                 Offseason Overview
               </p>
-              <h2 className="text-3xl font-extrabold text-white">
+              <h2 className="text-2xl font-extrabold text-white">
                 {seasonYear} Offseason
               </h2>
-              <p className="text-white/60 mt-2">
-                {champion ? `Champions: ${champion}` : "Championship complete."}
+              <p className="text-xs text-white/55 mt-1">
+                {championAbbreviation ? `Champions: ${championAbbreviation}` : "Championship complete."}
                 {selectedTeam?.name ? ` Your team: ${selectedTeam.name}.` : ""}
               </p>
 
-              <div className="mt-4 flex flex-wrap gap-3">
+              <div className="mt-2 flex flex-wrap gap-2">
                 <button
                   onClick={toggleRetirementsDisabled}
                   disabled={devOffseasonRunning}
@@ -3288,28 +3306,28 @@ export default function OffseasonHub() {
               </div>
 
               {devOffseasonStatus && (
-                <div className="mt-3 rounded-xl border border-purple-400/25 bg-purple-950/30 px-4 py-3 text-sm font-semibold text-purple-100">
+                <div className="mt-2 rounded-lg border border-purple-400/25 bg-purple-950/30 px-3 py-2 text-xs font-semibold text-purple-100">
                   {devOffseasonStatus}
                 </div>
               )}
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-4 gap-2">
               <StatPill label="Season" value={seasonYear} />
-              <StatPill label="Champion" value={champion || "TBD"} />
+              <StatPill label="Champion" value={championAbbreviation || "TBD"} />
               <StatPill label="Retired" value={retiredCount} />
               <StatPill label="Current Step" value={devOffseasonRunning ? (devStopRequested ? "Stopping" : "Dev Sim") : currentStepLabel} />
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-3 overflow-hidden">
           {cards.map((card) => (
             <EventCard key={card.step} {...card} />
           ))}
         </div>
 
-        <div className="mt-8 flex justify-center gap-4 flex-wrap">
+        <div className="bmLegacyRouteBack mt-8 flex justify-center gap-4 flex-wrap">
           <button
             onClick={() =>
               navigate("/team-hub", {

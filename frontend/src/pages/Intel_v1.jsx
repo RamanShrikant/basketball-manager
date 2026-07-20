@@ -3,6 +3,7 @@ import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
+import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
 import {
   buildLeagueIntel,
   formatMoney,
@@ -139,6 +140,14 @@ export default function Intel() {
     return rows.find((row) => row.name === activeName) || rows.find((row) => row.name === selectedTeam?.name) || rows[0];
   }, [activeName, rows, selectedTeam?.name]);
 
+  useKeyboardListNavigation({
+    items: visibleRows,
+    selectedItem: active,
+    onSelect: (row) => setActiveName(row.name),
+    getKey: (row) => row?.name,
+    rowSelector: "[data-bm-intel-row-index]",
+  });
+
   if (!leagueData) {
     return (
       <PageFade>
@@ -164,9 +173,9 @@ export default function Intel() {
 
   return (
     <PageFade>
-      <div className="bmCourtPage min-h-screen px-4 py-8 text-white">
-        <div className="mx-auto w-full max-w-7xl">
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+      <div className="bmCourtPage h-full min-h-0 overflow-hidden p-3 text-white">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1680px] flex-col">
+          <div className="mb-2 flex h-[52px] shrink-0 flex-wrap items-center justify-between gap-3">
             <button
               onClick={() => navigate("/team-hub")}
               className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
@@ -176,7 +185,7 @@ export default function Intel() {
 
             <div className="text-center">
               <div className="text-xs font-black uppercase tracking-[0.24em] text-orange-300">Front Office</div>
-              <h1 className="mt-1 text-4xl font-black text-orange-500">League Intel</h1>
+              <h1 className="text-3xl font-black text-orange-500">League Intel</h1>
             </div>
 
             <button
@@ -187,7 +196,7 @@ export default function Intel() {
             </button>
           </div>
 
-          <div className="mb-5 flex flex-wrap justify-center gap-2">
+          <div className="mb-2 flex shrink-0 flex-wrap justify-center gap-2">
             {["all", "contender", "playoff", "middle", "retool", "rebuild", "tank"].map((mode) => (
               <button
                 key={mode}
@@ -201,27 +210,28 @@ export default function Intel() {
             ))}
           </div>
 
-          <div className="grid gap-5 xl:grid-cols-[330px_1fr]">
-            <div className={`${sectionCard} xl:sticky xl:top-6 xl:max-h-[calc(100vh-48px)] xl:overflow-hidden`}>
+          <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[300px_1fr]">
+            <div className={`${sectionCard} flex min-h-0 flex-col overflow-hidden`}>
               <div className="border-b border-white/10 px-5 py-4">
                 <div className="text-sm font-black uppercase tracking-[0.18em] text-orange-300">All Teams</div>
                 <div className="mt-1 text-xs font-bold text-neutral-500">{visibleRows.length} teams shown</div>
               </div>
-              <div className="grid max-h-[72vh] gap-2 overflow-y-auto p-4">
-                {visibleRows.map((row) => (
+              <div className="bmTableScroller grid min-h-0 flex-1 gap-2 overflow-y-auto p-3">
+                {visibleRows.map((row, rowIndex) => (
+                  <div key={row.name} data-bm-intel-row-index={rowIndex}>
                   <TeamSelectorRow
-                    key={row.name}
                     row={row}
                     active={row.name === active.name}
                     onClick={() => setActiveName(row.name)}
                   />
+                  </div>
                 ))}
               </div>
             </div>
 
-            <div className="grid gap-5">
+            <div className="bmTableScroller grid min-h-0 gap-3 overflow-y-auto pr-1">
               <div className="overflow-hidden rounded-[30px] border border-white/10 bg-neutral-950/85 shadow-2xl">
-                <div className="relative overflow-hidden border-b border-white/10 bg-gradient-to-r from-orange-600/25 via-neutral-950 to-black px-6 py-6">
+                <div className="relative overflow-hidden border-b border-white/10 bg-gradient-to-r from-orange-600/25 via-neutral-950 to-black px-5 py-4">
                   {active.logo && (
                     <img
                       src={active.logo}
@@ -234,13 +244,13 @@ export default function Intel() {
                   <div className="relative z-10 flex flex-wrap items-center justify-between gap-5">
                     <div className="flex min-w-0 items-center gap-4">
                       {active.logo ? (
-                        <img src={active.logo} alt={active.name} className="h-20 w-20 object-contain" />
+                        <img src={active.logo} alt={active.name} className="h-14 w-14 object-contain" />
                       ) : (
-                        <div className="h-20 w-20 rounded-2xl bg-black/50" />
+                        <div className="h-14 w-14 rounded-xl bg-black/50" />
                       )}
                       <div className="min-w-0">
                         <div className="text-xs font-black uppercase tracking-[0.22em] text-orange-200">Team Intel Report</div>
-                        <h2 className="mt-1 truncate text-4xl font-black text-white">{active.name}</h2>
+                        <h2 className="truncate text-3xl font-black text-white">{active.name}</h2>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <Pill className={phaseTone(active.phase)}>{active.phaseLabel}</Pill>
                           <Pill className="border-white/10 bg-black/35 text-neutral-300">
@@ -260,12 +270,12 @@ export default function Intel() {
                     </div>
                   </div>
 
-                  <div className="relative z-10 mt-5 rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-bold leading-6 text-neutral-300">
+                  <div className="relative z-10 mt-3 rounded-xl border border-white/10 bg-black/35 px-4 py-2 text-sm font-bold text-neutral-300">
                     {active.phaseSummary}
                   </div>
                 </div>
 
-                <div className="grid gap-4 p-5 lg:grid-cols-3">
+                <div className="grid gap-3 p-3 lg:grid-cols-3">
                   <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
                     <div className="text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Roster</div>
                     <div className="mt-2 text-lg font-black text-white">{active.roster.count} standard players</div>

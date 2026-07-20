@@ -1532,14 +1532,14 @@ export default function SalaryTable() {
             <thead className="bg-white/5 border-b border-white/10">
               <tr className="text-white/70 text-sm">
                 <th className="text-left px-4 py-3">Player</th>
-                <th className="text-center px-3 py-3">Pos</th>
-                <th className="text-center px-3 py-3">OVR</th>
+                <th className="text-center px-3 py-2">Pos</th>
+                <th className="text-center px-3 py-2">OVR</th>
                 {yearColumns.map((y) => (
-                  <th key={y} className="text-right px-3 py-3 whitespace-nowrap">
+                  <th key={y} className="text-right px-3 py-2 whitespace-nowrap">
                     {y}
                   </th>
                 ))}
-                <th className="text-right px-3 py-3 whitespace-nowrap">Total Remaining</th>
+                <th className="text-right px-3 py-2 whitespace-nowrap">Total Remaining</th>
                 <th className="text-center px-3 py-3 whitespace-nowrap">Exp.</th>
               </tr>
             </thead>
@@ -1551,7 +1551,7 @@ export default function SalaryTable() {
                   className={`${p.isDeadCap ? "border-b border-red-500/45 bg-red-500/10 hover:bg-red-500/15" : p.isCapHold ? "border-b border-red-500/35 bg-red-500/5 hover:bg-red-500/10" : p.isTwoWay ? "border-b border-emerald-400/10 bg-emerald-500/5 hover:bg-emerald-500/10" : p.isStash ? "border-b border-amber-400/10 bg-amber-500/5 hover:bg-amber-500/10" : "border-b border-white/5 hover:bg-white/5"} transition`}
                   style={p.isDeadCap || p.isCapHold ? { boxShadow: "inset 0 0 0 1px rgba(248, 113, 113, 0.35)" } : undefined}
                 >
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-2">
                     <div className="flex items-center gap-3">
                       {p.headshot ? (
                         <img
@@ -1724,12 +1724,12 @@ export default function SalaryTable() {
 
   return (
     <PageFade>
-      <div className={`${styles.bmCourtPage} min-h-screen text-white p-6`}>
-        <div className={`${isAllTeamsView ? "max-w-[1600px]" : "max-w-6xl"} mx-auto space-y-5`}>
-          <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className={`${styles.bmCourtPage} bmCourtPage h-full min-h-0 overflow-hidden p-3 text-white`}>
+        <div className={`${isAllTeamsView ? "max-w-[1700px]" : "max-w-[1500px]"} mx-auto flex h-full min-h-0 flex-col gap-3`}>
+          <div className="flex shrink-0 items-center justify-between gap-4">
             <div>
-              <h1 className="text-4xl font-extrabold text-orange-500 leading-tight">Salary Table</h1>
-              <div className="text-white/60 text-sm mt-1">{leagueData?.leagueName || "League"}</div>
+              <h1 className="text-2xl font-black text-orange-500 leading-tight">Salary Table</h1>
+              <div className="text-white/45 text-xs">{leagueData?.leagueName || "League"}</div>
             </div>
 
             <div className="flex items-center gap-3 flex-wrap">
@@ -1765,7 +1765,7 @@ export default function SalaryTable() {
           )}
 
           {isAllTeamsView && (
-            <div className="space-y-5">
+            <div className="bmTableScroller min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
               <div className={`${styles.bmSolidPanel} border border-orange-500/20 rounded-2xl p-4 text-white/75`}>
                 <div className="text-lg font-extrabold text-orange-300">Full League Salary Table</div>
                 <div className="mt-1 text-sm text-white/60">
@@ -1778,8 +1778,8 @@ export default function SalaryTable() {
           )}
 
           {!isAllTeamsView && selectedTeam && (
-            <div className={`${styles.bmTablePanel} border border-white/10 rounded-2xl shadow-2xl overflow-hidden`}>
-              <div className="p-5 border-b border-white/10 flex flex-col gap-3">
+            <div className={`${styles.bmTablePanel} flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/10 shadow-2xl`}>
+              <div className="shrink-0 border-b border-white/10 p-3 flex flex-col gap-2">
                 <div className="flex items-center justify-between gap-4 flex-wrap">
                   <div className="flex items-center gap-3">
                     {selectedTeam.logo ? (
@@ -1819,19 +1819,19 @@ export default function SalaryTable() {
                 </div>
               </div>
 
-              <div className="overflow-x-auto">
+              <div className="bmTableScroller min-h-0 flex-1 overflow-auto">
                 <table className="w-full min-w-[980px]">
                   <thead className="bg-white/5 border-b border-white/10">
                     <tr className="text-white/70 text-sm">
                       <th className="text-left px-4 py-3">Player</th>
-                      <th className="text-center px-3 py-3">Pos</th>
-                      <th className="text-center px-3 py-3">OVR</th>
+                      <th className="text-center px-3 py-2">Pos</th>
+                      <th className="text-center px-3 py-2">OVR</th>
                       {yearColumns.map((y) => (
-                        <th key={y} className="text-right px-3 py-3 whitespace-nowrap">
+                        <th key={y} className="text-right px-3 py-2 whitespace-nowrap">
                           {y}
                         </th>
                       ))}
-                      <th className="text-right px-3 py-3 whitespace-nowrap">Total Remaining</th>
+                      <th className="text-right px-3 py-2 whitespace-nowrap">Total Remaining</th>
                       <th className="text-center px-3 py-3 whitespace-nowrap">Exp.</th>
                     </tr>
                   </thead>
@@ -1843,19 +1843,19 @@ export default function SalaryTable() {
                         className={`${p.isDeadCap ? "border-b border-red-500/45 bg-red-500/10 hover:bg-red-500/15" : p.isCapHold ? "border-b border-red-500/35 bg-red-500/5 hover:bg-red-500/10" : p.isTwoWay ? "border-b border-emerald-400/10 bg-emerald-500/5 hover:bg-emerald-500/10" : p.isStash ? "border-b border-amber-400/10 bg-amber-500/5 hover:bg-amber-500/10" : "border-b border-white/5 hover:bg-white/5"} transition`}
                         style={p.isDeadCap || p.isCapHold ? { boxShadow: "inset 0 0 0 1px rgba(248, 113, 113, 0.35)" } : undefined}
                       >
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-2">
                           <div className="flex items-center gap-3">
                             {p.headshot ? (
                               <img
                                 src={p.headshot}
                                 alt={p.name}
-                                className={`w-14 h-14 rounded-full object-cover border bg-white/5 ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`}
+                                className={`w-9 h-9 rounded-full object-cover border bg-white/5 ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`}
                                 onError={(e) => {
                                   e.currentTarget.style.display = "none";
                                 }}
                               />
                             ) : (
-                              <div className={`w-14 h-14 rounded-full bg-white/5 border ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`} />
+                              <div className={`w-9 h-9 rounded-full bg-white/5 border ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`} />
                             )}
 
                             <div className="leading-tight">

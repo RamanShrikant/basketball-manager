@@ -704,37 +704,29 @@ export default function PowerRankings() {
 
   return (
     <PageFade>
-      <div className="bmCourtPage min-h-screen text-white py-10 px-6">
-        <div className="max-w-6xl mx-auto">
-          <div className="flex items-center justify-between mb-6">
-            <h1 className="text-3xl font-bold text-orange-500">Power Rankings</h1>
+      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col">
+          <div className="mb-2 flex shrink-0 items-center justify-between gap-4">
+            <h1 className="text-2xl font-extrabold text-orange-500">Power Rankings</h1>
 
             <div className="flex gap-2">
-              <button
-                onClick={() => navigate("/team-hub")}
-                className="px-3 py-1 rounded bg-neutral-700 hover:bg-neutral-600 font-semibold"
-              >
-                Team Hub
-              </button>
               {["all", "east", "west"].map((mode) => (
                 <button
                   key={mode}
                   onClick={() => setConferenceFilter(mode)}
-                  className={`px-3 py-1 rounded font-semibold ${
-                    conferenceFilter === mode ? "bg-orange-600" : "bg-neutral-700"
+                  className={`rounded px-3 py-1 font-semibold ${
+                    conferenceFilter === mode ? "bg-orange-600" : "bg-neutral-700 hover:bg-neutral-600"
                   }`}
                 >
-                  {mode === "all"
-                    ? "All"
-                    : mode.charAt(0).toUpperCase() + mode.slice(1)}
+                  {mode === "all" ? "All" : mode.charAt(0).toUpperCase() + mode.slice(1)}
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="overflow-auto rounded-xl border border-neutral-800 bg-neutral-900/80">
-            <table className="w-full min-w-[980px] text-sm text-center">
-              <thead className="bg-neutral-800 text-gray-300">
+          <div className="bmTableScroller min-h-0 flex-1 overflow-auto rounded-xl border border-neutral-800 bg-neutral-900/80">
+            <table className="w-full min-w-[980px] text-center text-sm">
+              <thead className="sticky top-0 z-10 bg-neutral-800 text-gray-300">
                 <tr>
                   <SortHeader label="Rank" sortKey="rank" sortConfig={sortConfig} onSort={handleSort} />
                   <SortHeader label="Team" sortKey="team" sortConfig={sortConfig} onSort={handleSort} align="left" />
@@ -756,44 +748,32 @@ export default function PowerRankings() {
                       selectedTeam?.name === row.name ? "bg-orange-600/70" : ""
                     }`}
                   >
-                    <td className="px-3 py-2 font-semibold">{row.rank}</td>
-                    <td className="px-3 py-2 text-left pl-4 font-semibold">
+                    <td className="px-3 py-1.5 font-semibold">{row.rank}</td>
+                    <td className="px-3 py-1.5 text-left pl-4 font-semibold">
                       <div className="flex items-center gap-2">
-                        {row.logo && (
-                          <img
-                            src={row.logo}
-                            alt={row.name}
-                            className="w-6 h-6 object-contain"
-                          />
-                        )}
-                        <span>{row.name}</span>
+                        {row.logo && <img src={row.logo} alt={row.name} className="h-6 w-6 object-contain" />}
+                        <span className="whitespace-nowrap">{row.name}</span>
                       </div>
                     </td>
-                    <td className="px-3 py-2 font-bold text-orange-300">{row.overall}</td>
-                    <td className="px-3 py-2">{row.off}</td>
-                    <td className="px-3 py-2">{row.def}</td>
-                    <td className="px-3 py-2 font-semibold">
+                    <td className="px-3 py-1.5 font-bold text-orange-300">{row.overall}</td>
+                    <td className="px-3 py-1.5">{row.off}</td>
+                    <td className="px-3 py-1.5">{row.def}</td>
+                    <td className="px-3 py-1.5 font-semibold">
                       <span className="text-green-400">{row.w}</span>
                       <span className="text-gray-400"> - </span>
                       <span className="text-red-400">{row.l}</span>
                     </td>
-                    <td className="px-3 py-2">{row.conference || "—"}</td>
-                    <td className="px-3 py-2 font-semibold text-orange-300">{row.potential}</td>
-                    <td className="px-3 py-2 text-left text-gray-300">{row.topPlayers || "—"}</td>
+                    <td className="px-3 py-1.5">{row.conference || "—"}</td>
+                    <td className="px-3 py-1.5 font-semibold text-orange-300">{row.potential}</td>
+                    <td className="px-3 py-1.5 text-left text-gray-300">{row.topPlayers || "—"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-
-          <button
-            onClick={() => navigate("/team-hub")}
-            className="mt-8 px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold"
-          >
-            Back to Team Hub
-          </button>
         </div>
       </div>
     </PageFade>
   );
+
 }

@@ -1,6 +1,7 @@
 // src/utils/finalsMvpSeasonActions.js
 import { archiveCurrentSeasonIntoPlayerCards } from "./playerCareerHistory";
 import { saveLeagueDataInBackground } from "./leagueStorage.js";
+import { ensureCompletedSeasonStatsArchive } from "./seasonStatsArchive.js";
 
 const META_KEY = "bm_league_meta_v1";
 const SCHED_KEY = "bm_schedule_v3";
@@ -10,6 +11,9 @@ const RESULT_V3_PREFIX = "bm_result_v3_";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
 const PLAYER_STATS_KEY = "bm_player_stats_v1";
+const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
+const DRAFT_STATE_KEY = "bm_draft_state_v1";
+const LAST_CHAMPION_KEY = "bm_last_champion_v1";
 const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
 function safeClone(value) {
@@ -87,6 +91,11 @@ function clearSeasonStores() {
   localStorage.removeItem("bm_champ_v1");
   localStorage.removeItem(SCHED_KEY);
 
+  // A completed lottery/draft from an earlier run of the same calendar year
+  // must never leak into a fresh offseason and appear pre-completed.
+  localStorage.removeItem(DRAFT_LOTTERY_KEY);
+  localStorage.removeItem(DRAFT_STATE_KEY);
+
   // results v2 blob + v3 per-game
   localStorage.removeItem(RESULT_V2_BLOB_KEY);
   localStorage.removeItem(RESULT_V3_INDEX_KEY);
@@ -151,32 +160,56 @@ export function finalizeFinalsMvpAndGoOffseason({
   // 2) preserve Finals MVP always (history + latest) with the corrected year
   pushFinalsMvpToHistory(correctedFmvpRaw);
 
-  // 3) archive completed live season stats/accolades into player cards BEFORE clearing current-season stats
-  const archivedLeagueData = archiveCurrentSeasonIntoPlayerCards(
+  const completedChampion =
+    correctedFmvpRaw?.champion_team ||
+    correctedFmvpRaw?.finals_mvp?.team ||
+    null;
+
+  if (completedChampion) {
+    localStorage.setItem(
+      LAST_CHAMPION_KEY,
+      JSON.stringify({
+        team: completedChampion,
+        season: completedSeasonYear,
+      })
+    );
+  }
+
+  // 3) freeze the completed season before any offseason roster movement or runtime cleanup.
+  // This preserves regular-season/player-team assignments, playoff statistics, and final standings.
+  const seasonStartYear = completedSeasonYear - 1;
+  const leagueWithSeasonStatsArchive = ensureCompletedSeasonStatsArchive(
     leagueData,
+    seasonStartYear
+  );
+
+  // 4) archive completed live season stats/accolades into player cards BEFORE clearing current-season stats
+  const archivedLeagueData = archiveCurrentSeasonIntoPlayerCards(
+    leagueWithSeasonStatsArchive,
     completedSeasonYear
   );
 
-  // 4) bump season year so offseason pages can read the next cycle
+  // 5) bump season year so offseason pages can read the next cycle
   const currentSeasonStartYear = completedSeasonYear - 1;
   const nextSeasonYear = bumpSeasonYearMeta(currentSeasonStartYear);
 
-  // 5) clear season runtime keys so Calendar generates a fresh schedule/results later
+  // 6) clear season runtime keys so Calendar generates a fresh schedule/results later
   clearSeasonStores();
 
-  // 6) reset offseason state/results for the new offseason
+  // 7) reset offseason state/results for the new offseason
   localStorage.setItem(
     OFFSEASON_STATE_KEY,
     JSON.stringify(buildFreshOffseasonState(nextSeasonYear))
   );
   localStorage.removeItem(RETIREMENT_RESULTS_KEY);
 
-  // 7) update leagueData season year in memory + IndexedDB. localStorage only keeps a tiny pointer.
+  // 8) update leagueData season year in memory + IndexedDB. localStorage only keeps a tiny pointer.
   if (archivedLeagueData) {
     const updatedLeague = safeClone(archivedLeagueData);
     updatedLeague.seasonYear = nextSeasonYear;
     updatedLeague.currentSeasonYear = nextSeasonYear;
     updatedLeague.seasonStartYear = nextSeasonYear;
+    updatedLeague.draftState = null;
 
     if (typeof setLeagueData === "function") {
       setLeagueData(updatedLeague);
@@ -205,9 +238,9 @@ export function finalizeFinalsMvpAndGoOffseason({
     }
   }
 
-  // 8) do NOT delete finals mvp history/latest; we only clear the one-time page payload
+  // 9) do NOT delete finals mvp history/latest; we only clear the one-time page payload
   localStorage.removeItem("bm_finals_mvp_v1");
 
-  // 9) go to offseason hub
+  // 10) go to offseason hub
   navigate("/offseason");
 }

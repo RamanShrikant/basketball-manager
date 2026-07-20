@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
+import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
 import {
   canAddCustomProtectionToPick,
   canCreateSwapWithPick,
@@ -599,6 +600,14 @@ export default function TradePickSelect() {
   }, [alreadyAddedPickKeys, picks]);
 
   const selectedPick = picks.find((pick) => pickKey(pick) === selectedKey) || picks[0] || null;
+
+  useKeyboardListNavigation({
+    items: picks,
+    selectedItem: selectedPick,
+    onSelect: (pick) => setSelectedKey(pickKey(pick)),
+    getKey: pickKey,
+    rowSelector: "[data-bm-trade-pick-row-index]",
+  });
   const selectedPickAlreadyAdded = Boolean(selectedPick && alreadyAddedPickKeys.has(pickKey(selectedPick)));
   const canOpenSelectedPick = Boolean(selectedPick && !selectedPickAlreadyAdded && !sideIsFull);
   const rulePick = picks.find((pick) => pickKey(pick) === rulePickKey) || null;
@@ -697,7 +706,8 @@ export default function TradePickSelect() {
     let nextBuilder = setSideItems(builder, tradeSide, nextPrimaryItems);
     if (mirrorItem) nextBuilder = setSideItems(nextBuilder, otherTradeSide, nextOtherItems);
     saveBuilder(nextBuilder);
-    navigate(returnTo);
+    sessionStorage.setItem("bm_trade_builder_resume_v1", String(Date.now()));
+    navigate(returnTo, { state: { resumeTradeBuilder: true } });
   };
 
   const addConfiguredPick = () => {
@@ -819,11 +829,14 @@ export default function TradePickSelect() {
 
   return (
     <PageFade>
-      <div className="min-h-screen bmCourtPage text-white px-4 py-8">
-        <div className="mx-auto w-full max-w-5xl">
-          <div className="mb-5 flex items-center justify-between gap-4">
+      <div className="bmCourtPage h-full min-h-0 overflow-hidden p-3 text-white">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1520px] flex-col">
+          <div className="mb-2 flex h-[54px] shrink-0 items-center justify-between gap-4">
             <button
-              onClick={() => navigate(returnTo)}
+              onClick={() => {
+                sessionStorage.setItem("bm_trade_builder_resume_v1", String(Date.now()));
+                navigate(returnTo, { state: { resumeTradeBuilder: true } });
+              }}
               className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-neutral-200 hover:bg-white/10 hover:text-white"
             >
               ← Back
@@ -831,7 +844,7 @@ export default function TradePickSelect() {
 
             <div className="text-center">
               <div className="text-xs font-black uppercase tracking-[0.22em] text-orange-300">Select Pick</div>
-              <h1 className="text-4xl font-black text-orange-500">{tradeTeamName}</h1>
+              <h1 className="text-2xl font-black text-orange-500">{tradeTeamName}</h1>
             </div>
 
             <button
@@ -843,17 +856,17 @@ export default function TradePickSelect() {
             </button>
           </div>
 
-          <div className="mb-5 rounded-2xl border border-white/10 bg-neutral-950/85 p-5">
+          <div className="mb-2 shrink-0 rounded-xl border border-white/10 bg-neutral-950/85 px-4 py-2">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-3">
                 {teamLogo ? (
-                  <img src={teamLogo} alt={team?.name || tradeTeamName} className="h-12 w-12 object-contain" />
+                  <img src={teamLogo} alt={team?.name || tradeTeamName} className="h-9 w-9 object-contain" />
                 ) : (
                   <div className="h-12 w-12 rounded-full bg-white/5" />
                 )}
                 <div>
                   <div className="text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Pick Rules</div>
-                  <div className="text-xl font-black text-white">Click a pick to choose unprotected, custom protection, or a valid swap.</div>
+                  <div className="text-sm font-black text-white">Choose the asset and rule.</div>
                 </div>
               </div>
 
@@ -871,8 +884,8 @@ export default function TradePickSelect() {
               </p>
             </div>
           ) : (
-            <div className="overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/80">
-              <div className="grid grid-cols-[1fr_130px_180px_180px] gap-0 border-b border-white/10 bg-neutral-800 px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-neutral-400">
+            <div className="bmTableScroller min-h-0 flex-1 overflow-auto rounded-xl border border-white/10 bg-neutral-950/80">
+              <div className="sticky top-0 z-10 grid grid-cols-[1fr_110px_165px_180px] gap-0 border-b border-white/10 bg-neutral-800 px-4 py-2 text-xs font-black uppercase tracking-[0.14em] text-neutral-400">
                 <div>Asset</div>
                 <div className="text-center">Pick</div>
                 <div>Protection</div>
@@ -892,7 +905,8 @@ export default function TradePickSelect() {
                     type="button"
                     disabled={alreadyAdded || sideIsFull}
                     onClick={() => openRuleModal(pick)}
-                    className={`grid w-full grid-cols-[1fr_130px_180px_180px] items-center gap-0 px-4 py-4 text-left transition disabled:cursor-not-allowed ${
+                    data-bm-trade-pick-row-index={index}
+                    className={`grid w-full grid-cols-[1fr_110px_165px_180px] items-center gap-0 px-4 py-3 text-left transition disabled:cursor-not-allowed ${
                       alreadyAdded
                         ? "bg-neutral-950/85 text-neutral-500 opacity-70"
                         : sideIsFull
@@ -905,7 +919,7 @@ export default function TradePickSelect() {
                     }`}
                   >
                     <div>
-                      <div className="flex flex-wrap items-center gap-2 text-lg font-black">
+                      <div className="flex flex-wrap items-center gap-2 text-sm font-black">
                         <span>{formatPick(pick)}</span>
                         {alreadyAdded && (
                           <span className="rounded-full border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] text-orange-200">

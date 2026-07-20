@@ -232,6 +232,10 @@ export function archiveCurrentAwardsIntoPlayerHistory(leagueData, seasonYear) {
     ["all_nba_first", "All-NBA First Team", "all_nba_first"],
     ["all_nba_second", "All-NBA Second Team", "all_nba_second"],
     ["all_nba_third", "All-NBA Third Team", "all_nba_third"],
+    ["all_rookie_first", "All-Rookie First Team", "all_rookie_first"],
+    ["all_rookie_second", "All-Rookie Second Team", "all_rookie_second"],
+    ["all_defensive_first", "All-Defensive First Team", "all_defensive_first"],
+    ["all_defensive_second", "All-Defensive Second Team", "all_defensive_second"],
   ];
 
   for (const [key, label, type] of allNbaMap) {

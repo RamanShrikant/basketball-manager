@@ -18,11 +18,13 @@ import {
   validateCustomPickProtection,
 } from "../utils/draftPicks.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import { isDevelopmentRosterPlayer, sanitizeTradeItems } from "../utils/tradeRosterEligibility.js";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
 const TRADE_BUILDER_KEY = "bm_trade_builder_v1";
+const TRADE_FINDER_STATE_KEY = "bm_trade_finder_state_v1";
 const TRADE_DEBUG_KEY = "bm_trade_debug_v1";
 const TRADE_DEADLINE_STATUS_KEY = "bm_trade_deadline_status_v1";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
@@ -40,31 +42,31 @@ const TRADE_SALARY_TOLERANCE = 1_000;
 // Change only these numbers to move/resize the player face, OVR ring, name,
 // position/age line, and contract line inside each selected trade asset card.
 const TRADE_PLAYER_CARD_TUNING = {
-  cardHeight: 126,
+  cardHeight: 76,
   face: {
-    boxWidth: 180,
-    imageHeight: 180,
+    boxWidth: 68,
+    imageHeight: 88,
     x: 0,
-    y: 32,
+    y: 16,
   },
   ring: {
-    size: 95,
-    x: -12,
-    y: 14,
+    size: 56,
+    x: -1,
+    y: 0,
   },
   ringText: {
     ovrLabel: {
-      size: 12,
+      size: 7,
       x: 0,
       y: 0,
     },
     ovrNumber: {
-      size: 30,
+      size: 18,
       x: 0,
       y: 0,
     },
     potLine: {
-      size: 8,
+      size: 7,
       x: 0,
       y: 0,
     },
@@ -74,17 +76,17 @@ const TRADE_PLAYER_CARD_TUNING = {
     y: 0,
   },
   name: {
-    size: 30,
+    size: 15,
     x: 0,
     y: 0,
   },
   positionAge: {
-    size: 16,
+    size: 9,
     x: 0,
     y: 0,
   },
   contract: {
-    size: 13,
+    size: 8,
     x: 0,
     y: 0,
   },
@@ -95,7 +97,7 @@ const TRADE_PLAYER_CARD_TUNING = {
 // This places the item's team logo behind player/pick content at low opacity.
 const TRADE_ITEM_BACKGROUND_LOGO_TUNING = {
   enabled: true,
-  size: 500,
+  size: 260,
   opacity: 0.17,
   x: 0,
   y: 0,
@@ -143,15 +145,15 @@ const TRADE_ITEM_BACKGROUND_LOGO_TEAM_OVERRIDES = {
 // value column, and Valid Trade / Hard Cap Issue bar at the bottom of each side.
 const TRADE_FINANCIAL_FOOTER_TUNING = {
   footer: {
-    paddingX: 20,
-    paddingY: 12,
-    logoColumnWidth: 150,
-    gap: 22,
+    paddingX: 10,
+    paddingY: 7,
+    logoColumnWidth: 64,
+    gap: 10,
     x: 0,
     y: 0,
   },
   logo: {
-    size: 118,
+    size: 54,
     x: 0,
     y: 0,
   },
@@ -164,23 +166,23 @@ const TRADE_FINANCIAL_FOOTER_TUNING = {
     gap: 2,
   },
   label: {
-    size: 14,
+    size: 10,
     x: 0,
     y: 0,
     letterSpacing: "0.08em",
   },
   value: {
-    size: 14,
+    size: 10,
     x: 0,
     y: 0,
   },
   statusBar: {
-    height: 30,
-    marginTop: 8,
+    height: 24,
+    marginTop: 5,
     width: "100%",
     x: 0,
     y: 0,
-    fontSize: 14,
+    fontSize: 10,
     textX: 0,
     textY: 0,
   },
@@ -641,6 +643,18 @@ function makeEmptyBuilder(userTeamName, cpuTeamName) {
     userItems: [],
     cpuItems: [],
     updatedAt: Date.now(),
+  };
+}
+
+function sanitizeBuilderForStandardRoster(builder, userTeamName, cpuTeamName) {
+  const source = builder && typeof builder === "object" ? builder : {};
+  return {
+    ...source,
+    userTeamName: source.userTeamName || userTeamName,
+    cpuTeamName: source.cpuTeamName || cpuTeamName,
+    userItems: sanitizeTradeItems(source.userItems),
+    cpuItems: sanitizeTradeItems(source.cpuItems),
+    updatedAt: Number(source.updatedAt || Date.now()),
   };
 }
 
@@ -1717,19 +1731,9 @@ function refreshTeamFinancialSnapshot(team, leagueData) {
 }
 
 function getUnsupportedRosterTradePlayer(items = []) {
-  return (items || []).find((item) => {
-    if (item?.type !== "player" || !item.player) return false;
-    const player = item.player || {};
-    const status = String(player.rosterStatus || player.contractType || "").toLowerCase();
-    return Boolean(
-      player.isTwoWay ||
-        player.isStash ||
-        status.includes("two_way") ||
-        status.includes("two-way") ||
-        status.includes("stash") ||
-        status.includes("stashed")
-    );
-  }) || null;
+  return (items || []).find(
+    (item) => item?.type === "player" && item.player && isDevelopmentRosterPlayer(item.player)
+  ) || null;
 }
 
 function getProjectedStandardRosterCount(team, outgoingItems = [], incomingItems = []) {
@@ -2044,7 +2048,7 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
 
     return (
       <div
-        className="relative isolate w-full max-w-full overflow-hidden rounded-2xl border border-white/15 bg-black pr-10"
+        className="relative isolate w-full max-w-full overflow-hidden rounded-xl border border-white/15 bg-black pr-7"
         style={{ height: t.cardHeight, minWidth: 0, boxSizing: "border-box" }}
       >
         <TeamLogoWatermark team={team} />
@@ -2053,12 +2057,12 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
             e.stopPropagation();
             onRemove?.();
           }}
-          className="absolute right-2 top-2 z-20 rounded-full bg-black/70 px-2 py-0.5 text-xs font-black text-neutral-300 hover:bg-red-600 hover:text-white"
+          className="absolute right-1.5 top-1.5 z-20 rounded-full bg-black/70 px-1.5 py-0 text-[9px] font-black text-neutral-300 hover:bg-red-600 hover:text-white"
         >
           ✕
         </button>
 
-        <div className="relative z-10 flex h-full items-center gap-4">
+        <div className="relative z-10 flex h-full items-center gap-1.5">
           <div
             className="relative flex h-full shrink-0 items-end justify-center overflow-hidden rounded-l-2xl"
             style={{ width: t.face.boxWidth }}
@@ -2111,7 +2115,7 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
               {playerName}
             </div>
             <div
-              className="mt-1 font-black uppercase tracking-[0.18em] text-white"
+              className="mt-0.5 truncate font-black uppercase tracking-[0.08em] text-neutral-200"
               style={{
                 fontSize: t.positionAge.size,
                 transform: `translate(${t.positionAge.x}px, ${t.positionAge.y}px)`,
@@ -2122,7 +2126,7 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
               Age {player.age ?? "-"}
             </div>
             <div
-              className="mt-1 font-black uppercase tracking-[0.12em] text-white"
+              className="mt-0.5 truncate font-black uppercase tracking-[0.06em] text-neutral-300"
               style={{
                 fontSize: t.contract.size,
                 transform: `translate(${t.contract.x}px, ${t.contract.y}px)`,
@@ -2145,7 +2149,7 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
   const pickOriginalTeam = getPickOriginalTeamLogoTeam(leagueData, item.pick, team);
 
   return (
-    <div className="relative isolate h-full overflow-hidden rounded-2xl border border-white/15 bg-black p-4">
+    <div className="relative isolate h-full overflow-hidden rounded-xl border border-white/15 bg-black px-3 py-2">
       <TeamLogoWatermark team={pickOriginalTeam} />
       <button
         onClick={(e) => {
@@ -2156,8 +2160,8 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
       >
         ✕
       </button>
-      <div className="relative z-10 text-xs font-black uppercase tracking-[0.18em] text-orange-300">Draft Pick</div>
-      <div className="relative z-10 mt-2 pr-8 text-lg font-black text-white">
+      <div className="relative z-10 text-[9px] font-black uppercase tracking-[0.14em] text-orange-300">Draft Pick</div>
+      <div className="relative z-10 mt-1 pr-7 text-sm font-black leading-tight text-white">
         {pickLabel}
       </div>
     </div>
@@ -2169,10 +2173,11 @@ function EmptySlot({ label, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className="h-[126px] w-full rounded-2xl border border-white/15 bg-black p-6 text-left transition hover:border-orange-400/45"
+      disabled={!onClick}
+      className="h-[76px] w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-left transition hover:border-orange-400/45 disabled:cursor-default disabled:border-white/8 disabled:bg-white/[0.015] disabled:opacity-45"
     >
-      <div className="text-xl font-black text-white">{label}</div>
-      <div className="mt-2 text-sm font-semibold text-neutral-500">Player or Pick</div>
+      <div className="text-sm font-black text-white">{label}</div>
+      <div className="mt-1 text-[10px] font-semibold text-neutral-500">Player or Pick</div>
     </button>
   );
 }
@@ -2183,10 +2188,10 @@ function AddAssetButton({ onClick, disabled }) {
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="h-[126px] w-full rounded-2xl border border-white/15 bg-black p-6 text-left transition hover:border-orange-400/45 disabled:cursor-not-allowed disabled:opacity-40"
+      className="h-[76px] w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-left transition hover:border-orange-400/45 disabled:cursor-not-allowed disabled:opacity-40"
     >
-      <div className="text-xl font-black text-white">Add Trade Item</div>
-      <div className="mt-2 text-sm font-semibold text-neutral-500">Player or Pick</div>
+      <div className="text-sm font-black text-white">Add Trade Item</div>
+      <div className="mt-1 text-[10px] font-semibold text-neutral-500">Player or Pick</div>
     </button>
   );
 }
@@ -2397,20 +2402,20 @@ function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incoming
   });
 
   return (
-    <div className="overflow-hidden rounded-[28px] border border-white/15 bg-black">
-      <div className="border-b border-white/20 bg-black px-5 py-4">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-white/15 bg-black">
+      <div className="shrink-0 border-b border-white/20 bg-black px-4 py-2.5">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             {teamLogoOf(team) ? (
-              <img src={teamLogoOf(team)} alt={team?.name} className="h-12 w-12 shrink-0 object-contain" />
+              <img src={teamLogoOf(team)} alt={team?.name} className="h-9 w-9 shrink-0 object-contain" />
             ) : (
-              <div className="h-12 w-12 rounded-xl bg-white/5" />
+              <div className="h-9 w-9 rounded-lg bg-white/5" />
             )}
             <div className="min-w-0">
               <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">
                 {side === "user" ? "Your Team" : "CPU Team"}
               </div>
-              <div className="truncate text-xl font-black text-white">{team?.name || "Select Team"}</div>
+              <div className="truncate text-base font-black text-white">{team?.name || "Select Team"}</div>
             </div>
           </div>
           <div className="rounded-xl border border-orange-400/25 bg-black px-3 py-2 text-right">
@@ -2420,36 +2425,41 @@ function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incoming
         </div>
       </div>
 
-      <div className="grid min-w-0 gap-3 p-4">
-        {hasItems ? (
-          sortTradeItemsForDisplay(items).map((item) => {
-            const key = itemKey(item);
-            return (
-              <div key={`${side}-${key}`} className="w-full min-w-0 overflow-hidden" style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}>
+      <div className="bmTradeSideAssetGrid bmTableScroller grid min-h-0 flex-1 content-start gap-2 overflow-y-auto p-3">
+        {(() => {
+          const displayedItems = sortTradeItemsForDisplay(items);
+          const visibleSlotCount = Math.max(
+            1,
+            Math.min(MAX_SIDE_ITEMS, displayedItems.length + (canAddMore ? 1 : 0))
+          );
+
+          return Array.from({ length: visibleSlotCount }, (_, slotIndex) => {
+          const item = displayedItems[slotIndex] || null;
+          const key = item ? itemKey(item) : `empty-${slotIndex}`;
+
+          return (
+            <div
+              key={`${side}-${key}`}
+              className="w-full min-w-0 overflow-hidden"
+              style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}
+            >
+              {item ? (
                 <TradeItemCard
                   item={item}
                   team={team}
                   leagueData={leagueData}
-                  onRemove={() => onRemove(side, key)}
+                  onRemove={() => onRemove(side, itemKey(item))}
                 />
-              </div>
-            );
-          })
-        ) : (
-          <div className="w-full min-w-0 overflow-hidden" style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}>
-            <EmptySlot label="Add Trade Item" onClick={() => onAdd(side, 0)} />
-          </div>
-        )}
-
-        {hasItems && canAddMore && (
-          <AddAssetButton onClick={() => onAdd(side, items.length)} />
-        )}
-
-        {hasItems && !canAddMore && (
-          <div className="rounded-2xl border border-white/15 bg-black px-5 py-4 text-xs font-bold text-neutral-500">
-            Maximum trade assets added for this side.
-          </div>
-        )}
+              ) : (
+                <EmptySlot
+                  label={`Add Asset ${slotIndex + 1}`}
+                  onClick={canAddMore ? () => onAdd(side, slotIndex) : undefined}
+                />
+              )}
+            </div>
+          );
+          });
+        })()}
       </div>
 
       <TradeFinancialFooter
@@ -2479,16 +2489,26 @@ export default function ProposeTrade() {
     [teams, userTeamName]
   );
   const firstCpu = cpuTeamOptions[0]?.name || "";
+  const resumeMarker = sessionStorage.getItem("bm_trade_builder_resume_v1");
+  const shouldResumeSavedBuilder = Boolean(
+    location.state?.resumeTradeBuilder || location.state?.fromTradeFinder || resumeMarker
+  );
 
   const [builder, setBuilder] = useState(() => {
     const saved = safeReadBuilder();
-    return saved || makeEmptyBuilder(userTeamName, firstCpu);
+    sessionStorage.removeItem("bm_trade_builder_resume_v1");
+    if (shouldResumeSavedBuilder && saved) {
+      return sanitizeBuilderForStandardRoster(saved, userTeamName, firstCpu);
+    }
+    return makeEmptyBuilder(userTeamName, firstCpu);
   });
   const [slotMenu, setSlotMenu] = useState(null);
   const [notice, setNotice] = useState("");
   const [evaluation, setEvaluation] = useState(() => {
-    const saved = safeReadBuilder();
-    return saved?.source === "tradeFinder" && saved?.tradeFinderEvaluation ? saved.tradeFinderEvaluation : null;
+    const saved = shouldResumeSavedBuilder ? safeReadBuilder() : null;
+    return location.state?.fromTradeFinder && saved?.source === "tradeFinder" && saved?.tradeFinderEvaluation
+      ? saved.tradeFinderEvaluation
+      : null;
   });
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2544,7 +2564,11 @@ export default function ProposeTrade() {
     }
 
     setBuilder((prev) => {
-      const saved = prev || makeEmptyBuilder(userTeamName, firstCpu);
+      const saved = sanitizeBuilderForStandardRoster(
+        prev || makeEmptyBuilder(userTeamName, firstCpu),
+        userTeamName,
+        firstCpu
+      );
       const userTeamChanged = Boolean(saved?.userTeamName && saved.userTeamName !== userTeamName);
       const cpuTeamStillValid = Boolean(
         saved?.cpuTeamName &&
@@ -2785,6 +2809,9 @@ export default function ProposeTrade() {
       const nextBuilder = makeEmptyBuilder(userTeamName, cpuTeamName || firstCpu);
       setBuilder(nextBuilder);
       saveBuilder(nextBuilder);
+      if (cameFromTradeFinder) {
+        localStorage.removeItem(TRADE_FINDER_STATE_KEY);
+      }
       setEvaluation(null);
       setNotice(`Trade completed: ${userTeamName} and ${cpuTeamName} have finalized the deal.`);
     } catch (error) {
@@ -2809,9 +2836,9 @@ export default function ProposeTrade() {
 
   return (
     <PageFade>
-      <div className="min-h-screen bmCourtPage text-white px-4 py-8">
-        <div className="mx-auto w-full max-w-7xl">
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
+      <div className="h-screen min-h-0 overflow-hidden bmCourtPage text-white px-3 py-3">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1760px] flex-col">
+          <div className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-3">
             <button
               onClick={leaveTradeBuilder}
               className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-neutral-200 hover:bg-white/10 hover:text-white"
@@ -2823,7 +2850,7 @@ export default function ProposeTrade() {
               <div className="text-xs font-black uppercase tracking-[0.24em] text-orange-300">
                 Propose Trades
               </div>
-              <h1 className="mt-1 text-4xl font-black text-orange-500">Trade Builder</h1>
+              <h1 className="mt-0.5 text-3xl font-black text-orange-500 leading-none">Trade Builder</h1>
             </div>
 
             <button
@@ -2834,7 +2861,7 @@ export default function ProposeTrade() {
             </button>
           </div>
 
-          <div className="mb-5 grid gap-4 rounded-2xl border border-white/10 bg-black px-5 py-4 xl:grid-cols-[1fr_auto_1fr] xl:items-center">
+          <div className="mb-2 grid shrink-0 gap-3 rounded-xl border border-white/10 bg-black px-4 py-2 xl:grid-cols-[1fr_auto_1fr] xl:items-center">
             <div className="text-sm font-semibold text-neutral-300">
               Current Team: <span className="font-black text-white">{userTeamName}</span>
             </div>
@@ -2880,7 +2907,7 @@ export default function ProposeTrade() {
           )}
 
           {(notice || evaluation) && (
-            <div className="mb-5 grid gap-3 xl:grid-cols-[0.9fr_1.1fr]">
+            <div className="mb-2 grid max-h-[118px] shrink-0 gap-2 overflow-y-auto xl:grid-cols-[0.9fr_1.1fr] bmTableScroller">
               {notice && (
                 <div className="relative rounded-2xl border border-orange-400/25 bg-orange-500/10 p-3 pr-10 text-xs font-bold text-orange-100">
                   <button
@@ -2928,7 +2955,7 @@ export default function ProposeTrade() {
             </div>
           )}
 
-          <div className="grid gap-5 xl:grid-cols-2">
+          <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-2">
             <SidePanel
               side="user"
               team={userTeam}

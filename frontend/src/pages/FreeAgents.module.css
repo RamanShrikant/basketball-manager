@@ -22,3 +22,54 @@
 :global(body) {
   background-color: #0d0d0d;
 }
+
+.viewportShell {
+  min-height: 0;
+}
+
+.offseasonDashboard {
+  max-height: 24vh;
+  scrollbar-gutter: stable;
+}
+
+.tableViewport {
+  scrollbar-width: auto;
+  scrollbar-color: #f97316 rgba(18,18,18,0.96);
+  scrollbar-gutter: stable both-edges;
+  overscroll-behavior: contain;
+}
+
+.tableViewport::-webkit-scrollbar,
+.offseasonDashboard::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.tableViewport::-webkit-scrollbar-track,
+.offseasonDashboard::-webkit-scrollbar-track {
+  background: rgba(18,18,18,0.96);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.tableViewport::-webkit-scrollbar-thumb,
+.offseasonDashboard::-webkit-scrollbar-thumb {
+  background: linear-gradient(90deg, #ea580c, #fb923c);
+  border: 2px solid rgba(18,18,18,0.96);
+  border-radius: 999px;
+}
+
+.legacyBackRow {
+  display: none !important;
+}
+
+@media (max-width: 1023px) {
+  .viewportShell {
+    height: auto !important;
+    min-height: 100vh;
+    overflow: visible !important;
+  }
+
+  .legacyBackRow {
+    display: flex !important;
+  }
+}

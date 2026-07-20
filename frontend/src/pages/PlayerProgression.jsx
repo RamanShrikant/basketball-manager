@@ -5,6 +5,8 @@ import { computePlayerProgression } from "../api/simEnginePy";
 import { loadLeagueData, saveLeagueData } from "../utils/leagueStorage.js";
 import { recomputeDerivedRatingsInLeague } from "../utils/playerProgressionDerived_v1.js";
 import styles from "./PlayerProgression.module.css";
+import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
+import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
 
 const DELTAS_KEY = "bm_progression_deltas_v1";
 const PROG_META_KEY = "bm_progression_meta_v1";
@@ -2645,6 +2647,31 @@ export default function PlayerProgression() {
     return ["ALL", ...names, ...(hasFreeAgents ? [FREE_AGENTS_TEAM_LABEL] : [])];
   }, [teams, leagueData]);
 
+  const progressionTeamNames = useMemo(
+    () => (teams || []).map((team) => team?.name).filter(Boolean).sort(),
+    [teams]
+  );
+
+  const handleTeamCycle = (dir) => {
+    if (!progressionTeamNames.length) return;
+    const currentIndex = progressionTeamNames.indexOf(teamFilter);
+    const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex =
+      dir === "next"
+        ? (baseIndex + 1) % progressionTeamNames.length
+        : (baseIndex - 1 + progressionTeamNames.length) % progressionTeamNames.length;
+    setTeamFilter(progressionTeamNames[nextIndex]);
+    setFeaturedKey(null);
+    setSortConfig({ key: "overall", direction: "desc" });
+    setHasDefaultedTeamFilter(true);
+  };
+
+  useKeyboardTeamNavigation({
+    enabled: progressionTeamNames.length > 1,
+    onPrevious: () => handleTeamCycle("prev"),
+    onNext: () => handleTeamCycle("next"),
+  });
+
   useEffect(() => {
     if (hasDefaultedTeamFilter) return;
     const selectedTeamName = selectedTeam?.name;
@@ -2717,6 +2744,11 @@ export default function PlayerProgression() {
     return sortedRows.find((r) => r.__key === featuredKey) || sortedRows[0];
   }, [sortedRows, featuredKey]);
 
+  const progressionRowHeight =
+    sortedRows.length > 0 && sortedRows.length <= 16 && teamFilter !== "ALL"
+      ? `clamp(32px, calc((100vh - 190px) / ${sortedRows.length}), 46px)`
+      : undefined;
+
   const deltaFor = (row, key) => {
     const byKey = deltas?.[row.__key];
     if (byKey && typeof byKey === "object") return Number(byKey?.[key] ?? 0) || 0;
@@ -2751,153 +2783,97 @@ export default function PlayerProgression() {
   const circleCircumference = 2 * Math.PI * 50;
   const strokeOffset = circleCircumference * (1 - fillPercent);
 
+  useKeyboardListNavigation({
+    items: sortedRows,
+    selectedItem: featured,
+    onSelect: (row) => setFeaturedKey(row?.__key || null),
+    enabled: true,
+    getKey: (row) => row?.__key || row?.id || row?.name,
+  });
+
   if (!leagueData) {
     return (
-      <div className={`${styles.progressionPage} min-h-screen text-white flex items-center justify-center`}>
+      <div className={`${styles.progressionPage} bmCourtPage flex h-full items-center justify-center text-white`}>
         Loading progression...
       </div>
     );
   }
 
   return (
-    <div className={`${styles.progressionPage} min-h-screen text-white py-10`}>
-      <style>{`
-        .bm-orange-scroll {
-          scrollbar-width: thin;
-          scrollbar-color: #f97316 #171717;
-        }
-
-        .bm-orange-scroll::-webkit-scrollbar {
-          width: 10px;
-          height: 10px;
-        }
-
-        .bm-orange-scroll::-webkit-scrollbar-track {
-          background: #171717;
-          border-radius: 9999px;
-        }
-
-        .bm-orange-scroll::-webkit-scrollbar-thumb {
-          background: linear-gradient(to bottom, #f97316, #c2410c);
-          border-radius: 9999px;
-          border: 2px solid #171717;
-        }
-
-        .bm-orange-scroll::-webkit-scrollbar-thumb:hover {
-          background: linear-gradient(to bottom, #fb923c, #ea580c);
-        }
-      `}</style>
-
-      <div className="max-w-6xl mx-auto px-4">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-4xl font-extrabold text-orange-500">Player Progression</h1>
-          <div className="flex items-center gap-3">
-            <select
-              value={teamFilter}
-              onChange={(e) => {
-                setTeamFilter(e.target.value);
-                setFeaturedKey(null);
-                setSortConfig({ key: "overall", direction: "desc" });
-                setHasDefaultedTeamFilter(true);
-              }}
-              className="px-3 py-2 bg-neutral-800 rounded border border-neutral-700"
-            >
-              {teamOptions.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={handleReturnToOffseasonHub}
-              className="px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
-            >
-              Back to Offseason Hub
-            </button>
+    <div className={`${styles.progressionPage} bmCourtPage h-full overflow-hidden px-4 py-3 text-white`}>
+      <div className="mx-auto flex h-full min-h-0 max-w-[1800px] flex-col gap-2">
+        <div className="flex shrink-0 items-center justify-between gap-4">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-white/40">Offseason</p>
+            <h1 className="text-2xl font-black text-orange-500">Player Progression</h1>
           </div>
+          <select
+            value={teamFilter}
+            onChange={(e) => {
+              setTeamFilter(e.target.value);
+              setFeaturedKey(null);
+              setSortConfig({ key: "overall", direction: "desc" });
+              setHasDefaultedTeamFilter(true);
+            }}
+            className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm font-bold"
+          >
+            {teamOptions.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
         </div>
 
         {featured && (
-          <div className={`${styles.featurePanel} relative bg-neutral-800/95 backdrop-blur-md border border-neutral-700 rounded-xl shadow-lg px-8 pt-7 pb-4 mb-6`}>
-            <div className="absolute left-0 right-0 bottom-0 h-[2px] bg-white opacity-20" />
-
-            <div className="flex items-end justify-between gap-6">
-              <div className="flex items-end gap-6">
-                <div className="relative -mb-[8px]">
-                  {portraitSrc ? (
-                    <img src={portraitSrc} alt={featured.name} className="h-[170px] w-auto object-contain" />
-                  ) : (
-                    <div className="h-[170px] w-[120px] bg-neutral-700 rounded-lg flex items-center justify-center text-neutral-300">
-                      No Photo
-                    </div>
-                  )}
-                </div>
-
-                <div className="mb-2">
-                  <h2 className="text-[42px] font-bold leading-tight">{featured.name}</h2>
-                  <p className="text-gray-400 text-[22px] mt-1 flex items-center gap-2">
-                    {featured.pos} •{" "}
-                    {featuredTeamLogo ? (
-                      <img
-                        src={featuredTeamLogo}
-                        alt={featured.team}
-                        className="h-[22px] w-[22px] object-contain inline-block"
-                        draggable={false}
-                      />
-                    ) : (
-                      <span className="inline-block min-w-[22px] text-sm text-neutral-500">{featured.__isFreeAgent ? "FA" : ""}</span>
-                    )}{" "}
-                    • Age {featured.age}
-                  </p>
+          <div className={`${styles.featurePanel} relative flex h-[100px] shrink-0 items-end justify-between overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900/95 px-5`}>
+            <div className="flex min-w-0 items-end gap-4">
+              <div className="h-[94px] w-[86px] shrink-0 overflow-hidden">
+                {portraitSrc ? (
+                  <img src={portraitSrc} alt={featured.name} className="h-full w-full object-contain object-bottom" />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-xs text-neutral-500">No Photo</div>
+                )}
+              </div>
+              <div className="min-w-0 pb-3">
+                <h2 className="truncate text-2xl font-black leading-none">{featured.name}</h2>
+                <div className="mt-2 flex items-center gap-2 text-sm font-bold text-neutral-400">
+                  <span>{featured.pos}</span>
+                  <span>•</span>
+                  {featuredTeamLogo && <img src={featuredTeamLogo} alt="" className="h-5 w-5 object-contain" />}
+                  <span className="truncate">{featured.team}</span>
+                  <span>•</span>
+                  <span>Age {featured.age}</span>
                 </div>
               </div>
+            </div>
 
-              <div className="relative flex items-center justify-center mr-2 mb-2">
-                <svg width="105" height="105" viewBox="0 0 120 120">
-                  <defs>
-                    <linearGradient id="ovrGradientProg" x1="0%" y1="0%" x2="100%" y2="0%">
-                      <stop offset="0%" stopColor="#FFA500" />
-                      <stop offset="100%" stopColor="#FFD54F" />
-                    </linearGradient>
-                  </defs>
-                  <circle cx="60" cy="60" r="50" stroke="rgba(255,255,255,0.08)" strokeWidth="8" fill="none" />
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r="50"
-                    stroke="url(#ovrGradientProg)"
-                    strokeWidth="8"
-                    strokeLinecap="round"
-                    fill="none"
-                    strokeDasharray={circleCircumference}
-                    strokeDashoffset={strokeOffset}
-                    transform="rotate(-90 60 60)"
-                  />
-                </svg>
-
-                <div className="absolute text-center">
-                  <p className="text-sm text-gray-300">OVR</p>
-                  <p className="text-[44px] font-extrabold text-orange-400 leading-none mt-[-6px]">
-                    {featured.overall}
-                  </p>
-                  <p className="text-[10px] text-gray-400">
-                    POT <span className="text-orange-400 font-semibold">{featured.potential}</span>
-                  </p>
-                </div>
+            <div className="flex shrink-0 items-center gap-5 pb-3">
+              <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                {[
+                  ["OVR", featured.overall, deltaFor(featured, "overall")],
+                  ["OFF", featured.offRating, deltaFor(featured, "offRating")],
+                  ["DEF", featured.defRating, deltaFor(featured, "defRating")],
+                  ["POT", featured.potential, 0],
+                ].map(([label, value, delta]) => (
+                  <div key={label} className="min-w-[62px] rounded-lg border border-white/10 bg-black/30 px-2 py-1.5">
+                    <div className="text-[9px] font-black uppercase tracking-wider text-white/45">{label}</div>
+                    <div className="text-lg font-black text-orange-300">{value}<DeltaBadge d={delta} /></div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
         )}
-        <div className={`${styles.tablePanel} bm-orange-scroll max-h-[610px] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900`}>
-          <div className="min-w-[1300px] max-w-max mx-auto">
+
+        <div className={`${styles.tablePanel} bmTableScroller min-h-0 flex-1 overflow-auto rounded-xl border border-neutral-700 bg-neutral-950`}>
+          <div className="min-w-[1300px]">
             <table className="w-full border-collapse text-center">
-              <thead className="sticky top-0 z-20 bg-neutral-800 text-gray-300 text-[16px] font-semibold">
+              <thead className="sticky top-0 z-20 bg-neutral-800 text-xs font-black uppercase tracking-wide text-gray-300">
                 <tr>
                   {[
                     { key: "name", label: "Name" },
-                    { key: "team", label: "TEAM" },
-                    { key: "pos", label: "POS" },
-                    { key: "age", label: "AGE" },
+                    { key: "team", label: "Team" },
+                    { key: "pos", label: "Pos" },
+                    { key: "age", label: "Age" },
                     { key: "overall", label: "OVR" },
                     { key: "offRating", label: "OFF" },
                     { key: "defRating", label: "DEF" },
@@ -2907,80 +2883,42 @@ export default function PlayerProgression() {
                   ].map((col) => (
                     <th
                       key={col.key}
-                      className={`py-3 px-3 min-w-[95px] ${
-                        col.key === "name" ? "min-w-[200px] text-left pl-4" : "text-center"
-                      } cursor-pointer select-none`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleSort(col.key);
-                      }}
+                      className={`cursor-pointer select-none px-3 py-2 ${col.key === "name" ? "min-w-[210px] text-left" : "min-w-[78px]"}`}
+                      onClick={(e) => { e.stopPropagation(); handleSort(col.key); }}
                     >
                       {col.label}
-                      {sortConfig.key === col.key && (
-                        <span className="ml-1 text-orange-400">
-                          {sortConfig.direction === "asc"
-                            ? "▲"
-                            : sortConfig.direction === "desc"
-                            ? "▼"
-                            : ""}
-                        </span>
-                      )}
+                      {sortConfig.key === col.key && <span className="ml-1 text-orange-400">{sortConfig.direction === "asc" ? "▲" : sortConfig.direction === "desc" ? "▼" : ""}</span>}
                     </th>
                   ))}
                 </tr>
               </thead>
-
-              <tbody className="text-[17px] font-medium">
+              <tbody className="text-sm font-semibold">
                 {sortedRows.map((p, idx) => {
                   const active = p.__key === featured?.__key;
                   const logo = teamLogoByName?.[p.team] || null;
-
                   return (
                     <tr
                       key={`${p.__key}-${idx}`}
-                      className={`transition cursor-pointer ${active ? "bg-orange-600/25" : "hover:bg-neutral-800"}`}
+                      data-bm-nav-row-index={idx}
+                      className={`cursor-pointer border-t border-white/[0.035] transition ${active ? "bg-orange-600 text-white" : "hover:bg-neutral-800"}`}
+                      style={progressionRowHeight ? { height: progressionRowHeight } : undefined}
                       onClick={() => setFeaturedKey(p.__key)}
                     >
-                      <td className="py-2 px-3 whitespace-nowrap text-left pl-4 font-semibold">{p.name}</td>
-
-                      <td className="py-2 px-3">
-                        {logo ? (
-                          <img
-                            src={logo}
-                            alt={p.team}
-                            className="h-[22px] w-[22px] object-contain mx-auto"
-                            draggable={false}
-                          />
-                        ) : (
-                          <span className="text-neutral-500">{p.__isFreeAgent ? "FA" : "-"}</span>
-                        )}
-                      </td>
-
-                      <td className="py-2 px-3">{p.pos}</td>
-
-                      <td className="py-2 px-3">
-                        <span>{p.age}</span>
-                        <DeltaBadge d={deltaFor(p, "age")} />
-                      </td>
-
+                      <td className="whitespace-nowrap px-3 py-1.5 text-left font-black">{p.name}</td>
+                      <td className="px-3 py-1.5">{logo ? <img src={logo} alt={p.team} className="mx-auto h-5 w-5 object-contain" /> : <span className="text-neutral-500">FA</span>}</td>
+                      <td className="px-3 py-1.5">{p.pos}</td>
+                      <td className="px-3 py-1.5"><span>{p.age}</span><DeltaBadge d={deltaFor(p, "age")} /></td>
                       {["overall", "offRating", "defRating", "stamina"].map((k) => (
-                        <td key={k} className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                          <span>{showLetters ? toLetter(p[k]) : p[k]}</span>
-                          <DeltaBadge d={deltaFor(p, k)} />
+                        <td key={k} className="px-3 py-1.5" onDoubleClick={handleCellDoubleClick}>
+                          <span>{showLetters ? toLetter(p[k]) : p[k]}</span><DeltaBadge d={deltaFor(p, k)} />
                         </td>
                       ))}
-
-                      <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                        {showLetters ? toLetter(p.potential) : p.potential}
-                      </td>
-
+                      <td className="px-3 py-1.5" onDoubleClick={handleCellDoubleClick}>{showLetters ? toLetter(p.potential) : p.potential}</td>
                       {attrColumns.map((a) => {
                         const val = p.attrs?.[a.index] ?? 0;
-                        const d = deltaFor(p, a.key);
                         return (
-                          <td key={a.key} className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                            <span>{showLetters ? toLetter(val) : val}</span>
-                            <DeltaBadge d={d} />
+                          <td key={a.key} className="px-3 py-1.5" onDoubleClick={handleCellDoubleClick}>
+                            <span>{showLetters ? toLetter(val) : val}</span><DeltaBadge d={deltaFor(p, a.key)} />
                           </td>
                         );
                       })}
@@ -2989,10 +2927,6 @@ export default function PlayerProgression() {
                 })}
               </tbody>
             </table>
-
-            <div className="text-xs text-neutral-400 mt-3">
-              ▲/▼ shows change from last season. Double-click any rating cell to toggle numbers/letters.
-            </div>
           </div>
         </div>
       </div>

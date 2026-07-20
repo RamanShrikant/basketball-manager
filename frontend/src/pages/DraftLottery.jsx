@@ -325,6 +325,36 @@ function readDraftLottery(seasonYear) {
   return saved;
 }
 
+function isCompletedLotteryState(state) {
+  return Boolean(
+    state?.firstRoundRevealed &&
+    state?.secondRoundRevealed &&
+    !state?.isPreview
+  );
+}
+
+function offseasonExpectsCompletedLottery(seasonYear) {
+  const offseason = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), null);
+  if (!offseason || typeof offseason !== "object") return false;
+  if (Number(offseason.seasonYear) !== Number(seasonYear)) return false;
+  return Boolean(offseason.draftLotteryComplete);
+}
+
+function readLotteryForCurrentStage(seasonYear) {
+  const saved = readDraftLottery(seasonYear);
+  if (!saved) return null;
+
+  // A completed lottery can survive a season reset/new save when the same
+  // draft year is played again. The offseason stage is the authoritative
+  // signal: when it says the lottery has not been run, do not preload an old
+  // locked result and rob the user of the reveal.
+  if (isCompletedLotteryState(saved) && !offseasonExpectsCompletedLottery(seasonYear)) {
+    return null;
+  }
+
+  return saved;
+}
+
 function saveDraftLottery(row) {
   localStorage.setItem(DRAFT_LOTTERY_KEY, JSON.stringify(row));
 }
@@ -725,76 +755,103 @@ function LotteryOddsTable({ rows = [], firstRoundRevealed = false }) {
   );
 }
 
-function DraftMatrix({ rows = [], system, firstRoundRevealed = false }) {
+function getMatrixPickCount(rows = [], system = "") {
+  const oddsMax = (Array.isArray(rows) ? rows : []).reduce((highest, row) => {
+    const odds = row?.pickOddsByPick && typeof row.pickOddsByPick === "object"
+      ? Object.keys(row.pickOddsByPick).map(Number).filter(Number.isFinite)
+      : [];
+    return Math.max(highest, ...odds, 0);
+  }, 0);
+  return Math.max(1, rows.length, oddsMax, system === "three_two_one" ? 16 : 14);
+}
+
+function DraftMatrix({
+  rows = [],
+  system,
+  firstRoundRevealed = false,
+  revealedPicks = new Set(),
+  activeRevealPick = 0,
+}) {
   if (!rows.length) return null;
-  const maxPick = system === "three_two_one" ? 16 : 14;
+  const maxPick = getMatrixPickCount(rows, system);
   const pickColumns = Array.from({ length: maxPick }, (_, index) => index + 1);
+  const compactTeamLabel = (name = "") => {
+    const words = String(name).trim().split(/\s+/).filter(Boolean);
+    if (words.length <= 2) return words.join(" ");
+    return `${words[0]} ${words.at(-1)}`;
+  };
 
   return (
-    <div className="bmTablePanel rounded-3xl bg-neutral-900 border border-white/10 overflow-hidden shadow-2xl mb-8">
-      <div className="px-5 py-4 bg-neutral-800/80 border-b border-white/10">
-        <h2 className="text-2xl font-extrabold">Draft Probability Matrix</h2>
-        <p className="text-sm text-white/50">
-          Green marks the expected pick. Logos show the projected current owner before the reveal, then update to the actual resolved owner after the reveal.
-        </p>
-      </div>
-      <div className="overflow-x-hidden">
-        <div className="w-full">
-          <div
-            className="grid gap-1 px-3 py-3 bg-neutral-950/80 text-[10px] uppercase tracking-wide text-white/45 font-black border-b border-white/10 sticky top-0 z-10"
-            style={{ gridTemplateColumns: `210px repeat(${maxPick}, minmax(44px, 1fr))` }}
-          >
-            <div>Team</div>
-            {pickColumns.map((pick) => <div key={pick} className="text-center">#{pick}</div>)}
-          </div>
-
-          {rows.map((row, rowIndex) => {
-            const expectedPick = Number(row.expectedPick || row.projectedPick || row.lotterySeed || 0);
-            const finalPick = firstRoundRevealed ? Number(row.finalPick || 0) : 0;
-            return (
-              <div
-                key={`${row.teamName}-matrix-${rowIndex}`}
-                className="grid gap-1 px-3 py-2 border-b border-white/10 items-center hover:bg-white/[0.035]"
-                style={{ gridTemplateColumns: `210px repeat(${maxPick}, minmax(44px, 1fr))` }}
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <TeamLogo src={row.matrixOwnerLogo || row.logo} name={row.matrixOwnerTeamName || row.teamName} size={24} />
-                  <div className="min-w-0">
-                    <div className="font-bold truncate">{row.matrixOwnerTeamName || row.teamName}</div>
-                    <div className="text-[11px] text-white/40 truncate" title={row.matrixOwnershipSubtext}>
-                      {row.matrixOwnershipSubtext || "Pick rights"}
-                    </div>
-                  </div>
-                </div>
-                {pickColumns.map((pick) => {
-                  const pct = getPickOddsFromMap(row, pick);
-                  const intensity = Math.min(0.66, Math.max(0.035, pct / 45));
-                  const isExpected = Number(expectedPick) === pick;
-                  const isFinal = Number(finalPick) === pick;
-                  const bg = isExpected
-                    ? `rgba(16, 185, 129, ${Math.max(0.24, intensity)})`
-                    : `rgba(249, 115, 22, ${intensity})`;
-                  const borderClass = isFinal
-                    ? "border-amber-300 ring-2 ring-amber-300/80 text-amber-50"
-                    : isExpected
-                    ? "border-emerald-300/80 text-emerald-50"
-                    : "border-white/5 text-white/75";
-                  return (
-                    <div
-                      key={pick}
-                      className={`relative rounded-md px-1 py-2 text-center text-[11px] font-black border ${borderClass}`}
-                      style={{ background: bg }}
-                      title={`${row.matrixOriginalTeamName || row.teamName} odds at #${pick}: ${formatChance(pct)}`}
-                    >
-                      {pct > 0 ? formatChance(pct) : "-"}
-                      {isFinal ? <div className="mt-1 text-[8px] tracking-wide text-amber-100">FINAL</div> : null}
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
+    <div className="bmTablePanel rounded-2xl bg-neutral-900 border border-white/10 overflow-hidden shadow-2xl mb-3">
+      <div className="px-3 py-2 bg-neutral-800/80 border-b border-white/10 flex items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg font-extrabold leading-tight">Draft Probability Matrix</h2>
+          <p className="text-[10px] text-white/45 truncate">
+            Expected pick is green. The resolved pick is outlined after the reveal.
+          </p>
         </div>
+        <div className="text-[10px] uppercase tracking-[0.16em] text-white/35 shrink-0">
+          {rows.length} teams · {maxPick} picks
+        </div>
+      </div>
+      <div className="w-full overflow-hidden">
+        <div
+          className="grid gap-[3px] px-2 py-1.5 bg-neutral-950/80 text-[9px] uppercase tracking-wide text-white/45 font-black border-b border-white/10"
+          style={{ gridTemplateColumns: `138px repeat(${maxPick}, minmax(0, 1fr))` }}
+        >
+          <div>Team</div>
+          {pickColumns.map((pick) => <div key={pick} className="text-center">#{pick}</div>)}
+        </div>
+
+        {rows.map((row, rowIndex) => {
+          const expectedPick = Number(row.expectedPick || row.projectedPick || row.lotterySeed || 0);
+          const resolvedFinalPick = Number(row.finalPick || 0);
+          const finalPick = firstRoundRevealed || revealedPicks.has(resolvedFinalPick)
+            ? resolvedFinalPick
+            : 0;
+          const displayedTeam = row.matrixOwnerTeamName || row.teamName;
+          return (
+            <div
+              key={`${row.teamName}-matrix-${rowIndex}`}
+              className={`grid gap-[3px] px-2 py-[3px] border-b items-center transition ${
+                Number(activeRevealPick) === Number(finalPick) && finalPick
+                  ? "border-amber-300/80 bg-amber-400/15"
+                  : "border-white/[0.07] hover:bg-white/[0.035]"
+              }`}
+              style={{ gridTemplateColumns: `138px repeat(${maxPick}, minmax(0, 1fr))` }}
+              title={row.matrixOwnershipSubtext || displayedTeam}
+            >
+              <div className="flex items-center gap-1.5 min-w-0">
+                <TeamLogo src={row.matrixOwnerLogo || row.logo} name={displayedTeam} size={18} />
+                <div className="min-w-0 text-[10px] font-bold truncate">{compactTeamLabel(displayedTeam)}</div>
+              </div>
+              {pickColumns.map((pick) => {
+                const pct = getPickOddsFromMap(row, pick);
+                const intensity = Math.min(0.66, Math.max(0.035, pct / 45));
+                const isExpected = Number(expectedPick) === pick;
+                const isFinal = Number(finalPick) === pick;
+                const bg = isExpected
+                  ? `rgba(16, 185, 129, ${Math.max(0.24, intensity)})`
+                  : `rgba(249, 115, 22, ${intensity})`;
+                const borderClass = isFinal
+                  ? "border-amber-300 ring-1 ring-amber-300/90 text-amber-50"
+                  : isExpected
+                  ? "border-emerald-300/80 text-emerald-50"
+                  : "border-white/5 text-white/75";
+                return (
+                  <div
+                    key={pick}
+                    className={`rounded px-0.5 py-1 text-center text-[9px] leading-none font-black border ${borderClass}`}
+                    style={{ background: bg }}
+                    title={`${row.matrixOriginalTeamName || row.teamName} odds at #${pick}: ${formatChance(pct)}${isFinal ? " · Final pick" : ""}`}
+                  >
+                    {pct > 0 ? formatChance(pct) : "-"}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -805,16 +862,37 @@ export default function DraftLottery() {
   const { leagueData, setLeagueData } = useGame();
 
   const seasonYear = getSeasonYear(leagueData);
-  const [lotteryState, setLotteryState] = useState(() => readDraftLottery(seasonYear));
+  const [lotteryState, setLotteryState] = useState(() => readLotteryForCurrentStage(seasonYear));
   const [lotterySystem, setLotterySystem] = useState(() => localStorage.getItem(DEV_LOTTERY_SYSTEM_KEY) || "auto");
   const [loading, setLoading] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState("");
+  const [revealingLottery, setRevealingLottery] = useState(false);
+  const [revealedLotteryPicks, setRevealedLotteryPicks] = useState(() => new Set());
+  const [activeRevealPick, setActiveRevealPick] = useState(0);
   const preparingRef = useRef(false);
+  const revealRunRef = useRef(0);
 
   useEffect(() => {
-    setLotteryState(readDraftLottery(seasonYear));
+    const saved = readDraftLottery(seasonYear);
+    const staleCompletedResult = Boolean(
+      saved &&
+      isCompletedLotteryState(saved) &&
+      !offseasonExpectsCompletedLottery(seasonYear)
+    );
+
+    if (staleCompletedResult) {
+      localStorage.removeItem(DRAFT_LOTTERY_KEY);
+      setLotteryState(null);
+      return;
+    }
+
+    setLotteryState(saved);
   }, [seasonYear]);
+
+  useEffect(() => () => {
+    revealRunRef.current += 1;
+  }, []);
 
   const latestHistory = useMemo(() => getLatestSeasonHistoryEntry(leagueData, seasonYear), [leagueData, seasonYear]);
 
@@ -943,33 +1021,45 @@ export default function DraftLottery() {
     localStorage.setItem(DEV_LOTTERY_SYSTEM_KEY, system);
   };
 
-  const revealFirstRound = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      await runLotteryBackend({ revealFirst: true, revealSecond: secondRoundRevealed });
-    } catch (err) {
-      console.error("[DraftLottery] revealFirstRound failed", err);
-      setError(String(err?.message || err));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const startDraftLotteryReveal = async () => {
+    if (!result || loading || preparing || revealingLottery || lotteryComplete) return;
 
-  const revealSecondRound = async () => {
-    setLoading(true);
+    const runId = revealRunRef.current + 1;
+    revealRunRef.current = runId;
+    const maxPick = getMatrixPickCount(matrixRows, resolvedSystem);
+
     setError("");
+    setRevealingLottery(true);
+    setActiveRevealPick(0);
+    setRevealedLotteryPicks(new Set());
+
     try {
+      for (let pick = maxPick; pick >= 1; pick -= 1) {
+        if (revealRunRef.current !== runId) return;
+        setActiveRevealPick(pick);
+        setRevealedLotteryPicks((previous) => {
+          const next = new Set(previous);
+          next.add(pick);
+          return next;
+        });
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      }
+
+      if (revealRunRef.current !== runId) return;
       await runLotteryBackend({ revealFirst: true, revealSecond: true });
+      setActiveRevealPick(0);
     } catch (err) {
-      console.error("[DraftLottery] revealSecondRound failed", err);
+      console.error("[DraftLottery] animated reveal failed", err);
       setError(String(err?.message || err));
     } finally {
-      setLoading(false);
+      if (revealRunRef.current === runId) setRevealingLottery(false);
     }
   };
 
   const simAll = async () => {
+    revealRunRef.current += 1;
+    setRevealingLottery(false);
+    setActiveRevealPick(0);
     setLoading(true);
     setError("");
     try {
@@ -983,6 +1073,10 @@ export default function DraftLottery() {
   };
 
   const resetLottery = async () => {
+    revealRunRef.current += 1;
+    setRevealingLottery(false);
+    setRevealedLotteryPicks(new Set());
+    setActiveRevealPick(0);
     setLoading(true);
     setError("");
     try {
@@ -1064,6 +1158,8 @@ export default function DraftLottery() {
 
   const statusLabel = preparing
     ? "Preparing"
+    : revealingLottery
+    ? `Revealing #${activeRevealPick}`
     : lotteryComplete
     ? "Locked"
     : firstRoundRevealed
@@ -1077,7 +1173,7 @@ export default function DraftLottery() {
   }
 
   return (
-    <div className="min-h-screen bmCourtPage text-white py-8 px-4">
+    <div className="bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white">
       <style>{`
         .bmOrangeScrollbar { scrollbar-width: thin; scrollbar-color: rgba(249, 115, 22, 0.92) rgba(12, 12, 12, 0.78); }
         .bmOrangeScrollbar::-webkit-scrollbar { width: 12px; height: 12px; }
@@ -1086,48 +1182,48 @@ export default function DraftLottery() {
         .bmOrangeScrollbar::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #fdba74 0%, #fb923c 45%, #f97316 100%); }
       `}</style>
 
-      <div className="max-w-7xl mx-auto">
-        <div className="flex items-center justify-between gap-4 mb-8">
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col">
+        <div className="mb-2 flex shrink-0 items-center justify-between gap-4">
           <div>
-            <p className="text-xs text-white/40 tracking-[0.25em] uppercase mb-2">Offseason</p>
-            <h1 className="text-4xl md:text-5xl font-extrabold text-orange-500">NBA Draft Lottery</h1>
-            <p className="text-white/60 mt-2">
-              {seasonYear} draft order. First round reveals first; second round locks the full draft order.
+            <p className="mb-1 text-[10px] uppercase tracking-[0.25em] text-white/40">Offseason</p>
+            <h1 className="text-3xl font-extrabold text-orange-500">NBA Draft Lottery</h1>
+            <p className="mt-1 text-xs text-white/55">
+              {seasonYear} draft order. Reveal lottery picks one at a time or skip directly to the complete order.
             </p>
           </div>
 
           <button
             onClick={() => navigate("/offseason")}
-            className="bmSmoothButton px-5 py-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 font-bold"
+            className="bmLegacyRouteBack bmSmoothButton rounded-lg bg-neutral-800 px-4 py-2 text-sm font-bold hover:bg-neutral-700"
           >
             Back to Offseason
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
-          <div className="bmSolidPanel rounded-2xl bg-neutral-900 border border-white/10 p-4">
+        <div className="mb-2 grid shrink-0 grid-cols-5 gap-2">
+          <div className="bmSolidPanel rounded-xl bg-neutral-900 border border-white/10 px-3 py-2">
             <div className="text-xs text-white/45 uppercase tracking-wide">Season</div>
-            <div className="text-2xl font-extrabold mt-1">{seasonYear}</div>
+            <div className="mt-0.5 text-lg font-extrabold">{seasonYear}</div>
           </div>
-          <div className="bmSolidPanel rounded-2xl bg-neutral-900 border border-white/10 p-4">
+          <div className="bmSolidPanel rounded-xl bg-neutral-900 border border-white/10 px-3 py-2">
             <div className="text-xs text-white/45 uppercase tracking-wide">Source</div>
-            <div className="text-lg font-bold mt-1">{latestHistory ? "Season History" : "Schedule Fallback"}</div>
+            <div className="mt-0.5 text-sm font-bold">{latestHistory ? "Season History" : "Schedule Fallback"}</div>
           </div>
-          <div className="bmSolidPanel rounded-2xl bg-neutral-900 border border-white/10 p-4">
+          <div className="bmSolidPanel rounded-xl bg-neutral-900 border border-white/10 px-3 py-2">
             <div className="text-xs text-white/45 uppercase tracking-wide">Lottery Teams</div>
-            <div className="text-2xl font-extrabold mt-1">{result?.lotteryTeams?.length || "-"}</div>
+            <div className="mt-0.5 text-lg font-extrabold">{result?.lotteryTeams?.length || "-"}</div>
           </div>
-          <div className="bmSolidPanel rounded-2xl bg-neutral-900 border border-white/10 p-4">
+          <div className="bmSolidPanel rounded-xl bg-neutral-900 border border-white/10 px-3 py-2">
             <div className="text-xs text-white/45 uppercase tracking-wide">System</div>
-            <div className="text-lg font-bold mt-1">{result ? getResultSystemLabel(result, seasonYear) : getLotterySystemLabel(lotterySystem, seasonYear)}</div>
+            <div className="mt-0.5 text-sm font-bold">{result ? getResultSystemLabel(result, seasonYear) : getLotterySystemLabel(lotterySystem, seasonYear)}</div>
           </div>
-          <div className="bmSolidPanel rounded-2xl bg-neutral-900 border border-white/10 p-4">
+          <div className="bmSolidPanel rounded-xl bg-neutral-900 border border-white/10 px-3 py-2">
             <div className="text-xs text-white/45 uppercase tracking-wide">Status</div>
-            <div className="text-lg font-bold mt-1">{statusLabel}</div>
+            <div className="mt-0.5 text-sm font-bold">{statusLabel}</div>
           </div>
         </div>
 
-        <div className="bmSolidPanel rounded-2xl bg-purple-950/30 border border-purple-400/30 p-4 mb-6">
+        <div className="mb-2 shrink-0 rounded-xl border border-purple-400/30 bg-purple-950/30 px-3 py-2 bmSolidPanel">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-xs text-purple-200/70 uppercase tracking-[0.18em] font-bold">Dev Lottery Tool</div>
@@ -1175,6 +1271,7 @@ export default function DraftLottery() {
           </div>
         </div>
 
+        <div className="bmRouteScroller min-h-0 flex-1 overflow-y-auto pr-1">
         {error && (
           <div className="mb-6 rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-red-200 font-semibold">
             {error}
@@ -1187,28 +1284,26 @@ export default function DraftLottery() {
           </div>
         ) : null}
 
-        <DraftMatrix rows={matrixRows} system={resolvedSystem} firstRoundRevealed={firstRoundRevealed} />
+        <DraftMatrix
+          rows={matrixRows}
+          system={resolvedSystem}
+          firstRoundRevealed={firstRoundRevealed}
+          revealedPicks={revealedLotteryPicks}
+          activeRevealPick={activeRevealPick}
+        />
 
         <div className="flex flex-wrap gap-3 mb-8">
           <button
-            onClick={revealFirstRound}
-            disabled={loading || preparing || !result || firstRoundRevealed}
+            onClick={startDraftLotteryReveal}
+            disabled={loading || preparing || !result || revealingLottery || lotteryComplete}
             className="bmSmoothButton px-6 py-3 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:bg-neutral-700 disabled:text-white/45 font-extrabold"
           >
-            {loading && !firstRoundRevealed ? "Generating..." : firstRoundRevealed ? "First Round Revealed" : "Reveal First Round"}
-          </button>
-
-          <button
-            onClick={revealSecondRound}
-            disabled={loading || preparing || !firstRoundRevealed || secondRoundRevealed}
-            className="bmSmoothButton px-6 py-3 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:bg-neutral-700 disabled:text-white/45 font-extrabold"
-          >
-            {secondRoundRevealed ? "Second Round Revealed" : "Reveal Second Round"}
+            {revealingLottery ? `Revealing Pick #${activeRevealPick}...` : lotteryComplete ? "Lottery Complete" : "Start Draft Lottery"}
           </button>
 
           <button
             onClick={simAll}
-            disabled={loading || preparing || lotteryComplete}
+            disabled={loading || preparing || revealingLottery || lotteryComplete}
             className="bmSmoothButton px-6 py-3 rounded-xl bg-orange-700 hover:bg-orange-600 disabled:bg-neutral-700 disabled:text-white/45 font-extrabold"
           >
             Sim All
@@ -1271,6 +1366,7 @@ export default function DraftLottery() {
               </div>
             )}
           </div>
+        </div>
         </div>
       </div>
     </div>

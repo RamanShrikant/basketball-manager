@@ -11,8 +11,11 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import PageFade from "../components/PageFade";
+import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
+import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
+import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
 
 const MANUAL_STARTER_MINUTES = 1;
 const MANUAL_STARTER_MAX_MINUTES = 48;
@@ -118,6 +121,14 @@ function readGameplanFromStorage(teamName) {
     const [showRatingDetails, setShowRatingDetails] = useState(false);
     const navigate = useNavigate();
 
+    useKeyboardListNavigation({
+        items: players,
+        selectedItem: selectedPlayer,
+        onSelect: setSelectedPlayer,
+        enabled: !showRatingDetails,
+        getKey: (row) => row?.id || row?.playerId || row?.name,
+    });
+
     // ---------- Team list + index for static arrows ----------
     const allTeams = useMemo(() => {
         if (!leagueData?.conferences) return [];
@@ -150,6 +161,12 @@ function readGameplanFromStorage(teamName) {
         setSelectedPlayer(null);
         setSwapSelection(null);
     };
+
+    useKeyboardTeamNavigation({
+        enabled: allTeams.length > 1,
+        onPrevious: () => handleTeamSwitch("prev"),
+        onNext: () => handleTeamSwitch("next"),
+    });
 
     // --- Helper functions ---
     const calculateTeamRatings = (playersArr, minutesObj) => {
@@ -481,7 +498,7 @@ const handleAutoRebuild = () => {
 
     return (
     <PageFade>
-        <div className="min-h-screen bmCourtPage text-white flex flex-col items-center py-10">
+        <div className="h-screen min-h-0 bmCourtPage text-white flex flex-col items-center overflow-hidden px-5 py-2 pb-16">
         {toast && (
             <div className="fixed top-6 right-6 bg-neutral-800 border border-orange-500 text-orange-400 px-5 py-2 rounded-lg shadow-lg animate-pulse">
             Gameplan saved!
@@ -540,7 +557,7 @@ const handleAutoRebuild = () => {
         )}
 
         {/* Static header with pinned arrows (never shifts) */}
-        <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
+        <div className="w-full max-w-7xl flex items-center justify-between mb-1 select-none shrink-0">
             <div className="w-24 flex items-center justify-start">
             <button
                 onClick={() => handleTeamSwitch("prev")}
@@ -554,7 +571,7 @@ const handleAutoRebuild = () => {
             </button>
             </div>
 
-            <h1 className="text-3xl md:text-4xl font-extrabold text-orange-500 text-center">
+            <h1 className="text-2xl md:text-3xl font-extrabold text-orange-500 text-center">
             {selectedTeam.name} – Coach Gameplan
             </h1>
 
@@ -573,8 +590,8 @@ const handleAutoRebuild = () => {
         </div>
 
         {/* Player Card */}
-        <div className="relative w-full flex justify-center mb-0">
-            <div className="relative bmSolidPanel w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
+        <div className="relative w-full flex justify-center mb-0 shrink-0">
+            <div className="relative bmSolidPanel w-full max-w-7xl px-5 pt-3 pb-2 rounded-t-xl shadow-lg">
             <button
                 type="button"
                 onClick={() => setShowRatingDetails(true)}
@@ -586,22 +603,22 @@ const handleAutoRebuild = () => {
             </button>
             <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
             <div className="flex items-end justify-between">
-                <div className="flex items-end gap-6">
-                <img
+                <div className="flex items-end gap-4">
+                <PlayerPortraitFrame
                     src={player.headshot}
                     alt={player.name}
-                    className="h-[175px] w-auto object-contain -mb-[9px]"
+                    className="h-[112px] w-[142px]"
                 />
-                <div className="flex flex-col justify-end mb-3">
-                    <h2 className="text-[44px] font-bold leading-tight">{player.name}</h2>
-                    <p className="text-gray-400 text-[24px] mt-1">
+                <div className="flex flex-col justify-end mb-2">
+                    <h2 className="text-[32px] font-bold leading-tight">{player.name}</h2>
+                    <p className="text-gray-400 text-[17px] mt-0.5">
                     {player.pos}
                     {player.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age {player.age}
                     </p>
                 </div>
                 </div>
                 <div className="relative flex flex-col items-center justify-center mr-4 mb-2">
-                <svg width="110" height="110" viewBox="0 0 120 120">
+                <svg width="84" height="84" viewBox="0 0 120 120">
                     <defs>
                     <linearGradient id="ovrGradient" x1="0%" y1="0%" x2="100%" y2="0%">
                         <stop offset="0%" stopColor="#FFA500" />
@@ -624,7 +641,7 @@ const handleAutoRebuild = () => {
                 </svg>
                 <div className="absolute flex flex-col items-center justify-center text-center">
                     <p className="text-sm text-gray-300 tracking-wide mb-1">OVR</p>
-                    <p className="text-[47px] font-extrabold text-orange-400 leading-none mt-[-11px]">
+                    <p className="text-[38px] font-extrabold text-orange-400 leading-none mt-[-9px]">
                     {player.overall}
                     </p>
                 </div>
@@ -634,16 +651,16 @@ const handleAutoRebuild = () => {
         </div>
 
         {/* Table */}
-        <div className="w-full flex justify-center mt-[-1px]">
-            <div className="w-full max-w-5xl bmSolidPanel rounded-b-xl p-6 shadow-lg">
-            <div className="flex justify-between items-center mb-4 text-gray-300 text-lg font-semibold">
+        <div className="w-full flex-1 min-h-0 flex justify-center mt-[-1px]">
+            <div className="w-full max-w-7xl bmSolidPanel rounded-b-xl p-3 shadow-lg flex flex-col min-h-0">
+            <div className="flex flex-wrap justify-between items-center gap-2 mb-2 text-gray-300 text-sm font-semibold shrink-0">
                 <span>
                 Total: {total} / 240{" "}
                 <span className={remaining > 0 ? "text-orange-400" : "text-gray-400"}>
                     • Remaining: {remaining} min
                 </span>
                 </span>
-                <div className="flex gap-6">
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
                 <span>
                     POT: <span className="text-orange-400">{potRatings.pot}</span>
                 </span>
@@ -663,9 +680,9 @@ const handleAutoRebuild = () => {
                 </div>
             </div>
 
-            <div className="overflow-y-auto max-h-[480px]">
+            <div className="bmTableScroller overflow-y-auto flex-1 min-h-0 pr-1">
                 <table className="w-full border-collapse text-left">
-                <thead className="text-gray-400 text-[15px] border-b border-gray-700">
+                <thead className="sticky top-0 z-10 bg-neutral-950 text-gray-400 text-[13px] border-b border-gray-700">
                     <tr>
                     <th className="py-2 w-[60px]"></th>
                     <th className="py-2 text-center">POS</th>
@@ -674,10 +691,11 @@ const handleAutoRebuild = () => {
                     <th className="py-2 text-center">Minutes</th>
                     </tr>
                 </thead>
-                <tbody className="text-[16px]">
+                <tbody className="text-[14px]">
                     {players.map((p, i) => (
                     <tr
                         key={p.name}
+                        data-bm-nav-row-index={i}
                         onClick={() => setSelectedPlayer(p)}
                         className={`cursor-pointer transition ${
                         selectedPlayer?.name === p.name
@@ -703,7 +721,7 @@ const handleAutoRebuild = () => {
                         <td className="text-center font-semibold">
                         {lineupLabels[i] || i + 1}
                         </td>
-                        <td className="py-2 font-semibold">
+                        <td className="py-1.5 font-semibold whitespace-nowrap">
                         {p.name}
                         <span className="text-[#bfbfbf] text-sm ml-2">
                             {p.pos}
@@ -720,7 +738,7 @@ const handleAutoRebuild = () => {
                             step="1"
                             value={minutes[p.name] ?? 0}
                             onChange={(e) => handleMinuteChange(p.name, e.target.value)}
-                            className="w-[160px] accent-white"
+                            className="w-[130px] accent-white"
                             />
                             <span className="w-[50px] text-gray-200 text-sm">
                             {Math.round(minutes[p.name] ?? 0)}
@@ -733,7 +751,7 @@ const handleAutoRebuild = () => {
                 </table>
             </div>
 
-            <div className="flex justify-end gap-4 mt-6">
+            <div className="flex justify-end gap-3 mt-2 shrink-0">
                 <button
                 onClick={handleAutoRebuild}
                 className="px-5 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
@@ -757,7 +775,7 @@ const handleAutoRebuild = () => {
                     navigate("/team-hub");
                 }}
                 disabled={total !== 240}
-                className={`px-5 py-2 rounded-lg font-semibold transition ${
+                className={`bmLegacyRouteBack px-5 py-2 rounded-lg font-semibold transition ${
                     total !== 240
                     ? "bg-neutral-700 text-gray-500 cursor-not-allowed"
                     : "bg-neutral-700 hover:bg-neutral-600"

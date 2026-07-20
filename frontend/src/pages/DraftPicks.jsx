@@ -13,6 +13,7 @@ import {
   sortDraftPickAssets,
 } from "../utils/draftPicks.js";
 import "../styles/BMAnimations.css";
+import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
 
 const TEAM_CODES = {
   "Atlanta Hawks": "ATL",
@@ -452,6 +453,12 @@ export default function DraftPicks() {
     });
   };
 
+  useKeyboardTeamNavigation({
+    enabled: teamsSorted.length > 1,
+    onPrevious: () => handleTeamSwitch("prev"),
+    onNext: () => handleTeamSwitch("next"),
+  });
+
   const handleSort = (key) => {
     let direction = "asc";
     if (sortConfig.key === key && sortConfig.direction === "asc") direction = "desc";
@@ -485,12 +492,12 @@ export default function DraftPicks() {
 
   return (
     <PageFade>
-      <div className={`${styles.rosterPage} min-h-screen text-white flex flex-col items-center py-10`}>
-        <div className="w-full max-w-5xl flex items-center justify-between mb-8 select-none">
+      <div className={`${styles.rosterPage} h-full min-h-0 overflow-hidden text-white flex flex-col items-center px-4 py-3`}>
+        <div className="w-full max-w-7xl flex shrink-0 items-center justify-between mb-2 select-none">
           <div className="w-24 flex items-center justify-start">
             <button
               onClick={() => handleTeamSwitch("prev")}
-              className="text-4xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
+              className="text-2xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
               title="Previous Team"
             >
               ◄
@@ -498,12 +505,12 @@ export default function DraftPicks() {
           </div>
 
           <div className="flex items-center justify-center gap-4 text-center">
-            <TeamLogo src={activeTeamLogo} name={activeTeam?.name} size={68} />
+            <TeamLogo src={activeTeamLogo} name={activeTeam?.name} size={52} />
             <div>
               <div className="text-xs font-bold uppercase tracking-[0.24em] text-white/40">
                 Draft Assets
               </div>
-              <h1 className="text-4xl font-extrabold text-orange-500">
+              <h1 className="text-3xl font-extrabold text-orange-500">
                 {activeTeam?.name || "Team"} Picks
               </h1>
             </div>
@@ -512,7 +519,7 @@ export default function DraftPicks() {
           <div className="w-24 flex items-center justify-end">
             <button
               onClick={() => handleTeamSwitch("next")}
-              className="text-4xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
+              className="text-2xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
               title="Next Team"
             >
               ►
@@ -520,9 +527,9 @@ export default function DraftPicks() {
           </div>
         </div>
 
-        <div className="w-full max-w-5xl overflow-x-auto no-scrollbar">
-          <table className="w-full min-w-[860px] border-collapse text-center">
-            <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold uppercase">
+        <div className="bmTableScroller w-full max-w-7xl flex-1 min-h-0 overflow-auto rounded-xl border border-white/10">
+          <table className="w-full min-w-[920px] border-collapse text-center">
+            <thead className="sticky top-0 z-10 bg-neutral-800 text-gray-300 text-[13px] font-semibold uppercase">
               <tr>
                 {[
                   { key: "year", label: "Year" },
@@ -545,7 +552,7 @@ export default function DraftPicks() {
               </tr>
             </thead>
 
-            <tbody className="text-[17px] font-medium">
+            <tbody className="text-[14px] font-medium">
               {sortedPicks.map((asset, index) => {
                 const originLabel = getOriginLabel(asset, teamNames);
                 const originalTeam =
@@ -559,17 +566,21 @@ export default function DraftPicks() {
                 const hover = assetTypeLabel(asset) === "Swap" ? "hover:bg-amber-500/10" : "hover:bg-neutral-800";
 
                 return (
-                  <tr key={asset.id} className={`${zebra} ${hover} transition`}>
-                    <td className="py-3 px-4 font-bold">{asset.year || "—"}</td>
-                    <td className="py-3 px-4">{roundLabel(asset.round)}</td>
-                    <td className="py-3 px-4 font-bold tracking-wide">{getPickColumnValue(asset)}</td>
-                    <td className="py-3 px-4 text-left text-white/90">
+                  <tr key={asset.id} className={`${zebra} ${hover} h-11 transition`}>
+                    <td className="h-11 px-4 font-bold">{asset.year || "—"}</td>
+                    <td className="h-11 px-4">{roundLabel(asset.round)}</td>
+                    <td className="h-11 px-4 font-bold tracking-wide">{getPickColumnValue(asset)}</td>
+                    <td className="h-11 px-4 text-left text-white/90">
                       {compactProtectionLabel(asset, teamNames)}
                     </td>
-                    <td className="py-3 px-4 text-left">
+                    <td className="h-11 px-4 text-left">
                       <div className="flex items-center gap-3">
-                        {originalLogo ? <TeamLogo src={originalLogo} name={originLabel} size={28} /> : null}
-                        <span>{originLabel}</span>
+                        {originalLogo ? (
+                          <TeamLogo src={originalLogo} name={originLabel} size={28} />
+                        ) : (
+                          <span className="inline-block h-7 w-7 shrink-0" aria-hidden="true" />
+                        )}
+                        <span className="leading-none">{originLabel}</span>
                       </div>
                     </td>
                   </tr>
@@ -589,7 +600,7 @@ export default function DraftPicks() {
 
         <button
           onClick={() => navigate("/team-hub")}
-          className="mt-10 px-8 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
+          className="hidden mt-4 px-8 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition lg:hidden"
         >
           Back to Team Hub
         </button>

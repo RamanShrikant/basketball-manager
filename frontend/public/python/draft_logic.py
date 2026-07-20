@@ -1333,12 +1333,22 @@ def make_pick(
     league_data: Dict[str, Any],
     payload: Dict[str, Any],
     force_cpu: bool = False,
+    _copy_inputs: bool = True,
 ) -> Dict[str, Any]:
-    league = copy.deepcopy(_plain(league_data) or {})
-    payload = _plain(payload) or {}
-    season_year = _get_season_year(league, payload)
+    if _copy_inputs:
+        league = copy.deepcopy(_plain(league_data) or {})
+        payload = _plain(payload) or {}
+        state = copy.deepcopy(payload.get("draftState") or (league.get("draftState") or {}).get("draft") or {})
+    else:
+        # Batch draft actions already own a private deep-copied league/state.
+        # Reuse those objects for each pick rather than copying the full league
+        # dozens of times. Public one-pick calls keep the original copy-on-entry
+        # behavior above.
+        league = league_data if isinstance(league_data, dict) else {}
+        payload = payload if isinstance(payload, dict) else {}
+        state = payload.get("draftState") or (league.get("draftState") or {}).get("draft") or {}
 
-    state = copy.deepcopy(payload.get("draftState") or (league.get("draftState") or {}).get("draft") or {})
+    season_year = _get_season_year(league, payload)
     if not state or not state.get("draftOrder"):
         init = initialize_draft(league, payload)
         if not init.get("ok"):
@@ -1481,6 +1491,29 @@ def sim_until_user_pick(league_data: Dict[str, Any], payload: Dict[str, Any]) ->
     picks_made = []
     safety = 0
 
+    order = state.get("draftOrder") or []
+    current_index = max(0, _safe_int(state.get("currentPickIndex"), 0))
+    has_remaining_user_pick = bool(
+        user_team_name
+        and any(
+            (pick.get("currentOwnerTeamName") or pick.get("teamName")) == user_team_name
+            for pick in order[current_index:]
+        )
+    )
+
+    if user_team_name and not has_remaining_user_pick:
+        league.setdefault("draftState", {})["draft"] = state
+        return {
+            "ok": True,
+            "version": DRAFT_LOGIC_VERSION,
+            "leagueData": league,
+            "draftState": state,
+            "picksMade": [],
+            "noUserPicksRemaining": True,
+            "reason": "NO_USER_PICKS_REMAINING",
+            "message": "The controlled team has no remaining picks in this draft.",
+        }
+
     while not state.get("completed") and safety < 80:
         safety += 1
         idx = _safe_int(state.get("currentPickIndex"), 0)
@@ -1493,7 +1526,12 @@ def sim_until_user_pick(league_data: Dict[str, Any], payload: Dict[str, Any]) ->
         if user_team_name and team_name == user_team_name:
             break
 
-        result = make_pick(league, {**payload, "draftState": state, "userTeamName": user_team_name}, force_cpu = True)
+        result = make_pick(
+            league,
+            {**payload, "draftState": state, "userTeamName": user_team_name},
+            force_cpu = True,
+            _copy_inputs = False,
+        )
         if not result.get("ok"):
             return result
         league = result.get("leagueData") or league
@@ -1530,7 +1568,12 @@ def sim_rest_of_draft(league_data: Dict[str, Any], payload: Dict[str, Any]) -> D
 
     while not state.get("completed") and safety < 120:
         safety += 1
-        result = make_pick(league, {**payload, "draftState": state, "userTeamName": user_team_name}, force_cpu = True)
+        result = make_pick(
+            league,
+            {**payload, "draftState": state, "userTeamName": user_team_name},
+            force_cpu = True,
+            _copy_inputs = False,
+        )
         if not result.get("ok"):
             return result
         league = result.get("leagueData") or league

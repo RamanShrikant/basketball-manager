@@ -64,6 +64,8 @@
   width: 96%;
   padding: 1rem 2rem;
   scroll-snap-type: x mandatory;
+  scrollbar-width: auto;
+  scrollbar-color: var(--accent) rgba(255,255,255,0.08);
 }
 
 /* Cards */
@@ -159,7 +161,8 @@
   height: 8px;
 }
 .scrollRow::-webkit-scrollbar-track {
-  background: transparent;
+  background: rgba(255,255,255,0.08);
+  border-radius: 10px;
 }
 .scrollRow::-webkit-scrollbar-thumb {
   background-color: var(--accent);
@@ -181,4 +184,356 @@
   0% { transform: translate(0, 0) rotate(0deg); }
   50% { transform: translate(-100px, -60px) rotate(1deg); }
   100% { transform: translate(0, 0) rotate(0deg); }
+}
+
+/* 100%-zoom desktop density */
+@media (min-width: 1024px) {
+  .scrollRow {
+    gap: clamp(1rem, 1.4vw, 1.75rem);
+    width: min(98%, 1760px);
+    padding: 0.75rem 1.25rem;
+  }
+
+  .card {
+    width: clamp(250px, 20vw, 305px);
+    height: clamp(330px, 54vh, 390px);
+    border-radius: 16px;
+  }
+
+  .logo {
+    height: clamp(9.5rem, 22vh, 12rem);
+  }
+
+  .labelBar {
+    padding: 0.9rem 1.1rem;
+  }
+
+  .labelBg {
+    height: 108px;
+    border-bottom-left-radius: 16px;
+    border-bottom-right-radius: 16px;
+  }
+
+  .tileName {
+    font-size: clamp(22px, 1.65vw, 27px);
+  }
+
+  .teamName {
+    font-size: clamp(14px, 1vw, 16px);
+  }
+}
+
+@media (min-width: 1024px) and (max-height: 820px) {
+  .card {
+    height: min(350px, 62vh);
+  }
+
+  .logo {
+    height: min(10rem, 24vh);
+  }
+}
+
+.navigationRail {
+  width: min(96%, 1760px);
+  margin: 0 auto 0.45rem;
+  display: grid;
+  grid-template-columns: 42px 1fr 42px;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+  z-index: 3;
+}
+
+.railArrow {
+  height: 38px;
+  border-radius: 11px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(8,8,8,0.78);
+  color: white;
+  font-size: 17px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.railArrow:hover {
+  border-color: rgba(249,115,22,0.75);
+  background: rgba(55,28,10,0.88);
+  transform: translateY(-1px);
+}
+
+.railStatus {
+  min-height: 38px;
+  padding: 7px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 11px;
+  background: rgba(8,8,8,0.62);
+  color: rgba(255,255,255,0.72);
+  font-family: "Poppins", sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  backdrop-filter: blur(8px);
+}
+
+.keyHint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 23px;
+  padding: 0 7px;
+  border-radius: 7px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.07);
+  color: #fb923c;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.railLabel {
+  color: rgba(255,255,255,0.78);
+}
+
+.railDivider {
+  color: rgba(255,255,255,0.28);
+}
+
+.railCounter {
+  margin-left: auto;
+  color: white;
+  font-variant-numeric: tabular-nums;
+}
+
+.activeCard {
+  opacity: 1 !important;
+  border: 2px solid rgba(249,115,22,0.82);
+  box-shadow: 0 0 0 1px rgba(249,115,22,0.18), 0 18px 48px rgba(0,0,0,0.48);
+  filter: brightness(1.08);
+  transform: translateY(-4px);
+}
+
+.activeCard .logo {
+  opacity: 1;
+  transform: scale(1.06);
+}
+
+.logo {
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
+.scrollRow {
+  scrollbar-gutter: stable both-edges;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: 2rem;
+  padding-bottom: 1.2rem;
+}
+
+.scrollRow:focus-visible,
+.wrapper:focus-visible {
+  outline: none;
+}
+
+.scrollRow::-webkit-scrollbar {
+  height: 12px;
+}
+
+.scrollRow::-webkit-scrollbar-track {
+  background: rgba(10,10,10,0.82);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 999px;
+}
+
+.scrollRow::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(10,10,10,0.82);
+  background: linear-gradient(90deg, #ea580c, #fb923c);
+}
+
+@media (min-width: 1024px) {
+  .wrapper {
+    justify-content: center;
+    padding-top: 3.2rem;
+    padding-bottom: 1.2rem;
+  }
+
+  .navigationRail {
+    width: min(96%, 1760px);
+  }
+
+  .scrollRow {
+    align-items: stretch;
+  }
+
+  .card {
+    width: clamp(255px, 18.2vw, 315px);
+    height: clamp(340px, 51vh, 400px);
+    opacity: 0.62;
+  }
+
+  .logo {
+    height: clamp(11.5rem, 25vh, 14.5rem);
+  }
+}
+
+@media (min-width: 1024px) and (max-height: 820px) {
+  .wrapper {
+    padding-top: 2.4rem;
+  }
+
+  .card {
+    height: min(340px, 57vh);
+  }
+
+  .logo {
+    height: min(11.5rem, 25vh);
+  }
+
+  .navigationRail {
+    margin-bottom: 0.25rem;
+  }
+}
+
+/* Game-ready navigation rail: controls remain discoverable without tutorial text. */
+.railStatus {
+  justify-content: space-between;
+  gap: 14px;
+  padding-inline: 12px;
+}
+
+.railProgress {
+  flex: 1;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.railProgress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #ea580c, #fb923c);
+  transition: width 180ms ease;
+}
+
+@media (min-width: 1024px) {
+  .wrapper {
+    justify-content: center;
+    padding-top: 3.5rem;
+  }
+
+  .navigationRail,
+  .scrollRow {
+    width: min(97vw, 1760px);
+  }
+
+  .scrollRow {
+    align-items: stretch;
+    padding-bottom: 1rem;
+  }
+
+  .card {
+    width: clamp(255px, 19vw, 320px);
+    height: clamp(340px, 49vh, 410px);
+  }
+
+  .logo {
+    height: clamp(11rem, 23vh, 14rem);
+  }
+}
+
+/* Final game-ready hub composition. The rail and tiles begin high enough to
+   use the full screen while leaving the team selector unobstructed. */
+.modeBadge {
+  position: absolute;
+  top: 20px;
+  left: 22px;
+  z-index: 30;
+  padding: 7px 12px;
+  border: 1px solid rgba(249, 115, 22, 0.4);
+  border-radius: 999px;
+  background: rgba(45, 22, 8, 0.86);
+  color: #fed7aa;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+@media (min-width: 1024px) {
+  .wrapper {
+    justify-content: flex-start !important;
+    padding-top: clamp(118px, 15vh, 158px) !important;
+    padding-bottom: 1rem !important;
+  }
+
+  .navigationRail,
+  .scrollRow {
+    width: min(97vw, 1760px) !important;
+  }
+
+  .card {
+    width: clamp(248px, 18.3vw, 316px) !important;
+    height: clamp(342px, 47vh, 402px) !important;
+  }
+
+  .logo {
+    height: clamp(11.75rem, 23.5vh, 14rem) !important;
+  }
+}
+
+@media (min-width: 1024px) and (max-height: 820px) {
+  .wrapper {
+    padding-top: 92px !important;
+  }
+
+  .card {
+    height: min(350px, 53vh) !important;
+  }
+}
+
+/* Keep the console-style rail substantial on standard 1366x768 laptops. */
+@media (min-width: 1024px) and (max-height: 820px) {
+  .card {
+    height: min(410px, 60vh) !important;
+  }
+
+  .logo {
+    width: min(13rem, 24vw) !important;
+    height: min(13rem, 28vh) !important;
+  }
+}
+
+/* Playoff-stat navigation patch: the carousel uses one real scrollbar beneath
+   the cards instead of a second progress rail above them. */
+.carouselShell {
+  width: min(97vw, 1760px);
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+  z-index: 3;
+}
+
+.carouselShell .scrollRow {
+  width: 100% !important;
+  min-width: 0;
+  margin: 0;
+  padding-inline: 0.75rem;
+  padding-bottom: 1rem;
+}
+
+.carouselShell .railArrow {
+  align-self: center;
+}
+
+@media (min-width: 1024px) and (max-height: 820px) {
+  .carouselShell {
+    grid-template-columns: 42px minmax(0, 1fr) 42px;
+    gap: 8px;
+  }
 }

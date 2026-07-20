@@ -3,6 +3,8 @@
 import React, { useMemo } from "react";
 import { getCompletedSeasonYearForArchive } from "../utils/finalsMvpSeasonActions";
 import styles from "../pages/FinalsMvp.module.css";
+import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
+import PlayerPortraitFrame from "./PlayerPortraitFrame";
 
 function getAllTeamsFromLeague(leagueData) {
   if (!leagueData) return [];
@@ -213,22 +215,17 @@ export default function FinalsMvpReveal({
       </div>
 
       {/* Header Card */}
-      <div className={`relative ${isModal ? "bg-transparent px-5 pt-3 pb-0" : "bg-neutral-800 rounded-t-xl shadow-lg px-8 pt-7 pb-3"}`}>
-        <div className={`absolute left-0 right-0 bottom-0 ${isModal ? "h-[2px] opacity-55" : "h-[3px] opacity-60"} bg-white`} />
-
-        <div className="flex items-end justify-between gap-4">
+      <div className={`relative border-b border-white/45 ${isModal ? "bg-transparent px-5 pt-3 pb-3" : "bg-neutral-800 rounded-t-xl shadow-lg px-8 pt-7 pb-5"}`}>
+        <div className="flex items-center justify-between gap-4">
           <div className={`flex items-end ${isModal ? "gap-4" : "gap-6"}`}>
-            <div className={`relative z-10 ${isModal ? "mb-0 -translate-y-[1.7px]" : "-mb-[8px]"}`}>
-              {portraitSrc && (
-                <img
-                  src={portraitSrc}
-                  alt={winner?.player}
-                  className={`${isModal ? "h-[165px]" : "h-[170px]"} w-auto object-contain`}
-                />
-              )}
-            </div>
+            <PlayerPortraitFrame
+              src={portraitSrc}
+              alt={winner?.player || "Finals MVP"}
+              className={isModal ? "h-[146px] w-[174px]" : "h-[154px] w-[184px]"}
+              bottomInset={10}
+            />
 
-            <div className={isModal ? "mb-5" : "mb-2"}>
+            <div className="self-center pb-1">
               <h2 className={`${isModal ? "text-[31px]" : "text-[42px]"} font-bold leading-tight`}>{winner?.player}</h2>
               <p className={`text-gray-400 ${isModal ? "text-[16px]" : "text-[22px]"} mt-1`}>
                 {playerMeta?.pos} • Age {playerMeta?.age}
@@ -236,7 +233,7 @@ export default function FinalsMvpReveal({
             </div>
           </div>
 
-          <div className={`relative flex items-center justify-center ${isModal ? "mr-8 mb-5 scale-[1.1]" : "mr-4 mb-2"}`}>
+          <div className={`relative flex items-center justify-center self-center ${isModal ? "mr-8 scale-[1.1]" : "mr-4"}`}>
             <svg width="105" height="105" viewBox="0 0 120 120">
               <defs>
                 <linearGradient id="ovrGradient" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -279,61 +276,41 @@ export default function FinalsMvpReveal({
         </div>
       </div>
 
-      {/* Table */}
-      <div className={`${styles.tablePanel} overflow-x-auto mt-[-1px] ${isModal ? "" : "rounded-b-xl"}`} style={isModal ? { background: "transparent" } : undefined}>
-        <table className={`w-full min-w-[980px] border-collapse text-center ${isModal ? "text-[13px]" : "text-[15px]"} font-medium`} style={isModal ? { background: "transparent" } : undefined}>
-          <thead className={`${isModal ? "bg-neutral-900/35" : "bg-neutral-800"} text-gray-300 font-semibold`}>
-            <tr>
-              <th className="w-[68px] py-2">TEAM</th>
-              <th className="py-2">POS</th>
-              <th className="py-2">GP</th>
-              <th className="py-2">MIN</th>
-              <th className="py-2">PTS</th>
-              <th className="py-2">REB</th>
-              <th className="py-2">AST</th>
-              <th className="py-2">STL</th>
-              <th className="py-2">BLK</th>
-              <th className="py-2">TOV</th>
-              <th className="py-2">PF</th>
-              <th className="py-2">FGA</th>
-              <th className="py-2">3PA</th>
-              <th className="py-2">FTA</th>
-              <th className="py-2">FG%</th>
-              <th className="py-2">3P%</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="bg-orange-600 text-white">
-              <td className="py-2 text-center">
-                {winner?.team && teamLogoMap[winner.team] ? (
-                  <img
-                    src={teamLogoMap[winner.team]}
-                    alt={winner.team}
-                    className="mx-auto h-7 w-7 object-contain"
-                  />
-                ) : (
-                  "—"
-                )}
-              </td>
-
-              <td className="py-2">{playerMeta?.pos}</td>
-              <td className="py-2">{finalsRow?.gp}</td>
-              <td className="py-2">{fmt1(finalsRow?.mpg)}</td>
-              <td className="py-2">{fmt1(finalsRow?.ppg)}</td>
-              <td className="py-2">{fmt1(finalsRow?.rpg)}</td>
-              <td className="py-2">{fmt1(finalsRow?.apg)}</td>
-              <td className="py-2">{fmt1(finalsRow?.spg)}</td>
-              <td className="py-2">{fmt1(finalsRow?.bpg)}</td>
-              <td className="py-2">{fmt1(finalsRow?.tov)}</td>
-              <td className="py-2">{fmt1(finalsRow?.pf)}</td>
-              <td className="py-2">{fmt1(finalsRow?.fga)}</td>
-              <td className="py-2">{fmt1(finalsRow?.tpa)}</td>
-              <td className="py-2">{fmt1(finalsRow?.fta)}</td>
-              <td className="py-2">{fmt1(finalsRow?.fg)}</td>
-              <td className="py-2">{fmt1(finalsRow?.tp)}</td>
-            </tr>
-          </tbody>
-        </table>
+      {/* Compact stat strip: all Finals MVP information fits without horizontal scrolling. */}
+      <div className={`${styles.tablePanel} mt-3 ${isModal ? "px-5 pb-5" : "rounded-b-xl p-3"}`} style={isModal ? { background: "transparent" } : undefined}>
+        <div className={`grid grid-cols-4 gap-2 ${isModal ? "sm:grid-cols-8" : "md:grid-cols-8"}`}>
+          {[
+            ["GP", finalsRow?.gp],
+            ["MIN", fmt1(finalsRow?.mpg)],
+            ["PTS", fmt1(finalsRow?.ppg)],
+            ["REB", fmt1(finalsRow?.rpg)],
+            ["AST", fmt1(finalsRow?.apg)],
+            ["STL", fmt1(finalsRow?.spg)],
+            ["BLK", fmt1(finalsRow?.bpg)],
+            ["TOV", fmt1(finalsRow?.tov)],
+            ["TEAM", getTeamAbbreviation(winner?.team)],
+            ["POS", playerMeta?.pos || "—"],
+            ["PF", fmt1(finalsRow?.pf)],
+            ["FGA", fmt1(finalsRow?.fga)],
+            ["3PA", fmt1(finalsRow?.tpa)],
+            ["FTA", fmt1(finalsRow?.fta)],
+            ["FG%", fmt1(finalsRow?.fg)],
+            ["3P%", fmt1(finalsRow?.tp)],
+          ].map(([label, value]) => (
+            <div
+              key={label}
+              className="min-w-0 rounded-lg border border-white/10 bg-neutral-900/45 px-2 py-2 text-center"
+            >
+              <div className="text-[10px] font-black uppercase tracking-[0.14em] text-white/45">{label}</div>
+              <div
+                className={`mt-1 truncate font-black ${label === "TEAM" ? "text-[11px]" : "text-base"}`}
+                title={String(value ?? "—")}
+              >
+                {value ?? "—"}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
     </div>

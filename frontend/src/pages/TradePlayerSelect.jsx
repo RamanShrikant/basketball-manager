@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
+import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
+import { filterStandardTradePlayers } from "../utils/tradeRosterEligibility.js";
 import styles from "./RosterView.module.css";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
@@ -17,15 +19,10 @@ function getAllTeamsFromLeague(leagueData) {
 }
 
 function getTeamPlayers(team) {
-  return [
-    ...(Array.isArray(team?.players) ? team.players : []),
-    ...(Array.isArray(team?.twoWayPlayers)
-      ? team.twoWayPlayers.map((p) => ({ ...p, isTwoWay: true }))
-      : []),
-    ...(Array.isArray(team?.stashPlayers)
-      ? team.stashPlayers.map((p) => ({ ...p, isStash: true }))
-      : []),
-  ];
+  // Only standard-roster players are legal trade assets. Two-way and stash
+  // players stay completely hidden from the selector rather than appearing as
+  // disabled rows.
+  return filterStandardTradePlayers(team?.players);
 }
 
 function playerNameOf(player) {
@@ -284,47 +281,38 @@ function RatingRing({ player }) {
   const potential = player?.potential ?? "-";
   const value = Number(player?.overall || 0);
   const fillPercent = Math.min(Math.max(value, 0) / 99, 1);
-  const radius = 50;
+  const radius = 45;
   const circumference = 2 * Math.PI * radius;
   const strokeOffset = circumference * (1 - fillPercent);
 
   return (
-    <div className="relative flex flex-col items-center justify-center mr-4 mb-2">
-      <svg width="110" height="110" viewBox="0 0 120 120">
+    <div className="relative mr-3 flex h-[104px] w-[104px] shrink-0 items-center justify-center self-center">
+      <svg width="104" height="104" viewBox="0 0 112 112" aria-hidden="true">
         <defs>
           <linearGradient id="tradeSelectOvrGradient" x1="0%" y1="0%" x2="100%" y2="0%">
             <stop offset="0%" stopColor="#FFA500" />
             <stop offset="100%" stopColor="#FFD54F" />
           </linearGradient>
         </defs>
+        <circle cx="56" cy="56" r={radius} stroke="rgba(255,255,255,0.08)" strokeWidth="7" fill="rgba(0,0,0,0.16)" />
         <circle
-          cx="60"
-          cy="60"
-          r="50"
-          stroke="rgba(255,255,255,0.08)"
-          strokeWidth="8"
-          fill="none"
-        />
-        <circle
-          cx="60"
-          cy="60"
-          r="50"
+          cx="56"
+          cy="56"
+          r={radius}
           stroke="url(#tradeSelectOvrGradient)"
-          strokeWidth="8"
+          strokeWidth="7"
           strokeLinecap="round"
           fill="none"
           strokeDasharray={circumference}
           strokeDashoffset={strokeOffset}
-          transform="rotate(-90 60 60)"
+          transform="rotate(-90 56 56)"
         />
       </svg>
-      <div className="absolute flex flex-col items-center justify-center text-center">
-        <p className="text-sm text-gray-300 tracking-wide mb-1">OVR</p>
-        <p className="text-[47px] font-extrabold text-orange-400 leading-none mt-[-11px]">
-          {overall}
-        </p>
-        <p className="text-[10px] text-gray-400 mt-[-2px]">
-          POT <span className="text-orange-400 font-semibold">{potential}</span>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center leading-none">
+        <p className="text-[9px] font-black tracking-[0.12em] text-gray-300">OVR</p>
+        <p className="mt-0.5 text-[34px] font-black leading-none text-orange-400">{overall}</p>
+        <p className="mt-1 text-[9px] font-black text-gray-400">
+          POT <span className="text-orange-300">{potential}</span>
         </p>
       </div>
     </div>
@@ -406,6 +394,14 @@ export default function TradePlayerSelect() {
 
   const selectedPlayer =
     sortedPlayers.find((p) => playerKey(p) === selectedKey) || sortedPlayers[0] || null;
+
+  useKeyboardListNavigation({
+    items: sortedPlayers,
+    selectedItem: selectedPlayer,
+    onSelect: (player) => setSelectedKey(playerKey(player)),
+    getKey: playerKey,
+    rowSelector: "[data-bm-trade-player-row-index]",
+  });
   const selectedPlayerAlreadyAdded = Boolean(selectedPlayer && alreadyAddedPlayerKeys.has(playerKey(selectedPlayer)));
   const canAddSelectedPlayer = Boolean(selectedPlayer && team && !selectedPlayerAlreadyAdded && !sideIsFull);
 
@@ -443,7 +439,8 @@ export default function TradePlayerSelect() {
     const nextItems = [...currentItems, nextItem];
 
     saveBuilder(setSideItems(builder, tradeSide, nextItems));
-    navigate(returnTo);
+    sessionStorage.setItem("bm_trade_builder_resume_v1", String(Date.now()));
+    navigate(returnTo, { state: { resumeTradeBuilder: true } });
   };
 
   const addSelected = () => {
@@ -453,11 +450,15 @@ export default function TradePlayerSelect() {
 
   return (
     <PageFade>
-      <div className={`${styles.rosterPage} min-h-screen text-white flex flex-col items-center py-10 px-4`}>
-        <div className="w-full max-w-5xl flex items-center justify-between mb-6 select-none">
+      <div className={`${styles.rosterPage} bmCourtPage h-full min-h-0 overflow-hidden p-3 text-white`}>
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1520px] flex-col">
+        <div className="mb-2 flex h-[54px] w-full shrink-0 items-center justify-between select-none">
           <div className="w-36 flex items-center justify-start">
             <button
-              onClick={() => navigate(returnTo)}
+              onClick={() => {
+                sessionStorage.setItem("bm_trade_builder_resume_v1", String(Date.now()));
+                navigate(returnTo, { state: { resumeTradeBuilder: true } });
+              }}
               className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
             >
               ← Back
@@ -468,7 +469,7 @@ export default function TradePlayerSelect() {
             <div className="text-xs font-black uppercase tracking-[0.22em] text-orange-300">
               Select Player
             </div>
-            <h1 className="mt-1 text-4xl font-extrabold text-orange-500">
+            <h1 className="text-2xl font-extrabold text-orange-500">
               {team?.name || "Team"}
             </h1>
           </div>
@@ -485,8 +486,8 @@ export default function TradePlayerSelect() {
         </div>
 
         {selectedPlayer && (
-          <div className="relative w-full flex justify-center">
-            <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-8 pb-3 rounded-t-xl shadow-lg">
+          <div className="relative flex w-full shrink-0 justify-center">
+            <div className="relative h-[118px] w-full overflow-hidden rounded-t-xl bg-neutral-800 px-5 shadow-lg">
               <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60" />
 
               <div className="flex items-end justify-between relative">
@@ -496,17 +497,17 @@ export default function TradePlayerSelect() {
                       <img
                         src={selectedPlayer.headshot}
                         alt={playerNameOf(selectedPlayer)}
-                        className="h-[175px] w-auto object-contain"
+                        className="h-[122px] w-auto object-contain"
                       />
                     ) : (
-                      <div className="h-[175px] w-[130px] bg-neutral-700 rounded flex items-center justify-center text-neutral-300">
+                      <div className="flex h-[112px] w-[88px] items-center justify-center rounded bg-neutral-700 text-neutral-300">
                         No Image
                       </div>
                     )}
                   </div>
 
                   <div className="flex flex-col justify-end mb-3 min-w-0">
-                    <h2 className="text-[44px] font-bold leading-tight truncate">
+                    <h2 className="truncate text-[30px] font-bold leading-tight">
                       {playerNameOf(selectedPlayer)}
                       {selectedPlayer?.isTwoWay && (
                         <span className="ml-3 align-middle inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-1 text-[12px] font-extrabold text-emerald-200">
@@ -519,7 +520,7 @@ export default function TradePlayerSelect() {
                         </span>
                       )}
                     </h2>
-                    <p className="text-gray-400 text-[24px] mt-1">
+                    <p className="mt-1 text-[15px] text-gray-400">
                       {selectedPlayer.pos || "-"}
                       {selectedPlayer.secondaryPos ? ` / ${selectedPlayer.secondaryPos}` : ""} • Age {selectedPlayer.age ?? "-"} • Contract {formatMoney(getContractTotalRemaining(selectedPlayer, leagueData))} / {getContractYearsRemaining(selectedPlayer, leagueData) || 1} yr{getContractYearsRemaining(selectedPlayer, leagueData) === 1 ? "" : "s"}
                     </p>
@@ -542,10 +543,10 @@ export default function TradePlayerSelect() {
           </div>
         )}
 
-        <div className="w-full flex justify-center transition-opacity duration-300 ease-in-out mt-[-1px]">
-          <div className={`${styles.tablePanel} w-full max-w-5xl overflow-x-auto no-scrollbar`}>
+        <div className="mt-[-1px] flex min-h-0 flex-1 w-full justify-center transition-opacity duration-300 ease-in-out">
+          <div className={`${styles.tablePanel} bmTableScroller h-full min-h-0 w-full overflow-auto`}>
             <table className="w-full min-w-[1020px] border-collapse text-center">
-              <thead className="bg-neutral-800 text-gray-300 text-[16px] font-semibold">
+              <thead className="sticky top-0 z-10 bg-neutral-800 text-[13px] font-semibold text-gray-300">
                 <tr>
                   {[
                     { key: "name", label: "Name" },
@@ -573,8 +574,8 @@ export default function TradePlayerSelect() {
                 </tr>
               </thead>
 
-              <tbody className="text-[17px] font-medium">
-                {sortedPlayers.map((p) => {
+              <tbody className="text-[14px] font-medium">
+                {sortedPlayers.map((p, rowIndex) => {
                   const key = playerKey(p);
                   const active = key === selectedKey;
                   const alreadyAdded = alreadyAddedPlayerKeys.has(key);
@@ -583,6 +584,7 @@ export default function TradePlayerSelect() {
                   return (
                     <tr
                       key={key}
+                      data-bm-trade-player-row-index={rowIndex}
                       onClick={() => {
                         if (!alreadyAdded) setSelectedKey(key);
                       }}
@@ -636,6 +638,7 @@ export default function TradePlayerSelect() {
               </tbody>
             </table>
           </div>
+        </div>
         </div>
       </div>
     </PageFade>
