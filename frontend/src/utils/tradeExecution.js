@@ -1,5 +1,6 @@
 import { getLeagueFinancialRules } from "./leagueFinancials.js";
 import { evaluateTradeTeamImpact } from "./tradeTeamImpact.js";
+import { findIneligibleTradePlayer } from "./tradeRosterEligibility.js";
 import {
   buildTradeMachineSwapAssets,
   getTradeablePickOwnedRange,
@@ -459,6 +460,13 @@ function writeSavedDraftState(nextDraftState) {
 }
 
 function readTradePhaseInfo(leagueData) {
+  const attached = leagueData?.__offseasonTradeContext;
+  if (attached && typeof attached === "object" && attached.version) {
+    return {
+      ...attached,
+      enforceRegularSeasonRosterLimits: !attached.inOffseason,
+    };
+  }
   const seasonYear = getCurrentSeasonYear(leagueData);
   const offseasonState = readOffseasonState();
   const savedLottery = readSavedDraftLottery(seasonYear);
@@ -525,7 +533,9 @@ function getLockedDraftOrder(leagueData, seasonYear = getCurrentSeasonYear(leagu
   if (Array.isArray(direct) && direct.length) return direct;
 
   const lotteryOrder = leagueData?.draftState?.lottery?.fullDraftOrder;
-  if (Array.isArray(lotteryOrder) && lotteryOrder.length) return lotteryOrder;
+  if (leagueData?.draftState?.draftLotteryComplete && Array.isArray(lotteryOrder) && lotteryOrder.length) {
+    return lotteryOrder;
+  }
 
   const savedLottery = readSavedDraftLottery(seasonYear);
   if (
@@ -1646,6 +1656,18 @@ function validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, c
 
   if (!userItems.length || !cpuItems.length) {
     return { ok: false, reason: "Add at least one asset from each side before submitting." };
+  }
+
+  const ineligibleUserPlayer = findIneligibleTradePlayer(userItems, { leagueData });
+  if (ineligibleUserPlayer) {
+    const name = playerNameOf(ineligibleUserPlayer.item?.player);
+    return { ok: false, reason: `${name} cannot be traded: ${ineligibleUserPlayer.eligibility?.reason || "the player is not under a guaranteed contract for next season."}` };
+  }
+
+  const ineligibleCpuPlayer = findIneligibleTradePlayer(cpuItems, { leagueData });
+  if (ineligibleCpuPlayer) {
+    const name = playerNameOf(ineligibleCpuPlayer.item?.player);
+    return { ok: false, reason: `${name} cannot be traded: ${ineligibleCpuPlayer.eligibility?.reason || "the player is not under a guaranteed contract for next season."}` };
   }
 
   const userFinancial = evaluateTradeFinancialLegality({

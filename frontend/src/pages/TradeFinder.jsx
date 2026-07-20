@@ -3,6 +3,15 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { findComfortableTradeFinderOffers, sortTradeFinderOfferItems } from "../utils/tradeFinderOfferEngine.js";
 import { evaluateTradeTeamImpact } from "../utils/tradeTeamImpact.js";
+import {
+  buildOffseasonTradeEvaluationLeague,
+  getOffseasonTradeContext,
+  getTeamFromTradeLeague,
+} from "../utils/offseasonTradeContext.js";
+import {
+  filterTradeEligiblePlayers,
+  findIneligibleTradePlayer,
+} from "../utils/tradeRosterEligibility.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import PageFade from "../components/PageFade";
 import {
@@ -579,7 +588,9 @@ function readLockedDraftOrder(leagueData, seasonYear) {
   if (Array.isArray(direct) && direct.length) return direct;
 
   const lotteryOrder = leagueData?.draftState?.lottery?.fullDraftOrder;
-  if (Array.isArray(lotteryOrder) && lotteryOrder.length) return lotteryOrder;
+  if (leagueData?.draftState?.draftLotteryComplete && Array.isArray(lotteryOrder) && lotteryOrder.length) {
+    return lotteryOrder;
+  }
 
   const savedLottery = safeJSON(localStorage.getItem("bm_draft_lottery_v1"), null);
   if (
@@ -676,9 +687,14 @@ function collectTradeablePicksForTeam(leagueData, teamName) {
     .map((team) => team?.name || team?.teamName)
     .filter(Boolean);
   const seasonYear = getSeasonYearFromLeague(leagueData);
-  const draftOrder = readLockedDraftOrder(leagueData, seasonYear);
-  const draftComplete = isDraftCompleteForSeason(leagueData, seasonYear);
-  const draftOrderLocked = draftOrder.length >= 60;
+  const tradeContext = getOffseasonTradeContext(leagueData);
+  const draftOrder = tradeContext?.draftOrderLocked
+    ? tradeContext.draftOrder
+    : readLockedDraftOrder(leagueData, seasonYear);
+  const draftComplete = tradeContext?.inOffseason
+    ? Boolean(tradeContext.draftComplete)
+    : isDraftCompleteForSeason(leagueData, seasonYear);
+  const draftOrderLocked = Boolean(tradeContext?.draftOrderLocked || draftOrder.length >= 60);
 
   const futurePicks = normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
     .filter((pick) => String(pick.status || "active").toLowerCase() === "active")
@@ -791,8 +807,7 @@ function packageValue(items, leagueData) {
 }
 
 function getCandidateAssets(team, leagueData) {
-  const players = getTeamPlayers(team)
-    .filter((player) => !player?.isTwoWay && !player?.isStash)
+  const players = filterTradeEligiblePlayers(getTeamPlayers(team), { leagueData })
     .map((player) => ({
       type: "player",
       player,
@@ -966,10 +981,12 @@ function debugTradeFinderLoadOffer({ leagueData, selectedTeam, selectedItems, of
   try {
     const offerTeam = findTeamInLeague(leagueData, offer?.team?.name || offer?.team?.teamName || offer?.teamName) || offer?.team;
     const offerItems = sortTradeFinderOfferItems(offer?.offer || [], leagueData);
+    const projected = buildOffseasonTradeEvaluationLeague(leagueData);
+    const evaluationLeague = projected.leagueData;
     const builderEvaluation = evaluateTradeTeamImpact({
-      leagueData,
-      userTeam: selectedTeam,
-      cpuTeam: offerTeam,
+      leagueData: evaluationLeague,
+      userTeam: getTeamFromTradeLeague(evaluationLeague, selectedTeam?.name) || selectedTeam,
+      cpuTeam: getTeamFromTradeLeague(evaluationLeague, offerTeam?.name) || offerTeam,
       userTeamName: selectedTeam?.name || selectedTeam?.teamName || "",
       cpuTeamName: offerTeam?.name || offerTeam?.teamName || offer?.teamName || "",
       userItems: selectedItems,
@@ -1233,6 +1250,8 @@ function validateTradeFinderOffer({ leagueData, selectedTeam, offer }) {
   const offerItems = offer.offer;
 
   if (!selectedItems.length || !offerItems.length) return false;
+  if (findIneligibleTradePlayer(selectedItems, { leagueData })) return false;
+  if (findIneligibleTradePlayer(offerItems, { leagueData })) return false;
   if (getUnsupportedRosterTradePlayer(selectedItems) || getUnsupportedRosterTradePlayer(offerItems)) return false;
   if (!areTradeItemsStillOwned(leagueData, selectedTeam, selectedItems)) return false;
   if (!areTradeItemsStillOwned(leagueData, offerTeam, offerItems)) return false;
@@ -1832,7 +1851,11 @@ export default function TradeFinder() {
   const [offerSearchStopped, setOfferSearchStopped] = useState(false);
   const offerSearchAbortRef = useRef(null);
 
-  const selectedTeamPlayers = useMemo(() => getTeamPlayers(selectedTeam), [selectedTeam]);
+  const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
+  const selectedTeamPlayers = useMemo(
+    () => filterTradeEligiblePlayers(getTeamPlayers(selectedTeam), { leagueData, tradeContext }),
+    [selectedTeam, leagueData, tradeContext]
+  );
   const selectedTeamPicks = useMemo(() => getOwnedPicks(leagueData, selectedTeam?.name), [leagueData, selectedTeam]);
 
   const playerAssets = useMemo(

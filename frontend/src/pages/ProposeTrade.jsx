@@ -3,6 +3,11 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { evaluateTradeTeamImpact } from "../utils/tradeTeamImpact.js";
+import {
+  buildOffseasonTradeEvaluationLeague,
+  getOffseasonTradeContext,
+  getTeamFromTradeLeague,
+} from "../utils/offseasonTradeContext.js";
 import { executeAcceptedTradeOnLeague as executeAcceptedTradeOnLeagueShared } from "../utils/tradeExecution.js";
 import {
   buildTradeMachineSwapAssets,
@@ -536,7 +541,9 @@ function getLockedDraftOrder(leagueData, seasonYear = getCurrentSeasonYear(leagu
   if (Array.isArray(direct) && direct.length) return direct;
 
   const lotteryOrder = leagueData?.draftState?.lottery?.fullDraftOrder;
-  if (Array.isArray(lotteryOrder) && lotteryOrder.length) return lotteryOrder;
+  if (leagueData?.draftState?.draftLotteryComplete && Array.isArray(lotteryOrder) && lotteryOrder.length) {
+    return lotteryOrder;
+  }
 
   const savedLottery = readSavedDraftLottery(seasonYear);
   if (
@@ -2480,6 +2487,12 @@ export default function ProposeTrade() {
   const location = useLocation();
   const { leagueData, selectedTeam, setLeagueData } = useGame();
   const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
+  const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
+  const offseasonEvaluation = useMemo(
+    () => buildOffseasonTradeEvaluationLeague(leagueData, tradeContext),
+    [leagueData, tradeContext]
+  );
+  const evaluationLeagueData = offseasonEvaluation.leagueData;
   const userTeamName = selectedTeam?.name || "";
   const cpuTeamOptions = useMemo(
     () =>
@@ -2528,7 +2541,7 @@ export default function ProposeTrade() {
     };
   }, []);
 
-  const tradeDeadlineLocked = isTradeDeadlineLocked(deadlineStatus);
+  const tradeDeadlineLocked = !tradeContext.inOffseason && isTradeDeadlineLocked(deadlineStatus);
   const tradeDeadlineMessage = tradeDeadlineLocked
     ? "The trade deadline has passed. New trade offers are locked until the offseason."
     : "";
@@ -2536,8 +2549,10 @@ export default function ProposeTrade() {
   const cpuTeamName = builder.cpuTeamName || firstCpu;
   const userTeam = teams.find((t) => t?.name === userTeamName) || selectedTeam;
   const cpuTeam = teams.find((t) => t?.name === cpuTeamName) || cpuTeamOptions[0] || null;
-  const userItems = builder.userItems || [];
-  const cpuItems = builder.cpuItems || [];
+  const userItems = sanitizeTradeItems(builder.userItems || [], { leagueData, tradeContext });
+  const cpuItems = sanitizeTradeItems(builder.cpuItems || [], { leagueData, tradeContext });
+  const evaluationUserTeam = getTeamFromTradeLeague(evaluationLeagueData, userTeamName) || userTeam;
+  const evaluationCpuTeam = getTeamFromTradeLeague(evaluationLeagueData, cpuTeamName) || cpuTeam;
   const cameFromTradeFinder = Boolean(
     builder?.returnToTradeFinder ||
       builder?.source === "tradeFinder" ||
@@ -2751,9 +2766,9 @@ export default function ProposeTrade() {
 
     try {
       const result = evaluateTradeTeamImpact({
-        leagueData,
-        userTeam,
-        cpuTeam,
+        leagueData: evaluationLeagueData,
+        userTeam: evaluationUserTeam,
+        cpuTeam: evaluationCpuTeam,
         userTeamName,
         cpuTeamName,
         userItems,

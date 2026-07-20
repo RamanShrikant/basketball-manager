@@ -1,3 +1,4 @@
+import { filterTradeEligiblePlayers } from "./tradeRosterEligibility.js";
 import { getPlayerSalary, sideSalary } from "./tradeExecution.js";
 import {
   canAddCustomProtectionToPick,
@@ -134,10 +135,17 @@ export function getSeasonYearFromLeague(leagueData = {}) {
 }
 
 function readLockedDraftOrder(leagueData, seasonYear) {
+  const attachedContext = leagueData?.__offseasonTradeContext;
+  const attached = attachedContext?.draftOrder;
+  if (attachedContext?.draftOrderLocked && Array.isArray(attached) && attached.length) return attached;
+  const lotteryComplete = Boolean(
+    leagueData?.draftState?.draftLotteryComplete ||
+      leagueData?.offseasonState?.draftLotteryComplete
+  );
   const direct = leagueData?.draftState?.fullDraftOrder || leagueData?.draftLottery?.fullDraftOrder;
-  if (Array.isArray(direct) && direct.length) return direct;
+  if (lotteryComplete && Array.isArray(direct) && direct.length) return direct;
   const lotteryOrder = leagueData?.draftState?.lottery?.fullDraftOrder;
-  if (Array.isArray(lotteryOrder) && lotteryOrder.length) return lotteryOrder;
+  if (lotteryComplete && Array.isArray(lotteryOrder) && lotteryOrder.length) return lotteryOrder;
 
   try {
     if (typeof localStorage === "undefined") return [];
@@ -157,6 +165,10 @@ function readLockedDraftOrder(leagueData, seasonYear) {
 }
 
 function isDraftCompleteForSeason(leagueData, seasonYear) {
+  const attached = leagueData?.__offseasonTradeContext;
+  if (attached && Number(attached.seasonYear || seasonYear) === Number(seasonYear)) {
+    return Boolean(attached.draftComplete);
+  }
   try {
     const offseasonState = typeof localStorage !== "undefined" ? safeJSON(localStorage.getItem("bm_offseason_state_v1"), {}) || {} : {};
     const savedDraftState = typeof localStorage !== "undefined" ? safeJSON(localStorage.getItem("bm_draft_state_v1"), null) : null;
@@ -430,8 +442,7 @@ export function buildPickCandidates(team, leagueData) {
 }
 
 export function buildPlayerCandidates(team, leagueData) {
-  return getTeamPlayers(team)
-    .filter(isStandardRosterPlayer)
+  return filterTradeEligiblePlayers(getTeamPlayers(team), { leagueData })
     .map((player) => {
       const salary = getPlayerSalary(player, leagueData);
       const value = playerValue(player, leagueData);

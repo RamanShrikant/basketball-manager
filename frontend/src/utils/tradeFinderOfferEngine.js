@@ -12,6 +12,11 @@ import {
   uniqueByFamilyKey,
 } from "./tradeFinderPackageBuilder.js";
 import { resetTradeFinderImpactSearchCaches } from "./tradeTeamImpact.js";
+import {
+  attachOffseasonTradeContext,
+  buildOffseasonTradeEvaluationLeague,
+  getOffseasonTradeContext,
+} from "./offseasonTradeContext.js";
 
 import {
   TRADE_FINDER_COMFORT_FLOOR,
@@ -1095,6 +1100,8 @@ function sortFinalOffers(offers = []) {
 
 export async function runTradeFinderTeamBatch({
   leagueData,
+  evaluationLeagueData = null,
+  tradeContext = null,
   selectedTeam,
   selectedItems = [],
   cpuTeams = [],
@@ -1107,7 +1114,14 @@ export async function runTradeFinderTeamBatch({
 } = {}) {
   const batchStartedAt = nowMs();
   const batchTiming = {};
-  const baseContext = makeTradeFinderEvalContext({ leagueData, selectedTeam, selectedItems, comfortFloor });
+  const baseContext = makeTradeFinderEvalContext({
+    leagueData,
+    evaluationLeagueData,
+    tradeContext,
+    selectedTeam,
+    selectedItems,
+    comfortFloor,
+  });
   const offers = [];
   const teamSummaries = [];
   const aggregateMetrics = cloneMetrics(baseContext.metrics);
@@ -1120,6 +1134,8 @@ export async function runTradeFinderTeamBatch({
     let phaseStartedAt = nowMs();
     const context = makeTradeFinderEvalContext({
       leagueData,
+      evaluationLeagueData,
+      tradeContext,
       selectedTeam,
       selectedItems,
       comfortFloor: baseContext.comfortFloor,
@@ -1183,6 +1199,8 @@ function mergeMetricTotals(target = {}, source = {}) {
 
 async function runTradeFinderTeamsInWorkerPool({
   leagueData,
+  evaluationLeagueData = null,
+  tradeContext = null,
   selectedTeam,
   selectedItems = [],
   checkTeams = [],
@@ -1271,6 +1289,8 @@ async function runTradeFinderTeamsInWorkerPool({
           workerId,
           payload: {
             leagueData,
+            evaluationLeagueData,
+            tradeContext,
             selectedTeam,
             selectedItems,
             cpuTeams: chunk.teams,
@@ -1315,6 +1335,8 @@ async function runTradeFinderTeamsInWorkerPool({
 
 export async function findComfortableTradeFinderOffers({
   leagueData,
+  evaluationLeagueData = null,
+  tradeContext = null,
   selectedTeam,
   selectedItems = [],
   teams = [],
@@ -1322,6 +1344,15 @@ export async function findComfortableTradeFinderOffers({
   signal = null,
   searchMode = "accurate",
 } = {}) {
+  const resolvedTradeContext = getOffseasonTradeContext(leagueData, tradeContext);
+  const transactionLeagueData = attachOffseasonTradeContext(leagueData, resolvedTradeContext);
+  const preparedEvaluation = evaluationLeagueData
+    ? { leagueData: evaluationLeagueData, context: resolvedTradeContext }
+    : buildOffseasonTradeEvaluationLeague(transactionLeagueData, resolvedTradeContext);
+  leagueData = transactionLeagueData;
+  evaluationLeagueData = preparedEvaluation.leagueData;
+  tradeContext = resolvedTradeContext;
+
   const startedAt = nowMs();
   const searchTiming = {};
   let phaseStartedAt = nowMs();
@@ -1329,7 +1360,13 @@ export async function findComfortableTradeFinderOffers({
   const checkTeams = allTeams.filter((team) => !sameTeamName(getTeamName(team), getTeamName(selectedTeam)));
   addTimingMs(searchTiming, "resolveTeamsMs", nowMs() - phaseStartedAt);
   phaseStartedAt = nowMs();
-  const baseContext = makeTradeFinderEvalContext({ leagueData, selectedTeam, selectedItems });
+  const baseContext = makeTradeFinderEvalContext({
+    leagueData,
+    evaluationLeagueData,
+    tradeContext,
+    selectedTeam,
+    selectedItems,
+  });
   addTimingMs(searchTiming, "makeBaseContextMs", nowMs() - phaseStartedAt);
   const offers = [];
   const teamSummaries = [];
@@ -1370,6 +1407,8 @@ export async function findComfortableTradeFinderOffers({
   try {
     const workerResult = await runTradeFinderTeamsInWorkerPool({
       leagueData,
+      evaluationLeagueData,
+      tradeContext,
       selectedTeam,
       selectedItems,
       checkTeams,
@@ -1416,6 +1455,8 @@ export async function findComfortableTradeFinderOffers({
     phaseStartedAt = nowMs();
     const context = makeTradeFinderEvalContext({
       leagueData,
+      evaluationLeagueData,
+      tradeContext,
       selectedTeam,
       selectedItems,
       comfortFloor: baseContext.comfortFloor,

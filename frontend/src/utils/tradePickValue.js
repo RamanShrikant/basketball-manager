@@ -281,7 +281,11 @@ function loadResultsV3() {
   return out;
 }
 
-function buildRecordMap() {
+function buildRecordMap(leagueData = null) {
+  const attached = leagueData?.__offseasonTradeRecords;
+  if (attached && typeof attached === "object" && Object.keys(attached).length) {
+    return attached;
+  }
   const schedule = loadSchedule();
   const results = loadResultsV3();
   const map = {};
@@ -495,8 +499,20 @@ function getPickCache(cache, key) {
   return value;
 }
 
-function getPickStorageSignature() {
-  return `${safeLocalStorageGet(RESULT_V3_INDEX_KEY) || ""}::${safeLocalStorageGet(SCHEDULE_KEY) || ""}`;
+function getPickStorageSignature(leagueData = {}) {
+  const attachedRecords = Object.entries(leagueData?.__offseasonTradeRecords || {})
+    .map(([name, row]) => `${normalizeName(name)}:${toNum(row?.w, 0)}:${toNum(row?.l, 0)}:${toNum(row?.gp, 0)}`)
+    .sort()
+    .join("|");
+  const tradeContext = leagueData?.__offseasonTradeContext || {};
+  return [
+    safeLocalStorageGet(RESULT_V3_INDEX_KEY) || "",
+    safeLocalStorageGet(SCHEDULE_KEY) || "",
+    attachedRecords,
+    tradeContext?.seasonYear || "",
+    tradeContext?.stage || "",
+    tradeContext?.currentPickIndex || 0,
+  ].join("::");
 }
 
 function getLiveRosterRankSignature(teams = []) {
@@ -598,7 +614,7 @@ function buildLivePickBaseRows(leagueData, teams = getAllTeamsFromLeague(leagueD
   const totalStart = pickNow();
   try {
     const rosterSignature = liveSignature || measurePick(diag, "liveBaseRowsRosterSignatureMs", () => getLiveRosterRankSignature(teams));
-    const storage = storageSignature || measurePick(diag, "liveBaseRowsStorageSignatureMs", () => getPickStorageSignature());
+    const storage = storageSignature || measurePick(diag, "liveBaseRowsStorageSignatureMs", () => getPickStorageSignature(leagueData));
     const cacheKey = `${rosterSignature}::${storage}`;
     const cached = measurePick(diag, "liveBaseRowsCacheLookupMs", () => getPickCache(liveBaseRowsCache, cacheKey));
     if (cached) {
@@ -607,7 +623,7 @@ function buildLivePickBaseRows(leagueData, teams = getAllTeamsFromLeague(leagueD
     }
     incPickMetric(diag, "liveBaseRowsCacheMisses");
 
-    const records = measurePick(diag, "liveBaseRowsRecordMapMs", () => buildRecordMap());
+    const records = measurePick(diag, "liveBaseRowsRecordMapMs", () => buildRecordMap(leagueData));
     const baseRows = measurePick(diag, "liveBaseRowsMapMs", () => teams.map((team) => {
       const name = getTeamName(team);
       const ratings = calculatePickTeamRatingSnapshot(team);
@@ -644,7 +660,7 @@ function buildPickRankContext(leagueData, projection = null, diagLabel = "") {
   try {
     const teams = measurePick(diag, `${prefix}TeamsMs`, () => getAllTeamsFromLeague(leagueData));
     const liveSignature = measurePick(diag, `${prefix}LiveSignatureMs`, () => getLiveRosterRankSignature(teams));
-    const storageSignature = measurePick(diag, `${prefix}StorageSignatureMs`, () => getPickStorageSignature());
+    const storageSignature = measurePick(diag, `${prefix}StorageSignatureMs`, () => getPickStorageSignature(leagueData));
     const projectionSignature = measurePick(diag, `${prefix}ProjectionSignatureMs`, () => getProjectionRosterSignature(projection));
     const cacheKey = `${liveSignature}::${storageSignature}::${projectionSignature}`;
     if (rankCache.has(cacheKey)) {
@@ -810,6 +826,132 @@ function slotValue(round, slot) {
   const n = Math.round(Number(slot || 0));
   if (Number(round) === 2) return Number(SECOND_SLOT_VALUE[clamp(n, 31, 60)] || 0.05);
   return Number(FIRST_SLOT_VALUE[clamp(n, 1, 30)] || 0.35);
+}
+
+function getDraftTradeContext(leagueData = {}) {
+  const context = leagueData?.__offseasonTradeContext;
+  return context && typeof context === "object" ? context : null;
+}
+
+function prospectOverall(prospect = {}) {
+  return toNum(prospect?.overall ?? prospect?.ovr ?? prospect?.revealedOverall ?? prospect?.projectedOverall, 60);
+}
+
+function prospectPotential(prospect = {}) {
+  const overall = prospectOverall(prospect);
+  return Math.max(overall, toNum(prospect?.potential ?? prospect?.pot ?? prospect?.revealedPotential ?? prospect?.projectedPotential, overall));
+}
+
+function prospectDraftValue(prospect = {}) {
+  const overall = prospectOverall(prospect);
+  const potential = prospectPotential(prospect);
+  const age = clamp(toNum(prospect?.age, 20), 18, 24);
+  const readyBonus = Math.max(0, overall - 74) * 0.10;
+  const upsideBonus = Math.max(0, potential - overall) * 0.035;
+  const ageBonus = Math.max(0, 21 - age) * 0.12;
+  return overall * 0.55 + potential * 0.45 + readyBonus + upsideBonus + ageBonus;
+}
+
+function normalProspectValueAtSlot(slot = 15) {
+  const anchors = [
+    [1, 86.5], [3, 84.4], [5, 82.7], [10, 79.6], [15, 77.0],
+    [20, 75.2], [30, 72.5], [40, 70.5], [60, 67.8],
+  ];
+  const target = clamp(Number(slot || 15), 1, 60);
+  for (let index = 1; index < anchors.length; index += 1) {
+    const [rightSlot, rightValue] = anchors[index];
+    const [leftSlot, leftValue] = anchors[index - 1];
+    if (target <= rightSlot) {
+      const ratio = (target - leftSlot) / Math.max(1, rightSlot - leftSlot);
+      return leftValue + (rightValue - leftValue) * ratio;
+    }
+  }
+  return anchors[anchors.length - 1][1];
+}
+
+function getDraftBoardRows(leagueData = {}) {
+  const context = getDraftTradeContext(leagueData);
+  const rows = Array.isArray(context?.draftProspects) ? context.draftProspects : [];
+  return rows
+    .filter((row) => row && typeof row === "object")
+    .slice()
+    .sort((a, b) => {
+      const aProjection = toNum(a?.draftProjection ?? a?.trueRank ?? a?.rank, 999);
+      const bProjection = toNum(b?.draftProjection ?? b?.trueRank ?? b?.rank, 999);
+      if (aProjection !== bProjection) return aProjection - bProjection;
+      return prospectDraftValue(b) - prospectDraftValue(a);
+    });
+}
+
+function getDraftClassMultiplier(leagueData = {}, slot = 15) {
+  const context = getDraftTradeContext(leagueData);
+  if (!context?.inOffseason || context?.draftComplete) return 1;
+  const board = getDraftBoardRows(leagueData);
+  if (!board.length) return 1;
+
+  const center = clamp(Math.round(Number(slot || 15)), 1, Math.min(60, board.length));
+  const indices = [center - 2, center - 1, center, center + 1, center + 2]
+    .map((oneBased) => clamp(oneBased - 1, 0, board.length - 1));
+  const weights = [0.10, 0.22, 0.36, 0.22, 0.10];
+  let actual = 0;
+  let normal = 0;
+  indices.forEach((index, idx) => {
+    actual += prospectDraftValue(board[index]) * weights[idx];
+    normal += normalProspectValueAtSlot(index + 1) * weights[idx];
+  });
+  if (normal <= 0) return 1;
+  return round4(clamp(actual / normal, 0.88, 1.16));
+}
+
+function getLotteryExpectedPickModel({ leagueData = {}, originalTeam = "", range = null } = {}) {
+  const context = getDraftTradeContext(leagueData);
+  if (!context?.inOffseason || context?.lotteryRevealed || context?.draftComplete) return null;
+  const row = context?.lotteryOddsByTeam?.[normalizeName(originalTeam)];
+  const odds = row?.oddsByPick;
+  if (!odds || typeof odds !== "object") return null;
+
+  const normalizedRange = normalizeRange(range, 1);
+  let probability = 0;
+  let expectedSlot = 0;
+  let fullValue = 0;
+  let rangedValue = 0;
+
+  for (const [rawSlot, rawPct] of Object.entries(odds)) {
+    const slot = Number(rawSlot);
+    const chance = Number(rawPct) / 100;
+    if (!Number.isFinite(slot) || slot < 1 || slot > 30 || !Number.isFinite(chance) || chance <= 0) continue;
+    probability += chance;
+    expectedSlot += slot * chance;
+    const classMultiplier = getDraftClassMultiplier(leagueData, slot);
+    const value = slotValue(1, slot) * classMultiplier;
+    fullValue += value * chance;
+    if (slot >= normalizedRange.start && slot <= normalizedRange.end) rangedValue += value * chance;
+  }
+
+  if (probability <= 0) return null;
+  return {
+    expectedSlot: expectedSlot / probability,
+    fullSlotValue: fullValue / probability,
+    rangedSlotValue: rangedValue / probability,
+    conveyanceChance: clamp(
+      Object.entries(odds).reduce((sum, [rawSlot, rawPct]) => {
+        const slot = Number(rawSlot);
+        const chance = Number(rawPct) / 100;
+        return slot >= normalizedRange.start && slot <= normalizedRange.end ? sum + chance : sum;
+      }, 0) / probability,
+      0,
+      1
+    ),
+    ratio: fullValue > 0 ? clamp(rangedValue / fullValue, 0, 1) : 1,
+  };
+}
+
+function getPreLotteryExpectedSlot(leagueData = {}, originalTeam = "") {
+  const context = getDraftTradeContext(leagueData);
+  if (!context?.inOffseason || context?.lotteryRevealed || context?.draftComplete) return 0;
+  const row = context?.preLotteryExpectedSlotByTeam?.[normalizeName(originalTeam)];
+  const slot = Number(row?.expectedSlot || 0);
+  return Number.isFinite(slot) && slot > 0 ? slot : 0;
 }
 
 function getFullSlotRange(round) {
@@ -1038,9 +1180,15 @@ function projectSinglePickValue(item = {}, leagueData = {}, context = buildPickR
   const potRank = clamp(Number(teamContext.potRank || powerRank || 15), 1, 30);
   const blendedRank = clamp(powerRank * power + potRank * pot, 1, 30);
   const pickNumber = getPickNumber(pick);
-  const expectedSlot = pickNumber || expectedSlotFromRank(blendedRank, round, offset);
   const range = getRangeFromItem(item, round);
-  const rangeModel = distributionExpectedSlotValue({ round, expectedSlot, yearOffset: offset, range });
+  const lotteryModel = offset === 0 && round === 1 && !pickNumber
+    ? getLotteryExpectedPickModel({ leagueData, originalTeam, range })
+    : null;
+  const preLotteryExpectedSlot = offset === 0 && round === 1 && !pickNumber
+    ? getPreLotteryExpectedSlot(leagueData, originalTeam)
+    : 0;
+  const expectedSlot = pickNumber || lotteryModel?.expectedSlot || preLotteryExpectedSlot || expectedSlotFromRank(blendedRank, round, offset);
+  const rangeModel = lotteryModel || distributionExpectedSlotValue({ round, expectedSlot, yearOffset: offset, range });
   const normalizedRange = normalizeRange(range, round);
   const fullRange = getFullSlotRange(round);
   const rangeIsFull = normalizedRange.start === fullRange.start && normalizedRange.end === fullRange.end;
@@ -1051,28 +1199,42 @@ function projectSinglePickValue(item = {}, leagueData = {}, context = buildPickR
     rangeIsFull,
     pickNumber,
   });
+  const draftClassMultiplier = offset === 0 ? getDraftClassMultiplier(leagueData, pickNumber || expectedSlot) : 1;
 
-  // Core pick value now comes from expected landing area, not a generic pick label.
-  // For protected picks, rangedSlotValue is weighted across only the slots the
-  // receiving team can actually get. That means a top-5 protected bad-team first
-  // loses the #1-5 upside and can only be valued from #6 onward.
+  // Current-draft assets use the best information available at each stage:
+  // exact lottery slot after the reveal, the full lottery odds distribution
+  // before the reveal, and the live remaining prospect board during the draft.
+  // Future picks remain on the existing Power/POT projection model.
   const rawUnprotectedValue = pickNumber
-    ? slotValue(round, pickNumber) * certainty * valueTuningMultiplier
+    ? slotValue(round, pickNumber) * certainty * valueTuningMultiplier * draftClassMultiplier
     : rangeModel.fullSlotValue * certainty * valueTuningMultiplier;
-  const value = round4(pickNumber ? rawUnprotectedValue : rangeModel.rangedSlotValue * certainty * valueTuningMultiplier);
+  const value = round4(
+    pickNumber
+      ? rawUnprotectedValue
+      : rangeModel.rangedSlotValue * certainty * valueTuningMultiplier
+  );
   const effectiveRangeRatio = pickNumber ? 1 : rangeModel.ratio;
   const effectiveConveyanceChance = pickNumber ? 1 : rangeModel.conveyanceChance;
   const protectionText = String(item.protection || pick.displayProtection || pick.protections || pick.protection || "Unprotected");
   const rankPrefix = teamContext.postTradeProjected ? "post-trade projected Power Rank" : "Power Rank";
   const potPrefix = teamContext.postTradeProjected ? "post-trade projected POT Rank" : "POT Rank";
   const rankSource = offset === 0 ? `${rankPrefix} #${powerRank}` : `${rankPrefix} #${powerRank} / ${potPrefix} #${potRank}`;
-  const blendLabel = offset === 0 ? "current-year Power Ranking" : `${Math.round(power * 100)}% Power Ranking / ${Math.round(pot * 100)}% POT`;
+  const blendLabel = lotteryModel
+    ? "actual pre-lottery odds distribution"
+    : preLotteryExpectedSlot
+      ? "final-season lottery position projection"
+      : offset === 0
+        ? "current-year Power Ranking"
+        : `${Math.round(power * 100)}% Power Ranking / ${Math.round(pot * 100)}% POT`;
   const originalLabel = displayTeamName(originalTeam);
   const protectionNote = rangeIsFull
     ? ""
     : `, ${(effectiveConveyanceChance * 100).toFixed(0)}% expected conveyance, best conveyable ${formatRange(range, round)}`;
   const tuningNote = valueTuningMultiplier > 1.0001 ? `, draft-capital tuning x${valueTuningMultiplier.toFixed(3)}` : "";
-  const reason = `${pickYear} ${originalLabel} ${formatRound(round)} valued at ${value.toFixed(3)} (${rankSource}, ${blendLabel}, expected pick #${round4(expectedSlot).toFixed(2)}, ${formatRange(range, round)}${protectionNote}${tuningNote}).`;
+  const classNote = Math.abs(draftClassMultiplier - 1) > 0.005
+    ? `, current draft-board quality x${draftClassMultiplier.toFixed(3)}`
+    : "";
+  const reason = `${pickYear} ${originalLabel} ${formatRound(round)} valued at ${value.toFixed(3)} (${rankSource}, ${blendLabel}, expected pick #${round4(expectedSlot).toFixed(2)}, ${formatRange(range, round)}${protectionNote}${tuningNote}${classNote}).`;
 
   return {
     value,
@@ -1090,6 +1252,14 @@ function projectSinglePickValue(item = {}, leagueData = {}, context = buildPickR
     originalTeam,
     protectionText,
     range,
+    draftClassMultiplier,
+    valuationStage: lotteryModel
+      ? "pre_lottery_odds"
+      : pickNumber
+        ? "exact_pick"
+        : preLotteryExpectedSlot
+          ? "pre_lottery_final_record"
+          : "projected_pick",
     reason,
   };
 }

@@ -307,8 +307,20 @@ function leaguePowerSignature(leagueData, teams = []) {
     .sort()
     .join("##");
 
+  const attachedRecordPart = Object.entries(leagueData?.__offseasonTradeRecords || {})
+    .map(([name, row]) => `${normalizeName(name)}:${toNum(row?.w, 0)}:${toNum(row?.l, 0)}:${toNum(row?.gp, 0)}`)
+    .sort()
+    .join("|");
+  const offseasonPart = [
+    leagueData?.__offseasonTradeContext?.seasonYear || "",
+    leagueData?.__offseasonTradeContext?.stage || "",
+    leagueData?.__offseasonTradeContext?.currentPickIndex || 0,
+  ].join("|");
+
   return [
     rosterPart,
+    attachedRecordPart,
+    offseasonPart,
     safeLocalStorageGet(RESULT_V3_INDEX_KEY) || "",
     safeLocalStorageGet(SCHEDULE_KEY) || "",
   ].join("::");
@@ -690,7 +702,11 @@ function loadResultsV3() {
   return out;
 }
 
-function buildRecordMap() {
+function buildRecordMap(leagueData = null) {
+  const attached = leagueData?.__offseasonTradeRecords;
+  if (attached && typeof attached === "object" && Object.keys(attached).length) {
+    return attached;
+  }
   const schedule = loadSchedule();
   const results = loadResultsV3();
   const map = {};
@@ -1253,7 +1269,7 @@ function buildPowerRankingRows(leagueData, metrics = null) {
 
   incrementBreakdownMetric(metrics, "powerRowsCacheMisses");
   const recordsStart = tfImpactNow();
-  const records = buildRecordMap();
+  const records = buildRecordMap(leagueData);
   addBreakdownMetric(metrics, "powerRowsRecordMapMs", tfImpactNow() - recordsStart);
 
   const confStart = tfImpactNow();

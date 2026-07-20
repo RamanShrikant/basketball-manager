@@ -3343,6 +3343,17 @@ export default function OffseasonHub() {
           >
             Open Team Hub
           </button>
+          <button
+            onClick={() => navigate("/trades")}
+            disabled={devOffseasonRunning}
+            className={`px-6 py-3 rounded-xl font-semibold transition ${
+              devOffseasonRunning
+                ? "bg-neutral-700 text-white/45 cursor-not-allowed"
+                : "border border-orange-400/35 bg-orange-500/10 text-orange-100 hover:bg-orange-500/20"
+            }`}
+          >
+            Open Trade Center
+          </button>
         </div>
       </div>
     </div>

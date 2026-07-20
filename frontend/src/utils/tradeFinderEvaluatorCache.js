@@ -1,5 +1,9 @@
 import { evaluateTradeTeamImpact } from "./tradeTeamImpact.js";
 import {
+  getOffseasonTradeContext,
+  getTeamFromTradeLeague,
+} from "./offseasonTradeContext.js";
+import {
   evaluateTradeFinancialLegality,
   sideSalary,
   validateTradeForExecution,
@@ -72,26 +76,45 @@ function teamRosterCount(team = {}) {
   return Array.isArray(team?.players) ? team.players.length : 0;
 }
 
-function rosterCountsOk({ selectedTeam, cpuTeam, selectedItems = [], cpuItems = [] } = {}) {
+function rosterCountsOk({ selectedTeam, cpuTeam, selectedItems = [], cpuItems = [], tradeContext = null } = {}) {
   const selectedRoster = teamRosterCount(selectedTeam);
   const cpuRoster = teamRosterCount(cpuTeam);
   const userOutPlayers = countPlayerItems(selectedItems);
   const cpuOutPlayers = countPlayerItems(cpuItems);
   const selectedAfter = selectedRoster - userOutPlayers + cpuOutPlayers;
   const cpuAfter = cpuRoster - cpuOutPlayers + userOutPlayers;
+  if (tradeContext?.inOffseason) {
+    return selectedAfter >= 0 && cpuAfter >= 0;
+  }
   // Match the regular-season standard roster ceiling used by trade execution.
   // This avoids exact-evaluating packages that will later fail validation because
   // the user receives too many players.
   return selectedAfter <= 16 && cpuAfter <= 16 && selectedAfter >= 1 && cpuAfter >= 1;
 }
-export function makeTradeFinderEvalContext({ leagueData, selectedTeam, selectedItems = [], comfortFloor = null } = {}) {
+export function makeTradeFinderEvalContext({
+  leagueData,
+  evaluationLeagueData = null,
+  tradeContext = null,
+  selectedTeam,
+  selectedItems = [],
+  comfortFloor = null,
+} = {}) {
   const hasExplicitComfortFloor = comfortFloor !== null && comfortFloor !== undefined && Number.isFinite(Number(comfortFloor));
   const resolvedComfortFloor = hasExplicitComfortFloor
     ? Number(comfortFloor)
     : getTradeFinderComfortFloorForPackage(selectedItems, leagueData);
+  const resolvedTradeContext = getOffseasonTradeContext(leagueData, tradeContext);
+  const resolvedEvaluationLeague = evaluationLeagueData || leagueData;
+  const evaluationSelectedTeam = getTeamFromTradeLeague(
+    resolvedEvaluationLeague,
+    getTeamName(selectedTeam)
+  ) || selectedTeam;
   return {
     leagueData,
+    evaluationLeagueData: resolvedEvaluationLeague,
+    tradeContext: resolvedTradeContext,
     selectedTeam,
+    evaluationSelectedTeam,
     selectedItems,
     comfortFloor: resolvedComfortFloor,
     useUltraFastExact: (() => {
@@ -126,7 +149,13 @@ export function financialOk({ context, cpuTeam, cpuItems }) {
   if (!Array.isArray(cpuItems) || !cpuItems.length) return false;
   if (!Array.isArray(selectedItems) || !selectedItems.length) return false;
 
-  if (!rosterCountsOk({ selectedTeam, cpuTeam, selectedItems, cpuItems })) {
+  if (!rosterCountsOk({
+    selectedTeam,
+    cpuTeam,
+    selectedItems,
+    cpuItems,
+    tradeContext: context?.tradeContext,
+  })) {
     context.metrics.financialRejected += 1;
     return false;
   }
@@ -188,7 +217,14 @@ function makeResult({ context, cpuTeam, cpuItems, evaluation, finalValidation, m
 }
 
 export function evaluateCpuPackage({ context, cpuTeam, cpuItems, mode = "exact", requireFinalValidation = true }) {
-  const { leagueData, selectedTeam, selectedItems, comfortFloor } = context || {};
+  const {
+    leagueData,
+    evaluationLeagueData,
+    evaluationSelectedTeam,
+    selectedTeam,
+    selectedItems,
+    comfortFloor,
+  } = context || {};
   if (!Array.isArray(cpuItems) || !cpuItems.length || cpuItems.length > 8) return null;
 
   if (!financialOk({ context, cpuTeam, cpuItems })) {
@@ -208,10 +244,14 @@ export function evaluateCpuPackage({ context, cpuTeam, cpuItems, mode = "exact",
   const isScan = mode === "scan";
   const isBuilderExact = mode === "builder_exact" || mode === "builder" || mode === "propose_exact";
   const isTradeFinderExact = !isBuilderExact && (mode === "tf_exact" || mode === "exact");
+  const evaluationCpuTeam = getTeamFromTradeLeague(
+    evaluationLeagueData || leagueData,
+    getTeamName(cpuTeam)
+  ) || cpuTeam;
   const evaluation = evaluateTradeTeamImpact({
-    leagueData,
-    userTeam: selectedTeam,
-    cpuTeam,
+    leagueData: evaluationLeagueData || leagueData,
+    userTeam: evaluationSelectedTeam || selectedTeam,
+    cpuTeam: evaluationCpuTeam,
     userTeamName: getTeamName(selectedTeam),
     cpuTeamName: getTeamName(cpuTeam),
     userItems: selectedItems,

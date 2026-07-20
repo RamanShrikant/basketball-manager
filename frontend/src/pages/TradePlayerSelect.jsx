@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
-import { filterStandardTradePlayers } from "../utils/tradeRosterEligibility.js";
+import { filterTradeEligiblePlayers } from "../utils/tradeRosterEligibility.js";
 import styles from "./RosterView.module.css";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
@@ -18,11 +18,11 @@ function getAllTeamsFromLeague(leagueData) {
   return [];
 }
 
-function getTeamPlayers(team) {
-  // Only standard-roster players are legal trade assets. Two-way and stash
-  // players stay completely hidden from the selector rather than appearing as
-  // disabled rows.
-  return filterStandardTradePlayers(team?.players);
+function getTeamPlayers(team, leagueData) {
+  // During the offseason, only players with guaranteed salary for the upcoming
+  // season are shown. Unsigned return projections still affect team valuation,
+  // but they are never exposed as selectable transaction assets.
+  return filterTradeEligiblePlayers(team?.players, { leagueData });
 }
 
 function playerNameOf(player) {
@@ -330,7 +330,7 @@ export default function TradePlayerSelect() {
 
   const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
   const team = teams.find((t) => t?.name === tradeTeamName) || teams[0] || null;
-  const players = useMemo(() => getTeamPlayers(team), [team]);
+  const players = useMemo(() => getTeamPlayers(team, leagueData), [team, leagueData]);
   const builderSnapshot = useMemo(() => readBuilder(), []);
   const currentSideItems = useMemo(
     () => getSideItems(builderSnapshot, tradeSide),

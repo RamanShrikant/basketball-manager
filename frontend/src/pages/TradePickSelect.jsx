@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
+import { getOffseasonTradeContext } from "../utils/offseasonTradeContext.js";
 import {
   canAddCustomProtectionToPick,
   canCreateSwapWithPick,
@@ -242,7 +243,9 @@ function readLockedDraftOrder(leagueData, seasonYear) {
   if (Array.isArray(direct) && direct.length) return direct;
 
   const lotteryOrder = leagueData?.draftState?.lottery?.fullDraftOrder;
-  if (Array.isArray(lotteryOrder) && lotteryOrder.length) return lotteryOrder;
+  if (leagueData?.draftState?.draftLotteryComplete && Array.isArray(lotteryOrder) && lotteryOrder.length) {
+    return lotteryOrder;
+  }
 
   const savedLottery = safeJSON(localStorage.getItem("bm_draft_lottery_v1"), null);
   if (
@@ -443,9 +446,14 @@ function collectTradeablePicks({ leagueData, teamName, teamNames, activeSwapKeys
   if (!leagueData || !teamName) return [];
 
   const seasonYear = getSeasonYearFromLeague(leagueData);
-  const draftOrder = readLockedDraftOrder(leagueData, seasonYear);
-  const draftComplete = isDraftCompleteForSeason(leagueData, seasonYear);
-  const draftOrderLocked = draftOrder.length >= 60;
+  const tradeContext = getOffseasonTradeContext(leagueData);
+  const draftOrder = tradeContext?.draftOrderLocked
+    ? tradeContext.draftOrder
+    : readLockedDraftOrder(leagueData, seasonYear);
+  const draftComplete = tradeContext?.inOffseason
+    ? Boolean(tradeContext.draftComplete)
+    : isDraftCompleteForSeason(leagueData, seasonYear);
+  const draftOrderLocked = Boolean(tradeContext?.draftOrderLocked || draftOrder.length >= 60);
 
   const normalizedFuturePicks = normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
     .filter((pick) => String(pick.status || "active").toLowerCase() === "active")
