@@ -8,7 +8,7 @@ import {
   computeAllStars,
   repairCpuTeamsToMinRoster,
 } from "@/api/simEnginePy";
-import { getCpuCpuTradeCandidates } from "../api/cpuTradeEngine.js";
+import { getCpuCpuTradeCandidates, prewarmCpuTradeWorker } from "../api/cpuTradeEngine.js";
 import { executeCpuTradeCandidateOnLeague } from "../utils/tradeExecution.js";
 import {
   TRADE_DESK_FEED_KEY,
@@ -25,7 +25,9 @@ import { createPortal } from "react-dom";
 import AllStars from "./AllStars";
 import {
   saveBoxScoreToDB,
+  saveBoxScoresBatchToDB,
   loadBoxScoreFromDB,
+  loadBoxScoresByGameIdsFromDB,
   deleteBoxScoreFromDB,
   clearBoxScoresFromDB,
 } from "../utils/indexedDbStorage";
@@ -166,6 +168,34 @@ function loadTeamRoleMap(teamName) {
   return buildRoleMapFromMinutes(minutesObj, orderedNames);
 }
 
+function buildSimulationRuntime(leagueData, teams = []) {
+  ensureGameplansForLeague(leagueData);
+  const teamById = new Map();
+  const teamByName = new Map();
+  const minutesByTeam = new Map();
+  const roleByTeam = new Map();
+  const orderByTeam = new Map();
+
+  for (const team of teams || []) {
+    if (!team?.name) continue;
+    teamById.set(slugifyId(team.name), team);
+    teamByName.set(team.name, team);
+    const minutes = readFlatMinutesFromGameplan(team.name);
+    minutesByTeam.set(team.name, minutes);
+    roleByTeam.set(team.name, loadTeamRoleMap(team.name));
+    orderByTeam.set(team.name, readGameplanOrder(team.name, team));
+  }
+
+  return { leagueData, teams, teamById, teamByName, minutesByTeam, roleByTeam, orderByTeam };
+}
+
+function yieldToBrowser() {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
+    else setTimeout(resolve, 0);
+  });
+}
+
 const REGULAR_SEASON_MIN_STANDARD_PLAYERS = 14;
 const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 15;
 const REGULAR_SEASON_MAX_TWO_WAY_PLAYERS = 3;
@@ -264,14 +294,15 @@ function getSimulationBlockMessageThroughDate(scheduleByDate, teams, endDate = n
 /* -------------------------------------------------------------------------- */
 /*                              SIMULATION WRAPPER                             */
 /* -------------------------------------------------------------------------- */
-async function simOneSafe(game, leagueData, teams) {
+async function simOneSafe(game, leagueData, teams, runtime = null) {
   if (window.__debugSimLogs) {
     window.__lastGame = game;
     console.log("⏳ simOneSafe starting:", game.home, "vs", game.away);
   }
 
-const homeSource = teams.find((t) => slugifyId(t.name) === game.homeId);
-const awaySource = teams.find((t) => slugifyId(t.name) === game.awayId);
+const activeRuntime = runtime || buildSimulationRuntime(leagueData, teams);
+const homeSource = activeRuntime.teamById.get(game.homeId) || teams.find((t) => slugifyId(t.name) === game.homeId);
+const awaySource = activeRuntime.teamById.get(game.awayId) || teams.find((t) => slugifyId(t.name) === game.awayId);
 
 if (!homeSource || !awaySource) {
   throw new Error(`Team lookup failed: ${game.homeId} / ${game.awayId}`);
@@ -281,8 +312,6 @@ const simBlockMessage = getSimulationBlockMessageForGame(game, teams);
 if (simBlockMessage) {
   throw new Error(simBlockMessage);
 }
-
-  ensureGameplansForLeague(leagueData);
 
   const homeTeamObj = structuredClone(homeSource);
   const awayTeamObj = structuredClone(awaySource);
@@ -299,8 +328,8 @@ if (simBlockMessage) {
     }
   }
 
-  homeTeamObj.minutes = readFlatMinutesFromGameplan(homeTeamObj.name);
-  awayTeamObj.minutes = readFlatMinutesFromGameplan(awayTeamObj.name);
+  homeTeamObj.minutes = { ...(activeRuntime.minutesByTeam.get(homeTeamObj.name) || {}) };
+  awayTeamObj.minutes = { ...(activeRuntime.minutesByTeam.get(awayTeamObj.name) || {}) };
 
   if (window.__debugSimLogs) {
     console.log("[simOneSafe] home minutes keys =", Object.keys(homeTeamObj.minutes || {}));
@@ -316,18 +345,15 @@ if (simBlockMessage) {
 // ---------------------------------------------------------------------------
 // Helper: run ONE game with retries, using simOneSafe + queueSim
 // ---------------------------------------------------------------------------
-async function runGameWithRetries(game, leagueData, teams, maxRetries = 3) {
+async function runGameWithRetries(game, leagueData, teams, maxRetries = 3, runtime = null) {
   let lastFull = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    console.log(
-      `[RetrySim] Game ${game.id} (${game.away} @ ${game.home}) attempt`,
-      attempt,
-      "of",
-      maxRetries
-    );
+    if (window.__debugSimLogs) {
+      console.log(`[RetrySim] Game ${game.id} (${game.away} @ ${game.home}) attempt`, attempt, "of", maxRetries);
+    }
 
-    lastFull = await simOneSafe(game, leagueData, teams);
+    lastFull = await simOneSafe(game, leagueData, teams, runtime);
 
     if (isBadFullResult(lastFull)) {
   window.__lastBad = {
@@ -342,23 +368,19 @@ async function runGameWithRetries(game, leagueData, teams, maxRetries = 3) {
       : null,
     raw: lastFull,
   };
-  console.log("[RetrySim] __lastBad saved to window.__lastBad");
+  if (window.__debugSimLogs) console.log("[RetrySim] __lastBad saved to window.__lastBad");
 }
 
 
     // good result?
     if (!isBadFullResult(lastFull)) {
-      console.log("[RetrySim] Success for game", game.id, "on attempt", attempt);
+      if (window.__debugSimLogs) console.log("[RetrySim] Success for game", game.id, "on attempt", attempt);
       return lastFull;
     }
 
-    console.warn(
-      "[RetrySim] BAD result for game",
-      game.id,
-      "on attempt",
-      attempt,
-      lastFull
-    );
+    if (window.__debugSimLogs) {
+      console.warn("[RetrySim] BAD result for game", game.id, "on attempt", attempt, lastFull);
+    }
   }
 
   console.error(
@@ -1642,11 +1664,12 @@ export default function Calendar() {
   
   const navigate = useNavigate();
   const { leagueData, setLeagueData, selectedTeam } = useGame();
-  console.log("🔥 Calendar leagueData =", leagueData);
+  if (window.__debugSimLogs) console.log("🔥 Calendar leagueData =", leagueData);
   window.__leagueData = leagueData;
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    prewarmCpuTradeWorker();
   }, []);
 
 
@@ -1883,6 +1906,37 @@ function saveResultsIndexV3(ids) {
 }
 
 const resultWriteQueueRef = useRef(Promise.resolve());
+const boxScoreBatchRef = useRef([]);
+const resultIndexSetRef = useRef(null);
+const resultIndexDirtyRef = useRef(false);
+
+function getResultIndexSet() {
+  if (!(resultIndexSetRef.current instanceof Set)) {
+    resultIndexSetRef.current = new Set(loadResultsIndexV3());
+  }
+  return resultIndexSetRef.current;
+}
+
+function flushResultIndexCache() {
+  if (!resultIndexDirtyRef.current || !(resultIndexSetRef.current instanceof Set)) return;
+  saveResultsIndexV3(Array.from(resultIndexSetRef.current));
+  resultIndexDirtyRef.current = false;
+}
+
+function flushBoxScoreBatch() {
+  if (!boxScoreBatchRef.current.length) return resultWriteQueueRef.current;
+  const rows = boxScoreBatchRef.current.splice(0, boxScoreBatchRef.current.length);
+  resultWriteQueueRef.current = resultWriteQueueRef.current
+    .catch(() => {})
+    .then(() => saveBoxScoresBatchToDB(rows));
+  return resultWriteQueueRef.current;
+}
+
+function enqueueBoxScoreBatchRow(row) {
+  boxScoreBatchRef.current.push(row);
+  if (boxScoreBatchRef.current.length >= 25) flushBoxScoreBatch();
+  return resultWriteQueueRef.current;
+}
 
 function enqueueBoxScoreWrite(task) {
   resultWriteQueueRef.current = resultWriteQueueRef.current
@@ -1892,6 +1946,8 @@ function enqueueBoxScoreWrite(task) {
 }
 
 async function flushPendingResultWrites() {
+  flushResultIndexCache();
+  flushBoxScoreBatch();
   try {
     await resultWriteQueueRef.current;
   } catch (error) {
@@ -1945,7 +2001,7 @@ function loadOneResultV3(gameId) {
   }
 }
 
-function saveOneResultV3(gameId, slim, game = null, seasonYearValue = null) {
+function saveOneResultV3(gameId, slim, game = null, seasonYearValue = null, options = {}) {
   if (!gameId || !slim) return Promise.resolve(null);
 
   const existing = loadOneResultV3(gameId);
@@ -1960,19 +2016,14 @@ function saveOneResultV3(gameId, slim, game = null, seasonYearValue = null) {
 
   if (!slim.lockedAt) slim.lockedAt = Date.now();
 
-  let boxWrite = Promise.resolve();
-
   if (hasBoxRows(slim)) {
-    boxWrite = enqueueBoxScoreWrite(() =>
-      saveBoxScoreToDB(gameId, slim, {
-        seasonYear: seasonYearValue,
-        home: game?.home,
-        away: game?.away,
-      }).catch((e) => {
-        console.warn("[IndexedDB] failed saving box score", gameId, e);
-        throw e;
-      })
-    );
+    enqueueBoxScoreBatchRow({
+      gameId,
+      result: slim,
+      seasonYear: seasonYearValue,
+      home: game?.home,
+      away: game?.away,
+    });
   }
 
   try {
@@ -1981,25 +2032,32 @@ function saveOneResultV3(gameId, slim, game = null, seasonYearValue = null) {
     const compressed = LZString.compressToUTF16(json);
     localStorage.setItem(resultV3Key(gameId), compressed);
 
-    const ids = loadResultsIndexV3();
-    if (!ids.includes(gameId)) {
-      ids.push(gameId);
-      saveResultsIndexV3(ids);
+    const ids = getResultIndexSet();
+    if (!ids.has(gameId)) {
+      ids.add(gameId);
+      resultIndexDirtyRef.current = true;
     }
+    if (!options?.deferIndexWrite) flushResultIndexCache();
   } catch (e) {
     console.error("[ResultsV3] failed saving compact game", gameId, e);
     if (isQuotaError(e)) removeLegacyResultsBlob();
   }
 
-  return boxWrite;
+  // Return the canonical score object immediately. Box-score persistence stays
+  // on the batched write queue and is awaited by flushPendingResultWrites().
+  // This prevents callers from placing a newly simulated score into live state
+  // when storage has already locked a different completed result.
+  return Promise.resolve(existing || slim);
 }
 
 function deleteOneResultV3(gameId) {
   try {
     localStorage.removeItem(resultV3Key(gameId));
     deleteBoxScoreFromDB(gameId).catch(() => {});
-    const ids = loadResultsIndexV3().filter((id) => id !== gameId);
-    saveResultsIndexV3(ids);
+    const ids = getResultIndexSet();
+    ids.delete(gameId);
+    resultIndexDirtyRef.current = true;
+    flushResultIndexCache();
   } catch {}
 }
 
@@ -2465,6 +2523,48 @@ else {
     return stats;
   }
 
+  async function rebuildPlayerSeasonStatsFromCanonicalBoxScores(schedule, results) {
+    const gameRows = [];
+    for (const games of Object.values(schedule || {})) {
+      for (const game of games || []) {
+        if (!game?.id) continue;
+        if (!game.played && !hasUsableStoredResult(results?.[game.id])) continue;
+        gameRows.push(game);
+      }
+    }
+
+    await flushPendingResultWrites();
+
+    const boxScoresById = await loadBoxScoresByGameIdsFromDB(
+      gameRows.map((game) => game.id)
+    );
+
+    let stats = {};
+    const missingGameIds = [];
+    let processedGames = 0;
+
+    for (const game of gameRows) {
+      const slim = boxScoresById?.[game.id];
+      if (!slim?.box || !hasBoxRows(slim)) {
+        missingGameIds.push(game.id);
+        continue;
+      }
+      stats = applyGameToPlayerStats(stats, slim, game);
+      processedGames += 1;
+    }
+
+    return {
+      stats,
+      processedGames,
+      expectedGames: gameRows.length,
+      missingGameIds,
+    };
+  }
+
+  function getAwardEligiblePlayerCount(stats = {}) {
+    return Object.values(stats || {}).filter((row) => Number(row?.gp || 0) >= 65).length;
+  }
+
   
 
   const [scheduleByDate, setScheduleByDate] = useState({});
@@ -2505,6 +2605,10 @@ async function saveResults(results, { persistBoxes = false } = {}) {
           existing: existing.totals,
           incoming: slim?.totals,
         });
+        // Keep the caller's in-memory accumulator aligned with the canonical
+        // locked result so the next UI checkpoint cannot display the rejected
+        // score even temporarily.
+        results[id] = existing;
         continue;
       }
 
@@ -2563,6 +2667,57 @@ function snapshotLockedRegularSeasonGames(schedule, results) {
   }
 
   return locked;
+}
+
+function reconcileCompletedGamesWithCanonicalStorage(schedule, results) {
+  const nextResults = { ...(results || {}) };
+  const seenIds = new Map();
+  const duplicates = [];
+
+  for (const [date, games] of Object.entries(schedule || {})) {
+    if (!Array.isArray(games)) continue;
+
+    for (let index = 0; index < games.length; index += 1) {
+      const game = games[index];
+      if (!game?.id) continue;
+
+      if (seenIds.has(game.id)) {
+        duplicates.push({
+          gameId: game.id,
+          firstDate: seenIds.get(game.id),
+          duplicateDate: date,
+        });
+        continue;
+      }
+      seenIds.set(game.id, date);
+
+      const stored = loadOneResultV3(game.id);
+      const memory = nextResults[game.id];
+      const canonical = hasUsableStoredResult(stored)
+        ? stored
+        : hasUsableStoredResult(memory)
+          ? memory
+          : null;
+
+      if (canonical) {
+        nextResults[game.id] = canonical;
+        if (!game.played) games[index] = { ...game, played: true };
+      } else if (game.played) {
+        // A played flag without an authoritative result is a ghost. Repair it
+        // before simulation so the game can be simulated exactly once.
+        games[index] = { ...game, played: false };
+      }
+    }
+  }
+
+  if (duplicates.length) {
+    console.error("[Calendar integrity] duplicate regular-season game IDs", duplicates);
+    throw new Error(
+      `Season integrity protection found ${duplicates.length} duplicate game ID${duplicates.length === 1 ? "" : "s"}. Reset or regenerate the schedule before simulating.`
+    );
+  }
+
+  return nextResults;
 }
 
 function assertLockedRegularSeasonGamesUnchanged(snapshot, schedule, results, label) {
@@ -2629,10 +2784,37 @@ async function computeAndSaveCalendarAwards({
   gamesSimmed,
 }) {
   try {
-    const currentStats =
+    let currentStats =
       playerStats && Object.keys(playerStats || {}).length
         ? playerStats
         : loadPlayerStats();
+
+    const regularSeasonComplete = isRegularSeasonComplete(schedule, results);
+    if (regularSeasonComplete) {
+      const rebuilt = await rebuildPlayerSeasonStatsFromCanonicalBoxScores(schedule, results);
+      if (rebuilt.expectedGames > 0 && rebuilt.processedGames === rebuilt.expectedGames) {
+        currentStats = rebuilt.stats;
+        savePlayerStats(currentStats);
+        console.log(
+          "[Calendar] rebuilt final player stats from canonical box scores:",
+          rebuilt.processedGames,
+          "games"
+        );
+      } else {
+        console.warn("[Calendar] final stats rebuild had missing box scores", {
+          processedGames: rebuilt.processedGames,
+          expectedGames: rebuilt.expectedGames,
+          missingGameIds: rebuilt.missingGameIds.slice(0, 20),
+        });
+      }
+    }
+
+    const eligiblePlayerCount = getAwardEligiblePlayerCount(currentStats);
+    if (regularSeasonComplete && eligiblePlayerCount === 0) {
+      throw new Error(
+        "Regular-season results are complete, but no player has the 65 games required for awards. Player stats could not be reconciled from box scores."
+      );
+    }
 
     const defMap = {};
     for (const t of activeTeams || []) {
@@ -2686,11 +2868,16 @@ async function computeAndSaveCalendarAwards({
     };
 
     const awards = deepUnpair(awardsRaw) || {};
+    if (regularSeasonComplete && eligiblePlayerCount > 0 && !awards?.mvp) {
+      throw new Error("Awards calculation returned no MVP despite having eligible players.");
+    }
     localStorage.setItem("bm_awards_latest", JSON.stringify(awards));
     localStorage.setItem("bm_awards_v1", JSON.stringify(awards));
     appendPlayerMoodEvents(buildAwardMoodEvents(awards, focusedDate || fmt(seasonEnd)));
+    return awards;
   } catch (e) {
     console.error("[Calendar] awards computation failed after sim-to-date:", e);
+    return null;
   }
 }
 
@@ -3600,6 +3787,20 @@ const handleSimOnlyGame = async (dateStr, game) => {
     return;
   }
 
+  const canonicalExisting = loadOneResultV3(game?.id) || resultsById?.[game?.id] || null;
+  if (hasUsableStoredResult(canonicalExisting)) {
+    setResultsById((prev) => ({ ...prev, [game.id]: canonicalExisting }));
+    setScheduleByDate((prev) => ({
+      ...prev,
+      [dateStr]: (prev?.[dateStr] || []).map((row) =>
+        row?.id === game.id ? { ...row, played: true } : row
+      ),
+    }));
+    setActionModal(null);
+    setBoxModal({ game: { ...game, played: true }, result: canonicalExisting });
+    return;
+  }
+
   const {
     repairRes,
     repairedLeagueData,
@@ -3633,9 +3834,10 @@ const handleSimOnlyGame = async (dateStr, game) => {
   const upd = { ...scheduleByDate };
   const newResults = { ...resultsById };
 
+  const simRuntime = buildSimulationRuntime(repairedLeagueData, repairedTeams);
   let full;
   try {
-    full = await runGameWithRetries(game, repairedLeagueData, repairedTeams);
+    full = await runGameWithRetries(game, repairedLeagueData, repairedTeams, 3, simRuntime);
   } catch (err) {
     openSimError(
       err?.message || "This team doesn't have enough players.",
@@ -3650,23 +3852,31 @@ const handleSimOnlyGame = async (dateStr, game) => {
   }
 
   const result = slimResult(full);
-  const homeRoles = loadTeamRoleMap(game.home);
-  const awayRoles = loadTeamRoleMap(game.away);
-  const homeOrder = readGameplanOrder(
-    game.home,
-    repairedTeams.find((team) => team?.name === game.home)
-  );
-  const awayOrder = readGameplanOrder(
-    game.away,
-    repairedTeams.find((team) => team?.name === game.away)
-  );
+  const homeRoles = simRuntime.roleByTeam.get(game.home) || {};
+  const awayRoles = simRuntime.roleByTeam.get(game.away) || {};
+  const homeOrder = simRuntime.orderByTeam.get(game.home) || [];
+  const awayOrder = simRuntime.orderByTeam.get(game.away) || [];
   annotateSlimWithRoles(result, homeRoles, awayRoles, homeOrder, awayOrder);
 
   upd[dateStr] = upd[dateStr].map((g) =>
     g.id === game.id ? { ...g, played: true } : g
   );
 
-  newResults[game.id] = result;
+  const canonicalResult = await saveOneResultV3(game.id, result, game, seasonYear);
+  if (!sameLockedScore(canonicalResult, result)) {
+    setResultsById((prev) => ({ ...prev, [game.id]: canonicalResult }));
+    setScheduleByDate((prev) => ({
+      ...prev,
+      [dateStr]: (prev?.[dateStr] || []).map((row) =>
+        row?.id === game.id ? { ...row, played: true } : row
+      ),
+    }));
+    setActionModal(null);
+    setBoxModal({ game: { ...game, played: true }, result: canonicalResult });
+    return;
+  }
+
+  newResults[game.id] = canonicalResult || result;
   let playerStats = loadPlayerStats();
   const playerStatsBeforeGame = playerStats;
   playerStats = applyGameToPlayerStats(playerStats, result, game);
@@ -3681,15 +3891,14 @@ const handleSimOnlyGame = async (dateStr, game) => {
 
   saveSchedule(upd);
   refreshTradeDeadlineLockFromSchedule(upd);
-  await saveOneResultV3(game.id, result, game, seasonYear);
   await flushPendingResultWrites();
-  setResultsById((prev) => ({ ...prev, [game.id]: result }));
+  setResultsById((prev) => ({ ...prev, [game.id]: canonicalResult || result }));
   saveCalendarCursor(dateStr, monthKey(new Date(dateStr)));
   setFocusedDate(dateStr);
   setMonth(monthKey(new Date(dateStr)));
 
   setActionModal(null);
-  setBoxModal({ game, result });
+  setBoxModal({ game, result: canonicalResult || result });
 };
 
 const handleSimToDate = async (dateStr) => {
@@ -3737,12 +3946,20 @@ setBoxModal(null);
 
   let upd = structuredClone(scheduleByDate);
   let newResults = structuredClone(resultsById);
+  try {
+    newResults = reconcileCompletedGamesWithCanonicalStorage(upd, newResults);
+  } catch (error) {
+    setSimLock(false);
+    openSimError(error?.message || "The schedule contains conflicting completed games.", "Season integrity issue");
+    return;
+  }
   const lockedGamesAtStart = snapshotLockedRegularSeasonGames(upd, newResults);
 
   const sorted = Object.keys(upd).sort((a, b) => new Date(a) - new Date(b));
 
   let activeLeagueData = repairedLeagueData;
   let activeTeams = repairedTeams;
+  let simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
   let shouldGoToAwards = false;
 
   try {
@@ -3801,10 +4018,14 @@ for (const d of sorted) {
   if (cpuTradePass.leagueData !== activeLeagueData) {
     activeLeagueData = cpuTradePass.leagueData;
     activeTeams = buildTeamsFromLeagueForSim(activeLeagueData);
+    simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
   }
 
   const dayGames = upd[d];
   if (!Array.isArray(dayGames)) continue;
+  const dayMoodEvents = [];
+  const dayResultUpdates = {};
+  let dayChanged = false;
 
       for (let i = 0; i < dayGames.length; i++) {
         // ✅ allow stop between games
@@ -3813,15 +4034,23 @@ for (const d of sorted) {
         const g = dayGames[i];
         if (!g) continue;
 
-        if (g.played || hasUsableStoredResult(newResults?.[g.id])) {
-          if (!g.played && hasUsableStoredResult(newResults?.[g.id])) {
-            dayGames[i] = { ...g, played: true };
-          }
+        const storedExisting = loadOneResultV3(g.id);
+        const canonicalExisting = hasUsableStoredResult(storedExisting)
+          ? storedExisting
+          : hasUsableStoredResult(newResults?.[g.id])
+            ? newResults[g.id]
+            : null;
+
+        if (canonicalExisting) {
+          newResults[g.id] = canonicalExisting;
+          if (!g.played) dayGames[i] = { ...g, played: true };
           continue;
         }
 
+        if (g.played) dayGames[i] = { ...g, played: false };
+
         try {
-          const full = await runGameWithRetries(g, activeLeagueData, activeTeams);
+          const full = await runGameWithRetries(g, activeLeagueData, activeTeams, 3, simRuntime);
 
           // ✅ if user clicked stop while this game was running, bail after it finishes
           if (stopRef.current) break;
@@ -3831,45 +4060,63 @@ for (const d of sorted) {
 
           const slim = slimResult(full);
 
-const homeRoles = loadTeamRoleMap(g.home);
-const awayRoles = loadTeamRoleMap(g.away);
+const homeRoles = simRuntime.roleByTeam.get(g.home) || {};
+const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
           annotateSlimWithRoles(
             slim,
             homeRoles,
             awayRoles,
-            readGameplanOrder(g.home, activeTeams.find((team) => team?.name === g.home)),
-            readGameplanOrder(g.away, activeTeams.find((team) => team?.name === g.away))
+            simRuntime.orderByTeam.get(g.home) || [],
+            simRuntime.orderByTeam.get(g.away) || []
           );
 
-          newResults[g.id] = slim;
-          saveOneResultV3(g.id, slim, g, seasonYear);
+          const canonicalResult = await saveOneResultV3(
+            g.id,
+            slim,
+            g,
+            seasonYear,
+            { deferIndexWrite: true }
+          );
+
+          if (!sameLockedScore(canonicalResult, slim)) {
+            newResults[g.id] = canonicalResult;
+            dayResultUpdates[g.id] = canonicalResult;
+            dayGames[i] = { ...g, played: true };
+            console.error("[SimToDate] restored canonical locked result instead of applying duplicate simulation", g.id);
+            continue;
+          }
+
+          newResults[g.id] = canonicalResult || slim;
+          dayResultUpdates[g.id] = canonicalResult || slim;
 
           dayGames[i] = { ...g, played: true };
 
           // 🔥 update player stats
           const playerStatsBeforeGame = playerStats;
           playerStats = applyGameToPlayerStats(playerStats, slim, g);
-          appendPlayerMoodEvents(buildGamePerformanceMoodEvents(slim, g, d, {
+          dayMoodEvents.push(...buildGamePerformanceMoodEvents(slim, g, d, {
             teams: activeTeams,
             scheduleByDate: upd,
             resultsById: newResults,
             playerStatsBefore: playerStatsBeforeGame,
             seasonYear,
           }));
-
-          // ✅ LIVE UI UPDATE (optional but makes it feel instant)
-          setResultsById((prev) => ({ ...prev, [g.id]: slim }));
-          setScheduleByDate((prev) => ({ ...prev, [d]: dayGames.slice() }));
+          dayChanged = true;
         } catch (err) {
           console.error("[SimToDate] ERROR for game", g.id, err);
           // keep unplayed on error
         }
 
-        // yield to browser
-        await new Promise((res) => setTimeout(res, 0));
       }
 
       upd[d] = dayGames;
+      if (dayMoodEvents.length) appendPlayerMoodEvents(dayMoodEvents);
+      if (dayChanged) {
+        setScheduleByDate((prev) => ({ ...prev, [d]: dayGames.slice() }));
+        setResultsById((prev) => ({ ...prev, ...dayResultUpdates }));
+        flushResultIndexCache();
+      }
+      await yieldToBrowser();
     }
 
     // final saves (even if stopped, we save progress)
@@ -3898,14 +4145,20 @@ const awayRoles = loadTeamRoleMap(g.away);
     setResultsById(structuredClone(newResults));
 
     if (!stopRef.current && isRegularSeasonComplete(upd, newResults)) {
-      await computeAndSaveCalendarAwards({
+      const awards = await computeAndSaveCalendarAwards({
         playerStats,
         schedule: upd,
         results: newResults,
         activeTeams: activeTeams,
         gamesSimmed: countCompletedRegularSeasonGames(upd, newResults),
       });
-      shouldGoToAwards = true;
+      shouldGoToAwards = Boolean(awards?.mvp);
+      if (!shouldGoToAwards) {
+        openSimError(
+          "The regular season finished, but awards could not be generated because the final player-stat archive was incomplete. The game stayed on Calendar so no empty awards page is saved.",
+          "Awards generation issue"
+        );
+      }
     }
   } finally {
     setActionModal(null);
@@ -4021,13 +4274,22 @@ setBoxModal(null);
 
   let upd = structuredClone(scheduleByDate);
   let results = structuredClone(resultsById);
+  try {
+    results = reconcileCompletedGamesWithCanonicalStorage(upd, results);
+  } catch (error) {
+    setSimLock(false);
+    openSimError(error?.message || "The schedule contains conflicting completed games.", "Season integrity issue");
+    return;
+  }
   const lockedGamesAtStart = snapshotLockedRegularSeasonGames(upd, results);
 
   let activeLeagueData = repairedLeagueData;
   let activeTeams = repairedTeams;
+  let simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
 
   const dates = Object.keys(upd).sort();
   let gamesSimmed = 0;
+  let lastPersistedGames = 0;
   let lastDateProcessed = null;
 
 // ✅ track if user stopped
@@ -4068,6 +4330,7 @@ for (let di = 0; di < dates.length; di++) {
   if (cpuTradePass.leagueData !== activeLeagueData) {
     activeLeagueData = cpuTradePass.leagueData;
     activeTeams = buildTeamsFromLeagueForSim(activeLeagueData);
+    simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
   }
 
   const dayGames = upd[date];
@@ -4075,16 +4338,13 @@ for (let di = 0; di < dates.length; di++) {
     console.error("FULL SEASON FATAL: dayGames is not an array for", date, dayGames);
     break;
   }
+  const dayMoodEvents = [];
+  const dayResultUpdates = {};
+  let dayChanged = false;
 
-      console.log(
-        "📅 Processing date",
-        di + 1,
-        "of",
-        dates.length,
-        date,
-        "games:",
-        dayGames.length
-      );
+      if (window.__debugSimLogs) {
+        console.log("📅 Processing date", di + 1, "of", dates.length, date, "games:", dayGames.length);
+      }
 
       for (let i = 0; i < dayGames.length; i++) {
         if (stopRef.current) { stopped = true; break; }
@@ -4095,66 +4355,91 @@ for (let di = 0; di < dates.length; di++) {
           stopped = true;
           break;
         }
-        if (g.played || hasUsableStoredResult(results?.[g.id])) {
-          if (!g.played && hasUsableStoredResult(results?.[g.id])) {
-            dayGames[i] = { ...g, played: true };
-          }
+        const storedExisting = loadOneResultV3(g.id);
+        const canonicalExisting = hasUsableStoredResult(storedExisting)
+          ? storedExisting
+          : hasUsableStoredResult(results?.[g.id])
+            ? results[g.id]
+            : null;
+
+        if (canonicalExisting) {
+          results[g.id] = canonicalExisting;
+          if (!g.played) dayGames[i] = { ...g, played: true };
           continue;
         }
 
+        if (g.played) dayGames[i] = { ...g, played: false };
+
         try {
-          const full = await runGameWithRetries(g, activeLeagueData, activeTeams);
+          const full = await runGameWithRetries(g, activeLeagueData, activeTeams, 3, simRuntime);
           if (!full) continue;
 
           if (stopRef.current) { stopped = true; break; }
 
           const slim = slimResult(full);
 
-const homeRoles = loadTeamRoleMap(g.home);
-const awayRoles = loadTeamRoleMap(g.away);
+const homeRoles = simRuntime.roleByTeam.get(g.home) || {};
+const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
           annotateSlimWithRoles(
             slim,
             homeRoles,
             awayRoles,
-            readGameplanOrder(g.home, activeTeams.find((team) => team?.name === g.home)),
-            readGameplanOrder(g.away, activeTeams.find((team) => team?.name === g.away))
+            simRuntime.orderByTeam.get(g.home) || [],
+            simRuntime.orderByTeam.get(g.away) || []
           );
 
-          results[g.id] = slim;
-          saveOneResultV3(g.id, slim, g, seasonYear);
+          const canonicalResult = await saveOneResultV3(
+            g.id,
+            slim,
+            g,
+            seasonYear,
+            { deferIndexWrite: true }
+          );
+
+          if (!sameLockedScore(canonicalResult, slim)) {
+            results[g.id] = canonicalResult;
+            dayResultUpdates[g.id] = canonicalResult;
+            dayGames[i] = { ...g, played: true };
+            console.error("[FullSeason] restored canonical locked result instead of applying duplicate simulation", g.id);
+            continue;
+          }
+
+          results[g.id] = canonicalResult || slim;
+          dayResultUpdates[g.id] = canonicalResult || slim;
 
           dayGames[i] = { ...g, played: true };
           gamesSimmed++;
 
           const playerStatsBeforeGame = playerStats;
           playerStats = applyGameToPlayerStats(playerStats, slim, g);
-          appendPlayerMoodEvents(buildGamePerformanceMoodEvents(slim, g, date, {
+          dayMoodEvents.push(...buildGamePerformanceMoodEvents(slim, g, date, {
             teams: activeTeams,
             scheduleByDate: upd,
             resultsById: results,
             playerStatsBefore: playerStatsBeforeGame,
             seasonYear,
           }));
-
-          // ✅ LIVE UI UPDATE (so W/L shows immediately, not in batches)
-          setResultsById((prev) => ({ ...prev, [g.id]: slim }));
-          setScheduleByDate((prev) => ({ ...prev, [date]: dayGames.slice() }));
-
-          // yield to browser so it paints
-          await new Promise((res) => setTimeout(res, 0));
+          dayChanged = true;
         } catch (err) {
           console.error("FULL SEASON ERROR for game", g.id, err);
         }
       }
 
       upd[date] = dayGames;
+      if (dayMoodEvents.length) appendPlayerMoodEvents(dayMoodEvents);
+      if (dayChanged) {
+        setScheduleByDate((prev) => ({ ...prev, [date]: dayGames.slice() }));
+        setResultsById((prev) => ({ ...prev, ...dayResultUpdates }));
+        flushResultIndexCache();
+      }
+      await yieldToBrowser();
 
       if (stopped) break;
 
-      // optional: occasionally persist schedule + stats (not required for UI)
-      if (gamesSimmed % 50 === 0) {
+      if (gamesSimmed - lastPersistedGames >= 50) {
         saveSchedule(structuredClone(upd));
         savePlayerStats(playerStats);
+        lastPersistedGames = gamesSimmed;
       }
     }
   } catch (err) {
@@ -4210,84 +4495,20 @@ if (stopped) {
   return;
 }
 
-    // 🔥 compute awards from final playerStats
-    try {
-      // build def_rating lookup from rosters (activeTeams)
-const defMap = {};
-for (const t of activeTeams || []) {
-  const teamName = t?.name || t?.team;
-  for (const pl of t?.players || []) {
-    const playerName = pl?.name || pl?.player;
+    const awards = await computeAndSaveCalendarAwards({
+      playerStats,
+      schedule: upd,
+      results,
+      activeTeams,
+      gamesSimmed: countCompletedRegularSeasonGames(upd, results),
+    });
 
-    const def =
-      pl?.def_rating ??
-      pl?.defRating ??
-      pl?.defensive_rating ??
-      pl?.defensiveRating ??
-      pl?.drtg ??
-      pl?.defrtg;
-
-    if (playerName && teamName && def != null && Number.isFinite(Number(def))) {
-      defMap[`${playerName}__${teamName}`] = Number(def);
-    }
-  }
-}
-
-// build playersArray WITH def_rating attached (awards.py reads this)
-const rookieMetaMap = buildAwardRosterMetaLookup(activeTeams, seasonYear + 1);
-
-const playersArray = Object.values(playerStats || {}).map((p) => {
-  const key = `${p.player}__${p.team}`;
-  const def = defMap[key];
-  const rookieMeta = rookieMetaMap[key] || {};
-  return {
-    ...p,
-    ...rookieMeta,
-    def_rating: Number.isFinite(Number(def)) ? Number(def) : 110,
-  };
-});
-
-console.log("[Calendar] computing awards for", playersArray.length, "players");
-console.log(
-  "[Calendar] def_rating attached:",
-  playersArray.filter(p => p.def_rating != null).length,
-  "out of",
-  playersArray.length
-);
-
-      console.log("[Calendar] computing awards for", playersArray.length, "players");
-
-const teamsWithWins = buildTeamsWithWinsForAwards(activeTeams, upd, results);
-
-console.log("[Calendar] awards teamsWithWins sample:", teamsWithWins.slice(0, 5));
-console.log(
-  "[Calendar] awards wins nonzero teams:",
-  teamsWithWins.filter(t => (t.wins || 0) > 0).length,
-  "out of",
-  teamsWithWins.length
-);
-
-const awardsRaw = await computeSeasonAwards(playersArray, {
-  seasonYear,
-  gamesSimmed,
-  teams: teamsWithWins, // ✅ THIS is what makes _team_wins non-zero
-});
-
-
-      const deepUnpair = (x) => {
-        if (Array.isArray(x) && x.length && Array.isArray(x[0]) && x[0].length === 2) {
-          return Object.fromEntries(x.map(([k, v]) => [k, deepUnpair(v)]));
-        }
-        if (Array.isArray(x)) return x.map(deepUnpair);
-        return x;
-      };
-
-      const awards = deepUnpair(awardsRaw) || {};
-      localStorage.setItem("bm_awards_latest", JSON.stringify(awards));
-      localStorage.setItem("bm_awards_v1", JSON.stringify(awards));
-      appendPlayerMoodEvents(buildAwardMoodEvents(awards, lastDateProcessed || fmt(seasonEnd)));
-    } catch (e) {
-      console.error("[Calendar] awards computation failed:", e);
+    if (!awards?.mvp) {
+      openSimError(
+        "The regular season finished, but awards could not be generated because the final player-stat archive was incomplete. The game stayed on Calendar so no empty awards page is saved.",
+        "Awards generation issue"
+      );
+      return;
     }
 
     navigate("/awards");
@@ -4331,6 +4552,10 @@ if (
   }
 
   clearBoxScoresFromDB().catch(() => {});
+  resultIndexSetRef.current = new Set();
+  resultIndexDirtyRef.current = false;
+  boxScoreBatchRef.current = [];
+  resultWriteQueueRef.current = Promise.resolve();
 
   // keep your player stats wipe
   localStorage.removeItem(PLAYER_STATS_KEY);
@@ -4357,6 +4582,7 @@ setMiniAwardTab("mvp");
   const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
 
   saveSchedule(byDate);
+  setResultsById({});
   void saveResults({});
 
   const firstGameDate = Object.keys(byDate).sort()[0];

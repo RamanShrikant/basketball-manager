@@ -852,6 +852,132 @@ function prospectDraftValue(prospect = {}) {
   return overall * 0.55 + potential * 0.45 + readyBonus + upsideBonus + ageBonus;
 }
 
+function expectedProspectAssetValue(prospect = {}) {
+  const overall = prospectOverall(prospect);
+  const potential = prospectPotential(prospect);
+  const age = clamp(toNum(prospect?.age, 20), 18, 25);
+  const immediate = Math.max(0, overall - 70) * 0.55;
+  const upside = Math.max(0, potential - 80) * 0.45;
+  const gap = Math.max(0, potential - overall) * 0.15;
+  const ageBonus = Math.max(0, 22 - age) * 0.50;
+  const rookieSurplus = Math.max(0, overall - 76) * 0.18 + Math.max(0, potential - 90) * 0.28;
+  return round4(Math.max(0.25, immediate + upside + gap + ageBonus + rookieSurplus));
+}
+
+const EXPECTED_PROSPECT_POT_TAX = [
+  { min: 99, tax: [21.00, 18.00, 14.25, 9.00, 4.50, 0.90] },
+  { min: 97, tax: [16.50, 14.50, 11.50, 7.25, 3.35, 0.60] },
+  { min: 95, tax: [12.50, 11.00, 8.50, 5.25, 2.40, 0.35] },
+  { min: 93, tax: [9.00, 8.00, 6.10, 3.60, 1.55, 0.18] },
+  { min: 91, tax: [6.00, 5.25, 4.00, 2.35, 0.85, 0.05] },
+  { min: 89, tax: [3.90, 3.35, 2.50, 1.30, 0.45, 0.00] },
+  { min: 87, tax: [2.10, 1.75, 1.25, 0.62, 0.20, 0.00] },
+  { min: 85, tax: [0.95, 0.80, 0.58, 0.28, 0.08, 0.00] },
+];
+const EXPECTED_PROSPECT_GAP_TAX = [
+  { min: 21, tax: 5.50 }, { min: 16, tax: 4.25 }, { min: 12, tax: 2.85 },
+  { min: 8, tax: 1.60 }, { min: 4, tax: 0.75 }, { min: 0, tax: 0 },
+];
+const EXPECTED_YOUNG_CORE_OVR_TAX = [
+  { min: 92, tax: [20.00, 18.25, 16.00, 13.25, 8.00, 2.25] },
+  { min: 90, tax: [15.25, 13.85, 12.15, 10.30, 6.25, 1.45] },
+  { min: 88, tax: [11.50, 10.50, 9.25, 7.95, 4.65, 0.95] },
+  { min: 86, tax: [8.25, 7.50, 6.65, 5.55, 3.10, 0.45] },
+  { min: 84, tax: [5.25, 4.75, 4.15, 3.35, 1.75, 0.18] },
+];
+const EXPECTED_POT_KICKERS = [
+  { min: 98, tax: 6.25 }, { min: 96, tax: 4.50 }, { min: 94, tax: 3.10 },
+  { min: 92, tax: 1.85 }, { min: 90, tax: 0.85 }, { min: 0, tax: 0 },
+];
+
+function prospectAgeBucket(age) {
+  if (age <= 19) return 0;
+  if (age <= 20) return 1;
+  if (age <= 22) return 2;
+  if (age <= 24) return 3;
+  if (age <= 26) return 4;
+  return 5;
+}
+function youngCoreAgeBucket(age) {
+  if (age <= 21) return 0;
+  if (age <= 22) return 1;
+  if (age <= 23) return 2;
+  if (age <= 24) return 3;
+  if (age <= 25) return 4;
+  return 5;
+}
+function prospectTeamMultiplier(powerRank = 15) {
+  const rank = clamp(Math.round(toNum(powerRank, 15)), 1, 30);
+  if (rank <= 5) return 0.90;
+  if (rank <= 10) return 1.00;
+  if (rank <= 18) return 1.08;
+  if (rank <= 24) return 1.45;
+  return 1.90;
+}
+function expectedProspectRetentionTax(prospect = {}, powerRank = 15) {
+  const overall = Math.round(prospectOverall(prospect));
+  const potential = Math.round(prospectPotential(prospect));
+  const age = Math.round(clamp(toNum(prospect?.age, 20), 18, 30));
+  const potRow = EXPECTED_PROSPECT_POT_TAX.find((row) => potential >= row.min);
+  const gap = Math.max(0, potential - overall);
+  const gapTax = EXPECTED_PROSPECT_GAP_TAX.find((row) => gap >= row.min)?.tax || 0;
+  const highPotSubtotal = potRow ? Number(potRow.tax[prospectAgeBucket(age)] || 0) + gapTax : 0;
+  const coreRow = EXPECTED_YOUNG_CORE_OVR_TAX.find((row) => overall >= row.min);
+  const potKicker = EXPECTED_POT_KICKERS.find((row) => potential >= row.min)?.tax || 0;
+  const coreSubtotal = coreRow ? Number(coreRow.tax[youngCoreAgeBucket(age)] || 0) + potKicker : 0;
+  return round4(Math.max(highPotSubtotal, coreSubtotal) * prospectTeamMultiplier(powerRank));
+}
+
+function draftChoicePremium(slot = 15) {
+  const n = clamp(Math.round(toNum(slot, 15)), 1, 60);
+  if (n === 1) return 1.06;
+  if (n <= 3) return 1.05;
+  if (n <= 5) return 1.04;
+  if (n <= 10) return 1.025;
+  if (n <= 20) return 1.015;
+  return 1.01;
+}
+
+function getExpectedProspectModel(leagueData = {}, slot = 15, powerRank = 15) {
+  const context = getDraftTradeContext(leagueData);
+  if (!context?.inOffseason || context?.draftComplete) return null;
+  const board = getDraftBoardRows(leagueData);
+  if (!board.length) return null;
+  const absoluteSlot = clamp(Math.round(toNum(slot, 15)), 1, 60);
+  const liveOffset = context?.draftInProgress
+    ? absoluteSlot - (Math.max(0, Number(context?.currentPickIndex || 0)) + 1)
+    : absoluteSlot - 1;
+  const centerIndex = clamp(liveOffset, 0, board.length - 1);
+  const offsets = absoluteSlot === 1 && !context?.draftInProgress ? [0, 1, 2] : [-2, -1, 0, 1, 2];
+  const weights = absoluteSlot === 1 && !context?.draftInProgress ? [0.65, 0.25, 0.10] : [0.10, 0.22, 0.36, 0.22, 0.10];
+  const rows = offsets.map((offset, index) => ({
+    prospect: board[clamp(centerIndex + offset, 0, board.length - 1)],
+    weight: weights[index],
+  }));
+  const totalWeight = rows.reduce((sum, row) => sum + row.weight, 0) || 1;
+  const expected = rows.reduce((acc, row) => {
+    const w = row.weight / totalWeight;
+    acc.overall += prospectOverall(row.prospect) * w;
+    acc.potential += prospectPotential(row.prospect) * w;
+    acc.age += clamp(toNum(row.prospect?.age, 20), 18, 25) * w;
+    acc.assetValue += expectedProspectAssetValue(row.prospect) * w;
+    acc.retentionTax += expectedProspectRetentionTax(row.prospect, powerRank) * w;
+    return acc;
+  }, { overall: 0, potential: 0, age: 0, assetValue: 0, retentionTax: 0 });
+  const best = rows.slice().sort((a, b) => b.weight - a.weight)[0]?.prospect || board[centerIndex];
+  const certainty = context?.draftInProgress ? 1 : context?.lotteryRevealed ? 0.97 : 0.90;
+  return {
+    name: best?.name || best?.player || `prospect near #${absoluteSlot}`,
+    overall: round4(expected.overall),
+    potential: round4(expected.potential),
+    age: round4(expected.age),
+    assetValue: round4(expected.assetValue * draftChoicePremium(absoluteSlot)),
+    retentionTax: round4(expected.retentionTax),
+    certainty,
+    boardIndex: centerIndex,
+  };
+}
+
 function normalProspectValueAtSlot(slot = 15) {
   const anchors = [
     [1, 86.5], [3, 84.4], [5, 82.7], [10, 79.6], [15, 77.0],
@@ -889,7 +1015,11 @@ function getDraftClassMultiplier(leagueData = {}, slot = 15) {
   const board = getDraftBoardRows(leagueData);
   if (!board.length) return 1;
 
-  const center = clamp(Math.round(Number(slot || 15)), 1, Math.min(60, board.length));
+  const absoluteSlot = clamp(Math.round(Number(slot || 15)), 1, 60);
+  const remainingOffset = context?.draftInProgress
+    ? absoluteSlot - (Math.max(0, Number(context?.currentPickIndex || 0)) + 1)
+    : absoluteSlot - 1;
+  const center = clamp(remainingOffset + 1, 1, Math.min(60, board.length));
   const indices = [center - 2, center - 1, center, center + 1, center + 2]
     .map((oneBased) => clamp(oneBased - 1, 0, board.length - 1));
   const weights = [0.10, 0.22, 0.36, 0.22, 0.10];
@@ -903,7 +1033,7 @@ function getDraftClassMultiplier(leagueData = {}, slot = 15) {
   return round4(clamp(actual / normal, 0.88, 1.16));
 }
 
-function getLotteryExpectedPickModel({ leagueData = {}, originalTeam = "", range = null } = {}) {
+function getLotteryExpectedPickModel({ leagueData = {}, originalTeam = "", range = null, powerRank = 15 } = {}) {
   const context = getDraftTradeContext(leagueData);
   if (!context?.inOffseason || context?.lotteryRevealed || context?.draftComplete) return null;
   const row = context?.lotteryOddsByTeam?.[normalizeName(originalTeam)];
@@ -915,6 +1045,10 @@ function getLotteryExpectedPickModel({ leagueData = {}, originalTeam = "", range
   let expectedSlot = 0;
   let fullValue = 0;
   let rangedValue = 0;
+  let expectedProspectRetentionTax = 0;
+  let expectedProspectOverall = 0;
+  let expectedProspectPotential = 0;
+  let expectedProspectAge = 0;
 
   for (const [rawSlot, rawPct] of Object.entries(odds)) {
     const slot = Number(rawSlot);
@@ -923,8 +1057,13 @@ function getLotteryExpectedPickModel({ leagueData = {}, originalTeam = "", range
     probability += chance;
     expectedSlot += slot * chance;
     const classMultiplier = getDraftClassMultiplier(leagueData, slot);
-    const value = slotValue(1, slot) * classMultiplier;
+    const expectedProspect = getExpectedProspectModel(leagueData, slot, powerRank);
+    const value = Math.max(slotValue(1, slot) * classMultiplier, Number(expectedProspect?.assetValue || 0));
     fullValue += value * chance;
+    expectedProspectRetentionTax += Number(expectedProspect?.retentionTax || 0) * chance;
+    expectedProspectOverall += Number(expectedProspect?.overall || 0) * chance;
+    expectedProspectPotential += Number(expectedProspect?.potential || 0) * chance;
+    expectedProspectAge += Number(expectedProspect?.age || 0) * chance;
     if (slot >= normalizedRange.start && slot <= normalizedRange.end) rangedValue += value * chance;
   }
 
@@ -943,6 +1082,11 @@ function getLotteryExpectedPickModel({ leagueData = {}, originalTeam = "", range
       1
     ),
     ratio: fullValue > 0 ? clamp(rangedValue / fullValue, 0, 1) : 1,
+    expectedProspectRetentionTax: expectedProspectRetentionTax / probability,
+    expectedProspectOverall: expectedProspectOverall / probability,
+    expectedProspectPotential: expectedProspectPotential / probability,
+    expectedProspectAge: expectedProspectAge / probability,
+    draftAssetCertainty: 0.90,
   };
 }
 
@@ -1182,7 +1326,7 @@ function projectSinglePickValue(item = {}, leagueData = {}, context = buildPickR
   const pickNumber = getPickNumber(pick);
   const range = getRangeFromItem(item, round);
   const lotteryModel = offset === 0 && round === 1 && !pickNumber
-    ? getLotteryExpectedPickModel({ leagueData, originalTeam, range })
+    ? getLotteryExpectedPickModel({ leagueData, originalTeam, range, powerRank })
     : null;
   const preLotteryExpectedSlot = offset === 0 && round === 1 && !pickNumber
     ? getPreLotteryExpectedSlot(leagueData, originalTeam)
@@ -1200,18 +1344,33 @@ function projectSinglePickValue(item = {}, leagueData = {}, context = buildPickR
     pickNumber,
   });
   const draftClassMultiplier = offset === 0 ? getDraftClassMultiplier(leagueData, pickNumber || expectedSlot) : 1;
+  const expectedProspectModel = offset === 0 && round === 1
+    ? getExpectedProspectModel(leagueData, pickNumber || expectedSlot, powerRank)
+    : null;
+  const currentDraftExpectedPlayerValue = Math.max(
+    0,
+    Number(expectedProspectModel?.assetValue || 0),
+    Number(lotteryModel?.fullSlotValue || 0)
+  );
 
   // Current-draft assets use the best information available at each stage:
   // exact lottery slot after the reveal, the full lottery odds distribution
   // before the reveal, and the live remaining prospect board during the draft.
   // Future picks remain on the existing Power/POT projection model.
-  const rawUnprotectedValue = pickNumber
+  const traditionalUnprotectedValue = pickNumber
     ? slotValue(round, pickNumber) * certainty * valueTuningMultiplier * draftClassMultiplier
     : rangeModel.fullSlotValue * certainty * valueTuningMultiplier;
+  const prospectParityValue = offset === 0 && round === 1
+    ? currentDraftExpectedPlayerValue * Number(expectedProspectModel?.certainty || lotteryModel?.draftAssetCertainty || 0.90)
+    : 0;
+  const rawUnprotectedValue = Math.max(traditionalUnprotectedValue, prospectParityValue);
   const value = round4(
     pickNumber
       ? rawUnprotectedValue
-      : rangeModel.rangedSlotValue * certainty * valueTuningMultiplier
+      : Math.max(
+          rangeModel.rangedSlotValue * certainty * valueTuningMultiplier,
+          rawUnprotectedValue * Number(rangeModel.ratio || 1)
+        )
   );
   const effectiveRangeRatio = pickNumber ? 1 : rangeModel.ratio;
   const effectiveConveyanceChance = pickNumber ? 1 : rangeModel.conveyanceChance;
@@ -1234,7 +1393,12 @@ function projectSinglePickValue(item = {}, leagueData = {}, context = buildPickR
   const classNote = Math.abs(draftClassMultiplier - 1) > 0.005
     ? `, current draft-board quality x${draftClassMultiplier.toFixed(3)}`
     : "";
-  const reason = `${pickYear} ${originalLabel} ${formatRound(round)} valued at ${value.toFixed(3)} (${rankSource}, ${blendLabel}, expected pick #${round4(expectedSlot).toFixed(2)}, ${formatRange(range, round)}${protectionNote}${tuningNote}${classNote}).`;
+  const prospectNote = expectedProspectModel
+    ? `, expected ${expectedProspectModel.overall.toFixed(1)} OVR / ${expectedProspectModel.potential.toFixed(1)} POT age-${expectedProspectModel.age.toFixed(1)} prospect`
+    : lotteryModel?.expectedProspectOverall
+      ? `, lottery-weighted ${lotteryModel.expectedProspectOverall.toFixed(1)} OVR / ${lotteryModel.expectedProspectPotential.toFixed(1)} POT prospect`
+      : "";
+  const reason = `${pickYear} ${originalLabel} ${formatRound(round)} valued at ${value.toFixed(3)} (${rankSource}, ${blendLabel}, expected pick #${round4(expectedSlot).toFixed(2)}, ${formatRange(range, round)}${protectionNote}${tuningNote}${classNote}${prospectNote}).`;
 
   return {
     value,
@@ -1253,13 +1417,24 @@ function projectSinglePickValue(item = {}, leagueData = {}, context = buildPickR
     protectionText,
     range,
     draftClassMultiplier,
+    expectedProspectName: expectedProspectModel?.name || "",
+    expectedProspectOverall: round4(expectedProspectModel?.overall || lotteryModel?.expectedProspectOverall || 0),
+    expectedProspectPotential: round4(expectedProspectModel?.potential || lotteryModel?.expectedProspectPotential || 0),
+    expectedProspectAge: round4(expectedProspectModel?.age || lotteryModel?.expectedProspectAge || 0),
+    expectedProspectAssetValue: round4(expectedProspectModel?.assetValue || currentDraftExpectedPlayerValue || 0),
+    expectedProspectRetentionTax: round4(expectedProspectModel?.retentionTax || lotteryModel?.expectedProspectRetentionTax || 0),
+    draftAssetCertainty: round4(expectedProspectModel?.certainty || lotteryModel?.draftAssetCertainty || 0),
+    traditionalUnprotectedValue: round4(traditionalUnprotectedValue),
+    prospectParityValue: round4(prospectParityValue),
     valuationStage: lotteryModel
       ? "pre_lottery_odds"
-      : pickNumber
-        ? "exact_pick"
-        : preLotteryExpectedSlot
-          ? "pre_lottery_final_record"
-          : "projected_pick",
+      : getDraftTradeContext(leagueData)?.draftInProgress && pickNumber
+        ? "live_draft"
+        : pickNumber
+          ? "exact_pick"
+          : preLotteryExpectedSlot
+            ? "pre_lottery_final_record"
+            : "projected_pick",
     reason,
   };
 }

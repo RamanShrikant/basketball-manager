@@ -2,6 +2,7 @@ import { filterTradeEligiblePlayers } from "./tradeRosterEligibility.js";
 import { getPlayerSalary, sideSalary } from "./tradeExecution.js";
 import {
   canAddCustomProtectionToPick,
+  formatResolvedDraftPickLabel,
   getTradePickBaseProtectionLabel,
   getTradeablePickOwnedRange,
   isResolvedDraftPickAsset,
@@ -261,6 +262,7 @@ export function pickProtectionLabel(pick = {}) {
 }
 
 export function formatPick(pick = {}) {
+  if (isResolvedDraftPickAsset(pick)) return formatResolvedDraftPickLabel(pick);
   const round = Number(pick?.round || 1) === 1 ? "1st" : "2nd";
   const original = pick?.originalTeam || pick?.originalTeamName || "Own";
   const pickNumber = Number(pick?.pickNumber || pick?.overallPick || pick?.resolvedPickNumber || pick?.draftPickNumber || 0);
@@ -362,7 +364,9 @@ function buildPickItem(pick, protection, tradeRule, valueAdjust = 0) {
     },
     protection: cleanProtection,
     tradeRule,
-    label: `${cleanProtection} ${formatPick(pick)}`,
+    label: isResolvedDraftPickAsset(pick)
+      ? formatResolvedDraftPickLabel(pick)
+      : `${cleanProtection} ${formatPick(pick)}`,
     valueAdjust,
     salary: 0,
   };

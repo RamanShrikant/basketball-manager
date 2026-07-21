@@ -146,65 +146,53 @@ function addAccolade(player, accolade) {
   return next;
 }
 
-function updatePlayerEverywhere(leagueData, playerName, updater) {
-  const updated = structuredClone(leagueData);
-
-  for (const confKey of Object.keys(updated.conferences || {})) {
-    updated.conferences[confKey] = (updated.conferences[confKey] || []).map((team) => {
-      return {
-        ...team,
-        players: (team.players || []).map((player) => {
-          if ((player?.name || player?.player) !== playerName) return player;
-          return updater(player);
-        }),
-      };
+function buildPlayerLocationIndex(leagueData) {
+  const index = new Map();
+  const addContainer = (container) => {
+    if (!Array.isArray(container)) return;
+    container.forEach((player, playerIndex) => {
+      const name = player?.name || player?.player;
+      if (!name) return;
+      const rows = index.get(name) || [];
+      rows.push({ container, playerIndex });
+      index.set(name, rows);
     });
+  };
+
+  if (Array.isArray(leagueData?.teams)) {
+    for (const team of leagueData.teams) {
+      addContainer(team?.players);
+      addContainer(team?.twoWayPlayers);
+      addContainer(team?.stashPlayers);
+    }
   }
 
-  updated.freeAgents = (updated.freeAgents || []).map((player) => {
-    if ((player?.name || player?.player) !== playerName) return player;
-    return updater(player);
-  });
-
-  return updated;
-}
-
-export function archiveCurrentSeasonStatsIntoPlayerHistory(leagueData, seasonYear) {
-  if (!leagueData) return leagueData;
-
-  const statsMap = readCompressedOrJson(PLAYER_STATS_KEY, {});
-  const teamLogoMap = getTeamLogoMap(leagueData);
-  let updated = structuredClone(leagueData);
-
-  for (const rec of Object.values(statsMap || {})) {
-    const playerName = rec?.player;
-    if (!playerName || !Number(rec?.gp || 0)) continue;
-
-    const row = buildArchivedSeasonRow(rec, seasonYear, teamLogoMap);
-
-    updated = updatePlayerEverywhere(updated, playerName, (player) => {
-      return upsertSeasonRow(player, row);
-    });
+  for (const teams of Object.values(leagueData?.conferences || {})) {
+    for (const team of teams || []) {
+      addContainer(team?.players);
+      addContainer(team?.twoWayPlayers);
+      addContainer(team?.stashPlayers);
+    }
   }
 
-  return updated;
+  addContainer(leagueData?.freeAgents);
+  return index;
 }
 
-export function archiveCurrentAwardsIntoPlayerHistory(leagueData, seasonYear) {
-  if (!leagueData) return leagueData;
+function updateIndexedPlayer(index, playerName, updater) {
+  for (const location of index.get(playerName) || []) {
+    const current = location.container[location.playerIndex];
+    location.container[location.playerIndex] = updater(current);
+  }
+}
 
+function collectAwardAccolades(seasonYear) {
   const awards = readCompressedOrJson(AWARDS_KEY, null);
   const finalsMvp = readCompressedOrJson(FINALS_MVP_KEY, null);
   const allStars = readCompressedOrJson(ALL_STARS_KEY, null);
-
-  let updated = structuredClone(leagueData);
-
-  const addFor = (playerName, accolade) => {
-    if (!playerName) return;
-
-    updated = updatePlayerEverywhere(updated, playerName, (player) => {
-      return addAccolade(player, accolade);
-    });
+  const rows = [];
+  const add = (playerName, accolade) => {
+    if (playerName) rows.push({ playerName, accolade });
   };
 
   const awardMap = [
@@ -213,22 +201,12 @@ export function archiveCurrentAwardsIntoPlayerHistory(leagueData, seasonYear) {
     ["sixth_man", "6MOY", "Sixth Man of the Year"],
     ["roty", "ROTY", "Rookie of the Year"],
   ];
-
   for (const [key, shortLabel, fullLabel] of awardMap) {
     const winner = awards?.[key];
-    if (winner?.player) {
-      addFor(winner.player, {
-        seasonYear,
-        type: key,
-        label: shortLabel,
-        details: fullLabel,
-        team: winner.team || null,
-        source: "sim",
-      });
-    }
+    if (winner?.player) add(winner.player, { seasonYear, type: key, label: shortLabel, details: fullLabel, team: winner.team || null, source: "sim" });
   }
 
-  const allNbaMap = [
+  const teamRows = [
     ["all_nba_first", "All-NBA First Team", "all_nba_first"],
     ["all_nba_second", "All-NBA Second Team", "all_nba_second"],
     ["all_nba_third", "All-NBA Third Team", "all_nba_third"],
@@ -237,56 +215,66 @@ export function archiveCurrentAwardsIntoPlayerHistory(leagueData, seasonYear) {
     ["all_defensive_first", "All-Defensive First Team", "all_defensive_first"],
     ["all_defensive_second", "All-Defensive Second Team", "all_defensive_second"],
   ];
-
-  for (const [key, label, type] of allNbaMap) {
-    for (const row of awards?.[key] || []) {
-      if (row?.player) {
-        addFor(row.player, {
-          seasonYear,
-          type,
-          label,
-          team: row.team || null,
-          source: "sim",
-        });
-      }
-    }
+  for (const [key, label, type] of teamRows) {
+    for (const row of awards?.[key] || []) add(row?.player, { seasonYear, type, label, team: row?.team || null, source: "sim" });
   }
 
   const fmvpWinner = finalsMvp?.finals_mvp;
-  if (fmvpWinner?.player) {
-    addFor(fmvpWinner.player, {
-      seasonYear,
-      type: "finals_mvp",
-      label: "Finals MVP",
-      team: fmvpWinner.team || finalsMvp?.champion_team || null,
-      source: "sim",
-    });
-  }
+  if (fmvpWinner?.player) add(fmvpWinner.player, { seasonYear, type: "finals_mvp", label: "Finals MVP", team: fmvpWinner.team || finalsMvp?.champion_team || null, source: "sim" });
 
-  const addAllStarRows = (rows, label) => {
-    for (const row of rows || []) {
-      if (!row?.player) continue;
-
-      addFor(row.player, {
-        seasonYear,
-        type: "all_star",
-        label,
-        team: row.team || null,
-        source: "sim",
-      });
-    }
+  const addAllStars = (starRows, label) => {
+    for (const row of starRows || []) add(row?.player, { seasonYear, type: "all_star", label, team: row?.team || null, source: "sim" });
   };
+  addAllStars(allStars?.east?.starters, "All-Star Starter");
+  addAllStars(allStars?.west?.starters, "All-Star Starter");
+  addAllStars(allStars?.east?.reserves, "All-Star Reserve");
+  addAllStars(allStars?.west?.reserves, "All-Star Reserve");
+  return rows;
+}
 
-  addAllStarRows(allStars?.east?.starters, "All-Star Starter");
-  addAllStarRows(allStars?.west?.starters, "All-Star Starter");
-  addAllStarRows(allStars?.east?.reserves, "All-Star Reserve");
-  addAllStarRows(allStars?.west?.reserves, "All-Star Reserve");
+function applyStatsToClonedLeague(updated, seasonYear) {
+  const statsMap = readCompressedOrJson(PLAYER_STATS_KEY, {});
+  const teamLogoMap = getTeamLogoMap(updated);
+  const index = buildPlayerLocationIndex(updated);
+  for (const rec of Object.values(statsMap || {})) {
+    const playerName = rec?.player;
+    if (!playerName || !Number(rec?.gp || 0)) continue;
+    const row = buildArchivedSeasonRow(rec, seasonYear, teamLogoMap);
+    updateIndexedPlayer(index, playerName, (player) => upsertSeasonRow(player, row));
+  }
+  return { updated, index };
+}
 
+function applyAwardsToClonedLeague(updated, seasonYear, existingIndex = null) {
+  const index = existingIndex || buildPlayerLocationIndex(updated);
+  for (const { playerName, accolade } of collectAwardAccolades(seasonYear)) {
+    updateIndexedPlayer(index, playerName, (player) => addAccolade(player, accolade));
+  }
   return updated;
+}
+
+export function archiveCurrentSeasonStatsIntoPlayerHistory(leagueData, seasonYear) {
+  if (!leagueData) return leagueData;
+  const updated = structuredClone(leagueData);
+  return applyStatsToClonedLeague(updated, seasonYear).updated;
+}
+
+export function archiveCurrentAwardsIntoPlayerHistory(leagueData, seasonYear) {
+  if (!leagueData) return leagueData;
+  const updated = structuredClone(leagueData);
+  return applyAwardsToClonedLeague(updated, seasonYear);
 }
 
 export function archiveCurrentSeasonIntoPlayerCards(leagueData, seasonYear) {
-  let updated = archiveCurrentSeasonStatsIntoPlayerHistory(leagueData, seasonYear);
-  updated = archiveCurrentAwardsIntoPlayerHistory(updated, seasonYear);
+  if (!leagueData) return leagueData;
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const updated = structuredClone(leagueData);
+  const { index } = applyStatsToClonedLeague(updated, seasonYear);
+  applyAwardsToClonedLeague(updated, seasonYear, index);
+  if (typeof window !== "undefined" && window.__debugSimLogs) {
+    const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
+    console.log(`[PlayerHistory] archived season in ${elapsed.toFixed(1)}ms with one league clone`);
+  }
   return updated;
 }
+

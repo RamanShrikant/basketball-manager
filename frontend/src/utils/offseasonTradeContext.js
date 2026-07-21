@@ -1,4 +1,5 @@
 import LZString from "lz-string";
+import { projectPlayerForNextSeason, progressionProjectionSignature } from "./offseasonProgressionProjection.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
@@ -406,7 +407,7 @@ export function getOffseasonTradeContext(leagueData = {}, explicitContext = null
   const preLotteryExpectedSlotByTeam = buildPreLotteryExpectedSlots(records, lotterySystem);
 
   return {
-    version: 1,
+    version: 2,
     seasonYear,
     targetSeasonYear: seasonYear + 1,
     inOffseason,
@@ -418,6 +419,8 @@ export function getOffseasonTradeContext(leagueData = {}, explicitContext = null
     draftComplete,
     draftInProgress,
     currentPickIndex,
+    progressionComplete: Boolean(offseasonState?.progressionComplete || leagueData?.draftState?.progressionComplete),
+    useProjectedNextSeasonRatings: Boolean(inOffseason && !(offseasonState?.progressionComplete || leagueData?.draftState?.progressionComplete)),
     draftOrder,
     lotterySystem,
     lotteryOddsByTeam,
@@ -428,12 +431,46 @@ export function getOffseasonTradeContext(leagueData = {}, explicitContext = null
   };
 }
 
-function cloneProjectionPlayer(player, teamName, source) {
+function isCurrentOffseasonRookie(player = {}, source = "", context = {}) {
+  if (source === "pending_rookie") return true;
+  const currentDraftYear = Number(context?.seasonYear || 0);
+  const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+  const draftYear = Number(
+    meta?.draftYear ??
+      player?.draftYear ??
+      player?.draftClassYear ??
+      player?.draftedYear ??
+      player?.rookieDraftYear ??
+      player?.draft?.year ??
+      player?.contract?.draftYear ??
+      0
+  );
+  const acquiredVia = String(meta?.acquiredVia || player?.acquiredVia || "").toLowerCase();
+  const playerId = String(player?.id || "").toLowerCase();
+  if (currentDraftYear && draftYear === currentDraftYear) {
+    return Boolean(
+      acquiredVia.includes("draft") ||
+        playerId.startsWith(`rookie_${currentDraftYear}_`) ||
+        player?.rights?.rookieScale ||
+        player?.rookieSigningPending ||
+        player?.draftRightsOnly ||
+        player?.contract?.unsignedRookie
+    );
+  }
+  return Boolean(player?.isCurrentDraftRookie || player?.rookieSigningPending || player?.draftRightsOnly || player?.contract?.unsignedRookie);
+}
+
+function cloneProjectionPlayer(player, teamName, source, context = {}) {
+  const shouldProject = Boolean(context?.useProjectedNextSeasonRatings) && !isCurrentOffseasonRookie(player, source, context);
+  const projected = shouldProject
+    ? projectPlayerForNextSeason(player, { seasonYear: context?.targetSeasonYear || 0 })
+    : { ...(player || {}) };
   return {
-    ...(player || {}),
+    ...projected,
     __offseasonTradeProjectionOnly: true,
     __offseasonTradeProjectionSource: source,
     __offseasonTradeProjectionTeam: teamName,
+    __offseasonProjectionSkippedForCurrentRookie: Boolean(!shouldProject && isCurrentOffseasonRookie(player, source, context)),
   };
 }
 
@@ -459,12 +496,12 @@ function getProjectionOriginTeam(player = {}) {
   );
 }
 
-function addProjectionPlayer(teamPlayers, seen, player, teamName, source) {
+function addProjectionPlayer(teamPlayers, seen, player, teamName, source, context = {}) {
   if (!player || typeof player !== "object") return;
   const identity = getPlayerIdentity(player);
   if (!identity || seen.has(identity)) return;
   seen.add(identity);
-  teamPlayers.push(cloneProjectionPlayer(player, teamName, source));
+  teamPlayers.push(cloneProjectionPlayer(player, teamName, source, context));
 }
 
 function cloneTeamWithProjection(team = {}, projectedPlayers = []) {
@@ -500,11 +537,13 @@ export function buildOffseasonTradeEvaluationLeague(leagueData = {}, explicitCon
 
   for (const team of teams) {
     const teamName = getTeamName(team);
-    const players = Array.isArray(team?.players) ? [...team.players] : [];
+    const players = (Array.isArray(team?.players) ? team.players : []).map((player) =>
+      cloneProjectionPlayer(player, teamName, "actual_roster", context)
+    );
     const seen = new Set(players.map(getPlayerIdentity));
 
     for (const rookie of Array.isArray(team?.pendingRookieSignings) ? team.pendingRookieSignings : []) {
-      addProjectionPlayer(players, seen, rookie, teamName, "pending_rookie");
+      addProjectionPlayer(players, seen, rookie, teamName, "pending_rookie", context);
     }
 
     teamRows.set(normalizeName(teamName), cloneTeamWithProjection(team, players));
@@ -518,7 +557,7 @@ export function buildOffseasonTradeEvaluationLeague(leagueData = {}, explicitCon
     const row = teamRows.get(normalizeName(originTeam));
     if (!row) continue;
     const seen = new Set((row.players || []).map(getPlayerIdentity));
-    addProjectionPlayer(row.players, seen, freeAgent, getTeamName(row), "unsigned_return_assumption");
+    addProjectionPlayer(row.players, seen, freeAgent, getTeamName(row), "unsigned_return_assumption", context);
   }
 
   let projectedLeague;
@@ -579,7 +618,15 @@ export function getOffseasonTradeContextSignature(context = {}) {
     context?.stage,
     context?.lotteryRevealed ? 1 : 0,
     context?.draftComplete ? 1 : 0,
+    context?.progressionComplete ? 1 : 0,
+    context?.useProjectedNextSeasonRatings ? 1 : 0,
     context?.currentPickIndex || 0,
     prospectSignature,
   ].join("|");
+}
+
+export function getOffseasonProjectedRosterSignature(leagueData = {}) {
+  return getAllTeams(leagueData)
+    .flatMap((team) => (team?.players || []).map((player) => progressionProjectionSignature(player)))
+    .join(";");
 }

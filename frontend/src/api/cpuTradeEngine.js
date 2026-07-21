@@ -6,7 +6,7 @@ let counter = 0;
 const pending = new Map();
 
 function startCpuTradeWorker() {
-  if (worker) return;
+  if (worker) return worker;
 
   worker = new Worker("/workers/cpuTradeSeasonWorker.js");
 
@@ -32,6 +32,55 @@ function startCpuTradeWorker() {
   worker.onerror = (error) => {
     console.warn("[cpuTradeEngine] worker error", error);
   };
+  return worker;
+}
+
+function compactPlayer(player = {}) {
+  return {
+    id: player?.id ?? player?.playerId ?? null,
+    name: player?.name || player?.player || "",
+    pos: player?.pos || player?.position || "",
+    secondaryPos: player?.secondaryPos || null,
+    age: player?.age,
+    overall: player?.overall ?? player?.ovr,
+    potential: player?.potential ?? player?.pot,
+    offRating: player?.offRating,
+    defRating: player?.defRating,
+    stamina: player?.stamina,
+    salary: player?.salary,
+    currentSalary: player?.currentSalary,
+    capHit: player?.capHit,
+    contract: player?.contract,
+    rosterStatus: player?.rosterStatus,
+    isTwoWay: player?.isTwoWay,
+    isStash: player?.isStash,
+  };
+}
+
+function compactLeagueForCpuTrades(leagueData = {}) {
+  const compactTeam = (team = {}) => ({
+    name: team?.name || team?.teamName || team?.team || "",
+    conference: team?.conference || team?.conf || "",
+    players: (team?.players || []).map(compactPlayer),
+  });
+  const compact = {
+    seasonYear: leagueData?.seasonYear,
+    currentSeasonYear: leagueData?.currentSeasonYear,
+    draftPicks: leagueData?.draftPicks || [],
+    tradeHistory: (leagueData?.tradeHistory || []).slice(-120),
+  };
+  if (Array.isArray(leagueData?.teams)) compact.teams = leagueData.teams.map(compactTeam);
+  else if (leagueData?.conferences) {
+    compact.conferences = Object.fromEntries(
+      Object.entries(leagueData.conferences).map(([name, teams]) => [name, (teams || []).map(compactTeam)])
+    );
+  }
+  return compact;
+}
+
+export function prewarmCpuTradeWorker() {
+  const activeWorker = startCpuTradeWorker();
+  try { activeWorker?.postMessage({ type: "cpu-cpu-trade-prewarm" }); } catch {}
 }
 
 function deepSanitize(value, seen = new WeakSet()) {
@@ -79,7 +128,7 @@ export function getCpuCpuTradeCandidates(leagueData, context = {}) {
       type: "cpu-cpu-trade-candidates",
       requestId,
       payload: deepSanitize({
-        leagueData,
+        leagueData: compactLeagueForCpuTrades(leagueData),
         context,
       }),
     });

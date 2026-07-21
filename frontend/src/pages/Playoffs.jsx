@@ -2248,6 +2248,47 @@ export default function Playoffs() {
     return null;
   };
 
+  const listSeriesRefsForRound = (cur, roundName) => {
+    const confs = [cur?.layout?.left, cur?.layout?.right].filter(Boolean);
+    if (roundName === "r1") {
+      return confs.flatMap((confKey) =>
+        ["s1v8", "s4v5", "s3v6", "s2v7"].map((seriesKey) => ({ confKey, roundName, seriesKey }))
+      );
+    }
+    if (roundName === "r2") {
+      return confs.flatMap((confKey) =>
+        ["top", "bot"].map((seriesKey) => ({ confKey, roundName, seriesKey }))
+      );
+    }
+    if (roundName === "r3") {
+      return confs.map((confKey) => ({ confKey, roundName, seriesKey: "confFinals" }));
+    }
+    if (roundName === "finals") {
+      return [{ confKey: "NBA", roundName: "finals", seriesKey: "FINALS" }];
+    }
+    return [];
+  };
+
+  async function simCurrentRoundOneDayInCur(cur, roundName, { flush = true } = {}) {
+    const eligible = listSeriesRefsForRound(cur, roundName).filter((ref) =>
+      seriesReadyForNextGame(getSeriesNode(cur, ref.confKey, ref.roundName, ref.seriesKey))
+    );
+    if (!eligible.length) return false;
+
+    let progressed = false;
+    for (const ref of eligible) {
+      if (stopRequestedRef.current) break;
+      const series = getSeriesNode(cur, ref.confKey, ref.roundName, ref.seriesKey);
+      const beforeIndex = Number(series?.nextGameIndex || 0);
+      await simNextGameInCur(cur, ref.confKey, ref.roundName, ref.seriesKey);
+      const afterIndex = Number(series?.nextGameIndex || 0);
+      if (afterIndex > beforeIndex) progressed = true;
+    }
+
+    if (progressed && flush) persistPost(structuredClone(cur));
+    return progressed;
+  }
+
   // ✅ PATCH: round button should advance: Play-In -> R1 -> R2 -> R3 -> Finals
   const findNextStage = (cur) => {
     const L = cur?.layout?.left;
@@ -2271,18 +2312,8 @@ export default function Playoffs() {
 
     try {
       const cur = structuredClone(post);
-
-      // ✅ snapshot eligible series at click time
-      const eligible = listAllSeriesRefs(cur).filter((ref) =>
-        seriesReadyForNextGame(getSeriesNode(cur, ref.confKey, ref.roundName, ref.seriesKey))
-      );
-
-      for (const ref of eligible) {
-        await simNextGameInCur(cur, ref.confKey, ref.roundName, ref.seriesKey);
-        await new Promise((r) => setTimeout(r, 0));
-      }
-
-      persistPost(cur);
+      const round = findActiveRound(cur);
+      if (round) await simCurrentRoundOneDayInCur(cur, round, { flush: true });
     } finally {
       setSimLock(false);
     }
@@ -2375,39 +2406,10 @@ export default function Playoffs() {
         return;
       }
 
-      if (stage === "r1") {
-        for (const ck of confs) {
-          for (const sk of ["s1v8", "s4v5", "s3v6", "s2v7"]) {
-            if (stopRequestedRef.current) break;
-            const s = getSeriesNode(cur, ck, "r1", sk);
-            if (seriesReadyForNextGame(s)) {
-              await simSeriesToCompletionInCur(cur, ck, "r1", sk, { flush: true });
-            }
-          }
-        }
-      } else if (stage === "r2") {
-        for (const ck of confs) {
-          for (const sk of ["top", "bot"]) {
-            if (stopRequestedRef.current) break;
-            const s = getSeriesNode(cur, ck, "r2", sk);
-            if (seriesReadyForNextGame(s)) {
-              await simSeriesToCompletionInCur(cur, ck, "r2", sk, { flush: true });
-            }
-          }
-        }
-      } else if (stage === "r3") {
-        for (const ck of confs) {
-          if (stopRequestedRef.current) break;
-          const s = getSeriesNode(cur, ck, "r3", "confFinals");
-          if (seriesReadyForNextGame(s)) {
-            await simSeriesToCompletionInCur(cur, ck, "r3", "confFinals", { flush: true });
-          }
-        }
-      } else if (stage === "finals") {
-        const s = cur.finals;
-        if (seriesReadyForNextGame(s) && !stopRequestedRef.current) {
-          await simSeriesToCompletionInCur(cur, "NBA", "finals", "FINALS", { flush: true });
-        }
+      while (findActiveRound(cur) === stage && !stopRequestedRef.current) {
+        const progressed = await simCurrentRoundOneDayInCur(cur, stage, { flush: true });
+        if (!progressed) break;
+        await new Promise((r) => setTimeout(r, 0));
       }
 
       persistPost(structuredClone(cur));
@@ -2469,46 +2471,7 @@ export default function Playoffs() {
         const round = stage; // r1/r2/r3/finals/null
         if (!round) break;
 
-        let progressed = false;
-
-        if (round === "r1") {
-          for (const ck of confs) {
-            for (const sk of ["s1v8", "s4v5", "s3v6", "s2v7"]) {
-              if (stopRequestedRef.current) break;
-              const s = getSeriesNode(cur, ck, "r1", sk);
-              if (seriesReadyForNextGame(s)) {
-                const did = await simSeriesToCompletionInCur(cur, ck, "r1", sk, { flush: true });
-                progressed = progressed || did;
-              }
-            }
-          }
-        } else if (round === "r2") {
-          for (const ck of confs) {
-            for (const sk of ["top", "bot"]) {
-              if (stopRequestedRef.current) break;
-              const s = getSeriesNode(cur, ck, "r2", sk);
-              if (seriesReadyForNextGame(s)) {
-                const did = await simSeriesToCompletionInCur(cur, ck, "r2", sk, { flush: true });
-                progressed = progressed || did;
-              }
-            }
-          }
-        } else if (round === "r3") {
-          for (const ck of confs) {
-            if (stopRequestedRef.current) break;
-            const s = getSeriesNode(cur, ck, "r3", "confFinals");
-            if (seriesReadyForNextGame(s)) {
-              const did = await simSeriesToCompletionInCur(cur, ck, "r3", "confFinals", { flush: true });
-              progressed = progressed || did;
-            }
-          }
-        } else if (round === "finals") {
-          const s = cur.finals;
-          if (seriesReadyForNextGame(s) && !stopRequestedRef.current) {
-            const did = await simSeriesToCompletionInCur(cur, "NBA", "finals", "FINALS", { flush: true });
-            progressed = progressed || did;
-          }
-        }
+        const progressed = await simCurrentRoundOneDayInCur(cur, round, { flush: true });
 
         if (!progressed) {
           console.warn("[playoffs] Global sim made no progress; stopping to avoid infinite loop.");
@@ -3262,7 +3225,7 @@ ${disabled ? "opacity-60" : ""}
             }}
             className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm font-bold disabled:opacity-50"
           >
-            Sim One Game
+            Sim One Day
           </button>
 
           {/* Full-stage controls */}

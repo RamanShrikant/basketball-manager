@@ -13,6 +13,7 @@ import { evaluateTradePickImpact } from "./tradePickValue.js";
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const SCHEDULE_KEY = "bm_schedule_v3";
+const evaluationPlayerIndexCache = new WeakMap();
 
 const TEAM_IMPACT_EPS = 0.015;
 const NO_DOWNSIDE_MIN_GAIN = 0.10;
@@ -94,8 +95,10 @@ const PROSPECT_RETENTION_STACK_FALLBACK = 0.16;
 // firsts or exposing their own first through swaps. Existing pick value/protection
 // logic remains untouched; this is just additional retention pain layered on top.
 const OWN_FIRST_RETENTION_TAX_CAP = 42.00;
+const DRAFT_ASSET_RETENTION_TAX_CAP = 50.00;
 const OWN_FIRST_RETENTION_STACK_WEIGHTS = [1.00, 0.70, 0.45];
 const OWN_FIRST_RETENTION_STACK_FALLBACK = 0.20;
+const RESOLVED_PICK_REPLACEMENT_CREDIT_RATE = 0.95;
 const RATING_CACHE_MAX = 900;
 const POWER_CONTEXT_CACHE_MAX = 24;
 const TRADE_FINDER_IMPACT_CACHE_MAX = 2600;
@@ -1406,6 +1409,47 @@ function getTradePlayers(items = []) {
     .map((item) => item.player);
 }
 
+function getEvaluationPlayerIndex(leagueData = {}) {
+  if (!leagueData || typeof leagueData !== "object") return new Map();
+  const cached = evaluationPlayerIndexCache.get(leagueData);
+  if (cached) return cached;
+  const index = new Map();
+  for (const team of getAllTeamsFromLeague(leagueData)) {
+    for (const row of team?.players || []) index.set(getPlayerIdentity(row), row);
+  }
+  for (const row of leagueData?.freeAgents || []) index.set(getPlayerIdentity(row), row);
+  evaluationPlayerIndexCache.set(leagueData, index);
+  return index;
+}
+
+function findEvaluationPlayer(leagueData = {}, player = {}) {
+  const identity = getPlayerIdentity(player);
+  if (!identity) return player;
+  return getEvaluationPlayerIndex(leagueData).get(identity) || player;
+}
+
+function getEvaluationTradePlayers(items = [], leagueData = {}) {
+  return getTradePlayers(items).map((player) => findEvaluationPlayer(leagueData, player));
+}
+
+function getConservativeYoungRetentionPlayer(player = {}) {
+  const currentAge = Number(player?.__offseasonCurrentAge);
+  const currentOverall = Number(player?.__offseasonCurrentOverall);
+  const currentPotential = Number(player?.__offseasonCurrentPotential);
+  const projectedAge = Math.round(toNum(player?.age, 27));
+  const projectedOverall = Math.round(toNum(player?.overall ?? player?.ovr, 0));
+  const projectedPotential = Math.round(toNum(player?.potential ?? player?.pot, projectedOverall));
+  if (!Number.isFinite(currentAge) && !Number.isFinite(currentOverall) && !Number.isFinite(currentPotential)) return player;
+  return {
+    ...player,
+    age: Number.isFinite(currentAge) ? Math.min(projectedAge, Math.round(currentAge)) : projectedAge,
+    overall: Number.isFinite(currentOverall) ? Math.max(projectedOverall, Math.round(currentOverall)) : projectedOverall,
+    ovr: Number.isFinite(currentOverall) ? Math.max(projectedOverall, Math.round(currentOverall)) : projectedOverall,
+    potential: Number.isFinite(currentPotential) ? Math.max(projectedPotential, Math.round(currentPotential)) : projectedPotential,
+    pot: Number.isFinite(currentPotential) ? Math.max(projectedPotential, Math.round(currentPotential)) : projectedPotential,
+  };
+}
+
 function getPlayerDisplayName(player = {}) {
   return player?.name || player?.player || "Unknown Player";
 }
@@ -1715,12 +1759,108 @@ function isOutgoingOwnSwapExposure(row = {}, cpuTeamName = "") {
   return Boolean(cpuNorm && reasonNorm.includes(cpuNorm));
 }
 
+function isResolvedCurrentDraftPickRow(row = {}) {
+  if (Number(row?.round) !== 1) return false;
+  const stage = String(row?.valuationStage || "").toLowerCase();
+  if (stage !== "exact_pick" && stage !== "live_draft") return false;
+  const slot = Number(row?.expectedSlot || row?.pickNumber || row?.slot || 0);
+  const year = Number(row?.year || 0);
+  const currentYear = Number(row?.currentYear || 0);
+  return Number.isFinite(slot) && slot > 0 && (!currentYear || !year || year === currentYear);
+}
+
+function getResolvedPickReplacementProtection(row = {}, powerRank = 15) {
+  if (!isResolvedCurrentDraftPickRow(row)) return 0;
+
+  const overall = Number(row?.expectedProspectOverall || 0);
+  const potential = Number(row?.expectedProspectPotential || 0);
+  const age = Number(row?.expectedProspectAge || 0);
+  if (overall <= 0 || potential <= 0 || age <= 0) return 0;
+
+  // Recalculate the expected prospect's protection using the receiving CPU's
+  // direction. The pick may have originated from an elite team, but once a
+  // rebuilding CPU acquires it, the expected prospect should be protected like
+  // that CPU's own premium young player would be after the selection.
+  const projectedProspect = {
+    name: row?.expectedProspectName || `prospect near #${Number(row?.expectedSlot || 0).toFixed(0)}`,
+    overall,
+    potential,
+    age,
+  };
+  const prospectRow = getCpuOutgoingProspectRetentionTaxForPlayer(projectedProspect, powerRank);
+  const certainty = clamp(Number(row?.draftAssetCertainty || 0), 0, 1);
+  return round4(Number(prospectRow?.tax || 0) * certainty);
+}
+
+function applyResolvedPickReplacementCredit(outgoingRows = [], incomingPickRows = [], powerRank = 15) {
+  const availableIncoming = (incomingPickRows || [])
+    .filter(isResolvedCurrentDraftPickRow)
+    .map((row, index) => ({
+      row,
+      index,
+      protection: getResolvedPickReplacementProtection(row, powerRank),
+      used: false,
+    }))
+    .filter((entry) => entry.protection > TEAM_IMPACT_EPS)
+    .sort((a, b) => b.protection - a.protection);
+
+  const adjustedRows = (outgoingRows || []).map((row) => {
+    if (!isResolvedCurrentDraftPickRow(row)) return row;
+
+    const match = availableIncoming.find((entry) => {
+      if (entry.used) return false;
+      return Number(entry.row?.year || 0) === Number(row?.year || 0) &&
+        Number(entry.row?.round || 0) === Number(row?.round || 0);
+    });
+    if (!match) return row;
+
+    match.used = true;
+    const grossTax = Math.max(0, Number(row?.tax || 0));
+    const outgoingSlot = Math.max(1, Number(row?.expectedSlot || 30));
+    const incomingSlot = Math.max(1, Number(match.row?.expectedSlot || 30));
+    // A better/equal incoming pick can replace almost all retention protection.
+    // A worse pick only replaces a proportional share, so moving down still
+    // requires a real sweetener even when both assets are resolved.
+    const slotQualityFactor = clamp(outgoingSlot / incomingSlot, 0, 1);
+    const rawReplacementCredit = round4(
+      match.protection * RESOLVED_PICK_REPLACEMENT_CREDIT_RATE * slotQualityFactor
+    );
+    const replacementCredit = round4(Math.min(grossTax, rawReplacementCredit));
+    const netTax = round4(Math.max(0, grossTax - replacementCredit));
+
+    return {
+      ...row,
+      grossTax: round4(grossTax),
+      tax: netTax,
+      replacementCredit,
+      replacementCreditRate: RESOLVED_PICK_REPLACEMENT_CREDIT_RATE,
+      replacementPickYear: match.row?.year,
+      replacementPickSlot: round4(Number(match.row?.expectedSlot || 0)),
+      replacementPickProtection: round4(match.protection),
+      replacementSlotQualityFactor: round4(slotQualityFactor),
+    };
+  });
+
+  return {
+    rows: adjustedRows,
+    totalCredit: round4(adjustedRows.reduce((sum, row) => sum + Number(row?.replacementCredit || 0), 0)),
+  };
+}
+
 function getRetentionRowForPickAsset(row = {}, teamMultiplier = 0, cpuTeamName = "CPU team") {
-  if (teamMultiplier <= 0 || Number(row?.round) !== 1) return null;
+  if (Number(row?.round) !== 1) return null;
 
   const isOwnFirst = isOutgoingOwnFirstPick(row, cpuTeamName);
   const isOwnSwap = isOutgoingOwnSwapExposure(row, cpuTeamName);
-  if (!isOwnFirst && !isOwnSwap) return null;
+  const expectedProspectTax = Math.max(0, Number(row?.expectedProspectRetentionTax || 0));
+  const draftAssetCertainty = clamp(Number(row?.draftAssetCertainty || 0), 0, 1);
+  // Any current-draft first can represent a premium prospect, even when the
+  // pick originally belonged to another team or the CPU is already a contender.
+  // Once the lottery/order is resolved, this protection should closely match
+  // the prospect-retention tax that will apply immediately after selection.
+  const hasCurrentDraftProspectParity =
+    !isOwnSwap && expectedProspectTax > TEAM_IMPACT_EPS && draftAssetCertainty > 0;
+  if (!isOwnFirst && !isOwnSwap && !hasCurrentDraftProspectParity) return null;
 
   const valueForEstimate = Math.abs(Number(row.adjustedValue ?? row.value ?? 0));
   const rawExpectedSlot = Number(row.expectedSlot || row.pickNumber || row.slot || 0);
@@ -1732,7 +1872,13 @@ function getRetentionRowForPickAsset(row = {}, teamMultiplier = 0, cpuTeamName =
   const baseBeforeRisk = Math.max(slotBaseTax, valueBaseTax);
   const swapRiskFactor = isOwnSwap ? getSwapRetentionRiskFactor(row) : 1.00;
   const baseTax = round4(baseBeforeRisk * swapRiskFactor);
-  const tax = round4(baseTax * teamMultiplier);
+  const traditionalTax = isOwnFirst || isOwnSwap
+    ? round4(baseTax * Math.max(0, teamMultiplier))
+    : 0;
+  const prospectParityTax = hasCurrentDraftProspectParity
+    ? round4(expectedProspectTax * draftAssetCertainty)
+    : 0;
+  const tax = round4(Math.max(traditionalTax, prospectParityTax));
   if (tax <= TEAM_IMPACT_EPS) return null;
 
   return {
@@ -1743,8 +1889,22 @@ function getRetentionRowForPickAsset(row = {}, teamMultiplier = 0, cpuTeamName =
     baseTax: round4(baseTax),
     baseBeforeRisk: round4(baseBeforeRisk),
     teamMultiplier: round4(teamMultiplier),
+    traditionalTax,
+    expectedProspectTax: round4(expectedProspectTax),
+    expectedProspectName: row.expectedProspectName || "",
+    expectedProspectOverall: round4(Number(row.expectedProspectOverall || 0)),
+    expectedProspectPotential: round4(Number(row.expectedProspectPotential || 0)),
+    expectedProspectAge: round4(Number(row.expectedProspectAge || 0)),
+    currentYear: Number(row.currentYear || 0),
+    valuationStage: row.valuationStage || "",
+    draftAssetCertainty: round4(draftAssetCertainty),
+    prospectParityTax,
     swapRiskFactor: round4(swapRiskFactor),
-    assetKind: isOwnSwap ? "own-swap exposure" : "own first",
+    assetKind: isOwnSwap
+      ? "own-swap exposure"
+      : isOwnFirst
+        ? "own first"
+        : "current-draft premium pick",
     tax,
     protectionText: row.protectionText,
     adjustedValue: row.adjustedValue,
@@ -1755,36 +1915,86 @@ function getRetentionRowForPickAsset(row = {}, teamMultiplier = 0, cpuTeamName =
 
 function evaluateCpuOutgoingOwnFirstRetentionTax(pickImpact = {}, powerRank = 15, cpuTeamName = "CPU team") {
   const teamMultiplier = getOwnFirstRetentionTeamMultiplier(powerRank);
-  if (teamMultiplier <= 0) return { tax: 0, rows: [], reasons: [] };
 
-  const rows = (Array.isArray(pickImpact?.outgoing) ? pickImpact.outgoing : [])
+  const grossRows = (Array.isArray(pickImpact?.outgoing) ? pickImpact.outgoing : [])
     .map((row) => getRetentionRowForPickAsset(row, teamMultiplier, cpuTeamName))
     .filter(Boolean)
     .sort((a, b) => b.tax - a.tax);
 
-  if (!rows.length) return { tax: 0, rows, reasons: [] };
+  if (!grossRows.length) {
+    return { tax: 0, rows: [], grossRows: [], replacementCredit: 0, reasons: [] };
+  }
 
-  const weightedTax = rows.reduce((sum, row, idx) => {
+  const replacementResult = applyResolvedPickReplacementCredit(
+    grossRows,
+    Array.isArray(pickImpact?.incoming) ? pickImpact.incoming : [],
+    powerRank
+  );
+  // Preserve the original gross-tax ordering for stack weights. A fully covered
+  // first asset must not cause the second outgoing pick to jump from the 0.70x
+  // stack slot to 1.00x.
+  const adjustedRows = replacementResult.rows;
+  const positiveRows = adjustedRows.filter((row) => Number(row?.tax || 0) > TEAM_IMPACT_EPS);
+  const hasProspectParityRow = grossRows.some((row) => row.prospectParityTax > TEAM_IMPACT_EPS);
+  const taxCap = hasProspectParityRow
+    ? DRAFT_ASSET_RETENTION_TAX_CAP
+    : OWN_FIRST_RETENTION_TAX_CAP;
+  const weightedGrossTax = grossRows.reduce((sum, row, idx) => {
     const weight = OWN_FIRST_RETENTION_STACK_WEIGHTS[idx] ?? OWN_FIRST_RETENTION_STACK_FALLBACK;
-    return sum + row.tax * weight;
+    return sum + Number(row?.tax || 0) * weight;
   }, 0);
-  const tax = round4(clamp(weightedTax, 0, OWN_FIRST_RETENTION_TAX_CAP));
-  const primary = rows[0];
+  const weightedNetTax = adjustedRows.reduce((sum, row, idx) => {
+    const weight = OWN_FIRST_RETENTION_STACK_WEIGHTS[idx] ?? OWN_FIRST_RETENTION_STACK_FALLBACK;
+    return sum + Number(row?.tax || 0) * weight;
+  }, 0);
+  const grossTax = round4(clamp(weightedGrossTax, 0, taxCap));
+  const tax = round4(clamp(weightedNetTax, 0, taxCap));
+  const replacementCredit = round4(Math.max(0, grossTax - tax));
+
+  if (!positiveRows.length) {
+    return {
+      tax: 0,
+      rows: [],
+      grossRows,
+      replacementCredit,
+      reasons: replacementCredit > TEAM_IMPACT_EPS
+        ? [`CPU resolved-pick replacement credit: -${replacementCredit.toFixed(2)} threshold because ${cpuTeamName} receives a same-year exact pick that replaces 95% of the premium draft-asset protection it is sending.`]
+        : [],
+    };
+  }
+
+  const primary = positiveRows[0];
   const teamType = getOwnFirstRetentionTeamType(powerRank);
-  const extraCount = Math.max(0, rows.length - 1);
+  const extraCount = Math.max(0, positiveRows.length - 1);
   const extraText = extraCount > 0
-    ? `, with reduced stacking credit for ${extraCount} other outgoing own future asset${extraCount === 1 ? "" : "s"}`
+    ? `, with reduced stacking credit for ${extraCount} other outgoing draft asset${extraCount === 1 ? "" : "s"}`
     : "";
-  const kindText = primary.assetKind === "own-swap exposure" ? "own-swap retention" : "own-first retention";
+  const kindText = primary.assetKind === "own-swap exposure"
+    ? "own-swap retention"
+    : primary.assetKind === "current-draft premium pick"
+      ? "current-draft prospect retention"
+      : "own-first retention";
   const swapText = primary.assetKind === "own-swap exposure"
     ? ` through ${primary.recipientDirection || "first-round"} swap exposure at a ${primary.swapRiskFactor.toFixed(2)}x swap-risk factor`
+    : "";
+  const assetText = primary.assetKind === "current-draft premium pick"
+    ? `the ${primary.year || "current"} 1st projected around pick #${primary.expectedSlot.toFixed(2)}`
+    : `its own ${primary.year || "future"} 1st${swapText}, projected around pick #${primary.expectedSlot.toFixed(2)}`;
+  const parityText = primary.prospectParityTax > TEAM_IMPACT_EPS
+    ? `, expected to yield a premium prospect carrying ${primary.expectedProspectTax.toFixed(2)} of player-retention protection at ${(primary.draftAssetCertainty * 100).toFixed(0)}% draft certainty`
+    : "";
+  const replacementText = replacementCredit > TEAM_IMPACT_EPS
+    ? ` A 95% same-year resolved-pick replacement credit removes ${replacementCredit.toFixed(2)} from the gross ${grossTax.toFixed(2)} draft-asset retention cost.`
     : "";
 
   return {
     tax,
-    rows,
+    rows: positiveRows,
+    grossRows,
+    grossTax,
+    replacementCredit,
     reasons: [
-      `CPU ${kindText} tax: +${tax.toFixed(2)} threshold because ${cpuTeamName} is a ${teamType} giving up its own ${primary.year || "future"} 1st${swapText}, projected around pick #${primary.expectedSlot.toFixed(2)}${extraText}.`,
+      `CPU ${kindText} tax: +${tax.toFixed(2)} threshold because ${cpuTeamName} is a ${teamType} giving up ${assetText}${parityText}${extraText}.${replacementText}`,
     ],
   };
 }
@@ -1798,9 +2008,66 @@ function getPrimaryTradePickItems(items = []) {
   });
 }
 
-function buildCpuRosterAfterTrade(cpuTeam, userItems = [], cpuItems = [], cpuTeamName = "") {
-  const outgoingPlayers = getTradePlayers(cpuItems);
-  const incomingPlayers = getTradePlayers(userItems);
+function getResolvedExactPickDescriptor(item = {}) {
+  if (item?.type !== "pick" || !item.pick || item.tradeValueExcluded) return null;
+
+  const pick = item.pick || {};
+  const rule = item.tradeRule || pick.tradeRule || {};
+  const action = String(rule.action || "").toLowerCase();
+  if (rule.mirror || action === "swap") return null;
+
+  const assetType = String(pick.assetType || pick.type || pick.status || "").toLowerCase();
+  if (assetType !== "resolved") return null;
+
+  const slot = Number(
+    pick.pickNumber || pick.overallPick || pick.resolvedPickNumber || pick.draftPickNumber || pick.pick || 0
+  );
+  const year = Number(pick.year || pick.seasonYear || pick.draftYear || 0);
+  const round = getPickRound(pick);
+  if (!Number.isFinite(slot) || slot <= 0 || !Number.isFinite(year) || year <= 0) return null;
+  if (round !== 1 && round !== 2) return null;
+
+  return { year, round, slot };
+}
+
+function isMathematicallyStrictResolvedPickUpgrade(userItems = [], cpuItems = []) {
+  if (!userItems.length || !cpuItems.length) return false;
+
+  const incoming = userItems.map(getResolvedExactPickDescriptor);
+  const outgoing = cpuItems.map(getResolvedExactPickDescriptor);
+  if (incoming.some((row) => !row) || outgoing.some((row) => !row)) return false;
+
+  const incomingByGroup = new Map();
+  const outgoingByGroup = new Map();
+  const addToGroup = (map, row) => {
+    const key = `${row.year}|${row.round}`;
+    const slots = map.get(key) || [];
+    slots.push(row.slot);
+    map.set(key, slots);
+  };
+
+  incoming.forEach((row) => addToGroup(incomingByGroup, row));
+  outgoing.forEach((row) => addToGroup(outgoingByGroup, row));
+
+  let hasStrictUpgrade = incoming.length > outgoing.length;
+
+  for (const [key, outgoingSlotsRaw] of outgoingByGroup.entries()) {
+    const incomingSlots = [...(incomingByGroup.get(key) || [])].sort((a, b) => a - b);
+    const outgoingSlots = [...outgoingSlotsRaw].sort((a, b) => a - b);
+    if (incomingSlots.length < outgoingSlots.length) return false;
+
+    for (let index = 0; index < outgoingSlots.length; index += 1) {
+      if (incomingSlots[index] > outgoingSlots[index]) return false;
+      if (incomingSlots[index] < outgoingSlots[index]) hasStrictUpgrade = true;
+    }
+  }
+
+  return hasStrictUpgrade;
+}
+
+function buildCpuRosterAfterTrade(cpuTeam, userItems = [], cpuItems = [], cpuTeamName = "", leagueData = {}) {
+  const outgoingPlayers = getEvaluationTradePlayers(cpuItems, leagueData);
+  const incomingPlayers = getEvaluationTradePlayers(userItems, leagueData);
 
   const roster = (cpuTeam?.players || [])
     .filter((player) => !outgoingPlayers.some((outgoing) => samePlayer(player, outgoing)))
@@ -1871,7 +2138,7 @@ function genericPickValue(item = {}) {
   if (round === 1) {
     if (slot > 0) {
       const firstRoundSlot = clamp(slot, 1, 30);
-      value = 0.80 + ((30 - firstRoundSlot) / 29) * 7.40;
+      value = 1.00 + ((30 - firstRoundSlot) / 29) * 16.00;
     } else {
       value = 2.20;
     }
@@ -1966,7 +2233,7 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
 
   const beforePlayers = Array.isArray(cpuTeam?.players) ? cpuTeam.players : [];
   const afterRosterStart = tfImpactNow();
-  const afterPlayers = buildCpuRosterAfterTrade(cpuTeam, userItems, cpuItems, cpuName);
+  const afterPlayers = buildCpuRosterAfterTrade(cpuTeam, userItems, cpuItems, cpuName, leagueData);
   addBreakdownMetric(__tfBreakdownMetrics, "afterRosterBuildMs", tfImpactNow() - afterRosterStart);
 
   const useFastScanImpact = shouldUseTradeFinderFastScanImpact({
@@ -2020,8 +2287,9 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
 
   const pickScore = Number(pickImpact?.netPickScore || 0);
   const tradePlayersStart = tfImpactNow();
-  const cpuIncomingPlayers = getTradePlayers(userItems);
-  const cpuOutgoingPlayers = getTradePlayers(cpuItems);
+  const cpuIncomingPlayers = getEvaluationTradePlayers(userItems, leagueData);
+  const cpuOutgoingPlayers = getEvaluationTradePlayers(cpuItems, leagueData);
+  const cpuOutgoingRetentionPlayers = cpuOutgoingPlayers.map(getConservativeYoungRetentionPlayer);
   addBreakdownMetric(__tfBreakdownMetrics, "tradePlayersMs", tfImpactNow() - tradePlayersStart);
 
   const contractStart = tfImpactNow();
@@ -2037,7 +2305,7 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
   addBreakdownMetric(__tfBreakdownMetrics, "starTaxMs", tfImpactNow() - starTaxStart);
 
   const prospectTaxStart = tfImpactNow();
-  const prospectRetentionImpact = evaluateCpuOutgoingProspectRetentionTax(cpuOutgoingPlayers, powerContext.rank, cpuName);
+  const prospectRetentionImpact = evaluateCpuOutgoingProspectRetentionTax(cpuOutgoingRetentionPlayers, powerContext.rank, cpuName);
   addBreakdownMetric(__tfBreakdownMetrics, "prospectTaxMs", tfImpactNow() - prospectTaxStart);
 
   const ownFirstTaxStart = tfImpactNow();
@@ -2091,6 +2359,10 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
   const hasMeaningfulProspectRetentionTax = Number(prospectRetentionImpact?.tax || 0) > 0.035;
   const hasMeaningfulOwnFirstRetentionTax = Number(ownFirstRetentionImpact?.tax || 0) > 0.035;
   const hasMeaningfulAssetRetentionTax = assetRetentionTax > 0.035;
+  const mathematicallyStrictResolvedPickUpgradeAccept =
+    !hasPlayerMovement &&
+    !hasMeaningfulContractFriction &&
+    isMathematicallyStrictResolvedPickUpgrade(userItems, cpuItems);
   const cleanPickUpgradeAccept =
     !hasPlayerMovement &&
     !hasMeaningfulContractFriction &&
@@ -2127,7 +2399,8 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
     mainScore >= threshold - 1.35;
 
   const accepted = Boolean(
-    cleanPickUpgradeAccept ||
+    mathematicallyStrictResolvedPickUpgradeAccept ||
+      cleanPickUpgradeAccept ||
       noDownsidePickSweetenerAccept ||
       noDownsideAccept ||
       tradeoffAccept ||
@@ -2179,7 +2452,9 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
     reasons.push(`${cpuName} is currently the top team in its conference, so it needs a clearer reason to move pieces.`);
   }
 
-  if (cleanPickUpgradeAccept) {
+  if (mathematicallyStrictResolvedPickUpgradeAccept) {
+    reasons.push("Accepted because this pick-only offer is a mathematically strict exact-slot upgrade for the CPU with no draft-asset downside.");
+  } else if (cleanPickUpgradeAccept) {
     reasons.push("Accepted because this is a clean draft-asset upgrade for the CPU with no player, roster, salary, or contract downside.");
   } else if (cpuCpuBuyerAccept) {
     reasons.push("Accepted in CPU-to-CPU buyer mode because the team gets a meaningful rotation upgrade without an excessive pick/contract cost.");
@@ -2235,6 +2510,11 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
       prospectRetentionImpact,
       ownFirstRetentionTax: ownFirstRetentionImpact?.tax || 0,
       ownFirstRetentionImpact,
+      // Legacy ownFirst fields remain for saved diagnostics/Trade Finder
+      // compatibility. These aliases reflect that the same gate now also
+      // protects acquired current-draft premium picks.
+      draftAssetRetentionTax: ownFirstRetentionImpact?.tax || 0,
+      draftAssetRetentionImpact: ownFirstRetentionImpact,
       assetRetentionTax,
       noDownsideMinGain,
       before,
@@ -2252,6 +2532,7 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
         pickImpact,
         incomingPickValue: pickImpact?.incomingValue || 0,
         outgoingPickValue: pickImpact?.outgoingValue || 0,
+        mathematicallyStrictResolvedPickUpgradeAccept,
         cleanPickUpgradeAccept,
         noDownsidePickSweetenerAccept,
         cpuCpuBuyerAccept,
@@ -2264,6 +2545,7 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
         starRetentionTax: starRetentionImpact?.tax || 0,
         prospectRetentionTax: prospectRetentionImpact?.tax || 0,
         ownFirstRetentionTax: ownFirstRetentionImpact?.tax || 0,
+        draftAssetRetentionTax: ownFirstRetentionImpact?.tax || 0,
         assetRetentionTax,
       },
     },

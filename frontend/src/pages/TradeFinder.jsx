@@ -16,8 +16,10 @@ import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import PageFade from "../components/PageFade";
 import {
   canAddCustomProtectionToPick,
+  formatResolvedDraftPickLabel,
   getTradePickBaseProtectionLabel,
   getTradeablePickOwnedRange,
+  isResolvedDraftPickAsset,
   normalizeDraftPicks,
   normalizeTeamName,
   protectionDisplayForOwnedRange,
@@ -454,6 +456,7 @@ function formatMoney(amount) {
 }
 
 function formatPick(pick) {
+  if (isResolvedDraftPickAsset(pick)) return formatResolvedDraftPickLabel(pick);
   const round = Number(pick?.round || 1) === 1 ? "1st" : "2nd";
   const original = pick?.originalTeam || pick?.originalTeamName || "Own";
   const pickNumber = Number(pick?.pickNumber || pick?.overallPick || pick?.resolvedPickNumber || pick?.draftPickNumber || 0);
@@ -462,6 +465,7 @@ function formatPick(pick) {
 }
 
 function pickProtectionLabel(pick) {
+  if (isResolvedDraftPickAsset(pick)) return "Resolved";
   const raw = pick?.protection || pick?.protections || pick?.displayProtection || "";
   const label = String(raw || "").trim();
   if (!label || label.toLowerCase() === "none" || label.toLowerCase() === "null") return DEFAULT_PICK_PROTECTION;
@@ -821,7 +825,9 @@ function getCandidateAssets(team, leagueData) {
       type: "pick",
       pick,
       protection: pickProtectionLabel(pick),
-      label: `${pickProtectionLabel(pick)} ${formatPick(pick)}`,
+      label: isResolvedDraftPickAsset(pick)
+        ? formatResolvedDraftPickLabel(pick)
+        : `${pickProtectionLabel(pick)} ${formatPick(pick)}`,
       value: pickValue(pick, pickProtectionLabel(pick), leagueData),
       salary: 0,
     }));
@@ -1484,6 +1490,7 @@ function TradeFinderRatingRing({ player, variant = "packageRows" }) {
 
 function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team, selectedActionLabel = "Added" }) {
   const isPlayer = asset.type === "player";
+  const isResolvedPick = !isPlayer && isResolvedDraftPickAsset(asset.pick);
   const label = isPlayer ? playerNameOf(asset.player) : formatPick(asset.pick);
   const positionText = isPlayer
     ? `${asset.player?.pos || "-"}${asset.player?.secondaryPos ? ` / ${asset.player.secondaryPos}` : ""}`
@@ -1498,7 +1505,9 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
     : null;
   const contractLine = isPlayer
     ? `Contract: ${formatMoney(getPlayerSalary(asset.player, leagueData))}`
-    : `${protection || DEFAULT_PICK_PROTECTION} • Owns ${ownedRange?.start || "?"}-${ownedRange?.end || "?"}`;
+    : isResolvedPick
+      ? "Exact resolved draft pick"
+      : `${protection || DEFAULT_PICK_PROTECTION} • Owns ${ownedRange?.start || "?"}-${ownedRange?.end || "?"}`;
   const headshotT = TRADE_FINDER_HEADSHOT_TUNING.packageRows;
   const ringT = TRADE_FINDER_RATING_RING_TUNING.packageRows;
   const rowT = TRADE_FINDER_PLAYER_ROW_TUNING.packageRows;
@@ -1625,7 +1634,7 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
         </button>
       </div>
 
-      {!isPlayer && selected && (
+      {!isPlayer && selected && !isResolvedPick && (
         <div className="relative z-10 mt-3 rounded-xl border border-white/10 bg-black p-3">
           <div className="grid gap-2 sm:grid-cols-2">
             <button
@@ -1789,7 +1798,9 @@ function OfferAssetLine({ item, team }) {
     >
       <TradeFinderPillBackgroundLogo team={team} variant="offerRows" />
       <span className="relative z-10">
-        {item.protection || DEFAULT_PICK_PROTECTION} {formatPick(item.pick)}
+        {isResolvedDraftPickAsset(item.pick)
+          ? formatResolvedDraftPickLabel(item.pick)
+          : `${item.protection || DEFAULT_PICK_PROTECTION} ${formatPick(item.pick)}`}
       </span>
     </div>
   );

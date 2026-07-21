@@ -618,6 +618,25 @@ export function isResolvedDraftPickAsset(asset = {}) {
   return String(asset.assetType || asset.type || "pick").toLowerCase() === "resolved";
 }
 
+export function getResolvedDraftPickNumber(asset = {}) {
+  const value = Number(
+    asset?.pickNumber ||
+      asset?.overallPick ||
+      asset?.resolvedPickNumber ||
+      asset?.draftPickNumber ||
+      asset?.pick ||
+      0
+  );
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+export function formatResolvedDraftPickLabel(asset = {}) {
+  const pickNumber = getResolvedDraftPickNumber(asset);
+  const year = Number(asset?.year || asset?.seasonYear || asset?.draftYear || 0);
+  if (!pickNumber) return year > 0 ? `Draft Pick (${year})` : "Resolved Draft Pick";
+  return year > 0 ? `#${pickNumber} (${year})` : `#${pickNumber}`;
+}
+
 export function isProtectedDraftPickAsset(asset = {}) {
   if (isSwapDraftPickAsset(asset) || isResolvedDraftPickAsset(asset)) return false;
   const base = getTradePickBaseProtectionLabel(asset).toLowerCase();

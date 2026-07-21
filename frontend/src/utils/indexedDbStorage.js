@@ -113,6 +113,25 @@ export async function saveBoxScoreToDB(gameId, result, meta = {}) {
   return true;
 }
 
+export async function saveBoxScoresBatchToDB(rows = []) {
+  const cleanRows = (rows || []).filter((row) => row?.gameId && row?.result);
+  if (!cleanRows.length) return false;
+  const updatedAt = Date.now();
+  await runTransaction(BOX_SCORE_STORE, "readwrite", (store) => {
+    for (const row of cleanRows) {
+      store.put({
+        gameId: row.gameId,
+        result: row.result,
+        seasonYear: row?.seasonYear ?? null,
+        home: row?.home ?? null,
+        away: row?.away ?? null,
+        updatedAt,
+      });
+    }
+  });
+  return true;
+}
+
 export async function loadBoxScoreFromDB(gameId) {
   if (!gameId) return null;
 
@@ -130,6 +149,45 @@ export async function loadBoxScoreFromDB(gameId) {
       };
 
       request.onerror = () => reject(request.error || new Error("Failed to load box score."));
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+export async function loadBoxScoresByGameIdsFromDB(gameIds = []) {
+  const ids = [...new Set((gameIds || []).filter(Boolean).map((id) => String(id)))];
+  if (!ids.length) return {};
+
+  const db = await openBasketballManagerDb();
+
+  return new Promise((resolve, reject) => {
+    try {
+      const tx = db.transaction(BOX_SCORE_STORE, "readonly");
+      const store = tx.objectStore(BOX_SCORE_STORE);
+      const results = {};
+      let remaining = ids.length;
+
+      const finishOne = () => {
+        remaining -= 1;
+        if (remaining <= 0) resolve(results);
+      };
+
+      for (const gameId of ids) {
+        const request = store.get(gameId);
+        request.onsuccess = () => {
+          const row = request.result;
+          if (row?.result) results[gameId] = row.result;
+          finishOne();
+        };
+        request.onerror = () => {
+          console.warn("[indexedDbStorage] failed loading box score during batch", gameId, request.error);
+          finishOne();
+        };
+      }
+
+      tx.onerror = () => reject(tx.error || new Error("Failed to load box-score batch."));
+      tx.onabort = () => reject(tx.error || new Error("Box-score batch read was aborted."));
     } catch (err) {
       reject(err);
     }

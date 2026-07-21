@@ -12,6 +12,7 @@ import {
   getAllTeamsFromLeague,
   getDraftPickConflictKey,
   getDraftPickProtectionLabel,
+  formatResolvedDraftPickLabel,
   getTeamLogoMap,
   getTradePickBaseProtectionLabel,
   getTradeablePickOwnedRange,
@@ -378,6 +379,7 @@ function getOriginLabel(asset, teamNames = []) {
 }
 
 function formatPick(asset) {
+  if (isResolvedDraftPickAsset(asset)) return formatResolvedDraftPickLabel(asset);
   const pickNumber = getPickNumberLabel(asset);
   const numberSuffix = pickNumber !== "--" ? ` ${pickNumber}` : "";
   return `${asset?.year || "Future"} ${roundLabel(asset?.round)}${numberSuffix}`;
@@ -399,6 +401,7 @@ function isFullOwnedRangeForPick(asset = {}) {
 }
 
 function buildPickShortName(asset = {}, teamNames = []) {
+  if (isResolvedDraftPickAsset(asset)) return formatResolvedDraftPickLabel(asset);
   const year = asset?.year || "Future";
   const teamCode = getTeamCode(asset?.originalTeam || asset?.originalTeamName || "Own", teamNames);
   return `${year} ${teamCode} ${shortRoundLabel(asset?.round)}`;
@@ -411,6 +414,7 @@ function buildAddedProtectionDisplayLabel(asset = {}, validation = {}, teamNames
 }
 
 function buildFullOwnedPieceDisplayLabel(asset = {}, teamNames = []) {
+  if (isResolvedDraftPickAsset(asset)) return formatResolvedDraftPickLabel(asset);
   if (isSwapDraftPickAsset(asset)) return buildExistingSwapDisplayLabel(asset, teamNames);
   const owned = getTradeablePickOwnedRange(asset);
   const full = defaultRoundRange(asset?.round || 1);
@@ -658,6 +662,25 @@ export default function TradePickSelect() {
       setRuleError(encumbrance);
       return;
     }
+
+    if (isResolvedDraftPickAsset(pick)) {
+      const tradeRule = {
+        action: "full",
+        ownedRange: getTradeablePickOwnedRange(pick),
+        source: "trade_pick_select_resolved_exact_v3",
+      };
+      const nextPick = buildTradePickPayload(pick, "Resolved", tradeRule);
+      addItemsToBuilder({
+        type: "pick",
+        teamName: tradeTeamName,
+        protection: "Resolved",
+        tradeRule,
+        displayLabel: formatResolvedDraftPickLabel(pick),
+        pick: nextPick,
+      });
+      return;
+    }
+
     setSelectedKey(key);
     setRulePickKey(key);
     setRuleMode("full");
@@ -905,6 +928,7 @@ export default function TradePickSelect() {
                 const active = key === selectedKey;
                 const alreadyAdded = alreadyAddedPickKeys.has(key);
                 const isSwapRow = assetTypeLabel(pick) === "Swap";
+                const isResolvedRow = isResolvedDraftPickAsset(pick);
                 const originalLogo = isSwapRow ? "" : logoMap[normalizeTeamName(pick?.originalTeam || "")];
                 const range = getTradeablePickOwnedRange(pick);
                 return (
@@ -941,14 +965,16 @@ export default function TradePickSelect() {
                         )}
                       </div>
                       <div className="mt-1 text-xs font-bold uppercase tracking-[0.12em] opacity-70">
-                        {assetTypeLabel(pick)} • Owner: {pick.ownerTeam || pick.owner || tradeTeamName} • Owns {range.start}-{range.end}
+                        {isResolvedRow
+                          ? `Exact draft pick • Owner: ${pick.ownerTeam || pick.owner || tradeTeamName}`
+                          : `${assetTypeLabel(pick)} • Owner: ${pick.ownerTeam || pick.owner || tradeTeamName} • Owns ${range.start}-${range.end}`}
                       </div>
                     </div>
 
                     <div className="text-center text-lg font-black">{getPickNumberLabel(pick)}</div>
 
                     <div className="text-sm font-bold opacity-90">
-                      {compactProtectionLabel(pick)}
+                      {isResolvedRow ? "Exact" : compactProtectionLabel(pick)}
                     </div>
 
                     <div className="flex items-center gap-3 text-sm font-bold opacity-90">

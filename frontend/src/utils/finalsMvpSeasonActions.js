@@ -2,6 +2,7 @@
 import { archiveCurrentSeasonIntoPlayerCards } from "./playerCareerHistory";
 import { saveLeagueDataInBackground } from "./leagueStorage.js";
 import { ensureCompletedSeasonStatsArchive } from "./seasonStatsArchive.js";
+import { clearBoxScoresFromDB } from "./indexedDbStorage.js";
 
 const META_KEY = "bm_league_meta_v1";
 const SCHED_KEY = "bm_schedule_v3";
@@ -85,29 +86,49 @@ export function getCompletedSeasonYearForArchive(leagueData, fmvpRaw) {
   return FIRST_PLAYABLE_SEASON_YEAR + 1;
 }
 
+function deleteResultKeysInBatches(keys = [], batchSize = 100) {
+  const queue = Array.from(new Set((keys || []).filter(Boolean)));
+  const runBatch = () => {
+    const batch = queue.splice(0, batchSize);
+    for (const key of batch) {
+      try { localStorage.removeItem(key); } catch {}
+    }
+    if (queue.length) setTimeout(runBatch, 0);
+  };
+  if (queue.length) setTimeout(runBatch, 0);
+}
+
 function clearSeasonStores() {
-  // playoffs + schedule/results
+  let indexedResultKeys = [];
+  try {
+    const rawIndex = JSON.parse(localStorage.getItem(RESULT_V3_INDEX_KEY) || "[]");
+    if (Array.isArray(rawIndex)) indexedResultKeys = rawIndex.map((id) => `${RESULT_V3_PREFIX}${id}`);
+  } catch {}
+
+  // Remove the small reachability/index keys immediately so the new offseason
+  // cannot see the completed season. Large per-game cleanup is deferred in
+  // batches so the navigation click never blocks on 1,200+ localStorage writes.
   localStorage.removeItem("bm_postseason_v2");
   localStorage.removeItem("bm_champ_v1");
   localStorage.removeItem(SCHED_KEY);
-
-  // A completed lottery/draft from an earlier run of the same calendar year
-  // must never leak into a fresh offseason and appear pre-completed.
   localStorage.removeItem(DRAFT_LOTTERY_KEY);
   localStorage.removeItem(DRAFT_STATE_KEY);
-
-  // results v2 blob + v3 per-game
   localStorage.removeItem(RESULT_V2_BLOB_KEY);
   localStorage.removeItem(RESULT_V3_INDEX_KEY);
 
-  // delete all per-game result keys
-  for (let i = localStorage.length - 1; i >= 0; i--) {
-    const k = localStorage.key(i);
-    if (!k) continue;
-    if (k.startsWith(RESULT_V3_PREFIX)) localStorage.removeItem(k);
+  if (!indexedResultKeys.length) {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(RESULT_V3_PREFIX)) indexedResultKeys.push(key);
+    }
   }
+  deleteResultKeysInBatches(indexedResultKeys);
+  clearBoxScoresFromDB().catch((error) => {
+    if (typeof window !== "undefined" && window.__debugSimLogs) {
+      console.warn("[OffseasonCleanup] box-score cleanup failed", error);
+    }
+  });
 
-  // wipe season stats/awards so the next season starts from 0
   localStorage.removeItem(PLAYER_STATS_KEY);
   localStorage.removeItem("bm_awards_latest");
   localStorage.removeItem("bm_awards_v1");

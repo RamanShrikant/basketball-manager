@@ -122,6 +122,10 @@ self.onmessage = async (event) => {
   const requestId = msg.requestId;
 
   try {
+    if (msg.type === "cpu-cpu-trade-prewarm") {
+      await ensurePyodideReady();
+      return;
+    }
     if (msg.type === "cpu-cpu-trade-candidates") {
       await findCpuCpuTradeCandidates(requestId, msg.payload || {});
       return;

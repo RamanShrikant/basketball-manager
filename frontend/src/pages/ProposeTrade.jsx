@@ -12,6 +12,7 @@ import { executeAcceptedTradeOnLeague as executeAcceptedTradeOnLeagueShared } fr
 import {
   buildTradeMachineSwapAssets,
   canCreateSwapWithPick,
+  formatResolvedDraftPickLabel,
   getDraftPickConflictKey,
   getDraftPickEncumbranceReason,
   getTradeablePickOwnedRange,
@@ -19,6 +20,7 @@ import {
   normalizeDraftPickAsset,
   normalizeTeamName,
   protectionDisplayForOwnedRange,
+  isResolvedDraftPickAsset,
   removeDirectPickRowsConsumedBySwap,
   validateCustomPickProtection,
 } from "../utils/draftPicks.js";
@@ -935,6 +937,7 @@ function evaluateTradeFinancialLegality({ team, leagueData, outgoingSalary = 0, 
 
 function formatPick(pick) {
   if (!pick) return "Unknown Pick";
+  if (isResolvedDraftPickAsset(pick)) return formatResolvedDraftPickLabel(pick);
   const year = pick.year || pick.season || pick.seasonYear || "Future";
   const round = Number(pick.round || pick.rnd || 1);
   const original = pick.originalTeam || pick.original || pick.team || pick.fromTeam || pick.owner || "Own";
@@ -1119,7 +1122,10 @@ function isTradeDebugEnabled() {
 
 function tradeDebugItemLabel(item = {}) {
   if (item?.type === "player") return playerNameOf(item.player);
-  if (item?.type === "pick") return `${item.protection || item.pick?.displayProtection || item.pick?.protection || "Unprotected"} ${formatPick(item.pick || {})}`;
+  if (item?.type === "pick") {
+    if (isResolvedDraftPickAsset(item.pick)) return formatResolvedDraftPickLabel(item.pick);
+    return `${item.protection || item.pick?.displayProtection || item.pick?.protection || "Unprotected"} ${formatPick(item.pick || {})}`;
+  }
   return item?.label || item?.type || "Unknown asset";
 }
 
@@ -2152,7 +2158,9 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
   }
 
   const pickProtection = item.protection || item.pick?.protection || "Unprotected";
-  const pickLabel = item.displayLabel || `${pickProtection} ${formatPick(item.pick)}`;
+  const pickLabel = isResolvedDraftPickAsset(item.pick)
+    ? formatResolvedDraftPickLabel(item.pick)
+    : item.displayLabel || `${pickProtection} ${formatPick(item.pick)}`;
   const pickOriginalTeam = getPickOriginalTeamLogoTeam(leagueData, item.pick, team);
 
   return (
