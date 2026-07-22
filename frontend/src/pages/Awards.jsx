@@ -15,8 +15,8 @@ console.log("✅ Awards.jsx NEW loaded");
 /*                               AWARD CONSTANTS                              */
 /* -------------------------------------------------------------------------- */
 
-const AWARD_ORDER = ["mvp", "dpoy", "sixth_man", "mip", "roty"];
-const PARTY_AWARD_KEYS = ["mvp", "dpoy", "sixth_man"];
+const AWARD_ORDER = ["mvp", "dpoy", "sixth_man", "mip", "clutch_player", "roty"];
+const PARTY_AWARD_KEYS = [...AWARD_ORDER];
 
 const AWARD_META = {
   mvp: {
@@ -41,6 +41,12 @@ const AWARD_META = {
     short: "MIP",
     description:
       "Awarded to the player with the strongest season-to-season breakout.",
+  },
+  clutch_player: {
+    label: "Clutch Player of the Year",
+    short: "CPOTY",
+    description:
+      "Awarded to the player who combined clutch-game winning, production, volume, and the strongest performance elevation in games decided by five points or fewer.",
   },
   roty: {
     label: "Rookie of the Year",
@@ -70,14 +76,14 @@ function normalizeAwards(raw) {
   }
 
   // Winners (single objects)
-  for (const key of ["mvp", "dpoy", "roty", "sixth_man", "mip"]) {
+  for (const key of ["mvp", "dpoy", "roty", "sixth_man", "mip", "clutch_player"]) {
     if (awards[key] && Array.isArray(awards[key])) {
       awards[key] = fromEntriesMaybe(awards[key]);
     }
   }
 
   // Races (arrays of objects)
-  for (const key of ["mvp_race", "dpoy_race", "roty_race", "sixth_man_race", "mip_race"]) {
+  for (const key of ["mvp_race", "dpoy_race", "roty_race", "sixth_man_race", "mip_race", "clutch_player_race"]) {
     if (Array.isArray(awards[key])) {
       awards[key] = awards[key].map((entry) =>
         Array.isArray(entry) ? Object.fromEntries(entry) : entry
@@ -285,10 +291,26 @@ const [mvpPartyPieces, setMvpPartyPieces] = useState([]);
 
   const winnerRow = useMemo(() => {
     if (!winner?.player || !winner?.team) return null;
+    if (currentKey === "clutch_player") {
+      return {
+        name: winner.player,
+        team: winner.team,
+        gp: Number(winner.gp || 0),
+        min: fmtAward1(winner.clutch_mpg),
+        pts: fmtAward1(winner.clutch_ppg),
+        reb: fmtAward1(winner.clutch_rpg),
+        ast: fmtAward1(winner.clutch_apg),
+        stl: fmtAward1(winner.clutch_spg),
+        blk: fmtAward1(winner.clutch_bpg),
+        fgPct: 0,
+        tpPct: 0,
+        ftPct: 0,
+      };
+    }
     const skey = statsKey(winner.player, winner.team);
     const stats = statsMap[skey];
     return buildPerGameRow(winner.player, winner.team, stats);
-  }, [winner, statsMap]);
+  }, [currentKey, winner, statsMap]);
 
   const portraitSrc = useMemo(() => {
     if (!winner?.player || !winner?.team) return null;
@@ -407,6 +429,17 @@ const goNext = () => {
             { label: "FG%", value: `${winnerRow.fgPct}%` },
             { label: "Prev", value: fmtAward1(winner?.mip_prev_ppg) },
           ]
+        : currentKey === "clutch_player"
+        ? [
+            { label: "CL GP", value: fmtAward1(winner?.clutch_gp) },
+            { label: "CL W-L", value: `${winner?.clutch_wins || 0}-${winner?.clutch_losses || 0}` },
+            { label: "CL PPG", value: fmtAward1(winner?.clutch_ppg) },
+            { label: "CL RPG", value: fmtAward1(winner?.clutch_rpg) },
+            { label: "CL APG", value: fmtAward1(winner?.clutch_apg) },
+            { label: "CLUTCH LIFT", value: fmtSignedAward1(winner?.impact_lift) },
+            { label: "TS% Δ", value: `${fmtSignedAward1(winner?.ts_lift)}%` },
+            { label: "SCORE", value: fmtAward1(winner?.clutch_score) },
+          ]
         : [
             { label: "GP", value: winnerRow.gp },
             { label: "PPG", value: winnerRow.pts },
@@ -457,7 +490,7 @@ const goNext = () => {
     );
   }
 if (showAllNba) {
-  return <AllNbaTeams leagueDataProp={leagueData} />;
+  return <AllNbaTeams leagueDataProp={leagueData} onBackToAwards={() => setShowAllNba(false)} />;
 }
 
 
@@ -606,11 +639,17 @@ if (showAllNba) {
               {race && race.length > 0 ? (
                 <div className="space-y-2">
                   {race.map((p, idx) => {
-                    const row = buildPerGameRow(
-                      p.player,
-                      p.team,
-                      statsMap[statsKey(p.player, p.team)]
-                    );
+                    const row = currentKey === "clutch_player"
+                      ? {
+                          pts: fmtAward1(p.clutch_ppg),
+                          reb: fmtAward1(p.clutch_rpg),
+                          ast: fmtAward1(p.clutch_apg),
+                        }
+                      : buildPerGameRow(
+                          p.player,
+                          p.team,
+                          statsMap[statsKey(p.player, p.team)]
+                        );
                     if (!row) return null;
 
                     const isWinner =
@@ -669,6 +708,14 @@ if (showAllNba) {
                               {renderRaceStat("REB", row.reb)}
                               {renderRaceStat("AST", row.ast)}
                             </>
+                          ) : currentKey === "clutch_player" ? (
+                            <>
+                              {renderRaceStat("W-L", `${p.clutch_wins || 0}-${p.clutch_losses || 0}`)}
+                              {renderRaceStat("PTS", row.pts)}
+                              {renderRaceStat("AST", row.ast)}
+                              {renderRaceStat("Lift", fmtSignedAward1(p.impact_lift))}
+                              {renderRaceStat("Score", fmtAward1(p.clutch_score))}
+                            </>
                           ) : (
                             <>
                               {renderRaceStat("PTS", row.pts)}
@@ -711,8 +758,9 @@ if (showAllNba) {
         {/* NAV BUTTONS ------------------------------------------------------- */}
         <div className="flex justify-between mt-4">
           <button
-            className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-xs"
+            className={`rounded px-4 py-2 text-xs ${awardIndex === 0 ? "cursor-not-allowed bg-neutral-900 text-neutral-600" : "bg-neutral-800 hover:bg-neutral-700"}`}
             onClick={goPrev}
+            disabled={awardIndex === 0}
           >
             ◀ Previous Award
           </button>

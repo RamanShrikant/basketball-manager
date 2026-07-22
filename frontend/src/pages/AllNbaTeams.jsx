@@ -6,6 +6,7 @@ import LZString from "lz-string";
 import styles from "./AllNbaTeams.module.css";
 import PageFade from "../components/PageFade";
 import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
+import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
 import "../styles/BMAnimations.css";
 
 /* -------------------------------------------------------------------------- */
@@ -102,7 +103,7 @@ function readCompressedOrJson(key, fallback = {}) {
 /*                             ALL-NBA TEAMS PAGE                             */
 /* -------------------------------------------------------------------------- */
 
-export default function AllNbaTeams({ leagueDataProp }) {
+export default function AllNbaTeams({ leagueDataProp, onBackToAwards = null }) {
   const navigate = useNavigate();
   const { leagueData: ctxLeagueData } = useGame();
   const leagueData = leagueDataProp || ctxLeagueData;
@@ -384,11 +385,6 @@ export default function AllNbaTeams({ leagueDataProp }) {
   const rows = applySort(currentRows);
   const cardPlayer = selectedPlayer || rows[0];
 
-  // OVR circle calc (same as PlayerStats)
-  const fillPercent = Math.min((cardPlayer?.overall || 0) / 99, 1);
-  const circleCircumference = 2 * Math.PI * 50;
-  const strokeOffset = circleCircumference * (1 - fillPercent);
-
   /* -------------------------------------------------------------------------- */
   /*                                   RENDER                                   */
   /* -------------------------------------------------------------------------- */
@@ -464,57 +460,13 @@ export default function AllNbaTeams({ leagueDataProp }) {
                 </div>
               </div>
 
-              {/* OVR circle */}
-              <div className="relative flex flex-col items-center justify-center mr-4 mb-2">
-                <svg width="110" height="110" viewBox="0 0 120 120">
-                  <defs>
-                    <linearGradient
-                      id="ovrGradient"
-                      x1="0%"
-                      y1="0%"
-                      x2="100%"
-                      y2="0%"
-                    >
-                      <stop offset="0%" stopColor="#FFA500" />
-                      <stop offset="100%" stopColor="#FFD54F" />
-                    </linearGradient>
-                  </defs>
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r="50"
-                    stroke="rgba(255,255,255,0.08)"
-                    strokeWidth="8"
-                    fill="none"
-                  />
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r="50"
-                    stroke="url(#ovrGradient)"
-                    strokeWidth="8"
-                    strokeLinecap="round"
-                    fill="none"
-                    strokeDasharray={circleCircumference}
-                    strokeDashoffset={strokeOffset}
-                    transform="rotate(-90 60 60)"
-                  />
-                </svg>
-                <div className="absolute flex flex-col items-center justify-center text-center">
-                  <p className="text-sm text-gray-300 tracking-wide mb-1">
-                    OVR
-                  </p>
-                  <p className="text-[47px] font-extrabold text-orange-400 leading-none mt-[-11px]">
-                    {cardPlayer.overall}
-                  </p>
-                  <p className="text-[10px] text-gray-400 mt-[-2px]">
-                    POT{" "}
-                    <span className="text-orange-400 font-semibold">
-                      {cardPlayer.potential}
-                    </span>
-                  </p>
-                </div>
-              </div>
+              {/* OVR / POT rating ring */}
+              <PlayerRatingRing
+                overall={cardPlayer.overall}
+                potential={cardPlayer.potential}
+                size={110}
+                className="mr-4 mb-2"
+              />
             </div>
           </div>
         </div>
@@ -592,7 +544,14 @@ export default function AllNbaTeams({ leagueDataProp }) {
       </div>
 
 <div className="flex w-full max-w-5xl items-center justify-between mt-5">
-  {section === "all_rookie" ? (
+  {section === "all_nba" && onBackToAwards ? (
+    <button
+      className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded font-semibold"
+      onClick={onBackToAwards}
+    >
+      ◀ Individual Awards
+    </button>
+  ) : section === "all_rookie" ? (
     <button
       className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded font-semibold"
       onClick={() => {

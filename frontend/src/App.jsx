@@ -16,6 +16,7 @@ import PlayerStats from "./pages/PlayerStats.jsx";
 import Standings from "./pages/Standings.jsx";
 import Awards from "./pages/Awards";
 import Playoffs from "./pages/Playoffs.jsx";
+import PlayoffPicture from "./pages/PlayoffPicture.jsx";
 import FinalsMvp from "./pages/FinalsMVP.jsx";
 import PlayerProgression from "./pages/PlayerProgression";
 import SalaryTable from "./pages/SalaryTable.jsx";
@@ -24,6 +25,7 @@ import OffseasonHub from "./pages/OffseasonHub";
 import PlayerRetirements from "./pages/PlayerRetirements";
 import PlayerTeamOptions from "./pages/PlayerTeamOptions";
 import AwardTracker from "./pages/AwardTracker.jsx";
+import AllStarsPage from "./pages/AllStarsPage.jsx";
 import ViewingOffers from "./pages/ViewingOffers.jsx";
 import DraftLottery from "./pages/DraftLottery.jsx";
 import Draft from "./pages/Draft.jsx";
@@ -107,10 +109,12 @@ function App() {
         <Route path="/locker-room" element={<LockerRoom />} />
         <Route path="/intel" element={<Intel />} />
         <Route path="/playoffs" element={<Playoffs />} />
+        <Route path="/playoff-picture" element={<PlayoffPicture />} />
         <Route path="/player-progression" element={<PlayerProgression />} />
         <Route path="salary-table" element={<SalaryTable />} />
         <Route path="/free-agents" element={<FreeAgents />} />
         <Route path="/award-tracker" element={<AwardTracker />} />
+        <Route path="/all-stars" element={<AllStarsPage />} />
         <Route path="/offseason" element={<OffseasonHub />} />
         <Route path="/offseason-hub" element={<Navigate to="/offseason" replace />} />
         <Route path="/player-team-options" element={<PlayerTeamOptions />} />

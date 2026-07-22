@@ -12,6 +12,7 @@ import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import PageFade from "../components/PageFade";
 import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
+import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
@@ -617,35 +618,12 @@ const handleAutoRebuild = () => {
                     </p>
                 </div>
                 </div>
-                <div className="relative flex flex-col items-center justify-center mr-4 mb-2">
-                <svg width="84" height="84" viewBox="0 0 120 120">
-                    <defs>
-                    <linearGradient id="ovrGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <stop offset="0%" stopColor="#FFA500" />
-                        <stop offset="100%" stopColor="#FFD54F" />
-                    </linearGradient>
-                    </defs>
-                    <circle cx="60" cy="60" r="50" stroke="rgba(255,255,255,0.08)" strokeWidth="8" fill="none" />
-                    <circle
-                    cx="60"
-                    cy="60"
-                    r="50"
-                    stroke="url(#ovrGradient)"
-                    strokeWidth="8"
-                    strokeLinecap="round"
-                    fill="none"
-                    strokeDasharray={circleCircumference}
-                    strokeDashoffset={strokeOffset}
-                    transform="rotate(-90 60 60)"
-                    />
-                </svg>
-                <div className="absolute flex flex-col items-center justify-center text-center">
-                    <p className="text-sm text-gray-300 tracking-wide mb-1">OVR</p>
-                    <p className="text-[38px] font-extrabold text-orange-400 leading-none mt-[-9px]">
-                    {player.overall}
-                    </p>
-                </div>
-                </div>
+                <PlayerRatingRing
+                  overall={player.overall}
+                  size={84}
+                  showPotential={false}
+                  className="mr-4 mb-2"
+                />
             </div>
             </div>
         </div>

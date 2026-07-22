@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { findComfortableTradeFinderOffers, sortTradeFinderOfferItems } from "../utils/tradeFinderOfferEngine.js";
+import { findComfortableReverseTradeFinderOffers } from "../utils/reverseTradeFinderOfferEngine.js";
 import { evaluateTradeTeamImpact } from "../utils/tradeTeamImpact.js";
 import {
   buildOffseasonTradeEvaluationLeague,
@@ -26,6 +27,11 @@ import {
   sortDraftPickAssets,
   validateCustomPickProtection,
 } from "../utils/draftPicks.js";
+import {
+  filterTradeableLiveDraftRows,
+  getLiveDraftProgressSignature,
+  isResolvedPickConsumed,
+} from "../utils/liveDraftTradeAvailability.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
@@ -712,7 +718,8 @@ function collectTradeablePicksForTeam(leagueData, teamName) {
     }));
 
   const resolvedPicks = draftOrderLocked && !draftComplete
-    ? draftOrder.map((row) => buildResolvedDraftAsset(row, seasonYear))
+    ? filterTradeableLiveDraftRows(draftOrder, leagueData, seasonYear)
+        .map((row) => buildResolvedDraftAsset(row, seasonYear))
     : [];
 
   const activeKey = normalizeTeamName(teamName);
@@ -1236,6 +1243,7 @@ function areTradeItemsStillOwned(leagueData, team, items = []) {
       const pick = item.pick || {};
       const type = String(pick.assetType || pick.type || "pick").toLowerCase();
       if (type === "resolved") {
+        if (isResolvedPickConsumed(pick, leagueData)) return false;
         if (!isResolvedPickOwnedByTeam(leagueData, pick, teamName)) return false;
       } else if (!isNormalPickOwnedByTeam(leagueData, pick, teamName)) {
         return false;
@@ -1852,6 +1860,12 @@ export default function TradeFinder() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam } = useGame();
   const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
+  const [packageTeamIndex, setPackageTeamIndex] = useState(() => {
+    const index = teams.findIndex((team) => sameTeamName(team?.name || team?.teamName, selectedTeam?.name || selectedTeam?.teamName));
+    return index >= 0 ? index : 0;
+  });
+  const packageTeam = teams[packageTeamIndex] || selectedTeam;
+  const isReverseFinder = Boolean(packageTeam && selectedTeam && !sameTeamName(packageTeam?.name || packageTeam?.teamName, selectedTeam?.name || selectedTeam?.teamName));
   const [selectedAssetKeys, setSelectedAssetKeys] = useState([]);
   const [pickProtections, setPickProtections] = useState({});
   const [searched, setSearched] = useState(false);
@@ -1860,14 +1874,79 @@ export default function TradeFinder() {
   const [offerSearchError, setOfferSearchError] = useState("");
   const [offerSearchProgress, setOfferSearchProgress] = useState("");
   const [offerSearchStopped, setOfferSearchStopped] = useState(false);
+  const [liveDraftProgressSignature, setLiveDraftProgressSignature] = useState(() =>
+    getLiveDraftProgressSignature(leagueData)
+  );
   const offerSearchAbortRef = useRef(null);
+  const lastDraftProgressSignatureRef = useRef(liveDraftProgressSignature);
+  const packageTeamInitializedRef = useRef(false);
+
+  const resetFinderWorkspace = ({ clearPackage = true } = {}) => {
+    try { offerSearchAbortRef.current?.abort?.(); } catch {}
+    offerSearchAbortRef.current = null;
+    if (clearPackage) {
+      setSelectedAssetKeys([]);
+      setPickProtections({});
+    }
+    setSearched(false);
+    setPythonOffers([]);
+    setIsSearchingOffers(false);
+    setOfferSearchError("");
+    setOfferSearchProgress("");
+    setOfferSearchStopped(false);
+  };
+
+  const changePackageTeam = (direction) => {
+    if (!teams.length) return;
+    resetFinderWorkspace({ clearPackage: true });
+    setPackageTeamIndex((current) => (current + Number(direction || 0) + teams.length) % teams.length);
+  };
+
+  useEffect(() => {
+    if (!teams.length || !selectedTeam) return;
+    if (!packageTeamInitializedRef.current) {
+      const selectedIndex = teams.findIndex((team) => sameTeamName(team?.name || team?.teamName, selectedTeam?.name || selectedTeam?.teamName));
+      setPackageTeamIndex(selectedIndex >= 0 ? selectedIndex : 0);
+      packageTeamInitializedRef.current = true;
+      return;
+    }
+    if (packageTeamIndex < 0 || packageTeamIndex >= teams.length) setPackageTeamIndex(0);
+  }, [teams, selectedTeam, packageTeamIndex]);
+
+  useEffect(() => {
+    const syncDraftProgress = () => {
+      setLiveDraftProgressSignature(getLiveDraftProgressSignature(leagueData));
+    };
+    syncDraftProgress();
+    window.addEventListener("storage", syncDraftProgress);
+    const intervalId = window.setInterval(syncDraftProgress, 750);
+    return () => {
+      window.removeEventListener("storage", syncDraftProgress);
+      window.clearInterval(intervalId);
+    };
+  }, [leagueData]);
+
+  useEffect(() => {
+    if (lastDraftProgressSignatureRef.current === liveDraftProgressSignature) return;
+    lastDraftProgressSignatureRef.current = liveDraftProgressSignature;
+
+    try { offerSearchAbortRef.current?.abort?.(); } catch {}
+    offerSearchAbortRef.current = null;
+    setSearched(false);
+    setPythonOffers([]);
+    setOfferSearchProgress("");
+    setOfferSearchStopped(false);
+  }, [liveDraftProgressSignature]);
 
   const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
   const selectedTeamPlayers = useMemo(
-    () => filterTradeEligiblePlayers(getTeamPlayers(selectedTeam), { leagueData, tradeContext }),
-    [selectedTeam, leagueData, tradeContext]
+    () => filterTradeEligiblePlayers(getTeamPlayers(packageTeam), { leagueData, tradeContext }),
+    [packageTeam, leagueData, tradeContext]
   );
-  const selectedTeamPicks = useMemo(() => getOwnedPicks(leagueData, selectedTeam?.name), [leagueData, selectedTeam]);
+  const selectedTeamPicks = useMemo(
+    () => getOwnedPicks(leagueData, packageTeam?.name),
+    [leagueData, packageTeam, liveDraftProgressSignature]
+  );
 
   const playerAssets = useMemo(
     () => selectedTeamPlayers
@@ -1914,7 +1993,13 @@ export default function TradeFinder() {
   }, [pickProtections, selectedPackageAssets]);
 
   const selectedValue = useMemo(() => packageValue(selectedItems, leagueData), [selectedItems, leagueData]);
-  const offers = searched ? pythonOffers : [];
+  const offers = useMemo(() => {
+    if (!searched) return [];
+    return (pythonOffers || []).filter((offer) => {
+      const rows = [...(offer?.offer || []), ...(offer?.targetItems || [])];
+      return !rows.some((item) => item?.type === "pick" && isResolvedPickConsumed(item.pick || {}, leagueData));
+    });
+  }, [searched, pythonOffers, leagueData, liveDraftProgressSignature]);
 
   useEffect(() => {
     return () => {
@@ -1988,13 +2073,7 @@ export default function TradeFinder() {
     setOfferSearchProgress("Starting Trade Finder search...");
 
     try {
-      const result = await findComfortableTradeFinderOffers({
-        leagueData,
-        selectedTeam,
-        selectedItems,
-        teams,
-        signal: controller.signal,
-        onProgress: (progress = {}) => {
+      const standardProgress = (progress = {}) => {
           const teamIndex = Number(progress.teamIndex || 0);
           const teamsToCheck = Number(progress.teamsToCheck || 0);
           const offersFound = Number(progress.offersFound || 0);
@@ -2076,8 +2155,55 @@ export default function TradeFinder() {
           }
 
           setOfferSearchProgress("Searching CPU teams...");
-        },
-      });
+      };
+
+      const reverseProgress = (progress = {}) => {
+        const candidateIndex = Number(progress.candidateIndex || 0);
+        const candidatesToCheck = Number(progress.candidatesToCheck || 0);
+        const exactCandidates = Number(progress.exactCandidates || 0);
+        const offersFound = Number(progress.offersFound || 0);
+        const elapsed = Number(progress.elapsedSec || 0);
+        if (progress.phase === "scan_start") {
+          setOfferSearchProgress(`Quick scanning ${candidatesToCheck} legal package shapes from ${selectedTeam?.name || "your team"}...`);
+          return;
+        }
+        if (progress.phase === "scan_candidate") {
+          setOfferSearchProgress(`Quick scan ${candidateIndex}/${candidatesToCheck} • ${offersFound} promising package${offersFound === 1 ? "" : "s"} • ${elapsed.toFixed(1)}s`);
+          return;
+        }
+        if (progress.phase === "exact_start") {
+          setOfferSearchProgress(`Exact checking the strongest ${exactCandidates} candidates with Propose Trade logic...`);
+          return;
+        }
+        if (progress.phase === "exact_candidate") {
+          setOfferSearchProgress(`Exact check ${candidateIndex}/${exactCandidates} • ${offersFound} comfortable package${offersFound === 1 ? "" : "s"} found • ${elapsed.toFixed(1)}s`);
+          return;
+        }
+        if (progress.phase === "complete" || progress.phase === "stopped") {
+          const stopped = progress.phase === "stopped";
+          setOfferSearchStopped(stopped);
+          setOfferSearchProgress(`${stopped ? "Stopped" : "Complete"}: found ${offersFound} genuinely distinct comfortable package${offersFound === 1 ? "" : "s"} in ${elapsed.toFixed(1)}s.`);
+        }
+      };
+
+      const result = isReverseFinder
+        ? await findComfortableReverseTradeFinderOffers({
+            leagueData,
+            controlledTeam: selectedTeam,
+            targetTeam: packageTeam,
+            targetItems: selectedItems,
+            signal: controller.signal,
+            maxResults: 5,
+            onProgress: reverseProgress,
+          })
+        : await findComfortableTradeFinderOffers({
+            leagueData,
+            selectedTeam,
+            selectedItems,
+            teams,
+            signal: controller.signal,
+            onProgress: standardProgress,
+          });
 
       const nextOffers = Array.isArray(result?.offers)
         ? result.offers.map((offer) => ({
@@ -2089,6 +2215,8 @@ export default function TradeFinder() {
       if (isTradeDebugEnabled()) {
         console.log("[TRADE DEBUG][FINDER RESULTS] Search finished", {
           selectedTeam: selectedTeam?.name || selectedTeam?.teamName || "",
+          packageTeam: packageTeam?.name || packageTeam?.teamName || "",
+          reverseFinder: isReverseFinder,
           selectedValue,
           selectedItems: tradeDebugItems(selectedItems, leagueData),
           offerCount: nextOffers.length,
@@ -2141,13 +2269,23 @@ export default function TradeFinder() {
   };
 
   const loadOffer = (offer) => {
-    debugTradeFinderLoadOffer({ leagueData, selectedTeam, selectedItems, offer });
+    const userItems = isReverseFinder ? sortTradeFinderOfferItems(offer?.offer || [], leagueData) : selectedItems;
+    const cpuItems = isReverseFinder ? selectedItems : sortTradeFinderOfferItems(offer?.offer || [], leagueData);
+    const offerTeam = isReverseFinder ? packageTeam : offer.team;
+    const preparedOffer = { ...offer, team: offerTeam, selectedItems: userItems, offer: cpuItems };
+    if (!validateTradeFinderOffer({ leagueData, selectedTeam, offer: preparedOffer })) {
+      setPythonOffers((prev) => (prev || []).filter((row) => row !== offer));
+      setOfferSearchError("That offer is no longer available because a player or draft pick changed ownership or was already used.");
+      return;
+    }
+
+    debugTradeFinderLoadOffer({ leagueData, selectedTeam, selectedItems: userItems, offer: preparedOffer });
 
     saveTradeBuilderFromOffer({
       selectedTeam,
-      offerTeam: offer.team,
-      selectedItems,
-      offerItems: sortTradeFinderOfferItems(offer.offer, leagueData),
+      offerTeam,
+      selectedItems: userItems,
+      offerItems: cpuItems,
       offer,
     });
 
@@ -2196,19 +2334,48 @@ export default function TradeFinder() {
           <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
             <div className="overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950/85 shadow-2xl">
               <div className="border-b border-white/10 bg-gradient-to-r from-orange-600/20 to-black px-6 py-5">
-                <div className="flex items-center gap-4">
-                  {teamLogoOf(selectedTeam) ? (
-                    <img src={teamLogoOf(selectedTeam)} alt={selectedTeam.name} className="h-14 w-14 object-contain" />
-                  ) : (
-                    <div className="h-14 w-14 rounded-2xl bg-white/5" />
-                  )}
-                  <div>
-                    <div className="text-sm font-black uppercase tracking-[0.18em] text-orange-200">Your Package</div>
-                    <div className="mt-1 text-2xl font-black text-white">{selectedTeam.name}</div>
-                    <div className="mt-1 text-xs font-bold text-neutral-400">
-                      Select players and picks. Picks can be sent as full owned pieces or with valid custom protections.
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => changePackageTeam(-1)}
+                    disabled={isSearchingOffers || teams.length <= 1}
+                    aria-label="Previous team"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-black/35 text-xl font-black text-orange-200 transition hover:border-orange-400/35 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    ‹
+                  </button>
+
+                  <div className="flex min-w-0 flex-1 items-center gap-4">
+                    {teamLogoOf(packageTeam) ? (
+                      <img src={teamLogoOf(packageTeam)} alt={packageTeam?.name || "Team"} className="h-14 w-14 shrink-0 object-contain" />
+                    ) : (
+                      <div className="h-14 w-14 shrink-0 rounded-2xl bg-white/5" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="text-sm font-black uppercase tracking-[0.18em] text-orange-200">
+                        {isReverseFinder ? "Target Package" : "Your Package"}
+                      </div>
+                      <div className="mt-1 truncate text-2xl font-black text-white">{packageTeam?.name}</div>
+                      <div className="mt-1 text-xs font-bold text-neutral-400">
+                        {isReverseFinder
+                          ? `Select what you want from ${packageTeam?.name}. Trade Finder will calculate what they comfortably want from ${selectedTeam?.name}.`
+                          : "Select players and picks. Picks can be sent as full owned pieces or with valid custom protections."}
+                      </div>
+                      <div className="mt-2 text-[10px] font-black uppercase tracking-[0.16em] text-neutral-600">
+                        Team {packageTeamIndex + 1} of {teams.length}
+                      </div>
                     </div>
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={() => changePackageTeam(1)}
+                    disabled={isSearchingOffers || teams.length <= 1}
+                    aria-label="Next team"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-black/35 text-xl font-black text-orange-200 transition hover:border-orange-400/35 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    ›
+                  </button>
                 </div>
               </div>
 
@@ -2245,7 +2412,7 @@ export default function TradeFinder() {
                             setPickProtections((prev) => ({ ...prev, [asset.key]: value }));
                           } : undefined}
                           leagueData={leagueData}
-                          team={selectedTeam}
+                          team={packageTeam}
                         />
                       ))
                     ) : (
@@ -2265,7 +2432,7 @@ export default function TradeFinder() {
                       selected={false}
                       onToggle={() => toggleAsset(asset)}
                       leagueData={leagueData}
-                      team={selectedTeam}
+                      team={packageTeam}
                     />
                   ))
                 ) : (
@@ -2292,7 +2459,7 @@ export default function TradeFinder() {
                         setPickProtections((prev) => ({ ...prev, [asset.key]: value }));
                       }}
                       leagueData={leagueData}
-                      team={selectedTeam}
+                      team={packageTeam}
                     />
                   ))
                 ) : (
@@ -2307,12 +2474,18 @@ export default function TradeFinder() {
               <div className="border-b border-white/10 bg-gradient-to-r from-neutral-900 to-black px-6 py-5">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div>
-                    <div className="text-sm font-black uppercase tracking-[0.2em] text-orange-300">Legal CPU Offers</div>
+                    <div className="text-sm font-black uppercase tracking-[0.2em] text-orange-300">
+                      {isReverseFinder ? "CPU Asking Prices" : "Legal CPU Offers"}
+                    </div>
                     <div className="mt-1 text-2xl font-black text-white">
-                      {selectedItems.length ? `${selectedItems.length} asset package` : "Build a package"}
+                      {isReverseFinder
+                        ? (selectedItems.length ? `What ${packageTeam?.name} wants` : "Build a target package")
+                        : (selectedItems.length ? `${selectedItems.length} asset package` : "Build a package")}
                     </div>
                     <div className="mt-1 text-xs font-bold text-neutral-500">
-                      Package value: {selectedValue.toFixed(1)} • One comfortable offer max per CPU team • Teams checked: {Math.max(0, teams.length - 1)}
+                      {isReverseFinder
+                        ? `Target value: ${selectedValue.toFixed(1)} • Searches only ${selectedTeam?.name} assets • Returns 0–5 genuinely distinct comfortable packages`
+                        : `Package value: ${selectedValue.toFixed(1)} • One comfortable offer max per CPU team • Teams checked: ${Math.max(0, teams.length - 1)}`}
                     </div>
                   </div>
 
@@ -2342,7 +2515,9 @@ export default function TradeFinder() {
               <div className="tradeFinderScroller max-h-[68vh] overflow-y-auto p-5">
                 {!searched && (
                   <div className="rounded-2xl border border-orange-400/25 bg-orange-500/10 p-5 text-sm font-bold leading-6 text-orange-100">
-                    Pick a package on the left, then press Search Offers. Each CPU team can show one legal, comfortable offer using the same acceptance logic as Propose Trade.
+                    {isReverseFinder
+                      ? `Select the ${packageTeam?.name} package you want, then press Search Offers. The CPU will return only genuinely different, legal packages from ${selectedTeam?.name} that it would comfortably accept. Zero, one, or two results is completely normal when those are the only real options.`
+                      : "Pick a package on the left, then press Search Offers. Each CPU team can show one legal, comfortable offer using the same acceptance logic as Propose Trade."}
                   </div>
                 )}
 
@@ -2357,7 +2532,9 @@ export default function TradeFinder() {
                     <div>
                       {offerSearchStopped
                         ? "Stopping search after the current CPU evaluation finishes..."
-                        : "CPU front offices are building one comfortable package each, then checking Propose Trade acceptance, salary matching, and roster rules..."}
+                        : isReverseFinder
+                          ? `${packageTeam?.name} is checking distinct asking-price packages from ${selectedTeam?.name}, then confirming exact Propose Trade acceptance, salary matching, and roster rules...`
+                          : "CPU front offices are building one comfortable package each, then checking Propose Trade acceptance, salary matching, and roster rules..."}
                     </div>
                     {offerSearchProgress && (
                       <div className="mt-3 rounded-xl border border-orange-300/20 bg-black/25 px-3 py-2 text-xs text-orange-50">
@@ -2375,28 +2552,38 @@ export default function TradeFinder() {
 
                 {searched && selectedItems.length > 0 && !isSearchingOffers && !offers.length && (
                   <div className="rounded-2xl border border-white/10 bg-black/35 p-5 text-sm font-bold leading-6 text-neutral-300">
-                    No CPU team found a legal package it would comfortably accept for this offer. Very weak packages may get no responses.
+                    {isReverseFinder
+                      ? `${packageTeam?.name} did not find a genuinely distinct, legal package from ${selectedTeam?.name} that it would comfortably accept for the requested assets.`
+                      : "No CPU team found a legal package it would comfortably accept for this offer. Very weak packages may get no responses."}
                   </div>
                 )}
 
                 {searched && selectedItems.length > 0 && !isSearchingOffers && offers.length > 0 && (
                   <div className="grid gap-3">
-                    {offers.map((offer) => (
+                    {offers.map((offer, offerIndex) => (
                       <div
-                        key={offer.team?.name}
+                        key={`${offer.team?.name || packageTeam?.name}:${offer.anchorKey || offerIndex}`}
                         className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 transition hover:border-orange-400/30 hover:bg-orange-500/10"
                       >
                         <div className="flex items-center justify-between gap-4">
                           <div className="flex min-w-0 items-center gap-3">
-                            {teamLogoOf(offer.team) ? (
-                              <img src={teamLogoOf(offer.team)} alt={offer.team.name} className="h-11 w-11 object-contain" />
+                            {teamLogoOf(isReverseFinder ? selectedTeam : offer.team) ? (
+                              <img
+                                src={teamLogoOf(isReverseFinder ? selectedTeam : offer.team)}
+                                alt={(isReverseFinder ? selectedTeam : offer.team)?.name || "Team"}
+                                className="h-11 w-11 object-contain"
+                              />
                             ) : (
                               <div className="h-11 w-11 rounded-xl bg-white/5" />
                             )}
                             <div className="min-w-0">
-                              <div className="truncate text-lg font-black text-white">{offer.team?.name}</div>
+                              <div className="truncate text-lg font-black text-white">
+                                {isReverseFinder ? `Package ${offerIndex + 1}` : offer.team?.name}
+                              </div>
                               <div className="text-xs font-black uppercase tracking-[0.12em] text-neutral-500">
-                                {offer.quality || "Accepted Offer"} • Value {Number(offer.offerValue || 0).toFixed(1)}
+                                {isReverseFinder
+                                  ? `Built around ${offer.anchorLabel || "a distinct value base"} • Your outgoing value ${Number(offer.offerValue || 0).toFixed(1)}`
+                                  : `${offer.quality || "Accepted Offer"} • Value ${Number(offer.offerValue || 0).toFixed(1)}`}
                               </div>
                             </div>
                           </div>
@@ -2412,12 +2599,18 @@ export default function TradeFinder() {
 
                         <div className="mt-4 grid gap-3">
                           {sortTradeFinderOfferItems(offer.offer, leagueData).map((item, index) => (
-                            <OfferAssetLine key={`${offer.team?.name}-${item.label}-${index}`} item={item} team={offer.team} />
+                            <OfferAssetLine
+                              key={`${offer.team?.name}-${offerIndex}-${item.label}-${index}`}
+                              item={item}
+                              team={isReverseFinder ? selectedTeam : offer.team}
+                            />
                           ))}
                         </div>
 
                         <div className="mt-3 text-xs font-bold text-neutral-500">
-                          Finder estimate: {Number(offer.gap || 0) >= 0 ? "+" : ""}{Number(offer.gap || 0).toFixed(1)} value versus your package • CPU comfort margin {Number(offer.comfortMargin || 0) >= 0 ? "+" : ""}{Number(offer.comfortMargin || 0).toFixed(2)}.
+                          {isReverseFinder
+                            ? `${packageTeam?.name} exact comfort margin ${Number(offer.comfortMargin || 0) >= 0 ? "+" : ""}${Number(offer.comfortMargin || 0).toFixed(2)} • This is a distinct comfortable asking price, not filler added to reach five results.`
+                            : `Finder estimate: ${Number(offer.gap || 0) >= 0 ? "+" : ""}${Number(offer.gap || 0).toFixed(1)} value versus your package • CPU comfort margin ${Number(offer.comfortMargin || 0) >= 0 ? "+" : ""}${Number(offer.comfortMargin || 0).toFixed(2)}.`}
                         </div>
                       </div>
                     ))}

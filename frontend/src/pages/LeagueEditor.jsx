@@ -77,6 +77,7 @@ function clearRuntimeSeasonStores() {
     "bm_results_v2",
     "bm_results_index_v3",
     "bm_player_stats_v1",
+    "bm_clutch_stats_v1",
     "bm_awards_latest",
     "bm_awards_v1",
     "bm_postseason_v2",

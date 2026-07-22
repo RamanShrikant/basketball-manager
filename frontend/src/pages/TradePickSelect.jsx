@@ -24,6 +24,9 @@ import {
   sortDraftPickAssets,
   validateCustomPickProtection,
 } from "../utils/draftPicks.js";
+import {
+  filterTradeableLiveDraftRows,
+} from "../utils/liveDraftTradeAvailability.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
@@ -468,7 +471,8 @@ function collectTradeablePicks({ leagueData, teamName, teamNames, activeSwapKeys
 
   const resolvedCurrentYearPicks =
     draftOrderLocked && !draftComplete
-      ? draftOrder.map((row) => buildResolvedDraftAsset(row, seasonYear))
+      ? filterTradeableLiveDraftRows(draftOrder, leagueData, seasonYear)
+          .map((row) => buildResolvedDraftAsset(row, seasonYear))
       : [];
 
   const activeKey = normalizeTeamName(teamName);

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
-const HIDDEN_ROUTES = new Set(["/", "/league-editor", "/play", "/team-selector", "/team-hub"]);
+const HIDDEN_ROUTES = new Set(["/", "/league-editor", "/play", "/team-selector", "/team-hub", "/awards"]);
 
 const TEAM_HUB_ROUTES = new Set([
   "/roster-view",
@@ -18,7 +18,7 @@ const TEAM_HUB_ROUTES = new Set([
   "/intel",
   "/trades",
   "/award-tracker",
-  "/awards",
+  "/all-stars",
   "/game-simulator",
   "/simulate",
 ]);

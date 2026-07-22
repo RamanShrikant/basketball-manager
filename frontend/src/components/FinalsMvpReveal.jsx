@@ -5,6 +5,7 @@ import { getCompletedSeasonYearForArchive } from "../utils/finalsMvpSeasonAction
 import styles from "../pages/FinalsMvp.module.css";
 import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
 import PlayerPortraitFrame from "./PlayerPortraitFrame";
+import PlayerRatingRing from "./PlayerRatingRing.jsx";
 
 function getAllTeamsFromLeague(leagueData) {
   if (!leagueData) return [];
@@ -233,46 +234,12 @@ export default function FinalsMvpReveal({
             </div>
           </div>
 
-          <div className={`relative flex items-center justify-center self-center ${isModal ? "mr-8 scale-[1.1]" : "mr-4"}`}>
-            <svg width="105" height="105" viewBox="0 0 120 120">
-              <defs>
-                <linearGradient id="ovrGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor="#FFA500" />
-                  <stop offset="100%" stopColor="#FFD54F" />
-                </linearGradient>
-              </defs>
-              <circle
-                cx="60"
-                cy="60"
-                r="50"
-                stroke="rgba(255,255,255,0.08)"
-                strokeWidth="8"
-                fill="none"
-              />
-              <circle
-                cx="60"
-                cy="60"
-                r="50"
-                stroke="url(#ovrGradient)"
-                strokeWidth="8"
-                strokeLinecap="round"
-                fill="none"
-                strokeDasharray={circleCircumference}
-                strokeDashoffset={strokeOffset}
-                transform="rotate(-90 60 60)"
-              />
-            </svg>
-
-            <div className="absolute text-center">
-              <p className="text-sm text-gray-300">OVR</p>
-              <p className="text-[44px] font-extrabold text-orange-400 leading-none mt-[-6px]">
-                {playerMeta?.ovr}
-              </p>
-              <p className="text-[10px] text-gray-400">
-                POT <span className="text-orange-400 font-semibold">{playerMeta?.pot}</span>
-              </p>
-            </div>
-          </div>
+          <PlayerRatingRing
+            overall={playerMeta?.ovr}
+            potential={playerMeta?.pot}
+            size={105}
+            className={`self-center ${isModal ? "mr-8 scale-[1.1]" : "mr-4"}`}
+          />
         </div>
       </div>
 

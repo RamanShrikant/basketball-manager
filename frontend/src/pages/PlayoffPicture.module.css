@@ -1,0 +1,30 @@
+@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@700;800;900&display=swap");
+
+.page {
+  position: fixed;
+  inset: 0 0 48px 0;
+  overflow: hidden;
+  color: white;
+  font-family: "Poppins", system-ui, sans-serif;
+  background:
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 22px),
+    radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%);
+}
+
+.page::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("../assets/basketball-pattern.svg");
+  background-repeat: repeat;
+  background-size: 340px 340px;
+  opacity: 0.055;
+}
+
+.stage { position: relative; z-index: 2; }
+.scroll { scrollbar-width: thin; scrollbar-color: #f97316 #171717; }
+.scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.scroll::-webkit-scrollbar-track { background: #171717; }
+.scroll::-webkit-scrollbar-thumb { background: #ea580c; border-radius: 999px; border: 2px solid #171717; }

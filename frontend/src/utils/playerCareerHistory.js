@@ -199,6 +199,8 @@ function collectAwardAccolades(seasonYear) {
     ["mvp", "MVP", "Most Valuable Player"],
     ["dpoy", "DPOY", "Defensive Player of the Year"],
     ["sixth_man", "6MOY", "Sixth Man of the Year"],
+    ["mip", "MIP", "Most Improved Player"],
+    ["clutch_player", "CPOTY", "Clutch Player of the Year"],
     ["roty", "ROTY", "Rookie of the Year"],
   ];
   for (const [key, shortLabel, fullLabel] of awardMap) {

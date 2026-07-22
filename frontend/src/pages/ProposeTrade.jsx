@@ -27,6 +27,10 @@ import {
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { isDevelopmentRosterPlayer, sanitizeTradeItems } from "../utils/tradeRosterEligibility.js";
 import PageFade from "../components/PageFade";
+import {
+  getLiveDraftProgressSignature,
+  sanitizeBuilderForLiveDraft,
+} from "../utils/liveDraftTradeAvailability.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
@@ -2535,6 +2539,38 @@ export default function ProposeTrade() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deadlineStatus, setDeadlineStatus] = useState(() => readTradeDeadlineStatus());
   const [hardCapDetailModal, setHardCapDetailModal] = useState(null);
+  const [liveDraftProgressSignature, setLiveDraftProgressSignature] = useState(() =>
+    getLiveDraftProgressSignature(leagueData)
+  );
+
+  useEffect(() => {
+    const syncLiveDraftProgress = () => {
+      setLiveDraftProgressSignature(getLiveDraftProgressSignature(leagueData));
+    };
+
+    syncLiveDraftProgress();
+    window.addEventListener("storage", syncLiveDraftProgress);
+    const intervalId = window.setInterval(syncLiveDraftProgress, 750);
+
+    return () => {
+      window.removeEventListener("storage", syncLiveDraftProgress);
+      window.clearInterval(intervalId);
+    };
+  }, [leagueData]);
+
+  useEffect(() => {
+    const cleaned = sanitizeBuilderForLiveDraft(builder, leagueData);
+    if (!cleaned.changed) return;
+
+    setBuilder(cleaned.builder);
+    saveBuilder(cleaned.builder);
+    setEvaluation(null);
+    setSlotMenu(null);
+    setHardCapDetailModal(null);
+    setNotice(
+      `Removed ${cleaned.removed.join(", ")} because ${cleaned.removed.length === 1 ? "it has" : "they have"} already been used in the draft.`
+    );
+  }, [liveDraftProgressSignature, leagueData]);
 
   useEffect(() => {
     const syncDeadlineStatus = () => setDeadlineStatus(readTradeDeadlineStatus());
@@ -2747,6 +2783,17 @@ export default function ProposeTrade() {
     if (tradeDeadlineLocked) {
       setEvaluation(null);
       setNotice(tradeDeadlineMessage);
+      return;
+    }
+
+    const cleaned = sanitizeBuilderForLiveDraft(builder, leagueData);
+    if (cleaned.changed) {
+      setBuilder(cleaned.builder);
+      saveBuilder(cleaned.builder);
+      setEvaluation(null);
+      setNotice(
+        `Removed ${cleaned.removed.join(", ")} because ${cleaned.removed.length === 1 ? "it has" : "they have"} already been used in the draft.`
+      );
       return;
     }
 

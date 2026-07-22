@@ -5,6 +5,7 @@ import LZString from "lz-string";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import PageFade from "../components/PageFade";
 import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
+import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
 import "../styles/BMPageBackground.css";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
@@ -592,10 +593,6 @@ export default function PlayerStats({ scope = "regular" }) {
     return rowsTeams.find((row) => row.teamName === selectedTeamRow) || rowsTeams[0] || null;
   }, [rowsTeams, selectedTeamRow]);
 
-  const fillPercent = Math.min((Number(cardPlayer?.overall || 0)) / 99, 1);
-  const circleCircumference = 2 * Math.PI * 50;
-  const strokeOffset = circleCircumference * (1 - fillPercent);
-
   if (!leagueData || !selectedTeam) {
     return (
       <PageFade>
@@ -715,51 +712,12 @@ export default function PlayerStats({ scope = "regular" }) {
                 </div>
               </div>
 
-              <div className="relative flex flex-col items-center justify-center mr-4 mb-2">
-                <svg width="82" height="82" viewBox="0 0 120 120">
-                  <defs>
-                    <linearGradient id="ovrGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                      <stop offset="0%" stopColor="#FFA500" />
-                      <stop offset="100%" stopColor="#FFD54F" />
-                    </linearGradient>
-                  </defs>
-
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r="50"
-                    stroke="rgba(255,255,255,0.08)"
-                    strokeWidth="8"
-                    fill="none"
-                  />
-
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r="50"
-                    stroke="url(#ovrGradient)"
-                    strokeWidth="8"
-                    strokeLinecap="round"
-                    fill="none"
-                    strokeDasharray={circleCircumference}
-                    strokeDashoffset={strokeOffset}
-                    transform="rotate(-90 60 60)"
-                  />
-                </svg>
-
-                <div className="absolute flex flex-col items-center justify-center text-center">
-                  <p className="text-sm text-gray-300 tracking-wide mb-1">OVR</p>
-                  <p className="text-[34px] font-extrabold text-orange-400 leading-none mt-[-8px]">
-                    {cardPlayer.overall ?? "-"}
-                  </p>
-                  <p className="text-[10px] text-gray-400 mt-[-2px]">
-                    POT{" "}
-                    <span className="text-orange-400 font-semibold">
-                      {cardPlayer.potential ?? "-"}
-                    </span>
-                  </p>
-                </div>
-              </div>
+              <PlayerRatingRing
+                overall={cardPlayer.overall}
+                potential={cardPlayer.potential}
+                size={82}
+                className="mr-4 mb-2"
+              />
             </div>
           </div>
         </div>

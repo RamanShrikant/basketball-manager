@@ -5,6 +5,11 @@ import LZString from "lz-string";
 import styles from "../components/TeamHub.module.css";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
+import {
+  isAllStarsAvailable,
+  readOffseasonState as readAllStarsOffseasonState,
+  readSavedAllStars,
+} from "../utils/allStarsAvailability";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const POSTSEASON_KEY = "bm_postseason_v2";
@@ -114,6 +119,12 @@ export default function TeamHub() {
   const offseasonReturnTo = location.state?.returnTo || "/offseason";
   const playoffReturnTo = location.state?.playoffReturnTo || "/playoffs";
   const offseasonFreeAgentsPath = getOffseasonFreeAgencyReturnPath();
+  const savedAllStars = readSavedAllStars();
+  const allStarsAvailable = isAllStarsAvailable({
+    leagueData,
+    offseasonState: readAllStarsOffseasonState(),
+    data: savedAllStars,
+  });
 
   const teamsSorted = useMemo(() => {
     const teams = Array.isArray(leagueData?.teams)
@@ -163,7 +174,9 @@ export default function TeamHub() {
     { name: "Draft Picks", path: "/draft-picks", enabled: true },
     { name: "Statistics", path: "/player-stats", enabled: true },
     { name: "Playoff Statistics", path: "#", enabled: false },
+    { name: "View All-Stars", path: allStarsAvailable ? "/all-stars" : "#", enabled: allStarsAvailable },
     { name: "Standings", path: "/standings", enabled: true },
+    { name: "Playoff Picture", path: "/playoff-picture", enabled: true },
     { name: "Power Rankings", path: "/power-rankings", enabled: true },
     { name: "Award Tracker", path: "/award-tracker", enabled: true },
     { name: "Salary Table", path: "/salary-table", enabled: true },
@@ -189,7 +202,7 @@ export default function TeamHub() {
           : offseasonDisabledTiles.has(tile.name)
           ? "#"
           : tile.path,
-      enabled: tile.name === "Playoff Statistics" || !offseasonDisabledTiles.has(tile.name),
+      enabled: tile.name === "Playoff Statistics" ? true : offseasonDisabledTiles.has(tile.name) ? false : tile.enabled,
     })),
   ];
 
@@ -204,7 +217,9 @@ export default function TeamHub() {
     { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
     { name: "Statistics", path: "/player-stats", enabled: true },
     { name: "Playoff Statistics", path: "/playoff-stats", enabled: true },
+    { name: "View All-Stars", path: allStarsAvailable ? "/all-stars" : "#", enabled: allStarsAvailable },
     { name: "Standings", path: "/standings", enabled: true },
+    { name: "Playoff Picture", path: "#", enabled: false },
     { name: "Salary Table", path: "/salary-table", enabled: true },
     { name: "Award Tracker", path: "/award-tracker", enabled: true },
     { name: "Free Agents", path: "#", enabled: false },
@@ -402,6 +417,8 @@ export default function TeamHub() {
                         ? "Player morale and role check"
                         : tile.name === "Playoff Statistics"
                         ? isOffseasonMode ? "Previous postseason" : "Current postseason"
+                        : tile.name === "View All-Stars"
+                        ? allStarsAvailable ? "Starters and reserves" : "Available after selections"
                         : selectedTeam.name}
                     </div>
                   </div>

@@ -670,3 +670,22 @@ html[data-bm-route="calendar"] .bmGlobalRouteNavCalendar .bmGlobalRouteNavButton
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.36);
   pointer-events: auto;
 }
+
+/* Awards is a self-contained progression flow with no global footer.
+   Use the full viewport so the reserved navigation strip never exposes the
+   document background beneath individual awards or All-NBA pages. */
+@media (min-width: 1024px) {
+  html[data-bm-route="awards"],
+  body[data-bm-route="awards"] {
+    --bm-route-height: 100dvh;
+    background: #050505;
+  }
+
+  body[data-bm-route="awards"] #root,
+  body[data-bm-route="awards"] .bm-page-fade,
+  body[data-bm-route="awards"] .bm-page-fade > .bmCourtPage {
+    height: 100dvh !important;
+    min-height: 0 !important;
+  }
+}
+

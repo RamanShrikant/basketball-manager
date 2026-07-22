@@ -36,10 +36,38 @@ import "../styles/BMAnimations.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
 import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
+import {
+  applyGameToClutchStats,
+  computeClutchAwardResults,
+  createEmptyClutchStats,
+  loadClutchStats,
+  saveClutchStats,
+  CLUTCH_STATS_KEY,
+} from "../utils/clutchAwards.js";
 
 window.LZString = LZString;
 
+const PENDING_SIM_INTENT_KEY = "bm_pending_calendar_sim_v1";
 
+function readPendingSimulationIntent() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PENDING_SIM_INTENT_KEY) || "null");
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePendingSimulationIntent(intent) {
+  if (!intent) {
+    localStorage.removeItem(PENDING_SIM_INTENT_KEY);
+    return null;
+  }
+
+  const next = { ...intent, updatedAt: Date.now() };
+  localStorage.setItem(PENDING_SIM_INTENT_KEY, JSON.stringify(next));
+  return next;
+}
 
 
 
@@ -2345,6 +2373,7 @@ function buildAwardMoodEvents(awards = {}, currentDate) {
     sixth_man: ["Sixth Man Award", 6],
     sixthMan: ["Sixth Man Award", 6],
     mip: ["Most Improved Award", 6],
+    clutch_player: ["Clutch Player of the Year", 7],
     all_nba: ["All-NBA Selection", 7],
     allNBA: ["All-NBA Selection", 7],
     all_defense: ["All-Defense Selection", 6],
@@ -2505,18 +2534,21 @@ else {
 // 🔥 Rebuild player stats from existing schedule + results
   function recomputePlayerSeasonStatsFromResults(schedule, results) {
     let stats = {};
+    let clutchStats = createEmptyClutchStats(seasonYear);
 
     for (const games of Object.values(schedule || {})) {
       for (const g of games || []) {
         const slim = results?.[g.id];
         if (!slim) continue;
         stats = applyGameToPlayerStats(stats, slim, g);
+        clutchStats = applyGameToClutchStats(clutchStats, slim, g, seasonYear);
       }
     }
 
     savePlayerStats(stats);
+    saveClutchStats(clutchStats);
     console.log(
-      "[Calendar] recomputed player stats from existing results:",
+      "[Calendar] recomputed player and clutch stats from existing results:",
       Object.keys(stats).length,
       "players"
     );
@@ -2540,6 +2572,7 @@ else {
     );
 
     let stats = {};
+    let clutchStats = createEmptyClutchStats(seasonYear);
     const missingGameIds = [];
     let processedGames = 0;
 
@@ -2550,11 +2583,13 @@ else {
         continue;
       }
       stats = applyGameToPlayerStats(stats, slim, game);
+      clutchStats = applyGameToClutchStats(clutchStats, slim, game, seasonYear);
       processedGames += 1;
     }
 
     return {
       stats,
+      clutchStats,
       processedGames,
       expectedGames: gameRows.length,
       missingGameIds,
@@ -2795,8 +2830,9 @@ async function computeAndSaveCalendarAwards({
       if (rebuilt.expectedGames > 0 && rebuilt.processedGames === rebuilt.expectedGames) {
         currentStats = rebuilt.stats;
         savePlayerStats(currentStats);
+        saveClutchStats(rebuilt.clutchStats);
         console.log(
-          "[Calendar] rebuilt final player stats from canonical box scores:",
+          "[Calendar] rebuilt final player and clutch stats from canonical box scores:",
           rebuilt.processedGames,
           "games"
         );
@@ -2867,7 +2903,13 @@ async function computeAndSaveCalendarAwards({
       return x;
     };
 
-    const awards = deepUnpair(awardsRaw) || {};
+    const baseAwards = deepUnpair(awardsRaw) || {};
+    const clutchAwards = computeClutchAwardResults(
+      loadClutchStats(seasonYear),
+      { teams: activeTeams || [] },
+      { final: regularSeasonComplete }
+    );
+    const awards = { ...baseAwards, ...clutchAwards };
     if (regularSeasonComplete && eligiblePlayerCount > 0 && !awards?.mvp) {
       throw new Error("Awards calculation returned no MVP despite having eligible players.");
     }
@@ -2969,8 +3011,11 @@ useEffect(() => {
     clearAllResultsV3();
     removeLegacyResultsBlob();
     localStorage.removeItem(PLAYER_STATS_KEY);
+    localStorage.removeItem(PENDING_SIM_INTENT_KEY);
+    setPendingSimIntent(null);
     localStorage.removeItem("bm_awards_latest");
     localStorage.removeItem("bm_awards_v1");
+    localStorage.removeItem(CLUTCH_STATS_KEY);
     parsedResults = {};
     parsedPlayerStats = {};
   }
@@ -2983,6 +3028,32 @@ useEffect(() => {
   const hasRoleFields =
     parsedPlayerStats &&
     Object.values(parsedPlayerStats).some((p) => p && (("started" in p) || ("sixth" in p)));
+  const parsedClutchStats = loadClutchStats(seasonYear);
+  const hasClutchStats = Boolean(
+    Object.keys(parsedClutchStats?.players || {}).length ||
+      (parsedClutchStats?.processedGameIds || []).length
+  );
+  let clutchBackfillStarted = false;
+
+  const maybeBackfillClutchStats = (scheduleForBackfill) => {
+    if (!hasValidResults || hasClutchStats || clutchBackfillStarted) return;
+    clutchBackfillStarted = true;
+
+    rebuildPlayerSeasonStatsFromCanonicalBoxScores(scheduleForBackfill, parsedResults)
+      .then((rebuilt) => {
+        if (rebuilt?.processedGames > 0) {
+          saveClutchStats(rebuilt.clutchStats);
+          console.log(
+            "[CPOTY] backfilled clutch history from stored box scores:",
+            rebuilt.processedGames,
+            "games"
+          );
+        }
+      })
+      .catch((error) => {
+        console.warn("[CPOTY] could not backfill stored clutch history", error);
+      });
+  };
 
   const storedScheduleHasGames = Object.values(parsedSched || {}).some(
     (games) => Array.isArray(games) && games.some((game) => game?.id)
@@ -3008,6 +3079,7 @@ useEffect(() => {
     if (!hasPlayerStats || !hasRoleFields) {
       recomputePlayerSeasonStatsFromResults(hydrated.schedule, parsedResults);
     }
+    maybeBackfillClutchStats(hydrated.schedule);
     return;
   }
 
@@ -3030,6 +3102,7 @@ useEffect(() => {
       console.log("[Calendar] auto-rebuilt player stats (role-aware); players =", Object.keys(rebuiltStats).length);
     }
 
+    maybeBackfillClutchStats(rebuilt);
     return;
   }
 
@@ -3050,6 +3123,7 @@ useEffect(() => {
     const rebuiltStats = recomputePlayerSeasonStatsFromResults(parsedSched, parsedResults);
     console.log("[Calendar] auto-rebuilt player stats (role-aware); players =", Object.keys(rebuiltStats).length);
   }
+  maybeBackfillClutchStats(scheduleToUse);
 }, [scheduleTeamIdentitySignature, scheduleSeasonIdentity]);
 
 
@@ -3279,6 +3353,18 @@ const [allStarOpen, setAllStarOpen] = useState(false);
 const [allStarData, setAllStarData] = useState(null);
 const [tradeDeadlinePromptOpen, setTradeDeadlinePromptOpen] = useState(false);
 const [tradeToasts, setTradeToasts] = useState([]);
+const [pendingSimIntent, setPendingSimIntent] = useState(() => readPendingSimulationIntent());
+
+const persistPendingSimIntent = (intent) => {
+  const next = writePendingSimulationIntent(intent);
+  setPendingSimIntent(next);
+  return next;
+};
+
+const clearPendingSimIntent = () => {
+  writePendingSimulationIntent(null);
+  setPendingSimIntent(null);
+};
 
 const ALL_STAR_DATE = fmt(new Date(seasonYear + 1, 1, 13));
 const ALL_STAR_HANDLED_KEY = `bm_all_star_handled_v1_${seasonYear}`;
@@ -3373,6 +3459,15 @@ useEffect(() => {
   refreshTradeDeadlineLockFromSchedule(scheduleByDate);
 }, [TRADE_DEADLINE_HANDLED_KEY, TRADE_DEADLINE_DATE, scheduleByDate]);
 
+useEffect(() => {
+  const stored = readPendingSimulationIntent();
+  if (stored && Number(stored.seasonYear) !== Number(seasonYear)) {
+    clearPendingSimIntent();
+  } else if (stored) {
+    setPendingSimIntent(stored);
+  }
+}, [seasonYear]);
+
 // ✅ stop control
 const stopRef = useRef(false);
 const [stopRequested, setStopRequested] = useState(false);
@@ -3428,41 +3523,46 @@ const showCpuTradeToast = (entry) => {
   }, 5200);
 };
 
-const openAllStarTeams = async () => {
+const computeAndSaveAllStarTeams = async ({ openModal = true } = {}) => {
   try {
-    const stats = loadPlayerStats();
+    const expectedSeason = `${seasonYear}-${seasonYear + 1}`;
+    let result = allStarData?.season === expectedSeason ? allStarData : null;
 
-    console.log("[AllStars DEBUG] stats count =", Object.keys(stats || {}).length);
-    console.log("[AllStars DEBUG] first 5 stats =", Object.values(stats || {}).slice(0, 5));
-    console.log("[AllStars DEBUG] conferences =", leagueData?.conferences);
+    if (!result) {
+      const saved = JSON.parse(localStorage.getItem("bm_all_stars_v1") || "null");
+      if (saved?.season === expectedSeason) result = saved;
+    }
 
-    const payload = {
-      season: `${seasonYear}-${seasonYear + 1}`,
-      cutoff_date: ALL_STAR_DATE,
-      min_games: 12,
-      playerStats: stats,
-      leagueData,
-      scheduleByDate,
-      resultsById,
-    };
+    if (!result) {
+      const stats = loadPlayerStats();
+      const payload = {
+        season: expectedSeason,
+        cutoff_date: ALL_STAR_DATE,
+        min_games: 12,
+        playerStats: stats,
+        leagueData,
+        scheduleByDate,
+        resultsById,
+      };
 
-    console.log("[AllStars DEBUG] payload =", payload);
+      result = await computeAllStars(payload);
+      localStorage.setItem("bm_all_stars_v1", JSON.stringify(result));
+      appendPlayerMoodEvents(buildAllStarMoodEvents(result, ALL_STAR_DATE));
+    }
 
-    const result = await computeAllStars(payload);
-    console.log("[AllStars] result =", result);
-
-    localStorage.setItem("bm_all_stars_v1", JSON.stringify(result));
     localStorage.setItem(ALL_STAR_HANDLED_KEY, "true");
-    appendPlayerMoodEvents(buildAllStarMoodEvents(result, ALL_STAR_DATE));
-
-    setAllStarData(result);
-    setAllStarOpen(true);
-    setAllStarPromptOpen(false);
     allStarHandledRef.current = true;
+    setAllStarData(result);
+    setAllStarPromptOpen(false);
+    setAllStarOpen(Boolean(openModal));
+    return result;
   } catch (err) {
     console.error("[AllStars] Failed to compute all stars:", err);
+    return null;
   }
 };
+
+const openAllStarTeams = () => computeAndSaveAllStarTeams({ openModal: true });
 async function openBoxScoreForGame(game) {
   if (!game?.id) return;
 
@@ -3878,8 +3978,10 @@ const handleSimOnlyGame = async (dateStr, game) => {
 
   newResults[game.id] = canonicalResult || result;
   let playerStats = loadPlayerStats();
+  let clutchStats = loadClutchStats(seasonYear);
   const playerStatsBeforeGame = playerStats;
   playerStats = applyGameToPlayerStats(playerStats, result, game);
+  clutchStats = applyGameToClutchStats(clutchStats, result, game, seasonYear);
   appendPlayerMoodEvents(buildGamePerformanceMoodEvents(result, game, dateStr, {
     teams: repairedTeams,
     scheduleByDate: upd,
@@ -3888,6 +3990,7 @@ const handleSimOnlyGame = async (dateStr, game) => {
     seasonYear,
   }));
   savePlayerStats(playerStats);
+  saveClutchStats(clutchStats);
 
   saveSchedule(upd);
   refreshTradeDeadlineLockFromSchedule(upd);
@@ -3901,9 +4004,10 @@ const handleSimOnlyGame = async (dateStr, game) => {
   setBoxModal({ game, result: canonicalResult || result });
 };
 
-const handleSimToDate = async (dateStr) => {
+const handleSimToDate = async (dateStr, { resume = false } = {}) => {
   // start from whatever is already in storage
   let playerStats = loadPlayerStats();
+  let clutchStats = loadClutchStats(seasonYear);
 
   if (simLock) return;
     const {
@@ -3937,6 +4041,14 @@ if (simBlockMessage) {
 setActionModal(null);
 setBoxModal(null);
 
+  persistPendingSimIntent({
+    mode: "to_date",
+    targetDate: dateStr,
+    seasonYear,
+    pausedReason: null,
+    resumed: Boolean(resume),
+  });
+
   // ✅ reset stop state at the start of THIS run
   stopRef.current = false;
   setStopRequested(false);
@@ -3950,6 +4062,7 @@ setBoxModal(null);
     newResults = reconcileCompletedGamesWithCanonicalStorage(upd, newResults);
   } catch (error) {
     setSimLock(false);
+    clearPendingSimIntent();
     openSimError(error?.message || "The schedule contains conflicting completed games.", "Season integrity issue");
     return;
   }
@@ -3961,6 +4074,7 @@ setBoxModal(null);
   let activeTeams = repairedTeams;
   let simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
   let shouldGoToAwards = false;
+  let pausedAtCheckpoint = false;
 
   try {
 for (const d of sorted) {
@@ -3977,6 +4091,7 @@ for (const d of sorted) {
       "trade-deadline checkpoint"
     );
     savePlayerStats(playerStats);
+    saveClutchStats(clutchStats);
     cleanupGhostGames(upd, newResults);
     saveSchedule(upd);
     await saveResults(newResults);
@@ -3985,12 +4100,20 @@ for (const d of sorted) {
 
     setScheduleByDate(structuredClone(upd));
     setResultsById(structuredClone(newResults));
+    pausedAtCheckpoint = true;
+    persistPendingSimIntent({
+      mode: "to_date",
+      targetDate: dateStr,
+      seasonYear,
+      pausedReason: "trade_deadline",
+    });
     openTradeDeadlinePrompt();
     return;
   }
 
   if (d === ALL_STAR_DATE && !allStarHandledRef.current) {
     savePlayerStats(playerStats);
+    saveClutchStats(clutchStats);
     cleanupGhostGames(upd, newResults);
     saveSchedule(upd);
     await saveResults(newResults);
@@ -3998,6 +4121,13 @@ for (const d of sorted) {
 
     setScheduleByDate(structuredClone(upd));
     setResultsById(structuredClone(newResults));
+    pausedAtCheckpoint = true;
+    persistPendingSimIntent({
+      mode: "to_date",
+      targetDate: dateStr,
+      seasonYear,
+      pausedReason: "all_star",
+    });
     setAllStarPromptOpen(true);
     return;
   }
@@ -4094,6 +4224,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
           // 🔥 update player stats
           const playerStatsBeforeGame = playerStats;
           playerStats = applyGameToPlayerStats(playerStats, slim, g);
+          clutchStats = applyGameToClutchStats(clutchStats, slim, g, seasonYear);
           dayMoodEvents.push(...buildGamePerformanceMoodEvents(slim, g, d, {
             teams: activeTeams,
             scheduleByDate: upd,
@@ -4130,6 +4261,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
     }
 
     savePlayerStats(playerStats);
+    saveClutchStats(clutchStats);
     assertLockedRegularSeasonGamesUnchanged(
       lockedGamesAtStart,
       upd,
@@ -4164,6 +4296,10 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
     setActionModal(null);
     setSimLock(false);
     console.log("◀ SimToDate EXIT:", dateStr);
+
+    if (!pausedAtCheckpoint) {
+      clearPendingSimIntent();
+    }
 
     if (shouldGoToAwards) {
       navigate("/awards");
@@ -4225,7 +4361,7 @@ async function simulateBatch(games) {
   return results;
 }
 
-const handleSimSeason = async () => {
+const handleSimSeason = async ({ resume = false } = {}) => {
   // block if already running
   if (simLock) {
     console.log("FULL SEASON blocked: simLock already true");
@@ -4260,12 +4396,21 @@ if (simBlockMessage) {
 setActionModal(null);
 setBoxModal(null);
 
+  persistPendingSimIntent({
+    mode: "full_season",
+    targetDate: null,
+    seasonYear,
+    pausedReason: null,
+    resumed: Boolean(resume),
+  });
+
   // ✅ reset stop state at the start of a run
   stopRef.current = false;
   setStopRequested(false);
 
   // start with current stats
   let playerStats = loadPlayerStats();
+  let clutchStats = loadClutchStats(seasonYear);
 
 
 
@@ -4278,6 +4423,7 @@ setBoxModal(null);
     results = reconcileCompletedGamesWithCanonicalStorage(upd, results);
   } catch (error) {
     setSimLock(false);
+    clearPendingSimIntent();
     openSimError(error?.message || "The schedule contains conflicting completed games.", "Season integrity issue");
     return;
   }
@@ -4412,6 +4558,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
 
           const playerStatsBeforeGame = playerStats;
           playerStats = applyGameToPlayerStats(playerStats, slim, g);
+          clutchStats = applyGameToClutchStats(clutchStats, slim, g, seasonYear);
           dayMoodEvents.push(...buildGamePerformanceMoodEvents(slim, g, date, {
             teams: activeTeams,
             scheduleByDate: upd,
@@ -4439,6 +4586,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
       if (gamesSimmed - lastPersistedGames >= 50) {
         saveSchedule(structuredClone(upd));
         savePlayerStats(playerStats);
+        saveClutchStats(clutchStats);
         lastPersistedGames = gamesSimmed;
       }
     }
@@ -4470,6 +4618,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
     await saveResults(results);
     await flushPendingResultWrites();
     savePlayerStats(playerStats);
+    saveClutchStats(clutchStats);
     refreshTradeDeadlineLockFromSchedule(upd);
 
 setActionModal(null);
@@ -4478,6 +4627,12 @@ setSimLock(false);
 if (pausedForTradeDeadline) {
   setScheduleByDate(structuredClone(upd));
   setResultsById(structuredClone(results));
+  persistPendingSimIntent({
+    mode: "full_season",
+    targetDate: null,
+    seasonYear,
+    pausedReason: "trade_deadline",
+  });
   openTradeDeadlinePrompt();
   return;
 }
@@ -4485,9 +4640,17 @@ if (pausedForTradeDeadline) {
 if (pausedForAllStar) {
   setScheduleByDate(structuredClone(upd));
   setResultsById(structuredClone(results));
+  persistPendingSimIntent({
+    mode: "full_season",
+    targetDate: null,
+    seasonYear,
+    pausedReason: "all_star",
+  });
   setAllStarPromptOpen(true);
   return;
 }
+
+clearPendingSimIntent();
 
 // ✅ If stopped, do NOT compute awards or navigate away
 if (stopped) {
@@ -4528,6 +4691,34 @@ if (stopped) {
 
 
 
+const resumePendingSimulation = async () => {
+  const intent = readPendingSimulationIntent() || pendingSimIntent;
+  if (!intent || simLock) return;
+
+  if (Number(intent.seasonYear) !== Number(seasonYear)) {
+    clearPendingSimIntent();
+    return;
+  }
+
+  if (intent.mode === "full_season") {
+    await handleSimSeason({ resume: true });
+    return;
+  }
+
+  if (intent.mode === "to_date" && intent.targetDate) {
+    await handleSimToDate(intent.targetDate, { resume: true });
+  }
+};
+
+const closeAllStarTeams = () => {
+  setAllStarOpen(false);
+  if (readPendingSimulationIntent()) {
+    window.setTimeout(() => {
+      resumePendingSimulation();
+    }, 0);
+  }
+};
+
 const handleResetSeason = () => {
   if (!window.confirm("Reset season? ALL results + schedule will be wiped.")) return;
 
@@ -4559,6 +4750,7 @@ if (
 
   // keep your player stats wipe
   localStorage.removeItem(PLAYER_STATS_KEY);
+  localStorage.removeItem(CLUTCH_STATS_KEY);
   localStorage.removeItem("bm_all_stars_v1");
   localStorage.removeItem(TRADE_DESK_FEED_KEY);
   localStorage.removeItem(CALENDAR_CURSOR_KEY);
@@ -4741,14 +4933,158 @@ function devBuildPlayerStatsFromSchedule(schedule) {
   return stats;
 }
 
+function devBuildClutchStatsFromSchedule(schedule, results, playerStats) {
+  const clutchStats = createEmptyClutchStats(seasonYear);
+  const teamClutch = {};
+
+  const ensureTeamClutch = (teamName) => {
+    if (!teamName) return null;
+    teamClutch[teamName] ||= { clutchGames: 0, clutchWins: 0, clutchLosses: 0 };
+    return teamClutch[teamName];
+  };
+
+  for (const games of Object.values(schedule || {})) {
+    for (const game of games || []) {
+      if (!game?.played || !game?.id) continue;
+      const result = results?.[game.id];
+      const homeScore = Number(result?.totals?.home ?? result?.winner?.home ?? 0);
+      const awayScore = Number(result?.totals?.away ?? result?.winner?.away ?? 0);
+      if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore) || homeScore === awayScore) continue;
+      if (Math.abs(homeScore - awayScore) > 5) continue;
+
+      const home = ensureTeamClutch(game.home);
+      const away = ensureTeamClutch(game.away);
+      if (!home || !away) continue;
+      home.clutchGames += 1;
+      away.clutchGames += 1;
+      if (homeScore > awayScore) {
+        home.clutchWins += 1;
+        away.clutchLosses += 1;
+      } else {
+        away.clutchWins += 1;
+        home.clutchLosses += 1;
+      }
+    }
+  }
+
+  clutchStats.teams = Object.fromEntries(
+    Object.entries(teamClutch).map(([teamName, row]) => [
+      teamName,
+      { team: teamName, ...row },
+    ])
+  );
+
+  const rosterByPlayerTeam = new Map();
+  for (const team of teams || []) {
+    for (const player of team?.players || []) {
+      const name = player?.name || player?.player;
+      if (!name || !team?.name) continue;
+      rosterByPlayerTeam.set(`${name}__${team.name}`, player);
+    }
+  }
+
+  const statFields = ["pts", "reb", "ast", "stl", "blk", "to"];
+  const shootingFields = ["fgm", "fga", "tpm", "tpa", "ftm", "fta"];
+  const blankTotals = () => ({
+    gp: 0,
+    min: 0,
+    pts: 0,
+    reb: 0,
+    ast: 0,
+    stl: 0,
+    blk: 0,
+    tov: 0,
+    fgm: 0,
+    fga: 0,
+    tpm: 0,
+    tpa: 0,
+    ftm: 0,
+    fta: 0,
+  });
+
+  for (const row of Object.values(playerStats || {})) {
+    const playerName = row?.player;
+    const teamName = row?.team;
+    const totalGp = Number(row?.gp || 0);
+    const teamRecord = teamClutch[teamName];
+    if (!playerName || !teamName || totalGp <= 0 || !teamRecord?.clutchGames) continue;
+
+    const clutchGp = Math.min(totalGp, Number(teamRecord.clutchGames || 0));
+    const player = rosterByPlayerTeam.get(`${playerName}__${teamName}`) || {};
+    const overall = Number(player?.overall || player?.ovr || 70);
+    const seed = devStableNumber(`${playerName}-${teamName}-clutch`);
+    const randomLift = ((seed % 19) - 9) / 100;
+    const starLift = Math.max(-0.03, Math.min(0.10, (overall - 76) * 0.004));
+    const performanceFactor = Math.max(0.84, Math.min(1.20, 1 + randomLift + starLift));
+    const gpRatio = clutchGp / totalGp;
+
+    const total = blankTotals();
+    total.gp = totalGp;
+    total.min = Number(row?.min || 0);
+    for (const field of statFields) {
+      const sourceField = field === "to" ? (row?.to ?? row?.tov ?? 0) : row?.[field];
+      total[field === "to" ? "tov" : field] = Number(sourceField || 0);
+    }
+    for (const field of shootingFields) total[field] = Number(row?.[field] || 0);
+
+    const clutch = blankTotals();
+    clutch.gp = clutchGp;
+    clutch.min = totalGp > 0 ? (total.min / totalGp) * clutchGp : 0;
+
+    for (const field of ["pts", "reb", "ast", "stl", "blk", "tov"]) {
+      clutch[field] = Math.min(total[field], total[field] * gpRatio * performanceFactor);
+    }
+
+    for (const attempts of ["fga", "tpa", "fta"]) {
+      clutch[attempts] = Math.min(total[attempts], total[attempts] * gpRatio);
+    }
+    const shootingLift = Math.max(0.88, Math.min(1.15, performanceFactor));
+    for (const [made, attempts] of [["fgm", "fga"], ["tpm", "tpa"], ["ftm", "fta"]]) {
+      clutch[made] = Math.min(
+        clutch[attempts],
+        total[made],
+        total[made] * gpRatio * shootingLift
+      );
+    }
+
+    const nonClutch = blankTotals();
+    nonClutch.gp = Math.max(0, total.gp - clutch.gp);
+    nonClutch.min = Math.max(0, total.min - clutch.min);
+    for (const field of ["pts", "reb", "ast", "stl", "blk", "tov", ...shootingFields]) {
+      nonClutch[field] = Math.max(0, total[field] - clutch[field]);
+    }
+
+    clutchStats.players[playerName] = {
+      player: playerName,
+      latestTeam: teamName,
+      teamNames: [teamName],
+      total,
+      clutch,
+      nonClutch,
+      clutchWins: Number(teamRecord.clutchWins || 0),
+      clutchLosses: Number(teamRecord.clutchLosses || 0),
+    };
+  }
+
+  clutchStats.processedGameIds = Object.values(schedule || {})
+    .flat()
+    .filter((game) => game?.played && game?.id)
+    .map((game) => game.id);
+
+  return clutchStats;
+}
+
 function devClearSeasonCheckpointState() {
   clearAllResultsV3();
   clearBoxScoresFromDB().catch(() => {});
 
   localStorage.removeItem(PLAYER_STATS_KEY);
+  localStorage.removeItem(PENDING_SIM_INTENT_KEY);
+  setPendingSimIntent(null);
   localStorage.removeItem("bm_all_stars_v1");
   localStorage.removeItem("bm_awards_latest");
   localStorage.removeItem("bm_awards_v1");
+  localStorage.removeItem(CLUTCH_STATS_KEY);
   localStorage.removeItem("bm_postseason_v2");
   localStorage.removeItem("bm_champ_v1");
   localStorage.removeItem("bm_finals_mvp_v1");
@@ -4830,7 +5166,9 @@ async function handleDevQuickSeasonJump(mode) {
     }
 
     const playerStats = devBuildPlayerStatsFromSchedule(nextSchedule);
+    const clutchStats = devBuildClutchStatsFromSchedule(nextSchedule, nextResults, playerStats);
     savePlayerStats(playerStats);
+    saveClutchStats(clutchStats);
     saveSchedule(nextSchedule);
     await saveResults(nextResults, { persistBoxes: true });
     await flushPendingResultWrites();
@@ -5565,7 +5903,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
       ? "bg-blue-600 hover:bg-blue-500"
       : "bg-blue-600 hover:bg-blue-500 ring-1 ring-blue-300/30"
   }`}
-  onClick={handleSimSeason}
+  onClick={() => handleSimSeason()}
   title={
     !selectedTeamCanSim
       ? selectedTeamSimBlockMessage
@@ -5790,6 +6128,27 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
     </div>,
     document.body
   )}
+{pendingSimIntent && !simLock && !tradeDeadlinePromptOpen && !allStarPromptOpen && !allStarOpen && (
+  <div className="fixed bottom-6 left-1/2 z-[252] w-[min(620px,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-orange-400/35 bg-neutral-950/95 p-4 text-white shadow-2xl backdrop-blur">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <div className="text-[10px] font-black uppercase tracking-[0.22em] text-orange-300">Simulation Paused</div>
+        <div className="mt-1 text-sm font-bold text-neutral-200">
+          {pendingSimIntent.mode === "full_season"
+            ? "Resume the full-season simulation from the next unplayed game."
+            : `Resume simulation through ${pendingSimIntent.targetDate}.`}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => resumePendingSimulation()}
+        className="shrink-0 rounded-xl bg-orange-600 px-5 py-3 text-sm font-black hover:bg-orange-500"
+      >
+        Resume Simulation
+      </button>
+    </div>
+  </div>
+)}
 {tradeToasts.length > 0 && (
   <div className="pointer-events-none fixed bottom-6 right-6 z-[260] flex w-[min(420px,calc(100vw-2rem))] flex-col gap-3">
     {tradeToasts.map((toast) => (
@@ -5838,6 +6197,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
             onClick={() => {
               markTradeDeadlinePromptHandled("continue");
               setTradeDeadlinePromptOpen(false);
+              window.setTimeout(() => resumePendingSimulation(), 0);
             }}
           >
             Continue Season
@@ -5872,10 +6232,9 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
       <div className="mt-6 flex justify-end gap-3">
         <button
           className="rounded-lg bg-neutral-700 px-4 py-2 font-semibold text-white hover:bg-neutral-600"
-          onClick={() => {
-            localStorage.setItem(ALL_STAR_HANDLED_KEY, "true");
-            allStarHandledRef.current = true;
-            setAllStarPromptOpen(false);
+          onClick={async () => {
+            await computeAndSaveAllStarTeams({ openModal: false });
+            window.setTimeout(() => resumePendingSimulation(), 0);
           }}
         >
           Not Now
@@ -5895,7 +6254,8 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
 <AllStars
   open={allStarOpen}
   data={allStarData}
-  onClose={() => setAllStarOpen(false)}
+  onClose={closeAllStarTeams}
+  closeLabel={pendingSimIntent ? "Close & Continue Simulation" : "Close"}
 />
     </div>
   

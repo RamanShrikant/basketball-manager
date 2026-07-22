@@ -652,7 +652,94 @@ function buildPlayoffResultMap(post) {
   return resultByTeam;
 }
 
-function buildSeasonHistoryEntry({ seasonYear, teams, regularSeasonSnapshot, post }) {
+function buildCompactPostseasonBracket(post, resultsById = {}) {
+  if (!post || typeof post !== "object") return null;
+
+  const compactSeries = (series) => {
+    if (!series) return null;
+    const order = homeOrderForBestOf7HigherSeedHome();
+    const games = (series.gameIds || []).slice(0, Number(series.nextGameIndex || 0)).map((gameId, index) => {
+      const result = resultsById?.[gameId];
+      if (!result?.totals && !result?.winner) return null;
+      const highHome = order[index] === "H";
+      const homeTeam = highHome ? series.highSeedTeam : series.lowSeedTeam;
+      const awayTeam = highHome ? series.lowSeedTeam : series.highSeedTeam;
+      return {
+        gameId,
+        homeTeam,
+        awayTeam,
+        homeScore: Number(result?.totals?.home ?? result?.winner?.home ?? 0),
+        awayScore: Number(result?.totals?.away ?? result?.winner?.away ?? 0),
+        otCount: Number(result?.winner?.ot ?? result?.periods?.otCount ?? 0),
+      };
+    }).filter(Boolean);
+
+    return {
+      label: series.label || "Series",
+      round: Number(series.round || 0),
+      highSeedTeam: series.highSeedTeam || null,
+      lowSeedTeam: series.lowSeedTeam || null,
+      highSeedNum: series.highSeedNum ?? null,
+      lowSeedNum: series.lowSeedNum ?? null,
+      winsHigh: Number(series.winsHigh || 0),
+      winsLow: Number(series.winsLow || 0),
+      complete: Boolean(series.complete),
+      games,
+    };
+  };
+
+  const compactPlayInGame = (node) => node ? {
+    home: node.home || null,
+    away: node.away || null,
+    played: Boolean(node.played),
+    winner: node.winner || null,
+    loser: node.loser || null,
+    homeScore: Number(node.homeScore || 0),
+    awayScore: Number(node.awayScore || 0),
+    otCount: Number(node.otCount || 0),
+  } : null;
+
+  const conferences = {};
+  for (const [confKey, conf] of Object.entries(post.conf || {})) {
+    conferences[confKey] = {
+      seedOrder: Array.isArray(post?.seedOrder?.[confKey]) ? [...post.seedOrder[confKey]] : [],
+      playIn: {
+        g78: compactPlayInGame(conf?.playIn?.g78),
+        g910: compactPlayInGame(conf?.playIn?.g910),
+        gFinal: compactPlayInGame(conf?.playIn?.gFinal),
+        seed7: conf?.playIn?.seed7 || null,
+        seed8: conf?.playIn?.seed8 || null,
+      },
+      rounds: {
+        r1: {
+          s1v8: compactSeries(conf?.rounds?.r1?.s1v8),
+          s4v5: compactSeries(conf?.rounds?.r1?.s4v5),
+          s3v6: compactSeries(conf?.rounds?.r1?.s3v6),
+          s2v7: compactSeries(conf?.rounds?.r1?.s2v7),
+        },
+        r2: {
+          top: compactSeries(conf?.rounds?.r2?.top),
+          bot: compactSeries(conf?.rounds?.r2?.bot),
+        },
+        r3: {
+          confFinals: compactSeries(conf?.rounds?.r3?.confFinals),
+        },
+      },
+    };
+  }
+
+  return {
+    version: "postseason_bracket_v1",
+    seasonYear: Number(post.seasonYear || 0),
+    layout: post.layout || null,
+    conferences,
+    finals: compactSeries(post.finals),
+    champion: seriesWinnerTeam(post.finals),
+    archivedAt: new Date().toISOString(),
+  };
+}
+
+function buildSeasonHistoryEntry({ seasonYear, teams, regularSeasonSnapshot, post, resultsById = {} }) {
   const regularRows = Array.isArray(regularSeasonSnapshot) ? regularSeasonSnapshot : [];
   const regularByTeam = {};
   for (const row of regularRows) {
@@ -719,6 +806,7 @@ function buildSeasonHistoryEntry({ seasonYear, teams, regularSeasonSnapshot, pos
     createdAt: new Date().toISOString(),
     champion: seriesWinnerTeam(post?.finals),
     teams: teamRows,
+    postseasonBracket: buildCompactPostseasonBracket(post, resultsById),
   };
 }
 
@@ -1487,6 +1575,7 @@ export default function Playoffs() {
         teams,
         regularSeasonSnapshot,
         post: next,
+        resultsById: resultsRef.current || resultsLive || {},
       }),
       status: champ ? "complete" : "in_progress",
     };
@@ -2403,6 +2492,9 @@ export default function Playoffs() {
           }
         }
         persistPost(structuredClone(cur));
+        if (playInCompleteFor(left, cur) && playInCompleteFor(right, cur)) {
+          setPostseasonView("bracket");
+        }
         return;
       }
 

@@ -7,6 +7,13 @@ import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
+import {
+  computeClutchAwardResults,
+  loadClutchStats,
+  rebuildClutchStatsFromGames,
+  saveClutchStats,
+} from "../utils/clutchAwards.js";
+import { loadBoxScoresByGameIdsFromDB } from "../utils/indexedDbStorage.js";
 
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
@@ -16,6 +23,7 @@ const META_KEY = "bm_league_meta_v1";
 
 const TRACKER_MIN_GAME_SHARE = 0.8;
 const TRACKER_LIMIT = 10;
+const TRACKER_START_AVG_TEAM_GAMES = 10;
 const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
 const resultV3Key = (gameId) => `${RESULT_V3_PREFIX}${gameId}`;
@@ -40,6 +48,11 @@ const TAB_META = {
     title: "MIP Ladder",
     short: "MIP",
     description: "Top 10 season-to-season breakout players using saved player-card history.",
+  },
+  clutch_player: {
+    title: "CPOTY Ladder",
+    short: "CPOTY",
+    description: "Top clutch performers led by clutch-game winning and Clutch Lift, which compares their impact in close games against their other games.",
   },
   roty: {
     title: "ROTY Ladder",
@@ -769,6 +782,21 @@ function getColumnsForTab(tab) {
     ];
   }
 
+  if (tab === "clutch_player") {
+    return [
+      { key: "team", label: "Team" },
+      { key: "name", label: "Name" },
+      { key: "OVR", label: "OVR" },
+      { key: "ClutchGP", label: "Cl GP" },
+      { key: "ClutchRecord", label: "Clutch W-L" },
+      { key: "PTS", label: "Cl PTS" },
+      { key: "REB", label: "Cl REB" },
+      { key: "AST", label: "Cl AST" },
+      { key: "Lift", label: "Clutch Lift" },
+      { key: "Impact", label: "Score" },
+    ];
+  }
+
   if (tab === "roty") {
     return [
       { key: "team", label: "Team" },
@@ -806,54 +834,73 @@ export default function AwardTracker() {
   const [statsMap, setStatsMap] = useState(() =>
     loadMaybeCompressedJSON(PLAYER_STATS_KEY, {})
   );
+  const [clutchStats, setClutchStats] = useState(() => loadClutchStats());
+  const [scheduleByDate, setScheduleByDate] = useState(() => loadMaybeCompressedJSON(SCHED_KEY, {}));
+  const [resultsById, setResultsById] = useState(() => loadAllResultsV3());
 
   const trackerSeasonYear = useMemo(() => getTrackerSeasonYear(leagueData), [leagueData]);
 
   useEffect(() => {
-    const refreshStats = () => {
-      setStatsMap(loadMaybeCompressedJSON(PLAYER_STATS_KEY, {}));
+    let cancelled = false;
+
+    const backfillExistingClutchGames = async () => {
+      const existing = loadClutchStats(trackerSeasonYear);
+      if (
+        Object.keys(existing?.players || {}).length > 0 ||
+        (existing?.processedGameIds || []).length > 0
+      ) {
+        return;
+      }
+
+      const schedule = loadMaybeCompressedJSON(SCHED_KEY, {});
+      const games = Object.values(schedule || {})
+        .flat()
+        .filter((game) => game?.id && !String(game.id).startsWith("PO_") && !String(game.id).startsWith("PI_"));
+      if (!games.length) return;
+
+      try {
+        const boxScoresById = await loadBoxScoresByGameIdsFromDB(games.map((game) => game.id));
+        const rebuilt = rebuildClutchStatsFromGames({
+          games,
+          boxScoresById,
+          seasonYear: trackerSeasonYear,
+        });
+        if (cancelled || !(rebuilt?.processedGameIds || []).length) return;
+        const saved = saveClutchStats(rebuilt);
+        setClutchStats(saved);
+        console.log("[CPOTY] Award Tracker backfilled", rebuilt.processedGameIds.length, "games");
+      } catch (error) {
+        console.warn("[CPOTY] Award Tracker backfill failed", error);
+      }
     };
 
-    refreshStats();
+    backfillExistingClutchGames();
+    return () => { cancelled = true; };
+  }, [trackerSeasonYear]);
 
-    const intervalId = window.setInterval(refreshStats, 2000);
+  useEffect(() => {
+    const refreshSnapshot = () => {
+      setStatsMap(loadMaybeCompressedJSON(PLAYER_STATS_KEY, {}));
+      setClutchStats(loadClutchStats(trackerSeasonYear));
+      setScheduleByDate(loadMaybeCompressedJSON(SCHED_KEY, {}));
+      setResultsById(loadAllResultsV3());
+    };
 
-    window.addEventListener("focus", refreshStats);
-    document.addEventListener("visibilitychange", refreshStats);
+    refreshSnapshot();
+    const intervalId = window.setInterval(refreshSnapshot, 2000);
+    window.addEventListener("focus", refreshSnapshot);
+    document.addEventListener("visibilitychange", refreshSnapshot);
 
     return () => {
       window.clearInterval(intervalId);
-      window.removeEventListener("focus", refreshStats);
-      document.removeEventListener("visibilitychange", refreshStats);
+      window.removeEventListener("focus", refreshSnapshot);
+      document.removeEventListener("visibilitychange", refreshSnapshot);
     };
-  }, []);
-
-  const seasonLabel = useMemo(() => {
-    const y = Number(trackerSeasonYear);
-    return `${y}-${y + 1}`;
   }, [trackerSeasonYear]);
 
-  const scheduleByDate = useMemo(() => {
-    try {
-      const raw = localStorage.getItem(SCHED_KEY);
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
-  }, []);
-
-  const resultsById = useMemo(() => loadAllResultsV3(), []);
   const currentSeasonStatsMap = useMemo(() => {
-    const hasStats = statsMap && Object.keys(statsMap).length > 0;
-    if (!hasStats) return {};
-
-    const resultIds = Object.keys(resultsById || {});
-    const hasCurrentSeasonResults = resultIds.some((id) =>
-      resultIdBelongsToTrackerSeason(id, trackerSeasonYear)
-    );
-
-    return hasCurrentSeasonResults ? statsMap : {};
-  }, [statsMap, resultsById, trackerSeasonYear]);
+    return statsMap && typeof statsMap === "object" ? statsMap : {};
+  }, [statsMap]);
 
   const allTeams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
   const rosterInfoIndex = useMemo(() => buildRosterInfoIndex(leagueData, trackerSeasonYear + 1), [leagueData, trackerSeasonYear]);
@@ -884,6 +931,15 @@ export default function AwardTracker() {
 
     return map;
   }, [teamAwardRows, currentSeasonStatsMap]);
+
+  const averageTeamGames = useMemo(() => {
+    const teamNames = allTeams.map((team) => team?.name || team?.team).filter(Boolean);
+    if (!teamNames.length) return 0;
+    const total = teamNames.reduce((sum, teamName) => sum + Number(teamGamesMap[teamName] || 0), 0);
+    return total / teamNames.length;
+  }, [allTeams, teamGamesMap]);
+
+  const trackerActive = averageTeamGames >= TRACKER_START_AVG_TEAM_GAMES;
 
   const playerPool = useMemo(() => {
     const out = [];
@@ -1013,13 +1069,33 @@ export default function AwardTracker() {
       .slice(0, TRACKER_LIMIT);
   }, [eligiblePool, trackerSeasonYear]);
 
+  const clutchTop10 = useMemo(() => {
+    const results = computeClutchAwardResults(clutchStats, leagueData, { final: false });
+    return (results?.clutch_player_race || []).map((p) => ({
+      ...p,
+      gp: Number(p.gp || 0),
+      ppg: fmt1(p.clutch_ppg),
+      rpg: fmt1(p.clutch_rpg),
+      apg: fmt1(p.clutch_apg),
+      spg: fmt1(p.clutch_spg),
+      bpg: fmt1(p.clutch_bpg),
+      mpg: fmt1(p.clutch_mpg),
+      clutchRecord: `${Number(p.clutch_wins || 0)}-${Number(p.clutch_losses || 0)}`,
+      impactLift: fmt1(p.impact_lift),
+      tsLift: fmt1(p.ts_lift),
+      impact: fmt1(p.clutch_score),
+    }));
+  }, [clutchStats, leagueData]);
+
   const activeRows = useMemo(() => {
+    if (!trackerActive) return [];
     if (currentTab === "dpoy") return dpoyTop10;
     if (currentTab === "sixth_man") return sixthTop10;
     if (currentTab === "mip") return mipTop10;
+    if (currentTab === "clutch_player") return clutchTop10;
     if (currentTab === "roty") return rotyTop10;
     return mvpTop10;
-  }, [currentTab, mvpTop10, dpoyTop10, sixthTop10, mipTop10, rotyTop10]);
+  }, [trackerActive, currentTab, mvpTop10, dpoyTop10, sixthTop10, mipTop10, clutchTop10, rotyTop10]);
 
   useEffect(() => {
     if (!activeRows.length) {
@@ -1047,6 +1123,17 @@ export default function AwardTracker() {
 
   const columns = [{ key: "rank", label: "Rank" }, ...getColumnsForTab(currentTab)];
   const meta = TAB_META[currentTab];
+  const emptyMessage = !trackerActive
+    ? `Award races will begin after approximately ${TRACKER_START_AVG_TEAM_GAMES} games per team. Current league average: ${averageTeamGames.toFixed(1)}.`
+    : currentTab === "clutch_player"
+    ? "Not enough eligible clutch-game performances yet. Players need at least three clutch games, meaningful minutes, and participation in most of their team's close games."
+    : currentTab === "mip"
+    ? "No players currently meet the improvement and prior-season requirements."
+    : currentTab === "sixth_man"
+    ? "No eligible bench players have established a qualifying role yet."
+    : currentTab === "roty"
+    ? "No eligible rookies currently have enough games."
+    : "No eligible player statistics are available for this award race yet.";
 
   useKeyboardListNavigation({
     items: activeRows,
@@ -1077,30 +1164,40 @@ export default function AwardTracker() {
                 { k: "dpoy", label: "DPOY" },
                 { k: "sixth_man", label: "6MOY" },
                 { k: "mip", label: "MIP" },
+                { k: "clutch_player", label: "CPOTY" },
                 { k: "roty", label: "ROTY" },
               ].map((tab)=><button key={tab.k} onClick={()=>setCurrentTab(tab.k)} className={`rounded-md px-3 py-1.5 text-sm font-black ${currentTab===tab.k?"bg-orange-600":"bg-neutral-800 text-gray-300 hover:bg-neutral-700"}`}>{tab.label}</button>)}
             </div>
           </div>
 
-          {cardPlayer && (
-            <div className="flex h-[116px] shrink-0 items-end justify-between overflow-hidden rounded-xl border border-white/10 bg-neutral-900 px-5">
-              <div className="flex min-w-0 items-end gap-4">
-                <PlayerPortraitFrame src={cardPlayer.headshot} alt={cardPlayer.player} className="h-[108px] w-[104px]" />
-                <div className="min-w-0 pb-4">
-                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">{meta.title}</div>
-                  <h2 className="truncate text-3xl font-black">{cardPlayer.player}</h2>
-                  <div className="mt-1 flex items-center gap-2 text-sm font-bold text-white/45">
-                    {cardPlayer.teamLogo && <img src={cardPlayer.teamLogo} alt="" className="h-5 w-5 object-contain" />}
-                    <span>{cardPlayer.team}</span><span>•</span><span>{cardPlayer.pos}</span><span>•</span><span>Age {cardPlayer.age ?? "-"}</span>
+          <div className="flex h-[116px] shrink-0 items-end justify-between overflow-hidden rounded-xl border border-white/10 bg-neutral-900 px-5">
+            {cardPlayer ? (
+              <>
+                <div className="flex min-w-0 items-end gap-4">
+                  <PlayerPortraitFrame src={cardPlayer.headshot} alt={cardPlayer.player} className="h-[108px] w-[104px]" />
+                  <div className="min-w-0 pb-4">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">{meta.title}</div>
+                    <h2 className="truncate text-3xl font-black">{cardPlayer.player}</h2>
+                    <div className="mt-1 flex items-center gap-2 text-sm font-bold text-white/45">
+                      {cardPlayer.teamLogo && <img src={cardPlayer.teamLogo} alt="" className="h-5 w-5 object-contain" />}
+                      <span>{cardPlayer.team}</span><span>•</span><span>{cardPlayer.pos}</span><span>•</span><span>Age {cardPlayer.age ?? "-"}</span>
+                    </div>
                   </div>
                 </div>
+                <div className="mb-3 rounded-xl border border-orange-400/25 bg-black/30 px-5 py-2 text-center">
+                  <div className="text-[9px] font-black uppercase tracking-wider text-white/45">Overall</div>
+                  <div className="text-3xl font-black text-orange-300">{cardPlayer.overall ?? "--"}</div>
+                </div>
+              </>
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-center">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">{meta.title}</div>
+                  <p className="mt-2 max-w-3xl text-sm font-semibold text-neutral-400">{emptyMessage}</p>
+                </div>
               </div>
-              <div className="mb-3 rounded-xl border border-orange-400/25 bg-black/30 px-5 py-2 text-center">
-                <div className="text-[9px] font-black uppercase tracking-wider text-white/45">Overall</div>
-                <div className="text-3xl font-black text-orange-300">{cardPlayer.overall ?? "--"}</div>
-              </div>
-            </div>
-          )}
+            )}
+          </div>
 
           <div className="bmTableScroller min-h-0 flex-1 overflow-auto rounded-xl border border-white/10 bg-neutral-950">
             <table className="h-full w-full min-w-[900px] border-collapse text-center text-sm font-semibold">
@@ -1115,6 +1212,8 @@ export default function AwardTracker() {
                       if(col.key==="name") return <td key={col.key} className="whitespace-nowrap px-3 py-1.5 text-left font-black">{p.player}</td>;
                       if(col.key==="OVR") return <td key={col.key}>{p.overall??"--"}</td>;
                       if(col.key==="GP") return <td key={col.key}>{p.gp}</td>;
+                      if(col.key==="ClutchGP") return <td key={col.key}>{p.clutch_gp}</td>;
+                      if(col.key==="ClutchRecord") return <td key={col.key}>{p.clutchRecord}</td>;
                       if(col.key==="PTS") return <td key={col.key}>{p.ppg}</td>;
                       if(col.key==="PrevPTS") return <td key={col.key}>{p.mipPrevPpg}</td>;
                       if(col.key==="DeltaPTS"){const d=Number(p.mipDeltaPpg||0);return <td key={col.key}>{`${d>=0?"+":""}${d.toFixed(1)}`}</td>}
@@ -1124,6 +1223,7 @@ export default function AwardTracker() {
                       if(col.key==="BLK") return <td key={col.key}>{p.bpg}</td>;
                       if(col.key==="DRTG") return <td key={col.key}>{fmt1(p.def_rating)}</td>;
                       if(col.key==="MPG") return <td key={col.key}>{p.mpg}</td>;
+                      if(col.key==="Lift"){const d=Number(p.impactLift||0);return <td key={col.key}>{`${d>=0?"+":""}${d.toFixed(1)}`}</td>}
                       if(col.key==="Impact") return <td key={col.key}>{p.impact}</td>;
                       if(col.key==="Starts") return <td key={col.key}>{p.started}</td>;
                       if(col.key==="Sixth") return <td key={col.key}>{p.bench??p.sixth}</td>;
@@ -1133,7 +1233,7 @@ export default function AwardTracker() {
                 })}
               </tbody>
             </table>
-            {!activeRows.length && <div className="py-8 text-center text-neutral-400">No player stats loaded yet.</div>}
+            {!activeRows.length && <div className="px-6 py-8 text-center text-neutral-400">{emptyMessage}</div>}
           </div>
         </div>
       </div>
