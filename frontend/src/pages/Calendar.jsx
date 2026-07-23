@@ -9,7 +9,18 @@ import {
   repairCpuTeamsToMinRoster,
 } from "@/api/simEnginePy";
 import { getCpuCpuTradeCandidates, prewarmCpuTradeWorker } from "../api/cpuTradeEngine.js";
-import { executeCpuTradeCandidateOnLeague } from "../utils/tradeExecution.js";
+import {
+  addGeneratedCpuTradeCandidates,
+  buildCpuTradeBankSummary,
+  buildCpuTradeWorkerContext,
+  clearCpuTradeBankTestConfig,
+  ensureCpuTradeBankState,
+  executeDueCpuTradeFromBank,
+  getCpuTradeBankGenerationPolicy,
+  readCpuTradeBankTestConfig,
+  revalidateCpuTradeBankSlice,
+  writeCpuTradeBankTestConfig,
+} from "../utils/cpuTradeBank.js";
 import {
   TRADE_DESK_FEED_KEY,
   appendTradeDeskEntries,
@@ -17,7 +28,6 @@ import {
   appendTradeDeskMoodEventsFromEntries,
   buildRealisticGameMoodEvents,
   buildCompletedCpuTradeDeskEntry,
-  buildRejectedCpuTradeDeskEntry,
 } from "../utils/tradeDeskFeed.js";
 import { queueSim } from "@/api/simQueue";
 import LZString from "lz-string";
@@ -1718,6 +1728,111 @@ export default function Calendar() {
   const seasonYear =
     leagueSeasonYear ??
     (leagueData ? FIRST_PLAYABLE_SEASON_YEAR : storedSeasonYear ?? FIRST_PLAYABLE_SEASON_YEAR);
+
+  const cpuTradeGenerationJobRef = useRef(null);
+
+  useEffect(() => {
+    if (!leagueData || !seasonYear || !leagueData?.cpuTradeBankState) return;
+
+    const tradeDeadlineDate = fmt(new Date(seasonYear + 1, 1, 4));
+    const seasonStartDate = fmt(new Date(seasonYear, 9, 21));
+    const initialDaysToDeadline = Math.max(1, daysBetweenDateStrings(seasonStartDate, tradeDeadlineDate));
+    const testConfig = readCpuTradeBankTestConfig();
+    const initialized = ensureCpuTradeBankState(
+      leagueData,
+      {
+        seasonYear,
+        currentDate: seasonStartDate,
+        dayIndex: 0,
+        totalDates: Math.max(1, initialDaysToDeadline + 68),
+        tradeDeadlineDate,
+        daysToDeadline: initialDaysToDeadline,
+        deadlineDayIndex: initialDaysToDeadline,
+      },
+      testConfig
+    );
+
+    if (!initialized.changed || !initialized.leagueData) return;
+
+    setLeagueData(initialized.leagueData);
+    saveLeagueData(initialized.leagueData).catch((error) => {
+      console.warn("[CPU Trade Bank] failed to save initialized bank", error);
+    });
+  }, [leagueData, seasonYear, setLeagueData]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const resetDebugBank = () => {
+      const currentLeague = window.__leagueData || leagueData || null;
+      if (!currentLeague) return { reset: false, reason: "missing_league" };
+
+      const nextLeague = { ...currentLeague };
+      delete nextLeague.cpuTradeBankState;
+      setLeagueData(nextLeague);
+      saveLeagueData(nextLeague).catch((error) => {
+        console.warn("[CPU Trade Bank] failed to save debug bank reset", error);
+      });
+
+      window.__leagueData = nextLeague;
+      window.leagueData = nextLeague;
+      window.__basketballManagerLeagueData = nextLeague;
+      cpuTradeGenerationJobRef.current = null;
+      return { reset: true };
+    };
+
+    const applyDebugPreset = (patch) => {
+      const config = writeCpuTradeBankTestConfig(patch);
+      resetDebugBank();
+      return config;
+    };
+
+    window.__cpuTradeBankDebug = {
+      report: () => buildCpuTradeBankSummary(window.__leagueData || leagueData || {}),
+      getState: () => (window.__leagueData || leagueData || {})?.cpuTradeBankState || null,
+      getConfig: () => readCpuTradeBankTestConfig(),
+      configure: (patch = {}) => writeCpuTradeBankTestConfig(patch),
+      configureAndReset: (patch = {}) => applyDebugPreset(patch),
+      resetBank: () => resetDebugBank(),
+      clearConfig: () => {
+        const config = clearCpuTradeBankTestConfig();
+        resetDebugBank();
+        return config;
+      },
+      presets: {
+        deterministic: () => applyDebugPreset({ seed: "cpu-trade-diagnostic" }),
+        rapidBuild: () =>
+          applyDebugPreset({
+            seed: "cpu-trade-diagnostic",
+            forceGeneration: true,
+            generationCandidates: 8,
+            exactEvaluations: 8,
+          }),
+        executionDryRun: () =>
+          applyDebugPreset({
+            seed: "cpu-trade-diagnostic",
+            forceGeneration: true,
+            forceExecution: true,
+            dryRun: true,
+            generationCandidates: 8,
+            exactEvaluations: 8,
+          }),
+        accelerated: () =>
+          applyDebugPreset({
+            seed: "cpu-trade-diagnostic",
+            forceGeneration: true,
+            forceExecution: true,
+            dryRun: false,
+            generationCandidates: 8,
+            exactEvaluations: 8,
+          }),
+      },
+    };
+
+    return () => {
+      if (window.__cpuTradeBankDebug) delete window.__cpuTradeBankDebug;
+    };
+  }, [leagueData]);
 
   useEffect(() => {
     const y = calendarValidSeasonYear(leagueSeasonYear ?? seasonYear);
@@ -3707,30 +3822,86 @@ function daysBetweenDateStrings(fromDate, toDate) {
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return 999;
   return Math.ceil((to.getTime() - from.getTime()) / 86400000);
 }
-function shouldAskCpuTradeWorkerForDate(currentDate, dayIndex, totalDates, tradeDeadlineDate) {
-  const daysToDeadline = daysBetweenDateStrings(currentDate, tradeDeadlineDate);
-  const idx = Number(dayIndex || 0);
-  if (idx < 12) return false;
-  if (daysToDeadline <= 0) return false;
+function startCpuTradeBankGenerationJob({
+  generationJobRef,
+  leagueData,
+  workerContext,
+  generationContext,
+}) {
+  if (!generationJobRef || generationJobRef.current?.status === "pending") return false;
 
-  // Deadline week used to check every single day with up to 10 candidates.
-  // That created visible calendar pauses while most candidates were rejected.
-  // Keep the market active, but do not hammer the JS validation layer daily.
-  if (daysToDeadline <= 7) {
-    return daysToDeadline === 1 || idx % 2 === 0;
+  const job = {
+    id: `cpu_trade_bank_job_${Date.now()}_${workerContext?.generationNonce || 0}`,
+    status: "pending",
+    startedAt: Date.now(),
+    workerContext,
+    generationContext,
+    response: null,
+    error: null,
+  };
+
+  generationJobRef.current = job;
+
+  getCpuCpuTradeCandidates(leagueData, workerContext)
+    .then((response) => {
+      if (generationJobRef.current !== job) return;
+      job.status = "fulfilled";
+      job.response = response || { ok: true, candidates: [] };
+      job.finishedAt = Date.now();
+    })
+    .catch((error) => {
+      if (generationJobRef.current !== job) return;
+      job.status = "rejected";
+      job.error = error;
+      job.finishedAt = Date.now();
+    });
+
+  return true;
+}
+
+function takeCompletedCpuTradeBankGenerationJob(generationJobRef) {
+  const job = generationJobRef?.current;
+  if (!job || job.status === "pending") return null;
+  generationJobRef.current = null;
+  return job;
+}
+
+function resolveCalendarControlledTeamName(selectedTeam, leagueData = {}) {
+  const candidates = [
+    selectedTeam,
+    selectedTeam?.name,
+    selectedTeam?.teamName,
+    selectedTeam?.team,
+    selectedTeam?.franchiseName,
+    leagueData?.selectedTeam,
+    leagueData?.userTeam,
+    leagueData?.controlledTeam,
+    leagueData?.selectedTeamName,
+    leagueData?.userTeamName,
+    leagueData?.controlledTeamName,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+
+    if (candidate && typeof candidate === "object") {
+      const name =
+        candidate?.name ||
+        candidate?.teamName ||
+        candidate?.team ||
+        candidate?.franchiseName;
+
+      if (typeof name === "string" && name.trim()) {
+        return name.trim();
+      }
+    }
   }
 
-  const progress = Math.max(0, Math.min(1, idx / Math.max(1, Number(totalDates || 1))));
-  const cadence = progress < 0.30 ? 10 : progress < 0.67 ? 6 : 4;
-  return idx % cadence === 0;
+  return "";
 }
 
-function getCpuTradeMaxCandidatesForDate(currentDate, dayIndex, tradeDeadlineDate) {
-  const daysToDeadline = daysBetweenDateStrings(currentDate, tradeDeadlineDate);
-  if (daysToDeadline <= 7) return 3;
-  if (Number(dayIndex || 0) % 2 === 0) return 2;
-  return 1;
-}
 
 function shouldWriteCpuTradeDeskItems({ candidates = [], tradeDeskItems = [], currentDate, dayIndex, tradeDeadlineDate }) {
   if (!Array.isArray(tradeDeskItems) || !tradeDeskItems.length) return false;
@@ -3755,129 +3926,267 @@ async function runCpuCpuTradePassForDate({
   selectedTeam,
   setLeagueData,
   tradeDeadlineDate,
+  generationJobRef,
   onTradeDeskEntries,
   onCpuTradeCompleted,
 }) {
   if (!activeLeagueData || !currentDate || !tradeDeadlineDate) {
-    return { leagueData: activeLeagueData, tradesMade: [] };
+    return {
+      leagueData: activeLeagueData,
+      tradesMade: [],
+      bankChanged: false,
+      rosterChanged: false,
+    };
   }
 
-  if (!shouldAskCpuTradeWorkerForDate(currentDate, dayIndex, totalDates, tradeDeadlineDate)) {
-    return { leagueData: activeLeagueData, tradesMade: [] };
-  }
+  const daysToDeadline = daysBetweenDateStrings(currentDate, tradeDeadlineDate);
+  const baseContext = {
+    seasonYear: getCalendarLeagueSeasonYear(activeLeagueData),
+    currentDate,
+    dayIndex,
+    totalDates,
+    deadlineDayIndex: Number(dayIndex || 0) + Math.max(0, daysToDeadline),
+    tradeDeadlineDate,
+    daysToDeadline,
+    userTeamName: resolveCalendarControlledTeamName(selectedTeam, activeLeagueData),
+    recordsByTeam: buildCpuTradeRecordsByTeam(scheduleSnapshot, resultsSnapshot),
+    inOffseason: false,
+  };
+  const testConfig = readCpuTradeBankTestConfig();
+
+  let nextLeagueData = activeLeagueData;
+  let bankChanged = false;
+  let rosterChanged = false;
+  const tradesMade = [];
 
   try {
-    const daysToDeadline = daysBetweenDateStrings(currentDate, tradeDeadlineDate);
-    const maxCandidates = getCpuTradeMaxCandidatesForDate(currentDate, dayIndex, tradeDeadlineDate);
+    const initialized = ensureCpuTradeBankState(nextLeagueData, baseContext, testConfig);
+    if (initialized.leagueData) nextLeagueData = initialized.leagueData;
+    bankChanged = bankChanged || initialized.changed;
 
-    const response = await getCpuCpuTradeCandidates(activeLeagueData, {
-      currentDate,
-      dayIndex,
-      totalDates,
-      tradeDeadlineDate,
-      daysToDeadline,
-      userTeamName: selectedTeam?.name || "",
-      recordsByTeam: buildCpuTradeRecordsByTeam(scheduleSnapshot, resultsSnapshot),
-      maxCandidates,
-    });
+    const completedGenerationJob = takeCompletedCpuTradeBankGenerationJob(generationJobRef);
+    const activeBankBeforeGenerationConsume = nextLeagueData?.cpuTradeBankState;
+    const completedJobMatchesActiveBank =
+      !completedGenerationJob ||
+      (String(completedGenerationJob?.generationContext?.bankSeed || "") ===
+        String(activeBankBeforeGenerationConsume?.seed || "") &&
+        Number(completedGenerationJob?.generationContext?.seasonYear || 0) ===
+          Number(activeBankBeforeGenerationConsume?.seasonYear || 0));
 
-    const candidates = Array.isArray(response?.candidates) ? response.candidates : [];
-    const tradeDeskItems = Array.isArray(response?.tradeDeskItems) ? response.tradeDeskItems : [];
-
-    if (window.__debugCpuTrades) {
-      console.log("[CPU Trades] pass", {
-        currentDate,
-        daysToDeadline,
-        maxCandidates,
-        candidateCount: candidates.length,
-        tradeDeskItemCount: tradeDeskItems.length,
-        skippedReason: response?.skippedReason || null,
-        activityChance: response?.activityChance,
-      });
-    }
-
-    if (
-      tradeDeskItems.length &&
-      typeof onTradeDeskEntries === "function" &&
-      shouldWriteCpuTradeDeskItems({ candidates, tradeDeskItems, currentDate, dayIndex, tradeDeadlineDate })
-    ) {
-      onTradeDeskEntries(tradeDeskItems.slice(0, candidates.length ? 4 : 2));
-    }
-
-    if (!candidates.length) return { leagueData: activeLeagueData, tradesMade: [] };
-
-    let nextLeagueData = activeLeagueData;
-    const tradesMade = [];
-    let rejectedDeskEntries = 0;
-
-    for (const candidate of candidates) {
-      const result = executeCpuTradeCandidateOnLeague({
+    if (completedGenerationJob && !completedJobMatchesActiveBank) {
+      if (window.__debugCpuTrades) {
+        console.log("[CPU Trade Bank] discarded stale background generation job", {
+          jobSeasonYear: completedGenerationJob?.generationContext?.seasonYear,
+          activeSeasonYear: activeBankBeforeGenerationConsume?.seasonYear,
+          generatedDate: completedGenerationJob?.generationContext?.currentDate,
+        });
+      }
+    } else if (completedGenerationJob?.status === "rejected") {
+      console.warn("[CPU Trade Bank] background generation failed", completedGenerationJob.error);
+    } else if (completedGenerationJob?.status === "fulfilled") {
+      const generatedContext = {
+        ...baseContext,
+        generatedDate: completedGenerationJob?.generationContext?.currentDate || currentDate,
+        generatedDayIndex:
+          completedGenerationJob?.generationContext?.dayIndex ?? Number(dayIndex || 0),
+      };
+      const exactEvaluationLimit =
+        completedGenerationJob?.generationContext?.exactEvaluations || 3;
+      const added = addGeneratedCpuTradeCandidates({
         leagueData: nextLeagueData,
-        candidate,
+        response: completedGenerationJob.response,
+        context: generatedContext,
+        testConfig,
+        exactEvaluationLimit,
       });
 
-      if (!result?.ok || !result.leagueData) {
-        if (window.__debugCpuTrades) {
-          console.log("[CPU Trades] candidate rejected", candidate, result);
-        }
+      nextLeagueData = added.leagueData || nextLeagueData;
+      bankChanged = bankChanged || added.changed;
 
-        if (rejectedDeskEntries < 1 && typeof onTradeDeskEntries === "function") {
-          const stalledEntry = buildRejectedCpuTradeDeskEntry({
-            candidate,
-            result,
-            currentDate,
-          });
-          if (stalledEntry) {
-            onTradeDeskEntries([stalledEntry]);
-            rejectedDeskEntries += 1;
-          }
-        }
+      const responseCandidates = Array.isArray(completedGenerationJob.response?.candidates)
+        ? completedGenerationJob.response.candidates
+        : [];
+      const tradeDeskItems = Array.isArray(completedGenerationJob.response?.tradeDeskItems)
+        ? completedGenerationJob.response.tradeDeskItems
+        : [];
 
-        continue;
+      if (
+        tradeDeskItems.length &&
+        typeof onTradeDeskEntries === "function" &&
+        shouldWriteCpuTradeDeskItems({
+          candidates: added.accepted?.length ? added.accepted : responseCandidates,
+          tradeDeskItems,
+          currentDate: generatedContext.generatedDate,
+          dayIndex: generatedContext.generatedDayIndex,
+          tradeDeadlineDate,
+        })
+      ) {
+        onTradeDeskEntries(tradeDeskItems.slice(0, added.accepted?.length ? 4 : 2));
       }
 
-      nextLeagueData = result.leagueData;
-      tradesMade.push(result.tradeRecord);
+      if (window.__debugCpuTrades) {
+        console.log("[CPU Trade Bank] generation consumed", {
+          generatedDate: generatedContext.generatedDate,
+          consumedDate: currentDate,
+          proposed: responseCandidates.length,
+          accepted: added.accepted?.length || 0,
+          rejected: added.rejected?.length || 0,
+          bankSize: added.state?.candidates?.length || 0,
+          workerMs:
+            completedGenerationJob.finishedAt && completedGenerationJob.startedAt
+              ? completedGenerationJob.finishedAt - completedGenerationJob.startedAt
+              : null,
+          workerDebug: completedGenerationJob.response?.debug || null,
+        });
+      }
+    }
 
-      const completedEntry = buildCompletedCpuTradeDeskEntry(result.tradeRecord, currentDate);
+    const revalidationCadence = daysToDeadline <= 14 ? 2 : 5;
+    if (
+      nextLeagueData?.cpuTradeBankState?.candidates?.length &&
+      (testConfig?.forceGeneration || Number(dayIndex || 0) % revalidationCadence === 0)
+    ) {
+      const revalidated = revalidateCpuTradeBankSlice({
+        leagueData: nextLeagueData,
+        context: baseContext,
+        testConfig,
+        maxChecks: daysToDeadline <= 14 ? 2 : 1,
+      });
+      nextLeagueData = revalidated.leagueData || nextLeagueData;
+      bankChanged = bankChanged || revalidated.changed;
+
+      if (window.__debugCpuTrades && revalidated.checked) {
+        console.log("[CPU Trade Bank] periodic revalidation", {
+          currentDate,
+          checked: revalidated.checked,
+          removed: revalidated.removed,
+          bankSize: revalidated.state?.candidates?.length || 0,
+        });
+      }
+    }
+
+    const execution = executeDueCpuTradeFromBank({
+      leagueData: nextLeagueData,
+      context: baseContext,
+      testConfig,
+      maxCandidateChecks: daysToDeadline <= 14 ? 6 : 4,
+    });
+
+    if (execution?.leagueData) nextLeagueData = execution.leagueData;
+    bankChanged = bankChanged || Boolean(execution?.changed);
+
+    if (execution?.dryRun && window.__debugCpuTrades) {
+      console.log("[CPU Trade Bank] dry-run candidate passed final revalidation", {
+        currentDate,
+        candidate: execution.dryRunCandidate,
+        validation: execution.validation,
+      });
+    }
+
+    if (execution?.executed && execution?.tradeRecord) {
+      rosterChanged = true;
+      tradesMade.push(execution.tradeRecord);
+
+      const completedEntry = buildCompletedCpuTradeDeskEntry(execution.tradeRecord, currentDate);
       if (completedEntry && typeof onTradeDeskEntries === "function") {
         onTradeDeskEntries([completedEntry]);
       }
       if (completedEntry && typeof onCpuTradeCompleted === "function") {
-        onCpuTradeCompleted(completedEntry, result.tradeRecord);
+        onCpuTradeCompleted(completedEntry, execution.tradeRecord);
       }
 
-      console.log("[CPU Trades] completed", result.tradeRecord);
+      console.log("[CPU Trade Bank] completed", execution.tradeRecord);
 
-      // Natural pacing: never more than one CPU-to-CPU trade on a sim date.
-      break;
+      try {
+        ensureGameplansForLeague(nextLeagueData);
+      } catch (error) {
+        console.warn("[CPU Trade Bank] ensure gameplans failed after trade", error);
+      }
+    } else if (
+      execution?.reason === "no_valid_candidate" &&
+      window.__debugCpuTrades
+    ) {
+      console.log("[CPU Trade Bank] execution slot deferred after stale entries", {
+        currentDate,
+        lastFailure: execution.lastFailure,
+        bankSize: execution.state?.candidates?.length || 0,
+      });
     }
 
-    if (!tradesMade.length) return { leagueData: activeLeagueData, tradesMade: [] };
+    const activeState = nextLeagueData?.cpuTradeBankState;
+    const generationPolicy = getCpuTradeBankGenerationPolicy(
+      activeState,
+      baseContext,
+      testConfig
+    );
 
-    try {
-      ensureGameplansForLeague(nextLeagueData);
-    } catch (error) {
-      console.warn("[CPU Trades] ensure gameplans failed after trade", error);
+    if (
+      generationPolicy.shouldGenerate &&
+      generationJobRef?.current?.status !== "pending"
+    ) {
+      const workerContext = buildCpuTradeWorkerContext(
+        activeState,
+        baseContext,
+        generationPolicy
+      );
+      startCpuTradeBankGenerationJob({
+        generationJobRef,
+        leagueData: nextLeagueData,
+        workerContext,
+        generationContext: {
+          currentDate,
+          dayIndex,
+          seasonYear: activeState?.seasonYear,
+          bankSeed: activeState?.seed,
+          exactEvaluations: generationPolicy.exactEvaluations,
+        },
+      });
+
+      if (window.__debugCpuTrades) {
+        console.log("[CPU Trade Bank] background generation launched", {
+          currentDate,
+          dayIndex,
+          maxCandidates: generationPolicy.maxCandidates,
+          exactEvaluations: generationPolicy.exactEvaluations,
+          cadence: generationPolicy.cadence,
+          desiredReserve: generationPolicy.desiredReserve,
+          bankSize: activeState?.candidates?.length || 0,
+        });
+      }
     }
 
-    if (typeof setLeagueData === "function") setLeagueData(nextLeagueData);
-    saveLeagueData(nextLeagueData).catch((error) => {
-      console.warn("[CPU Trades] failed to save CPU trade league data", error);
-    });
+    if (bankChanged || rosterChanged) {
+      if (typeof setLeagueData === "function") setLeagueData(nextLeagueData);
+      saveLeagueData(nextLeagueData).catch((error) => {
+        console.warn("[CPU Trade Bank] failed to save bank/trade state", error);
+      });
 
-    try {
-      window.__leagueData = nextLeagueData;
-      window.leagueData = nextLeagueData;
-      window.__basketballManagerLeagueData = nextLeagueData;
-    } catch {}
+      try {
+        window.__leagueData = nextLeagueData;
+        window.leagueData = nextLeagueData;
+        window.__basketballManagerLeagueData = nextLeagueData;
+      } catch {}
+    }
 
-    return { leagueData: nextLeagueData, tradesMade };
+    return {
+      leagueData: nextLeagueData,
+      tradesMade,
+      bankChanged,
+      rosterChanged,
+      bankSummary: buildCpuTradeBankSummary(nextLeagueData),
+    };
   } catch (error) {
-    console.warn("[CPU Trades] pass failed", error);
-    return { leagueData: activeLeagueData, tradesMade: [] };
+    console.warn("[CPU Trade Bank] pass failed", error);
+    return {
+      leagueData: activeLeagueData,
+      tradesMade: [],
+      bankChanged: false,
+      rosterChanged: false,
+      error,
+    };
   }
 }
+
 /* -------------------------------------------------------------------------- */
 /*                           SIMULATION HANDLERS                               */
 /* -------------------------------------------------------------------------- */
@@ -4142,11 +4451,14 @@ for (const d of sorted) {
     selectedTeam,
     setLeagueData,
     tradeDeadlineDate: TRADE_DEADLINE_DATE,
+    generationJobRef: cpuTradeGenerationJobRef,
     onTradeDeskEntries: handleTradeDeskEntries,
     onCpuTradeCompleted: showCpuTradeToast,
   });
   if (cpuTradePass.leagueData !== activeLeagueData) {
     activeLeagueData = cpuTradePass.leagueData;
+  }
+  if (cpuTradePass.rosterChanged) {
     activeTeams = buildTeamsFromLeagueForSim(activeLeagueData);
     simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
   }
@@ -4470,11 +4782,14 @@ for (let di = 0; di < dates.length; di++) {
     selectedTeam,
     setLeagueData,
     tradeDeadlineDate: TRADE_DEADLINE_DATE,
+    generationJobRef: cpuTradeGenerationJobRef,
     onTradeDeskEntries: handleTradeDeskEntries,
     onCpuTradeCompleted: showCpuTradeToast,
   });
   if (cpuTradePass.leagueData !== activeLeagueData) {
     activeLeagueData = cpuTradePass.leagueData;
+  }
+  if (cpuTradePass.rosterChanged) {
     activeTeams = buildTeamsFromLeagueForSim(activeLeagueData);
     simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
   }
@@ -5208,23 +5523,6 @@ async function handleDevQuickSeasonJump(mode) {
 /* -------------------------------------------------------------------------- */
 /*                                    UI                                      */
 /* -------------------------------------------------------------------------- */
-if (!leagueData) {
-  return <div className="text-white p-6">Loading league...</div>;
-}
-if (!selectedTeam) {
-  return (
-    <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center justify-center">
-      <p>No team selected.</p>
-      <button
-        className="mt-4 px-4 py-2 bg-orange-600 rounded"
-        onClick={() => navigate("/team-selector")}
-      >
-        Pick a Team
-      </button>
-    </div>
-  );
-}
-
 /* -------------------------------------------------------------------------- */
 /*                      HEADER (Season / Record / Standings)                  */
 /* -------------------------------------------------------------------------- */
@@ -5414,6 +5712,27 @@ const cycleMiniAwardTab = (dir) => {
 const actionModalBlockMessage = actionModal
   ? getSimulationBlockMessageForGame(actionModal.game, teams)
   : "";
+
+// Keep all hooks above these loading/selection guards. React requires every
+// render of Calendar to call hooks in the same order, including the first
+// render while GameContext is still hydrating leagueData.
+if (!leagueData) {
+  return <div className="text-white p-6">Loading league...</div>;
+}
+if (!selectedTeam) {
+  return (
+    <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center justify-center">
+      <p>No team selected.</p>
+      <button
+        className="mt-4 px-4 py-2 bg-orange-600 rounded"
+        onClick={() => navigate("/team-selector")}
+      >
+        Pick a Team
+      </button>
+    </div>
+  );
+}
+
 return (
     <PageFade>
   <div

@@ -1965,37 +1965,171 @@ function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, u
 
 
 
-export function executeCpuTradeCandidateOnLeague({ leagueData, candidate }) {
+function resolveCurrentCpuTradePlayerItem(leagueData, teamName, item = {}) {
+  const team = findTeamInLeague(leagueData, teamName);
+  if (!team) {
+    return { ok: false, reason: `CPU trade candidate referenced ${teamName}, but that team no longer exists.` };
+  }
+
+  const requestedPlayer = item?.player || {};
+  const playerIndex = findStandardPlayerIndex(team, requestedPlayer);
+  if (playerIndex < 0) {
+    return {
+      ok: false,
+      reason: `${playerNameOf(requestedPlayer)} is no longer on ${teamName}'s standard roster.`,
+      staleCode: "player_ownership_changed",
+    };
+  }
+
+  return {
+    ok: true,
+    item: {
+      ...item,
+      type: "player",
+      teamName,
+      player: team.players[playerIndex],
+    },
+  };
+}
+
+function resolveCurrentCpuTradePickItem(leagueData, teamName, item = {}) {
+  const rows = Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : [];
+  const teamNames = getTeamNamesForDraftPickMatch(leagueData);
+  const requestedPick = item?.pick || {};
+  const rowIndex = rows.findIndex((row, index) =>
+    pickIdentityMatches(normalizeDraftPickAsset(row, index, teamNames), requestedPick, teamName)
+  );
+
+  if (rowIndex < 0) {
+    return {
+      ok: false,
+      reason: `${teamName} no longer owns ${formatPick(requestedPick)}.`,
+      staleCode: "pick_ownership_changed",
+    };
+  }
+
+  const normalized = normalizeDraftPickAsset(rows[rowIndex], rowIndex, teamNames);
+  if (!sameTeamName(normalized.ownerTeam, teamName)) {
+    return {
+      ok: false,
+      reason: `${teamName} no longer owns ${formatPick(requestedPick)}.`,
+      staleCode: "pick_ownership_changed",
+    };
+  }
+
+  return {
+    ok: true,
+    item: {
+      ...item,
+      type: "pick",
+      teamName,
+      pick: {
+        ...rows[rowIndex],
+        ...normalized,
+      },
+    },
+  };
+}
+
+function resolveCurrentCpuTradeItems(leagueData, teamName, items = []) {
+  const resolvedItems = [];
+
+  for (const item of items || []) {
+    const result = item?.type === "player"
+      ? resolveCurrentCpuTradePlayerItem(leagueData, teamName, item)
+      : item?.type === "pick"
+        ? resolveCurrentCpuTradePickItem(leagueData, teamName, item)
+        : { ok: false, reason: "CPU trade candidate contains an unsupported asset type.", staleCode: "unsupported_asset" };
+
+    if (!result.ok) return result;
+    resolvedItems.push(result.item);
+  }
+
+  return { ok: true, items: resolvedItems };
+}
+
+function cpuTradeTimingValidation({ currentDate = "", tradeDeadlineDate = "", inOffseason = false } = {}) {
+  if (inOffseason) {
+    return {
+      ok: false,
+      reason: "CPU-to-CPU trades are disabled during the offseason.",
+      staleCode: "offseason_locked",
+    };
+  }
+
+  if (currentDate && tradeDeadlineDate && String(currentDate) >= String(tradeDeadlineDate)) {
+    return {
+      ok: false,
+      reason: "CPU-to-CPU trades are disabled at and after the trade deadline.",
+      staleCode: "trade_deadline_locked",
+    };
+  }
+
+  return { ok: true };
+}
+
+export function validateCpuTradeCandidateOnLeague({
+  leagueData,
+  candidate,
+  currentDate = "",
+  tradeDeadlineDate = "",
+  inOffseason = false,
+} = {}) {
+  const timingValidation = cpuTradeTimingValidation({ currentDate, tradeDeadlineDate, inOffseason });
+  if (!timingValidation.ok) return timingValidation;
+
   const fromTeamName = candidate?.fromTeamName || candidate?.sellerTeamName || candidate?.teamA || "";
   const toTeamName = candidate?.toTeamName || candidate?.buyerTeamName || candidate?.teamB || "";
-  const fromItems = Array.isArray(candidate?.fromItems) ? candidate.fromItems : [];
-  const toItems = Array.isArray(candidate?.toItems) ? candidate.toItems : [];
+  const rawFromItems = Array.isArray(candidate?.fromItems) ? candidate.fromItems : [];
+  const rawToItems = Array.isArray(candidate?.toItems) ? candidate.toItems : [];
 
   if (!leagueData || !fromTeamName || !toTeamName) {
-    return { ok: false, reason: "CPU trade candidate is missing one or both teams." };
+    return { ok: false, reason: "CPU trade candidate is missing one or both teams.", staleCode: "missing_team" };
+  }
+
+  if (sameTeamName(fromTeamName, toTeamName)) {
+    return { ok: false, reason: "CPU trade candidate cannot trade a team with itself.", staleCode: "same_team" };
   }
 
   const fromTeam = findTeamInLeague(leagueData, fromTeamName);
   const toTeam = findTeamInLeague(leagueData, toTeamName);
-
   if (!fromTeam || !toTeam) {
-    return { ok: false, reason: "CPU trade candidate referenced a team that no longer exists." };
+    return {
+      ok: false,
+      reason: "CPU trade candidate referenced a team that no longer exists.",
+      staleCode: "missing_team",
+    };
   }
 
-  if (!fromItems.length || !toItems.length) {
-    return { ok: false, reason: "CPU trade candidate needs assets from both teams." };
+  if (!rawFromItems.length || !rawToItems.length) {
+    return { ok: false, reason: "CPU trade candidate needs assets from both teams.", staleCode: "empty_package" };
   }
 
+  const resolvedFrom = resolveCurrentCpuTradeItems(leagueData, fromTeamName, rawFromItems);
+  if (!resolvedFrom.ok) return resolvedFrom;
+
+  const resolvedTo = resolveCurrentCpuTradeItems(leagueData, toTeamName, rawToItems);
+  if (!resolvedTo.ok) return resolvedTo;
+
+  const fromItems = resolvedFrom.items;
+  const toItems = resolvedTo.items;
   const fromRosterProjection = getProjectedStandardRosterCount(fromTeam, fromItems, toItems);
   const toRosterProjection = getProjectedStandardRosterCount(toTeam, toItems, fromItems);
   if (fromRosterProjection.projected < 14 || toRosterProjection.projected < 14) {
     return {
       ok: false,
       reason: "CPU trade rejected because it would leave a team below the 14-player regular-season minimum.",
+      staleCode: "roster_minimum",
       fromRosterProjection,
       toRosterProjection,
     };
   }
+
+  const cpuTradeContext = {
+    ...(candidate?.debug || {}),
+    bankId: candidate?.bankId || candidate?.id || "",
+    generatedDate: candidate?.bankMeta?.generatedDate || candidate?.generatedDate || "",
+  };
 
   const toTeamView = evaluateTradeTeamImpact({
     leagueData,
@@ -2007,13 +2141,14 @@ export function executeCpuTradeCandidateOnLeague({ leagueData, candidate }) {
     cpuItems: toItems,
     evaluationMode: "cpu_cpu_trade",
     cpuTradeRole: "buyer",
-    cpuTradeContext: candidate?.debug || {},
+    cpuTradeContext,
   });
 
   if (!hasAcceptedEvaluation(toTeamView)) {
     return {
       ok: false,
       reason: toTeamView?.message || `${toTeamName} rejected the CPU trade candidate.`,
+      staleCode: "buyer_rejected",
       toTeamView,
     };
   }
@@ -2028,17 +2163,92 @@ export function executeCpuTradeCandidateOnLeague({ leagueData, candidate }) {
     cpuItems: fromItems,
     evaluationMode: "cpu_cpu_trade",
     cpuTradeRole: "seller",
-    cpuTradeContext: candidate?.debug || {},
+    cpuTradeContext,
   });
 
   if (!hasAcceptedEvaluation(fromTeamView)) {
     return {
       ok: false,
       reason: fromTeamView?.message || `${fromTeamName} rejected the CPU trade candidate.`,
+      staleCode: "seller_rejected",
       fromTeamView,
       toTeamView,
     };
   }
+
+  const combinedEvaluation = {
+    accepted: true,
+    decision: "accept",
+    score: Number(toTeamView?.score || 0) + Number(fromTeamView?.score || 0),
+    reasons: [
+      candidate?.motive || "CPU-to-CPU trade matched both teams' direction.",
+      ...(Array.isArray(toTeamView?.reasons) ? toTeamView.reasons.slice(0, 2) : []),
+      ...(Array.isArray(fromTeamView?.reasons) ? fromTeamView.reasons.slice(0, 2) : []),
+    ],
+  };
+
+  const executionValidation = validateTradeForExecution({
+    leagueData,
+    userTeam: fromTeam,
+    cpuTeam: toTeam,
+    userItems: fromItems,
+    cpuItems: toItems,
+    evaluation: combinedEvaluation,
+  });
+
+  if (!executionValidation.ok) {
+    return {
+      ...executionValidation,
+      staleCode: executionValidation.staleCode || "execution_legality_changed",
+      fromTeamView,
+      toTeamView,
+    };
+  }
+
+  return {
+    ok: true,
+    candidate: {
+      ...candidate,
+      fromTeamName,
+      toTeamName,
+      fromItems,
+      toItems,
+    },
+    fromTeam,
+    toTeam,
+    fromItems,
+    toItems,
+    fromTeamView,
+    toTeamView,
+    evaluation: combinedEvaluation,
+    executionValidation,
+  };
+}
+
+export function executeCpuTradeCandidateOnLeague({
+  leagueData,
+  candidate,
+  currentDate = "",
+  tradeDeadlineDate = "",
+  inOffseason = false,
+} = {}) {
+  const validation = validateCpuTradeCandidateOnLeague({
+    leagueData,
+    candidate,
+    currentDate,
+    tradeDeadlineDate,
+    inOffseason,
+  });
+
+  if (!validation.ok) return validation;
+
+  const hydratedCandidate = validation.candidate;
+  const fromTeamName = hydratedCandidate.fromTeamName;
+  const toTeamName = hydratedCandidate.toTeamName;
+  const fromItems = hydratedCandidate.fromItems;
+  const toItems = hydratedCandidate.toItems;
+  const fromTeamView = validation.fromTeamView;
+  const toTeamView = validation.toTeamView;
 
   const execution = executeAcceptedTradeOnLeague({
     leagueData,
@@ -2046,32 +2256,28 @@ export function executeCpuTradeCandidateOnLeague({ leagueData, candidate }) {
     cpuTeamName: toTeamName,
     userItems: fromItems,
     cpuItems: toItems,
-    evaluation: {
-      accepted: true,
-      decision: "accept",
-      score: Number(toTeamView?.score || 0) + Number(fromTeamView?.score || 0),
-      reasons: [
-        candidate?.motive || "CPU-to-CPU trade matched both teams' direction.",
-        ...(Array.isArray(toTeamView?.reasons) ? toTeamView.reasons.slice(0, 2) : []),
-        ...(Array.isArray(fromTeamView?.reasons) ? fromTeamView.reasons.slice(0, 2) : []),
-      ],
-    },
+    evaluation: validation.evaluation,
   });
 
   if (!execution.ok) {
-    return { ...execution, fromTeamView, toTeamView };
+    return {
+      ...execution,
+      staleCode: execution.staleCode || "execution_failed",
+      fromTeamView,
+      toTeamView,
+    };
   }
 
   const cpuTiming = getTradeTimingSnapshot(leagueData);
   const buyerReason = reasonFromTeamView(
     toTeamName,
     toTeamView,
-    candidate?.motive || `${toTeamName} wanted to add ${summarizeAssetsForReason(fromItems)}.`
+    hydratedCandidate?.motive || `${toTeamName} wanted to add ${summarizeAssetsForReason(fromItems)}.`
   );
   const sellerReason = reasonFromTeamView(
     fromTeamName,
     fromTeamView,
-    candidate?.motive || `${fromTeamName} wanted to add ${summarizeAssetsForReason(toItems)}.`
+    hydratedCandidate?.motive || `${fromTeamName} wanted to add ${summarizeAssetsForReason(toItems)}.`
   );
   const cpuReasoning = {
     ...((execution.tradeRecord || {}).reasoning || {}),
@@ -2085,11 +2291,13 @@ export function executeCpuTradeCandidateOnLeague({ leagueData, candidate }) {
     cpuCpuTrade: true,
     fromTeamName,
     toTeamName,
-    date: candidate?.currentDate || candidate?.date || (execution.tradeRecord || {}).date || cpuTiming.date,
-    currentDate: candidate?.currentDate || candidate?.date || (execution.tradeRecord || {}).currentDate || cpuTiming.currentDate,
-    day: candidate?.day || candidate?.currentDay || candidate?.dayIndex || (execution.tradeRecord || {}).day || cpuTiming.day,
-    dayIndex: candidate?.dayIndex || candidate?.day || candidate?.currentDay || (execution.tradeRecord || {}).dayIndex || cpuTiming.dayIndex,
-    motive: candidate?.motive || "",
+    date: hydratedCandidate?.currentDate || hydratedCandidate?.date || currentDate || (execution.tradeRecord || {}).date || cpuTiming.date,
+    currentDate: hydratedCandidate?.currentDate || hydratedCandidate?.date || currentDate || (execution.tradeRecord || {}).currentDate || cpuTiming.currentDate,
+    day: hydratedCandidate?.day ?? hydratedCandidate?.currentDay ?? hydratedCandidate?.dayIndex ?? (execution.tradeRecord || {}).day ?? cpuTiming.day,
+    dayIndex: hydratedCandidate?.dayIndex ?? hydratedCandidate?.day ?? hydratedCandidate?.currentDay ?? (execution.tradeRecord || {}).dayIndex ?? cpuTiming.dayIndex,
+    motive: hydratedCandidate?.motive || "",
+    bankId: hydratedCandidate?.bankId || hydratedCandidate?.id || null,
+    bankGeneratedDate: hydratedCandidate?.bankMeta?.generatedDate || hydratedCandidate?.generatedDate || null,
     reasoning: cpuReasoning,
     teamPackages: Array.isArray((execution.tradeRecord || {}).teamPackages)
       ? (execution.tradeRecord || {}).teamPackages.map((side) => ({

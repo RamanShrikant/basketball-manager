@@ -36,7 +36,7 @@ DEADLINE_WEEK_BASE_CHANCE = 0.950
 # Caps to keep it natural.
 MAX_CPU_TRADES_PER_DAY = 1
 MAX_CPU_TRADES_PER_TEAM_SEASON = 3
-MAX_CANDIDATES_PER_DAY = 8
+MAX_CANDIDATES_PER_DAY = 12
 
 # Team direction thresholds.
 BUYER_WIN_PCT = 0.535
@@ -56,6 +56,8 @@ MAX_TARGET_VET_OVR = 85
 MIN_TARGET_VET_AGE = 25
 MAX_UNTOUCHABLE_OVR = 86
 MAX_ASSETS_PER_SIDE = 3
+STANDARD_ROSTER_MIN = 14
+STANDARD_ROSTER_MAX = 16
 
 # CPU picks: simple only. Avoid swaps/protected split chaos in automated trades.
 ALLOW_CPU_FIRST_ROUND_PICKS = True
@@ -289,9 +291,44 @@ def _already_traded_count(league: Dict[str, Any], team_name: str) -> int:
     return count
 
 
+def _already_traded_pair(
+    league: Dict[str, Any],
+    team_a: str,
+    team_b: str,
+) -> bool:
+    wanted = {_norm(team_a), _norm(team_b)}
+    if len(wanted) != 2:
+        return False
+
+    for row in league.get("tradeHistory") or []:
+        if not isinstance(row, dict):
+            continue
+        if not (row.get("cpuCpuTrade") or row.get("source") == "cpu_cpu_trade"):
+            continue
+
+        names = {
+            _norm(row.get("fromTeamName")),
+            _norm(row.get("toTeamName")),
+        }
+        names.discard("")
+
+        if names == wanted:
+            return True
+
+    return False
+
+
 def _is_standard_player(player: Dict[str, Any]) -> bool:
     status = _str(player.get("rosterStatus") or player.get("contractType"), "").lower()
     return not (player.get("isTwoWay") or player.get("isStash") or "two" in status or "stash" in status)
+
+
+def _standard_roster_count(team: Dict[str, Any]) -> int:
+    return sum(
+        1
+        for player in _players(team)
+        if isinstance(player, dict) and _is_standard_player(player)
+    )
 
 
 def _is_core_player(team: Dict[str, Any], player: Dict[str, Any]) -> bool:
@@ -442,6 +479,11 @@ def _build_candidate(
     target_value = _rough_value_player(target, season_year)
 
     # Try 1-player or 2-player outgoing packages, then maybe add a pick.
+    # Filter roster-count legality here before expensive JavaScript evaluation.
+    # A 2-for-1 is only considered when both projected standard rosters remain
+    # inside the same 14-to-16 limits used by the shared trade machine.
+    seller_roster_count = _standard_roster_count(seller)
+    buyer_roster_count = _standard_roster_count(buyer)
     pool = buyer_pool[:]
     rng.shuffle(pool)
     combos: List[List[Dict[str, Any]]] = [[p] for p in pool]
@@ -449,8 +491,24 @@ def _build_candidate(
         for j in range(i + 1, min(len(pool), 8)):
             combos.append([pool[i], pool[j]])
 
-    best = None
+    viable = []
     for combo in combos:
+        seller_projected_count = seller_roster_count - 1 + len(combo)
+        buyer_projected_count = buyer_roster_count - len(combo) + 1
+
+        if not (
+            STANDARD_ROSTER_MIN
+            <= seller_projected_count
+            <= STANDARD_ROSTER_MAX
+        ):
+            continue
+        if not (
+            STANDARD_ROSTER_MIN
+            <= buyer_projected_count
+            <= STANDARD_ROSTER_MAX
+        ):
+            continue
+
         outgoing_salary = sum(_salary_for_year(p, season_year) for p in combo)
         if not _salary_matchish(target_salary, outgoing_salary):
             continue
@@ -462,9 +520,12 @@ def _build_candidate(
         need_pick = target_value > outgoing_value + 1.1 or seller_needs_pick
         pick = None
         if need_pick and picks:
-            # Prefer 2nds for small trades, firsts for bigger vet upgrades.
-            second = [p for p in picks if int(_num(p.get("round"), 1)) == 2]
-            first = [p for p in picks if int(_num(p.get("round"), 1)) == 1]
+            # Shuffle inside each framework so repeated background passes explore
+            # different legal picks instead of always attaching the same asset.
+            available_picks = picks[:]
+            rng.shuffle(available_picks)
+            second = [p for p in available_picks if int(_num(p.get("round"), 1)) == 2]
+            first = [p for p in available_picks if int(_num(p.get("round"), 1)) == 1]
             if PREFER_SECOND_ROUND_PICK_FOR_SMALL_TRADES and target_value - outgoing_value < 3.0 and second:
                 pick = second[0]
             elif first:
@@ -477,13 +538,17 @@ def _build_candidate(
         if balance < -3.25 or balance > 6.5:
             continue
         score = 10.0 - abs(balance) + buyer_ctx.get("buyerWeight", 0) + seller_ctx.get("sellerWeight", 0)
-        if best is None or score > best[0]:
-            best = (score, combo, pick, balance)
+        viable.append((score, combo, pick, balance))
 
-    if not best:
+    if not viable:
         return None
 
-    _, combo, pick, balance = best
+    # Keep quality high, but randomly choose among the strongest few frameworks.
+    # The exponent biases toward the best option without making every save identical.
+    viable.sort(key=lambda row: row[0], reverse=True)
+    shortlist = viable[: min(5, len(viable))]
+    choice_index = min(len(shortlist) - 1, int((rng.random() ** 1.8) * len(shortlist)))
+    _, combo, pick, balance = shortlist[choice_index]
     from_team = _team_name(seller)
     to_team = _team_name(buyer)
     from_items = [_player_item(target)]
@@ -518,6 +583,10 @@ def _build_candidate(
             "balance": round(balance, 3),
             "targetSalary": target_salary,
             "outgoingSalary": sum(_salary_for_year(p, season_year) for p in combo),
+            "sellerRosterBefore": seller_roster_count,
+            "buyerRosterBefore": buyer_roster_count,
+            "sellerRosterAfter": seller_roster_count - 1 + len(combo),
+            "buyerRosterAfter": buyer_roster_count - len(combo) + 1,
         },
     }
 
@@ -685,13 +754,23 @@ def find_cpu_cpu_trade_candidates(payload: Dict[str, Any]) -> Dict[str, Any]:
     if deadline_date and current_date and current_date >= deadline_date:
         return {"ok": True, "candidates": [], "skippedReason": "trade_deadline_locked"}
 
-    rng = _rng_for("cpu_cpu_trade", season_year, current_date, context.get("dayIndex"))
+    bank_seed = _str(context.get("bankSeed"), "")
+    generation_nonce = int(_num(context.get("generationNonce"), 0))
+    rng = _rng_for(
+        "cpu_cpu_trade",
+        season_year,
+        current_date,
+        context.get("dayIndex"),
+        bank_seed,
+        generation_nonce,
+    )
     teams = [t for t in _all_teams(league) if _team_name(t) and _norm(_team_name(t)) != _norm(user_team)]
     contexts = {_team_name(t): _phase_for(t, context) for t in teams}
     base_trade_desk_items = _build_trade_desk_signals(league, context, teams, contexts, season_year, current_date, rng)
 
-    chance = _activity_chance(context)
-    if rng.random() > chance:
+    bank_generation_mode = bool(context.get("bankGenerationMode"))
+    chance = 1.0 if bank_generation_mode else _activity_chance(context)
+    if not bank_generation_mode and rng.random() > chance:
         return {
             "ok": True,
             "candidates": [],
@@ -712,50 +791,77 @@ def find_cpu_cpu_trade_candidates(payload: Dict[str, Any]) -> Dict[str, Any]:
         if ctx.get("buyerWeight", 0) > 0.30:
             buyers.append(t)
 
-    rng.shuffle(sellers)
-    rng.shuffle(buyers)
-    sellers.sort(key=lambda t: contexts[_team_name(t)].get("sellerWeight", 0), reverse=True)
-    buyers.sort(key=lambda t: contexts[_team_name(t)].get("buyerWeight", 0), reverse=True)
-
-    candidates: List[Dict[str, Any]] = []
-    seen_pairs = set()
-
-    for seller in sellers[:10]:
+    # Build a randomized, weighted team-pair work queue. The previous nested-loop
+    # shape could fill an entire pass with one seller before another franchise was
+    # considered. This queue keeps strong buyer/seller direction relevant while
+    # ensuring each background pass explores several different matchups.
+    pair_queue = []
+    for seller in sellers:
         seller_name = _team_name(seller)
-        targets = _seller_trade_targets(seller, season_year)
-        if not targets:
-            continue
-        for buyer in buyers[:12]:
+        seller_weight = _num(contexts[seller_name].get("sellerWeight"), 0)
+        for buyer in buyers:
             buyer_name = _team_name(buyer)
             if _norm(buyer_name) == _norm(seller_name):
                 continue
-            pair_key = (_norm(seller_name), _norm(buyer_name))
-            if pair_key in seen_pairs:
+            if _already_traded_pair(league, seller_name, buyer_name):
                 continue
-            seen_pairs.add(pair_key)
-            buyer_pool = _buyer_outgoing_players(buyer, season_year)
-            if not buyer_pool:
-                continue
-            picks = _simple_pick_assets(league, buyer_name, season_year)
-            rng.shuffle(targets)
-            for target in targets[:4]:
-                candidate = _build_candidate(
-                    league,
-                    seller,
-                    buyer,
-                    target,
-                    buyer_pool,
-                    picks,
-                    contexts[seller_name],
-                    contexts[buyer_name],
-                    season_year,
-                    rng,
-                )
-                if candidate:
-                    candidates.append(candidate)
-                    break
-            if len(candidates) >= max_candidates:
+            buyer_weight = _num(contexts[buyer_name].get("buyerWeight"), 0)
+            randomized_priority = seller_weight + buyer_weight + rng.uniform(0.0, 1.15)
+            pair_queue.append((randomized_priority, seller, buyer))
+
+    rng.shuffle(pair_queue)
+    pair_queue.sort(key=lambda row: row[0], reverse=True)
+
+    candidates: List[Dict[str, Any]] = []
+    seller_candidate_counts: Dict[str, int] = {}
+    buyer_candidate_counts: Dict[str, int] = {}
+    pair_attempt_limit = min(len(pair_queue), max(40, max_candidates * 12))
+
+    for _, seller, buyer in pair_queue[:pair_attempt_limit]:
+        seller_name = _team_name(seller)
+        buyer_name = _team_name(buyer)
+        seller_key = _norm(seller_name)
+        buyer_key = _norm(buyer_name)
+
+        # Spread each pass across the league. Repeated passes can revisit a team,
+        # but no single pass should look like one franchise generated every deal.
+        if seller_candidate_counts.get(seller_key, 0) >= 2:
+            continue
+        if buyer_candidate_counts.get(buyer_key, 0) >= 3:
+            continue
+
+        targets = _seller_trade_targets(seller, season_year)
+        buyer_pool = _buyer_outgoing_players(buyer, season_year)
+        if not targets or not buyer_pool:
+            continue
+
+        picks = _simple_pick_assets(league, buyer_name, season_year)
+        randomized_targets = targets[:]
+        rng.shuffle(randomized_targets)
+
+        candidate = None
+        for target in randomized_targets[:4]:
+            candidate = _build_candidate(
+                league,
+                seller,
+                buyer,
+                target,
+                buyer_pool,
+                picks,
+                contexts[seller_name],
+                contexts[buyer_name],
+                season_year,
+                rng,
+            )
+            if candidate:
                 break
+
+        if not candidate:
+            continue
+
+        candidates.append(candidate)
+        seller_candidate_counts[seller_key] = seller_candidate_counts.get(seller_key, 0) + 1
+        buyer_candidate_counts[buyer_key] = buyer_candidate_counts.get(buyer_key, 0) + 1
         if len(candidates) >= max_candidates:
             break
 
@@ -775,6 +881,9 @@ def find_cpu_cpu_trade_candidates(payload: Dict[str, Any]) -> Dict[str, Any]:
             "buyerCount": len(buyers),
             "maxCandidates": max_candidates,
             "deadlineMode": _num(context.get("daysToDeadline"), 999) <= 7,
+            "bankGenerationMode": bank_generation_mode,
+            "generationNonce": generation_nonce,
+            "bankSeedPresent": bool(bank_seed),
         },
         "tradeDeskItems": (candidate_trade_desk_items + base_trade_desk_items)[:8],
     }
