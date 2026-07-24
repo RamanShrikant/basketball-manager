@@ -2,6 +2,10 @@ import { getLeagueFinancialRules } from "./leagueFinancials.js";
 import { evaluateTradeTeamImpact } from "./tradeTeamImpact.js";
 import { findIneligibleTradePlayer } from "./tradeRosterEligibility.js";
 import {
+  evaluateTradeRosterProjection,
+  projectStandardRosterCount,
+} from "./rosterRules.js";
+import {
   buildTradeMachineSwapAssets,
   getTradeablePickOwnedRange,
   makeTradeGeneratedDraftPickId,
@@ -21,7 +25,6 @@ const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
 const MAX_SIDE_ITEMS = 8;
-const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 16;
 const TRADE_MATCHING_SMALL_OUTGOING = 7_500_000;
 const TRADE_MATCHING_MID_OUTGOING = 29_000_000;
 const TRADE_MATCHING_BUFFER = 250_000;
@@ -1567,42 +1570,33 @@ function getUnsupportedRosterTradePlayer(items = []) {
 }
 
 
-function countTradePlayers(items = []) {
-  return (items || []).filter((item) => item?.type === "player" && item.player).length;
-}
-
-function getStandardRosterCount(team) {
-  return Array.isArray(team?.players) ? team.players.length : 0;
-}
-
 function getProjectedStandardRosterCount(team, outgoingItems = [], incomingItems = []) {
-  const current = getStandardRosterCount(team);
-  const outgoingPlayers = countTradePlayers(outgoingItems);
-  const incomingPlayers = countTradePlayers(incomingItems);
-  const projected = current - outgoingPlayers + incomingPlayers;
-
-  return {
-    current,
-    outgoingPlayers,
-    incomingPlayers,
-    projected,
-  };
+  return projectStandardRosterCount(team, outgoingItems, incomingItems);
 }
 
 function validateProjectedStandardRosterCount(team, outgoingItems = [], incomingItems = []) {
-  const teamName = team?.name || team?.teamName || "This team";
-  const counts = getProjectedStandardRosterCount(team, outgoingItems, incomingItems);
+  const projection = evaluateTradeRosterProjection({
+    team,
+    outgoingItems,
+    incomingItems,
+    inOffseason: false,
+  });
 
-  const allowedMax = Math.max(REGULAR_SEASON_MAX_STANDARD_PLAYERS, counts.current);
-  if (counts.projected > allowedMax) {
+  if (!projection.ok) {
     return {
       ok: false,
-      reason: `Trade blocked: ${teamName} would have ${counts.projected} standard players after this trade. A team can temporarily reach ${REGULAR_SEASON_MAX_STANDARD_PLAYERS}, and teams already above that number cannot add more players.`,
-      counts: { ...counts, allowedMax },
+      reason: `${projection.reason} Unequal player counts are allowed, but a trade cannot create more than ${projection.allowedMax} standard contracts.`,
+      counts: { ...projection.counts, allowedMax: projection.allowedMax },
+      projection,
     };
   }
 
-  return { ok: true, counts };
+  return {
+    ok: true,
+    counts: { ...projection.counts, allowedMax: projection.allowedMax },
+    projection,
+    requiresRepairBeforeSimulation: projection.requiresRepairBeforeSimulation,
+  };
 }
 
 function validateRosterLimitsForTrade({ leagueData, userTeam, cpuTeam, userItems, cpuItems }) {
@@ -2113,13 +2107,29 @@ export function validateCpuTradeCandidateOnLeague({
 
   const fromItems = resolvedFrom.items;
   const toItems = resolvedTo.items;
-  const fromRosterProjection = getProjectedStandardRosterCount(fromTeam, fromItems, toItems);
-  const toRosterProjection = getProjectedStandardRosterCount(toTeam, toItems, fromItems);
-  if (fromRosterProjection.projected < 14 || toRosterProjection.projected < 14) {
+  const fromRosterProjection = evaluateTradeRosterProjection({
+    team: fromTeam,
+    outgoingItems: fromItems,
+    incomingItems: toItems,
+    inOffseason: false,
+  });
+  const toRosterProjection = evaluateTradeRosterProjection({
+    team: toTeam,
+    outgoingItems: toItems,
+    incomingItems: fromItems,
+    inOffseason: false,
+  });
+
+  // CPU teams may complete unequal-player trades that temporarily leave one side
+  // below the game-ready minimum. Calendar repairs CPU rosters immediately after
+  // execution and before the next game. The hard trade blocker is only the
+  // temporary transaction ceiling: 16, or one more than the team already has.
+  if (!fromRosterProjection.ok || !toRosterProjection.ok) {
+    const blocked = !fromRosterProjection.ok ? fromRosterProjection : toRosterProjection;
     return {
       ok: false,
-      reason: "CPU trade rejected because it would leave a team below the 14-player regular-season minimum.",
-      staleCode: "roster_minimum",
+      reason: blocked.reason,
+      staleCode: "roster_maximum",
       fromRosterProjection,
       toRosterProjection,
     };
@@ -2222,6 +2232,12 @@ export function validateCpuTradeCandidateOnLeague({
     toTeamView,
     evaluation: combinedEvaluation,
     executionValidation,
+    fromRosterProjection,
+    toRosterProjection,
+    requiresRosterRepairBeforeSimulation: Boolean(
+      fromRosterProjection.requiresRepairBeforeSimulation ||
+        toRosterProjection.requiresRepairBeforeSimulation
+    ),
   };
 }
 

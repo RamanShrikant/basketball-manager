@@ -23,13 +23,13 @@ import {
   sideSalary,
   validateTradeForExecution,
 } from "./tradeExecution.js";
+import { evaluateTradeRosterProjection } from "./rosterRules.js";
 
 const REVERSE_MAX_CANDIDATES = 150;
 const REVERSE_MAX_EXACT_EVALS = 42;
 const REVERSE_MAX_RESULTS = 5;
 const REVERSE_MAX_COMFORT_MARGIN = 8;
 const SEARCH_YIELD_EVERY = 5;
-const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 16;
 
 function nowMs() {
   try {
@@ -66,24 +66,20 @@ function comfortMarginOf(evaluation = {}) {
   return Number(evaluation?.score || 0) - Number(evaluation?.teamImpact?.threshold || 0);
 }
 
-function playerCount(items = []) {
-  return (items || []).filter((item) => item?.type === "player").length;
-}
-
-function rosterCount(team = {}) {
-  return Array.isArray(team?.players) ? team.players.length : 0;
-}
-
 function rosterCountsOk({ controlledTeam, targetTeam, userItems, targetItems, inOffseason }) {
-  if (inOffseason) return true;
-  const userAfter = rosterCount(controlledTeam) - playerCount(userItems) + playerCount(targetItems);
-  const targetAfter = rosterCount(targetTeam) - playerCount(targetItems) + playerCount(userItems);
-  return (
-    userAfter >= 1 &&
-    targetAfter >= 1 &&
-    userAfter <= REGULAR_SEASON_MAX_STANDARD_PLAYERS &&
-    targetAfter <= REGULAR_SEASON_MAX_STANDARD_PLAYERS
-  );
+  const controlledProjection = evaluateTradeRosterProjection({
+    team: controlledTeam,
+    outgoingItems: userItems,
+    incomingItems: targetItems,
+    inOffseason: Boolean(inOffseason),
+  });
+  const targetProjection = evaluateTradeRosterProjection({
+    team: targetTeam,
+    outgoingItems: targetItems,
+    incomingItems: userItems,
+    inOffseason: Boolean(inOffseason),
+  });
+  return controlledProjection.ok && targetProjection.ok;
 }
 
 function financialsOk({ leagueData, controlledTeam, targetTeam, userItems, targetItems }) {

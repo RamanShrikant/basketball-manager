@@ -1,12 +1,16 @@
-import React from "react";
+import React, { useEffect } from "react";
 import "@/api/simEnginePy.js";
 
 import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
 import "./index.css";
 import "./styles/BMResponsiveDensity.css";
-import { GameProvider } from "./context/GameContext.jsx"; // ✅ import provider
+import { GameProvider, useGame } from "./context/GameContext.jsx"; // ✅ import provider
 import { simulateOneGame as pySimOneGame } from "./api/simEnginePy";
+import {
+  installBasketballManagerDiagnostics,
+  updateBasketballManagerDiagnosticsContext,
+} from "./utils/bmDiagnostics.js";
 
 // ------------------------------
 // DEV BOOT RESET (npm run dev)
@@ -63,6 +67,18 @@ function devBootResetIfNeeded() {
 
 devBootResetIfNeeded();
 
+installBasketballManagerDiagnostics();
+
+function DiagnosticsBridge() {
+  const { leagueData, selectedTeam } = useGame();
+
+  useEffect(() => {
+    updateBasketballManagerDiagnosticsContext({ leagueData, selectedTeam });
+  }, [leagueData, selectedTeam]);
+
+  return null;
+}
+
 window.simulateOneGame = pySimOneGame;
 console.log("✓ simulateOneGame exposed globally");
 
@@ -70,6 +86,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     {/* ✅ Wrap your app with GameProvider */}
     <GameProvider>
+      <DiagnosticsBridge />
       <App />
     </GameProvider>
   </React.StrictMode>

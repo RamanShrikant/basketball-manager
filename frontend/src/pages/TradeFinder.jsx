@@ -13,6 +13,13 @@ import {
   filterTradeEligiblePlayers,
   findIneligibleTradePlayer,
 } from "../utils/tradeRosterEligibility.js";
+import {
+  evaluateTradeRosterProjection,
+} from "../utils/rosterRules.js";
+import {
+  recordTradeFinderLoadAttempt,
+  recordTradeFinderSearchSnapshot,
+} from "../utils/bmDiagnostics.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import PageFade from "../components/PageFade";
 import {
@@ -39,8 +46,6 @@ const TRADE_BUILDER_KEY = "bm_trade_builder_v1";
 const TRADE_FINDER_STATE_KEY = "bm_trade_finder_state_v1";
 const TRADE_DEBUG_KEY = "bm_trade_debug_v1";
 const DEFAULT_PICK_PROTECTION = "Unprotected";
-const REGULAR_SEASON_MIN_STANDARD_PLAYERS = 14;
-const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 16;
 const TRADE_MATCHING_SMALL_OUTGOING = 7_500_000;
 const TRADE_MATCHING_MID_OUTGOING = 29_000_000;
 const TRADE_MATCHING_BUFFER = 250_000;
@@ -1158,10 +1163,6 @@ function isTradeFinanciallyLegal({ team, leagueData, outgoingSalary = 0, incomin
   return withinMatching && !projectedAtOrAboveFirstApron;
 }
 
-function getAllowedProjectedStandardRosterMax(team) {
-  return Math.max(REGULAR_SEASON_MAX_STANDARD_PLAYERS, getStandardRosterCount(team));
-}
-
 function sideSalary(items = [], leagueData) {
   return (items || []).reduce((sum, item) => {
     if (item?.type !== "player") return sum;
@@ -1171,14 +1172,6 @@ function sideSalary(items = [], leagueData) {
 
 function countTradePlayers(items = []) {
   return (items || []).filter((item) => item?.type === "player" && item.player).length;
-}
-
-function getStandardRosterCount(team) {
-  return Array.isArray(team?.players) ? team.players.length : 0;
-}
-
-function getProjectedStandardRosterCount(team, outgoingItems = [], incomingItems = []) {
-  return getStandardRosterCount(team) - countTradePlayers(outgoingItems) + countTradePlayers(incomingItems);
 }
 
 function getUnsupportedRosterTradePlayer(items = []) {
@@ -1228,14 +1221,37 @@ function isResolvedPickOwnedByTeam(leagueData, pick = {}, teamName = "") {
   });
 }
 
-function areTradeItemsStillOwned(leagueData, team, items = []) {
+function tradeFinderItemKey(item = {}) {
+  if (item?.type === "player") return `player:${playerKey(item.player)}`;
+  if (item?.type === "pick") return `pick:${pickKey(item.pick)}`;
+  return `${item?.type || "unknown"}:${tradeDebugItemLabel(item)}`;
+}
+
+function getDuplicateTradeFinderAssetKeys(...packages) {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const item of packages.flatMap((rows) => (Array.isArray(rows) ? rows : []))) {
+    const key = tradeFinderItemKey(item);
+    if (seen.has(key)) duplicates.add(key);
+    seen.add(key);
+  }
+  return Array.from(duplicates);
+}
+
+function findUnownedTradeItem(leagueData, team, items = []) {
   const teamName = team?.name || team?.teamName || "";
   const teamPlayers = getTeamPlayers(team);
   const playerIds = new Set(teamPlayers.map((player) => playerKey(player)));
 
   for (const item of items || []) {
     if (item?.type === "player") {
-      if (!playerIds.has(playerKey(item.player))) return false;
+      if (!playerIds.has(playerKey(item.player))) {
+        return {
+          item,
+          code: "player_not_owned",
+          reason: `${playerNameOf(item.player)} is no longer on ${teamName}'s standard roster.`,
+        };
+      }
       continue;
     }
 
@@ -1243,32 +1259,96 @@ function areTradeItemsStillOwned(leagueData, team, items = []) {
       const pick = item.pick || {};
       const type = String(pick.assetType || pick.type || "pick").toLowerCase();
       if (type === "resolved") {
-        if (isResolvedPickConsumed(pick, leagueData)) return false;
-        if (!isResolvedPickOwnedByTeam(leagueData, pick, teamName)) return false;
+        if (isResolvedPickConsumed(pick, leagueData)) {
+          return {
+            item,
+            code: "resolved_pick_consumed",
+            reason: `${formatPick(pick)} was already used in the live draft.`,
+          };
+        }
+        if (!isResolvedPickOwnedByTeam(leagueData, pick, teamName)) {
+          return {
+            item,
+            code: "resolved_pick_not_owned",
+            reason: `${teamName} no longer owns ${formatPick(pick)}.`,
+          };
+        }
       } else if (!isNormalPickOwnedByTeam(leagueData, pick, teamName)) {
-        return false;
+        return {
+          item,
+          code: "pick_not_owned",
+          reason: `${teamName} no longer owns ${formatPick(pick)}.`,
+        };
       }
     }
   }
 
-  return true;
+  return null;
 }
 
-function validateTradeFinderOffer({ leagueData, selectedTeam, offer }) {
-  if (!leagueData || !selectedTeam || !offer?.team || !Array.isArray(offer.offer)) return false;
-  if (!isTradeFinderOfferAccepted(offer)) return false;
+function validateTradeFinderOfferDetailed({ leagueData, selectedTeam, offer }) {
+  const fail = (code, reason, details = null) => ({ ok: false, code, reason, details });
+
+  if (!leagueData || !selectedTeam || !offer?.team || !Array.isArray(offer.offer)) {
+    return fail("invalid_offer_shape", "The Trade Finder offer is missing league, team, or package data.");
+  }
+  if (!isTradeFinderOfferAccepted(offer)) {
+    return fail("offer_not_accepted", "The CPU acceptance attached to this Trade Finder offer is no longer valid.");
+  }
 
   const offerTeamName = offer.team?.name || offer.team?.teamName || offer.teamName;
   const offerTeam = findTeamInLeague(leagueData, offerTeamName) || offer.team;
   const selectedItems = Array.isArray(offer.selectedItems) ? offer.selectedItems : [];
   const offerItems = offer.offer;
 
-  if (!selectedItems.length || !offerItems.length) return false;
-  if (findIneligibleTradePlayer(selectedItems, { leagueData })) return false;
-  if (findIneligibleTradePlayer(offerItems, { leagueData })) return false;
-  if (getUnsupportedRosterTradePlayer(selectedItems) || getUnsupportedRosterTradePlayer(offerItems)) return false;
-  if (!areTradeItemsStillOwned(leagueData, selectedTeam, selectedItems)) return false;
-  if (!areTradeItemsStillOwned(leagueData, offerTeam, offerItems)) return false;
+  if (!selectedItems.length || !offerItems.length) {
+    return fail("empty_package", "Both teams must have at least one asset in the trade.");
+  }
+
+  const duplicateAssetKeys = getDuplicateTradeFinderAssetKeys(selectedItems, offerItems);
+  if (duplicateAssetKeys.length) {
+    return fail("duplicate_assets", "The Trade Finder result contains a duplicated asset.", { duplicateAssetKeys });
+  }
+
+  const selectedIneligible = findIneligibleTradePlayer(selectedItems, { leagueData });
+  if (selectedIneligible) {
+    return fail(
+      "selected_player_ineligible",
+      `${playerNameOf(selectedIneligible.item?.player)} cannot be traded: ${selectedIneligible.eligibility?.reason || "the player is not trade eligible."}`,
+      selectedIneligible
+    );
+  }
+
+  const offerIneligible = findIneligibleTradePlayer(offerItems, { leagueData });
+  if (offerIneligible) {
+    return fail(
+      "offer_player_ineligible",
+      `${playerNameOf(offerIneligible.item?.player)} cannot be traded: ${offerIneligible.eligibility?.reason || "the player is not trade eligible."}`,
+      offerIneligible
+    );
+  }
+
+  const unsupportedSelected = getUnsupportedRosterTradePlayer(selectedItems);
+  if (unsupportedSelected) {
+    return fail(
+      "selected_non_standard_player",
+      `${playerNameOf(unsupportedSelected.player)} is not on the standard roster and cannot be loaded into this trade.`
+    );
+  }
+
+  const unsupportedOffer = getUnsupportedRosterTradePlayer(offerItems);
+  if (unsupportedOffer) {
+    return fail(
+      "offer_non_standard_player",
+      `${playerNameOf(unsupportedOffer.player)} is not on the standard roster and cannot be loaded into this trade.`
+    );
+  }
+
+  const selectedOwnershipIssue = findUnownedTradeItem(leagueData, selectedTeam, selectedItems);
+  if (selectedOwnershipIssue) return fail(selectedOwnershipIssue.code, selectedOwnershipIssue.reason, selectedOwnershipIssue);
+
+  const offerOwnershipIssue = findUnownedTradeItem(leagueData, offerTeam, offerItems);
+  if (offerOwnershipIssue) return fail(offerOwnershipIssue.code, offerOwnershipIssue.reason, offerOwnershipIssue);
 
   const selectedOutgoingSalary = sideSalary(selectedItems, leagueData);
   const selectedIncomingSalary = sideSalary(offerItems, leagueData);
@@ -1288,16 +1368,61 @@ function validateTradeFinderOffer({ leagueData, selectedTeam, offer }) {
     incomingSalary: offerIncomingSalary,
   });
 
-  if (!selectedFinancialOk || !offerFinancialOk) return false;
-
-  if (!isOffseasonTradeWindow(leagueData)) {
-    const selectedProjected = getProjectedStandardRosterCount(selectedTeam, selectedItems, offerItems);
-    const offerProjected = getProjectedStandardRosterCount(offerTeam, offerItems, selectedItems);
-    if (selectedProjected < REGULAR_SEASON_MIN_STANDARD_PLAYERS || selectedProjected > getAllowedProjectedStandardRosterMax(selectedTeam)) return false;
-    if (offerProjected < REGULAR_SEASON_MIN_STANDARD_PLAYERS || offerProjected > getAllowedProjectedStandardRosterMax(offerTeam)) return false;
+  if (!selectedFinancialOk) {
+    return fail("selected_salary_illegal", `${selectedTeam?.name || "Your team"} no longer passes salary matching for this offer.`);
+  }
+  if (!offerFinancialOk) {
+    return fail("offer_salary_illegal", `${offerTeam?.name || "The CPU team"} no longer passes salary matching for this offer.`);
   }
 
-  return true;
+  const inOffseason = isOffseasonTradeWindow(leagueData);
+  const selectedRosterProjection = evaluateTradeRosterProjection({
+    team: selectedTeam,
+    outgoingItems: selectedItems,
+    incomingItems: offerItems,
+    inOffseason,
+  });
+  const offerRosterProjection = evaluateTradeRosterProjection({
+    team: offerTeam,
+    outgoingItems: offerItems,
+    incomingItems: selectedItems,
+    inOffseason,
+  });
+
+  if (!selectedRosterProjection.ok) {
+    return fail("selected_roster_maximum", selectedRosterProjection.reason, {
+      selectedRosterProjection,
+      offerRosterProjection,
+    });
+  }
+  if (!offerRosterProjection.ok) {
+    return fail("offer_roster_maximum", offerRosterProjection.reason, {
+      selectedRosterProjection,
+      offerRosterProjection,
+    });
+  }
+
+  return {
+    ok: true,
+    code: "ok",
+    reason: "",
+    details: {
+      offerTeamName,
+      duplicateAssetKeys,
+      selectedRosterProjection,
+      offerRosterProjection,
+      asymmetricPlayerCounts:
+        countTradePlayers(selectedItems) !== countTradePlayers(offerItems),
+      repairBeforeSimulation: {
+        selectedTeam: selectedRosterProjection.requiresRepairBeforeSimulation,
+        offerTeam: offerRosterProjection.requiresRepairBeforeSimulation,
+      },
+    },
+  };
+}
+
+function validateTradeFinderOffer({ leagueData, selectedTeam, offer }) {
+  return validateTradeFinderOfferDetailed({ leagueData, selectedTeam, offer }).ok;
 }
 
 function attachSelectedItemsToOffers(offers = [], selectedItems = []) {
@@ -2212,6 +2337,74 @@ export default function TradeFinder() {
           }))
         : [];
 
+      const diagnosticsOffers = nextOffers.map((offer) => {
+        const userItems = isReverseFinder
+          ? sortTradeFinderOfferItems(offer?.offer || [], leagueData)
+          : selectedItems;
+        const cpuItems = isReverseFinder
+          ? selectedItems
+          : sortTradeFinderOfferItems(offer?.offer || [], leagueData);
+        const offerTeam = isReverseFinder ? packageTeam : offer.team;
+        const preparedOffer = {
+          ...offer,
+          team: offerTeam,
+          selectedItems: userItems,
+          offer: cpuItems,
+        };
+        const loadValidation = validateTradeFinderOfferDetailed({
+          leagueData,
+          selectedTeam,
+          offer: preparedOffer,
+        });
+        const duplicateAssetKeys = getDuplicateTradeFinderAssetKeys(userItems, cpuItems);
+
+        return {
+          team: offerTeam?.name || offerTeam?.teamName || offer?.teamName || "",
+          userPlayerCount: countTradePlayers(userItems),
+          cpuPlayerCount: countTradePlayers(cpuItems),
+          userAssetCount: userItems.length,
+          cpuAssetCount: cpuItems.length,
+          asymmetricAllowed: true,
+          duplicateAssetKeys,
+          loadValidation,
+          userRosterProjection: loadValidation?.details?.selectedRosterProjection || null,
+          cpuRosterProjection: loadValidation?.details?.offerRosterProjection || null,
+          userItems: tradeDebugItems(userItems, leagueData),
+          cpuItems: tradeDebugItems(cpuItems, leagueData),
+        };
+      });
+
+      const loadableOffers = nextOffers.filter(
+        (_offer, index) => diagnosticsOffers[index]?.loadValidation?.ok === true
+      );
+      const displayedOfferDiagnostics = diagnosticsOffers.filter(
+        (offerDiagnostics) => offerDiagnostics?.loadValidation?.ok === true
+      );
+      const rejectedGeneratedOffers = diagnosticsOffers.filter(
+        (offerDiagnostics) => offerDiagnostics?.loadValidation?.ok !== true
+      );
+
+      recordTradeFinderSearchSnapshot({
+        searchCompleted: !result?.stopped,
+        stopped: Boolean(result?.stopped),
+        reverseFinder: isReverseFinder,
+        selectedTeam: selectedTeam?.name || selectedTeam?.teamName || "",
+        packageTeam: packageTeam?.name || packageTeam?.teamName || "",
+        selectedItems: tradeDebugItems(selectedItems, leagueData),
+        resultMessage: result?.message || "",
+        generatedOfferCount: nextOffers.length,
+        displayedOfferCount: loadableOffers.length,
+        offers: displayedOfferDiagnostics,
+        rejectedGeneratedOffers,
+      });
+
+      if (rejectedGeneratedOffers.length) {
+        console.error(
+          `[BM DIAGNOSTICS][TRADE FINDER PRE-DISPLAY FILTER] Removed ${rejectedGeneratedOffers.length} generated offer${rejectedGeneratedOffers.length === 1 ? "" : "s"} that failed the exact Load Offer validation.`,
+          rejectedGeneratedOffers
+        );
+      }
+
       if (isTradeDebugEnabled()) {
         console.log("[TRADE DEBUG][FINDER RESULTS] Search finished", {
           selectedTeam: selectedTeam?.name || selectedTeam?.teamName || "",
@@ -2238,16 +2431,18 @@ export default function TradeFinder() {
         });
       }
 
-      setPythonOffers(nextOffers);
+      setPythonOffers(loadableOffers);
 
       if (result?.stopped) {
         setOfferSearchStopped(true);
         setOfferSearchError(result?.message || "Search stopped. Showing partial offers found so far.");
       }
 
-      if (!nextOffers.length && !result?.stopped) {
+      if (!loadableOffers.length && !result?.stopped) {
         setOfferSearchError(
-          result?.message || "No CPU team found a Propose Trade-legal package it would comfortably accept."
+          rejectedGeneratedOffers.length
+            ? "Trade Finder generated offers, but all were filtered before display because they failed exact ownership, salary, or temporary-roster validation. Run bmDiag.tradeFinder() in the console for the precise reasons."
+            : result?.message || "No CPU team found a Propose Trade-legal package it would comfortably accept."
         );
       }
     } catch (error) {
@@ -2273,9 +2468,27 @@ export default function TradeFinder() {
     const cpuItems = isReverseFinder ? selectedItems : sortTradeFinderOfferItems(offer?.offer || [], leagueData);
     const offerTeam = isReverseFinder ? packageTeam : offer.team;
     const preparedOffer = { ...offer, team: offerTeam, selectedItems: userItems, offer: cpuItems };
-    if (!validateTradeFinderOffer({ leagueData, selectedTeam, offer: preparedOffer })) {
+    const validation = validateTradeFinderOfferDetailed({
+      leagueData,
+      selectedTeam,
+      offer: preparedOffer,
+    });
+
+    recordTradeFinderLoadAttempt({
+      selectedTeam: selectedTeam?.name || selectedTeam?.teamName || "",
+      offerTeam: offerTeam?.name || offerTeam?.teamName || offer?.teamName || "",
+      reverseFinder: isReverseFinder,
+      userItems: tradeDebugItems(userItems, leagueData),
+      cpuItems: tradeDebugItems(cpuItems, leagueData),
+      validation,
+    });
+
+    if (!validation.ok) {
       setPythonOffers((prev) => (prev || []).filter((row) => row !== offer));
-      setOfferSearchError("That offer is no longer available because a player or draft pick changed ownership or was already used.");
+      setOfferSearchError(
+        validation.reason ||
+          "That offer is no longer available because its ownership, salary, or roster legality changed."
+      );
       return;
     }
 

@@ -54,6 +54,13 @@ import {
   saveClutchStats,
   CLUTCH_STATS_KEY,
 } from "../utils/clutchAwards.js";
+import {
+  evaluateTeamSimulationRoster,
+} from "../utils/rosterRules.js";
+import {
+  recordCpuTradeRepairDiagnostics,
+  recordPreSimulationDiagnostics,
+} from "../utils/bmDiagnostics.js";
 
 window.LZString = LZString;
 
@@ -234,64 +241,15 @@ function yieldToBrowser() {
   });
 }
 
-const REGULAR_SEASON_MIN_STANDARD_PLAYERS = 14;
-const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 15;
-const REGULAR_SEASON_MAX_TWO_WAY_PLAYERS = 3;
-
 function getTeamPlayerCount(team) {
   return Array.isArray(team?.players)
     ? team.players.filter((p) => p && (p.name || p.player)).length
     : 0;
 }
 
-function getTeamTwoWayCount(team) {
-  return Array.isArray(team?.twoWayPlayers)
-    ? team.twoWayPlayers.filter((p) => p && (p.name || p.player)).length
-    : 0;
-}
-
-function getTeamPendingRookieCount(team) {
-  return Array.isArray(team?.pendingRookieSignings)
-    ? team.pendingRookieSignings.filter((p) => p && (p.name || p.player)).length
-    : 0;
-}
-
 function getUserRosterSimBlockMessage(team) {
   if (!team) return "";
-
-  const teamName = team.name || team.teamName || "This team";
-  const count = getTeamPlayerCount(team);
-  const twoWayCount = getTeamTwoWayCount(team);
-  const pendingRookieCount = getTeamPendingRookieCount(team);
-  const issues = [];
-
-  if (pendingRookieCount > 0) {
-    issues.push(
-      `Pending rookie signings: ${pendingRookieCount} unresolved — resolve rookie signings first.`
-    );
-  }
-
-  if (count < REGULAR_SEASON_MIN_STANDARD_PLAYERS) {
-    issues.push(
-      `Standard roster: ${count} / ${REGULAR_SEASON_MIN_STANDARD_PLAYERS} minimum — sign ${REGULAR_SEASON_MIN_STANDARD_PLAYERS - count} standard player${REGULAR_SEASON_MIN_STANDARD_PLAYERS - count === 1 ? "" : "s"}.`
-    );
-  }
-
-  if (count > REGULAR_SEASON_MAX_STANDARD_PLAYERS) {
-    issues.push(
-      `Standard roster: ${count} / ${REGULAR_SEASON_MAX_STANDARD_PLAYERS} maximum — remove ${count - REGULAR_SEASON_MAX_STANDARD_PLAYERS} standard player${count - REGULAR_SEASON_MAX_STANDARD_PLAYERS === 1 ? "" : "s"}.`
-    );
-  }
-
-  if (twoWayCount > REGULAR_SEASON_MAX_TWO_WAY_PLAYERS) {
-    issues.push(
-      `Two-way roster: ${twoWayCount} / ${REGULAR_SEASON_MAX_TWO_WAY_PLAYERS} maximum — remove ${twoWayCount - REGULAR_SEASON_MAX_TWO_WAY_PLAYERS} two-way player${twoWayCount - REGULAR_SEASON_MAX_TWO_WAY_PLAYERS === 1 ? "" : "s"}.`
-    );
-  }
-
-  if (!issues.length) return "";
-
-  return `${teamName} must trim the roster before simulating games. ${issues.join(" ")}`;
+  return evaluateTeamSimulationRoster(team).message;
 }
 
 function getSimulationBlockMessageForGame(game, teams) {
@@ -3714,19 +3672,41 @@ async function repairCpuRostersBeforeSimulation({
     14,
     0
   );
-
-  console.log("[CPU Repair] raw result =", repairRes);
-  console.log("[CPU Repair] signings =", repairRes?.signings || []);
-  console.log("[CPU Repair] droppedPlayers =", repairRes?.droppedPlayers || []);
-  console.log("[CPU Repair] twoWayAssignments =", repairRes?.twoWayAssignments || []);
-  console.log("[CPU Repair] failedTeams =", repairRes?.failedTeams || []);
-  console.log("[CPU Repair] overMaxTeams =", repairRes?.overMaxTeams || []);
-
   const repairedLeagueData = repairRes?.leagueData || leagueData;
   const repairedTeams = buildTeamsFromLeagueForSim(repairedLeagueData);
 
-  const magic = repairedTeams.find((t) => t.name === "Orlando Magic");
-  console.log("[CPU Repair] Orlando count after repair =", getTeamPlayerCount(magic));
+  recordPreSimulationDiagnostics({
+    leagueData: repairedLeagueData,
+    selectedTeam,
+    repairResult: repairRes,
+    mode: "calendar_pre_simulation",
+  });
+
+  if (repairRes?.ok !== true) {
+    const failures = [
+      ...(repairRes?.failedTeams || []).map((row) => `${row.teamName} below minimum`),
+      ...(repairRes?.overMaxTeams || []).map((row) => `${row.teamName} above maximum`),
+      ...(repairRes?.overTwoWayTeams || []).map((row) => `${row.teamName} above two-way maximum`),
+    ];
+    throw new Error(
+      `CPU roster repair failed before simulation: ${failures.join(", ") || "repair worker returned no successful result"}`
+    );
+  }
+
+  const rosterMoves = [
+    ...(repairRes?.signings || []),
+    ...(repairRes?.droppedPlayers || []),
+    ...(repairRes?.twoWayAssignments || []),
+  ];
+
+  console.log("[CPU Repair] pre-simulation roster audit passed", {
+    signings: repairRes?.signings || [],
+    droppedPlayers: repairRes?.droppedPlayers || [],
+    twoWayAssignments: repairRes?.twoWayAssignments || [],
+    minPlayers: repairRes?.minPlayers,
+    maxPlayers: repairRes?.maxPlayers,
+    twoWayMax: repairRes?.twoWayMax,
+  });
 
   if (repairRes?.leagueData && typeof setLeagueData === "function") {
     setLeagueData(repairedLeagueData);
@@ -3735,30 +3715,20 @@ async function repairCpuRostersBeforeSimulation({
   saveLeagueData(repairedLeagueData).catch((err) => {
     console.warn("[Calendar] Failed to save repaired leagueData to IndexedDB.", err);
   });
-  const rosterMoves = [
-    ...(repairRes?.signings || []),
-    ...(repairRes?.droppedPlayers || []),
-    ...(repairRes?.twoWayAssignments || []),
-  ];
 
   if (rosterMoves.length) {
-  const touchedTeams = Array.from(
-    new Set(
-      rosterMoves
-        .map((s) => s.teamName || s.team)
-        .filter(Boolean)
-    )
-  );
+    const touchedTeams = Array.from(
+      new Set(rosterMoves.map((row) => row?.teamName || row?.team).filter(Boolean))
+    );
 
-  for (const teamName of touchedTeams) {
-    try {
-      localStorage.removeItem(`gameplan_${teamName}`);
-    } catch {}
+    for (const teamName of touchedTeams) {
+      try {
+        localStorage.removeItem(`gameplan_${teamName}`);
+      } catch {}
+    }
   }
 
   ensureGameplansForLeague(repairedLeagueData);
-}
-
 
   return {
     repairRes,
@@ -4084,6 +4054,55 @@ async function runCpuCpuTradePassForDate({
     }
 
     if (execution?.executed && execution?.tradeRecord) {
+      // A legal asymmetric trade may leave a CPU roster below the simulation
+      // minimum. Repair it before announcing or persisting the completed trade,
+      // so a failed repair cleanly rolls the whole pass back with no ghost feed.
+      const postTradeRepair = await repairCpuTeamsToMinRoster(
+        nextLeagueData,
+        baseContext.userTeamName || null,
+        14,
+        Number(dayIndex || 0)
+      );
+      if (postTradeRepair?.leagueData) {
+        nextLeagueData = postTradeRepair.leagueData;
+      }
+
+      recordCpuTradeRepairDiagnostics({
+        currentDate,
+        tradeRecord: execution.tradeRecord,
+        repairResult: postTradeRepair,
+      });
+
+      if (postTradeRepair?.ok !== true) {
+        throw new Error(
+          `CPU roster repair failed after the trade: ${[
+            ...(postTradeRepair?.failedTeams || []).map((row) => `${row.teamName} below minimum`),
+            ...(postTradeRepair?.overMaxTeams || []).map((row) => `${row.teamName} above maximum`),
+            ...(postTradeRepair?.overTwoWayTeams || []).map((row) => `${row.teamName} above two-way maximum`),
+          ].join(", ") || "repair worker returned no successful result"}`
+        );
+      }
+
+      const repairMoves = [
+        ...(postTradeRepair?.signings || []),
+        ...(postTradeRepair?.droppedPlayers || []),
+        ...(postTradeRepair?.twoWayAssignments || []),
+      ];
+      const repairedTeamNames = Array.from(
+        new Set(repairMoves.map((row) => row?.teamName || row?.team).filter(Boolean))
+      );
+      for (const teamName of repairedTeamNames) {
+        try {
+          localStorage.removeItem(`gameplan_${teamName}`);
+        } catch {}
+      }
+
+      try {
+        ensureGameplansForLeague(nextLeagueData);
+      } catch (error) {
+        console.warn("[CPU Trade Bank] ensure gameplans failed after trade", error);
+      }
+
       rosterChanged = true;
       tradesMade.push(execution.tradeRecord);
 
@@ -4096,12 +4115,6 @@ async function runCpuCpuTradePassForDate({
       }
 
       console.log("[CPU Trade Bank] completed", execution.tradeRecord);
-
-      try {
-        ensureGameplansForLeague(nextLeagueData);
-      } catch (error) {
-        console.warn("[CPU Trade Bank] ensure gameplans failed after trade", error);
-      }
     } else if (
       execution?.reason === "no_valid_candidate" &&
       window.__debugCpuTrades

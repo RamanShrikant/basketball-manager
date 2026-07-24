@@ -23,9 +23,9 @@ import {
   getPlayerSalary,
   sideSalary,
 } from "./tradeExecution.js";
+import { evaluateTradeRosterProjection } from "./rosterRules.js";
 
 const MAX_SIDE_ITEMS = 8;
-const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 16;
 const EPS = 0.0001;
 const PROTECTION_ENDS = [3, 5, 10, 14, 20];
 
@@ -287,15 +287,15 @@ function exactSalaryOk({ teamA, teamB, leagueData, aSalary, bSalary }) {
 }
 
 function validateRosterMax({ team, outgoingItems, incomingItems }) {
-  const current = Array.isArray(team?.players) ? team.players.length : 0;
-  const outgoingPlayers = (outgoingItems || []).filter((item) => item?.type === "player").length;
-  const incomingPlayers = (incomingItems || []).filter((item) => item?.type === "player").length;
-  const projected = current - outgoingPlayers + incomingPlayers;
-  const allowedMax = Math.max(REGULAR_SEASON_MAX_STANDARD_PLAYERS, current);
-  if (projected > allowedMax) {
-    return { ok: false, reason: `${teamNameOf(team)} would have ${projected} standard players after the trade; max allowed here is ${allowedMax}.` };
-  }
-  return { ok: true };
+  const projection = evaluateTradeRosterProjection({
+    team,
+    outgoingItems,
+    incomingItems,
+    inOffseason: false,
+  });
+  return projection.ok
+    ? { ok: true, projection }
+    : { ok: false, reason: projection.reason, projection };
 }
 
 function validateHardRules({ leagueData, teamA, teamB, aItems, bItems }) {

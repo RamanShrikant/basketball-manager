@@ -479,11 +479,13 @@ def _build_candidate(
     target_value = _rough_value_player(target, season_year)
 
     # Try 1-player or 2-player outgoing packages, then maybe add a pick.
-    # Filter roster-count legality here before expensive JavaScript evaluation.
-    # A 2-for-1 is only considered when both projected standard rosters remain
-    # inside the same 14-to-16 limits used by the shared trade machine.
+    # Unequal packages may temporarily leave a team outside the game-ready
+    # 14-to-15 range. The trade ceiling is 16 standard contracts, or one more
+    # than the team already carries; JavaScript repairs CPU rosters before play.
     seller_roster_count = _standard_roster_count(seller)
     buyer_roster_count = _standard_roster_count(buyer)
+    seller_allowed_max = max(STANDARD_ROSTER_MAX, seller_roster_count + 1)
+    buyer_allowed_max = max(STANDARD_ROSTER_MAX, buyer_roster_count + 1)
     pool = buyer_pool[:]
     rng.shuffle(pool)
     combos: List[List[Dict[str, Any]]] = [[p] for p in pool]
@@ -496,17 +498,9 @@ def _build_candidate(
         seller_projected_count = seller_roster_count - 1 + len(combo)
         buyer_projected_count = buyer_roster_count - len(combo) + 1
 
-        if not (
-            STANDARD_ROSTER_MIN
-            <= seller_projected_count
-            <= STANDARD_ROSTER_MAX
-        ):
+        if seller_projected_count > seller_allowed_max:
             continue
-        if not (
-            STANDARD_ROSTER_MIN
-            <= buyer_projected_count
-            <= STANDARD_ROSTER_MAX
-        ):
+        if buyer_projected_count > buyer_allowed_max:
             continue
 
         outgoing_salary = sum(_salary_for_year(p, season_year) for p in combo)

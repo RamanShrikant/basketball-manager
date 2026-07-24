@@ -14,6 +14,7 @@ import {
   sortTradeFinderOfferItems,
   getTeamName,
 } from "./tradeFinderPackageBuilder.js";
+import { evaluateTradeRosterProjection } from "./rosterRules.js";
 
 export const TRADE_FINDER_COMFORT_FLOOR = 1.5;
 
@@ -68,28 +69,24 @@ function getComfortMargin(evaluation = {}) {
 }
 
 
-function countPlayerItems(items = []) {
-  return (items || []).filter((item) => item?.type === "player").length;
-}
-
-function teamRosterCount(team = {}) {
-  return Array.isArray(team?.players) ? team.players.length : 0;
-}
-
 function rosterCountsOk({ selectedTeam, cpuTeam, selectedItems = [], cpuItems = [], tradeContext = null } = {}) {
-  const selectedRoster = teamRosterCount(selectedTeam);
-  const cpuRoster = teamRosterCount(cpuTeam);
-  const userOutPlayers = countPlayerItems(selectedItems);
-  const cpuOutPlayers = countPlayerItems(cpuItems);
-  const selectedAfter = selectedRoster - userOutPlayers + cpuOutPlayers;
-  const cpuAfter = cpuRoster - cpuOutPlayers + userOutPlayers;
-  if (tradeContext?.inOffseason) {
-    return selectedAfter >= 0 && cpuAfter >= 0;
-  }
-  // Match the regular-season standard roster ceiling used by trade execution.
-  // This avoids exact-evaluating packages that will later fail validation because
-  // the user receives too many players.
-  return selectedAfter <= 16 && cpuAfter <= 16 && selectedAfter >= 1 && cpuAfter >= 1;
+  const selectedProjection = evaluateTradeRosterProjection({
+    team: selectedTeam,
+    outgoingItems: selectedItems,
+    incomingItems: cpuItems,
+    inOffseason: Boolean(tradeContext?.inOffseason),
+  });
+  const cpuProjection = evaluateTradeRosterProjection({
+    team: cpuTeam,
+    outgoingItems: cpuItems,
+    incomingItems: selectedItems,
+    inOffseason: Boolean(tradeContext?.inOffseason),
+  });
+
+  // Unequal player packages may temporarily leave a team below 14. That is a
+  // simulation-readiness issue, not a trade-generation blocker. Only the hard
+  // temporary standard-roster transaction ceiling blocks the package here.
+  return selectedProjection.ok && cpuProjection.ok;
 }
 export function makeTradeFinderEvalContext({
   leagueData,

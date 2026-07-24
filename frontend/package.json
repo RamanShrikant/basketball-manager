@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:bm": "node scripts/bm-regression-check.mjs",
+    "check:bm": "node scripts/bm-regression-check.mjs"
   },
   "dependencies": {
     "lz-string": "^1.5.0",

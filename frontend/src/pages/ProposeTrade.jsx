@@ -26,6 +26,7 @@ import {
 } from "../utils/draftPicks.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { isDevelopmentRosterPlayer, sanitizeTradeItems } from "../utils/tradeRosterEligibility.js";
+import { evaluateTradeRosterProjection, projectStandardRosterCount } from "../utils/rosterRules.js";
 import PageFade from "../components/PageFade";
 import {
   getLiveDraftProgressSignature,
@@ -42,7 +43,6 @@ const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
 const MAX_SIDE_ITEMS = 8;
-const REGULAR_SEASON_MAX_STANDARD_PLAYERS = 16;
 const TRADE_MATCHING_SMALL_OUTGOING = 7_500_000;
 const TRADE_MATCHING_MID_OUTGOING = 29_000_000;
 const TRADE_MATCHING_BUFFER = 250_000;
@@ -1754,33 +1754,30 @@ function getUnsupportedRosterTradePlayer(items = []) {
 }
 
 function getProjectedStandardRosterCount(team, outgoingItems = [], incomingItems = []) {
-  const current = getStandardRosterCount(team);
-  const outgoingPlayers = countTradePlayers(outgoingItems);
-  const incomingPlayers = countTradePlayers(incomingItems);
-  const projected = current - outgoingPlayers + incomingPlayers;
-
-  return {
-    current,
-    outgoingPlayers,
-    incomingPlayers,
-    projected,
-  };
+  return projectStandardRosterCount(team, outgoingItems, incomingItems);
 }
 
 function validateProjectedStandardRosterCount(team, outgoingItems = [], incomingItems = []) {
-  const teamName = team?.name || team?.teamName || "This team";
-  const counts = getProjectedStandardRosterCount(team, outgoingItems, incomingItems);
-
-  const allowedMax = Math.max(REGULAR_SEASON_MAX_STANDARD_PLAYERS, counts.current);
-  if (counts.projected > allowedMax) {
+  const projection = evaluateTradeRosterProjection({
+    team,
+    outgoingItems,
+    incomingItems,
+    inOffseason: false,
+  });
+  if (!projection.ok) {
     return {
       ok: false,
-      reason: `Trade blocked: ${teamName} would have ${counts.projected} standard players after this trade. A team can temporarily reach ${REGULAR_SEASON_MAX_STANDARD_PLAYERS}, and teams already above that number cannot add more players.`,
-      counts: { ...counts, allowedMax },
+      reason: projection.reason,
+      counts: { ...projection.counts, allowedMax: projection.allowedMax },
+      projection,
     };
   }
-
-  return { ok: true, counts };
+  return {
+    ok: true,
+    counts: { ...projection.counts, allowedMax: projection.allowedMax },
+    projection,
+    requiresRepairBeforeSimulation: projection.requiresRepairBeforeSimulation,
+  };
 }
 
 function validateRosterLimitsForTrade({ leagueData, userTeam, cpuTeam, userItems, cpuItems }) {
