@@ -534,7 +534,6 @@ export function buildTradeFinderCandidatePackages({
   cpuTeam = null,
   financialOk = null,
   maxPackages = 96,
-  candidateOrder = "strongest",
 } = {}) {
   const packageMap = new Map();
   const selectedValue = packageValue(selectedItems, leagueData);
@@ -620,18 +619,14 @@ export function buildTradeFinderCandidatePackages({
     }))
     .filter((row) => row.items.length && row.items.length <= TRADE_FINDER_MAX_SIDE_ITEMS)
     .sort((a, b) => {
-      // Standard Finder wants the strongest plausible offers first. Reverse
-      // Finder wants packages nearest the requested asset's value so a finite
-      // candidate cap cannot crowd out the minimum accepted asking price.
-      // Financial legality remains outside the comparator to avoid recreating
-      // the old tens-of-thousands-of-salary-checks performance regression.
+      // Stronger packages first, but do not ignore salary coverage. This is only a
+      // candidate order; exact CPU acceptance remains the source of truth.
+      // Do not call financial legality inside the sort comparator. That made one
+      // search create tens of thousands of cached salary checks and was a major
+      // reason Trade Finder slowed down across the league. The offer engine
+      // filters legality once per candidate before exact evaluation.
       const aSalaryGap = salaryGapScore(a.items, selectedSalary, leagueData);
       const bSalaryGap = salaryGapScore(b.items, selectedSalary, leagueData);
-      if (candidateOrder === "reverse_nearest") {
-        const aScore = Math.abs(a.value - selectedValue) + aSalaryGap * 0.35 + a.items.length * 0.55;
-        const bScore = Math.abs(b.value - selectedValue) + bSalaryGap * 0.35 + b.items.length * 0.55;
-        return aScore - bScore;
-      }
       const aScore = -a.value + aSalaryGap * 0.42 + a.items.length * 0.28;
       const bScore = -b.value + bSalaryGap * 0.42 + b.items.length * 0.28;
       return aScore - bScore;

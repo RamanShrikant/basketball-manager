@@ -1,0 +1,50 @@
+PATCH 27 VALIDATION RESULTS
+Date: 2026-07-25
+
+AUTOMATED NODE REGRESSION SUITE
+- Result: PASS
+- Checks: 47/47
+- Includes existing roster/trade regression checks plus:
+  - first pending simulation date detection
+  - strict pre-deadline CPU-trade window
+  - historical resumed-date CPU-trade skip
+  - post-deadline resumed-date CPU-trade skip
+  - active pending pre-deadline CPU-trade pass preservation
+  - completed historical game-path skipping in both long-sim modes
+  - standard Trade Finder default ordering preservation
+  - reverse nearest-value ordering request
+  - reverse one-asset package preservation
+  - reverse candidate deduplication
+  - reverse exact rescue queue coverage
+  - removal of the upper comfort-margin false-negative filter
+
+SYNTAX/PARSE VALIDATION
+- Result: PASS, 8/8 changed source/test files
+- Calendar.jsx
+- TradeFinder.jsx
+- bmDiagnostics.js
+- calendarCpuTradeTiming.js
+- reverseTradeFinderCoverage.js
+- reverseTradeFinderOfferEngine.js
+- tradeFinderPackageBuilder.js
+- bm-regression-check.mjs
+
+STANDARD FINDER PARITY CHECK
+- Current default candidate sequence: 96 packages
+- Pre-patch candidate sequence: 96 packages
+- Exact sequence equality: TRUE
+- Conclusion: reverse-only ordering support does not alter standard Trade Finder behavior.
+
+REVERSE FINDER ENGINE SMOKE BENCHMARK
+Fixture: included 20-team league data, Toronto controlled, five ordinary target players.
+- Mitchell Robinson: 5 offers, 48 exact checks
+- Sam Hauser: 5 offers, 48 exact checks
+- Tyrese Martin: 5 offers, 48 exact checks
+- Kelly Oubre Jr.: 3 offers after all 109 legal candidates were exact-checked
+- Cole Anthony: 5 offers, 48 exact checks
+
+The difficult search demonstrates that the rescue path exhausts the retained legal set before returning fewer than five results. Superstar targets can still legitimately return zero when every legal package is rejected by the CPU exact evaluator.
+
+BUILD STATUS
+- The user's clean pre-patch production build passed with Vite exit code 0.
+- The sandbox does not contain the project's installed Vite/React dependency tree, so the patched production bundle must be built with the supplied PowerShell commands on the user's existing installation.

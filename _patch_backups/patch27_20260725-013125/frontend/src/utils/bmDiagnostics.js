@@ -10,7 +10,7 @@ import {
   evaluateTradeRosterProjection,
 } from "./rosterRules.js";
 
-const DIAGNOSTICS_VERSION = "2026-07-25_calendar_reverse_finder_regression_v3";
+const DIAGNOSTICS_VERSION = "2026-07-24_trade_roster_regression_v2";
 const AUTO_DIAGNOSTICS_KEY = "bm_diagnostics_auto_v1";
 
 const runtime = {
@@ -20,7 +20,6 @@ const runtime = {
   lastLoadAttempt: null,
   lastPreSimulation: null,
   lastCpuTradeRepair: null,
-  lastSimulationPerformance: null,
   lastReport: null,
 };
 
@@ -608,37 +607,6 @@ export function auditTradeFinderSnapshot(snapshot = runtime.tradeFinder) {
     })),
   });
 
-  if (snapshot?.reverseFinder) {
-    const engine = snapshot?.engineDiagnostics || null;
-    addCheck(checks, {
-      id: "trade_finder.reverse_engine_diagnostics",
-      ok: Boolean(engine),
-      severity: "warning",
-      message: engine
-        ? "Reverse Trade Finder recorded candidate-generation, legality, exact-check, rescue, and validation stage counts."
-        : "Reverse Trade Finder did not return engine-stage diagnostics.",
-      details: engine,
-    });
-    if (engine) {
-      addCheck(checks, {
-        id: "trade_finder.reverse_candidate_coverage",
-        ok: Number(engine?.rawGenerated || 0) > 0 && Number(engine?.candidatesSelectedForScan || 0) > 0,
-        severity: "warning",
-        message: Number(engine?.candidatesSelectedForScan || 0) > 0
-          ? `${Number(engine.candidatesSelectedForScan)} legal reverse candidates reached the scan stage.`
-          : "No reverse candidates reached the scan stage; inspect rosterRejected and financialRejected.",
-        details: engine,
-      });
-      addCheck(checks, {
-        id: "trade_finder.reverse_exact_coverage",
-        ok: Number(engine?.initialExactChecks || 0) + Number(engine?.rescueExactChecks || 0) > 0 || Number(engine?.legalCandidates || 0) === 0,
-        severity: "warning",
-        message: `${Number(engine?.initialExactChecks || 0)} initial and ${Number(engine?.rescueExactChecks || 0)} rescue exact checks were completed.`,
-        details: engine,
-      });
-    }
-  }
-
   return finishReport("trade_finder_snapshot", checks, { snapshot });
 }
 
@@ -690,35 +658,6 @@ export function recordCpuTradeRepairDiagnostics(payload = {}) {
   return runtime.lastCpuTradeRepair;
 }
 
-export function recordSimulationPerformanceDiagnostics(payload = {}) {
-  runtime.lastSimulationPerformance = {
-    ...payload,
-    recordedAt: nowIso(),
-  };
-  try {
-    window.__BM_LAST_SIMULATION_PERFORMANCE__ = runtime.lastSimulationPerformance;
-  } catch {}
-
-  console.groupCollapsed(
-    `[BM SIM PERFORMANCE] ${payload?.mode || "simulation"} • ${Number(payload?.elapsedMs || 0).toFixed(0)}ms • ${Number(payload?.cpuTradePasses || 0)} CPU-trade passes`
-  );
-  console.log(runtime.lastSimulationPerformance);
-  console.table([
-    {
-      mode: payload?.mode || "simulation",
-      firstPendingDate: payload?.firstPendingDate || "",
-      datesVisited: Number(payload?.datesVisited || 0),
-      historicalDatesSkipped: Number(payload?.historicalDatesSkipped || 0),
-      deadlineDatesSkipped: Number(payload?.deadlineDatesSkipped || 0),
-      cpuTradePasses: Number(payload?.cpuTradePasses || 0),
-      cpuTradeMs: Number(payload?.cpuTradeMs || 0).toFixed(0),
-      gamesSimmed: Number(payload?.gamesSimmed || 0),
-    },
-  ]);
-  console.groupEnd();
-  return runtime.lastSimulationPerformance;
-}
-
 export function auditRecentRuntimeEvents() {
   const checks = [];
 
@@ -756,16 +695,6 @@ export function auditRecentRuntimeEvents() {
         : "The most recent pre-simulation CPU repair failed."
       : "No pre-simulation diagnostics snapshot has been recorded this session.",
     details: runtime.lastPreSimulation,
-  });
-
-  addCheck(checks, {
-    id: "runtime.simulation_performance",
-    ok: Boolean(runtime.lastSimulationPerformance),
-    severity: "warning",
-    message: runtime.lastSimulationPerformance
-      ? `The most recent calendar run simulated ${Number(runtime.lastSimulationPerformance?.gamesSimmed || 0)} games with ${Number(runtime.lastSimulationPerformance?.cpuTradePasses || 0)} CPU-trade passes.`
-      : "No calendar simulation performance snapshot has been recorded this session.",
-    details: runtime.lastSimulationPerformance,
   });
 
   return finishReport("runtime_events", checks);
@@ -849,11 +778,9 @@ export function installBasketballManagerDiagnostics() {
         { command: "bmDiag.regressions()", purpose: "Run synthetic one-for-many and many-for-one trade regression tests." },
         { command: "bmDiag.league()", purpose: "Audit all live teams, players, contracts, duplicate ownership, and roster limits." },
         { command: "bmDiag.tradeFinder()", purpose: "Audit the most recent Trade Finder search and verify every displayed offer is loadable." },
-        { command: "bmDiag.reverseTradeFinder()", purpose: "Inspect candidate-stage counts from the most recent Reverse Trade Finder search." },
         { command: "bmDiag.lastLoad()", purpose: "Inspect the most recent Load Offer validation attempt." },
         { command: "bmDiag.lastRepair()", purpose: "Inspect the most recent CPU post-trade roster repair." },
         { command: "bmDiag.preSim()", purpose: "Inspect the most recent pre-simulation diagnostic snapshot." },
-        { command: "bmDiag.simPerformance()", purpose: "Inspect the most recent calendar simulation timing and CPU-trade workload." },
         { command: "bmDiag.events()", purpose: "Audit recent Trade Finder, CPU repair, and simulation events." },
         { command: "await bmDiag.copy()", purpose: "Copy the last diagnostics report as JSON." },
         { command: "bmDiag.auto(false)", purpose: "Disable automatic critical diagnostics logging." },
@@ -871,11 +798,6 @@ export function installBasketballManagerDiagnostics() {
     },
     tradeFinder() {
       return printReport(auditTradeFinderSnapshot(), "BM TRADE FINDER AUDIT");
-    },
-    reverseTradeFinder() {
-      const diagnostics = runtime.tradeFinder?.engineDiagnostics || null;
-      console.log(diagnostics);
-      return diagnostics;
     },
     events() {
       return printReport(auditRecentRuntimeEvents(), "BM RUNTIME EVENT AUDIT");
@@ -895,10 +817,6 @@ export function installBasketballManagerDiagnostics() {
     preSim() {
       console.log(runtime.lastPreSimulation);
       return runtime.lastPreSimulation;
-    },
-    simPerformance() {
-      console.log(runtime.lastSimulationPerformance);
-      return runtime.lastSimulationPerformance;
     },
     context() {
       console.log(runtime);

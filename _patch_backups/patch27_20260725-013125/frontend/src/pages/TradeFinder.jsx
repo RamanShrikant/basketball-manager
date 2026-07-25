@@ -2301,21 +2301,13 @@ export default function TradeFinder() {
           return;
         }
         if (progress.phase === "exact_candidate") {
-          setOfferSearchProgress(`Exact check ${candidateIndex}/${exactCandidates} • ${offersFound} accepted package${offersFound === 1 ? "" : "s"} found • ${elapsed.toFixed(1)}s`);
-          return;
-        }
-        if (progress.phase === "rescue_start") {
-          setOfferSearchProgress(`First exact pass found too few results. Rescue checking ${exactCandidates} additional legal candidates...`);
-          return;
-        }
-        if (progress.phase === "rescue_candidate") {
-          setOfferSearchProgress(`Rescue exact check ${candidateIndex}/${exactCandidates} • ${offersFound} distinct accepted package${offersFound === 1 ? "" : "s"} • ${elapsed.toFixed(1)}s`);
+          setOfferSearchProgress(`Exact check ${candidateIndex}/${exactCandidates} • ${offersFound} comfortable package${offersFound === 1 ? "" : "s"} found • ${elapsed.toFixed(1)}s`);
           return;
         }
         if (progress.phase === "complete" || progress.phase === "stopped") {
           const stopped = progress.phase === "stopped";
           setOfferSearchStopped(stopped);
-          setOfferSearchProgress(`${stopped ? "Stopped" : "Complete"}: found ${offersFound} distinct accepted package${offersFound === 1 ? "" : "s"} in ${elapsed.toFixed(1)}s.`);
+          setOfferSearchProgress(`${stopped ? "Stopped" : "Complete"}: found ${offersFound} genuinely distinct comfortable package${offersFound === 1 ? "" : "s"} in ${elapsed.toFixed(1)}s.`);
         }
       };
 
@@ -2400,30 +2392,11 @@ export default function TradeFinder() {
         packageTeam: packageTeam?.name || packageTeam?.teamName || "",
         selectedItems: tradeDebugItems(selectedItems, leagueData),
         resultMessage: result?.message || "",
-        engineDiagnostics: result?.diagnostics || null,
         generatedOfferCount: nextOffers.length,
         displayedOfferCount: loadableOffers.length,
         offers: displayedOfferDiagnostics,
         rejectedGeneratedOffers,
       });
-
-      if (isReverseFinder) {
-        try {
-          window.__BM_LAST_REVERSE_TRADE_FINDER__ = {
-            ...(result?.diagnostics || {}),
-            resultMessage: result?.message || "",
-            generatedOfferCount: nextOffers.length,
-            displayedOfferCount: loadableOffers.length,
-            recordedAt: new Date().toISOString(),
-          };
-          console.groupCollapsed(
-            `[BM REVERSE TRADE FINDER] ${selectedTeam?.name || "Your team"} searching for ${packageTeam?.name || "target team"} assets • ${loadableOffers.length} displayed offer${loadableOffers.length === 1 ? "" : "s"}`
-          );
-          console.table([window.__BM_LAST_REVERSE_TRADE_FINDER__]);
-          console.log("Full reverse finder result", result);
-          console.groupEnd();
-        } catch {}
-      }
 
       if (rejectedGeneratedOffers.length) {
         console.error(

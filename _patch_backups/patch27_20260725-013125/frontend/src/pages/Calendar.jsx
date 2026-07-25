@@ -58,14 +58,8 @@ import {
   evaluateTeamSimulationRoster,
 } from "../utils/rosterRules.js";
 import {
-  findFirstPendingSimulationDate,
-  getCpuTradeSimulationDateDecision,
-  isCpuTradeWindowOpenDate,
-} from "../utils/calendarCpuTradeTiming.js";
-import {
   recordCpuTradeRepairDiagnostics,
   recordPreSimulationDiagnostics,
-  recordSimulationPerformanceDiagnostics,
 } from "../utils/bmDiagnostics.js";
 
 window.LZString = LZString;
@@ -3912,29 +3906,6 @@ async function runCpuCpuTradePassForDate({
       tradesMade: [],
       bankChanged: false,
       rosterChanged: false,
-      skippedReason: "missing_context",
-    };
-  }
-
-  // Critical performance/timing gate: once the deadline date is reached, do
-  // not build season records, consume/revalidate bank candidates, or launch
-  // Pyodide work. A pre-deadline background job may finish later; detaching it
-  // here makes its completion harmless instead of letting it leak into March.
-  if (!isCpuTradeWindowOpenDate(currentDate, tradeDeadlineDate)) {
-    if (generationJobRef?.current) generationJobRef.current = null;
-    if (window.__debugCpuTrades) {
-      console.log("[CPU Trade Bank] skipped after trade deadline", {
-        currentDate,
-        tradeDeadlineDate,
-      });
-    }
-    return {
-      leagueData: activeLeagueData,
-      tradesMade: [],
-      bankChanged: false,
-      rosterChanged: false,
-      skippedReason: "trade_deadline_locked",
-      bankSummary: buildCpuTradeBankSummary(activeLeagueData),
     };
   }
 
@@ -4418,20 +4389,6 @@ setBoxModal(null);
     return;
   }
   const lockedGamesAtStart = snapshotLockedRegularSeasonGames(upd, newResults);
-  const firstPendingTradeDate = findFirstPendingSimulationDate(upd, newResults);
-  const simulationPerf = {
-    mode: "to_date",
-    targetDate: dateStr,
-    startedAt: Date.now(),
-    firstPendingDate: firstPendingTradeDate,
-    datesVisited: 0,
-    historicalDatesSkipped: 0,
-    deadlineDatesSkipped: 0,
-    cpuTradePasses: 0,
-    cpuTradeMs: 0,
-    cpuTradesCompleted: 0,
-    gamesSimmed: 0,
-  };
 
   const sorted = Object.keys(upd).sort((a, b) => new Date(a) - new Date(b));
 
@@ -4447,7 +4404,6 @@ for (const d of sorted) {
   if (stopRef.current) break;
 
   if (d > dateStr) break;
-  simulationPerf.datesVisited += 1;
 
   if (shouldPauseForTradeDeadline(d)) {
     assertLockedRegularSeasonGamesUnchanged(
@@ -4498,49 +4454,26 @@ for (const d of sorted) {
     return;
   }
 
-  // Preserve checkpoint handling above, but never walk every completed game
-  // again on a resumed run. Historical date iteration is cheap; historical
-  // result reads and per-game reconciliation were not.
-  if (!firstPendingTradeDate || d < firstPendingTradeDate) {
-    simulationPerf.historicalDatesSkipped += 1;
-    continue;
-  }
-
-  const cpuTradeDecision = getCpuTradeSimulationDateDecision({
+  const cpuTradePass = await runCpuCpuTradePassForDate({
+    activeLeagueData,
     currentDate: d,
-    firstPendingDate: firstPendingTradeDate,
+    dayIndex: sorted.indexOf(d),
+    totalDates: sorted.length,
+    scheduleSnapshot: upd,
+    resultsSnapshot: newResults,
+    selectedTeam,
+    setLeagueData,
     tradeDeadlineDate: TRADE_DEADLINE_DATE,
+    generationJobRef: cpuTradeGenerationJobRef,
+    onTradeDeskEntries: handleTradeDeskEntries,
+    onCpuTradeCompleted: showCpuTradeToast,
   });
-  if (cpuTradeDecision.shouldRun) {
-    const cpuTradeStartedAt = Date.now();
-    const cpuTradePass = await runCpuCpuTradePassForDate({
-      activeLeagueData,
-      currentDate: d,
-      dayIndex: sorted.indexOf(d),
-      totalDates: sorted.length,
-      scheduleSnapshot: upd,
-      resultsSnapshot: newResults,
-      selectedTeam,
-      setLeagueData,
-      tradeDeadlineDate: TRADE_DEADLINE_DATE,
-      generationJobRef: cpuTradeGenerationJobRef,
-      onTradeDeskEntries: handleTradeDeskEntries,
-      onCpuTradeCompleted: showCpuTradeToast,
-    });
-    simulationPerf.cpuTradePasses += 1;
-    simulationPerf.cpuTradeMs += Date.now() - cpuTradeStartedAt;
-    simulationPerf.cpuTradesCompleted += cpuTradePass?.tradesMade?.length || 0;
-    if (cpuTradePass.leagueData !== activeLeagueData) {
-      activeLeagueData = cpuTradePass.leagueData;
-    }
-    if (cpuTradePass.rosterChanged) {
-      activeTeams = buildTeamsFromLeagueForSim(activeLeagueData);
-      simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
-    }
-  } else if (cpuTradeDecision.reason === "historical_date_already_simulated") {
-    simulationPerf.historicalDatesSkipped += 1;
-  } else if (cpuTradeDecision.reason === "trade_deadline_locked") {
-    simulationPerf.deadlineDatesSkipped += 1;
+  if (cpuTradePass.leagueData !== activeLeagueData) {
+    activeLeagueData = cpuTradePass.leagueData;
+  }
+  if (cpuTradePass.rosterChanged) {
+    activeTeams = buildTeamsFromLeagueForSim(activeLeagueData);
+    simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
   }
 
   const dayGames = upd[d];
@@ -4612,7 +4545,6 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
           dayResultUpdates[g.id] = canonicalResult || slim;
 
           dayGames[i] = { ...g, played: true };
-          simulationPerf.gamesSimmed += 1;
 
           // 🔥 update player stats
           const playerStatsBeforeGame = playerStats;
@@ -4686,12 +4618,6 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
       }
     }
   } finally {
-    recordSimulationPerformanceDiagnostics({
-      ...simulationPerf,
-      elapsedMs: Date.now() - simulationPerf.startedAt,
-      stopped: Boolean(stopRef.current),
-      pausedAtCheckpoint,
-    });
     setActionModal(null);
     setSimLock(false);
     console.log("◀ SimToDate EXIT:", dateStr);
@@ -4827,20 +4753,6 @@ setBoxModal(null);
     return;
   }
   const lockedGamesAtStart = snapshotLockedRegularSeasonGames(upd, results);
-  const firstPendingTradeDate = findFirstPendingSimulationDate(upd, results);
-  const simulationPerf = {
-    mode: "full_season",
-    targetDate: null,
-    startedAt: Date.now(),
-    firstPendingDate: firstPendingTradeDate,
-    datesVisited: 0,
-    historicalDatesSkipped: 0,
-    deadlineDatesSkipped: 0,
-    cpuTradePasses: 0,
-    cpuTradeMs: 0,
-    cpuTradesCompleted: 0,
-    gamesSimmed: 0,
-  };
 
   let activeLeagueData = repairedLeagueData;
   let activeTeams = repairedTeams;
@@ -4862,7 +4774,6 @@ for (let di = 0; di < dates.length; di++) {
 
   const date = dates[di];
   lastDateProcessed = date;
-  simulationPerf.datesVisited += 1;
 
   if (shouldPauseForTradeDeadline(date)) {
     pausedForTradeDeadline = true;
@@ -4874,48 +4785,26 @@ for (let di = 0; di < dates.length; di++) {
     break;
   }
 
-  // Checkpoints still run above, but dates whose games are already canonical
-  // do not re-enter the expensive per-game storage/reconciliation path.
-  if (!firstPendingTradeDate || date < firstPendingTradeDate) {
-    simulationPerf.historicalDatesSkipped += 1;
-    continue;
-  }
-
-  const cpuTradeDecision = getCpuTradeSimulationDateDecision({
+  const cpuTradePass = await runCpuCpuTradePassForDate({
+    activeLeagueData,
     currentDate: date,
-    firstPendingDate: firstPendingTradeDate,
+    dayIndex: di,
+    totalDates: dates.length,
+    scheduleSnapshot: upd,
+    resultsSnapshot: results,
+    selectedTeam,
+    setLeagueData,
     tradeDeadlineDate: TRADE_DEADLINE_DATE,
+    generationJobRef: cpuTradeGenerationJobRef,
+    onTradeDeskEntries: handleTradeDeskEntries,
+    onCpuTradeCompleted: showCpuTradeToast,
   });
-  if (cpuTradeDecision.shouldRun) {
-    const cpuTradeStartedAt = Date.now();
-    const cpuTradePass = await runCpuCpuTradePassForDate({
-      activeLeagueData,
-      currentDate: date,
-      dayIndex: di,
-      totalDates: dates.length,
-      scheduleSnapshot: upd,
-      resultsSnapshot: results,
-      selectedTeam,
-      setLeagueData,
-      tradeDeadlineDate: TRADE_DEADLINE_DATE,
-      generationJobRef: cpuTradeGenerationJobRef,
-      onTradeDeskEntries: handleTradeDeskEntries,
-      onCpuTradeCompleted: showCpuTradeToast,
-    });
-    simulationPerf.cpuTradePasses += 1;
-    simulationPerf.cpuTradeMs += Date.now() - cpuTradeStartedAt;
-    simulationPerf.cpuTradesCompleted += cpuTradePass?.tradesMade?.length || 0;
-    if (cpuTradePass.leagueData !== activeLeagueData) {
-      activeLeagueData = cpuTradePass.leagueData;
-    }
-    if (cpuTradePass.rosterChanged) {
-      activeTeams = buildTeamsFromLeagueForSim(activeLeagueData);
-      simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
-    }
-  } else if (cpuTradeDecision.reason === "historical_date_already_simulated") {
-    simulationPerf.historicalDatesSkipped += 1;
-  } else if (cpuTradeDecision.reason === "trade_deadline_locked") {
-    simulationPerf.deadlineDatesSkipped += 1;
+  if (cpuTradePass.leagueData !== activeLeagueData) {
+    activeLeagueData = cpuTradePass.leagueData;
+  }
+  if (cpuTradePass.rosterChanged) {
+    activeTeams = buildTeamsFromLeagueForSim(activeLeagueData);
+    simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
   }
 
   const dayGames = upd[date];
@@ -4994,7 +4883,6 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
 
           dayGames[i] = { ...g, played: true };
           gamesSimmed++;
-          simulationPerf.gamesSimmed += 1;
 
           const playerStatsBeforeGame = playerStats;
           playerStats = applyGameToPlayerStats(playerStats, slim, g);
@@ -5060,15 +4948,6 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
     savePlayerStats(playerStats);
     saveClutchStats(clutchStats);
     refreshTradeDeadlineLockFromSchedule(upd);
-
-    recordSimulationPerformanceDiagnostics({
-      ...simulationPerf,
-      elapsedMs: Date.now() - simulationPerf.startedAt,
-      stopped,
-      pausedForTradeDeadline,
-      pausedForAllStar,
-      lastDateProcessed,
-    });
 
 setActionModal(null);
 setSimLock(false);

@@ -29,10 +29,6 @@ function excludes(relativePath, text, message) {
 
 const rosterRulesPath = path.join(root, "src/utils/rosterRules.js");
 const rosterRules = await import(`${pathToFileURL(rosterRulesPath).href}?check=${Date.now()}`);
-const calendarTimingPath = path.join(root, "src/utils/calendarCpuTradeTiming.js");
-const calendarTiming = await import(`${pathToFileURL(calendarTimingPath).href}?check=${Date.now()}`);
-const reverseCoveragePath = path.join(root, "src/utils/reverseTradeFinderCoverage.js");
-const reverseCoverage = await import(`${pathToFileURL(reverseCoveragePath).href}?check=${Date.now()}`);
 const {
   REGULAR_SEASON_MIN_STANDARD_PLAYERS,
   REGULAR_SEASON_MAX_STANDARD_PLAYERS,
@@ -58,95 +54,6 @@ includes("src/utils/tradeExecution.js", "requiresRosterRepairBeforeSimulation", 
 includes("src/pages/Calendar.jsx", "postTradeRepair", "Calendar repairs CPU rosters immediately after CPU trades.");
 includes("src/pages/Calendar.jsx", "recordPreSimulationDiagnostics", "Calendar records pre-simulation diagnostics.");
 includes("src/pages/Calendar.jsx", "recordCpuTradeRepairDiagnostics", "Calendar records post-trade CPU repair diagnostics.");
-includes("src/pages/Calendar.jsx", "getCpuTradeSimulationDateDecision", "Calendar gates CPU trade work by pending simulation date and deadline status.");
-includes("src/pages/Calendar.jsx", "recordSimulationPerformanceDiagnostics", "Calendar records simulation and CPU-trade timing diagnostics.");
-includes("src/pages/Calendar.jsx", "if (!firstPendingTradeDate || d < firstPendingTradeDate)", "Resumed Sim To Date skips completed games after preserving deadline and All-Star checkpoints.");
-includes("src/pages/Calendar.jsx", "if (!firstPendingTradeDate || date < firstPendingTradeDate)", "Resumed full-season simulation skips completed games after preserving checkpoints.");
-includes("src/utils/tradeFinderPackageBuilder.js", 'candidateOrder = "strongest"', "Standard Trade Finder keeps its existing strongest-first ordering by default.");
-includes("src/utils/reverseTradeFinderOfferEngine.js", 'candidateOrder: "reverse_nearest"', "Reverse Finder requests nearest-value candidate ordering instead of strongest-first truncation.");
-includes("src/utils/reverseTradeFinderOfferEngine.js", "REVERSE_RESCUE_EXACT_EVALS", "Reverse Finder has a second exact-check rescue pass.");
-includes("src/pages/TradeFinder.jsx", "engineDiagnostics: result?.diagnostics", "Trade Finder preserves Reverse Finder stage diagnostics.");
-excludes("src/utils/reverseTradeFinderOfferEngine.js", "REVERSE_MAX_COMFORT_MARGIN", "Reverse Finder no longer discards accepted offers solely because the CPU likes them by more than eight points.");
-
-const {
-  findFirstPendingSimulationDate,
-  getCpuTradeSimulationDateDecision,
-  isCpuTradeWindowOpenDate,
-} = calendarTiming;
-const { prioritizeReverseCandidateRows, buildReverseRescueQueue } = reverseCoverage;
-
-const scheduleTimingFixture = {
-  "2026-10-21": [{ id: "G1", played: true }],
-  "2027-02-03": [{ id: "G2", played: false }],
-  "2027-02-06": [{ id: "G3", played: false }],
-  "2027-04-08": [{ id: "G4", played: false }],
-};
-const storedTimingResults = {
-  G2: { totals: { home: 108, away: 101 } },
-};
-const firstPendingDate = findFirstPendingSimulationDate(scheduleTimingFixture, storedTimingResults);
-check("calendar.first_pending_date", firstPendingDate === "2027-02-06", "Calendar finds the first truly unsimulated date instead of restarting trade work at opening night.", firstPendingDate);
-check("calendar.active_window", isCpuTradeWindowOpenDate("2027-02-04", "2027-02-05"), "CPU trade window remains open strictly before the deadline.");
-check("calendar.deadline_locked", !isCpuTradeWindowOpenDate("2027-02-05", "2027-02-05"), "CPU trade processing is locked on and after the deadline date.");
-check(
-  "calendar.historical_resume_skip",
-  getCpuTradeSimulationDateDecision({ currentDate: "2027-01-15", firstPendingDate, tradeDeadlineDate: "2027-02-05" }).reason === "historical_date_already_simulated",
-  "Resumed simulation skips CPU trade processing on dates whose games are already complete."
-);
-check(
-  "calendar.post_deadline_resume_skip",
-  getCpuTradeSimulationDateDecision({ currentDate: firstPendingDate, firstPendingDate, tradeDeadlineDate: "2027-02-05" }).reason === "trade_deadline_locked",
-  "A late-season resume performs zero CPU trade passes once the first pending date is after the deadline."
-);
-check(
-  "calendar.live_pending_date_runs",
-  getCpuTradeSimulationDateDecision({ currentDate: "2027-01-15", firstPendingDate: "2027-01-15", tradeDeadlineDate: "2027-02-05" }).shouldRun === true,
-  "CPU trade processing still runs for a genuinely pending pre-deadline simulation date."
-);
-
-const reverseCandidates = [
-  [{ id: "star" }, { id: "filler-a" }, { id: "filler-b" }],
-  [{ id: "mid" }],
-  [{ id: "cheap" }],
-  [{ id: "pair-a" }, { id: "pair-b" }],
-  [{ id: "mid" }],
-];
-const candidateKey = (items) => items.map((item) => item.id).join("+");
-const heuristicMap = new Map([
-  ["star+filler-a+filler-b", 0.1],
-  ["mid", 2],
-  ["cheap", 1],
-  ["pair-a+pair-b", 0.2],
-]);
-const prioritizedReverse = prioritizeReverseCandidateRows({
-  candidates: reverseCandidates,
-  maxCandidates: 3,
-  packageKeyOf: candidateKey,
-  heuristicOf: (items) => heuristicMap.get(candidateKey(items)) ?? 99,
-});
-check(
-  "reverse.single_asset_coverage",
-  candidateKey(prioritizedReverse[0]) === "cheap" && candidateKey(prioritizedReverse[1]) === "mid",
-  "Reverse candidate caps preserve simple one-asset asking prices before multi-asset standard-finder shells.",
-  JSON.stringify(prioritizedReverse)
-);
-check(
-  "reverse.candidate_deduplication",
-  new Set(prioritizedReverse.map(candidateKey)).size === prioritizedReverse.length,
-  "Reverse candidate prioritization removes duplicate package identities."
-);
-const rescueQueue = buildReverseRescueQueue({
-  candidates: prioritizedReverse.concat([[{ id: "rescue" }], [{ id: "rescue" }]]),
-  checkedKeys: new Set(["cheap", "mid"]),
-  maxCandidates: 2,
-  packageKeyOf: candidateKey,
-});
-check(
-  "reverse.rescue_queue",
-  rescueQueue.length === 2 && candidateKey(rescueQueue[0]) === "star+filler-a+filler-b" && candidateKey(rescueQueue[1]) === "rescue",
-  "Reverse rescue exact checks skip already-tested and duplicate packages while retaining additional legal candidates.",
-  JSON.stringify(rescueQueue)
-);
 
 const freeAgency = read("public/python/free_agency_logic.py");
 const teamRoster = read("public/python/team_roster_logic.py");

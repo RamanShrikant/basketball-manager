@@ -24,17 +24,11 @@ import {
   validateTradeForExecution,
 } from "./tradeExecution.js";
 import { evaluateTradeRosterProjection } from "./rosterRules.js";
-import {
-  buildReverseRescueQueue,
-  prioritizeReverseCandidateRows,
-} from "./reverseTradeFinderCoverage.js";
 
-const REVERSE_RAW_CANDIDATES = 640;
-const REVERSE_MAX_CANDIDATES = 220;
-const REVERSE_MAX_EXACT_EVALS = 48;
-const REVERSE_RESCUE_EXACT_EVALS = 172;
+const REVERSE_MAX_CANDIDATES = 150;
+const REVERSE_MAX_EXACT_EVALS = 42;
 const REVERSE_MAX_RESULTS = 5;
-const REVERSE_EXPENSIVE_MARGIN = 8;
+const REVERSE_MAX_COMFORT_MARGIN = 8;
 const SEARCH_YIELD_EVERY = 5;
 
 function nowMs() {
@@ -256,20 +250,6 @@ function candidateHeuristic(items, targetItems, leagueData) {
   return Math.abs(value - targetValue) + salaryGap * 0.35 + items.length * 0.55;
 }
 
-export function prioritizeReverseTradeFinderCandidates(
-  candidates = [],
-  targetItems = [],
-  leagueData = null,
-  maxCandidates = REVERSE_MAX_CANDIDATES
-) {
-  return prioritizeReverseCandidateRows({
-    candidates,
-    maxCandidates,
-    packageKeyOf: packageKey,
-    heuristicOf: (items) => candidateHeuristic(items, targetItems, leagueData),
-  });
-}
-
 function makeResult({ leagueData, targetTeam, targetItems, userItems, evaluation, validation, comfortFloor }) {
   const sortedUserItems = sortTradeFinderOfferItems(userItems, leagueData);
   const sortedTargetItems = sortTradeFinderOfferItems(targetItems, leagueData);
@@ -290,8 +270,7 @@ function makeResult({ leagueData, targetTeam, targetItems, userItems, evaluation
     offerValue,
     targetValue,
     gap: offerValue - targetValue,
-    quality: comfortMargin > REVERSE_EXPENSIVE_MARGIN ? "Accepted Asking Price" : "Comfortable Asking Price",
-    expensiveAskingPrice: comfortMargin > REVERSE_EXPENSIVE_MARGIN,
+    quality: "Comfortable Asking Price",
     reverseFinder: true,
     anchor,
     anchorKey: anchor.key,
@@ -328,79 +307,27 @@ export async function runReverseTradeFinderSearch({
   evaluationLeagueData = preparedEvaluation.leagueData;
   tradeContext = resolvedTradeContext;
 
-  const diagnostics = {
-    version: "reverse_trade_finder_diagnostics_v2",
-    controlledTeam: getTeamName(controlledTeam),
-    targetTeam: getTeamName(targetTeam),
-    targetAssetCount: targetItems.length,
-    targetValue: round1(packageValue(targetItems, leagueData)),
-    targetSalary: sideSalary(targetItems, leagueData),
-    boardPlayers: 0,
-    boardPicks: 0,
-    rawGenerated: 0,
-    duplicateCandidates: 0,
-    emptyCandidates: 0,
-    rosterRejected: 0,
-    financialRejected: 0,
-    legalCandidates: 0,
-    candidatesSelectedForScan: 0,
-    scanAccepted: 0,
-    initialExactChecks: 0,
-    rescueExactChecks: 0,
-    exactAccepted: 0,
-    exactNotAccepted: 0,
-    belowComfortFloor: 0,
-    expensiveAccepted: 0,
-    finalValidationRejected: 0,
-    finalValidationReasons: {},
-  };
-
   const board = buildAssetBoard(controlledTeam, leagueData);
-  diagnostics.boardPlayers = board?.players?.length || 0;
-  diagnostics.boardPicks = board?.picks?.length || 0;
   const generated = buildTradeFinderCandidatePackages({
     board,
     leagueData,
     selectedItems: targetItems,
     selectedTeam: targetTeam,
     cpuTeam: controlledTeam,
-    maxPackages: REVERSE_RAW_CANDIDATES,
-    candidateOrder: "reverse_nearest",
+    maxPackages: REVERSE_MAX_CANDIDATES,
   });
-  diagnostics.rawGenerated = generated.length;
 
-  const legalCandidates = [];
+  const uniqueCandidates = [];
   const seen = new Set();
   for (const candidate of generated) {
     const cleaned = uniqueByFamilyKey(candidate || []).slice(0, TRADE_FINDER_MAX_SIDE_ITEMS);
     const key = packageKey(cleaned);
-    if (!cleaned.length) {
-      diagnostics.emptyCandidates += 1;
-      continue;
-    }
-    if (seen.has(key)) {
-      diagnostics.duplicateCandidates += 1;
-      continue;
-    }
+    if (!cleaned.length || seen.has(key)) continue;
     seen.add(key);
-    if (!rosterCountsOk({ controlledTeam, targetTeam, userItems: cleaned, targetItems, inOffseason: tradeContext?.inOffseason })) {
-      diagnostics.rosterRejected += 1;
-      continue;
-    }
-    if (!financialsOk({ leagueData, controlledTeam, targetTeam, userItems: cleaned, targetItems })) {
-      diagnostics.financialRejected += 1;
-      continue;
-    }
-    legalCandidates.push(cleaned);
+    if (!rosterCountsOk({ controlledTeam, targetTeam, userItems: cleaned, targetItems, inOffseason: tradeContext?.inOffseason })) continue;
+    if (!financialsOk({ leagueData, controlledTeam, targetTeam, userItems: cleaned, targetItems })) continue;
+    uniqueCandidates.push(cleaned);
   }
-  diagnostics.legalCandidates = legalCandidates.length;
-  const uniqueCandidates = prioritizeReverseTradeFinderCandidates(
-    legalCandidates,
-    targetItems,
-    leagueData,
-    REVERSE_MAX_CANDIDATES
-  );
-  diagnostics.candidatesSelectedForScan = uniqueCandidates.length;
 
   const comfortFloor = getTradeFinderComfortFloorForPackage(targetItems, leagueData);
   try {
@@ -506,26 +433,10 @@ export async function runReverseTradeFinderSearch({
     elapsedSec: round1((nowMs() - startedAt) / 1000),
   });
 
-  diagnostics.scanAccepted = scanAccepted.length;
   const exactOffers = [];
-  const exactCheckedKeys = new Set();
-
-  const recordValidationReason = (validation = {}) => {
-    const reason = String(validation?.staleCode || validation?.code || validation?.reason || "unknown_validation_failure")
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "") || "unknown_validation_failure";
-    diagnostics.finalValidationReasons[reason] = Number(diagnostics.finalValidationReasons[reason] || 0) + 1;
-  };
-
-  const exactCheckCandidate = (userItems, phase) => {
-    const key = packageKey(userItems);
-    if (!key || exactCheckedKeys.has(key)) return false;
-    exactCheckedKeys.add(key);
-    if (phase === "rescue") diagnostics.rescueExactChecks += 1;
-    else diagnostics.initialExactChecks += 1;
-
+  for (let index = 0; index < shortlist.length; index += 1) {
+    if (isCancelled(signal)) break;
+    const userItems = shortlist[index];
     const evaluation = evaluateCandidate({
       leagueData,
       evaluationLeagueData,
@@ -536,41 +447,21 @@ export async function runReverseTradeFinderSearch({
       mode: "exact",
     });
     const margin = comfortMarginOf(evaluation);
-    if (!isAccepted(evaluation)) {
-      diagnostics.exactNotAccepted += 1;
-      return false;
+    if (isAccepted(evaluation) && margin >= comfortFloor && margin <= REVERSE_MAX_COMFORT_MARGIN) {
+      const validation = validateTradeForExecution({
+        leagueData,
+        userTeam: controlledTeam,
+        cpuTeam: targetTeam,
+        userItems,
+        cpuItems: targetItems,
+        evaluation,
+      });
+      if (validation?.ok) {
+        exactOffers.push(
+          makeResult({ leagueData, targetTeam, targetItems, userItems, evaluation, validation, comfortFloor })
+        );
+      }
     }
-
-    diagnostics.exactAccepted += 1;
-    if (margin < comfortFloor) {
-      diagnostics.belowComfortFloor += 1;
-      return false;
-    }
-    if (margin > REVERSE_EXPENSIVE_MARGIN) diagnostics.expensiveAccepted += 1;
-
-    const validation = validateTradeForExecution({
-      leagueData,
-      userTeam: controlledTeam,
-      cpuTeam: targetTeam,
-      userItems,
-      cpuItems: targetItems,
-      evaluation,
-    });
-    if (!validation?.ok) {
-      diagnostics.finalValidationRejected += 1;
-      recordValidationReason(validation);
-      return false;
-    }
-
-    exactOffers.push(
-      makeResult({ leagueData, targetTeam, targetItems, userItems, evaluation, validation, comfortFloor })
-    );
-    return true;
-  };
-
-  for (let index = 0; index < shortlist.length; index += 1) {
-    if (isCancelled(signal)) break;
-    exactCheckCandidate(shortlist[index], "initial");
     safeProgress(onProgress, {
       phase: "exact_candidate",
       candidateIndex: index + 1,
@@ -582,100 +473,29 @@ export async function runReverseTradeFinderSearch({
     if ((index + 1) % 3 === 0) await yieldToBrowser();
   }
 
-  // Fast scan and exact evaluation deliberately use different fidelity. When
-  // the first exact slice finds too few offers, exact-check a second ordered
-  // slice rather than incorrectly declaring that no trade exists.
-  const initialDiverseOffers = selectDiverseReverseOffers(exactOffers, leagueData, maxResults, comfortFloor);
-  const rescueQueue = initialDiverseOffers.length >= maxResults
-    ? []
-    : buildReverseRescueQueue({
-        candidates: uniqueCandidates,
-        checkedKeys: exactCheckedKeys,
-        maxCandidates: REVERSE_RESCUE_EXACT_EVALS,
-        packageKeyOf: packageKey,
-      });
-
-  if (rescueQueue.length && !isCancelled(signal)) {
-    safeProgress(onProgress, {
-      phase: "rescue_start",
-      candidateIndex: 0,
-      candidatesToCheck: uniqueCandidates.length,
-      exactCandidates: rescueQueue.length,
-      offersFound: exactOffers.length,
-      elapsedSec: round1((nowMs() - startedAt) / 1000),
-    });
-
-    for (let index = 0; index < rescueQueue.length; index += 1) {
-      if (isCancelled(signal)) break;
-      exactCheckCandidate(rescueQueue[index], "rescue");
-      const diverseCount = selectDiverseReverseOffers(exactOffers, leagueData, maxResults, comfortFloor).length;
-      safeProgress(onProgress, {
-        phase: "rescue_candidate",
-        candidateIndex: index + 1,
-        candidatesToCheck: uniqueCandidates.length,
-        exactCandidates: rescueQueue.length,
-        offersFound: diverseCount,
-        elapsedSec: round1((nowMs() - startedAt) / 1000),
-      });
-      if (diverseCount >= maxResults) break;
-      if ((index + 1) % 3 === 0) await yieldToBrowser();
-    }
-  }
-
   const offers = selectDiverseReverseOffers(exactOffers, leagueData, maxResults, comfortFloor);
   const elapsedSec = round1((nowMs() - startedAt) / 1000);
   const stopped = isCancelled(signal);
-  diagnostics.comfortFloor = comfortFloor;
-  diagnostics.finalOffers = offers.length;
-  diagnostics.elapsedSec = elapsedSec;
-  diagnostics.stopped = stopped;
-
-  let noOfferMessage = "No legal package from your team met the CPU's acceptance threshold.";
-  if (!diagnostics.rawGenerated) {
-    noOfferMessage = "Your team has no eligible player or pick package shapes available for this target.";
-  } else if (!diagnostics.legalCandidates) {
-    noOfferMessage = diagnostics.financialRejected > diagnostics.rosterRejected
-      ? "Candidate packages were generated, but none passed both teams' salary-matching rules."
-      : "Candidate packages were generated, but none passed the temporary roster and salary rules.";
-  } else if (diagnostics.exactAccepted && diagnostics.finalValidationRejected >= diagnostics.exactAccepted) {
-    noOfferMessage = "The CPU accepted candidate packages, but final ownership, salary, or roster validation rejected them. Run bmDiag.reverseTradeFinder() for the precise stage counts.";
-  } else if (diagnostics.exactAccepted) {
-    noOfferMessage = "The CPU accepted candidate packages, but none cleared the configured comfort floor after exact evaluation.";
-  }
-
   safeProgress(onProgress, {
     phase: stopped ? "stopped" : "complete",
     candidateIndex: uniqueCandidates.length,
     candidatesToCheck: uniqueCandidates.length,
-    exactCandidates: diagnostics.initialExactChecks + diagnostics.rescueExactChecks,
+    exactCandidates: shortlist.length,
     offersFound: offers.length,
     elapsedSec,
   });
-
-  try {
-    console.groupCollapsed(
-      `[ReverseTradeFinder][diagnostics] ${diagnostics.controlledTeam} → ${diagnostics.targetTeam} • ${offers.length} offer${offers.length === 1 ? "" : "s"}`
-    );
-    console.table([diagnostics]);
-    if (Object.keys(diagnostics.finalValidationReasons).length) {
-      console.table(diagnostics.finalValidationReasons);
-    }
-    console.groupEnd();
-  } catch {}
 
   return {
     offers,
     stopped,
     elapsedSec,
     candidatesChecked: uniqueCandidates.length,
-    exactCandidatesChecked: diagnostics.initialExactChecks + diagnostics.rescueExactChecks,
+    exactCandidatesChecked: shortlist.length,
     comfortFloor,
-    diagnostics,
     message: offers.length
-      ? `Found ${offers.length} distinct accepted asking price${offers.length === 1 ? "" : "s"}.`
-      : noOfferMessage,
+      ? `Found ${offers.length} genuinely distinct comfortable asking price${offers.length === 1 ? "" : "s"}.`
+      : "No genuinely distinct legal package from your team met the CPU's comfortable acceptance threshold.",
   };
-
 }
 
 function canUseWorker() {
