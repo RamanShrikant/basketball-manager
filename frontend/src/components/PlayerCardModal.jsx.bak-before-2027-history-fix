@@ -295,26 +295,37 @@ function getMoodLabel(value) {
 }
 
 function getCurrentSeasonDisplayYear(leagueData) {
-  // 2027 history-display fix: the active league is authoritative.
-  // Local metadata can belong to a previously loaded save and be one season behind.
-  const leagueYears = [
-    leagueData?.currentSeasonYear,
-    leagueData?.seasonYear,
-  ]
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value) && value > 1900);
-
-  if (leagueYears.length) {
-    return Math.max(...leagueYears) + 1;
-  }
-
   const meta = safeJSON(localStorage.getItem("bm_league_meta_v1"), {});
   const metaStartYear = Number(meta?.seasonYear);
 
-  return Number.isFinite(metaStartYear) && metaStartYear > 1900
-    ? metaStartYear + 1
-    : 2026;
+  if (Number.isFinite(metaStartYear) && metaStartYear > 1900) {
+    return metaStartYear + 1;
+  }
+
+  const leagueYear = Number(
+    leagueData?.seasonYear ||
+    leagueData?.currentSeasonYear ||
+    2025
+  );
+
+  return Number.isFinite(leagueYear) && leagueYear > 1900 ? leagueYear + 1 : 2026;
 }
+
+function getSimStartDisplayYear(leagueData) {
+  const raw = Number(
+    leagueData?.simStartYear ||
+    leagueData?.seasonStartYear ||
+    leagueData?.startSeasonYear ||
+    2025
+  );
+
+  if (Number.isFinite(raw) && raw > 1900) {
+    return raw >= 2026 ? raw : raw + 1;
+  }
+
+  return 2026;
+}
+
 function round1(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
@@ -413,6 +424,7 @@ function buildPlayerCardSeasonRows({
   resolvedTeamLogo,
 }) {
   const currentSeasonYear = getCurrentSeasonDisplayYear(leagueData);
+  const simStartYear = getSimStartDisplayYear(leagueData);
   const teamLogoMap = getTeamLogoIndex(leagueData);
   const statsMap = readCompressedOrJson(PLAYER_STATS_KEY, {});
 
@@ -426,8 +438,7 @@ function buildPlayerCardSeasonRows({
     if (row?.rowType === "total") return false;
     if (row?.source === "sim" || row?.simulated === true) return true;
 
-    // Completed real-life rows remain visible; only the active live season is replaced.
-    return seasonYear > 0 && seasonYear < currentSeasonYear;
+    return seasonYear > 0 && seasonYear < simStartYear;
   });
 
   const playerName = player?.name || player?.player || "";
@@ -556,7 +567,7 @@ function collectLiveAllStarAccolades(playerName, leagueData) {
 }
 
 function buildPlayerCardAccolades({ player, leagueData }) {
-  const currentSeasonYear = getCurrentSeasonDisplayYear(leagueData);
+  const simStartYear = getSimStartDisplayYear(leagueData);
   const playerName = player?.name || player?.player || "";
 
   const rawAccolades = Array.isArray(player?.history?.accolades)
@@ -570,8 +581,8 @@ function buildPlayerCardAccolades({ player, leagueData }) {
       return true;
     }
 
-    // Keep completed real-life accolades before the active simulated season.
-    return seasonYear > 0 && seasonYear < currentSeasonYear;
+    // Keep real-life/preloaded accolades only before the sim's first display season.
+    return seasonYear > 0 && seasonYear < simStartYear;
   });
 
   const merged = [...filtered];
