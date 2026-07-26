@@ -18,6 +18,7 @@ import {
   ensureCpuTradeBankState,
   executeDueCpuTradeFromBank,
   getCpuTradeBankGenerationPolicy,
+  getCpuTradeBankRunwayStatus,
   readCpuTradeBankTestConfig,
   revalidateCpuTradeBankSlice,
   writeCpuTradeBankTestConfig,
@@ -29,6 +30,7 @@ import {
   appendTradeDeskMoodEventsFromEntries,
   buildRealisticGameMoodEvents,
   buildCompletedCpuTradeDeskEntry,
+  syncTradeDeskFeedWithLeagueHistory,
 } from "../utils/tradeDeskFeed.js";
 import { queueSim } from "@/api/simQueue";
 import LZString from "lz-string";
@@ -1852,7 +1854,7 @@ const teams = useMemo(() => {
   if (!leagueData) return [];
 
   const arr = getAllTeamsFromLeague(leagueData);
-  console.log("🔥 DEBUG Calendar loaded teams:", arr);
+  if (window.__debugCalendarTeams) console.log("🔥 DEBUG Calendar loaded teams:", arr);
   window.__debugTeams = arr;
 
   return arr.map((t) => ({
@@ -3433,6 +3435,7 @@ const [boxModal, setBoxModal] = useState(null);
 const [actionModal, setActionModal] = useState(null);
 const [simErrorModal, setSimErrorModal] = useState(null);
 const [simLock, setSimLock] = useState(false);
+const simLockRef = useRef(false);
 
 const [allStarPromptOpen, setAllStarPromptOpen] = useState(false);
 const [allStarOpen, setAllStarOpen] = useState(false);
@@ -3562,6 +3565,21 @@ const [showEastStandings, setShowEastStandings] = useState(true);
 const [showAwardsPanel, setShowAwardsPanel] = useState(false);
 const [miniAwardTab, setMiniAwardTab] = useState("mvp");
 const CALENDAR_SCALE = 1;
+
+const acquireSimRunLock = (label = "simulation") => {
+  if (simLockRef.current || simLock) {
+    console.log(`[Sim] ${label} blocked: simulation already running`);
+    return false;
+  }
+  simLockRef.current = true;
+  setSimLock(true);
+  return true;
+};
+
+const releaseSimRunLock = () => {
+  simLockRef.current = false;
+  setSimLock(false);
+};
 
 const openSimError = (message, title = "Cannot simulate") => {
   setSimErrorModal({ title, message });
@@ -3805,6 +3823,16 @@ function daysBetweenDateStrings(fromDate, toDate) {
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return 999;
   return Math.ceil((to.getTime() - from.getTime()) / 86400000);
 }
+
+function makeCpuTradeGenerationLeagueData(leagueData = {}) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+  // The Python generator only needs live rosters, draft picks, standings context,
+  // financials, and completed trade history. Sending the growing bank back into
+  // the worker every pass makes the payload balloon and can stall long sims.
+  const { cpuTradeBankState, ...leanLeagueData } = leagueData;
+  return leanLeagueData;
+}
+
 function startCpuTradeBankGenerationJob({
   generationJobRef,
   leagueData,
@@ -3825,7 +3853,7 @@ function startCpuTradeBankGenerationJob({
 
   generationJobRef.current = job;
 
-  getCpuCpuTradeCandidates(leagueData, workerContext)
+  getCpuCpuTradeCandidates(makeCpuTradeGenerationLeagueData(leagueData), workerContext)
     .then((response) => {
       if (generationJobRef.current !== job) return;
       job.status = "fulfilled";
@@ -3847,6 +3875,96 @@ function takeCompletedCpuTradeBankGenerationJob(generationJobRef) {
   if (!job || job.status === "pending") return null;
   generationJobRef.current = null;
   return job;
+}
+
+async function runForegroundCpuTradeBankGeneration({
+  leagueData,
+  baseContext,
+  testConfig,
+  generationJobRef,
+  maxPasses = 1,
+  reason = "runway",
+}) {
+  let nextLeagueData = leagueData;
+  let changed = false;
+  let totalAccepted = 0;
+  let totalRejected = 0;
+  const generationRows = [];
+
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    const state = nextLeagueData?.cpuTradeBankState;
+    const runway = getCpuTradeBankRunwayStatus(state, baseContext);
+    if (!state || runway.remainingTarget <= 0) break;
+    if (pass > 0 && !runway.critical && runway.bankSize >= Math.min(runway.remainingTarget, 10)) break;
+
+    const basePolicy = getCpuTradeBankGenerationPolicy(state, baseContext, {
+      ...testConfig,
+      forceGeneration: true,
+    });
+    const boostedPolicy = {
+      ...basePolicy,
+      shouldGenerate: true,
+      reason: `foreground_${reason}`,
+      foregroundRecommended: true,
+      inventoryPressure: Math.max(
+        Number(basePolicy?.inventoryPressure || 0),
+        Number(runway.inventoryPressure || 0),
+        pass > 0 ? 1.1 : 0.85
+      ),
+      maxCandidates: Math.max(basePolicy.maxCandidates || 0, runway.emergency ? 120 : 96),
+      exactEvaluations: Math.max(basePolicy.exactEvaluations || 0, runway.emergency ? 72 : 60),
+    };
+    const workerContext = buildCpuTradeWorkerContext(state, baseContext, boostedPolicy);
+
+    if (generationJobRef?.current?.status === "pending" && runway.critical) {
+      // A background job based on older inventory is less valuable than a live
+      // on-demand pass when the bank is empty/behind. Detach it so a late result
+      // cannot write stale Trade Desk noise after this foreground repair.
+      generationJobRef.current = null;
+    }
+
+    const response = await getCpuCpuTradeCandidates(
+      makeCpuTradeGenerationLeagueData(nextLeagueData),
+      workerContext
+    );
+    const added = addGeneratedCpuTradeCandidates({
+      leagueData: nextLeagueData,
+      response,
+      context: {
+        ...baseContext,
+        generatedDate: baseContext.currentDate,
+        generatedDayIndex: baseContext.dayIndex,
+      },
+      testConfig,
+      exactEvaluationLimit: boostedPolicy.exactEvaluations,
+    });
+
+    nextLeagueData = added.leagueData || nextLeagueData;
+    changed = changed || Boolean(added.changed);
+    totalAccepted += added.accepted?.length || 0;
+    totalRejected += added.rejected?.length || 0;
+    generationRows.push({
+      pass: pass + 1,
+      proposed: Array.isArray(response?.candidates) ? response.candidates.length : 0,
+      accepted: added.accepted?.length || 0,
+      rejected: added.rejected?.length || 0,
+      bankSize: added.state?.candidates?.length || 0,
+      workerDebug: response?.debug || null,
+    });
+
+    const updatedRunway = getCpuTradeBankRunwayStatus(nextLeagueData?.cpuTradeBankState, baseContext);
+    if (!updatedRunway.critical || (updatedRunway.bankSize >= Math.min(updatedRunway.remainingTarget, updatedRunway.emergency ? 8 : 12) && totalAccepted > 0)) {
+      break;
+    }
+  }
+
+  return {
+    leagueData: nextLeagueData,
+    changed,
+    totalAccepted,
+    totalRejected,
+    generationRows,
+  };
 }
 
 function resolveCalendarControlledTeamName(selectedTeam, leagueData = {}) {
@@ -3898,6 +4016,39 @@ function shouldWriteCpuTradeDeskItems({ candidates = [], tradeDeskItems = [], cu
   return idx % 12 === 0;
 }
 
+function countCpuTradeSlotsDueToday(state = {}, dayIndex = 0) {
+  const plan = Array.isArray(state?.executionPlanDays) ? state.executionPlanDays : [];
+  const cursor = Math.max(0, Math.trunc(Number(state?.planCursor || 0)));
+  const currentDay = Number(dayIndex || 0);
+  let due = 0;
+
+  for (let index = cursor; index < plan.length; index += 1) {
+    if (!Number.isFinite(Number(plan[index])) || currentDay < Number(plan[index])) break;
+    due += 1;
+  }
+
+  return due;
+}
+
+function getCpuTradeExecutionBurstLimit(state = {}, runway = {}, dayIndex = 0, daysToDeadline = 999) {
+  const remainingTarget = Math.max(0, Number(runway?.remainingTarget || 0));
+  if (!remainingTarget) return 0;
+
+  const dueSlots = countCpuTradeSlotsDueToday(state, dayIndex);
+  const completionDeficit = Math.max(0, Number(runway?.completionDeficit || 0));
+  const catchupNeed = Math.max(1, dueSlots, completionDeficit);
+  const deadlineCap =
+    daysToDeadline <= 7
+      ? 10
+      : daysToDeadline <= 14
+        ? 6
+        : daysToDeadline <= 35
+          ? 3
+          : 1;
+
+  return Math.max(1, Math.min(remainingTarget, deadlineCap, catchupNeed + (daysToDeadline <= 7 ? 2 : 0)));
+}
+
 
 async function runCpuCpuTradePassForDate({
   activeLeagueData,
@@ -3912,6 +4063,7 @@ async function runCpuCpuTradePassForDate({
   generationJobRef,
   onTradeDeskEntries,
   onCpuTradeCompleted,
+  cpuTradeBurstDepth = 0,
 }) {
   if (!activeLeagueData || !currentDate || !tradeDeadlineDate) {
     return {
@@ -3969,6 +4121,9 @@ async function runCpuCpuTradePassForDate({
     const initialized = ensureCpuTradeBankState(nextLeagueData, baseContext, testConfig);
     if (initialized.leagueData) nextLeagueData = initialized.leagueData;
     bankChanged = bankChanged || initialized.changed;
+    try {
+      syncTradeDeskFeedWithLeagueHistory(nextLeagueData);
+    } catch {}
 
     const completedGenerationJob = takeCompletedCpuTradeBankGenerationJob(generationJobRef);
     const activeBankBeforeGenerationConsume = nextLeagueData?.cpuTradeBankState;
@@ -4056,7 +4211,7 @@ async function runCpuCpuTradePassForDate({
         leagueData: nextLeagueData,
         context: baseContext,
         testConfig,
-        maxChecks: daysToDeadline <= 14 ? 2 : 1,
+        maxChecks: daysToDeadline <= 14 ? 8 : daysToDeadline <= 42 ? 5 : 2,
       });
       nextLeagueData = revalidated.leagueData || nextLeagueData;
       bankChanged = bankChanged || revalidated.changed;
@@ -4071,11 +4226,57 @@ async function runCpuCpuTradePassForDate({
       }
     }
 
+    const runwayBeforeExecution = getCpuTradeBankRunwayStatus(nextLeagueData?.cpuTradeBankState, baseContext);
+    const activeBankStateForExecution = nextLeagueData?.cpuTradeBankState || {};
+    const plannedTradeDay = activeBankStateForExecution.executionPlanDays?.[
+      Math.max(0, Math.trunc(Number(activeBankStateForExecution.planCursor || 0)))
+    ];
+    const executionSlotDue = Number.isFinite(Number(plannedTradeDay)) && Number(dayIndex || 0) >= Number(plannedTradeDay);
+    const backgroundGenerationPending = generationJobRef?.current?.status === "pending";
+    const lowRunwayBank =
+      runwayBeforeExecution.bankSize < Math.min(
+        runwayBeforeExecution.remainingTarget,
+        runwayBeforeExecution.emergency ? 10 : 8
+      );
+    const lateDeadlineCatchup =
+      daysToDeadline <= 7 &&
+      runwayBeforeExecution.remainingTarget > 0 &&
+      runwayBeforeExecution.bankSize < runwayBeforeExecution.remainingTarget;
+    const shouldForegroundGenerate =
+      runwayBeforeExecution.remainingTarget > 0 &&
+      daysToDeadline <= 75 &&
+      lowRunwayBank &&
+      (executionSlotDue || runwayBeforeExecution.completionDeficit >= 2 || runwayBeforeExecution.emergency || lateDeadlineCatchup) &&
+      (!backgroundGenerationPending || runwayBeforeExecution.critical || lateDeadlineCatchup);
+
+    if (shouldForegroundGenerate) {
+      const foreground = await runForegroundCpuTradeBankGeneration({
+        leagueData: nextLeagueData,
+        baseContext,
+        testConfig,
+        generationJobRef,
+        maxPasses: lateDeadlineCatchup ? 4 : runwayBeforeExecution.emergency ? 3 : 2,
+        reason: lateDeadlineCatchup ? "deadline_target_catchup" : runwayBeforeExecution.emergency ? "emergency_runway" : "low_inventory_due_slot",
+      });
+      nextLeagueData = foreground.leagueData || nextLeagueData;
+      bankChanged = bankChanged || foreground.changed;
+      if (window.__debugCpuTrades) {
+        console.log("[CPU Trade Bank] foreground replenishment", {
+          currentDate,
+          accepted: foreground.totalAccepted,
+          rejected: foreground.totalRejected,
+          rows: foreground.generationRows,
+          runwayBefore: runwayBeforeExecution,
+          runwayAfter: getCpuTradeBankRunwayStatus(nextLeagueData?.cpuTradeBankState, baseContext),
+        });
+      }
+    }
+
     const execution = executeDueCpuTradeFromBank({
       leagueData: nextLeagueData,
       context: baseContext,
       testConfig,
-      maxCandidateChecks: daysToDeadline <= 14 ? 6 : 4,
+      maxCandidateChecks: daysToDeadline <= 14 ? 28 : daysToDeadline <= 42 ? 22 : 16,
     });
 
     if (execution?.leagueData) nextLeagueData = execution.leagueData;
@@ -4149,6 +4350,9 @@ async function runCpuCpuTradePassForDate({
       if (completedEntry && typeof onCpuTradeCompleted === "function") {
         onCpuTradeCompleted(completedEntry, execution.tradeRecord);
       }
+      try {
+        syncTradeDeskFeedWithLeagueHistory(nextLeagueData);
+      } catch {}
 
       console.log("[CPU Trade Bank] completed", execution.tradeRecord);
     } else if (
@@ -4160,6 +4364,48 @@ async function runCpuCpuTradePassForDate({
         lastFailure: execution.lastFailure,
         bankSize: execution.state?.candidates?.length || 0,
       });
+    }
+
+    const postExecutionStateForBurst = nextLeagueData?.cpuTradeBankState || {};
+    const postExecutionRunwayForBurst = getCpuTradeBankRunwayStatus(postExecutionStateForBurst, baseContext);
+    const burstLimitForDate = getCpuTradeExecutionBurstLimit(
+      postExecutionStateForBurst,
+      postExecutionRunwayForBurst,
+      dayIndex,
+      daysToDeadline
+    );
+    const nextSlotDueForBurst =
+      countCpuTradeSlotsDueToday(postExecutionStateForBurst, dayIndex) > 0;
+    const shouldRunExtraTradeBurst =
+      execution?.executed &&
+      cpuTradeBurstDepth < burstLimitForDate - 1 &&
+      postExecutionRunwayForBurst.remainingTarget > 0 &&
+      daysToDeadline <= 35 &&
+      (nextSlotDueForBurst || postExecutionRunwayForBurst.completionDeficit > 0 || daysToDeadline <= 7);
+
+    if (shouldRunExtraTradeBurst) {
+      const extraPass = await runCpuCpuTradePassForDate({
+        activeLeagueData: nextLeagueData,
+        currentDate,
+        dayIndex,
+        totalDates,
+        scheduleSnapshot,
+        resultsSnapshot,
+        selectedTeam,
+        setLeagueData,
+        tradeDeadlineDate,
+        generationJobRef,
+        onTradeDeskEntries,
+        onCpuTradeCompleted,
+        cpuTradeBurstDepth: cpuTradeBurstDepth + 1,
+      });
+
+      nextLeagueData = extraPass?.leagueData || nextLeagueData;
+      bankChanged = bankChanged || Boolean(extraPass?.bankChanged);
+      rosterChanged = rosterChanged || Boolean(extraPass?.rosterChanged);
+      if (Array.isArray(extraPass?.tradesMade) && extraPass.tradesMade.length) {
+        tradesMade.push(...extraPass.tradesMade);
+      }
     }
 
     const activeState = nextLeagueData?.cpuTradeBankState;
@@ -4205,6 +4451,9 @@ async function runCpuCpuTradePassForDate({
     }
 
     if (bankChanged || rosterChanged) {
+      try {
+        syncTradeDeskFeedWithLeagueHistory(nextLeagueData);
+      } catch {}
       if (typeof setLeagueData === "function") setLeagueData(nextLeagueData);
       saveLeagueData(nextLeagueData).catch((error) => {
         console.warn("[CPU Trade Bank] failed to save bank/trade state", error);
@@ -4363,11 +4612,11 @@ const handleSimOnlyGame = async (dateStr, game) => {
 };
 
 const handleSimToDate = async (dateStr, { resume = false } = {}) => {
+  if (!acquireSimRunLock("SimToDate")) return;
   // start from whatever is already in storage
   let playerStats = loadPlayerStats();
   let clutchStats = loadClutchStats(seasonYear);
 
-  if (simLock) return;
     const {
     repairRes,
     repairedLeagueData,
@@ -4382,6 +4631,7 @@ const handleSimToDate = async (dateStr, { resume = false } = {}) => {
   const userRosterMessage = getUserRosterSimBlockMessage(userTeamLive || selectedTeam);
 
 if (userRosterMessage) {
+  releaseSimRunLock();
   openSimError(userRosterMessage, "Roster issue");
   return;
 }
@@ -4392,6 +4642,7 @@ const simBlockMessage = getSimulationBlockMessageThroughDate(
   dateStr
 );
 if (simBlockMessage) {
+  releaseSimRunLock();
   openSimError(simBlockMessage, "Simulation blocked");
   return;
 }
@@ -4419,7 +4670,7 @@ setBoxModal(null);
   try {
     newResults = reconcileCompletedGamesWithCanonicalStorage(upd, newResults);
   } catch (error) {
-    setSimLock(false);
+    releaseSimRunLock();
     clearPendingSimIntent();
     openSimError(error?.message || "The schedule contains conflicting completed games.", "Season integrity issue");
     return;
@@ -4700,7 +4951,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
       pausedAtCheckpoint,
     });
     setActionModal(null);
-    setSimLock(false);
+    releaseSimRunLock();
     console.log("◀ SimToDate EXIT:", dateStr);
 
     if (!pausedAtCheckpoint) {
@@ -4768,11 +5019,7 @@ async function simulateBatch(games) {
 }
 
 const handleSimSeason = async ({ resume = false } = {}) => {
-  // block if already running
-  if (simLock) {
-    console.log("FULL SEASON blocked: simLock already true");
-    return;
-  }
+  if (!acquireSimRunLock("FullSeason")) return;
     const {
     repairRes,
     repairedLeagueData,
@@ -4786,6 +5033,7 @@ const handleSimSeason = async ({ resume = false } = {}) => {
   const userTeamLive = repairedTeams.find((t) => t.name === selectedTeam?.name);
   const userRosterMessage = getUserRosterSimBlockMessage(userTeamLive || selectedTeam);
 if (userRosterMessage) {
+  releaseSimRunLock();
   openSimError(userRosterMessage, "Roster issue");
   return;
 }
@@ -4795,6 +5043,7 @@ const simBlockMessage = getSimulationBlockMessageThroughDate(
   repairedTeams
 );
 if (simBlockMessage) {
+  releaseSimRunLock();
   openSimError(simBlockMessage, "Simulation blocked");
   return;
 }
@@ -4828,7 +5077,7 @@ setBoxModal(null);
   try {
     results = reconcileCompletedGamesWithCanonicalStorage(upd, results);
   } catch (error) {
-    setSimLock(false);
+    releaseSimRunLock();
     clearPendingSimIntent();
     openSimError(error?.message || "The schedule contains conflicting completed games.", "Season integrity issue");
     return;
@@ -5078,7 +5327,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
     });
 
 setActionModal(null);
-setSimLock(false);
+releaseSimRunLock();
 
 if (pausedForTradeDeadline) {
   setScheduleByDate(structuredClone(upd));
@@ -5554,7 +5803,7 @@ function devClearSeasonCheckpointState() {
 }
 
 async function handleDevQuickSeasonJump(mode) {
-  if (simLock) return;
+  if (!acquireSimRunLock("DevQuickSim")) return;
 
   const label =
     mode === "last_game"
@@ -5564,6 +5813,7 @@ async function handleDevQuickSeasonJump(mode) {
       : "jump straight to the playoffs with a completed fake regular season";
 
   if (!window.confirm(`Dev quick sim will wipe current season results and ${label}. Continue?`)) {
+    releaseSimRunLock();
     return;
   }
 
@@ -5654,7 +5904,7 @@ async function handleDevQuickSeasonJump(mode) {
     console.error("[DevQuickSim] failed", err);
     openSimError(err?.message || "Dev quick sim failed.", "Dev quick sim failed");
   } finally {
-    setSimLock(false);
+    releaseSimRunLock();
   }
 }
 
