@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // simEnginePy.js - Supports Single + Batch Simulation
 // ============================================================
 console.log("### simEnginePy loaded:", import.meta.url);
@@ -435,7 +435,35 @@ if (msg.type === "all-stars-result") {
     }
 
     // ------------------------------------------------------------
-    // FREE AGENCY MARKET RESULT
+    // FINAL PROGRESSION SHAPE RESULT / ERROR
+    // ------------------------------------------------------------
+    if (msg.type === "final-progression-shape-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] final-progression-shape-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(deepFromEntries(msg.payload));
+      return;
+    }
+
+    if (msg.type === "final-progression-shape-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] final-progression-shape-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Final progression shape enforcement failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ error: err });
+      return;
+    }
+
+    // ------------------------------------------------------------    // FREE AGENCY MARKET RESULT
     // ------------------------------------------------------------
     if (msg.type === "free-agency-market-result") {
       const entry = pending.get(msg.requestId);
@@ -1288,7 +1316,44 @@ export function computePlayerProgression(leagueData, statsByKey = {}, meta = {})
 }
 
 // ------------------------------------------------------------
-// PUBLIC API - FREE AGENCY MARKET
+// PUBLIC API - FINAL PROGRESSION SHAPE (Python)
+// ------------------------------------------------------------
+export function enforceFinalProgressionShape(leagueData, meta = {}) {
+  startWorker();
+
+  const requestId = "PFS" + counter++;
+  const playerCount = countProgressionPayloadPlayers(leagueData);
+  const TIMEOUT_MS = Math.max(120000, Math.min(300000, 45000 + playerCount * 260));
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("FINAL_PROGRESSION_SHAPE_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      reject: (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "enforce-final-progression-shape",
+      requestId,
+      leagueData: deepSanitize(buildLeagueDataForProgressionWorker(leagueData)),
+      meta: deepSanitize(meta),
+    });
+  });
+}
+
+// ------------------------------------------------------------// PUBLIC API - FREE AGENCY MARKET
 // ------------------------------------------------------------
 export function generateFreeAgencyMarket(leagueData) {
   startWorker();

@@ -21,6 +21,8 @@ import {
   recordTradeFinderSearchSnapshot,
 } from "../utils/bmDiagnostics.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
+import { getContractSeasonYear, getDraftYear } from "../utils/seasonContext.js";
+import { getTradeWindowLockMessage, isTradeWindowLocked, readTradeDeadlineStatus } from "../utils/tradeWindow.js";
 import PageFade from "../components/PageFade";
 import {
   canAddCustomProtectionToPick,
@@ -416,8 +418,7 @@ function getCurrentSeasonYear(leagueData) {
 }
 
 function getTradePayrollSeasonYear(leagueData) {
-  const rawYear = Number(getCurrentSeasonYear(leagueData));
-  return Number.isFinite(rawYear) ? rawYear + 1 : 2026;
+  return getContractSeasonYear(leagueData || {});
 }
 
 function getPlayerSalary(player, leagueData) {
@@ -587,16 +588,18 @@ function safeJSON(raw, fallback = null) {
 function getSeasonYearFromLeague(leagueData) {
   const offseasonState = safeJSON(localStorage.getItem("bm_offseason_state_v1"), {}) || {};
   const candidates = [
-    offseasonState?.seasonYear,
-    leagueData?.seasonYear,
-    leagueData?.currentSeasonYear,
-    leagueData?.seasonStartYear,
+    offseasonState?.draftYear,
+    leagueData?.draftYear,
+    leagueData?.currentDraftYear,
+    leagueData?.draftState?.seasonYear,
+    getDraftYear(leagueData || {}),
   ]
     .map(Number)
     .filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
 
   return candidates.length ? Math.max(...candidates) : 2026;
 }
+
 
 function readLockedDraftOrder(leagueData, seasonYear) {
   const direct = leagueData?.draftState?.draftOrder;
@@ -1985,6 +1988,8 @@ export default function TradeFinder() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam } = useGame();
   const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
+  const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
+  const [deadlineStatus, setDeadlineStatus] = useState(() => readTradeDeadlineStatus());
   const [packageTeamIndex, setPackageTeamIndex] = useState(() => {
     const index = teams.findIndex((team) => sameTeamName(team?.name || team?.teamName, selectedTeam?.name || selectedTeam?.teamName));
     return index >= 0 ? index : 0;
@@ -2005,6 +2010,22 @@ export default function TradeFinder() {
   const offerSearchAbortRef = useRef(null);
   const lastDraftProgressSignatureRef = useRef(liveDraftProgressSignature);
   const packageTeamInitializedRef = useRef(false);
+  const tradeWindowLocked = isTradeWindowLocked({ tradeContext, deadlineStatus });
+  const tradeLockMessage = getTradeWindowLockMessage();
+
+  useEffect(() => {
+    const refresh = () => setDeadlineStatus(readTradeDeadlineStatus());
+    refresh();
+    const intervalId = window.setInterval(refresh, 1500);
+    const onStorage = (event) => {
+      if (!event.key || event.key === "bm_trade_deadline_status_v1" || event.key === "bm_offseason_state_v1") refresh();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
 
   const resetFinderWorkspace = ({ clearPackage = true } = {}) => {
     try { offerSearchAbortRef.current?.abort?.(); } catch {}
@@ -2063,7 +2084,6 @@ export default function TradeFinder() {
     setOfferSearchStopped(false);
   }, [liveDraftProgressSignature]);
 
-  const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
   const selectedTeamPlayers = useMemo(
     () => filterTradeEligiblePlayers(getTeamPlayers(packageTeam), { leagueData, tradeContext }),
     [packageTeam, leagueData, tradeContext]
@@ -2175,6 +2195,12 @@ export default function TradeFinder() {
   };
 
   const runSearchOffers = async () => {
+    if (tradeWindowLocked) {
+      setOfferSearchError(tradeLockMessage);
+      setSearched(true);
+      return;
+    }
+
     try {
       offerSearchAbortRef.current?.abort?.();
     } catch {}
@@ -2540,6 +2566,23 @@ export default function TradeFinder() {
           <button onClick={() => navigate("/trades")} className="rounded-xl bg-orange-600 px-6 py-3 font-bold">
             Trade Center
           </button>
+        </div>
+      </PageFade>
+    );
+  }
+
+  if (tradeWindowLocked) {
+    return (
+      <PageFade>
+        <div className="min-h-screen bmCourtPage text-white flex flex-col items-center justify-center px-4 text-center">
+          <div className="max-w-xl rounded-3xl border border-orange-400/25 bg-neutral-950/85 p-8 shadow-2xl">
+            <div className="text-xs font-black uppercase tracking-[0.24em] text-orange-300">Trade Finder Locked</div>
+            <h1 className="mt-2 text-3xl font-black text-orange-500">Trade deadline passed</h1>
+            <p className="mt-3 text-sm font-bold text-neutral-300">{tradeLockMessage}</p>
+            <button onClick={() => navigate("/trades")} className="mt-6 rounded-xl bg-orange-600 px-6 py-3 font-bold hover:bg-orange-500">
+              Back to Trade Center
+            </button>
+          </div>
         </div>
       </PageFade>
     );

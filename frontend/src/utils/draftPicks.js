@@ -1,3 +1,5 @@
+import { getDraftYear } from "./seasonContext.js";
+
 const DEFAULT_PICK_STATUS = "active";
 const DEFAULT_START_YEAR = 2026;
 const DEFAULT_END_YEAR = 2032;
@@ -1365,7 +1367,7 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
 export function applyDraftPickOwnershipToOrder(order = [], { leagueData, seasonYear } = {}) {
   if (!Array.isArray(order) || !order.length || !leagueData) return Array.isArray(order) ? sanitizeDraftOrderRows(order) : [];
 
-  const year = Number(seasonYear || leagueData?.seasonYear || leagueData?.currentSeasonYear || 2026);
+  const year = Number(seasonYear || getDraftYear(leagueData || {}));
   const resolveTeamName = buildTeamResolver(leagueData);
   const cleanOrder = sanitizeDraftOrderRows(order);
 

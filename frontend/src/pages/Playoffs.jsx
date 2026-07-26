@@ -49,6 +49,49 @@ function readFlatMinutesFromGameplan(teamName) {
   return { ...saved };
 }
 
+function readGameplanOrder(teamName, teamObj = null) {
+  const saved = readSavedGameplan(teamName);
+  const savedOrder = Array.isArray(saved?.order)
+    ? saved.order.filter(Boolean)
+    : [];
+
+  const minutes =
+    saved?.minutes && typeof saved.minutes === "object" && !Array.isArray(saved.minutes)
+      ? saved.minutes
+      : saved && typeof saved === "object"
+      ? saved
+      : {};
+
+  const minuteOrder = Object.entries(minutes || {})
+    .filter(([name]) => name)
+    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+    .map(([name]) => name);
+
+  const rosterOrder = (teamObj?.players || [])
+    .map((player) => player?.name || player?.player)
+    .filter(Boolean);
+
+  return Array.from(new Set([...savedOrder, ...minuteOrder, ...rosterOrder]));
+}
+
+function sortBoxRowsByFrozenRotation(rows = [], frozenOrder = [], fallbackOrder = []) {
+  const order = Array.from(new Set([...(frozenOrder || []), ...(fallbackOrder || [])]));
+  const index = new Map(order.map((name, i) => [String(name), i]));
+
+  return [...(rows || [])].sort((a, b) => {
+    const aName = String(a?.player || "");
+    const bName = String(b?.player || "");
+    const aIdx = index.has(aName) ? index.get(aName) : Number.MAX_SAFE_INTEGER;
+    const bIdx = index.has(bName) ? index.get(bName) : Number.MAX_SAFE_INTEGER;
+    if (aIdx !== bIdx) return aIdx - bIdx;
+
+    const minDiff = Number(b?.min || 0) - Number(a?.min || 0);
+    if (minDiff !== 0) return minDiff;
+    return aName.localeCompare(bName);
+  });
+}
+
+
 /* -----------------------------
    ✅ SURGICAL PATCH:
    - Regular-season standings MUST read Calendar's V3 per-game results
@@ -3687,7 +3730,14 @@ ${disabled ? "opacity-60" : ""}
                 { side: "away", label: "Away", logoTeam: boxModal.awayName },
                 { side: "home", label: "Home", logoTeam: boxModal.homeName },
               ].map(({ side, label, logoTeam }) => {
-                const rows = boxModal.result?.box?.[side] || [];
+                const teamName = side === "away" ? boxModal.awayName : boxModal.homeName;
+                const fallbackTeam = teams.find((team) => team?.name === teamName);
+                const fallbackOrder = readGameplanOrder(teamName, fallbackTeam);
+                const rows = sortBoxRowsByFrozenRotation(
+                  boxModal.result?.box?.[side] || [],
+                  boxModal.result?.rotationOrder?.[side] || [],
+                  fallbackOrder
+                );
                 return (
                   <div key={side} className="bg-neutral-800 p-3 rounded-lg">
                     <div className="flex items-center gap-2 mb-2">

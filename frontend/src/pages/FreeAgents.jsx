@@ -12,6 +12,7 @@ import PlayerRatingRing from "../components/PlayerRatingRing";
 import "../styles/BMAnimations.css";
 import { saveLeagueData, loadLeagueData } from "../utils/leagueStorage.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
+import { getFinancialSeasonYear } from "../utils/seasonContext.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -1067,7 +1068,7 @@ const isOffseasonMode =
   // User team cap dashboard + affordability model
   // ------------------------------------------------------------
   const getOperatingSeasonYear = () => {
-    return getCurrentSeasonYear() + (isOffseasonMode ? 1 : 0);
+    return getFinancialSeasonYear(workingLeagueData || {});
   };
 
   const financialRules = getLeagueFinancialRules(workingLeagueData || {}, getOperatingSeasonYear());

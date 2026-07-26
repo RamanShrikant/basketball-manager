@@ -712,8 +712,8 @@ if (showAllNba) {
                             <>
                               {renderRaceStat("W-L", `${p.clutch_wins || 0}-${p.clutch_losses || 0}`)}
                               {renderRaceStat("PTS", row.pts)}
+                              {renderRaceStat("REB", row.reb)}
                               {renderRaceStat("AST", row.ast)}
-                              {renderRaceStat("Lift", fmtSignedAward1(p.impact_lift))}
                               {renderRaceStat("Score", fmtAward1(p.clutch_score))}
                             </>
                           ) : (

@@ -18,6 +18,7 @@ import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
 const PROG_META_KEY = "bm_progression_meta_v1";
+const PROGRESSION_SHAPE_AUDIT_KEY = "bm_progression_shape_audit_v23";
 const PROG_DELTAS_KEY = "bm_progression_deltas_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
@@ -28,6 +29,103 @@ const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
 const OPTIONS_RESULTS_KEY = "bm_option_decision_results_v1";
 const LEAGUE_KEY = "leagueData";
 const FREE_AGENTS_TEAM_LABEL = "Free Agents";
+
+
+function enforcePotentialFloorAfterProgression(league) {
+  if (!league || typeof league !== "object") return league;
+  for (const row of getProgressionPlayerRowsFromLeague(league, true)) {
+    const player = row?.player;
+    if (!player || typeof player !== "object") continue;
+    const overall = Math.max(25, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70)));
+    const age = Math.round(Number(player.age ?? 25) || 25);
+    const rawPotential = Math.round(Number(player.potential ?? player.pot ?? overall) || overall);
+    const potential = age >= 29 ? overall : Math.max(overall, Math.min(99, rawPotential));
+    player.potential = potential;
+    if (Object.prototype.hasOwnProperty.call(player, "pot")) player.pot = potential;
+    delete player.__skipProgressionCurrentRookie;
+    delete player.__progressionOriginalOverall;
+  }
+  return league;
+}
+const V23_CUMULATIVE_SHAPE = {
+  97: [2, 4], 96: [4, 6], 95: [6, 8], 94: [8, 10], 93: [11, 13],
+  92: [14, 16], 91: [17, 19], 90: [21, 23], 89: [24, 29], 88: [30, 35],
+  87: [37, 42], 86: [45, 50], 85: [54, 59], 84: [62, 70], 83: [74, 82],
+  82: [88, 96], 81: [105, 113], 80: [125, 133], 79: [147, 158],
+  78: [175, 186], 77: [208, 219], 75: [290, 306], 74: [340, 358],
+};
+
+const V23_EXACT_MAX = {
+  99: 1, 98: 2, 97: 3, 96: 3, 95: 3, 94: 3, 93: 4, 92: 4, 91: 4, 90: 5,
+  89: 6, 88: 7, 87: 8, 86: 9, 85: 10, 84: 12, 83: 14, 82: 16, 81: 19,
+  80: 22, 79: 26, 78: 30, 77: 35, 76: 42, 75: 50, 74: 55,
+};
+
+function progressionAuditPlayerKey(row = {}) {
+  const player = row?.player || {};
+  return String(player.id ?? player.playerId ?? `${player.name || "Unknown"}__${row?.team || ""}`);
+}
+
+function auditFinalProgressionLeague(league) {
+  const uniqueRows = new Map();
+  for (const row of getProgressionPlayerRowsFromLeague(league, true)) {
+    const key = progressionAuditPlayerKey(row);
+    if (!uniqueRows.has(key)) uniqueRows.set(key, row);
+  }
+  const players = [...uniqueRows.values()].map((row) => row.player).filter(Boolean);
+  const values = players.map((player) => Math.max(25, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70))));
+  const violations = [];
+  const cumulative = {};
+  const exact = {};
+
+  for (const [thresholdText, [min, max]] of Object.entries(V23_CUMULATIVE_SHAPE)) {
+    const threshold = Number(thresholdText);
+    const actual = values.filter((value) => value >= threshold).length;
+    const ok = actual <= max;
+    cumulative[thresholdText] = { actual, targetMin: min, max, ok, belowTarget: actual < min };
+    if (!ok) violations.push({ type: "cumulative_max", threshold, actual, max });
+  }
+  for (const [rungText, max] of Object.entries(V23_EXACT_MAX)) {
+    const rung = Number(rungText);
+    const actual = values.filter((value) => value === rung).length;
+    const hard = rung >= 90;
+    const ok = !hard || actual <= max;
+    exact[rungText] = { actual, max, hard, ok };
+    if (!ok) violations.push({ type: "exact_max", rung, actual, max });
+  }
+  const potentialBelowOverallCount = players.filter((player) => {
+    const overall = Math.max(25, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70)));
+    const potential = Math.max(25, Math.min(99, Math.round(Number(player.potential ?? player.pot ?? overall) || overall)));
+    return potential < overall;
+  }).length;
+  if (potentialBelowOverallCount) violations.push({ type: "potential_below_overall", count: potentialBelowOverallCount });
+  return {
+    version: "v23_final_saved_pool_hard_caps_2027_universe",
+    ok: violations.length === 0,
+    playerCount: players.length,
+    violations,
+    cumulative,
+    exact,
+    potentialBelowOverallCount,
+  };
+}
+
+function prepareFinalShapeReconciliationLeague(league, beforeSnapshot, seasonYear) {
+  const next = snapshotLeague(league);
+  const beforeByKey = new Map();
+  for (const row of getProgressionPlayerRowsFromLeague(beforeSnapshot, true)) {
+    beforeByKey.set(progressionAuditPlayerKey(row), Math.round(Number(row?.player?.overall ?? row?.player?.ovr ?? 70) || 70));
+  }
+  for (const row of getProgressionPlayerRowsFromLeague(next, true)) {
+    const player = row?.player;
+    if (!player || typeof player !== "object") continue;
+    const beforeOverall = beforeByKey.get(progressionAuditPlayerKey(row));
+    if (Number.isFinite(beforeOverall)) player.__progressionOriginalOverall = beforeOverall;
+    if (isCurrentDraftClassRookie(player, seasonYear)) player.__skipProgressionCurrentRookie = true;
+  }
+  return next;
+}
+
 const DEV_SIM_STOPPED = "DEV_SIM_STOPPED";
 const DEV_SIM_PAUSED = "DEV_SIM_PAUSED";
 
@@ -1286,9 +1384,16 @@ function prepareLeagueForProgressionWorker(league, seasonYear = null) {
     if (!Array.isArray(team.twoWayPlayers)) team.twoWayPlayers = [];
     if (!Array.isArray(team.stashPlayers)) team.stashPlayers = [];
 
-    team.players = team.players.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
-    team.twoWayPlayers = team.twoWayPlayers.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
-    team.stashPlayers = team.stashPlayers.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
+    // Keep current-draft rookies in the worker payload as shape-only players.
+    // Python counts them against every hard OVR shelf but skips their
+    // progression, birthday, and potential update before their first season.
+    const markShapeOnlyRookie = (player) =>
+      isCurrentDraftClassRookie(player, seasonYear)
+        ? { ...player, __skipProgressionCurrentRookie: true }
+        : player;
+    team.players = team.players.map(markShapeOnlyRookie);
+    team.twoWayPlayers = team.twoWayPlayers.map(markShapeOnlyRookie);
+    team.stashPlayers = team.stashPlayers.map(markShapeOnlyRookie);
 
     const existing = new Set(team.players.map(progressionPlayerKey));
 
@@ -1320,7 +1425,11 @@ function prepareLeagueForProgressionWorker(league, seasonYear = null) {
   }
 
   if (!Array.isArray(cloned.freeAgents)) cloned.freeAgents = [];
-  cloned.freeAgents = cloned.freeAgents.filter((player) => !isCurrentDraftClassRookie(player, seasonYear));
+  cloned.freeAgents = cloned.freeAgents.map((player) =>
+    isCurrentDraftClassRookie(player, seasonYear)
+      ? { ...player, __skipProgressionCurrentRookie: true }
+      : player
+  );
 
   return cloned;
 }
@@ -2322,8 +2431,8 @@ export default function OffseasonHub() {
     const payload = await simEngine.runDraftLottery(workingLeague, {
       seasonYear,
       teamRecords,
-      lotterySystem: "auto",
-      forceLotterySystem: "auto",
+      lotterySystem,
+      forceLotterySystem: lotterySystem,
       seed: `${seasonYear}_${lotterySystem}_dev_full_offseason_${Date.now()}`,
     });
 
@@ -2810,6 +2919,11 @@ export default function OffseasonHub() {
       throw new Error("Progression returned no league. Check worker response shape.");
     }
 
+    const preliminaryHardShapeAudit = res?.debug?.shapeLock?.hardShapeAudit || null;
+    if (!preliminaryHardShapeAudit || preliminaryHardShapeAudit.ok !== true) {
+      throw new Error(`V23 preliminary hard-shape validation failed: ${JSON.stringify(preliminaryHardShapeAudit?.violations || [])}`);
+    }
+
     let updatedLeague = restoreTwoWayBucketsAfterProgression(res.league, beforeSnapshot);
 
     updatedLeague.seasonYear = seasonYear;
@@ -2825,6 +2939,42 @@ export default function OffseasonHub() {
     updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
 
     updatedLeague = restoreCurrentDraftClassRookiesAfterProgression(updatedLeague, beforeSnapshot, seasonYear);
+
+    const finalShapeInput = prepareFinalShapeReconciliationLeague(updatedLeague, beforeSnapshot, seasonYear);
+    const finalShapeMsg = await simEngine.enforceFinalProgressionShape(finalShapeInput, {
+      seed: Number(seasonYear) * 1009 + 23,
+      seasonYear,
+    });
+    const finalShapeRes = finalShapeMsg?.league ? finalShapeMsg : finalShapeMsg?.payload;
+    if (!finalShapeRes?.league) {
+      throw new Error("Final V23 saved-pool shape reconciliation returned no league.");
+    }
+    const backendFinalAudit = finalShapeRes?.debug?.hardShapeAudit || null;
+    if (!backendFinalAudit || backendFinalAudit.ok !== true) {
+      throw new Error(`Final V23 backend hard-cap validation failed: ${JSON.stringify(backendFinalAudit?.violations || [])}`);
+    }
+
+    updatedLeague = restoreCurrentDraftClassRookiesAfterProgression(finalShapeRes.league, beforeSnapshot, seasonYear);
+    updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
+
+    // Literal final save guard: POT can never finish below OVR, and veteran
+    // POT represents current ability. Also removes temporary shape markers.
+    updatedLeague = enforcePotentialFloorAfterProgression(updatedLeague);
+
+    const savedPoolAudit = auditFinalProgressionLeague(updatedLeague);
+    if (!savedPoolAudit.ok) {
+      throw new Error(`Final V23 UI-visible hard-cap validation failed: ${JSON.stringify(savedPoolAudit.violations || [])}`);
+    }
+    localStorage.setItem(
+      PROGRESSION_SHAPE_AUDIT_KEY,
+      JSON.stringify({
+        seasonYear,
+        runId: `dev_full_offseason_${seasonYear}`,
+        ts: Date.now(),
+        ...savedPoolAudit,
+        backendAudit: backendFinalAudit,
+      })
+    );
 
     const newDeltas = buildProgressionDeltas(beforeSnapshot, updatedLeague);
     const deltaCount = Object.keys(newDeltas || {}).length;

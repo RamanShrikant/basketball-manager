@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import { getDraftYear } from "../utils/seasonContext.js";
 
 const LEAGUE_KEY = "leagueData";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
@@ -133,16 +134,19 @@ function getSelectedTeamName(selectedTeam) {
 function getSeasonYear(leagueData) {
   const offseasonState = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {}) || {};
   const candidates = [
+    offseasonState?.draftYear,
     offseasonState?.seasonYear,
-    leagueData?.seasonYear,
-    leagueData?.currentSeasonYear,
-    leagueData?.seasonStartYear,
+    leagueData?.draftYear,
+    leagueData?.currentDraftYear,
+    leagueData?.draftState?.seasonYear,
+    getDraftYear(leagueData || {}),
   ]
     .map(Number)
     .filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
 
   return candidates.length ? Math.max(...candidates) : 2026;
 }
+
 
 function persistLeagueData(updated, setLeagueData) {
   if (!updated) return;

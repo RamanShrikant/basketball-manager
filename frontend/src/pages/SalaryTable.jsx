@@ -7,6 +7,33 @@ import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import styles from "./SalaryTable.module.css";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
+import { getContractSeasonYear, getFinancialSeasonYear, withOffseasonSeasonContext } from "../utils/seasonContext.js";
+
+const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
+
+function readOffseasonStateForSalaryTable() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(OFFSEASON_STATE_KEY) || "null");
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildSalaryContextLeague(leagueData) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData || {};
+  const offseasonState = readOffseasonStateForSalaryTable();
+  const y = Number(offseasonState?.seasonYear || 0);
+  if (!offseasonState?.active || !Number.isFinite(y) || y < 2020) return leagueData;
+  return withOffseasonSeasonContext({
+    ...leagueData,
+    financials: {
+      ...(leagueData.financials || {}),
+      currentSeasonYear: Number(offseasonState?.currentFinancialSeasonYear || offseasonState?.financialSeasonYear || leagueData?.financials?.currentSeasonYear || y + 1),
+      currentFinancialSeasonYear: Number(offseasonState?.currentFinancialSeasonYear || offseasonState?.financialSeasonYear || leagueData?.financials?.currentFinancialSeasonYear || y + 1),
+    },
+  }, y);
+}
 
 export default function SalaryTable() {
   const navigate = useNavigate();
@@ -17,22 +44,13 @@ export default function SalaryTable() {
   const [capHoldInfo, setCapHoldInfo] = useState(null);
   const [deadCapInfo, setDeadCapInfo] = useState(null);
 
-  const rawSeasonYear = Number(
-    leagueData?.seasonYear ??
-    leagueData?.currentSeasonYear ??
-    leagueData?.seasonStartYear ??
-    2025
-  );
-
-  const currentSeasonYear = Number.isFinite(rawSeasonYear)
-    ? rawSeasonYear + 1
-    : 2026;
-
-  const financialRules = getLeagueFinancialRules(leagueData || {}, currentSeasonYear);
+  const salaryContextLeague = useMemo(() => buildSalaryContextLeague(leagueData), [leagueData]);
+  const currentSeasonYear = getContractSeasonYear(salaryContextLeague || {});
+  const financialRules = getLeagueFinancialRules(salaryContextLeague || {}, getFinancialSeasonYear(salaryContextLeague || {}));
 
   const getLeagueAmount = (keys, fallback) => {
     for (const key of keys) {
-      const value = Number(leagueData?.[key] || 0);
+      const value = Number(salaryContextLeague?.[key] || leagueData?.[key] || 0);
       if (value > 0) return value;
     }
     return fallback;

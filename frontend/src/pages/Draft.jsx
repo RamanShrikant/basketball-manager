@@ -1,6 +1,7 @@
   import React, { useEffect, useMemo, useRef, useState } from "react";
   import { useNavigate } from "react-router-dom";
   import { useGame } from "../context/GameContext";
+import { getDraftYear } from "../utils/seasonContext.js";
   import * as simEngine from "../api/simEnginePy.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { applyDraftPickOwnershipToOrder, rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
@@ -135,13 +136,13 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     const meta = safeJSON(localStorage.getItem("bm_league_meta_v1"), {}) || {};
     const offseasonState = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {}) || {};
 
+    pushYear(offseasonState?.draftYear);
+    pushYear(leagueData?.draftYear);
+    pushYear(leagueData?.currentDraftYear);
+    pushYear(leagueData?.draftState?.seasonYear);
+    pushYear(meta?.draftYear);
+    pushYear(getDraftYear(leagueData || {}));
     pushYear(offseasonState?.seasonYear);
-    pushYear(leagueData?.seasonYear);
-    pushYear(leagueData?.currentSeasonYear);
-    pushYear(leagueData?.seasonStartYear);
-    pushYear(meta?.seasonYear);
-    pushYear(meta?.currentSeasonYear);
-    pushYear(meta?.seasonStartYear);
 
     if (candidates.length) return Math.max(...candidates);
     return 2026;

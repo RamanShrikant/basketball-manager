@@ -11,6 +11,7 @@ import {
   normalizeTeamName,
   sortDraftPickAssets,
 } from "./draftPicks.js";
+import { getContractSeasonYear } from "./seasonContext.js";
 
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
@@ -334,8 +335,9 @@ export function getPlayerSalary(player, leagueData) {
   const salaries = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
 
   if (salaries.length) {
-    const startYear = Number(contract.startYear || getCurrentSeasonYear(leagueData));
-    let idx = getCurrentSeasonYear(leagueData) - startYear;
+    const payrollSeasonYear = getContractSeasonYear(leagueData || {});
+    const startYear = Number(contract.startYear || payrollSeasonYear);
+    let idx = payrollSeasonYear - startYear;
     if (!Number.isFinite(idx) || idx < 0) idx = 0;
     if (idx >= salaries.length) idx = salaries.length - 1;
     return Number(salaries[idx] || 0);
@@ -361,8 +363,9 @@ function contractYearsLeft(player, leagueData) {
   const salaries = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
   if (!salaries.length) return 0;
 
-  const startYear = Number(contract.startYear || getCurrentSeasonYear(leagueData));
-  let idx = getCurrentSeasonYear(leagueData) - startYear;
+  const payrollSeasonYear = getContractSeasonYear(leagueData || {});
+  const startYear = Number(contract.startYear || payrollSeasonYear);
+  let idx = payrollSeasonYear - startYear;
   if (!Number.isFinite(idx) || idx < 0) idx = 0;
   if (idx >= salaries.length) idx = salaries.length - 1;
   return Math.max(1, salaries.length - idx);

@@ -3,10 +3,18 @@ import React, { useState, useEffect, useMemo } from "react";
 import FaceDNAEditor from "../components/FaceDNAEditor";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
+import { clearBoxScoresFromDB } from "../utils/indexedDbStorage.js";
+import {
+  getContractSeasonYear,
+  getDraftYear,
+  getFinancialSeasonYear,
+  withNormalizedSeasonContext,
+} from "../utils/seasonContext.js";
 
 const DRAFT_CLASSES_STORAGE_KEY = "bm_custom_draft_classes_v1";
 const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
 const FIRST_PLAYABLE_SEASON_YEAR = 2025;
+const DEFAULT_DRAFT_CLASS_YEAR = 2027;
 const LEAGUE_META_KEY = "bm_league_meta_v1";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 
@@ -25,47 +33,30 @@ function resolveLeagueSeasonYear(league = {}, fallback = FIRST_PLAYABLE_SEASON_Y
 }
 
 function withLeagueTimingFields(league = {}, requestedSeasonYear = FIRST_PLAYABLE_SEASON_YEAR) {
-  const seasonYear = validSeasonYear(requestedSeasonYear) ?? FIRST_PLAYABLE_SEASON_YEAR;
-  const expectedFinancialYear = seasonYear + 1;
-  const existingFinancials =
-    league.financials && typeof league.financials === "object" ? league.financials : {};
-
-  const currentFinancialSeasonYear =
-    validSeasonYear(league.currentFinancialSeasonYear) ??
-    validSeasonYear(existingFinancials.currentFinancialSeasonYear) ??
-    validSeasonYear(existingFinancials.currentSeasonYear) ??
-    validSeasonYear(existingFinancials.appliedThroughSeasonYear) ??
-    expectedFinancialYear;
-
-  return {
+  const seasonYear = validSeasonYear(requestedSeasonYear) ?? resolveLeagueSeasonYear(league);
+  return withNormalizedSeasonContext({
     ...league,
     seasonYear,
     currentSeasonYear: seasonYear,
     seasonStartYear: seasonYear,
-    currentFinancialSeasonYear,
-    financials: {
-      ...existingFinancials,
-      baseSeasonYear:
-        validSeasonYear(existingFinancials.baseSeasonYear) ?? expectedFinancialYear,
-      currentSeasonYear: currentFinancialSeasonYear,
-      currentFinancialSeasonYear,
-      appliedThroughSeasonYear:
-        validSeasonYear(existingFinancials.appliedThroughSeasonYear) ??
-        validSeasonYear(existingFinancials.appliedInflationThroughSeason) ??
-        currentFinancialSeasonYear,
-    },
-  };
+  });
 }
 
-function writeLeagueMetaSeason(seasonYear) {
+function writeLeagueMetaSeason(seasonYear, league = {}) {
   try {
-    const y = validSeasonYear(seasonYear) ?? FIRST_PLAYABLE_SEASON_YEAR;
+    const timed = withLeagueTimingFields(league, seasonYear);
     localStorage.setItem(
       LEAGUE_META_KEY,
       JSON.stringify({
-        seasonYear: y,
-        currentSeasonYear: y,
-        seasonStartYear: y,
+        seasonYear: timed.seasonYear,
+        currentSeasonYear: timed.currentSeasonYear,
+        seasonStartYear: timed.seasonStartYear,
+        displaySeasonYear: timed.displaySeasonYear,
+        draftYear: timed.draftYear,
+        contractSeasonYear: timed.contractSeasonYear,
+        payrollSeasonYear: timed.payrollSeasonYear,
+        currentPayrollSeasonYear: timed.currentPayrollSeasonYear,
+        currentFinancialSeasonYear: timed.currentFinancialSeasonYear,
       })
     );
   } catch {}
@@ -90,6 +81,24 @@ function clearRuntimeSeasonStores() {
     "bm_progression_deltas_v1",
     "bm_progression_meta_v1",
     "bm_draft_lottery_v1",
+    "bm_draft_state_v1",
+    "bm_trade_deadline_status_v1",
+    "bm_trade_builder_v1",
+    "bm_trade_finder_state_v1",
+    "bm_trade_finder_results_v1",
+    "bm_trade_debug_v1",
+    "bm_trade_desk_items_v1",
+    "bm_free_agency_last_route_v1",
+    "bm_player_team_options_results_v1",
+    "bm_season_stats_archive_v1",
+    "bm_power_rankings_v1",
+    "bm_dev_lottery_system_v1",
+    "bm_pending_calendar_sim_v1",
+    "bm_calendar_mood_context_v1",
+    "bm_cpu_trade_bank_test_config_v1",
+    "bm_cpu_trade_bank_snapshot_v1",
+    "bm_offseason_mood_baseline_v1",
+    "bm_offseason_trade_snapshot_v1",
   ];
 
   for (const key of exactKeys) {
@@ -106,11 +115,22 @@ function clearRuntimeSeasonStores() {
         key.startsWith(RESULT_V3_PREFIX) ||
         key.startsWith("bm_calendar_cursor_v1_") ||
         key.startsWith("bm_all_star_handled_v1_") ||
-        key.startsWith("bm_trade_deadline_handled_v1_")
+        key.startsWith("bm_trade_deadline_handled_v1_") ||
+        key.startsWith("gameplan_") ||
+        key.startsWith("bm_box_score_") ||
+        key.startsWith("bm_draft_class_mode_") ||
+        key.startsWith("bm_draft_state_v1_") ||
+        key.startsWith("bm_draft_lottery_v1_")
       ) {
         localStorage.removeItem(key);
       }
     }
+  } catch {}
+
+  try {
+    clearBoxScoresFromDB().catch((err) => {
+      console.warn("[LeagueEditor] IndexedDB box-score clear failed", err);
+    });
   } catch {}
 }
 
@@ -235,7 +255,7 @@ function getDraftPickProtectionOptions(asset = {}) {
 function createDefaultDraftPickForm(overrides = {}) {
   return {
     type: "pick",
-    year: 2026,
+    year: getDraftYear(getEditorLeagueSnapshot()),
     round: 1,
     originalTeam: "",
     ownerTeam: "",
@@ -269,7 +289,7 @@ function makeTeamCode(name = "") {
 
 function makeDraftPickAssetId(asset = {}) {
   const type = asset.type === "swap" ? "SWAP" : "PICK";
-  const year = Number(asset.year || 2026);
+  const year = Number(asset.year || getDraftYear(getEditorLeagueSnapshot()));
   const round = Number(asset.round || 1);
   const original = makeTeamCode(asset.originalTeam || "ORIG");
   const owner = makeTeamCode(asset.ownerTeam || "OWNER");
@@ -280,7 +300,7 @@ function makeDraftPickAssetId(asset = {}) {
 
 function normalizeDraftPickAsset(row = {}, index = 0) {
   const type = row.type === "swap" || row.assetType === "swap" || row.isSwap ? "swap" : "pick";
-  const year = Number(row.year || row.draftYear || 2026);
+  const year = Number(row.year || row.draftYear || getDraftYear(getEditorLeagueSnapshot()));
   const round = Number(row.round || row.draftRound || 1);
 
   const protections = safePickText(row.protections || row.protectionText || row.protection || row.displayProtection || "") || "Unprotected";
@@ -291,7 +311,7 @@ function normalizeDraftPickAsset(row = {}, index = 0) {
     id: row.id || "",
     type,
     assetType: type,
-    year: Number.isFinite(year) ? year : 2026,
+    year: Number.isFinite(year) ? year : getDraftYear(getEditorLeagueSnapshot()),
     round: round === 2 ? 2 : 1,
     originalTeam: safePickText(row.originalTeam || row.originalTeamName || row.teamName || row.team || ""),
     ownerTeam: safePickText(row.ownerTeam || row.currentOwner || row.currentOwnerTeamName || row.holderTeam || ""),
@@ -380,12 +400,12 @@ function getEditorLeagueSnapshot() {
 
 function getEditorContractStartYear() {
   const league = getEditorLeagueSnapshot();
-  return Number(league?.currentFinancialSeasonYear || league?.seasonYear || league?.currentSeasonYear || 2026);
+  return getContractSeasonYear(league || {});
 }
 
 function getEditorDefaultSalary() {
   const league = getEditorLeagueSnapshot();
-  const rules = getLeagueFinancialRules(league, getEditorContractStartYear());
+  const rules = getLeagueFinancialRules(league, getFinancialSeasonYear(league));
   return Math.round(Number(rules.salaryCap || 154_647_000) * 0.052 / 1_000) * 1_000;
 }
 
@@ -452,7 +472,7 @@ export default function LeagueEditor() {
   const [sendBIds, setSendBIds] = useState([]);
 
   // Draft class creator state. This only stores custom classes and does not decide draft mode.
-  const [draftClassYear, setDraftClassYear] = useState(2026);
+  const [draftClassYear, setDraftClassYear] = useState(DEFAULT_DRAFT_CLASS_YEAR);
   const [draftClasses, setDraftClasses] = useState({});
   const [draftClassStatus, setDraftClassStatus] = useState("");
 
@@ -1609,11 +1629,11 @@ const normalizePlayer = (p) => {
   }
 
   function getDraftClassStorageKey(seasonYear) {
-    return `${CUSTOM_DRAFT_CLASS_PREFIX}${Number(seasonYear || draftClassYear || 2026)}`;
+    return `${CUSTOM_DRAFT_CLASS_PREFIX}${Number(seasonYear || draftClassYear || DEFAULT_DRAFT_CLASS_YEAR)}`;
   }
 
   function getDraftClassForYear(year = draftClassYear) {
-    return draftClasses[String(Number(year || 2026))] || [];
+    return draftClasses[String(Number(year || DEFAULT_DRAFT_CLASS_YEAR))] || [];
   }
 
   function getDraftSourceForProspect(row = {}) {
@@ -1663,7 +1683,7 @@ const normalizePlayer = (p) => {
     const stamina = clamp(Number(row.stamina ?? calcStamina(age, attrs[ATH])), 40, 99);
     const source = getDraftSourceForProspect(row);
     const headshot = row.headshot || row.image || row.img || "";
-    const resolvedSeasonYear = Number(seasonYear || row.draftClassYear || row.seasonYear || draftClassYear || 2026);
+    const resolvedSeasonYear = Number(seasonYear || row.draftClassYear || row.seasonYear || draftClassYear || DEFAULT_DRAFT_CLASS_YEAR);
 
     return normalizePlayer({
       ...row,
@@ -1747,7 +1767,7 @@ const normalizePlayer = (p) => {
       ? payload.players
       : [];
 
-    const seasonYear = Number(payload.seasonYear || payload.draftClassYear || fallbackSeasonYear || 2026);
+    const seasonYear = Number(payload.seasonYear || payload.draftClassYear || fallbackSeasonYear || DEFAULT_DRAFT_CLASS_YEAR);
     const draftClass = rows.map((row, index) => normalizeDraftProspect(row, index, seasonYear));
 
     return {
@@ -1780,7 +1800,7 @@ const normalizePlayer = (p) => {
   }
 
   function updateDraftClassYear(year, updater) {
-    const seasonYear = Number(year || draftClassYear || 2026);
+    const seasonYear = Number(year || draftClassYear || DEFAULT_DRAFT_CLASS_YEAR);
     setDraftClasses((prev) => {
       const copy = JSON.parse(JSON.stringify(prev || {}));
       const key = String(seasonYear);
@@ -1792,7 +1812,7 @@ const normalizePlayer = (p) => {
   }
 
   function exportDraftClassYear(year = draftClassYear) {
-    const seasonYear = Number(year || draftClassYear || 2026);
+    const seasonYear = Number(year || draftClassYear || DEFAULT_DRAFT_CLASS_YEAR);
     const payload = normalizeDraftClassPayload(
       {
         seasonYear,
@@ -1824,7 +1844,7 @@ const normalizePlayer = (p) => {
           throw new Error("Draft class JSON has no prospects.");
         }
 
-        const seasonYear = Number(normalized.seasonYear || draftClassYear || 2026);
+        const seasonYear = Number(normalized.seasonYear || draftClassYear || DEFAULT_DRAFT_CLASS_YEAR);
 
         setDraftClasses((prev) => {
           const copy = JSON.parse(JSON.stringify(prev || {}));
@@ -1850,7 +1870,7 @@ const normalizePlayer = (p) => {
   }
 
   function clearDraftClassYear(year = draftClassYear) {
-    const seasonYear = Number(year || draftClassYear || 2026);
+    const seasonYear = Number(year || draftClassYear || DEFAULT_DRAFT_CLASS_YEAR);
     if (!window.confirm(`Clear the ${seasonYear} custom draft class?`)) return;
 
     setDraftClasses((prev) => {
@@ -2213,7 +2233,7 @@ const normalizePlayer = (p) => {
       seasonYear
     );
 
-    writeLeagueMetaSeason(seasonYear);
+    writeLeagueMetaSeason(seasonYear, timedLeague);
     localStorage.setItem("leagueData", JSON.stringify(timedLeague));
     saveLeagueDataInBackground(timedLeague);
   }, [hasLoadedLeague, leagueName, conferences, freeAgents, draftPicks, seasonYear]);
@@ -2542,7 +2562,7 @@ const normalizePlayer = (p) => {
                       const timed = withLeagueTimingFields(updated, resolvedSeasonYear);
 
                       clearRuntimeSeasonStores();
-                      writeLeagueMetaSeason(resolvedSeasonYear);
+                      writeLeagueMetaSeason(resolvedSeasonYear, timed);
 
                       setLeagueName(timed.leagueName);
                       setConferences(timed.conferences);
@@ -2806,7 +2826,7 @@ const normalizePlayer = (p) => {
                 value={draftClassYear}
                 onChange={(e) => setDraftClassYear(Number(e.target.value))}
               >
-                {[2026, 2027, 2028, 2029, 2030, 2031, 2032, 2033, 2034, 2035].map((year) => (
+                {[2027, 2028, 2029, 2030, 2031, 2032, 2033, 2034, 2035].map((year) => (
                   <option key={year} value={year}>
                     Class of {year}
                   </option>

@@ -7,6 +7,7 @@ const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
 const CUSTOM_DRAFT_CLASSES_INDEX_KEY = "bm_custom_draft_classes_v1";
 const CUSTOM_DRAFT_CLASS_MODE_BY_YEAR_KEY = "bm_draft_class_mode_by_year_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
+const DEFAULT_DRAFT_CLASS_YEAR = 2027;
 
 function safeJSON(raw, fallback = null) {
   try {
@@ -26,7 +27,7 @@ function getRowsFromDraftClassPayload(payload) {
 }
 
 function getDraftClassStorageKey(seasonYear) {
-  return `${CUSTOM_DRAFT_CLASS_PREFIX}${Number(seasonYear || 2026)}`;
+  return `${CUSTOM_DRAFT_CLASS_PREFIX}${Number(seasonYear || DEFAULT_DRAFT_CLASS_YEAR)}`;
 }
 
 function inferDraftClassYear(payload, fallbackYear) {
@@ -39,11 +40,11 @@ function inferDraftClassYear(payload, fallbackYear) {
       rowYear?.seasonYear ||
       rowYear?.draftYear ||
       fallbackYear ||
-      2026
+      DEFAULT_DRAFT_CLASS_YEAR
   );
 
   if (Number.isFinite(year) && year >= 2020 && year <= 2100) return year;
-  return Number(fallbackYear || 2026);
+  return Number(fallbackYear || DEFAULT_DRAFT_CLASS_YEAR);
 }
 
 function normalizeDraftClassForVault(payload, fallbackYear, fileName = "") {
@@ -106,7 +107,7 @@ export default function Play() {
   const { setLeagueData } = useGame();
   const [fileName, setFileName] = useState("");
   const [error, setError] = useState("");
-  const [draftClassYear, setDraftClassYear] = useState(2026);
+  const [draftClassYear, setDraftClassYear] = useState(DEFAULT_DRAFT_CLASS_YEAR);
   const [draftClassStatus, setDraftClassStatus] = useState("");
   const [draftClassIndex, setDraftClassIndex] = useState(() =>
     safeJSON(localStorage.getItem(CUSTOM_DRAFT_CLASSES_INDEX_KEY), {}) || {}
@@ -116,7 +117,7 @@ export default function Play() {
   );
   const navigate = useNavigate();
 
-  const selectedYearKey = String(Number(draftClassYear || 2026));
+  const selectedYearKey = String(Number(draftClassYear || DEFAULT_DRAFT_CLASS_YEAR));
   const selectedClassSummary = draftClassIndex?.[selectedYearKey] || null;
   const selectedClassMode = draftClassModes?.[selectedYearKey] || (selectedClassSummary ? "custom" : "auto");
 
@@ -137,7 +138,7 @@ export default function Play() {
   };
 
   const setDraftClassModeForYear = (year, mode) => {
-    const seasonYear = Number(year || draftClassYear || 2026);
+    const seasonYear = Number(year || draftClassYear || DEFAULT_DRAFT_CLASS_YEAR);
     const key = String(seasonYear);
     const nextModes = {
       ...(draftClassModes || {}),
@@ -201,7 +202,7 @@ export default function Play() {
       try {
         const parsed = JSON.parse(event.target.result);
         const normalized = normalizeDraftClassForVault(parsed, draftClassYear, file.name);
-        const seasonYear = Number(normalized.seasonYear || draftClassYear || 2026);
+        const seasonYear = Number(normalized.seasonYear || draftClassYear || DEFAULT_DRAFT_CLASS_YEAR);
         const key = String(seasonYear);
 
         localStorage.setItem(getDraftClassStorageKey(seasonYear), JSON.stringify(normalized));
@@ -238,7 +239,7 @@ export default function Play() {
   };
 
   const clearDraftClassForYear = () => {
-    const seasonYear = Number(draftClassYear || 2026);
+    const seasonYear = Number(draftClassYear || DEFAULT_DRAFT_CLASS_YEAR);
     const key = String(seasonYear);
 
     localStorage.removeItem(getDraftClassStorageKey(seasonYear));
@@ -306,7 +307,7 @@ export default function Play() {
               onChange={(e) => setDraftClassYear(Number(e.target.value))}
               className="rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm"
             >
-              {[2026, 2027, 2028, 2029, 2030, 2031, 2032, 2033, 2034, 2035].map((year) => (
+              {[2027, 2028, 2029, 2030, 2031, 2032, 2033, 2034, 2035].map((year) => (
                 <option key={year} value={year}>
                   Class of {year}
                 </option>
@@ -401,7 +402,7 @@ export default function Play() {
       </div>
 
       <p className="mt-10 text-sm text-gray-400 italic">
-        Tip: You can use your “NBA 2025.json” to test this.
+        Tip: Upload your 2026-27 league JSON, then optionally attach a 2027+ custom draft class.
       </p>
     </div>
   );

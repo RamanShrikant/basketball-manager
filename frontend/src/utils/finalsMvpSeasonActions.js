@@ -3,6 +3,7 @@ import { archiveCurrentSeasonIntoPlayerCards } from "./playerCareerHistory";
 import { saveLeagueDataInBackground } from "./leagueStorage.js";
 import { ensureCompletedSeasonStatsArchive } from "./seasonStatsArchive.js";
 import { clearBoxScoresFromDB } from "./indexedDbStorage.js";
+import { withOffseasonSeasonContext } from "./seasonContext.js";
 
 const META_KEY = "bm_league_meta_v1";
 const SCHED_KEY = "bm_schedule_v3";
@@ -50,9 +51,21 @@ function bumpSeasonYearMeta(currentSeasonStartYear = null) {
     safeSeasonYear(meta.seasonYear) ??
     fallback;
 
-  meta.seasonYear = cur + 1;
-  meta.currentSeasonYear = meta.seasonYear;
-  meta.seasonStartYear = meta.seasonYear;
+  const nextSeasonYear = cur + 1;
+  meta.seasonYear = nextSeasonYear;
+  meta.currentSeasonYear = nextSeasonYear;
+  meta.seasonStartYear = nextSeasonYear;
+  meta.displaySeasonYear = nextSeasonYear + 1;
+  meta.seasonEndYear = nextSeasonYear + 1;
+  meta.contractSeasonYear = nextSeasonYear;
+  meta.payrollSeasonYear = nextSeasonYear;
+  meta.currentPayrollSeasonYear = nextSeasonYear;
+  meta.salarySeasonYear = nextSeasonYear;
+  meta.currentSalarySeasonYear = nextSeasonYear;
+  meta.draftYear = nextSeasonYear;
+  meta.currentDraftYear = nextSeasonYear;
+  meta.currentFinancialSeasonYear = nextSeasonYear + 1;
+  meta.financialSeasonYear = nextSeasonYear + 1;
 
   localStorage.setItem(META_KEY, JSON.stringify(meta));
   return meta.seasonYear;
@@ -157,9 +170,18 @@ function pushFinalsMvpToHistory(fmvpRaw) {
 }
 
 function buildFreshOffseasonState(seasonYear) {
+  const y = safeSeasonYear(seasonYear, FIRST_PLAYABLE_SEASON_YEAR + 1);
   return {
     active: true,
-    seasonYear,
+    seasonYear: y,
+    draftYear: y,
+    currentDraftYear: y,
+    payrollSeasonYear: y,
+    contractSeasonYear: y,
+    salarySeasonYear: y,
+    financialSeasonYear: y + 1,
+    currentFinancialSeasonYear: y + 1,
+    displaySeasonYear: y + 1,
     retirementsComplete: false,
     freeAgencyComplete: false,
     progressionComplete: false,
@@ -228,10 +250,7 @@ export function finalizeFinalsMvpAndGoOffseason({
 
   // 8) update leagueData season year in memory + IndexedDB. localStorage only keeps a tiny pointer.
   if (archivedLeagueData) {
-    const updatedLeague = safeClone(archivedLeagueData);
-    updatedLeague.seasonYear = nextSeasonYear;
-    updatedLeague.currentSeasonYear = nextSeasonYear;
-    updatedLeague.seasonStartYear = nextSeasonYear;
+    const updatedLeague = withOffseasonSeasonContext(safeClone(archivedLeagueData), nextSeasonYear);
     updatedLeague.draftState = null;
 
     if (typeof setLeagueData === "function") {

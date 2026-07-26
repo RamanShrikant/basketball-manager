@@ -10852,6 +10852,58 @@ def is_priority_offseason_overfill_candidate(
     return False
 
 
+def is_late_rights_retention_candidate(
+    player: Dict[str, Any],
+    team_name: Optional[str],
+    current_day: int,
+    max_days: int,
+) -> bool:
+    """Late-market safety valve for 76+ OVR own-rights free agents.
+
+    By days 8/9 in a 10-day market, teams should not leave useful players
+    sitting unsigned merely because the cap/roster planning board filled up.
+    This only applies to the team that already owns the player's rights.
+    """
+    if not player or not team_name:
+        return False
+
+    if int(num(current_day, 0)) < max(8, int(num(max_days, DEFAULT_FREE_AGENCY_DAYS)) - 2):
+        return False
+
+    rights = get_player_rights(player)
+    if rights.get("heldByTeam") != team_name:
+        return False
+    if player.get("rightsRenounced"):
+        return False
+
+    overall = int(round(num(player.get("overall"), 0)))
+    return overall >= 76
+
+
+def build_late_rights_retention_spending_result(
+    league_data: Dict[str, Any],
+    team_name: str,
+    player: Dict[str, Any],
+    contract: Dict[str, Any],
+    snapshot: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    snapshot = snapshot or get_team_cap_snapshot(league_data, team_name)
+    offered_current_salary = get_contract_salary_for_year(contract, get_operating_season_year(league_data))
+    payroll = int(num(snapshot.get("payroll"), 0)) if snapshot.get("ok") else 0
+
+    return {
+        "ok": True,
+        "reason": "Late-market own-rights retention override for a 76+ OVR player.",
+        "teamSnapshot": snapshot,
+        "exceptionRoom": MAX_SALARY,
+        "spendingType": "late_rights_retention",
+        "exceptionType": None,
+        "birdRights": get_player_rights(player),
+        "payrollZone": get_payroll_zone_for_amount(league_data, payroll),
+        "projectedPayroll": payroll + int(num(offered_current_salary, 0)),
+        "lateRightsRetentionOverride": True,
+    }
+
 def can_add_standard_player_during_free_agency(
     league_data: Dict[str, Any],
     team: Dict[str, Any],
@@ -10869,8 +10921,13 @@ def can_add_standard_player_during_free_agency(
     standard_count = len(get_team_players(team))
     controlled_count = get_team_controlled_player_count(team)
 
-    if str(source or "").lower() == "user":
+    source_key = str(source or "").lower()
+
+    if source_key == "user":
         return True, "User offseason overfill allowed until Calendar simulation."
+
+    if source_key == "late_rights_retention" and is_rights_team(player, team_name) and int(round(num(player.get("overall"), 0))) >= 76:
+        return True, "Late-market own-rights retention overfill allowed."
 
     if controlled_count >= OFFSEASON_CONTROLLED_MAX:
         return False, f"{team_name} is at the offseason controlled-player planning limit ({OFFSEASON_CONTROLLED_MAX})."
@@ -10937,7 +10994,12 @@ def generate_cpu_offers_for_day(
             team_name = team_name,
             state = None,
         )
-        if remaining_roster_slots <= 0:
+        has_late_rights_retention_candidate = any(
+            is_late_rights_retention_candidate(debug_player, team_name, current_day, max_days)
+            for debug_player in free_agents
+        )
+
+        if remaining_roster_slots <= 0 and not has_late_rights_retention_candidate:
             for debug_player in free_agents:
                 if is_rfa_debug_target(debug_player, team_name):
                     record_fa_debug(
@@ -10965,6 +11027,9 @@ def generate_cpu_offers_for_day(
             target_override = offseason_min_target,
             snapshot = snapshot,
         )
+        if has_late_rights_retention_candidate:
+            active_offer_limit = max(active_offer_limit, get_active_offer_count_for_team(state, team_name) + 2)
+
         if active_offer_limit <= 0:
             for debug_player in free_agents:
                 if is_rfa_debug_target(debug_player, team_name):
@@ -11011,6 +11076,9 @@ def generate_cpu_offers_for_day(
         elif actual_roster_deficit >= 2:
             soft_offer_slots += 2
         max_offers_today = min(caps["total"], max(1, soft_offer_slots))
+        if has_late_rights_retention_candidate:
+            max_offers_today = max(max_offers_today, 2)
+
         if max_offers_today <= 0:
             for debug_player in free_agents:
                 if is_rfa_debug_target(debug_player, team_name):
@@ -11053,10 +11121,11 @@ def generate_cpu_offers_for_day(
             own_rights = is_rights_team(player, team_name)
             previous_team_player = bool(previous_team and previous_team == team_name)
             incumbent_priority = is_incumbent_retention_priority(player, team_name)
+            late_rights_retention_candidate = is_late_rights_retention_candidate(player, team_name, current_day, max_days)
             debug_this_candidate = is_rfa_debug_target(player, team_name)
             over_standard_limit = actual_roster_count >= get_roster_limit(league_data)
 
-            if over_standard_limit and not is_priority_offseason_overfill_candidate(
+            if over_standard_limit and not late_rights_retention_candidate and not is_priority_offseason_overfill_candidate(
                 player = player,
                 team_name = team_name,
                 league_data = league_data,
@@ -11136,7 +11205,11 @@ def generate_cpu_offers_for_day(
             elif current_day >= max_days - 2:
                 min_fit_threshold -= 0.030
 
-            min_fit_threshold = max(0.05, min_fit_threshold)
+            if late_rights_retention_candidate:
+                min_fit_threshold = 0.0
+            else:
+                min_fit_threshold = max(0.05, min_fit_threshold)
+
             if fit_score < min_fit_threshold:
                 if debug_this_candidate:
                     record_fa_debug(
@@ -11208,6 +11281,8 @@ def generate_cpu_offers_for_day(
                 target_score += 0.180
             if incumbent_priority:
                 target_score += 0.120
+            if late_rights_retention_candidate:
+                target_score += 0.500
             if incumbent_priority and rights.get("restrictedFreeAgent"):
                 target_score += 0.060
 
@@ -11230,6 +11305,8 @@ def generate_cpu_offers_for_day(
                 own_rights = own_rights,
                 previous_team_player = previous_team_player,
             )
+            if late_rights_retention_candidate:
+                target_tier = "incumbent"
 
             # Opening day should be best-case chasing, not backup/depth dumping.
             if current_day <= 1 and target_tier in ["value", "depth"]:
@@ -11305,7 +11382,7 @@ def generate_cpu_offers_for_day(
                 need_score = need_score,
             )
 
-            if not is_cpu_serious_offer_for_player(
+            if not late_rights_retention_candidate and not is_cpu_serious_offer_for_player(
                 player = player,
                 contract = contract,
                 current_day = current_day,
@@ -11331,17 +11408,26 @@ def generate_cpu_offers_for_day(
                     )
                 continue
 
-            eval_res = evaluate_market_offer_submission(
-                league_data = league_data,
-                team_name = team_name,
-                player = player,
-                contract = contract,
-                exclude_offer_id = None,
-                snapshot = snapshot,
-                state = state,
-                active_offer_count = active_offer_count,
-                active_offer_limit = active_offer_limit,
-            )
+            if late_rights_retention_candidate:
+                eval_res = build_late_rights_retention_spending_result(
+                    league_data = league_data,
+                    team_name = team_name,
+                    player = player,
+                    contract = contract,
+                    snapshot = snapshot,
+                )
+            else:
+                eval_res = evaluate_market_offer_submission(
+                    league_data = league_data,
+                    team_name = team_name,
+                    player = player,
+                    contract = contract,
+                    exclude_offer_id = None,
+                    snapshot = snapshot,
+                    state = state,
+                    active_offer_count = active_offer_count,
+                    active_offer_limit = active_offer_limit,
+                )
             if not eval_res.get("ok"):
                 if debug_this_candidate:
                     record_fa_debug(
@@ -11410,6 +11496,7 @@ def generate_cpu_offers_for_day(
                 "ownRights": own_rights,
                 "previousTeamPlayer": previous_team_player,
                 "rawCapStarPath": raw_cap_star_path,
+                "lateRightsRetentionCandidate": late_rights_retention_candidate,
             })
 
         tier_order = {
@@ -11435,7 +11522,7 @@ def generate_cpu_offers_for_day(
         value_used = 0
 
         for item in candidates:
-            if active_offer_count >= active_offer_limit:
+            if active_offer_count >= active_offer_limit and not item.get("lateRightsRetentionCandidate"):
                 if is_rfa_debug_target(item.get("player"), team_name):
                     record_fa_debug(
                         league_data = league_data,
@@ -11453,7 +11540,7 @@ def generate_cpu_offers_for_day(
                         },
                     )
                 break
-            if offers_used >= max_offers_today:
+            if offers_used >= max_offers_today and not item.get("lateRightsRetentionCandidate"):
                 if is_rfa_debug_target(item.get("player"), team_name):
                     record_fa_debug(
                         league_data = league_data,
@@ -11546,6 +11633,9 @@ def generate_cpu_offers_for_day(
             offer_record["teamDirection"] = profile.get("direction")
             offer_record["teamBoardScore"] = round(float(num(item.get("score"), 0.0)), 3)
             offer_record["targetTier"] = target_tier
+            if item.get("lateRightsRetentionCandidate"):
+                offer_record["source"] = "late_rights_retention"
+                offer_record["lateRightsRetentionOffer"] = True
             offer_record["incumbentPriority"] = bool(item.get("incumbentPriority"))
             offer_record["ownRightsOffer"] = bool(item.get("ownRights"))
             offer_record["previousTeamOffer"] = bool(item.get("previousTeamPlayer"))
@@ -11626,6 +11716,7 @@ def generate_cpu_offers_for_day(
                 "playerViewScore": offer_record.get("playerViewScore"),
                 "incumbentPriority": offer_record.get("incumbentPriority"),
                 "ownRightsOffer": offer_record.get("ownRightsOffer"),
+                "lateRightsRetentionOffer": offer_record.get("lateRightsRetentionOffer"),
                 "needScore": offer_record.get("needScore"),
                 "positionBucket": offer_record.get("positionBucket"),
                 "weakestPositions": offer_record.get("weakestPositions"),
@@ -12145,8 +12236,25 @@ def finalize_free_agent_signing_from_offer(
         return None
 
     contract = apply_free_agency_start_year(league_data, chosen_offer.get("contract"))
+    late_rights_retention_finalize = bool(
+        chosen_offer.get("lateRightsRetentionOffer")
+        or chosen_offer.get("source") == "late_rights_retention"
+    ) and is_late_rights_retention_candidate(
+        player = player,
+        team_name = signing_team_name,
+        current_day = current_day,
+        max_days = int(num(state.get("maxDays"), DEFAULT_FREE_AGENCY_DAYS)),
+    )
 
-    if chosen_offer.get("forceRfaMatch") or matched_rfa:
+    if late_rights_retention_finalize:
+        spending_res = build_late_rights_retention_spending_result(
+            league_data = league_data,
+            team_name = signing_team_name,
+            player = player,
+            contract = contract,
+            snapshot = snapshot,
+        )
+    elif chosen_offer.get("forceRfaMatch") or matched_rfa:
         spending_res = validate_offer_spending_rules(
             league_data = league_data,
             team_name = signing_team_name,
@@ -12231,7 +12339,7 @@ def finalize_free_agent_signing_from_offer(
         team = team,
         player = player,
         team_name = signing_team_name,
-        source = chosen_offer.get("source") or "cpu",
+        source = "late_rights_retention" if late_rights_retention_finalize else (chosen_offer.get("source") or "cpu"),
         matched_rfa = bool(chosen_offer.get("forceRfaMatch") or matched_rfa),
     )
     if not roster_add_ok:
@@ -13756,6 +13864,13 @@ def get_roster_repair_keep_score(player: Dict[str, Any]) -> float:
     elif overall >= 72:
         score += 1.0
 
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    fa_meta = player.get("freeAgencyMeta") if isinstance(player.get("freeAgencyMeta"), dict) else {}
+    if overall >= 76 and (meta.get("preSimulationHighValueSigning") or fa_meta.get("resolvedByPreSimulationSweep")):
+        # A 76+ player signed by the pre-simulation sweep should not be the
+        # immediate roster-limit casualty. The team must trim below him first.
+        score += 24.0
+
     # Cheap young assets are worth holding; older low-end money is more cuttable.
     if age <= 24 and upside >= 4:
         score += 2.0
@@ -13956,6 +14071,395 @@ def trim_cpu_team_to_season_roster_limits(
     return actions
 
 
+def _pre_sim_market_offer_capacity(
+    league_data: Dict[str, Any],
+    team_name: str,
+    player: Dict[str, Any],
+) -> Dict[str, Any]:
+    snapshot = get_team_cap_snapshot(league_data, team_name)
+    if not snapshot.get("ok"):
+        return {"ok": False, "teamName": team_name, "maxOffer": 0, "snapshot": snapshot}
+
+    max_offer = int(get_team_exception_room(league_data, team_name, player, snapshot=snapshot))
+    cap_room = int(num(snapshot.get("rawCapRoomWithoutHolds") or snapshot.get("capRoom"), 0))
+    roster_count = len(get_team_players(find_team_entry(league_data, team_name)[2] or {}))
+    return {
+        "ok": True,
+        "teamName": team_name,
+        "maxOffer": max_offer,
+        "capRoom": cap_room,
+        "rosterCount": roster_count,
+        "snapshot": snapshot,
+    }
+
+
+def _build_pre_sim_one_year_offer(
+    league_data: Dict[str, Any],
+    team_name: str,
+    player: Dict[str, Any],
+    season_year: int,
+    offer_cap_override: Optional[int] = None,
+) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
+    capacity = _pre_sim_market_offer_capacity(league_data, team_name, player)
+    if not capacity.get("ok"):
+        return None, capacity, {"ok": False, "reason": "cap snapshot unavailable"}
+
+    market = player.get("marketValue") if isinstance(player.get("marketValue"), dict) else estimate_market_value(player)
+    expected = int(num(market.get("expectedYear1Salary") or market.get("expectedAAV"), MIN_DEAL))
+    max_offer = int(num(capacity.get("maxOffer"), 0))
+    if offer_cap_override is not None:
+        max_offer = min(max_offer, int(num(offer_cap_override, 0)))
+        capacity = {
+            **capacity,
+            "maxOffer": max_offer,
+            "preSimEffectiveMaxOffer": max_offer,
+            "preSimOfferCapOverride": int(num(offer_cap_override, 0)),
+        }
+    minimum = int(get_minimum_salary_amount(league_data))
+
+    # User rule: offer as much as the team can offer; if market value is less
+    # than the team can offer, use market value instead. Always keep the deal at
+    # or above the league minimum so every 76+ FA has a legal one-year landing.
+    year_one = int(round_to_nearest(max(minimum, min(expected, max_offer if max_offer > 0 else minimum)), base=1_000))
+    year_one = int(clamp(year_one, minimum, MAX_SALARY))
+
+    contract = normalize_contract({
+        "startYear": int(season_year),
+        "salaryByYear": [year_one],
+        "option": None,
+    })
+
+    spending = validate_offer_spending_rules(
+        league_data = league_data,
+        team_name = team_name,
+        player = player,
+        contract = contract,
+        allow_pending_cap_hold_clearance = True,
+    )
+
+    if not spending.get("ok") and year_one > minimum:
+        contract = normalize_contract({
+            "startYear": int(season_year),
+            "salaryByYear": [minimum],
+            "option": None,
+        })
+        spending = validate_offer_spending_rules(
+            league_data = league_data,
+            team_name = team_name,
+            player = player,
+            contract = contract,
+            allow_pending_cap_hold_clearance = True,
+        )
+
+    return contract if spending.get("ok") else None, capacity, spending
+
+
+def _sign_high_value_free_agent_for_sim_start(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    team_name: str,
+    season_year: int,
+    current_day: int,
+    source: str = "pre_sim_high_value_fa_sweep",
+    offer_cap_override: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    free_agents = league_data.setdefault("freeAgents", [])
+    player_key = get_player_key_from_player(player)
+    player_idx = -1
+    for idx, candidate in enumerate(free_agents):
+        if get_player_key_from_player(candidate) == player_key:
+            player_idx = idx
+            break
+    if player_idx < 0:
+        return None
+
+    _, _, team = find_team_entry(league_data, team_name)
+    if team is None:
+        return None
+
+    live_player = free_agents[player_idx]
+    contract, capacity, spending = _build_pre_sim_one_year_offer(
+        league_data = league_data,
+        team_name = team_name,
+        player = live_player,
+        season_year = season_year,
+        offer_cap_override = offer_cap_override,
+    )
+    if not contract:
+        return None
+
+    signed_player = copy.deepcopy(live_player)
+    signed_player["contract"] = contract
+    signed_player["marketValue"] = estimate_market_value(signed_player)
+    signed_player.setdefault("meta", {})
+    if isinstance(signed_player.get("meta"), dict):
+        signed_player["meta"]["preSimulationHighValueSigning"] = True
+        signed_player["meta"]["preSimulationSignedSeasonYear"] = season_year
+    signed_player["freeAgencyMeta"] = {
+        **(signed_player.get("freeAgencyMeta") if isinstance(signed_player.get("freeAgencyMeta"), dict) else {}),
+        "resolvedByPreSimulationSweep": True,
+        "resolvedDay": current_day,
+        "source": source,
+    }
+
+    update_player_rights_after_signing(
+        player = signed_player,
+        team_name = team_name,
+        signing_source = "free_agency",
+        matched_rfa = False,
+    )
+
+    setoff_rows = apply_dead_cap_setoff_for_signed_player(
+        league_data = league_data,
+        player = live_player,
+        signing_team_name = team_name,
+        contract = signed_player.get("contract"),
+    )
+
+    free_agents.pop(player_idx)
+    team.setdefault("players", []).append(signed_player)
+
+    current_salary = get_contract_salary_for_year(contract, season_year)
+    exception_usage = record_exception_usage_for_signing(
+        league_data = league_data,
+        team_name = team_name,
+        spending_res = spending,
+        current_year_salary = current_salary,
+    )
+
+    state = ensure_free_agency_state(league_data)
+    state.setdefault("signedPlayersLog", [])
+    state.setdefault("offersByPlayer", {})
+    if player_key in state.get("offersByPlayer", {}):
+        del state["offersByPlayer"][player_key]
+
+    story_context = build_free_agency_story_context(
+        league_data = league_data,
+        player = signed_player,
+        team_name = team_name,
+        contract = contract,
+        row = {
+            "spendingType": spending.get("spendingType") or "pre_sim_market",
+            "exceptionType": spending.get("exceptionType"),
+            "source": source,
+        },
+        event_type = "pre_sim_high_value_signing",
+        current_day = current_day,
+    )
+
+    state["signedPlayersLog"].append({
+        "day": current_day,
+        "playerId": signed_player.get("id"),
+        "playerName": signed_player.get("name"),
+        "teamName": team_name,
+        "contract": contract,
+        "allOffers": [],
+        "source": source,
+        "spendingType": spending.get("spendingType"),
+        "exceptionType": spending.get("exceptionType"),
+        "storyContext": story_context,
+    })
+
+    salary_by_year = contract.get("salaryByYear") or []
+    return {
+        "playerId": signed_player.get("id"),
+        "playerName": signed_player.get("name"),
+        "signedWith": team_name,
+        "teamName": team_name,
+        "day": current_day,
+        "contract": contract,
+        "totalValue": int(sum(int(num(v, 0)) for v in salary_by_year)),
+        "aav": int(sum(int(num(v, 0)) for v in salary_by_year) / max(1, len(salary_by_year))),
+        "overall": signed_player.get("overall"),
+        "marketValue": estimate_market_value(signed_player),
+        "maxOffer": int(num(capacity.get("maxOffer"), 0)),
+        "capRoom": int(num(capacity.get("capRoom"), 0)),
+        "spendingType": spending.get("spendingType"),
+        "exceptionType": spending.get("exceptionType"),
+        "exceptionUsage": exception_usage,
+        "deadCapSetoffRows": setoff_rows,
+        "preSimulationHighValueSigning": True,
+        "cleanupSigning": True,
+        "source": source,
+        "storyContext": story_context,
+    }
+
+
+def sign_high_value_free_agents_before_simulation(
+    league_data: Dict[str, Any],
+    user_team_name: Optional[str],
+    current_day: int,
+    season_year: int,
+) -> Dict[str, Any]:
+    """Sign every placeable 76+ FA to CPU teams before the regular season can simulate."""
+    signings: List[Dict[str, Any]] = []
+    dropped_players: List[Dict[str, Any]] = []
+    two_way_assignments: List[Dict[str, Any]] = []
+    two_way_drops: List[Dict[str, Any]] = []
+    unplaceable: set = set()
+    pre_sim_spent_by_team: Dict[str, int] = {}
+    pre_sim_initial_capacity_by_team: Dict[str, int] = {}
+
+    def effective_pre_sim_capacity(team_name: str, capacity: Dict[str, Any]) -> Dict[str, Any]:
+        """Return fresh money after this sweep's prior signings.
+
+        Some cap snapshots do not fully reflect players appended earlier in the
+        same pre-simulation sweep until the whole Python action returns. Track a
+        local spending ledger so after a team signs one good free agent its
+        offer power immediately falls before the next 76+ player is ranked.
+        """
+        minimum = int(get_minimum_salary_amount(league_data))
+        raw_max = int(num(capacity.get("maxOffer"), 0))
+        raw_room = int(num(capacity.get("capRoom"), 0))
+        if team_name not in pre_sim_initial_capacity_by_team:
+            pre_sim_initial_capacity_by_team[team_name] = raw_max
+        spent = int(num(pre_sim_spent_by_team.get(team_name), 0))
+        initial_remaining = max(0, int(pre_sim_initial_capacity_by_team.get(team_name, raw_max)) - spent)
+        effective_max = min(raw_max, initial_remaining)
+        # Teams with no real spending power can still be used as minimum-contract
+        # landing spots if needed so no 76+ player remains unsigned when games sim.
+        if raw_max >= minimum:
+            effective_max = max(minimum, effective_max)
+        effective_room = min(raw_room, max(0, raw_room - spent))
+        return {
+            **capacity,
+            "maxOffer": int(effective_max),
+            "capRoom": int(effective_room),
+            "rawMaxOfferBeforeSweepLedger": raw_max,
+            "preSimSweepSpent": spent,
+        }
+
+    def high_value_pool() -> List[Dict[str, Any]]:
+        return sorted(
+            [
+                p for p in (league_data.get("freeAgents") or [])
+                if int(num(p.get("overall"), 0)) >= 76
+                and get_player_key_from_player(p) not in unplaceable
+            ],
+            key = lambda p: (
+                int(num(p.get("overall"), 0)),
+                int(num(p.get("potential"), num(p.get("overall"), 0))),
+                -int(num(p.get("age"), 27)),
+                str(p.get("name") or ""),
+            ),
+            reverse = True,
+        )
+
+    safety = 0
+    while safety < 220:
+        safety += 1
+        pool = high_value_pool()
+        if not pool:
+            break
+
+        player = pool[0]
+        player_key = get_player_key_from_player(player)
+        player_keep = get_roster_repair_keep_score(player)
+        player_overall = int(num(player.get("overall"), 0))
+
+        teams: List[Tuple[float, int, float, str]] = []
+        fallback_teams: List[Tuple[float, int, float, str]] = []
+        for _, _, team in iter_teams(league_data):
+            team_name = team.get("name")
+            if not team_name:
+                continue
+            if user_team_name and team_name == user_team_name:
+                continue
+            capacity = _pre_sim_market_offer_capacity(league_data, team_name, player)
+            if not capacity.get("ok"):
+                continue
+            capacity = effective_pre_sim_capacity(team_name, capacity)
+            roster = get_team_players(team)
+            roster_count = len(roster)
+            lowest_keep = min([get_roster_repair_keep_score(p) for p in roster], default = 0.0)
+            lowest_ovr = min([int(num(p.get("overall"), 0)) for p in roster], default = 0)
+            clean_slot = roster_count < REGULAR_SEASON_MAX_ROSTER
+            clear_upgrade = player_keep > lowest_keep or player_overall > lowest_ovr
+            row = (
+                float(num(capacity.get("maxOffer"), 0)),
+                int(num(capacity.get("capRoom"), 0)),
+                get_player_need_score_for_team(team, player, league_data = league_data),
+                team_name,
+            )
+            if clean_slot or clear_upgrade:
+                teams.append(row)
+            else:
+                fallback_teams.append(row)
+
+        # Respect the user's money-first rule among teams that can realistically
+        # absorb the player. If nobody can absorb him without cutting an equal or
+        # better player, make one conservative fallback pass instead of churning
+        # the same 76+ players forever.
+        candidates = teams if teams else fallback_teams[:]
+        if not candidates:
+            unplaceable.add(player_key)
+            continue
+
+        candidates.sort(key = lambda row: (row[0], row[1], row[2], row[3]), reverse = True)
+        signed = None
+        signed_team_name = None
+        for _max_offer, _cap_room, _need, team_name in candidates:
+            signed = _sign_high_value_free_agent_for_sim_start(
+                league_data = league_data,
+                player = player,
+                team_name = team_name,
+                season_year = season_year,
+                current_day = current_day,
+                offer_cap_override = int(num(_max_offer, 0)),
+            )
+            if signed:
+                signed_team_name = team_name
+                break
+
+        if not signed or not signed_team_name:
+            unplaceable.add(player_key)
+            continue
+
+        _, _, live_team = find_team_entry(league_data, signed_team_name)
+        signed_salary = 0
+        try:
+            signed_salary = int(num((signed.get("contract") or {}).get("salaryByYear", [0])[0], 0))
+        except Exception:
+            signed_salary = 0
+        pre_sim_spent_by_team[signed_team_name] = int(num(pre_sim_spent_by_team.get(signed_team_name), 0)) + max(0, signed_salary)
+
+        if live_team is not None:
+            trim_actions = trim_cpu_team_to_season_roster_limits(
+                league_data = league_data,
+                team = live_team,
+                season_year = season_year,
+            )
+            dropped_players.extend(trim_actions.get("droppedPlayers", []))
+            two_way_assignments.extend(trim_actions.get("twoWayAssignments", []))
+            two_way_drops.extend(trim_actions.get("twoWayDrops", []))
+
+        still_unsigned = any(
+            get_player_key_from_player(fa) == player_key
+            for fa in (league_data.get("freeAgents") or [])
+        )
+        if still_unsigned:
+            unplaceable.add(player_key)
+        else:
+            signings.append(signed)
+
+    unsigned_high_value = [
+        {
+            "playerId": p.get("id"),
+            "playerName": p.get("name"),
+            "overall": p.get("overall"),
+        }
+        for p in (league_data.get("freeAgents") or [])
+        if int(num(p.get("overall"), 0)) >= 76
+    ]
+
+    return {
+        "signings": signings,
+        "droppedPlayers": dropped_players + two_way_drops,
+        "twoWayAssignments": two_way_assignments,
+        "unsignedHighValueFreeAgents": unsigned_high_value,
+    }
+
+
 def repair_cpu_teams_to_min_roster(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None,
@@ -13997,6 +14501,17 @@ def repair_cpu_teams_to_min_roster(
         dropped_players.extend(trim_actions.get("droppedPlayers", []))
         two_way_assignments.extend(trim_actions.get("twoWayAssignments", []))
         two_way_drops.extend(trim_actions.get("twoWayDrops", []))
+
+    high_value_sweep = sign_high_value_free_agents_before_simulation(
+        league_data = updated,
+        user_team_name = user_team_name,
+        current_day = int(num(current_day, 0)),
+        season_year = season_year,
+    )
+    high_value_signings = high_value_sweep.get("signings", [])
+    dropped_players.extend(high_value_sweep.get("droppedPlayers", []))
+    two_way_assignments.extend(high_value_sweep.get("twoWayAssignments", []))
+    unsigned_high_value = high_value_sweep.get("unsignedHighValueFreeAgents", [])
 
     cleanup_signings = finalize_cpu_min_roster_cleanup(
         league_data = updated,
@@ -14059,10 +14574,30 @@ def repair_cpu_teams_to_min_roster(
                 "twoWayMax": TWO_WAY_MAX,
             })
 
+    progression_shape_audit = {}
+    try:
+        from progression import apply_final_league_shape_lock
+        shape_result = apply_final_league_shape_lock(
+            updated,
+            seed=(int(season_year) * 1009) + int(num(current_day, 0)),
+        )
+        if isinstance(shape_result, dict):
+            updated = shape_result.get("league", updated)
+            progression_shape_audit = shape_result.get("debug", {}) or {}
+    except Exception as exc:
+        progression_shape_audit = {
+            "ok": False,
+            "error": str(exc),
+            "stage": "pre_simulation_final_shape_lock",
+        }
+
     return {
         "ok": len(failed_teams) == 0 and len(over_max_teams) == 0 and len(over_two_way_teams) == 0,
         "leagueData": updated,
-        "signings": cleanup_signings,
+        "signings": high_value_signings + cleanup_signings,
+        "highValueSignings": high_value_signings,
+        "cleanupSignings": cleanup_signings,
+        "unsignedHighValueFreeAgents": unsigned_high_value,
         "droppedPlayers": dropped_players + two_way_drops,
         "twoWayAssignments": two_way_assignments,
         "failedTeams": failed_teams,
@@ -14071,6 +14606,7 @@ def repair_cpu_teams_to_min_roster(
         "minPlayers": min_target,
         "maxPlayers": REGULAR_SEASON_MAX_ROSTER,
         "twoWayMax": TWO_WAY_MAX,
+        "progressionShapeAudit": progression_shape_audit,
     }
 def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
     action = request.get("action")

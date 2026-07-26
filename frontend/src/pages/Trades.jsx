@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import { getOffseasonTradeContext } from "../utils/offseasonTradeContext.js";
+import { getTradeWindowLockMessage, isTradeWindowLocked, readTradeDeadlineStatus } from "../utils/tradeWindow.js";
 import PageFade from "../components/PageFade";
 import CpuTradeDiscoveryPanel from "../components/CpuTradeDiscoveryPanel.jsx";
 import {
@@ -310,6 +312,8 @@ export default function Trades() {
   const [activeDeskFilter, setActiveDeskFilter] = useState("all");
   const [activeDeskView, setActiveDeskView] = useState("live");
   const [showCpuTradeScanner, setShowCpuTradeScanner] = useState(false);
+  const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
+  const [deadlineStatus, setDeadlineStatus] = useState(() => readTradeDeadlineStatus());
 
   useEffect(() => {
     const refresh = () => setStoredFeed(readTradeDeskFeed());
@@ -320,6 +324,20 @@ export default function Trades() {
       if (!event.key || event.key === "bm_trade_desk_feed_v1") refresh();
     };
 
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => setDeadlineStatus(readTradeDeadlineStatus());
+    refresh();
+    const intervalId = window.setInterval(refresh, 1500);
+    const onStorage = (event) => {
+      if (!event.key || event.key === "bm_trade_deadline_status_v1" || event.key === "bm_offseason_state_v1") refresh();
+    };
     window.addEventListener("storage", onStorage);
     return () => {
       window.clearInterval(intervalId);
@@ -358,6 +376,8 @@ export default function Trades() {
 
   const showingFilteredDesk = activeDeskFilter !== "all";
   const showingHistory = activeDeskView === "history";
+  const tradeWindowLocked = isTradeWindowLocked({ tradeContext, deadlineStatus });
+  const tradeLockMessage = getTradeWindowLockMessage();
 
   if (!selectedTeam) {
     return (
@@ -427,24 +447,33 @@ export default function Trades() {
               </div>
 
               <div className="flex min-h-0 flex-1 flex-col justify-center p-5">
+                {tradeWindowLocked && (
+                  <div className="mb-4 rounded-2xl border border-orange-400/25 bg-orange-500/10 px-4 py-3 text-sm font-black text-orange-100">
+                    {tradeLockMessage}
+                  </div>
+                )}
+
                 <button
-                  onClick={() => navigate("/propose-trade")}
-                  className="w-full rounded-xl bg-orange-600 px-6 py-4 text-lg font-black text-white shadow-[0_18px_45px_rgba(234,88,12,0.24)] transition hover:-translate-y-0.5 hover:bg-orange-500"
+                  onClick={() => !tradeWindowLocked && navigate("/propose-trade")}
+                  disabled={tradeWindowLocked}
+                  className="w-full rounded-xl bg-orange-600 px-6 py-4 text-lg font-black text-white shadow-[0_18px_45px_rgba(234,88,12,0.24)] transition hover:-translate-y-0.5 hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-500 disabled:shadow-none disabled:hover:translate-y-0"
                 >
                   Propose Trade
                 </button>
 
                 <button
-                  onClick={() => navigate("/trade-finder")}
-                  className="mt-3 w-full rounded-xl border border-orange-400/25 bg-black px-6 py-4 text-lg font-black text-orange-100 transition hover:-translate-y-0.5 hover:border-orange-300/60 hover:bg-orange-500/10"
+                  onClick={() => !tradeWindowLocked && navigate("/trade-finder")}
+                  disabled={tradeWindowLocked}
+                  className="mt-3 w-full rounded-xl border border-orange-400/25 bg-black px-6 py-4 text-lg font-black text-orange-100 transition hover:-translate-y-0.5 hover:border-orange-300/60 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-neutral-950 disabled:text-neutral-600 disabled:hover:translate-y-0"
                 >
                   Trade Finder
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => setShowCpuTradeScanner((prev) => !prev)}
-                  className="mt-3 w-full rounded-xl border border-sky-300/25 bg-sky-500/10 px-6 py-4 text-lg font-black text-sky-100 transition hover:-translate-y-0.5 hover:border-sky-300/60 hover:bg-sky-500/20"
+                  onClick={() => !tradeWindowLocked && setShowCpuTradeScanner((prev) => !prev)}
+                  disabled={tradeWindowLocked}
+                  className="mt-3 w-full rounded-xl border border-sky-300/25 bg-sky-500/10 px-6 py-4 text-lg font-black text-sky-100 transition hover:-translate-y-0.5 hover:border-sky-300/60 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-neutral-950 disabled:text-neutral-600 disabled:hover:translate-y-0"
                 >
                   All Possible CPU Trades
                 </button>
@@ -622,7 +651,7 @@ export default function Trades() {
             </div>
           </div>
 
-          {showCpuTradeScanner && (
+          {showCpuTradeScanner && !tradeWindowLocked && (
             <div className="fixed inset-x-0 top-0 bottom-[48px] z-[90] bg-black/85 p-4 backdrop-blur-sm">
               <div className="mx-auto flex h-full max-w-[1800px] min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-950">
                 <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">

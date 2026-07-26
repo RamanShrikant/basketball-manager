@@ -4,6 +4,7 @@ import { ensureGameplansForLeague } from "../utils/ensureGameplans.js";
 import { loadLeagueData, saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 import { ensureLeagueFinancials } from "../utils/leagueFinancials.js";
 import { normalizeDevelopmentContracts } from "../utils/developmentContractUtils.js";
+import { withNormalizedSeasonContext, installSeasonContextAudit } from "../utils/seasonContext.js";
 
 const GameContext = createContext();
 
@@ -21,51 +22,9 @@ function leagueHasTeams(leagueData) {
 
 const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
-function validSeasonYear(value) {
-  const y = Number(value);
-  return Number.isFinite(y) && y >= 2020 && y <= 2100 ? Math.trunc(y) : null;
-}
-
 function normalizeLeagueTiming(leagueData) {
   if (!leagueData || typeof leagueData !== "object") return leagueData;
-
-  const existingSeasonYear =
-    validSeasonYear(leagueData.seasonYear) ??
-    validSeasonYear(leagueData.currentSeasonYear) ??
-    validSeasonYear(leagueData.seasonStartYear);
-
-  const seasonYear = existingSeasonYear ?? FIRST_PLAYABLE_SEASON_YEAR;
-  const expectedFinancialYear = seasonYear + 1;
-  const existingFinancials =
-    leagueData.financials && typeof leagueData.financials === "object"
-      ? leagueData.financials
-      : {};
-
-  const currentFinancialSeasonYear =
-    validSeasonYear(leagueData.currentFinancialSeasonYear) ??
-    validSeasonYear(existingFinancials.currentFinancialSeasonYear) ??
-    validSeasonYear(existingFinancials.currentSeasonYear) ??
-    validSeasonYear(existingFinancials.appliedThroughSeasonYear) ??
-    expectedFinancialYear;
-
-  return {
-    ...leagueData,
-    seasonYear,
-    currentSeasonYear: seasonYear,
-    seasonStartYear: seasonYear,
-    currentFinancialSeasonYear,
-    financials: {
-      ...existingFinancials,
-      baseSeasonYear:
-        validSeasonYear(existingFinancials.baseSeasonYear) ?? expectedFinancialYear,
-      currentSeasonYear: currentFinancialSeasonYear,
-      currentFinancialSeasonYear,
-      appliedThroughSeasonYear:
-        validSeasonYear(existingFinancials.appliedThroughSeasonYear) ??
-        validSeasonYear(existingFinancials.appliedInflationThroughSeason) ??
-        currentFinancialSeasonYear,
-    },
-  };
+  return withNormalizedSeasonContext(leagueData);
 }
 
 function normalizeLeagueFinancials(leagueData) {
@@ -78,6 +37,10 @@ export function GameProvider({ children }) {
 
   // Store only the team name. This prevents stale roster objects and localStorage bloat.
   const [selectedTeamName, setSelectedTeamName] = useState(null);
+
+  useEffect(() => {
+    installSeasonContextAudit(() => leagueData);
+  }, [leagueData]);
 
   const setLeagueData = (nextLeagueData) => {
     const normalized = normalizeLeagueFinancials(nextLeagueData);

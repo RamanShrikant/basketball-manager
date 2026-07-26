@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import { useGame } from "../context/GameContext";
+import { getSeasonCalendarConfig, getSeasonStartYear } from "../utils/seasonContext.js";
 import { useNavigate } from "react-router-dom";
 import {
   simulateOneGame,
@@ -669,7 +670,7 @@ function singleRoundRobinRounds(teamIds) {
   return rounds;
 }
 
-function generateFullSeasonSchedule(teams, startDate, endDate) {
+function generateFullSeasonSchedule(teams, startDate, endDate, calendarConfig = null) {
   const canonicalIds = teams.map((t) => slugifyId(t.name));
   const N = canonicalIds.length;
   if (N < 2) return { byDate: {}, list: [] };
@@ -727,11 +728,9 @@ function generateFullSeasonSchedule(teams, startDate, endDate) {
     byDate[fmt(d)] = [];
   }
 
-  const allStarBreak = new Set([
-    fmt(new Date(endDate.getFullYear(), 1, 13)),
-    fmt(new Date(endDate.getFullYear(), 1, 14)),
-    fmt(new Date(endDate.getFullYear(), 1, 15)),
-  ]);
+  const allStarStart = parseCalendarDate(calendarConfig?.allStarStart) || new Date(endDate.getFullYear(), 1, 13);
+  const allStarEnd = parseCalendarDate(calendarConfig?.allStarEnd) || new Date(endDate.getFullYear(), 1, 15);
+  const allStarBreak = new Set(rangeDays(allStarStart, allStarEnd).map(fmt));
 
   const playableDays = days.filter((d) => !allStarBreak.has(fmt(d)));
 
@@ -1654,12 +1653,15 @@ function calendarValidSeasonYear(value) {
   return Number.isFinite(y) && y >= 2020 && y <= 2100 ? Math.trunc(y) : null;
 }
 
+function parseCalendarDate(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
 function getCalendarLeagueSeasonYear(leagueData) {
-  return (
-    calendarValidSeasonYear(leagueData?.seasonYear) ??
-    calendarValidSeasonYear(leagueData?.currentSeasonYear) ??
-    calendarValidSeasonYear(leagueData?.seasonStartYear)
-  );
+  return calendarValidSeasonYear(getSeasonStartYear(leagueData || {}));
 }
 
 export default function Calendar() {
@@ -1693,13 +1695,18 @@ export default function Calendar() {
     leagueSeasonYear ??
     (leagueData ? FIRST_PLAYABLE_SEASON_YEAR : storedSeasonYear ?? FIRST_PLAYABLE_SEASON_YEAR);
 
+  const seasonCalendarConfig = useMemo(
+    () => getSeasonCalendarConfig({ ...(leagueData || {}), seasonYear, currentSeasonYear: seasonYear, seasonStartYear: seasonYear }),
+    [leagueData, seasonYear]
+  );
+
   const cpuTradeGenerationJobRef = useRef(null);
 
   useEffect(() => {
     if (!leagueData || !seasonYear || !leagueData?.cpuTradeBankState) return;
 
-    const tradeDeadlineDate = fmt(new Date(seasonYear + 1, 1, 4));
-    const seasonStartDate = fmt(new Date(seasonYear, 9, 21));
+    const tradeDeadlineDate = seasonCalendarConfig.tradeDeadlineDate || fmt(new Date(seasonYear + 1, 1, 4));
+    const seasonStartDate = seasonCalendarConfig.regularSeasonStart || fmt(new Date(seasonYear, 9, 21));
     const initialDaysToDeadline = Math.max(1, daysBetweenDateStrings(seasonStartDate, tradeDeadlineDate));
     const testConfig = readCpuTradeBankTestConfig();
     const initialized = ensureCpuTradeBankState(
@@ -1722,7 +1729,7 @@ export default function Calendar() {
     saveLeagueData(initialized.leagueData).catch((error) => {
       console.warn("[CPU Trade Bank] failed to save initialized bank", error);
     });
-  }, [leagueData, seasonYear, setLeagueData]);
+  }, [leagueData, seasonYear, seasonCalendarConfig, setLeagueData]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -1827,12 +1834,12 @@ export default function Calendar() {
   const CALENDAR_CURSOR_KEY = `bm_calendar_cursor_v1_${seasonYear}`;
 
   const seasonStart = useMemo(
-    () => new Date(seasonYear, 9, 21),
-    [seasonYear]
+    () => parseCalendarDate(seasonCalendarConfig.regularSeasonStart) || new Date(seasonYear, 9, 21),
+    [seasonCalendarConfig, seasonYear]
   );
   const seasonEnd = useMemo(
-    () => new Date(seasonYear + 1, 3, 12),
-    [seasonYear]
+    () => parseCalendarDate(seasonCalendarConfig.regularSeasonEnd) || new Date(seasonYear + 1, 3, 12),
+    [seasonCalendarConfig, seasonYear]
   );
 
   const allDays = useMemo(
@@ -3164,7 +3171,7 @@ useEffect(() => {
 
   // ✅ IMPORTANT: if schedule is missing/invalid, regenerate it EVEN IF results exist
   if (!scheduleValid) {
-    const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
+    const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd, seasonCalendarConfig);
 
     const hydrated = hydrateSchedulePlayedFlagsFromResults(byDate, parsedResults);
     const rebuilt = hydrated.schedule;
@@ -3445,11 +3452,11 @@ const clearPendingSimIntent = () => {
   setPendingSimIntent(null);
 };
 
-const ALL_STAR_DATE = fmt(new Date(seasonYear + 1, 1, 13));
+const ALL_STAR_DATE = seasonCalendarConfig.allStarSelectionDate || fmt(new Date(seasonYear + 1, 1, 13));
 const ALL_STAR_HANDLED_KEY = `bm_all_star_handled_v1_${seasonYear}`;
 const allStarHandledRef = useRef(localStorage.getItem(ALL_STAR_HANDLED_KEY) === "true");
 
-const TRADE_DEADLINE_DATE = fmt(new Date(seasonYear + 1, 1, 4));
+const TRADE_DEADLINE_DATE = seasonCalendarConfig.tradeDeadlineDate || fmt(new Date(seasonYear + 1, 1, 4));
 const TRADE_DEADLINE_STATUS_KEY = "bm_trade_deadline_status_v1";
 const TRADE_DEADLINE_HANDLED_KEY = `bm_trade_deadline_handled_v1_${seasonYear}`;
 const tradeDeadlineHandledRef = useRef(
@@ -5220,7 +5227,7 @@ setAllStarData(null);
 setShowAwardsPanel(false);
 setMiniAwardTab("mvp");
 
-  const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd);
+  const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd, seasonCalendarConfig);
 
   saveSchedule(byDate);
   setResultsById({});
@@ -5571,7 +5578,7 @@ async function handleDevQuickSeasonJump(mode) {
 
     const baseSchedule = Object.keys(scheduleByDate || {}).length
       ? structuredClone(scheduleByDate)
-      : generateFullSeasonSchedule(teams, seasonStart, seasonEnd).byDate;
+      : generateFullSeasonSchedule(teams, seasonStart, seasonEnd, seasonCalendarConfig).byDate;
 
     const dates = Object.keys(baseSchedule || {}).sort();
     const myId = selectedTeam?.name ? slugifyId(selectedTeam.name) : "";
@@ -6023,7 +6030,7 @@ return (
           </div>
 
           {/* right: controls */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {simLock && (
   <>
     <button
@@ -6085,9 +6092,7 @@ return (
 )}
 
 
-            
-
-                        {/* Month navigation */}
+            {/* Month navigation */}
             <button
               className="px-3 py-2 bg-neutral-700 rounded"
               onClick={() => {

@@ -4,6 +4,7 @@ import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
 import { filterTradeEligiblePlayers } from "../utils/tradeRosterEligibility.js";
+import { getContractSeasonYear } from "../utils/seasonContext.js";
 import styles from "./RosterView.module.css";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
@@ -125,49 +126,7 @@ function getRosterPayrollForYear(team, payrollSeasonYear) {
 }
 
 function getTradePayrollSeasonYear(leagueData) {
-  const candidates = [];
-
-  // Explicit payroll fields win first if a future save adds them.
-  pushUniqueYear(candidates, leagueData?.payrollSeasonYear);
-  pushUniqueYear(candidates, leagueData?.salarySeasonYear);
-  pushUniqueYear(candidates, leagueData?.currentPayrollSeasonYear);
-
-  // Saved roster labels such as "final rosters 25/26" should map to 2026.
-  pushUniqueYear(candidates, getLeagueLabelPayrollYear(leagueData));
-
-  // SalaryTable displays raw season + 1. Prefer the stable season markers before
-  // any already-advanced runtime pointer, then include raw candidates as safety.
-  pushUniqueYear(candidates, Number(leagueData?.seasonStartYear) + 1);
-  pushUniqueYear(candidates, Number(leagueData?.seasonYear) + 1);
-  pushUniqueYear(candidates, Number(leagueData?.currentSeasonYear) + 1);
-  pushUniqueYear(candidates, leagueData?.seasonStartYear);
-  pushUniqueYear(candidates, leagueData?.seasonYear);
-  pushUniqueYear(candidates, leagueData?.currentSeasonYear);
-  pushUniqueYear(candidates, 2026);
-
-  const teams = getAllTeamsFromLeague(leagueData);
-  const teamsWithStoredPayroll = teams
-    .map((team) => ({ team, storedPayroll: getStoredTeamPayroll(team) }))
-    .filter((row) => row.storedPayroll > 0);
-
-  if (teamsWithStoredPayroll.length && candidates.length) {
-    let best = null;
-
-    for (const year of candidates) {
-      const totalError = teamsWithStoredPayroll.reduce((sum, row) => {
-        const rosterPayroll = getRosterPayrollForYear(row.team, year);
-        return sum + Math.abs(rosterPayroll - row.storedPayroll);
-      }, 0);
-
-      if (!best || totalError < best.totalError) {
-        best = { year, totalError };
-      }
-    }
-
-    if (best) return best.year;
-  }
-
-  return candidates[0] || 2026;
+  return getContractSeasonYear(leagueData || {});
 }
 
 function getPlayerSalary(player, leagueData) {

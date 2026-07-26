@@ -4,11 +4,11 @@ import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
 import { applyDraftPickOwnershipToLotteryResult, applyDraftPickOwnershipToOrder } from "../utils/draftPicks.js";
+import { getDraftYear } from "../utils/seasonContext.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const LEAGUE_KEY = "leagueData";
-const DEV_LOTTERY_SYSTEM_KEY = "bm_dev_lottery_system_v1";
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const SCHEDULE_KEY = "bm_schedule_v3";
@@ -32,13 +32,13 @@ function getSeasonYear(leagueData) {
   const meta = safeJSON(localStorage.getItem("bm_league_meta_v1"), {}) || {};
   const offseasonState = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {}) || {};
 
+  pushYear(offseasonState?.draftYear);
+  pushYear(leagueData?.draftYear);
+  pushYear(leagueData?.currentDraftYear);
+  pushYear(leagueData?.draftState?.seasonYear);
+  pushYear(meta?.draftYear);
+  pushYear(getDraftYear(leagueData || {}));
   pushYear(offseasonState?.seasonYear);
-  pushYear(leagueData?.seasonYear);
-  pushYear(leagueData?.currentSeasonYear);
-  pushYear(leagueData?.seasonStartYear);
-  pushYear(meta?.seasonYear);
-  pushYear(meta?.currentSeasonYear);
-  pushYear(meta?.seasonStartYear);
 
   if (candidates.length) return Math.max(...candidates);
   return 2026;
@@ -383,14 +383,13 @@ function formatRecord(row = {}) {
   return `${wins}-${losses}`;
 }
 
-function getResolvedLotterySystem(system, seasonYear) {
-  if (system === "legacy_14" || system === "three_two_one") return system;
+function getResolvedLotterySystem(_system, seasonYear) {
   return Number(seasonYear) >= 2027 ? "three_two_one" : "legacy_14";
 }
 
 function getLotterySystemLabel(system, seasonYear) {
   const resolved = getResolvedLotterySystem(system, seasonYear);
-  if (resolved === "legacy_14") return "2026 Old System";
+  if (resolved === "legacy_14") return "Legacy Lottery System";
   return "3-2-1 System";
 }
 
@@ -863,7 +862,7 @@ export default function DraftLottery() {
 
   const seasonYear = getSeasonYear(leagueData);
   const [lotteryState, setLotteryState] = useState(() => readLotteryForCurrentStage(seasonYear));
-  const [lotterySystem, setLotterySystem] = useState(() => localStorage.getItem(DEV_LOTTERY_SYSTEM_KEY) || "auto");
+  const lotterySystem = getResolvedLotterySystem("auto", seasonYear);
   const [loading, setLoading] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState("");
@@ -894,6 +893,10 @@ export default function DraftLottery() {
     revealRunRef.current += 1;
   }, []);
 
+  useEffect(() => {
+    try { localStorage.removeItem("bm_dev_lottery_system_v1"); } catch {}
+  }, []);
+
   const latestHistory = useMemo(() => getLatestSeasonHistoryEntry(leagueData, seasonYear), [leagueData, seasonYear]);
 
   const rawResult = lotteryState?.result || null;
@@ -903,7 +906,7 @@ export default function DraftLottery() {
   const secondRoundRevealed = Boolean(lotteryState?.secondRoundRevealed);
   const firstRoundRevealed = Boolean(lotteryState?.firstRoundRevealed);
   const lotteryComplete = Boolean(firstRoundRevealed && secondRoundRevealed && !lotteryState?.isPreview);
-  const resolvedSystem = result?.meta?.system || result?.meta?.autoResolvedSystem || getResolvedLotterySystem(lotterySystem, seasonYear);
+  const resolvedSystem = getResolvedLotterySystem(result?.meta?.system || result?.meta?.autoResolvedSystem || lotterySystem, seasonYear);
 
   const persistLotteryResult = (nextLotteryState) => {
     const resolvedResult = nextLotteryState?.result
@@ -940,15 +943,18 @@ export default function DraftLottery() {
   };
 
   const runLotteryBackend = async ({ forceNew = false, revealFirst = false, revealSecond = false, systemOverride = lotterySystem } = {}) => {
+    const forcedSystem = getResolvedLotterySystem(systemOverride, seasonYear);
     const existing = readDraftLottery(seasonYear);
-    const existingRequest = existing?.requestedLotterySystem || "auto";
-    const requestMatches = String(existingRequest) === String(systemOverride || "auto");
+    const existingRequest = existing?.requestedLotterySystem || forcedSystem;
+    const existingSystem = getResolvedLotterySystem(existing?.lotterySystem || existing?.result?.meta?.system || existing?.result?.meta?.autoResolvedSystem || existingRequest, seasonYear);
+    const requestMatches = String(existingRequest) === String(forcedSystem) && existingSystem === forcedSystem;
     const existingAlreadyRevealed = Boolean(existing?.firstRoundRevealed || existing?.secondRoundRevealed);
 
     if (
       !forceNew &&
       existing?.result?.fullDraftOrder?.length &&
       !existing?.isPreview &&
+      existingSystem === forcedSystem &&
       (requestMatches || existingAlreadyRevealed)
     ) {
       const nextExisting = {
@@ -973,9 +979,9 @@ export default function DraftLottery() {
     const payload = await simEngine.runDraftLottery(leagueData, {
       seasonYear,
       teamRecords,
-      lotterySystem: systemOverride,
-      forceLotterySystem: systemOverride,
-      seed: `${seasonYear}_${systemOverride}_draft_lottery_${Date.now()}_${Math.random()}`,
+      lotterySystem: forcedSystem,
+      forceLotterySystem: forcedSystem,
+      seed: `${seasonYear}_${forcedSystem}_draft_lottery_${Date.now()}_${Math.random()}`,
     });
 
     if (!payload?.ok) throw new Error(payload?.reason || "Draft lottery failed.");
@@ -983,8 +989,8 @@ export default function DraftLottery() {
     const nextLotteryState = {
       seasonYear,
       generatedAt: new Date().toISOString(),
-      lotterySystem: payload?.meta?.system || payload?.meta?.autoResolvedSystem || systemOverride,
-      requestedLotterySystem: systemOverride,
+      lotterySystem: payload?.meta?.system || payload?.meta?.autoResolvedSystem || forcedSystem,
+      requestedLotterySystem: forcedSystem,
       isPreview: false,
       firstRoundRevealed: Boolean(revealFirst),
       secondRoundRevealed: Boolean(revealSecond),
@@ -1015,11 +1021,6 @@ export default function DraftLottery() {
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leagueData, seasonYear]);
-
-  const setDevLotterySystem = (system) => {
-    setLotterySystem(system);
-    localStorage.setItem(DEV_LOTTERY_SYSTEM_KEY, system);
-  };
 
   const startDraftLotteryReveal = async () => {
     if (!result || loading || preparing || revealingLottery || lotteryComplete) return;
@@ -1228,30 +1229,11 @@ export default function DraftLottery() {
             <div>
               <div className="text-xs text-purple-200/70 uppercase tracking-[0.18em] font-bold">Dev Lottery Tool</div>
               <div className="text-sm text-white/55 mt-1">
-                Choose the lottery system, reset for a hidden fresh draw, or resimulate both rounds instantly.
+                The lottery system is locked to the correct era rule. Reset for a hidden fresh draw, or resimulate both rounds instantly.
               </div>
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {[
-                ["auto", "Auto By Year"],
-                ["legacy_14", "Force 2026 Old"],
-                ["three_two_one", "Force 3-2-1"],
-              ].map(([value, label]) => (
-                <button
-                  key={value}
-                  onClick={() => setDevLotterySystem(value)}
-                  disabled={loading || preparing}
-                  className={`bmSmoothButton px-4 py-2 rounded-xl text-sm font-extrabold border ${
-                    lotterySystem === value
-                      ? "bg-purple-600 border-purple-300 text-white"
-                      : "bg-purple-950/40 border-purple-400/20 text-purple-100/70 hover:bg-purple-800/50"
-                  } disabled:bg-neutral-700 disabled:text-white/45`}
-                >
-                  {label}
-                </button>
-              ))}
-
               <button
                 onClick={resetLottery}
                 disabled={loading || preparing}

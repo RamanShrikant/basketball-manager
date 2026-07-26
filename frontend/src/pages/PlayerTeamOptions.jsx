@@ -4,6 +4,7 @@ import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
 import styles from "./PlayerTeamOptions.module.css";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
+import { getFinancialSeasonYear, getSeasonStartYear } from "../utils/seasonContext.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const OPTIONS_RESULTS_KEY = "bm_option_decision_results_v1";
@@ -18,16 +19,11 @@ function safeJSON(raw, fallback = null) {
 }
 
 function getSeasonYear(leagueData) {
-  return Number(
-    leagueData?.seasonYear ||
-    leagueData?.currentSeasonYear ||
-    safeJSON(localStorage.getItem("bm_league_meta_v1"), {})?.seasonYear ||
-    2026
-  );
+  return getSeasonStartYear(leagueData || safeJSON(localStorage.getItem("bm_league_meta_v1"), {}) || {});
 }
 
 function getOperatingFinancialSeasonYear(leagueData) {
-  return getSeasonYear(leagueData) + 1;
+  return getFinancialSeasonYear(leagueData || {});
 }
 
 function getMinimumCapHoldSalary(leagueData) {

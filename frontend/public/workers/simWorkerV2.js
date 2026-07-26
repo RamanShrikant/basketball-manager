@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // simWorkerV2.js - Batch-safe Pyodide Simulation Worker
 // ============================================================
 console.log("[simWorkerV2] booting...");
@@ -292,7 +292,47 @@ json.dumps(res)
 }
 
 // ------------------------------------------------------------
-// FREE AGENCY GENERIC REQUEST MODE
+async function enforceFinalProgressionShape(requestId, leagueData, meta) {
+  try {
+    pyodide.globals.set("final_shape_league_js", pyodide.toPy(leagueData || {}));
+    pyodide.globals.set("final_shape_meta_js", pyodide.toPy(meta || {}));
+
+    const pyJson = await pyodide.runPythonAsync(`
+import importlib, json
+import progression
+importlib.reload(progression)
+from progression import apply_final_league_shape_lock
+
+seed = None
+try:
+  seed = final_shape_meta_js.get("seed")
+except Exception:
+  seed = None
+
+res = apply_final_league_shape_lock(
+  league = final_shape_league_js,
+  settings = None,
+  seed = seed,
+)
+json.dumps(res)
+    `);
+
+    postMessage({
+      type: "final-progression-shape-result",
+      requestId,
+      payload: JSON.parse(pyJson),
+    });
+  } catch (err) {
+    console.error("[simWorkerV2] enforceFinalProgressionShape error:", err);
+    postMessage({
+      type: "final-progression-shape-error",
+      requestId,
+      error: err.toString(),
+    });
+  }
+}
+
+// ------------------------------------------------------------// FREE AGENCY GENERIC REQUEST MODE
 // ------------------------------------------------------------
 async function runFreeAgencyRequest(requestId, action, leagueData, payload, okType, errType) {
   try {
@@ -777,6 +817,10 @@ onmessage = async (e) => {
     );
   }
 
+  if (msg.type === "enforce-final-progression-shape") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return enforceFinalProgressionShape(msg.requestId, leaguePayload, msg.meta || {});
+  }
   // free agency market
   if (msg.type === "generate-free-agency-market") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};

@@ -3,6 +3,7 @@ import {
   isResolvedDraftPickAsset,
   normalizeTeamName,
 } from "./draftPicks.js";
+import { getDraftYear } from "./seasonContext.js";
 
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
@@ -21,11 +22,12 @@ export function getLiveDraftSeasonYear(leagueData) {
   const offseason = safeJSON(localStorage.getItem("bm_offseason_state_v1"), {}) || {};
   const candidates = [
     savedDraft?.seasonYear,
+    offseason?.draftYear,
     offseason?.seasonYear,
     leagueData?.draftState?.seasonYear,
-    leagueData?.seasonYear,
-    leagueData?.currentSeasonYear,
-    leagueData?.seasonStartYear,
+    leagueData?.draftYear,
+    leagueData?.currentDraftYear,
+    getDraftYear(leagueData || {}),
   ]
     .map(Number)
     .filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
