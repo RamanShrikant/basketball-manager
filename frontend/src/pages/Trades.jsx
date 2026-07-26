@@ -4,7 +4,6 @@ import { useGame } from "../context/GameContext";
 import { getOffseasonTradeContext } from "../utils/offseasonTradeContext.js";
 import { getTradeWindowLockMessage, isTradeWindowLocked, readTradeDeadlineStatus } from "../utils/tradeWindow.js";
 import PageFade from "../components/PageFade";
-import CpuTradeDiscoveryPanel from "../components/CpuTradeDiscoveryPanel.jsx";
 import {
   readTradeDeskFeed,
   mergeTradeDeskFeedWithLeague,
@@ -311,7 +310,6 @@ export default function Trades() {
   const [storedFeed, setStoredFeed] = useState(() => readTradeDeskFeed());
   const [activeDeskFilter, setActiveDeskFilter] = useState("all");
   const [activeDeskView, setActiveDeskView] = useState("live");
-  const [showCpuTradeScanner, setShowCpuTradeScanner] = useState(false);
   const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
   const [deadlineStatus, setDeadlineStatus] = useState(() => readTradeDeadlineStatus());
 
@@ -469,14 +467,6 @@ export default function Trades() {
                   Trade Finder
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => !tradeWindowLocked && setShowCpuTradeScanner((prev) => !prev)}
-                  disabled={tradeWindowLocked}
-                  className="mt-3 w-full rounded-xl border border-sky-300/25 bg-sky-500/10 px-6 py-4 text-lg font-black text-sky-100 transition hover:-translate-y-0.5 hover:border-sky-300/60 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-neutral-950 disabled:text-neutral-600 disabled:hover:translate-y-0"
-                >
-                  All Possible CPU Trades
-                </button>
 
                 {hasSavedProposal && (
                   <div className="mt-5 rounded-2xl border border-orange-400/25 bg-orange-500/10 p-4 text-sm font-semibold text-orange-100">
@@ -651,19 +641,6 @@ export default function Trades() {
             </div>
           </div>
 
-          {showCpuTradeScanner && !tradeWindowLocked && (
-            <div className="fixed inset-x-0 top-0 bottom-[48px] z-[90] bg-black/85 p-4 backdrop-blur-sm">
-              <div className="mx-auto flex h-full max-w-[1800px] min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-950">
-                <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
-                  <div className="font-black text-orange-300">All Possible CPU Trades</div>
-                  <button type="button" onClick={() => setShowCpuTradeScanner(false)} className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-black hover:bg-white/10">Close</button>
-                </div>
-                <div className="bmTableScroller min-h-0 flex-1 overflow-auto p-3">
-                  <CpuTradeDiscoveryPanel leagueData={leagueData} selectedTeam={selectedTeam} />
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </PageFade>

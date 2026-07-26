@@ -14460,6 +14460,94 @@ def sign_high_value_free_agents_before_simulation(
     }
 
 
+
+
+REGULAR_SEASON_RATING_FREEZE_FIELDS = (
+    "age",
+    "attrs",
+    "overall",
+    "ovr",
+    "potential",
+    "offRating",
+    "defRating",
+    "stamina",
+    "scoringRating",
+    "floor",
+    "ceiling",
+)
+
+
+def iter_regular_season_rating_freeze_players(league_data: Dict[str, Any]):
+    for _, _, team in iter_teams(league_data):
+        if not isinstance(team, dict):
+            continue
+        for player in get_team_players(team):
+            if isinstance(player, dict):
+                yield player
+        for player in (team.get("twoWayPlayers") or []):
+            if isinstance(player, dict):
+                yield player
+
+    for player in (league_data.get("freeAgents") or []):
+        if isinstance(player, dict):
+            yield player
+
+
+def build_regular_season_rating_freeze_snapshot(league_data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    snapshot: Dict[str, Dict[str, Any]] = {}
+    for player in iter_regular_season_rating_freeze_players(league_data):
+        key = get_player_key_from_player(player)
+        if not key or key in snapshot:
+            continue
+        snapshot[key] = {
+            field: copy.deepcopy(player.get(field))
+            for field in REGULAR_SEASON_RATING_FREEZE_FIELDS
+            if field in player
+        }
+    return snapshot
+
+
+def restore_regular_season_rating_freeze_snapshot(
+    league_data: Dict[str, Any],
+    snapshot: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    restored_players = 0
+    restored_fields = 0
+    drift_details: List[Dict[str, Any]] = []
+
+    for player in iter_regular_season_rating_freeze_players(league_data):
+        if not isinstance(player, dict):
+            continue
+        key = get_player_key_from_player(player)
+        frozen = snapshot.get(key)
+        if not frozen:
+            continue
+
+        changed_fields = []
+        for field, frozen_value in frozen.items():
+            if player.get(field) != frozen_value:
+                changed_fields.append(field)
+                player[field] = copy.deepcopy(frozen_value)
+                restored_fields += 1
+
+        if changed_fields:
+            restored_players += 1
+            if len(drift_details) < 20:
+                drift_details.append({
+                    "playerId": player.get("id"),
+                    "playerName": player.get("name"),
+                    "fields": changed_fields,
+                })
+
+    return {
+        "ok": True,
+        "stage": "regular_season_rating_freeze",
+        "trackedPlayers": len(snapshot),
+        "restoredPlayers": restored_players,
+        "restoredFields": restored_fields,
+        "details": drift_details,
+    }
+
 def repair_cpu_teams_to_min_roster(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None,
@@ -14467,6 +14555,7 @@ def repair_cpu_teams_to_min_roster(
     current_day: int = 0,
 ) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
+    rating_freeze_snapshot = build_regular_season_rating_freeze_snapshot(updated)
     normalize_all_player_rights(updated)
 
     if min_players is not None:
@@ -14574,22 +14663,20 @@ def repair_cpu_teams_to_min_roster(
                 "twoWayMax": TWO_WAY_MAX,
             })
 
-    progression_shape_audit = {}
-    try:
-        from progression import apply_final_league_shape_lock
-        shape_result = apply_final_league_shape_lock(
-            updated,
-            seed=(int(season_year) * 1009) + int(num(current_day, 0)),
-        )
-        if isinstance(shape_result, dict):
-            updated = shape_result.get("league", updated)
-            progression_shape_audit = shape_result.get("debug", {}) or {}
-    except Exception as exc:
-        progression_shape_audit = {
-            "ok": False,
-            "error": str(exc),
-            "stage": "pre_simulation_final_shape_lock",
-        }
+    # Regular-season roster repair must never run player progression/regression or
+    # league-wide rating shape locks. The only rating-changing path should be the
+    # explicit offseason Player Progression flow. Keep this repair limited to
+    # roster legality, emergency signings, and two-way/standard roster cleanup.
+    rating_freeze_audit = restore_regular_season_rating_freeze_snapshot(
+        updated,
+        rating_freeze_snapshot,
+    )
+    progression_shape_audit = {
+        "ok": True,
+        "skipped": True,
+        "stage": "regular_season_roster_repair",
+        "reason": "rating_shape_lock_disabled_outside_player_progression",
+    }
 
     return {
         "ok": len(failed_teams) == 0 and len(over_max_teams) == 0 and len(over_two_way_teams) == 0,
@@ -14607,6 +14694,7 @@ def repair_cpu_teams_to_min_roster(
         "maxPlayers": REGULAR_SEASON_MAX_ROSTER,
         "twoWayMax": TWO_WAY_MAX,
         "progressionShapeAudit": progression_shape_audit,
+        "ratingFreezeAudit": rating_freeze_audit,
     }
 def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
     action = request.get("action")

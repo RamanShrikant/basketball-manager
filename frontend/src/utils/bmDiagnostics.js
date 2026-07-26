@@ -819,6 +819,124 @@ export function runAllBasketballManagerDiagnostics() {
   return report;
 }
 
+
+function safeParseDiagnosticsJson(raw, fallback = null) {
+  try {
+    if (!raw) return fallback;
+    return JSON.parse(raw) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function isCpuCpuTradeRecordForReport(row = {}) {
+  return Boolean(row?.cpuCpuTrade || row?.source === "cpu_cpu_trade");
+}
+
+function receivedAssetsForReport(trade = {}, teamName = "") {
+  const key = normalizeText(teamName);
+  const side = Array.isArray(trade?.teamPackages)
+    ? trade.teamPackages.find((pkg) => normalizeText(pkg?.teamName) === key)
+    : null;
+  return Array.isArray(side?.received) ? side.received : [];
+}
+
+function reportAssetLabel(asset = {}) {
+  return asset?.label || asset?.displayLabel || asset?.playerName || asset?.name || "Asset";
+}
+
+function reportPlayerOverall(asset = {}) {
+  return Number(asset?.overall ?? asset?.player?.overall ?? asset?.ovr ?? asset?.player?.ovr ?? 0) || 0;
+}
+
+function cpuTradeReport(leagueData = runtime.leagueData) {
+  const league = leagueData && typeof leagueData === "object" ? leagueData : {};
+  const bank = league?.cpuTradeBankState || null;
+  const history = Array.isArray(league?.tradeHistory) ? league.tradeHistory : [];
+  const official = history.filter(isCpuCpuTradeRecordForReport);
+  const feed = typeof localStorage !== "undefined"
+    ? safeParseDiagnosticsJson(localStorage.getItem("bm_trade_desk_feed_v1"), [])
+    : [];
+  const rawStoredFeedTransactions = Array.isArray(feed)
+    ? feed.filter((row) => String(row?.type || "").toLowerCase() === "transaction").length
+    : 0;
+  const canonicalTradeRecordIds = new Set(official.map((row) => String(row?.id || row?.tradeId || "")).filter(Boolean));
+  const canonicalStoredFeedTransactions = Array.isArray(feed)
+    ? feed.filter((row) => {
+        if (String(row?.type || "").toLowerCase() !== "transaction") return false;
+        const tradeRecordId = String(row?.tradeRecordId || row?.id || "");
+        return Boolean(tradeRecordId && (canonicalTradeRecordIds.has(tradeRecordId) || tradeRecordId.startsWith("history_")));
+      }).length
+    : 0;
+  const staleStoredFeedTransactions = Math.max(0, rawStoredFeedTransactions - official.length);
+  const storedFeedTransactions = official.length;
+
+  const teamCounts = {};
+  const topMovedPlayers = [];
+  const packageRows = [];
+
+  for (const trade of official) {
+    const fromTeam = trade?.fromTeamName || trade?.userTeamName || "";
+    const toTeam = trade?.toTeamName || trade?.cpuTeamName || "";
+    for (const teamName of [fromTeam, toTeam]) {
+      if (!teamName) continue;
+      teamCounts[teamName] = (teamCounts[teamName] || 0) + 1;
+    }
+
+    const fromReceived = receivedAssetsForReport(trade, fromTeam);
+    const toReceived = receivedAssetsForReport(trade, toTeam);
+    const allAssets = [...fromReceived, ...toReceived];
+    for (const asset of allAssets) {
+      if (asset?.type !== "player") continue;
+      topMovedPlayers.push({
+        date: trade?.date || trade?.currentDate || "",
+        player: reportAssetLabel(asset),
+        ovr: reportPlayerOverall(asset),
+        trade: `${toTeam || "Buyer"} / ${fromTeam || "Seller"}`,
+      });
+    }
+
+    packageRows.push({
+      date: trade?.date || trade?.currentDate || "",
+      seller: fromTeam,
+      buyer: toTeam,
+      sellerGot: fromReceived.map(reportAssetLabel).join(", "),
+      buyerGot: toReceived.map(reportAssetLabel).join(", "),
+      assets: fromReceived.length + toReceived.length,
+      maxOvrMoved: Math.max(0, ...allAssets.filter((asset) => asset?.type === "player").map(reportPlayerOverall)),
+    });
+  }
+
+  const report = {
+    generatedAt: nowIso(),
+    officialCpuTradeCount: official.length,
+    targetTrades: bank?.targetTrades ?? null,
+    completedByBank: bank?.completedTrades ?? null,
+    remainingTarget: bank ? Math.max(0, Number(bank.targetTrades || 0) - Number(bank.completedTrades || official.length)) : null,
+    bankSize: Array.isArray(bank?.candidates) ? bank.candidates.length : 0,
+    plannedSlots: Array.isArray(bank?.executionPlanDays) ? bank.executionPlanDays.length : 0,
+    planCursor: bank?.planCursor ?? null,
+    stats: bank?.stats || null,
+    storedFeedTransactions,
+    rawStoredFeedTransactions,
+    canonicalStoredFeedTransactions,
+    staleStoredFeedTransactions,
+    teamCounts: Object.entries(teamCounts)
+      .map(([team, count]) => ({ team, count }))
+      .sort((a, b) => b.count - a.count || a.team.localeCompare(b.team)),
+    topMovedPlayers: topMovedPlayers
+      .sort((a, b) => b.ovr - a.ovr || String(b.date).localeCompare(String(a.date)))
+      .slice(0, 20),
+    packageRows,
+  };
+
+  console.log("[BM CPU TRADE REPORT]", report);
+  console.table(report.packageRows);
+  console.table(report.teamCounts);
+  console.table(report.topMovedPlayers);
+  return report;
+}
+
 async function copyJson(value) {
   const text = JSON.stringify(value, null, 2);
   try {
@@ -854,6 +972,7 @@ export function installBasketballManagerDiagnostics() {
         { command: "bmDiag.lastRepair()", purpose: "Inspect the most recent CPU post-trade roster repair." },
         { command: "bmDiag.preSim()", purpose: "Inspect the most recent pre-simulation diagnostic snapshot." },
         { command: "bmDiag.simPerformance()", purpose: "Inspect the most recent calendar simulation timing and CPU-trade workload." },
+        { command: "bmDiag.cpuTradeReport()", purpose: "Summarize official CPU trades, bank pacing, rejection reasons, team counts, and highest-OVR moved players." },
         { command: "bmDiag.events()", purpose: "Audit recent Trade Finder, CPU repair, and simulation events." },
         { command: "await bmDiag.copy()", purpose: "Copy the last diagnostics report as JSON." },
         { command: "bmDiag.auto(false)", purpose: "Disable automatic critical diagnostics logging." },
@@ -899,6 +1018,9 @@ export function installBasketballManagerDiagnostics() {
     simPerformance() {
       console.log(runtime.lastSimulationPerformance);
       return runtime.lastSimulationPerformance;
+    },
+    cpuTradeReport() {
+      return cpuTradeReport();
     },
     context() {
       console.log(runtime);

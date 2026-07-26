@@ -14,7 +14,8 @@ import hashlib
 import json
 import math
 import random
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 # -----------------------------------------------------------------------------
@@ -35,8 +36,9 @@ DEADLINE_WEEK_BASE_CHANCE = 0.950
 
 # Caps to keep it natural.
 MAX_CPU_TRADES_PER_DAY = 1
-MAX_CPU_TRADES_PER_TEAM_SEASON = 3
-MAX_CANDIDATES_PER_DAY = 12
+MAX_CPU_TRADES_PER_TEAM_SEASON = 8
+MAX_CANDIDATES_PER_DAY = 120
+RECENT_CPU_ACQUISITION_COOLDOWN_DAYS = 45
 
 # Team direction thresholds.
 BUYER_WIN_PCT = 0.535
@@ -50,12 +52,15 @@ SURPRISE_WINNING_SELLER_REDUCTION = 0.50
 CONTENDER_SLUMP_BUYER_BOOST = 1.55
 BAD_TEAM_OVERACHIEVING_SELLER_REDUCTION = 0.58
 
-# Asset guardrails. First version avoids star trades and messy pick trades.
-MIN_TARGET_VET_OVR = 73
-MAX_TARGET_VET_OVR = 85
-MIN_TARGET_VET_AGE = 25
-MAX_UNTOUCHABLE_OVR = 86
-MAX_ASSETS_PER_SIDE = 3
+# Asset guardrails. V2 treats every standard-roster player as technically
+# tradeable at the right price. Star/core players are protected by asking-price
+# penalties instead of hard blockers, and packages remain capped for sim speed.
+MIN_MARKET_PLAYER_OVR = 65
+MAX_ASSETS_PER_SIDE = 5
+MAX_PLAYER_ASSETS_PER_SIDE = 3
+MAX_PICK_ASSETS_PER_SIDE = 4
+MAJOR_TRADE_TARGET_OVR = 80
+STAR_TRADE_TARGET_OVR = 85
 STANDARD_ROSTER_MIN = 14
 STANDARD_ROSTER_MAX = 16
 
@@ -63,6 +68,8 @@ STANDARD_ROSTER_MAX = 16
 ALLOW_CPU_FIRST_ROUND_PICKS = True
 ALLOW_CPU_SECOND_ROUND_PICKS = True
 PREFER_SECOND_ROUND_PICK_FOR_SMALL_TRADES = True
+ALLOW_CPU_PROTECTED_FIRSTS = True
+CPU_PROTECTED_FIRST_PROFILES = [3, 5, 10, 14]
 
 
 # -----------------------------------------------------------------------------
@@ -318,6 +325,52 @@ def _already_traded_pair(
     return False
 
 
+def _parse_trade_date(value: Any) -> Optional[datetime]:
+    text = _str(value, "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00").split("T")[0])
+    except Exception:
+        return None
+
+
+def _recent_cpu_acquired_player_names(
+    league: Dict[str, Any],
+    team_name: str,
+    current_date: str,
+    cooldown_days: int = RECENT_CPU_ACQUISITION_COOLDOWN_DAYS,
+) -> Set[str]:
+    current = _parse_trade_date(current_date)
+    if current is None or not team_name:
+        return set()
+
+    locked: Set[str] = set()
+    for row in league.get("tradeHistory") or []:
+        if not isinstance(row, dict):
+            continue
+        if not (row.get("cpuCpuTrade") or row.get("source") == "cpu_cpu_trade"):
+            continue
+
+        previous = _parse_trade_date(row.get("date") or row.get("currentDate"))
+        if previous is None:
+            continue
+
+        elapsed = (current - previous).days
+        if elapsed < 0 or elapsed > cooldown_days:
+            continue
+
+        for move in row.get("movedPlayers") or []:
+            if not isinstance(move, dict):
+                continue
+            if _norm(move.get("toTeam")) == _norm(team_name):
+                name_key = _norm(move.get("name"))
+                if name_key:
+                    locked.add(name_key)
+
+    return locked
+
+
 def _is_standard_player(player: Dict[str, Any]) -> bool:
     status = _str(player.get("rosterStatus") or player.get("contractType"), "").lower()
     return not (player.get("isTwoWay") or player.get("isStash") or "two" in status or "stash" in status)
@@ -331,56 +384,181 @@ def _standard_roster_count(team: Dict[str, Any]) -> int:
     )
 
 
-def _is_core_player(team: Dict[str, Any], player: Dict[str, Any]) -> bool:
+def _roster_rank(team: Dict[str, Any], player: Dict[str, Any]) -> int:
     roster = sorted(_players(team), key=_player_ovr, reverse=True)
     try:
-        rank = roster.index(player) + 1
+        return roster.index(player) + 1
     except Exception:
-        rank = 99
-    return rank <= 3 or _player_ovr(player) >= MAX_UNTOUCHABLE_OVR
+        return 99
 
 
-def _seller_trade_targets(team: Dict[str, Any], season_year: int) -> List[Dict[str, Any]]:
+def _asset_protection_penalty(team: Dict[str, Any], player: Dict[str, Any], team_ctx: Optional[Dict[str, Any]] = None) -> float:
+    """Soft asking-price protection. No standard player is hard-blocked."""
+    ctx = team_ctx or {}
+    rank = _roster_rank(team, player)
+    ovr = _player_ovr(player)
+    pot = _player_pot(player)
+    age = _player_age(player)
+    years_left = _contract_years_left(player, int(_num(ctx.get("seasonYear"), 2026)))
+    phase = _str(ctx.get("phase"), "middle")
+    upside = max(0.0, pot - ovr)
+
+    penalty = 0.0
+    if rank == 1:
+        penalty += 13.0
+    elif rank == 2:
+        penalty += 8.0
+    elif rank == 3:
+        penalty += 5.0
+    elif rank <= 5:
+        penalty += 2.2
+
+    if ovr >= 92:
+        penalty += 20.0
+    elif ovr >= 89:
+        penalty += 12.0
+    elif ovr >= STAR_TRADE_TARGET_OVR:
+        penalty += 7.0
+    elif ovr >= MAJOR_TRADE_TARGET_OVR:
+        penalty += 3.0
+
+    if age <= 24 and pot >= 84:
+        penalty += 2.5 + upside * 0.32
+    if age <= 22 and pot >= 88:
+        penalty += 4.0
+
+    # Sellers/retoolers should listen on real players. Contenders should not move
+    # core pieces unless the exact evaluator later sees a massive return.
+    if phase in {"seller", "retool"}:
+        penalty *= 0.52
+        if age >= 29 or years_left <= 1:
+            penalty *= 0.62
+        # Low-direction teams should actually listen on expensive 80+ veterans.
+        # The exact Propose Trade-style validator still blocks weak returns, but
+        # this prevents the generator from never surfacing realistic sell-high names.
+        if ovr >= MAJOR_TRADE_TARGET_OVR and age >= 32:
+            penalty *= 0.78
+    elif phase == "middle":
+        penalty *= 0.88
+    elif phase == "buyer":
+        penalty *= 1.18
+    elif phase == "contender":
+        penalty *= 1.38
+
+    return penalty
+
+
+def _market_player_score(team: Dict[str, Any], player: Dict[str, Any], season_year: int, team_ctx: Optional[Dict[str, Any]] = None, role: str = "seller") -> float:
+    ctx = dict(team_ctx or {})
+    ctx["seasonYear"] = season_year
+    ovr = _player_ovr(player)
+    pot = _player_pot(player)
+    age = _player_age(player)
+    years_left = _contract_years_left(player, season_year)
+    salary_m = _salary_for_year(player, season_year) / 1_000_000
+    upside = max(0.0, pot - ovr)
+    rank = _roster_rank(team, player)
+    phase = _str(ctx.get("phase"), "middle")
+    protection = _asset_protection_penalty(team, player, ctx)
+
+    if role == "seller":
+        score = ovr * 1.55
+        score += max(0.0, age - 27) * 0.85
+        score += max(0.0, salary_m - 18.0) * 0.22
+        score += 4.0 if years_left <= 1 else 0.0
+        score += 2.4 if phase in {"seller", "retool"} else 0.0
+        if phase in {"seller", "retool"} and ovr >= MAJOR_TRADE_TARGET_OVR:
+            score += 4.8
+        if phase in {"seller", "retool"} and ovr >= STAR_TRADE_TARGET_OVR and age >= 32:
+            score += 5.2
+        score -= upside * (0.22 if phase in {"seller", "retool"} and ovr >= MAJOR_TRADE_TARGET_OVR else 0.32)
+        score -= protection
+    else:
+        # Buyer outgoing board: prospects/picks/salary are movable, but core stars
+        # stay expensive rather than impossible. This lets big trades exist when
+        # exact bilateral value really clears the bar.
+        score = max(0.0, 82.0 - ovr) * 0.85
+        score += upside * 0.35
+        score += max(0.0, 26 - age) * 0.55
+        score += min(salary_m / 8.0, 3.0)
+        if rank >= 7:
+            score += 4.0
+        elif rank >= 4:
+            score += 1.0
+        score -= protection * (0.46 if phase in {"contender", "buyer"} else 0.70)
+
+    return score
+
+
+def _seller_trade_targets(team: Dict[str, Any], season_year: int, team_ctx: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     out = []
     for p in _players(team):
         if not isinstance(p, dict) or not _is_standard_player(p):
             continue
         ovr = _player_ovr(p)
-        age = _player_age(p)
-        years_left = _contract_years_left(p, season_year)
-        if _is_core_player(team, p):
+        if ovr < MIN_MARKET_PLAYER_OVR:
             continue
-        if not (MIN_TARGET_VET_OVR <= ovr <= MAX_TARGET_VET_OVR):
+        score = _market_player_score(team, p, season_year, team_ctx, "seller")
+        # Keep every tier technically available, but do not waste the generator's
+        # limited attempts on players a team would almost never shop today.
+        if score < 45 and ovr < MAJOR_TRADE_TARGET_OVR:
             continue
-        if age < MIN_TARGET_VET_AGE and years_left > 1:
-            continue
-        score = ovr * 1.8 + age * 0.20 - years_left * 1.5
-        if age >= 31:
-            score += 4.0
-        if years_left <= 1:
-            score += 3.0
         out.append({"player": p, "score": score})
-    return [r["player"] for r in sorted(out, key=lambda x: x["score"], reverse=True)[:8]]
+
+    # Ensure the board contains some real starter/star possibilities when a team
+    # is selling, not only the safest mid-70s names.
+    ranked = sorted(out, key=lambda x: x["score"], reverse=True)
+    starter_rows = [r for r in ranked if _player_ovr(r["player"]) >= MAJOR_TRADE_TARGET_OVR]
+    mixed = []
+    seen = set()
+    for row in starter_rows[:8] + ranked:
+        key = _norm(row["player"].get("id") or row["player"].get("name"))
+        if key and key not in seen:
+            seen.add(key)
+            mixed.append(row["player"])
+    return mixed[:20]
 
 
-def _buyer_outgoing_players(team: Dict[str, Any], season_year: int) -> List[Dict[str, Any]]:
-    roster = sorted(_players(team), key=_player_ovr, reverse=True)
+def _buyer_outgoing_players(team: Dict[str, Any], season_year: int, team_ctx: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     out = []
-    for idx, p in enumerate(roster):
+    for p in _players(team):
         if not isinstance(p, dict) or not _is_standard_player(p):
             continue
         ovr = _player_ovr(p)
-        age = _player_age(p)
-        if idx <= 5 or ovr >= 81:
+        if ovr < MIN_MARKET_PLAYER_OVR:
             continue
-        if ovr < 65:
+        score = _market_player_score(team, p, season_year, team_ctx, "buyer")
+        if score < -8 and ovr >= STAR_TRADE_TARGET_OVR:
             continue
-        if age > 30 and ovr >= 72:
-            continue
-        # Prefer movable young/bench salaries, not actual rotation core.
-        score = (78 - ovr) + max(0, 25 - age) * 1.15 - max(0, age - 28) * 0.7 + min(_salary_for_year(p, season_year) / 10_000_000, 2.0)
         out.append({"player": p, "score": score})
-    return [r["player"] for r in sorted(out, key=lambda x: x["score"], reverse=True)[:10]]
+    return [r["player"] for r in sorted(out, key=lambda x: x["score"], reverse=True)[:20]]
+
+
+def _pick_identity_key(pick: Dict[str, Any]) -> str:
+    return "|".join([
+        _str(pick.get("assetType") or pick.get("type") or "pick", "pick").lower(),
+        _str(int(_num(pick.get("year") or pick.get("seasonYear"), 0))),
+        _str(int(_num(pick.get("round"), 1))),
+        _norm(pick.get("originalTeam") or pick.get("originalTeamName") or pick.get("team")),
+        _norm(pick.get("ownerTeam") or pick.get("currentOwnerTeamName") or pick.get("owner")),
+    ])
+
+
+def _protected_first_variant(pick: Dict[str, Any], protect_end: int) -> Dict[str, Any]:
+    label = "Lottery Protected" if int(protect_end) == 14 else f"Top {int(protect_end)} Protected"
+    return {
+        **pick,
+        "protection": label,
+        "protections": label,
+        "displayProtection": label,
+        "cpuGeneratedProtection": True,
+        "tradeRule": {
+            "action": "protected",
+            "protectStart": 1,
+            "protectEnd": int(protect_end),
+            "baseProtectionLabel": f"Top {int(protect_end)} Protected",
+        },
+    }
 
 
 def _simple_pick_assets(league: Dict[str, Any], owner_team: str, season_year: int) -> List[Dict[str, Any]]:
@@ -407,9 +585,20 @@ def _simple_pick_assets(league: Dict[str, Any], owner_team: str, season_year: in
         protection = _str(row.get("displayProtection") or row.get("protections") or row.get("protection") or "Unprotected", "Unprotected")
         if protection and protection.lower() not in {"unprotected", "none", "null"}:
             continue
-        score = (0 if rnd == 2 else 10) + (year - season_year) * 0.25
+        distance = max(1, year - season_year)
+        score = (0 if rnd == 2 else 10) + distance * 0.25
         out.append({"pick": row, "score": score, "round": rnd})
-    return [r["pick"] for r in sorted(out, key=lambda x: x["score"])[:8]]
+
+        # Give the automated market a realistic middle ground between no first and
+        # a fully unprotected first. These are simple one-protection picks only, so
+        # they match the project rule while giving high-quality trades better shape.
+        if ALLOW_CPU_PROTECTED_FIRSTS and rnd == 1:
+            for protect_end in CPU_PROTECTED_FIRST_PROFILES:
+                variant = _protected_first_variant(row, protect_end)
+                protection_discount = {3: 0.15, 5: 0.30, 10: 0.65, 14: 0.95}.get(int(protect_end), 0.55)
+                out.append({"pick": variant, "score": score + protection_discount, "round": rnd})
+
+    return [r["pick"] for r in sorted(out, key=lambda x: x["score"])[:16]]
 
 
 def _player_item(player: Dict[str, Any]) -> Dict[str, Any]:
@@ -418,11 +607,14 @@ def _player_item(player: Dict[str, Any]) -> Dict[str, Any]:
 
 def _pick_item(pick: Dict[str, Any]) -> Dict[str, Any]:
     protection = _str(pick.get("displayProtection") or pick.get("protections") or pick.get("protection") or "Unprotected", "Unprotected")
+    round_label = '1st' if int(_num(pick.get('round'), 1)) == 1 else '2nd'
+    label_suffix = "" if protection.lower() in {"", "unprotected", "none", "null"} else f" ({protection})"
     return {
         "type": "pick",
         "pick": pick,
         "protection": protection or "Unprotected",
-        "displayLabel": f"{pick.get('year', '')} {'1st' if int(_num(pick.get('round'), 1)) == 1 else '2nd'} - {pick.get('originalTeam') or pick.get('team') or 'Own'}",
+        "tradeRule": pick.get("tradeRule") if isinstance(pick.get("tradeRule"), dict) else None,
+        "displayLabel": f"{pick.get('year', '')} {round_label} - {pick.get('originalTeam') or pick.get('team') or 'Own'}{label_suffix}",
     }
 
 
@@ -444,11 +636,25 @@ def _rough_value_player(player: Dict[str, Any], season_year: int) -> float:
     return (ovr - 65) * 0.45 + upside * 0.22 + age_adj - contract_drag
 
 
-def _rough_value_pick(pick: Dict[str, Any]) -> float:
+def _rough_value_pick(pick: Dict[str, Any], season_year: int = 2026) -> float:
     rnd = int(_num(pick.get("round"), 1))
+    year = int(_num(pick.get("year") or pick.get("seasonYear"), season_year + 3))
+    distance = max(1, min(7, year - season_year))
+    protection = _str(pick.get("displayProtection") or pick.get("protections") or pick.get("protection") or "", "").lower()
     if rnd == 1:
-        return 4.0
-    return 1.2
+        value = max(4.8, 7.2 - distance * 0.25)
+        if "lottery" in protection or "top 14" in protection:
+            value *= 0.62
+        elif "top 10" in protection:
+            value *= 0.70
+        elif "top 5" in protection:
+            value *= 0.82
+        elif "top 3" in protection:
+            value *= 0.88
+        elif "protected" in protection:
+            value *= 0.78
+        return value
+    return max(0.9, 1.7 - distance * 0.08)
 
 
 def _salary_matchish(incoming_salary: float, outgoing_salary: float) -> bool:
@@ -463,13 +669,240 @@ def _salary_matchish(incoming_salary: float, outgoing_salary: float) -> bool:
     return incoming_salary <= outgoing_salary * 1.25 + 250_000
 
 
+def _pick_bundle_options(picks: List[Dict[str, Any]], max_picks: int, rng: random.Random) -> List[List[Dict[str, Any]]]:
+    clean = [p for p in picks if isinstance(p, dict)]
+    rng.shuffle(clean)
+    seconds = [p for p in clean if int(_num(p.get("round"), 1)) == 2]
+    protected_firsts = [p for p in clean if int(_num(p.get("round"), 1)) == 1 and "protected" in _str(p.get("displayProtection") or p.get("protection") or "").lower()]
+    unprotected_firsts = [p for p in clean if int(_num(p.get("round"), 1)) == 1 and p not in protected_firsts]
+    ordered = protected_firsts[:6] + unprotected_firsts[:5] + seconds[:6]
+    ordered += [p for p in clean if p not in ordered]
+    ordered = ordered[:12]
+    out: List[List[Dict[str, Any]]] = [[]]
+
+    def add_bundle(bundle: List[Dict[str, Any]]) -> None:
+        if len(bundle) > max_picks:
+            return
+        keys = [_pick_identity_key(p) for p in bundle]
+        if len(keys) != len(set(keys)):
+            return
+        sig = tuple(sorted((_str(p.get("id") or ""), _str(p.get("displayProtection") or p.get("protection") or "")) for p in bundle))
+        if sig in seen:
+            return
+        seen.add(sig)
+        out.append(bundle)
+
+    seen = {tuple()}
+    for pick in ordered:
+        add_bundle([pick])
+    if max_picks >= 2:
+        limit = min(len(ordered), 10)
+        for i in range(limit):
+            for j in range(i + 1, limit):
+                add_bundle([ordered[i], ordered[j]])
+    if max_picks >= 3:
+        # Rare richer pick bundles: protected first + second, or first + two seconds.
+        limit = min(len(ordered), 9)
+        for i in range(limit):
+            for j in range(i + 1, limit):
+                for k in range(j + 1, limit):
+                    bundle = [ordered[i], ordered[j], ordered[k]]
+                    firsts = sum(1 for p in bundle if int(_num(p.get("round"), 1)) == 1)
+                    if firsts <= 2:
+                        add_bundle(bundle)
+    return out
+
+
+def _package_value(items: List[Dict[str, Any]], season_year: int) -> float:
+    total = 0.0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "player" and isinstance(item.get("player"), dict):
+            total += _rough_value_player(item["player"], season_year)
+        elif item.get("type") == "pick" and isinstance(item.get("pick"), dict):
+            total += _rough_value_pick(item["pick"], season_year)
+    return total
+
+
+def _package_salary(items: List[Dict[str, Any]], season_year: int) -> float:
+    return sum(
+        _salary_for_year(item.get("player"), season_year)
+        for item in items
+        if isinstance(item, dict) and item.get("type") == "player" and isinstance(item.get("player"), dict)
+    )
+
+
+def _pick_round(pick: Dict[str, Any]) -> int:
+    return int(_num(pick.get("round"), 1))
+
+
+def _has_first(items: List[Dict[str, Any]]) -> bool:
+    return any(item.get("type") == "pick" and _pick_round(item.get("pick") or {}) == 1 for item in items)
+
+
+def _has_second(items: List[Dict[str, Any]]) -> bool:
+    return any(item.get("type") == "pick" and _pick_round(item.get("pick") or {}) == 2 for item in items)
+
+
+def _best_player_value(items: List[Dict[str, Any]], season_year: int) -> float:
+    vals = [
+        _rough_value_player(item.get("player"), season_year)
+        for item in items
+        if isinstance(item, dict) and item.get("type") == "player" and isinstance(item.get("player"), dict)
+    ]
+    return max(vals) if vals else 0.0
+
+
+def _best_player_ovr(items: List[Dict[str, Any]]) -> float:
+    vals = [
+        _player_ovr(item.get("player"))
+        for item in items
+        if isinstance(item, dict) and item.get("type") == "player" and isinstance(item.get("player"), dict)
+    ]
+    return max(vals) if vals else 0.0
+
+
+def _has_premium_young_asset(items: List[Dict[str, Any]]) -> bool:
+    for item in items:
+        if not isinstance(item, dict) or item.get("type") != "player" or not isinstance(item.get("player"), dict):
+            continue
+        player = item["player"]
+        if _player_age(player) <= 24 and _player_pot(player) >= 82:
+            return True
+    return False
+
+
+def _player_combo_options(pool: List[Dict[str, Any]], max_players: int, rng: random.Random, target: Optional[Dict[str, Any]] = None, season_year: int = 2026) -> List[List[Dict[str, Any]]]:
+    rows = [p for p in pool if isinstance(p, dict)]
+    target_salary = _salary_for_year(target or {}, season_year)
+    target_ovr = _player_ovr(target or {})
+
+    # Build three lanes rather than one sorted movable list:
+    # 1) salary ballast for large contracts, 2) premium future/current value, and
+    # 3) normal movable depth. This is the key v3 change that lets the bank find
+    # starter/high-salary frameworks without hardcoding stars into or out of the market.
+    by_movable = rows[:]
+    rng.shuffle(by_movable)
+    by_movable = sorted(
+        by_movable,
+        key=lambda p: (
+            _market_player_score({"players": rows}, p, season_year, {}, "buyer"),
+            _rough_value_player(p, season_year),
+        ),
+        reverse=True,
+    )[:12]
+
+    by_value = sorted(
+        rows,
+        key=lambda p: (
+            _rough_value_player(p, season_year),
+            max(0.0, _player_pot(p) - _player_ovr(p)),
+            _player_ovr(p),
+        ),
+        reverse=True,
+    )[:10 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 6]
+
+    by_salary = sorted(
+        rows,
+        key=lambda p: (
+            abs(_salary_for_year(p, season_year) - max(1.0, target_salary * 0.62)),
+            -_rough_value_player(p, season_year),
+        ),
+    )[:8 if target_salary >= 18_000_000 else 4]
+
+    ordered = []
+    seen = set()
+    for bucket in (by_value, by_salary, by_movable):
+        for player in bucket:
+            key = _norm(player.get("id") or player.get("name"))
+            if key and key not in seen:
+                seen.add(key)
+                ordered.append(player)
+
+    ordered = ordered[:18 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 12]
+    combos: List[List[Dict[str, Any]]] = []
+
+    def add_combo(combo: List[Dict[str, Any]]) -> None:
+        if not combo or len(combo) > max_players:
+            return
+        sig = tuple(sorted(_norm(p.get("id") or p.get("name")) for p in combo))
+        if not sig or any(not x for x in sig):
+            return
+        if sig in combo_seen:
+            return
+        combo_seen.add(sig)
+        combos.append(combo)
+
+    combo_seen = set()
+    for p0 in ordered:
+        add_combo([p0])
+
+    if max_players >= 2:
+        limit = min(len(ordered), 14 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 9)
+        for i in range(limit):
+            for j in range(i + 1, limit):
+                add_combo([ordered[i], ordered[j]])
+
+    if max_players >= 3:
+        # For high-value targets, include enough three-player salary/value shells to
+        # satisfy matching, but cap the combinatorics tightly for sim speed.
+        limit = min(len(ordered), 10 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 7)
+        for i in range(limit):
+            for j in range(i + 1, limit):
+                for k in range(j + 1, limit):
+                    add_combo([ordered[i], ordered[j], ordered[k]])
+
+    rng.shuffle(combos)
+    combos.sort(
+        key=lambda combo: (
+            -abs(_package_salary([_player_item(p) for p in combo], season_year) - target_salary) / 10_000_000,
+            _package_value([_player_item(p) for p in combo], season_year),
+        ),
+        reverse=True,
+    )
+    return combos[:84 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 42]
+
+
+def _target_value_window(target: Dict[str, Any]) -> Tuple[float, float]:
+    ovr = _player_ovr(target)
+    if ovr >= 90:
+        return (1.50, 22.0)
+    if ovr >= STAR_TRADE_TARGET_OVR:
+        return (-0.15, 19.0)
+    if ovr >= MAJOR_TRADE_TARGET_OVR:
+        return (-1.75, 16.5)
+    if ovr >= 78:
+        return (-2.45, 12.0)
+    return (-3.10, 8.5)
+
+
+def _candidate_template_label(target: Dict[str, Any], to_items: List[Dict[str, Any]], from_items: List[Dict[str, Any]]) -> str:
+    ovr = _player_ovr(target)
+    pick_count = sum(1 for item in to_items if item.get("type") == "pick")
+    player_count = sum(1 for item in to_items if item.get("type") == "player")
+    seller_pick_count = sum(1 for item in from_items if item.get("type") == "pick")
+    if ovr >= STAR_TRADE_TARGET_OVR:
+        return "star-market framework"
+    if ovr >= MAJOR_TRADE_TARGET_OVR and pick_count:
+        return "starter plus picks framework"
+    if player_count >= 2 and ovr >= 78:
+        return "consolidation framework"
+    if seller_pick_count:
+        return "seller-sweetened directional framework"
+    if pick_count:
+        return "pick-sweetened rotation framework"
+    return "directional player framework"
+
+
 def _build_candidate(
     league: Dict[str, Any],
     seller: Dict[str, Any],
     buyer: Dict[str, Any],
     target: Dict[str, Any],
     buyer_pool: List[Dict[str, Any]],
-    picks: List[Dict[str, Any]],
+    buyer_picks: List[Dict[str, Any]],
+    seller_picks: List[Dict[str, Any]],
     seller_ctx: Dict[str, Any],
     buyer_ctx: Dict[str, Any],
     season_year: int,
@@ -477,94 +910,175 @@ def _build_candidate(
 ) -> Optional[Dict[str, Any]]:
     target_salary = _salary_for_year(target, season_year)
     target_value = _rough_value_player(target, season_year)
+    target_ovr = _player_ovr(target)
 
-    # Try 1-player or 2-player outgoing packages, then maybe add a pick.
-    # Unequal packages may temporarily leave a team outside the game-ready
-    # 14-to-15 range. The trade ceiling is 16 standard contracts, or one more
-    # than the team already carries; JavaScript repairs CPU rosters before play.
     seller_roster_count = _standard_roster_count(seller)
     buyer_roster_count = _standard_roster_count(buyer)
     seller_allowed_max = max(STANDARD_ROSTER_MAX, seller_roster_count + 1)
     buyer_allowed_max = max(STANDARD_ROSTER_MAX, buyer_roster_count + 1)
-    pool = buyer_pool[:]
-    rng.shuffle(pool)
-    combos: List[List[Dict[str, Any]]] = [[p] for p in pool]
-    for i in range(min(len(pool), 6)):
-        for j in range(i + 1, min(len(pool), 8)):
-            combos.append([pool[i], pool[j]])
+
+    max_assets = MAX_ASSETS_PER_SIDE
+    max_players = min(MAX_PLAYER_ASSETS_PER_SIDE, max_assets)
+    player_combos = _player_combo_options(buyer_pool, max_players, rng, target, season_year)
+    pick_bundles = _pick_bundle_options(buyer_picks, MAX_PICK_ASSETS_PER_SIDE, rng)
+    # Keep the generated search progressive rather than exhaustive. First-round
+    # options are considered early for starter/star targets, but we cap the bundle
+    # count so one hard salary match cannot stall the sim thread.
+    if target_ovr >= STAR_TRADE_TARGET_OVR:
+        pick_bundles = pick_bundles[:28]
+    elif target_ovr >= MAJOR_TRADE_TARGET_OVR:
+        pick_bundles = pick_bundles[:24]
+    else:
+        pick_bundles = pick_bundles[:12]
+    seller_pick_bundles = _pick_bundle_options(seller_picks, 1, rng)[:6]
 
     viable = []
-    for combo in combos:
-        seller_projected_count = seller_roster_count - 1 + len(combo)
-        buyer_projected_count = buyer_roster_count - len(combo) + 1
+    min_balance, max_balance = _target_value_window(target)
 
-        if seller_projected_count > seller_allowed_max:
-            continue
-        if buyer_projected_count > buyer_allowed_max:
-            continue
+    # Higher-end targets need real outbound structure. This keeps every player
+    # available while making expensive players require multi-asset frameworks.
+    for combo in player_combos:
+        outgoing_player_items = [_player_item(p) for p in combo]
+        for pick_bundle in pick_bundles:
+            if len(combo) + len(pick_bundle) > max_assets:
+                continue
+            if target_ovr >= STAR_TRADE_TARGET_OVR and len(combo) + len(pick_bundle) < 2:
+                continue
+            if target_ovr >= 87 and len(combo) + len(pick_bundle) < 3:
+                continue
+            to_items = outgoing_player_items + [_pick_item(p) for p in pick_bundle]
+            if not to_items:
+                continue
 
-        outgoing_salary = sum(_salary_for_year(p, season_year) for p in combo)
-        if not _salary_matchish(target_salary, outgoing_salary):
-            continue
-        outgoing_value = sum(_rough_value_player(p, season_year) for p in combo)
-        seller_needs_pick = all(
-            _player_age(p) > 26 and _player_pot(p) <= _player_ovr(p) + 2
-            for p in combo
-        )
-        need_pick = target_value > outgoing_value + 1.1 or seller_needs_pick
-        pick = None
-        if need_pick and picks:
-            # Shuffle inside each framework so repeated background passes explore
-            # different legal picks instead of always attaching the same asset.
-            available_picks = picks[:]
-            rng.shuffle(available_picks)
-            second = [p for p in available_picks if int(_num(p.get("round"), 1)) == 2]
-            first = [p for p in available_picks if int(_num(p.get("round"), 1)) == 1]
-            if PREFER_SECOND_ROUND_PICK_FOR_SMALL_TRADES and target_value - outgoing_value < 3.0 and second:
-                pick = second[0]
-            elif first:
-                pick = first[0]
-            elif second:
-                pick = second[0]
-        total_value = outgoing_value + (_rough_value_pick(pick) if pick else 0.0)
-        balance = total_value - target_value
-        # Too cheap or insane overpay: skip. JS does final acceptance.
-        if balance < -3.25 or balance > 6.5:
-            continue
-        score = 10.0 - abs(balance) + buyer_ctx.get("buyerWeight", 0) + seller_ctx.get("sellerWeight", 0)
-        viable.append((score, combo, pick, balance))
+            # Starter/high-end targets must be paid for with actual trade capital,
+            # not just the two second-round-pick shells that made v2 feel shallow.
+            if target_ovr >= MAJOR_TRADE_TARGET_OVR:
+                has_real_anchor = (
+                    _has_first(to_items) or
+                    _has_premium_young_asset(to_items) or
+                    _best_player_ovr(to_items) >= max(76.0, target_ovr - 4.0)
+                )
+                if not has_real_anchor:
+                    continue
+            if target_ovr >= STAR_TRADE_TARGET_OVR:
+                premium_points = 0
+                premium_points += 2 if _has_first(to_items) else 0
+                premium_points += 1 if _has_second(to_items) else 0
+                premium_points += 2 if _has_premium_young_asset(to_items) else 0
+                premium_points += 1 if _best_player_ovr(to_items) >= target_ovr - 5.0 else 0
+                if premium_points < 3:
+                    continue
+
+            from_items = [_player_item(target)]
+            outgoing_salary = _package_salary(to_items, season_year)
+            incoming_salary = _package_salary(from_items, season_year)
+            if not _salary_matchish(incoming_salary, outgoing_salary):
+                continue
+
+            seller_projected_count = seller_roster_count - 1 + len(combo)
+            buyer_projected_count = buyer_roster_count - len(combo) + 1
+            if seller_projected_count > seller_allowed_max:
+                continue
+            if buyer_projected_count > buyer_allowed_max:
+                continue
+
+            total_value = _package_value(to_items, season_year)
+            seller_total_value = _package_value(from_items, season_year)
+            balance = total_value - seller_total_value
+
+            # If the buyer is overpaying, let the seller include one simple pick
+            # to convert a rejected overpay into a plausible directional trade.
+            if balance > max_balance and seller_pick_bundles:
+                sweetener_options = seller_pick_bundles[1:] or []
+                rng.shuffle(sweetener_options)
+                for seller_pick_bundle in sweetener_options[:3]:
+                    trial_from_items = from_items + [_pick_item(p) for p in seller_pick_bundle]
+                    if len(trial_from_items) > max_assets:
+                        continue
+                    trial_balance = total_value - _package_value(trial_from_items, season_year)
+                    if min_balance <= trial_balance <= max_balance:
+                        from_items = trial_from_items
+                        balance = trial_balance
+                        break
+
+            if balance < min_balance or balance > max_balance:
+                continue
+
+            pick_count = len(pick_bundle)
+            player_count = len(combo)
+            quality_bonus = 0.0
+            if target_ovr >= MAJOR_TRADE_TARGET_OVR:
+                quality_bonus += 2.8
+            if target_ovr >= STAR_TRADE_TARGET_OVR:
+                quality_bonus += 4.2
+            if seller_ctx.get("phase") in {"seller", "retool"} and target_ovr >= MAJOR_TRADE_TARGET_OVR:
+                quality_bonus += 1.6
+            if seller_ctx.get("phase") in {"seller", "retool"} and _player_age(target) >= 32 and target_ovr >= STAR_TRADE_TARGET_OVR:
+                quality_bonus += 2.0
+            if pick_count:
+                quality_bonus += min(2.8, pick_count * 0.8 + (1.0 if _has_first(to_items) else 0.0))
+            if _has_first(to_items) and target_ovr >= MAJOR_TRADE_TARGET_OVR:
+                quality_bonus += 1.2
+            if _has_premium_young_asset(to_items) and target_ovr >= MAJOR_TRADE_TARGET_OVR:
+                quality_bonus += 1.0
+            if player_count >= 2 and target_ovr >= 78:
+                quality_bonus += 1.0
+
+            # Penalize one-team spam without hard-locking activity below the cap.
+            buyer_activity = _already_traded_count(league, _team_name(buyer))
+            seller_activity = _already_traded_count(league, _team_name(seller))
+            activity_penalty = max(0, buyer_activity - 1) * 0.85 + max(0, seller_activity - 1) * 0.75
+
+            score = (
+                10.0
+                - abs(balance) * (0.70 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 0.95)
+                + buyer_ctx.get("buyerWeight", 0)
+                + seller_ctx.get("sellerWeight", 0)
+                + quality_bonus
+                - activity_penalty
+            )
+            viable.append((score, combo, pick_bundle, from_items, to_items, balance))
+            if len(viable) >= (72 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 36):
+                break
+        if len(viable) >= (72 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 36):
+            break
 
     if not viable:
         return None
 
-    # Keep quality high, but randomly choose among the strongest few frameworks.
-    # The exponent biases toward the best option without making every save identical.
     viable.sort(key=lambda row: row[0], reverse=True)
-    shortlist = viable[: min(5, len(viable))]
-    choice_index = min(len(shortlist) - 1, int((rng.random() ** 1.8) * len(shortlist)))
-    _, combo, pick, balance = shortlist[choice_index]
+    shortlist = viable[: min(10, len(viable))]
+    choice_index = min(len(shortlist) - 1, int((rng.random() ** 2.05) * len(shortlist)))
+    score, combo, pick_bundle, from_items, to_items, balance = shortlist[choice_index]
     from_team = _team_name(seller)
     to_team = _team_name(buyer)
-    from_items = [_player_item(target)]
-    to_items = [_player_item(p) for p in combo]
-    if pick:
-        to_items.append(_pick_item(pick))
+    template = _candidate_template_label(target, to_items, from_items)
 
     if len(from_items) > MAX_ASSETS_PER_SIDE or len(to_items) > MAX_ASSETS_PER_SIDE:
         return None
 
+    target_tier = "rotation"
+    if target_ovr >= 90:
+        target_tier = "franchise"
+    elif target_ovr >= STAR_TRADE_TARGET_OVR:
+        target_tier = "star"
+    elif target_ovr >= MAJOR_TRADE_TARGET_OVR:
+        target_tier = "starter"
+
     motive_bits = []
     if buyer_ctx.get("slump"):
-        motive_bits.append(f"{to_team} is underperforming and looks for a rotation boost")
+        motive_bits.append(f"{to_team} is underperforming and explores a {target_tier}-level upgrade")
+    elif buyer_ctx.get("phase") == "contender":
+        motive_bits.append(f"{to_team} shops like a contender looking for a higher-impact rotation piece")
     else:
         motive_bits.append(f"{to_team} looks like a buyer")
-    if seller_ctx.get("surprise"):
-        motive_bits.append(f"{from_team} is overachieving, so seller pressure is reduced")
+    if seller_ctx.get("phase") in {"seller", "retool"}:
+        motive_bits.append(f"{from_team} is open to bigger market frameworks for future value")
     else:
-        motive_bits.append(f"{from_team} moves a veteran for younger assets")
+        motive_bits.append(f"{from_team} listens because the package clears its asking-price board")
 
     return {
-        "id": f"cpu_trade_{_norm(from_team)}_{_norm(to_team)}_{_norm(_player_name(target))}",
+        "id": f"cpu_trade_{_norm(from_team)}_{_norm(to_team)}_{_norm(_player_name(target))}_{_stable_seed(template, balance) % 100000}",
         "fromTeamName": from_team,
         "toTeamName": to_team,
         "fromItems": from_items,
@@ -574,13 +1088,21 @@ def _build_candidate(
             "sellerPhase": seller_ctx.get("phase"),
             "buyerPhase": buyer_ctx.get("phase"),
             "targetPlayer": _player_name(target),
+            "targetOvr": target_ovr,
+            "targetAge": _player_age(target),
+            "targetTier": target_tier,
+            "template": template,
             "balance": round(balance, 3),
+            "candidateScore": round(score, 3),
             "targetSalary": target_salary,
-            "outgoingSalary": sum(_salary_for_year(p, season_year) for p in combo),
+            "outgoingSalary": _package_salary(to_items, season_year),
             "sellerRosterBefore": seller_roster_count,
             "buyerRosterBefore": buyer_roster_count,
-            "sellerRosterAfter": seller_roster_count - 1 + len(combo),
-            "buyerRosterAfter": buyer_roster_count - len(combo) + 1,
+            "sellerRosterAfter": seller_roster_count - 1 + sum(1 for item in to_items if item.get("type") == "player"),
+            "buyerRosterAfter": buyer_roster_count - sum(1 for item in to_items if item.get("type") == "player") + 1,
+            "buyerPickCount": sum(1 for item in to_items if item.get("type") == "pick"),
+            "sellerPickCount": sum(1 for item in from_items if item.get("type") == "pick"),
+            "protectedFirstCount": sum(1 for item in to_items + from_items if item.get("type") == "pick" and int(_num((item.get("pick") or {}).get("round"), 1)) == 1 and "protected" in _str(item.get("protection") or (item.get("pick") or {}).get("displayProtection") or "").lower()),
         },
     }
 
@@ -667,7 +1189,7 @@ def _build_trade_desk_signals(
     for seller in sellers[:2]:
         name = _team_name(seller)
         ctx = contexts[name]
-        targets = _seller_trade_targets(seller, season_year)
+        targets = _seller_trade_targets(seller, season_year, ctx)
         target = targets[0] if targets else None
         target_name = _player_name(target) if target else "veteran rotation pieces"
         if ctx.get("surprise"):
@@ -743,6 +1265,8 @@ def find_cpu_cpu_trade_candidates(payload: Dict[str, Any]) -> Dict[str, Any]:
     user_team = _str(context.get("userTeamName"), "")
     max_candidates = int(_num(context.get("maxCandidates"), MAX_CANDIDATES_PER_DAY))
     max_candidates = max(1, min(MAX_CANDIDATES_PER_DAY, max_candidates))
+    inventory_pressure = max(0.0, min(3.0, _num(context.get("inventoryPressure"), 0.0)))
+    reliability_mode = bool(context.get("foregroundRecommended")) or inventory_pressure >= 0.75
     season_year = _season_year(league)
 
     if deadline_date and current_date and current_date >= deadline_date:
@@ -780,9 +1304,9 @@ def find_cpu_cpu_trade_candidates(payload: Dict[str, Any]) -> Dict[str, Any]:
         ctx = contexts[name]
         if _already_traded_count(league, name) >= MAX_CPU_TRADES_PER_TEAM_SEASON:
             continue
-        if ctx.get("sellerWeight", 0) > 0.30:
+        if ctx.get("sellerWeight", 0) >= 0.20:
             sellers.append(t)
-        if ctx.get("buyerWeight", 0) > 0.30:
+        if ctx.get("buyerWeight", 0) >= 0.20:
             buyers.append(t)
 
     # Build a randomized, weighted team-pair work queue. The previous nested-loop
@@ -800,7 +1324,8 @@ def find_cpu_cpu_trade_candidates(payload: Dict[str, Any]) -> Dict[str, Any]:
             if _already_traded_pair(league, seller_name, buyer_name):
                 continue
             buyer_weight = _num(contexts[buyer_name].get("buyerWeight"), 0)
-            randomized_priority = seller_weight + buyer_weight + rng.uniform(0.0, 1.15)
+            activity_penalty = max(0, _already_traded_count(league, seller_name) - 1) * 0.65 + max(0, _already_traded_count(league, buyer_name) - 1) * 0.75
+            randomized_priority = seller_weight + buyer_weight + rng.uniform(0.0, 1.25) - activity_penalty
             pair_queue.append((randomized_priority, seller, buyer))
 
     rng.shuffle(pair_queue)
@@ -809,7 +1334,7 @@ def find_cpu_cpu_trade_candidates(payload: Dict[str, Any]) -> Dict[str, Any]:
     candidates: List[Dict[str, Any]] = []
     seller_candidate_counts: Dict[str, int] = {}
     buyer_candidate_counts: Dict[str, int] = {}
-    pair_attempt_limit = min(len(pair_queue), max(40, max_candidates * 12))
+    pair_attempt_limit = min(len(pair_queue), max(120 if reliability_mode else 80, max_candidates * (26 if reliability_mode else 18)))
 
     for _, seller, buyer in pair_queue[:pair_attempt_limit]:
         seller_name = _team_name(seller)
@@ -819,43 +1344,83 @@ def find_cpu_cpu_trade_candidates(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         # Spread each pass across the league. Repeated passes can revisit a team,
         # but no single pass should look like one franchise generated every deal.
-        if seller_candidate_counts.get(seller_key, 0) >= 2:
+        seller_pass_limit = 8 if reliability_mode else 5
+        buyer_pass_limit = 9 if reliability_mode else 6
+        if seller_candidate_counts.get(seller_key, 0) >= seller_pass_limit:
             continue
-        if buyer_candidate_counts.get(buyer_key, 0) >= 3:
+        if buyer_candidate_counts.get(buyer_key, 0) >= buyer_pass_limit:
             continue
 
-        targets = _seller_trade_targets(seller, season_year)
-        buyer_pool = _buyer_outgoing_players(buyer, season_year)
+        seller_recent_acquisitions = _recent_cpu_acquired_player_names(league, seller_name, current_date)
+        buyer_recent_acquisitions = _recent_cpu_acquired_player_names(league, buyer_name, current_date)
+        targets = [
+            player
+            for player in _seller_trade_targets(seller, season_year, contexts[seller_name])
+            if _norm(_player_name(player)) not in seller_recent_acquisitions
+        ]
+        buyer_pool = [
+            player
+            for player in _buyer_outgoing_players(buyer, season_year, contexts[buyer_name])
+            if _norm(_player_name(player)) not in buyer_recent_acquisitions
+        ]
         if not targets or not buyer_pool:
             continue
 
-        picks = _simple_pick_assets(league, buyer_name, season_year)
+        buyer_picks = _simple_pick_assets(league, buyer_name, season_year)
+        seller_picks = _simple_pick_assets(league, seller_name, season_year)
         randomized_targets = targets[:]
         rng.shuffle(randomized_targets)
+        if contexts[seller_name].get("phase") in {"seller", "retool"}:
+            # In seller/retool seasons, intentionally surface the real names a
+            # franchise would shop: productive 80+ players, and especially aging
+            # high-end players. Jitter keeps this from becoming deterministic.
+            randomized_targets.sort(
+                key=lambda p: (
+                    (_player_ovr(p) >= MAJOR_TRADE_TARGET_OVR) * 7.0 +
+                    (_player_ovr(p) >= STAR_TRADE_TARGET_OVR) * 5.0 +
+                    (_player_age(p) >= 32 and _player_ovr(p) >= MAJOR_TRADE_TARGET_OVR) * 4.0 -
+                    (_player_age(p) <= 21 and _player_pot(p) >= 88) * 2.0 +
+                    rng.uniform(0.0, 6.0)
+                ),
+                reverse=True,
+            )
 
-        candidate = None
-        for target in randomized_targets[:4]:
+        pair_added = 0
+        pair_candidate_limit = 2 if reliability_mode else 1
+        target_scan_limit = 26 if reliability_mode else 16
+        seen_pair_signatures: Set[str] = set()
+        for target in randomized_targets[:target_scan_limit]:
             candidate = _build_candidate(
                 league,
                 seller,
                 buyer,
                 target,
                 buyer_pool,
-                picks,
+                buyer_picks,
+                seller_picks,
                 contexts[seller_name],
                 contexts[buyer_name],
                 season_year,
                 rng,
             )
-            if candidate:
+            if not candidate:
+                continue
+            sig = json.dumps({
+                "from": candidate.get("fromTeamName"),
+                "to": candidate.get("toTeamName"),
+                "fromItems": [item.get("type") + ":" + _norm((item.get("player") or item.get("pick") or {}).get("name") or (item.get("pick") or {}).get("id") or item.get("protection") or "") for item in candidate.get("fromItems") or []],
+                "toItems": [item.get("type") + ":" + _norm((item.get("player") or item.get("pick") or {}).get("name") or (item.get("pick") or {}).get("id") or item.get("protection") or "") for item in candidate.get("toItems") or []],
+            }, sort_keys=True)
+            if sig in seen_pair_signatures:
+                continue
+            seen_pair_signatures.add(sig)
+            candidates.append(candidate)
+            pair_added += 1
+            seller_candidate_counts[seller_key] = seller_candidate_counts.get(seller_key, 0) + 1
+            buyer_candidate_counts[buyer_key] = buyer_candidate_counts.get(buyer_key, 0) + 1
+            if len(candidates) >= max_candidates or pair_added >= pair_candidate_limit:
                 break
 
-        if not candidate:
-            continue
-
-        candidates.append(candidate)
-        seller_candidate_counts[seller_key] = seller_candidate_counts.get(seller_key, 0) + 1
-        buyer_candidate_counts[buyer_key] = buyer_candidate_counts.get(buyer_key, 0) + 1
         if len(candidates) >= max_candidates:
             break
 
@@ -875,9 +1440,12 @@ def find_cpu_cpu_trade_candidates(payload: Dict[str, Any]) -> Dict[str, Any]:
             "buyerCount": len(buyers),
             "maxCandidates": max_candidates,
             "deadlineMode": _num(context.get("daysToDeadline"), 999) <= 7,
+            "reliabilityMode": reliability_mode,
+            "inventoryPressure": round(inventory_pressure, 3),
             "bankGenerationMode": bank_generation_mode,
             "generationNonce": generation_nonce,
             "bankSeedPresent": bool(bank_seed),
+            "recentAcquisitionCooldownDays": RECENT_CPU_ACQUISITION_COOLDOWN_DAYS,
         },
         "tradeDeskItems": (candidate_trade_desk_items + base_trade_desk_items)[:8],
     }

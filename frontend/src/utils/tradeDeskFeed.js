@@ -1370,9 +1370,27 @@ export function buildTradeHistoryDeskEntries(leagueData = {}) {
 
 export function mergeTradeDeskFeedWithLeague(feed = [], leagueData = {}) {
   const byId = new Map();
-  for (const entry of [...safeArray(feed), ...buildTradeHistoryDeskEntries(leagueData)]) {
+  const historyEntries = buildTradeHistoryDeskEntries(leagueData);
+
+  // Completed/Deal cards must be sourced from real tradeHistory rows only.
+  // Older saved feed rows could leave stale "Completed" items on the Live Board
+  // even when no official roster-changing trade existed in the History Log.
+  for (const entry of safeArray(feed)) {
+    const clean = normalizeTradeDeskEntry(entry);
+    if (!clean?.id) continue;
+    if (clean.type === "transaction") continue;
+    byId.set(clean.id, clean);
+  }
+
+  for (const entry of historyEntries) {
     const clean = normalizeTradeDeskEntry(entry);
     if (clean?.id) byId.set(clean.id, clean);
   }
+
   return [...byId.values()].sort(sortTradeDeskEntries);
+}
+
+export function syncTradeDeskFeedWithLeagueHistory(leagueData = {}) {
+  const merged = mergeTradeDeskFeedWithLeague(readTradeDeskFeed(), leagueData);
+  return writeTradeDeskFeed(merged);
 }

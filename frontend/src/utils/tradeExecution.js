@@ -30,6 +30,7 @@ const TRADE_MATCHING_SMALL_OUTGOING = 7_500_000;
 const TRADE_MATCHING_MID_OUTGOING = 29_000_000;
 const TRADE_MATCHING_BUFFER = 250_000;
 const TRADE_SALARY_TOLERANCE = 1_000;
+const CPU_CPU_RECENT_ACQUISITION_COOLDOWN_DAYS = 45;
 
 
 // Manual trade-card layout controls.
@@ -1702,14 +1703,35 @@ function normalizeTradeReasonText(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function isGenericTradeDecisionMessage(text = "") {
+  const normalized = normalizeTradeReasonText(text).toLowerCase();
+  return /\b(accepts|rejects) the proposal\.?$/.test(normalized);
+}
+
+function stripAcceptedReasonPrefix(text = "") {
+  return normalizeTradeReasonText(text)
+    .replace(/^accepted because\s+/i, "")
+    .replace(/^accepted in cpu-to-cpu buyer mode because\s+/i, "")
+    .replace(/^accepted in cpu-to-cpu seller mode because\s+/i, "")
+    .replace(/^accepted in cpu-to-cpu cpu mode because\s+/i, "")
+    .replace(/^accepted in [^:]+ mode because\s+/i, "");
+}
+
 function firstEvaluationReason(evaluation = {}, fallback = "") {
   const message = normalizeTradeReasonText(evaluation?.message);
-  if (message) return message;
+  if (message && !isGenericTradeDecisionMessage(message)) return message;
 
-  const reason = Array.isArray(evaluation?.reasons)
-    ? evaluation.reasons.map(normalizeTradeReasonText).find(Boolean)
-    : "";
-  if (reason) return reason;
+  const reasons = Array.isArray(evaluation?.reasons)
+    ? evaluation.reasons.map(normalizeTradeReasonText).filter(Boolean)
+    : [];
+
+  const acceptedReason = reasons.find((reason) => /^accepted (because|in)\b/i.test(reason));
+  if (acceptedReason) return stripAcceptedReasonPrefix(acceptedReason);
+
+  const strategicReason = reasons.find((reason) =>
+    /(rotation upgrade|future\/upside|draft-pick value|team-impact score|no draft-asset downside|contract downside|clear reason to trade)/i.test(reason)
+  );
+  if (strategicReason) return stripAcceptedReasonPrefix(strategicReason);
 
   return normalizeTradeReasonText(fallback);
 }
@@ -2001,6 +2023,58 @@ function resolveCurrentCpuTradeItems(leagueData, teamName, items = []) {
   return { ok: true, items: resolvedItems };
 }
 
+function parseTradeDateMs(value = "") {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function daysSinceTradeDate(currentDate = "", previousDate = "") {
+  const current = parseTradeDateMs(currentDate);
+  const previous = parseTradeDateMs(previousDate);
+  if (current === null || previous === null) return null;
+  return Math.floor((current - previous) / 86_400_000);
+}
+
+function isCpuCpuTradeRecord(row = {}) {
+  return Boolean(row?.cpuCpuTrade || row?.source === "cpu_cpu_trade");
+}
+
+function findRecentCpuAcquisitionBlock({ leagueData, teamName = "", outgoingItems = [], currentDate = "" } = {}) {
+  if (!teamName || !currentDate || !Array.isArray(outgoingItems) || !outgoingItems.length) return null;
+
+  const outgoingNames = new Set(
+    outgoingItems
+      .filter((item) => item?.type === "player")
+      .map((item) => normalizeTeamName(playerNameOf(item.player)))
+      .filter(Boolean)
+  );
+  if (!outgoingNames.size) return null;
+
+  const history = Array.isArray(leagueData?.tradeHistory) ? leagueData.tradeHistory : [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const row = history[index];
+    if (!isCpuCpuTradeRecord(row)) continue;
+
+    const elapsedDays = daysSinceTradeDate(currentDate, row?.date || row?.currentDate);
+    if (elapsedDays === null || elapsedDays < 0 || elapsedDays > CPU_CPU_RECENT_ACQUISITION_COOLDOWN_DAYS) continue;
+
+    const movedPlayers = Array.isArray(row?.movedPlayers) ? row.movedPlayers : [];
+    const blockedMove = movedPlayers.find((move) =>
+      sameTeamName(move?.toTeam, teamName) && outgoingNames.has(normalizeTeamName(move?.name))
+    );
+
+    if (blockedMove) {
+      return {
+        playerName: blockedMove.name || "recently acquired player",
+        acquiredDate: row?.date || row?.currentDate || "recently",
+        elapsedDays,
+      };
+    }
+  }
+
+  return null;
+}
+
 function cpuTradeTimingValidation({ currentDate = "", tradeDeadlineDate = "", inOffseason = false } = {}) {
   if (inOffseason) {
     return {
@@ -2066,6 +2140,35 @@ export function validateCpuTradeCandidateOnLeague({
 
   const fromItems = resolvedFrom.items;
   const toItems = resolvedTo.items;
+  const fromCooldownBlock = findRecentCpuAcquisitionBlock({
+    leagueData,
+    teamName: fromTeamName,
+    outgoingItems: fromItems,
+    currentDate,
+  });
+  if (fromCooldownBlock) {
+    return {
+      ok: false,
+      reason: `${fromTeamName} will not immediately re-trade ${fromCooldownBlock.playerName}; acquired ${fromCooldownBlock.elapsedDays} days ago.`,
+      staleCode: "recent_cpu_trade_player_cooldown",
+      cooldown: fromCooldownBlock,
+    };
+  }
+
+  const toCooldownBlock = findRecentCpuAcquisitionBlock({
+    leagueData,
+    teamName: toTeamName,
+    outgoingItems: toItems,
+    currentDate,
+  });
+  if (toCooldownBlock) {
+    return {
+      ok: false,
+      reason: `${toTeamName} will not immediately re-trade ${toCooldownBlock.playerName}; acquired ${toCooldownBlock.elapsedDays} days ago.`,
+      staleCode: "recent_cpu_trade_player_cooldown",
+      cooldown: toCooldownBlock,
+    };
+  }
   const fromRosterProjection = evaluateTradeRosterProjection({
     team: fromTeam,
     outgoingItems: fromItems,
