@@ -60,6 +60,9 @@ includes("src/pages/Calendar.jsx", "recordPreSimulationDiagnostics", "Calendar r
 includes("src/pages/Calendar.jsx", "recordCpuTradeRepairDiagnostics", "Calendar records post-trade CPU repair diagnostics.");
 includes("src/pages/Calendar.jsx", "getCpuTradeSimulationDateDecision", "Calendar gates CPU trade work by pending simulation date and deadline status.");
 includes("src/pages/Calendar.jsx", "recordSimulationPerformanceDiagnostics", "Calendar records simulation and CPU-trade timing diagnostics.");
+includes("src/pages/Calendar.jsx", "runForegroundCpuTradeBankGeneration", "Calendar has foreground CPU-trade bank replenishment for empty/behind target seasons.");
+includes("src/pages/Calendar.jsx", "syncTradeDeskFeedWithLeagueHistory(nextLeagueData)", "Calendar canonicalizes Trade Desk transactions against official trade history.");
+includes("src/pages/Calendar.jsx", "simLockRef.current", "Calendar uses a synchronous simulation run lock to block duplicate SimToDate/full-season runs.");
 includes("src/pages/Calendar.jsx", "if (!firstPendingTradeDate || d < firstPendingTradeDate)", "Resumed Sim To Date skips completed games after preserving deadline and All-Star checkpoints.");
 includes("src/pages/Calendar.jsx", "if (!firstPendingTradeDate || date < firstPendingTradeDate)", "Resumed full-season simulation skips completed games after preserving checkpoints.");
 includes("src/utils/tradeFinderPackageBuilder.js", 'candidateOrder = "strongest"', "Standard Trade Finder keeps its existing strongest-first ordering by default.");
@@ -151,9 +154,21 @@ check(
 const freeAgency = read("public/python/free_agency_logic.py");
 const teamRoster = read("public/python/team_roster_logic.py");
 const cpuTrade = read("public/python/cpu_cpu_trade_logic.py");
+const cpuTradeBank = read("src/utils/cpuTradeBank.js");
+const tradeDeskFeed = read("src/utils/tradeDeskFeed.js");
+check("cpu_trade_bank.version7", cpuTradeBank.includes("CPU_TRADE_BANK_VERSION = 7"), "CPU trade bank schema resets stale v7 inventory after the deadline target-catchup hotfix.");
+check("cpu_trade_bank.fuller_runway", cpuTradeBank.includes("daysToDeadline <= 7 && bankSize < remainingTarget") && cpuTradeBank.includes("remainingTarget + 12"), "CPU trade bank keeps a fuller late-season runway so target slots do not starve at the deadline.");
+check("cpu_trade_bank.runway_status", cpuTradeBank.includes("getCpuTradeBankRunwayStatus") && cpuTradeBank.includes("foregroundRecommended"), "CPU trade bank exposes runway/foreground inventory pressure signals.");
+check("calendar.cpu_trade_burst_execution", read("src/pages/Calendar.jsx").includes("getCpuTradeExecutionBurstLimit") && read("src/pages/Calendar.jsx").includes("cpuTradeBurstDepth"), "Calendar can consume multiple due CPU trade slots on one date when the bank is behind pace.");
+check("trade_desk.sync_history", tradeDeskFeed.includes("syncTradeDeskFeedWithLeagueHistory") && tradeDeskFeed.includes("mergeTradeDeskFeedWithLeague"), "Trade Desk feed can purge non-canonical transaction rows.");
 check("python.free_agency.max15", /REGULAR_SEASON_MAX_ROSTER\s*=\s*15/.test(freeAgency), "CPU roster repair restores teams to the 15-player simulation maximum.");
+check("python.free_agency.rating_freeze_snapshot", freeAgency.includes("REGULAR_SEASON_RATING_FREEZE_FIELDS") && freeAgency.includes("build_regular_season_rating_freeze_snapshot"), "Regular-season CPU roster repair snapshots existing player ratings before cleanup.");
+check("python.free_agency.rating_freeze_restore", freeAgency.includes("restore_regular_season_rating_freeze_snapshot") && freeAgency.includes("ratingFreezeAudit"), "Regular-season CPU roster repair restores any rating drift before saving.");
+check("python.free_agency.no_regular_season_shape_lock", !freeAgency.includes("from progression import apply_final_league_shape_lock") && !freeAgency.includes("pre_simulation_final_shape_lock"), "Regular-season CPU roster repair no longer invokes the offseason progression shape lock.");
 check("python.team_roster.max15", /STANDARD_ROSTER_MAX\s*=\s*15/.test(teamRoster), "Season-start roster logic keeps the 15-player simulation maximum.");
 check("python.cpu_trade.temp16", /STANDARD_ROSTER_MAX\s*=\s*16/.test(cpuTrade), "CPU trade generation starts from the temporary 16-player ceiling.");
+check("python.cpu_trade.max_candidates_120", /MAX_CANDIDATES_PER_DAY\s*=\s*120/.test(cpuTrade), "CPU trade generator can return larger replenishment batches when the bank is starving.");
+check("python.cpu_trade.reliability_mode", cpuTrade.includes("reliability_mode") && cpuTrade.includes("inventoryPressure"), "CPU trade generator uses inventory pressure to broaden candidate exploration.");
 check(
   "python.cpu_trade.one_more_than_current",
   cpuTrade.includes("seller_allowed_max = max(STANDARD_ROSTER_MAX, seller_roster_count + 1)") &&
