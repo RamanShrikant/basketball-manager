@@ -3,6 +3,11 @@ import {
   validateCpuTradeCandidateOnLeague,
 } from "./tradeExecution.js";
 import { normalizeTeamName } from "./draftPicks.js";
+import {
+  cpuTradeNow,
+  recordCpuTradeTiming,
+  recordCpuTradeValidation,
+} from "./cpuTradeTelemetry.js";
 
 export const CPU_TRADE_BANK_FIELD = "cpuTradeBankState";
 export const CPU_TRADE_BANK_VERSION = 7;
@@ -15,6 +20,12 @@ const MAX_BANK_ENTRIES_PER_TEAM = 52;
 const FIRST_EXECUTION_DAY = 12;
 const MAX_GENERATION_CANDIDATES_PER_PASS = 120;
 const MAX_EXACT_EVALUATIONS_PER_PASS = 72;
+const MAX_SAME_STATE_VALIDATION_CACHE = 512;
+
+let activeSameStateValidationCacheScope = "";
+const sameStateValidationCache = new Map();
+const objectIdentityTokens = new WeakMap();
+let nextObjectIdentityToken = 1;
 
 function finiteNumber(value, fallback = 0) {
   const number = Number(value);
@@ -105,6 +116,68 @@ function hashString(value = "") {
   return hash >>> 0;
 }
 
+function objectIdentityToken(value) {
+  if (!value || (typeof value !== "object" && typeof value !== "function")) {
+    return "primitive";
+  }
+  if (!objectIdentityTokens.has(value)) {
+    objectIdentityTokens.set(value, nextObjectIdentityToken++);
+  }
+  return objectIdentityTokens.get(value);
+}
+
+function recordsFingerprint(recordsByTeam = {}) {
+  return hashString(
+    Object.entries(recordsByTeam || {})
+      .map(([teamName, row]) => {
+        const values = Object.entries(row || {})
+          .filter(([, value]) => ["string", "number", "boolean"].includes(typeof value))
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, value]) => `${key}:${String(value)}`)
+          .join(",");
+        return `${normalizeTeamName(teamName)}:${values}`;
+      })
+      .sort()
+      .join("|")
+  ).toString(16);
+}
+
+function buildSameStateValidationCacheScope(leagueData = {}, context = {}, state = {}) {
+  const teamContainer = leagueData?.conferences || leagueData?.teams || leagueData;
+  const history = Array.isArray(leagueData?.tradeHistory) ? leagueData.tradeHistory : [];
+  const draftPicks = Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : [];
+  return [
+    getSeasonYear(leagueData, context),
+    context?.currentDate || context?.generatedDate || "",
+    context?.tradeDeadlineDate || "",
+    context?.inOffseason ? "offseason" : "regular",
+    normalizeTeamName(getContextUserTeamName(context, leagueData)),
+    finiteNumber(state?.completedTrades, 0),
+    history.length,
+    draftPicks.length,
+    objectIdentityToken(teamContainer),
+    objectIdentityToken(history),
+    objectIdentityToken(draftPicks),
+    recordsFingerprint(context?.recordsByTeam || {}),
+  ].join("|");
+}
+
+function prepareSameStateValidationCache(scope = "") {
+  if (scope === activeSameStateValidationCacheScope) return;
+  activeSameStateValidationCacheScope = scope;
+  sameStateValidationCache.clear();
+}
+
+function rememberSameStateValidation(signature, validation = null) {
+  if (!signature || !validation || typeof validation !== "object") return;
+  sameStateValidationCache.set(signature, validation);
+  while (sameStateValidationCache.size > MAX_SAME_STATE_VALIDATION_CACHE) {
+    const oldestKey = sameStateValidationCache.keys().next().value;
+    if (!oldestKey) break;
+    sameStateValidationCache.delete(oldestKey);
+  }
+}
+
 function seededRandom(seed = "") {
   let state = hashString(seed) || 0x6d2b79f5;
   return () => {
@@ -161,6 +234,10 @@ function makeStats(existing = {}) {
     generationPasses: finiteNumber(existing.generationPasses, 0),
     proposedCandidates: finiteNumber(existing.proposedCandidates, 0),
     exactEvaluations: finiteNumber(existing.exactEvaluations, 0),
+    cachedAdmissionRejections: finiteNumber(existing.cachedAdmissionRejections, 0),
+    sameStateValidationCacheHits: finiteNumber(existing.sameStateValidationCacheHits, 0),
+    sameStateAdmissionCacheHits: finiteNumber(existing.sameStateAdmissionCacheHits, 0),
+    sameStatePeriodicCacheHits: finiteNumber(existing.sameStatePeriodicCacheHits, 0),
     acceptedIntoBank: finiteNumber(existing.acceptedIntoBank, 0),
     duplicateCandidates: finiteNumber(existing.duplicateCandidates, 0),
     rejectedCandidates: finiteNumber(existing.rejectedCandidates, 0),
@@ -859,6 +936,12 @@ export function addGeneratedCpuTradeCandidates({
   const existingSignatures = new Set(state.candidates.map((candidate) => candidate.signature));
   const userTeamName = getContextUserTeamName(context, ensured.leagueData);
   const limit = clamp(Math.trunc(finiteNumber(exactEvaluationLimit, 3)), 1, MAX_EXACT_EVALUATIONS_PER_PASS);
+  const validationCacheScope = buildSameStateValidationCacheScope(
+    ensured.leagueData,
+    context,
+    state
+  );
+  prepareSameStateValidationCache(validationCacheScope);
 
   const exactEvaluationsBefore = state.stats.exactEvaluations;
   const duplicatesBefore = state.stats.duplicateCandidates;
@@ -899,14 +982,41 @@ export function addGeneratedCpuTradeCandidates({
       continue;
     }
 
-    state.stats.exactEvaluations += 1;
-    const validation = validateCpuTradeCandidateOnLeague({
-      leagueData: ensured.leagueData,
-      candidate,
-      currentDate: context?.currentDate || "",
-      tradeDeadlineDate: context?.tradeDeadlineDate || "",
-      inOffseason: Boolean(context?.inOffseason),
+    const cacheLookupStartedAt = cpuTradeNow();
+    let validation = sameStateValidationCache.get(signature) || null;
+    const validationCacheHit = Boolean(validation);
+    recordCpuTradeTiming("sameStateValidationCacheLookupMs", cpuTradeNow() - cacheLookupStartedAt, {
+      phase: "admission",
+      hit: validationCacheHit,
     });
+
+    if (validationCacheHit) {
+      state.stats.sameStateValidationCacheHits += 1;
+      state.stats.sameStateAdmissionCacheHits += 1;
+      if (validation?.ok === false) state.stats.cachedAdmissionRejections += 1;
+    } else {
+      state.stats.exactEvaluations += 1;
+      const validationStartedAt = cpuTradeNow();
+      validation = validateCpuTradeCandidateOnLeague({
+        leagueData: ensured.leagueData,
+        candidate,
+        currentDate: context?.currentDate || "",
+        tradeDeadlineDate: context?.tradeDeadlineDate || "",
+        inOffseason: Boolean(context?.inOffseason),
+      });
+      const validationMs = cpuTradeNow() - validationStartedAt;
+      recordCpuTradeTiming("exactValidationMs", validationMs, { phase: "admission" });
+      recordCpuTradeValidation({
+        phase: "admission",
+        signature,
+        candidate,
+        leagueData: ensured.leagueData,
+        context,
+        result: validation,
+        durationMs: validationMs,
+      });
+      rememberSameStateValidation(signature, validation);
+    }
 
     if (!validation.ok) {
       state.stats.rejectedCandidates += 1;
@@ -940,7 +1050,13 @@ export function addGeneratedCpuTradeCandidates({
   state.candidates = trimBank(state.candidates);
   state.generationNonce += 1;
   state.updatedAt = new Date().toISOString();
-  state.stats.processingMs += Date.now() - startedAt;
+  const generationConsumeMs = Date.now() - startedAt;
+  state.stats.processingMs += generationConsumeMs;
+  recordCpuTradeTiming("generationConsumeMs", generationConsumeMs, {
+    proposed: candidates.length,
+    accepted: accepted.length,
+    rejected: rejected.length,
+  });
   state.stats.lastGeneration = {
     date: context?.currentDate || "",
     dayIndex: finiteNumber(context?.dayIndex, 0),
@@ -1107,12 +1223,24 @@ export function executeDueCpuTradeFromBank({
     }
 
     if (testConfig?.dryRun) {
+      const validationStartedAt = cpuTradeNow();
       const validation = validateCpuTradeCandidateOnLeague({
         leagueData: ensured.leagueData,
         candidate,
         currentDate: context?.currentDate || "",
         tradeDeadlineDate: context?.tradeDeadlineDate || "",
         inOffseason: Boolean(context?.inOffseason),
+      });
+      const validationMs = cpuTradeNow() - validationStartedAt;
+      recordCpuTradeTiming("exactValidationMs", validationMs, { phase: "dry_run" });
+      recordCpuTradeValidation({
+        phase: "dry_run",
+        signature: candidate?.signature || getCpuTradeCandidateSignature(candidate),
+        candidate,
+        leagueData: ensured.leagueData,
+        context,
+        result: validation,
+        durationMs: validationMs,
       });
 
       state.stats.dryRuns += 1;
@@ -1149,12 +1277,27 @@ export function executeDueCpuTradeFromBank({
       };
     }
 
+    const executionStartedAt = cpuTradeNow();
     const result = executeCpuTradeCandidateOnLeague({
       leagueData: ensured.leagueData,
       candidate,
       currentDate: context?.currentDate || "",
       tradeDeadlineDate: context?.tradeDeadlineDate || "",
       inOffseason: Boolean(context?.inOffseason),
+    });
+    const executionMs = cpuTradeNow() - executionStartedAt;
+    recordCpuTradeTiming("executionMs", executionMs, {
+      ok: Boolean(result?.ok),
+      phase: "execution",
+    });
+    recordCpuTradeValidation({
+      phase: "execution",
+      signature: candidate?.signature || getCpuTradeCandidateSignature(candidate),
+      candidate,
+      leagueData: ensured.leagueData,
+      context,
+      result,
+      durationMs: executionMs,
     });
 
     if (!result?.ok || !result?.leagueData) {
@@ -1256,6 +1399,12 @@ export function revalidateCpuTradeBankSlice({
   let removed = 0;
   let cursor = Math.max(0, Math.trunc(finiteNumber(state.pruneCursor, 0)));
   const userTeamName = getContextUserTeamName(context, ensured.leagueData);
+  const validationCacheScope = buildSameStateValidationCacheScope(
+    ensured.leagueData,
+    context,
+    state
+  );
+  prepareSameStateValidationCache(validationCacheScope);
 
   if (userTeamName) {
     const candidatesBeforeUserLock = state.candidates.length;
@@ -1277,13 +1426,41 @@ export function revalidateCpuTradeBankSlice({
   while (checked < checks && state.candidates.length) {
     const index = cursor % state.candidates.length;
     const candidate = state.candidates[index];
-    const validation = validateCpuTradeCandidateOnLeague({
-      leagueData: ensured.leagueData,
-      candidate,
-      currentDate: context?.currentDate || "",
-      tradeDeadlineDate: context?.tradeDeadlineDate || "",
-      inOffseason: Boolean(context?.inOffseason),
+    const signature = candidate?.signature || getCpuTradeCandidateSignature(candidate);
+    const cacheLookupStartedAt = cpuTradeNow();
+    let validation = sameStateValidationCache.get(signature) || null;
+    const validationCacheHit = Boolean(validation);
+    recordCpuTradeTiming("sameStateValidationCacheLookupMs", cpuTradeNow() - cacheLookupStartedAt, {
+      phase: "periodic",
+      hit: validationCacheHit,
     });
+
+    if (validationCacheHit) {
+      state.stats.sameStateValidationCacheHits += 1;
+      state.stats.sameStatePeriodicCacheHits += 1;
+    } else {
+      const validationStartedAt = cpuTradeNow();
+      validation = validateCpuTradeCandidateOnLeague({
+        leagueData: ensured.leagueData,
+        candidate,
+        currentDate: context?.currentDate || "",
+        tradeDeadlineDate: context?.tradeDeadlineDate || "",
+        inOffseason: Boolean(context?.inOffseason),
+      });
+      const validationMs = cpuTradeNow() - validationStartedAt;
+      recordCpuTradeTiming("periodicRevalidationMs", validationMs, { phase: "periodic" });
+      recordCpuTradeTiming("exactValidationMs", validationMs, { phase: "periodic" });
+      recordCpuTradeValidation({
+        phase: "periodic",
+        signature,
+        candidate,
+        leagueData: ensured.leagueData,
+        context,
+        result: validation,
+        durationMs: validationMs,
+      });
+      rememberSameStateValidation(signature, validation);
+    }
 
     checked += 1;
 
@@ -1311,7 +1488,12 @@ export function revalidateCpuTradeBankSlice({
 
   state.pruneCursor = state.candidates.length ? cursor % state.candidates.length : 0;
   state.updatedAt = new Date().toISOString();
-  state.stats.processingMs += Date.now() - startedAt;
+  const revalidationPassMs = Date.now() - startedAt;
+  state.stats.processingMs += revalidationPassMs;
+  recordCpuTradeTiming("periodicRevalidationPassMs", revalidationPassMs, {
+    checked,
+    removed,
+  });
 
   return {
     leagueData: {

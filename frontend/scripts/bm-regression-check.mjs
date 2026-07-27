@@ -33,6 +33,10 @@ const calendarTimingPath = path.join(root, "src/utils/calendarCpuTradeTiming.js"
 const calendarTiming = await import(`${pathToFileURL(calendarTimingPath).href}?check=${Date.now()}`);
 const reverseCoveragePath = path.join(root, "src/utils/reverseTradeFinderCoverage.js");
 const reverseCoverage = await import(`${pathToFileURL(reverseCoveragePath).href}?check=${Date.now()}`);
+const cpuTradeTelemetryPath = path.join(root, "src/utils/cpuTradeTelemetry.js");
+const cpuTradeTelemetry = await import(`${pathToFileURL(cpuTradeTelemetryPath).href}?check=${Date.now()}`);
+const cpuTradeSaveQueuePath = path.join(root, "src/utils/cpuTradeSaveQueue.js");
+const cpuTradeSaveQueue = await import(`${pathToFileURL(cpuTradeSaveQueuePath).href}?check=${Date.now()}`);
 const {
   REGULAR_SEASON_MIN_STANDARD_PLAYERS,
   REGULAR_SEASON_MAX_STANDARD_PLAYERS,
@@ -61,8 +65,39 @@ includes("src/pages/Calendar.jsx", "recordCpuTradeRepairDiagnostics", "Calendar 
 includes("src/pages/Calendar.jsx", "getCpuTradeSimulationDateDecision", "Calendar gates CPU trade work by pending simulation date and deadline status.");
 includes("src/pages/Calendar.jsx", "recordSimulationPerformanceDiagnostics", "Calendar records simulation and CPU-trade timing diagnostics.");
 includes("src/pages/Calendar.jsx", "runForegroundCpuTradeBankGeneration", "Calendar has foreground CPU-trade bank replenishment for empty/behind target seasons.");
-includes("src/pages/Calendar.jsx", "syncTradeDeskFeedWithLeagueHistory(nextLeagueData)", "Calendar canonicalizes Trade Desk transactions against official trade history.");
+includes("src/pages/Calendar.jsx", "syncTradeDeskFeedHistoryWithTelemetry(nextLeagueData", "Calendar canonicalizes and measures Trade Desk history synchronization.");
 includes("src/pages/Calendar.jsx", "simLockRef.current", "Calendar uses a synchronous simulation run lock to block duplicate SimToDate/full-season runs.");
+includes("src/utils/bmDiagnostics.js", "cpuTradeReport(options = {})", "Diagnostics expose the full CPU-trade demon report command.");
+includes("src/utils/bmDiagnostics.js", "cpuTradeSaveBaseline", "Diagnostics can save a pre-optimization CPU-trade baseline.");
+includes("src/utils/bmDiagnostics.js", "cpuTradeCompare", "Diagnostics can compare the current run against the saved baseline.");
+includes("src/pages/Calendar.jsx", "ensureCpuTradeDiagnosticsSession", "Calendar automatically captures the pre-trade diagnostic baseline.");
+includes("src/pages/Calendar.jsx", 'recordCpuTradeTiming("recordBuildMs"', "Calendar measures full schedule record-map construction.");
+includes("src/pages/Calendar.jsx", 'recordCpuTradeTiming("rosterRepairMs"', "Calendar measures post-trade roster repair.");
+includes("src/api/cpuTradeEngine.js", 'recordCpuTradeTiming("workerGenerationMs"', "CPU trade worker round-trip time is measured.");
+includes("src/api/cpuTradeEngine.js", "cancelCpuTradeWorkerGeneration", "CPU trade worker exposes explicit cancellation for stale generation work.");
+includes("src/api/cpuTradeEngine.js", "worker_reset_after_timeout", "Timed-out CPU trade workers are terminated so they cannot block later generation jobs.");
+includes("src/pages/Calendar.jsx", "foreground_superseded_background", "Foreground catch-up cancels obsolete background Pyodide work before launching.");
+includes("src/pages/Calendar.jsx", "enqueueCpuTradeLeagueSave", "CPU trade state uses the serialized latest-only IndexedDB save queue.");
+includes("src/pages/Calendar.jsx", "await flushCpuTradeLeagueSaves()", "Calendar flushes queued CPU trade state before releasing simulation completion.");
+includes("public/workers/simWorkerV2.js", "if (initPromise) return initPromise;", "Simulation worker uses a single shared Pyodide initialization promise.");
+includes("public/workers/simWorkerV2.js", "const loadedPyodide = await loadPyodide", "Pyodide is assigned only after the one shared initialization completes.");
+includes("src/utils/cpuTradeBank.js", "buildSameStateValidationCacheScope", "CPU trade validation reuse is scoped to identical package-relevant state.");
+includes("src/utils/cpuTradeBank.js", "sameStatePeriodicCacheHits", "CPU trade diagnostics distinguish periodic same-state validation reuse.");
+includes("src/utils/cpuTradeBank.js", "objectIdentityToken(draftPicks)", "Same-state validation cache invalidates when draft-pick ownership storage changes.");
+includes("src/utils/cpuTradeBank.js", "recordsFingerprint(context?.recordsByTeam || {})", "Same-state validation cache invalidates when standings records change.");
+includes("src/utils/cpuTradeBank.js", "cachedAdmissionRejections", "CPU trade admission preserves rejected-package cache telemetry.");
+includes("src/pages/Calendar.jsx", "startSimulationGameOrderEvent", "Calendar records scheduled date and execution sequence without changing simulation order.");
+includes("src/pages/Calendar.jsx", "gameOrderDateInversions", "Calendar detects any scheduled-date inversion during simulation.");
+includes("src/utils/bmDiagnostics.js", "simHistory()", "Diagnostics preserve recent pre/post-checkpoint simulation runs for order investigation.");
+includes("src/utils/cpuTradeBank.js", 'recordCpuTradeTiming("exactValidationMs"', "CPU trade exact validation time is measured.");
+includes("src/utils/cpuTradeDiagnostics.js", "runCpuTradePackageBenchmarks", "Diagnostics include repeatable package-level validation benchmarks.");
+includes("src/utils/cpuTradeDiagnostics.js", "staleStoredFeedTransactions", "Diagnostics audit stale completed-trade feed entries.");
+includes("src/utils/cpuTradeDiagnostics.js", "postDeadlineTradeCount", "Diagnostics audit post-deadline CPU trades.");
+includes("src/utils/cpuTradeDiagnostics.js", "changedPlayers", "Diagnostics audit regular-season rating drift.");
+includes("src/pages/Calendar.jsx", 'recordCpuTradeTiming("foregroundGenerationMs"', "Calendar measures foreground catch-up generation separately.");
+includes("src/pages/Calendar.jsx", 'recordCpuTradeTiming("feedHistorySyncMs"', "Calendar measures canonical Trade Desk feed synchronization.");
+includes("src/utils/bmDiagnostics.js", "cpuTradeSummary()", "Diagnostics preserve the compact reliability report alongside the demon report.");
+includes("src/utils/cpuTradeTelemetry.js", "candidateSnapshot = safeClone(candidate)", "Package replay captures immutable candidate and league snapshots.");
 includes("src/pages/Calendar.jsx", "if (!firstPendingTradeDate || d < firstPendingTradeDate)", "Resumed Sim To Date skips completed games after preserving deadline and All-Star checkpoints.");
 includes("src/pages/Calendar.jsx", "if (!firstPendingTradeDate || date < firstPendingTradeDate)", "Resumed full-season simulation skips completed games after preserving checkpoints.");
 includes("src/utils/tradeFinderPackageBuilder.js", 'candidateOrder = "strongest"', "Standard Trade Finder keeps its existing strongest-first ordering by default.");
@@ -151,6 +186,77 @@ check(
   JSON.stringify(rescueQueue)
 );
 
+cpuTradeTelemetry.resetCpuTradeTelemetry({ sessionKey: "regression-test", note: "test" });
+cpuTradeTelemetry.recordCpuTradeTiming("exactValidationMs", 4.25, { phase: "test" });
+cpuTradeTelemetry.recordCpuTradeTiming("exactValidationMs", 5.75, { phase: "test" });
+const telemetrySnapshot = cpuTradeTelemetry.getCpuTradeTelemetrySnapshot();
+check(
+  "cpu_trade_diag.telemetry_timing",
+  telemetrySnapshot?.metrics?.exactValidationMs?.count === 2 && telemetrySnapshot?.metrics?.exactValidationMs?.totalMs === 10,
+  "CPU trade telemetry accumulates exact-validation counts and timing without mutating trade logic.",
+  JSON.stringify(telemetrySnapshot?.metrics?.exactValidationMs || {})
+);
+
+const benchmarkCandidateFixture = {
+  fromTeamName: "Alpha",
+  toTeamName: "Beta",
+  fromItems: [{ type: "player", player: { id: "p1", name: "One" } }],
+  toItems: [{ type: "player", player: { id: "p2", name: "Two" } }],
+};
+const benchmarkLeagueFixture = {
+  teams: [
+    { name: "Alpha", players: [{ id: "p1", name: "One" }] },
+    { name: "Beta", players: [{ id: "p2", name: "Two" }] },
+  ],
+};
+cpuTradeTelemetry.recordCpuTradeValidation({
+  phase: "regression_snapshot",
+  signature: "snapshot_fixture",
+  candidate: benchmarkCandidateFixture,
+  leagueData: benchmarkLeagueFixture,
+  context: { currentDate: "2027-01-01" },
+  result: {
+    ok: true,
+    fromTeamView: { accepted: true, score: 2, threshold: 1 },
+    toTeamView: { accepted: true, score: 3, threshold: 1 },
+  },
+  durationMs: 1,
+});
+benchmarkCandidateFixture.fromItems[0].player.name = "Mutated Candidate";
+benchmarkLeagueFixture.teams[0].players[0].name = "Mutated League";
+const benchmarkSnapshot = cpuTradeTelemetry.getCpuTradeBenchmarkSamples()[0];
+check(
+  "cpu_trade_diag.immutable_package_snapshot",
+  benchmarkSnapshot?.candidate?.fromItems?.[0]?.player?.name === "One" &&
+    benchmarkSnapshot?.leagueData?.teams?.[0]?.players?.[0]?.name === "One",
+  "Package benchmarks preserve exact immutable candidate and league inputs for before/after replay.",
+  JSON.stringify(benchmarkSnapshot || {})
+);
+cpuTradeTelemetry.resetCpuTradeTelemetry({ sessionKey: "", note: "regression-cleanup" });
+
+const queuedSaveVersions = [];
+const latestOnlyQueue = cpuTradeSaveQueue.createLatestOnlySaveQueue({
+  save: async (leagueData) => {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    queuedSaveVersions.push(leagueData.version);
+    return leagueData;
+  },
+  now: () => Date.now(),
+});
+const queuedPromises = [
+  latestOnlyQueue.enqueue({ leagueData: { version: 1 } }),
+  latestOnlyQueue.enqueue({ leagueData: { version: 2 } }),
+  latestOnlyQueue.enqueue({ leagueData: { version: 3 } }),
+];
+await latestOnlyQueue.flush();
+await Promise.all(queuedPromises);
+check(
+  "cpu_trade_storage.latest_only_queue",
+  queuedSaveVersions.length === 1 && queuedSaveVersions[0] === 3,
+  "Rapid CPU trade saves collapse to one latest-state IndexedDB write.",
+  JSON.stringify({ queuedSaveVersions, state: latestOnlyQueue.getState() })
+);
+
 const freeAgency = read("public/python/free_agency_logic.py");
 const teamRoster = read("public/python/team_roster_logic.py");
 const cpuTrade = read("public/python/cpu_cpu_trade_logic.py");
@@ -169,6 +275,7 @@ check("python.team_roster.max15", /STANDARD_ROSTER_MAX\s*=\s*15/.test(teamRoster
 check("python.cpu_trade.temp16", /STANDARD_ROSTER_MAX\s*=\s*16/.test(cpuTrade), "CPU trade generation starts from the temporary 16-player ceiling.");
 check("python.cpu_trade.max_candidates_120", /MAX_CANDIDATES_PER_DAY\s*=\s*120/.test(cpuTrade), "CPU trade generator can return larger replenishment batches when the bank is starving.");
 check("python.cpu_trade.reliability_mode", cpuTrade.includes("reliability_mode") && cpuTrade.includes("inventoryPressure"), "CPU trade generator uses inventory pressure to broaden candidate exploration.");
+check("python.cpu_trade.per_generation_memoization", cpuTrade.includes("_reset_generation_cache(league, current_date)") && cpuTrade.includes("_GENERATION_CACHE"), "CPU trade generation memoizes deterministic calculations only within the active payload.");
 check(
   "python.cpu_trade.one_more_than_current",
   cpuTrade.includes("seller_allowed_max = max(STANDARD_ROSTER_MAX, seller_roster_count + 1)") &&

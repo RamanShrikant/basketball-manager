@@ -1,4 +1,12 @@
 import {
+  buildCpuTradeDiagnosticReport,
+  compareCpuTradeDiagnosticReports,
+  readCpuTradeBaselineReport,
+  resetCpuTradeDiagnostics,
+  runCpuTradePackageBenchmarks,
+  saveCpuTradeBaselineReport,
+} from "./cpuTradeDiagnostics.js";
+import {
   REGULAR_SEASON_MAX_STANDARD_PLAYERS,
   REGULAR_SEASON_MAX_TWO_WAY_PLAYERS,
   REGULAR_SEASON_MIN_STANDARD_PLAYERS,
@@ -10,7 +18,7 @@ import {
   evaluateTradeRosterProjection,
 } from "./rosterRules.js";
 
-const DIAGNOSTICS_VERSION = "2026-07-25_calendar_reverse_finder_regression_v3";
+const DIAGNOSTICS_VERSION = "2026-07-27_cpu_trade_speed_v3_order_probe";
 const AUTO_DIAGNOSTICS_KEY = "bm_diagnostics_auto_v1";
 
 const runtime = {
@@ -21,6 +29,9 @@ const runtime = {
   lastPreSimulation: null,
   lastCpuTradeRepair: null,
   lastSimulationPerformance: null,
+  simulationPerformanceHistory: [],
+  lastCpuTradeReport: null,
+  lastCpuTradeComparison: null,
   lastReport: null,
 };
 
@@ -695,8 +706,16 @@ export function recordSimulationPerformanceDiagnostics(payload = {}) {
     ...payload,
     recordedAt: nowIso(),
   };
+  runtime.simulationPerformanceHistory.push(runtime.lastSimulationPerformance);
+  if (runtime.simulationPerformanceHistory.length > 8) {
+    runtime.simulationPerformanceHistory.splice(
+      0,
+      runtime.simulationPerformanceHistory.length - 8
+    );
+  }
   try {
     window.__BM_LAST_SIMULATION_PERFORMANCE__ = runtime.lastSimulationPerformance;
+    window.__BM_SIMULATION_PERFORMANCE_HISTORY__ = runtime.simulationPerformanceHistory;
   } catch {}
 
   console.groupCollapsed(
@@ -705,7 +724,9 @@ export function recordSimulationPerformanceDiagnostics(payload = {}) {
   console.log(runtime.lastSimulationPerformance);
   console.table([
     {
+      runId: payload?.runId || "",
       mode: payload?.mode || "simulation",
+      resumed: Boolean(payload?.resumed),
       firstPendingDate: payload?.firstPendingDate || "",
       datesVisited: Number(payload?.datesVisited || 0),
       historicalDatesSkipped: Number(payload?.historicalDatesSkipped || 0),
@@ -713,6 +734,7 @@ export function recordSimulationPerformanceDiagnostics(payload = {}) {
       cpuTradePasses: Number(payload?.cpuTradePasses || 0),
       cpuTradeMs: Number(payload?.cpuTradeMs || 0).toFixed(0),
       gamesSimmed: Number(payload?.gamesSimmed || 0),
+      gameOrderDateInversions: Number(payload?.gameOrderDateInversions || 0),
     },
   ]);
   console.groupEnd();
@@ -849,7 +871,7 @@ function reportPlayerOverall(asset = {}) {
   return Number(asset?.overall ?? asset?.player?.overall ?? asset?.ovr ?? asset?.player?.ovr ?? 0) || 0;
 }
 
-function cpuTradeReport(leagueData = runtime.leagueData) {
+function cpuTradeSummaryReport(leagueData = runtime.leagueData) {
   const league = leagueData && typeof leagueData === "object" ? leagueData : {};
   const bank = league?.cpuTradeBankState || null;
   const history = Array.isArray(league?.tradeHistory) ? league.tradeHistory : [];
@@ -948,6 +970,58 @@ async function copyJson(value) {
   return text;
 }
 
+function printCpuTradeReport(report) {
+  if (!report) return report;
+  console.groupCollapsed(
+    `[BM CPU TRADE REPORT] ${report.ok ? "PASS" : "FAIL"} • ${Number(report?.summary?.completedByBank || 0)}/${Number(report?.summary?.targetTrades || 0)} target • ${Number(report?.summary?.processingMs || 0).toFixed(0)}ms bank processing`
+  );
+  console.log(report);
+  console.table((report.checks || []).map((row) => ({
+    status: row.status,
+    check: row.name,
+  })));
+  console.table([{
+    officialCpuTradeCount: report?.summary?.officialCpuTradeCount || 0,
+    targetTrades: report?.summary?.targetTrades || 0,
+    completedByBank: report?.summary?.completedByBank || 0,
+    remainingTarget: report?.summary?.remainingTarget || 0,
+    exactEvaluations: report?.summary?.exactEvaluations || 0,
+    proposedCandidates: report?.summary?.proposedCandidates || 0,
+    executionDeferrals: report?.summary?.executionDeferrals || 0,
+    storedFeedTransactions: report?.summary?.storedFeedTransactions || 0,
+    staleStoredFeedTransactions: report?.summary?.staleStoredFeedTransactions || 0,
+    postDeadlineTradeCount: report?.summary?.postDeadlineTradeCount || 0,
+    simulationElapsedMs: report?.summary?.simulationElapsedMs || 0,
+  }]);
+  if (report.packageBenchmarks?.length) {
+    console.table(report.packageBenchmarks.map((row) => ({
+      category: row.category,
+      teams: row.teams?.join(" ↔ ") || "",
+      replay: row.decisionReplayMatch ? "PASS" : "FAIL",
+      coldMs: row.coldMs,
+      warmMedianMs: row.warmMedianMs,
+      warmP95Ms: row.warmP95Ms,
+      signature: row.signature,
+    })));
+  }
+  console.groupEnd();
+  return report;
+}
+
+function buildLiveCpuTradeReport(options = {}) {
+  const report = buildCpuTradeDiagnosticReport(runtime.leagueData || {}, {
+    ...options,
+    lastSimulationPerformance: runtime.lastSimulationPerformance,
+  });
+  runtime.lastCpuTradeReport = report;
+  runtime.lastReport = report;
+  try {
+    window.__BM_LAST_CPU_TRADE_REPORT__ = report;
+    window.__BM_LAST_DIAGNOSTICS__ = report;
+  } catch {}
+  return report;
+}
+
 export function installBasketballManagerDiagnostics() {
   if (typeof window === "undefined") return null;
   if (window.BMDiagnostics?.version === DIAGNOSTICS_VERSION) return window.BMDiagnostics;
@@ -971,8 +1045,14 @@ export function installBasketballManagerDiagnostics() {
         { command: "bmDiag.lastLoad()", purpose: "Inspect the most recent Load Offer validation attempt." },
         { command: "bmDiag.lastRepair()", purpose: "Inspect the most recent CPU post-trade roster repair." },
         { command: "bmDiag.preSim()", purpose: "Inspect the most recent pre-simulation diagnostic snapshot." },
-        { command: "bmDiag.simPerformance()", purpose: "Inspect the most recent calendar simulation timing and CPU-trade workload." },
-        { command: "bmDiag.cpuTradeReport()", purpose: "Summarize official CPU trades, bank pacing, rejection reasons, team counts, and highest-OVR moved players." },
+        { command: "bmDiag.simPerformance()", purpose: "Inspect the most recent calendar simulation timing, CPU-trade workload, and game execution order." },
+        { command: "bmDiag.simHistory()", purpose: "Inspect recent pre/post-checkpoint simulation runs together, including scheduled game execution order." },
+        { command: "bmDiag.cpuTradeReport()", purpose: "Build the full CPU-trade performance, quantity, quality, pacing, safety, and package replay report." },
+        { command: "bmDiag.cpuTradeSummary()", purpose: "Print the compact reliability summary added by the CPU trade reliability patch." },
+        { command: "bmDiag.cpuTradeBenchmarks()", purpose: "Rerun the captured simple, rejected, and complex package timing benchmarks." },
+        { command: "bmDiag.cpuTradeSaveBaseline('pre-optimization')", purpose: "Save the current report for automatic before/after comparison." },
+        { command: "bmDiag.cpuTradeCompare()", purpose: "Compare the current report against the saved pre-optimization baseline." },
+        { command: "bmDiag.cpuTradeReset()", purpose: "Clear only in-memory CPU-trade diagnostics before a fresh-save benchmark." },
         { command: "bmDiag.events()", purpose: "Audit recent Trade Finder, CPU repair, and simulation events." },
         { command: "await bmDiag.copy()", purpose: "Copy the last diagnostics report as JSON." },
         { command: "bmDiag.auto(false)", purpose: "Disable automatic critical diagnostics logging." },
@@ -1019,8 +1099,71 @@ export function installBasketballManagerDiagnostics() {
       console.log(runtime.lastSimulationPerformance);
       return runtime.lastSimulationPerformance;
     },
-    cpuTradeReport() {
-      return cpuTradeReport();
+    simHistory() {
+      const rows = [...runtime.simulationPerformanceHistory];
+      console.table(rows.map((row) => ({
+        runId: row?.runId || "",
+        mode: row?.mode || "",
+        targetDate: row?.targetDate || "",
+        resumed: Boolean(row?.resumed),
+        firstPendingDate: row?.firstPendingDate || "",
+        gamesSimmed: Number(row?.gamesSimmed || 0),
+        dateInversions: Number(row?.gameOrderDateInversions || 0),
+        paused: Boolean(row?.pausedAtCheckpoint || row?.pausedForTradeDeadline || row?.pausedForAllStar),
+        checkpoint: row?.checkpointEvents?.[0]?.reason || "",
+        elapsedMs: Number(row?.elapsedMs || 0),
+      })));
+      console.log(rows);
+      return rows;
+    },
+    cpuTradeReport(options = {}) {
+      return printCpuTradeReport(buildLiveCpuTradeReport(options));
+    },
+    cpuTradeSummary() {
+      return cpuTradeSummaryReport();
+    },
+    cpuTradeBenchmarks(options = {}) {
+      const rows = runCpuTradePackageBenchmarks(options);
+      console.table((rows || []).map((row) => ({
+        category: row.category,
+        replay: row.decisionReplayMatch ? "PASS" : "FAIL",
+        coldMs: row.coldMs,
+        warmAverageMs: row.warmAverageMs,
+        warmMedianMs: row.warmMedianMs,
+        warmP95Ms: row.warmP95Ms,
+        signature: row.signature,
+      })));
+      return rows;
+    },
+    cpuTradeSaveBaseline(label = "pre-optimization") {
+      const report = runtime.lastCpuTradeReport || buildLiveCpuTradeReport({ runBenchmarks: true });
+      const saved = saveCpuTradeBaselineReport(report, label);
+      console.log(`[BM CPU TRADE REPORT] Saved baseline "${saved.label}".`, saved);
+      return saved;
+    },
+    cpuTradeBaseline() {
+      const saved = readCpuTradeBaselineReport();
+      console.log(saved);
+      return saved;
+    },
+    cpuTradeCompare(options = {}) {
+      const current = buildLiveCpuTradeReport({ runBenchmarks: true, ...options });
+      const comparison = compareCpuTradeDiagnosticReports(current);
+      runtime.lastCpuTradeComparison = comparison;
+      runtime.lastReport = comparison;
+      console.groupCollapsed(`[BM CPU TRADE COMPARISON] ${comparison?.ok ? "PASS" : "FAIL"}`);
+      console.log(comparison);
+      if (comparison?.performance) console.table([comparison.performance]);
+      if (comparison?.packageComparisons?.length) console.table(comparison.packageComparisons);
+      console.groupEnd();
+      return comparison;
+    },
+    cpuTradeReset() {
+      const result = resetCpuTradeDiagnostics();
+      runtime.lastCpuTradeReport = null;
+      runtime.lastCpuTradeComparison = null;
+      console.log("[BM CPU TRADE REPORT] In-memory diagnostics reset. Start from a fresh save for a clean baseline.");
+      return result;
     },
     context() {
       console.log(runtime);

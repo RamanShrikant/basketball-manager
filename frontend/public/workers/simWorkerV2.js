@@ -15,6 +15,7 @@ importScripts("https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js");
 
 let pyodide = null;
 let ready = false;
+let initPromise = null;
 
 // Python files loaded from /public/python
 const pythonFiles = [
@@ -40,29 +41,44 @@ const pythonFiles = [
 ]
 
 async function init() {
-  if (ready) return;
+  if (ready) return pyodide;
+  if (initPromise) return initPromise;
 
-  console.log("[simWorkerV2] loading Pyodide...");
-  pyodide = await loadPyodide({
-    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/",
-  });
+  initPromise = (async () => {
+    console.log("[simWorkerV2] loading Pyodide...");
+    const loadedPyodide = await loadPyodide({
+      indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/",
+    });
 
-  await pyodide.loadPackage("micropip");
+    await loadedPyodide.loadPackage("micropip");
 
-  await pyodide.runPythonAsync(`
+    await loadedPyodide.runPythonAsync(`
 import sys
 sys.path.append("/python")
-  `);
+    `);
 
-  // load python files
-  for (const file of pythonFiles) {
-    const code = await fetch(`/python/${file}?v=${Date.now()}`).then((r) => r.text());
-    pyodide.FS.writeFile(file, code);
+    // Load Python files exactly once. Concurrent init/request messages share
+    // this promise so they cannot start a second Pyodide runtime.
+    for (const file of pythonFiles) {
+      const code = await fetch(`/python/${file}?v=${Date.now()}`).then((r) => r.text());
+      loadedPyodide.FS.writeFile(file, code);
+    }
+
+    pyodide = loadedPyodide;
+    ready = true;
+    console.log("[simWorkerV2] READY");
+    postMessage({ type: "ready" });
+    return pyodide;
+  })();
+
+  try {
+    return await initPromise;
+  } catch (error) {
+    initPromise = null;
+    pyodide = null;
+    ready = false;
+    throw error;
   }
-
-  ready = true;
-  console.log("[simWorkerV2] READY");
-  postMessage({ type: "ready" });
 }
 
 // Raw logging

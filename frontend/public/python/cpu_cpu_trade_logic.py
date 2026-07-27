@@ -72,6 +72,73 @@ ALLOW_CPU_PROTECTED_FIRSTS = True
 CPU_PROTECTED_FIRST_PROFILES = [3, 5, 10, 14]
 
 
+# Per-generation memoization. The worker handles generation requests serially,
+# so these caches are reset for every payload and never cross league states.
+# They only avoid recalculating deterministic values during the same exact search.
+_GENERATION_CACHE: Dict[str, Any] = {}
+
+
+def _reset_generation_cache(league: Optional[Dict[str, Any]] = None, current_date: str = "") -> None:
+    global _GENERATION_CACHE
+    cache: Dict[str, Any] = {
+        "league": league,
+        "currentDate": current_date,
+        "salary": {},
+        "contractYears": {},
+        "roughPlayer": {},
+        "roughPick": {},
+        "standardRosterCount": {},
+        "rosterRank": {},
+        "sellerTargets": {},
+        "buyerOutgoing": {},
+        "simplePicks": {},
+        "tradeCounts": {},
+        "tradePairs": set(),
+        "recentAcquisitions": {},
+    }
+
+    if isinstance(league, dict):
+        current = _parse_trade_date(current_date) if current_date else None
+        for row in league.get("tradeHistory") or []:
+            if not isinstance(row, dict):
+                continue
+            if not (row.get("cpuCpuTrade") or row.get("source") == "cpu_cpu_trade"):
+                continue
+
+            name_keys = {
+                _norm(row.get("userTeamName")),
+                _norm(row.get("cpuTeamName")),
+                _norm(row.get("fromTeamName")),
+                _norm(row.get("toTeamName")),
+            }
+            name_keys.discard("")
+            for key in name_keys:
+                cache["tradeCounts"][key] = cache["tradeCounts"].get(key, 0) + 1
+
+            pair = {_norm(row.get("fromTeamName")), _norm(row.get("toTeamName"))}
+            pair.discard("")
+            if len(pair) == 2:
+                cache["tradePairs"].add(frozenset(pair))
+
+            if current is None:
+                continue
+            previous = _parse_trade_date(row.get("date") or row.get("currentDate"))
+            if previous is None:
+                continue
+            elapsed = (current - previous).days
+            if elapsed < 0 or elapsed > RECENT_CPU_ACQUISITION_COOLDOWN_DAYS:
+                continue
+            for move in row.get("movedPlayers") or []:
+                if not isinstance(move, dict):
+                    continue
+                team_key = _norm(move.get("toTeam"))
+                player_key = _norm(move.get("name"))
+                if team_key and player_key:
+                    cache["recentAcquisitions"].setdefault(team_key, set()).add(player_key)
+
+    _GENERATION_CACHE = cache
+
+
 # -----------------------------------------------------------------------------
 # Safe helpers
 # -----------------------------------------------------------------------------
@@ -145,6 +212,13 @@ def _player_age(player: Dict[str, Any]) -> float:
 
 
 def _salary_for_year(player: Dict[str, Any], season_year: int) -> float:
+    cache = _GENERATION_CACHE.get("salary") if isinstance(_GENERATION_CACHE, dict) else None
+    key = (id(player), int(season_year))
+    if isinstance(cache, dict):
+        cached = cache.get(key)
+        if cached and cached[0] is player:
+            return cached[1]
+
     contract = player.get("contract") if isinstance(player.get("contract"), dict) else {}
     salaries = contract.get("salaryByYear") if isinstance(contract.get("salaryByYear"), list) else []
     if salaries:
@@ -156,22 +230,37 @@ def _salary_for_year(player: Dict[str, Any], season_year: int) -> float:
             idx = 0
         if idx >= len(salaries):
             idx = len(salaries) - 1
-        return max(0.0, _num(salaries[idx], 0.0))
-    return max(0.0, _num(player.get("salary") or player.get("currentSalary") or player.get("capHit"), 0.0))
+        value = max(0.0, _num(salaries[idx], 0.0))
+    else:
+        value = max(0.0, _num(player.get("salary") or player.get("currentSalary") or player.get("capHit"), 0.0))
+
+    if isinstance(cache, dict):
+        cache[key] = (player, value)
+    return value
 
 
 def _contract_years_left(player: Dict[str, Any], season_year: int) -> int:
+    cache = _GENERATION_CACHE.get("contractYears") if isinstance(_GENERATION_CACHE, dict) else None
+    key = (id(player), int(season_year))
+    if isinstance(cache, dict):
+        cached = cache.get(key)
+        if cached and cached[0] is player:
+            return cached[1]
+
     contract = player.get("contract") if isinstance(player.get("contract"), dict) else {}
     salaries = contract.get("salaryByYear") if isinstance(contract.get("salaryByYear"), list) else []
     if not salaries:
-        return 1 if _salary_for_year(player, season_year) > 0 else 0
-    start = int(_num(contract.get("startYear"), season_year))
-    idx = season_year - start
-    if idx < 0:
-        idx = 0
-    if idx >= len(salaries):
-        return 1
-    return max(1, len(salaries) - idx)
+        value = 1 if _salary_for_year(player, season_year) > 0 else 0
+    else:
+        start = int(_num(contract.get("startYear"), season_year))
+        idx = season_year - start
+        if idx < 0:
+            idx = 0
+        value = 1 if idx >= len(salaries) else max(1, len(salaries) - idx)
+
+    if isinstance(cache, dict):
+        cache[key] = (player, value)
+    return value
 
 
 def _season_year(league: Dict[str, Any]) -> int:
@@ -281,6 +370,9 @@ def _phase_for(team: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _already_traded_count(league: Dict[str, Any], team_name: str) -> int:
+    if _GENERATION_CACHE.get("league") is league:
+        return int((_GENERATION_CACHE.get("tradeCounts") or {}).get(_norm(team_name), 0))
+
     count = 0
     for row in league.get("tradeHistory") or []:
         if not isinstance(row, dict):
@@ -306,6 +398,9 @@ def _already_traded_pair(
     wanted = {_norm(team_a), _norm(team_b)}
     if len(wanted) != 2:
         return False
+
+    if _GENERATION_CACHE.get("league") is league:
+        return frozenset(wanted) in (_GENERATION_CACHE.get("tradePairs") or set())
 
     for row in league.get("tradeHistory") or []:
         if not isinstance(row, dict):
@@ -341,6 +436,13 @@ def _recent_cpu_acquired_player_names(
     current_date: str,
     cooldown_days: int = RECENT_CPU_ACQUISITION_COOLDOWN_DAYS,
 ) -> Set[str]:
+    if (
+        _GENERATION_CACHE.get("league") is league
+        and _GENERATION_CACHE.get("currentDate") == current_date
+        and cooldown_days == RECENT_CPU_ACQUISITION_COOLDOWN_DAYS
+    ):
+        return (_GENERATION_CACHE.get("recentAcquisitions") or {}).get(_norm(team_name), set())
+
     current = _parse_trade_date(current_date)
     if current is None or not team_name:
         return set()
@@ -377,19 +479,39 @@ def _is_standard_player(player: Dict[str, Any]) -> bool:
 
 
 def _standard_roster_count(team: Dict[str, Any]) -> int:
-    return sum(
+    cache = _GENERATION_CACHE.get("standardRosterCount") if isinstance(_GENERATION_CACHE, dict) else None
+    key = id(team)
+    if isinstance(cache, dict):
+        cached = cache.get(key)
+        if cached and cached[0] is team:
+            return cached[1]
+
+    value = sum(
         1
         for player in _players(team)
         if isinstance(player, dict) and _is_standard_player(player)
     )
+    if isinstance(cache, dict):
+        cache[key] = (team, value)
+    return value
 
 
 def _roster_rank(team: Dict[str, Any], player: Dict[str, Any]) -> int:
+    cache = _GENERATION_CACHE.get("rosterRank") if isinstance(_GENERATION_CACHE, dict) else None
+    key = (id(team), id(player))
+    if isinstance(cache, dict):
+        cached = cache.get(key)
+        if cached and cached[0] is team and cached[1] is player:
+            return cached[2]
+
     roster = sorted(_players(team), key=_player_ovr, reverse=True)
     try:
-        return roster.index(player) + 1
+        value = roster.index(player) + 1
     except Exception:
-        return 99
+        value = 99
+    if isinstance(cache, dict):
+        cache[key] = (team, player, value)
+    return value
 
 
 def _asset_protection_penalty(team: Dict[str, Any], player: Dict[str, Any], team_ctx: Optional[Dict[str, Any]] = None) -> float:
@@ -491,6 +613,13 @@ def _market_player_score(team: Dict[str, Any], player: Dict[str, Any], season_ye
 
 
 def _seller_trade_targets(team: Dict[str, Any], season_year: int, team_ctx: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    cache = _GENERATION_CACHE.get("sellerTargets") if isinstance(_GENERATION_CACHE, dict) else None
+    cache_key = (id(team), int(season_year), id(team_ctx))
+    if isinstance(cache, dict):
+        cached = cache.get(cache_key)
+        if cached and cached[0] is team and cached[1] is team_ctx:
+            return cached[2]
+
     out = []
     for p in _players(team):
         if not isinstance(p, dict) or not _is_standard_player(p):
@@ -512,14 +641,24 @@ def _seller_trade_targets(team: Dict[str, Any], season_year: int, team_ctx: Opti
     mixed = []
     seen = set()
     for row in starter_rows[:8] + ranked:
-        key = _norm(row["player"].get("id") or row["player"].get("name"))
-        if key and key not in seen:
-            seen.add(key)
+        player_key = _norm(row["player"].get("id") or row["player"].get("name"))
+        if player_key and player_key not in seen:
+            seen.add(player_key)
             mixed.append(row["player"])
-    return mixed[:20]
+    result = mixed[:20]
+    if isinstance(cache, dict):
+        cache[cache_key] = (team, team_ctx, result)
+    return result
 
 
 def _buyer_outgoing_players(team: Dict[str, Any], season_year: int, team_ctx: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    cache = _GENERATION_CACHE.get("buyerOutgoing") if isinstance(_GENERATION_CACHE, dict) else None
+    key = (id(team), int(season_year), id(team_ctx))
+    if isinstance(cache, dict):
+        cached = cache.get(key)
+        if cached and cached[0] is team and cached[1] is team_ctx:
+            return cached[2]
+
     out = []
     for p in _players(team):
         if not isinstance(p, dict) or not _is_standard_player(p):
@@ -531,7 +670,10 @@ def _buyer_outgoing_players(team: Dict[str, Any], season_year: int, team_ctx: Op
         if score < -8 and ovr >= STAR_TRADE_TARGET_OVR:
             continue
         out.append({"player": p, "score": score})
-    return [r["player"] for r in sorted(out, key=lambda x: x["score"], reverse=True)[:20]]
+    result = [r["player"] for r in sorted(out, key=lambda x: x["score"], reverse=True)[:20]]
+    if isinstance(cache, dict):
+        cache[key] = (team, team_ctx, result)
+    return result
 
 
 def _pick_identity_key(pick: Dict[str, Any]) -> str:
@@ -562,6 +704,13 @@ def _protected_first_variant(pick: Dict[str, Any], protect_end: int) -> Dict[str
 
 
 def _simple_pick_assets(league: Dict[str, Any], owner_team: str, season_year: int) -> List[Dict[str, Any]]:
+    cache = _GENERATION_CACHE.get("simplePicks") if isinstance(_GENERATION_CACHE, dict) else None
+    key = (id(league), _norm(owner_team), int(season_year))
+    if isinstance(cache, dict):
+        cached = cache.get(key)
+        if cached and cached[0] is league:
+            return cached[1]
+
     out = []
     rows = league.get("draftPicks") if isinstance(league.get("draftPicks"), list) else []
     for row in rows:
@@ -598,7 +747,10 @@ def _simple_pick_assets(league: Dict[str, Any], owner_team: str, season_year: in
                 protection_discount = {3: 0.15, 5: 0.30, 10: 0.65, 14: 0.95}.get(int(protect_end), 0.55)
                 out.append({"pick": variant, "score": score + protection_discount, "round": rnd})
 
-    return [r["pick"] for r in sorted(out, key=lambda x: x["score"])[:16]]
+    result = [r["pick"] for r in sorted(out, key=lambda x: x["score"])[:16]]
+    if isinstance(cache, dict):
+        cache[key] = (league, result)
+    return result
 
 
 def _player_item(player: Dict[str, Any]) -> Dict[str, Any]:
@@ -619,6 +771,13 @@ def _pick_item(pick: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _rough_value_player(player: Dict[str, Any], season_year: int) -> float:
+    cache = _GENERATION_CACHE.get("roughPlayer") if isinstance(_GENERATION_CACHE, dict) else None
+    key = (id(player), int(season_year))
+    if isinstance(cache, dict):
+        cached = cache.get(key)
+        if cached and cached[0] is player:
+            return cached[1]
+
     ovr = _player_ovr(player)
     pot = _player_pot(player)
     age = _player_age(player)
@@ -633,10 +792,20 @@ def _rough_value_player(player: Dict[str, Any], season_year: int) -> float:
     contract_drag = max(0.0, salary - max(2.0, (ovr - 66) * 2.0)) * 0.08
     if years >= 3 and age >= 30:
         contract_drag += 1.2
-    return (ovr - 65) * 0.45 + upside * 0.22 + age_adj - contract_drag
+    value = (ovr - 65) * 0.45 + upside * 0.22 + age_adj - contract_drag
+    if isinstance(cache, dict):
+        cache[key] = (player, value)
+    return value
 
 
 def _rough_value_pick(pick: Dict[str, Any], season_year: int = 2026) -> float:
+    cache = _GENERATION_CACHE.get("roughPick") if isinstance(_GENERATION_CACHE, dict) else None
+    key = (id(pick), int(season_year))
+    if isinstance(cache, dict):
+        cached = cache.get(key)
+        if cached and cached[0] is pick:
+            return cached[1]
+
     rnd = int(_num(pick.get("round"), 1))
     year = int(_num(pick.get("year") or pick.get("seasonYear"), season_year + 3))
     distance = max(1, min(7, year - season_year))
@@ -653,8 +822,12 @@ def _rough_value_pick(pick: Dict[str, Any], season_year: int = 2026) -> float:
             value *= 0.88
         elif "protected" in protection:
             value *= 0.78
-        return value
-    return max(0.9, 1.7 - distance * 0.08)
+    else:
+        value = max(0.9, 1.7 - distance * 0.08)
+
+    if isinstance(cache, dict):
+        cache[key] = (pick, value)
+    return value
 
 
 def _salary_matchish(incoming_salary: float, outgoing_salary: float) -> bool:
@@ -1261,6 +1434,7 @@ def find_cpu_cpu_trade_candidates(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": True, "candidates": [], "skippedReason": "disabled"}
 
     current_date = _str(context.get("currentDate"), "")
+    _reset_generation_cache(league, current_date)
     deadline_date = _str(context.get("tradeDeadlineDate"), "")
     user_team = _str(context.get("userTeamName"), "")
     max_candidates = int(_num(context.get("maxCandidates"), MAX_CANDIDATES_PER_DAY))

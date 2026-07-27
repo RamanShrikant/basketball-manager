@@ -9,7 +9,7 @@ import {
   computeAllStars,
   repairCpuTeamsToMinRoster,
 } from "@/api/simEnginePy";
-import { getCpuCpuTradeCandidates, prewarmCpuTradeWorker } from "../api/cpuTradeEngine.js";
+import { cancelCpuTradeWorkerGeneration, getCpuCpuTradeCandidates, prewarmCpuTradeWorker } from "../api/cpuTradeEngine.js";
 import {
   addGeneratedCpuTradeCandidates,
   buildCpuTradeBankSummary,
@@ -47,6 +47,10 @@ import {
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import {
+  enqueueCpuTradeLeagueSave,
+  flushCpuTradeLeagueSaves,
+} from "../utils/cpuTradeSaveQueue.js";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
 import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
 import {
@@ -70,6 +74,17 @@ import {
   recordPreSimulationDiagnostics,
   recordSimulationPerformanceDiagnostics,
 } from "../utils/bmDiagnostics.js";
+import { ensureCpuTradeDiagnosticsSession } from "../utils/cpuTradeDiagnostics.js";
+import {
+  cpuTradeNow,
+  recordCpuTradeBankHealth,
+  recordCpuTradeCompleted,
+  recordCpuTradeFeedWrite,
+  recordCpuTradeGenerationJob,
+  recordCpuTradePass,
+  recordCpuTradeRepair,
+  recordCpuTradeTiming,
+} from "../utils/cpuTradeTelemetry.js";
 
 window.LZString = LZString;
 
@@ -93,6 +108,77 @@ function writePendingSimulationIntent(intent) {
   const next = { ...intent, updatedAt: Date.now() };
   localStorage.setItem(PENDING_SIM_INTENT_KEY, JSON.stringify(next));
   return next;
+}
+
+const MAX_SIMULATION_GAME_ORDER_EVENTS = 1400;
+let simulationOrderRunSequence = 0;
+
+function createSimulationOrderRunId(mode = "simulation", targetDate = "") {
+  simulationOrderRunSequence += 1;
+  return `${mode}_${targetDate || "season"}_${Date.now()}_${simulationOrderRunSequence}`;
+}
+
+function recordSimulationCheckpointEvent(simulationPerf, event = {}) {
+  if (!simulationPerf) return null;
+  if (!Array.isArray(simulationPerf.checkpointEvents)) simulationPerf.checkpointEvents = [];
+  const row = {
+    sequence: simulationPerf.checkpointEvents.length + 1,
+    at: Date.now(),
+    ...event,
+  };
+  simulationPerf.checkpointEvents.push(row);
+  return row;
+}
+
+function startSimulationGameOrderEvent(simulationPerf, { scheduledDate = "", gameIndex = 0, game = null } = {}) {
+  if (!simulationPerf || !game) return null;
+  if (!Array.isArray(simulationPerf.gameExecutionOrder)) simulationPerf.gameExecutionOrder = [];
+
+  const previous = simulationPerf.gameExecutionOrder[simulationPerf.gameExecutionOrder.length - 1] || null;
+  const dateInversion = Boolean(
+    previous?.scheduledDate &&
+      scheduledDate &&
+      String(scheduledDate) < String(previous.scheduledDate)
+  );
+  if (dateInversion) simulationPerf.gameOrderDateInversions += 1;
+
+  simulationPerf.gameExecutionSequence = Number(simulationPerf.gameExecutionSequence || 0) + 1;
+  const row = {
+    sequence: simulationPerf.gameExecutionSequence,
+    runId: simulationPerf.runId || "",
+    scheduledDate,
+    gameIndex,
+    gameId: String(game?.id || ""),
+    away: game?.away || "",
+    home: game?.home || "",
+    startedAt: Date.now(),
+    status: "started",
+    dateInversion,
+    previousScheduledDate: previous?.scheduledDate || null,
+    previousGameId: previous?.gameId || null,
+  };
+
+  simulationPerf.gameExecutionOrder.push(row);
+  if (simulationPerf.gameExecutionOrder.length > MAX_SIMULATION_GAME_ORDER_EVENTS) {
+    simulationPerf.gameExecutionOrder.splice(
+      0,
+      simulationPerf.gameExecutionOrder.length - MAX_SIMULATION_GAME_ORDER_EVENTS
+    );
+  }
+
+  if (dateInversion) {
+    console.error("[BM SIM ORDER] scheduled-date inversion detected", row);
+  }
+  return row;
+}
+
+function finishSimulationGameOrderEvent(row, status = "completed", details = null) {
+  if (!row) return null;
+  row.status = status;
+  row.finishedAt = Date.now();
+  row.elapsedMs = Math.max(0, row.finishedAt - Number(row.startedAt || row.finishedAt));
+  if (details) row.details = details;
+  return row;
 }
 
 
@@ -2688,7 +2774,7 @@ else {
     return Object.values(stats || {}).filter((row) => Number(row?.gp || 0) >= 65).length;
   }
 
-  
+
 
   const [scheduleByDate, setScheduleByDate] = useState({});
   const [resultsById, setResultsById] = useState({});
@@ -3595,6 +3681,7 @@ const requestStop = () => {
 const handleTradeDeskEntries = (entries = []) => {
   if (!Array.isArray(entries) || !entries.length) return [];
 
+  const feedStartedAt = cpuTradeNow();
   const savedFeed = appendTradeDeskEntries(entries);
   appendTradeDeskMoodEventsFromEntries(entries, {
     currentDate:
@@ -3604,6 +3691,16 @@ const handleTradeDeskEntries = (entries = []) => {
       getLastPlayedDateFromSchedule(scheduleByDate) ||
       fmt(seasonStart),
     seasonYear,
+  });
+  const feedSyncMs = cpuTradeNow() - feedStartedAt;
+  let approxBytes = 0;
+  try { approxBytes = JSON.stringify(entries).length; } catch {}
+  recordCpuTradeTiming("feedSyncMs", feedSyncMs, { entryCount: entries.length });
+  recordCpuTradeFeedWrite({
+    entryCount: entries.length,
+    completedEntryCount: entries.filter((entry) => entry?.type === "transaction").length,
+    approxBytes,
+    durationMs: feedSyncMs,
   });
 
   return savedFeed;
@@ -3877,6 +3974,32 @@ function takeCompletedCpuTradeBankGenerationJob(generationJobRef) {
   return job;
 }
 
+function syncTradeDeskFeedHistoryWithTelemetry(leagueData, details = {}) {
+  const startedAt = cpuTradeNow();
+  const rows = syncTradeDeskFeedWithLeagueHistory(leagueData);
+  const durationMs = cpuTradeNow() - startedAt;
+  let approxBytes = 0;
+  try {
+    approxBytes = JSON.stringify(rows || []).length;
+  } catch {}
+
+  recordCpuTradeTiming("feedHistorySyncMs", durationMs, {
+    ...details,
+    rowCount: Array.isArray(rows) ? rows.length : 0,
+  });
+  recordCpuTradeFeedWrite({
+    operation: "history_sync",
+    ...details,
+    entryCount: Array.isArray(rows) ? rows.length : 0,
+    completedEntryCount: Array.isArray(rows)
+      ? rows.filter((row) => row?.type === "transaction").length
+      : 0,
+    approxBytes,
+    durationMs,
+  });
+  return rows;
+}
+
 async function runForegroundCpuTradeBankGeneration({
   leagueData,
   baseContext,
@@ -3890,73 +4013,148 @@ async function runForegroundCpuTradeBankGeneration({
   let totalAccepted = 0;
   let totalRejected = 0;
   const generationRows = [];
+  const foregroundStartedAt = cpuTradeNow();
 
-  for (let pass = 0; pass < maxPasses; pass += 1) {
-    const state = nextLeagueData?.cpuTradeBankState;
-    const runway = getCpuTradeBankRunwayStatus(state, baseContext);
-    if (!state || runway.remainingTarget <= 0) break;
-    if (pass > 0 && !runway.critical && runway.bankSize >= Math.min(runway.remainingTarget, 10)) break;
+  try {
+    for (let pass = 0; pass < maxPasses; pass += 1) {
+      const foregroundPassStartedAt = cpuTradeNow();
+      const state = nextLeagueData?.cpuTradeBankState;
+      const runway = getCpuTradeBankRunwayStatus(state, baseContext);
+      if (!state || runway.remainingTarget <= 0) break;
+      if (pass > 0 && !runway.critical && runway.bankSize >= Math.min(runway.remainingTarget, 10)) break;
 
-    const basePolicy = getCpuTradeBankGenerationPolicy(state, baseContext, {
-      ...testConfig,
-      forceGeneration: true,
-    });
-    const boostedPolicy = {
-      ...basePolicy,
-      shouldGenerate: true,
-      reason: `foreground_${reason}`,
-      foregroundRecommended: true,
-      inventoryPressure: Math.max(
-        Number(basePolicy?.inventoryPressure || 0),
-        Number(runway.inventoryPressure || 0),
-        pass > 0 ? 1.1 : 0.85
-      ),
-      maxCandidates: Math.max(basePolicy.maxCandidates || 0, runway.emergency ? 120 : 96),
-      exactEvaluations: Math.max(basePolicy.exactEvaluations || 0, runway.emergency ? 72 : 60),
-    };
-    const workerContext = buildCpuTradeWorkerContext(state, baseContext, boostedPolicy);
+      const basePolicy = getCpuTradeBankGenerationPolicy(state, baseContext, {
+        ...testConfig,
+        forceGeneration: true,
+      });
+      const boostedPolicy = {
+        ...basePolicy,
+        shouldGenerate: true,
+        reason: `foreground_${reason}`,
+        foregroundRecommended: true,
+        inventoryPressure: Math.max(
+          Number(basePolicy?.inventoryPressure || 0),
+          Number(runway.inventoryPressure || 0),
+          pass > 0 ? 1.1 : 0.85
+        ),
+        maxCandidates: Math.max(basePolicy.maxCandidates || 0, runway.emergency ? 120 : 96),
+        exactEvaluations: Math.max(basePolicy.exactEvaluations || 0, runway.emergency ? 72 : 60),
+      };
+      const workerContext = buildCpuTradeWorkerContext(state, baseContext, boostedPolicy);
 
-    if (generationJobRef?.current?.status === "pending" && runway.critical) {
-      // A background job based on older inventory is less valuable than a live
-      // on-demand pass when the bank is empty/behind. Detach it so a late result
-      // cannot write stale Trade Desk noise after this foreground repair.
-      generationJobRef.current = null;
+      if (generationJobRef?.current?.status === "pending" && runway.critical) {
+        // A background job based on older inventory is less valuable than a live
+        // on-demand pass when the bank is empty/behind. Terminate the stale worker
+        // request instead of merely detaching its ref; otherwise synchronous
+        // Pyodide keeps running and blocks the foreground request behind it.
+        generationJobRef.current = null;
+        cancelCpuTradeWorkerGeneration("foreground_superseded_background");
+      }
+
+      const response = await getCpuCpuTradeCandidates(
+        makeCpuTradeGenerationLeagueData(nextLeagueData),
+        workerContext
+      );
+      const added = addGeneratedCpuTradeCandidates({
+        leagueData: nextLeagueData,
+        response,
+        context: {
+          ...baseContext,
+          generatedDate: baseContext.currentDate,
+          generatedDayIndex: baseContext.dayIndex,
+        },
+        testConfig,
+        exactEvaluationLimit: boostedPolicy.exactEvaluations,
+      });
+
+      nextLeagueData = added.leagueData || nextLeagueData;
+      changed = changed || Boolean(added.changed);
+      totalAccepted += added.accepted?.length || 0;
+      totalRejected += added.rejected?.length || 0;
+
+      const foregroundPassMs = cpuTradeNow() - foregroundPassStartedAt;
+      const generationRow = {
+        pass: pass + 1,
+        proposed: Array.isArray(response?.candidates) ? response.candidates.length : 0,
+        accepted: added.accepted?.length || 0,
+        rejected: added.rejected?.length || 0,
+        bankSize: added.state?.candidates?.length || 0,
+        durationMs: foregroundPassMs,
+        workerDebug: response?.debug || null,
+      };
+      generationRows.push(generationRow);
+      recordCpuTradeTiming("foregroundGenerationPassMs", foregroundPassMs, {
+        reason,
+        pass: pass + 1,
+        proposed: generationRow.proposed,
+        accepted: generationRow.accepted,
+        rejected: generationRow.rejected,
+      });
+      recordCpuTradeGenerationJob({
+        event: "foreground_pass",
+        currentDate: baseContext?.currentDate || "",
+        reason,
+        pass: pass + 1,
+        durationMs: foregroundPassMs,
+        candidateCount: generationRow.proposed,
+        acceptedCount: generationRow.accepted,
+        rejectedCount: generationRow.rejected,
+        bankSize: generationRow.bankSize,
+      });
+
+      const updatedRunway = getCpuTradeBankRunwayStatus(
+        nextLeagueData?.cpuTradeBankState,
+        baseContext
+      );
+      if (
+        !updatedRunway.critical ||
+        (
+          updatedRunway.bankSize >= Math.min(
+            updatedRunway.remainingTarget,
+            updatedRunway.emergency ? 8 : 12
+          ) &&
+          totalAccepted > 0
+        )
+      ) {
+        break;
+      }
     }
-
-    const response = await getCpuCpuTradeCandidates(
-      makeCpuTradeGenerationLeagueData(nextLeagueData),
-      workerContext
-    );
-    const added = addGeneratedCpuTradeCandidates({
-      leagueData: nextLeagueData,
-      response,
-      context: {
-        ...baseContext,
-        generatedDate: baseContext.currentDate,
-        generatedDayIndex: baseContext.dayIndex,
-      },
-      testConfig,
-      exactEvaluationLimit: boostedPolicy.exactEvaluations,
+  } catch (error) {
+    const foregroundGenerationMs = cpuTradeNow() - foregroundStartedAt;
+    recordCpuTradeTiming("foregroundGenerationMs", foregroundGenerationMs, {
+      currentDate: baseContext?.currentDate || "",
+      reason,
+      failed: true,
     });
-
-    nextLeagueData = added.leagueData || nextLeagueData;
-    changed = changed || Boolean(added.changed);
-    totalAccepted += added.accepted?.length || 0;
-    totalRejected += added.rejected?.length || 0;
-    generationRows.push({
-      pass: pass + 1,
-      proposed: Array.isArray(response?.candidates) ? response.candidates.length : 0,
-      accepted: added.accepted?.length || 0,
-      rejected: added.rejected?.length || 0,
-      bankSize: added.state?.candidates?.length || 0,
-      workerDebug: response?.debug || null,
+    recordCpuTradeGenerationJob({
+      event: "foreground_failed",
+      currentDate: baseContext?.currentDate || "",
+      reason,
+      durationMs: foregroundGenerationMs,
+      acceptedCount: totalAccepted,
+      rejectedCount: totalRejected,
+      error: error?.message || String(error || ""),
     });
-
-    const updatedRunway = getCpuTradeBankRunwayStatus(nextLeagueData?.cpuTradeBankState, baseContext);
-    if (!updatedRunway.critical || (updatedRunway.bankSize >= Math.min(updatedRunway.remainingTarget, updatedRunway.emergency ? 8 : 12) && totalAccepted > 0)) {
-      break;
-    }
+    throw error;
   }
+
+  const foregroundGenerationMs = cpuTradeNow() - foregroundStartedAt;
+  recordCpuTradeTiming("foregroundGenerationMs", foregroundGenerationMs, {
+    currentDate: baseContext?.currentDate || "",
+    reason,
+    passCount: generationRows.length,
+    accepted: totalAccepted,
+    rejected: totalRejected,
+  });
+  recordCpuTradeGenerationJob({
+    event: "foreground_summary",
+    currentDate: baseContext?.currentDate || "",
+    reason,
+    durationMs: foregroundGenerationMs,
+    passCount: generationRows.length,
+    acceptedCount: totalAccepted,
+    rejectedCount: totalRejected,
+  });
 
   return {
     leagueData: nextLeagueData,
@@ -4080,7 +4278,10 @@ async function runCpuCpuTradePassForDate({
   // Pyodide work. A pre-deadline background job may finish later; detaching it
   // here makes its completion harmless instead of letting it leak into March.
   if (!isCpuTradeWindowOpenDate(currentDate, tradeDeadlineDate)) {
-    if (generationJobRef?.current) generationJobRef.current = null;
+    if (generationJobRef?.current) {
+      generationJobRef.current = null;
+      cancelCpuTradeWorkerGeneration("trade_deadline_locked");
+    }
     if (window.__debugCpuTrades) {
       console.log("[CPU Trade Bank] skipped after trade deadline", {
         currentDate,
@@ -4097,7 +4298,14 @@ async function runCpuCpuTradePassForDate({
     };
   }
 
+  const cpuTradePassStartedAt = cpuTradeNow();
   const daysToDeadline = daysBetweenDateStrings(currentDate, tradeDeadlineDate);
+  const recordsStartedAt = cpuTradeNow();
+  const recordsByTeam = buildCpuTradeRecordsByTeam(scheduleSnapshot, resultsSnapshot);
+  recordCpuTradeTiming("recordBuildMs", cpuTradeNow() - recordsStartedAt, {
+    currentDate,
+    scheduleDates: Object.keys(scheduleSnapshot || {}).length,
+  });
   const baseContext = {
     seasonYear: getCalendarLeagueSeasonYear(activeLeagueData),
     currentDate,
@@ -4107,7 +4315,7 @@ async function runCpuCpuTradePassForDate({
     tradeDeadlineDate,
     daysToDeadline,
     userTeamName: resolveCalendarControlledTeamName(selectedTeam, activeLeagueData),
-    recordsByTeam: buildCpuTradeRecordsByTeam(scheduleSnapshot, resultsSnapshot),
+    recordsByTeam,
     inOffseason: false,
   };
   const testConfig = readCpuTradeBankTestConfig();
@@ -4122,8 +4330,17 @@ async function runCpuCpuTradePassForDate({
     if (initialized.leagueData) nextLeagueData = initialized.leagueData;
     bankChanged = bankChanged || initialized.changed;
     try {
-      syncTradeDeskFeedWithLeagueHistory(nextLeagueData);
+      syncTradeDeskFeedHistoryWithTelemetry(nextLeagueData, {
+        currentDate,
+        reason: "pass_start_canonical_sync",
+      });
     } catch {}
+    ensureCpuTradeDiagnosticsSession({
+      leagueData: nextLeagueData,
+      bankState: initialized.state || nextLeagueData?.cpuTradeBankState,
+      context: baseContext,
+      selectedTeam,
+    });
 
     const completedGenerationJob = takeCompletedCpuTradeBankGenerationJob(generationJobRef);
     const activeBankBeforeGenerationConsume = nextLeagueData?.cpuTradeBankState;
@@ -4294,12 +4511,18 @@ async function runCpuCpuTradePassForDate({
       // A legal asymmetric trade may leave a CPU roster below the simulation
       // minimum. Repair it before announcing or persisting the completed trade,
       // so a failed repair cleanly rolls the whole pass back with no ghost feed.
+      const rosterRepairStartedAt = cpuTradeNow();
       const postTradeRepair = await repairCpuTeamsToMinRoster(
         nextLeagueData,
         baseContext.userTeamName || null,
         14,
         Number(dayIndex || 0)
       );
+      const rosterRepairMs = cpuTradeNow() - rosterRepairStartedAt;
+      recordCpuTradeTiming("rosterRepairMs", rosterRepairMs, {
+        currentDate,
+        tradeId: execution?.tradeRecord?.id || execution?.tradeRecord?.bankId || "",
+      });
       if (postTradeRepair?.leagueData) {
         nextLeagueData = postTradeRepair.leagueData;
       }
@@ -4328,20 +4551,55 @@ async function runCpuCpuTradePassForDate({
       const repairedTeamNames = Array.from(
         new Set(repairMoves.map((row) => row?.teamName || row?.team).filter(Boolean))
       );
+      const directlyTradedTeams = [execution?.tradeRecord?.fromTeamName, execution?.tradeRecord?.toTeamName].filter(Boolean);
+      const unrelatedTouchedTeams = repairedTeamNames.filter(
+        (teamName) => !directlyTradedTeams.some((directTeam) => String(directTeam) === String(teamName))
+      );
+      recordCpuTradeRepair({
+        currentDate,
+        tradeId: execution?.tradeRecord?.id || execution?.tradeRecord?.bankId || "",
+        ok: postTradeRepair?.ok === true,
+        durationMs: rosterRepairMs,
+        moveCount: repairMoves.length,
+        signings: postTradeRepair?.signings || [],
+        droppedPlayers: postTradeRepair?.droppedPlayers || [],
+        twoWayAssignments: postTradeRepair?.twoWayAssignments || [],
+        touchedTeams: repairedTeamNames,
+        directlyTradedTeams,
+        unrelatedTouchedTeams,
+      });
       for (const teamName of repairedTeamNames) {
         try {
           localStorage.removeItem(`gameplan_${teamName}`);
         } catch {}
       }
 
+      const gameplanRepairStartedAt = cpuTradeNow();
       try {
         ensureGameplansForLeague(nextLeagueData);
       } catch (error) {
         console.warn("[CPU Trade Bank] ensure gameplans failed after trade", error);
+      } finally {
+        recordCpuTradeTiming("gameplanRepairMs", cpuTradeNow() - gameplanRepairStartedAt, {
+          currentDate,
+          touchedTeams: repairedTeamNames,
+        });
       }
 
       rosterChanged = true;
       tradesMade.push(execution.tradeRecord);
+      recordCpuTradeCompleted({
+        currentDate,
+        dayIndex,
+        tradeId: execution?.tradeRecord?.id || execution?.tradeRecord?.bankId || "",
+        fromTeamName: execution?.tradeRecord?.fromTeamName || "",
+        toTeamName: execution?.tradeRecord?.toTeamName || "",
+        buyerScore: Number(execution?.tradeRecord?.toTeamView?.score || 0),
+        buyerThreshold: Number(execution?.tradeRecord?.toTeamView?.teamImpact?.threshold || 0),
+        sellerScore: Number(execution?.tradeRecord?.fromTeamView?.score || 0),
+        sellerThreshold: Number(execution?.tradeRecord?.fromTeamView?.teamImpact?.threshold || 0),
+        repairRequired: Boolean(execution?.requiresRosterRepairBeforeSimulation),
+      });
 
       const completedEntry = buildCompletedCpuTradeDeskEntry(execution.tradeRecord, currentDate);
       if (completedEntry && typeof onTradeDeskEntries === "function") {
@@ -4351,7 +4609,11 @@ async function runCpuCpuTradePassForDate({
         onCpuTradeCompleted(completedEntry, execution.tradeRecord);
       }
       try {
-        syncTradeDeskFeedWithLeagueHistory(nextLeagueData);
+        syncTradeDeskFeedHistoryWithTelemetry(nextLeagueData, {
+          currentDate,
+          reason: "post_trade_canonical_sync",
+          tradeId: execution?.tradeRecord?.id || execution?.tradeRecord?.bankId || "",
+        });
       } catch {}
 
       console.log("[CPU Trade Bank] completed", execution.tradeRecord);
@@ -4414,6 +4676,28 @@ async function runCpuCpuTradePassForDate({
       baseContext,
       testConfig
     );
+    recordCpuTradeBankHealth({
+      currentDate,
+      dayIndex,
+      daysToDeadline,
+      bankSize: activeState?.candidates?.length || 0,
+      completedTrades: activeState?.completedTrades || 0,
+      targetTrades: activeState?.targetTrades || 0,
+      remainingTarget: Math.max(0, Number(activeState?.targetTrades || 0) - Number(activeState?.completedTrades || 0)),
+      planCursor: activeState?.planCursor || 0,
+      nextPlannedDay: activeState?.executionPlanDays?.[activeState?.planCursor] ?? null,
+      shouldGenerate: generationPolicy?.shouldGenerate || false,
+      generationReason: generationPolicy?.reason || "",
+      completionDeficit: generationPolicy?.completionDeficit || 0,
+      reserveDeficit: generationPolicy?.reserveDeficit || 0,
+      supplyUrgent: generationPolicy?.supplyUrgent || false,
+      supplySatisfied: generationPolicy?.supplySatisfied || false,
+      foregroundTriggered: shouldForegroundGenerate,
+      foregroundReason: shouldForegroundGenerate
+        ? (lateDeadlineCatchup ? "deadline_target_catchup" : runwayBeforeExecution.emergency ? "emergency_runway" : "low_inventory_due_slot")
+        : "",
+      burstDepth: cpuTradeBurstDepth,
+    });
 
     if (
       generationPolicy.shouldGenerate &&
@@ -4452,11 +4736,23 @@ async function runCpuCpuTradePassForDate({
 
     if (bankChanged || rosterChanged) {
       try {
-        syncTradeDeskFeedWithLeagueHistory(nextLeagueData);
+        syncTradeDeskFeedHistoryWithTelemetry(nextLeagueData, {
+          currentDate,
+          reason: rosterChanged ? "pre_save_trade_sync" : "pre_save_bank_sync",
+        });
       } catch {}
       if (typeof setLeagueData === "function") setLeagueData(nextLeagueData);
-      saveLeagueData(nextLeagueData).catch((error) => {
-        console.warn("[CPU Trade Bank] failed to save bank/trade state", error);
+      const storageReason = rosterChanged ? "trade_or_roster_change" : "bank_state_only";
+      // CPU trade passes can finish much faster than a full IndexedDB league
+      // write. Queue the newest snapshot and let one serialized writer persist
+      // it; intermediate bank-only snapshots are safely covered by the latest
+      // state instead of opening dozens of overlapping transactions.
+      enqueueCpuTradeLeagueSave({
+        leagueData: nextLeagueData,
+        currentDate,
+        reason: storageReason,
+      }).catch((error) => {
+        console.warn("[CPU Trade Bank] failed to save queued bank/trade state", error);
       });
 
       try {
@@ -4466,6 +4762,22 @@ async function runCpuCpuTradePassForDate({
       } catch {}
     }
 
+    const totalCpuTradeProcessingMs = cpuTradeNow() - cpuTradePassStartedAt;
+    recordCpuTradeTiming("totalCpuTradeProcessingMs", totalCpuTradeProcessingMs, {
+      currentDate,
+      tradesCompleted: tradesMade.length,
+    });
+    recordCpuTradePass({
+      currentDate,
+      dayIndex,
+      durationMs: totalCpuTradeProcessingMs,
+      tradesCompleted: tradesMade.length,
+      bankChanged,
+      rosterChanged,
+      burstDepth: cpuTradeBurstDepth,
+      error: null,
+      bankSummary: buildCpuTradeBankSummary(nextLeagueData),
+    });
     return {
       leagueData: nextLeagueData,
       tradesMade,
@@ -4474,6 +4786,21 @@ async function runCpuCpuTradePassForDate({
       bankSummary: buildCpuTradeBankSummary(nextLeagueData),
     };
   } catch (error) {
+    const totalCpuTradeProcessingMs = cpuTradeNow() - cpuTradePassStartedAt;
+    recordCpuTradeTiming("totalCpuTradeProcessingMs", totalCpuTradeProcessingMs, {
+      currentDate,
+      failed: true,
+    });
+    recordCpuTradePass({
+      currentDate,
+      dayIndex,
+      durationMs: totalCpuTradeProcessingMs,
+      tradesCompleted: 0,
+      bankChanged: false,
+      rosterChanged: false,
+      burstDepth: cpuTradeBurstDepth,
+      error: error?.message || String(error || ""),
+    });
     console.warn("[CPU Trade Bank] pass failed", error);
     return {
       leagueData: activeLeagueData,
@@ -4650,6 +4977,7 @@ if (simBlockMessage) {
 setActionModal(null);
 setBoxModal(null);
 
+  const pendingIntentBeforeRun = readPendingSimulationIntent();
   persistPendingSimIntent({
     mode: "to_date",
     targetDate: dateStr,
@@ -4680,6 +5008,9 @@ setBoxModal(null);
   const simulationPerf = {
     mode: "to_date",
     targetDate: dateStr,
+    runId: createSimulationOrderRunId("to_date", dateStr),
+    resumed: Boolean(resume),
+    pendingIntentBeforeRun,
     startedAt: Date.now(),
     firstPendingDate: firstPendingTradeDate,
     datesVisited: 0,
@@ -4689,6 +5020,10 @@ setBoxModal(null);
     cpuTradeMs: 0,
     cpuTradesCompleted: 0,
     gamesSimmed: 0,
+    gameOrderDateInversions: 0,
+    gameExecutionSequence: 0,
+    gameExecutionOrder: [],
+    checkpointEvents: [],
   };
 
   const sorted = Object.keys(upd).sort((a, b) => new Date(a) - new Date(b));
@@ -4708,6 +5043,12 @@ for (const d of sorted) {
   simulationPerf.datesVisited += 1;
 
   if (shouldPauseForTradeDeadline(d)) {
+    recordSimulationCheckpointEvent(simulationPerf, {
+      type: "pause",
+      reason: "trade_deadline",
+      scheduledDate: d,
+      targetDate: dateStr,
+    });
     assertLockedRegularSeasonGamesUnchanged(
       lockedGamesAtStart,
       upd,
@@ -4736,6 +5077,12 @@ for (const d of sorted) {
   }
 
   if (d === ALL_STAR_DATE && !allStarHandledRef.current) {
+    recordSimulationCheckpointEvent(simulationPerf, {
+      type: "pause",
+      reason: "all_star",
+      scheduledDate: d,
+      targetDate: dateStr,
+    });
     savePlayerStats(playerStats);
     saveClutchStats(clutchStats);
     cleanupGhostGames(upd, newResults);
@@ -4829,14 +5176,26 @@ for (const d of sorted) {
 
         if (g.played) dayGames[i] = { ...g, played: false };
 
+        const gameOrderEvent = startSimulationGameOrderEvent(simulationPerf, {
+          scheduledDate: d,
+          gameIndex: i,
+          game: g,
+        });
+
         try {
           const full = await runGameWithRetries(g, activeLeagueData, activeTeams, 3, simRuntime);
 
           // ✅ if user clicked stop while this game was running, bail after it finishes
-          if (stopRef.current) break;
+          if (stopRef.current) {
+            finishSimulationGameOrderEvent(gameOrderEvent, "stopped_after_worker");
+            break;
+          }
 
           // still failed → skip, leave unplayed
-          if (!full) continue;
+          if (!full) {
+            finishSimulationGameOrderEvent(gameOrderEvent, "no_result");
+            continue;
+          }
 
           const slim = slimResult(full);
 
@@ -4862,6 +5221,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
             newResults[g.id] = canonicalResult;
             dayResultUpdates[g.id] = canonicalResult;
             dayGames[i] = { ...g, played: true };
+            finishSimulationGameOrderEvent(gameOrderEvent, "canonical_restored");
             console.error("[SimToDate] restored canonical locked result instead of applying duplicate simulation", g.id);
             continue;
           }
@@ -4871,6 +5231,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
 
           dayGames[i] = { ...g, played: true };
           simulationPerf.gamesSimmed += 1;
+          finishSimulationGameOrderEvent(gameOrderEvent, "completed");
 
           // 🔥 update player stats
           const playerStatsBeforeGame = playerStats;
@@ -4885,6 +5246,9 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
           }));
           dayChanged = true;
         } catch (err) {
+          finishSimulationGameOrderEvent(gameOrderEvent, "error", {
+            message: String(err?.message || err || "unknown error"),
+          });
           console.error("[SimToDate] ERROR for game", g.id, err);
           // keep unplayed on error
         }
@@ -4944,6 +5308,11 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
       }
     }
   } finally {
+    try {
+      await flushCpuTradeLeagueSaves();
+    } catch (error) {
+      console.warn("[CPU Trade Bank] failed to flush queued league saves", error);
+    }
     recordSimulationPerformanceDiagnostics({
       ...simulationPerf,
       elapsedMs: Date.now() - simulationPerf.startedAt,
@@ -5051,6 +5420,7 @@ if (simBlockMessage) {
 setActionModal(null);
 setBoxModal(null);
 
+  const pendingIntentBeforeRun = readPendingSimulationIntent();
   persistPendingSimIntent({
     mode: "full_season",
     targetDate: null,
@@ -5087,6 +5457,9 @@ setBoxModal(null);
   const simulationPerf = {
     mode: "full_season",
     targetDate: null,
+    runId: createSimulationOrderRunId("full_season"),
+    resumed: Boolean(resume),
+    pendingIntentBeforeRun,
     startedAt: Date.now(),
     firstPendingDate: firstPendingTradeDate,
     datesVisited: 0,
@@ -5096,6 +5469,10 @@ setBoxModal(null);
     cpuTradeMs: 0,
     cpuTradesCompleted: 0,
     gamesSimmed: 0,
+    gameOrderDateInversions: 0,
+    gameExecutionSequence: 0,
+    gameExecutionOrder: [],
+    checkpointEvents: [],
   };
 
   let activeLeagueData = repairedLeagueData;
@@ -5121,11 +5498,21 @@ for (let di = 0; di < dates.length; di++) {
   simulationPerf.datesVisited += 1;
 
   if (shouldPauseForTradeDeadline(date)) {
+    recordSimulationCheckpointEvent(simulationPerf, {
+      type: "pause",
+      reason: "trade_deadline",
+      scheduledDate: date,
+    });
     pausedForTradeDeadline = true;
     break;
   }
 
   if (date === ALL_STAR_DATE && !allStarHandledRef.current) {
+    recordSimulationCheckpointEvent(simulationPerf, {
+      type: "pause",
+      reason: "all_star",
+      scheduledDate: date,
+    });
     pausedForAllStar = true;
     break;
   }
@@ -5211,11 +5598,24 @@ for (let di = 0; di < dates.length; di++) {
 
         if (g.played) dayGames[i] = { ...g, played: false };
 
+        const gameOrderEvent = startSimulationGameOrderEvent(simulationPerf, {
+          scheduledDate: date,
+          gameIndex: i,
+          game: g,
+        });
+
         try {
           const full = await runGameWithRetries(g, activeLeagueData, activeTeams, 3, simRuntime);
-          if (!full) continue;
+          if (!full) {
+            finishSimulationGameOrderEvent(gameOrderEvent, "no_result");
+            continue;
+          }
 
-          if (stopRef.current) { stopped = true; break; }
+          if (stopRef.current) {
+            finishSimulationGameOrderEvent(gameOrderEvent, "stopped_after_worker");
+            stopped = true;
+            break;
+          }
 
           const slim = slimResult(full);
 
@@ -5241,6 +5641,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
             results[g.id] = canonicalResult;
             dayResultUpdates[g.id] = canonicalResult;
             dayGames[i] = { ...g, played: true };
+            finishSimulationGameOrderEvent(gameOrderEvent, "canonical_restored");
             console.error("[FullSeason] restored canonical locked result instead of applying duplicate simulation", g.id);
             continue;
           }
@@ -5251,6 +5652,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
           dayGames[i] = { ...g, played: true };
           gamesSimmed++;
           simulationPerf.gamesSimmed += 1;
+          finishSimulationGameOrderEvent(gameOrderEvent, "completed");
 
           const playerStatsBeforeGame = playerStats;
           playerStats = applyGameToPlayerStats(playerStats, slim, g);
@@ -5264,6 +5666,9 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
           }));
           dayChanged = true;
         } catch (err) {
+          finishSimulationGameOrderEvent(gameOrderEvent, "error", {
+            message: String(err?.message || err || "unknown error"),
+          });
           console.error("FULL SEASON ERROR for game", g.id, err);
         }
       }
@@ -5313,6 +5718,11 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
     saveSchedule(upd);
     await saveResults(results);
     await flushPendingResultWrites();
+    try {
+      await flushCpuTradeLeagueSaves();
+    } catch (error) {
+      console.warn("[CPU Trade Bank] failed to flush queued league saves", error);
+    }
     savePlayerStats(playerStats);
     saveClutchStats(clutchStats);
     refreshTradeDeadlineLockFromSchedule(upd);
