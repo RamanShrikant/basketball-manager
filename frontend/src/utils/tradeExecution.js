@@ -2075,6 +2075,37 @@ function findRecentCpuAcquisitionBlock({ leagueData, teamName = "", outgoingItem
   return null;
 }
 
+const cpuTradeEvaluationRecordWrappers = new WeakMap();
+
+function attachCpuTradeRecordsForEvaluation(leagueData = {}, recordsByTeam = null) {
+  if (!recordsByTeam || typeof recordsByTeam !== "object") {
+    return leagueData;
+  }
+
+  if (leagueData?.__cpuTradeRecords === recordsByTeam) return leagueData;
+
+  if (leagueData && typeof leagueData === "object") {
+    let byRecords = cpuTradeEvaluationRecordWrappers.get(leagueData);
+    if (!byRecords) {
+      byRecords = new WeakMap();
+      cpuTradeEvaluationRecordWrappers.set(leagueData, byRecords);
+    }
+    if (byRecords.has(recordsByTeam)) return byRecords.get(recordsByTeam);
+
+    const wrapped = { ...leagueData };
+    Object.defineProperty(wrapped, "__cpuTradeRecords", {
+      value: recordsByTeam,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+    byRecords.set(recordsByTeam, wrapped);
+    return wrapped;
+  }
+
+  return leagueData;
+}
+
 function cpuTradeTimingValidation({ currentDate = "", tradeDeadlineDate = "", inOffseason = false } = {}) {
   if (inOffseason) {
     return {
@@ -2101,16 +2132,19 @@ export function validateCpuTradeCandidateOnLeague({
   currentDate = "",
   tradeDeadlineDate = "",
   inOffseason = false,
+  recordsByTeam = null,
 } = {}) {
   const timingValidation = cpuTradeTimingValidation({ currentDate, tradeDeadlineDate, inOffseason });
   if (!timingValidation.ok) return timingValidation;
+
+  const evaluationLeagueData = attachCpuTradeRecordsForEvaluation(leagueData, recordsByTeam);
 
   const fromTeamName = candidate?.fromTeamName || candidate?.sellerTeamName || candidate?.teamA || "";
   const toTeamName = candidate?.toTeamName || candidate?.buyerTeamName || candidate?.teamB || "";
   const rawFromItems = Array.isArray(candidate?.fromItems) ? candidate.fromItems : [];
   const rawToItems = Array.isArray(candidate?.toItems) ? candidate.toItems : [];
 
-  if (!leagueData || !fromTeamName || !toTeamName) {
+  if (!evaluationLeagueData || !fromTeamName || !toTeamName) {
     return { ok: false, reason: "CPU trade candidate is missing one or both teams.", staleCode: "missing_team" };
   }
 
@@ -2118,8 +2152,8 @@ export function validateCpuTradeCandidateOnLeague({
     return { ok: false, reason: "CPU trade candidate cannot trade a team with itself.", staleCode: "same_team" };
   }
 
-  const fromTeam = findTeamInLeague(leagueData, fromTeamName);
-  const toTeam = findTeamInLeague(leagueData, toTeamName);
+  const fromTeam = findTeamInLeague(evaluationLeagueData, fromTeamName);
+  const toTeam = findTeamInLeague(evaluationLeagueData, toTeamName);
   if (!fromTeam || !toTeam) {
     return {
       ok: false,
@@ -2132,16 +2166,16 @@ export function validateCpuTradeCandidateOnLeague({
     return { ok: false, reason: "CPU trade candidate needs assets from both teams.", staleCode: "empty_package" };
   }
 
-  const resolvedFrom = resolveCurrentCpuTradeItems(leagueData, fromTeamName, rawFromItems);
+  const resolvedFrom = resolveCurrentCpuTradeItems(evaluationLeagueData, fromTeamName, rawFromItems);
   if (!resolvedFrom.ok) return resolvedFrom;
 
-  const resolvedTo = resolveCurrentCpuTradeItems(leagueData, toTeamName, rawToItems);
+  const resolvedTo = resolveCurrentCpuTradeItems(evaluationLeagueData, toTeamName, rawToItems);
   if (!resolvedTo.ok) return resolvedTo;
 
   const fromItems = resolvedFrom.items;
   const toItems = resolvedTo.items;
   const fromCooldownBlock = findRecentCpuAcquisitionBlock({
-    leagueData,
+    leagueData: evaluationLeagueData,
     teamName: fromTeamName,
     outgoingItems: fromItems,
     currentDate,
@@ -2156,7 +2190,7 @@ export function validateCpuTradeCandidateOnLeague({
   }
 
   const toCooldownBlock = findRecentCpuAcquisitionBlock({
-    leagueData,
+    leagueData: evaluationLeagueData,
     teamName: toTeamName,
     outgoingItems: toItems,
     currentDate,
@@ -2204,7 +2238,7 @@ export function validateCpuTradeCandidateOnLeague({
   };
 
   const toTeamView = evaluateTradeTeamImpact({
-    leagueData,
+    leagueData: evaluationLeagueData,
     userTeam: fromTeam,
     cpuTeam: toTeam,
     userTeamName: fromTeamName,
@@ -2226,7 +2260,7 @@ export function validateCpuTradeCandidateOnLeague({
   }
 
   const fromTeamView = evaluateTradeTeamImpact({
-    leagueData,
+    leagueData: evaluationLeagueData,
     userTeam: toTeam,
     cpuTeam: fromTeam,
     userTeamName: toTeamName,
@@ -2260,7 +2294,7 @@ export function validateCpuTradeCandidateOnLeague({
   };
 
   const executionValidation = validateTradeForExecution({
-    leagueData,
+    leagueData: evaluationLeagueData,
     userTeam: fromTeam,
     cpuTeam: toTeam,
     userItems: fromItems,
@@ -2309,6 +2343,7 @@ export function executeCpuTradeCandidateOnLeague({
   currentDate = "",
   tradeDeadlineDate = "",
   inOffseason = false,
+  recordsByTeam = null,
 } = {}) {
   const validation = validateCpuTradeCandidateOnLeague({
     leagueData,
@@ -2316,6 +2351,7 @@ export function executeCpuTradeCandidateOnLeague({
     currentDate,
     tradeDeadlineDate,
     inOffseason,
+    recordsByTeam,
   });
 
   if (!validation.ok) return validation;

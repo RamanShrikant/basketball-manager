@@ -114,11 +114,13 @@ const rosterRatingCache = new Map();
 const rankOnlyRatingCache = new Map();
 const powerContextCache = new Map();
 const tradeFinderImpactCache = new Map();
+let attachedRecordSignatureCache = new WeakMap();
 
 export function resetTradeFinderImpactSearchCaches({ keepPowerContext = true } = {}) {
   rosterRatingCache.clear();
   rankOnlyRatingCache.clear();
   tradeFinderImpactCache.clear();
+  attachedRecordSignatureCache = new WeakMap();
   try { resetFullTeamRatingCache(); } catch {}
   if (!keepPowerContext) powerContextCache.clear();
 }
@@ -291,6 +293,32 @@ function rosterRatingSignature(players = []) {
     .join("||");
 }
 
+function getAttachedTradeRecords(leagueData = {}) {
+  const cpuRecords = leagueData?.__cpuTradeRecords;
+  if (cpuRecords && typeof cpuRecords === "object") return cpuRecords;
+
+  const offseasonRecords = leagueData?.__offseasonTradeRecords;
+  return offseasonRecords && typeof offseasonRecords === "object" && Object.keys(offseasonRecords).length
+    ? offseasonRecords
+    : null;
+}
+
+function attachedTradeRecordsSignature(records = null) {
+  if (!records || typeof records !== "object") return "";
+  if (attachedRecordSignatureCache.has(records)) {
+    return attachedRecordSignatureCache.get(records);
+  }
+
+  const signature = Object.entries(records)
+    .map(([name, row]) =>
+      `${normalizeName(name)}:${toNum(row?.w, 0)}:${toNum(row?.l, 0)}:${toNum(row?.gp, 0)}:${toNum(row?.pf, 0)}:${toNum(row?.pa, 0)}`
+    )
+    .sort()
+    .join("|");
+  attachedRecordSignatureCache.set(records, signature);
+  return signature;
+}
+
 function gameplanRosterSignature(players = []) {
   return [...(players || [])]
     .map((p) =>
@@ -311,22 +339,25 @@ function leaguePowerSignature(leagueData, teams = []) {
     .sort()
     .join("##");
 
-  const attachedRecordPart = Object.entries(leagueData?.__offseasonTradeRecords || {})
-    .map(([name, row]) => `${normalizeName(name)}:${toNum(row?.w, 0)}:${toNum(row?.l, 0)}:${toNum(row?.gp, 0)}`)
-    .sort()
-    .join("|");
+  const attachedRecords = getAttachedTradeRecords(leagueData);
+  const attachedRecordPart = attachedTradeRecordsSignature(attachedRecords);
   const offseasonPart = [
     leagueData?.__offseasonTradeContext?.seasonYear || "",
     leagueData?.__offseasonTradeContext?.stage || "",
     leagueData?.__offseasonTradeContext?.currentPickIndex || 0,
   ].join("|");
+  const storagePart = attachedRecords
+    ? "attached-records"
+    : [
+        safeLocalStorageGet(RESULT_V3_INDEX_KEY) || "",
+        safeLocalStorageGet(SCHEDULE_KEY) || "",
+      ].join("::");
 
   return [
     rosterPart,
     attachedRecordPart,
     offseasonPart,
-    safeLocalStorageGet(RESULT_V3_INDEX_KEY) || "",
-    safeLocalStorageGet(SCHEDULE_KEY) || "",
+    storagePart,
   ].join("::");
 }
 
@@ -707,10 +738,8 @@ function loadResultsV3() {
 }
 
 function buildRecordMap(leagueData = null) {
-  const attached = leagueData?.__offseasonTradeRecords;
-  if (attached && typeof attached === "object" && Object.keys(attached).length) {
-    return attached;
-  }
+  const attached = getAttachedTradeRecords(leagueData);
+  if (attached) return attached;
   const schedule = loadSchedule();
   const results = loadResultsV3();
   const map = {};

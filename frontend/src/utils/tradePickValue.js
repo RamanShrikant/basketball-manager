@@ -281,11 +281,35 @@ function loadResultsV3() {
   return out;
 }
 
-function buildRecordMap(leagueData = null) {
-  const attached = leagueData?.__offseasonTradeRecords;
-  if (attached && typeof attached === "object" && Object.keys(attached).length) {
-    return attached;
+function getAttachedTradeRecords(leagueData = {}) {
+  const cpuRecords = leagueData?.__cpuTradeRecords;
+  if (cpuRecords && typeof cpuRecords === "object") return cpuRecords;
+
+  const offseasonRecords = leagueData?.__offseasonTradeRecords;
+  return offseasonRecords && typeof offseasonRecords === "object" && Object.keys(offseasonRecords).length
+    ? offseasonRecords
+    : null;
+}
+
+function attachedTradeRecordsSignature(records = null) {
+  if (!records || typeof records !== "object") return "";
+  if (attachedRecordSignatureCache.has(records)) {
+    return attachedRecordSignatureCache.get(records);
   }
+
+  const signature = Object.entries(records)
+    .map(([name, row]) =>
+      `${normalizeName(name)}:${toNum(row?.w, 0)}:${toNum(row?.l, 0)}:${toNum(row?.gp, 0)}:${toNum(row?.pf, 0)}:${toNum(row?.pa, 0)}`
+    )
+    .sort()
+    .join("|");
+  attachedRecordSignatureCache.set(records, signature);
+  return signature;
+}
+
+function buildRecordMap(leagueData = null) {
+  const attached = getAttachedTradeRecords(leagueData);
+  if (attached) return attached;
   const schedule = loadSchedule();
   const results = loadResultsV3();
   const map = {};
@@ -390,6 +414,7 @@ function getCachedAutoMinutes(teamName, players = []) {
 const rankCache = new Map();
 const liveBaseRowsCache = new Map();
 const pickTeamRatingCache = new Map();
+const attachedRecordSignatureCache = new WeakMap();
 
 let activePickBreakdownRow = null;
 let pickBreakdownCallCounter = 0;
@@ -500,15 +525,19 @@ function getPickCache(cache, key) {
 }
 
 function getPickStorageSignature(leagueData = {}) {
-  const attachedRecords = Object.entries(leagueData?.__offseasonTradeRecords || {})
-    .map(([name, row]) => `${normalizeName(name)}:${toNum(row?.w, 0)}:${toNum(row?.l, 0)}:${toNum(row?.gp, 0)}`)
-    .sort()
-    .join("|");
+  const attachedRecords = getAttachedTradeRecords(leagueData);
+  const attachedRecordPart = attachedTradeRecordsSignature(attachedRecords);
   const tradeContext = leagueData?.__offseasonTradeContext || {};
+  const storagePart = attachedRecords
+    ? "attached-records"
+    : [
+        safeLocalStorageGet(RESULT_V3_INDEX_KEY) || "",
+        safeLocalStorageGet(SCHEDULE_KEY) || "",
+      ].join("::");
+
   return [
-    safeLocalStorageGet(RESULT_V3_INDEX_KEY) || "",
-    safeLocalStorageGet(SCHEDULE_KEY) || "",
-    attachedRecords,
+    storagePart,
+    attachedRecordPart,
     tradeContext?.seasonYear || "",
     tradeContext?.stage || "",
     tradeContext?.currentPickIndex || 0,

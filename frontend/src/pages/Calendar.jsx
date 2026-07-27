@@ -3881,7 +3881,18 @@ function buildCpuTradeRecordsByTeam(scheduleSnapshot = {}, resultsSnapshot = {})
 
   const ensure = (teamName) => {
     if (!teamName) return null;
-    if (!map[teamName]) map[teamName] = { wins: 0, losses: 0, games: 0 };
+    if (!map[teamName]) {
+      map[teamName] = {
+        wins: 0,
+        losses: 0,
+        games: 0,
+        w: 0,
+        l: 0,
+        gp: 0,
+        pf: 0,
+        pa: 0,
+      };
+    }
     return map[teamName];
   };
 
@@ -3899,6 +3910,7 @@ function buildCpuTradeRecordsByTeam(scheduleSnapshot = {}, resultsSnapshot = {})
       const away = ensure(game.away);
       if (!home || !away) continue;
 
+      // Preserve the pre-existing generator-facing aliases exactly.
       home.games += 1;
       away.games += 1;
       if (homePts > awayPts) {
@@ -3907,6 +3919,34 @@ function buildCpuTradeRecordsByTeam(scheduleSnapshot = {}, resultsSnapshot = {})
       } else {
         away.wins += 1;
         home.losses += 1;
+      }
+
+      // Exact validation historically read only totals/winner from ResultsV3.
+      // Populate its fields from that same path so this speed optimization
+      // cannot broaden or otherwise change which standings results it sees.
+      const evaluationHomePts = Number(result?.totals?.home ?? result?.winner?.home);
+      const evaluationAwayPts = Number(result?.totals?.away ?? result?.winner?.away);
+      if (
+        !Number.isFinite(evaluationHomePts) ||
+        !Number.isFinite(evaluationAwayPts) ||
+        evaluationHomePts === evaluationAwayPts
+      ) {
+        continue;
+      }
+
+      home.gp += 1;
+      away.gp += 1;
+      home.pf += evaluationHomePts;
+      home.pa += evaluationAwayPts;
+      away.pf += evaluationAwayPts;
+      away.pa += evaluationHomePts;
+
+      if (evaluationHomePts > evaluationAwayPts) {
+        home.w += 1;
+        away.l += 1;
+      } else {
+        away.w += 1;
+        home.l += 1;
       }
     }
   }

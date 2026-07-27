@@ -238,6 +238,7 @@ function makeStats(existing = {}) {
     sameStateValidationCacheHits: finiteNumber(existing.sameStateValidationCacheHits, 0),
     sameStateAdmissionCacheHits: finiteNumber(existing.sameStateAdmissionCacheHits, 0),
     sameStatePeriodicCacheHits: finiteNumber(existing.sameStatePeriodicCacheHits, 0),
+    recordSnapshotValidationCalls: finiteNumber(existing.recordSnapshotValidationCalls, 0),
     acceptedIntoBank: finiteNumber(existing.acceptedIntoBank, 0),
     duplicateCandidates: finiteNumber(existing.duplicateCandidates, 0),
     rejectedCandidates: finiteNumber(existing.rejectedCandidates, 0),
@@ -996,6 +997,9 @@ export function addGeneratedCpuTradeCandidates({
       if (validation?.ok === false) state.stats.cachedAdmissionRejections += 1;
     } else {
       state.stats.exactEvaluations += 1;
+      if (context?.recordsByTeam && typeof context.recordsByTeam === "object") {
+        state.stats.recordSnapshotValidationCalls += 1;
+      }
       const validationStartedAt = cpuTradeNow();
       validation = validateCpuTradeCandidateOnLeague({
         leagueData: ensured.leagueData,
@@ -1003,6 +1007,7 @@ export function addGeneratedCpuTradeCandidates({
         currentDate: context?.currentDate || "",
         tradeDeadlineDate: context?.tradeDeadlineDate || "",
         inOffseason: Boolean(context?.inOffseason),
+        recordsByTeam: context?.recordsByTeam || null,
       });
       const validationMs = cpuTradeNow() - validationStartedAt;
       recordCpuTradeTiming("exactValidationMs", validationMs, { phase: "admission" });
@@ -1223,6 +1228,9 @@ export function executeDueCpuTradeFromBank({
     }
 
     if (testConfig?.dryRun) {
+      if (context?.recordsByTeam && typeof context.recordsByTeam === "object") {
+        state.stats.recordSnapshotValidationCalls += 1;
+      }
       const validationStartedAt = cpuTradeNow();
       const validation = validateCpuTradeCandidateOnLeague({
         leagueData: ensured.leagueData,
@@ -1230,6 +1238,7 @@ export function executeDueCpuTradeFromBank({
         currentDate: context?.currentDate || "",
         tradeDeadlineDate: context?.tradeDeadlineDate || "",
         inOffseason: Boolean(context?.inOffseason),
+        recordsByTeam: context?.recordsByTeam || null,
       });
       const validationMs = cpuTradeNow() - validationStartedAt;
       recordCpuTradeTiming("exactValidationMs", validationMs, { phase: "dry_run" });
@@ -1277,6 +1286,9 @@ export function executeDueCpuTradeFromBank({
       };
     }
 
+    if (context?.recordsByTeam && typeof context.recordsByTeam === "object") {
+      state.stats.recordSnapshotValidationCalls += 1;
+    }
     const executionStartedAt = cpuTradeNow();
     const result = executeCpuTradeCandidateOnLeague({
       leagueData: ensured.leagueData,
@@ -1284,6 +1296,7 @@ export function executeDueCpuTradeFromBank({
       currentDate: context?.currentDate || "",
       tradeDeadlineDate: context?.tradeDeadlineDate || "",
       inOffseason: Boolean(context?.inOffseason),
+      recordsByTeam: context?.recordsByTeam || null,
     });
     const executionMs = cpuTradeNow() - executionStartedAt;
     recordCpuTradeTiming("executionMs", executionMs, {
@@ -1439,6 +1452,9 @@ export function revalidateCpuTradeBankSlice({
       state.stats.sameStateValidationCacheHits += 1;
       state.stats.sameStatePeriodicCacheHits += 1;
     } else {
+      if (context?.recordsByTeam && typeof context.recordsByTeam === "object") {
+        state.stats.recordSnapshotValidationCalls += 1;
+      }
       const validationStartedAt = cpuTradeNow();
       validation = validateCpuTradeCandidateOnLeague({
         leagueData: ensured.leagueData,
@@ -1446,6 +1462,7 @@ export function revalidateCpuTradeBankSlice({
         currentDate: context?.currentDate || "",
         tradeDeadlineDate: context?.tradeDeadlineDate || "",
         inOffseason: Boolean(context?.inOffseason),
+        recordsByTeam: context?.recordsByTeam || null,
       });
       const validationMs = cpuTradeNow() - validationStartedAt;
       recordCpuTradeTiming("periodicRevalidationMs", validationMs, { phase: "periodic" });
