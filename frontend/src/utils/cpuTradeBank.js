@@ -4,6 +4,9 @@ import {
 } from "./tradeExecution.js";
 import { normalizeTeamName } from "./draftPicks.js";
 import {
+  validateCpuTradeCandidatesParallel,
+} from "../api/cpuTradeValidationPool.js";
+import {
   cpuTradeNow,
   recordCpuTradeTiming,
   recordCpuTradeValidation,
@@ -910,7 +913,7 @@ export function buildCpuTradeWorkerContext(state, context = {}, policy = {}) {
   };
 }
 
-export function addGeneratedCpuTradeCandidates({
+export async function addGeneratedCpuTradeCandidates({
   leagueData,
   response,
   context = {},
@@ -950,7 +953,64 @@ export function addGeneratedCpuTradeCandidates({
   state.stats.generationPasses += 1;
   state.stats.proposedCandidates += candidates.length;
 
-  for (const candidate of candidates.slice(0, limit)) {
+  const admissionCandidates = candidates.slice(0, limit);
+  const parallelPlan = [];
+  let parallelResultsByIndex = null;
+  let parallelFallbackReason = "";
+
+  for (let candidateIndex = 0; candidateIndex < admissionCandidates.length; candidateIndex += 1) {
+    const candidate = admissionCandidates[candidateIndex];
+    const fromTeamName = candidate?.fromTeamName || candidate?.sellerTeamName || candidate?.teamA || "";
+    const toTeamName = candidate?.toTeamName || candidate?.buyerTeamName || candidate?.teamB || "";
+    const signature = getCpuTradeCandidateSignature(candidate);
+
+    if (
+      !fromTeamName ||
+      !toTeamName ||
+      sameTeam(fromTeamName, userTeamName) ||
+      sameTeam(toTeamName, userTeamName) ||
+      existingSignatures.has(signature) ||
+      sameStateValidationCache.has(signature) ||
+      countBankEntriesForTeam(state.candidates, fromTeamName) >= MAX_BANK_ENTRIES_PER_TEAM ||
+      countBankEntriesForTeam(state.candidates, toTeamName) >= MAX_BANK_ENTRIES_PER_TEAM
+    ) {
+      continue;
+    }
+
+    parallelPlan.push({ candidateIndex, candidate });
+  }
+
+  if (parallelPlan.length >= 2) {
+    try {
+      const parallelRows = await validateCpuTradeCandidatesParallel({
+        leagueData: ensured.leagueData,
+        candidates: parallelPlan.map((row) => row.candidate),
+        currentDate: context?.currentDate || "",
+        tradeDeadlineDate: context?.tradeDeadlineDate || "",
+        inOffseason: Boolean(context?.inOffseason),
+        recordsByTeam: context?.recordsByTeam,
+      });
+
+      parallelResultsByIndex = new Map(
+        parallelPlan.map((row, index) => [row.candidateIndex, parallelRows[index]])
+      );
+      state.stats.exactEvaluations += parallelPlan.length;
+      if (context?.recordsByTeam && typeof context.recordsByTeam === "object") {
+        state.stats.recordSnapshotValidationCalls += parallelPlan.length;
+      }
+    } catch (error) {
+      parallelFallbackReason = error?.message || String(error || "parallel_validation_failed");
+      recordCpuTradeTiming("parallelValidationFallbackMs", 0, {
+        phase: "admission",
+        reason: parallelFallbackReason,
+        candidateCount: parallelPlan.length,
+      });
+      parallelResultsByIndex = null;
+    }
+  }
+
+  for (let candidateIndex = 0; candidateIndex < admissionCandidates.length; candidateIndex += 1) {
+    const candidate = admissionCandidates[candidateIndex];
     const fromTeamName = candidate?.fromTeamName || candidate?.sellerTeamName || candidate?.teamA || "";
     const toTeamName = candidate?.toTeamName || candidate?.buyerTeamName || candidate?.teamB || "";
 
@@ -996,30 +1056,49 @@ export function addGeneratedCpuTradeCandidates({
       state.stats.sameStateAdmissionCacheHits += 1;
       if (validation?.ok === false) state.stats.cachedAdmissionRejections += 1;
     } else {
-      state.stats.exactEvaluations += 1;
-      if (context?.recordsByTeam && typeof context.recordsByTeam === "object") {
-        state.stats.recordSnapshotValidationCalls += 1;
+      const parallelRow = parallelResultsByIndex?.get(candidateIndex) || null;
+
+      if (parallelRow?.result) {
+        validation = parallelRow.result;
+        recordCpuTradeValidation({
+          phase: "admission_parallel",
+          signature,
+          candidate,
+          leagueData: ensured.leagueData,
+          context,
+          result: validation,
+          durationMs: finiteNumber(parallelRow.durationMs, 0),
+        });
+      } else {
+        state.stats.exactEvaluations += 1;
+        if (context?.recordsByTeam && typeof context.recordsByTeam === "object") {
+          state.stats.recordSnapshotValidationCalls += 1;
+        }
+        const validationStartedAt = cpuTradeNow();
+        validation = validateCpuTradeCandidateOnLeague({
+          leagueData: ensured.leagueData,
+          candidate,
+          currentDate: context?.currentDate || "",
+          tradeDeadlineDate: context?.tradeDeadlineDate || "",
+          inOffseason: Boolean(context?.inOffseason),
+          recordsByTeam: context?.recordsByTeam || null,
+        });
+        const validationMs = cpuTradeNow() - validationStartedAt;
+        recordCpuTradeTiming("exactValidationMs", validationMs, {
+          phase: parallelFallbackReason ? "admission_serial_fallback" : "admission",
+          fallbackReason: parallelFallbackReason || null,
+        });
+        recordCpuTradeValidation({
+          phase: parallelFallbackReason ? "admission_serial_fallback" : "admission",
+          signature,
+          candidate,
+          leagueData: ensured.leagueData,
+          context,
+          result: validation,
+          durationMs: validationMs,
+        });
       }
-      const validationStartedAt = cpuTradeNow();
-      validation = validateCpuTradeCandidateOnLeague({
-        leagueData: ensured.leagueData,
-        candidate,
-        currentDate: context?.currentDate || "",
-        tradeDeadlineDate: context?.tradeDeadlineDate || "",
-        inOffseason: Boolean(context?.inOffseason),
-        recordsByTeam: context?.recordsByTeam || null,
-      });
-      const validationMs = cpuTradeNow() - validationStartedAt;
-      recordCpuTradeTiming("exactValidationMs", validationMs, { phase: "admission" });
-      recordCpuTradeValidation({
-        phase: "admission",
-        signature,
-        candidate,
-        leagueData: ensured.leagueData,
-        context,
-        result: validation,
-        durationMs: validationMs,
-      });
+
       rememberSameStateValidation(signature, validation);
     }
 

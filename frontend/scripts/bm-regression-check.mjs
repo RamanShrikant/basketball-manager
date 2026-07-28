@@ -37,6 +37,8 @@ const cpuTradeTelemetryPath = path.join(root, "src/utils/cpuTradeTelemetry.js");
 const cpuTradeTelemetry = await import(`${pathToFileURL(cpuTradeTelemetryPath).href}?check=${Date.now()}`);
 const cpuTradeSaveQueuePath = path.join(root, "src/utils/cpuTradeSaveQueue.js");
 const cpuTradeSaveQueue = await import(`${pathToFileURL(cpuTradeSaveQueuePath).href}?check=${Date.now()}`);
+const cpuTradeValidationProtocolPath = path.join(root, "src/utils/cpuTradeValidationProtocol.js");
+const cpuTradeValidationProtocol = await import(`${pathToFileURL(cpuTradeValidationProtocolPath).href}?check=${Date.now()}`);
 const {
   REGULAR_SEASON_MIN_STANDARD_PLAYERS,
   REGULAR_SEASON_MAX_STANDARD_PLAYERS,
@@ -75,8 +77,17 @@ includes("src/pages/Calendar.jsx", 'recordCpuTradeTiming("recordBuildMs"', "Cale
 includes("src/pages/Calendar.jsx", 'recordCpuTradeTiming("rosterRepairMs"', "Calendar measures post-trade roster repair.");
 includes("src/api/cpuTradeEngine.js", 'recordCpuTradeTiming("workerGenerationMs"', "CPU trade worker round-trip time is measured.");
 includes("src/api/cpuTradeEngine.js", "cancelCpuTradeWorkerGeneration", "CPU trade worker exposes explicit cancellation for stale generation work.");
-includes("src/api/cpuTradeEngine.js", "worker_reset_after_timeout", "Timed-out CPU trade workers are terminated so they cannot block later generation jobs.");
+includes("src/api/cpuTradeEngine.js", 'replaceWorkerSlot(slot.index, "request_timeout")', "Timed-out CPU trade requests replace only their affected generation worker.");
 includes("src/pages/Calendar.jsx", "foreground_superseded_background", "Foreground catch-up cancels obsolete background Pyodide work before launching.");
+includes("src/api/cpuTradeEngine.js", "MAX_GENERATION_WORKERS = 4", "V5B uses up to four persistent Pyodide generation workers on high-core desktops while scaling down on smaller systems.");
+includes("src/api/cpuTradeEngine.js", "getCpuCpuTradeCandidateBatch", "V5B exposes ordered parallel generation for independent exact-seed passes.");
+includes("src/api/cpuTradeEngine.js", "Promise.all(rowPromises)", "Each generation request is converted to an ordered fulfilled/error row so one failed worker cannot erase successful sibling results.");
+includes("src/api/cpuTradeEngine.js", 'cancelCpuTradeWorkerGeneration(reason = "superseded", requestId = null)', "Generation cancellation can target only the obsolete background request.");
+includes("src/pages/Calendar.jsx", "startCpuCpuTradeCandidateBatch", "Foreground replenishment launches future generation nonces concurrently without waiting for unused passes.");
+includes("src/pages/Calendar.jsx", "speculativeNonce === expectedNonce", "Parallel responses are consumed only when their exact generation nonce matches serial state.");
+includes("src/pages/Calendar.jsx", "trimCpuTradeGenerationResponse", "Speculative 120-candidate responses are trimmed to the serial policy budget before admission.");
+includes("src/pages/Calendar.jsx", "parallel_foreground_pass_fallback", "Any missing or mismatched parallel generation pass falls back to the original serial generator.");
+includes("src/utils/cpuTradeDiagnostics.js", "parallelGenerationPassesUsed", "Diagnostics report V5B parallel generation use and fallback coverage.");
 includes("src/pages/Calendar.jsx", "enqueueCpuTradeLeagueSave", "CPU trade state uses the serialized latest-only IndexedDB save queue.");
 includes("src/pages/Calendar.jsx", "await flushCpuTradeLeagueSaves()", "Calendar flushes queued CPU trade state before releasing simulation completion.");
 includes("public/workers/simWorkerV2.js", "if (initPromise) return initPromise;", "Simulation worker uses a single shared Pyodide initialization promise.");
@@ -95,6 +106,15 @@ includes("src/utils/cpuTradeBank.js", "recordSnapshotValidationCalls", "Diagnost
 includes("src/utils/tradeTeamImpact.js", "const cpuRecords = leagueData?.__cpuTradeRecords", "Team-impact rankings use the attached CPU-trade record snapshot without changing ranking formulas.");
 includes("src/utils/tradePickValue.js", "const cpuRecords = leagueData?.__cpuTradeRecords", "Draft-pick rankings use the same attached CPU-trade record snapshot.");
 includes("src/utils/cpuTradeDiagnostics.js", "recordSnapshotValidationCalls", "The CPU-trade report exposes live-record snapshot validation coverage.");
+includes("src/pages/Calendar.jsx", "prewarmCpuTradeValidationPool", "Calendar prewarms the persistent CPU-trade exact-validation worker pool.");
+includes("src/pages/Calendar.jsx", "await addGeneratedCpuTradeCandidates", "Calendar waits for deterministic ordered parallel admission validation.");
+includes("src/api/cpuTradeValidationPool.js", 'type: "sync-snapshot"', "Validation workers reuse a persistent trade-relevant league snapshot.");
+includes("src/api/cpuTradeValidationPool.js", "CPU_TRADE_VALIDATION_POOL_PARITY_MISMATCH", "Parallel validation falls back when serial-worker parity fails.");
+includes("src/workers/cpuTradeValidationWorker.js", "validateCpuTradeCandidateOnLeague", "Validation workers call the original exact evaluator rather than a rewritten formula.");
+includes("src/utils/cpuTradeBank.js", "validateCpuTradeCandidatesParallel", "CPU trade admission can exact-validate candidate batches in parallel.");
+includes("src/utils/cpuTradeBank.js", "admission_serial_fallback", "CPU trade admission preserves the V4 serial fallback path.");
+includes("src/utils/cpuTradeBank.js", "executeCpuTradeCandidateOnLeague", "Final trade execution still runs the original exact evaluator on the live main-thread league.");
+includes("src/utils/cpuTradeDiagnostics.js", "parallelValidationWallMs", "CPU-trade diagnostics expose parallel validation wall time.");
 includes("src/pages/Calendar.jsx", "w: 0,", "Calendar's prebuilt CPU-trade records include evaluator-compatible wins.");
 includes("src/pages/Calendar.jsx", "pf: 0,", "Calendar's prebuilt CPU-trade records include evaluator-compatible point differential inputs.");
 includes("src/pages/Calendar.jsx", "result?.totals?.home ?? result?.winner?.home", "Snapshot validation preserves the exact historical ResultsV3 score-read path.");
@@ -125,6 +145,60 @@ const {
   isCpuTradeWindowOpenDate,
 } = calendarTiming;
 const { prioritizeReverseCandidateRows, buildReverseRescueQueue } = reverseCoverage;
+const {
+  compactCpuTradeValidationResult,
+  cpuTradeValidationParityMatches,
+  mergeIndexedCpuTradeValidationResults,
+  partitionIndexedCpuTradeCandidates,
+} = cpuTradeValidationProtocol;
+
+const validationPartitions = partitionIndexedCpuTradeCandidates(["a", "b", "c", "d", "e"], 3);
+check(
+  "cpu_trade_parallel.partition_order",
+  JSON.stringify(validationPartitions) === JSON.stringify([
+    [{ index: 0, candidate: "a" }, { index: 3, candidate: "d" }],
+    [{ index: 1, candidate: "b" }, { index: 4, candidate: "e" }],
+    [{ index: 2, candidate: "c" }],
+  ]),
+  "Parallel exact validation partitions work while retaining original candidate indexes.",
+  JSON.stringify(validationPartitions)
+);
+
+const mergedValidationRows = mergeIndexedCpuTradeValidationResults(
+  [
+    { workerIndex: 0, results: [{ index: 0, result: { ok: true, evaluation: { score: 1 } }, durationMs: 2 }, { index: 3, result: { ok: false, staleCode: "x" }, durationMs: 3 }] },
+    { workerIndex: 1, results: [{ index: 1, result: { ok: true, evaluation: { score: 2 } }, durationMs: 4 }, { index: 4, result: { ok: true, evaluation: { score: 5 } }, durationMs: 5 }] },
+    { workerIndex: 2, results: [{ index: 2, result: { ok: true, evaluation: { score: 3 } }, durationMs: 6 }] },
+  ],
+  5
+);
+check(
+  "cpu_trade_parallel.merge_order",
+  mergedValidationRows.map((row) => row.result?.evaluation?.score || row.result?.staleCode).join("|") === "1|2|3|x|5",
+  "Parallel exact-validation results are restored to the original serial candidate order.",
+  JSON.stringify(mergedValidationRows)
+);
+
+const parityFixture = {
+  ok: true,
+  candidate: {
+    fromTeamName: "Alpha",
+    toTeamName: "Beta",
+    fromItems: [{ type: "player", teamName: "Alpha", player: { id: "p1", name: "One", overall: 99 } }],
+    toItems: [{ type: "pick", teamName: "Beta", pick: { id: "pick1", year: 2028, round: 1, ownerTeam: "Beta", originalTeam: "Beta" } }],
+  },
+  fromTeamView: { accepted: true, decision: "accept", score: 4, message: "yes", reasons: ["one"] },
+  toTeamView: { accepted: true, decision: "accept", score: 5, message: "yes", reasons: ["two"] },
+  evaluation: { accepted: true, decision: "accept", score: 9, reasons: ["one", "two"] },
+  requiresRosterRepairBeforeSimulation: false,
+};
+const compactParityFixture = compactCpuTradeValidationResult(parityFixture);
+check(
+  "cpu_trade_parallel.parity_projection",
+  cpuTradeValidationParityMatches(parityFixture, compactParityFixture),
+  "Worker result compaction preserves every field that controls CPU-trade admission decisions.",
+  JSON.stringify(compactParityFixture)
+);
 
 const scheduleTimingFixture = {
   "2026-10-21": [{ id: "G1", played: true }],

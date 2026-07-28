@@ -23,7 +23,7 @@ import {
   withCpuTradeTelemetrySuppressed,
 } from "./cpuTradeTelemetry.js";
 
-export const CPU_TRADE_DIAGNOSTICS_VERSION = "2026-07-27_speed_v3_same_state_cache";
+export const CPU_TRADE_DIAGNOSTICS_VERSION = "2026-07-28_speed_v5b_parallel_generation";
 export const CPU_TRADE_BASELINE_REPORT_KEY = "bm_cpu_trade_diagnostic_baseline_v1";
 
 const RATING_KEYS = [
@@ -782,7 +782,20 @@ export function buildCpuTradeDiagnosticReport(leagueData = {}, options = {}) {
       totalCpuTradeProcessingMs: finiteNumber(timings?.totalCpuTradeProcessingMs?.totalMs, 0),
       workerGenerationMs: finiteNumber(timings?.workerGenerationMs?.totalMs, 0),
       foregroundGenerationMs: finiteNumber(timings?.foregroundGenerationMs?.totalMs, 0),
+      parallelGenerationBatchMs: finiteNumber(timings?.parallelGenerationBatchMs?.totalMs, 0),
+      foregroundParallelGenerationBatchMs: finiteNumber(timings?.foregroundParallelGenerationBatchMs?.totalMs, 0),
+      parallelGenerationBatches: (telemetry?.generationJobs || []).filter((row) => row?.event === "parallel_batch_summary").length,
+      parallelGenerationPassesUsed: (telemetry?.generationJobs || []).filter((row) => row?.event === "parallel_foreground_pass_used").length,
+      parallelGenerationPassFallbacks: (telemetry?.generationJobs || []).filter((row) => row?.event === "parallel_foreground_pass_fallback").length,
+      parallelGenerationPassesDiscarded: (telemetry?.generationJobs || []).reduce(
+        (sum, row) => sum + (row?.event === "parallel_foreground_passes_discarded" ? finiteNumber(row?.count, 0) : 0),
+        0
+      ),
       exactValidationMs: finiteNumber(timings?.exactValidationMs?.totalMs, 0),
+      parallelValidationWallMs: finiteNumber(timings?.parallelValidationWallMs?.totalMs, 0),
+      parallelValidationWorkerComputeMs: finiteNumber(timings?.parallelValidationWorkerComputeMs?.totalMs, 0),
+      parallelValidationSnapshotSyncMs: finiteNumber(timings?.parallelValidationSnapshotSyncMs?.totalMs, 0),
+      parallelValidationFallbacks: finiteNumber(timings?.parallelValidationFallbackMs?.count, 0),
       recordBuildMs: finiteNumber(timings?.recordBuildMs?.totalMs, 0),
       rosterRepairMs: finiteNumber(timings?.rosterRepairMs?.totalMs, 0),
       feedSyncMs: finiteNumber(timings?.feedSyncMs?.totalMs, 0),

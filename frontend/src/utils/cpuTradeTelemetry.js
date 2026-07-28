@@ -1,4 +1,4 @@
-export const CPU_TRADE_TELEMETRY_VERSION = "2026-07-27_speed_v3_same_state_cache";
+export const CPU_TRADE_TELEMETRY_VERSION = "2026-07-28_speed_v5b_parallel_generation";
 
 const MAX_TIMING_SAMPLES = 600;
 const MAX_EVENT_ROWS = 500;
