@@ -43,7 +43,7 @@ function enforcePotentialFloorAfterProgression(league) {
 }
 
 
-const V23_CUMULATIVE_SHAPE = {
+const V24_CUMULATIVE_SHAPE = {
   97: [2, 4], 96: [4, 6], 95: [6, 8], 94: [8, 10], 93: [11, 13],
   92: [14, 16], 91: [17, 19], 90: [21, 23], 89: [24, 29], 88: [30, 35],
   87: [37, 42], 86: [45, 50], 85: [54, 59], 84: [62, 70], 83: [74, 82],
@@ -51,7 +51,7 @@ const V23_CUMULATIVE_SHAPE = {
   78: [175, 186], 77: [208, 219], 75: [290, 306], 74: [340, 358],
 };
 
-const V23_EXACT_MAX = {
+const V24_EXACT_MAX = {
   99: 1, 98: 2, 97: 3, 96: 3, 95: 3, 94: 3, 93: 4, 92: 4, 91: 4, 90: 5,
   89: 6, 88: 7, 87: 8, 86: 9, 85: 10, 84: 12, 83: 14, 82: 16, 81: 19,
   80: 22, 79: 26, 78: 30, 77: 35, 76: 42, 75: 50, 74: 55,
@@ -74,7 +74,7 @@ function auditFinalProgressionLeague(league) {
   const cumulative = {};
   const exact = {};
 
-  for (const [thresholdText, [min, max]] of Object.entries(V23_CUMULATIVE_SHAPE)) {
+  for (const [thresholdText, [min, max]] of Object.entries(V24_CUMULATIVE_SHAPE)) {
     const threshold = Number(thresholdText);
     const actual = values.filter((value) => value >= threshold).length;
     const ok = actual <= max;
@@ -82,7 +82,7 @@ function auditFinalProgressionLeague(league) {
     if (!ok) violations.push({ type: "cumulative_max", threshold, actual, max });
   }
 
-  for (const [rungText, max] of Object.entries(V23_EXACT_MAX)) {
+  for (const [rungText, max] of Object.entries(V24_EXACT_MAX)) {
     const rung = Number(rungText);
     const actual = values.filter((value) => value === rung).length;
     const hard = rung >= 90;
@@ -101,7 +101,7 @@ function auditFinalProgressionLeague(league) {
   }
 
   return {
-    version: "v23_final_saved_pool_hard_caps_2027_universe",
+    version: "v24_final_saved_pool_hard_caps_2027_universe",
     ok: violations.length === 0,
     playerCount: players.length,
     violations,
@@ -125,6 +125,53 @@ function prepareFinalShapeReconciliationLeague(league, beforeSnapshot, seasonYea
     if (isCurrentDraftClassRookie(player, seasonYear)) player.__skipProgressionCurrentRookie = true;
   }
   return next;
+}
+
+
+async function enforceFinalProgressionShapeUntilUiOk(league, beforeSnapshot, seasonYear, enforceShapeFn, runLabel = "progression") {
+  let updatedLeague = snapshotLeague(league);
+  let backendFinalAudit = null;
+  let savedPoolAudit = auditFinalProgressionLeague(enforcePotentialFloorAfterProgression(recomputeDerivedRatingsInLeague(snapshotLeague(updatedLeague))));
+  let finalShapeRes = null;
+
+  for (let pass = 0; pass < 5 && !savedPoolAudit.ok; pass += 1) {
+    const finalShapeInput = prepareFinalShapeReconciliationLeague(updatedLeague, beforeSnapshot, seasonYear);
+    const finalShapeMsg = await enforceShapeFn(finalShapeInput, {
+      seed: Number(seasonYear) * 1009 + 240 + pass,
+      seasonYear,
+      reconciliationPass: pass + 1,
+      runLabel,
+    });
+    finalShapeRes = finalShapeMsg?.league ? finalShapeMsg : finalShapeMsg?.payload;
+    if (!finalShapeRes?.league) {
+      throw new Error(`[${runLabel}] Final V24 saved-pool shape reconciliation returned no league.`);
+    }
+
+    backendFinalAudit = finalShapeRes?.debug?.hardShapeAudit || null;
+    if (!backendFinalAudit || backendFinalAudit.ok !== true) {
+      console.warn(`[${runLabel}] Backend final shape pass still reported violations; retrying against UI-visible pool.`, {
+        pass: pass + 1,
+        violations: backendFinalAudit?.violations || [],
+      });
+    }
+
+    updatedLeague = restoreCurrentDraftClassRookiesAfterProgression(finalShapeRes.league, beforeSnapshot, seasonYear);
+    updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
+    updatedLeague = restoreCurrentDraftClassRookiesAfterProgression(updatedLeague, beforeSnapshot, seasonYear);
+    updatedLeague = enforcePotentialFloorAfterProgression(updatedLeague);
+    savedPoolAudit = auditFinalProgressionLeague(updatedLeague);
+
+    if (!savedPoolAudit.ok) {
+      console.warn(`[${runLabel}] UI-visible final shape audit failed after pass ${pass + 1}; retrying.`, savedPoolAudit.violations || []);
+    }
+  }
+
+  return {
+    league: updatedLeague,
+    backendFinalAudit,
+    savedPoolAudit,
+    finalShapeResult: finalShapeRes,
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -2408,7 +2455,7 @@ export default function PlayerProgression() {
 
         const preliminaryHardShapeAudit = res?.debug?.shapeLock?.hardShapeAudit || null;
         if (!preliminaryHardShapeAudit || preliminaryHardShapeAudit.ok !== true) {
-          throw new Error(`[PlayerProgression] V23 preliminary hard-shape validation failed: ${JSON.stringify(preliminaryHardShapeAudit?.violations || [])}`);
+          console.warn(`[PlayerProgression] V24 preliminary hard-shape validation reported violations; final saved-pool reconciliation will retry.`, preliminaryHardShapeAudit?.violations || []);
         }
 
         let updatedLeague = restoreTwoWayBucketsAfterProgression(res.league, beforeSnapshot);
@@ -2447,30 +2494,18 @@ export default function PlayerProgression() {
         // V23 reconciliation runs on the exact post-React league that will be
         // saved. The original OVR marker keeps total yearly movement inside the
         // +4/-5 window, while rookie markers keep current draft picks untouched.
-        const finalShapeInput = prepareFinalShapeReconciliationLeague(updatedLeague, beforeSnapshot, seasonYear);
-        const finalShapeMsg = await enforceFinalProgressionShape(finalShapeInput, {
-          seed: Number(seasonYear) * 1009 + 23,
+        const finalShapeOutcome = await enforceFinalProgressionShapeUntilUiOk(
+          updatedLeague,
+          beforeSnapshot,
           seasonYear,
-        });
-        const finalShapeRes = finalShapeMsg?.league ? finalShapeMsg : finalShapeMsg?.payload;
-        if (!finalShapeRes?.league) {
-          throw new Error("[PlayerProgression] Final V23 saved-pool shape reconciliation returned no league.");
-        }
-        const backendFinalAudit = finalShapeRes?.debug?.hardShapeAudit || null;
-        if (!backendFinalAudit || backendFinalAudit.ok !== true) {
-          throw new Error(`[PlayerProgression] Final V23 backend hard-cap validation failed: ${JSON.stringify(backendFinalAudit?.violations || [])}`);
-        }
-
-        updatedLeague = restoreCurrentDraftClassRookiesAfterProgression(finalShapeRes.league, beforeSnapshot, seasonYear);
-        updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
-
-        // Literal final save guard: POT can never finish below OVR, and veteran
-        // POT represents current ability. Also removes temporary shape markers.
-        updatedLeague = enforcePotentialFloorAfterProgression(updatedLeague);
-
-        const savedPoolAudit = auditFinalProgressionLeague(updatedLeague);
-        if (!savedPoolAudit.ok) {
-          throw new Error(`[PlayerProgression] Final V23 UI-visible hard-cap validation failed: ${JSON.stringify(savedPoolAudit.violations || [])}`);
+          enforceFinalProgressionShape,
+          "PlayerProgression"
+        );
+        updatedLeague = finalShapeOutcome.league;
+        const backendFinalAudit = finalShapeOutcome.backendFinalAudit;
+        const savedPoolAudit = finalShapeOutcome.savedPoolAudit;
+        if (!savedPoolAudit?.ok) {
+          throw new Error(`[PlayerProgression] Final V24 UI-visible hard-cap validation failed after retries: ${JSON.stringify(savedPoolAudit?.violations || [])}`);
         }
         localStorage.setItem(
           PROGRESSION_SHAPE_AUDIT_KEY,

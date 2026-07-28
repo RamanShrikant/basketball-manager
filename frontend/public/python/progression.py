@@ -6,7 +6,7 @@ import random
 import math
 import datetime as _dt
 
-PROGRESSION_PY_VERSION = "2026-07-26_progression_v23_final_hard_caps_balanced_depth"
+PROGRESSION_PY_VERSION = "2026-07-28_progression_v24_organic_then_hard_caps"
 
 
 # -------------------------
@@ -299,7 +299,7 @@ def calc_overall_from_attrs(attrs: List[Any], pos: str) -> int:
     overall = max(60.0, min(99.0, overall))
     overall = int(math.floor(overall + 0.5))
 
-    num90 = sum(1 for v in a if float(v) > 90.0)
+    num90 = sum(1 for v in a if float(v) >= 90.0)
     if num90 >= 3:
         overall = min(99, overall + (num90 - 2))
 
@@ -2325,6 +2325,368 @@ def _is_shape_protected_item(item: Dict[str, Any]) -> bool:
     return bool(item.get("shape_protected")) or _is_current_draft_shape_protected(item.get("player"))
 
 
+
+# -------------------------
+# V24 organic player-level progression
+# -------------------------
+
+def _v24_age_expectation(age: int, overall: int) -> float:
+    """Organic age curve used before any league-shape bend.
+
+    Age guides probability, it does not dictate the result. The random roll below
+    can still send a young prospect down or an older player up in any one season.
+    """
+    age = _safe_int(age, 25)
+    if age <= 18:
+        base = 1.28
+    elif age == 19:
+        base = 1.12
+    elif age == 20:
+        base = 0.98
+    elif age == 21:
+        base = 0.82
+    elif age == 22:
+        base = 0.64
+    elif age == 23:
+        base = 0.46
+    elif age == 24:
+        base = 0.30
+    elif age == 25:
+        base = 0.16
+    elif age == 26:
+        base = 0.06
+    elif age == 27:
+        base = 0.00
+    elif age == 28:
+        base = -0.08
+    elif age == 29:
+        base = -0.18
+    elif age == 30:
+        base = -0.32
+    elif age == 31:
+        base = -0.50
+    elif age == 32:
+        base = -0.72
+    elif age == 33:
+        base = -0.96
+    elif age == 34:
+        base = -1.25
+    elif age == 35:
+        base = -1.60
+    elif age == 36:
+        base = -1.98
+    elif age == 37:
+        base = -2.35
+    elif age == 38:
+        base = -2.70
+    elif age == 39:
+        base = -3.02
+    else:
+        base = -3.28
+
+    # High ratings are harder to improve organically; low ratings are not doomed.
+    if overall >= 97:
+        base -= 0.42
+    elif overall >= 95:
+        base -= 0.28
+    elif overall >= 92:
+        base -= 0.16
+    elif overall >= 90:
+        base -= 0.08
+    elif overall < 68 and age <= 27:
+        base += 0.08
+    return base
+
+
+def _v24_potential_expectation(age: int, overall: int, potential: int) -> float:
+    gap = max(-8, _safe_int(potential, overall) - _safe_int(overall, 70))
+    age = _safe_int(age, 25)
+    if gap <= -2:
+        return -0.16
+    if gap <= 0:
+        return -0.06 if age <= 28 else 0.0
+    # POT is a probability shifter, not a promise. High gaps matter more while
+    # the player is still young; by late prime it mostly preserves variance.
+    if age <= 21:
+        return _clamp(0.075 * gap, 0.0, 0.95)
+    if age <= 24:
+        return _clamp(0.060 * gap, 0.0, 0.72)
+    if age <= 27:
+        return _clamp(0.042 * gap, 0.0, 0.46)
+    if age <= 29:
+        return _clamp(0.025 * gap, 0.0, 0.24)
+    return _clamp(0.010 * gap, 0.0, 0.10)
+
+
+def _v24_rating_tier_expectation(age: int, overall: int, potential: int) -> float:
+    # Natural resistance before league caps. This keeps the organic roll from
+    # constantly creating top-end inflation, while still letting rare stars pop.
+    gap = max(0, potential - overall)
+    if overall >= 97:
+        return -0.52 if gap < 2 else -0.32
+    if overall >= 95:
+        return -0.34 if gap < 4 else -0.18
+    if overall >= 92:
+        return -0.18 if gap < 5 else -0.04
+    if overall >= 90:
+        return -0.08 if gap < 4 else 0.02
+    if 70 <= overall <= 73 and age <= 27:
+        return 0.06
+    if 60 <= overall <= 69 and age <= 27:
+        return 0.05
+    return 0.0
+
+
+def _v24_random_event_adjustment(age: int, overall: int, potential: int, rng: random.Random) -> float:
+    gap = max(0, potential - overall)
+    roll = rng.random()
+    # Rare boom/bust layer. Anything can happen, but it is actually rare.
+    boom_chance = 0.010
+    bust_chance = 0.010
+    if age <= 24 and gap >= 8:
+        boom_chance += 0.018
+    if age <= 27 and gap >= 5:
+        boom_chance += 0.008
+    if overall >= 90:
+        boom_chance *= 0.55
+        bust_chance += 0.006
+    if age >= 33:
+        bust_chance += 0.018
+        boom_chance *= 0.55
+
+    if roll < boom_chance:
+        return rng.choice([0.75, 1.15, 1.65])
+    if roll > 1.0 - bust_chance:
+        return -rng.choice([0.75, 1.15, 1.65])
+    # Smaller yearly noise events.
+    if rng.random() < 0.055:
+        return rng.choice([-0.55, 0.55])
+    return 0.0
+
+
+def _v24_organic_sigma(p: Dict[str, Any], age: int, overall: int, potential: int, rng: random.Random) -> float:
+    # Wider than V23's table-based low/mid logic so repeated sims diverge.
+    if age <= 22:
+        sigma = 1.05
+    elif age <= 25:
+        sigma = 1.00
+    elif age <= 29:
+        sigma = 0.94
+    elif age <= 33:
+        sigma = 1.02
+    else:
+        sigma = 1.15
+    if overall >= 95:
+        sigma *= 0.72
+    elif overall >= 90:
+        sigma *= 0.84
+    elif overall < 74:
+        sigma *= 1.08
+    return sigma * _career_timing_sigma_mult(p, age, overall, potential, rng)
+
+
+def _v24_bound_delta(age: int, overall: int, potential: int, delta: int) -> int:
+    if age < 30:
+        lo = -3
+    elif age <= 33:
+        lo = -4
+    else:
+        lo = -5
+    gap = max(0, potential - overall)
+    if age <= 23 and potential >= 92 and gap >= 8:
+        hi = 4
+    elif age <= 24:
+        hi = 3
+    elif age <= 30:
+        hi = 2
+    else:
+        hi = 1
+    if overall >= 95:
+        hi = min(hi, 2)
+    elif overall >= 90:
+        hi = min(hi, 3)
+    return int(_clamp(delta, lo, hi))
+
+
+def _target_delta_for_player(
+    p: Dict[str, Any],
+    stats: Optional[Dict[str, Any]],
+    settings: Dict[str, Any],
+    rng: random.Random,
+    team_name: str = ""
+) -> int:
+    """V24 organic player-first progression.
+
+    This runs before league caps. Every player receives an individual probability
+    roll based on age, OVR, POT gap, a light career-timing profile, and randomness.
+    No current-season stats are used. The league-shape hard cap is a separate
+    final reconciliation step after these organic directions are decided.
+    """
+    age = _safe_int(p.get("age"), 25)
+    overall = int(_clamp(_safe_int(p.get("overall"), 70), 25, 99))
+    potential = int(_clamp(_safe_int(p.get("potential"), overall), 25, 99))
+
+    expected = 0.0
+    expected += _v24_age_expectation(age, overall)
+    expected += _v24_potential_expectation(age, overall, potential)
+    expected += _v24_rating_tier_expectation(age, overall, potential)
+    expected += _career_timing_expected_adjustment(p, age, overall, potential, rng)
+    expected += _v24_random_event_adjustment(age, overall, potential, rng)
+
+    sigma = _v24_organic_sigma(p, age, overall, potential, rng)
+    raw = expected + rng.gauss(0.0, sigma)
+    delta = _stoch_round(raw, rng)
+
+    # A second surprise coin can flip the direction for true variance. This is
+    # intentionally small: factors guide what is likely, but never make it fixed.
+    if rng.random() < 0.035:
+        delta += rng.choice([-1, 1])
+
+    return _v24_bound_delta(age, overall, potential, delta)
+
+
+def _apply_threshold_crossing_gates(
+    p: Dict[str, Any],
+    team_name: str,
+    before: int,
+    target: int,
+    stats: Optional[Dict[str, Any]],
+    settings: Dict[str, Any],
+    rng: random.Random,
+) -> int:
+    """V24 light individual plausibility gates.
+
+    These gates no longer decide the whole low/mid ecosystem. They only stop the
+    most unrealistic one-season band jumps before the final league cap pass.
+    """
+    age = _safe_int(p.get("age"), 25)
+    potential = _safe_int(p.get("potential"), before)
+    gap = max(0, potential - before)
+    if target <= before:
+        return int(_clamp(target, 60, 99))
+
+    # Extremely low players can rise, but only premium outliers should fly all
+    # the way into playable depth in one season.
+    if before < 68 and target >= 73:
+        chance = 0.06 + min(0.20, gap * 0.012) + (0.04 if age <= 22 else 0.0)
+        if rng.random() > chance:
+            target = min(target, 72)
+    if before < 70 and target >= 75:
+        chance = 0.04 + min(0.18, gap * 0.010) + (0.04 if age <= 22 else 0.0)
+        if rng.random() > chance:
+            target = min(target, 74)
+
+    # Low 70s should have a real chance to enter 74+, but 77+ remains uncommon.
+    if 70 <= before <= 73 and target >= 77:
+        chance = 0.08 + min(0.18, gap * 0.012) + (0.05 if age <= 23 else 0.0)
+        if rng.random() > chance:
+            target = min(target, 76)
+
+    # Role-player leaps into the 80s are possible, just not routine.
+    if 74 <= before <= 76 and target >= 80:
+        chance = 0.09 + min(0.18, gap * 0.012) + (0.05 if age <= 24 else 0.0)
+        if rng.random() > chance:
+            target = min(target, 79)
+    if 77 <= before <= 80 and target >= 83:
+        chance = 0.12 + min(0.18, gap * 0.014) + (0.05 if age <= 24 else 0.0)
+        if rng.random() > chance:
+            target = min(target, 82)
+
+    return int(_clamp(target, 60, 99))
+
+
+def _predict_dynamic_potential_after_progression(
+    old_age: int,
+    new_age: int,
+    old_overall: int,
+    new_overall: int,
+    old_potential: int,
+    settings: Dict[str, Any],
+    rng: random.Random,
+    player: Optional[Dict[str, Any]] = None,
+    team_name: str = "",
+    stats: Optional[Dict[str, Any]] = None,
+) -> int:
+    """V24 potential update based on age/OVR/career movement.
+
+    POT follows the supplied 2027 age-to-OVR relationship as a strong guideline,
+    but it reacts to the player's actual multi-season career direction. Breakouts
+    can reopen a ceiling; repeated stalls/declines slowly close it.
+    """
+    old_age = _safe_int(old_age, 25)
+    new_age = _safe_int(new_age, old_age + 1)
+    old_overall = int(_clamp(_safe_int(old_overall, 70), 25, 99))
+    new_overall = int(_clamp(_safe_int(new_overall, old_overall), 25, 99))
+    old_potential = int(_clamp(_safe_int(old_potential, max(old_overall, new_overall)), old_overall, 99))
+
+    if new_age >= 29:
+        return new_overall
+
+    anchor = predict_potential_from_age_and_overall(new_age, new_overall)
+    ovr_delta = new_overall - old_overall
+    player = player or {}
+    momentum = player.get("developmentMomentum") if isinstance(player.get("developmentMomentum"), dict) else {}
+    stalled = _safe_int(momentum.get("stalledYears"), 0)
+    decline = _safe_int(momentum.get("declineYears"), 0)
+    hot = _safe_int(momentum.get("hotYears"), 0)
+
+    # Start by blending old ceiling toward the age/OVR anchor.
+    pull = 0.12 if new_age <= 22 else 0.18 if new_age <= 25 else 0.28
+    raw = old_potential + (anchor - old_potential) * pull
+
+    # The actual progression result is important evidence, but never the only
+    # evidence. A one-year bad roll should not permanently crush a prospect.
+    if ovr_delta >= 4:
+        raw += 1.35
+    elif ovr_delta == 3:
+        raw += 0.95
+    elif ovr_delta == 2:
+        raw += 0.46
+    elif ovr_delta == 1:
+        raw += 0.12
+    elif ovr_delta <= -3:
+        raw -= 0.70
+    elif ovr_delta == -2:
+        raw -= 0.34
+    elif ovr_delta == -1:
+        raw -= 0.12
+
+    raw += min(0.45, hot * 0.10)
+    raw -= min(0.65, stalled * 0.10)
+    raw -= min(0.80, decline * 0.14)
+    raw += rng.gauss(0.0, 0.38 if new_age <= 23 else 0.30 if new_age <= 26 else 0.24)
+
+    candidate = _stoch_round(raw, rng)
+
+    # Ceiling cannot collapse too fast for young players, especially true high-upside guys.
+    if new_age <= 21:
+        max_drop = 1
+    elif new_age <= 23:
+        max_drop = 1 if old_potential >= 90 else 2
+    elif new_age <= 25:
+        max_drop = 2
+    elif new_age <= 27:
+        max_drop = 3
+    else:
+        max_drop = 4
+    candidate = max(candidate, old_potential - max_drop)
+
+    # Breakouts can create new upside even if the previous POT was stale/low.
+    if ovr_delta >= 3 and new_age <= 25:
+        candidate = max(candidate, new_overall + 2)
+    elif ovr_delta >= 2 and new_age <= 27:
+        candidate = max(candidate, new_overall + 1)
+
+    # Strong age/OVR relationship from the source roster: older players tighten,
+    # younger players keep room, and POT never displays below OVR.
+    hard_cap = _dynamic_potential_hard_cap(new_age, new_overall)
+    if old_potential >= 94 and new_age <= 23:
+        hard_cap = max(hard_cap, old_potential)
+    if ovr_delta >= 2:
+        hard_cap = max(hard_cap, min(99, new_overall + (4 if new_age <= 24 else 3)))
+
+    return int(_clamp(candidate, new_overall, min(99, hard_cap)))
+
 def _compute_raw_progression_plan(
     league: Dict[str, Any],
     stats_by_key: Optional[Dict[str, Dict[str, Any]]],
@@ -3915,7 +4277,7 @@ def _apply_v20_fine_shape_lock(
 # -------------------------
 # V23 final saved-pool hard league-shape lock
 # -------------------------
-_HARD_SHAPE_VERSION = "v23_final_saved_pool_hard_caps_2027_universe"
+_HARD_SHAPE_VERSION = "v24_final_saved_pool_hard_caps_2027_universe"
 
 
 def _hard_cumulative_spread(threshold: int) -> int:
