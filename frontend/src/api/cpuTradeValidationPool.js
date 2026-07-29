@@ -4,7 +4,14 @@ import {
   mergeIndexedCpuTradeValidationResults,
   partitionIndexedCpuTradeCandidates,
 } from "../utils/cpuTradeValidationProtocol.js";
-import { cpuTradeNow, recordCpuTradeTiming } from "../utils/cpuTradeTelemetry.js";
+import {
+  cpuTradeNow,
+  getCpuTradeRuntimeGauges,
+  isCpuTradeDeepTraceEnabled,
+  recordCpuTradeTiming,
+  recordCpuTradeTrace,
+  setCpuTradeRuntimeGauge,
+} from "../utils/cpuTradeTelemetry.js";
 
 const MAX_POOL_SIZE = 6;
 const MIN_POOL_SIZE = 2;
@@ -74,6 +81,22 @@ function makeWorkerSlot(index) {
     if (!pending) return;
     slot.pending.delete(response.requestId);
     clearTimeout(pending.timer);
+    if (pending.traceEnabled) {
+      const receivedAt = cpuTradeNow();
+      const receivedAtEpochMs = Date.now();
+      const diagnosticTiming = response?.diagnosticTiming || {};
+      response.__roundTripMs = Math.max(0, receivedAt - Number(pending.createdAt || receivedAt));
+      response.__queueDepthAtPost = Number(pending.queueDepthAtPost || 0);
+      response.__messageType = pending.messageType || "";
+      response.__queueAndInboundTransferMs = Math.max(
+        0,
+        Number(diagnosticTiming?.workerDequeuedAtEpochMs || 0) - Number(pending.createdAtEpochMs || 0)
+      );
+      response.__outboundTransferAndDispatchMs = Math.max(
+        0,
+        receivedAtEpochMs - Number(diagnosticTiming?.workerCompletedAtEpochMs || receivedAtEpochMs)
+      );
+    }
 
     if (response.type === "validate-batch-error") {
       pending.reject(new Error(response.error || "CPU trade validation worker failed"));
@@ -178,8 +201,29 @@ function postToSlot(slot, message, timeoutMs = DEFAULT_TIMEOUT_MS) {
       reject(new Error("CPU_TRADE_VALIDATION_POOL_TIMEOUT"));
     }, timeoutMs);
 
-    slot.pending.set(requestId, { resolve, reject, timer });
-    slot.worker.postMessage({ ...message, requestId });
+    const traceEnabled = isCpuTradeDeepTraceEnabled();
+    const postedAtEpochMs = traceEnabled ? Date.now() : 0;
+    slot.pending.set(requestId, {
+      resolve,
+      reject,
+      timer,
+      ...(traceEnabled
+        ? {
+            createdAt: cpuTradeNow(),
+            createdAtEpochMs: postedAtEpochMs,
+            queueDepthAtPost: slot.pending.size,
+            messageType: message?.type || "",
+            traceEnabled: true,
+          }
+        : {}),
+    });
+    slot.worker.postMessage({
+      ...message,
+      requestId,
+      ...(traceEnabled
+        ? { diagnosticsTraceEnabled: true, __diagnosticPostedAtEpochMs: postedAtEpochMs }
+        : {}),
+    });
   });
 }
 
@@ -198,9 +242,21 @@ async function syncSlotSnapshot(slot, snapshotKey, leagueData, storageEntries) {
   }
 
   slot.snapshotKey = snapshotKey;
-  recordCpuTradeTiming("parallelValidationSnapshotSyncMs", cpuTradeNow() - startedAt, {
+  const snapshotSyncMs = cpuTradeNow() - startedAt;
+  recordCpuTradeTiming("parallelValidationSnapshotSyncMs", snapshotSyncMs, {
     workerIndex: slot.index,
   });
+  if (isCpuTradeDeepTraceEnabled()) {
+    recordCpuTradeTrace("validation", "snapshot_synced", {
+      workerIndex: slot.index,
+      snapshotKey,
+      snapshotSyncMs,
+      workerRoundTripMs: Number(response?.__roundTripMs || 0),
+      queueAndInboundTransferMs: Number(response?.__queueAndInboundTransferMs || 0),
+      outboundTransferAndDispatchMs: Number(response?.__outboundTransferAndDispatchMs || 0),
+      queueDepthAtPost: Number(response?.__queueDepthAtPost || 0),
+    });
+  }
   return true;
 }
 
@@ -269,75 +325,154 @@ export async function validateCpuTradeCandidatesParallel({
   }
 
   const slots = availableSlots.slice(0, slotCount);
+  const traceEnabled = isCpuTradeDeepTraceEnabled();
+  const snapshotPreparationStartedAt = traceEnabled ? cpuTradeNow() : 0;
   const storageEntries = relevantStorageEntries(leagueData);
   const snapshotKey = buildSnapshotKey(leagueData, storageEntries);
   const leagueSnapshot = makeValidationLeagueSnapshot(leagueData);
+  const snapshotPreparationMs = traceEnabled
+    ? cpuTradeNow() - snapshotPreparationStartedAt
+    : 0;
   const wallStartedAt = cpuTradeNow();
 
-  await Promise.all(
-    slots.map((slot) =>
-      syncSlotSnapshot(slot, snapshotKey, leagueSnapshot, storageEntries)
-    )
-  );
+  if (traceEnabled) {
+    setCpuTradeRuntimeGauge("validationActiveWorkers", slots.length);
+    setCpuTradeRuntimeGauge("validationCandidateCount", rows.length);
+    recordCpuTradeTrace("validation", "batch_started", {
+      currentDate,
+      snapshotKey,
+      candidateCount: rows.length,
+      workerCount: slots.length,
+      snapshotPreparationMs,
+      storageEntryCount: storageEntries.length,
+      generationWorkload: getCpuTradeRuntimeGauges(),
+    });
+  }
 
-  const partitions = partitionIndexedCpuTradeCandidates(rows, slots.length);
-  const responses = await Promise.all(
-    slots.map((slot, index) =>
-      postToSlot(slot, {
-        type: "validate-batch",
+  try {
+    await Promise.all(
+      slots.map((slot) =>
+        syncSlotSnapshot(slot, snapshotKey, leagueSnapshot, storageEntries)
+      )
+    );
+
+    const partitions = partitionIndexedCpuTradeCandidates(rows, slots.length);
+    const responses = await Promise.all(
+      slots.map((slot, index) =>
+        postToSlot(slot, {
+          type: "validate-batch",
+          snapshotKey,
+          workerIndex: slot.index,
+          payload: {
+            candidates: partitions[index],
+            currentDate,
+            tradeDeadlineDate,
+            inOffseason,
+            recordsByTeam,
+          },
+        })
+      )
+    );
+
+    const merged = mergeIndexedCpuTradeValidationResults(responses, rows.length);
+    const wallMs = cpuTradeNow() - wallStartedAt;
+    const workerComputeMs = responses.reduce(
+      (sum, response) => sum + Number(response?.batchDurationMs || 0),
+      0
+    );
+
+    recordCpuTradeTiming("parallelValidationWallMs", wallMs, {
+      candidateCount: rows.length,
+      workerCount: slots.length,
+    });
+    recordCpuTradeTiming("parallelValidationWorkerComputeMs", workerComputeMs, {
+      candidateCount: rows.length,
+      workerCount: slots.length,
+    });
+    recordCpuTradeTiming("exactValidationMs", wallMs, {
+      phase: "admission_parallel",
+      candidateCount: rows.length,
+      workerCount: slots.length,
+    });
+
+    if (traceEnabled) {
+      const workerRoundTripMs = responses.reduce(
+        (sum, response) => sum + Number(response?.__roundTripMs || 0),
+        0
+      );
+      const queueAndInboundTransferMs = responses.reduce(
+        (sum, response) => sum + Number(response?.__queueAndInboundTransferMs || 0),
+        0
+      );
+      const outboundTransferAndDispatchMs = responses.reduce(
+        (sum, response) => sum + Number(response?.__outboundTransferAndDispatchMs || 0),
+        0
+      );
+      const queueAndTransferMsEstimate = Math.max(0, workerRoundTripMs - workerComputeMs);
+
+      recordCpuTradeTrace("validation", "batch_completed", {
+        currentDate,
         snapshotKey,
-        workerIndex: slot.index,
-        payload: {
-          candidates: partitions[index],
+        candidateCount: rows.length,
+        workerCount: slots.length,
+        snapshotPreparationMs,
+        wallMs,
+        workerComputeMs,
+        workerRoundTripMs,
+        queueAndTransferMsEstimate,
+        queueAndInboundTransferMs,
+        outboundTransferAndDispatchMs,
+        partitionSizes: partitions.map((partition) => partition.length),
+        workerRows: responses.map((response) => ({
+          workerIndex: response?.workerIndex ?? null,
+          batchDurationMs: Number(response?.batchDurationMs || 0),
+          roundTripMs: Number(response?.__roundTripMs || 0),
+          queueAndInboundTransferMs: Number(response?.__queueAndInboundTransferMs || 0),
+          outboundTransferAndDispatchMs: Number(response?.__outboundTransferAndDispatchMs || 0),
+          queueDepthAtPost: Number(response?.__queueDepthAtPost || 0),
+          resultCount: Array.isArray(response?.results) ? response.results.length : 0,
+        })),
+        generationWorkload: getCpuTradeRuntimeGauges(),
+      });
+    }
+
+    if (!parityCheckedSnapshots.has(snapshotKey)) {
+      const parityIndex = rows.findIndex(Boolean);
+      if (parityIndex >= 0) {
+        const serial = validateCpuTradeCandidateOnLeague({
+          leagueData,
+          candidate: rows[parityIndex],
           currentDate,
           tradeDeadlineDate,
           inOffseason,
           recordsByTeam,
-        },
-      })
-    )
-  );
+        });
 
-  const merged = mergeIndexedCpuTradeValidationResults(responses, rows.length);
-  const wallMs = cpuTradeNow() - wallStartedAt;
-  const workerComputeMs = responses.reduce(
-    (sum, response) => sum + Number(response?.batchDurationMs || 0),
-    0
-  );
-
-  recordCpuTradeTiming("parallelValidationWallMs", wallMs, {
-    candidateCount: rows.length,
-    workerCount: slots.length,
-  });
-  recordCpuTradeTiming("parallelValidationWorkerComputeMs", workerComputeMs, {
-    candidateCount: rows.length,
-    workerCount: slots.length,
-  });
-  recordCpuTradeTiming("exactValidationMs", wallMs, {
-    phase: "admission_parallel",
-    candidateCount: rows.length,
-    workerCount: slots.length,
-  });
-
-  if (!parityCheckedSnapshots.has(snapshotKey)) {
-    const parityIndex = rows.findIndex(Boolean);
-    if (parityIndex >= 0) {
-      const serial = validateCpuTradeCandidateOnLeague({
-        leagueData,
-        candidate: rows[parityIndex],
-        currentDate,
-        tradeDeadlineDate,
-        inOffseason,
-        recordsByTeam,
-      });
-
-      if (!cpuTradeValidationParityMatches(serial, merged[parityIndex].result)) {
-        disableCpuTradeValidationPool("serial_worker_parity_mismatch");
-        throw new Error("CPU_TRADE_VALIDATION_POOL_PARITY_MISMATCH");
+        if (!cpuTradeValidationParityMatches(serial, merged[parityIndex].result)) {
+          disableCpuTradeValidationPool("serial_worker_parity_mismatch");
+          throw new Error("CPU_TRADE_VALIDATION_POOL_PARITY_MISMATCH");
+        }
       }
+      parityCheckedSnapshots.add(snapshotKey);
     }
-    parityCheckedSnapshots.add(snapshotKey);
-  }
 
-  return merged;
+    return merged;
+  } catch (error) {
+    if (traceEnabled) {
+      recordCpuTradeTrace("validation", "batch_failed", {
+        currentDate,
+        snapshotKey,
+        candidateCount: rows.length,
+        workerCount: slots.length,
+        elapsedMs: cpuTradeNow() - wallStartedAt,
+        error: error?.message || String(error || ""),
+      });
+    }
+    throw error;
+  } finally {
+    if (traceEnabled) {
+      setCpuTradeRuntimeGauge("validationActiveWorkers", 0);
+      setCpuTradeRuntimeGauge("validationCandidateCount", 0);
+    }
+  }
 }

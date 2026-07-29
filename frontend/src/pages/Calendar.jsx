@@ -75,9 +75,11 @@ import {
   recordPreSimulationDiagnostics,
   recordSimulationPerformanceDiagnostics,
 } from "../utils/bmDiagnostics.js";
-import { ensureCpuTradeDiagnosticsSession } from "../utils/cpuTradeDiagnostics.js";
+import { buildCpuTradeDiagnosticReport, ensureCpuTradeDiagnosticsSession } from "../utils/cpuTradeDiagnostics.js";
 import {
   cpuTradeNow,
+  installCpuTradeTraceConsoleApi,
+  isCpuTradeDeepTraceEnabled,
   recordCpuTradeBankHealth,
   recordCpuTradeCompleted,
   recordCpuTradeFeedWrite,
@@ -85,6 +87,9 @@ import {
   recordCpuTradePass,
   recordCpuTradeRepair,
   recordCpuTradeTiming,
+  recordCpuTradeTrace,
+  shouldDisableCpuTradesForDiagnostics,
+  startCpuTradeMainThreadMonitor,
 } from "../utils/cpuTradeTelemetry.js";
 
 window.LZString = LZString;
@@ -1848,6 +1853,14 @@ export default function Calendar() {
       return config;
     };
 
+    installCpuTradeTraceConsoleApi(() => {
+      const currentLeague = window.__leagueData || leagueData || {};
+      return {
+        bankSummary: buildCpuTradeBankSummary(currentLeague),
+        diagnosticReport: buildCpuTradeDiagnosticReport(currentLeague, { runBenchmarks: false }),
+      };
+    });
+
     window.__cpuTradeBankDebug = {
       report: () => buildCpuTradeBankSummary(window.__leagueData || leagueData || {}),
       getState: () => (window.__leagueData || leagueData || {})?.cpuTradeBankState || null,
@@ -1892,6 +1905,7 @@ export default function Calendar() {
 
     return () => {
       if (window.__cpuTradeBankDebug) delete window.__cpuTradeBankDebug;
+      if (window.__cpuTradeTrace) delete window.__cpuTradeTrace;
     };
   }, [leagueData]);
 
@@ -3791,6 +3805,23 @@ function buildTeamsFromLeagueForSim(league) {
   }));
 }
 
+function buildCpuTradeRosterTrace(leagueData, teamNames = []) {
+  const requested = new Set((teamNames || []).filter(Boolean).map((name) => String(name)));
+  return getAllTeamsFromLeague(leagueData)
+    .filter((team) => !requested.size || requested.has(String(team?.name || team?.teamName || "")))
+    .map((team) => {
+      const evaluation = evaluateTeamSimulationRoster(team);
+      return {
+        teamName: evaluation.teamName,
+        standardCount: evaluation.standardCount,
+        twoWayCount: evaluation.twoWayCount,
+        pendingRookieCount: evaluation.pendingRookieCount,
+        simulationLegal: evaluation.ok,
+        issueCodes: (evaluation.issues || []).map((issue) => issue.code),
+      };
+    });
+}
+
 async function repairCpuRostersBeforeSimulation({
   leagueData,
   selectedTeam,
@@ -4484,6 +4515,27 @@ async function runCpuCpuTradePassForDate({
     };
   }
 
+  if (shouldDisableCpuTradesForDiagnostics()) {
+    if (generationJobRef?.current) {
+      const staleRequestId = generationJobRef.current?.requestId || null;
+      generationJobRef.current = null;
+      cancelCpuTradeWorkerGeneration("diagnostics_no_cpu_trades", staleRequestId);
+    }
+    recordCpuTradeTrace("control", "cpu_trade_pass_disabled", {
+      currentDate,
+      dayIndex,
+      tradeDeadlineDate,
+    });
+    return {
+      leagueData: activeLeagueData,
+      tradesMade: [],
+      bankChanged: false,
+      rosterChanged: false,
+      skippedReason: "diagnostics_no_cpu_trades",
+      bankSummary: buildCpuTradeBankSummary(activeLeagueData),
+    };
+  }
+
   // Critical performance/timing gate: once the deadline date is reached, do
   // not build season records, consume/revalidate bank candidates, or launch
   // Pyodide work. A pre-deadline background job may finish later; detaching it
@@ -4536,6 +4588,15 @@ async function runCpuCpuTradePassForDate({
   let bankChanged = false;
   let rosterChanged = false;
   const tradesMade = [];
+  const passTraceEnabled = isCpuTradeDeepTraceEnabled();
+  if (passTraceEnabled) {
+    recordCpuTradeTrace("bank", "pass_started", {
+      currentDate,
+      dayIndex,
+      daysToDeadline,
+      bankSummary: buildCpuTradeBankSummary(activeLeagueData),
+    });
+  }
 
   try {
     const initialized = ensureCpuTradeBankState(nextLeagueData, baseContext, testConfig);
@@ -4701,6 +4762,7 @@ async function runCpuCpuTradePassForDate({
       }
     }
 
+    const leagueDataBeforeCpuTradeExecution = nextLeagueData;
     const execution = executeDueCpuTradeFromBank({
       leagueData: nextLeagueData,
       context: baseContext,
@@ -4720,6 +4782,29 @@ async function runCpuCpuTradePassForDate({
     }
 
     if (execution?.executed && execution?.tradeRecord) {
+      const directlyTradedTeamNames = [
+        execution?.tradeRecord?.fromTeamName,
+        execution?.tradeRecord?.toTeamName,
+      ].filter(Boolean);
+      const rosterCountsBeforeTrade = passTraceEnabled
+        ? buildCpuTradeRosterTrace(leagueDataBeforeCpuTradeExecution, directlyTradedTeamNames)
+        : null;
+      const rosterCountsImmediatelyAfterTrade = passTraceEnabled
+        ? buildCpuTradeRosterTrace(nextLeagueData, directlyTradedTeamNames)
+        : null;
+      if (passTraceEnabled) {
+        recordCpuTradeTrace("repair", "post_trade_repair_started", {
+          currentDate,
+          dayIndex,
+          tradeId: execution?.tradeRecord?.id || execution?.tradeRecord?.bankId || "",
+          teams: directlyTradedTeamNames,
+          rosterCountsBeforeTrade,
+          rosterCountsImmediatelyAfterTrade,
+          repairQueueMs: null,
+          repairWorkerComputeMs: null,
+          timingScope: "main_thread_call_to_resolved_response",
+        });
+      }
       // A legal asymmetric trade may leave a CPU roster below the simulation
       // minimum. Repair it before announcing or persisting the completed trade,
       // so a failed repair cleanly rolls the whole pass back with no ghost feed.
@@ -4746,6 +4831,21 @@ async function runCpuCpuTradePassForDate({
       });
 
       if (postTradeRepair?.ok !== true) {
+        if (passTraceEnabled) {
+          recordCpuTradeTrace("repair", "post_trade_repair_failed", {
+            currentDate,
+            dayIndex,
+            tradeId: execution?.tradeRecord?.id || execution?.tradeRecord?.bankId || "",
+            teams: directlyTradedTeamNames,
+            rosterCountsBeforeTrade,
+            rosterCountsImmediatelyAfterTrade,
+            rosterCountsAfterRepair: buildCpuTradeRosterTrace(nextLeagueData, directlyTradedTeamNames),
+            totalBlockingMs: rosterRepairMs,
+            failedTeams: postTradeRepair?.failedTeams || [],
+            overMaxTeams: postTradeRepair?.overMaxTeams || [],
+            overTwoWayTeams: postTradeRepair?.overTwoWayTeams || [],
+          });
+        }
         throw new Error(
           `CPU roster repair failed after the trade: ${[
             ...(postTradeRepair?.failedTeams || []).map((row) => `${row.teamName} below minimum`),
@@ -4780,6 +4880,27 @@ async function runCpuCpuTradePassForDate({
         directlyTradedTeams,
         unrelatedTouchedTeams,
       });
+      if (passTraceEnabled) {
+        recordCpuTradeTrace("repair", "post_trade_repair_completed", {
+          currentDate,
+          dayIndex,
+          tradeId: execution?.tradeRecord?.id || execution?.tradeRecord?.bankId || "",
+          teams: directlyTradedTeams,
+          rosterCountsBeforeTrade,
+          rosterCountsImmediatelyAfterTrade,
+          rosterCountsAfterRepair: buildCpuTradeRosterTrace(nextLeagueData, directlyTradedTeams),
+          totalBlockingMs: rosterRepairMs,
+          repairQueueMs: null,
+          repairWorkerComputeMs: null,
+          timingScope: "main_thread_call_to_resolved_response",
+          moveCount: repairMoves.length,
+          signings: postTradeRepair?.signings || [],
+          droppedPlayers: postTradeRepair?.droppedPlayers || [],
+          twoWayAssignments: postTradeRepair?.twoWayAssignments || [],
+          touchedTeams: repairedTeamNames,
+          unrelatedTouchedTeams,
+        });
+      }
       for (const teamName of repairedTeamNames) {
         try {
           localStorage.removeItem(`gameplan_${teamName}`);
@@ -4979,6 +5100,7 @@ async function runCpuCpuTradePassForDate({
       currentDate,
       tradesCompleted: tradesMade.length,
     });
+    const completedBankSummary = buildCpuTradeBankSummary(nextLeagueData);
     recordCpuTradePass({
       currentDate,
       dayIndex,
@@ -4988,8 +5110,20 @@ async function runCpuCpuTradePassForDate({
       rosterChanged,
       burstDepth: cpuTradeBurstDepth,
       error: null,
-      bankSummary: buildCpuTradeBankSummary(nextLeagueData),
+      bankSummary: completedBankSummary,
     });
+    if (passTraceEnabled) {
+      recordCpuTradeTrace("bank", "pass_completed", {
+        currentDate,
+        dayIndex,
+        durationMs: totalCpuTradeProcessingMs,
+        tradesCompleted: tradesMade.length,
+        bankChanged,
+        rosterChanged,
+        burstDepth: cpuTradeBurstDepth,
+        bankSummary: completedBankSummary,
+      });
+    }
     return {
       leagueData: nextLeagueData,
       tradesMade,
@@ -5013,6 +5147,14 @@ async function runCpuCpuTradePassForDate({
       burstDepth: cpuTradeBurstDepth,
       error: error?.message || String(error || ""),
     });
+    if (passTraceEnabled) {
+      recordCpuTradeTrace("bank", "pass_failed", {
+        currentDate,
+        dayIndex,
+        durationMs: totalCpuTradeProcessingMs,
+        error: error?.message || String(error || ""),
+      });
+    }
     console.warn("[CPU Trade Bank] pass failed", error);
     return {
       leagueData: activeLeagueData,
@@ -5245,6 +5387,15 @@ setBoxModal(null);
   let simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
   let shouldGoToAwards = false;
   let pausedAtCheckpoint = false;
+  const simulationTraceEnabled = isCpuTradeDeepTraceEnabled();
+  const stopCpuTradeMainThreadMonitor = startCpuTradeMainThreadMonitor();
+  if (simulationTraceEnabled) {
+    recordCpuTradeTrace("simulation", "sim_to_date_started", {
+      targetDate: dateStr,
+      firstPendingDate: firstPendingTradeDate,
+      resumed: Boolean(resume),
+    });
+  }
 
   try {
 for (const d of sorted) {
@@ -5520,6 +5671,18 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
       }
     }
   } finally {
+    stopCpuTradeMainThreadMonitor();
+    if (simulationTraceEnabled) {
+      recordCpuTradeTrace("simulation", "sim_to_date_finishing", {
+        targetDate: dateStr,
+        elapsedMs: Date.now() - simulationPerf.startedAt,
+        gamesSimmed: simulationPerf.gamesSimmed,
+        cpuTradePasses: simulationPerf.cpuTradePasses,
+        cpuTradesCompleted: simulationPerf.cpuTradesCompleted,
+        stopped: Boolean(stopRef.current),
+        pausedAtCheckpoint,
+      });
+    }
     try {
       await flushCpuTradeLeagueSaves();
     } catch (error) {

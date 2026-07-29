@@ -8,7 +8,9 @@ import {
 } from "../api/cpuTradeValidationPool.js";
 import {
   cpuTradeNow,
+  isCpuTradeDeepTraceEnabled,
   recordCpuTradeTiming,
+  recordCpuTradeTrace,
   recordCpuTradeValidation,
 } from "./cpuTradeTelemetry.js";
 
@@ -757,9 +759,29 @@ export function getCpuTradeBankRunwayStatus(state, context = {}) {
   };
 }
 
+function traceCpuTradeBankPolicy(result, state = {}, context = {}) {
+  if (!isCpuTradeDeepTraceEnabled()) return result;
+  recordCpuTradeTrace("bank", "generation_policy", {
+    currentDate: context?.currentDate || "",
+    dayIndex: finiteNumber(context?.dayIndex, 0),
+    generationNonce: finiteNumber(state?.generationNonce, 0),
+    bankSize: Array.isArray(state?.candidates) ? state.candidates.length : 0,
+    completedTrades: finiteNumber(state?.completedTrades, 0),
+    targetTrades: finiteNumber(state?.targetTrades, 0),
+    shouldGenerate: Boolean(result?.shouldGenerate),
+    reason: result?.reason || "",
+    maxCandidates: finiteNumber(result?.maxCandidates, 0),
+    exactEvaluations: finiteNumber(result?.exactEvaluations, 0),
+    completionDeficit: finiteNumber(result?.completionDeficit ?? result?.runway?.completionDeficit, 0),
+    reserveDeficit: finiteNumber(result?.reserveDeficit ?? result?.runway?.reserveDeficit, 0),
+    inventoryPressure: finiteNumber(result?.inventoryPressure ?? result?.runway?.inventoryPressure, 0),
+  });
+  return result;
+}
+
 export function getCpuTradeBankGenerationPolicy(state, context = {}, testConfig = {}) {
   if (!state || !isBeforeDeadline(context)) {
-    return { shouldGenerate: false, reason: "timing_locked", maxCandidates: 0, exactEvaluations: 0 };
+    return traceCpuTradeBankPolicy({ shouldGenerate: false, reason: "timing_locked", maxCandidates: 0, exactEvaluations: 0 }, state, context);
   }
 
   const dayIndex = Math.max(0, Math.trunc(finiteNumber(context?.dayIndex, 0)));
@@ -788,14 +810,14 @@ export function getCpuTradeBankGenerationPolicy(state, context = {}, testConfig 
     inventoryPressure,
   } = runway;
   if (remainingTarget <= 0) {
-    return {
+    return traceCpuTradeBankPolicy({
       shouldGenerate: false,
       reason: "target_complete",
       maxCandidates: 0,
       exactEvaluations: 0,
       remainingTarget,
       runway,
-    };
+    }, state, context);
   }
 
   // Execution is intentionally late-weighted. Increase background work when
@@ -864,7 +886,7 @@ export function getCpuTradeBankGenerationPolicy(state, context = {}, testConfig 
     defaultExact = Math.min(defaultExact, daysToDeadline <= 14 ? 12 : 6);
   }
 
-  return {
+  return traceCpuTradeBankPolicy({
     shouldGenerate,
     reason: shouldGenerate ? (forced ? "forced" : "cadence") : "cadence_wait",
     cadence,
@@ -889,7 +911,7 @@ export function getCpuTradeBankGenerationPolicy(state, context = {}, testConfig 
       1,
       MAX_EXACT_EVALUATIONS_PER_PASS
     ),
-  };
+  }, state, context);
 }
 
 export function buildCpuTradeWorkerContext(state, context = {}, policy = {}) {
@@ -946,6 +968,19 @@ export async function addGeneratedCpuTradeCandidates({
     state
   );
   prepareSameStateValidationCache(validationCacheScope);
+  const bankSizeBeforeAdmission = state.candidates.length;
+  const traceEnabled = isCpuTradeDeepTraceEnabled();
+  if (traceEnabled) {
+    recordCpuTradeTrace("bank", "admission_started", {
+      currentDate: context?.currentDate || "",
+      dayIndex: finiteNumber(context?.dayIndex, 0),
+      generationNonce: finiteNumber(state?.generationNonce, 0),
+      proposedCandidates: candidates.length,
+      exactEvaluationLimit: limit,
+      bankSizeBefore: bankSizeBeforeAdmission,
+      workerDebug: response?.debug || null,
+    });
+  }
 
   const exactEvaluationsBefore = state.stats.exactEvaluations;
   const duplicatesBefore = state.stats.duplicateCandidates;
@@ -1141,6 +1176,23 @@ export async function addGeneratedCpuTradeCandidates({
     accepted: accepted.length,
     rejected: rejected.length,
   });
+  if (traceEnabled) {
+    recordCpuTradeTrace("bank", "admission_completed", {
+      currentDate: context?.currentDate || "",
+      dayIndex: finiteNumber(context?.dayIndex, 0),
+      consumedGenerationNonce: finiteNumber(state?.generationNonce, 1) - 1,
+      proposedCandidates: candidates.length,
+      processedCandidates: Math.min(candidates.length, limit),
+      acceptedCount: accepted.length,
+      rejectedCount: state.stats.rejectedCandidates - rejectionsBefore,
+      duplicateCount: state.stats.duplicateCandidates - duplicatesBefore,
+      exactEvaluationCount: state.stats.exactEvaluations - exactEvaluationsBefore,
+      bankSizeBefore: bankSizeBeforeAdmission,
+      bankSizeAfter: state.candidates.length,
+      admissionMs: generationConsumeMs,
+      parallelFallbackReason: parallelFallbackReason || null,
+    });
+  }
   state.stats.lastGeneration = {
     date: context?.currentDate || "",
     dayIndex: finiteNumber(context?.dayIndex, 0),
@@ -1220,6 +1272,18 @@ export function executeDueCpuTradeFromBank({
     candidates: [...ensured.state.candidates],
     stats: makeStats(ensured.state.stats),
   };
+
+  const executionTraceEnabled = isCpuTradeDeepTraceEnabled();
+  if (executionTraceEnabled) {
+    recordCpuTradeTrace("bank", "execution_check_started", {
+      currentDate: context?.currentDate || "",
+      dayIndex: finiteNumber(context?.dayIndex, 0),
+      selectionNonce: finiteNumber(state?.selectionNonce, 0),
+      bankSizeBefore: state.candidates.length,
+      completedTrades: finiteNumber(state?.completedTrades, 0),
+      targetTrades: finiteNumber(state?.targetTrades, 0),
+    });
+  }
 
   const userTeamName = getContextUserTeamName(context, ensured.leagueData);
   const candidatesBeforeUserLock = state.candidates.length;
@@ -1421,6 +1485,17 @@ export function executeDueCpuTradeFromBank({
     };
     state.stats.processingMs += Date.now() - startedAt;
     state.updatedAt = new Date().toISOString();
+    if (executionTraceEnabled) {
+      recordCpuTradeTrace("bank", "execution_completed", {
+        currentDate: context?.currentDate || "",
+        dayIndex: finiteNumber(context?.dayIndex, 0),
+        candidateId: candidate.bankId || candidate.id,
+        teams: [candidate.fromTeamName, candidate.toTeamName],
+        executionMs,
+        bankSizeAfter: state.candidates.length,
+        completedTrades: state.completedTrades,
+      });
+    }
 
     return {
       ...result,
@@ -1448,6 +1523,16 @@ export function executeDueCpuTradeFromBank({
   };
   state.stats.processingMs += Date.now() - startedAt;
   state.updatedAt = new Date().toISOString();
+  if (executionTraceEnabled) {
+    recordCpuTradeTrace("bank", "execution_deferred", {
+      currentDate: context?.currentDate || "",
+      dayIndex: finiteNumber(context?.dayIndex, 0),
+      reason: "no_valid_candidate",
+      removedCandidates: staleIds.size,
+      bankSizeAfter: state.candidates.length,
+      lastFailure: lastFailure?.reason || lastFailure?.staleCode || "",
+    });
+  }
 
   return {
     leagueData: {

@@ -9,8 +9,11 @@
 
 import {
   cpuTradeNow,
+  isCpuTradeDeepTraceEnabled,
   recordCpuTradeGenerationJob,
   recordCpuTradeTiming,
+  recordCpuTradeTrace,
+  setCpuTradeRuntimeGauge,
 } from "../utils/cpuTradeTelemetry.js";
 
 const MAX_GENERATION_WORKERS = 4;
@@ -20,6 +23,32 @@ let workerSlots = [];
 let counter = 0;
 const pending = new Map();
 const queuedRequestIds = [];
+
+function generationPoolSnapshot() {
+  const activeWorkers = workerSlots.filter((slot) => slot?.busy).length;
+  return {
+    workerCount: workerSlots.length,
+    activeWorkers,
+    idleWorkers: Math.max(0, workerSlots.length - activeWorkers),
+    queuedRequests: queuedRequestIds.length,
+    pendingRequests: pending.size,
+  };
+}
+
+function publishGenerationPoolGauges() {
+  const snapshot = generationPoolSnapshot();
+  if (isCpuTradeDeepTraceEnabled()) {
+    setCpuTradeRuntimeGauge("generationWorkerCount", snapshot.workerCount);
+    setCpuTradeRuntimeGauge("generationActiveWorkers", snapshot.activeWorkers);
+    setCpuTradeRuntimeGauge("generationQueuedRequests", snapshot.queuedRequests);
+    setCpuTradeRuntimeGauge("generationPendingRequests", snapshot.pendingRequests);
+  }
+  return snapshot;
+}
+
+export function getCpuTradeGenerationPoolStatus() {
+  return generationPoolSnapshot();
+}
 
 function desiredWorkerCount() {
   let hardware = 4;
@@ -132,6 +161,21 @@ function finishEntry(requestId, { payload = null, error = null, event = "fulfill
 
   const workerRoundTripMs = cpuTradeNow() - Number(entry.assignedAt || entry.createdAt || cpuTradeNow());
   const candidateCount = Array.isArray(payload?.candidates) ? payload.candidates.length : 0;
+  const traceEnabled = isCpuTradeDeepTraceEnabled();
+  const workerTiming = traceEnabled ? payload?.debug?.workerTiming || null : null;
+  const workerMeasuredMs = workerTiming
+    ? [
+        workerTiming.readyWaitMs,
+        workerTiming.inputSerializationMs,
+        workerTiming.pythonExecutionMs,
+        workerTiming.resultParseMs,
+        workerTiming.responsePreparationMs,
+      ].reduce((sum, value) => sum + Number(value || 0), 0)
+    : 0;
+  const resultTransferAndDispatchMsEstimate = traceEnabled
+    ? Math.max(0, workerRoundTripMs - workerMeasuredMs)
+    : 0;
+  const pool = traceEnabled ? publishGenerationPoolGauges() : null;
 
   recordCpuTradeTiming("workerGenerationMs", workerRoundTripMs, {
     requestId,
@@ -150,6 +194,25 @@ function finishEntry(requestId, { payload = null, error = null, event = "fulfill
     currentDate: entry?.context?.currentDate || "",
     error: error?.message || null,
   });
+  if (traceEnabled) {
+    recordCpuTradeTrace("generation", event, {
+      requestId,
+      workerIndex: entry.slotIndex,
+      generationNonce: entry?.context?.generationNonce ?? null,
+      currentDate: entry?.context?.currentDate || "",
+      reason: entry?.context?.generationReason || entry?.context?.reason || "",
+      requestedCandidates: entry?.context?.maxCandidates ?? null,
+      returnedCandidates: candidateCount,
+      queueWaitMs: Math.max(0, Number(entry.assignedAt || entry.createdAt || 0) - Number(entry.createdAt || 0)),
+      payloadPreparationMs: Number(entry.payloadPreparationMs || 0),
+      approximatePayloadBytes: Number(entry.approximatePayloadBytes || 0),
+      workerRoundTripMs,
+      workerTiming,
+      resultTransferAndDispatchMsEstimate,
+      pool,
+      error: error?.message || null,
+    });
+  }
 
   if (error) entry.reject(error);
   else entry.resolve(payload || { ok: true, candidates: [] });
@@ -209,6 +272,7 @@ function ensureWorkerPool() {
   while (workerSlots.length < target) {
     workerSlots.push(makeWorkerSlot(workerSlots.length));
   }
+  if (isCpuTradeDeepTraceEnabled()) publishGenerationPoolGauges();
   return workerSlots;
 }
 
@@ -247,6 +311,8 @@ function dispatchQueuedRequests() {
       dispatchQueuedRequests();
     }, REQUEST_TIMEOUT_MS);
 
+    const traceEnabled = isCpuTradeDeepTraceEnabled();
+    const assignedPool = traceEnabled ? publishGenerationPoolGauges() : null;
     recordCpuTradeGenerationJob({
       event: "assigned",
       requestId,
@@ -255,12 +321,24 @@ function dispatchQueuedRequests() {
       generationNonce: entry?.context?.generationNonce ?? null,
       currentDate: entry?.context?.currentDate || "",
     });
+    if (traceEnabled) {
+      recordCpuTradeTrace("generation", "assigned", {
+        requestId,
+        workerIndex: slot.index,
+        generationNonce: entry?.context?.generationNonce ?? null,
+        currentDate: entry?.context?.currentDate || "",
+        queueWaitMs: entry.assignedAt - Number(entry.createdAt || entry.assignedAt),
+        requestedCandidates: entry?.context?.maxCandidates ?? null,
+        pool: assignedPool,
+      });
+    }
 
     try {
       slot.worker.postMessage({
         type: "cpu-cpu-trade-candidates",
         requestId,
         payload: entry.payload,
+        ...(traceEnabled ? { diagnosticsTraceEnabled: true } : {}),
       });
     } catch (postError) {
       finishEntry(requestId, {
@@ -378,12 +456,16 @@ function enqueuePreparedRequest(compactLeague, context = {}, sharedDetails = {})
     assignedAt: null,
     slotIndex: null,
     status: "queued",
+    payloadPreparationMs,
+    approximatePayloadBytes,
     timer: null,
     resolve: resolvePromise,
     reject: rejectPromise,
   });
   queuedRequestIds.push(requestId);
 
+  const traceEnabled = isCpuTradeDeepTraceEnabled();
+  const launchedPool = traceEnabled ? publishGenerationPoolGauges() : null;
   recordCpuTradeGenerationJob({
     event: "launched",
     requestId,
@@ -394,6 +476,22 @@ function enqueuePreparedRequest(compactLeague, context = {}, sharedDetails = {})
     maxCandidates: context?.maxCandidates ?? null,
     sharedGenerationSnapshot: Boolean(sharedDetails.sharedGenerationSnapshot),
   });
+  if (traceEnabled) {
+    recordCpuTradeTrace("generation", "launched", {
+      requestId,
+      generationNonce: context?.generationNonce ?? null,
+      currentDate: context?.currentDate || "",
+      reason: context?.generationReason || context?.reason || "",
+      requestedCandidates: context?.maxCandidates ?? null,
+      bankSize: context?.bankSize ?? null,
+      remainingTarget: context?.remainingTarget ?? null,
+      payloadPreparationMs,
+      payloadCompactionMs: Number(sharedDetails.payloadCompactionMs || 0),
+      approximatePayloadBytes,
+      sharedGenerationSnapshot: Boolean(sharedDetails.sharedGenerationSnapshot),
+      pool: launchedPool,
+    });
+  }
 
   dispatchQueuedRequests();
   return promise;
@@ -472,6 +570,17 @@ export function startCpuCpuTradeCandidateBatch(leagueData, contexts = []) {
       generationNonces: rows.map((row) => row?.generationNonce ?? null),
       currentDate: rows[0]?.currentDate || "",
     });
+    if (isCpuTradeDeepTraceEnabled()) {
+      recordCpuTradeTrace("generation", "parallel_batch_summary", {
+        durationMs: batchWallMs,
+        passCount: rows.length,
+        fulfilledCount: fulfilled,
+        rejectedCount: rejected,
+        generationNonces: rows.map((row) => row?.generationNonce ?? null),
+        currentDate: rows[0]?.currentDate || "",
+        pool: publishGenerationPoolGauges(),
+      });
+    }
 
     return settledRows;
   });
