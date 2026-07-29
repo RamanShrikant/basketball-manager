@@ -128,6 +128,17 @@ includes("src/utils/cpuTradeDiagnostics.js", "staleStoredFeedTransactions", "Dia
 includes("src/utils/cpuTradeDiagnostics.js", "postDeadlineTradeCount", "Diagnostics audit post-deadline CPU trades.");
 includes("src/utils/cpuTradeDiagnostics.js", "changedPlayers", "Diagnostics audit regular-season rating drift.");
 includes("src/pages/Calendar.jsx", 'recordCpuTradeTiming("foregroundGenerationMs"', "Calendar measures foreground catch-up generation separately.");
+includes("src/utils/cpuTradeTelemetry.js", "MAX_TRACE_ROWS = 4000", "Deep CPU-trade diagnostics use a capped in-memory trace.");
+includes("src/utils/cpuTradeTelemetry.js", "installCpuTradeTraceConsoleApi", "Deep CPU-trade diagnostics expose one console export API.");
+includes("src/api/cpuTradeEngine.js", 'recordCpuTradeTrace("generation", "launched"', "Generation diagnostics record launch reason, nonce, payload, and worker-pool state.");
+includes("src/api/cpuTradeEngine.js", "...(traceEnabled ? { diagnosticsTraceEnabled: true } : {})", "Generation worker diagnostics are opt-in so the normal V5B worker message stays unchanged.");
+includes("public/workers/cpuTradeSeasonWorker.js", "Boolean(msg.diagnosticsTraceEnabled)", "The generation worker forwards the diagnostics flag into Python timing collection.");
+includes("src/api/cpuTradeValidationPool.js", "queueAndInboundTransferMs", "Exact-validation diagnostics separate queue/inbound transfer from worker compute.");
+includes("src/utils/cpuTradeBank.js", 'recordCpuTradeTrace("bank", "admission_completed"', "Bank diagnostics record inventory and admission outcomes.");
+includes("src/pages/Calendar.jsx", 'recordCpuTradeTrace("repair", "post_trade_repair_completed"', "Post-trade diagnostics record roster counts and mandatory repair completion.");
+includes("src/utils/cpuTradeSaveQueue.js", 'recordCpuTradeTrace("storage", "save_enqueued"', "Save diagnostics record queue depth, payload estimate, and write timing.");
+includes("src/pages/Calendar.jsx", "startCpuTradeMainThreadMonitor", "Sim To Date can record long tasks and event-loop delay without console spam.");
+includes("src/pages/Calendar.jsx", "shouldDisableCpuTradesForDiagnostics", "The no-CPU-trades floor control is explicit and diagnostics-only.");
 includes("src/pages/Calendar.jsx", 'recordCpuTradeTiming("feedHistorySyncMs"', "Calendar measures canonical Trade Desk feed synchronization.");
 includes("src/utils/bmDiagnostics.js", "cpuTradeSummary()", "Diagnostics preserve the compact reliability report alongside the demon report.");
 includes("src/utils/cpuTradeTelemetry.js", "candidateSnapshot = safeClone(candidate)", "Package replay captures immutable candidate and league snapshots.");
@@ -283,6 +294,44 @@ check(
   "CPU trade telemetry accumulates exact-validation counts and timing without mutating trade logic.",
   JSON.stringify(telemetrySnapshot?.metrics?.exactValidationMs || {})
 );
+
+const traceDefaultConfig = cpuTradeTelemetry.getCpuTradeTraceConfig();
+check(
+  "cpu_trade_trace.default_off",
+  traceDefaultConfig.enabled === false && cpuTradeTelemetry.shouldDisableCpuTradesForDiagnostics() === false,
+  "Deep tracing and the no-CPU-trades control remain disabled by default.",
+  JSON.stringify(traceDefaultConfig)
+);
+
+cpuTradeTelemetry.resetCpuTradeDeepTrace({ label: "regression-trace", noCpuTrades: true });
+for (let index = 0; index < 4005; index += 1) {
+  cpuTradeTelemetry.recordCpuTradeTrace("regression", "row", { index });
+}
+const cappedTrace = cpuTradeTelemetry.getCpuTradeDeepTraceSnapshot({ fixture: true });
+check(
+  "cpu_trade_trace.capped",
+  cappedTrace.rowCount === 4000 && cappedTrace.droppedRows === 6 && cappedTrace.events[0]?.sequence === 7,
+  "Deep tracing caps memory at 4,000 rows while retaining monotonic sequence numbers.",
+  JSON.stringify({ rowCount: cappedTrace.rowCount, droppedRows: cappedTrace.droppedRows, firstSequence: cappedTrace.events[0]?.sequence })
+);
+check(
+  "cpu_trade_trace.no_trades_opt_in",
+  cpuTradeTelemetry.shouldDisableCpuTradesForDiagnostics() === true,
+  "The game-simulation floor control activates only through an explicit deep-trace option."
+);
+const exportedTrace = cpuTradeTelemetry.exportCpuTradeDeepTrace({ download: false, context: { fixture: "regression" } });
+check(
+  "cpu_trade_trace.export",
+  exportedTrace?.trace?.context?.fixture === "regression" && exportedTrace?.trace?.events?.length === 4000 && !exportedTrace?.telemetry?.deepTrace,
+  "One export command returns the capped trace once together with the existing CPU-trade telemetry snapshot."
+);
+cpuTradeTelemetry.stopCpuTradeDeepTrace();
+check(
+  "cpu_trade_trace.stop_restores_default",
+  cpuTradeTelemetry.getCpuTradeTraceConfig().enabled === false && cpuTradeTelemetry.shouldDisableCpuTradesForDiagnostics() === false,
+  "Stopping diagnostics restores normal CPU-trade behavior."
+);
+cpuTradeTelemetry.resetCpuTradeTelemetry({ sessionKey: "regression-test", note: "post-trace-test" });
 
 const benchmarkCandidateFixture = {
   fromTeamName: "Alpha",

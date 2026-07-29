@@ -61,11 +61,29 @@ function installWorkerGlobals(entries = []) {
 self.onmessage = (event) => {
   const message = event.data || {};
   const requestId = message.requestId;
+  const traceEnabled = Boolean(message.diagnosticsTraceEnabled);
+  const workerDequeuedAtEpochMs = traceEnabled ? Date.now() : 0;
+  const diagnosticPostedAtEpochMs = traceEnabled
+    ? Number(message.__diagnosticPostedAtEpochMs || 0)
+    : 0;
+
+  const diagnosticTiming = () =>
+    traceEnabled
+      ? {
+          postedAtEpochMs: diagnosticPostedAtEpochMs || null,
+          workerDequeuedAtEpochMs,
+          workerCompletedAtEpochMs: Date.now(),
+        }
+      : undefined;
 
   try {
     if (message.type === "prewarm") {
       installWorkerGlobals([]);
-      self.postMessage({ type: "prewarm-ready", requestId });
+      self.postMessage({
+        type: "prewarm-ready",
+        requestId,
+        ...(traceEnabled ? { diagnosticTiming: diagnosticTiming() } : {}),
+      });
       return;
     }
 
@@ -77,6 +95,7 @@ self.onmessage = (event) => {
         type: "snapshot-ready",
         requestId,
         snapshotKey: activeSnapshotKey,
+        ...(traceEnabled ? { diagnosticTiming: diagnosticTiming() } : {}),
       });
       return;
     }
@@ -115,6 +134,7 @@ self.onmessage = (event) => {
       snapshotKey,
       workerIndex: Number(message.workerIndex ?? -1),
       batchDurationMs: now() - batchStartedAt,
+      ...(traceEnabled ? { diagnosticTiming: diagnosticTiming() } : {}),
       results,
     });
   } catch (error) {
@@ -122,6 +142,7 @@ self.onmessage = (event) => {
       type: "validate-batch-error",
       requestId,
       error: error?.message || String(error || "CPU trade validation worker failed"),
+      ...(traceEnabled ? { diagnosticTiming: diagnosticTiming() } : {}),
     });
   }
 };
