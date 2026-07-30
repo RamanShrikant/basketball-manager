@@ -2021,8 +2021,8 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
 
     return (
       <div
-        className="relative isolate w-full max-w-full overflow-hidden rounded-xl border border-white/15 bg-black pr-7"
-        style={{ height: t.cardHeight, minWidth: 0, boxSizing: "border-box" }}
+        className="relative isolate h-full w-full max-w-full overflow-hidden rounded-xl border border-white/15 bg-black pr-7"
+        style={{ minHeight: t.cardHeight, minWidth: 0, boxSizing: "border-box" }}
       >
         <TeamLogoWatermark team={team} />
         <button
@@ -2124,7 +2124,7 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
   const pickOriginalTeam = getPickOriginalTeamLogoTeam(leagueData, item.pick, team);
 
   return (
-    <div className="relative isolate h-full overflow-hidden rounded-xl border border-white/15 bg-black px-3 py-2">
+    <div className="relative isolate h-full min-h-[76px] overflow-hidden rounded-xl border border-white/15 bg-black px-3 py-2">
       <TeamLogoWatermark team={pickOriginalTeam} />
       <button
         onClick={(e) => {
@@ -2149,7 +2149,7 @@ function EmptySlot({ label, onClick }) {
       type="button"
       onClick={onClick}
       disabled={!onClick}
-      className="h-[76px] w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-left transition hover:border-orange-400/45 disabled:cursor-default disabled:border-white/8 disabled:bg-white/[0.015] disabled:opacity-45"
+      className="h-full min-h-[76px] w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-left transition hover:border-orange-400/45 disabled:cursor-default disabled:border-white/8 disabled:bg-white/[0.015] disabled:opacity-45"
     >
       <div className="text-sm font-black text-white">{label}</div>
       <div className="mt-1 text-[10px] font-semibold text-neutral-500">Player or Pick</div>
@@ -2163,7 +2163,7 @@ function AddAssetButton({ onClick, disabled }) {
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="h-[76px] w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-left transition hover:border-orange-400/45 disabled:cursor-not-allowed disabled:opacity-40"
+      className="h-full min-h-[76px] w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-left transition hover:border-orange-400/45 disabled:cursor-not-allowed disabled:opacity-40"
     >
       <div className="text-sm font-black text-white">Add Trade Item</div>
       <div className="mt-1 text-[10px] font-semibold text-neutral-500">Player or Pick</div>
@@ -2416,7 +2416,7 @@ function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incoming
             <div
               key={`${side}-${key}`}
               className="w-full min-w-0 overflow-hidden"
-              style={{ height: TRADE_PLAYER_CARD_TUNING.cardHeight }}
+              style={{ minHeight: TRADE_PLAYER_CARD_TUNING.cardHeight }}
             >
               {item ? (
                 <TradeItemCard

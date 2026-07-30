@@ -805,7 +805,7 @@ const teamRoster = read("public/python/team_roster_logic.py");
 const cpuTrade = read("public/python/cpu_cpu_trade_logic.py");
 const cpuTradeBank = read("src/utils/cpuTradeBank.js");
 const tradeDeskFeed = read("src/utils/tradeDeskFeed.js");
-check("cpu_trade_bank.version8", cpuTradeBank.includes("CPU_TRADE_BANK_VERSION = 8"), "CPU trade bank schema resets old exact-target inventory for the bounded continuous market.");
+check("cpu_trade_bank.version12", cpuTradeBank.includes("CPU_TRADE_BANK_VERSION = 12"), "CPU trade bank schema matches the current bounded continuous-market persistence version.");
 check("cpu_trade_bank.bounded_runway", cpuTradeBank.includes("upcomingSlots + 1") && cpuTradeBank.includes("lateOptionalInventoryLocked"), "CPU trade inventory covers upcoming organic slots without trying to stock every remaining target trade.");
 check("cpu_trade_bank.runway_status", cpuTradeBank.includes("getCpuTradeBankRunwayStatus") && cpuTradeBank.includes("foregroundRecommended"), "CPU trade bank exposes runway/foreground inventory pressure signals.");
 check("calendar.single_organic_execution", !read("src/pages/Calendar.jsx").includes("getCpuTradeExecutionBurstLimit") && !read("src/pages/Calendar.jsx").includes("countCpuTradeSlotsDueToday"), "Calendar executes at most one organic CPU trade slot per simulated date.");

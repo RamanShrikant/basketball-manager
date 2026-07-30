@@ -100,28 +100,16 @@ export function getCompletedSeasonYearForArchive(leagueData, fmvpRaw) {
   return FIRST_PLAYABLE_SEASON_YEAR + 1;
 }
 
-function deleteResultKeysInBatches(keys = [], batchSize = 100) {
-  const queue = Array.from(new Set((keys || []).filter(Boolean)));
-  const runBatch = () => {
-    const batch = queue.splice(0, batchSize);
-    for (const key of batch) {
-      try { localStorage.removeItem(key); } catch {}
-    }
-    if (queue.length) setTimeout(runBatch, 0);
-  };
-  if (queue.length) setTimeout(runBatch, 0);
-}
-
 function clearSeasonStores() {
-  let indexedResultKeys = [];
-  try {
-    const rawIndex = JSON.parse(localStorage.getItem(RESULT_V3_INDEX_KEY) || "[]");
-    if (Array.isArray(rawIndex)) indexedResultKeys = rawIndex.map((id) => `${RESULT_V3_PREFIX}${id}`);
-  } catch {}
+  // Delete the actual result payloads synchronously before dropping the index.
+  // The previous deferred cleanup could be interrupted by a reload/navigation,
+  // leaving 1,230 invisible prior-season keys that consumed localStorage until
+  // the Year-2 awards save failed with QuotaExceededError.
+  for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+    const key = localStorage.key(i);
+    if (key?.startsWith(RESULT_V3_PREFIX)) localStorage.removeItem(key);
+  }
 
-  // Remove the small reachability/index keys immediately so the new offseason
-  // cannot see the completed season. Large per-game cleanup is deferred in
-  // batches so the navigation click never blocks on 1,200+ localStorage writes.
   localStorage.removeItem("bm_postseason_v2");
   localStorage.removeItem("bm_champ_v1");
   localStorage.removeItem(SCHED_KEY);
@@ -130,13 +118,6 @@ function clearSeasonStores() {
   localStorage.removeItem(RESULT_V2_BLOB_KEY);
   localStorage.removeItem(RESULT_V3_INDEX_KEY);
 
-  if (!indexedResultKeys.length) {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const key = localStorage.key(i);
-      if (key?.startsWith(RESULT_V3_PREFIX)) indexedResultKeys.push(key);
-    }
-  }
-  deleteResultKeysInBatches(indexedResultKeys);
   clearBoxScoresFromDB().catch((error) => {
     if (typeof window !== "undefined" && window.__debugSimLogs) {
       console.warn("[OffseasonCleanup] box-score cleanup failed", error);

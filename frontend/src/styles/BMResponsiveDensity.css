@@ -601,6 +601,10 @@ html[data-bm-route="player-retirements"] .py-16 {
     max-height: 92px;
   }
 
+  html[data-bm-route="propose-trade"] .bmTradeSideAssetGrid > * > * {
+    height: 100% !important;
+  }
+
   /* Keep controls and headings anchored while data beneath them scrolls. */
   .bmTableScroller thead {
     position: sticky;

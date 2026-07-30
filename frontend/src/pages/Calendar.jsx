@@ -25,6 +25,7 @@ import {
 } from "../utils/cpuTradeBank.js";
 import {
   TRADE_DESK_FEED_KEY,
+  PLAYER_MOOD_EVENT_BUS_KEY,
   appendTradeDeskEntries,
   appendPlayerMoodEvents,
   appendTradeDeskMoodEventsFromEntries,
@@ -2587,6 +2588,14 @@ function isQuotaError(err) {
   );
 }
 
+function clearNonCriticalQuotaCaches() {
+  try { removeLegacyResultsBlob(); } catch {}
+  try { localStorage.removeItem(PLAYER_MOOD_EVENT_BUS_KEY); } catch {}
+  // bm_awards_latest duplicated bm_awards_v1 but had no readers. Clear any
+  // legacy copy first so critical current-season saves always win the quota.
+  try { localStorage.removeItem("bm_awards_latest"); } catch {}
+}
+
 function hasBoxRows(slim) {
   return !!(
     slim?.box &&
@@ -2598,20 +2607,17 @@ function hasBoxRows(slim) {
 function compactResultForCalendar(slim) {
   if (!slim) return null;
 
+  // localStorage is only the synchronous score/index layer. The complete box
+  // score (including periods and frozen rotation order) already lives in
+  // IndexedDB, so duplicating those fields for all 1,230 games wastes enough
+  // space to hit the browser quota in later seasons.
   return {
     winner: slim.winner || null,
     totals: slim.totals || {
       home: Number(slim?.winner?.home || 0),
       away: Number(slim?.winner?.away || 0),
     },
-    periods: slim.periods || null,
-    box: {
-      home: [],
-      away: [],
-    },
-    hasBoxScore: hasBoxRows(slim),
-    rotationOrder: slim?.rotationOrder || null,
-    lockedAt: slim?.lockedAt || null,
+    hasBoxScore: Boolean(slim?.hasBoxScore || hasBoxRows(slim)),
   };
 }
 
@@ -2660,11 +2666,85 @@ function loadResultsIndexV3() {
 }
 
 function saveResultsIndexV3(ids) {
+  const payload = JSON.stringify(ids);
   try {
-    localStorage.setItem(RESULT_V3_INDEX_KEY, JSON.stringify(ids));
+    localStorage.setItem(RESULT_V3_INDEX_KEY, payload);
   } catch (e) {
-    if (isQuotaError(e)) removeLegacyResultsBlob();
-    console.warn("[ResultsV3] failed saving index", e);
+    if (!isQuotaError(e)) {
+      console.warn("[ResultsV3] failed saving index", e);
+      return false;
+    }
+
+    clearNonCriticalQuotaCaches();
+    try {
+      localStorage.setItem(RESULT_V3_INDEX_KEY, payload);
+    } catch (retryError) {
+      console.warn("[ResultsV3] failed saving index after quota recovery", retryError);
+      return false;
+    }
+  }
+  return true;
+}
+
+function reconcileResultStoreV3WithSchedule(schedule = {}) {
+  try {
+    const scheduleIds = new Set();
+    for (const games of Object.values(schedule || {})) {
+      for (const game of games || []) {
+        if (game?.id) scheduleIds.add(String(game.id));
+      }
+    }
+
+    if (scheduleIds.size === 0) {
+      return { removed: 0, repaired: 0, kept: loadResultsIndexV3().length };
+    }
+
+    const keptIds = new Set();
+    let removed = 0;
+    let repaired = 0;
+
+    // Scan the actual keyspace instead of trusting the index. Older cleanup
+    // removed the index first and deleted payloads later, so a reload could
+    // leave an entire prior season as invisible quota-consuming orphan keys.
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith(RESULT_V3_PREFIX)) continue;
+
+      const gameId = key.slice(RESULT_V3_PREFIX.length);
+      if (scheduleIds.size > 0 && scheduleIds.has(gameId)) {
+        keptIds.add(gameId);
+      } else {
+        localStorage.removeItem(key);
+        removed += 1;
+      }
+    }
+
+    const priorIds = new Set(loadResultsIndexV3().map(String));
+    for (const id of keptIds) {
+      if (!priorIds.has(id)) repaired += 1;
+    }
+
+    if (keptIds.size > 0) {
+      saveResultsIndexV3(Array.from(keptIds));
+    } else {
+      localStorage.removeItem(RESULT_V3_INDEX_KEY);
+    }
+
+    resultIndexSetRef.current = new Set(keptIds);
+    resultIndexDirtyRef.current = false;
+
+    if (removed > 0 || repaired > 0) {
+      console.log("[ResultsV3] reconciled result storage", {
+        removedStaleKeys: removed,
+        repairedIndexEntries: repaired,
+        activeResultKeys: keptIds.size,
+      });
+    }
+
+    return { removed, repaired, kept: keptIds.size };
+  } catch (error) {
+    console.warn("[ResultsV3] result-store reconciliation failed", error);
+    return { removed: 0, repaired: 0, kept: 0 };
   }
 }
 
@@ -2736,12 +2816,11 @@ function loadOneResultV3(gameId) {
     const decompressed = LZString.decompressFromUTF16(stored);
     const json = decompressed || stored;
     const parsed = JSON.parse(json);
+    const compact = compactResultForCalendar(parsed);
 
-    // Old saves may still have full box scores in localStorage.
-    // Move them to IndexedDB, then shrink localStorage to score-only.
+    // Old saves may still have full box scores in localStorage. Preserve the
+    // complete result in IndexedDB before replacing the local copy.
     if (hasBoxRows(parsed)) {
-      const compact = compactResultForCalendar(parsed);
-
       saveBoxScoreToDB(gameId, parsed)
         .then(() => {
           try {
@@ -2758,7 +2837,22 @@ function loadOneResultV3(gameId) {
       return compact;
     }
 
-    return parsed;
+    // Shrink older score-only rows that still duplicate periods,
+    // rotationOrder, empty box arrays, or timestamps. Replacing a value with a
+    // smaller value works even when localStorage is already near its quota.
+    const canonicalJson = JSON.stringify(compact);
+    if (canonicalJson !== JSON.stringify(parsed)) {
+      try {
+        localStorage.setItem(
+          resultV3Key(gameId),
+          LZString.compressToUTF16(canonicalJson)
+        );
+      } catch (e) {
+        console.warn("[ResultsV3] failed compacting migrated result", gameId, e);
+      }
+    }
+
+    return compact;
   } catch {
     return null;
   }
@@ -2793,7 +2887,14 @@ function saveOneResultV3(gameId, slim, game = null, seasonYearValue = null, opti
     const compact = compactResultForCalendar(slim);
     const json = JSON.stringify(compact);
     const compressed = LZString.compressToUTF16(json);
-    localStorage.setItem(resultV3Key(gameId), compressed);
+
+    try {
+      localStorage.setItem(resultV3Key(gameId), compressed);
+    } catch (writeError) {
+      if (!isQuotaError(writeError)) throw writeError;
+      clearNonCriticalQuotaCaches();
+      localStorage.setItem(resultV3Key(gameId), compressed);
+    }
 
     const ids = getResultIndexSet();
     if (!ids.has(gameId)) {
@@ -2803,7 +2904,6 @@ function saveOneResultV3(gameId, slim, game = null, seasonYearValue = null, opti
     if (!options?.deferIndexWrite) flushResultIndexCache();
   } catch (e) {
     console.error("[ResultsV3] failed saving compact game", gameId, e);
-    if (isQuotaError(e)) removeLegacyResultsBlob();
   }
 
   // Return the canonical score object immediately. Box-score persistence stays
@@ -2826,10 +2926,16 @@ function deleteOneResultV3(gameId) {
 
 function clearAllResultsV3() {
   try {
-    const ids = loadResultsIndexV3();
-    for (const id of ids) localStorage.removeItem(resultV3Key(id));
+    // Never rely only on the index here. A missing/partial index is exactly how
+    // stale prior-season result keys became permanent localStorage orphans.
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(RESULT_V3_PREFIX)) localStorage.removeItem(key);
+    }
     localStorage.removeItem(RESULT_V3_INDEX_KEY);
     clearBoxScoresFromDB().catch(() => {});
+    resultIndexSetRef.current = new Set();
+    resultIndexDirtyRef.current = false;
   } catch {}
 }
 
@@ -2951,15 +3057,18 @@ function loadPlayerStats() {
 function savePlayerStats(stats) {
   try {
     writeCompressedJson(PLAYER_STATS_KEY, stats || {});
+    return true;
   } catch (e) {
     console.warn("[Calendar] compressed player stats save failed", e);
 
-    if (isQuotaError(e)) removeLegacyResultsBlob();
+    if (isQuotaError(e)) clearNonCriticalQuotaCaches();
 
     try {
       writeCompressedJson(PLAYER_STATS_KEY, stats || {});
+      return true;
     } catch (err) {
       console.error("[Calendar] player stats save failed after retry", err);
+      return false;
     }
   }
 }
@@ -3387,11 +3496,21 @@ window.__results = resultsById;
 
   const saveSchedule = (obj) => {
     setScheduleByDate(obj);
+    const payload = JSON.stringify(obj);
     try {
-      localStorage.setItem(SCHED_KEY, JSON.stringify(obj));
+      localStorage.setItem(SCHED_KEY, payload);
     } catch (e) {
-      console.warn("[Calendar] schedule save failed", e);
-      if (isQuotaError(e)) removeLegacyResultsBlob();
+      if (!isQuotaError(e)) {
+        console.warn("[Calendar] schedule save failed", e);
+        return;
+      }
+
+      clearNonCriticalQuotaCaches();
+      try {
+        localStorage.setItem(SCHED_KEY, payload);
+      } catch (retryError) {
+        console.warn("[Calendar] schedule save failed after quota recovery", retryError);
+      }
     }
   };
 
@@ -3419,15 +3538,26 @@ async function saveResults(results, { persistBoxes = false } = {}) {
         continue;
       }
 
-      try {
-        const compact = compactResultForCalendar(slim);
-        localStorage.setItem(
-          resultV3Key(id),
-          LZString.compressToUTF16(JSON.stringify(compact))
-        );
+      // Every normally simulated game is already written by
+      // saveOneResultV3. The final checkpoint should repair missing rows, not
+      // rewrite all 1,230 keys and amplify a near-quota failure.
+      if (existing?.totals) {
         existingIds.add(id);
-      } catch (error) {
-        console.warn("[ResultsV3] failed saving compact checkpoint", id, error);
+      } else {
+        try {
+          const compact = compactResultForCalendar(slim);
+          const compressed = LZString.compressToUTF16(JSON.stringify(compact));
+          try {
+            localStorage.setItem(resultV3Key(id), compressed);
+          } catch (writeError) {
+            if (!isQuotaError(writeError)) throw writeError;
+            clearNonCriticalQuotaCaches();
+            localStorage.setItem(resultV3Key(id), compressed);
+          }
+          existingIds.add(id);
+        } catch (error) {
+          console.warn("[ResultsV3] failed saving compact checkpoint", id, error);
+        }
       }
 
       if (persistBoxes && hasBoxRows(slim)) {
@@ -3895,8 +4025,26 @@ async function computeAndSaveCalendarAwards({
       });
     }
 
-    localStorage.setItem("bm_awards_latest", JSON.stringify(awards));
-    localStorage.setItem("bm_awards_v1", JSON.stringify(awards));
+    const persistAwards = () => {
+      // bm_awards_latest was an identical second copy with no readers. Keeping
+      // only the canonical key avoids wasting quota at the exact season gate.
+      localStorage.removeItem("bm_awards_latest");
+      localStorage.setItem("bm_awards_v1", JSON.stringify(awards));
+    };
+
+    try {
+      persistAwards();
+    } catch (storageError) {
+      if (!isQuotaError(storageError)) throw storageError;
+
+      console.warn("[Calendar] awards save hit localStorage quota; running recovery", storageError);
+      reconcileResultStoreV3WithSchedule(schedule);
+      for (const id of loadResultsIndexV3()) loadOneResultV3(id);
+      clearNonCriticalQuotaCaches();
+      savePlayerStats(awardDisplayStats);
+      persistAwards();
+    }
+
     appendPlayerMoodEvents(buildAwardMoodEvents(awards, focusedDate || fmt(seasonEnd)));
     return awards;
   } catch (e) {
@@ -3980,6 +4128,27 @@ useEffect(() => {
     parsedSched = {};
   }
 
+  const storedScheduleHasGamesBeforeLoad = Object.values(parsedSched || {}).some(
+    (games) => Array.isArray(games) && games.some((game) => game?.id)
+  );
+  let generatedScheduleForRecovery = null;
+
+  if (!storedScheduleHasGamesBeforeLoad) {
+    generatedScheduleForRecovery = generateFullSeasonSchedule(
+      teams,
+      seasonStart,
+      seasonEnd,
+      seasonCalendarConfig
+    ).byDate;
+  }
+
+  // Repair the result index and delete prior-season/orphan payloads against the
+  // current season's actual schedule. When the schedule key is missing, reuse
+  // this freshly generated schedule later so random schedule generation cannot
+  // disagree with the recovery pass.
+  reconcileResultStoreV3WithSchedule(
+    storedScheduleHasGamesBeforeLoad ? parsedSched : generatedScheduleForRecovery
+  );
   parsedResults = loadResults();
 
   const scheduleValid = isScheduleValid(parsedSched);
@@ -4037,9 +4206,7 @@ useEffect(() => {
       });
   };
 
-  const storedScheduleHasGames = Object.values(parsedSched || {}).some(
-    (games) => Array.isArray(games) && games.some((game) => game?.id)
-  );
+  const storedScheduleHasGames = storedScheduleHasGamesBeforeLoad;
 
   // A completed season schedule is immutable. Roster trades and other league-data
   // changes must never cause previously played games to be regenerated or moved.
@@ -4067,7 +4234,9 @@ useEffect(() => {
 
   // ✅ IMPORTANT: if schedule is missing/invalid, regenerate it EVEN IF results exist
   if (!scheduleValid) {
-    const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd, seasonCalendarConfig);
+    const byDate =
+      generatedScheduleForRecovery ||
+      generateFullSeasonSchedule(teams, seasonStart, seasonEnd, seasonCalendarConfig).byDate;
 
     const hydrated = hydrateSchedulePlayedFlagsFromResults(byDate, parsedResults);
     const rebuilt = hydrated.schedule;

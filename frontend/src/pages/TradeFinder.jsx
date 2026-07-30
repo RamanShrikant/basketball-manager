@@ -48,6 +48,7 @@ const TRADE_BUILDER_KEY = "bm_trade_builder_v1";
 const TRADE_FINDER_STATE_KEY = "bm_trade_finder_state_v1";
 const TRADE_DEBUG_KEY = "bm_trade_debug_v1";
 const DEFAULT_PICK_PROTECTION = "Unprotected";
+const MAX_TRADE_FINDER_PACKAGE_ASSETS = 8;
 const TRADE_MATCHING_SMALL_OUTGOING = 7_500_000;
 const TRADE_MATCHING_MID_OUTGOING = 29_000_000;
 const TRADE_MATCHING_BUFFER = 250_000;
@@ -73,27 +74,23 @@ const TRADE_FINDER_SCROLLBAR_TUNING = {
 // These are absolute-positioned so the pills stay the same size.
 const TRADE_FINDER_HEADSHOT_TUNING = {
   packageRows: {
-    // Face/headshot manual controls for the left package rows.
-    // size = visible player face/body image height.
-    // x/y = move the image inside the pill.
-    // boxWidth = invisible lane for the image before it crops.
-    // leftPad = where the OVR ring/name section starts after the image.
-    boxWidth: 150,
-    size: 96,
-    imageHeight: 76,
-    x: 12,
+    // Compact enough for the 3-column finder, but still keeps the 2K-style card look.
+    boxWidth: 126,
+    size: 90,
+    imageHeight: 72,
+    x: 8,
     y: 0,
-    leftPad: 148,
+    leftPad: 124,
     opacity: 1,
   },
   offerRows: {
-    // Right-side offer pills now use the same visual scale as the left package pills.
-    boxWidth: 150,
-    size: 96,
-    imageHeight: 76,
-    x: 12,
+    // Keep right-side offer pills at the same scale as the left/middle pills.
+    boxWidth: 126,
+    size: 90,
+    imageHeight: 72,
+    x: 8,
     y: 0,
-    leftPad: 148,
+    leftPad: 124,
     opacity: 1,
   },
 };
@@ -105,13 +102,13 @@ const TRADE_FINDER_RATING_RING_TUNING = {
   packageRows: {
     // Change `size` to shrink/grow the WHOLE ring.
     // The OVR/POT text now auto-scales with this number.
-    size: 72,
+    size: 62,
     referenceSize: 70,
     autoScaleText: true,
     textScale: 1,
-    x: -10,
+    x: -6,
     y: 0,
-    gap: 16,
+    gap: 10,
     ovrLabelSize: 8,
     ovrLabelX: 0,
     ovrLabelY: 0,
@@ -126,14 +123,14 @@ const TRADE_FINDER_RATING_RING_TUNING = {
     fillOpacity: 0.3,
   },
   offerRows: {
-    // Same scale as the user package rows, but still separately tunable.
-    size: 72,
+    // Same exact scale as the left/middle package rows.
+    size: 62,
     referenceSize: 70,
     autoScaleText: true,
     textScale: 1,
-    x: -10,
+    x: -6,
     y: 0,
-    gap: 16,
+    gap: 10,
     ovrLabelSize: 8,
     ovrLabelX: 0,
     ovrLabelY: 0,
@@ -153,9 +150,9 @@ const TRADE_FINDER_RATING_RING_TUNING = {
 // Use these when the headshot/ring/text spacing needs tiny 2K-style tuning.
 const TRADE_FINDER_PLAYER_ROW_TUNING = {
   packageRows: {
-    rowMinHeight: 92,
-    rowPaddingX: 16,
-    rowPaddingY: 14,
+    rowMinHeight: 88,
+    rowPaddingX: 14,
+    rowPaddingY: 12,
     rowRadius: 16,
 
     contentX: 0,
@@ -163,15 +160,15 @@ const TRADE_FINDER_PLAYER_ROW_TUNING = {
 
     textBlockX: 0,
     textBlockY: 0,
-    nameSize: 16,
+    nameSize: 15,
     nameX: 0,
     nameY: 0,
 
     // POS / AGE line controls. These are separate now.
-    positionSize: 12,
+    positionSize: 11,
     positionX: 0,
     positionY: 0,
-    ageSize: 12,
+    ageSize: 11,
     ageX: 0,
     ageY: 0,
     positionLineGap: 8,
@@ -185,16 +182,16 @@ const TRADE_FINDER_PLAYER_ROW_TUNING = {
 
     buttonX: 0,
     buttonY: 0,
-    buttonPadX: 14,
+    buttonPadX: 12,
     buttonPadY: 8,
     buttonTextSize: 12,
     buttonRadius: 12,
   },
   offerRows: {
-    // Right-side offer player pills match the left-side package player pill style.
-    rowMinHeight: 92,
-    rowPaddingX: 16,
-    rowPaddingY: 14,
+    // Right-side offer player pills match the left/middle package player pill style.
+    rowMinHeight: 88,
+    rowPaddingX: 14,
+    rowPaddingY: 12,
     rowRadius: 16,
 
     contentX: 0,
@@ -202,14 +199,14 @@ const TRADE_FINDER_PLAYER_ROW_TUNING = {
 
     textBlockX: 0,
     textBlockY: 0,
-    nameSize: 16,
+    nameSize: 15,
     nameX: 0,
     nameY: 0,
 
-    positionSize: 12,
+    positionSize: 11,
     positionX: 0,
     positionY: 0,
-    ageSize: 12,
+    ageSize: 11,
     ageX: 0,
     ageY: 0,
     positionLineGap: 8,
@@ -229,9 +226,9 @@ const TRADE_FINDER_PLAYER_ROW_TUNING = {
 const TRADE_FINDER_PILL_LOGO_TUNING = {
   packageRows: {
     enabled: true,
-    size: 280,
-    opacity: 0.11,
-    x: 250,
+    size: 250,
+    opacity: 0.1,
+    x: 185,
     y: 0,
     rotate: 0,
     blur: 0,
@@ -242,9 +239,9 @@ const TRADE_FINDER_PILL_LOGO_TUNING = {
   },
   offerRows: {
     enabled: true,
-    size: 260,
+    size: 250,
     opacity: 0.1,
-    x: 250,
+    x: 185,
     y: 0,
     rotate: 0,
     blur: 0,
@@ -1624,7 +1621,7 @@ function TradeFinderRatingRing({ player, variant = "packageRows" }) {
   );
 }
 
-function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team, selectedActionLabel = "Added" }) {
+function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team, selectedActionLabel = "Added", disabled = false, disabledLabel = "Max" }) {
   const isPlayer = asset.type === "player";
   const isResolvedPick = !isPlayer && isResolvedDraftPickAsset(asset.pick);
   const label = isPlayer ? playerNameOf(asset.player) : formatPick(asset.pick);
@@ -1648,11 +1645,20 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
   const ringT = TRADE_FINDER_RATING_RING_TUNING.packageRows;
   const rowT = TRADE_FINDER_PLAYER_ROW_TUNING.packageRows;
   const hasHeadshot = isPlayer && Boolean(playerHeadshotOf(asset.player));
+  const actionDisabled = Boolean(disabled && !selected);
+  const handleToggle = () => {
+    if (actionDisabled) return;
+    onToggle?.();
+  };
 
   return (
     <div
       className={`relative overflow-hidden border transition ${
-        selected ? "border-orange-400/60 bg-orange-500/15" : "border-white/10 bg-white/[0.035] hover:border-orange-400/30"
+        selected
+          ? "border-orange-400/60 bg-orange-500/15"
+          : actionDisabled
+            ? "border-white/10 bg-white/[0.025] opacity-45"
+            : "border-white/10 bg-white/[0.035] hover:border-orange-400/30"
       }`}
       style={{
         minHeight: isPlayer ? rowT.rowMinHeight : undefined,
@@ -1672,8 +1678,9 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
       >
         <button
           type="button"
-          onClick={onToggle}
-          className="min-w-0 flex flex-1 items-center text-left"
+          onClick={handleToggle}
+          disabled={actionDisabled}
+          className={`min-w-0 flex flex-1 items-center text-left ${actionDisabled ? "cursor-not-allowed" : ""}`}
           style={{ gap: isPlayer ? ringT.gap : 0 }}
         >
           {isPlayer && <TradeFinderRatingRing player={asset.player} variant="packageRows" />}
@@ -1755,9 +1762,14 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
 
         <button
           type="button"
-          onClick={onToggle}
+          onClick={handleToggle}
+          disabled={actionDisabled}
           className={`font-black transition ${
-            selected ? "bg-orange-600 text-white" : "bg-black text-neutral-300 hover:bg-white/10"
+            selected
+              ? "bg-orange-600 text-white"
+              : actionDisabled
+                ? "bg-black/70 text-neutral-500 cursor-not-allowed"
+                : "bg-black text-neutral-300 hover:bg-white/10"
           }`}
           style={{
             borderRadius: rowT.buttonRadius,
@@ -1766,7 +1778,7 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
             transform: `translate(${rowT.buttonX || 0}px, ${rowT.buttonY || 0}px)`,
           }}
         >
-          {selected ? selectedActionLabel : "Add"}
+          {selected ? selectedActionLabel : actionDisabled ? disabledLabel : "Add"}
         </button>
       </div>
 
@@ -2138,6 +2150,25 @@ export default function TradeFinder() {
   }, [pickProtections, selectedPackageAssets]);
 
   const selectedValue = useMemo(() => packageValue(selectedItems, leagueData), [selectedItems, leagueData]);
+
+  useEffect(() => {
+    if (selectedAssetKeys.length <= MAX_TRADE_FINDER_PACKAGE_ASSETS) return;
+    const trimmedKeys = selectedAssetKeys.slice(0, MAX_TRADE_FINDER_PACKAGE_ASSETS);
+    const keepKeys = new Set(trimmedKeys);
+    setSelectedAssetKeys(trimmedKeys);
+    setPickProtections((prev) => {
+      const next = {};
+      for (const [key, value] of Object.entries(prev || {})) {
+        if (keepKeys.has(key)) next[key] = value;
+      }
+      return next;
+    });
+    setSearched(false);
+    setPythonOffers([]);
+    setOfferSearchError("");
+    setOfferSearchProgress("Trade Finder packages are limited to 8 assets. Extra assets were removed.");
+    setOfferSearchStopped(false);
+  }, [selectedAssetKeys]);
   const offers = useMemo(() => {
     if (!searched) return [];
     return (pythonOffers || []).filter((offer) => {
@@ -2145,6 +2176,8 @@ export default function TradeFinder() {
       return !rows.some((item) => item?.type === "pick" && isResolvedPickConsumed(item.pick || {}, leagueData));
     });
   }, [searched, pythonOffers, leagueData, liveDraftProgressSignature]);
+
+  const isPackageFull = selectedItems.length >= MAX_TRADE_FINDER_PACKAGE_ASSETS;
 
   useEffect(() => {
     return () => {
@@ -2169,12 +2202,20 @@ export default function TradeFinder() {
     setOfferSearchError("");
     setOfferSearchProgress("");
     setOfferSearchStopped(false);
+
+    let shouldPrimePickProtection = false;
+
     setSelectedAssetKeys((prev) => {
       if (prev.includes(asset.key)) return prev.filter((key) => key !== asset.key);
+      if (prev.length >= MAX_TRADE_FINDER_PACKAGE_ASSETS) {
+        setOfferSearchProgress(`Trade Finder packages are limited to ${MAX_TRADE_FINDER_PACKAGE_ASSETS} assets. Remove one asset before adding another.`);
+        return prev;
+      }
+      shouldPrimePickProtection = asset.type === "pick";
       return [...prev, asset.key];
     });
 
-    if (asset.type === "pick") {
+    if (asset.type === "pick" && shouldPrimePickProtection) {
       setPickProtections((prev) => ({
         ...prev,
         [asset.key]: prev[asset.key] || normalizeFinderPickRule(asset.pick, null),
@@ -2591,8 +2632,8 @@ export default function TradeFinder() {
   return (
     <PageFade>
       <TradeFinderScrollbarStyles />
-      <div className="min-h-screen bmCourtPage px-4 py-8 text-white">
-        <div className="mx-auto w-full max-w-7xl">
+      <div className="min-h-screen bmCourtPage px-3 py-6 text-white">
+        <div className="mx-auto w-full max-w-[1760px]">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
             <button
               onClick={() => navigate("/trades")}
@@ -2614,37 +2655,32 @@ export default function TradeFinder() {
             </button>
           </div>
 
-          <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
-            <div className="overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950/85 shadow-2xl">
-              <div className="border-b border-white/10 bg-gradient-to-r from-orange-600/20 to-black px-6 py-5">
+          <div className="grid min-h-0 gap-5 xl:grid-cols-3">
+            <div className="flex min-h-0 flex-col overflow-hidden rounded-[24px] border border-white/10 bg-neutral-950/85 shadow-2xl">
+              <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-orange-600/20 to-black px-4 py-4">
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
                     onClick={() => changePackageTeam(-1)}
                     disabled={isSearchingOffers || teams.length <= 1}
                     aria-label="Previous team"
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-black/35 text-xl font-black text-orange-200 transition hover:border-orange-400/35 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-black/35 text-xl font-black text-orange-200 transition hover:border-orange-400/35 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     ‹
                   </button>
 
-                  <div className="flex min-w-0 flex-1 items-center gap-4">
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
                     {teamLogoOf(packageTeam) ? (
-                      <img src={teamLogoOf(packageTeam)} alt={packageTeam?.name || "Team"} className="h-14 w-14 shrink-0 object-contain" />
+                      <img src={teamLogoOf(packageTeam)} alt={packageTeam?.name || "Team"} className="h-12 w-12 shrink-0 object-contain" />
                     ) : (
-                      <div className="h-14 w-14 shrink-0 rounded-2xl bg-white/5" />
+                      <div className="h-12 w-12 shrink-0 rounded-2xl bg-white/5" />
                     )}
                     <div className="min-w-0">
-                      <div className="text-sm font-black uppercase tracking-[0.18em] text-orange-200">
-                        {isReverseFinder ? "Target Package" : "Your Package"}
+                      <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-200">
+                        {isReverseFinder ? "Browse Target" : "Browse Assets"}
                       </div>
-                      <div className="mt-1 truncate text-2xl font-black text-white">{packageTeam?.name}</div>
-                      <div className="mt-1 text-xs font-bold text-neutral-400">
-                        {isReverseFinder
-                          ? `Select what you want from ${packageTeam?.name}. Trade Finder will calculate what they comfortably want from ${selectedTeam?.name}.`
-                          : "Select players and picks. Picks can be sent as full owned pieces or with valid custom protections."}
-                      </div>
-                      <div className="mt-2 text-[10px] font-black uppercase tracking-[0.16em] text-neutral-600">
+                      <div className="mt-0.5 truncate text-xl font-black text-white">{packageTeam?.name}</div>
+                      <div className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-neutral-600">
                         Team {packageTeamIndex + 1} of {teams.length}
                       </div>
                     </div>
@@ -2655,120 +2691,149 @@ export default function TradeFinder() {
                     onClick={() => changePackageTeam(1)}
                     disabled={isSearchingOffers || teams.length <= 1}
                     aria-label="Next team"
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-black/35 text-xl font-black text-orange-200 transition hover:border-orange-400/35 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-black/35 text-xl font-black text-orange-200 transition hover:border-orange-400/35 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     ›
                   </button>
                 </div>
               </div>
 
-              <div className="tradeFinderScroller grid max-h-[68vh] gap-3 overflow-y-auto p-5">
-                <div className="rounded-2xl border border-orange-400/25 bg-orange-500/10 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Trade Package</div>
-                      <div className="mt-1 text-xs font-bold text-orange-100/80">
-                        Click an asset here to remove it from the finder package.
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-orange-300/25 bg-black/35 px-3 py-2 text-xs font-black text-orange-100">
-                      {selectedItems.length} / 8
+              <div className="tradeFinderScroller grid max-h-[70vh] min-h-0 gap-3 overflow-y-auto p-4">
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Players</div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.14em] text-neutral-600">
+                      {availablePlayerAssets.length} left
                     </div>
                   </div>
-
-                  <div className="mt-3 grid gap-3">
-                    {selectedPackageAssets.length ? (
-                      selectedPackageAssets.map((asset) => (
+                  <div className="grid gap-2">
+                    {availablePlayerAssets.length ? (
+                      availablePlayerAssets.map((asset) => (
                         <AssetRow
-                          key={`selected:${asset.key}`}
+                          key={asset.key}
                           asset={asset}
-                          selected
-                          selectedActionLabel="Remove"
+                          selected={false}
                           onToggle={() => toggleAsset(asset)}
-                          pickRule={asset.type === "pick" ? pickProtections[asset.key] || normalizeFinderPickRule(asset.pick, null) : undefined}
-                          onPickRuleChange={asset.type === "pick" ? (value) => {
+                          leagueData={leagueData}
+                          team={packageTeam}
+                          disabled={isPackageFull}
+                          disabledLabel="Full"
+                        />
+                      ))
+                    ) : (
+                      <div className="rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-bold text-neutral-500">
+                        {isPackageFull ? "Package is full. Remove an asset from the middle to add another player." : "Every available player is already in your package."}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 mt-1 flex items-center justify-between gap-2">
+                    <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Draft Picks</div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.14em] text-neutral-600">
+                      {availablePickAssets.length} left
+                    </div>
+                  </div>
+                  <div className="grid gap-2">
+                    {availablePickAssets.length ? (
+                      availablePickAssets.map((asset) => (
+                        <AssetRow
+                          key={asset.key}
+                          asset={asset}
+                          selected={false}
+                          onToggle={() => toggleAsset(asset)}
+                          pickRule={pickProtections[asset.key] || normalizeFinderPickRule(asset.pick, null)}
+                          onPickRuleChange={(value) => {
                             setSearched(false);
                             setPythonOffers([]);
                             setOfferSearchError("");
                             setOfferSearchProgress("");
                             setOfferSearchStopped(false);
                             setPickProtections((prev) => ({ ...prev, [asset.key]: value }));
-                          } : undefined}
+                          }}
                           leagueData={leagueData}
                           team={packageTeam}
+                          disabled={isPackageFull}
+                          disabledLabel="Full"
                         />
                       ))
                     ) : (
-                      <div className="rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-bold text-neutral-400">
-                        No assets selected yet. Add players or picks below to build your package.
+                      <div className="rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-bold text-neutral-500">
+                        {isPackageFull ? "Package is full. Remove an asset from the middle to add another pick." : pickAssets.length ? "Every tradeable pick is already in your package." : "No tradeable picks found for this team."}
                       </div>
                     )}
                   </div>
                 </div>
+              </div>
+            </div>
 
-                <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Players</div>
-                {availablePlayerAssets.length ? (
-                  availablePlayerAssets.map((asset) => (
-                    <AssetRow
-                      key={asset.key}
-                      asset={asset}
-                      selected={false}
-                      onToggle={() => toggleAsset(asset)}
-                      leagueData={leagueData}
-                      team={packageTeam}
-                    />
-                  ))
-                ) : (
-                  <div className="rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-bold text-neutral-500">
-                    Every available player is already in the Trade Package.
+            <div className="flex min-h-0 flex-col overflow-hidden rounded-[24px] border border-orange-400/20 bg-neutral-950/85 shadow-2xl">
+              <div className="shrink-0 border-b border-orange-400/15 bg-orange-500/10 px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Trade Package</div>
+                    <div className="mt-0.5 truncate text-xl font-black text-white">
+                      {selectedItems.length ? `${selectedItems.length} asset${selectedItems.length === 1 ? "" : "s"}` : "Build Package"}
+                    </div>
+                    <div className="mt-1 text-xs font-bold text-orange-100/70">
+                      Value {selectedValue.toFixed(1)} • Click remove to send assets back left
+                    </div>
                   </div>
-                )}
+                  <div className="rounded-xl border border-orange-300/25 bg-black/35 px-3 py-2 text-xs font-black text-orange-100">
+                    {selectedItems.length} / {MAX_TRADE_FINDER_PACKAGE_ASSETS}
+                  </div>
+                </div>
+              </div>
 
-                <div className="mt-3 text-xs font-black uppercase tracking-[0.18em] text-orange-300">Draft Picks</div>
-                {availablePickAssets.length ? (
-                  availablePickAssets.map((asset) => (
-                    <AssetRow
-                      key={asset.key}
-                      asset={asset}
-                      selected={false}
-                      onToggle={() => toggleAsset(asset)}
-                      pickRule={pickProtections[asset.key] || normalizeFinderPickRule(asset.pick, null)}
-                      onPickRuleChange={(value) => {
-                        setSearched(false);
-                        setPythonOffers([]);
-                        setOfferSearchError("");
-                        setOfferSearchProgress("");
-                        setOfferSearchStopped(false);
-                        setPickProtections((prev) => ({ ...prev, [asset.key]: value }));
-                      }}
-                      leagueData={leagueData}
-                      team={packageTeam}
-                    />
-                  ))
+              <div className="tradeFinderScroller max-h-[70vh] min-h-0 flex-1 overflow-y-auto p-4">
+                {selectedPackageAssets.length ? (
+                  <div className="grid gap-3">
+                    {selectedPackageAssets.map((asset) => (
+                      <AssetRow
+                        key={`selected:${asset.key}`}
+                        asset={asset}
+                        selected
+                        selectedActionLabel="Remove"
+                        onToggle={() => toggleAsset(asset)}
+                        pickRule={asset.type === "pick" ? pickProtections[asset.key] || normalizeFinderPickRule(asset.pick, null) : undefined}
+                        onPickRuleChange={asset.type === "pick" ? (value) => {
+                          setSearched(false);
+                          setPythonOffers([]);
+                          setOfferSearchError("");
+                          setOfferSearchProgress("");
+                          setOfferSearchStopped(false);
+                          setPickProtections((prev) => ({ ...prev, [asset.key]: value }));
+                        } : undefined}
+                        leagueData={leagueData}
+                        team={packageTeam}
+                      />
+                    ))}
+                  </div>
                 ) : (
-                  <div className="rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-bold text-neutral-500">
-                    {pickAssets.length ? "Every tradeable pick is already in the Trade Package." : "No tradeable picks found for this team."}
+                  <div className="rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-bold leading-6 text-neutral-400">
+                    Select players or picks from the left column. Your package will stay here while you search offers on the right.
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950/75 shadow-2xl">
-              <div className="border-b border-white/10 bg-gradient-to-r from-neutral-900 to-black px-6 py-5">
-                <div className="flex flex-wrap items-center justify-between gap-4">
-                  <div>
-                    <div className="text-sm font-black uppercase tracking-[0.2em] text-orange-300">
+            <div className="flex min-h-0 flex-col overflow-hidden rounded-[24px] border border-white/10 bg-neutral-950/75 shadow-2xl">
+              <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-neutral-900 to-black px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">
                       {isReverseFinder ? "CPU Asking Prices" : "Legal CPU Offers"}
                     </div>
-                    <div className="mt-1 text-2xl font-black text-white">
+                    <div className="mt-0.5 truncate text-2xl font-black text-white">
                       {isReverseFinder
                         ? (selectedItems.length ? `What ${packageTeam?.name} wants` : "Build a target package")
-                        : (selectedItems.length ? `${selectedItems.length} asset package` : "Build a package")}
+                        : (selectedItems.length ? "Offers Back" : "Build a package")}
                     </div>
                     <div className="mt-1 text-xs font-bold text-neutral-500">
                       {isReverseFinder
-                        ? `Target value: ${selectedValue.toFixed(1)} • Searches only ${selectedTeam?.name} assets • Returns 0–5 genuinely distinct comfortable packages`
-                        : `Package value: ${selectedValue.toFixed(1)} • One comfortable offer max per CPU team • Teams checked: ${Math.max(0, teams.length - 1)}`}
+                        ? `Searches ${selectedTeam?.name} assets • 0–5 distinct comfortable packages`
+                        : `One comfortable offer max per CPU team • Teams checked: ${Math.max(0, teams.length - 1)}`}
                     </div>
                   </div>
 
@@ -2777,7 +2842,7 @@ export default function TradeFinder() {
                       type="button"
                       onClick={runSearchOffers}
                       disabled={!selectedItems.length || isSearchingOffers}
-                      className="rounded-2xl bg-orange-600 px-7 py-3 text-sm font-black text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-2xl bg-orange-600 px-5 py-2.5 text-sm font-black text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {isSearchingOffers ? "Searching..." : "Search Offers"}
                     </button>
@@ -2786,7 +2851,7 @@ export default function TradeFinder() {
                       <button
                         type="button"
                         onClick={stopSearchOffers}
-                        className="rounded-2xl border border-red-300/35 bg-red-500/15 px-5 py-3 text-sm font-black text-red-100 transition hover:bg-red-500/25"
+                        className="rounded-2xl border border-red-300/35 bg-red-500/15 px-4 py-2.5 text-sm font-black text-red-100 transition hover:bg-red-500/25"
                       >
                         Stop
                       </button>
@@ -2795,12 +2860,12 @@ export default function TradeFinder() {
                 </div>
               </div>
 
-              <div className="tradeFinderScroller max-h-[68vh] overflow-y-auto p-5">
+              <div className="tradeFinderScroller max-h-[70vh] min-h-0 flex-1 overflow-y-auto p-4">
                 {!searched && (
-                  <div className="rounded-2xl border border-orange-400/25 bg-orange-500/10 p-5 text-sm font-bold leading-6 text-orange-100">
+                  <div className="rounded-2xl border border-orange-400/25 bg-orange-500/10 p-4 text-sm font-bold leading-6 text-orange-100">
                     {isReverseFinder
-                      ? `Select the ${packageTeam?.name} package you want, then press Search Offers. The CPU will return only genuinely different, legal packages from ${selectedTeam?.name} that it would comfortably accept. Zero, one, or two results is completely normal when those are the only real options.`
-                      : "Pick a package on the left, then press Search Offers. Each CPU team can show one legal, comfortable offer using the same acceptance logic as Propose Trade."}
+                      ? `Build the ${packageTeam?.name} target package in the middle, then search for asking prices from ${selectedTeam?.name}.`
+                      : "Build your package in the middle, then search for legal CPU offers back."}
                   </div>
                 )}
 
@@ -2816,8 +2881,8 @@ export default function TradeFinder() {
                       {offerSearchStopped
                         ? "Stopping search after the current CPU evaluation finishes..."
                         : isReverseFinder
-                          ? `${packageTeam?.name} is checking distinct asking-price packages from ${selectedTeam?.name}, then confirming exact Propose Trade acceptance, salary matching, and roster rules...`
-                          : "CPU front offices are building one comfortable package each, then checking Propose Trade acceptance, salary matching, and roster rules..."}
+                          ? `${packageTeam?.name} is checking distinct asking-price packages from ${selectedTeam?.name}...`
+                          : "CPU teams are building one comfortable legal offer each..."}
                     </div>
                     {offerSearchProgress && (
                       <div className="mt-3 rounded-xl border border-orange-300/20 bg-black/25 px-3 py-2 text-xs text-orange-50">
@@ -2836,8 +2901,8 @@ export default function TradeFinder() {
                 {searched && selectedItems.length > 0 && !isSearchingOffers && !offers.length && (
                   <div className="rounded-2xl border border-white/10 bg-black/35 p-5 text-sm font-bold leading-6 text-neutral-300">
                     {isReverseFinder
-                      ? `${packageTeam?.name} did not find a genuinely distinct, legal package from ${selectedTeam?.name} that it would comfortably accept for the requested assets.`
-                      : "No CPU team found a legal package it would comfortably accept for this offer. Very weak packages may get no responses."}
+                      ? `${packageTeam?.name} did not find a distinct legal asking price from ${selectedTeam?.name}.`
+                      : "No CPU team found a legal comfortable offer for this package."}
                   </div>
                 )}
 
@@ -2854,18 +2919,18 @@ export default function TradeFinder() {
                               <img
                                 src={teamLogoOf(isReverseFinder ? selectedTeam : offer.team)}
                                 alt={(isReverseFinder ? selectedTeam : offer.team)?.name || "Team"}
-                                className="h-11 w-11 object-contain"
+                                className="h-10 w-10 object-contain"
                               />
                             ) : (
-                              <div className="h-11 w-11 rounded-xl bg-white/5" />
+                              <div className="h-10 w-10 rounded-xl bg-white/5" />
                             )}
                             <div className="min-w-0">
                               <div className="truncate text-lg font-black text-white">
                                 {isReverseFinder ? `Package ${offerIndex + 1}` : offer.team?.name}
                               </div>
-                              <div className="text-xs font-black uppercase tracking-[0.12em] text-neutral-500">
+                              <div className="text-[11px] font-black uppercase tracking-[0.12em] text-neutral-500">
                                 {isReverseFinder
-                                  ? `Built around ${offer.anchorLabel || "a distinct value base"} • Your outgoing value ${Number(offer.offerValue || 0).toFixed(1)}`
+                                  ? `Built around ${offer.anchorLabel || "value base"} • Value ${Number(offer.offerValue || 0).toFixed(1)}`
                                   : `${offer.quality || "Accepted Offer"} • Value ${Number(offer.offerValue || 0).toFixed(1)}`}
                               </div>
                             </div>
@@ -2892,8 +2957,8 @@ export default function TradeFinder() {
 
                         <div className="mt-3 text-xs font-bold text-neutral-500">
                           {isReverseFinder
-                            ? `${packageTeam?.name} exact comfort margin ${Number(offer.comfortMargin || 0) >= 0 ? "+" : ""}${Number(offer.comfortMargin || 0).toFixed(2)} • This is a distinct comfortable asking price, not filler added to reach five results.`
-                            : `Finder estimate: ${Number(offer.gap || 0) >= 0 ? "+" : ""}${Number(offer.gap || 0).toFixed(1)} value versus your package • CPU comfort margin ${Number(offer.comfortMargin || 0) >= 0 ? "+" : ""}${Number(offer.comfortMargin || 0).toFixed(2)}.`}
+                            ? `${packageTeam?.name} comfort margin ${Number(offer.comfortMargin || 0) >= 0 ? "+" : ""}${Number(offer.comfortMargin || 0).toFixed(2)}.`
+                            : `Finder gap ${Number(offer.gap || 0) >= 0 ? "+" : ""}${Number(offer.gap || 0).toFixed(1)} • CPU comfort ${Number(offer.comfortMargin || 0) >= 0 ? "+" : ""}${Number(offer.comfortMargin || 0).toFixed(2)}.`}
                         </div>
                       </div>
                     ))}
