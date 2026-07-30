@@ -684,21 +684,21 @@ const {
 
 check(
   "cpu_trade_continuous.target_range",
-  CPU_TRADE_CONTINUOUS_MIN_TARGET === 24 && CPU_TRADE_CONTINUOUS_MAX_TARGET === 30,
-  "Continuous CPU-trade seasons stay inside the requested 24-30 range."
+  CPU_TRADE_CONTINUOUS_MIN_TARGET === 22 && CPU_TRADE_CONTINUOUS_MAX_TARGET === 30,
+  "Continuous CPU-trade seasons stay inside the requested 22-30 range."
 );
 check(
   "cpu_trade_continuous.minimum_floor",
   getContinuousMarketMinimumTrades(27) === 24 &&
-    getContinuousMarketMinimumTrades(24) === 24 &&
-    getContinuousMarketMinimumTrades(30) === 24,
-  "Every seeded 24-30 season preserves the same hard 24-trade reliability floor."
+    getContinuousMarketMinimumTrades(22) === 22 &&
+    getContinuousMarketMinimumTrades(30) === 27,
+  "A seeded desired target has a three-trade tolerance instead of exact-count forcing."
 );
 const continuousBudgets = getContinuousMarketBudgets(27);
 check(
   "cpu_trade_continuous.hard_budgets",
-  continuousBudgets.maximumGenerationPasses === 22 &&
-    continuousBudgets.maximumExactEvaluations === 810,
+  continuousBudgets.maximumGenerationPasses === 20 &&
+    continuousBudgets.maximumExactEvaluations === 756,
   "The 27-trade benchmark has fixed generation and exact-validation ceilings."
 );
 const continuousCoverageDecision = decideContinuousMarketGeneration({
@@ -723,8 +723,8 @@ check(
   "cpu_trade_continuous.coverage_generation",
   continuousCoverageDecision.shouldGenerate === true &&
     continuousCoverageDecision.reason === "continuous_inventory_coverage" &&
-    continuousCoverageDecision.exactEvaluationLimit <= 40 &&
-    continuousCoverageDecision.requestedCandidates <= 80,
+    continuousCoverageDecision.exactEvaluationLimit <= 36 &&
+    continuousCoverageDecision.requestedCandidates <= 72,
   "Organic inventory deficits launch one bounded nonblocking background pass."
 );
 const continuousCooldownDecision = decideContinuousMarketGeneration({
@@ -805,10 +805,8 @@ const teamRoster = read("public/python/team_roster_logic.py");
 const cpuTrade = read("public/python/cpu_cpu_trade_logic.py");
 const cpuTradeBank = read("src/utils/cpuTradeBank.js");
 const tradeDeskFeed = read("src/utils/tradeDeskFeed.js");
-check("cpu_trade_bank.version9", cpuTradeBank.includes("CPU_TRADE_BANK_VERSION = 9"), "CPU trade bank schema resets Patch 7 inventory for the reliable 24-30 market.");
-check("cpu_trade_bank.failed_candidates_purged_on_success", cpuTradeBank.includes("state.candidates.filter((row) => !staleIds.has(row.bankId || row.id))"), "Failed packages are purged even when a later candidate succeeds in the same execution slot.");
-check("calendar.completed_generation_preserved", read("src/pages/Calendar.jsx").includes("if (!generationJobRef || generationJobRef.current) return false;") && read("src/pages/Calendar.jsx").includes("!generationJobRef?.current"), "A fulfilled generation result cannot be overwritten before admission.");
-check("cpu_trade_bank.bounded_runway", cpuTradeBank.includes("upcomingSlots + (remainingMinimum > 0 ? 2 : 1)") && cpuTradeBank.includes("lateOptionalInventoryLocked"), "CPU trade inventory covers upcoming organic slots without trying to stock every remaining target trade.");
+check("cpu_trade_bank.version8", cpuTradeBank.includes("CPU_TRADE_BANK_VERSION = 8"), "CPU trade bank schema resets old exact-target inventory for the bounded continuous market.");
+check("cpu_trade_bank.bounded_runway", cpuTradeBank.includes("upcomingSlots + 1") && cpuTradeBank.includes("lateOptionalInventoryLocked"), "CPU trade inventory covers upcoming organic slots without trying to stock every remaining target trade.");
 check("cpu_trade_bank.runway_status", cpuTradeBank.includes("getCpuTradeBankRunwayStatus") && cpuTradeBank.includes("foregroundRecommended"), "CPU trade bank exposes runway/foreground inventory pressure signals.");
 check("calendar.single_organic_execution", !read("src/pages/Calendar.jsx").includes("getCpuTradeExecutionBurstLimit") && !read("src/pages/Calendar.jsx").includes("countCpuTradeSlotsDueToday"), "Calendar executes at most one organic CPU trade slot per simulated date.");
 check("trade_desk.sync_history", tradeDeskFeed.includes("syncTradeDeskFeedWithLeagueHistory") && tradeDeskFeed.includes("mergeTradeDeskFeedWithLeague"), "Trade Desk feed can purge non-canonical transaction rows.");

@@ -24,7 +24,7 @@ import {
   withCpuTradeTelemetrySuppressed,
 } from "./cpuTradeTelemetry.js";
 
-export const CPU_TRADE_DIAGNOSTICS_VERSION = "2026-07-30_speed_v8_reliable_24_30_market";
+export const CPU_TRADE_DIAGNOSTICS_VERSION = "2026-07-30_speed_v7_bounded_continuous_market";
 export const CPU_TRADE_BASELINE_REPORT_KEY = "bm_cpu_trade_diagnostic_baseline_v1";
 
 const RATING_KEYS = [

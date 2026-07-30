@@ -22,7 +22,7 @@ import {
 } from "./cpuTradeTelemetry.js";
 
 export const CPU_TRADE_BANK_FIELD = "cpuTradeBankState";
-export const CPU_TRADE_BANK_VERSION = 9;
+export const CPU_TRADE_BANK_VERSION = 8;
 export const CPU_TRADE_BANK_TEST_CONFIG_KEY = "bm_cpu_trade_bank_test_config_v1";
 
 const TARGET_MIN = CPU_TRADE_CONTINUOUS_MIN_TARGET;
@@ -339,10 +339,10 @@ function createBankState(leagueData, context, testConfig = {}) {
   const targetRoll = random();
   const targetBandRoll = random();
   let baseTargetTrades;
-  if (targetRoll < 0.18) {
-    baseTargetTrades = 24 + Math.floor(targetBandRoll * 2);
-  } else if (targetRoll < 0.82) {
-    baseTargetTrades = 26 + Math.floor(targetBandRoll * 3);
+  if (targetRoll < 0.16) {
+    baseTargetTrades = 22 + Math.floor(targetBandRoll * 2);
+  } else if (targetRoll < 0.84) {
+    baseTargetTrades = 24 + Math.floor(targetBandRoll * 5);
   } else {
     baseTargetTrades = 29 + Math.floor(targetBandRoll * 2);
   }
@@ -449,10 +449,10 @@ function normalizeBankState(existing, leagueData, context, testConfig = {}) {
   const targetRoll = random();
   const targetBandRoll = random();
   let generatedBaseTarget;
-  if (targetRoll < 0.18) {
-    generatedBaseTarget = 24 + Math.floor(targetBandRoll * 2);
-  } else if (targetRoll < 0.82) {
-    generatedBaseTarget = 26 + Math.floor(targetBandRoll * 3);
+  if (targetRoll < 0.16) {
+    generatedBaseTarget = 22 + Math.floor(targetBandRoll * 2);
+  } else if (targetRoll < 0.84) {
+    generatedBaseTarget = 24 + Math.floor(targetBandRoll * 5);
   } else {
     generatedBaseTarget = 29 + Math.floor(targetBandRoll * 2);
   }
@@ -778,16 +778,12 @@ export function getCpuTradeBankRunwayStatus(state, context = {}) {
   const horizonDays = daysToDeadline <= 21 ? 18 : daysToDeadline <= 60 ? 24 : 30;
   const upcomingSlots = countUpcomingExecutionSlots(state, dayIndex, horizonDays);
   const minimumSecured = remainingMinimum <= 0;
-  const lateOptionalInventoryLocked = minimumSecured && daysToDeadline <= 14;
+  const lateOptionalInventoryLocked = minimumSecured && daysToDeadline <= 21;
   const desiredReserve = remainingDesired <= 0 || lateOptionalInventoryLocked || upcomingSlots <= 0
     ? 0
     : Math.min(
         remainingDesired,
-        clamp(
-          upcomingSlots + (remainingMinimum > 0 ? 2 : 1),
-          remainingMinimum > 0 ? 4 : 2,
-          daysToDeadline <= 35 ? 8 : 6
-        )
+        clamp(upcomingSlots + 1, 2, daysToDeadline <= 35 ? 6 : 5)
       );
   const reserveDeficit = Math.max(0, desiredReserve - bankSize);
   const nextPlannedDay = getNextExecutionPlanDay(state);
@@ -874,14 +870,14 @@ export function getCpuTradeBankGenerationPolicy(state, context = {}, testConfig 
   const generationPasses = finiteNumber(state?.stats?.generationPasses, 0);
   const exactEvaluations = finiteNumber(state?.stats?.exactEvaluations, 0);
   const maximumGenerationPasses = clamp(
-    Math.trunc(finiteNumber(state?.maximumGenerationPasses, Math.ceil(runway.targetTrades * 0.8))),
-    20,
-    24
+    Math.trunc(finiteNumber(state?.maximumGenerationPasses, Math.ceil(runway.targetTrades * 0.72))),
+    14,
+    22
   );
   const maximumExactEvaluations = clamp(
-    Math.trunc(finiteNumber(state?.maximumExactEvaluations, runway.targetTrades * 30)),
-    720,
-    900
+    Math.trunc(finiteNumber(state?.maximumExactEvaluations, runway.targetTrades * 28)),
+    616,
+    840
   );
   const generationPassBudgetRemaining = Math.max(0, maximumGenerationPasses - generationPasses);
   const exactEvaluationBudgetRemaining = Math.max(0, maximumExactEvaluations - exactEvaluations);
@@ -1218,7 +1214,7 @@ export async function addGeneratedCpuTradeCandidates({
     // runway. This preserves validation/execution logic for every accepted
     // trade while avoiding v5's expensive surplus bank construction.
     const runwayAfterAccept = getCpuTradeBankRunwayStatus(state, context);
-    const surplusBuffer = runwayAfterAccept.remainingMinimum > 0 ? 2 : 1;
+    const surplusBuffer = runwayAfterAccept.daysToDeadline <= 21 ? 8 : 5;
     const enoughInventory =
       runwayAfterAccept.remainingTarget > 0 &&
       state.candidates.length >= Math.min(
@@ -1539,13 +1535,10 @@ export function executeDueCpuTradeFromBank({
       Math.max(finiteNumber(state.planCursor, 0) + 1, state.completedTrades)
     );
     state.selectionNonce += 1;
-    // Candidates that failed earlier in this same slot are permanently dead for
-    // the current live league state. Purge them even when a later candidate
-    // succeeds, otherwise the same rejected package can be retried for days.
-    state.candidates = removeCandidatesInvolvingTeams(
-      state.candidates.filter((row) => !staleIds.has(row.bankId || row.id)),
-      [candidate.fromTeamName, candidate.toTeamName]
-    );
+    state.candidates = removeCandidatesInvolvingTeams(state.candidates, [
+      candidate.fromTeamName,
+      candidate.toTeamName,
+    ]);
     state.stats.completedTrades = state.completedTrades;
     state.stats.lastExecution = {
       date: context?.currentDate || "",

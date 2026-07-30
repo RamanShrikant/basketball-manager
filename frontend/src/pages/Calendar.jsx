@@ -4008,10 +4008,7 @@ function startCpuTradeBankGenerationJob({
   workerContext,
   generationContext,
 }) {
-  // Never overwrite a fulfilled result that has not yet been admitted. A fast
-  // worker can finish after the pass-start consume check but before pass-end;
-  // preserving the ref lets the next simulated date consume that exact result.
-  if (!generationJobRef || generationJobRef.current) return false;
+  if (!generationJobRef || generationJobRef.current?.status === "pending") return false;
 
   const job = {
     id: `cpu_trade_bank_job_${Date.now()}_${workerContext?.generationNonce || 0}`,
@@ -4346,7 +4343,7 @@ async function runCpuCpuTradePassForDate({
       leagueData: nextLeagueData,
       context: baseContext,
       testConfig,
-      maxCandidateChecks: daysToDeadline <= 21 ? 12 : 10,
+      maxCandidateChecks: daysToDeadline <= 14 ? 10 : 8,
     });
 
     if (execution?.leagueData) nextLeagueData = execution.leagueData;
@@ -4579,7 +4576,7 @@ async function runCpuCpuTradePassForDate({
 
     if (
       generationPolicy.shouldGenerate &&
-      !generationJobRef?.current
+      generationJobRef?.current?.status !== "pending"
     ) {
       const workerContext = buildCpuTradeWorkerContext(
         activeState,

@@ -1,4 +1,4 @@
-export const CPU_TRADE_CONTINUOUS_MIN_TARGET = 24;
+export const CPU_TRADE_CONTINUOUS_MIN_TARGET = 22;
 export const CPU_TRADE_CONTINUOUS_MAX_TARGET = 30;
 
 function finiteNumber(value, fallback = 0) {
@@ -26,10 +26,11 @@ export function getContinuousMarketMinimumTrades(targetTrades) {
     CPU_TRADE_CONTINUOUS_MIN_TARGET,
     CPU_TRADE_CONTINUOUS_MAX_TARGET
   );
-  // Every season has a hard reliability floor of 24 trades, while the
-  // seeded desired ceiling can naturally land anywhere from 24 through 30.
-  // This keeps variance without forcing expensive exact-target catch-up.
-  return Math.min(target, CPU_TRADE_CONTINUOUS_MIN_TARGET);
+  return clamp(
+    target - 3,
+    CPU_TRADE_CONTINUOUS_MIN_TARGET,
+    target
+  );
 }
 
 export function getContinuousMarketBudgets(targetTrades) {
@@ -39,8 +40,8 @@ export function getContinuousMarketBudgets(targetTrades) {
     CPU_TRADE_CONTINUOUS_MAX_TARGET
   );
   return {
-    maximumGenerationPasses: clamp(Math.ceil(target * 0.8), 20, 24),
-    maximumExactEvaluations: clamp(target * 30, 720, 900),
+    maximumGenerationPasses: clamp(Math.ceil(target * 0.72), 14, 22),
+    maximumExactEvaluations: clamp(target * 28, 616, 840),
   };
 }
 
@@ -52,8 +53,8 @@ export function getContinuousMarketCooldownDays({
   const nonce = Math.max(0, Math.trunc(finiteNumber(generationNonce, 0)));
   const daysLeft = finiteNumber(daysToDeadline, 999);
   const roll = hashString(`${seed}|continuous-market-gap:${nonce}`);
-  const minimumGap = daysLeft <= 21 ? 1 : daysLeft <= 60 ? 2 : 3;
-  const spread = 2;
+  const minimumGap = daysLeft <= 21 ? 2 : daysLeft <= 60 ? 3 : 4;
+  const spread = daysLeft <= 21 ? 2 : 3;
   return minimumGap + (roll % spread);
 }
 
@@ -95,7 +96,7 @@ export function decideContinuousMarketGeneration({
   const cooldownReady = normalizedLastDay === null || day - normalizedLastDay >= cooldownDays;
   const minimumFloorRecovery = remainingMinimum > 0 &&
     bankSize === 0 &&
-    (Boolean(runway?.dueSoon) || daysLeft <= 28);
+    (Boolean(runway?.dueSoon) || daysLeft <= 14);
   const inventoryNeeded = reserveDeficit > 0 || minimumFloorRecovery;
 
   let shouldGenerate = false;
@@ -125,17 +126,17 @@ export function decideContinuousMarketGeneration({
   const requestedExact = clamp(
     Math.max(
       24,
-      reserveDeficit * 10,
-      remainingMinimum > 0 && bankSize === 0 ? 40 : 0
+      reserveDeficit * 12,
+      remainingMinimum > 0 && bankSize === 0 ? 36 : 0
     ),
     24,
-    40
+    36
   );
   const exactEvaluationLimit = Math.min(requestedExact, exactEvaluationBudgetRemaining);
   const requestedCandidates = clamp(
     Math.max(36, exactEvaluationLimit * 2),
     36,
-    daysLeft <= 28 ? 80 : 64
+    daysLeft <= 28 ? 72 : 60
   );
 
   return {
