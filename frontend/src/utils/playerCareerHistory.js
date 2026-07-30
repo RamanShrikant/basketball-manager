@@ -66,6 +66,19 @@ function pct1(made, attempts) {
   return round1((m / a) * 100);
 }
 
+function seasonStatRecordHasRealProduction(rec = {}) {
+  return (
+    Number(rec?.pts || 0) +
+    Number(rec?.reb || 0) +
+    Number(rec?.ast || 0) +
+    Number(rec?.stl || 0) +
+    Number(rec?.blk || 0) +
+    Number(rec?.fga || 0) +
+    Number(rec?.tpa || 0) +
+    Number(rec?.fta || 0)
+  ) > 0;
+}
+
 function buildArchivedSeasonRow(rec, seasonYear, teamLogoMap) {
   const gp = Number(rec?.gp || 0);
   const safeGp = gp || 1;
@@ -196,12 +209,12 @@ function collectAwardAccolades(seasonYear) {
   };
 
   const awardMap = [
-    ["mvp", "MVP", "Most Valuable Player"],
-    ["dpoy", "DPOY", "Defensive Player of the Year"],
-    ["sixth_man", "6MOY", "Sixth Man of the Year"],
-    ["mip", "MIP", "Most Improved Player"],
-    ["clutch_player", "CPOTY", "Clutch Player of the Year"],
-    ["roty", "ROTY", "Rookie of the Year"],
+    ["mvp", "Most Valuable Player", "Most Valuable Player"],
+    ["dpoy", "Defensive Player of the Year", "Defensive Player of the Year"],
+    ["sixth_man", "Sixth Man of the Year", "Sixth Man of the Year"],
+    ["mip", "Most Improved Player", "Most Improved Player"],
+    ["clutch_player", "Clutch Player of the Year", "Clutch Player of the Year"],
+    ["roty", "Rookie of the Year", "Rookie of the Year"],
   ];
   for (const [key, shortLabel, fullLabel] of awardMap) {
     const winner = awards?.[key];
@@ -224,14 +237,47 @@ function collectAwardAccolades(seasonYear) {
   const fmvpWinner = finalsMvp?.finals_mvp;
   if (fmvpWinner?.player) add(fmvpWinner.player, { seasonYear, type: "finals_mvp", label: "Finals MVP", team: fmvpWinner.team || finalsMvp?.champion_team || null, source: "sim" });
 
-  const addAllStars = (starRows, label) => {
-    for (const row of starRows || []) add(row?.player, { seasonYear, type: "all_star", label, team: row?.team || null, source: "sim" });
+  const addAllStars = (starRows) => {
+    for (const row of starRows || []) add(row?.player, { seasonYear, type: "all_star", label: "NBA All-Star", team: row?.team || null, source: "sim" });
   };
-  addAllStars(allStars?.east?.starters, "All-Star Starter");
-  addAllStars(allStars?.west?.starters, "All-Star Starter");
-  addAllStars(allStars?.east?.reserves, "All-Star Reserve");
-  addAllStars(allStars?.west?.reserves, "All-Star Reserve");
+  addAllStars(allStars?.east?.starters);
+  addAllStars(allStars?.west?.starters);
+  addAllStars(allStars?.east?.reserves);
+  addAllStars(allStars?.west?.reserves);
   return rows;
+}
+
+function applyChampionAccoladesToClonedLeague(updated, seasonYear, existingIndex = null) {
+  const finalsMvp = readCompressedOrJson(FINALS_MVP_KEY, null);
+  const championTeamName = finalsMvp?.champion_team || finalsMvp?.finals_mvp?.team || null;
+  if (!championTeamName) return updated;
+
+  const index = existingIndex || buildPlayerLocationIndex(updated);
+  const championTeams = getAllTeamsFromLeague(updated).filter((team) => team?.name === championTeamName);
+  const championPlayerNames = new Set();
+
+  for (const team of championTeams) {
+    for (const list of [team?.players, team?.twoWayPlayers]) {
+      for (const player of list || []) {
+        const playerName = player?.name || player?.player;
+        if (playerName) championPlayerNames.add(playerName);
+      }
+    }
+  }
+
+  const championAccolade = {
+    seasonYear,
+    type: "champion",
+    label: "NBA Champion",
+    team: championTeamName,
+    source: "sim",
+  };
+
+  for (const playerName of championPlayerNames) {
+    updateIndexedPlayer(index, playerName, (player) => addAccolade(player, championAccolade));
+  }
+
+  return updated;
 }
 
 function applyStatsToClonedLeague(updated, seasonYear) {
@@ -241,6 +287,12 @@ function applyStatsToClonedLeague(updated, seasonYear) {
   for (const rec of Object.values(statsMap || {})) {
     const playerName = rec?.player;
     if (!playerName || !Number(rec?.gp || 0)) continue;
+    // Awards-page aggregate rows are display helpers only. Do not archive them as
+    // extra player-card season rows or traded players can be double counted.
+    if (rec?._awardsOnly || rec?._combinedForAwards) continue;
+    // Do not archive corrupted placeholder rows like GP 82 / 0-0-0-0-0.
+    // Those rows can poison future ROTY/MIP eligibility and make cards look broken.
+    if (!seasonStatRecordHasRealProduction(rec)) continue;
     const row = buildArchivedSeasonRow(rec, seasonYear, teamLogoMap);
     updateIndexedPlayer(index, playerName, (player) => upsertSeasonRow(player, row));
   }
@@ -252,6 +304,7 @@ function applyAwardsToClonedLeague(updated, seasonYear, existingIndex = null) {
   for (const { playerName, accolade } of collectAwardAccolades(seasonYear)) {
     updateIndexedPlayer(index, playerName, (player) => addAccolade(player, accolade));
   }
+  applyChampionAccoladesToClonedLeague(updated, seasonYear, index);
   return updated;
 }
 

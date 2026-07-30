@@ -35,10 +35,13 @@ export function getCpuTradeSimulationDateDecision({
   currentDate,
   firstPendingDate = null,
   tradeDeadlineDate,
+  preseasonTradeStartDate = null,
+  allowPreseasonTrades = false,
 } = {}) {
   const current = cleanDate(currentDate);
   const pending = cleanDate(firstPendingDate);
   const deadline = cleanDate(tradeDeadlineDate);
+  const preseasonStart = cleanDate(preseasonTradeStartDate);
 
   if (!current || !deadline) {
     return { shouldRun: false, reason: "missing_date_context" };
@@ -46,11 +49,14 @@ export function getCpuTradeSimulationDateDecision({
   if (!pending) {
     return { shouldRun: false, reason: "season_already_complete" };
   }
-  if (current < pending) {
-    return { shouldRun: false, reason: "historical_date_already_simulated" };
-  }
   if (!isCpuTradeWindowOpenDate(current, deadline)) {
     return { shouldRun: false, reason: "trade_deadline_locked" };
+  }
+  if (current < pending) {
+    if (allowPreseasonTrades && preseasonStart && current >= preseasonStart) {
+      return { shouldRun: true, reason: "preseason_trade_window" };
+    }
+    return { shouldRun: false, reason: "historical_date_already_simulated" };
   }
   return { shouldRun: true, reason: "active_trade_window" };
 }

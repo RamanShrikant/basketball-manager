@@ -131,6 +131,63 @@ function statsKey(player, team) {
   return `${player}__${team}`;
 }
 
+function combineTrackerStatsForPlayer(statsMap, playerName, currentTeamName = "") {
+  const name = String(playerName || "").trim();
+  if (!name) return null;
+
+  const records = Object.entries(statsMap || {})
+    .filter(([key, row]) => (row?.player || key.split("__")[0]) === name && Number(row?.gp || 0) > 0)
+    .map(([, row]) => row);
+
+  if (!records.length) return null;
+
+  const total = {
+    player: name,
+    team: currentTeamName || records[records.length - 1]?.team || "",
+    gp: 0,
+    min: 0,
+    pts: 0,
+    reb: 0,
+    ast: 0,
+    stl: 0,
+    blk: 0,
+    fgm: 0,
+    fga: 0,
+    tpm: 0,
+    tpa: 0,
+    ftm: 0,
+    fta: 0,
+    to: 0,
+    pf: 0,
+    started: 0,
+    sixth: 0,
+    _hasRoleData: false,
+  };
+
+  for (const row of records) {
+    total.gp += Number(row.gp || 0);
+    total.min += Number(row.min || 0);
+    total.pts += Number(row.pts || 0);
+    total.reb += Number(row.reb || 0);
+    total.ast += Number(row.ast || 0);
+    total.stl += Number(row.stl || 0);
+    total.blk += Number(row.blk || 0);
+    total.fgm += Number(row.fgm || 0);
+    total.fga += Number(row.fga || 0);
+    total.tpm += Number(row.tpm || 0);
+    total.tpa += Number(row.tpa || 0);
+    total.ftm += Number(row.ftm || 0);
+    total.fta += Number(row.fta || 0);
+    total.to += Number(row.to ?? row.tov ?? row.turnovers ?? 0);
+    total.pf += Number(row.pf ?? row.fouls ?? 0);
+    total.started += Number(row.started || 0);
+    total.sixth += Number(row.sixth || 0);
+    total._hasRoleData = total._hasRoleData || Object.prototype.hasOwnProperty.call(row, "started") || Object.prototype.hasOwnProperty.call(row, "sixth");
+  }
+
+  return total;
+}
+
 function toInt(value, fallback = null) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -403,12 +460,12 @@ function buildCtx(players) {
 
 function impactMvp(p, c) {
   return (
-    0.28 * normWins(p._team_wins) +
-    0.27 * norm(ppg(p), c.ppg) +
+    0.30 * normWins(p._team_wins) +
+    0.28 * norm(ppg(p), c.ppg) +
     0.11 * norm(apg(p), c.apg) +
     0.11 * norm(rpg(p), c.rpg) +
-    0.09 * norm(spg(p), c.spg) +
-    0.09 * norm(bpg(p), c.bpg) +
+    0.075 * norm(spg(p), c.spg) +
+    0.075 * norm(bpg(p), c.bpg) +
     0.05 * normDefHi(Number(p.def_rating ?? 0), c.def_lo, c.def_hi)
   );
 }
@@ -457,6 +514,7 @@ function prevMipStat(prev, key) {
     spg: ["spg", "stl", "STL"],
     bpg: ["bpg", "blk", "BLK"],
     fgPct: ["fgPct", "fg_pct", "FG", "fg"],
+    mpg: ["mpg", "minutes", "min", "MIN"],
   }[key] || [key];
 
   for (const alias of aliases) {
@@ -485,28 +543,75 @@ function currentFgPct(p) {
   return (Number(p.fgm || 0) / fga) * 100;
 }
 
-function isMipEligible(p, seasonYear) {
-  if (isRookieCandidate(p, seasonYear)) return false;
+function prevMipGames(prev) {
+  return Number(prev?.games ?? prev?.gp ?? 0);
+}
 
-  const prev = p.mipPrev || p.mip_prev || p.previousSeasonStats;
-  if (!prev) return false;
+function prevMipMpg(prev) {
+  const raw = prevMipStat(prev, "mpg");
+  const games = Math.max(prevMipGames(prev), 1);
+  return raw > 60 ? raw / games : raw;
+}
 
-  const prevGames = Number(prev.games ?? prev.gp ?? 0);
-  if (prevGames < 25) return false;
-  if (mpg(p) < 14) return false;
-
-  const prevPpg = prevMipStat(prev, "ppg");
-  const prevProd = mipProdFromValues(
-    prevPpg,
+function previousNbaActivity(prev) {
+  if (!prev) return 0;
+  return mipProdFromValues(
+    prevMipStat(prev, "ppg"),
     prevMipStat(prev, "rpg"),
     prevMipStat(prev, "apg"),
     prevMipStat(prev, "spg"),
     prevMipStat(prev, "bpg")
   );
-  const currProd = mipProdFromValues(ppg(p), rpg(p), apg(p), spg(p), bpg(p));
+}
 
-  if (prevPpg >= 24 && prevProd >= 32) return false;
-  return (currProd - prevProd) >= 0.75 || (ppg(p) - prevPpg) >= 0.75;
+function isFirstNbaMinutesSeason(player) {
+  const prev = player?.mipPrev || player?.mip_prev || player?.previousSeasonStats;
+  if (!prev) return true;
+  return prevMipGames(prev) <= 0 || (prevMipMpg(prev) <= 0.01 && previousNbaActivity(prev) <= 0.01);
+}
+
+function isRotyCandidateForAwards(player, seasonYear) {
+  return isRookieCandidate(player, seasonYear) || isFirstNbaMinutesSeason(player);
+}
+
+function currentPer36Prod(p) {
+  const minutes = Number(p.min || 0);
+  if (minutes <= 0) return 0;
+  return mipProdFromValues(
+    (36 * Number(p.pts || 0)) / minutes,
+    (36 * Number(p.reb || 0)) / minutes,
+    (36 * Number(p.ast || 0)) / minutes,
+    (36 * Number(p.stl || 0)) / minutes,
+    (36 * Number(p.blk || 0)) / minutes
+  );
+}
+
+function prevPer36Prod(prev, prevProd) {
+  const prevMpg = prevMipMpg(prev);
+  if (prevMpg <= 0) return prevProd;
+  return (prevProd * 36) / prevMpg;
+}
+
+function isMipEligible(p, seasonYear) {
+  if (isRotyCandidateForAwards(p, seasonYear)) return false;
+
+  const prev = p.mipPrev || p.mip_prev || p.previousSeasonStats;
+  if (!prev) return false;
+
+  const prevGames = prevMipGames(prev);
+  if (prevGames < 30) return false;
+
+  const prevProd = previousNbaActivity(prev);
+  const prevMpg = prevMipMpg(prev);
+  if (prevProd <= 0.25 && prevMpg <= 0.01) return false;
+
+  if (mpg(p) < 18) return false;
+
+  const currProd = mipProdFromValues(ppg(p), rpg(p), apg(p), spg(p), bpg(p));
+  const per36Delta = currentPer36Prod(p) - prevPer36Prod(prev, prevProd);
+  const ppgDelta = ppg(p) - prevMipStat(prev, "ppg");
+
+  return (currProd - prevProd) >= 1.0 || ppgDelta >= 1.0 || per36Delta >= 1.5;
 }
 
 function impactMip(p) {
@@ -523,21 +628,23 @@ function impactMip(p) {
   const prevProd = mipProdFromValues(prevPpg, prevRpg, prevApg, prevSpg, prevBpg);
   const prodDelta = currProd - prevProd;
   const relativeGain = prodDelta / Math.max(prevProd, 5);
+  const per36Delta = currentPer36Prod(p) - prevPer36Prod(prev, prevProd);
   const fgDelta = prevFg > 0 ? currentFgPct(p) - prevFg : 0;
 
   let score =
-    3.25 * Math.max(0, relativeGain) +
-    0.88 * Math.max(0, ppg(p) - prevPpg) +
-    0.42 * Math.max(0, rpg(p) - prevRpg) +
-    0.48 * Math.max(0, apg(p) - prevApg) +
-    1.10 * Math.max(0, spg(p) - prevSpg) +
-    1.10 * Math.max(0, bpg(p) - prevBpg) +
-    0.18 * Math.max(0, fgDelta) +
+    2.20 * Math.max(0, relativeGain) +
+    0.60 * Math.max(0, prodDelta) +
+    0.52 * Math.max(0, per36Delta) +
+    0.72 * Math.max(0, ppg(p) - prevPpg) +
+    0.28 * Math.max(0, rpg(p) - prevRpg) +
+    0.32 * Math.max(0, apg(p) - prevApg) +
+    0.70 * Math.max(0, spg(p) - prevSpg) +
+    0.70 * Math.max(0, bpg(p) - prevBpg) +
+    0.14 * Math.max(0, fgDelta) +
     0.35 * norm(mpg(p), 36) +
     0.18 * normWins(p._team_wins);
 
-  if (prevProd < 6) score *= 0.78;
-  if (prevPpg >= 18) score *= 0.88;
+  if (prevProd < 6) score *= 0.86;
 
   return score;
 }
@@ -953,7 +1060,7 @@ export default function AwardTracker() {
         if (!playerName) continue;
 
         const key = statsKey(playerName, teamName);
-        const s = currentSeasonStatsMap[key];
+        const s = combineTrackerStatsForPlayer(currentSeasonStatsMap, playerName, teamName);
         const info = rosterInfoIndex[key] || {};
 
         if (!s || Number(s.gp || 0) <= 0) continue;
@@ -970,7 +1077,7 @@ export default function AwardTracker() {
           blk: Number(s.blk || 0),
           started: Number(s.started || 0),
           sixth: Number(s.sixth || 0),
-          _hasRoleData: Object.prototype.hasOwnProperty.call(s, "started") || Object.prototype.hasOwnProperty.call(s, "sixth"),
+          _hasRoleData: Boolean(s._hasRoleData) || Object.prototype.hasOwnProperty.call(s, "started") || Object.prototype.hasOwnProperty.call(s, "sixth"),
           def_rating: Number(info.def_rating ?? 0),
           overall: info.overall ?? null,
           potential: info.potential ?? null,
@@ -998,7 +1105,7 @@ export default function AwardTracker() {
           yearsOfExperience: info.yearsOfExperience,
           yoe: info.yoe,
           _team_wins: Number(teamWinsMap[teamName] || 0),
-          _team_games: Number(teamGamesMap[teamName] || 0),
+          _team_games: Math.max(Number(teamGamesMap[teamName] || 0), Number(s.gp || 0)),
         });
       }
     }
@@ -1043,7 +1150,7 @@ export default function AwardTracker() {
   }, [sixthPool, eligiblePool]);
 
   const rookiePool = useMemo(() => {
-    const strict = eligiblePool.filter((p) => isRookieCandidate(p, trackerSeasonYear));
+    const strict = eligiblePool.filter((p) => isRotyCandidateForAwards(p, trackerSeasonYear));
     const hasDraftYearData = eligiblePool.some((p) => hasExplicitRookieYearData(p));
     if (strict.length || hasDraftYearData) return strict;
     return eligiblePool.filter((p) => isYoungRotyFallback(p));

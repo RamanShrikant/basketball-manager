@@ -181,6 +181,21 @@ function parseDateString(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
 }
 
+
+function thirdSundayOfFebruary(year) {
+  const d = new Date(year, 1, 1);
+  const offset = (7 - d.getDay()) % 7;
+  return fmtDate(year, 1, 1 + offset + 14);
+}
+
+function addDaysToDateString(dateStr, delta) {
+  const parts = String(dateStr || "").split("-").map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+  const d = new Date(parts[0], parts[1] - 1, parts[2]);
+  d.setDate(d.getDate() + delta);
+  return fmtDate(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
 function fmtDate(year, monthIndex, day) {
   const d = new Date(year, monthIndex, day);
   const y = d.getFullYear();
@@ -193,13 +208,19 @@ export function getSeasonCalendarConfig(leagueData = {}) {
   const seasonStartYear = getSeasonStartYear(leagueData);
   const displaySeasonYear = getDisplaySeasonYear(leagueData);
   const source = leagueData?.calendar && typeof leagueData.calendar === "object" ? leagueData.calendar : {};
-  const defaultAllStarStart = seasonStartYear === 2026 ? fmtDate(displaySeasonYear, 1, 19) : fmtDate(displaySeasonYear, 1, 13);
-  const defaultAllStarEnd = seasonStartYear === 2026 ? fmtDate(displaySeasonYear, 1, 21) : fmtDate(displaySeasonYear, 1, 15);
+  const defaultAllStarDate = thirdSundayOfFebruary(displaySeasonYear);
+  const defaultAllStarStart = addDaysToDateString(defaultAllStarDate, -5);
+  const defaultAllStarEnd = addDaysToDateString(defaultAllStarDate, 3);
 
   return {
+    // Calendar begins on October 1 so preseason/trade/intel dates are visible.
     regularSeasonStart:
       parseDateString(source.regularSeasonStart) ??
-      parseDateString(source.seasonStartDate) ??
+      parseDateString(source.calendarStartDate) ??
+      fmtDate(seasonStartYear, 9, 1),
+    // Actual regular-season games can still begin on the normal late-October window.
+    regularSeasonGameStart:
+      parseDateString(source.regularSeasonGameStart) ??
       fmtDate(seasonStartYear, 9, 21),
     regularSeasonEnd:
       parseDateString(source.regularSeasonEnd) ??
@@ -207,7 +228,7 @@ export function getSeasonCalendarConfig(leagueData = {}) {
       fmtDate(displaySeasonYear, 3, 12),
     allStarStart:
       parseDateString(source.allStarStart) ??
-      parseDateString(source.allStarSelectionDate) ??
+      parseDateString(source.allStarBreakStart) ??
       defaultAllStarStart,
     allStarEnd:
       parseDateString(source.allStarEnd) ??
@@ -216,8 +237,7 @@ export function getSeasonCalendarConfig(leagueData = {}) {
     allStarSelectionDate:
       parseDateString(source.allStarSelectionDate) ??
       parseDateString(source.allStarDate) ??
-      parseDateString(source.allStarStart) ??
-      defaultAllStarStart,
+      defaultAllStarDate,
     tradeDeadlineDate:
       parseDateString(source.tradeDeadlineDate) ??
       parseDateString(source.tradeDeadline) ??
@@ -316,11 +336,12 @@ export function withOffseasonSeasonContext(leagueData = {}, offseasonSeasonYear 
     currentFinancialSeasonYear: financialSeasonYear,
     calendar: {
       ...existingCalendar,
-      regularSeasonStart: fmtDate(seasonYear, 9, 21),
+      regularSeasonStart: fmtDate(seasonYear, 9, 1),
+      regularSeasonGameStart: fmtDate(seasonYear, 9, 21),
       regularSeasonEnd: fmtDate(displaySeasonYear, 3, 12),
-      allStarStart: seasonYear === 2026 ? fmtDate(displaySeasonYear, 1, 19) : fmtDate(displaySeasonYear, 1, 13),
-      allStarEnd: seasonYear === 2026 ? fmtDate(displaySeasonYear, 1, 21) : fmtDate(displaySeasonYear, 1, 15),
-      allStarSelectionDate: seasonYear === 2026 ? fmtDate(displaySeasonYear, 1, 19) : fmtDate(displaySeasonYear, 1, 13),
+      allStarStart: addDaysToDateString(thirdSundayOfFebruary(displaySeasonYear), -5),
+      allStarEnd: addDaysToDateString(thirdSundayOfFebruary(displaySeasonYear), 3),
+      allStarSelectionDate: thirdSundayOfFebruary(displaySeasonYear),
       tradeDeadlineDate: fmtDate(displaySeasonYear, 1, 4),
     },
     financials: {

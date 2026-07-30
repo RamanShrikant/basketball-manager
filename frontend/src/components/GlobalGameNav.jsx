@@ -2,6 +2,7 @@ import React, { useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 const HIDDEN_ROUTES = new Set(["/", "/league-editor", "/play", "/team-selector", "/team-hub", "/awards"]);
+const TEAM_HUB_RETURN_CONTEXT_KEY = "bm_team_hub_return_context_v1";
 
 const TEAM_HUB_ROUTES = new Set([
   "/roster-view",
@@ -33,6 +34,40 @@ const OFFSEASON_ROUTES = new Set([
   "/player-progression",
 ]);
 
+
+function readTeamHubReturnContext() {
+  try {
+    const raw = sessionStorage.getItem(TEAM_HUB_RETURN_CONTEXT_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed?.section) return null;
+    const ageMs = Date.now() - Number(parsed.updatedAt || 0);
+    if (!Number.isFinite(ageMs) || ageMs > 60 * 60 * 1000) {
+      sessionStorage.removeItem(TEAM_HUB_RETURN_CONTEXT_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function buildTeamHubReturnConfig(fallbackLabel = "Team Hub") {
+  const ctx = readTeamHubReturnContext();
+  if (!ctx?.section) return { primaryPath: "/team-hub", primaryLabel: fallbackLabel, showHub: false };
+
+  const primaryState = {
+    hubSection: ctx.section,
+    ...(ctx.offseasonMode ? { offseasonMode: true, returnTo: ctx.returnTo || "/offseason" } : {}),
+    ...(ctx.playoffMode ? { playoffMode: true, playoffReturnTo: ctx.playoffReturnTo || "/playoffs" } : {}),
+  };
+
+  return {
+    primaryPath: "/team-hub",
+    primaryLabel: ctx.label || ctx.section,
+    primaryState,
+    showHub: false,
+  };
+}
 
 function isOffseasonActive() {
   try {
@@ -81,6 +116,10 @@ function routeConfig(pathname) {
   }
 
   if (pathname === "/free-agents" && isOffseasonActive()) {
+    const hubContext = buildTeamHubReturnConfig("Offseason Hub");
+    if (hubContext.primaryLabel !== "Offseason Hub" || hubContext.primaryState?.hubSection) {
+      return hubContext;
+    }
     return { primaryPath: "/offseason", primaryLabel: "Offseason Hub", showHub: true };
   }
 
@@ -101,10 +140,10 @@ function routeConfig(pathname) {
   }
 
   if (TEAM_HUB_ROUTES.has(pathname) || pathname.startsWith("/players")) {
-    return { primaryPath: "/team-hub", primaryLabel: "Team Hub", showHub: false };
+    return buildTeamHubReturnConfig("Team Hub");
   }
 
-  return { primaryPath: "/team-hub", primaryLabel: "Team Hub", showHub: false };
+  return buildTeamHubReturnConfig("Team Hub");
 }
 
 function shouldIgnoreShortcut(event) {
@@ -158,7 +197,7 @@ export default function GlobalGameNav() {
           navigate("/propose-trade", { state: { resumeTradeBuilder: true } });
         } else {
           if (location.pathname === "/propose-trade") clearTradeBuilderSession();
-          navigate(config.primaryPath);
+          navigate(config.primaryPath, config.primaryState ? { state: config.primaryState } : undefined);
         }
         return;
       }
@@ -188,7 +227,7 @@ export default function GlobalGameNav() {
               return;
             }
             if (location.pathname === "/propose-trade") clearTradeBuilderSession();
-            navigate(config.primaryPath);
+            navigate(config.primaryPath, config.primaryState ? { state: config.primaryState } : undefined);
           }}
           title={`Back to ${config.primaryLabel}`}
         >

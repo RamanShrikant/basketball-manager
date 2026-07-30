@@ -44,6 +44,8 @@ def _norm_wins(wins: float, cap: float, gamma: float = 2.0) -> float:
     return floor + (1.0 - floor) * base
 
 
+ALL_STAR_LOGIC_VERSION = "all_star_current_team_v2_20260730"
+
 def _normalize_player_stats(player_stats: Any) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
 
@@ -149,6 +151,75 @@ def _build_team_conference_map(league_data: Dict[str, Any]) -> Dict[str, str]:
 
     return out
 
+
+def _build_current_roster_team_map(league_data: Dict[str, Any]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    conferences = (league_data or {}).get("conferences") or {}
+    teams = []
+    if isinstance((league_data or {}).get("teams"), list):
+        teams.extend((league_data or {}).get("teams") or [])
+    for rows in conferences.values():
+        if isinstance(rows, list):
+            teams.extend(rows)
+
+    for team in teams:
+        if not isinstance(team, dict):
+            continue
+        team_name = team.get("name") or team.get("team")
+        if not team_name:
+            continue
+        for bucket in ["players", "twoWayPlayers", "stashPlayers"]:
+            for player in team.get(bucket) or []:
+                if not isinstance(player, dict):
+                    continue
+                name = player.get("name") or player.get("player")
+                if name:
+                    out[str(name)] = str(team_name)
+    return out
+
+def _combine_rows_by_player_current_team(rows: List[Dict[str, Any]], current_team_by_player: Dict[str, str]) -> List[Dict[str, Any]]:
+    grouped: Dict[str, Dict[str, Any]] = {}
+
+    for row in rows:
+        name = row.get("player")
+        if not name:
+            continue
+        if name not in grouped:
+            grouped[name] = {
+                "player": name,
+                "team": current_team_by_player.get(name) or row.get("team") or "",
+                "gp": 0,
+                "pts_total": 0.0,
+                "reb_total": 0.0,
+                "ast_total": 0.0,
+                "stl_total": 0.0,
+                "blk_total": 0.0,
+                "started": 0,
+                "sixth": 0,
+                "fgm": 0.0,
+                "fga": 0.0,
+                "tpm": 0.0,
+                "tpa": 0.0,
+                "ftm": 0.0,
+                "fta": 0.0,
+                "def_rating": row.get("def_rating", 0.0),
+                "team_names": [],
+            }
+        total = grouped[name]
+        if current_team_by_player.get(name):
+            total["team"] = current_team_by_player[name]
+        elif row.get("team"):
+            total["team"] = row.get("team")
+        if row.get("team") and row.get("team") not in total["team_names"]:
+            total["team_names"].append(row.get("team"))
+        for key in ["gp", "started", "sixth"]:
+            total[key] += _to_int(row.get(key), 0)
+        for key in ["pts_total", "reb_total", "ast_total", "stl_total", "blk_total", "fgm", "fga", "tpm", "tpa", "ftm", "fta"]:
+            total[key] += _to_float(row.get(key), 0.0)
+        if _to_float(row.get("def_rating"), 0.0) > _to_float(total.get("def_rating"), 0.0):
+            total["def_rating"] = row.get("def_rating", total.get("def_rating", 0.0))
+
+    return list(grouped.values())
 
 def _build_team_wins(schedule_by_date: Dict[str, Any], results_by_id: Dict[str, Any]) -> Dict[str, int]:
     wins: Dict[str, int] = {}
@@ -325,6 +396,8 @@ def compute_all_stars(payload: Dict[str, Any]) -> Dict[str, Any]:
     results_by_id = payload.get("resultsById") or payload.get("results_by_id") or {}
 
     normalized_rows = _normalize_player_stats(player_stats)
+    current_team_by_player = _build_current_roster_team_map(league_data)
+    normalized_rows = _combine_rows_by_player_current_team(normalized_rows, current_team_by_player)
     team_conf_map = _build_team_conference_map(league_data)
     team_wins = _build_team_wins(schedule_by_date, results_by_id)
 
@@ -344,6 +417,7 @@ def compute_all_stars(payload: Dict[str, Any]) -> Dict[str, Any]:
         "season": season,
         "cutoff_date": cutoff_date,
         "min_games": min_games,
+        "all_star_version": ALL_STAR_LOGIC_VERSION,
         "east": east,
         "west": west,
     }

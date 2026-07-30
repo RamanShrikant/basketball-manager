@@ -149,6 +149,53 @@ function statsKey(player, team) {
   return `${player}__${team}`;
 }
 
+function combineAwardStatsMapRows(statsMap, playerName, currentTeamName = "") {
+  const name = String(playerName || "").trim();
+  if (!name) return null;
+
+  const records = Object.entries(statsMap || {})
+    .filter(([key, row]) => (row?.player || key.split("__")[0]) === name && Number(row?.gp || 0) > 0)
+    .map(([, row]) => row);
+
+  if (!records.length) return null;
+
+  const total = {
+    player: name,
+    team: currentTeamName || records[records.length - 1]?.team || "",
+    gp: 0,
+    min: 0,
+    pts: 0,
+    reb: 0,
+    ast: 0,
+    stl: 0,
+    blk: 0,
+    fgm: 0,
+    fga: 0,
+    tpm: 0,
+    tpa: 0,
+    ftm: 0,
+    fta: 0,
+  };
+
+  for (const row of records) {
+    total.gp += Number(row.gp || 0);
+    total.min += Number(row.min || 0);
+    total.pts += Number(row.pts || 0);
+    total.reb += Number(row.reb || 0);
+    total.ast += Number(row.ast || 0);
+    total.stl += Number(row.stl || 0);
+    total.blk += Number(row.blk || 0);
+    total.fgm += Number(row.fgm || 0);
+    total.fga += Number(row.fga || 0);
+    total.tpm += Number(row.tpm || 0);
+    total.tpa += Number(row.tpa || 0);
+    total.ftm += Number(row.ftm || 0);
+    total.fta += Number(row.fta || 0);
+  }
+
+  return total;
+}
+
 function readCompressedOrJson(key, fallback = null) {
   try {
     const raw = localStorage.getItem(key);
@@ -307,8 +354,7 @@ const [mvpPartyPieces, setMvpPartyPieces] = useState([]);
         ftPct: 0,
       };
     }
-    const skey = statsKey(winner.player, winner.team);
-    const stats = statsMap[skey];
+    const stats = combineAwardStatsMapRows(statsMap, winner.player, winner.team);
     return buildPerGameRow(winner.player, winner.team, stats);
   }, [currentKey, winner, statsMap]);
 

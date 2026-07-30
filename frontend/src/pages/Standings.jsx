@@ -7,6 +7,7 @@ import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 import { getArchivedStatsSnapshot, getLatestSeasonHistoryEntry, seasonLabelFromStartYear } from "../utils/seasonStatsArchive.js";
+import { DIVISION_NAMES, groupTeamsByDivision, resolveTeamDivision } from "../utils/leagueDivisions.js";
 
 /* -----------------------------
    Results V3 (per-game storage)
@@ -98,6 +99,7 @@ export default function Standings() {
       teams.map((t) => ({
         ...t,
         conf,
+        division: resolveTeamDivision(t, conf),
         logo: resolveLogo(t),
       }))
     );
@@ -125,6 +127,7 @@ export default function Standings() {
         return {
           team: row?.teamName || "Unknown Team",
           conf: row?.conference || "",
+          division: row?.division || resolveTeamDivision({ name: row?.teamName || row?.team }, row?.conference || ""),
           logo: row?.logo || "",
           w: wins,
           l: losses,
@@ -148,6 +151,7 @@ export default function Standings() {
         return {
           team: teamName,
           conf: row?.conference || row?.conf || live?.conf || "",
+          division: row?.division || live?.division || resolveTeamDivision({ name: teamName }, row?.conference || row?.conf || live?.conf || ""),
           logo: live?.logo || "",
           w: wins,
           l: losses,
@@ -166,6 +170,7 @@ export default function Standings() {
       stats[t.name] = {
         team: t.name,
         conf: t.conf,
+        division: t.division,
         logo: t.logo,
         w: 0,
         l: 0,
@@ -191,6 +196,7 @@ export default function Standings() {
         stats[homeName] = {
           team: homeName,
           conf: meta.confHome || "",
+          division: meta.divisionHome || resolveTeamDivision({ name: homeName }, meta.confHome || ""),
           logo: resolveLogo(meta) || "",
           w: 0,
           l: 0,
@@ -202,6 +208,7 @@ export default function Standings() {
         stats[awayName] = {
           team: awayName,
           conf: meta.confAway || "",
+          division: meta.divisionAway || resolveTeamDivision({ name: awayName }, meta.confAway || ""),
           logo: resolveLogo(meta) || "",
           w: 0,
           l: 0,
@@ -249,6 +256,46 @@ export default function Standings() {
       ),
     [filtered]
   );
+  const divisionGroups = useMemo(() => {
+    const sortedTeams = [...teamStats].sort(
+      (a, b) => parseFloat(b.pct) - parseFloat(a.pct) || b.diff - a.diff || String(a.team).localeCompare(String(b.team))
+    );
+    return groupTeamsByDivision(sortedTeams, leagueData);
+  }, [teamStats, leagueData]);
+
+  const renderStandingsTable = (rows, compact = false) => (
+    <table className="w-full text-sm text-center">
+      <thead className="sticky top-0 z-10 bg-neutral-800 text-gray-300">
+        <tr>
+          <th className="px-3 py-2 text-left pl-4">Team</th>
+          <th className="px-3 py-2">W</th>
+          <th className="px-3 py-2">L</th>
+          <th className="px-3 py-2">PCT</th>
+          <th className="px-3 py-2">PF</th>
+          <th className="px-3 py-2">PA</th>
+          <th className="px-3 py-2">DIFF</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((t, i) => (
+          <tr key={`${t.division || "league"}-${t.team}`} className={`hover:bg-neutral-800/60 ${selectedTeam?.name === t.team ? "bg-orange-600/70" : ""}`}>
+            <td className={`px-3 ${compact ? "py-1.5" : "py-2"} text-left pl-4 font-semibold`}>
+              <div className="flex items-center gap-2">
+                {t.logo && <img src={t.logo} alt={t.team} className="w-6 h-6 object-contain" />}
+                <span>{i + 1}. {t.team}</span>
+              </div>
+            </td>
+            <td className="px-3 py-2">{t.w}</td>
+            <td className="px-3 py-2">{t.l}</td>
+            <td className="px-3 py-2">{t.pct}</td>
+            <td className="px-3 py-2">{t.pf}</td>
+            <td className="px-3 py-2">{t.pa}</td>
+            <td className="px-3 py-2">{t.diff}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 
   return (
     <PageFade>
@@ -263,7 +310,8 @@ export default function Standings() {
             {[
               "all",
               "east",
-              "west"
+              "west",
+              "div"
             ].map((mode) => (
               <button
                 key={mode}
@@ -274,58 +322,35 @@ export default function Standings() {
               >
                 {mode === "all"
                   ? "All"
-                  : mode.charAt(0).toUpperCase() + mode.slice(1)}
+                  : mode === "div"
+                    ? "Div"
+                    : mode.charAt(0).toUpperCase() + mode.slice(1)}
               </button>
             ))}
           </div>
         </div>
 
         <div className="bmTableScroller min-h-0 flex-1 overflow-auto rounded-xl border border-neutral-800">
-          <table className="w-full text-sm text-center">
-            <thead className="sticky top-0 z-10 bg-neutral-800 text-gray-300">
-              <tr>
-                <th className="px-3 py-2 text-left pl-4">Team</th>
-                <th className="px-3 py-2">W</th>
-                <th className="px-3 py-2">L</th>
-                <th className="px-3 py-2">PCT</th>
-                <th className="px-3 py-2">PF</th>
-                <th className="px-3 py-2">PA</th>
-                <th className="px-3 py-2">DIFF</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((t, i) => (
-                <tr
-                  key={t.team}
-                  className={`hover:bg-neutral-800/60 ${
-                    selectedTeam?.name === t.team ? "bg-orange-600/70" : ""
-                  }`}
-                >
-                  <td className="px-3 py-2 text-left pl-4 font-semibold">
-                    <div className="flex items-center gap-2">
-                      {t.logo && (
-                        <img
-                          src={t.logo}
-                          alt={t.team}
-                          className="w-6 h-6 object-contain"
-                        />
-                      )}
-                      <span>
-                        {i + 1}. {t.team}
-                      </span>
+          {viewMode === "div" ? (
+            <div className="grid grid-cols-1 gap-4 p-3 lg:grid-cols-2">
+              {DIVISION_NAMES.map((division) => {
+                const rows = divisionGroups[division] || [];
+                if (!rows.length) return null;
+                return (
+                  <div key={division} className="overflow-hidden rounded-xl border border-neutral-800 bg-neutral-950/55">
+                    <div className="border-b border-orange-500/25 bg-neutral-900/90 px-4 py-2 text-left text-lg font-black uppercase tracking-[0.14em] text-orange-400">
+                      {division}
                     </div>
-                  </td>
-                  <td className="px-3 py-2">{t.w}</td>
-                  <td className="px-3 py-2">{t.l}</td>
-                  <td className="px-3 py-2">{t.pct}</td>
-                  <td className="px-3 py-2">{t.pf}</td>
-                  <td className="px-3 py-2">{t.pa}</td>
-                  <td className="px-3 py-2">{t.diff}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    {renderStandingsTable(rows, true)}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            renderStandingsTable(sorted)
+          )}
         </div>
+
 
         <button
           onClick={() => navigate("/team-hub")}

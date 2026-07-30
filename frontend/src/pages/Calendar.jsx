@@ -53,6 +53,7 @@ import {
 } from "../utils/cpuTradeSaveQueue.js";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
 import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
+import { getDefaultDivisionForTeam, getDivisionConference, resolveTeamDivision } from "../utils/leagueDivisions.js";
 import {
   applyGameToClutchStats,
   computeClutchAwardResults,
@@ -734,126 +735,535 @@ const MiniStandingsPanel = ({
 
 
 /* -------------------------------------------------------------------------- */
-/*                        ROUND-ROBIN + SCHEDULE ENGINE                       */
+/*                        DIVISION-AWARE SCHEDULE ENGINE                       */
 /* -------------------------------------------------------------------------- */
-function singleRoundRobinRounds(teamIds) {
-  const ids = [...teamIds];
-  if (ids.length % 2 === 1) ids.push("__BYE__");
+function stableHashNumber(value = "") {
+  let hash = 2166136261;
+  for (const ch of String(value)) {
+    hash ^= ch.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash >>> 0);
+}
 
-  const n = ids.length;
-  const rounds = [];
-  let arr = ids.slice();
+function resolveCalendarTeamMeta(teams = []) {
+  const byCanon = {};
+  const byConference = { East: [], West: [] };
+  const byDivision = {};
 
-  for (let r = 0; r < n - 1; r++) {
-    const games = [];
-    for (let i = 0; i < n / 2; i++) {
-      const a = arr[i];
-      const b = arr[n - 1 - i];
-      if (a !== "__BYE__" && b !== "__BYE__") {
-        games.push(
-          r % 2 === 0 ? { home: a, away: b } : { home: b, away: a }
-        );
-      }
-    }
+  teams.forEach((t) => {
+    const cid = slugifyId(t.name);
+    const division = resolveTeamDivision(t, t.conference || t.conf || "");
+    const conference = getDivisionConference(division) || t.conference || t.conf || "";
+    const row = {
+      id: cid,
+      name: t.name,
+      division,
+      conference,
+      logo: t.logo || t.teamLogo || t.logoUrl || t.image || t.img || t.newTeamLogo || "",
+    };
+    byCanon[cid] = row;
+    if (!byConference[conference]) byConference[conference] = [];
+    byConference[conference].push(row);
+    if (!byDivision[division]) byDivision[division] = [];
+    byDivision[division].push(row);
+  });
 
-    rounds.push(games);
-    arr = [arr[0], arr[n - 1]].concat(arr.slice(1, n - 1));
+  return { byCanon, byConference, byDivision };
+}
+
+function addSeriesGames(matchups, a, b, count, seedLabel = "", threeGameTwoHomeTeamId = null) {
+  if (!a || !b || a.id === b.id) return;
+  if (count === 4) {
+    matchups.push({ home: a.id, away: b.id }, { home: b.id, away: a.id }, { home: a.id, away: b.id }, { home: b.id, away: a.id });
+    return;
+  }
+  if (count === 2) {
+    matchups.push({ home: a.id, away: b.id }, { home: b.id, away: a.id });
+    return;
   }
 
-  return rounds;
+  const aGetsTwoHome = threeGameTwoHomeTeamId
+    ? a.id === threeGameTwoHomeTeamId
+    : stableHashNumber(`${seedLabel}|${a.id}|${b.id}`) % 2 === 0;
+  matchups.push(
+    { home: aGetsTwoHome ? a.id : b.id, away: aGetsTwoHome ? b.id : a.id },
+    { home: aGetsTwoHome ? b.id : a.id, away: aGetsTwoHome ? a.id : b.id },
+    { home: aGetsTwoHome ? a.id : b.id, away: aGetsTwoHome ? b.id : a.id }
+  );
+}
+
+function getExtraFourGamePairsForConference(confTeams = []) {
+  const divisions = {};
+  for (const team of confTeams) {
+    if (!divisions[team.division]) divisions[team.division] = [];
+    divisions[team.division].push(team);
+  }
+  const divisionRows = Object.values(divisions).map((rows) => [...rows].sort((a, b) => a.name.localeCompare(b.name)));
+  const extras = new Set();
+  for (let i = 0; i < divisionRows.length; i += 1) {
+    for (let j = i + 1; j < divisionRows.length; j += 1) {
+      const aRows = divisionRows[i];
+      const bRows = divisionRows[j];
+      const limit = Math.min(aRows.length, bRows.length);
+      for (let idx = 0; idx < limit; idx += 1) {
+        for (let shift = 0; shift < Math.min(3, limit); shift += 1) {
+          const a = aRows[idx];
+          const b = bRows[(idx + shift) % limit];
+          extras.add([a.id, b.id].sort().join("__"));
+        }
+      }
+    }
+  }
+  return extras;
+}
+
+function buildDivisionAwareMatchups(teams = []) {
+  const { byCanon, byConference } = resolveCalendarTeamMeta(teams);
+  const ids = Object.keys(byCanon);
+  const matchups = [];
+  const extrasByConference = Object.fromEntries(
+    Object.entries(byConference).map(([conference, rows]) => [conference, getExtraFourGamePairsForConference(rows)])
+  );
+  const threeGameTwoHomeCounts = Object.fromEntries(ids.map((id) => [id, 0]));
+
+  for (let i = 0; i < ids.length; i += 1) {
+    for (let j = i + 1; j < ids.length; j += 1) {
+      const a = byCanon[ids[i]];
+      const b = byCanon[ids[j]];
+      if (!a || !b) continue;
+
+      let count = 2;
+      if (a.conference === b.conference) {
+        if (a.division === b.division) {
+          count = 4;
+        } else {
+          const extras = extrasByConference[a.conference] || new Set();
+          const key = [a.id, b.id].sort().join("__");
+          count = extras.has(key) ? 4 : 3;
+        }
+      }
+      let twoHomeTeamId = null;
+      if (count === 3) {
+        const aCount = threeGameTwoHomeCounts[a.id] || 0;
+        const bCount = threeGameTwoHomeCounts[b.id] || 0;
+        if (aCount < 2 && bCount >= 2) twoHomeTeamId = a.id;
+        else if (bCount < 2 && aCount >= 2) twoHomeTeamId = b.id;
+        else twoHomeTeamId = stableHashNumber(`${a.id}|${b.id}|three-home`) % 2 === 0 ? a.id : b.id;
+        threeGameTwoHomeCounts[twoHomeTeamId] = (threeGameTwoHomeCounts[twoHomeTeamId] || 0) + 1;
+      }
+      addSeriesGames(matchups, a, b, count, `${a.conference}|${a.division}|${b.division}`, twoHomeTeamId);
+    }
+  }
+
+  return { matchups, byCanon };
+}
+
+function hasTeamGameOn(scheduleTeamDates, teamId, dateStr) {
+  return Boolean(scheduleTeamDates?.[teamId]?.has(dateStr));
+}
+
+function violatesThreeStraight(scheduleTeamDates, teamId, dateStr) {
+  const d = parseCalendarDate(dateStr);
+  if (!d) return false;
+  const prev1 = fmt(addDays(d, -1));
+  const prev2 = fmt(addDays(d, -2));
+  const next1 = fmt(addDays(d, 1));
+  const next2 = fmt(addDays(d, 2));
+  return (
+    (hasTeamGameOn(scheduleTeamDates, teamId, prev1) && hasTeamGameOn(scheduleTeamDates, teamId, prev2)) ||
+    (hasTeamGameOn(scheduleTeamDates, teamId, prev1) && hasTeamGameOn(scheduleTeamDates, teamId, next1)) ||
+    (hasTeamGameOn(scheduleTeamDates, teamId, next1) && hasTeamGameOn(scheduleTeamDates, teamId, next2))
+  );
+}
+
+function sortedPairKey(a, b) {
+  return [String(a || ""), String(b || "")].sort().join("__");
+}
+
+function daysBetweenDateStrings(a, b) {
+  const left = parseCalendarDate(a);
+  const right = parseCalendarDate(b);
+  if (!left || !right) return 0;
+  return Math.round((right.getTime() - left.getTime()) / 86400000);
+}
+
+function spansAllowedAllStarBreak(a, b, allStarBreakSet) {
+  const left = parseCalendarDate(a);
+  const right = parseCalendarDate(b);
+  if (!left || !right || !allStarBreakSet?.size) return false;
+  for (const dateStr of allStarBreakSet) {
+    const d = parseCalendarDate(dateStr);
+    if (d && d > left && d < right) return true;
+  }
+  return false;
+}
+
+function buildCompactSeasonRoundDates(playableDays, neededRounds, allStarBreakSet) {
+  if (!Array.isArray(playableDays) || neededRounds <= 0) return [];
+  if (playableDays.length <= neededRounds) return playableDays.slice(0, neededRounds);
+
+  let indexes = [];
+
+  // The normal NBA rhythm is basically game, off day, game. When the number of
+  // playable dates permits it, start from every-other-day slots, then inject a
+  // few controlled back-to-back/two-day-rest pairs without ever creating long
+  // dead zones outside the All-Star break.
+  if (playableDays.length >= neededRounds * 2 - 1) {
+    indexes = Array.from({ length: neededRounds }, (_, index) => index * 2);
+  } else {
+    const maxIndex = playableDays.length - 1;
+    indexes = Array.from({ length: neededRounds }, (_, index) =>
+      Math.round((index * maxIndex) / Math.max(1, neededRounds - 1))
+    );
+  }
+
+  // De-dupe/fill defensive path for custom shortened seasons.
+  const used = new Set();
+  indexes = indexes.map((raw) => {
+    let next = Math.max(0, Math.min(playableDays.length - 1, Number(raw) || 0));
+    while (used.has(next) && next < playableDays.length - 1) next += 1;
+    while (used.has(next) && next > 0) next -= 1;
+    used.add(next);
+    return next;
+  }).sort((a, b) => a - b);
+
+  while (indexes.length < neededRounds) {
+    const existing = new Set(indexes);
+    const next = playableDays.findIndex((_, index) => !existing.has(index));
+    if (next < 0) break;
+    indexes.push(next);
+    indexes.sort((a, b) => a - b);
+  }
+
+  // Add occasional back-to-backs by moving the middle date in a three-date run
+  // from x+2 to x+1. The following interval then becomes x+1 -> x+4, which is
+  // exactly two off days. Skip the tweak if a trade-deadline/all-star removed
+  // date would make the real calendar gap too large.
+  for (let pivot = 8; pivot + 2 < indexes.length; pivot += 14) {
+    const leftIndex = indexes[pivot];
+    const rightIndex = indexes[pivot + 2];
+    const shiftedMiddle = leftIndex + 1;
+    if (shiftedMiddle >= rightIndex || shiftedMiddle >= playableDays.length) continue;
+    if (indexes.includes(shiftedMiddle)) continue;
+
+    const leftDate = playableDays[leftIndex];
+    const middleDate = playableDays[shiftedMiddle];
+    const rightDate = playableDays[rightIndex];
+    const leftGap = daysBetweenDateStrings(leftDate, middleDate);
+    const rightGap = daysBetweenDateStrings(middleDate, rightDate);
+    const rightGapAllowed = rightGap <= 3 || spansAllowedAllStarBreak(middleDate, rightDate, allStarBreakSet);
+
+    if (leftGap === 1 && rightGapAllowed) {
+      indexes[pivot + 1] = shiftedMiddle;
+    }
+  }
+
+  indexes = [...new Set(indexes)].sort((a, b) => a - b).slice(0, neededRounds);
+  return indexes.map((index) => playableDays[index]).filter(Boolean);
+}
+
+function buildPairQueues(matchups = []) {
+  const queues = {};
+  for (const game of matchups) {
+    const key = sortedPairKey(game.home, game.away);
+    if (!queues[key]) queues[key] = [];
+    queues[key].push(game);
+  }
+  return queues;
+}
+
+function buildRoundPairsFromQueues(pairQueues = {}, teamIds = [], neededRounds = 82) {
+  // Build 82 full-league rounds from the 82-game NBA matchup graph. Each round
+  // has every team playing once, which naturally creates the game/off/game rhythm
+  // Raman wanted and removes random 4-6 day dead zones from the old greedy spread.
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const pairCounts = {};
+    for (const [key, queue] of Object.entries(pairQueues)) {
+      pairCounts[key] = Array.isArray(queue) ? queue.length : 0;
+    }
+
+    const lastOpponent = Object.fromEntries(teamIds.map((id) => [id, null]));
+    const rounds = [];
+
+    const remainingBetween = (a, b) => pairCounts[sortedPairKey(a, b)] || 0;
+    const remainingDegreeWithin = (team, available) => {
+      let total = 0;
+      for (const other of available) {
+        if (other !== team) total += remainingBetween(team, other);
+      }
+      return total;
+    };
+
+    const candidateCountWithin = (team, available) => {
+      let count = 0;
+      for (const other of available) {
+        if (other !== team && remainingBetween(team, other) > 0) count += 1;
+      }
+      return count;
+    };
+
+    const findRound = (roundIndex) => {
+      const available = new Set(teamIds);
+      const pairs = [];
+      const failedStates = new Set();
+
+      const recurse = () => {
+        if (available.size === 0) return true;
+
+        const state = [...available].sort().join("|");
+        if (failedStates.has(state)) return false;
+
+        let team = null;
+        let bestMeta = null;
+        for (const candidate of available) {
+          const possible = candidateCountWithin(candidate, available);
+          const degree = remainingDegreeWithin(candidate, available);
+          const meta = [possible, -degree, stableHashNumber(`${attempt}|${roundIndex}|pick|${candidate}`)];
+          if (
+            !bestMeta ||
+            meta[0] < bestMeta[0] ||
+            (meta[0] === bestMeta[0] && meta[1] < bestMeta[1]) ||
+            (meta[0] === bestMeta[0] && meta[1] === bestMeta[1] && meta[2] < bestMeta[2])
+          ) {
+            team = candidate;
+            bestMeta = meta;
+          }
+        }
+
+        if (!team || bestMeta?.[0] <= 0) {
+          failedStates.add(state);
+          return false;
+        }
+
+        const opponents = [...available]
+          .filter((other) => other !== team && remainingBetween(team, other) > 0)
+          .sort((a, b) => {
+            const remainingDiff = remainingBetween(team, b) - remainingBetween(team, a);
+            if (remainingDiff) return remainingDiff;
+
+            const repeatA = lastOpponent[team] === a || lastOpponent[a] === team ? 1 : 0;
+            const repeatB = lastOpponent[team] === b || lastOpponent[b] === team ? 1 : 0;
+            if (repeatA !== repeatB) return repeatA - repeatB;
+
+            const degreeDiff = remainingDegreeWithin(b, available) - remainingDegreeWithin(a, available);
+            if (degreeDiff) return degreeDiff;
+
+            return stableHashNumber(`${attempt}|${roundIndex}|${team}|${a}`) - stableHashNumber(`${attempt}|${roundIndex}|${team}|${b}`);
+          });
+
+        available.delete(team);
+        for (const opponent of opponents) {
+          if (!available.has(opponent)) continue;
+          available.delete(opponent);
+          pairs.push([team, opponent]);
+
+          if (recurse()) return true;
+
+          pairs.pop();
+          available.add(opponent);
+        }
+        available.add(team);
+
+        failedStates.add(state);
+        return false;
+      };
+
+      return recurse() ? pairs : null;
+    };
+
+    let ok = true;
+    for (let roundIndex = 0; roundIndex < neededRounds; roundIndex += 1) {
+      const pairs = findRound(roundIndex);
+      if (!pairs) {
+        ok = false;
+        break;
+      }
+
+      for (const [a, b] of pairs) {
+        const key = sortedPairKey(a, b);
+        pairCounts[key] = (pairCounts[key] || 0) - 1;
+        lastOpponent[a] = b;
+        lastOpponent[b] = a;
+      }
+      rounds.push(pairs);
+    }
+
+    const remaining = Object.values(pairCounts).reduce((sum, count) => sum + Math.max(0, Number(count) || 0), 0);
+    if (ok && remaining === 0) return rounds;
+  }
+
+  return null;
 }
 
 function generateFullSeasonSchedule(teams, startDate, endDate, calendarConfig = null) {
   const canonicalIds = teams.map((t) => slugifyId(t.name));
-  const N = canonicalIds.length;
-  if (N < 2) return { byDate: {}, list: [] };
+  if (canonicalIds.length < 2) return { byDate: {}, list: [] };
 
-  const byCanon = {};
-  teams.forEach((t) => {
-    const cid = slugifyId(t.name);
-    byCanon[cid] = {
-      id: cid,
-      name: t.name,
-      logo:
-        t.logo ||
-        t.teamLogo ||
-        t.logoUrl ||
-        t.image ||
-        t.img ||
-        t.newTeamLogo ||
-        "",
-    };
-  });
-
-  const target = 82;
-
-  const single = singleRoundRobinRounds(canonicalIds);
-  const mirrored = single.map((rd) =>
-    rd.map((g) => ({ home: g.away, away: g.home }))
-  );
-
-  const perTeamPerDouble = 2 * (N - 1);
-  const baseCycles = Math.floor(target / perTeamPerDouble);
-  const remainingPerTeam = target - baseCycles * perTeamPerDouble;
-
-  const rounds = [];
-
-  for (let c = 0; c < baseCycles; c++) {
-    const pack =
-      c % 2 === 0
-        ? [...single, ...mirrored]
-        : [...single, ...mirrored].reverse();
-
-    for (const rd of pack) {
-      rounds.push(rd.map((g) => ({ ...g })));
-    }
-  }
-
-  for (let i = 0; i < remainingPerTeam; i++) {
-    const base = i % 2 === 0 ? single : mirrored;
-    rounds.push(base[i % base.length].map((g) => ({ ...g })));
-  }
-
+  const { matchups, byCanon } = buildDivisionAwareMatchups(teams);
   const days = rangeDays(startDate, endDate);
   const byDate = {};
+  for (const d of days) byDate[fmt(d)] = [];
 
-  for (const d of days) {
-    byDate[fmt(d)] = [];
-  }
-
-  const allStarStart = parseCalendarDate(calendarConfig?.allStarStart) || new Date(endDate.getFullYear(), 1, 13);
-  const allStarEnd = parseCalendarDate(calendarConfig?.allStarEnd) || new Date(endDate.getFullYear(), 1, 15);
+  const gameStart =
+    parseCalendarDate(calendarConfig?.regularSeasonGameStart) ||
+    new Date(startDate.getFullYear(), 9, 21);
+  const allStarDate = parseCalendarDate(calendarConfig?.allStarSelectionDate) || new Date(endDate.getFullYear(), 1, 15);
+  const allStarStart = parseCalendarDate(calendarConfig?.allStarStart) || addDays(allStarDate, -5);
+  const allStarEnd = parseCalendarDate(calendarConfig?.allStarEnd) || addDays(allStarDate, 3);
+  const tradeDeadline = calendarConfig?.tradeDeadlineDate || fmt(new Date(endDate.getFullYear(), 1, 4));
   const allStarBreak = new Set(rangeDays(allStarStart, allStarEnd).map(fmt));
 
-  const playableDays = days.filter((d) => !allStarBreak.has(fmt(d)));
+  const playableDays = days
+    .filter((d) => d >= gameStart)
+    .map(fmt)
+    .filter((dateStr) => dateStr !== tradeDeadline && !allStarBreak.has(dateStr));
 
-  const roundCount = rounds.length;
-  const lastPlayableIndex = playableDays.length - 1;
-  const lastRoundIndex = Math.max(1, roundCount - 1);
+  const gamesPerFullRound = canonicalIds.length / 2;
+  const neededRounds =
+    canonicalIds.length % 2 === 0 && gamesPerFullRound > 0
+      ? Math.round(matchups.length / gamesPerFullRound)
+      : 0;
 
-  for (let roundIndex = 0; roundIndex < roundCount; roundIndex++) {
-    const daySlot = Math.floor(
-      (roundIndex * lastPlayableIndex) / lastRoundIndex
-    );
+  const pairQueues = buildPairQueues(matchups);
+  const rounds = neededRounds > 0
+    ? buildRoundPairsFromQueues(pairQueues, canonicalIds, neededRounds)
+    : null;
+  const roundDates = buildCompactSeasonRoundDates(playableDays, neededRounds, allStarBreak);
 
-    const dateStr = fmt(playableDays[daySlot]);
-    const roundGames = rounds[roundIndex];
+  if (!rounds || roundDates.length < neededRounds) {
+    console.warn("[Calendar] compact NBA schedule builder failed; using balanced fallback schedule.");
+    return generateBalancedFallbackSchedule({
+      teams,
+      startDate,
+      endDate,
+      calendarConfig,
+      matchups,
+      byCanon,
+      canonicalIds,
+      playableDays,
+      allStarBreak,
+      tradeDeadline,
+    });
+  }
 
-    roundGames.forEach((g, gameIndex) => {
+  rounds.forEach((pairs, roundIndex) => {
+    const dateStr = roundDates[roundIndex];
+    if (!dateStr) return;
+
+    for (const [a, b] of pairs) {
+      const key = sortedPairKey(a, b);
+      const queued = pairQueues[key]?.shift();
+      if (!queued) continue;
+
+      const homeMeta = byCanon[queued.home];
+      const awayMeta = byCanon[queued.away];
+      if (!homeMeta || !awayMeta) continue;
+
+      const roundGameIndex = byDate[dateStr].length;
       byDate[dateStr].push({
-        id: `${dateStr}_${g.home}_vs_${g.away}_${roundIndex}_${gameIndex}`,
+        id: `${dateStr}_${queued.away}_at_${queued.home}_${roundIndex}_${roundGameIndex}`,
         date: dateStr,
-        homeId: g.home,
-        awayId: g.away,
-        home: byCanon[g.home].name,
-        away: byCanon[g.away].name,
-        homeLogo: byCanon[g.home].logo,
-        awayLogo: byCanon[g.away].logo,
-        homeTeamObj: byCanon[g.home],
-        awayTeamObj: byCanon[g.away],
+        homeId: queued.home,
+        awayId: queued.away,
+        home: homeMeta.name,
+        away: awayMeta.name,
+        homeLogo: homeMeta.logo,
+        awayLogo: awayMeta.logo,
+        homeTeamObj: homeMeta,
+        awayTeamObj: awayMeta,
+        confHome: homeMeta.conference,
+        confAway: awayMeta.conference,
+        divisionHome: homeMeta.division,
+        divisionAway: awayMeta.division,
         played: false,
       });
+    }
+  });
+
+  for (const dateStr of Object.keys(byDate)) {
+    byDate[dateStr].sort((a, b) => String(a.away).localeCompare(String(b.away)) || String(a.home).localeCompare(String(b.home)));
+  }
+
+  return { byDate, list: Object.values(byDate).flat() };
+}
+
+function generateBalancedFallbackSchedule({
+  teams,
+  startDate,
+  endDate,
+  calendarConfig,
+  matchups,
+  byCanon,
+  canonicalIds,
+  playableDays,
+  allStarBreak,
+  tradeDeadline,
+}) {
+  const days = rangeDays(startDate, endDate);
+  const byDate = {};
+  for (const d of days) byDate[fmt(d)] = [];
+
+  const dayLoad = Object.fromEntries(playableDays.map((dateStr) => [dateStr, 0]));
+  const teamDates = Object.fromEntries(canonicalIds.map((id) => [id, new Set()]));
+  const ordered = [...matchups].sort((a, b) => {
+    const ha = stableHashNumber(`${a.home}|${a.away}`);
+    const hb = stableHashNumber(`${b.home}|${b.away}`);
+    return ha - hb;
+  });
+  const avgGamesPerDay = ordered.length / Math.max(1, playableDays.length);
+
+  const pickDateForGame = (game, strict = true) => {
+    let best = null;
+    let bestScore = Infinity;
+    for (let index = 0; index < playableDays.length; index += 1) {
+      const dateStr = playableDays[index];
+      if (hasTeamGameOn(teamDates, game.home, dateStr) || hasTeamGameOn(teamDates, game.away, dateStr)) continue;
+      if (strict && (violatesThreeStraight(teamDates, game.home, dateStr) || violatesThreeStraight(teamDates, game.away, dateStr))) continue;
+      const d = parseCalendarDate(dateStr);
+      const restHomePrev = hasTeamGameOn(teamDates, game.home, fmt(addDays(d, -1))) ? 0 : 1;
+      const restAwayPrev = hasTeamGameOn(teamDates, game.away, fmt(addDays(d, -1))) ? 0 : 1;
+      const loadPenalty = Math.abs((dayLoad[dateStr] || 0) - avgGamesPerDay);
+      const restMixBonus = restHomePrev === 0 || restAwayPrev === 0 ? -0.10 : 0;
+      const score = loadPenalty * 2 + (dayLoad[dateStr] || 0) * 0.35 + restMixBonus + stableHashNumber(`${dateStr}|${game.home}|${game.away}`) / 1e12;
+      if (score < bestScore) {
+        bestScore = score;
+        best = dateStr;
+      }
+    }
+    return best;
+  };
+
+  ordered.forEach((game, gameIndex) => {
+    let dateStr = pickDateForGame(game, true) || pickDateForGame(game, false) || playableDays[gameIndex % playableDays.length];
+    if (!dateStr) return;
+    const homeMeta = byCanon[game.home];
+    const awayMeta = byCanon[game.away];
+    const roundGameIndex = byDate[dateStr].length;
+    byDate[dateStr].push({
+      id: `${dateStr}_${game.away}_at_${game.home}_${gameIndex}_${roundGameIndex}`,
+      date: dateStr,
+      homeId: game.home,
+      awayId: game.away,
+      home: homeMeta.name,
+      away: awayMeta.name,
+      homeLogo: homeMeta.logo,
+      awayLogo: awayMeta.logo,
+      homeTeamObj: homeMeta,
+      awayTeamObj: awayMeta,
+      confHome: homeMeta.conference,
+      confAway: awayMeta.conference,
+      divisionHome: homeMeta.division,
+      divisionAway: awayMeta.division,
+      played: false,
     });
+    dayLoad[dateStr] = (dayLoad[dateStr] || 0) + 1;
+    teamDates[game.home].add(dateStr);
+    teamDates[game.away].add(dateStr);
+  });
+
+  for (const dateStr of Object.keys(byDate)) {
+    byDate[dateStr].sort((a, b) => String(a.away).localeCompare(String(b.away)) || String(a.home).localeCompare(String(b.home)));
   }
 
   return { byDate, list: Object.values(byDate).flat() };
@@ -1308,6 +1718,85 @@ function awardStatsKey(player, team) {
   return `${player}__${team}`;
 }
 
+function combineAwardStatsForPlayer(statsMap, playerName, currentTeamName = "") {
+  const name = String(playerName || "").trim();
+  if (!name) return null;
+
+  const records = Object.entries(statsMap || {})
+    .filter(([key, row]) => {
+      if (row?._awardsOnly || row?._combinedForAwards) return false;
+      return (row?.player || key.split("__")[0]) === name && Number(row?.gp || 0) > 0;
+    })
+    .map(([, row]) => row);
+
+  if (!records.length) return null;
+
+  const total = {
+    player: name,
+    team: currentTeamName || records[records.length - 1]?.team || "",
+    gp: 0,
+    min: 0,
+    pts: 0,
+    reb: 0,
+    ast: 0,
+    stl: 0,
+    blk: 0,
+    fgm: 0,
+    fga: 0,
+    tpm: 0,
+    tpa: 0,
+    ftm: 0,
+    fta: 0,
+    to: 0,
+    pf: 0,
+    started: 0,
+    sixth: 0,
+    _hasRoleData: false,
+  };
+
+  for (const row of records) {
+    total.gp += Number(row.gp || 0);
+    total.min += Number(row.min || 0);
+    total.pts += Number(row.pts || 0);
+    total.reb += Number(row.reb || 0);
+    total.ast += Number(row.ast || 0);
+    total.stl += Number(row.stl || 0);
+    total.blk += Number(row.blk || 0);
+    total.fgm += Number(row.fgm || 0);
+    total.fga += Number(row.fga || 0);
+    total.tpm += Number(row.tpm || 0);
+    total.tpa += Number(row.tpa || 0);
+    total.ftm += Number(row.ftm || 0);
+    total.fta += Number(row.fta || 0);
+    total.to += Number(row.to ?? row.tov ?? row.turnovers ?? 0);
+    total.pf += Number(row.pf ?? row.fouls ?? 0);
+    total.started += Number(row.started || 0);
+    total.sixth += Number(row.sixth || 0);
+    total._hasRoleData = total._hasRoleData || Object.prototype.hasOwnProperty.call(row, "started") || Object.prototype.hasOwnProperty.call(row, "sixth");
+  }
+
+  return total;
+}
+
+function buildCombinedAwardStatsForCurrentRosters(statsMap, allTeams) {
+  const out = {};
+  for (const team of allTeams || []) {
+    const teamName = team?.name || team?.team;
+    if (!teamName) continue;
+
+    for (const player of team?.players || []) {
+      const playerName = player?.name || player?.player;
+      if (!playerName) continue;
+
+      const combined = combineAwardStatsForPlayer(statsMap, playerName, teamName);
+      if (combined && Number(combined.gp || 0) > 0) {
+        out[awardStatsKey(playerName, teamName)] = combined;
+      }
+    }
+  }
+  return out;
+}
+
 function miniPerGame(total, gp) {
   const games = Number(gp || 0);
   return games > 0 ? Number(total || 0) / games : 0;
@@ -1509,6 +1998,7 @@ function buildMiniAwardLadders(allTeams, statsMap, scheduleByDate, resultsById) 
   }
 
   const playerPool = [];
+  const combinedStatsByCurrentRoster = buildCombinedAwardStatsForCurrentRosters(statsMap, allTeams);
 
   for (const t of allTeams || []) {
     const teamName = t?.name || t?.team;
@@ -1519,7 +2009,7 @@ function buildMiniAwardLadders(allTeams, statsMap, scheduleByDate, resultsById) 
       if (!playerName) continue;
 
       const key = awardStatsKey(playerName, teamName);
-      const s = statsMap?.[key];
+      const s = combinedStatsByCurrentRoster[key];
       if (!s || Number(s.gp || 0) <= 0) continue;
 
       const info = rosterInfoIndex[key] || {};
@@ -1536,12 +2026,12 @@ function buildMiniAwardLadders(allTeams, statsMap, scheduleByDate, resultsById) 
         blk: Number(s.blk || 0),
         started: Number(s.started || 0),
         sixth: Number(s.sixth || 0),
-        _hasRoleData: Object.prototype.hasOwnProperty.call(s, "started") || Object.prototype.hasOwnProperty.call(s, "sixth"),
+        _hasRoleData: Boolean(s._hasRoleData) || Object.prototype.hasOwnProperty.call(s, "started") || Object.prototype.hasOwnProperty.call(s, "sixth"),
         def_rating: Number(info.def_rating ?? 110),
         headshot: info.headshot || null,
         teamLogo: info.teamLogo || null,
         _team_wins: Number(teamWinsMap[teamName] || 0),
-        _team_games: Number(teamGamesMap[teamName] || 0),
+        _team_games: Math.max(Number(teamGamesMap[teamName] || 0), Number(s.gp || 0)),
       });
     }
   }
@@ -1663,6 +2153,58 @@ function combineAwardSeasonRows(rows) {
   };
 }
 
+function awardHistoryRowHasRealNbaActivity(row) {
+  if (!row || row.rowType === "total") return false;
+  const games = safeAwardNumber(row.games ?? row.gp, 0);
+  if (games <= 0) return false;
+
+  const production =
+    safeAwardNumber(row.ppg) +
+    0.55 * safeAwardNumber(row.rpg) +
+    0.65 * safeAwardNumber(row.apg) +
+    1.35 * safeAwardNumber(row.spg) +
+    1.35 * safeAwardNumber(row.bpg);
+
+  return production > 0.05;
+}
+
+function getPriorAwardCareerActivity(player, currentDisplaySeasonYear = null) {
+  const seasons = Array.isArray(player?.history?.seasons)
+    ? player.history.seasons
+    : [];
+
+  let priorCareerGames = 0;
+  let priorCareerProduction = 0;
+  let priorCareerSeasons = 0;
+
+  for (const row of seasons) {
+    if (!awardHistoryRowHasRealNbaActivity(row)) continue;
+    const seasonYear = safeAwardNumber(row.seasonYear, null);
+    if (!seasonYear) continue;
+    if (currentDisplaySeasonYear && seasonYear >= Number(currentDisplaySeasonYear)) continue;
+
+    const games = safeAwardNumber(row.games ?? row.gp, 0);
+    priorCareerGames += games;
+    priorCareerProduction +=
+      games *
+      (
+        safeAwardNumber(row.ppg) +
+        0.55 * safeAwardNumber(row.rpg) +
+        0.65 * safeAwardNumber(row.apg) +
+        1.35 * safeAwardNumber(row.spg) +
+        1.35 * safeAwardNumber(row.bpg)
+      );
+    priorCareerSeasons += 1;
+  }
+
+  return {
+    priorCareerGames,
+    priorCareerProduction,
+    priorCareerSeasons,
+    hasPriorNbaMinutes: priorCareerGames > 0 && priorCareerProduction > 0.05,
+  };
+}
+
 function getPreviousAwardSeasonFromHistory(player, currentDisplaySeasonYear = null) {
   const seasons = Array.isArray(player?.history?.seasons)
     ? player.history.seasons
@@ -1702,9 +2244,11 @@ function buildAwardRosterMetaLookup(allTeams, currentDisplaySeasonYear = null) {
       if (!playerName) continue;
 
       const mipPrev = getPreviousAwardSeasonFromHistory(pl, currentDisplaySeasonYear);
+      const careerActivity = getPriorAwardCareerActivity(pl, currentDisplaySeasonYear);
 
       map[`${playerName}__${teamName}`] = {
         age: pl?.age,
+        ...careerActivity,
         overall: pl?.overall ?? pl?.ovr ?? pl?.rating ?? pl?.overall_rating,
         potential: pl?.potential ?? pl?.pot ?? pl?.potential_rating,
         offRating: pl?.offRating ?? pl?.off_rating,
@@ -1935,6 +2479,7 @@ export default function Calendar() {
   }, [leagueSeasonYear, seasonYear]);
 
   const CALENDAR_CURSOR_KEY = `bm_calendar_cursor_v1_${seasonYear}`;
+  const CALENDAR_SIM_CURSOR_KEY = `bm_calendar_sim_cursor_v1_${seasonYear}`;
 
   const seasonStart = useMemo(
     () => parseCalendarDate(seasonCalendarConfig.regularSeasonStart) || new Date(seasonYear, 9, 21),
@@ -2030,6 +2575,7 @@ const selectedTeamCanSim = !selectedTeamSimBlockMessage;
   // ===============================
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_"; // each game stored as bm_result_v3_<gameId>
+const ALL_STAR_LOGIC_VERSION = "all_star_current_team_v2_20260730";
 const RESULT_V2_BLOB_KEY = "bm_results_v2"; // legacy blob (for migration)
 
 const resultV3Key = (gameId) => `${RESULT_V3_PREFIX}${gameId}`;
@@ -2764,13 +3310,17 @@ else {
     let clutchStats = createEmptyClutchStats(seasonYear);
     const missingGameIds = [];
     let processedGames = 0;
+    let memoryFallbackGames = 0;
 
     for (const game of gameRows) {
-      const slim = boxScoresById?.[game.id];
+      const dbSlim = boxScoresById?.[game.id];
+      const memorySlim = results?.[game.id];
+      const slim = hasBoxRows(dbSlim) ? dbSlim : hasBoxRows(memorySlim) ? memorySlim : null;
       if (!slim?.box || !hasBoxRows(slim)) {
         missingGameIds.push(game.id);
         continue;
       }
+      if (slim === memorySlim && slim !== dbSlim) memoryFallbackGames += 1;
       stats = applyGameToPlayerStats(stats, slim, game);
       clutchStats = applyGameToClutchStats(clutchStats, slim, game, seasonYear);
       processedGames += 1;
@@ -2782,11 +3332,44 @@ else {
       processedGames,
       expectedGames: gameRows.length,
       missingGameIds,
+      memoryFallbackGames,
     };
   }
 
+  function statRowHasRealProduction(row = {}) {
+    return (
+      Number(row?.pts || 0) +
+      Number(row?.reb || 0) +
+      Number(row?.ast || 0) +
+      Number(row?.stl || 0) +
+      Number(row?.blk || 0) +
+      Number(row?.fga || 0) +
+      Number(row?.fta || 0) +
+      Number(row?.tpa || 0)
+    ) > 0;
+  }
+
   function getAwardEligiblePlayerCount(stats = {}) {
-    return Object.values(stats || {}).filter((row) => Number(row?.gp || 0) >= 65).length;
+    return Object.values(stats || {}).filter((row) => Number(row?.gp || 0) >= 65 && statRowHasRealProduction(row)).length;
+  }
+
+  function countRealStatRows(stats = {}) {
+    return Object.values(stats || {}).filter((row) => Number(row?.gp || 0) > 0 && statRowHasRealProduction(row)).length;
+  }
+
+  function chooseBestStatsForAwards(candidates = []) {
+    let best = null;
+    for (const candidate of candidates) {
+      if (!candidate?.stats) continue;
+      const eligible = getAwardEligiblePlayerCount(candidate.stats);
+      const realRows = countRealStatRows(candidate.stats);
+      const totalRows = Object.keys(candidate.stats || {}).length;
+      const score = eligible * 100000 + realRows * 100 + totalRows;
+      if (!best || score > best.score) {
+        best = { ...candidate, eligible, realRows, totalRows, score };
+      }
+    }
+    return best;
   }
 
 
@@ -3000,6 +3583,169 @@ function isRegularSeasonComplete(schedule, results) {
   return total > 0 && completed === total;
 }
 
+
+function mergeAwardDisplayStatsForStorage(rawStats = {}, combinedStats = {}) {
+  const next = { ...(rawStats || {}) };
+
+  for (const [key, row] of Object.entries(combinedStats || {})) {
+    if (!row?.player || !row?.team || Number(row?.gp || 0) <= 0) continue;
+    if (!statRowHasRealProduction(row)) continue;
+
+    next[key] = {
+      ...row,
+      _awardsOnly: true,
+      _combinedForAwards: true,
+      _combinedForAwardsAt: Date.now(),
+    };
+  }
+
+  return next;
+}
+
+function awardFallbackPerGame(row = {}, key) {
+  const gp = Math.max(1, Number(row?.gp || 0));
+  return Number((Number(row?.[key] || 0) / gp).toFixed(1));
+}
+
+function awardFallbackPct(made, attempts) {
+  const a = Number(attempts || 0);
+  if (!a) return 0;
+  return Number(((Number(made || 0) / a) * 100).toFixed(1));
+}
+
+function buildCalendarAwardFallbackRow(row = {}, score = 0, extra = {}) {
+  return {
+    player: row.player,
+    team: row.team,
+    gp: Number(row.gp || 0),
+    min: awardFallbackPerGame(row, "min"),
+    pts: awardFallbackPerGame(row, "pts"),
+    reb: awardFallbackPerGame(row, "reb"),
+    ast: awardFallbackPerGame(row, "ast"),
+    stl: awardFallbackPerGame(row, "stl"),
+    blk: awardFallbackPerGame(row, "blk"),
+    fgPct: awardFallbackPct(row.fgm, row.fga),
+    tpPct: awardFallbackPct(row.tpm, row.tpa),
+    ftPct: awardFallbackPct(row.ftm, row.fta),
+    score: Number(Number(score || 0).toFixed(3)),
+    ...extra,
+  };
+}
+
+function buildFallbackSeasonAwards(playersArray = [], teamsWithWins = [], regularSeasonComplete = false) {
+  const teamWins = new Map((teamsWithWins || []).map((team) => [team.team, Number(team.wins || 0)]));
+  const pool = (playersArray || [])
+    .filter((row) => Number(row?.gp || 0) >= (regularSeasonComplete ? 45 : 1))
+    .filter(statRowHasRealProduction)
+    .map((row) => ({
+      ...row,
+      _team_wins: Number(row?._team_wins ?? teamWins.get(row?.team) ?? 0),
+      _ppg: awardFallbackPerGame(row, "pts"),
+      _rpg: awardFallbackPerGame(row, "reb"),
+      _apg: awardFallbackPerGame(row, "ast"),
+      _spg: awardFallbackPerGame(row, "stl"),
+      _bpg: awardFallbackPerGame(row, "blk"),
+      _mpg: awardFallbackPerGame(row, "min"),
+    }));
+
+  if (!pool.length) return null;
+
+  const max = (key, fallback = 1) => Math.max(...pool.map((row) => Number(row?.[key] || 0)), fallback);
+  const maxPpg = max("_ppg");
+  const maxRpg = max("_rpg");
+  const maxApg = max("_apg");
+  const maxSpg = max("_spg");
+  const maxBpg = max("_bpg");
+  const maxWins = max("_team_wins", 82);
+  const maxOvr = max("overall", 99);
+  const norm = (value, maximum) => maximum > 0 ? Math.max(0, Math.min(1, Number(value || 0) / maximum)) : 0;
+
+  const scoreMvp = (row) =>
+    0.31 * norm(row._ppg, maxPpg) +
+    0.16 * norm(row._apg, maxApg) +
+    0.14 * norm(row._rpg, maxRpg) +
+    0.22 * norm(row._team_wins, maxWins) +
+    0.075 * norm(row._spg, maxSpg) +
+    0.075 * norm(row._bpg, maxBpg) +
+    0.02 * norm(row.overall, maxOvr);
+
+  const scoreDpoy = (row) =>
+    0.36 * norm(row._spg, maxSpg) +
+    0.36 * norm(row._bpg, maxBpg) +
+    0.18 * norm(Number(row.def_rating || row.defRating || 0), 99) +
+    0.10 * norm(row._team_wins, maxWins);
+
+  const scoreSixth = (row) => {
+    const starts = Number(row.started || 0);
+    const benchGames = Math.max(0, Number(row.gp || 0) - starts);
+    const benchShare = Number(row.gp || 0) > 0 ? benchGames / Number(row.gp || 1) : 0;
+    if (row._mpg < 14 || benchShare <= 0.5) return -1;
+    return 0.48 * norm(row._ppg, maxPpg) + 0.18 * norm(row._apg, maxApg) + 0.16 * norm(row._rpg, maxRpg) + 0.18 * benchShare;
+  };
+
+  const scoreMip = (row) => {
+    const prev = row.mip_prev || row.mipPrev || row.previousSeasonStats || {};
+    const prevGp = Number(prev.games ?? prev.gp ?? 0);
+    if (prevGp > 0 && prevGp < 30) return -1;
+    const prevPpg = Number(prev.ppg ?? prev.pts ?? 0);
+    const prevRpg = Number(prev.rpg ?? prev.reb ?? 0);
+    const prevApg = Number(prev.apg ?? prev.ast ?? 0);
+    const prodGain = (row._ppg + row._rpg + row._apg) - (prevPpg + prevRpg + prevApg);
+    return prodGain + Math.max(0, row._mpg - Number(prev.mpg || prev.min || 0)) * 0.15;
+  };
+
+  const isRotyEligible = (row) => {
+    const priorGames = Number(row.priorCareerGames ?? row.careerGamesBeforeSeason ?? row.previousCareerGames ?? 0);
+    const rookieFlag = row.rotyEligible || row.rookieEligible || row.isRookie || row.rookie;
+    return priorGames <= 0 && (rookieFlag || Number(row.age || 99) <= 24);
+  };
+
+  const ranked = (scorer, extra = () => ({}), sourcePool = pool) => sourcePool
+    .map((row) => ({ row, score: scorer(row) }))
+    .filter((entry) => Number.isFinite(entry.score) && entry.score >= 0)
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => buildCalendarAwardFallbackRow(entry.row, entry.score, extra(entry.row, entry.score)));
+
+  const mvpRace = ranked(scoreMvp).slice(0, 10);
+  const dpoyRace = ranked(scoreDpoy).slice(0, 10);
+  const sixthRace = ranked(scoreSixth).slice(0, 10);
+  const mipRace = ranked(scoreMip, (row) => {
+    const prev = row.mip_prev || row.mipPrev || row.previousSeasonStats || {};
+    return {
+      mip_prev_ppg: Number(prev.ppg ?? prev.pts ?? 0),
+      mip_ppg_delta: Number((row._ppg - Number(prev.ppg ?? prev.pts ?? 0)).toFixed(1)),
+      mip_prod_delta: Number(((row._ppg + row._rpg + row._apg) - (Number(prev.ppg ?? prev.pts ?? 0) + Number(prev.rpg ?? prev.reb ?? 0) + Number(prev.apg ?? prev.ast ?? 0))).toFixed(1)),
+    };
+  }).slice(0, 10);
+  const rotyRace = ranked(scoreMvp, () => ({}), pool.filter(isRotyEligible)).slice(0, 10);
+
+  const allNba = ranked(scoreMvp).slice(0, 15);
+  const allDef = ranked(scoreDpoy).slice(0, 10);
+
+  return {
+    season: seasonYear,
+    fallback: true,
+    fallbackReason: "JS final-awards fallback used because worker award result was missing or invalid.",
+    mvp: mvpRace[0] || null,
+    mvp_race: mvpRace,
+    dpoy: dpoyRace[0] || mvpRace[0] || null,
+    dpoy_race: dpoyRace,
+    sixth_man: sixthRace[0] || mvpRace[0] || null,
+    sixth_man_race: sixthRace,
+    mip: mipRace[0] || mvpRace[0] || null,
+    mip_race: mipRace,
+    roty: rotyRace[0] || null,
+    roty_race: rotyRace,
+    all_nba_first: allNba.slice(0, 5),
+    all_nba_second: allNba.slice(5, 10),
+    all_nba_third: allNba.slice(10, 15),
+    all_defensive_first: allDef.slice(0, 5),
+    all_defensive_second: allDef.slice(5, 10),
+    all_rookie_first: rotyRace.slice(0, 5),
+    all_rookie_second: rotyRace.slice(5, 10),
+  };
+}
+
 async function computeAndSaveCalendarAwards({
   playerStats,
   schedule,
@@ -3016,25 +3762,40 @@ async function computeAndSaveCalendarAwards({
     const regularSeasonComplete = isRegularSeasonComplete(schedule, results);
     if (regularSeasonComplete) {
       const rebuilt = await rebuildPlayerSeasonStatsFromCanonicalBoxScores(schedule, results);
-      if (rebuilt.expectedGames > 0 && rebuilt.processedGames === rebuilt.expectedGames) {
-        currentStats = rebuilt.stats;
+      const best = chooseBestStatsForAwards([
+        { source: "live-player-stats", stats: currentStats, clutchStats: loadClutchStats(seasonYear) },
+        { source: "canonical-box-score-rebuild", stats: rebuilt.stats, clutchStats: rebuilt.clutchStats },
+      ]);
+
+      if (best?.stats) {
+        currentStats = best.stats;
         savePlayerStats(currentStats);
-        saveClutchStats(rebuilt.clutchStats);
-        console.log(
-          "[Calendar] rebuilt final player and clutch stats from canonical box scores:",
-          rebuilt.processedGames,
-          "games"
-        );
-      } else {
-        console.warn("[Calendar] final stats rebuild had missing box scores", {
+        if (best.clutchStats) saveClutchStats(best.clutchStats);
+        console.log("[Calendar] selected final award stat source:", {
+          source: best.source,
+          eligible: best.eligible,
+          realRows: best.realRows,
           processedGames: rebuilt.processedGames,
           expectedGames: rebuilt.expectedGames,
+          memoryFallbackGames: rebuilt.memoryFallbackGames || 0,
+        });
+      }
+
+      if (!(rebuilt.expectedGames > 0 && rebuilt.processedGames === rebuilt.expectedGames)) {
+        console.warn("[Calendar] final stats rebuild had missing box scores; using best available player-stat source", {
+          processedGames: rebuilt.processedGames,
+          expectedGames: rebuilt.expectedGames,
+          memoryFallbackGames: rebuilt.memoryFallbackGames || 0,
           missingGameIds: rebuilt.missingGameIds.slice(0, 20),
         });
       }
     }
 
-    const eligiblePlayerCount = getAwardEligiblePlayerCount(currentStats);
+    const combinedCurrentRosterStats = buildCombinedAwardStatsForCurrentRosters(currentStats, activeTeams);
+    const awardDisplayStats = mergeAwardDisplayStatsForStorage(currentStats, combinedCurrentRosterStats);
+    savePlayerStats(awardDisplayStats);
+
+    const eligiblePlayerCount = getAwardEligiblePlayerCount(combinedCurrentRosterStats);
     if (regularSeasonComplete && eligiblePlayerCount === 0) {
       throw new Error(
         "Regular-season results are complete, but no player has the 65 games required for awards. Player stats could not be reconciled from box scores."
@@ -3063,7 +3824,7 @@ async function computeAndSaveCalendarAwards({
 
     const rookieMetaMap = buildAwardRosterMetaLookup(activeTeams, seasonYear + 1);
 
-    const playersArray = Object.values(currentStats || {}).map((p) => {
+    const playersArray = Object.values(combinedCurrentRosterStats || {}).map((p) => {
       const key = `${p.player}__${p.team}`;
       const def = defMap[key];
       const rookieMeta = rookieMetaMap[key] || {};
@@ -3074,15 +3835,9 @@ async function computeAndSaveCalendarAwards({
       };
     });
 
-    console.log("[Calendar] computing awards from sim-to-date for", playersArray.length, "players");
+    console.log("[Calendar] computing awards from combined sim-to-date stats for", playersArray.length, "players");
 
     const teamsWithWins = buildTeamsWithWinsForAwards(activeTeams, schedule, results);
-
-    const awardsRaw = await computeSeasonAwards(playersArray, {
-      seasonYear,
-      gamesSimmed,
-      teams: teamsWithWins,
-    });
 
     const deepUnpair = (x) => {
       if (Array.isArray(x) && x.length && Array.isArray(x[0]) && x[0].length === 2) {
@@ -3092,16 +3847,54 @@ async function computeAndSaveCalendarAwards({
       return x;
     };
 
-    const baseAwards = deepUnpair(awardsRaw) || {};
+    let awardsError = null;
+    let baseAwards = {};
+    try {
+      const awardsRaw = await computeSeasonAwards(playersArray, {
+        seasonYear,
+        gamesSimmed,
+        teams: teamsWithWins,
+      });
+      baseAwards = deepUnpair(awardsRaw) || {};
+    } catch (error) {
+      awardsError = error;
+      console.warn("[Calendar] Python awards worker failed; attempting JS fallback", error);
+    }
+
     const clutchAwards = computeClutchAwardResults(
       loadClutchStats(seasonYear),
       { teams: activeTeams || [] },
       { final: regularSeasonComplete }
     );
-    const awards = { ...baseAwards, ...clutchAwards };
+    const fallbackAwards =
+      regularSeasonComplete && eligiblePlayerCount > 0 && (!baseAwards?.mvp || awardsError)
+        ? buildFallbackSeasonAwards(playersArray, teamsWithWins, regularSeasonComplete)
+        : null;
+
+    const awards = {
+      ...(fallbackAwards || {}),
+      ...baseAwards,
+      ...clutchAwards,
+    };
+
+    if (!awards.mvp && fallbackAwards?.mvp) awards.mvp = fallbackAwards.mvp;
+    if (!awards.mvp_race?.length && fallbackAwards?.mvp_race?.length) awards.mvp_race = fallbackAwards.mvp_race;
+
     if (regularSeasonComplete && eligiblePlayerCount > 0 && !awards?.mvp) {
-      throw new Error("Awards calculation returned no MVP despite having eligible players.");
+      throw new Error(
+        awardsError?.message || "Awards calculation returned no MVP despite having eligible players."
+      );
     }
+
+    if (fallbackAwards?.mvp) {
+      console.warn("[Calendar] saved season awards using JS fallback", {
+        seasonYear,
+        eligiblePlayerCount,
+        workerHadMvp: Boolean(baseAwards?.mvp),
+        workerError: awardsError?.message || null,
+      });
+    }
+
     localStorage.setItem("bm_awards_latest", JSON.stringify(awards));
     localStorage.setItem("bm_awards_v1", JSON.stringify(awards));
     appendPlayerMoodEvents(buildAwardMoodEvents(awards, focusedDate || fmt(seasonEnd)));
@@ -3134,7 +3927,7 @@ async function computeAndSaveCalendarAwards({
 const scheduleTeamIdentitySignature = useMemo(
   () =>
     (teams || [])
-      .map((team) => slugifyId(team?.name))
+      .map((team) => `${slugifyId(team?.name)}:${resolveTeamDivision(team, team?.conference || team?.conf || "")}`)
       .filter(Boolean)
       .sort()
       .join("|"),
@@ -3410,6 +4203,40 @@ useEffect(() => {
     return lastPlayedDate;
   };
 
+  const getNextCalendarDateString = (dateStr) => {
+    const parsed = parseCalendarDate(dateStr);
+    if (!parsed) return fmt(seasonStart);
+    return fmt(addDays(parsed, 1));
+  };
+
+  const readSimulationCursorDate = () => {
+    const seasonStartStr = fmt(seasonStart);
+    try {
+      const raw = localStorage.getItem(CALENDAR_SIM_CURSOR_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      const date = typeof parsed === "string" ? parsed : parsed?.date;
+      if (date && parseCalendarDate(date)) return date < seasonStartStr ? seasonStartStr : date;
+    } catch {}
+    return seasonStartStr;
+  };
+
+  const saveSimulationCursorDate = (dateStr) => {
+    if (!dateStr) return;
+    try {
+      const seasonStartStr = fmt(seasonStart);
+      const parsed = parseCalendarDate(dateStr);
+      const nextDate = parsed ? fmt(parsed) : seasonStartStr;
+      localStorage.setItem(
+        CALENDAR_SIM_CURSOR_KEY,
+        JSON.stringify({
+          date: nextDate < seasonStartStr ? seasonStartStr : nextDate,
+          seasonYear,
+          updatedAt: Date.now(),
+        })
+      );
+    } catch {}
+  };
+
   /* -------------------------------------------------------------------------- */
   /*                              Month & Visible Days                           */
   /* -------------------------------------------------------------------------- */
@@ -3637,7 +4464,14 @@ useEffect(() => {
   try {
     const savedAllStars = JSON.parse(localStorage.getItem("bm_all_stars_v1") || "null");
     if (savedAllStars?.season === `${seasonYear}-${seasonYear + 1}`) {
-      setAllStarData(savedAllStars);
+      if (savedAllStars?.all_star_version === ALL_STAR_LOGIC_VERSION) {
+        setAllStarData(savedAllStars);
+      } else {
+        localStorage.removeItem("bm_all_stars_v1");
+        localStorage.removeItem(ALL_STAR_HANDLED_KEY);
+        allStarHandledRef.current = false;
+        setAllStarData(null);
+      }
     }
   } catch {}
 }, [ALL_STAR_HANDLED_KEY, seasonYear]);
@@ -3742,11 +4576,11 @@ const showCpuTradeToast = (entry) => {
 const computeAndSaveAllStarTeams = async ({ openModal = true } = {}) => {
   try {
     const expectedSeason = `${seasonYear}-${seasonYear + 1}`;
-    let result = allStarData?.season === expectedSeason ? allStarData : null;
+    let result = allStarData?.season === expectedSeason && allStarData?.all_star_version === ALL_STAR_LOGIC_VERSION ? allStarData : null;
 
     if (!result) {
       const saved = JSON.parse(localStorage.getItem("bm_all_stars_v1") || "null");
-      if (saved?.season === expectedSeason) result = saved;
+      if (saved?.season === expectedSeason && saved?.all_star_version === ALL_STAR_LOGIC_VERSION) result = saved;
     }
 
     if (!result) {
@@ -3759,9 +4593,11 @@ const computeAndSaveAllStarTeams = async ({ openModal = true } = {}) => {
         leagueData,
         scheduleByDate,
         resultsById,
+        all_star_version: ALL_STAR_LOGIC_VERSION,
       };
 
       result = await computeAllStars(payload);
+      result = { ...(result || {}), all_star_version: ALL_STAR_LOGIC_VERSION };
       localStorage.setItem("bm_all_stars_v1", JSON.stringify(result));
       appendPlayerMoodEvents(buildAllStarMoodEvents(result, ALL_STAR_DATE));
     }
@@ -4137,6 +4973,7 @@ async function runCpuCpuTradePassForDate({
   selectedTeam,
   setLeagueData,
   tradeDeadlineDate,
+  firstPendingDate = null,
   generationJobRef,
   onTradeDeskEntries,
   onCpuTradeCompleted,
@@ -4214,6 +5051,8 @@ async function runCpuCpuTradePassForDate({
     deadlineDayIndex: Number(dayIndex || 0) + Math.max(0, daysToDeadline),
     tradeDeadlineDate,
     daysToDeadline,
+    firstPendingDate,
+    preseasonTradeWindow: Boolean(firstPendingDate && currentDate < firstPendingDate),
     userTeamName: resolveCalendarControlledTeamName(selectedTeam, activeLeagueData),
     recordsByTeam,
     inOffseason: false,
@@ -4335,15 +5174,78 @@ async function runCpuCpuTradePassForDate({
       nextLeagueData?.cpuTradeBankState,
       baseContext
     );
-    const shouldForegroundGenerate = false;
-    const foregroundReason = "";
+    let shouldForegroundGenerate = false;
+    let foregroundReason = "";
+
+    // Pre-opener dates can fly by very quickly because there are no games to await.
+    // If we only launch background candidate jobs during that window, the sim can
+    // reach opening night before the worker response is consumed, which is why the
+    // trade log could start on Oct. 22 instead of showing true pre-season deals.
+    // Do one bounded foreground fill only when the bank is thin and we are still
+    // before the first pending game; this keeps sim speed safe during the actual
+    // season while making the Oct. 1 -> opening-night market real.
+    if (
+      baseContext.preseasonTradeWindow &&
+      generationJobRef?.current?.status !== "pending" &&
+      Number(nextLeagueData?.cpuTradeBankState?.candidates?.length || 0) < 6
+    ) {
+      const preseasonPolicy = getCpuTradeBankGenerationPolicy(
+        nextLeagueData?.cpuTradeBankState,
+        baseContext,
+        testConfig
+      );
+      const preseasonCompleted = Number(nextLeagueData?.cpuTradeBankState?.completedTrades || 0);
+      const preseasonTarget = Math.min(5, Math.max(3, Math.ceil(Number(nextLeagueData?.cpuTradeBankState?.targetTrades || 24) * 0.18)));
+
+      // Pre-opener empty calendar days complete too fast for background bank fill.
+      // Force one tiny foreground fill until the preseason market has produced a
+      // couple of deals, then fall back to normal background generation for speed.
+      if (preseasonCompleted < preseasonTarget || preseasonPolicy?.shouldGenerate) {
+        const forcedPreseasonPolicy = {
+          ...preseasonPolicy,
+          shouldGenerate: true,
+          maxCandidates: Math.min(Math.max(Number(preseasonPolicy?.maxCandidates || 0), 42), 64),
+          exactEvaluations: Math.min(Math.max(Number(preseasonPolicy?.exactEvaluations || 0), 18), 28),
+          foregroundRecommended: true,
+        };
+        const workerContext = buildCpuTradeWorkerContext(
+          nextLeagueData?.cpuTradeBankState,
+          baseContext,
+          forcedPreseasonPolicy
+        );
+        try {
+          const response = await getCpuCpuTradeCandidates(
+            makeCpuTradeGenerationLeagueData(nextLeagueData),
+            workerContext
+          );
+          const added = await addGeneratedCpuTradeCandidates({
+            leagueData: nextLeagueData,
+            response: response || { ok: true, candidates: [] },
+            context: {
+              ...baseContext,
+              generatedDate: currentDate,
+              generatedDayIndex: Number(dayIndex || 0),
+            },
+            testConfig,
+            exactEvaluationLimit: forcedPreseasonPolicy.exactEvaluations,
+          });
+          nextLeagueData = added.leagueData || nextLeagueData;
+          bankChanged = bankChanged || added.changed;
+          shouldForegroundGenerate = true;
+          foregroundReason = "preseason_opening_market_fill";
+        } catch (error) {
+          foregroundReason = `preseason_generation_failed:${error?.message || String(error || "unknown")}`;
+          console.warn("[CPU Trade Bank] preseason foreground generation failed", error);
+        }
+      }
+    }
 
     const leagueDataBeforeCpuTradeExecution = nextLeagueData;
     const execution = executeDueCpuTradeFromBank({
       leagueData: nextLeagueData,
       context: baseContext,
       testConfig,
-      maxCandidateChecks: daysToDeadline <= 14 ? 10 : 8,
+      maxCandidateChecks: baseContext.preseasonTradeWindow ? 18 : (daysToDeadline <= 14 ? 10 : 8),
     });
 
     if (execution?.leagueData) nextLeagueData = execution.leagueData;
@@ -4713,6 +5615,7 @@ async function runCpuCpuTradePassForDate({
 /* -------------------------------------------------------------------------- */
 const handleSimOnlyGame = async (dateStr, game) => {
   if (shouldPauseForTradeDeadline(dateStr)) {
+    saveSimulationCursorDate(dateStr);
     openTradeDeadlinePrompt();
     return;
   }
@@ -4836,6 +5739,25 @@ const handleSimOnlyGame = async (dateStr, game) => {
 
 const handleSimToDate = async (dateStr, { resume = false } = {}) => {
   if (!acquireSimRunLock("SimToDate")) return;
+
+  const simulationCursorAtStart = readSimulationCursorDate();
+  const firstPendingForTarget = findFirstPendingSimulationDate(scheduleByDate, resultsById);
+  if (dateStr < simulationCursorAtStart) {
+    releaseSimRunLock();
+    setActionModal(null);
+    openSimError(
+      `Cannot simulate backwards to ${dateStr}. The next unsimulated calendar date is ${simulationCursorAtStart}.`,
+      "Simulation already past this date"
+    );
+    return;
+  }
+  if (!firstPendingForTarget && dateStr >= simulationCursorAtStart) {
+    releaseSimRunLock();
+    setActionModal(null);
+    openSimError("The regular season has already been fully simulated.", "Season complete");
+    return;
+  }
+
   // start from whatever is already in storage
   let playerStats = loadPlayerStats();
   let clutchStats = loadClutchStats(seasonYear);
@@ -4901,6 +5823,8 @@ setBoxModal(null);
   }
   const lockedGamesAtStart = snapshotLockedRegularSeasonGames(upd, newResults);
   const firstPendingTradeDate = findFirstPendingSimulationDate(upd, newResults);
+  const runStartCursorDate = readSimulationCursorDate();
+  const allowPreseasonCpuTrades = Boolean(firstPendingTradeDate && runStartCursorDate < firstPendingTradeDate);
   const simulationPerf = {
     mode: "to_date",
     targetDate: dateStr,
@@ -4909,6 +5833,7 @@ setBoxModal(null);
     pendingIntentBeforeRun,
     startedAt: Date.now(),
     firstPendingDate: firstPendingTradeDate,
+    runStartCursorDate,
     datesVisited: 0,
     historicalDatesSkipped: 0,
     deadlineDatesSkipped: 0,
@@ -4929,12 +5854,14 @@ setBoxModal(null);
   let simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
   let shouldGoToAwards = false;
   let pausedAtCheckpoint = false;
+  let lastDateProcessed = null;
   const simulationTraceEnabled = isCpuTradeDeepTraceEnabled();
   const stopCpuTradeMainThreadMonitor = startCpuTradeMainThreadMonitor();
   if (simulationTraceEnabled) {
     recordCpuTradeTrace("simulation", "sim_to_date_started", {
       targetDate: dateStr,
       firstPendingDate: firstPendingTradeDate,
+      runStartCursorDate,
       resumed: Boolean(resume),
     });
   }
@@ -4945,6 +5872,11 @@ for (const d of sorted) {
   if (stopRef.current) break;
 
   if (d > dateStr) break;
+  if (d < runStartCursorDate) {
+    simulationPerf.historicalDatesSkipped += 1;
+    continue;
+  }
+  lastDateProcessed = d;
   simulationPerf.datesVisited += 1;
 
   if (shouldPauseForTradeDeadline(d)) {
@@ -5004,22 +5936,17 @@ for (const d of sorted) {
       seasonYear,
       pausedReason: "all_star",
     });
+    saveSimulationCursorDate(d);
     setAllStarPromptOpen(true);
     return;
-  }
-
-  // Preserve checkpoint handling above, but never walk every completed game
-  // again on a resumed run. Historical date iteration is cheap; historical
-  // result reads and per-game reconciliation were not.
-  if (!firstPendingTradeDate || d < firstPendingTradeDate) {
-    simulationPerf.historicalDatesSkipped += 1;
-    continue;
   }
 
   const cpuTradeDecision = getCpuTradeSimulationDateDecision({
     currentDate: d,
     firstPendingDate: firstPendingTradeDate,
     tradeDeadlineDate: TRADE_DEADLINE_DATE,
+    preseasonTradeStartDate: fmt(seasonStart),
+    allowPreseasonTrades: allowPreseasonCpuTrades,
   });
   if (cpuTradeDecision.shouldRun) {
     const cpuTradeStartedAt = Date.now();
@@ -5033,6 +5960,7 @@ for (const d of sorted) {
       selectedTeam,
       setLeagueData,
       tradeDeadlineDate: TRADE_DEADLINE_DATE,
+      firstPendingDate: firstPendingTradeDate,
       generationJobRef: cpuTradeGenerationJobRef,
       onTradeDeskEntries: handleTradeDeskEntries,
       onCpuTradeCompleted: showCpuTradeToast,
@@ -5051,6 +5979,13 @@ for (const d of sorted) {
     simulationPerf.historicalDatesSkipped += 1;
   } else if (cpuTradeDecision.reason === "trade_deadline_locked") {
     simulationPerf.deadlineDatesSkipped += 1;
+  }
+
+  // Preserve checkpoint/trade handling above, but never walk every completed game
+  // again on a resumed run. Preseason dates can run cheap CPU trade checks only.
+  if (!firstPendingTradeDate || d < firstPendingTradeDate) {
+    simulationPerf.historicalDatesSkipped += 1;
+    continue;
   }
 
   const dayGames = upd[d];
@@ -5178,6 +6113,12 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
       saveCalendarCursor(lastPlayedDate, monthKey(new Date(lastPlayedDate)));
       setFocusedDate(lastPlayedDate);
       setMonth(monthKey(new Date(lastPlayedDate)));
+    }
+    if (!pausedAtCheckpoint) {
+      const cursorBase = stopRef.current
+        ? (findFirstPendingSimulationDate(upd, newResults) || lastDateProcessed || dateStr)
+        : dateStr;
+      saveSimulationCursorDate(stopRef.current ? cursorBase : getNextCalendarDateString(cursorBase));
     }
 
     savePlayerStats(playerStats);
@@ -5371,6 +6312,8 @@ setBoxModal(null);
   }
   const lockedGamesAtStart = snapshotLockedRegularSeasonGames(upd, results);
   const firstPendingTradeDate = findFirstPendingSimulationDate(upd, results);
+  const runStartCursorDate = readSimulationCursorDate();
+  const allowPreseasonCpuTrades = Boolean(firstPendingTradeDate && runStartCursorDate < firstPendingTradeDate);
   const simulationPerf = {
     mode: "full_season",
     targetDate: null,
@@ -5379,6 +6322,7 @@ setBoxModal(null);
     pendingIntentBeforeRun,
     startedAt: Date.now(),
     firstPendingDate: firstPendingTradeDate,
+    runStartCursorDate,
     datesVisited: 0,
     historicalDatesSkipped: 0,
     deadlineDatesSkipped: 0,
@@ -5411,6 +6355,10 @@ for (let di = 0; di < dates.length; di++) {
   if (stopRef.current) { stopped = true; break; }
 
   const date = dates[di];
+  if (date < runStartCursorDate) {
+    simulationPerf.historicalDatesSkipped += 1;
+    continue;
+  }
   lastDateProcessed = date;
   simulationPerf.datesVisited += 1;
 
@@ -5434,17 +6382,12 @@ for (let di = 0; di < dates.length; di++) {
     break;
   }
 
-  // Checkpoints still run above, but dates whose games are already canonical
-  // do not re-enter the expensive per-game storage/reconciliation path.
-  if (!firstPendingTradeDate || date < firstPendingTradeDate) {
-    simulationPerf.historicalDatesSkipped += 1;
-    continue;
-  }
-
   const cpuTradeDecision = getCpuTradeSimulationDateDecision({
     currentDate: date,
     firstPendingDate: firstPendingTradeDate,
     tradeDeadlineDate: TRADE_DEADLINE_DATE,
+    preseasonTradeStartDate: fmt(seasonStart),
+    allowPreseasonTrades: allowPreseasonCpuTrades,
   });
   if (cpuTradeDecision.shouldRun) {
     const cpuTradeStartedAt = Date.now();
@@ -5458,6 +6401,7 @@ for (let di = 0; di < dates.length; di++) {
       selectedTeam,
       setLeagueData,
       tradeDeadlineDate: TRADE_DEADLINE_DATE,
+      firstPendingDate: firstPendingTradeDate,
       generationJobRef: cpuTradeGenerationJobRef,
       onTradeDeskEntries: handleTradeDeskEntries,
       onCpuTradeCompleted: showCpuTradeToast,
@@ -5476,6 +6420,13 @@ for (let di = 0; di < dates.length; di++) {
     simulationPerf.historicalDatesSkipped += 1;
   } else if (cpuTradeDecision.reason === "trade_deadline_locked") {
     simulationPerf.deadlineDatesSkipped += 1;
+  }
+
+  // Checkpoints/trades still run above, but dates whose games are already canonical
+  // do not re-enter the expensive per-game storage/reconciliation path.
+  if (!firstPendingTradeDate || date < firstPendingTradeDate) {
+    simulationPerf.historicalDatesSkipped += 1;
+    continue;
   }
 
   const dayGames = upd[date];
@@ -5665,6 +6616,7 @@ if (pausedForTradeDeadline) {
     seasonYear,
     pausedReason: "trade_deadline",
   });
+  saveSimulationCursorDate(lastDateProcessed || readSimulationCursorDate());
   openTradeDeadlinePrompt();
   return;
 }
@@ -5678,11 +6630,19 @@ if (pausedForAllStar) {
     seasonYear,
     pausedReason: "all_star",
   });
+  saveSimulationCursorDate(lastDateProcessed || readSimulationCursorDate());
   setAllStarPromptOpen(true);
   return;
 }
 
 clearPendingSimIntent();
+
+const nextPendingAfterRun = findFirstPendingSimulationDate(upd, results);
+if (stopped) {
+  saveSimulationCursorDate(nextPendingAfterRun || lastDateProcessed || readSimulationCursorDate());
+} else {
+  saveSimulationCursorDate(nextPendingAfterRun || getNextCalendarDateString(lastDateProcessed || fmt(seasonEnd)));
+}
 
 // ✅ If stopped, do NOT compute awards or navigate away
 if (stopped) {
@@ -5786,6 +6746,7 @@ if (
   localStorage.removeItem("bm_all_stars_v1");
   localStorage.removeItem(TRADE_DESK_FEED_KEY);
   localStorage.removeItem(CALENDAR_CURSOR_KEY);
+  localStorage.removeItem(CALENDAR_SIM_CURSOR_KEY);
 
   for (let i = localStorage.length - 1; i >= 0; i--) {
     const k = localStorage.key(i);
@@ -5803,6 +6764,23 @@ setAllStarData(null);
 setShowAwardsPanel(false);
 setMiniAwardTab("mvp");
 
+  try {
+    const resetLeague = structuredClone(leagueData || {});
+    delete resetLeague.cpuTradeBankState;
+    if (Array.isArray(resetLeague.tradeHistory)) {
+      resetLeague.tradeHistory = resetLeague.tradeHistory.filter((row) => {
+        const rowSeason = Number(row?.seasonYear ?? seasonYear);
+        return rowSeason !== Number(seasonYear);
+      });
+    }
+    setLeagueData(resetLeague);
+    saveLeagueData(resetLeague).catch((error) => {
+      console.warn("[Calendar] failed to save reset CPU trade state", error);
+    });
+  } catch (error) {
+    console.warn("[Calendar] failed to reset CPU trade state", error);
+  }
+
   const { byDate } = generateFullSeasonSchedule(teams, seasonStart, seasonEnd, seasonCalendarConfig);
 
   saveSchedule(byDate);
@@ -5813,6 +6791,7 @@ setMiniAwardTab("mvp");
   setFocusedDate(firstGameDate);
   setMonth(monthKey(new Date(firstGameDate || seasonStart)));
   saveCalendarCursor(firstGameDate, monthKey(new Date(firstGameDate || seasonStart)));
+  saveSimulationCursorDate(fmt(seasonStart));
 };
 
 
@@ -6427,6 +7406,23 @@ const cycleMiniAwardTab = (dir) => {
 /* -------------------------------------------------------------------------- */
 /*                               CALENDAR GRID                                */
 /* -------------------------------------------------------------------------- */
+const nextPendingSimulationDate = useMemo(
+  () => findFirstPendingSimulationDate(scheduleByDate, resultsById),
+  [scheduleByDate, resultsById]
+);
+const currentSimulationCursorDate = useMemo(
+  () => readSimulationCursorDate(),
+  [scheduleByDate, resultsById, CALENDAR_SIM_CURSOR_KEY, seasonStart]
+);
+
+const actionModalBackwardsMessage = actionModal
+  ? actionModal.dateStr < currentSimulationCursorDate
+    ? `Already simulated past this date. Next unsimulated date is ${currentSimulationCursorDate}.`
+    : !nextPendingSimulationDate
+      ? "Regular season is already complete."
+      : ""
+  : "";
+
 const actionModalBlockMessage = actionModal
   ? getSimulationBlockMessageForGame(actionModal.game, teams)
   : "";
@@ -6797,8 +7793,14 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                       }
 
                       const dateStr = fmt(d);
-                      const game = myGames[dateStr];
+                      const game = myGames[dateStr] || null;
                       const result = game ? resultsById[game.id] : null;
+                      const isTradeDeadline = dateStr === TRADE_DEADLINE_DATE;
+                      const isAllStarDate = dateStr === ALL_STAR_DATE;
+                      const isAllStarBreakDate =
+                        dateStr >= String(seasonCalendarConfig.allStarStart || ALL_STAR_DATE) &&
+                        dateStr <= String(seasonCalendarConfig.allStarEnd || ALL_STAR_DATE);
+                      const hasLeagueGames = Array.isArray(scheduleByDate?.[dateStr]) && scheduleByDate[dateStr].length > 0;
 
                       const finalScore =
                         game && game.played && result
@@ -6831,10 +7833,22 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                             setFocusedDate(dateStr);
                             setMonth(monthStr);
                             saveCalendarCursor(dateStr, monthStr);
-                            if (game) setActionModal({ dateStr, game });
+                            setActionModal({ dateStr, game, hasLeagueGames, event: isTradeDeadline ? "trade_deadline" : isAllStarDate ? "all_star" : isAllStarBreakDate ? "all_star_break" : null });
                           }}
                         >
                           <div className="text-xs text-gray-400">{d.getDate()}</div>
+
+                          {(isTradeDeadline || isAllStarDate || (!game && isAllStarBreakDate)) && (
+                            <div className={`mt-2 rounded-md border px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${
+                              isTradeDeadline
+                                ? "border-orange-500/60 bg-orange-600/20 text-orange-200"
+                                : isAllStarDate
+                                  ? "border-sky-400/60 bg-sky-600/20 text-sky-200"
+                                  : "border-white/15 bg-white/5 text-white/45"
+                            }`}>
+                              {isTradeDeadline ? "Trade Deadline" : isAllStarDate ? "All-Star Game" : "All-Star Break"}
+                            </div>
+                          )}
 
                           {game && (
                             <div className="mt-2 flex min-h-[54px] items-center gap-2.5 pr-1">
@@ -6902,35 +7916,51 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="mb-4 text-lg font-bold text-white">
-          {actionModal.game.away} @ {actionModal.game.home}
+          {actionModal.game ? `${actionModal.game.away} @ ${actionModal.game.home}` : actionModal.event === "trade_deadline" ? "Trade Deadline" : actionModal.event === "all_star" ? "All-Star Game" : `Sim to ${actionModal.dateStr}`}
         </h2>
 
-        {!actionModal.game.played ? (
+        {(!actionModal.game || !actionModal.game.played) ? (
           <div className="flex flex-col gap-2">
-            <button
-              className="px-4 py-2 bg-neutral-700 rounded hover:bg-neutral-600"
-              onClick={() =>
-                handleSimOnlyGame(actionModal.dateStr, actionModal.game)
-              }
-            >
-              Simulate this game
-            </button>
+            {actionModal.game ? (
+              <button
+                className="px-4 py-2 bg-neutral-700 rounded hover:bg-neutral-600"
+                onClick={() =>
+                  handleSimOnlyGame(actionModal.dateStr, actionModal.game)
+                }
+              >
+                Simulate this game
+              </button>
+            ) : (
+              <div className="rounded-lg border border-neutral-700 bg-neutral-950/60 px-3 py-2 text-sm text-neutral-300">
+                {actionModalBackwardsMessage || "No selected-team game on this date. You can still simulate the league to this day."}
+              </div>
+            )}
 
-<button
-  className={`px-4 py-2 rounded transition ${
-    selectedTeamCanSim
-      ? "bg-orange-600 hover:bg-orange-500"
-      : "bg-orange-600 hover:bg-orange-500 ring-1 ring-orange-300/30"
-  }`}
-  onClick={() => handleSimToDate(actionModal.dateStr)}
-  title={
-    !selectedTeamCanSim
-      ? selectedTeamSimBlockMessage
-      : ""
-  }
->
-  Simulate to this date
-</button>
+{actionModalBackwardsMessage ? (
+  <button
+    className="cursor-not-allowed rounded bg-neutral-700/70 px-4 py-2 text-neutral-400"
+    disabled
+    title={actionModalBackwardsMessage}
+  >
+    Cannot simulate backwards
+  </button>
+) : (
+  <button
+    className={`px-4 py-2 rounded transition ${
+      selectedTeamCanSim
+        ? "bg-orange-600 hover:bg-orange-500"
+        : "bg-orange-600 hover:bg-orange-500 ring-1 ring-orange-300/30"
+    }`}
+    onClick={() => handleSimToDate(actionModal.dateStr)}
+    title={
+      !selectedTeamCanSim
+        ? selectedTeamSimBlockMessage
+        : ""
+    }
+  >
+    Simulate to this date
+  </button>
+)}
 
 <button
   className={`px-4 py-2 rounded transition ${

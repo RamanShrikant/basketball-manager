@@ -537,3 +537,170 @@
     gap: 8px;
   }
 }
+
+/* Lightweight subsection labels while preserving the original horizontal Team Hub carousel. */
+.sectionChip,
+.directChip {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 2;
+  max-width: calc(100% - 28px);
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 146, 60, 0.42);
+  background: rgba(14, 14, 14, 0.72);
+  color: #fed7aa;
+  font-family: "Poppins", sans-serif;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  box-shadow: 0 10px 22px rgba(0,0,0,0.3);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.directChip {
+  background: rgba(67, 32, 10, 0.82);
+  border-color: rgba(249, 115, 22, 0.68);
+  color: white;
+}
+
+.activeCard .sectionChip,
+.activeCard .directChip {
+  background: linear-gradient(135deg, rgba(234, 88, 12, 0.92), rgba(251, 146, 60, 0.82));
+  border-color: rgba(255,255,255,0.22);
+  color: white;
+}
+
+/* Section-subhub patch: keep the old horizontal carousel look, but make the
+   first row true categories. Selecting a category swaps the same carousel into
+   the pages inside that section. */
+.sectionBackButton {
+  position: fixed;
+  top: 74px;
+  left: 22px;
+  z-index: 31;
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(249, 115, 22, 0.45);
+  background: rgba(18, 18, 18, 0.88);
+  color: #fed7aa;
+  font-family: "Poppins", sans-serif;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 14px 32px rgba(0,0,0,0.35);
+  backdrop-filter: blur(10px);
+}
+
+.sectionBackButton:hover {
+  border-color: rgba(249, 115, 22, 0.82);
+  background: rgba(61, 30, 10, 0.92);
+  color: white;
+}
+
+@media (min-width: 1024px) and (max-height: 820px) {
+  .sectionBackButton {
+    top: 58px;
+  }
+}
+
+/* Navigation-crisp patch: JS owns the active card. CSS snap stays gentle so
+   keyboard/button navigation cannot be pulled to a different tile mid-animation. */
+.card {
+  scroll-snap-stop: normal;
+  user-select: none;
+}
+
+.scrollRow {
+  scroll-behavior: auto;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: max(0.75rem, 3vw);
+}
+
+.sectionBottomBackButton {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  z-index: 35;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(8,8,8,0.88);
+  color: white;
+  font-family: "Poppins", sans-serif;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow: 0 16px 38px rgba(0,0,0,0.38);
+  backdrop-filter: blur(10px);
+  transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.sectionBottomBackButton:hover {
+  transform: translateY(-1px);
+  border-color: rgba(249,115,22,0.68);
+  background: rgba(26,18,12,0.94);
+}
+
+/* Keep the old removed top-left subsection pill unavailable even if stale CSS is loaded. */
+.sectionBackButton {
+  display: none !important;
+}
+
+/* Hover should feel responsive, but it no longer changes the selected card. */
+.card:not(.activeCard):hover {
+  opacity: 0.76;
+  transform: none;
+  filter: brightness(1.03);
+}
+
+/* Stable Team Hub navigation patch: JS controls the chosen card. Native scroll
+   snap was causing edge cards like Awards to be visually selected while the
+   scroll position still mapped to Stats/Front Office. */
+.scrollRow {
+  scroll-snap-type: none !important;
+}
+
+.card {
+  scroll-snap-align: none !important;
+}
+
+
+/* Final Team Hub fix: no native-scroll selection. The selected card is owned by
+   React state only, so arrow/A-D movement cannot wrap or jump to a random card. */
+.scrollRow {
+  overflow-x: hidden !important;
+  scroll-snap-type: none !important;
+  scrollbar-width: none !important;
+}
+
+.scrollRow::-webkit-scrollbar {
+  display: none !important;
+}
+
+.railArrow:disabled {
+  opacity: 0.32;
+  cursor: default;
+  transform: none !important;
+  border-color: rgba(255,255,255,0.08);
+  background: rgba(8,8,8,0.48);
+}
+
+.railArrow:disabled:hover {
+  border-color: rgba(255,255,255,0.08);
+  background: rgba(8,8,8,0.48);
+  transform: none !important;
+}

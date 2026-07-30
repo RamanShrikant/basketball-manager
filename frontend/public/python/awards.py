@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-AWARDS_PY_VERSION = "2026-07-20_all_defensive_top10_v2"
+AWARDS_PY_VERSION = "2026-07-30_roty_prior_activity_lock_v4"
 
 # ---------------------------------------------------------------------------
 # UTILITIES
@@ -91,6 +91,39 @@ def _season_close(value, season_js):
     if year is None or season is None:
         return False
     return year == season
+
+def _safe_float(value, default=0.0):
+    try:
+        if value in [None, ""]:
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _prior_career_games(p):
+    # Calendar injects this from player.history.seasons before the current award season.
+    for key in ["priorCareerGames", "careerGamesBeforeSeason", "careerGamesBeforeCurrentSeason"]:
+        value = p.get(key)
+        if value not in [None, ""]:
+            return max(0, _rookie_int(value, 0) or 0)
+    return 0
+
+
+def _prior_career_production(p):
+    for key in ["priorCareerProduction", "careerProductionBeforeSeason", "careerProductionBeforeCurrentSeason"]:
+        value = p.get(key)
+        if value not in [None, ""]:
+            return max(0.0, _safe_float(value, 0.0))
+    return 0.0
+
+
+def _has_prior_nba_activity(p):
+    explicit = p.get("hasPriorNbaMinutes")
+    if explicit not in [None, ""]:
+        return _rookie_bool(explicit)
+    return _prior_career_games(p) > 0 and _prior_career_production(p) > 0.05
+
 
 def _is_rookie_candidate(p, season_js=None):
     season = _rookie_int(season_js)
@@ -192,15 +225,15 @@ def _ctx(players):
 # ---------------------------------------------------------------------------
 
 # MVP:
-# 28% team wins, 27% ppg, 11% apg, 11% rpg, 9% spg, 9% bpg, 5% def_rating
+# 30% team wins, 28% ppg, 11% apg, 11% rpg, 7.5% spg, 7.5% bpg, 5% def_rating
 def _impact_mvp(p, c):
     return (
-        0.28 * _norm_wins(p["_team_wins"], c["wins"], gamma=2.0) +
-        0.27 * _norm(_ppg(p), c["ppg"]) +
+        0.30 * _norm_wins(p["_team_wins"], c["wins"], gamma=2.0) +
+        0.28 * _norm(_ppg(p), c["ppg"]) +
         0.11 * _norm(_apg(p), c["apg"]) +
         0.11 * _norm(_rpg(p), c["rpg"]) +
-        0.09 * _norm(_spg(p), c["spg"]) +
-        0.09 * _norm(_bpg(p), c["bpg"]) +
+        0.075 * _norm(_spg(p), c["spg"]) +
+        0.075 * _norm(_bpg(p), c["bpg"]) +
         0.05 * _norm_range_hi(_defr(p), c["def_lo"], c["def_hi"])
     )
 
@@ -261,6 +294,16 @@ def _mip_prev_row(p):
 def _mip_prev_games(prev):
     return int(_safe_float(prev.get("games", prev.get("gp", 0)), 0))
 
+def _mip_prev_mpg(prev):
+    for key in ["mpg", "minutes", "min", "MIN"]:
+        if key in prev and prev.get(key) not in [None, ""]:
+            value = _safe_float(prev.get(key), 0.0)
+            # Archived rows usually store MPG. If a future row stores total minutes,
+            # convert it when it clearly exceeds per-game range.
+            games = max(_mip_prev_games(prev), 1)
+            return value / games if value > 60 and games > 0 else value
+    return 0.0
+
 def _mip_prev_stat(prev, key):
     aliases = {
         "ppg": ["ppg", "pts", "PTS"],
@@ -271,6 +314,7 @@ def _mip_prev_stat(prev, key):
         "fgPct": ["fgPct", "fg_pct", "FG", "fg"],
         "threePct": ["threePct", "tpPct", "three_pct", "3P", "tp"],
         "ftPct": ["ftPct", "ft_pct", "FT", "ft"],
+        "mpg": ["mpg", "minutes", "min", "MIN"],
     }.get(key, [key])
 
     for alias in aliases:
@@ -293,8 +337,58 @@ def _mip_prod(ppg, rpg, apg, spg, bpg):
         1.35 * bpg
     )
 
-def _is_mip_candidate(p, season_js=None):
+def _previous_nba_activity(prev):
+    if not isinstance(prev, dict) or not prev:
+        return 0.0
+    return (
+        _mip_prev_stat(prev, "ppg") +
+        0.55 * _mip_prev_stat(prev, "rpg") +
+        0.65 * _mip_prev_stat(prev, "apg") +
+        1.35 * _mip_prev_stat(prev, "spg") +
+        1.35 * _mip_prev_stat(prev, "bpg")
+    )
+
+def _is_first_nba_minutes_season(p, season_js=None):
+    # A player can still be ROTY in year 2 if year 1 had no NBA production/minutes.
+    prev = _mip_prev_row(p)
+    if not prev:
+        return True
+    prev_games = _mip_prev_games(prev)
+    prev_mpg = _mip_prev_mpg(prev)
+    prev_activity = _previous_nba_activity(prev)
+    return prev_games <= 0 or (prev_mpg <= 0.01 and prev_activity <= 0.01)
+
+def _is_roty_candidate_for_awards(p, season_js=None):
+    # ROTY means first NBA-minutes season, not "young player who took a leap".
+    # If the player has real prior NBA activity in history, they are not eligible
+    # even if stale rookie flags/contract text still exist.
+    if _has_prior_nba_activity(p):
+        return False
     if _is_rookie_candidate(p, season_js):
+        return True
+    return _is_first_nba_minutes_season(p, season_js)
+
+def _current_per36_prod(p):
+    minutes = _safe_float(p.get("min"), 0.0)
+    if minutes <= 0:
+        return 0.0
+    return _mip_prod(
+        36.0 * _safe_float(p.get("pts"), 0.0) / minutes,
+        36.0 * _safe_float(p.get("reb"), 0.0) / minutes,
+        36.0 * _safe_float(p.get("ast"), 0.0) / minutes,
+        36.0 * _safe_float(p.get("stl"), 0.0) / minutes,
+        36.0 * _safe_float(p.get("blk"), 0.0) / minutes,
+    )
+
+def _prev_per36_prod(prev, prev_prod):
+    prev_mpg = _mip_prev_mpg(prev)
+    if prev_mpg <= 0:
+        return prev_prod
+    return prev_prod * 36.0 / prev_mpg
+
+def _is_mip_candidate(p, season_js=None):
+    # Rookies / first-NBA-minutes players belong in ROTY, not MIP.
+    if _is_roty_candidate_for_awards(p, season_js):
         return False
 
     prev = _mip_prev_row(p)
@@ -302,29 +396,25 @@ def _is_mip_candidate(p, season_js=None):
         return False
 
     prev_games = _mip_prev_games(prev)
-    if _gp(p) < 65 or prev_games < 25:
+    if _gp(p) < 65 or prev_games < 30:
         return False
 
-    # Keeps pure garbage-time jumps out while still allowing real breakout bench-to-starter seasons.
+    # Fixes the 0-minute / no-production previous season bug.
+    prev_prod = _previous_nba_activity(prev)
+    prev_mpg = _mip_prev_mpg(prev)
+    if prev_prod <= 0.25 and prev_mpg <= 0.01:
+        return False
+
+    # Keeps pure garbage-time jumps out while still allowing bench-to-starter leaps.
     if _mpg(p) < 18:
         return False
 
-    prev_ppg = _mip_prev_stat(prev, "ppg")
-    prev_prod = _mip_prod(
-        prev_ppg,
-        _mip_prev_stat(prev, "rpg"),
-        _mip_prev_stat(prev, "apg"),
-        _mip_prev_stat(prev, "spg"),
-        _mip_prev_stat(prev, "bpg"),
-    )
     curr_prod = _mip_prod(_ppg(p), _rpg(p), _apg(p), _spg(p), _bpg(p))
+    per36_delta = _current_per36_prod(p) - _prev_per36_prod(prev, prev_prod)
+    ppg_delta = _ppg(p) - _mip_prev_stat(prev, "ppg")
 
-    # Already-superstar seasons should stay in MVP/All-NBA instead of stealing MIP.
-    if prev_ppg >= 24.0 and prev_prod >= 32.0:
-        return False
-
-    # Require an actual improvement, not just a different stat shape.
-    if (curr_prod - prev_prod) < 1.0 and (_ppg(p) - prev_ppg) < 1.0:
+    # No superstar exclusion anymore: only actual improvement matters.
+    if (curr_prod - prev_prod) < 1.0 and ppg_delta < 1.0 and per36_delta < 1.5:
         return False
 
     return True
@@ -349,6 +439,7 @@ def _impact_mip(p):
     curr_prod = _mip_prod(curr_ppg, curr_rpg, curr_apg, curr_spg, curr_bpg)
     prod_delta = curr_prod - prev_prod
     relative_gain = prod_delta / max(prev_prod, 5.0)
+    per36_delta = _current_per36_prod(p) - _prev_per36_prod(prev, prev_prod)
 
     ppg_delta = curr_ppg - prev_ppg
     rpg_delta = curr_rpg - prev_rpg
@@ -361,24 +452,23 @@ def _impact_mip(p):
     wins_bonus = _norm_wins(p.get("_team_wins", 0), 82, gamma=2.0)
 
     score = (
-        3.25 * max(0.0, relative_gain) +
-        0.88 * max(0.0, ppg_delta) +
-        0.42 * max(0.0, rpg_delta) +
-        0.48 * max(0.0, apg_delta) +
-        1.10 * max(0.0, spg_delta) +
-        1.10 * max(0.0, bpg_delta) +
-        0.18 * max(0.0, fg_delta) +
+        2.20 * max(0.0, relative_gain) +
+        0.60 * max(0.0, prod_delta) +
+        0.52 * max(0.0, per36_delta) +
+        0.72 * max(0.0, ppg_delta) +
+        0.28 * max(0.0, rpg_delta) +
+        0.32 * max(0.0, apg_delta) +
+        0.70 * max(0.0, spg_delta) +
+        0.70 * max(0.0, bpg_delta) +
+        0.14 * max(0.0, fg_delta) +
         0.35 * role_bonus +
         0.18 * wins_bonus
     )
 
-    # Tiny baselines can inflate relative_gain, so temper those cases.
+    # Tiny baselines can inflate relative_gain, so temper those cases without
+    # excluding real breakouts.
     if prev_prod < 6.0:
-        score *= 0.78
-
-    # Strong established scorers can still win, but they need a very real leap.
-    if prev_ppg >= 18.0:
-        score *= 0.88
+        score *= 0.86
 
     p["_mip"] = score
     p["_mipEligible"] = True
@@ -388,10 +478,12 @@ def _impact_mip(p):
     p["mip_prev_ppg"] = round(prev_ppg, 3)
     p["mip_prev_rpg"] = round(prev_rpg, 3)
     p["mip_prev_apg"] = round(prev_apg, 3)
+    p["mip_prev_mpg"] = round(_mip_prev_mpg(prev), 3)
     p["mip_ppg_delta"] = round(ppg_delta, 3)
     p["mip_rpg_delta"] = round(rpg_delta, 3)
     p["mip_apg_delta"] = round(apg_delta, 3)
     p["mip_prod_delta"] = round(prod_delta, 3)
+    p["mip_per36_delta"] = round(per36_delta, 3)
     return score
 
 # Finals MVP weights unchanged, but def_rating direction is fixed (higher is better)
@@ -517,9 +609,10 @@ def compute_awards(players_js, teams_js, season_js=None):
     sixth_sorted = sorted(sixth, key=lambda p: p.get("_6m", 0.0), reverse=True)
 
     # ROTY ladder
-    rookie_candidates = [p for p in eligible if _is_rookie_candidate(p, season_js)]
-    if not rookie_candidates:
-        rookie_candidates = [p for p in eligible if _is_young_roty_fallback(p)]
+    rookie_candidates = [p for p in eligible if _is_roty_candidate_for_awards(p, season_js)]
+    # No broad young-player fallback here. It was letting established young vets
+    # sneak into ROTY when metadata was missing. A generated/real rookie must be
+    # explicitly rookie-marked or have zero prior NBA activity.
 
     MIN_ROOKIE_GAMES = 30
     rookies = [p for p in rookie_candidates if _gp(p) >= MIN_ROOKIE_GAMES] or rookie_candidates

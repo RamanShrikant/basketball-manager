@@ -99,6 +99,45 @@ function readCompressedOrJson(key, fallback = {}) {
   }
 }
 
+function combineAwardPageStats(playerStatsMap, playerName, currentTeamName = "") {
+  const name = String(playerName || "").trim();
+  if (!name) return null;
+
+  const records = Object.entries(playerStatsMap || {})
+    .filter(([key, row]) => (row?.player || key.split("__")[0]) === name && Number(row?.gp || 0) > 0)
+    .map(([, row]) => row);
+
+  if (!records.length) return null;
+
+  const total = {
+    player: name,
+    team: currentTeamName || records[records.length - 1]?.team || "",
+    gp: 0,
+    min: 0,
+    pts: 0,
+    reb: 0,
+    ast: 0,
+    stl: 0,
+    blk: 0,
+    fgm: 0,
+    fga: 0,
+  };
+
+  for (const row of records) {
+    total.gp += Number(row.gp || 0);
+    total.min += Number(row.min || 0);
+    total.pts += Number(row.pts || 0);
+    total.reb += Number(row.reb || 0);
+    total.ast += Number(row.ast || 0);
+    total.stl += Number(row.stl || 0);
+    total.blk += Number(row.blk || 0);
+    total.fgm += Number(row.fgm || 0);
+    total.fga += Number(row.fga || 0);
+  }
+
+  return total;
+}
+
 /* -------------------------------------------------------------------------- */
 /*                             ALL-NBA TEAMS PAGE                             */
 /* -------------------------------------------------------------------------- */
@@ -182,8 +221,7 @@ export default function AllNbaTeams({ leagueDataProp, onBackToAwards = null }) {
   /* ---------------------------- stats helper (copy of PlayerStats) --------------------------- */
 
   const computePlayerStats = (playerName, teamName) => {
-    const key = `${playerName}__${teamName}`;
-    const rec = playerStatsMap[key];
+    const rec = combineAwardPageStats(playerStatsMap, playerName, teamName);
 
     if (!rec || !rec.gp) {
       return {

@@ -1,5 +1,5 @@
 // src/pages/Intel_v1.jsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
@@ -7,119 +7,253 @@ import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
 import {
   buildLeagueIntel,
   formatMoney,
-  formatPick,
   phaseTone,
   playerHeadshotOf,
   playerNameOf,
-  teamLogoOf,
 } from "../utils/teamIntel_v1.js";
+import { normalizeTeamName } from "../utils/draftPicks.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
-const sectionCard = "rounded-[24px] border border-white/10 bg-neutral-950/80 shadow-2xl";
+const GLASS = "border border-white/10 bg-neutral-950/82 shadow-[0_22px_70px_rgba(0,0,0,0.42)] backdrop-blur-xl";
+const PANEL = `rounded-[24px] ${GLASS}`;
+const MINI = "rounded-2xl border border-white/10 bg-black/35";
+
+function cx(...parts) {
+  return parts.filter(Boolean).join(" ");
+}
 
 function Pill({ children, className = "" }) {
   return (
-    <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.12em] ${className}`}>
+    <span className={cx("inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.13em]", className)}>
       {children}
     </span>
   );
 }
 
-function RatingBadge({ label, value }) {
+function SectionTitle({ label, sub }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-center">
-      <div className="text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">{label}</div>
-      <div className="mt-1 text-2xl font-black text-orange-300">{value ?? "—"}</div>
+    <div className="shrink-0">
+      <div className="text-[11px] font-black uppercase tracking-[0.22em] text-orange-300">{label}</div>
+      {sub && <div className="mt-0.5 truncate text-[10px] font-bold text-neutral-500">{sub}</div>}
     </div>
   );
 }
 
-function MiniPlayer({ row, rightMeta = null }) {
-  const player = row?.player || row;
-  const headshot = row?.headshot || playerHeadshotOf(player);
-  const name = row?.name || playerNameOf(player);
-  const overall = row?.overall ?? player?.overall ?? "—";
-  const potential = row?.potential ?? player?.potential ?? "—";
-  const age = row?.age ?? player?.age ?? "—";
-  const pos = row?.pos || player?.pos || "-";
-
-  return (
-    <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] p-3 transition hover:border-orange-400/30 hover:bg-orange-500/10">
-      <div className="flex items-center gap-3">
-        <div className="flex h-14 w-14 shrink-0 items-end justify-center overflow-hidden rounded-xl bg-black/50">
-          {headshot ? (
-            <img src={headshot} alt={name} className="h-16 w-auto object-contain" />
-          ) : (
-            <div className="text-[10px] font-bold text-neutral-600">No Img</div>
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-black text-white">{name}</div>
-          <div className="mt-1 text-[11px] font-black uppercase tracking-[0.12em] text-neutral-400">
-            {pos} • Age {age} • OVR {overall} • POT {potential}
-          </div>
-          {row?.reason && <div className="mt-1 text-xs font-bold text-orange-200">{row.reason}</div>}
-        </div>
-        {rightMeta}
-      </div>
-    </div>
-  );
-}
-
-function PickLine({ row }) {
-  const pick = row?.pick || row;
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 transition hover:border-orange-400/30 hover:bg-orange-500/10">
-      <div className="text-sm font-black text-white">{row?.label || formatPick(pick)}</div>
-      <div className="mt-1 text-xs font-bold text-neutral-400">{row?.reason || "draft asset"}</div>
-    </div>
-  );
-}
-
-function EmptyNote({ children }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-bold leading-6 text-neutral-400">
-      {children}
-    </div>
-  );
-}
-
-function ListBlock({ title, children, subtitle = "" }) {
-  return (
-    <div className={sectionCard}>
-      <div className="border-b border-white/10 px-5 py-4">
-        <div className="text-sm font-black uppercase tracking-[0.18em] text-orange-300">{title}</div>
-        {subtitle && <div className="mt-1 text-xs font-bold text-neutral-500">{subtitle}</div>}
-      </div>
-      <div className="grid gap-3 p-5">{children}</div>
-    </div>
-  );
-}
-
-function TeamSelectorRow({ row, active, onClick }) {
+function FilterButton({ mode, label, count, active, onClick }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`flex w-full items-center gap-3 rounded-2xl border p-3 text-left transition ${
+      className={cx(
+        "rounded-full border px-3.5 py-2 text-[11px] font-black uppercase tracking-[0.13em] transition",
         active
-          ? "border-orange-400/60 bg-orange-500/15"
-          : "border-white/10 bg-white/[0.035] hover:border-orange-400/30 hover:bg-orange-500/10"
-      }`}
-    >
-      {row.logo ? (
-        <img src={row.logo} alt={row.name} className="h-9 w-9 object-contain" />
-      ) : (
-        <div className="h-9 w-9 rounded-xl bg-black/50" />
+          ? "border-orange-400/60 bg-orange-600 text-white shadow-lg shadow-orange-500/20"
+          : "border-white/10 bg-black/40 text-neutral-300 hover:border-orange-400/35 hover:bg-orange-500/10 hover:text-white"
       )}
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-black text-white">{row.name}</div>
-        <div className="mt-0.5 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-500">
-          {row.phaseLabel} • OVR {row.ratings.overall}
+    >
+      {label}
+      <span className="ml-2 rounded-full bg-black/30 px-1.5 py-0.5 text-[9px] text-white/80">{count}</span>
+    </button>
+  );
+}
+
+function TeamRow({ row, active, onClick, rowIndex }) {
+  const phaseLetter = row.phase === "contending" ? "CONT" : row.phase === "retooling" ? "RETO" : "REBU";
+  return (
+    <button
+      type="button"
+      data-bm-intel-row-index={rowIndex}
+      onClick={onClick}
+      className={cx(
+        "group grid h-[46px] w-full grid-cols-[30px_1fr_auto] items-center gap-2 rounded-xl border px-2.5 text-left transition",
+        active
+          ? "border-orange-400/70 bg-gradient-to-r from-orange-500/25 to-orange-500/8 shadow-lg shadow-orange-500/10"
+          : "border-white/8 bg-white/[0.035] hover:border-orange-400/30 hover:bg-orange-500/10"
+      )}
+    >
+      <div className="grid h-7 w-7 place-items-center overflow-hidden rounded-lg bg-black/40 ring-1 ring-white/10">
+        {row.logo ? <img src={row.logo} alt={row.name} className="h-6 w-6 object-contain" /> : <span className="text-[8px] text-neutral-600">NBA</span>}
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-[13px] font-black leading-none text-white">{row.name}</div>
+        <div className="mt-1 flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[0.11em] text-neutral-500">
+          <span>{phaseLetter}</span>
+          <span>•</span>
+          <span>{row.power.conference || "Conf"} #{row.power.conferenceRank || "—"}</span>
         </div>
       </div>
+      <div className="rounded-full border border-white/10 bg-black/25 px-2 py-1 text-[10px] font-black text-orange-200">
+        #{row.power.rank || "—"}
+      </div>
     </button>
+  );
+}
+
+function TeamSidebar({ visibleRows, active, setActiveName }) {
+  return (
+    <aside className={cx(PANEL, "flex min-h-0 flex-col overflow-hidden")}> 
+      <div className="shrink-0 border-b border-white/10 px-4 py-3">
+        <SectionTitle label="Opposing Teams" sub={`Your team hidden • ${visibleRows.length} shown`} />
+      </div>
+      <div className="bm-intel-scroll min-h-0 flex-1 overflow-y-auto p-2.5 pr-1.5">
+        <div className="grid gap-2 pr-1">
+          {visibleRows.map((row, rowIndex) => (
+            <TeamRow key={row.name} row={row} active={row.name === active?.name} rowIndex={rowIndex} onClick={() => setActiveName(row.name)} />
+          ))}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function StatTile({ label, value, sub = "", tone = "orange" }) {
+  const toneClass = tone === "green" ? "text-emerald-300" : tone === "red" ? "text-rose-300" : "text-orange-300";
+  return (
+    <div className="min-w-0 rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-center">
+      <div className="text-[10px] font-black uppercase tracking-[0.22em] text-white/65">{label}</div>
+      <div className={cx("mt-1 truncate text-3xl font-black leading-none", toneClass)}>{value}</div>
+      {sub && <div className="mt-1 truncate text-[10px] font-bold text-neutral-500">{sub}</div>}
+    </div>
+  );
+}
+
+function PlayerTiny({ row, source = false, compact = false }) {
+  const player = row?.player || row;
+  const name = row?.name || playerNameOf(player);
+  const headshot = row?.headshot || playerHeadshotOf(player);
+  const overall = row?.overall ?? player?.overall ?? "—";
+  const potential = row?.potential ?? player?.potential ?? "—";
+  const age = row?.age ?? player?.age ?? "—";
+  const pos = row?.pos || player?.pos || "-";
+  const meta = `${pos} · ${overall} OVR · ${potential} POT · Age ${age}`;
+  const footer = row?.salary ? formatMoney(row.salary) : "";
+
+  return (
+    <div className={cx("grid min-w-0 grid-cols-[34px_1fr_auto] items-center gap-2 rounded-xl border border-white/10 bg-white/[0.035] px-2.5", compact ? "h-[48px]" : "h-[52px]")}> 
+      <div className="flex h-8 w-8 shrink-0 items-end justify-center overflow-hidden rounded-lg bg-black/50 ring-1 ring-white/8">
+        {headshot ? <img src={headshot} alt={name} className="h-10 w-auto object-contain" /> : <span className="text-[8px] text-neutral-600">N/A</span>}
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-[12px] font-black leading-none text-white">{name}</div>
+        <div className="mt-1 truncate text-[9px] font-black uppercase tracking-[0.08em] text-neutral-400">{meta}</div>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {footer && <span className="max-w-[58px] truncate text-right text-[10px] font-black text-neutral-300">{footer}</span>}
+        {source && row?.sourceLogo ? <img src={row.sourceLogo} alt={row.sourceTeamName} className="h-6 w-6 object-contain" /> : null}
+      </div>
+    </div>
+  );
+}
+
+function ListPanel({ title, subtitle, rows = [], empty, source = false, limit = 3 }) {
+  const shown = rows.slice(0, limit);
+  const more = Math.max(0, rows.length - shown.length);
+  return (
+    <div className={cx(PANEL, "flex min-h-0 flex-col overflow-hidden p-3")}> 
+      <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
+        <SectionTitle label={title} sub={subtitle} />
+        {more > 0 && <Pill className="border-white/10 bg-black/30 text-neutral-300">+{more}</Pill>}
+      </div>
+      <div className="grid min-h-0 content-start gap-2">
+        {shown.length ? shown.map((row) => <PlayerTiny key={`${title}-${row.sourceTeamName || ""}-${row.name}`} row={row} source={source} compact />) : <EmptyMini>{empty}</EmptyMini>}
+      </div>
+    </div>
+  );
+}
+
+function EmptyMini({ children = "No clear read." }) {
+  return <div className="rounded-xl border border-white/10 bg-black/30 p-3 text-xs font-bold text-neutral-500">{children}</div>;
+}
+
+function LineupCard({ active }) {
+  const lineup = active.lineup || [];
+  return (
+    <div className={cx(PANEL, "flex min-h-0 flex-col overflow-hidden p-3")}> 
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <SectionTitle label="Lineup" sub="current best six" />
+        <Pill className="border-orange-400/25 bg-orange-500/10 text-orange-100">Best 6</Pill>
+      </div>
+      <div className="grid min-h-0 flex-1 grid-rows-6 rounded-2xl border border-white/8 bg-black/20">
+        {lineup.slice(0, 6).map((slot) => (
+          <div key={slot.label} className="grid grid-cols-[40px_1fr_42px_38px] items-center border-b border-white/6 px-3 text-[12px] last:border-b-0">
+            <div className="font-black text-orange-300">{slot.label}</div>
+            <div className="truncate font-black text-white">{slot.player?.name || "—"}</div>
+            <div className="text-right font-black text-orange-200">{slot.player?.overall ?? "—"}</div>
+            <div className="text-right font-bold text-neutral-500">{slot.player?.age ?? "—"}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StatusPanel({ active }) {
+  const bullets = (active.statusBullets || []).slice(0, 5);
+  return (
+    <div className={cx(PANEL, "relative flex min-h-0 flex-col overflow-hidden")}> 
+      <div className="grid shrink-0 grid-cols-[180px_1fr] border-b border-white/10 bg-gradient-to-r from-white/8 to-orange-500/8">
+        <div className="px-4 py-2.5 text-[12px] font-black uppercase tracking-[0.16em] text-white">Team Status</div>
+        <div className="px-4 py-2.5 text-center text-[12px] font-black uppercase tracking-[0.16em] text-orange-200">{active.phaseLabel}</div>
+      </div>
+      <div className="grid flex-1 content-center gap-2 px-5 py-3">
+        {bullets.map((line, idx) => (
+          <div key={`${line}-${idx}`} className="grid grid-cols-[18px_1fr] gap-2 text-[13px] font-semibold leading-5 text-neutral-100">
+            <span className="pt-0.5 text-orange-300">▪</span>
+            <span>{line}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ExpiringPanel({ active }) {
+  const expiring = (active.expiringContracts || []).slice(0, 4);
+  return (
+    <div className={cx(PANEL, "flex min-h-0 flex-col overflow-hidden p-3")}> 
+      <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
+        <SectionTitle label="Expiring Deals" sub="highest rated contracts ending soon" />
+      </div>
+      <div className="grid min-h-0 content-start gap-2">
+        {expiring.map((row) => (
+          <PlayerTiny key={`exp-${row.name}`} row={{ ...row, reason: `${formatMoney(row.salary)} expiring` }} compact />
+        ))}
+        {!expiring.length && <EmptyMini>No major expiring deals.</EmptyMini>}
+      </div>
+    </div>
+  );
+}
+
+function ReportHeader({ active }) {
+  const recordText = active.record.gp ? `${active.record.w}-${active.record.l}` : "0-0";
+  const confText = active.power.conferenceRank ? `${active.power.conferenceRank}/${active.power.conferenceTeamCount || 15}` : "—";
+  const capTone = active.capSpace >= 0 ? "green" : "red";
+
+  return (
+    <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950/85 shadow-2xl">
+      {active.logo && <img src={active.logo} alt="" aria-hidden="true" className="pointer-events-none absolute -left-6 top-1/2 h-36 w-36 -translate-y-1/2 object-contain opacity-10" />}
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_50%,rgba(249,115,22,0.22),transparent_33%),linear-gradient(90deg,rgba(0,0,0,0.28),rgba(0,0,0,0.8))]" />
+      <div className="relative z-10 grid h-full grid-cols-[1fr_560px] items-center gap-4 px-6">
+        <div className="min-w-0 pl-20">
+          <div className="text-[10px] font-black uppercase tracking-[0.32em] text-orange-200">Team Intel Report</div>
+          <div className="mt-1 flex min-w-0 items-center gap-3">
+            {active.logo && <img src={active.logo} alt={active.name} className="h-10 w-10 shrink-0 object-contain" />}
+            <h2 className="truncate text-[34px] font-black leading-none text-white">{active.name}</h2>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Pill className={phaseTone(active.phase)}>{active.phaseLabel}</Pill>
+            <Pill className="border-white/10 bg-black/35 text-neutral-300">Power #{active.power.rank || "—"}</Pill>
+            <Pill className="border-white/10 bg-black/35 text-neutral-300">Avg age {active.roster.avgAge.toFixed(1)}</Pill>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <StatTile label="Record" value={recordText} sub={active.record.gp ? `${active.record.gp} games` : "preseason"} />
+          <StatTile label="Conf" value={confText} sub={active.power.conference || "conference"} />
+          <StatTile label="Cap Space" value={formatMoney(active.capSpace)} sub={`payroll ${formatMoney(active.payroll)}`} tone={capTone} />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -128,17 +262,32 @@ export default function Intel() {
   const { leagueData, selectedTeam } = useGame();
   const [filter, setFilter] = useState("all");
   const rows = useMemo(() => buildLeagueIntel(leagueData), [leagueData]);
-  const [activeName, setActiveName] = useState(() => selectedTeam?.name || "");
+  const userTeamName = selectedTeam?.name || "";
+  const opponentRows = useMemo(
+    () => rows.filter((row) => normalizeTeamName(row.name) !== normalizeTeamName(userTeamName)),
+    [rows, userTeamName]
+  );
+  const [activeName, setActiveName] = useState("");
+
+  const counts = useMemo(() => ({
+    all: opponentRows.length,
+    contending: opponentRows.filter((row) => row.phase === "contending").length,
+    retooling: opponentRows.filter((row) => row.phase === "retooling").length,
+    rebuilding: opponentRows.filter((row) => row.phase === "rebuilding").length,
+  }), [opponentRows]);
 
   const visibleRows = useMemo(() => {
-    if (filter === "all") return rows;
-    return rows.filter((row) => row.phase === filter);
-  }, [filter, rows]);
+    return filter === "all" ? opponentRows : opponentRows.filter((row) => row.phase === filter);
+  }, [filter, opponentRows]);
 
   const active = useMemo(() => {
-    if (!rows.length) return null;
-    return rows.find((row) => row.name === activeName) || rows.find((row) => row.name === selectedTeam?.name) || rows[0];
-  }, [activeName, rows, selectedTeam?.name]);
+    if (!visibleRows.length && !opponentRows.length) return null;
+    return visibleRows.find((row) => row.name === activeName) || visibleRows[0] || opponentRows[0] || null;
+  }, [activeName, visibleRows, opponentRows]);
+
+  useEffect(() => {
+    if (active?.name && active.name !== activeName) setActiveName(active.name);
+  }, [active?.name, activeName]);
 
   useKeyboardListNavigation({
     items: visibleRows,
@@ -151,9 +300,7 @@ export default function Intel() {
   if (!leagueData) {
     return (
       <PageFade>
-        <div className="bmCourtPage flex min-h-screen items-center justify-center text-white">
-          Loading league intel...
-        </div>
+        <div className="bmCourtPage flex h-full items-center justify-center text-white">Loading league intel...</div>
       </PageFade>
     );
   }
@@ -161,11 +308,10 @@ export default function Intel() {
   if (!active) {
     return (
       <PageFade>
-        <div className="bmCourtPage flex min-h-screen flex-col items-center justify-center px-4 text-white">
-          <p className="mb-4 text-lg font-semibold">No teams found.</p>
-          <button onClick={() => navigate("/team-hub")} className="rounded-xl bg-orange-600 px-6 py-3 font-bold">
-            Team Hub
-          </button>
+        <div className="bmCourtPage flex h-full flex-col items-center justify-center gap-4 px-4 text-center text-white">
+          <h1 className="text-3xl font-black text-orange-500">League Intel</h1>
+          <p className="text-neutral-400">No opponent teams found.</p>
+          <button onClick={() => navigate("/team-hub")} className="rounded-xl bg-orange-600 px-6 py-3 font-bold">Team Hub</button>
         </div>
       </PageFade>
     );
@@ -173,219 +319,51 @@ export default function Intel() {
 
   return (
     <PageFade>
-      <div className="bmCourtPage h-full min-h-0 overflow-hidden p-3 text-white">
-        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1680px] flex-col">
-          <div className="mb-2 flex h-[52px] shrink-0 flex-wrap items-center justify-between gap-3">
-            <button
-              onClick={() => navigate("/team-hub")}
-              className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
-            >
-              ← Team Hub
-            </button>
-
-            <div className="text-center">
-              <div className="text-xs font-black uppercase tracking-[0.24em] text-orange-300">Front Office</div>
-              <h1 className="text-3xl font-black text-orange-500">League Intel</h1>
+      <style>{`
+        .bm-intel-scroll { scrollbar-width: thin; scrollbar-color: rgba(249,115,22,.88) rgba(255,255,255,.06); }
+        .bm-intel-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+        .bm-intel-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,.055); border-radius: 999px; }
+        .bm-intel-scroll::-webkit-scrollbar-thumb { background: rgba(249,115,22,.9); border-radius: 999px; }
+      `}</style>
+      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1720px] flex-col overflow-hidden">
+          <div className="mb-2 grid h-[48px] shrink-0 grid-cols-[280px_1fr_150px] items-center gap-3">
+            <div className="min-w-0">
+              <div className="text-[10px] font-black uppercase tracking-[0.28em] text-orange-300">Front Office</div>
+              <h1 className="text-3xl font-black leading-none text-orange-500">League Intel</h1>
             </div>
-
-            <button
-              onClick={() => navigate("/trades")}
-              className="rounded-xl border border-orange-400/25 bg-orange-500/10 px-4 py-2 text-sm font-black text-orange-100 hover:bg-orange-500/20"
-            >
+            <div className="flex justify-center gap-2 overflow-hidden">
+              <FilterButton mode="all" label="All" count={counts.all} active={filter === "all"} onClick={() => setFilter("all")} />
+              <FilterButton mode="contending" label="Contending" count={counts.contending} active={filter === "contending"} onClick={() => setFilter("contending")} />
+              <FilterButton mode="retooling" label="Retooling" count={counts.retooling} active={filter === "retooling"} onClick={() => setFilter("retooling")} />
+              <FilterButton mode="rebuilding" label="Rebuilding" count={counts.rebuilding} active={filter === "rebuilding"} onClick={() => setFilter("rebuilding")} />
+            </div>
+            <button onClick={() => navigate("/trades")} className="justify-self-end rounded-xl border border-orange-400/25 bg-orange-500/10 px-4 py-2 text-sm font-black text-orange-100 hover:bg-orange-500/20">
               Trade Center
             </button>
           </div>
 
-          <div className="mb-2 flex shrink-0 flex-wrap justify-center gap-2">
-            {["all", "contender", "playoff", "middle", "retool", "rebuild", "tank"].map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setFilter(mode)}
-                className={`rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.12em] transition ${
-                  filter === mode ? "bg-orange-600 text-white" : "border border-white/10 bg-black/40 text-neutral-300 hover:bg-white/10"
-                }`}
-              >
-                {mode === "all" ? "All" : mode === "tank" ? "Tanking" : mode}
-              </button>
-            ))}
-          </div>
+          <div className="grid min-h-0 flex-1 gap-3 overflow-hidden xl:grid-cols-[300px_1fr]">
+            <TeamSidebar visibleRows={visibleRows} active={active} setActiveName={setActiveName} />
 
-          <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[300px_1fr]">
-            <div className={`${sectionCard} flex min-h-0 flex-col overflow-hidden`}>
-              <div className="border-b border-white/10 px-5 py-4">
-                <div className="text-sm font-black uppercase tracking-[0.18em] text-orange-300">All Teams</div>
-                <div className="mt-1 text-xs font-bold text-neutral-500">{visibleRows.length} teams shown</div>
-              </div>
-              <div className="bmTableScroller grid min-h-0 flex-1 gap-2 overflow-y-auto p-3">
-                {visibleRows.map((row, rowIndex) => (
-                  <div key={row.name} data-bm-intel-row-index={rowIndex}>
-                  <TeamSelectorRow
-                    row={row}
-                    active={row.name === active.name}
-                    onClick={() => setActiveName(row.name)}
-                  />
-                  </div>
-                ))}
-              </div>
-            </div>
+            <div className="grid min-h-0 grid-rows-[118px_1fr] gap-3 overflow-hidden">
+              <ReportHeader active={active} />
 
-            <div className="bmTableScroller grid min-h-0 gap-3 overflow-y-auto pr-1">
-              <div className="overflow-hidden rounded-[30px] border border-white/10 bg-neutral-950/85 shadow-2xl">
-                <div className="relative overflow-hidden border-b border-white/10 bg-gradient-to-r from-orange-600/25 via-neutral-950 to-black px-5 py-4">
-                  {active.logo && (
-                    <img
-                      src={active.logo}
-                      alt=""
-                      aria-hidden="true"
-                      className="pointer-events-none absolute right-4 top-1/2 h-44 w-44 -translate-y-1/2 object-contain opacity-10"
-                    />
-                  )}
-
-                  <div className="relative z-10 flex flex-wrap items-center justify-between gap-5">
-                    <div className="flex min-w-0 items-center gap-4">
-                      {active.logo ? (
-                        <img src={active.logo} alt={active.name} className="h-14 w-14 object-contain" />
-                      ) : (
-                        <div className="h-14 w-14 rounded-xl bg-black/50" />
-                      )}
-                      <div className="min-w-0">
-                        <div className="text-xs font-black uppercase tracking-[0.22em] text-orange-200">Team Intel Report</div>
-                        <h2 className="truncate text-3xl font-black text-white">{active.name}</h2>
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <Pill className={phaseTone(active.phase)}>{active.phaseLabel}</Pill>
-                          <Pill className="border-white/10 bg-black/35 text-neutral-300">
-                            {active.record.gp ? `${active.record.w}-${active.record.l}` : "Preseason read"}
-                          </Pill>
-                          <Pill className="border-white/10 bg-black/35 text-neutral-300">
-                            Avg Age {active.roster.avgAge.toFixed(1)}
-                          </Pill>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2">
-                      <RatingBadge label="OVR" value={active.ratings.overall} />
-                      <RatingBadge label="OFF" value={active.ratings.off} />
-                      <RatingBadge label="DEF" value={active.ratings.def} />
-                    </div>
-                  </div>
-
-                  <div className="relative z-10 mt-3 rounded-xl border border-white/10 bg-black/35 px-4 py-2 text-sm font-bold text-neutral-300">
-                    {active.phaseSummary}
-                  </div>
+              <div className="grid min-h-0 gap-3 overflow-hidden xl:grid-cols-[300px_1fr]">
+                <div className="grid min-h-0 grid-rows-[235px_1fr] gap-3 overflow-hidden">
+                  <LineupCard active={active} />
+                  <ListPanel title="Untouchable" subtitle="protected core / hard to pry loose" rows={active.untouchables} empty="No true untouchable detected." limit={3} />
                 </div>
 
-                <div className="grid gap-3 p-3 lg:grid-cols-3">
-                  <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
-                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Roster</div>
-                    <div className="mt-2 text-lg font-black text-white">{active.roster.count} standard players</div>
-                    <div className="mt-1 text-xs font-bold text-neutral-400">Top-8 avg OVR {active.roster.avgTopOverall.toFixed(1)}</div>
-                  </div>
-                  <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
-                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Point Diff</div>
-                    <div className="mt-2 text-lg font-black text-white">
-                      {active.record.gp ? `${active.record.pointDiff >= 0 ? "+" : ""}${active.record.pointDiff.toFixed(1)}` : "No games"}
-                    </div>
-                    <div className="mt-1 text-xs font-bold text-neutral-400">based on completed results</div>
-                  </div>
-                  <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
-                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Draft Assets</div>
-                    <div className="mt-2 text-lg font-black text-white">{active.ownedPicks.length} active picks</div>
-                    <div className="mt-1 text-xs font-bold text-neutral-400">owned in draftPicks</div>
+                <div className="grid min-h-0 grid-rows-[205px_1fr] gap-3 overflow-hidden">
+                  <StatusPanel active={active} />
+                  <div className="grid min-h-0 grid-cols-3 gap-3 overflow-hidden">
+                    <ListPanel title="Trade Block" subtitle="timeline, salary, or rotation squeeze" rows={active.tradeBlock} empty="No obvious movable players." limit={4} />
+                    <ListPanel title="Targets" subtitle="fits from other rosters" rows={active.targets} empty="No clean target match." source limit={4} />
+                    <ExpiringPanel active={active} />
                   </div>
                 </div>
               </div>
-
-              <div className="grid gap-5 lg:grid-cols-2">
-                <ListBlock title="Goals" subtitle="What the front office should be trying to do">
-                  {active.goals.map((goal) => (
-                    <div key={goal} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-sm font-bold text-neutral-200">
-                      {goal}
-                    </div>
-                  ))}
-                </ListBlock>
-
-                <ListBlock title="Wants On Team" subtitle="Player types this team should be shopping for">
-                  {active.wants.map((want) => (
-                    <div key={want} className="rounded-2xl border border-orange-400/20 bg-orange-500/10 p-4 text-sm font-black text-orange-100">
-                      {want}
-                    </div>
-                  ))}
-                </ListBlock>
-              </div>
-
-              <div className="grid gap-5 lg:grid-cols-2">
-                <ListBlock title="Core / Protected" subtitle="Players they should be reluctant to move">
-                  {active.core.length ? (
-                    active.core.map((row) => <MiniPlayer key={row.name} row={row} />)
-                  ) : (
-                    <EmptyNote>No clear protected core yet.</EmptyNote>
-                  )}
-                </ListBlock>
-
-                <ListBlock title="Needs" subtitle="Weak spots detected from roster shape and ratings">
-                  {active.needs.length ? (
-                    active.needs.map((need) => (
-                      <div key={`${need.type}-${need.pos}`} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-                        <div className="text-sm font-black text-white">{need.label}</div>
-                        <div className="mt-1 text-xs font-bold text-neutral-400">{need.detail}</div>
-                      </div>
-                    ))
-                  ) : (
-                    <EmptyNote>No major holes detected.</EmptyNote>
-                  )}
-                </ListBlock>
-              </div>
-
-              <ListBlock title="Targets" subtitle="Readable target list from other teams, based on fit and availability">
-                {active.targets.length ? (
-                  <div className="grid gap-3 lg:grid-cols-2">
-                    {active.targets.map((row) => (
-                      <MiniPlayer
-                        key={`${row.sourceTeamName}-${row.name}`}
-                        row={row}
-                        rightMeta={
-                          <div className="hidden shrink-0 items-center gap-2 sm:flex">
-                            {row.sourceLogo && <img src={row.sourceLogo} alt={row.sourceTeamName} className="h-7 w-7 object-contain" />}
-                            <div className="max-w-[110px] truncate text-[10px] font-black uppercase tracking-[0.12em] text-neutral-500">
-                              {row.sourceTeamName}
-                            </div>
-                          </div>
-                        }
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyNote>No clean targets found from current roster data.</EmptyNote>
-                )}
-              </ListBlock>
-
-              <ListBlock title="Looking To Give Up" subtitle="Players or picks this team may put in offers">
-                {active.movable.length ? (
-                  <div className="grid gap-3 lg:grid-cols-2">
-                    {active.movable.map((row, index) =>
-                      row.type === "pick" ? (
-                        <PickLine key={`${row.label}-${index}`} row={row} />
-                      ) : (
-                        <MiniPlayer
-                          key={`${row.name}-${index}`}
-                          row={row}
-                          rightMeta={
-                            row.salary ? (
-                              <div className="hidden rounded-xl border border-white/10 bg-black/35 px-3 py-2 text-right sm:block">
-                                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-neutral-500">Salary</div>
-                                <div className="text-xs font-black text-white">{formatMoney(row.salary)}</div>
-                              </div>
-                            ) : null
-                          }
-                        />
-                      )
-                    )}
-                  </div>
-                ) : (
-                  <EmptyNote>No obvious movable assets. They would probably need a direct overpay.</EmptyNote>
-                )}
-              </ListBlock>
             </div>
           </div>
         </div>

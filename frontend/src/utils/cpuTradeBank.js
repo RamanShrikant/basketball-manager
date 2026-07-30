@@ -22,14 +22,14 @@ import {
 } from "./cpuTradeTelemetry.js";
 
 export const CPU_TRADE_BANK_FIELD = "cpuTradeBankState";
-export const CPU_TRADE_BANK_VERSION = 8;
+export const CPU_TRADE_BANK_VERSION = 12;
 export const CPU_TRADE_BANK_TEST_CONFIG_KEY = "bm_cpu_trade_bank_test_config_v1";
 
 const TARGET_MIN = CPU_TRADE_CONTINUOUS_MIN_TARGET;
 const TARGET_MAX = CPU_TRADE_CONTINUOUS_MAX_TARGET;
 const MAX_BANK_SIZE = 48;
 const MAX_BANK_ENTRIES_PER_TEAM = 3;
-const FIRST_EXECUTION_DAY = 12;
+const FIRST_EXECUTION_DAY = 1;
 const MAX_GENERATION_CANDIDATES_PER_PASS = 120;
 const MAX_EXACT_EVALUATIONS_PER_PASS = 72;
 const MAX_SAME_STATE_VALIDATION_CACHE = 512;
@@ -281,24 +281,40 @@ function buildExecutionPlan({ seed, targetTrades, firstDay, deadlineDay }) {
 
   for (let day = start; day <= end; day += 1) {
     const progress = (day - start) / Math.max(1, end - start);
-    const weight = 0.12 + Math.pow(progress, 2.35) * 4.6;
+    // Keep the season target intact, but shape it like a real market:
+    // a few light preseason/pre-opener moves, a quiet early/midseason trickle,
+    // then a deadline ramp. This prevents the old huge deadline-only cluster and
+    // makes Oct. 1 -> opening night useful without adding extra sim-loop work.
+    const preseasonLift = progress <= 0.12 ? 2.4 * (1 - progress / 0.12) : 0;
+    const midseasonBase = 0.42 + 0.28 * progress;
+    const deadlineLift = Math.pow(progress, 2.35) * 2.0;
+    const weight = midseasonBase + preseasonLift + deadlineLift;
     allDays.push({ day, weight });
   }
 
   const random = seededRandom(`${seed}|execution-plan`);
   const selected = [];
   const desired = Math.min(Math.max(0, targetTrades), allDays.length);
+  const used = new Set();
   const finalWindowStart = Math.max(start, end - 16);
-  const deadlineReserve = Math.min(
+  const preseasonWindowEnd = Math.min(end, start + 20);
+  const preseasonReserve = Math.min(
     desired,
     Math.max(
-      Math.min(5, desired),
-      Math.round(desired * (desired >= 32 ? 0.34 : 0.28))
+      Math.min(3, desired),
+      Math.round(desired * 0.18)
+    )
+  );
+  const deadlineReserve = Math.min(
+    Math.max(0, desired - preseasonReserve),
+    Math.max(
+      Math.min(3, desired),
+      Math.round(desired * (desired >= 32 ? 0.20 : 0.16))
     )
   );
 
   function weightedTake(pool, count) {
-    const local = [...pool];
+    const local = [...pool].filter((row) => !used.has(row.day));
     const out = [];
     while (out.length < count && local.length) {
       const totalWeight = local.reduce((sum, row) => sum + row.weight, 0);
@@ -313,20 +329,24 @@ function buildExecutionPlan({ seed, targetTrades, firstDay, deadlineDay }) {
         }
       }
 
-      out.push(local[selectedIndex].day);
+      const day = local[selectedIndex].day;
+      out.push(day);
+      used.add(day);
       local.splice(selectedIndex, 1);
     }
     return out;
   }
 
+  const preseasonPool = allDays.filter((row) => row.day <= preseasonWindowEnd);
   const finalPool = allDays.filter((row) => row.day >= finalWindowStart);
-  const regularPool = allDays.filter((row) => row.day < finalWindowStart);
+  const regularPool = allDays.filter((row) => row.day > preseasonWindowEnd && row.day < finalWindowStart);
+
+  selected.push(...weightedTake(preseasonPool, preseasonReserve));
   selected.push(...weightedTake(finalPool, deadlineReserve));
-  const used = new Set(selected);
-  selected.push(...weightedTake(regularPool.filter((row) => !used.has(row.day)), desired - selected.length));
+  selected.push(...weightedTake(regularPool, desired - selected.length));
 
   if (selected.length < desired) {
-    selected.push(...weightedTake(allDays.filter((row) => !used.has(row.day)), desired - selected.length));
+    selected.push(...weightedTake(allDays, desired - selected.length));
   }
 
   return [...new Set(selected)].sort((a, b) => a - b).slice(0, desired);
@@ -1304,7 +1324,13 @@ function executionDue(state, context = {}, testConfig = {}) {
   const expectedCompletedByNow = Math.floor(minimumTrades * Math.pow(deadlineProgress, 1.72));
   const behindPace = finiteNumber(state.completedTrades, 0) < expectedCompletedByNow;
   const bankHasInventory = Array.isArray(state.candidates) && state.candidates.length > 0;
+  const completedTrades = finiteNumber(state.completedTrades, 0);
+  const targetTrades = finiteNumber(state.targetTrades, 30);
+  const preseasonTarget = Math.min(5, Math.max(3, Math.ceil(targetTrades * 0.18)));
 
+  if (context?.preseasonTradeWindow && bankHasInventory && completedTrades < preseasonTarget) {
+    return true;
+  }
   if (behindPace && bankHasInventory && daysToDeadline <= 70) return true;
   if (!Number.isFinite(Number(plannedDay))) return false;
   return dayIndex >= Number(plannedDay);

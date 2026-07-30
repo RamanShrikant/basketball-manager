@@ -10,6 +10,7 @@ import {
   getFinancialSeasonYear,
   withNormalizedSeasonContext,
 } from "../utils/seasonContext.js";
+import { DIVISION_NAMES, getDefaultDivisionForTeam, getDivisionConference, normalizeLeagueDivisions } from "../utils/leagueDivisions.js";
 
 const DRAFT_CLASSES_STORAGE_KEY = "bm_custom_draft_classes_v1";
 const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
@@ -444,6 +445,7 @@ export default function LeagueEditor() {
   const [selectedConf, setSelectedConf] = useState("East");
   const [newTeamName, setNewTeamName] = useState("");
   const [newTeamLogo, setNewTeamLogo] = useState("");
+  const [newTeamDivision, setNewTeamDivision] = useState("Atlantic");
   const [editingTeam, setEditingTeam] = useState(null);
   const [editingPlayer, setEditingPlayer] = useState(null);
 
@@ -2171,7 +2173,7 @@ const normalizePlayer = (p) => {
       updated.draftPicks = normalizeDraftPickAssets(data.draftPicks || data.picks || []);
 
       const resolvedSeasonYear = resolveLeagueSeasonYear(data);
-      const timed = withLeagueTimingFields(updated, resolvedSeasonYear);
+      const timed = withLeagueTimingFields(normalizeLeagueDivisions(updated), resolvedSeasonYear);
 
       setLeagueName(timed.leagueName);
       setConferences(timed.conferences);
@@ -2226,7 +2228,7 @@ const normalizePlayer = (p) => {
     const timedLeague = withLeagueTimingFields(
       {
         leagueName,
-        conferences,
+        conferences: normalizeLeagueDivisions({ conferences }).conferences,
         freeAgents,
         draftPicks: normalizeDraftPickAssets(draftPicks),
       },
@@ -2267,7 +2269,10 @@ const normalizePlayer = (p) => {
   /* ---------------- Handlers ---------------- */
   const addTeam = () => {
     if (!newTeamName.trim()) return;
-    const team = { name: newTeamName.trim(), logo: newTeamLogo.trim(), players: [] };
+    const division = DIVISION_NAMES.includes(newTeamDivision) && getDivisionConference(newTeamDivision) === selectedConf
+      ? newTeamDivision
+      : getDefaultDivisionForTeam(newTeamName.trim(), selectedConf);
+    const team = { name: newTeamName.trim(), logo: newTeamLogo.trim(), division, conference: selectedConf, players: [] };
     setConferences((prev) => ({ ...prev, [selectedConf]: [...prev[selectedConf], team] }));
     setNewTeamName("");
     setNewTeamLogo("");
@@ -2294,8 +2299,11 @@ const normalizePlayer = (p) => {
 
     setConferences((prev) => {
       const copy = JSON.parse(JSON.stringify(prev));
+      const division = DIVISION_NAMES.includes(editTeamModal.division) ? editTeamModal.division : getDefaultDivisionForTeam(editTeamModal.name, selectedConf);
       copy[selectedConf][editTeamModal.idx].name = editTeamModal.name;
       copy[selectedConf][editTeamModal.idx].logo = editTeamModal.logo;
+      copy[selectedConf][editTeamModal.idx].division = division;
+      copy[selectedConf][editTeamModal.idx].conference = getDivisionConference(division) || selectedConf;
       return copy;
     });
 
@@ -2559,7 +2567,7 @@ const normalizePlayer = (p) => {
                       updated.draftPicks = normalizeDraftPickAssets(d.draftPicks || d.picks || []);
 
                       const resolvedSeasonYear = resolveLeagueSeasonYear(d);
-                      const timed = withLeagueTimingFields(updated, resolvedSeasonYear);
+                      const timed = withLeagueTimingFields(normalizeLeagueDivisions(updated), resolvedSeasonYear);
 
                       clearRuntimeSeasonStores();
                       writeLeagueMetaSeason(resolvedSeasonYear, timed);
@@ -2648,7 +2656,11 @@ const normalizePlayer = (p) => {
           {["East", "West"].map((c) => (
             <button
               key={c}
-              onClick={() => setSelectedConf(c)}
+              onClick={() => {
+                setSelectedConf(c);
+                const options = DIVISION_NAMES.filter((division) => getDivisionConference(division) === c);
+                if (!options.includes(newTeamDivision)) setNewTeamDivision(options[0] || newTeamDivision);
+              }}
               className={`px-4 py-2 rounded ${
                 selectedConf === c ? "bg-green-600 text-white" : "bg-gray-200"
               }`}
@@ -2674,6 +2686,15 @@ const normalizePlayer = (p) => {
             value={newTeamLogo}
             onChange={(e) => setNewTeamLogo(e.target.value)}
           />
+          <select
+            className="border p-2 rounded w-52"
+            value={newTeamDivision}
+            onChange={(e) => setNewTeamDivision(e.target.value)}
+          >
+            {DIVISION_NAMES.filter((division) => getDivisionConference(division) === selectedConf).map((division) => (
+              <option key={division} value={division}>{division}</option>
+            ))}
+          </select>
           <button
             onClick={addTeam}
             className="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
@@ -2981,7 +3002,10 @@ const normalizePlayer = (p) => {
                 <div className="flex justify-between items-center mb-3">
                   <div className="flex items-center gap-3">
                     {team.logo && <img src={team.logo} alt="" className="w-14 h-14 object-contain" />}
-                    <h2 className="text-2xl font-bold">{team.name}</h2>
+                    <div>
+                      <h2 className="text-2xl font-bold">{team.name}</h2>
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{team.division || getDefaultDivisionForTeam(team.name, selectedConf)}</div>
+                    </div>
                   </div>
                   <div className="flex gap-2 items-center">
                     <button
@@ -4316,6 +4340,19 @@ const normalizePlayer = (p) => {
                     value={editTeamModal.logo}
                     onChange={(e) => setEditTeamModal({ ...editTeamModal, logo: e.target.value })}
                   />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Division</label>
+                  <select
+                    className="border p-2 rounded w-full"
+                    value={editTeamModal.division || getDefaultDivisionForTeam(editTeamModal.name, selectedConf)}
+                    onChange={(e) => setEditTeamModal({ ...editTeamModal, division: e.target.value })}
+                  >
+                    {DIVISION_NAMES.filter((division) => getDivisionConference(division) === selectedConf).map((division) => (
+                      <option key={division} value={division}>{division}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 

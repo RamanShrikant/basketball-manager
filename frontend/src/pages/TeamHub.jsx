@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import LZString from "lz-string";
@@ -14,6 +14,7 @@ import {
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const POSTSEASON_KEY = "bm_postseason_v2";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
+const TEAM_HUB_RETURN_CONTEXT_KEY = "bm_team_hub_return_context_v1";
 
 function safeJSON(raw, fallback = null) {
   if (!raw) return fallback;
@@ -77,14 +78,89 @@ function getOffseasonFreeAgencyReturnPath() {
   return "/free-agents";
 }
 
+function tileSubtitle(tile, selectedTeamName, { allStarsAvailable = false, isOffseasonMode = false } = {}) {
+  if (tile.description) return tile.description;
+
+  return tile.name === "Return to Offseason Hub"
+    ? "Resume offseason flow"
+    : tile.name === "Return to Playoffs"
+    ? "Resume playoff bracket"
+    : tile.name === "Schedule"
+    ? "Calendar and Season Simulation"
+    : tile.name === "Standings"
+    ? "League, Conference, and Division Table"
+    : tile.name === "Playoff Picture"
+    ? "Seeds, Play-In, and Playoff Race"
+    : tile.name === "Award Tracker"
+    ? "Live MVP, DPOY, 6MOY, MIP, CPOTY, ROTY"
+    : tile.name === "Free Agents"
+    ? "Market and Available Players"
+    : tile.name === "Salary Table"
+    ? "Contracts, Cap, and Payroll"
+    : tile.name === "Power Rankings"
+    ? "League-Wide Team Ratings"
+    : tile.name === "Draft Picks"
+    ? "Team Draft Assets"
+    : tile.name === "Trades"
+    ? "Propose and Review Trades"
+    : tile.name === "Team Intel"
+    ? "Team scouting and trade intel"
+    : tile.name === "Locker Room"
+    ? "Player Morale and Role Check"
+    : tile.name === "Playoff Statistics"
+    ? isOffseasonMode ? "Previous Postseason" : "Current Postseason"
+    : tile.name === "View All-Stars"
+    ? allStarsAvailable ? "Starters and Reserves" : "Available After Selections"
+    : selectedTeamName;
+}
+
+
+function shouldIgnoreHubShortcut(event) {
+  const tagName = String(event?.target?.tagName || "").toLowerCase();
+  if (["input", "select", "textarea"].includes(tagName)) return true;
+  if (event?.target?.isContentEditable) return true;
+  if (document.querySelector('[role="dialog"][aria-modal="true"]')) return true;
+  return false;
+}
+
+function sectionReturnPayload(section, mode = {}) {
+  if (!section) return null;
+  return {
+    section,
+    label: section,
+    offseasonMode: Boolean(mode.isOffseasonMode),
+    playoffMode: Boolean(mode.isPlayoffMode),
+    returnTo: mode.offseasonReturnTo || null,
+    playoffReturnTo: mode.playoffReturnTo || null,
+    updatedAt: Date.now(),
+  };
+}
+
+function writeTeamHubReturnContext(payload) {
+  try {
+    if (!payload?.section) {
+      sessionStorage.removeItem(TEAM_HUB_RETURN_CONTEXT_KEY);
+      return;
+    }
+    sessionStorage.setItem(TEAM_HUB_RETURN_CONTEXT_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
 export default function TeamHub() {
   const { leagueData, selectedTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
   const location = useLocation();
   const [activeTileIndex, setActiveTileIndex] = useState(0);
+  const [activeSection, setActiveSection] = useState(() => (typeof location.state?.hubSection === "string" ? location.state.hubSection : null));
   const hubRef = useRef(null);
   const scrollRowRef = useRef(null);
   const tileRefs = useRef([]);
+  const scrollSnapTimerRef = useRef(null);
+  const programmaticScrollRef = useRef(false);
+  const scrollReleaseTimerRef = useRef(null);
+  const programmaticScrollTimerRef = useRef(null);
+  const ignoreScrollUntilRef = useRef(0);
+  const activeTileIndexRef = useRef(0);
 
   useEffect(() => {
     document.body.classList.add("th-no-scroll");
@@ -92,10 +168,36 @@ export default function TeamHub() {
   }, []);
 
   useEffect(() => {
+    activeTileIndexRef.current = activeTileIndex;
+  }, [activeTileIndex]);
+
+  useEffect(() => {
+    const requestedSection = location.state?.hubSection;
+    if (typeof requestedSection === "string" && requestedSection) {
+      setActiveSection(requestedSection);
+    }
+  }, [location.state?.hubSection]);
+
+  useEffect(() => {
     if (!selectedTeam) return undefined;
     const frame = window.requestAnimationFrame(() => hubRef.current?.focus?.());
     return () => window.cancelAnimationFrame(frame);
   }, [selectedTeam?.name]);
+
+  useLayoutEffect(() => {
+    activeTileIndexRef.current = 0;
+    setActiveTileIndex(0);
+    tileRefs.current = [];
+    if (scrollSnapTimerRef.current) window.clearTimeout(scrollSnapTimerRef.current);
+    if (scrollReleaseTimerRef.current) window.clearTimeout(scrollReleaseTimerRef.current);
+    if (programmaticScrollTimerRef.current) window.clearTimeout(programmaticScrollTimerRef.current);
+    programmaticScrollRef.current = true;
+    const row = scrollRowRef.current;
+    if (row) row.scrollLeft = 0;
+    programmaticScrollTimerRef.current = window.setTimeout(() => {
+      programmaticScrollRef.current = false;
+    }, 120);
+  }, [activeSection]);
 
   const offseasonState = safeJSON(
     localStorage.getItem(OFFSEASON_STATE_KEY),
@@ -143,6 +245,348 @@ export default function TeamHub() {
     setSelectedTeam(nextTeam);
   };
 
+  const regularSectionTiles = {
+    Team: [
+      { name: "View Roster", path: "/roster-view", enabled: true },
+      { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
+    ],
+    Stats: [
+      { name: "Statistics", path: "/player-stats", enabled: true },
+      { name: "Playoff Statistics", path: "#", enabled: false },
+    ],
+    "Front Office": [
+      { name: "Trades", path: "/trades", enabled: true },
+      { name: "Free Agents", path: "/free-agents", enabled: true },
+      { name: "Draft Picks", path: "/draft-picks", enabled: true },
+      { name: "Salary Table", path: "/salary-table", enabled: true },
+    ],
+    Season: [
+      { name: "Standings", path: "/standings", enabled: true },
+      { name: "Playoff Picture", path: "/playoff-picture", enabled: true },
+      { name: "Power Rankings", path: "/power-rankings", enabled: true },
+    ],
+    Scouting: [
+      { name: "Locker Room", path: "/locker-room", enabled: true },
+      { name: "Team Intel", path: "/intel", enabled: true },
+    ],
+    Awards: [
+      { name: "Award Tracker", path: "/award-tracker", enabled: true },
+      { name: "View All-Stars", path: allStarsAvailable ? "/all-stars" : "#", enabled: allStarsAvailable },
+    ],
+  };
+
+  const offseasonSectionTiles = {
+    Offseason: [
+      { name: "Free Agents", path: offseasonFreeAgentsPath, enabled: true },
+      { name: "Draft Picks", path: "/draft-picks", enabled: true },
+      { name: "Salary Table", path: "/salary-table", enabled: true },
+    ],
+    Team: [
+      { name: "View Roster", path: "/roster-view", enabled: true },
+      { name: "Coach Gameplan", path: "#", enabled: false },
+    ],
+    Season: [
+      { name: "Standings", path: "/standings", enabled: true },
+      { name: "Power Rankings", path: "/power-rankings", enabled: true },
+    ],
+    Stats: [
+      { name: "Playoff Statistics", path: "/playoff-stats", enabled: true },
+    ],
+    "Front Office": [
+      { name: "Trades", path: "/trades", enabled: true },
+    ],
+    Scouting: [
+      { name: "Locker Room", path: "/locker-room", enabled: true },
+      { name: "Team Intel", path: "/intel", enabled: true },
+    ],
+  };
+
+  const playoffSectionTiles = {
+    Playoffs: [
+      { name: "Playoff Statistics", path: "/playoff-stats", enabled: true },
+      { name: "Standings", path: "/standings", enabled: true },
+    ],
+    Team: [
+      { name: "View Roster", path: "/roster-view", enabled: true },
+      { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
+    ],
+    Season: [
+      { name: "Power Rankings", path: "/power-rankings", enabled: true },
+      { name: "Playoff Picture", path: "#", enabled: false },
+    ],
+    Stats: [
+      { name: "Statistics", path: "/player-stats", enabled: true },
+      { name: "Playoff Statistics", path: "/playoff-stats", enabled: true },
+    ],
+    "Front Office": [
+      { name: "Draft Picks", path: "/draft-picks", enabled: true },
+      { name: "Salary Table", path: "/salary-table", enabled: true },
+      { name: "Trades", path: "#", enabled: false },
+      { name: "Free Agents", path: "#", enabled: false },
+    ],
+    Scouting: [
+      { name: "Locker Room", path: "/locker-room", enabled: true },
+      { name: "Team Intel", path: "/intel", enabled: true },
+    ],
+    Awards: [
+      { name: "Award Tracker", path: "/award-tracker", enabled: true },
+      { name: "View All-Stars", path: allStarsAvailable ? "/all-stars" : "#", enabled: allStarsAvailable },
+    ],
+  };
+
+  const sectionTiles = isOffseasonMode
+    ? offseasonSectionTiles
+    : isPlayoffMode
+    ? playoffSectionTiles
+    : regularSectionTiles;
+
+  const mainItems = isOffseasonMode
+    ? [
+        { name: "Return to Offseason Hub", path: offseasonReturnTo, enabled: true, direct: true, description: "Resume Offseason Flow" },
+        { name: "Offseason", sectionKey: "Offseason", enabled: true, description: "Free Agency, Picks, and Cap Tools" },
+        { name: "Team", sectionKey: "Team", enabled: true, description: "Roster and Gameplan" },
+        { name: "Stats", sectionKey: "Stats", enabled: true, description: "Postseason Stat Tables" },
+        { name: "Front Office", sectionKey: "Front Office", enabled: true, description: "Trades and League Tools" },
+        { name: "Season", sectionKey: "Season", enabled: true, description: "Standings and Power Rankings" },
+        { name: "Scouting", sectionKey: "Scouting", enabled: true, description: "Locker Room and Team Intel" },
+      ]
+    : isPlayoffMode
+    ? [
+        { name: "Return to Playoffs", path: playoffReturnTo, enabled: true, direct: true, description: "Resume Playoff Bracket" },
+        { name: "Playoffs", sectionKey: "Playoffs", enabled: true, description: "Playoff Stats and Standings" },
+        { name: "Team", sectionKey: "Team", enabled: true, description: "Roster and Gameplan" },
+        { name: "Stats", sectionKey: "Stats", enabled: true, description: "Regular and Playoff Stats" },
+        { name: "Front Office", sectionKey: "Front Office", enabled: true, description: "Draft Assets and Salary" },
+        { name: "Season", sectionKey: "Season", enabled: true, description: "Power Rankings and Playoff Picture" },
+        { name: "Scouting", sectionKey: "Scouting", enabled: true, description: "Locker Room and Team Intel" },
+        { name: "Awards", sectionKey: "Awards", enabled: true, description: "Award Tracker and All-Stars" },
+      ]
+    : [
+        { name: "Schedule", path: "/calendar", enabled: true, direct: true, description: "Calendar and Season Simulation" },
+        { name: "Team", sectionKey: "Team", enabled: true, description: "Roster and Gameplan" },
+        { name: "Stats", sectionKey: "Stats", enabled: true, description: "Player and Playoff Stat Tables" },
+        { name: "Front Office", sectionKey: "Front Office", enabled: true, description: "Trades, Free Agency, Picks, Salary" },
+        { name: "Season", sectionKey: "Season", enabled: true, description: "Standings, Playoff Picture, Rankings" },
+        { name: "Scouting", sectionKey: "Scouting", enabled: true, description: "Locker Room and Team Intel" },
+        { name: "Awards", sectionKey: "Awards", enabled: true, description: "Tracker and All-Star Selections" },
+      ];
+
+  const currentSection = activeSection && sectionTiles[activeSection] ? activeSection : null;
+  const activeSectionTiles = currentSection ? sectionTiles[currentSection] || [] : [];
+  const tiles = currentSection ? activeSectionTiles : mainItems;
+
+  const navigateWithMode = (path, tile = null) => {
+    const hubReturnContext = currentSection
+      ? sectionReturnPayload(currentSection, {
+          isOffseasonMode,
+          isPlayoffMode,
+          offseasonReturnTo,
+          playoffReturnTo,
+        })
+      : null;
+
+    writeTeamHubReturnContext(hubReturnContext);
+
+    const navState = {
+      ...(isOffseasonMode
+        ? {
+            offseasonMode: true,
+            returnTo: offseasonReturnTo,
+          }
+        : {}),
+      ...(isPlayoffMode
+        ? {
+            playoffMode: true,
+            playoffReturnTo,
+          }
+        : {}),
+      ...(hubReturnContext
+        ? {
+            hubSection: hubReturnContext.section,
+            hubSectionLabel: hubReturnContext.label,
+          }
+        : {}),
+    };
+
+    navigate(path, {
+      state: Object.keys(navState).length ? navState : undefined,
+    });
+  };
+
+  const handleTileClick = (tile) => {
+    if (!tile?.enabled) return;
+
+    if (!currentSection && tile.sectionKey) {
+      activeTileIndexRef.current = 0;
+      setActiveTileIndex(0);
+      setActiveSection(tile.sectionKey);
+      return;
+    }
+
+    if (!tile.path || tile.path === "#") return;
+    navigateWithMode(tile.path, tile);
+  };
+
+  const getTileCenterTargetLeft = (index) => {
+    const row = scrollRowRef.current;
+    const node = tileRefs.current[index];
+    if (!row || !node) return null;
+
+    const targetLeft = node.offsetLeft - (row.clientWidth - node.offsetWidth) / 2;
+    const maxLeft = Math.max(0, row.scrollWidth - row.clientWidth);
+    return Math.max(0, Math.min(maxLeft, targetLeft));
+  };
+
+  const nearestTileIndexFromScroll = () => {
+    const row = scrollRowRef.current;
+    if (!row || !tiles.length) return activeTileIndex;
+
+    const maxLeft = Math.max(0, row.scrollWidth - row.clientWidth);
+
+    // Edge handling matters here. On wide screens the last card cannot always be
+    // centered, so row-center math can incorrectly pick Season/Stats while the
+    // user is clearly parked at Awards/front-office end.
+    if (row.scrollLeft <= 4) return 0;
+    if (maxLeft > 0 && row.scrollLeft >= maxLeft - 4) return tiles.length - 1;
+
+    const rowCenter = row.scrollLeft + row.clientWidth / 2;
+    let nearestIndex = activeTileIndex;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+
+    tileRefs.current.forEach((node, index) => {
+      if (!node) return;
+      const cardCenter = node.offsetLeft + node.offsetWidth / 2;
+      const distance = Math.abs(cardCenter - rowCenter);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = index;
+      }
+    });
+
+    return nearestIndex;
+  };
+
+  const scrollToTile = (index, behavior = "smooth") => {
+    if (!tiles.length) return;
+    const nextIndex = Math.max(0, Math.min(tiles.length - 1, index));
+    activeTileIndexRef.current = nextIndex;
+    setActiveTileIndex(nextIndex);
+
+    const row = scrollRowRef.current;
+    const targetLeft = getTileCenterTargetLeft(nextIndex);
+    if (!row || targetLeft === null) return;
+
+    if (scrollSnapTimerRef.current) window.clearTimeout(scrollSnapTimerRef.current);
+    if (scrollReleaseTimerRef.current) window.clearTimeout(scrollReleaseTimerRef.current);
+    if (programmaticScrollTimerRef.current) window.clearTimeout(programmaticScrollTimerRef.current);
+
+    programmaticScrollRef.current = true;
+    ignoreScrollUntilRef.current = Date.now() + (behavior === "smooth" ? 520 : 160);
+    row.scrollTo({ left: targetLeft, behavior });
+
+    // End every keyboard/button move by forcing the intended card. Do not let
+    // scrollbar position or native scroll-snap reinterpret the active card.
+    programmaticScrollTimerRef.current = window.setTimeout(() => {
+      const finalLeft = getTileCenterTargetLeft(nextIndex);
+      if (finalLeft !== null) row.scrollTo({ left: finalLeft, behavior: "auto" });
+      activeTileIndexRef.current = nextIndex;
+      setActiveTileIndex(nextIndex);
+      programmaticScrollRef.current = false;
+      ignoreScrollUntilRef.current = Date.now() + 160;
+    }, behavior === "smooth" ? 280 : 40);
+  };
+
+  const moveTileFocus = (direction) => {
+    if (!tiles.length) return;
+
+    const currentIndex = Math.max(0, Math.min(tiles.length - 1, Number(activeTileIndexRef.current || 0)));
+    const nextIndex = currentIndex + direction;
+
+    // Hard clamp: at the edge, do absolutely nothing. No wrap, no scroll
+    // recalc, no nearest-card guess.
+    if (nextIndex < 0 || nextIndex >= tiles.length) return;
+
+    scrollToTile(nextIndex, "smooth");
+  };
+
+  const handleHubKeyDown = (event) => {
+    const tagName = String(event.target?.tagName || "").toLowerCase();
+    if (["input", "select", "textarea"].includes(tagName)) return;
+
+    if (event.key === "Escape" || event.key === "Backspace") {
+      if (currentSection) {
+        event.preventDefault();
+        activeTileIndexRef.current = 0;
+        setActiveTileIndex(0);
+        setActiveSection(null);
+      }
+      return;
+    }
+
+    if (event.key === "ArrowRight" || event.key === "d" || event.key === "D") {
+      event.preventDefault();
+      moveTileFocus(1);
+      return;
+    }
+
+    if (event.key === "ArrowLeft" || event.key === "a" || event.key === "A") {
+      event.preventDefault();
+      moveTileFocus(-1);
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      handleTileClick(tiles[activeTileIndexRef.current] || tiles[activeTileIndex]);
+    }
+  };
+
+  const snapManualScrollToNearestTile = () => {
+    if (!tiles.length) return;
+    const nearestIndex = nearestTileIndexFromScroll();
+    activeTileIndexRef.current = nearestIndex;
+    setActiveTileIndex(nearestIndex);
+    scrollToTile(nearestIndex, "smooth");
+  };
+
+  const handleRowScroll = () => {
+    // Navigation is intentionally owned by activeTileIndex. Native scroll events
+    // were causing edge-card jumps, so the row no longer changes selection.
+  };
+
+  useEffect(() => {
+    return () => {
+      if (scrollSnapTimerRef.current) window.clearTimeout(scrollSnapTimerRef.current);
+      if (scrollReleaseTimerRef.current) window.clearTimeout(scrollReleaseTimerRef.current);
+      if (programmaticScrollTimerRef.current) window.clearTimeout(programmaticScrollTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onWindowKeyDown = (event) => {
+      if (event.defaultPrevented || shouldIgnoreHubShortcut(event)) return;
+      const key = event.key;
+      const isNavKey =
+        key === "ArrowRight" ||
+        key === "ArrowLeft" ||
+        key === "a" ||
+        key === "A" ||
+        key === "d" ||
+        key === "D" ||
+        key === "Enter" ||
+        key === " " ||
+        key === "Escape" ||
+        key === "Backspace";
+
+      if (!isNavKey) return;
+      hubRef.current?.focus?.({ preventScroll: true });
+      handleHubKeyDown(event);
+    };
+
+    window.addEventListener("keydown", onWindowKeyDown);
+    return () => window.removeEventListener("keydown", onWindowKeyDown);
+  }, [activeTileIndex, currentSection, tiles]);
+
   if (!selectedTeam) {
     return (
       <div className={styles.wrapper}>
@@ -165,130 +609,6 @@ export default function TeamHub() {
     );
   }
 
-  const normalTiles = [
-    { name: "View Roster", path: "/roster-view", enabled: true },
-    { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
-    { name: "Schedule", path: "/calendar", enabled: true },
-    { name: "Free Agents", path: "/free-agents", enabled: true },
-    { name: "Trades", path: "/trades", enabled: true },
-    { name: "Draft Picks", path: "/draft-picks", enabled: true },
-    { name: "Statistics", path: "/player-stats", enabled: true },
-    { name: "Playoff Statistics", path: "#", enabled: false },
-    { name: "View All-Stars", path: allStarsAvailable ? "/all-stars" : "#", enabled: allStarsAvailable },
-    { name: "Standings", path: "/standings", enabled: true },
-    { name: "Playoff Picture", path: "/playoff-picture", enabled: true },
-    { name: "Power Rankings", path: "/power-rankings", enabled: true },
-    { name: "Award Tracker", path: "/award-tracker", enabled: true },
-    { name: "Salary Table", path: "/salary-table", enabled: true },
-    { name: "Locker Room", path: "/locker-room", enabled: true },
-    { name: "Intel", path: "/intel", enabled: true },
-  ];
-
-  const offseasonDisabledTiles = new Set([
-    "Coach Gameplan",
-    "Schedule",
-    "Award Tracker",
-  ]);
-
-  const offseasonTiles = [
-    { name: "Return to Offseason Hub", path: offseasonReturnTo, enabled: true },
-    ...normalTiles.map((tile) => ({
-      ...tile,
-      path:
-        tile.name === "Free Agents"
-          ? offseasonFreeAgentsPath
-          : tile.name === "Playoff Statistics"
-          ? "/playoff-stats"
-          : offseasonDisabledTiles.has(tile.name)
-          ? "#"
-          : tile.path,
-      enabled: tile.name === "Playoff Statistics" ? true : offseasonDisabledTiles.has(tile.name) ? false : tile.enabled,
-    })),
-  ];
-
-  const playoffTiles = [
-    { name: "Return to Playoffs", path: playoffReturnTo, enabled: true },
-    { name: "View Roster", path: "/roster-view", enabled: true },
-    { name: "Locker Room", path: "/locker-room", enabled: true },
-    { name: "Trades", path: "#", enabled: false },
-    { name: "Intel", path: "/intel", enabled: true },
-    { name: "Power Rankings", path: "/power-rankings", enabled: true },
-    { name: "Draft Picks", path: "/draft-picks", enabled: true },
-    { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
-    { name: "Statistics", path: "/player-stats", enabled: true },
-    { name: "Playoff Statistics", path: "/playoff-stats", enabled: true },
-    { name: "View All-Stars", path: allStarsAvailable ? "/all-stars" : "#", enabled: allStarsAvailable },
-    { name: "Standings", path: "/standings", enabled: true },
-    { name: "Playoff Picture", path: "#", enabled: false },
-    { name: "Salary Table", path: "/salary-table", enabled: true },
-    { name: "Award Tracker", path: "/award-tracker", enabled: true },
-    { name: "Free Agents", path: "#", enabled: false },
-  ];
-
-  const tiles = isOffseasonMode
-    ? offseasonTiles
-    : isPlayoffMode
-    ? playoffTiles
-    : normalTiles;
-
-  const handleTileClick = (tile) => {
-    if (!tile.enabled || tile.path === "#") return;
-
-    const navState = isOffseasonMode
-      ? {
-          offseasonMode: true,
-          returnTo: offseasonReturnTo,
-        }
-      : isPlayoffMode
-      ? {
-          playoffMode: true,
-          playoffReturnTo,
-        }
-      : undefined;
-
-    navigate(tile.path, {
-      state: navState,
-    });
-  };
-
-  const scrollToTile = (index, behavior = "smooth") => {
-    if (!tiles.length) return;
-    const nextIndex = Math.max(0, Math.min(tiles.length - 1, index));
-    setActiveTileIndex(nextIndex);
-    tileRefs.current[nextIndex]?.scrollIntoView?.({
-      behavior,
-      inline: "center",
-      block: "nearest",
-    });
-  };
-
-  const moveTileFocus = (direction) => {
-    if (!tiles.length) return;
-    const nextIndex = (activeTileIndex + direction + tiles.length) % tiles.length;
-    scrollToTile(nextIndex);
-  };
-
-  const handleHubKeyDown = (event) => {
-    const tagName = String(event.target?.tagName || "").toLowerCase();
-    if (["input", "select", "textarea"].includes(tagName)) return;
-
-    if (event.key === "ArrowRight" || event.key === "d" || event.key === "D") {
-      event.preventDefault();
-      moveTileFocus(1);
-      return;
-    }
-
-    if (event.key === "ArrowLeft" || event.key === "a" || event.key === "A") {
-      event.preventDefault();
-      moveTileFocus(-1);
-      return;
-    }
-
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      handleTileClick(tiles[activeTileIndex]);
-    }
-  };
 
   return (
     <PageFade>
@@ -296,7 +616,6 @@ export default function TeamHub() {
         ref={hubRef}
         className={styles.wrapper}
         tabIndex={0}
-        onKeyDown={handleHubKeyDown}
         aria-label="Team Hub navigation"
       >
       {teamsSorted.length > 0 && (
@@ -365,31 +684,35 @@ export default function TeamHub() {
           type="button"
           className={styles.railArrow}
           onClick={() => moveTileFocus(-1)}
+          disabled={activeTileIndex <= 0}
           aria-label="Previous Team Hub option"
         >
           ◄
         </button>
 
-        <div ref={scrollRowRef} className={styles.scrollRow}>
+        <div key={currentSection || "main"} ref={scrollRowRef} className={styles.scrollRow} onScroll={handleRowScroll}>
           {tiles.map((tile, index) => {
-            const enabled = tile.enabled && tile.path !== "#";
+            const enabled = tile.enabled && (tile.sectionKey || tile.path !== "#");
             const active = index === activeTileIndex;
+            const chipText = currentSection || tile.name;
 
             return (
               <div
-                key={tile.name}
+                key={`${currentSection || "main"}-${tile.name}`}
                 ref={(node) => { tileRefs.current[index] = node; }}
                 onClick={() => {
+                  activeTileIndexRef.current = index;
                   setActiveTileIndex(index);
+                  scrollToTile(index, "auto");
                   handleTileClick(tile);
                 }}
-                onMouseEnter={() => setActiveTileIndex(index)}
-                onFocus={() => scrollToTile(index)}
                 tabIndex={enabled ? 0 : -1}
                 aria-current={active ? "true" : undefined}
                 className={`${styles.card} ${active ? styles.activeCard : ""} ${enabled ? "bmRouteCardClickable" : styles.disabled}`}
                 style={{ cursor: enabled ? "pointer" : "not-allowed" }}
               >
+                <div className={tile.direct ? styles.directChip : styles.sectionChip}>{chipText}</div>
+
                 <img
                   src={selectedTeam.logo}
                   alt={selectedTeam.name}
@@ -401,25 +724,7 @@ export default function TeamHub() {
                   <div className={styles.labelText}>
                     <div className={styles.tileName}>{tile.name}</div>
                     <div className={styles.teamName}>
-                      {tile.name === "Return to Offseason Hub"
-                        ? "Resume offseason flow"
-                        : tile.name === "Return to Playoffs"
-                        ? "Resume playoff bracket"
-                        : tile.name === "Power Rankings"
-                        ? "League-wide team ratings"
-                        : tile.name === "Draft Picks"
-                        ? "Team draft assets"
-                        : tile.name === "Trades"
-                        ? "Propose and review trades"
-                        : tile.name === "Intel"
-                        ? "Front office team intel"
-                        : tile.name === "Locker Room"
-                        ? "Player morale and role check"
-                        : tile.name === "Playoff Statistics"
-                        ? isOffseasonMode ? "Previous postseason" : "Current postseason"
-                        : tile.name === "View All-Stars"
-                        ? allStarsAvailable ? "Starters and reserves" : "Available after selections"
-                        : selectedTeam.name}
+                      {tileSubtitle(tile, selectedTeam.name, { allStarsAvailable, isOffseasonMode })}
                     </div>
                   </div>
                 </div>
@@ -432,11 +737,27 @@ export default function TeamHub() {
           type="button"
           className={styles.railArrow}
           onClick={() => moveTileFocus(1)}
+          disabled={activeTileIndex >= tiles.length - 1}
           aria-label="Next Team Hub option"
         >
           ►
         </button>
       </div>
+
+      {currentSection && (
+        <button
+          type="button"
+          className={styles.sectionBottomBackButton}
+          onClick={() => {
+            activeTileIndexRef.current = 0;
+            setActiveTileIndex(0);
+            setActiveSection(null);
+          }}
+        >
+          <span aria-hidden="true">←</span>
+          <span>Team Hub</span>
+        </button>
+      )}
     </div>
     </PageFade>
   );

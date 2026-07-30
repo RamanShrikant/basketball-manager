@@ -134,6 +134,68 @@ function fmtAvg(value) {
   return Number.isFinite(n) ? n.toFixed(1) : "0.0";
 }
 
+function combinePlayerStatRecords(records, playerName, currentTeamName = "") {
+  const rows = (records || []).filter((row) => row && Number(row.gp || 0) > 0);
+  if (!rows.length) return null;
+
+  const total = {
+    player: playerName,
+    team: currentTeamName || rows[rows.length - 1]?.team || "",
+    gp: 0,
+    min: 0,
+    pts: 0,
+    reb: 0,
+    ast: 0,
+    stl: 0,
+    blk: 0,
+    fgm: 0,
+    fga: 0,
+    tpm: 0,
+    tpa: 0,
+    ftm: 0,
+    fta: 0,
+    to: 0,
+    pf: 0,
+    started: 0,
+    sixth: 0,
+  };
+
+  for (const row of rows) {
+    total.gp += Number(row.gp || 0);
+    total.min += Number(row.min || 0);
+    total.pts += Number(row.pts || 0);
+    total.reb += Number(row.reb || 0);
+    total.ast += Number(row.ast || 0);
+    total.stl += Number(row.stl || 0);
+    total.blk += Number(row.blk || 0);
+    total.fgm += Number(row.fgm || 0);
+    total.fga += Number(row.fga || 0);
+    total.tpm += Number(row.tpm || 0);
+    total.tpa += Number(row.tpa || 0);
+    total.ftm += Number(row.ftm || 0);
+    total.fta += Number(row.fta || 0);
+    total.to += Number(row.to ?? row.tov ?? row.turnovers ?? 0);
+    total.pf += Number(row.pf ?? row.fouls ?? 0);
+    total.started += Number(row.started || 0);
+    total.sixth += Number(row.sixth || 0);
+  }
+
+  return total;
+}
+
+function getCombinedPlayerStatsRecord(playerStatsMap, playerName, currentTeamName = "") {
+  const name = String(playerName || "").trim();
+  if (!name) return null;
+
+  const exactCurrent = playerStatsMap?.[`${name}__${currentTeamName}`];
+  const records = Object.entries(playerStatsMap || {})
+    .filter(([key, row]) => (row?.player || key.split("__")[0]) === name)
+    .map(([, row]) => row);
+
+  if (!records.length && exactCurrent) records.push(exactCurrent);
+  return combinePlayerStatRecords(records, name, currentTeamName);
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                 COMPONENT                                  */
 /* -------------------------------------------------------------------------- */
@@ -239,8 +301,7 @@ export default function PlayerStats({ scope = "regular" }) {
   const results = useMemo(() => loadAllResultsV3(), []);
 
   const computePlayerStats = (playerName, teamName) => {
-    const key = `${playerName}__${teamName}`;
-    const rec = playerStatsMap?.[key];
+    const rec = getCombinedPlayerStatsRecord(playerStatsMap, playerName, teamName);
 
     if (!rec || !Number(rec.gp || 0)) {
       return {
