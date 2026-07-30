@@ -14548,15 +14548,166 @@ def restore_regular_season_rating_freeze_snapshot(
         "details": drift_details,
     }
 
+def normalize_cpu_repair_team_scope(
+    league_data: Dict[str, Any],
+    raw_team_names: Optional[List[Any]],
+    user_team_name: Optional[str] = None,
+) -> List[str]:
+    if not isinstance(raw_team_names, list):
+        return []
+
+    requested = []
+    seen = set()
+    for raw in raw_team_names:
+        team_name = str(raw or "").strip()
+        if not team_name or team_name in seen:
+            continue
+        if user_team_name and team_name == user_team_name:
+            continue
+        seen.add(team_name)
+        requested.append(team_name)
+
+    if not requested:
+        return []
+
+    live_names = {
+        str(team.get("name") or "")
+        for _, _, team in iter_teams(league_data)
+        if isinstance(team, dict) and team.get("name")
+    }
+    return [team_name for team_name in requested if team_name in live_names]
+
+
+def iter_cpu_repair_scope_teams(
+    league_data: Dict[str, Any],
+    user_team_name: Optional[str] = None,
+    team_name_scope: Optional[set] = None,
+):
+    for conf_name, idx, team in iter_teams(league_data):
+        if not isinstance(team, dict):
+            continue
+        team_name = team.get("name")
+        if not team_name:
+            continue
+        if user_team_name and team_name == user_team_name:
+            continue
+        if team_name_scope is not None and team_name not in team_name_scope:
+            continue
+        yield conf_name, idx, team
+
+
+def normalize_player_rights_for_repair_scope(
+    league_data: Dict[str, Any],
+    team_name_scope: set,
+) -> None:
+    for _, _, team in iter_cpu_repair_scope_teams(
+        league_data,
+        user_team_name = None,
+        team_name_scope = team_name_scope,
+    ):
+        team_name = team.get("name")
+        for player in get_team_players(team):
+            normalize_player_rights_for_location(player, team_name)
+        for player in (team.get("twoWayPlayers") or []):
+            normalize_player_rights_for_location(player, team_name)
+
+    # Players released by the trade or by a scoped trim can be signed during the
+    # same repair pass. Keep free-agent rights normalized exactly as the full pass.
+    for player in (league_data.get("freeAgents") or []):
+        normalize_player_rights_for_location(player, None)
+
+
+def collect_cpu_repair_action_team_names(*row_groups: Any) -> set:
+    names = set()
+    for rows in row_groups:
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            team_name = row.get("teamName") or row.get("signedWith") or row.get("team")
+            if team_name:
+                names.add(str(team_name))
+    return names
+
+
+def build_cpu_roster_repair_league_patch(
+    league_data: Dict[str, Any],
+    affected_team_names: set,
+) -> Dict[str, Any]:
+    team_patches = []
+    for conf_name, _, team in iter_teams(league_data):
+        team_name = team.get("name") if isinstance(team, dict) else None
+        if not team_name or team_name not in affected_team_names:
+            continue
+        team_patches.append({
+            "conference": conf_name,
+            "teamName": team_name,
+            "team": team,
+        })
+
+    top_level = {}
+    for key in [
+        "minRosterSize",
+        "maxRosterSize",
+        "rosterLimit",
+        "freeAgents",
+        "freeAgencyState",
+        "deadCapByTeam",
+    ]:
+        if key in league_data:
+            top_level[key] = league_data.get(key)
+
+    return {
+        "version": 1,
+        "teamPatches": team_patches,
+        "topLevel": top_level,
+    }
+
+
 def repair_cpu_teams_to_min_roster(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None,
     min_players: Optional[int] = None,
     current_day: int = 0,
+    target_team_names: Optional[List[Any]] = None,
+    return_patch_only: bool = False,
 ) -> Dict[str, Any]:
-    updated = copy.deepcopy(league_data)
+    requested_target_names = []
+    if isinstance(target_team_names, list):
+        requested_target_names = [
+            str(value or "").strip()
+            for value in target_team_names
+            if str(value or "").strip()
+        ]
+
+    scoped_team_names = normalize_cpu_repair_team_scope(
+        league_data,
+        target_team_names,
+        user_team_name = user_team_name,
+    )
+    targeted_mode = bool(requested_target_names)
+
+    if targeted_mode and len(scoped_team_names) != len(set(requested_target_names)):
+        return {
+            "ok": False,
+            "targetedFallbackRequired": True,
+            "targetedFallbackReason": "target_team_scope_invalid",
+            "requestedTargetTeamNames": requested_target_names,
+            "resolvedTargetTeamNames": scoped_team_names,
+        }
+
+    # The worker request already owns an isolated structured-clone/Pyodide copy.
+    # A second Python deepcopy of the entire 2MB+ league is pure overhead for the
+    # targeted post-trade path. The legacy/full path keeps its old copy semantics.
+    updated = league_data if targeted_mode else copy.deepcopy(league_data)
     rating_freeze_snapshot = build_regular_season_rating_freeze_snapshot(updated)
-    normalize_all_player_rights(updated)
+
+    target_scope = set(scoped_team_names)
+    if targeted_mode:
+        normalize_player_rights_for_repair_scope(updated, target_scope)
+    else:
+        normalize_all_player_rights(updated)
 
     if min_players is not None:
         try:
@@ -14571,17 +14722,14 @@ def repair_cpu_teams_to_min_roster(
     dropped_players: List[Dict[str, Any]] = []
     two_way_assignments: List[Dict[str, Any]] = []
     two_way_drops: List[Dict[str, Any]] = []
+    affected_team_names = set(target_scope)
 
-    # Before games can sim, CPU teams must be season-legal. This pass allows the
-    # offseason to be flexible, then cleans CPU teams by moving eligible young
-    # fringe players to two-way first and only cutting if still over 15.
-    for _, _, team in iter_teams(updated):
-        team_name = team.get("name")
-        if not team_name:
-            continue
-        if user_team_name and team_name == user_team_name:
-            continue
-
+    first_trim_scope = target_scope if targeted_mode else None
+    for _, _, team in iter_cpu_repair_scope_teams(
+        updated,
+        user_team_name = user_team_name,
+        team_name_scope = first_trim_scope,
+    ):
         trim_actions = trim_cpu_team_to_season_roster_limits(
             league_data = updated,
             team = team,
@@ -14590,34 +14738,67 @@ def repair_cpu_teams_to_min_roster(
         dropped_players.extend(trim_actions.get("droppedPlayers", []))
         two_way_assignments.extend(trim_actions.get("twoWayAssignments", []))
         two_way_drops.extend(trim_actions.get("twoWayDrops", []))
+        affected_team_names.update(collect_cpu_repair_action_team_names(
+            trim_actions.get("droppedPlayers", []),
+            trim_actions.get("twoWayAssignments", []),
+            trim_actions.get("twoWayDrops", []),
+        ))
 
-    high_value_sweep = sign_high_value_free_agents_before_simulation(
-        league_data = updated,
-        user_team_name = user_team_name,
-        current_day = int(num(current_day, 0)),
-        season_year = season_year,
+    # Keep the user's global 76+ rule exactly intact. This sweep still ranks all
+    # CPU teams by their real spending capacity and can legitimately touch a team
+    # outside the two-team trade. We only skip it when no 76+ free agent exists.
+    has_high_value_free_agents = any(
+        int(num(player.get("overall"), 0)) >= 76
+        for player in (updated.get("freeAgents") or [])
+        if isinstance(player, dict)
     )
-    high_value_signings = high_value_sweep.get("signings", [])
-    dropped_players.extend(high_value_sweep.get("droppedPlayers", []))
-    two_way_assignments.extend(high_value_sweep.get("twoWayAssignments", []))
-    unsigned_high_value = high_value_sweep.get("unsignedHighValueFreeAgents", [])
+    if has_high_value_free_agents:
+        high_value_sweep = sign_high_value_free_agents_before_simulation(
+            league_data = updated,
+            user_team_name = user_team_name,
+            current_day = int(num(current_day, 0)),
+            season_year = season_year,
+        )
+    else:
+        high_value_sweep = {
+            "signings": [],
+            "droppedPlayers": [],
+            "twoWayAssignments": [],
+            "unsignedHighValueFreeAgents": [],
+        }
 
+    high_value_signings = high_value_sweep.get("signings", [])
+    high_value_drops = high_value_sweep.get("droppedPlayers", [])
+    high_value_two_way = high_value_sweep.get("twoWayAssignments", [])
+    dropped_players.extend(high_value_drops)
+    two_way_assignments.extend(high_value_two_way)
+    unsigned_high_value = high_value_sweep.get("unsignedHighValueFreeAgents", [])
+    affected_team_names.update(collect_cpu_repair_action_team_names(
+        high_value_signings,
+        high_value_drops,
+        high_value_two_way,
+    ))
+
+    # Keep the existing global deficit ordering. Only teams below the minimum do
+    # real work here, and preserving this function unchanged guarantees identical
+    # emergency-player selection and story rows.
     cleanup_signings = finalize_cpu_min_roster_cleanup(
         league_data = updated,
         current_day = int(num(current_day, 0)),
         user_team_name = user_team_name,
         allow_generated_replacements = True,
     )
+    affected_team_names.update(collect_cpu_repair_action_team_names(cleanup_signings))
 
-    # Emergency signings may make the roster legal, but run one more light pass
-    # in case an old save or edge case still has too many players.
-    for _, _, team in iter_teams(updated):
-        team_name = team.get("name")
-        if not team_name:
-            continue
-        if user_team_name and team_name == user_team_name:
-            continue
-
+    # A final trim is only necessary for teams that the trade/repair actually
+    # touched. The all-team legality audit below catches any unexpected old-save
+    # violation and requests an automatic legacy fallback rather than guessing.
+    final_trim_scope = affected_team_names if targeted_mode else None
+    for _, _, team in iter_cpu_repair_scope_teams(
+        updated,
+        user_team_name = user_team_name,
+        team_name_scope = final_trim_scope,
+    ):
         trim_actions = trim_cpu_team_to_season_roster_limits(
             league_data = updated,
             team = team,
@@ -14626,19 +14807,23 @@ def repair_cpu_teams_to_min_roster(
         dropped_players.extend(trim_actions.get("droppedPlayers", []))
         two_way_assignments.extend(trim_actions.get("twoWayAssignments", []))
         two_way_drops.extend(trim_actions.get("twoWayDrops", []))
+        affected_team_names.update(collect_cpu_repair_action_team_names(
+            trim_actions.get("droppedPlayers", []),
+            trim_actions.get("twoWayAssignments", []),
+            trim_actions.get("twoWayDrops", []),
+        ))
 
     min_target = get_min_roster_target(updated)
     failed_teams = []
     over_max_teams = []
     over_two_way_teams = []
 
-    for _, _, team in iter_teams(updated):
+    for _, _, team in iter_cpu_repair_scope_teams(
+        updated,
+        user_team_name = user_team_name,
+        team_name_scope = None,
+    ):
         team_name = team.get("name")
-        if not team_name:
-            continue
-        if user_team_name and team_name == user_team_name:
-            continue
-
         player_count = len(get_team_players(team))
         two_way_count = len(team.get("twoWayPlayers") or [])
 
@@ -14663,10 +14848,21 @@ def repair_cpu_teams_to_min_roster(
                 "twoWayMax": TWO_WAY_MAX,
             })
 
-    # Regular-season roster repair must never run player progression/regression or
-    # league-wide rating shape locks. The only rating-changing path should be the
-    # explicit offseason Player Progression flow. Keep this repair limited to
-    # roster legality, emergency signings, and two-way/standard roster cleanup.
+    unexpected_illegal_teams = {
+        str(row.get("teamName") or "")
+        for row in [*failed_teams, *over_max_teams, *over_two_way_teams]
+        if row.get("teamName") and row.get("teamName") not in affected_team_names
+    }
+    if targeted_mode and unexpected_illegal_teams:
+        return {
+            "ok": False,
+            "targetedFallbackRequired": True,
+            "targetedFallbackReason": "unrelated_team_requires_full_repair",
+            "requestedTargetTeamNames": requested_target_names,
+            "resolvedTargetTeamNames": scoped_team_names,
+            "unexpectedIllegalTeams": sorted(unexpected_illegal_teams),
+        }
+
     rating_freeze_audit = restore_regular_season_rating_freeze_snapshot(
         updated,
         rating_freeze_snapshot,
@@ -14678,9 +14874,8 @@ def repair_cpu_teams_to_min_roster(
         "reason": "rating_shape_lock_disabled_outside_player_progression",
     }
 
-    return {
+    result = {
         "ok": len(failed_teams) == 0 and len(over_max_teams) == 0 and len(over_two_way_teams) == 0,
-        "leagueData": updated,
         "signings": high_value_signings + cleanup_signings,
         "highValueSignings": high_value_signings,
         "cleanupSignings": cleanup_signings,
@@ -14695,7 +14890,23 @@ def repair_cpu_teams_to_min_roster(
         "twoWayMax": TWO_WAY_MAX,
         "progressionShapeAudit": progression_shape_audit,
         "ratingFreezeAudit": rating_freeze_audit,
+        "repairMode": "targeted_post_trade" if targeted_mode else "full_league",
+        "targetedTeamNames": scoped_team_names,
+        "affectedTeamNames": sorted(affected_team_names),
+        "highValueSweepRan": bool(has_high_value_free_agents),
+        "targetedFallbackRequired": False,
     }
+
+    if targeted_mode and return_patch_only:
+        result["leaguePatch"] = build_cpu_roster_repair_league_patch(
+            updated,
+            affected_team_names,
+        )
+    else:
+        result["leagueData"] = updated
+
+    return result
+
 def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
     action = request.get("action")
     league_data = request.get("leagueData", {})
@@ -14828,6 +15039,8 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
             user_team_name = payload.get("userTeamName"),
             min_players = payload.get("minPlayers"),
             current_day = int(num(payload.get("currentDay"), 0)),
+            target_team_names = payload.get("targetTeamNames"),
+            return_patch_only = bool(payload.get("returnPatchOnly")),
         )
 
     return {

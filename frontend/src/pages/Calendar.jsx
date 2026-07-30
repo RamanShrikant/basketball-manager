@@ -9,7 +9,7 @@ import {
   computeAllStars,
   repairCpuTeamsToMinRoster,
 } from "@/api/simEnginePy";
-import { cancelCpuTradeWorkerGeneration, getCpuCpuTradeCandidates, prewarmCpuTradeWorker, startCpuCpuTradeCandidateBatch } from "../api/cpuTradeEngine.js";
+import { cancelCpuTradeWorkerGeneration, getCpuCpuTradeCandidates, prewarmCpuTradeWorker } from "../api/cpuTradeEngine.js";
 import { prewarmCpuTradeValidationPool } from "../api/cpuTradeValidationPool.js";
 import {
   addGeneratedCpuTradeCandidates,
@@ -21,7 +21,6 @@ import {
   getCpuTradeBankGenerationPolicy,
   getCpuTradeBankRunwayStatus,
   readCpuTradeBankTestConfig,
-  revalidateCpuTradeBankSlice,
   writeCpuTradeBankTestConfig,
 } from "../utils/cpuTradeBank.js";
 import {
@@ -4009,7 +4008,10 @@ function startCpuTradeBankGenerationJob({
   workerContext,
   generationContext,
 }) {
-  if (!generationJobRef || generationJobRef.current?.status === "pending") return false;
+  // Never overwrite a fulfilled result that has not yet been admitted. A fast
+  // worker can finish after the pass-start consume check but before pass-end;
+  // preserving the ref lets the next simulated date consume that exact result.
+  if (!generationJobRef || generationJobRef.current) return false;
 
   const job = {
     id: `cpu_trade_bank_job_${Date.now()}_${workerContext?.generationNonce || 0}`,
@@ -4079,334 +4081,6 @@ function syncTradeDeskFeedHistoryWithTelemetry(leagueData, details = {}) {
   return rows;
 }
 
-function trimCpuTradeGenerationResponse(response = {}, maxCandidates = 120) {
-  const limit = Math.max(1, Math.min(120, Math.trunc(Number(maxCandidates || 120))));
-  const candidates = Array.isArray(response?.candidates)
-    ? response.candidates.slice(0, limit)
-    : [];
-  return {
-    ...response,
-    candidates,
-    debug: {
-      ...(response?.debug || {}),
-      maxCandidates: limit,
-      speculativeGeneratedCandidates: Array.isArray(response?.candidates)
-        ? response.candidates.length
-        : 0,
-    },
-  };
-}
-
-async function runForegroundCpuTradeBankGeneration({
-  leagueData,
-  baseContext,
-  testConfig,
-  generationJobRef,
-  maxPasses = 1,
-  reason = "runway",
-}) {
-  let nextLeagueData = leagueData;
-  let changed = false;
-  let totalAccepted = 0;
-  let totalRejected = 0;
-  const generationRows = [];
-  const foregroundStartedAt = cpuTradeNow();
-  const boundedMaxPasses = Math.max(1, Math.min(4, Math.trunc(Number(maxPasses || 1))));
-
-  try {
-    const initialState = nextLeagueData?.cpuTradeBankState;
-    const initialRunway = getCpuTradeBankRunwayStatus(initialState, baseContext);
-
-    if (!initialState || initialRunway.remainingTarget <= 0) {
-      return {
-        leagueData: nextLeagueData,
-        changed,
-        totalAccepted,
-        totalRejected,
-        generationRows,
-      };
-    }
-
-    if (generationJobRef?.current?.status === "pending" && initialRunway.critical) {
-      // V5B uses a pool, so cancel only the stale background request. The other
-      // already-warm Pyodide workers remain alive for the foreground batch.
-      const staleRequestId = generationJobRef.current?.requestId || null;
-      generationJobRef.current = null;
-      cancelCpuTradeWorkerGeneration(
-        "foreground_superseded_background",
-        staleRequestId
-      );
-    }
-
-    const initialBasePolicy = getCpuTradeBankGenerationPolicy(initialState, baseContext, {
-      ...testConfig,
-      forceGeneration: true,
-    });
-    const speculativeMaxCandidates = Math.max(
-      initialBasePolicy.maxCandidates || 0,
-      initialRunway.emergency ? 120 : 96
-    );
-    const speculativeBaseContext = buildCpuTradeWorkerContext(initialState, baseContext, {
-      ...initialBasePolicy,
-      shouldGenerate: true,
-      reason: `foreground_${reason}`,
-      foregroundRecommended: true,
-      inventoryPressure: Math.max(
-        Number(initialBasePolicy?.inventoryPressure || 0),
-        Number(initialRunway.inventoryPressure || 0),
-        1.1
-      ),
-      maxCandidates: speculativeMaxCandidates,
-      exactEvaluations: Math.max(
-        initialBasePolicy.exactEvaluations || 0,
-        initialRunway.emergency ? 72 : 60
-      ),
-    });
-    const initialGenerationNonce = Number(initialState?.generationNonce || 0);
-    const speculativeContexts = Array.from(
-      { length: boundedMaxPasses },
-      (_, passIndex) => ({
-        ...speculativeBaseContext,
-        generationNonce: initialGenerationNonce + passIndex,
-        maxCandidates: speculativeMaxCandidates,
-        foregroundRecommended: true,
-      })
-    );
-
-    const parallelBatchStartedAt = cpuTradeNow();
-    const speculativeBatch = startCpuCpuTradeCandidateBatch(
-      makeCpuTradeGenerationLeagueData(nextLeagueData),
-      speculativeContexts
-    );
-
-    for (let pass = 0; pass < boundedMaxPasses; pass += 1) {
-      const foregroundPassStartedAt = cpuTradeNow();
-      const state = nextLeagueData?.cpuTradeBankState;
-      const runway = getCpuTradeBankRunwayStatus(state, baseContext);
-      if (!state || runway.remainingTarget <= 0) break;
-      if (pass > 0 && !runway.critical && runway.bankSize >= Math.min(runway.remainingTarget, 10)) break;
-
-      const basePolicy = getCpuTradeBankGenerationPolicy(state, baseContext, {
-        ...testConfig,
-        forceGeneration: true,
-      });
-      const boostedPolicy = {
-        ...basePolicy,
-        shouldGenerate: true,
-        reason: `foreground_${reason}`,
-        foregroundRecommended: true,
-        inventoryPressure: Math.max(
-          Number(basePolicy?.inventoryPressure || 0),
-          Number(runway.inventoryPressure || 0),
-          pass > 0 ? 1.1 : 0.85
-        ),
-        maxCandidates: Math.max(basePolicy.maxCandidates || 0, runway.emergency ? 120 : 96),
-        exactEvaluations: Math.max(basePolicy.exactEvaluations || 0, runway.emergency ? 72 : 60),
-      };
-      const workerContext = buildCpuTradeWorkerContext(state, baseContext, boostedPolicy);
-      const speculativeWaitStartedAt = cpuTradeNow();
-      const speculativeRow = speculativeBatch?.rows?.[pass]
-        ? await speculativeBatch.rows[pass]
-        : null;
-      recordCpuTradeTiming(
-        "foregroundParallelGenerationPassWaitMs",
-        cpuTradeNow() - speculativeWaitStartedAt,
-        {
-          currentDate: baseContext?.currentDate || "",
-          reason,
-          pass: pass + 1,
-          generationNonce: workerContext?.generationNonce ?? null,
-        }
-      );
-      const speculativeNonce = Number(
-        speculativeRow?.response?.debug?.generationNonce ??
-        speculativeContexts[pass]?.generationNonce ??
-        -1
-      );
-      const expectedNonce = Number(workerContext?.generationNonce || 0);
-      const speculativeUsable =
-        speculativeRow?.ok === true &&
-        speculativeRow?.response &&
-        speculativeNonce === expectedNonce;
-
-      let response;
-      if (speculativeUsable) {
-        response = trimCpuTradeGenerationResponse(
-          speculativeRow.response,
-          boostedPolicy.maxCandidates
-        );
-        recordCpuTradeGenerationJob({
-          event: "parallel_foreground_pass_used",
-          currentDate: baseContext?.currentDate || "",
-          reason,
-          pass: pass + 1,
-          generationNonce: expectedNonce,
-          candidateCount: Array.isArray(response?.candidates) ? response.candidates.length : 0,
-          speculativeCandidateCount: Array.isArray(speculativeRow?.response?.candidates)
-            ? speculativeRow.response.candidates.length
-            : 0,
-        });
-      } else {
-        recordCpuTradeGenerationJob({
-          event: "parallel_foreground_pass_fallback",
-          currentDate: baseContext?.currentDate || "",
-          reason,
-          pass: pass + 1,
-          generationNonce: expectedNonce,
-          speculativeNonce,
-          error: speculativeRow?.error?.message || String(speculativeRow?.error || "missing_parallel_response"),
-        });
-        response = await getCpuCpuTradeCandidates(
-          makeCpuTradeGenerationLeagueData(nextLeagueData),
-          workerContext
-        );
-      }
-
-      const added = await addGeneratedCpuTradeCandidates({
-        leagueData: nextLeagueData,
-        response,
-        context: {
-          ...baseContext,
-          generatedDate: baseContext.currentDate,
-          generatedDayIndex: baseContext.dayIndex,
-        },
-        testConfig,
-        exactEvaluationLimit: boostedPolicy.exactEvaluations,
-      });
-
-      nextLeagueData = added.leagueData || nextLeagueData;
-      changed = changed || Boolean(added.changed);
-      totalAccepted += added.accepted?.length || 0;
-      totalRejected += added.rejected?.length || 0;
-
-      const foregroundPassMs = cpuTradeNow() - foregroundPassStartedAt;
-      const generationRow = {
-        pass: pass + 1,
-        proposed: Array.isArray(response?.candidates) ? response.candidates.length : 0,
-        accepted: added.accepted?.length || 0,
-        rejected: added.rejected?.length || 0,
-        bankSize: added.state?.candidates?.length || 0,
-        durationMs: foregroundPassMs,
-        parallelGenerated: speculativeUsable,
-        workerDebug: response?.debug || null,
-      };
-      generationRows.push(generationRow);
-      recordCpuTradeTiming("foregroundGenerationPassMs", foregroundPassMs, {
-        reason,
-        pass: pass + 1,
-        proposed: generationRow.proposed,
-        accepted: generationRow.accepted,
-        rejected: generationRow.rejected,
-        parallelGenerated: speculativeUsable,
-      });
-      recordCpuTradeGenerationJob({
-        event: "foreground_pass",
-        currentDate: baseContext?.currentDate || "",
-        reason,
-        pass: pass + 1,
-        durationMs: foregroundPassMs,
-        candidateCount: generationRow.proposed,
-        acceptedCount: generationRow.accepted,
-        rejectedCount: generationRow.rejected,
-        bankSize: generationRow.bankSize,
-        parallelGenerated: speculativeUsable,
-      });
-
-      const updatedRunway = getCpuTradeBankRunwayStatus(
-        nextLeagueData?.cpuTradeBankState,
-        baseContext
-      );
-      if (
-        !updatedRunway.critical ||
-        (
-          updatedRunway.bankSize >= Math.min(
-            updatedRunway.remainingTarget,
-            updatedRunway.emergency ? 8 : 12
-          ) &&
-          totalAccepted > 0
-        )
-      ) {
-        break;
-      }
-    }
-
-    const unusedSpeculativePasses = Math.max(
-      0,
-      speculativeContexts.length - generationRows.length
-    );
-    if (unusedSpeculativePasses > 0) {
-      const cancelledUnusedPasses = speculativeBatch?.cancelRemaining?.(
-        "parallel_foreground_unused",
-        generationRows.length
-      ) || 0;
-      recordCpuTradeGenerationJob({
-        event: "parallel_foreground_passes_discarded",
-        currentDate: baseContext?.currentDate || "",
-        reason,
-        count: unusedSpeculativePasses,
-        cancelledCount: cancelledUnusedPasses,
-        consumedPasses: generationRows.length,
-        generatedPasses: speculativeContexts.length,
-      });
-    }
-
-    recordCpuTradeTiming(
-      "foregroundParallelGenerationBatchMs",
-      cpuTradeNow() - parallelBatchStartedAt,
-      {
-        currentDate: baseContext?.currentDate || "",
-        reason,
-        passCount: speculativeContexts.length,
-        consumedPasses: generationRows.length,
-        maxCandidates: speculativeMaxCandidates,
-      }
-    );
-  } catch (error) {
-    const foregroundGenerationMs = cpuTradeNow() - foregroundStartedAt;
-    recordCpuTradeTiming("foregroundGenerationMs", foregroundGenerationMs, {
-      currentDate: baseContext?.currentDate || "",
-      reason,
-      failed: true,
-    });
-    recordCpuTradeGenerationJob({
-      event: "foreground_failed",
-      currentDate: baseContext?.currentDate || "",
-      reason,
-      durationMs: foregroundGenerationMs,
-      acceptedCount: totalAccepted,
-      rejectedCount: totalRejected,
-      error: error?.message || String(error || ""),
-    });
-    throw error;
-  }
-
-  const foregroundGenerationMs = cpuTradeNow() - foregroundStartedAt;
-  recordCpuTradeTiming("foregroundGenerationMs", foregroundGenerationMs, {
-    currentDate: baseContext?.currentDate || "",
-    reason,
-    passCount: generationRows.length,
-    accepted: totalAccepted,
-    rejected: totalRejected,
-  });
-  recordCpuTradeGenerationJob({
-    event: "foreground_summary",
-    currentDate: baseContext?.currentDate || "",
-    reason,
-    durationMs: foregroundGenerationMs,
-    passCount: generationRows.length,
-    acceptedCount: totalAccepted,
-    rejectedCount: totalRejected,
-  });
-
-  return {
-    leagueData: nextLeagueData,
-    changed,
-    totalAccepted,
-    totalRejected,
-    generationRows,
-  };
-}
-
 function resolveCalendarControlledTeamName(selectedTeam, leagueData = {}) {
   const candidates = [
     selectedTeam,
@@ -4456,40 +4130,6 @@ function shouldWriteCpuTradeDeskItems({ candidates = [], tradeDeskItems = [], cu
   return idx % 12 === 0;
 }
 
-function countCpuTradeSlotsDueToday(state = {}, dayIndex = 0) {
-  const plan = Array.isArray(state?.executionPlanDays) ? state.executionPlanDays : [];
-  const cursor = Math.max(0, Math.trunc(Number(state?.planCursor || 0)));
-  const currentDay = Number(dayIndex || 0);
-  let due = 0;
-
-  for (let index = cursor; index < plan.length; index += 1) {
-    if (!Number.isFinite(Number(plan[index])) || currentDay < Number(plan[index])) break;
-    due += 1;
-  }
-
-  return due;
-}
-
-function getCpuTradeExecutionBurstLimit(state = {}, runway = {}, dayIndex = 0, daysToDeadline = 999) {
-  const remainingTarget = Math.max(0, Number(runway?.remainingTarget || 0));
-  if (!remainingTarget) return 0;
-
-  const dueSlots = countCpuTradeSlotsDueToday(state, dayIndex);
-  const completionDeficit = Math.max(0, Number(runway?.completionDeficit || 0));
-  const catchupNeed = Math.max(1, dueSlots, completionDeficit);
-  const deadlineCap =
-    daysToDeadline <= 7
-      ? 10
-      : daysToDeadline <= 14
-        ? 6
-        : daysToDeadline <= 35
-          ? 3
-          : 1;
-
-  return Math.max(1, Math.min(remainingTarget, deadlineCap, catchupNeed + (daysToDeadline <= 7 ? 2 : 0)));
-}
-
-
 async function runCpuCpuTradePassForDate({
   activeLeagueData,
   currentDate,
@@ -4503,7 +4143,6 @@ async function runCpuCpuTradePassForDate({
   generationJobRef,
   onTradeDeskEntries,
   onCpuTradeCompleted,
-  cpuTradeBurstDepth = 0,
 }) {
   if (!activeLeagueData || !currentDate || !tradeDeadlineDate) {
     return {
@@ -4692,82 +4331,22 @@ async function runCpuCpuTradePassForDate({
       }
     }
 
-    const revalidationCadence = daysToDeadline <= 14 ? 2 : 5;
-    if (
-      nextLeagueData?.cpuTradeBankState?.candidates?.length &&
-      (testConfig?.forceGeneration || Number(dayIndex || 0) % revalidationCadence === 0)
-    ) {
-      const revalidated = revalidateCpuTradeBankSlice({
-        leagueData: nextLeagueData,
-        context: baseContext,
-        testConfig,
-        maxChecks: daysToDeadline <= 14 ? 8 : daysToDeadline <= 42 ? 5 : 2,
-      });
-      nextLeagueData = revalidated.leagueData || nextLeagueData;
-      bankChanged = bankChanged || revalidated.changed;
+    // Banked candidates are exact-validated at admission and again on live execution.
+    // The bounded continuous market intentionally avoids repeated whole-bank revalidation.
 
-      if (window.__debugCpuTrades && revalidated.checked) {
-        console.log("[CPU Trade Bank] periodic revalidation", {
-          currentDate,
-          checked: revalidated.checked,
-          removed: revalidated.removed,
-          bankSize: revalidated.state?.candidates?.length || 0,
-        });
-      }
-    }
-
-    const runwayBeforeExecution = getCpuTradeBankRunwayStatus(nextLeagueData?.cpuTradeBankState, baseContext);
-    const activeBankStateForExecution = nextLeagueData?.cpuTradeBankState || {};
-    const plannedTradeDay = activeBankStateForExecution.executionPlanDays?.[
-      Math.max(0, Math.trunc(Number(activeBankStateForExecution.planCursor || 0)))
-    ];
-    const executionSlotDue = Number.isFinite(Number(plannedTradeDay)) && Number(dayIndex || 0) >= Number(plannedTradeDay);
-    const backgroundGenerationPending = generationJobRef?.current?.status === "pending";
-    const lowRunwayBank =
-      runwayBeforeExecution.bankSize < Math.min(
-        runwayBeforeExecution.remainingTarget,
-        runwayBeforeExecution.emergency ? 10 : 8
-      );
-    const lateDeadlineCatchup =
-      daysToDeadline <= 7 &&
-      runwayBeforeExecution.remainingTarget > 0 &&
-      runwayBeforeExecution.bankSize < runwayBeforeExecution.remainingTarget;
-    const shouldForegroundGenerate =
-      runwayBeforeExecution.remainingTarget > 0 &&
-      daysToDeadline <= 75 &&
-      lowRunwayBank &&
-      (executionSlotDue || runwayBeforeExecution.completionDeficit >= 2 || runwayBeforeExecution.emergency || lateDeadlineCatchup) &&
-      (!backgroundGenerationPending || runwayBeforeExecution.critical || lateDeadlineCatchup);
-
-    if (shouldForegroundGenerate) {
-      const foreground = await runForegroundCpuTradeBankGeneration({
-        leagueData: nextLeagueData,
-        baseContext,
-        testConfig,
-        generationJobRef,
-        maxPasses: lateDeadlineCatchup ? 4 : runwayBeforeExecution.emergency ? 3 : 2,
-        reason: lateDeadlineCatchup ? "deadline_target_catchup" : runwayBeforeExecution.emergency ? "emergency_runway" : "low_inventory_due_slot",
-      });
-      nextLeagueData = foreground.leagueData || nextLeagueData;
-      bankChanged = bankChanged || foreground.changed;
-      if (window.__debugCpuTrades) {
-        console.log("[CPU Trade Bank] foreground replenishment", {
-          currentDate,
-          accepted: foreground.totalAccepted,
-          rejected: foreground.totalRejected,
-          rows: foreground.generationRows,
-          runwayBefore: runwayBeforeExecution,
-          runwayAfter: getCpuTradeBankRunwayStatus(nextLeagueData?.cpuTradeBankState, baseContext),
-        });
-      }
-    }
+    const runwayBeforeExecution = getCpuTradeBankRunwayStatus(
+      nextLeagueData?.cpuTradeBankState,
+      baseContext
+    );
+    const shouldForegroundGenerate = false;
+    const foregroundReason = "";
 
     const leagueDataBeforeCpuTradeExecution = nextLeagueData;
     const execution = executeDueCpuTradeFromBank({
       leagueData: nextLeagueData,
       context: baseContext,
       testConfig,
-      maxCandidateChecks: daysToDeadline <= 14 ? 28 : daysToDeadline <= 42 ? 22 : 16,
+      maxCandidateChecks: daysToDeadline <= 21 ? 12 : 10,
     });
 
     if (execution?.leagueData) nextLeagueData = execution.leagueData;
@@ -4813,7 +4392,8 @@ async function runCpuCpuTradePassForDate({
         nextLeagueData,
         baseContext.userTeamName || null,
         14,
-        Number(dayIndex || 0)
+        Number(dayIndex || 0),
+        { targetTeamNames: directlyTradedTeamNames }
       );
       const rosterRepairMs = cpuTradeNow() - rosterRepairStartedAt;
       recordCpuTradeTiming("rosterRepairMs", rosterRepairMs, {
@@ -4879,6 +4459,11 @@ async function runCpuCpuTradePassForDate({
         touchedTeams: repairedTeamNames,
         directlyTradedTeams,
         unrelatedTouchedTeams,
+        repairMode: postTradeRepair?.repairMode || "unknown",
+        targetedFallbackUsed: Boolean(postTradeRepair?.targetedFallbackUsed),
+        targetedFallbackReason: postTradeRepair?.targetedFallbackReason || null,
+        targetedTeamNames: postTradeRepair?.targetedTeamNames || directlyTradedTeams,
+        affectedTeamNames: postTradeRepair?.affectedTeamNames || repairedTeamNames,
       });
       if (passTraceEnabled) {
         recordCpuTradeTrace("repair", "post_trade_repair_completed", {
@@ -4961,48 +4546,6 @@ async function runCpuCpuTradePassForDate({
       });
     }
 
-    const postExecutionStateForBurst = nextLeagueData?.cpuTradeBankState || {};
-    const postExecutionRunwayForBurst = getCpuTradeBankRunwayStatus(postExecutionStateForBurst, baseContext);
-    const burstLimitForDate = getCpuTradeExecutionBurstLimit(
-      postExecutionStateForBurst,
-      postExecutionRunwayForBurst,
-      dayIndex,
-      daysToDeadline
-    );
-    const nextSlotDueForBurst =
-      countCpuTradeSlotsDueToday(postExecutionStateForBurst, dayIndex) > 0;
-    const shouldRunExtraTradeBurst =
-      execution?.executed &&
-      cpuTradeBurstDepth < burstLimitForDate - 1 &&
-      postExecutionRunwayForBurst.remainingTarget > 0 &&
-      daysToDeadline <= 35 &&
-      (nextSlotDueForBurst || postExecutionRunwayForBurst.completionDeficit > 0 || daysToDeadline <= 7);
-
-    if (shouldRunExtraTradeBurst) {
-      const extraPass = await runCpuCpuTradePassForDate({
-        activeLeagueData: nextLeagueData,
-        currentDate,
-        dayIndex,
-        totalDates,
-        scheduleSnapshot,
-        resultsSnapshot,
-        selectedTeam,
-        setLeagueData,
-        tradeDeadlineDate,
-        generationJobRef,
-        onTradeDeskEntries,
-        onCpuTradeCompleted,
-        cpuTradeBurstDepth: cpuTradeBurstDepth + 1,
-      });
-
-      nextLeagueData = extraPass?.leagueData || nextLeagueData;
-      bankChanged = bankChanged || Boolean(extraPass?.bankChanged);
-      rosterChanged = rosterChanged || Boolean(extraPass?.rosterChanged);
-      if (Array.isArray(extraPass?.tradesMade) && extraPass.tradesMade.length) {
-        tradesMade.push(...extraPass.tradesMade);
-      }
-    }
-
     const activeState = nextLeagueData?.cpuTradeBankState;
     const generationPolicy = getCpuTradeBankGenerationPolicy(
       activeState,
@@ -5015,8 +4558,12 @@ async function runCpuCpuTradePassForDate({
       daysToDeadline,
       bankSize: activeState?.candidates?.length || 0,
       completedTrades: activeState?.completedTrades || 0,
+      minimumTrades: activeState?.minimumTrades || 0,
       targetTrades: activeState?.targetTrades || 0,
+      remainingMinimum: Math.max(0, Number(activeState?.minimumTrades || 0) - Number(activeState?.completedTrades || 0)),
       remainingTarget: Math.max(0, Number(activeState?.targetTrades || 0) - Number(activeState?.completedTrades || 0)),
+      maximumGenerationPasses: activeState?.maximumGenerationPasses || 0,
+      maximumExactEvaluations: activeState?.maximumExactEvaluations || 0,
       planCursor: activeState?.planCursor || 0,
       nextPlannedDay: activeState?.executionPlanDays?.[activeState?.planCursor] ?? null,
       shouldGenerate: generationPolicy?.shouldGenerate || false,
@@ -5025,16 +4572,14 @@ async function runCpuCpuTradePassForDate({
       reserveDeficit: generationPolicy?.reserveDeficit || 0,
       supplyUrgent: generationPolicy?.supplyUrgent || false,
       supplySatisfied: generationPolicy?.supplySatisfied || false,
-      foregroundTriggered: shouldForegroundGenerate,
-      foregroundReason: shouldForegroundGenerate
-        ? (lateDeadlineCatchup ? "deadline_target_catchup" : runwayBeforeExecution.emergency ? "emergency_runway" : "low_inventory_due_slot")
-        : "",
-      burstDepth: cpuTradeBurstDepth,
+      foregroundTriggered: false,
+      foregroundReason,
+      burstDepth: 0,
     });
 
     if (
       generationPolicy.shouldGenerate &&
-      generationJobRef?.current?.status !== "pending"
+      !generationJobRef?.current
     ) {
       const workerContext = buildCpuTradeWorkerContext(
         activeState,
@@ -5108,7 +4653,7 @@ async function runCpuCpuTradePassForDate({
       tradesCompleted: tradesMade.length,
       bankChanged,
       rosterChanged,
-      burstDepth: cpuTradeBurstDepth,
+      burstDepth: 0,
       error: null,
       bankSummary: completedBankSummary,
     });
@@ -5120,7 +4665,7 @@ async function runCpuCpuTradePassForDate({
         tradesCompleted: tradesMade.length,
         bankChanged,
         rosterChanged,
-        burstDepth: cpuTradeBurstDepth,
+        burstDepth: 0,
         bankSummary: completedBankSummary,
       });
     }
@@ -5144,7 +4689,7 @@ async function runCpuCpuTradePassForDate({
       tradesCompleted: 0,
       bankChanged: false,
       rosterChanged: false,
-      burstDepth: cpuTradeBurstDepth,
+      burstDepth: 0,
       error: error?.message || String(error || ""),
     });
     if (passTraceEnabled) {

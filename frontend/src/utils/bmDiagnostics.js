@@ -6,6 +6,7 @@ import {
   runCpuTradePackageBenchmarks,
   saveCpuTradeBaselineReport,
 } from "./cpuTradeDiagnostics.js";
+import { runCpuTradeValidationMicroDiagnostics, runSimSpeedMicroDiagnostics } from "./simSpeedMicroDiagnostics.js";
 import {
   REGULAR_SEASON_MAX_STANDARD_PLAYERS,
   REGULAR_SEASON_MAX_TWO_WAY_PLAYERS,
@@ -1050,6 +1051,8 @@ export function installBasketballManagerDiagnostics() {
         { command: "bmDiag.cpuTradeReport()", purpose: "Build the full CPU-trade performance, quantity, quality, pacing, safety, and package replay report." },
         { command: "bmDiag.cpuTradeSummary()", purpose: "Print the compact reliability summary added by the CPU trade reliability patch." },
         { command: "bmDiag.cpuTradeBenchmarks()", purpose: "Rerun the captured simple, rejected, and complex package timing benchmarks." },
+        { command: "await bmDiag.simSpeedMicroprofile()", purpose: "Profile validation, generation, isolated storage, and cloned roster repair without simulating a season." },
+        { command: "await bmDiag.cpuTradeValidationMicroprofile()", purpose: "Generate real CPU trade packages and measure exact cold, warm, and repeated validation without simulating or saving." },
         { command: "bmDiag.cpuTradeSaveBaseline('pre-optimization')", purpose: "Save the current report for automatic before/after comparison." },
         { command: "bmDiag.cpuTradeCompare()", purpose: "Compare the current report against the saved pre-optimization baseline." },
         { command: "bmDiag.cpuTradeReset()", purpose: "Clear only in-memory CPU-trade diagnostics before a fresh-save benchmark." },
@@ -1134,6 +1137,94 @@ export function installBasketballManagerDiagnostics() {
         signature: row.signature,
       })));
       return rows;
+    },
+    async simSpeedMicroprofile(options = {}) {
+      console.log("[BM SIM SPEED] Running no-season microprofile. The active league and save are not mutated.");
+      const report = await runSimSpeedMicroDiagnostics({
+        leagueData: runtime.leagueData,
+        selectedTeam: runtime.selectedTeam,
+        download: options?.download !== false,
+        benchmarkIterations: options?.benchmarkIterations || options?.iterations || 9,
+      });
+      runtime.lastReport = report;
+      console.groupCollapsed(`[BM SIM SPEED] ${report?.ok ? "PASS" : "PARTIAL"} - ${Math.round(Number(report?.elapsedMs || 0))} ms`);
+      console.table((report?.validation?.rows || []).map((row) => ({
+        stage: `validation:${row.category}`,
+        coldMs: row.coldMs,
+        warmMedianMs: row.warmMedianMs,
+        warmP95Ms: row.warmP95Ms,
+        parity: row.decisionReplayMatch ? "PASS" : "FAIL",
+      })));
+      console.table((report?.generation?.rows || []).map((row) => ({
+        stage: `generation:${row.maxCandidates}`,
+        wallMs: row.wallMs,
+        pythonMs: row.workerTiming?.pythonExecutionMs || 0,
+        inputBytes: row.workerTiming?.inputBytes || 0,
+        returned: row.returnedCandidates,
+      })));
+      if (report?.storage?.ok) {
+        console.table([
+          { stage: "storage:full", bytes: report.storage.fullLeague.bytes, medianMs: report.storage.fullLeague.writes.medianMs },
+          { stage: "storage:bank", bytes: report.storage.bankOnly.bytes, medianMs: report.storage.bankOnly.writes.medianMs },
+        ]);
+      }
+      if (report?.rosterRepair) {
+        console.table([{
+          stage: "rosterRepair",
+          coldMs: report.rosterRepair.coldMs || 0,
+          warmMs: report.rosterRepair.warmMs || 0,
+          ownerChanges: report.rosterRepair.warmComparison?.ownerChanges || 0,
+          ratingChanges: report.rosterRepair.warmComparison?.ratingChanges || 0,
+          deterministic: report.rosterRepair.deterministicOutput ? "PASS" : "FAIL",
+        }]);
+      }
+      if (report?.errors?.length) console.table(report.errors);
+      console.log(report);
+      console.groupEnd();
+      return report;
+    },
+    async cpuTradeValidationMicroprofile(options = {}) {
+      console.log("[BM CPU TRADE VALIDATION] Running generated-package exact-validation microprofile. No games, trades, or saves will be performed.");
+      const report = await runCpuTradeValidationMicroDiagnostics({
+        leagueData: runtime.leagueData,
+        selectedTeam: runtime.selectedTeam,
+        download: options?.download !== false,
+        maxCandidates: options?.maxCandidates || 36,
+        repeatIterations: options?.repeatIterations || options?.iterations || 5,
+      });
+      runtime.lastReport = report;
+      const validation = report?.validation || {};
+      console.groupCollapsed(`[BM CPU TRADE VALIDATION] ${report?.ok ? "PASS" : "PARTIAL"} - ${Math.round(Number(report?.elapsedMs || 0))} ms`);
+      console.table([
+        {
+          pass: "cold",
+          candidates: validation?.coldPass?.count || 0,
+          totalMs: validation?.coldPass?.totalMs || 0,
+          medianMs: validation?.coldPass?.durations?.medianMs || 0,
+          p95Ms: validation?.coldPass?.durations?.p95Ms || 0,
+          decisionHash: validation?.coldPass?.decisionHash || "",
+        },
+        {
+          pass: "warm",
+          candidates: validation?.warmPass?.count || 0,
+          totalMs: validation?.warmPass?.totalMs || 0,
+          medianMs: validation?.warmPass?.durations?.medianMs || 0,
+          p95Ms: validation?.warmPass?.durations?.p95Ms || 0,
+          decisionHash: validation?.warmPass?.decisionHash || "",
+        },
+      ]);
+      console.table((validation?.repeatRows || []).map((row) => ({
+        teams: row.teams?.join(" / ") || "",
+        shape: row.package?.shape || "",
+        iterations: row.iterations || 0,
+        medianMs: row.durations?.medianMs || 0,
+        p95Ms: row.durations?.p95Ms || 0,
+        parity: row.allDecisionsIdentical ? "PASS" : "FAIL",
+      })));
+      if (report?.errors?.length) console.table(report.errors);
+      console.log(report);
+      console.groupEnd();
+      return report;
     },
     cpuTradeSaveBaseline(label = "pre-optimization") {
       const report = runtime.lastCpuTradeReport || buildLiveCpuTradeReport({ runBenchmarks: true });

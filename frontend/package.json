@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:bm": "node scripts/bm-regression-check.mjs",
-    "check:bm": "node scripts/bm-regression-check.mjs"
+    "check:bm": "node scripts/bm-regression-check.mjs",
+    "check:cpu-trade-history": "node scripts/bm-cpu-trade-history-parity.mjs",
+    "check:bm:full": "node scripts/bm-regression-check.mjs && node scripts/bm-cpu-trade-history-parity.mjs"
   },
   "dependencies": {
     "lz-string": "^1.5.0",

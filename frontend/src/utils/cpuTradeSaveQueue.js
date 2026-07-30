@@ -1,4 +1,4 @@
-import { saveLeagueData } from "./leagueStorage.js";
+import { saveCpuTradeBankStateOverlay, saveLeagueData } from "./leagueStorage.js";
 import {
   cpuTradeNow,
   isCpuTradeDeepTraceEnabled,
@@ -24,6 +24,7 @@ export function createLatestOnlySaveQueue({
   save,
   now = () => Date.now(),
   onWrite = null,
+  getSaveMode = (reason) => (reason === "bank_state_only" ? "bank_overlay" : "full_league"),
 } = {}) {
   if (typeof save !== "function") {
     throw new TypeError("createLatestOnlySaveQueue requires a save function.");
@@ -56,7 +57,7 @@ export function createLatestOnlySaveQueue({
           const startedAt = now();
 
           try {
-            const result = await save(batch.leagueData);
+            const result = await save(batch.leagueData, batch);
             const durationMs = Math.max(0, finiteNumber(now() - startedAt, 0));
             latestPersistedRequestId = Math.max(
               latestPersistedRequestId,
@@ -73,6 +74,11 @@ export function createLatestOnlySaveQueue({
                 coalescedRequestCount: Math.max(0, batch.coveredRequestCount - 1),
                 currentDate: batch.currentDate,
                 reason: batch.reason,
+                latestReason: batch.latestReason,
+                saveMode: batch.saveMode,
+                coveredReasonCounts: batch.coveredReasonCounts,
+                coveredBankStateOnlyRequestCount: batch.coveredReasonCounts?.bank_state_only || 0,
+                coveredFullLeagueRequestCount: batch.coveredFullLeagueRequestCount || 0,
                 queueWaitMs: Math.max(0, finiteNumber(startedAt - batch.enqueuedAt, 0)),
                 approximatePayloadBytes: batch.approximatePayloadBytes || 0,
                 serializationEstimateMs: batch.serializationEstimateMs || 0,
@@ -99,6 +105,11 @@ export function createLatestOnlySaveQueue({
                 coalescedRequestCount: Math.max(0, batch.coveredRequestCount - 1),
                 currentDate: batch.currentDate,
                 reason: batch.reason,
+                latestReason: batch.latestReason,
+                saveMode: batch.saveMode,
+                coveredReasonCounts: batch.coveredReasonCounts,
+                coveredBankStateOnlyRequestCount: batch.coveredReasonCounts?.bank_state_only || 0,
+                coveredFullLeagueRequestCount: batch.coveredFullLeagueRequestCount || 0,
                 queueWaitMs: Math.max(0, finiteNumber(startedAt - batch.enqueuedAt, 0)),
                 approximatePayloadBytes: batch.approximatePayloadBytes || 0,
                 serializationEstimateMs: batch.serializationEstimateMs || 0,
@@ -140,41 +151,61 @@ export function createLatestOnlySaveQueue({
           waiterCount: waiters.length,
         }
       : null;
-    let approximatePayloadBytes = 0;
-    let serializationEstimateMs = 0;
+    const requestedSaveMode = getSaveMode(reason) === "bank_overlay"
+      ? "bank_overlay"
+      : "full_league";
+
+    const previousReasonCounts = pending?.coveredReasonCounts || {};
+    const coveredReasonCounts = {
+      ...previousReasonCounts,
+      [String(reason || "cpu_trade")]: finiteNumber(previousReasonCounts?.[String(reason || "cpu_trade")], 0) + 1,
+    };
+    const saveMode =
+      pending?.saveMode === "full_league" || requestedSaveMode === "full_league"
+        ? "full_league"
+        : "bank_overlay";
+    const fullSaveReason =
+      requestedSaveMode === "full_league"
+        ? String(reason || "cpu_trade")
+        : pending?.fullSaveReason || "";
+    const effectiveReason = fullSaveReason || String(reason || "cpu_trade");
+
+    const batch = {
+      leagueData,
+      currentDate,
+      reason: effectiveReason,
+      latestReason: String(reason || "cpu_trade"),
+      fullSaveReason,
+      saveMode,
+      requestedSaveMode,
+      coveredReasonCounts,
+      coveredFullLeagueRequestCount:
+        finiteNumber(pending?.coveredFullLeagueRequestCount, 0) +
+        (requestedSaveMode === "full_league" ? 1 : 0),
+      requestId,
+      enqueuedAt,
+      traceEnabled,
+      approximatePayloadBytes: 0,
+      serializationEstimateMs: 0,
+      firstCoveredRequestId: pending?.firstCoveredRequestId || requestId,
+      coveredRequestCount: finiteNumber(pending?.coveredRequestCount, 0) + 1,
+    };
+
     if (traceEnabled) {
       const serializationStartedAt = now();
-      try { approximatePayloadBytes = JSON.stringify(leagueData).length; } catch {}
-      serializationEstimateMs = Math.max(0, finiteNumber(now() - serializationStartedAt, 0));
+      try {
+        const payload = saveMode === "bank_overlay"
+          ? leagueData?.cpuTradeBankState || null
+          : leagueData;
+        batch.approximatePayloadBytes = JSON.stringify(payload).length;
+      } catch {}
+      batch.serializationEstimateMs = Math.max(
+        0,
+        finiteNumber(now() - serializationStartedAt, 0)
+      );
     }
 
-    if (pending) {
-      pending = {
-        leagueData,
-        currentDate,
-        reason,
-        requestId,
-        enqueuedAt,
-        traceEnabled,
-        approximatePayloadBytes,
-        serializationEstimateMs,
-        firstCoveredRequestId: pending.firstCoveredRequestId,
-        coveredRequestCount: pending.coveredRequestCount + 1,
-      };
-    } else {
-      pending = {
-        leagueData,
-        currentDate,
-        reason,
-        requestId,
-        enqueuedAt,
-        traceEnabled,
-        approximatePayloadBytes,
-        serializationEstimateMs,
-        firstCoveredRequestId: requestId,
-        coveredRequestCount: 1,
-      };
-    }
+    pending = batch;
 
     const resultPromise = new Promise((resolve, reject) => {
       waiters.push({ requestId, resolve, reject });
@@ -184,9 +215,12 @@ export function createLatestOnlySaveQueue({
       recordCpuTradeTrace("storage", "save_enqueued", {
         requestId,
         currentDate,
-        reason,
-        approximatePayloadBytes,
-        serializationEstimateMs,
+        reason: effectiveReason,
+        latestReason: batch.latestReason,
+        saveMode,
+        coveredReasonCounts,
+        approximatePayloadBytes: batch.approximatePayloadBytes,
+        serializationEstimateMs: batch.serializationEstimateMs,
         queueStateBefore,
         pendingCoveredRequestCount: pending?.coveredRequestCount || 0,
         waiterCountAfter: waiters.length,
@@ -230,22 +264,37 @@ export function createLatestOnlySaveQueue({
 }
 
 const cpuTradeLeagueSaveQueue = createLatestOnlySaveQueue({
-  save: saveLeagueData,
+  save: (leagueData, batch) =>
+    batch?.saveMode === "bank_overlay"
+      ? saveCpuTradeBankStateOverlay(leagueData)
+      : saveLeagueData(leagueData),
   now: cpuTradeNow,
   onWrite: (row) => {
+    const mode = row.saveMode === "bank_overlay"
+      ? "latest_only_cpu_bank_overlay"
+      : "latest_only_full_league";
     recordCpuTradeTiming("storageMs", row.durationMs, {
       reason: row.reason,
+      latestReason: row.latestReason,
+      saveMode: row.saveMode,
       ok: row.ok,
-      mode: "latest_only_indexeddb_queue",
+      mode,
       coveredRequestCount: row.coveredRequestCount,
       coalescedRequestCount: row.coalescedRequestCount,
+      coveredBankStateOnlyRequestCount: row.coveredBankStateOnlyRequestCount || 0,
+      coveredFullLeagueRequestCount: row.coveredFullLeagueRequestCount || 0,
     });
     recordCpuTradeStorageWrite({
       currentDate: row.currentDate,
       reason: row.reason,
+      latestReason: row.latestReason,
+      saveMode: row.saveMode,
+      coveredReasonCounts: row.coveredReasonCounts || {},
+      coveredBankStateOnlyRequestCount: row.coveredBankStateOnlyRequestCount || 0,
+      coveredFullLeagueRequestCount: row.coveredFullLeagueRequestCount || 0,
       ok: row.ok,
       durationMs: row.durationMs,
-      mode: "latest_only_indexeddb_queue",
+      mode,
       requestId: row.requestId,
       firstCoveredRequestId: row.firstCoveredRequestId,
       coveredRequestCount: row.coveredRequestCount,
@@ -259,6 +308,9 @@ const cpuTradeLeagueSaveQueue = createLatestOnlySaveQueue({
       recordCpuTradeTrace("storage", row.ok ? "save_completed" : "save_failed", {
         currentDate: row.currentDate,
         reason: row.reason,
+        latestReason: row.latestReason,
+        saveMode: row.saveMode,
+        coveredReasonCounts: row.coveredReasonCounts || {},
         requestId: row.requestId,
         firstCoveredRequestId: row.firstCoveredRequestId,
         coveredRequestCount: row.coveredRequestCount,

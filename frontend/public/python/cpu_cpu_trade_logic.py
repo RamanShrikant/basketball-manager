@@ -76,10 +76,12 @@ CPU_PROTECTED_FIRST_PROFILES = [3, 5, 10, 14]
 # so these caches are reset for every payload and never cross league states.
 # They only avoid recalculating deterministic values during the same exact search.
 _GENERATION_CACHE: Dict[str, Any] = {}
+_NORM_CACHE: Dict[str, str] = {}
 
 
 def _reset_generation_cache(league: Optional[Dict[str, Any]] = None, current_date: str = "") -> None:
-    global _GENERATION_CACHE
+    global _GENERATION_CACHE, _NORM_CACHE
+    _NORM_CACHE = {}
     cache: Dict[str, Any] = {
         "league": league,
         "currentDate": current_date,
@@ -87,6 +89,13 @@ def _reset_generation_cache(league: Optional[Dict[str, Any]] = None, current_dat
         "contractYears": {},
         "roughPlayer": {},
         "roughPick": {},
+        "playerItem": {},
+        "pickItem": {},
+        "playerOvr": {},
+        "playerPot": {},
+        "playerAge": {},
+        "pickRound": {},
+        "pickIdentity": {},
         "standardRosterCount": {},
         "rosterRank": {},
         "sellerTargets": {},
@@ -161,7 +170,14 @@ def _str(value: Any, default: str = "") -> str:
 
 
 def _norm(value: Any) -> str:
-    return "".join(ch for ch in _str(value).lower() if ch.isalnum())
+    text = value if isinstance(value, str) else _str(value)
+    cached = _NORM_CACHE.get(text)
+    if cached is not None:
+        return cached
+    normalized = "".join(ch for ch in text.lower() if ch.isalnum())
+    if len(_NORM_CACHE) < 4096:
+        _NORM_CACHE[text] = normalized
+    return normalized
 
 
 def _stable_seed(*parts: Any) -> int:
@@ -200,15 +216,36 @@ def _player_name(player: Dict[str, Any]) -> str:
 
 
 def _player_ovr(player: Dict[str, Any]) -> float:
-    return _num(player.get("overall") or player.get("ovr") or player.get("rating"), 60.0)
+    cache = _GENERATION_CACHE.get("playerOvr") if isinstance(_GENERATION_CACHE, dict) else None
+    key = id(player)
+    if isinstance(cache, dict) and key in cache:
+        return cache[key]
+    value = _num(player.get("overall") or player.get("ovr") or player.get("rating"), 60.0)
+    if isinstance(cache, dict):
+        cache[key] = value
+    return value
 
 
 def _player_pot(player: Dict[str, Any]) -> float:
-    return _num(player.get("potential") or player.get("pot") or _player_ovr(player), _player_ovr(player))
+    cache = _GENERATION_CACHE.get("playerPot") if isinstance(_GENERATION_CACHE, dict) else None
+    key = id(player)
+    if isinstance(cache, dict) and key in cache:
+        return cache[key]
+    value = _num(player.get("potential") or player.get("pot") or _player_ovr(player), _player_ovr(player))
+    if isinstance(cache, dict):
+        cache[key] = value
+    return value
 
 
 def _player_age(player: Dict[str, Any]) -> float:
-    return _num(player.get("age"), 27.0)
+    cache = _GENERATION_CACHE.get("playerAge") if isinstance(_GENERATION_CACHE, dict) else None
+    key = id(player)
+    if isinstance(cache, dict) and key in cache:
+        return cache[key]
+    value = _num(player.get("age"), 27.0)
+    if isinstance(cache, dict):
+        cache[key] = value
+    return value
 
 
 def _salary_for_year(player: Dict[str, Any], season_year: int) -> float:
@@ -677,13 +714,20 @@ def _buyer_outgoing_players(team: Dict[str, Any], season_year: int, team_ctx: Op
 
 
 def _pick_identity_key(pick: Dict[str, Any]) -> str:
-    return "|".join([
+    cache = _GENERATION_CACHE.get("pickIdentity") if isinstance(_GENERATION_CACHE, dict) else None
+    key = id(pick)
+    if isinstance(cache, dict) and key in cache:
+        return cache[key]
+    value = "|".join([
         _str(pick.get("assetType") or pick.get("type") or "pick", "pick").lower(),
         _str(int(_num(pick.get("year") or pick.get("seasonYear"), 0))),
         _str(int(_num(pick.get("round"), 1))),
         _norm(pick.get("originalTeam") or pick.get("originalTeamName") or pick.get("team")),
         _norm(pick.get("ownerTeam") or pick.get("currentOwnerTeamName") or pick.get("owner")),
     ])
+    if isinstance(cache, dict):
+        cache[key] = value
+    return value
 
 
 def _protected_first_variant(pick: Dict[str, Any], protect_end: int) -> Dict[str, Any]:
@@ -754,20 +798,38 @@ def _simple_pick_assets(league: Dict[str, Any], owner_team: str, season_year: in
 
 
 def _player_item(player: Dict[str, Any]) -> Dict[str, Any]:
-    return {"type": "player", "player": player}
+    cache = _GENERATION_CACHE.get("playerItem") if isinstance(_GENERATION_CACHE, dict) else None
+    key = id(player)
+    if isinstance(cache, dict):
+        cached = cache.get(key)
+        if cached and cached[0] is player:
+            return cached[1]
+    item = {"type": "player", "player": player}
+    if isinstance(cache, dict):
+        cache[key] = (player, item)
+    return item
 
 
 def _pick_item(pick: Dict[str, Any]) -> Dict[str, Any]:
+    cache = _GENERATION_CACHE.get("pickItem") if isinstance(_GENERATION_CACHE, dict) else None
+    key = id(pick)
+    if isinstance(cache, dict):
+        cached = cache.get(key)
+        if cached and cached[0] is pick:
+            return cached[1]
     protection = _str(pick.get("displayProtection") or pick.get("protections") or pick.get("protection") or "Unprotected", "Unprotected")
     round_label = '1st' if int(_num(pick.get('round'), 1)) == 1 else '2nd'
     label_suffix = "" if protection.lower() in {"", "unprotected", "none", "null"} else f" ({protection})"
-    return {
+    item = {
         "type": "pick",
         "pick": pick,
         "protection": protection or "Unprotected",
         "tradeRule": pick.get("tradeRule") if isinstance(pick.get("tradeRule"), dict) else None,
         "displayLabel": f"{pick.get('year', '')} {round_label} - {pick.get('originalTeam') or pick.get('team') or 'Own'}{label_suffix}",
     }
+    if isinstance(cache, dict):
+        cache[key] = (pick, item)
+    return item
 
 
 def _rough_value_player(player: Dict[str, Any], season_year: int) -> float:
@@ -907,7 +969,14 @@ def _package_salary(items: List[Dict[str, Any]], season_year: int) -> float:
 
 
 def _pick_round(pick: Dict[str, Any]) -> int:
-    return int(_num(pick.get("round"), 1))
+    cache = _GENERATION_CACHE.get("pickRound") if isinstance(_GENERATION_CACHE, dict) else None
+    key = id(pick)
+    if isinstance(cache, dict) and key in cache:
+        return cache[key]
+    value = int(_num(pick.get("round"), 1))
+    if isinstance(cache, dict):
+        cache[key] = value
+    return value
 
 
 def _has_first(items: List[Dict[str, Any]]) -> bool:

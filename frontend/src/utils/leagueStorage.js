@@ -2,6 +2,8 @@ const DB_NAME = "basketball_manager_league_storage_v2";
 const DB_VERSION = 1;
 const STORE_NAME = "league_saves";
 const ACTIVE_LEAGUE_KEY = "active_league";
+export const CPU_TRADE_BANK_OVERLAY_KEY = "active_cpu_trade_bank_overlay";
+const CPU_TRADE_BANK_OVERLAY_VERSION = 1;
 
 const LEGACY_DB_NAMES = [
   "basketball_manager_storage_v1",
@@ -61,6 +63,79 @@ function getAllTeamsFromLeague(leagueData) {
 
 function leagueHasTeams(leagueData) {
   return getAllTeamsFromLeague(leagueData).length > 0;
+}
+
+function normalizeFingerprintToken(value = "") {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export function buildLeagueTeamFingerprint(leagueData = null) {
+  return getAllTeamsFromLeague(leagueData)
+    .map((team) => normalizeFingerprintToken(team?.name || team?.teamName || team?.team || ""))
+    .filter(Boolean)
+    .sort()
+    .join("|");
+}
+
+export function buildCpuTradeBankOverlayRecord(leagueData = null, updatedAt = Date.now()) {
+  const bankState = leagueData?.cpuTradeBankState;
+  if (!bankState || typeof bankState !== "object") return null;
+
+  const seasonYear = getSeasonYearForPointer(leagueData);
+  const bankSeasonYear = Number(bankState?.seasonYear || seasonYear || 0);
+  if (!seasonYear || !Number.isFinite(bankSeasonYear) || bankSeasonYear !== seasonYear) return null;
+
+  return {
+    id: CPU_TRADE_BANK_OVERLAY_KEY,
+    version: CPU_TRADE_BANK_OVERLAY_VERSION,
+    updatedAt: Number(updatedAt) || Date.now(),
+    seasonYear,
+    teamFingerprint: buildLeagueTeamFingerprint(leagueData),
+    bankVersion: Number(bankState?.version || 0),
+    bankSeed: String(bankState?.seed || ""),
+    cpuTradeBankState: bankState,
+  };
+}
+
+export function mergeCpuTradeBankOverlayIntoLeague(leagueData = null, fullRecord = null, overlayRecord = null) {
+  if (!leagueHasTeams(leagueData)) {
+    return { leagueData, applied: false, reason: "missing_full_league" };
+  }
+  if (!overlayRecord || typeof overlayRecord !== "object") {
+    return { leagueData, applied: false, reason: "missing_overlay" };
+  }
+  if (Number(overlayRecord?.version || 0) !== CPU_TRADE_BANK_OVERLAY_VERSION) {
+    return { leagueData, applied: false, reason: "overlay_version_mismatch" };
+  }
+
+  const overlayState = overlayRecord?.cpuTradeBankState;
+  if (!overlayState || typeof overlayState !== "object") {
+    return { leagueData, applied: false, reason: "missing_bank_state" };
+  }
+
+  const leagueSeasonYear = getSeasonYearForPointer(leagueData);
+  const overlaySeasonYear = Number(overlayRecord?.seasonYear || overlayState?.seasonYear || 0);
+  const bankSeasonYear = Number(overlayState?.seasonYear || overlaySeasonYear || 0);
+  if (!leagueSeasonYear || overlaySeasonYear !== leagueSeasonYear || bankSeasonYear !== leagueSeasonYear) {
+    return { leagueData, applied: false, reason: "season_mismatch" };
+  }
+
+  const expectedFingerprint = buildLeagueTeamFingerprint(leagueData);
+  if (!expectedFingerprint || overlayRecord?.teamFingerprint !== expectedFingerprint) {
+    return { leagueData, applied: false, reason: "team_fingerprint_mismatch" };
+  }
+
+  const fullUpdatedAt = Number(fullRecord?.updatedAt || 0);
+  const overlayUpdatedAt = Number(overlayRecord?.updatedAt || 0);
+  if (!overlayUpdatedAt || overlayUpdatedAt < fullUpdatedAt) {
+    return { leagueData, applied: false, reason: "overlay_older_than_full_save" };
+  }
+
+  return {
+    leagueData: { ...leagueData, cpuTradeBankState: overlayState },
+    applied: true,
+    reason: "newer_compatible_overlay",
+  };
 }
 
 function getSeasonYearForPointer(leagueData = null) {
@@ -407,17 +482,22 @@ export async function saveLeagueData(leagueData) {
 
   try {
     leagueDataSaveInProgress = true;
+    const savedAt = Date.now();
 
-    await runStoreTransaction("readwrite", (store) =>
-      store.put({
+    await runStoreTransaction("readwrite", (store) => {
+      const request = store.put({
         id: ACTIVE_LEAGUE_KEY,
         leagueData,
-        updatedAt: Date.now(),
-        version: 3,
-      })
-    );
+        updatedAt: savedAt,
+        version: 4,
+      });
+      // A full league snapshot already contains the current bank state. Clearing
+      // the sidecar in the same transaction prevents an older overlay from
+      // surviving a roster, ownership, season-reset, or trade-history save.
+      store.delete(CPU_TRADE_BANK_OVERLAY_KEY);
+      return request;
+    });
 
-    const savedAt = Date.now();
     updateStorageMarkers(leagueData, savedAt);
     writeLocalStoragePointerOnly(leagueData, savedAt);
 
@@ -446,26 +526,63 @@ export async function saveLeagueData(leagueData) {
   }
 }
 
-export async function loadLeagueData() {
-  // 1. Try the clean v2 IndexedDB save first.
+export async function saveCpuTradeBankStateOverlay(leagueData) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+
+  const savedAt = Date.now();
+  const overlayRecord = buildCpuTradeBankOverlayRecord(leagueData, savedAt);
+  if (!overlayRecord) {
+    // Missing or incompatible bank state is not safe to represent as a sidecar.
+    return saveLeagueData(leagueData);
+  }
+
   try {
-    const saved = await runStoreTransaction("readonly", (store) =>
-      store.get(ACTIVE_LEAGUE_KEY)
-    );
+    await runStoreTransaction("readwrite", (store) => store.put(overlayRecord));
+    updateStorageMarkers(leagueData, savedAt);
+    writeLocalStoragePointerOnly(leagueData, savedAt);
+
+    try {
+      if (typeof window !== "undefined") {
+        window.__leagueData = leagueData;
+        window.__basketballManagerLeagueData = leagueData;
+      }
+    } catch {}
+
+    return leagueData;
+  } catch (error) {
+    console.warn("[leagueStorage] CPU trade bank sidecar save failed. Falling back to a full league save.", error);
+    return saveLeagueData(leagueData);
+  }
+}
+
+export async function loadLeagueData() {
+  // 1. Try the clean IndexedDB full snapshot, then layer on a newer,
+  // compatible CPU-trade bank sidecar when one exists.
+  try {
+    const [saved, overlay] = await Promise.all([
+      runStoreTransaction("readonly", (store) => store.get(ACTIVE_LEAGUE_KEY)),
+      runStoreTransaction("readonly", (store) => store.get(CPU_TRADE_BANK_OVERLAY_KEY)),
+    ]);
 
     if (leagueHasTeams(saved?.leagueData)) {
+      const merged = mergeCpuTradeBankOverlayIntoLeague(saved.leagueData, saved, overlay);
+      const loadedLeague = merged.leagueData;
       const savedAt = Date.now();
-      updateStorageMarkers(saved.leagueData, savedAt);
-      writeLocalStoragePointerOnly(saved.leagueData, savedAt);
+      updateStorageMarkers(loadedLeague, savedAt);
+      writeLocalStoragePointerOnly(loadedLeague, savedAt);
+
+      if (overlay && !merged.applied) {
+        runStoreTransaction("readwrite", (store) => store.delete(CPU_TRADE_BANK_OVERLAY_KEY)).catch(() => {});
+      }
 
       try {
         if (typeof window !== "undefined") {
-          window.__leagueData = saved.leagueData;
-          window.__basketballManagerLeagueData = saved.leagueData;
+          window.__leagueData = loadedLeague;
+          window.__basketballManagerLeagueData = loadedLeague;
         }
       } catch {}
 
-      return saved.leagueData;
+      return loadedLeague;
     }
   } catch (err) {
     console.warn("[leagueStorage] IndexedDB v2 load failed. Trying fallbacks.", err);
@@ -506,7 +623,11 @@ export async function migrateLeagueDataFromLocalStorage() {
 
 export async function clearLeagueDataFromIndexedDB() {
   try {
-    await runStoreTransaction("readwrite", (store) => store.delete(ACTIVE_LEAGUE_KEY));
+    await runStoreTransaction("readwrite", (store) => {
+      const request = store.delete(ACTIVE_LEAGUE_KEY);
+      store.delete(CPU_TRADE_BANK_OVERLAY_KEY);
+      return request;
+    });
   } catch (err) {
     console.warn("[leagueStorage] Could not clear IndexedDB leagueData.", err);
   }

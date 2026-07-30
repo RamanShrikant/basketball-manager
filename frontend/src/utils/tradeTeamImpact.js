@@ -103,6 +103,8 @@ const RESOLVED_PICK_REPLACEMENT_CREDIT_RATE = 0.95;
 const RATING_CACHE_MAX = 900;
 const POWER_CONTEXT_CACHE_MAX = 24;
 const TRADE_FINDER_IMPACT_CACHE_MAX = 2600;
+const CPU_TRADE_IMPACT_CACHE_MAX = 3600;
+const CPU_TRADE_IMPACT_CONTEXT_MAX = 48;
 const TRADE_FINDER_IMPACT_MODE_KEY = "bm_trade_finder_impact_mode_v1";
 const TRADE_DEBUG_KEY = "bm_trade_debug_v1";
 const TRADE_FINDER_FAST_FTR_MODE = "fast-ftr";
@@ -114,6 +116,12 @@ const rosterRatingCache = new Map();
 const rankOnlyRatingCache = new Map();
 const powerContextCache = new Map();
 const tradeFinderImpactCache = new Map();
+const cpuTradeImpactCache = new Map();
+let cpuTradeImpactCacheHits = 0;
+let cpuTradeImpactCacheMisses = 0;
+let cpuTradeImpactNextContextToken = 1;
+const cpuTradeImpactContextTokens = new Map();
+let cpuTradeImpactLeagueContextCache = new WeakMap();
 let attachedRecordSignatureCache = new WeakMap();
 
 export function resetTradeFinderImpactSearchCaches({ keepPowerContext = true } = {}) {
@@ -268,6 +276,149 @@ function makeTradeFinderImpactCacheKey({
     rosterRatingSignature(cpuTeam?.players || []),
     tradeItemsImpactSignature(userItems),
     tradeItemsImpactSignature(cpuItems),
+  ].join("::");
+}
+
+function stableJsonSignature(value) {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return `[${value.map(stableJsonSignature).join(",")}]`;
+  if (typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${key}:${stableJsonSignature(value[key])}`).join(",")}}`;
+  }
+  return stablePrimitive(value);
+}
+
+function cpuTradeDraftContextSignature(leagueData = {}) {
+  const draftPicks = Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : [];
+  const signature = draftPicks
+    .map((pick = {}) => [
+      stablePrimitive(pick?.id || pick?.pickId),
+      stablePrimitive(pick?.year || pick?.seasonYear),
+      stablePrimitive(pick?.round || pick?.rnd),
+      normalizeName(pick?.originalTeam || pick?.originalTeamName || pick?.team || ""),
+      normalizeName(pick?.ownerTeam || pick?.currentOwnerTeamName || pick?.owner || ""),
+      stablePrimitive(pick?.protection || pick?.protections || pick?.displayProtection),
+      stablePrimitive(pick?.status || "active"),
+      stablePrimitive(pick?.pickNumber || pick?.overallPick || pick?.resolvedPickNumber),
+      stableJsonSignature(pick?.tradeRule || null),
+    ].join("|"))
+    .sort()
+    .join("||");
+
+  return signature;
+}
+
+function cpuTradeContractContextSignature(leagueData = {}, teams = []) {
+  const signature = (teams || [])
+    .map((team = {}) => {
+      const players = (team?.players || [])
+        .map((player = {}) => [
+          getPlayerIdentity(player),
+          stablePrimitive(player?.salary ?? player?.currentSalary ?? player?.contractSalary ?? player?.capHit ?? player?.aav),
+          stablePrimitive(player?.contract?.startYear),
+          Array.isArray(player?.contract?.salaryByYear)
+            ? player.contract.salaryByYear.map(stablePrimitive).join(",")
+            : "",
+          stableJsonSignature(player?.contract?.option || null),
+        ].join("|"))
+        .sort()
+        .join(";");
+      return [
+        normalizeName(getTeamName(team)),
+        stablePrimitive(team?.payroll ?? team?.totalSalary ?? team?.salaryTotal ?? team?.financials?.payroll ?? team?.financials?.totalSalary),
+        players,
+      ].join("::");
+    })
+    .sort()
+    .join("##");
+
+  return signature;
+}
+
+function cpuTradeFinancialContextSignature(leagueData = {}) {
+  return [
+    stablePrimitive(leagueData?.seasonYear),
+    stablePrimitive(leagueData?.currentSeasonYear),
+    stablePrimitive(leagueData?.seasonStartYear),
+    stablePrimitive(leagueData?.payrollSeasonYear),
+    stablePrimitive(leagueData?.salarySeasonYear),
+    stablePrimitive(leagueData?.currentPayrollSeasonYear),
+    stablePrimitive(leagueData?.name || leagueData?.leagueName || leagueData?.title || leagueData?.fileName),
+    stableJsonSignature(leagueData?.financialRules || leagueData?.leagueFinancialRules || leagueData?.cba || null),
+    stablePrimitive(leagueData?.salaryCap),
+    stablePrimitive(leagueData?.luxuryTax),
+    stablePrimitive(leagueData?.firstApron),
+    stablePrimitive(leagueData?.secondApron),
+  ].join("|");
+}
+
+function internCpuTradeImpactContext(signature = "") {
+  if (cpuTradeImpactContextTokens.has(signature)) {
+    const token = cpuTradeImpactContextTokens.get(signature);
+    cpuTradeImpactContextTokens.delete(signature);
+    cpuTradeImpactContextTokens.set(signature, token);
+    return token;
+  }
+
+  const token = `ctx${cpuTradeImpactNextContextToken++}`;
+  cpuTradeImpactContextTokens.set(signature, token);
+  while (cpuTradeImpactContextTokens.size > CPU_TRADE_IMPACT_CONTEXT_MAX) {
+    const oldest = cpuTradeImpactContextTokens.keys().next().value;
+    cpuTradeImpactContextTokens.delete(oldest);
+  }
+  return token;
+}
+
+function cpuTradeImpactLeagueContextSignature(leagueData = {}, teams = []) {
+  if (leagueData && typeof leagueData === "object" && cpuTradeImpactLeagueContextCache.has(leagueData)) {
+    return cpuTradeImpactLeagueContextCache.get(leagueData);
+  }
+
+  const semanticSignature = [
+    leaguePowerSignature(leagueData, teams),
+    cpuTradeDraftContextSignature(leagueData),
+    cpuTradeContractContextSignature(leagueData, teams),
+    cpuTradeFinancialContextSignature(leagueData),
+  ].join("@@");
+  const token = internCpuTradeImpactContext(semanticSignature);
+
+  if (leagueData && typeof leagueData === "object") {
+    cpuTradeImpactLeagueContextCache.set(leagueData, token);
+  }
+  return token;
+}
+
+function makeCpuTradeImpactCacheKey({
+  leagueData,
+  userTeam,
+  cpuTeam,
+  userTeamName = "",
+  cpuTeamName = "",
+  userItems = [],
+  cpuItems = [],
+  evaluationMode = "standard",
+  cpuTradeRole = "",
+  cpuTradeContext = null,
+} = {}) {
+  const role = String(cpuTradeRole || "").toLowerCase();
+  if (String(evaluationMode || "").toLowerCase() !== "cpu_cpu_trade") return null;
+  if (role !== "buyer" && role !== "seller") return null;
+
+  const teams = getAllTeamsFromLeague(leagueData);
+  const cpuName = cpuTeamName || getTeamName(cpuTeam) || "";
+  const userName = userTeamName || getTeamName(userTeam) || "";
+  return [
+    "cpu-impact-v1",
+    role,
+    normalizeName(userName),
+    normalizeName(cpuName),
+    cpuTradeImpactLeagueContextSignature(leagueData, teams),
+    rosterRatingSignature(userTeam?.players || []),
+    rosterRatingSignature(cpuTeam?.players || []),
+    tradeItemsImpactSignature(userItems),
+    tradeItemsImpactSignature(cpuItems),
+    stablePrimitive(cpuTradeContext?.sellerPhase),
+    stablePrimitive(cpuTradeContext?.targetAge),
   ].join("::");
 }
 
@@ -2644,14 +2795,18 @@ export function evaluateTradeTeamImpact(args = {}) {
   const baseBreakdown = breakdownEnabled ? makeTradeFinderImpactBreakdownBase(args) : null;
 
   const cacheKeyStart = tfImpactNow();
-  const cacheKey = makeTradeFinderImpactCacheKey(args);
+  const tradeFinderCacheKey = makeTradeFinderImpactCacheKey(args);
+  const cpuTradeCacheKey = tradeFinderCacheKey ? null : makeCpuTradeImpactCacheKey(args);
+  const cacheKey = tradeFinderCacheKey || cpuTradeCacheKey;
+  const resultCache = tradeFinderCacheKey ? tradeFinderImpactCache : cpuTradeCacheKey ? cpuTradeImpactCache : null;
   addBreakdownMetric(metrics, "impactCacheKeyMs", tfImpactNow() - cacheKeyStart);
 
-  if (cacheKey) {
+  if (cacheKey && resultCache) {
     const cacheLookupStart = tfImpactNow();
-    const cached = getLimitedCache(tradeFinderImpactCache, cacheKey);
+    const cached = getLimitedCache(resultCache, cacheKey);
     addBreakdownMetric(metrics, "impactCacheLookupMs", tfImpactNow() - cacheLookupStart);
     if (cached) {
+      if (cpuTradeCacheKey) cpuTradeImpactCacheHits += 1;
       const totalMs = tfImpactNow() - totalStart;
       recordTradeFinderImpactBreakdown({
         ...baseBreakdown,
@@ -2665,18 +2820,25 @@ export function evaluateTradeTeamImpact(args = {}) {
       debugTradeImpactEvaluation(args, cached, { cacheHit: true, totalMs: tfImpactRoundMs(totalMs) });
       return {
         ...cached,
-        __tfImpactCacheHit: true,
+        ...(tradeFinderCacheKey ? { __tfImpactCacheHit: true } : {}),
+        ...(cpuTradeCacheKey ? { __cpuTradeImpactCacheHit: true } : {}),
       };
     }
+    if (cpuTradeCacheKey) cpuTradeImpactCacheMisses += 1;
   }
 
   const uncachedStart = tfImpactNow();
   const result = evaluateTradeTeamImpactUncached({ ...args, __tfBreakdownMetrics: metrics });
   addBreakdownMetric(metrics, "uncachedImpactMs", tfImpactNow() - uncachedStart);
 
-  if (cacheKey) {
+  if (cacheKey && resultCache) {
     const cacheStoreStart = tfImpactNow();
-    touchLimitedCache(tradeFinderImpactCache, cacheKey, result, TRADE_FINDER_IMPACT_CACHE_MAX);
+    touchLimitedCache(
+      resultCache,
+      cacheKey,
+      result,
+      tradeFinderCacheKey ? TRADE_FINDER_IMPACT_CACHE_MAX : CPU_TRADE_IMPACT_CACHE_MAX
+    );
     addBreakdownMetric(metrics, "impactCacheStoreMs", tfImpactNow() - cacheStoreStart);
   }
 
@@ -2706,5 +2868,25 @@ export function clearTradeFinderImpactCache() {
 
 export function getTradeFinderImpactCacheSize() {
   return tradeFinderImpactCache.size;
+}
+
+export function resetCpuTradeImpactCache() {
+  cpuTradeImpactCache.clear();
+  cpuTradeImpactCacheHits = 0;
+  cpuTradeImpactCacheMisses = 0;
+  cpuTradeImpactNextContextToken = 1;
+  cpuTradeImpactContextTokens.clear();
+  cpuTradeImpactLeagueContextCache = new WeakMap();
+}
+
+export function getCpuTradeImpactCacheStats() {
+  return {
+    size: cpuTradeImpactCache.size,
+    hits: cpuTradeImpactCacheHits,
+    misses: cpuTradeImpactCacheMisses,
+    maxSize: CPU_TRADE_IMPACT_CACHE_MAX,
+    contextCount: cpuTradeImpactContextTokens.size,
+    maxContexts: CPU_TRADE_IMPACT_CONTEXT_MAX,
+  };
 }
 

@@ -3,6 +3,7 @@ import {
   getCpuTradeCandidateSignature,
 } from "./cpuTradeBank.js";
 import { validateCpuTradeCandidateOnLeague } from "./tradeExecution.js";
+import { getCpuTradeImpactCacheStats } from "./tradeTeamImpact.js";
 import {
   buildTradeHistoryLogEntry,
   readTradeDeskFeed,
@@ -23,7 +24,7 @@ import {
   withCpuTradeTelemetrySuppressed,
 } from "./cpuTradeTelemetry.js";
 
-export const CPU_TRADE_DIAGNOSTICS_VERSION = "2026-07-28_speed_v5b_parallel_generation";
+export const CPU_TRADE_DIAGNOSTICS_VERSION = "2026-07-30_speed_v8_reliable_24_30_market";
 export const CPU_TRADE_BASELINE_REPORT_KEY = "bm_cpu_trade_diagnostic_baseline_v1";
 
 const RATING_KEYS = [
@@ -519,6 +520,9 @@ function summarizeRepairTelemetry(telemetry = {}) {
   return {
     repairRuns: repairs.length,
     failedRepairs: repairs.filter((row) => row?.ok === false).length,
+    targetedRepairRuns: repairs.filter((row) => row?.repairMode === "targeted_post_trade").length,
+    targetedFallbackRuns: repairs.filter((row) => row?.targetedFallbackUsed === true).length,
+    fullLeagueRepairRuns: repairs.filter((row) => String(row?.repairMode || "").startsWith("full_league")).length,
     totalMoves: repairs.reduce((sum, row) => sum + finiteNumber(row?.moveCount, 0), 0),
     unrelatedTeamRepairRuns: repairs.filter((row) => (row?.unrelatedTouchedTeams || []).length > 0).length,
     touchedTeamCounts: Object.fromEntries(Object.entries(touched).sort((a, b) => b[1] - a[1])),
@@ -529,12 +533,26 @@ function summarizeRepairTelemetry(telemetry = {}) {
 function summarizeStorageAndFeed(telemetry = {}) {
   const storageWrites = telemetry?.storageWrites || [];
   const feedWrites = telemetry?.feedWrites || [];
+  const bankOverlayWrites = storageWrites.filter((row) => row?.saveMode === "bank_overlay");
+  const fullLeagueWrites = storageWrites.filter((row) => row?.saveMode !== "bank_overlay");
+  const coveredBankStateOnlyRequests = storageWrites.reduce(
+    (sum, row) => sum + finiteNumber(row?.coveredBankStateOnlyRequestCount, row?.reason === "bank_state_only" ? 1 : 0),
+    0
+  );
   return {
     indexedDbSaveCount: storageWrites.length,
     indexedDbSuccessfulSaves: storageWrites.filter((row) => row?.ok !== false).length,
     indexedDbFailedSaves: storageWrites.filter((row) => row?.ok === false).length,
     bankStateOnlySaves: storageWrites.filter((row) => row?.reason === "bank_state_only").length,
-    latestOnlyIndexedDbWrites: storageWrites.filter((row) => row?.mode === "latest_only_indexeddb_queue").length,
+    coveredBankStateOnlyRequests,
+    bankOverlayWrites: bankOverlayWrites.length,
+    fullLeagueWrites: fullLeagueWrites.length,
+    bankOverlayMs: round3(bankOverlayWrites.reduce((sum, row) => sum + finiteNumber(row?.durationMs, 0), 0)),
+    fullLeagueWriteMs: round3(fullLeagueWrites.reduce((sum, row) => sum + finiteNumber(row?.durationMs, 0), 0)),
+    bankStateOnlyFullLeagueWrites: storageWrites.filter(
+      (row) => row?.reason === "bank_state_only" && row?.saveMode !== "bank_overlay"
+    ).length,
+    latestOnlyIndexedDbWrites: storageWrites.filter((row) => String(row?.mode || "").startsWith("latest_only_")).length,
     coveredSaveRequests: storageWrites.reduce((sum, row) => sum + finiteNumber(row?.coveredRequestCount, 1), 0),
     coalescedSaveRequests: storageWrites.reduce((sum, row) => sum + finiteNumber(row?.coalescedRequestCount, 0), 0),
     feedWriteCount: feedWrites.length,
@@ -626,6 +644,10 @@ export function runCpuTradePackageBenchmarks({ iterations = 7 } = {}) {
         currentDate: sample?.context?.currentDate || sample?.context?.generatedDate || "",
         tradeDeadlineDate: sample?.context?.tradeDeadlineDate || "",
         inOffseason: Boolean(sample?.context?.inOffseason),
+        recordsByTeam:
+          sample?.context?.recordsByTeam && typeof sample.context.recordsByTeam === "object"
+            ? sample.context.recordsByTeam
+            : null,
       });
       const finishedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
       durations.push(round3(finishedAt - startedAt));
@@ -684,7 +706,11 @@ export function buildCpuTradeDiagnosticReport(leagueData = {}, options = {}) {
   const officialCpuTradeCount = trades.length;
   const completedByBank = finiteNumber(bank?.completedTrades ?? bank?.stats?.completedTrades, 0);
   const targetTrades = finiteNumber(bank?.targetTrades, 0);
+  const minimumTrades = finiteNumber(bank?.minimumTrades, Math.max(0, targetTrades - 3));
   const remainingTarget = Math.max(0, targetTrades - completedByBank);
+  const remainingMinimum = Math.max(0, minimumTrades - completedByBank);
+  const maximumGenerationPasses = finiteNumber(bank?.maximumGenerationPasses, 0);
+  const maximumExactEvaluations = finiteNumber(bank?.maximumExactEvaluations, 0);
   const plannedSlots = Array.isArray(leagueData?.cpuTradeBankState?.executionPlanDays)
     ? leagueData.cpuTradeBankState.executionPlanDays.length
     : 0;
@@ -700,13 +726,49 @@ export function buildCpuTradeDiagnosticReport(leagueData = {}, options = {}) {
       categories: benchmarkCategories,
       requirement: "At least two real packages including one rejected package.",
     }),
-    passFail("Trade count reliability", targetTrades > 0 ? completedByBank === officialCpuTradeCount && remainingTarget <= 3 : null, {
-      officialCpuTradeCount, completedByBank, targetTrades, remainingTarget,
+    passFail("Trade count reliability", targetTrades > 0
+      ? completedByBank === officialCpuTradeCount &&
+        officialCpuTradeCount >= minimumTrades &&
+        officialCpuTradeCount <= targetTrades
+      : null, {
+      officialCpuTradeCount,
+      completedByBank,
+      minimumTrades,
+      targetTrades,
+      remainingMinimum,
+      remainingTarget,
     }),
     passFail("Candidate funnel telemetry", finiteNumber(bank?.stats?.generationPasses, 0) > 0, {
       generationPasses: finiteNumber(bank?.stats?.generationPasses, 0),
       proposedCandidates: finiteNumber(bank?.stats?.proposedCandidates, 0),
       exactEvaluations: finiteNumber(bank?.stats?.exactEvaluations, 0),
+    }),
+    passFail("Bounded continuous trade market", maximumGenerationPasses > 0 && maximumExactEvaluations > 0
+      ? finiteNumber(bank?.stats?.generationPasses, 0) <= maximumGenerationPasses &&
+        finiteNumber(bank?.stats?.exactEvaluations, 0) <= maximumExactEvaluations &&
+        bankHealth.foregroundPasses === 0 &&
+        bankHealth.foregroundRuns === 0 &&
+        bankHealth.burstPasses === 0 &&
+        finiteNumber(timings?.periodicRevalidationMs?.count, 0) === 0
+      : null, {
+      generationPasses: finiteNumber(bank?.stats?.generationPasses, 0),
+      maximumGenerationPasses,
+      exactEvaluations: finiteNumber(bank?.stats?.exactEvaluations, 0),
+      maximumExactEvaluations,
+      foregroundPasses: bankHealth.foregroundPasses,
+      foregroundRuns: bankHealth.foregroundRuns,
+      burstPasses: bankHealth.burstPasses,
+      periodicRevalidationCalls: finiteNumber(timings?.periodicRevalidationMs?.count, 0),
+    }),
+    passFail("Lightweight bank persistence", io.coveredBankStateOnlyRequests > 0
+      ? io.bankOverlayWrites > 0 && io.bankStateOnlyFullLeagueWrites === 0 && io.indexedDbFailedSaves === 0
+      : null, {
+      coveredBankStateOnlyRequests: io.coveredBankStateOnlyRequests,
+      bankOverlayWrites: io.bankOverlayWrites,
+      fullLeagueWrites: io.fullLeagueWrites,
+      bankStateOnlyFullLeagueWrites: io.bankStateOnlyFullLeagueWrites,
+      bankOverlayMs: io.bankOverlayMs,
+      fullLeagueWriteMs: io.fullLeagueWriteMs,
     }),
     passFail("Trade quality records", officialCpuTradeCount > 0 ? quality.tradesWithBothTeamViews === officialCpuTradeCount : null, {
       completedTrades: officialCpuTradeCount,
@@ -722,6 +784,7 @@ export function buildCpuTradeDiagnosticReport(leagueData = {}, options = {}) {
     passFail("Rating freeze", ratingFreeze.available ? ratingFreeze.ok : null, ratingFreeze),
   ];
 
+  const cpuImpactCache = getCpuTradeImpactCacheStats();
   const report = {
     name: "cpu_trade_demon_report",
     diagnosticsVersion: CPU_TRADE_DIAGNOSTICS_VERSION,
@@ -752,9 +815,13 @@ export function buildCpuTradeDiagnosticReport(leagueData = {}, options = {}) {
     },
     summary: {
       officialCpuTradeCount,
+      minimumTrades,
       targetTrades,
       completedByBank,
+      remainingMinimum,
       remainingTarget,
+      maximumGenerationPasses,
+      maximumExactEvaluations,
       bankSize: finiteNumber(bank?.bankSize, 0),
       plannedSlots,
       planCursor,
@@ -801,7 +868,15 @@ export function buildCpuTradeDiagnosticReport(leagueData = {}, options = {}) {
       feedSyncMs: finiteNumber(timings?.feedSyncMs?.totalMs, 0),
       feedHistorySyncMs: finiteNumber(timings?.feedHistorySyncMs?.totalMs, 0),
       storageMs: finiteNumber(timings?.storageMs?.totalMs, 0),
+      storageBankOverlayWrites: finiteNumber(io?.bankOverlayWrites, 0),
+      storageFullLeagueWrites: finiteNumber(io?.fullLeagueWrites, 0),
+      storageBankOverlayMs: finiteNumber(io?.bankOverlayMs, 0),
+      storageFullLeagueWriteMs: finiteNumber(io?.fullLeagueWriteMs, 0),
+      storageCoveredBankStateOnlyRequests: finiteNumber(io?.coveredBankStateOnlyRequests, 0),
       benchmarkCaptureMs: finiteNumber(timings?.benchmarkCaptureMs?.totalMs, 0),
+      cpuImpactCacheHits: finiteNumber(cpuImpactCache?.hits, 0),
+      cpuImpactCacheMisses: finiteNumber(cpuImpactCache?.misses, 0),
+      cpuImpactCacheSize: finiteNumber(cpuImpactCache?.size, 0),
     },
     checks,
     ok: checks.every((row) => row.status !== "FAIL"),
@@ -810,6 +885,9 @@ export function buildCpuTradeDiagnosticReport(leagueData = {}, options = {}) {
       generated: finiteNumber(bank?.stats?.proposedCandidates, 0),
       duplicateCandidates: finiteNumber(bank?.stats?.duplicateCandidates, 0),
       exactValidated: finiteNumber(bank?.stats?.exactEvaluations, 0),
+      maximumGenerationPasses,
+      maximumExactEvaluations,
+      periodicRevalidationCalls: finiteNumber(timings?.periodicRevalidationMs?.count, 0),
       sameStateValidationCacheHits: finiteNumber(bank?.stats?.sameStateValidationCacheHits, 0),
       sameStateAdmissionCacheHits: finiteNumber(bank?.stats?.sameStateAdmissionCacheHits, 0),
       sameStatePeriodicCacheHits: finiteNumber(bank?.stats?.sameStatePeriodicCacheHits, 0),
@@ -827,6 +905,7 @@ export function buildCpuTradeDiagnosticReport(leagueData = {}, options = {}) {
       rejectionReasons: bank?.rejectionReasons || {},
     },
     validation,
+    cpuImpactCache,
     bankHealth,
     timings,
     generationJobs: telemetry?.generationJobs || [],

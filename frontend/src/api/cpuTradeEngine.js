@@ -18,6 +18,7 @@ import {
 
 const MAX_GENERATION_WORKERS = 4;
 const REQUEST_TIMEOUT_MS = 30000;
+const CPU_TRADE_HISTORY_LIMIT = 120;
 
 let workerSlots = [];
 let counter = 0;
@@ -86,6 +87,42 @@ function compactPlayer(player = {}) {
   };
 }
 
+export function compactCpuTradeHistoryForWorker(tradeHistory = []) {
+  const rows = Array.isArray(tradeHistory) ? tradeHistory.slice(-CPU_TRADE_HISTORY_LIMIT) : [];
+
+  // Exact generator contract from cpu_cpu_trade_logic.py:
+  // history only drives per-team trade counts, repeat team-pair suppression,
+  // and the recent-acquisition cooldown. Keep every field those rules read,
+  // while dropping Trade Desk presentation/evaluation snapshots that Python
+  // never touches. The tail is selected before compaction to preserve the
+  // original 120-row history window exactly.
+  return rows.map((row) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+
+    const movedPlayers = Array.isArray(row.movedPlayers)
+      ? row.movedPlayers.map((move) => {
+          if (!move || typeof move !== "object" || Array.isArray(move)) return null;
+          return {
+            name: move.name,
+            toTeam: move.toTeam,
+          };
+        })
+      : [];
+
+    return {
+      cpuCpuTrade: row.cpuCpuTrade,
+      source: row.source,
+      userTeamName: row.userTeamName,
+      cpuTeamName: row.cpuTeamName,
+      fromTeamName: row.fromTeamName,
+      toTeamName: row.toTeamName,
+      date: row.date,
+      currentDate: row.currentDate,
+      movedPlayers,
+    };
+  });
+}
+
 function compactLeagueForCpuTrades(leagueData = {}) {
   const compactTeam = (team = {}) => ({
     name: team?.name || team?.teamName || team?.team || "",
@@ -96,7 +133,7 @@ function compactLeagueForCpuTrades(leagueData = {}) {
     seasonYear: leagueData?.seasonYear,
     currentSeasonYear: leagueData?.currentSeasonYear,
     draftPicks: leagueData?.draftPicks || [],
-    tradeHistory: (leagueData?.tradeHistory || []).slice(-120),
+    tradeHistory: compactCpuTradeHistoryForWorker(leagueData?.tradeHistory),
   };
   if (Array.isArray(leagueData?.teams)) compact.teams = leagueData.teams.map(compactTeam);
   else if (leagueData?.conferences) {

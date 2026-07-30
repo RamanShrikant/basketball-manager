@@ -73,6 +73,7 @@ function compactView(view = null) {
     accepted: Boolean(view?.accepted),
     decision: view?.decision || "",
     score: finiteNumber(view?.score, 0),
+    threshold: finiteNumber(view?.teamImpact?.threshold ?? view?.threshold, 0),
     message: view?.message || "",
     reasons: Array.isArray(view?.reasons) ? [...view.reasons] : [],
   };

@@ -4,6 +4,10 @@
 console.log("### simEnginePy loaded:", import.meta.url);
 
 import { queueSim } from "@/api/simQueue";
+import {
+  applyCpuRosterRepairLeaguePatch,
+  normalizeCpuRosterRepairTargetNames,
+} from "../utils/cpuRosterRepairPatch.js";
 
 let worker = null;
 
@@ -1063,11 +1067,12 @@ function convert(py) {
 // PUBLIC API - SINGLE GAME (with timeout)
 // ------------------------------------------------------------
 const WORKER_TIMEOUT_MS = 300;
-export function repairCpuTeamsToMinRoster(
+function requestCpuRosterRepairWorker(
   leagueData,
-  userTeamName = null,
-  minPlayers = 14,
-  currentDay = 0
+  userTeamName,
+  minPlayers,
+  currentDay,
+  payloadOverrides = {}
 ) {
   startWorker();
 
@@ -1101,10 +1106,81 @@ export function repairCpuTeamsToMinRoster(
         userTeamName,
         minPlayers,
         currentDay,
+        ...payloadOverrides,
       },
     });
   });
 }
+
+export async function repairCpuTeamsToMinRoster(
+  leagueData,
+  userTeamName = null,
+  minPlayers = 14,
+  currentDay = 0,
+  options = {}
+) {
+  const requestedTeamNames = normalizeCpuRosterRepairTargetNames(options?.targetTeamNames);
+  const targeted = requestedTeamNames.length > 0;
+
+  if (!targeted) {
+    return requestCpuRosterRepairWorker(
+      leagueData,
+      userTeamName,
+      minPlayers,
+      currentDay
+    );
+  }
+
+  let targetedResult = null;
+  let targetedError = null;
+  try {
+    targetedResult = await requestCpuRosterRepairWorker(
+      leagueData,
+      userTeamName,
+      minPlayers,
+      currentDay,
+      {
+        targetTeamNames: requestedTeamNames,
+        returnPatchOnly: true,
+        repairMode: "targeted_post_trade",
+      }
+    );
+  } catch (error) {
+    targetedError = error;
+  }
+
+  if (targetedResult && targetedResult.targetedFallbackRequired !== true) {
+    const mergedLeague = targetedResult.leaguePatch
+      ? applyCpuRosterRepairLeaguePatch(leagueData, targetedResult.leaguePatch)
+      : targetedResult.leagueData;
+    return {
+      ...targetedResult,
+      leagueData: mergedLeague,
+      leaguePatch: undefined,
+      targetedFallbackUsed: false,
+      requestedTargetTeamNames: requestedTeamNames,
+    };
+  }
+
+  const fallbackReason = targetedResult?.targetedFallbackReason
+    || targetedError?.message
+    || "targeted_repair_unavailable";
+  const fullResult = await requestCpuRosterRepairWorker(
+    leagueData,
+    userTeamName,
+    minPlayers,
+    currentDay
+  );
+  return {
+    ...fullResult,
+    repairMode: "full_league_fallback",
+    targetedFallbackUsed: true,
+    targetedFallbackReason: fallbackReason,
+    requestedTargetTeamNames: requestedTeamNames,
+    targetedAttemptDetails: targetedResult || null,
+  };
+}
+
 export function simulateOneGame({ homeTeam, awayTeam }) {
   startWorker();
   return queueSim(() => {
