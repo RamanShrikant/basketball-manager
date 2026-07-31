@@ -12,9 +12,73 @@ import { getLeagueFinancialRules, getRookieSalaryForPick } from "../utils/league
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
+import { countStandardRosterPlayers, isStandardRosterPlayer } from "../utils/rosterRules.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const ALL_PLAYERS_VIEW_KEY = "__ALL_PLAYERS__";
+
+
+function rosterPlayerKey(player = {}) {
+  return String(player?.id ?? player?.playerId ?? player?.name ?? player?.player ?? "");
+}
+
+function rosterContractType(player = {}) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  return String(
+    player?.contractType ||
+      player?.rosterStatus ||
+      player?.assignmentStatus ||
+      contract?.type ||
+      contract?.contractType ||
+      ""
+  ).toLowerCase().replace(/-/g, "_");
+}
+
+function isTwoWayRosterRow(player = {}) {
+  const type = rosterContractType(player);
+  return Boolean(player?.isTwoWay || type.includes("two_way"));
+}
+
+function isStashRosterRow(player = {}) {
+  const type = rosterContractType(player);
+  return Boolean(
+    player?.isStash ||
+      type.includes("stash") ||
+      type.includes("draft_rights") ||
+      type.includes("unsigned_rookie") ||
+      type.includes("rookie_pending")
+  );
+}
+
+function uniqueRosterRows(rows = []) {
+  const seen = new Set();
+  const out = [];
+  for (const row of rows || []) {
+    const key = rosterPlayerKey(row);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+function getNormalizedRosterBucketsForView(team = {}) {
+  const rawStandardBucket = Array.isArray(team?.players) ? team.players : [];
+  const rawTwoWayBucket = Array.isArray(team?.twoWayPlayers) ? team.twoWayPlayers : [];
+  const rawStashBucket = Array.isArray(team?.stashPlayers) ? team.stashPlayers : [];
+
+  const standardPlayers = rawStandardBucket.filter(isStandardRosterPlayer);
+  const twoWayPlayers = uniqueRosterRows([
+    ...rawTwoWayBucket,
+    ...rawStandardBucket.filter((player) => isTwoWayRosterRow(player) && !isStashRosterRow(player)),
+  ]);
+  const stashPlayers = uniqueRosterRows([
+    ...rawStashBucket,
+    ...rawStandardBucket.filter(isStashRosterRow),
+  ]);
+
+  return { standardPlayers, twoWayPlayers, stashPlayers };
+}
 
 function isOffseasonRosterRelaxed() {
   try {
@@ -566,13 +630,18 @@ export default function RosterView() {
     onNext: () => handleTeamSwitch("next"),
   });
 
+  const normalizedRosterBuckets = useMemo(
+    () => getNormalizedRosterBucketsForView(activeRosterTeam),
+    [activeRosterTeam]
+  );
+
   // active rows
   const viewPlayers = isAllView
     ? allLeaguePlayers
     : [
-        ...(activeRosterTeam?.players || []),
-        ...getTwoWayPlayers(activeRosterTeam).map(markTwoWayPlayer),
-        ...getStashPlayers(activeRosterTeam).map(markStashPlayer),
+        ...normalizedRosterBuckets.standardPlayers,
+        ...normalizedRosterBuckets.twoWayPlayers.map(markTwoWayPlayer),
+        ...normalizedRosterBuckets.stashPlayers.map(markStashPlayer),
       ];
 
   // sorting
@@ -1136,11 +1205,11 @@ export default function RosterView() {
     workingLeagueData?.maxRosterSize ||
     15
   );
-  const standardRosterCount = !isAllView && activeRosterTeam?.players
-    ? activeRosterTeam.players.length
+  const standardRosterCount = !isAllView && activeRosterTeam
+    ? countStandardRosterPlayers(activeRosterTeam)
     : 0;
-  const twoWayRosterCount = !isAllView ? getTwoWayPlayers(activeRosterTeam).length : 0;
-  const stashRosterCount = !isAllView ? getStashPlayers(activeRosterTeam).length : 0;
+  const twoWayRosterCount = !isAllView ? normalizedRosterBuckets.twoWayPlayers.length : 0;
+  const stashRosterCount = !isAllView ? normalizedRosterBuckets.stashPlayers.length : 0;
   const rosterOverRegularSeasonLimit =
     !isAllView && standardRosterCount > regularSeasonStandardRosterLimit;
 

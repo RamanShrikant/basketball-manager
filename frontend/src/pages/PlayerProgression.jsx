@@ -7,6 +7,8 @@ import { recomputeDerivedRatingsInLeague } from "../utils/playerProgressionDeriv
 import styles from "./PlayerProgression.module.css";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
+import { archiveCurrentSeasonIntoPlayerCards } from "../utils/playerCareerHistory.js";
+import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.js";
 
 const DELTAS_KEY = "bm_progression_deltas_v1";
 const PROG_META_KEY = "bm_progression_meta_v1";
@@ -1319,6 +1321,26 @@ function inferSeasonYear(leagueData) {
   return FIRST_PLAYABLE_SEASON_YEAR;
 }
 
+function preserveCompletedSeasonPlayerHistoryBeforeStatReset(league, completedSeasonYear, label = "PlayerProgression") {
+  if (!league) return league;
+  const displayYear = Number(completedSeasonYear || 0);
+  if (!Number.isFinite(displayYear) || displayYear <= 1900) return league;
+
+  try {
+    const withStatsArchive = ensureCompletedSeasonStatsArchive(league, displayYear - 1);
+    const withPlayerCards = archiveCurrentSeasonIntoPlayerCards(withStatsArchive, displayYear);
+    if (typeof window !== "undefined" && window.__debugSimLogs) {
+      console.log(`[${label}] preserved player-card season history before clearing stat stores`, {
+        completedSeasonYear: displayYear,
+      });
+    }
+    return withPlayerCards || league;
+  } catch (err) {
+    console.warn(`[${label}] failed to preserve completed player-card stats before stat reset`, err);
+    return league;
+  }
+}
+
 function stampAgingGuards(league, seasonYear) {
   if (!league) return league;
   for (const row of getProgressionPlayerRowsFromLeague(league, true)) {
@@ -2380,10 +2402,18 @@ export default function PlayerProgression() {
 
     (async () => {
       try {
+        // Preserve the completed season before progression clears live stat stores.
+        // This writes compact player/team season rows only, not game-by-game data.
+        const historySafeLeague = preserveCompletedSeasonPlayerHistoryBeforeStatReset(
+          leagueData,
+          seasonYear,
+          "PlayerProgression"
+        );
+
         // Normalize derived ratings before the before/after snapshot.
         // Otherwise this page can show huge fake OFF/DEF deltas that are
         // really just LeagueEditor formula recalculation, not progression.
-        const sourceLeague = recomputeDerivedRatingsInLeague(snapshotLeague(leagueData));
+        const sourceLeague = recomputeDerivedRatingsInLeague(snapshotLeague(historySafeLeague));
         const beforeSnapshot = snapshotLeague(sourceLeague);
 
         ppDump("ASYNC_BEFORE_SNAPSHOT_CREATED", beforeSnapshot, { runId, seasonYear });

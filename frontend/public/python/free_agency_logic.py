@@ -21,6 +21,7 @@ except Exception:
 # The active cache is scoped by object identity and restored after each board build,
 # so no gameplay state is written into the save and no cross-call values go stale.
 _ACTIVE_FINANCIAL_RULES_CONTEXT: Optional[Dict[str, Any]] = None
+_FA_TEAM_POWER_CONTEXT_CACHE: Dict[str, Any] = {}
 
 if _raw_get_financial_rules is not None:
     def get_financial_rules(league_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1304,8 +1305,138 @@ def get_player_salary_for_year(player: Dict[str, Any], season_year: int) -> int:
     return get_contract_salary_for_year(player.get("contract"), season_year)
 
 
+def roster_contract_type(player: Dict[str, Any]) -> str:
+    if not isinstance(player, dict):
+        return ""
+    contract = player.get("contract") if isinstance(player.get("contract"), dict) else {}
+    raw = (
+        player.get("contractType")
+        or player.get("rosterStatus")
+        or player.get("assignmentStatus")
+        or contract.get("type")
+        or contract.get("contractType")
+        or "standard"
+    )
+    return str(raw or "standard").lower().replace("-", "_")
+
+
+def is_two_way_contract_player(player: Dict[str, Any]) -> bool:
+    if not isinstance(player, dict):
+        return False
+    roster_type = roster_contract_type(player)
+    return bool(player.get("isTwoWay") or "two_way" in roster_type)
+
+
+def is_stash_contract_player(player: Dict[str, Any]) -> bool:
+    if not isinstance(player, dict):
+        return False
+    roster_type = roster_contract_type(player)
+    return bool(
+        player.get("isStash")
+        or "stash" in roster_type
+        or "draft_rights" in roster_type
+        or "unsigned_rookie" in roster_type
+        or "rookie_pending" in roster_type
+    )
+
+
+def is_standard_contract_player(player: Dict[str, Any]) -> bool:
+    if not isinstance(player, dict):
+        return False
+    if not (player.get("name") or player.get("player") or player.get("id") or player.get("playerId")):
+        return False
+    return not is_two_way_contract_player(player) and not is_stash_contract_player(player)
+
+
+def dedupe_contract_players(players: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for player in players or []:
+        if not isinstance(player, dict):
+            continue
+        key = get_player_key(player.get("id"), player.get("name") or player.get("player"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(player)
+    return out
+
+
+def normalize_development_roster_buckets(team: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep team.players as true standard contracts only.
+
+    Old/offseason saves can leave two-way or stash-tagged players inside the
+    standard bucket after progression. The Calendar validator already excludes
+    those rows; this normalizer makes backend repair count the same way and
+    moves the rows to their real buckets without adding heavy data.
+    """
+    if not isinstance(team, dict):
+        return team
+
+    raw_standard = list(team.get("players") or [])
+    raw_two_way = list(team.get("twoWayPlayers") or [])
+    raw_stash = list(team.get("stashPlayers") or [])
+
+    standard_players: List[Dict[str, Any]] = []
+    two_way_players: List[Dict[str, Any]] = []
+    stash_players: List[Dict[str, Any]] = []
+
+    for player in raw_standard:
+        if not isinstance(player, dict):
+            continue
+        if is_stash_contract_player(player):
+            moved = copy.deepcopy(player)
+            moved["isStash"] = True
+            moved["isTwoWay"] = False
+            if not moved.get("contractType"):
+                moved["contractType"] = "stash"
+            if not moved.get("rosterStatus"):
+                moved["rosterStatus"] = "stashed"
+            stash_players.append(moved)
+        elif is_two_way_contract_player(player):
+            moved = copy.deepcopy(player)
+            moved["isTwoWay"] = True
+            moved["isStash"] = False
+            if not moved.get("contractType"):
+                moved["contractType"] = "two_way"
+            if not moved.get("rosterStatus"):
+                moved["rosterStatus"] = "two_way"
+            two_way_players.append(moved)
+        elif is_standard_contract_player(player):
+            standard_players.append(player)
+
+    for player in raw_two_way:
+        if not isinstance(player, dict):
+            continue
+        moved = copy.deepcopy(player)
+        moved["isTwoWay"] = True
+        moved["isStash"] = False
+        if not moved.get("contractType"):
+            moved["contractType"] = "two_way"
+        if not moved.get("rosterStatus"):
+            moved["rosterStatus"] = "two_way"
+        two_way_players.append(moved)
+
+    for player in raw_stash:
+        if not isinstance(player, dict):
+            continue
+        moved = copy.deepcopy(player)
+        moved["isStash"] = True
+        moved["isTwoWay"] = False
+        if not moved.get("contractType"):
+            moved["contractType"] = "stash"
+        if not moved.get("rosterStatus"):
+            moved["rosterStatus"] = "stashed"
+        stash_players.append(moved)
+
+    team["players"] = dedupe_contract_players(standard_players)
+    team["twoWayPlayers"] = dedupe_contract_players(two_way_players)
+    team["stashPlayers"] = dedupe_contract_players(stash_players)
+    return team
+
+
 def get_team_players(team: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return team.get("players", [])
+    return [p for p in (team.get("players", []) if isinstance(team, dict) else []) if is_standard_contract_player(p)]
 
 
 def get_dead_cap_map(league_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2021,6 +2152,93 @@ def should_allow_cpu_cap_hold_renounce_for_target(
 
 
 
+def _fa_team_power_cache_key(league_data: Dict[str, Any]) -> str:
+    state = league_data.get("freeAgencyState") if isinstance(league_data, dict) else {}
+    day = state.get("currentDay") if isinstance(state, dict) else ""
+    season_year = league_data.get("seasonYear") or league_data.get("currentSeasonYear") or DEFAULT_SEASON_YEAR
+    teams = [get_team_name_from_team(team) for _, _, team in iter_teams(league_data)]
+    return f"{id(league_data)}|{season_year}|{day}|{len(teams)}|{len(league_data.get('freeAgents', []) if isinstance(league_data, dict) else [])}"
+
+
+def _team_current_power_score(profile: Dict[str, Any]) -> float:
+    top3 = float(num(profile.get("top3Overall"), 0.0))
+    top8 = float(num(profile.get("top8Overall"), 0.0))
+    star_count = int(num(profile.get("starCount"), 0))
+    starter_count = int(num(profile.get("starterQualityCount"), 0))
+    roster_score = clamp(
+        ((top3 - 76.0) / 14.0) * 0.55
+        + ((top8 - 73.0) / 13.0) * 0.45
+        + min(0.12, star_count * 0.040)
+        + min(0.08, starter_count * 0.012),
+        0.0,
+        1.0,
+    )
+    results = profile.get("resultsProfile", {}) if isinstance(profile.get("resultsProfile"), dict) else {}
+    standings = float(num(results.get("recentStandingsScore"), 0.50)) if results.get("historyAvailable") else 0.50
+    playoff = float(num(results.get("recentPlayoffScore"), 0.35)) if results.get("historyAvailable") else 0.35
+    history_score = clamp(standings * 0.65 + playoff * 0.35, 0.0, 1.0)
+    return clamp(roster_score * 0.74 + history_score * 0.26, 0.0, 1.0)
+
+
+def get_fa_team_power_context(
+    league_data: Dict[str, Any],
+    team_name: Optional[str],
+    team_profile: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if not team_name:
+        return {"rank": 30, "percentile": 0.50, "contenderScore": 0.50, "bottomTen": False, "topEight": False}
+
+    cache_key = _fa_team_power_cache_key(league_data)
+    cached = _FA_TEAM_POWER_CONTEXT_CACHE.get(cache_key)
+    if cached is None:
+        rows = []
+        for _, _, team in iter_teams(league_data):
+            name = get_team_name_from_team(team)
+            profile = build_team_roster_profile(team, league_data = league_data)
+            score = _team_current_power_score(profile)
+            rows.append({
+                "teamName": name,
+                "score": score,
+                "direction": profile.get("direction"),
+                "top3Overall": profile.get("top3Overall"),
+                "top8Overall": profile.get("top8Overall"),
+            })
+        rows.sort(key = lambda row: (-float(num(row.get("score"), 0.0)), str(row.get("teamName", ""))))
+        total = max(1, len(rows))
+        power_map = {}
+        for idx, row in enumerate(rows, start = 1):
+            percentile = 1.0 - ((idx - 1) / max(1, total - 1)) if total > 1 else 1.0
+            power_map[row["teamName"]] = {
+                **row,
+                "rank": idx,
+                "percentile": round(percentile, 3),
+                "contenderScore": round(float(num(row.get("score"), 0.5)), 3),
+                "topFive": idx <= 5,
+                "topEight": idx <= 8,
+                "topTwelve": idx <= 12,
+                "bottomTen": idx > max(0, total - 10),
+            }
+        cached = power_map
+        _FA_TEAM_POWER_CONTEXT_CACHE.clear()
+        _FA_TEAM_POWER_CONTEXT_CACHE[cache_key] = cached
+
+    if team_name in cached:
+        return cached[team_name]
+
+    # Fallback for unusual flat-team data or renamed teams.
+    score = _team_current_power_score(team_profile or {}) if team_profile else 0.50
+    return {
+        "teamName": team_name,
+        "rank": 15,
+        "percentile": 0.50,
+        "contenderScore": round(score, 3),
+        "topFive": score >= 0.78,
+        "topEight": score >= 0.72,
+        "topTwelve": score >= 0.65,
+        "bottomTen": score <= 0.38,
+    }
+
+
 def get_return_team_interest_bonus(
     league_data: Dict[str, Any],
     team_name: Optional[str],
@@ -2042,6 +2260,7 @@ def get_return_team_interest_bonus(
     if not profile.get("historyAvailable"):
         return 0.0
 
+    power_context = get_fa_team_power_context(league_data, team_name)
     overall = int(round(num(player.get("overall"), 0)))
     age = int(num(player.get("age"), 27))
     recent_win_pct = profile.get("recentWinPct")
@@ -2082,12 +2301,18 @@ def get_return_team_interest_bonus(
         # when the team was already a good situation.
         if rights_bonus:
             base += 0.004
+        if power_context.get("topEight"):
+            base += 0.007
+        elif power_context.get("topTwelve"):
+            base += 0.004
 
     # Older players should not get pulled back to bad old teams.
     if age >= 32 and recent_win_pct is not None and float(num(recent_win_pct, 0)) < 0.420:
         base -= 0.012
+    if age >= 30 and power_context.get("bottomTen"):
+        base -= 0.010
 
-    return round(clamp(base, 0.000, 0.060), 3)
+    return round(clamp(base, 0.000, 0.070), 3)
 
 
 def get_team_quality_player_interest_adjustment(
@@ -2095,6 +2320,7 @@ def get_team_quality_player_interest_adjustment(
     team_name: Optional[str],
     player: Dict[str, Any],
     direction: str = "balanced",
+    team_profile: Optional[Dict[str, Any]] = None,
 ) -> float:
     """Small team-quality adjustment used after money in player interest.
 
@@ -2106,6 +2332,7 @@ def get_team_quality_player_interest_adjustment(
         return 0.0
 
     profile = build_recent_team_results_profile(league_data, team_name)
+    power_context = get_fa_team_power_context(league_data, team_name, team_profile = team_profile)
     age = int(num(player.get("age"), 27))
     overall = float(num(player.get("overall"), 75))
     potential = float(num(player.get("potential"), overall))
@@ -2144,7 +2371,34 @@ def get_team_quality_player_interest_adjustment(
     if upside >= 3 and age <= 26 and direction in ["rebuilding", "retooling"]:
         adjustment += 0.008
 
-    return round(clamp(adjustment, -0.035, 0.055), 3)
+    contender_score = float(num(power_context.get("contenderScore"), 0.50))
+    if age >= 31:
+        adjustment += (contender_score - 0.50) * 0.135
+        if power_context.get("topFive"):
+            adjustment += 0.026
+        elif power_context.get("topEight"):
+            adjustment += 0.020
+        elif power_context.get("topTwelve"):
+            adjustment += 0.010
+        if power_context.get("bottomTen"):
+            adjustment -= 0.026
+        if direction == "rebuilding":
+            adjustment -= 0.018
+        return round(clamp(adjustment, -0.090, 0.115), 3)
+
+    if 26 <= age <= 30:
+        adjustment += (contender_score - 0.50) * 0.065
+        if power_context.get("topEight"):
+            adjustment += 0.010
+        if power_context.get("bottomTen"):
+            adjustment -= 0.012
+        return round(clamp(adjustment, -0.060, 0.080), 3)
+
+    # Young players still like good teams, but opportunity/money should beat ring chasing.
+    adjustment += (contender_score - 0.50) * 0.030
+    if power_context.get("topEight") and overall < 78:
+        adjustment -= 0.010
+    return round(clamp(adjustment, -0.050, 0.070), 3)
 
 
 def record_cpu_cap_hold_renounce_audit(
@@ -2928,6 +3182,7 @@ def finalize_cpu_min_roster_cleanup(
         teams_below_min = []
 
         for _, _, team in iter_teams(league_data):
+            normalize_development_roster_buckets(team)
             team_name = team.get("name")
             if not team_name:
                 continue
@@ -2948,6 +3203,7 @@ def finalize_cpu_min_roster_cleanup(
                 _, _, live_team = find_team_entry(league_data, team_name)
                 if live_team is None:
                     break
+                normalize_development_roster_buckets(live_team)
                 if len(get_team_players(live_team)) >= min_roster_target:
                     break
                 if len(get_team_players(live_team)) >= get_roster_limit(league_data):
@@ -5925,6 +6181,7 @@ def ensure_free_agency_state(league_data: Dict[str, Any]) -> Dict[str, Any]:
     state.setdefault("userOfferOutcomeLog", [])
     state.setdefault("pendingUserDecisions", [])
     state.setdefault("pendingRfaMatchDecisions", [])
+    state.setdefault("processedRfaMatchDecisionKeys", [])
     state.setdefault("pendingUserTeamName", None)
     state.setdefault("pendingUserTeamSnapshot", None)
     state.setdefault("forceViewingOffersReturn", False)
@@ -8333,6 +8590,14 @@ def should_create_user_rfa_match_decision(
     if chosen_offer.get("status", "active") != "active":
         return False
 
+    state = ensure_free_agency_state(league_data)
+    player_key = get_player_key_from_player(player)
+    processed_keys = {str(key) for key in state.get("processedRfaMatchDecisionKeys", [])}
+    offer_id = chosen_offer.get("offerId") or chosen_offer.get("id") or ""
+    processed_token = f"{player_key}|{chosen_offer.get('teamName')}|{offer_id}"
+    if str(player_key) in processed_keys or processed_token in processed_keys:
+        return False
+
     return True
 
 
@@ -8490,19 +8755,35 @@ def process_pending_rfa_match_decision(
     if not signed:
         if not match_offer:
             # Old saves could already contain impossible RFA decisions. Do not
-            # trap the user on Decline; clear the stale decision, fail the CPU
-            # offer sheet, and leave the player on the free-agent market. New
-            # decisions are prevented earlier by the pre-match preview.
+            # trap the user on Decline and do not regenerate the same prompt the
+            # next day. Treat the offer sheet as processed/expired, clear the
+            # user's match right for this specific sheet, and leave the player as
+            # a normal UFA if the outside team cannot legally complete it.
             state = ensure_free_agency_state(updated)
+            offer_id = chosen_offer.get("offerId") or chosen_offer.get("id") or ""
+            processed_token = f"{row_player_key}|{target_row.get('offeringTeamName') or chosen_offer.get('teamName')}|{offer_id}"
+            processed = [str(key) for key in state.get("processedRfaMatchDecisionKeys", [])]
+            for key in [str(row_player_key), processed_token]:
+                if key and key not in processed:
+                    processed.append(key)
+            state["processedRfaMatchDecisionKeys"] = processed[-200:]
             mark_cpu_offer_failed_final_validation(
                 league_data = updated,
                 player = player,
                 candidate_offer = chosen_offer,
                 current_day = current_day,
-                reason = "RFA offer sheet was declined but the offering team could not finalize it under current cap/roster rules.",
-                event_type = "rfa_offer_sheet_declined_failed_finalization",
+                reason = "RFA offer sheet was declined and expired before the offering team could finalize it.",
+                event_type = "rfa_offer_sheet_declined_expired",
             )
             clear_pending_rfa_match_decision_for_player(state, row_player_key)
+            rights = get_player_rights(player)
+            rights["restrictedFreeAgent"] = False
+            rights["heldByTeam"] = None
+            player["rights"] = rights
+            player["restrictedFreeAgent"] = False
+            player["rfaEligible"] = False
+            player["qualifyingOfferExtended"] = False
+            state.get("offersByPlayer", {}).pop(row_player_key, None)
             state["pendingUserTeamName"] = rights_team_name
             state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, rights_team_name) if rights_team_name else None
             state.setdefault("dailyLog", []).append({
@@ -8513,11 +8794,11 @@ def process_pending_rfa_match_decision(
                 "offeringTeamName": target_row.get("offeringTeamName"),
                 "decision": final_decision,
                 "signedWith": None,
-                "returnedToMarket": True,
+                "offerExpired": True,
             })
             return {
                 "ok": True,
-                "reason": f"{target_row.get('playerName', 'Player')} returned to free agency because the outside offer could not be finalized.",
+                "reason": f"{target_row.get('playerName', 'Player')} was released from the stale RFA offer-sheet loop.",
                 "leagueData": updated,
                 "processedDecision": {
                     "playerKey": row_player_key,
@@ -8526,7 +8807,7 @@ def process_pending_rfa_match_decision(
                     "rightsTeamName": rights_team_name,
                     "offeringTeamName": target_row.get("offeringTeamName"),
                     "decision": final_decision,
-                    "returnedToMarket": True,
+                    "offerExpired": True,
                 },
                 "processedSigning": None,
                 "processedSignings": [],
@@ -8546,6 +8827,13 @@ def process_pending_rfa_match_decision(
         }
 
     state = ensure_free_agency_state(updated)
+    offer_id = chosen_offer.get("offerId") or chosen_offer.get("id") or ""
+    processed_token = f"{row_player_key}|{target_row.get('offeringTeamName') or chosen_offer.get('teamName')}|{offer_id}"
+    processed = [str(key) for key in state.get("processedRfaMatchDecisionKeys", [])]
+    for key in [str(row_player_key), processed_token]:
+        if key and key not in processed:
+            processed.append(key)
+    state["processedRfaMatchDecisionKeys"] = processed[-200:]
     clear_pending_rfa_match_decision_for_player(state, row_player_key)
     state["pendingUserTeamName"] = rights_team_name
     state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, rights_team_name) if rights_team_name else None
@@ -9774,15 +10062,21 @@ def score_offer_for_player_with_fit(
         )
 
     # Team quality/direction is the second major factor after contract quality.
+    power_context = get_fa_team_power_context(league_data, team_name, team_profile = team_profile)
     score += get_team_quality_player_interest_adjustment(
         league_data = league_data,
         team_name = team_name,
         player = player,
         direction = direction,
+        team_profile = team_profile,
     )
 
-    if age >= 30 and direction in ["contending", "win now"]:
-        score += 0.018
+    if age >= 31 and direction in ["contending", "win now"]:
+        score += 0.020
+    if age >= 33 and power_context.get("topEight") and salary_ratio >= 0.88:
+        score += 0.022
+    if age >= 31 and power_context.get("bottomTen") and salary_ratio < 1.10:
+        score -= 0.020
     if age <= 25 and direction in ["rebuilding", "retooling"]:
         score += 0.018
     if potential - overall >= 2 and direction in ["rebuilding", "retooling"]:
@@ -9804,6 +10098,15 @@ def score_offer_for_player_with_fit(
             score += 0.016
         elif fit.get("positionBucket") in (fit.get("weakestPositions", []) or [])[:2]:
             score += 0.009
+
+        if age <= 25:
+            score += need_score * 0.020
+            if direction in ["rebuilding", "retooling"]:
+                score += need_score * 0.014
+        elif 26 <= age <= 30 and need_score >= 0.45:
+            score += 0.010
+        elif age >= 31 and power_context.get("topTwelve") and need_score >= 0.35:
+            score += 0.010
 
     if age >= 35 and offered_years >= 3:
         score -= 0.050
@@ -14164,6 +14467,7 @@ def trim_cpu_team_to_season_roster_limits(
     team: Dict[str, Any],
     season_year: int,
 ) -> Dict[str, Any]:
+    normalize_development_roster_buckets(team)
     team_name = team.get("name") or team.get("teamName") or "Unknown Team"
     actions = {
         "twoWayAssignments": [],
@@ -15025,6 +15329,7 @@ def repair_cpu_teams_to_min_roster(
         user_team_name = user_team_name,
         team_name_scope = None,
     ):
+        normalize_development_roster_buckets(team)
         team_name = team.get("name")
         player_count = len(get_team_players(team))
         two_way_count = len(team.get("twoWayPlayers") or [])

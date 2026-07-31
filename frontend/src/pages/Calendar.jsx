@@ -15,11 +15,14 @@ import { cancelCpuTradeWorkerGeneration, getCpuCpuTradeCandidates, prewarmCpuTra
 import { prewarmCpuTradeValidationPool } from "../api/cpuTradeValidationPool.js";
 import {
   addGeneratedCpuTradeCandidates,
+  buildCpuMegaTradeWorkerContext,
   buildCpuTradeBankSummary,
   buildCpuTradeWorkerContext,
   clearCpuTradeBankTestConfig,
   ensureCpuTradeBankState,
   executeDueCpuTradeFromBank,
+  executeImmediateCpuMegaTradeFromCandidates,
+  getCpuMegaTradeGenerationPolicy,
   getCpuTradeBankGenerationPolicy,
   getCpuTradeBankRunwayStatus,
   readCpuTradeBankTestConfig,
@@ -50,6 +53,8 @@ import {
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import { archiveCurrentSeasonIntoPlayerCards } from "../utils/playerCareerHistory.js";
+import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.js";
 import {
   enqueueCpuTradeLeagueSave,
   flushCpuTradeLeagueSaves,
@@ -2572,6 +2577,7 @@ const selectedTeamCanSim = !selectedTeamSimBlockMessage;
   const SCHED_KEY = "bm_schedule_v3";
   const RESULT_KEY = "bm_results_v2";
   const PLAYER_STATS_KEY = "bm_player_stats_v1";
+  const AWARD_DISPLAY_STATS_KEY = "bm_award_display_stats_v1";
   const CALENDAR_MOOD_CONTEXT_KEY = "bm_calendar_mood_context_v1";
   // ===============================
   // FAST RESULTS STORE (per-game)
@@ -3301,18 +3307,25 @@ function applyGameToPlayerStats(stats, slim, game) {
   if (!slim?.box) return stats;
 
   const toNum = (v) => {
+    if (typeof v === "string" && v.includes(":")) {
+      const [mins, secs] = v.split(":").map((part) => Number(part));
+      const m = Number.isFinite(mins) ? mins : 0;
+      const s = Number.isFinite(secs) ? secs : 0;
+      return m + s / 60;
+    }
     const n = Number(v);
     return Number.isFinite(n) ? n : 0;
   };
 
   const updateSide = (side, teamName) => {
     const rows = slim.box[side] || [];
+    const playedRows = rows.filter((row) => toNum(row?.min ?? row?.minutes) > 0);
 
 // Determine starters. Every non-starter appearance counts as a bench appearance for 6MOY.
-const sortedByMin = [...rows].sort((a, b) => toNum(b.min) - toNum(a.min));
+const sortedByMin = [...playedRows].sort((a, b) => toNum(b.min) - toNum(a.min));
 const starters = new Set(sortedByMin.slice(0, 5).map((r) => r.player));
 
-    for (const row of rows) {
+    for (const row of playedRows) {
       const key = `${row.player}__${teamName}`;
       const cur = stats[key] || {
         player: row.player,
@@ -3716,8 +3729,8 @@ function isRegularSeasonComplete(schedule, results) {
 }
 
 
-function mergeAwardDisplayStatsForStorage(rawStats = {}, combinedStats = {}) {
-  const next = { ...(rawStats || {}) };
+function buildAwardDisplayStatsForStorage(combinedStats = {}) {
+  const next = {};
 
   for (const [key, row] of Object.entries(combinedStats || {})) {
     if (!row?.player || !row?.team || Number(row?.gp || 0) <= 0) continue;
@@ -3732,6 +3745,16 @@ function mergeAwardDisplayStatsForStorage(rawStats = {}, combinedStats = {}) {
   }
 
   return next;
+}
+
+function saveAwardDisplayStats(combinedStats = {}) {
+  const displayStats = buildAwardDisplayStatsForStorage(combinedStats);
+  try {
+    writeCompressedJson(AWARD_DISPLAY_STATS_KEY, displayStats);
+  } catch (error) {
+    console.warn("[Calendar] failed to save dedicated award display stats", error);
+  }
+  return displayStats;
 }
 
 function awardFallbackPerGame(row = {}, key) {
@@ -3878,6 +3901,78 @@ function buildFallbackSeasonAwards(playersArray = [], teamsWithWins = [], regula
   };
 }
 
+
+async function finalizeCompletedRegularSeasonPlayerCardsAfterAwards({ awards, schedule, results, activeTeams, playerStats }) {
+  if (!isRegularSeasonComplete(schedule, results)) return null;
+
+  const displaySeasonYear = Number(seasonYear || 0) + 1;
+  if (!Number.isFinite(displaySeasonYear) || displaySeasonYear <= 1900) return null;
+
+  try {
+    // Keep the exact completed regular-season stat map available while the
+    // player-card archive runs. Award-display helper rows can live in storage
+    // too, but this guarantees the real season rows are archived before any
+    // playoffs/offseason/dev transition has a chance to clear the live key.
+    if (playerStats && Object.keys(playerStats || {}).length) {
+      savePlayerStats(playerStats);
+    }
+
+    const seasonStartForArchive = displaySeasonYear - 1;
+    const archiveRosterLeague = Array.isArray(activeTeams) && activeTeams.length
+      ? { ...leagueData, teams: activeTeams }
+      : leagueData;
+    const withStatsArchive = ensureCompletedSeasonStatsArchive(
+      leagueData,
+      seasonStartForArchive,
+      {
+        // Use the exact in-memory completed-season stat map rather than hoping a
+        // later transition can reconstruct it after storage cleanup.
+        playerStatsMap: playerStats,
+        rosterLeagueData: archiveRosterLeague,
+      }
+    );
+    const withPlayerCards = archiveCurrentSeasonIntoPlayerCards(withStatsArchive, displaySeasonYear);
+
+    const archivedYears = {
+      ...(withPlayerCards.playerHistoryArchivedYears || {}),
+      [String(displaySeasonYear)]: {
+        displaySeasonYear,
+        seasonStartYear: seasonStartForArchive,
+        source: "Calendar.computeAndSaveCalendarAwards",
+        archivedAt: new Date().toISOString(),
+      },
+    };
+    const finalized = {
+      ...withPlayerCards,
+      playerHistoryArchivedYears: archivedYears,
+    };
+
+    setLeagueData(finalized);
+    await saveLeagueData(finalized);
+
+    if (typeof window !== "undefined" && window.__debugSimLogs) {
+      console.log("[Calendar] finalized completed regular-season player-card history", {
+        displaySeasonYear,
+        seasonStartYear: seasonStartForArchive,
+      });
+    }
+
+    return finalized;
+  } catch (error) {
+    console.warn("[Calendar] failed to finalize completed regular-season player-card history", error);
+    return null;
+  } finally {
+    // Restore award-display rows for Awards/All-NBA UI after the archive uses
+    // the real completed-season rows. This keeps cards correct without changing
+    // the existing awards screen data source.
+    try {
+      const currentStats = playerStats && Object.keys(playerStats || {}).length ? playerStats : loadPlayerStats();
+      const combinedCurrentRosterStats = buildCombinedAwardStatsForCurrentRosters(currentStats, activeTeams);
+      saveAwardDisplayStats(combinedCurrentRosterStats);
+    } catch {}
+  }
+}
+
 async function computeAndSaveCalendarAwards({
   playerStats,
   schedule,
@@ -3924,8 +4019,7 @@ async function computeAndSaveCalendarAwards({
     }
 
     const combinedCurrentRosterStats = buildCombinedAwardStatsForCurrentRosters(currentStats, activeTeams);
-    const awardDisplayStats = mergeAwardDisplayStatsForStorage(currentStats, combinedCurrentRosterStats);
-    savePlayerStats(awardDisplayStats);
+    saveAwardDisplayStats(combinedCurrentRosterStats);
 
     const eligiblePlayerCount = getAwardEligiblePlayerCount(combinedCurrentRosterStats);
     if (regularSeasonComplete && eligiblePlayerCount === 0) {
@@ -4043,11 +4137,18 @@ async function computeAndSaveCalendarAwards({
       reconcileResultStoreV3WithSchedule(schedule);
       for (const id of loadResultsIndexV3()) loadOneResultV3(id);
       clearNonCriticalQuotaCaches();
-      savePlayerStats(awardDisplayStats);
+      saveAwardDisplayStats(combinedCurrentRosterStats);
       persistAwards();
     }
 
     appendPlayerMoodEvents(buildAwardMoodEvents(awards, focusedDate || fmt(seasonEnd)));
+    await finalizeCompletedRegularSeasonPlayerCardsAfterAwards({
+      awards,
+      schedule,
+      results,
+      activeTeams,
+      playerStats: currentStats,
+    });
     return awards;
   } catch (e) {
     console.error("[Calendar] awards computation failed after sim-to-date:", e);
@@ -4168,6 +4269,7 @@ useEffect(() => {
     setPendingSimIntent(null);
     localStorage.removeItem("bm_awards_latest");
     localStorage.removeItem("bm_awards_v1");
+    localStorage.removeItem(AWARD_DISPLAY_STATS_KEY);
     localStorage.removeItem(CLUTCH_STATS_KEY);
     parsedResults = {};
     parsedPlayerStats = {};
@@ -5470,13 +5572,92 @@ async function runCpuCpuTradePassForDate({
       }
     }
 
-    const leagueDataBeforeCpuTradeExecution = nextLeagueData;
-    const execution = executeDueCpuTradeFromBank({
-      leagueData: nextLeagueData,
-      context: baseContext,
-      testConfig,
-      maxCandidateChecks: baseContext.preseasonTradeWindow ? 18 : (daysToDeadline <= 14 ? 10 : 8),
-    });
+    let immediateMegaExecution = null;
+    let immediateMegaLeagueBeforeExecution = null;
+
+    const megaTradePolicy = getCpuMegaTradeGenerationPolicy(
+      nextLeagueData?.cpuTradeBankState,
+      baseContext,
+      testConfig
+    );
+    if (
+      megaTradePolicy.shouldGenerate &&
+      generationJobRef?.current?.status !== "pending"
+    ) {
+      const megaContext = {
+        ...baseContext,
+        generatedDate: currentDate,
+        generatedDayIndex: Number(dayIndex || 0),
+        megaTradeMode: true,
+        megaTradeHardSweep: Boolean(megaTradePolicy.hardSweep),
+      };
+
+      try {
+        if (megaTradePolicy.hardSweep && megaTradePolicy.localDirect) {
+          // The deadline mega deal is a curated legal bonus event.  Do not spin
+          // up the broad Python search here; it was the source of deadline-day
+          // stalls and still failed to finish a Booker/Tatum style deal.
+          immediateMegaLeagueBeforeExecution = nextLeagueData;
+          immediateMegaExecution = executeImmediateCpuMegaTradeFromCandidates({
+            leagueData: nextLeagueData,
+            response: { ok: true, candidates: [], debug: { megaTradeMode: true, localDirect: true } },
+            context: megaContext,
+            testConfig,
+            maxCandidateChecks: megaTradePolicy.directExecutionChecks || 24,
+          });
+          nextLeagueData = immediateMegaExecution?.leagueData || nextLeagueData;
+          bankChanged = bankChanged || Boolean(immediateMegaExecution?.changed);
+          foregroundReason = immediateMegaExecution?.executed
+            ? "mega_deadline_trade_executed"
+            : `mega_deadline_direct_sweep:${immediateMegaExecution?.reason || "no_valid_trade"}`;
+          shouldForegroundGenerate = shouldForegroundGenerate || Boolean(immediateMegaExecution?.executed);
+        } else {
+          const workerContext = buildCpuMegaTradeWorkerContext(
+            nextLeagueData?.cpuTradeBankState,
+            baseContext,
+            megaTradePolicy
+          );
+          const response = await getCpuCpuTradeCandidates(
+            makeCpuTradeGenerationLeagueData(nextLeagueData),
+            workerContext
+          );
+          const megaResponse = response || { ok: true, candidates: [], debug: { megaTradeMode: true } };
+          const added = await addGeneratedCpuTradeCandidates({
+            leagueData: nextLeagueData,
+            response: megaResponse,
+            context: megaContext,
+            testConfig,
+            exactEvaluationLimit: megaTradePolicy.exactEvaluations,
+          });
+          nextLeagueData = added.leagueData || nextLeagueData;
+          bankChanged = bankChanged || added.changed;
+          if (added.accepted?.length) {
+            shouldForegroundGenerate = true;
+            foregroundReason = "mega_trade_candidate_ready";
+          } else {
+            foregroundReason = `mega_trade_generation:${megaResponse?.skippedReason || "no_accepted_candidate"}`;
+          }
+        }
+      } catch (error) {
+        foregroundReason = `mega_trade_generation_failed:${error?.message || String(error || "unknown")}`;
+        console.warn("[CPU Trade Bank] mega trade generation failed", error);
+      }
+    }
+
+    let leagueDataBeforeCpuTradeExecution = immediateMegaExecution?.executed
+      ? (immediateMegaLeagueBeforeExecution || nextLeagueData)
+      : nextLeagueData;
+    let execution = immediateMegaExecution?.executed ? immediateMegaExecution : null;
+
+    if (!execution) {
+      leagueDataBeforeCpuTradeExecution = nextLeagueData;
+      execution = executeDueCpuTradeFromBank({
+        leagueData: nextLeagueData,
+        context: baseContext,
+        testConfig,
+        maxCandidateChecks: baseContext.preseasonTradeWindow ? 18 : (daysToDeadline <= 14 ? 10 : 8),
+      });
+    }
 
     if (execution?.leagueData) nextLeagueData = execution.leagueData;
     bankChanged = bankChanged || Boolean(execution?.changed);
@@ -7037,6 +7218,7 @@ if (
 
   // keep your player stats wipe
   localStorage.removeItem(PLAYER_STATS_KEY);
+  localStorage.removeItem(AWARD_DISPLAY_STATS_KEY);
   localStorage.removeItem(CLUTCH_STATS_KEY);
   localStorage.removeItem("bm_all_stars_v1");
   localStorage.removeItem(TRADE_DESK_FEED_KEY);
@@ -7390,6 +7572,7 @@ function devClearSeasonCheckpointState() {
   localStorage.removeItem("bm_all_stars_v1");
   localStorage.removeItem("bm_awards_latest");
   localStorage.removeItem("bm_awards_v1");
+  localStorage.removeItem(AWARD_DISPLAY_STATS_KEY);
   localStorage.removeItem(CLUTCH_STATS_KEY);
   localStorage.removeItem("bm_postseason_v2");
   localStorage.removeItem("bm_champ_v1");
@@ -7499,6 +7682,13 @@ async function handleDevQuickSeasonJump(mode) {
     }
 
     if (mode === "playoffs") {
+      await finalizeCompletedRegularSeasonPlayerCardsAfterAwards({
+        awards: null,
+        schedule: nextSchedule,
+        results: nextResults,
+        activeTeams: teams,
+        playerStats,
+      });
       navigate("/playoffs");
     }
   } catch (err) {

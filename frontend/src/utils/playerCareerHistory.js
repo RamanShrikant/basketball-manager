@@ -102,6 +102,93 @@ function buildArchivedSeasonRow(rec, seasonYear, teamLogoMap) {
   };
 }
 
+function statDisplayNumber(value, fallback = 0) {
+  const n = Number(String(value ?? "").replace("%", ""));
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function archivedPlayerSnapshotHasGames(row = {}) {
+  const stats = row?.stats && typeof row.stats === "object" ? row.stats : {};
+  const games = statDisplayNumber(row?.games ?? row?.gp ?? row?.GP ?? stats.GP, 0);
+  return games > 0;
+}
+
+function buildArchivedSeasonRowFromSnapshot(row, seasonYear, teamLogoMap) {
+  const stats = row?.stats && typeof row.stats === "object" ? row.stats : {};
+  const teamName = row?.teamName || row?.team || "Free Agent";
+  return {
+    seasonYear,
+    teamName,
+    teamLogo: row?.teamLogo || row?.logo || teamLogoMap[teamName] || "",
+    games: statDisplayNumber(row?.games ?? row?.gp ?? row?.GP ?? stats.GP, 0),
+    ppg: round1(statDisplayNumber(row?.ppg ?? stats.PTS, 0)),
+    rpg: round1(statDisplayNumber(row?.rpg ?? stats.REB, 0)),
+    apg: round1(statDisplayNumber(row?.apg ?? stats.AST, 0)),
+    spg: round1(statDisplayNumber(row?.spg ?? stats.STL, 0)),
+    bpg: round1(statDisplayNumber(row?.bpg ?? stats.BLK, 0)),
+    fgPct: round1(statDisplayNumber(row?.fgPct ?? stats.FG, 0)),
+    threePct: round1(statDisplayNumber(row?.threePct ?? stats["3P"], 0)),
+    ftPct: round1(statDisplayNumber(row?.ftPct ?? stats.FT, 0)),
+    source: "sim",
+    simulated: true,
+    recoveredFromStatsArchive: true,
+  };
+}
+
+function findRegularStatsArchiveForPlayerHistory(leagueData, completedSeasonYear) {
+  const targetDisplayYear = Number(completedSeasonYear || 0);
+  const targetStartYear = targetDisplayYear > 1900 ? targetDisplayYear - 1 : 0;
+  const history = Array.isArray(leagueData?.seasonHistory) ? leagueData.seasonHistory : [];
+
+  const candidates = history
+    .filter((entry) => entry?.statsArchive?.regular?.playerRows)
+    .map((entry) => {
+      const entryYear = Number(entry?.seasonYear || 0);
+      const snapshotYear = Number(entry?.statsArchive?.regular?.seasonYear || 0);
+      const displayYear = snapshotYear > 1900 ? snapshotYear + 1 : (entryYear > 1900 ? entryYear + 1 : 0);
+      let priority = 0;
+      if (entryYear === targetStartYear || snapshotYear === targetStartYear) priority = 4;
+      else if (entryYear === targetDisplayYear || snapshotYear === targetDisplayYear) priority = 3;
+      else if (displayYear === targetDisplayYear) priority = 2;
+      else if (targetDisplayYear <= 0) priority = 1;
+      return { entry, entryYear, snapshotYear, displayYear, priority };
+    })
+    .filter((row) => row.priority > 0)
+    .sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return Number(b.snapshotYear || b.entryYear || 0) - Number(a.snapshotYear || a.entryYear || 0);
+    });
+
+  return candidates[0] || null;
+}
+
+function applyArchivedStatsSnapshotToClonedLeague(updated, completedSeasonYear, existingIndex = null) {
+  const archiveCandidate = findRegularStatsArchiveForPlayerHistory(updated, completedSeasonYear);
+  const playerRows = archiveCandidate?.entry?.statsArchive?.regular?.playerRows || [];
+  if (!Array.isArray(playerRows) || !playerRows.length) {
+    return { updated, index: existingIndex || buildPlayerLocationIndex(updated), appliedRows: 0 };
+  }
+
+  const displaySeasonYear = Number(completedSeasonYear || archiveCandidate.displayYear || 0);
+  if (!Number.isFinite(displaySeasonYear) || displaySeasonYear <= 1900) {
+    return { updated, index: existingIndex || buildPlayerLocationIndex(updated), appliedRows: 0 };
+  }
+
+  const index = existingIndex || buildPlayerLocationIndex(updated);
+  const teamLogoMap = getTeamLogoMap(updated);
+  let appliedRows = 0;
+
+  for (const snapshotRow of playerRows) {
+    const playerName = snapshotRow?.name || snapshotRow?.player;
+    if (!playerName || !archivedPlayerSnapshotHasGames(snapshotRow)) continue;
+    const row = buildArchivedSeasonRowFromSnapshot(snapshotRow, displaySeasonYear, teamLogoMap);
+    updateIndexedPlayer(index, playerName, (player) => upsertSeasonRow(player, row));
+    appliedRows += 1;
+  }
+
+  return { updated, index, appliedRows };
+}
+
 function ensureHistory(player) {
   const next = { ...player };
 
@@ -284,6 +371,7 @@ function applyStatsToClonedLeague(updated, seasonYear) {
   const statsMap = readCompressedOrJson(PLAYER_STATS_KEY, {});
   const teamLogoMap = getTeamLogoMap(updated);
   const index = buildPlayerLocationIndex(updated);
+  let appliedLiveRows = 0;
   for (const rec of Object.values(statsMap || {})) {
     const playerName = rec?.player;
     if (!playerName || !Number(rec?.gp || 0)) continue;
@@ -295,8 +383,18 @@ function applyStatsToClonedLeague(updated, seasonYear) {
     if (!seasonStatRecordHasRealProduction(rec)) continue;
     const row = buildArchivedSeasonRow(rec, seasonYear, teamLogoMap);
     updateIndexedPlayer(index, playerName, (player) => upsertSeasonRow(player, row));
+    appliedLiveRows += 1;
   }
-  return { updated, index };
+
+  // Some dev/full-offseason paths may arrive here after live stat keys were
+  // already cleared. The compact seasonHistory statsArchive is the fallback
+  // source of truth, so recover one player-card row per player/team/season from
+  // that archive instead of losing the completed simulated season.
+  if (appliedLiveRows === 0) {
+    return applyArchivedStatsSnapshotToClonedLeague(updated, seasonYear, index);
+  }
+
+  return { updated, index, appliedRows: appliedLiveRows };
 }
 
 function applyAwardsToClonedLeague(updated, seasonYear, existingIndex = null) {

@@ -7,12 +7,24 @@ export const REGULAR_SCHEDULE_KEY = "bm_schedule_v3";
 export const REGULAR_RESULT_INDEX_KEY = "bm_results_index_v3";
 export const REGULAR_RESULT_PREFIX = "bm_result_v3_";
 export const SEASON_STATS_ARCHIVE_VERSION = "season_stats_archive_v1";
+export const COMPLETED_STATS_BACKUP_KEY = "bm_completed_stats_archive_v2";
+export const COMPLETED_REGULAR_PLAYER_STATS_KEY = "bm_completed_regular_player_stats_v2";
 
 const BEST_OF_SEVEN_HOME_ORDER = ["H", "H", "A", "A", "H", "A", "H"];
 
 function safeNumber(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function parseBoxMinutes(value) {
+  if (typeof value === "string" && value.includes(":")) {
+    const [mins, secs] = value.split(":").map((part) => Number(part));
+    const m = Number.isFinite(mins) ? mins : 0;
+    const s = Number.isFinite(secs) ? secs : 0;
+    return m + s / 60;
+  }
+  return safeNumber(value, 0);
 }
 
 function round1(value) {
@@ -62,6 +74,17 @@ export function readStorageValue(key, fallback = null) {
     return readCompressedOrJsonValue(localStorage.getItem(key), fallback);
   } catch {
     return fallback;
+  }
+}
+
+function writeCompressedStorageValue(key, value) {
+  try {
+    const json = JSON.stringify(value);
+    const compressed = LZString.compressToUTF16(json);
+    localStorage.setItem(key, `lz:${compressed}`);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -230,9 +253,154 @@ function createRawPlayerStat(playerName, teamName) {
   };
 }
 
+
+export function stripAwardDisplayRows(statsMap = {}) {
+  return Object.fromEntries(
+    Object.entries(statsMap || {}).filter(([, row]) => !row?._awardsOnly && !row?._combinedForAwards)
+  );
+}
+
+function isRealRawPlayerStatRow(rec = {}) {
+  if (!rec || rec._awardsOnly || rec._combinedForAwards) return false;
+  const playerName = rec?.player || rec?.name;
+  if (!playerName) return false;
+  return (
+    safeNumber(rec?.gp, 0) > 0 ||
+    safeNumber(rec?.min, 0) > 0 ||
+    safeNumber(rec?.pts, 0) > 0 ||
+    safeNumber(rec?.reb, 0) > 0 ||
+    safeNumber(rec?.ast, 0) > 0
+  );
+}
+
+function addRawStatsInto(target, row = {}) {
+  if (!target || !row) return target;
+  target.gp += safeNumber(row?.gp, 0);
+  target.min += safeNumber(row?.min, 0);
+  target.pts += safeNumber(row?.pts, 0);
+  target.reb += safeNumber(row?.reb, 0);
+  target.ast += safeNumber(row?.ast, 0);
+  target.stl += safeNumber(row?.stl, 0);
+  target.blk += safeNumber(row?.blk, 0);
+  target.fgm += safeNumber(row?.fgm, 0);
+  target.fga += safeNumber(row?.fga, 0);
+  target.tpm += safeNumber(row?.tpm, 0);
+  target.tpa += safeNumber(row?.tpa, 0);
+  target.ftm += safeNumber(row?.ftm, 0);
+  target.fta += safeNumber(row?.fta, 0);
+  target.to += safeNumber(row?.to ?? row?.tov ?? row?.turnovers, 0);
+  target.pf += safeNumber(row?.pf ?? row?.fouls, 0);
+  return target;
+}
+
+function combineRawStatsByPlayerName(rawPlayerStats = {}) {
+  const byName = new Map();
+
+  for (const rec of Object.values(rawPlayerStats || {})) {
+    if (!isRealRawPlayerStatRow(rec)) continue;
+    const playerName = rec?.player || rec?.name;
+    if (!playerName) continue;
+
+    if (!byName.has(playerName)) byName.set(playerName, createRawPlayerStat(playerName, rec?.team || rec?.teamName || ""));
+    const target = byName.get(playerName);
+    target.team = rec?.team || rec?.teamName || target.team || "";
+    addRawStatsInto(target, rec);
+  }
+
+  return byName;
+}
+
+export function snapshotHasUsefulPlayerStats(snapshot) {
+  return Boolean(
+    snapshot &&
+      Array.isArray(snapshot.playerRows) &&
+      snapshot.playerRows.some((row) => safeNumber(row?.stats?.GP ?? row?.gp, 0) > 0)
+  );
+}
+
+export function snapshotHasAnyTeamGames(snapshot) {
+  return Boolean(
+    snapshot &&
+      Array.isArray(snapshot.teamRows) &&
+      snapshot.teamRows.some((row) => safeNumber(row?.stats?.GP ?? row?.gamesPlayed ?? row?.gp, 0) > 0)
+  );
+}
+
+function snapshotIsUseful(snapshot) {
+  return snapshotHasUsefulPlayerStats(snapshot) || snapshotHasAnyTeamGames(snapshot);
+}
+
+function readCompletedStatsBackup() {
+  const backup = readStorageValue(COMPLETED_STATS_BACKUP_KEY, null);
+  if (!backup || typeof backup !== "object") return null;
+  return backup;
+}
+
+function readCompletedRegularPlayerStatsBackup(seasonYear = null) {
+  const backup = readStorageValue(COMPLETED_REGULAR_PLAYER_STATS_KEY, null);
+  if (!backup || typeof backup !== "object") return null;
+  const targetYear = safeNumber(seasonYear, 0);
+  if (targetYear && safeNumber(backup?.seasonYear, 0) !== targetYear) return null;
+  const stats = backup?.playerStatsMap || backup?.stats || null;
+  if (!stats || typeof stats !== "object") return null;
+  return stats;
+}
+
+function persistCompletedRegularPlayerStatsBackup(seasonYear, playerStatsMap) {
+  const year = safeNumber(seasonYear, 0);
+  if (!year) return;
+  if (!playerStatsMap || typeof playerStatsMap !== "object") return;
+  if (!Object.values(playerStatsMap).some(isRealRawPlayerStatRow)) return;
+
+  writeCompressedStorageValue(COMPLETED_REGULAR_PLAYER_STATS_KEY, {
+    version: SEASON_STATS_ARCHIVE_VERSION,
+    seasonYear: year,
+    playerStatsMap,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+function persistCompletedStatsBackup(seasonYear, regular, playoffs) {
+  const year = safeNumber(seasonYear, 0);
+  if (!year) return;
+
+  const previous = readCompletedStatsBackup();
+  const sameSeason = safeNumber(previous?.seasonYear, 0) === year;
+  const previousRegular = sameSeason ? previous?.regular || null : null;
+  const previousPlayoffs = sameSeason ? previous?.playoffs || null : null;
+
+  const nextRegular = snapshotHasUsefulPlayerStats(regular)
+    ? regular
+    : snapshotHasUsefulPlayerStats(previousRegular)
+    ? previousRegular
+    : regular || previousRegular || null;
+  const nextPlayoffs = snapshotIsUseful(playoffs)
+    ? playoffs
+    : snapshotIsUseful(previousPlayoffs)
+    ? previousPlayoffs
+    : playoffs || previousPlayoffs || null;
+
+  // Never replace the last useful completed-season backup with an empty
+  // snapshot created by a later offseason/progression cleanup path.
+  if (!snapshotIsUseful(nextRegular) && !snapshotIsUseful(nextPlayoffs)) return;
+
+  writeCompressedStorageValue(COMPLETED_STATS_BACKUP_KEY, {
+    version: SEASON_STATS_ARCHIVE_VERSION,
+    seasonYear: year,
+    regular: nextRegular,
+    playoffs: nextPlayoffs,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 function addBoxRow(target, teamName, row) {
   const playerName = row?.player || row?.player_name || row?.name;
   if (!playerName || !teamName) return;
+
+  const minutes = parseBoxMinutes(row?.min ?? row?.minutes);
+  // Box-score exports can include every roster player with 0.0 minutes. Those
+  // are DNPs and must not count as games played in playoff/offseason archives.
+  if (minutes <= 0) return;
 
   const key = `${playerName}__${teamName}`;
   if (!target[key]) target[key] = createRawPlayerStat(playerName, teamName);
@@ -243,7 +411,7 @@ function addBoxRow(target, teamName, row) {
   const ft = parseMadeAttempts(row?.ft);
 
   rec.gp += 1;
-  rec.min += safeNumber(row?.min ?? row?.minutes, 0);
+  rec.min += minutes;
   rec.pts += safeNumber(row?.pts ?? row?.points, 0);
   rec.reb += safeNumber(row?.reb ?? row?.rebounds, 0);
   rec.ast += safeNumber(row?.ast ?? row?.assists, 0);
@@ -386,6 +554,76 @@ function buildRegularSeasonRowsFromStorage(leagueData) {
   }));
 }
 
+
+function buildRegularPlayerStatsFromStoredBoxScores() {
+  const schedule = readStorageValue(REGULAR_SCHEDULE_KEY, {}) || {};
+  const results = readRegularSeasonResultsV3();
+  const scheduleById = new Map();
+
+  for (const games of Object.values(schedule || {})) {
+    for (const game of games || []) {
+      if (game?.id == null) continue;
+      scheduleById.set(String(game.id), game);
+    }
+  }
+
+  const rawPlayerStats = {};
+  for (const [gameId, result] of Object.entries(results || {})) {
+    const game = scheduleById.get(String(gameId));
+    if (!game || !result?.box) continue;
+    for (const row of result?.box?.home || []) addBoxRow(rawPlayerStats, game.home, row);
+    for (const row of result?.box?.away || []) addBoxRow(rawPlayerStats, game.away, row);
+  }
+
+  return rawPlayerStats;
+}
+
+export function readCanonicalRegularPlayerStatsMap() {
+  const stored = readStorageValue(PLAYER_STATS_KEY, {}) || {};
+  const hasAwardHelpers = Object.values(stored).some(
+    (row) => row?._awardsOnly || row?._combinedForAwards
+  );
+
+  if (!hasAwardHelpers) return stored;
+
+  // Older builds replaced a traded player's current-team segment with an
+  // awards-only combined row. Rebuild the canonical season map from actual
+  // game box scores when those results are still available, then repair the
+  // live key so every other stats consumer sees the same source of truth.
+  const rebuilt = buildRegularPlayerStatsFromStoredBoxScores();
+  if (Object.values(rebuilt || {}).some(isRealRawPlayerStatRow)) {
+    writeCompressedStorageValue(PLAYER_STATS_KEY, rebuilt);
+    return rebuilt;
+  }
+
+  return stripAwardDisplayRows(stored);
+}
+
+function chooseUsefulRegularRawStats(...candidates) {
+  for (const candidate of candidates) {
+    if (
+      candidate &&
+      typeof candidate === "object" &&
+      Object.values(candidate).some(isRealRawPlayerStatRow)
+    ) {
+      return candidate;
+    }
+  }
+  return candidates.find((candidate) => candidate && typeof candidate === "object") || {};
+}
+
+function buildRegularSnapshotFromStoredBoxScores(leagueData, seasonYear = null) {
+  const rawPlayerStats = buildRegularPlayerStatsFromStoredBoxScores();
+  if (!Object.values(rawPlayerStats || {}).some(isRealRawPlayerStatRow)) return null;
+
+  return buildRegularSeasonStatsSnapshot(
+    leagueData,
+    rawPlayerStats,
+    buildRegularSeasonRowsFromStorage(leagueData),
+    seasonYear
+  );
+}
+
 function buildSnapshotFromRaw({
   seasonYear,
   label,
@@ -393,12 +631,42 @@ function buildSnapshotFromRaw({
   rawPlayerStats,
   rawTeamStats,
   includeZeroRosterPlayers = true,
+  combinePlayerStatsToRosterTeams = false,
 }) {
   const maps = teamMetaMaps(teams);
   const playerRows = [];
   const addedPlayerKeys = new Set();
 
+  if (combinePlayerStatsToRosterTeams) {
+    const combinedByName = combineRawStatsByPlayerName(rawPlayerStats || {});
+
+    for (const team of teams || []) {
+      const teamName = team?.name || team?.teamName || "";
+      for (const player of team?.players || []) {
+        const playerName = player?.name || player?.player;
+        if (!playerName || !teamName) continue;
+        const key = `${playerName}__${teamName}`;
+        const rec = combinedByName.get(playerName) || null;
+        playerRows.push({
+          ...player,
+          name: playerName,
+          player: playerName,
+          teamName,
+          team: teamName,
+          teamLogo: maps.logoByTeam.get(teamName) || team.logo || "",
+          headshot: resolvePlayerImage(player),
+          stats: rec ? toPlayerDisplayStats({ ...rec, team: teamName }) : blankPlayerStats(),
+        });
+        addedPlayerKeys.add(key);
+      }
+    }
+  } else {
+
   for (const rec of Object.values(rawPlayerStats || {})) {
+    // Awards-page combined/helper rows are useful for award races, but they are
+    // not real per-team season rows and should never inflate player-card history
+    // or rookie eligibility recovery archives.
+    if (rec?._awardsOnly || rec?._combinedForAwards) continue;
     const playerName = rec?.player || rec?.name;
     const teamName = rec?.team || rec?.teamName;
     if (!playerName || !teamName) continue;
@@ -422,7 +690,9 @@ function buildSnapshotFromRaw({
     addedPlayerKeys.add(key);
   }
 
-  if (includeZeroRosterPlayers) {
+  }
+
+  if (includeZeroRosterPlayers && !combinePlayerStatsToRosterTeams) {
     for (const team of teams) {
       for (const player of team.players || []) {
         const key = `${player.name}__${team.name}`;
@@ -528,6 +798,7 @@ export function buildRegularSeasonStatsSnapshot(
     rawPlayerStats: playerStatsMap || {},
     rawTeamStats: normalizedRows,
     includeZeroRosterPlayers: true,
+    combinePlayerStatsToRosterTeams: true,
   });
 }
 
@@ -624,7 +895,7 @@ export function buildPlayoffStatsSnapshot(
     teams: playoffTeams,
     rawPlayerStats,
     rawTeamStats: Array.from(rawTeams.values()),
-    includeZeroRosterPlayers: false,
+    includeZeroRosterPlayers: true,
   });
 }
 
@@ -639,7 +910,11 @@ export function getLatestSeasonHistoryEntry(leagueData, { requireArchive = false
   )[0] || null;
 }
 
-export function ensureCompletedSeasonStatsArchive(leagueData, seasonStartYear) {
+export function ensureCompletedSeasonStatsArchive(
+  leagueData,
+  seasonStartYear,
+  options = {}
+) {
   if (!leagueData) return leagueData;
 
   const next = safeClone(leagueData);
@@ -653,33 +928,79 @@ export function ensureCompletedSeasonStatsArchive(leagueData, seasonStartYear) {
   }
 
   const entry = history[index] || {};
-  const playerStatsMap = readStorageValue(PLAYER_STATS_KEY, {}) || {};
-  const postseasonState = readStorageValue(POSTSEASON_KEY, null);
-  const playoffResults = readStorageValue(PLAYOFF_RESULTS_KEY, {}) || {};
+  const providedPlayerStats = options?.playerStatsMap;
+  const providedHasRealStats = Boolean(
+    providedPlayerStats &&
+      typeof providedPlayerStats === "object" &&
+      Object.values(providedPlayerStats).some(isRealRawPlayerStatRow)
+  );
+  const storedPlayerStats = readCanonicalRegularPlayerStatsMap();
+  const storedHasRealStats = Boolean(
+    storedPlayerStats &&
+      typeof storedPlayerStats === "object" &&
+      Object.values(storedPlayerStats).some(isRealRawPlayerStatRow)
+  );
+  const rawBackupPlayerStats = readCompletedRegularPlayerStatsBackup(targetYear);
+  const rebuiltRegularPlayerStats = !providedHasRealStats && !storedHasRealStats
+    ? buildRegularPlayerStatsFromStoredBoxScores()
+    : null;
+  const playerStatsMap = chooseUsefulRegularRawStats(
+    providedPlayerStats,
+    storedPlayerStats,
+    rawBackupPlayerStats,
+    rebuiltRegularPlayerStats
+  );
+  if (Object.values(playerStatsMap || {}).some(isRealRawPlayerStatRow)) {
+    persistCompletedRegularPlayerStatsBackup(targetYear, playerStatsMap);
+  }
+  const postseasonState = options?.postseasonState ?? readStorageValue(POSTSEASON_KEY, null);
+  const playoffResults = options?.playoffResults ?? readStorageValue(PLAYOFF_RESULTS_KEY, {}) ?? {};
+  const rosterLeagueData = options?.rosterLeagueData || next;
 
-  const savedFinalStandings = Array.isArray(entry?.teams) && entry.teams.length
+  const providedStandings = Array.isArray(options?.regularSeasonRows)
+    ? options.regularSeasonRows
+    : null;
+  const savedFinalStandings = providedStandings?.length
+    ? providedStandings
+    : Array.isArray(entry?.teams) && entry.teams.length
     ? entry.teams
     : buildRegularSeasonRowsFromStorage(next);
 
-  const regular = buildRegularSeasonStatsSnapshot(
-    next,
+  const previousArchive = entry?.statsArchive || {};
+  const previousRegular = previousArchive?.regular || null;
+  const previousPlayoffs = previousArchive?.playoffs || null;
+
+  const rebuiltRegular = buildRegularSeasonStatsSnapshot(
+    rosterLeagueData,
     playerStatsMap,
     savedFinalStandings,
     targetYear
   );
 
-  const playoffs = buildPlayoffStatsSnapshot(
-    next,
+  const rebuiltPlayoffs = buildPlayoffStatsSnapshot(
+    rosterLeagueData,
     postseasonState,
     playoffResults,
     targetYear
   );
+
+  // This function is called from several season/offseason paths. Some of those
+  // paths run after live stat storage has already been cleared. Never let a
+  // later empty rebuild overwrite the real completed-season table captured at
+  // the end of the regular season or playoffs.
+  const regular = snapshotHasUsefulPlayerStats(rebuiltRegular) || !snapshotHasUsefulPlayerStats(previousRegular)
+    ? rebuiltRegular
+    : previousRegular;
+  const playoffs = snapshotHasUsefulPlayerStats(rebuiltPlayoffs) || !snapshotHasUsefulPlayerStats(previousPlayoffs)
+    ? rebuiltPlayoffs
+    : previousPlayoffs;
 
   history[index] = {
     ...entry,
     seasonYear: targetYear,
     statsArchive: {
       version: SEASON_STATS_ARCHIVE_VERSION,
+      ...previousArchive,
       regular,
       playoffs,
       archivedAt: new Date().toISOString(),
@@ -689,6 +1010,11 @@ export function ensureCompletedSeasonStatsArchive(leagueData, seasonStartYear) {
   next.seasonHistory = history
     .sort((a, b) => safeNumber(a?.seasonYear, 0) - safeNumber(b?.seasonYear, 0))
     .slice(-10);
+
+  // Keep one compressed latest-season backup outside leagueData. This protects
+  // the offseason stats pages from later stale league saves without retaining
+  // game logs or multiple seasons of duplicate data.
+  persistCompletedStatsBackup(targetYear, regular, playoffs);
 
   return next;
 }
@@ -701,11 +1027,82 @@ export function getLivePlayoffStatsSnapshot(leagueData) {
 }
 
 export function getArchivedStatsSnapshot(leagueData, scope = "regular") {
-  const entry = getLatestSeasonHistoryEntry(leagueData, { requireArchive: true });
-  if (!entry) return null;
-  return scope === "playoffs"
-    ? entry?.statsArchive?.playoffs || null
-    : entry?.statsArchive?.regular || null;
+  const rows = Array.isArray(leagueData?.seasonHistory) ? leagueData.seasonHistory : [];
+  const getScoped = (entry) =>
+    scope === "playoffs" ? entry?.statsArchive?.playoffs || null : entry?.statsArchive?.regular || null;
+
+  const candidates = rows
+    .map((entry) => {
+      const snapshot = getScoped(entry);
+      const seasonYear = safeNumber(snapshot?.seasonYear ?? entry?.seasonYear, 0);
+      return { snapshot, seasonYear, source: "league" };
+    })
+    .filter((row) => row.snapshot);
+
+  const backup = readCompletedStatsBackup();
+  const backupSnapshot = scope === "playoffs" ? backup?.playoffs || null : backup?.regular || null;
+  if (backupSnapshot) {
+    candidates.push({
+      snapshot: backupSnapshot,
+      seasonYear: safeNumber(backupSnapshot?.seasonYear ?? backup?.seasonYear, 0),
+      source: "backup",
+    });
+  }
+
+  const latestKnownYear = candidates.reduce(
+    (max, row) => Math.max(max, safeNumber(row?.seasonYear, 0)),
+    0
+  );
+
+  const hasUsefulStoredRegularSnapshot =
+    scope !== "playoffs" && candidates.some((row) => snapshotHasUsefulPlayerStats(row.snapshot));
+
+  // The exact end-of-season display snapshot is the source of truth. Only
+  // reconstruct from raw totals or box scores when no useful archived snapshot
+  // survived. Rebuilding from the current offseason roster can otherwise move
+  // last season's stats onto the wrong team after roster transactions.
+  if (scope !== "playoffs" && !hasUsefulStoredRegularSnapshot) {
+    const rawBackupPlayerStats = readCompletedRegularPlayerStatsBackup(latestKnownYear || null);
+    if (rawBackupPlayerStats && Object.values(rawBackupPlayerStats).some(isRealRawPlayerStatRow)) {
+      const recoveredFromRawBackup = buildRegularSeasonStatsSnapshot(
+        leagueData,
+        rawBackupPlayerStats,
+        buildRegularSeasonRowsFromStorage(leagueData),
+        latestKnownYear || null
+      );
+      if (snapshotHasUsefulPlayerStats(recoveredFromRawBackup)) {
+        candidates.push({
+          snapshot: recoveredFromRawBackup,
+          seasonYear: safeNumber(recoveredFromRawBackup?.seasonYear ?? latestKnownYear, 0),
+          source: "raw-stats-backup",
+        });
+      }
+    }
+
+    const recovered = buildRegularSnapshotFromStoredBoxScores(leagueData, latestKnownYear || null);
+    if (recovered && snapshotHasUsefulPlayerStats(recovered)) {
+      candidates.push({
+        snapshot: recovered,
+        seasonYear: safeNumber(recovered?.seasonYear ?? latestKnownYear, 0),
+        source: "result-store-recovery",
+      });
+    }
+  }
+
+  const usefulCandidates = candidates.filter((row) =>
+    scope === "playoffs" ? snapshotIsUseful(row.snapshot) : snapshotHasUsefulPlayerStats(row.snapshot)
+  );
+  const rankedCandidates = usefulCandidates.length ? usefulCandidates : candidates;
+
+  rankedCandidates.sort((a, b) => {
+    if (b.seasonYear !== a.seasonYear) return b.seasonYear - a.seasonYear;
+
+    const sourceRank = (source) =>
+      source === "backup" ? 4 : source === "league" ? 3 : source === "raw-stats-backup" ? 2 : 1;
+    return sourceRank(b.source) - sourceRank(a.source);
+  });
+
+  return rankedCandidates[0]?.snapshot || null;
 }
 
 export function seasonLabelFromStartYear(seasonYear) {

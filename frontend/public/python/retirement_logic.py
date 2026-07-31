@@ -304,6 +304,17 @@ def compact_retired_player_record(player: Dict[str, Any]) -> Dict[str, Any]:
         "retirementProbability": float(num(player.get("retirementProbability"), snapshot.get("retirementProbability", 0))),
         "retirementRoll": player.get("retirementRoll"),
         "headshot": player.get("headshot") or player.get("portrait") or player.get("image") or player.get("photo") or player.get("face") or "",
+        "image": player.get("headshot") or player.get("portrait") or player.get("image") or player.get("photo") or player.get("face") or "",
+        "height": player.get("height"),
+        "attrs": copy.deepcopy(player.get("attrs") or player.get("attributes") or []),
+        "offRating": player.get("offRating") or player.get("offense"),
+        "defRating": player.get("defRating") or player.get("defense"),
+        "stamina": player.get("stamina"),
+        "contract": copy.deepcopy(player.get("contract")) if isinstance(player.get("contract"), dict) else None,
+        "history": copy.deepcopy(player.get("history") or player.get("careerHistory") or {}),
+        "accolades": copy.deepcopy(player.get("accolades") or player.get("awards") or player.get("honors") or []),
+        "teamName": player.get("retiredFromTeam") or player.get("currentTeam") or player.get("teamName") or "Free Agency",
+        "team": player.get("retiredFromTeam") or player.get("currentTeam") or player.get("team") or "Free Agency",
     }
 
 
@@ -329,7 +340,12 @@ def compute_retirement_probability(
     age_base_probability = get_age_base_probability(age)
     overall_adjustment = get_overall_rating_adjustment(overall)
 
-    if age <= 32:
+    # Project rule: 80+ OVR players cannot retire. This keeps still-useful
+    # stars/veterans from randomly disappearing while lower-rated aging players
+    # continue to use the normal retirement curve.
+    if overall >= 80:
+        probability = 0.0
+    elif age <= 32:
         probability = 0.0
     elif age >= 44:
         probability = 1.0
@@ -409,7 +425,7 @@ def apply_player_retirements(
             probability = retirement_eval["retirementProbability"]
             roll = rng.random()
 
-            auto_retire = retirement_eval["age"] >= 44
+            auto_retire = retirement_eval["age"] >= 44 and retirement_eval["overall"] < 80
             should_retire = auto_retire or (roll < probability)
 
             if should_retire:
@@ -460,7 +476,7 @@ def apply_player_retirements(
             probability = retirement_eval["retirementProbability"]
             roll = rng.random()
 
-            auto_retire = retirement_eval["age"] >= 44
+            auto_retire = retirement_eval["age"] >= 44 and retirement_eval["overall"] < 80
             should_retire = auto_retire or (roll < probability)
 
             if should_retire:
@@ -485,8 +501,8 @@ def apply_player_retirements(
 
     retired_players.sort(
         key = lambda p: (
-            -int(num(p.get("age"), 0)),
             -int(num(p.get("overall", p.get("ovr")), 0)),
+            -int(num(p.get("age"), 0)),
             str(p.get("name", "")),
         )
     )

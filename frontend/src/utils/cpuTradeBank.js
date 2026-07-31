@@ -1,8 +1,10 @@
 import {
+  executeCpuMegaTradeCandidateOnLeagueLoose,
   executeCpuTradeCandidateOnLeague,
   validateCpuTradeCandidateOnLeague,
 } from "./tradeExecution.js";
-import { normalizeTeamName } from "./draftPicks.js";
+import { normalizeDraftPickAsset, normalizeTeamName } from "./draftPicks.js";
+import { getContractSeasonYear } from "./seasonContext.js";
 import {
   validateCpuTradeCandidatesParallel,
 } from "../api/cpuTradeValidationPool.js";
@@ -22,7 +24,7 @@ import {
 } from "./cpuTradeTelemetry.js";
 
 export const CPU_TRADE_BANK_FIELD = "cpuTradeBankState";
-export const CPU_TRADE_BANK_VERSION = 12;
+export const CPU_TRADE_BANK_VERSION = 14;
 export const CPU_TRADE_BANK_TEST_CONFIG_KEY = "bm_cpu_trade_bank_test_config_v1";
 
 const TARGET_MIN = CPU_TRADE_CONTINUOUS_MIN_TARGET;
@@ -33,6 +35,16 @@ const FIRST_EXECUTION_DAY = 1;
 const MAX_GENERATION_CANDIDATES_PER_PASS = 120;
 const MAX_EXACT_EVALUATIONS_PER_PASS = 72;
 const MAX_SAME_STATE_VALIDATION_CACHE = 512;
+const MEGA_TRADE_FIRST_DAY = 45;
+const MEGA_TRADE_DEADLINE_BUFFER_DAYS = 14;
+const MEGA_TRADE_RETRY_COOLDOWN_DAYS = 6;
+const MEGA_TRADE_MAX_ATTEMPTS = 8;
+const MEGA_TRADE_HARD_SWEEP_DAYS_TO_DEADLINE = 24;
+const MEGA_TRADE_DIRECT_SWEEP_CANDIDATES = 0;
+const MEGA_TRADE_DIRECT_SWEEP_CHECKS = 24;
+const MEGA_TRADE_FAST_MAX_TARGETS = 5;
+const MEGA_TRADE_FAST_MAX_BUYERS = 8;
+const MEGA_TRADE_FAST_MAX_CANDIDATES = 32;
 
 let activeSameStateValidationCacheScope = "";
 const sameStateValidationCache = new Map();
@@ -228,6 +240,7 @@ function randomSeedToken(seasonYear, overrideSeed = "") {
 function countCpuTradesForSeason(leagueData = {}, seasonYear) {
   return (Array.isArray(leagueData?.tradeHistory) ? leagueData.tradeHistory : []).filter((row) => {
     if (!row || !(row.cpuCpuTrade || row.source === "cpu_cpu_trade")) return false;
+    if (row.cpuMegaTrade || row.megaTrade || row.tradeType === "cpu_mega_trade") return false;
     const rowSeason = Math.trunc(finiteNumber(row.seasonYear, seasonYear));
     return rowSeason === seasonYear;
   }).length;
@@ -258,6 +271,10 @@ function makeStats(existing = {}) {
     executionAttempts: finiteNumber(existing.executionAttempts, 0),
     executionDeferrals: finiteNumber(existing.executionDeferrals, 0),
     completedTrades: finiteNumber(existing.completedTrades, 0),
+    megaGenerationPasses: finiteNumber(existing.megaGenerationPasses, 0),
+    megaExactEvaluations: finiteNumber(existing.megaExactEvaluations, 0),
+    megaCandidatesAccepted: finiteNumber(existing.megaCandidatesAccepted, 0),
+    megaTradesCompleted: finiteNumber(existing.megaTradesCompleted, 0),
     dryRuns: finiteNumber(existing.dryRuns, 0),
     processingMs: finiteNumber(existing.processingMs, 0),
     rejectionReasons:
@@ -352,6 +369,64 @@ function buildExecutionPlan({ seed, targetTrades, firstDay, deadlineDay }) {
   return [...new Set(selected)].sort((a, b) => a - b).slice(0, desired);
 }
 
+function buildMegaTradeState({ seed = "", seasonYear = 2026, deadlineDay = 120 } = {}) {
+  const random = seededRandom(`${seed}|mega-trade:${seasonYear}`);
+  const latestDay = Math.max(MEGA_TRADE_FIRST_DAY + 1, Math.trunc(finiteNumber(deadlineDay, 120)) - MEGA_TRADE_DEADLINE_BUFFER_DAYS);
+  const targetDayIndex = Math.min(
+    latestDay,
+    MEGA_TRADE_FIRST_DAY + Math.floor(random() * Math.max(1, latestDay - MEGA_TRADE_FIRST_DAY + 1))
+  );
+
+  return {
+    seasonYear,
+    status: "pending",
+    targetDayIndex,
+    attempts: 0,
+    maxAttempts: MEGA_TRADE_MAX_ATTEMPTS,
+    nextAttemptDayIndex: targetDayIndex,
+    lastAttemptDayIndex: null,
+    lastAttemptDate: null,
+    lastSkippedReason: null,
+    candidateBankId: null,
+    candidateSignature: null,
+    executedTradeId: null,
+    executedDate: null,
+    executedTeams: [],
+    targetPlayerName: "",
+  };
+}
+
+function normalizeMegaTradeState(existing, { seed = "", seasonYear = 2026, deadlineDay = 120 } = {}) {
+  const fallback = buildMegaTradeState({ seed, seasonYear, deadlineDay });
+  if (!existing || typeof existing !== "object" || Number(existing.seasonYear) !== Number(seasonYear)) {
+    return fallback;
+  }
+
+  const status = String(existing.status || "pending");
+  const allowedStatus = new Set(["pending", "ready", "completed", "not_eligible", "failed_no_valid_package"]);
+  return {
+    ...fallback,
+    ...existing,
+    seasonYear,
+    status: allowedStatus.has(status) ? status : "pending",
+    targetDayIndex: Math.trunc(finiteNumber(existing.targetDayIndex, fallback.targetDayIndex)),
+    attempts: Math.trunc(finiteNumber(existing.attempts, 0)),
+    maxAttempts: Math.trunc(finiteNumber(existing.maxAttempts, MEGA_TRADE_MAX_ATTEMPTS)),
+    nextAttemptDayIndex: Math.trunc(finiteNumber(existing.nextAttemptDayIndex, existing.targetDayIndex ?? fallback.targetDayIndex)),
+    executedTeams: Array.isArray(existing.executedTeams) ? existing.executedTeams : [],
+  };
+}
+
+function isMegaTradeCandidate(candidate = {}) {
+  return Boolean(
+    candidate?.megaTrade ||
+      candidate?.cpuMegaTrade ||
+      candidate?.tradeType === "cpu_mega_trade" ||
+      candidate?.debug?.megaTrade ||
+      candidate?.bankMeta?.megaTrade
+  );
+}
+
 function createBankState(leagueData, context, testConfig = {}) {
   const seasonYear = getSeasonYear(leagueData, context);
   const seed = randomSeedToken(seasonYear, testConfig?.seed || "");
@@ -359,12 +434,12 @@ function createBankState(leagueData, context, testConfig = {}) {
   const targetRoll = random();
   const targetBandRoll = random();
   let baseTargetTrades;
-  if (targetRoll < 0.16) {
-    baseTargetTrades = 22 + Math.floor(targetBandRoll * 2);
-  } else if (targetRoll < 0.84) {
-    baseTargetTrades = 24 + Math.floor(targetBandRoll * 5);
+  if (targetRoll < 0.18) {
+    baseTargetTrades = 27 + Math.floor(targetBandRoll * 2);
+  } else if (targetRoll < 0.86) {
+    baseTargetTrades = 29 + Math.floor(targetBandRoll * 3);
   } else {
-    baseTargetTrades = 29 + Math.floor(targetBandRoll * 2);
+    baseTargetTrades = 32 + Math.floor(targetBandRoll * 2);
   }
   const targetOverride = finiteNumber(testConfig?.targetTrades, 0);
   const targetTrades = targetOverride > 0
@@ -420,6 +495,7 @@ function createBankState(leagueData, context, testConfig = {}) {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     stats: makeStats(),
+    megaTradeState: buildMegaTradeState({ seed, seasonYear, deadlineDay }),
   };
 }
 
@@ -465,16 +541,31 @@ function normalizeBankState(existing, leagueData, context, testConfig = {}) {
     completedTrades,
   };
 
+  const deadlineDay = Math.max(
+    FIRST_EXECUTION_DAY + 1,
+    Math.trunc(
+      finiteNumber(
+        context?.deadlineDayIndex,
+        finiteNumber(context?.dayIndex, 0) + finiteNumber(context?.daysToDeadline, 120)
+      )
+    )
+  );
+  state.megaTradeState = normalizeMegaTradeState(state.megaTradeState, {
+    seed: state.seed,
+    seasonYear,
+    deadlineDay,
+  });
+
   const random = seededRandom(`${state.seed}|target`);
   const targetRoll = random();
   const targetBandRoll = random();
   let generatedBaseTarget;
-  if (targetRoll < 0.16) {
-    generatedBaseTarget = 22 + Math.floor(targetBandRoll * 2);
-  } else if (targetRoll < 0.84) {
-    generatedBaseTarget = 24 + Math.floor(targetBandRoll * 5);
+  if (targetRoll < 0.18) {
+    generatedBaseTarget = 27 + Math.floor(targetBandRoll * 2);
+  } else if (targetRoll < 0.86) {
+    generatedBaseTarget = 29 + Math.floor(targetBandRoll * 3);
   } else {
-    generatedBaseTarget = 29 + Math.floor(targetBandRoll * 2);
+    generatedBaseTarget = 32 + Math.floor(targetBandRoll * 2);
   }
   const baseTargetTrades = clamp(
     Math.trunc(finiteNumber(state.baseTargetTrades, generatedBaseTarget)),
@@ -676,6 +767,7 @@ function compactCandidateForBank(candidate, validation, context, state) {
     id: bankId,
     bankId,
     signature,
+    megaTrade: isMegaTradeCandidate(candidate),
     fromTeamName,
     toTeamName,
     fromItems,
@@ -688,6 +780,7 @@ function compactCandidateForBank(candidate, validation, context, state) {
       generatedDayIndex: finiteNumber(context?.generatedDayIndex ?? context?.dayIndex, 0),
       generationNonce: finiteNumber(state.generationNonce, 0),
       acceptedAtGeneration: true,
+      megaTrade: isMegaTradeCandidate(candidate),
       fromTeamScore: finiteNumber(validation?.fromTeamView?.score, 0),
       toTeamScore: finiteNumber(validation?.toTeamView?.score, 0),
       lastValidatedDate: context?.currentDate || "",
@@ -723,7 +816,8 @@ function candidateTradeQualityScore(candidate = {}, seed = "") {
             ? 1.2
             : 0;
   const seededJitter = seed ? seededRandom(`${seed}|quality:${candidate?.bankId || candidate?.id || candidate?.signature || ""}`)() : 0;
-  return priority + tierBonus + Math.min(1.6, assetCount * 0.18) + Math.min(1.4, firstCount * 0.7) + seededJitter * 1.05;
+  const megaBonus = isMegaTradeCandidate(candidate) ? 28.0 : 0.0;
+  return priority + tierBonus + megaBonus + Math.min(1.6, assetCount * 0.18) + Math.min(1.4, firstCount * 0.7) + seededJitter * 1.05;
 }
 
 function rankCandidatesForExecution(candidates = [], state = {}, context = {}) {
@@ -731,7 +825,7 @@ function rankCandidatesForExecution(candidates = [], state = {}, context = {}) {
   return [...candidates]
     .map((candidate) => ({
       candidate,
-      score: candidateTradeQualityScore(candidate, seed),
+      score: candidateTradeQualityScore(candidate, seed) + (isMegaTradeCandidate(candidate) ? 1000 : 0),
     }))
     .sort((a, b) => b.score - a.score)
     .map((row) => row.candidate);
@@ -888,7 +982,7 @@ export function getCpuTradeBankGenerationPolicy(state, context = {}, testConfig 
   const daysToDeadline = finiteNumber(context?.daysToDeadline, 999);
   const runway = getCpuTradeBankRunwayStatus(state, context);
   const generationPasses = finiteNumber(state?.stats?.generationPasses, 0);
-  const exactEvaluations = finiteNumber(state?.stats?.exactEvaluations, 0);
+  const exactEvaluations = Math.max(0, finiteNumber(state?.stats?.exactEvaluations, 0) - finiteNumber(state?.stats?.megaExactEvaluations, 0));
   const maximumGenerationPasses = clamp(
     Math.trunc(finiteNumber(state?.maximumGenerationPasses, Math.ceil(runway.targetTrades * 0.72))),
     14,
@@ -1015,6 +1109,540 @@ export function buildCpuTradeWorkerContext(state, context = {}, policy = {}) {
   };
 }
 
+export function getCpuMegaTradeGenerationPolicy(state, context = {}, testConfig = {}) {
+  if (!state || !isBeforeDeadline(context) || testConfig?.disableMegaTrade) {
+    return { shouldGenerate: false, reason: "timing_locked", maxCandidates: 0, exactEvaluations: 0 };
+  }
+
+  const mega = state?.megaTradeState || {};
+  const status = String(mega.status || "pending");
+  if (["ready", "completed"].includes(status)) {
+    return { shouldGenerate: false, reason: `mega_${status}`, maxCandidates: 0, exactEvaluations: 0 };
+  }
+
+  const dayIndex = Math.max(0, Math.trunc(finiteNumber(context?.dayIndex, 0)));
+  const daysToDeadline = finiteNumber(context?.daysToDeadline, 999);
+  const hardSweep = daysToDeadline > 0 && daysToDeadline <= MEGA_TRADE_HARD_SWEEP_DAYS_TO_DEADLINE;
+  const targetDayIndex = Math.trunc(finiteNumber(mega.targetDayIndex, MEGA_TRADE_FIRST_DAY));
+  const nextAttemptDayIndex = Math.trunc(finiteNumber(mega.nextAttemptDayIndex, targetDayIndex));
+  const attempts = Math.trunc(finiteNumber(mega.attempts, 0));
+  const maxAttempts = Math.max(1, Math.trunc(finiteNumber(mega.maxAttempts, MEGA_TRADE_MAX_ATTEMPTS)));
+
+  if (!hardSweep && attempts >= maxAttempts) {
+    return { shouldGenerate: false, reason: "mega_attempt_budget_exhausted", maxCandidates: 0, exactEvaluations: 0 };
+  }
+  if (!hardSweep && (dayIndex < targetDayIndex || dayIndex < nextAttemptDayIndex)) {
+    return { shouldGenerate: false, reason: "mega_not_due", maxCandidates: 0, exactEvaluations: 0, targetDayIndex, nextAttemptDayIndex };
+  }
+  if (hardSweep && attempts > 0 && dayIndex < nextAttemptDayIndex) {
+    return { shouldGenerate: false, reason: "mega_hard_sweep_cooldown", maxCandidates: 0, exactEvaluations: 0, targetDayIndex, nextAttemptDayIndex };
+  }
+
+  if (hardSweep) {
+    return {
+      shouldGenerate: true,
+      reason: "mega_deadline_hard_sweep",
+      maxCandidates: 0,
+      exactEvaluations: 0,
+      directExecutionChecks: MEGA_TRADE_DIRECT_SWEEP_CHECKS,
+      hardSweep: true,
+      localDirect: true,
+      targetDayIndex,
+      attempts,
+    };
+  }
+
+  return {
+    shouldGenerate: true,
+    reason: attempts > 0 ? "mega_retry_due" : "mega_due",
+    maxCandidates: 28,
+    exactEvaluations: 14,
+    hardSweep: false,
+    targetDayIndex,
+    attempts,
+  };
+}
+
+export function buildCpuMegaTradeWorkerContext(state, context = {}, policy = {}) {
+  return {
+    ...buildCpuTradeWorkerContext(state, context, { ...policy, maxCandidates: policy?.maxCandidates || 18 }),
+    megaTradeMode: true,
+    megaTradeHardSweep: Boolean(policy?.hardSweep),
+    foregroundRecommended: true,
+    inventoryPressure: 0,
+    generationNonce: finiteNumber(state?.generationNonce, 0) + finiteNumber(state?.megaTradeState?.attempts, 0) + (policy?.hardSweep ? 1000 : 0),
+  };
+}
+
+function replaceTradeRecordInLeague(leagueData = {}, tradeRecord = {}) {
+  if (!tradeRecord || typeof tradeRecord !== "object") return leagueData;
+  const tradeId = tradeRecord.id || tradeRecord.bankId || "";
+  const history = Array.isArray(leagueData?.tradeHistory) ? leagueData.tradeHistory : [];
+  let replaced = false;
+  const nextHistory = history.map((row, index) => {
+    const rowId = row?.id || row?.bankId || "";
+    const sameId = tradeId && rowId && String(rowId) === String(tradeId);
+    const isLast = index === history.length - 1;
+    if (sameId || (!replaced && isLast)) {
+      replaced = true;
+      return tradeRecord;
+    }
+    return row;
+  });
+  return {
+    ...leagueData,
+    tradeHistory: replaced ? nextHistory : [...history, tradeRecord],
+    lastTrade: tradeRecord,
+  };
+}
+
+
+function playerDisplayName(player = {}) {
+  return player?.name || player?.player || player?.playerName || "Unknown Player";
+}
+
+function playerOvr(player = {}) {
+  return finiteNumber(player?.overall ?? player?.ovr ?? player?.rating, 0);
+}
+
+function playerPot(player = {}) {
+  return finiteNumber(player?.potential ?? player?.pot, playerOvr(player));
+}
+
+function playerAge(player = {}) {
+  return finiteNumber(player?.age ?? player?.playerAge, 0);
+}
+
+function getMegaTradePayrollSeasonYear(leagueData = {}) {
+  try {
+    return getContractSeasonYear(leagueData || {});
+  } catch {
+    return Math.trunc(finiteNumber(leagueData?.seasonYear ?? leagueData?.currentSeasonYear ?? leagueData?.seasonStartYear, 2026)) + 1;
+  }
+}
+
+function getMegaPlayerSalary(player = {}, leagueData = {}) {
+  const payrollYear = getMegaTradePayrollSeasonYear(leagueData);
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const salaries = Array.isArray(contract.salaryByYear) ? contract.salaryByYear.map((value) => Number(value) || 0) : [];
+  if (salaries.length) {
+    let startYear = Number(contract.startYear || payrollYear);
+    let idx = payrollYear - startYear;
+    if (salaries.length === 1 && startYear === payrollYear - 1 && (idx < 0 || idx >= salaries.length)) idx = 0;
+    if (!Number.isFinite(idx) || idx < 0) idx = 0;
+    if (idx >= salaries.length) idx = salaries.length - 1;
+    return Math.max(0, Number(salaries[idx] || 0));
+  }
+  const fallback = Number(player?.salary ?? player?.currentSalary ?? player?.contractSalary ?? player?.capHit ?? player?.aav ?? 0);
+  return Number.isFinite(fallback) ? Math.max(0, fallback) : 0;
+}
+
+function recordForTeamName(context = {}, teamName = "") {
+  if (!teamName) return null;
+  const rows = context?.recordsByTeam || {};
+  const key = Object.keys(rows).find((name) => sameTeam(name, teamName));
+  return key ? rows[key] : null;
+}
+
+function winPctForTeam(context = {}, teamName = "") {
+  const row = recordForTeamName(context, teamName) || {};
+  const wins = finiteNumber(row.wins ?? row.w, 0);
+  const losses = finiteNumber(row.losses ?? row.l, 0);
+  const games = finiteNumber(row.games ?? row.gp, wins + losses);
+  if (games <= 0) return null;
+  return wins / Math.max(1, wins + losses || games);
+}
+
+function teamTopOvr(team = {}, count = 6) {
+  const players = Array.isArray(team?.players) ? team.players : [];
+  const values = players.map(playerOvr).filter((value) => value > 0).sort((a, b) => b - a).slice(0, count);
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function isYoungMegaCore(player = {}) {
+  const age = playerAge(player);
+  const ovr = playerOvr(player);
+  const pot = playerPot(player);
+  if (age <= 25 && pot >= 93) return true;
+  if (age <= 24 && ovr >= 88 && pot >= 90) return true;
+  return false;
+}
+
+function isProtectedBuyerCore(player = {}, buyerTeam = {}) {
+  const age = playerAge(player);
+  const ovr = playerOvr(player);
+  const pot = playerPot(player);
+  if (isYoungMegaCore(player)) return true;
+  if (ovr >= 90) return true;
+  const sorted = [...(buyerTeam?.players || [])].sort((a, b) => playerOvr(b) - playerOvr(a));
+  const rank = sorted.findIndex((row) => {
+    const aid = row?.id ?? row?.playerId ?? row?.uuid ?? null;
+    const bid = player?.id ?? player?.playerId ?? player?.uuid ?? null;
+    if (aid != null && bid != null) return String(aid) === String(bid);
+    return normalizeTeamName(playerDisplayName(row)) === normalizeTeamName(playerDisplayName(player));
+  });
+  if (rank >= 0 && rank <= 1 && age <= 27 && pot >= 88) return true;
+  return false;
+}
+
+function activeFirstPicksForTeam(leagueData = {}, teamName = "", limit = 4) {
+  const seasonYear = getSeasonYear(leagueData, {});
+  const teamNames = getAllTeams(leagueData).map((team) => teamNameOf(team)).filter(Boolean);
+  return (Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : [])
+    .map((pick, index) => ({ raw: pick, normalized: normalizeDraftPickAsset(pick, index, teamNames) }))
+    .filter(({ normalized }) => {
+      const owner = normalized?.ownerTeam || normalized?.currentOwnerTeamName || normalized?.owner || "";
+      const round = finiteNumber(normalized?.round, 2);
+      const year = finiteNumber(normalized?.year ?? normalized?.seasonYear, 0);
+      const status = String(normalized?.status || "active").toLowerCase();
+      return sameTeam(owner, teamName) && round === 1 && year >= seasonYear + 1 && status !== "traded" && status !== "conveyed";
+    })
+    .sort((a, b) => finiteNumber(a.normalized?.year ?? a.normalized?.seasonYear, 0) - finiteNumber(b.normalized?.year ?? b.normalized?.seasonYear, 0))
+    .slice(0, limit)
+    .map(({ raw, normalized }) => ({
+      type: "pick",
+      teamName,
+      pick: compactPickReference({ ...raw, ...normalized }),
+      protection: normalized?.protection || normalized?.protections || normalized?.displayProtection || raw?.protection || "Unprotected",
+    }));
+}
+
+function playerTradeItem(player = {}, teamName = "") {
+  return { type: "player", teamName, player: compactPlayerReference(player) };
+}
+
+function buildFastMegaTargets(leagueData = {}, context = {}) {
+  const userTeamName = getContextUserTeamName(context, leagueData);
+  const teams = getAllTeams(leagueData);
+  const rankedByPower = [...teams].sort((a, b) => teamTopOvr(b, 6) - teamTopOvr(a, 6));
+  const powerRank = new Map(rankedByPower.map((team, index) => [normalizeTeamName(teamNameOf(team)), index + 1]));
+  const rows = [];
+
+  for (const team of teams) {
+    const teamName = teamNameOf(team);
+    if (!teamName || sameTeam(teamName, userTeamName)) continue;
+    const pct = winPctForTeam(context, teamName);
+    const rank = powerRank.get(normalizeTeamName(teamName)) || 99;
+    const under500 = pct == null ? rank >= 16 : pct < 0.5;
+    const badOrMid = under500 || rank >= 13;
+    if (!badOrMid) continue;
+    const rebuildingSeller = (pct != null && pct <= 0.38) || rank >= 24;
+
+    for (const player of team?.players || []) {
+      const ovr = playerOvr(player);
+      const age = playerAge(player);
+      if (ovr < 90 || age < 28) continue;
+      if (!rebuildingSeller && ovr >= 94 && age <= 30) continue;
+      if (isYoungMegaCore(player)) continue;
+      const pctPenalty = pct == null ? 0.08 : Math.max(0, 0.5 - pct);
+      rows.push({
+        team,
+        teamName,
+        player,
+        score: ovr * 10 + age * 0.8 + pctPenalty * 100 + Math.max(0, rank - 12) * 3,
+        powerRank: rank,
+        winPct: pct,
+      });
+    }
+  }
+
+  return rows.sort((a, b) => b.score - a.score).slice(0, MEGA_TRADE_FAST_MAX_TARGETS);
+}
+
+function buildFastMegaBuyers(leagueData = {}, context = {}, sellerName = "") {
+  const userTeamName = getContextUserTeamName(context, leagueData);
+  return getAllTeams(leagueData)
+    .filter((team) => {
+      const name = teamNameOf(team);
+      if (!name || sameTeam(name, userTeamName) || sameTeam(name, sellerName)) return false;
+      const pct = winPctForTeam(context, name);
+      return pct == null ? teamTopOvr(team, 6) >= 82 : pct >= 0.52;
+    })
+    .map((team) => {
+      const name = teamNameOf(team);
+      const pct = winPctForTeam(context, name);
+      return { team, teamName: name, score: (pct == null ? 0.55 : pct) * 100 + teamTopOvr(team, 6) * 2 };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MEGA_TRADE_FAST_MAX_BUYERS);
+}
+
+function buildBuyerSalaryCombos(leagueData = {}, buyerTeam = {}, targetSalary = 0) {
+  const teamName = teamNameOf(buyerTeam);
+  const candidates = (buyerTeam?.players || [])
+    .filter((player) => !isProtectedBuyerCore(player, buyerTeam))
+    .map((player) => ({ player, salary: getMegaPlayerSalary(player, leagueData), ovr: playerOvr(player), age: playerAge(player), pot: playerPot(player) }))
+    .filter((row) => row.salary > 0)
+    .sort((a, b) => b.salary - a.salary || b.ovr - a.ovr)
+    .slice(0, 9);
+
+  const combos = [];
+  const add = (rows) => {
+    const key = rows.map((r) => r.player?.id ?? playerDisplayName(r.player)).join("|");
+    if (!rows.length || combos.some((combo) => combo.key === key)) return;
+    combos.push({ key, rows, salary: rows.reduce((sum, row) => sum + row.salary, 0), ovrScore: rows.reduce((sum, row) => sum + row.ovr, 0) });
+  };
+
+  for (let i = 0; i < candidates.length; i += 1) add([candidates[i]]);
+  for (let i = 0; i < Math.min(6, candidates.length); i += 1) {
+    for (let j = i + 1; j < Math.min(7, candidates.length); j += 1) add([candidates[i], candidates[j]]);
+  }
+  for (let i = 0; i < Math.min(4, candidates.length); i += 1) {
+    for (let j = i + 1; j < Math.min(6, candidates.length); j += 1) {
+      for (let k = j + 1; k < Math.min(7, candidates.length); k += 1) add([candidates[i], candidates[j], candidates[k]]);
+    }
+  }
+
+  const minUsefulSalary = Math.max(0, targetSalary * 0.62 - 1_000_000);
+  return combos
+    .filter((combo) => combo.salary >= minUsefulSalary)
+    .sort((a, b) => {
+      const aGap = Math.abs(a.salary - targetSalary * 0.82);
+      const bGap = Math.abs(b.salary - targetSalary * 0.82);
+      if (aGap !== bGap) return aGap - bGap;
+      return b.ovrScore - a.ovrScore;
+    })
+    .slice(0, 4)
+    .map((combo) => combo.rows.map((row) => playerTradeItem(row.player, teamName)));
+}
+
+function buildFastMegaCandidates(leagueData = {}, context = {}, state = {}) {
+  const seed = `${state?.seed || ""}|fast-mega:${context?.currentDate || context?.dayIndex || ""}`;
+  const randomTargets = shuffled(buildFastMegaTargets(leagueData, context), seed).sort((a, b) => b.score - a.score);
+  const out = [];
+
+  for (const targetRow of randomTargets) {
+    const targetSalary = getMegaPlayerSalary(targetRow.player, leagueData);
+    const targetOvr = playerOvr(targetRow.player);
+    const buyers = buildFastMegaBuyers(leagueData, context, targetRow.teamName);
+    for (const buyerRow of buyers) {
+      const firstPicks = activeFirstPicksForTeam(leagueData, buyerRow.teamName, 4);
+      if (firstPicks.length < 1) continue;
+      const salaryCombos = buildBuyerSalaryCombos(leagueData, buyerRow.team, targetSalary);
+      for (const salaryItems of salaryCombos) {
+        const pickNeed = targetOvr >= 94 ? Math.min(4, Math.max(2, firstPicks.length)) : Math.min(3, Math.max(1, firstPicks.length));
+        const picks = firstPicks.slice(0, pickNeed);
+        const toItems = [...salaryItems, ...picks].slice(0, 7);
+        if (toItems.length < 2) continue;
+        out.push({
+          id: `fast_mega_${hashString(`${targetRow.teamName}|${buyerRow.teamName}|${playerDisplayName(targetRow.player)}|${out.length}|${seed}`).toString(16)}`,
+          fromTeamName: targetRow.teamName,
+          toTeamName: buyerRow.teamName,
+          fromItems: [playerTradeItem(targetRow.player, targetRow.teamName)],
+          toItems,
+          megaTrade: true,
+          cpuMegaTrade: true,
+          tradeType: "cpu_mega_trade",
+          motive: `Mega Deadline Deal: ${targetRow.teamName} cashes out on ${playerDisplayName(targetRow.player)} while ${buyerRow.teamName} makes a title-window swing.`,
+          debug: {
+            megaTrade: true,
+            fastMegaDeadlineRecipe: true,
+            targetPlayer: playerDisplayName(targetRow.player),
+            targetOvr,
+            targetAge: playerAge(targetRow.player),
+            sellerWinPct: targetRow.winPct,
+            sellerPowerRank: targetRow.powerRank,
+          },
+        });
+        if (out.length >= MEGA_TRADE_FAST_MAX_CANDIDATES) return out;
+      }
+    }
+  }
+
+  return out;
+}
+
+export function executeImmediateCpuMegaTradeFromCandidates({
+  leagueData,
+  response,
+  context = {},
+  testConfig = {},
+  maxCandidateChecks = MEGA_TRADE_DIRECT_SWEEP_CHECKS,
+} = {}) {
+  const startedAt = Date.now();
+  const ensured = ensureCpuTradeBankState(leagueData, context, testConfig);
+  if (!ensured.state) {
+    return { leagueData, state: null, changed: false, executed: false, tradeRecord: null, reason: "no_bank_state" };
+  }
+
+  const state = {
+    ...ensured.state,
+    candidates: [...ensured.state.candidates],
+    stats: makeStats(ensured.state.stats),
+  };
+  const userTeamName = getContextUserTeamName(context, ensured.leagueData);
+  const workerCandidates = Array.isArray(response?.candidates) ? response.candidates : [];
+  const localCandidates = buildFastMegaCandidates(ensured.leagueData, context, state);
+  const rawCandidates = localCandidates.length ? localCandidates : workerCandidates;
+  const directCandidates = shuffled(
+    rawCandidates.filter((candidate) => isMegaTradeCandidate(candidate) && !candidateInvolvesTeam(candidate, userTeamName)),
+    `${state.seed}|direct-mega:${state?.megaTradeState?.attempts || 0}:${context?.currentDate || context?.dayIndex || ""}`
+  ).map((candidate) => ({
+    ...candidate,
+    megaTrade: true,
+    cpuMegaTrade: true,
+    tradeType: "cpu_mega_trade",
+    motive: String(candidate?.motive || "").startsWith("Mega Deadline Deal:")
+      ? candidate.motive
+      : `Mega Deadline Deal: ${candidate?.motive || "A contender makes a title-window swing for a 90+ star from a team outside the title race."}`,
+    debug: {
+      ...(candidate?.debug || {}),
+      megaTrade: true,
+      directMegaDeadlineSweep: true,
+      fastRecipeCandidate: Boolean(localCandidates.length),
+    },
+  }));
+
+  const mega = normalizeMegaTradeState(state.megaTradeState, {
+    seed: state.seed,
+    seasonYear: state.seasonYear,
+    deadlineDay: context?.deadlineDayIndex,
+  });
+  const attempts = Math.trunc(finiteNumber(mega.attempts, 0)) + 1;
+
+  if (!directCandidates.length) {
+    state.megaTradeState = {
+      ...mega,
+      attempts,
+      status: "failed_no_valid_package",
+      lastAttemptDayIndex: Math.trunc(finiteNumber(context?.generatedDayIndex ?? context?.dayIndex, 0)),
+      lastAttemptDate: context?.generatedDate || context?.currentDate || "",
+      lastSkippedReason: response?.skippedReason || "no_direct_mega_candidates",
+      nextAttemptDayIndex: null,
+    };
+    state.updatedAt = new Date().toISOString();
+    state.stats.processingMs += Date.now() - startedAt;
+    return {
+      leagueData: { ...ensured.leagueData, [CPU_TRADE_BANK_FIELD]: state },
+      state,
+      changed: true,
+      executed: false,
+      tradeRecord: null,
+      reason: state.megaTradeState.lastSkippedReason,
+    };
+  }
+
+  const candidates = rankCandidatesForExecution(directCandidates, state, {
+    ...context,
+    immediateMegaDeadlineSweep: true,
+  });
+  const checkLimit = clamp(Math.trunc(finiteNumber(maxCandidateChecks, MEGA_TRADE_DIRECT_SWEEP_CHECKS)), 1, MEGA_TRADE_FAST_MAX_CANDIDATES);
+  let lastFailure = null;
+
+  for (const candidate of candidates.slice(0, checkLimit)) {
+    if (candidateInvolvesTeam(candidate, userTeamName)) {
+      lastFailure = { ok: false, staleCode: "user_team_locked", reason: "Mega candidate involved controlled team." };
+      continue;
+    }
+
+    const executionStartedAt = cpuTradeNow();
+    const result = executeCpuMegaTradeCandidateOnLeagueLoose({
+      leagueData: ensured.leagueData,
+      candidate,
+      currentDate: context?.currentDate || "",
+      tradeDeadlineDate: context?.tradeDeadlineDate || "",
+      inOffseason: Boolean(context?.inOffseason),
+      recordsByTeam: context?.recordsByTeam || null,
+    });
+    const executionMs = cpuTradeNow() - executionStartedAt;
+    recordCpuTradeTiming("executionMs", executionMs, {
+      ok: Boolean(result?.ok),
+      phase: "direct_mega_deadline_sweep",
+    });
+    recordCpuTradeValidation({
+      phase: "direct_mega_deadline_sweep",
+      signature: candidate?.signature || getCpuTradeCandidateSignature(candidate),
+      candidate,
+      leagueData: ensured.leagueData,
+      context,
+      result,
+      durationMs: executionMs,
+    });
+
+    if (!result?.ok || !result?.leagueData) {
+      lastFailure = result;
+      bumpReason(state.stats, result?.staleCode || "direct_mega_rejected");
+      continue;
+    }
+
+    const patchedTradeRecord = {
+      ...(result.tradeRecord || {}),
+      cpuCpuTrade: true,
+      cpuMegaTrade: true,
+      megaTrade: true,
+      tradeType: "cpu_mega_trade",
+      megaDeadlineDeal: true,
+      tradeLabel: "Mega Deadline Deal",
+      motive: (result?.tradeRecord?.motive || candidate?.motive || "").startsWith("Mega Deadline Deal:")
+        ? (result?.tradeRecord?.motive || candidate?.motive || "")
+        : `Mega Deadline Deal: ${result?.tradeRecord?.motive || candidate?.motive || "A contender makes a title-window swing for a 90+ star."}`,
+    };
+    const finalLeagueWithRecord = replaceTradeRecordInLeague(result.leagueData, patchedTradeRecord);
+    state.completedTrades = countCpuTradesForSeason(finalLeagueWithRecord, state.seasonYear);
+    state.megaTradeState = {
+      ...mega,
+      attempts,
+      status: "completed",
+      executedTradeId: patchedTradeRecord?.id || patchedTradeRecord?.bankId || candidate?.id || null,
+      executedDate: context?.currentDate || "",
+      executedTeams: [candidate.fromTeamName, candidate.toTeamName].filter(Boolean),
+      targetPlayerName: candidate?.debug?.targetPlayer || mega.targetPlayerName || "",
+      candidateBankId: candidate?.bankId || candidate?.id || mega.candidateBankId || null,
+      candidateSignature: candidate?.signature || getCpuTradeCandidateSignature(candidate),
+      lastAttemptDayIndex: Math.trunc(finiteNumber(context?.generatedDayIndex ?? context?.dayIndex, 0)),
+      lastAttemptDate: context?.generatedDate || context?.currentDate || "",
+      lastSkippedReason: null,
+      nextAttemptDayIndex: null,
+    };
+    state.stats.megaTradesCompleted += 1;
+    state.stats.lastExecution = {
+      date: context?.currentDate || "",
+      dayIndex: finiteNumber(context?.dayIndex, 0),
+      result: "completed_direct_mega_deadline_trade",
+      candidateId: candidate.bankId || candidate.id,
+      teams: [candidate.fromTeamName, candidate.toTeamName],
+      bankSize: state.candidates.length,
+    };
+    state.stats.processingMs += Date.now() - startedAt;
+    state.updatedAt = new Date().toISOString();
+    return {
+      ...result,
+      leagueData: {
+        ...finalLeagueWithRecord,
+        [CPU_TRADE_BANK_FIELD]: state,
+      },
+      state,
+      changed: true,
+      executed: true,
+      immediateMegaTrade: true,
+      tradeRecord: patchedTradeRecord,
+      reason: "completed_direct_mega_deadline_trade",
+    };
+  }
+
+  state.megaTradeState = {
+    ...mega,
+    attempts,
+    status: "failed_no_valid_package",
+    lastAttemptDayIndex: Math.trunc(finiteNumber(context?.generatedDayIndex ?? context?.dayIndex, 0)),
+    lastAttemptDate: context?.generatedDate || context?.currentDate || "",
+    lastSkippedReason: lastFailure?.staleCode || lastFailure?.reason || response?.skippedReason || "direct_mega_all_candidates_rejected",
+    nextAttemptDayIndex: null,
+  };
+  state.updatedAt = new Date().toISOString();
+  state.stats.processingMs += Date.now() - startedAt;
+  return {
+    leagueData: { ...ensured.leagueData, [CPU_TRADE_BANK_FIELD]: state },
+    state,
+    changed: true,
+    executed: false,
+    tradeRecord: null,
+    lastFailure,
+    reason: state.megaTradeState.lastSkippedReason,
+  };
+}
+
 export async function addGeneratedCpuTradeCandidates({
   leagueData,
   response,
@@ -1037,6 +1665,7 @@ export async function addGeneratedCpuTradeCandidates({
     Array.isArray(response?.candidates) ? response.candidates : [],
     `${state.seed}|generation:${state.generationNonce}`
   );
+  const megaGeneration = Boolean(context?.megaTradeMode || response?.debug?.megaTradeMode || candidates.some(isMegaTradeCandidate));
   const accepted = [];
   const rejected = [];
   const existingSignatures = new Set(state.candidates.map((candidate) => candidate.signature));
@@ -1065,7 +1694,11 @@ export async function addGeneratedCpuTradeCandidates({
   const exactEvaluationsBefore = state.stats.exactEvaluations;
   const duplicatesBefore = state.stats.duplicateCandidates;
   const rejectionsBefore = state.stats.rejectedCandidates;
-  state.stats.generationPasses += 1;
+  if (megaGeneration) {
+    state.stats.megaGenerationPasses += 1;
+  } else {
+    state.stats.generationPasses += 1;
+  }
   state.stats.proposedCandidates += candidates.length;
 
   const admissionCandidates = candidates.slice(0, limit);
@@ -1086,8 +1719,8 @@ export async function addGeneratedCpuTradeCandidates({
       sameTeam(toTeamName, userTeamName) ||
       existingSignatures.has(signature) ||
       sameStateValidationCache.has(signature) ||
-      countBankEntriesForTeam(state.candidates, fromTeamName) >= MAX_BANK_ENTRIES_PER_TEAM ||
-      countBankEntriesForTeam(state.candidates, toTeamName) >= MAX_BANK_ENTRIES_PER_TEAM
+      (!isMegaTradeCandidate(candidate) && countBankEntriesForTeam(state.candidates, fromTeamName) >= MAX_BANK_ENTRIES_PER_TEAM) ||
+      (!isMegaTradeCandidate(candidate) && countBankEntriesForTeam(state.candidates, toTeamName) >= MAX_BANK_ENTRIES_PER_TEAM)
     ) {
       continue;
     }
@@ -1110,6 +1743,7 @@ export async function addGeneratedCpuTradeCandidates({
         parallelPlan.map((row, index) => [row.candidateIndex, parallelRows[index]])
       );
       state.stats.exactEvaluations += parallelPlan.length;
+      if (megaGeneration) state.stats.megaExactEvaluations += parallelPlan.length;
       if (context?.recordsByTeam && typeof context.recordsByTeam === "object") {
         state.stats.recordSnapshotValidationCalls += parallelPlan.length;
       }
@@ -1149,8 +1783,9 @@ export async function addGeneratedCpuTradeCandidates({
     }
 
     if (
-      countBankEntriesForTeam(state.candidates, fromTeamName) >= MAX_BANK_ENTRIES_PER_TEAM ||
-      countBankEntriesForTeam(state.candidates, toTeamName) >= MAX_BANK_ENTRIES_PER_TEAM
+      !isMegaTradeCandidate(candidate) &&
+      (countBankEntriesForTeam(state.candidates, fromTeamName) >= MAX_BANK_ENTRIES_PER_TEAM ||
+        countBankEntriesForTeam(state.candidates, toTeamName) >= MAX_BANK_ENTRIES_PER_TEAM)
     ) {
       state.stats.rejectedCandidates += 1;
       bumpReason(state.stats, "team_bank_limit");
@@ -1186,6 +1821,7 @@ export async function addGeneratedCpuTradeCandidates({
         });
       } else {
         state.stats.exactEvaluations += 1;
+        if (megaGeneration) state.stats.megaExactEvaluations += 1;
         if (context?.recordsByTeam && typeof context.recordsByTeam === "object") {
           state.stats.recordSnapshotValidationCalls += 1;
         }
@@ -1228,7 +1864,14 @@ export async function addGeneratedCpuTradeCandidates({
     state.candidates.push(bankCandidate);
     existingSignatures.add(bankCandidate.signature);
     state.stats.acceptedIntoBank += 1;
+    if (isMegaTradeCandidate(bankCandidate)) {
+      state.stats.megaCandidatesAccepted += 1;
+    }
     accepted.push(bankCandidate);
+
+    if (megaGeneration && isMegaTradeCandidate(bankCandidate)) {
+      break;
+    }
 
     // Stop exact validation once this pass has rebuilt a healthy inventory
     // runway. This preserves validation/execution logic for every accepted
@@ -1246,12 +1889,43 @@ export async function addGeneratedCpuTradeCandidates({
     }
   }
 
+  if (megaGeneration) {
+    const mega = normalizeMegaTradeState(state.megaTradeState, {
+      seed: state.seed,
+      seasonYear: state.seasonYear,
+      deadlineDay: context?.deadlineDayIndex,
+    });
+    const acceptedMega = accepted.find(isMegaTradeCandidate) || null;
+    const attempts = Math.trunc(finiteNumber(mega.attempts, 0)) + 1;
+    const skippedReason = response?.skippedReason || (acceptedMega ? null : "no_accepted_mega_candidate");
+    state.megaTradeState = {
+      ...mega,
+      attempts,
+      lastAttemptDayIndex: Math.trunc(finiteNumber(context?.generatedDayIndex ?? context?.dayIndex, 0)),
+      lastAttemptDate: context?.generatedDate || context?.currentDate || "",
+      lastSkippedReason: skippedReason,
+    };
+    if (acceptedMega) {
+      state.megaTradeState.status = "ready";
+      state.megaTradeState.candidateBankId = acceptedMega.bankId || acceptedMega.id || null;
+      state.megaTradeState.candidateSignature = acceptedMega.signature || null;
+      state.megaTradeState.targetPlayerName = acceptedMega?.debug?.targetPlayer || "";
+      state.megaTradeState.nextAttemptDayIndex = null;
+    } else {
+      const hardSweep = Boolean(context?.megaTradeHardSweep);
+      state.megaTradeState.status = hardSweep ? "failed_no_valid_package" : "pending";
+      state.megaTradeState.nextAttemptDayIndex = Math.trunc(finiteNumber(context?.generatedDayIndex ?? context?.dayIndex, 0)) + (hardSweep ? 3 : MEGA_TRADE_RETRY_COOLDOWN_DAYS);
+    }
+  }
+
   state.candidates = trimBank(state.candidates);
-  state.generationNonce += 1;
-  state.lastGenerationDayIndex = Math.max(
-    0,
-    Math.trunc(finiteNumber(context?.generatedDayIndex ?? context?.dayIndex, 0))
-  );
+  if (!megaGeneration) {
+    state.generationNonce += 1;
+    state.lastGenerationDayIndex = Math.max(
+      0,
+      Math.trunc(finiteNumber(context?.generatedDayIndex ?? context?.dayIndex, 0))
+    );
+  }
   state.updatedAt = new Date().toISOString();
   const generationConsumeMs = Date.now() - startedAt;
   state.stats.processingMs += generationConsumeMs;
@@ -1308,10 +1982,15 @@ export async function addGeneratedCpuTradeCandidates({
 
 function executionDue(state, context = {}, testConfig = {}) {
   if (!state || !isBeforeDeadline(context)) return false;
-  if (finiteNumber(state.completedTrades, 0) >= finiteNumber(state.targetTrades, 30)) return false;
   if (testConfig?.forceExecution) return true;
 
   const dayIndex = finiteNumber(context?.dayIndex, 0);
+  const hasReadyMegaTrade =
+    String(state?.megaTradeState?.status || "") === "ready" &&
+    (state.candidates || []).some(isMegaTradeCandidate);
+  if (hasReadyMegaTrade) return true;
+
+  if (finiteNumber(state.completedTrades, 0) >= finiteNumber(state.targetTrades, 30)) return false;
   const cursor = Math.max(0, Math.trunc(finiteNumber(state.planCursor, 0)));
   const plannedDay = state.executionPlanDays?.[cursor];
   const daysToDeadline = finiteNumber(context?.daysToDeadline, 999);
@@ -1331,7 +2010,8 @@ function executionDue(state, context = {}, testConfig = {}) {
   if (context?.preseasonTradeWindow && bankHasInventory && completedTrades < preseasonTarget) {
     return true;
   }
-  if (behindPace && bankHasInventory && daysToDeadline <= 70) return true;
+  if (behindPace && bankHasInventory && daysToDeadline <= 82) return true;
+  if (bankHasInventory && daysToDeadline <= 28 && completedTrades < minimumTrades) return true;
   if (!Number.isFinite(Number(plannedDay))) return false;
   return dayIndex >= Number(plannedDay);
 }
@@ -1555,11 +2235,31 @@ export function executeDueCpuTradeFromBank({
       continue;
     }
 
+    const executedMegaTrade = isMegaTradeCandidate(candidate) || isMegaTradeCandidate(result?.tradeRecord);
     state.completedTrades = countCpuTradesForSeason(result.leagueData, state.seasonYear);
-    state.planCursor = Math.min(
-      state.executionPlanDays.length,
-      Math.max(finiteNumber(state.planCursor, 0) + 1, state.completedTrades)
-    );
+    if (executedMegaTrade) {
+      const mega = normalizeMegaTradeState(state.megaTradeState, {
+        seed: state.seed,
+        seasonYear: state.seasonYear,
+        deadlineDay: context?.deadlineDayIndex,
+      });
+      state.megaTradeState = {
+        ...mega,
+        status: "completed",
+        executedTradeId: result?.tradeRecord?.id || result?.tradeRecord?.bankId || candidate?.bankId || candidate?.id || null,
+        executedDate: context?.currentDate || "",
+        executedTeams: [candidate.fromTeamName, candidate.toTeamName].filter(Boolean),
+        targetPlayerName: candidate?.debug?.targetPlayer || mega.targetPlayerName || "",
+        candidateBankId: candidate?.bankId || candidate?.id || mega.candidateBankId || null,
+        candidateSignature: candidate?.signature || mega.candidateSignature || null,
+      };
+      state.stats.megaTradesCompleted += 1;
+    } else {
+      state.planCursor = Math.min(
+        state.executionPlanDays.length,
+        Math.max(finiteNumber(state.planCursor, 0) + 1, state.completedTrades)
+      );
+    }
     state.selectionNonce += 1;
     state.candidates = removeCandidatesInvolvingTeams(state.candidates, [
       candidate.fromTeamName,
@@ -1569,7 +2269,7 @@ export function executeDueCpuTradeFromBank({
     state.stats.lastExecution = {
       date: context?.currentDate || "",
       dayIndex: finiteNumber(context?.dayIndex, 0),
-      result: "completed",
+      result: executedMegaTrade ? "completed_mega_trade" : "completed",
       candidateId: candidate.bankId || candidate.id,
       teams: [candidate.fromTeamName, candidate.toTeamName],
       bankSize: state.candidates.length,
@@ -1873,6 +2573,7 @@ export function buildCpuTradeBankSummary(leagueData = {}) {
     bankSize: state.candidates.length,
     nextPlannedDay: state.executionPlanDays?.[state.planCursor] ?? null,
     generationNonce: state.generationNonce,
+    megaTradeState: state.megaTradeState || null,
     packageTypes,
     rejectionReasons: { ...stats.rejectionReasons },
     stats,

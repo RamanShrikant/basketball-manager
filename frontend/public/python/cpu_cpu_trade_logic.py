@@ -59,6 +59,16 @@ MIN_MARKET_PLAYER_OVR = 65
 MAX_ASSETS_PER_SIDE = 5
 MAX_PLAYER_ASSETS_PER_SIDE = 3
 MAX_PICK_ASSETS_PER_SIDE = 4
+
+# One-per-season mega trade lane. These caps are only used when JS requests
+# megaTradeMode; the regular CPU trade bank keeps its existing package limits.
+MEGA_TRADE_TARGET_OVR = 90
+MEGA_MAX_ASSETS_PER_SIDE = 7
+MEGA_MAX_PLAYER_ASSETS_PER_SIDE = 3
+MEGA_MAX_PICK_ASSETS_PER_SIDE = 4
+MEGA_TARGET_SCAN_LIMIT = 28
+MEGA_BUYER_SCAN_LIMIT = 24
+
 MAJOR_TRADE_TARGET_OVR = 80
 STAR_TRADE_TARGET_OVR = 85
 STANDARD_ROSTER_MIN = 14
@@ -607,6 +617,41 @@ def _asset_protection_penalty(team: Dict[str, Any], player: Dict[str, Any], team
     return penalty
 
 
+
+def _is_shared_untouchable_core(team: Dict[str, Any], player: Dict[str, Any], team_ctx: Optional[Dict[str, Any]] = None) -> bool:
+    """Hard CPU-outgoing guard matching League Intel's protected-core spirit.
+
+    Retooling/selling teams should not protect 28+ players. Contenders can
+    still treat elite prime stars as core, but young blue-chip pieces are the
+    main hard blocker for CPU-to-CPU outgoing packages.
+    """
+    ctx = team_ctx or {}
+    phase = _str(ctx.get("phase"), "middle")
+    ovr = _player_ovr(player)
+    pot = _player_pot(player)
+    age = _player_age(player)
+    upside = max(0.0, pot - ovr)
+    rank = _roster_rank(team, player)
+
+    if phase in {"seller", "retool"} and age >= 28:
+        return False
+
+    if age <= 23 and pot >= 90 and ovr >= 76:
+        return True
+    if age <= 24 and pot >= 88 and upside >= 6:
+        return True
+    if age <= 25 and ovr >= 89 and pot >= 93:
+        return True
+    if age <= 22 and ovr >= 80 and pot >= 94:
+        return True
+    if phase in {"contender", "buyer"}:
+        if ovr >= 94 and age <= 32 and rank <= 2:
+            return True
+        if ovr >= 91 and 24 <= age <= 32 and rank == 1:
+            return True
+
+    return False
+
 def _market_player_score(team: Dict[str, Any], player: Dict[str, Any], season_year: int, team_ctx: Optional[Dict[str, Any]] = None, role: str = "seller") -> float:
     ctx = dict(team_ctx or {})
     ctx["seasonYear"] = season_year
@@ -627,7 +672,9 @@ def _market_player_score(team: Dict[str, Any], player: Dict[str, Any], season_ye
         score += 4.0 if years_left <= 1 else 0.0
         score += 2.4 if phase in {"seller", "retool"} else 0.0
         if phase in {"seller", "retool"} and ovr >= MAJOR_TRADE_TARGET_OVR:
-            score += 4.8
+            score += 6.8
+        if phase in {"seller", "retool"} and ovr >= STAR_TRADE_TARGET_OVR and age >= 28:
+            score += 4.2
         if phase in {"seller", "retool"} and ovr >= STAR_TRADE_TARGET_OVR and age >= 32:
             score += 5.2
         score -= upside * (0.22 if phase in {"seller", "retool"} and ovr >= MAJOR_TRADE_TARGET_OVR else 0.32)
@@ -663,6 +710,8 @@ def _seller_trade_targets(team: Dict[str, Any], season_year: int, team_ctx: Opti
             continue
         ovr = _player_ovr(p)
         if ovr < MIN_MARKET_PLAYER_OVR:
+            continue
+        if _is_shared_untouchable_core(team, p, team_ctx):
             continue
         score = _market_player_score(team, p, season_year, team_ctx, "seller")
         # Keep every tier technically available, but do not waste the generator's
@@ -702,6 +751,8 @@ def _buyer_outgoing_players(team: Dict[str, Any], season_year: int, team_ctx: Op
             continue
         ovr = _player_ovr(p)
         if ovr < MIN_MARKET_PLAYER_OVR:
+            continue
+        if _is_shared_untouchable_core(team, p, team_ctx):
             continue
         score = _market_player_score(team, p, season_year, team_ctx, "buyer")
         if score < -8 and ovr >= STAR_TRADE_TARGET_OVR:
@@ -904,7 +955,12 @@ def _salary_matchish(incoming_salary: float, outgoing_salary: float) -> bool:
     return incoming_salary <= outgoing_salary * 1.25 + 250_000
 
 
-def _pick_bundle_options(picks: List[Dict[str, Any]], max_picks: int, rng: random.Random) -> List[List[Dict[str, Any]]]:
+def _pick_bundle_options(
+    picks: List[Dict[str, Any]],
+    max_picks: int,
+    rng: random.Random,
+    allow_four_pick_bundles: bool = False,
+) -> List[List[Dict[str, Any]]]:
     clean = [p for p in picks if isinstance(p, dict)]
     rng.shuffle(clean)
     seconds = [p for p in clean if int(_num(p.get("round"), 1)) == 2]
@@ -945,6 +1001,19 @@ def _pick_bundle_options(picks: List[Dict[str, Any]], max_picks: int, rng: rando
                     firsts = sum(1 for p in bundle if int(_num(p.get("round"), 1)) == 1)
                     if firsts <= 2:
                         add_bundle(bundle)
+
+    if allow_four_pick_bundles and max_picks >= 4:
+        # Mega trades can reach a real blockbuster pick shape, but this lane is
+        # opt-in so the normal bank does not pay the combinatorics cost.
+        limit = min(len(ordered), 8)
+        for i in range(limit):
+            for j in range(i + 1, limit):
+                for k in range(j + 1, limit):
+                    for l in range(k + 1, limit):
+                        bundle = [ordered[i], ordered[j], ordered[k], ordered[l]]
+                        firsts = sum(1 for p in bundle if int(_num(p.get("round"), 1)) == 1)
+                        if 2 <= firsts <= 3:
+                            add_bundle(bundle)
     return out
 
 
@@ -985,6 +1054,71 @@ def _has_first(items: List[Dict[str, Any]]) -> bool:
 
 def _has_second(items: List[Dict[str, Any]]) -> bool:
     return any(item.get("type") == "pick" and _pick_round(item.get("pick") or {}) == 2 for item in items)
+
+
+def _first_count(items: List[Dict[str, Any]]) -> int:
+    return sum(1 for item in items if item.get("type") == "pick" and _pick_round(item.get("pick") or {}) == 1)
+
+
+def _premium_young_asset_count(items: List[Dict[str, Any]]) -> int:
+    count = 0
+    for item in items:
+        if not isinstance(item, dict) or item.get("type") != "player" or not isinstance(item.get("player"), dict):
+            continue
+        player = item["player"]
+        if _player_age(player) <= 24 and _player_pot(player) >= 82:
+            count += 1
+    return count
+
+
+def _player_position_bucket(player: Dict[str, Any]) -> str:
+    text = _str(player.get("pos") or player.get("position") or player.get("positionAbbrev"), "").upper()
+    for token in ["PG", "SG", "SF", "PF", "C"]:
+        if token in text:
+            return token
+    if "G" in text:
+        return "SG"
+    if "F" in text:
+        return "SF"
+    return "UTIL"
+
+
+def _is_young_franchise_cornerstone(player: Dict[str, Any]) -> bool:
+    age = _player_age(player)
+    ovr = _player_ovr(player)
+    pot = _player_pot(player)
+    upside = max(0.0, pot - ovr)
+    return bool(
+        ovr >= MEGA_TRADE_TARGET_OVR
+        and (
+            (age <= 23 and pot >= 92)
+            or (age <= 24 and pot >= 94)
+            or (age <= 25 and pot >= 94 and upside >= 3)
+        )
+    )
+
+
+def _buyer_mega_fit_score(buyer: Dict[str, Any], target: Dict[str, Any], buyer_ctx: Dict[str, Any]) -> float:
+    target_bucket = _player_position_bucket(target)
+    target_ovr = _player_ovr(target)
+    ranked = sorted(_players(buyer), key=lambda p: _player_ovr(p), reverse=True)
+    top8 = sum(_player_ovr(p) for p in ranked[:8]) / max(1, len(ranked[:8])) if ranked else 70.0
+    same_bucket_quality = [p for p in ranked if _player_position_bucket(p) == target_bucket and _player_ovr(p) >= 80]
+    same_bucket_star = max((_player_ovr(p) for p in same_bucket_quality), default=0.0)
+    need_bonus = 0.0
+    if target_bucket == "UTIL":
+        need_bonus = 0.35
+    elif not same_bucket_quality:
+        need_bonus = 1.20
+    elif same_bucket_star <= target_ovr - 5.0:
+        need_bonus = 0.90
+    elif same_bucket_star <= target_ovr - 2.0:
+        need_bonus = 0.45
+    else:
+        need_bonus = -0.75
+
+    phase_bonus = 1.30 if buyer_ctx.get("phase") == "contender" else 0.62 if buyer_ctx.get("phase") == "buyer" else 0.0
+    return (top8 - 78.0) * 0.19 + phase_bonus + need_bonus + _num(buyer_ctx.get("buyerWeight"), 0.0)
 
 
 def _best_player_value(items: List[Dict[str, Any]], season_year: int) -> float:
@@ -1119,6 +1253,28 @@ def _target_value_window(target: Dict[str, Any]) -> Tuple[float, float]:
     return (-3.10, 8.5)
 
 
+def _mega_target_value_window(target: Dict[str, Any]) -> Tuple[float, float]:
+    age = _player_age(target)
+    ovr = _player_ovr(target)
+    # Direct deadline mega trades need a broader value window than normal banked
+    # deals. Otherwise a realistic Booker/Tatum-style trade can fail because a
+    # contender's available salary+picks lands a few points outside the narrow
+    # asking band even though both teams would plausibly accept the framework.
+    if age <= 31:
+        low, high = 2.0, 42.0
+    elif age <= 34:
+        low, high = 1.2, 34.0
+    else:
+        low, high = 0.3, 26.0
+    if ovr >= 94:
+        low += 0.8
+        high += 6.0
+    elif ovr >= 92:
+        low += 0.4
+        high += 4.0
+    return (low, high)
+
+
 def _candidate_template_label(target: Dict[str, Any], to_items: List[Dict[str, Any]], from_items: List[Dict[str, Any]]) -> str:
     ovr = _player_ovr(target)
     pick_count = sum(1 for item in to_items if item.get("type") == "pick")
@@ -1149,6 +1305,7 @@ def _build_candidate(
     buyer_ctx: Dict[str, Any],
     season_year: int,
     rng: random.Random,
+    mega_trade: bool = False,
 ) -> Optional[Dict[str, Any]]:
     target_salary = _salary_for_year(target, season_year)
     target_value = _rough_value_player(target, season_year)
@@ -1159,14 +1316,22 @@ def _build_candidate(
     seller_allowed_max = max(STANDARD_ROSTER_MAX, seller_roster_count + 1)
     buyer_allowed_max = max(STANDARD_ROSTER_MAX, buyer_roster_count + 1)
 
-    max_assets = MAX_ASSETS_PER_SIDE
-    max_players = min(MAX_PLAYER_ASSETS_PER_SIDE, max_assets)
+    max_assets = MEGA_MAX_ASSETS_PER_SIDE if mega_trade else MAX_ASSETS_PER_SIDE
+    max_players = min(MEGA_MAX_PLAYER_ASSETS_PER_SIDE if mega_trade else MAX_PLAYER_ASSETS_PER_SIDE, max_assets)
+    max_picks = MEGA_MAX_PICK_ASSETS_PER_SIDE if mega_trade else MAX_PICK_ASSETS_PER_SIDE
     player_combos = _player_combo_options(buyer_pool, max_players, rng, target, season_year)
-    pick_bundles = _pick_bundle_options(buyer_picks, MAX_PICK_ASSETS_PER_SIDE, rng)
+    pick_bundles = _pick_bundle_options(
+        buyer_picks,
+        max_picks,
+        rng,
+        allow_four_pick_bundles = mega_trade,
+    )
     # Keep the generated search progressive rather than exhaustive. First-round
     # options are considered early for starter/star targets, but we cap the bundle
     # count so one hard salary match cannot stall the sim thread.
-    if target_ovr >= STAR_TRADE_TARGET_OVR:
+    if mega_trade:
+        pick_bundles = pick_bundles[:64]
+    elif target_ovr >= STAR_TRADE_TARGET_OVR:
         pick_bundles = pick_bundles[:28]
     elif target_ovr >= MAJOR_TRADE_TARGET_OVR:
         pick_bundles = pick_bundles[:24]
@@ -1175,7 +1340,7 @@ def _build_candidate(
     seller_pick_bundles = _pick_bundle_options(seller_picks, 1, rng)[:6]
 
     viable = []
-    min_balance, max_balance = _target_value_window(target)
+    min_balance, max_balance = _mega_target_value_window(target) if mega_trade else _target_value_window(target)
 
     # Higher-end targets need real outbound structure. This keeps every player
     # available while making expensive players require multi-asset frameworks.
@@ -1209,6 +1374,25 @@ def _build_candidate(
                 premium_points += 2 if _has_premium_young_asset(to_items) else 0
                 premium_points += 1 if _best_player_ovr(to_items) >= target_ovr - 5.0 else 0
                 if premium_points < 3:
+                    continue
+
+            if mega_trade:
+                first_count = _first_count(to_items)
+                premium_young_count = _premium_young_asset_count(to_items)
+                best_outgoing_ovr = _best_player_ovr(to_items)
+                mega_premium_points = first_count * 2 + premium_young_count * 3
+                if best_outgoing_ovr >= target_ovr - 7.0:
+                    mega_premium_points += 2
+                elif best_outgoing_ovr >= 82.0:
+                    mega_premium_points += 1
+                # Dedicated mega-trade lane: multiple firsts can carry value
+                # without requiring the buyer to give up its own League Intel
+                # untouchable young core. This lets contenders push in for 90+
+                # prime/older stars without sending Wemby/Harper-style pieces.
+                required_points = 5 if _player_age(target) <= 31 else 4 if _player_age(target) <= 34 else 3
+                if mega_premium_points < required_points:
+                    continue
+                if first_count < (2 if _player_age(target) <= 34 else 1) and premium_young_count <= 0:
                     continue
 
             from_items = [_player_item(target)]
@@ -1279,10 +1463,14 @@ def _build_candidate(
                 + quality_bonus
                 - activity_penalty
             )
+            if mega_trade:
+                score += 8.0 + min(3.0, _first_count(to_items) * 0.65 + _premium_young_asset_count(to_items) * 0.80)
             viable.append((score, combo, pick_bundle, from_items, to_items, balance))
-            if len(viable) >= (72 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 36):
+            viable_cap = 96 if mega_trade else (72 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 36)
+            if len(viable) >= viable_cap:
                 break
-        if len(viable) >= (72 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 36):
+        viable_cap = 96 if mega_trade else (72 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 36)
+        if len(viable) >= viable_cap:
             break
 
     if not viable:
@@ -1296,7 +1484,8 @@ def _build_candidate(
     to_team = _team_name(buyer)
     template = _candidate_template_label(target, to_items, from_items)
 
-    if len(from_items) > MAX_ASSETS_PER_SIDE or len(to_items) > MAX_ASSETS_PER_SIDE:
+    side_limit = MEGA_MAX_ASSETS_PER_SIDE if mega_trade else MAX_ASSETS_PER_SIDE
+    if len(from_items) > side_limit or len(to_items) > side_limit:
         return None
 
     target_tier = "rotation"
@@ -1320,7 +1509,8 @@ def _build_candidate(
         motive_bits.append(f"{from_team} listens because the package clears its asking-price board")
 
     return {
-        "id": f"cpu_trade_{_norm(from_team)}_{_norm(to_team)}_{_norm(_player_name(target))}_{_stable_seed(template, balance) % 100000}",
+        "id": f"{'cpu_mega_trade' if mega_trade else 'cpu_trade'}_{_norm(from_team)}_{_norm(to_team)}_{_norm(_player_name(target))}_{_stable_seed(template, balance) % 100000}",
+        "megaTrade": bool(mega_trade),
         "fromTeamName": from_team,
         "toTeamName": to_team,
         "fromItems": from_items,
@@ -1345,7 +1535,176 @@ def _build_candidate(
             "buyerPickCount": sum(1 for item in to_items if item.get("type") == "pick"),
             "sellerPickCount": sum(1 for item in from_items if item.get("type") == "pick"),
             "protectedFirstCount": sum(1 for item in to_items + from_items if item.get("type") == "pick" and int(_num((item.get("pick") or {}).get("round"), 1)) == 1 and "protected" in _str(item.get("protection") or (item.get("pick") or {}).get("displayProtection") or "").lower()),
+            "megaTrade": bool(mega_trade),
+            "megaFirstCount": _first_count(to_items) if mega_trade else 0,
+            "megaPremiumYoungAssetCount": _premium_young_asset_count(to_items) if mega_trade else 0,
         },
+    }
+
+
+def _build_mega_trade_candidates(
+    league: Dict[str, Any],
+    context: Dict[str, Any],
+    teams: List[Dict[str, Any]],
+    contexts: Dict[str, Dict[str, Any]],
+    season_year: int,
+    current_date: str,
+    rng: random.Random,
+    max_candidates: int,
+) -> Tuple[List[Dict[str, Any]], str, Dict[str, Any]]:
+    target_rows: List[Tuple[float, Dict[str, Any], Dict[str, Any]]] = []
+
+    for seller in teams:
+        seller_name = _team_name(seller)
+        seller_ctx = contexts.get(seller_name, {})
+        seller_phase = seller_ctx.get("phase")
+        seller_win_pct = _num(seller_ctx.get("winPct"), 0.0)
+        seller_top_avg = _num(seller_ctx.get("topAvg"), 70.0)
+        hard_sweep = bool(context.get("megaTradeHardSweep"))
+        seller_disappointing = bool(seller_win_pct > 0 and seller_win_pct <= 0.500 and seller_top_avg >= 81.0)
+        seller_mid_star_market = bool(seller_win_pct > 0 and seller_win_pct <= (0.555 if hard_sweep else 0.535) and seller_top_avg >= 80.0)
+        if seller_phase not in {"seller", "retool"} and not seller_disappointing and not seller_mid_star_market:
+            continue
+        if _already_traded_count(league, seller_name) >= MAX_CPU_TRADES_PER_TEAM_SEASON:
+            continue
+        recent_names = _recent_cpu_acquired_player_names(league, seller_name, current_date)
+        for player in _players(seller):
+            if not isinstance(player, dict) or not _is_standard_player(player):
+                continue
+            if _player_ovr(player) < MEGA_TRADE_TARGET_OVR:
+                continue
+            if _norm(_player_name(player)) in recent_names:
+                continue
+            if _is_young_franchise_cornerstone(player):
+                continue
+            age = _player_age(player)
+            rebuilding_seller = seller_phase == "seller" or (seller_win_pct > 0 and seller_win_pct <= 0.380)
+            if not rebuilding_seller and _player_ovr(player) >= 94 and age <= 30:
+                continue
+            if age < 28 and _is_shared_untouchable_core(seller, player, seller_ctx):
+                continue
+            salary_m = _salary_for_year(player, season_year) / 1_000_000
+            # Prime/older 90+ players on mid/bad teams are the exact market
+            # this lane is supposed to force. Younger franchise cornerstones were
+            # already filtered above.
+            timeline_score = 4.4 if 28 <= age <= 32 else 3.0 if 33 <= age <= 35 else 1.5 if age > 35 else -2.5
+            direction_bonus = 0.0
+            if seller_phase in {"seller", "retool"}:
+                direction_bonus += 4.5
+            if seller_disappointing:
+                direction_bonus += 3.0
+            if seller_mid_star_market and age >= 30:
+                direction_bonus += 2.0
+            if hard_sweep:
+                direction_bonus += 2.5
+            score = (
+                (_player_ovr(player) - 89.0) * 2.7
+                + timeline_score
+                + direction_bonus
+                + _num(seller_ctx.get("sellerWeight"), 0.0) * 1.4
+                + max(0.0, salary_m - 28.0) * 0.04
+                + rng.uniform(0.0, 5.0)
+            )
+            target_rows.append((score, seller, player))
+
+    if not target_rows:
+        return [], "no_eligible_mega_star", {"eligibleMegaTargets": 0, "megaTradeMode": True}
+
+    target_rows.sort(key=lambda row: row[0], reverse=True)
+    target_rows = target_rows[:MEGA_TARGET_SCAN_LIMIT]
+    candidates: List[Dict[str, Any]] = []
+    buyer_attempts = 0
+
+    for _, seller, target in target_rows:
+        seller_name = _team_name(seller)
+        seller_ctx = contexts.get(seller_name, {})
+        seller_picks = _simple_pick_assets(league, seller_name, season_year)
+        buyer_rows: List[Tuple[float, Dict[str, Any]]] = []
+        for buyer in teams:
+            buyer_name = _team_name(buyer)
+            if _norm(buyer_name) == _norm(seller_name):
+                continue
+            buyer_ctx = contexts.get(buyer_name, {})
+            if buyer_ctx.get("phase") not in {"contender", "buyer"}:
+                continue
+            if _already_traded_count(league, buyer_name) >= MAX_CPU_TRADES_PER_TEAM_SEASON:
+                continue
+            if _already_traded_pair(league, seller_name, buyer_name):
+                continue
+            score = _buyer_mega_fit_score(buyer, target, buyer_ctx) + rng.uniform(0.0, 3.5)
+            buyer_rows.append((score, buyer))
+
+        buyer_rows.sort(key=lambda row: row[0], reverse=True)
+        for _, buyer in buyer_rows[:MEGA_BUYER_SCAN_LIMIT]:
+            buyer_attempts += 1
+            buyer_name = _team_name(buyer)
+            buyer_ctx = contexts.get(buyer_name, {})
+            buyer_recent = _recent_cpu_acquired_player_names(league, buyer_name, current_date)
+            if hard_sweep:
+                # Deadline mega solver: use a wider salary/asset pool than the
+                # normal market board so $45M-$60M stars can be matched without
+                # forcing a buyer to send its League Intel untouchable. Still
+                # excludes true young-core protected pieces and recent arrivals.
+                raw_pool = [
+                    player for player in _players(buyer)
+                    if isinstance(player, dict)
+                    and _is_standard_player(player)
+                    and _player_ovr(player) >= MIN_MARKET_PLAYER_OVR
+                    and _norm(_player_name(player)) not in buyer_recent
+                    and not _is_shared_untouchable_core(buyer, player, buyer_ctx)
+                ]
+                buyer_pool = sorted(
+                    raw_pool,
+                    key=lambda p: (
+                        _salary_for_year(p, season_year) / 1_000_000,
+                        _rough_value_player(p, season_year),
+                        max(0.0, _player_pot(p) - _player_ovr(p)),
+                    ),
+                    reverse=True,
+                )[:28]
+            else:
+                buyer_pool = [
+                    player
+                    for player in _buyer_outgoing_players(buyer, season_year, buyer_ctx)
+                    if _norm(_player_name(player)) not in buyer_recent
+                ]
+            buyer_picks = _simple_pick_assets(league, buyer_name, season_year)
+            if not buyer_pool:
+                continue
+            candidate = _build_candidate(
+                league,
+                seller,
+                buyer,
+                target,
+                buyer_pool,
+                buyer_picks,
+                seller_picks,
+                seller_ctx,
+                buyer_ctx,
+                season_year,
+                rng,
+                mega_trade = True,
+            )
+            if not candidate:
+                continue
+            candidate["motive"] = (
+                f"Mega trade market: {seller_name} cashes out on {_player_name(target)} "
+                f"because its timeline leans {seller_ctx.get('phase')}, while {buyer_name} makes a title-window swing."
+            )
+            candidate.setdefault("debug", {})["megaTrade"] = True
+            candidate["debug"]["megaBuyerFitScore"] = round(_buyer_mega_fit_score(buyer, target, buyer_ctx), 3)
+            candidates.append(candidate)
+            if len(candidates) >= max_candidates:
+                return candidates, "", {
+                    "eligibleMegaTargets": len(target_rows),
+                    "buyerAttempts": buyer_attempts,
+                    "megaTradeMode": True,
+                }
+
+    return candidates, ("" if candidates else "no_valid_mega_trade_package"), {
+        "eligibleMegaTargets": len(target_rows),
+        "buyerAttempts": buyer_attempts,
+        "megaTradeMode": True,
     }
 
 
@@ -1528,6 +1887,41 @@ def find_cpu_cpu_trade_candidates(payload: Dict[str, Any]) -> Dict[str, Any]:
     teams = [t for t in _all_teams(league) if _team_name(t) and _norm(_team_name(t)) != _norm(user_team)]
     contexts = {_team_name(t): _phase_for(t, context) for t in teams}
     base_trade_desk_items = _build_trade_desk_signals(league, context, teams, contexts, season_year, current_date, rng)
+
+    if bool(context.get("megaTradeMode")):
+        mega_candidates, mega_skipped, mega_debug = _build_mega_trade_candidates(
+            league = league,
+            context = context,
+            teams = teams,
+            contexts = contexts,
+            season_year = season_year,
+            current_date = current_date,
+            rng = rng,
+            max_candidates = max_candidates,
+        )
+        candidate_trade_desk_items = []
+        for candidate in mega_candidates[:max_candidates]:
+            entry = _candidate_trade_desk_entry(candidate, current_date)
+            if entry:
+                entry["label"] = "Mega Framework"
+                entry["tag"] = "Blockbuster"
+                entry["priority"] = 96
+                candidate_trade_desk_items.append(entry)
+        return {
+            "ok": True,
+            "candidates": mega_candidates[:max_candidates],
+            "activityChance": 1.0,
+            "skippedReason": None if mega_candidates else mega_skipped,
+            "debug": {
+                **mega_debug,
+                "sellerCount": sum(1 for t in teams if contexts.get(_team_name(t), {}).get("phase") in {"seller", "retool"}),
+                "buyerCount": sum(1 for t in teams if contexts.get(_team_name(t), {}).get("phase") in {"contender", "buyer"}),
+                "maxCandidates": max_candidates,
+                "bankSeedPresent": bool(bank_seed),
+                "generationNonce": generation_nonce,
+            },
+            "tradeDeskItems": (candidate_trade_desk_items + base_trade_desk_items)[:8],
+        }
 
     bank_generation_mode = bool(context.get("bankGenerationMode"))
     chance = 1.0 if bank_generation_mode else _activity_chance(context)

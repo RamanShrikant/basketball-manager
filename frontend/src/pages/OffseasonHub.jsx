@@ -14,6 +14,8 @@ import {
   recordRetirementMoodEvents,
 } from "../utils/offseasonMoodEvents.js";
 import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
+import { archiveCurrentSeasonIntoPlayerCards } from "../utils/playerCareerHistory.js";
+import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -1221,6 +1223,26 @@ function loadStatsByKeyFromStorage() {
   }
 
   return {};
+}
+
+function preserveCompletedSeasonPlayerHistoryBeforeStatReset(league, completedSeasonYear, label = "offseason") {
+  if (!league) return league;
+  const displayYear = Number(completedSeasonYear || 0);
+  if (!Number.isFinite(displayYear) || displayYear <= 1900) return league;
+
+  try {
+    const withStatsArchive = ensureCompletedSeasonStatsArchive(league, displayYear - 1);
+    const withPlayerCards = archiveCurrentSeasonIntoPlayerCards(withStatsArchive, displayYear);
+    if (typeof window !== "undefined" && window.__debugSimLogs) {
+      console.log(`[${label}] preserved player-card season history before clearing stat stores`, {
+        completedSeasonYear: displayYear,
+      });
+    }
+    return withPlayerCards || league;
+  } catch (err) {
+    console.warn(`[${label}] failed to preserve completed player-card stats before stat reset`, err);
+    return league;
+  }
 }
 
 function progressionPlayerKey(player = {}) {
@@ -2931,11 +2953,19 @@ export default function OffseasonHub() {
       throw new Error("computePlayerProgression is not wired in simEnginePy.js yet.");
     }
 
+    // Preserve the completed season before progression clears live stat stores.
+    // This writes compact player/team season rows only, not game-by-game data.
+    const historySafeLeague = preserveCompletedSeasonPlayerHistoryBeforeStatReset(
+      workingLeague,
+      seasonYear,
+      "OffseasonHub Dev Progression"
+    );
+
     // Match the manual PlayerProgression page exactly: normalize derived
     // ratings before the snapshot, then build visible deltas from the final
     // post-recompute league. This prevents dev/full-offseason from saving
     // Python-bumped OFF/DEF/STAM while manual progression saves V19 values.
-    const sourceLeague = recomputeDerivedRatingsInLeague(snapshotLeague(workingLeague));
+    const sourceLeague = recomputeDerivedRatingsInLeague(snapshotLeague(historySafeLeague));
     const beforeSnapshot = snapshotLeague(sourceLeague);
     const leagueForProg = prepareLeagueForProgressionWorker(sourceLeague, seasonYear);
 

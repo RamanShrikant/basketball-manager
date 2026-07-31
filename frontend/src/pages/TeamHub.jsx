@@ -109,6 +109,8 @@ function tileSubtitle(tile, selectedTeamName, { allStarsAvailable = false, isOff
     ? "Team scouting and trade intel"
     : tile.name === "Locker Room"
     ? "Player Morale and Role Check"
+    : tile.name === "Statistics"
+    ? isOffseasonMode ? "Previous Regular Season" : "Player and Team Stats"
     : tile.name === "Playoff Statistics"
     ? isOffseasonMode ? "Previous Postseason" : "Current Postseason"
     : tile.name === "View All-Stars"
@@ -247,21 +249,36 @@ export default function TeamHub() {
     setSelectedTeam(nextTeam);
   };
 
-  const regularSectionTiles = {
+  // Keep the Team Hub structure identical in every phase. Only the first
+  // direct tile changes from Schedule to the appropriate return action, while
+  // individual destinations can be disabled when that phase does not allow them.
+  const sectionTiles = {
     Team: [
       { name: "View Roster", path: "/roster-view", enabled: true },
       { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
     ],
     Stats: [
       { name: "Statistics", path: "/player-stats", enabled: true },
-      { name: "Playoff Statistics", path: "#", enabled: false },
+      {
+        name: "Playoff Statistics",
+        path: isPlayoffMode || isOffseasonMode ? "/playoff-stats" : "#",
+        enabled: isPlayoffMode || isOffseasonMode,
+      },
     ],
     "Front Office": [
-      { name: "Trades", path: "/trades", enabled: true },
-      { name: "Free Agents", path: "/free-agents", enabled: true },
+      { name: "Trades", path: "/trades", enabled: !isPlayoffMode },
+      {
+        name: "Free Agents",
+        path: isOffseasonMode ? offseasonFreeAgentsPath : "/free-agents",
+        enabled: !isPlayoffMode,
+      },
       { name: "Draft Picks", path: "/draft-picks", enabled: true },
       { name: "Salary Table", path: "/salary-table", enabled: true },
-      { name: "Contract Extensions", path: "/contract-extensions", enabled: true },
+      {
+        name: "Contract Extensions",
+        path: "/contract-extensions",
+        enabled: !isPlayoffMode,
+      },
     ],
     Season: [
       { name: "Standings", path: "/standings", enabled: true },
@@ -274,107 +291,76 @@ export default function TeamHub() {
     ],
     Awards: [
       { name: "Award Tracker", path: "/award-tracker", enabled: true },
-      { name: "View All-Stars", path: allStarsAvailable ? "/all-stars" : "#", enabled: allStarsAvailable },
+      {
+        name: "View All-Stars",
+        path: allStarsAvailable ? "/all-stars" : "#",
+        enabled: allStarsAvailable,
+      },
     ],
   };
 
-  const offseasonSectionTiles = {
-    Offseason: [
-      { name: "Free Agents", path: offseasonFreeAgentsPath, enabled: true },
-      { name: "Draft Picks", path: "/draft-picks", enabled: true },
-      { name: "Salary Table", path: "/salary-table", enabled: true },
-    ],
-    Team: [
-      { name: "View Roster", path: "/roster-view", enabled: true },
-      { name: "Coach Gameplan", path: "#", enabled: false },
-    ],
-    Season: [
-      { name: "Standings", path: "/standings", enabled: true },
-      { name: "Power Rankings", path: "/power-rankings", enabled: true },
-    ],
-    Stats: [
-      { name: "Playoff Statistics", path: "/playoff-stats", enabled: true },
-    ],
-    "Front Office": [
-      { name: "Trades", path: "/trades", enabled: true },
-      { name: "Contract Extensions", path: "/contract-extensions", enabled: true },
-    ],
-    Scouting: [
-      { name: "Locker Room", path: "/locker-room", enabled: true },
-      { name: "Team Intel", path: "/intel", enabled: true },
-    ],
-  };
-
-  const playoffSectionTiles = {
-    Playoffs: [
-      { name: "Playoff Statistics", path: "/playoff-stats", enabled: true },
-      { name: "Standings", path: "/standings", enabled: true },
-    ],
-    Team: [
-      { name: "View Roster", path: "/roster-view", enabled: true },
-      { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
-    ],
-    Season: [
-      { name: "Power Rankings", path: "/power-rankings", enabled: true },
-      { name: "Playoff Picture", path: "#", enabled: false },
-    ],
-    Stats: [
-      { name: "Statistics", path: "/player-stats", enabled: true },
-      { name: "Playoff Statistics", path: "/playoff-stats", enabled: true },
-    ],
-    "Front Office": [
-      { name: "Draft Picks", path: "/draft-picks", enabled: true },
-      { name: "Salary Table", path: "/salary-table", enabled: true },
-      { name: "Trades", path: "#", enabled: false },
-      { name: "Free Agents", path: "#", enabled: false },
-      { name: "Contract Extensions", path: "#", enabled: false },
-    ],
-    Scouting: [
-      { name: "Locker Room", path: "/locker-room", enabled: true },
-      { name: "Team Intel", path: "/intel", enabled: true },
-    ],
-    Awards: [
-      { name: "Award Tracker", path: "/award-tracker", enabled: true },
-      { name: "View All-Stars", path: allStarsAvailable ? "/all-stars" : "#", enabled: allStarsAvailable },
-    ],
-  };
-
-  const sectionTiles = isOffseasonMode
-    ? offseasonSectionTiles
+  const firstMainItem = isOffseasonMode
+    ? {
+        name: "Return to Offseason Hub",
+        path: offseasonReturnTo,
+        enabled: true,
+        direct: true,
+        description: "Resume Offseason Flow",
+      }
     : isPlayoffMode
-    ? playoffSectionTiles
-    : regularSectionTiles;
+    ? {
+        name: "Return to Playoffs",
+        path: playoffReturnTo,
+        enabled: true,
+        direct: true,
+        description: "Resume Playoff Bracket",
+      }
+    : {
+        name: "Schedule",
+        path: "/calendar",
+        enabled: true,
+        direct: true,
+        description: "Calendar and Season Simulation",
+      };
 
-  const mainItems = isOffseasonMode
-    ? [
-        { name: "Return to Offseason Hub", path: offseasonReturnTo, enabled: true, direct: true, description: "Resume Offseason Flow" },
-        { name: "Offseason", sectionKey: "Offseason", enabled: true, description: "Free Agency, Picks, and Cap Tools" },
-        { name: "Team", sectionKey: "Team", enabled: true, description: "Roster and Gameplan" },
-        { name: "Stats", sectionKey: "Stats", enabled: true, description: "Postseason Stat Tables" },
-        { name: "Front Office", sectionKey: "Front Office", enabled: true, description: "Trades and League Tools" },
-        { name: "Season", sectionKey: "Season", enabled: true, description: "Standings and Power Rankings" },
-        { name: "Scouting", sectionKey: "Scouting", enabled: true, description: "Locker Room and Team Intel" },
-      ]
-    : isPlayoffMode
-    ? [
-        { name: "Return to Playoffs", path: playoffReturnTo, enabled: true, direct: true, description: "Resume Playoff Bracket" },
-        { name: "Playoffs", sectionKey: "Playoffs", enabled: true, description: "Playoff Stats and Standings" },
-        { name: "Team", sectionKey: "Team", enabled: true, description: "Roster and Gameplan" },
-        { name: "Stats", sectionKey: "Stats", enabled: true, description: "Regular and Playoff Stats" },
-        { name: "Front Office", sectionKey: "Front Office", enabled: true, description: "Draft Assets and Salary" },
-        { name: "Season", sectionKey: "Season", enabled: true, description: "Power Rankings and Playoff Picture" },
-        { name: "Scouting", sectionKey: "Scouting", enabled: true, description: "Locker Room and Team Intel" },
-        { name: "Awards", sectionKey: "Awards", enabled: true, description: "Award Tracker and All-Stars" },
-      ]
-    : [
-        { name: "Schedule", path: "/calendar", enabled: true, direct: true, description: "Calendar and Season Simulation" },
-        { name: "Team", sectionKey: "Team", enabled: true, description: "Roster and Gameplan" },
-        { name: "Stats", sectionKey: "Stats", enabled: true, description: "Player and Playoff Stat Tables" },
-        { name: "Front Office", sectionKey: "Front Office", enabled: true, description: "Trades, Free Agency, Picks, Salary" },
-        { name: "Season", sectionKey: "Season", enabled: true, description: "Standings, Playoff Picture, Rankings" },
-        { name: "Scouting", sectionKey: "Scouting", enabled: true, description: "Locker Room and Team Intel" },
-        { name: "Awards", sectionKey: "Awards", enabled: true, description: "Tracker and All-Star Selections" },
-      ];
+  const mainItems = [
+    firstMainItem,
+    { name: "Team", sectionKey: "Team", enabled: true, description: "Roster and Gameplan" },
+    {
+      name: "Stats",
+      sectionKey: "Stats",
+      enabled: true,
+      description: isOffseasonMode
+        ? "Previous Regular Season and Playoff Stats"
+        : isPlayoffMode
+        ? "Regular and Playoff Stats"
+        : "Player and Playoff Stat Tables",
+    },
+    {
+      name: "Front Office",
+      sectionKey: "Front Office",
+      enabled: true,
+      description: "Trades, Free Agency, Picks, Salary",
+    },
+    {
+      name: "Season",
+      sectionKey: "Season",
+      enabled: true,
+      description: "Standings, Playoff Picture, Rankings",
+    },
+    {
+      name: "Scouting",
+      sectionKey: "Scouting",
+      enabled: true,
+      description: "Locker Room and Team Intel",
+    },
+    {
+      name: "Awards",
+      sectionKey: "Awards",
+      enabled: true,
+      description: "Tracker and All-Star Selections",
+    },
+  ];
 
   const currentSection = activeSection && sectionTiles[activeSection] ? activeSection : null;
   const activeSectionTiles = currentSection ? sectionTiles[currentSection] || [] : [];

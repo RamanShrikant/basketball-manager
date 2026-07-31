@@ -13,6 +13,7 @@ import {
   expandSnapshotTeamRows,
   getArchivedStatsSnapshot,
   getLivePlayoffStatsSnapshot,
+  readCanonicalRegularPlayerStatsMap,
   getSnapshotPlayerRows,
   getSnapshotTeams,
   seasonLabelFromStartYear,
@@ -187,9 +188,15 @@ function getCombinedPlayerStatsRecord(playerStatsMap, playerName, currentTeamNam
   const name = String(playerName || "").trim();
   if (!name) return null;
 
-  const exactCurrent = playerStatsMap?.[`${name}__${currentTeamName}`];
+  const exactCurrentCandidate = playerStatsMap?.[`${name}__${currentTeamName}`];
+  const exactCurrent = exactCurrentCandidate?._awardsOnly || exactCurrentCandidate?._combinedForAwards
+    ? null
+    : exactCurrentCandidate;
   const records = Object.entries(playerStatsMap || {})
-    .filter(([key, row]) => (row?.player || key.split("__")[0]) === name)
+    .filter(([key, row]) => {
+      if (row?._awardsOnly || row?._combinedForAwards) return false;
+      return (row?.player || key.split("__")[0]) === name;
+    })
     .map(([, row]) => row);
 
   if (!records.length && exactCurrent) records.push(exactCurrent);
@@ -211,9 +218,14 @@ export default function PlayerStats({ scope = "regular" }) {
   const archivedSnapshot = useMemo(() => {
     if (!leagueData) return null;
     if (isPlayoffStats) {
-      return isOffseasonMode
-        ? getArchivedStatsSnapshot(leagueData, "playoffs")
-        : getLivePlayoffStatsSnapshot(leagueData);
+      if (!isOffseasonMode) return getLivePlayoffStatsSnapshot(leagueData);
+      const archived = getArchivedStatsSnapshot(leagueData, "playoffs");
+      // Some offseason paths archive regular-season stats before playoff results
+      // are finalized. Keep the page useful by falling back to the still-saved
+      // postseason result blob when the archived playoff snapshot is empty.
+      if (archived && (archived.playerRows?.length || archived.teamRows?.length)) return archived;
+      const live = getLivePlayoffStatsSnapshot(leagueData);
+      return live && (live.playerRows?.length || live.teamRows?.length) ? live : archived;
     }
     return isOffseasonMode ? getArchivedStatsSnapshot(leagueData, "regular") : null;
   }, [leagueData, isPlayoffStats, isOffseasonMode]);
@@ -264,8 +276,13 @@ export default function PlayerStats({ scope = "regular" }) {
 
   const selectedTeam = useMemo(() => {
     const targetName = viewTeamName || controlledTeam?.name;
-    return allTeams.find((team) => team.name === targetName) || controlledTeam || allTeams[0] || null;
-  }, [allTeams, viewTeamName, controlledTeam]);
+    const found = allTeams.find((team) => team.name === targetName);
+    // In offseason playoff stats, the controlled team may have missed the
+    // playoffs, so it will not exist in the archived playoff-team list. Fall
+    // back to the first playoff team so arrows/team switching actually work.
+    if (archivedSnapshot && isPlayoffStats && !found) return allTeams[0] || null;
+    return found || controlledTeam || allTeams[0] || null;
+  }, [allTeams, viewTeamName, controlledTeam, archivedSnapshot, isPlayoffStats]);
 
   const teamLogo = useMemo(() => {
     const map = {};
@@ -291,7 +308,7 @@ export default function PlayerStats({ scope = "regular" }) {
   }, [allTeams, archivedSnapshot]);
 
   const playerStatsMap = useMemo(() => {
-    return readCompressedOrJson(PLAYER_STATS_KEY, {});
+    return readCanonicalRegularPlayerStatsMap();
   }, []);
 
   const schedule = useMemo(() => {
@@ -823,7 +840,7 @@ export default function PlayerStats({ scope = "regular" }) {
       <div className="w-full flex flex-1 min-h-0 justify-center mt-[-1px]">
         <div className="bmTableScroller w-full max-w-7xl min-h-0 overflow-auto rounded-b-xl bmTablePanel">
           {(mode === "players" || mode === "league") && (
-            <table className="w-full min-w-[1540px] border-collapse text-center text-[14px] font-medium">
+            <table className="bmStatsTable w-full min-w-[1540px] border-collapse text-center text-[14px] font-medium">
               <thead className="bg-neutral-800 text-gray-300 text-[13px] font-semibold">
                 <tr>
                   {mode === "league" && <th className="py-3 px-2 min-w-[60px]">Team</th>}
@@ -914,7 +931,7 @@ export default function PlayerStats({ scope = "regular" }) {
           )}
 
           {mode === "teams" && (
-            <table className="w-full min-w-[1540px] border-collapse text-center text-[14px] font-medium">
+            <table className="bmStatsTable w-full min-w-[1540px] border-collapse text-center text-[14px] font-medium">
               <thead className="bg-neutral-800 text-gray-300 text-[13px] font-semibold">
                 <tr>
                   {teamCols.map((col) => (

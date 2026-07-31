@@ -13,6 +13,7 @@ const RESULT_V3_PREFIX = "bm_result_v3_";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
 const PLAYER_STATS_KEY = "bm_player_stats_v1";
+const AWARD_DISPLAY_STATS_KEY = "bm_award_display_stats_v1";
 const CLUTCH_STATS_KEY = "bm_clutch_stats_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
@@ -128,6 +129,7 @@ function clearSeasonStores() {
   localStorage.removeItem(CLUTCH_STATS_KEY);
   localStorage.removeItem("bm_awards_latest");
   localStorage.removeItem("bm_awards_v1");
+  localStorage.removeItem(AWARD_DISPLAY_STATS_KEY);
 }
 
 function pushFinalsMvpToHistory(fmvpRaw) {

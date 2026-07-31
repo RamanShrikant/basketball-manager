@@ -1617,6 +1617,48 @@ export default function ViewingOffers() {
       : generatedOffers;
   };
 
+  const mergeFreeAgencyDayEvents = (previousLatest = null, nextLatest = {}) => {
+    const mergedDayResolved = nextLatest?.dayResolved ?? previousLatest?.dayResolved ?? null;
+    const sameDay =
+      Boolean(previousLatest) &&
+      (previousLatest.dayResolved === null ||
+        previousLatest.dayResolved === undefined ||
+        mergedDayResolved === null ||
+        mergedDayResolved === undefined ||
+        Number(previousLatest.dayResolved) === Number(mergedDayResolved));
+
+    const signingKey = (row = {}) => [
+      row.playerId ?? row.playerKey ?? row.playerName ?? "",
+      row.teamName || row.signedWith || "",
+      row.rfaMatched ? "rfa" : "sign",
+    ].join("|");
+    const offerKey = (row = {}) => [
+      row.offerId ?? row.playerId ?? row.playerKey ?? row.playerName ?? "",
+      row.teamName || "",
+      row.totalValue || row.contract?.salaryByYear?.reduce?.((sum, val) => sum + Number(val || 0), 0) || 0,
+    ].join("|");
+
+    const mergeRows = (oldRows = [], newRows = [], keyFn) => {
+      const out = [];
+      const seen = new Set();
+      for (const row of [...(sameDay ? oldRows : []), ...(newRows || [])]) {
+        if (!row) continue;
+        const key = keyFn(row);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(row);
+      }
+      return out;
+    };
+
+    return {
+      dayResolved: mergedDayResolved,
+      signings: mergeRows(previousLatest?.signings || [], nextLatest?.signings || [], signingKey),
+      generatedOffers: mergeRows(previousLatest?.generatedOffers || [], nextLatest?.generatedOffers || [], offerKey),
+      stateSummary: nextLatest?.stateSummary || previousLatest?.stateSummary || null,
+    };
+  };
+
 
   const fullFreeAgencySummaryEntries = useMemo(() => {
     const savedLog = Array.isArray(freeAgencyState?.fullActionLog)
@@ -2487,12 +2529,12 @@ if (secondApron > 0 && payrollAfter >= secondApron) {
         },
       };
 
-      const latest = {
+      const latest = mergeFreeAgencyDayEvents(latestResults, {
         dayResolved: dayResolved ?? row?.day ?? null,
         signings: res?.processedSignings || (res?.processedSigning ? [res.processedSigning] : []),
         generatedOffers: keepVisibleGeneratedOffers(res?.generatedOffers || []),
         stateSummary: res?.stateSummary || latestResults?.stateSummary || null,
-      };
+      });
 
       applyLeagueUpdateWithLatestResults(cleanedLeagueData, latest);
     } catch (err) {

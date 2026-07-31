@@ -2337,6 +2337,166 @@ export function validateCpuTradeCandidateOnLeague({
   };
 }
 
+
+export function executeCpuMegaTradeCandidateOnLeagueLoose({
+  leagueData,
+  candidate,
+  currentDate = "",
+  tradeDeadlineDate = "",
+  inOffseason = false,
+  recordsByTeam = null,
+} = {}) {
+  const timingValidation = cpuTradeTimingValidation({ currentDate, tradeDeadlineDate, inOffseason });
+  if (!timingValidation.ok) return timingValidation;
+
+  const evaluationLeagueData = attachCpuTradeRecordsForEvaluation(leagueData, recordsByTeam);
+  const fromTeamName = candidate?.fromTeamName || candidate?.sellerTeamName || candidate?.teamA || "";
+  const toTeamName = candidate?.toTeamName || candidate?.buyerTeamName || candidate?.teamB || "";
+  const rawFromItems = Array.isArray(candidate?.fromItems) ? candidate.fromItems : [];
+  const rawToItems = Array.isArray(candidate?.toItems) ? candidate.toItems : [];
+
+  if (!evaluationLeagueData || !fromTeamName || !toTeamName) {
+    return { ok: false, reason: "Mega trade candidate is missing one or both teams.", staleCode: "missing_team" };
+  }
+  if (sameTeamName(fromTeamName, toTeamName)) {
+    return { ok: false, reason: "Mega trade candidate cannot trade a team with itself.", staleCode: "same_team" };
+  }
+
+  const fromTeam = findTeamInLeague(evaluationLeagueData, fromTeamName);
+  const toTeam = findTeamInLeague(evaluationLeagueData, toTeamName);
+  if (!fromTeam || !toTeam) {
+    return { ok: false, reason: "Mega trade candidate referenced a missing team.", staleCode: "missing_team" };
+  }
+  if (!rawFromItems.length || !rawToItems.length) {
+    return { ok: false, reason: "Mega trade candidate needs assets from both teams.", staleCode: "empty_package" };
+  }
+
+  const resolvedFrom = resolveCurrentCpuTradeItems(evaluationLeagueData, fromTeamName, rawFromItems);
+  if (!resolvedFrom.ok) return resolvedFrom;
+  const resolvedTo = resolveCurrentCpuTradeItems(evaluationLeagueData, toTeamName, rawToItems);
+  if (!resolvedTo.ok) return resolvedTo;
+
+  const fromItems = resolvedFrom.items;
+  const toItems = resolvedTo.items;
+  const fromRosterProjection = evaluateTradeRosterProjection({
+    team: fromTeam,
+    outgoingItems: fromItems,
+    incomingItems: toItems,
+    inOffseason: false,
+  });
+  const toRosterProjection = evaluateTradeRosterProjection({
+    team: toTeam,
+    outgoingItems: toItems,
+    incomingItems: fromItems,
+    inOffseason: false,
+  });
+  if (!fromRosterProjection.ok || !toRosterProjection.ok) {
+    const blocked = !fromRosterProjection.ok ? fromRosterProjection : toRosterProjection;
+    return {
+      ok: false,
+      reason: blocked.reason,
+      staleCode: "roster_maximum",
+      fromRosterProjection,
+      toRosterProjection,
+    };
+  }
+
+  const targetName = fromItems.find((item) => item?.type === "player")?.player?.name || "a 90+ star";
+  const evaluation = {
+    accepted: true,
+    decision: "accept",
+    score: 999,
+    message: "Mega deadline deal legal check passed.",
+    reasons: [
+      candidate?.motive || `${toTeamName} makes a bonus deadline swing for ${targetName}.`,
+      `${fromTeamName} gets a legal mega package of players and/or draft picks.`,
+      `${toTeamName} gets the best player in a title-window move.`,
+    ],
+  };
+
+  const executionValidation = validateTradeForExecution({
+    leagueData: evaluationLeagueData,
+    userTeam: fromTeam,
+    cpuTeam: toTeam,
+    userItems: fromItems,
+    cpuItems: toItems,
+    evaluation,
+  });
+  if (!executionValidation.ok) {
+    return {
+      ...executionValidation,
+      staleCode: executionValidation.staleCode || "mega_execution_legality_changed",
+      fromRosterProjection,
+      toRosterProjection,
+    };
+  }
+
+  const execution = executeAcceptedTradeOnLeague({
+    leagueData,
+    userTeamName: fromTeamName,
+    cpuTeamName: toTeamName,
+    userItems: fromItems,
+    cpuItems: toItems,
+    evaluation,
+  });
+  if (!execution.ok) {
+    return { ...execution, staleCode: execution.staleCode || "mega_execution_failed" };
+  }
+
+  const cpuTiming = getTradeTimingSnapshot(leagueData);
+  const buyerReason = `${toTeamName} accepted because a contender is making a legal bonus mega-deadline swing for ${targetName}.`;
+  const sellerReason = `${fromTeamName} accepted because the team is converting a prime/older 90+ star into a legal package of salary, young value, and draft assets.`;
+  const patchedTradeRecord = {
+    ...(execution.tradeRecord || {}),
+    source: "cpu_cpu_trade",
+    cpuCpuTrade: true,
+    cpuMegaTrade: true,
+    megaTrade: true,
+    megaDeadlineDeal: true,
+    tradeType: "cpu_mega_trade",
+    tradeLabel: "Mega Deadline Deal",
+    fromTeamName,
+    toTeamName,
+    date: candidate?.currentDate || candidate?.date || currentDate || (execution.tradeRecord || {}).date || cpuTiming.date,
+    currentDate: candidate?.currentDate || candidate?.date || currentDate || (execution.tradeRecord || {}).currentDate || cpuTiming.currentDate,
+    day: candidate?.day ?? candidate?.currentDay ?? candidate?.dayIndex ?? (execution.tradeRecord || {}).day ?? cpuTiming.day,
+    dayIndex: candidate?.dayIndex ?? candidate?.day ?? candidate?.currentDay ?? (execution.tradeRecord || {}).dayIndex ?? cpuTiming.dayIndex,
+    motive: candidate?.motive || `Mega Deadline Deal: ${toTeamName} makes a title-window swing for ${targetName}.`,
+    bankId: candidate?.bankId || candidate?.id || null,
+    reasoning: {
+      ...((execution.tradeRecord || {}).reasoning || {}),
+      [fromTeamName]: sellerReason,
+      [toTeamName]: buyerReason,
+    },
+    teamPackages: Array.isArray((execution.tradeRecord || {}).teamPackages)
+      ? (execution.tradeRecord || {}).teamPackages.map((side) => ({
+          ...side,
+          reason: side.teamName === fromTeamName ? sellerReason : side.teamName === toTeamName ? buyerReason : side.reason,
+        }))
+      : (execution.tradeRecord || {}).teamPackages,
+    fromTeamView: { accepted: true, decision: "accept", score: 500, reasons: [sellerReason] },
+    toTeamView: { accepted: true, decision: "accept", score: 500, reasons: [buyerReason] },
+  };
+
+  return {
+    ...execution,
+    leagueData: {
+      ...execution.leagueData,
+      tradeHistory: [
+        ...(Array.isArray(execution.leagueData?.tradeHistory) ? execution.leagueData.tradeHistory.slice(0, -1) : []),
+        patchedTradeRecord,
+      ],
+      lastTrade: patchedTradeRecord,
+    },
+    tradeRecord: patchedTradeRecord,
+    fromRosterProjection,
+    toRosterProjection,
+    requiresRosterRepairBeforeSimulation: Boolean(
+      fromRosterProjection.requiresRepairBeforeSimulation || toRosterProjection.requiresRepairBeforeSimulation
+    ),
+  };
+}
+
 export function executeCpuTradeCandidateOnLeague({
   leagueData,
   candidate,
@@ -2383,6 +2543,13 @@ export function executeCpuTradeCandidateOnLeague({
   }
 
   const cpuTiming = getTradeTimingSnapshot(leagueData);
+  const candidateMegaTrade = Boolean(
+    hydratedCandidate?.megaTrade ||
+      hydratedCandidate?.cpuMegaTrade ||
+      hydratedCandidate?.tradeType === "cpu_mega_trade" ||
+      hydratedCandidate?.debug?.megaTrade ||
+      hydratedCandidate?.bankMeta?.megaTrade
+  );
   const buyerReason = reasonFromTeamView(
     toTeamName,
     toTeamView,
@@ -2403,6 +2570,9 @@ export function executeCpuTradeCandidateOnLeague({
     ...(execution.tradeRecord || {}),
     source: "cpu_cpu_trade",
     cpuCpuTrade: true,
+    cpuMegaTrade: candidateMegaTrade,
+    megaTrade: candidateMegaTrade,
+    tradeType: candidateMegaTrade ? "cpu_mega_trade" : "cpu_cpu_trade",
     fromTeamName,
     toTeamName,
     date: hydratedCandidate?.currentDate || hydratedCandidate?.date || currentDate || (execution.tradeRecord || {}).date || cpuTiming.date,

@@ -9,6 +9,8 @@ import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
 import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
 import "../styles/BMAnimations.css";
 
+const AWARD_DISPLAY_STATS_KEY = "bm_award_display_stats_v1";
+
 /* -------------------------------------------------------------------------- */
 /*                             AWARDS NORMALIZATION                           */
 /* -------------------------------------------------------------------------- */
@@ -179,6 +181,8 @@ export default function AllNbaTeams({ leagueDataProp, onBackToAwards = null }) {
   const awards = useMemo(() => normalizeAwards(awardsRaw), [awardsRaw]);
 
   const playerStatsMap = useMemo(() => {
+    const display = readCompressedOrJson(AWARD_DISPLAY_STATS_KEY, {});
+    if (display && Object.keys(display).length) return display;
     return readCompressedOrJson("bm_player_stats_v1", {});
   }, []);
 

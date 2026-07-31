@@ -17,6 +17,7 @@ console.log("✅ Awards.jsx NEW loaded");
 
 const AWARD_ORDER = ["mvp", "dpoy", "sixth_man", "mip", "clutch_player", "roty"];
 const PARTY_AWARD_KEYS = [...AWARD_ORDER];
+const AWARD_DISPLAY_STATS_KEY = "bm_award_display_stats_v1";
 
 const AWARD_META = {
   mvp: {
@@ -218,6 +219,8 @@ function readCompressedOrJson(key, fallback = null) {
 }
 
 function loadPlayerStatsFromStorage() {
+  const display = readCompressedOrJson(AWARD_DISPLAY_STATS_KEY, {});
+  if (display && Object.keys(display).length) return display;
   return readCompressedOrJson("bm_player_stats_v1", {});
 }
 

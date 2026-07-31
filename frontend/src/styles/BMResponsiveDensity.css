@@ -693,3 +693,85 @@ html[data-bm-route="calendar"] .bmGlobalRouteNavCalendar .bmGlobalRouteNavButton
   }
 }
 
+
+/* Playoff stats uses the exact same page component as regular-season stats.
+   Keep its route-density rules identical so the table/card dimensions never
+   change between regular season, playoffs, and offseason archive views. */
+@media (min-width: 1024px) {
+  html[data-bm-route="playoff-stats"] .bmCourtPage {
+    overflow: hidden !important;
+  }
+
+  html[data-bm-route="playoff-stats"] tbody tr {
+    height: clamp(34px, calc((100dvh - 252px) / 15), 52px) !important;
+  }
+
+  html[data-bm-route="playoff-stats"] tbody td {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+    vertical-align: middle;
+  }
+
+  html[data-bm-route="playoff-stats"] thead th {
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+  }
+
+  html[data-bm-route="playoff-stats"] tbody td:first-child {
+    white-space: nowrap !important;
+  }
+}
+
+@media (min-width: 1024px) and (max-height: 820px) {
+  html[data-bm-route="playoff-stats"] tbody tr {
+    height: 29px !important;
+  }
+}
+
+/* Player stats and playoff stats must share one table density in every phase. */
+.bmStatsTable thead th {
+  padding-top: 0.72rem !important;
+  padding-bottom: 0.72rem !important;
+}
+
+.bmStatsTable tbody tr {
+  height: 2.8rem;
+}
+
+.bmStatsTable tbody td {
+  padding-top: 0.62rem !important;
+  padding-bottom: 0.62rem !important;
+}
+
+.bmStatsTable tbody td:first-child {
+  min-height: 2.8rem;
+}
+
+/* Final stats-table parity: playoff stats is the same PlayerStats component,
+   so its rows must use the exact regular-season route dimensions. */
+@media (min-width: 1024px) {
+  html[data-bm-route="player-stats"] .bmStatsTable tbody tr,
+  html[data-bm-route="playoff-stats"] .bmStatsTable tbody tr {
+    height: clamp(34px, calc((100dvh - 252px) / 15), 52px) !important;
+  }
+
+  html[data-bm-route="player-stats"] .bmStatsTable tbody td,
+  html[data-bm-route="playoff-stats"] .bmStatsTable tbody td {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+    vertical-align: middle !important;
+  }
+
+  html[data-bm-route="player-stats"] .bmStatsTable thead th,
+  html[data-bm-route="playoff-stats"] .bmStatsTable thead th {
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+  }
+}
+
+@media (min-width: 1024px) and (max-height: 820px) {
+  html[data-bm-route="player-stats"] .bmStatsTable tbody tr,
+  html[data-bm-route="playoff-stats"] .bmStatsTable tbody tr {
+    height: clamp(30px, calc((100dvh - 228px) / 15), 36px) !important;
+  }
+}

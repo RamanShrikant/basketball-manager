@@ -398,6 +398,66 @@ function buildSeasonRowFromStats(rec, seasonYear, teamLogoMap) {
   };
 }
 
+function statDisplayNumber(value, fallback = 0) {
+  const n = Number(String(value ?? "").replace("%", ""));
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function buildSeasonRowFromArchivedSnapshot(row, displaySeasonYear, teamLogoMap) {
+  const stats = row?.stats && typeof row.stats === "object" ? row.stats : {};
+  const teamName = row?.teamName || row?.team || "Free Agent";
+  const gp = statDisplayNumber(row?.games ?? row?.gp ?? row?.GP ?? stats.GP, 0);
+  if (gp <= 0) return null;
+  return {
+    seasonYear: displaySeasonYear,
+    teamName,
+    teamLogo: row?.teamLogo || row?.logo || teamLogoMap[teamName] || "",
+    games: gp,
+    ppg: round1(statDisplayNumber(row?.ppg ?? stats.PTS, 0)),
+    rpg: round1(statDisplayNumber(row?.rpg ?? stats.REB, 0)),
+    apg: round1(statDisplayNumber(row?.apg ?? stats.AST, 0)),
+    spg: round1(statDisplayNumber(row?.spg ?? stats.STL, 0)),
+    bpg: round1(statDisplayNumber(row?.bpg ?? stats.BLK, 0)),
+    fgPct: round1(statDisplayNumber(row?.fgPct ?? stats.FG, 0)),
+    threePct: round1(statDisplayNumber(row?.threePct ?? stats["3P"], 0)),
+    ftPct: round1(statDisplayNumber(row?.ftPct ?? stats.FT, 0)),
+    source: "sim",
+    simulated: true,
+    recoveredFromStatsArchive: true,
+  };
+}
+
+function collectArchivedSnapshotRowsForPlayer({ leagueData, playerName, currentSeasonYear, existingRows, teamLogoMap }) {
+  if (!playerName) return [];
+  const history = Array.isArray(leagueData?.seasonHistory) ? leagueData.seasonHistory : [];
+  const existingKeys = new Set(
+    (existingRows || []).map((row) => `${Number(row?.seasonYear || 0)}__${String(row?.teamName || row?.team || "")}`)
+  );
+  const rows = [];
+
+  for (const entry of history) {
+    const playerRows = entry?.statsArchive?.regular?.playerRows;
+    if (!Array.isArray(playerRows) || !playerRows.length) continue;
+
+    const snapshotStartYear = Number(entry?.statsArchive?.regular?.seasonYear || entry?.seasonYear || 0);
+    const displaySeasonYear = snapshotStartYear > 1900 ? snapshotStartYear + 1 : 0;
+    if (!displaySeasonYear || displaySeasonYear >= Number(currentSeasonYear || 0)) continue;
+
+    for (const snapshotRow of playerRows) {
+      const rowName = snapshotRow?.name || snapshotRow?.player;
+      if (rowName !== playerName) continue;
+      const built = buildSeasonRowFromArchivedSnapshot(snapshotRow, displaySeasonYear, teamLogoMap);
+      if (!built) continue;
+      const key = `${Number(built.seasonYear || 0)}__${String(built.teamName || "")}`;
+      if (existingKeys.has(key)) continue;
+      existingKeys.add(key);
+      rows.push(built);
+    }
+  }
+
+  return rows;
+}
+
 function buildEmptyLiveSeasonRow(player, seasonYear, teamName, teamLogo) {
   return {
     seasonYear,
@@ -475,15 +535,23 @@ function buildPlayerCardSeasonRows({ player, leagueData, resolvedTeamName, resol
     if (recPlayer === playerName && Number(rec?.gp || 0) > 0) liveRecords.push(rec);
   }
 
-  let liveRows = [];
-  if (liveRecords.length) {
-    liveRows = liveRecords.map((rec) => buildSeasonRowFromStats(rec, currentSeasonYear, teamLogoMap));
-  } else {
-    liveRows = [buildEmptyLiveSeasonRow(player, currentSeasonYear, resolvedTeamName, resolvedTeamLogo)];
-  }
+  const archivedFallbackRows = collectArchivedSnapshotRowsForPlayer({
+    leagueData,
+    playerName,
+    currentSeasonYear,
+    existingRows: historicalRows,
+    teamLogoMap,
+  });
+
+  const liveRows = liveRecords.length
+    ? liveRecords.map((rec) => buildSeasonRowFromStats(rec, currentSeasonYear, teamLogoMap))
+    : [];
 
   return [
-    ...combineRowsBySeasonYear(historicalRows.filter((row) => Number(row?.seasonYear || 0) !== Number(currentSeasonYear))),
+    ...combineRowsBySeasonYear([
+      ...historicalRows,
+      ...archivedFallbackRows,
+    ].filter((row) => Number(row?.seasonYear || 0) !== Number(currentSeasonYear))),
     ...combineRowsBySeasonYear(liveRows),
   ].sort((a, b) => Number(a?.seasonYear || 0) - Number(b?.seasonYear || 0));
 }

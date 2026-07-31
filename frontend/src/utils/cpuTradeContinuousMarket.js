@@ -1,5 +1,5 @@
-export const CPU_TRADE_CONTINUOUS_MIN_TARGET = 22;
-export const CPU_TRADE_CONTINUOUS_MAX_TARGET = 30;
+export const CPU_TRADE_CONTINUOUS_MIN_TARGET = 24;
+export const CPU_TRADE_CONTINUOUS_MAX_TARGET = 33;
 
 function finiteNumber(value, fallback = 0) {
   const number = Number(value);
@@ -40,8 +40,8 @@ export function getContinuousMarketBudgets(targetTrades) {
     CPU_TRADE_CONTINUOUS_MAX_TARGET
   );
   return {
-    maximumGenerationPasses: clamp(Math.ceil(target * 0.72), 14, 22),
-    maximumExactEvaluations: clamp(target * 28, 616, 840),
+    maximumGenerationPasses: clamp(Math.ceil(target * 0.76), 16, 26),
+    maximumExactEvaluations: clamp(target * 30, 720, 990),
   };
 }
 

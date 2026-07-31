@@ -6,6 +6,7 @@ import {
   captureOffseasonMoodBaseline,
   recordRetirementMoodEvents,
 } from "../utils/offseasonMoodEvents.js";
+import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./PlayerRetirements.module.css";
 
 const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
@@ -54,6 +55,59 @@ function getAllTeamsFromLeague(leagueData) {
   if (Array.isArray(leagueData.teams)) return leagueData.teams;
   if (leagueData.conferences) return Object.values(leagueData.conferences).flat();
   return [];
+}
+
+function getAllPlayerBucketsFromLeague(leagueData) {
+  const players = [];
+  for (const team of getAllTeamsFromLeague(leagueData)) {
+    for (const bucket of [team?.players, team?.twoWayPlayers, team?.stashPlayers]) {
+      if (Array.isArray(bucket)) {
+        for (const player of bucket) players.push({ ...(player || {}), teamName: team?.name || player?.teamName || player?.team || "" });
+      }
+    }
+  }
+  if (Array.isArray(leagueData?.freeAgents)) players.push(...leagueData.freeAgents);
+  if (Array.isArray(leagueData?.retiredPlayersHistory)) players.push(...leagueData.retiredPlayersHistory);
+  return players.filter(Boolean);
+}
+
+function findMatchingFullPlayer(leagueData, player) {
+  const targetId = player?.id ?? player?.playerId ?? null;
+  const targetName = String(player?.name || player?.player || "").trim().toLowerCase();
+  const targetTeam = String(player?.retiredFromTeam || player?.teamName || player?.team || "").trim().toLowerCase();
+  if (targetId == null && !targetName) return null;
+
+  return getAllPlayerBucketsFromLeague(leagueData).find((row) => {
+    const rowId = row?.id ?? row?.playerId ?? null;
+    if (targetId != null && rowId != null && String(rowId) === String(targetId)) return true;
+    const rowName = String(row?.name || row?.player || "").trim().toLowerCase();
+    if (!targetName || rowName !== targetName) return false;
+    const rowTeam = String(row?.retiredFromTeam || row?.teamName || row?.team || "").trim().toLowerCase();
+    return !targetTeam || !rowTeam || rowTeam === targetTeam;
+  }) || null;
+}
+
+function preferNonEmpty(primary, fallback) {
+  if (Array.isArray(primary) && primary.length) return primary;
+  if (primary && typeof primary === "object" && Object.keys(primary).length) return primary;
+  if (primary != null && primary !== "") return primary;
+  return fallback;
+}
+
+function hydrateRetiredPlayerForCard(player, leagueData) {
+  const full = findMatchingFullPlayer(leagueData, player) || {};
+  return {
+    ...full,
+    ...player,
+    history: preferNonEmpty(player?.history, full?.history),
+    accolades: preferNonEmpty(player?.accolades, full?.accolades || full?.awards || full?.honors || []),
+    attrs: preferNonEmpty(player?.attrs, full?.attrs || full?.attributes || []),
+    contract: preferNonEmpty(player?.contract, full?.contract),
+    height: preferNonEmpty(player?.height, full?.height),
+    teamName: player?.retiredFromTeam || player?.teamName || full?.teamName || full?.team || "Free Agency",
+    team: player?.retiredFromTeam || player?.team || full?.team || full?.teamName || "Free Agency",
+    retired: true,
+  };
 }
 
 function resolveLogo(team) {
@@ -116,6 +170,18 @@ function compactRetiredPlayer(player) {
     retirementProbability: player.retirementProbability ?? player.retirementSnapshot?.retirementProbability ?? 0,
     retirementRoll: player.retirementRoll ?? null,
     headshot: player.headshot || player.portrait || player.image || player.photo || player.face || "",
+    image: player.headshot || player.portrait || player.image || player.photo || player.face || "",
+    teamName: player.retiredFromTeam || player.currentTeam || player.teamName || player.team || "",
+    team: player.retiredFromTeam || player.currentTeam || player.teamName || player.team || "",
+    height: player.height ?? null,
+    attrs: Array.isArray(player.attrs) ? player.attrs : Array.isArray(player.attributes) ? player.attributes : [],
+    offRating: player.offRating ?? player.offense ?? null,
+    defRating: player.defRating ?? player.defense ?? null,
+    stamina: player.stamina ?? null,
+    history: player.history || player.careerHistory || null,
+    accolades: player.accolades || player.awards || player.honors || [],
+    stats: player.stats || player.currentStats || null,
+    contract: player.contract || null,
   };
 }
 
@@ -256,6 +322,7 @@ export default function PlayerRetirements() {
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [playerCardPlayer, setPlayerCardPlayer] = useState(null);
 
   useEffect(() => {
     setWorkingLeagueData(leagueData || null);
@@ -285,7 +352,18 @@ export default function PlayerRetirements() {
     return map;
   }, [workingLeagueData, leagueData]);
 
-  const retiredPlayers = retirementResult?.retiredPlayers || [];
+  const retiredPlayers = useMemo(() => {
+    const rows = Array.isArray(retirementResult?.retiredPlayers) ? retirementResult.retiredPlayers : [];
+    return [...rows].sort((a, b) => {
+      const aOvr = Number(a?.overall ?? a?.ovr ?? 0);
+      const bOvr = Number(b?.overall ?? b?.ovr ?? 0);
+      if (bOvr !== aOvr) return bOvr - aOvr;
+      const aAge = Number(a?.age ?? 0);
+      const bAge = Number(b?.age ?? 0);
+      if (bAge !== aAge) return bAge - aAge;
+      return String(a?.name || "").localeCompare(String(b?.name || ""));
+    });
+  }, [retirementResult?.retiredPlayers]);
   const summary = retirementResult?.summary || {
     retiredCount: retiredPlayers.length,
     averageAge: 0,
@@ -565,7 +643,13 @@ setError("");
                   const logo = teamLogoMap[player?.retiredFromTeam] || "";
                   const headshot = player?.headshot || player?.portrait || player?.image || player?.photo || player?.face || null;
                   return (
-                    <div key={`${player?.name || "retired"}-${idx}`} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-4 px-5 py-2.5 transition hover:bg-white/5">
+                    <button
+                      key={`${player?.name || "retired"}-${idx}`}
+                      type="button"
+                      onClick={() => setPlayerCardPlayer(hydrateRetiredPlayerForCard(player, workingLeagueData || leagueData))}
+                      className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-4 px-5 py-2.5 text-left transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-orange-500/60"
+                      title={`Open ${player?.name || "player"} card`}
+                    >
                       <div className="flex min-w-0 items-center gap-3">
                         {headshot ? (
                           <img src={headshot} alt={player?.name || "Retired Player"} className="h-10 w-10 shrink-0 rounded-full border border-white/10 bg-white/5 object-cover" />
@@ -587,7 +671,7 @@ setError("");
                         <span className="text-xs text-white/50">{Math.round(Number(player?.retirementProbability || 0) * 100)}%</span>
                         <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-200">Retired</span>
                       </div>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -595,6 +679,15 @@ setError("");
           </div>
         </section>
       </div>
+
+      <PlayerCardModal
+        open={!!playerCardPlayer}
+        player={playerCardPlayer}
+        teamName={playerCardPlayer?.retiredFromTeam || playerCardPlayer?.teamName || playerCardPlayer?.team || "Free Agency"}
+        teamLogo={teamLogoMap[playerCardPlayer?.retiredFromTeam] || teamLogoMap[playerCardPlayer?.teamName] || ""}
+        leagueData={workingLeagueData || leagueData}
+        onClose={() => setPlayerCardPlayer(null)}
+      />
     </div>
   );
 

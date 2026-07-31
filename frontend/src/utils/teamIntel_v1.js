@@ -638,22 +638,21 @@ function getUntouchableStatus(player, phase) {
   }
 
   if (phase === "retooling") {
-    // Retooling teams only mark true anchors as untouchable.
-    // Good starters like 85-86 OVR / 88-89 POT should be valuable, not protected.
-    if (overall >= 94 && age <= 32) return { level: "franchise", label: "Franchise star" };
-    if (overall >= 92 && age <= 30) return { level: "star", label: "Star anchor" };
+    // Retooling teams should protect only young future-core players. Prime/older
+    // stars can still be expensive, but they should not be labeled untouchable.
+    if (age >= 28) return null;
     if (age <= 25 && overall >= 90 && potential >= 93) return { level: "youngcore", label: "Young core" };
     if (age <= 23 && overall >= 86 && potential >= 95) return { level: "future", label: "Franchise upside" };
+    if (age <= 23 && potential >= 92 && overall >= 80) return { level: "bluechip", label: "Blue-chip prospect" };
   }
 
   if (phase === "rebuilding") {
-    // Rebuilding teams should protect only real franchise pieces/prospects.
-    // This intentionally keeps players like Josh Giddey or Kel'el Ware movable in the right offer.
-    if (overall >= 94 && age <= 28) return { level: "franchise", label: "Young franchise star" };
+    // Rebuilding teams should never mark 28+ players untouchable. They may be
+    // valuable, but the protected core should be the future timeline only.
+    if (age >= 28) return null;
     if (age <= 25 && overall >= 89 && potential >= 93) return { level: "youngstar", label: "Young star" };
     if (age <= 22 && overall >= 80 && potential >= 94) return { level: "future", label: "Franchise prospect" };
     if (age <= 21 && overall >= 76 && potential >= 95) return { level: "bluechip", label: "Blue-chip prospect" };
-    if (overall >= 97 && age >= 31) return null;
   }
 
   if (potential >= 95 && age <= 22 && overall >= 80 && upside >= 4) return { level: "bluechip", label: "Protected upside" };
