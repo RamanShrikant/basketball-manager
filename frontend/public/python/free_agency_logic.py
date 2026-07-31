@@ -2,18 +2,35 @@ import copy
 import json
 import random
 import sys
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from league_financials import (
         ensure_league_financials,
-        get_financial_rules,
+        get_financial_rules as _raw_get_financial_rules,
         get_rookie_salary_for_pick,
     )
 except Exception:
     ensure_league_financials = None
-    get_financial_rules = None
+    _raw_get_financial_rules = None
     get_rookie_salary_for_pick = None
+
+# Result-preserving, call-scoped cache for immutable league financial rules.
+# CPU offer generation asks for the same league-level rules thousands of times.
+# The active cache is scoped by object identity and restored after each board build,
+# so no gameplay state is written into the save and no cross-call values go stale.
+_ACTIVE_FINANCIAL_RULES_CONTEXT: Optional[Dict[str, Any]] = None
+
+if _raw_get_financial_rules is not None:
+    def get_financial_rules(league_data: Dict[str, Any]) -> Dict[str, Any]:
+        context = _ACTIVE_FINANCIAL_RULES_CONTEXT
+        if context is not None and context.get("leagueData") is league_data:
+            return context["rules"]
+        return _raw_get_financial_rules(league_data)
+else:
+    get_financial_rules = None
+
 
 DEFAULT_SALARY_CAP = 154_647_000
 REGULAR_SEASON_MIN_ROSTER = 14
@@ -9564,7 +9581,8 @@ def evaluate_market_offer_submission(
     snapshot: Optional[Dict[str, Any]] = None,
     state: Optional[Dict[str, Any]] = None,
     active_offer_count: Optional[int] = None,
-    active_offer_limit: Optional[int] = None
+    active_offer_limit: Optional[int] = None,
+    calculate_player_view_score: bool = True,
 ) -> Dict[str, Any]:
     normalize_player_rights_for_location(player, None)
 
@@ -9649,11 +9667,13 @@ def evaluate_market_offer_submission(
         source = "evaluation",
         current_day = int(num(state.get("currentDay"), 0)),
     )
-    player_view_score = score_offer_for_player(
-        league_data = league_data,
-        player = player,
-        offer = preview_offer_record,
-    )
+    player_view_score = None
+    if calculate_player_view_score:
+        player_view_score = score_offer_for_player(
+            league_data = league_data,
+            player = player,
+            offer = preview_offer_record,
+        )
 
     return {
         "ok": True,
@@ -10945,7 +10965,183 @@ def can_add_standard_player_during_free_agency(
 
     return False, f"{team_name} already has {standard_count} standard players and this is not a priority overfill signing."
 
+def _materialize_cpu_offer_candidate(
+    league_data: Dict[str, Any],
+    state: Dict[str, Any],
+    team: Dict[str, Any],
+    team_name: str,
+    item: Dict[str, Any],
+    current_day: int,
+    max_days: int,
+    snapshot: Dict[str, Any],
+    active_offer_count: int,
+    active_offer_limit: int,
+    max_offers_today: int,
+) -> bool:
+    if item.get("evaluated"):
+        return bool(item.get("valid"))
+
+    player = item["player"]
+    target_score = float(num(item.get("score"), 0.0))
+    target_tier = str(item.get("targetTier") or "value")
+    incumbent_priority = bool(item.get("incumbentPriority"))
+    own_rights = bool(item.get("ownRights"))
+    late_rights_retention_candidate = bool(item.get("lateRightsRetentionCandidate"))
+    debug_this_candidate = bool(item.get("debugThisCandidate"))
+
+    # Rebuild the candidate-local deterministic RNG and consume the exact board
+    # jitter draw that was already included in item["score"]. No global random
+    # state or iteration order is changed.
+    rng = random.Random(int(item.get("seed", 0)))
+    rng.random()
+
+    contract = build_cpu_offer_contract(
+        league_data = league_data,
+        team = team,
+        player = player,
+        current_day = current_day,
+        max_days = max_days,
+        rng = rng,
+        target_score = target_score,
+        incumbent_priority = incumbent_priority,
+        target_tier = target_tier,
+        profile = item["profile"],
+        snapshot = snapshot,
+        need_score = float(num(item.get("needScore"), 0.0)),
+    )
+
+    if not late_rights_retention_candidate and not is_cpu_serious_offer_for_player(
+        player = player,
+        contract = contract,
+        current_day = current_day,
+        max_days = max_days,
+        incumbent_priority = incumbent_priority,
+        target_tier = target_tier,
+    ):
+        if debug_this_candidate:
+            record_fa_debug(
+                league_data = league_data,
+                bucket = "cpuOfferDebugLog",
+                event = "candidate_rejected_not_serious_offer",
+                player = player,
+                team_name = team_name,
+                payload = {
+                    "targetTier": target_tier,
+                    "targetScore": round(target_score, 3),
+                    "contract": compact_debug_contract(contract),
+                    "marketValue": compact_debug_player(player).get("marketValue"),
+                    "incumbentPriority": incumbent_priority,
+                    "ownRights": own_rights,
+                },
+            )
+        item["evaluated"] = True
+        item["valid"] = False
+        return False
+
+    if late_rights_retention_candidate:
+        eval_res = build_late_rights_retention_spending_result(
+            league_data = league_data,
+            team_name = team_name,
+            player = player,
+            contract = contract,
+            snapshot = snapshot,
+        )
+    else:
+        eval_res = evaluate_market_offer_submission(
+            league_data = league_data,
+            team_name = team_name,
+            player = player,
+            contract = contract,
+            exclude_offer_id = None,
+            snapshot = snapshot,
+            state = state,
+            active_offer_count = active_offer_count,
+            active_offer_limit = active_offer_limit,
+            calculate_player_view_score = False,
+        )
+
+    if not eval_res.get("ok"):
+        if debug_this_candidate:
+            record_fa_debug(
+                league_data = league_data,
+                bucket = "cpuOfferDebugLog",
+                event = "candidate_rejected_spending_eval",
+                player = player,
+                team_name = team_name,
+                payload = {
+                    "targetTier": target_tier,
+                    "targetScore": round(target_score, 3),
+                    "contract": compact_debug_contract(contract),
+                    "spending": compact_debug_spending(eval_res),
+                    "activeOfferCount": active_offer_count,
+                    "activeOfferLimit": active_offer_limit,
+                    "snapshot": compact_debug_snapshot(snapshot),
+                    "incumbentPriority": incumbent_priority,
+                    "ownRights": own_rights,
+                },
+            )
+        item["evaluated"] = True
+        item["valid"] = False
+        return False
+
+    if debug_this_candidate:
+        record_fa_debug(
+            league_data = league_data,
+            bucket = "cpuOfferDebugLog",
+            event = "candidate_added_to_cpu_board",
+            player = player,
+            team_name = team_name,
+            payload = {
+                "targetTier": target_tier,
+                "targetScore": round(target_score, 3),
+                "fitScore": round(float(num(item.get("fitScore"), 0.0)), 3),
+                "needScore": round(float(num(item.get("needScore"), 0.0)), 3),
+                "contract": compact_debug_contract(contract),
+                "spending": compact_debug_spending(eval_res),
+                "activeOfferCount": active_offer_count,
+                "activeOfferLimit": active_offer_limit,
+                "maxOffersToday": max_offers_today,
+                "incumbentPriority": incumbent_priority,
+                "ownRights": own_rights,
+            },
+        )
+
+    if eval_res.get("pendingCapHoldClearance"):
+        eval_res["plannedCapHoldRenounces"] = []
+        eval_res["plannedCapHoldClearanceAmount"] = 0
+        eval_res["blockedCapHoldRenounces"] = []
+        eval_res["capHoldClearanceDeferredUntilAcceptance"] = True
+
+    item["contract"] = contract
+    item["evalRes"] = eval_res
+    item["evaluated"] = True
+    item["valid"] = True
+    return True
+
+
 def generate_cpu_offers_for_day(
+    league_data: Dict[str, Any],
+    user_team_name: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    global _ACTIVE_FINANCIAL_RULES_CONTEXT
+
+    previous_context = _ACTIVE_FINANCIAL_RULES_CONTEXT
+    if _raw_get_financial_rules is not None:
+        _ACTIVE_FINANCIAL_RULES_CONTEXT = {
+            "leagueData": league_data,
+            "rules": _raw_get_financial_rules(league_data),
+        }
+
+    try:
+        return _generate_cpu_offers_for_day_impl(
+            league_data = league_data,
+            user_team_name = user_team_name,
+        )
+    finally:
+        _ACTIVE_FINANCIAL_RULES_CONTEXT = previous_context
+
+
+def _generate_cpu_offers_for_day_impl(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None
 ) -> List[Dict[str, Any]]:
@@ -11367,129 +11563,14 @@ def generate_cpu_offers_for_day(
             rng = random.Random(seed)
             target_score += rng.random() * 0.025
 
-            contract = build_cpu_offer_contract(
-                league_data = league_data,
-                team = team,
-                player = player,
-                current_day = current_day,
-                max_days = max_days,
-                rng = rng,
-                target_score = target_score,
-                incumbent_priority = incumbent_priority,
-                target_tier = target_tier,
-                profile = profile,
-                snapshot = snapshot,
-                need_score = need_score,
-            )
-
-            if not late_rights_retention_candidate and not is_cpu_serious_offer_for_player(
-                player = player,
-                contract = contract,
-                current_day = current_day,
-                max_days = max_days,
-                incumbent_priority = incumbent_priority,
-                target_tier = target_tier,
-            ):
-                if debug_this_candidate:
-                    record_fa_debug(
-                        league_data = league_data,
-                        bucket = "cpuOfferDebugLog",
-                        event = "candidate_rejected_not_serious_offer",
-                        player = player,
-                        team_name = team_name,
-                        payload = {
-                            "targetTier": target_tier,
-                            "targetScore": round(target_score, 3),
-                            "contract": compact_debug_contract(contract),
-                            "marketValue": compact_debug_player(player).get("marketValue"),
-                            "incumbentPriority": incumbent_priority,
-                            "ownRights": own_rights,
-                        },
-                    )
-                continue
-
-            if late_rights_retention_candidate:
-                eval_res = build_late_rights_retention_spending_result(
-                    league_data = league_data,
-                    team_name = team_name,
-                    player = player,
-                    contract = contract,
-                    snapshot = snapshot,
-                )
-            else:
-                eval_res = evaluate_market_offer_submission(
-                    league_data = league_data,
-                    team_name = team_name,
-                    player = player,
-                    contract = contract,
-                    exclude_offer_id = None,
-                    snapshot = snapshot,
-                    state = state,
-                    active_offer_count = active_offer_count,
-                    active_offer_limit = active_offer_limit,
-                )
-            if not eval_res.get("ok"):
-                if debug_this_candidate:
-                    record_fa_debug(
-                        league_data = league_data,
-                        bucket = "cpuOfferDebugLog",
-                        event = "candidate_rejected_spending_eval",
-                        player = player,
-                        team_name = team_name,
-                        payload = {
-                            "targetTier": target_tier,
-                            "targetScore": round(target_score, 3),
-                            "contract": compact_debug_contract(contract),
-                            "spending": compact_debug_spending(eval_res),
-                            "activeOfferCount": active_offer_count,
-                            "activeOfferLimit": active_offer_limit,
-                            "snapshot": compact_debug_snapshot(snapshot),
-                            "incumbentPriority": incumbent_priority,
-                            "ownRights": own_rights,
-                        },
-                    )
-                continue
-
-            if debug_this_candidate:
-                record_fa_debug(
-                    league_data = league_data,
-                    bucket = "cpuOfferDebugLog",
-                    event = "candidate_added_to_cpu_board",
-                    player = player,
-                    team_name = team_name,
-                    payload = {
-                        "targetTier": target_tier,
-                        "targetScore": round(target_score, 3),
-                        "fitScore": round(fit_score, 3),
-                        "needScore": round(need_score, 3),
-                        "contract": compact_debug_contract(contract),
-                        "spending": compact_debug_spending(eval_res),
-                        "activeOfferCount": active_offer_count,
-                        "activeOfferLimit": active_offer_limit,
-                        "maxOffersToday": max_offers_today,
-                        "incumbentPriority": incumbent_priority,
-                        "ownRights": own_rights,
-                    },
-                )
-
-            if eval_res.get("pendingCapHoldClearance"):
-                # Soft-offer rule: do not block the offer board here. A team can
-                # make multiple conditional offers using raw cap room. Only when
-                # an offer is actually selected for the board do we attach the
-                # display/audit clearance plan. Final signing still re-checks this.
-                eval_res["plannedCapHoldRenounces"] = []
-                eval_res["plannedCapHoldClearanceAmount"] = 0
-                eval_res["blockedCapHoldRenounces"] = []
-                eval_res["capHoldClearanceDeferredUntilAcceptance"] = True
-
-            candidates.append({
+            candidate = {
                 "score": target_score,
                 "targetTier": target_tier,
                 "teamName": team_name,
                 "player": player,
                 "playerKey": player_key,
-                "contract": contract,
-                "evalRes": eval_res,
+                "contract": None,
+                "evalRes": None,
                 "fit": fit,
                 "profile": profile,
                 "incumbentPriority": incumbent_priority,
@@ -11497,7 +11578,33 @@ def generate_cpu_offers_for_day(
                 "previousTeamPlayer": previous_team_player,
                 "rawCapStarPath": raw_cap_star_path,
                 "lateRightsRetentionCandidate": late_rights_retention_candidate,
-            })
+                "seed": seed,
+                "fitScore": fit_score,
+                "needScore": need_score,
+                "debugThisCandidate": debug_this_candidate,
+                "evaluated": False,
+                "valid": None,
+            }
+
+            # Preserve diagnostic/debug side effects in their original scan order.
+            # Non-debug candidates are materialized only if the sorted board can
+            # still use them, which removes thousands of wasted contract builds.
+            if debug_this_candidate and not _materialize_cpu_offer_candidate(
+                league_data = league_data,
+                state = state,
+                team = team,
+                team_name = team_name,
+                item = candidate,
+                current_day = current_day,
+                max_days = max_days,
+                snapshot = snapshot,
+                active_offer_count = active_offer_count,
+                active_offer_limit = active_offer_limit,
+                max_offers_today = max_offers_today,
+            ):
+                continue
+
+            candidates.append(candidate)
 
         tier_order = {
             "incumbent": 0,
@@ -11522,6 +11629,21 @@ def generate_cpu_offers_for_day(
         value_used = 0
 
         for item in candidates:
+            if not _materialize_cpu_offer_candidate(
+                league_data = league_data,
+                state = state,
+                team = team,
+                team_name = team_name,
+                item = item,
+                current_day = current_day,
+                max_days = max_days,
+                snapshot = snapshot,
+                active_offer_count = active_offer_count,
+                active_offer_limit = active_offer_limit,
+                max_offers_today = max_offers_today,
+            ):
+                continue
+
             if active_offer_count >= active_offer_limit and not item.get("lateRightsRetentionCandidate"):
                 if is_rfa_debug_target(item.get("player"), team_name):
                     record_fa_debug(
@@ -12985,34 +13107,93 @@ def advance_free_agency_day(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None
 ) -> Dict[str, Any]:
+    perf_started = time.perf_counter()
+    perf: Dict[str, Any] = {}
+
+    def mark(name: str, started: float) -> None:
+        perf[name] = round((time.perf_counter() - started) * 1000.0, 3)
+
+    def finish(result: Dict[str, Any]) -> Dict[str, Any]:
+        state_for_counts = updated.get("freeAgencyState", {}) if isinstance(updated, dict) else {}
+        offers_by_player = state_for_counts.get("offersByPlayer", {}) if isinstance(state_for_counts, dict) else {}
+        active_offer_count = 0
+        if isinstance(offers_by_player, dict):
+            for rows in offers_by_player.values():
+                if not isinstance(rows, list):
+                    continue
+                active_offer_count += sum(
+                    1 for row in rows
+                    if isinstance(row, dict) and row.get("status", "active") == "active"
+                )
+
+        perf["totalAdvanceFunctionMs"] = round((time.perf_counter() - perf_started) * 1000.0, 3)
+        result["performanceDiagnostics"] = {
+            "version": 1,
+            "action": "advance_free_agency_day",
+            "python": perf,
+            "counts": {
+                "teamCount": sum(1 for _ in iter_teams(updated)),
+                "freeAgentCount": len(updated.get("freeAgents", []) or []),
+                "activeOfferCount": active_offer_count,
+                "offerPlayerCount": len(offers_by_player) if isinstance(offers_by_player, dict) else 0,
+                "dailyLogCount": len(state_for_counts.get("dailyLog", []) or []),
+                "signedPlayersLogCount": len(state_for_counts.get("signedPlayersLog", []) or []),
+                "offerHistoryCount": len(state_for_counts.get("offerHistory", []) or []),
+                "fullActionLogCount": len(state_for_counts.get("fullActionLog", []) or []),
+                "currentDay": int(num(state_for_counts.get("currentDay"), 0)),
+                "maxDays": int(num(state_for_counts.get("maxDays"), 0)),
+            },
+        }
+        return result
+
+    stage_started = time.perf_counter()
     updated = copy.deepcopy(league_data)
+    mark("deepCopyMs", stage_started)
+
+    stage_started = time.perf_counter()
     normalize_all_player_rights(updated)
+    mark("normalizeRightsMs", stage_started)
+
+    stage_started = time.perf_counter()
     state = ensure_free_agency_state(updated)
+    mark("ensureStateMs", stage_started)
+
+    stage_started = time.perf_counter()
     refresh_free_agent_market_values(updated)
+    mark("refreshMarketValuesMs", stage_started)
 
     if not state.get("isActive"):
-        return {
+        stage_started = time.perf_counter()
+        state_summary = build_free_agency_state_summary(updated)
+        mark("buildStateSummaryMs", stage_started)
+        return finish({
             "ok": False,
             "reason": "Free agency period is not active.",
-            "stateSummary": build_free_agency_state_summary(updated),
-        }
+            "stateSummary": state_summary,
+        })
 
     if state.get("pendingUserDecisions"):
-        return {
+        stage_started = time.perf_counter()
+        state_summary = build_free_agency_state_summary(updated)
+        mark("buildStateSummaryMs", stage_started)
+        return finish({
             "ok": False,
             "reason": "Process your pending user signings before advancing the day.",
             "leagueData": updated,
-            "stateSummary": build_free_agency_state_summary(updated),
-        }
+            "stateSummary": state_summary,
+        })
 
     if state.get("pendingRfaMatchDecisions"):
-        return {
+        stage_started = time.perf_counter()
+        state_summary = build_free_agency_state_summary(updated)
+        mark("buildStateSummaryMs", stage_started)
+        return finish({
             "ok": False,
             "reason": "Process your pending restricted free agent match decisions before advancing the day.",
             "leagueData": updated,
             "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
-            "stateSummary": build_free_agency_state_summary(updated),
-        }
+            "stateSummary": state_summary,
+        })
 
     state["forceViewingOffersReturn"] = False
     state["forceViewingOffersReturnReason"] = None
@@ -13023,11 +13204,13 @@ def advance_free_agency_day(
     max_days = int(num(state.get("maxDays"), DEFAULT_FREE_AGENCY_DAYS))
     offseason_min_target = get_free_agency_min_roster_target(updated)
 
+    stage_started = time.perf_counter()
     signings = resolve_signings_for_day(
         league_data = updated,
         current_day = current_day,
         user_team_name = user_team_name,
     )
+    mark("resolveSigningsMs", stage_started)
 
     state["dailyLog"].append({
         "day": current_day,
@@ -13038,17 +13221,15 @@ def advance_free_agency_day(
     if state.get("pendingUserDecisions") or state.get("pendingRfaMatchDecisions"):
         generated_offers = []
 
-        # The Day Complete screen should still show the next wave of CPU offers
-        # while the user is deciding which accepted offers to finalize. Generate
-        # those offers for display/market continuity, but restore currentDay so
-        # the pending user decisions are still resolved as this completed day.
         if current_day < max_days and len(updated.get("freeAgents", [])) > 0:
             original_day = state.get("currentDay")
             state["currentDay"] = current_day + 1
+            stage_started = time.perf_counter()
             generated_offers = generate_cpu_offers_for_day(
                 league_data = updated,
                 user_team_name = user_team_name,
             )
+            mark("generateOffersMs", stage_started)
             state["dailyLog"].append({
                 "day": current_day + 1,
                 "type": "offer_generation_preview_pending_user",
@@ -13056,6 +13237,7 @@ def advance_free_agency_day(
             })
             state["currentDay"] = original_day
 
+        stage_started = time.perf_counter()
         append_free_agency_full_action_log(
             league_data = updated,
             day_resolved = current_day,
@@ -13064,20 +13246,25 @@ def advance_free_agency_day(
             generated_offers = generated_offers,
             event_type = "daily_resolution_pending_user",
         )
+        mark("appendActionLogMs", stage_started)
 
-        return {
+        stage_started = time.perf_counter()
+        state_summary = build_free_agency_state_summary(updated)
+        mark("buildStateSummaryMs", stage_started)
+        return finish({
             "ok": True,
             "leagueData": updated,
             "dayResolved": current_day,
             "signings": signings,
             "generatedOffers": generated_offers,
             "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
-            "stateSummary": build_free_agency_state_summary(updated),
-        }
+            "stateSummary": state_summary,
+        })
 
     if current_day >= max_days or len(updated.get("freeAgents", [])) == 0:
         final_cleanup_target = get_min_roster_target(updated)
 
+        stage_started = time.perf_counter()
         final_cleanup_signings = finalize_cpu_min_roster_cleanup(
             league_data = updated,
             current_day = current_day,
@@ -13085,6 +13272,7 @@ def advance_free_agency_day(
             min_roster_target_override = final_cleanup_target,
             allow_generated_replacements = True,
         )
+        mark("finalRosterCleanupMs", stage_started)
 
         if final_cleanup_signings:
             signings.extend(final_cleanup_signings)
@@ -13103,6 +13291,7 @@ def advance_free_agency_day(
         state["status"] = "complete"
         state["pendingUserTeamSnapshot"] = None
 
+        stage_started = time.perf_counter()
         append_free_agency_full_action_log(
             league_data = updated,
             day_resolved = current_day,
@@ -13111,23 +13300,29 @@ def advance_free_agency_day(
             generated_offers = [],
             event_type = "final_market_resolution",
         )
+        mark("appendActionLogMs", stage_started)
 
-        return {
+        stage_started = time.perf_counter()
+        state_summary = build_free_agency_state_summary(updated)
+        mark("buildStateSummaryMs", stage_started)
+        return finish({
             "ok": True,
             "leagueData": updated,
             "dayResolved": current_day,
             "signings": signings,
             "generatedOffers": [],
             "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
-            "stateSummary": build_free_agency_state_summary(updated),
-        }
+            "stateSummary": state_summary,
+        })
 
     state["currentDay"] = current_day + 1
 
+    stage_started = time.perf_counter()
     generated_offers = generate_cpu_offers_for_day(
         league_data = updated,
         user_team_name = user_team_name,
     )
+    mark("generateOffersMs", stage_started)
 
     state["dailyLog"].append({
         "day": state["currentDay"],
@@ -13135,6 +13330,7 @@ def advance_free_agency_day(
         "offersGenerated": len(generated_offers),
     })
 
+    stage_started = time.perf_counter()
     append_free_agency_full_action_log(
         league_data = updated,
         day_resolved = current_day,
@@ -13143,18 +13339,24 @@ def advance_free_agency_day(
         generated_offers = generated_offers,
         event_type = "daily_market_update",
     )
+    mark("appendActionLogMs", stage_started)
 
+    stage_started = time.perf_counter()
     state["pendingUserTeamSnapshot"] = get_team_cap_snapshot(updated, user_team_name) if user_team_name else None
+    mark("userTeamSnapshotMs", stage_started)
 
-    return {
+    stage_started = time.perf_counter()
+    state_summary = build_free_agency_state_summary(updated)
+    mark("buildStateSummaryMs", stage_started)
+    return finish({
         "ok": True,
         "leagueData": updated,
         "dayResolved": current_day,
         "signings": signings,
         "generatedOffers": generated_offers,
         "pendingRfaMatchDecisions": state.get("pendingRfaMatchDecisions", []),
-        "stateSummary": build_free_agency_state_summary(updated),
-    }
+        "stateSummary": state_summary,
+    })
 
 # ------------------------------------------------------------
 # IMMEDIATE OFFER EVALUATION / SIGN / RELEASE

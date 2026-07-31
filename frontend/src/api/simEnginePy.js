@@ -99,6 +99,69 @@ function buildLeagueDataForFreeAgencyBackendAction(leagueData) {
 }
 
 
+
+function recordFreeAgencyPerformanceSample(sample) {
+  if (typeof window === "undefined" || !sample) return;
+
+  const existing = Array.isArray(window.__bmFaPerfRuns) ? window.__bmFaPerfRuns : [];
+  const next = [...existing, sample].slice(-30);
+  window.__bmFaPerfRuns = next;
+
+  window.bmFaPerf = {
+    latest: () => {
+      const rows = window.__bmFaPerfRuns || [];
+      return rows[rows.length - 1] || null;
+    },
+    all: () => [...(window.__bmFaPerfRuns || [])],
+    reset: () => {
+      window.__bmFaPerfRuns = [];
+      console.log("[BM FA PERF] Cleared recorded samples.");
+    },
+    report: () => {
+      const rows = (window.__bmFaPerfRuns || []).map((row) => ({
+        dayResolved: row.dayResolved,
+        totalApiMs: row.frontend?.totalApiMs,
+        payloadBuildMs: row.frontend?.payloadBuildMs,
+        workerRoundTripMs: row.frontend?.workerRoundTripMs,
+        toPyMs: row.worker?.toPyMs,
+        pythonComputeMs: row.worker?.pythonComputeMs,
+        pythonSerializeMs: row.worker?.pythonSerializeMs,
+        deepCopyMs: row.python?.deepCopyMs,
+        normalizeRightsMs: row.python?.normalizeRightsMs,
+        refreshMarketValuesMs: row.python?.refreshMarketValuesMs,
+        resolveSigningsMs: row.python?.resolveSigningsMs,
+        generateOffersMs: row.python?.generateOffersMs,
+        finalRosterCleanupMs: row.python?.finalRosterCleanupMs,
+        freeAgentCount: row.counts?.freeAgentCount,
+        activeOfferCount: row.counts?.activeOfferCount,
+      }));
+      console.table(rows);
+      return rows;
+    },
+    export: () => JSON.stringify(window.__bmFaPerfRuns || [], null, 2),
+  };
+
+  console.groupCollapsed(
+    `[BM FA PERF] Day ${sample.dayResolved ?? "?"}: ${sample.frontend?.totalApiMs ?? "?"} ms total`
+  );
+  console.table([{
+    totalApiMs: sample.frontend?.totalApiMs,
+    payloadBuildMs: sample.frontend?.payloadBuildMs,
+    workerRoundTripMs: sample.frontend?.workerRoundTripMs,
+    toPyMs: sample.worker?.toPyMs,
+    pythonComputeMs: sample.worker?.pythonComputeMs,
+    pythonSerializeMs: sample.worker?.pythonSerializeMs,
+    deepCopyMs: sample.python?.deepCopyMs,
+    normalizeRightsMs: sample.python?.normalizeRightsMs,
+    refreshMarketValuesMs: sample.python?.refreshMarketValuesMs,
+    resolveSigningsMs: sample.python?.resolveSigningsMs,
+    generateOffersMs: sample.python?.generateOffersMs,
+    finalRosterCleanupMs: sample.python?.finalRosterCleanupMs,
+  }]);
+  console.log("Full diagnostic:", sample);
+  console.groupEnd();
+}
+
 // ------------------------------------------------------------
 // PLAYER PROGRESSION PAYLOAD GUARD
 // ------------------------------------------------------------
@@ -1949,6 +2012,12 @@ export function advanceFreeAgencyDay(
 
   const requestId = "FAD" + counter++;
   const TIMEOUT_MS = 180000;
+  const callStartedAt = performance.now();
+
+  const payloadBuildStartedAt = performance.now();
+  const backendLeagueData = buildLeagueDataForFreeAgencyBackendAction(leagueData);
+  const sanitizedLeagueData = deepSanitize(backendLeagueData);
+  const payloadBuildMs = performance.now() - payloadBuildStartedAt;
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -1957,10 +2026,27 @@ export function advanceFreeAgencyDay(
       reject(new Error("ADVANCE_FREE_AGENCY_DAY_TIMEOUT"));
     }, TIMEOUT_MS);
 
+    let postedAt = 0;
     pending.set(requestId, {
-      resolve: (v) => {
+      resolve: (value) => {
         clearTimeout(timer);
-        resolve(v);
+        const receivedAt = performance.now();
+        const diagnostics = value?.performanceDiagnostics || {};
+        const sample = {
+          ...diagnostics,
+          dayResolved: value?.dayResolved ?? diagnostics?.counts?.currentDay ?? null,
+          frontend: {
+            payloadBuildMs: Number(payloadBuildMs.toFixed(3)),
+            workerRoundTripMs: Number((receivedAt - postedAt).toFixed(3)),
+            totalApiMs: Number((receivedAt - callStartedAt).toFixed(3)),
+          },
+        };
+
+        if (value && typeof value === "object") {
+          value.performanceDiagnostics = sample;
+        }
+        recordFreeAgencyPerformanceSample(sample);
+        resolve(value);
       },
       reject: (e) => {
         clearTimeout(timer);
@@ -1969,16 +2055,18 @@ export function advanceFreeAgencyDay(
       timer,
     });
 
+    postedAt = performance.now();
     worker.postMessage({
       type: "advance-free-agency-day",
       requestId,
-      leagueData: deepSanitize(buildLeagueDataForFreeAgencyBackendAction(leagueData)),
+      leagueData: sanitizedLeagueData,
       payload: {
         userTeamName,
       },
     });
   });
 }
+
 export function processPendingUserFreeAgencyDecisions(
   leagueData,
   userTeamName = null,

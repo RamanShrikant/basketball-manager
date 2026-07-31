@@ -351,22 +351,53 @@ json.dumps(res)
 // ------------------------------------------------------------// FREE AGENCY GENERIC REQUEST MODE
 // ------------------------------------------------------------
 async function runFreeAgencyRequest(requestId, action, leagueData, payload, okType, errType) {
+  const requestStartedAt = performance.now();
   try {
-    pyodide.globals.set("fa_request_js", pyodide.toPy({
+    const toPyStartedAt = performance.now();
+    const pyRequest = pyodide.toPy({
       action,
       leagueData: leagueData || {},
       payload: payload || {},
-    }));
+    });
+    const toPyMs = performance.now() - toPyStartedAt;
+    pyodide.globals.set("fa_request_js", pyRequest);
 
-const pyJson = await pyodide.runPythonAsync(`
+    const pythonStartedAt = performance.now();
+    const pyJson = await pyodide.runPythonAsync(`
 import json
+import time
 from free_agency_logic import handle_request
 
+_fa_compute_started = time.perf_counter()
 res = handle_request(fa_request_js)
-json.dumps(res)
+_fa_compute_ms = (time.perf_counter() - _fa_compute_started) * 1000.0
+_fa_serialize_started = time.perf_counter()
+_fa_payload_json = json.dumps(res)
+_fa_serialize_ms = (time.perf_counter() - _fa_serialize_started) * 1000.0
+_fa_payload_json
     `);
+    const pythonRequestMs = performance.now() - pythonStartedAt;
 
+    const jsonParseStartedAt = performance.now();
     const payloadOut = JSON.parse(pyJson);
+    const jsonParseMs = performance.now() - jsonParseStartedAt;
+
+    if (action === "advance_free_agency_day" && payloadOut && typeof payloadOut === "object") {
+      const pythonComputeMs = Number(pyodide.globals.get("_fa_compute_ms") || 0);
+      const pythonSerializeMs = Number(pyodide.globals.get("_fa_serialize_ms") || 0);
+      payloadOut.performanceDiagnostics = {
+        ...(payloadOut.performanceDiagnostics || {}),
+        worker: {
+          toPyMs: Number(toPyMs.toFixed(3)),
+          pythonRequestMs: Number(pythonRequestMs.toFixed(3)),
+          pythonComputeMs: Number(pythonComputeMs.toFixed(3)),
+          pythonSerializeMs: Number(pythonSerializeMs.toFixed(3)),
+          jsonParseMs: Number(jsonParseMs.toFixed(3)),
+          responseJsonChars: typeof pyJson === "string" ? pyJson.length : 0,
+          workerUntilPostMessageMs: Number((performance.now() - requestStartedAt).toFixed(3)),
+        },
+      };
+    }
 
     postMessage({
       type: okType,
