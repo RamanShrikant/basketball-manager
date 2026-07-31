@@ -1020,6 +1020,35 @@ if (msg.type === "free-agency-process-rfa-match-error") {
       return;
     }
     // ------------------------------------------------------------
+    // CONTRACT EXTENSION RESULT
+    // ------------------------------------------------------------
+    if (msg.type === "contract-extension-result") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] contract-extension-result for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.resolve(msg.payload);
+      return;
+    }
+
+    if (msg.type === "contract-extension-error") {
+      const entry = pending.get(msg.requestId);
+      if (!entry) {
+        console.warn("[simEnginePy] contract-extension-error for unknown requestId", msg.requestId, msg);
+        return;
+      }
+      pending.delete(msg.requestId);
+      if (entry.timer) clearTimeout(entry.timer);
+      const err = msg.error || "Contract extension request failed";
+      if (entry.reject) entry.reject(new Error(err));
+      else entry.resolve({ ok: false, reason: err });
+      return;
+    }
+
+    // ------------------------------------------------------------
     // PLAYER MOOD / LOCKER ROOM RESULT
     // ------------------------------------------------------------
     if (msg.type === "player-mood-result") {
@@ -2239,6 +2268,89 @@ export function applyRightsManagement(
     });
   });
 }
+// ------------------------------------------------------------
+// PUBLIC API - CONTRACT EXTENSIONS
+// ------------------------------------------------------------
+function runContractExtensionAction(leagueData, action, payload = {}) {
+  startWorker();
+  const requestId = "CEXT" + counter++;
+  const TIMEOUT_MS = 60000;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      reject(new Error("CONTRACT_EXTENSION_TIMEOUT"));
+    }, TIMEOUT_MS);
+
+    pending.set(requestId, {
+      resolve: (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      reject: (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+      timer,
+    });
+
+    worker.postMessage({
+      type: "contract-extension-action",
+      requestId,
+      action,
+      leagueData: deepSanitize(leagueData),
+      payload: deepSanitize(payload),
+    });
+  });
+}
+
+export function previewContractExtensions(leagueData, userTeamName, currentDate = null) {
+  return runContractExtensionAction(leagueData, "preview_contract_extensions", {
+    userTeamName,
+    currentDate,
+  });
+}
+
+export function submitContractExtensionOffer(
+  leagueData,
+  userTeamName,
+  playerId,
+  offer,
+  currentDate = null
+) {
+  return runContractExtensionAction(leagueData, "submit_contract_extension_offer", {
+    userTeamName,
+    playerId,
+    offer,
+    currentDate,
+  });
+}
+
+export function processCpuContractExtensions(
+  leagueData,
+  userTeamName,
+  phase = "opening",
+  currentDate = null
+) {
+  return runContractExtensionAction(leagueData, "process_cpu_contract_extensions", {
+    userTeamName,
+    phase,
+    currentDate,
+  });
+}
+
+export function closeContractExtensionWindow(
+  leagueData,
+  userTeamName,
+  currentDate = null
+) {
+  return runContractExtensionAction(leagueData, "close_contract_extension_window", {
+    userTeamName,
+    currentDate,
+  });
+}
+
 // ------------------------------------------------------------
 // PUBLIC API - LOCKER ROOM / PLAYER MOODS
 // ------------------------------------------------------------

@@ -31,6 +31,9 @@ const pythonFiles = [
   "progression.py",
   "league_financials.py",
   "free_agency_logic.py",
+  "contract_extension_acceptance.py",
+  "cpu_contract_extensions.py",
+  "contract_extension_logic.py",
   "player_mood_logic.py",
   "retirement_logic.py",
   "all_star_logic.py",
@@ -609,6 +612,46 @@ async function repairCpuTeamsToMinRoster(requestId, leagueData, payload) {
 }
 
 // ------------------------------------------------------------
+// CONTRACT EXTENSION REQUEST MODE
+// ------------------------------------------------------------
+async function runContractExtensionRequest(requestId, action, leagueData, payload) {
+  try {
+    pyodide.globals.set("contract_extension_request_js", pyodide.toPy({
+      action,
+      leagueData: leagueData || {},
+      payload: payload || {},
+    }));
+
+    const pyJson = await pyodide.runPythonAsync(`
+import importlib, json
+import contract_extension_acceptance
+import cpu_contract_extensions
+import contract_extension_logic
+importlib.reload(contract_extension_acceptance)
+importlib.reload(cpu_contract_extensions)
+importlib.reload(contract_extension_logic)
+from contract_extension_logic import handle_request
+
+res = handle_request(contract_extension_request_js)
+json.dumps(res)
+    `);
+
+    postMessage({
+      type: "contract-extension-result",
+      requestId,
+      payload: JSON.parse(pyJson),
+    });
+  } catch (err) {
+    console.error("[simWorkerV2] contract extension request error:", action, err);
+    postMessage({
+      type: "contract-extension-error",
+      requestId,
+      error: err.toString(),
+    });
+  }
+}
+
+// ------------------------------------------------------------
 // PLAYER MOOD / LOCKER ROOM REQUEST MODE
 // ------------------------------------------------------------
 async function runPlayerMoodRequest(requestId, leagueData, payload) {
@@ -965,6 +1008,16 @@ if (msg.type === "preview-rights-management") {
   if (msg.type === "apply-rights-management") {
     const leaguePayload = msg.leagueData ?? msg.league ?? {};
     return applyRightsManagement(msg.requestId, leaguePayload, msg.payload || {});
+  }
+
+  if (msg.type === "contract-extension-action") {
+    const leaguePayload = msg.leagueData ?? msg.league ?? {};
+    return runContractExtensionRequest(
+      msg.requestId,
+      msg.action,
+      leaguePayload,
+      msg.payload || {}
+    );
   }
 
   // locker room / player moods

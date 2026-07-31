@@ -8,6 +8,8 @@ import {
   computeSeasonAwards,
   computeAllStars,
   repairCpuTeamsToMinRoster,
+  processCpuContractExtensions,
+  closeContractExtensionWindow,
 } from "@/api/simEnginePy";
 import { cancelCpuTradeWorkerGeneration, getCpuCpuTradeCandidates, prewarmCpuTradeWorker } from "../api/cpuTradeEngine.js";
 import { prewarmCpuTradeValidationPool } from "../api/cpuTradeValidationPool.js";
@@ -4538,6 +4540,8 @@ const [allStarPromptOpen, setAllStarPromptOpen] = useState(false);
 const [allStarOpen, setAllStarOpen] = useState(false);
 const [allStarData, setAllStarData] = useState(null);
 const [tradeDeadlinePromptOpen, setTradeDeadlinePromptOpen] = useState(false);
+const [contractExtensionPromptOpen, setContractExtensionPromptOpen] = useState(false);
+const [contractExtensionDeadlineBusy, setContractExtensionDeadlineBusy] = useState(false);
 const [tradeToasts, setTradeToasts] = useState([]);
 const [pendingSimIntent, setPendingSimIntent] = useState(() => readPendingSimulationIntent());
 
@@ -4555,6 +4559,58 @@ const clearPendingSimIntent = () => {
 const ALL_STAR_DATE = seasonCalendarConfig.allStarSelectionDate || fmt(new Date(seasonYear + 1, 1, 13));
 const ALL_STAR_HANDLED_KEY = `bm_all_star_handled_v1_${seasonYear}`;
 const allStarHandledRef = useRef(localStorage.getItem(ALL_STAR_HANDLED_KEY) === "true");
+
+const CONTRACT_EXTENSION_DEADLINE_DATE = seasonCalendarConfig.contractExtensionDeadlineDate || fmt(new Date(seasonYear, 9, 20));
+const CONTRACT_EXTENSION_DEADLINE_HANDLED_KEY = `bm_contract_extension_deadline_handled_v1_${seasonYear}`;
+const contractExtensionDeadlineHandledRef = useRef(
+  localStorage.getItem(CONTRACT_EXTENSION_DEADLINE_HANDLED_KEY) === "true"
+);
+
+function openContractExtensionDeadlinePrompt() {
+  setActionModal(null);
+  setBoxModal(null);
+  setContractExtensionPromptOpen(true);
+}
+
+function markContractExtensionDeadlineHandled() {
+  try {
+    localStorage.setItem(CONTRACT_EXTENSION_DEADLINE_HANDLED_KEY, "true");
+  } catch {}
+  contractExtensionDeadlineHandledRef.current = true;
+}
+
+function shouldPauseForContractExtensionDeadline(dateStr) {
+  return dateStr === CONTRACT_EXTENSION_DEADLINE_DATE && !contractExtensionDeadlineHandledRef.current;
+}
+
+async function processContractExtensionDeadline({ closeWindow = false } = {}) {
+  if (!leagueData || !selectedTeam?.name) return leagueData;
+  setContractExtensionDeadlineBusy(true);
+  try {
+    const result = closeWindow
+      ? await closeContractExtensionWindow(
+          leagueData,
+          selectedTeam.name,
+          CONTRACT_EXTENSION_DEADLINE_DATE
+        )
+      : await processCpuContractExtensions(
+          leagueData,
+          selectedTeam.name,
+          "deadline",
+          CONTRACT_EXTENSION_DEADLINE_DATE
+        );
+    if (result?.ok && result?.leagueData) {
+      setLeagueData(result.leagueData);
+      return result.leagueData;
+    }
+    if (result && !result.ok) {
+      throw new Error(result.reason || "Contract extension deadline processing failed.");
+    }
+    return leagueData;
+  } finally {
+    setContractExtensionDeadlineBusy(false);
+  }
+}
 
 const TRADE_DEADLINE_DATE = seasonCalendarConfig.tradeDeadlineDate || fmt(new Date(seasonYear + 1, 1, 4));
 const TRADE_DEADLINE_STATUS_KEY = "bm_trade_deadline_status_v1";
@@ -4651,6 +4707,11 @@ useEffect(() => {
 
   refreshTradeDeadlineLockFromSchedule(scheduleByDate);
 }, [TRADE_DEADLINE_HANDLED_KEY, TRADE_DEADLINE_DATE, scheduleByDate]);
+
+useEffect(() => {
+  contractExtensionDeadlineHandledRef.current =
+    localStorage.getItem(CONTRACT_EXTENSION_DEADLINE_HANDLED_KEY) === "true";
+}, [CONTRACT_EXTENSION_DEADLINE_HANDLED_KEY]);
 
 useEffect(() => {
   const stored = readPendingSimulationIntent();
@@ -5783,6 +5844,12 @@ async function runCpuCpuTradePassForDate({
 /*                           SIMULATION HANDLERS                               */
 /* -------------------------------------------------------------------------- */
 const handleSimOnlyGame = async (dateStr, game) => {
+  if (shouldPauseForContractExtensionDeadline(dateStr)) {
+    saveSimulationCursorDate(dateStr);
+    openContractExtensionDeadlinePrompt();
+    return;
+  }
+
   if (shouldPauseForTradeDeadline(dateStr)) {
     saveSimulationCursorDate(dateStr);
     openTradeDeadlinePrompt();
@@ -6047,6 +6114,39 @@ for (const d of sorted) {
   }
   lastDateProcessed = d;
   simulationPerf.datesVisited += 1;
+
+  if (shouldPauseForContractExtensionDeadline(d)) {
+    recordSimulationCheckpointEvent(simulationPerf, {
+      type: "pause",
+      reason: "contract_extension_deadline",
+      scheduledDate: d,
+      targetDate: dateStr,
+    });
+    assertLockedRegularSeasonGamesUnchanged(
+      lockedGamesAtStart,
+      upd,
+      newResults,
+      "contract-extension deadline checkpoint"
+    );
+    savePlayerStats(playerStats);
+    saveClutchStats(clutchStats);
+    cleanupGhostGames(upd, newResults);
+    saveSchedule(upd);
+    await saveResults(newResults);
+    await flushPendingResultWrites();
+
+    setScheduleByDate(structuredClone(upd));
+    setResultsById(structuredClone(newResults));
+    pausedAtCheckpoint = true;
+    persistPendingSimIntent({
+      mode: "to_date",
+      targetDate: dateStr,
+      seasonYear,
+      pausedReason: "contract_extension_deadline",
+    });
+    openContractExtensionDeadlinePrompt();
+    return;
+  }
 
   if (shouldPauseForTradeDeadline(d)) {
     recordSimulationCheckpointEvent(simulationPerf, {
@@ -6518,6 +6618,7 @@ setBoxModal(null);
 let stopped = false;
 let pausedForAllStar = false;
 let pausedForTradeDeadline = false;
+let pausedForContractExtensionDeadline = false;
 
   try {
 for (let di = 0; di < dates.length; di++) {
@@ -6530,6 +6631,16 @@ for (let di = 0; di < dates.length; di++) {
   }
   lastDateProcessed = date;
   simulationPerf.datesVisited += 1;
+
+  if (shouldPauseForContractExtensionDeadline(date)) {
+    recordSimulationCheckpointEvent(simulationPerf, {
+      type: "pause",
+      reason: "contract_extension_deadline",
+      scheduledDate: date,
+    });
+    pausedForContractExtensionDeadline = true;
+    break;
+  }
 
   if (shouldPauseForTradeDeadline(date)) {
     recordSimulationCheckpointEvent(simulationPerf, {
@@ -6750,7 +6861,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
       lockedGamesAtStart,
       upd,
       results,
-      pausedForTradeDeadline ? "trade-deadline checkpoint" : "full-season checkpoint"
+      pausedForContractExtensionDeadline ? "contract-extension deadline checkpoint" : pausedForTradeDeadline ? "trade-deadline checkpoint" : "full-season checkpoint"
     );
     saveSchedule(upd);
     await saveResults(results);
@@ -6769,12 +6880,27 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
       elapsedMs: Date.now() - simulationPerf.startedAt,
       stopped,
       pausedForTradeDeadline,
+      pausedForContractExtensionDeadline,
       pausedForAllStar,
       lastDateProcessed,
     });
 
 setActionModal(null);
 releaseSimRunLock();
+
+if (pausedForContractExtensionDeadline) {
+  setScheduleByDate(structuredClone(upd));
+  setResultsById(structuredClone(results));
+  persistPendingSimIntent({
+    mode: "full_season",
+    targetDate: null,
+    seasonYear,
+    pausedReason: "contract_extension_deadline",
+  });
+  saveSimulationCursorDate(lastDateProcessed || readSimulationCursorDate());
+  openContractExtensionDeadlinePrompt();
+  return;
+}
 
 if (pausedForTradeDeadline) {
   setScheduleByDate(structuredClone(upd));
@@ -7965,6 +8091,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                       const game = myGames[dateStr] || null;
                       const result = game ? resultsById[game.id] : null;
                       const isTradeDeadline = dateStr === TRADE_DEADLINE_DATE;
+                      const isContractExtensionDeadline = dateStr === CONTRACT_EXTENSION_DEADLINE_DATE;
                       const isAllStarDate = dateStr === ALL_STAR_DATE;
                       const isAllStarBreakDate =
                         dateStr >= String(seasonCalendarConfig.allStarStart || ALL_STAR_DATE) &&
@@ -8002,20 +8129,22 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                             setFocusedDate(dateStr);
                             setMonth(monthStr);
                             saveCalendarCursor(dateStr, monthStr);
-                            setActionModal({ dateStr, game, hasLeagueGames, event: isTradeDeadline ? "trade_deadline" : isAllStarDate ? "all_star" : isAllStarBreakDate ? "all_star_break" : null });
+                            setActionModal({ dateStr, game, hasLeagueGames, event: isContractExtensionDeadline ? "contract_extension_deadline" : isTradeDeadline ? "trade_deadline" : isAllStarDate ? "all_star" : isAllStarBreakDate ? "all_star_break" : null });
                           }}
                         >
                           <div className="text-xs text-gray-400">{d.getDate()}</div>
 
-                          {(isTradeDeadline || isAllStarDate || (!game && isAllStarBreakDate)) && (
+                          {(isContractExtensionDeadline || isTradeDeadline || isAllStarDate || (!game && isAllStarBreakDate)) && (
                             <div className={`mt-2 rounded-md border px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${
-                              isTradeDeadline
+                              isContractExtensionDeadline
+                                ? "border-emerald-500/60 bg-emerald-600/20 text-emerald-200"
+                                : isTradeDeadline
                                 ? "border-orange-500/60 bg-orange-600/20 text-orange-200"
                                 : isAllStarDate
                                   ? "border-sky-400/60 bg-sky-600/20 text-sky-200"
                                   : "border-white/15 bg-white/5 text-white/45"
                             }`}>
-                              {isTradeDeadline ? "Trade Deadline" : isAllStarDate ? "All-Star Game" : "All-Star Break"}
+                              {isContractExtensionDeadline ? "Extension Deadline" : isTradeDeadline ? "Trade Deadline" : isAllStarDate ? "All-Star Game" : "All-Star Break"}
                             </div>
                           )}
 
@@ -8085,7 +8214,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="mb-4 text-lg font-bold text-white">
-          {actionModal.game ? `${actionModal.game.away} @ ${actionModal.game.home}` : actionModal.event === "trade_deadline" ? "Trade Deadline" : actionModal.event === "all_star" ? "All-Star Game" : `Sim to ${actionModal.dateStr}`}
+          {actionModal.game ? `${actionModal.game.away} @ ${actionModal.game.home}` : actionModal.event === "contract_extension_deadline" ? "Contract Extension Deadline" : actionModal.event === "trade_deadline" ? "Trade Deadline" : actionModal.event === "all_star" ? "All-Star Game" : `Sim to ${actionModal.dateStr}`}
         </h2>
 
         {(!actionModal.game || !actionModal.game.played) ? (
@@ -8362,7 +8491,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
     </div>,
     document.body
   )}
-{pendingSimIntent && !simLock && !tradeDeadlinePromptOpen && !allStarPromptOpen && !allStarOpen && (
+{pendingSimIntent && !simLock && !tradeDeadlinePromptOpen && !contractExtensionPromptOpen && !allStarPromptOpen && !allStarOpen && (
   <div className="fixed bottom-6 left-1/2 z-[252] w-[min(620px,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-orange-400/35 bg-neutral-950/95 p-4 text-white shadow-2xl backdrop-blur">
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div>
@@ -8403,6 +8532,64 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
         </div>
       </div>
     ))}
+  </div>
+)}
+
+{contractExtensionPromptOpen && (
+  <div className="fixed inset-0 z-[234] flex items-center justify-center bg-black/75 p-4">
+    <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-emerald-400/35 bg-neutral-950 text-white shadow-2xl">
+      <div className="border-b border-emerald-500/20 bg-gradient-to-r from-emerald-600/20 to-neutral-900 px-6 py-5">
+        <div className="text-xs font-black uppercase tracking-[0.24em] text-emerald-300">
+          Contract Extension Deadline
+        </div>
+        <h2 className="mt-1 text-2xl font-black text-white">
+          Final day to secure long-term extensions
+        </h2>
+      </div>
+
+      <div className="px-6 py-5">
+        <p className="text-sm font-semibold leading-6 text-neutral-300">
+          CPU teams will complete their final extension review today. You can open
+          Contract Extensions to negotiate with eligible players, or continue and
+          close the window for the season.
+        </p>
+
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+          <button
+            disabled={contractExtensionDeadlineBusy}
+            className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-black text-neutral-200 hover:bg-white/10 disabled:opacity-50"
+            onClick={async () => {
+              try {
+                await processContractExtensionDeadline({ closeWindow: false });
+                setContractExtensionPromptOpen(false);
+                navigate("/contract-extensions");
+              } catch (error) {
+                openSimError(error?.message || "Extension deadline processing failed.", "Contract extension error");
+              }
+            }}
+          >
+            Open Contract Extensions
+          </button>
+
+          <button
+            disabled={contractExtensionDeadlineBusy}
+            className="rounded-xl bg-emerald-600 px-5 py-3 text-sm font-black text-white hover:bg-emerald-500 disabled:opacity-50"
+            onClick={async () => {
+              try {
+                await processContractExtensionDeadline({ closeWindow: true });
+                markContractExtensionDeadlineHandled();
+                setContractExtensionPromptOpen(false);
+                window.setTimeout(() => resumePendingSimulation(), 0);
+              } catch (error) {
+                openSimError(error?.message || "Extension deadline processing failed.", "Contract extension error");
+              }
+            }}
+          >
+            {contractExtensionDeadlineBusy ? "Processing…" : "Close Window & Continue"}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 )}
 

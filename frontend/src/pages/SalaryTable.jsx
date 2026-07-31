@@ -219,7 +219,13 @@ export default function SalaryTable() {
       startYear = currentSeasonYear;
     }
 
-    return { startYear, salaryByYear, option };
+    return {
+      startYear,
+      salaryByYear,
+      option,
+      extensionMeta: contract?.extensionMeta || null,
+      extensions: Array.isArray(contract?.extensions) ? contract.extensions : [],
+    };
   };
 
   const getOptionYearIndices = (option) => {
@@ -1587,6 +1593,11 @@ export default function SalaryTable() {
                       <div className="leading-tight">
                         <div className="font-semibold flex items-center gap-2">
                           <span>{p.name}</span>
+                          {p.contract?.extensionMeta && (
+                            <span className="inline-flex items-center rounded-full border border-violet-400/25 bg-violet-500/15 px-2 py-0.5 text-[10px] font-extrabold text-violet-200">
+                              EXT
+                            </span>
+                          )}
                           {p.isTwoWay && (
                             <span className="inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-200">
                               2W
@@ -1642,8 +1653,12 @@ export default function SalaryTable() {
                     const optionType = sal > 0 && !p.isDeadCap && !p.isCapHold
                       ? getOptionTypeForContractYear(p.contract, idx)
                       : null;
+                    const extensionStartYear = Number(p.contract?.extensionMeta?.extensionStartYear || 0);
+                    const isExtensionYear = extensionStartYear > 0 && Number(seasonYear) >= extensionStartYear;
                     const salClass = p.isDeadCap || p.isCapHold
                       ? "text-red-200 font-extrabold"
+                      : isExtensionYear
+                      ? "text-violet-300 font-extrabold"
                       : getOptionSalaryClass(optionType);
 
                     return (
@@ -1879,6 +1894,11 @@ export default function SalaryTable() {
                             <div className="leading-tight">
                               <div className="font-semibold flex items-center gap-2">
                                 <span>{p.name}</span>
+                                {p.contract?.extensionMeta && (
+                                  <span className="inline-flex items-center rounded-full border border-violet-400/25 bg-violet-500/15 px-2 py-0.5 text-[10px] font-extrabold text-violet-200">
+                                    EXT
+                                  </span>
+                                )}
                                 {p.isTwoWay && (
                                   <span className="inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-200">
                                     2W
@@ -1934,8 +1954,12 @@ export default function SalaryTable() {
                           const optionType = sal > 0 && !p.isDeadCap && !p.isCapHold
                             ? getOptionTypeForContractYear(p.contract, idx)
                             : null;
+                          const extensionStartYear = Number(p.contract?.extensionMeta?.extensionStartYear || 0);
+                          const isExtensionYear = extensionStartYear > 0 && Number(seasonYear) >= extensionStartYear;
                           const salClass = p.isDeadCap || p.isCapHold
                             ? "text-red-200 font-extrabold"
+                            : isExtensionYear
+                            ? "text-violet-300 font-extrabold"
                             : getOptionSalaryClass(optionType);
 
                           return (

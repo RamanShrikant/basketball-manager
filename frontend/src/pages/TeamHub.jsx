@@ -97,6 +97,8 @@ function tileSubtitle(tile, selectedTeamName, { allStarsAvailable = false, isOff
     ? "Market and Available Players"
     : tile.name === "Salary Table"
     ? "Contracts, Cap, and Payroll"
+    : tile.name === "Contract Extensions"
+    ? "Eligibility, Negotiations, and Future Payroll"
     : tile.name === "Power Rankings"
     ? "League-Wide Team Ratings"
     : tile.name === "Draft Picks"
@@ -259,6 +261,7 @@ export default function TeamHub() {
       { name: "Free Agents", path: "/free-agents", enabled: true },
       { name: "Draft Picks", path: "/draft-picks", enabled: true },
       { name: "Salary Table", path: "/salary-table", enabled: true },
+      { name: "Contract Extensions", path: "/contract-extensions", enabled: true },
     ],
     Season: [
       { name: "Standings", path: "/standings", enabled: true },
@@ -294,6 +297,7 @@ export default function TeamHub() {
     ],
     "Front Office": [
       { name: "Trades", path: "/trades", enabled: true },
+      { name: "Contract Extensions", path: "/contract-extensions", enabled: true },
     ],
     Scouting: [
       { name: "Locker Room", path: "/locker-room", enabled: true },
@@ -323,6 +327,7 @@ export default function TeamHub() {
       { name: "Salary Table", path: "/salary-table", enabled: true },
       { name: "Trades", path: "#", enabled: false },
       { name: "Free Agents", path: "#", enabled: false },
+      { name: "Contract Extensions", path: "#", enabled: false },
     ],
     Scouting: [
       { name: "Locker Room", path: "/locker-room", enabled: true },

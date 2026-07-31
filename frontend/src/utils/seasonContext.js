@@ -222,6 +222,15 @@ export function getSeasonCalendarConfig(leagueData = {}) {
     regularSeasonGameStart:
       parseDateString(source.regularSeasonGameStart) ??
       fmtDate(seasonStartYear, 9, 21),
+    // Basketball Manager uses one clear preseason deadline for both rookie and
+    // veteran extension gameplay. The default is the day before opening night.
+    contractExtensionDeadlineDate:
+      parseDateString(source.contractExtensionDeadlineDate) ??
+      parseDateString(source.extensionDeadlineDate) ??
+      addDaysToDateString(
+        parseDateString(source.regularSeasonGameStart) ?? fmtDate(seasonStartYear, 9, 21),
+        -1
+      ),
     regularSeasonEnd:
       parseDateString(source.regularSeasonEnd) ??
       parseDateString(source.seasonEndDate) ??

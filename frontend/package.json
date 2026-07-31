@@ -10,8 +10,9 @@
     "test:bm": "node scripts/bm-regression-check.mjs",
     "check:bm": "node scripts/bm-regression-check.mjs",
     "check:cpu-trade-history": "node scripts/bm-cpu-trade-history-parity.mjs",
-    "check:bm:full": "node scripts/bm-regression-check.mjs && node scripts/bm-cpu-trade-history-parity.mjs && node scripts/bm-year2-storage-regression.mjs",
-    "check:year2-storage": "node scripts/bm-year2-storage-regression.mjs"
+    "check:bm:full": "node scripts/bm-regression-check.mjs && python scripts/contract-extension-regression.py && node scripts/bm-cpu-trade-history-parity.mjs && node scripts/bm-year2-storage-regression.mjs",
+    "check:year2-storage": "node scripts/bm-year2-storage-regression.mjs",
+    "check:contract-extensions": "python scripts/contract-extension-regression.py"
   },
   "dependencies": {
     "lz-string": "^1.5.0",
