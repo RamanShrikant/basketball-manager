@@ -15,13 +15,13 @@ import { cancelCpuTradeWorkerGeneration, getCpuCpuTradeCandidates, prewarmCpuTra
 import { prewarmCpuTradeValidationPool } from "../api/cpuTradeValidationPool.js";
 import {
   addGeneratedCpuTradeCandidates,
-  buildCpuMegaTradeWorkerContext,
   buildCpuTradeBankSummary,
   buildCpuTradeWorkerContext,
   clearCpuTradeBankTestConfig,
   ensureCpuTradeBankState,
   executeDueCpuTradeFromBank,
-  executeImmediateCpuMegaTradeFromCandidates,
+  executePreparedCpuMegaTradePlan,
+  prepareCpuMegaTradePlan,
   getCpuMegaTradeGenerationPolicy,
   getCpuTradeBankGenerationPolicy,
   getCpuTradeBankRunwayStatus,
@@ -5635,67 +5635,50 @@ async function runCpuCpuTradePassForDate({
       baseContext,
       testConfig
     );
-    if (
-      megaTradePolicy.shouldGenerate &&
-      generationJobRef?.current?.status !== "pending"
-    ) {
+
+    // The one-per-season mega trade is now a prepared bonus event. Planning is
+    // a tiny local recipe pass earlier in the season; execution happens with
+    // timing variance before the deadline. Neither step uses the Python worker,
+    // normal trade evaluator, exact-validation pool, or a deadline-day sweep.
+    if (megaTradePolicy.shouldGenerate) {
       const megaContext = {
         ...baseContext,
         generatedDate: currentDate,
         generatedDayIndex: Number(dayIndex || 0),
         megaTradeMode: true,
-        megaTradeHardSweep: Boolean(megaTradePolicy.hardSweep),
+        megaTradePlannerAction: megaTradePolicy.action,
       };
 
       try {
-        if (megaTradePolicy.hardSweep && megaTradePolicy.localDirect) {
-          // The deadline mega deal is a curated legal bonus event.  Do not spin
-          // up the broad Python search here; it was the source of deadline-day
-          // stalls and still failed to finish a Booker/Tatum style deal.
-          immediateMegaLeagueBeforeExecution = nextLeagueData;
-          immediateMegaExecution = executeImmediateCpuMegaTradeFromCandidates({
+        if (megaTradePolicy.action === "plan") {
+          const planned = prepareCpuMegaTradePlan({
             leagueData: nextLeagueData,
-            response: { ok: true, candidates: [], debug: { megaTradeMode: true, localDirect: true } },
             context: megaContext,
             testConfig,
-            maxCandidateChecks: megaTradePolicy.directExecutionChecks || 24,
+          });
+          nextLeagueData = planned?.leagueData || nextLeagueData;
+          bankChanged = bankChanged || Boolean(planned?.changed);
+          foregroundReason = planned?.planned
+            ? "mega_trade_plan_ready"
+            : `mega_trade_plan_retry:${planned?.reason || "no_recipe"}`;
+        } else if (megaTradePolicy.action === "execute" || megaTradePolicy.action === "plan_and_execute") {
+          immediateMegaLeagueBeforeExecution = nextLeagueData;
+          immediateMegaExecution = executePreparedCpuMegaTradePlan({
+            leagueData: nextLeagueData,
+            context: megaContext,
+            testConfig,
+            maxCandidateChecks: megaTradePolicy.maxCandidateChecks || 4,
           });
           nextLeagueData = immediateMegaExecution?.leagueData || nextLeagueData;
           bankChanged = bankChanged || Boolean(immediateMegaExecution?.changed);
           foregroundReason = immediateMegaExecution?.executed
-            ? "mega_deadline_trade_executed"
-            : `mega_deadline_direct_sweep:${immediateMegaExecution?.reason || "no_valid_trade"}`;
+            ? "prepared_mega_trade_executed"
+            : `prepared_mega_trade_retry:${immediateMegaExecution?.reason || "no_valid_trade"}`;
           shouldForegroundGenerate = shouldForegroundGenerate || Boolean(immediateMegaExecution?.executed);
-        } else {
-          const workerContext = buildCpuMegaTradeWorkerContext(
-            nextLeagueData?.cpuTradeBankState,
-            baseContext,
-            megaTradePolicy
-          );
-          const response = await getCpuCpuTradeCandidates(
-            makeCpuTradeGenerationLeagueData(nextLeagueData),
-            workerContext
-          );
-          const megaResponse = response || { ok: true, candidates: [], debug: { megaTradeMode: true } };
-          const added = await addGeneratedCpuTradeCandidates({
-            leagueData: nextLeagueData,
-            response: megaResponse,
-            context: megaContext,
-            testConfig,
-            exactEvaluationLimit: megaTradePolicy.exactEvaluations,
-          });
-          nextLeagueData = added.leagueData || nextLeagueData;
-          bankChanged = bankChanged || added.changed;
-          if (added.accepted?.length) {
-            shouldForegroundGenerate = true;
-            foregroundReason = "mega_trade_candidate_ready";
-          } else {
-            foregroundReason = `mega_trade_generation:${megaResponse?.skippedReason || "no_accepted_candidate"}`;
-          }
         }
       } catch (error) {
-        foregroundReason = `mega_trade_generation_failed:${error?.message || String(error || "unknown")}`;
-        console.warn("[CPU Trade Bank] mega trade generation failed", error);
+        foregroundReason = `mega_trade_planner_failed:${error?.message || String(error || "unknown")}`;
+        console.warn("[CPU Trade Bank] prepared mega trade planner failed", error);
       }
     }
 

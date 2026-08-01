@@ -440,6 +440,74 @@ def _conference_rank_for_team(league: Dict[str, Any], context: Dict[str, Any], t
     return None
 
 
+def _mega_league_rank_for_team(league: Dict[str, Any], context: Dict[str, Any], team_name: str) -> Optional[int]:
+    teams = _all_teams(league)
+    if not team_name or not teams:
+        return None
+    rows = []
+    for team in teams:
+        name = _team_name(team)
+        record = _record_for(name, context, team)
+        games = _num(record.get("games"), 0.0)
+        pct = (_num(record.get("wins"), 0.0) / max(1.0, games)) if games > 0 else None
+        rows.append({"name": name, "pct": pct, "games": games, "power": _top_avg(team, 6)})
+    use_record = sum(1 for row in rows if row["games"] >= 20) >= max(1, int(len(rows) * 0.8 + 0.999))
+    rows.sort(
+        key=lambda row: (
+            ((row["pct"] or 0.0) * 50.0 + row["power"] * 0.5) if use_record else row["power"],
+            row["pct"] if row["pct"] is not None else -1.0,
+            row["power"],
+        ),
+        reverse=True,
+    )
+    target = _norm(team_name)
+    for index, row in enumerate(rows, start=1):
+        if _norm(row["name"]) == target:
+            return index
+    return None
+
+
+def _mega_seller_direction(
+    league: Dict[str, Any],
+    context: Dict[str, Any],
+    seller: Dict[str, Any],
+    seller_ctx: Dict[str, Any],
+) -> Dict[str, Any]:
+    seller_name = _team_name(seller)
+    wins = _num(seller_ctx.get("wins"), 0.0)
+    losses = _num(seller_ctx.get("losses"), 0.0)
+    games = _num(seller_ctx.get("games"), wins + losses)
+    win_pct = (wins / max(1.0, wins + losses)) if games > 0 else None
+    conference_rank = _conference_rank_for_team(league, context, seller_name)
+    league_rank = _mega_league_rank_for_team(league, context, seller_name)
+    phase = "middle"
+    if conference_rank is not None:
+        if conference_rank >= 12:
+            phase = "seller"  # League Intel rebuilding
+        elif conference_rank >= 8:
+            phase = "retool"
+        else:
+            phase = "contender"
+    elif (win_pct is not None and win_pct <= 0.380) or (league_rank is not None and league_rank >= 24):
+        phase = "seller"
+    elif (win_pct is not None and win_pct < 0.500) or (league_rank is not None and league_rank >= 16):
+        phase = "retool"
+    under_500 = win_pct is not None and win_pct < 0.500
+    bottom_half = league_rank is not None and league_rank >= 16
+    return {
+        "phase": phase,
+        "wins": wins,
+        "losses": losses,
+        "games": games,
+        "winPct": win_pct,
+        "conferenceRank": conference_rank,
+        "leagueRank": league_rank,
+        "under500": under_500,
+        "bottomHalf": bottom_half,
+        "eligible": phase in {"seller", "retool"} or under_500 or bottom_half,
+    }
+
+
 def _strict_mega_seller_block_reason(
     league: Dict[str, Any],
     context: Dict[str, Any],
@@ -447,39 +515,21 @@ def _strict_mega_seller_block_reason(
     seller_ctx: Dict[str, Any],
     target: Optional[Dict[str, Any]] = None,
 ) -> str:
-    seller_name = _team_name(seller)
-    phase = str(seller_ctx.get("phase") or "middle")
-    wins = _num(seller_ctx.get("wins"), 0.0)
-    losses = _num(seller_ctx.get("losses"), 0.0)
-    games = _num(seller_ctx.get("games"), wins + losses)
-    win_pct = _num(seller_ctx.get("winPct"), 0.0)
-    conf_rank = _conference_rank_for_team(league, context, seller_name)
-    top_avg = _num(seller_ctx.get("topAvg"), _top_avg(seller, 8))
-
-    if games >= MIN_GAMES_FOR_RECORD_DIRECTION:
-        if conf_rank is not None and conf_rank <= 7:
-            return "seller_top7_conference"
-        if win_pct >= 0.500:
-            return "seller_not_below_500"
-    elif phase in {"contender", "buyer"} or top_avg >= 84.5:
-        return "seller_contender_before_record_sample"
-
-    if phase in {"contender", "buyer"}:
-        return "seller_phase_buyer_or_contender"
-
+    direction = _mega_seller_direction(league, context, seller, seller_ctx)
+    conference_rank = direction.get("conferenceRank")
+    if conference_rank is not None and conference_rank <= 7:
+        return "seller_top7_conference"
+    if not direction.get("eligible"):
+        return "seller_not_mid_bad_retool_or_rebuild"
     if target is not None:
         ovr = _player_ovr(target)
         age = _player_age(target)
-        clearly_bad = bool(
-            phase == "seller"
-            or (games >= MIN_GAMES_FOR_RECORD_DIRECTION and (win_pct <= 0.410 or (conf_rank is not None and conf_rank >= 10)))
-        )
-        if ovr >= 95 and not clearly_bad:
-            return "superstar_seller_not_clearly_bad"
-        if ovr >= 90 and phase not in {"seller", "retool"} and not clearly_bad:
-            return "star_seller_not_rebuild_or_retool"
-        if ovr >= 94 and age <= 30 and not bool(phase == "seller" or win_pct <= 0.380):
-            return "prime_superstar_requires_deep_seller"
+        if ovr < MEGA_TRADE_TARGET_OVR:
+            return "mega_target_below_90"
+        if age < 28:
+            return "mega_target_too_young"
+        if direction.get("phase") != "seller" and ovr >= 94 and age <= 30:
+            return "retool_or_mid_protects_prime_94_plus"
     return ""
 
 
@@ -1624,15 +1674,16 @@ def _build_mega_trade_candidates(
     for seller in teams:
         seller_name = _team_name(seller)
         seller_ctx = contexts.get(seller_name, {})
-        seller_phase = seller_ctx.get("phase")
-        seller_win_pct = _num(seller_ctx.get("winPct"), 0.0)
+        direction = _mega_seller_direction(league, context, seller, seller_ctx)
+        seller_phase = direction.get("phase")
+        seller_win_pct = direction.get("winPct")
         seller_top_avg = _num(seller_ctx.get("topAvg"), 70.0)
         hard_sweep = bool(context.get("megaTradeHardSweep"))
-        seller_disappointing = bool(seller_win_pct > 0 and seller_win_pct <= 0.445 and seller_top_avg >= 81.0)
+        seller_disappointing = bool(direction.get("under500") or direction.get("bottomHalf"))
         seller_block = _strict_mega_seller_block_reason(league, context, seller, seller_ctx)
         if seller_block:
             continue
-        if seller_phase not in {"seller", "retool"} and not seller_disappointing:
+        if not direction.get("eligible"):
             continue
         if _already_traded_count(league, seller_name) >= MAX_CPU_TRADES_PER_TEAM_SEASON:
             continue
@@ -1650,7 +1701,7 @@ def _build_mega_trade_candidates(
             target_block = _strict_mega_seller_block_reason(league, context, seller, seller_ctx, player)
             if target_block:
                 continue
-            rebuilding_seller = seller_phase == "seller" or (seller_win_pct > 0 and seller_win_pct <= 0.380)
+            rebuilding_seller = seller_phase == "seller"
             if not rebuilding_seller and _player_ovr(player) >= 94 and age <= 30:
                 continue
             if age < 28 and _is_shared_untouchable_core(seller, player, seller_ctx):

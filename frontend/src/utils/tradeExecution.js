@@ -32,6 +32,11 @@ const TRADE_MATCHING_BUFFER = 250_000;
 const TRADE_SALARY_TOLERANCE = 1_000;
 const CPU_CPU_RECENT_ACQUISITION_COOLDOWN_DAYS = 45;
 
+function finiteNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
 
 // Manual trade-card layout controls.
 // Change only these numbers to move/resize the player face, OVR ring, name,
@@ -1092,28 +1097,70 @@ function conferenceRankForMegaSeller(leagueData = {}, recordsByTeam = {}, teamNa
   return null;
 }
 
-function strictMegaSellerExecutionBlockReason(leagueData = {}, recordsByTeam = {}, sellerTeam = {}, targetPlayer = null) {
+function megaLeagueRankForSeller(leagueData = {}, recordsByTeam = {}, sellerName = "") {
+  const teams = getAllTeamsFromLeague(leagueData);
+  if (!sellerName || !teams.length) return null;
+  const rows = teams.map((team) => {
+    const name = team?.name || team?.teamName || "";
+    return {
+      name,
+      pct: megaWinPct(recordsByTeam, name),
+      games: megaGamesPlayed(recordsByTeam, name),
+      power: teamTopOvrForMega(team, 6),
+    };
+  });
+  const useRecord = rows.filter((row) => row.games >= 20).length >= Math.max(1, Math.ceil(rows.length * 0.8));
+  rows.sort((a, b) => {
+    const aScore = useRecord ? (a.pct ?? 0) * 50 + a.power * 0.5 : a.power;
+    const bScore = useRecord ? (b.pct ?? 0) * 50 + b.power * 0.5 : b.power;
+    if (bScore !== aScore) return bScore - aScore;
+    if ((b.pct ?? -1) !== (a.pct ?? -1)) return (b.pct ?? -1) - (a.pct ?? -1);
+    return b.power - a.power;
+  });
+  const index = rows.findIndex((row) => sameTeamName(row.name, sellerName));
+  return index >= 0 ? index + 1 : null;
+}
+
+function megaSellerDirectionForExecution(leagueData = {}, recordsByTeam = {}, sellerTeam = {}) {
   const sellerName = sellerTeam?.name || sellerTeam?.teamName || "";
   const games = megaGamesPlayed(recordsByTeam, sellerName);
   const pct = megaWinPct(recordsByTeam, sellerName);
-  const confRank = conferenceRankForMegaSeller(leagueData, recordsByTeam, sellerName);
-  const power = teamTopOvrForMega(sellerTeam, 6);
-  if (games >= 12) {
-    if (confRank != null && confRank <= 7) return "seller_top7_conference";
-    if (pct != null && pct >= 0.5) return "seller_not_below_500";
-  } else if (power >= 84.5) {
-    return "seller_power_contender_before_record_sample";
+  const conferenceRank = conferenceRankForMegaSeller(leagueData, recordsByTeam, sellerName);
+  const leagueRank = megaLeagueRankForSeller(leagueData, recordsByTeam, sellerName);
+  let phase = "middle";
+  if (conferenceRank != null) {
+    if (conferenceRank >= 12) phase = "rebuilding";
+    else if (conferenceRank >= 8) phase = "retooling";
+    else phase = "contending";
+  } else if ((pct != null && pct <= 0.38) || (leagueRank != null && leagueRank >= 24)) {
+    phase = "rebuilding";
+  } else if ((pct != null && pct < 0.5) || (leagueRank != null && leagueRank >= 16)) {
+    phase = "retooling";
   }
+  const under500 = pct != null && pct < 0.5;
+  const bottomHalf = leagueRank != null && leagueRank >= 16;
+  return {
+    phase,
+    games,
+    pct,
+    conferenceRank,
+    leagueRank,
+    eligible: phase === "retooling" || phase === "rebuilding" || under500 || bottomHalf,
+  };
+}
+
+function strictMegaSellerExecutionBlockReason(leagueData = {}, recordsByTeam = {}, sellerTeam = {}, targetPlayer = null) {
+  const direction = megaSellerDirectionForExecution(leagueData, recordsByTeam, sellerTeam);
+  if (direction.conferenceRank != null && direction.conferenceRank <= 7) return "seller_top7_conference";
+  if (!direction.eligible) return "seller_not_mid_bad_retool_or_rebuild";
   if (targetPlayer) {
     const ovr = finiteNumber(targetPlayer?.overall ?? targetPlayer?.ovr ?? targetPlayer?.rating, 0);
     const age = finiteNumber(targetPlayer?.age ?? targetPlayer?.playerAge, 27);
-    const clearlyBad = Boolean(
-      (games >= 12 && pct != null && pct <= 0.41) ||
-        (games >= 12 && confRank != null && confRank >= 10) ||
-        power <= 80.5
-    );
-    if (ovr >= 95 && !clearlyBad) return "superstar_seller_not_clearly_bad";
-    if (ovr >= 94 && age <= 30 && !(pct != null && pct <= 0.38)) return "prime_superstar_requires_deep_seller";
+    if (ovr < 90) return "mega_target_below_90";
+    if (age < 28) return "mega_target_too_young";
+    if (direction.phase !== "rebuilding" && ovr >= 94 && age <= 30) {
+      return "retool_or_mid_protects_prime_94_plus";
+    }
   }
   return "";
 }
