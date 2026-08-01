@@ -1042,6 +1042,82 @@ function findTeamInLeague(leagueData, teamName) {
   return getAllTeamsFromLeague(leagueData).find((team) => sameTeamName(team?.name || team?.teamName, teamName)) || null;
 }
 
+function recordForTeamName(recordsByTeam = {}, teamName = "") {
+  if (!recordsByTeam || typeof recordsByTeam !== "object" || !teamName) return null;
+  const key = Object.keys(recordsByTeam).find((name) => sameTeamName(name, teamName));
+  return key ? recordsByTeam[key] : null;
+}
+
+function megaWinPct(recordsByTeam = {}, teamName = "") {
+  const row = recordForTeamName(recordsByTeam, teamName) || {};
+  const wins = finiteNumber(row.wins ?? row.w, 0);
+  const losses = finiteNumber(row.losses ?? row.l, 0);
+  const games = finiteNumber(row.games ?? row.gp, wins + losses);
+  if (games <= 0) return null;
+  return wins / Math.max(1, wins + losses || games);
+}
+
+function megaGamesPlayed(recordsByTeam = {}, teamName = "") {
+  const row = recordForTeamName(recordsByTeam, teamName) || {};
+  const wins = finiteNumber(row.wins ?? row.w, 0);
+  const losses = finiteNumber(row.losses ?? row.l, 0);
+  return finiteNumber(row.games ?? row.gp, wins + losses);
+}
+
+function teamTopOvrForMega(team = {}, count = 6) {
+  const players = Array.isArray(team?.players) ? team.players : [];
+  const values = players
+    .map((player) => finiteNumber(player?.overall ?? player?.ovr ?? player?.rating, 0))
+    .filter((value) => value > 0)
+    .sort((a, b) => b - a)
+    .slice(0, count);
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
+function conferenceRankForMegaSeller(leagueData = {}, recordsByTeam = {}, teamName = "") {
+  if (!leagueData?.conferences || typeof leagueData.conferences !== "object" || !teamName) return null;
+  for (const rows of Object.values(leagueData.conferences)) {
+    if (!Array.isArray(rows) || !rows.some((team) => sameTeamName(team?.name || team?.teamName, teamName))) continue;
+    const ranked = [...rows].sort((a, b) => {
+      const ap = megaWinPct(recordsByTeam, a?.name || a?.teamName);
+      const bp = megaWinPct(recordsByTeam, b?.name || b?.teamName);
+      const ar = recordForTeamName(recordsByTeam, a?.name || a?.teamName) || {};
+      const br = recordForTeamName(recordsByTeam, b?.name || b?.teamName) || {};
+      if ((bp ?? -1) !== (ap ?? -1)) return (bp ?? -1) - (ap ?? -1);
+      return finiteNumber(br.wins ?? br.w, 0) - finiteNumber(ar.wins ?? ar.w, 0);
+    });
+    const index = ranked.findIndex((team) => sameTeamName(team?.name || team?.teamName, teamName));
+    return index >= 0 ? index + 1 : null;
+  }
+  return null;
+}
+
+function strictMegaSellerExecutionBlockReason(leagueData = {}, recordsByTeam = {}, sellerTeam = {}, targetPlayer = null) {
+  const sellerName = sellerTeam?.name || sellerTeam?.teamName || "";
+  const games = megaGamesPlayed(recordsByTeam, sellerName);
+  const pct = megaWinPct(recordsByTeam, sellerName);
+  const confRank = conferenceRankForMegaSeller(leagueData, recordsByTeam, sellerName);
+  const power = teamTopOvrForMega(sellerTeam, 6);
+  if (games >= 12) {
+    if (confRank != null && confRank <= 7) return "seller_top7_conference";
+    if (pct != null && pct >= 0.5) return "seller_not_below_500";
+  } else if (power >= 84.5) {
+    return "seller_power_contender_before_record_sample";
+  }
+  if (targetPlayer) {
+    const ovr = finiteNumber(targetPlayer?.overall ?? targetPlayer?.ovr ?? targetPlayer?.rating, 0);
+    const age = finiteNumber(targetPlayer?.age ?? targetPlayer?.playerAge, 27);
+    const clearlyBad = Boolean(
+      (games >= 12 && pct != null && pct <= 0.41) ||
+        (games >= 12 && confRank != null && confRank >= 10) ||
+        power <= 80.5
+    );
+    if (ovr >= 95 && !clearlyBad) return "superstar_seller_not_clearly_bad";
+    if (ovr >= 94 && age <= 30 && !(pct != null && pct <= 0.38)) return "prime_superstar_requires_deep_seller";
+  }
+  return "";
+}
+
 function getPlayerIdentity(player = {}) {
   const id = player?.id ?? player?.playerId ?? player?.player_id ?? player?.uuid ?? null;
   if (id !== null && id !== undefined && String(id).trim() !== "") return `id:${String(id)}`;
@@ -2378,6 +2454,15 @@ export function executeCpuMegaTradeCandidateOnLeagueLoose({
 
   const fromItems = resolvedFrom.items;
   const toItems = resolvedTo.items;
+  const outgoingStar = fromItems.find((item) => item?.type === "player")?.player || null;
+  const sellerBlockReason = strictMegaSellerExecutionBlockReason(evaluationLeagueData, recordsByTeam || {}, fromTeam, outgoingStar);
+  if (sellerBlockReason) {
+    return {
+      ok: false,
+      reason: `Mega trade seller blocked: ${fromTeamName} is not a valid star seller (${sellerBlockReason}).`,
+      staleCode: sellerBlockReason,
+    };
+  }
   const fromRosterProjection = evaluateTradeRosterProjection({
     team: fromTeam,
     outgoingItems: fromItems,

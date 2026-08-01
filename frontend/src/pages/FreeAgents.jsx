@@ -13,6 +13,10 @@ import "../styles/BMAnimations.css";
 import { saveLeagueData, loadLeagueData } from "../utils/leagueStorage.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { getFinancialSeasonYear } from "../utils/seasonContext.js";
+import {
+  buildLegalFreeAgentSalarySchedule,
+  getFreeAgentContractRules,
+} from "../utils/freeAgencyContractRules.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -136,6 +140,10 @@ function compactOfferForStorage(offer, keepStory = false) {
     years: offer.years || offer.contract?.salaryByYear?.length || 0,
     totalValue: offer.totalValue || 0,
     aav: offer.aav || 0,
+    decisionContract: offer.decisionContract || null,
+    decisionYears: offer.decisionYears || offer.decisionContract?.salaryByYear?.length || 0,
+    decisionTotalValue: offer.decisionTotalValue || 0,
+    decisionAAV: offer.decisionAAV || 0,
     currentYearSalary:
       offer.currentYearSalary ||
       offer.contract?.salaryByYear?.[0] ||
@@ -1128,7 +1136,7 @@ const isOffseasonMode =
       return Number(currentSalaryByYear[currentSalaryByYear.length - 1] || 0);
     }
 
-    return Number(player?.marketValue?.expectedYear1Salary || MIN_CONTRACT_AMOUNT);
+    return Number(player?.marketValue?.contractExpectedYear1Salary || player?.marketValue?.expectedYear1Salary || MIN_CONTRACT_AMOUNT);
   };
 
   const getCapHoldForPlayer = (player, teamName) => {
@@ -1147,7 +1155,7 @@ const isOffseasonMode =
     }
 
     const previousSalary = getPreviousSalaryForCapHold(player);
-    const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || MIN_CONTRACT_AMOUNT);
+    const marketYearOne = Number(player?.marketValue?.contractExpectedYear1Salary || player?.marketValue?.expectedYear1Salary || MIN_CONTRACT_AMOUNT);
 
     if (rights.birdLevel === "bird") {
       return Math.max(previousSalary, marketYearOne, MIN_CONTRACT_AMOUNT);
@@ -1408,6 +1416,41 @@ const isOffseasonMode =
     maxRosterSize,
   ]);
 
+  const offerContractRules = useMemo(() => {
+    if (!signTargetPlayer || !selectedTeam?.name || !workingLeagueData) return null;
+
+    return getFreeAgentContractRules({
+      leagueData: workingLeagueData,
+      player: signTargetPlayer,
+      teamName: selectedTeam.name,
+      dashboard: userCapDashboard
+        ? {
+            ...userCapDashboard,
+            replacedCapHold: getCapHoldForPlayer(signTargetPlayer, selectedTeam.name),
+          }
+        : null,
+      year1Salary: parseMillionsText(offerSalaryText),
+    });
+  }, [
+    signTargetPlayer,
+    selectedTeam?.name,
+    workingLeagueData,
+    userCapDashboard,
+    offerSalaryText,
+  ]);
+
+  const offerMinimumAmount = Number(
+    offerContractRules?.minFirstYearSalary || MIN_CONTRACT_AMOUNT
+  );
+  const offerMaximumAmount = Number(
+    offerContractRules?.maxFirstYearSalary || MAX_CONTRACT_AMOUNT
+  );
+  const offerMinimumMillions = offerMinimumAmount / 1_000_000;
+  const offerMaximumMillions = Math.max(offerMinimumMillions, offerMaximumAmount / 1_000_000);
+  const legalOfferYears = Array.isArray(offerContractRules?.allowedYears) && offerContractRules.allowedYears.length
+    ? offerContractRules.allowedYears
+    : [1, 2, 3, 4];
+
   const getBestExceptionLabel = (dashboard) => {
     if (!dashboard) return "-";
 
@@ -1423,8 +1466,11 @@ const isOffseasonMode =
 
   const getExpectedYearOneSalary = (player) => {
     return Number(
+      player?.marketValue?.contractExpectedYear1Salary ||
       player?.marketValue?.expectedYear1Salary ||
+      player?.marketValue?.contractExpectedAAV ||
       player?.marketValue?.expectedAAV ||
+      player?.marketValue?.contractMinAcceptableAAV ||
       player?.marketValue?.minAcceptableAAV ||
       MIN_CONTRACT_AMOUNT
     );
@@ -1951,18 +1997,17 @@ const isOffseasonMode =
     });
   }, [sortedPlayers]);
 
-  const getOfferSalaryByYear = (year1Salary, years) => {
-    const out = [];
-    for (let i = 0; i < years; i++) {
-      const salary = year1Salary * ((1 + 0.05) ** i);
-      out.push(Math.round(salary / 1000) * 1000);
-    }
-    return out;
+  const getOfferSalaryByYear = (year1Salary, years, raisePct = 0.05) => {
+    return buildLegalFreeAgentSalarySchedule(year1Salary, years, raisePct);
   };
 
-  const buildOfferContract = (year1Salary, years, currentOptionType) => {
+  const buildOfferContract = (year1Salary, years, currentOptionType, contractRules = null) => {
     const startYear = getCurrentSeasonYear() + (isOffseasonMode ? 1 : 0);
-    const salaryByYear = getOfferSalaryByYear(year1Salary, years);
+    const salaryByYear = getOfferSalaryByYear(
+      year1Salary,
+      years,
+      Number(contractRules?.maxRaisePct ?? 0.05)
+    );
     const finalOptionIndex = Math.max(0, Number(years || 1) - 1);
 
     return {
@@ -1981,12 +2026,36 @@ const isOffseasonMode =
   };
 
   const openSignModal = (player) => {
-    const defaultYear1Salary = Math.min(
-      Math.max(player?.marketValue?.expectedYear1Salary || MIN_CONTRACT_AMOUNT, MIN_CONTRACT_AMOUNT),
-      MAX_CONTRACT_AMOUNT
+    const requestedSalary = Number(
+      player?.marketValue?.contractExpectedYear1Salary ||
+      player?.marketValue?.expectedYear1Salary ||
+      player?.marketValue?.contractExpectedAAV ||
+      player?.marketValue?.expectedAAV ||
+      MIN_CONTRACT_AMOUNT
     );
-    const defaultYears =
-      player?.marketValue?.expectedYears || 2;
+    const initialRules = getFreeAgentContractRules({
+      leagueData: workingLeagueData || {},
+      player,
+      teamName: selectedTeam?.name || "",
+      dashboard: userCapDashboard
+        ? {
+            ...userCapDashboard,
+            replacedCapHold: getCapHoldForPlayer(player, selectedTeam?.name || ""),
+          }
+        : null,
+      year1Salary: requestedSalary,
+    });
+    const defaultYear1Salary = Math.min(
+      Math.max(requestedSalary, initialRules.minFirstYearSalary),
+      initialRules.maxFirstYearSalary
+    );
+    const requestedYears = Number(player?.marketValue?.contractExpectedYears || player?.marketValue?.expectedYears || 2);
+    const defaultYears = initialRules.allowedYears.includes(requestedYears)
+      ? requestedYears
+      : initialRules.allowedYears.reduce((best, year) =>
+          Math.abs(year - requestedYears) < Math.abs(best - requestedYears) ? year : best,
+        initialRules.allowedYears[0] || 1
+      );
 
     setSelectedPlayer(player);
     setSignTargetPlayer(player);
@@ -2012,6 +2081,27 @@ const isOffseasonMode =
       setOptionType("none");
     }
   }, [offerYears, optionType]);
+
+  useEffect(() => {
+    if (!signModalOpen || !offerContractRules) return;
+
+    const currentSalary = parseMillionsText(offerSalaryText);
+    const clampedSalary = Math.min(
+      Math.max(currentSalary || offerContractRules.minFirstYearSalary, offerContractRules.minFirstYearSalary),
+      offerContractRules.maxFirstYearSalary
+    );
+    if (currentSalary !== clampedSalary) {
+      setOfferSalaryText(formatMillionsInput(clampedSalary));
+    }
+
+    if (!offerContractRules.allowedYears.includes(offerYears)) {
+      const nextYears = offerContractRules.allowedYears.reduce((best, year) =>
+        Math.abs(year - offerYears) < Math.abs(best - offerYears) ? year : best,
+      offerContractRules.allowedYears[0] || 1
+      );
+      setOfferYears(nextYears);
+    }
+  }, [signModalOpen, offerContractRules, offerSalaryText, offerYears]);
 
   const openOffersModal = async (player, baseLeagueData = workingLeagueData, forcedOffersView = null) => {
     if (!player) return;
@@ -2228,25 +2318,25 @@ const isOffseasonMode =
       return;
     }
 
-    if (year1Salary < MIN_CONTRACT_AMOUNT) {
+    if (year1Salary < offerMinimumAmount) {
       setOfferEvaluation({
         ok: false,
-        reason: `Minimum first-year salary is ${formatDollars(MIN_CONTRACT_AMOUNT)}.`,
+        reason: `Minimum first-year salary is ${formatDollars(offerMinimumAmount)}.`,
       });
       setOfferEvalLoading(false);
       return;
     }
 
-    if (year1Salary > MAX_CONTRACT_AMOUNT) {
+    if (year1Salary > offerMaximumAmount) {
       setOfferEvaluation({
         ok: false,
-        reason: `Maximum first-year salary is ${formatDollars(MAX_CONTRACT_AMOUNT)}.`,
+        reason: `Maximum first-year salary is ${formatDollars(offerMaximumAmount)}.`,
       });
       setOfferEvalLoading(false);
       return;
     }
 
-    const offer = buildOfferContract(year1Salary, offerYears, optionType);
+    const offer = buildOfferContract(year1Salary, offerYears, optionType, offerContractRules);
 
     let cancelled = false;
     setOfferEvalLoading(true);
@@ -2287,6 +2377,9 @@ const isOffseasonMode =
     offerSalaryText,
     offerYears,
     optionType,
+    offerContractRules,
+    offerMinimumAmount,
+    offerMaximumAmount,
     evaluateFreeAgencyOffer,
   ]);
 
@@ -2758,17 +2851,17 @@ updateOffseasonState({
       return;
     }
 
-    if (year1Salary < MIN_CONTRACT_AMOUNT) {
-      setSignError(`Minimum first-year salary is ${formatDollars(MIN_CONTRACT_AMOUNT)}.`);
+    if (year1Salary < offerMinimumAmount) {
+      setSignError(`Minimum first-year salary is ${formatDollars(offerMinimumAmount)}.`);
       return;
     }
 
-    if (year1Salary > MAX_CONTRACT_AMOUNT) {
-      setSignError(`Maximum first-year salary is ${formatDollars(MAX_CONTRACT_AMOUNT)}.`);
+    if (year1Salary > offerMaximumAmount) {
+      setSignError(`Maximum first-year salary is ${formatDollars(offerMaximumAmount)}.`);
       return;
     }
 
-    const offer = buildOfferContract(year1Salary, offerYears, optionType);
+    const offer = buildOfferContract(year1Salary, offerYears, optionType, offerContractRules);
 
     try {
       if (isOffseasonMode) {
@@ -2912,7 +3005,7 @@ updateOffseasonState({
       )}
 
       {rosterActionError && rosterActionError !== rosterValidationMessage && (
-        <div className="mb-4 text-red-300 text-sm font-semibold">
+        <div className="mb-2 text-red-300 text-sm font-semibold">
           {rosterActionError}
         </div>
       )}
@@ -3339,39 +3432,39 @@ updateOffseasonState({
 
       {signModalOpen && signTargetPlayer && createPortal(
         <div
-          className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-[9999] px-4 py-4"
+          className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-[9999] px-3 py-3"
           onClick={closeSignModal}
           role="presentation"
         >
           <div
-            className="fa-modal-scroll w-full max-w-6xl max-h-[calc(100vh-1.5rem)] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-6"
+            className="w-full max-w-[96rem] bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-4"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
           >
-            <h2 className="text-xl font-bold text-orange-400 mb-1.5">
+            <h2 className="text-lg font-bold text-orange-400 mb-0.5">
               {isOffseasonMode ? "Submit Offer" : "Offer Contract"}
             </h2>
 
-            <p className="text-white text-base mb-1">
+            <p className="text-white text-sm mb-0.5">
               {signTargetPlayer.name}
             </p>
-            <div className="flex flex-wrap gap-2 mb-3">
+            <div className="flex flex-wrap gap-1.5 mb-2">
               {renderRightsChips(signTargetPlayer, offerEvaluation)}
             </div>
 
-            <p className="text-gray-400 text-sm mb-4">
+            <p className="text-gray-400 text-xs mb-2">
               Offering from {selectedTeam?.name || "No Team Selected"}
             </p>
 
-            <div className="mb-4">
+            <div className="mb-2">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-semibold text-gray-300">Interest</span>
                 <span className="text-sm font-semibold text-white">
                   {interestDisplay.label}
                 </span>
               </div>
-              <div className="w-full h-3.5 bg-neutral-900 rounded-full overflow-hidden border border-neutral-700">
+              <div className="w-full h-2.5 bg-neutral-900 rounded-full overflow-hidden border border-neutral-700">
                 <div
                   className={`h-full ${interestDisplay.barClass} transition-all duration-200`}
                   style={{ width: `${interestDisplay.percent}%` }}
@@ -3379,40 +3472,40 @@ updateOffseasonState({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
-              <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+            <div className="grid grid-cols-2 xl:grid-cols-4 gap-2 mb-2">
+              <div className="bg-neutral-900 rounded-lg p-2 border border-neutral-700">
                 <div className="text-xs text-gray-400 mb-1">Payroll</div>
-                <div className="text-base font-semibold text-white">
+                <div className="text-sm font-semibold text-white">
                   {formatDollars(offerEvaluation?.teamSnapshot?.payroll || 0)}
                 </div>
               </div>
 
-              <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+              <div className="bg-neutral-900 rounded-lg p-2 border border-neutral-700">
                 <div className="text-xs text-gray-400 mb-1">Cap Room</div>
-                <div className="text-base font-semibold text-white">
+                <div className="text-sm font-semibold text-white">
                   {formatDollars(offerEvaluation?.teamSnapshot?.capRoom || 0)}
                 </div>
               </div>
 
-              <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+              <div className="bg-neutral-900 rounded-lg p-2 border border-neutral-700">
                 <div className="text-xs text-gray-400 mb-1">Dead Cap</div>
-                <div className="text-base font-semibold text-white">
+                <div className="text-sm font-semibold text-white">
                   {formatDollars(offerEvaluation?.teamSnapshot?.deadCap || 0)}
                 </div>
               </div>
 
-              <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+              <div className="bg-neutral-900 rounded-lg p-2 border border-neutral-700">
                 <div className="text-xs text-gray-400 mb-1">Cap Holds</div>
-                <div className="text-base font-semibold text-orange-200">
+                <div className="text-sm font-semibold text-orange-200">
                   {formatDollars(offerEvaluation?.teamSnapshot?.capHoldTotal || offerEvaluation?.teamSnapshot?.capHolds || 0)}
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-[1.05fr_0.95fr] gap-4 items-start mb-4">
-              <div className="space-y-4">
-                <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700">
-              <div className="text-sm font-semibold text-gray-300 mb-2.5">Money</div>
+            <div className="grid grid-cols-1 xl:grid-cols-[1.02fr_0.98fr] gap-3 items-start mb-2">
+              <div className="space-y-2">
+                <div className="bg-neutral-900 rounded-lg p-2.5 border border-neutral-700">
+              <div className="text-sm font-semibold text-gray-300 mb-1.5">Money</div>
 
               <div className="flex flex-col gap-2.5">
                 <input
@@ -3421,24 +3514,24 @@ updateOffseasonState({
                   onChange={(e) => {
                     const nextText = e.target.value;
                     const parsedSalary = parseMillionsText(nextText);
-                    if (parsedSalary > MAX_CONTRACT_AMOUNT) {
-                      setOfferSalaryText(formatMillionsInput(MAX_CONTRACT_AMOUNT));
-                      setSignError(`Maximum first-year salary is ${formatDollars(MAX_CONTRACT_AMOUNT)}.`);
+                    if (parsedSalary > offerMaximumAmount) {
+                      setOfferSalaryText(formatMillionsInput(offerMaximumAmount));
+                      setSignError(`Maximum first-year salary is ${formatDollars(offerMaximumAmount)}.`);
                       return;
                     }
                     setOfferSalaryText(nextText);
                     setSignError("");
                   }}
                   placeholder="First-year salary in millions"
-                  className="w-full px-4 py-2 rounded-lg bg-neutral-800 border border-neutral-600 text-white outline-none focus:border-orange-500"
+                  className="w-full px-3 py-1.5 rounded-lg bg-neutral-800 border border-neutral-600 text-white outline-none focus:border-orange-500"
                 />
 
                 <input
                   type="range"
-                  min={MIN_CONTRACT_MILLIONS}
-                  max={MAX_CONTRACT_MILLIONS}
+                  min={offerMinimumMillions}
+                  max={offerMaximumMillions}
                   step="0.01"
-                  value={Math.min(Math.max(Number(offerSalaryText) || MIN_CONTRACT_MILLIONS, MIN_CONTRACT_MILLIONS), MAX_CONTRACT_MILLIONS)}
+                  value={Math.min(Math.max(Number(offerSalaryText) || offerMinimumMillions, offerMinimumMillions), offerMaximumMillions)}
                   onChange={(e) => {
                     const val = Number(e.target.value);
                     setOfferSalaryText(val.toFixed(2));
@@ -3453,20 +3546,25 @@ updateOffseasonState({
                     {formatDollars(parseMillionsText(offerSalaryText))}
                   </span>
                 </div>
+                <div className={`text-xs ${offerContractRules?.hasLegalSalaryRange ? "text-gray-500" : "text-red-300"}`}>
+                  {offerContractRules?.hasLegalSalaryRange
+                    ? `Player range: ${formatDollars(offerMinimumAmount)} - ${formatDollars(offerMaximumAmount)}`
+                    : `No legal first-year salary exists for this player.`}
+                </div>
               </div>
             </div>
 
-                <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700">
-                  <div className="text-sm font-semibold text-gray-300 mb-2.5">Years</div>
+                <div className="bg-neutral-900 rounded-lg p-2.5 border border-neutral-700">
+                  <div className="text-sm font-semibold text-gray-300 mb-1.5">Years</div>
               <div className="flex gap-2 flex-wrap">
-                {[1, 2, 3, 4].map((y) => (
+                {legalOfferYears.map((y) => (
                   <button
                     key={y}
                     onClick={() => {
                       setOfferYears(y);
                       setSignError("");
                     }}
-                    className={`px-3.5 py-2 rounded-lg font-semibold transition ${
+                    className={`px-3 py-1.5 rounded-lg font-semibold transition ${
                       offerYears === y
                         ? "bg-orange-600 text-white"
                         : "bg-neutral-800 text-gray-300 hover:bg-neutral-700"
@@ -3476,10 +3574,18 @@ updateOffseasonState({
                   </button>
                 ))}
               </div>
+              {offerContractRules && (
+                <div className="mt-2 text-xs text-gray-500">
+                  Preview path: {offerContractRules.label} · showing all player-legal years · up to {Math.round(offerContractRules.maxRaisePct * 100)}% raises
+                  {offerContractRules.ownRights && offerContractRules.rightsCeiling > 0 && offerContractRules.rightsCeiling < offerContractRules.playerMaximumSalary ? (
+                    <span className="block text-yellow-300/80">Rights ceiling: {formatDollars(offerContractRules.rightsCeiling)}. Higher offers need cap space/hold clearing and may be blocked on submit.</span>
+                  ) : null}
+                </div>
+              )}
             </div>
 
-                <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700">
-                  <div className="text-sm font-semibold text-gray-300 mb-2.5">Option</div>
+                <div className="bg-neutral-900 rounded-lg p-2.5 border border-neutral-700">
+                  <div className="text-sm font-semibold text-gray-300 mb-1.5">Option</div>
 
               <div className="space-y-2">
                 <select
@@ -3488,7 +3594,7 @@ updateOffseasonState({
                     setOptionType(e.target.value);
                     setSignError("");
                   }}
-                  className="w-full px-4 py-2 rounded-lg bg-neutral-800 border border-neutral-600 text-white outline-none focus:border-orange-500"
+                  className="w-full px-3 py-1.5 rounded-lg bg-neutral-800 border border-neutral-600 text-white outline-none focus:border-orange-500"
                 >
                   <option value="none">No Option</option>
                   <option value="team" disabled={offerYears <= 1}>Team Option</option>
@@ -3503,9 +3609,9 @@ updateOffseasonState({
 
               </div>
 
-              <div className="space-y-4">
-                <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700">
-                  <div className="text-sm font-semibold text-gray-300 mb-2.5">Contract Preview</div>
+              <div className="space-y-2">
+                <div className="bg-neutral-900 rounded-lg p-2.5 border border-neutral-700">
+                  <div className="text-sm font-semibold text-gray-300 mb-1.5">Contract Preview</div>
 
               <div className="space-y-1 text-sm text-gray-300">
                 {(offerEvaluation?.contract?.salaryByYear || []).map((amount, idx) => {
@@ -3527,21 +3633,21 @@ updateOffseasonState({
               </div>
             </div>
 
-                <div className="bg-neutral-900 rounded-xl p-3.5 border border-neutral-700">
+                <div className="bg-neutral-900 rounded-lg p-2.5 border border-neutral-700">
                   <div className="text-sm font-semibold text-gray-300 mb-2">Market View</div>
 
               <div className="space-y-1 text-sm text-gray-300">
                 <div className="flex justify-between gap-4">
                   <span>Expected Years</span>
-                  <span>{offerEvaluation?.marketValue?.expectedYears ?? "-"}</span>
+                  <span>{offerEvaluation?.marketValue?.contractExpectedYears ?? offerEvaluation?.marketValue?.expectedYears ?? "-"}</span>
                 </div>
                 <div className="flex justify-between gap-4">
                   <span>Expected AAV</span>
-                  <span>{formatDollars(offerEvaluation?.marketValue?.expectedAAV || 0)}</span>
+                  <span>{formatDollars(offerEvaluation?.marketValue?.contractExpectedAAV || offerEvaluation?.marketValue?.expectedAAV || 0)}</span>
                 </div>
                 <div className="flex justify-between gap-4">
                   <span>Minimum Acceptable AAV</span>
-                  <span>{formatDollars(offerEvaluation?.marketValue?.minAcceptableAAV || 0)}</span>
+                  <span>{formatDollars(offerEvaluation?.marketValue?.contractMinAcceptableAAV || offerEvaluation?.marketValue?.minAcceptableAAV || 0)}</span>
                 </div>
               </div>
             </div>
@@ -3549,54 +3655,54 @@ updateOffseasonState({
             </div>
 
             {signError && (
-              <div className="mb-4 text-red-300 text-sm font-semibold">
+              <div className="mb-2 text-red-300 text-sm font-semibold">
                 {signError}
               </div>
             )}
 
             {!offerEvalLoading && offerEvaluation?.reason && !offerEvaluation?.ok && (
-              <div className="mb-4 text-red-300 text-sm font-semibold">
+              <div className="mb-2 text-red-300 text-sm font-semibold">
                 {offerEvaluation.reason}
               </div>
             )}
 
             {!offerEvalLoading && offerEvaluation?.ok && !offerEvaluation.accepted && !isOffseasonMode && (
-              <div className="mb-4 text-yellow-300 text-sm font-semibold">
+              <div className="mb-2 text-yellow-300 text-sm font-semibold">
                 Current offer is not strong enough yet.
               </div>
             )}
 
             {!offerEvalLoading && offerEvaluation?.ok && offerEvaluation.accepted && !isOffseasonMode && (
-              <div className="mb-4 text-green-300 text-sm font-semibold">
+              <div className="mb-2 text-green-300 text-sm font-semibold">
                 This player is ready to sign this offer.
               </div>
             )}
 
             {canSubmitLiveOffer && (
-              <div className="mb-4 text-blue-300 text-sm font-semibold">
+              <div className="mb-2 text-blue-300 text-sm font-semibold">
                 In offseason mode, this submits a live market offer. The player may wait and compare it to CPU offers.
               </div>
             )}
 
             {canSubmitLiveOffer && (offerEvaluation?.pendingCapHoldClearance || offerNeedsCapHoldClearance) && (
-              <div className="mb-4 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-yellow-200 text-sm font-semibold">
+              <div className="mb-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-1.5 text-yellow-200 text-sm font-semibold">
                 You have enough raw cap space for this offer, but cap holds are lowering practical cap. The offer can still be submitted. If the player chooses you, clear the needed holds from the pending-signings screen before finalizing.
               </div>
             )}
 
             {canSubmitLiveOffer && userRosterCount >= maxRosterSize && (
-              <div className="mb-4 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-yellow-200 text-sm font-semibold">
+              <div className="mb-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-1.5 text-yellow-200 text-sm font-semibold">
                 Your roster is full ({userRosterCount}/{maxRosterSize}). You can still submit this live offer, but if the player accepts you may need to waive, trade, or otherwise clear a roster spot before finalizing the signing.
               </div>
             )}
 
             {canManualCleanupSign && (
-              <div className="mb-4 text-yellow-300 text-sm font-semibold">
+              <div className="mb-2 text-yellow-300 text-sm font-semibold">
                 The live market is over. You can still sign remaining free agents directly, even if your offseason roster is over normal limits. Calendar will require a legal roster before games can be simulated.
               </div>
             )}
 
-            <div className="flex justify-end gap-3 pt-1">
+            <div className="flex justify-end gap-3 pt-0">
               <button
                 onClick={closeSignModal}
                 className="px-4 py-2 rounded-lg bg-gray-600 hover:bg-gray-500 text-white font-semibold transition"
@@ -3608,6 +3714,7 @@ updateOffseasonState({
                 disabled={
                   !selectedTeam ||
                   offerEvalLoading ||
+                  !offerContractRules?.hasLegalSalaryRange ||
                   (isOffseasonMode && !canUseFreeAgencyAction)
                 }
                 className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold transition"
@@ -3638,15 +3745,15 @@ updateOffseasonState({
             role="dialog"
             aria-modal="true"
           >
-            <h2 className="text-xl font-bold text-orange-400 mb-1.5">
+            <h2 className="text-lg font-bold text-orange-400 mb-0.5">
               View Offers
             </h2>
 
-            <p className="text-white text-base mb-1">
+            <p className="text-white text-sm mb-0.5">
               {offersViewData?.player?.name || selectedPlayer?.name || "-"}
             </p>
 
-            <p className="text-gray-400 text-sm mb-4">
+            <p className="text-gray-400 text-xs mb-2">
               Live market offers for this free agent
             </p>
 
@@ -3665,30 +3772,30 @@ updateOffseasonState({
                   return (
                     <>
                       <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
-                        <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                        <div className="bg-neutral-900 rounded-lg p-2 border border-neutral-700">
                           <div className="text-xs text-gray-400 mb-1">Outside Offers</div>
-                          <div className="text-base font-semibold text-white">
+                          <div className="text-sm font-semibold text-white">
                             {offersViewData?.offers?.length || 0}
                           </div>
                         </div>
 
-                        <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                        <div className="bg-neutral-900 rounded-lg p-2 border border-neutral-700">
                           <div className="text-xs text-gray-400 mb-1">Expected AAV</div>
-                          <div className="text-base font-semibold text-white">
-                            {formatDollars(modalPlayer?.marketValue?.expectedAAV || 0)}
+                          <div className="text-sm font-semibold text-white">
+                            {formatDollars(modalPlayer?.marketValue?.contractExpectedAAV || modalPlayer?.marketValue?.expectedAAV || 0)}
                           </div>
                         </div>
 
-                        <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                        <div className="bg-neutral-900 rounded-lg p-2 border border-neutral-700">
                           <div className="text-xs text-gray-400 mb-1">Expected Years</div>
-                          <div className="text-base font-semibold text-white">
-                            {modalPlayer?.marketValue?.expectedYears ?? "-"}
+                          <div className="text-sm font-semibold text-white">
+                            {modalPlayer?.marketValue?.contractExpectedYears ?? modalPlayer?.marketValue?.expectedYears ?? "-"}
                           </div>
                         </div>
 
-                        <div className="bg-neutral-900 rounded-xl p-3 border border-neutral-700">
+                        <div className="bg-neutral-900 rounded-lg p-2 border border-neutral-700">
                           <div className="text-xs text-gray-400 mb-1">RFA</div>
-                          <div className={isRfa ? "text-base font-semibold text-emerald-300" : "text-base font-semibold text-white"}>
+                          <div className={isRfa ? "text-base font-semibold text-emerald-300" : "text-sm font-semibold text-white"}>
                             {isRfa ? "Yes" : "No"}
                           </div>
                         </div>

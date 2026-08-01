@@ -116,6 +116,10 @@ function compactOfferForStorage(offer, keepStory = false) {
     years: offer.years || offer.contract?.salaryByYear?.length || 0,
     totalValue: offer.totalValue || 0,
     aav: offer.aav || 0,
+    decisionContract: offer.decisionContract || null,
+    decisionYears: offer.decisionYears || offer.decisionContract?.salaryByYear?.length || 0,
+    decisionTotalValue: offer.decisionTotalValue || 0,
+    decisionAAV: offer.decisionAAV || 0,
     currentYearSalary:
       offer.currentYearSalary ||
       offer.contract?.salaryByYear?.[0] ||
@@ -1372,7 +1376,7 @@ function getPreviewPreviousSalary(player = {}, leagueData = {}) {
     return Number(currentSalaryByYear[currentSalaryByYear.length - 1] || 0);
   }
 
-  return Number(player?.marketValue?.expectedYear1Salary || getPreviewMinimumSalary(leagueData));
+  return Number(player?.marketValue?.contractExpectedYear1Salary || player?.marketValue?.expectedYear1Salary || getPreviewMinimumSalary(leagueData));
 }
 
 function getPreviewCapHoldForPlayer(player = {}, teamName = "", leagueData = {}) {
@@ -1393,7 +1397,7 @@ function getPreviewCapHoldForPlayer(player = {}, teamName = "", leagueData = {})
 
   const minimumSalary = getPreviewMinimumSalary(leagueData);
   const previousSalary = getPreviewPreviousSalary(player, leagueData);
-  const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || minimumSalary);
+  const marketYearOne = Number(player?.marketValue?.contractExpectedYear1Salary || player?.marketValue?.expectedYear1Salary || minimumSalary);
 
   if (birdLevel === "bird") {
     return Math.max(previousSalary, marketYearOne, minimumSalary);
@@ -2247,7 +2251,7 @@ export default function ViewingOffers() {
       return Number(currentSalaryByYear[currentSalaryByYear.length - 1] || 0);
     }
 
-    return Number(player?.marketValue?.expectedYear1Salary || getPreviewMinimumSalary(leagueData));
+    return Number(player?.marketValue?.contractExpectedYear1Salary || player?.marketValue?.expectedYear1Salary || getPreviewMinimumSalary(leagueData));
   };
 
   const getCapHoldForPlayer = (player, teamName) => {
@@ -2267,7 +2271,7 @@ export default function ViewingOffers() {
     }
 
     const previousSalary = getPreviousSalaryForCapHold(player);
-    const marketYearOne = Number(player?.marketValue?.expectedYear1Salary || getPreviewMinimumSalary(leagueData));
+    const marketYearOne = Number(player?.marketValue?.contractExpectedYear1Salary || player?.marketValue?.expectedYear1Salary || getPreviewMinimumSalary(leagueData));
 
     if (rights.birdLevel === "bird") {
       return Math.max(previousSalary, marketYearOne, minimumSalary);
@@ -3479,8 +3483,8 @@ return (
                               <InfoChip tone="orange">{formatBirdLevel(row.birdLevel)}</InfoChip>
                               {row.restrictedFreeAgent && <InfoChip tone="green">RFA</InfoChip>}
                               <InfoChip tone="red">Hold {formatDollars(row.capHold)}</InfoChip>
-                              {row.marketValue?.expectedYear1Salary && (
-                                <InfoChip>Market {formatDollars(row.marketValue.expectedYear1Salary)}</InfoChip>
+                              {(row.marketValue?.contractExpectedYear1Salary || row.marketValue?.expectedYear1Salary) && (
+                                <InfoChip>Market {formatDollars(row.marketValue.contractExpectedYear1Salary || row.marketValue.expectedYear1Salary)}</InfoChip>
                               )}
                             </div>
                           </div>

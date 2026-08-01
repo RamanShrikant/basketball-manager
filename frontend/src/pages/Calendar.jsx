@@ -1120,12 +1120,17 @@ function generateFullSeasonSchedule(teams, startDate, endDate, calendarConfig = 
   const allStarStart = parseCalendarDate(calendarConfig?.allStarStart) || addDays(allStarDate, -5);
   const allStarEnd = parseCalendarDate(calendarConfig?.allStarEnd) || addDays(allStarDate, 3);
   const tradeDeadline = calendarConfig?.tradeDeadlineDate || fmt(new Date(endDate.getFullYear(), 1, 4));
+  const extensionBlackoutDays = new Set([
+    calendarConfig?.rookieExtensionDeadlineDate,
+    calendarConfig?.contractExtensionDeadlineDate,
+    calendarConfig?.veteranExtensionDeadlineDate,
+  ].filter(Boolean));
   const allStarBreak = new Set(rangeDays(allStarStart, allStarEnd).map(fmt));
 
   const playableDays = days
     .filter((d) => d >= gameStart)
     .map(fmt)
-    .filter((dateStr) => dateStr !== tradeDeadline && !allStarBreak.has(dateStr));
+    .filter((dateStr) => dateStr !== tradeDeadline && !extensionBlackoutDays.has(dateStr) && !allStarBreak.has(dateStr));
 
   const gamesPerFullRound = canonicalIds.length / 2;
   const neededRounds =
@@ -4643,6 +4648,7 @@ const [allStarOpen, setAllStarOpen] = useState(false);
 const [allStarData, setAllStarData] = useState(null);
 const [tradeDeadlinePromptOpen, setTradeDeadlinePromptOpen] = useState(false);
 const [contractExtensionPromptOpen, setContractExtensionPromptOpen] = useState(false);
+const [contractExtensionPromptInfo, setContractExtensionPromptInfo] = useState(null);
 const [contractExtensionDeadlineBusy, setContractExtensionDeadlineBusy] = useState(false);
 const [tradeToasts, setTradeToasts] = useState([]);
 const [pendingSimIntent, setPendingSimIntent] = useState(() => readPendingSimulationIntent());
@@ -4662,44 +4668,91 @@ const ALL_STAR_DATE = seasonCalendarConfig.allStarSelectionDate || fmt(new Date(
 const ALL_STAR_HANDLED_KEY = `bm_all_star_handled_v1_${seasonYear}`;
 const allStarHandledRef = useRef(localStorage.getItem(ALL_STAR_HANDLED_KEY) === "true");
 
-const CONTRACT_EXTENSION_DEADLINE_DATE = seasonCalendarConfig.contractExtensionDeadlineDate || fmt(new Date(seasonYear, 9, 20));
-const CONTRACT_EXTENSION_DEADLINE_HANDLED_KEY = `bm_contract_extension_deadline_handled_v1_${seasonYear}`;
-const contractExtensionDeadlineHandledRef = useRef(
-  localStorage.getItem(CONTRACT_EXTENSION_DEADLINE_HANDLED_KEY) === "true"
+const ROOKIE_EXTENSION_DEADLINE_DATE =
+  seasonCalendarConfig.rookieExtensionDeadlineDate ||
+  seasonCalendarConfig.contractExtensionDeadlineDate ||
+  fmt(new Date(seasonYear, 9, 20));
+const VETERAN_EXTENSION_DEADLINE_DATE =
+  seasonCalendarConfig.veteranExtensionDeadlineDate ||
+  fmt(new Date(seasonYear + 1, 2, 31));
+const CONTRACT_EXTENSION_DEADLINE_DATE = ROOKIE_EXTENSION_DEADLINE_DATE;
+const ROOKIE_EXTENSION_DEADLINE_HANDLED_KEY = `bm_rookie_extension_deadline_handled_v1_${seasonYear}`;
+const VETERAN_EXTENSION_DEADLINE_HANDLED_KEY = `bm_veteran_extension_deadline_handled_v1_${seasonYear}`;
+const CONTRACT_EXTENSION_DEADLINE_HANDLED_KEY = ROOKIE_EXTENSION_DEADLINE_HANDLED_KEY;
+const rookieExtensionDeadlineHandledRef = useRef(
+  localStorage.getItem(ROOKIE_EXTENSION_DEADLINE_HANDLED_KEY) === "true"
 );
+const veteranExtensionDeadlineHandledRef = useRef(
+  localStorage.getItem(VETERAN_EXTENSION_DEADLINE_HANDLED_KEY) === "true"
+);
+const contractExtensionDeadlineHandledRef = rookieExtensionDeadlineHandledRef;
 
-function openContractExtensionDeadlinePrompt() {
+function getContractExtensionDeadlineInfo(dateStrOrType) {
+  if (dateStrOrType === "rookie" || dateStrOrType === ROOKIE_EXTENSION_DEADLINE_DATE) {
+    return {
+      type: "rookie",
+      phase: "rookie_deadline",
+      date: ROOKIE_EXTENSION_DEADLINE_DATE,
+      label: "Rookie Extension Deadline",
+      title: "Final day for rookie-scale extensions",
+      handledRef: rookieExtensionDeadlineHandledRef,
+      handledKey: ROOKIE_EXTENSION_DEADLINE_HANDLED_KEY,
+    };
+  }
+  if (dateStrOrType === "veteran" || dateStrOrType === VETERAN_EXTENSION_DEADLINE_DATE) {
+    return {
+      type: "veteran",
+      phase: "veteran_deadline",
+      date: VETERAN_EXTENSION_DEADLINE_DATE,
+      label: "Veteran Extension Deadline",
+      title: "Final day for veteran extensions",
+      handledRef: veteranExtensionDeadlineHandledRef,
+      handledKey: VETERAN_EXTENSION_DEADLINE_HANDLED_KEY,
+    };
+  }
+  return null;
+}
+
+function openContractExtensionDeadlinePrompt(dateStrOrType = null) {
+  const info = getContractExtensionDeadlineInfo(dateStrOrType || ROOKIE_EXTENSION_DEADLINE_DATE);
   setActionModal(null);
   setBoxModal(null);
+  setContractExtensionPromptInfo(info);
   setContractExtensionPromptOpen(true);
 }
 
-function markContractExtensionDeadlineHandled() {
+function markContractExtensionDeadlineHandled(dateStrOrType = null) {
+  const info = getContractExtensionDeadlineInfo(dateStrOrType || contractExtensionPromptInfo?.type || ROOKIE_EXTENSION_DEADLINE_DATE);
+  if (!info) return;
   try {
-    localStorage.setItem(CONTRACT_EXTENSION_DEADLINE_HANDLED_KEY, "true");
+    localStorage.setItem(info.handledKey, "true");
   } catch {}
-  contractExtensionDeadlineHandledRef.current = true;
+  info.handledRef.current = true;
 }
 
 function shouldPauseForContractExtensionDeadline(dateStr) {
-  return dateStr === CONTRACT_EXTENSION_DEADLINE_DATE && !contractExtensionDeadlineHandledRef.current;
+  const info = getContractExtensionDeadlineInfo(dateStr);
+  return Boolean(info && !info.handledRef.current);
 }
 
-async function processContractExtensionDeadline({ closeWindow = false } = {}) {
+async function processContractExtensionDeadline({ closeWindow = false, deadlineType = null } = {}) {
   if (!leagueData || !selectedTeam?.name) return leagueData;
+  const info = getContractExtensionDeadlineInfo(deadlineType || contractExtensionPromptInfo?.type || ROOKIE_EXTENSION_DEADLINE_DATE);
+  if (!info) return leagueData;
   setContractExtensionDeadlineBusy(true);
   try {
     const result = closeWindow
       ? await closeContractExtensionWindow(
           leagueData,
           selectedTeam.name,
-          CONTRACT_EXTENSION_DEADLINE_DATE
+          info.date,
+          info.phase
         )
       : await processCpuContractExtensions(
           leagueData,
           selectedTeam.name,
-          "deadline",
-          CONTRACT_EXTENSION_DEADLINE_DATE
+          info.phase,
+          info.date
         );
     if (result?.ok && result?.leagueData) {
       setLeagueData(result.leagueData);
@@ -4811,9 +4864,11 @@ useEffect(() => {
 }, [TRADE_DEADLINE_HANDLED_KEY, TRADE_DEADLINE_DATE, scheduleByDate]);
 
 useEffect(() => {
-  contractExtensionDeadlineHandledRef.current =
-    localStorage.getItem(CONTRACT_EXTENSION_DEADLINE_HANDLED_KEY) === "true";
-}, [CONTRACT_EXTENSION_DEADLINE_HANDLED_KEY]);
+  rookieExtensionDeadlineHandledRef.current =
+    localStorage.getItem(ROOKIE_EXTENSION_DEADLINE_HANDLED_KEY) === "true";
+  veteranExtensionDeadlineHandledRef.current =
+    localStorage.getItem(VETERAN_EXTENSION_DEADLINE_HANDLED_KEY) === "true";
+}, [ROOKIE_EXTENSION_DEADLINE_HANDLED_KEY, VETERAN_EXTENSION_DEADLINE_HANDLED_KEY]);
 
 useEffect(() => {
   const stored = readPendingSimulationIntent();
@@ -6027,7 +6082,7 @@ async function runCpuCpuTradePassForDate({
 const handleSimOnlyGame = async (dateStr, game) => {
   if (shouldPauseForContractExtensionDeadline(dateStr)) {
     saveSimulationCursorDate(dateStr);
-    openContractExtensionDeadlinePrompt();
+    openContractExtensionDeadlinePrompt(dateStr);
     return;
   }
 
@@ -6325,7 +6380,7 @@ for (const d of sorted) {
       seasonYear,
       pausedReason: "contract_extension_deadline",
     });
-    openContractExtensionDeadlinePrompt();
+    openContractExtensionDeadlinePrompt(d);
     return;
   }
 
@@ -7079,7 +7134,7 @@ if (pausedForContractExtensionDeadline) {
     pausedReason: "contract_extension_deadline",
   });
   saveSimulationCursorDate(lastDateProcessed || readSimulationCursorDate());
-  openContractExtensionDeadlinePrompt();
+  openContractExtensionDeadlinePrompt(lastDateProcessed || readSimulationCursorDate());
   return;
 }
 
@@ -7201,6 +7256,9 @@ if (
   k.startsWith("bm_postseason_") ||
   k.startsWith("bm_champ_") ||
   k.startsWith("bm_trade_deadline_handled_v1_") ||
+  k.startsWith("bm_contract_extension_deadline_handled_v1_") ||
+  k.startsWith("bm_rookie_extension_deadline_handled_v1_") ||
+  k.startsWith("bm_veteran_extension_deadline_handled_v1_") ||
   k.startsWith("bm_result_v3_") ||     // ✅ NEW
   k === "bm_results_index_v3" ||       // ✅ NEW
   k === "bm_trade_deadline_status_v1"
@@ -7234,8 +7292,12 @@ if (
 
   allStarHandledRef.current = false;
 tradeDeadlineHandledRef.current = false;
+rookieExtensionDeadlineHandledRef.current = false;
+veteranExtensionDeadlineHandledRef.current = false;
 setAllStarPromptOpen(false);
 setTradeDeadlinePromptOpen(false);
+setContractExtensionPromptOpen(false);
+setContractExtensionPromptInfo(null);
 setAllStarOpen(false);
 setAllStarData(null);
 setShowAwardsPanel(false);
@@ -8281,7 +8343,10 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                       const game = myGames[dateStr] || null;
                       const result = game ? resultsById[game.id] : null;
                       const isTradeDeadline = dateStr === TRADE_DEADLINE_DATE;
-                      const isContractExtensionDeadline = dateStr === CONTRACT_EXTENSION_DEADLINE_DATE;
+                      const contractExtensionDayInfo = getContractExtensionDeadlineInfo(dateStr);
+                      const isRookieExtensionDeadline = contractExtensionDayInfo?.type === "rookie";
+                      const isVeteranExtensionDeadline = contractExtensionDayInfo?.type === "veteran";
+                      const isContractExtensionDeadline = Boolean(contractExtensionDayInfo);
                       const isAllStarDate = dateStr === ALL_STAR_DATE;
                       const isAllStarBreakDate =
                         dateStr >= String(seasonCalendarConfig.allStarStart || ALL_STAR_DATE) &&
@@ -8319,7 +8384,20 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                             setFocusedDate(dateStr);
                             setMonth(monthStr);
                             saveCalendarCursor(dateStr, monthStr);
-                            setActionModal({ dateStr, game, hasLeagueGames, event: isContractExtensionDeadline ? "contract_extension_deadline" : isTradeDeadline ? "trade_deadline" : isAllStarDate ? "all_star" : isAllStarBreakDate ? "all_star_break" : null });
+                            setActionModal({
+                              dateStr,
+                              game,
+                              hasLeagueGames,
+                              event: isContractExtensionDeadline
+                                ? (isRookieExtensionDeadline ? "rookie_extension_deadline" : "veteran_extension_deadline")
+                                : isTradeDeadline
+                                  ? "trade_deadline"
+                                  : isAllStarDate
+                                    ? "all_star"
+                                    : isAllStarBreakDate
+                                      ? "all_star_break"
+                                      : null,
+                            });
                           }}
                         >
                           <div className="text-xs text-gray-400">{d.getDate()}</div>
@@ -8334,7 +8412,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                                   ? "border-sky-400/60 bg-sky-600/20 text-sky-200"
                                   : "border-white/15 bg-white/5 text-white/45"
                             }`}>
-                              {isContractExtensionDeadline ? "Extension Deadline" : isTradeDeadline ? "Trade Deadline" : isAllStarDate ? "All-Star Game" : "All-Star Break"}
+                              {isContractExtensionDeadline ? contractExtensionDayInfo.label : isTradeDeadline ? "Trade Deadline" : isAllStarDate ? "All-Star Game" : "All-Star Break"}
                             </div>
                           )}
 
@@ -8404,7 +8482,19 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="mb-4 text-lg font-bold text-white">
-          {actionModal.game ? `${actionModal.game.away} @ ${actionModal.game.home}` : actionModal.event === "contract_extension_deadline" ? "Contract Extension Deadline" : actionModal.event === "trade_deadline" ? "Trade Deadline" : actionModal.event === "all_star" ? "All-Star Game" : `Sim to ${actionModal.dateStr}`}
+          {actionModal.game
+            ? `${actionModal.game.away} @ ${actionModal.game.home}`
+            : actionModal.event === "rookie_extension_deadline"
+              ? "Rookie Extension Deadline"
+              : actionModal.event === "veteran_extension_deadline"
+                ? "Veteran Extension Deadline"
+                : actionModal.event === "contract_extension_deadline"
+                  ? "Contract Extension Deadline"
+                  : actionModal.event === "trade_deadline"
+                    ? "Trade Deadline"
+                    : actionModal.event === "all_star"
+                      ? "All-Star Game"
+                      : `Sim to ${actionModal.dateStr}`}
         </h2>
 
         {(!actionModal.game || !actionModal.game.played) ? (
@@ -8730,18 +8820,18 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
     <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-emerald-400/35 bg-neutral-950 text-white shadow-2xl">
       <div className="border-b border-emerald-500/20 bg-gradient-to-r from-emerald-600/20 to-neutral-900 px-6 py-5">
         <div className="text-xs font-black uppercase tracking-[0.24em] text-emerald-300">
-          Contract Extension Deadline
+          {contractExtensionPromptInfo?.label || "Contract Extension Deadline"}
         </div>
         <h2 className="mt-1 text-2xl font-black text-white">
-          Final day to secure long-term extensions
+          {contractExtensionPromptInfo?.title || "Final day to secure long-term extensions"}
         </h2>
       </div>
 
       <div className="px-6 py-5">
         <p className="text-sm font-semibold leading-6 text-neutral-300">
-          CPU teams will complete their final extension review today. You can open
+          CPU teams will complete their {contractExtensionPromptInfo?.type === "veteran" ? "veteran" : "rookie-scale"} extension review today. You can open
           Contract Extensions to negotiate with eligible players, or continue and
-          close the window for the season.
+          close this extension window for the season.
         </p>
 
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
@@ -8750,7 +8840,8 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
             className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-black text-neutral-200 hover:bg-white/10 disabled:opacity-50"
             onClick={async () => {
               try {
-                await processContractExtensionDeadline({ closeWindow: false });
+                await processContractExtensionDeadline({ closeWindow: false, deadlineType: contractExtensionPromptInfo?.type });
+                markContractExtensionDeadlineHandled(contractExtensionPromptInfo?.type);
                 setContractExtensionPromptOpen(false);
                 navigate("/contract-extensions");
               } catch (error) {
@@ -8766,8 +8857,8 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
             className="rounded-xl bg-emerald-600 px-5 py-3 text-sm font-black text-white hover:bg-emerald-500 disabled:opacity-50"
             onClick={async () => {
               try {
-                await processContractExtensionDeadline({ closeWindow: true });
-                markContractExtensionDeadlineHandled();
+                await processContractExtensionDeadline({ closeWindow: true, deadlineType: contractExtensionPromptInfo?.type });
+                markContractExtensionDeadlineHandled(contractExtensionPromptInfo?.type);
                 setContractExtensionPromptOpen(false);
                 window.setTimeout(() => resumePendingSimulation(), 0);
               } catch (error) {

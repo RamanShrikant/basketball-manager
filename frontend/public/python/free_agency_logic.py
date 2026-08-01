@@ -63,6 +63,22 @@ DEFAULT_SECOND_APRON = 207_824_000
 NON_BIRD_RAISE_MULT = 1.20
 EARLY_BIRD_RAISE_MULT = 1.75
 
+# Free-agency contract-shape rules. These constants only govern the legal
+# salary/years/raises of a deal. They deliberately do not change CPU target
+# selection, player/team preference scores, bidding order, or market timing.
+OFFICIAL_2026_27_SALARY_CAP = 164_961_000
+STANDARD_FREE_AGENT_RAISE_PCT = 0.05
+BIRD_FREE_AGENT_RAISE_PCT = 0.08
+PLAYER_MINIMUM_BASE_SCALE = {
+    0: 1_300_000,
+    1: 1_900_000,
+    2: 2_200_000,
+    3: 2_500_000,
+    6: 2_900_000,
+    10: 3_300_000,
+}
+
+
 
 def sync_financial_constants(league_data: Dict[str, Any]) -> Dict[str, Any]:
     """Synchronize legacy module constants with the current league economy.
@@ -405,7 +421,7 @@ def get_previous_salary_reference(
         if salary_by_year:
             return int(num(salary_by_year[-1], 0))
 
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     return int(num(market_value.get("expectedYear1Salary"), MIN_DEAL))
 
 
@@ -420,23 +436,60 @@ def get_bird_rights_salary_ceiling(
     rights = get_player_rights(player)
     bird_level = rights.get("birdLevel", "none")
     previous_salary = get_previous_salary_reference(league_data, player)
+    player_minimum = get_player_minimum_salary_amount(league_data, player)
+    player_maximum = get_player_max_salary_amount(league_data, player)
+
+    if bird_level == "bird":
+        return int(player_maximum)
+
+    if bird_level == "early_bird":
+        estimated_average_salary = get_non_taxpayer_mle_amount(league_data)
+        return int(min(player_maximum, max(
+            player_minimum,
+            estimated_average_salary * 1.05,
+            previous_salary * EARLY_BIRD_RAISE_MULT,
+        )))
+
+    if bird_level == "non_bird":
+        qualifying_offer = 0
+        if isinstance(player.get("qualifyingOffer"), dict):
+            qualifying_offer = int(num(player["qualifyingOffer"].get("amount"), 0))
+        return int(min(player_maximum, max(
+            player_minimum,
+            player_minimum * NON_BIRD_RAISE_MULT,
+            previous_salary * NON_BIRD_RAISE_MULT,
+            qualifying_offer,
+        )))
+
+    return 0
+
+
+def get_legacy_bird_rights_salary_ceiling(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    team_name: str,
+) -> int:
+    """Exact pre-patch Bird ceiling used only for CPU decision parity."""
+    if not is_rights_team(player, team_name):
+        return 0
+
+    rights = get_player_rights(player)
+    bird_level = rights.get("birdLevel", "none")
+    previous_salary = get_previous_salary_reference(league_data, player)
 
     if bird_level == "bird":
         return int(MAX_SALARY)
-
     if bird_level == "early_bird":
         return int(min(MAX_SALARY, max(
             MIN_DEAL,
             get_non_taxpayer_mle_amount(league_data),
             previous_salary * EARLY_BIRD_RAISE_MULT,
         )))
-
     if bird_level == "non_bird":
         return int(min(MAX_SALARY, max(
             MIN_DEAL,
             previous_salary * NON_BIRD_RAISE_MULT,
         )))
-
     return 0
 
 
@@ -785,11 +838,28 @@ def normalize_contract(contract: Optional[Dict[str, Any]]) -> Optional[Dict[str,
                 "picked": raw_option.get("picked"),
             }
 
-    return {
+    normalized = {
         "startYear": start_year,
         "salaryByYear": safe_salary_by_year,
         "option": safe_option,
     }
+
+    # Preserve long-lived contract metadata. Extension years are stored directly
+    # in salaryByYear, but the metadata is still needed to block duplicate rookie
+    # extensions, keep history/tooltips accurate, and preserve original-term rules.
+    for key in [
+        "extensionMeta",
+        "extensions",
+        "originalTermYears",
+        "signedSeasonYear",
+        "signedDate",
+        "rookieScale",
+        "type",
+    ]:
+        if key in contract and contract.get(key) is not None:
+            normalized[key] = copy.deepcopy(contract.get(key))
+
+    return normalized
 
 
 def build_salary_by_year(year1_salary: int, years: int) -> List[int]:
@@ -1148,6 +1218,321 @@ def get_player_pro_seasons(player: Dict[str, Any]) -> int:
             return int(num(meta.get(key), 0))
 
     return 0
+
+
+def get_player_service_years_for_salary_rules(
+    player: Dict[str, Any],
+    league_data: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Resolve salary-rule service time without changing legacy roster logic.
+
+    Imported rosters do not consistently carry years-of-service metadata. The
+    salary rules therefore use explicit data first, then draft year, then a
+    conservative age-based NBA entry estimate. This helper is intentionally
+    separate from get_player_pro_seasons(), which is used by existing rookie,
+    option, and two-way logic and must retain its old behavior.
+    """
+    direct_keys = [
+        "proSeasons",
+        "seasonsPro",
+        "yearsPro",
+        "yearsOfExperience",
+        "yoe",
+        "serviceYears",
+    ]
+
+    for source in [player, player.get("meta") if isinstance(player.get("meta"), dict) else {}]:
+        for key in direct_keys:
+            value = source.get(key)
+            if value not in [None, ""]:
+                return max(0, int(num(value, 0)))
+
+    draft_year = None
+    for source in [
+        player,
+        player.get("meta") if isinstance(player.get("meta"), dict) else {},
+        player.get("draft") if isinstance(player.get("draft"), dict) else {},
+    ]:
+        for key in ["draftYear", "yearDrafted", "draftedYear", "year"]:
+            value = source.get(key)
+            if value not in [None, ""]:
+                parsed = int(num(value, 0))
+                if 2000 <= parsed <= 2100:
+                    draft_year = parsed
+                    break
+        if draft_year is not None:
+            break
+
+    if draft_year is not None and isinstance(league_data, dict):
+        season_start_year = get_current_season_year(league_data)
+        # Draft year is the NBA season start year: a 2023 draftee entering
+        # 2026-27 has three completed service seasons. Keep this stable while
+        # free agency is active; the operating contract year is one year ahead.
+        return max(0, season_start_year - draft_year)
+
+    age = int(num(player.get("age"), 19))
+    # Most imported players entered around age 19. This correctly places a
+    # 22-year-old in the 0-6 tier and veteran stars in the 10+ tier without
+    # modifying any other age/progression behavior.
+    return max(0, min(25, age - 19))
+
+
+def get_player_max_salary_percentage(
+    player: Dict[str, Any],
+    league_data: Optional[Dict[str, Any]] = None,
+) -> float:
+    service_years = get_player_service_years_for_salary_rules(player, league_data)
+    if service_years >= 10:
+        return 0.35
+    if service_years >= 7:
+        return 0.30
+    return 0.25
+
+
+def get_player_max_salary_amount(
+    league_data: Optional[Dict[str, Any]],
+    player: Dict[str, Any],
+) -> int:
+    cap = get_salary_cap(league_data or {}) if isinstance(league_data, dict) else int(DEFAULT_SALARY_CAP)
+    pct = get_player_max_salary_percentage(player, league_data)
+    return int(round_to_nearest(cap * pct, base = 1_000))
+
+
+def get_player_minimum_salary_amount(
+    league_data: Optional[Dict[str, Any]],
+    player: Dict[str, Any],
+) -> int:
+    """Return the lightweight experience minimum, inflated with the cap."""
+    service_years = get_player_service_years_for_salary_rules(player, league_data)
+    if service_years >= 10:
+        base_amount = PLAYER_MINIMUM_BASE_SCALE[10]
+    elif service_years >= 6:
+        base_amount = PLAYER_MINIMUM_BASE_SCALE[6]
+    elif service_years >= 3:
+        base_amount = PLAYER_MINIMUM_BASE_SCALE[3]
+    elif service_years >= 2:
+        base_amount = PLAYER_MINIMUM_BASE_SCALE[2]
+    elif service_years >= 1:
+        base_amount = PLAYER_MINIMUM_BASE_SCALE[1]
+    else:
+        base_amount = PLAYER_MINIMUM_BASE_SCALE[0]
+
+    cap = get_salary_cap(league_data or {}) if isinstance(league_data, dict) else int(DEFAULT_SALARY_CAP)
+    inflation_index = max(0.1, float(cap) / float(OFFICIAL_2026_27_SALARY_CAP))
+    return int(round_to_nearest(base_amount * inflation_index, base = 1_000))
+
+
+def get_free_agent_contract_path_limits(
+    player: Dict[str, Any],
+    spending_type: Optional[str],
+    exception_type: Optional[str],
+    bird_level: Optional[str] = None,
+) -> Dict[str, Any]:
+    spending = str(spending_type or "").strip().lower()
+    exception = str(exception_type or "").strip().lower()
+    bird = normalize_bird_level(
+        bird_level or get_player_rights(player).get("birdLevel"),
+        int(num(get_player_rights(player).get("seasonsTowardBird"), 0)),
+    )
+
+    if spending in ["bird_rights", "late_rights_retention"]:
+        if bird == "bird":
+            return {"path": "bird", "label": "Full Bird", "minYears": 1, "maxYears": 5, "maxRaisePct": BIRD_FREE_AGENT_RAISE_PCT}
+        if bird == "early_bird":
+            return {"path": "early_bird", "label": "Early Bird", "minYears": 2, "maxYears": 4, "maxRaisePct": BIRD_FREE_AGENT_RAISE_PCT}
+        return {"path": "non_bird", "label": "Non-Bird", "minYears": 1, "maxYears": 4, "maxRaisePct": STANDARD_FREE_AGENT_RAISE_PCT}
+
+    if spending == "rfa_match":
+        return {"path": "rfa_match", "label": "RFA Match", "minYears": 1, "maxYears": 4, "maxRaisePct": STANDARD_FREE_AGENT_RAISE_PCT}
+    if spending == "minimum" or exception == "minimum":
+        return {"path": "minimum", "label": "Minimum", "minYears": 1, "maxYears": 2, "maxRaisePct": STANDARD_FREE_AGENT_RAISE_PCT}
+    if exception == "taxpayer_mle":
+        return {"path": "taxpayer_mle", "label": "Taxpayer MLE", "minYears": 1, "maxYears": 2, "maxRaisePct": STANDARD_FREE_AGENT_RAISE_PCT}
+    if exception == "room_exception":
+        return {"path": "room_exception", "label": "Room MLE", "minYears": 1, "maxYears": 3, "maxRaisePct": STANDARD_FREE_AGENT_RAISE_PCT}
+    if exception == "non_taxpayer_mle":
+        return {"path": "non_taxpayer_mle", "label": "Non-Taxpayer MLE", "minYears": 1, "maxYears": 4, "maxRaisePct": STANDARD_FREE_AGENT_RAISE_PCT}
+    return {"path": "cap_space", "label": "Cap Space", "minYears": 1, "maxYears": 4, "maxRaisePct": STANDARD_FREE_AGENT_RAISE_PCT}
+
+
+def build_legal_salary_by_year(
+    year1_salary: int,
+    years: int,
+    raise_pct: float,
+) -> List[int]:
+    """Build the actual legal contract schedule. Raises use first-year salary."""
+    first_year = max(0, int(num(year1_salary, 0)))
+    safe_years = int(clamp(years, 1, 5))
+    safe_raise = float(clamp(num(raise_pct, 0.0), 0.0, BIRD_FREE_AGENT_RAISE_PCT))
+    return [
+        int(round_to_nearest(first_year * (1.0 + (safe_raise * idx)), base = 1_000))
+        for idx in range(safe_years)
+    ]
+
+
+def build_decision_contract_from_actual(
+    league_data: Dict[str, Any],
+    contract: Optional[Dict[str, Any]],
+    player: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Convert an actual contract to the legacy decision-comparison shape.
+
+    A fifth Bird year and the additional Bird raise are real signed benefits,
+    but are intentionally ignored by destination scoring. The player evaluates
+    the same first-year salary, no more than four years, and the pre-patch 5%
+    schedule, preserving current retention and destination balance.
+    """
+    normalized = normalize_contract(contract)
+    if not normalized or not normalized.get("salaryByYear"):
+        return normalized
+
+    actual_year1 = int(num(normalized["salaryByYear"][0], 0))
+    year1 = actual_year1
+    if isinstance(player, dict):
+        player_minimum = get_player_minimum_salary_amount(league_data, player)
+        player_maximum = get_player_max_salary_amount(league_data, player)
+        # Legal boundary amounts map back to their pre-patch decision boundary.
+        # This prevents a higher veteran minimum or lower 25%/30% max from
+        # changing offer strength, while the signed contract remains legal.
+        tolerance = 2_000
+        if player_minimum > MIN_DEAL and actual_year1 <= player_minimum + tolerance:
+            year1 = MIN_DEAL
+        elif player_maximum < MAX_SALARY and actual_year1 >= player_maximum - tolerance:
+            year1 = MAX_SALARY
+
+    decision_years = int(clamp(len(normalized["salaryByYear"]), 1, 4))
+    option = None
+    raw_option = normalized.get("option")
+    if isinstance(raw_option, dict):
+        option_indices = get_option_year_indices(raw_option)
+        if decision_years - 1 in option_indices:
+            option = {
+                "type": raw_option.get("type"),
+                "yearIndices": [decision_years - 1],
+                "picked": raw_option.get("picked"),
+            }
+
+    return normalize_contract({
+        "startYear": normalized.get("startYear", get_operating_season_year(league_data)),
+        "salaryByYear": build_salary_by_year(year1, decision_years),
+        "option": option,
+    })
+
+
+def get_contract_max_annual_raise_pct(contract: Optional[Dict[str, Any]]) -> float:
+    normalized = normalize_contract(contract)
+    salaries = list(normalized.get("salaryByYear", [])) if normalized else []
+    max_raise = 0.0
+    for idx in range(1, len(salaries)):
+        previous = float(num(salaries[idx - 1], 0))
+        current = float(num(salaries[idx], 0))
+        if previous <= 0:
+            continue
+        max_raise = max(max_raise, (current / previous) - 1.0)
+    return max_raise
+
+
+def validate_contract_shape_for_path(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    contract: Dict[str, Any],
+    spending_type: Optional[str],
+    exception_type: Optional[str],
+    bird_level: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized = normalize_contract(contract)
+    if not normalized:
+        return {"ok": False, "reason": "Invalid contract."}
+
+    rules = get_free_agent_contract_path_limits(player, spending_type, exception_type, bird_level)
+    years = len(normalized.get("salaryByYear", []))
+    min_years = int(rules["minYears"])
+    max_years = int(rules["maxYears"])
+    if years < min_years or years > max_years:
+        allowed = f"{min_years}-{max_years}" if min_years != max_years else str(max_years)
+        return {
+            "ok": False,
+            "reason": f"{rules['label']} contracts must be {allowed} years.",
+            "contractRules": rules,
+        }
+
+    max_raise = float(rules["maxRaisePct"])
+    actual_raise = get_contract_max_annual_raise_pct(normalized)
+    # A small tolerance preserves old in-progress 5%-compounded offers while
+    # every new contract generated by this patch uses the legal linear schedule.
+    if actual_raise > max_raise + 0.001:
+        return {
+            "ok": False,
+            "reason": f"{rules['label']} contracts allow raises of at most {int(round(max_raise * 100))}%.",
+            "contractRules": rules,
+        }
+
+    return {"ok": True, "contractRules": rules}
+
+
+def shape_cpu_contract_for_spending_path(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    team_name: str,
+    decision_contract: Dict[str, Any],
+    spending_type: Optional[str],
+    exception_type: Optional[str],
+    exception_room: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Shape an already-selected CPU offer without changing its decision value."""
+    normalized = normalize_contract(decision_contract)
+    if not normalized:
+        return decision_contract
+
+    rights = get_player_rights(player)
+    rules = get_free_agent_contract_path_limits(
+        player,
+        spending_type,
+        exception_type,
+        rights.get("birdLevel"),
+    )
+    salaries = list(normalized.get("salaryByYear", []))
+    legacy_years = max(1, len(salaries))
+    actual_years = int(clamp(legacy_years, rules["minYears"], rules["maxYears"]))
+    if rules["path"] == "bird" and legacy_years >= 4:
+        actual_years = 5
+
+    player_minimum = get_player_minimum_salary_amount(league_data, player)
+    player_maximum = get_player_max_salary_amount(league_data, player)
+    salary_ceiling = player_maximum
+
+    if rules["path"] in ["bird", "early_bird", "non_bird"]:
+        salary_ceiling = min(
+            salary_ceiling,
+            get_bird_rights_salary_ceiling(league_data, player, team_name),
+        )
+    elif rules["path"] == "minimum":
+        salary_ceiling = player_minimum
+    elif exception_room is not None and int(num(exception_room, 0)) > 0:
+        salary_ceiling = min(salary_ceiling, int(num(exception_room, 0)))
+
+    year1 = int(clamp(
+        int(num(salaries[0] if salaries else player_minimum, player_minimum)),
+        player_minimum,
+        max(player_minimum, salary_ceiling),
+    ))
+    if rules["path"] == "minimum":
+        year1 = player_minimum
+
+    raw_option = normalized.get("option")
+    option = None
+    if isinstance(raw_option, dict) and actual_years >= 2:
+        option = {
+            "type": raw_option.get("type"),
+            "yearIndices": [actual_years - 1],
+            "picked": raw_option.get("picked"),
+        }
+
+    return normalize_contract({
+        "startYear": normalized.get("startYear", get_operating_season_year(league_data)),
+        "salaryByYear": build_legal_salary_by_year(year1, actual_years, rules["maxRaisePct"]),
+        "option": option,
+    })
 
 
 def is_completed_final_rookie_scale_team_option(
@@ -1847,7 +2232,7 @@ def get_player_cap_hold_amount(
             return int(round_to_nearest(max(MIN_DEAL, qo_amount), base = 1_000))
 
     previous_salary = get_previous_salary_reference(league_data, player)
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     market_year_one = int(num(market_value.get("expectedYear1Salary"), MIN_DEAL))
 
     if bird_level == "bird":
@@ -1884,7 +2269,7 @@ def get_team_cap_hold_rows(
 
         qualifying_offer = player.get("qualifyingOffer")
         qualifying_offer_eligible = player.get("qualifyingOfferEligible")
-        market_value = player.get("marketValue") or estimate_market_value(player)
+        market_value = player.get("marketValue") or estimate_market_value(player, league_data)
 
         rows.append({
             "playerKey": get_cap_hold_player_key(player),
@@ -2780,7 +3165,10 @@ def get_team_cap_snapshot(
         "isHardCapped": is_team_hard_capped(league_data, team_name),
     }
 
-def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
+def estimate_market_value(
+    player: Dict[str, Any],
+    league_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     overall = num(player.get("overall"), 75)
     age = int(num(player.get("age"), 27))
     potential = num(player.get("potential"), overall)
@@ -2790,8 +3178,11 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
     def_rating = num(player.get("defRating"), overall)
     scoring_rating = num(player.get("scoringRating"), 50)
 
-    # True fringe/minimum players should still be cheap, but real rotation
-    # players in the 77-83 range need a real NBA-style market.
+    # The legacy market curve remains the decision curve. Legal salary floors
+    # and ceilings only reshape the public ask and final signed contract.
+    player_minimum = get_player_minimum_salary_amount(league_data, player)
+    player_maximum = get_player_max_salary_amount(league_data, player)
+
     minimum_bucket = (
         overall <= 72
         or (overall <= 73 and age >= 27 and upside <= 1)
@@ -2800,30 +3191,36 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
 
     if minimum_bucket:
         years = get_realistic_expected_contract_years(player)
-        base_salary = MIN_DEAL
+        legacy_base_salary = MIN_DEAL
 
         if overall >= 73 and age <= 26:
-            base_salary = max(MIN_DEAL, int(round(1_900_000 * (float(MAX_SALARY) / 54_000_000.0))))
+            legacy_base_salary = max(MIN_DEAL, int(round(1_900_000 * (float(MAX_SALARY) / 54_000_000.0))))
         elif overall >= 73:
-            base_salary = max(MIN_DEAL, int(round(DEFAULT_MINIMUM_EXCEPTION)))
+            legacy_base_salary = max(MIN_DEAL, int(round(DEFAULT_MINIMUM_EXCEPTION)))
 
-        salary_by_year = build_salary_by_year(
-            int(round_to_nearest(base_salary, base = 1_000)),
-            years,
-        )
+        legacy_year1 = int(round_to_nearest(legacy_base_salary, base = 1_000))
+        legacy_salary_by_year = build_salary_by_year(legacy_year1, years)
+        actual_year1 = int(round_to_nearest(clamp(legacy_year1, player_minimum, player_maximum), base = 1_000))
+        salary_by_year = build_legal_salary_by_year(actual_year1, years, STANDARD_FREE_AGENT_RAISE_PCT)
+
         return {
+            # Legacy fields remain untouched because they drive the existing
+            # destination/interest system. Contract-facing fields are the legal
+            # salary floor/ceiling version shown in the UI and used to sign.
             "expectedYears": years,
-            "salaryByYear": salary_by_year,
-            "expectedYear1Salary": salary_by_year[0],
-            "expectedAAV": int(sum(salary_by_year) / len(salary_by_year)),
+            "salaryByYear": legacy_salary_by_year,
+            "expectedYear1Salary": legacy_salary_by_year[0],
+            "expectedAAV": int(sum(legacy_salary_by_year) / len(legacy_salary_by_year)),
             "minAcceptableAAV": MIN_DEAL,
+            "contractExpectedYears": years,
+            "contractExpectedYear1Salary": salary_by_year[0],
+            "contractExpectedAAV": int(sum(salary_by_year) / len(salary_by_year)),
+            "contractMinAcceptableAAV": int(clamp(MIN_DEAL, player_minimum, player_maximum)),
+            "playerMinimumSalary": player_minimum,
+            "playerMaximumSalary": player_maximum,
+            "maxSalaryPercent": get_player_max_salary_percentage(player, league_data),
         }
 
-    # Salary curve tuned for a $150M cap.
-    # Surgical market-value tuning:
-    # - Keep true fringe/minimum players cheap.
-    # - Raise 75-83 OVR players modestly, especially real 77-83 rotation/starter talent.
-    # - Smooth the 84-88 jump so high-end starters do not cliff into star pricing too abruptly.
     if overall <= 75:
         base_salary = 3_100_000 + max(0.0, overall - 74.0) * 1_250_000
     elif overall <= 78:
@@ -2837,14 +3234,8 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
     else:
         base_salary = 37_400_000 + (overall - 88.0) * 3_200_000
 
-    # Convert the existing 2026-dollar market curve into a percentage of the
-    # base max salary, then re-expand it through the current inflated max. This
-    # keeps the current market logic shape while making future FA expectations
-    # grow with the league economy.
     base_salary *= (float(MAX_SALARY) / 54_000_000.0)
 
-    # Upside/age modifiers. Young RFAs and young rotation players cost more,
-    # while older role players are still discounted realistically.
     if age <= 22:
         base_salary *= 1.08 + min(0.18, upside * 0.025)
     elif age <= 25:
@@ -2856,21 +3247,12 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
     elif age <= 33:
         base_salary *= max(0.85, 1.0 - ((age - 30) * 0.043))
     else:
-        # Surgical old-player tuning:
-        # Elite older stars should still be paid like elite current-value players.
-        # 84+ OVR players use a softer age curve that improves as the player remains
-        # more elite, while sub-84 older players keep the normal stronger age discount.
         if overall >= 84:
             star_score = clamp((overall - 84.0) / 8.0, 0.0, 1.0)
-
             starting_mult = 0.88 + (star_score * 0.10)
             yearly_drop = 0.040 - (star_score * 0.018)
             floor_mult = 0.68 + (star_score * 0.14)
-
-            base_salary *= max(
-                floor_mult,
-                starting_mult - ((age - 34) * yearly_drop),
-            )
+            base_salary *= max(floor_mult, starting_mult - ((age - 34) * yearly_drop))
         else:
             base_salary *= max(0.62, 0.84 - ((age - 33) * 0.062))
 
@@ -2881,7 +3263,6 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
     if age >= 36 and overall <= 82:
         base_salary *= 0.93 if overall >= 80 else 0.90
 
-    # Skill boosts for players who are clearly valuable despite only moderate OVR.
     if off_rating >= 88:
         base_salary *= 1.04
     if def_rating >= 88:
@@ -2895,15 +3276,12 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
     ):
         base_salary *= 1.025
 
-    year1_salary = int(
-        round_to_nearest(
-            clamp(base_salary, MIN_DEAL, MAX_SALARY),
-            base = 1_000,
-        )
-    )
+    legacy_year1_salary = int(round_to_nearest(clamp(base_salary, MIN_DEAL, MAX_SALARY), base = 1_000))
+    actual_year1_salary = int(round_to_nearest(clamp(legacy_year1_salary, player_minimum, player_maximum), base = 1_000))
 
     years = get_realistic_expected_contract_years(player)
-    salary_by_year = build_salary_by_year(year1_salary, years)
+    legacy_salary_by_year = build_salary_by_year(legacy_year1_salary, years)
+    salary_by_year = build_legal_salary_by_year(actual_year1_salary, years, STANDARD_FREE_AGENT_RAISE_PCT)
 
     if overall <= 76:
         min_accept_mult = 0.86
@@ -2926,20 +3304,25 @@ def estimate_market_value(player: Dict[str, Any]) -> Dict[str, Any]:
         min_accept_mult -= 0.025 if overall >= 77 else 0.04
 
     min_accept_mult = clamp(min_accept_mult, 0.78, 0.995)
-
-    min_acceptable_aav = int(
-        round_to_nearest(
-            max(MIN_DEAL, year1_salary * min_accept_mult),
-            base = 1_000,
-        )
-    )
+    legacy_min_acceptable_aav = int(round_to_nearest(max(MIN_DEAL, legacy_year1_salary * min_accept_mult), base = 1_000))
+    actual_min_acceptable_aav = int(round_to_nearest(clamp(legacy_min_acceptable_aav, player_minimum, player_maximum), base = 1_000))
 
     return {
+        # Legacy fields remain untouched because they drive the existing
+        # destination/interest system. Contract-facing fields are the legal
+        # salary floor/ceiling version shown in the UI and used to sign.
         "expectedYears": years,
-        "salaryByYear": salary_by_year,
-        "expectedYear1Salary": salary_by_year[0],
-        "expectedAAV": int(sum(salary_by_year) / len(salary_by_year)),
-        "minAcceptableAAV": min_acceptable_aav,
+        "salaryByYear": legacy_salary_by_year,
+        "expectedYear1Salary": legacy_salary_by_year[0],
+        "expectedAAV": int(sum(legacy_salary_by_year) / len(legacy_salary_by_year)),
+        "minAcceptableAAV": legacy_min_acceptable_aav,
+        "contractExpectedYears": years,
+        "contractExpectedYear1Salary": salary_by_year[0],
+        "contractExpectedAAV": int(sum(salary_by_year) / len(salary_by_year)),
+        "contractMinAcceptableAAV": actual_min_acceptable_aav,
+        "playerMinimumSalary": player_minimum,
+        "playerMaximumSalary": player_maximum,
+        "maxSalaryPercent": get_player_max_salary_percentage(player, league_data),
     }
 
 def add_market_values_to_free_agents(league_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2947,7 +3330,7 @@ def add_market_values_to_free_agents(league_data: Dict[str, Any]) -> Dict[str, A
     free_agents = updated.get("freeAgents", [])
 
     for player in free_agents:
-        player["marketValue"] = estimate_market_value(player)
+        player["marketValue"] = estimate_market_value(player, league_data)
 
     return {
         "ok": True,
@@ -2956,7 +3339,7 @@ def add_market_values_to_free_agents(league_data: Dict[str, Any]) -> Dict[str, A
     }
 def refresh_free_agent_market_values(league_data: Dict[str, Any]) -> None:
     for player in league_data.get("freeAgents", []):
-        player["marketValue"] = estimate_market_value(player)
+        player["marketValue"] = estimate_market_value(player, league_data)
 
 
 def build_contract_from_offer(league_data: Dict[str, Any], offer: Dict[str, Any]) -> Dict[str, Any]:
@@ -3007,11 +3390,17 @@ def apply_free_agency_start_year(
 
 def is_minimum_contract_for_current_year(
     league_data: Dict[str, Any],
-    contract: Dict[str, Any]
+    contract: Dict[str, Any],
+    player: Optional[Dict[str, Any]] = None,
 ) -> bool:
     season_year = get_operating_season_year(league_data)
     offered_current_salary = get_contract_salary_for_year(contract, season_year)
-    return int(offered_current_salary) <= int(get_minimum_exception_amount(league_data))
+    minimum_limit = (
+        get_player_minimum_salary_amount(league_data, player)
+        if isinstance(player, dict)
+        else get_minimum_exception_amount(league_data)
+    )
+    return int(offered_current_salary) <= int(minimum_limit)
 
 def is_emergency_fill_candidate(player: Dict[str, Any]) -> bool:
     overall = int(round(num(player.get("overall"), 0)))
@@ -3215,7 +3604,7 @@ def finalize_cpu_min_roster_cleanup(
 
                 hard_cap = snapshot.get("hardCap")
                 is_hard_capped = bool(snapshot.get("isHardCapped"))
-                projected_payroll = int(num(snapshot.get("payroll"), 0)) + MIN_DEAL
+                projected_payroll = int(num(snapshot.get("payroll"), 0)) + get_minimum_salary_amount(league_data)
                 if is_hard_capped and hard_cap is not None and projected_payroll > int(num(hard_cap, 0)):
                     break
 
@@ -3247,12 +3636,13 @@ def finalize_cpu_min_roster_cleanup(
                         continue
 
                     signed_player = copy.deepcopy(league_data["freeAgents"][player_idx])
+                    cleanup_minimum_salary = get_player_minimum_salary_amount(league_data, signed_player)
                     signed_player["contract"] = normalize_contract({
                         "startYear": season_year,
-                        "salaryByYear": [MIN_DEAL],
+                        "salaryByYear": [cleanup_minimum_salary],
                         "option": None,
                     })
-                    signed_player["marketValue"] = estimate_market_value(signed_player)
+                    signed_player["marketValue"] = estimate_market_value(signed_player, league_data)
 
                     update_player_rights_after_signing(
                         player = signed_player,
@@ -3282,12 +3672,13 @@ def finalize_cpu_min_roster_cleanup(
                         season_year = season_year,
                         index = generated_index,
                     )
+                    cleanup_minimum_salary = get_player_minimum_salary_amount(league_data, signed_player)
                     signed_player["contract"] = normalize_contract({
                         "startYear": season_year,
-                        "salaryByYear": [MIN_DEAL],
+                        "salaryByYear": [cleanup_minimum_salary],
                         "option": None,
                     })
-                    signed_player["marketValue"] = estimate_market_value(signed_player)
+                    signed_player["marketValue"] = estimate_market_value(signed_player, league_data)
 
                     update_player_rights_after_signing(
                         player = signed_player,
@@ -3794,6 +4185,7 @@ def get_team_exception_room(
     team_name: str,
     player: Optional[Dict[str, Any]] = None,
     snapshot: Optional[Dict[str, Any]] = None,
+    decision_mode: bool = False,
 ) -> int:
     snapshot = snapshot or get_team_cap_snapshot(league_data, team_name)
     if not snapshot.get("ok"):
@@ -3804,7 +4196,12 @@ def get_team_exception_room(
     remaining = get_team_remaining_exceptions(league_data, team_name)
 
     if player is not None and is_rights_team(player, team_name):
-        usable_room = get_bird_rights_salary_ceiling(
+        ceiling_resolver = (
+            get_legacy_bird_rights_salary_ceiling
+            if decision_mode
+            else get_bird_rights_salary_ceiling
+        )
+        usable_room = ceiling_resolver(
             league_data = league_data,
             player = player,
             team_name = team_name,
@@ -3817,7 +4214,11 @@ def get_team_exception_room(
         zone = get_payroll_zone_for_amount(league_data, payroll)
 
         if zone == "second_apron":
-            usable_room = MIN_DEAL
+            usable_room = (
+                MIN_DEAL
+                if decision_mode or player is None
+                else get_player_minimum_salary_amount(league_data, player)
+            )
         elif zone in ["first_apron", "tax"]:
             usable_room = remaining["taxpayerMLE"]
         else:
@@ -3838,6 +4239,8 @@ def validate_offer_spending_rules(
     snapshot: Optional[Dict[str, Any]] = None,
     allow_pending_cap_hold_clearance: bool = True,
     allow_rfa_match_rights: bool = False,
+    enforce_contract_shape: bool = True,
+    decision_mode: bool = False,
 ) -> Dict[str, Any]:
     snapshot = snapshot or get_team_cap_snapshot(league_data, team_name)
     if not snapshot.get("ok"):
@@ -3855,25 +4258,38 @@ def validate_offer_spending_rules(
     offered_current_salary = get_contract_salary_for_year(contract, season_year)
     outstanding_current_salary = int(num(outstanding_current_salary, 0))
 
-    minimum_salary = get_minimum_salary_amount(league_data)
-    if offered_current_salary < minimum_salary:
-        under_by = minimum_salary - offered_current_salary
+    player_minimum_salary = (
+        get_minimum_salary_amount(league_data)
+        if decision_mode
+        else get_player_minimum_salary_amount(league_data, player)
+    )
+    player_maximum_salary = (
+        MAX_SALARY
+        if decision_mode
+        else get_player_max_salary_amount(league_data, player)
+    )
+    if offered_current_salary < player_minimum_salary:
+        under_by = player_minimum_salary - offered_current_salary
         return {
             "ok": False,
             "reason": f"Offer is below the minimum first-year salary by ${int(under_by):,}.",
             "teamSnapshot": snapshot,
-            "exceptionRoom": minimum_salary,
+            "exceptionRoom": player_minimum_salary,
+            "playerMinimumSalary": player_minimum_salary,
+            "playerMaximumSalary": player_maximum_salary,
             "spendingType": "minimum_salary_blocked",
         }
 
-    if offered_current_salary > MAX_SALARY:
-        over_by = offered_current_salary - MAX_SALARY
+    if offered_current_salary > player_maximum_salary:
+        over_by = offered_current_salary - player_maximum_salary
         return {
             "ok": False,
             "reason": f"Offer exceeds the maximum first-year salary by ${int(over_by):,}.",
             "teamSnapshot": snapshot,
-            "exceptionRoom": MAX_SALARY,
+            "exceptionRoom": player_maximum_salary,
             "spendingType": "max_salary_blocked",
+            "playerMinimumSalary": player_minimum_salary,
+            "playerMaximumSalary": player_maximum_salary,
         }
 
     replaced_cap_hold = 0
@@ -3899,13 +4315,16 @@ def validate_offer_spending_rules(
             "ok": False,
             "reason": f"{team_name} would exceed its hard cap by ${int(over_by):,}.",
             "teamSnapshot": snapshot,
-            "exceptionRoom": get_team_exception_room(league_data, team_name, player),
+            "exceptionRoom": get_team_exception_room(
+                league_data, team_name, player, snapshot = snapshot, decision_mode = decision_mode
+            ),
             "spendingType": "hard_cap_blocked",
         }
 
     allow_minimum_exception = is_minimum_contract_for_current_year(
         league_data = league_data,
         contract = contract,
+        player = None if decision_mode else player,
     )
 
     rights = get_player_rights(player)
@@ -3919,17 +4338,57 @@ def validate_offer_spending_rules(
     remaining = get_team_remaining_exceptions(league_data, team_name)
     needed_room = outstanding_current_salary + offered_current_salary
 
+    def finalize_legal_spending_result(result: Dict[str, Any]) -> Dict[str, Any]:
+        if not enforce_contract_shape:
+            result["contractRules"] = get_free_agent_contract_path_limits(
+                player,
+                result.get("spendingType"),
+                result.get("exceptionType"),
+                rights.get("birdLevel"),
+            )
+            result["playerMinimumSalary"] = player_minimum_salary
+            result["playerMaximumSalary"] = player_maximum_salary
+            return result
+
+        shape_res = validate_contract_shape_for_path(
+            league_data = league_data,
+            player = player,
+            contract = contract,
+            spending_type = result.get("spendingType"),
+            exception_type = result.get("exceptionType"),
+            bird_level = rights.get("birdLevel"),
+        )
+        if not shape_res.get("ok"):
+            return {
+                **shape_res,
+                "teamSnapshot": snapshot,
+                "exceptionRoom": result.get("exceptionRoom"),
+                "spendingType": "contract_shape_blocked",
+                "attemptedSpendingType": result.get("spendingType"),
+                "exceptionType": result.get("exceptionType"),
+                "birdRights": rights,
+                "payrollZone": payroll_zone,
+                "exceptionRemaining": remaining,
+                "playerMinimumSalary": player_minimum_salary,
+                "playerMaximumSalary": player_maximum_salary,
+            }
+
+        result["contractRules"] = shape_res.get("contractRules")
+        result["playerMinimumSalary"] = player_minimum_salary
+        result["playerMaximumSalary"] = player_maximum_salary
+        return result
+
     # Surgical RFA match rule:
     # Matching an outside offer sheet is not the same as creating a normal
     # Early Bird / Non-Bird return offer. If the original team still holds RFA
     # rights, the match should not be blocked by the Bird-rights salary ceiling.
     # Hard-cap legality was already checked above through projected_payroll.
     if allow_rfa_match_rights and own_rights and rights.get("restrictedFreeAgent"):
-        return {
+        return finalize_legal_spending_result({
             "ok": True,
             "reason": "Offer is legal using restricted free agent matching rights.",
             "teamSnapshot": snapshot,
-            "exceptionRoom": MAX_SALARY,
+            "exceptionRoom": player_maximum_salary,
             "spendingType": "rfa_match",
             "exceptionType": None,
             "birdRights": rights,
@@ -3937,7 +4396,7 @@ def validate_offer_spending_rules(
             "projectedPayroll": projected_payroll,
             "exceptionRemaining": remaining,
             "rfaMatchRights": True,
-        }
+        })
 
     # Live free-agency offer rule:
     # If a team has enough raw cap room after clearing cap holds, the offer is
@@ -3966,7 +4425,7 @@ def validate_offer_spending_rules(
             }
 
         clearance_needed = max(0, needed_room - practical_cap_room)
-        return {
+        return finalize_legal_spending_result({
             "ok": True,
             "reason": "Offer can be submitted using raw cap room after clearing cap holds.",
             "teamSnapshot": snapshot,
@@ -3982,28 +4441,98 @@ def validate_offer_spending_rules(
             "rawCapRoomWithoutHolds": raw_cap_room_without_holds,
             "rawPayrollWithoutHolds": raw_payroll_without_holds,
             "capHoldTotal": cap_hold_total,
-        }
+        })
 
     if own_rights and rights.get("birdLevel") in ["bird", "early_bird", "non_bird"]:
-        bird_ceiling = get_bird_rights_salary_ceiling(
+        bird_ceiling_resolver = (
+            get_legacy_bird_rights_salary_ceiling
+            if decision_mode
+            else get_bird_rights_salary_ceiling
+        )
+        bird_ceiling = bird_ceiling_resolver(
             league_data = league_data,
             player = player,
             team_name = team_name,
         )
 
         if offered_current_salary > bird_ceiling:
-            over_by = offered_current_salary - bird_ceiling
+            # Being over a player's retained-rights ceiling does not make the
+            # offer impossible by itself. The team may still be able to renounce
+            # holds/use cap room and submit a normal cap-space offer. This keeps
+            # the user offer slider tied to the player's true max while preserving
+            # the old cap/room blocker messages when the team cannot actually do it.
+            cap_space_room = max(cap_room + int(replaced_cap_hold), 0)
+            raw_cap_space_room = max(raw_cap_room_without_holds, 0)
+
+            if cap_space_room >= needed_room:
+                return finalize_legal_spending_result({
+                    "ok": True,
+                    "reason": "Offer is legal using cap room instead of the retained-rights ceiling.",
+                    "teamSnapshot": snapshot,
+                    "exceptionRoom": cap_space_room,
+                    "spendingType": "cap_space",
+                    "exceptionType": None,
+                    "birdRights": rights,
+                    "payrollZone": "below_cap",
+                    "projectedPayroll": projected_payroll,
+                    "exceptionRemaining": remaining,
+                    "usedCapSpaceOverRightsLimit": True,
+                    "rightsCeiling": bird_ceiling,
+                })
+
+            if allow_pending_cap_hold_clearance and cap_hold_total > 0 and raw_cap_space_room >= needed_room:
+                raw_projected_payroll = raw_payroll_without_holds + needed_room
+                if is_hard_capped and hard_cap is not None and raw_projected_payroll > int(num(hard_cap, 0)):
+                    over_by = raw_projected_payroll - int(num(hard_cap, 0))
+                    return {
+                        "ok": False,
+                        "reason": f"{team_name} would exceed its hard cap by ${int(over_by):,} even after clearing cap holds.",
+                        "teamSnapshot": snapshot,
+                        "exceptionRoom": raw_cap_space_room,
+                        "spendingType": "hard_cap_blocked",
+                        "exceptionType": None,
+                        "birdRights": rights,
+                        "payrollZone": payroll_zone,
+                        "exceptionRemaining": remaining,
+                        "rightsCeiling": bird_ceiling,
+                    }
+
+                clearance_needed = max(0, needed_room - practical_cap_room)
+                return finalize_legal_spending_result({
+                    "ok": True,
+                    "reason": "Offer can be submitted with cap room after clearing holds instead of using the retained-rights ceiling.",
+                    "teamSnapshot": snapshot,
+                    "exceptionRoom": raw_cap_space_room,
+                    "spendingType": "cap_space",
+                    "exceptionType": None,
+                    "birdRights": rights,
+                    "payrollZone": "below_cap",
+                    "projectedPayroll": raw_projected_payroll,
+                    "exceptionRemaining": remaining,
+                    "pendingCapHoldClearance": True,
+                    "capHoldClearanceNeeded": clearance_needed,
+                    "rawCapRoomWithoutHolds": raw_cap_room_without_holds,
+                    "rawPayrollWithoutHolds": raw_payroll_without_holds,
+                    "capHoldTotal": cap_hold_total,
+                    "usedCapSpaceOverRightsLimit": True,
+                    "rightsCeiling": bird_ceiling,
+                })
+
+            over_by = offered_current_salary - max(bird_ceiling, cap_space_room, raw_cap_space_room)
             return {
                 "ok": False,
-                "reason": f"{team_name} only has {rights.get('birdLevel')} rights for {player.get('name')}. This offer is over the rights limit by ${int(over_by):,}.",
+                "reason": f"{team_name} cannot currently submit this offer. It is over the retained-rights limit and short of cap room by ${int(max(0, over_by)):,}.",
                 "teamSnapshot": snapshot,
-                "exceptionRoom": bird_ceiling,
-                "spendingType": "bird_rights_blocked",
+                "exceptionRoom": max(bird_ceiling, cap_space_room, raw_cap_space_room),
+                "spendingType": "bird_rights_or_cap_room_blocked",
                 "birdRights": rights,
                 "payrollZone": payroll_zone,
+                "rightsCeiling": bird_ceiling,
+                "playerMinimumSalary": player_minimum_salary,
+                "playerMaximumSalary": player_maximum_salary,
             }
 
-        return {
+        return finalize_legal_spending_result({
             "ok": True,
             "reason": "Offer is legal using Bird rights.",
             "teamSnapshot": snapshot,
@@ -4014,21 +4543,21 @@ def validate_offer_spending_rules(
             "payrollZone": payroll_zone,
             "projectedPayroll": projected_payroll,
             "exceptionRemaining": remaining,
-        }
+        })
 
     if allow_minimum_exception:
-        return {
+        return finalize_legal_spending_result({
             "ok": True,
             "reason": "Offer is legal using the minimum exception.",
             "teamSnapshot": snapshot,
-            "exceptionRoom": MIN_DEAL,
+            "exceptionRoom": get_player_minimum_salary_amount(league_data, player),
             "spendingType": "minimum",
             "exceptionType": None,
             "birdRights": rights,
             "payrollZone": payroll_zone,
             "projectedPayroll": projected_payroll,
             "exceptionRemaining": remaining,
-        }
+        })
 
     needed_room = outstanding_current_salary + offered_current_salary
     available_room = 0
@@ -4052,7 +4581,7 @@ def validate_offer_spending_rules(
                 "ok": False,
                 "reason": f"{team_name} is above the second apron and can only sign outside free agents to minimum contracts.",
                 "teamSnapshot": snapshot,
-                "exceptionRoom": MIN_DEAL,
+                "exceptionRoom": player_minimum_salary,
                 "spendingType": "second_apron_blocked",
                 "exceptionType": None,
                 "birdRights": rights,
@@ -4097,7 +4626,7 @@ def validate_offer_spending_rules(
             "exceptionRemaining": remaining,
         }
 
-    return {
+    return finalize_legal_spending_result({
         "ok": True,
         "reason": legal_reason,
         "teamSnapshot": snapshot,
@@ -4108,7 +4637,7 @@ def validate_offer_spending_rules(
         "payrollZone": payroll_zone,
         "projectedPayroll": projected_payroll,
         "exceptionRemaining": remaining,
-    }
+    })
 
 def classify_team_direction(
     team: Dict[str, Any],
@@ -4300,7 +4829,7 @@ def decide_player_option(
 ) -> Dict[str, Any]:
     contract = normalize_contract(player.get("contract"))
     active_option = get_active_option_for_year(contract, season_year)
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
 
     if not active_option or active_option.get("type") != "player":
         return {
@@ -4311,7 +4840,7 @@ def decide_player_option(
         }
 
     option_salary = int(active_option["salary"])
-    expected_aav = int(market_value["expectedAAV"])
+    expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
     expected_years = get_realistic_expected_contract_years(player)
 
     age = int(num(player.get("age"), 27))
@@ -4378,7 +4907,7 @@ def decide_cpu_team_option(
 ) -> Dict[str, Any]:
     contract = normalize_contract(player.get("contract"))
     active_option = get_active_option_for_year(contract, season_year)
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
 
     if not active_option or active_option.get("type") != "team":
         return {
@@ -4389,7 +4918,7 @@ def decide_cpu_team_option(
         }
 
     option_salary = int(active_option["salary"])
-    expected_aav = int(market_value["expectedAAV"])
+    expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
 
     age = int(num(player.get("age"), 27))
     overall = num(player.get("overall"), 75)
@@ -4585,7 +5114,8 @@ def build_free_agent_record(
     player: Dict[str, Any],
     from_team_name: str,
     season_year: int,
-    reason: str
+    reason: str,
+    league_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     fa_player = copy.deepcopy(player)
     previous_rights = get_player_rights(fa_player)
@@ -4615,7 +5145,7 @@ def build_free_agent_record(
         )
 
     fa_player["contract"] = None
-    fa_player["marketValue"] = estimate_market_value(fa_player)
+    fa_player["marketValue"] = estimate_market_value(fa_player, league_data)
     return fa_player
 
 def remove_existing_free_agent_match(
@@ -4652,6 +5182,7 @@ def add_player_to_free_agency(
         from_team_name = from_team_name,
         season_year = season_year,
         reason = reason,
+        league_data = updated,
     )
     free_agents.append(fa_player)
     return fa_player
@@ -4664,7 +5195,7 @@ def build_contract_status_row(
     league_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     raw_contract = normalize_contract(player.get("contract"))
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     team_direction = classify_team_direction(team, league_data = league_data)
     re_sign_interest = estimate_team_re_sign_interest(team, player, league_data = league_data)
 
@@ -5100,7 +5631,7 @@ def build_two_way_decision_row(
     season_year: int,
     league_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     can_extend = can_extend_two_way_for_next_season(player, season_year)
     available = ["convert", "release"]
     if can_extend:
@@ -5222,7 +5753,7 @@ def build_stash_decision_row(
     season_year: int,
     league_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     can_two_way = can_assign_stash_player_to_two_way(team, player, season_year)
     available = ["standard", "release"]
     if can_two_way:
@@ -5820,7 +6351,7 @@ def apply_offseason_contract_decisions(
                         "potential": int(round(num(player.get("potential"), num(player.get("overall"), 0)))),
                         "salaryThisYear": int(num(active_option.get("salary"), salary_this_year)),
                         "optionSeasonYear": int(upcoming_year),
-                        "marketValue": player.get("marketValue") or estimate_market_value(player),
+                        "marketValue": player.get("marketValue") or estimate_market_value(player, league_data),
                         "teamDirection": classify_team_direction(team, league_data = updated)["direction"],
                         "result": "accepted_option",
                         "score": decision["score"],
@@ -5853,7 +6384,7 @@ def apply_offseason_contract_decisions(
                         "potential": int(round(num(player.get("potential"), num(player.get("overall"), 0)))),
                         "salaryThisYear": int(num(active_option.get("salary"), salary_this_year)),
                         "optionSeasonYear": int(upcoming_year),
-                        "marketValue": player.get("marketValue") or estimate_market_value(player),
+                        "marketValue": player.get("marketValue") or estimate_market_value(player, league_data),
                         "teamDirection": classify_team_direction(team, league_data = updated)["direction"],
                         "result": "declined_option_entered_free_agency",
                         "score": decision["score"],
@@ -6104,7 +6635,7 @@ def apply_offseason_contract_decisions(
     normalize_all_player_rights(updated)
 
     for player in updated.setdefault("freeAgents", []):
-        player["marketValue"] = estimate_market_value(player)
+        player["marketValue"] = estimate_market_value(player, league_data)
 
     summary = {
         "seasonYear": season_year,
@@ -8356,8 +8887,8 @@ def sort_offers_for_display(offers: List[Dict[str, Any]]) -> List[Dict[str, Any]
         offers,
         key = lambda o: (
             -num(o.get("playerViewScore"), 0),
-            -num(o.get("totalValue"), 0),
-            -num(o.get("aav"), 0),
+            -num(o.get("decisionTotalValue"), num(o.get("totalValue"), 0)),
+            -num(o.get("decisionAAV"), num(o.get("aav"), 0)),
             str(o.get("teamName", "")),
         )
     )
@@ -9833,12 +10364,27 @@ def build_offer_record(
     player: Dict[str, Any],
     contract: Dict[str, Any],
     source: str,
-    current_day: int
+    current_day: int,
+    decision_contract: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    salary_by_year = list(contract.get("salaryByYear", []))
+    normalized_contract = normalize_contract(contract)
+    salary_by_year = list(normalized_contract.get("salaryByYear", [])) if normalized_contract else []
     total_value = int(sum(salary_by_year))
     years = len(salary_by_year)
     aav = int(total_value / max(1, years))
+
+    normalized_decision_contract = (
+        normalize_contract(decision_contract)
+        or build_decision_contract_from_actual(league_data, normalized_contract, player)
+    )
+    decision_salary_by_year = (
+        list(normalized_decision_contract.get("salaryByYear", []))
+        if normalized_decision_contract
+        else list(salary_by_year[:4])
+    )
+    decision_total_value = int(sum(decision_salary_by_year))
+    decision_years = len(decision_salary_by_year)
+    decision_aav = int(decision_total_value / max(1, decision_years))
 
     player_key = get_player_key_from_player(player)
 
@@ -9851,12 +10397,19 @@ def build_offer_record(
         "source": source,
         "submittedDay": current_day,
         "status": "active",
-        "contract": normalize_contract(contract),
+        "contract": normalized_contract,
         "salaryByYear": salary_by_year,
         "currentYearSalary": int(salary_by_year[0]) if salary_by_year else 0,
         "years": years,
         "totalValue": total_value,
         "aav": aav,
+        # Destination scoring deliberately uses the legacy comparable offer.
+        # The actual signed contract above may have a fifth Bird year or 8%
+        # raises, but those extras do not make the player more likely to stay.
+        "decisionContract": normalized_decision_contract,
+        "decisionYears": decision_years,
+        "decisionTotalValue": decision_total_value,
+        "decisionAAV": decision_aav,
     }
 
 
@@ -9871,6 +10424,9 @@ def evaluate_market_offer_submission(
     active_offer_count: Optional[int] = None,
     active_offer_limit: Optional[int] = None,
     calculate_player_view_score: bool = True,
+    decision_contract: Optional[Dict[str, Any]] = None,
+    enforce_contract_shape: bool = True,
+    decision_mode: bool = False,
 ) -> Dict[str, Any]:
     normalize_player_rights_for_location(player, None)
 
@@ -9924,20 +10480,29 @@ def evaluate_market_offer_submission(
         contract = contract,
         outstanding_current_salary = outstanding_current_salary,
         snapshot = snapshot,
+        enforce_contract_shape = enforce_contract_shape,
+        decision_mode = decision_mode,
     )
     if not spending_res.get("ok"):
         return spending_res
 
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     offered_years = len(contract["salaryByYear"])
     offered_aav = int(sum(contract["salaryByYear"]) / max(1, offered_years))
+    decision_contract = (
+        normalize_contract(decision_contract)
+        or build_decision_contract_from_actual(league_data, contract, player)
+    )
+    decision_salaries = list(decision_contract.get("salaryByYear", [])) if decision_contract else list(contract["salaryByYear"][:4])
+    decision_years = len(decision_salaries)
+    decision_aav = int(sum(decision_salaries) / max(1, decision_years))
     expected_years = get_realistic_expected_contract_years(player)
-    expected_aav = int(market_value["expectedAAV"])
-    min_acceptable_aav = int(market_value["minAcceptableAAV"])
+    expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
+    min_acceptable_aav = int(num(market_value.get("minAcceptableAAV"), MIN_DEAL))
 
-    salary_ratio = offered_aav / max(1, expected_aav)
-    year_penalty = abs(offered_years - expected_years) * 0.06
-    option_adjustment = get_contract_option_player_score_adjustment(contract)
+    salary_ratio = decision_aav / max(1, expected_aav)
+    year_penalty = abs(decision_years - expected_years) * 0.06
+    option_adjustment = get_contract_option_player_score_adjustment(decision_contract or contract)
     acceptance_score = salary_ratio - year_penalty + option_adjustment
 
     if is_rights_team(player, team_name):
@@ -9954,6 +10519,7 @@ def evaluate_market_offer_submission(
         contract = contract,
         source = "evaluation",
         current_day = int(num(state.get("currentDay"), 0)),
+        decision_contract = decision_contract,
     )
     player_view_score = None
     if calculate_player_view_score:
@@ -9968,6 +10534,7 @@ def evaluate_market_offer_submission(
         "reason": spending_res.get("reason", "Offer can be submitted to the live market."),
         "teamSnapshot": snapshot,
         "contract": contract,
+        "decisionContract": decision_contract,
         "marketValue": market_value,
         "exceptionRoom": spending_res.get("exceptionRoom"),
         "spendingType": spending_res.get("spendingType"),
@@ -9980,11 +10547,16 @@ def evaluate_market_offer_submission(
         "rawCapRoomWithoutHolds": spending_res.get("rawCapRoomWithoutHolds"),
         "rawPayrollWithoutHolds": spending_res.get("rawPayrollWithoutHolds"),
         "capHoldTotal": spending_res.get("capHoldTotal"),
+        "contractRules": spending_res.get("contractRules"),
+        "playerMinimumSalary": spending_res.get("playerMinimumSalary"),
+        "playerMaximumSalary": spending_res.get("playerMaximumSalary"),
         "playerViewScore": player_view_score,
         "interestScore": player_view_score,
         "details": {
             "offeredYears": offered_years,
             "offeredAAV": offered_aav,
+            "decisionYears": decision_years,
+            "decisionAAV": decision_aav,
             "expectedYears": expected_years,
             "expectedAAV": expected_aav,
             "minAcceptableAAV": min_acceptable_aav,
@@ -10002,19 +10574,22 @@ def score_offer_for_player_with_fit(
     team_profile: Optional[Dict[str, Any]] = None,
     fit: Optional[Dict[str, Any]] = None,
 ) -> float:
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     expected_aav = int(max(MIN_DEAL, num(market_value.get("expectedAAV"), MIN_DEAL)))
     expected_years = get_realistic_expected_contract_years(player)
 
-    offered_aav = int(num(offer.get("aav"), 0))
-    offered_years = int(num(offer.get("years"), 1))
+    offered_aav = int(num(offer.get("decisionAAV"), num(offer.get("aav"), 0)))
+    offered_years = int(num(offer.get("decisionYears"), num(offer.get("years"), 1)))
     team_name = offer.get("teamName")
 
-    contract = normalize_contract(offer.get("contract"))
+    contract = normalize_contract(offer.get("decisionContract"))
+    if not contract:
+        actual_contract = normalize_contract(offer.get("contract"))
+        contract = build_decision_contract_from_actual(league_data, actual_contract, player)
     if not contract:
         contract = normalize_contract({
             "startYear": get_operating_season_year(league_data),
-            "salaryByYear": list(offer.get("salaryByYear", [])) or [offered_aav],
+            "salaryByYear": list((offer.get("decisionContract") or {}).get("salaryByYear", [])) or list(offer.get("salaryByYear", [])) or [offered_aav],
             "option": None,
         })
 
@@ -10227,12 +10802,13 @@ def is_cpu_serious_offer_for_player(
     max_days: int,
     incumbent_priority: bool = False,
     target_tier: str = "value",
+    league_data: Optional[Dict[str, Any]] = None,
 ) -> bool:
     contract = normalize_contract(contract)
     if not contract:
         return False
 
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
     min_acceptable_aav = int(num(market_value.get("minAcceptableAAV"), MIN_DEAL))
     salary_by_year = contract.get("salaryByYear", [])
@@ -10272,7 +10848,7 @@ def get_cpu_rights_hold_value_score(
     team_name: str,
 ) -> Dict[str, Any]:
     rights = get_player_rights(player)
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
     cap_hold = int(get_player_cap_hold_amount(
         league_data = league_data,
@@ -10644,7 +11220,7 @@ def classify_cpu_target_tier(
     age = int(num(player.get("age"), 27))
     potential = int(round(num(player.get("potential"), overall)))
     upside = max(0, potential - overall)
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
     need_score = float(num(fit.get("needScore"), 0.0))
     rights = get_player_rights(player)
@@ -10779,7 +11355,7 @@ def build_cpu_offer_contract(
     need_score: Optional[float] = None,
     exception_room: Optional[int] = None,
 ) -> Dict[str, Any]:
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     if profile is None:
         profile = build_team_roster_profile(team, league_data = league_data)
     direction = profile["direction"]
@@ -10793,9 +11369,8 @@ def build_cpu_offer_contract(
     def_rating = int(round(num(player.get("defRating"), overall)))
     scoring_rating = int(round(num(player.get("scoringRating"), overall)))
 
-    expected_year1 = int(market_value["expectedYear1Salary"])
+    expected_year1 = int(num(market_value.get("expectedYear1Salary"), MIN_DEAL))
     expected_years = get_realistic_expected_contract_years(player)
-
     team_name = team.get("name")
     if snapshot is None:
         snapshot = get_team_cap_snapshot(league_data, team_name) if team_name else {"ok": False, "capRoom": 0, "rosterCount": 0}
@@ -10807,6 +11382,7 @@ def build_cpu_offer_contract(
             team_name = team_name,
             player = player,
             snapshot = snapshot,
+            decision_mode = True,
         ) if team_name else cap_room
     else:
         exception_room = int(num(exception_room, 0))
@@ -10947,7 +11523,7 @@ def build_cpu_offer_contract(
                 continue
             if live_offer.get("teamName") == team_name:
                 continue
-            if int(num(live_offer.get("aav"), 0)) >= int(expected_year1 * 0.82):
+            if int(num(live_offer.get("decisionAAV"), num(live_offer.get("aav"), 0))) >= int(expected_year1 * 0.82):
                 outside_pressure = True
                 break
         if outside_pressure and overall >= 80 and (overall >= 86 or age <= 25 or return_context_bonus >= 0.018):
@@ -11148,7 +11724,7 @@ def is_priority_offseason_overfill_candidate(
     age = int(num(player.get("age"), 27))
     potential = int(round(num(player.get("potential"), overall)))
     upside = max(0, potential - overall)
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
 
     if matched_rfa:
@@ -11218,7 +11794,7 @@ def build_late_rights_retention_spending_result(
         "ok": True,
         "reason": "Late-market own-rights retention override for a 76+ OVR player.",
         "teamSnapshot": snapshot,
-        "exceptionRoom": MAX_SALARY,
+        "exceptionRoom": get_player_max_salary_amount(league_data, player),
         "spendingType": "late_rights_retention",
         "exceptionType": None,
         "birdRights": get_player_rights(player),
@@ -11298,7 +11874,7 @@ def _materialize_cpu_offer_candidate(
     rng = random.Random(int(item.get("seed", 0)))
     rng.random()
 
-    contract = build_cpu_offer_contract(
+    decision_contract = build_cpu_offer_contract(
         league_data = league_data,
         team = team,
         player = player,
@@ -11315,7 +11891,8 @@ def _materialize_cpu_offer_candidate(
 
     if not late_rights_retention_candidate and not is_cpu_serious_offer_for_player(
         player = player,
-        contract = contract,
+        contract = decision_contract,
+        league_data = league_data,
         current_day = current_day,
         max_days = max_days,
         incumbent_priority = incumbent_priority,
@@ -11331,7 +11908,7 @@ def _materialize_cpu_offer_candidate(
                 payload = {
                     "targetTier": target_tier,
                     "targetScore": round(target_score, 3),
-                    "contract": compact_debug_contract(contract),
+                    "contract": compact_debug_contract(decision_contract),
                     "marketValue": compact_debug_player(player).get("marketValue"),
                     "incumbentPriority": incumbent_priority,
                     "ownRights": own_rights,
@@ -11342,28 +11919,31 @@ def _materialize_cpu_offer_candidate(
         return False
 
     if late_rights_retention_candidate:
-        eval_res = build_late_rights_retention_spending_result(
+        preliminary_eval = build_late_rights_retention_spending_result(
             league_data = league_data,
             team_name = team_name,
             player = player,
-            contract = contract,
+            contract = decision_contract,
             snapshot = snapshot,
         )
     else:
-        eval_res = evaluate_market_offer_submission(
+        preliminary_eval = evaluate_market_offer_submission(
             league_data = league_data,
             team_name = team_name,
             player = player,
-            contract = contract,
+            contract = decision_contract,
             exclude_offer_id = None,
             snapshot = snapshot,
             state = state,
             active_offer_count = active_offer_count,
             active_offer_limit = active_offer_limit,
             calculate_player_view_score = False,
+            decision_contract = decision_contract,
+            enforce_contract_shape = False,
+            decision_mode = True,
         )
 
-    if not eval_res.get("ok"):
+    if not preliminary_eval.get("ok"):
         if debug_this_candidate:
             record_fa_debug(
                 league_data = league_data,
@@ -11374,13 +11954,90 @@ def _materialize_cpu_offer_candidate(
                 payload = {
                     "targetTier": target_tier,
                     "targetScore": round(target_score, 3),
-                    "contract": compact_debug_contract(contract),
-                    "spending": compact_debug_spending(eval_res),
+                    "contract": compact_debug_contract(decision_contract),
+                    "spending": compact_debug_spending(preliminary_eval),
                     "activeOfferCount": active_offer_count,
                     "activeOfferLimit": active_offer_limit,
                     "snapshot": compact_debug_snapshot(snapshot),
                     "incumbentPriority": incumbent_priority,
                     "ownRights": own_rights,
+                },
+            )
+        item["evaluated"] = True
+        item["valid"] = False
+        return False
+
+    contract = shape_cpu_contract_for_spending_path(
+        league_data = league_data,
+        player = player,
+        team_name = team_name,
+        decision_contract = decision_contract,
+        spending_type = preliminary_eval.get("spendingType"),
+        exception_type = preliminary_eval.get("exceptionType"),
+        exception_room = preliminary_eval.get("exceptionRoom"),
+    )
+
+    # The preliminary evaluation is the exact pre-patch cap/offer decision. Do
+    # not run a second team-market evaluation after reshaping the contract: that
+    # could remove a bidder and alter destinations. Only validate the O(1) legal
+    # contract shape, then carry forward the original spending result.
+    actual_spending_type = preliminary_eval.get("spendingType")
+    actual_exception_type = preliminary_eval.get("exceptionType")
+    player_minimum = get_player_minimum_salary_amount(league_data, player)
+    actual_year1 = get_contract_salary_for_year(contract, get_operating_season_year(league_data))
+
+    # When the legacy offer fit only because it was below the player's new
+    # experience minimum, the signed deal uses the minimum exception and its
+    # two-year limit. This keeps the bidder while producing a legal contract.
+    if actual_year1 <= player_minimum and int(num(preliminary_eval.get("exceptionRoom"), 0)) < player_minimum:
+        actual_spending_type = "minimum"
+        actual_exception_type = None
+        contract = shape_cpu_contract_for_spending_path(
+            league_data = league_data,
+            player = player,
+            team_name = team_name,
+            decision_contract = decision_contract,
+            spending_type = "minimum",
+            exception_type = None,
+            exception_room = player_minimum,
+        )
+
+    shape_res = validate_contract_shape_for_path(
+        league_data = league_data,
+        player = player,
+        contract = contract,
+        spending_type = actual_spending_type,
+        exception_type = actual_exception_type,
+        bird_level = get_player_rights(player).get("birdLevel"),
+    )
+
+    eval_res = {
+        **preliminary_eval,
+        "ok": bool(shape_res.get("ok")),
+        "reason": shape_res.get("reason") or preliminary_eval.get("reason"),
+        "contract": contract,
+        "decisionContract": decision_contract,
+        "spendingType": actual_spending_type,
+        "exceptionType": actual_exception_type,
+        "contractRules": shape_res.get("contractRules"),
+        "playerMinimumSalary": player_minimum,
+        "playerMaximumSalary": get_player_max_salary_amount(league_data, player),
+    }
+
+    if not eval_res.get("ok"):
+        if debug_this_candidate:
+            record_fa_debug(
+                league_data = league_data,
+                bucket = "cpuOfferDebugLog",
+                event = "candidate_rejected_contract_shape",
+                player = player,
+                team_name = team_name,
+                payload = {
+                    "targetTier": target_tier,
+                    "targetScore": round(target_score, 3),
+                    "decisionContract": compact_debug_contract(decision_contract),
+                    "actualContract": compact_debug_contract(contract),
+                    "spending": compact_debug_spending(eval_res),
                 },
             )
         item["evaluated"] = True
@@ -11416,6 +12073,7 @@ def _materialize_cpu_offer_candidate(
         eval_res["capHoldClearanceDeferredUntilAcceptance"] = True
 
     item["contract"] = contract
+    item["decisionContract"] = decision_contract
     item["evalRes"] = eval_res
     item["evaluated"] = True
     item["valid"] = True
@@ -11610,7 +12268,7 @@ def _generate_cpu_offers_for_day_impl(
             age = int(num(player.get("age"), 27))
             potential = int(round(num(player.get("potential"), overall)))
             upside = max(0, potential - overall)
-            market_value = player.get("marketValue") or estimate_market_value(player)
+            market_value = player.get("marketValue") or estimate_market_value(player, league_data)
             expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
 
             rights = get_player_rights(player)
@@ -12044,6 +12702,7 @@ def _generate_cpu_offers_for_day_impl(
                 contract = contract,
                 source = "cpu",
                 current_day = current_day,
+                decision_contract = item.get("decisionContract"),
             )
             offer_record["spendingType"] = eval_res.get("spendingType")
             offer_record["exceptionType"] = eval_res.get("exceptionType")
@@ -12202,7 +12861,7 @@ def get_free_agent_offers(
             "overall": player.get("overall"),
             "age": player.get("age"),
             "position": player.get("pos"),
-            "marketValue": player.get("marketValue") or estimate_market_value(player),
+            "marketValue": player.get("marketValue") or estimate_market_value(player, league_data),
             "rights": get_player_rights(player),
             "qualifyingOffer": copy.deepcopy(player.get("qualifyingOffer")) if isinstance(player.get("qualifyingOffer"), dict) else None,
             "qualifyingOfferEligible": copy.deepcopy(player.get("qualifyingOfferEligible")) if isinstance(player.get("qualifyingOfferEligible"), dict) else None,
@@ -12275,6 +12934,7 @@ def submit_user_free_agent_offer(
         contract = contract,
         source = "user",
         current_day = current_day,
+        decision_contract = eval_res.get("decisionContract"),
     )
     offer_record["spendingType"] = eval_res.get("spendingType")
     offer_record["exceptionType"] = eval_res.get("exceptionType")
@@ -12415,7 +13075,7 @@ def should_match_restricted_free_agent_offer(
         )
         return False
 
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
 
     offered_years = len(contract.get("salaryByYear", []))
     offered_aav = int(sum(contract.get("salaryByYear", [])) / max(1, offered_years))
@@ -12800,7 +13460,7 @@ def finalize_free_agent_signing_from_offer(
 
     signed_player = copy.deepcopy(player)
     signed_player["contract"] = contract
-    signed_player["marketValue"] = estimate_market_value(signed_player)
+    signed_player["marketValue"] = estimate_market_value(signed_player, league_data)
 
     update_player_rights_after_signing(
         player = signed_player,
@@ -13139,6 +13799,7 @@ def resolve_signings_for_day(
             player = player,
             contract = normalize_contract(best_offer.get("contract")),
             exclude_offer_id = best_offer.get("offerId"),
+            decision_contract = normalize_contract(best_offer.get("decisionContract")),
         )
 
         should_sign = False
@@ -13668,7 +14329,8 @@ def get_market_acceptance_threshold(
     league_data: Dict[str, Any],
     player: Dict[str, Any],
     contract: Dict[str, Any],
-    exclude_offer_id: Optional[str] = None
+    exclude_offer_id: Optional[str] = None,
+    decision_contract: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     contract = normalize_contract(contract)
     if not contract:
@@ -13680,11 +14342,16 @@ def get_market_acceptance_threshold(
             "fringePlayer": False,
         }
 
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
+    decision_contract = (
+        normalize_contract(decision_contract)
+        or build_decision_contract_from_actual(league_data, contract, player)
+        or contract
+    )
 
-    min_acceptable_aav = int(market_value["minAcceptableAAV"])
-    offered_years = len(contract["salaryByYear"])
-    offered_aav = int(sum(contract["salaryByYear"]) / max(1, offered_years))
+    min_acceptable_aav = int(num(market_value.get("minAcceptableAAV"), MIN_DEAL))
+    offered_years = len(decision_contract["salaryByYear"])
+    offered_aav = int(sum(decision_contract["salaryByYear"]) / max(1, offered_years))
 
     overall = int(round(num(player.get("overall"), 0)))
     age = int(num(player.get("age"), 27))
@@ -13699,7 +14366,10 @@ def get_market_acceptance_threshold(
     ]
 
     offer_count = len(active_offers)
-    best_live_aav = max([int(num(o.get("aav"), 0)) for o in active_offers], default = 0)
+    best_live_aav = max([
+        int(num(o.get("decisionAAV"), num(o.get("aav"), 0)))
+        for o in active_offers
+    ], default = 0)
 
     current_day = int(num(state.get("currentDay"), 1))
     max_days = int(num(state.get("maxDays"), DEFAULT_FREE_AGENCY_DAYS))
@@ -13727,8 +14397,8 @@ def get_market_acceptance_threshold(
             "fringePlayer": True,
         }
 
-    expected_aav = int(market_value["expectedAAV"])
-    option_mult = get_option_required_aav_multiplier(contract)
+    expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
+    option_mult = get_option_required_aav_multiplier(decision_contract)
 
     if offer_count == 0:
         # Expected AAV is now the clean "ready to sign" target shown to the user.
@@ -13843,23 +14513,27 @@ def evaluate_offer(
             "capHoldTotal": spending_res.get("capHoldTotal"),
         }
 
-    market_value = player.get("marketValue") or estimate_market_value(player)
+    market_value = player.get("marketValue") or estimate_market_value(player, league_data)
 
-    offered_years = len(contract["salaryByYear"])
-    offered_aav = int(sum(contract["salaryByYear"]) / max(1, offered_years))
+    actual_years = len(contract["salaryByYear"])
+    actual_aav = int(sum(contract["salaryByYear"]) / max(1, actual_years))
+    decision_contract = build_decision_contract_from_actual(league_data, contract, player) or contract
+    offered_years = len(decision_contract["salaryByYear"])
+    offered_aav = int(sum(decision_contract["salaryByYear"]) / max(1, offered_years))
     expected_years = get_realistic_expected_contract_years(player)
-    expected_aav = int(market_value["expectedAAV"])
-    min_acceptable_aav = int(market_value["minAcceptableAAV"])
+    expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
+    min_acceptable_aav = int(num(market_value.get("minAcceptableAAV"), MIN_DEAL))
 
     market_threshold = get_market_acceptance_threshold(
         league_data = league_data,
         player = player,
         contract = contract,
+        decision_contract = decision_contract,
     )
 
     required_aav = int(market_threshold["requiredAAV"])
     year_penalty = abs(offered_years - expected_years) * 0.06
-    option_adjustment = get_contract_option_player_score_adjustment(contract)
+    option_adjustment = get_contract_option_player_score_adjustment(decision_contract)
     acceptance_score = (offered_aav / max(1, required_aav)) - year_penalty + option_adjustment
 
     accepted = bool(market_threshold["autoAccept"]) or (
@@ -13872,6 +14546,7 @@ def evaluate_offer(
         "reason": "Offer accepted." if accepted else "Offer rejected.",
         "teamSnapshot": snapshot,
         "contract": contract,
+        "decisionContract": decision_contract,
         "marketValue": market_value,
         "exceptionRoom": available_room,
         "spendingType": spending_res.get("spendingType"),
@@ -13885,8 +14560,10 @@ def evaluate_offer(
         "rawPayrollWithoutHolds": spending_res.get("rawPayrollWithoutHolds"),
         "capHoldTotal": spending_res.get("capHoldTotal"),
         "details": {
-            "offeredYears": offered_years,
-            "offeredAAV": offered_aav,
+            "offeredYears": actual_years,
+            "offeredAAV": actual_aav,
+            "decisionYears": offered_years,
+            "decisionAAV": offered_aav,
             "expectedYears": expected_years,
             "expectedAAV": expected_aav,
             "minAcceptableAAV": min_acceptable_aav,
@@ -13976,7 +14653,7 @@ def sign_free_agent(
         updated,
         evaluation["contract"],
     )
-    signed_player["marketValue"] = estimate_market_value(signed_player)
+    signed_player["marketValue"] = estimate_market_value(signed_player, league_data)
 
     update_player_rights_after_signing(
         player = signed_player,
@@ -14056,7 +14733,7 @@ def release_player(
         rookie_scale = get_player_rights(released_player).get("rookieScale", False),
         restricted_free_agent = False,
     )
-    released_player["marketValue"] = estimate_market_value(released_player)
+    released_player["marketValue"] = estimate_market_value(released_player, league_data)
     released_player["freeAgencyMeta"] = {
         "fromTeam": team_name,
         "seasonYear": season_year,
@@ -14581,12 +15258,19 @@ def _pre_sim_market_offer_capacity(
     league_data: Dict[str, Any],
     team_name: str,
     player: Dict[str, Any],
+    decision_mode: bool = False,
 ) -> Dict[str, Any]:
     snapshot = get_team_cap_snapshot(league_data, team_name)
     if not snapshot.get("ok"):
         return {"ok": False, "teamName": team_name, "maxOffer": 0, "snapshot": snapshot}
 
-    max_offer = int(get_team_exception_room(league_data, team_name, player, snapshot=snapshot))
+    max_offer = int(get_team_exception_room(
+        league_data,
+        team_name,
+        player,
+        snapshot=snapshot,
+        decision_mode=decision_mode,
+    ))
     cap_room = int(num(snapshot.get("rawCapRoomWithoutHolds") or snapshot.get("capRoom"), 0))
     roster_count = len(get_team_players(find_team_entry(league_data, team_name)[2] or {}))
     return {
@@ -14606,12 +15290,18 @@ def _build_pre_sim_one_year_offer(
     season_year: int,
     offer_cap_override: Optional[int] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
-    capacity = _pre_sim_market_offer_capacity(league_data, team_name, player)
+    # Preserve the exact pre-patch money ranking used to choose a landing team.
+    # The selected offer is reshaped to the player-specific legal min/max only
+    # after the same destination has been chosen.
+    capacity = _pre_sim_market_offer_capacity(league_data, team_name, player, decision_mode=True)
     if not capacity.get("ok"):
         return None, capacity, {"ok": False, "reason": "cap snapshot unavailable"}
 
-    market = player.get("marketValue") if isinstance(player.get("marketValue"), dict) else estimate_market_value(player)
-    expected = int(num(market.get("expectedYear1Salary") or market.get("expectedAAV"), MIN_DEAL))
+    market = player.get("marketValue") if isinstance(player.get("marketValue"), dict) else estimate_market_value(player, league_data)
+    expected = int(num(
+        market.get("expectedYear1Salary"),
+        num(market.get("expectedAAV"), MIN_DEAL),
+    ))
     max_offer = int(num(capacity.get("maxOffer"), 0))
     if offer_cap_override is not None:
         max_offer = min(max_offer, int(num(offer_cap_override, 0)))
@@ -14621,13 +15311,19 @@ def _build_pre_sim_one_year_offer(
             "preSimEffectiveMaxOffer": max_offer,
             "preSimOfferCapOverride": int(num(offer_cap_override, 0)),
         }
-    minimum = int(get_minimum_salary_amount(league_data))
+    legacy_minimum = int(get_minimum_salary_amount(league_data))
+    minimum = int(get_player_minimum_salary_amount(league_data, player))
+    player_maximum = int(get_player_max_salary_amount(league_data, player))
 
-    # User rule: offer as much as the team can offer; if market value is less
-    # than the team can offer, use market value instead. Always keep the deal at
-    # or above the league minimum so every 76+ FA has a legal one-year landing.
-    year_one = int(round_to_nearest(max(minimum, min(expected, max_offer if max_offer > 0 else minimum)), base=1_000))
-    year_one = int(clamp(year_one, minimum, MAX_SALARY))
+    # Keep the exact pre-patch offer amount for destination ranking and sweep
+    # spending order. The actual signed salary may move up to the experience
+    # minimum or down to the player's 25/30/35% maximum.
+    decision_year_one = int(round_to_nearest(
+        max(legacy_minimum, min(expected, max_offer if max_offer > 0 else legacy_minimum)),
+        base=1_000,
+    ))
+    year_one = int(clamp(decision_year_one, minimum, player_maximum))
+    capacity = {**capacity, "decisionYearOneSalary": decision_year_one}
 
     contract = normalize_contract({
         "startYear": int(season_year),
@@ -14696,7 +15392,7 @@ def _sign_high_value_free_agent_for_sim_start(
 
     signed_player = copy.deepcopy(live_player)
     signed_player["contract"] = contract
-    signed_player["marketValue"] = estimate_market_value(signed_player)
+    signed_player["marketValue"] = estimate_market_value(signed_player, league_data)
     signed_player.setdefault("meta", {})
     if isinstance(signed_player.get("meta"), dict):
         signed_player["meta"]["preSimulationHighValueSigning"] = True
@@ -14774,10 +15470,11 @@ def _sign_high_value_free_agent_for_sim_start(
         "teamName": team_name,
         "day": current_day,
         "contract": contract,
+        "decisionCurrentYearSalary": int(num(capacity.get("decisionYearOneSalary"), current_salary)),
         "totalValue": int(sum(int(num(v, 0)) for v in salary_by_year)),
         "aav": int(sum(int(num(v, 0)) for v in salary_by_year) / max(1, len(salary_by_year))),
         "overall": signed_player.get("overall"),
-        "marketValue": estimate_market_value(signed_player),
+        "marketValue": estimate_market_value(signed_player, league_data),
         "maxOffer": int(num(capacity.get("maxOffer"), 0)),
         "capRoom": int(num(capacity.get("capRoom"), 0)),
         "spendingType": spending.get("spendingType"),
@@ -14871,7 +15568,7 @@ def sign_high_value_free_agents_before_simulation(
                 continue
             if user_team_name and team_name == user_team_name:
                 continue
-            capacity = _pre_sim_market_offer_capacity(league_data, team_name, player)
+            capacity = _pre_sim_market_offer_capacity(league_data, team_name, player, decision_mode=True)
             if not capacity.get("ok"):
                 continue
             capacity = effective_pre_sim_capacity(team_name, capacity)
@@ -14924,7 +15621,10 @@ def sign_high_value_free_agents_before_simulation(
         _, _, live_team = find_team_entry(league_data, signed_team_name)
         signed_salary = 0
         try:
-            signed_salary = int(num((signed.get("contract") or {}).get("salaryByYear", [0])[0], 0))
+            signed_salary = int(num(
+                signed.get("decisionCurrentYearSalary"),
+                (signed.get("contract") or {}).get("salaryByYear", [0])[0],
+            ))
         except Exception:
             signed_salary = 0
         pre_sim_spent_by_team[signed_team_name] = int(num(pre_sim_spent_by_team.get(signed_team_name), 0)) + max(0, signed_salary)
@@ -15430,7 +16130,7 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
         player = payload.get("player", {})
         return {
             "ok": True,
-            "marketValue": estimate_market_value(player),
+            "marketValue": estimate_market_value(player, league_data),
         }
 
     if action == "generate_market_for_all_free_agents":

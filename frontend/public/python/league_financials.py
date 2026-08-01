@@ -13,13 +13,41 @@ import math
 import datetime as _dt
 from typing import Any, Dict, Optional
 
-LEAGUE_FINANCIALS_VERSION = "2026-06-14_league_inflation_v1"
+LEAGUE_FINANCIALS_VERSION = "2026-07-31_fa_contract_rules_v2"
 DEFAULT_ANNUAL_INFLATION_RATE = 0.065
 DEFAULT_BASE_SEASON_YEAR = 2026
+
+OFFICIAL_2026_27_FINANCIAL_RULES: Dict[str, float] = {
+    "salaryCap": 164_961_000,
+    "luxuryTaxLine": 200_428_000,
+    "minimumTeamSalary": 148_465_000,
+    "firstApron": 209_015_000,
+    "secondApron": 221_686_000,
+    "hardCap": 221_686_000,
+
+    "minimumSalary": 1_200_000,
+    "minimumException": 1_500_000,
+    "veteranMinimum": 1_500_000,
+    "twoWaySalary": 580_000,
+
+    "maxSalary": 57_800_000,
+    "roomException": 9_366_000,
+    "nonTaxpayerMLE": 15_044_000,
+    "midLevelException": 15_044_000,
+    "taxpayerMLE": 6_064_000,
+
+    "rookiePick1Salary": 12_500_000,
+    "rookieFirstRoundDecline": 335_000,
+    "rookieFirstRoundFloor": 2_550_000,
+    "rookieSecondRoundBase": 2_300_000,
+    "rookieSecondRoundDecline": 30_000,
+    "rookieSecondRoundFloor": 1_300_000,
+}
 
 DEFAULT_BASE_FINANCIAL_RULES: Dict[str, float] = {
     "salaryCap": 154_647_000,
     "luxuryTaxLine": 187_895_000,
+    "minimumTeamSalary": 139_182_000,
     "firstApron": 195_945_000,
     "secondApron": 207_824_000,
     "hardCap": 207_824_000,
@@ -96,11 +124,21 @@ def _build_base_rules_from_league(league_data: Optional[Dict[str, Any]]) -> Dict
     league_data = league_data or {}
     financials = league_data.get("financials") if isinstance(league_data.get("financials"), dict) else {}
     existing_base = financials.get("baseRules") if isinstance(financials.get("baseRules"), dict) else {}
-    out = dict(DEFAULT_BASE_FINANCIAL_RULES)
+    base_season_year = _season_year(
+        financials.get("baseSeasonYear") or get_current_financial_season_year(league_data),
+        DEFAULT_BASE_SEASON_YEAR,
+    )
+    default_rules = (
+        OFFICIAL_2026_27_FINANCIAL_RULES
+        if not existing_base and base_season_year == 2027
+        else DEFAULT_BASE_FINANCIAL_RULES
+    )
+    out = dict(default_rules)
     out.update(existing_base)
 
     out["salaryCap"] = _num(existing_base.get("salaryCap") or league_data.get("salaryCap") or league_data.get("capLimit"), out["salaryCap"])
     out["luxuryTaxLine"] = _num(existing_base.get("luxuryTaxLine") or league_data.get("luxuryTaxLine") or league_data.get("taxLine"), out["luxuryTaxLine"])
+    out["minimumTeamSalary"] = _num(existing_base.get("minimumTeamSalary") or league_data.get("minimumTeamSalary") or league_data.get("salaryFloor") or league_data.get("minimumTeamPayroll"), out["minimumTeamSalary"])
     out["firstApron"] = _num(existing_base.get("firstApron") or league_data.get("firstApron") or league_data.get("apron1"), out["firstApron"])
     out["secondApron"] = _num(existing_base.get("secondApron") or league_data.get("secondApron") or league_data.get("apron2"), out["secondApron"])
     out["hardCap"] = _num(existing_base.get("hardCap") or league_data.get("hardCap") or league_data.get("hardCapLimit") or league_data.get("secondApron") or league_data.get("apron2"), out["hardCap"])
@@ -120,7 +158,7 @@ def _build_base_rules_from_league(league_data: Optional[Dict[str, Any]]) -> Dict
         "rookiePick1Salary", "rookieFirstRoundDecline", "rookieFirstRoundFloor",
         "rookieSecondRoundBase", "rookieSecondRoundDecline", "rookieSecondRoundFloor",
     ]:
-        out[key] = _num(existing_base.get(key), DEFAULT_BASE_FINANCIAL_RULES[key])
+        out[key] = _num(existing_base.get(key), default_rules[key])
 
     return out
 
@@ -152,6 +190,7 @@ def get_financial_rules(league_data: Optional[Dict[str, Any]], season_year: Opti
 
         "salaryCap": scaled("salaryCap"),
         "luxuryTaxLine": scaled("luxuryTaxLine"),
+        "minimumTeamSalary": scaled("minimumTeamSalary"),
         "firstApron": scaled("firstApron"),
         "secondApron": scaled("secondApron"),
         "hardCap": scaled("hardCap"),
@@ -169,6 +208,8 @@ def get_financial_rules(league_data: Optional[Dict[str, Any]], season_year: Opti
     }
     rules["capLimit"] = rules["salaryCap"]
     rules["taxLine"] = rules["luxuryTaxLine"]
+    rules["salaryFloor"] = rules["minimumTeamSalary"]
+    rules["minimumTeamPayroll"] = rules["minimumTeamSalary"]
     rules["apron1"] = rules["firstApron"]
     rules["apron2"] = rules["secondApron"]
     rules["hardCapLimit"] = rules["hardCap"]
@@ -189,6 +230,9 @@ def normalize_financial_aliases(league_data: Dict[str, Any], rules: Optional[Dic
     league_data["capLimit"] = rules["salaryCap"]
     league_data["luxuryTaxLine"] = rules["luxuryTaxLine"]
     league_data["taxLine"] = rules["luxuryTaxLine"]
+    league_data["minimumTeamSalary"] = rules["minimumTeamSalary"]
+    league_data["salaryFloor"] = rules["minimumTeamSalary"]
+    league_data["minimumTeamPayroll"] = rules["minimumTeamSalary"]
     league_data["firstApron"] = rules["firstApron"]
     league_data["apron1"] = rules["firstApron"]
     league_data["secondApron"] = rules["secondApron"]

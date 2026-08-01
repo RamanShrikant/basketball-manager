@@ -1253,6 +1253,57 @@ function winPctForTeam(context = {}, teamName = "") {
   return wins / Math.max(1, wins + losses || games);
 }
 
+function gamesPlayedForTeam(context = {}, teamName = "") {
+  const row = recordForTeamName(context, teamName) || {};
+  const wins = finiteNumber(row.wins ?? row.w, 0);
+  const losses = finiteNumber(row.losses ?? row.l, 0);
+  return finiteNumber(row.games ?? row.gp, wins + losses);
+}
+
+function conferenceRankForTeam(leagueData = {}, context = {}, teamName = "") {
+  if (!leagueData?.conferences || typeof leagueData.conferences !== "object" || !teamName) return null;
+  for (const rows of Object.values(leagueData.conferences)) {
+    if (!Array.isArray(rows) || !rows.some((team) => sameTeam(teamNameOf(team), teamName))) continue;
+    const ranked = [...rows].sort((a, b) => {
+      const ap = winPctForTeam(context, teamNameOf(a));
+      const bp = winPctForTeam(context, teamNameOf(b));
+      const ar = recordForTeamName(context, teamNameOf(a)) || {};
+      const br = recordForTeamName(context, teamNameOf(b)) || {};
+      if ((bp ?? -1) !== (ap ?? -1)) return (bp ?? -1) - (ap ?? -1);
+      return finiteNumber(br.wins ?? br.w, 0) - finiteNumber(ar.wins ?? ar.w, 0);
+    });
+    const index = ranked.findIndex((team) => sameTeam(teamNameOf(team), teamName));
+    return index >= 0 ? index + 1 : null;
+  }
+  return null;
+}
+
+function strictMegaSellerBlockReason(leagueData = {}, context = {}, sellerTeam = {}, targetPlayer = null) {
+  const teamName = teamNameOf(sellerTeam);
+  const pct = winPctForTeam(context, teamName);
+  const games = gamesPlayedForTeam(context, teamName);
+  const confRank = conferenceRankForTeam(leagueData, context, teamName);
+  const power = teamTopOvr(sellerTeam, 6);
+  if (games >= 12) {
+    if (confRank != null && confRank <= 7) return "seller_top7_conference";
+    if (pct != null && pct >= 0.5) return "seller_not_below_500";
+  } else if (power >= 84.5) {
+    return "seller_power_contender_before_record_sample";
+  }
+  if (targetPlayer) {
+    const ovr = playerOvr(targetPlayer);
+    const age = playerAge(targetPlayer);
+    const clearlyBad = Boolean(
+      (games >= 12 && pct != null && pct <= 0.41) ||
+        (games >= 12 && confRank != null && confRank >= 10) ||
+        power <= 80.5
+    );
+    if (ovr >= 95 && !clearlyBad) return "superstar_seller_not_clearly_bad";
+    if (ovr >= 94 && age <= 30 && !(pct != null && pct <= 0.38)) return "prime_superstar_requires_deep_seller";
+  }
+  return "";
+}
+
 function teamTopOvr(team = {}, count = 6) {
   const players = Array.isArray(team?.players) ? team.players : [];
   const values = players.map(playerOvr).filter((value) => value > 0).sort((a, b) => b - a).slice(0, count);
@@ -1324,8 +1375,9 @@ function buildFastMegaTargets(leagueData = {}, context = {}) {
     if (!teamName || sameTeam(teamName, userTeamName)) continue;
     const pct = winPctForTeam(context, teamName);
     const rank = powerRank.get(normalizeTeamName(teamName)) || 99;
-    const under500 = pct == null ? rank >= 16 : pct < 0.5;
-    const badOrMid = under500 || rank >= 13;
+    if (strictMegaSellerBlockReason(leagueData, context, team)) continue;
+    const under500 = pct == null ? rank >= 18 : pct < 0.5;
+    const badOrMid = under500 && (pct == null ? rank >= 18 : pct <= 0.445 || rank >= 18);
     if (!badOrMid) continue;
     const rebuildingSeller = (pct != null && pct <= 0.38) || rank >= 24;
 
@@ -1333,6 +1385,7 @@ function buildFastMegaTargets(leagueData = {}, context = {}) {
       const ovr = playerOvr(player);
       const age = playerAge(player);
       if (ovr < 90 || age < 28) continue;
+      if (strictMegaSellerBlockReason(leagueData, context, team, player)) continue;
       if (!rebuildingSeller && ovr >= 94 && age <= 30) continue;
       if (isYoungMegaCore(player)) continue;
       const pctPenalty = pct == null ? 0.08 : Math.max(0, 0.5 - pct);
@@ -1476,7 +1529,14 @@ export function executeImmediateCpuMegaTradeFromCandidates({
   const localCandidates = buildFastMegaCandidates(ensured.leagueData, context, state);
   const rawCandidates = localCandidates.length ? localCandidates : workerCandidates;
   const directCandidates = shuffled(
-    rawCandidates.filter((candidate) => isMegaTradeCandidate(candidate) && !candidateInvolvesTeam(candidate, userTeamName)),
+    rawCandidates.filter((candidate) => {
+      if (!isMegaTradeCandidate(candidate) || candidateInvolvesTeam(candidate, userTeamName)) return false;
+      const seller = getAllTeams(ensured.leagueData).find((team) => sameTeam(teamNameOf(team), candidate?.fromTeamName || candidate?.sellerTeamName || ""));
+      const targetItem = Array.isArray(candidate?.fromItems) ? candidate.fromItems.find((item) => item?.type === "player") : null;
+      const targetName = targetItem?.player?.name || targetItem?.playerName || candidate?.debug?.targetPlayer || "";
+      const target = seller?.players?.find((player) => normalizeTeamName(playerDisplayName(player)) === normalizeTeamName(targetName)) || targetItem?.player || null;
+      return seller ? !strictMegaSellerBlockReason(ensured.leagueData, context, seller, target) : false;
+    }),
     `${state.seed}|direct-mega:${state?.megaTradeState?.attempts || 0}:${context?.currentDate || context?.dayIndex || ""}`
   ).map((candidate) => ({
     ...candidate,

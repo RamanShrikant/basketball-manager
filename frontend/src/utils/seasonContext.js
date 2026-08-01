@@ -181,6 +181,17 @@ function parseDateString(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
 }
 
+function dateYear(dateStr) {
+  const parsed = parseDateString(dateStr);
+  return parsed ? Number(parsed.slice(0, 4)) : null;
+}
+
+function dateForSeasonYear(value, expectedYear) {
+  const parsed = parseDateString(value);
+  if (!parsed) return null;
+  return dateYear(parsed) === expectedYear ? parsed : null;
+}
+
 
 function thirdSundayOfFebruary(year) {
   const d = new Date(year, 1, 1);
@@ -212,44 +223,56 @@ export function getSeasonCalendarConfig(leagueData = {}) {
   const defaultAllStarStart = addDaysToDateString(defaultAllStarDate, -5);
   const defaultAllStarEnd = addDaysToDateString(defaultAllStarDate, 3);
 
+  const regularSeasonGameStart =
+    dateForSeasonYear(source.regularSeasonGameStart, seasonStartYear) ??
+    fmtDate(seasonStartYear, 9, 21);
+  const defaultRookieExtensionDeadlineDate = addDaysToDateString(regularSeasonGameStart, -1);
+  const defaultVeteranExtensionDeadlineDate = fmtDate(displaySeasonYear, 2, 31);
+  const rookieExtensionDeadlineDate =
+    dateForSeasonYear(source.rookieExtensionDeadlineDate, seasonStartYear) ??
+    dateForSeasonYear(source.contractExtensionDeadlineDate, seasonStartYear) ??
+    dateForSeasonYear(source.extensionDeadlineDate, seasonStartYear) ??
+    defaultRookieExtensionDeadlineDate;
+  const veteranExtensionDeadlineDate =
+    dateForSeasonYear(source.veteranExtensionDeadlineDate, displaySeasonYear) ??
+    dateForSeasonYear(source.veteranContractExtensionDeadlineDate, displaySeasonYear) ??
+    defaultVeteranExtensionDeadlineDate;
+
   return {
     // Calendar begins on October 1 so preseason/trade/intel dates are visible.
     regularSeasonStart:
-      parseDateString(source.regularSeasonStart) ??
-      parseDateString(source.calendarStartDate) ??
+      dateForSeasonYear(source.regularSeasonStart, seasonStartYear) ??
+      dateForSeasonYear(source.calendarStartDate, seasonStartYear) ??
       fmtDate(seasonStartYear, 9, 1),
     // Actual regular-season games can still begin on the normal late-October window.
-    regularSeasonGameStart:
-      parseDateString(source.regularSeasonGameStart) ??
-      fmtDate(seasonStartYear, 9, 21),
-    // Basketball Manager uses one clear preseason deadline for both rookie and
-    // veteran extension gameplay. The default is the day before opening night.
-    contractExtensionDeadlineDate:
-      parseDateString(source.contractExtensionDeadlineDate) ??
-      parseDateString(source.extensionDeadlineDate) ??
-      addDaysToDateString(
-        parseDateString(source.regularSeasonGameStart) ?? fmtDate(seasonStartYear, 9, 21),
-        -1
-      ),
+    regularSeasonGameStart,
+    // Rookie-scale extensions close before opening night. Veteran extensions stay
+    // available deeper into the league year and use their own March 31 deadline.
+    rookieExtensionDeadlineDate,
+    veteranExtensionDeadlineDate,
+    // Backwards-compatible aliases for older code/save data.
+    contractExtensionDeadlineDate: rookieExtensionDeadlineDate,
+    extensionDeadlineDate: rookieExtensionDeadlineDate,
+    veteranContractExtensionDeadlineDate: veteranExtensionDeadlineDate,
     regularSeasonEnd:
-      parseDateString(source.regularSeasonEnd) ??
-      parseDateString(source.seasonEndDate) ??
+      dateForSeasonYear(source.regularSeasonEnd, displaySeasonYear) ??
+      dateForSeasonYear(source.seasonEndDate, displaySeasonYear) ??
       fmtDate(displaySeasonYear, 3, 12),
     allStarStart:
-      parseDateString(source.allStarStart) ??
-      parseDateString(source.allStarBreakStart) ??
+      dateForSeasonYear(source.allStarStart, displaySeasonYear) ??
+      dateForSeasonYear(source.allStarBreakStart, displaySeasonYear) ??
       defaultAllStarStart,
     allStarEnd:
-      parseDateString(source.allStarEnd) ??
-      parseDateString(source.allStarWeekendEnd) ??
+      dateForSeasonYear(source.allStarEnd, displaySeasonYear) ??
+      dateForSeasonYear(source.allStarWeekendEnd, displaySeasonYear) ??
       defaultAllStarEnd,
     allStarSelectionDate:
-      parseDateString(source.allStarSelectionDate) ??
-      parseDateString(source.allStarDate) ??
+      dateForSeasonYear(source.allStarSelectionDate, displaySeasonYear) ??
+      dateForSeasonYear(source.allStarDate, displaySeasonYear) ??
       defaultAllStarDate,
     tradeDeadlineDate:
-      parseDateString(source.tradeDeadlineDate) ??
-      parseDateString(source.tradeDeadline) ??
+      dateForSeasonYear(source.tradeDeadlineDate, displaySeasonYear) ??
+      dateForSeasonYear(source.tradeDeadline, displaySeasonYear) ??
       fmtDate(displaySeasonYear, 1, 4),
     nbaCupFinalDate: parseDateString(source.nbaCupFinalDate) ?? null,
   };
@@ -348,6 +371,11 @@ export function withOffseasonSeasonContext(leagueData = {}, offseasonSeasonYear 
       regularSeasonStart: fmtDate(seasonYear, 9, 1),
       regularSeasonGameStart: fmtDate(seasonYear, 9, 21),
       regularSeasonEnd: fmtDate(displaySeasonYear, 3, 12),
+      rookieExtensionDeadlineDate: fmtDate(seasonYear, 9, 20),
+      contractExtensionDeadlineDate: fmtDate(seasonYear, 9, 20),
+      extensionDeadlineDate: fmtDate(seasonYear, 9, 20),
+      veteranExtensionDeadlineDate: fmtDate(displaySeasonYear, 2, 31),
+      veteranContractExtensionDeadlineDate: fmtDate(displaySeasonYear, 2, 31),
       allStarStart: addDaysToDateString(thirdSundayOfFebruary(displaySeasonYear), -5),
       allStarEnd: addDaysToDateString(thirdSundayOfFebruary(displaySeasonYear), 3),
       allStarSelectionDate: thirdSundayOfFebruary(displaySeasonYear),

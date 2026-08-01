@@ -139,7 +139,8 @@ includes("src/api/simEnginePy.js", "previewContractExtensions", "Frontend API ex
 includes("src/api/simEnginePy.js", "submitContractExtensionOffer", "Frontend API exposes user extension negotiations.");
 includes("src/api/simEnginePy.js", "processCpuContractExtensions", "Frontend API exposes CPU extension processing.");
 includes("src/pages/ContractExtensions.jsx", "Offer Extension", "Contract Extensions page includes a complete negotiation action.");
-includes("src/pages/SalaryTable.jsx", "extensionStartYear", "Salary Table distinguishes appended extension seasons.");
+includes("src/pages/SalaryTable.jsx", "extensionMeta: contract?.extensionMeta", "Salary Table preserves extension metadata internally while displaying extension years like normal contract years.");
+excludes("src/pages/SalaryTable.jsx", "text-violet-300", "Salary Table no longer colors extension years differently from normal salary years.");
 includes("src/utils/seasonContext.js", "contractExtensionDeadlineDate", "Season calendar exposes a contract-extension deadline.");
 includes("src/pages/Calendar.jsx", "shouldPauseForContractExtensionDeadline", "Calendar simulation pauses at the extension deadline.");
 includes("src/pages/TeamHub.jsx", 'path: "/contract-extensions"', "Team Hub links the Contract Extensions front-office page.");

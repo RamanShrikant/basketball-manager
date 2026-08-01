@@ -53,11 +53,25 @@ function optionLabel(value) {
   return "No Option";
 }
 
+function extensionTypeLabel(value) {
+  if (value === "rookie_scale") return "Rookie Scale";
+  if (value === "veteran") return "Veteran";
+  return "—";
+}
+
 function interestTone(label = "") {
   const text = String(label).toLowerCase();
-  if (text.includes("very likely") || text.includes("open")) return "text-emerald-300";
-  if (text.includes("stronger")) return "text-amber-300";
+  if (text.includes("available") || text.includes("accepted") || text.includes("open")) return "text-emerald-300";
+  if (text.includes("wait") || text.includes("direction") || text.includes("role")) return "text-amber-300";
   return "text-rose-300";
+}
+
+function packageTotal(pkg) {
+  return Number(pkg?.totalValue || (pkg?.salaryByYear || []).reduce((sum, value) => sum + Number(value || 0), 0));
+}
+
+function packageAav(pkg) {
+  return Number(pkg?.aav || packageTotal(pkg) / Math.max(1, Number(pkg?.years || pkg?.salaryByYear?.length || 1)));
 }
 
 export default function ContractExtensions() {
@@ -65,21 +79,23 @@ export default function ContractExtensions() {
   const { leagueData, selectedTeam, setLeagueData } = useGame();
   const [preview, setPreview] = useState(null);
   const [selectedPlayerId, setSelectedPlayerId] = useState(null);
+  const [selectedPackageId, setSelectedPackageId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState(null);
-  const [offer, setOffer] = useState({
-    years: 3,
-    firstYearSalary: 10_000_000,
-    annualRaisePct: 8,
-    optionType: "none",
-  });
 
   const teamName = selectedTeam?.name || null;
   const selectedRow = useMemo(
     () => preview?.players?.find((row) => String(row.playerId || row.playerName) === String(selectedPlayerId)) || null,
     [preview, selectedPlayerId]
   );
+
+  const askPackages = selectedRow?.askPackages || [];
+  const selectedPackage = useMemo(
+    () => askPackages.find((pkg) => String(pkg.askPackageId || pkg.packageId) === String(selectedPackageId)) || askPackages[0] || null,
+    [askPackages, selectedPackageId]
+  );
+  const projectedSalaries = selectedPackage?.salaryByYear || [];
 
   const loadPreview = async (sourceLeague = leagueData, { runCpuOpening = false } = {}) => {
     if (!sourceLeague || !teamName) return;
@@ -111,7 +127,9 @@ export default function ContractExtensions() {
       const currentStillExists = next.players?.some(
         (row) => String(row.playerId || row.playerName) === String(selectedPlayerId)
       );
-      if (!currentStillExists) setSelectedPlayerId(eligible?.playerId || eligible?.playerName || next.players?.[0]?.playerId || null);
+      if (!currentStillExists) {
+        setSelectedPlayerId(eligible?.playerId || eligible?.playerName || next.players?.[0]?.playerId || null);
+      }
     } catch (error) {
       setNotice({ type: "error", text: error?.message || "Contract extension preview failed." });
     } finally {
@@ -121,31 +139,21 @@ export default function ContractExtensions() {
 
   useEffect(() => {
     if (!leagueData || !teamName) return;
-    loadPreview(leagueData, { runCpuOpening: true });
-    // Opening CPU processing is idempotent in Python for the current season.
+    loadPreview(leagueData, { runCpuOpening: false });
+    // CPU extension actions now run only at the rookie/veteran deadline prompts, not from opening this page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leagueData?.seasonYear, teamName]);
 
   useEffect(() => {
-    if (!selectedRow?.eligible) return;
-    const marketYears = Number(selectedRow?.marketValue?.expectedYears || 3);
-    setOffer({
-      years: Math.max(selectedRow.minYears || 1, Math.min(selectedRow.maxYears || 1, marketYears)),
-      firstYearSalary: Number(selectedRow.recommendedFirstYearSalary || selectedRow.minFirstYearSalary || 1_200_000),
-      annualRaisePct: Math.min(8, Number(selectedRow.maxAnnualRaisePct || 8)),
-      optionType: "none",
-    });
-  }, [selectedRow?.playerId, selectedRow?.eligible]);
-
-  const projectedSalaries = useMemo(() => {
-    const years = Math.max(1, Number(offer.years || 1));
-    const first = Number(offer.firstYearSalary || 0);
-    const raise = Number(offer.annualRaisePct || 0) / 100;
-    return Array.from({ length: years }, (_, index) => Math.round((first * Math.pow(1 + raise, index)) / 1000) * 1000);
-  }, [offer]);
+    if (!selectedRow?.eligible || !selectedRow?.askPackages?.length) {
+      setSelectedPackageId(null);
+      return;
+    }
+    setSelectedPackageId(selectedRow.askPackages[0].askPackageId || selectedRow.askPackages[0].packageId);
+  }, [selectedRow?.playerId, selectedRow?.playerName, selectedRow?.eligible]);
 
   const submitOffer = async () => {
-    if (!leagueData || !teamName || !selectedRow?.eligible) return;
+    if (!leagueData || !teamName || !selectedRow?.eligible || !selectedPackage) return;
     setSubmitting(true);
     setNotice(null);
     try {
@@ -153,15 +161,15 @@ export default function ContractExtensions() {
         leagueData,
         teamName,
         selectedRow.playerId || selectedRow.playerName,
-        offer,
+        selectedPackage,
         currentLeagueDate(leagueData)
       );
-      if (!result?.ok) throw new Error(result?.reason || "The extension offer could not be submitted.");
+      if (!result?.ok) throw new Error(result?.reason || "The extension package could not be submitted.");
       if (result.leagueData) setLeagueData(result.leagueData);
       setNotice({
         type: result.accepted ? "success" : "warning",
         text: result.accepted
-          ? `${selectedRow.playerName} accepted the extension. The new years are now on the salary table.`
+          ? `${selectedRow.playerName} signed the selected extension package. The new years are now on the salary table.`
           : `${selectedRow.playerName} declined: ${result.decision?.reason || "The offer was not strong enough."}`,
       });
       await loadPreview(result.leagueData || leagueData);
@@ -184,14 +192,14 @@ export default function ContractExtensions() {
 
   return (
     <PageFade>
-      <div className="bm-page-bg min-h-screen overflow-hidden bg-neutral-950 text-white">
-        <div className="mx-auto flex h-screen max-w-[1500px] flex-col px-5 py-5">
-          <header className="mb-4 flex shrink-0 items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/55 px-5 py-4 backdrop-blur">
+      <div className="bm-page-bg min-h-screen overflow-hidden bg-neutral-950 pb-16 text-white">
+        <div className="mx-auto flex h-[calc(100vh-70px)] max-w-[1600px] flex-col px-5 py-3">
+          <header className="mb-3 flex shrink-0 items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/55 px-5 py-2.5 backdrop-blur">
             <div>
               <div className="text-[11px] font-black uppercase tracking-[0.25em] text-orange-300">Front Office</div>
-              <h1 className="mt-1 text-3xl font-black">Contract Extensions</h1>
+              <h1 className="mt-0.5 text-2xl font-black">Contract Extensions</h1>
               <p className="mt-1 text-sm text-neutral-400">
-                {teamName} · Deadline {preview?.state?.deadlineDate || "—"} · {preview?.state?.isOpen ? "Negotiations open" : "Window closed"}
+                {teamName} · Rookie deadline {preview?.state?.rookieDeadlineDate || "—"} · Veteran deadline {preview?.state?.veteranDeadlineDate || "—"}
               </p>
             </div>
             <button
@@ -204,7 +212,7 @@ export default function ContractExtensions() {
           </header>
 
           {notice && (
-            <div className={`mb-4 shrink-0 rounded-xl border px-4 py-3 text-sm font-bold ${
+            <div className={`mb-3 shrink-0 rounded-xl border px-4 py-3 text-sm font-bold ${
               notice.type === "success"
                 ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
                 : notice.type === "warning"
@@ -215,12 +223,12 @@ export default function ContractExtensions() {
             </div>
           )}
 
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[440px_minmax(0,1fr)]">
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[420px_minmax(0,1fr)]">
             <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-900/90">
-              <div className="grid grid-cols-3 gap-2 border-b border-white/10 p-4 text-center">
+              <div className="grid grid-cols-3 gap-2 border-b border-white/10 p-3 text-center">
                 <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{preview?.summary?.eligibleCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Eligible</div></div>
                 <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{preview?.summary?.rookieEligibleCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Rookie</div></div>
-                <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{preview?.summary?.alreadyExtendedCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Extended</div></div>
+                <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{preview?.summary?.veteranEligibleCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Veteran</div></div>
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto p-3 orange-scrollbar">
@@ -243,8 +251,8 @@ export default function ContractExtensions() {
                               <div className="truncate text-sm font-black">{row.playerName}</div>
                               <div className="mt-1 text-xs text-neutral-500">{row.position || "—"} · Age {row.age} · {row.overall} OVR · {row.potential} POT</div>
                             </div>
-                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${row.eligible ? "bg-emerald-500/15 text-emerald-300" : row.alreadyExtended ? "bg-sky-500/15 text-sky-300" : "bg-white/5 text-neutral-500"}`}>
-                              {row.eligible ? "Eligible" : row.alreadyExtended ? "Extended" : "Ineligible"}
+                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${row.eligible ? "bg-emerald-500/15 text-emerald-300" : row.alreadyExtended ? "bg-sky-500/15 text-sky-300" : row.playerRefusesExtension ? "bg-amber-500/15 text-amber-300" : "bg-white/5 text-neutral-500"}`}>
+                              {row.eligible ? "Has Ask" : row.alreadyExtended ? "Extended" : row.playerRefusesExtension ? "Refuses" : "Ineligible"}
                             </span>
                           </div>
                           <div className="mt-2 line-clamp-2 text-xs leading-5 text-neutral-400">{row.reason}</div>
@@ -256,148 +264,140 @@ export default function ContractExtensions() {
               </div>
             </section>
 
-            <section className="min-h-0 overflow-y-auto rounded-2xl border border-white/10 bg-neutral-900/90 p-5 orange-scrollbar">
+            <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-900/90">
               {!selectedRow ? (
                 <div className="flex h-full items-center justify-center text-neutral-500">Select a player.</div>
               ) : (
-                <div className="space-y-5">
-                  <div className="flex flex-wrap items-start justify-between gap-4 border-b border-white/10 pb-5">
-                    <div>
-                      <h2 className="text-3xl font-black">{selectedRow.playerName}</h2>
-                      <div className="mt-2 text-sm text-neutral-400">{selectedRow.reason}</div>
-                    </div>
-                    {selectedRow.eligible && (
-                      <div className="rounded-xl border border-orange-400/20 bg-orange-500/10 px-4 py-3 text-right">
-                        <div className="text-[10px] font-black uppercase tracking-wider text-orange-300">Player Interest</div>
-                        <div className={`mt-1 text-sm font-black ${interestTone(selectedRow.interestLabel)}`}>{selectedRow.interestLabel}</div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <div className="rounded-xl border border-white/8 bg-black/25 p-4">
-                      <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Current Contract</div>
-                      <div className="mt-2 text-lg font-black">{selectedRow.remainingContractYears ?? selectedRow.currentContract?.salaryByYear?.length ?? 0} years remaining</div>
-                      <div className="mt-1 text-xs text-neutral-400">Ends {selectedRow.currentContractEndYear || "—"}</div>
-                    </div>
-                    <div className="rounded-xl border border-white/8 bg-black/25 p-4">
-                      <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Extension Type</div>
-                      <div className="mt-2 text-lg font-black">{selectedRow.extensionType === "rookie_scale" ? "Rookie Scale" : selectedRow.extensionType === "veteran" ? "Veteran" : "—"}</div>
-                      <div className="mt-1 text-xs text-neutral-400">Starts {selectedRow.extensionStartYear || "—"}</div>
-                    </div>
-                    <div className="rounded-xl border border-white/8 bg-black/25 p-4">
-                      <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Projected Market</div>
-                      <div className="mt-2 text-lg font-black">{compactMoney(selectedRow.marketValue?.expectedAAV)}</div>
-                      <div className="mt-1 text-xs text-neutral-400">Expected AAV</div>
-                    </div>
-                  </div>
-
-                  {selectedRow.currentContract?.salaryByYear?.length > 0 && (
-                    <div>
-                      <div className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Existing guaranteed years</div>
-                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                        {selectedRow.currentContract.salaryByYear
-                          .map((salary, index) => ({
-                            salary,
-                            year: Number(selectedRow.currentContract.startYear) + index,
-                          }))
-                          .filter((row) => row.year >= Number(selectedRow.currentContractSeasonYear || selectedRow.currentContract.startYear))
-                          .map((row) => (
-                            <div key={row.year} className="rounded-xl border border-white/8 bg-black/20 p-3">
-                              <div className="text-xs text-neutral-500">{row.year}</div>
-                              <div className="mt-1 font-black">{compactMoney(row.salary)}</div>
-                            </div>
-                          ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {!selectedRow.eligible ? (
-                    <div className="rounded-2xl border border-white/10 bg-black/25 p-6">
-                      <div className="text-lg font-black">Not currently negotiable</div>
-                      <p className="mt-2 text-sm leading-6 text-neutral-400">{selectedRow.reason}</p>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <label className="rounded-xl border border-white/8 bg-black/20 p-4">
-                          <span className="text-xs font-black uppercase tracking-wider text-neutral-500">Extension Years</span>
-                          <select
-                            value={offer.years}
-                            onChange={(event) => setOffer((prev) => ({ ...prev, years: Number(event.target.value) }))}
-                            className="mt-3 w-full rounded-lg border border-white/10 bg-neutral-950 px-3 py-2 font-bold"
-                          >
-                            {Array.from({ length: selectedRow.maxYears - selectedRow.minYears + 1 }, (_, index) => selectedRow.minYears + index).map((year) => <option value={year} key={year}>{year} years</option>)}
-                          </select>
-                        </label>
-
-                        <label className="rounded-xl border border-white/8 bg-black/20 p-4">
-                          <span className="text-xs font-black uppercase tracking-wider text-neutral-500">First-Year Salary</span>
-                          <input
-                            type="number"
-                            min={selectedRow.minFirstYearSalary}
-                            max={selectedRow.maxFirstYearSalary}
-                            step={100000}
-                            value={offer.firstYearSalary}
-                            onChange={(event) => setOffer((prev) => ({ ...prev, firstYearSalary: Number(event.target.value) }))}
-                            className="mt-3 w-full rounded-lg border border-white/10 bg-neutral-950 px-3 py-2 font-bold"
-                          />
-                          <div className="mt-2 text-[11px] text-neutral-500">Legal range {compactMoney(selectedRow.minFirstYearSalary)} – {compactMoney(selectedRow.maxFirstYearSalary)}</div>
-                        </label>
-
-                        <label className="rounded-xl border border-white/8 bg-black/20 p-4">
-                          <span className="text-xs font-black uppercase tracking-wider text-neutral-500">Annual Raise</span>
-                          <select
-                            value={offer.annualRaisePct}
-                            onChange={(event) => setOffer((prev) => ({ ...prev, annualRaisePct: Number(event.target.value) }))}
-                            className="mt-3 w-full rounded-lg border border-white/10 bg-neutral-950 px-3 py-2 font-bold"
-                          >
-                            {[0, 5, 8].filter((value) => value <= selectedRow.maxAnnualRaisePct).map((value) => <option value={value} key={value}>{value}%</option>)}
-                          </select>
-                        </label>
-
-                        <label className="rounded-xl border border-white/8 bg-black/20 p-4">
-                          <span className="text-xs font-black uppercase tracking-wider text-neutral-500">Final-Year Option</span>
-                          <select
-                            value={offer.optionType}
-                            onChange={(event) => setOffer((prev) => ({ ...prev, optionType: event.target.value }))}
-                            className="mt-3 w-full rounded-lg border border-white/10 bg-neutral-950 px-3 py-2 font-bold"
-                          >
-                            <option value="none">No Option</option>
-                            <option value="player">Player Option</option>
-                            <option value="team">Team Option</option>
-                          </select>
-                        </label>
-                      </div>
-
-                      <div className="rounded-2xl border border-orange-400/20 bg-orange-500/7 p-5">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Offer Preview</div>
-                            <div className="mt-1 text-2xl font-black">{offer.years} years · {compactMoney(projectedSalaries.reduce((sum, value) => sum + value, 0))}</div>
-                            <div className="mt-1 text-sm text-neutral-400">{optionLabel(offer.optionType)} · begins {selectedRow.extensionStartYear}</div>
+                <>
+                  <div className="min-h-0 flex-1 overflow-hidden p-4">
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-3">
+                        <div>
+                          <h2 className="text-2xl font-black">{selectedRow.playerName}</h2>
+                          <div className="mt-1 text-sm text-neutral-400">{selectedRow.reason}</div>
+                        </div>
+                        <div className="rounded-xl border border-orange-400/20 bg-orange-500/10 px-3 py-2 text-right">
+                          <div className="text-[10px] font-black uppercase tracking-wider text-orange-300">Player Camp</div>
+                          <div className={`mt-1 text-sm font-black ${interestTone(selectedRow.interestLabel || selectedRow.reason)}`}>
+                            {selectedRow.eligible ? selectedRow.interestLabel || "Ask available" : selectedRow.playerRefusesExtension ? "Not interested" : "Not negotiable"}
                           </div>
-                          <button
-                            type="button"
-                            disabled={submitting || !preview?.state?.isOpen}
-                            onClick={submitOffer}
-                            className="rounded-xl bg-orange-600 px-6 py-3 text-sm font-black text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            {submitting ? "Submitting…" : "Offer Extension"}
-                          </button>
-                        </div>
-                        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-                          {projectedSalaries.map((salary, index) => (
-                            <div key={index} className="rounded-lg bg-black/30 p-3 text-center">
-                              <div className="text-[10px] text-neutral-500">{Number(selectedRow.extensionStartYear) + index}</div>
-                              <div className="mt-1 text-sm font-black">{compactMoney(salary)}</div>
-                            </div>
-                          ))}
                         </div>
                       </div>
-                    </>
+
+                      <div className="grid gap-2 md:grid-cols-4">
+                        <div className="rounded-xl border border-white/8 bg-black/25 p-3">
+                          <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Current Contract</div>
+                          <div className="mt-1.5 text-base font-black">{selectedRow.remainingContractYears ?? selectedRow.currentContract?.salaryByYear?.length ?? 0} years left</div>
+                          <div className="mt-0.5 text-xs text-neutral-400">Ends {selectedRow.currentContractEndYear || "—"}</div>
+                        </div>
+                        <div className="rounded-xl border border-white/8 bg-black/25 p-3">
+                          <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Extension Type</div>
+                          <div className="mt-1.5 text-base font-black">{extensionTypeLabel(selectedRow.extensionType)}</div>
+                          <div className="mt-0.5 text-xs text-neutral-400">Starts {selectedRow.extensionStartYear || "—"}</div>
+                        </div>
+                        <div className="rounded-xl border border-white/8 bg-black/25 p-3">
+                          <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Projected Market</div>
+                          <div className="mt-1.5 text-base font-black">{compactMoney(selectedRow.marketValue?.expectedAAV)}</div>
+                          <div className="mt-0.5 text-xs text-neutral-400">Expected AAV</div>
+                        </div>
+                        <div className="rounded-xl border border-white/8 bg-black/25 p-3">
+                          <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Deadline</div>
+                          <div className="mt-1.5 text-base font-black">{selectedRow.deadlineType === "rookie" ? "Rookie" : selectedRow.deadlineType === "veteran" ? "Veteran" : "—"}</div>
+                          <div className="mt-0.5 text-xs text-neutral-400">{selectedRow.deadlineDate || "—"}</div>
+                        </div>
+                      </div>
+
+                      {selectedRow.currentContract?.salaryByYear?.length > 0 && (
+                        <div>
+                          <div className="mb-1.5 text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Existing guaranteed years</div>
+                          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                            {selectedRow.currentContract.salaryByYear
+                              .map((salary, index) => ({
+                                salary,
+                                year: Number(selectedRow.currentContract.startYear) + index,
+                              }))
+                              .filter((row) => row.year >= Number(selectedRow.currentContractSeasonYear || selectedRow.currentContract.startYear))
+                              .map((row) => (
+                                <div key={row.year} className="rounded-xl border border-white/8 bg-black/20 p-2.5">
+                                  <div className="text-xs text-neutral-500">{row.year}</div>
+                                  <div className="mt-1 font-black">{compactMoney(row.salary)}</div>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {!selectedRow.eligible ? (
+                        <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
+                          <div className="text-lg font-black">Not currently negotiable</div>
+                          <p className="mt-2 text-sm leading-6 text-neutral-400">{selectedRow.reason}</p>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="mb-1.5 text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Player-requested packages</div>
+                          <div className="grid gap-2 xl:grid-cols-3">
+                            {askPackages.map((pkg) => {
+                              const id = pkg.askPackageId || pkg.packageId;
+                              const active = String(id) === String(selectedPackage?.askPackageId || selectedPackage?.packageId);
+                              return (
+                                <button
+                                  type="button"
+                                  key={id}
+                                  onClick={() => setSelectedPackageId(id)}
+                                  className={`rounded-2xl border p-3 text-left transition ${active ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black/25 hover:border-white/25"}`}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <div className="text-sm font-black text-white">{pkg.label || `${pkg.years}-year package`}</div>
+                                      <div className="mt-1 text-xs text-neutral-500">{pkg.years} years · {optionLabel(pkg.optionType)}</div>
+                                    </div>
+                                    <div className="rounded-full border border-white/10 bg-black/25 px-2.5 py-1 text-[10px] font-black uppercase text-neutral-300">
+                                      AAV {compactMoney(packageAav(pkg))}
+                                    </div>
+                                  </div>
+                                  <div className="mt-2 text-xl font-black">{compactMoney(packageTotal(pkg))}</div>
+                                  <div className="mt-0.5 text-xs text-neutral-400">First year {compactMoney(pkg.firstYearSalary)} · {pkg.annualRaisePct}% raises</div>
+                                  <div className="mt-2 grid grid-cols-2 gap-1">
+                                    {(pkg.salaryByYear || []).map((salary, index) => (
+                                      <div key={`${id}-${index}`} className="rounded-lg bg-black/30 px-2 py-1 text-center">
+                                        <div className="text-[9px] text-neutral-500">{Number(selectedRow.extensionStartYear) + index}</div>
+                                        <div className="text-xs font-black">{compactMoney(salary)}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {selectedRow.eligible && selectedPackage && (
+                    <div className="shrink-0 border-t border-orange-400/20 bg-neutral-950/95 p-3 shadow-[0_-16px_40px_rgba(0,0,0,0.35)]">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Selected Ask</div>
+                          <div className="mt-1 text-xl font-black">
+                            {selectedPackage.years} years · {compactMoney(packageTotal(selectedPackage))}
+                          </div>
+                          <div className="mt-1 text-sm text-neutral-400">
+                            {compactMoney(packageAav(selectedPackage))} AAV · {optionLabel(selectedPackage.optionType)} · begins {selectedRow.extensionStartYear}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={submitting || !preview?.state?.isOpen}
+                          onClick={submitOffer}
+                          className="rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-black text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {submitting ? "Submitting…" : "Offer Extension"}
+                        </button>
+                      </div>
+                    </div>
                   )}
-                </div>
+                </>
               )}
             </section>
           </div>

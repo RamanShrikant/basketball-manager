@@ -2343,11 +2343,13 @@ export function processCpuContractExtensions(
 export function closeContractExtensionWindow(
   leagueData,
   userTeamName,
-  currentDate = null
+  currentDate = null,
+  phase = "deadline"
 ) {
   return runContractExtensionAction(leagueData, "close_contract_extension_window", {
     userTeamName,
     currentDate,
+    phase,
   });
 }
 

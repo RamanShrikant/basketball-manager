@@ -26,11 +26,12 @@ except Exception:  # pragma: no cover
     get_financial_rules = None
 
 try:
-    from free_agency_logic import estimate_market_value
+    from free_agency_logic import estimate_market_value, classify_team_direction
 except Exception:  # pragma: no cover
     estimate_market_value = None
+    classify_team_direction = None
 
-EXTENSION_SYSTEM_VERSION = "2026-07-31_contract_extensions_v1"
+EXTENSION_SYSTEM_VERSION = "2026-08-01_contract_deadline_rollover_fix"
 
 
 def _num(value: Any, fallback: float = 0.0) -> float:
@@ -53,6 +54,12 @@ def _round_money(value: float) -> int:
 
 def _norm(value: Any) -> str:
     return "".join(ch.lower() for ch in str(value or "") if ch.isalnum())
+
+
+def _stable_fraction(*parts: Any) -> float:
+    raw = "|".join(str(part or "") for part in parts)
+    import hashlib
+    return int(hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12], 16) / float(0xFFFFFFFFFFFF)
 
 
 def _player_key(player: Dict[str, Any]) -> str:
@@ -107,13 +114,45 @@ def _date_add_days(date_str: str, delta: int) -> str:
         return str(date_str or "")
 
 
-def _deadline_date(league_data: Dict[str, Any]) -> str:
+def _valid_date_for_year(value: Any, expected_year: int) -> str:
+    try:
+        import datetime as dt
+        text = str(value or "").strip()
+        d = dt.date.fromisoformat(text)
+        return text if d.year == int(expected_year) else ""
+    except Exception:
+        return ""
+
+
+def _rookie_deadline_date(league_data: Dict[str, Any]) -> str:
     calendar = league_data.get("calendar") if isinstance(league_data.get("calendar"), dict) else {}
-    explicit = calendar.get("contractExtensionDeadlineDate") or calendar.get("extensionDeadlineDate")
+    season_year = _season_start_year(league_data)
+    explicit = (
+        _valid_date_for_year(calendar.get("rookieExtensionDeadlineDate"), season_year)
+        or _valid_date_for_year(calendar.get("contractExtensionDeadlineDate"), season_year)
+        or _valid_date_for_year(calendar.get("extensionDeadlineDate"), season_year)
+    )
     if explicit:
         return str(explicit)
-    game_start = str(calendar.get("regularSeasonGameStart") or f"{_season_start_year(league_data)}-10-21")
+    game_start = _valid_date_for_year(calendar.get("regularSeasonGameStart"), season_year) or f"{season_year}-10-21"
     return _date_add_days(game_start, -1)
+
+
+def _veteran_deadline_date(league_data: Dict[str, Any]) -> str:
+    calendar = league_data.get("calendar") if isinstance(league_data.get("calendar"), dict) else {}
+    display_year = _display_year(league_data)
+    explicit = (
+        _valid_date_for_year(calendar.get("veteranExtensionDeadlineDate"), display_year)
+        or _valid_date_for_year(calendar.get("veteranContractExtensionDeadlineDate"), display_year)
+    )
+    if explicit:
+        return str(explicit)
+    return f"{display_year}-03-31"
+
+
+def _deadline_date(league_data: Dict[str, Any]) -> str:
+    # Backwards-compatible alias used by older callers and save data.
+    return _rookie_deadline_date(league_data)
 
 
 def _current_date(league_data: Dict[str, Any], payload: Optional[Dict[str, Any]] = None) -> str:
@@ -242,21 +281,262 @@ def _extension_state(league_data: Dict[str, Any], payload: Optional[Dict[str, An
     state = league_data.get("contractExtensionState") if isinstance(league_data.get("contractExtensionState"), dict) else {}
     if _int(state.get("seasonYear"), 0) != season_year:
         state = {}
-    deadline = _deadline_date(league_data)
+    rookie_deadline = _rookie_deadline_date(league_data)
+    veteran_deadline = _veteran_deadline_date(league_data)
     current = _current_date(league_data, payload)
-    closed = bool(state.get("closed"))
+    legacy_closed = bool(state.get("closed"))
+    closed_types = set(str(x) for x in (state.get("closedTypes") or []))
+    if legacy_closed:
+        closed_types.update(["rookie_scale", "veteran"])
+    rookie_open = bool(not legacy_closed and "rookie_scale" not in closed_types and (not current or current <= rookie_deadline))
+    veteran_open = bool(not legacy_closed and "veteran" not in closed_types and (not current or current <= veteran_deadline))
     return {
         "version": EXTENSION_SYSTEM_VERSION,
         "seasonYear": season_year,
-        "deadlineDate": deadline,
+        "deadlineDate": rookie_deadline,
+        "rookieDeadlineDate": rookie_deadline,
+        "veteranDeadlineDate": veteran_deadline,
         "currentDate": current,
-        "isOpen": bool(not closed and (not current or not deadline or current <= deadline)),
-        "closed": closed,
+        "isOpen": bool(rookie_open or veteran_open),
+        "rookieWindowOpen": rookie_open,
+        "veteranWindowOpen": veteran_open,
+        "closed": legacy_closed,
+        "closedTypes": sorted(closed_types),
         "closedDate": state.get("closedDate"),
         "cpuPhasesProcessed": list(state.get("cpuPhasesProcessed") or []),
         "transactions": list(state.get("transactions") or []),
         "negotiations": list(state.get("negotiations") or []),
     }
+
+
+def _team_direction(league_data: Dict[str, Any], team: Dict[str, Any]) -> str:
+    if classify_team_direction is not None:
+        try:
+            row = classify_team_direction(team, league_data=league_data)
+            if isinstance(row, dict) and row.get("direction"):
+                return str(row.get("direction")).lower()
+        except Exception:
+            pass
+    wins = _num(team.get("wins") or team.get("recordWins"), 0)
+    losses = _num(team.get("losses") or team.get("recordLosses"), 0)
+    total = wins + losses
+    if total >= 20:
+        pct = wins / max(1.0, total)
+        if pct >= 0.58:
+            return "contender"
+        if pct <= 0.36:
+            return "rebuilding"
+    return "balanced"
+
+
+def _player_mood_value(player: Dict[str, Any]) -> float:
+    mood = player.get("mood")
+    if isinstance(mood, dict):
+        return _num(mood.get("value") or mood.get("score"), 50)
+    if isinstance(mood, (int, float)):
+        return _num(mood, 50)
+    return 50.0
+
+
+def _usage_concern(player: Dict[str, Any]) -> bool:
+    overall = _num(player.get("overall"), 70)
+    if overall < 77:
+        return False
+    stats = player.get("stats") if isinstance(player.get("stats"), dict) else {}
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    raw_minutes = (
+        player.get("minutes")
+        or player.get("minutesPerGame")
+        or stats.get("mpg")
+        or stats.get("minutesPerGame")
+        or meta.get("minutesPerGame")
+        or meta.get("roleMinutes")
+    )
+    if raw_minutes in [None, ""]:
+        role = str(player.get("role") or meta.get("role") or "").lower()
+        return overall >= 80 and any(token in role for token in ["bench", "reserve", "limited", "dnp"])
+    return _num(raw_minutes, 24) < (18 if overall < 82 else 24)
+
+
+def _extension_refusal_reason(league_data: Dict[str, Any], team: Dict[str, Any], player: Dict[str, Any], extension_type: str) -> Optional[str]:
+    age = _num(player.get("age"), 27)
+    overall = _num(player.get("overall"), 70)
+    potential = _num(player.get("potential"), overall)
+    direction = _team_direction(league_data, team)
+    mood = _player_mood_value(player)
+    team_name = team.get("name") or team.get("teamName") or ""
+    roll = _stable_fraction(
+        EXTENSION_SYSTEM_VERSION,
+        team_name,
+        player.get("id") or player.get("name"),
+        _season_start_year(league_data),
+        extension_type,
+    )
+
+    if _usage_concern(player):
+        return "Not interested in an extension right now — he wants a larger role before committing."
+    if mood <= 30 and overall >= 76:
+        return "Not interested in an extension right now — his camp is unhappy with the current situation."
+    if mood <= 40 and overall >= 80 and roll < 0.42:
+        return "Not interested in an extension right now — his camp is unsure about the current situation."
+
+    # Rookie-scale players still usually like early security, but non-core or
+    # underused young players should sometimes wait instead of automatically
+    # signing any legal ask package.
+    if extension_type == "rookie_scale":
+        core_young = bool(overall >= 80 or potential >= 86)
+        elite_young = bool(overall >= 84 or potential >= 90)
+        if elite_young:
+            return None
+        wait_threshold = 0.06
+        if not core_young:
+            wait_threshold += 0.14
+        if direction in {"rebuilding", "rebuild"}:
+            wait_threshold += 0.03
+        if direction in {"contender", "contending", "win_now", "win now", "title_contender"}:
+            wait_threshold -= 0.03
+        if roll < max(0.0, min(0.24, wait_threshold)):
+            return "Not interested in an extension right now — he wants to see his role and market develop first."
+        return None
+
+    if direction in {"rebuilding", "rebuild"}:
+        if age >= 29 and overall >= 78:
+            return "Not interested in an extension with a rebuilding team — he prefers to evaluate free agency."
+        if age >= 27 and overall >= 82 and roll < 0.65:
+            return "Not interested in an extension right now — he wants to see the team's direction first."
+        if age >= 30 and overall < 78 and roll < 0.45:
+            return "Not interested in an extension right now — he may look for a better role in free agency."
+
+    if direction in {"retooling", "retool", "balanced"}:
+        if age >= 33 and overall < 84:
+            return "Not interested in an extension right now — he wants to see the team's direction first."
+        if overall >= 84 and age <= 31 and direction in {"retooling", "retool", "balanced"} and roll < 0.28:
+            return "Not interested in an extension right now — he believes free agency may create stronger options."
+        if age >= 30 and overall >= 78 and roll < 0.18:
+            return "Not interested in an extension right now — he wants to keep his options open."
+
+    # Even on good teams, some veterans should simply prefer free-agency
+    # leverage instead of always providing a signable ask package.
+    if overall >= 88 and roll < 0.24:
+        return "Not interested in an extension right now — his camp wants to test star-level leverage in free agency."
+    if overall >= 82 and age <= 31 and roll < 0.14:
+        return "Not interested in an extension right now — he believes free agency may create stronger options."
+    if age >= 34 and overall >= 84 and roll < 0.42:
+        return "Not interested in an extension right now — he wants to reassess after the season."
+    if age >= 32 and overall < 80 and roll < 0.34:
+        return "Not interested in an extension right now — he wants to keep his market open."
+
+    if direction in {"contender", "contending", "win_now", "win now", "title_contender"}:
+        if age >= 35 and overall >= 84 and roll < 0.32:
+            return "Not interested in an extension right now — he wants to reassess after the season."
+        if age >= 33 and overall < 78 and roll < 0.30:
+            return "Not interested in an extension right now — he wants to keep his market open."
+
+    return None
+
+
+def _offer_aav(salaries: List[int]) -> int:
+    return _round_money(sum(salaries) / max(1, len(salaries)))
+
+
+def _build_extension_ask_packages(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+    eligibility: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    if not eligibility.get("eligible"):
+        return []
+    extension_type = str(eligibility.get("extensionType") or "veteran")
+    market = eligibility.get("marketValue") if isinstance(eligibility.get("marketValue"), dict) else {}
+    market_first = _num(market.get("expectedYear1Salary") or eligibility.get("recommendedFirstYearSalary"), eligibility.get("minFirstYearSalary"))
+    market_aav = _num(market.get("expectedAAV") or market_first, market_first)
+    min_first = _num(eligibility.get("minFirstYearSalary"), 1_200_000)
+    max_first = _num(eligibility.get("maxFirstYearSalary"), market_first)
+    min_years = max(1, _int(eligibility.get("minYears"), 1))
+    max_years = max(min_years, _int(eligibility.get("maxYears"), min_years))
+    overall = _num(player.get("overall"), 70)
+    potential = _num(player.get("potential"), overall)
+    age = _num(player.get("age"), 27)
+    direction = _team_direction(league_data, team)
+
+    preferred_years = [5, 4, 3, 2, 1]
+    legal_years = [year for year in preferred_years if min_years <= year <= max_years]
+    if not legal_years:
+        legal_years = [max_years]
+    legal_years = legal_years[:3]
+
+    if extension_type == "rookie_scale":
+        base_premium = 1.035
+        if potential >= 90 or overall >= 86:
+            base_premium += 0.025
+        if potential - overall >= 7:
+            base_premium += 0.015
+        raise_pct = 8.0
+    else:
+        base_premium = 1.02 if direction in {"contender", "title_contender", "win_now"} else 1.06
+        if direction in {"retooling", "retool"}:
+            base_premium += 0.025
+        if direction in {"rebuilding", "rebuild"}:
+            base_premium += 0.055
+        if age >= 32:
+            base_premium += 0.02
+        raise_pct = 8.0 if overall >= 82 else 5.0
+
+    packages: List[Dict[str, Any]] = []
+    seen = set()
+    for year in legal_years:
+        shorter_premium = max(0, max_years - year) * (0.035 if extension_type == "rookie_scale" else 0.045)
+        desired_first = market_first * (base_premium + shorter_premium)
+        # High-end players should naturally hit the cap/max clamp instead of overflowing legal limits.
+        if overall >= 90 or (extension_type == "rookie_scale" and potential >= 92):
+            desired_first = max(desired_first, max_first * 0.985)
+        first = _round_money(max(min_first, min(max_first, desired_first)))
+        salaries = [_round_money(first * ((1 + raise_pct / 100.0) ** idx)) for idx in range(year)]
+        if not salaries or (year, salaries[0]) in seen:
+            continue
+        seen.add((year, salaries[0]))
+        option_type = "none"
+        if (overall >= 88 or potential >= 91) and year >= 4:
+            option_type = "player"
+        total = sum(salaries)
+        aav = _offer_aav(salaries)
+        if year >= 5:
+            label = "Long-term security"
+        elif year >= 4:
+            label = "Balanced commitment"
+        else:
+            label = "Shorter premium"
+        packages.append({
+            "packageId": f"ask:{year}:{salaries[0]}",
+            "askPackageId": f"ask:{year}:{salaries[0]}",
+            "label": label,
+            "years": year,
+            "firstYearSalary": salaries[0],
+            "annualRaisePct": raise_pct,
+            "salaryByYear": salaries,
+            "optionType": option_type,
+            "extensionType": extension_type,
+            "totalValue": total,
+            "aav": aav,
+            "marketAAV": _round_money(market_aav),
+            "valueRatio": round(aav / max(1.0, market_aav), 4),
+            "playerAsk": True,
+            "pitch": "Player's preferred structure based on market value, role, age, and team direction.",
+        })
+    return packages
+
+
+def _phase_allowed_extension_type(phase: str, extension_type: str, current_date: str, state: Dict[str, Any]) -> bool:
+    phase = str(phase or "opening").lower()
+    if phase in {"rookie_deadline", "rookie", "opening"}:
+        return extension_type == "rookie_scale"
+    if phase in {"veteran_deadline", "veteran"}:
+        return extension_type == "veteran"
+    if phase == "deadline":
+        # Legacy caller: before opening night this is the rookie deadline; after that it is the veteran deadline.
+        return extension_type == ("rookie_scale" if current_date <= state.get("rookieDeadlineDate", "9999-12-31") else "veteran")
+    return True
 
 
 def build_extension_eligibility(
@@ -283,11 +563,14 @@ def build_extension_eligibility(
         "currentContract": contract,
         "marketValue": market,
         "deadlineDate": state["deadlineDate"],
+        "rookieDeadlineDate": state["rookieDeadlineDate"],
+        "veteranDeadlineDate": state["veteranDeadlineDate"],
         "windowOpen": state["isOpen"],
+        "askPackages": [],
     }
 
     if not state["isOpen"]:
-        base["reason"] = "The Contract Extension Deadline has passed."
+        base["reason"] = "The contract extension windows have passed."
         return base
     if not contract:
         base["reason"] = "A signed standard NBA contract is required."
@@ -341,7 +624,19 @@ def build_extension_eligibility(
         extension_type = "rookie_scale"
         max_years = 5
     else:
-        original_term = _int(contract.get("originalTermYears"), len(salaries))
+        explicit_original_term = (
+            contract.get("originalTermYears")
+            or contract.get("termYears")
+            or contract.get("years")
+            or meta.get("originalTermYears")
+            or meta.get("contractYears")
+        )
+        original_term = _int(explicit_original_term, 0)
+        if original_term <= 0:
+            # The shipped roster stores many active veteran deals as remaining years only.
+            # Infer enough original term for end-of-contract veteran extension rules instead
+            # of treating every expiring veteran as a fake one-year contract.
+            original_term = 4 if remaining_years == 2 else 3 if remaining_years == 1 else len(salaries)
         if original_term < 3:
             base["reason"] = "The current contract is too short to extend."
             return base
@@ -354,6 +649,30 @@ def build_extension_eligibility(
             base["eligibleNextSeason"] = remaining_years in {2, 3}
             return base
         max_years = max(1, min(4, 5 - remaining_years))
+
+    deadline_for_type = state["rookieDeadlineDate"] if extension_type == "rookie_scale" else state["veteranDeadlineDate"]
+    closed_types = set(state.get("closedTypes") or [])
+    if extension_type in closed_types:
+        base["reason"] = "This extension window is closed for the season."
+        base["deadlineDate"] = deadline_for_type
+        base["deadlineType"] = "rookie" if extension_type == "rookie_scale" else "veteran"
+        return base
+    if state.get("currentDate") and deadline_for_type and state["currentDate"] > deadline_for_type:
+        base["reason"] = "The Rookie Extension Deadline has passed." if extension_type == "rookie_scale" else "The Veteran Extension Deadline has passed."
+        base["deadlineDate"] = deadline_for_type
+        base["deadlineType"] = "rookie" if extension_type == "rookie_scale" else "veteran"
+        return base
+
+    refusal = _extension_refusal_reason(league_data, team, player, extension_type)
+    if refusal:
+        base.update({
+            "extensionType": extension_type,
+            "reason": refusal,
+            "deadlineDate": deadline_for_type,
+            "deadlineType": "rookie" if extension_type == "rookie_scale" else "veteran",
+            "playerRefusesExtension": True,
+        })
+        return base
 
     extension_start_year = last_year + 1
     rules = _financial_rules(league_data, extension_start_year)
@@ -374,10 +693,12 @@ def build_extension_eligibility(
     base.update({
         "eligible": True,
         "extensionType": extension_type,
-        "reason": "Eligible to negotiate a rookie-scale extension." if extension_type == "rookie_scale" else "Eligible to negotiate a veteran extension.",
+        "reason": "Eligible to choose a rookie-scale extension package." if extension_type == "rookie_scale" else "Eligible to choose a veteran extension package.",
         "remainingContractYears": remaining_years,
         "currentContractEndYear": last_year,
         "extensionStartYear": extension_start_year,
+        "deadlineDate": deadline_for_type,
+        "deadlineType": "rookie" if extension_type == "rookie_scale" else "veteran",
         "minYears": 1,
         "maxYears": max_years,
         "minFirstYearSalary": _round_money(minimum),
@@ -389,21 +710,24 @@ def build_extension_eligibility(
         "experienceMaxPct": max_pct,
     })
 
-    preview_offer = {
-        "years": min(max_years, max(1, _int(market.get("expectedYears"), 3))),
-        "firstYearSalary": base["recommendedFirstYearSalary"],
-        "annualRaisePct": 8.0,
-        "salaryByYear": [base["recommendedFirstYearSalary"]],
-        "optionType": "none",
-        "extensionType": extension_type,
-    }
-    preview_offer["salaryByYear"] = [
-        _round_money(preview_offer["firstYearSalary"] * (1.08 ** idx))
-        for idx in range(preview_offer["years"])
-    ]
-    interest = evaluate_extension_offer(league_data, team, player, preview_offer, base)
-    base["interestLabel"] = interest.get("interestLabel")
-    base["interestPreview"] = interest
+    ask_packages = _build_extension_ask_packages(league_data, team, player, base)
+    base["askPackages"] = ask_packages
+    if ask_packages:
+        preferred = ask_packages[0]
+        base["interestLabel"] = "Player ask available"
+        base["interestPreview"] = {
+            "accepted": True,
+            "interestLabel": "Player ask available",
+            "reason": "Choose one of the packages his camp is already willing to sign.",
+            "offerAAV": preferred.get("aav"),
+            "marketAAV": preferred.get("marketAAV"),
+            "valueRatio": preferred.get("valueRatio"),
+            "marketValue": market,
+        }
+    else:
+        base["eligible"] = False
+        base["reason"] = "No legal extension package could be generated under the current contract limits."
+        base["interestLabel"] = "No legal package"
     return base
 
 
@@ -482,6 +806,13 @@ def _apply_accepted_extension(
     extensions = list(contract.get("extensions") or [])
     extensions = [row for row in extensions if str(row.get("id") or "") != transaction_id]
     extensions.append(meta)
+    if eligibility.get("extensionType") == "rookie_scale":
+        rights = player.setdefault("rights", {})
+        if isinstance(rights, dict):
+            rights["rookieScaleExtensionSigned"] = True
+            rights["rookieScale"] = False
+        player["rookieScale"] = False
+        contract["rookieScale"] = False
     player["contract"] = {
         **contract,
         "salaryByYear": original_salaries + extension_salaries,
@@ -543,6 +874,30 @@ def _apply_accepted_extension(
 
 
 def _validate_offer(offer: Dict[str, Any], eligibility: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+    package_id = str(offer.get("askPackageId") or offer.get("packageId") or "")
+    ask_packages = eligibility.get("askPackages") if isinstance(eligibility.get("askPackages"), list) else []
+    if package_id:
+        for package in ask_packages:
+            if str(package.get("askPackageId") or package.get("packageId")) == package_id:
+                normalized = {
+                    "years": _int(package.get("years"), 0),
+                    "firstYearSalary": _int(package.get("firstYearSalary"), 0),
+                    "annualRaisePct": _num(package.get("annualRaisePct"), 0),
+                    "salaryByYear": [_int(value, 0) for value in package.get("salaryByYear", [])],
+                    "optionType": str(package.get("optionType") or "none").lower(),
+                    "extensionType": eligibility.get("extensionType"),
+                    "askPackageId": package_id,
+                    "packageId": package_id,
+                    "playerAsk": True,
+                    "acceptedByPlayerAsk": True,
+                    "label": package.get("label"),
+                }
+                if not normalized["salaryByYear"]:
+                    return False, "The selected player-ask package is missing salary years.", {}
+                return True, "", normalized
+        return False, "That extension package is no longer available.", {}
+
+    # Backwards compatibility for old saved UI/tests that still submit manual offers.
     years = _int(offer.get("years"), 0)
     if years < _int(eligibility.get("minYears"), 1) or years > _int(eligibility.get("maxYears"), 1):
         return False, "The offered extension length is outside the legal range.", {}
@@ -619,7 +974,23 @@ def submit_contract_extension_offer(
     if not valid:
         return {"ok": False, "reason": reason, "eligibility": eligibility}
 
-    decision = evaluate_extension_offer(updated, team, player, normalized_offer, eligibility)
+    if normalized_offer.get("acceptedByPlayerAsk"):
+        salaries = normalized_offer.get("salaryByYear") or []
+        aav = _offer_aav(salaries)
+        market_aav = _round_money(_num((eligibility.get("marketValue") or {}).get("expectedAAV"), aav))
+        decision = {
+            "accepted": True,
+            "score": 100,
+            "threshold": 0,
+            "interestLabel": "Accepted asking price",
+            "reason": "The player signed because this matched one of his requested extension packages.",
+            "offerAAV": aav,
+            "marketAAV": market_aav,
+            "valueRatio": round(aav / max(1.0, market_aav), 4),
+            "marketValue": eligibility.get("marketValue"),
+        }
+    else:
+        decision = evaluate_extension_offer(updated, team, player, normalized_offer, eligibility)
     state = _extension_state(updated, payload)
     negotiation = {
         "id": f"negotiation:{state['seasonYear']}:{_norm(team.get('name'))}:{_norm(player.get('id') or player.get('name'))}:{len(state['negotiations']) + 1}",
@@ -711,6 +1082,8 @@ def process_cpu_contract_extensions(
             eligibility = build_extension_eligibility(updated, team, player, payload)
             if not eligibility.get("eligible"):
                 continue
+            if not _phase_allowed_extension_type(phase, str(eligibility.get("extensionType") or ""), state.get("currentDate") or "", state):
+                continue
             cpu = build_cpu_extension_offer(updated, team, player, eligibility, phase=phase)
             if not cpu:
                 continue
@@ -757,11 +1130,26 @@ def close_contract_extension_window(
     user_team_name: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    cpu_result = process_cpu_contract_extensions(league_data, user_team_name, phase="deadline", payload=payload)
+    payload = payload or {}
+    phase = str(payload.get("phase") or "deadline")
+    cpu_result = process_cpu_contract_extensions(league_data, user_team_name, phase=phase, payload=payload)
     updated = cpu_result.get("leagueData") if isinstance(cpu_result.get("leagueData"), dict) else copy.deepcopy(league_data)
     state = _extension_state(updated, payload)
-    state["closed"] = True
-    state["isOpen"] = False
+    closed_types = set(state.get("closedTypes") or [])
+    if phase in {"rookie_deadline", "rookie", "opening"}:
+        closed_types.add("rookie_scale")
+    elif phase in {"veteran_deadline", "veteran"}:
+        closed_types.add("veteran")
+    else:
+        # Legacy close-callers used one all-season deadline and expect the entire
+        # extension system to close. Calendar v2 passes rookie_deadline/veteran_deadline
+        # explicitly, so this branch is only for backwards compatibility/tests.
+        closed_types.update(["rookie_scale", "veteran"])
+    state["closedTypes"] = sorted(closed_types)
+    state["rookieWindowOpen"] = "rookie_scale" not in closed_types and state.get("currentDate", "") <= state.get("rookieDeadlineDate", "")
+    state["veteranWindowOpen"] = "veteran" not in closed_types and state.get("currentDate", "") <= state.get("veteranDeadlineDate", "")
+    state["isOpen"] = bool(state["rookieWindowOpen"] or state["veteranWindowOpen"])
+    state["closed"] = not state["isOpen"]
     state["closedDate"] = state["currentDate"] or state["deadlineDate"]
     updated["contractExtensionState"] = state
     return {
