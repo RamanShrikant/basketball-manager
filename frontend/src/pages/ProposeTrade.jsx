@@ -11,6 +11,11 @@ import {
 } from "../utils/offseasonTradeContext.js";
 import { executeAcceptedTradeOnLeague as executeAcceptedTradeOnLeagueShared } from "../utils/tradeExecution.js";
 import {
+  evaluateUserTradeFinancialLegality,
+  getUserTradeDeadlineStatus,
+  validateUserTradeRules,
+} from "../utils/userTradeRules.js";
+import {
   buildTradeMachineSwapAssets,
   canCreateSwapWithPick,
   formatResolvedDraftPickLabel,
@@ -39,7 +44,6 @@ import "../styles/BMPageBackground.css";
 const TRADE_BUILDER_KEY = "bm_trade_builder_v1";
 const TRADE_FINDER_STATE_KEY = "bm_trade_finder_state_v1";
 const TRADE_DEBUG_KEY = "bm_trade_debug_v1";
-const TRADE_DEADLINE_STATUS_KEY = "bm_trade_deadline_status_v1";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
@@ -446,7 +450,7 @@ function readTradePhaseInfo(leagueData) {
   const savedDraftState = readSavedDraftState(seasonYear);
 
   const draftOrder = getLockedDraftOrder(leagueData, seasonYear);
-  const draftOrderLocked = draftOrder.length >= 60;
+  const draftOrderLocked = draftOrder.filter(Boolean).length >= 30;
   const draftComplete = Boolean(
     (Number(offseasonState?.seasonYear || seasonYear) === Number(seasonYear) && offseasonState?.draftComplete) ||
       (Number(savedDraftState?.seasonYear || 0) === Number(seasonYear) && savedDraftState?.completed) ||
@@ -503,11 +507,19 @@ function getOwnerTeamFromDraftRow(row = {}) {
 
 function getLockedDraftOrder(leagueData, seasonYear = getCurrentSeasonYear(leagueData)) {
   const direct = leagueData?.draftState?.draftOrder;
-  if (Array.isArray(direct) && direct.length) return direct;
+  if (Array.isArray(direct) && direct.length) return direct.filter(Boolean);
 
   const lotteryOrder = leagueData?.draftState?.lottery?.fullDraftOrder;
   if (leagueData?.draftState?.draftLotteryComplete && Array.isArray(lotteryOrder) && lotteryOrder.length) {
-    return lotteryOrder;
+    return lotteryOrder.filter(Boolean);
+  }
+
+  const savedDraftState = readSavedDraftState(seasonYear);
+  if (Array.isArray(savedDraftState?.draftOrder) && savedDraftState.draftOrder.length) {
+    return savedDraftState.draftOrder.filter(Boolean);
+  }
+  if (Array.isArray(savedDraftState?.fullDraftOrder) && savedDraftState.fullDraftOrder.length) {
+    return savedDraftState.fullDraftOrder.filter(Boolean);
   }
 
   const savedLottery = readSavedDraftLottery(seasonYear);
@@ -517,7 +529,7 @@ function getLockedDraftOrder(leagueData, seasonYear = getCurrentSeasonYear(leagu
     savedLottery.secondRoundRevealed &&
     Array.isArray(savedLottery?.result?.fullDraftOrder)
   ) {
-    return savedLottery.result.fullDraftOrder;
+    return savedLottery.result.fullDraftOrder.filter(Boolean);
   }
 
   return [];
@@ -593,19 +605,6 @@ function isResolvedPickAlreadyDrafted(pick = {}, seasonYear = 2026) {
   const index = order.findIndex((row) => resolvedPickIdentityMatches(row, pick));
   const currentPickIndex = Number(savedDraftState.currentPickIndex || 0);
   return index >= 0 && currentPickIndex > index;
-}
-
-function readTradeDeadlineStatus() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(TRADE_DEADLINE_STATUS_KEY) || "null");
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function isTradeDeadlineLocked(status) {
-  return Boolean(status?.locked);
 }
 
 function makeEmptyBuilder(userTeamName, cpuTeamName) {
@@ -2213,13 +2212,34 @@ function TradeFinancialRow({ label, value, tuning }) {
 }
 
 
+function normalizeTradeFinancialRows(rows) {
+  if (Array.isArray(rows)) return rows.filter(Boolean);
+  if (!rows || typeof rows !== "object") return [];
+  const labels = {
+    basePayroll: "Current payroll",
+    outgoingSalary: "Outgoing salary",
+    incomingSalary: "Incoming salary",
+    netSalary: "Net salary change",
+    projectedPayroll: "Projected payroll",
+    salaryCap: "Salary cap",
+    firstApron: "First apron",
+    secondApron: "Second apron",
+    hardCap: "Hard cap",
+    matchingLimit: "Max incoming by matching",
+  };
+  return Object.entries(rows).map(([key, value]) => ({
+    label: labels[key] || key.replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase()),
+    value: typeof value === "number" ? formatMoney(value) : value,
+  }));
+}
+
 function buildHardCapIssueDetails({ team, cap, outgoingSalary = 0, incomingSalary = 0, netSalary = 0, playerCount = 0, financialCheck = null }) {
   if (financialCheck) {
     return {
       title: financialCheck.title,
       message: financialCheck.message,
       rows: [
-        ...(financialCheck.rows || []),
+        ...normalizeTradeFinancialRows(financialCheck.rows),
         { label: "Projected players", value: playerCount },
       ],
     };
@@ -2353,11 +2373,11 @@ function TradeFinancialFooter({ team, cap, netSalary, playerCount, hardCapDetail
 function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incomingItems = [], onAdd, onRemove, onHardCapDetails }) {
   const salaryTotal = sideSalary(items, leagueData);
   const cap = getTeamCapInfo(team, leagueData, salaryTotal, incomingSalary);
-  const financialCheck = evaluateTradeFinancialLegality({
+  const financialCheck = evaluateUserTradeFinancialLegality({
     team,
     leagueData,
-    outgoingSalary: salaryTotal,
-    incomingSalary,
+    outgoingItems: items,
+    incomingItems,
   });
   const hasItems = Array.isArray(items) && items.length > 0;
   const canAddMore = (items || []).length < MAX_SIDE_ITEMS;
@@ -2493,7 +2513,6 @@ export default function ProposeTrade() {
   });
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [deadlineStatus, setDeadlineStatus] = useState(() => readTradeDeadlineStatus());
   const [hardCapDetailModal, setHardCapDetailModal] = useState(null);
   const [liveDraftProgressSignature, setLiveDraftProgressSignature] = useState(() =>
     getLiveDraftProgressSignature(leagueData)
@@ -2528,22 +2547,10 @@ export default function ProposeTrade() {
     );
   }, [liveDraftProgressSignature, leagueData]);
 
-  useEffect(() => {
-    const syncDeadlineStatus = () => setDeadlineStatus(readTradeDeadlineStatus());
-    syncDeadlineStatus();
-
-    window.addEventListener("storage", syncDeadlineStatus);
-    const intervalId = window.setInterval(syncDeadlineStatus, 1500);
-
-    return () => {
-      window.removeEventListener("storage", syncDeadlineStatus);
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
-  const tradeDeadlineLocked = !tradeContext.inOffseason && isTradeDeadlineLocked(deadlineStatus);
+  const userDeadlineStatus = getUserTradeDeadlineStatus(leagueData);
+  const tradeDeadlineLocked = Boolean(userDeadlineStatus.locked);
   const tradeDeadlineMessage = tradeDeadlineLocked
-    ? "The trade deadline has passed. New trade offers are locked until the offseason."
+    ? userDeadlineStatus.reason
     : "";
 
   const cpuTeamName = builder.cpuTeamName || firstCpu;
@@ -2761,6 +2768,23 @@ export default function ProposeTrade() {
       return;
     }
 
+    const userRuleValidation = validateUserTradeRules({
+      leagueData,
+      userTeam,
+      cpuTeam,
+      userTeamName,
+      cpuTeamName,
+      userItems,
+      cpuItems,
+      includeDeadline: true,
+      includeFinancial: true,
+    });
+    if (!userRuleValidation.ok) {
+      setEvaluation(null);
+      setNotice(userRuleValidation.reason || "This user trade package violates an enabled trade rule.");
+      return;
+    }
+
     const proposal = buildTradeProposalPayload({
       userTeamName,
       cpuTeamName,
@@ -2812,6 +2836,7 @@ export default function ProposeTrade() {
       userItems,
       cpuItems,
       evaluation,
+      userDrivenRules: true,
     });
 
     if (!result.ok) {

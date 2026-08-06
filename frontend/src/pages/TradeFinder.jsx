@@ -22,7 +22,16 @@ import {
 } from "../utils/bmDiagnostics.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { getContractSeasonYear, getDraftYear } from "../utils/seasonContext.js";
-import { getTradeWindowLockMessage, isTradeWindowLocked, readTradeDeadlineStatus } from "../utils/tradeWindow.js";
+import { getTradeWindowLockMessage } from "../utils/tradeWindow.js";
+import {
+  attachUserTradeRuleContext,
+  getUserTradeDeadlineStatus,
+  getUserTradeCurrentDate,
+  getUserTradePickEligibility,
+  getUserTradePlayerEligibility,
+  validateUserTradeAssetPackage,
+  validateUserTradeRules,
+} from "../utils/userTradeRules.js";
 import PageFade from "../components/PageFade";
 import {
   canAddCustomProtectionToPick,
@@ -598,27 +607,58 @@ function getSeasonYearFromLeague(leagueData) {
 }
 
 
+function getDraftOrderPickNumber(row = null) {
+  if (!row || typeof row !== "object") return 0;
+  const value = Number(row.pick || row.pickNumber || row.overallPick || row.draftPickNumber || row.resolvedPickNumber || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function isUsableDraftOrderRow(row = null) {
+  if (!row || typeof row !== "object") return false;
+  if (getDraftOrderPickNumber(row) > 0) return true;
+  return Boolean(row.teamName || row.currentOwnerTeamName || row.ownerTeamName || row.originalTeamName || row.originalPickTeamName);
+}
+
+function sanitizeDraftOrderRows(rows = []) {
+  return (Array.isArray(rows) ? rows : []).filter(isUsableDraftOrderRow);
+}
+
 function readLockedDraftOrder(leagueData, seasonYear) {
-  const direct = leagueData?.draftState?.draftOrder;
-  if (Array.isArray(direct) && direct.length) return direct;
+  const candidates = [];
+  const pushRows = (rows, allowed = true) => {
+    if (!allowed || !Array.isArray(rows)) return;
+    const clean = sanitizeDraftOrderRows(rows.filter(Boolean));
+    if (clean.length) candidates.push(clean);
+  };
 
-  const lotteryOrder = leagueData?.draftState?.lottery?.fullDraftOrder;
-  if (leagueData?.draftState?.draftLotteryComplete && Array.isArray(lotteryOrder) && lotteryOrder.length) {
-    return lotteryOrder;
-  }
-
+  const savedDraftState = safeJSON(localStorage.getItem("bm_draft_state_v1"), null);
   const savedLottery = safeJSON(localStorage.getItem("bm_draft_lottery_v1"), null);
-  if (
-    savedLottery &&
-    Number(savedLottery.seasonYear) === Number(seasonYear) &&
-    savedLottery.firstRoundRevealed &&
-    savedLottery.secondRoundRevealed &&
-    Array.isArray(savedLottery?.result?.fullDraftOrder)
-  ) {
-    return savedLottery.result.fullDraftOrder;
-  }
+  const savedDraftMatches = savedDraftState && Number(savedDraftState.seasonYear || seasonYear) === Number(seasonYear);
+  const savedLotteryMatches = savedLottery && Number(savedLottery.seasonYear || seasonYear) === Number(seasonYear);
+  const savedLotteryRevealed = Boolean(
+    savedLotteryMatches &&
+      savedLottery.firstRoundRevealed &&
+      savedLottery.secondRoundRevealed &&
+      !savedLottery.isPreview
+  );
+  const leagueLotteryComplete = Boolean(
+    leagueData?.draftState?.draftLotteryComplete ||
+      (Number(leagueData?.draftState?.seasonYear || seasonYear) === Number(seasonYear) &&
+        Array.isArray(leagueData?.draftState?.draftOrder) &&
+        leagueData.draftState.draftOrder.length)
+  );
 
-  return [];
+  pushRows(savedDraftState?.draftOrder, savedDraftMatches);
+  pushRows(savedDraftState?.fullDraftOrder, savedDraftMatches);
+  pushRows(savedLottery?.result?.fullDraftOrder, savedLotteryRevealed);
+  pushRows(savedLottery?.fullDraftOrder, savedLotteryRevealed);
+  pushRows(leagueData?.draftState?.fullDraftOrder, leagueLotteryComplete);
+  pushRows(leagueData?.draftState?.draftOrder, leagueLotteryComplete);
+  pushRows(leagueData?.draftState?.lottery?.fullDraftOrder, leagueLotteryComplete);
+  pushRows(leagueData?.draftLottery?.fullDraftOrder, leagueLotteryComplete);
+
+  candidates.sort((a, b) => b.length - a.length);
+  return candidates.find((rows) => rows.length >= 60) || candidates[0] || [];
 }
 
 function isDraftCompleteForSeason(leagueData, seasonYear) {
@@ -665,10 +705,13 @@ function getPickOriginalName(row = {}) {
 }
 
 function buildResolvedDraftAsset(row = {}, seasonYear) {
+  if (!row || typeof row !== "object") return null;
   const pickNumber = Number(row.pick || row.pickNumber || row.overallPick || row.draftPickNumber || row.resolvedPickNumber || 0);
+  if (!Number.isFinite(pickNumber) || pickNumber <= 0) return null;
   const round = Number(row.round || (pickNumber <= 30 ? 1 : 2));
   const ownerTeam = getPickOwnerName(row);
   const originalTeam = getPickOriginalName(row);
+  if (!ownerTeam) return null;
 
   return {
     id: `resolved_${seasonYear}_${round}_${pickNumber}_${ownerTeam}_${originalTeam}`,
@@ -709,7 +752,7 @@ function collectTradeablePicksForTeam(leagueData, teamName) {
   const draftComplete = tradeContext?.inOffseason
     ? Boolean(tradeContext.draftComplete)
     : isDraftCompleteForSeason(leagueData, seasonYear);
-  const draftOrderLocked = Boolean(tradeContext?.draftOrderLocked || draftOrder.length >= 60);
+  const draftOrderLocked = Boolean(tradeContext?.draftOrderLocked || draftOrder.length > 0);
 
   const futurePicks = normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
     .filter((pick) => String(pick.status || "active").toLowerCase() === "active")
@@ -725,6 +768,7 @@ function collectTradeablePicksForTeam(leagueData, teamName) {
   const resolvedPicks = draftOrderLocked && !draftComplete
     ? filterTradeableLiveDraftRows(draftOrder, leagueData, seasonYear)
         .map((row) => buildResolvedDraftAsset(row, seasonYear))
+        .filter(Boolean)
     : [];
 
   const activeKey = normalizeTeamName(teamName);
@@ -739,6 +783,65 @@ function collectTradeablePicksForTeam(leagueData, teamName) {
     seen.add(key);
     return true;
   });
+}
+
+function collectTradeablePicksByTeamForFinder(leagueData, teams = []) {
+  const byTeam = new Map();
+  if (!leagueData) return byTeam;
+
+  const teamNames = (Array.isArray(teams) && teams.length ? teams : getAllTeamsFromLeague(leagueData))
+    .map((team) => team?.name || team?.teamName)
+    .filter(Boolean);
+  const seasonYear = getSeasonYearFromLeague(leagueData);
+  const tradeContext = getOffseasonTradeContext(leagueData);
+  const draftOrder = tradeContext?.draftOrderLocked
+    ? tradeContext.draftOrder
+    : readLockedDraftOrder(leagueData, seasonYear);
+  const draftComplete = tradeContext?.inOffseason
+    ? Boolean(tradeContext.draftComplete)
+    : isDraftCompleteForSeason(leagueData, seasonYear);
+  const draftOrderLocked = Boolean(tradeContext?.draftOrderLocked || draftOrder.length > 0);
+
+  const futurePicks = normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
+    .filter((pick) => String(pick.status || "active").toLowerCase() === "active")
+    .filter((pick) => Number(pick.year || 0) >= Number(seasonYear))
+    .filter((pick) => !(draftComplete && Number(pick.year || 0) === Number(seasonYear)))
+    .filter((pick) => !(draftOrderLocked && !draftComplete && Number(pick.year || 0) === Number(seasonYear)))
+    .map((pick) => ({ ...pick, currentSeasonYear: seasonYear, leagueSeasonYear: seasonYear }));
+
+  const resolvedPicks = draftOrderLocked && !draftComplete
+    ? filterTradeableLiveDraftRows(draftOrder, leagueData, seasonYear)
+        .map((row) => buildResolvedDraftAsset(row, seasonYear))
+        .filter(Boolean)
+    : [];
+
+  for (const pick of [...resolvedPicks, ...futurePicks]) {
+    const ownerKey = normalizeTeamName(pick.ownerTeam || pick.owner || pick.currentOwnerTeamName || "");
+    if (!ownerKey) continue;
+    if (!byTeam.has(ownerKey)) byTeam.set(ownerKey, []);
+    byTeam.get(ownerKey).push(pick);
+  }
+
+  for (const [teamKey, rows] of byTeam.entries()) {
+    const seen = new Set();
+    const deduped = rows
+      .sort(sortDraftPickAssets)
+      .filter((pick) => {
+        const key = pickKey(pick);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    byTeam.set(teamKey, deduped);
+  }
+
+  return byTeam;
+}
+
+function getOwnedPicksFromFinderMap(picksByTeam, teamName = "") {
+  const key = normalizeTeamName(teamName);
+  if (!key || !picksByTeam || typeof picksByTeam.get !== "function") return [];
+  return picksByTeam.get(key) || [];
 }
 
 function collectAllTradeablePicksForTradeFinder(leagueData, teams = []) {
@@ -1350,29 +1453,19 @@ function validateTradeFinderOfferDetailed({ leagueData, selectedTeam, offer }) {
   const offerOwnershipIssue = findUnownedTradeItem(leagueData, offerTeam, offerItems);
   if (offerOwnershipIssue) return fail(offerOwnershipIssue.code, offerOwnershipIssue.reason, offerOwnershipIssue);
 
-  const selectedOutgoingSalary = sideSalary(selectedItems, leagueData);
-  const selectedIncomingSalary = sideSalary(offerItems, leagueData);
-  const offerOutgoingSalary = sideSalary(offerItems, leagueData);
-  const offerIncomingSalary = sideSalary(selectedItems, leagueData);
-
-  const selectedFinancialOk = isTradeFinanciallyLegal({
-    team: selectedTeam,
+  const userRuleValidation = validateUserTradeRules({
     leagueData,
-    outgoingSalary: selectedOutgoingSalary,
-    incomingSalary: selectedIncomingSalary,
+    userTeam: selectedTeam,
+    cpuTeam: offerTeam,
+    userTeamName: selectedTeam?.name || selectedTeam?.teamName || "",
+    cpuTeamName: offerTeamName,
+    userItems: selectedItems,
+    cpuItems: offerItems,
+    includeDeadline: true,
+    includeFinancial: true,
   });
-  const offerFinancialOk = isTradeFinanciallyLegal({
-    team: offerTeam,
-    leagueData,
-    outgoingSalary: offerOutgoingSalary,
-    incomingSalary: offerIncomingSalary,
-  });
-
-  if (!selectedFinancialOk) {
-    return fail("selected_salary_illegal", `${selectedTeam?.name || "Your team"} no longer passes salary matching for this offer.`);
-  }
-  if (!offerFinancialOk) {
-    return fail("offer_salary_illegal", `${offerTeam?.name || "The CPU team"} no longer passes salary matching for this offer.`);
+  if (!userRuleValidation.ok) {
+    return fail(userRuleValidation.code || "user_trade_rule", userRuleValidation.reason || "This offer violates an enabled user trade rule.", userRuleValidation);
   }
 
   const inOffseason = isOffseasonTradeWindow(leagueData);
@@ -1621,7 +1714,7 @@ function TradeFinderRatingRing({ player, variant = "packageRows" }) {
   );
 }
 
-function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team, selectedActionLabel = "Added", disabled = false, disabledLabel = "Max" }) {
+function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team, selectedActionLabel = "Added", disabled = false, disabledLabel = "Max", disabledReason = "" }) {
   const isPlayer = asset.type === "player";
   const isResolvedPick = !isPlayer && isResolvedDraftPickAsset(asset.pick);
   const label = isPlayer ? playerNameOf(asset.player) : formatPick(asset.pick);
@@ -1755,6 +1848,11 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
                 }}
               >
                 {contractLine}
+              </div>
+            )}
+            {(actionDisabled || selected) && disabledReason && (
+              <div className="mt-1 line-clamp-2 text-[10px] font-black leading-tight text-red-300">
+                {disabledReason}
               </div>
             )}
           </div>
@@ -2001,7 +2099,6 @@ export default function TradeFinder() {
   const { leagueData, selectedTeam } = useGame();
   const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
   const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
-  const [deadlineStatus, setDeadlineStatus] = useState(() => readTradeDeadlineStatus());
   const [packageTeamIndex, setPackageTeamIndex] = useState(() => {
     const index = teams.findIndex((team) => sameTeamName(team?.name || team?.teamName, selectedTeam?.name || selectedTeam?.teamName));
     return index >= 0 ? index : 0;
@@ -2022,22 +2119,14 @@ export default function TradeFinder() {
   const offerSearchAbortRef = useRef(null);
   const lastDraftProgressSignatureRef = useRef(liveDraftProgressSignature);
   const packageTeamInitializedRef = useRef(false);
-  const tradeWindowLocked = isTradeWindowLocked({ tradeContext, deadlineStatus });
-  const tradeLockMessage = getTradeWindowLockMessage();
-
-  useEffect(() => {
-    const refresh = () => setDeadlineStatus(readTradeDeadlineStatus());
-    refresh();
-    const intervalId = window.setInterval(refresh, 1500);
-    const onStorage = (event) => {
-      if (!event.key || event.key === "bm_trade_deadline_status_v1" || event.key === "bm_offseason_state_v1") refresh();
-    };
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, []);
+  const userTradeCurrentDate = useMemo(() => getUserTradeCurrentDate(leagueData), [leagueData]);
+  const userDeadlineStatus = useMemo(() => getUserTradeDeadlineStatus(leagueData), [leagueData]);
+  const tradeablePicksByTeam = useMemo(
+    () => collectTradeablePicksByTeamForFinder(leagueData, teams),
+    [leagueData, teams, liveDraftProgressSignature]
+  );
+  const tradeWindowLocked = Boolean(userDeadlineStatus.locked);
+  const tradeLockMessage = userDeadlineStatus.reason || getTradeWindowLockMessage();
 
   const resetFinderWorkspace = ({ clearPackage = true } = {}) => {
     try { offerSearchAbortRef.current?.abort?.(); } catch {}
@@ -2071,18 +2160,23 @@ export default function TradeFinder() {
     if (packageTeamIndex < 0 || packageTeamIndex >= teams.length) setPackageTeamIndex(0);
   }, [teams, selectedTeam, packageTeamIndex]);
 
+  const shouldPollLiveDraftProgress = Boolean(
+    tradeContext?.inOffseason && tradeContext?.draftOrderLocked && !tradeContext?.draftComplete
+  );
+
   useEffect(() => {
     const syncDraftProgress = () => {
       setLiveDraftProgressSignature(getLiveDraftProgressSignature(leagueData));
     };
     syncDraftProgress();
+    if (!shouldPollLiveDraftProgress) return undefined;
     window.addEventListener("storage", syncDraftProgress);
-    const intervalId = window.setInterval(syncDraftProgress, 750);
+    const intervalId = window.setInterval(syncDraftProgress, 1500);
     return () => {
       window.removeEventListener("storage", syncDraftProgress);
       window.clearInterval(intervalId);
     };
-  }, [leagueData]);
+  }, [leagueData, shouldPollLiveDraftProgress]);
 
   useEffect(() => {
     if (lastDraftProgressSignatureRef.current === liveDraftProgressSignature) return;
@@ -2101,8 +2195,8 @@ export default function TradeFinder() {
     [packageTeam, leagueData, tradeContext]
   );
   const selectedTeamPicks = useMemo(
-    () => getOwnedPicks(leagueData, packageTeam?.name),
-    [leagueData, packageTeam, liveDraftProgressSignature]
+    () => getOwnedPicksFromFinderMap(tradeablePicksByTeam, packageTeam?.name),
+    [tradeablePicksByTeam, packageTeam]
   );
 
   const playerAssets = useMemo(
@@ -2148,6 +2242,77 @@ export default function TradeFinder() {
       return asset;
     });
   }, [pickProtections, selectedPackageAssets]);
+
+  const assetEligibilityByKey = useMemo(() => {
+    const map = new Map();
+    const teamName = packageTeam?.name || packageTeam?.teamName || "";
+    for (const asset of allAssets) {
+      if (asset.type === "player") {
+        map.set(asset.key, getUserTradePlayerEligibility({ leagueData, teamName, player: asset.player, currentDate: userTradeCurrentDate }));
+      } else {
+        const item = buildFinderPickItem(asset, pickProtections[asset.key]);
+        let eligibility = getUserTradePickEligibility({
+          leagueData,
+          teamName,
+          pick: item.pick,
+          item,
+          outgoingItems: selectedItems,
+          incomingItems: [],
+        });
+
+        // Belt-and-suspenders Stepien check for Trade Finder. The asset-row
+        // eligibility call should already catch this, but the Finder also needs
+        // to validate the projected package exactly as it would exist if the
+        // user clicked Add. This prevents stale UI/team-context state from
+        // allowing a 2027 + 2028 first package through visually.
+        if (!selectedKeySet.has(asset.key)) {
+          const projectedPackageValidation = validateUserTradeAssetPackage({
+            leagueData,
+            teamName,
+            outgoingItems: [...selectedItems, item],
+            incomingItems: [],
+          });
+          if (!projectedPackageValidation.ok && projectedPackageValidation.code === "stepien_rule") {
+            eligibility = projectedPackageValidation;
+          }
+        }
+
+        if (
+          !selectedKeySet.has(asset.key) &&
+          eligibility?.code === "second_apron_furthest_first" &&
+          canAddCustomProtectionToPick(asset.pick)
+        ) {
+          const ownedRange = getTradeablePickOwnedRange(asset.pick);
+          const suggestedRule = { mode: "protected", protectEnd: ownedRange.start };
+          const protectedItem = buildFinderPickItem(asset, suggestedRule);
+          const protectedEligibility = getUserTradePickEligibility({
+            leagueData,
+            teamName,
+            pick: protectedItem.pick,
+            item: protectedItem,
+            outgoingItems: selectedItems,
+            incomingItems: [],
+          });
+          if (protectedEligibility.ok) {
+            eligibility = {
+              ...protectedEligibility,
+              suggestedPickRule: suggestedRule,
+              note: "This second-apron pick must carry protection to be traded.",
+            };
+          }
+        }
+        map.set(asset.key, eligibility);
+      }
+    }
+    return map;
+  }, [allAssets, leagueData, packageTeam, pickProtections, selectedItems, selectedKeySet, userTradeCurrentDate]);
+
+  const selectedPackageValidation = useMemo(() => validateUserTradeAssetPackage({
+    leagueData,
+    teamName: packageTeam?.name || packageTeam?.teamName || "",
+    outgoingItems: selectedItems,
+    incomingItems: [],
+  }), [leagueData, packageTeam, selectedItems]);
 
   const selectedValue = useMemo(() => packageValue(selectedItems, leagueData), [selectedItems, leagueData]);
 
@@ -2197,6 +2362,31 @@ export default function TradeFinder() {
   }, []);
 
   const toggleAsset = (asset) => {
+    const eligibility = assetEligibilityByKey.get(asset?.key);
+    const alreadySelected = selectedAssetKeys.includes(asset?.key);
+    if (!alreadySelected && eligibility?.ok === false) {
+      setOfferSearchError(eligibility.reason || "This asset is not trade eligible.");
+      setOfferSearchProgress("");
+      return;
+    }
+
+    if (!alreadySelected && asset?.type === "pick") {
+      const candidateItem = buildFinderPickItem(asset, pickProtections[asset.key]);
+      const projectedPackageValidation = validateUserTradeAssetPackage({
+        leagueData,
+        teamName: packageTeam?.name || packageTeam?.teamName || "",
+        outgoingItems: [...selectedItems, candidateItem],
+        incomingItems: [],
+      });
+      if (!projectedPackageValidation.ok) {
+        setOfferSearchError(projectedPackageValidation.reason || "This pick cannot be added under the active trade rules.");
+        setOfferSearchProgress("");
+        return;
+      }
+    }
+    if (!alreadySelected && asset?.type === "pick" && eligibility?.suggestedPickRule) {
+      setPickProtections((current) => ({ ...current, [asset.key]: eligibility.suggestedPickRule }));
+    }
     setSearched(false);
     setPythonOffers([]);
     setOfferSearchError("");
@@ -2258,6 +2448,18 @@ export default function TradeFinder() {
 
     if (!selectedItems.length) {
       setPythonOffers([]);
+      return;
+    }
+
+    const packageValidation = validateUserTradeAssetPackage({
+      leagueData,
+      teamName: packageTeam?.name || packageTeam?.teamName || "",
+      outgoingItems: selectedItems,
+      incomingItems: [],
+    });
+    if (!packageValidation.ok) {
+      setPythonOffers([]);
+      setOfferSearchError(packageValidation.reason || "This Trade Finder package contains an illegal asset.");
       return;
     }
 
@@ -2386,23 +2588,26 @@ export default function TradeFinder() {
         }
       };
 
+      const userRuleLeagueData = attachUserTradeRuleContext(leagueData);
       const result = isReverseFinder
         ? await findComfortableReverseTradeFinderOffers({
-            leagueData,
+            leagueData: userRuleLeagueData,
             controlledTeam: selectedTeam,
             targetTeam: packageTeam,
             targetItems: selectedItems,
             signal: controller.signal,
             maxResults: 5,
             onProgress: reverseProgress,
+            userDrivenRules: true,
           })
         : await findComfortableTradeFinderOffers({
-            leagueData,
+            leagueData: userRuleLeagueData,
             selectedTeam,
             selectedItems,
             teams,
             signal: controller.signal,
             onProgress: standardProgress,
+            userDrivenRules: true,
           });
 
       const nextOffers = Array.isArray(result?.offers)
@@ -2716,8 +2921,9 @@ export default function TradeFinder() {
                           onToggle={() => toggleAsset(asset)}
                           leagueData={leagueData}
                           team={packageTeam}
-                          disabled={isPackageFull}
-                          disabledLabel="Full"
+                          disabled={isPackageFull || assetEligibilityByKey.get(asset.key)?.ok === false}
+                          disabledLabel={assetEligibilityByKey.get(asset.key)?.ok === false ? "Locked" : "Full"}
+                          disabledReason={assetEligibilityByKey.get(asset.key)?.reason || ""}
                         />
                       ))
                     ) : (
@@ -2754,8 +2960,9 @@ export default function TradeFinder() {
                           }}
                           leagueData={leagueData}
                           team={packageTeam}
-                          disabled={isPackageFull}
-                          disabledLabel="Full"
+                          disabled={isPackageFull || assetEligibilityByKey.get(asset.key)?.ok === false}
+                          disabledLabel={assetEligibilityByKey.get(asset.key)?.ok === false ? "Locked" : "Full"}
+                          disabledReason={assetEligibilityByKey.get(asset.key)?.reason || ""}
                         />
                       ))
                     ) : (
@@ -2841,10 +3048,10 @@ export default function TradeFinder() {
                     <button
                       type="button"
                       onClick={runSearchOffers}
-                      disabled={!selectedItems.length || isSearchingOffers}
+                      disabled={!selectedItems.length || isSearchingOffers || selectedPackageValidation.ok === false}
                       className="rounded-2xl bg-orange-600 px-5 py-2.5 text-sm font-black text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {isSearchingOffers ? "Searching..." : "Search Offers"}
+                      {isSearchingOffers ? "Searching..." : selectedPackageValidation.ok === false ? "Illegal Package" : "Search Offers"}
                     </button>
 
                     {isSearchingOffers && (
@@ -2861,6 +3068,12 @@ export default function TradeFinder() {
               </div>
 
               <div className="tradeFinderScroller max-h-[70vh] min-h-0 flex-1 overflow-y-auto p-4">
+                {selectedItems.length > 0 && selectedPackageValidation.ok === false && (
+                  <div className="mb-3 rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm font-bold leading-6 text-red-100">
+                    {selectedPackageValidation.reason || "This package contains an asset that cannot currently be traded."}
+                  </div>
+                )}
+
                 {!searched && (
                   <div className="rounded-2xl border border-orange-400/25 bg-orange-500/10 p-4 text-sm font-bold leading-6 text-orange-100">
                     {isReverseFinder

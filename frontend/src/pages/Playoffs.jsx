@@ -11,6 +11,12 @@ import styles from "./Playoffs.module.css";
 import FinalsMvpReveal from "../components/FinalsMvpReveal";
 import { finalizeFinalsMvpAndGoOffseason } from "../utils/finalsMvpSeasonActions";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
+import {
+  ensurePostseasonCalendar,
+  formatLeagueDate,
+  setPostseasonCurrentDate,
+  syncPostseasonLeagueClock,
+} from "../utils/leagueClock.js";
 
 const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
@@ -1634,12 +1640,18 @@ export default function Playoffs() {
   }
 
   function persistPost(next) {
-    flushPendingResults();
-    setPost(next);
-    savePostseasonState(next);
+    const prepared = ensurePostseasonCalendar(next, {
+      scheduleByDate,
+      seasonStartYear: seasonYear,
+    });
 
-    const champ = finalsChampionName(next.finals);
-    persistSeasonHistorySnapshot(next, { force: Boolean(champ) });
+    flushPendingResults();
+    syncPostseasonLeagueClock(prepared);
+    setPost(prepared);
+    savePostseasonState(prepared);
+
+    const champ = finalsChampionName(prepared.finals);
+    persistSeasonHistorySnapshot(prepared, { force: Boolean(champ) });
 
     // ALWAYS show champion popup once finals completes (and store it)
     if (champ) {
@@ -1745,8 +1757,14 @@ export default function Playoffs() {
     if (loaded?.seasonYear === seasonYear) {
       if (hydratedPostseasonSeasonRef.current !== seasonYear) {
         hydratedPostseasonSeasonRef.current = seasonYear;
-        setPost(loaded);
-        persistSeasonHistorySnapshot(loaded);
+        const prepared = ensurePostseasonCalendar(loaded, {
+          scheduleByDate,
+          seasonStartYear: seasonYear,
+        });
+        setPost(prepared);
+        savePostseasonState(prepared);
+        syncPostseasonLeagueClock(prepared);
+        persistSeasonHistorySnapshot(prepared);
       }
       return;
     }
@@ -1760,7 +1778,7 @@ export default function Playoffs() {
     const regularSeasonSnapshot = buildRegularSeasonSnapshot({ standings, seeds });
     const fresh = buildInitialPostseason({ seasonYear, seeds, regularSeasonSnapshot });
     persistPost(fresh);
-  }, [seasonYear, seeds, standings]);
+  }, [seasonYear, seeds, standings, scheduleByDate]);
 
   function winnerFromSlim(slim) {
     if (!slim?.winner?.side || slim.winner.side === "tie") return null;
@@ -1881,6 +1899,7 @@ export default function Playoffs() {
     if (idx >= series.gameIds.length) return;
 
     const gid = series.gameIds[idx];
+    const gameDate = series.gameDates?.[idx] || null;
     const { home, away } = seriesGameMeta(series, idx);
 
     const slim = await safeSimGameId(gid, home, away, { retries: 2 });
@@ -1890,6 +1909,8 @@ export default function Playoffs() {
       console.warn("[playoffs] No winner (tie/bad result). Not advancing game index.", gid, slim);
       return;
     }
+
+    setPostseasonCurrentDate(cur, gameDate);
 
     if (side === "home") {
       if (home === series.highSeedTeam) series.winsHigh++;
@@ -1923,6 +1944,7 @@ export default function Playoffs() {
         if (idx >= series.gameIds.length) break;
 
         const gid = series.gameIds[idx];
+        const gameDate = series.gameDates?.[idx] || null;
         const { home, away } = seriesGameMeta(series, idx);
 
         const slim = await safeSimGameId(gid, home, away, { retries: 2 });
@@ -1932,6 +1954,8 @@ export default function Playoffs() {
           console.warn("[playoffs] No winner (tie/bad result). Stopping series sim to avoid burning games.", gid, slim);
           break;
         }
+
+        setPostseasonCurrentDate(cur, gameDate);
 
         if (side === "home") {
           if (home === series.highSeedTeam) series.winsHigh++;
@@ -2148,6 +2172,8 @@ export default function Playoffs() {
     const side = winnerFromSlim(slim);
     if (!side) return;
 
+    setPostseasonCurrentDate(cur, node.date);
+
     const winner = side === "home" ? node.home : node.away;
     const loser = side === "home" ? node.away : node.home;
 
@@ -2182,34 +2208,65 @@ export default function Playoffs() {
     wireForward(cur, confKey);
   }
 
+  function listReadyPlayInGamesByDate(cur, confKeys) {
+    const candidates = [];
+
+    for (const confKey of (confKeys || []).filter(Boolean)) {
+      const playIn = cur?.conf?.[confKey]?.playIn;
+      if (!playIn) continue;
+
+      for (const [which, node] of [
+        ["78", playIn.g78],
+        ["910", playIn.g910],
+        ["final", playIn.gFinal],
+      ]) {
+        if (!node || node.played || !node.home || !node.away || !node.date) continue;
+        candidates.push({ confKey, which, node, date: node.date });
+      }
+    }
+
+    return candidates.sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async function simPlayInStageInCalendarOrder(cur, confKeys, { flush = false } = {}) {
+    let progressed = false;
+
+    while (!stopRequestedRef.current) {
+      const ready = listReadyPlayInGamesByDate(cur, confKeys);
+      if (!ready.length) break;
+
+      const nextDate = ready[0].date;
+      const gamesOnDate = ready.filter((candidate) => candidate.date === nextDate);
+      let dateProgressed = false;
+
+      for (const candidate of gamesOnDate) {
+        if (stopRequestedRef.current) return progressed;
+        await simPlayInGameInCur(cur, candidate.confKey, candidate.which);
+        dateProgressed = dateProgressed || Boolean(candidate.node.played);
+        progressed = progressed || Boolean(candidate.node.played);
+        if (flush && candidate.node.played) persistPost(structuredClone(cur));
+      }
+
+      if (!dateProgressed) break;
+    }
+
+    return progressed;
+  }
+
   async function simGlobalOnePlayInGame() {
     if (simLock || allPlayInsComplete) return;
     setSimLock(true);
 
     try {
       const cur = structuredClone(post);
-      const confs = [left, right].filter(Boolean);
-      const hasOpeningGames = confs.some((ck) => {
-        const pi = cur?.conf?.[ck]?.playIn;
-        return pi && (!pi.g78?.played || !pi.g910?.played);
-      });
+      const ready = listReadyPlayInGamesByDate(cur, [left, right]);
+      const nextDate = ready[0]?.date || null;
+      const targets = nextDate
+        ? ready.filter((candidate) => candidate.date === nextDate)
+        : [];
 
-      const targets = [];
-      for (const ck of confs) {
-        const pi = cur?.conf?.[ck]?.playIn;
-        if (!pi) continue;
-
-        if (hasOpeningGames) {
-          if (!pi.g78?.played) targets.push({ confKey: ck, which: "78" });
-          if (!pi.g910?.played) targets.push({ confKey: ck, which: "910" });
-        } else if (!pi.gFinal?.played && pi.gFinal?.home && pi.gFinal?.away) {
-          targets.push({ confKey: ck, which: "final" });
-        }
-      }
-
-      // The target list is frozen before any game is simulated. That means the
-      // final-seed games never begin on the same click that finishes 7/8 and
-      // 9/10, matching the round-by-round playoff Sim One Game behavior.
+      // One click processes one actual play-in date. Games on the next play-in
+      // date cannot begin until a later click, preserving the built-in rest days.
       for (const target of targets) {
         await simPlayInGameInCur(cur, target.confKey, target.which);
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -2231,27 +2288,10 @@ export default function Playoffs() {
     try {
       const cur = structuredClone(post);
 
-      for (const ck of [left, right]) {
-        if (!ck) continue;
-
-        try {
-          const pi = cur.conf[ck].playIn;
-
-          if (!pi.g78.played) {
-            await simPlayInGameInCur(cur, ck, "78");
-            persistPost(cur);
-          }
-          if (!pi.g910.played) {
-            await simPlayInGameInCur(cur, ck, "910");
-            persistPost(cur);
-          }
-          if (!pi.gFinal.played) {
-            await simPlayInGameInCur(cur, ck, "final");
-            persistPost(cur);
-          }
-        } catch (e) {
-          console.warn(`[playoffs] play-in sim failed for conf=${ck}, continuing`, e);
-        }
+      try {
+        await simPlayInStageInCalendarOrder(cur, [left, right], { flush: true });
+      } catch (e) {
+        console.warn("[playoffs] play-in sim failed, continuing", e);
       }
 
       if (playInCompleteFor(left, cur) && playInCompleteFor(right, cur)) {
@@ -2268,6 +2308,7 @@ export default function Playoffs() {
 
     const idx = series.nextGameIndex;
     const gid = series.gameIds[idx];
+    const gameDate = series.gameDates?.[idx] || null;
     const { home, away } = seriesGameMeta(series, idx);
 
     const slim = await safeSimGameId(gid, home, away, { retries: 2 });
@@ -2277,6 +2318,8 @@ export default function Playoffs() {
       console.warn("[playoffs] No winner (tie/bad result). Not advancing game index.", gid, slim);
       return;
     }
+
+    setPostseasonCurrentDate(cur, gameDate);
 
     if (side === "home") {
       if (home === series.highSeedTeam) series.winsHigh++;
@@ -2312,6 +2355,7 @@ export default function Playoffs() {
       if (idx >= series.gameIds.length) break;
 
       const gid = series.gameIds[idx];
+      const gameDate = series.gameDates?.[idx] || null;
       const { home, away } = seriesGameMeta(series, idx);
 
       const slim = await safeSimGameId(gid, home, away, { retries: 2 });
@@ -2325,6 +2369,8 @@ export default function Playoffs() {
         );
         break;
       }
+
+      setPostseasonCurrentDate(cur, gameDate);
 
       if (side === "home") {
         if (home === series.highSeedTeam) series.winsHigh++;
@@ -2402,14 +2448,33 @@ export default function Playoffs() {
   };
 
   async function simCurrentRoundOneDayInCur(cur, roundName, { flush = true } = {}) {
-    const eligible = listSeriesRefsForRound(cur, roundName).filter((ref) =>
-      seriesReadyForNextGame(getSeriesNode(cur, ref.confKey, ref.roundName, ref.seriesKey))
-    );
-    if (!eligible.length) return false;
+    const candidates = listSeriesRefsForRound(cur, roundName)
+      .map((ref) => {
+        const series = getSeriesNode(cur, ref.confKey, ref.roundName, ref.seriesKey);
+        if (!seriesReadyForNextGame(series)) return null;
+        const nextIndex = Number(series?.nextGameIndex || 0);
+        return {
+          ref,
+          nextDate: series?.gameDates?.[nextIndex] || null,
+        };
+      })
+      .filter(Boolean);
+
+    if (!candidates.length) return false;
+
+    const nextScheduledDate = candidates
+      .map((candidate) => candidate.nextDate)
+      .filter(Boolean)
+      .sort()[0] || null;
+
+    const eligible = nextScheduledDate
+      ? candidates.filter((candidate) => candidate.nextDate === nextScheduledDate)
+      : candidates;
 
     let progressed = false;
-    for (const ref of eligible) {
+    for (const candidate of eligible) {
       if (stopRequestedRef.current) break;
+      const { ref } = candidate;
       const series = getSeriesNode(cur, ref.confKey, ref.roundName, ref.seriesKey);
       const beforeIndex = Number(series?.nextGameIndex || 0);
       await simNextGameInCur(cur, ref.confKey, ref.roundName, ref.seriesKey);
@@ -2516,24 +2581,7 @@ export default function Playoffs() {
       }
 
       if (stage === "playin") {
-        for (const ck of confs) {
-          if (stopRequestedRef.current) break;
-          const pi = cur?.conf?.[ck]?.playIn;
-          if (!pi) continue;
-
-          if (!pi.g78.played && !stopRequestedRef.current) {
-            await simPlayInGameInCur(cur, ck, "78");
-            persistPost(structuredClone(cur));
-          }
-          if (!pi.g910.played && !stopRequestedRef.current) {
-            await simPlayInGameInCur(cur, ck, "910");
-            persistPost(structuredClone(cur));
-          }
-          if (!pi.gFinal.played && !stopRequestedRef.current) {
-            await simPlayInGameInCur(cur, ck, "final");
-            persistPost(structuredClone(cur));
-          }
-        }
+        await simPlayInStageInCalendarOrder(cur, confs, { flush: true });
         persistPost(structuredClone(cur));
         if (playInCompleteFor(left, cur) && playInCompleteFor(right, cur)) {
           setPostseasonView("bracket");
@@ -2580,24 +2628,7 @@ export default function Playoffs() {
 
         // 1) if play-in not complete, do play-in first
         if (stage === "playin") {
-          for (const ck of confs) {
-            if (stopRequestedRef.current) break;
-            const pi = cur?.conf?.[ck]?.playIn;
-            if (!pi) continue;
-
-            if (!pi.g78.played && !stopRequestedRef.current) {
-              await simPlayInGameInCur(cur, ck, "78");
-              persistPost(structuredClone(cur));
-            }
-            if (!pi.g910.played && !stopRequestedRef.current) {
-              await simPlayInGameInCur(cur, ck, "910");
-              persistPost(structuredClone(cur));
-            }
-            if (!pi.gFinal.played && !stopRequestedRef.current) {
-              await simPlayInGameInCur(cur, ck, "final");
-              persistPost(structuredClone(cur));
-            }
-          }
+          await simPlayInStageInCalendarOrder(cur, confs, { flush: true });
           persistPost(structuredClone(cur));
           continue;
         }
@@ -2799,6 +2830,8 @@ export default function Playoffs() {
       const side = winnerFromSlim(slim);
       if (!side) return false;
 
+      setPostseasonCurrentDate(cur, node.date);
+
       const winner = side === "home" ? node.home : node.away;
       const loser = side === "home" ? node.away : node.home;
 
@@ -2836,11 +2869,14 @@ export default function Playoffs() {
 
       const idx = series.nextGameIndex;
       const gid = series.gameIds[idx];
+      const gameDate = series.gameDates?.[idx] || null;
       const { home, away } = seriesGameMeta(series, idx);
 
       const slim = saveDevGameResult(gid, home, away);
       const side = winnerFromSlim(slim);
       if (!side) return false;
+
+      setPostseasonCurrentDate(cur, gameDate);
 
       if (side === "home") {
         if (home === series.highSeedTeam) series.winsHigh++;
@@ -2894,23 +2930,16 @@ export default function Playoffs() {
         let progressed = false;
 
         if (stage === "playin") {
-          for (const ck of confs) {
+          const ready = listReadyPlayInGamesByDate(cur, confs);
+          const nextDate = ready[0]?.date || null;
+          const targets = nextDate
+            ? ready.filter((candidate) => candidate.date === nextDate)
+            : [];
+
+          for (const target of targets) {
             if (stopRequestedRef.current) break;
-
-            const pi = cur?.conf?.[ck]?.playIn;
-            if (!pi) continue;
-
-            if (!pi.g78.played && !stopRequestedRef.current) {
-              progressed = applyDevPlayInGame(cur, ck, "78") || progressed;
-            }
-
-            if (!pi.g910.played && !stopRequestedRef.current) {
-              progressed = applyDevPlayInGame(cur, ck, "910") || progressed;
-            }
-
-            if (!pi.gFinal.played && !stopRequestedRef.current) {
-              progressed = applyDevPlayInGame(cur, ck, "final") || progressed;
-            }
+            progressed =
+              applyDevPlayInGame(cur, target.confKey, target.which) || progressed;
           }
 
           if (!progressed) {
@@ -3426,8 +3455,13 @@ ${disabled ? "opacity-60" : ""}
           )}
         </div>
 
-        <div className="absolute left-1/2 -translate-x-1/2 text-[28px] font-extrabold tracking-wide text-white/90 select-none">
-          {showingPlayIn ? "PLAY-IN TOURNAMENT" : "PLAYOFFS"}
+        <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center select-none">
+          <div className="text-[28px] font-extrabold leading-none tracking-wide text-white/90">
+            {showingPlayIn ? "PLAY-IN TOURNAMENT" : "PLAYOFFS"}
+          </div>
+          <div className="mt-1 text-[9px] font-black uppercase tracking-[0.24em] text-orange-300/65">
+            Current Date • {formatLeagueDate(post?.calendar?.currentDate)}
+          </div>
         </div>
 
         <div className="flex w-[300px] justify-end gap-2">

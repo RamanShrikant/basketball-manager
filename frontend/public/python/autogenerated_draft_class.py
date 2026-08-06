@@ -1640,6 +1640,37 @@ def _repair_prospects_to_overall_slots(prospects: List[Dict[str, Any]], overall_
         repaired.append(prospect)
     return repaired
 
+
+def _renumber_visible_draft_projections(prospects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Give the draft board one clean visible rank per prospect.
+
+    Earlier auto classes used a noisy visible draftProjection, which created
+    ties and gaps like #1, #3, #3, #5. Keep that noisy order, but renumber the
+    visible board to a stable 1..100 sequence so the UI and live draft can sort
+    cleanly by Rank.
+    """
+    ordered = sorted(
+        enumerate(prospects or []),
+        key=lambda pair: (
+            _safe_int(pair[1].get("draftProjection"), 999),
+            _safe_int(pair[1].get("trueRank"), 999),
+            -_safe_int(pair[1].get("potential"), 0),
+            -_safe_int(pair[1].get("overall"), 0),
+            str(pair[1].get("name") or ""),
+            pair[0],
+        ),
+    )
+
+    repaired: List[Dict[str, Any]] = []
+    for visible_rank, (_, prospect) in enumerate(ordered, start=1):
+        next_prospect = dict(prospect or {})
+        next_prospect["draftProjection"] = visible_rank
+        next_prospect["rank"] = visible_rank
+        next_prospect["boardRank"] = visible_rank
+        repaired.append(next_prospect)
+
+    return repaired
+
 def generate_draft_class(
     season_year: int = 2026,
     count: int = DRAFT_CLASS_FIXED_COUNT,
@@ -1689,9 +1720,11 @@ def generate_draft_class(
             )
         )
 
-    # Sort by true rank, but keep draftProjection as the visible noisy board.
+    # Sort by true rank for quality calibration, then repair the visible board
+    # ranks to one clean 1..100 sequence.
     prospects = sorted(prospects, key = lambda p: p["trueRank"])
     prospects = _repair_prospects_to_overall_slots(prospects, overall_slots, rng, class_type)
+    prospects = _renumber_visible_draft_projections(prospects)
 
     return {
         "ok": True,

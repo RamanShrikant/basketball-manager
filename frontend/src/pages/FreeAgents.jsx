@@ -7,6 +7,7 @@ import { rebuildGameplansForLeague } from "../utils/ensureGameplans";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./FreeAgents.module.css";
 import PageFade from "../components/PageFade";
+import { stampFreeAgentSigningRestrictions } from "../utils/userTradeRules.js";
 import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
 import PlayerRatingRing from "../components/PlayerRatingRing";
 import "../styles/BMAnimations.css";
@@ -230,6 +231,15 @@ function compactSigningForStorage(row, emergency = false) {
       : [],
     storyContext: compactStoryContextForStorage(row.storyContext),
   };
+}
+
+function getFreeAgencyLedgerDateForDay(seasonYear, latestResults = null) {
+  const day = Number(latestResults?.dayResolved ?? latestResults?.day ?? NaN);
+  const year = Number(seasonYear);
+  if (!Number.isFinite(year) || year < 2020 || year > 2100 || !Number.isFinite(day)) return null;
+  if (day <= 0) return `${year}-06-30`;
+  const date = new Date(Date.UTC(year, 6, Math.max(1, Math.round(day))));
+  return date.toISOString().slice(0, 10);
 }
 
 function compactFreeAgencyStateSummaryForStorage(summary) {
@@ -978,28 +988,39 @@ const isOffseasonMode =
     maxRosterSize,
   ]);
 
-  const applyLeagueUpdate = (updated) => {
+  const applyLeagueUpdate = (updated, signingLedgerOptions = {}) => {
     if (!updated) return;
 
-    setWorkingLeagueData(updated);
+    const nextUpdated = workingLeagueData
+      ? stampFreeAgentSigningRestrictions({
+          beforeLeague: workingLeagueData,
+          afterLeague: updated,
+          signedDate: signingLedgerOptions?.signedDate || null,
+          dayResolved: signingLedgerOptions?.dayResolved ?? null,
+          signings: signingLedgerOptions?.signings || [],
+          source: signingLedgerOptions?.source || (isOffseasonMode ? "offseason_free_agency" : "user_free_agent_signing"),
+        })
+      : updated;
+
+    setWorkingLeagueData(nextUpdated);
 
     if (typeof setLeagueData === "function") {
-      setLeagueData(updated);
+      setLeagueData(nextUpdated);
     }
 
-    persistLeagueData(updated);
+    persistLeagueData(nextUpdated);
 
     if (typeof setSelectedTeam === "function" && selectedTeam?.name) {
       let nextSelectedTeam = null;
 
       const updatedTeams = [];
 
-      if (Array.isArray(updated.teams)) {
-        updatedTeams.push(...updated.teams);
+      if (Array.isArray(nextUpdated.teams)) {
+        updatedTeams.push(...nextUpdated.teams);
       }
 
-      if (updated.conferences) {
-        updatedTeams.push(...Object.values(updated.conferences || {}).flat());
+      if (nextUpdated.conferences) {
+        updatedTeams.push(...Object.values(nextUpdated.conferences || {}).flat());
       }
 
       nextSelectedTeam = updatedTeams.find((team) => team?.name === selectedTeam.name) || null;
@@ -1021,7 +1042,12 @@ const isOffseasonMode =
       },
     };
 
-    applyLeagueUpdate(nextLeagueData);
+    applyLeagueUpdate(nextLeagueData, {
+      signings: Array.isArray(latestResults?.signings) ? latestResults.signings : [],
+      dayResolved: latestResults?.dayResolved ?? null,
+      signedDate: getFreeAgencyLedgerDateForDay(currentSeasonYear, latestResults),
+      source: "offseason_free_agency",
+    });
   };
 
   const getPlayerKey = (player) => {

@@ -25,6 +25,10 @@ import {
 } from "./tradeExecution.js";
 import { evaluateTradeRosterProjection } from "./rosterRules.js";
 import {
+  evaluateUserTradeFinancialLegality,
+  validateUserTradeAssetPackage,
+} from "./userTradeRules.js";
+import {
   buildReverseRescueQueue,
   prioritizeReverseCandidateRows,
 } from "./reverseTradeFinderCoverage.js";
@@ -88,7 +92,23 @@ function rosterCountsOk({ controlledTeam, targetTeam, userItems, targetItems, in
   return controlledProjection.ok && targetProjection.ok;
 }
 
-function financialsOk({ leagueData, controlledTeam, targetTeam, userItems, targetItems }) {
+function financialsOk({ leagueData, controlledTeam, targetTeam, userItems, targetItems, userDrivenRules = false }) {
+  if (userDrivenRules) {
+    return Boolean(
+      evaluateUserTradeFinancialLegality({
+        team: controlledTeam,
+        leagueData,
+        outgoingItems: userItems,
+        incomingItems: targetItems,
+      })?.ok &&
+        evaluateUserTradeFinancialLegality({
+          team: targetTeam,
+          leagueData,
+          outgoingItems: targetItems,
+          incomingItems: userItems,
+        })?.ok
+    );
+  }
   const userOutgoing = sideSalary(userItems, leagueData);
   const userIncoming = sideSalary(targetItems, leagueData);
   const targetOutgoing = sideSalary(targetItems, leagueData);
@@ -313,6 +333,7 @@ export async function runReverseTradeFinderSearch({
   onProgress = null,
   signal = null,
   maxResults = REVERSE_MAX_RESULTS,
+  userDrivenRules = false,
 } = {}) {
   const startedAt = nowMs();
   if (!leagueData || !controlledTeam || !targetTeam || !Array.isArray(targetItems) || !targetItems.length) {
@@ -387,7 +408,19 @@ export async function runReverseTradeFinderSearch({
       diagnostics.rosterRejected += 1;
       continue;
     }
-    if (!financialsOk({ leagueData, controlledTeam, targetTeam, userItems: cleaned, targetItems })) {
+    if (userDrivenRules) {
+      const assetValidation = validateUserTradeAssetPackage({
+        leagueData,
+        teamName: getTeamName(controlledTeam),
+        outgoingItems: cleaned,
+        incomingItems: targetItems,
+      });
+      if (!assetValidation.ok) {
+        diagnostics.financialRejected += 1;
+        continue;
+      }
+    }
+    if (!financialsOk({ leagueData, controlledTeam, targetTeam, userItems: cleaned, targetItems, userDrivenRules })) {
       diagnostics.financialRejected += 1;
       continue;
     }
@@ -555,6 +588,7 @@ export async function runReverseTradeFinderSearch({
       userItems,
       cpuItems: targetItems,
       evaluation,
+      userDrivenRules,
     });
     if (!validation?.ok) {
       diagnostics.finalValidationRejected += 1;
@@ -742,6 +776,7 @@ export async function findComfortableReverseTradeFinderOffers(args = {}) {
           targetTeam: args.targetTeam,
           targetItems: args.targetItems,
           maxResults: Math.min(REVERSE_MAX_RESULTS, Math.max(0, Number(args.maxResults || REVERSE_MAX_RESULTS))),
+          userDrivenRules: Boolean(args.userDrivenRules),
         },
       });
     });

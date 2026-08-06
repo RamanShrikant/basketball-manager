@@ -4,6 +4,7 @@ import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { getDraftYear } from "../utils/seasonContext.js";
+import { stampRookieSigningRestrictions } from "../utils/userTradeRules.js";
 
 const LEAGUE_KEY = "leagueData";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
@@ -412,10 +413,15 @@ export default function RookieSignings() {
         throw new Error(result?.reason || "Failed to apply rookie signings.");
       }
 
-      const nextLeague = result.leagueData || workingLeagueData;
+      const rawNextLeague = result.leagueData || workingLeagueData;
+      const nextLeague = stampRookieSigningRestrictions({
+        beforeLeague: workingLeagueData,
+        afterLeague: rawNextLeague,
+        draftYear: seasonYear,
+      });
       setWorkingLeagueData(nextLeague);
       persistLeagueData(nextLeague, setLeagueData);
-      setApplied(result);
+      setApplied({ ...result, leagueData: nextLeague });
 
       const remainingUser = result.remainingPendingRookies?.filter((row) => row.userControlled) || [];
       const remainingCpu = result.remainingPendingRookies?.filter((row) => !row.userControlled) || [];

@@ -5,6 +5,7 @@ import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
 import { getOffseasonTradeContext } from "../utils/offseasonTradeContext.js";
+import { getUserTradePickEligibility } from "../utils/userTradeRules.js";
 import {
   canAddCustomProtectionToPick,
   canCreateSwapWithPick,
@@ -242,27 +243,58 @@ function getSeasonYearFromLeague(leagueData) {
   return candidates.length ? Math.max(...candidates) : 2026;
 }
 
+function getDraftOrderPickNumber(row = null) {
+  if (!row || typeof row !== "object") return 0;
+  const value = Number(row.pick || row.pickNumber || row.overallPick || row.draftPickNumber || row.resolvedPickNumber || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function isUsableDraftOrderRow(row = null) {
+  if (!row || typeof row !== "object") return false;
+  if (getDraftOrderPickNumber(row) > 0) return true;
+  return Boolean(row.teamName || row.currentOwnerTeamName || row.ownerTeamName || row.originalTeamName || row.originalPickTeamName);
+}
+
+function sanitizeDraftOrderRows(rows = []) {
+  return (Array.isArray(rows) ? rows : []).filter(isUsableDraftOrderRow);
+}
+
 function readLockedDraftOrder(leagueData, seasonYear) {
-  const direct = leagueData?.draftState?.draftOrder;
-  if (Array.isArray(direct) && direct.length) return direct;
+  const candidates = [];
+  const pushRows = (rows, allowed = true) => {
+    if (!allowed || !Array.isArray(rows)) return;
+    const clean = sanitizeDraftOrderRows(rows.filter(Boolean));
+    if (clean.length) candidates.push(clean);
+  };
 
-  const lotteryOrder = leagueData?.draftState?.lottery?.fullDraftOrder;
-  if (leagueData?.draftState?.draftLotteryComplete && Array.isArray(lotteryOrder) && lotteryOrder.length) {
-    return lotteryOrder;
-  }
-
+  const savedDraftState = safeJSON(localStorage.getItem("bm_draft_state_v1"), null);
   const savedLottery = safeJSON(localStorage.getItem("bm_draft_lottery_v1"), null);
-  if (
-    savedLottery &&
-    Number(savedLottery.seasonYear) === Number(seasonYear) &&
-    savedLottery.firstRoundRevealed &&
-    savedLottery.secondRoundRevealed &&
-    Array.isArray(savedLottery?.result?.fullDraftOrder)
-  ) {
-    return savedLottery.result.fullDraftOrder;
-  }
+  const savedDraftMatches = savedDraftState && Number(savedDraftState.seasonYear || seasonYear) === Number(seasonYear);
+  const savedLotteryMatches = savedLottery && Number(savedLottery.seasonYear || seasonYear) === Number(seasonYear);
+  const savedLotteryRevealed = Boolean(
+    savedLotteryMatches &&
+      savedLottery.firstRoundRevealed &&
+      savedLottery.secondRoundRevealed &&
+      !savedLottery.isPreview
+  );
+  const leagueLotteryComplete = Boolean(
+    leagueData?.draftState?.draftLotteryComplete ||
+      (Number(leagueData?.draftState?.seasonYear || seasonYear) === Number(seasonYear) &&
+        Array.isArray(leagueData?.draftState?.draftOrder) &&
+        leagueData.draftState.draftOrder.length)
+  );
 
-  return [];
+  pushRows(savedDraftState?.draftOrder, savedDraftMatches);
+  pushRows(savedDraftState?.fullDraftOrder, savedDraftMatches);
+  pushRows(savedLottery?.result?.fullDraftOrder, savedLotteryRevealed);
+  pushRows(savedLottery?.fullDraftOrder, savedLotteryRevealed);
+  pushRows(leagueData?.draftState?.fullDraftOrder, leagueLotteryComplete);
+  pushRows(leagueData?.draftState?.draftOrder, leagueLotteryComplete);
+  pushRows(leagueData?.draftState?.lottery?.fullDraftOrder, leagueLotteryComplete);
+  pushRows(leagueData?.draftLottery?.fullDraftOrder, leagueLotteryComplete);
+
+  candidates.sort((a, b) => b.length - a.length);
+  return candidates.find((rows) => rows.length >= 60) || candidates[0] || [];
 }
 
 function isDraftCompleteForSeason(leagueData, seasonYear) {
@@ -285,10 +317,13 @@ function getPickOriginalName(row = {}) {
 }
 
 function buildResolvedDraftAsset(row = {}, seasonYear) {
-  const pickNumber = Number(row.pick || row.pickNumber || row.overallPick || 0);
+  if (!row || typeof row !== "object") return null;
+  const pickNumber = Number(row.pick || row.pickNumber || row.overallPick || row.draftPickNumber || row.resolvedPickNumber || 0);
+  if (!Number.isFinite(pickNumber) || pickNumber <= 0) return null;
   const round = Number(row.round || (pickNumber <= 30 ? 1 : 2));
   const ownerTeam = getPickOwnerName(row);
   const originalTeam = getPickOriginalName(row);
+  if (!ownerTeam) return null;
 
   return {
     id: `resolved_${seasonYear}_${round}_${pickNumber}_${ownerTeam}_${originalTeam}`,
@@ -460,7 +495,7 @@ function collectTradeablePicks({ leagueData, teamName, teamNames, activeSwapKeys
   const draftComplete = tradeContext?.inOffseason
     ? Boolean(tradeContext.draftComplete)
     : isDraftCompleteForSeason(leagueData, seasonYear);
-  const draftOrderLocked = Boolean(tradeContext?.draftOrderLocked || draftOrder.length >= 60);
+  const draftOrderLocked = Boolean(tradeContext?.draftOrderLocked || draftOrder.length > 0);
 
   const normalizedFuturePicks = normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
     .filter((pick) => String(pick.status || "active").toLowerCase() === "active")
@@ -473,6 +508,7 @@ function collectTradeablePicks({ leagueData, teamName, teamNames, activeSwapKeys
     draftOrderLocked && !draftComplete
       ? filterTradeableLiveDraftRows(draftOrder, leagueData, seasonYear)
           .map((row) => buildResolvedDraftAsset(row, seasonYear))
+          .filter(Boolean)
       : [];
 
   const activeKey = normalizeTeamName(teamName);
@@ -593,6 +629,33 @@ export default function TradePickSelect() {
     [activeSwapKeys, leagueData, otherTeamName, teamNames]
   );
 
+  const rowEligibilityByKey = useMemo(() => {
+    const map = new Map();
+    for (const pick of picks) {
+      const canPreviewAsProtected = canAddCustomProtectionToPick(pick);
+      const previewItem = {
+        type: "pick",
+        teamName: tradeTeamName,
+        pick,
+        // Preview a protectable pick as protected so the second-apron rule does
+        // not hide an asset that can still be moved legally with protection.
+        // Picks that cannot accept protection are previewed as their full asset.
+        // Stepien still evaluates either version as an outgoing future first.
+        tradeRule: { action: canPreviewAsProtected ? "protected" : "full" },
+        protection: canPreviewAsProtected ? "Protected" : getTradePickBaseProtectionLabel(pick),
+      };
+      map.set(pickKey(pick), getUserTradePickEligibility({
+        leagueData,
+        teamName: tradeTeamName,
+        pick,
+        item: previewItem,
+        outgoingItems: currentSideItems,
+        incomingItems: otherSideItems,
+      }));
+    }
+    return map;
+  }, [currentSideItems, leagueData, otherSideItems, picks, tradeTeamName]);
+
   const [selectedKey, setSelectedKey] = useState("");
   const [rulePickKey, setRulePickKey] = useState("");
   const [ruleMode, setRuleMode] = useState("full");
@@ -608,12 +671,15 @@ export default function TradePickSelect() {
     }
 
     setSelectedKey((prev) => {
-      const prevStillAvailable = prev && picks.some((pick) => pickKey(pick) === prev) && !alreadyAddedPickKeys.has(prev);
+      const prevStillAvailable = prev && picks.some((pick) => pickKey(pick) === prev) && !alreadyAddedPickKeys.has(prev) && rowEligibilityByKey.get(prev)?.ok !== false;
       if (prevStillAvailable) return prev;
-      const firstAvailable = picks.find((pick) => !alreadyAddedPickKeys.has(pickKey(pick)));
+      const firstAvailable = picks.find((pick) => {
+        const key = pickKey(pick);
+        return !alreadyAddedPickKeys.has(key) && rowEligibilityByKey.get(key)?.ok !== false;
+      });
       return pickKey(firstAvailable || picks[0]);
     });
-  }, [alreadyAddedPickKeys, picks]);
+  }, [alreadyAddedPickKeys, picks, rowEligibilityByKey]);
 
   const selectedPick = picks.find((pick) => pickKey(pick) === selectedKey) || picks[0] || null;
 
@@ -625,7 +691,9 @@ export default function TradePickSelect() {
     rowSelector: "[data-bm-trade-pick-row-index]",
   });
   const selectedPickAlreadyAdded = Boolean(selectedPick && alreadyAddedPickKeys.has(pickKey(selectedPick)));
-  const canOpenSelectedPick = Boolean(selectedPick && !selectedPickAlreadyAdded && !sideIsFull);
+  const selectedPickEligibility = selectedPick ? rowEligibilityByKey.get(pickKey(selectedPick)) : null;
+  const selectedPickRuleLocked = Boolean(selectedPickEligibility?.ok === false);
+  const canOpenSelectedPick = Boolean(selectedPick && !selectedPickAlreadyAdded && !selectedPickRuleLocked && !sideIsFull);
   const rulePick = picks.find((pick) => pickKey(pick) === rulePickKey) || null;
   const ownedRange = rulePick ? getTradeablePickOwnedRange(rulePick) : null;
   const rulePickEncumbrance = rulePick ? getFastEncumbranceReason(rulePick, activeSwapKeys, leagueData) : "";
@@ -653,6 +721,11 @@ export default function TradePickSelect() {
   const openRuleModal = (pick) => {
     if (!pick) return;
     const key = pickKey(pick);
+    const rowEligibility = rowEligibilityByKey.get(key);
+    if (rowEligibility?.ok === false) {
+      setRuleError(rowEligibility.reason || "This pick is not trade eligible.");
+      return;
+    }
     if (alreadyAddedPickKeys.has(key)) {
       setRuleError("That pick is already in this trade package. Remove it from the builder before adding it again.");
       return;
@@ -685,9 +758,19 @@ export default function TradePickSelect() {
       return;
     }
 
+    const fullEligibility = getUserTradePickEligibility({
+      leagueData,
+      teamName: tradeTeamName,
+      pick,
+      item: { type: "pick", teamName: tradeTeamName, pick, tradeRule: { action: "full" } },
+      outgoingItems: currentSideItems,
+      incomingItems: otherSideItems,
+    });
+    const canUseProtection = canAddCustomProtectionToPick(pick);
+
     setSelectedKey(key);
     setRulePickKey(key);
-    setRuleMode("full");
+    setRuleMode(!fullEligibility.ok && fullEligibility.code === "second_apron_furthest_first" && canUseProtection ? "protected" : "full");
     setProtectEnd(defaultProtectionEnd(pick));
     setSwapDirection("best");
     setSelectedSwapKey("");
@@ -710,6 +793,33 @@ export default function TradePickSelect() {
   }, [canSwap, ruleMode]);
 
   const addItemsToBuilder = (primaryItem, mirrorItem = null) => {
+    const primaryEligibility = getUserTradePickEligibility({
+      leagueData,
+      teamName: tradeTeamName,
+      pick: primaryItem?.pick,
+      item: primaryItem,
+      outgoingItems: currentSideItems,
+      incomingItems: otherSideItems,
+    });
+    if (!primaryEligibility.ok) {
+      setRuleError(primaryEligibility.reason || "This pick is not trade eligible.");
+      return;
+    }
+    if (mirrorItem) {
+      const mirrorEligibility = getUserTradePickEligibility({
+        leagueData,
+        teamName: otherTeamName,
+        pick: mirrorItem?.pick,
+        item: mirrorItem,
+        outgoingItems: otherSideItems,
+        incomingItems: currentSideItems,
+      });
+      if (!mirrorEligibility.ok) {
+        setRuleError(mirrorEligibility.reason || "The linked swap pick is not trade eligible.");
+        return;
+      }
+    }
+
     const builder = readBuilder();
     const currentItems = getSideItems(builder, tradeSide);
     const currentOtherItems = getSideItems(builder, otherTradeSide);
@@ -861,6 +971,17 @@ export default function TradePickSelect() {
   const modalProtectionValidation = rulePick && ownedRange
     ? validateCustomPickProtection(rulePick, ownedRange.start, protectEnd)
     : { ok: false, reason: "No pick selected." };
+  const fullModeEligibility = rulePick
+    ? getUserTradePickEligibility({
+        leagueData,
+        teamName: tradeTeamName,
+        pick: rulePick,
+        item: { type: "pick", teamName: tradeTeamName, pick: rulePick, tradeRule: { action: "full" } },
+        outgoingItems: currentSideItems,
+        incomingItems: otherSideItems,
+      })
+    : { ok: true };
+  const configuredModeLocked = Boolean(ruleMode === "full" && fullModeEligibility.ok === false);
 
   return (
     <PageFade>
@@ -887,7 +1008,7 @@ export default function TradePickSelect() {
               disabled={!canOpenSelectedPick}
               className="rounded-xl bg-orange-600 px-5 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {selectedPickAlreadyAdded ? "Already Added" : sideIsFull ? "Limit Reached" : "Add Pick"}
+              {selectedPickAlreadyAdded ? "Already Added" : selectedPickRuleLocked ? "Trade Locked" : sideIsFull ? "Limit Reached" : "Add Pick"}
             </button>
           </div>
 
@@ -931,6 +1052,8 @@ export default function TradePickSelect() {
                 const key = pickKey(pick);
                 const active = key === selectedKey;
                 const alreadyAdded = alreadyAddedPickKeys.has(key);
+                const eligibility = rowEligibilityByKey.get(key) || { ok: true };
+                const ruleLocked = eligibility.ok === false;
                 const isSwapRow = assetTypeLabel(pick) === "Swap";
                 const isResolvedRow = isResolvedDraftPickAsset(pick);
                 const originalLogo = isSwapRow ? "" : logoMap[normalizeTeamName(pick?.originalTeam || "")];
@@ -939,11 +1062,11 @@ export default function TradePickSelect() {
                   <button
                     key={key}
                     type="button"
-                    disabled={alreadyAdded || sideIsFull}
+                    disabled={alreadyAdded || ruleLocked || sideIsFull}
                     onClick={() => openRuleModal(pick)}
                     data-bm-trade-pick-row-index={index}
                     className={`grid w-full grid-cols-[1fr_110px_165px_180px] items-center gap-0 px-4 py-3 text-left transition disabled:cursor-not-allowed ${
-                      alreadyAdded
+                      alreadyAdded || ruleLocked
                         ? "bg-neutral-950/85 text-neutral-500 opacity-70"
                         : sideIsFull
                         ? "bg-neutral-950/85 text-neutral-500 opacity-60"
@@ -962,7 +1085,12 @@ export default function TradePickSelect() {
                             Already in package
                           </span>
                         )}
-                        {!alreadyAdded && sideIsFull && (
+                        {ruleLocked && (
+                          <span className="rounded-full border border-red-400/40 bg-red-500/15 px-2 py-0.5 text-[10px] font-black text-red-200">
+                            {eligibility.reason}
+                          </span>
+                        )}
+                        {!alreadyAdded && !ruleLocked && sideIsFull && (
                           <span className="rounded-full border border-red-400/40 bg-red-500/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] text-red-200">
                             Limit reached
                           </span>
@@ -1014,16 +1142,19 @@ export default function TradePickSelect() {
               <div className="grid flex-1 gap-4 overflow-y-auto p-5">
                 <button
                   type="button"
-                  onClick={() => setRuleMode("full")}
+                  disabled={fullModeEligibility.ok === false}
+                  onClick={() => fullModeEligibility.ok !== false && setRuleMode("full")}
                   className={`rounded-2xl border px-5 py-4 text-left transition ${
                     ruleMode === "full" ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black hover:border-orange-400/40"
-                  }`}
+                  } ${fullModeEligibility.ok === false ? "cursor-not-allowed opacity-45 hover:border-white/10" : ""}`}
                 >
                   <div className="text-lg font-black text-white">
                     {!isFullOwnedRangeForPick(rulePick) ? "Trade range rights" : "Trade full owned piece"}
                   </div>
                   <div className="mt-1 text-sm font-semibold text-neutral-400">
-                    {!isFullOwnedRangeForPick(rulePick)
+                    {fullModeEligibility.ok === false
+                      ? fullModeEligibility.reason
+                      : !isFullOwnedRangeForPick(rulePick)
                       ? `Sends only the owned slots ${ownedRange?.start}-${ownedRange?.end}; the original protection stays attached.`
                       : "Sends exactly what this team owns right now. Existing protections stay attached."}
                   </div>
@@ -1148,10 +1279,10 @@ export default function TradePickSelect() {
                   <button
                     type="button"
                     onClick={addConfiguredPick}
-                    disabled={Boolean(rulePick && alreadyAddedPickKeys.has(pickKey(rulePick))) || sideIsFull}
+                    disabled={Boolean(rulePick && alreadyAddedPickKeys.has(pickKey(rulePick))) || sideIsFull || configuredModeLocked}
                     className="rounded-xl bg-orange-600 px-5 py-3 text-sm font-black text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {rulePick && alreadyAddedPickKeys.has(pickKey(rulePick)) ? "Already Added" : sideIsFull ? "Limit Reached" : "Add Pick"}
+                    {rulePick && alreadyAddedPickKeys.has(pickKey(rulePick)) ? "Already Added" : configuredModeLocked ? "Trade Locked" : sideIsFull ? "Limit Reached" : "Add Pick"}
                   </button>
                 </div>
               </div>

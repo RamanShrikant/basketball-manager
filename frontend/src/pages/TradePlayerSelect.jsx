@@ -5,6 +5,7 @@ import PageFade from "../components/PageFade";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
 import { filterTradeEligiblePlayers } from "../utils/tradeRosterEligibility.js";
 import { getContractSeasonYear } from "../utils/seasonContext.js";
+import { getUserTradeCurrentDate, getUserTradePlayerEligibility } from "../utils/userTradeRules.js";
 import styles from "./RosterView.module.css";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
@@ -295,12 +296,25 @@ export default function TradePlayerSelect() {
     () => getSideItems(builderSnapshot, tradeSide),
     [builderSnapshot, tradeSide]
   );
+  const userTradeCurrentDate = useMemo(() => getUserTradeCurrentDate(leagueData), [leagueData]);
   const alreadyAddedPlayerKeys = useMemo(
     () => getAlreadyAddedPlayerKeys(currentSideItems),
     [currentSideItems]
   );
   const sideItemCount = currentSideItems.length;
   const sideIsFull = sideItemCount >= MAX_SIDE_ITEMS;
+  const playerEligibilityByKey = useMemo(() => {
+    const map = new Map();
+    for (const player of players) {
+      map.set(playerKey(player), getUserTradePlayerEligibility({
+        leagueData,
+        teamName: team?.name || team?.teamName || tradeTeamName,
+        player,
+        currentDate: userTradeCurrentDate,
+      }));
+    }
+    return map;
+  }, [leagueData, players, team, tradeTeamName, userTradeCurrentDate]);
 
   const [selectedKey, setSelectedKey] = useState("");
   const [sortConfig, setSortConfig] = useState({ key: "overall", direction: "desc" });
@@ -344,12 +358,16 @@ export default function TradePlayerSelect() {
     }
 
     const selectedStillExists = selectedKey && sortedPlayers.some((p) => playerKey(p) === selectedKey);
-    const selectedIsAvailable = selectedStillExists && !alreadyAddedPlayerKeys.has(selectedKey);
+    const selectedEligibility = playerEligibilityByKey.get(selectedKey);
+    const selectedIsAvailable = selectedStillExists && !alreadyAddedPlayerKeys.has(selectedKey) && selectedEligibility?.ok !== false;
     if (selectedIsAvailable) return;
 
-    const firstAvailable = sortedPlayers.find((p) => !alreadyAddedPlayerKeys.has(playerKey(p)));
+    const firstAvailable = sortedPlayers.find((p) => {
+      const key = playerKey(p);
+      return !alreadyAddedPlayerKeys.has(key) && playerEligibilityByKey.get(key)?.ok !== false;
+    });
     setSelectedKey(playerKey(firstAvailable || sortedPlayers[0]));
-  }, [alreadyAddedPlayerKeys, sortedPlayers, selectedKey]);
+  }, [alreadyAddedPlayerKeys, playerEligibilityByKey, sortedPlayers, selectedKey]);
 
   const selectedPlayer =
     sortedPlayers.find((p) => playerKey(p) === selectedKey) || sortedPlayers[0] || null;
@@ -362,7 +380,9 @@ export default function TradePlayerSelect() {
     rowSelector: "[data-bm-trade-player-row-index]",
   });
   const selectedPlayerAlreadyAdded = Boolean(selectedPlayer && alreadyAddedPlayerKeys.has(playerKey(selectedPlayer)));
-  const canAddSelectedPlayer = Boolean(selectedPlayer && team && !selectedPlayerAlreadyAdded && !sideIsFull);
+  const selectedPlayerEligibility = selectedPlayer ? playerEligibilityByKey.get(playerKey(selectedPlayer)) : null;
+  const selectedPlayerRuleLocked = Boolean(selectedPlayerEligibility?.ok === false);
+  const canAddSelectedPlayer = Boolean(selectedPlayer && team && !selectedPlayerAlreadyAdded && !selectedPlayerRuleLocked && !sideIsFull);
 
   const handleSort = (key) => {
     setSortConfig((prev) => {
@@ -381,7 +401,8 @@ export default function TradePlayerSelect() {
   };
 
   const addPlayerToBuilder = (player) => {
-    if (!player || !team || sideIsFull || alreadyAddedPlayerKeys.has(playerKey(player))) return;
+    const eligibility = player ? playerEligibilityByKey.get(playerKey(player)) : null;
+    if (!player || !team || sideIsFull || alreadyAddedPlayerKeys.has(playerKey(player)) || eligibility?.ok === false) return;
 
     const builder = readBuilder();
     const currentItems = getSideItems(builder, tradeSide);
@@ -439,7 +460,7 @@ export default function TradePlayerSelect() {
               disabled={!canAddSelectedPlayer}
               className="rounded-xl bg-orange-600 px-5 py-2 text-sm font-black text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {selectedPlayerAlreadyAdded ? "Already Added" : sideIsFull ? "Limit Reached" : "Add Player"}
+              {selectedPlayerAlreadyAdded ? "Already Added" : selectedPlayerRuleLocked ? "Trade Locked" : sideIsFull ? "Limit Reached" : "Add Player"}
             </button>
           </div>
         </div>
@@ -488,7 +509,12 @@ export default function TradePlayerSelect() {
                         Already in package
                       </div>
                     )}
-                    {!selectedPlayerAlreadyAdded && sideIsFull && (
+                    {!selectedPlayerAlreadyAdded && selectedPlayerRuleLocked && (
+                      <div className="mt-3 inline-flex w-fit items-center rounded-full border border-red-400/40 bg-red-500/15 px-3 py-1 text-xs font-black text-red-200">
+                        {selectedPlayerEligibility?.reason || "Player is not trade eligible."}
+                      </div>
+                    )}
+                    {!selectedPlayerAlreadyAdded && !selectedPlayerRuleLocked && sideIsFull && (
                       <div className="mt-3 inline-flex w-fit items-center rounded-full border border-red-400/40 bg-red-500/15 px-3 py-1 text-xs font-black uppercase tracking-[0.14em] text-red-200">
                         Package limit reached
                       </div>
@@ -538,22 +564,24 @@ export default function TradePlayerSelect() {
                   const key = playerKey(p);
                   const active = key === selectedKey;
                   const alreadyAdded = alreadyAddedPlayerKeys.has(key);
-                  const unavailable = alreadyAdded || (!active && sideIsFull);
+                  const eligibility = playerEligibilityByKey.get(key) || { ok: true };
+                  const ruleLocked = eligibility.ok === false;
+                  const unavailable = alreadyAdded || ruleLocked || (!active && sideIsFull);
 
                   return (
                     <tr
                       key={key}
                       data-bm-trade-player-row-index={rowIndex}
                       onClick={() => {
-                        if (!alreadyAdded) setSelectedKey(key);
+                        if (!alreadyAdded && !ruleLocked) setSelectedKey(key);
                       }}
                       onDoubleClick={() => {
-                        if (!alreadyAdded && !sideIsFull) addPlayerToBuilder(p);
+                        if (!alreadyAdded && !ruleLocked && !sideIsFull) addPlayerToBuilder(p);
                       }}
-                      aria-disabled={alreadyAdded}
-                      title={alreadyAdded ? "Already in this trade package" : ""}
+                      aria-disabled={alreadyAdded || ruleLocked}
+                      title={alreadyAdded ? "Already in this trade package" : ruleLocked ? eligibility.reason : ""}
                       className={`transition ${
-                        alreadyAdded
+                        alreadyAdded || ruleLocked
                           ? "cursor-not-allowed bg-neutral-950/80 text-neutral-500 opacity-70"
                           : active
                           ? "cursor-pointer bg-orange-600 text-white"
@@ -569,6 +597,11 @@ export default function TradePlayerSelect() {
                         {alreadyAdded && (
                           <span className="ml-3 inline-flex items-center rounded-full border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-orange-200">
                             Already in package
+                          </span>
+                        )}
+                        {ruleLocked && (
+                          <span className="ml-3 inline-flex max-w-[520px] items-center rounded-full border border-red-400/35 bg-red-500/10 px-2 py-0.5 text-[10px] font-extrabold text-red-200">
+                            {eligibility.eligibleDate ? `Locked until ${eligibility.eligibleDateLabel}` : eligibility.reason}
                           </span>
                         )}
                         {p.isTwoWay && (

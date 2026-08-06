@@ -192,10 +192,13 @@ function getPickOriginalName(row = {}) {
 }
 
 function buildResolvedDraftAsset(row = {}, seasonYear) {
+  if (!row || typeof row !== "object") return null;
   const pickNumber = Number(row.pick || row.pickNumber || row.overallPick || row.draftPickNumber || row.resolvedPickNumber || 0);
+  if (!Number.isFinite(pickNumber) || pickNumber <= 0) return null;
   const round = Number(row.round || (pickNumber <= 30 ? 1 : 2));
   const ownerTeam = getPickOwnerName(row);
   const originalTeam = getPickOriginalName(row);
+  if (!ownerTeam) return null;
   return {
     id: `resolved_${seasonYear}_${round}_${pickNumber}_${ownerTeam}_${originalTeam}`,
     assetType: "resolved",
@@ -239,7 +242,7 @@ export function collectTradeablePicksForTeam(leagueData, teamName) {
     .map((pick) => ({ ...pick, currentSeasonYear: seasonYear, leagueSeasonYear: seasonYear }));
 
   const resolvedPicks = draftOrderLocked && !draftComplete
-    ? draftOrder.map((row) => buildResolvedDraftAsset(row, seasonYear))
+    ? draftOrder.map((row) => buildResolvedDraftAsset(row, seasonYear)).filter(Boolean)
     : [];
 
   const activeKey = normalizeTeamName(teamName);

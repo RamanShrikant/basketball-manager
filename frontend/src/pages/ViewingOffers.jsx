@@ -6,8 +6,19 @@ import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./ViewingOffers.module.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
+import { stampFreeAgentSigningRestrictions } from "../utils/userTradeRules.js";
 
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
+
+function getFreeAgencyLedgerDateForDay(leagueData = {}, latestResults = null) {
+  const day = Number(latestResults?.dayResolved ?? latestResults?.day ?? NaN);
+  const state = leagueData?.freeAgencyState || {};
+  const year = Number(state?.seasonYear || leagueData?.seasonYear || leagueData?.currentSeasonYear || 0);
+  if (!Number.isFinite(year) || year < 2020 || year > 2100 || !Number.isFinite(day)) return null;
+  if (day <= 0) return `${year}-06-30`;
+  const date = new Date(Date.UTC(year, 6, Math.max(1, Math.round(day))));
+  return date.toISOString().slice(0, 10);
+}
 
 function compactStorySideForStorage(side) {
   if (!side || typeof side !== "object") return null;
@@ -2163,7 +2174,16 @@ export default function ViewingOffers() {
       },
     };
 
-    applyLeagueUpdate(nextLeagueData);
+    const stampedLeagueData = stampFreeAgentSigningRestrictions({
+      beforeLeague: leagueData || {},
+      afterLeague: nextLeagueData,
+      signedDate: getFreeAgencyLedgerDateForDay(nextLeagueData, nextLatestResults),
+      dayResolved: nextLatestResults?.dayResolved ?? null,
+      signings: Array.isArray(nextLatestResults?.signings) ? nextLatestResults.signings : [],
+      source: "offseason_free_agency",
+    });
+
+    applyLeagueUpdate(stampedLeagueData);
   };
 
   useEffect(() => {

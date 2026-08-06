@@ -70,6 +70,40 @@ function safeJSON(raw, fallback = null) {
   }
 }
 
+
+function readActiveLeagueClock() {
+  try {
+    const parsed = JSON.parse(safeStorageGet("bm_league_clock_v1") || "null");
+    const date = String(parsed?.date || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+    return {
+      ...parsed,
+      date,
+      phase: String(parsed?.phase || "").toLowerCase(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isActiveRegularSeasonClock(leagueData = {}, seasonYear = 0) {
+  const clock = readActiveLeagueClock();
+  const date = String(clock?.date || "").trim();
+  const phase = String(clock?.phase || "").replace(/[^a-z]/g, "");
+  if (!date) return false;
+  if (phase === "regularseason") return true;
+
+  const [year, month] = date.split("-").map(Number);
+  const startYear = Number(seasonYear || currentSeasonYear(leagueData));
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(startYear)) return false;
+
+  // Any active calendar date between opening night and the following June means
+  // the stale offseason/draft localStorage for that year must not keep the Front
+  // Office in offseason mode. This fixes Y2 Contract Extensions staying locked
+  // after the new regular season has clearly started.
+  return (year === startYear && month >= 9) || (year === startYear + 1 && month < 6);
+}
+
 function getAllTeams(leagueData = {}) {
   if (Array.isArray(leagueData?.teams)) return leagueData.teams;
   if (leagueData?.conferences && typeof leagueData.conferences === "object") {
@@ -118,8 +152,17 @@ function getLockedDraftOrder(leagueData, seasonYear, savedLottery, savedDraftSta
     savedLottery?.result?.fullDraftOrder,
     savedLottery?.fullDraftOrder,
     savedDraftState?.draftOrder,
-  ];
-  return candidates.find((rows) => Array.isArray(rows) && rows.length) || [];
+    savedDraftState?.fullDraftOrder,
+  ]
+    .filter((rows) => Array.isArray(rows) && rows.filter(Boolean).length)
+    .map((rows) => rows.filter(Boolean));
+
+  // The lottery page can leave a shorter 16/30-row display order in
+  // leagueData while a complete 60-row order is already saved in lottery/draft
+  // storage. User trade surfaces need the most complete locked order so current
+  // draft picks become exact resolved assets instead of stale "2027 1st --" rows.
+  candidates.sort((a, b) => b.length - a.length);
+  return candidates.find((rows) => rows.length >= 60) || candidates[0] || [];
 }
 
 function getDraftProspects(leagueData, seasonYear, savedDraftState) {
@@ -336,12 +379,14 @@ function determineStage({ inOffseason, lotteryRevealed, draftComplete, draftInPr
 
 export function getOffseasonTradeContext(leagueData = {}, explicitContext = null) {
   const embedded = explicitContext || leagueData?.__offseasonTradeContext;
-  if (embedded && typeof embedded === "object" && embedded.version) return embedded;
-
   const seasonYear = currentSeasonYear(leagueData);
-  const offseasonState = getSavedStateForYear(OFFSEASON_STATE_KEY, seasonYear) || leagueData?.offseasonState || {};
-  const savedLottery = getSavedStateForYear(DRAFT_LOTTERY_KEY, seasonYear);
-  const savedDraftState = getSavedStateForYear(DRAFT_STATE_KEY, seasonYear);
+  const activeRegularSeasonClock = isActiveRegularSeasonClock(leagueData, seasonYear);
+  if (embedded && typeof embedded === "object" && embedded.version && !activeRegularSeasonClock) return embedded;
+  const offseasonState = activeRegularSeasonClock
+    ? {}
+    : (getSavedStateForYear(OFFSEASON_STATE_KEY, seasonYear) || leagueData?.offseasonState || {});
+  const savedLottery = activeRegularSeasonClock ? null : getSavedStateForYear(DRAFT_LOTTERY_KEY, seasonYear);
+  const savedDraftState = activeRegularSeasonClock ? null : getSavedStateForYear(DRAFT_STATE_KEY, seasonYear);
   const rawDraftOrder = getLockedDraftOrder(leagueData, seasonYear, savedLottery, savedDraftState);
   const firstRoundRevealed = Boolean(
     savedLottery?.firstRoundRevealed ||
@@ -376,7 +421,8 @@ export function getOffseasonTradeContext(leagueData = {}, explicitContext = null
   );
   const draftInProgress = Boolean(!draftComplete && currentPickIndex > 0);
   const inOffseason = Boolean(
-    offseasonState?.inOffseason ||
+    !activeRegularSeasonClock && (
+      offseasonState?.inOffseason ||
       offseasonState?.offseason ||
       offseasonState?.active ||
       offseasonState?.started ||
@@ -390,6 +436,7 @@ export function getOffseasonTradeContext(leagueData = {}, explicitContext = null
       savedDraftState ||
       leagueData?.draftState?.draftLotteryComplete ||
       leagueData?.draftState?.draftOrder?.length
+    )
   );
 
   const prospects = getDraftProspects(leagueData, seasonYear, savedDraftState);
@@ -415,7 +462,7 @@ export function getOffseasonTradeContext(leagueData = {}, explicitContext = null
     lotteryRevealed,
     firstRoundRevealed,
     secondRoundRevealed,
-    draftOrderLocked: Boolean(lotteryRevealed && draftOrder.length >= 60),
+    draftOrderLocked: Boolean(lotteryRevealed && draftOrder.length > 0),
     draftComplete,
     draftInProgress,
     currentPickIndex,

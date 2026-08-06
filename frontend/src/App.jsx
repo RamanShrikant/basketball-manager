@@ -29,6 +29,7 @@ import AllStarsPage from "./pages/AllStarsPage.jsx";
 import ViewingOffers from "./pages/ViewingOffers.jsx";
 import DraftLottery from "./pages/DraftLottery.jsx";
 import Draft from "./pages/Draft.jsx";
+import UpcomingDraft from "./pages/UpcomingDraft.jsx";
 import RookieSignings from "./pages/RookieSignings.jsx";
 import RosterFinalization from "./pages/RosterFinalization.jsx";
 import PowerRankings from "./pages/PowerRankings.jsx";
@@ -41,6 +42,8 @@ import TradeFinder from "./pages/TradeFinder.jsx";
 import LockerRoom from "./pages/LockerRoom.jsx";
 import ContractExtensions from "./pages/ContractExtensions.jsx";
 import Intel from "./pages/Intel_v1.jsx";
+import Settings from "./pages/Settings.jsx";
+import LeagueHistory from "./pages/LeagueHistory.jsx";
 import GlobalGameNav from "./components/GlobalGameNav.jsx";
 
 function RouteDensitySync() {
@@ -97,6 +100,7 @@ function App() {
         <Route path="/playoff-stats" element={<PlayerStats scope="playoffs" />} />
         <Route path="/draft-lottery" element={<DraftLottery />} />
         <Route path="/draft" element={<Draft />} />
+        <Route path="/upcoming-draft" element={<UpcomingDraft />} />
         <Route path="/rookie-signings" element={<RookieSignings />} />
         <Route path="/roster-finalization" element={<RosterFinalization />} />
         <Route path="/standings" element={<Standings />} />
@@ -110,6 +114,8 @@ function App() {
         <Route path="/locker-room" element={<LockerRoom />} />
         <Route path="/contract-extensions" element={<ContractExtensions />} />
         <Route path="/intel" element={<Intel />} />
+        <Route path="/settings" element={<Settings />} />
+        <Route path="/league-history" element={<LeagueHistory />} />
         <Route path="/playoffs" element={<Playoffs />} />
         <Route path="/playoff-picture" element={<PlayoffPicture />} />
         <Route path="/player-progression" element={<PlayerProgression />} />

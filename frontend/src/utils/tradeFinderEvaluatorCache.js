@@ -15,6 +15,7 @@ import {
   getTeamName,
 } from "./tradeFinderPackageBuilder.js";
 import { evaluateTradeRosterProjection } from "./rosterRules.js";
+import { evaluateUserTradeFinancialLegality } from "./userTradeRules.js";
 
 export const TRADE_FINDER_COMFORT_FLOOR = 1.5;
 
@@ -95,6 +96,7 @@ export function makeTradeFinderEvalContext({
   selectedTeam,
   selectedItems = [],
   comfortFloor = null,
+  userDrivenRules = false,
 } = {}) {
   const hasExplicitComfortFloor = comfortFloor !== null && comfortFloor !== undefined && Number.isFinite(Number(comfortFloor));
   const resolvedComfortFloor = hasExplicitComfortFloor
@@ -113,6 +115,7 @@ export function makeTradeFinderEvalContext({
     selectedTeam,
     evaluationSelectedTeam,
     selectedItems,
+    userDrivenRules: Boolean(userDrivenRules),
     comfortFloor: resolvedComfortFloor,
     useUltraFastExact: (() => {
       const items = Array.isArray(selectedItems) ? selectedItems : [];
@@ -164,24 +167,38 @@ export function financialOk({ context, cpuTeam, cpuItems }) {
   }
 
   const startedAt = nowMs();
-  const selectedFinancial = evaluateTradeFinancialLegality({
-    team: selectedTeam,
-    leagueData,
-    outgoingSalary: sideSalary(selectedItems, leagueData),
-    incomingSalary: sideSalary(cpuItems, leagueData),
-  });
+  const selectedFinancial = context?.userDrivenRules
+    ? evaluateUserTradeFinancialLegality({
+        team: selectedTeam,
+        leagueData,
+        outgoingItems: selectedItems,
+        incomingItems: cpuItems,
+      })
+    : evaluateTradeFinancialLegality({
+        team: selectedTeam,
+        leagueData,
+        outgoingSalary: sideSalary(selectedItems, leagueData),
+        incomingSalary: sideSalary(cpuItems, leagueData),
+      });
   if (!selectedFinancial.ok) {
     context.metrics.financialMs += nowMs() - startedAt;
     context.financialCache.set(key, false);
     return false;
   }
 
-  const cpuFinancial = evaluateTradeFinancialLegality({
-    team: cpuTeam,
-    leagueData,
-    outgoingSalary: sideSalary(cpuItems, leagueData),
-    incomingSalary: sideSalary(selectedItems, leagueData),
-  });
+  const cpuFinancial = context?.userDrivenRules
+    ? evaluateUserTradeFinancialLegality({
+        team: cpuTeam,
+        leagueData,
+        outgoingItems: cpuItems,
+        incomingItems: selectedItems,
+      })
+    : evaluateTradeFinancialLegality({
+        team: cpuTeam,
+        leagueData,
+        outgoingSalary: sideSalary(cpuItems, leagueData),
+        incomingSalary: sideSalary(selectedItems, leagueData),
+      });
   const ok = Boolean(cpuFinancial.ok);
   context.metrics.financialMs += nowMs() - startedAt;
   context.financialCache.set(key, ok);
@@ -303,6 +320,7 @@ export function evaluateCpuPackage({ context, cpuTeam, cpuItems, mode = "exact",
       userItems: selectedItems,
       cpuItems,
       evaluation,
+      userDrivenRules: Boolean(context?.userDrivenRules),
     });
     context.metrics.validationMs += nowMs() - validationStartedAt;
     if (!finalValidation.ok) {

@@ -189,24 +189,41 @@ function getSeasonYearFromLeague(leagueData) {
 }
 
 function readLockedDraftOrder(leagueData, seasonYear) {
-  const direct = leagueData?.draftState?.draftOrder;
-  if (Array.isArray(direct) && direct.length) return sanitizeDraftOrderRows(direct);
+  const candidates = [];
+  const pushRows = (rows, allowed = true) => {
+    if (!allowed || !Array.isArray(rows)) return;
+    const clean = sanitizeDraftOrderRows(rows.filter(Boolean));
+    if (clean.length) candidates.push(clean);
+  };
 
-  const lotteryOrder = leagueData?.draftState?.lottery?.fullDraftOrder;
-  if (Array.isArray(lotteryOrder) && lotteryOrder.length) return sanitizeDraftOrderRows(lotteryOrder);
-
+  const savedDraftState = safeJSON(localStorage.getItem("bm_draft_state_v1"), null);
   const savedLottery = safeJSON(localStorage.getItem("bm_draft_lottery_v1"), null);
-  if (
-    savedLottery &&
-    Number(savedLottery.seasonYear) === Number(seasonYear) &&
-    savedLottery.firstRoundRevealed &&
-    savedLottery.secondRoundRevealed &&
-    Array.isArray(savedLottery?.result?.fullDraftOrder)
-  ) {
-    return sanitizeDraftOrderRows(savedLottery.result.fullDraftOrder);
-  }
+  const savedDraftMatches = savedDraftState && Number(savedDraftState.seasonYear || seasonYear) === Number(seasonYear);
+  const savedLotteryMatches = savedLottery && Number(savedLottery.seasonYear || seasonYear) === Number(seasonYear);
+  const savedLotteryRevealed = Boolean(
+    savedLotteryMatches &&
+      savedLottery.firstRoundRevealed &&
+      savedLottery.secondRoundRevealed &&
+      !savedLottery.isPreview
+  );
+  const leagueLotteryComplete = Boolean(
+    leagueData?.draftState?.draftLotteryComplete ||
+      (Number(leagueData?.draftState?.seasonYear || seasonYear) === Number(seasonYear) &&
+        Array.isArray(leagueData?.draftState?.draftOrder) &&
+        leagueData.draftState.draftOrder.length)
+  );
 
-  return [];
+  pushRows(savedDraftState?.draftOrder, savedDraftMatches);
+  pushRows(savedDraftState?.fullDraftOrder, savedDraftMatches);
+  pushRows(savedLottery?.result?.fullDraftOrder, savedLotteryRevealed);
+  pushRows(savedLottery?.fullDraftOrder, savedLotteryRevealed);
+  pushRows(leagueData?.draftState?.fullDraftOrder, leagueLotteryComplete);
+  pushRows(leagueData?.draftState?.draftOrder, leagueLotteryComplete);
+  pushRows(leagueData?.draftState?.lottery?.fullDraftOrder, leagueLotteryComplete);
+  pushRows(leagueData?.draftLottery?.fullDraftOrder, leagueLotteryComplete);
+
+  candidates.sort((a, b) => b.length - a.length);
+  return candidates.find((rows) => rows.length >= 60) || candidates[0] || [];
 }
 
 function isDraftCompleteForSeason(leagueData, seasonYear) {
@@ -398,7 +415,7 @@ export default function DraftPicks() {
     return applyDraftPickOwnershipToOrder(locked, { leagueData, seasonYear });
   }, [leagueData, seasonYear]);
   const draftComplete = useMemo(() => isDraftCompleteForSeason(leagueData, seasonYear), [leagueData, seasonYear]);
-  const draftOrderLocked = draftOrder.length >= 50;
+  const draftOrderLocked = draftOrder.length > 0;
 
   const picks = useMemo(() => {
     return normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)

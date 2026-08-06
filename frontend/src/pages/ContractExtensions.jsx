@@ -7,6 +7,8 @@ import {
   submitContractExtensionOffer,
 } from "../api/simEnginePy.js";
 import PageFade from "../components/PageFade.jsx";
+import { getOffseasonTradeContext } from "../utils/offseasonTradeContext.js";
+import { getUserTradeCurrentDate, stampExtensionRestriction } from "../utils/userTradeRules.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
@@ -27,6 +29,9 @@ function compactMoney(value) {
 }
 
 function currentLeagueDate(leagueData) {
+  const ruleDate = getUserTradeCurrentDate(leagueData);
+  if (ruleDate) return ruleDate;
+
   const direct =
     leagueData?.currentDate ||
     leagueData?.calendarDate ||
@@ -85,6 +90,7 @@ export default function ContractExtensions() {
   const [notice, setNotice] = useState(null);
 
   const teamName = selectedTeam?.name || null;
+  const extensionWindowLocked = useMemo(() => Boolean(getOffseasonTradeContext(leagueData)?.inOffseason), [leagueData]);
   const selectedRow = useMemo(
     () => preview?.players?.find((row) => String(row.playerId || row.playerName) === String(selectedPlayerId)) || null,
     [preview, selectedPlayerId]
@@ -138,11 +144,11 @@ export default function ContractExtensions() {
   };
 
   useEffect(() => {
-    if (!leagueData || !teamName) return;
+    if (!leagueData || !teamName || extensionWindowLocked) return;
     loadPreview(leagueData, { runCpuOpening: false });
     // CPU extension actions now run only at the rookie/veteran deadline prompts, not from opening this page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leagueData?.seasonYear, teamName]);
+  }, [leagueData?.seasonYear, teamName, extensionWindowLocked]);
 
   useEffect(() => {
     if (!selectedRow?.eligible || !selectedRow?.askPackages?.length) {
@@ -165,14 +171,23 @@ export default function ContractExtensions() {
         currentLeagueDate(leagueData)
       );
       if (!result?.ok) throw new Error(result?.reason || "The extension package could not be submitted.");
-      if (result.leagueData) setLeagueData(result.leagueData);
+      const resultLeague = result.leagueData || leagueData;
+      const stampedLeague = result.accepted
+        ? stampExtensionRestriction({
+            leagueData: resultLeague,
+            teamName,
+            player: { id: selectedRow.playerId, playerId: selectedRow.playerId, name: selectedRow.playerName },
+            signedDate: currentLeagueDate(resultLeague),
+          })
+        : resultLeague;
+      if (stampedLeague) setLeagueData(stampedLeague);
       setNotice({
         type: result.accepted ? "success" : "warning",
         text: result.accepted
           ? `${selectedRow.playerName} signed the selected extension package. The new years are now on the salary table.`
           : `${selectedRow.playerName} declined: ${result.decision?.reason || "The offer was not strong enough."}`,
       });
-      await loadPreview(result.leagueData || leagueData);
+      await loadPreview(stampedLeague || resultLeague);
     } catch (error) {
       setNotice({ type: "error", text: error?.message || "Extension negotiation failed." });
     } finally {
@@ -187,6 +202,29 @@ export default function ContractExtensions() {
           Select a team before opening Contract Extensions.
         </div>
       </div>
+    );
+  }
+
+  if (extensionWindowLocked) {
+    return (
+      <PageFade>
+        <div className="bm-page-bg flex min-h-screen items-center justify-center bg-neutral-950 px-6 pb-20 text-white">
+          <div className="max-w-2xl rounded-3xl border border-orange-400/25 bg-black/70 p-8 text-center shadow-2xl shadow-black/40">
+            <div className="text-xs font-black uppercase tracking-[0.28em] text-orange-300">Front Office</div>
+            <h1 className="mt-3 text-3xl font-black text-white">Contract Extensions Locked</h1>
+            <p className="mt-3 text-sm font-bold leading-6 text-neutral-300">
+              Contract extensions are disabled during the offseason. They reopen when the next regular season begins.
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate("/team-hub", { state: { hubSection: "Front Office", offseasonMode: true, returnTo: "/offseason" } })}
+              className="mt-6 rounded-2xl border border-white/10 bg-orange-600 px-6 py-3 text-sm font-black text-white transition hover:bg-orange-500"
+            >
+              Back to Front Office
+            </button>
+          </div>
+        </div>
+      </PageFade>
     );
   }
 

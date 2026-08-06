@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import { useGame } from "../context/GameContext";
 import { getSeasonCalendarConfig, getSeasonStartYear } from "../utils/seasonContext.js";
+import { writeLeagueClock } from "../utils/leagueClock.js";
+import { getUserTradeRuleSettings, stampFreeAgentSigningRestrictions } from "../utils/userTradeRules.js";
 import { useNavigate } from "react-router-dom";
 import {
   simulateOneGame,
@@ -2350,6 +2352,7 @@ export default function Calendar() {
     () => getSeasonCalendarConfig({ ...(leagueData || {}), seasonYear, currentSeasonYear: seasonYear, seasonStartYear: seasonYear }),
     [leagueData, seasonYear]
   );
+  const userTradeDeadlineEnabled = getUserTradeRuleSettings(leagueData || {}).tradeDeadline;
 
   const cpuTradeGenerationJobRef = useRef(null);
 
@@ -4504,14 +4507,21 @@ useEffect(() => {
       const seasonStartStr = fmt(seasonStart);
       const parsed = parseCalendarDate(dateStr);
       const nextDate = parsed ? fmt(parsed) : seasonStartStr;
+      const resolvedDate = nextDate < seasonStartStr ? seasonStartStr : nextDate;
       localStorage.setItem(
         CALENDAR_SIM_CURSOR_KEY,
         JSON.stringify({
-          date: nextDate < seasonStartStr ? seasonStartStr : nextDate,
+          date: resolvedDate,
           seasonYear,
           updatedAt: Date.now(),
         })
       );
+      writeLeagueClock({
+        date: resolvedDate,
+        phase: "regularSeason",
+        seasonYear,
+        source: "calendar",
+      });
     } catch {}
   };
 
@@ -4801,6 +4811,9 @@ function refreshTradeDeadlineLockFromSchedule(schedule) {
     locked,
     lastPlayedDate: lastPlayedDate || null,
     lockedAt: locked ? Date.now() : null,
+    deadlineDayOfferOpen: locked ? false : undefined,
+    offerWindowOpen: locked ? false : undefined,
+    phase: locked ? "after_deadline" : undefined,
   });
 
   return locked;
@@ -4811,6 +4824,9 @@ function openTradeDeadlinePrompt() {
     locked: false,
     lastOfferDate: TRADE_DEADLINE_DATE,
     promptOpen: true,
+    deadlineDayOfferOpen: true,
+    offerWindowOpen: true,
+    phase: "deadline_day",
     promptedAt: Date.now(),
   });
 
@@ -4825,17 +4841,25 @@ function markTradeDeadlinePromptHandled(choice = "continue") {
   } catch {}
 
   tradeDeadlineHandledRef.current = true;
+  const makeTrades = choice === "trade_center";
   writeTradeDeadlineStatus({
     locked: false,
     promptOpen: false,
     promptHandled: true,
     promptChoice: choice,
+    deadlineDayOfferOpen: makeTrades,
+    offerWindowOpen: makeTrades,
+    phase: makeTrades ? "deadline_day_open" : "deadline_day_continue",
     promptedAt: Date.now(),
   });
 }
 
 function shouldPauseForTradeDeadline(dateStr) {
-  return dateStr === TRADE_DEADLINE_DATE && !tradeDeadlineHandledRef.current;
+  return Boolean(
+    userTradeDeadlineEnabled &&
+      dateStr === TRADE_DEADLINE_DATE &&
+      !tradeDeadlineHandledRef.current
+  );
 }
 
 useEffect(() => {
@@ -4862,6 +4886,11 @@ useEffect(() => {
 
   refreshTradeDeadlineLockFromSchedule(scheduleByDate);
 }, [TRADE_DEADLINE_HANDLED_KEY, TRADE_DEADLINE_DATE, scheduleByDate]);
+
+useEffect(() => {
+  if (userTradeDeadlineEnabled || !tradeDeadlinePromptOpen) return;
+  setTradeDeadlinePromptOpen(false);
+}, [tradeDeadlinePromptOpen, userTradeDeadlineEnabled]);
 
 useEffect(() => {
   rookieExtensionDeadlineHandledRef.current =
@@ -5048,6 +5077,7 @@ async function repairCpuRostersBeforeSimulation({
   leagueData,
   selectedTeam,
   setLeagueData,
+  currentDate = null,
 }) {
   const repairRes = await repairCpuTeamsToMinRoster(
     leagueData,
@@ -5055,7 +5085,15 @@ async function repairCpuRostersBeforeSimulation({
     14,
     0
   );
-  const repairedLeagueData = repairRes?.leagueData || leagueData;
+  let repairedLeagueData = repairRes?.leagueData || leagueData;
+  if (repairRes?.signings?.length) {
+    repairedLeagueData = stampFreeAgentSigningRestrictions({
+      beforeLeague: leagueData,
+      afterLeague: repairedLeagueData,
+      signedDate: currentDate,
+      source: "cpu_auto_signing",
+    });
+  }
   const repairedTeams = buildTeamsFromLeagueForSim(repairedLeagueData);
 
   recordPreSimulationDiagnostics({
@@ -5749,7 +5787,14 @@ async function runCpuCpuTradePassForDate({
         tradeId: execution?.tradeRecord?.id || execution?.tradeRecord?.bankId || "",
       });
       if (postTradeRepair?.leagueData) {
-        nextLeagueData = postTradeRepair.leagueData;
+        nextLeagueData = postTradeRepair?.signings?.length
+          ? stampFreeAgentSigningRestrictions({
+              beforeLeague: nextLeagueData,
+              afterLeague: postTradeRepair.leagueData,
+              signedDate: currentDate,
+              source: "cpu_auto_signing",
+            })
+          : postTradeRepair.leagueData;
       }
 
       recordCpuTradeRepairDiagnostics({
@@ -6097,6 +6142,7 @@ const handleSimOnlyGame = async (dateStr, game) => {
     leagueData,
     selectedTeam,
     setLeagueData,
+    currentDate: dateStr,
   });
 
   const userTeamLive = repairedTeams.find((t) => t.name === selectedTeam?.name);
@@ -6225,6 +6271,7 @@ const handleSimToDate = async (dateStr, { resume = false } = {}) => {
     leagueData,
     selectedTeam,
     setLeagueData,
+    currentDate: firstPendingForTarget || dateStr,
   });
 
   const userTeamLive = repairedTeams.find((t) => t.name === selectedTeam?.name);
@@ -6743,6 +6790,7 @@ const handleSimSeason = async ({ resume = false } = {}) => {
     leagueData,
     selectedTeam,
     setLeagueData,
+    currentDate: findFirstPendingSimulationDate(scheduleByDate, resultsById),
   });
 
   const userTeamLive = repairedTeams.find((t) => t.name === selectedTeam?.name);
@@ -8325,7 +8373,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                       const dateStr = fmt(d);
                       const game = myGames[dateStr] || null;
                       const result = game ? resultsById[game.id] : null;
-                      const isTradeDeadline = dateStr === TRADE_DEADLINE_DATE;
+                      const isTradeDeadline = userTradeDeadlineEnabled && dateStr === TRADE_DEADLINE_DATE;
                       const contractExtensionDayInfo = getContractExtensionDeadlineInfo(dateStr);
                       const isRookieExtensionDeadline = contractExtensionDayInfo?.type === "rookie";
                       const isVeteranExtensionDeadline = contractExtensionDayInfo?.type === "veteran";
@@ -8857,7 +8905,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
   </div>
 )}
 
-{tradeDeadlinePromptOpen && (
+{userTradeDeadlineEnabled && tradeDeadlinePromptOpen && (
   <div className="fixed inset-0 z-[233] flex items-center justify-center bg-black/75 p-4">
     <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-orange-400/35 bg-neutral-950 text-white shadow-2xl">
       <div className="border-b border-orange-500/20 bg-gradient-to-r from-orange-600/20 to-neutral-900 px-6 py-5">

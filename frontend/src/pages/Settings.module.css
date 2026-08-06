@@ -1,0 +1,481 @@
+.page {
+  height: 100vh;
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+  color: #fff;
+  isolation: isolate;
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 22px),
+    radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%);
+  background-repeat: repeat, repeat, repeat, no-repeat;
+  background-size: 340px 340px, auto, auto, cover;
+  background-position: center;
+  background-blend-mode: soft-light, normal, normal, normal;
+}
+
+.shell {
+  width: min(1460px, calc(100vw - 230px));
+  height: calc(100vh - 66px);
+  max-height: calc(100vh - 66px);
+  margin: 0 auto;
+  padding: 7px 0 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  overflow: hidden;
+}
+
+.headerBlock {
+  text-align: center;
+  flex: 0 0 auto;
+}
+
+.kicker,
+.panelKicker,
+.modalKicker {
+  color: rgba(255,255,255,0.46);
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 800;
+}
+
+.headerBlock h1 {
+  margin: 1px 0 3px;
+  font-size: clamp(30px, 3.2vw, 44px);
+  line-height: 0.86;
+  font-weight: 1000;
+  letter-spacing: -0.055em;
+  color: #f97316;
+  text-transform: uppercase;
+}
+
+.headerBlock p {
+  margin: 0 auto;
+  max-width: 810px;
+  color: rgba(255,255,255,0.62);
+  font-size: 11px;
+  line-height: 1.15;
+}
+
+.summaryRow {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.summaryCard,
+.summaryActions,
+.panel {
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(28,28,28,0.86);
+  box-shadow: 0 20px 50px rgba(0,0,0,0.28);
+  backdrop-filter: blur(10px);
+}
+
+.summaryCard {
+  border-radius: 14px;
+  padding: 7px 13px;
+  min-height: 42px;
+  box-sizing: border-box;
+}
+
+.summaryCard span,
+.panelNote,
+.ruleStatus {
+  display: block;
+  color: rgba(255,255,255,0.48);
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.summaryCard strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 1000;
+}
+
+.summaryActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 14px;
+  padding: 6px;
+}
+
+.summaryActions button,
+.modalDone {
+  height: 30px;
+  border-radius: 10px;
+  border: 1px solid rgba(249,115,22,0.32);
+  background: rgba(249,115,22,0.12);
+  color: #fed7aa;
+  font-size: 11.5px;
+  font-weight: 1000;
+  cursor: pointer;
+}
+
+.summaryActions button {
+  padding: 0 11px;
+}
+
+.summaryActions button:hover,
+.modalDone:hover {
+  background: rgba(249,115,22,0.22);
+  color: #fff;
+}
+
+.panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 18px;
+  padding: 8px 14px 9px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panelHeader {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 2px 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.panelHeader h2 {
+  margin: 2px 0 0;
+  font-size: 20px;
+  line-height: 1;
+  font-weight: 1000;
+  letter-spacing: -0.03em;
+}
+
+.ruleList {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: repeat(10, minmax(0, 1fr));
+  gap: 4px;
+  padding-top: 7px;
+}
+
+.ruleRow {
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(10,10,10,0.48);
+  padding: 3px 10px 3px 13px;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+  box-sizing: border-box;
+}
+
+.ruleRow:hover {
+  transform: translateY(-1px);
+  border-color: rgba(249,115,22,0.45);
+  background: rgba(21,21,21,0.76);
+}
+
+.ruleOn {
+  box-shadow: inset 0 0 0 1px rgba(249,115,22,0.11);
+}
+
+.ruleOff {
+  opacity: 0.72;
+  filter: saturate(0.65);
+}
+
+.ruleTextBlock {
+  min-width: 0;
+}
+
+.ruleLabel {
+  font-size: 13.25px;
+  font-weight: 1000;
+  line-height: 1.02;
+  color: rgba(255,255,255,0.94);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ruleStatus {
+  margin-top: 3px;
+  letter-spacing: 0.085em;
+  color: rgba(255,255,255,0.38);
+}
+
+.ruleControls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.helpButton {
+  width: 25px;
+  height: 25px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.86);
+  font-size: 13px;
+  font-weight: 1000;
+  cursor: pointer;
+}
+
+.helpButton:hover {
+  border-color: rgba(249,115,22,0.5);
+  background: rgba(249,115,22,0.18);
+  color: #fff;
+}
+
+.switch {
+  position: relative;
+  width: 60px;
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  color: #fff;
+  font-weight: 1000;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+.switchOn {
+  background: linear-gradient(135deg, #f97316, #fb923c);
+  box-shadow: 0 0 18px rgba(249,115,22,0.22);
+}
+
+.switchOff {
+  background: rgba(82,82,82,0.95);
+}
+
+.switchKnob {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.94);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.34);
+  transition: transform 160ms ease;
+}
+
+.switchOn .switchKnob {
+  transform: translateX(34px);
+}
+
+.switchText {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  left: 10px;
+}
+
+.switchOff .switchText {
+  left: auto;
+  right: 9px;
+}
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.62);
+  backdrop-filter: blur(7px);
+}
+
+.helpModal {
+  position: relative;
+  width: min(520px, calc(100vw - 42px));
+  border-radius: 20px;
+  border: 1px solid rgba(249,115,22,0.42);
+  background: linear-gradient(180deg, rgba(35,35,35,0.98), rgba(12,12,12,0.98));
+  box-shadow: 0 30px 90px rgba(0,0,0,0.72), inset 0 0 0 1px rgba(255,255,255,0.06);
+  padding: 25px 26px 22px;
+}
+
+.helpModal h2 {
+  margin: 6px 42px 10px 0;
+  font-size: 27px;
+  line-height: 1;
+  font-weight: 1000;
+  letter-spacing: -0.035em;
+  color: #fff;
+}
+
+.helpModal p {
+  margin: 0;
+  color: rgba(255,255,255,0.72);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.modalClose {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.86);
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.modalClose:hover {
+  border-color: rgba(249,115,22,0.5);
+  background: rgba(249,115,22,0.18);
+  color: #fff;
+}
+
+.modalDone {
+  margin-top: 20px;
+  min-width: 96px;
+  padding: 0 18px;
+}
+
+.backButton {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(12,12,12,0.9);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 1000;
+  cursor: pointer;
+  box-shadow: 0 14px 34px rgba(0,0,0,0.36);
+}
+
+.backButton:hover {
+  border-color: rgba(249,115,22,0.42);
+  background: rgba(24,24,24,0.96);
+}
+
+@media (max-height: 820px) {
+  .shell {
+    height: calc(100vh - 62px);
+    max-height: calc(100vh - 62px);
+    gap: 5px;
+    padding-top: 5px;
+  }
+
+  .headerBlock h1 {
+    font-size: clamp(28px, 3vw, 38px);
+  }
+
+  .headerBlock p {
+    font-size: 10px;
+    line-height: 1.08;
+  }
+
+  .summaryCard {
+    min-height: 38px;
+    padding: 6px 12px;
+  }
+
+  .summaryCard strong {
+    font-size: 13px;
+  }
+
+  .summaryActions button {
+    height: 28px;
+  }
+
+  .panel {
+    padding: 6px 12px 7px;
+  }
+
+  .panelHeader h2 {
+    font-size: 18px;
+  }
+
+  .ruleList {
+    gap: 3px;
+    padding-top: 5px;
+  }
+
+  .ruleLabel {
+    font-size: 12.5px;
+  }
+
+  .ruleStatus {
+    font-size: 8px;
+    margin-top: 2px;
+  }
+
+  .helpButton {
+    width: 23px;
+    height: 23px;
+    font-size: 12px;
+  }
+
+  .switch {
+    width: 56px;
+    height: 24px;
+  }
+
+  .switchKnob {
+    width: 16px;
+    height: 16px;
+  }
+
+  .switchOn .switchKnob {
+    transform: translateX(32px);
+  }
+}
+
+@media (max-width: 980px) {
+  .shell {
+    width: min(900px, calc(100vw - 34px));
+  }
+
+  .summaryRow {
+    grid-template-columns: 1fr;
+  }
+
+  .summaryActions {
+    justify-content: stretch;
+  }
+
+  .summaryActions button {
+    flex: 1;
+  }
+}

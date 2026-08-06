@@ -10,6 +10,10 @@ import {
   readOffseasonState as readAllStarsOffseasonState,
   readSavedAllStars,
 } from "../utils/allStarsAvailability";
+import {
+  getUpcomingDraftYearForPhase,
+  isDraftStartedForYear,
+} from "../utils/upcomingDraftClass.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const POSTSEASON_KEY = "bm_postseason_v2";
@@ -109,12 +113,20 @@ function tileSubtitle(tile, selectedTeamName, { allStarsAvailable = false, isOff
     ? "Team scouting and trade intel"
     : tile.name === "Locker Room"
     ? "Player Morale and Role Check"
+    : tile.name === "Upcoming Draft"
+    ? "Prospects, Rankings, and Scouting Reports"
     : tile.name === "Statistics"
     ? isOffseasonMode ? "Previous Regular Season" : "Player and Team Stats"
     : tile.name === "Playoff Statistics"
     ? isOffseasonMode ? "Previous Postseason" : "Current Postseason"
     : tile.name === "View All-Stars"
     ? allStarsAvailable ? "Starters and Reserves" : "Available After Selections"
+    : tile.name === "League History"
+    ? "Transactions and Records"
+    : tile.name === "Transaction History"
+    ? "Trades, Signings, and Dates"
+    : tile.name === "Settings"
+    ? "Trade Rules and League Options"
     : selectedTeamName;
 }
 
@@ -226,6 +238,12 @@ export default function TeamHub() {
   const playoffReturnTo = location.state?.playoffReturnTo || "/playoffs";
   const offseasonFreeAgentsPath = getOffseasonFreeAgencyReturnPath();
   const savedAllStars = readSavedAllStars();
+  const upcomingDraftYear = getUpcomingDraftYearForPhase(leagueData || {}, {
+    isOffseasonMode,
+  });
+  const upcomingDraftAvailable = Boolean(
+    leagueData && !isDraftStartedForYear(upcomingDraftYear, leagueData)
+  );
   const allStarsAvailable = isAllStarsAvailable({
     leagueData,
     offseasonState: readAllStarsOffseasonState(),
@@ -277,7 +295,10 @@ export default function TeamHub() {
       {
         name: "Contract Extensions",
         path: "/contract-extensions",
-        enabled: !isPlayoffMode,
+        enabled: !isPlayoffMode && !isOffseasonMode,
+        description: isOffseasonMode
+          ? "Reopens When the Next Season Starts"
+          : "Eligibility, Negotiations, and Future Payroll",
       },
     ],
     Season: [
@@ -288,6 +309,14 @@ export default function TeamHub() {
     Scouting: [
       { name: "Locker Room", path: "/locker-room", enabled: true },
       { name: "Team Intel", path: "/intel", enabled: true },
+      {
+        name: "Upcoming Draft",
+        path: upcomingDraftAvailable ? "/upcoming-draft" : "#",
+        enabled: upcomingDraftAvailable,
+        description: upcomingDraftAvailable
+          ? "Prospects, Rankings, and Scouting Reports"
+          : "Reopens When the Next Season Starts",
+      },
     ],
     Awards: [
       { name: "Award Tracker", path: "/award-tracker", enabled: true },
@@ -296,6 +325,9 @@ export default function TeamHub() {
         path: allStarsAvailable ? "/all-stars" : "#",
         enabled: allStarsAvailable,
       },
+    ],
+    "League History": [
+      { name: "Transaction History", path: "/league-history", enabled: true },
     ],
   };
 
@@ -352,13 +384,26 @@ export default function TeamHub() {
       name: "Scouting",
       sectionKey: "Scouting",
       enabled: true,
-      description: "Locker Room and Team Intel",
+      description: "Locker Room, Team Intel, and Draft Board",
     },
     {
       name: "Awards",
       sectionKey: "Awards",
       enabled: true,
       description: "Tracker and All-Star Selections",
+    },
+    {
+      name: "League History",
+      sectionKey: "League History",
+      enabled: true,
+      description: "Transactions, Records, and Dates",
+    },
+    {
+      name: "Settings",
+      path: "/settings",
+      enabled: true,
+      direct: true,
+      description: "Trade Rules and League Options",
     },
   ];
 

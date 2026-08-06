@@ -46,15 +46,23 @@ export function readLiveDraftOrder(leagueData, seasonYear = getLiveDraftSeasonYe
     Array.isArray(savedDraft?.draftOrder) &&
     savedDraft.draftOrder.length
   ) {
-    return savedDraft.draftOrder;
+    return savedDraft.draftOrder.filter(Boolean);
+  }
+  if (
+    savedDraft &&
+    Number(savedDraft?.seasonYear || seasonYear) === Number(seasonYear) &&
+    Array.isArray(savedDraft?.fullDraftOrder) &&
+    savedDraft.fullDraftOrder.length
+  ) {
+    return savedDraft.fullDraftOrder.filter(Boolean);
   }
 
   const direct = leagueData?.draftState?.draftOrder;
-  if (Array.isArray(direct) && direct.length) return direct;
+  if (Array.isArray(direct) && direct.length) return direct.filter(Boolean);
 
   const lotteryOrder = leagueData?.draftState?.lottery?.fullDraftOrder;
   if (leagueData?.draftState?.draftLotteryComplete && Array.isArray(lotteryOrder) && lotteryOrder.length) {
-    return lotteryOrder;
+    return lotteryOrder.filter(Boolean);
   }
 
   const savedLottery = safeJSON(localStorage.getItem(DRAFT_LOTTERY_KEY), null);
@@ -65,7 +73,7 @@ export function readLiveDraftOrder(leagueData, seasonYear = getLiveDraftSeasonYe
     savedLottery?.secondRoundRevealed &&
     Array.isArray(savedLottery?.result?.fullDraftOrder)
   ) {
-    return savedLottery.result.fullDraftOrder;
+    return savedLottery.result.fullDraftOrder.filter(Boolean);
   }
 
   return [];
@@ -134,7 +142,7 @@ export function isDraftOrderRowTradeable(row, index, leagueData, seasonYear = ge
 
 export function filterTradeableLiveDraftRows(rows = [], leagueData, seasonYear = getLiveDraftSeasonYear(leagueData)) {
   return (Array.isArray(rows) ? rows : []).filter((row, index) =>
-    isDraftOrderRowTradeable(row, index, leagueData, seasonYear)
+    row && typeof row === "object" && isDraftOrderRowTradeable(row, index, leagueData, seasonYear)
   );
 }
 

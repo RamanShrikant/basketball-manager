@@ -774,11 +774,7 @@ function DraftMatrix({
   if (!rows.length) return null;
   const maxPick = getMatrixPickCount(rows, system);
   const pickColumns = Array.from({ length: maxPick }, (_, index) => index + 1);
-  const compactTeamLabel = (name = "") => {
-    const words = String(name).trim().split(/\s+/).filter(Boolean);
-    if (words.length <= 2) return words.join(" ");
-    return `${words[0]} ${words.at(-1)}`;
-  };
+  const compactTeamLabel = (name = "") => String(name || "").trim();
 
   return (
     <div className="bmTablePanel rounded-2xl bg-neutral-900 border border-white/10 overflow-hidden shadow-2xl mb-3">
@@ -796,7 +792,7 @@ function DraftMatrix({
       <div className="w-full overflow-hidden">
         <div
           className="grid gap-[3px] px-2 py-1.5 bg-neutral-950/80 text-[9px] uppercase tracking-wide text-white/45 font-black border-b border-white/10"
-          style={{ gridTemplateColumns: `138px repeat(${maxPick}, minmax(0, 1fr))` }}
+          style={{ gridTemplateColumns: `180px repeat(${maxPick}, minmax(0, 1fr))` }}
         >
           <div>Team</div>
           {pickColumns.map((pick) => <div key={pick} className="text-center">#{pick}</div>)}
@@ -817,7 +813,7 @@ function DraftMatrix({
                   ? "border-amber-300/80 bg-amber-400/15"
                   : "border-white/[0.07] hover:bg-white/[0.035]"
               }`}
-              style={{ gridTemplateColumns: `138px repeat(${maxPick}, minmax(0, 1fr))` }}
+              style={{ gridTemplateColumns: `180px repeat(${maxPick}, minmax(0, 1fr))` }}
               title={row.matrixOwnershipSubtext || displayedTeam}
             >
               <div className="flex items-center gap-1.5 min-w-0">

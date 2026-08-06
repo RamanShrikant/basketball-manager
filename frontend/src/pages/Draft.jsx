@@ -6,6 +6,12 @@ import { getDraftYear } from "../utils/seasonContext.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { applyDraftPickOwnershipToOrder, rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
 import { recordCompletedDraftMoodEvents } from "../utils/offseasonMoodEvents.js";
+import {
+  getDraftClassFingerprint,
+  markDraftStartedForYear,
+  normalizeDraftClassRows,
+  readUpcomingDraftClassForYear,
+} from "../utils/upcomingDraftClass.js";
 
   const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
   const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
@@ -245,6 +251,83 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     };
   }
 
+  function getMatchingUpcomingDraftPreview(seasonYear, customSetup) {
+    const preview = readUpcomingDraftClassForYear(seasonYear);
+    if (!preview?.draftClass?.length) return null;
+
+    if (customSetup?.mode === "custom") {
+      const customRows = customSetup?.draftClassPayload?.draftClass || [];
+      const customFingerprint = getDraftClassFingerprint(customRows);
+      if (
+        preview.sourceMode === "custom" &&
+        preview.sourceFingerprint &&
+        preview.sourceFingerprint === customFingerprint
+      ) {
+        return preview;
+      }
+      return null;
+    }
+
+    return preview.sourceMode === "auto" ? preview : null;
+  }
+
+  function applyDraftClassSourceMetadata(result, descriptor, seasonYear) {
+    if (!result?.ok || !descriptor) return result;
+
+    const sourceMode = descriptor.sourceMode === "custom" ? "custom" : "auto";
+    const classType =
+      sourceMode === "custom"
+        ? "custom"
+        : descriptor.classType || descriptor.classMeta?.classType || "auto";
+    const seedMode = sourceMode === "custom" ? "custom" : "fresh_random";
+    const classMeta = {
+      ...(descriptor.classMeta || {}),
+      seasonYear: Number(seasonYear),
+      classType,
+      seedMode,
+      sourceMode,
+      previewGenerated: Boolean(descriptor.previewGenerated || descriptor.sourceMode === "auto"),
+    };
+
+    const nextState = result?.draftState
+      ? {
+          ...result.draftState,
+          seasonYear: Number(seasonYear),
+          classType,
+          seedMode,
+          classMeta,
+          customDraftClass: sourceMode === "custom",
+          isCustomDraftClass: sourceMode === "custom",
+        }
+      : result?.draftState;
+
+    if (!result?.leagueData || !nextState) {
+      return { ...result, draftState: nextState };
+    }
+
+    const rootDraftState =
+      result.leagueData.draftState && typeof result.leagueData.draftState === "object"
+        ? result.leagueData.draftState
+        : {};
+
+    return {
+      ...result,
+      draftState: nextState,
+      leagueData: {
+        ...result.leagueData,
+        draftState: {
+          ...rootDraftState,
+          seasonYear: Number(seasonYear),
+          draftClass: nextState.draftClass || rootDraftState.draftClass || [],
+          classType,
+          seedMode,
+          classMeta,
+          draft: nextState,
+        },
+      },
+    };
+  }
+
   function getDraftOrderSignature(order = []) {
     if (!Array.isArray(order) || !order.length) return "";
     return order
@@ -257,10 +340,44 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
       .join("|");
   }
 
+  function getProspectIdentityKey(prospect = {}) {
+    return String(prospect?.id || prospect?.playerId || prospect?.prospectId || prospect?.name || prospect?.playerName || "");
+  }
+
+  function applyDraftBoardRanksFromClass(rows = [], fullClass = []) {
+    if (!Array.isArray(rows)) return [];
+    const normalizedFullClass = Array.isArray(fullClass) && fullClass.length ? fullClass : [];
+    const rankById = new Map(
+      normalizedFullClass
+        .map((prospect) => [getProspectIdentityKey(prospect), getProspectRank(prospect, null)])
+        .filter(([id, rank]) => id && Number.isFinite(Number(rank)))
+    );
+
+    return rows.map((row) => {
+      const rank = rankById.get(getProspectIdentityKey(row));
+      if (!Number.isFinite(Number(rank))) return row;
+      return {
+        ...row,
+        draftProjection: Number(rank),
+        rank: Number(rank),
+        boardRank: Number(rank),
+      };
+    });
+  }
+
   function normalizeSavedDraftState(saved, currentOrder = [], seasonYear) {
     if (!saved || typeof saved !== "object") return null;
     if (Number(saved.seasonYear) !== Number(seasonYear)) return null;
     if (!Array.isArray(saved.draftOrder) || !saved.draftOrder.length) return null;
+
+    const hasFullDraftClass = Array.isArray(saved.draftClass) && saved.draftClass.length;
+    const normalizedDraftClass = normalizeDraftClassRows(
+      hasFullDraftClass ? saved.draftClass : saved.availableProspects || [],
+      seasonYear
+    );
+    const normalizedAvailableProspects = hasFullDraftClass
+      ? applyDraftBoardRanksFromClass(saved.availableProspects || [], normalizedDraftClass)
+      : normalizedDraftClass;
 
     const savedSignature = saved.draftOrderSignature || getDraftOrderSignature(saved.draftOrder);
     const currentSignature = getDraftOrderSignature(currentOrder);
@@ -280,6 +397,10 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     return {
       ...saved,
       seasonYear: Number(seasonYear),
+      draftClass: normalizedDraftClass.length ? normalizedDraftClass : saved.draftClass,
+      availableProspects: normalizedAvailableProspects.length
+        ? normalizedAvailableProspects
+        : saved.availableProspects || [],
       draftedPicks,
       currentPickIndex,
       completed,
@@ -775,9 +896,14 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     );
   }
 
+  function getProspectRank(prospect = {}, fallback = 999) {
+    const rank = Number(prospect?.draftProjection ?? prospect?.rank ?? prospect?.boardRank ?? prospect?.trueRank);
+    return Number.isFinite(rank) ? rank : fallback;
+  }
+
   function prospectSort(a, b) {
     return (
-      Number(a.draftProjection || 999) - Number(b.draftProjection || 999) ||
+      getProspectRank(a, 999) - getProspectRank(b, 999) ||
       Number(b.potential || 0) - Number(a.potential || 0) ||
       Number(b.overall || 0) - Number(a.overall || 0) ||
       String(a.name || "").localeCompare(String(b.name || ""))
@@ -792,6 +918,10 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
   }
 
   function getProspectSortValue(prospect = {}, key = "") {
+    if (key === "rank") {
+      return getProspectRank(prospect, 999);
+    }
+
     if (key === "overall") {
       return safeDraftSortNumber(prospect.overall ?? prospect.ovr ?? prospect.rating, -1);
     }
@@ -1146,7 +1276,13 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
           <table className="w-full min-w-[1040px] text-sm">
             <thead className="sticky top-0 bg-neutral-800/95 text-white/70 z-10">
               <tr>
-                <th className="px-4 py-3 text-left">Rank</th>
+                <SortableDraftHeader
+                  label="Rank"
+                  sortKey="rank"
+                  sortState={sortState}
+                  onSortChange={onSortChange}
+                  className="px-4 py-3 text-left"
+                />
                 <th className="px-4 py-3 text-left min-w-[310px]">Player</th>
                 <SortableDraftHeader
                   label="POS"
@@ -1207,7 +1343,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
                     }}
                   >
                     <td className="px-4 py-2.5 font-bold text-orange-200">
-                      #{prospect.draftProjection || prospect.trueRank || "-"}
+                      #{getProspectRank(prospect, "-")}
                     </td>
 
                     <td className="px-4 py-2.5 min-w-[310px]">
@@ -1323,7 +1459,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
           </div>
           <div className="text-right shrink-0">
             <div className="text-xs text-white/40 uppercase">Projection</div>
-            <div className="text-2xl font-extrabold text-orange-300">#{prospect.draftProjection || prospect.trueRank}</div>
+            <div className="text-2xl font-extrabold text-orange-300">#{getProspectRank(prospect, "-")}</div>
           </div>
         </div>
 
@@ -1443,6 +1579,11 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
       return buildTeamLogoMap(workingLeagueData, draftOrder);
     }, [workingLeagueData, draftOrder]);
 
+    useEffect(() => {
+      if (!draftOrder?.length) return;
+      markDraftStartedForYear(seasonYear);
+    }, [draftOrder?.length, seasonYear]);
+
     const currentPick = useMemo(() => {
       if (!draftState || draftState.completed) return null;
       return draftState.draftOrder?.[draftState.currentPickIndex] || null;
@@ -1458,8 +1599,15 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     const hasRemainingUserPick = remainingUserPicks.length > 0;
 
     const availableProspects = useMemo(() => {
-      return sortDraftProspects(draftState?.availableProspects || [], draftBoardSort);
-    }, [draftState, draftBoardSort]);
+      const fullClass = normalizeDraftClassRows(
+        draftState?.draftClass?.length ? draftState.draftClass : draftState?.availableProspects || [],
+        seasonYear
+      );
+      const availableWithStableRanks = draftState?.draftClass?.length
+        ? applyDraftBoardRanksFromClass(draftState?.availableProspects || [], fullClass)
+        : fullClass;
+      return sortDraftProspects(availableWithStableRanks, draftBoardSort);
+    }, [draftState, draftBoardSort, seasonYear]);
 
     const handleDraftBoardSortChange = (key) => {
       setDraftBoardSort((prev) => getNextDraftSortState(prev, key));
@@ -1601,15 +1749,30 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
           draftOrder,
         };
 
-        if (customSetup.draftClassPayload?.draftClass?.length) {
+        const matchingPreview = getMatchingUpcomingDraftPreview(seasonYear, customSetup);
+        let draftClassDescriptor = null;
+
+        if (matchingPreview?.draftClass?.length) {
+          draftPayload.draftClass = matchingPreview.draftClass;
+          draftPayload.classType = matchingPreview.sourceMode === "custom" ? "custom" : "auto";
+          draftClassDescriptor = matchingPreview;
+        } else if (customSetup.draftClassPayload?.draftClass?.length) {
           draftPayload.draftClass = customSetup.draftClassPayload.draftClass;
           draftPayload.classType = "custom";
+          draftClassDescriptor = {
+            sourceMode: "custom",
+            sourceFingerprint: getDraftClassFingerprint(customSetup.draftClassPayload.draftClass),
+            classType: "custom",
+            classMeta: customSetup.draftClassPayload.classMeta || {},
+            previewGenerated: false,
+          };
         }
 
         clearSavedLegacyDraftState(seasonYear, "old deterministic auto draft state before initializeDraft");
         const leagueForDraftInit = stripLegacyDraftStateFromLeagueData(workingLeagueData, seasonYear);
 
-        const result = await simEngine.initializeDraft(leagueForDraftInit, draftPayload);
+        let result = await simEngine.initializeDraft(leagueForDraftInit, draftPayload);
+        result = applyDraftClassSourceMetadata(result, draftClassDescriptor, seasonYear);
 
         await applyDraftResult(result);
       } catch (err) {

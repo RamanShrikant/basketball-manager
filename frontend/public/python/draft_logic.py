@@ -899,6 +899,32 @@ def _ratings_from_attrs(attrs: List[int]) -> Tuple[int, int]:
     return int(off_rating), int(def_rating)
 
 
+
+def _normalize_draft_projection_ranks(prospects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Guarantee a single visible draft-board rank for every available prospect."""
+    ordered = sorted(
+        enumerate(prospects or []),
+        key=lambda pair: (
+            _safe_int(pair[1].get("draftProjection"), 999),
+            _safe_int(pair[1].get("rank"), 999),
+            _safe_int(pair[1].get("trueRank"), 999),
+            -_safe_int(pair[1].get("potential"), 0),
+            -_safe_int(pair[1].get("overall"), 0),
+            str(pair[1].get("name") or pair[1].get("playerName") or ""),
+            pair[0],
+        ),
+    )
+
+    normalized: List[Dict[str, Any]] = []
+    for visible_rank, (_, prospect) in enumerate(ordered, start=1):
+        next_prospect = copy.deepcopy(prospect or {})
+        next_prospect["draftProjection"] = visible_rank
+        next_prospect["rank"] = visible_rank
+        next_prospect["boardRank"] = visible_rank
+        normalized.append(next_prospect)
+
+    return normalized
+
 def _normalize_draft_prospect_for_state(
     prospect: Dict[str, Any],
     season_year: int,
@@ -1283,6 +1309,7 @@ def initialize_draft(league_data: Dict[str, Any], payload: Dict[str, Any]) -> Di
         _normalize_draft_prospect_for_state(p, season_year, index, rating_baselines)
         for index, p in enumerate(draft_class or [])
     ]
+    draft_class = _normalize_draft_projection_ranks(draft_class)
 
     available = sorted(
         [copy.deepcopy(p) for p in draft_class],

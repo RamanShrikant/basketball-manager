@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
-import { getOffseasonTradeContext } from "../utils/offseasonTradeContext.js";
-import { getTradeWindowLockMessage, isTradeWindowLocked, readTradeDeadlineStatus } from "../utils/tradeWindow.js";
+import { getUserTradeDeadlineStatus } from "../utils/userTradeRules.js";
 import PageFade from "../components/PageFade";
 import {
   readTradeDeskFeed,
@@ -310,8 +309,6 @@ export default function Trades() {
   const [storedFeed, setStoredFeed] = useState(() => readTradeDeskFeed());
   const [activeDeskFilter, setActiveDeskFilter] = useState("all");
   const [activeDeskView, setActiveDeskView] = useState("live");
-  const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
-  const [deadlineStatus, setDeadlineStatus] = useState(() => readTradeDeadlineStatus());
 
   useEffect(() => {
     const refresh = () => setStoredFeed(readTradeDeskFeed());
@@ -322,20 +319,6 @@ export default function Trades() {
       if (!event.key || event.key === "bm_trade_desk_feed_v1") refresh();
     };
 
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, []);
-
-  useEffect(() => {
-    const refresh = () => setDeadlineStatus(readTradeDeadlineStatus());
-    refresh();
-    const intervalId = window.setInterval(refresh, 1500);
-    const onStorage = (event) => {
-      if (!event.key || event.key === "bm_trade_deadline_status_v1" || event.key === "bm_offseason_state_v1") refresh();
-    };
     window.addEventListener("storage", onStorage);
     return () => {
       window.clearInterval(intervalId);
@@ -374,8 +357,9 @@ export default function Trades() {
 
   const showingFilteredDesk = activeDeskFilter !== "all";
   const showingHistory = activeDeskView === "history";
-  const tradeWindowLocked = isTradeWindowLocked({ tradeContext, deadlineStatus });
-  const tradeLockMessage = getTradeWindowLockMessage();
+  const userDeadlineStatus = getUserTradeDeadlineStatus(leagueData);
+  const tradeWindowLocked = Boolean(userDeadlineStatus.locked);
+  const tradeLockMessage = userDeadlineStatus.reason || "The trade deadline has passed.";
 
   if (!selectedTeam) {
     return (

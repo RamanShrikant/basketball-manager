@@ -1109,6 +1109,7 @@ export async function runTradeFinderTeamBatch({
   teamsToCheck = 0,
   comfortFloor = null,
   searchMode = "accurate",
+  userDrivenRules = false,
   onTeamDone = null,
   signal = null,
 } = {}) {
@@ -1121,6 +1122,7 @@ export async function runTradeFinderTeamBatch({
     selectedTeam,
     selectedItems,
     comfortFloor,
+    userDrivenRules,
   });
   const offers = [];
   const teamSummaries = [];
@@ -1139,6 +1141,7 @@ export async function runTradeFinderTeamBatch({
       selectedTeam,
       selectedItems,
       comfortFloor: baseContext.comfortFloor,
+      userDrivenRules,
     });
     addTimingMs(batchTiming, "makeTeamContextMs", nowMs() - phaseStartedAt);
     const beforeMetrics = cloneMetrics(context.metrics);
@@ -1206,6 +1209,7 @@ async function runTradeFinderTeamsInWorkerPool({
   checkTeams = [],
   baseComfortFloor = null,
   searchMode = "accurate",
+  userDrivenRules = false,
   onProgress = null,
   signal = null,
   startedAt = nowMs(),
@@ -1298,6 +1302,7 @@ async function runTradeFinderTeamsInWorkerPool({
             teamsToCheck: checkTeams.length,
             comfortFloor: baseComfortFloor,
             searchMode,
+            userDrivenRules,
           },
         });
       });
@@ -1343,6 +1348,7 @@ export async function findComfortableTradeFinderOffers({
   onProgress = null,
   signal = null,
   searchMode = "accurate",
+  userDrivenRules = false,
 } = {}) {
   const resolvedTradeContext = getOffseasonTradeContext(leagueData, tradeContext);
   const transactionLeagueData = attachOffseasonTradeContext(leagueData, resolvedTradeContext);
@@ -1366,6 +1372,7 @@ export async function findComfortableTradeFinderOffers({
     tradeContext,
     selectedTeam,
     selectedItems,
+    userDrivenRules,
   });
   addTimingMs(searchTiming, "makeBaseContextMs", nowMs() - phaseStartedAt);
   const offers = [];
@@ -1414,6 +1421,7 @@ export async function findComfortableTradeFinderOffers({
       checkTeams,
       baseComfortFloor: baseContext.comfortFloor,
       searchMode,
+      userDrivenRules,
       onProgress,
       signal,
       startedAt,
@@ -1460,6 +1468,7 @@ export async function findComfortableTradeFinderOffers({
       selectedTeam,
       selectedItems,
       comfortFloor: baseContext.comfortFloor,
+      userDrivenRules,
     });
     addTimingMs(searchTiming, "makeTeamContextMs", nowMs() - phaseStartedAt);
     const beforeMetrics = cloneMetrics(context.metrics);

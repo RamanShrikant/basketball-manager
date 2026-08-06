@@ -9605,6 +9605,7 @@ def prepare_user_offer_for_conditional_finalization(
         outstanding_current_salary = 0,
         snapshot = snapshot,
         allow_pending_cap_hold_clearance = True,
+        allow_rfa_match_rights = bool(normalized_offer.get("forceRfaMatch")),
     )
 
     if not spending_check.get("ok"):
@@ -9675,6 +9676,7 @@ def prepare_user_offer_for_conditional_finalization(
         outstanding_current_salary = 0,
         snapshot = snapshot_after if snapshot_after.get("ok") else None,
         allow_pending_cap_hold_clearance = False,
+        allow_rfa_match_rights = bool(normalized_offer.get("forceRfaMatch")),
     )
 
     if not final_check.get("ok"):

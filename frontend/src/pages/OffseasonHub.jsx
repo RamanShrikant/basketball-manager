@@ -16,6 +16,7 @@ import {
 import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
 import { archiveCurrentSeasonIntoPlayerCards } from "../utils/playerCareerHistory.js";
 import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.js";
+import { formatLeagueDate, getOffseasonCurrentDate, writeLeagueClock } from "../utils/leagueClock.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -3316,6 +3317,19 @@ export default function OffseasonHub() {
     return "Retirements";
   }, [offseasonState]);
 
+  const currentOffseasonDate = useMemo(() => {
+    return getOffseasonCurrentDate({ seasonYear, offseasonState, leagueData });
+  }, [seasonYear, offseasonState, leagueData]);
+
+  useEffect(() => {
+    writeLeagueClock({
+      date: currentOffseasonDate,
+      phase: "offseason",
+      seasonYear,
+      source: "offseason-hub",
+    });
+  }, [currentOffseasonDate, seasonYear]);
+
   const cards = useMemo(() => {
     const retirementsComplete = !!offseasonState.retirementsComplete;
     const leagueInflationComplete = !!offseasonState.leagueInflationComplete;
@@ -3435,6 +3449,9 @@ export default function OffseasonHub() {
           </h1>
           <p className="text-xs text-white/55 mt-1">
             Move through each offseason stage one event at a time.
+          </p>
+          <p className="mt-1 text-[9px] font-black uppercase tracking-[0.24em] text-orange-300/65">
+            Current Date • {formatLeagueDate(currentOffseasonDate)}
           </p>
         </div>
 
