@@ -5,8 +5,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import random
 import math
 import datetime as _dt
+import hashlib
 
-PROGRESSION_PY_VERSION = "2026-07-28_progression_v24_organic_then_hard_caps"
+PROGRESSION_PY_VERSION = "2026-08-07_progression_v25c_hidden_gem_overlay"
 
 
 # -------------------------
@@ -2327,6 +2328,1006 @@ def _is_shape_protected_item(item: Dict[str, Any]) -> bool:
 
 
 # -------------------------
+# V25 hidden career-path engine
+# -------------------------
+
+_V25_PROFILE_VERSION = "v25c_hidden_gem_overlay_v1"
+_V25_AUDIT_KEY = "v25CareerAudit"
+_V25_FAST_DECLINE_PROFILES = {"fast_decliner", "short_peak", "true_bust"}
+_V25_BREAKOUT_PROFILES = {"generational_hit", "star_hit", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier", "late_bloomer", "slow_burn"}
+_V25_PROTECTED_PROFILES = {"generational_hit", "star_hit", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier", "long_prime", "late_bloomer"}
+# V25C: hidden upside is an overlay, not a competing profile. A player can be
+# steady/slow-burn/volatile and ALSO secretly have more ceiling than his visible
+# POT suggests. This is the missing low/mid-tier surprise lane.
+_V25_HIDDEN_UPSIDE_LEVELS = {"none": 0, "rotation_gem": 1, "starter_gem": 2, "star_gem": 3, "elite_gem": 4}
+_V25_HIDDEN_UPSIDE_SET = {"rotation_gem", "starter_gem", "star_gem", "elite_gem"}
+
+
+def _v25_meta(p: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(p, dict):
+        return {}
+    meta = p.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+        p["meta"] = meta
+    return meta
+
+
+def _v25_league_meta(league: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(league, dict):
+        return {}
+    meta = league.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+        league["meta"] = meta
+    return meta
+
+
+def _v25_stable_int(*parts: Any) -> int:
+    raw = "|".join(str(x) for x in parts)
+    return int(hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()[:16], 16)
+
+
+def _v25_unit(*parts: Any) -> float:
+    return _v25_stable_int(*parts) / float(0xFFFFFFFFFFFFFFFF)
+
+
+def _v25_choice(weighted: List[Tuple[str, float]], *seed_parts: Any) -> str:
+    total = sum(max(0.0, float(w)) for _, w in weighted)
+    if total <= 0:
+        return weighted[0][0] if weighted else "steady_growth"
+    roll = _v25_unit("choice", *seed_parts) * total
+    acc = 0.0
+    last = weighted[-1][0]
+    for name, weight in weighted:
+        acc += max(0.0, float(weight))
+        if roll <= acc:
+            return name
+    return last
+
+
+def _v25_league_seed(league: Dict[str, Any], fallback_seed: Any = None) -> str:
+    meta = _v25_league_meta(league)
+    seed = meta.get("progressionSeedV25") or league.get("progressionSeedV25") or meta.get("progressionUniverseSeedV25")
+    if seed is None or str(seed) == "":
+        # Frontend normally creates a new-save seed. This fallback only exists for
+        # direct Python smoke tests; it is deterministic for the same passed seed.
+        seed = f"fallback_{fallback_seed if fallback_seed is not None else 'no_seed'}_{_v25_stable_int('league', league.get('leagueName', ''), len(_all_players(league))) % 10_000_000}"
+    seed = str(seed)
+    meta["progressionSeedV25"] = seed
+    league["progressionSeedV25"] = seed
+    return seed
+
+
+def _v25_traits(p: Dict[str, Any]) -> Dict[str, float]:
+    raw = p.get("traits") or _v25_meta(p).get("traits") or {}
+    if not isinstance(raw, dict):
+        return {"nbaReady": 0.5, "boomBust": 0.5, "workEthic": 0.5, "injuryRisk": 0.15, "starUpside": 0.5}
+    return {
+        "nbaReady": _clamp(_safe_float(raw.get("nbaReady"), 0.5), 0.0, 1.0),
+        "boomBust": _clamp(_safe_float(raw.get("boomBust"), 0.5), 0.0, 1.0),
+        "workEthic": _clamp(_safe_float(raw.get("workEthic"), 0.5), 0.0, 1.0),
+        "injuryRisk": _clamp(_safe_float(raw.get("injuryRisk"), 0.15), 0.0, 1.0),
+        "starUpside": _clamp(_safe_float(raw.get("starUpside"), 0.5), 0.0, 1.0),
+    }
+
+
+def _v25_class_type(p: Dict[str, Any]) -> str:
+    meta = _v25_meta(p)
+    raw = (
+        meta.get("v25DraftClassType") or meta.get("draftClassType") or meta.get("classType") or
+        p.get("v25DraftClassType") or p.get("draftClassType") or p.get("classType") or "normal"
+    )
+    raw = str(raw or "normal").lower()
+    if raw in {"custom", "provided", "loaded"}:
+        return "normal"
+    return raw
+
+
+def _v25_class_quality_mult(class_type: str) -> float:
+    class_type = str(class_type or "normal").lower()
+    return {
+        "weak": 0.86,
+        "normal": 1.00,
+        "deep": 1.06,
+        "star_heavy": 1.12,
+        "generational": 1.18,
+        "defensive_class": 1.00,
+        "guard_heavy": 1.01,
+        "big_man_heavy": 1.01,
+        "top_heavy": 1.10,
+        "deep_no_superstars": 1.04,
+        "boom_bust": 1.07,
+        "flat": 0.96,
+    }.get(class_type, 1.00)
+
+
+def _v25_draft_origin(p: Dict[str, Any]) -> str:
+    meta = _v25_meta(p)
+    acquired = str(meta.get("acquiredVia") or p.get("acquiredVia") or "").lower()
+    round_num = _safe_int(meta.get("draftRound"), _safe_int(p.get("draftRound"), 0))
+    pick = _safe_int(meta.get("draftPick"), _safe_int(p.get("draftPick"), 0))
+    if acquired == "undrafted_free_agent" or (round_num <= 0 and pick <= 0):
+        if acquired == "draft":
+            return "unknown_drafted"
+        return "undrafted"
+    if pick == 1:
+        return "pick_1"
+    if 2 <= pick <= 3:
+        return "top_3"
+    if 4 <= pick <= 5:
+        return "top_5"
+    if 6 <= pick <= 14:
+        return "lottery"
+    if 15 <= pick <= 20:
+        return "mid_first"
+    if 21 <= pick <= 30 or round_num == 1:
+        return "late_first"
+    if 31 <= pick <= 40:
+        return "early_second"
+    if 41 <= pick <= 60 or round_num == 2:
+        return "late_second"
+    return "unknown_drafted"
+
+
+def _v25_pre_draft_rank(p: Dict[str, Any]) -> int:
+    meta = _v25_meta(p)
+    for key in ("v25PreDraftRank", "v25PreDraftProjection", "trueRank", "draftProjection", "rank", "boardRank"):
+        value = meta.get(key) if key in meta else p.get(key)
+        rank = _safe_int(value, 0)
+        if rank > 0:
+            return rank
+    return 999
+
+
+def _v25_prospect_grade(p: Dict[str, Any], age: int, overall: int, potential: int) -> float:
+    meta = _v25_meta(p)
+    existing = meta.get("v25ProspectGrade") or p.get("v25ProspectGrade")
+    if existing is not None:
+        return _clamp(_safe_float(existing, 50.0), 35.0, 99.0)
+    traits = _v25_traits(p)
+    rank = _v25_pre_draft_rank(p)
+    class_mult = _v25_class_quality_mult(_v25_class_type(p))
+    gap = max(0, potential - overall)
+    age_bonus = _clamp((23 - age) * 1.15, -5.0, 6.0)
+    rank_bonus = 0.0
+    if rank <= 3:
+        rank_bonus = 4.0
+    elif rank <= 10:
+        rank_bonus = 2.4
+    elif rank <= 20:
+        rank_bonus = 1.1
+    elif rank <= 40:
+        rank_bonus = 0.2
+    elif rank < 999:
+        rank_bonus = -1.2
+    trait_bonus = (
+        (traits["starUpside"] - 0.5) * 7.0 +
+        (traits["workEthic"] - 0.5) * 4.0 +
+        (traits["boomBust"] - 0.5) * 1.8 -
+        max(0.0, traits["injuryRisk"] - 0.20) * 5.0
+    )
+    grade = (0.52 * potential + 0.36 * overall + 0.12 * (overall + min(12, gap)))
+    grade += age_bonus + rank_bonus + trait_bonus
+    grade = 50.0 + (grade - 50.0) * class_mult
+    return _clamp(grade, 35.0, 99.0)
+
+
+def _v25_hidden_gem_chance(p: Dict[str, Any], age: int, overall: int, potential: int, grade: float, origin: str, class_type: str) -> float:
+    """V25B: create a real, but still rare, low/mid-POT hidden-gem lane.
+
+    V25 mostly let high-POT players hit or bust. This chance deliberately gives
+    normal-looking young players a small hidden-ceiling mismatch without turning
+    every 70/78 prospect into a future star.
+    """
+    traits = _v25_traits(p)
+    chance = 0.010
+    if age <= 20:
+        chance += 0.018
+    elif age <= 22:
+        chance += 0.014
+    elif age <= 24:
+        chance += 0.006
+    if potential <= 80:
+        chance += 0.014
+    elif potential <= 84:
+        chance += 0.010
+    if overall <= 70:
+        chance += 0.012
+    elif overall <= 74:
+        chance += 0.008
+    if origin in {"late_first", "early_second", "late_second"}:
+        chance += 0.014
+    if origin == "undrafted":
+        chance += 0.010
+    if class_type in {"deep", "boom_bust", "guard_heavy", "big_man_heavy", "deep_no_superstars"}:
+        chance += 0.010
+    chance += max(0.0, traits["workEthic"] - 0.50) * 0.035
+    chance += max(0.0, traits["starUpside"] - 0.50) * 0.030
+    chance += max(0.0, traits["boomBust"] - 0.52) * 0.020
+    # A low grade can still hide a useful player, but should rarely hide a star.
+    if grade < 45:
+        chance *= 0.55
+    elif grade < 50:
+        chance *= 0.75
+    if age >= 25:
+        chance *= 0.42
+    if overall >= 78:
+        chance *= 0.45
+    return _clamp(chance, 0.002, 0.120)
+
+
+def _v25_hidden_upside_overlay(
+    p: Dict[str, Any],
+    age: int,
+    overall: int,
+    potential: int,
+    grade: float,
+    origin: str,
+    class_type: str,
+    league_seed: str,
+    seed_key: str,
+) -> str:
+    """V25C hidden-gem overlay.
+
+    This is intentionally separate from the main career profile. It creates a
+    small pool of low/mid visible-POT players with hidden rotation/starter/star
+    upside, then lets the yearly engine and hard caps decide who actually hits.
+    """
+    if age > 25 or overall > 80 or potential > 88:
+        return "none"
+
+    traits = _v25_traits(p)
+    gap = max(0, potential - overall)
+    base = _v25_hidden_gem_chance(p, age, overall, potential, grade, origin, class_type)
+
+    # Most eligible players get nothing. Better youth/tools/work-ethic/class
+    # context increase the chance, but visible POT is not allowed to fully gate it.
+    mult = 1.0
+    if age <= 19:
+        mult += 0.45
+    elif age <= 21:
+        mult += 0.28
+    elif age <= 23:
+        mult += 0.12
+    if 68 <= overall <= 76:
+        mult += 0.25
+    elif overall < 68:
+        mult += 0.08
+    if 76 <= potential <= 84:
+        mult += 0.28
+    elif potential <= 75:
+        mult -= 0.10
+    if origin in {"late_first", "early_second", "late_second", "undrafted"}:
+        mult += 0.22
+    if class_type in {"deep", "boom_bust", "deep_no_superstars", "guard_heavy", "big_man_heavy"}:
+        mult += 0.18
+    mult += max(0.0, traits["workEthic"] - 0.50) * 0.55
+    mult += max(0.0, traits["starUpside"] - 0.50) * 0.45
+    mult += max(0.0, traits["boomBust"] - 0.55) * 0.30
+    if grade < 42:
+        mult *= 0.48
+    elif grade < 48:
+        mult *= 0.70
+    elif grade >= 60:
+        mult *= 1.15
+
+    # Chances are per player, not guaranteed outcomes. The actual hit rate is
+    # lower after organic rolls, POT reveal, and hard-cap competition.
+    total = _clamp(base * mult + 0.010, 0.004, 0.185)
+    star_share = 0.10
+    if age <= 22 and 70 <= overall <= 77 and 76 <= potential <= 85:
+        star_share += 0.035
+    star_share += max(0.0, traits["starUpside"] - 0.58) * 0.12
+    star_share += max(0.0, traits["workEthic"] - 0.60) * 0.08
+    if origin in {"early_second", "late_second", "undrafted"}:
+        star_share += 0.025
+    if class_type in {"deep", "boom_bust", "deep_no_superstars"}:
+        star_share += 0.020
+    star_share = _clamp(star_share, 0.055, 0.24)
+
+    elite_share = 0.008
+    if age <= 21 and overall <= 74 and traits["starUpside"] >= 0.68 and traits["workEthic"] >= 0.58:
+        elite_share += 0.010
+    if class_type == "boom_bust":
+        elite_share += 0.006
+    elite_share = _clamp(elite_share, 0.002, 0.030)
+
+    roll = _v25_unit(league_seed, seed_key, "hidden_upside_overlay")
+    if roll >= total:
+        return "none"
+    # Within hidden-upside hits, choose level. Keep true 90+ low-POT outliers rare.
+    inner = roll / max(total, 1e-9)
+    if inner < elite_share:
+        return "elite_gem"
+    if inner < elite_share + star_share:
+        return "star_gem"
+    starter_share = 0.36 + max(0.0, traits["workEthic"] - 0.50) * 0.20 + max(0.0, grade - 52.0) * 0.006
+    starter_share = _clamp(starter_share, 0.28, 0.56)
+    if inner < elite_share + star_share + starter_share:
+        return "starter_gem"
+    return "rotation_gem"
+
+
+def _v25_hidden_upside_level_from_profile(prof: Dict[str, Any]) -> int:
+    if not isinstance(prof, dict):
+        return 0
+    return int(_V25_HIDDEN_UPSIDE_LEVELS.get(str(prof.get("hiddenUpside") or "none"), 0))
+
+
+def _v25_hidden_upside_level(p: Dict[str, Any], rng: Optional[random.Random] = None) -> int:
+    return _v25_hidden_upside_level_from_profile(_v25_profile(p, rng))
+
+
+def _v25_hidden_upside_name(p: Dict[str, Any], rng: Optional[random.Random] = None) -> str:
+    prof = _v25_profile(p, rng)
+    return str(prof.get("hiddenUpside") or "none") if isinstance(prof, dict) else "none"
+
+
+def _v25_outlier_fit(p: Dict[str, Any], age: int, overall: int, potential: int, origin: str) -> Tuple[float, float]:
+    traits = _v25_traits(p)
+    attrs = _ensure_attrs(p.get("attrs"))
+    height = _safe_int(p.get("height"), 78)
+    # Attribute labels vary across the project; use broad, low-risk signals only.
+    athletic_tools = max(attrs[6], attrs[7], attrs[13], attrs[14]) / 99.0
+    defensive_tools = max(attrs[8], attrs[9], attrs[10], attrs[11]) / 99.0
+    feel_tools = max(attrs[5], attrs[4], attrs[12]) / 99.0
+    raw_fit = 0.0
+    skill_fit = 0.0
+    if age <= 21 and overall <= 78:
+        raw_fit = 0.55 * traits["starUpside"] + 0.25 * traits["boomBust"] + 0.20 * traits["workEthic"]
+        raw_fit += 0.22 * max(athletic_tools, defensive_tools)
+        if height >= 80:
+            raw_fit += 0.05
+    if age <= 23 and overall <= 76 and origin in {"early_second", "late_second", "undrafted", "late_first"}:
+        skill_fit = 0.46 * traits["workEthic"] + 0.34 * feel_tools + 0.12 * traits["starUpside"] + 0.08 * traits["boomBust"]
+    return _clamp(raw_fit, 0.0, 1.0), _clamp(skill_fit, 0.0, 1.0)
+
+
+def _v25_profile_weights(p: Dict[str, Any], age: int, overall: int, potential: int, grade: float, origin: str, class_type: str) -> List[Tuple[str, float]]:
+    traits = _v25_traits(p)
+    gap = max(0, potential - overall)
+    class_mult = _v25_class_quality_mult(class_type)
+    raw_fit, skill_fit = _v25_outlier_fit(p, age, overall, potential, origin)
+    boom = traits["boomBust"]
+    work = traits["workEthic"]
+    star = traits["starUpside"]
+
+    if age >= 30:
+        # V25B: early-30s stars should not cliff by default. Keep decline
+        # variance, but move some fast-decliner odds into long-prime/steady.
+        base = [
+            ("long_prime", 18 + max(0, overall - 82) * 1.0),
+            ("steady_growth", 34),
+            ("short_peak", 9 + max(0, overall - 86) * 0.45),
+            ("fast_decliner", 11 + max(0, age - 33) * 2.7),
+            ("volatile", 5),
+        ]
+        if overall >= 90:
+            base.append(("star_hit", 10))
+        return base
+
+    if overall >= 90:
+        return [
+            ("generational_hit", 7 if potential >= 96 and age <= 27 else 2),
+            ("star_hit", 33),
+            ("long_prime", 14),
+            ("short_peak", 10),
+            ("steady_growth", 18),
+            ("volatile", 8),
+            ("fast_decliner", 3 if age >= 27 else 1),
+            ("disappointment", 4),
+        ]
+
+    if potential >= 95 and age <= 23:
+        # V25B: elite prospects should have real middle outcomes. True busts
+        # exist, but most misses should become starters/rotation disappointments
+        # instead of falling straight into the low 70s.
+        return [
+            ("generational_hit", 15 * class_mult),
+            ("star_hit", 29 * class_mult),
+            ("quality_starter", 24),
+            ("steady_growth", 8),
+            ("slow_burn", 13 + 3 * boom),
+            ("late_bloomer", 7 + 2 * work),
+            ("volatile", 7 + 4 * boom),
+            ("disappointment", 12 + 4 * (1 - work)),
+            ("true_bust", 1.0 + 1.0 * boom),
+        ]
+    if potential >= 90 and age <= 24:
+        return [
+            ("generational_hit", 3.5 * class_mult),
+            ("star_hit", 18 * class_mult),
+            ("quality_starter", 31),
+            ("steady_growth", 8),
+            ("slow_burn", 15 + 3 * boom),
+            ("late_bloomer", 10 + 2 * work),
+            ("volatile", 9 + 4 * boom),
+            ("disappointment", 16 + 5 * (1 - work)),
+            ("true_bust", 2.0 + 1.2 * boom),
+            ("raw_tools_outlier", 3.0 * raw_fit),
+        ]
+    if potential >= 84 and age <= 25:
+        gem_chance = _v25_hidden_gem_chance(p, age, overall, potential, grade, origin, class_type)
+        return [
+            ("star_hit", 4.5 * class_mult),
+            ("quality_starter", 26),
+            ("steady_growth", 23),
+            ("slow_burn", 13 + 2 * boom),
+            ("late_bloomer", 10 + 3 * work),
+            ("volatile", 9 + 5 * boom),
+            ("disappointment", 15),
+            ("true_bust", 3 + 1.5 * boom),
+            ("hidden_gem", 3 + gem_chance * 85),
+            ("raw_tools_outlier", 2.3 * raw_fit),
+            ("skill_feel_outlier", 1.8 * skill_fit),
+        ]
+
+    # Already-playable young rotation players with moderate POT (Jamal Shead /
+    # Miles McBride type) should usually become backup/rotation pieces, not
+    # roll as true busts as often as raw 19-year-olds.
+    if overall >= 76 and potential >= 80 and age <= 26:
+        return [
+            ("star_hit", 1.0 * class_mult),
+            ("quality_starter", 18 + max(0, grade - 72) * 0.25),
+            ("steady_growth", 34 + max(0, potential - overall) * 0.7),
+            ("late_bloomer", 10 + 2 * work),
+            ("slow_burn", 4),
+            ("volatile", 10 + 4 * boom),
+            ("disappointment", 13 + 3 * (1 - work)),
+            ("true_bust", 2.5 + 1.5 * max(0.0, boom - 0.5)),
+            ("hidden_gem", 1.5 + _v25_hidden_gem_chance(p, age, overall, potential, grade, origin, class_type) * 45),
+        ]
+
+    # Moderate/low visible POT: mostly role/fringe, but young players can still
+    # roll hidden-gem/outlier stories very rarely.
+    gem_chance = _v25_hidden_gem_chance(p, age, overall, potential, grade, origin, class_type)
+    return [
+        ("quality_starter", 8 + max(0, grade - 58) * 0.32),
+        ("steady_growth", 27 + max(0, potential - overall) * 0.9),
+        ("slow_burn", 10 if age <= 23 else 4),
+        ("late_bloomer", 10 if 21 <= age <= 26 else 4),
+        ("volatile", 8 + 5 * boom),
+        ("disappointment", 22),
+        ("true_bust", 10 + max(0, 75 - potential) * 0.55),
+        ("hidden_gem", 2 + gem_chance * 165),
+        ("raw_tools_outlier", 2.1 * raw_fit),
+        ("skill_feel_outlier", 2.0 * skill_fit),
+    ]
+
+
+def _v25_build_profile(p: Dict[str, Any], league_seed: str, season_year: Any, rng: Optional[random.Random] = None) -> Dict[str, Any]:
+    age = _safe_int(p.get("age"), 25)
+    overall = int(_clamp(_safe_int(p.get("overall"), 70), 25, 99))
+    potential = int(_clamp(_safe_int(p.get("potential"), overall), overall, 99))
+    meta = _v25_meta(p)
+    origin = _v25_draft_origin(p)
+    class_type = _v25_class_type(p)
+    grade = _v25_prospect_grade(p, age, overall, potential)
+    seed_key = str(p.get("id") or _player_name(p) or "unknown")
+    profile = _v25_choice(
+        _v25_profile_weights(p, age, overall, potential, grade, origin, class_type),
+        league_seed, seed_key, age, overall, potential, origin, class_type, "profile"
+    )
+
+    # Rare hard overrides for Giannis/Jokic-style outliers. These use prospect
+    # quality + traits, not actual draft slot magic.
+    raw_fit, skill_fit = _v25_outlier_fit(p, age, overall, potential, origin)
+    raw_roll = _v25_unit(league_seed, seed_key, "raw_tools_override")
+    skill_roll = _v25_unit(league_seed, seed_key, "skill_feel_override")
+    if age <= 21 and overall <= 78 and raw_fit >= 0.68:
+        chance = 0.010 + 0.045 * raw_fit
+        if class_type in {"generational", "star_heavy", "boom_bust"}:
+            chance += 0.012
+        if raw_roll < chance:
+            profile = "raw_tools_outlier"
+    if age <= 23 and overall <= 76 and origin in {"early_second", "late_second", "undrafted", "late_first"} and skill_fit >= 0.62:
+        chance = 0.004 + 0.026 * skill_fit
+        if class_type in {"deep", "boom_bust"}:
+            chance += 0.006
+        if skill_roll < chance:
+            profile = "skill_feel_outlier"
+
+    hidden_upside = _v25_hidden_upside_overlay(
+        p, age, overall, potential, grade, origin, class_type, league_seed, seed_key
+    )
+    hidden_level = int(_V25_HIDDEN_UPSIDE_LEVELS.get(hidden_upside, 0))
+    # Hidden upside should not be killed by a main-profile bust/disappointment
+    # roll. It should express as a slow/volatile/late career arc instead.
+    if hidden_level >= 3 and profile in {"true_bust", "disappointment", "fast_decliner"}:
+        profile = "slow_burn" if age <= 22 else "late_bloomer"
+    elif hidden_level >= 2 and profile == "true_bust":
+        profile = "volatile"
+    elif hidden_level >= 1 and profile == "true_bust" and age <= 22:
+        profile = "steady_growth"
+
+    u = lambda label: _v25_unit(league_seed, seed_key, label)
+    if profile == "early_peak":
+        peak_start = 22 + int(u("peak_start") * 3)
+        peak_end = peak_start + 2 + int(u("peak_end") * 3)
+        decline_start = peak_end + 1 + int(u("decline") * 3)
+        decline_sharp = 0.70 + u("sharp") * 0.35
+    elif profile == "late_bloomer":
+        peak_start = 26 + int(u("peak_start") * 3)
+        peak_end = peak_start + 3 + int(u("peak_end") * 3)
+        decline_start = peak_end + 1 + int(u("decline") * 3)
+        decline_sharp = 0.42 + u("sharp") * 0.24
+    elif profile in {"slow_burn", "skill_feel_outlier"}:
+        peak_start = 25 + int(u("peak_start") * 4)
+        peak_end = peak_start + 3 + int(u("peak_end") * 4)
+        decline_start = peak_end + 1 + int(u("decline") * 3)
+        decline_sharp = 0.38 + u("sharp") * 0.25
+    elif profile == "long_prime":
+        peak_start = 26 + int(u("peak_start") * 3)
+        peak_end = 32 + int(u("peak_end") * 4)
+        decline_start = peak_end + 1 + int(u("decline") * 3)
+        decline_sharp = 0.26 + u("sharp") * 0.20
+    elif profile == "short_peak":
+        peak_start = 23 + int(u("peak_start") * 4)
+        peak_end = peak_start + 1 + int(u("peak_end") * 2)
+        decline_start = peak_end + 1 + int(u("decline") * 2)
+        decline_sharp = 0.78 + u("sharp") * 0.40
+    elif profile == "fast_decliner":
+        peak_start = max(24, age - 1)
+        peak_end = max(peak_start, age + int(u("peak_end") * 2))
+        decline_start = min(31, max(28, peak_end))
+        decline_sharp = 0.88 + u("sharp") * 0.45
+    else:
+        peak_start = 24 + int(u("peak_start") * 4)
+        peak_end = peak_start + 3 + int(u("peak_end") * 3)
+        decline_start = peak_end + 1 + int(u("decline") * 3)
+        decline_sharp = 0.48 + u("sharp") * 0.28
+
+    if hidden_level > 0:
+        # Hidden gems often reveal later: early years can look ordinary before
+        # the real leap. Elite/Star overlays get a little earlier runway.
+        reveal_age = 22 + int(u("hidden_reveal_age") * 4)
+        if hidden_level >= 3:
+            reveal_age = max(21, reveal_age - 1)
+        if age <= 24:
+            peak_start = max(peak_start, min(28, reveal_age))
+            peak_end = max(peak_end, peak_start + 3 + int(u("hidden_peak_len") * 2))
+            decline_start = max(decline_start, peak_end + 2)
+            decline_sharp = min(decline_sharp, 0.58 + u("hidden_decline") * 0.20)
+
+    base_ceiling = max(overall, potential)
+    ceiling = base_ceiling
+    if profile == "generational_hit":
+        ceiling = max(96, base_ceiling + 2, overall + 8)
+    elif profile == "star_hit":
+        ceiling = max(90, base_ceiling + 1, overall + 5)
+    elif profile == "quality_starter":
+        ceiling = max(83, base_ceiling, overall + 4)
+    elif profile == "steady_growth":
+        ceiling = max(base_ceiling, overall + 2)
+    elif profile in {"slow_burn", "late_bloomer"}:
+        ceiling = max(base_ceiling + 1, overall + 5)
+    elif profile == "hidden_gem":
+        ceiling = max(base_ceiling + 5 + int(u("gem_ceiling") * 8), overall + 8)
+        # A minority of hidden gems are true hidden-ceiling mismatches. This is
+        # the missing V25B lane: normal visible POT, real starter/star upside.
+        if age <= 24 and overall <= 76 and u("gem_star_ceiling") < 0.22:
+            ceiling = max(ceiling, 87 + int(u("gem_star_height") * 8))
+    elif profile == "raw_tools_outlier":
+        ceiling = max(base_ceiling + 6 + int(u("raw_ceiling") * 5), 89 if potential < 88 else 92)
+    elif profile == "skill_feel_outlier":
+        ceiling = max(base_ceiling + 6 + int(u("skill_ceiling") * 6), 87 if potential < 86 else 91)
+    elif profile == "volatile":
+        ceiling = max(base_ceiling + int(u("vol_ceiling") * 4), overall + 3)
+    elif profile == "disappointment":
+        # Most elite misses should land in the middle: useful starter/rotation,
+        # not automatic low-70s collapse.
+        if potential >= 92 and age <= 24:
+            ceiling = max(overall + 4, min(base_ceiling, overall + 9, 88))
+        else:
+            ceiling = max(overall + 1, min(base_ceiling, overall + 6, 88))
+    elif profile == "true_bust":
+        if potential >= 95 and age <= 23:
+            ceiling = max(overall + 2, min(base_ceiling - 2, overall + 6, 84))
+        elif potential >= 90 and age <= 24:
+            ceiling = max(overall + 1, min(base_ceiling - 2, overall + 5, 83))
+        else:
+            ceiling = max(overall, min(base_ceiling - 3, overall + 3, 82))
+    elif profile == "long_prime":
+        ceiling = max(base_ceiling, overall + 2)
+    elif profile == "short_peak":
+        ceiling = max(base_ceiling, overall + 4)
+    elif profile == "fast_decliner":
+        ceiling = max(overall, min(base_ceiling, overall + 1))
+
+    hidden_upside_ceiling = 0
+    if hidden_upside == "rotation_gem":
+        hidden_upside_ceiling = max(80 + int(u("hidden_rot_height") * 5), overall + 6)
+    elif hidden_upside == "starter_gem":
+        hidden_upside_ceiling = max(84 + int(u("hidden_starter_height") * 5), overall + 9)
+    elif hidden_upside == "star_gem":
+        hidden_upside_ceiling = max(88 + int(u("hidden_star_height") * 5), overall + 12)
+    elif hidden_upside == "elite_gem":
+        hidden_upside_ceiling = max(92 + int(u("hidden_elite_height") * 4), overall + 14)
+    if hidden_upside_ceiling:
+        ceiling = max(ceiling, hidden_upside_ceiling)
+
+    # Weak classes mute future rookie ceilings, but never override already-good current players.
+    if class_type == "weak" and age <= 23 and overall < 86:
+        if hidden_level >= 3:
+            ceiling = min(ceiling, max(base_ceiling + 5, 91))
+        elif hidden_level >= 2:
+            ceiling = min(ceiling, max(base_ceiling + 4, 88))
+        else:
+            ceiling = min(ceiling, max(base_ceiling + 3, 90 if profile in {"star_hit", "raw_tools_outlier", "skill_feel_outlier"} else 86))
+    if class_type == "generational" and profile in {"generational_hit", "star_hit"}:
+        ceiling = max(ceiling, 96 if profile == "generational_hit" else 92)
+
+    if profile == "true_bust" and potential >= 92 and age <= 24:
+        floor = max(25, overall - 3)
+    elif profile == "disappointment" and potential >= 90 and age <= 24:
+        floor = max(25, overall - 2)
+    else:
+        floor = max(25, overall - (7 if profile in {"true_bust", "fast_decliner"} else 5 if profile in {"disappointment", "volatile"} else 3))
+    v25 = {
+        "version": _V25_PROFILE_VERSION,
+        "profile": profile,
+        "hiddenCeiling": int(_clamp(ceiling, overall, 99)),
+        "hiddenFloor": int(_clamp(floor, 25, overall)),
+        "peakStartAge": int(_clamp(peak_start, 18, 38)),
+        "peakEndAge": int(_clamp(max(peak_start, peak_end), 19, 40)),
+        "declineStartAge": int(_clamp(max(peak_end + 1, decline_start), 23, 42)),
+        "declineSharpness": round(float(_clamp(decline_sharp, 0.15, 1.45)), 3),
+        "volatility": round(float(_clamp(0.55 + u("volatility") * 0.70 + (0.35 if profile == "volatile" else 0.0), 0.45, 1.70)), 3),
+        "longevity": round(float(_clamp(1.15 - decline_sharp + u("longevity") * 0.35, 0.15, 1.25)), 3),
+        "potTrust": round(float(_clamp(0.45 + (potential - overall) / 30.0 + u("pot_trust") * 0.20, 0.30, 0.95)), 3),
+        "originalOvr": overall,
+        "originalPot": potential,
+        "originalAge": age,
+        "prospectGrade": round(float(grade), 2),
+        "draftOrigin": origin,
+        "classQuality": class_type,
+        "preDraftRank": _v25_pre_draft_rank(p),
+        "hiddenUpside": hidden_upside,
+        "hiddenUpsideLevel": hidden_level,
+        "hiddenUpsideCeiling": int(_clamp(hidden_upside_ceiling or ceiling, overall, 99)),
+        "hiddenRevealAge": int(_clamp(peak_start, 18, 34)),
+    }
+    meta["devProfileV25"] = v25
+    p["devProfileV25"] = v25
+    return v25
+
+
+def _v25_profile(p: Dict[str, Any], rng: Optional[random.Random] = None) -> Dict[str, Any]:
+    existing = None
+    meta = _v25_meta(p)
+    if isinstance(meta.get("devProfileV25"), dict):
+        existing = meta.get("devProfileV25")
+    elif isinstance(p.get("devProfileV25"), dict):
+        existing = p.get("devProfileV25")
+    if isinstance(existing, dict) and existing.get("version") == _V25_PROFILE_VERSION:
+        if p.get("devProfileV25") is not existing:
+            p["devProfileV25"] = existing
+        return existing
+    # Fallback for isolated calls: deterministic but not new-save varied unless the frontend seeded the league.
+    return _v25_build_profile(p, str(p.get("__v25LeagueSeed") or "no_league_seed"), p.get("__v25SeasonYear"), rng)
+
+
+def _ensure_v25_profiles_for_league(league: Dict[str, Any], fallback_seed: Any = None, season_year: Any = None) -> Dict[str, Any]:
+    seed = _v25_league_seed(league, fallback_seed)
+    counts: Dict[str, int] = {}
+    class_counts: Dict[str, int] = {}
+    hidden_gems = 0
+    hidden_upside_counts = {"rotation_gem": 0, "starter_gem": 0, "star_gem": 0, "elite_gem": 0}
+    outliers = 0
+    busts = 0
+    for p in _all_players(league):
+        if not isinstance(p, dict):
+            continue
+        p["__v25LeagueSeed"] = seed
+        p["__v25SeasonYear"] = season_year
+        prof = _v25_profile(p)
+        name = str(prof.get("profile") or "unknown")
+        counts[name] = counts.get(name, 0) + 1
+        cq = str(prof.get("classQuality") or "normal")
+        class_counts[cq] = class_counts.get(cq, 0) + 1
+        hidden_name = str(prof.get("hiddenUpside") or "none")
+        if hidden_name in hidden_upside_counts:
+            hidden_upside_counts[hidden_name] += 1
+        if name == "hidden_gem" or hidden_name in _V25_HIDDEN_UPSIDE_SET:
+            hidden_gems += 1
+        if name in {"raw_tools_outlier", "skill_feel_outlier"}:
+            outliers += 1
+        if name == "true_bust":
+            busts += 1
+    audit = {
+        "version": _V25_PROFILE_VERSION,
+        "leagueSeed": seed,
+        "seasonYear": season_year,
+        "playerCount": len(_all_players(league)),
+        "profileCounts": counts,
+        "classQualityCounts": class_counts,
+        "hiddenGemCount": hidden_gems,
+        "hiddenUpsideCounts": hidden_upside_counts,
+        "outlierCount": outliers,
+        "trueBustCount": busts,
+    }
+    _v25_league_meta(league)[_V25_AUDIT_KEY] = audit
+    league[_V25_AUDIT_KEY] = audit
+    return audit
+
+
+def _v25_profile_expected_adjustment(p: Dict[str, Any], age: int, overall: int, potential: int, rng: random.Random) -> float:
+    prof = _v25_profile(p, rng)
+    name = str(prof.get("profile") or "steady_growth")
+    ceiling = _safe_int(prof.get("hiddenCeiling"), max(overall, potential))
+    room = max(0, ceiling - overall)
+    peak_start = _safe_int(prof.get("peakStartAge"), 25)
+    peak_end = _safe_int(prof.get("peakEndAge"), 30)
+    decline_start = _safe_int(prof.get("declineStartAge"), 32)
+    sharp = _safe_float(prof.get("declineSharpness"), 0.5)
+    adj = 0.0
+
+    if name == "generational_hit":
+        adj += 0.52 if room >= 4 else 0.15
+    elif name == "star_hit":
+        adj += 0.34 if room >= 3 else 0.08
+    elif name == "quality_starter":
+        adj += 0.16 if room >= 2 else 0.0
+    elif name == "steady_growth":
+        adj += 0.05 if room >= 2 and age <= 27 else 0.0
+    elif name == "slow_burn":
+        adj += -0.14 if age < peak_start - 2 else 0.32 if age <= peak_end and room >= 2 else 0.04
+    elif name == "late_bloomer":
+        adj += -0.08 if age < peak_start - 1 else 0.42 if age <= peak_end and room >= 2 else 0.02
+    elif name == "early_peak":
+        adj += 0.30 if age <= peak_end and room >= 2 else -0.18 if age >= decline_start else 0.0
+    elif name == "short_peak":
+        adj += 0.28 if peak_start <= age <= peak_end and room >= 2 else -0.28 if age >= decline_start else 0.0
+    elif name == "volatile":
+        adj += rng.choice([-0.34, -0.16, 0.16, 0.38])
+    elif name == "disappointment":
+        # Disappointment means underachieving, not instant collapse.
+        adj -= 0.16 if potential >= 90 and age <= 24 else 0.26
+        if age <= 23 and rng.random() < 0.14:
+            adj += 0.30
+    elif name == "true_bust":
+        # True busts are rare. Elite young busts should mostly stall/slide, not
+        # repeatedly nuke into the low 70s unless the cap layer later confirms it.
+        adj -= 0.30 if potential >= 90 and age <= 24 else 0.50
+        if age <= 22 and rng.random() < 0.08:
+            adj += 0.55
+    elif name == "hidden_gem":
+        adj += 0.28 if age < peak_start else 0.78 if age <= peak_end and room >= 2 else 0.14
+    elif name == "raw_tools_outlier":
+        adj += 0.16 if age < 21 else 0.70 if age <= peak_end and room >= 3 else 0.10
+    elif name == "skill_feel_outlier":
+        adj += 0.10 if age < 22 else 0.60 if age <= peak_end and room >= 2 else 0.14
+    elif name == "long_prime":
+        adj += 0.08 if age <= peak_end else 0.18 if age >= decline_start else 0.0
+    elif name == "fast_decliner":
+        adj -= 0.40 if age >= decline_start - 1 else 0.0
+
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    if hidden_level > 0 and room > 0:
+        reveal_age = _safe_int(prof.get("hiddenRevealAge"), peak_start)
+        # Small setup boost before reveal, then a stronger but finite runway.
+        if age < reveal_age - 1:
+            adj += 0.06 + hidden_level * 0.045
+        elif age <= peak_end:
+            adj += 0.18 + hidden_level * 0.17
+        else:
+            adj += 0.04 + hidden_level * 0.04
+        # Low visible POT should not be a prison once the hidden overlay exists.
+        if potential <= 84 and age <= 26:
+            adj += 0.08 + hidden_level * 0.06
+
+    if age >= decline_start:
+        decline_pressure = min(2.2, (age - decline_start + 1) * sharp * 0.36)
+        if name == "long_prime":
+            decline_pressure *= 0.35
+        elif name in {"fast_decliner", "short_peak"}:
+            decline_pressure *= 1.30
+        # V25B: avoid too many age-31/32/33 cliff drops for elite stars unless
+        # they explicitly rolled a fast/short decline path.
+        if age <= 33 and overall >= 90 and name not in {"fast_decliner", "short_peak"}:
+            decline_pressure *= 0.52
+        elif age <= 33 and overall >= 86 and name not in {"fast_decliner", "short_peak"}:
+            decline_pressure *= 0.72
+        adj -= decline_pressure
+
+    # No profile can force endless climbing after ceiling is reached.
+    if room <= 0 and adj > 0:
+        adj *= 0.18
+    return float(adj)
+
+
+def _v25_sigma_mult(p: Dict[str, Any], age: int, overall: int, potential: int, rng: random.Random) -> float:
+    prof = _v25_profile(p, rng)
+    name = str(prof.get("profile") or "steady_growth")
+    mult = _safe_float(prof.get("volatility"), 1.0)
+    if name in {"volatile", "raw_tools_outlier", "skill_feel_outlier", "hidden_gem"}:
+        mult *= 1.12
+    if name in {"steady_growth", "long_prime"}:
+        mult *= 0.88
+    if name in {"true_bust", "disappointment"} and age <= 23:
+        mult *= 1.05
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    if hidden_level > 0 and age <= 26:
+        mult *= 1.0 + hidden_level * 0.06
+    return float(_clamp(mult, 0.55, 1.95))
+
+
+def _v25_random_event_adjustment(p: Dict[str, Any], age: int, overall: int, potential: int, rng: random.Random) -> float:
+    prof = _v25_profile(p, rng)
+    name = str(prof.get("profile") or "steady_growth")
+    traits = _v25_traits(p)
+    chance = 0.018 + max(0, potential - overall) * 0.0015
+    if age <= 23:
+        chance += 0.010
+    if name in {"volatile", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
+        chance += 0.026
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    if hidden_level > 0 and age <= 26:
+        chance += 0.010 + hidden_level * 0.006
+    if traits["boomBust"] >= 0.65:
+        chance += 0.012
+    chance = _clamp(chance, 0.006, 0.075)
+    roll = rng.random()
+    if roll < chance * 0.45:
+        return rng.choice([0.70, 1.05, 1.45])
+    if roll > 1.0 - chance * 0.55:
+        if potential >= 90 and age <= 24 and name not in {"true_bust", "volatile"}:
+            return -rng.choice([0.30, 0.55, 0.80])
+        return -rng.choice([0.55, 0.90, 1.20])
+    return 0.0
+
+
+def _v25_bound_delta(p: Dict[str, Any], age: int, overall: int, potential: int, delta: int, rng: random.Random) -> int:
+    prof = _v25_profile(p, rng)
+    name = str(prof.get("profile") or "steady_growth")
+    ceiling = _safe_int(prof.get("hiddenCeiling"), max(overall, potential))
+    if age < 30:
+        lo = -3
+    elif age <= 33:
+        lo = -4
+    else:
+        lo = -5
+    if name in {"true_bust", "fast_decliner"}:
+        lo -= 1 if age >= 24 else 0
+    if potential >= 92 and age <= 24 and name in {"true_bust", "disappointment"}:
+        lo = max(lo, -2)
+    elif potential >= 90 and age <= 24:
+        lo = max(lo, -3)
+    gap = max(0, potential - overall)
+    room = max(0, ceiling - overall)
+    if age <= 22 and name in {"generational_hit", "raw_tools_outlier"} and room >= 8:
+        hi = 4
+    elif age <= 26 and (name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier"} or _v25_hidden_upside_level_from_profile(prof) >= 2) and room >= 6:
+        hi = 4 if rng.random() < (0.50 if _v25_hidden_upside_level_from_profile(prof) >= 3 else 0.38) else 3
+    elif age <= 24 and (name in {"star_hit", "hidden_gem", "skill_feel_outlier", "slow_burn", "late_bloomer"} or _v25_hidden_upside_level_from_profile(prof) >= 1) and room >= 5:
+        hi = 4 if ((name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier"} or _v25_hidden_upside_level_from_profile(prof) >= 3) and rng.random() < 0.30) else 3
+    elif age <= 24:
+        hi = 3
+    elif age <= 29:
+        hi = 2
+    else:
+        hi = 1
+    if overall >= 95:
+        hi = min(hi, 2)
+    elif overall >= 90:
+        hi = min(hi, 3)
+    if room <= 0:
+        hi = min(hi, 0)
+    elif room == 1:
+        hi = min(hi, 1)
+    if name in {"disappointment", "true_bust"}:
+        if potential >= 92 and age <= 24:
+            hi = min(hi, 2 if name == "disappointment" else 1)
+        else:
+            hi = min(hi, 1 if age <= 23 else 0)
+    return int(_clamp(delta, lo, hi))
+
+
+def _v25_cap_trim_protection_score(item: Dict[str, Any], rng: Optional[random.Random] = None) -> int:
+    p = item.get("player") or {}
+    before = int(item.get("before_overall", _safe_int(p.get("overall"), 70)))
+    after = int(item.get("target_overall", before))
+    age = _safe_int(p.get("age"), 25)
+    pot = _safe_int(p.get("potential"), before)
+    prof = _v25_profile(p, rng)
+    name = str(prof.get("profile") or "steady_growth")
+    ceiling = _safe_int(prof.get("hiddenCeiling"), max(before, pot))
+    peak_start = _safe_int(prof.get("peakStartAge"), 25)
+    peak_end = _safe_int(prof.get("peakEndAge"), 30)
+    score = 0
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    if name in _V25_PROTECTED_PROFILES:
+        score += 3
+    if name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
+        score += 2
+    if hidden_level > 0:
+        score += 2 + hidden_level
+        if age <= 26 and after <= 86 and ceiling >= after + 2:
+            score += 2
+    if age <= 24 and ceiling >= after + 3:
+        score += 2
+    if peak_start - 1 <= age <= peak_end and ceiling >= after + 2:
+        score += 2
+    if after - before >= 2:
+        score += 1
+    if pot >= after + 4:
+        score += 1
+    if name in {"true_bust", "disappointment", "fast_decliner"}:
+        score -= 1 if hidden_level > 0 else 3
+    if age >= _safe_int(prof.get("declineStartAge"), 32):
+        score -= 2
+    return int(score)
+
+
+def _v25_boost_priority_score(item: Dict[str, Any], threshold: int, rng: Optional[random.Random] = None) -> int:
+    p = item.get("player") or {}
+    after = int(item.get("target_overall", item.get("before_overall", 70)))
+    prof = _v25_profile(p, rng)
+    name = str(prof.get("profile") or "steady_growth")
+    ceiling = _safe_int(prof.get("hiddenCeiling"), _safe_int(p.get("potential"), after))
+    age = _safe_int(p.get("age"), 25)
+    score = 0
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    if ceiling >= threshold:
+        score += 3
+    if hidden_level > 0 and age <= 26 and ceiling >= threshold:
+        score += 2 + hidden_level
+    if name in _V25_BREAKOUT_PROFILES:
+        score += 2
+    if name in {"generational_hit", "star_hit"}:
+        score += 2
+    if name in {"true_bust", "disappointment", "fast_decliner"}:
+        score -= 1 if hidden_level > 0 else 3
+    if age <= 24:
+        score += 1
+    return int(score)
+
+
+def _v25_reconcile_potential_candidate(p: Dict[str, Any], candidate: int, old_potential: int, new_overall: int, ovr_delta: int, new_age: int, rng: random.Random) -> int:
+    prof = _v25_profile(p, rng)
+    name = str(prof.get("profile") or "steady_growth")
+    hidden_ceiling = _safe_int(prof.get("hiddenCeiling"), max(old_potential, new_overall))
+    candidate = int(candidate)
+    if new_age >= 29:
+        return new_overall
+
+    if name in {"generational_hit", "star_hit"} and old_potential >= 90:
+        # One bad year should not instantly reveal a failed star path.
+        candidate = max(candidate, old_potential - (1 if new_age <= 24 else 2))
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    if name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier", "late_bloomer", "slow_burn"} or hidden_level > 0:
+        if ovr_delta >= 2:
+            runway = 4 if new_age <= 25 else 3
+            if hidden_level >= 3:
+                runway += 1
+            candidate = max(candidate, min(99, new_overall + runway, hidden_ceiling))
+        elif ovr_delta >= 1:
+            runway = 2 + (1 if hidden_level >= 2 and new_age <= 25 else 0)
+            candidate = max(candidate, min(99, new_overall + runway, hidden_ceiling))
+        elif hidden_level > 0 and new_age <= 24 and new_overall + 3 < hidden_ceiling:
+            # Slow reveal even before the first big OVR spike; avoids visible POT
+            # acting as a hard prison for real hidden-gem overlays.
+            candidate = max(candidate, min(hidden_ceiling, old_potential + 1, new_overall + 3 + max(0, hidden_level - 1)))
+        # Keep a little unrevealed runway for true hidden stories.
+        if new_overall + 2 < hidden_ceiling and new_age <= 26:
+            candidate = max(candidate, min(hidden_ceiling, new_overall + 2 + max(0, hidden_level - 1)))
+    if name in {"disappointment", "true_bust"}:
+        if old_potential >= 92 and new_age <= 24:
+            # Slow reveal: repeated non-growth lowers POT, but not all the way
+            # from 95+ to the 70s in one or two offseasons.
+            drop = 1 if name == "disappointment" else 2
+            candidate = max(candidate, old_potential - drop)
+            candidate = min(candidate, max(new_overall + (2 if name == "disappointment" else 1), old_potential - (drop - 1))) if ovr_delta <= -2 else candidate
+        else:
+            if ovr_delta <= 0:
+                candidate = min(candidate, max(new_overall, old_potential - (2 if name == "true_bust" else 1)))
+            if name == "true_bust" and new_age >= 23:
+                candidate = min(candidate, max(new_overall, hidden_ceiling))
+    return int(_clamp(candidate, new_overall, 99))
+
+
+# -------------------------
 # V24 organic player-level progression
 # -------------------------
 
@@ -2515,35 +3516,36 @@ def _target_delta_for_player(
     rng: random.Random,
     team_name: str = ""
 ) -> int:
-    """V24 organic player-first progression.
+    """V25 hidden-career player-first progression.
 
-    This runs before league caps. Every player receives an individual probability
-    roll based on age, OVR, POT gap, a light career-timing profile, and randomness.
-    No current-season stats are used. The league-shape hard cap is a separate
-    final reconciliation step after these organic directions are decided.
+    This remains organic and player-first: age/OVR/POT provide the expectation,
+    but the saved V25 hidden profile changes the career story. Current-season
+    stats/minutes are still intentionally ignored.
     """
     age = _safe_int(p.get("age"), 25)
     overall = int(_clamp(_safe_int(p.get("overall"), 70), 25, 99))
-    potential = int(_clamp(_safe_int(p.get("potential"), overall), 25, 99))
+    potential = int(_clamp(_safe_int(p.get("potential"), overall), overall, 99))
 
     expected = 0.0
     expected += _v24_age_expectation(age, overall)
     expected += _v24_potential_expectation(age, overall, potential)
     expected += _v24_rating_tier_expectation(age, overall, potential)
-    expected += _career_timing_expected_adjustment(p, age, overall, potential, rng)
-    expected += _v24_random_event_adjustment(age, overall, potential, rng)
+    expected += _v25_profile_expected_adjustment(p, age, overall, potential, rng)
+    expected += _v25_random_event_adjustment(p, age, overall, potential, rng)
 
-    sigma = _v24_organic_sigma(p, age, overall, potential, rng)
+    sigma = _v24_organic_sigma(p, age, overall, potential, rng) * _v25_sigma_mult(p, age, overall, potential, rng)
     raw = expected + rng.gauss(0.0, sigma)
     delta = _stoch_round(raw, rng)
 
-    # A second surprise coin can flip the direction for true variance. This is
-    # intentionally small: factors guide what is likely, but never make it fixed.
-    if rng.random() < 0.035:
+    prof = _v25_profile(p, rng)
+    name = str(prof.get("profile") or "steady_growth")
+    surprise = 0.025
+    if name in {"volatile", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
+        surprise += 0.025
+    if rng.random() < surprise:
         delta += rng.choice([-1, 1])
 
-    return _v24_bound_delta(age, overall, potential, delta)
-
+    return _v25_bound_delta(p, age, overall, potential, delta, rng)
 
 def _apply_threshold_crossing_gates(
     p: Dict[str, Any],
@@ -2562,33 +3564,38 @@ def _apply_threshold_crossing_gates(
     age = _safe_int(p.get("age"), 25)
     potential = _safe_int(p.get("potential"), before)
     gap = max(0, potential - before)
+    prof = _v25_profile(p, rng)
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    hidden_gate_bonus = 0.0
+    if hidden_level > 0 and age <= 26:
+        hidden_gate_bonus = 0.10 + hidden_level * 0.075
     if target <= before:
         return int(_clamp(target, 60, 99))
 
     # Extremely low players can rise, but only premium outliers should fly all
     # the way into playable depth in one season.
     if before < 68 and target >= 73:
-        chance = 0.06 + min(0.20, gap * 0.012) + (0.04 if age <= 22 else 0.0)
+        chance = 0.06 + min(0.20, gap * 0.012) + (0.04 if age <= 22 else 0.0) + hidden_gate_bonus
         if rng.random() > chance:
             target = min(target, 72)
     if before < 70 and target >= 75:
-        chance = 0.04 + min(0.18, gap * 0.010) + (0.04 if age <= 22 else 0.0)
+        chance = 0.04 + min(0.18, gap * 0.010) + (0.04 if age <= 22 else 0.0) + hidden_gate_bonus
         if rng.random() > chance:
             target = min(target, 74)
 
     # Low 70s should have a real chance to enter 74+, but 77+ remains uncommon.
     if 70 <= before <= 73 and target >= 77:
-        chance = 0.08 + min(0.18, gap * 0.012) + (0.05 if age <= 23 else 0.0)
+        chance = 0.08 + min(0.18, gap * 0.012) + (0.05 if age <= 23 else 0.0) + hidden_gate_bonus
         if rng.random() > chance:
             target = min(target, 76)
 
     # Role-player leaps into the 80s are possible, just not routine.
     if 74 <= before <= 76 and target >= 80:
-        chance = 0.09 + min(0.18, gap * 0.012) + (0.05 if age <= 24 else 0.0)
+        chance = 0.09 + min(0.18, gap * 0.012) + (0.05 if age <= 24 else 0.0) + hidden_gate_bonus
         if rng.random() > chance:
             target = min(target, 79)
     if 77 <= before <= 80 and target >= 83:
-        chance = 0.12 + min(0.18, gap * 0.014) + (0.05 if age <= 24 else 0.0)
+        chance = 0.12 + min(0.18, gap * 0.014) + (0.05 if age <= 24 else 0.0) + hidden_gate_bonus
         if rng.random() > chance:
             target = min(target, 82)
 
@@ -2685,6 +3692,16 @@ def _predict_dynamic_potential_after_progression(
     if ovr_delta >= 2:
         hard_cap = max(hard_cap, min(99, new_overall + (4 if new_age <= 24 else 3)))
 
+    candidate = _v25_reconcile_potential_candidate(
+        player or {},
+        candidate,
+        old_potential,
+        new_overall,
+        ovr_delta,
+        new_age,
+        rng,
+    )
+
     return int(_clamp(candidate, new_overall, min(99, hard_cap)))
 
 def _compute_raw_progression_plan(
@@ -2719,6 +3736,7 @@ def _compute_raw_progression_plan(
                 "target_delta": 0,
                 "target_overall": current_overall,
                 "shape_protected": True,
+                "v25_profile": _v25_profile(p, rng),
             })
             continue
 
@@ -2743,6 +3761,7 @@ def _compute_raw_progression_plan(
             "before_overall": current_overall,
             "target_delta": target - current_overall,
             "target_overall": target,
+            "v25_profile": _v25_profile(p, rng),
         })
 
     return plan
@@ -3760,9 +4779,10 @@ def _hard_shape_trim_priority(item: Dict[str, Any], rng: random.Random) -> Tuple
     # Hard lock still protects only true future stars. It does NOT protect
     # every young 78 with decent potential, because that was the source of the
     # 77-84 flood.
+    v25_protect = _v25_cap_trim_protection_score(item, rng)
     premium = 1 if ((level == "elite" or dev_path in {"ceiling_hit", "star"}) and age <= 25 and after >= 84 and after < pot) else 0
     normal_depth = 0 if 77 <= after <= 84 else 1
-    return (premium, normal_depth, gap, pot, -age, -after, rng.random())
+    return (premium + v25_protect, normal_depth, gap, pot, -age, -after, rng.random())
 
 
 def _shape_shortage_boost_priority(item: Dict[str, Any], threshold: int, rng: random.Random) -> Tuple[Any, ...]:
@@ -3785,7 +4805,8 @@ def _shape_shortage_boost_priority(item: Dict[str, Any], threshold: int, rng: ra
     age_score = 3 if age <= 24 else 2 if age <= 27 else 1 if age <= 30 else 0
     close_score = max(0, 4 - max(0, threshold - after))
     draft_score = 2 if draft_slot <= 10 else 1 if draft_slot <= 30 else 0
-    return (free_agent_penalty, level_score, age_score, close_score, draft_score, gap, pot, -abs(25 - age), rng.random())
+    v25_score = _v25_boost_priority_score(item, threshold, rng)
+    return (free_agent_penalty, level_score + v25_score, age_score, close_score, draft_score, gap, pot, -abs(25 - age), rng.random())
 
 
 def _can_shape_shortage_boost(item: Dict[str, Any], threshold: int) -> bool:
@@ -3806,6 +4827,18 @@ def _can_shape_shortage_boost(item: Dict[str, Any], threshold: int) -> bool:
         return level == "elite" and age <= 24 and pot >= threshold + 6
     if age > 32:
         return False
+    prof = _v25_profile(p)
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    hidden_ceiling = _safe_int(prof.get("hiddenCeiling"), pot) if isinstance(prof, dict) else pot
+    if hidden_level > 0 and age <= 26 and team != "__FREE_AGENCY__" and hidden_ceiling >= threshold:
+        if threshold >= 90:
+            return before >= threshold - 5 and after >= threshold - 6 and hidden_level >= 3
+        if threshold >= 85:
+            return before >= threshold - 5 and after >= threshold - 6 and hidden_level >= 2
+        if threshold >= 80:
+            return before >= threshold - 5 and after >= threshold - 6
+        if threshold >= 77:
+            return before >= threshold - 4 or after >= threshold - 4
     # Allow deeper rescue only for the 77+ floor. Higher bands stay close to
     # the threshold so shortage boosts do not create unrealistic giant jumps.
     if threshold >= 90 and after < 87:
@@ -4277,7 +5310,7 @@ def _apply_v20_fine_shape_lock(
 # -------------------------
 # V23 final saved-pool hard league-shape lock
 # -------------------------
-_HARD_SHAPE_VERSION = "v24_final_saved_pool_hard_caps_2027_universe"
+_HARD_SHAPE_VERSION = "v25_final_saved_pool_hard_caps_2027_universe"
 
 
 def _hard_cumulative_spread(threshold: int) -> int:
@@ -4413,8 +5446,11 @@ def _hard_trim_priority(item: Dict[str, Any], rng: random.Random) -> Tuple[Any, 
     gap = max(0, pot - before)
     profile = _career_timing_profile(p, age, before, pot, rng)
     early_peak = 0 if str(profile.get("kind")) == "early_peak" else 1
+    v25_protect = _v25_cap_trim_protection_score(item, rng)
     # Ascending: old/low-upside/early-peaking players leave crowded shelves first.
-    return (-age, gap, pot, early_peak, after - before, rng.random())
+    # Low/negative V25 scores are trim candidates. Positive V25 scores protect
+    # hidden gems, late bloomers, and real outliers from being erased by caps.
+    return (v25_protect, -age, gap, pot, early_peak, after - before, rng.random())
 
 
 def _hard_boost_priority(item: Dict[str, Any], threshold: int, rng: random.Random) -> Tuple[Any, ...]:
@@ -4428,8 +5464,9 @@ def _hard_boost_priority(item: Dict[str, Any], threshold: int, rng: random.Rando
     breakout = _safe_int(profile.get("breakoutAge"), 24)
     timing = 2 if abs(age - breakout) <= 1 else 1 if age < breakout + 2 else 0
     youth = max(0, 31 - age)
-    # Descending: plausible young/high-POT players occupy vacancies.
-    return (pot >= threshold, min(gap, 20), timing, youth, after, before, rng.random())
+    v25_score = _v25_boost_priority_score(item, threshold, rng)
+    # Descending: plausible young/high-POT/V25-breakout players occupy vacancies.
+    return (v25_score, pot >= threshold, min(gap, 20), timing, youth, after, before, rng.random())
 
 
 def _hard_set_target(item: Dict[str, Any], desired: int, rng: random.Random, force: bool = False) -> bool:
@@ -5223,6 +6260,25 @@ def _reconcile_potential_after_final_shape(
     _finalize_potential_floor(league)
 
 
+
+def _before_snapshot_from_progression_markers(league: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    before: Dict[str, Dict[str, Any]] = {}
+    if not isinstance(league, dict):
+        return before
+    for p, tname in _all_players_with_team(league):
+        if not isinstance(p, dict):
+            continue
+        marker = p.get("__progressionOriginalOverall")
+        if marker is None:
+            continue
+        key = f"{_player_name(p)}__{tname}"
+        before[key] = {
+            "overall": _safe_int(marker, _safe_int(p.get("overall"), 70)),
+            "potential": _safe_int(p.get("__progressionOriginalPotential"), _safe_int(p.get("potential"), _safe_int(marker, 70))),
+            "age": _safe_int(p.get("__progressionOriginalAge"), max(18, _safe_int(p.get("age"), 25) - 1)),
+        }
+    return before
+
 def apply_final_league_shape_lock(
     league: Dict[str, Any],
     settings: Optional[Dict[str, Any]] = None,
@@ -5241,6 +6297,10 @@ def apply_final_league_shape_lock(
     settings = settings or DEFAULT_SETTINGS
     rng = random.Random(seed)
     debug = _apply_final_shape_lock_to_current_league(league, settings, rng)
+    before = _before_snapshot_from_progression_markers(league)
+    if before:
+        _reconcile_potential_after_final_shape(league, before, settings, rng)
+    _finalize_potential_floor(league)
     return {"league": league, "debug": debug, "version": PROGRESSION_PY_VERSION}
 
 def _enforce_actual_yearly_delta_window(
@@ -5443,7 +6503,9 @@ def apply_end_of_season_progression_with_deltas(
     # Use one shared RNG stream for progression and potential updates.
     rng = random.Random(seed)
 
+    _v25_league_seed(league, seed)
     ensure_progression_fields(league, season_start_year = season_year)
+    v25_career_audit = _ensure_v25_profiles_for_league(league, seed, season_year)
 
     before: Dict[str, Dict[str, Any]] = {}
     for p, tname in _all_players_with_team(league):
@@ -5500,6 +6562,8 @@ def apply_end_of_season_progression_with_deltas(
         old = before.get(key)
         if old is not None:
             p["__progressionOriginalOverall"] = _safe_int(old.get("overall"), _safe_int(p.get("overall"), 70))
+            p["__progressionOriginalPotential"] = _safe_int(old.get("potential"), _safe_int(p.get("potential"), _safe_int(p.get("overall"), 70)))
+            p["__progressionOriginalAge"] = _safe_int(old.get("age"), max(18, _safe_int(p.get("age"), 25) - 1))
 
     # Final lock for all currently loaded buckets after potential update.
     # The public apply_final_league_shape_lock() is also called after frontend
@@ -5537,4 +6601,4 @@ def apply_end_of_season_progression_with_deltas(
 
         deltas[key] = d
 
-    return {"league": league, "deltas": deltas, "version": PROGRESSION_PY_VERSION, "debug": {"shapeLock": shape_debug}}
+    return {"league": league, "deltas": deltas, "version": PROGRESSION_PY_VERSION, "debug": {"shapeLock": shape_debug, "careerAudit": v25_career_audit}}
