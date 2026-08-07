@@ -6,6 +6,7 @@ import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
 import { filterTradeEligiblePlayers } from "../utils/tradeRosterEligibility.js";
 import { getContractSeasonYear } from "../utils/seasonContext.js";
 import { getUserTradeCurrentDate, getUserTradePlayerEligibility } from "../utils/userTradeRules.js";
+import { formatInjuryReturnLabel, isPlayerInjured } from "../utils/injurySystem.js";
 import styles from "./RosterView.module.css";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
@@ -29,6 +30,16 @@ function getTeamPlayers(team, leagueData) {
 
 function playerNameOf(player) {
   return player?.name || player?.player || "Unknown Player";
+}
+
+function TradeInjuryBadge({ player, currentDate = null }) {
+  if (!isPlayerInjured(player, currentDate)) return null;
+  const label = formatInjuryReturnLabel(player, currentDate);
+  return (
+    <span className="ml-2 inline-flex items-center rounded-full border border-red-400/45 bg-red-500/15 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-red-200">
+      INJ{label ? ` — ${label}` : ""}
+    </span>
+  );
 }
 
 function getCurrentSeasonYear(leagueData) {
@@ -499,6 +510,7 @@ export default function TradePlayerSelect() {
                           STASH
                         </span>
                       )}
+                      <TradeInjuryBadge player={selectedPlayer} currentDate={userTradeCurrentDate} />
                     </h2>
                     <p className="mt-1 text-[15px] text-gray-400">
                       {selectedPlayer.pos || "-"}
@@ -594,6 +606,7 @@ export default function TradePlayerSelect() {
                     >
                       <td className="py-2 px-3 whitespace-nowrap text-left pl-4 font-semibold">
                         {playerNameOf(p)}
+                        <TradeInjuryBadge player={p} currentDate={userTradeCurrentDate} />
                         {alreadyAdded && (
                           <span className="ml-3 inline-flex items-center rounded-full border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-orange-200">
                             Already in package

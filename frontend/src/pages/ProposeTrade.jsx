@@ -31,6 +31,7 @@ import {
   validateCustomPickProtection,
 } from "../utils/draftPicks.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import { formatInjuryReturnLabel, isPlayerInjured } from "../utils/injurySystem.js";
 import { isDevelopmentRosterPlayer, sanitizeTradeItems } from "../utils/tradeRosterEligibility.js";
 import { evaluateTradeRosterProjection, projectStandardRosterCount } from "../utils/rosterRules.js";
 import PageFade from "../components/PageFade";
@@ -245,6 +246,24 @@ function getCurrentSeasonYear(leagueData) {
       leagueData?.currentSeasonYear ||
       leagueData?.seasonStartYear ||
       2026
+  );
+}
+
+function getTradeScreenCurrentDate() {
+  try {
+    return localStorage.getItem("bm_calendar_current_date_v1") || localStorage.getItem("bm_calendar_cursor_date_v1") || null;
+  } catch {
+    return null;
+  }
+}
+
+function TradeInjuryBadge({ player, currentDate = null, compact = false }) {
+  if (!isPlayerInjured(player, currentDate)) return null;
+  const label = formatInjuryReturnLabel(player, currentDate);
+  return (
+    <span className={`inline-flex shrink-0 items-center rounded-full border border-red-400/45 bg-red-500/15 font-black uppercase tracking-[0.10em] text-red-200 ${compact ? "px-1.5 py-0.5 text-[8px]" : "px-2 py-0.5 text-[9px]"}`}>
+      INJ{label ? ` — ${label}` : ""}
+    </span>
   );
 }
 
@@ -2015,6 +2034,7 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
     const player = item.player || {};
     const playerName = playerNameOf(player);
     const yearsRemaining = getContractYearsRemaining(player, leagueData);
+    const currentDate = getTradeScreenCurrentDate();
     const t = TRADE_PLAYER_CARD_TUNING;
     const nameFontSize = getTradeCardNameFontSize(playerName, t.name.size);
 
@@ -2085,6 +2105,9 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
               }}
             >
               {playerName}
+            </div>
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+              <TradeInjuryBadge player={player} currentDate={currentDate} compact />
             </div>
             <div
               className="mt-0.5 truncate font-black uppercase tracking-[0.08em] text-neutral-200"

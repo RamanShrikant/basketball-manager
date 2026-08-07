@@ -13,6 +13,8 @@ import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
 import { countStandardRosterPlayers, isStandardRosterPlayer } from "../utils/rosterRules.js";
+import { formatInjuryReturnLabel, isPlayerInjured } from "../utils/injurySystem.js";
+import { readLeagueClock } from "../utils/leagueClock.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const ALL_PLAYERS_VIEW_KEY = "__ALL_PLAYERS__";
@@ -1212,6 +1214,8 @@ export default function RosterView() {
   const stashRosterCount = !isAllView ? normalizedRosterBuckets.stashPlayers.length : 0;
   const rosterOverRegularSeasonLimit =
     !isAllView && standardRosterCount > regularSeasonStandardRosterLimit;
+  const currentLeagueDate = readLeagueClock()?.date || null;
+  const selectedPlayerInjured = isPlayerInjured(player, currentLeagueDate);
 
   return (
     <PageFade>
@@ -1295,6 +1299,11 @@ export default function RosterView() {
                       STASH
                     </span>
                   )}
+                  {selectedPlayerInjured && (
+                    <span className="inline-flex items-center rounded-full border border-red-400/30 bg-red-500/20 px-2 py-1 text-[12px] font-extrabold text-red-100">
+                      INJ
+                    </span>
+                  )}
                 </h2>
                 <p className="text-gray-400 text-[16px] mt-0.5">
                   {player?.pos || "-"}
@@ -1302,6 +1311,7 @@ export default function RosterView() {
                   {player?.age ?? "-"}
                   {player?.isTwoWay ? " • Two-Way Contract" : ""}
                   {player?.isStash ? " • Stashed" : ""}
+                  {selectedPlayerInjured ? ` • ${formatInjuryReturnLabel(player, currentLeagueDate)}` : ""}
                 </p>
               </div>
             </div>
@@ -1326,6 +1336,7 @@ export default function RosterView() {
                   {showTeamCol && <th className="py-3 px-3 min-w-[60px]">Team</th>}
                   {[
                     { key: "name", label: "Name" },
+                    { key: "injuryStatus", label: "STATUS", noSort: true },
                     { key: "pos", label: "POS" },
                     { key: "age", label: "AGE" },
                     { key: "overall", label: "OVR" },
@@ -1338,11 +1349,11 @@ export default function RosterView() {
                     <th
                       key={col.key}
                       className={`py-2 px-3 min-w-[88px] ${
-                        col.key === "name" ? "min-w-[210px] text-left pl-4" : "text-center"
-                      } cursor-pointer select-none`}
+                        col.key === "name" ? "min-w-[210px] text-left pl-4" : col.key === "injuryStatus" ? "min-w-[150px]" : "text-center"
+                      } ${col.noSort ? "select-none" : "cursor-pointer select-none"}`}
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleSort(col.key);
+                        if (!col.noSort) handleSort(col.key);
                       }}
                     >
                       {col.label}
@@ -1359,6 +1370,7 @@ export default function RosterView() {
               <tbody className="text-[14px] font-medium">
                 {sortedPlayers.map((p, idx) => {
                   const tinfo = teamOfPlayer[getPlayerKey(p)] || teamOfPlayer[`name:${p.name || ""}`] || {};
+                  const injured = isPlayerInjured(p, currentLeagueDate);
                   return (
                     <tr
                       key={`${p.name}-${idx}`}
@@ -1369,6 +1381,8 @@ export default function RosterView() {
                           ? "bg-orange-600 text-white"
                           : p.isTwoWay
                           ? "bg-emerald-500/5 hover:bg-emerald-500/10"
+                          : injured
+                          ? "bg-red-500/7 hover:bg-red-500/12"
                           : p.isStash
                           ? "bg-amber-500/5 hover:bg-amber-500/10"
                           : "hover:bg-neutral-800"
@@ -1401,6 +1415,20 @@ export default function RosterView() {
                           <span className="ml-2 inline-flex items-center rounded-full border border-amber-400/25 bg-amber-500/15 px-2 py-0.5 text-[10px] font-extrabold text-amber-200">
                             STASH
                           </span>
+                        )}
+                        {injured && (
+                          <span className="ml-2 inline-flex items-center rounded-full border border-red-400/30 bg-red-500/20 px-2 py-0.5 text-[10px] font-extrabold text-red-100">
+                            INJ
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-1.5 px-3 whitespace-nowrap">
+                        {injured ? (
+                          <span className="inline-flex items-center rounded-full border border-red-400/30 bg-red-500/15 px-2 py-0.5 text-[11px] font-extrabold text-red-100">
+                            {formatInjuryReturnLabel(p, currentLeagueDate)}
+                          </span>
+                        ) : (
+                          <span className="text-neutral-500">—</span>
                         )}
                       </td>
                       <td className="py-1.5 px-3">{p.pos}</td>

@@ -6,6 +6,7 @@ import { ensureLeagueFinancials } from "../utils/leagueFinancials.js";
 import { normalizeDevelopmentContracts } from "../utils/developmentContractUtils.js";
 import { withNormalizedSeasonContext, installSeasonContextAudit } from "../utils/seasonContext.js";
 import { ensureTradeRuleSettings } from "../utils/tradeRuleSettings.js";
+import { ensureInjurySettings } from "../utils/injurySystem.js";
 
 const GameContext = createContext();
 
@@ -30,7 +31,7 @@ function normalizeLeagueTiming(leagueData) {
 
 function normalizeLeagueFinancials(leagueData) {
   if (!leagueData || typeof leagueData !== "object") return leagueData;
-  return ensureTradeRuleSettings(normalizeDevelopmentContracts(ensureLeagueFinancials(normalizeLeagueTiming(leagueData))));
+  return ensureInjurySettings(ensureTradeRuleSettings(normalizeDevelopmentContracts(ensureLeagueFinancials(normalizeLeagueTiming(leagueData)))));
 }
 
 export function GameProvider({ children }) {

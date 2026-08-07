@@ -17,6 +17,14 @@ import {
   setPostseasonCurrentDate,
   syncPostseasonLeagueClock,
 } from "../utils/leagueClock.js";
+import {
+  ensureTeamGameplanInjurySafe,
+  formatInjuryEventLine,
+  normalizeInjurySettings,
+  processGameInjuries,
+  readInjurySafeGameplanMinutes,
+  recoverPlayersForDate,
+} from "../utils/injurySystem.js";
 
 const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
@@ -990,7 +998,7 @@ function sortWithTiebreak(teamNames, standings) {
 }
 
 /* ------------ sim helpers ------------ */
-async function simOneSafe({ homeName, awayName, leagueData, teamsByName }) {
+async function simOneSafe({ homeName, awayName, leagueData, teamsByName, currentDate = null }) {
   const homeTeamObj = teamsByName[homeName];
   const awayTeamObj = teamsByName[awayName];
 
@@ -999,6 +1007,7 @@ async function simOneSafe({ homeName, awayName, leagueData, teamsByName }) {
   }
 
   ensureGameplansForLeague(leagueData);
+  recoverPlayersForDate(leagueData, currentDate);
 
   const home = structuredClone(homeTeamObj);
   const away = structuredClone(awayTeamObj);
@@ -1015,8 +1024,10 @@ async function simOneSafe({ homeName, awayName, leagueData, teamsByName }) {
     }
   }
 
-  home.minutes = readFlatMinutesFromGameplan(home.name);
-  away.minutes = readFlatMinutesFromGameplan(away.name);
+  ensureTeamGameplanInjurySafe(homeTeamObj, currentDate);
+  ensureTeamGameplanInjurySafe(awayTeamObj, currentDate);
+  home.minutes = readInjurySafeGameplanMinutes(homeTeamObj, currentDate);
+  away.minutes = readInjurySafeGameplanMinutes(awayTeamObj, currentDate);
 
   if (window.__debugSimLogs) {
     console.log("[Playoffs simOneSafe] home minutes keys =", Object.keys(home.minutes || {}));
@@ -1341,6 +1352,7 @@ export default function Playoffs() {
 
   const [modal, setModal] = useState(null);
   const [boxModal, setBoxModal] = useState(null);
+  const [postseasonInjuryAlert, setPostseasonInjuryAlert] = useState(null);
   const [simLock, setSimLock] = useState(false);
   const [champModal, setChampModal] = useState(null);
   const [postseasonView, setPostseasonView] = useState("playin");
@@ -1348,6 +1360,17 @@ export default function Playoffs() {
   // ✅ PATCH: stop button support (calendar-style stop behavior)
   const stopRequestedRef = useRef(false);
   const [simStopping, setSimStopping] = useState(false);
+
+  const showUserPostseasonInjuryAlert = (events = []) => {
+    const injurySettings = normalizeInjurySettings(leagueData?.settings?.injuries);
+    if (!injurySettings.enabled || !injurySettings.userAlerts || !selectedTeam?.name) return false;
+    const userEvents = (events || []).filter((event) => event?.teamName === selectedTeam.name);
+    if (!userEvents.length) return false;
+    stopRequestedRef.current = true;
+    setSimStopping(true);
+    setPostseasonInjuryAlert({ events: userEvents, createdAt: Date.now() });
+    return true;
+  };
 
   // ✅ PATCH (Finals MVP)
   const [fmvpLoading, setFmvpLoading] = useState(false);
@@ -1797,7 +1820,7 @@ export default function Playoffs() {
     return false;
   }
 
-  async function simGameId(gameId, homeName, awayName) {
+  async function simGameId(gameId, homeName, awayName, currentDate = null) {
     // check state first (but don't trust bad cached 0-0/tie)
     const cached = resultsLive?.[gameId];
     if (cached && !isBadSlimResult(cached)) return cached;
@@ -1807,11 +1830,32 @@ export default function Playoffs() {
     const storedOne = stored?.[gameId];
     if (storedOne && !isBadSlimResult(storedOne)) return storedOne;
 
-    const full = await simOneSafe({ homeName, awayName, leagueData, teamsByName });
+    const recovery = recoverPlayersForDate(leagueData, currentDate);
+    if (recovery.touchedTeamNames.length) {
+      const cloned = structuredClone(leagueData);
+      setLeagueData(cloned);
+      saveLeagueDataInBackground(cloned);
+      showUserPostseasonInjuryAlert(recovery.events);
+    }
+
+    const full = await simOneSafe({ homeName, awayName, leagueData, teamsByName, currentDate });
     const slim = slimResult(full);
 
     // don't save bad results — force resim next time instead of getting stuck
     if (isBadSlimResult(slim)) return slim;
+
+    const injuryResult = processGameInjuries({
+      leagueData,
+      game: { home: homeName, away: awayName },
+      result: slim,
+      currentDate,
+    });
+    if (injuryResult.touchedTeamNames.length) {
+      const cloned = structuredClone(leagueData);
+      setLeagueData(cloned);
+      saveLeagueDataInBackground(cloned);
+      showUserPostseasonInjuryAlert(injuryResult.events);
+    }
 
     const mergedResults = { ...(resultsRef.current || {}), [gameId]: slim };
     resultsRef.current = mergedResults;
@@ -1823,10 +1867,10 @@ export default function Playoffs() {
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  async function safeSimGameId(gameId, homeName, awayName, { retries = 1, backoffMs = 75 } = {}) {
+  async function safeSimGameId(gameId, homeName, awayName, currentDate = null, { retries = 1, backoffMs = 75 } = {}) {
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        const slim = await simGameId(gameId, homeName, awayName);
+        const slim = await simGameId(gameId, homeName, awayName, currentDate);
 
         // treat tie/0-0 as a failed attempt so we retry
         if (slim && !isBadSlimResult(slim)) return slim;
@@ -1841,10 +1885,10 @@ export default function Playoffs() {
     return null;
   }
 
-  async function safeSimTransientPlayIn(homeName, awayName, { retries = 1, backoffMs = 75 } = {}) {
+  async function safeSimTransientPlayIn(homeName, awayName, currentDate = null, { retries = 1, backoffMs = 75 } = {}) {
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        const full = await simOneSafe({ homeName, awayName, leagueData, teamsByName });
+        const full = await simOneSafe({ homeName, awayName, leagueData, teamsByName, currentDate });
         const slim = slimResult(full);
         if (slim && !isBadSlimResult(slim)) return slim;
         throw new Error("bad play-in sim result (tie/0-0/null)");
@@ -1902,7 +1946,7 @@ export default function Playoffs() {
     const gameDate = series.gameDates?.[idx] || null;
     const { home, away } = seriesGameMeta(series, idx);
 
-    const slim = await safeSimGameId(gid, home, away, { retries: 2 });
+    const slim = await safeSimGameId(gid, home, away, gameDate, { retries: 2 });
     const side = winnerFromSlim(slim);
 
     if (!side) {
@@ -1947,7 +1991,7 @@ export default function Playoffs() {
         const gameDate = series.gameDates?.[idx] || null;
         const { home, away } = seriesGameMeta(series, idx);
 
-        const slim = await safeSimGameId(gid, home, away, { retries: 2 });
+        const slim = await safeSimGameId(gid, home, away, gameDate, { retries: 2 });
         const side = winnerFromSlim(slim);
 
         if (!side) {
@@ -2166,8 +2210,27 @@ export default function Playoffs() {
     if (node.played) return;
     if (!node.home || !node.away) return;
 
-    const slim = await safeSimTransientPlayIn(node.home, node.away, { retries: 1 });
+    const recovery = recoverPlayersForDate(leagueData, node.date);
+    if (recovery.touchedTeamNames.length) {
+      const cloned = structuredClone(leagueData);
+      setLeagueData(cloned);
+      saveLeagueDataInBackground(cloned);
+    }
+
+    const slim = await safeSimTransientPlayIn(node.home, node.away, node.date, { retries: 1 });
     if (!slim) return;
+
+    const injuryResult = processGameInjuries({
+      leagueData,
+      game: { home: node.home, away: node.away },
+      result: slim,
+      currentDate: node.date,
+    });
+    if (injuryResult.touchedTeamNames.length) {
+      const cloned = structuredClone(leagueData);
+      setLeagueData(cloned);
+      saveLeagueDataInBackground(cloned);
+    }
 
     const side = winnerFromSlim(slim);
     if (!side) return;
@@ -2311,7 +2374,7 @@ export default function Playoffs() {
     const gameDate = series.gameDates?.[idx] || null;
     const { home, away } = seriesGameMeta(series, idx);
 
-    const slim = await safeSimGameId(gid, home, away, { retries: 2 });
+    const slim = await safeSimGameId(gid, home, away, gameDate, { retries: 2 });
     const side = winnerFromSlim(slim);
 
     if (!side) {
@@ -2358,7 +2421,7 @@ export default function Playoffs() {
       const gameDate = series.gameDates?.[idx] || null;
       const { home, away } = seriesGameMeta(series, idx);
 
-      const slim = await safeSimGameId(gid, home, away, { retries: 2 });
+      const slim = await safeSimGameId(gid, home, away, gameDate, { retries: 2 });
       const side = winnerFromSlim(slim);
 
       if (!side) {
@@ -3535,6 +3598,46 @@ ${disabled ? "opacity-60" : ""}
                 <div className="text-white/80 font-extrabold text-xl mb-3 select-none text-right">{right}</div>
                 <BracketSide2K confKey={right} mirror={true} />
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+      {/* Injury Alert Modal */}
+      {postseasonInjuryAlert && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4 bmPlayoffFadeIn">
+          <div className="w-full max-w-xl rounded-2xl border border-orange-500/35 bg-neutral-950 p-5 shadow-2xl bmPlayoffPanelRise">
+            <div className="text-xs font-black uppercase tracking-[0.22em] text-orange-300">Controlled Team Alert</div>
+            <h2 className="mt-1 text-2xl font-black text-white">Injury Update</h2>
+            <div className="mt-4 space-y-2">
+              {(postseasonInjuryAlert.events || []).map((event) => (
+                <div key={event.id || `${event.playerName}-${event.returnDate}`} className="rounded-xl border border-neutral-800 bg-neutral-900 px-4 py-3 text-sm text-neutral-100">
+                  {formatInjuryEventLine(event)}
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-sm text-neutral-400">
+              The CPU has already rebuilt the rotation. Open Coach Gameplan to make your own changes, or close this and keep the auto-rebuilt rotation.
+            </p>
+            <div className="mt-5 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                className="rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2 text-sm font-black text-white hover:bg-neutral-800"
+                onClick={() => setPostseasonInjuryAlert(null)}
+              >
+                Keep CPU Auto-Rebuild
+              </button>
+              <button
+                type="button"
+                className="rounded-xl bg-orange-600 px-4 py-2 text-sm font-black text-white hover:bg-orange-500"
+                onClick={() => {
+                  setPostseasonInjuryAlert(null);
+                  navigate("/coach-gameplan");
+                }}
+              >
+                Adjust Rotation Manually
+              </button>
             </div>
           </div>
         </div>

@@ -101,6 +101,14 @@ import {
   shouldDisableCpuTradesForDiagnostics,
   startCpuTradeMainThreadMonitor,
 } from "../utils/cpuTradeTelemetry.js";
+import {
+  ensureTeamGameplanInjurySafe,
+  formatInjuryEventLine,
+  normalizeInjurySettings,
+  processGameInjuries,
+  readInjurySafeGameplanMinutes,
+  recoverPlayersForDate,
+} from "../utils/injurySystem.js";
 
 window.LZString = LZString;
 
@@ -401,7 +409,7 @@ function getSimulationBlockMessageThroughDate(scheduleByDate, teams, endDate = n
 /* -------------------------------------------------------------------------- */
 /*                              SIMULATION WRAPPER                             */
 /* -------------------------------------------------------------------------- */
-async function simOneSafe(game, leagueData, teams, runtime = null) {
+async function simOneSafe(game, leagueData, teams, runtime = null, currentDate = null) {
   if (window.__debugSimLogs) {
     window.__lastGame = game;
     console.log("⏳ simOneSafe starting:", game.home, "vs", game.away);
@@ -435,8 +443,10 @@ if (simBlockMessage) {
     }
   }
 
-  homeTeamObj.minutes = { ...(activeRuntime.minutesByTeam.get(homeTeamObj.name) || {}) };
-  awayTeamObj.minutes = { ...(activeRuntime.minutesByTeam.get(awayTeamObj.name) || {}) };
+  ensureTeamGameplanInjurySafe(homeSource, currentDate);
+  ensureTeamGameplanInjurySafe(awaySource, currentDate);
+  homeTeamObj.minutes = readInjurySafeGameplanMinutes(homeSource, currentDate);
+  awayTeamObj.minutes = readInjurySafeGameplanMinutes(awaySource, currentDate);
 
   if (window.__debugSimLogs) {
     console.log("[simOneSafe] home minutes keys =", Object.keys(homeTeamObj.minutes || {}));
@@ -452,7 +462,7 @@ if (simBlockMessage) {
 // ---------------------------------------------------------------------------
 // Helper: run ONE game with retries, using simOneSafe + queueSim
 // ---------------------------------------------------------------------------
-async function runGameWithRetries(game, leagueData, teams, maxRetries = 3, runtime = null) {
+async function runGameWithRetries(game, leagueData, teams, maxRetries = 3, runtime = null, currentDate = null) {
   let lastFull = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -460,7 +470,7 @@ async function runGameWithRetries(game, leagueData, teams, maxRetries = 3, runti
       console.log(`[RetrySim] Game ${game.id} (${game.away} @ ${game.home}) attempt`, attempt, "of", maxRetries);
     }
 
-    lastFull = await simOneSafe(game, leagueData, teams, runtime);
+    lastFull = await simOneSafe(game, leagueData, teams, runtime, currentDate);
 
     if (isBadFullResult(lastFull)) {
   window.__lastBad = {
@@ -2592,7 +2602,7 @@ const selectedTeamCanSim = !selectedTeamSimBlockMessage;
   // ===============================
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_"; // each game stored as bm_result_v3_<gameId>
-const ALL_STAR_LOGIC_VERSION = "all_star_current_team_v2_20260730";
+const ALL_STAR_LOGIC_VERSION = "all_star_gp_eligibility_v4_20260806";
 const RESULT_V2_BLOB_KEY = "bm_results_v2"; // legacy blob (for migration)
 
 const resultV3Key = (gameId) => `${RESULT_V3_PREFIX}${gameId}`;
@@ -4662,6 +4672,7 @@ const [contractExtensionPromptInfo, setContractExtensionPromptInfo] = useState(n
 const [contractExtensionDeadlineBusy, setContractExtensionDeadlineBusy] = useState(false);
 const [tradeToasts, setTradeToasts] = useState([]);
 const [pendingSimIntent, setPendingSimIntent] = useState(() => readPendingSimulationIntent());
+const [injuryAlertModal, setInjuryAlertModal] = useState(null);
 
 const persistPendingSimIntent = (intent) => {
   const next = writePendingSimulationIntent(intent);
@@ -4672,6 +4683,28 @@ const persistPendingSimIntent = (intent) => {
 const clearPendingSimIntent = () => {
   writePendingSimulationIntent(null);
   setPendingSimIntent(null);
+};
+
+
+const shouldPauseForUserInjuryEvents = (events = [], intent = null) => {
+  const injurySettings = normalizeInjurySettings(leagueData?.settings?.injuries);
+  if (!injurySettings.enabled || !injurySettings.userAlerts || !selectedTeam?.name) return false;
+  const userEvents = (events || []).filter((event) => event?.teamName === selectedTeam.name);
+  if (!userEvents.length) return false;
+
+  if (intent) persistPendingSimIntent({ ...intent, pausedReason: "injury_alert", seasonYear });
+  setInjuryAlertModal({ events: userEvents, intent, createdAt: Date.now() });
+  return true;
+};
+
+const refreshInjuryTouchedTeams = (activeLeagueData, touchedTeamNames = []) => {
+  if (!touchedTeamNames?.length) return null;
+  setLeagueData(structuredClone(activeLeagueData));
+  const nextTeams = buildTeamsFromLeagueForSim(activeLeagueData);
+  return {
+    teams: nextTeams,
+    runtime: buildSimulationRuntime(activeLeagueData, nextTeams),
+  };
 };
 
 const ALL_STAR_DATE = seasonCalendarConfig.allStarSelectionDate || fmt(new Date(seasonYear + 1, 1, 13));
@@ -6165,13 +6198,24 @@ const handleSimOnlyGame = async (dateStr, game) => {
     console.log("[CPU Roster Repair] auto-two-way assignments before single game:", repairRes?.twoWayAssignments || []);
   }
 
+  let activeLeagueData = repairedLeagueData;
+  let activeTeams = repairedTeams;
+  const recovery = recoverPlayersForDate(activeLeagueData, dateStr);
+  if (recovery.touchedTeamNames.length) {
+    const refreshed = refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames);
+    if (refreshed) {
+      activeTeams = refreshed.teams;
+    }
+  }
+  if (shouldPauseForUserInjuryEvents(recovery.events, null)) return;
+
   const upd = { ...scheduleByDate };
   const newResults = { ...resultsById };
 
-  const simRuntime = buildSimulationRuntime(repairedLeagueData, repairedTeams);
+  const simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
   let full;
   try {
-    full = await runGameWithRetries(game, repairedLeagueData, repairedTeams, 3, simRuntime);
+    full = await runGameWithRetries(game, activeLeagueData, activeTeams, 3, simRuntime, dateStr);
   } catch (err) {
     openSimError(
       err?.message || "This team doesn't have enough players.",
@@ -6217,12 +6261,23 @@ const handleSimOnlyGame = async (dateStr, game) => {
   playerStats = applyGameToPlayerStats(playerStats, result, game);
   clutchStats = applyGameToClutchStats(clutchStats, result, game, seasonYear);
   appendPlayerMoodEvents(buildGamePerformanceMoodEvents(result, game, dateStr, {
-    teams: repairedTeams,
+    teams: activeTeams,
     scheduleByDate: upd,
     resultsById: newResults,
     playerStatsBefore: playerStatsBeforeGame,
     seasonYear,
   }));
+
+  const injuryResult = processGameInjuries({
+    leagueData: activeLeagueData,
+    game,
+    result: canonicalResult || result,
+    currentDate: dateStr,
+  });
+  if (injuryResult.touchedTeamNames.length) {
+    refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames);
+  }
+
   savePlayerStats(playerStats);
   saveClutchStats(clutchStats);
 
@@ -6235,7 +6290,9 @@ const handleSimOnlyGame = async (dateStr, game) => {
   setMonth(monthKey(new Date(dateStr)));
 
   setActionModal(null);
-  setBoxModal({ game, result: canonicalResult || result });
+  if (!shouldPauseForUserInjuryEvents(injuryResult.events, null)) {
+    setBoxModal({ game, result: canonicalResult || result });
+  }
 };
 
 const handleSimToDate = async (dateStr, { resume = false } = {}) => {
@@ -6380,6 +6437,32 @@ for (const d of sorted) {
   }
   lastDateProcessed = d;
   simulationPerf.datesVisited += 1;
+
+  const recovery = recoverPlayersForDate(activeLeagueData, d);
+  if (recovery.touchedTeamNames.length) {
+    const refreshed = refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames);
+    if (refreshed) {
+      activeTeams = refreshed.teams;
+      simRuntime = refreshed.runtime;
+    }
+  }
+  if (shouldPauseForUserInjuryEvents(recovery.events, {
+    mode: "to_date",
+    targetDate: dateStr,
+    seasonYear,
+  })) {
+    savePlayerStats(playerStats);
+    saveClutchStats(clutchStats);
+    cleanupGhostGames(upd, newResults);
+    saveSchedule(upd);
+    await saveResults(newResults);
+    await flushPendingResultWrites();
+    setScheduleByDate(structuredClone(upd));
+    setResultsById(structuredClone(newResults));
+    pausedAtCheckpoint = true;
+    saveSimulationCursorDate(d);
+    return;
+  }
 
   if (shouldPauseForContractExtensionDeadline(d)) {
     recordSimulationCheckpointEvent(simulationPerf, {
@@ -6558,7 +6641,7 @@ for (const d of sorted) {
         });
 
         try {
-          const full = await runGameWithRetries(g, activeLeagueData, activeTeams, 3, simRuntime);
+          const full = await runGameWithRetries(g, activeLeagueData, activeTeams, 3, simRuntime, d);
 
           // ✅ if user clicked stop while this game was running, bail after it finishes
           if (stopRef.current) {
@@ -6619,7 +6702,42 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
             playerStatsBefore: playerStatsBeforeGame,
             seasonYear,
           }));
+
+          const injuryResult = processGameInjuries({
+            leagueData: activeLeagueData,
+            game: g,
+            result: canonicalResult || slim,
+            currentDate: d,
+          });
+          if (injuryResult.touchedTeamNames.length) {
+            const refreshed = refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames);
+            if (refreshed) {
+              activeTeams = refreshed.teams;
+              simRuntime = refreshed.runtime;
+            }
+          }
+
           dayChanged = true;
+
+          if (shouldPauseForUserInjuryEvents(injuryResult.events, {
+            mode: "to_date",
+            targetDate: dateStr,
+            seasonYear,
+          })) {
+            upd[d] = dayGames;
+            if (dayMoodEvents.length) appendPlayerMoodEvents(dayMoodEvents);
+            savePlayerStats(playerStats);
+            saveClutchStats(clutchStats);
+            cleanupGhostGames(upd, newResults);
+            saveSchedule(upd);
+            await saveResults(newResults);
+            await flushPendingResultWrites();
+            setScheduleByDate(structuredClone(upd));
+            setResultsById(structuredClone(newResults));
+            pausedAtCheckpoint = true;
+            saveSimulationCursorDate(d);
+            return;
+          }
         } catch (err) {
           finishSimulationGameOrderEvent(gameOrderEvent, "error", {
             message: String(err?.message || err || "unknown error"),
@@ -6886,6 +7004,7 @@ let stopped = false;
 let pausedForAllStar = false;
 let pausedForTradeDeadline = false;
 let pausedForContractExtensionDeadline = false;
+let pausedForInjuryAlert = false;
 
   try {
 for (let di = 0; di < dates.length; di++) {
@@ -6898,6 +7017,33 @@ for (let di = 0; di < dates.length; di++) {
   }
   lastDateProcessed = date;
   simulationPerf.datesVisited += 1;
+
+  const recovery = recoverPlayersForDate(activeLeagueData, date);
+  if (recovery.touchedTeamNames.length) {
+    const refreshed = refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames);
+    if (refreshed) {
+      activeTeams = refreshed.teams;
+      simRuntime = refreshed.runtime;
+    }
+  }
+  if (shouldPauseForUserInjuryEvents(recovery.events, {
+    mode: "full_season",
+    targetDate: null,
+    seasonYear,
+  })) {
+    savePlayerStats(playerStats);
+    saveClutchStats(clutchStats);
+    cleanupGhostGames(upd, results);
+    saveSchedule(upd);
+    await saveResults(results);
+    await flushPendingResultWrites();
+    setScheduleByDate(structuredClone(upd));
+    setResultsById(structuredClone(results));
+    saveSimulationCursorDate(date);
+    pausedForInjuryAlert = true;
+    stopped = true;
+    return;
+  }
 
   if (shouldPauseForContractExtensionDeadline(date)) {
     recordSimulationCheckpointEvent(simulationPerf, {
@@ -7020,7 +7166,7 @@ for (let di = 0; di < dates.length; di++) {
         });
 
         try {
-          const full = await runGameWithRetries(g, activeLeagueData, activeTeams, 3, simRuntime);
+          const full = await runGameWithRetries(g, activeLeagueData, activeTeams, 3, simRuntime, date);
           if (!full) {
             finishSimulationGameOrderEvent(gameOrderEvent, "no_result");
             continue;
@@ -7079,7 +7225,43 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
             playerStatsBefore: playerStatsBeforeGame,
             seasonYear,
           }));
+
+          const injuryResult = processGameInjuries({
+            leagueData: activeLeagueData,
+            game: g,
+            result: canonicalResult || slim,
+            currentDate: date,
+          });
+          if (injuryResult.touchedTeamNames.length) {
+            const refreshed = refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames);
+            if (refreshed) {
+              activeTeams = refreshed.teams;
+              simRuntime = refreshed.runtime;
+            }
+          }
+
           dayChanged = true;
+
+          if (shouldPauseForUserInjuryEvents(injuryResult.events, {
+            mode: "full_season",
+            targetDate: null,
+            seasonYear,
+          })) {
+            upd[date] = dayGames;
+            if (dayMoodEvents.length) appendPlayerMoodEvents(dayMoodEvents);
+            savePlayerStats(playerStats);
+            saveClutchStats(clutchStats);
+            cleanupGhostGames(upd, results);
+            saveSchedule(upd);
+            await saveResults(results);
+            await flushPendingResultWrites();
+            setScheduleByDate(structuredClone(upd));
+            setResultsById(structuredClone(results));
+            saveSimulationCursorDate(date);
+            pausedForInjuryAlert = true;
+            stopped = true;
+            return;
+          }
         } catch (err) {
           finishSimulationGameOrderEvent(gameOrderEvent, "error", {
             message: String(err?.message || err || "unknown error"),
@@ -7149,6 +7331,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
       pausedForTradeDeadline,
       pausedForContractExtensionDeadline,
       pausedForAllStar,
+      pausedForInjuryAlert,
       lastDateProcessed,
     });
 
@@ -7194,6 +7377,13 @@ if (pausedForAllStar) {
   });
   saveSimulationCursorDate(lastDateProcessed || readSimulationCursorDate());
   setAllStarPromptOpen(true);
+  return;
+}
+
+if (pausedForInjuryAlert) {
+  setScheduleByDate(structuredClone(upd));
+  setResultsById(structuredClone(results));
+  saveSimulationCursorDate(lastDateProcessed || readSimulationCursorDate());
   return;
 }
 
@@ -8802,7 +8992,66 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
     </div>,
     document.body
   )}
-{pendingSimIntent && !simLock && !tradeDeadlinePromptOpen && !contractExtensionPromptOpen && !allStarPromptOpen && !allStarOpen && (
+
+{/* ---------------------------- INJURY ALERT MODAL ---------------------------- */}
+{injuryAlertModal &&
+  createPortal(
+    <div
+      className="fixed inset-0 z-[245] bg-black/75 backdrop-blur-[2px] flex items-center justify-center p-4"
+      onClick={() => setInjuryAlertModal(null)}
+    >
+      <div
+        className="w-full max-w-[560px] overflow-hidden rounded-2xl border border-orange-500/40 bg-neutral-950 text-white shadow-[0_0_36px_rgba(0,0,0,0.62)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="border-b border-orange-500/20 bg-gradient-to-r from-orange-600/20 to-red-500/10 px-6 py-5">
+          <div className="text-[11px] font-black uppercase tracking-[0.24em] text-orange-300">Controlled Team Alert</div>
+          <h2 className="mt-1 text-2xl font-black text-white">Injury Update</h2>
+          <p className="mt-1 text-sm font-semibold text-orange-100/80">
+            Your rotation has already been auto-rebuilt so injured players cannot start or play minutes.
+          </p>
+        </div>
+
+        <div className="px-6 py-5">
+          <div className="space-y-2">
+            {(injuryAlertModal.events || []).map((event) => (
+              <div key={event.id} className="rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm font-bold text-neutral-100">
+                {formatInjuryEventLine(event)}
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-black text-neutral-200 hover:bg-white/10"
+              onClick={() => {
+                setInjuryAlertModal(null);
+                navigate("/coach-gameplan");
+              }}
+            >
+              Adjust Rotation Manually
+            </button>
+            <button
+              type="button"
+              className="rounded-xl bg-orange-600 px-5 py-3 text-sm font-black text-white hover:bg-orange-500"
+              onClick={() => {
+                setInjuryAlertModal(null);
+                if (injuryAlertModal.intent) {
+                  window.setTimeout(() => resumePendingSimulation(), 0);
+                }
+              }}
+            >
+              Keep CPU Auto-Rebuild
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )}
+
+{pendingSimIntent && !simLock && !injuryAlertModal && !tradeDeadlinePromptOpen && !contractExtensionPromptOpen && !allStarPromptOpen && !allStarOpen && (
   <div className="fixed bottom-6 left-1/2 z-[252] w-[min(620px,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-orange-400/35 bg-neutral-950/95 p-4 text-white shadow-2xl backdrop-blur">
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div>

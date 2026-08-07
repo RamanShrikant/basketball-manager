@@ -23,6 +23,7 @@ import {
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { getContractSeasonYear, getDraftYear } from "../utils/seasonContext.js";
 import { getTradeWindowLockMessage } from "../utils/tradeWindow.js";
+import { formatInjuryReturnLabel, isPlayerInjured } from "../utils/injurySystem.js";
 import {
   attachUserTradeRuleContext,
   getUserTradeDeadlineStatus,
@@ -404,6 +405,16 @@ function playerHeadshotOf(player) {
 
 function playerKey(player) {
   return String(player?.id || player?.playerId || playerNameOf(player));
+}
+
+function TradeFinderInjuryBadge({ player, currentDate = null, compact = false }) {
+  if (!isPlayerInjured(player, currentDate)) return null;
+  const label = formatInjuryReturnLabel(player, currentDate);
+  return (
+    <span className={`inline-flex shrink-0 items-center rounded-full border border-red-400/45 bg-red-500/15 font-black uppercase tracking-[0.10em] text-red-200 ${compact ? "px-1.5 py-0.5 text-[8px]" : "px-2 py-0.5 text-[9px]"}`}>
+      INJ{label ? ` — ${label}` : ""}
+    </span>
+  );
 }
 
 function pickKey(pick) {
@@ -1714,7 +1725,7 @@ function TradeFinderRatingRing({ player, variant = "packageRows" }) {
   );
 }
 
-function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team, selectedActionLabel = "Added", disabled = false, disabledLabel = "Max", disabledReason = "" }) {
+function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team, currentDate = null, selectedActionLabel = "Added", disabled = false, disabledLabel = "Max", disabledReason = "" }) {
   const isPlayer = asset.type === "player";
   const isResolvedPick = !isPlayer && isResolvedDraftPickAsset(asset.pick);
   const label = isPlayer ? playerNameOf(asset.player) : formatPick(asset.pick);
@@ -1791,6 +1802,11 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
             >
               {label}
             </div>
+            {isPlayer && (
+              <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                <TradeFinderInjuryBadge player={asset.player} currentDate={currentDate} compact />
+              </div>
+            )}
             {isPlayer ? (
               <div
                 className="mt-1 flex min-w-0 items-center font-black uppercase tracking-[0.08em] text-neutral-300"
@@ -1930,7 +1946,7 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
   );
 }
 
-function OfferAssetLine({ item, team }) {
+function OfferAssetLine({ item, team, currentDate = null }) {
   if (item.type === "player") {
     const headshotT = TRADE_FINDER_HEADSHOT_TUNING.offerRows;
     const ringT = TRADE_FINDER_RATING_RING_TUNING.offerRows;
@@ -1978,6 +1994,9 @@ function OfferAssetLine({ item, team }) {
                 }}
               >
                 {playerNameOf(item.player)}
+              </div>
+              <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                <TradeFinderInjuryBadge player={item.player} currentDate={currentDate} compact />
               </div>
 
               <div
@@ -2921,6 +2940,7 @@ export default function TradeFinder() {
                           onToggle={() => toggleAsset(asset)}
                           leagueData={leagueData}
                           team={packageTeam}
+                          currentDate={userTradeCurrentDate}
                           disabled={isPackageFull || assetEligibilityByKey.get(asset.key)?.ok === false}
                           disabledLabel={assetEligibilityByKey.get(asset.key)?.ok === false ? "Locked" : "Full"}
                           disabledReason={assetEligibilityByKey.get(asset.key)?.reason || ""}
@@ -2960,6 +2980,7 @@ export default function TradeFinder() {
                           }}
                           leagueData={leagueData}
                           team={packageTeam}
+                          currentDate={userTradeCurrentDate}
                           disabled={isPackageFull || assetEligibilityByKey.get(asset.key)?.ok === false}
                           disabledLabel={assetEligibilityByKey.get(asset.key)?.ok === false ? "Locked" : "Full"}
                           disabledReason={assetEligibilityByKey.get(asset.key)?.reason || ""}
@@ -3014,6 +3035,7 @@ export default function TradeFinder() {
                         } : undefined}
                         leagueData={leagueData}
                         team={packageTeam}
+                        currentDate={userTradeCurrentDate}
                       />
                     ))}
                   </div>
@@ -3164,6 +3186,7 @@ export default function TradeFinder() {
                               key={`${offer.team?.name}-${offerIndex}-${item.label}-${index}`}
                               item={item}
                               team={isReverseFinder ? selectedTeam : offer.team}
+                              currentDate={userTradeCurrentDate}
                             />
                           ))}
                         </div>

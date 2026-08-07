@@ -6,6 +6,12 @@ import {
   buildFullTeamRating,
   calculateTeamPotentialRating,
 } from "../utils/ensureGameplans";
+import {
+  formatInjuryReturnLabel,
+  isPlayerInjured,
+  rebuildTeamGameplanForAvailability,
+} from "../utils/injurySystem.js";
+import { readLeagueClock } from "../utils/leagueClock.js";
 import { computeTeamRatings } from "../api/teamRatings";
 import React, { useState, useEffect, useMemo } from "react";
 import { useGame } from "../context/GameContext";
@@ -281,6 +287,7 @@ useEffect(() => {
 
   const key = `gameplan_${selectedTeam.name}`;
   const raw = localStorage.getItem(key);
+  const currentDate = readLeagueClock()?.date || null;
   const teamPlayers = selectedTeam.players || [];
   const currentRosterSignature = getRosterSignatureForGameplan(teamPlayers);
   setPotRatings(calculatePotentialRating(teamPlayers));
@@ -304,8 +311,14 @@ useEffect(() => {
           saved?.source === "coach_gameplan"
       );
 
+      const injuryUnsafe = isNewFormat && teamPlayers.some((p) => {
+        if (!isPlayerInjured(p, currentDate)) return false;
+        return Number(saved.minutes?.[p.name] || 0) > 0 || (saved.order || []).slice(0, 5).includes(p.name);
+      });
+
       if (
         isNewFormat &&
+        !injuryUnsafe &&
         (saved.version === GAMEPLAN_VERSION || isManualSaved) &&
         saved.rosterSignature === currentRosterSignature
       ) {
@@ -318,7 +331,7 @@ useEffect(() => {
 
         const normalizedMinutes = {};
         for (const p of teamPlayers) {
-          normalizedMinutes[p.name] = Number(saved.minutes?.[p.name] || 0);
+          normalizedMinutes[p.name] = isPlayerInjured(p, currentDate) ? 0 : Number(saved.minutes?.[p.name] || 0);
         }
 
         setMinutes(normalizedMinutes);
@@ -345,7 +358,7 @@ useEffect(() => {
   }
 
   if (!loaded) {
-    rebuildSingleTeamGameplan(selectedTeam, { preserveManual: false });
+    rebuildTeamGameplanForAvailability(selectedTeam, currentDate, { source: "coach_gameplan_injury_aware_rebuild" });
 
     const freshRaw = localStorage.getItem(key);
     if (!freshRaw) return;
@@ -362,7 +375,7 @@ useEffect(() => {
 
       const normalizedMinutes = {};
       for (const p of teamPlayers) {
-        normalizedMinutes[p.name] = Number(fresh.minutes?.[p.name] || 0);
+        normalizedMinutes[p.name] = isPlayerInjured(p, currentDate) ? 0 : Number(fresh.minutes?.[p.name] || 0);
       }
 
       setMinutes(normalizedMinutes);
@@ -407,22 +420,28 @@ const handleSave = () => {
 const handleAutoRebuild = () => {
     if (!selectedTeam) return;
 
+    const currentDate = readLeagueClock()?.date || null;
     const teamPlayers = selectedTeam.players || [];
-    const { sorted, obj } = buildSmartRotation(teamPlayers);
+    rebuildTeamGameplanForAvailability(selectedTeam, currentDate, { source: "coach_gameplan_auto_rebuild" });
+    const fresh = readGameplanFromStorage(selectedTeam.name);
+    const sorted = [
+        ...(fresh?.order || []).map((name) => teamPlayers.find((p) => p.name === name)).filter(Boolean),
+        ...teamPlayers.filter((p) => !(fresh?.order || []).includes(p.name)),
+    ];
+    const obj = {};
+    for (const p of teamPlayers) {
+        obj[p.name] = isPlayerInjured(p, currentDate) ? 0 : Number(fresh?.minutes?.[p.name] || 0);
+    }
 
     setPlayers(sorted);
     setMinutes(obj);
     setTeamRatings(calculateTeamRatings(sorted, obj));
-
-    // Auto rebuild should not be protected as a manual/user-edited gameplan.
-    saveGameplanToStorage(selectedTeam.name, teamPlayers, sorted, obj, {
-        manualLocked: false,
-        userEdited: false,
-        source: "auto_rotation",
-    });
 };
 
     const handleMinuteChange = (name, value) => {
+        const currentDate = readLeagueClock()?.date || null;
+        const targetPlayer = players.find((p) => p.name === name);
+        if (isPlayerInjured(targetPlayer, currentDate)) return;
         const idx = players.findIndex((p) => p.name === name);
         const isStarter = idx > -1 && idx < 5;
         const minAllowed = isStarter ? MANUAL_STARTER_MINUTES : MANUAL_BENCH_MINUTES;
@@ -442,6 +461,8 @@ const handleAutoRebuild = () => {
     };
 
     const handleSquareClick = (player) => {
+        const currentDate = readLeagueClock()?.date || null;
+        if (isPlayerInjured(player, currentDate)) return;
         if (!swapSelection) {
         setSwapSelection(player);
         } else if (swapSelection.name === player.name) {
@@ -496,6 +517,7 @@ const handleAutoRebuild = () => {
     const strokeOffset = circleCircumference * (1 - fillPercent);
     const lineupLabels = ["PG", "SG", "SF", "PF", "C", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"];
     const formatExactRating = (value) => Number(value || 0).toFixed(4);
+    const currentLeagueDate = readLeagueClock()?.date || null;
 
     return (
     <PageFade>
@@ -611,10 +633,16 @@ const handleAutoRebuild = () => {
                     className="h-[112px] w-[142px]"
                 />
                 <div className="flex flex-col justify-end mb-2">
-                    <h2 className="text-[32px] font-bold leading-tight">{player.name}</h2>
+                    <h2 className="text-[32px] font-bold leading-tight flex items-center gap-3">
+                    <span>{player.name}</span>
+                    {isPlayerInjured(player, currentLeagueDate) && (
+                        <span className="rounded-full border border-red-400/40 bg-red-500/20 px-2 py-1 text-[12px] font-black uppercase tracking-wide text-red-100">INJ</span>
+                    )}
+                    </h2>
                     <p className="text-gray-400 text-[17px] mt-0.5">
                     {player.pos}
                     {player.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age {player.age}
+                    {isPlayerInjured(player, currentLeagueDate) ? ` • ${formatInjuryReturnLabel(player, currentLeagueDate)}` : ""}
                     </p>
                 </div>
                 </div>
@@ -670,7 +698,9 @@ const handleAutoRebuild = () => {
                     </tr>
                 </thead>
                 <tbody className="text-[14px]">
-                    {players.map((p, i) => (
+                    {players.map((p, i) => {
+                    const injured = isPlayerInjured(p, currentLeagueDate);
+                    return (
                     <tr
                         key={p.name}
                         data-bm-nav-row-index={i}
@@ -678,6 +708,8 @@ const handleAutoRebuild = () => {
                         className={`cursor-pointer transition ${
                         selectedPlayer?.name === p.name
                             ? "bg-orange-600 text-white"
+                            : injured
+                            ? "bg-red-950/30 text-red-100"
                             : i < 5
                             ? "bg-neutral-850"
                             : "hover:bg-neutral-700"
@@ -689,10 +721,13 @@ const handleAutoRebuild = () => {
                             e.stopPropagation();
                             handleSquareClick(p);
                             }}
-                            className={`w-5 h-5 mx-auto border-2 rounded-sm cursor-pointer transition ${
-                            swapSelection?.name === p.name
-                                ? "bg-orange-500 border-orange-400"
-                                : "border-white"
+                            title={injured ? "Injured players cannot be placed in the starting five" : "Swap rotation slot"}
+                            className={`w-5 h-5 mx-auto border-2 rounded-sm transition ${
+                            injured
+                                ? "cursor-not-allowed border-red-300 bg-red-500/30 opacity-60"
+                                : swapSelection?.name === p.name
+                                ? "cursor-pointer bg-orange-500 border-orange-400"
+                                : "cursor-pointer border-white"
                             }`}
                         ></div>
                         </td>
@@ -701,6 +736,11 @@ const handleAutoRebuild = () => {
                         </td>
                         <td className="py-1.5 font-semibold whitespace-nowrap">
                         {p.name}
+                        {injured && (
+                            <span className="ml-2 rounded-full border border-red-400/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-red-100">
+                            INJ • {formatInjuryReturnLabel(p, currentLeagueDate)}
+                            </span>
+                        )}
                         <span className="text-[#bfbfbf] text-sm ml-2">
                             {p.pos}
                             {p.secondaryPos ? ` / ${p.secondaryPos}` : ""}
@@ -711,20 +751,22 @@ const handleAutoRebuild = () => {
                         <div className="flex items-center gap-3 justify-center">
                             <input
                             type="range"
-                            min={i < 5 ? MANUAL_STARTER_MINUTES : MANUAL_BENCH_MINUTES}
-                            max={i < 5 ? MANUAL_STARTER_MAX_MINUTES : MANUAL_BENCH_MAX_MINUTES}
+                            min={injured ? 0 : i < 5 ? MANUAL_STARTER_MINUTES : MANUAL_BENCH_MINUTES}
+                            max={injured ? 0 : i < 5 ? MANUAL_STARTER_MAX_MINUTES : MANUAL_BENCH_MAX_MINUTES}
                             step="1"
-                            value={minutes[p.name] ?? 0}
+                            value={injured ? 0 : minutes[p.name] ?? 0}
+                            disabled={injured}
                             onChange={(e) => handleMinuteChange(p.name, e.target.value)}
-                            className="w-[130px] accent-white"
+                            className={`w-[130px] accent-white ${injured ? "cursor-not-allowed opacity-45" : ""}`}
                             />
                             <span className="w-[50px] text-gray-200 text-sm">
-                            {Math.round(minutes[p.name] ?? 0)}
+                            {injured ? 0 : Math.round(minutes[p.name] ?? 0)}
                             </span>
                         </div>
                         </td>
                     </tr>
-                    ))}
+                    );
+                    })}
                 </tbody>
                 </table>
             </div>

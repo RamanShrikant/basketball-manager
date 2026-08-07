@@ -66,7 +66,7 @@
 .summaryRow {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.88fr) minmax(0, 0.68fr) minmax(0, 0.62fr) auto;
   gap: 8px;
 }
 
@@ -145,6 +145,20 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+
+.optionsPanel {
+  flex: 0 0 auto;
+  min-height: 132px;
+}
+
+.optionList {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding-top: 7px;
 }
 
 .panelHeader {
@@ -421,6 +435,10 @@
 
   .panel {
     padding: 6px 12px 7px;
+  }
+
+  .optionsPanel {
+    min-height: 120px;
   }
 
   .panelHeader h2 {
