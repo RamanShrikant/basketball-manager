@@ -28,7 +28,7 @@ import {
 } from "./cpuTradeTelemetry.js";
 
 export const CPU_TRADE_BANK_FIELD = "cpuTradeBankState";
-export const CPU_TRADE_BANK_VERSION = 14;
+export const CPU_TRADE_BANK_VERSION = 18;
 export const CPU_TRADE_BANK_TEST_CONFIG_KEY = "bm_cpu_trade_bank_test_config_v1";
 
 const TARGET_MIN = CPU_TRADE_CONTINUOUS_MIN_TARGET;
@@ -49,13 +49,13 @@ const MEGA_TRADE_PLAN_RETRY_DAYS = 7;
 const MEGA_TRADE_EXECUTION_RETRY_DAYS = 3;
 const MEGA_TRADE_EXECUTION_MIN_LEAD_DAYS = 6;
 const MEGA_TRADE_EXECUTION_MAX_LEAD_DAYS = 18;
-const MEGA_TRADE_PLAN_MAX_CANDIDATES = 28;
-const MEGA_TRADE_EXECUTION_FALLBACK_CHECKS = 10;
+const MEGA_TRADE_PLAN_MAX_CANDIDATES = 12;
+const MEGA_TRADE_EXECUTION_FALLBACK_CHECKS = 4;
 // Legacy export helper default; the Calendar no longer uses the old deadline sweep.
 const MEGA_TRADE_DIRECT_SWEEP_CHECKS = MEGA_TRADE_EXECUTION_FALLBACK_CHECKS;
-const MEGA_TRADE_FAST_MAX_TARGETS = 10;
-const MEGA_TRADE_FAST_MAX_BUYERS = 12;
-const MEGA_TRADE_FAST_MAX_CANDIDATES = 96;
+const MEGA_TRADE_FAST_MAX_TARGETS = 5;
+const MEGA_TRADE_FAST_MAX_BUYERS = 8;
+const MEGA_TRADE_FAST_MAX_CANDIDATES = 32;
 
 let activeSameStateValidationCacheScope = "";
 const sameStateValidationCache = new Map();
@@ -1236,11 +1236,11 @@ export function getCpuMegaTradeGenerationPolicy(state, context = {}, testConfig 
 
   // A final tiny retry is allowed before trades close, but it is still capped at
   // four simple legal recipes and never invokes the normal evaluator.
-  if (daysToDeadline > 0 && daysToDeadline <= 6) {
+  if (daysToDeadline > 0 && daysToDeadline <= 2) {
     return {
       shouldGenerate: true,
       action: "plan_and_execute",
-      reason: "final_guaranteed_mega_retry",
+      reason: "final_lightweight_retry",
       maxCandidateChecks: MEGA_TRADE_EXECUTION_FALLBACK_CHECKS,
       executionDayIndex: dayIndex,
     };
@@ -1573,41 +1573,6 @@ function buildFastMegaTargets(leagueData = {}, context = {}, directionMap = null
   const teams = getAllTeams(leagueData);
   const directions = directionMap || buildMegaDirectionMap(leagueData, context);
   const rows = [];
-  const used = new Set();
-
-  const playerIdentityKey = (player = {}, teamName = "") => {
-    const id = player?.id ?? player?.playerId ?? player?.uuid ?? "";
-    return id ? `id:${id}` : `${normalizeTeamName(teamName)}:${normalizeTeamName(playerDisplayName(player))}`;
-  };
-
-  const addTarget = ({ team, teamName, direction, player, fallback = false, reason = "strict" }) => {
-    const key = playerIdentityKey(player, teamName);
-    if (!key || used.has(key)) return;
-    used.add(key);
-    const ovr = playerOvr(player);
-    const age = playerAge(player);
-    const pctPenalty = direction?.pct == null ? 0.08 : Math.max(0, 0.5 - direction.pct);
-    const directionBonus = direction?.phase === "rebuilding" ? 16 : direction?.phase === "retooling" ? 10 : 5;
-    const fallbackPenalty = fallback ? -42 : 0;
-    rows.push({
-      team,
-      teamName,
-      player,
-      score:
-        ovr * 10 +
-        age * 0.8 +
-        pctPenalty * 100 +
-        Math.max(0, finiteNumber(direction?.leagueRank, 16) - 12) * 3 +
-        directionBonus +
-        fallbackPenalty,
-      powerRank: direction?.leagueRank,
-      conferenceRank: direction?.conferenceRank,
-      sellerPhase: direction?.phase,
-      winPct: direction?.pct,
-      guaranteedMegaFallback: fallback,
-      fallbackReason: reason,
-    });
-  };
 
   for (const team of teams) {
     const teamName = teamNameOf(team);
@@ -1622,49 +1587,27 @@ function buildFastMegaTargets(leagueData = {}, context = {}, directionMap = null
       if (ovr < 90 || age < 28) continue;
       if (direction.phase !== "rebuilding" && ovr >= 94 && age <= 30) continue;
       if (isYoungMegaCore(player)) continue;
-      addTarget({ team, teamName, direction, player, fallback: false, reason: "strict" });
+      const pctPenalty = direction.pct == null ? 0.08 : Math.max(0, 0.5 - direction.pct);
+      const directionBonus = direction.phase === "rebuilding" ? 16 : direction.phase === "retooling" ? 10 : 5;
+      rows.push({
+        team,
+        teamName,
+        player,
+        score:
+          ovr * 10 +
+          age * 0.8 +
+          pctPenalty * 100 +
+          Math.max(0, finiteNumber(direction.leagueRank, 16) - 12) * 3 +
+          directionBonus,
+        powerRank: direction.leagueRank,
+        conferenceRank: direction.conferenceRank,
+        sellerPhase: direction.phase,
+        winPct: direction.pct,
+      });
     }
   }
 
-  // Guarantee safety net: if the strict seller filter cannot find enough 90+
-  // targets in a later season, add a tiny relaxed pool. These candidates are
-  // still legal-checked and still exclude the controlled team, but they prevent
-  // a season from reaching the deadline with zero possible mega-trade recipes.
-  if (rows.length < MEGA_TRADE_FAST_MAX_TARGETS) {
-    for (const team of teams) {
-      const teamName = teamNameOf(team);
-      if (!teamName || sameTeam(teamName, userTeamName)) continue;
-      const direction = directions.get(normalizeTeamName(teamName)) || megaSellerDirection(leagueData, context, team);
-      const hardTopSeed = direction?.conferenceRank != null && direction.conferenceRank <= 3;
-      for (const player of team?.players || []) {
-        const ovr = playerOvr(player);
-        const age = playerAge(player);
-        if (ovr < 90 || age < 26) continue;
-        // Still protect the absolute apex young franchise piece unless the team
-        // is truly buried; this keeps the fallback from randomly moving the best
-        // 24-year-old in the league just to satisfy the guarantee.
-        if (ovr >= 95 && age <= 27 && direction?.phase !== "rebuilding") continue;
-        if (hardTopSeed && ovr >= 94) continue;
-        addTarget({
-          team,
-          teamName,
-          direction,
-          player,
-          fallback: true,
-          reason: "relaxed_one_per_season_guarantee",
-        });
-      }
-    }
-  }
-
-  const strictRows = rows.filter((row) => !row.guaranteedMegaFallback).sort((a, b) => b.score - a.score);
-  const fallbackRows = rows.filter((row) => row.guaranteedMegaFallback).sort((a, b) => b.score - a.score);
-  const strictTake = Math.max(4, MEGA_TRADE_FAST_MAX_TARGETS - Math.min(3, fallbackRows.length));
-  return [
-    ...strictRows.slice(0, strictTake),
-    ...fallbackRows.slice(0, 3),
-    ...strictRows.slice(strictTake),
-  ].slice(0, MEGA_TRADE_FAST_MAX_TARGETS);
+  return rows.sort((a, b) => b.score - a.score).slice(0, MEGA_TRADE_FAST_MAX_TARGETS);
 }
 
 function buildFastMegaBuyers(leagueData = {}, context = {}, sellerName = "", directionMap = null) {
@@ -1807,8 +1750,6 @@ function buildFastMegaCandidates(leagueData = {}, context = {}, state = {}, opti
           debug: {
             megaTrade: true,
             fastMegaDeadlineRecipe: true,
-            guaranteedMegaFallback: Boolean(targetRow.guaranteedMegaFallback),
-            fallbackReason: targetRow.fallbackReason || "",
             targetPlayer: playerDisplayName(targetRow.player),
             targetOvr,
             targetAge: playerAge(targetRow.player),
@@ -1891,7 +1832,7 @@ export function prepareCpuMegaTradePlan({
   const attempts = Math.trunc(finiteNumber(mega.attempts, 0)) + 1;
   const candidates = buildFastMegaCandidates(ensured.leagueData, context, state, {
     maxTargets: MEGA_TRADE_FAST_MAX_TARGETS,
-    maxBuyers: MEGA_TRADE_FAST_MAX_BUYERS,
+    maxBuyers: 6,
     maxCandidates: MEGA_TRADE_PLAN_MAX_CANDIDATES,
   });
   const plannedCandidates = selectDiversifiedMegaPlanCandidates(

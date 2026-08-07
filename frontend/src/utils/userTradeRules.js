@@ -22,12 +22,18 @@ import {
   normalizeDraftPicks,
   normalizeTeamName,
 } from "./draftPicks.js";
+import { bumpPerfCounter } from "./bmPerfRescueDebug.js";
 
 const TRADE_DEADLINE_STATUS_KEY = "bm_trade_deadline_status_v1";
 const USER_TRADE_RULE_META_KEY = "userTradeRuleMeta";
 const TRADE_RULE_STATE_KEY = "tradeRuleState";
 const tradeRuleTransactionIndexCache = new WeakMap();
 const tradeHistoryAcquisitionIndexCache = new WeakMap();
+const normalizedLeaguePicksCache = new WeakMap();
+const playerEligibilityResultCache = new WeakMap();
+const pickEligibilityResultCache = new WeakMap();
+const stepienViolationsCache = new WeakMap();
+const secondApronFurthestFirstCache = new WeakMap();
 const SALARY_TOLERANCE = 1_000;
 const MATCHING_SMALL_OUTGOING = 7_500_000;
 const MATCHING_MID_OUTGOING = 29_000_000;
@@ -743,9 +749,24 @@ export function getUserTradePlayerEligibility({
   currentDate = null,
   settings = null,
 } = {}) {
+  bumpPerfCounter("tradeRules.playerEligibilityCalls");
   if (!player) return { ok: false, code: "missing_player", reason: "Player could not be found." };
   const active = settings || getUserTradeRuleSettings(leagueData);
   const today = normalizeIsoDate(currentDate) || getUserTradeCurrentDate(leagueData);
+  const cache = getScopedResultCache(playerEligibilityResultCache, leagueData);
+  const playerCacheKey = cache ? [
+    normalizeTeamName(teamName),
+    playerIdentity(player) || `name:${normalizeTeamName(playerNameOf(player))}`,
+    today,
+    primitiveSettingsSignature(active),
+    leagueRuleHistorySignature(leagueData),
+    normalizeIsoDate(player?.tradeMeta?.eligibleDate || player?.tradeRestrictions?.eligibleDate || ""),
+    normalizeIsoDate(player?.tradeMeta?.acquiredTradeEligibleDate || player?.tradeRestrictions?.acquiredTradeEligibleDate || ""),
+  ].join("|") : "";
+  if (cache && cache.has(playerCacheKey)) {
+    bumpPerfCounter("tradeRules.playerEligibilityCacheHit");
+    return cache.get(playerCacheKey);
+  }
   const metadata = normalizeRestrictionMetadata(player, leagueData);
   const restrictions = [];
 
@@ -815,9 +836,13 @@ export function getUserTradePlayerEligibility({
 
   if (restrictions.length) {
     restrictions.sort((a, b) => String(a.eligibleDate || "").localeCompare(String(b.eligibleDate || "")));
-    return restrictions[restrictions.length - 1];
+    const locked = restrictions[restrictions.length - 1];
+    if (cache && playerCacheKey) cache.set(playerCacheKey, locked);
+    return locked;
   }
-  return { ok: true, code: "ok", reason: "" };
+  const okResult = { ok: true, code: "ok", reason: "" };
+  if (cache && playerCacheKey) cache.set(playerCacheKey, okResult);
+  return okResult;
 }
 
 function pickYear(pick = {}) {
@@ -890,8 +915,20 @@ function futureStepienStartYear(leagueData = {}, context = null) {
 }
 
 function normalizeLeaguePicks(leagueData = {}) {
+  if (leagueData && typeof leagueData === "object") {
+    const cached = normalizedLeaguePicksCache.get(leagueData);
+    if (cached) {
+      bumpPerfCounter("tradeRules.normalizedPickCacheHit");
+      return cached;
+    }
+  }
+  bumpPerfCounter("tradeRules.normalizedPickBuild");
   const names = getAllTeams(leagueData).map(teamNameOf).filter(Boolean);
-  return normalizeDraftPicks(leagueData?.draftPicks || [], names);
+  const normalized = normalizeDraftPicks(leagueData?.draftPicks || [], names);
+  if (leagueData && typeof leagueData === "object") {
+    normalizedLeaguePicksCache.set(leagueData, normalized);
+  }
+  return normalized;
 }
 
 function selectedOutgoingPickRows(items = []) {
@@ -978,14 +1015,103 @@ function buildGuaranteedFirstMap({ leagueData = {}, teamName = "", outgoingItems
   return { startYear, maxYear, years };
 }
 
+function stepienItemsSignature(items = []) {
+  return selectedOutgoingPickRows(items)
+    .map((row) => `${pickIdentity(row.pick)}:${isGuaranteedFirst(row.pick, row.item) ? "G" : "P"}`)
+    .sort()
+    .join(";");
+}
+
+
+function primitiveSettingsSignature(settings = {}) {
+  if (!settings || typeof settings !== "object") return "default";
+  return [
+    settings.tradeDeadline,
+    settings.salaryMatching,
+    settings.stepienRule,
+    settings.recentlyAcquired,
+    settings.recentlySigned,
+    settings.newlyDrafted,
+    settings.newlyDraftedRookie,
+    settings.recentlyExtended,
+    settings.secondApron,
+  ].map((value) => value === false ? "0" : "1").join("");
+}
+
+function leagueRuleHistorySignature(leagueData = {}) {
+  const state = getTradeRuleStateRoot(leagueData);
+  const tradeHistoryLength = Array.isArray(leagueData?.tradeHistory) ? leagueData.tradeHistory.length : 0;
+  const txLength = Array.isArray(state?.transactions) ? state.transactions.length : 0;
+  const lockCount = state?.playerLocks && typeof state.playerLocks === "object" ? Object.keys(state.playerLocks).length : 0;
+  return `${tradeHistoryLength}|${txLength}|${lockCount}|${leagueData?.seasonYear || leagueData?.currentSeasonYear || ""}`;
+}
+
+function outgoingPickSignature(items = []) {
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => item?.type === "pick" && item.pick)
+    .map((item) => {
+      const pick = item.pick || {};
+      return [
+        pickIdentity(pick),
+        pickProtectionLabel(pick),
+        pick?.protection || pick?.displayProtection || "",
+        item?.tradeRule?.mode || "",
+        item?.tradeRule?.protectEnd || "",
+      ].join(":");
+    })
+    .sort()
+    .join("||");
+}
+
+function getScopedResultCache(cacheRoot, leagueData) {
+  if (!leagueData || typeof leagueData !== "object") return null;
+  let cache = cacheRoot.get(leagueData);
+  if (!cache) {
+    cache = new Map();
+    cacheRoot.set(leagueData, cache);
+  }
+  if (cache.size > 2500) cache.clear();
+  return cache;
+}
+
+function getLeagueScopedCache(weakCache, leagueData = {}) {
+  if (!leagueData || typeof leagueData !== "object") return null;
+  let cache = weakCache.get(leagueData);
+  if (!cache) {
+    cache = new Map();
+    weakCache.set(leagueData, cache);
+  }
+  return cache;
+}
+
 function findStepienViolations(args = {}) {
-  const map = buildGuaranteedFirstMap(args);
+  const leagueData = args?.leagueData || {};
+  const resolvedTeamName = resolveTeamNameForTradeRules(args);
+  const context = getOffseasonTradeContext(leagueData);
+  const startYear = futureStepienStartYear(leagueData, context);
+  const cache = getLeagueScopedCache(stepienViolationsCache, leagueData);
+  const key = cache
+    ? [
+        normalizeTeamName(resolvedTeamName || args?.teamName || ""),
+        startYear,
+        stepienItemsSignature(args?.outgoingItems || []),
+        stepienItemsSignature(args?.incomingItems || []),
+      ].join("|")
+    : "";
+  if (cache && cache.has(key)) {
+    bumpPerfCounter("tradeRules.stepienViolationCacheHit");
+    return cache.get(key);
+  }
+
+  bumpPerfCounter("tradeRules.stepienViolationBuild");
+  const map = buildGuaranteedFirstMap({ ...args, teamName: resolvedTeamName || args?.teamName || "" });
   const violations = [];
   for (let year = map.startYear; year < map.maxYear; year += 1) {
     if (!map.years.get(year) && !map.years.get(year + 1)) {
       violations.push({ year1: year, year2: year + 1, map });
     }
   }
+  if (cache) cache.set(key, violations);
   return violations;
 }
 
@@ -1020,13 +1146,25 @@ function getSecondApronFurthestFirstYear({ leagueData = {}, teamName = "", pick 
   const secondApron = Number(rules?.secondApron || 0);
   if (!secondApron || getTeamBasePayroll(team, leagueData) < secondApron - SALARY_TOLERANCE) return null;
   const startYear = futureStepienStartYear(leagueData);
+  const cache = getLeagueScopedCache(secondApronFurthestFirstCache, leagueData);
+  const key = cache
+    ? [normalizeTeamName(resolvedTeamName), startYear, stepienItemsSignature(outgoingItems), stepienItemsSignature(incomingItems)].join("|")
+    : "";
+  if (cache && cache.has(key)) {
+    bumpPerfCounter("tradeRules.secondApronCacheHit");
+    return cache.get(key);
+  }
+
+  bumpPerfCounter("tradeRules.secondApronBuild");
   const teamKey = normalizeTeamName(resolvedTeamName);
   const years = normalizeLeaguePicks(leagueData)
     .filter((pick) => normalizeTeamName(pickOwner(pick)) === teamKey)
     .filter((pick) => pickYear(pick) >= startYear)
     .filter((pick) => isUnprotectedNormalFutureFirst(pick))
     .map(pickYear);
-  return years.length ? Math.max(...years) : null;
+  const result = years.length ? Math.max(...years) : null;
+  if (cache) cache.set(key, result);
+  return result;
 }
 
 export function getUserTradePickEligibility({
@@ -1038,12 +1176,29 @@ export function getUserTradePickEligibility({
   incomingItems = [],
   settings = null,
 } = {}) {
+  bumpPerfCounter("tradeRules.pickEligibilityCalls");
   if (!pick) return { ok: false, code: "missing_pick", reason: "Draft pick could not be found." };
   const active = settings || getUserTradeRuleSettings(leagueData);
   const context = getOffseasonTradeContext(leagueData);
   const startYear = futureStepienStartYear(leagueData, context);
   const year = pickYear(pick);
   const resolvedTeamName = resolveTeamNameForTradeRules({ leagueData, teamName, pick, outgoingItems, incomingItems });
+  const cache = getScopedResultCache(pickEligibilityResultCache, leagueData);
+  const cacheKey = cache ? [
+    normalizeTeamName(resolvedTeamName || teamName),
+    pickIdentity(pick),
+    pickProtectionLabel(pick),
+    primitiveSettingsSignature(active),
+    futureStepienStartYear(leagueData, context),
+    leagueRuleHistorySignature(leagueData),
+    Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks.length : 0,
+    outgoingPickSignature(outgoingItems),
+    outgoingPickSignature(incomingItems),
+  ].join("|") : "";
+  if (cache && cache.has(cacheKey)) {
+    bumpPerfCounter("tradeRules.pickEligibilityCacheHit");
+    return cache.get(cacheKey);
+  }
 
   if (active.secondApron && isUnprotectedNormalFutureFirst(pick, item)) {
     const furthestYear = getSecondApronFurthestFirstYear({ leagueData, teamName: resolvedTeamName, pick, outgoingItems, incomingItems });
@@ -1073,7 +1228,9 @@ export function getUserTradePickEligibility({
     }
   }
 
-  return { ok: true, code: "ok", reason: "" };
+  const okResult = { ok: true, code: "ok", reason: "" };
+  if (cache && cacheKey) cache.set(cacheKey, okResult);
+  return okResult;
 }
 
 export function validateUserTradeAssetPackage({

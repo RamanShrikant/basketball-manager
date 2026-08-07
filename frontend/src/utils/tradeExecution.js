@@ -2406,6 +2406,43 @@ function buildCpuTrialPackage({
   return capCpuPackageToMax(packageItems, originalFirstKeys, MAX_SIDE_ITEMS);
 }
 
+function buildCpuGreedyFirstCombo(pool = [], count = 0, mode = "balanced", originalFirstKeys = new Set()) {
+  const wanted = Math.max(0, Math.trunc(count || 0));
+  if (!wanted) return [];
+  const rows = (Array.isArray(pool) ? pool : []).filter(Boolean);
+  if (rows.length < wanted) return [];
+
+  let sorted;
+  if (mode === "preserve_original") {
+    sorted = [...rows].sort((a, b) => {
+      const aOriginal = originalFirstKeys.has(cpuPickKey(a)) ? 1 : 0;
+      const bOriginal = originalFirstKeys.has(cpuPickKey(b)) ? 1 : 0;
+      if (aOriginal !== bOriginal) return bOriginal - aOriginal;
+      return cpuPickYear(a) - cpuPickYear(b);
+    });
+  } else if (mode === "later_years") {
+    sorted = [...rows].sort((a, b) => cpuPickYear(b) - cpuPickYear(a));
+  } else {
+    sorted = [...rows].sort((a, b) => {
+      const aScore = cpuRepairedItemSortScore(a, originalFirstKeys);
+      const bScore = cpuRepairedItemSortScore(b, originalFirstKeys);
+      return bScore - aScore || cpuPickYear(a) - cpuPickYear(b);
+    });
+  }
+
+  const chosen = [];
+  const usedYears = new Set();
+  for (const item of sorted) {
+    const year = cpuPickYear(item);
+    if (!year) continue;
+    if (usedYears.has(year) || usedYears.has(year - 1) || usedYears.has(year + 1)) continue;
+    chosen.push(item);
+    usedYears.add(year);
+    if (chosen.length >= wanted) break;
+  }
+  return chosen.length >= wanted ? chosen : [];
+}
+
 function repairCpuStepienForSide({ leagueData, teamName, outgoingItems = [], incomingItems = [] } = {}) {
   const original = (Array.isArray(outgoingItems) ? outgoingItems : []).filter(Boolean);
   const originalFirsts = original.filter(isCpuFutureFirstItem);
@@ -2417,67 +2454,84 @@ function repairCpuStepienForSide({ leagueData, teamName, outgoingItems = [], inc
     return { ok: true, items: initialCapped, changed: cpuPackageAssetCount(original) !== cpuPackageAssetCount(initialCapped) };
   }
 
-  const initialFull = cpuStepienPackageValidation(leagueData, teamName, original, incomingItems);
-  if (!initial.ok && initial.code !== "stepien_rule" && initialFull.code !== "stepien_rule") {
+  // Keep CPU trades cheap: this repair layer is only here to sanitize Stepien.
+  // If another rule blocks the package, do not run a picker-combination search.
+  if (initial.code && initial.code !== "stepien_rule" && initial.code !== "too_many_assets") {
     return {
       ok: false,
-      reason: initial.reason || initialFull.reason,
-      staleCode: initial.code || initialFull.code || "cpu_trade_rule_block",
+      reason: initial.reason || "CPU trade package failed the active trade rules.",
+      staleCode: initial.code || "cpu_trade_rule_block",
     };
   }
 
-  const basePlayers = original
-    .filter((item) => item?.type === "player")
+  if (!originalFirsts.length) {
+    return {
+      ok: false,
+      reason: initial.reason || `${teamName} cannot satisfy Stepien with this CPU package.`,
+      staleCode: initial.code || "cpu_stepien_repair_failed",
+    };
+  }
+
+  const baseNonFirstItems = original
+    .filter((item) => !isCpuFutureFirstItem(item))
     .sort((a, b) => cpuRepairedItemSortScore(b, originalFirstKeys) - cpuRepairedItemSortScore(a, originalFirstKeys))
     .slice(0, MAX_SIDE_ITEMS);
   const originalNonFirstPicks = original.filter((item) => item?.type === "pick" && !isCpuFutureFirstItem(item));
-  const maxFirstSlots = Math.max(0, MAX_SIDE_ITEMS - cpuPackageAssetCount(basePlayers));
+  const maxFirstSlots = Math.max(0, MAX_SIDE_ITEMS - cpuPackageAssetCount(baseNonFirstItems));
   const desiredFirstCount = Math.min(originalFirsts.length, maxFirstSlots);
-  const firstPool = getCpuOwnedFirstRoundPickItems(leagueData, teamName, new Set())
-    .sort((a, b) => {
-      const aOriginal = originalFirstKeys.has(cpuPickKey(a)) ? 1 : 0;
-      const bOriginal = originalFirstKeys.has(cpuPickKey(b)) ? 1 : 0;
-      if (aOriginal !== bOriginal) return bOriginal - aOriginal;
-      return cpuRepairedItemSortScore(b, originalFirstKeys) - cpuRepairedItemSortScore(a, originalFirstKeys) || cpuPickYear(a) - cpuPickYear(b);
+  const usedPickKeys = new Set(baseNonFirstItems.filter((item) => item?.type === "pick").map(cpuPickKey));
+  const firstPool = getCpuOwnedFirstRoundPickItems(leagueData, teamName, usedPickKeys);
+  const attempts = [];
+  const addAttempt = (combo, label) => {
+    if (!Array.isArray(combo) || combo.length !== desiredFirstCount) return;
+    const key = combo.map(cpuPickKey).join(";");
+    if (!key || attempts.some((row) => row.key === key)) return;
+    attempts.push({ key, combo, label });
+  };
+
+  if (desiredFirstCount > 0) {
+    addAttempt(buildCpuGreedyFirstCombo(firstPool, desiredFirstCount, "preserve_original", originalFirstKeys), "preserve_original_firsts");
+    addAttempt(buildCpuGreedyFirstCombo(firstPool, desiredFirstCount, "balanced", originalFirstKeys), "balanced_firsts");
+    addAttempt(buildCpuGreedyFirstCombo(firstPool, desiredFirstCount, "later_years", originalFirstKeys), "later_firsts");
+  }
+
+  // Try only a few direct, deterministic repairs. No 1000+ combination search.
+  for (const attempt of attempts.slice(0, 4)) {
+    const trial = buildCpuTrialPackage({
+      leagueData,
+      teamName,
+      baseItems: baseNonFirstItems,
+      firstCombo: attempt.combo,
+      originalNonFirstPicks,
+      originalFirstKeys,
     });
-
-  let bestRejectedReason = initial.reason || initialFull.reason || "CPU package could not be made Stepien-safe.";
-
-  // Rebuild the whole first-round part of the package at once. This matters
-  // for mega trades: replacing one illegal 1st at a time can accidentally turn
-  // a multi-first package into a pile of seconds even when a different legal
-  // first-year combination exists.
-  for (let firstCount = desiredFirstCount; firstCount >= 0; firstCount -= 1) {
-    const combos = generateCpuFirstCombos(firstPool, firstCount, 1200)
-      .sort((a, b) => getCpuCombinationScore(b, originalFirstKeys) - getCpuCombinationScore(a, originalFirstKeys));
-
-    for (const combo of combos) {
-      const trial = buildCpuTrialPackage({
-        leagueData,
-        teamName,
-        baseItems: basePlayers,
-        firstCombo: combo,
-        originalNonFirstPicks,
-        originalFirstKeys,
-      });
-      if (!cpuPackageAssetCount(trial)) continue;
-      const validation = cpuStepienPackageValidation(leagueData, teamName, trial, incomingItems);
-      if (validation.ok && cpuPackageAssetCount(trial) <= MAX_SIDE_ITEMS) {
-        return {
-          ok: true,
-          items: trial,
-          changed: true,
-          replacementType: firstCount === desiredFirstCount ? "legal_first_rebuild" : firstCount > 0 ? "partial_first_rebuild" : "seconds",
-        };
-      }
-      bestRejectedReason = validation.reason || bestRejectedReason;
+    if (!cpuPackageAssetCount(trial)) continue;
+    const validation = cpuStepienPackageValidation(leagueData, teamName, trial, incomingItems);
+    if (validation.ok && cpuPackageAssetCount(trial) <= MAX_SIDE_ITEMS) {
+      return { ok: true, items: trial, changed: true, replacementType: attempt.label };
     }
+  }
+
+  // Final cheap fallback: replace unsafe 1sts with available 2nds/filler. This
+  // preserves CPU trade volume without letting Stepien turn one trade into a
+  // deep combinatorial search.
+  const secondsOnly = buildCpuTrialPackage({
+    leagueData,
+    teamName,
+    baseItems: baseNonFirstItems,
+    firstCombo: [],
+    originalNonFirstPicks,
+    originalFirstKeys,
+  });
+  const secondsValidation = cpuStepienPackageValidation(leagueData, teamName, secondsOnly, incomingItems);
+  if (secondsValidation.ok && cpuPackageAssetCount(secondsOnly) > 0 && cpuPackageAssetCount(secondsOnly) <= MAX_SIDE_ITEMS) {
+    return { ok: true, items: secondsOnly, changed: true, replacementType: "seconds" };
   }
 
   return {
     ok: false,
-    reason: bestRejectedReason || `${teamName} cannot satisfy Stepien after a CPU trade pick repair.`,
-    staleCode: "cpu_stepien_repair_failed",
+    reason: secondsValidation.reason || initial.reason || `${teamName} cannot satisfy Stepien after a cheap CPU pick repair.`,
+    staleCode: secondsValidation.code || initial.code || "cpu_stepien_repair_failed",
   };
 }
 
@@ -2490,37 +2544,30 @@ function repairCpuTradeStepienPackages({ leagueData, fromTeamName, toTeamName, f
   const toRepair = repairCpuStepienForSide({ leagueData, teamName: toTeamName, outgoingItems: toItems, incomingItems: fromRepair.items });
   if (!toRepair.ok) return toRepair;
 
-  // Re-check both sides after the other package has been rebuilt/capped. This
-  // keeps legal incoming-first fixes from becoming stale if the opposite side's
-  // package changed during its own Stepien repair.
-  const fromFinal = repairCpuStepienForSide({ leagueData, teamName: fromTeamName, outgoingItems: fromRepair.items, incomingItems: toRepair.items });
-  if (!fromFinal.ok) return fromFinal;
-
-  const toFinal = repairCpuStepienForSide({ leagueData, teamName: toTeamName, outgoingItems: toRepair.items, incomingItems: fromFinal.items });
-  if (!toFinal.ok) return toFinal;
-
-  const finalFromValidation = cpuStepienPackageValidation(leagueData, fromTeamName, fromFinal.items, toFinal.items);
+  // One final validation pass only. Do not re-run the repair recursively for both
+  // sides; that was the expensive Jan/deadline behavior regression.
+  const finalFromValidation = cpuStepienPackageValidation(leagueData, fromTeamName, fromRepair.items, toRepair.items);
   if (!finalFromValidation.ok) {
     return {
       ok: false,
-      reason: finalFromValidation.reason || "CPU trade candidate would violate Stepien after package repair.",
+      reason: finalFromValidation.reason || "CPU trade candidate would violate Stepien after cheap package repair.",
       staleCode: finalFromValidation.code || "cpu_stepien_repair_failed",
     };
   }
-  const finalToValidation = cpuStepienPackageValidation(leagueData, toTeamName, toFinal.items, fromFinal.items);
+  const finalToValidation = cpuStepienPackageValidation(leagueData, toTeamName, toRepair.items, fromRepair.items);
   if (!finalToValidation.ok) {
     return {
       ok: false,
-      reason: finalToValidation.reason || "CPU trade candidate would violate Stepien after package repair.",
+      reason: finalToValidation.reason || "CPU trade candidate would violate Stepien after cheap package repair.",
       staleCode: finalToValidation.code || "cpu_stepien_repair_failed",
     };
   }
 
   return {
     ok: true,
-    fromItems: fromFinal.items,
-    toItems: toFinal.items,
-    changed: Boolean(fromRepair.changed || toRepair.changed || fromFinal.changed || toFinal.changed),
+    fromItems: fromRepair.items,
+    toItems: toRepair.items,
+    changed: Boolean(fromRepair.changed || toRepair.changed),
   };
 }
 
@@ -2673,18 +2720,12 @@ export function validateCpuTradeCandidateOnLeague({
   const resolvedTo = resolveCurrentCpuTradeItems(evaluationLeagueData, toTeamName, rawToItems);
   if (!resolvedTo.ok) return resolvedTo;
 
-  let fromItems = resolvedFrom.items;
-  let toItems = resolvedTo.items;
-  const stepienRepair = repairCpuTradeStepienPackages({ leagueData: evaluationLeagueData, fromTeamName, toTeamName, fromItems, toItems });
-  if (!stepienRepair.ok) {
-    return {
-      ok: false,
-      reason: stepienRepair.reason || "CPU trade candidate would violate the active Stepien rule.",
-      staleCode: stepienRepair.staleCode || "cpu_stepien_rule",
-    };
-  }
-  fromItems = stepienRepair.fromItems;
-  toItems = stepienRepair.toItems;
+  // Performance critical: normal CPU-bank candidate validation should mirror the
+  // old fast engine. Stepien is sanitized only at the final execution gate below;
+  // running the pick-repair layer for every generated candidate made midseason
+  // sim crawl as soon as the CPU trade market opened.
+  const fromItems = resolvedFrom.items;
+  const toItems = resolvedTo.items;
   const fromCooldownBlock = findRecentCpuAcquisitionBlock({
     leagueData: evaluationLeagueData,
     teamName: fromTeamName,

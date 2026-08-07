@@ -1,7 +1,9 @@
 ﻿// ============================================================
 // simWorkerV2.js - Batch-safe Pyodide Simulation Worker
 // ============================================================
-console.log("[simWorkerV2] booting...");
+const BM_SIM_LOG_ENABLED = false;
+const simLog = (...args) => { if (BM_SIM_LOG_ENABLED) console.log(...args); };
+simLog("[simWorkerV2] booting...");
 
 self.addEventListener("error", (e) =>
   console.error("[simWorkerV2] WORKER ERROR:", e)
@@ -48,7 +50,7 @@ async function init() {
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
-    console.log("[simWorkerV2] loading Pyodide...");
+    simLog("[simWorkerV2] loading Pyodide...");
     const loadedPyodide = await loadPyodide({
       indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/",
     });
@@ -69,7 +71,7 @@ sys.path.append("/python")
 
     pyodide = loadedPyodide;
     ready = true;
-    console.log("[simWorkerV2] READY");
+    simLog("[simWorkerV2] READY");
     postMessage({ type: "ready" });
     return pyodide;
   })();
@@ -86,7 +88,7 @@ sys.path.append("/python")
 
 // Raw logging
 self.addEventListener("message", (e) => {
-  console.log("[simWorkerV2] MSG IN:", e.data);
+  simLog("[simWorkerV2] MSG IN:", e.data);
 });
 
 // ------------------------------------------------------------
@@ -121,7 +123,7 @@ result
 // BATCH GAME MODE
 // ------------------------------------------------------------
 async function simulateBatch(batchId, games) {
-  console.log("[simWorkerV2] simulateBatch:", games.length, "games");
+  simLog("[simWorkerV2] simulateBatch:", games.length, "games");
 
   try {
     pyodide.globals.set("games", pyodide.toPy(games));

@@ -796,6 +796,50 @@ function collectTradeablePicksForTeam(leagueData, teamName) {
   });
 }
 
+const tradeFinderPickUniverseCache = new WeakMap();
+
+function getTradeFinderPickUniverse(leagueData, teams = []) {
+  if (!leagueData || typeof leagueData !== "object") return { resolvedPicks: [], futurePicks: [] };
+  const teamNames = (Array.isArray(teams) && teams.length ? teams : getAllTeamsFromLeague(leagueData))
+    .map((team) => team?.name || team?.teamName)
+    .filter(Boolean);
+  const seasonYear = getSeasonYearFromLeague(leagueData);
+  const tradeContext = getOffseasonTradeContext(leagueData);
+  const draftOrder = tradeContext?.draftOrderLocked
+    ? tradeContext.draftOrder
+    : readLockedDraftOrder(leagueData, seasonYear);
+  const draftComplete = tradeContext?.inOffseason
+    ? Boolean(tradeContext.draftComplete)
+    : isDraftCompleteForSeason(leagueData, seasonYear);
+  const draftOrderLocked = Boolean(tradeContext?.draftOrderLocked || draftOrder.length > 0);
+  const signature = [
+    seasonYear,
+    draftComplete ? "draftComplete" : "draftOpen",
+    draftOrderLocked ? "locked" : "unlocked",
+    Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks.length : 0,
+    Array.isArray(draftOrder) ? draftOrder.length : 0,
+    teamNames.length,
+  ].join("|");
+  const cached = tradeFinderPickUniverseCache.get(leagueData);
+  if (cached?.signature === signature) return cached.value;
+
+  const futurePicks = normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
+    .filter((pick) => String(pick.status || "active").toLowerCase() === "active")
+    .filter((pick) => Number(pick.year || 0) >= Number(seasonYear))
+    .filter((pick) => !(draftComplete && Number(pick.year || 0) === Number(seasonYear)))
+    .filter((pick) => !(draftOrderLocked && !draftComplete && Number(pick.year || 0) === Number(seasonYear)))
+    .map((pick) => ({ ...pick, currentSeasonYear: seasonYear, leagueSeasonYear: seasonYear }));
+
+  const resolvedPicks = draftOrderLocked && !draftComplete
+    ? filterTradeableLiveDraftRows(draftOrder, leagueData, seasonYear)
+        .map((row) => buildResolvedDraftAsset(row, seasonYear))
+        .filter(Boolean)
+    : [];
+  const value = { resolvedPicks, futurePicks };
+  tradeFinderPickUniverseCache.set(leagueData, { signature, value });
+  return value;
+}
+
 function collectTradeablePicksByTeamForFinder(leagueData, teams = []) {
   const byTeam = new Map();
   if (!leagueData) return byTeam;
@@ -853,6 +897,22 @@ function getOwnedPicksFromFinderMap(picksByTeam, teamName = "") {
   const key = normalizeTeamName(teamName);
   if (!key || !picksByTeam || typeof picksByTeam.get !== "function") return [];
   return picksByTeam.get(key) || [];
+}
+
+function collectTradeablePicksForSingleTeamForFinder(leagueData, teamName = "", teams = []) {
+  const ownerKey = normalizeTeamName(teamName);
+  if (!leagueData || !ownerKey) return [];
+  const { resolvedPicks, futurePicks } = getTradeFinderPickUniverse(leagueData, teams);
+  const seen = new Set();
+  return [...resolvedPicks, ...futurePicks]
+    .filter((pick) => normalizeTeamName(pick.ownerTeam || pick.owner || pick.currentOwnerTeamName || "") === ownerKey)
+    .sort(sortDraftPickAssets)
+    .filter((pick) => {
+      const key = pickKey(pick);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 function collectAllTradeablePicksForTradeFinder(leagueData, teams = []) {
@@ -2140,10 +2200,6 @@ export default function TradeFinder() {
   const packageTeamInitializedRef = useRef(false);
   const userTradeCurrentDate = useMemo(() => getUserTradeCurrentDate(leagueData), [leagueData]);
   const userDeadlineStatus = useMemo(() => getUserTradeDeadlineStatus(leagueData), [leagueData]);
-  const tradeablePicksByTeam = useMemo(
-    () => collectTradeablePicksByTeamForFinder(leagueData, teams),
-    [leagueData, teams, liveDraftProgressSignature]
-  );
   const tradeWindowLocked = Boolean(userDeadlineStatus.locked);
   const tradeLockMessage = userDeadlineStatus.reason || getTradeWindowLockMessage();
 
@@ -2214,8 +2270,8 @@ export default function TradeFinder() {
     [packageTeam, leagueData, tradeContext]
   );
   const selectedTeamPicks = useMemo(
-    () => getOwnedPicksFromFinderMap(tradeablePicksByTeam, packageTeam?.name),
-    [tradeablePicksByTeam, packageTeam]
+    () => collectTradeablePicksForSingleTeamForFinder(leagueData, packageTeam?.name || packageTeam?.teamName || "", teams),
+    [leagueData, packageTeam, teams, liveDraftProgressSignature]
   );
 
   const playerAssets = useMemo(
@@ -2262,69 +2318,64 @@ export default function TradeFinder() {
     });
   }, [pickProtections, selectedPackageAssets]);
 
-  const assetEligibilityByKey = useMemo(() => {
+  const playerEligibilityByKey = useMemo(() => {
     const map = new Map();
     const teamName = packageTeam?.name || packageTeam?.teamName || "";
-    for (const asset of allAssets) {
-      if (asset.type === "player") {
-        map.set(asset.key, getUserTradePlayerEligibility({ leagueData, teamName, player: asset.player, currentDate: userTradeCurrentDate }));
-      } else {
-        const item = buildFinderPickItem(asset, pickProtections[asset.key]);
-        let eligibility = getUserTradePickEligibility({
+    for (const asset of playerAssets) {
+      map.set(asset.key, getUserTradePlayerEligibility({ leagueData, teamName, player: asset.player, currentDate: userTradeCurrentDate }));
+    }
+    return map;
+  }, [playerAssets, leagueData, packageTeam, userTradeCurrentDate]);
+
+  const pickEligibilityByKey = useMemo(() => {
+    const map = new Map();
+    const teamName = packageTeam?.name || packageTeam?.teamName || "";
+    for (const asset of pickAssets) {
+      const item = buildFinderPickItem(asset, pickProtections[asset.key]);
+      let eligibility = getUserTradePickEligibility({
+        leagueData,
+        teamName,
+        pick: item.pick,
+        item,
+        outgoingItems: selectedItems,
+        incomingItems: [],
+      });
+
+      // The pick eligibility helper already performs the projected Stepien check.
+      // Do not also run full package validation for every row on every render;
+      // keep that full validation for click/search/submit paths.
+      if (
+        !selectedKeySet.has(asset.key) &&
+        eligibility?.code === "second_apron_furthest_first" &&
+        canAddCustomProtectionToPick(asset.pick)
+      ) {
+        const ownedRange = getTradeablePickOwnedRange(asset.pick);
+        const suggestedRule = { mode: "protected", protectEnd: ownedRange.start };
+        const protectedItem = buildFinderPickItem(asset, suggestedRule);
+        const protectedEligibility = getUserTradePickEligibility({
           leagueData,
           teamName,
-          pick: item.pick,
-          item,
+          pick: protectedItem.pick,
+          item: protectedItem,
           outgoingItems: selectedItems,
           incomingItems: [],
         });
-
-        // Belt-and-suspenders Stepien check for Trade Finder. The asset-row
-        // eligibility call should already catch this, but the Finder also needs
-        // to validate the projected package exactly as it would exist if the
-        // user clicked Add. This prevents stale UI/team-context state from
-        // allowing a 2027 + 2028 first package through visually.
-        if (!selectedKeySet.has(asset.key)) {
-          const projectedPackageValidation = validateUserTradeAssetPackage({
-            leagueData,
-            teamName,
-            outgoingItems: [...selectedItems, item],
-            incomingItems: [],
-          });
-          if (!projectedPackageValidation.ok && projectedPackageValidation.code === "stepien_rule") {
-            eligibility = projectedPackageValidation;
-          }
+        if (protectedEligibility.ok) {
+          eligibility = {
+            ...protectedEligibility,
+            suggestedPickRule: suggestedRule,
+            note: "This second-apron pick must carry protection to be traded.",
+          };
         }
-
-        if (
-          !selectedKeySet.has(asset.key) &&
-          eligibility?.code === "second_apron_furthest_first" &&
-          canAddCustomProtectionToPick(asset.pick)
-        ) {
-          const ownedRange = getTradeablePickOwnedRange(asset.pick);
-          const suggestedRule = { mode: "protected", protectEnd: ownedRange.start };
-          const protectedItem = buildFinderPickItem(asset, suggestedRule);
-          const protectedEligibility = getUserTradePickEligibility({
-            leagueData,
-            teamName,
-            pick: protectedItem.pick,
-            item: protectedItem,
-            outgoingItems: selectedItems,
-            incomingItems: [],
-          });
-          if (protectedEligibility.ok) {
-            eligibility = {
-              ...protectedEligibility,
-              suggestedPickRule: suggestedRule,
-              note: "This second-apron pick must carry protection to be traded.",
-            };
-          }
-        }
-        map.set(asset.key, eligibility);
       }
+      map.set(asset.key, eligibility);
     }
     return map;
-  }, [allAssets, leagueData, packageTeam, pickProtections, selectedItems, selectedKeySet, userTradeCurrentDate]);
+  }, [pickAssets, leagueData, packageTeam, pickProtections, selectedItems, selectedKeySet]);
+
+  const assetEligibilityByKey = useMemo(() => {
+    return new Map([...playerEligibilityByKey, ...pickEligibilityByKey]);
+  }, [playerEligibilityByKey, pickEligibilityByKey]);
 
   const selectedPackageValidation = useMemo(() => validateUserTradeAssetPackage({
     leagueData,

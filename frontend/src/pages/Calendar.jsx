@@ -78,6 +78,7 @@ import {
 import {
   findFirstPendingSimulationDate,
   getCpuTradeSimulationDateDecision,
+  getCpuTradeCalendarPacingDecision,
   isCpuTradeWindowOpenDate,
 } from "../utils/calendarCpuTradeTiming.js";
 import {
@@ -101,6 +102,7 @@ import {
   shouldDisableCpuTradesForDiagnostics,
   startCpuTradeMainThreadMonitor,
 } from "../utils/cpuTradeTelemetry.js";
+import { bumpPerfCounter } from "../utils/bmPerfRescueDebug.js";
 import {
   ensureTeamGameplanInjurySafe,
   formatInjuryEventLine,
@@ -5960,7 +5962,7 @@ async function runCpuCpuTradePassForDate({
         });
       } catch {}
 
-      console.log("[CPU Trade Bank] completed", execution.tradeRecord);
+      if (window.__debugCpuTrades) console.log("[CPU Trade Bank] completed", execution.tradeRecord);
     } else if (
       execution?.reason === "no_valid_candidate" &&
       window.__debugCpuTrades
@@ -6407,6 +6409,8 @@ setBoxModal(null);
   };
 
   const sorted = Object.keys(upd).sort((a, b) => new Date(a) - new Date(b));
+  const sortedIndexByDate = new Map(sorted.map((date, index) => [date, index]));
+  let lastCpuTradePassDayIndex = null;
 
   let activeLeagueData = repairedLeagueData;
   let activeTeams = repairedTeams;
@@ -6566,12 +6570,21 @@ for (const d of sorted) {
     preseasonTradeStartDate: fmt(seasonStart),
     allowPreseasonTrades: allowPreseasonCpuTrades,
   });
-  if (cpuTradeDecision.shouldRun) {
+  const cpuTradeDayIndex = sortedIndexByDate.get(d) ?? 0;
+  const cpuTradePacing = getCpuTradeCalendarPacingDecision({
+    bankState: activeLeagueData?.cpuTradeBankState,
+    currentDate: d,
+    dayIndex: cpuTradeDayIndex,
+    tradeDeadlineDate: TRADE_DEADLINE_DATE,
+    lastCpuTradePassDayIndex,
+    basicDecision: cpuTradeDecision,
+  });
+  if (cpuTradeDecision.shouldRun && cpuTradePacing.shouldRun) {
     const cpuTradeStartedAt = Date.now();
     const cpuTradePass = await runCpuCpuTradePassForDate({
       activeLeagueData,
       currentDate: d,
-      dayIndex: sorted.indexOf(d),
+      dayIndex: cpuTradeDayIndex,
       totalDates: sorted.length,
       scheduleSnapshot: upd,
       resultsSnapshot: newResults,
@@ -6583,9 +6596,11 @@ for (const d of sorted) {
       onTradeDeskEntries: handleTradeDeskEntries,
       onCpuTradeCompleted: showCpuTradeToast,
     });
+    lastCpuTradePassDayIndex = cpuTradeDayIndex;
     simulationPerf.cpuTradePasses += 1;
     simulationPerf.cpuTradeMs += Date.now() - cpuTradeStartedAt;
     simulationPerf.cpuTradesCompleted += cpuTradePass?.tradesMade?.length || 0;
+    bumpPerfCounter("cpuTrade.calendarPasses");
     if (cpuTradePass.leagueData !== activeLeagueData) {
       activeLeagueData = cpuTradePass.leagueData;
     }
@@ -6593,6 +6608,8 @@ for (const d of sorted) {
       activeTeams = buildTeamsFromLeagueForSim(activeLeagueData);
       simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
     }
+  } else if (cpuTradeDecision.shouldRun) {
+    bumpPerfCounter(`cpuTrade.calendarSkip.${cpuTradePacing.reason || "unknown"}`);
   } else if (cpuTradeDecision.reason === "historical_date_already_simulated") {
     simulationPerf.historicalDatesSkipped += 1;
   } else if (cpuTradeDecision.reason === "trade_deadline_locked") {
@@ -6995,6 +7012,7 @@ setBoxModal(null);
   let simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
 
   const dates = Object.keys(upd).sort();
+  let lastCpuTradePassDayIndex = null;
   let gamesSimmed = 0;
   let lastPersistedGames = 0;
   let lastDateProcessed = null;
@@ -7082,7 +7100,15 @@ for (let di = 0; di < dates.length; di++) {
     preseasonTradeStartDate: fmt(seasonStart),
     allowPreseasonTrades: allowPreseasonCpuTrades,
   });
-  if (cpuTradeDecision.shouldRun) {
+  const cpuTradePacing = getCpuTradeCalendarPacingDecision({
+    bankState: activeLeagueData?.cpuTradeBankState,
+    currentDate: date,
+    dayIndex: di,
+    tradeDeadlineDate: TRADE_DEADLINE_DATE,
+    lastCpuTradePassDayIndex,
+    basicDecision: cpuTradeDecision,
+  });
+  if (cpuTradeDecision.shouldRun && cpuTradePacing.shouldRun) {
     const cpuTradeStartedAt = Date.now();
     const cpuTradePass = await runCpuCpuTradePassForDate({
       activeLeagueData,
@@ -7099,9 +7125,11 @@ for (let di = 0; di < dates.length; di++) {
       onTradeDeskEntries: handleTradeDeskEntries,
       onCpuTradeCompleted: showCpuTradeToast,
     });
+    lastCpuTradePassDayIndex = di;
     simulationPerf.cpuTradePasses += 1;
     simulationPerf.cpuTradeMs += Date.now() - cpuTradeStartedAt;
     simulationPerf.cpuTradesCompleted += cpuTradePass?.tradesMade?.length || 0;
+    bumpPerfCounter("cpuTrade.calendarPasses");
     if (cpuTradePass.leagueData !== activeLeagueData) {
       activeLeagueData = cpuTradePass.leagueData;
     }
@@ -7109,6 +7137,8 @@ for (let di = 0; di < dates.length; di++) {
       activeTeams = buildTeamsFromLeagueForSim(activeLeagueData);
       simRuntime = buildSimulationRuntime(activeLeagueData, activeTeams);
     }
+  } else if (cpuTradeDecision.shouldRun) {
+    bumpPerfCounter(`cpuTrade.calendarSkip.${cpuTradePacing.reason || "unknown"}`);
   } else if (cpuTradeDecision.reason === "historical_date_already_simulated") {
     simulationPerf.historicalDatesSkipped += 1;
   } else if (cpuTradeDecision.reason === "trade_deadline_locked") {

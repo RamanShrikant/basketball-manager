@@ -1,7 +1,9 @@
 ﻿// ============================================================
 // simEnginePy.js - Supports Single + Batch Simulation
 // ============================================================
-console.log("### simEnginePy loaded:", import.meta.url);
+const BM_SIM_ENGINE_LOG_ENABLED = false;
+const simEngineLog = (...args) => { if (BM_SIM_ENGINE_LOG_ENABLED) console.log(...args); };
+simEngineLog("### simEnginePy loaded:", import.meta.url);
 
 import { queueSim } from "@/api/simQueue";
 import {
@@ -248,7 +250,7 @@ function startWorker() {
 
     // ready
     if (msg.type === "ready") {
-      console.log("[simEnginePy] Worker ready");
+      simEngineLog("[simEnginePy] Worker ready");
       return;
     }
 
@@ -258,7 +260,7 @@ function startWorker() {
       if (entry) {
         pending.delete(msg.id);
         clearTimeout(entry.timer);
-        console.log("[simEnginePy] result-single for id", msg.id);
+        simEngineLog("[simEnginePy] result-single for id", msg.id);
         entry.resolve(convert(msg.result));
       } else {
         console.warn("[simEnginePy] result-single for unknown id", msg.id, msg);
@@ -476,9 +478,9 @@ if (msg.type === "all-stars-result") {
         out = out.payload;
       }
 
-      console.log("[simEnginePy] progression-result msg keys:", Object.keys(msg));
-      console.log("[simEnginePy] progression-result out keys:", Object.keys(out || {}));
-      console.log("[simEnginePy] progression-result out.version:", out?.version);
+      simEngineLog("[simEnginePy] progression-result msg keys:", Object.keys(msg));
+      simEngineLog("[simEnginePy] progression-result out keys:", Object.keys(out || {}));
+      simEngineLog("[simEnginePy] progression-result out.version:", out?.version);
 
       entry.resolve(out);
       return;
@@ -1393,7 +1395,7 @@ export function computeFinalsMvp(finalsPlayers, meta = {}) {
 
   const requestId = "F" + counter++;
 
-  console.log("[simEnginePy] FMVP POST", {
+  simEngineLog("[simEnginePy] FMVP POST", {
     requestId,
     n: (finalsPlayers || []).length,
     meta,
@@ -1434,7 +1436,7 @@ export function computePlayerProgression(leagueData, statsByKey = {}, meta = {})
 
   const requestId = "P" + counter++;
 
-  console.log("[simEnginePy] progression POST", {
+  simEngineLog("[simEnginePy] progression POST", {
     requestId,
     seasonYear: meta?.seasonYear,
     seed: meta?.seed,

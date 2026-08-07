@@ -5,6 +5,7 @@
 import asyncio
 import math
 import random
+BM_SIM_DEBUG_LOGS = False
 
 from bm_scoring import scoring_to_game_points
 from assists import assists_per36, noisy_assists
@@ -950,7 +951,8 @@ async def build_box(team, mins, team_points, ratings):
 # ------------------------------------------------------------
 
 async def simulate_game(home, away):
-    print("🔍 PY starting simulate_game:", home["name"], "vs", away["name"])
+    if BM_SIM_DEBUG_LOGS:
+        print("🔍 PY starting simulate_game:", home["name"], "vs", away["name"])
     await asyncio.sleep(0)
 
     minsH = home["minutes"]
@@ -1038,7 +1040,8 @@ async def simulate_game(home, away):
     home_box = await build_box(home, actualMinsH, finalH, rateH)
     away_box = await build_box(away, actualMinsA, finalA, rateA)
 
-    print("✅ PY finished:", home["name"], "vs", away["name"])
+    if BM_SIM_DEBUG_LOGS:
+        print("✅ PY finished:", home["name"], "vs", away["name"])
 
     return {
         "score": {"home": finalH, "away": finalA},

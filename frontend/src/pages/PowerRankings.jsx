@@ -11,7 +11,7 @@ import "../styles/BMAnimations.css";
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const SCHEDULE_KEY = "bm_schedule_v3";
-const POWER_RANKINGS_AUTO_RATINGS_CACHE_KEY = "bm_power_rankings_auto_ratings_v5";
+const POWER_RANKINGS_AUTO_RATINGS_CACHE_KEY = "bm_power_rankings_healthy_auto_ratings_v6";
 
 const toNum = (value, fallback = 0) => {
   const n = Number(value);
@@ -97,7 +97,7 @@ function getLegacyGameplanRosterSignature(teamPlayers = []) {
 
 function getPowerRankingsRosterSignature(teamPlayers = []) {
   return [
-    `auto-v${GAMEPLAN_VERSION}`,
+    `healthy-auto-v6-${GAMEPLAN_VERSION}`,
     ...[...(teamPlayers || [])]
       .map((p) =>
         [
@@ -254,10 +254,11 @@ function getTeamRatingsForPowerRankings(team, autoRatingsCache, markCacheDirty) 
     return normalizeRatingsForPowerRankings(cached);
   }
 
-  const savedPlan = readSavedGameplanPayload(teamName);
-  const minutes = isUsableSavedAutoGameplan(team, savedPlan)
-    ? savedPlan.minutes
-    : buildAutoRebuiltMinutes(team);
+  // Power Rankings is a roster-strength page, not an injury report.  Never read
+  // the saved Coach Gameplan here because midseason injury-safe rotations can zero
+  // out stars and incorrectly drag Team OVR down.  Rebuild from the full roster so
+  // Team OVR represents the fully healthy version of the team.
+  const minutes = buildAutoRebuiltMinutes(team);
   const ratings = computeRatingsFromMinutes(team, minutes);
 
   if (teamName && autoRatingsCache) {
