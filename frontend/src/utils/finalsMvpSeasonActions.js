@@ -4,6 +4,7 @@ import { saveLeagueDataInBackground } from "./leagueStorage.js";
 import { ensureCompletedSeasonStatsArchive } from "./seasonStatsArchive.js";
 import { clearBoxScoresFromDB } from "./indexedDbStorage.js";
 import { withOffseasonSeasonContext } from "./seasonContext.js";
+import { appendChampionToLeagueHistory } from "./leagueHistoryUtils.js";
 
 const META_KEY = "bm_league_meta_v1";
 const SCHED_KEY = "bm_schedule_v3";
@@ -212,9 +213,20 @@ export function finalizeFinalsMvpAndGoOffseason({
   );
 
   // 4) archive completed live season stats/accolades into player cards BEFORE clearing current-season stats
-  const archivedLeagueData = archiveCurrentSeasonIntoPlayerCards(
-    leagueWithSeasonStatsArchive,
-    completedSeasonYear
+  // and write the champion + Finals MVP into this league's persistent history.
+  const archivedLeagueData = appendChampionToLeagueHistory(
+    archiveCurrentSeasonIntoPlayerCards(
+      leagueWithSeasonStatsArchive,
+      completedSeasonYear
+    ),
+    {
+      seasonYear: completedSeasonYear,
+      championTeam: completedChampion,
+      runnerUp: correctedFmvpRaw?.runner_up || correctedFmvpRaw?.runnerUp || "",
+      series: correctedFmvpRaw?.series || correctedFmvpRaw?.result || "",
+      finalsMvp: correctedFmvpRaw?.finals_mvp?.player || correctedFmvpRaw?.finals_mvp?.name || null,
+      finalsMvpTeam: correctedFmvpRaw?.finals_mvp?.team || completedChampion || null,
+    }
   );
 
   // 5) bump season year so offseason pages can read the next cycle

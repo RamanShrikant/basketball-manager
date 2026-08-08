@@ -44,6 +44,8 @@ import ContractExtensions from "./pages/ContractExtensions.jsx";
 import Intel from "./pages/Intel_v1.jsx";
 import Settings from "./pages/Settings.jsx";
 import LeagueHistory from "./pages/LeagueHistory.jsx";
+import AwardHistory from "./pages/AwardHistory.jsx";
+import PastChampions from "./pages/PastChampions.jsx";
 import GlobalGameNav from "./components/GlobalGameNav.jsx";
 
 function RouteDensitySync() {
@@ -116,6 +118,8 @@ function App() {
         <Route path="/intel" element={<Intel />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/league-history" element={<LeagueHistory />} />
+        <Route path="/award-history" element={<AwardHistory />} />
+        <Route path="/past-champions" element={<PastChampions />} />
         <Route path="/playoffs" element={<Playoffs />} />
         <Route path="/playoff-picture" element={<PlayoffPicture />} />
         <Route path="/player-progression" element={<PlayerProgression />} />

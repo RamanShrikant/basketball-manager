@@ -122,9 +122,13 @@ function tileSubtitle(tile, selectedTeamName, { allStarsAvailable = false, isOff
     : tile.name === "View All-Stars"
     ? allStarsAvailable ? "Starters and Reserves" : "Available After Selections"
     : tile.name === "League History"
-    ? "Transactions and Records"
+    ? "Transactions, Awards, and Champions"
     : tile.name === "Transaction History"
     ? "Trades, Signings, and Dates"
+    : tile.name === "Award History"
+    ? "MVP, DPOY, 6MOY, MIP, CPOTY, ROTY"
+    : tile.name === "Past Champions"
+    ? "Champions and Finals MVPs"
     : tile.name === "Settings"
     ? "Trade Rules and League Options"
     : selectedTeamName;
@@ -328,6 +332,8 @@ export default function TeamHub() {
     ],
     "League History": [
       { name: "Transaction History", path: "/league-history", enabled: true },
+      { name: "Award History", path: "/award-history", enabled: true },
+      { name: "Past Champions", path: "/past-champions", enabled: true },
     ],
   };
 
@@ -396,7 +402,7 @@ export default function TeamHub() {
       name: "League History",
       sectionKey: "League History",
       enabled: true,
-      description: "Transactions, Records, and Dates",
+      description: "Transactions, Awards, and Champions",
     },
     {
       name: "Settings",

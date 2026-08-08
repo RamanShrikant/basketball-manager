@@ -1,5 +1,4 @@
 import React, { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext.jsx";
 import PageFade from "../components/PageFade.jsx";
 import { formatLeagueDate, normalizeIsoDate } from "../utils/leagueClock.js";
@@ -105,7 +104,6 @@ const FILTERS = [
 ];
 
 export default function LeagueHistory() {
-  const navigate = useNavigate();
   const { leagueData } = useGame();
   const [filter, setFilter] = useState("all");
   const rows = useMemo(() => buildRows(leagueData || {}), [leagueData]);
@@ -118,19 +116,8 @@ export default function LeagueHistory() {
     <PageFade>
       <div className="h-screen max-h-screen overflow-hidden bmCourtPage px-5 pt-4 pb-[92px] text-white">
         <div className="mx-auto flex h-full max-w-[1600px] min-h-0 flex-col">
-          <div className="mb-3 flex shrink-0 items-center justify-between gap-4">
-            <button
-              onClick={() => navigate("/team-hub", { state: { hubSection: "League History" } })}
-              className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
-            >
-              ← Team Hub
-            </button>
-            <div className="text-center">
-              <div className="text-xs font-black uppercase tracking-[0.24em] text-orange-300">League History</div>
-              <h1 className="mt-1 text-4xl font-black text-orange-500">Transaction History</h1>
-              <p className="mt-1 text-sm text-neutral-400">Trades, signings, rookie signings, extensions, and user-trade eligibility dates.</p>
-            </div>
-            <div className="w-[112px]" />
+          <div className="mb-3 shrink-0 text-center">
+            <h1 className="text-4xl font-black text-orange-500">Transaction History</h1>
           </div>
 
           <div className="mb-3 flex shrink-0 flex-wrap items-center gap-2 rounded-3xl border border-white/10 bg-neutral-950/80 p-3">

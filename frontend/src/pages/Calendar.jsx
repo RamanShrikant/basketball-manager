@@ -55,6 +55,7 @@ import {
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import { appendRegularSeasonAwardsToLeagueHistory } from "../utils/leagueHistoryUtils.js";
 import { archiveCurrentSeasonIntoPlayerCards } from "../utils/playerCareerHistory.js";
 import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.js";
 import {
@@ -3967,8 +3968,17 @@ async function finalizeCompletedRegularSeasonPlayerCardsAfterAwards({ awards, sc
       playerHistoryArchivedYears: archivedYears,
     };
 
-    setLeagueData(finalized);
-    await saveLeagueData(finalized);
+    // Archive the six major regular-season award winners into this league save.
+    // This happens inside the existing completed-season save path, so there is
+    // no extra app-wide state normalization or startup mutation.
+    const finalizedWithHistory = appendRegularSeasonAwardsToLeagueHistory(
+      finalized,
+      awards,
+      displaySeasonYear
+    ) || finalized;
+
+    setLeagueData(finalizedWithHistory);
+    await saveLeagueData(finalizedWithHistory);
 
     if (typeof window !== "undefined" && window.__debugSimLogs) {
       console.log("[Calendar] finalized completed regular-season player-card history", {
@@ -3977,7 +3987,7 @@ async function finalizeCompletedRegularSeasonPlayerCardsAfterAwards({ awards, sc
       });
     }
 
-    return finalized;
+    return finalizedWithHistory;
   } catch (error) {
     console.warn("[Calendar] failed to finalize completed regular-season player-card history", error);
     return null;
