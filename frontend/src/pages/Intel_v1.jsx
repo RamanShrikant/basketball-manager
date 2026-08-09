@@ -130,7 +130,7 @@ function PlayerTiny({ row, source = false, compact = false }) {
   const footer = row?.salary ? formatMoney(row.salary) : "";
 
   return (
-    <div className={cx("grid min-w-0 grid-cols-[34px_1fr_auto] items-center gap-2 rounded-xl border border-white/10 bg-white/[0.035] px-2.5", compact ? "h-[48px]" : "h-[52px]")}> 
+    <div className={cx("grid min-w-0 grid-cols-[36px_1fr_auto] items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.035] px-2.5", compact ? "h-full min-h-[46px] max-h-[54px]" : "h-[54px]")}> 
       <div className="flex h-8 w-8 shrink-0 items-end justify-center overflow-hidden rounded-lg bg-black/50 ring-1 ring-white/8">
         {headshot ? <img src={headshot} alt={name} className="h-10 w-auto object-contain" /> : <span className="text-[8px] text-neutral-600">N/A</span>}
       </div>
@@ -149,14 +149,22 @@ function PlayerTiny({ row, source = false, compact = false }) {
 function ListPanel({ title, subtitle, rows = [], empty, source = false, limit = 3 }) {
   const shown = rows.slice(0, limit);
   const more = Math.max(0, rows.length - shown.length);
+  const rowCount = Math.max(1, shown.length);
   return (
     <div className={cx(PANEL, "flex min-h-0 flex-col overflow-hidden p-3")}> 
       <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
         <SectionTitle label={title} sub={subtitle} />
         {more > 0 && <Pill className="border-white/10 bg-black/30 text-neutral-300">+{more}</Pill>}
       </div>
-      <div className="grid min-h-0 content-start gap-2">
-        {shown.length ? shown.map((row) => <PlayerTiny key={`${title}-${row.sourceTeamName || ""}-${row.name}`} row={row} source={source} compact />) : <EmptyMini>{empty}</EmptyMini>}
+      <div
+        className="grid min-h-0 flex-1 gap-2"
+        style={{ gridTemplateRows: shown.length ? `repeat(${rowCount}, minmax(0, 1fr))` : "1fr" }}
+      >
+        {shown.length ? shown.map((row) => (
+          <div key={`${title}-${row.sourceTeamName || ""}-${row.name}`} className="min-h-0">
+            <PlayerTiny row={row} source={source} compact />
+          </div>
+        )) : <EmptyMini>{empty}</EmptyMini>}
       </div>
     </div>
   );
@@ -196,9 +204,9 @@ function StatusPanel({ active }) {
         <div className="px-4 py-2.5 text-[12px] font-black uppercase tracking-[0.16em] text-white">Team Status</div>
         <div className="px-4 py-2.5 text-center text-[12px] font-black uppercase tracking-[0.16em] text-orange-200">{active.phaseLabel}</div>
       </div>
-      <div className="grid flex-1 content-center gap-2 px-5 py-3">
+      <div className="grid min-h-0 flex-1 content-center gap-1.5 px-5 py-2.5">
         {bullets.map((line, idx) => (
-          <div key={`${line}-${idx}`} className="grid grid-cols-[18px_1fr] gap-2 text-[13px] font-semibold leading-5 text-neutral-100">
+          <div key={`${line}-${idx}`} className="grid grid-cols-[18px_1fr] gap-2 text-[12px] font-semibold leading-5 text-neutral-100">
             <span className="pt-0.5 text-orange-300">▪</span>
             <span>{line}</span>
           </div>
@@ -210,14 +218,20 @@ function StatusPanel({ active }) {
 
 function ExpiringPanel({ active }) {
   const expiring = (active.expiringContracts || []).slice(0, 4);
+  const rowCount = Math.max(1, expiring.length);
   return (
     <div className={cx(PANEL, "flex min-h-0 flex-col overflow-hidden p-3")}> 
       <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
         <SectionTitle label="Expiring Deals" sub="highest rated contracts ending soon" />
       </div>
-      <div className="grid min-h-0 content-start gap-2">
+      <div
+        className="grid min-h-0 flex-1 gap-2"
+        style={{ gridTemplateRows: expiring.length ? `repeat(${rowCount}, minmax(0, 1fr))` : "1fr" }}
+      >
         {expiring.map((row) => (
-          <PlayerTiny key={`exp-${row.name}`} row={{ ...row, reason: `${formatMoney(row.salary)} expiring` }} compact />
+          <div key={`exp-${row.name}`} className="min-h-0">
+            <PlayerTiny row={{ ...row, reason: `${formatMoney(row.salary)} expiring` }} compact />
+          </div>
         ))}
         {!expiring.length && <EmptyMini>No major expiring deals.</EmptyMini>}
       </div>
@@ -325,9 +339,9 @@ export default function Intel() {
         .bm-intel-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,.055); border-radius: 999px; }
         .bm-intel-scroll::-webkit-scrollbar-thumb { background: rgba(249,115,22,.9); border-radius: 999px; }
       `}</style>
-      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white">
-        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1720px] flex-col overflow-hidden">
-          <div className="mb-2 grid h-[48px] shrink-0 grid-cols-[280px_1fr_150px] items-center gap-3">
+      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-4 pt-2 pb-5 text-white">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1720px] flex-col overflow-hidden pb-1">
+          <div className="mb-2 grid h-[44px] shrink-0 grid-cols-[280px_1fr_150px] items-center gap-3">
             <div className="min-w-0">
               <div className="text-[10px] font-black uppercase tracking-[0.28em] text-orange-300">Front Office</div>
               <h1 className="text-3xl font-black leading-none text-orange-500">League Intel</h1>
@@ -343,19 +357,19 @@ export default function Intel() {
             </button>
           </div>
 
-          <div className="grid min-h-0 flex-1 gap-3 overflow-hidden xl:grid-cols-[300px_1fr]">
+          <div className="grid min-h-0 flex-1 gap-3 overflow-hidden pb-1 xl:grid-cols-[300px_1fr]">
             <TeamSidebar visibleRows={visibleRows} active={active} setActiveName={setActiveName} />
 
-            <div className="grid min-h-0 grid-rows-[118px_1fr] gap-3 overflow-hidden">
+            <div className="grid min-h-0 grid-rows-[102px_1fr] gap-3 overflow-hidden">
               <ReportHeader active={active} />
 
               <div className="grid min-h-0 gap-3 overflow-hidden xl:grid-cols-[300px_1fr]">
-                <div className="grid min-h-0 grid-rows-[235px_1fr] gap-3 overflow-hidden">
+                <div className="grid min-h-0 grid-rows-[208px_1fr] gap-3 overflow-hidden">
                   <LineupCard active={active} />
                   <ListPanel title="Untouchable" subtitle="protected core / hard to pry loose" rows={active.untouchables} empty="No true untouchable detected." limit={3} />
                 </div>
 
-                <div className="grid min-h-0 grid-rows-[205px_1fr] gap-3 overflow-hidden">
+                <div className="grid min-h-0 grid-rows-[168px_1fr] gap-3 overflow-hidden">
                   <StatusPanel active={active} />
                   <div className="grid min-h-0 grid-cols-3 gap-3 overflow-hidden">
                     <ListPanel title="Trade Block" subtitle="timeline, salary, or rotation squeeze" rows={active.tradeBlock} empty="No obvious movable players." limit={4} />

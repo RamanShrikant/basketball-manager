@@ -36,8 +36,9 @@ try:
 except Exception:  # pragma: no cover
     get_locker_room_moods = None
 
-EXTENSION_SYSTEM_VERSION = "2026-08-08_happy_mood_gate_v8"
-EXTENSION_HAPPY_MOOD_THRESHOLD = 76
+EXTENSION_SYSTEM_VERSION = "2026-08-08_selective_interest_v10"
+EXTENSION_HAPPY_MOOD_THRESHOLD = 76  # legacy compatibility only
+EXTENSION_INTEREST_THRESHOLD = 70
 
 
 def _num(value: Any, fallback: float = 0.0) -> float:
@@ -312,6 +313,8 @@ def _extension_state(league_data: Dict[str, Any], payload: Optional[Dict[str, An
         "cpuPhasesProcessed": list(state.get("cpuPhasesProcessed") or []),
         "transactions": list(state.get("transactions") or []),
         "negotiations": list(state.get("negotiations") or []),
+        "lastCpuRun": state.get("lastCpuRun") if isinstance(state.get("lastCpuRun"), dict) else None,
+        "cpuRunDiagnostics": list(state.get("cpuRunDiagnostics") or []),
     }
 
 
@@ -675,10 +678,18 @@ def build_extension_eligibility(
     mood_payload = dict(payload or {})
     if not isinstance(mood_payload.get("__extensionMoodByPlayer"), dict):
         mood_payload["__extensionMoodByPlayer"] = _build_extension_mood_map(league_data, team, mood_payload)
-    extension_mood = _canonical_extension_mood_value(player, mood_payload)
-    base["extensionMoodScore"] = _int(extension_mood, 50)
-    base["extensionMoodRequired"] = EXTENSION_HAPPY_MOOD_THRESHOLD
-    base["extensionMoodEligible"] = bool(extension_mood >= EXTENSION_HAPPY_MOOD_THRESHOLD)
+    sentiment = _canonical_extension_sentiment(player, mood_payload)
+    extension_mood = _num(sentiment.get("moodScore"), 65)
+    extension_interest = _num(sentiment.get("extensionInterestScore"), extension_mood)
+    base["extensionMoodScore"] = _int(extension_mood, 65)
+    base["extensionMoodRequired"] = None
+    base["extensionMoodEligible"] = bool(extension_mood >= 72)
+    base["extensionInterestScore"] = _int(extension_interest, 65)
+    base["extensionInterestRequired"] = EXTENSION_INTEREST_THRESHOLD
+    base["extensionInterestEligible"] = bool(sentiment.get("extensionInterestWilling", extension_interest >= EXTENSION_INTEREST_THRESHOLD))
+    base["extensionInterestLabel"] = sentiment.get("extensionInterestLabel") or ("Interested" if extension_interest >= EXTENSION_INTEREST_THRESHOLD else "Prefers to Wait")
+    base["extensionInterestReasons"] = list(sentiment.get("extensionInterestReasons") or [])
+    base["extensionPersonalityType"] = sentiment.get("extensionPersonalityType") or "Flexible"
 
     refusal = _extension_refusal_reason(league_data, team, player, extension_type, mood_payload)
     if refusal:
@@ -731,11 +742,12 @@ def build_extension_eligibility(
     base["askPackages"] = ask_packages
     if ask_packages:
         preferred = ask_packages[0]
-        base["interestLabel"] = "Player ask available"
+        interest_label = base.get("extensionInterestLabel") or "Interested"
+        base["interestLabel"] = interest_label
         base["interestPreview"] = {
             "accepted": True,
-            "interestLabel": "Player ask available",
-            "reason": "Choose one of the packages his camp is already willing to sign.",
+            "interestLabel": interest_label,
+            "reason": f"Extension interest {base.get('extensionInterestScore', '—')}/100. Choose one of the packages his camp is already willing to sign.",
             "offerAAV": preferred.get("aav"),
             "marketAAV": preferred.get("marketAAV"),
             "valueRatio": preferred.get("valueRatio"),
@@ -1217,3 +1229,271 @@ def handle_request_json(raw: str) -> str:
         return json.dumps(handle_request(json.loads(raw or "{}")))
     except Exception as exc:
         return json.dumps({"ok": False, "reason": str(exc)})
+
+# ============================================================================
+# V9 EXTENSION SENTIMENT BRIDGE
+# ============================================================================
+# Contract extensions now consume Locker Room's extensionInterest result rather
+# than treating a single mood threshold as the entire player decision.
+
+def _build_extension_mood_map(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    if get_locker_room_moods is None:
+        return {}
+    try:
+        payload = payload or {}
+        current_date = _current_date(league_data, payload)
+        calendar = league_data.get("calendar") if isinstance(league_data.get("calendar"), dict) else {}
+        mood_league = {
+            **league_data,
+            "currentDate": current_date,
+            "calendarDate": current_date,
+            "calendar": {**calendar, "currentDate": current_date, "cursorDate": current_date},
+        }
+        result = get_locker_room_moods(mood_league, team.get("name") or team.get("teamName"))
+        rows = result.get("players") if isinstance(result, dict) and isinstance(result.get("players"), list) else []
+        sentiment_map: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            mood = _num(row.get("moodScore"), 65)
+            interest = row.get("extensionInterest") if isinstance(row.get("extensionInterest"), dict) else {}
+            interest_score = _num(interest.get("score"), mood)
+            entry = {
+                "moodScore": mood,
+                "moodLabel": row.get("moodLabel"),
+                "extensionInterestScore": interest_score,
+                "extensionInterestLabel": interest.get("label") or ("Interested" if interest_score >= EXTENSION_INTEREST_THRESHOLD else "Prefers to Wait"),
+                "extensionInterestWilling": bool(interest.get("willing", interest_score >= EXTENSION_INTEREST_THRESHOLD)),
+                "extensionInterestThreshold": _int(interest.get("threshold"), EXTENSION_INTEREST_THRESHOLD),
+                "extensionInterestReasons": list(interest.get("reasons") or []),
+                "extensionPersonalityType": interest.get("personalityType") or "Flexible",
+            }
+            for value in [row.get("playerId"), row.get("id"), row.get("playerName"), row.get("name"), row.get("player")]:
+                key = _norm(value)
+                if key:
+                    sentiment_map[key] = entry
+        return sentiment_map
+    except Exception:
+        return {}
+
+
+def _canonical_extension_sentiment(
+    player: Dict[str, Any],
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload = payload or {}
+    mood_map = payload.get("__extensionMoodByPlayer")
+    if isinstance(mood_map, dict):
+        for key in _extension_mood_lookup_keys(player):
+            if key not in mood_map:
+                continue
+            raw = mood_map.get(key)
+            if isinstance(raw, dict):
+                mood = _num(raw.get("moodScore"), 65)
+                score = _num(raw.get("extensionInterestScore"), mood)
+                return {
+                    **raw,
+                    "moodScore": mood,
+                    "extensionInterestScore": score,
+                    "extensionInterestWilling": bool(raw.get("extensionInterestWilling", score >= EXTENSION_INTEREST_THRESHOLD)),
+                    "extensionInterestThreshold": _int(raw.get("extensionInterestThreshold"), EXTENSION_INTEREST_THRESHOLD),
+                }
+            # Compatibility with V8 maps that stored mood as a plain number.
+            mood = _num(raw, 65)
+            return {
+                "moodScore": mood,
+                "extensionInterestScore": mood,
+                "extensionInterestWilling": mood >= EXTENSION_INTEREST_THRESHOLD,
+                "extensionInterestThreshold": EXTENSION_INTEREST_THRESHOLD,
+                "extensionInterestLabel": "Interested" if mood >= EXTENSION_INTEREST_THRESHOLD else "Prefers to Wait",
+                "extensionInterestReasons": [],
+                "extensionPersonalityType": "Flexible",
+            }
+    mood = _player_mood_value(player)
+    return {
+        "moodScore": mood,
+        "extensionInterestScore": mood,
+        "extensionInterestWilling": mood >= EXTENSION_INTEREST_THRESHOLD,
+        "extensionInterestThreshold": EXTENSION_INTEREST_THRESHOLD,
+        "extensionInterestLabel": "Interested" if mood >= EXTENSION_INTEREST_THRESHOLD else "Prefers to Wait",
+        "extensionInterestReasons": [],
+        "extensionPersonalityType": "Flexible",
+    }
+
+
+def _canonical_extension_mood_value(player: Dict[str, Any], payload: Optional[Dict[str, Any]] = None) -> float:
+    return _num(_canonical_extension_sentiment(player, payload).get("moodScore"), 65)
+
+
+def _extension_refusal_reason(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+    extension_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    sentiment = _canonical_extension_sentiment(player, payload)
+    score = _int(sentiment.get("extensionInterestScore"), 65)
+    mood = _int(sentiment.get("moodScore"), 65)
+    willing = bool(sentiment.get("extensionInterestWilling", score >= EXTENSION_INTEREST_THRESHOLD))
+    if willing and score >= EXTENSION_INTEREST_THRESHOLD:
+        return None
+    label = str(sentiment.get("extensionInterestLabel") or "Prefers to Wait")
+    if mood >= 80:
+        return (
+            f"{label} — he is happy with the current situation (mood {mood}), but his extension interest is "
+            f"{score}/100. He wants to preserve more future flexibility before committing long term."
+        )
+    return (
+        f"{label} — extension interest is {score}/100 (needs {EXTENSION_INTEREST_THRESHOLD}+). "
+        f"Current Locker Room mood is {mood}; role, security, team direction, franchise relationship, and free-agency leverage all affect this decision."
+    )
+
+
+# ============================================================================
+# V10 CPU DEADLINE DIAGNOSTICS WRAPPER
+# ============================================================================
+# Keeps the proven V8/V9 extension execution path, while recording each gate so
+# a future zero-extension season is immediately diagnosable instead of guessed.
+
+_process_cpu_contract_extensions_v9 = process_cpu_contract_extensions
+
+
+def _v10_scan_cpu_extension_gates(
+    league_data: Dict[str, Any],
+    user_team_name: Optional[str],
+    phase: str,
+    payload: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    from cpu_contract_extensions import cpu_extension_offer_diagnostic
+
+    state = _extension_state(league_data, payload)
+    current_date = state.get("currentDate") or _current_date(league_data, payload)
+    user_key = _norm(user_team_name)
+    diag = {
+        "version": "v10",
+        "seasonYear": state.get("seasonYear"),
+        "phase": phase,
+        "date": current_date,
+        "teamsChecked": 0,
+        "legalCandidates": 0,
+        "playerWilling": 0,
+        "playerRefused": 0,
+        "teamApproved": 0,
+        "teamValueRejected": 0,
+        "payrollRejected": 0,
+        "otherRejected": 0,
+        "offersGenerated": 0,
+        "signed": 0,
+        "rejectionReasons": {},
+    }
+
+    for _, _, team in _iter_teams(league_data):
+        team_name = team.get("name") or team.get("teamName") or ""
+        if user_key and _norm(team_name) == user_key:
+            continue
+        diag["teamsChecked"] += 1
+        mood_map = _build_extension_mood_map(league_data, team, payload)
+        team_payload = dict(payload or {})
+        team_payload["__extensionMoodByPlayer"] = mood_map
+
+        for player in team.get("players", []) or []:
+            eligibility = build_extension_eligibility(league_data, team, player, team_payload)
+            extension_type = str(eligibility.get("extensionType") or "")
+            if not extension_type:
+                continue
+            if not _phase_allowed_extension_type(phase, extension_type, current_date, state):
+                continue
+
+            if eligibility.get("playerRefusesExtension"):
+                diag["legalCandidates"] += 1
+                diag["playerRefused"] += 1
+                reason = "player_interest_below_threshold"
+                diag["rejectionReasons"][reason] = diag["rejectionReasons"].get(reason, 0) + 1
+                continue
+
+            if not eligibility.get("eligible"):
+                continue
+
+            diag["legalCandidates"] += 1
+            diag["playerWilling"] += 1
+            decision = cpu_extension_offer_diagnostic(league_data, team, player, eligibility, phase)
+            if decision.get("approved"):
+                diag["teamApproved"] += 1
+                continue
+
+            reason = str(decision.get("reason") or "unknown")
+            diag["rejectionReasons"][reason] = diag["rejectionReasons"].get(reason, 0) + 1
+            if reason.startswith("payroll"):
+                diag["payrollRejected"] += 1
+            elif reason.startswith("team_value"):
+                diag["teamValueRejected"] += 1
+            else:
+                diag["otherRejected"] += 1
+
+    return diag
+
+
+def process_cpu_contract_extensions(
+    league_data: Dict[str, Any],
+    user_team_name: Optional[str] = None,
+    phase: str = "opening",
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    before = _extension_state(league_data, payload)
+    phase_key = f"{before['seasonYear']}:{phase}"
+    already_processed = phase_key in before.get("cpuPhasesProcessed", [])
+
+    # Run the established execution path first. Detailed league-wide gate scanning
+    # is only paid for when a deadline unexpectedly produces zero extensions,
+    # so normal seasons do not double the mood-evaluation workload.
+    result = _process_cpu_contract_extensions_v9(league_data, user_team_name, phase, payload)
+    updated = result.get("leagueData") if isinstance(result, dict) else None
+    if not isinstance(updated, dict) or already_processed or phase not in {"rookie_deadline", "veteran_deadline", "deadline"}:
+        return result
+
+    rows = result.get("results") if isinstance(result.get("results"), list) else []
+    signed = sum(1 for row in rows if isinstance(row, dict) and row.get("transaction"))
+    if signed == 0:
+        diagnostics = _v10_scan_cpu_extension_gates(league_data, user_team_name, phase, payload)
+    else:
+        diagnostics = {
+            "version": "v10",
+            "seasonYear": before.get("seasonYear"),
+            "phase": phase,
+            "date": before.get("currentDate") or _current_date(league_data, payload),
+            "teamsChecked": None,
+            "legalCandidates": None,
+            "playerWilling": None,
+            "playerRefused": None,
+            "teamApproved": len(rows),
+            "teamValueRejected": None,
+            "payrollRejected": None,
+            "otherRejected": None,
+            "rejectionReasons": {},
+        }
+
+    diagnostics["offersGenerated"] = len(rows)
+    diagnostics["signed"] = signed
+
+    state = updated.get("contractExtensionState") if isinstance(updated.get("contractExtensionState"), dict) else {}
+    state["lastCpuRun"] = diagnostics
+    history = list(state.get("cpuRunDiagnostics") or [])
+    history = [
+        row for row in history
+        if not (
+            isinstance(row, dict)
+            and _int(row.get("seasonYear"), -1) == _int(diagnostics.get("seasonYear"), -2)
+            and str(row.get("phase") or "") == str(phase)
+        )
+    ]
+    history.append(diagnostics)
+    state["cpuRunDiagnostics"] = history[-12:]
+    updated["contractExtensionState"] = state
+    result["leagueData"] = updated
+    result["diagnostics"] = diagnostics
+    return result

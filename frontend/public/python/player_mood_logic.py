@@ -43,7 +43,7 @@ except Exception:  # pragma: no cover - Pyodide fallback path
     _fa_get_player_role_rank_on_team = None
 
 DEFAULT_SEASON_YEAR = 2026
-MOOD_SYSTEM_VERSION = "2026-06-27_superstar_story_decay_v3"
+MOOD_SYSTEM_VERSION = "2026-08-08_contextual_sentiment_v11"
 
 
 # -----------------------------------------------------------------------------
@@ -2335,8 +2335,8 @@ def get_locker_room_moods(league_data: Dict[str, Any], team_name: Optional[str] 
     rows.sort(key=lambda row: (row.get("moodScore", 0), -num(row.get("overall"), 0), str(row.get("playerName", ""))))
 
     avg = sum(num(row.get("moodScore"), 0) for row in rows) / max(1, len(rows))
-    low_count = sum(1 for row in rows if num(row.get("moodScore"), 0) < 55)
-    high_count = sum(1 for row in rows if num(row.get("moodScore"), 0) >= 76)
+    low_count = sum(1 for row in rows if num(row.get("moodScore"), 0) < 50)
+    high_count = sum(1 for row in rows if num(row.get("moodScore"), 0) >= 72)
     wants_out_count = sum(1 for row in rows if row.get("wantsOutRisk") in ["medium", "high"])
 
     return {
@@ -2405,3 +2405,974 @@ def get_locker_room_moods_json(request_json: str) -> str:
         return json.dumps(handle_request(request))
     except Exception as exc:
         return json.dumps({"ok": False, "reason": str(exc), "players": []})
+
+# ============================================================================
+# V9 CONTEXTUAL SENTIMENT ENGINE
+# ============================================================================
+# This override intentionally lives after the legacy helpers so older saves and
+# callers keep the same public get_locker_room_moods() contract. Python resolves
+# evaluate_player_mood at call time, so this function becomes the canonical V9
+# evaluator without changing the UI/API integration points.
+
+V9_MOOD_BASELINE = 65.0
+V9_EXTENSION_INTEREST_THRESHOLD = 70
+
+
+def _v9_stable_fraction(*parts: Any) -> float:
+    import hashlib
+    raw = "|".join(str(part or "") for part in parts)
+    return int(hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12], 16) / float(0xFFFFFFFFFFFF)
+
+
+def _v9_bound(value: float, lo: float, hi: float) -> float:
+    return clamp(float(value), float(lo), float(hi))
+
+
+def _v9_season_evidence_weight(team_games: int) -> float:
+    games = max(0, int(num(team_games, 0)))
+    if games <= 0:
+        return 0.0
+    if games <= 10:
+        return 0.25
+    if games <= 30:
+        return 0.45
+    if games <= 55:
+        return 0.65
+    return 0.80
+
+
+def _v9_consecutive_team_seasons(player: Dict[str, Any], team_name: str) -> int:
+    history = player.get("history") if isinstance(player.get("history"), dict) else {}
+    seasons = history.get("seasons") if isinstance(history.get("seasons"), list) else []
+    target = normalize_name(team_name)
+    count = 0
+    for row in reversed(seasons):
+        if not isinstance(row, dict) or row.get("rowType") == "total":
+            continue
+        row_team = row.get("teamName") or row.get("team") or row.get("teamAbbr") or row.get("teamId")
+        if not row_team:
+            continue
+        if normalize_name(row_team) == target:
+            count += 1
+        elif count:
+            break
+    return count
+
+
+def _v9_franchise_relationship(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+) -> Tuple[float, List[str]]:
+    team_name = get_team_name(team)
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    contract = player.get("contract") if isinstance(player.get("contract"), dict) else {}
+    years_meta = int(num(meta.get("yearsWithCurrentTeam"), 0))
+    years_history = _v9_consecutive_team_seasons(player, team_name)
+    years = max(years_meta, years_history)
+
+    score = 0.0
+    reasons: List[str] = []
+    if years >= 8:
+        score += 6.0
+        reasons.append(f"{years}+ seasons of franchise continuity")
+    elif years >= 5:
+        score += 4.5
+        reasons.append(f"{years} seasons with the franchise")
+    elif years >= 3:
+        score += 3.0
+        reasons.append(f"{years} seasons of continuity")
+    elif years >= 2:
+        score += 1.5
+        reasons.append("Established continuity with the team")
+
+    drafted_by = (
+        meta.get("draftedByTeam")
+        or meta.get("draftTeam")
+        or meta.get("draftedBy")
+        or player.get("draftedByTeam")
+        or player.get("draftTeam")
+        or player.get("draftedBy")
+    )
+    if drafted_by and normalize_name(drafted_by) == normalize_name(team_name):
+        score += 2.5
+        reasons.append("Drafted and developed by this franchise")
+
+    extension_meta = contract.get("extensionMeta") if isinstance(contract.get("extensionMeta"), dict) else {}
+    extension_team = extension_meta.get("teamName")
+    if extension_meta and (not extension_team or normalize_name(extension_team) == normalize_name(team_name)):
+        score += 2.5
+        reasons.append("Previously committed to the franchise")
+
+    history = player.get("history") if isinstance(player.get("history"), dict) else {}
+    awards = history.get("awards") if isinstance(history.get("awards"), list) else []
+    title_with_team = False
+    for row in awards:
+        if not isinstance(row, dict):
+            continue
+        text = " ".join(str(row.get(key) or "") for key in ["type", "award", "name", "label"]).lower()
+        row_team = row.get("teamName") or row.get("team")
+        if ("champ" in text or "title" in text) and row_team and normalize_name(row_team) == normalize_name(team_name):
+            title_with_team = True
+            break
+    if title_with_team:
+        score += 2.5
+        reasons.append("Championship history with this franchise")
+
+    return round(_v9_bound(score, -8, 10), 1), reasons
+
+
+def _v9_recent_event_context(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+    expectation: Dict[str, Any],
+) -> Tuple[float, List[str]]:
+    current_date = get_current_league_date(league_data)
+    pieces: List[Tuple[float, str]] = []
+
+    # Persistent/temporary events written by the rest of the game.
+    for row in get_player_stored_mood_events(league_data, player):
+        event_date = row.get("date") or row.get("createdAt") or season_opening_date(league_data)
+        base = num(row.get("baseImpact", row.get("impact", row.get("moodImpact", 0))), 0)
+        flat = num(row.get("decayPerWeek", row.get("weeklyDecay", 0)), 0)
+        pct = num(row.get("decayPctPerWeek", row.get("decayPercentPerWeek", row.get("weeklyDecayPct", 0))), 0)
+        active = decayed_impact_pct(base, event_date, current_date, pct) if pct > 0 else decayed_impact(base, event_date, current_date, flat)
+        if abs(active) >= 0.1:
+            label = clean_text(row.get("label") or row.get("category") or row.get("text") or "Recent event")
+            pieces.append((active, label))
+
+    # Real-player historical context can still matter, but temporary tags now
+    # genuinely decay instead of permanently dominating a player's mood.
+    for tag in get_historical_tags(player):
+        base = num(tag.get("baseImpact", tag.get("impact", 0)), 0)
+        event_date = tag.get("date") or season_opening_date(league_data)
+        flat = num(tag.get("decayPerWeek"), 0)
+        pct = num(tag.get("decayPctPerWeek") or tag.get("decayPercentPerWeek"), 0)
+        active = decayed_impact_pct(base, event_date, current_date, pct) if pct > 0 else decayed_impact(base, event_date, current_date, flat)
+        if abs(active) >= 0.1:
+            pieces.append((active, clean_text(tag.get("label") or "Historical context")))
+
+    # Trade context. Only the latest few entries count and the effect fades.
+    for entry in collect_trade_entries_for_player(league_data, get_team_name(team), player)[-3:]:
+        entry_type = str(entry.get("_type") or "trade").lower()
+        mentioned = bool(entry.get("_mentionedPlayer"))
+        if "rumor" in entry_type:
+            base = -7.0 if mentioned else -3.0
+            label = "Direct trade rumors" if mentioned else "Team trade rumors"
+        elif "negotiation" in entry_type or "talk" in entry_type:
+            base = -5.0 if mentioned else -2.5
+            label = "Trade talks"
+        else:
+            base = -5.0 if mentioned else -1.0
+            label = "Recent completed trade"
+        event_date = entry.get("date") or entry.get("currentDate") or entry.get("createdAt") or current_date
+        active = decayed_impact_pct(base, event_date, current_date, 5)
+        if abs(active) >= 0.1:
+            pieces.append((active, label))
+
+    # Completed postseason outcomes become a bounded season-memory event.
+    outcome = get_playoff_outcome_for_team(league_data, get_team_name(team))
+    if outcome and outcome.get("available"):
+        actual = num(outcome.get("roundIndex"), 0)
+        expected = num(expectation.get("expectedRoundIndex"), 1)
+        gap = actual - expected
+        if actual >= 5:
+            pieces.append((8.0, "Championship season"))
+        elif gap >= 1.5:
+            pieces.append((6.0, "Playoff run exceeded expectations"))
+        elif gap <= -1.5:
+            pieces.append((-8.0, "Postseason fell well short of expectations"))
+        elif gap <= -0.75:
+            pieces.append((-4.0, "Disappointing playoff finish"))
+
+    total = _v9_bound(sum(value for value, _ in pieces), -12, 12)
+    strongest = sorted(pieces, key=lambda row: abs(row[0]), reverse=True)[:3]
+    details = [f"{label} ({value:+.1f})" for value, label in strongest]
+    return round(total, 1), details
+
+
+def _v9_extension_interest(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+    mood_score: float,
+    personality: Dict[str, Any],
+    relationship_score: float,
+    role_score: float,
+    team_score: float,
+    career_score: float,
+    contract: Optional[Dict[str, Any]],
+    years_left: int,
+    rookie_scale: bool,
+) -> Dict[str, Any]:
+    overall = num(player.get("overall"), 70)
+    potential = num(player.get("potential"), overall)
+    age = int(num(player.get("age"), 27))
+
+    interest = 65.0 + (float(mood_score) - 65.0) * 0.55
+    reasons: List[Dict[str, Any]] = []
+
+    mood_component = (float(mood_score) - 65.0) * 0.55
+    if abs(mood_component) >= 0.5:
+        reasons.append({
+            "label": "Current Mood",
+            "impact": round(mood_component, 1),
+            "detail": f"Locker Room mood is {round_int(mood_score)}.",
+        })
+
+    security = 0.0
+    if age <= 24:
+        security += 6.0
+    elif age <= 29:
+        security += 2.0
+    elif age <= 33:
+        security += 5.0
+    else:
+        security += 8.0
+    if overall < 82:
+        security += 3.0
+    if years_left <= 1:
+        security += 2.0
+    if rookie_scale:
+        security += 4.0
+    security += (_v9_stable_fraction(player_key(player), "security") - 0.5) * 4.0
+    security = _v9_bound(security, -2, 12)
+    interest += security
+    reasons.append({
+        "label": "Security Preference",
+        "impact": round(security, 1),
+        "detail": "Career stage and contract position shape how much guaranteed security matters.",
+    })
+
+    relationship_component = relationship_score * 0.70
+    interest += relationship_component
+    if abs(relationship_component) >= 0.5:
+        reasons.append({
+            "label": "Franchise Relationship",
+            "impact": round(relationship_component, 1),
+            "detail": "Continuity and history with the organization affect commitment.",
+        })
+
+    role_component = role_score * 0.28
+    interest += role_component
+    if abs(role_component) >= 0.5:
+        reasons.append({
+            "label": "Role Fit",
+            "impact": round(role_component, 1),
+            "detail": "Players are more willing to commit when their role fits their talent.",
+        })
+
+    situation_component = (team_score + career_score) * 0.22
+    interest += situation_component
+    if abs(situation_component) >= 0.5:
+        reasons.append({
+            "label": "Team Direction",
+            "impact": round(situation_component, 1),
+            "detail": "Competitive outlook and career timeline affect long-term interest.",
+        })
+
+    loyalty_component = (num(personality.get("loyalty"), 55) - 55.0) * 0.08
+    ambition_component = -(num(personality.get("ambition"), 55) - 55.0) * 0.055
+    personality_component = _v9_bound(loyalty_component + ambition_component, -5, 5)
+    interest += personality_component
+    if abs(personality_component) >= 0.5:
+        reasons.append({
+            "label": "Personality",
+            "impact": round(personality_component, 1),
+            "detail": "Loyalty and ambition change how strongly he values continuity versus flexibility.",
+        })
+
+    leverage = 0.0
+    if overall >= 94:
+        leverage = -18.0
+    elif overall >= 90:
+        leverage = -13.0
+    elif overall >= 86:
+        leverage = -7.0
+    elif overall >= 82:
+        leverage = -3.0
+    if age <= 25 and potential >= 90:
+        leverage -= 4.0
+    leverage += (_v9_stable_fraction(player_key(player), "market") - 0.5) * 4.0
+    leverage = _v9_bound(leverage, -20, 2)
+    interest += leverage
+    if abs(leverage) >= 0.5:
+        reasons.append({
+            "label": "Free Agency Leverage",
+            "impact": round(leverage, 1),
+            "detail": "Players with stronger open-market leverage are more willing to keep future options open.",
+        })
+
+    if mood_score < 50:
+        interest -= 8.0
+        reasons.append({"label": "Current Frustration", "impact": -8.0, "detail": "An unhappy player is reluctant to make a long-term commitment."})
+    if mood_score < 35:
+        interest -= 6.0
+
+    interest += (_v9_stable_fraction(
+        league_data.get("leagueId") or league_data.get("saveId") or league_data.get("seed") or "league",
+        player_key(player),
+        "extension-style",
+    ) - 0.5) * 6.0
+
+    score = round_int(_v9_bound(interest, 0, 100))
+    willing = score >= V9_EXTENSION_INTEREST_THRESHOLD
+    if score >= 88:
+        label = "Very Interested"
+    elif score >= 76:
+        label = "Interested"
+    elif score >= V9_EXTENSION_INTEREST_THRESHOLD:
+        label = "Open to Extension"
+    elif score >= 60:
+        label = "Prefers to Wait"
+    else:
+        label = "Not Interested"
+
+    security_rank = security
+    market_rank = abs(min(0.0, leverage))
+    if security_rank >= 9:
+        personality_type = "Security-Oriented"
+    elif num(personality.get("loyalty"), 55) >= 68:
+        personality_type = "Loyal"
+    elif market_rank >= 11 or num(personality.get("ambition"), 55) >= 76:
+        personality_type = "Market-Driven"
+    elif num(personality.get("winningSensitivity"), 50) >= 72:
+        personality_type = "Competitive"
+    elif num(personality.get("roleSensitivity"), 50) >= 72:
+        personality_type = "Role-Driven"
+    else:
+        personality_type = "Flexible"
+
+    reasons_sorted = sorted(reasons, key=lambda row: abs(num(row.get("impact"), 0)), reverse=True)[:6]
+    return {
+        "score": score,
+        "label": label,
+        "willing": willing,
+        "threshold": V9_EXTENSION_INTEREST_THRESHOLD,
+        "personalityType": personality_type,
+        "reasons": reasons_sorted,
+    }
+
+
+# V11 INJURY-AWARE MOOD
+# Injury availability is contextual, not a coaching/role decision. These helpers
+# intentionally mirror the JS injury system's active/return-date behavior without
+# introducing a Python dependency on frontend utilities.
+def _v11_player_injury_context(player: Dict[str, Any], current_date: str) -> Dict[str, Any]:
+    injury = player.get("injury") if isinstance(player.get("injury"), dict) else None
+    if not injury or injury.get("active") is False:
+        return {"active": False, "returnDate": "", "daysRemaining": 0}
+
+    return_date = str(injury.get("returnDate") or player.get("injuredUntil") or player.get("returnDate") or "").strip()
+    current = str(current_date or "").strip()
+    days_remaining = 0
+
+    try:
+        import datetime as _dt
+        current_obj = _dt.date.fromisoformat(current) if current else None
+        return_obj = _dt.date.fromisoformat(return_date) if return_date else None
+        if current_obj is not None and return_obj is not None:
+            # Players are available before games on the listed return date.
+            if return_obj <= current_obj:
+                return {"active": False, "returnDate": return_date, "daysRemaining": 0}
+            days_remaining = max(0, (return_obj - current_obj).days)
+    except Exception:
+        # If dates cannot be parsed, the injury.active flag remains authoritative.
+        pass
+
+    return {"active": True, "returnDate": return_date, "daysRemaining": days_remaining}
+
+
+def _v11_injury_mood_impact(injury_context: Dict[str, Any]) -> float:
+    if not injury_context.get("active"):
+        return 0.0
+    days = int(num(injury_context.get("daysRemaining"), 0))
+    if days <= 0:
+        return -1.0
+    if days <= 7:
+        return -0.5
+    if days <= 21:
+        return -1.5
+    if days <= 60:
+        return -2.5
+    return -3.5
+
+def evaluate_player_mood(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    team_profile: Dict[str, Any],
+    team_expectation: Dict[str, Any],
+    player: Dict[str, Any],
+) -> Dict[str, Any]:
+    season_year = get_current_season_year(league_data)
+    current_date = get_current_league_date(league_data)
+    team_name = get_team_name(team)
+    status = str(player.get("moodRosterStatus") or player.get("rosterStatus") or "standard")
+    overall = num(player.get("overall"), 0)
+    potential = num(player.get("potential"), overall)
+    age = int(num(player.get("age"), 27))
+    upside = max(0.0, potential - overall)
+    rank = get_role_rank_on_team(team, player) if status == "standard" else 99
+    expected_role = expected_role_from_overall(overall, potential, age)
+    actual_role = actual_role_from_rank(rank, status)
+    raw_stats = get_player_stats_summary(player, league_data, team)
+    planned_mpg = get_gameplan_minutes_for_player(league_data, team, player)
+    stats = apply_gameplan_minutes_fallback(raw_stats, planned_mpg)
+    team_games = get_team_games_played_context(team, league_data)
+    if team_games > 0:
+        stats["teamGamesContext"] = int(team_games)
+    evidence_weight = _v9_season_evidence_weight(team_games)
+    injury_context = _v11_player_injury_context(player, current_date)
+    injury_active = bool(injury_context.get("active"))
+
+    contract = normalize_contract(player.get("contract"))
+    salary = get_contract_salary_for_year(contract, season_year)
+    years_left = get_contract_years_remaining(contract, season_year)
+    option_label = get_contract_option_label(contract)
+    market = estimate_market_value(player)
+    expected_aav = int(num(market.get("expectedAAV") or market.get("expectedYear1Salary"), 0))
+    rookie_scale = is_rookie_scale_mood_exempt(player, contract, season_year, salary, years_left)
+
+    historical_tags = get_historical_tags(player)
+    personality = build_player_personality(player, team_expectation, status)
+    personality = apply_historical_personality_mods(personality, historical_tags)
+
+    factors = {
+        "roleSatisfaction": 0.0,
+        "teamSituation": 0.0,
+        "careerFit": 0.0,
+        "contractSecurity": 0.0,
+        "franchiseRelationship": 0.0,
+        "productionDevelopment": 0.0,
+        "injuryRecovery": 0.0,
+        "recentEvents": 0.0,
+    }
+    events: List[Dict[str, Any]] = []
+    baseline = V9_MOOD_BASELINE
+    add_event(
+        events,
+        "Situation Baseline",
+        0,
+        f"{player_name(player)} begins from a stable, content situation baseline.",
+        f"Base mood {round_int(baseline)}; context then moves the score up or down.",
+        event_type="baseline",
+        duration="season",
+        date=season_opening_date(league_data),
+    )
+
+    # ------------------------------------------------------------------
+    # 1) Role satisfaction: hierarchy + minutes are ONE bounded category.
+    # ------------------------------------------------------------------
+    role_score = 0.0
+    role_detail: List[str] = []
+    if status == "standard":
+        expected_max = int(expected_role.get("maxRank") or 15)
+        if rank <= expected_max:
+            role_score += 3.0 if overall >= 80 else 2.0
+            role_detail.append(f"Role rank #{rank} fits {expected_role.get('label')}")
+        else:
+            gap = max(1, rank - expected_max)
+            role_score -= min(10.0, 2.5 + gap * 2.1)
+            if age <= 24 and upside >= 4:
+                role_score -= 2.0
+            role_detail.append(f"Role rank #{rank} is below {expected_role.get('label')} expectation")
+
+        if injury_active:
+            # Auto-rotation correctly gives injured players 0 minutes. That must
+            # not be interpreted as the coach reducing the player's role.
+            role_detail.append("Injury absence does not count as a coaching or playing-time decision")
+        else:
+            mpg = float(num(stats.get("minutesPerGame"), 0))
+            expected_mpg = float(num(expected_role.get("minutes"), 0))
+            if mpg > 0 and expected_mpg > 0:
+                minute_gap = mpg - expected_mpg
+                if minute_gap >= -3:
+                    role_score += 3.0
+                    role_detail.append(f"{mpg:.1f} MPG is aligned with his role")
+                elif minute_gap <= -10:
+                    role_score -= min(7.0, abs(minute_gap) * 0.55)
+                    role_detail.append(f"{mpg:.1f} MPG is well below roughly {expected_mpg:.0f}")
+                elif minute_gap < -5:
+                    role_score -= min(4.5, abs(minute_gap) * 0.38)
+                    role_detail.append("Minutes are somewhat below expectation")
+            else:
+                # Missing stats/gameplan evidence is neutral. Absence of evidence
+                # is never treated as unhappiness.
+                role_detail.append("No reliable minutes evidence yet; no mood penalty applied")
+    elif status == "two_way":
+        role_score = -5.0 if overall >= 73 or potential >= 78 else 1.5
+        role_detail.append("Two-way role may limit near-term opportunity")
+    elif status == "stash":
+        role_score = -4.0 if potential >= 78 else 0.0
+        role_detail.append("Stash status creates development uncertainty")
+
+    role_score = _v9_bound(role_score, -15, 10)
+    factors["roleSatisfaction"] = role_score
+    if abs(role_score) >= 0.1:
+        add_event(events, "Role Satisfaction", role_score, "Role and playing time are evaluated together.", "; ".join(role_detail[:3]), event_type="role", duration="active", date=current_date)
+
+    # ------------------------------------------------------------------
+    # 2) Team situation: established outlook early, live evidence later.
+    # ------------------------------------------------------------------
+    tier = str(team_expectation.get("preseasonTier") or "balanced").lower()
+    established_map = {
+        "title_favorite": 3.0,
+        "contender": 2.5,
+        "playoff_team": 1.5,
+        "play_in_hopeful": 0.5,
+        "retooling": 0.0,
+        "rebuilding": -1.0,
+    }
+    established = established_map.get(tier, 0.0)
+    wins, losses, win_pct = read_record(team)
+    live = 0.0
+    if win_pct is not None and team_games > 0:
+        expected_pct = num(team_expectation.get("expectedWinPct"), 0.500)
+        gap = win_pct - expected_pct
+        if gap >= 0.12:
+            live += 7.0
+        elif gap >= 0.05:
+            live += 3.5
+        elif gap <= -0.15:
+            live -= 9.0
+        elif gap <= -0.07:
+            live -= 4.5
+        if win_pct >= 0.65:
+            live += 3.0
+        elif win_pct <= 0.35:
+            live -= 3.0
+    team_score = established * (1.0 - evidence_weight) + live * evidence_weight
+    team_score = _v9_bound(team_score, -12, 10)
+    factors["teamSituation"] = team_score
+    if abs(team_score) >= 0.1:
+        detail = f"Preseason: {humanize_tier(tier)}"
+        if team_games > 0:
+            detail += f"; current record {wins}-{losses}; live evidence weight {round_int(evidence_weight * 100)}%"
+        add_event(events, "Team Situation", team_score, "Team outlook is judged against expectations, not wins alone.", detail, event_type="team_context", duration="active", date=current_date)
+
+    # ------------------------------------------------------------------
+    # 3) Career/timeline fit.
+    # ------------------------------------------------------------------
+    direction = str(team_profile.get("direction") or "balanced").lower().replace("-", "_")
+    career_score = 0.0
+    career_detail = "Career stage is reasonably aligned with the roster direction."
+    if direction in {"rebuilding", "rebuild"} and age <= 24 and upside >= 3:
+        career_score = 5.0 + min(3.0, upside * 0.35)
+        career_detail = "A rebuilding timeline gives his development room."
+    elif direction in {"rebuilding", "rebuild"} and age >= 30 and overall >= 80:
+        career_score = -8.0
+        career_detail = "Veteran talent may be impatient with a rebuilding timeline."
+    elif direction in {"contending", "contender", "win_now", "title_contender"} and age >= 28 and overall >= 76:
+        career_score = 4.0
+        career_detail = "His career stage fits a win-now roster."
+    elif direction in {"contending", "contender", "win_now", "title_contender"} and age <= 25:
+        career_score = 1.5
+        career_detail = "A strong competitive environment supports his development."
+    if age <= 23 and upside >= 5 and rank > 9:
+        career_score -= 4.0
+        career_detail += " Development opportunity is limited by depth-chart position."
+    career_score = _v9_bound(career_score, -10, 8)
+    factors["careerFit"] = career_score
+    if abs(career_score) >= 0.1:
+        add_event(events, "Career Fit", career_score, "Team timeline is compared with the player's career stage.", career_detail, event_type="timeline", duration="active", date=current_date)
+
+    # ------------------------------------------------------------------
+    # 4) Contract/security. Contract year is uncertainty, not unhappiness.
+    # ------------------------------------------------------------------
+    contract_score = 0.0
+    contract_detail: List[str] = []
+    if not contract:
+        contract_score -= 4.0
+        contract_detail.append("No standard guaranteed contract stored")
+    else:
+        if years_left >= 3:
+            contract_score += 3.0
+            contract_detail.append(f"{years_left} years of guaranteed security")
+        elif years_left == 2:
+            contract_score += 1.0
+            contract_detail.append("Two guaranteed years remain")
+        elif years_left == 1:
+            contract_detail.append("Contract year creates future uncertainty, but is not treated as team unhappiness")
+
+        if salary > 0 and expected_aav > 0:
+            ratio = salary / max(1, expected_aav)
+            if ratio <= 0.55 and overall >= 78 and not rookie_scale:
+                contract_score -= 5.0
+                contract_detail.append("Veteran salary is well below estimated market value")
+            elif ratio >= 1.10:
+                contract_score += 2.0
+                contract_detail.append("Current contract provides strong financial security")
+        if option_label == "Team Option" and overall >= 76:
+            contract_score -= 2.0
+            contract_detail.append("Team option adds some uncertainty")
+        elif option_label == "Player Option":
+            contract_score += 1.0
+            contract_detail.append("Player option preserves flexibility")
+        if rookie_scale:
+            contract_score = max(contract_score, 0.0)
+            contract_detail.append("Rookie-scale salary is treated as normal, not underpayment")
+
+    contract_score = _v9_bound(contract_score, -8, 7)
+    factors["contractSecurity"] = contract_score
+    if abs(contract_score) >= 0.1:
+        add_event(events, "Contract & Security", contract_score, "Contract security is separated from feelings about the team.", "; ".join(contract_detail[:3]), event_type="contract", duration="active", date=current_date)
+
+
+    # ------------------------------------------------------------------
+    # 5) Injury recovery. Being hurt can be frustrating, but 0 minutes while
+    # unavailable never counts as a coach/role problem.
+    # ------------------------------------------------------------------
+    injury_score = _v11_injury_mood_impact(injury_context)
+    factors["injuryRecovery"] = injury_score
+    if injury_active:
+        days = int(num(injury_context.get("daysRemaining"), 0))
+        return_date = str(injury_context.get("returnDate") or "")
+        detail = "Unavailable due to injury; playing-time expectations are paused."
+        if days > 0:
+            detail += f" About {days} day{'s' if days != 1 else ''} remain."
+        if return_date:
+            detail += f" Target return: {return_date}."
+        add_event(
+            events,
+            "Injury Recovery",
+            injury_score,
+            "Injury absence is separated from role satisfaction.",
+            detail,
+            event_type="injury",
+            duration="active_condition",
+            date=current_date,
+        )
+
+    # ------------------------------------------------------------------
+    # 6) Franchise relationship.
+    # ------------------------------------------------------------------
+    relationship_score, relationship_reasons = _v9_franchise_relationship(league_data, team, player)
+    factors["franchiseRelationship"] = relationship_score
+    if abs(relationship_score) >= 0.1:
+        add_event(events, "Franchise Relationship", relationship_score, "History with the organization creates continuity and trust.", "; ".join(relationship_reasons[:3]), event_type="relationship", duration="active_condition", date=current_date)
+
+    # ------------------------------------------------------------------
+    # 7) Production/development. This fades in as the season provides evidence.
+    # ------------------------------------------------------------------
+    production_score = 0.0
+    gp = int(num(stats.get("games"), 0))
+    ppg = float(num(stats.get("pointsPerGame"), 0))
+    apg = float(num(stats.get("assistsPerGame"), 0))
+    rpg = float(num(stats.get("reboundsPerGame"), 0))
+    if gp >= 5:
+        raw_prod = 0.0
+        if overall >= 84 and ppg >= 20:
+            raw_prod += 3.0
+        elif overall >= 84 and ppg < 14:
+            raw_prod -= 3.5
+        elif 76 <= overall < 84 and (ppg >= 12 or apg >= 5 or rpg >= 7):
+            raw_prod += 2.0
+        if team_games >= 20 and gp / max(1, team_games) < 0.55 and not injury_active:
+            raw_prod -= 2.5
+        production_score = raw_prod * max(0.35, evidence_weight)
+    production_score = _v9_bound(production_score, -6, 6)
+    factors["productionDevelopment"] = production_score
+    if abs(production_score) >= 0.1:
+        add_event(events, "Production", production_score, "Current-season production gradually matters more as the sample grows.", f"{gp} GP · {ppg:.1f} PPG · {rpg:.1f} RPG · {apg:.1f} APG", event_type="production", duration="active", date=current_date)
+
+    # ------------------------------------------------------------------
+    # 8) Recent events/history. One bounded category prevents event stacking.
+    # ------------------------------------------------------------------
+    recent_score, recent_details = _v9_recent_event_context(league_data, team, player, team_expectation)
+    factors["recentEvents"] = recent_score
+    if abs(recent_score) >= 0.1:
+        add_event(events, "Recent Events", recent_score, "Recent organizational events can temporarily move morale.", "; ".join(recent_details), event_type="recent_context", duration="temporary", date=current_date)
+
+    raw_score = baseline + sum(factors.values())
+    mood_score = round_int(_v9_bound(raw_score, 0, 100))
+    if mood_score >= 90:
+        label, tone = "Thriving", "elite"
+    elif mood_score >= 80:
+        label, tone = "Very Happy", "positive"
+    elif mood_score >= 72:
+        label, tone = "Happy", "positive"
+    elif mood_score >= 62:
+        label, tone = "Content", "neutral"
+    elif mood_score >= 50:
+        label, tone = "Uneasy", "warning"
+    elif mood_score >= 35:
+        label, tone = "Frustrated", "negative"
+    else:
+        label, tone = "Very Frustrated", "critical"
+
+    extension_interest = _v9_extension_interest(
+        league_data,
+        team,
+        player,
+        mood_score,
+        personality,
+        relationship_score,
+        role_score,
+        team_score,
+        career_score,
+        contract,
+        years_left,
+        rookie_scale,
+    )
+
+    negative_events = [row for row in events if num(row.get("impact"), 0) < 0]
+    main_concern = "None"
+    if negative_events:
+        main = sorted(negative_events, key=lambda row: num(row.get("impact"), 0))[0]
+        main_concern = main.get("category") or "Situation"
+
+    delta = mood_score - baseline
+    trend = "rising" if delta >= 8 else "falling" if delta <= -8 else "stable"
+    wants_out_risk = "low"
+    if mood_score < 35 and overall >= 82:
+        wants_out_risk = "high"
+    elif mood_score < 50 and overall >= 80:
+        wants_out_risk = "medium"
+
+    reasons_sorted = sorted(events, key=lambda row: abs(num(row.get("impact"), 0)), reverse=True)
+    return {
+        "playerId": player.get("id") or player.get("playerId"),
+        "playerKey": player_key(player),
+        "playerName": player_name(player),
+        "name": player_name(player),
+        "headshot": player.get("headshot") or player.get("playerHeadshot") or player.get("image") or "",
+        "position": player.get("pos") or player.get("position") or "-",
+        "secondaryPos": player.get("secondaryPos") or player.get("secondaryPosition"),
+        "age": age,
+        "overall": round_int(overall),
+        "potential": round_int(potential),
+        "rosterStatus": status,
+        "baseMood": round_int(baseline),
+        "moodScore": mood_score,
+        "moodLabel": label,
+        "moodTone": tone,
+        "trend": trend,
+        "mainConcern": main_concern,
+        "wantsOutRisk": wants_out_risk,
+        "factors": {key: round(value, 1) for key, value in factors.items()},
+        "reasons": reasons_sorted[:12],
+        "eventLog": reasons_sorted[:20],
+        "activeModifiers": [row for row in reasons_sorted if row.get("duration") != "expired"][:12],
+        "historicalTags": historical_tags,
+        "personality": personality,
+        "extensionInterest": extension_interest,
+        "role": {
+            "rank": rank if status == "standard" else None,
+            "actualRole": actual_role,
+            "expectedRole": expected_role.get("label"),
+            "expectedMinutes": expected_role.get("minutes"),
+            "usageClass": expected_role.get("usageClass"),
+        },
+        "contract": {
+            "salary": int(salary),
+            "yearsLeft": int(years_left),
+            "optionLabel": option_label,
+            "estimatedMarketAAV": int(expected_aav),
+            "rookieScaleContext": bool(rookie_scale),
+        },
+        "stats": stats,
+        "expectationProfile": team_expectation,
+        "seasonEvidenceWeight": round(evidence_weight, 3),
+    }
+
+
+# ============================================================================
+# V10 EXTENSION INTEREST CALIBRATION
+# ============================================================================
+# V9's structure is retained, but the willingness distribution is recalibrated:
+# legal eligibility no longer implies a near-automatic desire for an extension.
+
+def _v9_extension_interest(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+    mood_score: float,
+    personality: Dict[str, Any],
+    relationship_score: float,
+    role_score: float,
+    team_score: float,
+    career_score: float,
+    contract: Optional[Dict[str, Any]],
+    years_left: int,
+    rookie_scale: bool,
+) -> Dict[str, Any]:
+    overall = num(player.get("overall"), 70)
+    potential = num(player.get("potential"), overall)
+    age = int(num(player.get("age"), 27))
+
+    # A player must have positive reasons to commit; legal extension status itself
+    # is not treated as evidence that he wants to sign one.
+    interest = 61.0
+    reasons: List[Dict[str, Any]] = []
+
+    mood_component = _v9_bound((float(mood_score) - 65.0) * 0.50, -10, 10)
+    interest += mood_component
+    if abs(mood_component) >= 0.5:
+        reasons.append({
+            "label": "Current Mood",
+            "impact": round(mood_component, 1),
+            "detail": f"Locker Room mood is {round_int(mood_score)}.",
+        })
+
+    # Security is now a preference rather than an automatic +10/+12 for most
+    # extension-eligible players. Stable player-specific variance keeps careers
+    # from feeling cloned while remaining deterministic inside a save.
+    security = 0.0
+    if age <= 24:
+        security += 2.5
+    elif age <= 29:
+        security += 0.5
+    elif age <= 33:
+        security += 2.0
+    else:
+        security += 3.0
+    if overall < 78:
+        security += 1.5
+    elif overall < 82:
+        security += 0.5
+    if years_left <= 1:
+        security += 1.5
+    if rookie_scale:
+        security += 2.0
+    security += (_v9_stable_fraction(player_key(player), "security-v10") - 0.5) * 5.0
+    security = _v9_bound(security, -2, 7)
+    interest += security
+    if abs(security) >= 0.5:
+        reasons.append({
+            "label": "Security Preference",
+            "impact": round(security, 1),
+            "detail": "Guaranteed years matter differently by age, market position, and stable player preference.",
+        })
+
+    relationship_component = _v9_bound(relationship_score * 0.50, -5, 5)
+    interest += relationship_component
+    if abs(relationship_component) >= 0.5:
+        reasons.append({
+            "label": "Franchise Relationship",
+            "impact": round(relationship_component, 1),
+            "detail": "Continuity and history with the organization can make a long-term commitment more attractive.",
+        })
+
+    role_component = _v9_bound(role_score * 0.42, -7, 5)
+    interest += role_component
+    if abs(role_component) >= 0.5:
+        reasons.append({
+            "label": "Role Fit",
+            "impact": round(role_component, 1),
+            "detail": "A role that matches his talent makes a long-term commitment more appealing.",
+        })
+
+    situation_component = _v9_bound((team_score + career_score) * 0.25, -5, 5)
+    interest += situation_component
+    if abs(situation_component) >= 0.5:
+        reasons.append({
+            "label": "Team Direction",
+            "impact": round(situation_component, 1),
+            "detail": "Competitive outlook and career timeline affect whether this is the right long-term situation.",
+        })
+
+    loyalty_component = (num(personality.get("loyalty"), 55) - 55.0) * 0.10
+    ambition_component = -(num(personality.get("ambition"), 55) - 55.0) * 0.08
+    personality_component = _v9_bound(loyalty_component + ambition_component, -6, 6)
+    interest += personality_component
+    if abs(personality_component) >= 0.5:
+        reasons.append({
+            "label": "Personality",
+            "impact": round(personality_component, 1),
+            "detail": "Loyalty and ambition shape continuity versus flexibility preferences.",
+        })
+
+    # Market leverage now matters before superstar level. Strong players are
+    # more likely to keep free-agency flexibility even when their team mood is good.
+    leverage = 0.0
+    if overall >= 94:
+        leverage = -15.0
+    elif overall >= 90:
+        leverage = -11.0
+    elif overall >= 86:
+        leverage = -7.0
+    elif overall >= 83:
+        leverage = -5.0
+    elif overall >= 80:
+        leverage = -3.0
+    elif overall >= 78:
+        leverage = -1.5
+    if age <= 25 and potential >= 90:
+        leverage -= 3.0
+    if age >= 31:
+        leverage += 1.5
+    leverage += (_v9_stable_fraction(player_key(player), "market-v10") - 0.5) * 4.0
+    leverage = _v9_bound(leverage, -18, 2)
+    interest += leverage
+    if abs(leverage) >= 0.5:
+        reasons.append({
+            "label": "Free Agency Leverage",
+            "impact": round(leverage, 1),
+            "detail": "A stronger market gives him more reason to preserve future options instead of extending early.",
+        })
+
+    # Severe role mismatch matters to commitment even when security is appealing.
+    if role_score <= -10 and age <= 27:
+        interest -= 3.0
+        reasons.append({
+            "label": "Long-Term Role Concern",
+            "impact": -3.0,
+            "detail": "A young player being used well below his expected role is reluctant to lock into the situation.",
+        })
+
+    if mood_score < 62:
+        interest -= 3.0
+        reasons.append({
+            "label": "Current Unease",
+            "impact": -3.0,
+            "detail": "An uneasy current situation makes an early long-term commitment less attractive.",
+        })
+    if mood_score < 50:
+        interest -= 6.0
+
+    # Stable per-save/player style variance creates genuine differences between
+    # otherwise similar players without changing when the page is reopened.
+    interest += (_v9_stable_fraction(
+        league_data.get("leagueId") or league_data.get("saveId") or league_data.get("seed") or "league",
+        player_key(player),
+        "extension-style-v10",
+    ) - 0.5) * 5.0
+
+    score = round_int(_v9_bound(interest, 0, 100))
+    willing = score >= V9_EXTENSION_INTEREST_THRESHOLD
+    if score >= 84:
+        label = "Very Interested"
+    elif score >= 76:
+        label = "Interested"
+    elif score >= V9_EXTENSION_INTEREST_THRESHOLD:
+        label = "Open to Extension"
+    elif score >= 60:
+        label = "Prefers to Wait"
+    else:
+        label = "Not Interested"
+
+    market_rank = abs(min(0.0, leverage))
+    if security >= 5.5:
+        personality_type = "Security-Oriented"
+    elif num(personality.get("loyalty"), 55) >= 68:
+        personality_type = "Loyal"
+    elif market_rank >= 9 or num(personality.get("ambition"), 55) >= 76:
+        personality_type = "Market-Driven"
+    elif num(personality.get("winningSensitivity"), 50) >= 72:
+        personality_type = "Competitive"
+    elif num(personality.get("roleSensitivity"), 50) >= 72:
+        personality_type = "Role-Driven"
+    else:
+        personality_type = "Flexible"
+
+    reasons_sorted = sorted(reasons, key=lambda row: abs(num(row.get("impact"), 0)), reverse=True)[:6]
+    return {
+        "score": score,
+        "label": label,
+        "willing": willing,
+        "threshold": V9_EXTENSION_INTEREST_THRESHOLD,
+        "personalityType": personality_type,
+        "reasons": reasons_sorted,
+        "calibrationVersion": "v10_selective_interest",
+    }

@@ -4682,6 +4682,7 @@ const [tradeDeadlinePromptOpen, setTradeDeadlinePromptOpen] = useState(false);
 const [contractExtensionPromptOpen, setContractExtensionPromptOpen] = useState(false);
 const [contractExtensionPromptInfo, setContractExtensionPromptInfo] = useState(null);
 const [contractExtensionDeadlineBusy, setContractExtensionDeadlineBusy] = useState(false);
+const [contractExtensionResumeToken, setContractExtensionResumeToken] = useState(0);
 const [tradeToasts, setTradeToasts] = useState([]);
 const [pendingSimIntent, setPendingSimIntent] = useState(() => readPendingSimulationIntent());
 const [injuryAlertModal, setInjuryAlertModal] = useState(null);
@@ -7494,6 +7495,18 @@ const resumePendingSimulation = async () => {
   }
 };
 
+useEffect(() => {
+  if (!contractExtensionResumeToken) return undefined;
+  if (!readPendingSimulationIntent()) return undefined;
+  const timer = window.setTimeout(() => {
+    resumePendingSimulation();
+  }, 0);
+  return () => window.clearTimeout(timer);
+  // Intentionally keyed only to the resume token: setting the token forces a
+  // fresh render after setLeagueData, so resume uses the updated extension state.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [contractExtensionResumeToken]);
+
 const closeAllStarTeams = () => {
   setAllStarOpen(false);
   if (readPendingSimulationIntent()) {
@@ -9180,7 +9193,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                 await processContractExtensionDeadline({ closeWindow: true, deadlineType: contractExtensionPromptInfo?.type });
                 markContractExtensionDeadlineHandled(contractExtensionPromptInfo?.type);
                 setContractExtensionPromptOpen(false);
-                window.setTimeout(() => resumePendingSimulation(), 0);
+                setContractExtensionResumeToken((value) => value + 1);
               } catch (error) {
                 openSimError(error?.message || "Extension deadline processing failed.", "Contract extension error");
               }

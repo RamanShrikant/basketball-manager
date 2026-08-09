@@ -1300,9 +1300,14 @@ export default function RosterView() {
                     </span>
                   )}
                   {selectedPlayerInjured && (
-                    <span className="inline-flex items-center rounded-full border border-red-400/30 bg-red-500/20 px-2 py-1 text-[12px] font-extrabold text-red-100">
-                      INJ
-                    </span>
+                    <>
+                      <span className="inline-flex items-center rounded-full border border-red-400/30 bg-red-500/20 px-2 py-1 text-[12px] font-extrabold text-red-100">
+                        INJ
+                      </span>
+                      <span className="inline-flex items-center rounded-full border border-red-400/20 bg-red-950/45 px-2 py-1 text-[11px] font-extrabold text-red-200">
+                        {formatInjuryReturnLabel(player, currentLeagueDate)}
+                      </span>
+                    </>
                   )}
                 </h2>
                 <p className="text-gray-400 text-[16px] mt-0.5">
@@ -1311,7 +1316,6 @@ export default function RosterView() {
                   {player?.age ?? "-"}
                   {player?.isTwoWay ? " • Two-Way Contract" : ""}
                   {player?.isStash ? " • Stashed" : ""}
-                  {selectedPlayerInjured ? ` • ${formatInjuryReturnLabel(player, currentLeagueDate)}` : ""}
                 </p>
               </div>
             </div>
@@ -1329,14 +1333,13 @@ export default function RosterView() {
       {/* Table */}
       <div className="w-full flex flex-1 min-h-0 justify-center transition-opacity duration-300 ease-in-out mt-[-1px]">
         <div className={`${styles.tablePanel} ${styles.rosterScroller} bmTableScroller w-full max-w-7xl min-h-0 overflow-auto rounded-b-xl`}>
-          <div className="min-w-[1540px] w-max">
+          <div className="min-w-[1390px] w-max">
             <table className="w-full border-collapse text-center">
               <thead className="sticky top-0 z-20 bg-neutral-800 text-gray-300 text-[13px] font-semibold">
                 <tr>
                   {showTeamCol && <th className="py-3 px-3 min-w-[60px]">Team</th>}
                   {[
                     { key: "name", label: "Name" },
-                    { key: "injuryStatus", label: "STATUS", noSort: true },
                     { key: "pos", label: "POS" },
                     { key: "age", label: "AGE" },
                     { key: "overall", label: "OVR" },
@@ -1349,7 +1352,7 @@ export default function RosterView() {
                     <th
                       key={col.key}
                       className={`py-2 px-3 min-w-[88px] ${
-                        col.key === "name" ? "min-w-[210px] text-left pl-4" : col.key === "injuryStatus" ? "min-w-[150px]" : "text-center"
+                        col.key === "name" ? "min-w-[230px] text-left pl-4" : "text-center"
                       } ${col.noSort ? "select-none" : "cursor-pointer select-none"}`}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1420,15 +1423,6 @@ export default function RosterView() {
                           <span className="ml-2 inline-flex items-center rounded-full border border-red-400/30 bg-red-500/20 px-2 py-0.5 text-[10px] font-extrabold text-red-100">
                             INJ
                           </span>
-                        )}
-                      </td>
-                      <td className="py-1.5 px-3 whitespace-nowrap">
-                        {injured ? (
-                          <span className="inline-flex items-center rounded-full border border-red-400/30 bg-red-500/15 px-2 py-0.5 text-[11px] font-extrabold text-red-100">
-                            {formatInjuryReturnLabel(p, currentLeagueDate)}
-                          </span>
-                        ) : (
-                          <span className="text-neutral-500">—</span>
                         )}
                       </td>
                       <td className="py-1.5 px-3">{p.pos}</td>

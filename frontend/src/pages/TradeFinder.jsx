@@ -2213,7 +2213,12 @@ function TradeFinderScrollbarStyles() {
 export default function TradeFinder() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam } = useGame();
-  const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
+  const teams = useMemo(
+    () => [...getAllTeamsFromLeague(leagueData)].sort((a, b) =>
+      String(a?.name || a?.teamName || "").localeCompare(String(b?.name || b?.teamName || ""))
+    ),
+    [leagueData]
+  );
   const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
   const [packageTeamIndex, setPackageTeamIndex] = useState(() => {
     const index = teams.findIndex((team) => sameTeamName(team?.name || team?.teamName, selectedTeam?.name || selectedTeam?.teamName));

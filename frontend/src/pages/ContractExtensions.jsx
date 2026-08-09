@@ -52,6 +52,8 @@ function currentLeagueDate(leagueData) {
   }
 }
 
+function buildExtensionMoodLeague(leagueData, teamName) { return leagueData; }
+
 function optionLabel(value) {
   if (value === "player") return "Player Option";
   if (value === "team") return "Team Option";
@@ -79,6 +81,26 @@ function packageAav(pkg) {
   return Number(pkg?.aav || packageTotal(pkg) / Math.max(1, Number(pkg?.years || pkg?.salaryByYear?.length || 1)));
 }
 
+
+function extensionRowSortBucket(row) {
+  if (row?.eligible) return 0;
+  if (row?.playerRefusesExtension) return 1;
+  if (row?.alreadyExtended) return 2;
+  return 3;
+}
+
+function sortExtensionRows(rows = []) {
+  return [...(Array.isArray(rows) ? rows : [])].sort((a, b) => {
+    const bucketDiff = extensionRowSortBucket(a) - extensionRowSortBucket(b);
+    if (bucketDiff !== 0) return bucketDiff;
+    const overallDiff = Number(b?.overall || 0) - Number(a?.overall || 0);
+    if (overallDiff !== 0) return overallDiff;
+    const potentialDiff = Number(b?.potential || 0) - Number(a?.potential || 0);
+    if (potentialDiff !== 0) return potentialDiff;
+    return String(a?.playerName || "").localeCompare(String(b?.playerName || ""));
+  });
+}
+
 export default function ContractExtensions() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam, setLeagueData } = useGame();
@@ -102,6 +124,8 @@ export default function ContractExtensions() {
     [askPackages, selectedPackageId]
   );
   const projectedSalaries = selectedPackage?.salaryByYear || [];
+  const refusingCount = useMemo(() => (preview?.players || []).filter((row) => row?.playerRefusesExtension).length, [preview]);
+  const orderedExtensionPlayers = useMemo(() => sortExtensionRows(preview?.players || []), [preview]);
 
   const loadPreview = async (sourceLeague = leagueData, { runCpuOpening = false } = {}) => {
     if (!sourceLeague || !teamName) return;
@@ -274,7 +298,7 @@ export default function ContractExtensions() {
                   <div className="p-6 text-center text-neutral-400">Loading extension eligibility…</div>
                 ) : (
                   <div className="space-y-2">
-                    {(preview?.players || []).map((row) => {
+                    {orderedExtensionPlayers.map((row) => {
                       const key = row.playerId || row.playerName;
                       const active = String(key) === String(selectedPlayerId);
                       return (
@@ -307,48 +331,53 @@ export default function ContractExtensions() {
                 <div className="flex h-full items-center justify-center text-neutral-500">Select a player.</div>
               ) : (
                 <>
-                  <div className="min-h-0 flex-1 overflow-hidden p-4">
-                    <div className="space-y-3">
-                      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-3">
-                        <div>
-                          <h2 className="text-2xl font-black">{selectedRow.playerName}</h2>
-                          <div className="mt-1 text-sm text-neutral-400">{selectedRow.reason}</div>
+                  <div className="min-h-0 flex-1 overflow-hidden p-3">
+                    <div className="flex h-full min-h-0 flex-col gap-2">
+                      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 pb-2">
+                        <div className="min-w-0">
+                          <h2 className="truncate text-xl font-black">{selectedRow.playerName}</h2>
+                          {!selectedRow.eligible && (
+                            <div className="mt-1 line-clamp-2 text-xs leading-4 text-neutral-400">{selectedRow.reason}</div>
+                          )}
                         </div>
-                        <div className="rounded-xl border border-orange-400/20 bg-orange-500/10 px-3 py-2 text-right">
+                        <div className="shrink-0 rounded-xl border border-orange-400/20 bg-orange-500/10 px-3 py-1.5 text-right">
                           <div className="text-[10px] font-black uppercase tracking-wider text-orange-300">Player Camp</div>
-                          <div className={`mt-1 text-sm font-black ${interestTone(selectedRow.interestLabel || selectedRow.reason)}`}>
-                            {selectedRow.eligible ? selectedRow.interestLabel || "Ask available" : selectedRow.playerRefusesExtension ? "Not interested" : "Not negotiable"}
+                          <div className={`mt-1 text-sm font-black ${interestTone(selectedRow.interestLabel || selectedRow.extensionInterestLabel || selectedRow.reason)}`}>
+                            {selectedRow.eligible ? selectedRow.interestLabel || selectedRow.extensionInterestLabel || "Ask available" : selectedRow.playerRefusesExtension ? selectedRow.extensionInterestLabel || "Prefers to wait" : "Not negotiable"}
                           </div>
+                          {selectedRow.extensionInterestScore != null && (
+                            <div className="mt-0.5 text-[10px] font-black text-neutral-400">Interest {selectedRow.extensionInterestScore}/100 · Mood {selectedRow.extensionMoodScore ?? "—"}</div>
+                          )}
                         </div>
                       </div>
 
-                      <div className="grid gap-2 md:grid-cols-4">
-                        <div className="rounded-xl border border-white/8 bg-black/25 p-3">
+                      <div className="grid shrink-0 gap-2 md:grid-cols-4">
+                        <div className="rounded-xl border border-white/8 bg-black/25 p-2.5">
                           <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Current Contract</div>
-                          <div className="mt-1.5 text-base font-black">{selectedRow.remainingContractYears ?? selectedRow.currentContract?.salaryByYear?.length ?? 0} years left</div>
-                          <div className="mt-0.5 text-xs text-neutral-400">Ends {selectedRow.currentContractEndYear || "—"}</div>
+                          <div className="mt-1 text-sm font-black">{selectedRow.remainingContractYears ?? selectedRow.currentContract?.salaryByYear?.length ?? 0} years left</div>
+                          <div className="mt-0.5 text-[10px] text-neutral-400">Ends {selectedRow.currentContractEndYear || "—"}</div>
                         </div>
-                        <div className="rounded-xl border border-white/8 bg-black/25 p-3">
+                        <div className="rounded-xl border border-white/8 bg-black/25 p-2.5">
                           <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Extension Type</div>
-                          <div className="mt-1.5 text-base font-black">{extensionTypeLabel(selectedRow.extensionType)}</div>
-                          <div className="mt-0.5 text-xs text-neutral-400">Starts {selectedRow.extensionStartYear || "—"}</div>
+                          <div className="mt-1 text-sm font-black">{extensionTypeLabel(selectedRow.extensionType)}</div>
+                          <div className="mt-0.5 text-[10px] text-neutral-400">Starts {selectedRow.extensionStartYear || "—"}</div>
                         </div>
-                        <div className="rounded-xl border border-white/8 bg-black/25 p-3">
+                        <div className="rounded-xl border border-white/8 bg-black/25 p-2.5">
                           <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Projected Market</div>
-                          <div className="mt-1.5 text-base font-black">{compactMoney(selectedRow.marketValue?.expectedAAV)}</div>
-                          <div className="mt-0.5 text-xs text-neutral-400">Expected AAV</div>
+                          <div className="mt-1 text-sm font-black">{compactMoney(selectedRow.marketValue?.expectedAAV)}</div>
+                          <div className="mt-0.5 text-[10px] text-neutral-400">Expected AAV</div>
                         </div>
-                        <div className="rounded-xl border border-white/8 bg-black/25 p-3">
+                        <div className="rounded-xl border border-white/8 bg-black/25 p-2.5">
                           <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Deadline</div>
-                          <div className="mt-1.5 text-base font-black">{selectedRow.deadlineType === "rookie" ? "Rookie" : selectedRow.deadlineType === "veteran" ? "Veteran" : "—"}</div>
-                          <div className="mt-0.5 text-xs text-neutral-400">{selectedRow.deadlineDate || "—"}</div>
+                          <div className="mt-1 text-sm font-black">{selectedRow.deadlineType === "rookie" ? "Rookie" : selectedRow.deadlineType === "veteran" ? "Veteran" : "—"}</div>
+                          <div className="mt-0.5 text-[10px] text-neutral-400">{selectedRow.deadlineDate || "—"}</div>
                         </div>
                       </div>
 
                       {selectedRow.currentContract?.salaryByYear?.length > 0 && (
-                        <div>
-                          <div className="mb-1.5 text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Existing guaranteed years</div>
-                          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                        <div className="shrink-0">
+                          <div className="mb-1 text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Existing guaranteed years</div>
+                          <div className="grid grid-cols-5 gap-2">
                             {selectedRow.currentContract.salaryByYear
                               .map((salary, index) => ({
                                 salary,
@@ -356,9 +385,9 @@ export default function ContractExtensions() {
                               }))
                               .filter((row) => row.year >= Number(selectedRow.currentContractSeasonYear || selectedRow.currentContract.startYear))
                               .map((row) => (
-                                <div key={row.year} className="rounded-xl border border-white/8 bg-black/20 p-2.5">
-                                  <div className="text-xs text-neutral-500">{row.year}</div>
-                                  <div className="mt-1 font-black">{compactMoney(row.salary)}</div>
+                                <div key={row.year} className="rounded-xl border border-white/8 bg-black/20 px-2.5 py-2">
+                                  <div className="text-[10px] text-neutral-500">{row.year}</div>
+                                  <div className="mt-0.5 text-sm font-black">{compactMoney(row.salary)}</div>
                                 </div>
                               ))}
                           </div>
@@ -366,14 +395,14 @@ export default function ContractExtensions() {
                       )}
 
                       {!selectedRow.eligible ? (
-                        <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                          <div className="text-lg font-black">Not currently negotiable</div>
-                          <p className="mt-2 text-sm leading-6 text-neutral-400">{selectedRow.reason}</p>
+                        <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                          <div className="text-base font-black">Not currently negotiable</div>
+                          <p className="mt-1 text-xs leading-5 text-neutral-400">{selectedRow.reason}</p>
                         </div>
                       ) : (
-                        <div>
-                          <div className="mb-1.5 text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Player-requested packages</div>
-                          <div className="grid gap-2 xl:grid-cols-3">
+                        <div className="flex min-h-0 flex-1 flex-col">
+                          <div className="mb-1 shrink-0 text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Player-requested packages</div>
+                          <div className="grid min-h-0 flex-1 gap-2 xl:grid-cols-3">
                             {askPackages.map((pkg) => {
                               const id = pkg.askPackageId || pkg.packageId;
                               const active = String(id) === String(selectedPackage?.askPackageId || selectedPackage?.packageId);
@@ -382,7 +411,7 @@ export default function ContractExtensions() {
                                   type="button"
                                   key={id}
                                   onClick={() => setSelectedPackageId(id)}
-                                  className={`rounded-2xl border p-3 text-left transition ${active ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black/25 hover:border-white/25"}`}
+                                  className={`flex min-h-0 flex-col rounded-2xl border p-2.5 text-left transition ${active ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black/25 hover:border-white/25"}`}
                                 >
                                   <div className="flex items-start justify-between gap-3">
                                     <div>
@@ -393,13 +422,13 @@ export default function ContractExtensions() {
                                       AAV {compactMoney(packageAav(pkg))}
                                     </div>
                                   </div>
-                                  <div className="mt-2 text-xl font-black">{compactMoney(packageTotal(pkg))}</div>
-                                  <div className="mt-0.5 text-xs text-neutral-400">First year {compactMoney(pkg.firstYearSalary)} · {pkg.annualRaisePct}% raises</div>
-                                  <div className="mt-2 grid grid-cols-2 gap-1">
+                                  <div className="mt-1.5 text-lg font-black">{compactMoney(packageTotal(pkg))}</div>
+                                  <div className="mt-0.5 text-[10px] text-neutral-400">First year {compactMoney(pkg.firstYearSalary)} · {pkg.annualRaisePct}% raises</div>
+                                  <div className="mt-auto flex flex-wrap gap-1 pt-2">
                                     {(pkg.salaryByYear || []).map((salary, index) => (
-                                      <div key={`${id}-${index}`} className="rounded-lg bg-black/30 px-2 py-1 text-center">
-                                        <div className="text-[9px] text-neutral-500">{Number(selectedRow.extensionStartYear) + index}</div>
-                                        <div className="text-xs font-black">{compactMoney(salary)}</div>
+                                      <div key={`${id}-${index}`} className="rounded-md bg-black/30 px-1.5 py-1 text-center">
+                                        <span className="text-[8px] text-neutral-500">{Number(selectedRow.extensionStartYear) + index} </span>
+                                        <span className="text-[10px] font-black">{compactMoney(salary)}</span>
                                       </div>
                                     ))}
                                   </div>
@@ -413,14 +442,14 @@ export default function ContractExtensions() {
                   </div>
 
                   {selectedRow.eligible && selectedPackage && (
-                    <div className="shrink-0 border-t border-orange-400/20 bg-neutral-950/95 p-3 shadow-[0_-16px_40px_rgba(0,0,0,0.35)]">
+                    <div className="shrink-0 border-t border-orange-400/20 bg-neutral-950/95 px-3 py-2 shadow-[0_-16px_40px_rgba(0,0,0,0.35)]">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Selected Ask</div>
-                          <div className="mt-1 text-xl font-black">
+                          <div className="mt-0.5 text-lg font-black">
                             {selectedPackage.years} years · {compactMoney(packageTotal(selectedPackage))}
                           </div>
-                          <div className="mt-1 text-sm text-neutral-400">
+                          <div className="mt-0.5 text-xs text-neutral-400">
                             {compactMoney(packageAav(selectedPackage))} AAV · {optionLabel(selectedPackage.optionType)} · begins {selectedRow.extensionStartYear}
                           </div>
                         </div>

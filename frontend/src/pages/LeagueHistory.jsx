@@ -46,9 +46,19 @@ function addIsoMonths(value, months) {
 }
 
 function extensionHistoryRows(leagueData = {}) {
-  const history = Array.isArray(leagueData?.contractExtensionHistory)
+  const canonical = Array.isArray(leagueData?.contractExtensionHistory)
     ? leagueData.contractExtensionHistory
     : [];
+  const stateRows = Array.isArray(leagueData?.contractExtensionState?.transactions)
+    ? leagueData.contractExtensionState.transactions
+    : [];
+  const seen = new Set();
+  const history = [...canonical, ...stateRows].filter((row, index) => {
+    const key = String(row?.id || `${row?.teamName || ""}|${row?.playerName || ""}|${row?.date || row?.signedDate || ""}|${index}`);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
   return history.map((row, index) => {
     const date = normalizeIsoDate(row?.date || row?.signedDate) || normalizeDateForSort(row?.recordedAt);

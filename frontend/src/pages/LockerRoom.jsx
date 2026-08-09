@@ -402,21 +402,21 @@ function OvrPill({ label, value }) {
 
 
 const LOCKER_ROOM_PLAYER_PILL_TUNING = {
-  rowMinHeight: 92,
+  rowMinHeight: 84,
   rowPaddingX: 16,
   rowPaddingY: 14,
   rowRadius: 16,
 
-  headshotBoxWidth: 150,
-  headshotSize: 96,
-  headshotX: 12,
+  headshotBoxWidth: 98,
+  headshotSize: 76,
+  headshotX: 2,
   headshotY: 0,
-  leftPad: 148,
+  leftPad: 108,
 
-  ringSize: 72,
-  ringX: -10,
+  ringSize: 54,
+  ringX: 0,
   ringY: 0,
-  ringGap: 16,
+  ringGap: 10,
 
   nameSize: 16,
   infoSize: 12,
@@ -425,20 +425,6 @@ const LOCKER_ROOM_PLAYER_PILL_TUNING = {
   scorePadX: 14,
   scorePadY: 8,
   scoreRadius: 12,
-};
-
-const LOCKER_ROOM_PLAYER_LOGO_TUNING = {
-  enabled: true,
-  size: 280,
-  opacity: 0.11,
-  x: 250,
-  y: 0,
-  rotate: 0,
-  blur: 0,
-  brightness: 1.25,
-  contrast: 1.12,
-  saturate: 1.2,
-  blendMode: "screen",
 };
 
 
@@ -465,7 +451,7 @@ const LOCKER_ROOM_PLAYER_LOGO_TUNING = {
 const LOCKER_ROOM_REPORT_HEADER_TUNING = {
   // Outer report banner shell. This is the bordered area above Role / Contract / Stats.
   headerBox: {
-    height: 260,          // Fixed header height. Increase only if you want a taller hero area.
+    height: 200,          // Compact V10 hero keeps the full report visible without right-side scrolling.
     paddingX: 28,         // Left/right breathing room inside the banner.
     paddingTop: 24,       // Top breathing room inside the banner.
     borderRadius: 24,     // Roundness of the banner's top corners.
@@ -487,14 +473,14 @@ const LOCKER_ROOM_REPORT_HEADER_TUNING = {
   // Player face/headshot in the right report banner.
   // This is fully independent from the grey divider bar.
   faceCard: {
-    boxWidth: 220,        // Invisible lane width. Increase if a big face gets cropped sideways.
-    boxHeight: 230,       // Invisible lane height. Does NOT control the grey bar.
-    boxX: 70,             // Move the whole headshot lane right/left.
-    boxY: 20,             // Move the whole headshot lane down/up.
+    boxWidth: 180,        // Compact headshot lane for the single-screen report.
+    boxHeight: 190,       // Compact lane height.
+    boxX: 48,             // V10 compact hero position.
+    boxY: 5,              // V10 compact hero position.
 
-    imageSize: 200,       // ACTUAL headshot size. Increase this for a bigger player image.
-    imageX: -45,          // Move only the headshot image right/left inside the lane.
-    imageY: 6,            // Move only the headshot image down/up inside the lane.
+    imageSize: 165,       // Compact headshot size.
+    imageX: -30,          // Compact headshot alignment.
+    imageY: 0,            // Compact headshot alignment.
     imageBottom: 0,       // Anchors the image from the bottom of the fixed lane.
 
     zIndex: 4,            // Layer order for the headshot.
@@ -504,15 +490,15 @@ const LOCKER_ROOM_REPORT_HEADER_TUNING = {
   // Entire text group containing the report label + player name.
   // Move this first when you want to place the whole text block.
   textBlock: {
-    x: 330,               // Move BOTH label and player name right/left together.
-    y: 70,                // Move BOTH label and player name down/up together.
+    x: 285,               // Compact report text position.
+    y: 58,                // Compact report text position.
     width: "max-content", // Keeps text free-flowing instead of resizing itself.
     zIndex: 6,            // Higher number = sits above background logo.
   },
 
   // The orange "LOCKER ROOM REPORT" text above the player name.
   reportLabel: {
-    fontSize: 29,         // Text size.
+    fontSize: 24,         // Compact report-label size.
     x: -160,              // Move only this label right/left.
     y: -50,               // Move only this label down/up.
     lineHeight: 1.15,     // Prevents tall letters from being clipped.
@@ -522,7 +508,7 @@ const LOCKER_ROOM_REPORT_HEADER_TUNING = {
 
   // Big player name in the right report banner.
   playerName: {
-    fontSize: 48,         // Player name size.
+    fontSize: 42,         // Compact player-name size.
     x: -110,              // Move only the name right/left.
     y: -56,               // Move only the name down/up.
     lineHeight: 1.12,     // Prevents descenders like y/g/p from getting cut off.
@@ -541,9 +527,9 @@ const LOCKER_ROOM_REPORT_HEADER_TUNING = {
 
     // Position/size of the whole ring.
     // These start centered around the old mood-square spot, so it should land in the same area.
-    x: 255,               // Move the mood ring right/left inside the header.
-    y: 116,               // Move the mood ring down/up inside the header.
-    size: 144,            // Whole mood ring size.
+    x: 300,               // Compact hero mood-ring position.
+    y: 76,                // Compact hero mood-ring position.
+    size: 112,            // Compact hero mood-ring size.
     zIndex: 8,            // Layer order for the mood ring.
 
     // Ring shape/visuals.
@@ -585,7 +571,7 @@ const LOCKER_ROOM_REPORT_HEADER_TUNING = {
   // right of the mood ring so the user can quickly see how the final
   // mood score was built.
   moodBreakdown: {
-    enabled: true,
+    enabled: false,
     zIndex: 10,
     maxItems: 3,
 
@@ -730,30 +716,6 @@ const LOCKER_ROOM_REPORT_HEADER_TUNING = {
   },
 };
 
-function LockerRoomPillBackgroundLogo({ team }) {
-  const logo = teamLogoOf(team);
-  const t = LOCKER_ROOM_PLAYER_LOGO_TUNING;
-
-  if (!t.enabled || !logo) return null;
-
-  return (
-    <img
-      src={logo}
-      alt=""
-      aria-hidden="true"
-      className="pointer-events-none absolute left-1/2 top-1/2 z-0 select-none object-contain"
-      style={{
-        width: t.size,
-        height: t.size,
-        opacity: t.opacity,
-        transform: `translate(calc(-50% + ${t.x}px), calc(-50% + ${t.y}px)) rotate(${t.rotate}deg)`,
-        filter: `blur(${t.blur}px) brightness(${t.brightness}) contrast(${t.contrast}) saturate(${t.saturate})`,
-        mixBlendMode: t.blendMode,
-      }}
-    />
-  );
-}
-
 function LockerRoomPlayerHeadshot({ row }) {
   const t = LOCKER_ROOM_PLAYER_PILL_TUNING;
 
@@ -783,7 +745,7 @@ function LockerRoomMiniRatingRing({ row }) {
   const overall = Number(row?.overall || 0);
   const potential = Number(row?.potential || overall || 0);
   const size = t.ringSize;
-  const radius = 50;
+  const radius = 47;
   const circumference = 2 * Math.PI * radius;
   const fillPercent = Math.min(Math.max(overall, 0) / 99, 1);
   const strokeOffset = circumference * (1 - fillPercent);
@@ -804,13 +766,13 @@ function LockerRoomMiniRatingRing({ row }) {
             <stop offset="100%" stopColor="#FFD54F" />
           </linearGradient>
         </defs>
-        <circle cx="60" cy="60" r={radius} stroke="rgba(255,255,255,0.08)" strokeWidth="8" fill="rgba(0,0,0,0.30)" />
+        <circle cx="60" cy="60" r={radius} stroke="rgba(255,255,255,0.08)" strokeWidth="7" fill="rgba(0,0,0,0.30)" />
         <circle
           cx="60"
           cy="60"
           r={radius}
           stroke="url(#lockerRoomRowOvrGradient)"
-          strokeWidth="8"
+          strokeWidth="7"
           strokeLinecap="round"
           fill="none"
           strokeDasharray={circumference}
@@ -818,10 +780,10 @@ function LockerRoomMiniRatingRing({ row }) {
           transform="rotate(-90 60 60)"
         />
       </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center text-center leading-none">
-        <div className="text-[8px] font-black uppercase tracking-wide text-neutral-300">OVR</div>
-        <div className="text-[28px] font-black leading-[0.9] text-orange-400">{row?.overall ?? "-"}</div>
-        <div className="text-[8px] font-black uppercase text-neutral-400">
+      <div className="absolute inset-0 flex -translate-y-[1px] flex-col items-center justify-center text-center leading-none">
+        <div className="text-[7px] font-black uppercase tracking-[0.08em] text-neutral-300">OVR</div>
+        <div className="mt-[1px] text-[21px] font-black leading-[0.82] text-orange-400">{row?.overall ?? "-"}</div>
+        <div className="mt-[2px] text-[6.5px] font-black uppercase leading-none tracking-[0.02em] text-neutral-400">
           POT <span className="text-orange-400">{potential || "-"}</span>
         </div>
       </div>
@@ -1081,8 +1043,8 @@ function PlayerMoodRow({ row, active, onClick, team }) {
     <button
       type="button"
       onClick={onClick}
-      className={`group relative isolate w-full overflow-hidden border text-left transition hover:-translate-y-0.5 hover:border-orange-400/30 ${
-        active ? "border-orange-400/60 bg-orange-500/15" : "border-white/10 bg-white/[0.035]"
+      className={`group relative isolate w-full overflow-hidden border text-left transition hover:border-orange-400/35 ${
+        active ? "border-orange-400/60 bg-gradient-to-r from-orange-500/20 via-orange-500/10 to-black/40" : "border-white/10 bg-neutral-900/80"
       }`}
       style={{
         minHeight: t.rowMinHeight,
@@ -1090,44 +1052,41 @@ function PlayerMoodRow({ row, active, onClick, team }) {
         borderRadius: t.rowRadius,
       }}
     >
-      <LockerRoomPillBackgroundLogo team={team} />
       <LockerRoomPlayerHeadshot row={row} />
 
       <div
-        className="relative z-10 flex items-center justify-between gap-3"
-        style={{ paddingLeft: hasHeadshot ? t.leftPad : 0 }}
+        className="relative z-10 grid grid-cols-[62px_minmax(0,1fr)_72px] items-center gap-3"
+        style={{ paddingLeft: hasHeadshot ? t.leftPad : 0, alignItems: "center" }}
       >
-        <div className="min-w-0 flex flex-1 items-center text-left" style={{ gap: t.ringGap }}>
+        <div className="grid h-[62px] w-[62px] place-items-center rounded-xl border border-white/10 bg-black/75 shadow-inner shadow-black/40">
           <LockerRoomMiniRatingRing row={row} />
+        </div>
 
-          <div className="min-w-0 flex-1">
-            <div className="truncate font-black text-white" style={{ fontSize: t.nameSize }}>
-              {row.playerName}
-            </div>
-
-            <div
-              className="mt-1 flex min-w-0 items-center gap-2 font-black uppercase tracking-[0.08em] text-neutral-300"
-              style={{ fontSize: t.infoSize }}
-            >
-              <span className="truncate">{row.position || "-"}</span>
-              <span className="shrink-0 text-neutral-500">•</span>
-              <span className="shrink-0">Age {row.age ?? "-"}</span>
-            </div>
-
+        <div className="min-w-0 text-left">
+          <div className="line-clamp-2 font-black leading-[1.08] text-white" style={{ fontSize: t.nameSize }}>
+            {row.playerName}
+          </div>
+          <div
+            className="mt-1.5 flex min-w-0 items-center gap-2 font-black uppercase tracking-[0.07em] text-neutral-300"
+            style={{ fontSize: t.infoSize }}
+          >
+            <span className="shrink-0">{row.position || "-"}</span>
+            <span className="shrink-0 text-neutral-600">•</span>
+            <span className="shrink-0">Age {row.age ?? "-"}</span>
           </div>
         </div>
 
         <div
-          className={`shrink-0 text-center font-black transition ${
-            active ? "bg-orange-600 text-white" : "bg-black text-orange-300 group-hover:bg-white/10"
+          className={`w-[68px] shrink-0 justify-self-end text-center font-black transition ${
+            active ? "bg-orange-600 text-white" : "bg-black/85 text-orange-300 group-hover:bg-white/10"
           }`}
           style={{
             borderRadius: t.scoreRadius,
-            padding: `${t.scorePadY}px ${t.scorePadX}px`,
+            padding: `${t.scorePadY}px 8px`,
           }}
         >
-          <div className="text-[24px] leading-none">{row.moodScore}</div>
-          <div className="mt-1 text-[9px] uppercase tracking-[0.16em] text-neutral-300">{trendText(row.trend)}</div>
+          <div className="text-[23px] leading-none">{row.moodScore}</div>
+          <div className="mt-1 text-[9px] uppercase tracking-[0.13em] text-neutral-300">{trendText(row.trend)}</div>
         </div>
       </div>
     </button>
@@ -1241,7 +1200,7 @@ function formatDecayLabel(event, decayPerWeek = 0, decayPctPerWeek = 0) {
 }
 
 function buildMoodEventPills(player) {
-  const baseMood = Number(player?.baseMood ?? 50);
+  const baseMood = Number(player?.baseMood ?? 65);
   const targetMood = Math.round(Number(player?.moodScore ?? baseMood));
   const rawEvents = Array.isArray(player?.eventLog) && player.eventLog.length
     ? player.eventLog
@@ -1297,6 +1256,7 @@ function buildMoodEventPills(player) {
         removalDate,
         remainingWeeks: Number.isFinite(remainingWeeks) ? remainingWeeks : 0,
         progress,
+        category: event?.category || event?.label || "Mood Context",
         text,
         detail,
         date,
@@ -1390,6 +1350,238 @@ function MoodEventPill({ event }) {
   );
 }
 
+
+function ExtensionInterestPanel({ player }) {
+  const interest = player?.extensionInterest;
+  if (!interest || typeof interest !== "object") return null;
+  const score = Math.max(0, Math.min(100, Number(interest.score || 0)));
+  const reasons = Array.isArray(interest.reasons) ? interest.reasons.slice(0, 4) : [];
+  const willing = Boolean(interest.willing);
+
+  return (
+    <div className="h-full rounded-2xl border border-orange-400/20 bg-orange-500/[0.07] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Contract Outlook</div>
+          <div className="mt-1 text-lg font-black text-white">{interest.label || "Extension Outlook"}</div>
+          <div className="mt-1 text-xs font-bold text-neutral-400">
+            {interest.personalityType || "Flexible"} · willingness threshold {interest.threshold ?? 70}
+          </div>
+        </div>
+        <div className={`rounded-2xl border px-4 py-3 text-center ${willing ? "border-emerald-400/25 bg-emerald-500/10" : "border-amber-400/25 bg-amber-500/10"}`}>
+          <div className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-400">Extension Interest</div>
+          <div className={`mt-1 text-2xl font-black ${willing ? "text-emerald-300" : "text-amber-300"}`}>{Math.round(score)}</div>
+        </div>
+      </div>
+
+      {reasons.length > 0 && (
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          {reasons.map((reason, index) => {
+            const impact = Number(reason?.impact || 0);
+            return (
+              <div key={`${reason?.label || "reason"}-${index}`} className="rounded-xl border border-white/8 bg-black/25 px-3 py-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs font-black text-white">{reason?.label || "Context"}</div>
+                  <div className={`text-sm font-black ${factorTone(impact)}`}>{impact > 0 ? "+" : ""}{impact}</div>
+                </div>
+                {reason?.detail && <div className="mt-1 text-[11px] leading-4 text-neutral-500">{reason.detail}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function CompactMoodContextPanel({ player }) {
+  const factors = Object.entries(player?.factors || {})
+    .filter(([, value]) => Math.abs(Number(value || 0)) >= 0.1)
+    .map(([key, value]) => ({ label: humanizeMoodLabel(key), value: Number(value || 0) }))
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+    .slice(0, 6);
+
+  return (
+    <div className="h-full rounded-2xl border border-white/10 bg-black/55 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Current Situation</div>
+          <div className="mt-1 text-sm font-semibold text-neutral-500">The strongest active drivers of his Locker Room mood.</div>
+        </div>
+        <div className="rounded-xl border border-orange-400/25 bg-orange-500/10 px-3 py-2 text-center">
+          <div className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Mood</div>
+          <div className="text-xl font-black text-orange-300">{Math.round(Number(player?.moodScore || 0))}</div>
+        </div>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        {factors.length ? factors.map((factor) => (
+          <div key={factor.label} className="rounded-xl border border-white/8 bg-white/[0.035] px-2.5 py-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 truncate text-[11px] font-black uppercase tracking-[0.08em] text-neutral-300">{factor.label}</span>
+              <span className={`shrink-0 text-sm font-black ${factorTone(factor.value)}`}>
+                {factor.value > 0 ? "+" : ""}{Math.round(factor.value * 10) / 10}
+              </span>
+            </div>
+          </div>
+        )) : (
+          <div className="col-span-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-3 text-sm font-bold text-neutral-500">
+            No major active mood modifiers.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+function MoodDriversPanel({ player }) {
+  const reasonByKey = new Map(
+    (Array.isArray(player?.reasons) ? player.reasons : []).map((reason) => [
+      String(reason?.category || "").toLowerCase().replace(/[^a-z0-9]/g, ""),
+      reason,
+    ])
+  );
+  const factors = Object.entries(player?.factors || {})
+    .filter(([, value]) => Math.abs(Number(value || 0)) >= 0.1)
+    .map(([key, value]) => {
+      const label = humanizeMoodLabel(key);
+      const normalized = String(label).toLowerCase().replace(/[^a-z0-9]/g, "");
+      const reason = reasonByKey.get(normalized);
+      return {
+        key,
+        label,
+        value: Number(value || 0),
+        detail: reason?.detail || reason?.text || "",
+      };
+    })
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+    .slice(0, 6);
+
+  return (
+    <section className="flex h-full min-h-0 flex-col rounded-2xl border border-white/10 bg-black/55 p-3">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">Mood Overview</div>
+          <div className="mt-0.5 text-lg font-black text-white">What is driving his current situation</div>
+          <div className="mt-0.5 text-[11px] font-semibold text-neutral-500">
+            Role, team context, career fit, security, health, and franchise relationship all feed the mood score.
+          </div>
+        </div>
+        <div className="shrink-0 rounded-xl border border-orange-400/25 bg-orange-500/10 px-3 py-1.5 text-center">
+          <div className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Current Mood</div>
+          <div className="text-xl font-black text-orange-300">{Math.round(Number(player?.moodScore || 0))}</div>
+          <div className="text-[9px] font-black uppercase tracking-[0.12em] text-neutral-400">{player?.moodLabel || "Mood"}</div>
+        </div>
+      </div>
+
+      <div className="mt-2 grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2 xl:grid-cols-3">
+        {factors.length ? factors.map((factor) => (
+          <div key={factor.key} className="flex min-h-0 flex-col justify-center rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <span className="min-w-0 text-[11px] font-black uppercase tracking-[0.08em] text-neutral-300">{factor.label}</span>
+              <span className={`shrink-0 text-sm font-black ${factorTone(factor.value)}`}>
+                {factor.value > 0 ? "+" : ""}{Math.round(factor.value * 10) / 10}
+              </span>
+            </div>
+            {factor.detail ? <div className="mt-1 break-words text-[8.5px] font-semibold leading-[12px] text-neutral-500">{factor.detail}</div> : null}
+          </div>
+        )) : (
+          <div className="col-span-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-3 text-sm font-bold text-neutral-500">
+            No major active mood modifiers.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ContractOutlookMini({ player }) {
+  const interest = player?.extensionInterest;
+  if (!interest || typeof interest !== "object") {
+    return (
+      <section className="rounded-2xl border border-white/10 bg-black/45 p-4">
+        <div className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">Contract Outlook</div>
+        <div className="mt-2 text-sm font-bold text-neutral-500">No extension-interest profile is available.</div>
+      </section>
+    );
+  }
+
+  const score = Math.max(0, Math.min(100, Number(interest.score || 0)));
+  const willing = Boolean(interest.willing);
+  const reasons = Array.isArray(interest.reasons) ? interest.reasons.slice(0, 3) : [];
+
+  return (
+    <section className="flex h-full min-h-0 flex-col rounded-2xl border border-orange-400/18 bg-orange-500/[0.055] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">Contract Outlook</div>
+          <div className={`mt-0.5 text-base font-black ${willing ? "text-emerald-300" : "text-amber-300"}`}>
+            {interest.label || (willing ? "Open to Extension" : "Prefers to Wait")}
+          </div>
+          <div className="mt-1 text-[10px] font-bold text-neutral-500">
+            {interest.personalityType || "Flexible"} · threshold {interest.threshold ?? 70}
+          </div>
+        </div>
+        <div className="shrink-0 rounded-xl border border-white/10 bg-black/35 px-3 py-2 text-center">
+          <div className="text-[9px] font-black uppercase tracking-[0.12em] text-neutral-500">Interest</div>
+          <div className={`text-2xl font-black ${willing ? "text-emerald-300" : "text-amber-300"}`}>{Math.round(score)}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex-1 space-y-2">
+        {reasons.map((reason, index) => {
+          const impact = Number(reason?.impact || 0);
+          return (
+            <div key={`${reason?.label || "reason"}-${index}`} className="flex items-center justify-between gap-3 border-t border-white/8 pt-2 first:border-t-0 first:pt-0">
+              <span className="min-w-0 truncate text-[11px] font-bold text-neutral-300">{reason?.label || "Context"}</span>
+              <span className={`shrink-0 text-xs font-black ${factorTone(impact)}`}>{impact > 0 ? "+" : ""}{impact}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function MoodLedgerStrip({ player }) {
+  const { baseMood, targetMood, events } = buildMoodEventPills(player);
+  const shown = events.slice(0, 4);
+
+  return (
+    <section className="flex h-full min-h-0 flex-col rounded-2xl border border-white/10 bg-black/45 p-3">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <div className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">Active Mood Context</div>
+          <div className="mt-0.5 text-[10px] font-semibold text-neutral-500">Strongest current modifiers layered on the {baseMood} baseline.</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-500">
+          <span>Base <b className="text-white">{baseMood}</b></span>
+          <span>→</span>
+          <span>Mood <b className="text-orange-300">{targetMood}</b></span>
+        </div>
+      </div>
+      <div className="mt-2 grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2">
+        {shown.length ? shown.map((event, index) => (
+          <div key={`${event.text}-${index}`} className="flex min-h-0 flex-col justify-center rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2">
+            <div className="flex items-start justify-between gap-2">
+              <span className="min-w-0 break-words text-[9.5px] font-black uppercase leading-[12px] tracking-[0.04em] text-white">
+                {humanizeMoodLabel(event.category || "Mood Context")}
+              </span>
+              <span className={`shrink-0 text-xs font-black ${factorTone(event.impact)}`}>{formatSigned(event.impact)}</span>
+            </div>
+            {event.detail ? <div className="mt-1 break-words text-[8.5px] font-semibold leading-[12px] text-neutral-500">{event.detail}</div> : null}
+          </div>
+        )) : (
+          <div className="col-span-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-3 text-xs font-bold text-neutral-500">
+            No active mood modifiers beyond the baseline.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function SimpleMoodEventLog({ player }) {
   const { baseMood, targetMood, events } = buildMoodEventPills(player);
   const eventTotal = Math.round(events.reduce((sum, event) => sum + Number(event.impact || 0), 0) * 10) / 10;
@@ -1399,7 +1591,7 @@ function SimpleMoodEventLog({ player }) {
       <div className="mb-4 flex items-center justify-between gap-4">
         <div>
           <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Event Log</div>
-          <div className="mt-1 text-sm font-semibold text-neutral-500">Base mood starts at 50. Events explain the current mood.</div>
+          <div className="mt-1 text-sm font-semibold text-neutral-500">Base mood starts at 65. Context explains the current situation.</div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <div className="rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-center">
@@ -1539,9 +1731,9 @@ export default function LockerRoom() {
   return (
     <PageFade>
       <style>{LOCKER_ROOM_SCROLLBAR_STYLE}</style>
-      <div className="bmCourtPage h-full min-h-0 overflow-hidden p-3 text-white">
+      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-3 pt-3 pb-4 text-white">
         <div className="mx-auto flex h-full min-h-0 w-full max-w-[1680px] flex-col">
-          <div className="mb-2 flex h-[58px] shrink-0 items-center justify-between gap-4 select-none">
+          <div className="mb-2 flex h-[54px] shrink-0 items-center justify-between gap-4 select-none">
             <button
               onClick={() => handleTeamSwitch("prev")}
               className="w-20 text-left text-4xl font-black text-white transition hover:text-orange-400 active:scale-95"
@@ -1553,8 +1745,8 @@ export default function LockerRoom() {
             <div className="min-w-0 text-center">
               <div className="text-xs font-black uppercase tracking-[0.24em] text-orange-300">Locker Room</div>
               <div className="mt-2 flex items-center justify-center gap-4">
-                {logo ? <img src={logo} alt={activeTeam?.name || "Team"} className="h-12 w-12 object-contain" /> : null}
-                <h1 className="truncate text-3xl font-black text-orange-500">{activeTeam?.name || "Team"}</h1>
+                {logo ? <img src={logo} alt={activeTeam?.name || "Team"} className="h-10 w-10 object-contain" /> : null}
+                <h1 className="truncate text-[28px] font-black text-orange-500">{activeTeam?.name || "Team"}</h1>
               </div>
             </div>
 
@@ -1578,12 +1770,12 @@ export default function LockerRoom() {
               Checking the locker room...
             </div>
           ) : (
-            <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[430px_1fr]">
+            <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[520px_minmax(0,1fr)]">
               <div className="flex h-full min-h-0 flex-col rounded-2xl border border-white/10 bg-neutral-950/90 p-3 shadow-2xl">
-                <div className="mb-4 flex items-center justify-between gap-3 px-1">
+                <div className="mb-3 flex items-center justify-between gap-3 px-1">
                   <div>
                     <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Players</div>
-                    <div className="text-sm font-semibold text-neutral-500">Lowest mood is listed first.</div>
+                    <div className="text-sm font-semibold text-neutral-500">Select a player to inspect his current situation.</div>
                   </div>
                   <div className="rounded-xl border border-white/10 bg-black px-3 py-2 text-sm font-black text-white">
                     {players.length}
@@ -1604,126 +1796,51 @@ export default function LockerRoom() {
                 </div>
               </div>
 
-              <div className="locker-room-detail-scroll relative isolate h-full min-h-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-white/10 bg-neutral-950/95 shadow-2xl">
-                {logo ? (
-                  <img
-                    src={logo}
-                    alt=""
-                    aria-hidden="true"
-                    className="pointer-events-none absolute right-[-120px] top-[-120px] z-0 h-[460px] w-[460px] object-contain opacity-[0.08]"
-                  />
-                ) : null}
+              <div className="relative isolate h-full min-h-0 overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/95 shadow-2xl">
 
                 {selectedPlayer ? (
-                  <div className="relative z-10 p-4">
-                    <div
-                      className="relative mb-6 border border-white/10 bg-transparent shadow-[0_18px_45px_rgba(0,0,0,0.32)]"
-                      style={{
-                        height: reportHeaderT.headerBox.height,
-                        paddingLeft: reportHeaderT.headerBox.paddingX,
-                        paddingRight: reportHeaderT.headerBox.paddingX,
-                        paddingTop: reportHeaderT.headerBox.paddingTop,
-                        borderTopLeftRadius: reportHeaderT.headerBox.borderRadius,
-                        borderTopRightRadius: reportHeaderT.headerBox.borderRadius,
-                        overflow: reportHeaderT.headerBox.overflow,
-                      }}
-                    >
-
-
-                      <div
-                        className="pointer-events-none absolute flex items-end justify-center"
-                        style={{
-                          left: reportHeaderT.faceCard.boxX,
-                          top: reportHeaderT.faceCard.boxY,
-                          width: reportHeaderT.faceCard.boxWidth,
-                          height: reportHeaderT.faceCard.boxHeight,
-                          zIndex: reportHeaderT.faceCard.zIndex,
-                        }}
-                        aria-hidden="true"
-                      >
-                        {selectedPlayer.headshot ? (
-                          <img
-                            src={selectedPlayer.headshot}
-                            alt=""
-                            className={`absolute left-1/2 w-auto max-w-none select-none object-contain ${
-                              reportHeaderT.faceCard.shadow ? "drop-shadow-[0_18px_28px_rgba(0,0,0,0.45)]" : ""
-                            }`}
-                            style={{
-                              bottom: reportHeaderT.faceCard.imageBottom,
-                              height: reportHeaderT.faceCard.imageSize,
-                              transform: `translate(calc(-50% + ${reportHeaderT.faceCard.imageX}px), ${reportHeaderT.faceCard.imageY}px)`,
-                            }}
-                          />
-                        ) : (
-                          <div className="flex h-32 w-28 items-center justify-center rounded-2xl border border-white/10 bg-black/45 text-sm font-bold text-neutral-500">
-                            No Image
-                          </div>
-                        )}
-                      </div>
-
-                      <div
-                        className="absolute min-w-0"
-                        style={{
-                          left: reportHeaderT.textBlock.x,
-                          top: reportHeaderT.textBlock.y,
-                          width: reportHeaderT.textBlock.width,
-                          zIndex: reportHeaderT.textBlock.zIndex,
-                          overflow: "visible",
-                        }}
-                      >
-                        <div
-                          className="font-black uppercase text-orange-300"
-                          style={{
-                            fontSize: reportHeaderT.reportLabel.fontSize,
-                            lineHeight: reportHeaderT.reportLabel.lineHeight,
-                            letterSpacing: reportHeaderT.reportLabel.letterSpacing,
-                            whiteSpace: reportHeaderT.reportLabel.whiteSpace,
-                            transform: `translate(${reportHeaderT.reportLabel.x}px, ${reportHeaderT.reportLabel.y}px)`,
-                          }}
-                        >
-                          Locker Room Report
+                  <div className="relative z-10 grid h-full min-h-0 grid-rows-[164px_minmax(0,1fr)] gap-2.5 p-3 pb-3">
+                    <div className="relative h-[164px] overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(100deg,rgba(20,20,20,0.96),rgba(10,10,10,0.90))] shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
+                      <div className="relative z-10 grid h-full grid-cols-[180px_minmax(0,1fr)_118px] items-center gap-5 px-6">
+                        <div className="relative h-full overflow-hidden">
+                          {selectedPlayer.headshot ? (
+                            <img
+                              src={selectedPlayer.headshot}
+                              alt=""
+                              className="absolute bottom-0 left-1/2 h-[158px] w-auto max-w-none -translate-x-1/2 object-contain drop-shadow-[0_18px_28px_rgba(0,0,0,0.45)]"
+                            />
+                          ) : (
+                            <div className="flex h-full items-center justify-center text-sm font-bold text-neutral-500">No Image</div>
+                          )}
                         </div>
-                        <h2
-                          className="font-black text-white"
-                          style={{
-                            marginTop: reportHeaderT.playerName.marginTop,
-                            fontSize: reportHeaderT.playerName.fontSize,
-                            lineHeight: reportHeaderT.playerName.lineHeight,
-                            whiteSpace: reportHeaderT.playerName.whiteSpace,
-                            overflow: "visible",
-                            transform: `translate(${reportHeaderT.playerName.x}px, ${reportHeaderT.playerName.y}px)`,
-                          }}
-                        >
-                          {selectedPlayer.playerName}
-                        </h2>
+
+                        <div className="min-w-0 self-center">
+                          <div className="text-[12px] font-black uppercase tracking-[0.28em] text-orange-300">Locker Room Report</div>
+                          <h2 className="mt-1 truncate text-[36px] font-black leading-[1.02] text-white">{selectedPlayer.playerName}</h2>
+                          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-black uppercase tracking-[0.10em] text-neutral-400">
+                            <span>{selectedPlayer.position || "-"}</span>
+                            <span className="text-neutral-700">•</span>
+                            <span>Age {selectedPlayer.age ?? "-"}</span>
+                            <span className="text-neutral-700">•</span>
+                            <span className="text-orange-200">{selectedPlayer.moodLabel || "Mood"}</span>
+                            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[9px] text-neutral-300">{trendText(selectedPlayer.trend)}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-center">
+                          <MoodRing score={selectedPlayer.moodScore} size={106} />
+                        </div>
                       </div>
-
-                      <LockerRoomReportMoodRing
-                        player={selectedPlayer}
-                        tuning={reportHeaderT.moodRing}
-                      />
-
-                      <LockerRoomMoodBreakdownDiagram
-                        player={selectedPlayer}
-                        moodRingTuning={reportHeaderT.moodRing}
-                        tuning={reportHeaderT.moodBreakdown}
-                      />
-
-                      <div
-                        className="pointer-events-none absolute"
-                        style={{
-                          left: reportHeaderT.greyDividerBar.x,
-                          bottom: reportHeaderT.greyDividerBar.y,
-                          width: reportHeaderT.greyDividerBar.width,
-                          height: reportHeaderT.greyDividerBar.height,
-                          backgroundColor: reportHeaderT.greyDividerBar.color,
-                          opacity: reportHeaderT.greyDividerBar.opacity,
-                          zIndex: reportHeaderT.greyDividerBar.zIndex,
-                        }}
-                      />
+                      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-white/45" />
                     </div>
 
-                    <SimpleMoodEventLog player={selectedPlayer} />
+                    <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_270px] gap-2.5">
+                      <div className="grid min-h-0 grid-rows-[minmax(0,1.08fr)_minmax(0,0.92fr)] gap-2.5">
+                        <MoodDriversPanel player={selectedPlayer} />
+                        <MoodLedgerStrip player={selectedPlayer} />
+                      </div>
+                      <ContractOutlookMini player={selectedPlayer} />
+                    </div>
                   </div>
                 ) : (
                   <div className="relative z-10 p-10 text-center text-lg font-black text-neutral-400">
@@ -1734,10 +1851,10 @@ export default function LockerRoom() {
             </div>
           )}
 
-          <div className="mt-8 flex justify-center">
+          <div className="mt-1.5 flex shrink-0 justify-center">
             <button
               onClick={() => navigate("/team-hub")}
-              className="rounded-lg bg-orange-600 px-8 py-3 font-semibold text-white transition hover:bg-orange-500 active:scale-95"
+              className="rounded-lg bg-orange-600 px-7 py-2.5 font-semibold text-white transition hover:bg-orange-500 active:scale-95"
             >
               Back to Team Hub
             </button>
