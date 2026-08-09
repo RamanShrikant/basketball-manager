@@ -31,7 +31,13 @@ except Exception:  # pragma: no cover
     estimate_market_value = None
     classify_team_direction = None
 
-EXTENSION_SYSTEM_VERSION = "2026-08-01_contract_deadline_rollover_fix"
+try:
+    from player_mood_logic import get_locker_room_moods
+except Exception:  # pragma: no cover
+    get_locker_room_moods = None
+
+EXTENSION_SYSTEM_VERSION = "2026-08-08_happy_mood_gate_v8"
+EXTENSION_HAPPY_MOOD_THRESHOLD = 76
 
 
 def _num(value: Any, fallback: float = 0.0) -> float:
@@ -330,108 +336,111 @@ def _team_direction(league_data: Dict[str, Any], team: Dict[str, Any]) -> str:
 
 
 def _player_mood_value(player: Dict[str, Any]) -> float:
+    # Legacy fallback only. Canonical extension decisions use Locker Room mood.
     mood = player.get("mood")
     if isinstance(mood, dict):
-        return _num(mood.get("value") or mood.get("score"), 50)
+        return _num(mood.get("moodScore") or mood.get("value") or mood.get("score"), 50)
     if isinstance(mood, (int, float)):
         return _num(mood, 50)
     return 50.0
 
 
-def _usage_concern(player: Dict[str, Any]) -> bool:
-    overall = _num(player.get("overall"), 70)
-    if overall < 77:
-        return False
-    stats = player.get("stats") if isinstance(player.get("stats"), dict) else {}
-    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
-    raw_minutes = (
-        player.get("minutes")
-        or player.get("minutesPerGame")
-        or stats.get("mpg")
-        or stats.get("minutesPerGame")
-        or meta.get("minutesPerGame")
-        or meta.get("roleMinutes")
-    )
-    if raw_minutes in [None, ""]:
-        role = str(player.get("role") or meta.get("role") or "").lower()
-        return overall >= 80 and any(token in role for token in ["bench", "reserve", "limited", "dnp"])
-    return _num(raw_minutes, 24) < (18 if overall < 82 else 24)
+def _extension_mood_lookup_keys(player: Dict[str, Any]) -> List[str]:
+    keys = []
+    for value in [
+        player.get("id"),
+        player.get("playerId"),
+        player.get("uuid"),
+        player.get("name"),
+        player.get("player"),
+    ]:
+        key = _norm(value)
+        if key and key not in keys:
+            keys.append(key)
+    return keys
 
 
-def _extension_refusal_reason(league_data: Dict[str, Any], team: Dict[str, Any], player: Dict[str, Any], extension_type: str) -> Optional[str]:
-    age = _num(player.get("age"), 27)
-    overall = _num(player.get("overall"), 70)
-    potential = _num(player.get("potential"), overall)
-    direction = _team_direction(league_data, team)
-    mood = _player_mood_value(player)
-    team_name = team.get("name") or team.get("teamName") or ""
-    roll = _stable_fraction(
-        EXTENSION_SYSTEM_VERSION,
-        team_name,
-        player.get("id") or player.get("name"),
-        _season_start_year(league_data),
-        extension_type,
-    )
+def _build_extension_mood_map(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, float]:
+    # Compute the exact Locker Room mood snapshot once per team, then reuse it.
+    if get_locker_room_moods is None:
+        return {}
 
-    if _usage_concern(player):
-        return "Not interested in an extension right now — he wants a larger role before committing."
-    if mood <= 30 and overall >= 76:
-        return "Not interested in an extension right now — his camp is unhappy with the current situation."
-    if mood <= 40 and overall >= 80 and roll < 0.42:
-        return "Not interested in an extension right now — his camp is unsure about the current situation."
+    try:
+        payload = payload or {}
+        current_date = _current_date(league_data, payload)
+        calendar = league_data.get("calendar") if isinstance(league_data.get("calendar"), dict) else {}
+        mood_league = {
+            **league_data,
+            "currentDate": current_date,
+            "calendarDate": current_date,
+            "calendar": {
+                **calendar,
+                "currentDate": current_date,
+                "cursorDate": current_date,
+            },
+        }
+        result = get_locker_room_moods(
+            mood_league,
+            team.get("name") or team.get("teamName"),
+        )
+        rows = result.get("players") if isinstance(result, dict) and isinstance(result.get("players"), list) else []
+        mood_map: Dict[str, float] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            raw_score = row.get("moodScore")
+            if raw_score in [None, ""]:
+                raw_score = row.get("score")
+            score = _num(raw_score, -1)
+            if score < 0:
+                continue
+            for value in [
+                row.get("playerId"),
+                row.get("id"),
+                row.get("playerName"),
+                row.get("name"),
+                row.get("player"),
+            ]:
+                key = _norm(value)
+                if key:
+                    mood_map[key] = score
+        return mood_map
+    except Exception:
+        return {}
 
-    # Rookie-scale players still usually like early security, but non-core or
-    # underused young players should sometimes wait instead of automatically
-    # signing any legal ask package.
-    if extension_type == "rookie_scale":
-        core_young = bool(overall >= 80 or potential >= 86)
-        elite_young = bool(overall >= 84 or potential >= 90)
-        if elite_young:
-            return None
-        wait_threshold = 0.06
-        if not core_young:
-            wait_threshold += 0.14
-        if direction in {"rebuilding", "rebuild"}:
-            wait_threshold += 0.03
-        if direction in {"contender", "contending", "win_now", "win now", "title_contender"}:
-            wait_threshold -= 0.03
-        if roll < max(0.0, min(0.24, wait_threshold)):
-            return "Not interested in an extension right now — he wants to see his role and market develop first."
-        return None
 
-    if direction in {"rebuilding", "rebuild"}:
-        if age >= 29 and overall >= 78:
-            return "Not interested in an extension with a rebuilding team — he prefers to evaluate free agency."
-        if age >= 27 and overall >= 82 and roll < 0.65:
-            return "Not interested in an extension right now — he wants to see the team's direction first."
-        if age >= 30 and overall < 78 and roll < 0.45:
-            return "Not interested in an extension right now — he may look for a better role in free agency."
+def _canonical_extension_mood_value(
+    player: Dict[str, Any],
+    payload: Optional[Dict[str, Any]] = None,
+) -> float:
+    payload = payload or {}
+    mood_map = payload.get("__extensionMoodByPlayer")
+    if isinstance(mood_map, dict):
+        for key in _extension_mood_lookup_keys(player):
+            if key in mood_map:
+                return _num(mood_map.get(key), 50)
+    return _player_mood_value(player)
 
-    if direction in {"retooling", "retool", "balanced"}:
-        if age >= 33 and overall < 84:
-            return "Not interested in an extension right now — he wants to see the team's direction first."
-        if overall >= 84 and age <= 31 and direction in {"retooling", "retool", "balanced"} and roll < 0.28:
-            return "Not interested in an extension right now — he believes free agency may create stronger options."
-        if age >= 30 and overall >= 78 and roll < 0.18:
-            return "Not interested in an extension right now — he wants to keep his options open."
 
-    # Even on good teams, some veterans should simply prefer free-agency
-    # leverage instead of always providing a signable ask package.
-    if overall >= 88 and roll < 0.24:
-        return "Not interested in an extension right now — his camp wants to test star-level leverage in free agency."
-    if overall >= 82 and age <= 31 and roll < 0.14:
-        return "Not interested in an extension right now — he believes free agency may create stronger options."
-    if age >= 34 and overall >= 84 and roll < 0.42:
-        return "Not interested in an extension right now — he wants to reassess after the season."
-    if age >= 32 and overall < 80 and roll < 0.34:
-        return "Not interested in an extension right now — he wants to keep his market open."
-
-    if direction in {"contender", "contending", "win_now", "win now", "title_contender"}:
-        if age >= 35 and overall >= 84 and roll < 0.32:
-            return "Not interested in an extension right now — he wants to reassess after the season."
-        if age >= 33 and overall < 78 and roll < 0.30:
-            return "Not interested in an extension right now — he wants to keep his market open."
-
+def _extension_refusal_reason(
+    league_data: Dict[str, Any],
+    team: Dict[str, Any],
+    player: Dict[str, Any],
+    extension_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    mood = _canonical_extension_mood_value(player, payload)
+    if mood < EXTENSION_HAPPY_MOOD_THRESHOLD:
+        rounded = _int(mood, 50)
+        return (
+            f"Not interested in an extension right now — his Locker Room mood is "
+            f"{rounded}. Players must be Happy ({EXTENSION_HAPPY_MOOD_THRESHOLD}+) "
+            f"before committing to an extension."
+        )
     return None
 
 
@@ -663,7 +672,15 @@ def build_extension_eligibility(
         base["deadlineType"] = "rookie" if extension_type == "rookie_scale" else "veteran"
         return base
 
-    refusal = _extension_refusal_reason(league_data, team, player, extension_type)
+    mood_payload = dict(payload or {})
+    if not isinstance(mood_payload.get("__extensionMoodByPlayer"), dict):
+        mood_payload["__extensionMoodByPlayer"] = _build_extension_mood_map(league_data, team, mood_payload)
+    extension_mood = _canonical_extension_mood_value(player, mood_payload)
+    base["extensionMoodScore"] = _int(extension_mood, 50)
+    base["extensionMoodRequired"] = EXTENSION_HAPPY_MOOD_THRESHOLD
+    base["extensionMoodEligible"] = bool(extension_mood >= EXTENSION_HAPPY_MOOD_THRESHOLD)
+
+    refusal = _extension_refusal_reason(league_data, team, player, extension_type, mood_payload)
     if refusal:
         base.update({
             "extensionType": extension_type,
@@ -932,9 +949,11 @@ def preview_contract_extensions(
     team = _find_team(league_data, user_team_name or "")
     if not team:
         return {"ok": False, "reason": "Selected team could not be found."}
-    rows = [build_extension_eligibility(league_data, team, player, payload) for player in team.get("players", []) or []]
+    mood_payload = dict(payload or {})
+    mood_payload["__extensionMoodByPlayer"] = _build_extension_mood_map(league_data, team, mood_payload)
+    rows = [build_extension_eligibility(league_data, team, player, mood_payload) for player in team.get("players", []) or []]
     rows.sort(key=lambda row: (not row.get("eligible"), -_num(row.get("overall"), 0), str(row.get("playerName") or "")))
-    state = _extension_state(league_data, payload)
+    state = _extension_state(league_data, mood_payload)
     return {
         "ok": True,
         "version": EXTENSION_SYSTEM_VERSION,
@@ -966,7 +985,9 @@ def submit_contract_extension_offer(
     player = _find_player(team, player_ref)
     if not player:
         return {"ok": False, "reason": "Player could not be found on the selected team."}
-    eligibility = build_extension_eligibility(updated, team, player, payload)
+    mood_payload = dict(payload or {})
+    mood_payload["__extensionMoodByPlayer"] = _build_extension_mood_map(updated, team, mood_payload)
+    eligibility = build_extension_eligibility(updated, team, player, mood_payload)
     if not eligibility.get("eligible"):
         return {"ok": False, "reason": eligibility.get("reason"), "eligibility": eligibility}
 
@@ -991,7 +1012,7 @@ def submit_contract_extension_offer(
         }
     else:
         decision = evaluate_extension_offer(updated, team, player, normalized_offer, eligibility)
-    state = _extension_state(updated, payload)
+    state = _extension_state(updated, mood_payload)
     negotiation = {
         "id": f"negotiation:{state['seasonYear']}:{_norm(team.get('name'))}:{_norm(player.get('id') or player.get('name'))}:{len(state['negotiations']) + 1}",
         "date": state["currentDate"],
@@ -1078,8 +1099,10 @@ def process_cpu_contract_extensions(
     for _, _, team in _iter_teams(updated):
         if user_team_name and _norm(team.get("name")) == _norm(user_team_name):
             continue
+        team_payload = dict(payload or {})
+        team_payload["__extensionMoodByPlayer"] = _build_extension_mood_map(updated, team, team_payload)
         for player in list(team.get("players", []) or []):
-            eligibility = build_extension_eligibility(updated, team, player, payload)
+            eligibility = build_extension_eligibility(updated, team, player, team_payload)
             if not eligibility.get("eligible"):
                 continue
             if not _phase_allowed_extension_type(phase, str(eligibility.get("extensionType") or ""), state.get("currentDate") or "", state):

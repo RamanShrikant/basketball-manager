@@ -25,6 +25,63 @@ function normalizeDateForSort(value = "") {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : "0000-00-00";
 }
 
+
+function formatCompactMoney(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  return `$${Math.round(n / 1000)}K`;
+}
+
+function addIsoMonths(value, months) {
+  const iso = normalizeIsoDate(value);
+  if (!iso) return "";
+  const [year, month, day] = iso.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, 1));
+  date.setUTCMonth(date.getUTCMonth() + Number(months || 0));
+  const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  date.setUTCDate(Math.min(day, lastDay));
+  return date.toISOString().slice(0, 10);
+}
+
+function extensionHistoryRows(leagueData = {}) {
+  const history = Array.isArray(leagueData?.contractExtensionHistory)
+    ? leagueData.contractExtensionHistory
+    : [];
+
+  return history.map((row, index) => {
+    const date = normalizeIsoDate(row?.date || row?.signedDate) || normalizeDateForSort(row?.recordedAt);
+    const playerName = row?.playerName || row?.name || "Player";
+    const teamName = row?.teamName || row?.toTeam || "Team";
+    const years = Number(row?.years || row?.extensionYears || row?.salaryByYear?.length || 0);
+    const totalValue = Number(
+      row?.totalValue ||
+      row?.totalNewMoney ||
+      (Array.isArray(row?.salaryByYear) ? row.salaryByYear.reduce((sum, salary) => sum + Number(salary || 0), 0) : 0)
+    );
+    const eligibleDate = addIsoMonths(date, 6);
+    const details = [
+      years > 0 ? `${years} year${years === 1 ? "" : "s"}` : "",
+      totalValue > 0 ? `${formatCompactMoney(totalValue)} new money` : "",
+      row?.extensionStartYear ? `starts ${row.extensionStartYear}` : "",
+    ].filter(Boolean).join(" • ");
+
+    return {
+      id: row?.id || `contract_extension_${index}_${teamName}_${playerName}`,
+      date,
+      type: "extension",
+      label: String(row?.actor || "").toLowerCase() === "cpu" ? "CPU Extension" : "Extension",
+      title: `${teamName} extended ${playerName}`,
+      teams: teamName,
+      details: details || `${playerName} signed a contract extension with ${teamName}.`,
+      restriction: eligibleDate
+        ? `Trade eligible ${formatLeagueDate(eligibleDate)}`
+        : "Recently extended — 6-month user-trade restriction applies.",
+    };
+  });
+}
+
 function tradeRows(leagueData = {}) {
   const history = Array.isArray(leagueData?.tradeHistory) ? leagueData.tradeHistory : [];
   return history.map((row, index) => {
@@ -58,7 +115,7 @@ function tradeRows(leagueData = {}) {
 function ledgerRows(leagueData = {}) {
   const state = getTradeRuleState(leagueData);
   return (Array.isArray(state.transactions) ? state.transactions : [])
-    .filter((row) => row?.type !== "trade")
+    .filter((row) => row?.type !== "trade" && row?.type !== "extension" && row?.type !== "contract_extension")
     .map((row, index) => ({
     id: row?.id || `ledger_${index}`,
     date: normalizeIsoDate(row?.date) || normalizeDateForSort(row?.recordedAt),
@@ -83,7 +140,7 @@ function ledgerRows(leagueData = {}) {
 }
 
 function buildRows(leagueData = {}) {
-  const rows = [...tradeRows(leagueData), ...ledgerRows(leagueData)];
+  const rows = [...tradeRows(leagueData), ...ledgerRows(leagueData), ...extensionHistoryRows(leagueData)];
   const seen = new Set();
   return rows
     .filter((row) => {

@@ -484,6 +484,44 @@ function formatMoney(amount) {
   return `${sign}$${Math.round(abs / 1000)}K`;
 }
 
+
+function getPlayerContractYearsRemaining(player, leagueData) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const salaries = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
+  if (!salaries.length) return 0;
+
+  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
+  let startYear = Number(contract.startYear || payrollSeasonYear);
+  let index = payrollSeasonYear - startYear;
+
+  if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && (index < 0 || index >= salaries.length)) {
+    startYear = payrollSeasonYear;
+    index = 0;
+  }
+
+  if (!Number.isFinite(index)) index = 0;
+  if (index < 0) index = 0;
+  if (index >= salaries.length) return 0;
+  return Math.max(0, salaries.length - index);
+}
+
+function getPlayerContractOptionAbbrev(player) {
+  const option = player?.contract?.option;
+  if (!option || typeof option !== "object" || option?.picked === true || option?.picked === false) return "";
+  const type = String(option?.type || "").toLowerCase();
+  if (type === "player") return "PO";
+  if (type === "team") return "TO";
+  return "";
+}
+
+function formatTradeFinderPlayerContract(player, leagueData) {
+  const salary = formatMoney(getPlayerSalary(player, leagueData));
+  const years = getPlayerContractYearsRemaining(player, leagueData);
+  const option = getPlayerContractOptionAbbrev(player);
+  const yearsLabel = years > 0 ? `${years} ${years === 1 ? "YR" : "YRS"} LEFT` : "EXPIRING";
+  return `${salary} • ${yearsLabel}${option ? ` • ${option}` : ""}`;
+}
+
 function formatPick(pick) {
   if (isResolvedDraftPickAsset(pick)) return formatResolvedDraftPickLabel(pick);
   const round = Number(pick?.round || 1) === 1 ? "1st" : "2nd";
@@ -1801,7 +1839,7 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
     ? validateCustomPickProtection(asset.pick, ownedRange.start, normalizedPickRule.protectEnd)
     : null;
   const contractLine = isPlayer
-    ? `Contract: ${formatMoney(getPlayerSalary(asset.player, leagueData))}`
+    ? formatTradeFinderPlayerContract(asset.player, leagueData)
     : isResolvedPick
       ? "Exact resolved draft pick"
       : `${protection || DEFAULT_PICK_PROTECTION} • Owns ${ownedRange?.start || "?"}-${ownedRange?.end || "?"}`;
@@ -2006,7 +2044,7 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
   );
 }
 
-function OfferAssetLine({ item, team, currentDate = null }) {
+function OfferAssetLine({ item, team, leagueData, currentDate = null }) {
   if (item.type === "player") {
     const headshotT = TRADE_FINDER_HEADSHOT_TUNING.offerRows;
     const ringT = TRADE_FINDER_RATING_RING_TUNING.offerRows;
@@ -2014,8 +2052,7 @@ function OfferAssetLine({ item, team, currentDate = null }) {
     const hasHeadshot = Boolean(playerHeadshotOf(item.player));
     const positionText = `${item.player?.pos || "-"}${item.player?.secondaryPos ? ` / ${item.player.secondaryPos}` : ""}`;
     const ageText = item.player?.age ? `Age ${item.player.age}` : "";
-    const salary = Number(item.salary || 0);
-    const contractLine = salary > 0 ? `Contract: ${formatMoney(salary)}` : "Contract: $0";
+    const contractLine = formatTradeFinderPlayerContract(item.player, leagueData);
 
     return (
       <div
@@ -3237,6 +3274,7 @@ export default function TradeFinder() {
                               key={`${offer.team?.name}-${offerIndex}-${item.label}-${index}`}
                               item={item}
                               team={isReverseFinder ? selectedTeam : offer.team}
+                              leagueData={leagueData}
                               currentDate={userTradeCurrentDate}
                             />
                           ))}
