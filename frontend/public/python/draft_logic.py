@@ -1007,6 +1007,105 @@ def _normalize_draft_prospect_for_state(
     return p
 
 
+# -------------------------
+# V25D progression metadata helpers
+# -------------------------
+def _v25_draft_class_type_from_context(league_data: Optional[Dict[str, Any]], prospect: Dict[str, Any], season_year: int) -> str:
+    league_data = league_data or {}
+    class_meta = league_data.get("draftClassMeta") if isinstance(league_data.get("draftClassMeta"), dict) else {}
+    raw = (
+        prospect.get("v25DraftClassType") or prospect.get("draftClassType") or prospect.get("classType") or
+        league_data.get("classType") or league_data.get("draftClassType") or class_meta.get("classType")
+    )
+    if raw is None:
+        raw = "custom" if str(prospect.get("id") or "").startswith("custom_") else "normal"
+    raw = str(raw or "normal").lower()
+    if raw in {"provided", "loaded"}:
+        raw = "custom"
+    return raw
+
+
+def _v25_prospect_grade_preview(prospect: Dict[str, Any], overall: int, potential: int, pick_number: Optional[int], league_data: Optional[Dict[str, Any]], season_year: int) -> float:
+    traits = prospect.get("traits") if isinstance(prospect.get("traits"), dict) else {}
+    star = _clamp(_safe_float(traits.get("starUpside"), 0.50), 0.0, 1.0)
+    work = _clamp(_safe_float(traits.get("workEthic"), 0.50), 0.0, 1.0)
+    boom = _clamp(_safe_float(traits.get("boomBust"), 0.50), 0.0, 1.0)
+    injury = _clamp(_safe_float(traits.get("injuryRisk"), 0.15), 0.0, 1.0)
+    rank = _safe_int(prospect.get("trueRank") or prospect.get("draftProjection") or prospect.get("rank"), pick_number or 999)
+    age = _safe_int(prospect.get("age"), 20)
+    gap = max(0, int(potential) - int(overall))
+    rank_bonus = 0.0
+    if rank <= 3:
+        rank_bonus = 4.0
+    elif rank <= 10:
+        rank_bonus = 2.4
+    elif rank <= 20:
+        rank_bonus = 1.2
+    elif rank <= 40:
+        rank_bonus = 0.3
+    elif rank < 999:
+        rank_bonus = -1.1
+    trait_bonus = (star - 0.5) * 7.0 + (work - 0.5) * 4.0 + (boom - 0.5) * 1.8 - max(0.0, injury - 0.20) * 5.0
+    age_bonus = _clamp((23 - age) * 1.10, -5.0, 6.0)
+    grade = 0.52 * int(potential) + 0.36 * int(overall) + 0.12 * (int(overall) + min(12, gap))
+    grade += rank_bonus + trait_bonus + age_bonus
+    class_type = _v25_draft_class_type_from_context(league_data, prospect, season_year)
+    class_mult = {
+        "weak": 0.86,
+        "normal": 1.00,
+        "custom": 1.00,
+        "deep": 1.06,
+        "star_heavy": 1.12,
+        "generational": 1.18,
+        "boom_bust": 1.07,
+        "deep_no_superstars": 1.04,
+    }.get(class_type, 1.00)
+    grade = 50.0 + (grade - 50.0) * class_mult
+    return round(_clamp(grade, 35.0, 99.0), 2)
+
+
+def _v25_reach_steal_type(pre_rank: int, pick_number: Optional[int], drafted: bool) -> str:
+    if not drafted or not pick_number:
+        return "undrafted"
+    rank = _safe_int(pre_rank, 999)
+    pick_no = _safe_int(pick_number, 999)
+    if rank <= 0 or rank >= 999 or pick_no <= 0 or pick_no >= 999:
+        return "unknown"
+    diff = pick_no - rank
+    if diff >= 20:
+        return "huge_steal"
+    if diff >= 8:
+        return "steal"
+    if diff <= -18:
+        return "huge_reach"
+    if diff <= -7:
+        return "reach"
+    return "fair_value"
+
+
+def _v25_prospect_context_for_player(
+    prospect: Dict[str, Any],
+    overall_rating: int,
+    potential: int,
+    overall_pick: Optional[int],
+    drafted: bool,
+    league_data: Optional[Dict[str, Any]],
+    season_year: int,
+) -> Dict[str, Any]:
+    pre_rank = _safe_int(prospect.get("trueRank") or prospect.get("draftProjection") or prospect.get("rank"), overall_pick or 999)
+    class_type = _v25_draft_class_type_from_context(league_data, prospect, season_year)
+    return {
+        "v25PreDraftRank": pre_rank if pre_rank > 0 and pre_rank < 999 else None,
+        "v25PreDraftProjection": _safe_int(prospect.get("draftProjection") or prospect.get("rank") or pre_rank, pre_rank),
+        "v25PreDraftTier": prospect.get("tier") or prospect.get("projectedDraftTier") or "",
+        "v25PreDraftOverall": int(overall_rating),
+        "v25PreDraftPotential": int(potential),
+        "v25ProspectGrade": _v25_prospect_grade_preview(prospect, int(overall_rating), int(potential), overall_pick, league_data, season_year),
+        "v25DraftClassType": class_type,
+        "v25ReachStealType": _v25_reach_steal_type(pre_rank, overall_pick, drafted),
+    }
+
+
 def _prospect_to_player(
     prospect: Dict[str, Any],
     team_name: str,
@@ -1043,6 +1142,16 @@ def _prospect_to_player(
 
     rights_team = team_name if drafted else None
     acquired_via = "draft" if drafted else "undrafted_free_agent"
+    player_potential = max(overall_rating, _safe_int(prospect.get("potential"), overall_rating))
+    v25_context = _v25_prospect_context_for_player(
+        prospect,
+        overall_rating,
+        player_potential,
+        overall_pick,
+        drafted,
+        league_data,
+        season_year,
+    )
     contract_type = contract.get("type") if isinstance(contract, dict) else "standard"
     if drafted:
         roster_status = "rookie_pending"
@@ -1069,7 +1178,7 @@ def _prospect_to_player(
         "age": _safe_int(prospect.get("age"), 20),
         "height": _safe_int(prospect.get("height"), 78),
         "weight": _safe_int(prospect.get("weight"), 215),
-        "potential": max(overall_rating, _safe_int(prospect.get("potential"), overall_rating)),
+        "potential": player_potential,
         "overall": overall_rating,
         "offRating": off_rating,
         "defRating": def_rating,
@@ -1086,6 +1195,16 @@ def _prospect_to_player(
             attrs[CLOSE],
         ),
         "scoringRatingSource": "v19_attrs_source_truth",
+        "traits": copy.deepcopy(prospect.get("traits")) if isinstance(prospect.get("traits"), dict) else {},
+        "floor": _safe_int(prospect.get("floor"), max(25, overall_rating - 4)),
+        "ceiling": _safe_int(prospect.get("ceiling"), player_potential),
+        "scouting": copy.deepcopy(prospect.get("scouting")) if isinstance(prospect.get("scouting"), dict) else {},
+        "trueRank": _safe_int(prospect.get("trueRank"), _safe_int(prospect.get("draftProjection"), overall_pick or 999)),
+        "draftProjection": _safe_int(prospect.get("draftProjection"), _safe_int(prospect.get("trueRank"), overall_pick or 999)),
+        "rank": _safe_int(prospect.get("rank"), _safe_int(prospect.get("trueRank"), overall_pick or 999)),
+        "tier": prospect.get("tier") or "",
+        "classType": v25_context.get("v25DraftClassType"),
+        "v25ProspectGrade": v25_context.get("v25ProspectGrade"),
         "attrs": attrs,
         "portraitId": prospect.get("portraitId") or "",
         "headshot": portrait_url,
@@ -1118,6 +1237,15 @@ def _prospect_to_player(
             "rookieSigningDecision": None,
             "proSeasons": 0,
             "yearsWithCurrentTeam": 0,
+            "traits": copy.deepcopy(prospect.get("traits")) if isinstance(prospect.get("traits"), dict) else {},
+            "floor": _safe_int(prospect.get("floor"), max(25, overall_rating - 4)),
+            "ceiling": _safe_int(prospect.get("ceiling"), player_potential),
+            "scouting": copy.deepcopy(prospect.get("scouting")) if isinstance(prospect.get("scouting"), dict) else {},
+            "trueRank": _safe_int(prospect.get("trueRank"), _safe_int(prospect.get("draftProjection"), overall_pick or 999)),
+            "draftProjection": _safe_int(prospect.get("draftProjection"), _safe_int(prospect.get("trueRank"), overall_pick or 999)),
+            "rank": _safe_int(prospect.get("rank"), _safe_int(prospect.get("trueRank"), overall_pick or 999)),
+            "tier": prospect.get("tier") or "",
+            **{k: v for k, v in v25_context.items() if v is not None},
             "college": prospect.get("college") or "",
             "nationality": prospect.get("nationality") or "",
             "archetype": prospect.get("archetype") or "",

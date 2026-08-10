@@ -21,7 +21,7 @@ import { formatLeagueDate, getOffseasonCurrentDate, writeLeagueClock } from "../
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
 const PROG_META_KEY = "bm_progression_meta_v1";
-const PROGRESSION_SHAPE_AUDIT_KEY = "bm_progression_shape_audit_v23";
+const PROGRESSION_SHAPE_AUDIT_KEY = "bm_progression_shape_audit_v25d";
 const PROG_DELTAS_KEY = "bm_progression_deltas_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
@@ -47,6 +47,10 @@ function enforcePotentialFloorAfterProgression(league) {
     if (Object.prototype.hasOwnProperty.call(player, "pot")) player.pot = potential;
     delete player.__skipProgressionCurrentRookie;
     delete player.__progressionOriginalOverall;
+    delete player.__progressionOriginalPotential;
+    delete player.__progressionOriginalAge;
+    delete player.__v25LeagueSeed;
+    delete player.__v25SeasonYear;
   }
   return league;
 }
@@ -103,7 +107,7 @@ function auditFinalProgressionLeague(league) {
   }).length;
   if (potentialBelowOverallCount) violations.push({ type: "potential_below_overall", count: potentialBelowOverallCount });
   return {
-    version: "v24_final_saved_pool_hard_caps_2027_universe",
+    version: "v25d_final_saved_pool_hard_caps_2027_universe",
     ok: violations.length === 0,
     playerCount: players.length,
     violations,
@@ -114,16 +118,24 @@ function auditFinalProgressionLeague(league) {
 }
 
 function prepareFinalShapeReconciliationLeague(league, beforeSnapshot, seasonYear) {
-  const next = snapshotLeague(league);
+  const next = ensureProgressionUniverseSeed(snapshotLeague(league));
   const beforeByKey = new Map();
   for (const row of getProgressionPlayerRowsFromLeague(beforeSnapshot, true)) {
-    beforeByKey.set(progressionAuditPlayerKey(row), Math.round(Number(row?.player?.overall ?? row?.player?.ovr ?? 70) || 70));
+    const player = row?.player || {};
+    const overall = Math.round(Number(player.overall ?? player.ovr ?? 70) || 70);
+    const potential = Math.round(Number(player.potential ?? player.pot ?? overall) || overall);
+    const age = Math.round(Number(player.age ?? 25) || 25);
+    beforeByKey.set(progressionAuditPlayerKey(row), { overall, potential, age });
   }
   for (const row of getProgressionPlayerRowsFromLeague(next, true)) {
     const player = row?.player;
     if (!player || typeof player !== "object") continue;
-    const beforeOverall = beforeByKey.get(progressionAuditPlayerKey(row));
-    if (Number.isFinite(beforeOverall)) player.__progressionOriginalOverall = beforeOverall;
+    const before = beforeByKey.get(progressionAuditPlayerKey(row));
+    if (before) {
+      player.__progressionOriginalOverall = before.overall;
+      player.__progressionOriginalPotential = before.potential;
+      player.__progressionOriginalAge = before.age;
+    }
     if (isCurrentDraftClassRookie(player, seasonYear)) player.__skipProgressionCurrentRookie = true;
   }
   return next;
@@ -131,7 +143,7 @@ function prepareFinalShapeReconciliationLeague(league, beforeSnapshot, seasonYea
 
 
 async function enforceFinalProgressionShapeUntilUiOk(league, beforeSnapshot, seasonYear, enforceShapeFn, runLabel = "progression") {
-  let updatedLeague = snapshotLeague(league);
+  let updatedLeague = ensureProgressionUniverseSeed(snapshotLeague(league));
   let backendFinalAudit = null;
   let savedPoolAudit = auditFinalProgressionLeague(enforcePotentialFloorAfterProgression(recomputeDerivedRatingsInLeague(snapshotLeague(updatedLeague))));
   let finalShapeRes = null;
@@ -139,14 +151,15 @@ async function enforceFinalProgressionShapeUntilUiOk(league, beforeSnapshot, sea
   for (let pass = 0; pass < 5 && !savedPoolAudit.ok; pass += 1) {
     const finalShapeInput = prepareFinalShapeReconciliationLeague(updatedLeague, beforeSnapshot, seasonYear);
     const finalShapeMsg = await enforceShapeFn(finalShapeInput, {
-      seed: Number(seasonYear) * 1009 + 240 + pass,
+      seed: buildProgressionRunSeed(finalShapeInput, seasonYear, `shape_${pass}`),
+      progressionSeedV25: getProgressionUniverseSeed(finalShapeInput),
       seasonYear,
       reconciliationPass: pass + 1,
       runLabel,
     });
     finalShapeRes = finalShapeMsg?.league ? finalShapeMsg : finalShapeMsg?.payload;
     if (!finalShapeRes?.league) {
-      throw new Error(`[${runLabel}] Final V24 saved-pool shape reconciliation returned no league.`);
+      throw new Error(`[${runLabel}] Final V25D saved-pool shape reconciliation returned no league.`);
     }
 
     backendFinalAudit = finalShapeRes?.debug?.hardShapeAudit || null;
@@ -282,6 +295,47 @@ function snapshotLeague(obj) {
   } catch {
     return obj;
   }
+}
+
+function makeProgressionUniverseSeed() {
+  const randomPart = (() => {
+    try {
+      if (typeof crypto !== "undefined" && crypto?.randomUUID) return crypto.randomUUID();
+    } catch {}
+    try {
+      const bytes = new Uint32Array(4);
+      crypto.getRandomValues(bytes);
+      return Array.from(bytes).map((v) => v.toString(16).padStart(8, "0")).join("");
+    } catch {}
+    return `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  })();
+  return `bm_v25d_${Date.now()}_${randomPart}`;
+}
+
+function ensureProgressionUniverseSeed(league) {
+  if (!league || typeof league !== "object") return league;
+  const meta = league.meta && typeof league.meta === "object" ? league.meta : {};
+  let seed = meta.progressionSeedV25 || league.progressionSeedV25 || meta.progressionUniverseSeedV25;
+  if (!seed) seed = makeProgressionUniverseSeed();
+  meta.progressionSeedV25 = String(seed);
+  meta.progressionUniverseSeedV25 = String(seed);
+  league.meta = meta;
+  league.progressionSeedV25 = String(seed);
+  return league;
+}
+
+function getProgressionUniverseSeed(league) {
+  return String(league?.meta?.progressionSeedV25 || league?.progressionSeedV25 || league?.meta?.progressionUniverseSeedV25 || "");
+}
+
+function buildProgressionRunSeed(league, seasonYear, suffix = "organic") {
+  const raw = `${getProgressionUniverseSeed(league)}|${Number(seasonYear || 0)}|${suffix}`;
+  let hash = 2166136261;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash ^= raw.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash >>> 0) % 2147483647;
 }
 
 function getSeasonYear(leagueData) {
@@ -2966,7 +3020,7 @@ export default function OffseasonHub() {
     // ratings before the snapshot, then build visible deltas from the final
     // post-recompute league. This prevents dev/full-offseason from saving
     // Python-bumped OFF/DEF/STAM while manual progression saves V19 values.
-    const sourceLeague = recomputeDerivedRatingsInLeague(snapshotLeague(historySafeLeague));
+    const sourceLeague = ensureProgressionUniverseSeed(recomputeDerivedRatingsInLeague(snapshotLeague(historySafeLeague)));
     const beforeSnapshot = snapshotLeague(sourceLeague);
     const leagueForProg = prepareLeagueForProgressionWorker(sourceLeague, seasonYear);
 
@@ -2987,7 +3041,8 @@ export default function OffseasonHub() {
     );
 
     const msg = await simEngine.computePlayerProgression(leagueForProg, statsByKey, {
-      seed: seasonYear,
+      seed: buildProgressionRunSeed(leagueForProg, seasonYear, "organic"),
+      progressionSeedV25: getProgressionUniverseSeed(leagueForProg),
       seasonYear,
     });
 
@@ -2999,7 +3054,7 @@ export default function OffseasonHub() {
 
     const preliminaryHardShapeAudit = res?.debug?.shapeLock?.hardShapeAudit || null;
     if (!preliminaryHardShapeAudit || preliminaryHardShapeAudit.ok !== true) {
-      console.warn(`V24 preliminary hard-shape validation reported violations; final saved-pool reconciliation will retry.`, preliminaryHardShapeAudit?.violations || []);
+      console.warn(`V25D preliminary hard-shape validation reported violations; final saved-pool reconciliation will retry.`, preliminaryHardShapeAudit?.violations || []);
     }
 
     let updatedLeague = restoreTwoWayBucketsAfterProgression(res.league, beforeSnapshot);
@@ -3029,7 +3084,7 @@ export default function OffseasonHub() {
     const backendFinalAudit = finalShapeOutcome.backendFinalAudit;
     const savedPoolAudit = finalShapeOutcome.savedPoolAudit;
     if (!savedPoolAudit?.ok) {
-      throw new Error(`Final V24 UI-visible hard-cap validation failed after retries: ${JSON.stringify(savedPoolAudit?.violations || [])}`);
+      throw new Error(`Final V25D UI-visible hard-cap validation failed after retries: ${JSON.stringify(savedPoolAudit?.violations || [])}`);
     }
     localStorage.setItem(
       PROGRESSION_SHAPE_AUDIT_KEY,
