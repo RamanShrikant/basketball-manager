@@ -325,7 +325,7 @@ def _standard_second_round_contract(player: Dict[str, Any], season_year: int, le
     if round_num == 1:
         return {
             "type": "standard",
-            "startYear": season_year + 1,
+            "startYear": season_year,
             "salaryByYear": [
                 first_salary,
                 int(first_salary * 1.05),
@@ -343,7 +343,7 @@ def _standard_second_round_contract(player: Dict[str, Any], season_year: int, le
 
     return {
         "type": "standard",
-        "startYear": season_year + 1,
+        "startYear": season_year,
         "salaryByYear": [first_salary, int(first_salary * 1.08)],
         "option": None,
         "source": "second_round_rookie_contract",
@@ -357,7 +357,7 @@ def _two_way_contract(season_year: int, league: Optional[Dict[str, Any]] = None)
     # accidentally treat it as standard salary.
     return {
         "type": "two_way",
-        "startYear": season_year + 1,
+        "startYear": season_year,
         "salaryByYear": [],
         "option": None,
         "source": "rookie_two_way_contract",
@@ -753,7 +753,7 @@ def _apply_decision_to_player(
         meta = player.setdefault("meta", {})
         if isinstance(meta, dict):
             meta["rookieSigningDecision"] = "standard"
-            meta["nbaRookieSeasonYear"] = season_year + 1
+            meta["nbaRookieSeasonYear"] = season_year
         rights_path = "first_round_rookie_scale_rfa_path" if draft_round == 1 else "second_round_standard_rfa_path"
         _set_rookie_team_control_rights(
             player = player,
@@ -777,12 +777,12 @@ def _apply_decision_to_player(
         meta = player.setdefault("meta", {})
         if isinstance(meta, dict):
             meta["rookieSigningDecision"] = "two_way"
-            meta["nbaRookieSeasonYear"] = season_year + 1
+            meta["nbaRookieSeasonYear"] = season_year
         player["twoWayMeta"] = {
             **(player.get("twoWayMeta") if isinstance(player.get("twoWayMeta"), dict) else {}),
             "assignedByTeam": team_name,
-            "assignedSeasonYear": season_year + 1,
-            "currentTwoWaySeasonYear": season_year + 1,
+            "assignedSeasonYear": season_year,
+            "currentTwoWaySeasonYear": season_year,
             "twoWayYearsUsed": 1,
             "maxTwoWayYears": 3,
             "source": "rookie_signing_two_way",

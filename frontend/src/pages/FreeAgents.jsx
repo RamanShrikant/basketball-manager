@@ -13,7 +13,7 @@ import PlayerRatingRing from "../components/PlayerRatingRing";
 import "../styles/BMAnimations.css";
 import { saveLeagueData, loadLeagueData } from "../utils/leagueStorage.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
-import { getFinancialSeasonYear } from "../utils/seasonContext.js";
+import { getContractSeasonYear, getFinancialSeasonYear } from "../utils/seasonContext.js";
 import {
   buildLegalFreeAgentSalarySchedule,
   getFreeAgentContractRules,
@@ -688,7 +688,10 @@ export default function FreeAgents() {
     );
   };
 
+  const getActiveContractSeasonYear = () => Number(getContractSeasonYear(workingLeagueData || {}) || getCurrentSeasonYear());
+
   const currentSeasonYear = getCurrentSeasonYear();
+  const activeContractSeasonYear = getActiveContractSeasonYear();
 
 const freeAgencyStateForMode =
   workingLeagueData?.freeAgencyState && typeof workingLeagueData.freeAgencyState === "object"
@@ -2028,7 +2031,9 @@ const isOffseasonMode =
   };
 
   const buildOfferContract = (year1Salary, years, currentOptionType, contractRules = null) => {
-    const startYear = getCurrentSeasonYear() + (isOffseasonMode ? 1 : 0);
+    // In live/offseason free agency, leagueData is already normalized to the active payroll year.
+    // Adding +1 here pushed new deals one salary-table column late after Y1.
+    const startYear = activeContractSeasonYear;
     const salaryByYear = getOfferSalaryByYear(
       year1Salary,
       years,
@@ -3951,7 +3956,7 @@ updateOffseasonState({
                               {offer.salaryByYear.map((amount, yearIdx) => (
                                 <div key={`${offer.teamName}-${yearIdx}`} className="flex justify-between gap-4 text-gray-300">
                                   <span>
-                                    {(offer?.contract?.startYear ?? (getCurrentSeasonYear() + (isOffseasonMode ? 1 : 0))) + yearIdx}
+                                    {(offer?.contract?.startYear ?? activeContractSeasonYear) + yearIdx}
                                   </span>
                                   <span>{formatDollars(amount)}</span>
                                 </div>

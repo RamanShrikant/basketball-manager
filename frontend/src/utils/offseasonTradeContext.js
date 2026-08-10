@@ -88,10 +88,21 @@ function readActiveLeagueClock() {
 
 function isActiveRegularSeasonClock(leagueData = {}, seasonYear = 0) {
   const clock = readActiveLeagueClock();
-  const date = String(clock?.date || "").trim();
-  const phase = String(clock?.phase || "").replace(/[^a-z]/g, "");
+  const leagueDate =
+    leagueData?.calendar?.currentDate ||
+    leagueData?.calendarDate ||
+    leagueData?.currentDate ||
+    leagueData?.date ||
+    "";
+  const leaguePhase =
+    leagueData?.calendar?.phase ||
+    leagueData?.seasonPhase ||
+    leagueData?.phase ||
+    "";
+  const date = String(clock?.date || leagueDate || "").trim();
+  const phase = String(clock?.phase || leaguePhase || "").replace(/[^a-z]/gi, "").toLowerCase();
   if (!date) return false;
-  if (phase === "regularseason") return true;
+  if (phase === "regularseason" || phase === "regular") return true;
 
   const [year, month] = date.split("-").map(Number);
   const startYear = Number(seasonYear || currentSeasonYear(leagueData));
@@ -99,8 +110,8 @@ function isActiveRegularSeasonClock(leagueData = {}, seasonYear = 0) {
 
   // Any active calendar date between opening night and the following June means
   // the stale offseason/draft localStorage for that year must not keep the Front
-  // Office in offseason mode. This fixes Y2 Contract Extensions staying locked
-  // after the new regular season has clearly started.
+  // Office in offseason mode. This fixes later seasons where the live league is
+  // already playing games but old offseason storage still hides tradeable players.
   return (year === startYear && month >= 9) || (year === startYear + 1 && month < 6);
 }
 

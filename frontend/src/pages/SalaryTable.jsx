@@ -7,30 +7,118 @@ import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
 import styles from "./SalaryTable.module.css";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
-import { getContractSeasonYear, getFinancialSeasonYear, withOffseasonSeasonContext } from "../utils/seasonContext.js";
+import {
+  getContractSeasonYear,
+  getDisplaySeasonYear,
+  getFinancialSeasonYear,
+  withOffseasonSeasonContext,
+} from "../utils/seasonContext.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
+const LEAGUE_META_KEY = "bm_league_meta_v1";
+
+function safeParseSalaryTableJSON(key, fallback = null) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "null");
+    return parsed && typeof parsed === "object" ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function readOffseasonStateForSalaryTable() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(OFFSEASON_STATE_KEY) || "null");
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
+  return safeParseSalaryTableJSON(OFFSEASON_STATE_KEY, null);
+}
+
+function readLeagueMetaForSalaryTable() {
+  return safeParseSalaryTableJSON(LEAGUE_META_KEY, null);
+}
+
+function validSalaryTableYear(value) {
+  const year = Number(value);
+  return Number.isFinite(year) && year >= 2020 && year <= 2100 ? Math.trunc(year) : null;
+}
+
+function pushSalaryTableYear(candidates, value) {
+  const year = validSalaryTableYear(value);
+  if (year && !candidates.includes(year)) candidates.push(year);
+}
+
+function resolveSalaryTableSeasonYear(leagueData) {
+  if (!leagueData || typeof leagueData !== "object") return getContractSeasonYear(leagueData || {});
+
+  const candidates = [];
+  const meta = readLeagueMetaForSalaryTable() || {};
+  const offseasonState = readOffseasonStateForSalaryTable() || {};
+  const freeAgencyState = leagueData?.freeAgencyState && typeof leagueData.freeAgencyState === "object"
+    ? leagueData.freeAgencyState
+    : {};
+
+  // Explicit payroll/contract fields are the safest source for this page.
+  for (const source of [leagueData, meta]) {
+    pushSalaryTableYear(candidates, source?.contractSeasonYear);
+    pushSalaryTableYear(candidates, source?.payrollSeasonYear);
+    pushSalaryTableYear(candidates, source?.currentPayrollSeasonYear);
+    pushSalaryTableYear(candidates, source?.salarySeasonYear);
+    pushSalaryTableYear(candidates, source?.currentSalarySeasonYear);
   }
+
+  // Offseason and free-agency state use the active payroll year directly.
+  if (offseasonState?.active) {
+    pushSalaryTableYear(candidates, offseasonState?.seasonYear);
+    pushSalaryTableYear(candidates, offseasonState?.payrollSeasonYear);
+    pushSalaryTableYear(candidates, offseasonState?.currentPayrollSeasonYear);
+  }
+
+  if (
+    freeAgencyState?.isActive ||
+    Number(freeAgencyState?.currentDay || 0) > 0 ||
+    Number(freeAgencyState?.maxDays || 0) > 0 ||
+    freeAgencyState?.marketComplete ||
+    freeAgencyState?.freeAgencyComplete ||
+    freeAgencyState?.completed ||
+    freeAgencyState?.isComplete
+  ) {
+    pushSalaryTableYear(candidates, freeAgencyState?.seasonYear);
+    pushSalaryTableYear(candidates, freeAgencyState?.payrollSeasonYear);
+  }
+
+  // The calendar and standings screens often advance the season as a start-year
+  // while the salary table is user-facing as the season-ending/payroll label.
+  // Include display/end-year candidates so Year 2+ cannot stay stuck on the
+  // imported roster filename year.
+  pushSalaryTableYear(candidates, getDisplaySeasonYear(leagueData));
+  pushSalaryTableYear(candidates, leagueData?.displaySeasonYear);
+  pushSalaryTableYear(candidates, leagueData?.seasonEndYear);
+  pushSalaryTableYear(candidates, leagueData?.awardsSeasonYear);
+  pushSalaryTableYear(candidates, meta?.displaySeasonYear);
+  pushSalaryTableYear(candidates, meta?.seasonEndYear);
+  pushSalaryTableYear(candidates, meta?.awardsSeasonYear);
+
+  // Last fallback: the legacy contract helper.
+  pushSalaryTableYear(candidates, getContractSeasonYear(leagueData));
+
+  return candidates.length ? Math.max(...candidates) : getContractSeasonYear(leagueData);
 }
 
 function buildSalaryContextLeague(leagueData) {
   if (!leagueData || typeof leagueData !== "object") return leagueData || {};
-  const offseasonState = readOffseasonStateForSalaryTable();
-  const y = Number(offseasonState?.seasonYear || 0);
-  if (!offseasonState?.active || !Number.isFinite(y) || y < 2020) return leagueData;
+
+  const y = resolveSalaryTableSeasonYear(leagueData);
+  if (!validSalaryTableYear(y)) return leagueData;
+
   return withOffseasonSeasonContext({
     ...leagueData,
+    contractSeasonYear: y,
+    payrollSeasonYear: y,
+    currentPayrollSeasonYear: y,
+    salarySeasonYear: y,
+    currentSalarySeasonYear: y,
+    displaySeasonYear: Math.max(y, validSalaryTableYear(leagueData?.displaySeasonYear) || y),
     financials: {
       ...(leagueData.financials || {}),
-      currentSeasonYear: Number(offseasonState?.currentFinancialSeasonYear || offseasonState?.financialSeasonYear || leagueData?.financials?.currentSeasonYear || y + 1),
-      currentFinancialSeasonYear: Number(offseasonState?.currentFinancialSeasonYear || offseasonState?.financialSeasonYear || leagueData?.financials?.currentFinancialSeasonYear || y + 1),
+      currentSeasonYear: Number(leagueData?.financials?.currentSeasonYear || y + 1),
+      currentFinancialSeasonYear: Number(leagueData?.financials?.currentFinancialSeasonYear || y + 1),
     },
   }, y);
 }
@@ -45,7 +133,7 @@ export default function SalaryTable() {
   const [deadCapInfo, setDeadCapInfo] = useState(null);
 
   const salaryContextLeague = useMemo(() => buildSalaryContextLeague(leagueData), [leagueData]);
-  const currentSeasonYear = getContractSeasonYear(salaryContextLeague || {});
+  const currentSeasonYear = resolveSalaryTableSeasonYear(leagueData || salaryContextLeague || {});
   const financialRules = getLeagueFinancialRules(salaryContextLeague || {}, getFinancialSeasonYear(salaryContextLeague || {}));
 
   const getLeagueAmount = (keys, fallback) => {
@@ -1104,6 +1192,11 @@ export default function SalaryTable() {
     return { label: "Below Cap", tone: "good" };
   }, [payrollThisYear, HARD_CAP, SECOND_APRON, FIRST_APRON, TAX_LINE, SALARY_CAP]);
 
+  const salaryPageLabel = useMemo(() => {
+    const source = leagueData?.leagueName || leagueData?.name || "League";
+    return `Payroll year ${currentSeasonYear} • ${source}`;
+  }, [leagueData?.leagueName, leagueData?.name, currentSeasonYear]);
+
   const toneClass = (tone) => {
     if (tone === "danger") return "bg-red-500/15 text-red-200 border-red-400/25";
     if (tone === "warn") return "bg-orange-500/15 text-orange-200 border-orange-400/25";
@@ -1753,7 +1846,7 @@ export default function SalaryTable() {
           <div className="flex shrink-0 items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl font-black text-orange-500 leading-tight">Salary Table</h1>
-              <div className="text-white/45 text-xs">{leagueData?.leagueName || "League"}</div>
+              <div className="text-white/45 text-xs">{salaryPageLabel}</div>
             </div>
 
             <div className="flex items-center gap-3 flex-wrap">

@@ -335,11 +335,50 @@ function weightedRowsAverage(rows, key, games) {
   }, 0) / safeGames);
 }
 
+function normalizeSeasonRowIdentity(row = {}) {
+  const source = String(row?.source || (row?.simulated ? "sim" : "history"));
+  const team = String(row?.teamName || row?.team || "").trim();
+  const games = Number(row?.games ?? row?.gp ?? 0);
+  const ppg = Number(row?.ppg ?? 0);
+  const rpg = Number(row?.rpg ?? 0);
+  const apg = Number(row?.apg ?? 0);
+  return `${source}|${team}|${games}|${ppg.toFixed(1)}|${rpg.toFixed(1)}|${apg.toFixed(1)}`;
+}
+
+function dedupeDisplaySeasonRows(rows = []) {
+  const seen = new Set();
+  const unique = [];
+  for (const row of rows || []) {
+    if (!row || row.rowType === "total") continue;
+    const key = normalizeSeasonRowIdentity(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(row);
+  }
+
+  const totalGames = unique.reduce((sum, row) => sum + Number(row?.games ?? row?.gp ?? 0), 0);
+  if (totalGames <= 90 || unique.length <= 1) return unique;
+
+  const archived = unique.filter((row) => row?.source === "sim" || row?.simulated || row?.recoveredFromStatsArchive);
+  const live = unique.filter((row) => row?.source === "live");
+
+  // During offseason/player cards, a just-archived season and a stale live stats map can both exist.
+  // If that creates impossible 100+ GP rows, prefer the archived season snapshot and drop live duplicates.
+  if (archived.length && live.length) {
+    const archivedGames = archived.reduce((sum, row) => sum + Number(row?.games ?? row?.gp ?? 0), 0);
+    if (archivedGames > 0 && archivedGames <= 90) return archived;
+  }
+
+  return unique;
+}
+
 function combineDisplaySeasonRows(rows) {
-  const clean = (rows || []).filter((row) => row && row.rowType !== "total");
+  const clean = dedupeDisplaySeasonRows(rows);
   if (!clean.length) return null;
 
-  const games = clean.reduce((sum, row) => sum + Number(row?.games ?? row?.gp ?? 0), 0);
+  const rawGames = clean.reduce((sum, row) => sum + Number(row?.games ?? row?.gp ?? 0), 0);
+  const games = Math.min(rawGames, 82);
+  const averageGames = rawGames || games || 1;
   const teamNames = uniqueTeamNames(clean);
   const latest = [...clean].reverse().find(Boolean) || {};
   const multiTeam = teamNames.length > 1;
@@ -351,14 +390,14 @@ function combineDisplaySeasonRows(rows) {
     teamLogo: multiTeam ? "" : latest.teamLogo,
     rowType: "team",
     games,
-    ppg: weightedRowsAverage(clean, "ppg", games),
-    rpg: weightedRowsAverage(clean, "rpg", games),
-    apg: weightedRowsAverage(clean, "apg", games),
-    spg: weightedRowsAverage(clean, "spg", games),
-    bpg: weightedRowsAverage(clean, "bpg", games),
-    fgPct: weightedRowsAverage(clean, "fgPct", games),
-    threePct: weightedRowsAverage(clean, "threePct", games),
-    ftPct: weightedRowsAverage(clean, "ftPct", games),
+    ppg: weightedRowsAverage(clean, "ppg", averageGames),
+    rpg: weightedRowsAverage(clean, "rpg", averageGames),
+    apg: weightedRowsAverage(clean, "apg", averageGames),
+    spg: weightedRowsAverage(clean, "spg", averageGames),
+    bpg: weightedRowsAverage(clean, "bpg", averageGames),
+    fgPct: weightedRowsAverage(clean, "fgPct", averageGames),
+    threePct: weightedRowsAverage(clean, "threePct", averageGames),
+    ftPct: weightedRowsAverage(clean, "ftPct", averageGames),
   };
 }
 

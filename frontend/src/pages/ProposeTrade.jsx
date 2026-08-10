@@ -400,6 +400,15 @@ function getContractTotalRemaining(player, leagueData) {
   return salaries.slice(idx).reduce((sum, value) => sum + Number(value || 0), 0);
 }
 
+function getPlayerContractOptionAbbrev(player) {
+  const option = player?.contract?.option;
+  if (!option || typeof option !== "object" || option?.picked === true || option?.picked === false) return "";
+  const type = String(option?.type || "").toLowerCase();
+  if (type === "player") return "PO";
+  if (type === "team") return "TO";
+  return "";
+}
+
 function formatMoney(amount) {
   const n = Number(amount || 0);
   if (!Number.isFinite(n) || n === 0) return "$0";
@@ -2132,6 +2141,12 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
               <span className="text-white">
                 {yearsRemaining || "—"} YR{yearsRemaining === 1 ? "" : "S"}
               </span>
+              {getPlayerContractOptionAbbrev(player) ? (
+                <>
+                  <span className="mx-2 text-white">•</span>
+                  <span className="text-orange-200">{getPlayerContractOptionAbbrev(player)}</span>
+                </>
+              ) : null}
             </div>
           </div>
         </div>

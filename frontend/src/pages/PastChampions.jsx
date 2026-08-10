@@ -78,9 +78,10 @@ export default function PastChampions() {
           </div>
 
           <div className="mb-2 min-h-0 flex-1 overflow-y-auto rounded-[28px] border border-white/10 bg-neutral-950/85 pb-2 shadow-2xl">
-            <div className="sticky top-0 z-10 grid grid-cols-[120px_1fr_1fr_160px] gap-4 border-b border-white/10 bg-neutral-900/95 px-5 py-2.5 text-xs font-black uppercase tracking-[0.18em] text-neutral-400 backdrop-blur">
+            <div className="sticky top-0 z-10 grid grid-cols-[120px_1fr_1fr_1fr_160px] gap-4 border-b border-white/10 bg-neutral-900/95 px-5 py-2.5 text-xs font-black uppercase tracking-[0.18em] text-neutral-400 backdrop-blur">
               <div>Season</div>
               <div>Champion</div>
+              <div>Runner-Up</div>
               <div>Finals MVP</div>
               <div>Finals</div>
             </div>
@@ -88,18 +89,20 @@ export default function PastChampions() {
             {rows.length ? (
               rows.map((row) => {
                 const championLogo = findTeamLogoByHistoryName(teamLogoLookup, row.championTeam);
+                const runnerUpLogo = findTeamLogoByHistoryName(teamLogoLookup, row.runnerUp);
                 const fmvpPlayer = findPlayerByHistoryName(playerLookup, row.finalsMvp);
                 return (
-                  <div key={`${row.seasonYear}_${row.championTeam}`} className="grid grid-cols-[120px_1fr_1fr_160px] gap-4 border-b border-white/10 px-5 py-3 last:border-b-0">
+                  <div key={`${row.seasonYear}_${row.championTeam}`} className="grid grid-cols-[120px_1fr_1fr_1fr_160px] gap-4 border-b border-white/10 px-5 py-3 last:border-b-0">
                     <div>
                       <div className="text-base font-black text-orange-200">{row.seasonLabel}</div>
                       <div className="text-xs font-bold uppercase tracking-[0.12em] text-neutral-600">{row.seasonYear}</div>
                     </div>
-                    <TeamCell name={row.championTeam} logo={championLogo} sub={row.runnerUp ? `def. ${row.runnerUp}` : "NBA Champion"} />
+                    <TeamCell name={row.championTeam} logo={championLogo} sub="NBA Champion" />
+                    <TeamCell name={row.runnerUp || "—"} logo={runnerUpLogo} sub={row.runnerUp ? "Finals runner-up" : "Runner-up not recorded"} />
                     <FinalsMvpCell name={row.finalsMvp} team={row.finalsMvpTeam} player={fmvpPlayer} />
                     <div>
                       <div className="text-base font-black text-white">{row.series || "—"}</div>
-                      {row.runnerUp ? <div className="mt-1 text-xs font-bold text-neutral-500">vs. {row.runnerUp}</div> : null}
+                      {row.runnerUp ? <div className="mt-1 text-xs font-bold text-neutral-500">def. {row.runnerUp}</div> : null}
                     </div>
                   </div>
                 );

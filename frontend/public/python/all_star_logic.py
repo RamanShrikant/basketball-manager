@@ -44,7 +44,7 @@ def _norm_wins(wins: float, cap: float, gamma: float = 2.0) -> float:
     return floor + (1.0 - floor) * base
 
 
-ALL_STAR_LOGIC_VERSION = "all_star_current_team_v2_20260730"
+ALL_STAR_LOGIC_VERSION = "all_star_gp_thresholds_v4_hotfix_20260810"
 
 def _normalize_player_stats(player_stats: Any) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
@@ -221,8 +221,22 @@ def _combine_rows_by_player_current_team(rows: List[Dict[str, Any]], current_tea
 
     return list(grouped.values())
 
-def _build_team_wins(schedule_by_date: Dict[str, Any], results_by_id: Dict[str, Any]) -> Dict[str, int]:
-    wins: Dict[str, int] = {}
+def _read_game_result(game: Dict[str, Any], results_by_id: Dict[str, Any]) -> Dict[str, Any]:
+    game_id = game.get("id")
+    result = (results_by_id or {}).get(game_id) or (results_by_id or {}).get(str(game_id)) or {}
+    if not result and isinstance(game.get("result"), dict):
+        result = game.get("result") or {}
+    return result if isinstance(result, dict) else {}
+
+
+def _build_team_records(schedule_by_date: Dict[str, Any], results_by_id: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
+    records: Dict[str, Dict[str, int]] = {}
+
+    def ensure(team: Any) -> Dict[str, int]:
+        name = str(team or "")
+        if name not in records:
+            records[name] = {"wins": 0, "losses": 0, "gp": 0}
+        return records[name]
 
     for _, games in (schedule_by_date or {}).items():
         if not isinstance(games, list):
@@ -231,24 +245,34 @@ def _build_team_wins(schedule_by_date: Dict[str, Any], results_by_id: Dict[str, 
         for game in games:
             if not isinstance(game, dict):
                 continue
-            if not game.get("played"):
+            result = _read_game_result(game, results_by_id)
+            if not game.get("played") and not result:
                 continue
 
-            game_id = game.get("id")
-            result = (results_by_id or {}).get(game_id) or {}
-            totals = result.get("totals") or result.get("score") or {}
-
+            totals = result.get("totals") or result.get("score") or result.get("winner") or {}
             home_pts = _to_int(totals.get("home"), 0)
             away_pts = _to_int(totals.get("away"), 0)
-
-            if home_pts == away_pts:
+            home_name = game.get("home")
+            away_name = game.get("away")
+            if not home_name or not away_name or home_pts == away_pts:
                 continue
 
-            winner = game.get("home") if home_pts > away_pts else game.get("away")
-            if winner:
-                wins[winner] = wins.get(winner, 0) + 1
+            home = ensure(home_name)
+            away = ensure(away_name)
+            home["gp"] += 1
+            away["gp"] += 1
+            if home_pts > away_pts:
+                home["wins"] += 1
+                away["losses"] += 1
+            else:
+                away["wins"] += 1
+                home["losses"] += 1
 
-    return wins
+    return records
+
+
+def _build_team_wins(schedule_by_date: Dict[str, Any], results_by_id: Dict[str, Any]) -> Dict[str, int]:
+    return {team: row.get("wins", 0) for team, row in _build_team_records(schedule_by_date, results_by_id).items()}
 
 
 def _decorate_players(
@@ -256,6 +280,7 @@ def _decorate_players(
     team_conf_map: Dict[str, str],
     team_wins: Dict[str, int],
     min_games: int,
+    team_games: Dict[str, int],
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
 
@@ -270,6 +295,17 @@ def _decorate_players(
         )
 
         if conference not in ("East", "West"):
+            continue
+
+        resolved_team_games = max(
+            _to_int(team_games.get(row["team"]), 0),
+            _to_int(team_games.get(_norm_team_name(row["team"])), 0),
+            gp,
+            min_games,
+        )
+        starter_min_games = max(min_games, int((resolved_team_games * 0.75) + 0.9999))
+        reserve_min_games = max(min_games, int((resolved_team_games * 0.60) + 0.9999))
+        if gp < reserve_min_games:
             continue
 
         ppg = row["pts_total"] / gp if gp else 0.0
@@ -300,6 +336,11 @@ def _decorate_players(
             "started": row["started"],
             "sixth": row["sixth"],
             "team_wins": team_wins_value,
+            "team_games": resolved_team_games,
+            "starter_min_games": starter_min_games,
+            "reserve_min_games": reserve_min_games,
+            "starter_eligible": gp >= starter_min_games,
+            "reserve_eligible": gp >= reserve_min_games,
             "def_rating": row["def_rating"],
             "all_star_score": 0.0,
         })
@@ -368,12 +409,35 @@ def _sort_players(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _build_conference_team(players: List[Dict[str, Any]], conference: str) -> Dict[str, Any]:
-    conf_players = [p for p in players if p["conference"] == conference]
-    conf_players = _sort_players(conf_players)
+    conf_players = _sort_players([p for p in players if p["conference"] == conference])
 
-    starters = conf_players[:5]
-    reserves = conf_players[5:12]
-    snubs = conf_players[12:20]
+    starters = _sort_players([p for p in conf_players if p.get("starter_eligible")])[:5]
+    selected_names = {p.get("player") for p in starters}
+
+    reserve_pool = [p for p in conf_players if p.get("reserve_eligible") and p.get("player") not in selected_names]
+    reserves = _sort_players(reserve_pool)[:7]
+    selected_names.update(p.get("player") for p in reserves)
+
+    # Emergency fallback only prevents empty teams in very short/debug seasons; normal All-Star
+    # selections still obey starter 75% GP and reserve 60% GP thresholds.
+    if len(starters) < 5:
+        for p in conf_players:
+            if p.get("player") in selected_names:
+                continue
+            starters.append(p)
+            selected_names.add(p.get("player"))
+            if len(starters) >= 5:
+                break
+    if len(reserves) < 7:
+        for p in conf_players:
+            if p.get("player") in selected_names:
+                continue
+            reserves.append(p)
+            selected_names.add(p.get("player"))
+            if len(reserves) >= 7:
+                break
+
+    snubs = [p for p in conf_players if p.get("player") not in selected_names][:8]
 
     return {
         "starters": starters,
@@ -399,13 +463,17 @@ def compute_all_stars(payload: Dict[str, Any]) -> Dict[str, Any]:
     current_team_by_player = _build_current_roster_team_map(league_data)
     normalized_rows = _combine_rows_by_player_current_team(normalized_rows, current_team_by_player)
     team_conf_map = _build_team_conference_map(league_data)
-    team_wins = _build_team_wins(schedule_by_date, results_by_id)
+    team_records = _build_team_records(schedule_by_date, results_by_id)
+    team_wins = {team: row.get("wins", 0) for team, row in team_records.items()}
+    team_games = {team: row.get("gp", 0) for team, row in team_records.items()}
+    team_games.update({_norm_team_name(team): gp for team, gp in list(team_games.items())})
 
     decorated = _decorate_players(
         normalized_rows = normalized_rows,
         team_conf_map = team_conf_map,
         team_wins = team_wins,
         min_games = min_games,
+        team_games = team_games,
     )
 
     decorated = _apply_all_star_scores(decorated)
@@ -417,6 +485,8 @@ def compute_all_stars(payload: Dict[str, Any]) -> Dict[str, Any]:
         "season": season,
         "cutoff_date": cutoff_date,
         "min_games": min_games,
+        "starter_games_pct": 0.75,
+        "reserve_games_pct": 0.60,
         "all_star_version": ALL_STAR_LOGIC_VERSION,
         "east": east,
         "west": west,

@@ -517,8 +517,12 @@ def _build_extension_ask_packages(
             label = "Long-term security"
         elif year >= 4:
             label = "Balanced commitment"
+        elif year == 3:
+            label = "Short-term premium"
+        elif year == 2:
+            label = "Bridge premium"
         else:
-            label = "Shorter premium"
+            label = "Prove-it premium"
         packages.append({
             "packageId": f"ask:{year}:{salaries[0]}",
             "askPackageId": f"ask:{year}:{salaries[0]}",

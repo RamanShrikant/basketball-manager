@@ -15,12 +15,31 @@ import { DIVISION_NAMES, groupTeamsByDivision, resolveTeamDivision } from "../ut
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const resultV3Key = (gameId) => `${RESULT_V3_PREFIX}${gameId}`;
+function parseMaybeCompressed(raw, fallback = null) {
+  if (!raw) return fallback;
+  try {
+    if (String(raw).startsWith("lz:")) {
+      const decompressed = LZString.decompressFromUTF16(String(raw).slice(3));
+      return decompressed ? JSON.parse(decompressed) : fallback;
+    }
+  } catch {}
+  try {
+    return JSON.parse(raw);
+  } catch {}
+  try {
+    const decompressed = LZString.decompressFromUTF16(raw);
+    return decompressed ? JSON.parse(decompressed) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 
 function loadResultsIndexV3() {
   try {
     const raw = localStorage.getItem(RESULT_V3_INDEX_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
+    const parsed = parseMaybeCompressed(raw, []);
     if (!Array.isArray(parsed)) return [];
     // ✅ normalize ids to strings so everything compares cleanly
     return parsed.map((x) => String(x));
@@ -33,9 +52,7 @@ function loadOneResultV3(gameIdStr) {
   try {
     const stored = localStorage.getItem(resultV3Key(gameIdStr));
     if (!stored) return null;
-    const decompressed = LZString.decompressFromUTF16(stored);
-    const json = decompressed || stored;
-    return JSON.parse(json);
+    return parseMaybeCompressed(stored, null);
   } catch {
     return null;
   }
@@ -59,7 +76,7 @@ export default function Standings() {
   const schedule = useMemo(() => {
     try {
       const raw = localStorage.getItem("bm_schedule_v3");
-      return raw ? JSON.parse(raw) : {};
+      return parseMaybeCompressed(raw, {}) || {};
     } catch {
       return {};
     }

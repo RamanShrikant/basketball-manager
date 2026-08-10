@@ -17,6 +17,7 @@ import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
 import { archiveCurrentSeasonIntoPlayerCards } from "../utils/playerCareerHistory.js";
 import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.js";
 import { formatLeagueDate, getOffseasonCurrentDate, writeLeagueClock } from "../utils/leagueClock.js";
+import { getContractSeasonYear } from "../utils/seasonContext.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -1911,16 +1912,11 @@ function getDevFillerSalary(player = {}, leagueData = {}) {
 }
 
 function buildDevFillerContract(player = {}, leagueData = {}) {
-  const seasonForContract = Number(
-    leagueData?.seasonYear ||
-      leagueData?.currentSeasonYear ||
-      leagueData?.seasonStartYear ||
-      2026
-  );
+  const seasonForContract = Number(getContractSeasonYear(leagueData || {}) || leagueData?.seasonYear || 2026);
 
   return {
     type: "standard",
-    startYear: seasonForContract + 1,
+    startYear: seasonForContract,
     salaryByYear: [Math.round(getDevFillerSalary(player, leagueData))],
     isGuaranteed: true,
     source: "dev_roster_minimum_fill",

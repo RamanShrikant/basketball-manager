@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-AWARDS_PY_VERSION = "2026-07-30_roty_prior_activity_lock_v4"
+AWARDS_PY_VERSION = "2026-08-10_all_rookie_gp_fill_v5"
 
 # ---------------------------------------------------------------------------
 # UTILITIES
@@ -609,13 +609,15 @@ def compute_awards(players_js, teams_js, season_js=None):
     sixth_sorted = sorted(sixth, key=lambda p: p.get("_6m", 0.0), reverse=True)
 
     # ROTY ladder
-    rookie_candidates = [p for p in eligible if _is_roty_candidate_for_awards(p, season_js)]
+    rookie_candidates_all = [p for p in players if _is_roty_candidate_for_awards(p, season_js)]
+    for p in rookie_candidates_all:
+        p["_team_wins"] = team_wins.get(p.get("team"), 0)
     # No broad young-player fallback here. It was letting established young vets
     # sneak into ROTY when metadata was missing. A generated/real rookie must be
     # explicitly rookie-marked or have zero prior NBA activity.
 
     MIN_ROOKIE_GAMES = 30
-    rookies = [p for p in rookie_candidates if _gp(p) >= MIN_ROOKIE_GAMES] or rookie_candidates
+    rookies = [p for p in rookie_candidates_all if _gp(p) >= MIN_ROOKIE_GAMES] or rookie_candidates_all
     ctx_roty = _ctx(rookies) if rookies else ctx
     max_roty_mpg = max((_mpg(p) for p in rookies), default=0)
 
@@ -624,6 +626,30 @@ def compute_awards(players_js, teams_js, season_js=None):
         p["_rookieEligible"] = True
 
     roty_sorted = sorted(rookies, key=lambda p: p.get("_roty", 0.0), reverse=True)
+
+    all_rookie_pool = []
+    seen_rookie_names = set()
+    for p in roty_sorted:
+        key = (str(p.get("player") or p.get("name") or "").lower(), str(p.get("team") or "").lower())
+        if key in seen_rookie_names:
+            continue
+        seen_rookie_names.add(key)
+        all_rookie_pool.append(p)
+    gp_fallback = sorted(
+        rookie_candidates_all,
+        key=lambda p: (_gp(p), _mpg(p), _ppg(p), p.get("_team_wins", 0)),
+        reverse=True,
+    )
+    for p in gp_fallback:
+        key = (str(p.get("player") or p.get("name") or "").lower(), str(p.get("team") or "").lower())
+        if key in seen_rookie_names:
+            continue
+        p["_rookieEligible"] = True
+        p.setdefault("_roty", 0.0)
+        seen_rookie_names.add(key)
+        all_rookie_pool.append(p)
+        if len(all_rookie_pool) >= 10:
+            break
 
     # MIP ladder: current simulated stats vs player.history.seasons previous row.
     mip_candidates = [p for p in eligible if _is_mip_candidate(p, season_js)]
@@ -669,9 +695,9 @@ def compute_awards(players_js, teams_js, season_js=None):
         "roty": roty_sorted[0] if roty_sorted else None,
         "roty_race": roty_sorted[:5],
         "roty_top10": roty_sorted[:10],
-        # All-Rookie teams follow the final ROTY ladder: ranks 1-5 and 6-10.
-        "all_rookie_first": roty_sorted[:5],
-        "all_rookie_second": roty_sorted[5:10],
+        # All-Rookie teams follow the ROTY ladder, then fill empty slots by rookie games played.
+        "all_rookie_first": all_rookie_pool[:5],
+        "all_rookie_second": all_rookie_pool[5:10],
 
         "awards_py_version": AWARDS_PY_VERSION,
     }

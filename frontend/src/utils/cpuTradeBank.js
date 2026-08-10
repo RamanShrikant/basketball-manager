@@ -1392,6 +1392,15 @@ function megaLeagueRankForTeam(leagueData = {}, context = {}, teamName = "") {
   return index >= 0 ? index + 1 : null;
 }
 
+function megaHealthyPowerRankForTeam(leagueData = {}, teamName = "") {
+  const rows = getAllTeams(leagueData)
+    .map((team) => ({ name: teamNameOf(team), power: teamTopOvr(team, 8) }))
+    .filter((row) => row.name && row.power > 0)
+    .sort((a, b) => b.power - a.power);
+  const index = rows.findIndex((row) => sameTeam(row.name, teamName));
+  return index >= 0 ? index + 1 : null;
+}
+
 function buildMegaDirectionMap(leagueData = {}, context = {}) {
   const teams = getAllTeams(leagueData);
   const baseRows = teams.map((team) => {
@@ -1404,8 +1413,13 @@ function buildMegaDirectionMap(leagueData = {}, context = {}) {
       power: teamTopOvr(team, 6),
       conferenceRank: null,
       leagueRank: null,
+      healthyPowerRank: null,
     };
   });
+
+  for (const row of baseRows) {
+    row.healthyPowerRank = megaHealthyPowerRankForTeam(leagueData, row.teamName);
+  }
 
   const useRecord = baseRows.filter((row) => row.games >= 20).length >= Math.max(1, Math.ceil(baseRows.length * 0.8));
   [...baseRows]
@@ -1447,15 +1461,18 @@ function buildMegaDirectionMap(leagueData = {}, context = {}) {
     }
     const under500 = row.pct != null && row.pct < 0.5;
     const bottomHalf = row.leagueRank != null && row.leagueRank >= 16;
+    const protectedHealthyCore = row.healthyPowerRank != null && row.healthyPowerRank <= 12;
     out.set(normalizeTeamName(row.teamName), {
       phase,
       pct: row.pct,
       games: row.games,
       conferenceRank: row.conferenceRank,
       leagueRank: row.leagueRank,
+      healthyPowerRank: row.healthyPowerRank,
+      protectedHealthyCore,
       under500,
       bottomHalf,
-      eligible: phase === "retooling" || phase === "rebuilding" || under500 || bottomHalf,
+      eligible: !protectedHealthyCore && (phase === "retooling" || phase === "rebuilding" || under500 || bottomHalf),
     });
   }
   return out;
@@ -1467,6 +1484,7 @@ function megaSellerDirection(leagueData = {}, context = {}, sellerTeam = {}) {
   const games = gamesPlayedForTeam(context, teamName);
   const conferenceRank = conferenceRankForTeam(leagueData, context, teamName);
   const leagueRank = megaLeagueRankForTeam(leagueData, context, teamName);
+  const healthyPowerRank = megaHealthyPowerRankForTeam(leagueData, teamName);
   let phase = "middle";
   if (conferenceRank != null) {
     if (conferenceRank >= 12) phase = "rebuilding";
@@ -1479,21 +1497,25 @@ function megaSellerDirection(leagueData = {}, context = {}, sellerTeam = {}) {
   }
   const under500 = pct != null && pct < 0.5;
   const bottomHalf = leagueRank != null && leagueRank >= 16;
+  const protectedHealthyCore = healthyPowerRank != null && healthyPowerRank <= 12;
   return {
     phase,
     pct,
     games,
     conferenceRank,
     leagueRank,
+    healthyPowerRank,
+    protectedHealthyCore,
     under500,
     bottomHalf,
-    eligible: phase === "retooling" || phase === "rebuilding" || under500 || bottomHalf,
+    eligible: !protectedHealthyCore && (phase === "retooling" || phase === "rebuilding" || under500 || bottomHalf),
   };
 }
 
 function strictMegaSellerBlockReason(leagueData = {}, context = {}, sellerTeam = {}, targetPlayer = null) {
   const direction = megaSellerDirection(leagueData, context, sellerTeam);
   if (direction.conferenceRank != null && direction.conferenceRank <= 7) return "seller_top7_conference";
+  if (direction.protectedHealthyCore) return "seller_top12_healthy_team_ovr";
   if (!direction.eligible) return "seller_not_mid_bad_retool_or_rebuild";
   if (targetPlayer) {
     const ovr = playerOvr(targetPlayer);
@@ -1579,6 +1601,7 @@ function buildFastMegaTargets(leagueData = {}, context = {}, directionMap = null
     if (!teamName || sameTeam(teamName, userTeamName)) continue;
     const direction = directions.get(normalizeTeamName(teamName)) || megaSellerDirection(leagueData, context, team);
     if (direction.conferenceRank != null && direction.conferenceRank <= 7) continue;
+    if (direction.protectedHealthyCore) continue;
     if (!direction.eligible) continue;
 
     for (const player of team?.players || []) {

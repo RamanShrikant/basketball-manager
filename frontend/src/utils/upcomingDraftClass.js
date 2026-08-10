@@ -200,6 +200,80 @@ export function readCustomDraftClassSetupForYear(seasonYear) {
   };
 }
 
+
+function slimUpcomingDraftProspect(row = {}, index = 0, seasonYear = 2026) {
+  const name = row?.name || row?.playerName || `Prospect ${index + 1}`;
+  return {
+    id: row?.id || row?.playerId || row?.prospectId || `upcoming_${seasonYear}_${String(index + 1).padStart(3, "0")}`,
+    name,
+    playerName: row?.playerName || name,
+    seasonYear: Number(row?.seasonYear || row?.draftClassYear || seasonYear),
+    draftClassYear: Number(row?.draftClassYear || row?.seasonYear || seasonYear),
+    draftProjection: Number(row?.draftProjection || row?.trueRank || row?.rank || index + 1),
+    trueRank: Number(row?.trueRank || row?.draftProjection || row?.rank || index + 1),
+    rank: Number(row?.rank || row?.draftProjection || row?.trueRank || index + 1),
+    boardRank: Number(row?.boardRank || row?.rank || row?.draftProjection || index + 1),
+    pos: row?.pos || row?.position || "-",
+    position: row?.position || row?.pos || "-",
+    age: Number(row?.age ?? row?.playerAge ?? 0) || 0,
+    height: row?.height ?? null,
+    weight: row?.weight ?? null,
+    overall: Number(row?.overall ?? row?.ovr ?? row?.rating ?? 0) || 0,
+    potential: Number(row?.potential ?? row?.pot ?? row?.potential_rating ?? 0) || 0,
+    archetype: row?.archetype || row?.type || "Prospect",
+    tier: row?.tier || "Draft Prospect",
+    college: row?.college || row?.school || row?.university || row?.academy || "",
+    school: row?.school || row?.college || row?.university || row?.academy || "",
+    sourceType: row?.sourceType || row?.collegeBucket || row?.draftSource || "",
+    nationality: row?.nationality || "",
+    headshot: row?.headshot || row?.image || row?.img || row?.portrait || "",
+    image: row?.image || row?.headshot || row?.img || row?.portrait || "",
+    img: row?.img || row?.headshot || row?.image || row?.portrait || "",
+    attrs: Array.isArray(row?.attrs) ? row.attrs.slice(0, 15) : Array.isArray(row?.attributes) ? row.attributes.slice(0, 15) : [],
+    traits: row?.traits && typeof row.traits === "object"
+      ? {
+          nbaReady: Number(row.traits.nbaReady || 0),
+          boomBust: Number(row.traits.boomBust || 0),
+          workEthic: Number(row.traits.workEthic || 0),
+          injuryRisk: Number(row.traits.injuryRisk || 0),
+          starUpside: Number(row.traits.starUpside || 0),
+        }
+      : undefined,
+    scouting: row?.scouting && typeof row.scouting === "object"
+      ? {
+          projectedRangeLow: row.scouting.projectedRangeLow,
+          projectedRangeHigh: row.scouting.projectedRangeHigh,
+          scoutedOverallRange: row.scouting.scoutedOverallRange,
+          scoutedPotentialRange: row.scouting.scoutedPotentialRange,
+        }
+      : undefined,
+  };
+}
+
+function buildStorableUpcomingDraftPreview(payload = {}, rows = []) {
+  const seasonYear = Number(payload?.seasonYear || payload?.draftClassYear || 2026);
+  return {
+    seasonYear,
+    draftClassYear: seasonYear,
+    sourceMode: payload?.sourceMode || "auto",
+    sourceFingerprint: payload?.sourceFingerprint || "",
+    classType: payload?.classType || payload?.classMeta?.classType || "auto",
+    seed: payload?.seed || payload?.classMeta?.seed || null,
+    seedMode: payload?.seedMode || payload?.classMeta?.seedMode || "fresh_random",
+    classMeta: {
+      seasonYear,
+      previewGenerated: true,
+      sourceMode: payload?.sourceMode || "auto",
+      classType: payload?.classType || payload?.classMeta?.classType || "auto",
+      seed: payload?.seed || payload?.classMeta?.seed || null,
+      seedMode: payload?.seedMode || payload?.classMeta?.seedMode || "fresh_random",
+    },
+    draftClass: rows.map((row, index) => slimUpcomingDraftProspect(row, index, seasonYear)),
+    savedAt: Date.now(),
+    slimStorage: true,
+  };
+}
+
 export function getUpcomingDraftClassStorageKey(seasonYear) {
   return `${UPCOMING_DRAFT_CLASS_PREFIX}${Number(seasonYear || 2026)}`;
 }
@@ -224,15 +298,54 @@ export function saveUpcomingDraftClassForYear(payload) {
   const rows = normalizeDraftClassRows(payload, resolvedYear);
   if (!rows.length) return null;
 
-  const next = {
-    ...payload,
-    seasonYear: resolvedYear,
-    draftClassYear: resolvedYear,
-    draftClass: rows,
-    savedAt: Date.now(),
-  };
+  const next = buildStorableUpcomingDraftPreview(
+    {
+      ...payload,
+      seasonYear: resolvedYear,
+      draftClassYear: resolvedYear,
+    },
+    rows
+  );
 
-  localStorage.setItem(getUpcomingDraftClassStorageKey(resolvedYear), JSON.stringify(next));
+  try {
+    localStorage.setItem(getUpcomingDraftClassStorageKey(resolvedYear), JSON.stringify(next));
+  } catch (err) {
+    // localStorage quota should never blank the screen. Return the in-memory board
+    // and persist only the smallest stable board possible for refresh recovery.
+    try {
+      const emergency = {
+        seasonYear: resolvedYear,
+        draftClassYear: resolvedYear,
+        sourceMode: next.sourceMode,
+        sourceFingerprint: next.sourceFingerprint,
+        classType: next.classType,
+        seed: next.seed,
+        seedMode: next.seedMode,
+        savedAt: Date.now(),
+        emergencySlimStorage: true,
+        draftClass: rows.map((row, index) => ({
+          id: row?.id || `upcoming_${resolvedYear}_${index + 1}`,
+          name: row?.name || row?.playerName || `Prospect ${index + 1}`,
+          playerName: row?.playerName || row?.name || `Prospect ${index + 1}`,
+          seasonYear: resolvedYear,
+          draftClassYear: resolvedYear,
+          draftProjection: Number(row?.draftProjection || row?.trueRank || row?.rank || index + 1),
+          trueRank: Number(row?.trueRank || row?.draftProjection || row?.rank || index + 1),
+          rank: Number(row?.rank || row?.draftProjection || row?.trueRank || index + 1),
+          pos: row?.pos || row?.position || "-",
+          position: row?.position || row?.pos || "-",
+          overall: Number(row?.overall ?? row?.ovr ?? row?.rating ?? 0) || 0,
+          potential: Number(row?.potential ?? row?.pot ?? row?.potential_rating ?? 0) || 0,
+          age: Number(row?.age ?? 0) || 0,
+          archetype: row?.archetype || row?.type || "Prospect",
+          tier: row?.tier || "Draft Prospect",
+          headshot: row?.headshot || row?.image || row?.img || "",
+        })),
+      };
+      localStorage.setItem(getUpcomingDraftClassStorageKey(resolvedYear), JSON.stringify(emergency));
+    } catch {}
+    console.warn("[UpcomingDraft] Preview persistence skipped because localStorage quota is full.", err);
+  }
   return next;
 }
 

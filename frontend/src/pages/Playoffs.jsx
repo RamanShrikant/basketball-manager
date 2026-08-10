@@ -1578,10 +1578,29 @@ export default function Playoffs() {
           (row) => `${row.player}__${row.team}` === winnerKey
         );
 
+        const finalsSeries = post?.finals || {};
+        const highWonFinals = Number(finalsSeries?.winsHigh || 0) >= Number(finalsSeries?.winsLow || 0);
+        const finalsRunnerUp = champModal.team === finalsSeries?.highSeedTeam
+          ? finalsSeries?.lowSeedTeam
+          : champModal.team === finalsSeries?.lowSeedTeam
+          ? finalsSeries?.highSeedTeam
+          : (highWonFinals ? finalsSeries?.lowSeedTeam : finalsSeries?.highSeedTeam);
+        const finalsSeriesScore = champModal.team === finalsSeries?.highSeedTeam
+          ? `${Number(finalsSeries?.winsHigh || 0)}-${Number(finalsSeries?.winsLow || 0)}`
+          : champModal.team === finalsSeries?.lowSeedTeam
+          ? `${Number(finalsSeries?.winsLow || 0)}-${Number(finalsSeries?.winsHigh || 0)}`
+          : highWonFinals
+          ? `${Number(finalsSeries?.winsHigh || 0)}-${Number(finalsSeries?.winsLow || 0)}`
+          : `${Number(finalsSeries?.winsLow || 0)}-${Number(finalsSeries?.winsHigh || 0)}`;
+
         const enrichedPayload = {
           ...payload,
           season: fmvpSeasonYear,
           champion_team: champModal.team,
+          runner_up: finalsRunnerUp || "",
+          runnerUp: finalsRunnerUp || "",
+          series: finalsSeriesScore,
+          result: finalsSeriesScore,
           awards_py_version: EXPECTED_AWARDS_PY_VERSION,
           finals_mvp: payload?.finals_mvp
             ? {
@@ -1594,9 +1613,27 @@ export default function Playoffs() {
         safeSetSmallJSON(FINALS_MVP_KEY, enrichedPayload);
       } catch (e) {
         console.warn("[playoffs] Finals MVP compute failed", e);
+        const finalsSeries = post?.finals || {};
+        const highWonFinals = Number(finalsSeries?.winsHigh || 0) >= Number(finalsSeries?.winsLow || 0);
+        const finalsRunnerUp = champModal.team === finalsSeries?.highSeedTeam
+          ? finalsSeries?.lowSeedTeam
+          : champModal.team === finalsSeries?.lowSeedTeam
+          ? finalsSeries?.highSeedTeam
+          : (highWonFinals ? finalsSeries?.lowSeedTeam : finalsSeries?.highSeedTeam);
+        const finalsSeriesScore = champModal.team === finalsSeries?.highSeedTeam
+          ? `${Number(finalsSeries?.winsHigh || 0)}-${Number(finalsSeries?.winsLow || 0)}`
+          : champModal.team === finalsSeries?.lowSeedTeam
+          ? `${Number(finalsSeries?.winsLow || 0)}-${Number(finalsSeries?.winsHigh || 0)}`
+          : highWonFinals
+          ? `${Number(finalsSeries?.winsHigh || 0)}-${Number(finalsSeries?.winsLow || 0)}`
+          : `${Number(finalsSeries?.winsLow || 0)}-${Number(finalsSeries?.winsHigh || 0)}`;
         safeSetSmallJSON(FINALS_MVP_KEY, {
           season: fmvpSeasonYear,
           champion_team: champModal.team,
+          runner_up: finalsRunnerUp || "",
+          runnerUp: finalsRunnerUp || "",
+          series: finalsSeriesScore,
+          result: finalsSeriesScore,
           finals_mvp: null,
           error: String(e?.message || e),
         });

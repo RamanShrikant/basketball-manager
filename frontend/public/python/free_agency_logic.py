@@ -191,10 +191,61 @@ def get_current_season_year(league_data: Dict[str, Any]) -> int:
         or DEFAULT_SEASON_YEAR
     )
 
+
+def _safe_year(value: Any) -> Optional[int]:
+    try:
+        year = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    if 2020 <= year <= 2100:
+        return year
+    return None
+
+
+def get_explicit_payroll_season_year(league_data: Dict[str, Any]) -> Optional[int]:
+    # Frontend offseason flows wrap leagueData with these explicit season keys.
+    # When one exists it is already the active payroll/contract year, so backend
+    # free-agency code must not add another +1 or salary tables/trade eligibility
+    # drift one season behind.
+    for key in (
+        "contractSeasonYear",
+        "payrollSeasonYear",
+        "currentPayrollSeasonYear",
+        "salarySeasonYear",
+        "currentSalarySeasonYear",
+        "financialSeasonYear",
+    ):
+        year = _safe_year(league_data.get(key))
+        if year is not None:
+            return year
+
+    state = league_data.get("freeAgencyState", {})
+    if isinstance(state, dict):
+        for key in ("contractSeasonYear", "payrollSeasonYear", "seasonYear", "targetSeasonYear"):
+            year = _safe_year(state.get(key))
+            if year is not None:
+                return year
+
+    offseason_state = league_data.get("offseasonState", {})
+    if isinstance(offseason_state, dict):
+        for key in ("contractSeasonYear", "payrollSeasonYear", "seasonYear", "targetSeasonYear"):
+            year = _safe_year(offseason_state.get(key))
+            if year is not None:
+                return year
+
+    return None
+
+
 def get_operating_season_year(league_data: Dict[str, Any]) -> int:
+    explicit_year = get_explicit_payroll_season_year(league_data)
+    if explicit_year is not None:
+        return explicit_year
+
     season_year = get_current_season_year(league_data)
     state = league_data.get("freeAgencyState", {})
     if isinstance(state, dict) and state.get("isActive"):
+        # Legacy saves without explicit payroll context still enter FA immediately
+        # after a completed season, so keep the old +1 fallback only there.
         return season_year + 1
     return season_year
 
@@ -3096,7 +3147,8 @@ def get_team_cap_snapshot(
             for player in league_data.get("freeAgents", [])
         )
         if has_offseason_free_agents:
-            season_year = get_current_season_year(league_data) + 1
+            explicit_year = get_explicit_payroll_season_year(league_data)
+            season_year = explicit_year if explicit_year is not None else get_current_season_year(league_data) + 1
 
     salary_cap = get_salary_cap(league_data)
     roster_limit = get_roster_limit(league_data)
@@ -3384,7 +3436,7 @@ def apply_free_agency_start_year(
 
     state = ensure_free_agency_state(league_data)
     if state.get("isActive"):
-        normalized["startYear"] = get_current_season_year(league_data) + 1
+        normalized["startYear"] = get_operating_season_year(league_data)
 
     return normalized
 

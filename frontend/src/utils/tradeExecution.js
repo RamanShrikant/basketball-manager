@@ -1128,12 +1128,26 @@ function megaLeagueRankForSeller(leagueData = {}, recordsByTeam = {}, sellerName
   return index >= 0 ? index + 1 : null;
 }
 
+
+function megaHealthyPowerRankForSeller(leagueData = {}, sellerName = "") {
+  const rows = getAllTeamsFromLeague(leagueData)
+    .map((team) => ({
+      name: team?.name || team?.teamName || "",
+      power: teamTopOvrForMega(team, 8),
+    }))
+    .filter((row) => row.name && row.power > 0)
+    .sort((a, b) => b.power - a.power);
+  const index = rows.findIndex((row) => sameTeamName(row.name, sellerName));
+  return index >= 0 ? index + 1 : null;
+}
+
 function megaSellerDirectionForExecution(leagueData = {}, recordsByTeam = {}, sellerTeam = {}) {
   const sellerName = sellerTeam?.name || sellerTeam?.teamName || "";
   const games = megaGamesPlayed(recordsByTeam, sellerName);
   const pct = megaWinPct(recordsByTeam, sellerName);
   const conferenceRank = conferenceRankForMegaSeller(leagueData, recordsByTeam, sellerName);
   const leagueRank = megaLeagueRankForSeller(leagueData, recordsByTeam, sellerName);
+  const healthyPowerRank = megaHealthyPowerRankForSeller(leagueData, sellerName);
   let phase = "middle";
   if (conferenceRank != null) {
     if (conferenceRank >= 12) phase = "rebuilding";
@@ -1146,19 +1160,23 @@ function megaSellerDirectionForExecution(leagueData = {}, recordsByTeam = {}, se
   }
   const under500 = pct != null && pct < 0.5;
   const bottomHalf = leagueRank != null && leagueRank >= 16;
+  const protectedHealthyCore = healthyPowerRank != null && healthyPowerRank <= 12;
   return {
     phase,
     games,
     pct,
     conferenceRank,
     leagueRank,
-    eligible: phase === "retooling" || phase === "rebuilding" || under500 || bottomHalf,
+    healthyPowerRank,
+    protectedHealthyCore,
+    eligible: !protectedHealthyCore && (phase === "retooling" || phase === "rebuilding" || under500 || bottomHalf),
   };
 }
 
 function strictMegaSellerExecutionBlockReason(leagueData = {}, recordsByTeam = {}, sellerTeam = {}, targetPlayer = null) {
   const direction = megaSellerDirectionForExecution(leagueData, recordsByTeam, sellerTeam);
   if (direction.conferenceRank != null && direction.conferenceRank <= 7) return "seller_top7_conference";
+  if (direction.protectedHealthyCore) return "seller_top12_healthy_team_ovr";
   if (!direction.eligible) return "seller_not_mid_bad_retool_or_rebuild";
   if (targetPlayer) {
     const ovr = finiteNumber(targetPlayer?.overall ?? targetPlayer?.ovr ?? targetPlayer?.rating, 0);

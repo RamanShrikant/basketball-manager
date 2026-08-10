@@ -184,6 +184,15 @@ function getContractTotalRemaining(player, leagueData) {
   return salaries.slice(idx).reduce((sum, value) => sum + Number(value || 0), 0);
 }
 
+function getPlayerContractOptionAbbrev(player) {
+  const option = player?.contract?.option;
+  if (!option || typeof option !== "object" || option?.picked === true || option?.picked === false) return "";
+  const type = String(option?.type || "").toLowerCase();
+  if (type === "player") return "PO";
+  if (type === "team") return "TO";
+  return "";
+}
+
 function formatMoney(amount) {
   const n = Number(amount || 0);
   if (!Number.isFinite(n) || n === 0) return "$0";
@@ -605,7 +614,12 @@ export default function TradePlayerSelect() {
                       }`}
                     >
                       <td className="py-2 px-3 whitespace-nowrap text-left pl-4 font-semibold">
-                        {playerNameOf(p)}
+                        <span>{playerNameOf(p)}</span>
+                        {getPlayerContractOptionAbbrev(p) ? (
+                          <span className="ml-2 rounded-full border border-sky-300/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-black text-sky-100">
+                            {getPlayerContractOptionAbbrev(p)}
+                          </span>
+                        ) : null}
                         <TradeInjuryBadge player={p} currentDate={userTradeCurrentDate} />
                         {alreadyAdded && (
                           <span className="ml-3 inline-flex items-center rounded-full border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-orange-200">
