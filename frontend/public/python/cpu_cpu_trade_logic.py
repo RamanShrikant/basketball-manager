@@ -1347,13 +1347,22 @@ def _player_combo_options(pool: List[Dict[str, Any]], max_players: int, rng: ran
                     add_combo([ordered[i], ordered[j], ordered[k]])
 
     rng.shuffle(combos)
-    combos.sort(
-        key=lambda combo: (
-            -abs(_package_salary([_player_item(p) for p in combo], season_year) - target_salary) / 10_000_000,
-            _package_value([_player_item(p) for p in combo], season_year),
-        ),
-        reverse=True,
-    )
+
+    def combo_sort_key(combo: List[Dict[str, Any]]) -> Tuple[float, float]:
+        # Preserve the exact old left-to-right package math, but calculate the
+        # player-only salary/value pair directly instead of constructing and
+        # rescanning two identical temporary item lists for every sort key.
+        combo_salary = 0
+        combo_value = 0.0
+        for player in combo:
+            combo_salary += _salary_for_year(player, season_year)
+            combo_value += _rough_value_player(player, season_year)
+        return (
+            -abs(combo_salary - target_salary) / 10_000_000,
+            combo_value,
+        )
+
+    combos.sort(key=combo_sort_key, reverse=True)
     return combos[:84 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 42]
 
 
@@ -1463,6 +1472,24 @@ def _build_candidate(
     # available while making expensive players require multi-asset frameworks.
     for combo in player_combos:
         outgoing_player_items = [_player_item(p) for p in combo]
+
+        # Every pick bundle below shares the exact same outgoing player package.
+        # Compute those deterministic player facts once per combo instead of
+        # rediscovering them through multiple full package scans for every pick
+        # permutation. Picks add no salary or player-quality facts.
+        combo_salary = 0
+        combo_value = 0.0
+        combo_premium_young_count = 0
+        combo_best_player_ovr = 0.0
+        for player in combo:
+            combo_salary += _salary_for_year(player, season_year)
+            combo_value += _rough_value_player(player, season_year)
+            player_ovr = _player_ovr(player)
+            if player_ovr > combo_best_player_ovr:
+                combo_best_player_ovr = player_ovr
+            if _player_age(player) <= 24 and _player_pot(player) >= 82:
+                combo_premium_young_count += 1
+
         for pick_bundle in pick_bundles:
             if len(combo) + len(pick_bundle) > max_assets:
                 continue
@@ -1470,33 +1497,41 @@ def _build_candidate(
                 continue
             if target_ovr >= 87 and len(combo) + len(pick_bundle) < 3:
                 continue
-            to_items = outgoing_player_items + [_pick_item(p) for p in pick_bundle]
-            if not to_items:
-                continue
+            # Package structure is player-combo facts plus this raw pick bundle.
+            # This is mathematically identical to inspecting `to_items`, but avoids
+            # rebuilding/rescanning that same list several times before we know the
+            # package is viable.
+            first_count = 0
+            second_count = 0
+            for pick in pick_bundle:
+                round_no = _pick_round(pick)
+                if round_no == 1:
+                    first_count += 1
+                elif round_no == 2:
+                    second_count += 1
 
             # Starter/high-end targets must be paid for with actual trade capital,
             # not just the two second-round-pick shells that made v2 feel shallow.
             if target_ovr >= MAJOR_TRADE_TARGET_OVR:
                 has_real_anchor = (
-                    _has_first(to_items) or
-                    _has_premium_young_asset(to_items) or
-                    _best_player_ovr(to_items) >= max(76.0, target_ovr - 4.0)
+                    first_count > 0 or
+                    combo_premium_young_count > 0 or
+                    combo_best_player_ovr >= max(76.0, target_ovr - 4.0)
                 )
                 if not has_real_anchor:
                     continue
             if target_ovr >= STAR_TRADE_TARGET_OVR:
                 premium_points = 0
-                premium_points += 2 if _has_first(to_items) else 0
-                premium_points += 1 if _has_second(to_items) else 0
-                premium_points += 2 if _has_premium_young_asset(to_items) else 0
-                premium_points += 1 if _best_player_ovr(to_items) >= target_ovr - 5.0 else 0
+                premium_points += 2 if first_count > 0 else 0
+                premium_points += 1 if second_count > 0 else 0
+                premium_points += 2 if combo_premium_young_count > 0 else 0
+                premium_points += 1 if combo_best_player_ovr >= target_ovr - 5.0 else 0
                 if premium_points < 3:
                     continue
 
             if mega_trade:
-                first_count = _first_count(to_items)
-                premium_young_count = _premium_young_asset_count(to_items)
-                best_outgoing_ovr = _best_player_ovr(to_items)
+                premium_young_count = combo_premium_young_count
+                best_outgoing_ovr = combo_best_player_ovr
                 mega_premium_points = first_count * 2 + premium_young_count * 3
                 if best_outgoing_ovr >= target_ovr - 7.0:
                     mega_premium_points += 2
@@ -1513,8 +1548,8 @@ def _build_candidate(
                     continue
 
             from_items = [_player_item(target)]
-            outgoing_salary = _package_salary(to_items, season_year)
-            incoming_salary = _package_salary(from_items, season_year)
+            outgoing_salary = combo_salary
+            incoming_salary = target_salary
             if not _salary_matchish(incoming_salary, outgoing_salary):
                 continue
 
@@ -1525,8 +1560,12 @@ def _build_candidate(
             if buyer_projected_count > buyer_allowed_max:
                 continue
 
-            total_value = _package_value(to_items, season_year)
-            seller_total_value = _package_value(from_items, season_year)
+            # Continue the original package-value accumulation in the exact same
+            # item order: outgoing players first, then each pick in bundle order.
+            total_value = combo_value
+            for pick in pick_bundle:
+                total_value += _rough_value_pick(pick, season_year)
+            seller_total_value = target_value
             balance = total_value - seller_total_value
 
             # If the buyer is overpaying, let the seller include one simple pick
@@ -1535,12 +1574,14 @@ def _build_candidate(
                 sweetener_options = seller_pick_bundles[1:] or []
                 rng.shuffle(sweetener_options)
                 for seller_pick_bundle in sweetener_options[:3]:
-                    trial_from_items = from_items + [_pick_item(p) for p in seller_pick_bundle]
-                    if len(trial_from_items) > max_assets:
+                    if 1 + len(seller_pick_bundle) > max_assets:
                         continue
-                    trial_balance = total_value - _package_value(trial_from_items, season_year)
+                    trial_seller_value = target_value
+                    for pick in seller_pick_bundle:
+                        trial_seller_value += _rough_value_pick(pick, season_year)
+                    trial_balance = total_value - trial_seller_value
                     if min_balance <= trial_balance <= max_balance:
-                        from_items = trial_from_items
+                        from_items = from_items + [_pick_item(p) for p in seller_pick_bundle]
                         balance = trial_balance
                         break
 
@@ -1559,10 +1600,10 @@ def _build_candidate(
             if seller_ctx.get("phase") in {"seller", "retool"} and _player_age(target) >= 32 and target_ovr >= STAR_TRADE_TARGET_OVR:
                 quality_bonus += 2.0
             if pick_count:
-                quality_bonus += min(2.8, pick_count * 0.8 + (1.0 if _has_first(to_items) else 0.0))
-            if _has_first(to_items) and target_ovr >= MAJOR_TRADE_TARGET_OVR:
+                quality_bonus += min(2.8, pick_count * 0.8 + (1.0 if first_count > 0 else 0.0))
+            if first_count > 0 and target_ovr >= MAJOR_TRADE_TARGET_OVR:
                 quality_bonus += 1.2
-            if _has_premium_young_asset(to_items) and target_ovr >= MAJOR_TRADE_TARGET_OVR:
+            if combo_premium_young_count > 0 and target_ovr >= MAJOR_TRADE_TARGET_OVR:
                 quality_bonus += 1.0
             if player_count >= 2 and target_ovr >= 78:
                 quality_bonus += 1.0
@@ -1581,7 +1622,12 @@ def _build_candidate(
                 - activity_penalty
             )
             if mega_trade:
-                score += 8.0 + min(3.0, _first_count(to_items) * 0.65 + _premium_young_asset_count(to_items) * 0.80)
+                score += 8.0 + min(3.0, first_count * 0.65 + combo_premium_young_count * 0.80)
+
+            # Materialize pick item wrappers only for packages that survive all of
+            # the original filters. The wrappers are presentation data and their
+            # constructors are pure/memoized within this generation request.
+            to_items = outgoing_player_items + [_pick_item(p) for p in pick_bundle]
             viable.append((score, combo, pick_bundle, from_items, to_items, balance))
             viable_cap = 96 if mega_trade else (72 if target_ovr >= MAJOR_TRADE_TARGET_OVR else 36)
             if len(viable) >= viable_cap:
