@@ -1,4 +1,4 @@
-import { computeTeamRatings } from "../api/teamRatings";
+import { computeTeamRatingsNumeric } from "../api/teamRatings";
 
 export const GAMEPLAN_VERSION = 18;
 
@@ -746,7 +746,7 @@ function scoreMinutes(valid, minutesObj) {
   const diag = activeSmartRotationBreakdownRow;
   const start = smartNow();
   try {
-    const ratings = computeTeamRatings({ players: valid }, minutesObj, { includeRosterOut: false });
+    const ratings = computeTeamRatingsNumeric({ players: valid }, minutesObj);
 
     // Use exact 4-decimal ratings internally so rotations/sim-adjacent logic do
     // not treat two rounded display ratings as identical.
@@ -925,7 +925,7 @@ function displayedRatings(valid, minutesObj) {
   const diag = activeSmartRotationBreakdownRow;
   const start = smartNow();
   try {
-    const ratings = computeTeamRatings({ players: valid }, minutesObj, { includeRosterOut: false });
+    const ratings = computeTeamRatingsNumeric({ players: valid }, minutesObj);
     return {
       overall: Number(ratings?.overall || 0),
       off: Number(ratings?.off || 0),
@@ -1647,7 +1647,7 @@ export function buildFullTeamRating(teamPlayers, options = {}) {
     };
   }
 
-  const ratings = computeTeamRatings({ players: built.valid }, built.minutesObj, { includeRosterOut: false });
+  const ratings = computeTeamRatingsNumeric({ players: built.valid }, built.minutesObj);
   const result = {
     // Whole-number values are display-only.
     ftr: Number(ratings.overall || 0),
@@ -1951,7 +1951,7 @@ function potentialWindowTeamScore(players, yearsAhead) {
 function getAutoBuiltExactOverallForPotential(teamPlayers) {
   try {
     const built = buildSmartRotation(teamPlayers);
-    const ratings = computeTeamRatings({ players: teamPlayers || [] }, built.obj || {}, { includeRosterOut: false });
+    const ratings = computeTeamRatingsNumeric({ players: teamPlayers || [] }, built.obj || {});
     return Number(ratings.exactOverall ?? ratings.overall ?? 0);
   } catch (error) {
     console.warn("Team POT proof bonus fallback:", error);

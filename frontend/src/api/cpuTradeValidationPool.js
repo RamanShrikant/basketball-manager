@@ -35,6 +35,7 @@ let requestCounter = 0;
 let disabledReason = "";
 let prewarmPromise = null;
 const parityCheckedSnapshots = new Set();
+let parityCheckedAnySnapshot = false;
 
 function objectToken(value) {
   if (!value || (typeof value !== "object" && typeof value !== "function")) {
@@ -436,7 +437,17 @@ export async function validateCpuTradeCandidatesParallel({
       });
     }
 
-    if (!parityCheckedSnapshots.has(snapshotKey)) {
+    // Worker code and snapshot protocol are identical for every validation pass.
+    // A serial-vs-worker parity check is valuable as a session safety gate, but
+    // repeating a full cold exact validation after every league snapshot adds
+    // hidden CPU-trade work without changing any accepted/rejected decision.
+    // Keep one normal-session gate; deep tracing can still re-check every new
+    // snapshot when diagnostics explicitly ask for that extra proof.
+    const shouldParityCheck =
+      !parityCheckedAnySnapshot ||
+      (traceEnabled && !parityCheckedSnapshots.has(snapshotKey));
+
+    if (shouldParityCheck) {
       const parityIndex = rows.findIndex(Boolean);
       if (parityIndex >= 0) {
         const serial = validateCpuTradeCandidateOnLeague({
@@ -453,6 +464,7 @@ export async function validateCpuTradeCandidatesParallel({
           throw new Error("CPU_TRADE_VALIDATION_POOL_PARITY_MISMATCH");
         }
       }
+      parityCheckedAnySnapshot = true;
       parityCheckedSnapshots.add(snapshotKey);
     }
 

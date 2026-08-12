@@ -340,6 +340,243 @@ const fastPositionPrimaryIndex = new Int8Array(FAST_POSITION_PLAYER_LIMIT);
 const fastPositionSecondaryIndex = new Int8Array(FAST_POSITION_PLAYER_LIMIT);
 const fastPositionPrimaryMinutes = new Float64Array(FAST_POSITION_PLAYER_LIMIT);
 const fastPositionValues = new Float64Array(5);
+const fastRatingPlayers = new Array(FAST_POSITION_PLAYER_LIMIT);
+const fastRatingMinutes = new Float64Array(FAST_POSITION_PLAYER_LIMIT);
+
+function prepareFastNoRosterOut(team, minsObj) {
+  const players = Array.isArray(team?.players) ? team.players : [];
+  let count = 0;
+  let total = 0;
+
+  for (let posIndex = 0; posIndex < 5; posIndex += 1) {
+    fastPositionValues[posIndex] = 0;
+  }
+
+  for (let playerIndex = 0; playerIndex < players.length; playerIndex += 1) {
+    const player = players[playerIndex];
+    if (!player) continue;
+
+    const minutes = Math.max(0, +(minsObj?.[player.name] || 0));
+    if (minutes <= 0) continue;
+    if (count >= FAST_POSITION_PLAYER_LIMIT) return null;
+
+    const primaryPos = player.pos || "SG";
+    if (POSITION_INDEX[primaryPos] === undefined) return null;
+
+    for (let i = 0; i < count; i += 1) {
+      if (fastRatingPlayers[i]?.name === player.name) return null;
+    }
+
+    const secondaryPos = player.secondaryPos || null;
+    const secondaryIndex =
+      secondaryPos &&
+      secondaryPos !== primaryPos &&
+      POSITION_INDEX[secondaryPos] !== undefined
+        ? POSITION_INDEX[secondaryPos]
+        : -1;
+    const primaryIndex = POSITION_INDEX[primaryPos];
+
+    fastRatingPlayers[count] = player;
+    fastRatingMinutes[count] = minutes;
+    fastPositionPrimaryIndex[count] = primaryIndex;
+    fastPositionSecondaryIndex[count] = secondaryIndex;
+    fastPositionPrimaryMinutes[count] = minutes;
+    fastPositionValues[primaryIndex] += minutes;
+    total += minutes;
+    count += 1;
+  }
+
+  return { count, total };
+}
+
+function fastPreparedCoveragePenalty(count) {
+  let currentPenalty = coveragePenaltyValues(fastPositionValues);
+  let improved = true;
+  let passes = 0;
+
+  while (improved && passes < 20) {
+    improved = false;
+    passes += 1;
+
+    let bestPlayerIndex = -1;
+    let bestAmount = 0;
+    let bestPenaltyGain = 0;
+    let bestTestPenalty = currentPenalty;
+
+    for (let i = 0; i < count; i += 1) {
+      const secondaryIndex = fastPositionSecondaryIndex[i];
+      if (secondaryIndex < 0) continue;
+
+      const movable = Number(fastPositionPrimaryMinutes[i] || 0);
+      if (movable <= 1e-7) continue;
+
+      const primaryIndex = fastPositionPrimaryIndex[i];
+      const primaryBefore = Number(fastPositionValues[primaryIndex] || 0);
+      const secondaryBefore = Number(fastPositionValues[secondaryIndex] || 0);
+      const candidateCount = fillTransferCandidateAmounts(
+        fastPositionValues,
+        primaryIndex,
+        secondaryIndex,
+        movable
+      );
+
+      for (let candidateIndex = 0; candidateIndex < candidateCount; candidateIndex += 1) {
+        const amount = transferCandidateScratch[candidateIndex];
+        fastPositionValues[primaryIndex] = primaryBefore - amount;
+        fastPositionValues[secondaryIndex] =
+          secondaryBefore + amount * TR_SECONDARY_POS_CREDIT;
+
+        const testPenalty = coveragePenaltyValues(fastPositionValues);
+
+        fastPositionValues[primaryIndex] = primaryBefore;
+        fastPositionValues[secondaryIndex] = secondaryBefore;
+
+        const penaltyGain = currentPenalty - testPenalty;
+        if (bestPlayerIndex < 0 || penaltyGain > bestPenaltyGain + 1e-10) {
+          bestPlayerIndex = i;
+          bestAmount = amount;
+          bestPenaltyGain = penaltyGain;
+          bestTestPenalty = testPenalty;
+        }
+      }
+    }
+
+    if (bestPlayerIndex >= 0 && bestPenaltyGain > 1e-6) {
+      const primaryIndex = fastPositionPrimaryIndex[bestPlayerIndex];
+      const secondaryIndex = fastPositionSecondaryIndex[bestPlayerIndex];
+      fastPositionPrimaryMinutes[bestPlayerIndex] -= bestAmount;
+      if (Math.abs(fastPositionPrimaryMinutes[bestPlayerIndex]) < 1e-7) {
+        fastPositionPrimaryMinutes[bestPlayerIndex] = 0;
+      }
+      fastPositionValues[primaryIndex] -= bestAmount;
+      fastPositionValues[secondaryIndex] += bestAmount * TR_SECONDARY_POS_CREDIT;
+      currentPenalty = bestTestPenalty;
+      improved = true;
+    }
+  }
+
+  return currentPenalty;
+}
+
+function updateTopTwo(top, eff, base, minutes) {
+  if (!top.first || eff > top.first.eff) {
+    top.second = top.first;
+    top.first = { eff, base, minutes };
+  } else if (!top.second || eff > top.second.eff) {
+    top.second = { eff, base, minutes };
+  }
+}
+
+function starBoostFromTopTwo(top, starExp) {
+  let pull = 0;
+  const first = top.first;
+  const second = top.second;
+
+  if (first) {
+    const gap = Math.max(0, first.base - TR_STAR_REF);
+    if (gap > 0) {
+      const share = Math.max(0, first.minutes / 240) ** TR_STAR_SHARE_EXP;
+      pull += (gap ** starExp) * share;
+    }
+  }
+
+  if (second) {
+    const gap = Math.max(0, second.base - TR_STAR_REF);
+    if (gap > 0) {
+      const share = Math.max(0, second.minutes / 240) ** TR_STAR_SHARE_EXP;
+      pull += (gap ** starExp) * share;
+    }
+  }
+
+  return pull ** TR_STAR_OUT_EXP;
+}
+
+// Internal exact numeric fast path for callers that only need ratings and do not
+// consume rosterOut. It preserves the same player order, fatigue, star boost,
+// positional allocator, scaling, and 4-decimal rounding as computeTeamRatings.
+// Any unusual roster shape falls back to the public implementation.
+export function computeTeamRatingsNumeric(team, minsObj) {
+  const prepared = prepareFastNoRosterOut(team, minsObj);
+  if (!prepared) {
+    const ratings = computeTeamRatings(team, minsObj, { includeRosterOut: false });
+    return {
+      overall: ratings.overall,
+      off: ratings.off,
+      def: ratings.def,
+      exactOverall: ratings.exactOverall,
+      exactOff: ratings.exactOff,
+      exactDef: ratings.exactDef,
+    };
+  }
+
+  const { count, total } = prepared;
+  if (!total) {
+    return {
+      overall: 0,
+      off: 0,
+      def: 0,
+      exactOverall: 0,
+      exactOff: 0,
+      exactDef: 0,
+    };
+  }
+
+  const coveragePenalty = fastPreparedCoveragePenalty(count);
+  let baseOvr = 0;
+  let baseOff = 0;
+  let baseDef = 0;
+  const topOvr = { first: null, second: null };
+  const topOff = { first: null, second: null };
+  const topDef = { first: null, second: null };
+
+  for (let i = 0; i < count; i += 1) {
+    const player = fastRatingPlayers[i];
+    const minutes = fastRatingMinutes[i];
+    const stamina = player?.stamina ?? 75;
+    const overall = player?.overall ?? 75;
+    const off = player?.offRating ?? 75;
+    const def = player?.defRating ?? 75;
+    const penalty = fatiguePenalty(minutes, stamina);
+    const share = minutes / 240;
+    const effOvr = overall * penalty;
+    const effOff = off * penalty;
+    const effDef = def * penalty;
+
+    baseOvr += share * effOvr;
+    baseOff += share * effOff;
+    baseDef += share * effDef;
+    updateTopTwo(topOvr, effOvr, Number(overall), minutes);
+    updateTopTwo(topOff, effOff, Number(off), minutes);
+    updateTopTwo(topDef, effDef, Number(def), minutes);
+  }
+
+  const sOvr = starBoostFromTopTwo(topOvr, TR_STAR_EXP_OVR) * TR_STAR_MULT_OVR;
+  const sOff = starBoostFromTopTwo(topOff, TR_STAR_EXP_OFF) * TR_STAR_MULT_OFF;
+  const sDef = starBoostFromTopTwo(topDef, TR_STAR_EXP_DEF) * TR_STAR_MULT_DEF;
+
+  let emptyPen = 0;
+  if (total < 240) {
+    const emptyFrac = (240 - total) / 240;
+    emptyPen = TR_EMPTY_MIN_PTS * (emptyFrac ** 0.85);
+  }
+
+  const rawOff = baseOff + sOff - coveragePenalty - emptyPen;
+  const rawDef = baseDef + sDef - coveragePenalty - emptyPen;
+  const rawOvr = baseOvr + sOvr - coveragePenalty - emptyPen;
+
+  const exactOverall = round4(scaleRange(rawOvr, "overall"));
+  const exactOff = round4(scaleRange(rawOff, "side"));
+  const exactDef = round4(scaleRange(rawDef, "side"));
+
+  return {
+    overall: Math.round(exactOverall),
+    off: Math.round(exactOff),
+    def: Math.round(exactDef),
+    exactOverall,
+    exactOff,
+    exactDef,
+  };
+}
 
 function calculateBestPositionCoveragePenalty(roster) {
   const count = Array.isArray(roster) ? roster.length : 0;

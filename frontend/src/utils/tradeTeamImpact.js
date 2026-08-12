@@ -1,5 +1,5 @@
 import LZString from "lz-string";
-import { computeTeamRatings } from "../api/teamRatings.js";
+import { computeTeamRatingsNumeric } from "../api/teamRatings.js";
 import {
   GAMEPLAN_VERSION,
   buildFullTeamRating,
@@ -1372,7 +1372,7 @@ function calculateTeamImpactRatings(players = [], options = {}) {
   }
 
   const teamRatingsStart = tfImpactNow();
-  const teamRatings = computeTeamRatings({ players: valid }, minutes, { includeRosterOut: false });
+  const teamRatings = computeTeamRatingsNumeric({ players: valid }, minutes);
   addBreakdownMetric(metrics, `${rolePrefix}TeamRatingsMs`, tfImpactNow() - teamRatingsStart);
 
   const potentialStart = tfImpactNow();
@@ -1389,7 +1389,7 @@ function calculateTeamImpactRatings(players = [], options = {}) {
     addBreakdownMetric(metrics, `${rolePrefix}FastFtrMinutesMs`, tfImpactNow() - fastMinutesStart);
 
     const fastFtrRatingsStart = tfImpactNow();
-    const fastFtrRatings = computeTeamRatings({ players: valid }, fastFtrMinutes, { includeRosterOut: false });
+    const fastFtrRatings = computeTeamRatingsNumeric({ players: valid }, fastFtrMinutes);
     addBreakdownMetric(metrics, `${rolePrefix}FastFtrRatingsMs`, tfImpactNow() - fastFtrRatingsStart);
     fullTeamRatings = {
       ftr: Number(fastFtrRatings?.overall || 0),
@@ -1513,7 +1513,7 @@ function calculateRankOnlyRatings(team = {}, metrics = null) {
   }
 
   const ratingsStart = tfImpactNow();
-  const ratings = computeTeamRatings({ players: valid }, minutes, { includeRosterOut: false });
+  const ratings = computeTeamRatingsNumeric({ players: valid }, minutes);
   addBreakdownMetric(metrics, "powerRankTeamRatingsMs", tfImpactNow() - ratingsStart);
   addBreakdownMetric(metrics, "powerRankRatingTotalMs", tfImpactNow() - totalStart);
   incrementBreakdownMetric(metrics, "powerRankTeamsRated");
