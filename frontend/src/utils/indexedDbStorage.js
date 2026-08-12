@@ -3,8 +3,6 @@
 // localStorage stays for small/fast summaries. IndexedDB stores heavy full box scores.
 
 const DB_NAME = "basketball_manager_storage_v1";
-// Bump to v2 so browsers that already created v1 with zero stores run onupgradeneeded.
-const DB_VERSION = 2;
 const BOX_SCORE_STORE = "boxScores";
 
 let dbPromise = null;
@@ -29,37 +27,63 @@ function openBasketballManagerDb() {
       return;
     }
 
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      ensureBoxScoreStore(db);
+    const fail = (error) => {
+      dbPromise = null;
+      reject(error || new Error("Failed to open IndexedDB."));
     };
 
-    request.onsuccess = () => {
-      const db = request.result;
-
-      if (!db.objectStoreNames.contains(BOX_SCORE_STORE)) {
+    const finishOpen = (db) => {
+      db.onversionchange = () => {
         db.close();
         dbPromise = null;
-        reject(
-          new Error(
-            `IndexedDB object store missing after open: ${BOX_SCORE_STORE}. Close other tabs and refresh.`
-          )
-        );
+      };
+
+      if (!db.objectStoreNames.contains(BOX_SCORE_STORE)) {
+        const nextVersion = Math.max(1, Number(db.version || 1) + 1);
+        db.close();
+
+        const upgradeRequest = indexedDB.open(DB_NAME, nextVersion);
+        upgradeRequest.onupgradeneeded = () => {
+          ensureBoxScoreStore(upgradeRequest.result);
+        };
+        upgradeRequest.onsuccess = () => {
+          const upgradedDb = upgradeRequest.result;
+          upgradedDb.onversionchange = () => {
+            upgradedDb.close();
+            dbPromise = null;
+          };
+
+          if (!upgradedDb.objectStoreNames.contains(BOX_SCORE_STORE)) {
+            upgradedDb.close();
+            fail(new Error(`IndexedDB object store missing after upgrade: ${BOX_SCORE_STORE}.`));
+            return;
+          }
+
+          resolve(upgradedDb);
+        };
+        upgradeRequest.onerror = () => fail(upgradeRequest.error);
+        upgradeRequest.onblocked = () => {
+          console.warn("[indexedDbStorage] IndexedDB upgrade is blocked by another tab. Close other tabs and refresh.");
+        };
         return;
       }
 
       resolve(db);
     };
 
-    request.onerror = () => {
-      dbPromise = null;
-      reject(request.error || new Error("Failed to open IndexedDB."));
+    // Open the browser's existing DB version instead of hard-coding an older
+    // version. This avoids VersionError when a user's DB has already advanced.
+    const request = indexedDB.open(DB_NAME);
+
+    request.onupgradeneeded = () => {
+      // Brand-new databases still need the box-score store on first creation.
+      ensureBoxScoreStore(request.result);
     };
 
+    request.onsuccess = () => finishOpen(request.result);
+    request.onerror = () => fail(request.error);
     request.onblocked = () => {
-      console.warn("[indexedDbStorage] IndexedDB upgrade is blocked by another tab. Close other tabs and refresh.");
+      console.warn("[indexedDbStorage] IndexedDB open is blocked by another tab. Close other tabs and refresh.");
     };
   });
 

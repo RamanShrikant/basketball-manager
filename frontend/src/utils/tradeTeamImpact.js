@@ -124,6 +124,89 @@ const cpuTradeImpactContextTokens = new Map();
 let cpuTradeImpactLeagueContextCache = new WeakMap();
 let attachedRecordSignatureCache = new WeakMap();
 
+const CPU_TRADE_IMPACT_BREAKDOWN_MAX_ROWS = 800;
+let cpuTradeImpactBreakdownEnabled = false;
+let cpuTradeImpactBreakdownStore = makeCpuTradeImpactBreakdownStore();
+
+function makeCpuTradeImpactBreakdownStore() {
+  return {
+    rows: [],
+    totals: {},
+    byRole: {},
+    byTeam: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: null,
+  };
+}
+
+function addCpuImpactAggregate(target = {}, row = {}) {
+  target.calls = Number(target.calls || 0) + 1;
+  target.cacheHits = Number(target.cacheHits || 0) + (row.cacheHit ? 1 : 0);
+  target.cacheMisses = Number(target.cacheMisses || 0) + (row.cacheHit ? 0 : 1);
+  target.accepted = Number(target.accepted || 0) + (row.accepted ? 1 : 0);
+  target.rejected = Number(target.rejected || 0) + (row.accepted ? 0 : 1);
+  target.totalMs = Number(target.totalMs || 0) + Number(row.totalMs || 0);
+
+  if (!target.metrics || typeof target.metrics !== "object") target.metrics = {};
+  for (const [key, value] of Object.entries(row.metrics || {})) {
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    target.metrics[key] = Number(target.metrics[key] || 0) + value;
+  }
+  return target;
+}
+
+function recordCpuTradeImpactBreakdown(row = {}) {
+  if (!cpuTradeImpactBreakdownEnabled) return;
+  try {
+    const cleanRow = {
+      callIndex: Number(cpuTradeImpactBreakdownStore?.totals?.calls || 0) + 1,
+      ...row,
+    };
+
+    cpuTradeImpactBreakdownStore.rows.push(cleanRow);
+    while (cpuTradeImpactBreakdownStore.rows.length > CPU_TRADE_IMPACT_BREAKDOWN_MAX_ROWS) {
+      cpuTradeImpactBreakdownStore.rows.shift();
+    }
+
+    cpuTradeImpactBreakdownStore.totals = addCpuImpactAggregate(
+      cpuTradeImpactBreakdownStore.totals || {},
+      cleanRow
+    );
+
+    const roleKey = String(cleanRow.cpuTradeRole || "cpu").toLowerCase() || "cpu";
+    cpuTradeImpactBreakdownStore.byRole[roleKey] = addCpuImpactAggregate(
+      cpuTradeImpactBreakdownStore.byRole[roleKey] || { role: roleKey },
+      cleanRow
+    );
+
+    const teamKey = cleanRow.team || "Unknown";
+    cpuTradeImpactBreakdownStore.byTeam[teamKey] = addCpuImpactAggregate(
+      cpuTradeImpactBreakdownStore.byTeam[teamKey] || { team: teamKey },
+      cleanRow
+    );
+
+    cpuTradeImpactBreakdownStore.updatedAt = new Date().toISOString();
+  } catch {}
+}
+
+export function setCpuTradeImpactBreakdownEnabled(enabled = true) {
+  cpuTradeImpactBreakdownEnabled = Boolean(enabled);
+  return cpuTradeImpactBreakdownEnabled;
+}
+
+export function resetCpuTradeImpactBreakdown() {
+  cpuTradeImpactBreakdownStore = makeCpuTradeImpactBreakdownStore();
+  return cpuTradeImpactBreakdownStore;
+}
+
+export function getCpuTradeImpactBreakdown() {
+  try {
+    return JSON.parse(JSON.stringify(cpuTradeImpactBreakdownStore));
+  } catch {
+    return cpuTradeImpactBreakdownStore;
+  }
+}
+
 export function resetTradeFinderImpactSearchCaches({ keepPowerContext = true } = {}) {
   rosterRatingCache.clear();
   rankOnlyRatingCache.clear();
@@ -1277,10 +1360,11 @@ function calculateTeamImpactRatings(players = [], options = {}) {
   }
 
   let minutes = {};
+  let smartRotationResult = null;
   const smartRotationStart = tfImpactNow();
   try {
-    const built = buildSmartRotation(valid);
-    minutes = built?.obj && typeof built.obj === "object" ? built.obj : {};
+    smartRotationResult = buildSmartRotation(valid);
+    minutes = smartRotationResult?.obj && typeof smartRotationResult.obj === "object" ? smartRotationResult.obj : {};
   } catch (error) {
     console.warn("Trade impact auto-rotation fallback:", error);
   } finally {
@@ -1319,13 +1403,20 @@ function calculateTeamImpactRatings(players = [], options = {}) {
     };
   } else {
     const fullTeamStart = tfImpactNow();
-    fullTeamRatings = buildFullTeamRating(valid);
+    fullTeamRatings = buildFullTeamRating(valid, {
+      // Reuse the exact full-roster chooseStarters result captured during
+      // buildSmartRotation. This remains correct even when smart rotation later
+      // accepts a low-end exclusion retry on a reduced roster.
+      precomputedStarters: Array.isArray(smartRotationResult?.__fullRosterStarters)
+        ? smartRotationResult.__fullRosterStarters
+        : null,
+    });
     addBreakdownMetric(metrics, `${rolePrefix}FullTeamRatingMs`, tfImpactNow() - fullTeamStart);
   }
 
   addBreakdownMetric(metrics, `${rolePrefix}RatingTotalMs`, tfImpactNow() - totalStart);
 
-  return {
+  const result = {
     exactOverall: round4(teamRatings?.exactOverall ?? teamRatings?.overall ?? 0),
     exactOff: round4(teamRatings?.exactOff ?? teamRatings?.off ?? 0),
     exactDef: round4(teamRatings?.exactDef ?? teamRatings?.def ?? 0),
@@ -1336,6 +1427,30 @@ function calculateTeamImpactRatings(players = [], options = {}) {
     displayFtr: toNum(fullTeamRatings?.ftr, Math.round(fullTeamRatings?.exactFtr || 0)),
     ratingMode: options?.fastFtr ? TRADE_FINDER_FAST_FTR_MODE : "exact",
   };
+
+  // CPU exact validation later asks the pick-value engine to project the same
+  // post-trade roster. Preserve an exact, non-enumerable snapshot of the power
+  // rating values so that projection can reuse work we have already completed.
+  // POT is intentionally recalculated by the pick engine because its cache/use
+  // contract is separate; that work is tiny compared with smart rotation.
+  // Non-enumerable keeps the public/debug result byte-for-byte unchanged.
+  try {
+    const pickExactOff = round4(teamRatings?.exactOff ?? teamRatings?.off ?? 0);
+    const pickExactDef = round4(teamRatings?.exactDef ?? teamRatings?.def ?? 0);
+    Object.defineProperty(result, "__pickProjectionSnapshot", {
+      value: {
+        exactOverall: round4(teamRatings?.exactOverall ?? teamRatings?.overall ?? 0),
+        // Match calculatePowerOverall -> calculatePickTeamRatingSnapshot exactly:
+        // each side is rounded first, then their sum is rounded.
+        offDef: round4(pickExactOff + pickExactDef),
+      },
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  } catch {}
+
+  return result;
 }
 
 function rateTeamRoster(players = [], options = {}) {
@@ -2445,6 +2560,15 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
   const positiveMovement = round4(Math.max(0, deltaOVR) + Math.max(0, deltaPOT) + Math.max(0, deltaFTR));
   const noDownsideMinGain = NO_DOWNSIDE_MIN_GAIN + (powerContext.isTopConferenceTeam ? 0.05 : 0);
   const pickImpactStart = tfImpactNow();
+  const cpuRosterChangedByTrade =
+    getTradePlayers(userItems).length > 0 || getTradePlayers(cpuItems).length > 0;
+  const projectedRatingSnapshotsByTeam =
+    isCpuCpuEvaluation &&
+    !useFastScanImpact &&
+    cpuRosterChangedByTrade &&
+    after?.__pickProjectionSnapshot
+      ? new Map([[normalizeName(cpuName), after.__pickProjectionSnapshot]])
+      : null;
   const pickImpact = useFastScanImpact
     ? genericPickImpactForCpu(userItems, cpuItems)
     : evaluateTradePickImpact({
@@ -2453,6 +2577,7 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
         cpuItems,
         userTeamName: userName,
         cpuTeamName: cpuName,
+        projectedRatingSnapshotsByTeam,
       });
   addBreakdownMetric(__tfBreakdownMetrics, "pickImpactMs", tfImpactNow() - pickImpactStart);
 
@@ -2789,10 +2914,26 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
 
 export function evaluateTradeTeamImpact(args = {}) {
   const totalStart = tfImpactNow();
-  const breakdownEnabled =
-    String(args?.cpuTradeRole || "").toLowerCase() === "trade_finder" && isTradeFinderImpactBreakdownEnabled();
+  const normalizedBreakdownRole = String(args?.cpuTradeRole || "").toLowerCase();
+  const tradeFinderBreakdownEnabled =
+    normalizedBreakdownRole === "trade_finder" && isTradeFinderImpactBreakdownEnabled();
+  const cpuBreakdownEnabled =
+    cpuTradeImpactBreakdownEnabled &&
+    String(args?.evaluationMode || "").toLowerCase() === "cpu_cpu_trade" &&
+    (normalizedBreakdownRole === "buyer" || normalizedBreakdownRole === "seller");
+  const breakdownEnabled = tradeFinderBreakdownEnabled || cpuBreakdownEnabled;
   const metrics = breakdownEnabled ? {} : null;
-  const baseBreakdown = breakdownEnabled ? makeTradeFinderImpactBreakdownBase(args) : null;
+  const baseBreakdown = breakdownEnabled
+    ? {
+        ...makeTradeFinderImpactBreakdownBase(args),
+        ...(cpuBreakdownEnabled ? { impactMode: "exact" } : {}),
+      }
+    : null;
+
+  const recordImpactBreakdown = (row = {}) => {
+    if (tradeFinderBreakdownEnabled) recordTradeFinderImpactBreakdown(row);
+    if (cpuBreakdownEnabled) recordCpuTradeImpactBreakdown(row);
+  };
 
   const cacheKeyStart = tfImpactNow();
   const tradeFinderCacheKey = makeTradeFinderImpactCacheKey(args);
@@ -2808,7 +2949,7 @@ export function evaluateTradeTeamImpact(args = {}) {
     if (cached) {
       if (cpuTradeCacheKey) cpuTradeImpactCacheHits += 1;
       const totalMs = tfImpactNow() - totalStart;
-      recordTradeFinderImpactBreakdown({
+      recordImpactBreakdown({
         ...baseBreakdown,
         cacheHit: true,
         accepted: Boolean(cached?.accepted),
@@ -2844,7 +2985,7 @@ export function evaluateTradeTeamImpact(args = {}) {
 
   if (breakdownEnabled) {
     const totalMs = tfImpactNow() - totalStart;
-    recordTradeFinderImpactBreakdown({
+    recordImpactBreakdown({
       ...baseBreakdown,
       cacheHit: false,
       accepted: Boolean(result?.accepted),

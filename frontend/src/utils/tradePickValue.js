@@ -203,7 +203,14 @@ function buildRosterAfterTrade(team, incomingPlayers = [], outgoingPlayers = [],
   return roster;
 }
 
-function buildPostTradePickProjection(leagueData, userItems = [], cpuItems = [], userTeamName = "", cpuTeamName = "") {
+function buildPostTradePickProjection(
+  leagueData,
+  userItems = [],
+  cpuItems = [],
+  userTeamName = "",
+  cpuTeamName = "",
+  projectedRatingSnapshotsByTeam = null
+) {
   const userTeam = getTeamByName(leagueData, userTeamName);
   const cpuTeam = getTeamByName(leagueData, cpuTeamName);
   const userOutgoingPlayers = getTradePlayers(userItems);
@@ -227,7 +234,18 @@ function buildPostTradePickProjection(leagueData, userItems = [], cpuItems = [],
     );
   }
 
-  return adjustedRostersByTeam.size ? { adjustedRostersByTeam } : null;
+  return adjustedRostersByTeam.size
+    ? {
+        adjustedRostersByTeam,
+        // Optional exact rating snapshots supplied by the caller for rosters it
+        // has already rated. These are semantic equivalents of
+        // calculatePickTeamRatingSnapshot and only avoid duplicate work.
+        projectedRatingSnapshotsByTeam:
+          projectedRatingSnapshotsByTeam && typeof projectedRatingSnapshotsByTeam.get === "function"
+            ? projectedRatingSnapshotsByTeam
+            : null,
+      }
+    : null;
 }
 
 function parseMaybeCompressed(raw, fallback = null) {
@@ -700,6 +718,7 @@ function buildPickRankContext(leagueData, projection = null, diagLabel = "") {
 
     const liveBaseRows = measurePick(diag, `${prefix}LiveBaseRowsMs`, () => buildLivePickBaseRows(leagueData, teams, liveSignature, storageSignature));
     const adjustedRostersByTeam = projection?.adjustedRostersByTeam;
+    const projectedRatingSnapshotsByTeam = projection?.projectedRatingSnapshotsByTeam;
     const hasProjection = Boolean(adjustedRostersByTeam && typeof adjustedRostersByTeam.get === "function");
 
     // Projection only changes the user team and the CPU team involved in this one
@@ -710,7 +729,16 @@ function buildPickRankContext(leagueData, projection = null, diagLabel = "") {
           const projectedPlayers = adjustedRostersByTeam.get(normalizeName(row.name));
           if (!Array.isArray(projectedPlayers)) return row;
 
-          const ratings = calculatePickTeamRatingSnapshot(row.team, projectedPlayers);
+          const precomputed = projectedRatingSnapshotsByTeam?.get?.(normalizeName(row.name));
+          const ratings = precomputed && typeof precomputed === "object"
+            ? {
+                exactOverall: precomputed.exactOverall,
+                offDef: precomputed.offDef,
+                // Preserve the pick engine's exact POT path/cache semantics.
+                exactPot: calculatePot({ ...(row.team || {}), players: projectedPlayers }),
+              }
+            : calculatePickTeamRatingSnapshot(row.team, projectedPlayers);
+          if (precomputed) incPickMetric(diag, `${prefix}ProjectedSnapshotReuseHits`);
           return {
             ...row,
             exactOverall: ratings.exactOverall,
@@ -1842,6 +1870,7 @@ export function evaluateTradePickImpact(args = {}) {
     cpuItems = [],
     userTeamName = "",
     cpuTeamName = "",
+    projectedRatingSnapshotsByTeam = null,
   } = args || {};
 
   const diagRow = createPickBreakdownRow({ userItems, cpuItems, userTeamName, cpuTeamName });
@@ -1913,7 +1942,18 @@ export function evaluateTradePickImpact(args = {}) {
       return result;
     }
 
-    const projection = measurePick(diagRow, "buildPostTradePickProjectionMs", () => buildPostTradePickProjection(leagueData, userItems, cpuItems, userTeamName, cpuTeamName));
+    const projection = measurePick(
+      diagRow,
+      "buildPostTradePickProjectionMs",
+      () => buildPostTradePickProjection(
+        leagueData,
+        userItems,
+        cpuItems,
+        userTeamName,
+        cpuTeamName,
+        projectedRatingSnapshotsByTeam
+      )
+    );
     const projectedContext = measurePick(diagRow, "projectedContextMs", () => buildPickRankContext(leagueData, projection, "projected"));
     const incoming = measurePick(diagRow, "incomingPickItemValuesMs", () => validIncomingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, projectedContext), "incoming", directionMultiplier)));
     const outgoing = measurePick(diagRow, "outgoingPickItemValuesMs", () => validOutgoingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, projectedContext), "outgoing", directionMultiplier)));

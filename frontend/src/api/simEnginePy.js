@@ -10,6 +10,11 @@ import {
   applyCpuRosterRepairLeaguePatch,
   normalizeCpuRosterRepairTargetNames,
 } from "../utils/cpuRosterRepairPatch.js";
+import {
+  isMultiYearSpeedDiagnosticsEnabled,
+  recordMultiYearGameSimTiming,
+  shouldSampleMultiYearGamePayload,
+} from "../utils/multiYearSpeedDiagnostics.js";
 
 let worker = null;
 
@@ -260,6 +265,20 @@ function startWorker() {
       if (entry) {
         pending.delete(msg.id);
         clearTimeout(entry.timer);
+        if (entry.multiYearPerf) {
+          const workerRoundTripMs = Math.max(0, performance.now() - entry.multiYearPerf.postedAt);
+          recordMultiYearGameSimTiming({
+            seasonYear: entry.multiYearPerf.seasonYear,
+            phase: entry.multiYearPerf.phase,
+            teamCloneMs: entry.multiYearPerf.teamCloneMs,
+            sanitizeMs: entry.multiYearPerf.sanitizeMs,
+            workerRoundTripMs,
+            workerToPyMs: msg?.perf?.toPyMs || 0,
+            pythonComputeMs: msg?.perf?.pythonComputeMs || 0,
+            workerToJsMs: msg?.perf?.toJsMs || 0,
+            payloadBytes: entry.multiYearPerf.payloadBytes || 0,
+          });
+        }
         simEngineLog("[simEnginePy] result-single for id", msg.id);
         entry.resolve(convert(msg.result));
       } else {
@@ -1275,15 +1294,36 @@ export async function repairCpuTeamsToMinRoster(
   };
 }
 
-export function simulateOneGame({ homeTeam, awayTeam }) {
+export function simulateOneGame({ homeTeam, awayTeam, diagnostics = null }) {
   startWorker();
   return queueSim(() => {
     return new Promise((resolve) => {
       const id = counter++;
+      const multiYearEnabled = isMultiYearSpeedDiagnosticsEnabled();
+      const sanitizeStartedAt = multiYearEnabled ? performance.now() : 0;
+      const sanitizedHome = multiYearEnabled ? deepSanitize(homeTeam) : null;
+      const sanitizedAway = multiYearEnabled ? deepSanitize(awayTeam) : null;
+      const sanitizeMs = multiYearEnabled ? performance.now() - sanitizeStartedAt : 0;
+      let payloadBytes = 0;
+      if (multiYearEnabled && shouldSampleMultiYearGamePayload(200)) {
+        try {
+          payloadBytes = JSON.stringify({ home: sanitizedHome, away: sanitizedAway }).length;
+        } catch {}
+      }
 
       const entry = {
         resolve,
         timer: null,
+        multiYearPerf: multiYearEnabled
+          ? {
+              seasonYear: Number(diagnostics?.seasonYear || 0),
+              phase: diagnostics?.phase || "other",
+              teamCloneMs: Number(diagnostics?.teamCloneMs || 0),
+              sanitizeMs,
+              payloadBytes,
+              postedAt: 0,
+            }
+          : null,
       };
 
       entry.timer = setTimeout(() => {
@@ -1295,12 +1335,14 @@ export function simulateOneGame({ homeTeam, awayTeam }) {
       }, WORKER_TIMEOUT_MS);
 
       pending.set(id, entry);
+      if (entry.multiYearPerf) entry.multiYearPerf.postedAt = performance.now();
 
       worker.postMessage({
         type: "simulate-single",
         id,
-        home: deepSanitize(homeTeam),
-        away: deepSanitize(awayTeam),
+        home: multiYearEnabled ? sanitizedHome : deepSanitize(homeTeam),
+        away: multiYearEnabled ? sanitizedAway : deepSanitize(awayTeam),
+        ...(multiYearEnabled ? { multiYearDiagnostics: true } : {}),
       });
     });
   });

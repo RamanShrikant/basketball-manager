@@ -12,6 +12,11 @@ import FinalsMvpReveal from "../components/FinalsMvpReveal";
 import { finalizeFinalsMvpAndGoOffseason } from "../utils/finalsMvpSeasonActions";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 import {
+  isMultiYearSpeedDiagnosticsEnabled,
+  recordMultiYearInjuryEvents,
+  recordMultiYearPhaseTiming,
+} from "../utils/multiYearSpeedDiagnostics.js";
+import {
   ensurePostseasonCalendar,
   formatLeagueDate,
   setPostseasonCurrentDate,
@@ -1009,8 +1014,10 @@ async function simOneSafe({ homeName, awayName, leagueData, teamsByName, current
   ensureGameplansForLeague(leagueData);
   recoverPlayersForDate(leagueData, currentDate);
 
+  const multiYearCloneStartedAt = isMultiYearSpeedDiagnosticsEnabled() ? performance.now() : 0;
   const home = structuredClone(homeTeamObj);
   const away = structuredClone(awayTeamObj);
+  const multiYearTeamCloneMs = multiYearCloneStartedAt ? performance.now() - multiYearCloneStartedAt : 0;
 
   for (const p of home.players || []) {
     if (!p.secondaryPos || String(p.secondaryPos).trim() === "") {
@@ -1035,7 +1042,17 @@ async function simOneSafe({ homeName, awayName, leagueData, teamsByName, current
   }
 
   const full = await queueSim(() =>
-    simulateOneGame({ homeTeam: home, awayTeam: away, leagueData })
+    simulateOneGame({
+      homeTeam: home,
+      awayTeam: away,
+      leagueData,
+      diagnostics: {
+        seasonYear: Number(leagueData?.seasonYear ?? leagueData?.currentSeasonYear ?? leagueData?.year ?? 0),
+        phase: "playoffs",
+        date: currentDate || "",
+        teamCloneMs: multiYearTeamCloneMs,
+      },
+    })
   );
 
   return full;
@@ -1693,10 +1710,10 @@ export default function Playoffs() {
     if (!leagueWithHistory) return;
 
     if (typeof setLeagueData === "function") {
-      setLeagueData(leagueWithHistory);
+      setLeagueData(leagueWithHistory, { source: "Playoffs.seasonHistory.context" });
     }
 
-    saveLeagueDataInBackground(leagueWithHistory);
+    saveLeagueDataInBackground(leagueWithHistory, { source: "Playoffs.seasonHistory.explicit" });
   }
 
   function persistPost(next) {
@@ -1870,8 +1887,8 @@ export default function Playoffs() {
     const recovery = recoverPlayersForDate(leagueData, currentDate);
     if (recovery.touchedTeamNames.length) {
       const cloned = structuredClone(leagueData);
-      setLeagueData(cloned);
-      saveLeagueDataInBackground(cloned);
+      setLeagueData(cloned, { source: "Playoffs.injuryRecovery.context" });
+      saveLeagueDataInBackground(cloned, { source: "Playoffs.injuryRecovery.explicit" });
       showUserPostseasonInjuryAlert(recovery.events);
     }
 
@@ -1887,10 +1904,11 @@ export default function Playoffs() {
       result: slim,
       currentDate,
     });
+    recordMultiYearInjuryEvents({ seasonYear, phase: "playoffs", events: injuryResult?.events || [] });
     if (injuryResult.touchedTeamNames.length) {
       const cloned = structuredClone(leagueData);
-      setLeagueData(cloned);
-      saveLeagueDataInBackground(cloned);
+      setLeagueData(cloned, { source: "Playoffs.gameInjury.context" });
+      saveLeagueDataInBackground(cloned, { source: "Playoffs.gameInjury.explicit" });
       showUserPostseasonInjuryAlert(injuryResult.events);
     }
 
@@ -2250,8 +2268,8 @@ export default function Playoffs() {
     const recovery = recoverPlayersForDate(leagueData, node.date);
     if (recovery.touchedTeamNames.length) {
       const cloned = structuredClone(leagueData);
-      setLeagueData(cloned);
-      saveLeagueDataInBackground(cloned);
+      setLeagueData(cloned, { source: "Playoffs.playInInjuryRecovery.context" });
+      saveLeagueDataInBackground(cloned, { source: "Playoffs.playInInjuryRecovery.explicit" });
     }
 
     const slim = await safeSimTransientPlayIn(node.home, node.away, node.date, { retries: 1 });
@@ -2263,10 +2281,11 @@ export default function Playoffs() {
       result: slim,
       currentDate: node.date,
     });
+    recordMultiYearInjuryEvents({ seasonYear, phase: "playoffs", events: injuryResult?.events || [] });
     if (injuryResult.touchedTeamNames.length) {
       const cloned = structuredClone(leagueData);
-      setLeagueData(cloned);
-      saveLeagueDataInBackground(cloned);
+      setLeagueData(cloned, { source: "Playoffs.playInGameInjury.context" });
+      saveLeagueDataInBackground(cloned, { source: "Playoffs.playInGameInjury.explicit" });
     }
 
     const side = winnerFromSlim(slim);
@@ -2708,6 +2727,8 @@ export default function Playoffs() {
     if (simLock) return;
     if (post?.finals?.complete) return;
 
+    const multiYearStartedAt = isMultiYearSpeedDiagnosticsEnabled() ? performance.now() : 0;
+    let multiYearFinalsComplete = false;
     setSimLock(true);
     stopRequestedRef.current = false;
     setSimStopping(false);
@@ -2748,7 +2769,20 @@ export default function Playoffs() {
       }
 
       persistPost(structuredClone(cur));
+      multiYearFinalsComplete = Boolean(cur?.finals?.complete);
     } finally {
+      if (multiYearStartedAt) {
+        recordMultiYearPhaseTiming({
+          seasonYear,
+          phase: "playoffs",
+          elapsedMs: performance.now() - multiYearStartedAt,
+          details: {
+            stopped: Boolean(stopRequestedRef.current),
+            finalsComplete: multiYearFinalsComplete,
+            mode: "production_simulate_playoffs",
+          },
+        });
+      }
       setSimLock(false);
       stopRequestedRef.current = false;
       setSimStopping(false);

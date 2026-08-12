@@ -1,16 +1,26 @@
 import { getCpuCpuTradeCandidates, getCpuTradeGenerationPoolStatus, prewarmCpuTradeWorker } from "../api/cpuTradeEngine.js";
+import {
+  getCpuTradeValidationPoolStatus,
+  validateCpuTradeCandidatesParallel,
+} from "../api/cpuTradeValidationPool.js";
 import { repairCpuTeamsToMinRoster } from "../api/simEnginePy.js";
 import { runCpuTradePackageBenchmarks } from "./cpuTradeDiagnostics.js";
 import { getCpuTradeCandidateSignature } from "./cpuTradeBank.js";
 import { validateCpuTradeCandidateOnLeague } from "./tradeExecution.js";
-import { getCpuTradeImpactCacheStats, resetCpuTradeImpactCache } from "./tradeTeamImpact.js";
+import {
+  getCpuTradeImpactBreakdown,
+  getCpuTradeImpactCacheStats,
+  resetCpuTradeImpactBreakdown,
+  resetCpuTradeImpactCache,
+  setCpuTradeImpactBreakdownEnabled,
+} from "./tradeTeamImpact.js";
 import {
   configureCpuTradeTrace,
   getCpuTradeTraceConfig,
 } from "./cpuTradeTelemetry.js";
 
 const MICROPROFILE_VERSION = "2026-07-29_v1";
-const VALIDATION_MICROPROFILE_VERSION = "2026-07-29_v3";
+const VALIDATION_MICROPROFILE_VERSION = "2026-08-12_v5_dynamic_parallel_validation";
 const STORAGE_DB_PREFIX = "BM_SIM_SPEED_MICROPROFILE_V1";
 
 function nowMs() {
@@ -521,6 +531,64 @@ function validationDecisionHash(rows = []) {
   }))));
 }
 
+function summarizeCpuImpactBreakdown(snapshot = null) {
+  if (!snapshot || typeof snapshot !== "object") return null;
+
+  const compactAggregate = (row = {}) => {
+    const metrics = row?.metrics && typeof row.metrics === "object" ? row.metrics : {};
+    const rankedMetrics = Object.entries(metrics)
+      .filter(([key, value]) => key.endsWith("Ms") && Number.isFinite(Number(value)))
+      .map(([key, value]) => ({ metric: key, totalMs: round3(value) }))
+      .sort((a, b) => b.totalMs - a.totalMs);
+
+    return {
+      calls: finiteNumber(row?.calls, 0),
+      cacheHits: finiteNumber(row?.cacheHits, 0),
+      cacheMisses: finiteNumber(row?.cacheMisses, 0),
+      accepted: finiteNumber(row?.accepted, 0),
+      rejected: finiteNumber(row?.rejected, 0),
+      totalMs: round3(row?.totalMs),
+      metrics: Object.fromEntries(
+        Object.entries(metrics).map(([key, value]) => [key, round3(value)])
+      ),
+      topMetrics: rankedMetrics.slice(0, 24),
+    };
+  };
+
+  const rows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+  const slowestCalls = [...rows]
+    .sort((a, b) => finiteNumber(b?.totalMs, 0) - finiteNumber(a?.totalMs, 0))
+    .slice(0, 16)
+    .map((row) => ({
+      callIndex: finiteNumber(row?.callIndex, 0),
+      role: row?.cpuTradeRole || "",
+      team: row?.team || "",
+      userTeam: row?.userTeam || "",
+      cacheHit: Boolean(row?.cacheHit),
+      accepted: Boolean(row?.accepted),
+      totalMs: round3(row?.totalMs),
+      userItems: row?.userItems || null,
+      cpuItems: row?.cpuItems || null,
+      metrics: Object.fromEntries(
+        Object.entries(row?.metrics || {})
+          .filter(([, value]) => Number.isFinite(Number(value)))
+          .map(([key, value]) => [key, round3(value)])
+      ),
+    }));
+
+  const byRole = {};
+  for (const [role, row] of Object.entries(snapshot?.byRole || {})) {
+    byRole[role] = compactAggregate(row);
+  }
+
+  return {
+    totals: compactAggregate(snapshot?.totals || {}),
+    byRole,
+    slowestCalls,
+    capturedRows: rows.length,
+  };
+}
+
 function runExactValidationPass({
   leagueData,
   candidates = [],
@@ -553,6 +621,44 @@ function runExactValidationPass({
     count: rows.length,
     totalMs: round3(nowMs() - startedAt),
     durations: summarizeDurations(durations),
+    outcomes: validationOutcomeCounts(rows),
+    decisionHash: validationDecisionHash(rows),
+    rows,
+  };
+}
+
+async function runParallelExactValidationPass({
+  leagueData,
+  candidates = [],
+  currentDate = "",
+  tradeDeadlineDate = "",
+  recordsByTeam = {},
+} = {}) {
+  const startedAt = nowMs();
+  const parallelRows = await validateCpuTradeCandidatesParallel({
+    leagueData,
+    candidates,
+    currentDate,
+    tradeDeadlineDate,
+    inOffseason: false,
+    recordsByTeam,
+  });
+
+  const rows = candidates.map((candidate, index) => ({
+    signature: getCpuTradeCandidateSignature(candidate),
+    teams: [candidate?.fromTeamName || "", candidate?.toTeamName || ""],
+    package: candidatePackageShape(candidate),
+    durationMs: round3(parallelRows[index]?.durationMs || 0),
+    workerIndex: Number(parallelRows[index]?.workerIndex ?? -1),
+    result: validationResultSummary(parallelRows[index]?.result || {}),
+  }));
+
+  return {
+    count: rows.length,
+    wallMs: round3(nowMs() - startedAt),
+    workerComputeMs: round3(rows.reduce((sum, row) => sum + Number(row.durationMs || 0), 0)),
+    workerCount: new Set(rows.map((row) => row.workerIndex).filter((value) => value >= 0)).size,
+    durations: summarizeDurations(rows.map((row) => row.durationMs)),
     outcomes: validationOutcomeCounts(rows),
     decisionHash: validationDecisionHash(rows),
     rows,
@@ -692,39 +798,86 @@ export async function runCpuTradeValidationMicroDiagnostics({
     const candidateBySignature = new Map(candidates.map((candidate) => [getCpuTradeCandidateSignature(candidate), candidate]));
     resetCpuTradeImpactCache();
     const cacheBeforeCold = getCpuTradeImpactCacheStats();
-    const coldPass = runExactValidationPass({
-      leagueData: fixture,
-      candidates,
-      currentDate,
-      tradeDeadlineDate,
-      recordsByTeam,
-    });
-    const cacheAfterCold = getCpuTradeImpactCacheStats();
-    const warmPass = runExactValidationPass({
-      leagueData: fixture,
-      candidates,
-      currentDate,
-      tradeDeadlineDate,
-      recordsByTeam,
-    });
-    const cacheAfterWarm = getCpuTradeImpactCacheStats();
-    const repeatRows = runExactRepeatProfile({
-      leagueData: fixture,
-      sourceRows: coldPass.rows,
-      candidateBySignature,
-      currentDate,
-      tradeDeadlineDate,
-      recordsByTeam,
-      iterations: repeatIterations,
-    });
+
+    let coldImpactBreakdown = null;
+    let warmImpactBreakdown = null;
+    let repeatImpactBreakdown = null;
+    let coldPass = null;
+    let parallelPass = null;
+    let warmPass = null;
+    let repeatRows = [];
+    let cacheAfterCold = null;
+    let cacheAfterWarm = null;
+
+    setCpuTradeImpactBreakdownEnabled(true);
+    try {
+      resetCpuTradeImpactBreakdown();
+      coldPass = runExactValidationPass({
+        leagueData: fixture,
+        candidates,
+        currentDate,
+        tradeDeadlineDate,
+        recordsByTeam,
+      });
+      coldImpactBreakdown = summarizeCpuImpactBreakdown(getCpuTradeImpactBreakdown());
+
+      cacheAfterCold = getCpuTradeImpactCacheStats();
+
+      // Same exact candidates through the real worker pool. Worker modules have
+      // their own cold caches, so this measures actual parallel wall time while
+      // still comparing every decision against the serial cold pass.
+      parallelPass = await runParallelExactValidationPass({
+        leagueData: fixture,
+        candidates,
+        currentDate,
+        tradeDeadlineDate,
+        recordsByTeam,
+      });
+
+      resetCpuTradeImpactBreakdown();
+      warmPass = runExactValidationPass({
+        leagueData: fixture,
+        candidates,
+        currentDate,
+        tradeDeadlineDate,
+        recordsByTeam,
+      });
+      warmImpactBreakdown = summarizeCpuImpactBreakdown(getCpuTradeImpactBreakdown());
+
+      cacheAfterWarm = getCpuTradeImpactCacheStats();
+
+      resetCpuTradeImpactBreakdown();
+      repeatRows = runExactRepeatProfile({
+        leagueData: fixture,
+        sourceRows: coldPass.rows,
+        candidateBySignature,
+        currentDate,
+        tradeDeadlineDate,
+        recordsByTeam,
+        iterations: repeatIterations,
+      });
+      repeatImpactBreakdown = summarizeCpuImpactBreakdown(getCpuTradeImpactBreakdown());
+
+    } finally {
+      setCpuTradeImpactBreakdownEnabled(false);
+    }
+    cacheAfterCold = cacheAfterCold || getCpuTradeImpactCacheStats();
+    cacheAfterWarm = cacheAfterWarm || getCpuTradeImpactCacheStats();
     const parity = coldPass.decisionHash === warmPass.decisionHash && coldPass.rows.every((row, index) => (
       JSON.stringify(row.result) === JSON.stringify(warmPass.rows[index]?.result)
     ));
+    const parallelParity = Boolean(parallelPass) &&
+      coldPass.decisionHash === parallelPass.decisionHash &&
+      coldPass.rows.every((row, index) => (
+        JSON.stringify(row.result) === JSON.stringify(parallelPass.rows[index]?.result)
+      ));
 
     report.validation = {
-      ok: parity && repeatRows.every((row) => row.allDecisionsIdentical),
+      ok: parity && parallelParity && repeatRows.every((row) => row.allDecisionsIdentical),
       candidateCount: candidates.length,
       coldPass,
+      parallelPass,
+      parallelPool: getCpuTradeValidationPoolStatus(),
       warmPass,
       repeatRows,
       cpuImpactCache: {
@@ -732,7 +885,16 @@ export async function runCpuTradeValidationMicroDiagnostics({
         afterCold: cacheAfterCold,
         afterWarm: cacheAfterWarm,
       },
+      impactBreakdown: {
+        cold: coldImpactBreakdown,
+        warm: warmImpactBreakdown,
+        repeat: repeatImpactBreakdown,
+      },
       decisionParity: parity,
+      parallelDecisionParity: parallelParity,
+      parallelWallSpeedupPct: coldPass.totalMs > 0 && Number(parallelPass?.wallMs || 0) > 0
+        ? round3((1 - Number(parallelPass.wallMs) / coldPass.totalMs) * 100)
+        : 0,
       totalWarmSpeedupPct: coldPass.totalMs > 0
         ? round3((1 - warmPass.totalMs / coldPass.totalMs) * 100)
         : 0,
@@ -741,6 +903,7 @@ export async function runCpuTradeValidationMicroDiagnostics({
         : 0,
     };
   } catch (error) {
+    setCpuTradeImpactBreakdownEnabled(false);
     report.errors.push({ stage: report.generation ? "validation" : "generation", error: error?.message || String(error || "") });
   }
 

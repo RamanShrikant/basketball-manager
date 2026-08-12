@@ -12,6 +12,23 @@ function finiteNumber(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function hasCpuTradeReason(coveredReasonCounts = {}) {
+  return Boolean(
+    Number(coveredReasonCounts?.bank_state_only || 0) > 0 ||
+    Number(coveredReasonCounts?.trade_or_roster_change || 0) > 0
+  );
+}
+
+function getLeagueSaveSource(batch = {}) {
+  const counts = batch?.coveredReasonCounts || {};
+  const cpuReason = hasCpuTradeReason(counts);
+  const injuryReason = Number(counts?.injury_state || 0) > 0 || Number(counts?.injury_alerts_disabled || 0) > 0;
+
+  if (cpuReason && injuryReason) return "shared_latest_league_save_queue";
+  if (injuryReason) return "Calendar.injuryStateQueue";
+  return "cpu_trade_save_queue";
+}
+
 /**
  * Creates a latest-state-only async save queue.
  *
@@ -264,12 +281,19 @@ export function createLatestOnlySaveQueue({
 }
 
 const cpuTradeLeagueSaveQueue = createLatestOnlySaveQueue({
-  save: (leagueData, batch) =>
-    batch?.saveMode === "bank_overlay"
-      ? saveCpuTradeBankStateOverlay(leagueData)
-      : saveLeagueData(leagueData),
+  save: (leagueData, batch) => {
+    const source = getLeagueSaveSource(batch);
+    return batch?.saveMode === "bank_overlay"
+      ? saveCpuTradeBankStateOverlay(leagueData, { source })
+      : saveLeagueData(leagueData, { source });
+  },
   now: cpuTradeNow,
   onWrite: (row) => {
+    // Injury persistence shares this latest-only writer so full-league saves
+    // cannot race CPU-trade saves. Keep CPU-trade telemetry limited to actual
+    // CPU-trade requests so the performance report remains meaningful.
+    if (!hasCpuTradeReason(row.coveredReasonCounts || {})) return;
+
     const mode = row.saveMode === "bank_overlay"
       ? "latest_only_cpu_bank_overlay"
       : "latest_only_full_league";

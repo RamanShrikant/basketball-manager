@@ -367,10 +367,14 @@ function cacheSmartRotationResult(valid, result) {
     .filter((player) => player?.name && !orderedNames.has(player.name))
     .sort(comparePlayers)
     .map((player) => player.name);
+  const fullRosterStarterNames = (result?.__fullRosterStarters || [])
+    .map((player) => player?.name)
+    .filter(Boolean);
 
   return {
     order: [...order, ...missing],
     obj: { ...(result?.obj || {}) },
+    fullRosterStarterNames,
   };
 }
 
@@ -397,7 +401,19 @@ function inflateSmartRotationResult(valid, cached) {
     obj[player.name] = Number(cached?.obj?.[player.name] || 0);
   }
 
-  return { sorted, obj };
+  const result = { sorted, obj };
+  const fullRosterStarters = (cached?.fullRosterStarterNames || [])
+    .map((name) => byName.get(name))
+    .filter(Boolean);
+  try {
+    Object.defineProperty(result, "__fullRosterStarters", {
+      value: fullRosterStarters,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  } catch {}
+  return result;
 }
 
 function combos(arr, k) {
@@ -676,13 +692,15 @@ function benchLineupAssignmentScore(benchPlayers = []) {
   );
 }
 
+function rotationSelectionScoreFromBase(candidate, baseScore) {
+  if (!candidate) return -Infinity;
+  const benchScore = benchLineupAssignmentScore(candidate.bench || []);
+  return Number(baseScore) + benchScore * BENCH_LINEUP_ASSIGNMENT_WEIGHT;
+}
+
 function rotationSelectionScore(valid, candidate) {
   if (!candidate) return -Infinity;
-
-  const baseScore = scoreMinutes(valid, candidate.minutesObj);
-  const benchScore = benchLineupAssignmentScore(candidate.bench || []);
-
-  return baseScore + benchScore * BENCH_LINEUP_ASSIGNMENT_WEIGHT;
+  return rotationSelectionScoreFromBase(candidate, scoreMinutes(valid, candidate.minutesObj));
 }
 
 function makeZeroMinutes(valid) {
@@ -769,14 +787,17 @@ function seedRotation(valid, starters, benchPlayers) {
     minByName[p.name] = min;
   });
 
+  // Seed scores are intentionally deferred. Every seed is immediately consumed
+  // by either the quick candidate scorer or the minute optimizer, both of which
+  // compute the exact score for the minutes they actually evaluate. Computing
+  // the seed score (and selection score) here duplicated two full team-rating
+  // evaluations per bench candidate without affecting any choice or output.
   return {
     starters,
     bench: benchPlayers,
     rotation,
     minutesObj,
     minByName,
-    score: scoreMinutes(valid, minutesObj),
-    selectionScore: rotationSelectionScore(valid, { bench: benchPlayers, minutesObj }),
   };
 }
 
@@ -888,7 +909,12 @@ function optimizeSeededRotation(valid, seeded) {
     rotation,
     minutesObj,
     score: currentScore,
-    selectionScore: rotationSelectionScore(valid, { bench: benchPlayers, minutesObj }),
+    // currentScore is already scoreMinutes(valid, minutesObj). Reuse it instead
+    // of evaluating the identical rotation a second time.
+    selectionScore: rotationSelectionScoreFromBase(
+      { bench: benchPlayers, minutesObj },
+      currentScore
+    ),
   };
   addSmartMetric(diag, "optimizeSeededRotationMs", smartNow() - optimizeStart);
   return optimizedResult;
@@ -1125,13 +1151,15 @@ function applyBenchRealismPass(valid, optimized) {
 
   rotation = [...starters, ...bench];
 
+  const finalScore = scoreMinutes(valid, minutesObj);
   return {
     ...optimized,
     bench,
     rotation,
     minutesObj,
-    score: scoreMinutes(valid, minutesObj),
-    selectionScore: rotationSelectionScore(valid, { bench, minutesObj }),
+    score: finalScore,
+    // Avoid a second scoreMinutes call for the exact same final rotation.
+    selectionScore: rotationSelectionScoreFromBase({ bench, minutesObj }, finalScore),
   };
 }
 
@@ -1492,7 +1520,9 @@ function buildBestOptimizedRotation(valid, starters, benchNeeded, seedBuilder = 
   for (const benchPlayers of finalists) {
     let candidate = measureSmart(diag, "buildOptimizedRotationFromBenchMs", () => buildOptimizedRotationFromBench(valid, starters, benchPlayers, seedBuilder));
     candidate = measureSmart(diag, "applyBenchRealismPassMs", () => applyBenchRealismPass(valid, candidate));
-    const candidateScore = measureSmart(diag, "finalCandidateScoreMs", () => scoreMinutes(valid, candidate?.minutesObj || {}));
+    // applyBenchRealismPass already stores the exact score for candidate.minutesObj.
+    // Reuse it instead of immediately recomputing the same team rating again.
+    const candidateScore = measureSmart(diag, "finalCandidateScoreMs", () => Number(candidate?.score ?? -Infinity));
 
     if (
       !best ||
@@ -1546,25 +1576,36 @@ function seedFullTeamRotation(valid, starters, benchPlayers) {
     }
   }
 
+  // As with the normal seed, scoring is deferred until the exact quick-score or
+  // optimizer step that consumes this seed. The eager values were never read.
   return {
     starters,
     bench: benchPlayers,
     rotation,
     minutesObj,
     minByName,
-    score: scoreMinutes(valid, minutesObj),
-    selectionScore: rotationSelectionScore(valid, { bench: benchPlayers, minutesObj }),
   };
 }
 
-function buildOptimizedFullTeamRotation(teamPlayers) {
+function buildOptimizedFullTeamRotation(teamPlayers, precomputedStarters = null) {
   const valid = (teamPlayers || []).filter(
     (p) => p && p.name && Number.isFinite(Number(p.overall))
   );
 
   if (valid.length === 0) return null;
 
-  const starters = chooseStarters(valid);
+  let starters = null;
+  if (Array.isArray(precomputedStarters) && precomputedStarters.length) {
+    const validByName = new Map(valid.map((player) => [player.name, player]));
+    const reused = precomputedStarters
+      .map((player) => validByName.get(player?.name || ""))
+      .filter(Boolean);
+    const expected = Math.min(POSITIONS.length, valid.length);
+    if (reused.length === expected && new Set(reused.map((player) => player.name)).size === expected) {
+      starters = reused;
+    }
+  }
+  if (!starters) starters = chooseStarters(valid);
   const benchNeeded = Math.max(0, Math.min(ROTATION_SIZE, valid.length) - starters.length);
   let best = buildBestOptimizedRotation(valid, starters, benchNeeded, seedFullTeamRotation);
 
@@ -1584,7 +1625,7 @@ function buildOptimizedFullTeamRotation(teamPlayers) {
   return { valid, ...best };
 }
 
-export function buildFullTeamRating(teamPlayers) {
+export function buildFullTeamRating(teamPlayers, options = {}) {
   const valid = (teamPlayers || []).filter(
     (p) => p && p.name && Number.isFinite(Number(p.overall))
   );
@@ -1592,7 +1633,7 @@ export function buildFullTeamRating(teamPlayers) {
   const cached = getLimitedCache(fullTeamRatingCache, cacheKey);
   if (cached) return { ...cached, minutes: { ...(cached.minutes || {}) } };
 
-  const built = buildOptimizedFullTeamRotation(valid);
+  const built = buildOptimizedFullTeamRotation(valid, options?.precomputedStarters || null);
 
   if (!built) {
     return {
@@ -1668,7 +1709,20 @@ function buildSmartRotationCore(valid) {
     obj[p.name] = Number(best.minutesObj[p.name] || 0);
   }
 
-  return { sorted, obj };
+  const result = { sorted, obj };
+  // Internal only: these are the starters selected from this exact `valid`
+  // roster before any low-end exclusion retry. Full-team rating starts from
+  // the same chooseStarters(valid) result, so preserving it lets callers avoid
+  // repeating that expensive starter search without changing any decision.
+  try {
+    Object.defineProperty(result, "__coreStarters", {
+      value: starters,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  } catch {}
+  return result;
 }
 
 
@@ -1685,6 +1739,12 @@ function buildSmartRotationUncached(valid) {
   if (valid.length === 0) return { sorted: [], obj: {} };
 
   let best = measureSmart(diag, "uncachedInitialCoreMs", () => buildSmartRotationCore(valid));
+  // Keep the starter choice from the full roster even if the smart-rotation
+  // realism retry later accepts a reduced roster. buildFullTeamRating always
+  // selects starters from the full roster, so this is the exact reusable value.
+  const fullRosterStarters = Array.isArray(best?.__coreStarters)
+    ? best.__coreStarters
+    : [];
   let bestScore = measureSmart(diag, "uncachedInitialScoreMs", () => scoreMinutes(valid, best.obj || {}));
 
   const ranked = measureSmart(diag, "uncachedRankPlayersMs", () => [...valid].sort(comparePlayers));
@@ -1744,6 +1804,14 @@ function buildSmartRotationUncached(valid) {
     }
   });
 
+  try {
+    Object.defineProperty(best, "__fullRosterStarters", {
+      value: fullRosterStarters,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  } catch {}
   return best;
 }
 

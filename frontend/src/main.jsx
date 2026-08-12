@@ -36,7 +36,13 @@ function devBootResetIfNeeded() {
   // Same server boot: do nothing
   if (prev === String(bootId)) return;
 
-  // New dev server boot => wipe save state
+  // New dev server boot => wipe save state. Calendar also consumes this
+  // one-shot token before its first season hydrate so stale result payloads or
+  // played flags cannot survive a dev fresh-start through another storage layer.
+  try {
+    sessionStorage.setItem("bm_dev_fresh_calendar_boot_v1", String(bootId));
+  } catch {}
+
   for (let i = localStorage.length - 1; i >= 0; i--) {
     const k = localStorage.key(i);
     if (!k) continue;

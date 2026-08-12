@@ -54,7 +54,11 @@ import {
 } from "../utils/indexedDbStorage";
 import PageFade from "../components/PageFade";
 import "../styles/BMAnimations.css";
-import { saveLeagueData } from "../utils/leagueStorage.js";
+import {
+  markLeagueInjuryStateChanged,
+  saveInjuryStateOverlay,
+  saveLeagueData,
+} from "../utils/leagueStorage.js";
 import { appendRegularSeasonAwardsToLeagueHistory } from "../utils/leagueHistoryUtils.js";
 import { archiveCurrentSeasonIntoPlayerCards } from "../utils/playerCareerHistory.js";
 import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.js";
@@ -104,6 +108,14 @@ import {
   startCpuTradeMainThreadMonitor,
 } from "../utils/cpuTradeTelemetry.js";
 import { bumpPerfCounter } from "../utils/bmPerfRescueDebug.js";
+import {
+  isMultiYearSpeedDiagnosticsEnabled,
+  recordMultiYearCalendarDate,
+  recordMultiYearCalendarRun,
+  recordMultiYearCpuTradeSnapshot,
+  recordMultiYearInjuryEvents,
+  recordMultiYearLeagueSnapshot,
+} from "../utils/multiYearSpeedDiagnostics.js";
 import {
   ensureTeamGameplanInjurySafe,
   formatInjuryEventLine,
@@ -431,8 +443,10 @@ if (simBlockMessage) {
   throw new Error(simBlockMessage);
 }
 
+  const multiYearCloneStartedAt = isMultiYearSpeedDiagnosticsEnabled() ? performance.now() : 0;
   const homeTeamObj = structuredClone(homeSource);
   const awayTeamObj = structuredClone(awaySource);
+  const multiYearTeamCloneMs = multiYearCloneStartedAt ? performance.now() - multiYearCloneStartedAt : 0;
 
   for (const p of homeTeamObj.players || []) {
     if (!p.secondaryPos || String(p.secondaryPos).trim() === "") {
@@ -460,7 +474,50 @@ if (simBlockMessage) {
     homeTeam: homeTeamObj,
     awayTeam: awayTeamObj,
     leagueData,
+    diagnostics: {
+      seasonYear: getCalendarLeagueSeasonYear(leagueData),
+      phase: "regular_season",
+      date: currentDate || "",
+      teamCloneMs: multiYearTeamCloneMs,
+    },
   });
+}
+
+function startMultiYearCalendarDateProbe(simulationPerf) {
+  if (!isMultiYearSpeedDiagnosticsEnabled()) return null;
+  return {
+    startedAt: performance.now(),
+    gamesBefore: Number(simulationPerf?.gamesSimmed || 0),
+    cpuTradeMsBefore: Number(simulationPerf?.cpuTradeMs || 0),
+    cpuTradePassesBefore: Number(simulationPerf?.cpuTradePasses || 0),
+  };
+}
+
+function finishMultiYearCalendarDateProbe(probe, simulationPerf, seasonYear, date, tradeDeadlineDate) {
+  if (!probe) return;
+  recordMultiYearCalendarDate({
+    seasonYear,
+    date,
+    elapsedMs: performance.now() - probe.startedAt,
+    gamesSimmed: Number(simulationPerf?.gamesSimmed || 0) - probe.gamesBefore,
+    cpuTradeMs: Number(simulationPerf?.cpuTradeMs || 0) - probe.cpuTradeMsBefore,
+    cpuTradePasses: Number(simulationPerf?.cpuTradePasses || 0) - probe.cpuTradePassesBefore,
+    tradeDeadlineDate,
+  });
+}
+
+function captureMultiYearCpuTradeCheckpoint(leagueData, seasonYear, checkpoint) {
+  if (!isMultiYearSpeedDiagnosticsEnabled() || !leagueData) return;
+  try {
+    recordMultiYearCpuTradeSnapshot({
+      seasonYear,
+      checkpoint,
+      report: buildCpuTradeDiagnosticReport(leagueData, { runBenchmarks: false }),
+      leagueData,
+    });
+  } catch (error) {
+    console.warn("[BM MULTI-YEAR SPEED] CPU trade checkpoint capture failed", checkpoint, error);
+  }
 }
 // ---------------------------------------------------------------------------
 // Helper: run ONE game with retries, using simOneSafe + queueSim
@@ -4217,8 +4274,35 @@ const scheduleTeamIdentitySignature = useMemo(
 
 const scheduleSeasonIdentity = `${fmt(seasonStart)}::${fmt(seasonEnd)}`;
 
+function consumeDevFreshCalendarBoot() {
+  if (!import.meta.env.DEV) return false;
+  try {
+    const token = sessionStorage.getItem("bm_dev_fresh_calendar_boot_v1");
+    if (!token) return false;
+    const consumedKey = "bm_dev_fresh_calendar_consumed_v1";
+    if (sessionStorage.getItem(consumedKey) === token) return false;
+    sessionStorage.setItem(consumedKey, token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 useEffect(() => {
   if (!teams || teams.length < 2) return;
+
+  const forceDevFreshSeason = consumeDevFreshCalendarBoot();
+  if (forceDevFreshSeason) {
+    try { localStorage.removeItem(SCHED_KEY); } catch {}
+    clearAllResultsV3();
+    removeLegacyResultsBlob();
+    try { localStorage.removeItem(PLAYER_STATS_KEY); } catch {}
+    try { localStorage.removeItem(AWARD_DISPLAY_STATS_KEY); } catch {}
+    try { localStorage.removeItem(CLUTCH_STATS_KEY); } catch {}
+    try { localStorage.removeItem(PENDING_SIM_INTENT_KEY); } catch {}
+    setPendingSimIntent(null);
+    console.log("[Calendar] dev fresh-start: cleared current-season schedule/results before hydrate");
+  }
 
   const wantStart = fmt(seasonStart);
   const wantEnd = fmt(seasonEnd);
@@ -4253,12 +4337,14 @@ useEffect(() => {
   // ----- load from storage -----
   let parsedSched = {};
   let parsedResults = {};
-  let parsedPlayerStats = loadPlayerStats();
+  let parsedPlayerStats = forceDevFreshSeason ? {} : loadPlayerStats();
 
-  try {
-    parsedSched = JSON.parse(localStorage.getItem(SCHED_KEY)) || {};
-  } catch {
-    parsedSched = {};
+  if (!forceDevFreshSeason) {
+    try {
+      parsedSched = JSON.parse(localStorage.getItem(SCHED_KEY)) || {};
+    } catch {
+      parsedSched = {};
+    }
   }
 
   const storedScheduleHasGamesBeforeLoad = Object.values(parsedSched || {}).some(
@@ -4686,6 +4772,32 @@ const [contractExtensionResumeToken, setContractExtensionResumeToken] = useState
 const [tradeToasts, setTradeToasts] = useState([]);
 const [pendingSimIntent, setPendingSimIntent] = useState(() => readPendingSimulationIntent());
 const [injuryAlertModal, setInjuryAlertModal] = useState(null);
+const injuryAlertsEnabledRef = useRef(
+  normalizeInjurySettings(leagueData?.settings?.injuries).userAlerts
+);
+
+// A paused simulation resumes from the closure that opened the injury modal.
+// Keep the user's one-click "always CPU" choice authoritative immediately so
+// that stale pre-render snapshots cannot turn prompts back on while React is
+// still committing the updated league settings.
+const withCurrentInjuryAlertPreference = (sourceLeagueData) => {
+  if (!sourceLeagueData || typeof sourceLeagueData !== "object") return sourceLeagueData;
+
+  const currentSettings = normalizeInjurySettings(sourceLeagueData?.settings?.injuries);
+  const desiredUserAlerts = currentSettings.userAlerts !== false && injuryAlertsEnabledRef.current !== false;
+  if (currentSettings.userAlerts === desiredUserAlerts) return sourceLeagueData;
+
+  return {
+    ...sourceLeagueData,
+    settings: {
+      ...(sourceLeagueData.settings || {}),
+      injuries: {
+        ...currentSettings,
+        userAlerts: desiredUserAlerts,
+      },
+    },
+  };
+};
 
 const persistPendingSimIntent = (intent) => {
   const next = writePendingSimulationIntent(intent);
@@ -4698,10 +4810,59 @@ const clearPendingSimIntent = () => {
   setPendingSimIntent(null);
 };
 
+const disableUserInjuryAlerts = async () => {
+  if (!leagueData || typeof leagueData !== "object") return;
+
+  // Flip this synchronously before the paused simulation resumes. The current
+  // React closure can still contain userAlerts=true until the next render.
+  injuryAlertsEnabledRef.current = false;
+
+  const latestLeagueData = (() => {
+    try {
+      const live = window.__leagueData || window.__basketballManagerLeagueData || null;
+      return live && typeof live === "object" ? live : leagueData;
+    } catch {
+      return leagueData;
+    }
+  })();
+
+  const nextLeagueData = structuredClone(latestLeagueData);
+  nextLeagueData.settings = {
+    ...(nextLeagueData.settings || {}),
+    injuries: {
+      ...normalizeInjurySettings(nextLeagueData?.settings?.injuries),
+      userAlerts: false,
+    },
+  };
+  markLeagueInjuryStateChanged(nextLeagueData);
+
+  // React sees the preference immediately. Persistence uses the tiny injury
+  // sidecar instead of serializing/writing the entire league just for one bit.
+  const normalizedLeagueData = setLeagueData(nextLeagueData, {
+    source: "Calendar.injuryAlertsDisabled",
+    persist: false,
+  }) || nextLeagueData;
+  try {
+    await saveInjuryStateOverlay(normalizedLeagueData, {
+      source: "Calendar.injuryAlertsSidecar",
+    });
+  } catch (error) {
+    console.warn("[Calendar] failed to persist disabled injury alerts", error);
+  }
+
+  try {
+    window.__leagueData = normalizedLeagueData;
+    window.leagueData = normalizedLeagueData;
+    window.__basketballManagerLeagueData = normalizedLeagueData;
+  } catch {}
+
+  console.log("[Calendar] controlled-team injury alerts disabled; CPU auto-rebuild will continue without prompts");
+};
+
 
 const shouldPauseForUserInjuryEvents = (events = [], intent = null) => {
   const injurySettings = normalizeInjurySettings(leagueData?.settings?.injuries);
-  if (!injurySettings.enabled || !injurySettings.userAlerts || !selectedTeam?.name) return false;
+  if (!injurySettings.enabled || !injurySettings.userAlerts || injuryAlertsEnabledRef.current === false || !selectedTeam?.name) return false;
   const userEvents = (events || []).filter((event) => event?.teamName === selectedTeam.name);
   if (!userEvents.length) return false;
 
@@ -4710,9 +4871,35 @@ const shouldPauseForUserInjuryEvents = (events = [], intent = null) => {
   return true;
 };
 
-const refreshInjuryTouchedTeams = (activeLeagueData, touchedTeamNames = []) => {
+const refreshInjuryTouchedTeams = async (activeLeagueData, touchedTeamNames = [], currentDate = "") => {
   if (!touchedTeamNames?.length) return null;
-  setLeagueData(structuredClone(activeLeagueData));
+
+  // The injury engine already mutated the authoritative simulation object and
+  // rebuilt the affected rotation. Stamp that exact state before cloning it.
+  if (injuryAlertsEnabledRef.current === false) {
+    activeLeagueData.settings = { ...(activeLeagueData.settings || {}) };
+    activeLeagueData.settings.injuries = {
+      ...normalizeInjurySettings(activeLeagueData?.settings?.injuries),
+      userAlerts: false,
+    };
+  }
+  markLeagueInjuryStateChanged(activeLeagueData);
+
+  const injurySnapshot = structuredClone(activeLeagueData);
+  const normalizedInjurySnapshot = setLeagueData(injurySnapshot, {
+    source: "Calendar.injuryStateRefresh",
+    persist: false,
+  }) || injurySnapshot;
+
+  // Persist ONLY the authoritative injury/settings snapshot. This sidecar is a
+  // few active-injury rows, not the 3–4 MB league object. Awaiting it preserves
+  // the existing game-result -> injury-state crash ordering without paying for
+  // hundreds of full-league writes. If the sidecar fails, leagueStorage falls
+  // back to a normal full save rather than sacrificing correctness.
+  await saveInjuryStateOverlay(normalizedInjurySnapshot, {
+    source: "Calendar.injuryStateSidecar",
+  });
+
   const nextTeams = buildTeamsFromLeagueForSim(activeLeagueData);
   return {
     teams: nextTeams,
@@ -5176,12 +5363,16 @@ async function repairCpuRostersBeforeSimulation({
   });
 
   if (repairRes?.leagueData && typeof setLeagueData === "function") {
-    setLeagueData(repairedLeagueData);
+    // setLeagueData already persists this exact repaired snapshot. Do not issue
+    // a second identical full-league write immediately afterward.
+    setLeagueData(repairedLeagueData, { source: "Calendar.preSimRepair.context" });
+  } else {
+    // Preserve the old explicit-save fallback for any call site that does not
+    // have a context setter available.
+    saveLeagueData(repairedLeagueData, { source: "Calendar.preSimRepair.explicitFallback" }).catch((err) => {
+      console.warn("[Calendar] Failed to save repaired leagueData to IndexedDB.", err);
+    });
   }
-
-  saveLeagueData(repairedLeagueData).catch((err) => {
-    console.warn("[Calendar] Failed to save repaired leagueData to IndexedDB.", err);
-  });
 
   if (rosterMoves.length) {
     const touchedTeams = Array.from(
@@ -6058,14 +6249,22 @@ async function runCpuCpuTradePassForDate({
           reason: rosterChanged ? "pre_save_trade_sync" : "pre_save_bank_sync",
         });
       } catch {}
-      if (typeof setLeagueData === "function") setLeagueData(nextLeagueData);
+      let normalizedLeagueDataForSave = nextLeagueData;
+      if (typeof setLeagueData === "function") {
+        normalizedLeagueDataForSave = setLeagueData(nextLeagueData, {
+          source: rosterChanged ? "Calendar.cpuTradePass.tradeOrRoster" : "Calendar.cpuTradePass.bankOnly",
+          // The dedicated latest-only save queue below is the authoritative
+          // persistence path for this exact state. Avoid writing it twice.
+          persist: false,
+        }) || nextLeagueData;
+      }
       const storageReason = rosterChanged ? "trade_or_roster_change" : "bank_state_only";
       // CPU trade passes can finish much faster than a full IndexedDB league
       // write. Queue the newest snapshot and let one serialized writer persist
       // it; intermediate bank-only snapshots are safely covered by the latest
       // state instead of opening dozens of overlapping transactions.
       enqueueCpuTradeLeagueSave({
-        leagueData: nextLeagueData,
+        leagueData: normalizedLeagueDataForSave,
         currentDate,
         reason: storageReason,
       }).catch((error) => {
@@ -6185,7 +6384,7 @@ const handleSimOnlyGame = async (dateStr, game) => {
     repairedLeagueData,
     repairedTeams,
   } = await repairCpuRostersBeforeSimulation({
-    leagueData,
+    leagueData: withCurrentInjuryAlertPreference(leagueData),
     selectedTeam,
     setLeagueData,
     currentDate: dateStr,
@@ -6215,7 +6414,7 @@ const handleSimOnlyGame = async (dateStr, game) => {
   let activeTeams = repairedTeams;
   const recovery = recoverPlayersForDate(activeLeagueData, dateStr);
   if (recovery.touchedTeamNames.length) {
-    const refreshed = refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames);
+    const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames, dateStr);
     if (refreshed) {
       activeTeams = refreshed.teams;
     }
@@ -6288,7 +6487,7 @@ const handleSimOnlyGame = async (dateStr, game) => {
     currentDate: dateStr,
   });
   if (injuryResult.touchedTeamNames.length) {
-    refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames);
+    await refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames, dateStr);
   }
 
   savePlayerStats(playerStats);
@@ -6310,6 +6509,7 @@ const handleSimOnlyGame = async (dateStr, game) => {
 
 const handleSimToDate = async (dateStr, { resume = false } = {}) => {
   if (!acquireSimRunLock("SimToDate")) return;
+  const multiYearRunWallStartedAt = Date.now();
 
   const simulationCursorAtStart = readSimulationCursorDate();
   const firstPendingForTarget = findFirstPendingSimulationDate(scheduleByDate, resultsById);
@@ -6333,16 +6533,18 @@ const handleSimToDate = async (dateStr, { resume = false } = {}) => {
   let playerStats = loadPlayerStats();
   let clutchStats = loadClutchStats(seasonYear);
 
+    const preSimRepairStartedAt = performance.now();
     const {
     repairRes,
     repairedLeagueData,
     repairedTeams,
   } = await repairCpuRostersBeforeSimulation({
-    leagueData,
+    leagueData: withCurrentInjuryAlertPreference(leagueData),
     selectedTeam,
     setLeagueData,
     currentDate: firstPendingForTarget || dateStr,
   });
+  const preSimRepairMs = performance.now() - preSimRepairStartedAt;
 
   const userTeamLive = repairedTeams.find((t) => t.name === selectedTeam?.name);
   const userRosterMessage = getUserRosterSimBlockMessage(userTeamLive || selectedTeam);
@@ -6397,12 +6599,19 @@ setBoxModal(null);
   const firstPendingTradeDate = findFirstPendingSimulationDate(upd, newResults);
   const runStartCursorDate = readSimulationCursorDate();
   const allowPreseasonCpuTrades = Boolean(firstPendingTradeDate && runStartCursorDate < firstPendingTradeDate);
+  recordMultiYearLeagueSnapshot(repairedLeagueData, {
+    seasonYear,
+    checkpoint: "season_start",
+    date: firstPendingTradeDate || runStartCursorDate || "",
+  });
   const simulationPerf = {
+    seasonYear,
     mode: "to_date",
     targetDate: dateStr,
     runId: createSimulationOrderRunId("to_date", dateStr),
     resumed: Boolean(resume),
     pendingIntentBeforeRun,
+    preSimRepairMs,
     startedAt: Date.now(),
     firstPendingDate: firstPendingTradeDate,
     runStartCursorDate,
@@ -6413,6 +6622,8 @@ setBoxModal(null);
     cpuTradeMs: 0,
     cpuTradesCompleted: 0,
     gamesSimmed: 0,
+    injuriesGenerated: 0,
+    gameErrors: 0,
     gameOrderDateInversions: 0,
     gameExecutionSequence: 0,
     gameExecutionOrder: [],
@@ -6452,10 +6663,11 @@ for (const d of sorted) {
   }
   lastDateProcessed = d;
   simulationPerf.datesVisited += 1;
+  const multiYearDateProbe = startMultiYearCalendarDateProbe(simulationPerf);
 
   const recovery = recoverPlayersForDate(activeLeagueData, d);
   if (recovery.touchedTeamNames.length) {
-    const refreshed = refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames);
+    const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames, d);
     if (refreshed) {
       activeTeams = refreshed.teams;
       simRuntime = refreshed.runtime;
@@ -6476,6 +6688,7 @@ for (const d of sorted) {
     setResultsById(structuredClone(newResults));
     pausedAtCheckpoint = true;
     saveSimulationCursorDate(d);
+    finishMultiYearCalendarDateProbe(multiYearDateProbe, simulationPerf, seasonYear, d, TRADE_DEADLINE_DATE);
     return;
   }
 
@@ -6631,6 +6844,7 @@ for (const d of sorted) {
   // again on a resumed run. Preseason dates can run cheap CPU trade checks only.
   if (!firstPendingTradeDate || d < firstPendingTradeDate) {
     simulationPerf.historicalDatesSkipped += 1;
+    finishMultiYearCalendarDateProbe(multiYearDateProbe, simulationPerf, seasonYear, d, TRADE_DEADLINE_DATE);
     continue;
   }
 
@@ -6679,6 +6893,7 @@ for (const d of sorted) {
 
           // still failed → skip, leave unplayed
           if (!full) {
+            simulationPerf.gameErrors += 1;
             finishSimulationGameOrderEvent(gameOrderEvent, "no_result");
             continue;
           }
@@ -6737,8 +6952,10 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
             result: canonicalResult || slim,
             currentDate: d,
           });
+          simulationPerf.injuriesGenerated += Array.isArray(injuryResult?.events) ? injuryResult.events.length : 0;
+          recordMultiYearInjuryEvents({ seasonYear, phase: "regular_season", events: injuryResult?.events || [] });
           if (injuryResult.touchedTeamNames.length) {
-            const refreshed = refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames);
+            const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames, d);
             if (refreshed) {
               activeTeams = refreshed.teams;
               simRuntime = refreshed.runtime;
@@ -6764,12 +6981,14 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
             setResultsById(structuredClone(newResults));
             pausedAtCheckpoint = true;
             saveSimulationCursorDate(d);
+            finishMultiYearCalendarDateProbe(multiYearDateProbe, simulationPerf, seasonYear, d, TRADE_DEADLINE_DATE);
             return;
           }
         } catch (err) {
           finishSimulationGameOrderEvent(gameOrderEvent, "error", {
             message: String(err?.message || err || "unknown error"),
           });
+          simulationPerf.gameErrors += 1;
           console.error("[SimToDate] ERROR for game", g.id, err);
           // keep unplayed on error
         }
@@ -6784,6 +7003,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
         flushResultIndexCache();
       }
       await yieldToBrowser();
+      finishMultiYearCalendarDateProbe(multiYearDateProbe, simulationPerf, seasonYear, d, TRADE_DEADLINE_DATE);
     }
 
     // final saves (even if stopped, we save progress)
@@ -6852,12 +7072,36 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
     } catch (error) {
       console.warn("[CPU Trade Bank] failed to flush queued league saves", error);
     }
-    recordSimulationPerformanceDiagnostics({
+    const completedPerf = {
       ...simulationPerf,
       elapsedMs: Date.now() - simulationPerf.startedAt,
+      totalWallMs: Date.now() - multiYearRunWallStartedAt,
       stopped: Boolean(stopRef.current),
       pausedAtCheckpoint,
-    });
+      lastDateProcessed,
+      scheduledGames: Object.values(upd || {}).reduce((sum, games) => sum + (Array.isArray(games) ? games.length : 0), 0),
+      committedGames: countCompletedRegularSeasonGames(upd, newResults),
+    };
+    recordSimulationPerformanceDiagnostics(completedPerf);
+    recordMultiYearCalendarRun(completedPerf);
+    if (!stopRef.current && isRegularSeasonComplete(upd, newResults)) {
+      recordMultiYearLeagueSnapshot(activeLeagueData, {
+        seasonYear,
+        checkpoint: "regular_season_end",
+        date: lastDateProcessed || dateStr,
+        replace: true,
+      });
+      captureMultiYearCpuTradeCheckpoint(activeLeagueData, seasonYear, "regular_season_end");
+    }
+    if (pausedAtCheckpoint && readPendingSimulationIntent()?.pausedReason === "trade_deadline") {
+      recordMultiYearLeagueSnapshot(activeLeagueData, {
+        seasonYear,
+        checkpoint: "trade_deadline",
+        date: lastDateProcessed || "",
+        replace: true,
+      });
+      captureMultiYearCpuTradeCheckpoint(activeLeagueData, seasonYear, "trade_deadline");
+    }
     setActionModal(null);
     releaseSimRunLock();
     console.log("◀ SimToDate EXIT:", dateStr);
@@ -6928,16 +7172,19 @@ async function simulateBatch(games) {
 
 const handleSimSeason = async ({ resume = false } = {}) => {
   if (!acquireSimRunLock("FullSeason")) return;
+  const multiYearRunWallStartedAt = Date.now();
+  const preSimRepairStartedAt = performance.now();
     const {
     repairRes,
     repairedLeagueData,
     repairedTeams,
   } = await repairCpuRostersBeforeSimulation({
-    leagueData,
+    leagueData: withCurrentInjuryAlertPreference(leagueData),
     selectedTeam,
     setLeagueData,
     currentDate: findFirstPendingSimulationDate(scheduleByDate, resultsById),
   });
+  const preSimRepairMs = performance.now() - preSimRepairStartedAt;
 
   const userTeamLive = repairedTeams.find((t) => t.name === selectedTeam?.name);
   const userRosterMessage = getUserRosterSimBlockMessage(userTeamLive || selectedTeam);
@@ -6996,12 +7243,19 @@ setBoxModal(null);
   const firstPendingTradeDate = findFirstPendingSimulationDate(upd, results);
   const runStartCursorDate = readSimulationCursorDate();
   const allowPreseasonCpuTrades = Boolean(firstPendingTradeDate && runStartCursorDate < firstPendingTradeDate);
+  recordMultiYearLeagueSnapshot(repairedLeagueData, {
+    seasonYear,
+    checkpoint: "season_start",
+    date: firstPendingTradeDate || runStartCursorDate || "",
+  });
   const simulationPerf = {
+    seasonYear,
     mode: "full_season",
     targetDate: null,
     runId: createSimulationOrderRunId("full_season"),
     resumed: Boolean(resume),
     pendingIntentBeforeRun,
+    preSimRepairMs,
     startedAt: Date.now(),
     firstPendingDate: firstPendingTradeDate,
     runStartCursorDate,
@@ -7012,6 +7266,8 @@ setBoxModal(null);
     cpuTradeMs: 0,
     cpuTradesCompleted: 0,
     gamesSimmed: 0,
+    injuriesGenerated: 0,
+    gameErrors: 0,
     gameOrderDateInversions: 0,
     gameExecutionSequence: 0,
     gameExecutionOrder: [],
@@ -7046,10 +7302,11 @@ for (let di = 0; di < dates.length; di++) {
   }
   lastDateProcessed = date;
   simulationPerf.datesVisited += 1;
+  const multiYearDateProbe = startMultiYearCalendarDateProbe(simulationPerf);
 
   const recovery = recoverPlayersForDate(activeLeagueData, date);
   if (recovery.touchedTeamNames.length) {
-    const refreshed = refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames);
+    const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames, date);
     if (refreshed) {
       activeTeams = refreshed.teams;
       simRuntime = refreshed.runtime;
@@ -7071,6 +7328,7 @@ for (let di = 0; di < dates.length; di++) {
     saveSimulationCursorDate(date);
     pausedForInjuryAlert = true;
     stopped = true;
+    finishMultiYearCalendarDateProbe(multiYearDateProbe, simulationPerf, seasonYear, date, TRADE_DEADLINE_DATE);
     return;
   }
 
@@ -7081,6 +7339,7 @@ for (let di = 0; di < dates.length; di++) {
       scheduledDate: date,
     });
     pausedForContractExtensionDeadline = true;
+    finishMultiYearCalendarDateProbe(multiYearDateProbe, simulationPerf, seasonYear, date, TRADE_DEADLINE_DATE);
     break;
   }
 
@@ -7091,6 +7350,7 @@ for (let di = 0; di < dates.length; di++) {
       scheduledDate: date,
     });
     pausedForTradeDeadline = true;
+    finishMultiYearCalendarDateProbe(multiYearDateProbe, simulationPerf, seasonYear, date, TRADE_DEADLINE_DATE);
     break;
   }
 
@@ -7101,6 +7361,7 @@ for (let di = 0; di < dates.length; di++) {
       scheduledDate: date,
     });
     pausedForAllStar = true;
+    finishMultiYearCalendarDateProbe(multiYearDateProbe, simulationPerf, seasonYear, date, TRADE_DEADLINE_DATE);
     break;
   }
 
@@ -7160,6 +7421,7 @@ for (let di = 0; di < dates.length; di++) {
   // do not re-enter the expensive per-game storage/reconciliation path.
   if (!firstPendingTradeDate || date < firstPendingTradeDate) {
     simulationPerf.historicalDatesSkipped += 1;
+    finishMultiYearCalendarDateProbe(multiYearDateProbe, simulationPerf, seasonYear, date, TRADE_DEADLINE_DATE);
     continue;
   }
 
@@ -7209,6 +7471,7 @@ for (let di = 0; di < dates.length; di++) {
         try {
           const full = await runGameWithRetries(g, activeLeagueData, activeTeams, 3, simRuntime, date);
           if (!full) {
+            simulationPerf.gameErrors += 1;
             finishSimulationGameOrderEvent(gameOrderEvent, "no_result");
             continue;
           }
@@ -7273,8 +7536,10 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
             result: canonicalResult || slim,
             currentDate: date,
           });
+          simulationPerf.injuriesGenerated += Array.isArray(injuryResult?.events) ? injuryResult.events.length : 0;
+          recordMultiYearInjuryEvents({ seasonYear, phase: "regular_season", events: injuryResult?.events || [] });
           if (injuryResult.touchedTeamNames.length) {
-            const refreshed = refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames);
+            const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames, date);
             if (refreshed) {
               activeTeams = refreshed.teams;
               simRuntime = refreshed.runtime;
@@ -7301,12 +7566,14 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
             saveSimulationCursorDate(date);
             pausedForInjuryAlert = true;
             stopped = true;
+            finishMultiYearCalendarDateProbe(multiYearDateProbe, simulationPerf, seasonYear, date, TRADE_DEADLINE_DATE);
             return;
           }
         } catch (err) {
           finishSimulationGameOrderEvent(gameOrderEvent, "error", {
             message: String(err?.message || err || "unknown error"),
           });
+          simulationPerf.gameErrors += 1;
           console.error("FULL SEASON ERROR for game", g.id, err);
         }
       }
@@ -7319,6 +7586,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
         flushResultIndexCache();
       }
       await yieldToBrowser();
+      finishMultiYearCalendarDateProbe(multiYearDateProbe, simulationPerf, seasonYear, date, TRADE_DEADLINE_DATE);
 
       if (stopped) break;
 
@@ -7365,16 +7633,39 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
     saveClutchStats(clutchStats);
     refreshTradeDeadlineLockFromSchedule(upd);
 
-    recordSimulationPerformanceDiagnostics({
+    const completedPerf = {
       ...simulationPerf,
       elapsedMs: Date.now() - simulationPerf.startedAt,
+      totalWallMs: Date.now() - multiYearRunWallStartedAt,
       stopped,
       pausedForTradeDeadline,
       pausedForContractExtensionDeadline,
       pausedForAllStar,
       pausedForInjuryAlert,
       lastDateProcessed,
-    });
+      scheduledGames: Object.values(upd || {}).reduce((sum, games) => sum + (Array.isArray(games) ? games.length : 0), 0),
+      committedGames: countCompletedRegularSeasonGames(upd, results),
+    };
+    recordSimulationPerformanceDiagnostics(completedPerf);
+    recordMultiYearCalendarRun(completedPerf);
+    if (!stopped && !pausedForTradeDeadline && !pausedForContractExtensionDeadline && !pausedForAllStar && !pausedForInjuryAlert && isRegularSeasonComplete(upd, results)) {
+      recordMultiYearLeagueSnapshot(activeLeagueData, {
+        seasonYear,
+        checkpoint: "regular_season_end",
+        date: lastDateProcessed || fmt(seasonEnd),
+        replace: true,
+      });
+      captureMultiYearCpuTradeCheckpoint(activeLeagueData, seasonYear, "regular_season_end");
+    }
+    if (pausedForTradeDeadline) {
+      recordMultiYearLeagueSnapshot(activeLeagueData, {
+        seasonYear,
+        checkpoint: "trade_deadline",
+        date: lastDateProcessed || "",
+        replace: true,
+      });
+      captureMultiYearCpuTradeCheckpoint(activeLeagueData, seasonYear, "trade_deadline");
+    }
 
 setActionModal(null);
 releaseSimRunLock();
@@ -9088,14 +9379,15 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
             <button
               type="button"
               className="rounded-xl bg-orange-600 px-5 py-3 text-sm font-black text-white hover:bg-orange-500"
-              onClick={() => {
+              onClick={async () => {
+                await disableUserInjuryAlerts();
                 setInjuryAlertModal(null);
                 if (injuryAlertModal.intent) {
                   window.setTimeout(() => resumePendingSimulation(), 0);
                 }
               }}
             >
-              Keep CPU Auto-Rebuild
+              Always Use CPU Auto-Rebuild
             </button>
           </div>
         </div>

@@ -8,6 +8,14 @@ import {
 } from "./cpuTradeDiagnostics.js";
 import { runCpuTradeValidationMicroDiagnostics, runSimSpeedMicroDiagnostics } from "./simSpeedMicroDiagnostics.js";
 import {
+  buildMultiYearSpeedReport,
+  copyMultiYearSpeedReport,
+  getMultiYearSpeedDiagnosticsStatus,
+  resetMultiYearSpeedDiagnostics,
+  startMultiYearSpeedDiagnostics,
+  stopMultiYearSpeedDiagnostics,
+} from "./multiYearSpeedDiagnostics.js";
+import {
   REGULAR_SEASON_MAX_STANDARD_PLAYERS,
   REGULAR_SEASON_MAX_TWO_WAY_PLAYERS,
   REGULAR_SEASON_MIN_STANDARD_PLAYERS,
@@ -1048,6 +1056,11 @@ export function installBasketballManagerDiagnostics() {
         { command: "bmDiag.preSim()", purpose: "Inspect the most recent pre-simulation diagnostic snapshot." },
         { command: "bmDiag.simPerformance()", purpose: "Inspect the most recent calendar simulation timing, CPU-trade workload, and game execution order." },
         { command: "bmDiag.simHistory()", purpose: "Inspect recent pre/post-checkpoint simulation runs together, including scheduled game execution order." },
+        { command: "bmDiag.multiYearSpeedStart()", purpose: "Start a fresh Y1/Y2/Y3 baseline capture with date, storage, worker, playoff, and dev-offseason timings." },
+        { command: "bmDiag.multiYearSpeedReport()", purpose: "Build the accumulated multi-season speed report without changing the save." },
+        { command: "await bmDiag.multiYearSpeedCopy()", purpose: "Copy the complete Y1/Y2/Y3 speed report as JSON for comparison." },
+        { command: "bmDiag.multiYearSpeedStop()", purpose: "Stop multi-season capture while keeping the collected report." },
+        { command: "bmDiag.multiYearSpeedReset()", purpose: "Clear only the multi-season speed diagnostic capture." },
         { command: "bmDiag.cpuTradeReport()", purpose: "Build the full CPU-trade performance, quantity, quality, pacing, safety, and package replay report." },
         { command: "bmDiag.cpuTradeSummary()", purpose: "Print the compact reliability summary added by the CPU trade reliability patch." },
         { command: "bmDiag.cpuTradeBenchmarks()", purpose: "Rerun the captured simple, rejected, and complex package timing benchmarks." },
@@ -1121,6 +1134,43 @@ export function installBasketballManagerDiagnostics() {
     },
     cpuTradeReport(options = {}) {
       return printCpuTradeReport(buildLiveCpuTradeReport(options));
+    },
+    multiYearSpeedStart(options = {}) {
+      const status = startMultiYearSpeedDiagnostics(options);
+      console.log("[BM MULTI-YEAR SPEED] capture started", status);
+      return status;
+    },
+    multiYearSpeedReport() {
+      const report = buildMultiYearSpeedReport();
+      console.log(report);
+      console.table((report?.seasons || []).map((row) => ({
+        seasonYear: row.seasonYear,
+        regularSeasonMs: row.overall?.regularSeasonWallMs || 0,
+        playoffsMs: row.overall?.playoffsWallMs || 0,
+        offseasonMs: row.overall?.offseasonComputeMs || 0,
+        fullYearMs: row.overall?.fullYearMeasuredMs || 0,
+        games: row.overall?.gamesSimulated || 0,
+        msPerGame: row.overall?.regularSeasonMsPerGame || 0,
+      })));
+      return report;
+    },
+    async multiYearSpeedCopy() {
+      return copyMultiYearSpeedReport();
+    },
+    multiYearSpeedStop() {
+      const status = stopMultiYearSpeedDiagnostics();
+      console.log("[BM MULTI-YEAR SPEED] capture stopped", status);
+      return status;
+    },
+    multiYearSpeedReset() {
+      const status = resetMultiYearSpeedDiagnostics();
+      console.log("[BM MULTI-YEAR SPEED] capture reset", status);
+      return status;
+    },
+    multiYearSpeedStatus() {
+      const status = getMultiYearSpeedDiagnosticsStatus();
+      console.log(status);
+      return status;
     },
     cpuTradeSummary() {
       return cpuTradeSummaryReport();
@@ -1221,6 +1271,19 @@ export function installBasketballManagerDiagnostics() {
         p95Ms: row.durations?.p95Ms || 0,
         parity: row.allDecisionsIdentical ? "PASS" : "FAIL",
       })));
+      if (validation?.impactBreakdown?.cold?.totals) {
+        console.log("[BM CPU TRADE VALIDATION] Cold exact-impact timing breakdown");
+        console.table((validation.impactBreakdown.cold.totals.topMetrics || []).map((row) => ({
+          metric: row.metric,
+          totalMs: row.totalMs,
+        })));
+        console.table(Object.entries(validation.impactBreakdown.cold.byRole || {}).map(([role, row]) => ({
+          role,
+          calls: row.calls || 0,
+          cacheHits: row.cacheHits || 0,
+          totalMs: row.totalMs || 0,
+        })));
+      }
       if (report?.errors?.length) console.table(report.errors);
       console.log(report);
       console.groupEnd();

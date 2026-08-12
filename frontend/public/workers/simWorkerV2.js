@@ -94,21 +94,30 @@ self.addEventListener("message", (e) => {
 // ------------------------------------------------------------
 // SINGLE GAME MODE
 // ------------------------------------------------------------
-async function simulateOneGame(id, home, away) {
+async function simulateOneGame(id, home, away, multiYearDiagnostics = false) {
   try {
+    const toPyStartedAt = multiYearDiagnostics ? performance.now() : 0;
     pyodide.globals.set("home", pyodide.toPy(home));
     pyodide.globals.set("away", pyodide.toPy(away));
+    const toPyMs = multiYearDiagnostics ? performance.now() - toPyStartedAt : 0;
 
+    const pythonStartedAt = multiYearDiagnostics ? performance.now() : 0;
     const pyRes = await pyodide.runPythonAsync(`
 from game_sim import simulate_game
 result = await simulate_game(home, away)
 result
     `);
+    const pythonComputeMs = multiYearDiagnostics ? performance.now() - pythonStartedAt : 0;
+
+    const toJsStartedAt = multiYearDiagnostics ? performance.now() : 0;
+    const jsResult = pyRes.toJs({ dict_converter: Object, create_pyproxies: false });
+    const toJsMs = multiYearDiagnostics ? performance.now() - toJsStartedAt : 0;
 
     postMessage({
       type: "result-single",
       id,
-      result: pyRes.toJs({ dict_converter: Object, create_pyproxies: false }),
+      result: jsResult,
+      ...(multiYearDiagnostics ? { perf: { toPyMs, pythonComputeMs, toJsMs } } : {}),
     });
   } catch (err) {
     postMessage({
@@ -872,7 +881,7 @@ onmessage = async (e) => {
   }
 
   if (msg.type === "simulate-single") {
-    return simulateOneGame(msg.id, msg.home, msg.away);
+    return simulateOneGame(msg.id, msg.home, msg.away, Boolean(msg.multiYearDiagnostics));
   }
     if (msg.type === "compute-all-stars") {
     return computeAllStars(msg.requestId, msg.payload || {});

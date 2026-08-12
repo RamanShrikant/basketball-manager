@@ -18,6 +18,12 @@ import { archiveCurrentSeasonIntoPlayerCards } from "../utils/playerCareerHistor
 import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.js";
 import { formatLeagueDate, getOffseasonCurrentDate, writeLeagueClock } from "../utils/leagueClock.js";
 import { getContractSeasonYear } from "../utils/seasonContext.js";
+import {
+  isMultiYearSpeedDiagnosticsEnabled,
+  recordMultiYearLeagueSnapshot,
+  recordMultiYearOffseasonStepTiming,
+  recordMultiYearPhaseTiming,
+} from "../utils/multiYearSpeedDiagnostics.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -3173,6 +3179,28 @@ export default function OffseasonHub() {
     return persistDevLeagueData(result.leagueData || workingLeague);
   };
 
+  const runTimedDevOffseasonStep = async (step, fn) => {
+    if (!isMultiYearSpeedDiagnosticsEnabled()) return fn();
+    const startedAt = performance.now();
+    let ok = false;
+    let errorMessage = "";
+    try {
+      const result = await fn();
+      ok = true;
+      return result;
+    } catch (error) {
+      errorMessage = String(error?.message || error || "unknown error");
+      throw error;
+    } finally {
+      recordMultiYearOffseasonStepTiming({
+        seasonYear,
+        step,
+        elapsedMs: performance.now() - startedAt,
+        details: { ok, error: errorMessage },
+      });
+    }
+  };
+
   const finalizeDevAdvanceToCalendar = (workingLeague) => {
     try {
       recordFullOffseasonMoodEvents(workingLeague, {
@@ -3204,6 +3232,12 @@ export default function OffseasonHub() {
     saveOffseasonState(nextState);
     setOffseasonState(nextState);
     persistDevLeagueData(workingLeague);
+    recordMultiYearLeagueSnapshot(workingLeague, {
+      seasonYear: Number(workingLeague?.seasonYear ?? workingLeague?.currentSeasonYear ?? workingLeague?.year ?? seasonYear + 1),
+      checkpoint: "next_season_ready",
+      date: "",
+      replace: true,
+    });
     navigate("/calendar");
   };
 
@@ -3217,6 +3251,7 @@ export default function OffseasonHub() {
       return;
     }
 
+    const multiYearOffseasonStartedAt = isMultiYearSpeedDiagnosticsEnabled() ? performance.now() : 0;
     try {
       setDevOffseasonRunning(true);
       setDevOffseasonStatus("");
@@ -3241,66 +3276,66 @@ export default function OffseasonHub() {
       }
 
       setDevStatus("Running retirements...");
-      workingLeague = await runDevRetirements(workingLeague, userTeamName);
+      workingLeague = await runTimedDevOffseasonStep("retirements", () => runDevRetirements(workingLeague, userTeamName));
       assertDevNotStopped();
       if (stopAtDevTarget(target, "retirements", "Stopped after retirements.")) return;
 
       setDevStatus("Applying league financial inflation...");
-      workingLeague = await runDevLeagueInflation(workingLeague);
+      workingLeague = await runTimedDevOffseasonStep("league_inflation", () => runDevLeagueInflation(workingLeague));
       assertDevNotStopped();
 
       setDevStatus("Running draft lottery...");
-      workingLeague = await runDevDraftLottery(workingLeague);
+      workingLeague = await runTimedDevOffseasonStep("draft_lottery", () => runDevDraftLottery(workingLeague));
       assertDevNotStopped();
       if (stopAtDevTarget(target, "lottery", "Stopped after draft lottery.")) return;
 
       setDevStatus(DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU ? "Simulating NBA Draft with selected team as CPU..." : "Simulating NBA Draft...");
-      workingLeague = await runDevDraft(workingLeague, userTeamName);
+      workingLeague = await runTimedDevOffseasonStep("draft", () => runDevDraft(workingLeague, userTeamName));
       assertDevNotStopped();
       if (stopAtDevTarget(target, "draft", "Stopped after the NBA Draft.")) return;
 
       setDevStatus(DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU ? "Resolving rookie/stash signings with selected team as CPU..." : "Resolving rookie signings...");
-      workingLeague = await runDevRookieSignings(workingLeague, userTeamName);
+      workingLeague = await runTimedDevOffseasonStep("rookie_signings", () => runDevRookieSignings(workingLeague, userTeamName));
       assertDevNotStopped();
       if (stopAtDevTarget(target, "rookie_signings", "Stopped after rookie signings.")) return;
 
       setDevStatus(DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU ? "Resolving options, two-way, stash, and rights with selected team as CPU..." : "Resolving player/team options and rights...");
-      workingLeague = await runDevOptionsAndRights(workingLeague, userTeamName);
+      workingLeague = await runTimedDevOffseasonStep("options_and_rights", () => runDevOptionsAndRights(workingLeague, userTeamName));
       assertDevNotStopped();
       if (stopAtDevTarget(target, "options", "Stopped after options and rights.")) return;
 
       if (target === "free_agency_start") {
         setDevStatus("Opening free agency...");
-        workingLeague = await runDevFreeAgencyStart(workingLeague, userTeamName);
+        workingLeague = await runTimedDevOffseasonStep("free_agency_start", () => runDevFreeAgencyStart(workingLeague, userTeamName));
         assertDevNotStopped();
         stopAtDevTarget(target, "free_agency_start", "Free agency is open.", "/free-agents");
         return;
       }
 
       setDevStatus(DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU ? "Simulating free agency to the end with selected team as CPU..." : "Simulating free agency to the end...");
-      workingLeague = await runDevFreeAgencyToEnd(workingLeague, userTeamName);
+      workingLeague = await runTimedDevOffseasonStep("free_agency", () => runDevFreeAgencyToEnd(workingLeague, userTeamName));
       assertDevNotStopped();
       if (stopAtDevTarget(target, "free_agency_complete", "Stopped after free agency completed.")) return;
 
       if (!DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU) {
         setDevStatus("Fixing user roster legality if needed...");
-        workingLeague = await runDevTrimUserRoster(workingLeague, userTeamName);
+        workingLeague = await runTimedDevOffseasonStep("user_roster_trim", () => runDevTrimUserRoster(workingLeague, userTeamName));
         assertDevNotStopped();
       }
 
       setDevStatus(DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU ? "Finalizing all rosters with selected team as CPU..." : "Finalizing rosters...");
-      workingLeague = await runDevRosterFinalization(workingLeague, userTeamName);
+      workingLeague = await runTimedDevOffseasonStep("roster_finalization", () => runDevRosterFinalization(workingLeague, userTeamName));
       assertDevNotStopped();
 
       if (!DEV_SIM_TREAT_SELECTED_TEAM_AS_CPU) {
         setDevStatus("Re-checking user roster legality...");
-        workingLeague = await runDevTrimUserRoster(workingLeague, userTeamName);
+        workingLeague = await runTimedDevOffseasonStep("user_roster_trim", () => runDevTrimUserRoster(workingLeague, userTeamName));
         assertDevNotStopped();
       }
       if (stopAtDevTarget(target, "roster_ready", "Stopped after roster cleanup.")) return;
 
       setDevStatus("Running player progression...");
-      workingLeague = await runDevProgression(workingLeague);
+      workingLeague = await runTimedDevOffseasonStep("progression", () => runDevProgression(workingLeague));
       assertDevNotStopped();
       if (stopAtDevTarget(target, "progression", "Stopped after player progression.")) return;
 
@@ -3323,6 +3358,14 @@ export default function OffseasonHub() {
       alert(err?.message || "Dev full offseason sim failed. Check the console.");
       setDevOffseasonStatus(err?.message || "Dev full offseason sim failed.");
     } finally {
+      if (multiYearOffseasonStartedAt) {
+        recordMultiYearPhaseTiming({
+          seasonYear,
+          phase: "offseason_dev_total",
+          elapsedMs: performance.now() - multiYearOffseasonStartedAt,
+          details: { target },
+        });
+      }
       setDevOffseasonRunning(false);
       setDevStopRequested(false);
       devStopRequestedRef.current = false;

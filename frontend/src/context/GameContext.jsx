@@ -44,13 +44,19 @@ export function GameProvider({ children }) {
     installSeasonContextAudit(() => leagueData);
   }, [leagueData]);
 
-  const setLeagueData = (nextLeagueData) => {
+  const setLeagueData = (nextLeagueData, diagnostics = {}) => {
     const normalized = normalizeLeagueFinancials(nextLeagueData);
     setLeagueDataRaw(normalized);
 
+    if (diagnostics?.persist === false) return normalized;
+
     if (normalized && leagueHasTeams(normalized)) {
-      saveLeagueDataInBackground(normalized);
+      saveLeagueDataInBackground(normalized, {
+        source: diagnostics?.source || "GameContext.setLeagueData",
+      });
     }
+
+    return normalized;
   };
 
   // Load league from IndexedDB first, then migrate old localStorage saves.
@@ -81,7 +87,7 @@ export function GameProvider({ children }) {
         }
 
         setLeagueDataRaw(parsed);
-        saveLeagueDataInBackground(parsed);
+        saveLeagueDataInBackground(parsed, { source: "GameContext.hydrate" });
         return true;
       } catch (err) {
         console.error("Failed to load leagueData:", err);
