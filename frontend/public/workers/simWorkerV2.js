@@ -131,33 +131,96 @@ result
 // ------------------------------------------------------------
 // BATCH GAME MODE
 // ------------------------------------------------------------
-async function simulateBatch(batchId, games) {
+async function simulateBatch(batchId, games, multiYearDiagnostics = false) {
   simLog("[simWorkerV2] simulateBatch:", games.length, "games");
 
+  // IMPORTANT: Pyodide 0.24.1 can fatally crash when one runPythonAsync call
+  // stays alive across many simulate_game() coroutines that repeatedly yield
+  // through asyncio.sleep(0). Keep the batch at the worker-message layer while
+  // executing each game through the exact proven single-game Pyodide path.
+  // This is still useful for measuring worker dispatch/structured-clone cost,
+  // and it avoids touching the live worker or changing game logic/RNG order.
   try {
-    pyodide.globals.set("games", pyodide.toPy(games));
+    const out = [];
+    let toPyMs = 0;
+    let pythonComputeMs = 0;
+    let toJsMs = 0;
 
-    const pyRes = await pyodide.runPythonAsync(`
+    for (const game of games || []) {
+      const toPyStartedAt = multiYearDiagnostics ? performance.now() : 0;
+      pyodide.globals.set("home", pyodide.toPy(game.home));
+      pyodide.globals.set("away", pyodide.toPy(game.away));
+      if (multiYearDiagnostics) toPyMs += performance.now() - toPyStartedAt;
+
+      const pythonStartedAt = multiYearDiagnostics ? performance.now() : 0;
+      const pyRes = await pyodide.runPythonAsync(`
 from game_sim import simulate_game
-out = []
-for g in games:
-    h = g["home"]
-    a = g["away"]
-    r = await simulate_game(h, a)
-    out.append({ "id": g["id"], "result": r })
-out
-    `);
+result = await simulate_game(home, away)
+result
+      `);
+      if (multiYearDiagnostics) pythonComputeMs += performance.now() - pythonStartedAt;
+
+      const toJsStartedAt = multiYearDiagnostics ? performance.now() : 0;
+      const jsResult = pyRes.toJs({ dict_converter: Object, create_pyproxies: false });
+      if (multiYearDiagnostics) toJsMs += performance.now() - toJsStartedAt;
+
+      out.push({ id: game.id, result: jsResult });
+    }
 
     postMessage({
       type: "result-batch",
       batchId,
-      results: pyRes.toJs({ dict_converter: Object, create_pyproxies: false }),
+      results: out,
+      ...(multiYearDiagnostics ? { perf: { toPyMs, pythonComputeMs, toJsMs } } : {}),
     });
   } catch (err) {
     postMessage({
       type: "result-batch",
       batchId,
       results: [],
+      error: err.toString(),
+    });
+  }
+}
+
+async function setGameBenchmarkRngSeed(requestId, seed) {
+  try {
+    pyodide.globals.set("bm_game_benchmark_seed", Number(seed) || 1);
+    await pyodide.runPythonAsync(`
+import random
+random.seed(int(bm_game_benchmark_seed))
+    `);
+    postMessage({
+      type: "benchmark-game-rng-seeded",
+      requestId,
+    });
+  } catch (err) {
+    postMessage({
+      type: "benchmark-game-rng-seeded",
+      requestId,
+      error: err.toString(),
+    });
+  }
+}
+
+async function setGameBenchmarkYieldMode(requestId, disabled) {
+  try {
+    pyodide.globals.set("bm_disable_game_yields", Boolean(disabled));
+    await pyodide.runPythonAsync(`
+import game_sim
+# Toggle only game_sim scheduling points; do not monkey-patch asyncio globally.
+game_sim.BM_GAME_COOPERATIVE_YIELDS = not bool(bm_disable_game_yields)
+    `);
+    postMessage({
+      type: "benchmark-game-yield-mode-set",
+      requestId,
+      disabled: Boolean(disabled),
+    });
+  } catch (err) {
+    postMessage({
+      type: "benchmark-game-yield-mode-set",
+      requestId,
+      disabled: Boolean(disabled),
       error: err.toString(),
     });
   }
@@ -891,8 +954,17 @@ onmessage = async (e) => {
     return repairCpuTeamsToMinRoster(msg.requestId, leaguePayload, msg.payload || {});
   }
 
+  if (msg.type === "benchmark-set-game-rng-seed") {
+    return setGameBenchmarkRngSeed(msg.requestId, msg.seed);
+  }
+
+  if (msg.type === "benchmark-set-game-yield-mode") {
+    await setGameBenchmarkYieldMode(msg.requestId, msg.disabled);
+    return;
+  }
+
   if (msg.type === "simulate-batch") {
-    return simulateBatch(msg.batchId, msg.games);
+    return simulateBatch(msg.batchId, msg.games, Boolean(msg.multiYearDiagnostics));
   }
 
   // awards

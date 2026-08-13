@@ -7,6 +7,16 @@ import math
 import random
 BM_SIM_DEBUG_LOGS = False
 
+# Performance-only switch: a dedicated simulation Web Worker does not need
+# to bounce through Pyodide's browser event loop during a game. Keeping this
+# False removes only cooperative scheduling overhead; basketball calculations
+# and random-number calls/order are unchanged.
+BM_GAME_COOPERATIVE_YIELDS = False
+
+async def _bm_game_cooperative_yield():
+    if BM_GAME_COOPERATIVE_YIELDS:
+        await asyncio.sleep(0)
+
 from bm_scoring import scoring_to_game_points
 from assists import assists_per36, noisy_assists
 from rebounds import get_rebounds
@@ -852,7 +862,7 @@ async def build_box(team, mins, team_points, ratings):
     rows = []
     for i, p in enumerate(active):
         if i % 3 == 0:
-            await asyncio.sleep(0)
+            await _bm_game_cooperative_yield()
 
         P = pts[i]
 
@@ -953,7 +963,7 @@ async def build_box(team, mins, team_points, ratings):
 async def simulate_game(home, away):
     if BM_SIM_DEBUG_LOGS:
         print("🔍 PY starting simulate_game:", home["name"], "vs", away["name"])
-    await asyncio.sleep(0)
+    await _bm_game_cooperative_yield()
 
     minsH = home["minutes"]
     minsA = away["minutes"]
@@ -1017,7 +1027,7 @@ async def simulate_game(home, away):
     ot_count = 0
 
     while sum(HQ) == sum(AQ):
-        await asyncio.sleep(0)
+        await _bm_game_cooperative_yield()
         otH, otA = simulate_ot_period(total_mu, margin_mu, dOvr)
         HQ.append(otH)
         AQ.append(otA)
