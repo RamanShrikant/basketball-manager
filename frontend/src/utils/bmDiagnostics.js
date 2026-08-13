@@ -7,6 +7,7 @@ import {
   saveCpuTradeBaselineReport,
 } from "./cpuTradeDiagnostics.js";
 import { runCpuTradeValidationMicroDiagnostics, runSimSpeedMicroDiagnostics } from "./simSpeedMicroDiagnostics.js";
+import { runGameArchitectureBenchmark, runGameYieldBenchmark } from "./gameArchitectureDiagnostics.js";
 import {
   buildMultiYearSpeedReport,
   copyMultiYearSpeedReport,
@@ -1064,6 +1065,8 @@ export function installBasketballManagerDiagnostics() {
         { command: "bmDiag.cpuTradeSummary()", purpose: "Print the compact reliability summary added by the CPU trade reliability patch." },
         { command: "bmDiag.cpuTradeBenchmarks()", purpose: "Rerun the captured simple, rejected, and complex package timing benchmarks." },
         { command: "await bmDiag.simSpeedMicroprofile()", purpose: "Profile validation, generation, isolated storage, and cloned roster repair without simulating a season." },
+        { command: "await bmDiag.gameArchitectureBenchmark()", purpose: "Compare serial single-game dispatch with safe worker-level batching using a dedicated worker and exact RNG/output parity." },
+        { command: "await bmDiag.gameYieldBenchmark()", purpose: "Measure the cost of game_sim asyncio.sleep(0) yields on an isolated worker with exact RNG/output parity." },
         { command: "await bmDiag.cpuTradeValidationMicroprofile()", purpose: "Generate real CPU trade packages and measure exact cold, warm, and repeated validation without simulating or saving." },
         { command: "bmDiag.cpuTradeSaveBaseline('pre-optimization')", purpose: "Save the current report for automatic before/after comparison." },
         { command: "bmDiag.cpuTradeCompare()", purpose: "Compare the current report against the saved pre-optimization baseline." },
@@ -1228,6 +1231,74 @@ export function installBasketballManagerDiagnostics() {
         }]);
       }
       if (report?.errors?.length) console.table(report.errors);
+      console.log(report);
+      console.groupEnd();
+      return report;
+    },
+    async gameArchitectureBenchmark(options = {}) {
+      console.log("[BM GAME ARCH] Running isolated single-vs-batch worker benchmark. Live league/save and the live simulation worker are not mutated.");
+      const report = await runGameArchitectureBenchmark({
+        leagueData: runtime.leagueData || window.__leagueData || window.leagueData || null,
+        games: options?.games || options?.gameCount || 30,
+        trials: options?.trials || 4,
+        seed: options?.seed || 20260812,
+      });
+      runtime.lastReport = report;
+      console.groupCollapsed(`[BM GAME ARCH] ${report?.ok ? "PARITY PASS" : "PARITY FAIL"} - ${Math.round(Number(report?.totalElapsedMs || 0))} ms`);
+      console.table((report?.rows || []).map((row) => ({
+        trial: row.trial,
+        order: row.order,
+        games: row.gameCount,
+        singleMs: row.singleWallMs,
+        batchMs: row.batchWallMs,
+        speedupPct: row.speedupPct,
+        parity: row.parity?.exact ? "PASS" : "FAIL",
+        singleHash: row.parity?.singleHash || "",
+        batchHash: row.parity?.batchHash || "",
+      })));
+      console.table([{
+        gamesPerTrial: report?.gameCountPerTrial || 0,
+        medianSingleMs: report?.summary?.medianSingleMs || 0,
+        medianBatchMs: report?.summary?.medianBatchMs || 0,
+        medianSavedMs: report?.summary?.medianSavedMs || 0,
+        savedMsPerGame: report?.summary?.medianSavedMsPerGame || 0,
+        projectedSavedAcross1230Ms: report?.summary?.projectedSavedMsAcross1230Games || 0,
+        exactParity: report?.parity?.exactAcrossAllTrials ? "PASS" : "FAIL",
+      }]);
+      console.log(report);
+      console.groupEnd();
+      return report;
+    },
+    async gameYieldBenchmark(options = {}) {
+      console.log("[BM GAME YIELD] Measuring game_sim asyncio.sleep(0) overhead in an isolated worker. Live league/save and live simulation worker are not mutated.");
+      const report = await runGameYieldBenchmark({
+        leagueData: runtime.leagueData || window.__leagueData || window.leagueData || null,
+        games: options?.games || options?.gameCount || 30,
+        trials: options?.trials || 4,
+        seed: options?.seed || 20260812,
+      });
+      runtime.lastReport = report;
+      console.groupCollapsed(`[BM GAME YIELD] ${report?.ok ? "PARITY PASS" : "PARITY FAIL"} - ${Math.round(Number(report?.totalElapsedMs || 0))} ms`);
+      console.table((report?.rows || []).map((row) => ({
+        trial: row.trial,
+        order: row.order,
+        games: row.gameCount,
+        baselineMs: row.baselineWallMs,
+        noYieldMs: row.noYieldWallMs,
+        speedupPct: row.speedupPct,
+        parity: row.parity?.exact ? "PASS" : "FAIL",
+        baselineHash: row.parity?.singleHash || "",
+        noYieldHash: row.parity?.batchHash || "",
+      })));
+      console.table([{
+        gamesPerTrial: report?.gameCountPerTrial || 0,
+        medianBaselineMs: report?.summary?.medianBaselineMs || 0,
+        medianNoYieldMs: report?.summary?.medianNoYieldMs || 0,
+        medianSavedMs: report?.summary?.medianSavedMs || 0,
+        savedMsPerGame: report?.summary?.medianSavedMsPerGame || 0,
+        projectedSavedAcross1230Ms: report?.summary?.projectedSavedMsAcross1230Games || 0,
+        exactParity: report?.parity?.exactAcrossAllTrials ? "PASS" : "FAIL",
+      }]);
       console.log(report);
       console.groupEnd();
       return report;
