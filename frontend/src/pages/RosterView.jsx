@@ -10,6 +10,7 @@ import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
 import "../styles/BMAnimations.css";
 import { getLeagueFinancialRules, getRookieSalaryForPick } from "../utils/leagueFinancials.js";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
+import { getContractSeasonYear, getFinancialSeasonYear } from "../utils/seasonContext.js";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
 import { countStandardRosterPlayers, isStandardRosterPlayer } from "../utils/rosterRules.js";
@@ -196,8 +197,31 @@ export default function RosterView() {
     );
   };
 
+  const getActiveContractSeasonYear = () => {
+    return Number(
+      getContractSeasonYear(workingLeagueData || {}) ||
+        workingLeagueData?.contractSeasonYear ||
+        workingLeagueData?.payrollSeasonYear ||
+        workingLeagueData?.freeAgencyState?.contractSeasonYear ||
+        workingLeagueData?.freeAgencyState?.payrollSeasonYear ||
+        getCurrentSeasonYear()
+    );
+  };
+
+  const getActiveFinancialRulesSeasonYear = () => {
+    const contractYear = getActiveContractSeasonYear();
+    return Number(
+      getFinancialSeasonYear(workingLeagueData || {}) ||
+        workingLeagueData?.financialSeasonYear ||
+        workingLeagueData?.currentFinancialSeasonYear ||
+        workingLeagueData?.freeAgencyState?.financialSeasonYear ||
+        workingLeagueData?.freeAgencyState?.currentFinancialSeasonYear ||
+        contractYear + 1
+    );
+  };
+
   const getStandardMinimumSalary = () => {
-    const rules = getLeagueFinancialRules(workingLeagueData || {}, getCurrentSeasonYear() + 1);
+    const rules = getLeagueFinancialRules(workingLeagueData || {}, getActiveFinancialRulesSeasonYear());
     return Number(
       rules.minimumException ||
       rules.veteranMinimum ||
@@ -916,7 +940,7 @@ export default function RosterView() {
   };
 
   const buildStandardContractFromTwoWay = (player) => {
-    const targetStartYear = getCurrentSeasonYear() + 1;
+    const targetStartYear = getActiveContractSeasonYear();
     const storedStandardContract =
       player?.previousStandardContract ||
       player?.standardContractBeforeTwoWay ||
@@ -952,7 +976,7 @@ export default function RosterView() {
 
   const buildTwoWayContractFromStandard = () => ({
     type: "two_way",
-    startYear: getCurrentSeasonYear() + 1,
+    startYear: getActiveContractSeasonYear(),
     salaryByYear: [],
     option: null,
     source: "manual_roster_assignment",
@@ -974,7 +998,7 @@ export default function RosterView() {
       const standardPlayers = Array.isArray(team.players) ? team.players : [];
       const twoWayPlayers = getTwoWayPlayers(team);
 
-      const targetTwoWaySeasonYear = getCurrentSeasonYear() + 1;
+      const targetTwoWaySeasonYear = getActiveContractSeasonYear();
       const previousStandardContract =
         player?.previousStandardContract ||
         rebaseStandardContractFromSeason(player?.contract, targetTwoWaySeasonYear) ||
@@ -998,8 +1022,8 @@ export default function RosterView() {
         twoWayMeta: {
           ...(player?.twoWayMeta || {}),
           assignedByTeam: team.name,
-          assignedSeasonYear: getCurrentSeasonYear(),
-          currentTwoWaySeasonYear: getCurrentSeasonYear(),
+          assignedSeasonYear: getActiveContractSeasonYear(),
+          currentTwoWaySeasonYear: getActiveContractSeasonYear(),
           twoWayYearsUsed: nextTwoWayYearsUsed,
           maxTwoWayYears: usage.max,
           twoWayIneligible: false,
@@ -1055,7 +1079,7 @@ export default function RosterView() {
           maxTwoWayYears: usage.max,
           twoWayIneligible: true,
           convertedToStandardByTeam: team.name,
-          convertedToStandardSeasonYear: getCurrentSeasonYear(),
+          convertedToStandardSeasonYear: getActiveContractSeasonYear(),
           source: "manual_two_way_upgrade_to_standard",
         },
       };

@@ -1105,10 +1105,28 @@ const isOffseasonMode =
   // User team cap dashboard + affordability model
   // ------------------------------------------------------------
   const getOperatingSeasonYear = () => {
-    return getFinancialSeasonYear(workingLeagueData || {});
+    return Number(
+      getContractSeasonYear(workingLeagueData || {}) ||
+        workingLeagueData?.freeAgencyState?.contractSeasonYear ||
+        workingLeagueData?.freeAgencyState?.payrollSeasonYear ||
+        workingLeagueData?.freeAgencyState?.seasonYear ||
+        workingLeagueData?.seasonYear ||
+        workingLeagueData?.currentSeasonYear ||
+        2026
+    );
   };
 
-  const financialRules = getLeagueFinancialRules(workingLeagueData || {}, getOperatingSeasonYear());
+  const getFinancialRulesSeasonYear = () => {
+    const contractYear = getOperatingSeasonYear();
+    return Number(
+      getFinancialSeasonYear(workingLeagueData || {}) ||
+        workingLeagueData?.freeAgencyState?.financialSeasonYear ||
+        workingLeagueData?.freeAgencyState?.currentFinancialSeasonYear ||
+        contractYear + 1
+    );
+  };
+
+  const financialRules = getLeagueFinancialRules(workingLeagueData || {}, getFinancialRulesSeasonYear());
   const MIN_CONTRACT_AMOUNT = Number(financialRules.minimumSalary || 1_200_000);
   const MAX_CONTRACT_AMOUNT = Number(financialRules.maxSalary || 54_000_000);
   const MIN_CONTRACT_MILLIONS = MIN_CONTRACT_AMOUNT / 1_000_000;

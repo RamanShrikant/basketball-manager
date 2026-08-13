@@ -1477,7 +1477,7 @@ def _build_standard_contract_after_two_way(
     season_year: int,
     league: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    target_start_year = int(season_year) + 1
+    target_start_year = int(season_year)
     stored = (
         player.get("previousStandardContract")
         if isinstance(player.get("previousStandardContract"), dict)
@@ -1524,7 +1524,7 @@ def _promote_two_way_to_standard(team: Dict[str, Any], player: Dict[str, Any], s
     )
 
     previous_two_way_meta = copy.deepcopy(promoted.get("twoWayMeta")) if isinstance(promoted.get("twoWayMeta"), dict) else None
-    promoted = _set_player_as_standard(promoted, team_name, season_year + 1, source = "two_way_promotion", league = league)
+    promoted = _set_player_as_standard(promoted, team_name, season_year, source = "two_way_promotion", league = league)
     promoted.pop("isTwoWay", None)
     promoted.pop("twoWayMeta", None)
     if previous_two_way_meta:
@@ -1534,11 +1534,11 @@ def _promote_two_way_to_standard(team: Dict[str, Any], player: Dict[str, Any], s
             {
                 "type": "two_way",
                 "twoWayMeta": previous_two_way_meta,
-                "convertedSeasonYear": int(season_year) + 1,
+                "convertedSeasonYear": int(season_year),
                 "source": "two_way_promotion",
             },
         ]
-    target_start_year = int(season_year) + 1
+    target_start_year = int(season_year)
     rookie_reference_year = _rookie_reference_start_year(promoted, target_start_year)
     rookie_scale_control = (
         _get_player_draft_round(promoted) in [1, 2]
@@ -1751,12 +1751,12 @@ def _move_standard_to_two_way_for_finalization(
     meta = moved.setdefault("meta", {})
     if isinstance(meta, dict):
         meta["cpuRosterFinalizationTwoWay"] = True
-        meta["twoWayAssignedSeasonYear"] = season_year + 1
+        meta["twoWayAssignedSeasonYear"] = season_year
 
     moved["twoWayMeta"] = {
         **(moved.get("twoWayMeta") if isinstance(moved.get("twoWayMeta"), dict) else {}),
-        "currentTwoWaySeasonYear": season_year + 1,
-        "assignedSeasonYear": season_year + 1,
+        "currentTwoWaySeasonYear": season_year,
+        "assignedSeasonYear": season_year,
         "twoWayYearsUsed": max(1, _safe_int(moved.get("twoWayYearsUsed"), 1)),
         "maxTwoWayYears": 3,
         "source": "cpu_roster_finalization_two_way_conversion",

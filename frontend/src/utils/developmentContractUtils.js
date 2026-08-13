@@ -1,4 +1,5 @@
 import { getLeagueFinancialRules, getRookieSalaryForPick } from "./leagueFinancials.js";
+import { getContractSeasonYear } from "./seasonContext.js";
 
 const TWO_WAY_TYPES = new Set(["two_way", "two-way"]);
 const STASH_TYPES = new Set(["stash", "stashed", "draft_stash", "g_league_stash", "overseas_stash"]);
@@ -19,13 +20,15 @@ function getContractType(player) {
 }
 
 function getOperatingSeasonYear(leagueData) {
-  const seasonYear = safeNumber(
-    leagueData?.seasonYear ??
+  return safeNumber(
+    getContractSeasonYear(leagueData || {}) ??
+      leagueData?.contractSeasonYear ??
+      leagueData?.payrollSeasonYear ??
+      leagueData?.seasonYear ??
       leagueData?.currentSeasonYear ??
       leagueData?.seasonStartYear,
     2025
   );
-  return seasonYear + 1;
 }
 
 function getDevelopmentStartYear(player, fallbackYear) {
@@ -237,13 +240,67 @@ function repairLegacyPromotedPlayer(player, leagueData, operatingSeasonYear) {
   };
 }
 
+function isFutureDatedTwoWayStandardContract(player, operatingSeasonYear) {
+  if (!player || typeof player !== "object") return false;
+
+  const type = getContractType(player);
+  if (type !== "standard") return false;
+
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const startYear = safeNumber(contract?.startYear, 0);
+  if (startYear !== operatingSeasonYear + 1) return false;
+
+  const salaries = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+  if (!salaries.length) return false;
+
+  const sourceText = [
+    contract?.source,
+    player?.twoWayMeta?.source,
+    player?.meta?.rookieSigningDecision,
+    player?.meta?.acquiredVia,
+    player?.previousContract?.source,
+    player?.previousStandardContract?.source,
+    player?.standardContractBeforeTwoWay?.source,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return sourceText.includes("two_way") || sourceText.includes("two-way");
+}
+
+function repairFutureDatedTwoWayStandardContract(player, operatingSeasonYear) {
+  if (!isFutureDatedTwoWayStandardContract(player, operatingSeasonYear)) return player;
+
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+
+  return {
+    ...player,
+    contract: {
+      ...contract,
+      startYear: operatingSeasonYear,
+      source: `${contract.source || "two_way_standard"}_start_year_repaired`,
+    },
+    meta: {
+      ...(player?.meta && typeof player.meta === "object" ? player.meta : {}),
+      twoWayStandardStartYearRepaired: true,
+      twoWayStandardStartYearRepairedFrom: safeNumber(contract?.startYear, 0),
+      twoWayStandardStartYearRepairedTo: operatingSeasonYear,
+    },
+  };
+}
+
 function normalizeTeam(team, leagueData, operatingSeasonYear) {
   if (!team || typeof team !== "object") return team;
 
   let changed = false;
 
   const players = (Array.isArray(team?.players) ? team.players : []).map((player) => {
-    const repaired = repairLegacyPromotedPlayer(player, leagueData, operatingSeasonYear);
+    const startYearRepaired = repairFutureDatedTwoWayStandardContract(
+      player,
+      operatingSeasonYear
+    );
+    const repaired = repairLegacyPromotedPlayer(startYearRepaired, leagueData, operatingSeasonYear);
     if (repaired !== player) changed = true;
     return repaired;
   });

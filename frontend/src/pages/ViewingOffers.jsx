@@ -6,6 +6,7 @@ import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./ViewingOffers.module.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
+import { getContractSeasonYear, getFinancialSeasonYear } from "../utils/seasonContext.js";
 import { stampFreeAgentSigningRestrictions } from "../utils/userTradeRules.js";
 
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
@@ -1215,19 +1216,27 @@ function getPreviewCurrentSeasonYear(leagueData) {
 }
 
 function getPreviewOperatingSeasonYear(leagueData) {
-  const state = leagueData?.freeAgencyState || {};
-  const freeAgencyWindowActive = Boolean(
-    state?.isActive ||
-    Number(state?.currentDay || 0) > 0 ||
-    Number(state?.maxDays || 0) > 0 ||
-    state?.latestResults
+  return Number(
+    getContractSeasonYear(leagueData || {}) ||
+      leagueData?.freeAgencyState?.contractSeasonYear ||
+      leagueData?.freeAgencyState?.payrollSeasonYear ||
+      leagueData?.freeAgencyState?.seasonYear ||
+      getPreviewCurrentSeasonYear(leagueData)
   );
+}
 
-  return getPreviewCurrentSeasonYear(leagueData) + (freeAgencyWindowActive ? 1 : 0);
+function getPreviewFinancialRulesSeasonYear(leagueData) {
+  const contractYear = getPreviewOperatingSeasonYear(leagueData);
+  return Number(
+    getFinancialSeasonYear(leagueData || {}) ||
+      leagueData?.freeAgencyState?.financialSeasonYear ||
+      leagueData?.freeAgencyState?.currentFinancialSeasonYear ||
+      contractYear + 1
+  );
 }
 
 function getPreviewFinancialRules(leagueData) {
-  return getLeagueFinancialRules(leagueData || {}, getPreviewOperatingSeasonYear(leagueData));
+  return getLeagueFinancialRules(leagueData || {}, getPreviewFinancialRulesSeasonYear(leagueData));
 }
 
 function getPreviewMinimumSalary(leagueData) {

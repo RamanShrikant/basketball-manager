@@ -5596,7 +5596,7 @@ def build_standard_conversion_contract(
     source: str,
     league_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    target_start_year = int(season_year) + 1
+    target_start_year = int(season_year)
 
     stored_standard_contract = (
         player.get("previousStandardContract")
@@ -5674,18 +5674,17 @@ def is_two_way_contract_decision_due(player: Dict[str, Any], season_year: int) -
     # Same-offseason rookie signings should not immediately reappear on the
     # Options page. The decision is due only after that two-way season has been
     # completed, or when an old save has an expired/missing two-way contract.
-    if int(season_year) < int(current_two_way_year):
+    if int(season_year) <= int(current_two_way_year):
         return False
 
-    upcoming_year = int(season_year) + 1
-    return contract is None or get_raw_contract_salary_for_year(contract, upcoming_year) <= 0
+    return True
 
 
 def can_extend_two_way_for_next_season(player: Dict[str, Any], season_year: int) -> bool:
     if get_two_way_years_used(player) >= 3:
         return False
 
-    target_year = int(season_year) + 1
+    target_year = int(season_year)
     rookie_year = get_player_rookie_reference_year(player)
 
     if rookie_year is not None and target_year - rookie_year >= 4:
@@ -5808,7 +5807,7 @@ def can_assign_stash_player_to_two_way(
     if two_way_count >= TWO_WAY_MAX:
         return False
 
-    target_year = int(season_year) + 1
+    target_year = int(season_year)
     rookie_year = get_player_rookie_reference_year(player)
 
     if rookie_year is not None and target_year - rookie_year >= 4:
@@ -5954,14 +5953,14 @@ def mark_player_as_standard_conversion(
             {
                 "type": "two_way",
                 "twoWayMeta": previous_two_way_meta,
-                "convertedSeasonYear": int(season_year) + 1,
+                "convertedSeasonYear": int(season_year),
                 "source": source,
             },
         ]
 
     meta = converted.setdefault("meta", {})
     if isinstance(meta, dict):
-        meta["nbaRookieSeasonYear"] = meta.get("nbaRookieSeasonYear") or season_year + 1
+        meta["nbaRookieSeasonYear"] = meta.get("nbaRookieSeasonYear") or season_year
         meta["rookieSigningDecision"] = source
         meta["yearsWithCurrentTeam"] = max(1, int(num(meta.get("yearsWithCurrentTeam"), 0)))
 
@@ -5989,7 +5988,7 @@ def mark_player_as_two_way_extension(
     old_tw_meta = extended.get("twoWayMeta") if isinstance(extended.get("twoWayMeta"), dict) else {}
 
     extended["contract"] = build_two_way_contract_for_season(
-        start_year = season_year + 1,
+        start_year = season_year,
         source = source,
     )
     extended["contractType"] = "two_way"
@@ -6000,14 +5999,14 @@ def mark_player_as_two_way_extension(
 
     meta = extended.setdefault("meta", {})
     if isinstance(meta, dict):
-        meta["nbaRookieSeasonYear"] = meta.get("nbaRookieSeasonYear") or season_year + 1
+        meta["nbaRookieSeasonYear"] = meta.get("nbaRookieSeasonYear") or season_year
         meta["rookieSigningDecision"] = source
 
     extended["twoWayMeta"] = {
         **old_tw_meta,
         "assignedByTeam": team_name,
-        "assignedSeasonYear": old_tw_meta.get("assignedSeasonYear", season_year + 1),
-        "currentTwoWaySeasonYear": season_year + 1,
+        "assignedSeasonYear": old_tw_meta.get("assignedSeasonYear", season_year),
+        "currentTwoWaySeasonYear": season_year,
         "twoWayYearsUsed": min(3, previous_years_used + 1),
         "maxTwoWayYears": 3,
         "source": source,
@@ -6031,7 +6030,7 @@ def mark_stash_player_as_first_two_way(
 ) -> Dict[str, Any]:
     two_way_player = copy.deepcopy(player)
     two_way_player["contract"] = build_two_way_contract_for_season(
-        start_year = season_year + 1,
+        start_year = season_year,
         source = "stash_return_two_way",
     )
     two_way_player["contractType"] = "two_way"
@@ -6043,13 +6042,13 @@ def mark_stash_player_as_first_two_way(
 
     meta = two_way_player.setdefault("meta", {})
     if isinstance(meta, dict):
-        meta["nbaRookieSeasonYear"] = season_year + 1
+        meta["nbaRookieSeasonYear"] = season_year
         meta["rookieSigningDecision"] = "stash_return_two_way"
 
     two_way_player["twoWayMeta"] = {
         "assignedByTeam": team_name,
-        "assignedSeasonYear": season_year + 1,
-        "currentTwoWaySeasonYear": season_year + 1,
+        "assignedSeasonYear": season_year,
+        "currentTwoWaySeasonYear": season_year,
         "twoWayYearsUsed": 1,
         "maxTwoWayYears": 3,
         "source": "stash_return_two_way",
