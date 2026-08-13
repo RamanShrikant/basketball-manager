@@ -363,15 +363,10 @@ function getPlayerSalaryForYear(player = {}, payrollSeasonYear) {
     ? contract.salaryByYear.map((value) => Number(value) || 0)
     : [];
   if (salaries.length) {
-    let startYear = Number(contract.startYear || payrollSeasonYear);
-    let index = Number(payrollSeasonYear) - startYear;
-    if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && (index < 0 || index >= salaries.length)) {
-      startYear = payrollSeasonYear;
-      index = 0;
-    }
-    if (!Number.isFinite(index) || index < 0) index = 0;
-    if (index >= salaries.length) index = salaries.length - 1;
-    return Number(salaries[index] || 0);
+    const startYear = Number(contract.startYear || payrollSeasonYear);
+    const index = Number(payrollSeasonYear) - startYear;
+    if (index >= 0 && index < salaries.length) return Number(salaries[index] || 0);
+    return 0;
   }
   const fallback = Number(
     player?.salary ?? player?.currentSalary ?? player?.contractSalary ?? player?.capHit ?? player?.aav ?? 0

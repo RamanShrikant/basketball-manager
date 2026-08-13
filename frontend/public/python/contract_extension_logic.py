@@ -105,7 +105,9 @@ def _contract_season_year(league_data: Dict[str, Any]) -> int:
         mode = max(set(starts), key=starts.count)
         if starts.count(mode) / len(starts) >= 0.55 and mode == season:
             return season
-    return season + 1
+    # Contracts are keyed by season start year. Falling back to season + 1
+    # skips the first salary slot and makes extensions/FA deals look short.
+    return season
 
 
 def _display_year(league_data: Dict[str, Any]) -> int:

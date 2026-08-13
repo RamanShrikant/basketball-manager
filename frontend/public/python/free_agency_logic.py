@@ -213,7 +213,6 @@ def get_explicit_payroll_season_year(league_data: Dict[str, Any]) -> Optional[in
         "currentPayrollSeasonYear",
         "salarySeasonYear",
         "currentSalarySeasonYear",
-        "financialSeasonYear",
     ):
         year = _safe_year(league_data.get(key))
         if year is not None:
@@ -248,6 +247,22 @@ def get_operating_season_year(league_data: Dict[str, Any]) -> int:
         # after a completed season, so keep the old +1 fallback only there.
         return season_year + 1
     return season_year
+
+def get_offseason_contract_year(league_data: Dict[str, Any]) -> int:
+    """Return the salary-array year being decided in the current offseason.
+
+    A 2027 offseason decides the 2027-28 contract slot, so this must be 2027,
+    not the display/financial end year 2028.  Keeping this as a dedicated
+    helper prevents old `season + 1` logic from pushing options/expiries one
+    year too far forward and incorrectly sending signed players to free agency.
+    """
+    return int(get_operating_season_year(league_data))
+
+
+def get_completed_contract_year(offseason_contract_year: int) -> int:
+    """The season that just ended before the offseason decisions run."""
+    return int(offseason_contract_year) - 1
+
 
 
 def get_salary_cap(league_data: Dict[str, Any]) -> int:
@@ -5245,33 +5260,37 @@ def build_contract_status_row(
     player: Dict[str, Any],
     season_year: int,
     league_data: Optional[Dict[str, Any]] = None,
+    completed_season_year: Optional[int] = None,
 ) -> Dict[str, Any]:
     raw_contract = normalize_contract(player.get("contract"))
     market_value = player.get("marketValue") or estimate_market_value(player, league_data)
     team_direction = classify_team_direction(team, league_data = league_data)
     re_sign_interest = estimate_team_re_sign_interest(team, player, league_data = league_data)
 
-    upcoming_year = season_year + 1
+    decision_year = int(season_year)
+    completed_year = int(completed_season_year) if completed_season_year is not None else get_completed_contract_year(decision_year)
+
     final_rookie_option_completed = is_completed_final_rookie_scale_team_option(
         player = player,
-        current_season_year = season_year,
+        current_season_year = completed_year,
     )
 
-    # Options from the completed/current season were already decided before
-    # that season began. Strip those stale labels before evaluating the next
-    # offseason, while preserving the special final rookie-scale QO path.
+    # The offseason decides the upcoming contract slot (decision_year).  Only
+    # option labels from seasons that have already begun/ended are stale.  Do
+    # not finalize through decision_year or use decision_year + 1 here, or
+    # 2028/2029 options get processed one offseason early.
     contract = raw_contract if final_rookie_option_completed else finalize_elapsed_option_years(
         raw_contract,
-        through_season_year = season_year,
+        through_season_year = completed_year,
     )
 
-    salary_this_year = get_contract_salary_for_year(contract, upcoming_year)
-    salary_next_year = get_contract_salary_for_year(contract, upcoming_year + 1) if contract else 0
+    salary_this_year = get_contract_salary_for_year(contract, decision_year)
+    salary_next_year = get_contract_salary_for_year(contract, decision_year + 1) if contract else 0
     active_option = get_active_option_for_player_for_year(
         player = player,
         contract = contract,
-        option_season_year = upcoming_year,
-        current_season_year = season_year,
+        option_season_year = decision_year,
+        current_season_year = completed_year,
     )
 
     if final_rookie_option_completed:
@@ -5303,7 +5322,9 @@ def build_contract_status_row(
         "potential": int(round(num(player.get("potential"), num(player.get("overall"), 0)))),
         "position": player.get("pos"),
         "status": status,
-        "seasonYear": season_year,
+        "seasonYear": decision_year,
+        "decisionSeasonYear": decision_year,
+        "completedSeasonYear": completed_year,
         "salaryThisYear": int(salary_this_year),
         "salaryNextYear": int(salary_next_year),
         "contractLastYear": contract_last_year,
@@ -5324,7 +5345,7 @@ def build_contract_status_row(
         if active_option["type"] == "player":
             row["playerOptionDecision"] = decide_player_option(
                 player = player,
-                season_year = upcoming_year,
+                season_year = decision_year,
                 team = team,
                 league_data = league_data,
             )
@@ -5332,7 +5353,7 @@ def build_contract_status_row(
             row["cpuTeamOptionDecision"] = decide_cpu_team_option(
                 team,
                 player,
-                upcoming_year,
+                decision_year,
                 league_data = league_data,
             )
 
@@ -6049,10 +6070,11 @@ def preview_offseason_contracts(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None
 ) -> Dict[str, Any]:
-    # Player/team options are a pre-free-agency step. Keep preview aligned
-    # with apply_offseason_contract_decisions by resolving the current
-    # offseason year, even if a stale freeAgencyState is still marked active.
-    season_year = get_current_season_year(league_data)
+    # Player/team options are a pre-free-agency step for the upcoming contract
+    # slot. In the 2027 offseason, this must evaluate the 2027-28 salary slot
+    # (season_year = 2027), not the display/financial year 2028.
+    season_year = get_offseason_contract_year(league_data)
+    completed_season_year = get_completed_contract_year(season_year)
 
     expired_contracts = []
     player_options = []
@@ -6068,6 +6090,7 @@ def preview_offseason_contracts(
                 player,
                 season_year,
                 league_data = league_data,
+                completed_season_year = completed_season_year,
             )
 
             if row["status"] in ["expired", "no_contract"]:
@@ -6096,6 +6119,7 @@ def preview_offseason_contracts(
                 player,
                 season_year,
                 league_data = league_data,
+                completed_season_year = completed_season_year,
             )
             row["twoWayContract"] = True
             signed_players.append(row)
@@ -6175,6 +6199,7 @@ def preview_offseason_contracts(
     return {
         "ok": True,
         "seasonYear": season_year,
+        "completedSeasonYear": completed_season_year,
         "userTeamName": user_team_name,
         "summary": {
             "expiredContractCount": len(expired_contracts),
@@ -6220,7 +6245,8 @@ def apply_offseason_contract_decisions(
     user_team_name: Optional[str] = None,
     team_option_decisions: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    season_year = get_current_season_year(league_data)
+    season_year = get_offseason_contract_year(league_data)
+    completed_season_year = get_completed_contract_year(season_year)
     preview = preview_offseason_contracts(
         league_data = league_data,
         user_team_name = user_team_name,
@@ -6304,23 +6330,23 @@ def apply_offseason_contract_decisions(
             raw_contract = normalize_contract(player.get("contract"))
             final_rookie_option_completed = is_completed_final_rookie_scale_team_option(
                 player = player,
-                current_season_year = season_year,
+                current_season_year = completed_season_year,
             )
 
             contract = raw_contract if final_rookie_option_completed else finalize_elapsed_option_years(
                 raw_contract,
-                through_season_year = season_year,
+                through_season_year = completed_season_year,
             )
             if not final_rookie_option_completed:
                 player["contract"] = contract
 
-            upcoming_year = season_year + 1
-            salary_this_year = get_contract_salary_for_year(contract, upcoming_year)
+            decision_year = season_year
+            salary_this_year = get_contract_salary_for_year(contract, decision_year)
             active_option = get_active_option_for_player_for_year(
                 player = player,
                 contract = contract,
-                option_season_year = upcoming_year,
-                current_season_year = season_year,
+                option_season_year = decision_year,
+                current_season_year = completed_season_year,
             )
 
             if active_option and salary_this_year <= 0:
@@ -6381,7 +6407,7 @@ def apply_offseason_contract_decisions(
             if active_option and active_option.get("type") == "player":
                 decision = decide_player_option(
                     player = player,
-                    season_year = upcoming_year,
+                    season_year = decision_year,
                     team = team,
                     league_data = updated,
                 )
@@ -6402,7 +6428,7 @@ def apply_offseason_contract_decisions(
                         "overall": int(round(num(player.get("overall"), 0))),
                         "potential": int(round(num(player.get("potential"), num(player.get("overall"), 0)))),
                         "salaryThisYear": int(num(active_option.get("salary"), salary_this_year)),
-                        "optionSeasonYear": int(upcoming_year),
+                        "optionSeasonYear": int(decision_year),
                         "marketValue": player.get("marketValue") or estimate_market_value(player, league_data),
                         "teamDirection": classify_team_direction(team, league_data = updated)["direction"],
                         "result": "accepted_option",
@@ -6435,7 +6461,7 @@ def apply_offseason_contract_decisions(
                         "overall": int(round(num(player.get("overall"), 0))),
                         "potential": int(round(num(player.get("potential"), num(player.get("overall"), 0)))),
                         "salaryThisYear": int(num(active_option.get("salary"), salary_this_year)),
-                        "optionSeasonYear": int(upcoming_year),
+                        "optionSeasonYear": int(decision_year),
                         "marketValue": player.get("marketValue") or estimate_market_value(player, league_data),
                         "teamDirection": classify_team_direction(team, league_data = updated)["direction"],
                         "result": "declined_option_entered_free_agency",
@@ -6461,7 +6487,7 @@ def apply_offseason_contract_decisions(
                     decision = decide_cpu_team_option(
                         team,
                         player,
-                        upcoming_year,
+                        decision_year,
                         league_data = updated,
                     )
                     exercise = decision["exerciseOption"]

@@ -8,9 +8,9 @@
 // - financialSeasonYear: the NBA cap/apron rule year
 // - draftYear: the draft attached to the completed season
 //
-// Existing saves historically inferred the current salary year as season + 1.
-// These helpers preserve that legacy fallback unless a save/import explicitly
-// supplies payroll fields or clearly identifies the new 2026-27 data shape.
+// Salary/contracts are indexed by the season START year. Display/financial
+// labels use the season END year. Never use the end-year label to choose a
+// salaryByYear index; that is what makes fresh contracts look one year short.
 
 export const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
@@ -167,12 +167,14 @@ export function getContractSeasonYear(leagueData = {}) {
     validSeasonYear(leagueData?.currentSalarySeasonYear, null);
 
   if (explicit) return explicit;
-  if (looksLikeSeasonStartContractFile(leagueData, seasonStartYear)) return seasonStartYear;
 
-  // Legacy behavior: older saves/screens treated the active salary slot as the
-  // season-ending year. Do not change those saves unless they opt into explicit
-  // payroll fields during import/normalization.
-  return seasonStartYear + 1;
+  // Contract salaryByYear arrays are always keyed by the season START year:
+  // 2026 means 2026-27, 2027 means 2027-28, etc. Display/cap labels are
+  // one year later, but using those labels here skips the first salary slot.
+  // Missing explicit payroll fields should therefore fall back to the saved
+  // season start year, not seasonStartYear + 1.
+  if (looksLikeSeasonStartContractFile(leagueData, seasonStartYear)) return seasonStartYear;
+  return seasonStartYear;
 }
 
 function parseDateString(value) {

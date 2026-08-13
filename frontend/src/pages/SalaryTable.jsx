@@ -47,27 +47,34 @@ function pushSalaryTableYear(candidates, value) {
 function resolveSalaryTableSeasonYear(leagueData) {
   if (!leagueData || typeof leagueData !== "object") return getContractSeasonYear(leagueData || {});
 
-  const candidates = [];
   const meta = readLeagueMetaForSalaryTable() || {};
   const offseasonState = readOffseasonStateForSalaryTable() || {};
   const freeAgencyState = leagueData?.freeAgencyState && typeof leagueData.freeAgencyState === "object"
     ? leagueData.freeAgencyState
     : {};
 
-  // Explicit payroll/contract fields are the safest source for this page.
+  // SalaryTable must use the contract/payroll START year for indexing
+  // contract.salaryByYear. Display/end/financial years are labels only.
   for (const source of [leagueData, meta]) {
-    pushSalaryTableYear(candidates, source?.contractSeasonYear);
-    pushSalaryTableYear(candidates, source?.payrollSeasonYear);
-    pushSalaryTableYear(candidates, source?.currentPayrollSeasonYear);
-    pushSalaryTableYear(candidates, source?.salarySeasonYear);
-    pushSalaryTableYear(candidates, source?.currentSalarySeasonYear);
+    const explicit =
+      validSalaryTableYear(source?.contractSeasonYear) ??
+      validSalaryTableYear(source?.payrollSeasonYear) ??
+      validSalaryTableYear(source?.currentPayrollSeasonYear) ??
+      validSalaryTableYear(source?.salarySeasonYear) ??
+      validSalaryTableYear(source?.currentSalarySeasonYear);
+
+    if (explicit) return explicit;
   }
 
-  // Offseason and free-agency state use the active payroll year directly.
   if (offseasonState?.active) {
-    pushSalaryTableYear(candidates, offseasonState?.seasonYear);
-    pushSalaryTableYear(candidates, offseasonState?.payrollSeasonYear);
-    pushSalaryTableYear(candidates, offseasonState?.currentPayrollSeasonYear);
+    const explicitOffseason =
+      validSalaryTableYear(offseasonState?.contractSeasonYear) ??
+      validSalaryTableYear(offseasonState?.payrollSeasonYear) ??
+      validSalaryTableYear(offseasonState?.currentPayrollSeasonYear) ??
+      validSalaryTableYear(offseasonState?.salarySeasonYear) ??
+      validSalaryTableYear(offseasonState?.seasonYear);
+
+    if (explicitOffseason) return explicitOffseason;
   }
 
   if (
@@ -79,26 +86,17 @@ function resolveSalaryTableSeasonYear(leagueData) {
     freeAgencyState?.completed ||
     freeAgencyState?.isComplete
   ) {
-    pushSalaryTableYear(candidates, freeAgencyState?.seasonYear);
-    pushSalaryTableYear(candidates, freeAgencyState?.payrollSeasonYear);
+    const explicitFreeAgency =
+      validSalaryTableYear(freeAgencyState?.contractSeasonYear) ??
+      validSalaryTableYear(freeAgencyState?.payrollSeasonYear) ??
+      validSalaryTableYear(freeAgencyState?.currentPayrollSeasonYear) ??
+      validSalaryTableYear(freeAgencyState?.salarySeasonYear) ??
+      validSalaryTableYear(freeAgencyState?.seasonYear);
+
+    if (explicitFreeAgency) return explicitFreeAgency;
   }
 
-  // The calendar and standings screens often advance the season as a start-year
-  // while the salary table is user-facing as the season-ending/payroll label.
-  // Include display/end-year candidates so Year 2+ cannot stay stuck on the
-  // imported roster filename year.
-  pushSalaryTableYear(candidates, getDisplaySeasonYear(leagueData));
-  pushSalaryTableYear(candidates, leagueData?.displaySeasonYear);
-  pushSalaryTableYear(candidates, leagueData?.seasonEndYear);
-  pushSalaryTableYear(candidates, leagueData?.awardsSeasonYear);
-  pushSalaryTableYear(candidates, meta?.displaySeasonYear);
-  pushSalaryTableYear(candidates, meta?.seasonEndYear);
-  pushSalaryTableYear(candidates, meta?.awardsSeasonYear);
-
-  // Last fallback: the legacy contract helper.
-  pushSalaryTableYear(candidates, getContractSeasonYear(leagueData));
-
-  return candidates.length ? Math.max(...candidates) : getContractSeasonYear(leagueData);
+  return getContractSeasonYear(leagueData);
 }
 
 function buildSalaryContextLeague(leagueData) {
@@ -109,16 +107,22 @@ function buildSalaryContextLeague(leagueData) {
 
   return withOffseasonSeasonContext({
     ...leagueData,
+    seasonYear: y,
+    currentSeasonYear: y,
+    seasonStartYear: y,
     contractSeasonYear: y,
     payrollSeasonYear: y,
     currentPayrollSeasonYear: y,
     salarySeasonYear: y,
     currentSalarySeasonYear: y,
-    displaySeasonYear: Math.max(y, validSalaryTableYear(leagueData?.displaySeasonYear) || y),
+    displaySeasonYear: y + 1,
+    seasonEndYear: y + 1,
+    currentFinancialSeasonYear: y + 1,
+    financialSeasonYear: y + 1,
     financials: {
       ...(leagueData.financials || {}),
-      currentSeasonYear: Number(leagueData?.financials?.currentSeasonYear || y + 1),
-      currentFinancialSeasonYear: Number(leagueData?.financials?.currentFinancialSeasonYear || y + 1),
+      currentSeasonYear: y + 1,
+      currentFinancialSeasonYear: y + 1,
     },
   }, y);
 }
@@ -135,6 +139,15 @@ export default function SalaryTable() {
   const salaryContextLeague = useMemo(() => buildSalaryContextLeague(leagueData), [leagueData]);
   const currentSeasonYear = resolveSalaryTableSeasonYear(leagueData || salaryContextLeague || {});
   const financialRules = getLeagueFinancialRules(salaryContextLeague || {}, getFinancialSeasonYear(salaryContextLeague || {}));
+
+  const getDisplayYearLabel = (contractYear) => Number(contractYear || 0) + 1;
+
+  const getSeasonRangeLabel = (contractYear) => {
+    const start = Number(contractYear || 0);
+    const end = start + 1;
+    if (!Number.isFinite(start) || start <= 0) return "";
+    return `${start}-${String(end).slice(-2)}`;
+  };
 
   const getLeagueAmount = (keys, fallback) => {
     for (const key of keys) {
@@ -291,22 +304,6 @@ export default function SalaryTable() {
       : [];
     const option = contract?.option ?? null;
 
-    const lastYear = startYear + Math.max(0, salaryByYear.length - 1);
-
-    const hasCurrentSeasonSlot =
-      salaryByYear.length > 0 &&
-      currentSeasonYear >= startYear &&
-      currentSeasonYear <= lastYear;
-
-    const looksLikePreviousOffseasonOneYearDeal =
-      salaryByYear.length === 1 &&
-      startYear === currentSeasonYear - 1 &&
-      !hasCurrentSeasonSlot;
-
-    if (looksLikePreviousOffseasonOneYearDeal) {
-      startYear = currentSeasonYear;
-    }
-
     return {
       startYear,
       salaryByYear,
@@ -381,7 +378,7 @@ export default function SalaryTable() {
 
     const pendingOptionYears = getOptionYearIndices(option)
       .filter((yearIndex) => isPendingOptionContractYear(contract, yearIndex))
-      .map((yearIndex) => Number(contract?.startYear || 0) + Number(yearIndex));
+      .map((yearIndex) => getDisplayYearLabel(Number(contract?.startYear || 0) + Number(yearIndex)));
 
     if (!pendingOptionYears.length) return "None";
 
@@ -1161,6 +1158,7 @@ export default function SalaryTable() {
     return Array.from({ length: DISPLAY_YEARS }, (_, i) => currentSeasonYear + i);
   }, [currentSeasonYear]);
 
+
   const teamTotalsByYear = useMemo(() => {
     const totals = yearColumns.map(() => 0);
 
@@ -1194,8 +1192,44 @@ export default function SalaryTable() {
 
   const salaryPageLabel = useMemo(() => {
     const source = leagueData?.leagueName || leagueData?.name || "League";
-    return `Payroll year ${currentSeasonYear} • ${source}`;
+    return `Payroll year ${getDisplayYearLabel(currentSeasonYear)} • ${source}`;
   }, [leagueData?.leagueName, leagueData?.name, currentSeasonYear]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    window.BM_CONTRACT_DEBUG = {
+      check(names = []) {
+        const wanted = Array.isArray(names) ? names : [names];
+        const teams = getAllTeamsFromLeague(leagueData || {});
+        const rows = teams.flatMap((team) =>
+          (team?.players || []).map((player) => ({ team: team?.name || "", player }))
+        );
+        const currentContractYear = resolveSalaryTableSeasonYear(leagueData || {});
+        const report = wanted.map((name) => {
+          const found = rows.find(({ player }) => String(player?.name || "").toLowerCase() === String(name || "").toLowerCase());
+          if (!found) return { name, found: false };
+          const contract = found.player?.contract || {};
+          const salaryByYear = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
+          return {
+            name: found.player.name,
+            team: found.team,
+            contractSeasonYear: currentContractYear,
+            displayPayrollYear: currentContractYear + 1,
+            startYear: contract.startYear,
+            salarySlots: salaryByYear.length,
+            salaryByYear,
+            option: contract.option || null,
+            activeIndex: Number(currentContractYear) - Number(contract.startYear || currentContractYear),
+            activeSalary: salaryByYear[Number(currentContractYear) - Number(contract.startYear || currentContractYear)] || 0,
+            rights: found.player?.rights || null,
+          };
+        });
+        console.table(report);
+        return report;
+      },
+    };
+  }, [leagueData]);
 
   const toneClass = (tone) => {
     if (tone === "danger") return "bg-red-500/15 text-red-200 border-red-400/25";
@@ -1626,7 +1660,7 @@ export default function SalaryTable() {
             <div className={`px-3 py-2 rounded-xl border text-sm ${toneClass(snapshot.capStatus.tone)}`}>
               <div className="font-semibold">{snapshot.capStatus.label}</div>
               <div className="text-xs opacity-80">
-                {snapshot.deadCapPlayerRows.length > 0 || snapshot.capHoldRows.length > 0 ? "Payroll + Adjustments" : "Payroll"} {yearColumns[0]}: {fmtM(snapshot.payrollThisYear)}
+                {snapshot.deadCapPlayerRows.length > 0 || snapshot.capHoldRows.length > 0 ? "Payroll + Adjustments" : "Payroll"} {getDisplayYearLabel(yearColumns[0])}: {fmtM(snapshot.payrollThisYear)}
               </div>
             </div>
           </div>
@@ -1652,8 +1686,8 @@ export default function SalaryTable() {
                 <th className="text-center px-3 py-2">Pos</th>
                 <th className="text-center px-3 py-2">OVR</th>
                 {yearColumns.map((y) => (
-                  <th key={y} className="text-right px-3 py-2 whitespace-nowrap">
-                    {y}
+                  <th key={y} className="text-right px-3 py-2 whitespace-nowrap" title={getSeasonRangeLabel(y)}>
+                    {getDisplayYearLabel(y)}
                   </th>
                 ))}
                 <th className="text-right px-3 py-2 whitespace-nowrap">Total Remaining</th>
@@ -1776,7 +1810,7 @@ export default function SalaryTable() {
                       className={`inline-flex items-center justify-center gap-1 rounded-full border px-2.5 py-1 text-xs font-extrabold ${getExpChipClass(p.expType)}`}
                       title={p.expNote}
                     >
-                      {p.endYear} {p.expType}
+                      {getDisplayYearLabel(p.endYear)} {p.expType}
                     </span>
                   </td>
                 </tr>
@@ -1918,7 +1952,7 @@ export default function SalaryTable() {
                   <div className={`px-3 py-2 rounded-xl border text-sm ${toneClass(capStatus.tone)}`}>
                     <div className="font-semibold">{capStatus.label}</div>
                     <div className="text-xs opacity-80">
-                      {deadCapPlayerRows.length > 0 || capHoldRows.length > 0 ? "Payroll + Adjustments" : "Payroll"} {yearColumns[0]}: {fmtM(payrollThisYear)}
+                      {deadCapPlayerRows.length > 0 || capHoldRows.length > 0 ? "Payroll + Adjustments" : "Payroll"} {getDisplayYearLabel(yearColumns[0])}: {fmtM(payrollThisYear)}
                     </div>
                   </div>
                 </div>
@@ -1944,8 +1978,8 @@ export default function SalaryTable() {
                       <th className="text-center px-3 py-2">Pos</th>
                       <th className="text-center px-3 py-2">OVR</th>
                       {yearColumns.map((y) => (
-                        <th key={y} className="text-right px-3 py-2 whitespace-nowrap">
-                          {y}
+                        <th key={y} className="text-right px-3 py-2 whitespace-nowrap" title={getSeasonRangeLabel(y)}>
+                          {getDisplayYearLabel(y)}
                         </th>
                       ))}
                       <th className="text-right px-3 py-2 whitespace-nowrap">Total Remaining</th>
@@ -2068,7 +2102,7 @@ export default function SalaryTable() {
                             className={`inline-flex items-center justify-center gap-1 rounded-full border px-2.5 py-1 text-xs font-extrabold ${getExpChipClass(p.expType)}`}
                             title={p.expNote}
                           >
-                            {p.endYear} {p.expType}
+                            {getDisplayYearLabel(p.endYear)} {p.expType}
                           </span>
                         </td>
                       </tr>

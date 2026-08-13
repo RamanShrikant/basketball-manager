@@ -346,31 +346,55 @@ function buildProgressionRunSeed(league, seasonYear, suffix = "organic") {
 }
 
 function getSeasonYear(leagueData) {
-  const candidates = [];
-
-  const pushYear = (value) => {
+  const validYear = (value) => {
     const y = Number(value);
-    if (Number.isFinite(y) && y >= 2020 && y <= 2100) {
-      candidates.push(y);
-    }
+    return Number.isFinite(y) && y >= 2020 && y <= 2100 ? Math.trunc(y) : null;
   };
 
   const meta = safeJSON(localStorage.getItem("bm_league_meta_v1"), {});
   const offseasonState = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {});
 
-  pushYear(meta?.seasonYear);
-  pushYear(meta?.currentSeasonYear);
-  pushYear(meta?.seasonStartYear);
-  pushYear(offseasonState?.seasonYear);
-  pushYear(leagueData?.seasonYear);
-  pushYear(leagueData?.currentSeasonYear);
-  pushYear(leagueData?.seasonStartYear);
+  // Prefer the live league season start year. Do not Math.max() against
+  // display/end/payroll labels from storage, because that can push offseason
+  // contracts one salary slot too far into the future.
+  return (
+    validYear(leagueData?.seasonYear) ??
+    validYear(leagueData?.currentSeasonYear) ??
+    validYear(leagueData?.seasonStartYear) ??
+    validYear(offseasonState?.seasonYear) ??
+    validYear(meta?.seasonYear) ??
+    validYear(meta?.currentSeasonYear) ??
+    validYear(meta?.seasonStartYear) ??
+    2026
+  );
+}
 
-  if (candidates.length) {
-    return Math.max(...candidates);
-  }
+function withContractSeasonContextForYear(leagueData, seasonYear) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+  const y = Number(seasonYear || leagueData?.seasonYear || leagueData?.currentSeasonYear || 2026);
+  if (!Number.isFinite(y) || y < 2020 || y > 2100) return leagueData;
 
-  return 2026;
+  return {
+    ...leagueData,
+    seasonYear: y,
+    currentSeasonYear: y,
+    seasonStartYear: y,
+    contractSeasonYear: y,
+    payrollSeasonYear: y,
+    currentPayrollSeasonYear: y,
+    salarySeasonYear: y,
+    currentSalarySeasonYear: y,
+    displaySeasonYear: y + 1,
+    seasonEndYear: y + 1,
+    financialSeasonYear: y + 1,
+    currentFinancialSeasonYear: y + 1,
+    financials: {
+      ...(leagueData.financials || {}),
+      currentSeasonYear: y + 1,
+      currentFinancialSeasonYear: y + 1,
+      appliedThroughSeasonYear: Number(leagueData?.financials?.appliedThroughSeasonYear || y + 1),
+    },
+  };
 }
 
 function getChampionName() {
@@ -563,7 +587,20 @@ function hasPendingOptionForSeasonLocal(player, seasonYear) {
 
 function hasUnresolvedPreFreeAgencyContracts(leagueData, seasonYear) {
   const snapshot = getLeagueDataSnapshot(leagueData);
-  const targetSeasonYear = Number(seasonYear || snapshot?.seasonYear || snapshot?.currentSeasonYear || 2026) + 1;
+  const validYear = (value) => {
+    const y = Number(value);
+    return Number.isFinite(y) && y >= 2020 && y <= 2100 ? Math.trunc(y) : null;
+  };
+  const targetSeasonYear =
+    validYear(snapshot?.contractSeasonYear) ??
+    validYear(snapshot?.payrollSeasonYear) ??
+    validYear(snapshot?.currentPayrollSeasonYear) ??
+    validYear(snapshot?.salarySeasonYear) ??
+    validYear(snapshot?.currentSalarySeasonYear) ??
+    validYear(seasonYear) ??
+    validYear(snapshot?.seasonYear) ??
+    validYear(snapshot?.currentSeasonYear) ??
+    2026;
 
   for (const team of getAllTeamsFromLeague(snapshot) || []) {
     const rosterBuckets = [team?.players || [], team?.twoWayPlayers || []];
@@ -2169,7 +2206,8 @@ export default function OffseasonHub() {
   const persistDevLeagueData = (updated) => {
     if (!updated) return updated;
 
-    const compact = compactLeagueDataForDevStorage(updated);
+    const normalized = withContractSeasonContextForYear(updated, seasonYear);
+    const compact = compactLeagueDataForDevStorage(normalized);
 
     saveLeagueData(compact).catch((err) => {
       console.error("[OffseasonHub Dev] IndexedDB compact leagueData save failed. Retrying ultra-light FA state.", err);
@@ -2209,10 +2247,10 @@ export default function OffseasonHub() {
     });
 
     if (typeof setLeagueData === "function") {
-      setLeagueData(updated);
+      setLeagueData(normalized);
     }
 
-    return updated;
+    return normalized;
   };
 
   const updateDevOffseasonState = (patch) => {
@@ -2381,6 +2419,7 @@ export default function OffseasonHub() {
     }
 
     finalizedLeagueData = rollDraftPickAssetsForCompletedSeason(finalizedLeagueData, seasonYear, { draftComplete: true });
+    finalizedLeagueData = withContractSeasonContextForYear(finalizedLeagueData, seasonYear);
     saveLeagueData(finalizedLeagueData).catch((err) => {
       console.warn("[OffseasonHub] Failed to save rolled draft assets to IndexedDB.", err);
     });
@@ -2425,6 +2464,15 @@ export default function OffseasonHub() {
         seasonYear,
         currentSeasonYear: seasonYear,
         seasonStartYear: seasonYear,
+        contractSeasonYear: seasonYear,
+        payrollSeasonYear: seasonYear,
+        currentPayrollSeasonYear: seasonYear,
+        salarySeasonYear: seasonYear,
+        currentSalarySeasonYear: seasonYear,
+        displaySeasonYear: seasonYear + 1,
+        seasonEndYear: seasonYear + 1,
+        financialSeasonYear: seasonYear + 1,
+        currentFinancialSeasonYear: seasonYear + 1,
       };
 
       localStorage.setItem(
