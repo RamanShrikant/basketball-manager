@@ -162,6 +162,8 @@ export default function SalaryTable() {
   const FIRST_APRON = getLeagueAmount(["firstApron", "apron1"], financialRules.firstApron);
   const SECOND_APRON = getLeagueAmount(["secondApron", "apron2"], financialRules.secondApron);
   const HARD_CAP = getLeagueAmount(["hardCap", "hardCapLimit"], financialRules.hardCap || SECOND_APRON);
+  const hardCapDuplicatesSecondApron = Math.abs(Number(HARD_CAP || 0) - Number(SECOND_APRON || 0)) < 1;
+  const shouldShowHardCapLine = Number(HARD_CAP || 0) > 0 && !hardCapDuplicatesSecondApron;
   const MIN_CONTRACT_AMOUNT = Number(financialRules.minimumSalary || 1_200_000);
 
   const fmtM = (n) => {
@@ -1182,13 +1184,13 @@ export default function SalaryTable() {
   const payrollThisYear = teamTotalsByYear?.[0] ?? 0;
 
   const capStatus = useMemo(() => {
-    if (payrollThisYear >= HARD_CAP) return { label: "Hard Cap", tone: "danger" };
+    if (shouldShowHardCapLine && payrollThisYear >= HARD_CAP) return { label: "Hard Cap", tone: "danger" };
     if (payrollThisYear >= SECOND_APRON) return { label: "2nd Apron", tone: "danger" };
     if (payrollThisYear >= FIRST_APRON) return { label: "1st Apron", tone: "warn" };
     if (payrollThisYear >= TAX_LINE) return { label: "Luxury Tax", tone: "warn" };
     if (payrollThisYear >= SALARY_CAP) return { label: "Over Cap", tone: "neutral" };
     return { label: "Below Cap", tone: "good" };
-  }, [payrollThisYear, HARD_CAP, SECOND_APRON, FIRST_APRON, TAX_LINE, SALARY_CAP]);
+  }, [payrollThisYear, HARD_CAP, SECOND_APRON, FIRST_APRON, TAX_LINE, SALARY_CAP, shouldShowHardCapLine]);
 
   const salaryPageLabel = useMemo(() => {
     const source = leagueData?.leagueName || leagueData?.name || "League";
@@ -1594,7 +1596,7 @@ export default function SalaryTable() {
     });
     const payroll = totalsByYear?.[0] ?? 0;
     const status = (() => {
-      if (payroll >= HARD_CAP) return { label: "Hard Cap", tone: "danger" };
+      if (shouldShowHardCapLine && payroll >= HARD_CAP) return { label: "Hard Cap", tone: "danger" };
       if (payroll >= SECOND_APRON) return { label: "2nd Apron", tone: "danger" };
       if (payroll >= FIRST_APRON) return { label: "1st Apron", tone: "warn" };
       if (payroll >= TAX_LINE) return { label: "Luxury Tax", tone: "warn" };
@@ -1670,7 +1672,7 @@ export default function SalaryTable() {
             <Chip label={`Luxury Tax: ${fmtM(TAX_LINE)}`} />
             <Chip label={`1st Apron: ${fmtM(FIRST_APRON)}`} />
             <Chip label={`2nd Apron: ${fmtM(SECOND_APRON)}`} />
-            <Chip label={`Hard Cap: ${fmtM(HARD_CAP)}`} />
+            {shouldShowHardCapLine && <Chip label={`Hard Cap: ${fmtM(HARD_CAP)}`} />}
             {snapshot.deadCapPlayerRows.length > 0 && <Chip label={`Dead Cap: ${fmtM(snapshot.deadCapTotal)}`} />}
             {(snapshot.twoWayCount || 0) > 0 && <Chip label={`Two-Way: ${snapshot.twoWayCount}/3`} />}
             {(snapshot.stashCount || 0) > 0 && <Chip label={`Stash: ${snapshot.stashCount}`} />}
@@ -1962,7 +1964,7 @@ export default function SalaryTable() {
                   <Chip label={`Luxury Tax: ${fmtM(TAX_LINE)}`} />
                   <Chip label={`1st Apron: ${fmtM(FIRST_APRON)}`} />
                   <Chip label={`2nd Apron: ${fmtM(SECOND_APRON)}`} />
-                  <Chip label={`Hard Cap: ${fmtM(HARD_CAP)}`} />
+                  {shouldShowHardCapLine && <Chip label={`Hard Cap: ${fmtM(HARD_CAP)}`} />}
                   {deadCapPlayerRows.length > 0 && <Chip label={`Dead Cap: ${fmtM(deadCapTotal)}`} />}
                   {getTwoWayPlayers(selectedTeam).length > 0 && <Chip label={`Two-Way: ${getTwoWayPlayers(selectedTeam).length}/3`} />}
                   {getStashPlayers(selectedTeam).length > 0 && <Chip label={`Stash: ${getStashPlayers(selectedTeam).length}`} />}

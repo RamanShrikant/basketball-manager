@@ -53,6 +53,7 @@ import {
   clearBoxScoresFromDB,
 } from "../utils/indexedDbStorage";
 import PageFade from "../components/PageFade";
+import InjuryAlertModal from "../components/InjuryAlertModal";
 import "../styles/BMAnimations.css";
 import {
   markLeagueInjuryStateChanged,
@@ -4871,6 +4872,23 @@ const shouldPauseForUserInjuryEvents = (events = [], intent = null) => {
   return true;
 };
 
+const continueAfterInjuryAutoAdjust = () => {
+  const intent = injuryAlertModal?.intent || readPendingSimulationIntent();
+  setInjuryAlertModal(null);
+  if (intent) {
+    window.setTimeout(() => resumePendingSimulation(), 0);
+  }
+};
+
+const alwaysAutoAdjustAfterInjury = async () => {
+  const intent = injuryAlertModal?.intent || readPendingSimulationIntent();
+  await disableUserInjuryAlerts();
+  setInjuryAlertModal(null);
+  if (intent) {
+    window.setTimeout(() => resumePendingSimulation(), 0);
+  }
+};
+
 const refreshInjuryTouchedTeams = async (activeLeagueData, touchedTeamNames = [], currentDate = "") => {
   if (!touchedTeamNames?.length) return null;
 
@@ -9338,63 +9356,18 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
   )}
 
 {/* ---------------------------- INJURY ALERT MODAL ---------------------------- */}
-{injuryAlertModal &&
-  createPortal(
-    <div
-      className="fixed inset-0 z-[245] bg-black/75 backdrop-blur-[2px] flex items-center justify-center p-4"
-      onClick={() => setInjuryAlertModal(null)}
-    >
-      <div
-        className="w-full max-w-[560px] overflow-hidden rounded-2xl border border-orange-500/40 bg-neutral-950 text-white shadow-[0_0_36px_rgba(0,0,0,0.62)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="border-b border-orange-500/20 bg-gradient-to-r from-orange-600/20 to-red-500/10 px-6 py-5">
-          <div className="text-[11px] font-black uppercase tracking-[0.24em] text-orange-300">Controlled Team Alert</div>
-          <h2 className="mt-1 text-2xl font-black text-white">Injury Update</h2>
-          <p className="mt-1 text-sm font-semibold text-orange-100/80">
-            Your rotation has already been auto-rebuilt so injured players cannot start or play minutes.
-          </p>
-        </div>
-
-        <div className="px-6 py-5">
-          <div className="space-y-2">
-            {(injuryAlertModal.events || []).map((event) => (
-              <div key={event.id} className="rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm font-bold text-neutral-100">
-                {formatInjuryEventLine(event)}
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
-            <button
-              type="button"
-              className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-black text-neutral-200 hover:bg-white/10"
-              onClick={() => {
-                setInjuryAlertModal(null);
-                navigate("/coach-gameplan");
-              }}
-            >
-              Adjust Rotation Manually
-            </button>
-            <button
-              type="button"
-              className="rounded-xl bg-orange-600 px-5 py-3 text-sm font-black text-white hover:bg-orange-500"
-              onClick={async () => {
-                await disableUserInjuryAlerts();
-                setInjuryAlertModal(null);
-                if (injuryAlertModal.intent) {
-                  window.setTimeout(() => resumePendingSimulation(), 0);
-                }
-              }}
-            >
-              Always Use CPU Auto-Rebuild
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>,
-    document.body
-  )}
+{injuryAlertModal && (
+  <InjuryAlertModal
+    events={injuryAlertModal.events || []}
+    formatEventLine={formatInjuryEventLine}
+    onAdjustManually={() => {
+      setInjuryAlertModal(null);
+      navigate("/coach-gameplan");
+    }}
+    onAutoAdjust={continueAfterInjuryAutoAdjust}
+    onAlwaysAutoAdjust={alwaysAutoAdjustAfterInjury}
+  />
+)}
 
 {pendingSimIntent && !simLock && !injuryAlertModal && !tradeDeadlinePromptOpen && !contractExtensionPromptOpen && !allStarPromptOpen && !allStarOpen && (
   <div className="fixed bottom-6 left-1/2 z-[252] w-[min(620px,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-orange-400/35 bg-neutral-950/95 p-4 text-white shadow-2xl backdrop-blur">

@@ -9,6 +9,7 @@ import { queueSim } from "@/api/simQueue";
 import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import styles from "./Playoffs.module.css";
 import FinalsMvpReveal from "../components/FinalsMvpReveal";
+import InjuryAlertModal from "../components/InjuryAlertModal";
 import { finalizeFinalsMvpAndGoOffseason } from "../utils/finalsMvpSeasonActions";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 import {
@@ -1284,6 +1285,26 @@ export default function Playoffs() {
     return map;
   }, [teams]);
 
+
+  const freezePostseasonRotationOrder = (slim, homeName, awayName) => {
+    if (!slim || typeof slim !== "object") return slim;
+
+    const existing = slim.rotationOrder && typeof slim.rotationOrder === "object" ? slim.rotationOrder : {};
+    const homeOrder = Array.isArray(existing.home) && existing.home.length
+      ? existing.home.filter(Boolean)
+      : readGameplanOrder(homeName, teamsByName?.[homeName] || null);
+    const awayOrder = Array.isArray(existing.away) && existing.away.length
+      ? existing.away.filter(Boolean)
+      : readGameplanOrder(awayName, teamsByName?.[awayName] || null);
+
+    slim.rotationOrder = {
+      home: Array.from(new Set(homeOrder || [])),
+      away: Array.from(new Set(awayOrder || [])),
+    };
+
+    return slim;
+  };
+
   const confKeys = useMemo(() => {
     const keys = Object.keys(leagueData?.conferences || {});
     if (keys.length) return keys;
@@ -1376,17 +1397,81 @@ export default function Playoffs() {
 
   // ✅ PATCH: stop button support (calendar-style stop behavior)
   const stopRequestedRef = useRef(false);
+  const postseasonResumeIntentRef = useRef(null);
+  const postseasonInjuryAlertsEnabledRef = useRef(
+    normalizeInjurySettings(leagueData?.settings?.injuries).userAlerts !== false
+  );
   const [simStopping, setSimStopping] = useState(false);
+
+  useEffect(() => {
+    postseasonInjuryAlertsEnabledRef.current =
+      normalizeInjurySettings(leagueData?.settings?.injuries).userAlerts !== false;
+  }, [leagueData?.settings?.injuries]);
 
   const showUserPostseasonInjuryAlert = (events = []) => {
     const injurySettings = normalizeInjurySettings(leagueData?.settings?.injuries);
-    if (!injurySettings.enabled || !injurySettings.userAlerts || !selectedTeam?.name) return false;
+    if (
+      !injurySettings.enabled ||
+      !injurySettings.userAlerts ||
+      postseasonInjuryAlertsEnabledRef.current === false ||
+      !selectedTeam?.name
+    ) {
+      return false;
+    }
     const userEvents = (events || []).filter((event) => event?.teamName === selectedTeam.name);
     if (!userEvents.length) return false;
     stopRequestedRef.current = true;
     setSimStopping(true);
-    setPostseasonInjuryAlert({ events: userEvents, createdAt: Date.now() });
+    setPostseasonInjuryAlert({
+      events: userEvents,
+      intent: postseasonResumeIntentRef.current,
+      createdAt: Date.now(),
+    });
     return true;
+  };
+
+  const disablePostseasonUserInjuryAlerts = () => {
+    postseasonInjuryAlertsEnabledRef.current = false;
+    if (!leagueData || typeof leagueData !== "object") return;
+
+    const nextLeagueData = structuredClone(leagueData);
+    nextLeagueData.settings = {
+      ...(nextLeagueData.settings || {}),
+      injuries: {
+        ...normalizeInjurySettings(nextLeagueData?.settings?.injuries),
+        userAlerts: false,
+      },
+    };
+
+    setLeagueData(nextLeagueData, { source: "Playoffs.injuryAlertsDisabled.context" });
+    saveLeagueDataInBackground(nextLeagueData, { source: "Playoffs.injuryAlertsDisabled.persist" });
+
+    try {
+      window.__leagueData = nextLeagueData;
+      window.leagueData = nextLeagueData;
+      window.__basketballManagerLeagueData = nextLeagueData;
+    } catch {}
+  };
+
+  const resumePostseasonAfterInjury = (intent = null) => {
+    const resumeIntent = intent || postseasonInjuryAlert?.intent || postseasonResumeIntentRef.current;
+    setPostseasonInjuryAlert(null);
+    stopRequestedRef.current = false;
+    setSimStopping(false);
+
+    if (!resumeIntent?.mode) return;
+
+    window.setTimeout(() => {
+      if (resumeIntent.mode === "round") {
+        simTopNextRound();
+      } else if (resumeIntent.mode === "playoffs") {
+        simTopPlayoffsToChampion();
+      } else if (resumeIntent.mode === "dev_playoffs") {
+        simDevInstantPlayoffsToChampion();
+      } else if (resumeIntent.mode === "playin_all") {
+        simAllPlayInsBothConferences();
+      }
+    }, 0);
   };
 
   // ✅ PATCH (Finals MVP)
@@ -1893,7 +1978,7 @@ export default function Playoffs() {
     }
 
     const full = await simOneSafe({ homeName, awayName, leagueData, teamsByName, currentDate });
-    const slim = slimResult(full);
+    const slim = freezePostseasonRotationOrder(slimResult(full), homeName, awayName);
 
     // don't save bad results — force resim next time instead of getting stuck
     if (isBadSlimResult(slim)) return slim;
@@ -1944,7 +2029,7 @@ export default function Playoffs() {
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const full = await simOneSafe({ homeName, awayName, leagueData, teamsByName, currentDate });
-        const slim = slimResult(full);
+        const slim = freezePostseasonRotationOrder(slimResult(full), homeName, awayName);
         if (slim && !isBadSlimResult(slim)) return slim;
         throw new Error("bad play-in sim result (tie/0-0/null)");
       } catch (err) {
@@ -2286,6 +2371,7 @@ export default function Playoffs() {
       const cloned = structuredClone(leagueData);
       setLeagueData(cloned, { source: "Playoffs.playInGameInjury.context" });
       saveLeagueDataInBackground(cloned, { source: "Playoffs.playInGameInjury.explicit" });
+      showUserPostseasonInjuryAlert(injuryResult.events);
     }
 
     const side = winnerFromSlim(slim);
@@ -2403,6 +2489,9 @@ export default function Playoffs() {
   async function simAllPlayInsBothConferences() {
     if (simLock) return;
     setSimLock(true);
+    stopRequestedRef.current = false;
+    postseasonResumeIntentRef.current = { mode: "playin_all" };
+    setSimStopping(false);
 
     try {
       const cur = structuredClone(post);
@@ -2418,6 +2507,9 @@ export default function Playoffs() {
       }
     } finally {
       setSimLock(false);
+      stopRequestedRef.current = false;
+      if (!postseasonInjuryAlert) postseasonResumeIntentRef.current = null;
+      setSimStopping(false);
     }
   }
 
@@ -2687,6 +2779,7 @@ export default function Playoffs() {
 
     setSimLock(true);
     stopRequestedRef.current = false;
+    postseasonResumeIntentRef.current = { mode: "round" };
     setSimStopping(false);
 
     try {
@@ -2718,6 +2811,7 @@ export default function Playoffs() {
     } finally {
       setSimLock(false);
       stopRequestedRef.current = false;
+      if (!postseasonInjuryAlert) postseasonResumeIntentRef.current = null;
       setSimStopping(false);
     }
   }
@@ -2731,6 +2825,7 @@ export default function Playoffs() {
     let multiYearFinalsComplete = false;
     setSimLock(true);
     stopRequestedRef.current = false;
+    postseasonResumeIntentRef.current = { mode: "playoffs" };
     setSimStopping(false);
 
     try {
@@ -2785,6 +2880,7 @@ export default function Playoffs() {
       }
       setSimLock(false);
       stopRequestedRef.current = false;
+      if (!postseasonInjuryAlert) postseasonResumeIntentRef.current = null;
       setSimStopping(false);
     }
   }
@@ -2797,6 +2893,7 @@ export default function Playoffs() {
 
     setSimLock(true);
     stopRequestedRef.current = false;
+    postseasonResumeIntentRef.current = { mode: "dev_playoffs" };
     setSimStopping(false);
 
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -2921,7 +3018,7 @@ export default function Playoffs() {
       const homeScore = side === "home" ? winnerScore : loserScore;
       const awayScore = side === "away" ? winnerScore : loserScore;
 
-      return {
+      return freezePostseasonRotationOrder({
         winner: {
           score: `${homeScore}-${awayScore}`,
           home: homeScore,
@@ -2937,7 +3034,7 @@ export default function Playoffs() {
           home: buildDevBox(homeName, homeScore, side === "home"),
           away: buildDevBox(awayName, awayScore, side === "away"),
         },
-      };
+      }, homeName, awayName);
     };
 
     const saveDevGameResult = (gameId, homeName, awayName) => {
@@ -3120,6 +3217,7 @@ export default function Playoffs() {
     } finally {
       setSimLock(false);
       stopRequestedRef.current = false;
+      if (!postseasonInjuryAlert) postseasonResumeIntentRef.current = null;
       setSimStopping(false);
     }
   }
@@ -3677,58 +3775,22 @@ ${disabled ? "opacity-60" : ""}
 
       {/* Injury Alert Modal — same presentation as regular season */}
       {postseasonInjuryAlert && (
-        <div
-          className="fixed inset-0 z-[245] bg-black/75 backdrop-blur-[2px] flex items-center justify-center p-4 bmPlayoffFadeIn"
-          onClick={() => setPostseasonInjuryAlert(null)}
-        >
-          <div
-            className="w-full max-w-[560px] overflow-hidden rounded-2xl border border-orange-500/40 bg-neutral-950 text-white shadow-[0_0_36px_rgba(0,0,0,0.62)] bmPlayoffPanelRise"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="border-b border-orange-500/20 bg-gradient-to-r from-orange-600/20 to-red-500/10 px-6 py-5">
-              <div className="text-[11px] font-black uppercase tracking-[0.24em] text-orange-300">Controlled Team Alert</div>
-              <h2 className="mt-1 text-2xl font-black text-white">Injury Update</h2>
-              <p className="mt-1 text-sm font-semibold text-orange-100/80">
-                Your rotation has already been auto-rebuilt so injured players cannot start or play minutes.
-              </p>
-            </div>
-
-            <div className="px-6 py-5">
-              <div className="space-y-2">
-                {(postseasonInjuryAlert.events || []).map((event) => (
-                  <div
-                    key={event.id || `${event.playerName}-${event.returnDate}`}
-                    className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-neutral-100"
-                  >
-                    {formatInjuryEventLine(event)}
-                  </div>
-                ))}
-              </div>
-              <p className="mt-4 text-sm leading-6 text-neutral-400">
-                Open Coach Gameplan to make your own changes, or keep the automatically rebuilt rotation.
-              </p>
-              <div className="mt-5 flex flex-wrap justify-end gap-3">
-                <button
-                  type="button"
-                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-black text-white hover:bg-white/10"
-                  onClick={() => setPostseasonInjuryAlert(null)}
-                >
-                  Keep Auto Rotation
-                </button>
-                <button
-                  type="button"
-                  className="rounded-xl bg-orange-600 px-4 py-2.5 text-sm font-black text-white hover:bg-orange-500"
-                  onClick={() => {
-                    setPostseasonInjuryAlert(null);
-                    navigate("/coach-gameplan");
-                  }}
-                >
-                  Adjust Rotation Manually
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <InjuryAlertModal
+          events={postseasonInjuryAlert.events || []}
+          formatEventLine={formatInjuryEventLine}
+          onAdjustManually={() => {
+            setPostseasonInjuryAlert(null);
+            postseasonResumeIntentRef.current = null;
+            stopRequestedRef.current = false;
+            setSimStopping(false);
+            navigate("/coach-gameplan");
+          }}
+          onAutoAdjust={() => resumePostseasonAfterInjury(postseasonInjuryAlert?.intent)}
+          onAlwaysAutoAdjust={() => {
+            disablePostseasonUserInjuryAlerts();
+            resumePostseasonAfterInjury(postseasonInjuryAlert?.intent);
+          }}
+        />
       )}
 
       {/* Series / Play-In Modal */}
