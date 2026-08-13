@@ -4,6 +4,7 @@
 
 const DB_NAME = "basketball_manager_storage_v1";
 const BOX_SCORE_STORE = "boxScores";
+const APP_DATA_STORE = "appData";
 
 let dbPromise = null;
 
@@ -16,6 +17,27 @@ function ensureBoxScoreStore(db) {
     store.createIndex("updatedAt", "updatedAt", { unique: false });
     store.createIndex("seasonYear", "seasonYear", { unique: false });
   }
+}
+
+function ensureAppDataStore(db) {
+  if (!db.objectStoreNames.contains(APP_DATA_STORE)) {
+    const store = db.createObjectStore(APP_DATA_STORE, {
+      keyPath: "key",
+    });
+    store.createIndex("updatedAt", "updatedAt", { unique: false });
+  }
+}
+
+function ensureRequiredStores(db) {
+  ensureBoxScoreStore(db);
+  ensureAppDataStore(db);
+}
+
+function hasRequiredStores(db) {
+  return (
+    db.objectStoreNames.contains(BOX_SCORE_STORE) &&
+    db.objectStoreNames.contains(APP_DATA_STORE)
+  );
 }
 
 function openBasketballManagerDb() {
@@ -38,13 +60,13 @@ function openBasketballManagerDb() {
         dbPromise = null;
       };
 
-      if (!db.objectStoreNames.contains(BOX_SCORE_STORE)) {
+      if (!hasRequiredStores(db)) {
         const nextVersion = Math.max(1, Number(db.version || 1) + 1);
         db.close();
 
         const upgradeRequest = indexedDB.open(DB_NAME, nextVersion);
         upgradeRequest.onupgradeneeded = () => {
-          ensureBoxScoreStore(upgradeRequest.result);
+          ensureRequiredStores(upgradeRequest.result);
         };
         upgradeRequest.onsuccess = () => {
           const upgradedDb = upgradeRequest.result;
@@ -53,9 +75,9 @@ function openBasketballManagerDb() {
             dbPromise = null;
           };
 
-          if (!upgradedDb.objectStoreNames.contains(BOX_SCORE_STORE)) {
+          if (!hasRequiredStores(upgradedDb)) {
             upgradedDb.close();
-            fail(new Error(`IndexedDB object store missing after upgrade: ${BOX_SCORE_STORE}.`));
+            fail(new Error("IndexedDB required object stores are missing after upgrade."));
             return;
           }
 
@@ -76,8 +98,8 @@ function openBasketballManagerDb() {
     const request = indexedDB.open(DB_NAME);
 
     request.onupgradeneeded = () => {
-      // Brand-new databases still need the box-score store on first creation.
-      ensureBoxScoreStore(request.result);
+      // Brand-new databases need every current store on first creation.
+      ensureRequiredStores(request.result);
     };
 
     request.onsuccess = () => finishOpen(request.result);
@@ -251,4 +273,58 @@ export async function countBoxScoresInDB() {
       reject(err);
     }
   });
+}
+
+
+// ------------------------------------------------------------
+// GENERIC LARGE APP DATA
+// ------------------------------------------------------------
+// Heavy, growing UI/domain payloads belong here instead of localStorage.
+// Values are stored as structured-clone data, so callers avoid JSON stringify
+// quota pressure on the main thread.
+export async function saveAppDataToDB(key, value) {
+  if (!key) return false;
+
+  await runTransaction(APP_DATA_STORE, "readwrite", (store) => {
+    store.put({
+      key: String(key),
+      value,
+      updatedAt: Date.now(),
+    });
+  });
+
+  return true;
+}
+
+export async function loadAppDataFromDB(key) {
+  if (!key) return null;
+  const db = await openBasketballManagerDb();
+
+  return new Promise((resolve, reject) => {
+    try {
+      const tx = db.transaction(APP_DATA_STORE, "readonly");
+      const store = tx.objectStore(APP_DATA_STORE);
+      const request = store.get(String(key));
+
+      request.onsuccess = () => resolve(request.result?.value ?? null);
+      request.onerror = () => reject(request.error || new Error("Failed to load app data."));
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+export async function deleteAppDataFromDB(key) {
+  if (!key) return false;
+  await runTransaction(APP_DATA_STORE, "readwrite", (store) => {
+    store.delete(String(key));
+  });
+  return true;
+}
+
+export async function clearAppDataFromDB() {
+  await runTransaction(APP_DATA_STORE, "readwrite", (store) => {
+    store.clear();
+  });
+  return true;
 }

@@ -31,9 +31,10 @@ import {
   writeCpuTradeBankTestConfig,
 } from "../utils/cpuTradeBank.js";
 import {
-  TRADE_DESK_FEED_KEY,
   PLAYER_MOOD_EVENT_BUS_KEY,
   appendTradeDeskEntries,
+  clearTradeDeskFeed,
+  clearPlayerMoodEventBus,
   appendPlayerMoodEvents,
   appendTradeDeskMoodEventsFromEntries,
   buildRealisticGameMoodEvents,
@@ -7862,7 +7863,8 @@ if (
   localStorage.removeItem(AWARD_DISPLAY_STATS_KEY);
   localStorage.removeItem(CLUTCH_STATS_KEY);
   localStorage.removeItem("bm_all_stars_v1");
-  localStorage.removeItem(TRADE_DESK_FEED_KEY);
+  clearTradeDeskFeed();
+  clearPlayerMoodEventBus();
   localStorage.removeItem(CALENDAR_CURSOR_KEY);
   localStorage.removeItem(CALENDAR_SIM_CURSOR_KEY);
 
@@ -8223,7 +8225,8 @@ function devClearSeasonCheckpointState() {
   localStorage.removeItem("bm_champ_v1");
   localStorage.removeItem("bm_finals_mvp_v1");
   localStorage.removeItem("bm_finals_mvp_seen_v1");
-  localStorage.removeItem(TRADE_DESK_FEED_KEY);
+  clearTradeDeskFeed();
+  clearPlayerMoodEventBus();
   localStorage.removeItem(TRADE_DEADLINE_STATUS_KEY);
   localStorage.removeItem(TRADE_DEADLINE_HANDLED_KEY);
 

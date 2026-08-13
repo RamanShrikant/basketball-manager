@@ -15,6 +15,7 @@ import {
   startMultiYearSpeedDiagnostics,
   stopMultiYearSpeedDiagnostics,
 } from "./multiYearSpeedDiagnostics.js";
+import { readTradeDeskFeed } from "./tradeDeskFeed.js";
 import {
   REGULAR_SEASON_MAX_STANDARD_PLAYERS,
   REGULAR_SEASON_MAX_TWO_WAY_PLAYERS,
@@ -885,9 +886,7 @@ function cpuTradeSummaryReport(leagueData = runtime.leagueData) {
   const bank = league?.cpuTradeBankState || null;
   const history = Array.isArray(league?.tradeHistory) ? league.tradeHistory : [];
   const official = history.filter(isCpuCpuTradeRecordForReport);
-  const feed = typeof localStorage !== "undefined"
-    ? safeParseDiagnosticsJson(localStorage.getItem("bm_trade_desk_feed_v1"), [])
-    : [];
+  const feed = readTradeDeskFeed();
   const rawStoredFeedTransactions = Array.isArray(feed)
     ? feed.filter((row) => String(row?.type || "").toLowerCase() === "transaction").length
     : 0;

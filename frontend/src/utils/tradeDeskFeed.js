@@ -2,8 +2,25 @@
 // Real Trade Desk feed storage/helpers for CPU-to-CPU rumors, negotiations, completed trades,
 // and the Trade History Log.
 
+import {
+  loadAppDataFromDB,
+  saveAppDataToDB,
+} from "./indexedDbStorage.js";
+
 export const TRADE_DESK_FEED_KEY = "bm_trade_desk_feed_v1";
+export const PLAYER_MOOD_EVENT_BUS_KEY = "bm_player_mood_event_bus_v1";
 const MAX_FEED_ROWS = 90;
+const MAX_PLAYER_MOOD_EVENT_ROWS = 1600;
+
+let tradeDeskFeedCache = null;
+let playerMoodEventBusCache = null;
+let tradeDeskStorageInitialized = false;
+let feedPendingSnapshot = null;
+let moodPendingSnapshot = null;
+let feedPersistPromise = Promise.resolve();
+let moodPersistPromise = Promise.resolve();
+let feedWriterRunning = false;
+let moodWriterRunning = false;
 
 function safeArray(value) {
   return Array.isArray(value) ? value : [];
@@ -275,30 +292,92 @@ export function normalizeTradeDeskEntry(entry = {}) {
   };
 }
 
-export function readTradeDeskFeed() {
-  if (typeof localStorage === "undefined") return [];
-  const rows = safeJson(localStorage.getItem(TRADE_DESK_FEED_KEY), []);
-  return safeArray(rows)
-    .map(normalizeTradeDeskEntry)
-    .filter(Boolean)
-    .sort(sortTradeDeskEntries);
-}
-
-export function writeTradeDeskFeed(entries = []) {
-  const clean = safeArray(entries)
+function normalizeTradeDeskFeedRows(entries = []) {
+  return safeArray(entries)
     .map(normalizeTradeDeskEntry)
     .filter(Boolean)
     .sort(sortTradeDeskEntries)
     .slice(0, MAX_FEED_ROWS);
+}
 
-  if (typeof localStorage !== "undefined") {
+function localStorageRows(key) {
+  if (typeof localStorage === "undefined") return [];
+  return safeArray(safeJson(localStorage.getItem(key), []));
+}
+
+async function persistAppDataSnapshot(key, value, label) {
+  try {
+    await saveAppDataToDB(key, value);
+    try { localStorage.removeItem(key); } catch {}
+    return true;
+  } catch (error) {
+    console.warn(`[TradeDeskFeed] IndexedDB ${label} save failed`, error);
+    // Emergency compatibility fallback only. Normal browsers should never use
+    // localStorage for these heavy payloads after migration.
     try {
-      localStorage.setItem(TRADE_DESK_FEED_KEY, JSON.stringify(clean));
-    } catch (error) {
-      console.warn("[TradeDeskFeed] failed to save feed", error);
+      if (typeof indexedDB === "undefined" && typeof localStorage !== "undefined") {
+        localStorage.setItem(key, JSON.stringify(value));
+      }
+    } catch (fallbackError) {
+      console.warn(`[TradeDeskFeed] ${label} fallback save also failed`, fallbackError);
     }
+    return false;
   }
+}
 
+function queueFeedPersistence(snapshot) {
+  feedPendingSnapshot = snapshot;
+  if (feedWriterRunning) return feedPersistPromise;
+
+  feedWriterRunning = true;
+  feedPersistPromise = (async () => {
+    try {
+      while (feedPendingSnapshot !== null) {
+        const next = feedPendingSnapshot;
+        feedPendingSnapshot = null;
+        await persistAppDataSnapshot(TRADE_DESK_FEED_KEY, next, "trade desk feed");
+      }
+    } finally {
+      feedWriterRunning = false;
+    }
+  })();
+
+  return feedPersistPromise;
+}
+
+function queueMoodPersistence(snapshot) {
+  moodPendingSnapshot = snapshot;
+  if (moodWriterRunning) return moodPersistPromise;
+
+  moodWriterRunning = true;
+  moodPersistPromise = (async () => {
+    try {
+      while (moodPendingSnapshot !== null) {
+        const next = moodPendingSnapshot;
+        moodPendingSnapshot = null;
+        await persistAppDataSnapshot(PLAYER_MOOD_EVENT_BUS_KEY, next, "player mood event bus");
+      }
+    } finally {
+      moodWriterRunning = false;
+    }
+  })();
+
+  return moodPersistPromise;
+}
+
+export function readTradeDeskFeed() {
+  if (Array.isArray(tradeDeskFeedCache)) return [...tradeDeskFeedCache];
+
+  // Before the async IndexedDB bootstrap finishes, legacy localStorage remains
+  // readable so old saves and non-browser regression shims keep working.
+  tradeDeskFeedCache = normalizeTradeDeskFeedRows(localStorageRows(TRADE_DESK_FEED_KEY));
+  return [...tradeDeskFeedCache];
+}
+
+export function writeTradeDeskFeed(entries = []) {
+  const clean = normalizeTradeDeskFeedRows(entries);
+  tradeDeskFeedCache = clean;
+  queueFeedPersistence(clean);
   return clean;
 }
 
@@ -317,9 +396,6 @@ export function appendTradeDeskEntries(entries = []) {
 
   return writeTradeDeskFeed([...byId.values()]);
 }
-
-export const PLAYER_MOOD_EVENT_BUS_KEY = "bm_player_mood_event_bus_v1";
-const MAX_PLAYER_MOOD_EVENT_ROWS = 1600;
 
 function moodPlayerKeyFromName(playerName = "") {
   const clean = cleanText(playerName);
@@ -457,12 +533,7 @@ export function buildPlayerMoodEventsFromTradeDeskEntries(entries = [], options 
   return out;
 }
 
-export function readPlayerMoodEventBus() {
-  if (typeof localStorage === "undefined") return [];
-  return safeArray(safeJson(localStorage.getItem(PLAYER_MOOD_EVENT_BUS_KEY), []));
-}
-
-export function writePlayerMoodEventBus(events = []) {
+function normalizePlayerMoodEventRows(events = []) {
   const byId = new Map();
 
   for (const event of safeArray(events)) {
@@ -474,7 +545,7 @@ export function writePlayerMoodEventBus(events = []) {
     });
   }
 
-  const clean = [...byId.values()]
+  return [...byId.values()]
     .sort((a, b) => {
       const dateA = Date.parse(a.createdAt || a.date || "") || 0;
       const dateB = Date.parse(b.createdAt || b.date || "") || 0;
@@ -482,15 +553,30 @@ export function writePlayerMoodEventBus(events = []) {
       return String(b.id || "").localeCompare(String(a.id || ""));
     })
     .slice(0, MAX_PLAYER_MOOD_EVENT_ROWS);
+}
 
-  if (typeof localStorage !== "undefined") {
-    try {
-      localStorage.setItem(PLAYER_MOOD_EVENT_BUS_KEY, JSON.stringify(clean));
-    } catch (error) {
-      console.warn("[TradeDeskFeed] failed to save player mood event bus", error);
-    }
-  }
+export function readPlayerMoodEventBus() {
+  if (Array.isArray(playerMoodEventBusCache)) return [...playerMoodEventBusCache];
+  playerMoodEventBusCache = normalizePlayerMoodEventRows(localStorageRows(PLAYER_MOOD_EVENT_BUS_KEY));
+  return [...playerMoodEventBusCache];
+}
 
+export function writePlayerMoodEventBus(events = []) {
+  const clean = normalizePlayerMoodEventRows(events);
+  playerMoodEventBusCache = clean;
+  queueMoodPersistence(clean);
+  return clean;
+}
+
+// Some offseason flows historically wrote an already-deduplicated, bounded
+// array directly and preserved its order. Keep that exact behavior while only
+// changing the persistence backend.
+export function writePlayerMoodEventBusSnapshot(events = []) {
+  const clean = safeArray(events)
+    .filter((event) => event && typeof event === "object")
+    .slice(0, MAX_PLAYER_MOOD_EVENT_ROWS);
+  playerMoodEventBusCache = clean;
+  queueMoodPersistence(clean);
   return clean;
 }
 
@@ -499,6 +585,107 @@ export function appendPlayerMoodEvents(events = []) {
   if (!incoming.length) return readPlayerMoodEventBus();
 
   return writePlayerMoodEventBus([...readPlayerMoodEventBus(), ...incoming]);
+}
+
+export function clearTradeDeskFeed() {
+  tradeDeskFeedCache = [];
+  try { localStorage.removeItem(TRADE_DESK_FEED_KEY); } catch {}
+  queueFeedPersistence([]);
+}
+
+export function clearPlayerMoodEventBus() {
+  playerMoodEventBusCache = [];
+  try { localStorage.removeItem(PLAYER_MOOD_EVENT_BUS_KEY); } catch {}
+  queueMoodPersistence([]);
+}
+
+export async function flushTradeDeskStorageWrites() {
+  await Promise.all([feedPersistPromise, moodPersistPromise]);
+}
+
+export async function initializeTradeDeskStorage({ reset = false } = {}) {
+  if (tradeDeskStorageInitialized && !reset) return getTradeDeskStorageReport();
+
+  const legacyFeed = reset ? [] : localStorageRows(TRADE_DESK_FEED_KEY);
+  const legacyMood = reset ? [] : localStorageRows(PLAYER_MOOD_EVENT_BUS_KEY);
+
+  let dbFeed = [];
+  let dbMood = [];
+  if (!reset) {
+    try {
+      [dbFeed, dbMood] = await Promise.all([
+        loadAppDataFromDB(TRADE_DESK_FEED_KEY),
+        loadAppDataFromDB(PLAYER_MOOD_EVENT_BUS_KEY),
+      ]);
+    } catch (error) {
+      console.warn("[TradeDeskFeed] IndexedDB bootstrap read failed; legacy cache will remain available", error);
+    }
+  }
+
+  const mergedFeedById = new Map();
+  for (const row of [...safeArray(dbFeed), ...safeArray(legacyFeed)]) {
+    const normalized = normalizeTradeDeskEntry(row);
+    if (normalized?.id) mergedFeedById.set(normalized.id, normalized);
+  }
+  tradeDeskFeedCache = normalizeTradeDeskFeedRows([...mergedFeedById.values()]);
+
+  // Preserve the exact legacy array order during one-time migration. Existing
+  // code historically read this bus verbatim from localStorage; migration must
+  // not silently change mood-event application order.
+  if (legacyMood.length) {
+    playerMoodEventBusCache = safeArray(legacyMood)
+      .filter((row) => row && typeof row === "object")
+      .slice(0, MAX_PLAYER_MOOD_EVENT_ROWS);
+  } else {
+    playerMoodEventBusCache = safeArray(dbMood)
+      .filter((row) => row && typeof row === "object")
+      .slice(0, MAX_PLAYER_MOOD_EVENT_ROWS);
+  }
+
+  await Promise.all([
+    persistAppDataSnapshot(TRADE_DESK_FEED_KEY, tradeDeskFeedCache, "trade desk feed migration"),
+    persistAppDataSnapshot(PLAYER_MOOD_EVENT_BUS_KEY, playerMoodEventBusCache, "player mood event migration"),
+  ]);
+
+  tradeDeskStorageInitialized = true;
+
+  try {
+    if (typeof window !== "undefined") {
+      window.bmTradeDeskStorage = {
+        report: getTradeDeskStorageReport,
+        flush: flushTradeDeskStorageWrites,
+      };
+    }
+  } catch {}
+
+  return getTradeDeskStorageReport();
+}
+
+export async function getTradeDeskStorageReport() {
+  let dbFeed = null;
+  let dbMood = null;
+  let indexedDbReadable = false;
+  try {
+    [dbFeed, dbMood] = await Promise.all([
+      loadAppDataFromDB(TRADE_DESK_FEED_KEY),
+      loadAppDataFromDB(PLAYER_MOOD_EVENT_BUS_KEY),
+    ]);
+    indexedDbReadable = true;
+  } catch {}
+
+  return {
+    initialized: tradeDeskStorageInitialized,
+    tradeDeskRows: Array.isArray(tradeDeskFeedCache) ? tradeDeskFeedCache.length : 0,
+    moodEventRows: Array.isArray(playerMoodEventBusCache) ? playerMoodEventBusCache.length : 0,
+    indexedDbTradeDeskRows: Array.isArray(dbFeed) ? dbFeed.length : 0,
+    indexedDbMoodEventRows: Array.isArray(dbMood) ? dbMood.length : 0,
+    indexedDbReadable,
+    localStorageTradeDeskPresent:
+      typeof localStorage !== "undefined" && localStorage.getItem(TRADE_DESK_FEED_KEY) !== null,
+    localStorageMoodBusPresent:
+      typeof localStorage !== "undefined" && localStorage.getItem(PLAYER_MOOD_EVENT_BUS_KEY) !== null,
+    storage: "indexedDB",
+  };
 }
 
 export function appendTradeDeskMoodEventsFromEntries(entries = [], options = {}) {

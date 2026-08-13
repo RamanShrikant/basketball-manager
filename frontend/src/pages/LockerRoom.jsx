@@ -5,6 +5,7 @@ import { getLockerRoomMoods } from "../api/simEnginePy.js";
 import PageFade from "../components/PageFade";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
+import { readTradeDeskFeed, readPlayerMoodEventBus } from "../utils/tradeDeskFeed.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
@@ -47,9 +48,7 @@ const LOCKER_ROOM_SCROLLBAR_STYLE = `
   }
 `;
 
-const TRADE_DESK_FEED_KEY = "bm_trade_desk_feed_v1";
 const CALENDAR_MOOD_CONTEXT_KEY = "bm_calendar_mood_context_v1";
-const PLAYER_MOOD_EVENT_BUS_KEY = "bm_player_mood_event_bus_v1";
 
 function getAllTeamsFromLeague(leagueData) {
   if (!leagueData) return [];
@@ -111,10 +110,7 @@ function readCalendarMoodContextForLockerRoom() {
 }
 
 function readTradeDeskFeedForLockerRoom() {
-  if (typeof localStorage === "undefined") return [];
-
-  const rows = safeJsonParse(localStorage.getItem(TRADE_DESK_FEED_KEY), []);
-  return Array.isArray(rows) ? rows : [];
+  return readTradeDeskFeed();
 }
 
 
@@ -123,10 +119,7 @@ function normalizeMoodEventNameKey(value = "") {
 }
 
 function readPlayerMoodEventBusForLockerRoom() {
-  if (typeof localStorage === "undefined") return [];
-
-  const rows = safeJsonParse(localStorage.getItem(PLAYER_MOOD_EVENT_BUS_KEY), []);
-  return Array.isArray(rows) ? rows.filter((row) => row && typeof row === "object") : [];
+  return readPlayerMoodEventBus().filter((row) => row && typeof row === "object");
 }
 
 function moodStateKeysForEvent(event = {}) {

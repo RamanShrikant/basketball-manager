@@ -1,4 +1,9 @@
-const PLAYER_MOOD_EVENT_BUS_KEY = "bm_player_mood_event_bus_v1";
+import {
+  PLAYER_MOOD_EVENT_BUS_KEY,
+  readPlayerMoodEventBus,
+  writePlayerMoodEventBusSnapshot,
+} from "./tradeDeskFeed.js";
+
 const OFFSEASON_MOOD_BASELINE_KEY = "bm_offseason_mood_baseline_v1";
 const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
@@ -303,11 +308,11 @@ function makeMoodEvent({
 }
 
 function appendMoodEvents(events = []) {
-  if (!hasLocalStorage() || !Array.isArray(events) || !events.length) {
-    return { added: 0, total: 0 };
+  if (!Array.isArray(events) || !events.length) {
+    return { added: 0, total: readPlayerMoodEventBus().length };
   }
 
-  const existing = safeJSON(localStorage.getItem(PLAYER_MOOD_EVENT_BUS_KEY), []);
+  const existing = readPlayerMoodEventBus();
   const byId = new Map();
 
   for (const row of Array.isArray(existing) ? existing : []) {
@@ -323,8 +328,10 @@ function appendMoodEvents(events = []) {
     byId.set(id, row);
   }
 
+  // Preserve the existing offseason-specific 700-row bound exactly; only the
+  // persistence backend changes from localStorage to IndexedDB.
   const next = [...byId.values()].slice(-700);
-  localStorage.setItem(PLAYER_MOOD_EVENT_BUS_KEY, JSON.stringify(next));
+  writePlayerMoodEventBusSnapshot(next);
   return { added, total: next.length };
 }
 

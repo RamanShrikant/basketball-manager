@@ -7,6 +7,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const calendar = fs.readFileSync(path.join(root, "src/pages/Calendar.jsx"), "utf8");
 const finals = fs.readFileSync(path.join(root, "src/utils/finalsMvpSeasonActions.js"), "utf8");
+const tradeDesk = fs.readFileSync(path.join(root, "src/utils/tradeDeskFeed.js"), "utf8");
+const indexedDbStorage = fs.readFileSync(path.join(root, "src/utils/indexedDbStorage.js"), "utf8");
+const main = fs.readFileSync(path.join(root, "src/main.jsx"), "utf8");
 
 const checks = [];
 function check(id, condition, message) {
@@ -59,6 +62,34 @@ check(
     calendar.includes("PLAYER_MOOD_EVENT_BUS_KEY") &&
     calendar.includes("awards save hit localStorage quota; running recovery"),
   "Critical season saves recover quota by dropping noncritical temporary caches and retrying."
+);
+
+
+check(
+  "year2.trade_desk_indexeddb",
+  tradeDesk.includes('persistAppDataSnapshot(TRADE_DESK_FEED_KEY') &&
+    tradeDesk.includes('persistAppDataSnapshot(PLAYER_MOOD_EVENT_BUS_KEY') &&
+    !tradeDesk.includes('localStorage.setItem(TRADE_DESK_FEED_KEY') &&
+    !tradeDesk.includes('localStorage.setItem(PLAYER_MOOD_EVENT_BUS_KEY'),
+  "Trade Desk and the growing player-mood event bus persist in IndexedDB instead of localStorage."
+);
+
+check(
+  "year2.trade_desk_migration",
+  tradeDesk.includes("initializeTradeDeskStorage") &&
+    tradeDesk.includes("localStorageRows(TRADE_DESK_FEED_KEY)") &&
+    tradeDesk.includes("localStorageRows(PLAYER_MOOD_EVENT_BUS_KEY)") &&
+    main.includes("initializeTradeDeskStorage({ reset: devFreshReset })"),
+  "App boot migrates legacy Trade Desk/mood payloads before React consumers read the synchronous cache."
+);
+
+check(
+  "year2.indexeddb_app_data_store",
+  indexedDbStorage.includes('const APP_DATA_STORE = "appData"') &&
+    indexedDbStorage.includes("ensureAppDataStore") &&
+    indexedDbStorage.includes("saveAppDataToDB") &&
+    indexedDbStorage.includes("loadAppDataFromDB"),
+  "The existing Basketball Manager IndexedDB owns a forward-safe appData store for heavy growing payloads."
 );
 
 check(

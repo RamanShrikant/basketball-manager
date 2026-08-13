@@ -11,18 +11,19 @@ import {
   installBasketballManagerDiagnostics,
   updateBasketballManagerDiagnosticsContext,
 } from "./utils/bmDiagnostics.js";
+import { initializeTradeDeskStorage } from "./utils/tradeDeskFeed.js";
 
 // ------------------------------
 // DEV BOOT RESET (npm run dev)
 // ------------------------------
 function devBootResetIfNeeded() {
   // Only run this in dev
-  if (!import.meta.env.DEV) return;
+  if (!import.meta.env.DEV) return false;
 
   // This constant is injected by vite.config.js (define: __DEV_SERVER_BOOT_ID__)
   const bootId =
     typeof __DEV_SERVER_BOOT_ID__ !== "undefined" ? __DEV_SERVER_BOOT_ID__ : null;
-  if (!bootId) return;
+  if (!bootId) return false;
 
   const KEY = "bm_dev_boot_id_v1";
   const prev = localStorage.getItem(KEY);
@@ -30,11 +31,11 @@ function devBootResetIfNeeded() {
   // First ever run: just store boot id, don't wipe
   if (!prev) {
     localStorage.setItem(KEY, String(bootId));
-    return;
+    return false;
   }
 
   // Same server boot: do nothing
-  if (prev === String(bootId)) return;
+  if (prev === String(bootId)) return false;
 
   // New dev server boot => wipe save state. Calendar also consumes this
   // one-shot token before its first season hydrate so stale result payloads or
@@ -69,11 +70,8 @@ function devBootResetIfNeeded() {
   localStorage.setItem(KEY, String(bootId));
 
   console.log("🧹 Dev boot detected — wiped save state for a fresh start.");
+  return true;
 }
-
-devBootResetIfNeeded();
-
-installBasketballManagerDiagnostics();
 
 function DiagnosticsBridge() {
   const { leagueData, selectedTeam } = useGame();
@@ -85,15 +83,32 @@ function DiagnosticsBridge() {
   return null;
 }
 
-window.simulateOneGame = pySimOneGame;
-console.log("✓ simulateOneGame exposed globally");
+async function bootstrap() {
+  const devFreshReset = devBootResetIfNeeded();
 
-ReactDOM.createRoot(document.getElementById("root")).render(
-  <React.StrictMode>
-    {/* ✅ Wrap your app with GameProvider */}
-    <GameProvider>
-      <DiagnosticsBridge />
-      <App />
-    </GameProvider>
-  </React.StrictMode>
-);
+  try {
+    const storageReport = await initializeTradeDeskStorage({ reset: devFreshReset });
+    console.log("[TradeDeskFeed] IndexedDB storage ready", storageReport);
+  } catch (error) {
+    // Storage migration must never prevent the game UI from booting. The
+    // Trade Desk helpers keep an in-memory compatibility cache if IDB fails.
+    console.warn("[TradeDeskFeed] storage bootstrap failed; continuing with in-memory cache", error);
+  }
+
+  installBasketballManagerDiagnostics();
+
+  window.simulateOneGame = pySimOneGame;
+  console.log("✓ simulateOneGame exposed globally");
+
+  ReactDOM.createRoot(document.getElementById("root")).render(
+    <React.StrictMode>
+      {/* ✅ Wrap your app with GameProvider */}
+      <GameProvider>
+        <DiagnosticsBridge />
+        <App />
+      </GameProvider>
+    </React.StrictMode>
+  );
+}
+
+bootstrap();
