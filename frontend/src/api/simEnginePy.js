@@ -15,8 +15,66 @@ import {
   recordMultiYearGameSimTiming,
   shouldSampleMultiYearGamePayload,
 } from "../utils/multiYearSpeedDiagnostics.js";
+import {
+  applyTargetedCpuRosterRepairFastPath,
+  buildCpuRosterRepairFastPathBaseline,
+  canUseTargetedCpuRosterRepairFastPath,
+} from "../utils/cpuRosterRepairFastPath.js";
 
 let worker = null;
+
+let cpuRosterRepairFastPathBaseline = null;
+const cpuRosterRepairFastPathStats = {
+  workerRepairs: 0,
+  fastNoopBypasses: 0,
+  rejectedByReason: {},
+  lastDecision: null,
+};
+
+function noteCpuRosterRepairFastPathDecision(decision = {}) {
+  const reason = String(decision?.reason || "unknown");
+  cpuRosterRepairFastPathStats.lastDecision = {
+    ok: Boolean(decision?.ok),
+    reason,
+    at: new Date().toISOString(),
+  };
+  if (!decision?.ok) {
+    cpuRosterRepairFastPathStats.rejectedByReason[reason] =
+      Number(cpuRosterRepairFastPathStats.rejectedByReason[reason] || 0) + 1;
+  }
+}
+
+function rememberCpuRosterRepairFastPathBaseline(leagueData, result = null) {
+  if (!leagueData || result?.ok !== true) {
+    if (result && result?.ok !== true) cpuRosterRepairFastPathBaseline = null;
+    return;
+  }
+  cpuRosterRepairFastPathBaseline = buildCpuRosterRepairFastPathBaseline(leagueData);
+}
+
+function installCpuRosterRepairFastPathDiagnostics() {
+  try {
+    if (typeof window === "undefined") return;
+    window.bmRosterRepairFastPath = {
+      report: () => ({
+        ...cpuRosterRepairFastPathStats,
+        rejectedByReason: { ...cpuRosterRepairFastPathStats.rejectedByReason },
+        baseline: cpuRosterRepairFastPathBaseline
+          ? { ...cpuRosterRepairFastPathBaseline }
+          : null,
+      }),
+      reset: () => {
+        cpuRosterRepairFastPathStats.workerRepairs = 0;
+        cpuRosterRepairFastPathStats.fastNoopBypasses = 0;
+        cpuRosterRepairFastPathStats.rejectedByReason = {};
+        cpuRosterRepairFastPathStats.lastDecision = null;
+        return window.bmRosterRepairFastPath.report();
+      },
+    };
+  } catch {}
+}
+
+installCpuRosterRepairFastPathDiagnostics();
 
 let pending = new Map();
 let batchPending = new Map();
@@ -1236,17 +1294,41 @@ export async function repairCpuTeamsToMinRoster(
   const targeted = requestedTeamNames.length > 0;
 
   if (!targeted) {
-    return requestCpuRosterRepairWorker(
+    cpuRosterRepairFastPathStats.workerRepairs += 1;
+    const result = await requestCpuRosterRepairWorker(
       leagueData,
       userTeamName,
       minPlayers,
       currentDay
     );
+    rememberCpuRosterRepairFastPathBaseline(result?.leagueData || leagueData, result);
+    return result;
+  }
+
+  const fastPathDecision = canUseTargetedCpuRosterRepairFastPath({
+    leagueData,
+    userTeamName,
+    minPlayers,
+    targetTeamNames: requestedTeamNames,
+    baseline: cpuRosterRepairFastPathBaseline,
+  });
+  noteCpuRosterRepairFastPathDecision(fastPathDecision);
+
+  if (fastPathDecision?.ok) {
+    const fastResult = applyTargetedCpuRosterRepairFastPath({
+      leagueData,
+      targetTeamNames: requestedTeamNames,
+      minPlayers,
+    });
+    cpuRosterRepairFastPathStats.fastNoopBypasses += 1;
+    rememberCpuRosterRepairFastPathBaseline(fastResult?.leagueData || leagueData, fastResult);
+    return fastResult;
   }
 
   let targetedResult = null;
   let targetedError = null;
   try {
+    cpuRosterRepairFastPathStats.workerRepairs += 1;
     targetedResult = await requestCpuRosterRepairWorker(
       leagueData,
       userTeamName,
@@ -1266,25 +1348,28 @@ export async function repairCpuTeamsToMinRoster(
     const mergedLeague = targetedResult.leaguePatch
       ? applyCpuRosterRepairLeaguePatch(leagueData, targetedResult.leaguePatch)
       : targetedResult.leagueData;
-    return {
+    const finalResult = {
       ...targetedResult,
       leagueData: mergedLeague,
       leaguePatch: undefined,
       targetedFallbackUsed: false,
       requestedTargetTeamNames: requestedTeamNames,
     };
+    rememberCpuRosterRepairFastPathBaseline(mergedLeague || leagueData, finalResult);
+    return finalResult;
   }
 
   const fallbackReason = targetedResult?.targetedFallbackReason
     || targetedError?.message
     || "targeted_repair_unavailable";
+  cpuRosterRepairFastPathStats.workerRepairs += 1;
   const fullResult = await requestCpuRosterRepairWorker(
     leagueData,
     userTeamName,
     minPlayers,
     currentDay
   );
-  return {
+  const finalResult = {
     ...fullResult,
     repairMode: "full_league_fallback",
     targetedFallbackUsed: true,
@@ -1292,6 +1377,8 @@ export async function repairCpuTeamsToMinRoster(
     requestedTargetTeamNames: requestedTeamNames,
     targetedAttemptDetails: targetedResult || null,
   };
+  rememberCpuRosterRepairFastPathBaseline(finalResult?.leagueData || leagueData, finalResult);
+  return finalResult;
 }
 
 export function simulateOneGame({ homeTeam, awayTeam, diagnostics = null }) {

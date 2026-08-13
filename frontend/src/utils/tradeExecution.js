@@ -1726,7 +1726,7 @@ function validateRosterLimitsForTrade({ leagueData, userTeam, cpuTeam, userItems
   };
 }
 
-function validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, cpuItems, evaluation, userDrivenRules = false }) {
+function validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, cpuItems, evaluation, userDrivenRules = false, inOffseason = null }) {
   if (!hasAcceptedEvaluation(evaluation)) {
     return { ok: false, reason: "CPU must accept the proposal before it can be submitted." };
   }
@@ -1749,13 +1749,13 @@ function validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, c
     };
   }
 
-  const ineligibleUserPlayer = findIneligibleTradePlayer(userItems, { leagueData });
+  const ineligibleUserPlayer = findIneligibleTradePlayer(userItems, { leagueData, inOffseason });
   if (ineligibleUserPlayer) {
     const name = playerNameOf(ineligibleUserPlayer.item?.player);
     return { ok: false, reason: `${name} cannot be traded: ${ineligibleUserPlayer.eligibility?.reason || "the player is not under a guaranteed contract for next season."}` };
   }
 
-  const ineligibleCpuPlayer = findIneligibleTradePlayer(cpuItems, { leagueData });
+  const ineligibleCpuPlayer = findIneligibleTradePlayer(cpuItems, { leagueData, inOffseason });
   if (ineligibleCpuPlayer) {
     const name = playerNameOf(ineligibleCpuPlayer.item?.player);
     return { ok: false, reason: `${name} cannot be traded: ${ineligibleCpuPlayer.eligibility?.reason || "the player is not under a guaranteed contract for next season."}` };
@@ -2009,10 +2009,10 @@ function reasonFromTeamView(teamName = "", view = {}, fallback = "") {
   return `${teamName} accepted because ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`;
 }
 
-function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, userItems, cpuItems, evaluation, userDrivenRules = false }) {
+function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, userItems, cpuItems, evaluation, userDrivenRules = false, inOffseason = null }) {
   const userTeam = findTeamInLeague(leagueData, userTeamName);
   const cpuTeam = findTeamInLeague(leagueData, cpuTeamName);
-  const validation = validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, cpuItems, evaluation, userDrivenRules });
+  const validation = validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, cpuItems, evaluation, userDrivenRules, inOffseason });
   if (!validation.ok) return validation;
 
   const nextLeague = cloneLeagueForTrade(leagueData);
@@ -2849,6 +2849,7 @@ export function validateCpuTradeCandidateOnLeague({
     userItems: fromItems,
     cpuItems: toItems,
     evaluation: combinedEvaluation,
+    inOffseason,
   });
 
   if (!executionValidation.ok) {
@@ -2992,6 +2993,7 @@ export function executeCpuMegaTradeCandidateOnLeagueLoose({
     userItems: fromItems,
     cpuItems: toItems,
     evaluation,
+    inOffseason,
   });
   if (!executionValidation.ok) {
     return {
@@ -3009,6 +3011,7 @@ export function executeCpuMegaTradeCandidateOnLeagueLoose({
     userItems: fromItems,
     cpuItems: toItems,
     evaluation,
+    inOffseason,
   });
   if (!execution.ok) {
     return { ...execution, staleCode: execution.staleCode || "mega_execution_failed" };
@@ -3102,6 +3105,7 @@ export function executeCpuTradeCandidateOnLeague({
     userItems: fromItems,
     cpuItems: toItems,
     evaluation: validation.evaluation,
+    inOffseason,
   });
 
   if (!execution.ok) {

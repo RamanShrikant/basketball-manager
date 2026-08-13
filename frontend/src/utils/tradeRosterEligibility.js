@@ -149,7 +149,19 @@ export function getOffseasonGuaranteedContractStatus(player = {}, { leagueData =
 }
 
 export function getTradePlayerEligibility(player = {}, options = {}) {
-  const { leagueData = {}, tradeContext = null } = options || {};
+  const { leagueData = {}, tradeContext = null, inOffseason = null } = options || {};
+
+  // CPU trade validation already has an authoritative phase from the Calendar
+  // simulation loop. Respect an explicit regular-season phase instead of
+  // re-inferring it from stale offseason/draft browser storage. This prevents
+  // Year-2+ regular-season candidates from being rejected by offseason-only
+  // guaranteed-contract and unresolved-option rules.
+  if (inOffseason === false) {
+    return isStandardTradeEligiblePlayer(player)
+      ? { eligible: true, code: "STANDARD_ROSTER" }
+      : { eligible: false, code: "DEVELOPMENT_ROSTER", reason: "Only standard-roster players can be traded." };
+  }
+
   const context = getOffseasonTradeContext(leagueData, tradeContext);
   if (!context.inOffseason) {
     return isStandardTradeEligiblePlayer(player)
