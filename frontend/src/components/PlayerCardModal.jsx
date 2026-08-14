@@ -373,7 +373,13 @@ function dedupeDisplaySeasonRows(rows = []) {
 }
 
 function combineDisplaySeasonRows(rows) {
-  const clean = dedupeDisplaySeasonRows(rows);
+  // Patch 29: free-agency signings/archived fallbacks can create a zero-game
+  // current-team row for the previous season. Do not let those rows append the
+  // new team to a real historical season (ex: DAL/PHX when the player signed
+  // with Phoenix after that season ended).
+  const realGameRows = (rows || []).filter((row) => Number(row?.games ?? row?.gp ?? 0) > 0);
+  const sourceRows = realGameRows.length ? realGameRows : rows;
+  const clean = dedupeDisplaySeasonRows(sourceRows);
   if (!clean.length) return null;
 
   const rawGames = clean.reduce((sum, row) => sum + Number(row?.games ?? row?.gp ?? 0), 0);
@@ -472,6 +478,12 @@ function collectArchivedSnapshotRowsForPlayer({ leagueData, playerName, currentS
   const existingKeys = new Set(
     (existingRows || []).map((row) => `${Number(row?.seasonYear || 0)}__${String(row?.teamName || row?.team || "")}`)
   );
+  const seasonsWithRealHistoricalRows = new Set(
+    (existingRows || [])
+      .filter((row) => Number(row?.games ?? row?.gp ?? 0) > 0)
+      .map((row) => Number(row?.seasonYear || 0))
+      .filter(Boolean)
+  );
   const rows = [];
 
   for (const entry of history) {
@@ -487,6 +499,7 @@ function collectArchivedSnapshotRowsForPlayer({ leagueData, playerName, currentS
       if (rowName !== playerName) continue;
       const built = buildSeasonRowFromArchivedSnapshot(snapshotRow, displaySeasonYear, teamLogoMap);
       if (!built) continue;
+      if (seasonsWithRealHistoricalRows.has(Number(built.seasonYear || 0))) continue;
       const key = `${Number(built.seasonYear || 0)}__${String(built.teamName || "")}`;
       if (existingKeys.has(key)) continue;
       existingKeys.add(key);

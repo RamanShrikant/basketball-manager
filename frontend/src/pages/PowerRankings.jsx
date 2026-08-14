@@ -4,6 +4,7 @@ import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
 import { computeTeamRatings } from "../api/teamRatings.js";
 import { GAMEPLAN_VERSION, buildSmartRotation } from "../utils/ensureGameplans";
+import { buildOffseasonTradeEvaluationLeague } from "../utils/offseasonTradeContext.js";
 import PageFade from "../components/PageFade";
 import "../styles/BMPageBackground.css";
 import "../styles/BMAnimations.css";
@@ -548,10 +549,15 @@ export default function PowerRankings() {
     });
   };
 
-  const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
+  const rankingsLeagueData = useMemo(() => {
+    const projected = buildOffseasonTradeEvaluationLeague(leagueData || {});
+    return projected?.leagueData || leagueData;
+  }, [leagueData]);
+
+  const teams = useMemo(() => getAllTeamsFromLeague(rankingsLeagueData), [rankingsLeagueData]);
   const confMap = useMemo(
-    () => getTeamConferenceMap(leagueData, teams),
-    [leagueData, teams]
+    () => getTeamConferenceMap(rankingsLeagueData, teams),
+    [rankingsLeagueData, teams]
   );
 
   const rows = useMemo(() => {

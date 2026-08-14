@@ -1718,6 +1718,76 @@ export default function ViewingOffers() {
     return buildFreeAgencySummaryText(fullFreeAgencySummaryEntries);
   }, [fullFreeAgencySummaryEntries]);
 
+  const leagueEventSignings = useMemo(() => {
+    const activeDay = Number(
+      dayResolved ??
+        latestResults?.dayResolved ??
+        stateSummary?.currentDay ??
+        freeAgencyState?.currentDay ??
+        0
+    );
+    const maxDaysForEventView = Number(freeAgencyState?.maxDays || stateSummary?.maxDays || 10);
+    const summaryCompleteForEventView = Boolean(
+      fullFreeAgencySummaryEntries.length > 0 &&
+        (
+          marketClosed ||
+          Number(dayResolved || 0) >= maxDaysForEventView ||
+          (!freeAgencyState?.isActive && Number(freeAgencyState?.currentDay || 0) >= maxDaysForEventView)
+        )
+    );
+    const showAllDays = Boolean(summaryCompleteForEventView || marketClosed);
+    const rowsFromDurableLog = [];
+
+    for (const entry of fullFreeAgencySummaryEntries || []) {
+      const entryDay = Number(entry?.dayResolved ?? entry?.offerDay ?? 0);
+      if (!showAllDays && activeDay && entryDay && entryDay !== activeDay) continue;
+      for (const row of Array.isArray(entry?.signings) ? entry.signings : []) {
+        if (!row) continue;
+        rowsFromDurableLog.push({
+          ...row,
+          signedWith: row.signedWith || row.teamName || row.toTeam || "",
+          day: row.day ?? entry?.dayResolved ?? null,
+        });
+      }
+    }
+
+    const fallbackRows = [
+      ...(Array.isArray(signings) ? signings : []),
+      ...(Array.isArray(freeAgencyState?.signedPlayersLog) ? freeAgencyState.signedPlayersLog : []),
+    ].map((row) => ({
+      ...row,
+      signedWith: row?.signedWith || row?.teamName || row?.toTeam || "",
+    })).filter((row) => {
+      if (showAllDays || !activeDay) return true;
+      const rowDay = Number(row?.day ?? row?.dayResolved ?? 0);
+      return !rowDay || rowDay === activeDay;
+    });
+
+    const sourceRows = rowsFromDurableLog.length ? rowsFromDurableLog : fallbackRows;
+    const seen = new Set();
+    return sourceRows.filter((row) => {
+      if (!row) return false;
+      const key = [
+        row.playerId ?? row.playerKey ?? row.playerName ?? "",
+        row.signedWith || row.teamName || "",
+        row.day ?? row.dayResolved ?? "",
+        row.rfaMatched ? "rfa" : "sign",
+      ].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [
+    dayResolved,
+    latestResults?.dayResolved,
+    stateSummary?.currentDay,
+    freeAgencyState?.currentDay,
+    freeAgencyState?.signedPlayersLog,
+    fullFreeAgencySummaryEntries,
+    marketClosed,
+    signings,
+  ]);
+
   const freeAgencyMaxDaysForSummary = Number(
     freeAgencyState?.maxDays || stateSummary?.maxDays || 10
   );
@@ -3695,23 +3765,24 @@ return (
                     </button>
                   </div>
 
-                  {!signings.length ? (
+                  {!leagueEventSignings.length ? (
                     <p className="text-gray-400">No signings recorded.</p>
                   ) : (
-<div className="bm-orange-scroll max-h-[540px] overflow-y-auto pr-2 space-y-3">
-  {signings.map((signing, idx) => {
-                        const logo = getTeamLogo(signing?.signedWith);
+                    <div className="bm-orange-scroll max-h-[540px] overflow-y-auto pr-2 space-y-3">
+                      {leagueEventSignings.map((signing, idx) => {
+                        const signingTeamName = signing?.signedWith || signing?.teamName || signing?.toTeam || "Unknown Team";
+                        const logo = getTeamLogo(signingTeamName);
 
                         return (
                           <div
-                            key={`${signing.playerName || "player"}-${idx}`}
+                            key={`${signing.playerName || "player"}-${signingTeamName}-${signing.day ?? idx}`}
                             className="bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3"
                           >
                             <div className="flex items-start gap-3">
                               {logo ? (
                                 <img
                                   src={logo}
-                                  alt={signing?.signedWith || "Team logo"}
+                                  alt={signingTeamName || "Team logo"}
                                   className="w-10 h-10 object-contain mt-1"
                                 />
                               ) : (
@@ -3720,12 +3791,12 @@ return (
 
                               <div className="min-w-0 flex-1">
                                 <div className="text-white font-semibold">
-                                  <PlayerNameButton onClick={() => openPlayerCardFromRow(signing, signing?.signedWith || "Free Agent")}>
+                                  <PlayerNameButton onClick={() => openPlayerCardFromRow(signing, signingTeamName || "Free Agent")}>
                                     {signing.playerName || "Unknown Player"}
                                   </PlayerNameButton>
                                 </div>
                                 <div className="text-sm text-gray-400 mt-1">
-                                  Signed with {signing.signedWith || "Unknown Team"}
+                                  Signed with {signingTeamName}
                                 </div>
                                 <div className="text-sm text-gray-500 mt-2">
                                   {formatContractLine(signing?.contract)}

@@ -2308,8 +2308,8 @@ export default function TradeFinder() {
   }, [liveDraftProgressSignature]);
 
   const selectedTeamPlayers = useMemo(
-    () => filterTradeEligiblePlayers(getTeamPlayers(packageTeam), { leagueData, tradeContext }),
-    [packageTeam, leagueData, tradeContext]
+    () => (getTeamPlayers(packageTeam) || []).filter(Boolean),
+    [packageTeam]
   );
   const selectedTeamPicks = useMemo(
     () => collectTradeablePicksForSingleTeamForFinder(leagueData, packageTeam?.name || packageTeam?.teamName || "", teams),
@@ -2483,7 +2483,8 @@ export default function TradeFinder() {
     }
 
     if (!alreadySelected && asset?.type === "pick") {
-      const candidateItem = buildFinderPickItem(asset, pickProtections[asset.key]);
+      const effectiveRule = eligibility?.suggestedPickRule || pickProtections[asset.key];
+      const candidateItem = buildFinderPickItem(asset, effectiveRule);
       const projectedPackageValidation = validateUserTradeAssetPackage({
         leagueData,
         teamName: packageTeam?.name || packageTeam?.teamName || "",
@@ -2495,9 +2496,9 @@ export default function TradeFinder() {
         setOfferSearchProgress("");
         return;
       }
-    }
-    if (!alreadySelected && asset?.type === "pick" && eligibility?.suggestedPickRule) {
-      setPickProtections((current) => ({ ...current, [asset.key]: eligibility.suggestedPickRule }));
+      if (eligibility?.suggestedPickRule) {
+        setPickProtections((current) => ({ ...current, [asset.key]: eligibility.suggestedPickRule }));
+      }
     }
     setSearched(false);
     setPythonOffers([]);

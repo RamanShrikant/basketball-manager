@@ -475,11 +475,14 @@ POSITION_WEIGHTS = {
 }
 
 SECONDARY_BY_POS = {
-    "PG": ["SG", ""],
-    "SG": ["PG", "SF", ""],
-    "SF": ["SG", "PF", ""],
-    "PF": ["SF", "C", ""],
-    "C": ["PF", ""],
+    # Auto-generated prospects should always carry a playable secondary
+    # position. Older previews lost this field in JS storage, and blanks made the
+    # generated classes feel flatter than custom draft classes.
+    "PG": ["SG"],
+    "SG": ["PG", "SF"],
+    "SF": ["SG", "PF"],
+    "PF": ["SF", "C"],
+    "C": ["PF"],
 }
 
 HEIGHT_RANGES = {

@@ -462,24 +462,32 @@ function readTradePhaseInfo(leagueData) {
   };
 }
 
+function asDraftRowObject(row = {}) {
+  return row && typeof row === "object" ? row : {};
+}
+
 function getPickNumberFromAny(row = {}) {
-  const n = Number(row.pick ?? row.pickNumber ?? row.overallPick ?? row.draftPickNumber ?? row.resolvedPickNumber ?? 0);
+  const safeRow = asDraftRowObject(row);
+  const n = Number(safeRow.pick ?? safeRow.pickNumber ?? safeRow.overallPick ?? safeRow.draftPickNumber ?? safeRow.resolvedPickNumber ?? 0);
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 function getRoundFromAny(row = {}) {
-  const explicit = Number(row.round || row.roundNum || row.pickRound || 0);
+  const safeRow = asDraftRowObject(row);
+  const explicit = Number(safeRow.round || safeRow.roundNum || safeRow.pickRound || 0);
   if (explicit === 1 || explicit === 2) return explicit;
-  const pickNumber = getPickNumberFromAny(row);
+  const pickNumber = getPickNumberFromAny(safeRow);
   return pickNumber && pickNumber <= 30 ? 1 : 2;
 }
 
 function getOriginalTeamFromAny(row = {}) {
-  return row.originalTeam || row.originalTeamName || row.originalPickTeamName || row.naturalLotteryTeamName || row.team || row.teamName || "";
+  const safeRow = asDraftRowObject(row);
+  return safeRow.originalTeam || safeRow.originalTeamName || safeRow.originalPickTeamName || safeRow.naturalLotteryTeamName || safeRow.team || safeRow.teamName || "";
 }
 
 function getOwnerTeamFromDraftRow(row = {}) {
-  return row.currentOwnerTeamName || row.ownerTeamName || row.ownerTeam || row.owner || row.currentOwner || row.teamName || "";
+  const safeRow = asDraftRowObject(row);
+  return safeRow.currentOwnerTeamName || safeRow.ownerTeamName || safeRow.ownerTeam || safeRow.owner || safeRow.currentOwner || safeRow.teamName || "";
 }
 
 function getLockedDraftOrder(leagueData, seasonYear = getCurrentSeasonYear(leagueData)) {
@@ -505,6 +513,7 @@ function getLockedDraftOrder(leagueData, seasonYear = getCurrentSeasonYear(leagu
 }
 
 function resolvedPickIdentityMatches(row = {}, pick = {}) {
+  if (!row || typeof row !== "object" || !pick || typeof pick !== "object") return false;
   const rowPick = getPickNumberFromAny(row);
   const pickNumber = getPickNumberFromAny(pick);
   if (!rowPick || !pickNumber || rowPick !== pickNumber) return false;
@@ -519,6 +528,7 @@ function resolvedPickIdentityMatches(row = {}, pick = {}) {
 }
 
 function setDraftRowOwner(row = {}, toTeamName = "", leagueData = {}, tradeStamp = {}) {
+  if (!row || typeof row !== "object") return row;
   const toTeam = findTeamInLeague(leagueData, toTeamName);
   const ownerLogo = teamLogoOf(toTeam);
   return {
@@ -543,6 +553,7 @@ function updateDraftOrderOwner(rows = [], pick = {}, fromTeamName = "", toTeamNa
   let label = formatPick(pick);
 
   const nextRows = (Array.isArray(rows) ? rows : []).map((row) => {
+    if (!row || typeof row !== "object") return row;
     if (!resolvedPickIdentityMatches(row, pick)) return row;
 
     found = true;

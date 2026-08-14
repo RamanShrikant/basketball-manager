@@ -2602,6 +2602,11 @@ const handleContinueToProgression = () => {
   const buildCleanFreeAgencyStateForInit = (seasonYear, userTeamName = null, maxDays = 10) => {
   return {
     seasonYear,
+    contractSeasonYear: seasonYear,
+    payrollSeasonYear: seasonYear,
+    currentPayrollSeasonYear: seasonYear,
+    salarySeasonYear: seasonYear,
+    targetSeasonYear: seasonYear,
     isActive: false,
     currentDay: 0,
     maxDays,

@@ -4637,6 +4637,30 @@ def validate_offer_spending_rules(
         spending_type = "cap_space"
         exception_type = None
         legal_reason = "Offer is legal using cap room."
+    elif (
+        allow_pending_cap_hold_clearance
+        and not own_rights
+        and cap_hold_total > 0
+        and raw_cap_room_without_holds > 0
+        and practical_cap_room < needed_room
+        and needed_room > raw_cap_room_without_holds
+    ):
+        over_by = needed_room - raw_cap_room_without_holds
+        return {
+            "ok": False,
+            "reason": f"{team_name} does not have enough cap room for this offer even after clearing cap holds. Short by ${int(over_by):,}.",
+            "teamSnapshot": snapshot,
+            "exceptionRoom": raw_cap_room_without_holds,
+            "spendingType": "cap_space_after_holds_blocked",
+            "exceptionType": None,
+            "birdRights": rights,
+            "payrollZone": payroll_zone,
+            "exceptionRemaining": remaining,
+            "rawCapRoomWithoutHolds": raw_cap_room_without_holds,
+            "rawPayrollWithoutHolds": raw_payroll_without_holds,
+            "capHoldTotal": cap_hold_total,
+            "capHoldClearanceNeeded": max(0, needed_room - practical_cap_room),
+        }
     elif cap_room > 0 and needed_room <= remaining["roomException"] + int(replaced_cap_hold):
         available_room = remaining["roomException"] + int(replaced_cap_hold)
         spending_type = "cap_or_exception"
@@ -5358,6 +5382,79 @@ def build_contract_status_row(
             )
 
     return row
+
+
+def audit_pre_free_agency_roster_contract_cleanup_needed(
+    league_data: Dict[str, Any],
+    season_year: int,
+    limit: int = 12,
+) -> Dict[str, Any]:
+    """Detect roster players who should have been processed before FA opens.
+
+    Free agency initialization only builds the offer market from the current
+    ``freeAgents`` pool. If the prior Options/Rights/expired-contract step was
+    skipped, expired players remain on team rosters as $0 salary players and the
+    new FA class never appears. This guard catches that state before Day 1.
+    """
+    examples: List[Dict[str, Any]] = []
+    count = 0
+    completed_season_year = get_completed_contract_year(int(season_year))
+
+    for _, _, team in iter_teams(league_data):
+        team_name = team.get("name", "Unknown Team")
+        players = team.get("players") if isinstance(team.get("players"), list) else []
+        for player in players:
+            if not isinstance(player, dict):
+                continue
+
+            raw_contract = normalize_contract(player.get("contract"))
+            final_rookie_option_completed = is_completed_final_rookie_scale_team_option(
+                player = player,
+                current_season_year = completed_season_year,
+            )
+            contract = raw_contract if final_rookie_option_completed else finalize_elapsed_option_years(
+                raw_contract,
+                through_season_year = completed_season_year,
+            )
+            salary_this_year = get_contract_salary_for_year(contract, int(season_year))
+            active_option = get_active_option_for_player_for_year(
+                player = player,
+                contract = contract,
+                option_season_year = int(season_year),
+                current_season_year = completed_season_year,
+            )
+
+            reason = ""
+            if final_rookie_option_completed:
+                reason = "expired_rookie_scale_contract"
+            elif contract is None:
+                reason = "no_contract"
+            elif active_option:
+                reason = f"pending_{active_option.get('type')}_option"
+            elif salary_this_year <= 0:
+                reason = "expired_contract"
+
+            if not reason:
+                continue
+
+            count += 1
+            if len(examples) < limit:
+                examples.append({
+                    "playerId": player.get("id"),
+                    "playerName": player.get("name"),
+                    "teamName": team_name,
+                    "overall": int(round(num(player.get("overall"), 0))),
+                    "seasonYear": int(season_year),
+                    "reason": reason,
+                    "salaryThisYear": int(num(salary_this_year, 0)),
+                    "optionType": active_option.get("type") if isinstance(active_option, dict) else None,
+                })
+
+    return {
+        "ok": count == 0,
+        "count": count,
+        "examples": examples,
+    }
 
 
 
@@ -9962,6 +10059,7 @@ def process_pending_user_decisions(
             }
 
         chosen_offer["teamName"] = user_team_name
+        chosen_offer["source"] = "user"
         chosen_offer["contract"] = normalize_contract(
             chosen_offer.get("contract") or row.get("contract")
         )
@@ -13539,6 +13637,16 @@ def finalize_free_agent_signing_from_offer(
 
     signed_player = copy.deepcopy(player)
     signed_player["contract"] = contract
+    # Patch 29: free-agency signings are standard roster contracts. Clear stale
+    # two-way/stash flags so newly signed players do not disappear from trade
+    # screens or remain blocked by old development-roster metadata.
+    signed_player["isTwoWay"] = False
+    signed_player["twoWay"] = False
+    signed_player["isStash"] = False
+    signed_player["stash"] = False
+    signed_player["contractType"] = "standard"
+    signed_player["rosterStatus"] = "standard"
+    signed_player["assignmentStatus"] = "standard"
     signed_player["marketValue"] = estimate_market_value(signed_player, league_data)
 
     update_player_rights_after_signing(
@@ -14047,12 +14155,30 @@ def initialize_free_agency_period(
 ) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
 
+    season_year = get_current_season_year(updated)
+    pre_fa_audit = audit_pre_free_agency_roster_contract_cleanup_needed(updated, season_year)
+    if not pre_fa_audit.get("ok"):
+        return {
+            "ok": False,
+            "reason": (
+                f"PRE_FREE_AGENCY_CONTRACT_CLEANUP_REQUIRED: {pre_fa_audit.get('count')} roster player(s) "
+                f"still need option/expired-contract processing for {season_year} before free agency can open."
+            ),
+            "seasonYear": season_year,
+            "unresolvedPreFreeAgencyContracts": pre_fa_audit,
+        }
+
     updated.setdefault("freeAgents", [])
     normalize_all_player_rights(updated)
     refresh_free_agent_market_values(updated)
 
     state = ensure_free_agency_state(updated)
-    state["seasonYear"] = get_current_season_year(updated)
+    state["seasonYear"] = season_year
+    state["contractSeasonYear"] = season_year
+    state["payrollSeasonYear"] = season_year
+    state["currentPayrollSeasonYear"] = season_year
+    state["salarySeasonYear"] = season_year
+    state["targetSeasonYear"] = season_year
     state["isActive"] = True
     state["currentDay"] = 1
     state["maxDays"] = int(clamp(max_days, 1, 30))

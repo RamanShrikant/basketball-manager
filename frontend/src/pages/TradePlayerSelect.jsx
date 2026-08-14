@@ -3,7 +3,6 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
-import { filterTradeEligiblePlayers } from "../utils/tradeRosterEligibility.js";
 import { getContractSeasonYear } from "../utils/seasonContext.js";
 import { getUserTradeCurrentDate, getUserTradePlayerEligibility } from "../utils/userTradeRules.js";
 import { formatInjuryReturnLabel, isPlayerInjured } from "../utils/injurySystem.js";
@@ -22,10 +21,10 @@ function getAllTeamsFromLeague(leagueData) {
 }
 
 function getTeamPlayers(team, leagueData) {
-  // During the offseason, only players with guaranteed salary for the upcoming
-  // season are shown. Unsigned return projections still affect team valuation,
-  // but they are never exposed as selectable transaction assets.
-  return filterTradeEligiblePlayers(team?.players, { leagueData });
+  // Patch 29: the selector should not silently hide standard-contract players.
+  // Show the team roster and let getUserTradePlayerEligibility render exact
+  // lock reasons for recently signed/acquired/two-way/stash/deadline cases.
+  return Array.isArray(team?.players) ? team.players.filter(Boolean) : [];
 }
 
 function playerNameOf(player) {

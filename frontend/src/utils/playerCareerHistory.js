@@ -205,6 +205,23 @@ function ensureHistory(player) {
 function upsertSeasonRow(player, row) {
   const next = ensureHistory(player);
 
+  // Patch 29: when applying archived stat snapshots after an offseason signing,
+  // do not attach the player's new current team to an already-authored previous
+  // season. Existing real history rows win; archive rows only fill missing years.
+  const rowSeason = Number(row?.seasonYear || 0);
+  const rowTeam = String(row?.teamName || row?.team || "").trim();
+  const isArchiveFill = row?.source === "sim" || row?.simulated === true || row?.recoveredFromStatsArchive;
+  if (isArchiveFill && rowSeason && rowTeam) {
+    const existingRealSeasonRows = next.history.seasons.filter((existing) => (
+      Number(existing?.seasonYear || 0) === rowSeason &&
+      Number(existing?.games ?? existing?.gp ?? 0) > 0 &&
+      !(existing?.source === "sim" || existing?.simulated === true || existing?.recoveredFromStatsArchive)
+    ));
+    if (existingRealSeasonRows.length && !existingRealSeasonRows.some((existing) => String(existing?.teamName || existing?.team || "").trim() === rowTeam)) {
+      return next;
+    }
+  }
+
   next.history.seasons = next.history.seasons.filter((existing) => {
     const sameSeason = Number(existing?.seasonYear || 0) === Number(row?.seasonYear || 0);
     const sameTeam = String(existing?.teamName || "") === String(row?.teamName || "");

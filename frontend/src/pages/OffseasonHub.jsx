@@ -435,8 +435,11 @@ function buildDefaultOffseasonState(seasonYear) {
     draftComplete: false,
     rookieSigningsComplete: false,
     optionsComplete: false,
+    optionsResolvedSeasonYear: null,
     rightsManagementComplete: false,
+    rightsResolvedSeasonYear: null,
     preFreeAgencyResolved: false,
+    preFreeAgencyResolvedSeasonYear: null,
     freeAgencyComplete: false,
     rosterFinalizationComplete: false,
     progressionComplete: false,
@@ -1150,6 +1153,11 @@ function buildAutoRightsDecisions(rows = []) {
 function buildCleanFreeAgencyStateForDev(seasonYear, userTeamName = null, maxDays = 10, originalUserTeamName = null) {
   return {
     seasonYear,
+    contractSeasonYear: seasonYear,
+    payrollSeasonYear: seasonYear,
+    currentPayrollSeasonYear: seasonYear,
+    salarySeasonYear: seasonYear,
+    targetSeasonYear: seasonYear,
     isActive: false,
     currentDay: 0,
     maxDays,
@@ -1173,6 +1181,44 @@ function buildCleanFreeAgencyStateForDev(seasonYear, userTeamName = null, maxDay
     isComplete: false,
     status: "not_started",
   };
+}
+
+function getFreeAgencyStateSeasonYear(state = {}) {
+  const candidates = [
+    state?.contractSeasonYear,
+    state?.payrollSeasonYear,
+    state?.currentPayrollSeasonYear,
+    state?.salarySeasonYear,
+    state?.targetSeasonYear,
+    state?.seasonYear,
+  ];
+
+  for (const value of candidates) {
+    const year = Number(value || 0);
+    if (Number.isFinite(year) && year >= 2020 && year <= 2100) return Math.trunc(year);
+  }
+
+  return 0;
+}
+
+function isCurrentFreeAgencyStateForSeason(state = {}, seasonYear = 2026) {
+  const stateYear = getFreeAgencyStateSeasonYear(state);
+  return stateYear > 0 && stateYear === Number(seasonYear || 0);
+}
+
+function hasFreeAgencyStartedEvidence(state = {}) {
+  return Boolean(
+    state?.isActive ||
+      Number(state?.currentDay || 0) > 0 ||
+      (Array.isArray(state?.dailyLog) && state.dailyLog.length > 0) ||
+      (Array.isArray(state?.offerHistory) && state.offerHistory.length > 0) ||
+      state?.latestResults ||
+      state?.marketComplete ||
+      state?.freeAgencyComplete ||
+      state?.completed ||
+      state?.isComplete ||
+      state?.status === "complete"
+  );
 }
 
 function compactSigningForDevStorage(row) {
@@ -2763,9 +2809,17 @@ export default function OffseasonHub() {
     const unresolvedPreFreeAgencyContracts = hasUnresolvedPreFreeAgencyContracts(workingLeague, seasonYear);
     const backendUserTeamName = getDevBackendUserTeamName(userTeamName);
 
+    const optionsStampedForSeason = Number(currentOffseasonState?.optionsResolvedSeasonYear || 0) === Number(seasonYear);
+    const rightsStampedForSeason = Number(currentOffseasonState?.rightsResolvedSeasonYear || 0) === Number(seasonYear);
+    const preFaStampedForSeason = Number(currentOffseasonState?.preFreeAgencyResolvedSeasonYear || 0) === Number(seasonYear);
+
     if (
       currentOffseasonState.optionsComplete &&
       currentOffseasonState.rightsManagementComplete &&
+      currentOffseasonState.preFreeAgencyResolved &&
+      optionsStampedForSeason &&
+      rightsStampedForSeason &&
+      preFaStampedForSeason &&
       !unresolvedPreFreeAgencyContracts
     ) {
       return workingLeague;
@@ -2823,8 +2877,11 @@ export default function OffseasonHub() {
 
     updateDevOffseasonState({
       optionsComplete: true,
+      optionsResolvedSeasonYear: seasonYear,
       rightsManagementComplete: false,
+      rightsResolvedSeasonYear: null,
       preFreeAgencyResolved: false,
+      preFreeAgencyResolvedSeasonYear: null,
       freeAgencyComplete: false,
       progressionComplete: false,
     });
@@ -2848,8 +2905,11 @@ export default function OffseasonHub() {
 
     updateDevOffseasonState({
       optionsComplete: true,
+      optionsResolvedSeasonYear: seasonYear,
       rightsManagementComplete: true,
+      rightsResolvedSeasonYear: seasonYear,
       preFreeAgencyResolved: true,
+      preFreeAgencyResolvedSeasonYear: seasonYear,
       freeAgencyComplete: false,
       progressionComplete: false,
     });
@@ -2867,14 +2927,28 @@ export default function OffseasonHub() {
     }
 
     let nextLeague = workingLeague;
+    const preFaState = readOffseasonState(seasonYear);
+    const preFaStampedForSeason = Number(preFaState?.preFreeAgencyResolvedSeasonYear || 0) === Number(seasonYear);
+
+    if (!preFaStampedForSeason || hasUnresolvedPreFreeAgencyContracts(nextLeague, seasonYear)) {
+      nextLeague = await runDevOptionsAndRights(nextLeague, userTeamName);
+    }
+
     const state = nextLeague?.freeAgencyState || {};
+    const stateMatchesSeason = isCurrentFreeAgencyStateForSeason(state, seasonYear);
+    const stillNeedsContractCleanup = hasUnresolvedPreFreeAgencyContracts(nextLeague, seasonYear);
     const alreadyStarted = Boolean(
-      state?.isActive ||
-        Number(state?.currentDay || 0) > 0 ||
-        (Array.isArray(state?.dailyLog) && state.dailyLog.length > 0) ||
-        (Array.isArray(state?.offerHistory) && state.offerHistory.length > 0) ||
-        state?.latestResults
+      stateMatchesSeason &&
+        !stillNeedsContractCleanup &&
+        hasFreeAgencyStartedEvidence(state)
     );
+
+    if (!stateMatchesSeason && hasFreeAgencyStartedEvidence(state)) {
+      nextLeague = {
+        ...nextLeague,
+        freeAgencyState: buildCleanFreeAgencyStateForDev(seasonYear, backendUserTeamName, 10, userTeamName || null),
+      };
+    }
 
     if (!alreadyStarted) {
       const leagueForInit = {
@@ -2899,8 +2973,11 @@ export default function OffseasonHub() {
 
     updateDevOffseasonState({
       optionsComplete: true,
+      optionsResolvedSeasonYear: seasonYear,
       rightsManagementComplete: true,
+      rightsResolvedSeasonYear: seasonYear,
       preFreeAgencyResolved: true,
+      preFreeAgencyResolvedSeasonYear: seasonYear,
       freeAgencyComplete: false,
     });
 
@@ -2918,13 +2995,28 @@ export default function OffseasonHub() {
     }
 
     let nextLeague = workingLeague;
+    const preFaState = readOffseasonState(seasonYear);
+    const preFaStampedForSeason = Number(preFaState?.preFreeAgencyResolvedSeasonYear || 0) === Number(seasonYear);
+
+    if (!preFaStampedForSeason || hasUnresolvedPreFreeAgencyContracts(nextLeague, seasonYear)) {
+      nextLeague = await runDevOptionsAndRights(nextLeague, userTeamName);
+    }
+
     const startState = nextLeague?.freeAgencyState || {};
+    const stateMatchesSeason = isCurrentFreeAgencyStateForSeason(startState, seasonYear);
+    const stillNeedsContractCleanup = hasUnresolvedPreFreeAgencyContracts(nextLeague, seasonYear);
     const alreadyStarted = Boolean(
-      startState?.isActive ||
-        Number(startState?.currentDay || 0) > 0 ||
-        (Array.isArray(startState?.dailyLog) && startState.dailyLog.length > 0) ||
-        (Array.isArray(startState?.offerHistory) && startState.offerHistory.length > 0)
+      stateMatchesSeason &&
+        !stillNeedsContractCleanup &&
+        hasFreeAgencyStartedEvidence(startState)
     );
+
+    if (!stateMatchesSeason && hasFreeAgencyStartedEvidence(startState)) {
+      nextLeague = {
+        ...nextLeague,
+        freeAgencyState: buildCleanFreeAgencyStateForDev(seasonYear, backendUserTeamName, 10, userTeamName || null),
+      };
+    }
 
     if (!alreadyStarted) {
       const leagueForInit = {
@@ -3017,8 +3109,11 @@ export default function OffseasonHub() {
 
     updateDevOffseasonState({
       optionsComplete: true,
+      optionsResolvedSeasonYear: seasonYear,
       rightsManagementComplete: true,
+      rightsResolvedSeasonYear: seasonYear,
       preFreeAgencyResolved: true,
+      preFreeAgencyResolvedSeasonYear: seasonYear,
       freeAgencyComplete: true,
     });
 
@@ -3270,8 +3365,11 @@ export default function OffseasonHub() {
       draftComplete: true,
       rookieSigningsComplete: true,
       optionsComplete: true,
+      optionsResolvedSeasonYear: seasonYear,
       rightsManagementComplete: true,
+      rightsResolvedSeasonYear: seasonYear,
       preFreeAgencyResolved: true,
+      preFreeAgencyResolvedSeasonYear: seasonYear,
       freeAgencyComplete: true,
       rosterFinalizationComplete: true,
       progressionComplete: true,

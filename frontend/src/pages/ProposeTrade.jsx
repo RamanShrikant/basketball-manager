@@ -13,6 +13,7 @@ import { executeAcceptedTradeOnLeague as executeAcceptedTradeOnLeagueShared } fr
 import {
   evaluateUserTradeFinancialLegality,
   getUserTradeDeadlineStatus,
+  validateUserTradeAssetPackage,
   validateUserTradeRules,
 } from "../utils/userTradeRules.js";
 import {
@@ -2417,6 +2418,21 @@ function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incoming
     outgoingItems: items,
     incomingItems,
   });
+  const assetRuleCheck = validateUserTradeAssetPackage({
+    leagueData,
+    teamName: team?.name || team?.teamName || "",
+    outgoingItems: items,
+    incomingItems,
+  });
+  const displayCheck = assetRuleCheck.ok
+    ? financialCheck
+    : {
+        ok: false,
+        title: `${team?.name || team?.teamName || "This team"} Trade Rule Issue`,
+        message: assetRuleCheck.reason || "This side contains an illegal trade asset.",
+        rows: [],
+        statusLabel: "Trade Rule Issue",
+      };
   const hasItems = Array.isArray(items) && items.length > 0;
   const canAddMore = (items || []).length < MAX_SIDE_ITEMS;
   const netSalary = Number(incomingSalary || 0) - Number(salaryTotal || 0);
@@ -2431,7 +2447,7 @@ function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incoming
     incomingSalary,
     netSalary,
     playerCount,
-    financialCheck,
+    financialCheck: displayCheck,
   });
 
   return (
@@ -2502,7 +2518,7 @@ function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incoming
         playerCount={playerCount}
         hardCapDetails={hardCapDetails}
         onHardCapDetails={onHardCapDetails}
-        financialCheck={financialCheck}
+        financialCheck={displayCheck}
       />
     </div>
   );
@@ -2867,18 +2883,26 @@ export default function ProposeTrade() {
 
     if (isSubmitting) return;
 
-    const result = executeAcceptedTradeOnLeagueShared({
-      leagueData,
-      userTeamName,
-      cpuTeamName,
-      userItems,
-      cpuItems,
-      evaluation,
-      userDrivenRules: true,
-    });
+    let result;
 
-    if (!result.ok) {
-      setNotice(result.reason || "Trade could not be submitted.");
+    try {
+      result = executeAcceptedTradeOnLeagueShared({
+        leagueData,
+        userTeamName,
+        cpuTeamName,
+        userItems,
+        cpuItems,
+        evaluation,
+        userDrivenRules: true,
+      });
+    } catch (error) {
+      console.error("[ProposeTrade] Accepted trade execution crashed", error);
+      setNotice(`Trade could not be submitted: ${error?.message || String(error || "Unknown error")}`);
+      return;
+    }
+
+    if (!result?.ok) {
+      setNotice(result?.reason || "Trade could not be submitted.");
       return;
     }
 

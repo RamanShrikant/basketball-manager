@@ -9085,62 +9085,45 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
 
         {(!actionModal.game || !actionModal.game.played) ? (
           <div className="flex flex-col gap-2">
-            {actionModal.game ? (
-              <button
-                className="px-4 py-2 bg-neutral-700 rounded hover:bg-neutral-600"
-                onClick={() =>
-                  handleSimOnlyGame(actionModal.dateStr, actionModal.game)
-                }
-              >
-                Simulate this game
-              </button>
-            ) : (
+            {!actionModal.game && (
               <div className="rounded-lg border border-neutral-700 bg-neutral-950/60 px-3 py-2 text-sm text-neutral-300">
                 {actionModalBackwardsMessage || "No selected-team game on this date. You can still simulate the league to this day."}
               </div>
             )}
 
-{actionModalBackwardsMessage ? (
-  <button
-    className="cursor-not-allowed rounded bg-neutral-700/70 px-4 py-2 text-neutral-400"
-    disabled
-    title={actionModalBackwardsMessage}
-  >
-    Cannot simulate backwards
-  </button>
-) : (
-  <button
-    className={`px-4 py-2 rounded transition ${
-      selectedTeamCanSim
-        ? "bg-orange-600 hover:bg-orange-500"
-        : "bg-orange-600 hover:bg-orange-500 ring-1 ring-orange-300/30"
-    }`}
-    onClick={() => handleSimToDate(actionModal.dateStr)}
-    title={
-      !selectedTeamCanSim
-        ? selectedTeamSimBlockMessage
-        : ""
-    }
-  >
-    Simulate to this date
-  </button>
-)}
+            {actionModalBackwardsMessage ? (
+              <button
+                className="cursor-not-allowed rounded bg-neutral-700/70 px-4 py-2 text-neutral-400"
+                disabled
+                title={actionModalBackwardsMessage}
+              >
+                Cannot simulate backwards
+              </button>
+            ) : (
+              <button
+                className={`px-4 py-2 rounded transition ${
+                  selectedTeamCanSim
+                    ? "bg-orange-600 hover:bg-orange-500"
+                    : "bg-orange-600 hover:bg-orange-500 ring-1 ring-orange-300/30"
+                }`}
+                onClick={() => handleSimToDate(actionModal.dateStr)}
+                title={!selectedTeamCanSim ? selectedTeamSimBlockMessage : ""}
+              >
+                Simulate to this date
+              </button>
+            )}
 
-<button
-  className={`px-4 py-2 rounded transition ${
-    selectedTeamCanSim
-      ? "bg-blue-600 hover:bg-blue-500"
-      : "bg-blue-600 hover:bg-blue-500 ring-1 ring-blue-300/30"
-  }`}
-  onClick={() => handleSimSeason()}
-  title={
-    !selectedTeamCanSim
-      ? selectedTeamSimBlockMessage
-      : ""
-  }
->
-  Simulate full season
-</button>
+            <button
+              className={`px-4 py-2 rounded transition ${
+                selectedTeamCanSim
+                  ? "bg-blue-600 hover:bg-blue-500"
+                  : "bg-blue-600 hover:bg-blue-500 ring-1 ring-blue-300/30"
+              }`}
+              onClick={() => handleSimSeason()}
+              title={!selectedTeamCanSim ? selectedTeamSimBlockMessage : ""}
+            >
+              Simulate full season
+            </button>
 
             <button
               className="px-4 py-2 bg-neutral-700 rounded hover:bg-neutral-600"

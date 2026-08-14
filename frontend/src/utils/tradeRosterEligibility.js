@@ -49,8 +49,54 @@ function isPendingUnsignedRookie(player = {}) {
   );
 }
 
+function hasPositiveSalaryContract(player = {}) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : null;
+  const salaries = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+  return Boolean(contract && salaries.some((value) => Math.max(0, toNum(value, 0)) > 0));
+}
+
+function hasStandardSalarySignal(player = {}) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : null;
+  const salaries = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+  const maxSalary = salaries.reduce((max, value) => Math.max(max, toNum(value, 0)), 0);
+  return maxSalary >= 1_500_000;
+}
+
+function hasExplicitStandardRosterSignal(player = {}) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+  const tokens = [
+    player?.contractType,
+    player?.rosterStatus,
+    player?.assignmentStatus,
+    player?.status,
+    contract?.type,
+    contract?.contractType,
+    contract?.rosterStatus,
+    meta?.contractType,
+    meta?.rosterStatus,
+    meta?.assignmentStatus,
+  ].map(normalized);
+
+  return tokens.some((token) =>
+    token === "standard" ||
+    token === "standard_contract" ||
+    token === "nba_standard" ||
+    token === "active_roster" ||
+    token === "roster"
+  );
+}
+
 export function isDevelopmentRosterPlayer(player = {}) {
   if (!player || typeof player !== "object") return false;
+
+  // Patch 29: a player who is now on a real standard contract should not stay
+  // permanently trade-hidden because old two-way/stash flags survived a free
+  // agency signing or rookie conversion. Current explicit development markers
+  // still win, but a positive standard-contract signal clears stale booleans.
+  if ((player.isTwoWay || player.isStash || player.twoWay || player.stash) && hasPositiveSalaryContract(player) && (hasExplicitStandardRosterSignal(player) || hasStandardSalarySignal(player))) {
+    return false;
+  }
 
   if (player.isTwoWay || player.isStash || player.twoWay || player.stash) return true;
 

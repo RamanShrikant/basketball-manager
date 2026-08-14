@@ -467,6 +467,28 @@ def _mega_league_rank_for_team(league: Dict[str, Any], context: Dict[str, Any], 
     return None
 
 
+def _mega_healthy_strength_rank_for_team(league: Dict[str, Any], team_name: str) -> Optional[int]:
+    """Rank teams by healthy roster strength, ignoring injury-driven records.
+
+    Mega trades are supposed to be rare franchise-direction moves, not a way for
+    an unlucky top roster to sell a 90+ star because the standings temporarily
+    sagged. This rank uses only the current standard roster's top-end talent.
+    """
+    teams = _all_teams(league)
+    if not team_name or not teams:
+        return None
+    ranked = sorted(
+        teams,
+        key = lambda team: (_top_avg(team, 8), _top_avg(team, 6), _top_avg(team, 3)),
+        reverse = True,
+    )
+    target = _norm(team_name)
+    for index, team in enumerate(ranked, start = 1):
+        if _norm(_team_name(team)) == target:
+            return index
+    return None
+
+
 def _mega_seller_direction(
     league: Dict[str, Any],
     context: Dict[str, Any],
@@ -517,6 +539,9 @@ def _strict_mega_seller_block_reason(
 ) -> str:
     direction = _mega_seller_direction(league, context, seller, seller_ctx)
     conference_rank = direction.get("conferenceRank")
+    healthy_rank = _mega_healthy_strength_rank_for_team(league, _team_name(seller))
+    if healthy_rank is not None and healthy_rank <= 14:
+        return "seller_top14_healthy_strength"
     if conference_rank is not None and conference_rank <= 7:
         return "seller_top7_conference"
     if not direction.get("eligible"):

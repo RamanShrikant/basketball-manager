@@ -3,6 +3,8 @@ import { getAllTeamsFromLeague, getDraftYear, getSeasonStartYear } from "./seaso
 export const UPCOMING_DRAFT_CLASS_PREFIX = "bm_upcoming_draft_class_";
 export const DRAFT_STARTED_PREFIX = "bm_draft_started_";
 
+const UPCOMING_DRAFT_CLASS_SCHEMA_VERSION = 2;
+
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
 const CUSTOM_DRAFT_CLASS_KEY = "bm_custom_draft_class_v1";
 const CUSTOM_DRAFT_CLASS_MODE_KEY = "bm_draft_class_mode_v1";
@@ -89,6 +91,13 @@ export function normalizeDraftClassRows(payload, seasonYear) {
     const projection = Number(row?.draftProjection || row?.trueRank || row?.rank || index + 1);
     const trueRank = Number(row?.trueRank || row?.draftProjection || row?.rank || index + 1);
     const name = row?.name || row?.playerName || `Prospect ${index + 1}`;
+    const primaryPos = row?.pos || row?.position || "-";
+    const secondaryPos = [
+      row?.secondaryPos,
+      row?.secondaryPosition,
+      row?.secondPos,
+      row?.secondary_pos,
+    ].find((value) => value && String(value).trim() && String(value).trim() !== primaryPos) || "";
 
     return {
       ...row,
@@ -101,8 +110,10 @@ export function normalizeDraftClassRows(payload, seasonYear) {
       trueRank: Number.isFinite(trueRank) ? trueRank : index + 1,
       overall: Number(row?.overall ?? row?.ovr ?? row?.rating ?? 0) || 0,
       potential: Number(row?.potential ?? row?.pot ?? row?.potential_rating ?? 0) || 0,
-      pos: row?.pos || row?.position || "-",
+      pos: primaryPos,
       position: row?.position || row?.pos || "-",
+      secondaryPos,
+      secondaryPosition: secondaryPos,
       archetype: row?.archetype || row?.type || "Prospect",
       tier: row?.tier || "Draft Prospect",
     };
@@ -203,6 +214,13 @@ export function readCustomDraftClassSetupForYear(seasonYear) {
 
 function slimUpcomingDraftProspect(row = {}, index = 0, seasonYear = 2026) {
   const name = row?.name || row?.playerName || `Prospect ${index + 1}`;
+  const primaryPos = row?.pos || row?.position || "-";
+  const secondaryPos = [
+    row?.secondaryPos,
+    row?.secondaryPosition,
+    row?.secondPos,
+    row?.secondary_pos,
+  ].find((value) => value && String(value).trim() && String(value).trim() !== primaryPos) || "";
   return {
     id: row?.id || row?.playerId || row?.prospectId || `upcoming_${seasonYear}_${String(index + 1).padStart(3, "0")}`,
     name,
@@ -213,8 +231,10 @@ function slimUpcomingDraftProspect(row = {}, index = 0, seasonYear = 2026) {
     trueRank: Number(row?.trueRank || row?.draftProjection || row?.rank || index + 1),
     rank: Number(row?.rank || row?.draftProjection || row?.trueRank || index + 1),
     boardRank: Number(row?.boardRank || row?.rank || row?.draftProjection || index + 1),
-    pos: row?.pos || row?.position || "-",
+    pos: primaryPos,
     position: row?.position || row?.pos || "-",
+    secondaryPos,
+    secondaryPosition: secondaryPos,
     age: Number(row?.age ?? row?.playerAge ?? 0) || 0,
     height: row?.height ?? null,
     weight: row?.weight ?? null,
@@ -253,6 +273,7 @@ function slimUpcomingDraftProspect(row = {}, index = 0, seasonYear = 2026) {
 function buildStorableUpcomingDraftPreview(payload = {}, rows = []) {
   const seasonYear = Number(payload?.seasonYear || payload?.draftClassYear || 2026);
   return {
+    schemaVersion: UPCOMING_DRAFT_CLASS_SCHEMA_VERSION,
     seasonYear,
     draftClassYear: seasonYear,
     sourceMode: payload?.sourceMode || "auto",
@@ -282,6 +303,19 @@ export function readUpcomingDraftClassForYear(seasonYear) {
   const resolvedYear = Number(seasonYear || 2026);
   const saved = safeJSON(localStorage.getItem(getUpcomingDraftClassStorageKey(resolvedYear)), null);
   if (!saved || Number(saved.seasonYear) !== resolvedYear) return null;
+
+  // Auto-generated previews saved before schema v2 lost secondary positions while
+  // being slimmed for localStorage. Force those old auto previews to regenerate;
+  // custom classes are separately fingerprinted and normalized on read.
+  if (
+    String(saved?.sourceMode || "auto") === "auto" &&
+    Number(saved?.schemaVersion || 0) < UPCOMING_DRAFT_CLASS_SCHEMA_VERSION
+  ) {
+    try {
+      localStorage.removeItem(getUpcomingDraftClassStorageKey(resolvedYear));
+    } catch {}
+    return null;
+  }
 
   const rows = normalizeDraftClassRows(saved, resolvedYear);
   if (!rows.length) return null;
@@ -314,6 +348,7 @@ export function saveUpcomingDraftClassForYear(payload) {
     // and persist only the smallest stable board possible for refresh recovery.
     try {
       const emergency = {
+        schemaVersion: UPCOMING_DRAFT_CLASS_SCHEMA_VERSION,
         seasonYear: resolvedYear,
         draftClassYear: resolvedYear,
         sourceMode: next.sourceMode,
@@ -334,6 +369,8 @@ export function saveUpcomingDraftClassForYear(payload) {
           rank: Number(row?.rank || row?.draftProjection || row?.trueRank || index + 1),
           pos: row?.pos || row?.position || "-",
           position: row?.position || row?.pos || "-",
+          secondaryPos: row?.secondaryPos || row?.secondaryPosition || "",
+          secondaryPosition: row?.secondaryPosition || row?.secondaryPos || "",
           overall: Number(row?.overall ?? row?.ovr ?? row?.rating ?? 0) || 0,
           potential: Number(row?.potential ?? row?.pot ?? row?.potential_rating ?? 0) || 0,
           age: Number(row?.age ?? 0) || 0,

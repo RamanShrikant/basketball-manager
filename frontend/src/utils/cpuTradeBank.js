@@ -1461,7 +1461,7 @@ function buildMegaDirectionMap(leagueData = {}, context = {}) {
     }
     const under500 = row.pct != null && row.pct < 0.5;
     const bottomHalf = row.leagueRank != null && row.leagueRank >= 16;
-    const protectedHealthyCore = row.healthyPowerRank != null && row.healthyPowerRank <= 12;
+    const protectedHealthyCore = row.healthyPowerRank != null && row.healthyPowerRank <= 14;
     out.set(normalizeTeamName(row.teamName), {
       phase,
       pct: row.pct,
@@ -1497,7 +1497,7 @@ function megaSellerDirection(leagueData = {}, context = {}, sellerTeam = {}) {
   }
   const under500 = pct != null && pct < 0.5;
   const bottomHalf = leagueRank != null && leagueRank >= 16;
-  const protectedHealthyCore = healthyPowerRank != null && healthyPowerRank <= 12;
+  const protectedHealthyCore = healthyPowerRank != null && healthyPowerRank <= 14;
   return {
     phase,
     pct,
@@ -1515,7 +1515,7 @@ function megaSellerDirection(leagueData = {}, context = {}, sellerTeam = {}) {
 function strictMegaSellerBlockReason(leagueData = {}, context = {}, sellerTeam = {}, targetPlayer = null) {
   const direction = megaSellerDirection(leagueData, context, sellerTeam);
   if (direction.conferenceRank != null && direction.conferenceRank <= 7) return "seller_top7_conference";
-  if (direction.protectedHealthyCore) return "seller_top12_healthy_team_ovr";
+  if (direction.protectedHealthyCore) return "seller_top14_healthy_team_ovr";
   if (!direction.eligible) return "seller_not_mid_bad_retool_or_rebuild";
   if (targetPlayer) {
     const ovr = playerOvr(targetPlayer);

@@ -1,0 +1,17 @@
+Patch 29 test results
+
+Passed:
+- Python compile: frontend/public/python/free_agency_logic.py
+- Python compile: frontend/public/python/cpu_cpu_trade_logic.py
+- JS syntax check: frontend/src/utils/tradeRosterEligibility.js
+- JS syntax check: frontend/src/utils/playerCareerHistory.js
+- JS syntax check: frontend/src/utils/cpuTradeBank.js
+- JS syntax check: frontend/src/utils/userTradeRules.js
+- Smoke test: stale former two-way player with a real standard salary is no longer classified as development roster.
+- Smoke test: current true two-way/stash player remains classified as development roster.
+- FA cap-room smoke test: Phoenix/Kawhi $60.92M now blocks as cap-space-after-holds shortage by $4,226,924 instead of misleading MLE overage.
+- FA cap-room smoke test: Phoenix/Kawhi $54.99M remains legal using cap room after cap-hold clearance.
+- Mega-trade guard grep verified top-14 healthy OVR guard in Python and JS paths.
+
+Not run in sandbox:
+- Full Vite production build, because this sandbox copy does not have Vite/node_modules installed. The user's Windows build passed for Patch 28; Patch 29 should be validated locally with `cd frontend; npm run build` after applying.
