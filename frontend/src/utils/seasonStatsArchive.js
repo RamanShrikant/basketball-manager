@@ -1,14 +1,37 @@
 import LZString from "lz-string";
+import {
+  deleteAppDataFromDB,
+  loadAppDataFromDB,
+  saveAppDataToDB,
+} from "./indexedDbStorage.js";
+import { readScheduleFromStorage } from "./scheduleStorage.js";
 
 export const PLAYER_STATS_KEY = "bm_player_stats_v1";
 export const POSTSEASON_KEY = "bm_postseason_v2";
 export const PLAYOFF_RESULTS_KEY = "bm_results_v2";
-export const REGULAR_SCHEDULE_KEY = "bm_schedule_v3";
 export const REGULAR_RESULT_INDEX_KEY = "bm_results_index_v3";
 export const REGULAR_RESULT_PREFIX = "bm_result_v3_";
 export const SEASON_STATS_ARCHIVE_VERSION = "season_stats_archive_v1";
 export const COMPLETED_STATS_BACKUP_KEY = "bm_completed_stats_archive_v2";
 export const COMPLETED_REGULAR_PLAYER_STATS_KEY = "bm_completed_regular_player_stats_v2";
+
+let completedStatsBackupCache = null;
+let completedRegularPlayerStatsBackupCache = null;
+let seasonStatsStorageInitialized = false;
+let seasonStatsWriteChain = Promise.resolve();
+let seasonStatsLastPersistError = null;
+
+function queueSeasonStatsPersistence(operation) {
+  seasonStatsWriteChain = seasonStatsWriteChain
+    .catch(() => {})
+    .then(operation)
+    .catch((error) => {
+      seasonStatsLastPersistError = error;
+      console.warn("[SeasonStatsArchive] IndexedDB persistence failed", error);
+      return false;
+    });
+  return seasonStatsWriteChain;
+}
 
 const BEST_OF_SEVEN_HOME_ORDER = ["H", "H", "A", "A", "H", "A", "H"];
 
@@ -331,13 +354,23 @@ function snapshotIsUseful(snapshot) {
 }
 
 function readCompletedStatsBackup() {
+  if (completedStatsBackupCache && typeof completedStatsBackupCache === "object") {
+    return completedStatsBackupCache;
+  }
   const backup = readStorageValue(COMPLETED_STATS_BACKUP_KEY, null);
   if (!backup || typeof backup !== "object") return null;
+  completedStatsBackupCache = backup;
   return backup;
 }
 
 function readCompletedRegularPlayerStatsBackup(seasonYear = null) {
-  const backup = readStorageValue(COMPLETED_REGULAR_PLAYER_STATS_KEY, null);
+  let backup = completedRegularPlayerStatsBackupCache;
+  if (!backup || typeof backup !== "object") {
+    backup = readStorageValue(COMPLETED_REGULAR_PLAYER_STATS_KEY, null);
+    if (backup && typeof backup === "object") {
+      completedRegularPlayerStatsBackupCache = backup;
+    }
+  }
   if (!backup || typeof backup !== "object") return null;
   const targetYear = safeNumber(seasonYear, 0);
   if (targetYear && safeNumber(backup?.seasonYear, 0) !== targetYear) return null;
@@ -352,11 +385,25 @@ function persistCompletedRegularPlayerStatsBackup(seasonYear, playerStatsMap) {
   if (!playerStatsMap || typeof playerStatsMap !== "object") return;
   if (!Object.values(playerStatsMap).some(isRealRawPlayerStatRow)) return;
 
-  writeCompressedStorageValue(COMPLETED_REGULAR_PLAYER_STATS_KEY, {
+  const payload = {
     version: SEASON_STATS_ARCHIVE_VERSION,
     seasonYear: year,
     playerStatsMap,
     updatedAt: new Date().toISOString(),
+  };
+  completedRegularPlayerStatsBackupCache = payload;
+  queueSeasonStatsPersistence(async () => {
+    try {
+      await saveAppDataToDB(COMPLETED_REGULAR_PLAYER_STATS_KEY, payload);
+      seasonStatsLastPersistError = null;
+      try { localStorage.removeItem(COMPLETED_REGULAR_PLAYER_STATS_KEY); } catch {}
+      return true;
+    } catch (error) {
+      // Critical recovery only: preserve the last completed regular-season
+      // snapshot in compressed localStorage if IndexedDB is unavailable.
+      writeCompressedStorageValue(COMPLETED_REGULAR_PLAYER_STATS_KEY, payload);
+      throw error;
+    }
   });
 }
 
@@ -384,13 +431,125 @@ function persistCompletedStatsBackup(seasonYear, regular, playoffs) {
   // snapshot created by a later offseason/progression cleanup path.
   if (!snapshotIsUseful(nextRegular) && !snapshotIsUseful(nextPlayoffs)) return;
 
-  writeCompressedStorageValue(COMPLETED_STATS_BACKUP_KEY, {
+  const payload = {
     version: SEASON_STATS_ARCHIVE_VERSION,
     seasonYear: year,
     regular: nextRegular,
     playoffs: nextPlayoffs,
     updatedAt: new Date().toISOString(),
+  };
+  completedStatsBackupCache = payload;
+  queueSeasonStatsPersistence(async () => {
+    try {
+      await saveAppDataToDB(COMPLETED_STATS_BACKUP_KEY, payload);
+      seasonStatsLastPersistError = null;
+      try { localStorage.removeItem(COMPLETED_STATS_BACKUP_KEY); } catch {}
+      return true;
+    } catch (error) {
+      // Critical recovery only: preserve the last completed-season archive in
+      // compressed localStorage if IndexedDB is unavailable.
+      writeCompressedStorageValue(COMPLETED_STATS_BACKUP_KEY, payload);
+      throw error;
+    }
   });
+}
+
+export async function flushSeasonStatsArchiveStorageWrites() {
+  await seasonStatsWriteChain.catch(() => {});
+}
+
+export async function initializeSeasonStatsArchiveStorage({ reset = false } = {}) {
+  if (seasonStatsStorageInitialized && !reset) return getSeasonStatsArchiveStorageReport();
+
+  if (reset) {
+    completedStatsBackupCache = null;
+    completedRegularPlayerStatsBackupCache = null;
+    try { localStorage.removeItem(COMPLETED_STATS_BACKUP_KEY); } catch {}
+    try { localStorage.removeItem(COMPLETED_REGULAR_PLAYER_STATS_KEY); } catch {}
+    await Promise.allSettled([
+      deleteAppDataFromDB(COMPLETED_STATS_BACKUP_KEY),
+      deleteAppDataFromDB(COMPLETED_REGULAR_PLAYER_STATS_KEY),
+    ]);
+    seasonStatsStorageInitialized = true;
+    return getSeasonStatsArchiveStorageReport();
+  }
+
+  let dbCompleted = null;
+  let dbRegular = null;
+  try {
+    [dbCompleted, dbRegular] = await Promise.all([
+      loadAppDataFromDB(COMPLETED_STATS_BACKUP_KEY),
+      loadAppDataFromDB(COMPLETED_REGULAR_PLAYER_STATS_KEY),
+    ]);
+  } catch (error) {
+    console.warn("[SeasonStatsArchive] IndexedDB bootstrap read failed", error);
+  }
+
+  const legacyCompleted = readStorageValue(COMPLETED_STATS_BACKUP_KEY, null);
+  const legacyRegular = readStorageValue(COMPLETED_REGULAR_PLAYER_STATS_KEY, null);
+  completedStatsBackupCache = legacyCompleted || dbCompleted || null;
+  completedRegularPlayerStatsBackupCache = legacyRegular || dbRegular || null;
+
+  const migrations = [];
+  if (legacyCompleted) {
+    migrations.push(
+      saveAppDataToDB(COMPLETED_STATS_BACKUP_KEY, legacyCompleted).then(() => {
+        localStorage.removeItem(COMPLETED_STATS_BACKUP_KEY);
+      })
+    );
+  }
+  if (legacyRegular) {
+    migrations.push(
+      saveAppDataToDB(COMPLETED_REGULAR_PLAYER_STATS_KEY, legacyRegular).then(() => {
+        localStorage.removeItem(COMPLETED_REGULAR_PLAYER_STATS_KEY);
+      })
+    );
+  }
+
+  if (migrations.length) {
+    const settled = await Promise.allSettled(migrations);
+    const failed = settled.find((row) => row.status === "rejected");
+    if (failed) {
+      seasonStatsLastPersistError = failed.reason;
+      console.warn("[SeasonStatsArchive] legacy backup migration incomplete; localStorage fallback kept where needed", failed.reason);
+    } else {
+      seasonStatsLastPersistError = null;
+    }
+  }
+
+  seasonStatsStorageInitialized = true;
+  return getSeasonStatsArchiveStorageReport();
+}
+
+export async function getSeasonStatsArchiveStorageReport() {
+  let dbCompleted = null;
+  let dbRegular = null;
+  let indexedDbReadable = false;
+  try {
+    [dbCompleted, dbRegular] = await Promise.all([
+      loadAppDataFromDB(COMPLETED_STATS_BACKUP_KEY),
+      loadAppDataFromDB(COMPLETED_REGULAR_PLAYER_STATS_KEY),
+    ]);
+    indexedDbReadable = true;
+  } catch {}
+
+  return {
+    initialized: seasonStatsStorageInitialized,
+    storage: "indexedDB",
+    completedSeasonYear: safeNumber(completedStatsBackupCache?.seasonYear, 0) || null,
+    completedRegularSeasonYear:
+      safeNumber(completedRegularPlayerStatsBackupCache?.seasonYear, 0) || null,
+    indexedDbCompletedSeasonYear: safeNumber(dbCompleted?.seasonYear, 0) || null,
+    indexedDbCompletedRegularSeasonYear: safeNumber(dbRegular?.seasonYear, 0) || null,
+    indexedDbReadable,
+    localStorageCompletedBackupPresent:
+      typeof localStorage !== "undefined" && localStorage.getItem(COMPLETED_STATS_BACKUP_KEY) !== null,
+    localStorageRegularBackupPresent:
+      typeof localStorage !== "undefined" && localStorage.getItem(COMPLETED_REGULAR_PLAYER_STATS_KEY) !== null,
+    lastPersistError: seasonStatsLastPersistError
+      ? String(seasonStatsLastPersistError?.message || seasonStatsLastPersistError)
+      : null,
+  };
 }
 
 function addBoxRow(target, teamName, row) {
@@ -478,7 +637,7 @@ function readRegularSeasonResultsV3() {
 }
 
 function buildRegularSeasonRowsFromStorage(leagueData) {
-  const schedule = readStorageValue(REGULAR_SCHEDULE_KEY, {}) || {};
+  const schedule = readScheduleFromStorage() || {};
   const results = readRegularSeasonResultsV3();
   const teams = getAllTeamsFromLeague(leagueData);
   const byName = new Map(
@@ -556,7 +715,7 @@ function buildRegularSeasonRowsFromStorage(leagueData) {
 
 
 function buildRegularPlayerStatsFromStoredBoxScores() {
-  const schedule = readStorageValue(REGULAR_SCHEDULE_KEY, {}) || {};
+  const schedule = readScheduleFromStorage() || {};
   const results = readRegularSeasonResultsV3();
   const scheduleById = new Map();
 

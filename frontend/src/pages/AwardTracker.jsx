@@ -14,11 +14,11 @@ import {
   saveClutchStats,
 } from "../utils/clutchAwards.js";
 import { loadBoxScoresByGameIdsFromDB } from "../utils/indexedDbStorage.js";
+import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
 
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const PLAYER_STATS_KEY = "bm_player_stats_v1";
-const SCHED_KEY = "bm_schedule_v3";
 const META_KEY = "bm_league_meta_v1";
 
 const TRACKER_MIN_GAME_SHARE = 0.8;
@@ -942,7 +942,7 @@ export default function AwardTracker() {
     loadMaybeCompressedJSON(PLAYER_STATS_KEY, {})
   );
   const [clutchStats, setClutchStats] = useState(() => loadClutchStats());
-  const [scheduleByDate, setScheduleByDate] = useState(() => loadMaybeCompressedJSON(SCHED_KEY, {}));
+  const [scheduleByDate, setScheduleByDate] = useState(() => readScheduleFromStorage());
   const [resultsById, setResultsById] = useState(() => loadAllResultsV3());
 
   const trackerSeasonYear = useMemo(() => getTrackerSeasonYear(leagueData), [leagueData]);
@@ -959,7 +959,7 @@ export default function AwardTracker() {
         return;
       }
 
-      const schedule = loadMaybeCompressedJSON(SCHED_KEY, {});
+      const schedule = readScheduleFromStorage();
       const games = Object.values(schedule || {})
         .flat()
         .filter((game) => game?.id && !String(game.id).startsWith("PO_") && !String(game.id).startsWith("PI_"));
@@ -989,7 +989,7 @@ export default function AwardTracker() {
     const refreshSnapshot = () => {
       setStatsMap(loadMaybeCompressedJSON(PLAYER_STATS_KEY, {}));
       setClutchStats(loadClutchStats(trackerSeasonYear));
-      setScheduleByDate(loadMaybeCompressedJSON(SCHED_KEY, {}));
+      setScheduleByDate(readScheduleFromStorage());
       setResultsById(loadAllResultsV3());
     };
 

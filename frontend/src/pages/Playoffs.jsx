@@ -31,6 +31,7 @@ import {
   readInjurySafeGameplanMinutes,
   recoverPlayersForDate,
 } from "../utils/injurySystem.js";
+import { clearScheduleStorage, readScheduleFromStorage } from "../utils/scheduleStorage.js";
 
 const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
@@ -163,7 +164,6 @@ function clearAllResultsV3() {
 
 // Playoff results (keep existing v2 blob behavior)
 const RESULT_KEY = "bm_results_v2"; // (used here for playoff games PO_/PI_)
-const SCHED_KEY = "bm_schedule_v3";
 const POSTSEASON_KEY = "bm_postseason_v2";
 const CHAMP_KEY = "bm_champ_v1";
 const FINALS_MVP_KEY = "bm_finals_mvp_v1"; // ✅ PATCH (Finals MVP)
@@ -272,7 +272,7 @@ function cleanupOldSeasonStorageForPostseasonSave() {
   // localStorage quota crashes.
   try {
     clearAllResultsV3();
-    localStorage.removeItem(SCHED_KEY);
+    clearScheduleStorage();
   } catch {}
 }
 
@@ -326,11 +326,7 @@ function savePlayoffResults(results) {
 }
 
 function loadSchedule() {
-  try {
-    return JSON.parse(localStorage.getItem(SCHED_KEY) || "{}");
-  } catch {
-    return {};
-  }
+  return readScheduleFromStorage();
 }
 function scoreToObj(score) {
   if (!score) return null;
@@ -2262,7 +2258,7 @@ export default function Playoffs() {
     // ✅ SURGICAL PATCH: also wipe regular-season V3 results (so seeding resets cleanly)
     clearAllResultsV3();
 
-    localStorage.removeItem(SCHED_KEY);
+    clearScheduleStorage();
     localStorage.removeItem(CHAMP_KEY);
     localStorage.removeItem(FINALS_MVP_KEY); // ✅ PATCH (Finals MVP)
     localStorage.removeItem(FINALS_MVP_SEEN_KEY);

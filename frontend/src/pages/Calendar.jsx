@@ -65,6 +65,13 @@ import { appendRegularSeasonAwardsToLeagueHistory } from "../utils/leagueHistory
 import { archiveCurrentSeasonIntoPlayerCards } from "../utils/playerCareerHistory.js";
 import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.js";
 import {
+  cacheScheduleForRuntime,
+  clearScheduleStorage,
+  hydrateScheduleTeamMetadata,
+  persistScheduleStructure,
+  readScheduleFromStorage,
+} from "../utils/scheduleStorage.js";
+import {
   enqueueCpuTradeLeagueSave,
   flushCpuTradeLeagueSaves,
 } from "../utils/cpuTradeSaveQueue.js";
@@ -2654,7 +2661,6 @@ const selectedTeamCanSim = !selectedTeamSimBlockMessage;
   }, [selectedTeam]);
 
   /* ----------------------------- LOCAL STORAGE KEYS ----------------------------- */
-  const SCHED_KEY = "bm_schedule_v3";
   const RESULT_KEY = "bm_results_v2";
   const PLAYER_STATS_KEY = "bm_player_stats_v1";
   const AWARD_DISPLAY_STATS_KEY = "bm_award_display_stats_v1";
@@ -3589,24 +3595,15 @@ window.__results = resultsById;
 
 
 
-  const saveSchedule = (obj) => {
+  const saveSchedule = (obj, { persistStructure = false } = {}) => {
     setScheduleByDate(obj);
-    const payload = JSON.stringify(obj);
-    try {
-      localStorage.setItem(SCHED_KEY, payload);
-    } catch (e) {
-      if (!isQuotaError(e)) {
-        console.warn("[Calendar] schedule save failed", e);
-        return;
-      }
+    cacheScheduleForRuntime(obj);
 
-      clearNonCriticalQuotaCaches();
-      try {
-        localStorage.setItem(SCHED_KEY, payload);
-      } catch (retryError) {
-        console.warn("[Calendar] schedule save failed after quota recovery", retryError);
-      }
-    }
+    // Regular-season structure is immutable once generated. Simulation calls
+    // this function frequently only to advance in-memory `played` flags; those
+    // flags are already durable in Results V3 and must not trigger a full
+    // schedule rewrite.
+    if (persistStructure) persistScheduleStructure(obj);
   };
 
 
@@ -4295,7 +4292,7 @@ useEffect(() => {
 
   const forceDevFreshSeason = consumeDevFreshCalendarBoot();
   if (forceDevFreshSeason) {
-    try { localStorage.removeItem(SCHED_KEY); } catch {}
+    clearScheduleStorage();
     clearAllResultsV3();
     removeLegacyResultsBlob();
     try { localStorage.removeItem(PLAYER_STATS_KEY); } catch {}
@@ -4342,11 +4339,7 @@ useEffect(() => {
   let parsedPlayerStats = forceDevFreshSeason ? {} : loadPlayerStats();
 
   if (!forceDevFreshSeason) {
-    try {
-      parsedSched = JSON.parse(localStorage.getItem(SCHED_KEY)) || {};
-    } catch {
-      parsedSched = {};
-    }
+    parsedSched = hydrateScheduleTeamMetadata(readScheduleFromStorage(), teams);
   }
 
   const storedScheduleHasGamesBeforeLoad = Object.values(parsedSched || {}).some(
@@ -4467,7 +4460,7 @@ useEffect(() => {
       console.log("[Calendar] restored played flags from stored results:", hydrated.hydratedCount);
     }
 
-    saveSchedule(rebuilt);          // writes storage + sets state
+    saveSchedule(rebuilt, { persistStructure: true }); // persist immutable structure once + set state
     setResultsById(parsedResults);  // keep results if they exist
 
     if (hasValidResults && (!hasPlayerStats || !hasRoleFields)) {

@@ -8,10 +8,10 @@ import { buildOffseasonTradeEvaluationLeague } from "../utils/offseasonTradeCont
 import PageFade from "../components/PageFade";
 import "../styles/BMPageBackground.css";
 import "../styles/BMAnimations.css";
+import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
 
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
-const SCHEDULE_KEY = "bm_schedule_v3";
 const POWER_RANKINGS_AUTO_RATINGS_CACHE_KEY = "bm_power_rankings_healthy_auto_ratings_v6";
 
 const toNum = (value, fallback = 0) => {
@@ -436,7 +436,7 @@ function getTeamPotentialForPowerRankings(team, exactCurrentOverall = 0) {
 }
 
 function loadSchedule() {
-  return parseMaybeCompressed(localStorage.getItem(SCHEDULE_KEY), {}) || {};
+  return readScheduleFromStorage();
 }
 
 function resultV3Key(gameId) {

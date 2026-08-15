@@ -11,6 +11,7 @@ import {
   withNormalizedSeasonContext,
 } from "../utils/seasonContext.js";
 import { DIVISION_NAMES, getDefaultDivisionForTeam, getDivisionConference, normalizeLeagueDivisions } from "../utils/leagueDivisions.js";
+import { clearScheduleStorage } from "../utils/scheduleStorage.js";
 
 const DRAFT_CLASSES_STORAGE_KEY = "bm_custom_draft_classes_v1";
 const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
@@ -64,8 +65,8 @@ function writeLeagueMetaSeason(seasonYear, league = {}) {
 }
 
 function clearRuntimeSeasonStores() {
+  clearScheduleStorage();
   const exactKeys = [
-    "bm_schedule_v3",
     "bm_results_v2",
     "bm_results_index_v3",
     "bm_player_stats_v1",

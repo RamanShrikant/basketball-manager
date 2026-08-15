@@ -9,10 +9,10 @@ import {
 } from "./ensureGameplans.js";
 import { evaluateCpuContractFriction } from "./tradeContractValue.js";
 import { evaluateTradePickImpact } from "./tradePickValue.js";
+import { getScheduleStructureFingerprint, readScheduleFromStorage } from "./scheduleStorage.js";
 
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
-const SCHEDULE_KEY = "bm_schedule_v3";
 const evaluationPlayerIndexCache = new WeakMap();
 
 const TEAM_IMPACT_EPS = 0.015;
@@ -584,7 +584,7 @@ function leaguePowerSignature(leagueData, teams = []) {
     ? "attached-records"
     : [
         safeLocalStorageGet(RESULT_V3_INDEX_KEY) || "",
-        safeLocalStorageGet(SCHEDULE_KEY) || "",
+        getScheduleStructureFingerprint(readScheduleFromStorage()),
       ].join("::");
 
   return [
@@ -956,7 +956,7 @@ function resultV3Key(gameId) {
 }
 
 function loadSchedule() {
-  return parseMaybeCompressed(safeLocalStorageGet(SCHEDULE_KEY), {}) || {};
+  return readScheduleFromStorage();
 }
 
 function loadResultsV3() {

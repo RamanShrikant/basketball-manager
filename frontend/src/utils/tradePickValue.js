@@ -4,10 +4,10 @@ import {
   buildSmartRotation,
   calculateTeamPotentialRating,
 } from "./ensureGameplans.js";
+import { getScheduleStructureFingerprint, readScheduleFromStorage } from "./scheduleStorage.js";
 
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
-const SCHEDULE_KEY = "bm_schedule_v3";
 
 const CPU_INCOMING_PICK_VALUE_MULT = 1.06;
 const CPU_OUTGOING_PICK_VALUE_MULT = 1.125;
@@ -284,7 +284,7 @@ function resultV3Key(gameId) {
 }
 
 function loadSchedule() {
-  return parseMaybeCompressed(safeLocalStorageGet(SCHEDULE_KEY), {}) || {};
+  return readScheduleFromStorage();
 }
 
 function loadResultsV3() {
@@ -550,7 +550,7 @@ function getPickStorageSignature(leagueData = {}) {
     ? "attached-records"
     : [
         safeLocalStorageGet(RESULT_V3_INDEX_KEY) || "",
-        safeLocalStorageGet(SCHEDULE_KEY) || "",
+        getScheduleStructureFingerprint(readScheduleFromStorage()),
       ].join("::");
 
   return [

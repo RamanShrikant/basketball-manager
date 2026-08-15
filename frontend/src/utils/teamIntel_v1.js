@@ -12,10 +12,10 @@ import {
   sortDraftPickAssets,
 } from "./draftPicks.js";
 import { getContractSeasonYear } from "./seasonContext.js";
+import { readScheduleFromStorage } from "./scheduleStorage.js";
 
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
-const SCHEDULE_KEY = "bm_schedule_v3";
 const POWER_RANKINGS_AUTO_RATINGS_CACHE_KEY = "bm_power_rankings_auto_ratings_v5";
 
 const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
@@ -118,7 +118,7 @@ function safeLocalStorageGet(key, fallback = null) {
 }
 
 function loadSchedule() {
-  return parseMaybeCompressed(safeLocalStorageGet(SCHEDULE_KEY), {}) || {};
+  return readScheduleFromStorage();
 }
 
 function resultV3Key(gameId) {

@@ -12,6 +12,9 @@ import {
   updateBasketballManagerDiagnosticsContext,
 } from "./utils/bmDiagnostics.js";
 import { initializeTradeDeskStorage } from "./utils/tradeDeskFeed.js";
+import { initializeScheduleStorage } from "./utils/scheduleStorage.js";
+import { initializeUpcomingDraftClassStorage } from "./utils/upcomingDraftClass.js";
+import { initializeSeasonStatsArchiveStorage } from "./utils/seasonStatsArchive.js";
 
 // ------------------------------
 // DEV BOOT RESET (npm run dev)
@@ -86,13 +89,22 @@ function DiagnosticsBridge() {
 async function bootstrap() {
   const devFreshReset = devBootResetIfNeeded();
 
-  try {
-    const storageReport = await initializeTradeDeskStorage({ reset: devFreshReset });
-    console.log("[TradeDeskFeed] IndexedDB storage ready", storageReport);
-  } catch (error) {
-    // Storage migration must never prevent the game UI from booting. The
-    // Trade Desk helpers keep an in-memory compatibility cache if IDB fails.
-    console.warn("[TradeDeskFeed] storage bootstrap failed; continuing with in-memory cache", error);
+  const storageBootstraps = [
+    ["ScheduleStorage", initializeScheduleStorage],
+    ["UpcomingDraft", initializeUpcomingDraftClassStorage],
+    ["SeasonStatsArchive", initializeSeasonStatsArchiveStorage],
+    ["TradeDeskFeed", initializeTradeDeskStorage],
+  ];
+
+  for (const [label, initializeStorage] of storageBootstraps) {
+    try {
+      const storageReport = await initializeStorage({ reset: devFreshReset });
+      console.log(`[${label}] IndexedDB storage ready`, storageReport);
+    } catch (error) {
+      // Storage migration must never prevent the game UI from booting. Each
+      // storage layer keeps a synchronous runtime/legacy compatibility path.
+      console.warn(`[${label}] storage bootstrap failed; continuing with compatibility cache`, error);
+    }
   }
 
   installBasketballManagerDiagnostics();

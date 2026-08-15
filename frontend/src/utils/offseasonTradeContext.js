@@ -1,12 +1,12 @@
 import LZString from "lz-string";
 import { projectPlayerForNextSeason, progressionProjectionSignature } from "./offseasonProgressionProjection.js";
+import { readScheduleFromStorage } from "./scheduleStorage.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
-const SCHEDULE_KEY = "bm_schedule_v3";
 const CUSTOM_DRAFT_CLASS_KEY = "bm_custom_draft_class_v1";
 const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
 
@@ -314,7 +314,7 @@ function buildPreLotteryExpectedSlots(records = {}, lotterySystem = "legacy_14")
 
 function captureRecordSnapshot(leagueData = {}, seasonYear = 0) {
   const existing = safeJSON(safeStorageGet("bm_offseason_trade_record_snapshot_v1"), null);
-  const schedule = parseMaybeCompressed(safeStorageGet(SCHEDULE_KEY), {}) || {};
+  const schedule = readScheduleFromStorage();
   const ids = parseMaybeCompressed(safeStorageGet(RESULT_V3_INDEX_KEY), []) || [];
   const results = {};
 

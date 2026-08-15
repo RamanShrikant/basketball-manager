@@ -5,13 +5,13 @@ import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
 import { applyDraftPickOwnershipToLotteryResult, applyDraftPickOwnershipToOrder } from "../utils/draftPicks.js";
 import { getDraftYear } from "../utils/seasonContext.js";
+import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const LEAGUE_KEY = "leagueData";
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
-const SCHEDULE_KEY = "bm_schedule_v3";
 
 function safeJSON(raw, fallback = null) {
   try {
@@ -105,7 +105,7 @@ function loadAllResultsV3() {
 }
 
 function buildFallbackTeamRecordsFromSchedule(leagueData) {
-  const schedule = safeJSON(localStorage.getItem(SCHEDULE_KEY), {}) || {};
+  const schedule = readScheduleFromStorage();
   const results = loadAllResultsV3();
   const teams = getAllTeamsFromLeague(leagueData);
 

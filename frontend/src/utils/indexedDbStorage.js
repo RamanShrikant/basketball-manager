@@ -328,3 +328,61 @@ export async function clearAppDataFromDB() {
   });
   return true;
 }
+
+export async function loadAppDataEntriesByPrefixFromDB(prefix) {
+  const cleanPrefix = String(prefix || "");
+  if (!cleanPrefix) return [];
+
+  const db = await openBasketballManagerDb();
+
+  return new Promise((resolve, reject) => {
+    try {
+      const tx = db.transaction(APP_DATA_STORE, "readonly");
+      const store = tx.objectStore(APP_DATA_STORE);
+      const request = store.openCursor();
+      const rows = [];
+
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve(rows);
+          return;
+        }
+
+        const row = cursor.value;
+        if (String(row?.key || "").startsWith(cleanPrefix)) {
+          rows.push({
+            key: String(row.key),
+            value: row?.value ?? null,
+            updatedAt: row?.updatedAt ?? null,
+          });
+        }
+        cursor.continue();
+      };
+
+      request.onerror = () =>
+        reject(request.error || new Error("Failed to scan app data by prefix."));
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+export async function deleteAppDataByPrefixFromDB(prefix) {
+  const cleanPrefix = String(prefix || "");
+  if (!cleanPrefix) return false;
+
+  await runTransaction(APP_DATA_STORE, "readwrite", (store) => {
+    const request = store.openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      if (String(cursor.value?.key || "").startsWith(cleanPrefix)) {
+        cursor.delete();
+      }
+      cursor.continue();
+    };
+  });
+
+  return true;
+}

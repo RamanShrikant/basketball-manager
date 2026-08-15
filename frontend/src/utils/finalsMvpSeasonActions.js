@@ -5,9 +5,9 @@ import { ensureCompletedSeasonStatsArchive } from "./seasonStatsArchive.js";
 import { clearBoxScoresFromDB } from "./indexedDbStorage.js";
 import { withOffseasonSeasonContext } from "./seasonContext.js";
 import { appendChampionToLeagueHistory } from "./leagueHistoryUtils.js";
+import { clearScheduleStorage } from "./scheduleStorage.js";
 
 const META_KEY = "bm_league_meta_v1";
-const SCHED_KEY = "bm_schedule_v3";
 const RESULT_V2_BLOB_KEY = "bm_results_v2";
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
@@ -114,7 +114,7 @@ function clearSeasonStores() {
 
   localStorage.removeItem("bm_postseason_v2");
   localStorage.removeItem("bm_champ_v1");
-  localStorage.removeItem(SCHED_KEY);
+  clearScheduleStorage();
   localStorage.removeItem(DRAFT_LOTTERY_KEY);
   localStorage.removeItem(DRAFT_STATE_KEY);
   localStorage.removeItem(RESULT_V2_BLOB_KEY);

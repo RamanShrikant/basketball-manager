@@ -4,8 +4,8 @@ import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
 import styles from "./PlayoffPicture.module.css";
+import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
 
-const SCHED_KEY = "bm_schedule_v3";
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const POSTSEASON_KEY = "bm_postseason_v2";
@@ -251,7 +251,7 @@ export default function PlayoffPicture() {
     return [...history].filter((row) => row?.postseasonBracket).sort((a,b)=>Number(b.seasonYear||0)-Number(a.seasonYear||0))[0] || null;
   }, [leagueData]);
 
-  const schedule = useMemo(() => safeJSON(localStorage.getItem(SCHED_KEY), {}) || {}, []);
+  const schedule = useMemo(() => readScheduleFromStorage(), []);
   const results = useMemo(() => loadResults(), []);
   const conferenceKeys = useMemo(() => {
     const keys = Object.keys(leagueData?.conferences || {});

@@ -18,6 +18,7 @@ import {
   getSnapshotTeams,
   seasonLabelFromStartYear,
 } from "../utils/seasonStatsArchive.js";
+import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
 
 /* -------------------------------------------------------------------------- */
 /*                              STORAGE HELPERS                               */
@@ -26,7 +27,6 @@ import {
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
 const PLAYER_STATS_KEY = "bm_player_stats_v1";
-const SCHED_KEY = "bm_schedule_v3";
 
 const resultV3Key = (gameId) => `${RESULT_V3_PREFIX}${gameId}`;
 
@@ -311,9 +311,7 @@ export default function PlayerStats({ scope = "regular" }) {
     return readCanonicalRegularPlayerStatsMap();
   }, []);
 
-  const schedule = useMemo(() => {
-    return readCompressedOrJson(SCHED_KEY, {});
-  }, []);
+  const schedule = useMemo(() => readScheduleFromStorage(), []);
 
   const results = useMemo(() => loadAllResultsV3(), []);
 

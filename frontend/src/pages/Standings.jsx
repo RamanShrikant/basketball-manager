@@ -8,6 +8,7 @@ import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 import { getArchivedStatsSnapshot, getLatestSeasonHistoryEntry, seasonLabelFromStartYear } from "../utils/seasonStatsArchive.js";
 import { DIVISION_NAMES, groupTeamsByDivision, resolveTeamDivision } from "../utils/leagueDivisions.js";
+import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
 
 /* -----------------------------
    Results V3 (per-game storage)
@@ -73,14 +74,7 @@ const resolveLogo = (t) =>
   t.logo || t.teamLogo || t.newTeamLogo || t.logoUrl || t.image || t.img || "";
 
 export default function Standings() {
-  const schedule = useMemo(() => {
-    try {
-      const raw = localStorage.getItem("bm_schedule_v3");
-      return parseMaybeCompressed(raw, {}) || {};
-    } catch {
-      return {};
-    }
-  }, []);
+  const schedule = useMemo(() => readScheduleFromStorage(), []);
 
   const { leagueData, selectedTeam } = useGame();
   const navigate = useNavigate();

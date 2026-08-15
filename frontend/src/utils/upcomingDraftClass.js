@@ -1,4 +1,10 @@
 import { getAllTeamsFromLeague, getDraftYear, getSeasonStartYear } from "./seasonContext.js";
+import {
+  deleteAppDataByPrefixFromDB,
+  deleteAppDataFromDB,
+  loadAppDataEntriesByPrefixFromDB,
+  saveAppDataToDB,
+} from "./indexedDbStorage.js";
 
 export const UPCOMING_DRAFT_CLASS_PREFIX = "bm_upcoming_draft_class_";
 export const DRAFT_STARTED_PREFIX = "bm_draft_started_";
@@ -10,6 +16,119 @@ const CUSTOM_DRAFT_CLASS_KEY = "bm_custom_draft_class_v1";
 const CUSTOM_DRAFT_CLASS_MODE_KEY = "bm_draft_class_mode_v1";
 const CUSTOM_DRAFT_CLASS_MODE_BY_YEAR_KEY = "bm_draft_class_mode_by_year_v1";
 const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
+
+const upcomingDraftClassCache = new Map();
+let upcomingDraftStorageInitialized = false;
+let upcomingDraftWriteChain = Promise.resolve();
+let upcomingDraftLastPersistError = null;
+
+function queueUpcomingDraftPersistence(operation) {
+  upcomingDraftWriteChain = upcomingDraftWriteChain
+    .catch(() => {})
+    .then(operation)
+    .catch((error) => {
+      upcomingDraftLastPersistError = error;
+      console.warn("[UpcomingDraft] IndexedDB persistence failed", error);
+      return false;
+    });
+  return upcomingDraftWriteChain;
+}
+
+function readLegacyUpcomingDraftRows() {
+  const rows = [];
+  if (typeof localStorage === "undefined") return rows;
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key || !key.startsWith(UPCOMING_DRAFT_CLASS_PREFIX)) continue;
+    const value = safeJSON(localStorage.getItem(key), null);
+    if (value && typeof value === "object") rows.push({ key, value });
+  }
+  return rows;
+}
+
+export async function flushUpcomingDraftClassStorageWrites() {
+  await upcomingDraftWriteChain.catch(() => {});
+}
+
+export async function initializeUpcomingDraftClassStorage({ reset = false } = {}) {
+  if (upcomingDraftStorageInitialized && !reset) return getUpcomingDraftClassStorageReport();
+
+  if (reset) {
+    upcomingDraftClassCache.clear();
+    if (typeof localStorage !== "undefined") {
+      const keys = [];
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (key?.startsWith(UPCOMING_DRAFT_CLASS_PREFIX)) keys.push(key);
+      }
+      for (const key of keys) localStorage.removeItem(key);
+    }
+    try {
+      await deleteAppDataByPrefixFromDB(UPCOMING_DRAFT_CLASS_PREFIX);
+    } catch (error) {
+      console.warn("[UpcomingDraft] reset could not clear IndexedDB previews", error);
+    }
+    upcomingDraftStorageInitialized = true;
+    return getUpcomingDraftClassStorageReport();
+  }
+
+  try {
+    const dbRows = await loadAppDataEntriesByPrefixFromDB(UPCOMING_DRAFT_CLASS_PREFIX);
+    for (const row of dbRows || []) {
+      if (row?.key && row?.value && typeof row.value === "object") {
+        upcomingDraftClassCache.set(String(row.key), row.value);
+      }
+    }
+  } catch (error) {
+    console.warn("[UpcomingDraft] IndexedDB bootstrap read failed", error);
+  }
+
+  // One-time migration. Legacy localStorage wins because it is the newest value
+  // produced by the pre-migration code. Remove each key only after its DB save.
+  for (const row of readLegacyUpcomingDraftRows()) {
+    upcomingDraftClassCache.set(row.key, row.value);
+    try {
+      await saveAppDataToDB(row.key, row.value);
+      localStorage.removeItem(row.key);
+      upcomingDraftLastPersistError = null;
+    } catch (error) {
+      upcomingDraftLastPersistError = error;
+      console.warn("[UpcomingDraft] legacy preview migration failed; keeping localStorage copy", row.key, error);
+    }
+  }
+
+  upcomingDraftStorageInitialized = true;
+  return getUpcomingDraftClassStorageReport();
+}
+
+export async function getUpcomingDraftClassStorageReport() {
+  let dbRows = [];
+  let indexedDbReadable = false;
+  try {
+    dbRows = await loadAppDataEntriesByPrefixFromDB(UPCOMING_DRAFT_CLASS_PREFIX);
+    indexedDbReadable = true;
+  } catch {}
+
+  const legacyKeys = [];
+  if (typeof localStorage !== "undefined") {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(UPCOMING_DRAFT_CLASS_PREFIX)) legacyKeys.push(key);
+    }
+  }
+
+  return {
+    initialized: upcomingDraftStorageInitialized,
+    storage: "indexedDB",
+    cachedYears: upcomingDraftClassCache.size,
+    indexedDbYears: dbRows.length,
+    indexedDbReadable,
+    legacyLocalStorageKeys: legacyKeys,
+    lastPersistError: upcomingDraftLastPersistError
+      ? String(upcomingDraftLastPersistError?.message || upcomingDraftLastPersistError)
+      : null,
+  };
+}
 
 export function safeJSON(raw, fallback = null) {
   try {
@@ -301,7 +420,15 @@ export function getUpcomingDraftClassStorageKey(seasonYear) {
 
 export function readUpcomingDraftClassForYear(seasonYear) {
   const resolvedYear = Number(seasonYear || 2026);
-  const saved = safeJSON(localStorage.getItem(getUpcomingDraftClassStorageKey(resolvedYear)), null);
+  const storageKey = getUpcomingDraftClassStorageKey(resolvedYear);
+  let saved = upcomingDraftClassCache.get(storageKey) || null;
+
+  // Legacy compatibility before bootstrap or after a failed migration.
+  if (!saved && typeof localStorage !== "undefined") {
+    saved = safeJSON(localStorage.getItem(storageKey), null);
+    if (saved) upcomingDraftClassCache.set(storageKey, saved);
+  }
+
   if (!saved || Number(saved.seasonYear) !== resolvedYear) return null;
 
   // Auto-generated previews saved before schema v2 lost secondary positions while
@@ -311,9 +438,11 @@ export function readUpcomingDraftClassForYear(seasonYear) {
     String(saved?.sourceMode || "auto") === "auto" &&
     Number(saved?.schemaVersion || 0) < UPCOMING_DRAFT_CLASS_SCHEMA_VERSION
   ) {
+    upcomingDraftClassCache.delete(storageKey);
     try {
-      localStorage.removeItem(getUpcomingDraftClassStorageKey(resolvedYear));
+      localStorage.removeItem(storageKey);
     } catch {}
+    queueUpcomingDraftPersistence(() => deleteAppDataFromDB(storageKey));
     return null;
   }
 
@@ -341,48 +470,17 @@ export function saveUpcomingDraftClassForYear(payload) {
     rows
   );
 
-  try {
-    localStorage.setItem(getUpcomingDraftClassStorageKey(resolvedYear), JSON.stringify(next));
-  } catch (err) {
-    // localStorage quota should never blank the screen. Return the in-memory board
-    // and persist only the smallest stable board possible for refresh recovery.
+  const storageKey = getUpcomingDraftClassStorageKey(resolvedYear);
+  upcomingDraftClassCache.set(storageKey, next);
+  queueUpcomingDraftPersistence(async () => {
+    await saveAppDataToDB(storageKey, next);
+    upcomingDraftLastPersistError = null;
     try {
-      const emergency = {
-        schemaVersion: UPCOMING_DRAFT_CLASS_SCHEMA_VERSION,
-        seasonYear: resolvedYear,
-        draftClassYear: resolvedYear,
-        sourceMode: next.sourceMode,
-        sourceFingerprint: next.sourceFingerprint,
-        classType: next.classType,
-        seed: next.seed,
-        seedMode: next.seedMode,
-        savedAt: Date.now(),
-        emergencySlimStorage: true,
-        draftClass: rows.map((row, index) => ({
-          id: row?.id || `upcoming_${resolvedYear}_${index + 1}`,
-          name: row?.name || row?.playerName || `Prospect ${index + 1}`,
-          playerName: row?.playerName || row?.name || `Prospect ${index + 1}`,
-          seasonYear: resolvedYear,
-          draftClassYear: resolvedYear,
-          draftProjection: Number(row?.draftProjection || row?.trueRank || row?.rank || index + 1),
-          trueRank: Number(row?.trueRank || row?.draftProjection || row?.rank || index + 1),
-          rank: Number(row?.rank || row?.draftProjection || row?.trueRank || index + 1),
-          pos: row?.pos || row?.position || "-",
-          position: row?.position || row?.pos || "-",
-          secondaryPos: row?.secondaryPos || row?.secondaryPosition || "",
-          secondaryPosition: row?.secondaryPosition || row?.secondaryPos || "",
-          overall: Number(row?.overall ?? row?.ovr ?? row?.rating ?? 0) || 0,
-          potential: Number(row?.potential ?? row?.pot ?? row?.potential_rating ?? 0) || 0,
-          age: Number(row?.age ?? 0) || 0,
-          archetype: row?.archetype || row?.type || "Prospect",
-          tier: row?.tier || "Draft Prospect",
-          headshot: row?.headshot || row?.image || row?.img || "",
-        })),
-      };
-      localStorage.setItem(getUpcomingDraftClassStorageKey(resolvedYear), JSON.stringify(emergency));
+      localStorage.removeItem(storageKey);
     } catch {}
-    console.warn("[UpcomingDraft] Preview persistence skipped because localStorage quota is full.", err);
-  }
+    return true;
+  });
+
   return next;
 }
 
