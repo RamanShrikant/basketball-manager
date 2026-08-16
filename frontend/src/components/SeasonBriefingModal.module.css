@@ -1,0 +1,89 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 520;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  opacity: 0;
+  background: rgba(4, 4, 4, 0.48);
+  backdrop-filter: blur(16px) brightness(0.48) saturate(0.78);
+  -webkit-backdrop-filter: blur(16px) brightness(0.48) saturate(0.78);
+  transition: opacity 780ms ease, backdrop-filter 820ms ease;
+  pointer-events: none;
+}
+.backdropVisible { opacity: 1; pointer-events: auto; }
+.stage {
+  position: relative;
+  width: min(88vw, calc(84vh * 1.7768331562), 1450px);
+  aspect-ratio: 1672 / 941;
+  overflow: hidden;
+  opacity: 0;
+  border-radius: 1.25rem;
+  background: #070604;
+  box-shadow: 0 30px 100px rgba(0, 0, 0, 0.68);
+  isolation: isolate;
+  transform: translateY(28px) scale(0.958);
+  filter: blur(3px);
+  transition: opacity 780ms ease, transform 860ms cubic-bezier(0.18, 0.82, 0.2, 1), filter 780ms ease;
+}
+.stageVisible { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+.wallpaper { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; user-select:none; pointer-events:none; }
+.content {
+  position:absolute; z-index:4; display:flex; flex-direction:column; overflow:hidden; opacity:0;
+  color:#ddd3bf; text-shadow:0 2px 12px rgba(0,0,0,.98); pointer-events:none; transform:translateY(12px);
+  filter:blur(2px); transition:opacity 920ms ease, transform 980ms cubic-bezier(.2,.72,.24,1), filter 900ms ease;
+}
+.contentVisible { opacity:1; pointer-events:auto; transform:translateY(0); filter:blur(0); }
+.contentScroller { min-height:0; height:100%; overflow-y:auto; overscroll-behavior:contain; pointer-events:auto; scrollbar-width:thin; scrollbar-color:rgba(207,165,84,.55) rgba(0,0,0,.16); }
+.contentScroller::-webkit-scrollbar { width:7px; }
+.contentScroller::-webkit-scrollbar-track { background:rgba(0,0,0,.16); }
+.contentScroller::-webkit-scrollbar-thumb { border-radius:999px; background:rgba(207,165,84,.5); }
+.contentInner {
+  min-height:100%; padding:clamp(.42rem,.7vw,.88rem) clamp(.58rem,.95vw,1.12rem) 1.1rem; opacity:0;
+  border-left:1px solid rgba(206,164,82,.36); background:linear-gradient(90deg,rgba(0,0,0,.36),rgba(0,0,0,.12) 82%,transparent);
+  transform:translateY(8px); filter:blur(1.2px); transition:opacity 560ms ease, transform 620ms cubic-bezier(.2,.72,.24,1), filter 540ms ease;
+}
+.contentInnerVisible { opacity:1; transform:translateY(0); filter:blur(0); }
+.eyebrow { font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; font-size:clamp(.47rem,.55vw,.68rem); font-weight:900; letter-spacing:.22em; color:#c9a258; }
+.title { margin:clamp(.2rem,.32vw,.4rem) 0 0; font-family:"Palatino Linotype","Book Antiqua",Palatino,Georgia,serif; font-size:clamp(.96rem,1.38vw,1.75rem); font-weight:600; line-height:1.05; letter-spacing:.035em; color:#e0c17c; }
+.paragraphs { display:flex; flex-direction:column; gap:clamp(.42rem,.65vw,.78rem); margin-top:clamp(.44rem,.68vw,.82rem); }
+.paragraph { margin:0; max-width:98%; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; font-size:clamp(.54rem,.63vw,.8rem); font-weight:560; line-height:1.52; color:rgba(237,228,211,.95); }
+.progressionGrid { display:grid; grid-template-columns:1fr 1fr; gap:.55rem; margin-top:.65rem; }
+.listSection { margin-top:.72rem; padding-top:.58rem; border-top:1px solid rgba(207,165,84,.28); }
+.listHeading { margin:0; font-family:Inter,ui-sans-serif,system-ui,sans-serif; font-size:clamp(.48rem,.55vw,.68rem); font-weight:900; letter-spacing:.13em; text-transform:uppercase; color:#c9a258; }
+.progressionList,.prospectList { display:flex; flex-direction:column; gap:.22rem; margin-top:.4rem; }
+.progressionRow,.prospectRow { display:grid; align-items:center; gap:.35rem; min-height:1.42rem; padding:.22rem .32rem; border:1px solid rgba(207,165,84,.14); background:rgba(0,0,0,.25); font-family:Inter,ui-sans-serif,system-ui,sans-serif; font-size:clamp(.43rem,.48vw,.61rem); }
+.progressionRow { grid-template-columns:minmax(0,1fr) auto auto; }
+.progressionIdentity { display:flex; min-width:0; align-items:center; gap:.28rem; }
+.progressionRank { color:rgba(224,193,124,.55); }
+.progressionName { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:750; }
+.progressionOriginal { color:rgba(237,228,211,.66); }
+.deltaUp,.deltaDown { min-width:1.65rem; text-align:right; font-weight:900; }
+.deltaUp { color:#75d997; }
+.deltaDown { color:#ef8e82; }
+.boardHeader { display:flex; align-items:center; justify-content:space-between; gap:.5rem; }
+.boardCount { font-family:Inter,ui-sans-serif,system-ui,sans-serif; font-size:clamp(.4rem,.45vw,.56rem); color:rgba(237,228,211,.58); }
+.prospectRow { grid-template-columns:auto minmax(0,1fr) auto auto; }
+.prospectRank { color:#c9a258; font-weight:900; }
+.prospectName { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:800; }
+.prospectPosition { color:rgba(237,228,211,.62); }
+.prospectRatings { color:rgba(224,193,124,.86); white-space:nowrap; }
+.boardEmpty { margin-top:.75rem; padding:.58rem; border:1px solid rgba(207,165,84,.22); background:rgba(0,0,0,.28); font:600 clamp(.5rem,.57vw,.72rem)/1.45 Inter,sans-serif; color:rgba(237,228,211,.78); }
+.hotspot { position:absolute; z-index:8; padding:0; border:0; border-radius:999px; outline:0; background:transparent; cursor:pointer; box-shadow:none; transition:backdrop-filter 190ms ease,opacity 190ms ease,transform 150ms ease; }
+.hotspot:hover,.hotspot:focus-visible { border:0; outline:0; background:transparent; box-shadow:none; backdrop-filter:brightness(1.2) saturate(1.05); -webkit-backdrop-filter:brightness(1.2) saturate(1.05); }
+.hotspotActive { background:transparent; backdrop-filter:brightness(1.1) saturate(1.03); -webkit-backdrop-filter:brightness(1.1) saturate(1.03); }
+.hotspot:active { transform:scale(.985); }
+.enterHotspot { border-radius:.8rem; }
+.closeHotspot { border-radius:50%; }
+.srOnly { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+@media (max-width:900px) {
+  .backdrop { padding:.4rem; }
+  .stage { width:min(96vw,calc(90vh * 1.7768331562)); border-radius:.78rem; }
+  .contentInner { padding:.32rem .44rem .7rem; }
+  .paragraphs { gap:.3rem; margin-top:.34rem; }
+  .paragraph { line-height:1.38; }
+  .progressionGrid { grid-template-columns:1fr; }
+  .prospectRatings { display:none; }
+}

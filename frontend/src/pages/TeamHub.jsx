@@ -91,6 +91,8 @@ function tileSubtitle(tile, selectedTeamName, { allStarsAvailable = false, isOff
     ? "Resume playoff bracket"
     : tile.name === "Schedule"
     ? "Calendar and Season Simulation"
+    : tile.name === "New Chapter"
+    ? "Season Story, League Changes, Prospects, and Outlook"
     : tile.name === "Standings"
     ? "League, Conference, and Division Table"
     : tile.name === "Playoff Picture"
@@ -306,6 +308,12 @@ export default function TeamHub() {
       },
     ],
     Season: [
+      {
+        name: "New Chapter",
+        action: "openSeasonBriefing",
+        enabled: true,
+        description: "Season Story, League Changes, Prospects, and Outlook",
+      },
       { name: "Standings", path: "/standings", enabled: true },
       { name: "Playoff Picture", path: "/playoff-picture", enabled: true },
       { name: "Power Rankings", path: "/power-rankings", enabled: true },
@@ -462,6 +470,11 @@ export default function TeamHub() {
       activeTileIndexRef.current = 0;
       setActiveTileIndex(0);
       setActiveSection(tile.sectionKey);
+      return;
+    }
+
+    if (tile.action === "openSeasonBriefing") {
+      window.dispatchEvent(new CustomEvent("bm:open-season-briefing", { detail: { source: "team-hub" } }));
       return;
     }
 

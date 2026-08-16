@@ -47,6 +47,7 @@ import LeagueHistory from "./pages/LeagueHistory.jsx";
 import AwardHistory from "./pages/AwardHistory.jsx";
 import PastChampions from "./pages/PastChampions.jsx";
 import GlobalGameNav from "./components/GlobalGameNav.jsx";
+import SeasonBriefingHost from "./components/SeasonBriefingHost.jsx";
 
 function RouteDensitySync() {
   const { pathname } = useLocation();
@@ -78,6 +79,7 @@ function App() {
     <BrowserRouter>
       <RouteDensitySync />
       <GlobalGameNav />
+      <SeasonBriefingHost />
       <Routes>
         {/* ✅ Routes that use your shared Layout */}
         <Route element={<Layout />}>
