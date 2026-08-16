@@ -13,6 +13,13 @@ const main = fs.readFileSync(path.join(root, "src/main.jsx"), "utf8");
 const scheduleStorage = fs.readFileSync(path.join(root, "src/utils/scheduleStorage.js"), "utf8");
 const upcomingDraft = fs.readFileSync(path.join(root, "src/utils/upcomingDraftClass.js"), "utf8");
 const seasonStatsArchive = fs.readFileSync(path.join(root, "src/utils/seasonStatsArchive.js"), "utf8");
+const customDraftStorage = fs.readFileSync(path.join(root, "src/utils/customDraftClassStorage.js"), "utf8");
+const offseasonMoodBaselineStorage = fs.readFileSync(path.join(root, "src/utils/offseasonMoodBaselineStorage.js"), "utf8");
+const offseasonMoodEvents = fs.readFileSync(path.join(root, "src/utils/offseasonMoodEvents.js"), "utf8");
+const playPage = fs.readFileSync(path.join(root, "src/pages/Play.jsx"), "utf8");
+const leagueEditor = fs.readFileSync(path.join(root, "src/pages/LeagueEditor.jsx"), "utf8");
+const draftPage = fs.readFileSync(path.join(root, "src/pages/Draft.jsx"), "utf8");
+const offseasonHub = fs.readFileSync(path.join(root, "src/pages/OffseasonHub.jsx"), "utf8");
 const scheduleConsumerPaths = [
   "src/pages/Standings.jsx",
   "src/pages/PowerRankings.jsx",
@@ -210,6 +217,39 @@ check(
     main.includes('["SeasonStatsArchive", initializeSeasonStatsArchiveStorage]') &&
     main.indexOf("const storageBootstraps") < main.indexOf("ReactDOM.createRoot"),
   "All synchronous compatibility caches are hydrated before React renders pages that read them."
+);
+
+check(
+  "year3.offseason_mood_baseline_indexeddb",
+  main.includes('["OffseasonMoodBaseline", initializeOffseasonMoodBaselineStorage]') &&
+    offseasonMoodBaselineStorage.includes("saveAppDataToDB(OFFSEASON_MOOD_BASELINE_KEY, snapshot)") &&
+    offseasonMoodBaselineStorage.includes("loadAppDataFromDB(OFFSEASON_MOOD_BASELINE_KEY)") &&
+    offseasonMoodEvents.includes("readOffseasonMoodBaselineSnapshot()") &&
+    offseasonMoodEvents.includes("writeOffseasonMoodBaselineSnapshot(snapshot)") &&
+    !offseasonMoodEvents.includes("localStorage.setItem(OFFSEASON_MOOD_BASELINE_KEY"),
+  "The full-league offseason mood baseline is stored in IndexedDB instead of consuming localStorage quota."
+);
+
+check(
+  "year3.custom_draft_classes_indexeddb",
+  main.includes('["CustomDraftStorage", initializeCustomDraftClassStorage]') &&
+    customDraftStorage.includes("loadAppDataEntriesByPrefixFromDB(CUSTOM_DRAFT_CLASS_PREFIX)") &&
+    customDraftStorage.includes("saveAppDataToDB(key, payload)") &&
+    customDraftStorage.includes("replaceCustomDraftClasses") &&
+    !playPage.includes("localStorage.setItem(getDraftClassStorageKey") &&
+    !leagueEditor.includes("localStorage.setItem(getDraftClassStorageKey") &&
+    !draftPage.includes("localStorage.getItem(seasonKey)") &&
+    !offseasonHub.includes("localStorage.getItem(seasonKey)"),
+  "Custom draft-class payloads and their aggregate vault migrate to IndexedDB instead of duplicating large JSON in localStorage."
+);
+
+check(
+  "year3.large_payload_bootstrap_before_render",
+  main.includes('["CustomDraftStorage", initializeCustomDraftClassStorage]') &&
+    main.includes('["OffseasonMoodBaseline", initializeOffseasonMoodBaselineStorage]') &&
+    main.indexOf('["CustomDraftStorage", initializeCustomDraftClassStorage]') < main.indexOf("ReactDOM.createRoot") &&
+    main.indexOf('["OffseasonMoodBaseline", initializeOffseasonMoodBaselineStorage]') < main.indexOf("ReactDOM.createRoot"),
+  "Large synchronous consumers are hydrated from IndexedDB before React renders."
 );
 
 check(

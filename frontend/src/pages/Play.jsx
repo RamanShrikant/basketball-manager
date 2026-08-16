@@ -2,9 +2,13 @@ import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
+import {
+  deleteCustomDraftClassForYear,
+  readCustomDraftClassesIndex,
+  writeCustomDraftClassForYear,
+  writeCustomDraftClassesIndex,
+} from "../utils/customDraftClassStorage.js";
 
-const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
-const CUSTOM_DRAFT_CLASSES_INDEX_KEY = "bm_custom_draft_classes_v1";
 const CUSTOM_DRAFT_CLASS_MODE_BY_YEAR_KEY = "bm_draft_class_mode_by_year_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
 const DEFAULT_DRAFT_CLASS_YEAR = 2027;
@@ -24,10 +28,6 @@ function getRowsFromDraftClassPayload(payload) {
   if (Array.isArray(payload?.prospects)) return payload.prospects;
   if (Array.isArray(payload?.players)) return payload.players;
   return [];
-}
-
-function getDraftClassStorageKey(seasonYear) {
-  return `${CUSTOM_DRAFT_CLASS_PREFIX}${Number(seasonYear || DEFAULT_DRAFT_CLASS_YEAR)}`;
 }
 
 function inferDraftClassYear(payload, fallbackYear) {
@@ -110,7 +110,7 @@ export default function Play() {
   const [draftClassYear, setDraftClassYear] = useState(DEFAULT_DRAFT_CLASS_YEAR);
   const [draftClassStatus, setDraftClassStatus] = useState("");
   const [draftClassIndex, setDraftClassIndex] = useState(() =>
-    safeJSON(localStorage.getItem(CUSTOM_DRAFT_CLASSES_INDEX_KEY), {}) || {}
+    readCustomDraftClassesIndex() || {}
   );
   const [draftClassModes, setDraftClassModes] = useState(() =>
     safeJSON(localStorage.getItem(CUSTOM_DRAFT_CLASS_MODE_BY_YEAR_KEY), {}) || {}
@@ -129,7 +129,7 @@ export default function Play() {
 
   const saveDraftClassIndex = (nextIndex) => {
     setDraftClassIndex(nextIndex);
-    localStorage.setItem(CUSTOM_DRAFT_CLASSES_INDEX_KEY, JSON.stringify(nextIndex || {}));
+    writeCustomDraftClassesIndex(nextIndex || {});
   };
 
   const saveDraftClassModes = (nextModes) => {
@@ -205,7 +205,7 @@ export default function Play() {
         const seasonYear = Number(normalized.seasonYear || draftClassYear || DEFAULT_DRAFT_CLASS_YEAR);
         const key = String(seasonYear);
 
-        localStorage.setItem(getDraftClassStorageKey(seasonYear), JSON.stringify(normalized));
+        writeCustomDraftClassForYear(seasonYear, normalized);
 
         const nextIndex = {
           ...(draftClassIndex || {}),
@@ -242,7 +242,7 @@ export default function Play() {
     const seasonYear = Number(draftClassYear || DEFAULT_DRAFT_CLASS_YEAR);
     const key = String(seasonYear);
 
-    localStorage.removeItem(getDraftClassStorageKey(seasonYear));
+    deleteCustomDraftClassForYear(seasonYear);
 
     const nextIndex = { ...(draftClassIndex || {}) };
     delete nextIndex[key];

@@ -5,6 +5,10 @@ import {
   loadAppDataEntriesByPrefixFromDB,
   saveAppDataToDB,
 } from "./indexedDbStorage.js";
+import {
+  readCustomDraftClassForYear,
+  readDefaultCustomDraftClass,
+} from "./customDraftClassStorage.js";
 
 export const UPCOMING_DRAFT_CLASS_PREFIX = "bm_upcoming_draft_class_";
 export const DRAFT_STARTED_PREFIX = "bm_draft_started_";
@@ -12,10 +16,8 @@ export const DRAFT_STARTED_PREFIX = "bm_draft_started_";
 const UPCOMING_DRAFT_CLASS_SCHEMA_VERSION = 2;
 
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
-const CUSTOM_DRAFT_CLASS_KEY = "bm_custom_draft_class_v1";
 const CUSTOM_DRAFT_CLASS_MODE_KEY = "bm_draft_class_mode_v1";
 const CUSTOM_DRAFT_CLASS_MODE_BY_YEAR_KEY = "bm_draft_class_mode_by_year_v1";
-const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
 
 const upcomingDraftClassCache = new Map();
 let upcomingDraftStorageInitialized = false;
@@ -284,11 +286,8 @@ function readDraftClassModeForYear(seasonYear, hasCustomClass = false) {
 
 export function readCustomDraftClassSetupForYear(seasonYear) {
   const resolvedYear = Number(seasonYear || 2026);
-  const savedSeasonClass = safeJSON(
-    localStorage.getItem(`${CUSTOM_DRAFT_CLASS_PREFIX}${resolvedYear}`),
-    null
-  );
-  const savedDefaultClass = safeJSON(localStorage.getItem(CUSTOM_DRAFT_CLASS_KEY), null);
+  const savedSeasonClass = readCustomDraftClassForYear(resolvedYear);
+  const savedDefaultClass = readDefaultCustomDraftClass();
   const draftClassPayload = savedSeasonClass || savedDefaultClass || null;
   const rows = getRowsFromDraftClassPayload(draftClassPayload);
   const hasCustomClass = rows.length > 0;

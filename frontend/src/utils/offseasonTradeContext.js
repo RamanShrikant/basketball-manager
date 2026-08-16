@@ -1,14 +1,17 @@
 import LZString from "lz-string";
 import { projectPlayerForNextSeason, progressionProjectionSignature } from "./offseasonProgressionProjection.js";
 import { readScheduleFromStorage } from "./scheduleStorage.js";
+import {
+  readCustomDraftClassForYear,
+  readDefaultCustomDraftClass,
+} from "./customDraftClassStorage.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
-const CUSTOM_DRAFT_CLASS_KEY = "bm_custom_draft_class_v1";
-const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
+
 
 function toNumber(value, fallback = 0) {
   const n = Number(value);
@@ -188,8 +191,8 @@ function getDraftProspects(leagueData, seasonYear, savedDraftState) {
   const direct = directCandidates.find((rows) => Array.isArray(rows) && rows.length);
   if (direct) return direct;
 
-  const seasonPayload = safeJSON(safeStorageGet(`${CUSTOM_DRAFT_CLASS_PREFIX}${seasonYear}`), null);
-  const defaultPayload = safeJSON(safeStorageGet(CUSTOM_DRAFT_CLASS_KEY), null);
+  const seasonPayload = readCustomDraftClassForYear(seasonYear);
+  const defaultPayload = readDefaultCustomDraftClass();
   const payload = seasonPayload || defaultPayload;
   if (Array.isArray(payload)) return payload;
   return payload?.draftClass || payload?.prospects || payload?.players || [];

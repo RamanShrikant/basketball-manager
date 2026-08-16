@@ -12,9 +12,13 @@ import {
 } from "../utils/seasonContext.js";
 import { DIVISION_NAMES, getDefaultDivisionForTeam, getDivisionConference, normalizeLeagueDivisions } from "../utils/leagueDivisions.js";
 import { clearScheduleStorage } from "../utils/scheduleStorage.js";
+import {
+  readCustomDraftClassForYear,
+  readCustomDraftClassesIndex,
+  replaceCustomDraftClasses,
+} from "../utils/customDraftClassStorage.js";
+import { clearOffseasonMoodBaselineStorage } from "../utils/offseasonMoodBaselineStorage.js";
 
-const DRAFT_CLASSES_STORAGE_KEY = "bm_custom_draft_classes_v1";
-const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
 const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 const DEFAULT_DRAFT_CLASS_YEAR = 2027;
 const LEAGUE_META_KEY = "bm_league_meta_v1";
@@ -127,6 +131,10 @@ function clearRuntimeSeasonStores() {
         localStorage.removeItem(key);
       }
     }
+  } catch {}
+
+  try {
+    clearOffseasonMoodBaselineStorage();
   } catch {}
 
   try {
@@ -1631,10 +1639,6 @@ const normalizePlayer = (p) => {
       .replace(/^_+|_+$/g, "") || "prospect";
   }
 
-  function getDraftClassStorageKey(seasonYear) {
-    return `${CUSTOM_DRAFT_CLASS_PREFIX}${Number(seasonYear || draftClassYear || DEFAULT_DRAFT_CLASS_YEAR)}`;
-  }
-
   function getDraftClassForYear(year = draftClassYear) {
     return draftClasses[String(Number(year || DEFAULT_DRAFT_CLASS_YEAR))] || [];
   }
@@ -1791,15 +1795,17 @@ const normalizePlayer = (p) => {
   }
 
   function persistDraftClasses(nextClasses) {
-    localStorage.setItem(DRAFT_CLASSES_STORAGE_KEY, JSON.stringify(nextClasses || {}));
+    const normalizedClasses = {};
 
     for (const [year, rows] of Object.entries(nextClasses || {})) {
       const seasonYear = Number(year);
       if (!Number.isFinite(seasonYear)) continue;
 
       const payload = normalizeDraftClassPayload({ seasonYear, draftClass: rows || [] }, seasonYear);
-      localStorage.setItem(getDraftClassStorageKey(seasonYear), JSON.stringify(payload));
+      normalizedClasses[String(seasonYear)] = payload;
     }
+
+    replaceCustomDraftClasses(normalizedClasses);
   }
 
   function updateDraftClassYear(year, updater) {
@@ -1880,7 +1886,6 @@ const normalizePlayer = (p) => {
       const copy = JSON.parse(JSON.stringify(prev || {}));
       delete copy[String(seasonYear)];
       persistDraftClasses(copy);
-      localStorage.removeItem(getDraftClassStorageKey(seasonYear));
       return copy;
     });
     setDraftClassStatus(`Cleared custom draft class ${seasonYear}.`);
@@ -2189,24 +2194,31 @@ const normalizePlayer = (p) => {
   }, []);
 
   useEffect(() => {
-    const savedClasses = safeJSON(localStorage.getItem(DRAFT_CLASSES_STORAGE_KEY), {});
+    const savedClasses = readCustomDraftClassesIndex() || {};
     const loaded = {};
 
     for (const [year, value] of Object.entries(savedClasses || {})) {
       const seasonYear = Number(year);
       if (!Number.isFinite(seasonYear)) continue;
 
-      const rows = Array.isArray(value)
+      const savedPayload = readCustomDraftClassForYear(seasonYear);
+      const rows = Array.isArray(savedPayload)
+        ? savedPayload
+        : Array.isArray(savedPayload?.draftClass)
+        ? savedPayload.draftClass
+        : Array.isArray(value)
         ? value
         : Array.isArray(value?.draftClass)
         ? value.draftClass
         : [];
 
-      loaded[String(seasonYear)] = rows.map((row, index) => normalizeDraftProspect(row, index, seasonYear));
+      if (rows.length) {
+        loaded[String(seasonYear)] = rows.map((row, index) => normalizeDraftProspect(row, index, seasonYear));
+      }
     }
 
     for (let year = 2026; year <= 2035; year++) {
-      const savedPayload = safeJSON(localStorage.getItem(getDraftClassStorageKey(year)), null);
+      const savedPayload = readCustomDraftClassForYear(year);
       if (savedPayload?.draftClass?.length && !loaded[String(year)]) {
         loaded[String(year)] = savedPayload.draftClass.map((row, index) => normalizeDraftProspect(row, index, year));
       }

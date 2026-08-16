@@ -15,6 +15,8 @@ import { initializeTradeDeskStorage } from "./utils/tradeDeskFeed.js";
 import { initializeScheduleStorage } from "./utils/scheduleStorage.js";
 import { initializeUpcomingDraftClassStorage } from "./utils/upcomingDraftClass.js";
 import { initializeSeasonStatsArchiveStorage } from "./utils/seasonStatsArchive.js";
+import { initializeCustomDraftClassStorage } from "./utils/customDraftClassStorage.js";
+import { initializeOffseasonMoodBaselineStorage } from "./utils/offseasonMoodBaselineStorage.js";
 
 // ------------------------------
 // DEV BOOT RESET (npm run dev)
@@ -93,6 +95,8 @@ async function bootstrap() {
     ["ScheduleStorage", initializeScheduleStorage],
     ["UpcomingDraft", initializeUpcomingDraftClassStorage],
     ["SeasonStatsArchive", initializeSeasonStatsArchiveStorage],
+    ["CustomDraftStorage", initializeCustomDraftClassStorage],
+    ["OffseasonMoodBaseline", initializeOffseasonMoodBaselineStorage],
     ["TradeDeskFeed", initializeTradeDeskStorage],
   ];
 

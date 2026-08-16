@@ -3,8 +3,11 @@ import {
   readPlayerMoodEventBus,
   writePlayerMoodEventBusSnapshot,
 } from "./tradeDeskFeed.js";
-
-const OFFSEASON_MOOD_BASELINE_KEY = "bm_offseason_mood_baseline_v1";
+import {
+  OFFSEASON_MOOD_BASELINE_KEY,
+  readOffseasonMoodBaselineSnapshot,
+  writeOffseasonMoodBaselineSnapshot,
+} from "./offseasonMoodBaselineStorage.js";
 const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
 
@@ -476,23 +479,22 @@ function stayedPlayersForTeam(baseTeam = {}, finalTeam = {}) {
 }
 
 export function captureOffseasonMoodBaseline(leagueData, options = {}) {
-  if (!leagueData || !hasLocalStorage()) return null;
+  if (!leagueData) return null;
 
   const seasonYear = Number(options.seasonYear || getSeasonYearFromLeague(leagueData));
-  const existing = safeJSON(localStorage.getItem(OFFSEASON_MOOD_BASELINE_KEY), null);
+  const existing = readOffseasonMoodBaselineSnapshot();
 
   if (!options.force && existing?.seasonYear === seasonYear && Array.isArray(existing?.teams) && existing.teams.length) {
     return existing;
   }
 
   const snapshot = buildLeagueSnapshot(leagueData, seasonYear);
-  localStorage.setItem(OFFSEASON_MOOD_BASELINE_KEY, JSON.stringify(snapshot));
+  writeOffseasonMoodBaselineSnapshot(snapshot);
   return snapshot;
 }
 
 export function readOffseasonMoodBaseline(seasonYear = null) {
-  if (!hasLocalStorage()) return null;
-  const snapshot = safeJSON(localStorage.getItem(OFFSEASON_MOOD_BASELINE_KEY), null);
+  const snapshot = readOffseasonMoodBaselineSnapshot();
   if (!snapshot || typeof snapshot !== "object") return null;
   if (seasonYear && Number(snapshot.seasonYear) !== Number(seasonYear)) return null;
   return snapshot;

@@ -19,6 +19,10 @@ import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.j
 import { formatLeagueDate, getOffseasonCurrentDate, writeLeagueClock } from "../utils/leagueClock.js";
 import { getContractSeasonYear } from "../utils/seasonContext.js";
 import {
+  readCustomDraftClassForYear,
+  readDefaultCustomDraftClass,
+} from "../utils/customDraftClassStorage.js";
+import {
   isMultiYearSpeedDiagnosticsEnabled,
   recordMultiYearLeagueSnapshot,
   recordMultiYearOffseasonStepTiming,
@@ -32,8 +36,6 @@ const PROGRESSION_SHAPE_AUDIT_KEY = "bm_progression_shape_audit_v25d";
 const PROG_DELTAS_KEY = "bm_progression_deltas_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
-const CUSTOM_DRAFT_CLASS_KEY = "bm_custom_draft_class_v1";
-const CUSTOM_DRAFT_CLASS_PREFIX = "bm_custom_draft_class_";
 const CUSTOM_DRAFT_CLASS_MODE_BY_YEAR_KEY = "bm_draft_class_mode_by_year_v1";
 const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
 const OPTIONS_RESULTS_KEY = "bm_option_decision_results_v1";
@@ -257,9 +259,8 @@ function readDraftClassModeForYear(seasonYear, hasCustomClass = false) {
 }
 
 function readCustomDraftClassSetupForYear(seasonYear) {
-  const seasonKey = `${CUSTOM_DRAFT_CLASS_PREFIX}${Number(seasonYear || 2026)}`;
-  const savedSeasonClass = safeJSON(localStorage.getItem(seasonKey), null);
-  const savedDefaultClass = safeJSON(localStorage.getItem(CUSTOM_DRAFT_CLASS_KEY), null);
+  const savedSeasonClass = readCustomDraftClassForYear(seasonYear);
+  const savedDefaultClass = readDefaultCustomDraftClass();
   const draftClassPayload = savedSeasonClass || savedDefaultClass || null;
   const rows = getRowsFromDraftClassPayload(draftClassPayload);
   const hasCustomClass = rows.length > 0;
