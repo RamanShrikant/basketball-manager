@@ -6,6 +6,12 @@ const round4 = (value) => Math.round(Number(value || 0) * 10000) / 10000;
 const projectionCache = new Map();
 const MAX_PROJECTION_CACHE = 3000;
 
+// Rating-scale constants for the deflated 40-99 ecosystem.
+// Attributes remain 25-99. Derived OVR can now reach 40.
+const OVERALL_MIN = 40;
+const RATING_MAX = 99;
+const OVERALL_CURVE_POWER = 0.65;
+
 const POS_PARAMS = {
   PG: { weights: [0.11,0.05,0.03,0.05,0.17,0.17,0.10,0.07,0.10,0.02,0.01,0.07,0.05,0.01,0.01], prim: [5,6,1,7], alpha: 0.25 },
   SG: { weights: [0.15,0.08,0.05,0.05,0.12,0.07,0.11,0.07,0.11,0.03,0.02,0.08,0.06,0.01,0.01], prim: [1,5,7], alpha: 0.28 },
@@ -45,6 +51,15 @@ function sigmoid(value) {
   return 1 / (1 + Math.exp(-0.12 * (value - 77)));
 }
 
+function overallFromBlend(blend) {
+  if (blend <= 30) return OVERALL_MIN;
+  return clamp(
+    OVERALL_MIN + (RATING_MAX - OVERALL_MIN) * Math.pow(sigmoid(blend), OVERALL_CURVE_POWER),
+    OVERALL_MIN,
+    RATING_MAX
+  );
+}
+
 export function calculateProjectedOverallFromAttrs(attrs = [], position = "SF") {
   const pos = normalizedPos(position);
   const config = POS_PARAMS[pos];
@@ -52,9 +67,9 @@ export function calculateProjectedOverallFromAttrs(attrs = [], position = "SF") 
   const weighted = config.weights.reduce((sum, weight, index) => sum + weight * values[index], 0);
   const peak = Math.max(...config.prim.map((oneBased) => values[oneBased - 1]));
   const blended = config.alpha * peak + (1 - config.alpha) * weighted;
-  let overall = Math.round(clamp(60 + 39 * sigmoid(blended), 60, 99));
+  let overall = Math.round(overallFromBlend(blended));
   const eliteAttrs = values.filter((value) => value >= 90).length;
-  if (eliteAttrs >= 3) overall = Math.min(99, overall + eliteAttrs - 2);
+  if (eliteAttrs >= 3) overall = Math.min(RATING_MAX, overall + eliteAttrs - 2);
   return overall;
 }
 

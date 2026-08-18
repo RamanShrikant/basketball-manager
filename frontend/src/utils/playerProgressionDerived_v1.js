@@ -9,6 +9,13 @@ const PERD = 8, INTD = 9, BLK = 10, STL = 11, REB = 12, OIQ = 13, DIQ = 14;
 const POSITIONS = ["PG", "SG", "SF", "PF", "C"];
 const clampRange = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
+// Rating-scale constants for the deflated 40-99 ecosystem.
+// Attributes remain 25-99. Derived OVR can now reach 40, while OFF/DEF can reach 30.
+const OVERALL_MIN = 40;
+const RATING_MAX = 99;
+const OFF_DEF_MIN = 30;
+const OVERALL_CURVE_POWER = 0.65;
+
 function getAllTeamsFromLeagueData(leagueData) {
   if (!leagueData || typeof leagueData !== "object") return [];
   if (Array.isArray(leagueData.teams)) return leagueData.teams;
@@ -139,8 +146,7 @@ function calcOverallFromAttrs(attrs, pos) {
   const Peak = Math.max(...prim.map((i) => a[i] || 75));
   const B = p.alpha * Peak + (1 - p.alpha) * W;
 
-  let overall = 60 + 39 * sigmoid(B);
-  overall = Math.round(Math.min(99, Math.max(60, overall)));
+  let overall = Math.round(overallFromBlend(B));
 
   const num90 = a.filter((x) => x >= 90).length;
   if (num90 >= 3) {
@@ -193,7 +199,7 @@ function calcOffenseDefenseFromAttrs(attrsIn, posIn) {
     return weight > 0 ? score / weight : 75;
   };
 
-  const scale = (x) => Math.round(clampRange(60 + 39 * sigmoid(x), 60, 99));
+  const scale = (x) => Math.round(overallFromBlend(x));
 
   return {
     off: scale(weightedAverage(offensiveAttrs)),
@@ -251,7 +257,7 @@ function buildRatingBaselinesFromLeague(leagueData) {
   const safe = (v) => (v && v > 1e-6 ? v : 1.0);
   const zPos = (attrs, pos, k) => (attrs[k] - (posMean[pos]?.[k] ?? 75)) / safe(posStd[pos]?.[k]);
   const zAbs = (attrs, k) => (attrs[k] - (absMean[k] ?? 75)) / safe(absStd[k]);
-  const zToRating = (z) => clampRange(75 + 12 * z, 50, 99);
+  const zToRating = (z) => clampRange(75 + 12 * z, OFF_DEF_MIN, 99);
 
   const pfBridgedWeights = (() => {
     const pf = OFF_WEIGHTS_POSZ.PF, sf = OFF_WEIGHTS_POSZ.SF;
@@ -282,7 +288,7 @@ function buildRatingBaselinesFromLeague(leagueData) {
     off -= Math.min(6, 0.07 * threePenaltyMult(p) * t3Gap);
     off -= Math.min(6, 0.07 * closePenaltyMult(p) * cGap);
 
-    return clampRange(off, 50, 99);
+    return clampRange(off, OFF_DEF_MIN, 99);
   };
 
   const previewDef = (attrs, pos) => {
@@ -327,7 +333,7 @@ function buildRatingBaselinesFromLeague(leagueData) {
     def -= Math.min(4, absPen + relPen);
 
     const cap = p === "C" ? 99 : p === "PF" ? 98 : 96;
-    return clampRange(def, 50, cap);
+    return clampRange(def, OFF_DEF_MIN, cap);
   };
 
   let sumOV = 0, sumOFF = 0, sumDEF = 0, n = 0;
@@ -357,7 +363,7 @@ function calcOffDefV19(attrsIn, posIn, name = "", height = 78, baselines) {
   const safe = (v) => (v && v > 1e-6 ? v : 1.0);
   const zPos = (k) => (attrs[k] - (posMean[p]?.[k] ?? 75)) / safe(posStd[p]?.[k]);
   const zAbs = (k) => (attrs[k] - (absMean[k] ?? 75)) / safe(absStd[k]);
-  const zToRating = (z) => clampRange(75 + 12 * z, 50, 99);
+  const zToRating = (z) => clampRange(75 + 12 * z, OFF_DEF_MIN, 99);
 
   const ABS_MIX = { PF: 0.7, SF: 0.2, PG: 0.1, SG: 0.1, C: 0.1 };
 
@@ -426,10 +432,10 @@ function calcOffDefV19(attrsIn, posIn, name = "", height = 78, baselines) {
   def -= Math.min(4, absPen + relPen);
 
   const j = v19Jitter(name, attrs);
-  off = clampRange(off + offShift + j, 50, 99);
+  off = clampRange(off + offShift + j, OFF_DEF_MIN, 99);
 
   const defCap = p === "C" ? 99 : p === "PF" ? 98 : 96;
-  def = clampRange(def + defShift + 0.7 * j, 50, defCap);
+  def = clampRange(def + defShift + 0.7 * j, OFF_DEF_MIN, defCap);
 
   return { off: bankersRound(off), def: bankersRound(def) };
 }

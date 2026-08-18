@@ -1306,6 +1306,13 @@ const normalizePlayer = (p) => {
   /* ---------------- Helpers ---------------- */
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
+  // Rating-scale constants for the deflated 40-99 ecosystem.
+  // Attributes remain 25-99. Derived OVR can now reach 40, while OFF/DEF can reach 30.
+  const OVERALL_MIN = 40;
+  const RATING_MAX = 99;
+  const OFF_DEF_MIN = 30;
+  const OVERALL_CURVE_POWER = 0.65;
+
   function bankersRound(n) {
     const f = Math.floor(n);
     const diff = n - f;
@@ -1326,6 +1333,15 @@ const normalizePlayer = (p) => {
 
   const sigmoid = (x) => 1 / (1 + Math.exp(-0.12 * (x - 77)));
 
+  const overallFromBlend = (blend) => {
+    if (blend <= 30) return OVERALL_MIN;
+    return clamp(
+      OVERALL_MIN + (RATING_MAX - OVERALL_MIN) * Math.pow(sigmoid(blend), OVERALL_CURVE_POWER),
+      OVERALL_MIN,
+      RATING_MAX
+    );
+  };
+
   /* ---------------- Overall & Stamina (unchanged) ---------------- */
   const calcOverall = (attrs, pos) => {
     const p = posParams[pos];
@@ -1334,8 +1350,7 @@ const normalizePlayer = (p) => {
     const prim = p.prim.map((i) => i - 1);
     const Peak = Math.max(...prim.map((i) => attrs[i] || 75));
     const B = p.alpha * Peak + (1 - p.alpha) * W;
-    let overall = 60 + 39 * sigmoid(B);
-    overall = Math.round(Math.min(99, Math.max(60, overall)));
+    let overall = Math.round(overallFromBlend(B));
     const num90 = (attrs || []).filter((a) => a >= 90).length;
     if (num90 >= 3) {
       const bonus = num90 - 2;
@@ -1423,7 +1438,7 @@ const normalizePlayer = (p) => {
     })();
 
     const ABS_MIX = { PF: 0.7, SF: 0.2, PG: 0.1, SG: 0.1, C: 0.1 };
-    const zToRating = (z) => clamp(75 + 12 * z, 50, 99);
+    const zToRating = (z) => clamp(75 + 12 * z, OFF_DEF_MIN, 99);
 
     const previewOff = (attrs, pos) => {
       const p = ["PG", "SG", "SF", "PF", "C"].includes(pos) ? pos : "SF";
@@ -1443,7 +1458,7 @@ const normalizePlayer = (p) => {
       const cGap = Math.max(0, 60 - (attrs[CLOSE] || 0) - 2);
       off -= Math.min(6, 0.07 * threePenaltyMult(p) * t3Gap);
       off -= Math.min(6, 0.07 * closePenaltyMult(p) * cGap);
-      return clamp(off, 50, 99);
+      return clamp(off, OFF_DEF_MIN, 99);
     };
 
     const previewDef = (attrs, pos) => {
@@ -1481,7 +1496,7 @@ const normalizePlayer = (p) => {
 
       def -= Math.min(4, absPen + relPen);
       const cap = p === "C" ? 99 : p === "PF" ? 98 : 96;
-      return clamp(def, 50, cap);
+      return clamp(def, OFF_DEF_MIN, cap);
     };
 
     let sumOV = 0, sumOFF = 0, sumDEF = 0, n = 0;
@@ -1513,7 +1528,7 @@ const normalizePlayer = (p) => {
     const safe = (v) => (v && v > 1e-6 ? v : 1.0);
     const zPos = (k) => (attrs[k] - (posMean[p]?.[k] ?? 75)) / safe(posStd[p]?.[k]);
     const zAbs = (k) => (attrs[k] - (absMean[k] ?? 75)) / safe(absStd[k]);
-    const zToRating = (z) => clamp(75 + 12 * z, 50, 99);
+    const zToRating = (z) => clamp(75 + 12 * z, OFF_DEF_MIN, 99);
 
     const ABS_MIX = { PF: 0.7, SF: 0.2, PG: 0.1, SG: 0.1, C: 0.1 };
     const wBase =
@@ -1573,9 +1588,9 @@ const normalizePlayer = (p) => {
     def -= Math.min(4, absPen + relPen);
 
     const j = v19Jitter(name, attrs);
-    off = clamp(off + offShift + j, 50, 99);
+    off = clamp(off + offShift + j, OFF_DEF_MIN, 99);
     const defCap = p === "C" ? 99 : p === "PF" ? 98 : 96;
-    def = clamp(def + defShift + 0.7 * j, 50, defCap);
+    def = clamp(def + defShift + 0.7 * j, OFF_DEF_MIN, defCap);
 
     return { off: bankersRound(off), def: bankersRound(def) };
   };
@@ -1679,8 +1694,8 @@ const normalizePlayer = (p) => {
     const height = clamp(Number(row.height || 78), 65, 90);
     const overall = clamp(
       Number(row.overall ?? row.ovr ?? calcOverall(attrs, pos)),
-      50,
-      99
+      OVERALL_MIN,
+      RATING_MAX
     );
     const potential = clamp(Number(row.potential ?? row.pot ?? overall), overall, 99);
     const offDef = calcOffDef(attrs, pos, name, height);
@@ -1729,7 +1744,7 @@ const normalizePlayer = (p) => {
       tier: row.tier || "Custom",
       overall,
       potential,
-      floor: clamp(Number(row.floor || overall - 4), 45, overall),
+      floor: clamp(Number(row.floor || overall - 4), OVERALL_MIN, overall),
       ceiling: clamp(Number(row.ceiling || potential), potential, 99),
       attrs,
       offRating: Number.isFinite(Number(row.offRating)) ? Number(row.offRating) : offDef.off,
@@ -1749,7 +1764,7 @@ const normalizePlayer = (p) => {
       scouting: row.scouting || {
         projectedRangeLow: clamp(rank - 3, 1, 110),
         projectedRangeHigh: clamp(rank + 8, 1, 110),
-        scoutedOverallRange: [clamp(overall - 2, 45, 99), clamp(overall + 2, 45, 99)],
+        scoutedOverallRange: [clamp(overall - 2, OVERALL_MIN, RATING_MAX), clamp(overall + 2, OVERALL_MIN, RATING_MAX)],
         scoutedPotentialRange: [clamp(potential - 4, overall, 99), clamp(potential + 3, overall, 99)],
       },
       traits: {
