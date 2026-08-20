@@ -1,0 +1,33 @@
+OK inserted FA market equivalent helper
+OK replace classify_cpu_target_tier: 1 replacement(s)
+OK retune FA decision patience tiers: 1 replacement(s)
+OK add market_ovr to build_cpu_offer_contract: 1 replacement(s)
+OK retune fringe/depth classification in offer builder: 1 replacement(s)
+OK contender vet threshold: 1 replacement(s)
+OK contender defense threshold: 1 replacement(s)
+OK contender young discount threshold: 2 replacement(s)
+OK rebuild older discount threshold: 1 replacement(s)
+OK balanced prime threshold: 1 replacement(s)
+OK outside pressure threshold: 1 replacement(s)
+OK perfect fit threshold: 1 replacement(s)
+OK scoring skill threshold: 1 replacement(s)
+OK available room star floor: 1 replacement(s)
+OK available room starter floor: 1 replacement(s)
+OK depth length tier A: 1 replacement(s)
+OK depth length tier B: 1 replacement(s)
+OK value length tier: 1 replacement(s)
+OK primary length tier: 1 replacement(s)
+OK incumbent length tier: 1 replacement(s)
+OK serious minimum-offer guard: 1 replacement(s)
+OK late rights return threshold: 1 replacement(s)
+OK late rights reason text: 1 replacement(s)
+SKIP late rights overfill add guard: pattern not found
+OK retune offer multiplier caps: 1 replacement(s)
+OK replace incumbent retention priority: 1 replacement(s)
+OK replace priority offseason overfill candidate: 1 replacement(s)
+OK replace late rights retention candidate: 1 replacement(s)
+SKIP story/profile rotation threshold: pattern not found
+SKIP story/profile star threshold: pattern not found
+OK regular-season FA repair high-value threshold: 1 replacement(s)
+OK inserted ViewingOffers current-day event helper
+OK ViewingOffers signedPlayersLog current-day filter replacements: 3

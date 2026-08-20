@@ -55,22 +55,22 @@ BAD_TEAM_OVERACHIEVING_SELLER_REDUCTION = 0.58
 # Asset guardrails. V2 treats every standard-roster player as technically
 # tradeable at the right price. Star/core players are protected by asking-price
 # penalties instead of hard blockers, and packages remain capped for sim speed.
-MIN_MARKET_PLAYER_OVR = 65
+MIN_MARKET_PLAYER_OVR = 60
 MAX_ASSETS_PER_SIDE = 5
 MAX_PLAYER_ASSETS_PER_SIDE = 3
 MAX_PICK_ASSETS_PER_SIDE = 4
 
 # One-per-season mega trade lane. These caps are only used when JS requests
 # megaTradeMode; the regular CPU trade bank keeps its existing package limits.
-MEGA_TRADE_TARGET_OVR = 90
+MEGA_TRADE_TARGET_OVR = 86
 MEGA_MAX_ASSETS_PER_SIDE = 7
 MEGA_MAX_PLAYER_ASSETS_PER_SIDE = 3
 MEGA_MAX_PICK_ASSETS_PER_SIDE = 4
 MEGA_TARGET_SCAN_LIMIT = 28
 MEGA_BUYER_SCAN_LIMIT = 24
 
-MAJOR_TRADE_TARGET_OVR = 80
-STAR_TRADE_TARGET_OVR = 85
+MAJOR_TRADE_TARGET_OVR = 76
+STAR_TRADE_TARGET_OVR = 82
 STANDARD_ROSTER_MIN = 14
 STANDARD_ROSTER_MAX = 16
 
@@ -340,7 +340,7 @@ def _record_for(team_name: str, context: Dict[str, Any], team: Dict[str, Any]) -
 
 def _expected_win_pct_from_strength(top_avg: float) -> float:
     # Simple roster-strength expectation. 78 ~= .500, 86 ~= high seed.
-    return max(0.22, min(0.78, 0.50 + (top_avg - 78.0) * 0.025))
+    return max(0.22, min(0.78, 0.50 + (top_avg - 75.0) * 0.025))
 
 
 def _phase_for(team: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -354,8 +354,8 @@ def _phase_for(team: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     slump = False
 
     if win_pct is not None and games >= MIN_GAMES_FOR_RECORD_DIRECTION:
-        surprise = bool(win_pct >= expected + 0.105 and top < 81.5)
-        slump = bool(win_pct <= expected - 0.115 and top >= 82.0)
+        surprise = bool(win_pct >= expected + 0.105 and top < 78.5)
+        slump = bool(win_pct <= expected - 0.115 and top >= 79.0)
         if win_pct >= STRONG_BUYER_WIN_PCT:
             phase = "contender"
         elif win_pct >= BUYER_WIN_PCT:
@@ -367,13 +367,13 @@ def _phase_for(team: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         else:
             phase = "middle"
     else:
-        if top >= 84.5:
+        if top >= 81.5:
             phase = "contender"
-        elif top >= 81.0:
+        elif top >= 78.0:
             phase = "buyer"
-        elif top <= 75.5:
+        elif top <= 72.5:
             phase = "seller"
-        elif top <= 78.0:
+        elif top <= 75.0:
             phase = "retool"
         else:
             phase = "middle"
@@ -2294,3 +2294,4 @@ def find_cpu_cpu_trade_candidates_json(payload_json: str) -> str:
             "skippedReason": "error",
             "error": str(exc),
         })
+

@@ -43,8 +43,8 @@ def fatigue_penalty(minutes, stamina):
 # Matches the EXACT gamespace logic.
 # ---------------------------------------------------------
 
-TR_COV_ALPHA = 15.0
-TR_OVERPOS_MAXPT = 6.0
+TR_COV_ALPHA = 9.0
+TR_OVERPOS_MAXPT = 3.0
 
 def coverage_penalty(pos_min):
     """
@@ -92,21 +92,33 @@ def empty_minutes_penalty(total_minutes):
 # Star boost engine (same star curve as your friend)
 # ---------------------------------------------------------
 
-TR_STAR_REF = 84.0
+# Native deflated roster calibration. Mirrors frontend/src/api/teamRatings.js.
+TR_STAR_REF = 80.0
+TR_STAR_SOFT_CAP = 12.0
+TR_STAR_TAIL_MULT = 0.35
 TR_STAR_SCALE = 1.00
-TR_STAR_EXP_OVR = 1.22
-TR_STAR_EXP_OFF = 1.20
-TR_STAR_EXP_DEF = 1.20
+TR_STAR_MULT_OVR = 0.72
+TR_STAR_MULT_OFF = 0.68
+TR_STAR_MULT_DEF = 0.58
+TR_STAR_EXP_OVR = 1.12
+TR_STAR_EXP_OFF = 1.10
+TR_STAR_EXP_DEF = 1.10
 TR_STAR_SHARE_EXP = 0.45
 TR_STAR_OUT_EXP = 0.85
 
-def star_boost(eff_list, star_exp, ref=TR_STAR_REF):
+def star_gap_above_ref(base, ref=TR_STAR_REF):
+    raw_gap = max(0.0, float(base or 0) - ref)
+    if raw_gap <= TR_STAR_SOFT_CAP:
+        return raw_gap
+    return TR_STAR_SOFT_CAP + (raw_gap - TR_STAR_SOFT_CAP) * TR_STAR_TAIL_MULT
+
+def star_boost(eff_list, star_exp, ref=TR_STAR_REF, rating_key="overall"):
     """
     eff_list: [ { "eff": number, "player": p }, ... ]
 
     Your friend's exact 2-star shared-boost algorithm:
     - identify top 2 players by effective rating
-    - convert gap above reference
+    - convert gap above native deflated reference
     - weight by share minutes
     - apply exponent scaling
     """
@@ -119,9 +131,9 @@ def star_boost(eff_list, star_exp, ref=TR_STAR_REF):
     pull = 0.0
     for entry in top2:
         p = entry["player"]
-        base = p.get("overall") or p.get("offRating") or p.get("defRating") or 75
+        base = p.get(rating_key) or p.get("overall") or p.get("offRating") or p.get("defRating") or 75
 
-        gap = max(0, base - ref)
+        gap = star_gap_above_ref(base, ref=ref)
         if gap <= 0:
             continue
 
@@ -136,12 +148,24 @@ def star_boost(eff_list, star_exp, ref=TR_STAR_REF):
 # Scaling final off/def/overall back into 25–99 range
 # ---------------------------------------------------------
 
-TR_GAIN = 1.30
+TR_GAIN_OVR = 2.04
+TR_GAIN_OFF = 2.14
+TR_GAIN_DEF = 1.216
+TR_SCALE_CENTER_RAW_OVR = 80.0
+TR_SCALE_CENTER_OUT_OVR = 78.5
+TR_SCALE_CENTER_RAW_OFF = 80.0
+TR_SCALE_CENTER_OUT_OFF = 76.0
+TR_SCALE_CENTER_RAW_DEF = 80.0
+TR_SCALE_CENTER_OUT_DEF = 78.47
 
-def scale_range(raw):
+def scale_range(raw, kind="overall"):
     """
-    Same mapping formula in original:
-        (raw - 75) * GA + 75
-    Clamped to 25–99
+    Native deflated mapping. Patch 31 stretches the displayed/team-impact
+    rating scale without hard max/min values. For the current deflation roster,
+    this should naturally land around OVR 89-65, OFF 92-68, DEF 91-66.
     """
-    return clamp((raw - 75) * TR_GAIN + 75, 25, 99)
+    if kind == "off":
+        return clamp((raw - TR_SCALE_CENTER_RAW_OFF) * TR_GAIN_OFF + TR_SCALE_CENTER_OUT_OFF, 25, 99)
+    if kind == "def":
+        return clamp((raw - TR_SCALE_CENTER_RAW_DEF) * TR_GAIN_DEF + TR_SCALE_CENTER_OUT_DEF, 25, 99)
+    return clamp((raw - TR_SCALE_CENTER_RAW_OVR) * TR_GAIN_OVR + TR_SCALE_CENTER_OUT_OVR, 25, 99)

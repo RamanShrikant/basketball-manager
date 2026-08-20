@@ -1,6 +1,30 @@
 """CPU-team contract-extension offer construction and decision logic."""
 from __future__ import annotations
 
+# BM_PATCH32_ECONOMIC_IMPORT
+try:
+    from deflated_trade_scale import economic_player_copy, player_economic_overall, player_economic_potential, economy_ovr, TRADE_TIER
+except Exception:  # pragma: no cover - patch fallback
+    def economic_player_copy(player):
+        return player
+    def player_economic_overall(player):
+        try:
+            return float(player.get("overall", player.get("ovr", 0)))
+        except Exception:
+            return 0.0
+    def player_economic_potential(player):
+        try:
+            return max(player_economic_overall(player), float(player.get("potential", player.get("pot", player_economic_overall(player)))))
+        except Exception:
+            return player_economic_overall(player)
+    def economy_ovr(value):
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+    TRADE_TIER = {"MEGA": 86, "STAR": 84, "STARTER": 76, "CORE": 80, "SUPERSTAR": 88, "FRANCHISE": 90}
+
+
 import math
 from typing import Any, Dict, Optional
 
@@ -32,6 +56,7 @@ def _team_payroll_for_year(team: Dict[str, Any], season_year: int) -> int:
 
 
 def _core_score(player: Dict[str, Any], team: Dict[str, Any], extension_type: str) -> float:
+    player = economic_player_copy(player)  # BM_PATCH32_EXTENSION_CORE_ECONOMY
     overall = _num(player.get("overall"), 70)
     potential = _num(player.get("potential"), overall)
     age = _num(player.get("age"), 27)
@@ -56,6 +81,7 @@ def _choose_cpu_ask_package(
     core_score: float,
     future_room: float,
 ) -> Optional[Dict[str, Any]]:
+    player = economic_player_copy(player)  # BM_PATCH32_EXTENSION_ASK_ECONOMY
     packages = eligibility.get("askPackages") if isinstance(eligibility.get("askPackages"), list) else []
     if not packages:
         return None
@@ -102,6 +128,7 @@ def build_cpu_extension_offer(
     eligibility: Dict[str, Any],
     phase: str = "opening",
 ) -> Optional[Dict[str, Any]]:
+    player = economic_player_copy(player)  # BM_PATCH32_EXTENSION_OFFER_ECONOMY
     if not eligibility.get("eligible"):
         return None
 
@@ -193,6 +220,7 @@ def _v10_cpu_extension_evaluation(
     eligibility: Dict[str, Any],
     phase: str = "opening",
 ) -> Dict[str, Any]:
+    player = economic_player_copy(player)  # BM_PATCH32_EXTENSION_V10_ECONOMY
     if not eligibility.get("eligible"):
         return {"approved": False, "reason": "player_not_willing_or_ineligible", "result": None}
 

@@ -1,5 +1,6 @@
 import { filterTradeEligiblePlayers } from "./tradeRosterEligibility.js";
 import { getPlayerSalary, sideSalary } from "./tradeExecution.js";
+import { economyOvr, economyOvrForPlayer, economyPotentialForPlayer, marketAavMillionsFromEconomicOverall, TRADE_TIER } from "./nativeDeflatedTradeScale.js";
 import {
   canAddCustomProtectionToPick,
   formatResolvedDraftPickLabel,
@@ -274,28 +275,50 @@ export function formatPick(pick = {}) {
 }
 
 export function playerValue(player, leagueData) {
-  const overall = Number(player?.overall || player?.ovr || 0);
-  const potential = Number(player?.potential || player?.pot || overall || 0);
+  const visibleOverall = Number(player?.overall || player?.ovr || 0);
+  const visiblePotential = Number(player?.potential || player?.pot || visibleOverall || 0);
+  const economicOverall = economyOvrForPlayer(player);
+  const economicPotential = Math.max(economicOverall, economyOvr(visiblePotential));
   const age = Number(player?.age || 27);
   const salaryM = getPlayerSalary(player, leagueData) / 1_000_000;
 
-  // One consistent scale for every Trade Finder search. The old linear formula
-  // made cheap 76-78 OVR players worth almost as much as franchise players, which
-  // caused normal packages to search like superstar packages. This curve keeps
-  // stars expensive while making rotation-player packages land in a realistic
-  // target range.
-  const lowTier = Math.max(0, Math.min(overall, 80) - 60) * 1.25;
-  const starterTier = Math.max(0, Math.min(overall, 85) - 80) * 2.0;
-  const starTier = Math.max(0, overall - 85) * 4.0;
-  const ratingValue = Math.max(2, lowTier + starterTier + starTier);
-  const potentialBonus = Math.max(-8, potential - overall) * 1.15;
-  const ageBonus = age <= 22 ? 8 : age <= 25 ? 6 : age <= 28 ? 3.5 : age <= 31 ? 1 : age <= 34 ? -2 : -6;
-  const contractPenalty = Math.max(0, salaryM - 18) * 0.40;
-  const bargainBonus = overall >= 76 && salaryM > 0 && salaryM <= 8 ? 4.5 : 0;
-  const starBonus = overall >= 95 ? 42 : overall >= 92 ? 34 : overall >= 90 ? 26 : overall >= 85 ? 12 : overall >= 80 ? 4 : 0;
+  // Patch 32: value uses the deflated league economy, not raw old thresholds.
+  // A visible 70 now behaves like real rotation value, 76 like starter-ish value,
+  // 84 like star value, and 88+ like superstar/franchise value.
+  const depthTier = Math.max(0, Math.min(economicOverall, 70) - 58) * 0.95;
+  const rotationTier = Math.max(0, Math.min(economicOverall, 80) - 70) * 1.65;
+  const starterTier = Math.max(0, Math.min(economicOverall, 88) - 80) * 2.65;
+  const starTier = Math.max(0, economicOverall - 88) * 4.35;
+  const ratingValue = Math.max(2, depthTier + rotationTier + starterTier + starTier);
 
-  return Math.max(1, ratingValue + potentialBonus + ageBonus + starBonus + bargainBonus - contractPenalty);
+  const upside = Math.max(-6, Math.min(14, economicPotential - economicOverall));
+  const potentialBonus = upside * (age <= 24 ? 1.55 : age <= 27 ? 1.25 : age <= 30 ? 0.85 : 0.45);
+  const ageBonus = age <= 22 ? 9 : age <= 25 ? 7 : age <= 28 ? 4 : age <= 31 ? 1 : age <= 34 ? -3 : -7;
+
+  const expectedM = marketAavMillionsFromEconomicOverall(economicOverall, age);
+  const contractPenalty = Math.max(0, salaryM - expectedM * 1.16) * 0.52;
+  const bargainBonus =
+    salaryM > 0 && salaryM <= expectedM * 0.58 && economicOverall >= 75
+      ? Math.min(9, (expectedM * 0.58 - salaryM) * 0.55)
+      : salaryM > 0 && salaryM <= 8 && visibleOverall >= TRADE_TIER.ROTATION
+        ? 3.5
+        : 0;
+
+  const starBonus =
+    economicOverall >= 95 ? 42 :
+    economicOverall >= 92 ? 34 :
+    economicOverall >= 90 ? 27 :
+    economicOverall >= 88 ? 19 :
+    economicOverall >= 84 ? 10 :
+    economicOverall >= 80 ? 4 :
+    0;
+
+  const franchiseAgeBonus = visibleOverall >= TRADE_TIER.SUPERSTAR && age <= 30 ? 8 : 0;
+  const youngCoreBonus = age <= 25 && visibleOverall >= TRADE_TIER.STARTER && visiblePotential >= 82 ? 6 : 0;
+
+  return Math.max(1, ratingValue + potentialBonus + ageBonus + starBonus + franchiseAgeBonus + youngCoreBonus + bargainBonus - contractPenalty);
 }
+
 
 export function pickValue(pick, protection = TRADE_FINDER_DEFAULT_PICK_PROTECTION, leagueData = null) {
   const round = Number(pick?.round || 1);
