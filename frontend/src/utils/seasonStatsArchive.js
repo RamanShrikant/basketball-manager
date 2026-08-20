@@ -172,6 +172,9 @@ function compactPlayer(player = {}, teamName = "") {
     headshot: resolvePlayerImage(player),
     image: resolvePlayerImage(player),
     img: resolvePlayerImage(player),
+    portraitId: player?.portraitId || player?.portraitFamilyId || "",
+    portraitFamilyId: player?.portraitFamilyId || player?.portraitId || "",
+    portraitVariant: player?.portraitVariant || player?.portraitStage || "",
     teamName,
     team: teamName,
   };

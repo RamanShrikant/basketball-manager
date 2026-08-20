@@ -624,11 +624,14 @@ const handleAutoRebuild = () => {
             >
                 i
             </button>
-            <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
+            <div className="pointer-events-none absolute left-0 right-0 bottom-0 z-20 h-[3px] bg-white opacity-60"></div>
             <div className="flex items-end justify-between">
                 <div className="flex items-end gap-4">
                 <PlayerPortraitFrame
                     src={player.headshot}
+                    player={player}
+                    team={selectedTeam}
+                    teamName={selectedTeam?.name || ""}
                     alt={player.name}
                     className="h-[112px] w-[142px]"
                 />

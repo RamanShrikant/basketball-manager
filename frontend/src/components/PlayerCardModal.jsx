@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import LZString from "lz-string";
+import RuntimePlayerPortrait from "./RuntimePlayerPortrait.jsx";
 
 const ATTR_LABELS = [
   "3PT",
@@ -1424,11 +1425,16 @@ export default function PlayerCardModal({
             <div className="flex min-w-0 gap-5">
               <div className="pc-face-card relative -mb-[10px] flex h-36 w-28 shrink-0 self-end items-end justify-center overflow-hidden rounded-t-[26px] rounded-b-none border-x-2 border-t-2 border-b-0 border-white/20 bg-gradient-to-b from-zinc-800 to-zinc-950 sm:h-40 sm:w-32">
                 {resolvedTeamLogo && <img src={resolvedTeamLogo} alt={resolvedTeamName} className="absolute inset-0 m-auto h-28 w-28 object-contain opacity-12 blur-[1px]" />}
-                {portraitUrl ? (
-                  <img src={portraitUrl} alt={player.name} className="relative z-10 h-full w-full object-contain object-bottom drop-shadow-2xl" style={{ transform: "translateY(2px) scale(1.2)", transformOrigin: "bottom center" }} />
-                ) : (
-                  <div className="relative z-10 flex h-full w-full items-center justify-center text-sm font-bold text-zinc-500">No Image</div>
-                )}
+                <RuntimePlayerPortrait
+                  player={player}
+                  team={team}
+                  teamName={resolvedTeamName}
+                  src={portraitUrl}
+                  alt={player?.name || "Player"}
+                  className="relative z-10 h-full w-full"
+                  contentStyle={{ transform: "translateY(2px) scale(1.2)", transformOrigin: "bottom center" }}
+                  fallback={<div className="relative z-10 flex h-full w-full items-center justify-center text-sm font-bold text-zinc-500">No Image</div>}
+                />
               </div>
 
               <div className="relative top-2 min-w-0 flex-1 self-end pb-1">

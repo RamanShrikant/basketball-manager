@@ -1,4 +1,5 @@
 // src/pages/Intel_v1.jsx
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
@@ -132,7 +133,7 @@ function PlayerTiny({ row, source = false, compact = false }) {
   return (
     <div className={cx("grid min-w-0 grid-cols-[36px_1fr_auto] items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.035] px-2.5", compact ? "h-full min-h-[46px] max-h-[54px]" : "h-[54px]")}> 
       <div className="flex h-8 w-8 shrink-0 items-end justify-center overflow-hidden rounded-lg bg-black/50 ring-1 ring-white/8">
-        {headshot ? <img src={headshot} alt={name} className="h-10 w-auto object-contain" /> : <span className="text-[8px] text-neutral-600">N/A</span>}
+        <RuntimePlayerPortrait player={player} teamName={row?.teamName || row?.team || player?.teamName || ""} src={headshot} alt={name} className="h-10 w-10" fallback={<span className="text-[8px] text-neutral-600">N/A</span>} />
       </div>
       <div className="min-w-0">
         <div className="truncate text-[12px] font-black leading-none text-white">{name}</div>

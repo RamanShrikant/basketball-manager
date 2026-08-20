@@ -1,0 +1,10 @@
+{
+  "version": "bm_portrait_dressing_fit_v2",
+  "canvas": {
+    "width": 1040,
+    "height": 760
+  },
+  "fitByTemplate": {},
+  "fitByFace": {},
+  "jerseyTemplateHashes": {}
+}

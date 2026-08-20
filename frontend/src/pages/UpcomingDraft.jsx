@@ -13,6 +13,7 @@ import {
   safeJSON,
   saveUpcomingDraftClassForYear,
 } from "../utils/upcomingDraftClass.js";
+import HeadshotLayoutTransform from "../components/HeadshotLayoutTransform.jsx";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
@@ -143,12 +144,14 @@ function ProspectHeadshot({ src, name }) {
 
   return (
     <div className="flex h-16 w-14 shrink-0 items-end justify-center overflow-hidden">
-      <img
-        src={src}
-        alt={name || "Prospect"}
-        className="h-full w-full object-contain object-bottom drop-shadow-[0_8px_12px_rgba(0,0,0,0.5)]"
-        loading="lazy"
-      />
+      <HeadshotLayoutTransform className="h-full w-full">
+        <img
+          src={src}
+          alt={name || "Prospect"}
+          className="h-full w-full object-contain object-bottom drop-shadow-[0_8px_12px_rgba(0,0,0,0.5)]"
+          loading="lazy"
+        />
+      </HeadshotLayoutTransform>
     </div>
   );
 }
@@ -157,12 +160,14 @@ function ProspectHeroHeadshot({ src, name }) {
   return (
     <div className="relative flex h-40 w-44 shrink-0 self-end items-end justify-center overflow-hidden">
       {src ? (
-        <img
-          src={src}
-          alt={name || "Prospect"}
-          className="h-full w-full object-contain object-bottom drop-shadow-[0_16px_18px_rgba(0,0,0,0.5)]"
-          loading="lazy"
-        />
+        <HeadshotLayoutTransform className="h-full w-full">
+          <img
+            src={src}
+            alt={name || "Prospect"}
+            className="h-full w-full object-contain object-bottom drop-shadow-[0_16px_18px_rgba(0,0,0,0.5)]"
+            loading="lazy"
+          />
+        </HeadshotLayoutTransform>
       ) : (
         <div className="flex h-28 w-24 items-center justify-center text-[10px] font-black text-white/25">
           IMG

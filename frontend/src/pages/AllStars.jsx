@@ -1,6 +1,7 @@
 import React, { useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useGame } from "../context/GameContext";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 
 function buildRosterLookupFromLeague(leagueData) {
   const byKey = {};
@@ -42,6 +43,9 @@ function buildRosterLookupFromLeague(leagueData) {
         pos: p?.pos || p?.position || "",
         secondaryPos: p?.secondaryPos || p?.secondary_pos || "",
         teamLogo,
+        portraitId: p?.portraitId || p?.portraitFamilyId || "",
+        portraitFamilyId: p?.portraitFamilyId || p?.portraitId || "",
+        portraitVariant: p?.portraitVariant || p?.portraitStage || "",
       };
 
       byKey[`${playerName}__${teamName}`] = info;
@@ -70,11 +74,14 @@ function PlayerRow({ player, index, lookup }) {
         <span className="w-5 shrink-0 text-xs text-neutral-400">{index + 1}</span>
 
         <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-950 ring-1 ring-white/10">
-          {info.headshot ? (
-            <img src={info.headshot} alt={player.player} className="h-full w-full object-cover" />
-          ) : (
-            <div className="text-xs text-neutral-500">N/A</div>
-          )}
+          <RuntimePlayerPortrait
+            player={info}
+            teamName={player.team || ""}
+            src={info.headshot}
+            alt={player.player}
+            className="h-full w-full"
+            fallback={<div className="flex h-full w-full items-center justify-center text-xs text-neutral-500">N/A</div>}
+          />
         </div>
 
         <div className="min-w-0">

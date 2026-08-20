@@ -4,19 +4,24 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "npm run portrait:sync",
     "dev": "vite --host 127.0.0.1",
+    "prebuild": "npm run portrait:sync",
     "build": "vite build",
     "preview": "vite preview",
     "test:bm": "node scripts/bm-regression-check.mjs",
     "check:bm": "node scripts/bm-regression-check.mjs",
     "check:cpu-trade-history": "node scripts/bm-cpu-trade-history-parity.mjs",
-    "check:bm:full": "node scripts/bm-regression-check.mjs && python scripts/contract-extension-regression.py && npm run check:fa-contract-rules && node scripts/bm-cpu-trade-history-parity.mjs && node scripts/bm-year2-storage-regression.mjs && node scripts/bm-year2-cpu-trade-phase-regression.mjs && npm run check:cpu-roster-repair-fastpath && npm run check:new-chapter",
+    "check:bm:full": "node scripts/bm-regression-check.mjs && python scripts/contract-extension-regression.py && npm run check:fa-contract-rules && node scripts/bm-cpu-trade-history-parity.mjs && node scripts/bm-year2-storage-regression.mjs && node scripts/bm-year2-cpu-trade-phase-regression.mjs && npm run check:cpu-roster-repair-fastpath && npm run check:new-chapter && npm run check:portrait-studio && npm run check:portrait-dressing",
     "check:year2-storage": "node scripts/bm-year2-storage-regression.mjs",
     "check:year2-cpu-trade-phase": "node scripts/bm-year2-cpu-trade-phase-regression.mjs",
     "check:contract-extensions": "python scripts/contract-extension-regression.py",
     "check:fa-contract-rules": "python scripts/free-agency-contract-rules-regression.py && node scripts/free-agency-contract-rules-ui-regression.mjs",
     "check:cpu-roster-repair-fastpath": "node scripts/bm-cpu-roster-repair-fastpath-regression.mjs",
-    "check:new-chapter": "node scripts/season-briefing-regression.mjs"
+    "check:new-chapter": "node scripts/season-briefing-regression.mjs",
+    "check:portrait-dressing": "node scripts/portrait-dressing-regression.mjs",
+    "portrait:sync": "node scripts/sync-portrait-studio.mjs",
+    "check:portrait-studio": "node scripts/portrait-studio-regression.mjs"
   },
   "dependencies": {
     "lz-string": "^1.5.0",

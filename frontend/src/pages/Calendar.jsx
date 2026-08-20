@@ -54,6 +54,7 @@ import {
   clearBoxScoresFromDB,
 } from "../utils/indexedDbStorage";
 import PageFade from "../components/PageFade";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import InjuryAlertModal from "../components/InjuryAlertModal";
 import "../styles/BMAnimations.css";
 import {
@@ -792,15 +793,14 @@ const MiniStandingsPanel = ({
                   </span>
 
                   <div className="h-7 w-7 shrink-0 overflow-hidden rounded-full border border-neutral-700 bg-neutral-950">
-                    {row.headshot ? (
-                      <img
-                        src={row.headshot}
-                        alt={row.player}
-                        className="h-full w-full object-cover object-top"
-                      />
-                    ) : (
-                      <div className="h-full w-full" />
-                    )}
+                    <RuntimePlayerPortrait
+                      player={row}
+                      teamName={row.team || row.teamName || ""}
+                      src={row.headshot}
+                      alt={row.player || "Player"}
+                      className="h-full w-full"
+                      fallback={<div className="h-full w-full" />}
+                    />
                   </div>
 
                   <div className="shrink-0">

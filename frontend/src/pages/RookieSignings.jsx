@@ -5,6 +5,7 @@ import * as simEngine from "../api/simEnginePy.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { getDraftYear } from "../utils/seasonContext.js";
 import { stampRookieSigningRestrictions } from "../utils/userTradeRules.js";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 
 const LEAGUE_KEY = "leagueData";
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
@@ -205,11 +206,14 @@ function RookieCard({
     >
       <div className="flex gap-4">
         <div className="h-20 w-20 rounded-2xl bg-black/40 border border-white/10 overflow-hidden flex items-center justify-center shrink-0">
-          {imageUrl ? (
-            <img src={imageUrl} alt={row.playerName} className="h-full w-full object-cover" />
-          ) : (
-            <span className="text-xs text-white/40">No Image</span>
-          )}
+          <RuntimePlayerPortrait
+            player={row}
+            teamName={row.teamName || ""}
+            src={imageUrl}
+            alt={row.playerName || "Rookie"}
+            className="h-full w-full"
+            fallback={<span className="flex h-full w-full items-center justify-center text-xs text-white/40">No Image</span>}
+          />
         </div>
 
         <div className="min-w-0 flex-1">

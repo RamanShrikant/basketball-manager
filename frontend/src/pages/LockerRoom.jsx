@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { getLockerRoomMoods } from "../api/simEnginePy.js";
 import PageFade from "../components/PageFade";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
 import { readTradeDeskFeed, readPlayerMoodEventBus } from "../utils/tradeDeskFeed.js";
@@ -709,7 +710,7 @@ const LOCKER_ROOM_REPORT_HEADER_TUNING = {
   },
 };
 
-function LockerRoomPlayerHeadshot({ row }) {
+function LockerRoomPlayerHeadshot({ row, team = null }) {
   const t = LOCKER_ROOM_PLAYER_PILL_TUNING;
 
   if (!row?.headshot) return null;
@@ -720,12 +721,15 @@ function LockerRoomPlayerHeadshot({ row }) {
       style={{ width: t.headshotBoxWidth }}
       aria-hidden="true"
     >
-      <img
+      <RuntimePlayerPortrait
+        player={row}
+        team={team}
+        teamName={team?.name || team?.teamName || ""}
         src={row.headshot}
         alt=""
-        className="w-auto object-contain select-none"
-        style={{
-          height: t.headshotSize,
+        ariaHidden
+        className="h-full w-full select-none"
+        contentStyle={{
           transform: `translate(${t.headshotX}px, ${t.headshotY}px)`,
         }}
       />
@@ -1045,7 +1049,7 @@ function PlayerMoodRow({ row, active, onClick, team }) {
         borderRadius: t.rowRadius,
       }}
     >
-      <LockerRoomPlayerHeadshot row={row} />
+      <LockerRoomPlayerHeadshot row={row} team={team} />
 
       <div
         className="relative z-10 grid grid-cols-[62px_minmax(0,1fr)_72px] items-center gap-3"
@@ -1796,15 +1800,15 @@ export default function LockerRoom() {
                     <div className="relative h-[164px] overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(100deg,rgba(20,20,20,0.96),rgba(10,10,10,0.90))] shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
                       <div className="relative z-10 grid h-full grid-cols-[180px_minmax(0,1fr)_118px] items-center gap-5 px-6">
                         <div className="relative h-full overflow-hidden">
-                          {selectedPlayer.headshot ? (
-                            <img
-                              src={selectedPlayer.headshot}
-                              alt=""
-                              className="absolute bottom-0 left-1/2 h-[158px] w-auto max-w-none -translate-x-1/2 object-contain drop-shadow-[0_18px_28px_rgba(0,0,0,0.45)]"
-                            />
-                          ) : (
-                            <div className="flex h-full items-center justify-center text-sm font-bold text-neutral-500">No Image</div>
-                          )}
+                          <RuntimePlayerPortrait
+                            player={selectedPlayer}
+                            team={activeTeam}
+                            teamName={activeTeam?.name || ""}
+                            src={selectedPlayer?.headshot}
+                            alt={selectedPlayer?.playerName || "Player"}
+                            className="absolute inset-0 h-full w-full"
+                            fallback={<div className="flex h-full items-center justify-center text-sm font-bold text-neutral-500">No Image</div>}
+                          />
                         </div>
 
                         <div className="min-w-0 self-center">

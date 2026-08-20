@@ -9,6 +9,7 @@ import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
 import { archiveCurrentSeasonIntoPlayerCards } from "../utils/playerCareerHistory.js";
 import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.js";
+import HeadshotLayoutTransform from "../components/HeadshotLayoutTransform.jsx";
 
 const DELTAS_KEY = "bm_progression_deltas_v1";
 const PROG_META_KEY = "bm_progression_meta_v1";
@@ -3122,7 +3123,7 @@ export default function PlayerProgression() {
             <div className="flex min-w-0 items-end gap-4">
               <div className="h-[94px] w-[86px] shrink-0 overflow-hidden">
                 {portraitSrc ? (
-                  <img src={portraitSrc} alt={featured.name} className="h-full w-full object-contain object-bottom" />
+                  <HeadshotLayoutTransform className="h-full w-full"><img src={portraitSrc} alt={featured.name} className="h-full w-full object-contain object-bottom" /></HeadshotLayoutTransform>
                 ) : (
                   <div className="flex h-full items-center justify-center text-xs text-neutral-500">No Photo</div>
                 )}

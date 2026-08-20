@@ -3,3 +3,6 @@ frontend/dist
 .vercel
 
 _patch_backups/
+
+# Local development safety backups
+frontend_backup_*/

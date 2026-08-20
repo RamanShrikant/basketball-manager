@@ -6,6 +6,7 @@ import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./RosterView.module.css";
 import PageFade from "../components/PageFade";
 import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
 import "../styles/BMAnimations.css";
 import { getLeagueFinancialRules, getRookieSalaryForPick } from "../utils/leagueFinancials.js";
@@ -1297,11 +1298,14 @@ export default function RosterView() {
       {/* Player Card */}
       <div className="relative w-full flex shrink-0 justify-center">
         <div className="relative bg-neutral-800 w-full max-w-7xl px-5 pt-3 pb-1 rounded-t-xl shadow-lg">
-          <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
+          <div className="pointer-events-none absolute left-0 right-0 bottom-0 z-20 h-[3px] bg-white opacity-60"></div>
           <div className="flex items-end justify-between relative">
             <div className="flex items-end gap-6">
               <PlayerPortraitFrame
                 src={player?.headshot}
+                player={player}
+                team={activeRosterTeam || selectedTeam}
+                teamName={activeRosterTeam?.name || selectedTeam?.name || ""}
                 alt={player?.name || "Player"}
                 className="h-[116px] w-[150px]"
                 fallback={(
@@ -1502,17 +1506,15 @@ export default function RosterView() {
             <div className="relative p-5 sm:p-6">
               <div className="flex items-center gap-4">
                 <div className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-neutral-900">
-                  {actionTargetPlayer?.headshot ? (
-                    <img
-                      src={actionTargetPlayer.headshot}
-                      alt={actionTargetPlayer.name}
-                      className="h-full w-full object-contain"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center text-xs font-bold text-neutral-500">
-                      No Image
-                    </div>
-                  )}
+                  <RuntimePlayerPortrait
+                    player={actionTargetPlayer}
+                    team={activeRosterTeam || selectedTeam}
+                    teamName={activeRosterTeam?.name || selectedTeam?.name || ""}
+                    src={actionTargetPlayer?.headshot}
+                    alt={actionTargetPlayer?.name || "Player"}
+                    className="h-full w-full"
+                    fallback={<div className="flex h-full w-full items-center justify-center text-xs font-bold text-neutral-500">No Image</div>}
+                  />
                 </div>
 
                 <div className="min-w-0 flex-1">

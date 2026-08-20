@@ -6,6 +6,7 @@ import AllNbaTeams from "./AllNbaTeams";
 import LZString from "lz-string";
 import styles from "./Awards.module.css";
 import PageFade from "../components/PageFade";
+import HeadshotLayoutTransform from "../components/HeadshotLayoutTransform.jsx";
 import "../styles/BMAnimations.css";
 console.log("✅ Awards.jsx NEW loaded");
 
@@ -651,11 +652,13 @@ if (showAllNba) {
                   - centered so stats no longer feel stuck on one side */}
               <div className="flex justify-center items-end min-h-[270px]">
                 {hasWinner && portraitSrc ? (
-                  <img
-                    src={portraitSrc}
-                    alt={winner.player}
-                    className="max-h-72 w-auto object-contain"
-                  />
+                  <HeadshotLayoutTransform className="inline-flex max-h-72 items-end justify-center">
+                    <img
+                      src={portraitSrc}
+                      alt={winner.player}
+                      className="max-h-72 w-auto object-contain"
+                    />
+                  </HeadshotLayoutTransform>
                 ) : (
                   <span className="text-xs text-neutral-500 flex items-center justify-center w-full h-full">
                     No portrait

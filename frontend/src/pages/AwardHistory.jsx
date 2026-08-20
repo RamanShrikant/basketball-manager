@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { useGame } from "../context/GameContext.jsx";
 import PageFade from "../components/PageFade.jsx";
+import HeadshotLayoutTransform from "../components/HeadshotLayoutTransform.jsx";
 import {
   LEAGUE_HISTORY_AWARD_META,
   LEAGUE_HISTORY_AWARD_ORDER,
@@ -29,7 +30,7 @@ function PlayerBadge({ name, team, player }) {
     <div className="flex min-w-0 items-center gap-3">
       <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-black/40 shadow-lg">
         {img ? (
-          <img src={img} alt={name} className="h-full w-full object-cover" />
+          <HeadshotLayoutTransform className="h-full w-full"><img src={img} alt={name} className="h-full w-full object-cover" /></HeadshotLayoutTransform>
         ) : (
           <span className="text-xs font-black text-orange-200">{initials(name)}</span>
         )}

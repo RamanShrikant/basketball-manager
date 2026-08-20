@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { saveLeagueData } from "../utils/leagueStorage.js";
@@ -651,11 +652,14 @@ setError("");
                       title={`Open ${player?.name || "player"} card`}
                     >
                       <div className="flex min-w-0 items-center gap-3">
-                        {headshot ? (
-                          <img src={headshot} alt={player?.name || "Retired Player"} className="h-10 w-10 shrink-0 rounded-full border border-white/10 bg-white/5 object-cover" />
-                        ) : (
-                          <div className="h-10 w-10 shrink-0 rounded-full border border-white/10 bg-white/5" />
-                        )}
+                        <RuntimePlayerPortrait
+                          player={player}
+                          teamName={player?.retiredFromTeam || player?.teamName || player?.team || ""}
+                          src={headshot || ""}
+                          alt={player?.name || "Retired Player"}
+                          className="h-10 w-10 shrink-0 rounded-full border border-white/10 bg-white/5"
+                          fallback={<div className="h-10 w-10 shrink-0 rounded-full border border-white/10 bg-white/5" />}
+                        />
                         <div className="min-w-0">
                           <div className="truncate font-bold">{player?.name || "Unknown Player"}</div>
                           <div className="text-xs text-white/50">{player?.pos || "-"} • Age {player?.age ?? "-"} • OVR {player?.overall ?? player?.ovr ?? "-"}</div>

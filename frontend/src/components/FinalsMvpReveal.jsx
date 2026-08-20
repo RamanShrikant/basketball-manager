@@ -224,6 +224,7 @@ export default function FinalsMvpReveal({
               alt={winner?.player || "Finals MVP"}
               className={isModal ? "h-[146px] w-[174px]" : "h-[154px] w-[184px]"}
               bottomInset={10}
+              layoutPage="finals-mvp"
             />
 
             <div className="self-center pb-1">

@@ -32,6 +32,7 @@ import {
   validateCustomPickProtection,
 } from "../utils/draftPicks.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import { formatInjuryReturnLabel, isPlayerInjured } from "../utils/injurySystem.js";
 import { isDevelopmentRosterPlayer, sanitizeTradeItems } from "../utils/tradeRosterEligibility.js";
 import { evaluateTradeRosterProjection, projectStandardRosterCount } from "../utils/rosterRules.js";
@@ -2069,19 +2070,18 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
             className="relative flex h-full shrink-0 items-end justify-center overflow-hidden rounded-l-2xl"
             style={{ width: t.face.boxWidth }}
           >
-            {player?.headshot ? (
-              <img
-                src={player.headshot}
-                alt={playerName}
-                className="w-auto object-contain"
-                style={{
-                  height: t.face.imageHeight,
-                  transform: `translate(${t.face.x}px, ${t.face.y}px)`,
-                }}
-              />
-            ) : (
-              <div className="h-full w-full" />
-            )}
+            <RuntimePlayerPortrait
+              player={player}
+              team={team}
+              teamName={team?.name || team?.teamName || ""}
+              src={player?.headshot}
+              alt={playerName}
+              className="h-full w-full"
+              contentStyle={{
+                transform: `translate(${t.face.x}px, ${t.face.y}px)`,
+              }}
+              fallback={<div className="h-full w-full" />}
+            />
           </div>
 
           <RatingRing

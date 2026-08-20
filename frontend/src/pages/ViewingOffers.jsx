@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
@@ -3374,15 +3375,14 @@ return (
                         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
                           <div className="flex items-center gap-4 min-w-0">
                             <div className="w-16 h-16 rounded-full overflow-hidden bg-neutral-800 border border-neutral-700 shrink-0 flex items-center justify-center">
-                              {row?.player?.headshot ? (
-                                <img
-                                  src={row.player.headshot}
-                                  alt={row?.player?.name || row?.playerName || "Player"}
-                                  className="w-full h-full object-cover"
-                                />
-                              ) : (
-                                <div className="text-xs text-gray-400">No Image</div>
-                              )}
+                              <RuntimePlayerPortrait
+                                player={row?.player}
+                                teamName={row?.player?.teamName || "Free Agent"}
+                                src={row?.player?.headshot}
+                                alt={row?.player?.name || row?.playerName || "Player"}
+                                className="h-full w-full"
+                                fallback={<div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No Image</div>}
+                              />
                             </div>
 
                             <div className="min-w-0 flex-1">
@@ -3648,15 +3648,14 @@ return (
     </button>
 
     <div className="w-16 h-16 rounded-full overflow-hidden bg-neutral-800 border border-neutral-700 shrink-0 flex items-center justify-center">
-      {row?.player?.headshot ? (
-        <img
-          src={row.player.headshot}
-          alt={row?.player?.name || row?.playerName || "Player"}
-          className="w-full h-full object-cover"
-        />
-      ) : (
-        <div className="text-xs text-gray-400">No Image</div>
-      )}
+      <RuntimePlayerPortrait
+        player={row?.player}
+        teamName={row?.player?.teamName || "Free Agent"}
+        src={row?.player?.headshot}
+        alt={row?.player?.name || row?.playerName || "Player"}
+        className="h-full w-full"
+        fallback={<div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No Image</div>}
+      />
     </div>
 
     <div className="relative w-20 h-20 shrink-0 hidden sm:flex items-center justify-center">

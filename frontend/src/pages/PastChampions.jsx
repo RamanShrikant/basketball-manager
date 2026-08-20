@@ -1,6 +1,7 @@
 import React, { useMemo } from "react";
 import { useGame } from "../context/GameContext.jsx";
 import PageFade from "../components/PageFade.jsx";
+import HeadshotLayoutTransform from "../components/HeadshotLayoutTransform.jsx";
 import {
   createPlayerLookup,
   createTeamLogoLookup,
@@ -44,7 +45,7 @@ function FinalsMvpCell({ name, team, player }) {
   return (
     <div className="flex min-w-0 items-center gap-3">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-black/35">
-        {img ? <img src={img} alt={name} className="h-full w-full object-cover" /> : <span className="text-xs font-black text-orange-200">{initials(name)}</span>}
+        {img ? <HeadshotLayoutTransform className="h-full w-full"><img src={img} alt={name} className="h-full w-full object-cover" /></HeadshotLayoutTransform> : <span className="text-xs font-black text-orange-200">{initials(name)}</span>}
       </div>
       <div className="min-w-0">
         <div className="truncate text-base font-black text-white">{name}</div>

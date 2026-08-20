@@ -1281,7 +1281,7 @@ export default function AwardTracker() {
             {cardPlayer ? (
               <>
                 <div className="flex min-w-0 items-end gap-4">
-                  <PlayerPortraitFrame src={cardPlayer.headshot} alt={cardPlayer.player} className="h-[108px] w-[104px]" />
+                  <PlayerPortraitFrame src={cardPlayer.headshot} player={cardPlayer} teamName={cardPlayer.team || cardPlayer.teamName || ""} alt={cardPlayer.player} className="h-[108px] w-[104px]" />
                   <div className="min-w-0 pb-4">
                     <div className="text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">{meta.title}</div>
                     <h2 className="truncate text-3xl font-black">{cardPlayer.player}</h2>

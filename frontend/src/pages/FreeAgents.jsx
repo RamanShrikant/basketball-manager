@@ -3235,12 +3235,14 @@ updateOffseasonState({
 
       <div className="w-full flex justify-center px-4">
         <div className="relative bg-neutral-800/95 backdrop-blur-md border border-neutral-700 w-full max-w-7xl px-5 pt-3 pb-1 rounded-t-xl shadow-2xl">
-          <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
+          <div className="pointer-events-none absolute left-0 right-0 bottom-0 z-20 h-[3px] bg-white opacity-60"></div>
 
           <div className="flex items-end justify-between relative">
             <div className="flex items-end gap-6">
               <PlayerPortraitFrame
                 src={resolvePlayerPortrait(player)}
+                player={player}
+                teamName="Free Agent"
                 alt={player?.name || "Free agent"}
                 className="h-[100px] w-[142px]"
                 fallback={(
@@ -4066,7 +4068,7 @@ updateOffseasonState({
       <PlayerCardModal
         open={!!playerCardPlayer}
         player={playerCardPlayer}
-        teamName={playerCardPlayer?.teamName || playerCardPlayer?.rights?.heldByTeam || "Free Agent"}
+        teamName="Free Agent"
         teamLogo={playerCardPlayer?.teamLogo || ""}
         leagueData={workingLeagueData}
         onClose={() => setPlayerCardPlayer(null)}

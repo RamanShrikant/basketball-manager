@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
 import { getContractSeasonYear } from "../utils/seasonContext.js";
 import { getUserTradeCurrentDate, getUserTradePlayerEligibility } from "../utils/userTradeRules.js";
@@ -466,22 +467,20 @@ export default function TradePlayerSelect() {
         {selectedPlayer && (
           <div className="relative flex w-full shrink-0 justify-center">
             <div className="relative h-[118px] w-full overflow-hidden rounded-t-xl bg-neutral-800 px-5 shadow-lg">
-              <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60" />
+              <div className="pointer-events-none absolute left-0 right-0 bottom-0 z-20 h-[3px] bg-white opacity-60" />
 
               <div className="flex items-end justify-between relative">
                 <div className="flex items-end gap-6 min-w-0">
                   <div className="relative -mb-[9px] shrink-0">
-                    {selectedPlayer.headshot ? (
-                      <img
-                        src={selectedPlayer.headshot}
-                        alt={playerNameOf(selectedPlayer)}
-                        className="h-[122px] w-auto object-contain"
-                      />
-                    ) : (
-                      <div className="flex h-[112px] w-[88px] items-center justify-center rounded bg-neutral-700 text-neutral-300">
-                        No Image
-                      </div>
-                    )}
+                    <RuntimePlayerPortrait
+                      player={selectedPlayer}
+                      team={team}
+                      teamName={team?.name || ""}
+                      src={selectedPlayer?.headshot}
+                      alt={playerNameOf(selectedPlayer)}
+                      className="h-[122px] w-[110px]"
+                      fallback={<div className="flex h-[112px] w-[88px] items-center justify-center rounded bg-neutral-700 text-neutral-300">No Image</div>}
+                    />
                   </div>
 
                   <div className="flex flex-col justify-end mb-3 min-w-0">

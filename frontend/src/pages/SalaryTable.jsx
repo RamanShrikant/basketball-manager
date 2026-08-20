@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import PageFade from "../components/PageFade";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import "../styles/BMAnimations.css";
 import styles from "./SalaryTable.module.css";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
@@ -515,6 +516,7 @@ export default function SalaryTable() {
       pos: player?.pos || "",
       overall: player?.overall ?? "-",
       headshot: getPlayerImage(player),
+      portraitId: player?.portraitId || player?.portraitFamilyId || "",
       contract: {
         ...normalized,
         type: "two_way",
@@ -546,6 +548,7 @@ export default function SalaryTable() {
       pos: player?.pos || "",
       overall: player?.overall ?? "-",
       headshot: getPlayerImage(player),
+      portraitId: player?.portraitId || player?.portraitFamilyId || "",
       contract: {
         startYear,
         salaryByYear: [],
@@ -1094,6 +1097,7 @@ export default function SalaryTable() {
         pos: p?.pos || "",
         overall: p?.overall ?? "-",
         headshot: getPlayerImage(p),
+        portraitId: p?.portraitId || p?.portraitFamilyId || "",
         contract: c,
         years,
         endYear,
@@ -1519,6 +1523,7 @@ export default function SalaryTable() {
         pos: p?.pos || "",
         overall: p?.overall ?? "-",
         headshot: getPlayerImage(p),
+        portraitId: p?.portraitId || p?.portraitFamilyId || "",
         contract: c,
         years,
         endYear,
@@ -1706,18 +1711,14 @@ export default function SalaryTable() {
                 >
                   <td className="px-4 py-2">
                     <div className="flex items-center gap-3">
-                      {p.headshot ? (
-                        <img
-                          src={p.headshot}
-                          alt={p.name}
-                          className={`w-12 h-12 rounded-full object-cover border bg-white/5 ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`}
-                          onError={(e) => {
-                            e.currentTarget.style.display = "none";
-                          }}
-                        />
-                      ) : (
-                        <div className={`w-12 h-12 rounded-full bg-white/5 border ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`} />
-                      )}
+                      <RuntimePlayerPortrait
+                        player={p}
+                        teamName={snapshot.teamName}
+                        src={p.headshot}
+                        alt={p.name}
+                        className={`h-12 w-12 rounded-full border bg-white/5 ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`}
+                        fallback={<div className={`h-12 w-12 rounded-full bg-white/5 border ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`} />}
+                      />
 
                       <div className="leading-tight">
                         <div className="font-semibold flex items-center gap-2">
@@ -1998,18 +1999,14 @@ export default function SalaryTable() {
                       >
                         <td className="px-4 py-2">
                           <div className="flex items-center gap-3">
-                            {p.headshot ? (
-                              <img
-                                src={p.headshot}
-                                alt={p.name}
-                                className={`w-9 h-9 rounded-full object-cover border bg-white/5 ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`}
-                                onError={(e) => {
-                                  e.currentTarget.style.display = "none";
-                                }}
-                              />
-                            ) : (
-                              <div className={`w-9 h-9 rounded-full bg-white/5 border ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`} />
-                            )}
+                            <RuntimePlayerPortrait
+                              player={p}
+                              teamName={selectedTeam.name}
+                              src={p.headshot}
+                              alt={p.name}
+                              className={`h-9 w-9 rounded-full border bg-white/5 ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`}
+                              fallback={<div className={`h-9 w-9 rounded-full bg-white/5 border ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`} />}
+                            />
 
                             <div className="leading-tight">
                               <div className="font-semibold flex items-center gap-2">

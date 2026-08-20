@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import { findComfortableTradeFinderOffers, sortTradeFinderOfferItems } from "../utils/tradeFinderOfferEngine.js";
 import { findComfortableReverseTradeFinderOffers } from "../utils/reverseTradeFinderOfferEngine.js";
 import { evaluateTradeTeamImpact } from "../utils/tradeTeamImpact.js";
@@ -1710,7 +1711,7 @@ function saveTradeFinderState(snapshot) {
   } catch {}
 }
 
-function TradeFinderPlayerHeadshot({ player, variant = "packageRows" }) {
+function TradeFinderPlayerHeadshot({ player, team = null, variant = "packageRows" }) {
   const headshot = playerHeadshotOf(player);
   const t = TRADE_FINDER_HEADSHOT_TUNING[variant] || TRADE_FINDER_HEADSHOT_TUNING.packageRows;
 
@@ -1722,12 +1723,15 @@ function TradeFinderPlayerHeadshot({ player, variant = "packageRows" }) {
       style={{ width: t.boxWidth }}
       aria-hidden="true"
     >
-      <img
+      <RuntimePlayerPortrait
+        player={player}
+        team={team}
+        teamName={team?.name || team?.teamName || ""}
         src={headshot}
         alt=""
-        className="w-auto object-contain select-none"
-        style={{
-          height: t.size || t.imageHeight,
+        ariaHidden
+        className="h-full w-full select-none"
+        contentStyle={{
           opacity: t.opacity ?? 1,
           transform: `translate(${t.x || 0}px, ${t.y || 0}px)`,
         }}
@@ -1869,7 +1873,7 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
       }}
     >
       <TradeFinderPillBackgroundLogo team={team} variant="packageRows" />
-      {isPlayer && <TradeFinderPlayerHeadshot player={asset.player} variant="packageRows" />}
+      {isPlayer && <TradeFinderPlayerHeadshot player={asset.player} team={team} variant="packageRows" />}
 
       <div
         className="relative z-10 flex items-center justify-between gap-3"
@@ -2064,7 +2068,7 @@ function OfferAssetLine({ item, team, leagueData, currentDate = null }) {
         }}
       >
         <TradeFinderPillBackgroundLogo team={team} variant="offerRows" />
-        <TradeFinderPlayerHeadshot player={item.player} variant="offerRows" />
+        <TradeFinderPlayerHeadshot player={item.player} team={team} variant="offerRows" />
 
         <div
           className="relative z-10 flex items-center justify-between gap-3"

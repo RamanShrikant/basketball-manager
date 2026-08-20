@@ -1,0 +1,10 @@
+BASKETBALL MANAGER — JERSEYLESS BASE GENERATION QUEUE
+=====================================================
+
+Draft references: 44
+Base portraits ready: 44
+Draft portraits still needing a base: 0
+
+For each current draft portrait, generate the same identity with NO TOP and save using the exact target filename below.
+Drop finished files into: frontend/public/assets/portrait_studio/base/
+

@@ -480,11 +480,13 @@ export default function AllNbaTeams({ leagueDataProp, onBackToAwards = null }) {
       {cardPlayer && (
         <div className="relative w-full flex justify-center">
           <div className="relative bg-neutral-800 w-full max-w-5xl px-8 pt-4 pb-2 rounded-t-xl shadow-lg">
-            <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-white opacity-60"></div>
+            <div className="pointer-events-none absolute left-0 right-0 bottom-0 z-20 h-[3px] bg-white opacity-60"></div>
             <div className="flex items-end justify-between relative">
               <div className="flex items-end gap-6">
                 <PlayerPortraitFrame
                   src={cardPlayer.headshot}
+                  player={cardPlayer}
+                  teamName={cardPlayer.teamName || cardPlayer.team || ""}
                   alt={cardPlayer.name}
                   className="h-[166px] w-[190px]"
                 />

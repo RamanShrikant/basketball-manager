@@ -1,6 +1,7 @@
 // LeagueEditor.jsx
 import React, { useState, useEffect, useMemo } from "react";
-import FaceDNAEditor from "../components/FaceDNAEditor";
+import PlayerCreatorStudio from "../components/PlayerCreatorStudio.jsx";
+import HeadshotLayoutTransform from "../components/HeadshotLayoutTransform.jsx";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 import { clearBoxScoresFromDB } from "../utils/indexedDbStorage.js";
@@ -2719,7 +2720,7 @@ const normalizePlayer = (p) => {
 
       {selectedPool === "PLAYER_CREATOR" && (
         <div className="max-w-7xl mx-auto border rounded-2xl p-8 bg-white shadow-lg">
-          <FaceDNAEditor />
+          <PlayerCreatorStudio />
         </div>
       )}
 
@@ -2765,15 +2766,19 @@ const normalizePlayer = (p) => {
                   <tr key={p.id || i} className="border-b align-middle py-4">
                     <td className="flex items-center gap-4 py-4">
                       {p.headshot && (
-                        <div
-                          className="w-16 h-16 rounded-full bg-white border border-slate-200"
-                          style={{
-                            backgroundImage: `url(${p.headshot})`,
-                            backgroundSize: "80%",
-                            backgroundPosition: "center 10%",
-                            backgroundRepeat: "no-repeat",
-                          }}
-                        />
+                        <div className="w-16 h-16 overflow-hidden rounded-full bg-white border border-slate-200">
+                          <HeadshotLayoutTransform className="h-full w-full">
+                            <div
+                              className="h-full w-full"
+                              style={{
+                                backgroundImage: `url(${p.headshot})`,
+                                backgroundSize: "80%",
+                                backgroundPosition: "center 10%",
+                                backgroundRepeat: "no-repeat",
+                              }}
+                            />
+                          </HeadshotLayoutTransform>
+                        </div>
                       )}
                       <div>
                         <div className="font-semibold text-base">{p.name}</div>
@@ -2939,15 +2944,19 @@ const normalizePlayer = (p) => {
                   <tr key={p.id || i} className="border-b align-middle py-4">
                     <td className="flex items-center gap-4 py-4">
                       {p.headshot && (
-                        <div
-                          className="w-16 h-16 rounded-full bg-white border border-slate-200"
-                          style={{
-                            backgroundImage: `url(${p.headshot})`,
-                            backgroundSize: "80%",
-                            backgroundPosition: "center 10%",
-                            backgroundRepeat: "no-repeat",
-                          }}
-                        />
+                        <div className="w-16 h-16 overflow-hidden rounded-full bg-white border border-slate-200">
+                          <HeadshotLayoutTransform className="h-full w-full">
+                            <div
+                              className="h-full w-full"
+                              style={{
+                                backgroundImage: `url(${p.headshot})`,
+                                backgroundSize: "80%",
+                                backgroundPosition: "center 10%",
+                                backgroundRepeat: "no-repeat",
+                              }}
+                            />
+                          </HeadshotLayoutTransform>
+                        </div>
                       )}
                       <div>
                         <div className="font-semibold text-base">#{i + 1} {p.name}</div>
@@ -3089,15 +3098,19 @@ const normalizePlayer = (p) => {
                         <tr key={p.id || i} className="border-b align-middle py-4">
                           <td className="flex items-center gap-4 py-4">
                             {p.headshot && (
-                              <div
-                                className="w-16 h-16 rounded-full bg-white border border-slate-200"
-                                style={{
-                                  backgroundImage: `url(${p.headshot})`,
-                                  backgroundSize: "80%",
-                                  backgroundPosition: "center 10%",
-                                  backgroundRepeat: "no-repeat",
-                                }}
-                              />
+                              <div className="w-16 h-16 overflow-hidden rounded-full bg-white border border-slate-200">
+                                <HeadshotLayoutTransform className="h-full w-full">
+                                  <div
+                                    className="h-full w-full"
+                                    style={{
+                                      backgroundImage: `url(${p.headshot})`,
+                                      backgroundSize: "80%",
+                                      backgroundPosition: "center 10%",
+                                      backgroundRepeat: "no-repeat",
+                                    }}
+                                  />
+                                </HeadshotLayoutTransform>
+                              </div>
                             )}
                             <div>
                               <div className="font-semibold text-base">{p.name}</div>
@@ -3254,11 +3267,15 @@ const normalizePlayer = (p) => {
                           onChange={() => setSendAIds((arr) => toggleId(arr, p.id))}
                         />
                         {p.headshot ? (
-                          <img
-                            src={p.headshot}
-                            alt=""
-                            className="w-6 h-6 rounded-full object-cover border border-slate-200"
-                          />
+                          <div className="w-6 h-6 overflow-hidden rounded-full border border-slate-200">
+                            <HeadshotLayoutTransform className="h-full w-full">
+                              <img
+                                src={p.headshot}
+                                alt=""
+                                className="h-full w-full object-cover"
+                              />
+                            </HeadshotLayoutTransform>
+                          </div>
                         ) : (
                           <div className="w-6 h-6 rounded-full bg-slate-100 border border-slate-200" />
                         )}
@@ -3291,14 +3308,18 @@ const normalizePlayer = (p) => {
                         />
 
                         {p.headshot ? (
-                          <img
-                            src={p.headshot}
-                            alt=""
-                            className="w-6 h-6 rounded-full object-cover border border-slate-200"
-                            onError={(e) => {
-                              e.currentTarget.style.display = "none";
-                            }}
-                          />
+                          <div className="w-6 h-6 overflow-hidden rounded-full border border-slate-200">
+                            <HeadshotLayoutTransform className="h-full w-full">
+                              <img
+                                src={p.headshot}
+                                alt=""
+                                className="h-full w-full object-cover"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = "none";
+                                }}
+                              />
+                            </HeadshotLayoutTransform>
+                          </div>
                         ) : (
                           <div className="w-6 h-6 rounded-full bg-slate-100 border border-slate-200" />
                         )}
