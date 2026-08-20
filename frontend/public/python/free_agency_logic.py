@@ -4679,6 +4679,32 @@ def estimate_team_re_sign_interest(
     }
 
 
+
+# Patch 35E: visible-rating-to-FA-market-equivalent helper.
+# This keeps displayed ratings deflated while letting FA logic behave like the old inflated scale.
+def get_free_agency_market_equivalent_overall(player):
+    try:
+        raw = float(num(player.get("overall", player.get("ovr", 70)), 70))
+    except Exception:
+        try:
+            raw = float(player.get("overall", player.get("ovr", 70)) or 70)
+        except Exception:
+            raw = 70.0
+
+    if raw >= 88:
+        return raw + 4.0
+    if raw >= 82:
+        return raw + 4.5
+    if raw >= 78:
+        return raw + 4.0
+    if raw >= 72:
+        return raw + 4.0
+    if raw >= 68:
+        return raw + 3.0
+    if raw >= 60:
+        return raw + 2.0
+    return raw
+
 def estimate_team_free_agent_fit_from_profile(
     team: Dict[str, Any],
     player: Dict[str, Any],
