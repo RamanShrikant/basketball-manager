@@ -4684,6 +4684,7 @@ def estimate_team_free_agent_fit_from_profile(
     player: Dict[str, Any],
     profile: Dict[str, Any],
 ) -> Dict[str, Any]:
+    market_ovr = int(round(get_free_agency_market_equivalent_overall(player)))
     # Same scoring formula as estimate_team_free_agent_fit(...), but uses the
     # already-built team profile from the current FA day instead of rebuilding it
     # for every team/player candidate.
@@ -4705,7 +4706,6 @@ def estimate_team_free_agent_fit_from_profile(
         if overall >= 79:
             score += 0.10
         score += max(0.0, min(0.10, (age - 27) * 0.010))
-        market_ovr = int(round(get_free_agency_market_equivalent_overall(player)))
     if age <= 24 and market_ovr < 78:
             score -= 0.05
 
