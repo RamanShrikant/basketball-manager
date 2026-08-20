@@ -4705,7 +4705,8 @@ def estimate_team_free_agent_fit_from_profile(
         if overall >= 79:
             score += 0.10
         score += max(0.0, min(0.10, (age - 27) * 0.010))
-        if age <= 24 and market_ovr < 78:
+        market_ovr = int(round(get_free_agency_market_equivalent_overall(player)))
+    if age <= 24 and market_ovr < 78:
             score -= 0.05
 
     elif direction in ["rebuilding"]:
