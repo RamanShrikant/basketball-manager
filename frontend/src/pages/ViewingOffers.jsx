@@ -1782,7 +1782,7 @@ export default function ViewingOffers() {
     })).filter((row) => {
       if (showAllDays || !activeDay) return true;
       const rowDay = Number(row?.day ?? row?.dayResolved ?? 0);
-      return !rowDay || rowDay === activeDay;
+      return Boolean(rowDay && rowDay === activeDay);
     });
 
     const sourceRows = rowsFromDurableLog.length ? rowsFromDurableLog : fallbackRows;

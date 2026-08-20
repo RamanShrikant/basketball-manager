@@ -850,23 +850,88 @@ def get_team_games_played_context(team: Dict[str, Any], league_data: Optional[Di
 # Roles / player personality / historical tags
 # -----------------------------------------------------------------------------
 
-def expected_role_from_overall(overall: float, potential: float, age: int) -> Dict[str, Any]:
-    if overall >= 94:
-        return {"label": "MVP-Level Franchise Star", "maxRank": 1, "minutes": 35, "usageClass": "superstar"}
-    if overall >= 90:
-        return {"label": "Franchise Star", "maxRank": 1, "minutes": 34, "usageClass": "superstar"}
-    if overall >= 86:
-        return {"label": "All-Star / Lead Option", "maxRank": 2, "minutes": 32, "usageClass": "star"}
-    if overall >= 82:
-        return {"label": "Top Starter", "maxRank": 4, "minutes": 30, "usageClass": "core"}
-    if overall >= 79:
-        return {"label": "Starter", "maxRank": 5, "minutes": 27, "usageClass": "starter"}
-    if overall >= 76:
-        return {"label": "Rotation Player", "maxRank": 9, "minutes": 19, "usageClass": "rotation"}
-    if potential >= 80 and age <= 24:
-        return {"label": "Development Prospect", "maxRank": 11, "minutes": 12, "usageClass": "prospect"}
-    return {"label": "Depth", "maxRank": 15, "minutes": 7, "usageClass": "depth"}
 
+# BM_PATCH38_LOCKER_ROOM_REALISM_HELPERS
+# Interpret visible deflated OVRs using old-version role pressure bands while keeping display ratings unchanged.
+def mood_equivalent_overall(value: Any) -> float:
+    raw = num(value, 70)
+    if raw >= 88:
+        return raw + 4.0
+    if raw >= 84:
+        return raw + 4.5
+    if raw >= 80:
+        return raw + 4.5
+    if raw >= 76:
+        return raw + 4.0
+    if raw >= 72:
+        return raw + 4.0
+    if raw >= 68:
+        return raw + 3.0
+    if raw >= 60:
+        return raw + 2.0
+    return raw
+
+
+def mood_equivalent_potential(value: Any, fallback: float = 70.0) -> float:
+    return max(mood_equivalent_overall(value), mood_equivalent_overall(fallback))
+
+
+def mood_team_direction_from_expectation(team_expectation: Dict[str, Any], team_profile: Dict[str, Any], fallback: str = "balanced") -> str:
+    raw = normalize_name(fallback)
+    if raw in {"contending", "winnow", "win_now", "win now"}:
+        return "contending"
+    if raw in {"rebuilding", "developing"}:
+        return "rebuilding"
+    base = "retooling" if raw in {"retooling", "balanced"} else (fallback or "balanced")
+    rank = num(team_expectation.get("preseasonPowerRank"), 0)
+    tier = normalize_name(team_expectation.get("preseasonTier"))
+    expected_round = num(team_expectation.get("expectedRoundIndex"), 0)
+    if tier in {"titlefavorite", "contender"} or expected_round >= 2.75 or (rank and rank <= 6):
+        return "contending"
+    if tier in {"rebuilding"} or (rank and rank >= 25):
+        return "rebuilding"
+    return base
+
+
+def mood_action_tags(mood_score: float, main_concern: str, wants_out_risk: str, direction: str, expected_role: Dict[str, Any], stats: Dict[str, Any]) -> List[str]:
+    tags: List[str] = []
+    concern = normalize_name(main_concern)
+    mpg = num(stats.get("minutesPerGame"), 0)
+    expected_mpg = num(expected_role.get("minutes"), 0)
+    if mood_score >= 76:
+        tags.append("Stable")
+    if concern in {"role", "minutes"} or (expected_mpg and mpg and mpg < expected_mpg - 5):
+        tags.append("Wants bigger role")
+    if concern in {"contract", "nextcontract", "optionyear"}:
+        tags.append("Contract pressure")
+    if concern in {"timelineclash", "losing", "expectationmiss", "direction"}:
+        tags.append("Concerned about direction")
+    if wants_out_risk in {"medium", "high"}:
+        tags.append("Trade-risk watch")
+    if direction == "rebuilding" and expected_role.get("usageClass") in {"prospect", "rotation"}:
+        tags.append("Development fit")
+    return list(dict.fromkeys(tags))[:5]
+
+
+def expected_role_from_overall(overall: float, potential: float, age: int) -> Dict[str, Any]:
+    visible_overall = float(num(overall, 70))
+    interpreted_overall = mood_equivalent_overall(visible_overall)
+    interpreted_potential = mood_equivalent_potential(potential, interpreted_overall)
+    if interpreted_overall >= 94:
+        return {"label": "MVP-Level Franchise Star", "maxRank": 1, "minutes": 35, "usageClass": "superstar", "interpretedOverall": round(interpreted_overall, 1)}
+    if interpreted_overall >= 90:
+        return {"label": "Franchise Star", "maxRank": 1, "minutes": 34, "usageClass": "superstar", "interpretedOverall": round(interpreted_overall, 1)}
+    if interpreted_overall >= 86:
+        return {"label": "All-Star / Lead Option", "maxRank": 2, "minutes": 32, "usageClass": "star", "interpretedOverall": round(interpreted_overall, 1)}
+    if interpreted_overall >= 82:
+        return {"label": "Top Starter", "maxRank": 4, "minutes": 30, "usageClass": "core", "interpretedOverall": round(interpreted_overall, 1)}
+    if interpreted_overall >= 79:
+        return {"label": "Starter", "maxRank": 5, "minutes": 27, "usageClass": "starter", "interpretedOverall": round(interpreted_overall, 1)}
+    if interpreted_overall >= 76:
+        return {"label": "Rotation Player", "maxRank": 9, "minutes": 19, "usageClass": "rotation", "interpretedOverall": round(interpreted_overall, 1)}
+    if interpreted_potential >= 80 and age <= 24:
+        return {"label": "Development Prospect", "maxRank": 11, "minutes": 12, "usageClass": "prospect", "interpretedOverall": round(interpreted_overall, 1)}
+    return {"label": "Depth", "maxRank": 15, "minutes": 7, "usageClass": "depth", "interpretedOverall": round(interpreted_overall, 1)}
 
 def actual_role_from_rank(rank: int, status: str) -> str:
     if status == "two_way":
@@ -907,7 +972,7 @@ def build_player_personality(player: Dict[str, Any], team_expectation: Dict[str,
     potential = num(player.get("potential"), overall)
     age = int(num(player.get("age"), 27))
     upside = max(0.0, potential - overall)
-    tier = player_tier(overall)
+    tier = player_tier(mood_overall)
     pressure = num(team_expectation.get("pressureLevel"), 50)
 
     ambition = clamp(35 + max(0, overall - 72) * 2.1 + max(0, potential - 78) * 1.0, 20, 99)
@@ -1923,14 +1988,18 @@ def evaluate_player_mood(
     status = str(player.get("moodRosterStatus") or player.get("rosterStatus") or "standard")
     overall = num(player.get("overall"), 0)
     potential = num(player.get("potential"), overall)
+    mood_overall = mood_equivalent_overall(overall)
+    mood_potential = mood_equivalent_potential(potential, mood_overall)
     age = int(num(player.get("age"), 27))
     upside = max(0.0, potential - overall)
+    mood_upside = max(0.0, mood_potential - mood_overall)
     rank = get_role_rank_on_team(team, player) if status == "standard" else 99
     expected_role = expected_role_from_overall(overall, potential, age)
     actual_role = actual_role_from_rank(rank, status)
     wins, losses, win_pct = read_record(team)
     profile_results = team_profile.get("resultsProfile") if isinstance(team_profile.get("resultsProfile"), dict) else {}
-    direction = str(team_profile.get("direction") or "balanced")
+    raw_direction = str(team_profile.get("direction") or "balanced")
+    direction = mood_team_direction_from_expectation(team_expectation, team_profile, raw_direction)
     raw_stats = get_player_stats_summary(player, league_data, team)
     planned_mpg = get_gameplan_minutes_for_player(league_data, team, player)
     stats = apply_gameplan_minutes_fallback(raw_stats, planned_mpg)
@@ -1986,19 +2055,19 @@ def evaluate_player_mood(
     )
 
     status_impact = 0.0
-    if overall >= 95:
+    if mood_overall >= 95:
         status_impact = 16.0
-    elif overall >= 90:
+    elif mood_overall >= 90:
         status_impact = 10.0
-    elif overall >= 84:
+    elif mood_overall >= 84:
         status_impact = 5.0
-    elif overall >= 78:
+    elif mood_overall >= 78:
         status_impact = 2.0
     if status_impact:
         factors["status"] += status_impact
         add_event(
             events,
-            "Star Status" if overall >= 84 else "Roster Status",
+            "Star Status" if mood_overall >= 84 else "Roster Status",
             status_impact,
             "His standing in the league gives him confidence and leverage.",
             f"OVR {round_int(overall)} status modifier.",
@@ -2059,15 +2128,15 @@ def evaluate_player_mood(
             add_event(events, "Losing", impact, "Team results are below a stable morale level.", f"Record context: {wins}-{losses}", event_type="team_result", duration="active")
 
     # Direction/timeline fit.
-    if direction in ["contending", "win now"] and age >= 29 and overall >= 76:
+    if direction in ["contending", "win now"] and age >= 29 and mood_overall >= 76:
         impact = 4 + min(3, (age - 29) * 0.4)
         factors["teamFit"] += impact
         add_event(events, "Timeline Fit", impact, "His career stage fits a win-now team.", f"Team direction: {direction}", event_type="timeline", duration="active")
-    if direction == "rebuilding" and age <= 24 and upside >= 3:
-        impact = 5 + min(4, upside * 0.45)
+    if direction == "rebuilding" and age <= 24 and mood_upside >= 3:
+        impact = 5 + min(4, mood_upside * 0.45)
         factors["teamFit"] += impact
         add_event(events, "Development Fit", impact, "A rebuilding timeline gives his development more room.", f"POT {round_int(potential)} / OVR {round_int(overall)}", event_type="timeline", duration="active")
-    if direction == "rebuilding" and age >= 30 and overall >= 80:
+    if direction == "rebuilding" and age >= 30 and mood_overall >= 80:
         impact = -9 * (0.85 + role_weight * 0.15)
         factors["teamFit"] += impact
         add_event(events, "Timeline Clash", impact, "Veteran talent may be impatient with a rebuild.", f"Team direction: {direction}", event_type="timeline", duration="active")
@@ -2076,7 +2145,7 @@ def evaluate_player_mood(
     if status == "standard":
         expected_max_rank = int(expected_role["maxRank"])
         if rank <= expected_max_rank:
-            impact = (6 if overall >= 80 else 3) * (0.85 + role_weight * 0.15)
+            impact = (6 if mood_overall >= 80 else 3) * (0.85 + role_weight * 0.15)
             factors["role"] += impact
             add_event(events, "Role", impact, "His team role matches his talent level.", f"Role rank: #{rank}; expected: {expected_role['label']}", event_type="role", duration="active")
         else:
@@ -2110,12 +2179,12 @@ def evaluate_player_mood(
                 impact = -min(10, (expected_mpg - mpg) * 0.62) * (0.76 + role_weight * 0.24)
                 factors["playingTime"] += impact
                 add_event(events, "Minutes", impact, "Minutes are a little below his preferred role.", f"{minute_detail} vs expected around {expected_mpg:.0f}", event_type="minutes", duration="active")
-        elif overall >= 78:
+        elif mood_overall >= 78:
             impact = -7 * (0.75 + role_weight * 0.25)
             factors["playingTime"] += impact
             add_event(events, "Minutes", impact, "No reliable minutes or gameplan data found for a rotation-level player.", "Missing minutes data", event_type="minutes", duration="active")
     elif status == "two_way":
-        if overall >= 73 or potential >= 78:
+        if mood_overall >= 73 or mood_potential >= 78:
             impact = -7
             factors["role"] += impact
             add_event(events, "Role", impact, "He may want a standard roster spot soon.", "Currently two-way", event_type="role", duration="active")
@@ -2131,12 +2200,12 @@ def evaluate_player_mood(
     rookie_scale_mood_exempt = is_rookie_scale_mood_exempt(player, contract, season_year, salary, years_left)
     if salary > 0 and expected_aav > 0:
         salary_ratio = salary / max(1, expected_aav)
-        if salary_ratio <= 0.55 and overall >= 78 and not rookie_scale_mood_exempt:
+        if salary_ratio <= 0.55 and mood_overall >= 78 and not rookie_scale_mood_exempt:
             impact = (-11 if years_left <= 2 else -7) * (0.75 + role_weight * 0.25)
             factors["contract"] += impact
             add_event(events, "Contract", impact, "He appears underpaid compared with his current market value.", f"Salary ${salary:,}; estimated market AAV ${expected_aav:,}", event_type="contract", duration="active")
         elif salary_ratio >= 1.10:
-            impact = 4 if overall < 84 else 3
+            impact = 4 if mood_overall < 84 else 3
             factors["contract"] += impact
             add_event(events, "Contract", impact, "Contract security is helping his mood.", f"Salary ${salary:,}", event_type="contract", duration="active")
         elif salary_ratio >= 0.85:
@@ -2147,19 +2216,19 @@ def evaluate_player_mood(
         factors["futureSecurity"] += impact
         add_event(events, "Next Contract", impact, "No secure future salary is stored for him.", "Free-agency uncertainty", event_type="contract", duration="active")
     elif years_left == 1:
-        if overall >= 80 or age <= 25:
+        if mood_overall >= 80 or age <= 25:
             impact = -6 * (0.80 + role_weight * 0.20)
             factors["futureSecurity"] += impact
             add_event(events, "Next Contract", impact, "He is entering a contract year and thinking about his next deal.", "1 year left", event_type="contract", duration="active")
         else:
             factors["futureSecurity"] -= 2
     elif years_left >= 3:
-        impact = 4 if overall < 88 else 2
+        impact = 4 if mood_overall < 88 else 2
         factors["futureSecurity"] += impact
         add_event(events, "Security", impact, "Multi-year security is stabilizing his mood.", f"{years_left} years left", event_type="contract", duration="active")
 
     if option_label:
-        impact = -3 if option_label == "Team Option" and overall >= 76 else -1
+        impact = -3 if option_label == "Team Option" and mood_overall >= 76 else -1
         factors["futureSecurity"] += impact
         add_event(events, "Option Year", impact, f"{option_label} adds some uncertainty.", "Option decision can affect long-term security.", event_type="contract", duration="active")
 
@@ -2169,15 +2238,15 @@ def evaluate_player_mood(
     apg = float(num(stats.get("assistsPerGame"), 0))
     rpg = float(num(stats.get("reboundsPerGame"), 0))
     if gp > 0:
-        if overall >= 84 and ppg >= 20:
+        if mood_overall >= 84 and ppg >= 20:
             impact = 3 + min(4, (ppg - 20) * 0.25)
             factors["careerStage"] += impact
             add_event(events, "Production", impact, "His production matches a lead-player role.", f"{ppg:.1f} PPG", event_type="production", duration="active")
-        elif overall >= 84 and ppg < 14:
+        elif mood_overall >= 84 and ppg < 14:
             impact = -5 * (0.80 + role_weight * 0.20)
             factors["careerStage"] += impact
             add_event(events, "Production", impact, "His box-score role may not match his star talent.", f"{ppg:.1f} PPG", event_type="production", duration="active")
-        elif 76 <= overall < 84 and (ppg >= 12 or apg >= 5 or rpg >= 7):
+        elif 76 <= mood_overall < 84 and (ppg >= 12 or apg >= 5 or rpg >= 7):
             factors["careerStage"] += 2
             add_event(events, "Production", 2, "He is producing within his role.", f"{ppg:.1f} PPG, {rpg:.1f} RPG, {apg:.1f} APG", event_type="production", duration="active")
 
@@ -2190,8 +2259,8 @@ def evaluate_player_mood(
                 add_event(events, "Availability", impact, "Low games played may be affecting rhythm or role security.", f"{gp} GP out of roughly {int(team_games_played)} team games", event_type="availability", duration="active")
 
     # Young upside buried on depth chart.
-    if age <= 23 and potential >= overall + 5 and status == "standard" and rank > 9:
-        impact = -8 - min(5, upside * 0.35)
+    if age <= 23 and mood_potential >= mood_overall + 5 and status == "standard" and rank > 9:
+        impact = -8 - min(5, mood_upside * 0.35)
         factors["careerStage"] += impact
         add_event(events, "Development", impact, "Young upside player is buried on the depth chart.", f"POT {round_int(potential)} / rank #{rank}", event_type="development", duration="active")
 
@@ -2200,7 +2269,7 @@ def evaluate_player_mood(
         impact = 3
         factors["continuity"] += impact
         add_event(events, "Continuity", impact, "Winning with a familiar team helps stability.", f"{years_with_team} years with team", event_type="continuity", duration="active")
-    elif years_with_team >= 3 and effective_win_pct is not None and effective_win_pct < 0.400 and overall >= 80:
+    elif years_with_team >= 3 and effective_win_pct is not None and effective_win_pct < 0.400 and mood_overall >= 80:
         impact = -3 * (0.85 + role_weight * 0.15)
         factors["continuity"] += impact
         add_event(events, "Continuity", impact, "Long-term losing with the same team can create restlessness.", f"{years_with_team} years with team", event_type="continuity", duration="active")
@@ -2208,7 +2277,7 @@ def evaluate_player_mood(
     factors["tradeContext"] += trade_context_events(events, league_data, team_name, player, personality, historical_tags)
 
     # Depth/fringe stability: do not punish low-end guys like stars unless they have real upside concerns.
-    if overall < 74 and potential < 78 and status == "standard":
+    if mood_overall < 74 and mood_potential < 78 and status == "standard":
         impact = 3
         factors["careerStage"] += impact
         add_event(events, "Role Acceptance", impact, "Depth players with secure roster spots are generally happy to be in the league.", f"OVR {round_int(overall)} role-player baseline", event_type="personality", duration="active")
@@ -2264,12 +2333,14 @@ def evaluate_player_mood(
     event_log_sorted = sorted(events, key=lambda r: (abs(num(r.get("impact"), 0)), r.get("date") or ""), reverse=True)
 
     wants_out_risk = "low"
-    if mood_score < 35 and overall >= 82:
+    if mood_score < 35 and mood_overall >= 82:
         wants_out_risk = "high"
-    elif mood_score < 50 and overall >= 84:
+    elif mood_score < 50 and mood_overall >= 84:
         wants_out_risk = "medium"
-    elif mood_score < 45 and overall >= 78:
+    elif mood_score < 45 and mood_overall >= 78:
         wants_out_risk = "medium"
+
+    action_tags = mood_action_tags(mood_score, main_concern, wants_out_risk, direction, expected_role, stats)
 
     return {
         "playerId": player.get("id") or player.get("playerId"),
@@ -2293,6 +2364,8 @@ def evaluate_player_mood(
         "trend": trend,
         "mainConcern": main_concern,
         "wantsOutRisk": wants_out_risk,
+        "actionTags": action_tags,
+        "interpretedOverall": round(mood_overall, 1),
         "factors": {k: round(v, 1) for k, v in factors.items()},
         "reasons": reasons_sorted[:12],
         "eventLog": event_log_sorted[:20],
@@ -2354,7 +2427,7 @@ def get_locker_room_moods(league_data: Dict[str, Any], team_name: Optional[str] 
             "happyCount": high_count,
             "playerCount": len(rows),
             "wantsOutWatchCount": wants_out_count,
-            "teamDirection": profile.get("direction") or "balanced",
+            "teamDirection": mood_team_direction_from_expectation(expectation, profile, profile.get("direction") or "balanced"),
             "teamDirectionConfidence": profile.get("directionConfidence"),
             "top3Overall": profile.get("top3Overall"),
             "top8Overall": profile.get("top8Overall"),

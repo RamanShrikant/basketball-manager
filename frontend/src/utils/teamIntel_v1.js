@@ -573,9 +573,223 @@ function topRotation(team, count = 8) {
     .slice(0, count);
 }
 
+
+
+// BM_PATCH38_TEAM_INTEL_REALISM_HELPERS
+// Shared front-office interpretation helpers for the deflated OVR scale.
+function teamIntelPlayerKey(player = {}) {
+  return normalizeTeamName(playerNameOf(player) || player?.id || player?.playerId || "");
+}
+
+function getMinutesForPlayer(minutes = {}, player = {}) {
+  const candidates = [playerNameOf(player), player?.name, player?.player, player?.id, player?.playerId]
+    .filter((value) => value !== undefined && value !== null && String(value).trim() !== "")
+    .map(String);
+  for (const key of candidates) {
+    if (Object.prototype.hasOwnProperty.call(minutes || {}, key)) return toNum(minutes[key], 0);
+  }
+  const normalized = Object.fromEntries(Object.entries(minutes || {}).map(([key, value]) => [normalizeTeamName(key), value]));
+  for (const key of candidates) {
+    const normalizedKey = normalizeTeamName(key);
+    if (Object.prototype.hasOwnProperty.call(normalized, normalizedKey)) return toNum(normalized[normalizedKey], 0);
+  }
+  return 0;
+}
+
+function getOrderedRotationPlayers(team) {
+  const players = getStandardPlayers(team);
+  const byKey = new Map(players.map((player) => [teamIntelPlayerKey(player), player]));
+  const used = new Set();
+  const out = [];
+  const minutes = getRotationMinutes(team) || {};
+  const saved = readSavedGameplanPayload(teamNameOf(team));
+  const order = Array.isArray(saved?.order) ? saved.order : [];
+
+  for (const rawName of order) {
+    const key = normalizeTeamName(rawName);
+    const player = byKey.get(key);
+    if (player && !used.has(key)) {
+      out.push(player);
+      used.add(key);
+    }
+  }
+
+  for (const player of [...players].sort((a, b) =>
+    getMinutesForPlayer(minutes, b) - getMinutesForPlayer(minutes, a) ||
+    playerOverall(b) - playerOverall(a) ||
+    playerPotential(b) - playerPotential(a) ||
+    playerAge(a) - playerAge(b) ||
+    playerNameOf(a).localeCompare(playerNameOf(b))
+  )) {
+    const key = teamIntelPlayerKey(player);
+    if (!used.has(key)) {
+      out.push(player);
+      used.add(key);
+    }
+  }
+  return out;
+}
+
+function playerEligibleAt(player, pos) {
+  return player?.pos === pos || player?.secondaryPos === pos;
+}
+
+function playerRoleRanks(team, player, minutes = null) {
+  const roster = getStandardPlayers(team);
+  const key = teamIntelPlayerKey(player);
+  const byOverall = [...roster].sort((a, b) =>
+    playerOverall(b) - playerOverall(a) ||
+    playerPotential(b) - playerPotential(a) ||
+    playerAge(a) - playerAge(b) ||
+    playerNameOf(a).localeCompare(playerNameOf(b))
+  );
+  const mins = minutes || getRotationMinutes(team) || {};
+  const byMinutes = [...roster].sort((a, b) =>
+    getMinutesForPlayer(mins, b) - getMinutesForPlayer(mins, a) ||
+    playerOverall(b) - playerOverall(a) ||
+    playerNameOf(a).localeCompare(playerNameOf(b))
+  );
+  return {
+    overallRank: Math.max(1, byOverall.findIndex((row) => teamIntelPlayerKey(row) === key) + 1 || roster.length + 1),
+    rotationRank: Math.max(1, byMinutes.findIndex((row) => teamIntelPlayerKey(row) === key) + 1 || roster.length + 1),
+    mpg: getMinutesForPlayer(mins, player),
+  };
+}
+
+function sourceRosterTopCutoff(phase) {
+  if (phase === "contending") return 5;
+  if (phase === "retooling") return 4;
+  return 3;
+}
+
+function isStrongNeedFit(player, needs = []) {
+  return (needs || []).some((need) => playerTraitMatchesNeed(player, need) >= 11);
+}
+
+function playerNeedFitLabel(player, needs = []) {
+  const matched = (needs || [])
+    .map((need) => ({ need, score: playerTraitMatchesNeed(player, need) }))
+    .filter((row) => row.score > 0)
+    .sort((a, b) => b.score - a.score)[0];
+  return matched?.need?.label || "roster fit";
+}
+
+function isProtectedCorePlayer(team, player, phase, leagueData = null, needs = []) {
+  const overall = playerOverall(player);
+  const potential = playerPotential(player);
+  const age = playerAge(player);
+  const upside = potential - overall;
+  const minutes = getRotationMinutes(team) || {};
+  const ranks = playerRoleRanks(team, player, minutes);
+  const mpg = ranks.mpg;
+  const highMinute = mpg >= 28;
+  const realRotation = mpg >= 20;
+  const needFit = isStrongNeedFit(player, needs);
+
+  const isMegaStar = overall >= 89;
+  const isPrimeYoungStar = age <= 26 && overall >= 84 && potential >= 88;
+  const isYoungTitleCore = phase === "contending" && age <= 25 && overall >= 80 && potential >= 86 && ranks.overallRank <= 4;
+  const isEliteFuture = age <= 21 && potential >= 92 && overall >= 74;
+  const isBlueChipFuture = age <= 22 && potential >= 90 && overall >= 76;
+  const isContendingPrimeStar = phase === "contending" && age <= 30 && overall >= 86 && ranks.overallRank <= 3;
+  const isContendingVetStar = phase === "contending" && age >= 31 && overall >= 87 && ranks.overallRank <= 2;
+
+  // Visible untouchables should be true franchise/core names, not every good young player.
+  // This prevents Coward/Ware/Giddey/Matas/Miller/Reaves/Lauri/Zion/Kyrie/AD/Dame-style
+  // players from being labeled untouchable just because they are useful or high OVR.
+  if (phase === "contending") {
+    if (isMegaStar && ranks.overallRank <= 2) return { protected: true, visible: true, level: "franchise", label: "Franchise anchor", score: 130 };
+    if (isPrimeYoungStar && ranks.overallRank <= 4) return { protected: true, visible: true, level: "young_star", label: "Young title core", score: 124 - ranks.overallRank };
+    if (isContendingPrimeStar) return { protected: true, visible: true, level: "prime_star", label: "Prime title piece", score: 116 - ranks.overallRank };
+    if (isContendingVetStar) return { protected: true, visible: true, level: "veteran_star", label: "Veteran title anchor", score: 108 - ranks.overallRank };
+    if (isBlueChipFuture && ranks.overallRank <= 5) return { protected: true, visible: true, level: "bluechip", label: "Blue-chip title core", score: 105 - ranks.overallRank };
+
+    if (ranks.overallRank <= 3 && (overall >= 80 || highMinute)) return { protected: true, visible: false, level: "title_core", label: "Protected title core", score: 96 - ranks.overallRank };
+    if (isYoungTitleCore) return { protected: true, visible: false, level: "young_core", label: "Protected young title core", score: 92 - ranks.overallRank };
+    if (needFit && realRotation && overall >= 76 && age <= 29 && ranks.overallRank <= 4) return { protected: true, visible: false, level: "fit_core", label: "Protected lineup fit", score: 82 - ranks.overallRank };
+  }
+
+  if (phase === "retooling") {
+    if (isMegaStar && age <= 27 && ranks.overallRank <= 2) return { protected: true, visible: true, level: "retool_star", label: "Retool franchise anchor", score: 122 - ranks.overallRank };
+    if (isEliteFuture && ranks.overallRank <= 3) return { protected: true, visible: true, level: "elite_future", label: "Elite future core", score: 118 - ranks.overallRank };
+    if (isBlueChipFuture && ranks.overallRank <= 2 && potential >= 93) return { protected: true, visible: true, level: "bluechip", label: "Blue-chip prospect", score: 110 - ranks.overallRank };
+
+    if (age <= 24 && overall >= 79 && potential >= 88 && ranks.overallRank <= 3) return { protected: true, visible: false, level: "young_core", label: "Protected young retool core", score: 84 - ranks.overallRank };
+    if (age <= 23 && potential >= 88 && upside >= 6 && ranks.overallRank <= 5) return { protected: true, visible: false, level: "upside", label: "Protected upside", score: 78 - ranks.overallRank };
+  }
+
+  if (phase === "rebuilding") {
+    if (isMegaStar && age <= 24 && ranks.overallRank <= 2) return { protected: true, visible: true, level: "rebuild_star", label: "Rebuild franchise anchor", score: 122 - ranks.overallRank };
+    if (isEliteFuture && ranks.overallRank <= 4) return { protected: true, visible: true, level: "elite_future", label: "Elite future core", score: 116 - ranks.overallRank };
+    if (isBlueChipFuture && potential >= 94 && ranks.overallRank <= 4) return { protected: true, visible: true, level: "bluechip", label: "Franchise prospect", score: 112 - ranks.overallRank };
+
+    if (age <= 24 && overall >= 78 && potential >= 89 && ranks.overallRank <= 3) return { protected: true, visible: false, level: "young_core", label: "Protected young rebuild core", score: 84 - ranks.overallRank };
+    if (age <= 22 && potential >= 88 && upside >= 7 && ranks.overallRank <= 5) return { protected: true, visible: false, level: "upside", label: "Protected upside", score: 76 - ranks.overallRank };
+  }
+
+  return { protected: false, visible: false, level: "available", label: "Available in right context", score: 0 };
+}
+
+function sourceAvailabilityForTarget(sourceTeam, player, sourcePhase, sourceShell = {}, leagueData = null) {
+  const sourceRatings = sourceShell?.powerRow?.ratings || computeSafeTeamRatings(sourceTeam);
+  const sourceNeeds = buildNeeds(sourceTeam, sourcePhase, sourceRatings);
+  const protection = isProtectedCorePlayer(sourceTeam, player, sourcePhase, leagueData, sourceNeeds);
+  if (protection.protected) return { ok: false, score: -999, reason: protection.label, maxUses: 0 };
+
+  const overall = playerOverall(player);
+  const potential = playerPotential(player);
+  const age = playerAge(player);
+  const upside = potential - overall;
+  const salary = getPlayerSalary(player, leagueData);
+  const minutes = getRotationMinutes(sourceTeam) || {};
+  const ranks = playerRoleRanks(sourceTeam, player, minutes);
+  const crowding = positionalCrowding(player, sourceTeam);
+  const expiring = isExpiring(player, leagueData);
+  const reasons = [];
+  let score = 0;
+
+  if (sourcePhase === "contending") {
+    if (ranks.overallRank <= 3 || (overall >= 84 && ranks.overallRank <= 5)) return { ok: false, score: -999, reason: "protected title core", maxUses: 0 };
+    if (age >= 30 && overall >= 70) { score += 23; reasons.push("older contender piece"); }
+    if (salary >= 15_000_000 && overall <= 80) { score += 20; reasons.push("salary-match piece"); }
+    if (ranks.rotationRank >= 7 && overall >= 68) { score += 17; reasons.push("rotation squeeze"); }
+    if (ranks.mpg > 0 && ranks.mpg < 22 && overall >= 68) { score += 14; reasons.push("could play more elsewhere"); }
+    if (age <= 23 && upside >= 5 && ranks.mpg < 18) { score += 16; reasons.push("blocked young player"); }
+    if (crowding > 0 && ranks.rotationRank >= 6) { score += crowding * 6; reasons.push("position overload"); }
+    if (ranks.mpg >= 28 && age < 30 && overall >= 76) score -= 20;
+  } else if (sourcePhase === "retooling") {
+    if (age <= 24 && potential >= 89 && overall >= 78 && ranks.overallRank <= 3) return { ok: false, score: -999, reason: "protected young retool core", maxUses: 0 };
+    if (age >= 28 && overall >= 72) { score += 23; reasons.push("older retool piece"); }
+    if (salary >= 18_000_000 && overall <= 82) { score += 17; reasons.push("salary cleanup"); }
+    if (ranks.rotationRank >= 7 && overall >= 68) { score += 14; reasons.push("rotation squeeze"); }
+    if (ranks.mpg > 0 && ranks.mpg < 20 && overall >= 68) { score += 12; reasons.push("underused rotation player"); }
+    if (age <= 24 && upside >= 5 && ranks.mpg < 16) { score += 12; reasons.push("blocked prospect"); }
+    if (expiring && age >= 27) { score += 11; reasons.push("expiring veteran"); }
+    if (crowding > 0) { score += crowding * 5; reasons.push("position overload"); }
+    if (age <= 25 && potential >= 86 && ranks.overallRank <= 4) score -= 16;
+  } else {
+    if (age <= 22 && potential >= 90 && overall >= 74) return { ok: false, score: -999, reason: "elite rebuild future", maxUses: 0 };
+    if (age >= 26 && overall >= 70) { score += 30; reasons.push("veteran outside rebuild timeline"); }
+    if (age >= 30) { score += 9; reasons.push("age/timeline seller"); }
+    if (expiring && age >= 26) { score += 12; reasons.push("expiring veteran"); }
+    if (salary >= 12_000_000 && overall <= 82) { score += 12; reasons.push("salary flexibility"); }
+    if (potential <= overall + 2 && age >= 25) { score += 9; reasons.push("limited upside"); }
+    if (ranks.rotationRank >= 7 && overall >= 68) { score += 8; reasons.push("role squeeze"); }
+  }
+
+  const ok = score >= (sourcePhase === "contending" ? 15 : 13);
+  return {
+    ok,
+    score,
+    reason: reasons.slice(0, 2).join(" / ") || "available in right offer",
+    maxUses: 3,
+  };
+}
+
 function attrAvg(players, index, fallback = 70) {
   return average(players.map((player) => Number(player?.attrs?.[index])), fallback);
 }
+
 
 function buildNeeds(team, phase, ratings) {
   const top8 = topRotation(team, 8);
@@ -585,20 +799,15 @@ function buildNeeds(team, phase, ratings) {
     if (!needs.some((need) => need.key === key && need.pos === pos)) needs.push({ key, label, priority, detail, pos });
   };
 
-  const posThreshold = phase === "contending" ? 82 : phase === "retooling" ? 79 : 76;
+  const posThreshold = phase === "contending" ? 77 : phase === "retooling" ? 74 : 71;
   const weakestPositions = POSITIONS
     .map((pos) => ({ pos, score: posScores[pos] || 0 }))
     .sort((a, b) => a.score - b.score);
 
   for (const row of weakestPositions.slice(0, 2)) {
     if (row.score < posThreshold) {
-      const label =
-        row.pos === "PG"
-          ? "Lead guard"
-          : row.pos === "C"
-          ? "Center / rim protector"
-          : `${row.pos} upgrade`;
-      pushNeed(`pos_${row.pos}`, label, Math.max(8, 96 - row.score), `${row.pos} top option is ${Math.round(row.score)} OVR.`, row.pos);
+      const label = row.pos === "PG" ? "Lead guard" : row.pos === "C" ? "Center / rim protector" : `${row.pos} upgrade`;
+      pushNeed(`pos_${row.pos}`, label, Math.max(8, 91 - row.score), `${row.pos} top option is ${Math.round(row.score)} OVR.`, row.pos);
     }
   }
 
@@ -610,81 +819,78 @@ function buildNeeds(team, phase, ratings) {
   const reb = attrAvg(top8, 12, 70);
   const eighth = playerOverall(topRotation(team, 8)[7] || {});
 
-  if (shooting < 75) pushNeed("shooting", "Shooting / spacing", 14, `Top rotation 3PT avg is ${Math.round(shooting)}.`);
-  if (phase !== "rebuilding" && (passing < 74 || ball < 74)) pushNeed("creation", "Secondary creator", 12, "Needs more ball handling and passing.");
-  if (perD < 75) pushNeed("perimeter_defense", "Point-of-attack defense", 11, `Perimeter defense avg is ${Math.round(perD)}.`);
-  if (insD < 75 || reb < 75) pushNeed("interior_defense", "Interior defense / rebounding", 10, "Frontcourt defense or boards are light.", "C");
-  if (eighth && eighth < 76 && phase === "contending") pushNeed("depth", "Bench depth", 9, `8th man is around ${Math.round(eighth)} OVR.`);
+  if (shooting < 74) pushNeed("shooting", "Shooting / spacing", 14, `Top rotation 3PT avg is ${Math.round(shooting)}.`);
+  if (phase !== "rebuilding" && (passing < 73 || ball < 73)) pushNeed("creation", "Secondary creator", 12, "Needs more ball handling and passing.");
+  if (perD < 74) pushNeed("perimeter_defense", "Point-of-attack defense", 11, `Perimeter defense avg is ${Math.round(perD)}.`);
+  if (insD < 74 || reb < 74) pushNeed("interior_defense", "Interior defense / rebounding", 10, "Frontcourt defense or boards are light.", "C");
+  if (eighth && eighth < 70 && phase === "contending") pushNeed("depth", "Bench depth", 9, `8th man is around ${Math.round(eighth)} OVR.`);
   if (phase === "rebuilding") {
     pushNeed("picks", "Draft capital", 16, "Future-focused team should stockpile picks.");
     pushNeed("young_upside", "Young upside", 15, "Timeline needs prospects more than older vets.");
   }
-  if (phase === "contending" && toNum(ratings?.overall, 0) < 87) pushNeed("star", "Top-end talent", 13, "Good team, but short one premium piece.");
+  if (phase === "contending" && toNum(ratings?.overall, 0) < 84) pushNeed("star", "Top-end talent", 13, "Good team, but short one premium piece.");
 
   return needs.sort((a, b) => b.priority - a.priority).slice(0, 5);
 }
 
-function getUntouchableStatus(player, phase) {
+
+function getUntouchableStatus(player, phase, team = null, leagueData = null, needs = []) {
+  if (team) {
+    const status = isProtectedCorePlayer(team, player, phase, leagueData, needs);
+    if (status.protected && status.visible) return status;
+    return null;
+  }
   const overall = playerOverall(player);
   const potential = playerPotential(player);
   const age = playerAge(player);
   const upside = potential - overall;
-
   if (phase === "contending") {
-    if (overall >= 94) return { level: "franchise", label: "Franchise star" };
-    if (overall >= 91 && age >= 24 && age <= 32) return { level: "prime", label: "Prime title piece" };
-    if (age <= 23 && potential >= 90 && overall >= 78) return { level: "bluechip", label: "Blue-chip prospect" };
-    if (age <= 25 && overall >= 88 && potential >= 91) return { level: "youngstar", label: "Young star" };
+    if (overall >= 88) return { level: "franchise", label: "Franchise star" };
+    if (overall >= 84 && age >= 24 && age <= 32) return { level: "prime", label: "Prime title piece" };
+    if (age <= 25 && overall >= 78 && potential >= 84) return { level: "youngcore", label: "Young title-core piece" };
   }
-
   if (phase === "retooling") {
-    // Retooling teams should protect only young future-core players. Prime/older
-    // stars can still be expensive, but they should not be labeled untouchable.
-    if (age >= 28) return null;
-    if (age <= 25 && overall >= 90 && potential >= 93) return { level: "youngcore", label: "Young core" };
-    if (age <= 23 && overall >= 86 && potential >= 95) return { level: "future", label: "Franchise upside" };
-    if (age <= 23 && potential >= 92 && overall >= 80) return { level: "bluechip", label: "Blue-chip prospect" };
+    if (age >= 29) return null;
+    if (age <= 28 && overall >= 80) return { level: "youngcore", label: "Retool core" };
+    if (age <= 24 && potential >= 84 && overall >= 74) return { level: "bluechip", label: "Blue-chip prospect" };
   }
-
   if (phase === "rebuilding") {
-    // Rebuilding teams should never mark 28+ players untouchable. They may be
-    // valuable, but the protected core should be the future timeline only.
     if (age >= 28) return null;
-    if (age <= 25 && overall >= 89 && potential >= 93) return { level: "youngstar", label: "Young star" };
-    if (age <= 22 && overall >= 80 && potential >= 94) return { level: "future", label: "Franchise prospect" };
-    if (age <= 21 && overall >= 76 && potential >= 95) return { level: "bluechip", label: "Blue-chip prospect" };
+    if (age <= 25 && overall >= 76 && potential >= 82) return { level: "youngstar", label: "Rebuild core" };
+    if (age <= 23 && potential >= 82 && upside >= 4) return { level: "future", label: "Protected upside" };
   }
-
-  if (potential >= 95 && age <= 22 && overall >= 80 && upside >= 4) return { level: "bluechip", label: "Protected upside" };
+  if (potential >= 88 && age <= 22 && overall >= 72 && upside >= 5) return { level: "bluechip", label: "Protected upside" };
   return null;
 }
+
 
 function isProtectedYoungAsset(player, phase = "retooling") {
   const overall = playerOverall(player);
   const potential = playerPotential(player);
   const age = playerAge(player);
   const upside = potential - overall;
-
-  if (age <= 23 && potential >= 90 && overall >= 76) return true;
-  if (age <= 24 && potential >= 88 && upside >= 6) return true;
-  if (phase === "rebuilding" && age <= 25 && potential >= 86 && overall >= 74) return true;
+  if (age <= 23 && potential >= 84 && overall >= 72) return true;
+  if (age <= 24 && potential >= 82 && upside >= 5) return true;
+  if (phase === "rebuilding" && age <= 25 && potential >= 80 && overall >= 70) return true;
   return false;
 }
 
-function buildUntouchables(team, phase) {
+
+function buildUntouchables(team, phase, leagueData = null, needs = []) {
   return getStandardPlayers(team)
     .map((player) => {
-      const status = getUntouchableStatus(player, phase);
-      const score = playerOverall(player) * 1.55 + Math.max(0, playerPotential(player) - playerOverall(player)) * 2.4 + Math.max(0, 28 - playerAge(player)) * 1.3;
+      const status = isProtectedCorePlayer(team, player, phase, leagueData, needs);
+      const ranks = playerRoleRanks(team, player);
+      const score = (status?.score || 0) + playerOverall(player) * 1.2 + Math.max(0, playerPotential(player) - playerOverall(player)) * 1.7 - ranks.overallRank * 2;
       return { player, status, score };
     })
-    .filter((row) => row.status)
+    .filter((row) => row.status?.protected && row.status?.visible)
     .sort(
       (a, b) =>
         playerOverall(b.player) - playerOverall(a.player) ||
         playerPotential(b.player) - playerPotential(a.player) ||
-        playerAge(a.player) - playerAge(b.player) ||
-        b.score - a.score
+        b.score - a.score ||
+        playerAge(a.player) - playerAge(b.player)
     )
     .slice(0, 3)
     .map((row) => decoratePlayer(row.player, { reason: row.status.label }));
@@ -712,82 +918,97 @@ function decoratePlayer(player, extra = {}) {
   };
 }
 
+
 function buildLineup(team) {
-  const players = getStandardPlayers(team).sort((a, b) => playerOverall(b) - playerOverall(a));
+  const players = getStandardPlayers(team);
+  const ordered = getOrderedRotationPlayers(team);
+  const minutes = getRotationMinutes(team) || {};
+  const candidatePool = ordered.slice(0, Math.min(9, ordered.length));
+  let bestMap = null;
+  let bestScore = -Infinity;
   const used = new Set();
-  const slots = [];
-
-  for (const pos of POSITIONS) {
-    const best = players.find((p) => !used.has(playerNameOf(p)) && (p?.pos === pos || p?.secondaryPos === pos));
-    const fallback = players.find((p) => !used.has(playerNameOf(p)));
-    const pick = best || fallback;
-    if (pick) used.add(playerNameOf(pick));
-    slots.push({ label: pos, player: pick ? decoratePlayer(pick) : null });
-  }
-
-  const sixth = players.find((p) => !used.has(playerNameOf(p)));
+  const mapping = {};
+  const scorePlayerForSlot = (player, pos) => {
+    const mpg = getMinutesForPlayer(minutes, player);
+    const primary = player?.pos === pos ? 1 : 0;
+    const secondary = player?.secondaryPos === pos ? 1 : 0;
+    const rotationIndex = Math.max(0, ordered.findIndex((row) => teamIntelPlayerKey(row) === teamIntelPlayerKey(player)));
+    return mpg * 900 + playerOverall(player) * 120 + playerPotential(player) * 10 + primary * 1400 + secondary * 900 - rotationIndex * 30;
+  };
+  const search = (slotIdx, score) => {
+    if (slotIdx >= POSITIONS.length) {
+      if (score > bestScore) { bestScore = score; bestMap = { ...mapping }; }
+      return;
+    }
+    const pos = POSITIONS[slotIdx];
+    const legal = candidatePool.filter((player) => !used.has(teamIntelPlayerKey(player)) && playerEligibleAt(player, pos));
+    const fallback = candidatePool.filter((player) => !used.has(teamIntelPlayerKey(player)));
+    for (const player of (legal.length ? legal : fallback)) {
+      const key = teamIntelPlayerKey(player);
+      used.add(key); mapping[pos] = player;
+      search(slotIdx + 1, score + scorePlayerForSlot(player, pos));
+      delete mapping[pos]; used.delete(key);
+    }
+  };
+  search(0, 0);
+  const starterPlayers = bestMap ? POSITIONS.map((pos) => bestMap[pos]).filter(Boolean) : ordered.slice(0, 5);
+  const starterKeys = new Set(starterPlayers.map(teamIntelPlayerKey));
+  const slots = POSITIONS.map((pos) => ({ label: pos, player: bestMap?.[pos] ? decoratePlayer(bestMap[pos]) : null }));
+  const sixth = ordered.find((player) => !starterKeys.has(teamIntelPlayerKey(player))) || players.find((player) => !starterKeys.has(teamIntelPlayerKey(player)));
   slots.push({ label: "6TH", player: sixth ? decoratePlayer(sixth) : null });
   return slots;
 }
 
-function buildTradeBlock(team, phase, leagueData, untouchables = []) {
-  const untouchableNames = new Set(untouchables.map((row) => normalizeTeamName(row.name)));
-  const minutes = getRotationMinutes(team);
 
+function buildTradeBlock(team, phase, leagueData, untouchables = [], needs = []) {
+  const untouchableNames = new Set(untouchables.map((row) => normalizeTeamName(row.name)));
+  const minutes = getRotationMinutes(team) || {};
   return getStandardPlayers(team)
-    .filter((player) => !untouchableNames.has(normalizeTeamName(playerNameOf(player))))
-    .filter((player) => !isProtectedYoungAsset(player, phase))
     .map((player) => {
+      const name = playerNameOf(player);
       const overall = playerOverall(player);
       const potential = playerPotential(player);
       const age = playerAge(player);
+      const upside = potential - overall;
       const salary = getPlayerSalary(player, leagueData);
       const years = contractYearsLeft(player, leagueData);
-      const mpg = toNum(minutes[playerNameOf(player)], 0);
+      const ranks = playerRoleRanks(team, player, minutes);
+      const mpg = ranks.mpg;
       const crowding = positionalCrowding(player, team);
+      const protection = isProtectedCorePlayer(team, player, phase, leagueData, needs);
       const reasons = [];
       let score = 0;
 
-      if (phase === "rebuilding" && age >= 28 && overall >= 74) {
-        score += 28;
-        reasons.push("veteran outside timeline");
+      if (protection.protected || untouchableNames.has(normalizeTeamName(name))) return null;
+
+      if (phase === "contending") {
+        if (ranks.overallRank <= 3 || (overall >= 84 && ranks.overallRank <= 5)) return null;
+        if (age >= 30 && overall >= 70) { score += 26; reasons.push("older contender piece"); }
+        if (salary >= 15_000_000 && overall <= 80) { score += 23; reasons.push("matching salary"); }
+        if (ranks.overallRank >= 5 && overall >= 72) { score += 13; reasons.push("movable non-core rotation"); }
+        if (mpg > 0 && mpg < 22 && overall >= 68) { score += 16; reasons.push("could play more elsewhere"); }
+        if (age <= 23 && upside >= 5 && mpg < 18) { score += 18; reasons.push("blocked young player"); }
+        if (crowding > 0 && ranks.rotationRank >= 6) { score += crowding * 7; reasons.push("position overload"); }
+        if (isStrongNeedFit(player, needs) && age < 30 && mpg >= 24) score -= 14;
+      } else if (phase === "retooling") {
+        if (age >= 28 && overall >= 72) { score += 25; reasons.push("older retool piece"); }
+        if (age >= 31 && overall >= 80) { score += 10; reasons.push("star timeline question"); }
+        if (mpg > 0 && mpg < 22 && overall >= 68) { score += 15; reasons.push("underused rotation piece"); }
+        if (crowding > 0) { score += crowding * 6; reasons.push("position overload"); }
+        if (salary >= 18_000_000 && overall <= 82) { score += 15; reasons.push("salary flexibility"); }
+        if (years >= 3 && salary >= 14_000_000 && overall < 80) { score += 9; reasons.push("long money"); }
+        if (isExpiring(player, leagueData) && age >= 27) { score += 10; reasons.push("expiring veteran"); }
+      } else {
+        if (age >= 26 && overall >= 70) { score += 31; reasons.push("outside rebuild timeline"); }
+        if (age >= 30) { score += 10; reasons.push("veteran seller"); }
+        if (salary >= 12_000_000 && overall <= 82) { score += 13; reasons.push("salary flexibility"); }
+        if (isExpiring(player, leagueData) && age >= 26) { score += 12; reasons.push("expiring veteran"); }
+        if (mpg > 0 && mpg < 20 && overall >= 68) { score += 9; reasons.push("limited role"); }
       }
-      if (phase === "rebuilding" && overall >= 90 && age >= 30) {
-        score += 20;
-        reasons.push("star trade chip");
-      }
-      if (phase === "retooling" && age >= 30 && overall >= 76) {
-        score += 18;
-        reasons.push("older retool piece");
-      }
-      if (phase === "contending" && overall <= 76) {
-        score += 10;
-        reasons.push("expendable depth");
-      }
-      if (overall >= 77 && mpg > 0 && mpg < 18) {
-        score += 14;
-        reasons.push("buried in rotation");
-      }
-      if (crowding > 0) {
-        score += crowding * 6;
-        reasons.push("position overload");
-      }
-      if (salary >= 18_000_000 && overall < 84) {
-        score += 16;
-        reasons.push("salary flexibility");
-      }
-      if (years >= 3 && salary >= 14_000_000 && overall < 82) {
-        score += 9;
-        reasons.push("long money");
-      }
-      if (isExpiring(player, leagueData) && phase !== "contending" && age >= 27) {
-        score += 10;
-        reasons.push("expiring veteran");
-      }
-      if (potential <= overall + 1 && age >= 28 && phase !== "contending") {
-        score += 8;
-        reasons.push("limited upside");
-      }
+
+      if (potential <= overall + 1 && age >= 27 && phase !== "contending") { score += 9; reasons.push("limited upside"); }
+      if (age <= 23 && potential >= 90 && phase !== "contending") score -= 18;
+      if (!reasons.length || score < 14) return null;
 
       return decoratePlayer(player, {
         salary,
@@ -796,8 +1017,8 @@ function buildTradeBlock(team, phase, leagueData, untouchables = []) {
         reason: reasons.slice(0, 2).join(" / ") || "available in the right offer",
       });
     })
-    .filter((row) => row.score > 0)
-    .sort((a, b) => b.score - a.score || b.overall - a.overall || b.potential - a.potential || a.name.localeCompare(b.name))
+    .filter(Boolean)
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || Number(b.overall || 0) - Number(a.overall || 0) || Number(b.potential || 0) - Number(a.potential || 0) || String(a.name || "").localeCompare(String(b.name || "")))
     .slice(0, 12);
 }
 
@@ -810,23 +1031,25 @@ function playerTraitMatchesNeed(player, need) {
   const age = playerAge(player);
 
   if (need.pos && (pos === need.pos || secondary === need.pos)) return 18;
-  if (need.key === "shooting") return toNum(attrs[0], 60) >= 78 ? 14 : 0;
-  if (need.key === "creation") return toNum(attrs[4], 60) + toNum(attrs[5], 60) >= 154 ? 13 : 0;
-  if (need.key === "perimeter_defense") return toNum(attrs[8], 60) >= 80 ? 12 : 0;
-  if (need.key === "interior_defense") return pos === "C" || secondary === "C" || toNum(attrs[9], 60) + toNum(attrs[10], 60) + toNum(attrs[12], 60) >= 230 ? 12 : 0;
-  if (need.key === "depth") return overall >= 76 && overall <= 84 ? 11 : 0;
-  if (need.key === "young_upside") return age <= 24 && (potential >= overall + 3 || potential >= 84) ? 15 : 0;
-  if (need.key === "star") return overall >= 86 ? 12 : 0;
+  if (need.key === "shooting") return toNum(attrs[0], 60) >= 76 ? 14 : overall >= 74 ? 6 : 0;
+  if (need.key === "creation") return toNum(attrs[4], 60) + toNum(attrs[5], 60) >= 150 ? 13 : overall >= 76 && ["PG", "SG"].includes(pos) ? 7 : 0;
+  if (need.key === "perimeter_defense") return toNum(attrs[8], 60) >= 78 ? 12 : overall >= 75 && ["SG", "SF"].includes(pos) ? 6 : 0;
+  if (need.key === "interior_defense") return pos === "C" || secondary === "C" || toNum(attrs[9], 60) + toNum(attrs[10], 60) + toNum(attrs[12], 60) >= 224 ? 12 : 0;
+  if (need.key === "depth") return overall >= 70 && overall <= 82 ? 11 : 0;
+  if (need.key === "young_upside") return age <= 25 && (potential >= overall + 3 || potential >= 80) ? 15 : 0;
+  if (need.key === "star") return overall >= 80 ? 12 : overall >= 77 ? 7 : 0;
+  if (need.key === "picks") return age <= 24 && potential >= 78 ? 8 : 0;
   return 0;
 }
 
-function targetReasonFor(player, needs, sourcePhase) {
-  const matched = needs
+function targetReasonFor(player, needs, sourcePhase, availability = null) {
+  const matched = (needs || [])
     .map((need) => ({ need, score: playerTraitMatchesNeed(player, need) }))
     .filter((row) => row.score > 0)
     .sort((a, b) => b.score - a.score)[0];
-  const sourceText = sourcePhase === "rebuilding" ? "rebuilding seller" : sourcePhase === "retooling" ? "retooling fit" : "contender depth";
-  return matched ? `${matched.need.label} • ${sourceText}` : sourceText;
+  const needText = matched?.need?.label || "roster fit";
+  const sourceText = availability?.reason || (sourcePhase === "rebuilding" ? "seller availability" : sourcePhase === "retooling" ? "retool availability" : "contender surplus");
+  return `${needText} • ${sourceText}`;
 }
 
 function buildTargetsForTeam(team, phase, needs, teams, intelShellByName, leagueData) {
@@ -839,58 +1062,59 @@ function buildTargetsForTeam(team, phase, needs, teams, intelShellByName, league
 
     const sourceShell = intelShellByName[normalizeTeamName(sourceName)] || {};
     const sourcePhase = sourceShell.phase || "retooling";
-    const sourceUntouchables = new Set((sourceShell.untouchables || []).map((row) => normalizeTeamName(row.name)));
-    const sourceMinutes = getRotationMinutes(sourceTeam);
 
     for (const player of getStandardPlayers(sourceTeam)) {
-      const name = playerNameOf(player);
-      if (sourceUntouchables.has(normalizeTeamName(name))) continue;
-
       const overall = playerOverall(player);
       const potential = playerPotential(player);
       const age = playerAge(player);
-      const needScore = needs.reduce((sum, need) => sum + playerTraitMatchesNeed(player, need), 0);
-      const mpg = toNum(sourceMinutes[name], 0);
-      const crowding = positionalCrowding(player, sourceTeam);
-      let score = needScore;
+      const upside = potential - overall;
+      const needScore = (needs || []).reduce((sum, need) => sum + playerTraitMatchesNeed(player, need), 0);
+      const availability = sourceAvailabilityForTarget(sourceTeam, player, sourcePhase, sourceShell, leagueData);
+      if (!availability.ok) continue;
+
+      let score = needScore + availability.score * 0.75;
 
       if (phase === "contending") {
-        if (overall >= 78 && overall <= 89) score += 18;
-        if (age >= 25 && age <= 33) score += 7;
-        if (["rebuilding", "retooling"].includes(sourcePhase) && age >= 27) score += 11;
-        if (overall < 75) score -= 16;
+        if (overall >= 80 && overall <= 86) score += 25;
+        else if (overall >= 76) score += 21;
+        else if (overall >= 71) score += 12;
+        if (age >= 24 && age <= 34) score += 7;
+        if (["rebuilding", "retooling"].includes(sourcePhase) && age >= 27) score += 9;
+        if (overall < 69) score -= 12;
       } else if (phase === "retooling") {
-        if (age >= 22 && age <= 28) score += 14;
-        if (overall >= 77 && potential >= 82) score += 10;
-        if (sourcePhase === "contending" && mpg < 20 && overall >= 77) score += 8;
+        if (age >= 21 && age <= 29) score += 17;
+        if (overall >= 73 && potential >= 78) score += 13;
+        if (age <= 25 && upside >= 3) score += 11;
+        if (sourcePhase === "contending" && availability.score >= 18) score += 8;
+        if (age >= 32) score -= 10;
       } else {
-        if (age <= 24) score += 21;
-        if (potential >= overall + 4) score += 15;
-        if (potential >= 86) score += 10;
-        if (age >= 29) score -= 25;
-        if (overall >= 90 && age >= 27) score -= 16;
+        if (age <= 24) score += 24;
+        if (age <= 26 && potential >= 78) score += 16;
+        if (upside >= 4) score += 12;
+        if (sourcePhase === "contending" && availability.score >= 18) score += 9;
+        if (age >= 28) score -= 24;
+        if (overall >= 84 && age >= 27) score -= 18;
       }
 
-      if (mpg > 0 && mpg < 18 && overall >= 76) score += 8;
-      if (crowding > 0) score += crowding * 3;
-      if (overall >= 94) score -= 30;
-      if (age <= 22 && potential >= 92) score -= 16;
-      if (needScore <= 0 && phase !== "rebuilding") score -= 8;
-      if (score <= 14) continue;
+      if (needScore <= 0 && phase !== "rebuilding") score -= 7;
+      const threshold = phase === "contending" ? 29 : phase === "retooling" ? 27 : 25;
+      if (score < threshold) continue;
 
       rows.push(decoratePlayer(player, {
         sourceTeamName: sourceName,
         sourceLogo: teamLogoOf(sourceTeam),
         salary: getPlayerSalary(player, leagueData),
+        availabilityScore: availability.score,
+        maxTargetUses: 3,
         score,
-        reason: targetReasonFor(player, needs, sourcePhase),
+        reason: targetReasonFor(player, needs, sourcePhase, availability),
       }));
     }
   }
 
   return rows
-    .sort((a, b) => b.score - a.score || b.overall - a.overall || b.potential - a.potential || a.name.localeCompare(b.name))
-    .slice(0, 14);
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || Number(b.availabilityScore || 0) - Number(a.availabilityScore || 0) || Number(b.overall || 0) - Number(a.overall || 0) || Number(b.potential || 0) - Number(a.potential || 0) || String(a.name || "").localeCompare(String(b.name || "")))
+    .slice(0, 24);
 }
 
 function buildGoals(phase, needs) {
@@ -1002,8 +1226,8 @@ function buildIntelForTeam({ team, teams, leagueData, record, powerRow, phase, s
   const ratings = powerRow?.ratings || computeSafeTeamRatings(team);
   const needs = buildNeeds(team, phase, ratings);
   const ownedPicks = collectOwnedPicksForTeam(leagueData, name);
-  const untouchables = buildUntouchables(team, phase);
-  const tradeBlock = buildTradeBlock(team, phase, leagueData, untouchables);
+  const untouchables = buildUntouchables(team, phase, leagueData, needs);
+  const tradeBlock = buildTradeBlock(team, phase, leagueData, untouchables, needs);
   const targets = buildTargetsForTeam(team, phase, needs, teams, sourceShellByName, leagueData);
   const payroll = teamPayroll(team, leagueData);
   const salaryCap = getSalaryCap(leagueData);
@@ -1063,9 +1287,9 @@ function buildIntelForTeam({ team, teams, leagueData, record, powerRow, phase, s
 function sortByOverallDesc(rows = [], limit = rows.length) {
   return [...rows]
     .sort((a, b) =>
-      b.overall - a.overall ||
-      b.potential - a.potential ||
-      a.age - b.age ||
+      Number(b.overall || 0) - Number(a.overall || 0) ||
+      Number(b.potential || 0) - Number(a.potential || 0) ||
+      Number(a.age || 99) - Number(b.age || 99) ||
       Number(b.score || 0) - Number(a.score || 0) ||
       String(a.name || "").localeCompare(String(b.name || ""))
     )
@@ -1074,18 +1298,16 @@ function sortByOverallDesc(rows = [], limit = rows.length) {
 
 function limitTradeIntelLists(row) {
   const untouchables = sortByOverallDesc(row.untouchables || [], 3);
-  const tradeBlock = sortByOverallDesc(row.tradeBlock || [], 4);
-  const targets = sortByOverallDesc(row.targets || [], 4);
+  const selectedBlock = [...(row.tradeBlock || [])]
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || Number(b.overall || 0) - Number(a.overall || 0) || Number(b.potential || 0) - Number(a.potential || 0) || String(a.name || "").localeCompare(String(b.name || "")))
+    .slice(0, 4);
+  const selectedTargets = [...(row.targets || [])]
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || Number(b.availabilityScore || 0) - Number(a.availabilityScore || 0) || Number(b.overall || 0) - Number(a.overall || 0) || Number(b.potential || 0) - Number(a.potential || 0) || String(a.name || "").localeCompare(String(b.name || "")))
+    .slice(0, 4);
+  const tradeBlock = sortByOverallDesc(selectedBlock, 4);
+  const targets = sortByOverallDesc(selectedTargets, 4);
   const expiringContracts = sortByOverallDesc(row.expiringContracts || [], 4);
-  return {
-    ...row,
-    untouchables,
-    core: untouchables,
-    tradeBlock,
-    movable: tradeBlock,
-    targets,
-    expiringContracts,
-  };
+  return { ...row, untouchables, core: untouchables, tradeBlock, movable: tradeBlock, targets, expiringContracts };
 }
 
 function applyTargetFrequencyCap(rows, maxUses = 3, perTeamLimit = 4) {
@@ -1095,21 +1317,28 @@ function applyTargetFrequencyCap(rows, maxUses = 3, perTeamLimit = 4) {
 
   for (const row of orderedRows) {
     const selected = [];
+    const usedSourceTeams = new Set();
     const candidates = [...(row.targets || [])].sort(
       (a, b) =>
         Number(b.score || 0) - Number(a.score || 0) ||
-        b.overall - a.overall ||
-        b.potential - a.potential ||
-        a.age - b.age ||
+        Number(b.availabilityScore || 0) - Number(a.availabilityScore || 0) ||
+        Number(b.overall || 0) - Number(a.overall || 0) ||
+        Number(b.potential || 0) - Number(a.potential || 0) ||
         String(a.name || "").localeCompare(String(b.name || ""))
     );
 
     for (const target of candidates) {
       const key = normalizeTeamName(target.name || playerNameOf(target.player));
+      const sourceKey = normalizeTeamName(target.sourceTeamName || "");
+      if (sourceKey && usedSourceTeams.has(sourceKey)) continue;
+
       const used = usage.get(key) || 0;
-      if (used >= maxUses) continue;
+      const targetMaxUses = Math.min(3, Math.max(0, Number.isFinite(Number(target.maxTargetUses)) ? Number(target.maxTargetUses) : maxUses));
+      if (used >= targetMaxUses) continue;
+
       selected.push(target);
       usage.set(key, used + 1);
+      if (sourceKey) usedSourceTeams.add(sourceKey);
       if (selected.length >= perTeamLimit) break;
     }
 
@@ -1144,7 +1373,7 @@ export function buildLeagueIntel(leagueData) {
     sourceShellByName[normalizeTeamName(name)] = {
       phase,
       powerRow,
-      untouchables: buildUntouchables(team, phase),
+      untouchables: buildUntouchables(team, phase, null, buildNeeds(team, phase, powerRow?.ratings || computeSafeTeamRatings(team))),
     };
   }
 
