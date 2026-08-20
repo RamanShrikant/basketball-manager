@@ -6,7 +6,7 @@ import {
   isStandardRosterPlayer,
 } from "./rosterRules.js";
 
-const HIGH_VALUE_FREE_AGENT_OVR = 76;
+const HIGH_VALUE_FREE_AGENT_OVR = 72;
 
 function finiteNumber(value, fallback = 0) {
   const parsed = Number(value);

@@ -17,34 +17,44 @@ import {
 import { evaluateTradeRosterProjection } from "./rosterRules.js";
 import { evaluateUserTradeFinancialLegality } from "./userTradeRules.js";
 
+import { economyOvrForPlayer, TRADE_TIER } from "./nativeDeflatedTradeScale.js";
 export const TRADE_FINDER_COMFORT_FLOOR = 1.5;
 
 export function getTradeFinderComfortFloorForPackage(selectedItems = [], leagueData = null) {
   const items = Array.isArray(selectedItems) ? selectedItems : [];
   const players = items.filter((item) => item?.type === "player");
   const picks = items.filter((item) => item?.type === "pick");
-  const sortedOvrs = players
+  const sortedEconomyOvrs = players
+    .map((item) => economyOvrForPlayer(item.player || {}))
+    .sort((a, b) => b - a);
+  const visibleOvrs = players
     .map((item) => Number(item.player?.overall || item.player?.ovr || 0))
     .sort((a, b) => b - a);
-  const bestOvr = sortedOvrs[0] || 0;
-  const secondOvr = sortedOvrs[1] || 0;
+  const bestOvr = sortedEconomyOvrs[0] || 0;
+  const secondOvr = sortedEconomyOvrs[1] || 0;
+  const bestVisible = visibleOvrs[0] || 0;
   const selectedSalary = items.reduce((sum, item) => sum + Number(item.salary || item.player?.contract?.salaryByYear?.[0] || 0), 0);
   const pickValue = picks.reduce((sum, item) => sum + packageValue([item], leagueData), 0);
-  const cheapUsefulSingle = players.length === 1 && picks.length === 0 && bestOvr >= 73 && bestOvr <= 78 && selectedSalary <= 9_000_000;
+  const cheapUsefulSingle =
+    players.length === 1 &&
+    picks.length === 0 &&
+    bestVisible >= TRADE_TIER.ROTATION &&
+    bestVisible <= TRADE_TIER.STARTER + 2 &&
+    selectedSalary <= 12_000_000;
 
-  // Comfort is a floor, not the target. Keep true star/franchise packages strict,
-  // but do not classify two ordinary rotation players as a star package just
-  // because their combined internal value is high. This keeps Obi+Ben-style
-  // searches from hiding every realistic offer, while still skipping barely
-  // positive packages like the Raptors/Poeltl example.
-  if (bestOvr >= 88 || pickValue >= 55 || (bestOvr >= 84 && pickValue >= 25)) return 1.5;
-  if (bestOvr >= 84) return 1.25;
-  if (bestOvr >= 81 || pickValue >= 28 || (bestOvr >= 78 && secondOvr >= 75)) return 1.15;
-  if (cheapUsefulSingle) return 0.35;
-  if (bestOvr >= 74 || pickValue >= 14) return 0.95;
-  if (!players.length && picks.length) return pickValue >= 30 ? 1.0 : 0.85;
-  return 0.75;
+  // Patch 32: revive normal-asset Trade Finder searches on the deflated scale.
+  // Stars/franchise assets remain strict; 70-78 visible players no longer search
+  // like old bench filler or old superstar packages.
+  if (bestOvr >= 92 || pickValue >= 55 || (bestOvr >= 88 && pickValue >= 25)) return 1.5;
+  if (bestOvr >= 88) return 1.30;
+  if (bestOvr >= 84 || pickValue >= 30) return 1.10;
+  if (bestOvr >= 80 || (bestOvr >= 78 && secondOvr >= 75) || pickValue >= 22) return 0.85;
+  if (cheapUsefulSingle) return 0.25;
+  if (bestOvr >= 75 || pickValue >= 14) return 0.55;
+  if (!players.length && picks.length) return pickValue >= 30 ? 0.95 : 0.70;
+  return 0.45;
 }
+
 
 
 function nowMs() {
@@ -119,9 +129,9 @@ export function makeTradeFinderEvalContext({
     comfortFloor: resolvedComfortFloor,
     useUltraFastExact: (() => {
       const items = Array.isArray(selectedItems) ? selectedItems : [];
-      const bestOvr = items.filter((item) => item?.type === "player").reduce((max, item) => Math.max(max, Number(item.player?.overall || item.player?.ovr || 0)), 0);
+      const bestOvr = items.filter((item) => item?.type === "player").reduce((max, item) => Math.max(max, economyOvrForPlayer(item.player || {})), 0);
       const value = packageValue(items, leagueData);
-      return bestOvr >= 88 || value >= 90;
+      return bestOvr >= 92 || value >= 90;
     })(),
     exactCache: new Map(),
     scanCache: new Map(),

@@ -1,6 +1,6 @@
 import { computeTeamRatingsNumeric } from "../api/teamRatings";
 
-export const GAMEPLAN_VERSION = 18;
+export const GAMEPLAN_VERSION = 20;
 
 // Helpers to support both league shapes: { teams: [...] } or { conferences: { ... } }
 function getAllTeamsFromLeague(leagueData) {
@@ -248,14 +248,14 @@ const POT_FUTURE_WINDOWS = [
 ];
 
 const POT_SCALE_BASE = 77.8156;
-const POT_SCALE_FLOOR_VALUE = 70;
-const POT_SCALE_MULTIPLIER = 2.0199;
-const POT_TOP_CURVE_START = 90;
-const POT_TOP_CURVE_MULTIPLIER = 0.74;
-const POT_PROOF_BASE_OVERALL = 84;
-const POT_PROOF_MULTIPLIER = 0.20;
-const POT_ELITE_PROOF_BASE_OVERALL = 92;
-const POT_ELITE_PROOF_MULTIPLIER = 1.10;
+const POT_SCALE_FLOOR_VALUE = 71;
+const POT_SCALE_MULTIPLIER = 2.10;
+const POT_TOP_CURVE_START = 87;
+const POT_TOP_CURVE_MULTIPLIER = 0.78;
+const POT_PROOF_BASE_OVERALL = 80;
+const POT_PROOF_MULTIPLIER = 0.18;
+const POT_ELITE_PROOF_BASE_OVERALL = 88;
+const POT_ELITE_PROOF_MULTIPLIER = 0.82;
 
 const POT_AGE_POINTS = [
   [18, 1.10],
@@ -1908,7 +1908,7 @@ function playerPotentialWindowScore(player, yearsAhead) {
   const uncertaintyPenalty = Math.min(5, upsideGap * 0.35) * ageMultiplier;
 
   // Elite ceilings should separate from normal good young players.
-  const eliteBonus = Math.max(0, potential - 92) * 0.12 * ageMultiplier;
+  const eliteBonus = Math.max(0, potential - 88) * 0.10 * ageMultiplier;
 
   return 58 + (potential - 58) * ageMultiplier + eliteBonus - uncertaintyPenalty;
 }
@@ -1994,7 +1994,7 @@ export function calculateTeamPotentialRating(teamPlayers, options = {}) {
   const exactCurrentOverall = Number.isFinite(suppliedCurrentOverall)
     ? suppliedCurrentOverall
     : getAutoBuiltExactOverallForPotential(valid);
-  const futureStrength = Math.max(0, rawPot - 84) / 10;
+  const futureStrength = Math.max(0, rawPot - 80) / 10;
   const proofBonus =
     Math.max(0, exactCurrentOverall - POT_PROOF_BASE_OVERALL) *
       futureStrength *

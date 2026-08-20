@@ -22,6 +22,26 @@ function getFreeAgencyLedgerDateForDay(leagueData = {}, latestResults = null) {
   return date.toISOString().slice(0, 10);
 }
 
+function getActiveFreeAgencyEventDay(leagueData = {}, latestResults = null) {
+  const state = leagueData?.freeAgencyState || {};
+  const raw = latestResults?.dayResolved ?? latestResults?.day ?? state?.latestResults?.dayResolved ?? state?.latestResults?.day ?? state?.currentDay ?? 0;
+  const day = Number(raw);
+  return Number.isFinite(day) ? Math.round(day) : 0;
+}
+
+function getFreeAgencyRowDay(row) {
+  const raw = row?.day ?? row?.dayResolved ?? row?.signedDay ?? row?.submittedDay ?? row?.storyContext?.day ?? null;
+  const day = Number(raw);
+  return Number.isFinite(day) ? Math.round(day) : null;
+}
+
+function filterFaEventsForCurrentDay(rows = [], currentDay = 0) {
+  const list = Array.isArray(rows) ? rows : [];
+  const day = Number(currentDay || 0);
+  if (!Number.isFinite(day) || day <= 0) return [];
+  return list.filter((row) => getFreeAgencyRowDay(row) === Math.round(day));
+}
+
 function compactStorySideForStorage(side) {
   if (!side || typeof side !== "object") return null;
 
@@ -1736,7 +1756,8 @@ export default function ViewingOffers() {
           (!freeAgencyState?.isActive && Number(freeAgencyState?.currentDay || 0) >= maxDaysForEventView)
         )
     );
-    const showAllDays = Boolean(summaryCompleteForEventView || marketClosed);
+    // BM_PATCH33_FA_EVENTS_DAILY_ONLY: League Events shows current day only.
+    const showAllDays = false;
     const rowsFromDurableLog = [];
 
     for (const entry of fullFreeAgencySummaryEntries || []) {
@@ -1754,7 +1775,7 @@ export default function ViewingOffers() {
 
     const fallbackRows = [
       ...(Array.isArray(signings) ? signings : []),
-      ...(Array.isArray(freeAgencyState?.signedPlayersLog) ? freeAgencyState.signedPlayersLog : []),
+      ...(Array.isArray(freeAgencyState?.signedPlayersLog) ? filterFaEventsForCurrentDay(freeAgencyState.signedPlayersLog, getActiveFreeAgencyEventDay((typeof leagueData !== "undefined" ? leagueData : {}), (typeof latestResults !== "undefined" ? latestResults : null))) : []),
     ].map((row) => ({
       ...row,
       signedWith: row?.signedWith || row?.teamName || row?.toTeam || "",
@@ -1866,7 +1887,7 @@ export default function ViewingOffers() {
 
     const signingSources = [
       ...(Array.isArray(signings) ? signings : []),
-      ...(Array.isArray(freeAgencyState?.signedPlayersLog) ? freeAgencyState.signedPlayersLog : []),
+      ...(Array.isArray(freeAgencyState?.signedPlayersLog) ? filterFaEventsForCurrentDay(freeAgencyState.signedPlayersLog, getActiveFreeAgencyEventDay((typeof leagueData !== "undefined" ? leagueData : {}), (typeof latestResults !== "undefined" ? latestResults : null))) : []),
     ];
 
     for (const signing of signingSources) {
@@ -2143,7 +2164,7 @@ export default function ViewingOffers() {
       }
     }
 
-    for (const log of state.signedPlayersLog || []) {
+    for (const log of filterFaEventsForCurrentDay(state.signedPlayersLog, getActiveFreeAgencyEventDay((typeof leagueData !== "undefined" ? leagueData : {}), (typeof latestResults !== "undefined" ? latestResults : null))) || []) {
       const allOffers = Array.isArray(log?.allOffers) ? log.allOffers : [];
       const userOffer = allOffers.find((offer) => offer?.teamName === teamName && offer?.source === "user");
       if (!userOffer) continue;

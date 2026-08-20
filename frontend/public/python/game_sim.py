@@ -27,6 +27,8 @@ from shooting_model import simulate_one_game
 from efficiency import (
     fatigue_penalty, coverage_penalty, empty_minutes_penalty,
     star_boost, scale_range,
+    TR_STAR_MULT_OVR, TR_STAR_MULT_OFF, TR_STAR_MULT_DEF,
+    TR_STAR_EXP_OVR, TR_STAR_EXP_OFF, TR_STAR_EXP_DEF,
 )
 
 # ------------------------------------------------------------
@@ -153,9 +155,9 @@ def compute_team_ratings(team, mins):
         eff_off.append({"eff": eff_f, "player": r})
         eff_def.append({"eff": eff_d, "player": r})
 
-    s_ovr = star_boost(eff_overall, star_exp=1.22)
-    s_off = star_boost(eff_off, star_exp=1.20)
-    s_def = star_boost(eff_def, star_exp=1.20)
+    s_ovr = star_boost(eff_overall, star_exp=TR_STAR_EXP_OVR, rating_key="overall") * TR_STAR_MULT_OVR
+    s_off = star_boost(eff_off, star_exp=TR_STAR_EXP_OFF, rating_key="offRating") * TR_STAR_MULT_OFF
+    s_def = star_boost(eff_def, star_exp=TR_STAR_EXP_DEF, rating_key="defRating") * TR_STAR_MULT_DEF
 
     cov_pen = coverage_penalty(pos_min)
     empty_pen = empty_minutes_penalty(total_minutes)
@@ -165,9 +167,9 @@ def compute_team_ratings(team, mins):
     raw_def = wavg_def + s_def - cov_pen - empty_pen
 
     return {
-        "overall": round(scale_range(raw_ovr)),
-        "off": round(scale_range(raw_off)),
-        "def": round(scale_range(raw_def)),
+        "overall": round(scale_range(raw_ovr, "overall")),
+        "off": round(scale_range(raw_off, "off")),
+        "def": round(scale_range(raw_def, "def")),
         "roster": roster
     }
 
@@ -175,16 +177,16 @@ def compute_team_ratings(team, mins):
 # EXPECTED POINTS / TEMPO
 # ------------------------------------------------------------
 
-OFF_MEAN = 80.0
-DEF_MEAN = 80.0
+OFF_MEAN = 77.0
+DEF_MEAN = 77.0
 
 BASE_O = 110.5
 OFF_COEF = 18.0 / 33.0
 DEF_COEF = 0.61
 
-MARG_PER_OVR   = 0.26   # how much each rating point shifts expected margin
-STYLE_MARGIN_K = 0.20   # extra style term: off vs def imbalance
-TOTAL_SKEW_K   = 0.42   # small skew to totals for offensive juggernauts
+MARG_PER_OVR   = 0.18   # Patch 31: rating display is stretched; margin impact stays stable
+STYLE_MARGIN_K = 0.14   # Patch 31: keep OFF/DEF stretch from over-widening scores
+TOTAL_SKEW_K   = 0.30   # Patch 31: preserve style without turning ratings into blowouts
 
 def expected_points(off, opp_def):
     return BASE_O + OFF_COEF * (off - OFF_MEAN) - DEF_COEF * (opp_def - DEF_MEAN)
@@ -195,8 +197,8 @@ def tempo_multiplier(offA, defA, offB, defB):
     PACE_CLAMP = (0.83, 1.05)
 
     t = (
-        PACE_A * ((offA - 80) + (offB - 80))
-        - PACE_D * ((defA - 80) + (defB - 80))
+        PACE_A * ((offA - OFF_MEAN) + (offB - OFF_MEAN))
+        - PACE_D * ((defA - DEF_MEAN) + (defB - DEF_MEAN))
     )
     return clamp(1 + t, PACE_CLAMP[0], PACE_CLAMP[1])
 

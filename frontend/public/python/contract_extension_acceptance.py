@@ -6,6 +6,30 @@ or contract-application code.
 """
 from __future__ import annotations
 
+# BM_PATCH32_ECONOMIC_IMPORT
+try:
+    from deflated_trade_scale import economic_player_copy, player_economic_overall, player_economic_potential, economy_ovr, TRADE_TIER
+except Exception:  # pragma: no cover - patch fallback
+    def economic_player_copy(player):
+        return player
+    def player_economic_overall(player):
+        try:
+            return float(player.get("overall", player.get("ovr", 0)))
+        except Exception:
+            return 0.0
+    def player_economic_potential(player):
+        try:
+            return max(player_economic_overall(player), float(player.get("potential", player.get("pot", player_economic_overall(player)))))
+        except Exception:
+            return player_economic_overall(player)
+    def economy_ovr(value):
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+    TRADE_TIER = {"MEGA": 86, "STAR": 84, "STARTER": 76, "CORE": 80, "SUPERSTAR": 88, "FRANCHISE": 90}
+
+
 import hashlib
 import math
 import random
@@ -128,6 +152,7 @@ def evaluate_extension_offer(
     offer: Dict[str, Any],
     eligibility: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    player = economic_player_copy(player)  # BM_PATCH32_EXTENSION_ECONOMY
     """Return a deterministic player decision for one exact extension offer."""
     eligibility = eligibility or {}
     market = _market_value(player)

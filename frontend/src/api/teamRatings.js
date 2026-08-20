@@ -4,19 +4,29 @@
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 const round4 = (x) => Math.round(Number(x || 0) * 10000) / 10000;
 
-const TR_GAIN_OVR = 1.48;
-const TR_GAIN_SIDE = 1.15;
-const TR_SCALE_CENTER_RAW_OVR = 84;
-const TR_SCALE_CENTER_OUT_OVR = 81;
-const TR_SCALE_CENTER_RAW_SIDE = 84;
-const TR_SCALE_CENTER_OUT_SIDE = 82;
-const TR_STAR_MULT_OVR = 1.0;
-const TR_STAR_MULT_OFF = 0.95;
-const TR_STAR_MULT_DEF = 0.75;
-const TR_STAR_REF = 84.0;
-const TR_STAR_EXP_OVR = 1.22;
-const TR_STAR_EXP_OFF = 1.20;
-const TR_STAR_EXP_DEF = 1.20;
+// Native deflated roster calibration.
+// Patch 31 stretches the native-deflated TEAM scale without hard caps.
+// Current deflation roster targets approximately: OVR 89-65, OFF 92-68,
+// DEF 91-66, POT 93-65, while preserving the same ranking/order language.
+// Future rosters can naturally land outside those ranges.
+const TR_GAIN_OVR = 2.04;
+const TR_GAIN_OFF = 2.14;
+const TR_GAIN_DEF = 1.216;
+const TR_SCALE_CENTER_RAW_OVR = 80;
+const TR_SCALE_CENTER_OUT_OVR = 78.5;
+const TR_SCALE_CENTER_RAW_OFF = 80;
+const TR_SCALE_CENTER_OUT_OFF = 76;
+const TR_SCALE_CENTER_RAW_DEF = 80;
+const TR_SCALE_CENTER_OUT_DEF = 78.47;
+const TR_STAR_MULT_OVR = 0.72;
+const TR_STAR_MULT_OFF = 0.68;
+const TR_STAR_MULT_DEF = 0.58;
+const TR_STAR_REF = 80.0;
+const TR_STAR_SOFT_CAP = 12.0;
+const TR_STAR_TAIL_MULT = 0.35;
+const TR_STAR_EXP_OVR = 1.12;
+const TR_STAR_EXP_OFF = 1.10;
+const TR_STAR_EXP_DEF = 1.10;
 const TR_STAR_SHARE_EXP = 0.45;
 const TR_STAR_OUT_EXP = 0.85;
 const TR_COV_ALPHA = 9.0;
@@ -467,13 +477,19 @@ function updateTopTwo(top, eff, base, minutes) {
   }
 }
 
+function starGapAboveRef(base) {
+  const rawGap = Math.max(0, Number(base || 0) - TR_STAR_REF);
+  if (rawGap <= TR_STAR_SOFT_CAP) return rawGap;
+  return TR_STAR_SOFT_CAP + (rawGap - TR_STAR_SOFT_CAP) * TR_STAR_TAIL_MULT;
+}
+
 function starBoostFromTopTwo(top, starExp) {
   let pull = 0;
   const first = top.first;
   const second = top.second;
 
   if (first) {
-    const gap = Math.max(0, first.base - TR_STAR_REF);
+    const gap = starGapAboveRef(first.base);
     if (gap > 0) {
       const share = Math.max(0, first.minutes / 240) ** TR_STAR_SHARE_EXP;
       pull += (gap ** starExp) * share;
@@ -481,7 +497,7 @@ function starBoostFromTopTwo(top, starExp) {
   }
 
   if (second) {
-    const gap = Math.max(0, second.base - TR_STAR_REF);
+    const gap = starGapAboveRef(second.base);
     if (gap > 0) {
       const share = Math.max(0, second.minutes / 240) ** TR_STAR_SHARE_EXP;
       pull += (gap ** starExp) * share;
@@ -565,8 +581,8 @@ export function computeTeamRatingsNumeric(team, minsObj) {
   const rawOvr = baseOvr + sOvr - coveragePenalty - emptyPen;
 
   const exactOverall = round4(scaleRange(rawOvr, "overall"));
-  const exactOff = round4(scaleRange(rawOff, "side"));
-  const exactDef = round4(scaleRange(rawDef, "side"));
+  const exactOff = round4(scaleRange(rawOff, "off"));
+  const exactDef = round4(scaleRange(rawDef, "def"));
 
   return {
     overall: Math.round(exactOverall),
@@ -921,7 +937,7 @@ function starBoost(effList, starExp, key = "overall") {
         ? Number(p.defRating ?? p.overall ?? 75)
         : Number(p.overall ?? 75);
 
-    const gap = Math.max(0, base - TR_STAR_REF);
+    const gap = starGapAboveRef(base);
     if (gap <= 0) continue;
 
     const share = Math.max(0, p.minutes / 240) ** TR_STAR_SHARE_EXP;
@@ -948,9 +964,19 @@ function coveragePenaltyPts(posMin) {
 }
 
 const scaleRange = (raw, kind = "overall") => {
-  const gain = kind === "overall" ? TR_GAIN_OVR : TR_GAIN_SIDE;
-  const centerRaw = kind === "overall" ? TR_SCALE_CENTER_RAW_OVR : TR_SCALE_CENTER_RAW_SIDE;
-  const centerOut = kind === "overall" ? TR_SCALE_CENTER_OUT_OVR : TR_SCALE_CENTER_OUT_SIDE;
+  let gain = TR_GAIN_OVR;
+  let centerRaw = TR_SCALE_CENTER_RAW_OVR;
+  let centerOut = TR_SCALE_CENTER_OUT_OVR;
+
+  if (kind === "off") {
+    gain = TR_GAIN_OFF;
+    centerRaw = TR_SCALE_CENTER_RAW_OFF;
+    centerOut = TR_SCALE_CENTER_OUT_OFF;
+  } else if (kind === "def") {
+    gain = TR_GAIN_DEF;
+    centerRaw = TR_SCALE_CENTER_RAW_DEF;
+    centerOut = TR_SCALE_CENTER_OUT_DEF;
+  }
 
   return clamp((raw - centerRaw) * gain + centerOut, 25, 99);
 };
@@ -994,8 +1020,8 @@ export function computeTeamRatings(team, minsObj, options = {}) {
   const rawOvr = baseOvr + sOvr - cov - emptyPen;
 
   const exactOverall = round4(scaleRange(rawOvr, "overall"));
-  const exactOff = round4(scaleRange(rawOff, "side"));
-  const exactDef = round4(scaleRange(rawDef, "side"));
+  const exactOff = round4(scaleRange(rawOff, "off"));
+  const exactDef = round4(scaleRange(rawDef, "def"));
 
   return {
     // Whole-number values are for UI display.

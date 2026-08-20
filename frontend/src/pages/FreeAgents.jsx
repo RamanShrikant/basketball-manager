@@ -1511,17 +1511,51 @@ const isOffseasonMode =
     return `MLE ${formatDollars(dashboard.nonTaxpayerMLE)}`;
   };
 
+
+  // BM_PATCH33_FRONTEND_CONTRACT_PARITY: display fallback for stale marketValue.
+  const patch33EconomyPoints = [[50,55],[55,60],[60,66],[65,71.5],[68,75],[69,75.5],[70,76],[72,77.5],[73,78.5],[75,80],[76,81],[80,84],[82,86],[85,89],[88,92],[90,94],[92,95.5],[95,97],[99,99]];
+  const patch33ContractEconomyOverall = (visible) => {
+    const x = Number(visible || 0); const pts = patch33EconomyPoints;
+    if (x <= pts[0][0]) { const [x0,y0]=pts[0]; const [x1,y1]=pts[1]; return y0 + ((x-x0)*(y1-y0))/(x1-x0); }
+    for (let i=0;i<pts.length-1;i+=1){ const [x0,y0]=pts[i]; const [x1,y1]=pts[i+1]; if (x>=x0 && x<=x1) return y0 + ((x-x0)*(y1-y0))/Math.max(0.0001,x1-x0); }
+    const [xa,ya]=pts[pts.length-2]; const [xb,yb]=pts[pts.length-1]; return yb + ((x-xb)*(yb-ya))/Math.max(0.0001,xb-xa);
+  };
+  const patch33EstimateDisplayYearOneSalary = (player = {}) => {
+    const visible = Number(player?.__bmPatch32VisibleOverall ?? player?.overall ?? player?.ovr ?? 75) || 75;
+    const pot = Number(player?.__bmPatch32VisiblePotential ?? player?.potential ?? player?.pot ?? visible) || visible;
+    const ovr = patch33ContractEconomyOverall(visible); const epot = Math.max(ovr, patch33ContractEconomyOverall(pot));
+    const age = Math.round(Number(player?.age ?? 27)); const upside = Math.max(0, epot - ovr); const vup = Math.max(0, pot - visible);
+    const off = Number(player?.offRating ?? visible); const def = Number(player?.defRating ?? visible); const scoring = Number(player?.scoringRating ?? 50);
+    const maxSalary = Number(financialRules?.maxSalary || 54_000_000); const minSalary = Number(financialRules?.minimumSalary || MIN_CONTRACT_AMOUNT || 1_200_000); const capScale = maxSalary / 54_000_000;
+    const minimumBucket = visible <= 63 || (visible <= 65 && age >= 28 && vup <= 1) || (visible <= 67 && age >= 32 && vup <= 1);
+    if (minimumBucket) return Math.max(minSalary, visible >= 66 ? Number(financialRules?.minimumException || minSalary) : minSalary);
+    let base; if (ovr <= 75) base = 3100000 + Math.max(0, ovr - 74) * 1250000; else if (ovr <= 78) base = 4800000 + (ovr - 76) * 2050000; else if (ovr <= 81) base = 10800000 + (ovr - 79) * 3000000; else if (ovr <= 84) base = 19000000 + (ovr - 82) * 3500000; else if (ovr <= 88) base = 26000000 + (ovr - 84) * 2850000; else base = 37400000 + (ovr - 88) * 3200000; base *= capScale;
+    if (age <= 22) base *= 1.08 + Math.min(0.18, upside * 0.025); else if (age <= 25) base *= 1.05 + Math.min(0.14, upside * 0.018); else if (age <= 27) base *= 1.02 + Math.min(0.08, upside * 0.010); else if (age <= 33) base *= Math.max(0.85, 1 - Math.max(0, age - 30) * 0.043); else if (ovr >= 84) { const s = Math.max(0, Math.min(1, (ovr - 84) / 8)); base *= Math.max(0.68 + s * 0.14, 0.88 + s * 0.10 - (age - 34) * (0.040 - s * 0.018)); } else base *= Math.max(0.62, 0.84 - (age - 33) * 0.062);
+    if (age >= 31 && ovr <= 80) base *= ovr >= 77 ? 0.94 : 0.92; if (age >= 34 && ovr <= 79) base *= ovr >= 77 ? 0.91 : 0.88; if (age >= 36 && ovr <= 82) base *= ovr >= 80 ? 0.93 : 0.90;
+    if (off >= 84) base *= 1.04; if (def >= 84) base *= 1.04; if (scoring >= 80) base *= 1.03; if (visible <= 83 && Math.max(off, def) >= visible + 7) base *= 1.05;
+    if (age >= 35 && age <= 37 && ovr >= 88) base *= 1.11; else if (age >= 35 && age <= 37 && ovr >= 82) base *= 1.14; else if (age >= 34 && age <= 37 && ovr >= 80 && (Math.max(off, def) >= 82 || scoring >= 70)) base *= 1.08;
+    if (age <= 21 && visible >= 70 && pot >= 90) base = Math.max(base, 8500000 * capScale); else if (age <= 23 && visible >= 70 && pot >= 84) base = Math.max(base, 6500000 * capScale); else if (age <= 24 && visible >= 70 && pot >= 80) base = Math.max(base, 5500000 * capScale);
+    if (visible >= 70 && ovr >= 76 && age <= 29) base = Math.max(base, 4600000 * capScale); if (visible >= 69 && ovr >= 75 && age <= 27 && pot >= 74) base = Math.max(base, 4800000 * capScale); else if (visible >= 69 && ovr >= 75 && age <= 29) base = Math.max(base, 4200000 * capScale); if (visible >= 68 && ovr >= 74 && age <= 33) base = Math.max(base, 3400000 * capScale);
+    return Math.round(Math.max(minSalary, Math.min(maxSalary, base)) / 1000) * 1000;
+  };
+
+  
   const getExpectedYearOneSalary = (player) => {
-    return Number(
+    const storedAsk = Number(
       player?.marketValue?.contractExpectedYear1Salary ||
       player?.marketValue?.expectedYear1Salary ||
       player?.marketValue?.contractExpectedAAV ||
       player?.marketValue?.expectedAAV ||
       player?.marketValue?.contractMinAcceptableAAV ||
       player?.marketValue?.minAcceptableAAV ||
-      MIN_CONTRACT_AMOUNT
+      0
     );
+    const parityAsk = patch33EstimateDisplayYearOneSalary(player);
+    const scaleVersion = String(player?.marketValue?.contractScaleVersion || "");
+    if (scaleVersion.includes("patch33_contract_market_parity")) return storedAsk || parityAsk || MIN_CONTRACT_AMOUNT;
+    return Math.max(storedAsk || 0, parityAsk || 0, MIN_CONTRACT_AMOUNT);
   };
+
 
   const formatExpectedSalaryShort = (player) => {
     const amount = getExpectedYearOneSalary(player);

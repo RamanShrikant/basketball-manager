@@ -12,7 +12,7 @@ import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
 
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
-const POWER_RANKINGS_AUTO_RATINGS_CACHE_KEY = "bm_power_rankings_healthy_auto_ratings_v6";
+const POWER_RANKINGS_AUTO_RATINGS_CACHE_KEY = "bm_power_rankings_healthy_auto_ratings_v7";
 
 const toNum = (value, fallback = 0) => {
   const n = Number(value);
@@ -98,7 +98,7 @@ function getLegacyGameplanRosterSignature(teamPlayers = []) {
 
 function getPowerRankingsRosterSignature(teamPlayers = []) {
   return [
-    `healthy-auto-v6-${GAMEPLAN_VERSION}`,
+    `healthy-auto-v7-${GAMEPLAN_VERSION}`,
     ...[...(teamPlayers || [])]
       .map((p) =>
         [

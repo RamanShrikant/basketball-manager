@@ -1,5 +1,6 @@
 import { getLeagueFinancialRules, roundMoney } from "./leagueFinancials.js";
 
+import { economicTradePlayerCopy } from "./nativeDeflatedTradeScale.js";
 const DEFAULT_SEASON_YEAR = 2026;
 const BASE_MAX_SALARY = 54_000_000;
 const YEARLY_RAISE = 0.05;
@@ -172,16 +173,46 @@ function buildSalaryByYear(yearOneSalary, years) {
   return out;
 }
 
+function getDeflatedEconomicContractOverall(player = {}) {
+  const visibleOverall = num(player?.overall ?? player?.ovr, 75);
+  const potential = num(player?.potential ?? player?.pot, visibleOverall);
+  const upside = Math.max(0, potential - visibleOverall);
+  const offRating = num(player?.offRating ?? player?.off ?? player?.offense, visibleOverall);
+  const defRating = num(player?.defRating ?? player?.def ?? player?.defense, visibleOverall);
+  const scoringRating = num(player?.scoringRating ?? player?.scoring ?? player?.shooting ?? 50, 50);
+
+  // Patch 32D: visible ratings are deflated, but the contract/trade economy
+  // should still value players similarly to the old game. This is not a hidden
+  // displayed OVR; it is only an economic translation for salary expectations
+  // and contract-friction math.
+  let economicOverall;
+  if (visibleOverall <= 60) economicOverall = visibleOverall + 4.5;
+  else if (visibleOverall <= 65) economicOverall = visibleOverall + 5.0;
+  else if (visibleOverall <= 70) economicOverall = visibleOverall + 5.0;
+  else if (visibleOverall <= 76) economicOverall = visibleOverall + 4.5;
+  else if (visibleOverall <= 84) economicOverall = visibleOverall + 4.0;
+  else if (visibleOverall <= 88) economicOverall = visibleOverall + 4.0;
+  else if (visibleOverall <= 92) economicOverall = visibleOverall + 3.5;
+  else economicOverall = visibleOverall + 2.5;
+
+  economicOverall += Math.min(1.4, upside * 0.11);
+  if (Math.max(offRating, defRating) >= visibleOverall + 7) economicOverall += 0.45;
+  if (scoringRating >= 84) economicOverall += 0.35;
+
+  return clamp(economicOverall, 55, 99);
+}
+
 function getRealisticExpectedContractYears(player = {}) {
-  const overall = num(player?.overall ?? player?.ovr, 75);
+  const visibleOverall = num(player?.overall ?? player?.ovr, 75);
+  const overall = getDeflatedEconomicContractOverall(player);
   const age = Math.round(num(player?.age, 27));
-  const potential = num(player?.potential ?? player?.pot, overall);
-  const upside = Math.max(0, potential - overall);
+  const potential = num(player?.potential ?? player?.pot, visibleOverall);
+  const upside = Math.max(0, potential - visibleOverall);
 
   const minimumBucket =
-    overall <= 72 ||
-    (overall <= 73 && age >= 30 && upside <= 1) ||
-    (overall <= 74 && age >= 32 && upside <= 1);
+    visibleOverall <= 64 ||
+    (visibleOverall <= 66 && age >= 30 && upside <= 1) ||
+    (visibleOverall <= 68 && age >= 32 && upside <= 1);
 
   if (minimumBucket) {
     if (age <= 25 && upside >= 4) return 2;
@@ -190,43 +221,43 @@ function getRealisticExpectedContractYears(player = {}) {
 
   let years;
 
-  if (overall >= 90) {
+  if (overall >= 93) {
     if (age <= 34) years = 4;
     else if (age <= 36) years = 3;
     else if (age <= 38) years = 2;
     else years = 1;
-  } else if (overall >= 88) {
+  } else if (overall >= 91) {
     if (age <= 34) years = 4;
     else if (age <= 35) years = 3;
     else if (age <= 38) years = 2;
     else years = 1;
-  } else if (overall >= 85) {
+  } else if (overall >= 88) {
     if (age <= 34) years = 4;
     else if (age <= 36) years = 2;
-    else if (age <= 37 && overall >= 87) years = 2;
+    else if (age <= 37 && overall >= 90) years = 2;
     else years = 1;
-  } else if (overall >= 81) {
+  } else if (overall >= 84) {
     if (age <= 31) years = 4;
     else if (age <= 34) years = 3;
     else if (age <= 37) years = 2;
     else years = 1;
-  } else if (overall >= 78) {
+  } else if (overall >= 81) {
     if (age <= 29) years = 4;
     else if (age <= 31) years = 3;
     else if (age <= 34) years = 2;
-    else if (age <= 36 && overall >= 80) years = 2;
+    else if (age <= 36 && overall >= 83) years = 2;
     else years = 1;
-  } else if (overall >= 76) {
+  } else if (overall >= 79) {
     if (age <= 29) years = 4;
     else if (age <= 31) years = 3;
     else if (age <= 33) years = 2;
     else years = 1;
-  } else if (overall >= 74) {
+  } else if (overall >= 77) {
     if (age <= 25 && upside >= 3) years = 3;
     else if (age <= 28) years = 2;
-    else if (age <= 31 && overall >= 75) years = 2;
+    else if (age <= 31 && overall >= 78) years = 2;
     else years = 1;
-  } else if (overall >= 73) {
+  } else if (overall >= 75) {
     if (age <= 25 && upside >= 3) years = 3;
     else if (age <= 29) years = 2;
     else years = 1;
@@ -234,12 +265,12 @@ function getRealisticExpectedContractYears(player = {}) {
     years = 1;
   }
 
-  if (age <= 24 && upside >= 4 && overall >= 74) years = Math.min(4, years + 1);
-  if (age <= 29 && overall >= 76) years = Math.max(years, 4);
-  if (age <= 31 && overall >= 81) years = Math.max(years, 4);
-  if (age <= 34 && overall >= 85) years = Math.max(years, 4);
-  if (age >= 35 && age <= 37 && overall >= 82) years = Math.max(years, 2);
-  if (age >= 36 && age <= 38 && overall >= 90) years = Math.max(years, 2);
+  if (age <= 24 && upside >= 4 && visibleOverall >= 70) years = Math.min(4, years + 1);
+  if (age <= 29 && visibleOverall >= 76) years = Math.max(years, 4);
+  if (age <= 31 && visibleOverall >= 81) years = Math.max(years, 4);
+  if (age <= 34 && visibleOverall >= 85) years = Math.max(years, 4);
+  if (age >= 35 && age <= 37 && visibleOverall >= 82) years = Math.max(years, 2);
+  if (age >= 36 && age <= 38 && visibleOverall >= 90) years = Math.max(years, 2);
 
   return clamp(Math.round(years), 1, 4);
 }
@@ -252,25 +283,26 @@ export function estimateTradeMarketValue(player = {}, leagueData = {}) {
   const minimumException = num(rules?.minimumException, 1_500_000);
   const scale = maxSalary / BASE_MAX_SALARY;
 
-  const overall = num(player?.overall ?? player?.ovr, 75);
+  const visibleOverall = num(player?.overall ?? player?.ovr, 75);
+  const overall = getDeflatedEconomicContractOverall(player);
   const age = Math.round(num(player?.age, 27));
-  const potential = num(player?.potential ?? player?.pot, overall);
-  const upside = Math.max(0, potential - overall);
-  const offRating = num(player?.offRating ?? player?.off ?? player?.offense, overall);
-  const defRating = num(player?.defRating ?? player?.def ?? player?.defense, overall);
+  const potential = num(player?.potential ?? player?.pot, visibleOverall);
+  const upside = Math.max(0, potential - visibleOverall);
+  const offRating = num(player?.offRating ?? player?.off ?? player?.offense, visibleOverall);
+  const defRating = num(player?.defRating ?? player?.def ?? player?.defense, visibleOverall);
   const scoringRating = num(player?.scoringRating ?? player?.scoring ?? player?.shooting ?? 50, 50);
 
   const years = getRealisticExpectedContractYears(player);
   const minimumBucket =
-    overall <= 72 ||
-    (overall <= 73 && age >= 27 && upside <= 1) ||
-    (overall <= 74 && age >= 30 && upside <= 1);
+    visibleOverall <= 64 ||
+    (visibleOverall <= 66 && age >= 27 && upside <= 1) ||
+    (visibleOverall <= 68 && age >= 30 && upside <= 1);
 
   if (minimumBucket) {
     let baseSalary = minimumSalary;
-    if (overall >= 73 && age <= 26) {
+    if (visibleOverall >= 66 && age <= 26) {
       baseSalary = Math.max(minimumSalary, Math.round(1_900_000 * scale));
-    } else if (overall >= 73) {
+    } else if (visibleOverall >= 66) {
       baseSalary = Math.max(minimumSalary, Math.round(minimumException));
     }
 
@@ -283,6 +315,7 @@ export function estimateTradeMarketValue(player = {}, leagueData = {}) {
       expectedYears: years,
       salaryByYear,
       minimumBucket: true,
+      economicOverall: round4(overall),
     };
   }
 
@@ -327,11 +360,11 @@ export function estimateTradeMarketValue(player = {}, leagueData = {}) {
   if (age >= 34 && overall <= 79) baseSalary *= overall >= 77 ? 0.91 : 0.88;
   if (age >= 36 && overall <= 82) baseSalary *= overall >= 80 ? 0.93 : 0.90;
 
-  if (offRating >= 88) baseSalary *= 1.04;
-  if (defRating >= 88) baseSalary *= 1.04;
-  if (scoringRating >= 84) baseSalary *= 1.03;
-  if (overall <= 83 && Math.max(offRating, defRating) >= overall + 7) baseSalary *= 1.05;
-  if (age >= 34 && overall >= 77 && overall <= 82 && (Math.max(offRating, defRating) >= 86 || scoringRating >= 82)) {
+  if (offRating >= 84) baseSalary *= 1.04;
+  if (defRating >= 84) baseSalary *= 1.04;
+  if (scoringRating >= 80) baseSalary *= 1.03;
+  if (visibleOverall <= 83 && Math.max(offRating, defRating) >= visibleOverall + 7) baseSalary *= 1.05;
+  if (age >= 34 && visibleOverall >= 77 && visibleOverall <= 82 && (Math.max(offRating, defRating) >= 84 || scoringRating >= 80)) {
     baseSalary *= 1.025;
   }
 
@@ -346,6 +379,7 @@ export function estimateTradeMarketValue(player = {}, leagueData = {}) {
     expectedYears: years,
     salaryByYear,
     minimumBucket: false,
+    economicOverall: round4(overall),
   };
 }
 

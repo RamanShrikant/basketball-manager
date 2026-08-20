@@ -5,6 +5,30 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+# BM_PATCH32_ECONOMIC_IMPORT
+try:
+    from deflated_trade_scale import economic_player_copy, player_economic_overall, player_economic_potential, economy_ovr, TRADE_TIER
+except Exception:  # pragma: no cover - patch fallback
+    def economic_player_copy(player):
+        return player
+    def player_economic_overall(player):
+        try:
+            return float(player.get("overall", player.get("ovr", 0)))
+        except Exception:
+            return 0.0
+    def player_economic_potential(player):
+        try:
+            return max(player_economic_overall(player), float(player.get("potential", player.get("pot", player_economic_overall(player)))))
+        except Exception:
+            return player_economic_overall(player)
+    def economy_ovr(value):
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+    TRADE_TIER = {"MEGA": 86, "STAR": 84, "STARTER": 76, "CORE": 80, "SUPERSTAR": 88, "FRANCHISE": 90}
+
+
 try:
     from league_financials import (
         ensure_league_financials,
@@ -939,139 +963,76 @@ def build_salary_by_year(year1_salary: int, years: int) -> List[int]:
 # ------------------------------------------------------------
 # FREE AGENCY CONTRACT LENGTH / OPTION SHAPE HELPERS
 # ------------------------------------------------------------
+
+def bm_patch33_visible_overall(player: Dict[str, Any]) -> float:
+    if isinstance(player, dict) and "__bmPatch32VisibleOverall" in player:
+        return num(player.get("__bmPatch32VisibleOverall"), num(player.get("overall"), 75))
+    return num(player.get("overall", player.get("ovr", 75)), 75)
+
+
+def bm_patch33_visible_potential(player: Dict[str, Any], visible_overall: Optional[float] = None) -> float:
+    ovr = bm_patch33_visible_overall(player) if visible_overall is None else float(visible_overall)
+    if isinstance(player, dict) and "__bmPatch32VisiblePotential" in player:
+        return num(player.get("__bmPatch32VisiblePotential"), ovr)
+    return num(player.get("potential", player.get("pot", ovr)), ovr)
+
+
+_BM_PATCH33_CONTRACT_ECONOMY_POINTS = [(50.0,55.0),(55.0,60.0),(60.0,66.0),(65.0,71.5),(68.0,75.0),(69.0,75.5),(70.0,76.0),(72.0,77.5),(73.0,78.5),(75.0,80.0),(76.0,81.0),(80.0,84.0),(82.0,86.0),(85.0,89.0),(88.0,92.0),(90.0,94.0),(92.0,95.5),(95.0,97.0),(99.0,99.0)]
+
+
+def bm_patch33_contract_economy_ovr(visible_overall: Any) -> float:
+    x = num(visible_overall, 0.0); pts = _BM_PATCH33_CONTRACT_ECONOMY_POINTS
+    if x <= pts[0][0]:
+        x0,y0=pts[0]; x1,y1=pts[1]; return y0 + ((x-x0)*(y1-y0))/max(0.0001,x1-x0)
+    for (x0,y0),(x1,y1) in zip(pts, pts[1:]):
+        if x0 <= x <= x1: return y0 + ((x-x0)*(y1-y0))/max(0.0001,x1-x0)
+    xa,ya=pts[-2]; xb,yb=pts[-1]; return yb + ((x-xb)*(yb-ya))/max(0.0001,xb-xa)
+
+
+def bm_patch33_contract_economic_overall(player: Dict[str, Any]) -> float:
+    return bm_patch33_contract_economy_ovr(bm_patch33_visible_overall(player))
+
+
+def bm_patch33_contract_economic_potential(player: Dict[str, Any]) -> float:
+    visible = bm_patch33_visible_overall(player)
+    visible_pot = bm_patch33_visible_potential(player, visible)
+    econ = bm_patch33_contract_economy_ovr(visible)
+    return max(econ, bm_patch33_contract_economy_ovr(visible_pot))
+
+
 def get_realistic_expected_contract_years(player: Dict[str, Any]) -> int:
-    """More aggressive NBA-lite expected free-agency contract length, capped at 4 years.
-
-    Surgical contract-shape rule:
-    - 76+ OVR players in their 20s can get 4-year deals.
-    - 81+ OVR players through age 31 can still expect 4-year deals.
-    - 85+ OVR players through age 34 can still expect 4-year deals.
-    - Useful 2-year cases become 3 years more often.
-    - Useful older 1-year cases become 2 years more often.
-    - True fringe/minimum players and old low-end vets stay short.
-    - This helper is shared by market-value expectations and CPU offer building
-      so realistic offers are not punished for matching the new expectedYears.
-    """
-    overall = float(num(player.get("overall"), 75))
+    """Patch 33: contract length uses deflated->old-economy parity."""
+    visible_overall = bm_patch33_visible_overall(player)
+    visible_potential = bm_patch33_visible_potential(player, visible_overall)
+    overall = bm_patch33_contract_economy_ovr(visible_overall)
+    potential = max(overall, bm_patch33_contract_economy_ovr(visible_potential))
     age = int(num(player.get("age"), 27))
-    potential = float(num(player.get("potential"), overall))
     upside = max(0.0, potential - overall)
-
-    minimum_bucket = (
-        overall <= 72
-        or (overall <= 73 and age >= 30 and upside <= 1)
-        or (overall <= 74 and age >= 32 and upside <= 1)
-    )
-
+    visible_upside = max(0.0, visible_potential - visible_overall)
+    minimum_bucket = (visible_overall <= 63 or (visible_overall <= 65 and age >= 28 and visible_upside <= 1) or (visible_overall <= 67 and age >= 32 and visible_upside <= 1))
     if minimum_bucket:
-        if age <= 25 and upside >= 4:
-            return 2
+        if age <= 25 and visible_upside >= 4: return 2
         return 1 if age >= 30 else 2
-
-    if overall >= 90:
-        if age <= 34:
-            years = 4
-        elif age <= 36:
-            years = 3
-        elif age <= 38:
-            years = 2
-        else:
-            years = 1
-
+    if overall >= 92:
+        years = 4 if age <= 34 else 3 if age <= 36 else 2 if age <= 38 else 1
     elif overall >= 88:
-        if age <= 34:
-            years = 4
-        elif age <= 35:
-            years = 3
-        elif age <= 38:
-            years = 2
-        else:
-            years = 1
-
-    elif overall >= 85:
-        if age <= 34:
-            years = 4
-        elif age <= 36:
-            years = 2
-        elif age <= 37 and overall >= 87:
-            years = 2
-        else:
-            years = 1
-
-    elif overall >= 81:
-        if age <= 31:
-            years = 4
-        elif age <= 34:
-            years = 3
-        elif age <= 37:
-            years = 2
-        else:
-            years = 1
-
-    elif overall >= 78:
-        if age <= 29:
-            years = 4
-        elif age <= 31:
-            years = 3
-        elif age <= 34:
-            years = 2
-        elif age <= 36 and overall >= 80:
-            years = 2
-        else:
-            years = 1
-
-    elif overall >= 76:
-        if age <= 29:
-            years = 4
-        elif age <= 31:
-            years = 3
-        elif age <= 33:
-            years = 2
-        else:
-            years = 1
-
-    elif overall >= 74:
-        if age <= 25 and upside >= 3:
-            years = 3
-        elif age <= 28:
-            years = 2
-        elif age <= 31 and overall >= 75:
-            years = 2
-        else:
-            years = 1
-
-    elif overall >= 73:
-        if age <= 25 and upside >= 3:
-            years = 3
-        elif age <= 29:
-            years = 2
-        else:
-            years = 1
-
+        years = 4 if age <= 34 else 3 if age <= 36 else 2 if age <= 38 else 1
+    elif overall >= 84:
+        years = 4 if age <= 31 else 3 if age <= 34 else 2 if age <= 37 else 1
+    elif overall >= 80:
+        years = 4 if age <= 29 else 3 if age <= 31 else 2 if age <= 34 or (age <= 36 and overall >= 82) else 1
+    elif overall >= 77:
+        years = 4 if age <= 29 else 3 if age <= 31 else 2 if age <= 33 else 1
+    elif overall >= 75:
+        years = 3 if age <= 25 and upside >= 3 else 2 if age <= 29 or (age <= 31 and overall >= 76) else 1
     else:
         years = 1
-
-    # Young upside players should get more team commitment.
-    if age <= 24 and upside >= 4 and overall >= 74:
-        years = min(4, years + 1)
-
-    # Prime/near-prime players who are already good should not be stuck short.
-    if age <= 29 and overall >= 76:
-        years = max(years, 4)
-
-    if age <= 31 and overall >= 81:
-        years = max(years, 4)
-
-    if age <= 34 and overall >= 85:
-        years = max(years, 4)
-
-    # Useful older players should not all collapse to one-year deals.
-    if 35 <= age <= 37 and overall >= 82:
-        years = max(years, 2)
-
-    if 36 <= age <= 38 and overall >= 90:
-        years = max(years, 2)
-
+    if age <= 24 and visible_upside >= 4 and visible_overall >= 68: years = min(4, years + 1)
+    if age <= 29 and overall >= 80: years = max(years, 4)
+    if age <= 31 and overall >= 84: years = max(years, 4)
+    if age <= 34 and overall >= 88: years = max(years, 4)
+    if 35 <= age <= 37 and overall >= 82: years = max(years, 2)
+    if 36 <= age <= 38 and overall >= 90: years = max(years, 2)
     return int(clamp(years, 1, 4))
 
 def build_cpu_offer_option(
@@ -3232,165 +3193,88 @@ def get_team_cap_snapshot(
         "isHardCapped": is_team_hard_capped(league_data, team_name),
     }
 
-def estimate_market_value(
-    player: Dict[str, Any],
-    league_data: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    overall = num(player.get("overall"), 75)
+
+def estimate_market_value(player: Dict[str, Any], league_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Patch 33: old-contract-economy parity for the deflated rating scale."""
+    visible_overall = bm_patch33_visible_overall(player)
+    visible_potential = bm_patch33_visible_potential(player, visible_overall)
+    overall = bm_patch33_contract_economy_ovr(visible_overall)
+    potential = max(overall, bm_patch33_contract_economy_ovr(visible_potential))
     age = int(num(player.get("age"), 27))
-    potential = num(player.get("potential"), overall)
     upside = max(0.0, potential - overall)
-
-    off_rating = num(player.get("offRating"), overall)
-    def_rating = num(player.get("defRating"), overall)
+    visible_upside = max(0.0, visible_potential - visible_overall)
+    off_rating = num(player.get("offRating"), visible_overall)
+    def_rating = num(player.get("defRating"), visible_overall)
     scoring_rating = num(player.get("scoringRating"), 50)
-
-    # The legacy market curve remains the decision curve. Legal salary floors
-    # and ceilings only reshape the public ask and final signed contract.
     player_minimum = get_player_minimum_salary_amount(league_data, player)
     player_maximum = get_player_max_salary_amount(league_data, player)
-
-    minimum_bucket = (
-        overall <= 72
-        or (overall <= 73 and age >= 27 and upside <= 1)
-        or (overall <= 74 and age >= 30 and upside <= 1)
-    )
-
+    cap_scale = float(MAX_SALARY) / 54_000_000.0
+    minimum_bucket = (visible_overall <= 63 or (visible_overall <= 65 and age >= 28 and visible_upside <= 1) or (visible_overall <= 67 and age >= 32 and visible_upside <= 1))
+    years = get_realistic_expected_contract_years(player)
     if minimum_bucket:
-        years = get_realistic_expected_contract_years(player)
         legacy_base_salary = MIN_DEAL
-
-        if overall >= 73 and age <= 26:
-            legacy_base_salary = max(MIN_DEAL, int(round(1_900_000 * (float(MAX_SALARY) / 54_000_000.0))))
-        elif overall >= 73:
-            legacy_base_salary = max(MIN_DEAL, int(round(DEFAULT_MINIMUM_EXCEPTION)))
-
-        legacy_year1 = int(round_to_nearest(legacy_base_salary, base = 1_000))
+        if visible_overall >= 66 and age <= 26 and visible_upside >= 2: legacy_base_salary = max(MIN_DEAL, int(round(2_000_000 * cap_scale)))
+        elif visible_overall >= 66: legacy_base_salary = max(MIN_DEAL, int(round(DEFAULT_MINIMUM_EXCEPTION)))
+        legacy_year1 = int(round_to_nearest(legacy_base_salary, base=1_000))
         legacy_salary_by_year = build_salary_by_year(legacy_year1, years)
-        actual_year1 = int(round_to_nearest(clamp(legacy_year1, player_minimum, player_maximum), base = 1_000))
+        actual_year1 = int(round_to_nearest(clamp(legacy_year1, player_minimum, player_maximum), base=1_000))
         salary_by_year = build_legal_salary_by_year(actual_year1, years, STANDARD_FREE_AGENT_RAISE_PCT)
-
-        return {
-            # Legacy fields remain untouched because they drive the existing
-            # destination/interest system. Contract-facing fields are the legal
-            # salary floor/ceiling version shown in the UI and used to sign.
-            "expectedYears": years,
-            "salaryByYear": legacy_salary_by_year,
-            "expectedYear1Salary": legacy_salary_by_year[0],
-            "expectedAAV": int(sum(legacy_salary_by_year) / len(legacy_salary_by_year)),
-            "minAcceptableAAV": MIN_DEAL,
-            "contractExpectedYears": years,
-            "contractExpectedYear1Salary": salary_by_year[0],
-            "contractExpectedAAV": int(sum(salary_by_year) / len(salary_by_year)),
-            "contractMinAcceptableAAV": int(clamp(MIN_DEAL, player_minimum, player_maximum)),
-            "playerMinimumSalary": player_minimum,
-            "playerMaximumSalary": player_maximum,
-            "maxSalaryPercent": get_player_max_salary_percentage(player, league_data),
-        }
-
-    if overall <= 75:
-        base_salary = 3_100_000 + max(0.0, overall - 74.0) * 1_250_000
-    elif overall <= 78:
-        base_salary = 4_800_000 + (overall - 76.0) * 2_050_000
-    elif overall <= 81:
-        base_salary = 10_800_000 + (overall - 79.0) * 3_000_000
-    elif overall <= 84:
-        base_salary = 19_000_000 + (overall - 82.0) * 3_500_000
-    elif overall <= 88:
-        base_salary = 26_000_000 + (overall - 84.0) * 2_850_000
-    else:
-        base_salary = 37_400_000 + (overall - 88.0) * 3_200_000
-
-    base_salary *= (float(MAX_SALARY) / 54_000_000.0)
-
-    if age <= 22:
-        base_salary *= 1.08 + min(0.18, upside * 0.025)
-    elif age <= 25:
-        base_salary *= 1.05 + min(0.14, upside * 0.018)
-    elif age <= 27:
-        base_salary *= 1.02 + min(0.08, upside * 0.010)
-    elif age <= 30:
-        base_salary *= 1.00
-    elif age <= 33:
-        base_salary *= max(0.85, 1.0 - ((age - 30) * 0.043))
+        return {"expectedYears": years, "salaryByYear": legacy_salary_by_year, "expectedYear1Salary": legacy_salary_by_year[0], "expectedAAV": int(sum(legacy_salary_by_year)/len(legacy_salary_by_year)), "minAcceptableAAV": MIN_DEAL, "contractExpectedYears": years, "contractExpectedYear1Salary": salary_by_year[0], "contractExpectedAAV": int(sum(salary_by_year)/len(salary_by_year)), "contractMinAcceptableAAV": int(clamp(MIN_DEAL, player_minimum, player_maximum)), "playerMinimumSalary": player_minimum, "playerMaximumSalary": player_maximum, "maxSalaryPercent": get_player_max_salary_percentage(player, league_data), "visibleOverall": visible_overall, "economicOverall": round(overall,3), "contractScaleVersion": "patch33_contract_market_parity_v1"}
+    if overall <= 75: base_salary = 3_100_000 + max(0.0, overall - 74.0) * 1_250_000
+    elif overall <= 78: base_salary = 4_800_000 + (overall - 76.0) * 2_050_000
+    elif overall <= 81: base_salary = 10_800_000 + (overall - 79.0) * 3_000_000
+    elif overall <= 84: base_salary = 19_000_000 + (overall - 82.0) * 3_500_000
+    elif overall <= 88: base_salary = 26_000_000 + (overall - 84.0) * 2_850_000
+    else: base_salary = 37_400_000 + (overall - 88.0) * 3_200_000
+    base_salary *= cap_scale
+    if age <= 22: base_salary *= 1.08 + min(0.18, upside * 0.025)
+    elif age <= 25: base_salary *= 1.05 + min(0.14, upside * 0.018)
+    elif age <= 27: base_salary *= 1.02 + min(0.08, upside * 0.010)
+    elif age <= 30: base_salary *= 1.00
+    elif age <= 33: base_salary *= max(0.85, 1.0 - ((age - 30) * 0.043))
     else:
         if overall >= 84:
             star_score = clamp((overall - 84.0) / 8.0, 0.0, 1.0)
-            starting_mult = 0.88 + (star_score * 0.10)
-            yearly_drop = 0.040 - (star_score * 0.018)
-            floor_mult = 0.68 + (star_score * 0.14)
-            base_salary *= max(floor_mult, starting_mult - ((age - 34) * yearly_drop))
-        else:
-            base_salary *= max(0.62, 0.84 - ((age - 33) * 0.062))
-
-    if age >= 31 and overall <= 80:
-        base_salary *= 0.94 if overall >= 77 else 0.92
-    if age >= 34 and overall <= 79:
-        base_salary *= 0.91 if overall >= 77 else 0.88
-    if age >= 36 and overall <= 82:
-        base_salary *= 0.93 if overall >= 80 else 0.90
-
-    if off_rating >= 88:
-        base_salary *= 1.04
-    if def_rating >= 88:
-        base_salary *= 1.04
-    if scoring_rating >= 84:
-        base_salary *= 1.03
-    if overall <= 83 and max(off_rating, def_rating) >= overall + 7:
-        base_salary *= 1.05
-    if age >= 34 and 77 <= overall <= 82 and (
-        max(off_rating, def_rating) >= 86 or scoring_rating >= 82
-    ):
-        base_salary *= 1.025
-
-    legacy_year1_salary = int(round_to_nearest(clamp(base_salary, MIN_DEAL, MAX_SALARY), base = 1_000))
-    actual_year1_salary = int(round_to_nearest(clamp(legacy_year1_salary, player_minimum, player_maximum), base = 1_000))
-
-    years = get_realistic_expected_contract_years(player)
+            base_salary *= max(0.68 + star_score*0.14, 0.88 + star_score*0.10 - ((age - 34) * (0.040 - star_score*0.018)))
+        else: base_salary *= max(0.62, 0.84 - ((age - 33) * 0.062))
+    if age >= 31 and overall <= 80: base_salary *= 0.94 if overall >= 77 else 0.92
+    if age >= 34 and overall <= 79: base_salary *= 0.91 if overall >= 77 else 0.88
+    if age >= 36 and overall <= 82: base_salary *= 0.93 if overall >= 80 else 0.90
+    if off_rating >= 84: base_salary *= 1.04
+    if def_rating >= 84: base_salary *= 1.04
+    if scoring_rating >= 80: base_salary *= 1.03
+    if visible_overall <= 83 and max(off_rating, def_rating) >= visible_overall + 7: base_salary *= 1.05
+    if 35 <= age <= 37 and overall >= 88: base_salary *= 1.11
+    elif 35 <= age <= 37 and overall >= 82: base_salary *= 1.14
+    elif 34 <= age <= 37 and overall >= 80 and (max(off_rating, def_rating) >= 82 or scoring_rating >= 70): base_salary *= 1.08
+    if age <= 21 and visible_overall >= 70 and visible_potential >= 90: base_salary = max(base_salary, 8_500_000 * cap_scale)
+    elif age <= 23 and visible_overall >= 70 and visible_potential >= 84: base_salary = max(base_salary, 6_500_000 * cap_scale)
+    elif age <= 24 and visible_overall >= 70 and visible_potential >= 80: base_salary = max(base_salary, 5_500_000 * cap_scale)
+    if visible_overall >= 70 and overall >= 76 and age <= 29: base_salary = max(base_salary, 4_600_000 * cap_scale)
+    if visible_overall >= 69 and overall >= 75 and age <= 27 and visible_potential >= 74: base_salary = max(base_salary, 4_800_000 * cap_scale)
+    elif visible_overall >= 69 and overall >= 75 and age <= 29: base_salary = max(base_salary, 4_200_000 * cap_scale)
+    if visible_overall >= 68 and overall >= 74 and age <= 33: base_salary = max(base_salary, 3_400_000 * cap_scale)
+    legacy_year1_salary = int(round_to_nearest(clamp(base_salary, MIN_DEAL, MAX_SALARY), base=1_000))
+    actual_year1_salary = int(round_to_nearest(clamp(legacy_year1_salary, player_minimum, player_maximum), base=1_000))
     legacy_salary_by_year = build_salary_by_year(legacy_year1_salary, years)
     salary_by_year = build_legal_salary_by_year(actual_year1_salary, years, STANDARD_FREE_AGENT_RAISE_PCT)
-
-    if overall <= 76:
-        min_accept_mult = 0.86
-    elif overall <= 78:
-        min_accept_mult = 0.90
-    elif overall <= 81:
-        min_accept_mult = 0.93
-    elif overall <= 84:
-        min_accept_mult = 0.95
-    elif overall <= 87:
-        min_accept_mult = 0.97
-    else:
-        min_accept_mult = 0.985
-
-    if age <= 25 and upside >= 3 and overall >= 77:
-        min_accept_mult += 0.04
-    if age >= 31 and overall <= 80:
-        min_accept_mult -= 0.015 if overall >= 77 else 0.03
-    if age >= 34 and overall <= 79:
-        min_accept_mult -= 0.025 if overall >= 77 else 0.04
-
+    if overall <= 76: min_accept_mult = 0.86
+    elif overall <= 78: min_accept_mult = 0.90
+    elif overall <= 81: min_accept_mult = 0.93
+    elif overall <= 84: min_accept_mult = 0.95
+    elif overall <= 87: min_accept_mult = 0.97
+    else: min_accept_mult = 0.985
+    if age <= 25 and visible_upside >= 3 and visible_overall >= 70: min_accept_mult += 0.05
+    if age <= 23 and visible_potential >= 88 and visible_overall >= 70: min_accept_mult += 0.025
+    if age >= 31 and overall <= 80: min_accept_mult -= 0.015 if overall >= 77 else 0.03
+    if age >= 34 and overall <= 79: min_accept_mult -= 0.025 if overall >= 77 else 0.04
+    if visible_overall >= 70: min_accept_mult = max(min_accept_mult, 0.88)
+    if visible_overall >= 75: min_accept_mult = max(min_accept_mult, 0.92)
+    if visible_overall >= 80: min_accept_mult = max(min_accept_mult, 0.95)
     min_accept_mult = clamp(min_accept_mult, 0.78, 0.995)
-    legacy_min_acceptable_aav = int(round_to_nearest(max(MIN_DEAL, legacy_year1_salary * min_accept_mult), base = 1_000))
-    actual_min_acceptable_aav = int(round_to_nearest(clamp(legacy_min_acceptable_aav, player_minimum, player_maximum), base = 1_000))
-
-    return {
-        # Legacy fields remain untouched because they drive the existing
-        # destination/interest system. Contract-facing fields are the legal
-        # salary floor/ceiling version shown in the UI and used to sign.
-        "expectedYears": years,
-        "salaryByYear": legacy_salary_by_year,
-        "expectedYear1Salary": legacy_salary_by_year[0],
-        "expectedAAV": int(sum(legacy_salary_by_year) / len(legacy_salary_by_year)),
-        "minAcceptableAAV": legacy_min_acceptable_aav,
-        "contractExpectedYears": years,
-        "contractExpectedYear1Salary": salary_by_year[0],
-        "contractExpectedAAV": int(sum(salary_by_year) / len(salary_by_year)),
-        "contractMinAcceptableAAV": actual_min_acceptable_aav,
-        "playerMinimumSalary": player_minimum,
-        "playerMaximumSalary": player_maximum,
-        "maxSalaryPercent": get_player_max_salary_percentage(player, league_data),
-    }
+    legacy_min_acceptable_aav = int(round_to_nearest(max(MIN_DEAL, legacy_year1_salary * min_accept_mult), base=1_000))
+    actual_min_acceptable_aav = int(round_to_nearest(clamp(legacy_min_acceptable_aav, player_minimum, player_maximum), base=1_000))
+    return {"expectedYears": years, "salaryByYear": legacy_salary_by_year, "expectedYear1Salary": legacy_salary_by_year[0], "expectedAAV": int(sum(legacy_salary_by_year)/len(legacy_salary_by_year)), "minAcceptableAAV": legacy_min_acceptable_aav, "contractExpectedYears": years, "contractExpectedYear1Salary": salary_by_year[0], "contractExpectedAAV": int(sum(salary_by_year)/len(salary_by_year)), "contractMinAcceptableAAV": actual_min_acceptable_aav, "playerMinimumSalary": player_minimum, "playerMaximumSalary": player_maximum, "maxSalaryPercent": get_player_max_salary_percentage(player, league_data), "visibleOverall": visible_overall, "economicOverall": round(overall,3), "contractScaleVersion": "patch33_contract_market_parity_v1"}
 
 def add_market_values_to_free_agents(league_data: Dict[str, Any]) -> Dict[str, Any]:
     updated = copy.deepcopy(league_data)
@@ -3469,19 +3353,15 @@ def is_minimum_contract_for_current_year(
     )
     return int(offered_current_salary) <= int(minimum_limit)
 
+
 def is_emergency_fill_candidate(player: Dict[str, Any]) -> bool:
-    overall = int(round(num(player.get("overall"), 0)))
+    """Patch 33: minimum cleanup should only use true fringe/depth bodies."""
+    visible_overall = bm_patch33_visible_overall(player)
+    visible_potential = bm_patch33_visible_potential(player, visible_overall)
     age = int(num(player.get("age"), 27))
-    potential = int(round(num(player.get("potential"), overall)))
-
-    return (
-        overall <= 74
-        or (overall <= 75 and (age >= 23 or potential <= overall + 1))
-        or (overall <= 76 and (age >= 25 or potential <= overall + 2))
-        or (overall <= 77 and (age >= 27 or potential <= overall + 2))
-        or (overall <= 78 and age >= 30 and potential <= overall + 2)
-    )
-
+    upside = max(0.0, visible_potential - visible_overall)
+    if player.get("generatedEmergencyFiller"): return True
+    return (visible_overall <= 63 or (visible_overall <= 65 and age >= 27 and upside <= 1) or (visible_overall <= 66 and age >= 30 and upside <= 1) or (visible_overall <= 67 and age >= 33 and upside <= 0.5))
 
 def is_min_roster_cleanup_eligible_free_agent(
     player: Dict[str, Any],
@@ -3513,30 +3393,16 @@ def is_min_roster_cleanup_eligible_free_agent(
     return True
 
 
-def get_min_roster_cleanup_candidate_score(
-    player: Dict[str, Any],
-    team_name: str,
-) -> float:
-    rights = get_player_rights(player)
-    rights_team = rights.get("heldByTeam")
+
+def get_min_roster_cleanup_candidate_score(player: Dict[str, Any], team_name: str) -> float:
+    rights = get_player_rights(player); rights_team = rights.get("heldByTeam")
     meta = player.get("freeAgencyMeta") if isinstance(player.get("freeAgencyMeta"), dict) else {}
     previous_team = meta.get("fromTeam") or player.get("formerTeamName") or player.get("previousTeam")
-
-    overall = float(num(player.get("overall"), 0))
-    potential = float(num(player.get("potential"), overall))
-    age = float(num(player.get("age"), 27))
-
-    score = overall * 100.0 + potential - (age * 0.10)
-
-    # Re-signing your own/previous low-end players is the least disruptive way
-    # to fix mass roster deficits after options/expired-contract cleanup.
-    if rights_team and rights_team == team_name:
-        score += 10000.0
-    if previous_team and previous_team == team_name:
-        score += 5000.0
-
+    visible_overall = bm_patch33_visible_overall(player); visible_potential = bm_patch33_visible_potential(player, visible_overall); age = float(num(player.get("age"), 27))
+    score = (68.0 - visible_overall) * 100.0 - max(0.0, visible_potential - visible_overall) * 4.0 - age * 0.05
+    if rights_team and rights_team == team_name: score += 10000.0
+    if previous_team and previous_team == team_name: score += 5000.0
     return score
-
 
 def build_generated_cpu_min_roster_filler(
     team_name: str,
@@ -4839,7 +4705,7 @@ def estimate_team_free_agent_fit_from_profile(
         if overall >= 79:
             score += 0.10
         score += max(0.0, min(0.10, (age - 27) * 0.010))
-        if age <= 24 and overall < 78:
+        if age <= 24 and market_ovr < 78:
             score -= 0.05
 
     elif direction in ["rebuilding"]:
@@ -10996,7 +10862,7 @@ def is_cpu_serious_offer_for_player(
     # Minimum offers are serious only for true depth/fringe players. This blocks
     # apron teams from fake-bidding on star or starter-level free agents.
     if offered_aav <= int(MIN_DEAL * 1.25):
-        if expected_aav > int(MIN_DEAL * 1.55) and overall >= 75:
+        if expected_aav > int(MIN_DEAL * 1.55) and get_fa_market_equivalent_ovr(player) >= 75:
             return False
         if current_day <= 2 and target_tier != "depth" and not incumbent_priority:
             return False
@@ -11327,13 +11193,14 @@ def get_player_required_interest_for_day(
     potential = int(round(num(player.get("potential"), overall)))
 
     patience = 1.0 - ((current_day - 1) / max(1.0, float(max_days)))
-    if overall >= 88:
+    market_ovr = get_fa_market_equivalent_ovr(player)
+    if market_ovr >= 88:
         base += 0.025 * patience
-    elif overall >= 83:
+    elif market_ovr >= 83:
         base += 0.014 * patience
-    elif overall <= 74 and (age >= 27 or potential <= overall + 1):
+    elif market_ovr <= 74 and (age >= 27 or potential <= overall + 1):
         base -= 0.025
-    elif overall <= 77:
+    elif market_ovr <= 77:
         base -= 0.012
 
     if current_day >= max_days:
@@ -11383,6 +11250,55 @@ def withdraw_stale_cpu_offers_for_day(
     return withdrawn
 
 
+# ------------------------------------------------------------
+# NATIVE DEFLATED FREE-AGENCY MARKET TIER HELPERS
+# ------------------------------------------------------------
+def _fa_market_interp(value: float, points: List[Tuple[float, float]]) -> float:
+    x = float(num(value, 0.0))
+    if not points:
+        return x
+    if x <= points[0][0]:
+        return points[0][1]
+    for idx in range(1, len(points)):
+        x0, y0 = points[idx - 1]
+        x1, y1 = points[idx]
+        if x <= x1:
+            t = (x - x0) / max(0.0001, x1 - x0)
+            return y0 + ((y1 - y0) * t)
+    x0, y0 = points[-2]
+    x1, y1 = points[-1]
+    slope = (y1 - y0) / max(0.0001, x1 - x0)
+    return y1 + ((x - x1) * slope)
+
+
+def get_fa_market_equivalent_ovr(player: Dict[str, Any]) -> float:
+    """Translate visible deflated OVR into old-scale FA market tiers only.
+
+    This is not a hidden gameplay/display rating. It is a free-agency decision
+    helper so the same kind of player draws the same interest, money lane,
+    roster priority, and late-market pressure as he did before visible ratings
+    were deflated.
+    """
+    visible = float(num(player.get("overall"), player.get("ovr", 0)))
+    points = [
+        (55.0, 56.0),
+        (60.0, 62.0),
+        (64.0, 66.0),
+        (68.0, 71.0),
+        (70.0, 74.0),
+        (72.0, 76.0),
+        (74.0, 78.0),
+        (76.0, 80.0),
+        (78.0, 82.0),
+        (80.0, 85.0),
+        (82.0, 87.0),
+        (85.0, 89.0),
+        (88.0, 92.0),
+        (90.0, 94.0),
+        (94.0, 98.0),
+    ]
+    return float(round(_fa_market_interp(visible, points), 3))
+
 def classify_cpu_target_tier(
     player: Dict[str, Any],
     team: Dict[str, Any],
@@ -11394,6 +11310,7 @@ def classify_cpu_target_tier(
     previous_team_player: bool,
 ) -> str:
     overall = int(round(num(player.get("overall"), 0)))
+    market_ovr = get_fa_market_equivalent_ovr(player)
     age = int(num(player.get("age"), 27))
     potential = int(round(num(player.get("potential"), overall)))
     upside = max(0, potential - overall)
@@ -11402,26 +11319,31 @@ def classify_cpu_target_tier(
     need_score = float(num(fit.get("needScore"), 0.0))
     rights = get_player_rights(player)
 
-    if incumbent_priority or (own_rights and rights.get("restrictedFreeAgent") and overall >= 75):
+    # Rights/retention lane: new visible 72-75 can now equal old useful rotation.
+    if incumbent_priority or (own_rights and rights.get("restrictedFreeAgent") and market_ovr >= 76):
         return "incumbent"
 
-    if overall >= 86:
+    # Primary/backup/value/depth use market-equivalent tiers so the FA board
+    # behaves like old inflated ratings while visible ratings stay deflated.
+    if market_ovr >= 86:
         return "primary"
-    if overall >= 82 and (need_score >= 0.36 or age <= 27 or upside >= 2):
+    if market_ovr >= 82 and (need_score >= 0.34 or age <= 28 or upside >= 2):
         return "primary"
-    if target_score >= 0.88 and overall >= 80:
+    if target_score >= 0.86 and market_ovr >= 80:
         return "primary"
 
-    if overall >= 78:
+    if market_ovr >= 78:
         return "backup"
-    if overall >= 75 and (need_score >= 0.45 or age <= 25 or upside >= 2):
+    if market_ovr >= 75 and (need_score >= 0.38 or age <= 26 or upside >= 2):
         return "backup"
 
-    if expected_aav <= int(MIN_DEAL * 1.55) or overall <= 74:
+    if market_ovr >= 72 and (need_score >= 0.30 or age <= 27 or upside >= 2 or expected_aav > int(MIN_DEAL * 1.55)):
+        return "value"
+
+    if expected_aav <= int(MIN_DEAL * 1.55) or market_ovr <= 71:
         return "depth"
 
     return "value"
-
 
 def get_cpu_daily_offer_caps(
     current_day: int,
@@ -11541,6 +11463,7 @@ def build_cpu_offer_contract(
     overall = int(round(num(player.get("overall"), 75)))
     potential = int(round(num(player.get("potential"), overall)))
     upside = max(0, potential - overall)
+    market_ovr = get_fa_market_equivalent_ovr(player)
 
     off_rating = int(round(num(player.get("offRating"), overall)))
     def_rating = int(round(num(player.get("defRating"), overall)))
@@ -11595,10 +11518,9 @@ def build_cpu_offer_contract(
     )
 
     fringe_player = (
-        overall <= 74
-        or (overall <= 75 and (age >= 23 or potential <= overall + 1))
-        or (overall <= 76 and (age >= 26 or potential <= overall + 2))
-        or (overall <= 77 and age >= 30 and potential <= overall + 2)
+        market_ovr <= 71
+        or (market_ovr <= 73 and (age >= 28 or potential <= overall + 1))
+        or (market_ovr <= 75 and age >= 31 and potential <= overall + 2)
     )
 
     if fringe_player and target_tier == "depth":
@@ -11643,18 +11565,18 @@ def build_cpu_offer_contract(
         multiplier += 0.025
 
     if direction in ["contending", "win now"]:
-        if overall >= 80 and age >= 27:
+        if market_ovr >= 80 and age >= 27:
             multiplier += 0.025
-        if def_rating >= 84 and overall >= 78:
+        if def_rating >= 84 and market_ovr >= 78:
             multiplier += 0.012
-        if age <= 24 and overall < 78:
+        if age <= 24 and market_ovr < 78:
             multiplier -= 0.020
     elif direction == "rebuilding":
         if age <= 26:
             multiplier += 0.025
         if upside >= 3:
             multiplier += 0.025
-        if age >= 30 and overall <= 80:
+        if age >= 30 and market_ovr <= 80:
             multiplier -= 0.055
     elif direction == "retooling":
         if age <= 29:
@@ -11662,7 +11584,7 @@ def build_cpu_offer_contract(
         if upside >= 2:
             multiplier += 0.020
     else:
-        if 24 <= age <= 31 and overall >= 78:
+        if 24 <= age <= 31 and market_ovr >= 78:
             multiplier += 0.012
 
     if need_score >= 0.70:
@@ -11703,12 +11625,12 @@ def build_cpu_offer_contract(
             if int(num(live_offer.get("decisionAAV"), num(live_offer.get("aav"), 0))) >= int(expected_year1 * 0.82):
                 outside_pressure = True
                 break
-        if outside_pressure and overall >= 80 and (overall >= 86 or age <= 25 or return_context_bonus >= 0.018):
+        if outside_pressure and market_ovr >= 80 and (market_ovr >= 86 or age <= 25 or return_context_bonus >= 0.018):
             multiplier += 0.010 if overall < 86 else 0.014
     else:
         perfect_outside_fit = bool(
             target_tier == "primary"
-            and overall >= 80
+            and market_ovr >= 80
             and planning_room >= int(expected_year1 * 0.88)
             and need_score >= 0.70
             and age <= 31
@@ -11716,23 +11638,23 @@ def build_cpu_offer_contract(
         if perfect_outside_fit:
             multiplier += 0.018
 
-    if off_rating >= 87 and scoring_rating >= 86 and age <= 30 and overall >= 80:
+    if off_rating >= 87 and scoring_rating >= 86 and age <= 30 and market_ovr >= 80:
         multiplier += 0.015
 
     # Market discipline caps. Only true stars should get major over-market bids.
-    if overall >= 90:
+    if market_ovr >= 90:
         max_multiplier = 1.16
         min_primary_multiplier = 0.98
-    elif overall >= 87:
+    elif market_ovr >= 87:
         max_multiplier = 1.12
         min_primary_multiplier = 0.95
-    elif overall >= 84:
+    elif market_ovr >= 84:
         max_multiplier = 1.08
         min_primary_multiplier = 0.92
-    elif overall >= 81:
+    elif market_ovr >= 81:
         max_multiplier = 1.05
         min_primary_multiplier = 0.88
-    elif overall >= 78:
+    elif market_ovr >= 78:
         max_multiplier = 1.02
         min_primary_multiplier = 0.82
     else:
@@ -11756,9 +11678,9 @@ def build_cpu_offer_contract(
     # If a team can afford to make a real offer to a starter/star, do not let
     # that offer land as a fake lowball. If it cannot afford the floor, the
     # serious-offer filter later will simply skip the bid.
-    if available_room >= int(expected_year1 * 0.85) and overall >= 84:
+    if available_room >= int(expected_year1 * 0.85) and market_ovr >= 84:
         multiplier = max(multiplier, 0.85)
-    elif available_room >= int(expected_year1 * 0.80) and overall >= 80:
+    elif available_room >= int(expected_year1 * 0.80) and market_ovr >= 80:
         multiplier = max(multiplier, 0.80)
 
     multiplier = clamp(multiplier, 0.55, max_multiplier)
@@ -11775,16 +11697,16 @@ def build_cpu_offer_contract(
     years = get_realistic_expected_contract_years(player)
 
     if target_tier == "depth":
-        if overall <= 72:
+        if market_ovr <= 72:
             years = 1 if age >= 26 else min(2, years)
-        elif overall <= 76:
+        elif market_ovr <= 76:
             years = min(years, 2 if age <= 28 or upside >= 2 else 1)
-    elif target_tier == "value" and overall <= 76:
+    elif target_tier == "value" and market_ovr <= 76:
         years = min(years, 2 if age <= 32 or upside >= 2 else 1)
 
-    if target_tier == "primary" and overall >= 82 and age <= 30:
+    if target_tier == "primary" and market_ovr >= 82 and age <= 30:
         years = max(years, min(4, expected_years))
-    if target_tier == "incumbent" and overall >= 80 and age <= 30:
+    if target_tier == "incumbent" and market_ovr >= 80 and age <= 30:
         years = max(years, min(4, expected_years))
 
     years = int(clamp(years, 1, 4))
@@ -11841,21 +11763,21 @@ def is_incumbent_retention_priority(player: Dict[str, Any], team_name: Optional[
         return False
 
     overall = int(round(num(player.get("overall"), 0)))
+    market_ovr = get_fa_market_equivalent_ovr(player)
     age = int(num(player.get("age"), 27))
     potential = int(round(num(player.get("potential"), overall)))
     upside = max(0, potential - overall)
 
-    if rights.get("restrictedFreeAgent") and overall >= 76:
+    if rights.get("restrictedFreeAgent") and market_ovr >= 76:
         return True
-    if overall >= 82:
+    if market_ovr >= 82:
         return True
-    if overall >= 79 and age <= 33:
+    if market_ovr >= 79 and age <= 33:
         return True
-    if overall >= 77 and age <= 27 and upside >= 2:
+    if market_ovr >= 77 and age <= 27 and upside >= 2:
         return True
 
     return False
-
 
 def get_team_controlled_player_count(team: Dict[str, Any]) -> int:
     """Standard + two-way + pending rookies for display/CPU planning.
@@ -11882,10 +11804,8 @@ def is_priority_offseason_overfill_candidate(
 ) -> bool:
     """Allow CPU over-15 offseason additions only for meaningful roster assets.
 
-    This keeps normal filler/depth signings capped at 15 while still letting a
-    team temporarily overfill for RFAs, Bird-rights retention, strong targets,
-    or good young assets. Final season simulation still requires 14-15 standard
-    players.
+    Uses FA market-equivalent OVR so deflated 72-80 players can behave like the
+    old 76-85 market without forcing emergency cleanup signings.
     """
     if not player or not team_name:
         return False
@@ -11898,6 +11818,7 @@ def is_priority_offseason_overfill_candidate(
     own_rights = is_rights_team(player, team_name)
     previous_team_player = bool(previous_team and previous_team == team_name)
     overall = int(round(num(player.get("overall"), 0)))
+    market_ovr = get_fa_market_equivalent_ovr(player)
     age = int(num(player.get("age"), 27))
     potential = int(round(num(player.get("potential"), overall)))
     upside = max(0, potential - overall)
@@ -11905,28 +11826,27 @@ def is_priority_offseason_overfill_candidate(
     expected_aav = int(num(market_value.get("expectedAAV"), MIN_DEAL))
 
     if matched_rfa:
-        return overall >= 74 or potential >= 78 or age <= 25
+        return market_ovr >= 74 or potential >= 78 or age <= 25
 
     if rights.get("restrictedFreeAgent") and (own_rights or previous_team_player):
-        return overall >= 74 or potential >= 78 or upside >= 3
+        return market_ovr >= 74 or potential >= 78 or upside >= 3
 
     if is_incumbent_retention_priority(player, team_name):
         return True
 
     if own_rights or previous_team_player:
-        return overall >= 77 or potential >= 81 or (age <= 25 and upside >= 4)
+        return market_ovr >= 77 or potential >= 81 or (age <= 25 and upside >= 4)
 
-    if overall >= 82:
+    if market_ovr >= 82:
         return True
 
-    if overall >= 79 and age <= 31 and expected_aav >= 6_000_000:
+    if market_ovr >= 79 and age <= 31 and expected_aav >= 6_000_000:
         return True
 
-    if age <= 24 and overall >= 76 and potential >= 82:
+    if age <= 24 and market_ovr >= 76 and potential >= 82:
         return True
 
     return False
-
 
 def is_late_rights_retention_candidate(
     player: Dict[str, Any],
@@ -11934,11 +11854,10 @@ def is_late_rights_retention_candidate(
     current_day: int,
     max_days: int,
 ) -> bool:
-    """Late-market safety valve for 76+ OVR own-rights free agents.
+    """Late-market safety valve for own-rights rotation-level free agents.
 
-    By days 8/9 in a 10-day market, teams should not leave useful players
-    sitting unsigned merely because the cap/roster planning board filled up.
-    This only applies to the team that already owns the player's rights.
+    This is still natural FA market behavior, not emergency cleanup. It only
+    applies to the player's own-rights team near the end of the live market.
     """
     if not player or not team_name:
         return False
@@ -11952,9 +11871,7 @@ def is_late_rights_retention_candidate(
     if player.get("rightsRenounced"):
         return False
 
-    overall = int(round(num(player.get("overall"), 0)))
-    return overall >= 76
-
+    return get_fa_market_equivalent_ovr(player) >= 76
 
 def build_late_rights_retention_spending_result(
     league_data: Dict[str, Any],
@@ -11969,7 +11886,7 @@ def build_late_rights_retention_spending_result(
 
     return {
         "ok": True,
-        "reason": "Late-market own-rights retention override for a 76+ OVR player.",
+        "reason": "Late-market own-rights retention override for a rotation-level own-rights player.",
         "teamSnapshot": snapshot,
         "exceptionRoom": get_player_max_salary_amount(league_data, player),
         "spendingType": "late_rights_retention",

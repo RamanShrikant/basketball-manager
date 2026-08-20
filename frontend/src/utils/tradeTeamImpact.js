@@ -60,14 +60,14 @@ const STAR_RETENTION_TAX_BY_OVR = {
 // premium young assets are genuinely hard for the user to steal.
 const PROSPECT_RETENTION_TAX_CAP = 50.00;
 const PROSPECT_RETENTION_TAX_BY_POT = [
-  { min: 99, tax: [21.00, 18.00, 14.25, 9.00, 4.50, 0.90] },
-  { min: 97, tax: [16.50, 14.50, 11.50, 7.25, 3.35, 0.60] },
-  { min: 95, tax: [12.50, 11.00, 8.50, 5.25, 2.40, 0.35] },
-  { min: 93, tax: [9.00, 8.00, 6.10, 3.60, 1.55, 0.18] },
-  { min: 91, tax: [6.00, 5.25, 4.00, 2.35, 0.85, 0.05] },
-  { min: 89, tax: [3.90, 3.35, 2.50, 1.30, 0.45, 0.00] },
-  { min: 87, tax: [2.10, 1.75, 1.25, 0.62, 0.20, 0.00] },
-  { min: 85, tax: [0.95, 0.80, 0.58, 0.28, 0.08, 0.00] },
+  [80, 0.035],
+  [82, 0.075],
+  [84, 0.130],
+  [86, 0.205],
+  [88, 0.310],
+  [90, 0.430],
+  [93, 0.600],
+  [96, 0.780],
 ];
 const PROSPECT_GAP_TAX_BY_GAP = [
   { min: 21, tax: 5.50 },
@@ -77,11 +77,13 @@ const PROSPECT_GAP_TAX_BY_GAP = [
   { min: 4, tax: 0.75 },
 ];
 const YOUNG_CORE_RETENTION_TAX_BY_OVR = [
-  { min: 92, tax: [20.00, 18.25, 16.00, 13.25, 8.00, 2.25] },
-  { min: 90, tax: [15.25, 13.85, 12.15, 10.30, 6.25, 1.45] },
-  { min: 88, tax: [11.50, 10.50, 9.25, 7.95, 4.65, 0.95] },
-  { min: 86, tax: [7.25, 6.60, 5.85, 5.05, 2.80, 0.45] },
-  { min: 84, tax: [3.00, 2.55, 2.10, 1.60, 0.80, 0.00] },
+  [76, 0.040],
+  [78, 0.085],
+  [80, 0.150],
+  [82, 0.235],
+  [84, 0.340],
+  [86, 0.480],
+  [88, 0.640],
 ];
 const YOUNG_CORE_POT_KICKER_BY_POT = [
   { min: 98, tax: 6.25 },
@@ -2467,7 +2469,7 @@ function genericPickImpactForCpu(userItems = [], cpuItems = []) {
   const bestIncomingPlayerOvr = (userItems || [])
     .filter((item) => item?.type === "player")
     .reduce((max, item) => Math.max(max, toNum(item.player?.overall ?? item.player?.ovr, 0)), 0);
-  const starPickCostDiscount = bestIncomingPlayerOvr >= 92 ? 0.42 : bestIncomingPlayerOvr >= 88 ? 0.62 : bestIncomingPlayerOvr >= 84 ? 0.78 : 1;
+  const starPickCostDiscount = bestIncomingPlayerOvr >= 92 ? 0.42 : bestIncomingPlayerOvr >= 86 ? 0.62 : bestIncomingPlayerOvr >= 84 ? 0.78 : 1;
   const incomingValue = round4(incomingItems.reduce((sum, item) => sum + genericPickValue(item), 0));
   const outgoingValue = round4(outgoingItems.reduce((sum, item) => sum + genericPickValue(item), 0) * starPickCostDiscount);
   const outgoingBaseValue = round4(outgoingItems.reduce((sum, item) => sum + genericPickValue(item), 0));
@@ -2700,36 +2702,36 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
     const age = toNum(player?.age, 27);
     const ovr = toNum(player?.overall ?? player?.ovr, 0);
     const pot = toNum(player?.potential ?? player?.pot ?? ovr, ovr);
-    return age <= 24 && pot >= 82;
+    return age <= 24 && pot >= 79;
   });
-  const cpuCpuBuyerPickFloor = bestIncomingPlayerOvr >= 88
+  const cpuCpuBuyerPickFloor = bestIncomingPlayerOvr >= 86
     ? -9.25
-    : bestIncomingPlayerOvr >= 85
+    : bestIncomingPlayerOvr >= 83
       ? -7.75
-      : bestIncomingPlayerOvr >= 82
+      : bestIncomingPlayerOvr >= 76
         ? -6.25
-        : bestIncomingPlayerOvr >= 79
+        : bestIncomingPlayerOvr >= 76
           ? -4.75
           : CPU_CPU_BASE_BUYER_PICK_FLOOR;
   const sellerPhase = String(cpuTradeContext?.sellerPhase || "").toLowerCase();
   const sellerIsFutureFocused = sellerPhase === "seller" || sellerPhase === "retool";
   const sellerReceivesRealFutureValue = pickScore >= 0.45 || deltaPOT >= 0.040 || incomingPremiumYoungPlayer;
-  const cpuCpuSellerOvrDropFloor = sellerIsFutureFocused && bestOutgoingPlayerOvr >= 80 && sellerReceivesRealFutureValue
+  const cpuCpuSellerOvrDropFloor = sellerIsFutureFocused && bestOutgoingPlayerOvr >= 76 && sellerReceivesRealFutureValue
     ? -4.15
     : CPU_CPU_BASE_SELLER_OVR_DROP;
-  const cpuCpuBuyerScoreSlack = bestIncomingPlayerOvr >= 85 ? 1.55 : bestIncomingPlayerOvr >= 80 ? 1.35 : 1.15;
-  const cpuCpuSellerScoreSlack = bestOutgoingPlayerOvr >= 85 && sellerReceivesRealFutureValue ? 2.00 : bestOutgoingPlayerOvr >= 80 && sellerReceivesRealFutureValue ? 1.85 : 1.60;
+  const cpuCpuBuyerScoreSlack = bestIncomingPlayerOvr >= 83 ? 1.55 : bestIncomingPlayerOvr >= 80 ? 1.35 : 1.15;
+  const cpuCpuSellerScoreSlack = bestOutgoingPlayerOvr >= 83 && sellerReceivesRealFutureValue ? 2.00 : bestOutgoingPlayerOvr >= 76 && sellerReceivesRealFutureValue ? 1.85 : 1.60;
   const targetAge = toNum(cpuTradeContext?.targetAge, 27);
   const cpuCpuAgingHighEndSellerAccept =
     isCpuCpuEvaluation &&
     normalizedCpuTradeRole === "seller" &&
     cpuCpuContractOkay &&
     sellerIsFutureFocused &&
-    bestOutgoingPlayerOvr >= 85 &&
+    bestOutgoingPlayerOvr >= 83 &&
     targetAge >= 32 &&
     sellerReceivesRealFutureValue &&
     (pickScore >= 4.2 || incomingPremiumYoungPlayer) &&
-    bestIncomingPlayerOvr >= 78 &&
+    bestIncomingPlayerOvr >= 74 &&
     deltaOVR >= -5.25 &&
     mainScore >= threshold - 8.75;
 
@@ -2738,7 +2740,7 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
     normalizedCpuTradeRole === "buyer" &&
     cpuCpuContractOkay &&
     pickScore >= cpuCpuBuyerPickFloor &&
-    (deltaOVR >= 0.025 || deltaFTR >= 0.035 || positiveMovement >= 0.055 || bestIncomingPlayerOvr >= 82) &&
+    (deltaOVR >= 0.025 || deltaFTR >= 0.035 || positiveMovement >= 0.055 || bestIncomingPlayerOvr >= 76) &&
     mainScore >= threshold - cpuCpuBuyerScoreSlack;
 
   const cpuCpuSellerAccept =
