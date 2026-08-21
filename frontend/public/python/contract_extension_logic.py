@@ -1186,13 +1186,44 @@ def process_cpu_contract_extensions(
     }
 
 
+
+# BM_PATCH46_QUALITY_FA_SWEEP_EXTENSION_FLOW: normalize legacy/generic deadline closes so rookie deadline cannot
+# accidentally close the veteran window before March 31.
+def _normalize_extension_close_phase(
+    league_data: Dict[str, Any],
+    payload: Optional[Dict[str, Any]],
+    phase: str,
+) -> str:
+    raw = str(phase or "deadline").strip().lower()
+    if raw in {"rookie_deadline", "rookie", "opening", "veteran_deadline", "veteran"}:
+        return raw
+
+    if raw not in {"deadline", "close", "final", "final_deadline", "extension_deadline"}:
+        return raw
+
+    current = _current_date(league_data, payload or {})
+    rookie = _rookie_deadline_date(league_data)
+    veteran = _veteran_deadline_date(league_data)
+
+    # On or before Oct rookie-deadline flow: never close veteran by accident.
+    if current and rookie and current <= rookie:
+        return "rookie_deadline"
+
+    # Between rookie and veteran deadline, a generic close is safest as a rookie
+    # close. The explicit veteran modal/worker call should send veteran_deadline.
+    if current and veteran and current < veteran:
+        return "rookie_deadline"
+
+    return "veteran_deadline"
+
 def close_contract_extension_window(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = payload or {}
-    phase = str(payload.get("phase") or "deadline")
+    raw_phase = str(payload.get("phase") or "deadline")
+    phase = _normalize_extension_close_phase(league_data, payload, raw_phase)
     cpu_result = process_cpu_contract_extensions(league_data, user_team_name, phase=phase, payload=payload)
     updated = cpu_result.get("leagueData") if isinstance(cpu_result.get("leagueData"), dict) else copy.deepcopy(league_data)
     state = _extension_state(updated, payload)
@@ -1202,10 +1233,14 @@ def close_contract_extension_window(
     elif phase in {"veteran_deadline", "veteran"}:
         closed_types.add("veteran")
     else:
-        # Legacy close-callers used one all-season deadline and expect the entire
-        # extension system to close. Calendar v2 passes rookie_deadline/veteran_deadline
-        # explicitly, so this branch is only for backwards compatibility/tests.
-        closed_types.update(["rookie_scale", "veteran"])
+        # Defensive fallback for older callers. Before the veteran deadline, never
+        # close the veteran window from a generic deadline/open-flow call.
+        current = state.get("currentDate", "")
+        veteran_deadline = state.get("veteranDeadlineDate", "")
+        if current and veteran_deadline and current >= veteran_deadline:
+            closed_types.add("veteran")
+        else:
+            closed_types.add("rookie_scale")
     state["closedTypes"] = sorted(closed_types)
     state["rookieWindowOpen"] = "rookie_scale" not in closed_types and state.get("currentDate", "") <= state.get("rookieDeadlineDate", "")
     state["veteranWindowOpen"] = "veteran" not in closed_types and state.get("currentDate", "") <= state.get("veteranDeadlineDate", "")

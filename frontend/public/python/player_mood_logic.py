@@ -970,8 +970,14 @@ def player_tier(overall: float) -> str:
 def build_player_personality(player: Dict[str, Any], team_expectation: Dict[str, Any], status: str) -> Dict[str, Any]:
     overall = num(player.get("overall"), 70)
     potential = num(player.get("potential"), overall)
+    # BM_PATCH44_LOCKER_ROOM_TEAM_INTEL: build personality from the interpreted
+    # deflated-scale mood overall. The previous code referenced mood_overall
+    # before defining it, which could crash the whole Locker Room page.
+    mood_overall = mood_equivalent_overall(overall)
+    mood_potential = mood_equivalent_potential(potential, mood_overall)
     age = int(num(player.get("age"), 27))
     upside = max(0.0, potential - overall)
+    mood_upside = max(0.0, mood_potential - mood_overall)
     tier = player_tier(mood_overall)
     pressure = num(team_expectation.get("pressureLevel"), 50)
 
@@ -2391,6 +2397,61 @@ def evaluate_player_mood(
 
 
 # -----------------------------------------------------------------------------
+# Patch 44 safety fallback
+# -----------------------------------------------------------------------------
+
+def _fallback_player_mood_row(player: Dict[str, Any], exc: Exception) -> Dict[str, Any]:
+    """Return a neutral player row instead of letting one bad row kill the page."""
+    overall = num(player.get("overall"), player.get("ovr", 70))
+    potential = num(player.get("potential"), overall)
+    age = int(num(player.get("age"), 27))
+    name = player_name(player)
+    reason = clean_text(str(exc))[:180] or "Unknown mood calculation error"
+    return {
+        "playerId": player.get("id") or player.get("playerId"),
+        "playerKey": player_key(player),
+        "playerName": name,
+        "name": name,
+        "headshot": player.get("headshot") or player.get("playerHeadshot") or player.get("image") or "",
+        "portraitId": player.get("portraitId") or player.get("portraitFamilyId") or "",
+        "portraitFamilyId": player.get("portraitFamilyId") or player.get("portraitId") or "",
+        "portraitVariant": player.get("portraitVariant") or player.get("portraitStage") or "",
+        "position": player.get("pos") or player.get("position") or "-",
+        "secondaryPos": player.get("secondaryPos") or player.get("secondaryPosition"),
+        "age": age,
+        "overall": round_int(overall),
+        "potential": round_int(potential),
+        "rosterStatus": str(player.get("rosterStatus") or "standard"),
+        "baseMood": 50,
+        "moodScore": 50,
+        "moodLabel": "Neutral",
+        "moodTone": "neutral",
+        "trend": "stable",
+        "mainConcern": "calculation_fallback",
+        "wantsOutRisk": "low",
+        "actionTags": ["Needs mood recalculation"],
+        "interpretedOverall": round(mood_equivalent_overall(overall), 1),
+        "factors": {"fallback": 0.0},
+        "reasons": [{
+            "label": "Mood Calculation Fallback",
+            "impact": 0,
+            "text": "This player used a neutral fallback because his mood row failed to calculate.",
+            "detail": reason,
+            "duration": "temporary",
+            "source": "patch44_safe_fallback",
+        }],
+        "eventLog": [],
+        "activeModifiers": [],
+        "historicalTags": [],
+        "personality": {},
+        "role": {"rank": None, "actualRole": "Unknown", "expectedRole": "Unknown", "expectedMinutes": 0, "usageClass": "unknown"},
+        "contract": {"salary": 0, "yearsLeft": 0, "optionLabel": None, "estimatedMarketAAV": 0},
+        "stats": {},
+        "expectationProfile": {},
+        "diagnostic": {"fallback": True, "error": reason},
+    }
+
+# -----------------------------------------------------------------------------
 # Public endpoint
 # -----------------------------------------------------------------------------
 
@@ -2404,7 +2465,20 @@ def get_locker_room_moods(league_data: Dict[str, Any], team_name: Optional[str] 
     expectation = get_team_expectation(league_data, team)
     all_expectations = infer_team_expectations(league_data)
     players = get_roster_players_with_status(team)
-    rows = [evaluate_player_mood(league_data, team, profile, expectation, player) for player in players]
+    rows = []
+    diagnostics = []
+    for player in players:
+        try:
+            row = evaluate_player_mood(league_data, team, profile, expectation, player)
+            if not isinstance(row, dict):
+                raise ValueError("Mood evaluator returned a non-dict row")
+            rows.append(row)
+        except Exception as exc:
+            diagnostics.append({
+                "playerName": player_name(player),
+                "error": clean_text(str(exc))[:180],
+            })
+            rows.append(_fallback_player_mood_row(player, exc))
 
     # Keep user's current UI behavior: worst mood first if the page sorts this way,
     # but include enough data for OVR sorting too.
@@ -2441,6 +2515,7 @@ def get_locker_room_moods(league_data: Dict[str, Any], team_name: Optional[str] 
         "teamProfile": profile,
         "teamExpectation": expectation,
         "leagueExpectations": all_expectations,
+        "diagnostics": diagnostics,
         "moodSystem": {
             "version": MOOD_SYSTEM_VERSION,
             "mode": "ck3_expectation_ledger",
@@ -2503,6 +2578,59 @@ def _v9_stable_fraction(*parts: Any) -> float:
 def _v9_bound(value: float, lo: float, hi: float) -> float:
     return clamp(float(value), float(lo), float(hi))
 
+
+
+# BM_PATCH46_QUALITY_FA_SWEEP_EXTENSION_FLOW: keep extension interest from being flooded by fringe/depth vets.
+def _v12_extension_interest_fringe_adjustment(
+    player: Dict[str, Any],
+    role_score: float,
+    rookie_scale: bool,
+) -> Tuple[float, str]:
+    overall = int(round(num(player.get("overall"), 70)))
+    potential = int(round(num(player.get("potential"), overall)))
+    age = int(num(player.get("age"), 27))
+    upside = max(0, potential - overall)
+
+    if rookie_scale:
+        return 0.0, "Rookie-scale players keep the existing upside/security extension read."
+
+    adjustment = 0.0
+    details: List[str] = []
+
+    if age >= 35 and overall <= 70:
+        adjustment -= 5.0
+        details.append("older low-end vet flexibility")
+
+    if age >= 29 and overall <= 65:
+        adjustment -= 12.0
+        details.append("fringe veteran usually tests the market")
+        if role_score < 2.0:
+            adjustment -= 4.0
+            details.append("not carrying a strong enough role to ask early")
+    elif age >= 29 and overall <= 69:
+        adjustment -= 6.0
+        details.append("depth veteran needs stronger role security")
+        if role_score < 0.0:
+            adjustment -= 2.0
+            details.append("role score is negative")
+    elif overall <= 65 and upside < 7 and role_score < 2.0:
+        adjustment -= 6.0
+        details.append("low-end non-rookie with limited leverage")
+    elif overall <= 69 and upside < 3 and role_score < 0.0:
+        adjustment -= 3.0
+        details.append("low-upside depth player without a clear role")
+
+    if overall <= 69 and role_score >= 4.0:
+        adjustment += 2.5
+        details.append("actual role keeps him negotiable")
+    if age <= 25 and upside >= 6:
+        adjustment += 2.0
+        details.append("young upside offsets some market hesitation")
+
+    adjustment = _v9_bound(adjustment, -16.0, 3.0)
+    if not details:
+        return 0.0, "No fringe-depth extension adjustment."
+    return round(adjustment, 1), "; ".join(details[:3])
 
 def _v9_season_evidence_weight(team_games: int) -> float:
     games = max(0, int(num(team_games, 0)))
@@ -2778,6 +2906,20 @@ def _v9_extension_interest(
             "label": "Free Agency Leverage",
             "impact": round(leverage, 1),
             "detail": "Players with stronger open-market leverage are more willing to keep future options open.",
+        })
+
+
+    fringe_adjustment, fringe_detail = _v12_extension_interest_fringe_adjustment(
+        player = player,
+        role_score = role_score,
+        rookie_scale = rookie_scale,
+    )
+    if abs(fringe_adjustment) >= 0.5:
+        interest += fringe_adjustment
+        reasons.append({
+            "label": "Market / Role Reality",
+            "impact": round(fringe_adjustment, 1),
+            "detail": fringe_detail,
         })
 
     if mood_score < 50:

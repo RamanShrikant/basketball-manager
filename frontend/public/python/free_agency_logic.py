@@ -186,6 +186,9 @@ def get_minimum_exception_amount(league_data: Dict[str, Any]) -> int:
     return int(max(MIN_DEAL, league_data.get("minimumException") or league_data.get("minimumSalary") or league_data.get("veteranMinimum") or DEFAULT_MINIMUM_EXCEPTION))
 OFFSEASON_MIN_ROSTER = REGULAR_SEASON_MIN_ROSTER
 
+# BM_PATCH46_QUALITY_FA_SWEEP_EXTENSION_FLOW: deflated rosters use 71+ as the pre-sim quality FA sweep line.
+PRE_SIM_QUALITY_FA_MIN_OVR = 71
+
 def num(value: Any, fallback: float = 0.0) -> float:
     try:
         return float(value)
@@ -4732,7 +4735,7 @@ def estimate_team_free_agent_fit_from_profile(
         if overall >= 79:
             score += 0.10
         score += max(0.0, min(0.10, (age - 27) * 0.010))
-    if age <= 24 and market_ovr < 78:
+        if age <= 24 and market_ovr < 78:
             score -= 0.05
 
     elif direction in ["rebuilding"]:
@@ -15643,7 +15646,7 @@ def sign_high_value_free_agents_before_simulation(
     current_day: int,
     season_year: int,
 ) -> Dict[str, Any]:
-    """Sign every placeable 76+ FA to CPU teams before the regular season can simulate."""
+    """Sign every placeable deflated-scale quality FA to CPU teams before the regular season can simulate."""
     signings: List[Dict[str, Any]] = []
     dropped_players: List[Dict[str, Any]] = []
     two_way_assignments: List[Dict[str, Any]] = []
@@ -15658,7 +15661,7 @@ def sign_high_value_free_agents_before_simulation(
         Some cap snapshots do not fully reflect players appended earlier in the
         same pre-simulation sweep until the whole Python action returns. Track a
         local spending ledger so after a team signs one good free agent its
-        offer power immediately falls before the next 76+ player is ranked.
+        offer power immediately falls before the next deflated-scale quality player is ranked.
         """
         minimum = int(get_minimum_salary_amount(league_data))
         raw_max = int(num(capacity.get("maxOffer"), 0))
@@ -15669,7 +15672,7 @@ def sign_high_value_free_agents_before_simulation(
         initial_remaining = max(0, int(pre_sim_initial_capacity_by_team.get(team_name, raw_max)) - spent)
         effective_max = min(raw_max, initial_remaining)
         # Teams with no real spending power can still be used as minimum-contract
-        # landing spots if needed so no 76+ player remains unsigned when games sim.
+        # landing spots if needed so no deflated-scale quality player remains unsigned when games sim.
         if raw_max >= minimum:
             effective_max = max(minimum, effective_max)
         effective_room = min(raw_room, max(0, raw_room - spent))
@@ -15685,7 +15688,7 @@ def sign_high_value_free_agents_before_simulation(
         return sorted(
             [
                 p for p in (league_data.get("freeAgents") or [])
-                if int(num(p.get("overall"), 0)) >= 76
+                if int(num(p.get("overall"), 0)) >= PRE_SIM_QUALITY_FA_MIN_OVR
                 and get_player_key_from_player(p) not in unplaceable
             ],
             key = lambda p: (
@@ -15741,7 +15744,7 @@ def sign_high_value_free_agents_before_simulation(
         # Respect the user's money-first rule among teams that can realistically
         # absorb the player. If nobody can absorb him without cutting an equal or
         # better player, make one conservative fallback pass instead of churning
-        # the same 76+ players forever.
+        # the same 71+ players forever.
         candidates = teams if teams else fallback_teams[:]
         if not candidates:
             unplaceable.add(player_key)
@@ -15804,7 +15807,7 @@ def sign_high_value_free_agents_before_simulation(
             "overall": p.get("overall"),
         }
         for p in (league_data.get("freeAgents") or [])
-        if int(num(p.get("overall"), 0)) >= 76
+        if int(num(p.get("overall"), 0)) >= PRE_SIM_QUALITY_FA_MIN_OVR
     ]
 
     return {
@@ -16099,11 +16102,11 @@ def repair_cpu_teams_to_min_roster(
             trim_actions.get("twoWayDrops", []),
         ))
 
-    # Keep the user's global 76+ rule exactly intact. This sweep still ranks all
-    # CPU teams by their real spending capacity and can legitimately touch a team
-    # outside the two-team trade. We only skip it when no 76+ free agent exists.
+    # Keep the user's pre-simulation quality-FA sweep intact, now retuned for
+    # deflated rosters. This sweep still ranks all CPU teams by their real spending
+    # capacity and can legitimately touch a team outside the two-team trade.
     has_high_value_free_agents = any(
-        int(num(player.get("overall"), 0)) >= 76
+        int(num(player.get("overall"), 0)) >= PRE_SIM_QUALITY_FA_MIN_OVR
         for player in (updated.get("freeAgents") or [])
         if isinstance(player, dict)
     )
