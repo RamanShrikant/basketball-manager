@@ -211,6 +211,39 @@ export function getFallbackPortraitUrl(player = {}, explicitSrc = "") {
   return explicitSrc || player?.headshot || player?.portrait || player?.image || player?.photo || player?.img || player?.face || "";
 }
 
+export function shouldUseDraftAttireForFirstYearGeneratedFreeAgent(
+  player = {},
+  faceId = "",
+  fallbackSrc = "",
+  teamCode = ""
+) {
+  const resolvedFaceId = String(faceId || getPlayerPortraitId(player, fallbackSrc) || "").trim().toLowerCase();
+  if (!/^rookie_face_\d+$/i.test(resolvedFaceId)) return false;
+  if (String(teamCode || "").trim()) return false;
+
+  // The baked rookie-face image is the player's draft-attire portrait.
+  // Only use this path when that original source is actually available.
+  const source = String(getFallbackPortraitUrl(player, fallbackSrc) || "");
+  if (!/\/assets\/rookie_faces\/rookie_face_\d+\.png(?:[?#].*)?$/i.test(source)) return false;
+
+  const meta = isObject(player?.meta) ? player.meta : {};
+  const rawProSeasons = meta.proSeasons ?? player?.proSeasons ?? null;
+  if (rawProSeasons !== null && rawProSeasons !== undefined && rawProSeasons !== "") {
+    const proSeasons = Number(rawProSeasons);
+    if (Number.isFinite(proSeasons)) return proSeasons <= 0;
+  }
+
+  // Narrow legacy-save fallbacks for just-drafted players whose proSeasons field
+  // may not have been persisted yet.
+  if (String(meta.rookieSigningDecision || "").toLowerCase() === "release") return true;
+  const transactions = Array.isArray(player?.history?.transactions) ? player.history.transactions : [];
+  return transactions.some((row) => {
+    const type = String(row?.type || "").toLowerCase();
+    const label = String(row?.label || "").toLowerCase();
+    return type === "rookie_released" || label.includes("undrafted rookie");
+  });
+}
+
 export function normalizePortraitTeamCode(teamLike, player = {}) {
   const raw = typeof teamLike === "string"
     ? teamLike

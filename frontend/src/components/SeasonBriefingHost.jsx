@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useGame } from "../context/GameContext.jsx";
-import { initializeDraft } from "../api/simEnginePy.js";
+import { initializeDraft, getLockerRoomMoods } from "../api/simEnginePy.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
 import {
@@ -185,7 +185,16 @@ export default function SeasonBriefingHost() {
           getSeasonBriefingKey(sourceLeague || {}, expectedTeam) !== expectedKey
         ) return null;
 
-        const built = buildSeasonBriefingData(sourceLeague, expectedTeam);
+        let moodData = null;
+        try {
+          const moodResult = await getLockerRoomMoods(sourceLeague, expectedTeam);
+          if (moodResult?.ok && Array.isArray(moodResult?.players)) moodData = moodResult;
+        } catch (error) {
+          // New Chapter should still open if the mood worker is unavailable.
+          console.warn("[New Chapter] locker room mood snapshot unavailable", error);
+        }
+
+        const built = buildSeasonBriefingData(sourceLeague, expectedTeam, null, { moodData });
         if (!built) return null;
 
         const nextLeague = storeSeasonBriefingSnapshot(sourceLeague, expectedTeam, built);

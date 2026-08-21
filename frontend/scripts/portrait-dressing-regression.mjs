@@ -40,6 +40,23 @@ check("dressing.template_calibration", tor.x === 8 && Math.abs(tor.scale - 1.030
 check("dressing.player_jersey_override", bos.x === 25 && bos.y === -9 && bos.scale === 0.97, "Player × jersey override wins for the exceptional templates that need custom fitting.");
 check("dressing.override_detection", utils.hasJerseyOverride(config, "rookie_face_0003", "BOS_jersey_v1", "rookie") && !utils.hasJerseyOverride(config, "rookie_face_0003", "TOR_jersey_v1", "rookie"), "Override detection distinguishes inherited jerseys from custom exceptions.");
 check("dressing.free_agent_team", utils.normalizePortraitTeamCode("Free Agent") === "", "Free agents explicitly resolve to no jersey instead of an invalid team template.");
+const firstYearGeneratedFreeAgent = {
+  portraitId: "rookie_face_0003",
+  headshot: "/assets/rookie_faces/rookie_face_0003.png",
+  team: "Free Agent",
+  contractType: "free_agent",
+  meta: { proSeasons: 0, rookieSigningDecision: "release" },
+};
+const veteranGeneratedFreeAgent = {
+  ...firstYearGeneratedFreeAgent,
+  meta: { proSeasons: 2 },
+};
+check(
+  "dressing.first_year_generated_fa_draft_attire",
+  utils.shouldUseDraftAttireForFirstYearGeneratedFreeAgent(firstYearGeneratedFreeAgent, "rookie_face_0003", firstYearGeneratedFreeAgent.headshot, "") &&
+    !utils.shouldUseDraftAttireForFirstYearGeneratedFreeAgent(veteranGeneratedFreeAgent, "rookie_face_0003", veteranGeneratedFreeAgent.headshot, ""),
+  "First-year generated rookie free agents keep their original draft-attire portrait while veteran generated free agents stay on the runtime path."
+);
 check("dressing.phoenix_normalization", utils.normalizePortraitTeamCode("Phoenix Suns") === "PHX", "Phoenix team naming resolves to the PHX runtime template.");
 
 const layered = read("src/components/LayeredPlayerPortrait.jsx");

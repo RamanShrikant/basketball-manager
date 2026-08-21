@@ -26,6 +26,33 @@ function ProgressionList({ title, rows, positive }) {
   </section>;
 }
 
+
+
+function BriefingSections({ sections }) {
+  if (!Array.isArray(sections) || !sections.length) return null;
+  return (
+    <div className={styles.briefingSections}>
+      {sections.map((section, sectionIndex) => {
+        const items = Array.isArray(section?.items) ? section.items.filter(Boolean) : [];
+        if (!items.length) return null;
+        return (
+          <section className={styles.briefingSection} key={`${section?.title || "section"}-${sectionIndex}`}>
+            <h3 className={styles.briefingSectionTitle}>{section?.title}</h3>
+            <div className={styles.briefingSectionList}>
+              {items.map((item, itemIndex) => (
+                <div className={styles.briefingSectionItem} key={`${sectionIndex}-${itemIndex}-${String(item).slice(0, 24)}`}>
+                  <span className={styles.briefingBullet}>•</span>
+                  <span>{item}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
 function ProspectBoard({ rows, classCount }) {
   if (!Array.isArray(rows) || !rows.length) return <div className={styles.boardEmpty}>The upcoming class has not been prepared yet. Open Upcoming Draft to generate or load the live board, then reopen New Chapter.</div>;
   return <section className={styles.listSection}>
@@ -64,6 +91,7 @@ export default function SeasonBriefingModal({ open, wallpaperUrl, briefing, onCl
         <div className={styles.eyebrow}>{tab?.eyebrow}</div><h2 className={styles.title}>{tab?.title}</h2>
         {activeTab==="league"&&(progression.improved?.length||progression.regressed?.length)?<div className={styles.progressionGrid}><ProgressionList title="Biggest improvements" rows={progression.improved} positive/><ProgressionList title="Biggest regressions" rows={progression.regressed}/></div>:null}
         <div className={styles.paragraphs}>{paragraphs.map((p,index)=><p className={styles.paragraph} key={`${activeTab}-${index}`}>{p}</p>)}</div>
+        <BriefingSections sections={tab?.sections} />
         {activeTab==="prospects"?<ProspectBoard rows={tab?.prospects} classCount={tab?.classCount}/>:null}
       </div></div></section>
       {TAB_KEYS.map((key)=><button key={key} type="button" className={`${styles.hotspot} ${activeTab===key?styles.hotspotActive:""}`} style={boxStyle(layout[`${key}Button`])} onClick={()=>handleTabChange(key)} aria-label={`Open ${key} briefing`} aria-pressed={activeTab===key}><span className={styles.srOnly}>{key}</span></button>)}

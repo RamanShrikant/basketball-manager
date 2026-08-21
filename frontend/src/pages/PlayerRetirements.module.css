@@ -23,3 +23,30 @@
   position: relative;
   z-index: 1;
 }
+
+.storyBox {
+  backdrop-filter: blur(3px);
+}
+
+.storyScroller {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(249, 115, 22, 0.9) rgba(255, 255, 255, 0.05);
+}
+
+.storyScroller::-webkit-scrollbar {
+  width: 6px;
+}
+
+.storyScroller::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.storyScroller::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(251, 146, 60, 0.95), rgba(234, 88, 12, 0.9));
+  border-radius: 999px;
+}
+
+.storyScroller::-webkit-scrollbar-thumb:hover {
+  background: rgba(249, 115, 22, 1);
+}

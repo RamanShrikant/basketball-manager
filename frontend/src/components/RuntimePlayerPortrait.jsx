@@ -12,6 +12,7 @@ import {
   normalizePortraitFitConfig,
   normalizePortraitTeamCode,
   resolveJerseyFit,
+  shouldUseDraftAttireForFirstYearGeneratedFreeAgent,
 } from "../utils/portraitDressing.js";
 
 let runtimeSnapshot = null;
@@ -87,7 +88,8 @@ function FallbackPortrait({ src, alt, imageClassName = "", fallback = null }) {
  * Runtime portrait renderer for post-draft players.
  * - Prospects/draft views can set mode="draft" to preserve the baked source image.
  * - Active players use jerseyless base + current team jersey.
- * - Free agents (no team) use the jerseyless base only.
+ * - First-year generated rookie free agents keep their original draft-attire portrait.
+ * - Other free agents (no team) use the jerseyless base only.
  * - Fit resolution supports per-player defaults and per-player/per-template overrides.
  *
  * The wrapper uses overflow-visible so page-level headshot Y tuning doesn't run
@@ -114,16 +116,22 @@ export default function RuntimePlayerPortrait({
   const faceId = getPlayerPortraitId(player || {}, fallbackSrc);
   const stageId = getPortraitStageId(player || {});
   const teamCode = normalizePortraitTeamCode(teamName || team, player || {});
+  const useDraftAttireFreeAgent = shouldUseDraftAttireForFirstYearGeneratedFreeAgent(
+    player || {},
+    faceId,
+    fallbackSrc,
+    teamCode
+  );
 
   const resolved = useMemo(() => {
-    if (mode === "draft" || !faceId || !data) return null;
+    if (mode === "draft" || useDraftAttireFreeAgent || !faceId || !data) return null;
     const face = data.faceById?.get(faceId);
     if (!face?.baseReady || !face?.baseUrl) return null;
     const jersey = teamCode ? data.jerseyByTeam?.get(teamCode) : null;
     const templateId = jersey ? getJerseyTemplateId(jersey) : "";
     const fit = jersey ? resolveJerseyFit(data.fitConfig, faceId, templateId, stageId) : null;
     return { face, jersey, fit };
-  }, [data, faceId, mode, stageId, teamCode]);
+  }, [data, faceId, mode, stageId, teamCode, useDraftAttireFreeAgent]);
 
   return (
     <div className={`relative overflow-visible ${className}`} style={style} aria-hidden={ariaHidden || undefined}>

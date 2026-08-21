@@ -1546,6 +1546,21 @@ function buildFallbackFreeAgencySummaryEntries(freeAgencyState = {}, latestResul
   return Array.from(byKey.values());
 }
 
+function cpuOfferIdentityKey(offer = {}) {
+  const team = String(offer?.teamName || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const player = String(offer?.playerId ?? offer?.playerKey ?? offer?.playerName ?? offer?.player?.name ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  return team && player ? `${team}|${player}` : "";
+}
+
+function cpuOfferDay(offer = {}, fallback = null) {
+  const raw = offer?.submittedDay ?? offer?.day ?? offer?.generatedOfferDay ?? offer?.offerDay ?? fallback;
+  const day = Number(raw);
+  return Number.isFinite(day) && day > 0 ? Math.trunc(day) : null;
+}
+
 function buildFreeAgencySummaryText(entries = []) {
   if (!entries.length) return "No full free agency action summary is available yet.";
 
@@ -1615,6 +1630,7 @@ export default function ViewingOffers() {
 
   const [hideLeagueEvents, setHideLeagueEvents] = useState(false);
   const [hideCpuOffers, setHideCpuOffers] = useState(false);
+  const [onlyNewCpuOffers, setOnlyNewCpuOffers] = useState(false);
   const [hideRightsRenounced, setHideRightsRenounced] = useState(false);
   const [selectedDecisionMap, setSelectedDecisionMap] = useState({});
   const [selectedRightsRenounceMap, setSelectedRightsRenounceMap] = useState({});
@@ -1739,6 +1755,50 @@ export default function ViewingOffers() {
     return buildFreeAgencySummaryText(fullFreeAgencySummaryEntries);
   }, [fullFreeAgencySummaryEntries]);
 
+  // CPU teams rebuild their active offer board each FA day. Keep the gameplay
+  // behavior intact, but remember the first day each team/player pairing appeared
+  // so the UI can distinguish a genuinely new pursuit from a refreshed one.
+  const cpuOfferFirstSeenDayByKey = useMemo(() => {
+    const firstSeen = new Map();
+
+    const recordOffer = (offer = {}, fallbackDay = null) => {
+      if (offer?.source && offer.source !== "cpu") return;
+      const key = cpuOfferIdentityKey(offer);
+      const day = cpuOfferDay(offer, fallbackDay);
+      if (!key || !day) return;
+      const previous = firstSeen.get(key);
+      if (!previous || day < previous) firstSeen.set(key, day);
+    };
+
+    for (const entry of fullFreeAgencySummaryEntries || []) {
+      const fallbackDay = Number(entry?.offerDay || 0) || null;
+      for (const offer of entry?.generatedOffers || []) recordOffer(offer, fallbackDay);
+    }
+
+    for (const offer of freeAgencyState?.offerHistory || []) recordOffer(offer);
+    for (const offers of Object.values(freeAgencyState?.offersByPlayer || {})) {
+      for (const offer of offers || []) recordOffer(offer);
+    }
+    for (const offer of generatedOffers || []) recordOffer(offer, dayResolved);
+
+    return firstSeen;
+  }, [fullFreeAgencySummaryEntries, freeAgencyState?.offerHistory, freeAgencyState?.offersByPlayer, generatedOffers, dayResolved]);
+
+  const displayedGeneratedOffers = useMemo(() => {
+    return (generatedOffers || [])
+      .map((offer) => {
+        const offerDay = cpuOfferDay(offer, dayResolved);
+        const firstSeenDay = cpuOfferFirstSeenDayByKey.get(cpuOfferIdentityKey(offer)) || offerDay;
+        return {
+          ...offer,
+          _offerDay: offerDay,
+          _firstSeenDay: firstSeenDay,
+          _isNewCpuOffer: Boolean(offerDay && firstSeenDay && offerDay === firstSeenDay),
+        };
+      })
+      .filter((offer) => !onlyNewCpuOffers || offer._isNewCpuOffer);
+  }, [generatedOffers, dayResolved, cpuOfferFirstSeenDayByKey, onlyNewCpuOffers]);
+
   const leagueEventSignings = useMemo(() => {
     const activeDay = Number(
       dayResolved ??
@@ -1762,7 +1822,9 @@ export default function ViewingOffers() {
 
     for (const entry of fullFreeAgencySummaryEntries || []) {
       const entryDay = Number(entry?.dayResolved ?? entry?.offerDay ?? 0);
-      if (!showAllDays && activeDay && entryDay && entryDay !== activeDay) continue;
+      // Day 0 is opening-market roster cleanup, not a signing from Day 1/2/3/etc.
+      // Require an exact positive-day match so setup rows cannot leak into later days.
+      if (!showAllDays && (!Number.isFinite(activeDay) || activeDay <= 0 || entryDay !== activeDay)) continue;
       for (const row of Array.isArray(entry?.signings) ? entry.signings : []) {
         if (!row) continue;
         rowsFromDurableLog.push({
@@ -1787,7 +1849,7 @@ export default function ViewingOffers() {
 
     const sourceRows = rowsFromDurableLog.length ? rowsFromDurableLog : fallbackRows;
     const seen = new Set();
-    return sourceRows.filter((row) => {
+    const uniqueRows = sourceRows.filter((row) => {
       if (!row) return false;
       const key = [
         row.playerId ?? row.playerKey ?? row.playerName ?? "",
@@ -1799,6 +1861,21 @@ export default function ViewingOffers() {
       seen.add(key);
       return true;
     });
+
+    // Daily League Events should read like a transaction wire: biggest signing first.
+    // Durable action-log rows are compact, so resolve the signed player in the live league roster.
+    const signingOverall = (row) => {
+      const player = findPlayerInLeague(leagueData, row);
+      const raw = player?.overall ?? row?.overall ?? row?.player?.overall ?? 0;
+      const overall = Number(raw);
+      return Number.isFinite(overall) ? overall : 0;
+    };
+
+    return uniqueRows.sort((a, b) => {
+      const overallDiff = signingOverall(b) - signingOverall(a);
+      if (overallDiff !== 0) return overallDiff;
+      return String(a?.playerName || "").localeCompare(String(b?.playerName || ""));
+    });
   }, [
     dayResolved,
     latestResults?.dayResolved,
@@ -1806,6 +1883,7 @@ export default function ViewingOffers() {
     freeAgencyState?.currentDay,
     freeAgencyState?.signedPlayersLog,
     fullFreeAgencySummaryEntries,
+    leagueData,
     marketClosed,
     signings,
   ]);
@@ -3234,7 +3312,7 @@ return (
                   </div>
 
                   <div className="rounded-lg border border-neutral-700 bg-black/30 px-3 py-2">
-                    <div className="text-xs text-gray-400 mb-1">New CPU Offers</div>
+                    <div className="text-xs text-gray-400 mb-1">CPU Offers</div>
                     <div className="text-base font-semibold text-white">
                       {generatedOffers.length}
                     </div>
@@ -3842,23 +3920,45 @@ return (
               {!hideCpuOffers && (
                 <div className="bg-neutral-800 border border-neutral-700 rounded-2xl p-6 shadow-lg">
                   <div className="flex items-center justify-between gap-4 mb-4">
-                    <div className="text-lg font-semibold text-orange-400">
-                      New CPU Offers
+                    <div>
+                      <div className="text-lg font-semibold text-orange-400">
+                        CPU Offers
+                      </div>
+                      <div className="text-[11px] text-gray-500 mt-1">
+                        {onlyNewCpuOffers
+                          ? `${displayedGeneratedOffers.length} first-time offer${displayedGeneratedOffers.length === 1 ? "" : "s"} on this board`
+                          : `${generatedOffers.length} current offer${generatedOffers.length === 1 ? "" : "s"}`}
+                      </div>
                     </div>
 
-                    <button
-                      onClick={() => setHideCpuOffers(true)}
-                      className="px-3 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg text-sm font-semibold transition"
-                    >
-                      Hide New CPU Offers
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setOnlyNewCpuOffers((value) => !value)}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition border ${
+                          onlyNewCpuOffers
+                            ? "border-orange-500/50 bg-orange-500/15 text-orange-200 hover:bg-orange-500/20"
+                            : "border-neutral-600 bg-neutral-900/60 text-gray-300 hover:bg-neutral-700"
+                        }`}
+                        title="Show only team/player pairings that appeared for the first time on this offer day."
+                      >
+                        {onlyNewCpuOffers ? "Show All" : "Only New"}
+                      </button>
+                      <button
+                        onClick={() => setHideCpuOffers(true)}
+                        className="px-3 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg text-sm font-semibold transition"
+                      >
+                        Hide CPU Offers
+                      </button>
+                    </div>
                   </div>
 
-                  {!generatedOffers.length ? (
-                    <p className="text-gray-400">No new CPU offers were generated.</p>
+                  {!displayedGeneratedOffers.length ? (
+                    <p className="text-gray-400">
+                      {onlyNewCpuOffers ? "No first-time CPU offers on this board." : "No CPU offers were generated."}
+                    </p>
                   ) : (
 <div className="bm-orange-scroll max-h-[540px] overflow-y-auto pr-2 space-y-3">
-  {generatedOffers.map((offer, idx) => {
+  {displayedGeneratedOffers.map((offer, idx) => {
                         const logo = getTeamLogo(offer?.teamName);
 
                         return (
@@ -3890,7 +3990,13 @@ return (
                                 <div className="text-sm text-gray-500 mt-2">
                                   {formatContractLine(offer?.contract, offer?.totalValue, offer?.years)}
                                 </div>
+                                <div className="text-[11px] text-gray-500 mt-1.5">
+                                  {offer?._isNewCpuOffer
+                                    ? `First offered Day ${offer?._offerDay ?? offer?._firstSeenDay ?? "-"}`
+                                    : `Refreshed Day ${offer?._offerDay ?? "-"} • first offered Day ${offer?._firstSeenDay ?? "-"}`}
+                                </div>
                                 <div className="flex flex-wrap gap-2 mt-2">
+                                  {offer?._isNewCpuOffer && <InfoChip tone="green">NEW</InfoChip>}
                                   <InfoChip tone="orange" onClick={() => openOfferInfo(offer, "Full Transaction Context", "full")}>Click For Context</InfoChip>
                                   <ContractOptionChip source={offer} />
                                   {offer?.spendingType && <InfoChip tone={offer.spendingType === "bird_rights" ? "orange" : "green"} onClick={() => openOfferInfo(offer, formatToolLabel(offer.spendingType), "cba")}>{formatToolLabel(offer.spendingType)}</InfoChip>}
@@ -3993,7 +4099,7 @@ return (
                       onClick={() => setHideCpuOffers(false)}
                       className="px-4 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg text-sm font-semibold transition"
                     >
-                      Show New CPU Offers
+                      Show CPU Offers
                     </button>
                   )}
 

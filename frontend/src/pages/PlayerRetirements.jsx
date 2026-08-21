@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
@@ -8,6 +8,16 @@ import {
   recordRetirementMoodEvents,
 } from "../utils/offseasonMoodEvents.js";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
+import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
+import { RETIREMENT_LAYOUT } from "../config/retirementLayout.js";
+import {
+  buildRetirementNarrativeSnapshot,
+  getRetirementNarrativeKey,
+} from "../utils/retirementNarrative.js";
+import {
+  loadRetirementNarrativesFromDB,
+  saveRetirementNarrativesToDB,
+} from "../utils/retirementNarrativeStorage.js";
 import styles from "./PlayerRetirements.module.css";
 
 const RETIREMENT_RESULTS_KEY = "bm_retirement_results_v1";
@@ -114,6 +124,101 @@ function hydrateRetiredPlayerForCard(player, leagueData) {
 function resolveLogo(team) {
   return team?.logo || team?.teamLogo || team?.newTeamLogo || team?.logoUrl || team?.image || "";
 }
+
+function normalizeTeamLabel(value) {
+  return String(value || "").trim();
+}
+
+function isFreeAgencyLabel(value) {
+  const normalized = normalizeTeamLabel(value).toLowerCase().replace(/[^a-z]/g, "");
+  return !normalized || normalized === "fa" || normalized === "freeagent" || normalized === "freeagency" || normalized === "unsigned";
+}
+
+function finiteHistoryNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+// Pick the team that best represents a free agent's NBA career. This is not
+// simply "most recent team": it rewards both sustained games and productive
+// seasons, so a player's real prime/legacy team tends to win.
+function getCareerLegacyTeam(player) {
+  const seasons = Array.isArray(player?.history?.seasons) ? player.history.seasons : [];
+  const byTeam = new Map();
+
+  for (const row of seasons) {
+    if (!row || row?.rowType === "total") continue;
+
+    const teamName = normalizeTeamLabel(row?.teamName || row?.team);
+    if (isFreeAgencyLabel(teamName)) continue;
+
+    const games = Math.max(0, finiteHistoryNumber(row?.games ?? row?.gp, 0));
+    const ppg = Math.max(0, finiteHistoryNumber(row?.ppg, 0));
+    const rpg = Math.max(0, finiteHistoryNumber(row?.rpg, 0));
+    const apg = Math.max(0, finiteHistoryNumber(row?.apg, 0));
+    const spg = Math.max(0, finiteHistoryNumber(row?.spg, 0));
+    const bpg = Math.max(0, finiteHistoryNumber(row?.bpg, 0));
+    const seasonYear = finiteHistoryNumber(row?.seasonYear, 0);
+
+    // The production weighting mirrors the broad impact weighting already used
+    // elsewhere in the game. Games provide longevity; production identifies
+    // where the player actually had his best basketball years.
+    const production = ppg + 0.55 * rpg + 0.65 * apg + 1.35 * spg + 1.35 * bpg;
+    const seasonScore = games > 0
+      ? games * (1 + production / 20)
+      : 1; // preserve sparse historical rows as a weak tenure signal
+
+    const current = byTeam.get(teamName) || {
+      teamName,
+      score: 0,
+      games: 0,
+      peakProduction: 0,
+      latestSeasonYear: 0,
+      teamLogo: "",
+    };
+
+    current.score += seasonScore;
+    current.games += games;
+    current.peakProduction = Math.max(current.peakProduction, production);
+    current.latestSeasonYear = Math.max(current.latestSeasonYear, seasonYear);
+    current.teamLogo = current.teamLogo || row?.teamLogo || row?.logo || "";
+    byTeam.set(teamName, current);
+  }
+
+  const ranked = [...byTeam.values()].sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (b.games !== a.games) return b.games - a.games;
+    if (b.peakProduction !== a.peakProduction) return b.peakProduction - a.peakProduction;
+    if (b.latestSeasonYear !== a.latestSeasonYear) return b.latestSeasonYear - a.latestSeasonYear;
+    return a.teamName.localeCompare(b.teamName);
+  });
+
+  return ranked[0] || null;
+}
+
+function getRetirementLogoChoice(player, teamLogoMap) {
+  // If he retired directly from an NBA roster, that latest team wins.
+  const retiredFrom = normalizeTeamLabel(player?.retiredFromTeam || player?.teamName || player?.team);
+  if (!isFreeAgencyLabel(retiredFrom)) {
+    return {
+      teamName: retiredFrom,
+      logo: teamLogoMap?.[retiredFrom] || player?.teamLogo || "",
+      source: "latest-team",
+    };
+  }
+
+  // Free agents use the team associated with their strongest body of career
+  // seasons. If there is no usable NBA history, intentionally show no logo.
+  const legacy = getCareerLegacyTeam(player);
+  if (!legacy?.teamName) return null;
+
+  return {
+    teamName: legacy.teamName,
+    logo: teamLogoMap?.[legacy.teamName] || legacy.teamLogo || "",
+    source: "career-legacy",
+  };
+}
+
 
 function readOffseasonState(seasonYear) {
   const stored = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), null);
@@ -324,6 +429,8 @@ export default function PlayerRetirements() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [playerCardPlayer, setPlayerCardPlayer] = useState(null);
+  const [retirementNarratives, setRetirementNarratives] = useState({});
+  const autoRunSeasonRef = useRef(null);
 
   useEffect(() => {
     setWorkingLeagueData(leagueData || null);
@@ -331,6 +438,18 @@ export default function PlayerRetirements() {
 
   const seasonYear = getSeasonYear(workingLeagueData || leagueData);
   const offseasonState = useMemo(() => readOffseasonState(seasonYear), [seasonYear]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadRetirementNarrativesFromDB(seasonYear).then((stored) => {
+      if (!cancelled && stored && typeof stored === "object") {
+        setRetirementNarratives(stored);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [seasonYear]);
 
   useEffect(() => {
     if (!workingLeagueData) return;
@@ -365,6 +484,12 @@ export default function PlayerRetirements() {
       return String(a?.name || "").localeCompare(String(b?.name || ""));
     });
   }, [retirementResult?.retiredPlayers]);
+
+  const derivedRetirementNarratives = useMemo(
+    () => buildRetirementNarrativeSnapshot(retiredPlayers, workingLeagueData || leagueData),
+    [retiredPlayers, workingLeagueData, leagueData]
+  );
+
   const summary = retirementResult?.summary || {
     retiredCount: retiredPlayers.length,
     averageAge: 0,
@@ -373,75 +498,17 @@ export default function PlayerRetirements() {
   };
 
 const alreadyRan = !!retirementResult?.ok || !!offseasonState.retirementsComplete;
-const retirementsDisabled = !!offseasonState.retirementsDisabled;
 
-const finalizeRetirementsAsSkipped = ({ disabled = false } = {}) => {
-  const skippedLeagueData = workingLeagueData
-    ? {
-        ...workingLeagueData,
-        seasonYear,
-        currentSeasonYear: seasonYear,
-        seasonStartYear: seasonYear,
-      }
-    : workingLeagueData;
-
-  const res = {
-    ok: true,
-    skipped: true,
-    disabled,
-    seasonYear,
-    leagueData: skippedLeagueData,
-    retiredPlayers: [],
-    summary: {
-      retiredCount: 0,
-      averageAge: 0,
-      averageOverall: 0,
-      teamsAffected: 0,
-    },
-  };
-
-  setRetirementResult(res);
-
-  if (typeof setLeagueData === "function" && skippedLeagueData) {
-    setLeagueData(skippedLeagueData);
-  }
-
-  if (skippedLeagueData) {
-    saveLeagueDataAfterRetirements(skippedLeagueData);
-  }
-
-  saveRetirementResult(res);
-
-  const nextOffseasonState = {
-    ...readOffseasonState(seasonYear),
-    active: true,
-    seasonYear,
-    retirementsComplete: true,
-    retirementsSkipped: true,
-    retirementsDisabled: disabled ? true : retirementsDisabled,
-  };
-
-  saveOffseasonState(nextOffseasonState);
-  setError("");
-};
-
-const toggleRetirementsDisabled = () => {
-  const next = {
-    ...readOffseasonState(seasonYear),
-    retirementsDisabled: !retirementsDisabled,
-  };
-
-  saveOffseasonState(next);
-  setError("");
-};
+  useEffect(() => {
+    if (!alreadyRan || retiredPlayers.length === 0) return;
+    // Story text is a small derived cache. Keep it out of localStorage and persist
+    // only the final strings/list in IndexedDB; the heavyweight source-of-truth
+    // player/history data already lives in the central IndexedDB league save.
+    saveRetirementNarrativesToDB(seasonYear, derivedRetirementNarratives).catch(() => {});
+  }, [alreadyRan, retiredPlayers.length, seasonYear, derivedRetirementNarratives]);
   const runRetirements = async () => {
 if (!workingLeagueData) {
   setError("No league data found.");
-  return;
-}
-
-if (readOffseasonState(seasonYear).retirementsDisabled) {
-  finalizeRetirementsAsSkipped({ disabled: true });
   return;
 }
 
@@ -501,7 +568,7 @@ setError("");
       try {
         recordRetirementMoodEvents(updated, compactResult, {
           seasonYear,
-          source: "manual_retirements",
+          source: "auto_retirements",
         });
       } catch (err) {
         console.warn("[Retirements] Failed to record retirement mood events", err);
@@ -540,6 +607,8 @@ setError("");
         active: true,
         seasonYear,
         retirementsComplete: true,
+        retirementsSkipped: false,
+        retirementsDisabled: false,
       };
 
       saveOffseasonState(nextOffseasonState);
@@ -549,6 +618,18 @@ setError("");
       setLoading(false);
     }
   };
+
+  // Opening the retirement step runs the retirement engine automatically once
+  // for this offseason. The ref protects against React StrictMode double effects.
+  useEffect(() => {
+    if (alreadyRan || loading || !workingLeagueData) return;
+    if (autoRunSeasonRef.current === seasonYear) return;
+
+    autoRunSeasonRef.current = seasonYear;
+    runRetirements();
+    // runRetirements intentionally runs once per season when this page opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alreadyRan, loading, seasonYear, workingLeagueData]);
 
   return (
     <div className={`${styles.retirementsPage} bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white`}>
@@ -562,38 +643,11 @@ setError("");
             </div>
           </div>
 
-          <div className="flex shrink-0 flex-wrap justify-end gap-2">
-            <button
-              onClick={toggleRetirementsDisabled}
-              disabled={alreadyRan}
-              className={`rounded-lg px-4 py-2 text-sm font-bold transition ${
-                alreadyRan
-                  ? "cursor-not-allowed bg-neutral-700 text-white/45"
-                  : retirementsDisabled
-                  ? "bg-emerald-700 hover:bg-emerald-600"
-                  : "bg-neutral-700 hover:bg-neutral-600"
-              }`}
-            >
-              {retirementsDisabled ? "Retirements Off" : "Retirements On"}
-            </button>
-
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
             {!alreadyRan && (
-              <>
-                <button
-                  onClick={() => finalizeRetirementsAsSkipped({ disabled: retirementsDisabled })}
-                  disabled={loading}
-                  className="rounded-lg bg-neutral-700 px-4 py-2 text-sm font-bold transition hover:bg-neutral-600 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Skip
-                </button>
-                <button
-                  onClick={runRetirements}
-                  disabled={loading || retirementsDisabled}
-                  className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-white/45"
-                >
-                  {loading ? "Processing..." : retirementsDisabled ? "Disabled" : "Run Retirements"}
-                </button>
-              </>
+              <div className="rounded-lg border border-orange-500/25 bg-orange-500/10 px-4 py-2 text-sm font-bold text-orange-200">
+                {loading ? "Running retirements..." : "Preparing retirements..."}
+              </div>
             )}
 
             {alreadyRan && (
@@ -608,8 +662,19 @@ setError("");
         </header>
 
         {error && (
-          <div className="shrink-0 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-200">
-            {error}
+          <div className="flex shrink-0 items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-200">
+            <span>{error}</span>
+            <button
+              type="button"
+              onClick={() => {
+                autoRunSeasonRef.current = null;
+                runRetirements();
+              }}
+              disabled={loading}
+              className="rounded-lg bg-red-500/20 px-3 py-1.5 text-xs font-extrabold text-red-100 transition hover:bg-red-500/30 disabled:opacity-50"
+            >
+              Retry
+            </button>
           </div>
         )}
 
@@ -625,56 +690,218 @@ setError("");
             <div>
               <h2 className="text-xl font-extrabold">Retirement Results</h2>
               <p className="text-xs text-white/50">
-                {alreadyRan ? `${retiredPlayers.length} players retired.` : "Run retirements to generate the league result."}
+                {alreadyRan ? `${retiredPlayers.length} players retired.` : "Retirements run automatically when this step opens."}
               </p>
             </div>
           </div>
 
           <div className="bmTableScroller min-h-0 flex-1 overflow-y-auto">
             {!alreadyRan ? (
-              <div className="flex h-full min-h-[220px] items-center justify-center text-white/45">No results yet.</div>
+              <div className="flex h-full min-h-[220px] items-center justify-center text-white/45">{loading ? "Running retirements..." : "Preparing retirement results..."}</div>
             ) : retiredPlayers.length === 0 ? (
               <div className="flex h-full min-h-[220px] flex-col items-center justify-center text-center">
-                <p className="text-xl font-bold">{retirementResult?.disabled ? "Retirements are disabled." : "No retirements this offseason."}</p>
+                <p className="text-xl font-bold">No retirements this offseason.</p>
                 <p className="mt-1 text-sm text-white/50">Every player remains active.</p>
               </div>
             ) : (
               <div className="divide-y divide-white/5">
                 {retiredPlayers.map((player, idx) => {
-                  const logo = teamLogoMap[player?.retiredFromTeam] || "";
                   const headshot = player?.headshot || player?.portrait || player?.image || player?.photo || player?.face || null;
+                  const narrativeKey = getRetirementNarrativeKey(player);
+                  const narrative = derivedRetirementNarratives[narrativeKey] || retirementNarratives[narrativeKey] || {};
+                  const retirementReason = narrative.reason || "I felt it was the right time to step away from the game.";
+                  const retirementAccomplishments = Array.isArray(narrative.accomplishments)
+                    ? narrative.accomplishments
+                    : ["No major recorded career honors."];
                   return (
                     <button
                       key={`${player?.name || "retired"}-${idx}`}
                       type="button"
                       onClick={() => setPlayerCardPlayer(hydrateRetiredPlayerForCard(player, workingLeagueData || leagueData))}
-                      className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-4 px-5 py-2.5 text-left transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-orange-500/60"
+                      className="relative block w-full overflow-visible text-left transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-orange-500/60"
+                      style={{ height: `${RETIREMENT_LAYOUT.rowHeight}px` }}
                       title={`Open ${player?.name || "player"} card`}
                     >
-                      <div className="flex min-w-0 items-center gap-3">
+                      <div
+                        className="absolute overflow-visible"
+                        style={{
+                          left: `${RETIREMENT_LAYOUT.headshot.left}px`,
+                          top: `${RETIREMENT_LAYOUT.headshot.top}px`,
+                          width: `${RETIREMENT_LAYOUT.headshot.width}px`,
+                          height: `${RETIREMENT_LAYOUT.headshot.height}px`,
+                          transform: `translate(${RETIREMENT_LAYOUT.headshot.x}px, ${RETIREMENT_LAYOUT.headshot.y}px) scale(${RETIREMENT_LAYOUT.headshot.scale})`,
+                          transformOrigin: "center center",
+                        }}
+                      >
                         <RuntimePlayerPortrait
                           player={player}
                           teamName={player?.retiredFromTeam || player?.teamName || player?.team || ""}
                           src={headshot || ""}
                           alt={player?.name || "Retired Player"}
-                          className="h-10 w-10 shrink-0 rounded-full border border-white/10 bg-white/5"
-                          fallback={<div className="h-10 w-10 shrink-0 rounded-full border border-white/10 bg-white/5" />}
+                          className="absolute inset-0 h-full w-full overflow-visible bg-transparent"
+                          imageClassName="object-contain object-bottom"
+                          fallback={<div className="h-full w-full" />}
                         />
-                        <div className="min-w-0">
-                          <div className="truncate font-bold">{player?.name || "Unknown Player"}</div>
-                          <div className="text-xs text-white/50">{player?.pos || "-"} • Age {player?.age ?? "-"} • OVR {player?.overall ?? player?.ovr ?? "-"}</div>
+                      </div>
+
+                      <div
+                        className="absolute min-w-0 whitespace-nowrap font-extrabold"
+                        style={{
+                          left: `${RETIREMENT_LAYOUT.name.left}px`,
+                          top: `${RETIREMENT_LAYOUT.name.top}px`,
+                          fontSize: `${RETIREMENT_LAYOUT.name.fontSize}px`,
+                          transform: `translate(${RETIREMENT_LAYOUT.name.x}px, ${RETIREMENT_LAYOUT.name.y}px) scale(${RETIREMENT_LAYOUT.name.scale})`,
+                          transformOrigin: "left center",
+                        }}
+                      >
+                        {player?.name || "Unknown Player"}
+                      </div>
+
+                      <div
+                        className="absolute whitespace-nowrap text-white/50"
+                        style={{
+                          left: `${RETIREMENT_LAYOUT.meta.left}px`,
+                          top: `${RETIREMENT_LAYOUT.meta.top}px`,
+                          fontSize: `${RETIREMENT_LAYOUT.meta.fontSize}px`,
+                          transform: `translate(${RETIREMENT_LAYOUT.meta.x}px, ${RETIREMENT_LAYOUT.meta.y}px) scale(${RETIREMENT_LAYOUT.meta.scale})`,
+                          transformOrigin: "left center",
+                        }}
+                      >
+                        {player?.pos || "-"} • Age {player?.age ?? "-"}
+                      </div>
+
+                      <div
+                        className="absolute"
+                        style={{
+                          right: `${RETIREMENT_LAYOUT.ratingRing.right}px`,
+                          top: `${RETIREMENT_LAYOUT.ratingRing.top}px`,
+                          width: `${RETIREMENT_LAYOUT.ratingRing.size}px`,
+                          height: `${RETIREMENT_LAYOUT.ratingRing.size}px`,
+                          transform: `translate(${RETIREMENT_LAYOUT.ratingRing.x}px, ${RETIREMENT_LAYOUT.ratingRing.y}px) scale(${RETIREMENT_LAYOUT.ratingRing.scale})`,
+                          transformOrigin: "center center",
+                        }}
+                      >
+                        <PlayerRatingRing
+                          overall={player?.overall ?? player?.ovr}
+                          size={RETIREMENT_LAYOUT.ratingRing.size}
+                          showPotential={false}
+                          label="OVR"
+                        />
+                      </div>
+
+                      <div
+                        className={`absolute flex flex-col overflow-hidden rounded-xl border border-orange-400/15 bg-black/20 shadow-inner shadow-black/25 transition-colors hover:border-orange-400/50 hover:bg-orange-500/10 ${styles.storyBox}`}
+                        style={{
+                          left: `${RETIREMENT_LAYOUT.reasonBox.left}px`,
+                          top: `${RETIREMENT_LAYOUT.reasonBox.top}px`,
+                          width: `${RETIREMENT_LAYOUT.reasonBox.width}px`,
+                          height: `${RETIREMENT_LAYOUT.reasonBox.height}px`,
+                          padding: `${RETIREMENT_LAYOUT.reasonBox.padding}px`,
+                          opacity: RETIREMENT_LAYOUT.reasonBox.opacity,
+                          transform: `translate(${RETIREMENT_LAYOUT.reasonBox.x}px, ${RETIREMENT_LAYOUT.reasonBox.y}px) scale(${RETIREMENT_LAYOUT.reasonBox.scale})`,
+                          transformOrigin: "left top",
+                          boxSizing: "border-box",
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <div
+                          className="shrink-0 font-black uppercase tracking-[0.16em] text-orange-300/80"
+                          style={{ fontSize: `${RETIREMENT_LAYOUT.reasonBox.titleFontSize}px`, lineHeight: 1 }}
+                        >
+                          Player Reasoning
+                        </div>
+                        <div
+                          className={`mt-2 min-h-0 flex-1 overflow-y-auto pr-1 text-white/70 ${styles.storyScroller}`}
+                          style={{
+                            fontSize: `${RETIREMENT_LAYOUT.reasonBox.bodyFontSize}px`,
+                            lineHeight: RETIREMENT_LAYOUT.reasonBox.lineHeight,
+                          }}
+                          onWheel={(event) => event.stopPropagation()}
+                        >
+                          {retirementReason}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 text-sm text-white/70">
-                        {logo ? <img src={logo} alt="" className="h-6 w-6 object-contain" /> : null}
-                        <span className="hidden whitespace-nowrap lg:inline">{player?.retiredFromTeam || "Free Agency"}</span>
+                      <div
+                        className={`absolute flex flex-col overflow-hidden rounded-xl border border-orange-400/15 bg-black/20 shadow-inner shadow-black/25 transition-colors hover:border-orange-400/50 hover:bg-orange-500/10 ${styles.storyBox}`}
+                        style={{
+                          left: `${RETIREMENT_LAYOUT.accomplishmentsBox.left}px`,
+                          top: `${RETIREMENT_LAYOUT.accomplishmentsBox.top}px`,
+                          width: `${RETIREMENT_LAYOUT.accomplishmentsBox.width}px`,
+                          height: `${RETIREMENT_LAYOUT.accomplishmentsBox.height}px`,
+                          padding: `${RETIREMENT_LAYOUT.accomplishmentsBox.padding}px`,
+                          opacity: RETIREMENT_LAYOUT.accomplishmentsBox.opacity,
+                          transform: `translate(${RETIREMENT_LAYOUT.accomplishmentsBox.x}px, ${RETIREMENT_LAYOUT.accomplishmentsBox.y}px) scale(${RETIREMENT_LAYOUT.accomplishmentsBox.scale})`,
+                          transformOrigin: "left top",
+                          boxSizing: "border-box",
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <div
+                          className="shrink-0 font-black uppercase tracking-[0.16em] text-orange-300/80"
+                          style={{ fontSize: `${RETIREMENT_LAYOUT.accomplishmentsBox.titleFontSize}px`, lineHeight: 1 }}
+                        >
+                          Career Accomplishments
+                        </div>
+                        <div
+                          className={`mt-2 min-h-0 flex-1 overflow-y-auto pr-1 text-white/70 ${styles.storyScroller}`}
+                          style={{
+                            fontSize: `${RETIREMENT_LAYOUT.accomplishmentsBox.bodyFontSize}px`,
+                            lineHeight: RETIREMENT_LAYOUT.accomplishmentsBox.lineHeight,
+                          }}
+                          onWheel={(event) => event.stopPropagation()}
+                        >
+                          <div className="flex flex-col" style={{ gap: `${RETIREMENT_LAYOUT.accomplishmentsBox.itemGap}px` }}>
+                            {retirementAccomplishments.map((item, itemIdx) => (
+                              <div key={`${item}-${itemIdx}`} className="flex items-start gap-1.5">
+                                <span className="mt-[0.15em] shrink-0 text-orange-400">•</span>
+                                <span>{item}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-white/50">{Math.round(Number(player?.retirementProbability || 0) * 100)}%</span>
-                        <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-200">Retired</span>
-                      </div>
+                      {(() => {
+                        const logoChoice = getRetirementLogoChoice(player, teamLogoMap);
+                        if (!logoChoice?.logo) return null;
+
+                        const base = RETIREMENT_LAYOUT.teamLogo || {};
+                        const override = RETIREMENT_LAYOUT.teamLogoOverrides?.[logoChoice.teamName] || {};
+                        const x = Number(base.x || 0) + Number(override.x || 0);
+                        const y = Number(base.y || 0) + Number(override.y || 0);
+                        const scale = Number(base.scale ?? 1) * Number(override.scale ?? 1);
+                        const opacity = Math.max(0, Math.min(1, Number(base.opacity ?? 1) * Number(override.opacity ?? 1)));
+                        const size = Number(base.size || 58);
+
+                        return (
+                          // Keep each retirement logo physically clipped to its own row.
+                          // The row itself stays overflow-visible so Raman's large headshot
+                          // tuning remains untouched; only this logo layer is row-locked.
+                          <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                            <div
+                              className="absolute flex items-center justify-center"
+                              style={{
+                                right: `${Number(base.right || 0)}px`,
+                                top: `${Number(base.top || 0)}px`,
+                                width: `${size}px`,
+                                height: `${size}px`,
+                                transform: `translate(${x}px, ${y}px) scale(${scale})`,
+                                transformOrigin: "center center",
+                                opacity,
+                              }}
+                              title={logoChoice.teamName}
+                            >
+                              <img
+                                src={logoChoice.logo}
+                                alt=""
+                                className="h-full w-full object-contain"
+                                draggable="false"
+                              />
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </button>
                   );
                 })}

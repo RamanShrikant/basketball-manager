@@ -56,7 +56,7 @@ const TEAM_ALIASES = Object.freeze({
   "philadelphia sixers": "Philadelphia 76ers",
 });
 
-export const SEASON_BRIEFING_CONTENT_VERSION = 5;
+export const SEASON_BRIEFING_CONTENT_VERSION = 8;
 export const MAX_SEASON_BRIEFING_SNAPSHOTS = 8;
 export const MAX_SEASON_BRIEFING_STORYLINES = 12;
 
@@ -103,6 +103,21 @@ function getAllTeams(leagueData) {
 
 function teamNameOf(team) {
   return text(team?.name || team?.teamName || team?.team);
+}
+
+function conferenceNameOf(team) {
+  const raw = text(team?.conference || team?.conf || team?.conferenceName);
+  const normalized = normalizeName(raw);
+  if (normalized.includes("east")) return "East";
+  if (normalized.includes("west")) return "West";
+  return raw;
+}
+
+function conferenceDisplayName(value) {
+  const normalized = normalizeName(value);
+  if (normalized.includes("east")) return "Eastern Conference";
+  if (normalized.includes("west")) return "Western Conference";
+  return text(value) || "conference";
 }
 
 function playerNameOf(player) {
@@ -165,6 +180,17 @@ function naturalList(values, conjunction = "and") {
   if (rows.length === 1) return rows[0];
   if (rows.length === 2) return `${rows[0]} ${conjunction} ${rows[1]}`;
   return `${rows.slice(0, -1).join(", ")}, ${conjunction} ${rows.at(-1)}`;
+}
+
+function possessive(value) {
+  const source = text(value);
+  if (!source) return "";
+  return /s$/i.test(source) ? `${source}'` : `${source}'s`;
+}
+
+function sentenceCase(value) {
+  const source = text(value);
+  return source ? `${source.charAt(0).toUpperCase()}${source.slice(1)}` : "";
 }
 
 function stableHash(value) {
@@ -477,6 +503,7 @@ function rosterTurnover(leagueData, snapshot, previousStats, teamName, seasonYea
         name: row.name,
         previousOverall: safeNumber(row.overall, 0),
         previousStatLine: formatStatLine(row),
+        stats: row?.stats || {},
         destination: current?.teamName && normalizeName(current.teamName) !== normalizeName(teamName)
           ? current.teamName
           : "",
@@ -492,6 +519,7 @@ function rosterTurnover(leagueData, snapshot, previousStats, teamName, seasonYea
       potential: row.pot,
       age: row.age,
       rookie: safeNumber(row?.source?.draftYear ?? row?.source?.draftClassYear, 0) === Number(seasonYear),
+      source: row?.source || null,
     }))
     .sort((a, b) => b.overall - a.overall || b.potential - a.potential);
 
@@ -507,6 +535,285 @@ function formatStatLine(row) {
   const values = [ppg, rpg, apg].map((value) => Number.isFinite(value) ? value.toFixed(1) : "0.0");
   return `${values[0]} PPG, ${values[1]} RPG and ${values[2]} APG`;
 }
+
+function getBriefingContractYear(leagueData) {
+  const candidates = [
+    leagueData?.contractSeasonYear,
+    leagueData?.financials?.contractSeasonYear,
+    leagueData?.seasonStartYear,
+    leagueData?.currentSeasonYear,
+    leagueData?.seasonYear,
+    getSeasonStartYear(leagueData || {}),
+  ];
+  for (const value of candidates) {
+    const year = safeNumber(value, 0);
+    if (year >= 2020 && year <= 2100) return Math.trunc(year);
+  }
+  return 0;
+}
+
+function playerContract(player) {
+  return player?.contract && typeof player.contract === "object" ? player.contract : {};
+}
+
+function contractYearsLeft(player, leagueData) {
+  const direct = safeNumber(player?.yearsLeft ?? player?.contractYears, -1);
+  if (direct >= 0) return Math.max(0, Math.round(direct));
+  const contract = playerContract(player);
+  const salaries = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+  if (!salaries.length) return 0;
+  const currentYear = getBriefingContractYear(leagueData);
+  const startYear = safeNumber(contract?.startYear, currentYear);
+  let index = currentYear - startYear;
+  if (!Number.isFinite(index) || index < 0) index = 0;
+  if (index >= salaries.length) return 0;
+  return Math.max(0, salaries.length - index);
+}
+
+function currentContractSalary(player, leagueData) {
+  const contract = playerContract(player);
+  const salaries = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+  if (salaries.length) {
+    const currentYear = getBriefingContractYear(leagueData);
+    const startYear = safeNumber(contract?.startYear, currentYear);
+    let index = currentYear - startYear;
+    if (!Number.isFinite(index) || index < 0) index = 0;
+    if (index >= salaries.length) index = salaries.length - 1;
+    return safeNumber(salaries[index], 0);
+  }
+  return safeNumber(player?.salary ?? player?.currentSalary ?? player?.contractSalary ?? player?.capHit ?? player?.aav, 0);
+}
+
+function compactMoney(value) {
+  const amount = safeNumber(value, 0);
+  if (!amount) return "";
+  if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(amount >= 10_000_000 ? 1 : 2).replace(/\.0$/, "")}M`;
+  if (amount >= 1_000) return `$${Math.round(amount / 1_000)}K`;
+  return `$${Math.round(amount)}`;
+}
+
+function contractOriginalTerm(player) {
+  const contract = playerContract(player);
+  const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+  const explicit = safeNumber(
+    contract?.originalTermYears ??
+    contract?.termYears ??
+    contract?.years ??
+    meta?.originalTermYears ??
+    meta?.contractYears,
+    0
+  );
+  if (explicit > 0) return Math.round(explicit);
+  const salaries = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+  return salaries.length;
+}
+
+function hasFutureExtension(player, leagueData) {
+  const contract = playerContract(player);
+  const currentYear = getBriefingContractYear(leagueData);
+  const rows = [
+    ...(Array.isArray(contract?.extensions) ? contract.extensions : []),
+    ...(contract?.extensionMeta && typeof contract.extensionMeta === "object" ? [contract.extensionMeta] : []),
+  ];
+  return rows.some((row) => safeNumber(row?.extensionStartYear, 0) > currentYear);
+}
+
+function unresolvedContractOption(player, leagueData) {
+  const contract = playerContract(player);
+  const option = contract?.option && typeof contract.option === "object" ? contract.option : null;
+  if (!option || option.picked != null) return false;
+  const years = Array.isArray(option.yearIndices) ? option.yearIndices : [];
+  if (!years.length) return false;
+  const currentYear = getBriefingContractYear(leagueData);
+  const startYear = safeNumber(contract?.startYear, currentYear);
+  const currentIndex = Math.max(0, currentYear - startYear);
+  return years.some((index) => safeNumber(index, -99) >= currentIndex);
+}
+
+function buildExtensionWatch(team, leagueData) {
+  const currentYear = getBriefingContractYear(leagueData);
+  return getRoster(team)
+    .map((player) => {
+      const contract = playerContract(player);
+      const yearsLeft = contractYearsLeft(player, leagueData);
+      const salaries = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+      if (!salaries.length || yearsLeft <= 0 || hasFutureExtension(player, leagueData)) return null;
+      if (unresolvedContractOption(player, leagueData)) return null;
+      const status = normalizeName(player?.contractType || player?.rosterStatus || contract?.type || "standard");
+      if (["two way", "two-way", "stash"].includes(status)) return null;
+
+      const rights = player?.rights && typeof player.rights === "object" ? player.rights : {};
+      const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+      const draftRound = safeNumber(meta?.draftRound ?? player?.draftRound, 0);
+      const rookieScale = Boolean(rights?.rookieScale || player?.rookieScale || contract?.rookieScale);
+      const originalTerm = contractOriginalTerm(player);
+      let extensionType = "";
+      if (rookieScale && draftRound === 1 && yearsLeft === 1) {
+        extensionType = "rookie-scale";
+      } else if (!rookieScale && originalTerm >= 3 && (yearsLeft === 1 || (yearsLeft === 2 && originalTerm >= 4))) {
+        extensionType = "veteran";
+      }
+      if (!extensionType) return null;
+
+      const endYear = currentYear + yearsLeft - 1;
+      return {
+        name: playerNameOf(player),
+        overall: playerOverall(player),
+        age: playerAge(player),
+        yearsLeft,
+        endYear,
+        salary: currentContractSalary(player, leagueData),
+        extensionType,
+        headline: `${playerNameOf(player)} (${playerOverall(player)} OVR) is in the ${extensionType} extension window with ${yearsLeft} contract year${yearsLeft === 1 ? "" : "s"} remaining.`,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.overall - a.overall || a.age - b.age || a.name.localeCompare(b.name))
+    .slice(0, 6);
+}
+
+function positionFitScore(player, snapshot) {
+  const pos = playerPosition(player);
+  if (!pos) return 0;
+  const groupScore = (test) => {
+    const rows = snapshot.roster.filter((row) => test(row.pos));
+    const best = rows[0]?.ovr || 55;
+    const playable = rows.filter((row) => row.ovr >= 75).length;
+    return Math.max(0, 88 - best) + Math.max(0, 2 - playable) * 4;
+  };
+  if (pos.includes("PG")) return groupScore((value) => value.includes("PG"));
+  if (pos.includes("SG") || pos.includes("SF")) return groupScore((value) => value.includes("SG") || value.includes("SF"));
+  if (pos.includes("PF")) return groupScore((value) => value.includes("PF"));
+  if (pos.includes("C")) return groupScore((value) => value.includes("C"));
+  return 0;
+}
+
+function buildExpiringTradeTargets(leagueData, userTeamName, userSnapshot) {
+  const userKey = normalizeName(userTeamName);
+  const candidates = [];
+  for (const team of getAllTeams(leagueData)) {
+    const sourceTeamName = teamNameOf(team);
+    if (!sourceTeamName || normalizeName(sourceTeamName) === userKey) continue;
+    const sourceRoster = getRoster(team)
+      .slice()
+      .sort((a, b) => playerOverall(b) - playerOverall(a) || playerAge(a) - playerAge(b));
+    const topNames = new Set(sourceRoster.slice(0, 2).map((player) => normalizeName(playerNameOf(player))));
+    const sourceSnapshot = rosterSnapshot(team);
+
+    for (const player of sourceRoster) {
+      const yearsLeft = contractYearsLeft(player, leagueData);
+      const salary = currentContractSalary(player, leagueData);
+      const ovr = playerOverall(player);
+      const age = playerAge(player);
+      if (yearsLeft !== 1 || salary <= 0 || ovr < 74) continue;
+      const topTwo = topNames.has(normalizeName(playerNameOf(player)));
+      if (topTwo && ovr >= 87 && age <= 29) continue;
+
+      const fit = positionFitScore(player, userSnapshot);
+      const sourceFlex =
+        sourceSnapshot.direction === "rebuilding" ? 9 :
+        sourceSnapshot.direction === "developing" ? 4 :
+        sourceSnapshot.direction === "retooling" ? 2 : -3;
+      const veteranFlex = age >= 29 ? 4 : 0;
+      const starPenalty = topTwo ? 8 : 0;
+      const score = ovr * 1.25 + fit + sourceFlex + veteranFlex - starPenalty;
+
+      candidates.push({
+        name: playerNameOf(player),
+        teamName: sourceTeamName,
+        overall: ovr,
+        age,
+        pos: playerPosition(player),
+        salary,
+        yearsLeft,
+        fitScore: fit,
+        sourceDirection: sourceSnapshot.direction,
+        score,
+        headline: `${playerNameOf(player)} — ${sourceTeamName}, ${ovr} OVR, age ${age || "—"}, expiring at ${compactMoney(salary) || "an active salary"}.`,
+      });
+    }
+  }
+  return candidates
+    .sort((a, b) => b.score - a.score || b.overall - a.overall || a.name.localeCompare(b.name))
+    .slice(0, 6);
+}
+
+function archivedPlayerIndex(previousEntry) {
+  const index = new Map();
+  for (const row of archivedPlayerRows(previousEntry)) {
+    const name = playerNameOf(row);
+    const key = normalizeName(name);
+    if (!key) continue;
+    const existing = index.get(key);
+    const next = {
+      name,
+      teamName: text(row?.teamName || row?.team),
+      overall: playerOverall(row),
+      age: playerAge(row),
+      stats: row?.stats || {},
+    };
+    if (!existing || next.overall > existing.overall) index.set(key, next);
+  }
+  return index;
+}
+
+function rosterShiftEvents(leagueData, previousEntry) {
+  if (!previousEntry) return [];
+  const currentIndex = playerIndex(leagueData);
+  const events = [];
+  for (const previousTeam of previousEntry?.teams || []) {
+    const teamName = text(previousTeam?.teamName || previousTeam?.team || previousTeam?.name);
+    const currentTeam = findTeam(leagueData, teamName);
+    if (!teamName || !currentTeam) continue;
+
+    const previousRows = previousTeamPlayerStats(previousEntry, teamName)
+      .slice()
+      .sort((a, b) => b.overall - a.overall || safeNumber(b?.stats?.PTS ?? b?.stats?.ppg, 0) - safeNumber(a?.stats?.PTS ?? a?.stats?.ppg, 0))
+      .slice(0, 7);
+    if (!previousRows.length) continue;
+
+    const currentNames = new Set(getRoster(currentTeam).map((player) => normalizeName(playerNameOf(player))));
+    const departed = previousRows.filter((row) => !currentNames.has(normalizeName(row.name)));
+    const meaningfulDepartures = departed.filter((row) => row.overall >= 78 || safeNumber(row?.stats?.PTS ?? row?.stats?.ppg, 0) >= 14);
+    if (!meaningfulDepartures.length) continue;
+
+    const previousNames = new Set(previousRows.map((row) => normalizeName(row.name)));
+    const arrivals = getRoster(currentTeam)
+      .filter((player) => !previousNames.has(normalizeName(playerNameOf(player))) && playerOverall(player) >= 78)
+      .sort((a, b) => playerOverall(b) - playerOverall(a))
+      .slice(0, 4);
+
+    const lostValue = meaningfulDepartures.reduce((sum, row) => sum + Math.max(0, row.overall - 70) + safeNumber(row?.stats?.PTS ?? row?.stats?.ppg, 0) * 0.35, 0);
+    const gainedValue = arrivals.reduce((sum, player) => sum + Math.max(0, playerOverall(player) - 70), 0);
+    const netLoss = lostValue - gainedValue;
+    const starLoss = meaningfulDepartures.some((row) => row.overall >= 84);
+    if (!starLoss && meaningfulDepartures.length < 2 && netLoss < 16) continue;
+
+    const departureText = meaningfulDepartures.slice(0, 3).map((row) => {
+      const now = currentIndex.get(normalizeName(row.name));
+      return now?.teamName && normalizeName(now.teamName) !== normalizeName(teamName)
+        ? `${row.name} to ${now.teamName}`
+        : row.name;
+    });
+    const incomingText = arrivals.slice(0, 2).map((player) => playerNameOf(player));
+    const severity =
+      netLoss >= 28 || (starLoss && meaningfulDepartures.length >= 2) ? "core collapse" :
+      netLoss >= 16 || starLoss ? "major reset" : "rotation reset";
+    const currentTop = rosterSnapshot(currentTeam).top[0];
+
+    events.push({
+      type: "franchise_shift",
+      score: 72 + Math.min(28, Math.round(netLoss)) + (starLoss ? 6 : 0),
+      teamName,
+      severity,
+      departed: meaningfulDepartures.slice(0, 4).map((row) => row.name),
+      arrivals: arrivals.map((player) => playerNameOf(player)),
+      headline: `${teamName} entered a ${severity} after losing ${naturalList(departureText)}${incomingText.length ? ` while adding ${naturalList(incomingText)}` : ""}${currentTop ? `; ${currentTop.name} now headlines the roster` : ""}`,
+    });
+  }
+  return events.sort((a, b) => b.score - a.score || a.teamName.localeCompare(b.teamName)).slice(0, 6);
+}
+
 
 function readProgressionRows(leagueData, seasonYear) {
   if (typeof localStorage === "undefined") return [];
@@ -562,30 +869,42 @@ function getTradeMoves(row) {
   return moves.filter((move) => move.name && move.fromTeam && move.toTeam);
 }
 
-function recentTradeEvents(leagueData, seasonYear) {
-  const index = playerIndex(leagueData);
+function recentTradeEvents(leagueData, seasonYear, previousEntry = null) {
+  const liveIndex = playerIndex(leagueData);
+  const archivedIndex = archivedPlayerIndex(previousEntry);
   const rows = Array.isArray(leagueData?.tradeHistory) ? leagueData.tradeHistory : [];
   const events = [];
-  rows.slice(-80).forEach((row, rowIndex) => {
+  rows.slice(-120).forEach((row, rowIndex) => {
     const rowYear = safeNumber(row?.seasonYear, 0);
     if (rowYear && rowYear < seasonYear - 1) return;
     for (const move of getTradeMoves(row)) {
-      const player = index.get(normalizeName(move.name));
-      const ovr = safeNumber(player?.overall, safeNumber(row?.overall, 0));
+      const live = liveIndex.get(normalizeName(move.name));
+      const archived = archivedIndex.get(normalizeName(move.name));
+      const ovr = Math.max(
+        safeNumber(live?.overall, 0),
+        safeNumber(archived?.overall, 0),
+        safeNumber(row?.overall, 0)
+      );
+      const ppg = safeNumber(archived?.stats?.PTS ?? archived?.stats?.ppg, 0);
+      const score =
+        (ovr >= 90 ? 104 : ovr >= 86 ? 96 : ovr >= 82 ? 86 : ovr >= 78 ? 72 : 58) +
+        Math.min(8, Math.max(0, ppg - 16) * 0.5);
       events.push({
         type: "trade",
-        score: ovr >= 90 ? 96 : ovr >= 86 ? 88 : ovr >= 82 ? 78 : 58,
+        score,
         playerName: move.name,
         fromTeam: move.fromTeam,
         toTeam: move.toTeam,
         overall: ovr,
-        date: text(row?.date || row?.completedAt || row?.timestamp),
+        previousPpg: ppg,
+        date: text(row?.currentDate || row?.date || row?.leagueDate || ""),
+        phase: tradePhaseFromRecord(row),
         rowIndex,
-        headline: `${move.toTeam} acquired ${move.name} from ${move.fromTeam}`,
+        headline: `${move.toTeam} acquired ${move.name}${ovr ? ` (${ovr} OVR)` : ""} from ${move.fromTeam}`,
       });
     }
   });
-  return events;
+  return events.sort((a, b) => b.score - a.score || b.overall - a.overall || b.rowIndex - a.rowIndex);
 }
 
 function freeAgencyEvents(leagueData, seasonYear) {
@@ -606,16 +925,30 @@ function freeAgencyEvents(leagueData, seasonYear) {
     seen.add(key);
     const player = index.get(normalizeName(name));
     const ovr = safeNumber(player?.overall, safeNumber(row?.overall, 0));
+    const contract = row?.contract && typeof row.contract === "object"
+      ? row.contract
+      : playerContract(player);
+    const salaries = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+    const years = salaries.length || safeNumber(row?.years, 0);
+    const aav = safeNumber(
+      row?.aav,
+      salaries.length ? salaries.reduce((sum, value) => sum + safeNumber(value, 0), 0) / salaries.length : 0
+    );
+    const contractText = years
+      ? ` on a ${years}-year${aav ? `, ${compactMoney(aav)} AAV` : ""} deal`
+      : "";
     out.push({
       type: "free_agency",
-      score: ovr >= 90 ? 94 : ovr >= 86 ? 86 : ovr >= 82 ? 76 : 55,
+      score: ovr >= 90 ? 102 : ovr >= 86 ? 94 : ovr >= 82 ? 84 : ovr >= 78 ? 70 : 55,
       playerName: name,
       toTeam: teamName,
       overall: ovr,
-      headline: `${teamName} signed ${name}`,
+      years,
+      aav,
+      headline: `${teamName} signed ${name}${ovr ? ` (${ovr} OVR)` : ""}${contractText}`,
     });
   }
-  return out;
+  return out.sort((a, b) => b.score - a.score || b.overall - a.overall || a.playerName.localeCompare(b.playerName));
 }
 
 function retirementEvents(leagueData, seasonYear) {
@@ -754,6 +1087,206 @@ function positionNeed(snapshot) {
   }).sort((a, b) => (a.best + a.playable * 3) - (b.best + b.playable * 3))[0]?.label || "rotation depth";
 }
 
+function tradePhaseFromRecord(row = {}) {
+  const phaseText = normalizeName(row?.phase || row?.seasonPhase || row?.tradePhase || row?.source || "");
+  if (/offseason|off season|summer/.test(phaseText)) return "offseason";
+  if (/regular|deadline|midseason|mid season|playoff/.test(phaseText)) return "in_season";
+  if (row?.inOffseason === true || row?.offseason === true) return "offseason";
+
+  const rawDate = text(row?.currentDate || row?.date || row?.leagueDate || row?.calendarDate);
+  const match = rawDate.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (match) {
+    const month = Number(match[2]);
+    if ([7, 8, 9].includes(month)) return "offseason";
+    if ([10, 11, 12, 1, 2, 3, 4, 5, 6].includes(month)) return "in_season";
+  }
+  return "unknown";
+}
+
+function ratingLookup(player, aliases = []) {
+  if (!player || typeof player !== "object") return 0;
+  const sources = [player, player?.ratings, player?.attributes, player?.skills, player?.currentRatings]
+    .filter((row) => row && typeof row === "object");
+  for (const source of sources) {
+    for (const alias of aliases) {
+      const value = safeNumber(source?.[alias], NaN);
+      if (Number.isFinite(value)) return value;
+    }
+  }
+  return 0;
+}
+
+function playerBasketballProfile(player) {
+  if (!player) return { strengths: [], primary: "", position: "" };
+  const position = playerPosition(player);
+  const rows = [
+    { key:"shooting", value:ratingLookup(player, ["3PT", "3pt", "three", "threePt", "threePoint", "threePointRating", "three_point", "rating3pt"]) },
+    { key:"passing", value:ratingLookup(player, ["PASS", "pass", "passing", "passRating", "passingRating"]) },
+    { key:"handling", value:ratingLookup(player, ["BALL", "ball", "ballHandle", "ballHandling", "handle", "dribble"]) },
+    { key:"defense", value:ratingLookup(player, ["DEF", "def", "defense", "defRating", "defensiveRating"]) },
+    { key:"rebounding", value:ratingLookup(player, ["REB", "reb", "rebound", "rebounding", "rebRating"]) },
+    { key:"rim", value:ratingLookup(player, ["BLK", "blk", "block", "blocks", "blockRating"]) },
+    { key:"finishing", value:ratingLookup(player, ["CLOSE", "close", "closeRating", "inside", "insideScoring", "finishing"]) },
+    { key:"scoring", value:ratingLookup(player, ["OFF", "off", "offense", "offRating", "offensiveRating"]) },
+  ].filter((row) => row.value > 0).sort((a, b) => b.value - a.value);
+  return { strengths: rows, primary: rows[0]?.key || "", position };
+}
+
+function basketballFitPhrase(player, mode = "add") {
+  const profile = playerBasketballProfile(player);
+  const strong = profile.strengths.filter((row) => row.value >= 78).slice(0, 3).map((row) => row.key);
+  const pos = profile.position;
+  const isBig = pos.includes("C") || pos.includes("PF");
+  const pieces = [];
+  if (strong.includes("shooting")) pieces.push("floor spacing");
+  if (strong.includes("passing") || strong.includes("handling")) pieces.push("another source of creation");
+  if (strong.includes("defense")) pieces.push(isBig ? "a sturdier defensive backbone" : "point-of-attack and wing defense");
+  if (strong.includes("rim")) pieces.push("rim protection");
+  if (strong.includes("rebounding")) pieces.push("rebounding");
+  if (strong.includes("finishing") || strong.includes("scoring")) pieces.push("scoring pressure");
+  const useful = uniqueNames(pieces, 3);
+  if (!useful.length) {
+    const overall = playerOverall(player);
+    if (overall >= 84) return mode === "remove" ? "removes a high-level two-way piece from the rotation" : "adds another high-level piece who can carry real responsibility";
+    if (overall >= 78) return mode === "remove" ? "takes dependable rotation quality out of the lineup" : "adds dependable rotation quality without forcing the stars to absorb every possession";
+    return mode === "remove" ? "takes away useful depth" : "adds useful depth";
+  }
+  const list = naturalList(useful);
+  return mode === "remove" ? `takes away ${list}` : `adds ${list}`;
+}
+
+function roundedProductionText(row) {
+  const stats = row?.stats || {};
+  const ppg = safeNumber(stats?.PTS ?? stats?.ppg, NaN);
+  const rpg = safeNumber(stats?.REB ?? stats?.rpg, NaN);
+  const apg = safeNumber(stats?.AST ?? stats?.apg, NaN);
+  const parts = [];
+  if (Number.isFinite(ppg) && ppg >= 3) parts.push(`${Math.round(ppg)} point${Math.round(ppg) === 1 ? "" : "s"}`);
+  if (Number.isFinite(rpg) && rpg >= 2) parts.push(`${Math.round(rpg)} rebound${Math.round(rpg) === 1 ? "" : "s"}`);
+  if (Number.isFinite(apg) && apg >= 2) parts.push(`${Math.round(apg)} assist${Math.round(apg) === 1 ? "" : "s"}`);
+  return parts.length ? `about ${naturalList(parts)} a night` : "";
+}
+
+function teamPlayerRow(context, playerName) {
+  const target = normalizeName(playerName);
+  return context?.snapshot?.roster?.find((row) => normalizeName(row.name) === target) || null;
+}
+
+function previousPlayerRow(context, playerName) {
+  const target = normalizeName(playerName);
+  return context?.previousStats?.find((row) => normalizeName(row.name) === target) || null;
+}
+
+function currentLeaguePlayer(context, playerName) {
+  return playerIndex(context?.leagueData || {}).get(normalizeName(playerName)) || null;
+}
+
+function tradeAftermathSentence(context, event) {
+  const canonical = context.canonical;
+  const isIncoming = normalizeName(event?.toTeam) === normalizeName(canonical);
+  const current = currentLeaguePlayer(context, event?.playerName);
+  const currentStillHere = normalizeName(current?.teamName) === normalizeName(canonical);
+  const previous = previousPlayerRow(context, event?.playerName);
+  const production = roundedProductionText(previous);
+  const overall = safeNumber(current?.overall, safeNumber(event?.overall, 0));
+  const fit = basketballFitPhrase(current || previous || {}, isIncoming ? "add" : "remove");
+  const phase = event?.phase || "unknown";
+
+  if (isIncoming && phase === "in_season") {
+    if (!currentStillHere) {
+      return `The in-season trade for ${event.playerName} never became a lasting answer; he is already elsewhere, so the move now reads more like a short-term swing than a piece of the current foundation.`;
+    }
+    if (overall >= 83 || (previous && safeNumber(previous?.stats?.PTS ?? previous?.stats?.ppg, 0) >= 15)) {
+      return `${choose(`${canonical}|${event.playerName}|trade-aged-well`, [
+        `The in-season trade for ${event.playerName} has aged well`,
+        `${event.playerName}'s midseason arrival looks better with a full offseason of distance`,
+        `What looked like a deadline gamble on ${event.playerName} now feels much more settled`,
+      ])}. ${production ? `By the end of last season he was giving ${canonical} ${production}, and he ${fit}.` : `In basketball terms, he ${fit}.`}`;
+    }
+    if (overall <= 74) {
+      return `The in-season trade for ${event.playerName} has not aged especially well. His role never grew into what the move seemed to promise, and ${canonical} is still searching for more certainty in that part of the rotation.`;
+    }
+    return `The in-season trade for ${event.playerName} has settled into something useful rather than transformative. ${production ? `He finished the year around ${production}, and he ${fit}.` : `In basketball terms, he ${fit}.`}`;
+  }
+
+  if (isIncoming) {
+    return `${choose(`${canonical}|${event.playerName}|trade-new`, [
+      `${canonical} changed the shape of the roster by trading for ${event.playerName}`,
+      `The trade for ${event.playerName} is one of the clearest changes to ${possessive(canonical)} identity`,
+      `${event.playerName} arrives through trade with a real job to do immediately`,
+    ])}. On paper, he ${fit}, giving the coaching staff a different set of answers than it had a year ago.`;
+  }
+
+  if (phase === "in_season") {
+    return `Trading ${event.playerName} away during last season is still part of the story. ${overall >= 82 ? `He remains a high-level player elsewhere, so the cost of that decision is visible every time ${canonical} needs what he used to provide.` : `The move has become easier to live with as his value has settled, but it still changed the shape of the rotation.`}`;
+  }
+  return `${canonical} moved ${event.playerName} out of the picture. That decision ${fit}, forcing the remaining core to redistribute the possessions and matchups he used to handle.`;
+}
+
+function freeAgencyAdditionSentence(context, event) {
+  const player = currentLeaguePlayer(context, event?.playerName);
+  const fit = basketballFitPhrase(player || {}, "add");
+  const contractNote = event?.years ? ` The ${event.years}-year commitment makes this more than a camp experiment.` : "";
+  return `${choose(`${context.canonical}|${event.playerName}|fa-add`, [
+    `${event.playerName} is the clearest new face from free agency`,
+    `Free agency brought ${event.playerName} into the rotation`,
+    `${context.canonical} used the open market to add ${event.playerName}`,
+    `The offseason's most immediate fit change is ${event.playerName}`,
+  ])}. He ${fit}, which should change how some of the surrounding lineups can function.${contractNote}`;
+}
+
+function freeAgencyDepartureSentence(context, departure) {
+  const current = currentLeaguePlayer(context, departure?.name);
+  const previous = previousPlayerRow(context, departure?.name) || departure;
+  const production = roundedProductionText(previous);
+  const fit = basketballFitPhrase(current || previous || {}, "remove");
+  const destination = departure?.destination && normalizeName(departure.destination) !== "free agency"
+    ? ` to ${departure.destination}`
+    : "";
+  return `${choose(`${context.canonical}|${departure?.name}|fa-loss`, [
+    `The loss of ${departure.name}${destination} is not cosmetic`,
+    `${context.canonical} will feel ${departure.name}'s departure${destination}`,
+    `One of the real offseason subtractions is ${departure.name}${destination}`,
+    `Free agency took ${departure.name}${destination} out of last year's rotation`,
+  ])}. ${production ? `He had been giving the team ${production}, and losing him ` : "That exit "}${fit}.`;
+}
+
+function buildTeamTransactionStories(context) {
+  const stories = [];
+  const used = new Set();
+  const add = (key, value) => {
+    const normalized = normalizeName(key);
+    if (!value || !normalized || used.has(normalized)) return;
+    used.add(normalized);
+    stories.push(value.replace(/\s+/g, " ").trim());
+  };
+
+  const trades = [...context.activity.incomingTrades, ...context.activity.outgoingTrades]
+    .sort((a, b) => b.score - a.score);
+  const signings = [...context.activity.signings].sort((a, b) => b.score - a.score);
+  const tradedOut = new Set(context.activity.outgoingTrades.map((row) => normalizeName(row.playerName)));
+  const faLosses = (context.turnover?.departures || [])
+    .filter((row) => !tradedOut.has(normalizeName(row.name)))
+    .filter((row) => safeNumber(row.previousOverall, 0) >= 76 || safeNumber(row?.stats?.PTS ?? row?.stats?.ppg, 0) >= 9)
+    .slice(0, 4);
+
+  // Put one major beat from each transaction lane up front so the prose cannot
+  // become "three trade headlines" while ignoring the actual free-agent market.
+  if (trades[0]) add(`trade|${trades[0].playerName}|${trades[0].fromTeam}|${trades[0].toTeam}`, tradeAftermathSentence(context, trades[0]));
+  if (signings[0]) add(`signing|${signings[0].playerName}`, freeAgencyAdditionSentence(context, signings[0]));
+  if (faLosses[0]) add(`departure|${faLosses[0].name}`, freeAgencyDepartureSentence(context, faLosses[0]));
+
+  for (const event of trades.slice(1, 5)) {
+    add(`trade|${event.playerName}|${event.fromTeam}|${event.toTeam}`, tradeAftermathSentence(context, event));
+  }
+  for (const event of signings.slice(1, 4)) {
+    add(`signing|${event.playerName}`, freeAgencyAdditionSentence(context, event));
+  }
+  for (const row of faLosses.slice(1, 4)) add(`departure|${row.name}`, freeAgencyDepartureSentence(context, row));
+
+  return stories.slice(0, 7);
+}
+
 function teamActivity(leagueData, teamName, seasonYear, trades, signings) {
   const target = normalizeName(teamName);
   const incomingTrades = trades.filter((event) => normalizeName(event.toTeam) === target);
@@ -764,9 +1297,10 @@ function teamActivity(leagueData, teamName, seasonYear, trades, signings) {
 }
 
 function buildLeagueEventBoard({ leagueData, seasonYear, previousEntry, progressionRows }) {
-  const trades = recentTradeEvents(leagueData, seasonYear);
+  const trades = recentTradeEvents(leagueData, seasonYear, previousEntry);
   const signings = freeAgencyEvents(leagueData, seasonYear);
   const retirements = retirementEvents(leagueData, seasonYear);
+  const franchiseShifts = rosterShiftEvents(leagueData, previousEntry);
   const progression = progressionRows.filter((row) => Math.abs(row.delta) >= 3 && row.currentOverall >= 78).map((row) => ({
     type: row.delta > 0 ? "breakout" : "regression",
     score: 64 + Math.min(22, Math.abs(row.delta) * 4) + Math.max(0, row.currentOverall - 82),
@@ -780,18 +1314,23 @@ function buildLeagueEventBoard({ leagueData, seasonYear, previousEntry, progress
     ...leagueHistoryEvents(leagueData, seasonYear, previousEntry),
     ...standoutTeamEvents(previousEntry),
     ...trades,
+    ...franchiseShifts,
     ...signings,
     ...retirements,
     ...progression,
   ].sort((a, b) => b.score - a.score);
   const seen = new Set();
   return {
-    trades, signings, retirements,
+    trades,
+    signings,
+    retirements,
+    franchiseShifts,
     events: events.filter((event) => {
       const key = normalizeName(event.headline);
       if (!key || seen.has(key)) return false;
-      seen.add(key); return true;
-    }).slice(0, 18),
+      seen.add(key);
+      return true;
+    }).slice(0, 24),
   };
 }
 
@@ -821,79 +1360,318 @@ function continuityAssessment(prior, current) {
   return { ...old, status, evidence };
 }
 
+function buildOwnExpiringWatch(team, leagueData) {
+  return getRoster(team)
+    .map((player) => {
+      const yearsLeft = contractYearsLeft(player, leagueData);
+      const overall = playerOverall(player);
+      if (yearsLeft !== 1 || overall < 74) return null;
+      return {
+        name: playerNameOf(player),
+        overall,
+        age: playerAge(player),
+        salary: currentContractSalary(player, leagueData),
+        yearsLeft,
+        headline: `${playerNameOf(player)} (${overall} OVR) is entering the final guaranteed year of his current deal${currentContractSalary(player, leagueData) > 0 ? ` at ${compactMoney(currentContractSalary(player, leagueData))}` : ""}.`,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.overall - a.overall || a.age - b.age || a.name.localeCompare(b.name))
+    .slice(0, 6);
+}
+
+function normalizeMoodPlayers(moodData) {
+  const rows = Array.isArray(moodData?.players)
+    ? moodData.players
+    : Array.isArray(moodData?.moods)
+      ? moodData.moods
+      : [];
+  return rows.map((row) => ({
+    name: text(row?.playerName || row?.name || row?.player),
+    score: safeNumber(row?.moodScore ?? row?.score ?? row?.mood, NaN),
+    label: text(row?.moodLabel || row?.label || ""),
+    trend: text(row?.trend || ""),
+    reasons: Array.isArray(row?.reasons) ? row.reasons : [],
+  })).filter((row) => row.name && Number.isFinite(row.score));
+}
+
+function moodReasonText(row) {
+  const reason = [...(row?.reasons || [])]
+    .filter((item) => text(item?.detail || item?.text || item?.category))
+    .sort((a, b) => Math.abs(safeNumber(b?.impact, 0)) - Math.abs(safeNumber(a?.impact, 0)))[0];
+  return text(reason?.detail || reason?.text || reason?.category).replace(/\?/g, ".");
+}
+
+function playoffMoodPhrase(previousRow) {
+  const raw = normalizeName(previousRow?.playoffResult || "");
+  if (raw.includes("firstround")) return "Last season's first-round exit";
+  if (raw.includes("secondround")) return "Last season's second-round exit";
+  if (raw.includes("conferencefinal")) return "Last season's conference-finals loss";
+  if (raw.includes("playin")) return "Last season's Play-In exit";
+  return previousRow?.madePlayoffs ? "Last season's playoff exit" : "Last season's finish";
+}
+
+function buildMoodPulse(moodData, previousRow, canonical) {
+  const rows = normalizeMoodPlayers(moodData);
+  if (!rows.length) return null;
+  const average = rows.reduce((sum, row) => sum + row.score, 0) / rows.length;
+  const unsettled = rows.filter((row) => row.score < 55).sort((a, b) => a.score - b.score).slice(0, 3);
+  const upbeat = rows.filter((row) => row.score >= 70).sort((a, b) => b.score - a.score).slice(0, 3);
+  const falling = rows.filter((row) => normalizeName(row.trend) === "falling").length;
+  let summary = "";
+  if (average >= 74) {
+    summary = `${canonical} opens camp with a genuinely upbeat locker room. The group is carrying confidence into the new season rather than dragging last year behind it.`;
+  } else if (average >= 64) {
+    summary = `${canonical} enters the season with a mostly positive locker room, although there are still individual concerns beneath the surface.`;
+  } else if (average >= 54) {
+    summary = `${canonical} enters camp with mixed emotions. The room is not fractured, but the mood is uneven enough that results early in the season will matter.`;
+  } else {
+    summary = `${canonical} opens the year with an uneasy locker room. Several players are carrying real frustration into the season, and the group needs a strong start to settle the atmosphere.`;
+  }
+  if (previousRow?.madePlayoffs && !previousRow?.champion && !previousRow?.finals && average < 62) {
+    summary += ` ${playoffMoodPhrase(previousRow)} is still sitting poorly with parts of the roster.`;
+  } else if ((previousRow?.conferenceFinals || previousRow?.finals || previousRow?.champion) && average >= 68) {
+    summary += ` Last season's run has left the group believing it belongs in meaningful games again.`;
+  }
+
+  const items = [];
+  for (const row of unsettled) {
+    const reason = moodReasonText(row);
+    items.push(`${row.name} is one of the more unsettled players in the room${row.trend ? ` and is trending ${row.trend}` : ""}${reason ? `; ${reason}` : ""}.`);
+  }
+  if (!items.length && upbeat.length) {
+    items.push(`${naturalList(upbeat.map((row) => row.name))} ${upbeat.length === 1 ? "is" : "are"} among the strongest positive voices in the locker room entering the season.`);
+  }
+  if (falling >= 3 && average < 66) items.push(`${falling} players currently show a falling mood trend, so the emotional temperature of the room is worth monitoring early.`);
+  return {
+    average: Number(average.toFixed(1)),
+    summary,
+    items: items.slice(0, 4),
+    unsettled: unsettled.map(({ name, score, label, trend }) => ({ name, score, label, trend })),
+  };
+}
+
+function previousRotationAverage(previousEntry, teamName) {
+  const rows = previousTeamPlayerStats(previousEntry, teamName).slice(0, 9);
+  if (!rows.length) return 0;
+  return rows.reduce((sum, row) => sum + safeNumber(row.overall, 0), 0) / rows.length;
+}
+
+function teamMoveEvidence(leagueBoard, teamName) {
+  const target = normalizeName(teamName);
+  return [...leagueBoard.trades, ...leagueBoard.signings]
+    .filter((event) => normalizeName(event.toTeam || event.teamName) === target || normalizeName(event.fromTeam) === target)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 2);
+}
+
+function conferenceTrajectoryPhrase(trajectory) {
+  if (trajectory === "improved") return "enters the season clearly stronger";
+  if (trajectory === "regressed") return "enters the season noticeably weaker";
+  if (trajectory === "strengthened") return "has strengthened";
+  if (trajectory === "slipped") return "has slipped";
+  return "remains in a similar competitive tier";
+}
+
+function buildConferenceCompetition(context) {
+  const currentConference = conferenceNameOf(context.team);
+  if (!currentConference) return [];
+  const userStrength = context.snapshot.average + (context.snapshot.top[0]?.ovr || 0) * 0.16;
+  const peers = getAllTeams(context.leagueData)
+    .filter((team) => normalizeName(conferenceNameOf(team)) === normalizeName(currentConference))
+    .filter((team) => normalizeName(teamNameOf(team)) !== normalizeName(context.canonical))
+    .map((team) => {
+      const snap = rosterSnapshot(team);
+      const previousAverage = previousRotationAverage(context.previousEntry, teamNameOf(team));
+      const delta = previousAverage > 0 ? snap.average - previousAverage : 0;
+      const progressionRows = teamProgression(context.progressionRows, teamNameOf(team));
+      const progressionNet = progressionRows.reduce((sum, row) => sum + safeNumber(row.delta, 0), 0);
+      const shift = context.leagueBoard.franchiseShifts.find((row) => normalizeName(row.teamName) === normalizeName(teamNameOf(team)));
+      const moves = teamMoveEvidence(context.leagueBoard, teamNameOf(team));
+      const strength = snap.average + (snap.top[0]?.ovr || 0) * 0.16;
+      let trajectory = "steady";
+      if (shift?.severity === "core collapse" || delta <= -1.8 || progressionNet <= -5) trajectory = "regressed";
+      else if (delta >= 1.8 || progressionNet >= 5 || (moves[0]?.toTeam && safeNumber(moves[0]?.overall, 0) >= 84)) trajectory = "improved";
+      else if (delta <= -0.8 || progressionNet <= -3) trajectory = "slipped";
+      else if (delta >= 0.8 || progressionNet >= 3) trajectory = "strengthened";
+      return { teamName: teamNameOf(team), snap, previousAverage, delta, progressionNet, shift, moves, strength, trajectory, distance: Math.abs(strength - userStrength) };
+    })
+    .sort((a, b) => a.distance - b.distance || b.strength - a.strength)
+    .slice(0, 4);
+
+  return peers.map((peer) => {
+    const move = peer.moves[0];
+    let detail = "";
+    if (peer.shift?.headline) detail = peer.shift.headline;
+    else if (move?.headline) detail = move.headline;
+    else if (peer.progressionNet >= 3) detail = `internal development added ${peer.progressionNet} net OVR points across its most notable movers`;
+    else if (peer.progressionNet <= -3) detail = `internal regression removed ${Math.abs(peer.progressionNet)} net OVR points across its most notable movers`;
+    else detail = `its current rotation remains close to ${possessive(context.canonical)} competitive tier`;
+    return {
+      teamName: peer.teamName,
+      trajectory: peer.trajectory,
+      strength: Number(peer.strength.toFixed(1)),
+      headline: `${peer.teamName} ${conferenceTrajectoryPhrase(peer.trajectory)}; ${detail}.`,
+    };
+  });
+}
+
+function buildTeamConcerns(context) {
+  const items = [];
+  const aging = context.snapshot.roster
+    .filter((row) => row.age >= 33 && row.ovr >= 80)
+    .sort((a, b) => b.ovr - a.ovr || b.age - a.age)
+    .slice(0, 2);
+  for (const row of aging) {
+    items.push(`${row.name} is still ${row.ovr} OVR at age ${row.age}, leaving a meaningful part of the team's ceiling tied to an older veteran staying healthy and productive.`);
+  }
+  for (const row of context.extensionWatch.slice(0, 2)) items.push(row.headline);
+  const extensionNames = new Set(context.extensionWatch.map((row) => normalizeName(row.name)));
+  for (const row of context.ownExpiringWatch.filter((item) => !extensionNames.has(normalizeName(item.name))).slice(0, 2)) {
+    items.push(`${row.name} (${row.overall} OVR) can reach free agency after this season if no new deal changes the timeline.`);
+  }
+  return uniqueNames(items, 6);
+}
+
 function primaryStoryline(context) {
   const topIncoming = context.activity.significant.find((event) => event.toTeam && normalizeName(event.toTeam) === normalizeName(context.canonical) && event.overall >= 84);
   const topOutgoing = context.activity.outgoingTrades.find((event) => event.overall >= 84);
   const topDeparture = context.turnover?.departures?.find((row) => row.previousOverall >= 84);
   const top = context.snapshot.top[0];
-  if (context.previousRow?.champion) return { type:"title_defense", subject:context.canonical, question:`Can ${context.canonical} defend the championship?` };
+  if (context.previousRow?.champion) return { type:"title_defense", subject:context.canonical, statement:`${context.canonical} enters the season carrying the pressure of a championship defense.` };
   if (topDeparture) {
     const destination = topDeparture.destination ? ` to ${topDeparture.destination}` : "";
-    return { type:"roster_reset", subject:topDeparture.name, question:`How does ${context.canonical} replace ${topDeparture.name} after losing him${destination}?` };
+    return { type:"roster_reset", subject:topDeparture.name, statement:`The roster now has to absorb ${topDeparture.name}'s departure${destination}, making that loss the defining personnel challenge entering the season.` };
   }
-  if (topIncoming) return { type:"roster_reset", subject:topIncoming.playerName, question:`How far can ${context.canonical} go after adding ${topIncoming.playerName}?` };
-  if (topOutgoing) return { type:"roster_reset", subject:topOutgoing.playerName, question:`What becomes of ${context.canonical} after moving ${topOutgoing.playerName}?` };
-  if (top?.ovr >= 87 && top?.age >= 28) return { type:"star_window", subject:top.name, question:`Can ${context.canonical} maximize ${top.name}'s prime before the window changes?` };
-  if (context.snapshot.youngCore.length >= 2) return { type:"development", subject:context.snapshot.youngCore[0]?.name, question:`Which part of ${context.canonical}'s young core becomes the next real centerpiece?` };
-  return { type:"direction", subject:top?.name || context.canonical, question:`What did ${context.canonical} actually learn about its direction last season?` };
+  if (topIncoming) return { type:"roster_reset", subject:topIncoming.playerName, statement:`Adding ${topIncoming.playerName} changes the ceiling of the roster and raises the expectations immediately.` };
+  if (topOutgoing) return { type:"roster_reset", subject:topOutgoing.playerName, statement:`Moving ${topOutgoing.playerName} has changed the direction of the roster and put more responsibility on the players who remain.` };
+  if (top?.ovr >= 87 && top?.age >= 30) return { type:"star_window", subject:top.name, statement:`The season is tied to maximizing what remains of ${top.name}'s elite window at age ${top.age}.` };
+  if (context.snapshot.youngCore.length >= 2) return { type:"development", subject:context.snapshot.youngCore[0]?.name, statement:`The season will show whether ${naturalList(context.snapshot.youngCore.slice(0, 3).map((row) => row.name))} are ready to turn promise into a real competitive core.` };
+  return { type:"direction", subject:top?.name || context.canonical, statement:`This season is about turning last year's evidence into a clearer competitive identity.` };
+}
+
+function buildTeamSections(context) {
+  const transactionItems = context.transactionStories || [];
+  const contractItems = [
+    ...context.extensionWatch.map((row) => row.headline),
+    ...context.ownExpiringWatch
+      .filter((row) => !context.extensionWatch.some((ext) => normalizeName(ext.name) === normalizeName(row.name)))
+      .map((row) => `${row.name} (${row.overall} OVR) is on an expiring deal and can reach free agency after the season.`),
+  ];
+  const concernItems = buildTeamConcerns(context);
+  const moodItems = context.moodPulse ? [context.moodPulse.summary, ...context.moodPulse.items] : [];
+
+  return [
+    { title: "How the roster changed", items: transactionItems.slice(0, 6) },
+    { title: "Pressure points", items: concernItems.slice(0, 5) },
+    { title: "Contract watch", items: contractItems.slice(0, 6) },
+    { title: "Locker room pulse", items: moodItems.slice(0, 5) },
+  ].filter((section) => section.items.length);
+}
+
+function buildLeagueSections(context) {
+  const conferenceItems = context.conferenceCompetition.map((row) => row.headline);
+  const majorTrades = context.leagueBoard.trades
+    .filter((event) => event.overall >= 78 || event.score >= 72)
+    .slice(0, 6)
+    .map((event) => event.headline);
+  const franchiseShifts = context.leagueBoard.franchiseShifts.slice(0, 5).map((event) => event.headline);
+  const majorSignings = context.leagueBoard.signings
+    .filter((event) => event.overall >= 78 || event.score >= 70)
+    .slice(0, 6)
+    .map((event) => event.headline);
+
+  return [
+    { title: `${conferenceDisplayName(conferenceNameOf(context.team))} competition`, items: conferenceItems },
+    { title: "Major trades", items: majorTrades },
+    { title: "Franchise shifts", items: franchiseShifts },
+    { title: "Free agency", items: majorSignings },
+  ].filter((section) => section.items.length);
+}
+
+function buildOutlookSections(context) {
+  return [
+    { title: "Potential expiring trade targets", items: context.expiringTradeTargets.map((row) => row.headline) },
+    { title: `${context.canonical} contract decisions`, items: [
+      ...context.extensionWatch.map((row) => row.headline),
+      ...context.ownExpiringWatch
+        .filter((row) => !context.extensionWatch.some((ext) => normalizeName(ext.name) === normalizeName(row.name)))
+        .map((row) => `${row.name} (${row.overall} OVR) is scheduled to reach free agency after this season.`),
+    ] },
+  ].filter((section) => section.items.length);
 }
 
 function buildTeamParagraphs(context) {
-  const { canonical, previousRow, previousStats, snapshot, activity, teamProgression, continuity, turnover } = context;
+  const { canonical, previousRow, previousStats, snapshot, teamProgression, continuity } = context;
   const record = formatRecord(previousRow);
   const finish = formatFinish(previousRow);
   const leader = previousStats[0];
-  const leaderLine = leader && formatStatLine(leader) ? `${leader.name} led the season at ${formatStatLine(leader)}.` : "";
-  const first = previousRow
-    ? `${canonical} closed last season ${record ? `${record} ` : ""}and ${finish}. ${leaderLine}`.trim()
-    : `${canonical} enters the year without a complete prior-season archive, so the current roster has to establish the story from here.`;
-
-  const additions = uniqueNames([
-    ...activity.incomingTrades.map((event) => event.playerName),
-    ...activity.signings.map((event) => event.playerName),
-  ], 4);
-  const departures = uniqueNames([
-    ...activity.outgoingTrades.map((event) => event.playerName),
-    ...(turnover?.departures || []).map((row) => row.name),
-  ], 4);
-  const departureDetails = (turnover?.departures || [])
-    .filter((row) => departures.includes(row.name))
-    .slice(0, 2)
-    .map((row) => row.destination ? `${row.name} is now with ${row.destination}` : `${row.name} is no longer on the roster`);
-  const prog = teamProgression.slice(0, 3).map((row) => `${row.name} ${row.delta > 0 ? "rose" : "fell"} ${Math.abs(row.delta)} OVR to ${row.currentOverall}`);
-  const movement = [
-    additions.length ? `The offseason added ${naturalList(additions)}.` : "",
-    departureDetails.length ? `${departureDetails.join("; ")}.` : departures.length ? `${naturalList(departures)} left the roster.` : "",
-    prog.length ? `${prog.join("; ")}.` : "",
-  ].filter(Boolean).join(" ");
-  const topNames = snapshot.top.slice(0, 3).map((row) => `${row.name} (${row.ovr} OVR${row.age ? `, age ${row.age}` : ""})`);
-  const second = `${movement || "The offseason produced no saved blockbuster transaction, making internal development the largest change."} The current hierarchy starts with ${naturalList(topNames) || "an unsettled rotation"}.`;
-
-  const continuityLead = continuity?.evidence
-    ? `Last year's central question has ${continuity.status === "escalated" ? "become more urgent" : continuity.status === "resolved" ? "been answered at the highest level" : continuity.status === "reversed" ? "changed completely" : "carried forward"}: ${continuity.evidence}.`
+  const roundedLeader = roundedProductionText(leader);
+  const leaderLine = leader && roundedLeader
+    ? `${leader.name} carried the biggest nightly load, giving them ${roundedLeader}.`
     : "";
-  const third = `${continuityLead} ${context.primaryStoryline.question}`.trim();
-  return [first, second, third];
+  const moodLead = context.moodPulse?.summary || "";
+  const first = previousRow
+    ? `${choose(`${canonical}|${context.seasonYear}|opening`, [
+        `${canonical} does not enter ${seasonLabel(context.seasonYear)} with a blank slate`,
+        `The new season starts with last spring still hanging over ${canonical}`,
+        `${canonical} arrives at camp with a full year of evidence behind it`,
+        `Last season left ${canonical} with a clearer picture of what this group is`,
+      ])}. The team finished ${record || "the schedule"} and ${finish}. ${leaderLine} ${moodLead}`.trim()
+    : `${canonical} enters the year without a complete prior-season archive, so the current roster has to establish the tone itself. ${moodLead}`.trim();
+
+  const transactionStories = context.transactionStories || [];
+  const second = transactionStories.length
+    ? transactionStories.slice(0, 3).join(" ")
+    : "The core came through the offseason mostly intact, so this season will lean more heavily on internal growth than on a dramatic personnel reset.";
+
+  const top = snapshot.top[0];
+  const secondStar = snapshot.top[1];
+  const aging = snapshot.roster.filter((row) => row.ovr >= 82 && row.age >= 33).sort((a, b) => b.ovr - a.ovr).slice(0, 2);
+  const identity = [];
+  if (top) identity.push(`${top.name} remains the central piece at ${top.ovr} OVR`);
+  if (secondStar) identity.push(`${secondStar.name} gives the roster another major pillar at ${secondStar.ovr} OVR`);
+  if (aging.length) identity.push(`${naturalList(aging.map((row) => `${row.name}, now ${row.age}`))} makes age and durability part of the competitive equation`);
+  const third = `${identity.length ? `${naturalList(identity)}.` : "The rotation still needs a clear hierarchy."}${teamProgression.length ? ` Internally, ${teamProgression.slice(0, 3).map((row) => `${row.name} ${row.delta > 0 ? "moved forward" : "gave back ground"}`).join(", ")}, changing the amount of responsibility the coaching staff can reasonably place on the younger pieces.` : ""}`;
+
+  const concernItems = buildTeamConcerns(context).slice(0, 3);
+  const continuityLead = continuity?.evidence ? `The thread from last season has not disappeared: ${continuity.evidence}.` : "";
+  const fourthFallback = transactionStories[3] || context.primaryStoryline.statement;
+  const fourth = `${continuityLead} ${concernItems.length
+    ? `The pressure entering camp is less abstract now. ${concernItems.join(" ")}`
+    : fourthFallback}`.trim();
+
+  return [first, second, third, fourth].filter(Boolean);
 }
 
 function buildLeagueParagraphs(context) {
-  const { canonical, leagueBoard, previousEntry, snapshot } = context;
+  const { canonical, leagueBoard, previousEntry } = context;
   const champ = text(previousEntry?.champion);
-  const firstEvents = leagueBoard.events.filter((event) => ["champion","award","team_season"].includes(event.type)).slice(0, 3);
+  const firstEvents = leagueBoard.events.filter((event) => ["champion", "award", "team_season"].includes(event.type)).slice(0, 4);
   const first = firstEvents.length
     ? firstEvents.map((event) => `${event.headline}.`).join(" ")
-    : champ ? `${champ} begins the year as defending champion.` : "The previous season archive does not preserve one complete headline, so the league hierarchy has to be read through the current rosters.";
+    : champ
+      ? `${champ} begins the year carrying the league's championship target.`
+      : "The league opens without one overwhelming archived headline, which puts more weight on the changes teams made after the season ended.";
 
-  const movement = leagueBoard.events.filter((event) => ["trade","free_agency","retirement","breakout","regression"].includes(event.type)).slice(0, 4);
-  const second = movement.length
-    ? movement.map((event) => `${event.headline}.`).join(" ")
-    : "No single saved transaction or progression event dominates the league-wide ledger entering this season.";
+  const movementLeads = [...leagueBoard.trades.slice(0, 3), ...leagueBoard.signings.slice(0, 3), ...leagueBoard.franchiseShifts.slice(0, 2)]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4)
+    .map((event) => event.headline);
+  const second = movementLeads.length
+    ? `${choose(`${canonical}|${context.seasonYear}|league-moved`, [
+        "The summer changed the shape of the league in several places",
+        "The transaction wire mattered this offseason",
+        "Several front offices chose movement over continuity",
+      ])}. ${movementLeads.join(". ")}. Those decisions will show up in rotations and playoff matchups long before they show up in a retrospective grade.`
+    : "The offseason produced no saved blockbuster large enough to redefine the landscape, so continuity will matter more than transaction shock at the start of the year.";
 
-  const peers = getAllTeams(context.leagueData).map((team) => ({ name:teamNameOf(team), snap:rosterSnapshot(team) }))
-    .sort((a,b)=>(b.snap.average + (b.snap.top[0]?.ovr||0)*0.15) - (a.snap.average + (a.snap.top[0]?.ovr||0)*0.15));
-  const rank = peers.findIndex((row) => normalizeName(row.name) === normalizeName(canonical)) + 1;
-  const nearby = peers.filter((row) => normalizeName(row.name) !== normalizeName(canonical)).slice(Math.max(0, rank - 3), Math.max(3, rank + 1)).map((row)=>row.name).slice(0,3);
-  const third = `${canonical} open with a rotation averaging ${snapshot.average.toFixed(1)} OVR and sits roughly ${rank ? `#${rank}` : "in the middle"} by current roster strength. ${nearby.length ? `${naturalList(nearby)} are among the teams occupying the same immediate competitive map.` : "The current roster has to define its own tier quickly."}`;
+  const conference = conferenceDisplayName(conferenceNameOf(context.team));
+  const rivals = context.conferenceCompetition.slice(0, 3);
+  const rivalSentences = rivals.map((row) => row.headline.replace(/\.$/, ""));
+  const third = rivals.length
+    ? `${possessive(canonical)} real race begins inside the ${conference}. ${rivalSentences.join(". ")}. That is the neighborhood that will decide seeding, matchup pressure and how aggressive the front office needs to become before the deadline.`
+    : `${possessive(canonical)} first measure is the ${conference}. The playoff race there will tell the front office far more than a generic league-wide roster ranking ever could.`;
   return [first, second, third];
 }
 
@@ -916,24 +1694,27 @@ function buildProspectParagraphs(context) {
 }
 
 function buildOutlookParagraphs(context) {
-  const { canonical, snapshot, previousRow, activity, futureFirsts, continuity, primaryStoryline:story } = context;
-  const top = snapshot.top[0]; const secondStar = snapshot.top[1];
-  const core = snapshot.top.slice(0,3).map((row)=>`${row.name} (${row.ovr} OVR${row.age?`, age ${row.age}`:""})`);
-  const first = `${canonical} begins ${seasonLabel(context.seasonYear)} around ${naturalList(core) || "an unsettled core"}. ${previousRow ? `That group inherits a ${formatRecord(previousRow)} season that ${formatFinish(previousRow)}.` : "There is no complete previous result in the archive."}`;
-  let pressure = "";
-  if (top?.ovr >= 87 && top?.age >= 30) pressure = `${top.name} is ${top.age}, so the best player on the roster is already in a win-now age band.`;
-  else if (snapshot.youngCore.length >= 2) pressure = `${snapshot.youngCore[0].name} and ${snapshot.youngCore[1].name} give the franchise multiple high-level players age 25 or younger.`;
-  else if (snapshot.direction === "rebuilding") pressure = `The rotation grades below contender level and the season should be judged by how much real core talent emerges.`;
-  else pressure = `The roster is neither an obvious teardown nor a finished contender, which makes the next major move unusually important.`;
-  const second = `${pressure} The team controls ${futureFirsts} listed first-round pick${futureFirsts === 1 ? "" : "s"} over the next four drafts, giving the front office ${futureFirsts >= 3 ? "real ammunition" : futureFirsts ? "some flexibility" : "very little draft insulation"}.`;
-  const starMove = activity.significant.find((event)=>event.overall >= 84);
-  const evidence = starMove ? `${starMove.headline}.` : continuity?.evidence ? `${continuity.evidence}.` : "";
-  const agePair = top && secondStar ? `${top.name}/${secondStar.name}` : top?.name || "the core";
-  const third = `${evidence} The management question is specific: ${story.question} Every trade, extension and rotation decision should be judged against what it does to the ${agePair} timeline.`.trim();
+  const { canonical, snapshot, previousRow, activity, futureFirsts, expiringTradeTargets, extensionWatch, ownExpiringWatch } = context;
+  const top = snapshot.top[0];
+  const core = snapshot.top.slice(0, 3).map((row) => `${row.name} (${row.ovr} OVR${row.age ? `, age ${row.age}` : ""})`);
+  const first = `${canonical} opens ${seasonLabel(context.seasonYear)} around ${naturalList(core) || "an unsettled core"}. ${previousRow ? `That group is coming out of a ${formatRecord(previousRow)} season that ${formatFinish(previousRow)}.` : "The prior-season archive is incomplete, so the current roster has to establish the standard itself."}`;
+
+  const pressureBits = [];
+  const aging = snapshot.roster.filter((row) => row.ovr >= 82 && row.age >= 33).sort((a, b) => b.ovr - a.ovr).slice(0, 2);
+  if (aging.length) pressureBits.push(`${naturalList(aging.map((row) => `${row.name} at age ${row.age}`))} keeps part of the team's ceiling tied to an older veteran timeline`);
+  if (extensionWatch.length) pressureBits.push(`${extensionWatch.length} meaningful extension decision${extensionWatch.length === 1 ? " is" : "s are"} already approaching`);
+  const nonExtensionExpirings = ownExpiringWatch.filter((row) => !extensionWatch.some((ext) => normalizeName(ext.name) === normalizeName(row.name)));
+  if (nonExtensionExpirings.length) pressureBits.push(`${naturalList(nonExtensionExpirings.slice(0, 2).map((row) => row.name))} can reach free agency after the season`);
+  if (context.moodPulse?.average < 60) pressureBits.push("the locker room is entering the year with more tension than comfort");
+  const second = `${pressureBits.length ? `The front office is managing several live pressures: ${pressureBits.join("; ")}.` : "The front office enters the year without one obvious crisis hanging over the roster."} The team controls ${futureFirsts} listed first-round pick${futureFirsts === 1 ? "" : "s"} over the next four drafts${expiringTradeTargets.length ? `, while ${expiringTradeTargets.length} outside players on expiring deals currently grade as realistic market fits` : ""}.`;
+
+  const starMove = activity.significant.find((event) => event.overall >= 84);
+  const evidence = starMove ? `${starMove.headline}. ` : "";
+  const third = `${evidence}${context.primaryStoryline.statement} The season should be judged by whether the roster's decisions strengthen that direction rather than simply preserve the status quo.`.trim();
   return [first, second, third];
 }
 
-export function buildSeasonBriefingData(leagueData, teamName, explicitYear = null) {
+export function buildSeasonBriefingData(leagueData, teamName, explicitYear = null, options = {}) {
   const seasonYear = getSeasonBriefingSeasonYear(leagueData, explicitYear);
   const canonical = canonicalTeamName(teamName) || text(teamName);
   const team = findTeam(leagueData, canonical);
@@ -974,21 +1755,27 @@ export function buildSeasonBriefingData(leagueData, teamName, explicitYear = nul
   const firstRoundPicks = ownedFirstRoundPicks(leagueData, canonical, draft.draftYear);
   const futureFirsts = totalFutureFirsts(leagueData, canonical, seasonYear, 4);
   const recentRookieRows = recentRookies(team, seasonYear);
+  const extensionWatch = buildExtensionWatch(team, leagueData);
+  const ownExpiringWatch = buildOwnExpiringWatch(team, leagueData);
+  const expiringTradeTargets = buildExpiringTradeTargets(leagueData, canonical, snapshot);
+  const moodPulse = buildMoodPulse(options?.moodData || null, previousRow, canonical);
 
   const context = {
     leagueData, seasonYear, canonical, team, previousEntry, previousRow, snapshot,
     progressionRows, progression, teamProgression:teamProgressionRows,
     leagueBoard, activity, previousStats, turnover, draft, firstRoundPicks, futureFirsts,
-    recentRookieRows,
+    recentRookieRows, extensionWatch, ownExpiringWatch, expiringTradeTargets, moodPulse,
   };
+  context.transactionStories = buildTeamTransactionStories(context);
+  context.conferenceCompetition = buildConferenceCompetition(context);
   const prior = previousStoredSnapshot(leagueData, canonical, seasonYear);
   const story = primaryStoryline(context);
   context.primaryStoryline = story;
   context.continuity = continuityAssessment(prior, context);
 
   const dossier = {
-    version: 2,
-    generatedFrom: "save_events",
+    version: 5,
+    generatedFrom: "cinematic_transaction_timeline_market_contract_mood_intel",
     seasonYear,
     previousSeasonYear: previousEntry?.seasonYear ?? null,
     previousRecord: formatRecord(previousRow),
@@ -1001,7 +1788,16 @@ export function buildSeasonBriefingData(leagueData, teamName, explicitYear = nul
     },
     teamProgression: teamProgressionRows,
     significantTeamMoves: activity.significant.slice(0, 6).map((event) => ({ type:event.type, headline:event.headline, overall:event.overall || 0 })),
-    leagueHeadlines: leagueBoard.events.slice(0, 8).map((event) => ({ type:event.type, headline:event.headline, score:event.score })),
+    transactionStories: context.transactionStories.slice(0, 6),
+    majorTrades: leagueBoard.trades.slice(0, 6).map((event) => ({ playerName:event.playerName, fromTeam:event.fromTeam, toTeam:event.toTeam, overall:event.overall || 0, phase:event.phase || "unknown", headline:event.headline })),
+    majorSignings: leagueBoard.signings.slice(0, 6).map((event) => ({ playerName:event.playerName, toTeam:event.toTeam, overall:event.overall || 0, years:event.years || 0, aav:event.aav || 0, headline:event.headline })),
+    franchiseShifts: leagueBoard.franchiseShifts.slice(0, 5).map((event) => ({ teamName:event.teamName, severity:event.severity, headline:event.headline })),
+    extensionWatch: extensionWatch.slice(0, 6).map((row) => ({ name:row.name, overall:row.overall, yearsLeft:row.yearsLeft, extensionType:row.extensionType, headline:row.headline })),
+    ownExpiringWatch: ownExpiringWatch.slice(0, 6).map((row) => ({ name:row.name, overall:row.overall, age:row.age, yearsLeft:row.yearsLeft, headline:row.headline })),
+    moodPulse: moodPulse ? { average:moodPulse.average, summary:moodPulse.summary, unsettled:moodPulse.unsettled } : null,
+    conferenceCompetition: context.conferenceCompetition.slice(0, 4),
+    expiringTradeTargets: expiringTradeTargets.slice(0, 6).map((row) => ({ name:row.name, teamName:row.teamName, overall:row.overall, age:row.age, salary:row.salary, headline:row.headline })),
+    leagueHeadlines: leagueBoard.events.slice(0, 12).map((event) => ({ type:event.type, headline:event.headline, score:event.score })),
     draftYear: draft.draftYear,
     draftClassCount: draft.classCount,
     futureFirsts,
@@ -1023,19 +1819,42 @@ export function buildSeasonBriefingData(leagueData, teamName, explicitYear = nul
     teamSlug: getSeasonBriefingTeamSlug(canonical),
     seasonYear,
     seasonLabel: seasonLabel(seasonYear),
-    source: "event_dossier_v2",
+    source: "event_dossier_v5",
     dossier,
     tabs: {
-      team: { eyebrow:"TEAM BRIEFING", title:canonical, paragraphs:buildTeamParagraphs(context) },
-      league: { eyebrow:"LEAGUE LANDSCAPE", title:"What changed around the league", paragraphs:buildLeagueParagraphs(context), progression },
-      prospects: { eyebrow:"PROSPECTS & PICKS", title:`The ${draft.draftYear} board`, paragraphs:buildProspectParagraphs(context), prospects:prospectRows, classCount:draft.classCount, draftYear:draft.draftYear },
-      outlook: { eyebrow:"SEASON OUTLOOK", title:"What this season asks", paragraphs:buildOutlookParagraphs(context) },
+      team: {
+        eyebrow:"TEAM BRIEFING",
+        title:canonical,
+        paragraphs:buildTeamParagraphs(context),
+        sections:buildTeamSections(context),
+      },
+      league: {
+        eyebrow:"LEAGUE LANDSCAPE",
+        title:"The league has moved",
+        paragraphs:buildLeagueParagraphs(context),
+        sections:buildLeagueSections(context),
+        progression,
+      },
+      prospects: {
+        eyebrow:"PROSPECTS & PICKS",
+        title:`The ${draft.draftYear} board`,
+        paragraphs:buildProspectParagraphs(context),
+        prospects:prospectRows,
+        classCount:draft.classCount,
+        draftYear:draft.draftYear,
+      },
+      outlook: {
+        eyebrow:"SEASON OUTLOOK",
+        title:"The season ahead",
+        paragraphs:buildOutlookParagraphs(context),
+        sections:buildOutlookSections(context),
+      },
     },
   };
 }
 
-export function getSeasonBriefingDiagnostics(leagueData, teamName, explicitYear = null) {
-  const briefing = buildSeasonBriefingData(leagueData, teamName, explicitYear);
+export function getSeasonBriefingDiagnostics(leagueData, teamName, explicitYear = null, options = {}) {
+  const briefing = buildSeasonBriefingData(leagueData, teamName, explicitYear, options);
   return briefing ? {
     key: briefing.key,
     source: briefing.source,
