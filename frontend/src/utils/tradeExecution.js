@@ -1,4 +1,6 @@
+import { computeTeamRatings } from "../api/teamRatings.js";
 import { getLeagueFinancialRules } from "./leagueFinancials.js";
+import { buildSmartRotation } from "./ensureGameplans.js";
 import { evaluateTradeTeamImpact } from "./tradeTeamImpact.js";
 import { findIneligibleTradePlayer } from "./tradeRosterEligibility.js";
 import {
@@ -42,6 +44,66 @@ const CPU_CPU_RECENT_ACQUISITION_COOLDOWN_DAYS = 45;
 function finiteNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+
+const MEGA_HEALTHY_POWER_PROTECTION_RANK = 14;
+const megaHealthyPowerRatingsCacheForExecution = new WeakMap();
+
+function getMegaHealthyPowerRosterSignatureForExecution(team = {}) {
+  return [
+    "mega-healthy-power-rankings-v2",
+    ...(Array.isArray(team?.players) ? team.players : [])
+      .map((player) => [
+        player?.name || player?.player || "",
+        player?.pos || player?.position || "",
+        player?.secondaryPos || "",
+        finiteNumber(player?.overall ?? player?.ovr ?? player?.rating, 0),
+        finiteNumber(player?.offRating ?? player?.off ?? player?.offense, 0),
+        finiteNumber(player?.defRating ?? player?.def ?? player?.defense, 0),
+        finiteNumber(player?.stamina, 75),
+        finiteNumber(player?.potential ?? player?.pot, 0),
+        finiteNumber(player?.age, 0),
+      ].join("|"))
+      .sort(),
+  ].join("||");
+}
+
+function buildMegaHealthyFallbackMinutesForExecution(team = {}) {
+  const players = [...(Array.isArray(team?.players) ? team.players : [])]
+    .filter((player) => player?.name || player?.player)
+    .sort((a, b) => finiteNumber(b?.overall ?? b?.ovr ?? b?.rating, 0) - finiteNumber(a?.overall ?? a?.ovr ?? a?.rating, 0));
+  const minuteSlots = [36, 34, 32, 30, 28, 24, 20, 16, 12, 8];
+  const minutes = {};
+  for (let index = 0; index < Math.min(players.length, minuteSlots.length); index += 1) {
+    const name = players[index]?.name || players[index]?.player;
+    if (name) minutes[name] = minuteSlots[index];
+  }
+  return minutes;
+}
+
+function getMegaHealthyPowerRankingsOverallForExecution(team = {}) {
+  const fallback = teamTopOvrForMega(team, 8);
+  if (!team || typeof team !== "object") return fallback;
+  const signature = getMegaHealthyPowerRosterSignatureForExecution(team);
+  const cached = megaHealthyPowerRatingsCacheForExecution.get(team);
+  if (cached?.signature === signature) return cached.overall;
+
+  let overall = fallback;
+  try {
+    const built = buildSmartRotation(Array.isArray(team?.players) ? team.players : []);
+    const minutes = built?.obj && typeof built.obj === "object"
+      ? built.obj
+      : buildMegaHealthyFallbackMinutesForExecution(team);
+    const ratings = computeTeamRatings(team, minutes);
+    const powerRankingsOverall = finiteNumber(ratings?.exactOverall ?? ratings?.overall, fallback);
+    if (powerRankingsOverall > 0) overall = powerRankingsOverall;
+  } catch {
+    overall = fallback;
+  }
+
+  megaHealthyPowerRatingsCacheForExecution.set(team, { signature, overall });
+  return overall;
 }
 
 
@@ -1123,7 +1185,7 @@ function megaHealthyPowerRankForSeller(leagueData = {}, sellerName = "") {
   const rows = getAllTeamsFromLeague(leagueData)
     .map((team) => ({
       name: team?.name || team?.teamName || "",
-      power: teamTopOvrForMega(team, 8),
+      power: getMegaHealthyPowerRankingsOverallForExecution(team),
     }))
     .filter((row) => row.name && row.power > 0)
     .sort((a, b) => b.power - a.power);
@@ -1150,7 +1212,7 @@ function megaSellerDirectionForExecution(leagueData = {}, recordsByTeam = {}, se
   }
   const under500 = pct != null && pct < 0.5;
   const bottomHalf = leagueRank != null && leagueRank >= 16;
-  const protectedHealthyCore = healthyPowerRank != null && healthyPowerRank <= 12;
+  const protectedHealthyCore = healthyPowerRank != null && healthyPowerRank <= MEGA_HEALTHY_POWER_PROTECTION_RANK;
   return {
     phase,
     games,
@@ -1166,7 +1228,7 @@ function megaSellerDirectionForExecution(leagueData = {}, recordsByTeam = {}, se
 function strictMegaSellerExecutionBlockReason(leagueData = {}, recordsByTeam = {}, sellerTeam = {}, targetPlayer = null) {
   const direction = megaSellerDirectionForExecution(leagueData, recordsByTeam, sellerTeam);
   if (direction.conferenceRank != null && direction.conferenceRank <= 7) return "seller_top7_conference";
-  if (direction.protectedHealthyCore) return "seller_top12_healthy_team_ovr";
+  if (direction.protectedHealthyCore) return "seller_top14_healthy_power_rankings_ovr";
   if (!direction.eligible) return "seller_not_mid_bad_retool_or_rebuild";
   if (targetPlayer) {
     const ovr = finiteNumber(targetPlayer?.overall ?? targetPlayer?.ovr ?? targetPlayer?.rating, 0);

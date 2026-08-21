@@ -4,7 +4,9 @@ import {
   validateCpuTradeCandidateOnLeague,
 } from "./tradeExecution.js";
 import { normalizeDraftPickAsset, normalizeTeamName } from "./draftPicks.js";
+import { computeTeamRatings } from "../api/teamRatings.js";
 import { getContractSeasonYear } from "./seasonContext.js";
+import { buildSmartRotation } from "./ensureGameplans.js";
 import {
   countStandardRosterPlayers,
   TRADE_TEMPORARY_STANDARD_ROSTER_MAX,
@@ -69,6 +71,66 @@ function finiteNumber(value, fallback = 0) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+
+const MEGA_HEALTHY_POWER_PROTECTION_RANK = 14;
+const megaHealthyPowerRatingsCache = new WeakMap();
+
+function getMegaHealthyPowerRosterSignature(team = {}) {
+  return [
+    "mega-healthy-power-rankings-v2",
+    ...(Array.isArray(team?.players) ? team.players : [])
+      .map((player) => [
+        player?.name || player?.player || "",
+        player?.pos || player?.position || "",
+        player?.secondaryPos || "",
+        finiteNumber(player?.overall ?? player?.ovr ?? player?.rating, 0),
+        finiteNumber(player?.offRating ?? player?.off ?? player?.offense, 0),
+        finiteNumber(player?.defRating ?? player?.def ?? player?.defense, 0),
+        finiteNumber(player?.stamina, 75),
+        finiteNumber(player?.potential ?? player?.pot, 0),
+        finiteNumber(player?.age, 0),
+      ].join("|"))
+      .sort(),
+  ].join("||");
+}
+
+function buildMegaHealthyFallbackMinutes(team = {}) {
+  const players = [...(Array.isArray(team?.players) ? team.players : [])]
+    .filter((player) => player?.name || player?.player)
+    .sort((a, b) => playerOvr(b) - playerOvr(a));
+  const minuteSlots = [36, 34, 32, 30, 28, 24, 20, 16, 12, 8];
+  const minutes = {};
+  for (let index = 0; index < Math.min(players.length, minuteSlots.length); index += 1) {
+    const name = players[index]?.name || players[index]?.player;
+    if (name) minutes[name] = minuteSlots[index];
+  }
+  return minutes;
+}
+
+function getMegaHealthyPowerRankingsOverall(team = {}) {
+  const fallback = teamTopOvr(team, 8);
+  if (!team || typeof team !== "object") return fallback;
+  const signature = getMegaHealthyPowerRosterSignature(team);
+  const cached = megaHealthyPowerRatingsCache.get(team);
+  if (cached?.signature === signature) return cached.overall;
+
+  let overall = fallback;
+  try {
+    const built = buildSmartRotation(Array.isArray(team?.players) ? team.players : []);
+    const minutes = built?.obj && typeof built.obj === "object"
+      ? built.obj
+      : buildMegaHealthyFallbackMinutes(team);
+    const ratings = computeTeamRatings(team, minutes);
+    const powerRankingsOverall = finiteNumber(ratings?.exactOverall ?? ratings?.overall, fallback);
+    if (powerRankingsOverall > 0) overall = powerRankingsOverall;
+  } catch {
+    overall = fallback;
+  }
+
+  megaHealthyPowerRatingsCache.set(team, { signature, overall });
+  return overall;
 }
 
 function getSeasonYear(leagueData = {}, context = {}) {
@@ -1394,7 +1456,7 @@ function megaLeagueRankForTeam(leagueData = {}, context = {}, teamName = "") {
 
 function megaHealthyPowerRankForTeam(leagueData = {}, teamName = "") {
   const rows = getAllTeams(leagueData)
-    .map((team) => ({ name: teamNameOf(team), power: teamTopOvr(team, 8) }))
+    .map((team) => ({ name: teamNameOf(team), power: getMegaHealthyPowerRankingsOverall(team) }))
     .filter((row) => row.name && row.power > 0)
     .sort((a, b) => b.power - a.power);
   const index = rows.findIndex((row) => sameTeam(row.name, teamName));
@@ -1461,7 +1523,7 @@ function buildMegaDirectionMap(leagueData = {}, context = {}) {
     }
     const under500 = row.pct != null && row.pct < 0.5;
     const bottomHalf = row.leagueRank != null && row.leagueRank >= 16;
-    const protectedHealthyCore = row.healthyPowerRank != null && row.healthyPowerRank <= 14;
+    const protectedHealthyCore = row.healthyPowerRank != null && row.healthyPowerRank <= MEGA_HEALTHY_POWER_PROTECTION_RANK;
     out.set(normalizeTeamName(row.teamName), {
       phase,
       pct: row.pct,
@@ -1497,7 +1559,7 @@ function megaSellerDirection(leagueData = {}, context = {}, sellerTeam = {}) {
   }
   const under500 = pct != null && pct < 0.5;
   const bottomHalf = leagueRank != null && leagueRank >= 16;
-  const protectedHealthyCore = healthyPowerRank != null && healthyPowerRank <= 14;
+  const protectedHealthyCore = healthyPowerRank != null && healthyPowerRank <= MEGA_HEALTHY_POWER_PROTECTION_RANK;
   return {
     phase,
     pct,
@@ -1515,7 +1577,7 @@ function megaSellerDirection(leagueData = {}, context = {}, sellerTeam = {}) {
 function strictMegaSellerBlockReason(leagueData = {}, context = {}, sellerTeam = {}, targetPlayer = null) {
   const direction = megaSellerDirection(leagueData, context, sellerTeam);
   if (direction.conferenceRank != null && direction.conferenceRank <= 7) return "seller_top7_conference";
-  if (direction.protectedHealthyCore) return "seller_top14_healthy_team_ovr";
+  if (direction.protectedHealthyCore) return "seller_top14_healthy_power_rankings_ovr";
   if (!direction.eligible) return "seller_not_mid_bad_retool_or_rebuild";
   if (targetPlayer) {
     const ovr = playerOvr(targetPlayer);
