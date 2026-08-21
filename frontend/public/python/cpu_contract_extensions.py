@@ -230,23 +230,28 @@ def _v10_cpu_extension_evaluation(
     potential = _num(player.get("potential"), overall)
     age = _num(player.get("age"), 27)
 
+    # BM_PATCH45_ROOKIE_SIGNINGS_CPU_EXTENSIONS
+    # These are economic/old-feel OVR values, but previous gates were still too
+    # selective for a deflated roster ecosystem. CPU should retain useful young
+    # cores and mid-rotation pieces more often while keeping late-career role
+    # player extensions selective.
     if extension_type == "rookie_scale":
-        if potential < 84 and overall < 78:
+        if potential < 80 and overall < 70:
             return {"approved": False, "reason": "team_value_rookie_low_upside", "result": None, "coreScore": round(core_score, 2)}
-        if overall < 74 and potential < 87:
+        if overall < 68 and potential < 84:
             return {"approved": False, "reason": "team_value_rookie_not_core", "result": None, "coreScore": round(core_score, 2)}
-        minimum_core = 77.0
+        minimum_core = 72.5
     else:
-        if overall < 78 and core_score < 84:
+        if overall < 72 and core_score < 78.0:
             return {"approved": False, "reason": "team_value_veteran_not_core", "result": None, "coreScore": round(core_score, 2)}
-        if age >= 33 and overall < 80:
+        if age >= 34 and overall < 75 and core_score < 83.0:
             return {"approved": False, "reason": "team_value_older_role_player", "result": None, "coreScore": round(core_score, 2)}
-        if age >= 35 and overall < 86:
+        if age >= 36 and overall < 80:
             return {"approved": False, "reason": "team_value_late_career", "result": None, "coreScore": round(core_score, 2)}
-        minimum_core = 82.5
+        minimum_core = 75.0
 
     if phase in {"deadline", "rookie_deadline", "veteran_deadline"}:
-        minimum_core -= 0.75
+        minimum_core -= 1.0
     if core_score < minimum_core:
         return {"approved": False, "reason": "team_value_core_score", "result": None, "coreScore": round(core_score, 2)}
 
@@ -263,13 +268,13 @@ def _v10_cpu_extension_evaluation(
         first_apron = salary_cap * 1.27
     payroll = _team_payroll_for_year(team, extension_start) if extension_start else 0
 
-    # Rough second-apron-style tolerance. This is not a hard CBA reproduction;
-    # it prevents the old behavior where being $1 over the first apron blocked
-    # nearly every non-superstar extension.
+    # Keep payroll discipline, but define "core asset" on the new scale. This
+    # lets CPU teams retain useful young/core pieces instead of only stars.
     hard_budget = first_apron + max(10_000_000.0, salary_cap * 0.075)
     core_asset = bool(
-        overall >= 86
-        or (extension_type == "rookie_scale" and potential >= 88 and overall >= 76)
+        overall >= 80
+        or (extension_type == "rookie_scale" and potential >= 84 and overall >= 70)
+        or (age <= 27 and overall >= 74 and potential >= 78)
     )
 
     candidates = []
@@ -284,8 +289,8 @@ def _v10_cpu_extension_evaluation(
         if projected > hard_budget and not core_asset:
             saw_budget_reject = True
             continue
-        if projected > first_apron and overall < 80 and not (
-            extension_type == "rookie_scale" and potential >= 86
+        if projected > first_apron and overall < 74 and not (
+            extension_type == "rookie_scale" and potential >= 82
         ):
             saw_budget_reject = True
             continue
@@ -293,20 +298,20 @@ def _v10_cpu_extension_evaluation(
         package_score = 0.0
         if extension_type == "rookie_scale":
             package_score += years * 4.5
-            package_score += max(0.0, potential - 80.0) * 0.50
+            package_score += max(0.0, potential - 76.0) * 0.42
         else:
-            preferred_years = 4 if age <= 29 else 3 if age <= 32 else 2
-            package_score -= abs(years - preferred_years) * 3.5
-            if age >= 32 and years >= 4:
-                package_score -= 8.0
+            preferred_years = 4 if age <= 28 else 3 if age <= 32 else 2
+            package_score -= abs(years - preferred_years) * 3.25
+            if age >= 33 and years >= 4:
+                package_score -= 7.0
 
-        package_score += min(12.0, max(-5.0, core_score - 75.0))
+        package_score += min(12.0, max(-4.0, core_score - 72.0))
         package_score -= _num(package.get("valueRatio"), 1.0) * 2.0
 
         # Soft payroll pressure affects which ask the CPU chooses rather than
         # automatically killing the negotiation.
         over_apron = max(0.0, projected - first_apron)
-        package_score -= min(8.0, (over_apron / max(1.0, salary_cap)) * 55.0)
+        package_score -= min(7.0, (over_apron / max(1.0, salary_cap)) * 50.0)
         candidates.append((package_score, package, projected))
 
     if not candidates:
@@ -330,7 +335,7 @@ def _v10_cpu_extension_evaluation(
         "extensionType": extension_type,
         "askPackageId": ask_package.get("askPackageId") or ask_package.get("packageId"),
         "packageId": ask_package.get("packageId") or ask_package.get("askPackageId"),
-        "source": "cpu_contract_extension_player_ask_v10",
+        "source": "cpu_contract_extension_player_ask_v10_patch45",
         "phase": phase,
         "playerAsk": True,
         "acceptedByPlayerAsk": True,
@@ -357,7 +362,6 @@ def _v10_cpu_extension_evaluation(
         "firstApronAtExtensionStart": int(round(first_apron)),
     }
     return {"approved": True, "reason": "approved", "result": result, **{k: v for k, v in result.items() if k in {"coreScore", "futurePayrollBeforeExtension", "futurePayrollWithExtension"}}}
-
 
 def build_cpu_extension_offer(
     league_data: Dict[str, Any],

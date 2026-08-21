@@ -36,6 +36,24 @@ try:
 except Exception:  # pragma: no cover
     get_locker_room_moods = None
 
+
+# BM_PATCH42_EXTENSION_ECONOMY_IMPORT
+try:
+    from deflated_trade_scale import player_economic_overall, player_economic_potential
+except Exception:  # pragma: no cover
+    def player_economic_overall(player):
+        try:
+            return float(player.get("overall", player.get("ovr", 0)))
+        except Exception:
+            return 0.0
+
+    def player_economic_potential(player):
+        try:
+            base = player_economic_overall(player)
+            return max(base, float(player.get("potential", player.get("pot", base))))
+        except Exception:
+            return player_economic_overall(player)
+
 EXTENSION_SYSTEM_VERSION = "2026-08-08_selective_interest_v10"
 EXTENSION_HAPPY_MOOD_THRESHOLD = 76  # legacy compatibility only
 EXTENSION_INTEREST_THRESHOLD = 70
@@ -471,6 +489,8 @@ def _build_extension_ask_packages(
     max_years = max(min_years, _int(eligibility.get("maxYears"), min_years))
     overall = _num(player.get("overall"), 70)
     potential = _num(player.get("potential"), overall)
+    econ_overall = _num(player_economic_overall(player), overall)
+    econ_potential = max(econ_overall, _num(player_economic_potential(player), potential))
     age = _num(player.get("age"), 27)
     direction = _team_direction(league_data, team)
 
@@ -482,7 +502,7 @@ def _build_extension_ask_packages(
 
     if extension_type == "rookie_scale":
         base_premium = 1.035
-        if potential >= 90 or overall >= 86:
+        if econ_potential >= 90 or econ_overall >= 86:
             base_premium += 0.025
         if potential - overall >= 7:
             base_premium += 0.015
@@ -495,7 +515,7 @@ def _build_extension_ask_packages(
             base_premium += 0.055
         if age >= 32:
             base_premium += 0.02
-        raise_pct = 8.0 if overall >= 82 else 5.0
+        raise_pct = 8.0 if econ_overall >= 82 else 5.0
 
     packages: List[Dict[str, Any]] = []
     seen = set()
@@ -503,7 +523,7 @@ def _build_extension_ask_packages(
         shorter_premium = max(0, max_years - year) * (0.035 if extension_type == "rookie_scale" else 0.045)
         desired_first = market_first * (base_premium + shorter_premium)
         # High-end players should naturally hit the cap/max clamp instead of overflowing legal limits.
-        if overall >= 90 or (extension_type == "rookie_scale" and potential >= 92):
+        if econ_overall >= 90 or (extension_type == "rookie_scale" and econ_potential >= 92):
             desired_first = max(desired_first, max_first * 0.985)
         first = _round_money(max(min_first, min(max_first, desired_first)))
         salaries = [_round_money(first * ((1 + raise_pct / 100.0) ** idx)) for idx in range(year)]
@@ -511,7 +531,7 @@ def _build_extension_ask_packages(
             continue
         seen.add((year, salaries[0]))
         option_type = "none"
-        if (overall >= 88 or potential >= 91) and year >= 4:
+        if (econ_overall >= 88 or econ_potential >= 91) and year >= 4:
             option_type = "player"
         total = sum(salaries)
         aav = _offer_aav(salaries)
@@ -1454,9 +1474,7 @@ def process_cpu_contract_extensions(
     phase_key = f"{before['seasonYear']}:{phase}"
     already_processed = phase_key in before.get("cpuPhasesProcessed", [])
 
-    # Run the established execution path first. Detailed league-wide gate scanning
-    # is only paid for when a deadline unexpectedly produces zero extensions,
-    # so normal seasons do not double the mood-evaluation workload.
+    # Run the established execution path first.
     result = _process_cpu_contract_extensions_v9(league_data, user_team_name, phase, payload)
     updated = result.get("leagueData") if isinstance(result, dict) else None
     if not isinstance(updated, dict) or already_processed or phase not in {"rookie_deadline", "veteran_deadline", "deadline"}:
@@ -1464,25 +1482,13 @@ def process_cpu_contract_extensions(
 
     rows = result.get("results") if isinstance(result.get("results"), list) else []
     signed = sum(1 for row in rows if isinstance(row, dict) and row.get("transaction"))
-    if signed == 0:
-        diagnostics = _v10_scan_cpu_extension_gates(league_data, user_team_name, phase, payload)
-    else:
-        diagnostics = {
-            "version": "v10",
-            "seasonYear": before.get("seasonYear"),
-            "phase": phase,
-            "date": before.get("currentDate") or _current_date(league_data, payload),
-            "teamsChecked": None,
-            "legalCandidates": None,
-            "playerWilling": None,
-            "playerRefused": None,
-            "teamApproved": len(rows),
-            "teamValueRejected": None,
-            "payrollRejected": None,
-            "otherRejected": None,
-            "rejectionReasons": {},
-        }
 
+    # BM_PATCH45_ROOKIE_SIGNINGS_CPU_EXTENSIONS
+    # Always persist deadline diagnostics, even when some extensions are signed.
+    # A 3-extension season should still explain whether scarcity came from legal
+    # eligibility, player willingness, team-value gates, payroll pressure, or
+    # options/other blockers.
+    diagnostics = _v10_scan_cpu_extension_gates(league_data, user_team_name, phase, payload)
     diagnostics["offersGenerated"] = len(rows)
     diagnostics["signed"] = signed
 
@@ -1503,3 +1509,4 @@ def process_cpu_contract_extensions(
     result["leagueData"] = updated
     result["diagnostics"] = diagnostics
     return result
+

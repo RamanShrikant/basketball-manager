@@ -22,7 +22,7 @@ except Exception:
     get_financial_rules = None
     get_rookie_salary_for_pick = None
 
-TEAM_ROSTER_LOGIC_VERSION = "2026-07-17_two_way_contract_continuity_v9"
+TEAM_ROSTER_LOGIC_VERSION = "2026-08-21_patch45_deflated_rookie_signings_v10"
 
 STANDARD_ROSTER_MIN = 14
 STANDARD_ROSTER_MAX = 15
@@ -418,39 +418,65 @@ def _recommended_rookie_decision(player: Dict[str, Any], team: Dict[str, Any]) -
     _ = team
     overall = _safe_int(player.get("overall"), 0)
     potential = _safe_int(player.get("potential"), overall)
+    age = _safe_int(player.get("age"), 22)
     meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
     pick = _safe_int(meta.get("draftPick"), 60)
+    round_num = _safe_int(meta.get("draftRound"), 2)
+    upside = potential - overall
+    archetype = str(meta.get("archetype") or player.get("archetype") or "").lower()
+    nationality = str(meta.get("nationality") or player.get("nationality") or "").lower()
+    stash_signal = any(token in archetype for token in ["stash", "overseas", "international", "draft rights"]) or any(
+        token in nationality for token in ["france", "spain", "serbia", "croatia", "germany", "australia", "turkey", "lithuania"]
+    )
 
-    # Recommendation only reflects the player's draft slot / talent profile.
-    # Roster quantity is intentionally ignored here: offseason overfill is legal
-    # for the user flow, and final season-start roster legality is handled later
-    # by Calendar / roster finalization.
-    if pick <= 24:
-        if overall <= 63:
-            return "two_way"
-        return "standard"
-
-    if 25 <= pick <= 45:
-        if overall >= 74 or potential >= 86:
-            return "standard"
-        if overall <= 71:
-            return "two_way"
-        if overall <= 73 and potential < 84:
-            return "two_way"
-        return "standard"
-
-    # Picks 46-60 should usually be developmental holds, not automatic standard deals.
-    if pick >= 46:
-        if overall >= 74 or potential >= 86:
-            return "standard"
-        if overall <= 69:
+    # BM_PATCH45_ROOKIE_SIGNINGS_CPU_EXTENSIONS
+    # Deflated-class scale:
+    # - Top auto-generated rookies now live around 72-79 OVR.
+    # - Late firsts often live around 63-66 OVR.
+    # - Second-rounders are often 60-64 OVR.
+    #
+    # Recommendation only reflects draft slot / player path. Offseason overfill
+    # remains legal for the user flow; Calendar/finalization handles hard roster
+    # limits later.
+    if round_num == 1 or pick <= 30:
+        # First-round picks should normally get standard rookie-scale contracts
+        # even when late-first OVR looks low on the deflated scale.
+        if pick >= 26 and stash_signal and overall <= 61 and potential < 76:
             return "stash"
-        return "two_way"
-
-    if overall >= 74 or potential >= 84:
         return "standard"
-    return "two_way"
 
+    # Early/mid second: standard for useful NBA-ready or real-upside prospects,
+    # two-way for normal developmental players, stash only for low-readiness holds.
+    if 31 <= pick <= 45:
+        if overall >= 64:
+            return "standard"
+        if potential >= 76:
+            return "standard"
+        if age <= 21 and overall >= 62 and upside >= 10:
+            return "standard"
+        if stash_signal and overall <= 61 and potential >= 70:
+            return "stash"
+        if overall >= 60 or potential >= 72:
+            return "two_way"
+        return "stash"
+
+    # Late second / undrafted draft-rights range.
+    if pick >= 46:
+        if overall >= 66 or potential >= 80:
+            return "standard"
+        if overall >= 61 or potential >= 73:
+            return "two_way"
+        if stash_signal or (age <= 21 and potential >= 70):
+            return "stash"
+        if age >= 23 and overall <= 59 and potential <= 68:
+            return "release"
+        return "stash"
+
+    if overall >= 66 or potential >= 80:
+        return "standard"
+    if overall >= 60 or potential >= 72:
+        return "two_way"
+    return "stash"
 
 def _decision_label(decision: str) -> str:
     labels = {
@@ -876,20 +902,36 @@ def _auto_cpu_decision(player: Dict[str, Any], team: Dict[str, Any], season_year
     rng = random.Random(_stable_seed(season_year, _team_name(team), player.get("id"), "rookie_signing"))
     overall = _safe_int(player.get("overall"), 0)
     potential = _safe_int(player.get("potential"), overall)
+    age = _safe_int(player.get("age"), 22)
     meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
     pick = _safe_int(meta.get("draftPick"), 60)
+    round_num = _safe_int(meta.get("draftRound"), 2)
+    upside = potential - overall
 
-    # Keep CPU behavior pick-slot driven. Randomness should move developmental
-    # players between stash and two-way, not upgrade normal late picks into
-    # standard deals too often.
-    if recommended == "two_way" and pick >= 46 and overall <= 69 and potential >= 70 and rng.random() < 0.35:
+    # BM_PATCH45_ROOKIE_SIGNINGS_CPU_EXTENSIONS
+    # CPU randomness should only move borderline developmental players between
+    # two-way/stash. It should not downgrade useful deflated-scale first-round or
+    # early-second prospects into two-ways just because their OVR is now 63-66.
+    if recommended == "standard":
+        if round_num == 1 or pick <= 30:
+            return "standard"
+        if pick >= 46 and overall <= 62 and potential < 78 and roster_counts(team)["twoWayCount"] < TWO_WAY_MAX:
+            return "two_way"
+        return "standard"
+
+    if recommended == "two_way":
+        if pick >= 46 and overall <= 60 and potential >= 70 and rng.random() < 0.28:
+            return "stash"
+        if age <= 21 and potential >= 78 and overall >= 62 and roster_counts(team)["standardCount"] < STANDARD_ROSTER_MAX and rng.random() < 0.18:
+            return "standard"
+        return "two_way"
+
+    if recommended == "stash":
+        if overall >= 62 and potential >= 74 and roster_counts(team)["twoWayCount"] < TWO_WAY_MAX and rng.random() < 0.45:
+            return "two_way"
         return "stash"
-    if recommended == "stash" and overall >= 70 and roster_counts(team)["twoWayCount"] < TWO_WAY_MAX and rng.random() < 0.25:
-        return "two_way"
-    if recommended == "standard" and pick >= 25 and overall <= 71 and roster_counts(team)["twoWayCount"] < TWO_WAY_MAX:
-        return "two_way"
-    return recommended
 
+    return recommended
 
 def _should_cpu_upgrade_two_way(player: Dict[str, Any], team: Dict[str, Any]) -> bool:
     counts = roster_counts(team)
@@ -903,32 +945,36 @@ def _should_cpu_upgrade_two_way(player: Dict[str, Any], team: Dict[str, Any]) ->
     age = _safe_int(player.get("age"), 22)
     upside = potential - overall
 
-    if overall >= 76:
+    # BM_PATCH45_ROOKIE_SIGNINGS_CPU_EXTENSIONS
+    # Deflated scale: a 68-72 OVR two-way with youth/POT can be a real rotation
+    # path, not an old-scale fringe body.
+    if overall >= 72:
         return True
-    if overall >= 74 and potential >= 78:
+    if overall >= 70 and potential >= 76:
         return True
-    if age <= 23 and overall >= 72 and potential >= 82:
+    if age <= 23 and overall >= 68 and potential >= 78:
         return True
-    if age <= 22 and overall >= 70 and upside >= 7:
+    if age <= 22 and overall >= 66 and upside >= 8:
         return True
 
     return False
-
 
 def _should_cpu_release_two_way(player: Dict[str, Any]) -> bool:
     overall = _safe_int(player.get("overall"), 0)
     potential = _safe_int(player.get("potential"), overall)
     age = _safe_int(player.get("age"), 22)
 
-    if overall <= 56 and potential <= 66:
+    # BM_PATCH45_ROOKIE_SIGNINGS_CPU_EXTENSIONS
+    # Keep releases narrow after rating deflation so useful 60-64 OVR projects
+    # are not flushed immediately.
+    if overall <= 54 and potential <= 64:
         return True
-    if age >= 24 and overall <= 58 and potential <= 68:
+    if age >= 24 and overall <= 56 and potential <= 66:
         return True
-    if age >= 26 and overall <= 61 and potential <= 69:
+    if age >= 26 and overall <= 59 and potential <= 67:
         return True
 
     return False
-
 
 def _remove_two_way_player(team: Dict[str, Any], player: Dict[str, Any]) -> None:
     key = player.get("id") or player.get("name")
