@@ -81,6 +81,22 @@ const V24_EXACT_MIN = {
   72: 20, 71: 22, 70: 24, 69: 26, 68: 28, 67: 30, 66: 31, 65: 29,
   64: 27, 63: 25, 62: 23,
 };
+
+const HARD_SHAPE_MIN_OVR = 74;
+const CANONICAL_2027_PLAYER_POOL_SIZE = 546;
+
+function progressionDepthPopulationScale(playerCount) {
+  const count = Math.max(1, Number(playerCount) || CANONICAL_2027_PLAYER_POOL_SIZE);
+  return Math.max(1, Math.min(2, count / CANONICAL_2027_PLAYER_POOL_SIZE));
+}
+
+function progressionPopulationAwareCorridor(rating, min, max, playerCount) {
+  const numericRating = Number(rating);
+  if (numericRating >= HARD_SHAPE_MIN_OVR) return [Number(min), Number(max)];
+  const scale = progressionDepthPopulationScale(playerCount);
+  return [Math.floor(Number(min) * scale), Math.ceil(Number(max) * scale)];
+}
+
 function progressionAuditPlayerKey(row = {}) {
   const player = row?.player || {};
   return String(player.id ?? player.playerId ?? `${player.name || "Unknown"}__${row?.team || ""}`);
@@ -94,26 +110,56 @@ function auditFinalProgressionLeague(league) {
   }
   const players = [...uniqueRows.values()].map((row) => row.player).filter(Boolean);
   const values = players.map((player) => Math.max(54, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70))));
+  const playerCount = players.length;
+  const depthPopulationScale = progressionDepthPopulationScale(playerCount);
   const violations = [];
+  const advisories = [];
   const cumulative = {};
   const exact = {};
 
-  for (const [thresholdText, [min, max]] of Object.entries(V24_CUMULATIVE_SHAPE)) {
+  for (const [thresholdText, [baseMin, baseMax]] of Object.entries(V24_CUMULATIVE_SHAPE)) {
     const threshold = Number(thresholdText);
+    const [min, max] = progressionPopulationAwareCorridor(threshold, baseMin, baseMax, playerCount);
     const actual = values.filter((value) => value >= threshold).length;
-    const ok = actual <= max;
-    cumulative[thresholdText] = { actual, targetMin: min, max, ok, belowTarget: actual < min };
-    if (!ok) violations.push({ type: "cumulative_max", threshold, actual, max });
+    const hard = threshold >= HARD_SHAPE_MIN_OVR;
+    const withinCorridor = actual >= min && actual <= max;
+    cumulative[thresholdText] = {
+      actual,
+      targetMin: min,
+      max,
+      hard,
+      ok: hard ? withinCorridor : true,
+      withinCorridor,
+      belowTarget: actual < min,
+    };
+    if (actual > max) {
+      const row = { type: "cumulative_max", threshold, actual, max };
+      if (hard) violations.push(row);
+      else advisories.push(row);
+    }
   }
 
-  for (const [rungText, max] of Object.entries(V24_EXACT_MAX)) {
+  for (const [rungText, baseMax] of Object.entries(V24_EXACT_MAX)) {
     const rung = Number(rungText);
+    const baseMin = Number(V24_EXACT_MIN[rungText] ?? 0);
+    const [min, max] = progressionPopulationAwareCorridor(rung, baseMin, baseMax, playerCount);
     const actual = values.filter((value) => value === rung).length;
-    const min = Number(V24_EXACT_MIN[rungText] ?? 0);
-    const hard = rung >= 62;
-    const ok = actual <= max;
-    exact[rungText] = { actual, min, max, hard, ok, belowTarget: actual < min };
-    if (!ok) violations.push({ type: "exact_max", rung, actual, max });
+    const hard = rung >= HARD_SHAPE_MIN_OVR;
+    const withinCorridor = actual >= min && actual <= max;
+    exact[rungText] = {
+      actual,
+      min,
+      max,
+      hard,
+      ok: hard ? withinCorridor : true,
+      withinCorridor,
+      belowTarget: actual < min,
+    };
+    if (actual > max) {
+      const row = { type: "exact_max", rung, actual, max };
+      if (hard) violations.push(row);
+      else advisories.push(row);
+    }
   }
 
   const potentialBelowOverall = players.filter((player) => {
@@ -126,10 +172,13 @@ function auditFinalProgressionLeague(league) {
   }
 
   return {
-    version: "v26_deflated_standard_rating_system_saved_pool_audit",
+    version: "v27_deflated_standard_74_plus_hard_depth_population_aware",
     ok: violations.length === 0,
-    playerCount: players.length,
+    playerCount,
+    hardMinOverall: HARD_SHAPE_MIN_OVR,
+    depthPopulationScale,
     violations,
+    advisories,
     cumulative,
     exact,
     potentialBelowOverallCount: potentialBelowOverall.length,
@@ -196,7 +245,9 @@ async function enforceFinalProgressionShapeUntilUiOk(league, beforeSnapshot, sea
     savedPoolAudit = auditFinalProgressionLeague(updatedLeague);
 
     if (!savedPoolAudit.ok) {
-      console.warn(`[${runLabel}] UI-visible final shape audit failed after pass ${pass + 1}; retrying.`, savedPoolAudit.violations || []);
+      console.warn(`[${runLabel}] UI-visible final hard-shape audit failed after pass ${pass + 1}; retrying.`, savedPoolAudit.violations || []);
+    } else if (savedPoolAudit.advisories?.length) {
+      console.info(`[${runLabel}] Depth-shape advisories remain but are non-blocking.`, savedPoolAudit.advisories);
     }
   }
 

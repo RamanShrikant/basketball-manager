@@ -5573,7 +5573,34 @@ def _apply_v20_fine_shape_lock(
 # -------------------------
 # V23 final saved-pool hard league-shape lock
 # -------------------------
-_HARD_SHAPE_VERSION = "v1_deflated_standard_62_99_tight_bands"
+_HARD_SHAPE_VERSION = "v2_deflated_standard_74_99_hard_depth_population_aware"
+_HARD_SHAPE_MIN_OVR = 74
+_CANONICAL_2027_PLAYER_POOL_SIZE = 546
+
+
+def _shape_population_scale(player_count: int) -> float:
+    """Scale only the depth shelves when the total player universe grows.
+
+    The canonical 2027 curve was captured from a 546-player progression pool.
+    Future seasons naturally add extra deep-bench, two-way, stash, and free-agent
+    bodies. Those extra players must not make the 62-73 distribution mathematically
+    impossible while the real 74+ NBA talent curve is still healthy.
+    """
+    count = max(1, _safe_int(player_count, _CANONICAL_2027_PLAYER_POOL_SIZE))
+    return float(_clamp(count / float(_CANONICAL_2027_PLAYER_POOL_SIZE), 1.0, 2.0))
+
+
+def _population_aware_corridor(
+    rating: int,
+    low: int,
+    high: int,
+    player_count: int,
+) -> Tuple[int, int]:
+    rating = int(rating)
+    if rating >= _HARD_SHAPE_MIN_OVR:
+        return int(low), int(high)
+    scale = _shape_population_scale(player_count)
+    return int(math.floor(float(low) * scale)), int(math.ceil(float(high) * scale))
 
 
 def _hard_cumulative_spread(threshold: int) -> int:
@@ -5742,47 +5769,61 @@ def _hard_exact_count(plan: List[Dict[str, Any]], rung: int) -> int:
 def audit_current_league_shape(league: Dict[str, Any]) -> Dict[str, Any]:
     """Audit the exact player pool the UI will save and display.
 
-    This is deliberately independent of the progression plan. It counts every
-    standard roster, two-way, stash, and free-agent player after all Python and
-    frontend transformations. Hard-cap success is only true when this final
-    visible pool is legal.
+    74+ remains a true hard invariant because it controls the playable NBA
+    talent curve. 62-73 is depth-population-aware and advisory: the game still
+    smooths those shelves, but extra fringe/two-way/stash/free-agent bodies can
+    never brick progression by themselves.
     """
     players = [p for p in _all_players(league) if isinstance(p, dict)] if isinstance(league, dict) else []
     values = [int(_clamp(_safe_int(p.get("overall"), p.get("ovr", 70)), 25, 99)) for p in players]
+    player_count = len(players)
+    population_scale = _shape_population_scale(player_count)
     cumulative = _hard_cumulative_corridors()
     exact = _hard_exact_corridors()
     violations: List[Dict[str, Any]] = []
+    advisories: List[Dict[str, Any]] = []
     cumulative_audit: Dict[str, Any] = {}
     exact_audit: Dict[str, Any] = {}
 
     for threshold in _PROGRESS_TIER_THRESHOLDS:
-        low, high = cumulative[int(threshold)]
+        base_low, base_high = cumulative[int(threshold)]
+        low, high = _population_aware_corridor(threshold, base_low, base_high, player_count)
         actual = sum(1 for value in values if value >= threshold)
-        ok = low <= actual <= high
+        hard = int(threshold) >= _HARD_SHAPE_MIN_OVR
+        within_corridor = low <= actual <= high
         cumulative_audit[str(threshold)] = {
             "actual": actual, "targetMin": low, "max": high,
-            "ok": ok, "belowTarget": actual < low,
+            "hard": hard,
+            "ok": within_corridor if hard else True,
+            "withinCorridor": within_corridor,
+            "belowTarget": actual < low,
         }
         if actual > high:
-            violations.append({"type": "cumulative_max", "threshold": threshold, "actual": actual, "max": high})
-        elif actual < low:
-            # Soft floor: report as belowTarget in the audit but do not block the
-            # save. Hard maximums prevent inflation; soft minimums only smooth
-            # nearby rungs when plausible candidates exist.
-            pass
+            row = {"type": "cumulative_max", "threshold": threshold, "actual": actual, "max": high}
+            if hard:
+                violations.append(row)
+            else:
+                advisories.append(row)
 
     for rung in range(_PROGRESS_EXACT_RUNG_MAX, _PROGRESS_EXACT_RUNG_MIN - 1, -1):
-        low, high = exact.get(rung, (0, 9999))
+        base_low, base_high = exact.get(rung, (0, 9999))
+        low, high = _population_aware_corridor(rung, base_low, base_high, player_count)
         actual = sum(1 for value in values if value == rung)
-        ok = low <= actual <= high
-        exact_audit[str(rung)] = {"actual": actual, "targetMin": low, "max": high, "hard": True, "ok": ok, "belowTarget": actual < low}
+        hard = int(rung) >= _HARD_SHAPE_MIN_OVR
+        within_corridor = low <= actual <= high
+        exact_audit[str(rung)] = {
+            "actual": actual, "targetMin": low, "max": high,
+            "hard": hard,
+            "ok": within_corridor if hard else True,
+            "withinCorridor": within_corridor,
+            "belowTarget": actual < low,
+        }
         if actual > high:
-            violations.append({"type": "exact_max", "rung": rung, "actual": actual, "max": high})
-        elif actual < low:
-            # Soft floor: report as belowTarget in the audit but do not block the
-            # save. Hard maximums prevent exact-rung clumping; soft minimums only
-            # smooth nearby rungs when plausible candidates exist.
-            pass
+            row = {"type": "exact_max", "rung": rung, "actual": actual, "max": high}
+            if hard:
+                violations.append(row)
+            else:
+                advisories.append(row)
 
     potential_below_overall = []
     for p in players:
@@ -5802,7 +5843,10 @@ def audit_current_league_shape(league: Dict[str, Any]) -> Dict[str, Any]:
         "version": _HARD_SHAPE_VERSION,
         "ok": len(violations) == 0,
         "playerCount": len(players),
+        "hardMinOverall": _HARD_SHAPE_MIN_OVR,
+        "depthPopulationScale": round(population_scale, 6),
         "violations": violations,
+        "advisories": advisories,
         "cumulative": cumulative_audit,
         "exact": exact_audit,
         "potentialBelowOverallCount": len(potential_below_overall),
@@ -5834,15 +5878,19 @@ def _apply_true_hard_shape_lock(
     if not plan:
         return {"version": _HARD_SHAPE_VERSION, "ok": True, "violations": []}
 
+    player_count = len(plan)
+    population_scale = _shape_population_scale(player_count)
     cumulative = _hard_cumulative_corridors()
     exact = _hard_exact_corridors()
     _refresh_plan_targets(plan)
     _apply_age_peak_caps(plan, rng)
 
-    # 1. Hard cumulative maximums, highest shelf first.
+    # 1. Hard cumulative maximums, highest shelf first. 74+ uses the canonical
+    # hard corridor. 62-73 uses a population-aware smoothing ceiling.
     for threshold in _PROGRESS_TIER_THRESHOLDS:
         _refresh_plan_targets(plan)
-        _low, high = cumulative[int(threshold)]
+        base_low, base_high = cumulative[int(threshold)]
+        _low, high = _population_aware_corridor(threshold, base_low, base_high, player_count)
         while _hard_count(plan, threshold) > high:
             candidates = [
                 item for item in plan
@@ -5859,10 +5907,12 @@ def _apply_true_hard_shape_lock(
             if not _hard_set_target(candidates[0], threshold - 1, rng):
                 break
 
-    # 2. Hard exact-rung anti-clump maximums.
+    # 2. Exact-rung anti-clump maximums. Depth rungs use the same
+    # population-aware smoothing ceiling and are advisory at final audit.
     for rung in range(_PROGRESS_EXACT_RUNG_MAX, _PROGRESS_EXACT_RUNG_MIN - 1, -1):
         _refresh_plan_targets(plan)
-        _low, high = exact.get(rung, (0, 9999))
+        base_low, base_high = exact.get(rung, (0, 9999))
+        _low, high = _population_aware_corridor(rung, base_low, base_high, player_count)
         while _hard_exact_count(plan, rung) > high:
             candidates = [
                 item for item in plan
@@ -5884,6 +5934,8 @@ def _apply_true_hard_shape_lock(
     for _pass in range(3):
         changed = False
         for threshold in _PROGRESS_TIER_THRESHOLDS:
+            if int(threshold) < _HARD_SHAPE_MIN_OVR:
+                continue
             _refresh_plan_targets(plan)
             low, _high = cumulative[int(threshold)]
             need = low - _hard_count(plan, threshold)
@@ -5914,7 +5966,7 @@ def _apply_true_hard_shape_lock(
 
     # 4. Exact-rung minimums prevent empty rungs. We only pull close plausible
     # players upward, then re-run all hard maximums.
-    for rung in range(_PROGRESS_EXACT_RUNG_MAX - 1, _PROGRESS_EXACT_RUNG_MIN - 1, -1):
+    for rung in range(_PROGRESS_EXACT_RUNG_MAX - 1, _HARD_SHAPE_MIN_OVR - 1, -1):
         low, _high = exact.get(rung, (0, 9999))
         need = low - _hard_exact_count(plan, rung)
         if need <= 0:
@@ -5934,7 +5986,8 @@ def _apply_true_hard_shape_lock(
     # Re-assert every upper cap after floor filling. These loops terminate
     # because each correction moves a player below the current threshold/rung.
     for threshold in _PROGRESS_TIER_THRESHOLDS:
-        _low, high = cumulative[int(threshold)]
+        base_low, base_high = cumulative[int(threshold)]
+        _low, high = _population_aware_corridor(threshold, base_low, base_high, player_count)
         while _hard_count(plan, threshold) > high:
             candidates = [item for item in plan if not _is_shape_protected_item(item) and int(item.get("target_overall", 0)) >= threshold]
             candidates.sort(key=lambda item: _hard_trim_priority(item, rng))
@@ -5943,7 +5996,8 @@ def _apply_true_hard_shape_lock(
             if not _hard_set_target(candidates[0], threshold - 1, rng):
                 break
     for rung in range(_PROGRESS_EXACT_RUNG_MAX, _PROGRESS_EXACT_RUNG_MIN - 1, -1):
-        _low, high = exact.get(rung, (0, 9999))
+        base_low, base_high = exact.get(rung, (0, 9999))
+        _low, high = _population_aware_corridor(rung, base_low, base_high, player_count)
         while _hard_exact_count(plan, rung) > high:
             candidates = [item for item in plan if not _is_shape_protected_item(item) and int(item.get("target_overall", 0)) == rung]
             candidates.sort(key=lambda item: _hard_trim_priority(item, rng))
@@ -5954,40 +6008,55 @@ def _apply_true_hard_shape_lock(
 
     _refresh_plan_targets(plan)
     violations: List[Dict[str, Any]] = []
+    advisories: List[Dict[str, Any]] = []
     cumulative_audit: Dict[str, Any] = {}
     exact_audit: Dict[str, Any] = {}
     for threshold in _PROGRESS_TIER_THRESHOLDS:
-        low, high = cumulative[int(threshold)]
+        base_low, base_high = cumulative[int(threshold)]
+        low, high = _population_aware_corridor(threshold, base_low, base_high, player_count)
         actual = _hard_count(plan, threshold)
-        ok = low <= actual <= high
+        hard = int(threshold) >= _HARD_SHAPE_MIN_OVR
+        within_corridor = low <= actual <= high
         cumulative_audit[str(threshold)] = {
             "actual": actual, "targetMin": low, "max": high,
-            "ok": ok, "belowTarget": actual < low,
+            "hard": hard,
+            "ok": within_corridor if hard else True,
+            "withinCorridor": within_corridor,
+            "belowTarget": actual < low,
         }
         if actual > high:
-            violations.append({"type": "cumulative_max", "threshold": threshold, "actual": actual, "max": high})
-        elif actual < low:
-            # Soft floor: report as belowTarget in the audit but do not block the
-            # save. Hard maximums prevent inflation; soft minimums only smooth
-            # nearby rungs when plausible candidates exist.
-            pass
+            row = {"type": "cumulative_max", "threshold": threshold, "actual": actual, "max": high}
+            if hard:
+                violations.append(row)
+            else:
+                advisories.append(row)
     for rung in range(_PROGRESS_EXACT_RUNG_MAX, _PROGRESS_EXACT_RUNG_MIN - 1, -1):
-        low, high = exact.get(rung, (0, 9999))
+        base_low, base_high = exact.get(rung, (0, 9999))
+        low, high = _population_aware_corridor(rung, base_low, base_high, player_count)
         actual = _hard_exact_count(plan, rung)
-        ok = low <= actual <= high
-        exact_audit[str(rung)] = {"actual": actual, "targetMin": low, "max": high, "hard": True, "ok": ok, "belowTarget": actual < low}
+        hard = int(rung) >= _HARD_SHAPE_MIN_OVR
+        within_corridor = low <= actual <= high
+        exact_audit[str(rung)] = {
+            "actual": actual, "targetMin": low, "max": high,
+            "hard": hard,
+            "ok": within_corridor if hard else True,
+            "withinCorridor": within_corridor,
+            "belowTarget": actual < low,
+        }
         if actual > high:
-            violations.append({"type": "exact_max", "rung": rung, "actual": actual, "max": high})
-        elif actual < low:
-            # Soft floor: report as belowTarget in the audit but do not block the
-            # save. Hard maximums prevent exact-rung clumping; soft minimums only
-            # smooth nearby rungs when plausible candidates exist.
-            pass
+            row = {"type": "exact_max", "rung": rung, "actual": actual, "max": high}
+            if hard:
+                violations.append(row)
+            else:
+                advisories.append(row)
 
     return {
         "version": _HARD_SHAPE_VERSION,
         "ok": len(violations) == 0,
+        "hardMinOverall": _HARD_SHAPE_MIN_OVR,
+        "depthPopulationScale": round(population_scale, 6),
         "violations": violations,
+        "advisories": advisories,
         "cumulative": cumulative_audit,
         "exact": exact_audit,
     }
