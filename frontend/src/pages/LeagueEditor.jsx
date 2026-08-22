@@ -1325,7 +1325,11 @@ const normalizePlayer = (p) => {
     return (frac - 0.5) * 0.7;
   }
 
-  const sigmoid = (x) => 1 / (1 + Math.exp(-0.12 * (x - 77)));
+  const RATING_MIN_OVERALL = 54;
+  const RATING_MAX_OVERALL = 99;
+  const OVERALL_SIGMOID_SLOPE = 0.135;
+  const OVERALL_SIGMOID_MIDPOINT = 77.4;
+  const sigmoid = (x) => 1 / (1 + Math.exp(-OVERALL_SIGMOID_SLOPE * (x - OVERALL_SIGMOID_MIDPOINT)));
 
   /* ---------------- Overall & Stamina (unchanged) ---------------- */
   const calcOverall = (attrs, pos) => {
@@ -1335,12 +1339,12 @@ const normalizePlayer = (p) => {
     const prim = p.prim.map((i) => i - 1);
     const Peak = Math.max(...prim.map((i) => attrs[i] || 75));
     const B = p.alpha * Peak + (1 - p.alpha) * W;
-    let overall = 60 + 39 * sigmoid(B);
-    overall = Math.round(Math.min(99, Math.max(60, overall)));
+    let overall = RATING_MIN_OVERALL + (RATING_MAX_OVERALL - RATING_MIN_OVERALL) * sigmoid(B);
+    overall = Math.round(Math.min(RATING_MAX_OVERALL, Math.max(RATING_MIN_OVERALL, overall)));
     const num90 = (attrs || []).filter((a) => a >= 90).length;
     if (num90 >= 3) {
       const bonus = num90 - 2;
-      overall = Math.min(99, overall + bonus);
+      overall = Math.min(RATING_MAX_OVERALL, overall + bonus);
     }
     return overall;
   };

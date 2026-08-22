@@ -21,6 +21,11 @@ const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
 // If a run gets stuck INFLIGHT (worker failed / page refresh), clear after this long
 const INFLIGHT_STALE_MS = 75000;
+// PATCH53: INFLIGHT locks are only trustworthy while the owner is actively
+// heartbeating. This prevents a cleaned-up React effect / stale worker from
+// trapping future offseasons on the Player Progression step.
+const INFLIGHT_HEARTBEAT_STALE_MS = 12000;
+const PROGRESSION_SESSION_ID = `pp_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
 const FREE_AGENTS_TEAM_LABEL = "Free Agents";
 const FREE_AGENTS_TEAM_DELTA_KEY = "Free Agents";
@@ -31,7 +36,7 @@ function enforcePotentialFloorAfterProgression(league) {
   for (const row of getProgressionPlayerRowsFromLeague(league, true)) {
     const player = row?.player;
     if (!player || typeof player !== "object") continue;
-    const overall = Math.max(25, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70)));
+    const overall = Math.max(54, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70)));
     const age = Math.round(Number(player.age ?? 25) || 25);
     const rawPotential = Math.round(Number(player.potential ?? player.pot ?? overall) || overall);
     const potential = age >= 29
@@ -51,19 +56,31 @@ function enforcePotentialFloorAfterProgression(league) {
 
 
 const V24_CUMULATIVE_SHAPE = {
-  97: [2, 4], 96: [4, 6], 95: [6, 8], 94: [8, 10], 93: [11, 13],
-  92: [14, 16], 91: [17, 19], 90: [21, 23], 89: [24, 29], 88: [30, 35],
-  87: [37, 42], 86: [45, 50], 85: [54, 59], 84: [62, 70], 83: [74, 82],
-  82: [88, 96], 81: [105, 113], 80: [125, 133], 79: [147, 158],
-  78: [175, 186], 77: [208, 219], 75: [290, 306], 74: [340, 358],
+  99: [0, 1], 98: [0, 1], 97: [0, 2], 96: [1, 3], 95: [2, 4],
+  94: [3, 5], 93: [4, 6], 92: [5, 8], 91: [6, 10], 90: [8, 12],
+  89: [10, 14], 88: [13, 17], 87: [15, 21], 86: [19, 25], 85: [23, 29],
+  84: [27, 35], 83: [33, 41], 82: [39, 49], 81: [47, 57], 80: [55, 67],
+  79: [64, 78], 78: [76, 90], 77: [89, 105], 76: [104, 122], 75: [121, 141],
+  74: [140, 162], 73: [161, 185], 72: [184, 210], 71: [209, 237], 70: [236, 266],
+  69: [264, 298], 68: [295, 331], 67: [327, 367], 66: [361, 405], 65: [393, 441],
+  64: [423, 475], 63: [451, 507], 62: [477, 537],
 };
 
 const V24_EXACT_MAX = {
-  99: 1, 98: 2, 97: 3, 96: 3, 95: 3, 94: 3, 93: 4, 92: 4, 91: 4, 90: 5,
-  89: 6, 88: 7, 87: 8, 86: 9, 85: 10, 84: 12, 83: 14, 82: 16, 81: 19,
-  80: 22, 79: 26, 78: 30, 77: 35, 76: 42, 75: 50, 74: 55,
+  99: 1, 98: 1, 97: 2, 96: 2, 95: 2, 94: 2, 93: 2, 92: 2, 91: 3, 90: 3,
+  89: 3, 88: 4, 87: 4, 86: 5, 85: 5, 84: 7, 83: 8, 82: 9, 81: 10,
+  80: 11, 79: 13, 78: 15, 77: 17, 76: 20, 75: 22, 74: 24, 73: 26,
+  72: 28, 71: 30, 70: 32, 69: 35, 68: 37, 67: 39, 66: 41, 65: 39,
+  64: 37, 63: 35, 62: 33,
 };
 
+const V24_EXACT_MIN = {
+  99: 0, 98: 0, 97: 0, 96: 0, 95: 0, 94: 0, 93: 0, 92: 0, 91: 1, 90: 1,
+  89: 1, 88: 2, 87: 2, 86: 3, 85: 3, 84: 4, 83: 4, 82: 5, 81: 6,
+  80: 7, 79: 8, 78: 9, 77: 11, 76: 13, 75: 15, 74: 17, 73: 18,
+  72: 20, 71: 22, 70: 24, 69: 26, 68: 28, 67: 30, 66: 31, 65: 29,
+  64: 27, 63: 25, 62: 23,
+};
 function progressionAuditPlayerKey(row = {}) {
   const player = row?.player || {};
   return String(player.id ?? player.playerId ?? `${player.name || "Unknown"}__${row?.team || ""}`);
@@ -76,7 +93,7 @@ function auditFinalProgressionLeague(league) {
     if (!uniqueRows.has(key)) uniqueRows.set(key, row);
   }
   const players = [...uniqueRows.values()].map((row) => row.player).filter(Boolean);
-  const values = players.map((player) => Math.max(25, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70))));
+  const values = players.map((player) => Math.max(54, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70))));
   const violations = [];
   const cumulative = {};
   const exact = {};
@@ -92,15 +109,16 @@ function auditFinalProgressionLeague(league) {
   for (const [rungText, max] of Object.entries(V24_EXACT_MAX)) {
     const rung = Number(rungText);
     const actual = values.filter((value) => value === rung).length;
-    const hard = rung >= 90;
-    const ok = !hard || actual <= max;
-    exact[rungText] = { actual, max, hard, ok };
+    const min = Number(V24_EXACT_MIN[rungText] ?? 0);
+    const hard = rung >= 62;
+    const ok = actual <= max;
+    exact[rungText] = { actual, min, max, hard, ok, belowTarget: actual < min };
     if (!ok) violations.push({ type: "exact_max", rung, actual, max });
   }
 
   const potentialBelowOverall = players.filter((player) => {
-    const overall = Math.max(25, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70)));
-    const potential = Math.max(25, Math.min(99, Math.round(Number(player.potential ?? player.pot ?? overall) || overall)));
+    const overall = Math.max(54, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70)));
+    const potential = Math.max(54, Math.min(99, Math.round(Number(player.potential ?? player.pot ?? overall) || overall)));
     return potential < overall;
   });
   if (potentialBelowOverall.length) {
@@ -108,7 +126,7 @@ function auditFinalProgressionLeague(league) {
   }
 
   return {
-    version: "v25d_final_saved_pool_hard_caps_2027_universe",
+    version: "v26_deflated_standard_rating_system_saved_pool_audit",
     ok: violations.length === 0,
     playerCount: players.length,
     violations,
@@ -146,7 +164,7 @@ function prepareFinalShapeReconciliationLeague(league, beforeSnapshot, seasonYea
 async function enforceFinalProgressionShapeUntilUiOk(league, beforeSnapshot, seasonYear, enforceShapeFn, runLabel = "progression") {
   let updatedLeague = ensureProgressionUniverseSeed(snapshotLeague(league));
   let backendFinalAudit = null;
-  let savedPoolAudit = auditFinalProgressionLeague(enforcePotentialFloorAfterProgression(recomputeDerivedRatingsInLeague(snapshotLeague(updatedLeague))));
+  let savedPoolAudit = auditFinalProgressionLeague(enforcePotentialFloorAfterProgression(recomputeDerivedRatingsInLeague(snapshotLeague(updatedLeague), { preserveOverall: true })));
   let finalShapeRes = null;
 
   for (let pass = 0; pass < 5 && !savedPoolAudit.ok; pass += 1) {
@@ -172,7 +190,7 @@ async function enforceFinalProgressionShapeUntilUiOk(league, beforeSnapshot, sea
     }
 
     updatedLeague = restoreCurrentDraftClassRookiesAfterProgression(finalShapeRes.league, beforeSnapshot, seasonYear);
-    updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
+    updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague, { preserveOverall: true });
     updatedLeague = restoreCurrentDraftClassRookiesAfterProgression(updatedLeague, beforeSnapshot, seasonYear);
     updatedLeague = enforcePotentialFloorAfterProgression(updatedLeague);
     savedPoolAudit = auditFinalProgressionLeague(updatedLeague);
@@ -1695,14 +1713,17 @@ function getProgressionAgeCompletionAudit(league, seasonYear) {
   for (const row of getProgressionPlayerRowsFromLeague(league, true)) {
     const player = row.player;
     const lastBirthdayYear = Number(player?.lastBirthdayYear);
+    const rookieExempt = isCurrentDraftClassRookie(player, seasonYear);
     rows.push({
       name: player?.name || "",
       team: row.teamName,
       age: player?.age,
       lastBirthdayYear: Number.isFinite(lastBirthdayYear) ? lastBirthdayYear : null,
+      rookieExempt,
       stale:
-        !Number.isFinite(lastBirthdayYear) ||
-        lastBirthdayYear < Number(seasonYear || 0),
+        !rookieExempt &&
+        (!Number.isFinite(lastBirthdayYear) ||
+          lastBirthdayYear < Number(seasonYear || 0)),
     });
   }
 
@@ -1745,6 +1766,27 @@ function makeUnavailableAgeAudit(seasonYear, reason = "NO_FULL_LEAGUE_OBJECT") {
     unavailable: true,
     reason,
   };
+}
+
+function clearProgressionMarkersForFreshRun(reason = "fresh-progression-run", seasonYear = null) {
+  try {
+    localStorage.removeItem(PROG_META_KEY);
+    localStorage.removeItem(DELTAS_KEY);
+    localStorage.removeItem(PROGRESSION_SHAPE_AUDIT_KEY);
+    console.warn("[PlayerProgression] Cleared stale progression markers before running current offseason progression.", {
+      reason,
+      seasonYear,
+    });
+  } catch (err) {
+    console.warn("[PlayerProgression] Failed to clear stale progression markers.", { reason, seasonYear, err });
+  }
+}
+
+function isStoredOffseasonProgressionCompleteForSeason(seasonYear, progressionCycleId = null) {
+  const state = readJsonSafe(OFFSEASON_STATE_KEY, {}) || {};
+  const sameSeason = Number(state?.seasonYear || 0) === Number(seasonYear || 0);
+  const sameCycle = !progressionCycleId || String(state?.progressionCycleId || "") === String(progressionCycleId);
+  return sameSeason && sameCycle && state?.progressionComplete === true;
 }
 
 
@@ -1797,6 +1839,100 @@ function readJsonSafe(key, fallback) {
     return parsed ?? fallback;
   } catch {
     return fallback;
+  }
+}
+
+function makeProgressionCycleId(seasonYear = null) {
+  return `prog_${Number(seasonYear || 0)}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function ensureProgressionCycleIdOnOffseasonState(state = {}, seasonYear = null) {
+  const resolvedSeasonYear = Number(seasonYear || state?.seasonYear || 0);
+  const existing = String(state?.progressionCycleId || "").trim();
+  if (existing) return { state, progressionCycleId: existing, didCreate: false };
+
+  const progressionCycleId = makeProgressionCycleId(resolvedSeasonYear);
+  const nextState = {
+    ...(state || {}),
+    active: state?.active !== false,
+    seasonYear: resolvedSeasonYear || state?.seasonYear,
+    progressionCycleId,
+    progressionCycleCreatedAt: Date.now(),
+  };
+
+  try {
+    localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(nextState));
+  } catch (err) {
+    console.warn("[PlayerProgression] Failed to persist generated progression cycle id.", {
+      seasonYear: resolvedSeasonYear,
+      progressionCycleId,
+      err,
+    });
+  }
+
+  return { state: nextState, progressionCycleId, didCreate: true };
+}
+
+function getActiveProgressionContext(leagueData) {
+  const stored = readJsonSafe(OFFSEASON_STATE_KEY, {}) || {};
+  const seasonYear =
+    Number(stored?.active ? stored?.seasonYear : 0) ||
+    inferSeasonYear(leagueData);
+  const ensured = ensureProgressionCycleIdOnOffseasonState(stored, seasonYear);
+
+  return {
+    offseasonState: ensured.state,
+    seasonYear,
+    progressionCycleId: ensured.progressionCycleId,
+    progressionComplete: ensured.state?.progressionComplete === true,
+    didCreateCycleId: ensured.didCreate,
+  };
+}
+
+function progressionMetaMatchesCurrentCycle(meta = null, seasonYear = null, progressionCycleId = null) {
+  if (!meta || typeof meta !== "object") return false;
+  if (Number(meta?.appliedForSeasonYear) !== Number(seasonYear)) return false;
+  if (!progressionCycleId) return true;
+  return String(meta?.progressionCycleId || "") === String(progressionCycleId);
+}
+
+function isInflightMetaForCurrentCycle(meta = null, seasonYear = null, progressionCycleId = null) {
+  if (!meta || typeof meta !== "object") return false;
+  if (meta?.appliedForSeasonYear !== "INFLIGHT") return false;
+  if (Number(meta?.seasonYear) !== Number(seasonYear)) return false;
+  if (!progressionCycleId) return true;
+  return String(meta?.progressionCycleId || "") === String(progressionCycleId);
+}
+
+function isInflightMetaHeartbeatFresh(meta = null) {
+  const heartbeatTs = Number(meta?.heartbeatTs || meta?.ts || 0);
+  if (!Number.isFinite(heartbeatTs) || heartbeatTs <= 0) return false;
+  return Date.now() - heartbeatTs <= INFLIGHT_HEARTBEAT_STALE_MS;
+}
+
+function writeInflightHeartbeat(runId, seasonYear, progressionCycleId) {
+  const current = readJsonSafe(PROG_META_KEY, null);
+  if (
+    current?.appliedForSeasonYear !== "INFLIGHT" ||
+    current?.runId !== runId ||
+    Number(current?.seasonYear) !== Number(seasonYear) ||
+    String(current?.progressionCycleId || "") !== String(progressionCycleId || "")
+  ) {
+    return false;
+  }
+
+  try {
+    localStorage.setItem(
+      PROG_META_KEY,
+      JSON.stringify({
+        ...current,
+        heartbeatTs: Date.now(),
+        ownerSessionId: PROGRESSION_SESSION_ID,
+      })
+    );
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -1910,7 +2046,10 @@ export default function PlayerProgression() {
   }
 
   async function handleReturnToOffseasonHub() {
-    const resolvedSeasonYear = inferSeasonYear(leagueData);
+    const storedOffseasonForReturn = readJsonSafe(OFFSEASON_STATE_KEY, {}) || {};
+    const resolvedSeasonYear =
+      Number(storedOffseasonForReturn?.seasonYear || 0) ||
+      inferSeasonYear(leagueData);
 
     const savedDeltas = readJsonSafe(DELTAS_KEY, {});
     const savedDeltaCount =
@@ -2045,6 +2184,7 @@ export default function PlayerProgression() {
   const [featuredKey, setFeaturedKey] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: "overall", direction: "desc" });
   const [deltas, setDeltas] = useState(() => readJsonSafe(DELTAS_KEY, {}));
+  const [progressionRunNonce, setProgressionRunNonce] = useState(0);
 
 
   useEffect(() => {
@@ -2218,12 +2358,19 @@ export default function PlayerProgression() {
 
     const rawLeagueMeta = localStorage.getItem(META_KEY);
     const rawProgMeta = localStorage.getItem(PROG_META_KEY);
-    const seasonYear = inferSeasonYear(leagueData);
+    const activeProgressionContext = getActiveProgressionContext(leagueData);
+    const storedOffseasonForRun = activeProgressionContext.offseasonState;
+    const seasonYear = activeProgressionContext.seasonYear;
+    const progressionCycleId = activeProgressionContext.progressionCycleId;
+    const currentCycleIncomplete = storedOffseasonForRun?.active !== false && storedOffseasonForRun?.progressionComplete !== true;
 
     console.log("[PPDBG] raw metas", {
       runId,
       rawLeagueMeta,
       rawProgMeta,
+      seasonYear,
+      progressionCycleId,
+      currentCycleIncomplete,
     });
 
     ppDump("EFFECT_AFTER_RAW_META", leagueData, { runId, rawLeagueMeta, rawProgMeta });
@@ -2245,22 +2392,72 @@ export default function PlayerProgression() {
     console.log("[PlayerProgression] leagueData.seasonStartYear =", leagueData?.seasonStartYear);
     console.log("[PlayerProgression] progMeta =", progMeta);
 
+    // Progression markers are global, but every new offseason needs a fresh
+    // progression run. If the hub says this season's progression step is still
+    // incomplete, never trust old deltas/meta just because the seasonYear number
+    // matches. This fixes Year 2/3 getting stuck on stale last-offseason results.
+    const storedOffseasonProgressionComplete = isStoredOffseasonProgressionCompleteForSeason(seasonYear, progressionCycleId);
+    const progMetaDoneForSeasonButWrongCycle =
+      progMeta &&
+      progMeta?.appliedForSeasonYear !== "INFLIGHT" &&
+      Number(progMeta?.appliedForSeasonYear) === Number(seasonYear) &&
+      !progressionMetaMatchesCurrentCycle(progMeta, seasonYear, progressionCycleId);
+    const progMetaDoneForIncompleteCycle =
+      progMeta &&
+      progMeta?.appliedForSeasonYear !== "INFLIGHT" &&
+      Number(progMeta?.appliedForSeasonYear) === Number(seasonYear) &&
+      currentCycleIncomplete &&
+      !storedOffseasonProgressionComplete;
+
+    if (progMetaDoneForSeasonButWrongCycle || progMetaDoneForIncompleteCycle) {
+      console.warn("[PlayerProgression] Stale progression marker does not belong to the active incomplete offseason cycle; clearing so current progression can run.", {
+        runId,
+        seasonYear,
+        progressionCycleId,
+        progMeta,
+        storedOffseasonState: readJsonSafe(OFFSEASON_STATE_KEY, null),
+      });
+      clearProgressionMarkersForFreshRun("offseason-cycle-stale-marker", seasonYear);
+      progMeta = null;
+    }
+
     if (progMeta?.appliedForSeasonYear === "INFLIGHT") {
       const ageMs = Date.now() - Number(progMeta?.ts || 0);
+      const sameCycleInflight = isInflightMetaForCurrentCycle(progMeta, seasonYear, progressionCycleId);
+      const heartbeatFresh = isInflightMetaHeartbeatFresh(progMeta);
+      const lockAgeFresh = ageMs <= INFLIGHT_STALE_MS;
 
-      if (ageMs <= INFLIGHT_STALE_MS) {
-        ppDump("BRANCH_INFLIGHT_ATTACH", leagueData, { runId, seasonYear, ageMs });
-        console.log("[PlayerProgression] INFLIGHT detected, attaching instead of rerunning", {
+      if (sameCycleInflight && heartbeatFresh && lockAgeFresh) {
+        ppDump("BRANCH_INFLIGHT_ATTACH", leagueData, { runId, seasonYear, progressionCycleId, ageMs });
+        console.log("[PlayerProgression] Active INFLIGHT detected, attaching instead of rerunning", {
           runId,
           seasonYear,
+          progressionCycleId,
           ageMs,
+          ownerSessionId: progMeta?.ownerSessionId,
+          heartbeatAgeMs: Date.now() - Number(progMeta?.heartbeatTs || progMeta?.ts || 0),
         });
 
         inflightInterval = setInterval(async () => {
           if (cancelled) return;
 
           const m = readJsonSafe(PROG_META_KEY, null);
-          const done = Number(m?.appliedForSeasonYear) === Number(seasonYear);
+          const done = progressionMetaMatchesCurrentCycle(m, seasonYear, progressionCycleId);
+          const stillActiveInflight = isInflightMetaForCurrentCycle(m, seasonYear, progressionCycleId) && isInflightMetaHeartbeatFresh(m);
+
+          if (!done && !stillActiveInflight) {
+            console.warn("[PlayerProgression] Attached INFLIGHT lost heartbeat or cycle ownership; clearing and forcing a fresh progression run.", {
+              runId,
+              seasonYear,
+              progressionCycleId,
+              currentMeta: m,
+            });
+            clearInterval(inflightInterval);
+            inflightInterval = null;
+            clearProgressionMarkersForFreshRun("inflight-heartbeat-lost", seasonYear);
+            setProgressionRunNonce((value) => value + 1);
+            return;
+          }
 
           if (done) {
             try {
@@ -2281,6 +2478,7 @@ export default function PlayerProgression() {
                 console.error("[PlayerProgression] Inflight run finished but no full saved league was available yet.", {
                   runId,
                   seasonYear,
+                  progressionCycleId,
                   savedAgeAudit,
                   savedLeagueIsPointer,
                   savedDeltaCount: Object.keys(savedDeltas || {}).length,
@@ -2302,20 +2500,24 @@ export default function PlayerProgression() {
         };
       }
 
-      console.warn("[PlayerProgression] stale INFLIGHT detected, clearing meta so progression can rerun.", {
+      console.warn("[PlayerProgression] stale or wrong-cycle INFLIGHT detected, clearing meta so progression can rerun.", {
         runId,
+        seasonYear,
+        progressionCycleId,
         ageMs,
+        sameCycleInflight,
+        heartbeatFresh,
+        lockAgeFresh,
+        progMeta,
       });
 
-      try {
-        localStorage.removeItem(PROG_META_KEY);
-      } catch {}
+      clearProgressionMarkersForFreshRun("stale-or-wrong-cycle-inflight", seasonYear);
 
       progMeta = null;
     }
 
     // If already applied this season, only trust the lock if deltas exist AND saved leagueData proves players aged for this season.
-    if (Number(progMeta?.appliedForSeasonYear) === Number(seasonYear)) {
+    if (progressionMetaMatchesCurrentCycle(progMeta, seasonYear, progressionCycleId)) {
       const savedDeltas = readJsonSafe(DELTAS_KEY, {});
       const savedDeltaCount =
         savedDeltas && typeof savedDeltas === "object"
@@ -2330,7 +2532,8 @@ export default function PlayerProgression() {
       const canTrustSavedProgression =
         savedDeltaCount > 0 &&
         progMeta?.deltasSaved !== false &&
-        savedAgeAudit.ok;
+        savedAgeAudit.ok &&
+        (!currentCycleIncomplete || storedOffseasonProgressionComplete);
 
       if (!canTrustSavedProgression && savedLeagueIsPointer && savedDeltaCount > 0 && progMeta?.deltasSaved !== false) {
         console.log("[PlayerProgression] Already-applied lock uses IndexedDB pointer; loading full saved league before deciding to rerun.", {
@@ -2422,10 +2625,7 @@ export default function PlayerProgression() {
         savedAgeAudit,
       });
 
-      try {
-        localStorage.removeItem(PROG_META_KEY);
-        localStorage.removeItem(DELTAS_KEY);
-      } catch {}
+      clearProgressionMarkersForFreshRun("bad-progression-lock", seasonYear);
 
       progMeta = null;
     }
@@ -2436,6 +2636,8 @@ export default function PlayerProgression() {
     if (!hasStats) {
       console.warn("[PlayerProgression] No stats found. Running progression without stats.");
     }
+
+    const inflightStartedAt = Date.now();
 
     try {
       ppDump("BRANCH_RUN_NEW_BEFORE_INFLIGHT", leagueData, { runId, seasonYear, hasStats });
@@ -2448,19 +2650,47 @@ export default function PlayerProgression() {
         PROG_META_KEY,
         JSON.stringify({
           appliedForSeasonYear: "INFLIGHT",
-          ts: Date.now(),
+          ts: inflightStartedAt,
+          heartbeatTs: inflightStartedAt,
           seasonYear,
+          progressionCycleId,
           runId,
+          ownerSessionId: PROGRESSION_SESSION_ID,
         })
       );
     } catch {}
 
+    const heartbeatInterval = setInterval(() => {
+      if (Date.now() - inflightStartedAt > INFLIGHT_STALE_MS) {
+        clearInterval(heartbeatInterval);
+        return;
+      }
+      writeInflightHeartbeat(runId, seasonYear, progressionCycleId);
+    }, 1000);
+
     (async () => {
       try {
+        const fullSavedLeagueForRun = await loadFullSavedLeagueForProgression("run-new-source-league");
+        const fullSavedLeagueYear = fullSavedLeagueForRun ? inferSeasonYear(fullSavedLeagueForRun) : null;
+        const contextLeagueYear = inferSeasonYear(leagueData);
+        const sourceLeagueForRun =
+          fullSavedLeagueForRun && Math.abs(Number(fullSavedLeagueYear || 0) - Number(seasonYear || 0)) <= 1
+            ? fullSavedLeagueForRun
+            : leagueData;
+
+        console.log("[PlayerProgression] selected source league for progression run", {
+          runId,
+          seasonYear,
+          progressionCycleId,
+          usedIndexedDbLeague: sourceLeagueForRun === fullSavedLeagueForRun,
+          fullSavedLeagueYear,
+          contextLeagueYear,
+        });
+
         // Preserve the completed season before progression clears live stat stores.
         // This writes compact player/team season rows only, not game-by-game data.
         const historySafeLeague = preserveCompletedSeasonPlayerHistoryBeforeStatReset(
-          leagueData,
+          sourceLeagueForRun,
           seasonYear,
           "PlayerProgression"
         );
@@ -2468,7 +2698,7 @@ export default function PlayerProgression() {
         // Normalize derived ratings before the before/after snapshot.
         // Otherwise this page can show huge fake OFF/DEF deltas that are
         // really just LeagueEditor formula recalculation, not progression.
-        const sourceLeague = ensureProgressionUniverseSeed(recomputeDerivedRatingsInLeague(snapshotLeague(historySafeLeague)));
+        const sourceLeague = ensureProgressionUniverseSeed(recomputeDerivedRatingsInLeague(snapshotLeague(historySafeLeague), { preserveOverall: true }));
         const beforeSnapshot = snapshotLeague(sourceLeague);
 
         ppDump("ASYNC_BEFORE_SNAPSHOT_CREATED", beforeSnapshot, { runId, seasonYear });
@@ -2571,7 +2801,7 @@ export default function PlayerProgression() {
         updatedLeague = stampCareerSeasonCounters(updatedLeague, seasonYear);
 
         // FORCE LeagueEditor formulas as the source of truth for derived ratings
-        updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
+        updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague, { preserveOverall: true });
 
         // Current-year draft picks have not played a season yet, so keep their
         // draft-night ratings/age/counters exactly unchanged this offseason.
@@ -2664,10 +2894,12 @@ export default function PlayerProgression() {
         const metaNow = readJsonSafe(PROG_META_KEY, null);
         const stillOwner =
           metaNow?.appliedForSeasonYear === "INFLIGHT" &&
-          metaNow?.seasonYear === seasonYear &&
+          Number(metaNow?.seasonYear) === Number(seasonYear) &&
+          String(metaNow?.progressionCycleId || "") === String(progressionCycleId || "") &&
           metaNow?.runId === runId;
 
         if (!stillOwner) {
+          clearInterval(heartbeatInterval);
           console.warn("[PlayerProgression] Not owner anymore - skipping commits", {
             runId,
             seasonYear,
@@ -2817,6 +3049,8 @@ export default function PlayerProgression() {
           console.log("[PlayerProgression] cleared season stat keys:", statKeysToClear);
         }
 
+        clearInterval(heartbeatInterval);
+
         // Mark progression DONE before touching React league state.
         // This prevents the leagueData state update from immediately retriggering this effect
         // while the lock still says INFLIGHT.
@@ -2827,6 +3061,7 @@ export default function PlayerProgression() {
             ts: Date.now(),
             deltaCount,
             seasonYear,
+            progressionCycleId,
             deltasSaved: true,
             stage: "DONE",
           })
@@ -2840,6 +3075,7 @@ export default function PlayerProgression() {
             ...existingOffseason,
             active: true,
             seasonYear,
+            progressionCycleId,
             progressionComplete: true,
           })
         );
@@ -2877,6 +3113,9 @@ export default function PlayerProgression() {
 
         console.groupEnd();
       } catch (err) {
+        try {
+          clearInterval(heartbeatInterval);
+        } catch {}
         console.error("[PlayerProgression] Python progression failed:", err);
 
         try {
@@ -2908,7 +3147,7 @@ export default function PlayerProgression() {
         clearInterval(inflightInterval);
       }
     };
-  }, [leagueData, setLeagueData, setSelectedTeam]);
+  }, [leagueData, setLeagueData, setSelectedTeam, progressionRunNonce]);
 
   const teams = useMemo(() => getAllTeamsFromLeague(leagueData), [leagueData]);
 

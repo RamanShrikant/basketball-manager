@@ -94,7 +94,11 @@ function v19Jitter(name = "", attrs = []) {
   return (frac - 0.5) * 0.7;
 }
 
-const sigmoid = (x) => 1 / (1 + Math.exp(-0.12 * (x - 77)));
+const RATING_MIN_OVERALL = 54;
+const RATING_MAX_OVERALL = 99;
+const OVERALL_SIGMOID_SLOPE = 0.135;
+const OVERALL_SIGMOID_MIDPOINT = 77.4;
+const sigmoid = (x) => 1 / (1 + Math.exp(-OVERALL_SIGMOID_SLOPE * (x - OVERALL_SIGMOID_MIDPOINT)));
 
 const posParams = {
   PG: {
@@ -139,12 +143,12 @@ function calcOverallFromAttrs(attrs, pos) {
   const Peak = Math.max(...prim.map((i) => a[i] || 75));
   const B = p.alpha * Peak + (1 - p.alpha) * W;
 
-  let overall = 60 + 39 * sigmoid(B);
-  overall = Math.round(Math.min(99, Math.max(60, overall)));
+  let overall = RATING_MIN_OVERALL + (RATING_MAX_OVERALL - RATING_MIN_OVERALL) * sigmoid(B);
+  overall = Math.round(Math.min(RATING_MAX_OVERALL, Math.max(RATING_MIN_OVERALL, overall)));
 
   const num90 = a.filter((x) => x >= 90).length;
   if (num90 >= 3) {
-    overall = Math.min(99, overall + (num90 - 2));
+    overall = Math.min(RATING_MAX_OVERALL, overall + (num90 - 2));
   }
   return overall;
 }
@@ -193,7 +197,7 @@ function calcOffenseDefenseFromAttrs(attrsIn, posIn) {
     return weight > 0 ? score / weight : 75;
   };
 
-  const scale = (x) => Math.round(clampRange(60 + 39 * sigmoid(x), 60, 99));
+  const scale = (x) => Math.round(clampRange(RATING_MIN_OVERALL + (RATING_MAX_OVERALL - RATING_MIN_OVERALL) * sigmoid(x), RATING_MIN_OVERALL, RATING_MAX_OVERALL));
 
   return {
     off: scale(weightedAverage(offensiveAttrs)),
@@ -483,9 +487,34 @@ function calcScoringRating(pos, three, mid, close) {
   return 50;
 }
 
-export function recomputeDerivedRatingsInLeague(leagueData) {
-  // Build baselines once from the post-progression league, matching LeagueEditor v19.
-  // Then recalc every player's derived fields from attrs with that shared baseline.
+export function calcLeagueEditorOverallFromAttrs(attrs, pos) {
+  return calcOverallFromAttrs(attrs, pos);
+}
+
+export function buildLeagueEditorRatingBaselines(leagueData) {
+  return buildRatingBaselinesFromLeague(leagueData);
+}
+
+export function calcLeagueEditorOffDefFromAttrs(attrs, pos, name = "", height = 78, baselines = null) {
+  const activeBaselines = baselines || {
+    posMean: Object.fromEntries(POSITIONS.map((p) => [p, {}])),
+    posStd: Object.fromEntries(POSITIONS.map((p) => [p, {}])),
+    absMean: {},
+    absStd: {},
+    offShift: 0,
+    defShift: 0,
+  };
+  return calcOffDefV19(attrs, pos, name, height, activeBaselines);
+}
+
+export function recomputeDerivedRatingsInLeague(leagueData, options = {}) {
+  // Build baselines once from the visible league, matching LeagueEditor v19.
+  //
+  // PATCH50: progression/offseason screens must not silently rewrite curated
+  // OVR before creating their before snapshot. Use preserveOverall=true in those
+  // flows so arrows compare against the actual saved roster OVR, while OFF/DEF,
+  // stamina, and scoring still use the same LeagueEditor-derived system.
+  const preserveOverall = options?.preserveOverall === true;
   const baselines = buildRatingBaselinesFromLeague(leagueData);
 
   for (const row of getProgressionPlayerRowsFromLeagueLocal(leagueData, true)) {
@@ -494,7 +523,14 @@ export function recomputeDerivedRatingsInLeague(leagueData) {
     const attrs = padAttrs(p?.attrs);
 
     p.attrs = attrs;
-    p.overall = calcOverallFromAttrs(attrs, pos);
+    if (!preserveOverall) {
+      p.overall = calcOverallFromAttrs(attrs, pos);
+    } else {
+      const visible = Number(p?.overall ?? p?.ovr ?? p?.rating);
+      if (Number.isFinite(visible)) {
+        p.overall = Math.round(clampRange(visible, RATING_MIN_OVERALL, RATING_MAX_OVERALL));
+      }
+    }
 
     const { off, def } = calcOffDefV19(
       attrs,
@@ -514,4 +550,8 @@ export function recomputeDerivedRatingsInLeague(leagueData) {
   }
 
   return leagueData;
+}
+
+export function recomputeNonOverallDerivedRatingsInLeague(leagueData) {
+  return recomputeDerivedRatingsInLeague(leagueData, { preserveOverall: true });
 }

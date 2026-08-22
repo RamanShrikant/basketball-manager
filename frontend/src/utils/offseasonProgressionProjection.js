@@ -41,8 +41,13 @@ function padAttrs(attrs = []) {
   return rows.map((value) => Math.round(clamp(toNum(value, 75), 25, 99)));
 }
 
+const RATING_MIN_OVERALL = 54;
+const RATING_MAX_OVERALL = 99;
+const OVERALL_SIGMOID_SLOPE = 0.135;
+const OVERALL_SIGMOID_MIDPOINT = 77.4;
+
 function sigmoid(value) {
-  return 1 / (1 + Math.exp(-0.12 * (value - 77)));
+  return 1 / (1 + Math.exp(-OVERALL_SIGMOID_SLOPE * (value - OVERALL_SIGMOID_MIDPOINT)));
 }
 
 export function calculateProjectedOverallFromAttrs(attrs = [], position = "SF") {
@@ -52,9 +57,9 @@ export function calculateProjectedOverallFromAttrs(attrs = [], position = "SF") 
   const weighted = config.weights.reduce((sum, weight, index) => sum + weight * values[index], 0);
   const peak = Math.max(...config.prim.map((oneBased) => values[oneBased - 1]));
   const blended = config.alpha * peak + (1 - config.alpha) * weighted;
-  let overall = Math.round(clamp(60 + 39 * sigmoid(blended), 60, 99));
+  let overall = Math.round(clamp(RATING_MIN_OVERALL + (RATING_MAX_OVERALL - RATING_MIN_OVERALL) * sigmoid(blended), RATING_MIN_OVERALL, RATING_MAX_OVERALL));
   const eliteAttrs = values.filter((value) => value >= 90).length;
-  if (eliteAttrs >= 3) overall = Math.min(99, overall + eliteAttrs - 2);
+  if (eliteAttrs >= 3) overall = Math.min(RATING_MAX_OVERALL, overall + eliteAttrs - 2);
   return overall;
 }
 
@@ -238,7 +243,7 @@ export function projectPlayerForNextSeason(player = {}, { skipProgression = fals
   const pos = normalizedPos(player.pos || player.position);
   const beforeAttrs = padAttrs(player.attrs || player.attributes);
   const delta = skipProgression ? 0 : expectedOverallDelta(player);
-  const projectedOverallTarget = Math.round(clamp(currentOverall + delta, 60, 99));
+  const projectedOverallTarget = Math.round(clamp(currentOverall + delta, RATING_MIN_OVERALL, RATING_MAX_OVERALL));
   const projectedAge = skipProgression ? currentAge : currentAge + 1;
   const projectedAttrs = delta === 0 ? beforeAttrs : moveAttrsTowardOverall(beforeAttrs, pos, projectedOverallTarget, Math.sign(delta));
   const projectedOverall = projectedOverallTarget;

@@ -48,7 +48,7 @@ function enforcePotentialFloorAfterProgression(league) {
   for (const row of getProgressionPlayerRowsFromLeague(league, true)) {
     const player = row?.player;
     if (!player || typeof player !== "object") continue;
-    const overall = Math.max(25, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70)));
+    const overall = Math.max(54, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70)));
     const age = Math.round(Number(player.age ?? 25) || 25);
     const rawPotential = Math.round(Number(player.potential ?? player.pot ?? overall) || overall);
     const potential = age >= 29 ? overall : Math.max(overall, Math.min(99, rawPotential));
@@ -64,19 +64,31 @@ function enforcePotentialFloorAfterProgression(league) {
   return league;
 }
 const V24_CUMULATIVE_SHAPE = {
-  97: [2, 4], 96: [4, 6], 95: [6, 8], 94: [8, 10], 93: [11, 13],
-  92: [14, 16], 91: [17, 19], 90: [21, 23], 89: [24, 29], 88: [30, 35],
-  87: [37, 42], 86: [45, 50], 85: [54, 59], 84: [62, 70], 83: [74, 82],
-  82: [88, 96], 81: [105, 113], 80: [125, 133], 79: [147, 158],
-  78: [175, 186], 77: [208, 219], 75: [290, 306], 74: [340, 358],
+  99: [0, 1], 98: [0, 1], 97: [0, 2], 96: [1, 3], 95: [2, 4],
+  94: [3, 5], 93: [4, 6], 92: [5, 8], 91: [6, 10], 90: [8, 12],
+  89: [10, 14], 88: [13, 17], 87: [15, 21], 86: [19, 25], 85: [23, 29],
+  84: [27, 35], 83: [33, 41], 82: [39, 49], 81: [47, 57], 80: [55, 67],
+  79: [64, 78], 78: [76, 90], 77: [89, 105], 76: [104, 122], 75: [121, 141],
+  74: [140, 162], 73: [161, 185], 72: [184, 210], 71: [209, 237], 70: [236, 266],
+  69: [264, 298], 68: [295, 331], 67: [327, 367], 66: [361, 405], 65: [393, 441],
+  64: [423, 475], 63: [451, 507], 62: [477, 537],
 };
 
 const V24_EXACT_MAX = {
-  99: 1, 98: 2, 97: 3, 96: 3, 95: 3, 94: 3, 93: 4, 92: 4, 91: 4, 90: 5,
-  89: 6, 88: 7, 87: 8, 86: 9, 85: 10, 84: 12, 83: 14, 82: 16, 81: 19,
-  80: 22, 79: 26, 78: 30, 77: 35, 76: 42, 75: 50, 74: 55,
+  99: 1, 98: 1, 97: 2, 96: 2, 95: 2, 94: 2, 93: 2, 92: 2, 91: 3, 90: 3,
+  89: 3, 88: 4, 87: 4, 86: 5, 85: 5, 84: 7, 83: 8, 82: 9, 81: 10,
+  80: 11, 79: 13, 78: 15, 77: 17, 76: 20, 75: 22, 74: 24, 73: 26,
+  72: 28, 71: 30, 70: 32, 69: 35, 68: 37, 67: 39, 66: 41, 65: 39,
+  64: 37, 63: 35, 62: 33,
 };
 
+const V24_EXACT_MIN = {
+  99: 0, 98: 0, 97: 0, 96: 0, 95: 0, 94: 0, 93: 0, 92: 0, 91: 1, 90: 1,
+  89: 1, 88: 2, 87: 2, 86: 3, 85: 3, 84: 4, 83: 4, 82: 5, 81: 6,
+  80: 7, 79: 8, 78: 9, 77: 11, 76: 13, 75: 15, 74: 17, 73: 18,
+  72: 20, 71: 22, 70: 24, 69: 26, 68: 28, 67: 30, 66: 31, 65: 29,
+  64: 27, 63: 25, 62: 23,
+};
 function progressionAuditPlayerKey(row = {}) {
   const player = row?.player || {};
   return String(player.id ?? player.playerId ?? `${player.name || "Unknown"}__${row?.team || ""}`);
@@ -89,7 +101,7 @@ function auditFinalProgressionLeague(league) {
     if (!uniqueRows.has(key)) uniqueRows.set(key, row);
   }
   const players = [...uniqueRows.values()].map((row) => row.player).filter(Boolean);
-  const values = players.map((player) => Math.max(25, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70))));
+  const values = players.map((player) => Math.max(54, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70))));
   const violations = [];
   const cumulative = {};
   const exact = {};
@@ -104,19 +116,20 @@ function auditFinalProgressionLeague(league) {
   for (const [rungText, max] of Object.entries(V24_EXACT_MAX)) {
     const rung = Number(rungText);
     const actual = values.filter((value) => value === rung).length;
-    const hard = rung >= 90;
-    const ok = !hard || actual <= max;
-    exact[rungText] = { actual, max, hard, ok };
+    const min = Number(V24_EXACT_MIN[rungText] ?? 0);
+    const hard = rung >= 62;
+    const ok = actual <= max;
+    exact[rungText] = { actual, min, max, hard, ok, belowTarget: actual < min };
     if (!ok) violations.push({ type: "exact_max", rung, actual, max });
   }
   const potentialBelowOverallCount = players.filter((player) => {
-    const overall = Math.max(25, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70)));
-    const potential = Math.max(25, Math.min(99, Math.round(Number(player.potential ?? player.pot ?? overall) || overall)));
+    const overall = Math.max(54, Math.min(99, Math.round(Number(player.overall ?? player.ovr ?? 70) || 70)));
+    const potential = Math.max(54, Math.min(99, Math.round(Number(player.potential ?? player.pot ?? overall) || overall)));
     return potential < overall;
   }).length;
   if (potentialBelowOverallCount) violations.push({ type: "potential_below_overall", count: potentialBelowOverallCount });
   return {
-    version: "v25d_final_saved_pool_hard_caps_2027_universe",
+    version: "v26_deflated_standard_rating_system_saved_pool_audit",
     ok: violations.length === 0,
     playerCount: players.length,
     violations,
@@ -154,7 +167,7 @@ function prepareFinalShapeReconciliationLeague(league, beforeSnapshot, seasonYea
 async function enforceFinalProgressionShapeUntilUiOk(league, beforeSnapshot, seasonYear, enforceShapeFn, runLabel = "progression") {
   let updatedLeague = ensureProgressionUniverseSeed(snapshotLeague(league));
   let backendFinalAudit = null;
-  let savedPoolAudit = auditFinalProgressionLeague(enforcePotentialFloorAfterProgression(recomputeDerivedRatingsInLeague(snapshotLeague(updatedLeague))));
+  let savedPoolAudit = auditFinalProgressionLeague(enforcePotentialFloorAfterProgression(recomputeDerivedRatingsInLeague(snapshotLeague(updatedLeague), { preserveOverall: true })));
   let finalShapeRes = null;
 
   for (let pass = 0; pass < 5 && !savedPoolAudit.ok; pass += 1) {
@@ -180,7 +193,7 @@ async function enforceFinalProgressionShapeUntilUiOk(league, beforeSnapshot, sea
     }
 
     updatedLeague = restoreCurrentDraftClassRookiesAfterProgression(finalShapeRes.league, beforeSnapshot, seasonYear);
-    updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
+    updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague, { preserveOverall: true });
     updatedLeague = restoreCurrentDraftClassRookiesAfterProgression(updatedLeague, beforeSnapshot, seasonYear);
     updatedLeague = enforcePotentialFloorAfterProgression(updatedLeague);
     savedPoolAudit = auditFinalProgressionLeague(updatedLeague);
@@ -423,6 +436,32 @@ function getChampionName() {
   return null;
 }
 
+function makeProgressionCycleId(seasonYear = null) {
+  return `prog_${Number(seasonYear || 0)}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function withFreshProgressionCycle(state = {}, seasonYear = null) {
+  const resolvedSeasonYear = Number(seasonYear || state?.seasonYear || 0);
+  return {
+    ...(state || {}),
+    seasonYear: resolvedSeasonYear || state?.seasonYear,
+    progressionComplete: false,
+    progressionCycleId: makeProgressionCycleId(resolvedSeasonYear),
+    progressionCycleCreatedAt: Date.now(),
+  };
+}
+
+function ensureProgressionCycleState(state = {}, seasonYear = null) {
+  const resolvedSeasonYear = Number(seasonYear || state?.seasonYear || 0);
+  if (state?.progressionCycleId) return state;
+  return {
+    ...(state || {}),
+    seasonYear: resolvedSeasonYear || state?.seasonYear,
+    progressionCycleId: makeProgressionCycleId(resolvedSeasonYear),
+    progressionCycleCreatedAt: Date.now(),
+  };
+}
+
 function buildDefaultOffseasonState(seasonYear) {
   return {
     active: true,
@@ -444,6 +483,8 @@ function buildDefaultOffseasonState(seasonYear) {
     freeAgencyComplete: false,
     rosterFinalizationComplete: false,
     progressionComplete: false,
+    progressionCycleId: makeProgressionCycleId(seasonYear),
+    progressionCycleCreatedAt: Date.now(),
   };
 }
 
@@ -467,15 +508,24 @@ function readOffseasonState(seasonYear) {
       localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(fresh));
       localStorage.removeItem(FREE_AGENCY_LAST_ROUTE_KEY);
       localStorage.removeItem(OPTIONS_RESULTS_KEY);
+      clearProgressionMarkersForFreshOffseason("offseason-year-rollover", resolvedSeasonYear);
     } catch {}
     return fresh;
   }
 
-  return {
+  const merged = ensureProgressionCycleState({
     ...buildDefaultOffseasonState(resolvedSeasonYear),
     ...stored,
     seasonYear: resolvedSeasonYear,
-  };
+  }, resolvedSeasonYear);
+
+  if (!stored?.progressionCycleId) {
+    try {
+      localStorage.setItem(OFFSEASON_STATE_KEY, JSON.stringify(merged));
+    } catch {}
+  }
+
+  return merged;
 }
 
 function saveOffseasonState(state) {
@@ -503,6 +553,20 @@ function makeUnavailableAgeAudit(seasonYear, reason = "NO_FULL_LEAGUE_OBJECT") {
     unavailable: true,
     reason,
   };
+}
+
+function clearProgressionMarkersForFreshOffseason(reason = "fresh-offseason", seasonYear = null) {
+  try {
+    localStorage.removeItem(PROG_META_KEY);
+    localStorage.removeItem(PROG_DELTAS_KEY);
+    localStorage.removeItem(PROGRESSION_SHAPE_AUDIT_KEY);
+    console.warn("[OffseasonHub] Cleared stale progression markers for fresh offseason/progression run.", {
+      reason,
+      seasonYear,
+    });
+  } catch (err) {
+    console.warn("[OffseasonHub] Failed to clear stale progression markers.", { reason, seasonYear, err });
+  }
 }
 
 function getLeagueDataSnapshot(leagueData) {
@@ -694,14 +758,17 @@ function getProgressionAgeCompletionAudit(leagueData, seasonYear) {
   for (const row of getProgressionPlayerRowsFromLeague(snapshot, true)) {
     const player = row.player;
     const lastBirthdayYear = Number(player?.lastBirthdayYear);
+    const rookieExempt = isCurrentDraftClassRookie(player, seasonYear);
     rows.push({
       name: player?.name || "",
       team: row.teamName,
       age: player?.age,
       lastBirthdayYear: Number.isFinite(lastBirthdayYear) ? lastBirthdayYear : null,
+      rookieExempt,
       stale:
-        !Number.isFinite(lastBirthdayYear) ||
-        lastBirthdayYear < Number(seasonYear || 0),
+        !rookieExempt &&
+        (!Number.isFinite(lastBirthdayYear) ||
+          lastBirthdayYear < Number(seasonYear || 0)),
     });
   }
 
@@ -730,6 +797,8 @@ function isProgressionReallyCompleteForSeason(seasonYear, leagueData = null, off
   const deltaCount = Math.max(Number(progressionMeta?.deltaCount || 0), storedDeltaCount);
   const metaMatches = Number(progressionMeta?.appliedForSeasonYear) === Number(seasonYear);
   const stageDone = progressionMeta?.stage === "DONE" || progressionMeta?.deltasSaved === true;
+  const expectedCycleId = String(offseasonState?.progressionCycleId || "");
+  const cycleMatches = !expectedCycleId || String(progressionMeta?.progressionCycleId || "") === expectedCycleId;
   const offseasonSaysComplete = Boolean(offseasonState?.progressionComplete);
 
   const liveAgeAudit =
@@ -742,7 +811,7 @@ function isProgressionReallyCompleteForSeason(seasonYear, leagueData = null, off
       : makeUnavailableAgeAudit(seasonYear, "LOCALSTORAGE_INDEXEDDB_POINTER");
   const ageAudit = liveAgeAudit.ok ? liveAgeAudit : savedAgeAudit.ok ? savedAgeAudit : liveAgeAudit;
 
-  const markerOk = metaMatches && stageDone && deltaCount > 0;
+  const markerOk = metaMatches && cycleMatches && stageDone && deltaCount > 0;
 
   return {
     ok: markerOk && (ageAudit.ok || offseasonSaysComplete),
@@ -751,6 +820,8 @@ function isProgressionReallyCompleteForSeason(seasonYear, leagueData = null, off
     deltaCount,
     storedDeltaCount,
     progressionMeta,
+    expectedCycleId,
+    cycleMatches,
     ageAudit,
     liveAgeAudit,
     savedAgeAudit,
@@ -2301,12 +2372,39 @@ export default function OffseasonHub() {
   };
 
   const updateDevOffseasonState = (patch) => {
-    const next = {
-      ...readOffseasonState(seasonYear),
+    const current = readOffseasonState(seasonYear);
+    const explicitlySetsProgression = patch && Object.prototype.hasOwnProperty.call(patch, "progressionComplete");
+    const touchesPreProgressionStep = Boolean(
+      patch?.retirementsComplete ||
+        patch?.leagueInflationComplete ||
+        patch?.draftLotteryComplete ||
+        patch?.draftComplete ||
+        patch?.rookieSigningsComplete ||
+        patch?.optionsComplete ||
+        patch?.freeAgencyComplete ||
+        patch?.rosterFinalizationComplete
+    );
+
+    let normalizedPatch = patch || {};
+    if (explicitlySetsProgression && patch.progressionComplete === false) {
+      clearProgressionMarkersForFreshOffseason("dev-state-reset-progression-incomplete", seasonYear);
+      normalizedPatch = withFreshProgressionCycle({ ...current, ...normalizedPatch }, seasonYear);
+    } else if (!explicitlySetsProgression && current.progressionComplete === true && touchesPreProgressionStep) {
+      // A new offseason can start while the previous completed state's marker is
+      // still in storage. As soon as we run any pre-progression offseason step,
+      // progression for this fresh cycle is incomplete and old deltas must die.
+      clearProgressionMarkersForFreshOffseason("dev-fresh-offseason-started", seasonYear);
+      normalizedPatch = withFreshProgressionCycle({ ...current, ...normalizedPatch }, seasonYear);
+    } else if (touchesPreProgressionStep && current.progressionComplete !== true && !current.progressionCycleId) {
+      normalizedPatch = ensureProgressionCycleState({ ...current, ...normalizedPatch, progressionComplete: false }, seasonYear);
+    }
+
+    const next = ensureProgressionCycleState({
+      ...current,
       active: true,
       seasonYear,
-      ...patch,
-    };
+      ...normalizedPatch,
+    }, seasonYear);
 
     saveOffseasonState(next);
     setOffseasonState(next);
@@ -2416,13 +2514,7 @@ export default function OffseasonHub() {
       setOffseasonState(nextBlocked);
       saveOffseasonState(nextBlocked);
 
-      if (!progressionCheck.metaMatches || progressionCheck.deltaCount <= 0) {
-        try {
-          localStorage.removeItem(PROG_META_KEY);
-        } catch {}
-      } else {
-        console.warn("[OffseasonHub] Kept progression meta because the marker/deltas exist; block was caused by validation context, not a missing progression run.", progressionCheck);
-      }
+      clearProgressionMarkersForFreshOffseason("advance-blocked-progression-validation", seasonYear);
 
       navigate("/player-progression");
       return;
@@ -3148,7 +3240,9 @@ export default function OffseasonHub() {
   };
 
   const runDevProgression = async (workingLeague) => {
-    if (readOffseasonState(seasonYear).progressionComplete) return workingLeague;
+    const activeOffseasonForProgression = readOffseasonState(seasonYear);
+    if (activeOffseasonForProgression.progressionComplete) return workingLeague;
+    const progressionCycleId = activeOffseasonForProgression.progressionCycleId || makeProgressionCycleId(seasonYear);
 
     if (typeof simEngine.computePlayerProgression !== "function") {
       throw new Error("computePlayerProgression is not wired in simEnginePy.js yet.");
@@ -3166,7 +3260,7 @@ export default function OffseasonHub() {
     // ratings before the snapshot, then build visible deltas from the final
     // post-recompute league. This prevents dev/full-offseason from saving
     // Python-bumped OFF/DEF/STAM while manual progression saves V19 values.
-    const sourceLeague = ensureProgressionUniverseSeed(recomputeDerivedRatingsInLeague(snapshotLeague(historySafeLeague)));
+    const sourceLeague = ensureProgressionUniverseSeed(recomputeDerivedRatingsInLeague(snapshotLeague(historySafeLeague), { preserveOverall: true }));
     const beforeSnapshot = snapshotLeague(sourceLeague);
     const leagueForProg = prepareLeagueForProgressionWorker(sourceLeague, seasonYear);
 
@@ -3181,7 +3275,9 @@ export default function OffseasonHub() {
       JSON.stringify({
         appliedForSeasonYear: "INFLIGHT",
         ts: Date.now(),
+        heartbeatTs: Date.now(),
         seasonYear,
+        progressionCycleId,
         runId: `dev_full_offseason_${Date.now()}`,
       })
     );
@@ -3215,7 +3311,7 @@ export default function OffseasonHub() {
     // FORCE the same LeagueEditor/V19 derived-rating formulas used by the
     // manual PlayerProgression page. Python owns attrs/OVR/POT/age; frontend
     // V19 owns OFF/DEF/STAM/SCO display values.
-    updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague);
+    updatedLeague = recomputeDerivedRatingsInLeague(updatedLeague, { preserveOverall: true });
 
     updatedLeague = restoreCurrentDraftClassRookiesAfterProgression(updatedLeague, beforeSnapshot, seasonYear);
 
@@ -3289,12 +3385,14 @@ export default function OffseasonHub() {
         ts: Date.now(),
         deltaCount,
         seasonYear,
+        progressionCycleId,
         deltasSaved: true,
         stage: "DONE",
       })
     );
 
     updateDevOffseasonState({
+      progressionCycleId,
       progressionComplete: true,
     });
 

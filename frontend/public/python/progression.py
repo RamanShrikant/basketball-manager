@@ -7,7 +7,12 @@ import math
 import datetime as _dt
 import hashlib
 
-PROGRESSION_PY_VERSION = "2026-08-09_progression_v25d_polished_outliers"
+PROGRESSION_PY_VERSION = "2026-08-21_progression_story_arc_v3"
+
+RATING_MIN_OVERALL = 54
+RATING_MAX_OVERALL = 99
+OVERALL_SIGMOID_SLOPE = 0.135
+OVERALL_SIGMOID_MIDPOINT = 77.4
 
 
 # -------------------------
@@ -230,7 +235,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
 # -------------------------
 
 def _sigmoid_overall(x: float) -> float:
-    return 1.0 / (1.0 + math.exp(-0.12 * (x - 77.0)))
+    return 1.0 / (1.0 + math.exp(-OVERALL_SIGMOID_SLOPE * (x - OVERALL_SIGMOID_MIDPOINT)))
 
 
 _POS_PARAMS = {
@@ -296,13 +301,13 @@ def calc_overall_from_attrs(attrs: List[Any], pos: str) -> int:
 
     B = alpha * Peak + (1.0 - alpha) * W
 
-    overall = 60.0 + 39.0 * _sigmoid_overall(B)
-    overall = max(60.0, min(99.0, overall))
+    overall = RATING_MIN_OVERALL + (RATING_MAX_OVERALL - RATING_MIN_OVERALL) * _sigmoid_overall(B)
+    overall = max(float(RATING_MIN_OVERALL), min(float(RATING_MAX_OVERALL), overall))
     overall = int(math.floor(overall + 0.5))
 
     num90 = sum(1 for v in a if float(v) >= 90.0)
     if num90 >= 3:
-        overall = min(99, overall + (num90 - 2))
+        overall = min(RATING_MAX_OVERALL, overall + (num90 - 2))
 
     return int(overall)
 
@@ -1622,7 +1627,7 @@ def _apply_threshold_crossing_gates(
         if team_name == "__FREE_AGENCY__" and before < 80 and level == "normal":
             bias = float((settings.get("progression", {}) or {}).get("free_agent_regression_bias", 0.12))
             if rng.random() < bias * 0.35:
-                return max(60, target - 1)
+                return max(RATING_MIN_OVERALL, target - 1)
         return target
 
     # Tiny free-agency bias for players who begin progression unsigned.
@@ -1696,7 +1701,7 @@ def _apply_threshold_crossing_gates(
             if rng.random() > chance:
                 target = min(target, 84)
 
-    return int(_clamp(target, 60, 99))
+    return int(_clamp(target, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
 
 
 
@@ -2188,7 +2193,7 @@ def _move_attrs_toward_target_overall(
     attrs = _ensure_attrs(p.get("attrs"))
     pos = p.get("pos") or p.get("position") or "SF"
     current_overall = calc_overall_from_attrs(attrs, pos)
-    target_overall = int(_clamp(target_overall, 60, 99))
+    target_overall = int(_clamp(target_overall, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
 
     if current_overall == target_overall:
         p["attrs"] = attrs
@@ -2331,7 +2336,7 @@ def _is_shape_protected_item(item: Dict[str, Any]) -> bool:
 # V25 hidden career-path engine
 # -------------------------
 
-_V25_PROFILE_VERSION = "v25d_polished_outliers_v1"
+_V25_PROFILE_VERSION = "v25f_story_arc_v3"
 _V25_AUDIT_KEY = "v25CareerAudit"
 _V25_FAST_DECLINE_PROFILES = {"fast_decliner", "short_peak", "true_bust"}
 _V25_BREAKOUT_PROFILES = {"generational_hit", "star_hit", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier", "late_bloomer", "slow_burn"}
@@ -2683,6 +2688,94 @@ def _v25_hidden_upside_level_from_profile(prof: Dict[str, Any]) -> int:
 def _v25_hidden_upside_level(p: Dict[str, Any], rng: Optional[random.Random] = None) -> int:
     return _v25_hidden_upside_level_from_profile(_v25_profile(p, rng))
 
+def _v25_elite_young_prospect(p: Dict[str, Any], age: int, overall: int, potential: int, prof: Optional[Dict[str, Any]] = None) -> bool:
+    """Premium teenager/early-20s prospect protection.
+
+    The hidden path can still create disappointment/bust outcomes, but normal
+    yearly noise or league-shape trims should not casually turn a 90+ POT
+    teenager into a -3/-4 one-year crash.
+    """
+    if age > 22 or potential < 90:
+        return False
+    meta = _v25_meta(p) if isinstance(p, dict) else {}
+    rank = _v25_pre_draft_rank(p) if isinstance(p, dict) else 999
+    origin = _v25_draft_origin(p) if isinstance(p, dict) else "unknown"
+    if potential >= 92:
+        return True
+    if origin in {"pick_1", "top_3", "top_5", "lottery"} and rank <= 14:
+        return True
+    if overall >= 75 and potential >= 90 and age <= 21:
+        return True
+    return False
+
+
+def _v25_low_young_developmental(p: Dict[str, Any], age: int, overall: int, potential: int, prof: Optional[Dict[str, Any]] = None) -> bool:
+    if age > 25 or overall >= 65:
+        return False
+    prof = prof or (_v25_profile(p, None) if isinstance(p, dict) else {})
+    name = str(prof.get("profile") or "steady_growth") if isinstance(prof, dict) else "steady_growth"
+    return name not in {"true_bust", "fast_decliner"}
+
+
+def _v25_story_phase_pressure(p: Dict[str, Any], age: int, overall: int, potential: int, prof: Dict[str, Any]) -> float:
+    """Small deterministic pull toward the saved career story.
+
+    This makes V25 a career-arc engine instead of pure annual noise: players
+    with runway before peak get upward pull; disappointments can stall; busts
+    slide slowly; late bloomers wait and then pop.
+    """
+    name = str(prof.get("profile") or "steady_growth")
+    ceiling = _safe_int(prof.get("hiddenCeiling"), max(overall, potential))
+    floor = _safe_int(prof.get("hiddenFloor"), min(overall, potential))
+    peak_start = _safe_int(prof.get("peakStartAge"), 25)
+    peak_end = _safe_int(prof.get("peakEndAge"), 30)
+    room = max(0, ceiling - overall)
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    adj = 0.0
+
+    if age < peak_start:
+        years_to_peak = max(1, peak_start - age)
+        # Arc pull scales with room but is intentionally modest; it nudges odds,
+        # it does not guarantee a ladder every season.
+        adj += _clamp((room / years_to_peak) * 0.095, 0.0, 0.42)
+        if name in {"generational_hit", "star_hit"}:
+            adj += 0.13 if room >= 5 else 0.04
+        elif name in {"quality_starter", "steady_growth"}:
+            adj += 0.05 if room >= 3 else 0.0
+        elif name in {"slow_burn", "late_bloomer"}:
+            adj -= 0.03 if age < peak_start - 2 else 0.09
+        elif name == "disappointment":
+            adj -= 0.08
+        elif name == "true_bust":
+            adj -= 0.16
+    elif age <= peak_end:
+        adj += _clamp(room * 0.055, 0.0, 0.35)
+        if name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
+            adj += 0.18 + hidden_level * 0.04
+    else:
+        if overall > floor and name in {"true_bust", "fast_decliner"}:
+            adj -= 0.18
+
+    if age > peak_end:
+        # After the saved prime window, the story stops pulling late-career
+        # climbs. Late bloomers can hold longer, but they should not commonly
+        # set first career highs at 38-40.
+        post = max(1, age - peak_end)
+        if name == "long_prime":
+            adj -= min(0.24, post * 0.045)
+        elif name in {"late_bloomer", "slow_burn", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
+            adj -= min(0.42, post * 0.085)
+        else:
+            adj -= min(0.55, post * 0.12)
+
+    if _v25_low_young_developmental(p, age, overall, potential, prof):
+        # Low-rated young players should usually churn upward/stall, not fall
+        # further into unusable territory unless their true-bust story demands it.
+        adj += 0.16 + max(0, min(8, potential - overall)) * 0.018
+
+    return float(_clamp(adj, -0.55, 0.65))
+
+
 
 def _v25_hidden_upside_name(p: Dict[str, Any], rng: Optional[random.Random] = None) -> str:
     prof = _v25_profile(p, rng)
@@ -2915,6 +3008,29 @@ def _v25_build_profile(p: Dict[str, Any], league_seed: str, season_year: Any, rn
             decline_start = max(decline_start, peak_end + 2)
             decline_sharp = min(decline_sharp, 0.58 + u("hidden_decline") * 0.20)
 
+    # V25F: keep most prospect arcs inside realistic NBA timing. The previous
+    # story engine created variance, but too many prospects set first peaks at
+    # 38-41 in no-retirement stress tests. Late bloomers still exist, but normal
+    # stars should peak in the mid/late 20s and decline should begin in the
+    # early/mid 30s.
+    if age <= 22:
+        if profile in {"late_bloomer", "slow_burn", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
+            peak_start = min(peak_start, 29)
+            peak_end = min(max(peak_end, peak_start + 2), 33)
+            decline_start = min(max(decline_start, peak_end + 1), 35)
+        elif profile == "long_prime":
+            peak_start = min(peak_start, 27)
+            peak_end = min(max(peak_end, peak_start + 3), 33)
+            decline_start = min(max(decline_start, peak_end + 1), 35)
+        else:
+            peak_start = min(peak_start, 27)
+            peak_end = min(max(peak_end, peak_start + 2), 31)
+            decline_start = min(max(decline_start, peak_end + 1), 34)
+    elif age <= 25:
+        peak_start = min(peak_start, 29 if profile in {"late_bloomer", "slow_burn"} else 28)
+        peak_end = min(max(peak_end, peak_start + 2), 33)
+        decline_start = min(max(decline_start, peak_end + 1), 35)
+
     base_ceiling = max(overall, potential)
     ceiling = base_ceiling
     if profile == "generational_hit":
@@ -3087,6 +3203,7 @@ def _v25_profile_expected_adjustment(p: Dict[str, Any], age: int, overall: int, 
     decline_start = _safe_int(prof.get("declineStartAge"), 32)
     sharp = _safe_float(prof.get("declineSharpness"), 0.5)
     adj = 0.0
+    adj += _v25_story_phase_pressure(p, age, overall, potential, prof)
 
     if name == "generational_hit":
         adj += 0.52 if room >= 4 else 0.15
@@ -3107,16 +3224,16 @@ def _v25_profile_expected_adjustment(p: Dict[str, Any], age: int, overall: int, 
     elif name == "volatile":
         adj += rng.choice([-0.34, -0.16, 0.16, 0.38])
     elif name == "disappointment":
-        # Disappointment means underachieving, not instant collapse.
-        adj -= 0.16 if potential >= 90 and age <= 24 else 0.26
-        if age <= 23 and rng.random() < 0.14:
-            adj += 0.30
+        # Disappointment means underachieving/stalling, not instant collapse.
+        adj -= 0.10 if potential >= 90 and age <= 24 else 0.24
+        if age <= 23 and rng.random() < 0.16:
+            adj += 0.34
     elif name == "true_bust":
-        # True busts are rare. Elite young busts should mostly stall/slide, not
-        # repeatedly nuke into the low 70s unless the cap layer later confirms it.
-        adj -= 0.30 if potential >= 90 and age <= 24 else 0.50
-        if age <= 22 and rng.random() < 0.08:
-            adj += 0.55
+        # True busts are rare. Elite young busts should mostly stall/slide early,
+        # then reveal over several seasons rather than nuking in year one.
+        adj -= 0.22 if potential >= 90 and age <= 24 else 0.48
+        if age <= 22 and rng.random() < 0.10:
+            adj += 0.50
     elif name == "hidden_gem":
         adj += 0.28 if age < peak_start else 0.78 if age <= peak_end and room >= 2 else 0.14
     elif name == "raw_tools_outlier":
@@ -3152,7 +3269,7 @@ def _v25_profile_expected_adjustment(p: Dict[str, Any], age: int, overall: int, 
             adj += 0.22
 
     if age >= decline_start:
-        decline_pressure = min(2.2, (age - decline_start + 1) * sharp * 0.36)
+        decline_pressure = min(2.8, (age - decline_start + 1) * sharp * 0.46)
         if name == "long_prime":
             decline_pressure *= 0.35
         elif name in {"fast_decliner", "short_peak"}:
@@ -3162,7 +3279,7 @@ def _v25_profile_expected_adjustment(p: Dict[str, Any], age: int, overall: int, 
         if age <= 33 and overall >= 90 and name not in {"fast_decliner", "short_peak"}:
             decline_pressure *= 0.52
         elif age <= 33 and overall >= 86 and name not in {"fast_decliner", "short_peak"}:
-            decline_pressure *= 0.72
+            decline_pressure *= 0.78
         adj -= decline_pressure
 
     # No profile can force endless climbing after ceiling is reached.
@@ -3211,8 +3328,10 @@ def _v25_random_event_adjustment(p: Dict[str, Any], age: int, overall: int, pote
             return rng.choice([1.05, 1.45, 1.85, 2.20])
         return rng.choice([0.70, 1.05, 1.45])
     if roll > 1.0 - chance * 0.55:
+        if _v25_elite_young_prospect(p, age, overall, potential, prof) and name not in {"true_bust", "volatile"}:
+            return -rng.choice([0.20, 0.35, 0.55])
         if potential >= 90 and age <= 24 and name not in {"true_bust", "volatile"}:
-            return -rng.choice([0.30, 0.55, 0.80])
+            return -rng.choice([0.25, 0.45, 0.70])
         return -rng.choice([0.55, 0.90, 1.20])
     return 0.0
 
@@ -3221,37 +3340,58 @@ def _v25_bound_delta(p: Dict[str, Any], age: int, overall: int, potential: int, 
     prof = _v25_profile(p, rng)
     name = str(prof.get("profile") or "steady_growth")
     ceiling = _safe_int(prof.get("hiddenCeiling"), max(overall, potential))
+    gap = max(0, potential - overall)
+    room = max(0, ceiling - overall)
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    elite_young = _v25_elite_young_prospect(p, age, overall, potential, prof)
+    low_young = _v25_low_young_developmental(p, age, overall, potential, prof)
+
     if age < 30:
         lo = -3
     elif age <= 33:
         lo = -4
     else:
         lo = -5
-    if name in {"true_bust", "fast_decliner"}:
-        lo -= 1 if age >= 24 else 0
-    if potential >= 92 and age <= 24 and name in {"true_bust", "disappointment"}:
-        lo = max(lo, -2)
+
+    # Premium teenagers/early-20s prospects should not lose three OVR in a
+    # normal annual roll. Bust/disappointment paths can still start badly, but
+    # the reveal should take multiple seasons.
+    if elite_young:
+        if name == "true_bust":
+            lo = max(lo, -2)
+        elif name in {"disappointment", "volatile"}:
+            lo = max(lo, -1)
+        else:
+            lo = max(lo, 0 if age <= 20 else -1)
     elif potential >= 90 and age <= 24:
-        lo = max(lo, -3)
-    gap = max(0, potential - overall)
-    room = max(0, ceiling - overall)
-    hidden_level = _v25_hidden_upside_level_from_profile(prof)
-    if age <= 23 and hidden_level >= 4 and overall <= 76 and room >= 12:
-        hi = 5 if rng.random() < 0.58 else 4
-    elif age <= 24 and hidden_level >= 3 and overall <= 78 and room >= 10:
-        hi = 5 if rng.random() < 0.25 else 4
-    elif age <= 22 and name in {"generational_hit", "raw_tools_outlier"} and room >= 8:
+        lo = max(lo, -2 if name in {"true_bust", "disappointment"} else -1)
+
+    # Low-rated young players normally should churn upward or stall. Only true
+    # bust/fast-decliner stories get permission to keep sliding.
+    if low_young:
+        lo = max(lo, 0 if age <= 22 else -1)
+
+    # Rare +5 lane, visible +4 lane. These remain hidden-path/room gated so the
+    # league bands do not become inflation machines.
+    if age <= 23 and hidden_level >= 4 and overall <= 77 and room >= 12:
+        hi = 5
+    elif age <= 23 and name in {"raw_tools_outlier", "skill_feel_outlier", "hidden_gem"} and room >= 11 and overall <= 77:
+        hi = 5 if rng.random() < 0.22 else 4
+    elif age <= 22 and name == "generational_hit" and room >= 9:
+        hi = 5 if rng.random() < 0.12 else 4
+    elif age <= 24 and (hidden_level >= 3 or name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}) and room >= 8:
         hi = 4
-    elif age <= 26 and (name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier"} or hidden_level >= 2) and room >= 6:
-        hi = 4 if rng.random() < (0.58 if hidden_level >= 3 else 0.42) else 3
-    elif age <= 24 and (name in {"star_hit", "hidden_gem", "skill_feel_outlier", "slow_burn", "late_bloomer"} or hidden_level >= 1) and room >= 5:
-        hi = 4 if ((name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier"} or hidden_level >= 3) and rng.random() < 0.34) else 3
+    elif age <= 24 and (name in {"generational_hit", "star_hit", "slow_burn", "late_bloomer"} or elite_young) and room >= 6:
+        hi = 4 if rng.random() < (0.24 if elite_young else 0.16) else 3
+    elif age <= 25 and low_young and room >= 8:
+        hi = 4 if rng.random() < 0.20 else 3
     elif age <= 24:
         hi = 3
     elif age <= 29:
         hi = 2
     else:
         hi = 1
+
     if overall >= 95:
         hi = min(hi, 2)
     elif overall >= 90:
@@ -3260,11 +3400,15 @@ def _v25_bound_delta(p: Dict[str, Any], age: int, overall: int, potential: int, 
         hi = min(hi, 0)
     elif room == 1:
         hi = min(hi, 1)
+
     if name in {"disappointment", "true_bust"}:
-        if potential >= 92 and age <= 24:
+        if elite_young:
+            hi = min(hi, 2 if name == "disappointment" else 1)
+        elif potential >= 90 and age <= 24:
             hi = min(hi, 2 if name == "disappointment" else 1)
         else:
             hi = min(hi, 1 if age <= 23 else 0)
+
     return int(_clamp(delta, lo, hi))
 
 
@@ -3293,6 +3437,16 @@ def _v25_cap_trim_protection_score(item: Dict[str, Any], rng: Optional[random.Ra
             score += 3
         if age <= 23 and before <= 76 and hidden_level >= 4 and ceiling >= 92:
             score += 4
+    if _v25_elite_young_prospect(p, age, before, pot, prof):
+        score += 8
+        if after <= before:
+            score += 4
+        if name not in {"true_bust", "disappointment"}:
+            score += 4
+    if _v25_low_young_developmental(p, age, before, pot, prof):
+        score += 3
+        if after < before:
+            score += 3
     if age <= 24 and ceiling >= after + 3:
         score += 2
     if peak_start - 1 <= age <= peak_end and ceiling >= after + 2:
@@ -3326,6 +3480,10 @@ def _v25_boost_priority_score(item: Dict[str, Any], threshold: int, rng: Optiona
         score += 3
     if hidden_level > 0 and age <= 26 and ceiling >= threshold:
         score += 2 + hidden_level
+    if _v25_elite_young_prospect(p, age, after, _safe_int(p.get("potential"), after), prof):
+        score += 5
+    if _v25_low_young_developmental(p, age, after, _safe_int(p.get("potential"), after), prof):
+        score += 3
     if name in _V25_BREAKOUT_PROFILES:
         score += 2
     if name in {"generational_hit", "star_hit"}:
@@ -3390,70 +3548,70 @@ def _v25_reconcile_potential_candidate(p: Dict[str, Any], candidate: int, old_po
 # -------------------------
 
 def _v24_age_expectation(age: int, overall: int) -> float:
-    """Organic age curve used before any league-shape bend.
+    """Organic deflated-scale age curve, tuned for story arcs.
 
-    Age guides probability, it does not dictate the result. The random roll below
-    can still send a young prospect down or an older player up in any one season.
+    Young players get enough positive pull for +3/+4 seasons to show up.
+    Prime players mostly hold. Older players face stronger drag so isolated
+    long sims do not produce common age-39/40 first peaks.
     """
     age = _safe_int(age, 25)
     if age <= 18:
-        base = 1.28
+        base = 0.34
     elif age == 19:
-        base = 1.12
+        base = 0.31
     elif age == 20:
-        base = 0.98
+        base = 0.28
     elif age == 21:
-        base = 0.82
+        base = 0.23
     elif age == 22:
-        base = 0.64
-    elif age == 23:
-        base = 0.46
-    elif age == 24:
-        base = 0.30
-    elif age == 25:
         base = 0.16
-    elif age == 26:
-        base = 0.06
-    elif age == 27:
+    elif age == 23:
+        base = 0.10
+    elif age == 24:
+        base = 0.04
+    elif age == 25:
         base = 0.00
+    elif age == 26:
+        base = -0.04
+    elif age == 27:
+        base = -0.09
     elif age == 28:
-        base = -0.08
+        base = -0.17
     elif age == 29:
-        base = -0.18
+        base = -0.28
     elif age == 30:
-        base = -0.32
+        base = -0.45
     elif age == 31:
-        base = -0.50
+        base = -0.70
     elif age == 32:
-        base = -0.72
+        base = -0.98
     elif age == 33:
-        base = -0.96
+        base = -1.28
     elif age == 34:
-        base = -1.25
-    elif age == 35:
         base = -1.60
+    elif age == 35:
+        base = -1.95
     elif age == 36:
-        base = -1.98
-    elif age == 37:
         base = -2.35
+    elif age == 37:
+        base = -2.75
     elif age == 38:
-        base = -2.70
-    elif age == 39:
-        base = -3.02
+        base = -3.15
     else:
-        base = -3.28
+        base = -3.50
 
-    # High ratings are harder to improve organically; low ratings are not doomed.
     if overall >= 97:
-        base -= 0.42
+        base -= 0.22
     elif overall >= 95:
-        base -= 0.28
+        base -= 0.15
     elif overall >= 92:
-        base -= 0.16
-    elif overall >= 90:
         base -= 0.08
-    elif overall < 68 and age <= 27:
-        base += 0.08
+    elif overall >= 90:
+        base -= 0.04
+    elif overall < 62 and age <= 24:
+        base += 0.14
+    elif overall < 65 and age <= 24:
+        base += 0.10
     return base
 
 
@@ -3461,20 +3619,20 @@ def _v24_potential_expectation(age: int, overall: int, potential: int) -> float:
     gap = max(-8, _safe_int(potential, overall) - _safe_int(overall, 70))
     age = _safe_int(age, 25)
     if gap <= -2:
-        return -0.16
+        return -0.14
     if gap <= 0:
-        return -0.06 if age <= 28 else 0.0
-    # POT is a probability shifter, not a promise. High gaps matter more while
-    # the player is still young; by late prime it mostly preserves variance.
+        return -0.05 if age <= 28 else 0.0
+    # Potential is a probability shifter, not a yearly elevator. The hidden
+    # V25 career path can still create major breakouts and exceed-POT stories.
     if age <= 21:
-        return _clamp(0.075 * gap, 0.0, 0.95)
+        return _clamp(0.028 * gap, 0.0, 0.38)
     if age <= 24:
-        return _clamp(0.060 * gap, 0.0, 0.72)
-    if age <= 27:
-        return _clamp(0.042 * gap, 0.0, 0.46)
-    if age <= 29:
-        return _clamp(0.025 * gap, 0.0, 0.24)
-    return _clamp(0.010 * gap, 0.0, 0.10)
+        return _clamp(0.018 * gap, 0.0, 0.22)
+    if age <= 26:
+        return _clamp(0.010 * gap, 0.0, 0.10)
+    if age <= 28:
+        return _clamp(0.004 * gap, 0.0, 0.03)
+    return 0.0
 
 
 def _v24_rating_tier_expectation(age: int, overall: int, potential: int) -> float:
@@ -3491,8 +3649,8 @@ def _v24_rating_tier_expectation(age: int, overall: int, potential: int) -> floa
         return -0.08 if gap < 4 else 0.02
     if 70 <= overall <= 73 and age <= 27:
         return 0.06
-    if 60 <= overall <= 69 and age <= 27:
-        return 0.05
+    if 62 <= overall <= 69 and age <= 27:
+        return 0.03
     return 0.0
 
 
@@ -3630,7 +3788,7 @@ def _apply_threshold_crossing_gates(
         if hidden_level >= 3 and before <= 78:
             hidden_gate_bonus += 0.08
     if target <= before:
-        return int(_clamp(target, 60, 99))
+        return int(_clamp(target, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
 
     # Extremely low players can rise, but only premium outliers should fly all
     # the way into playable depth in one season.
@@ -3659,7 +3817,7 @@ def _apply_threshold_crossing_gates(
         if rng.random() > chance:
             target = min(target, 82)
 
-    return int(_clamp(target, 60, 99))
+    return int(_clamp(target, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
 
 
 def _predict_dynamic_potential_after_progression(
@@ -3747,10 +3905,15 @@ def _predict_dynamic_potential_after_progression(
     # Strong age/OVR relationship from the source roster: older players tighten,
     # younger players keep room, and POT never displays below OVR.
     hard_cap = _dynamic_potential_hard_cap(new_age, new_overall)
+    # Early high-upside prospects keep their visible ceiling through a short
+    # evaluation window. The old hard cap was crushing 90-93 POT teenagers after
+    # one bad or band-trimmed season.
     if old_potential >= 94 and new_age <= 23:
         hard_cap = max(hard_cap, old_potential)
+    elif old_potential >= 90 and new_age <= 24:
+        hard_cap = max(hard_cap, old_potential - (0 if ovr_delta >= 0 else 1))
     if ovr_delta >= 2:
-        hard_cap = max(hard_cap, min(99, new_overall + (4 if new_age <= 24 else 3)))
+        hard_cap = max(hard_cap, min(99, new_overall + (5 if new_age <= 24 else 3)))
 
     candidate = _v25_reconcile_potential_candidate(
         player or {},
@@ -3803,7 +3966,7 @@ def _compute_raw_progression_plan(
         stats = _stat_lookup(stats_by_key, p, tname)
         delta = _target_delta_for_player(p, stats, settings, rng, tname)
 
-        target = int(_clamp(current_overall + delta, 60, 99))
+        target = int(_clamp(current_overall + delta, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
         target = _apply_threshold_crossing_gates(
             p = p,
             team_name = tname,
@@ -3830,48 +3993,62 @@ def _compute_raw_progression_plan(
 
 # v20 fine-grained cumulative shelves. These match the current 2026-27 roster
 # ecosystem and are rebuilt from the imported league, including free agents.
-_PROGRESS_TIER_THRESHOLDS = (97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 75, 74)
-# Cumulative governors protect the league ceiling and the playable middle.
+_PROGRESS_TIER_THRESHOLDS = tuple(range(RATING_MAX_OVERALL, 61, -1))
+# Single-OVR rung governors from 62-99. 54-61 are intentionally uncapped churn.
 _PROGRESS_FULL_CONTROL_TIERS = _PROGRESS_TIER_THRESHOLDS
 _PROGRESS_DEPTH_TRIM_ONLY_TIERS = ()
 
-# Band governors remain as coarse fallback governors, but v20 adds exact-rung
-# smoothing below so the league does not collect too many players at 85/80/77.
-_PROGRESS_BANDS = (
-    ("97_99", 97, 99, "full"),
-    ("95_96", 95, 96, "full"),
-    ("92_94", 92, 94, "light"),
-    ("90_91", 90, 91, "light"),
-    ("88_89", 88, 89, "light"),
-    ("85_87", 85, 87, "light"),
-    ("83_84", 83, 84, "light"),
-    ("81_82", 81, 82, "light"),
-    ("77_80", 77, 80, "light"),
-    ("74_76", 74, 76, "light"),
-    ("71_73", 71, 73, "trim"),
-    ("68_70", 68, 70, "trim"),
-    ("64_67", 64, 67, "trim"),
-    ("60_63", 60, 63, "trim"),
+_PROGRESS_BANDS = tuple(
+    (f"{rung}", rung, rung, "full") for rung in range(62, RATING_MAX_OVERALL + 1)
 )
-_PROGRESS_EXACT_RUNG_MIN = 74
-_PROGRESS_EXACT_RUNG_MAX = 99
+_PROGRESS_EXACT_RUNG_MIN = 62
+_PROGRESS_EXACT_RUNG_MAX = RATING_MAX_OVERALL
 _PROGRESS_BASELINE_KEY = "progressionBaseline"
 
-# Canonical shape derived from Raman's 2027 roster JSON, using rostered players
-# plus free agents. These are not exact locks; corridors below still allow churn,
-# but they stop later saves from preserving a bad/inflated interim baseline.
+# Deflated standard league economy, derived from the supplied 2026-27 roster.
+# Values are tight final-check corridors, not broad old-universe re-inflation targets.
+# Cumulative keys mean N players at-or-above that OVR.
 _CANONICAL_2027_SHELF_COUNTS = {
-    97: 3, 96: 5, 95: 7, 94: 9, 93: 12, 92: 15, 91: 18, 90: 22,
-    89: 27, 88: 33, 87: 40, 86: 48, 85: 57, 84: 67, 83: 79, 82: 93,
-    81: 110, 80: 130, 79: 154, 78: 182, 77: 215, 75: 301, 74: 353,
+    99: 0, 98: 0, 97: 1, 96: 2, 95: 3, 94: 4, 93: 5, 92: 6,
+    91: 8, 90: 10, 89: 12, 88: 15, 87: 18, 86: 22, 85: 26,
+    84: 31, 83: 37, 82: 44, 81: 52, 80: 61, 79: 71, 78: 83,
+    77: 97, 76: 113, 75: 131, 74: 151, 73: 173, 72: 197,
+    71: 223, 70: 251, 69: 281, 68: 313, 67: 347, 66: 383,
+    65: 417, 64: 449, 63: 479, 62: 507,
+}
+
+_CANONICAL_2027_SHELF_BANDS = {
+    99: (0, 1), 98: (0, 1), 97: (0, 2), 96: (1, 3), 95: (1, 4),
+    94: (3, 5), 93: (4, 6), 92: (5, 8), 91: (6, 10), 90: (8, 12),
+    89: (10, 14), 88: (13, 17), 87: (15, 21), 86: (19, 25),
+    85: (23, 29), 84: (27, 35), 83: (33, 41), 82: (39, 49),
+    81: (47, 57), 80: (55, 67), 79: (64, 78), 78: (76, 90),
+    77: (89, 105), 76: (104, 122), 75: (121, 141), 74: (140, 162),
+    73: (161, 185), 72: (184, 210), 71: (209, 237), 70: (236, 266),
+    69: (264, 298), 68: (295, 331), 67: (327, 367), 66: (361, 405),
+    65: (393, 441), 64: (423, 475), 63: (451, 507), 62: (477, 537),
 }
 
 _CANONICAL_2027_EXACT_COUNTS = {
-    98: 1, 97: 2, 96: 2, 95: 2, 94: 2, 93: 3, 92: 3, 91: 3, 90: 4,
-    89: 5, 88: 6, 87: 7, 86: 8, 85: 9, 84: 10, 83: 12, 82: 14,
-    81: 17, 80: 20, 79: 24, 78: 28, 77: 33, 76: 39, 75: 47, 74: 52,
+    99: 0, 98: 0, 97: 1, 96: 1, 95: 1, 94: 1, 93: 1, 92: 1,
+    91: 2, 90: 2, 89: 2, 88: 3, 87: 3, 86: 4, 85: 4,
+    84: 5, 83: 6, 82: 7, 81: 8, 80: 9, 79: 10, 78: 12,
+    77: 14, 76: 16, 75: 18, 74: 20, 73: 22, 72: 24, 71: 26,
+    70: 28, 69: 30, 68: 32, 67: 34, 66: 36, 65: 34, 64: 32,
+    63: 30, 62: 28,
 }
 
+_CANONICAL_2027_EXACT_BANDS = {
+    99: (0, 1), 98: (0, 1), 97: (0, 2), 96: (0, 2), 95: (0, 2),
+    94: (0, 2), 93: (0, 2), 92: (0, 2), 91: (1, 3), 90: (1, 3),
+    89: (1, 3), 88: (2, 4), 87: (2, 4), 86: (3, 5), 85: (3, 5),
+    84: (4, 7), 83: (4, 8), 82: (5, 9), 81: (6, 10), 80: (7, 11),
+    79: (8, 13), 78: (9, 15), 77: (11, 17), 76: (13, 20),
+    75: (15, 22), 74: (17, 24), 73: (18, 26), 72: (20, 28),
+    71: (22, 30), 70: (24, 32), 69: (26, 35), 68: (28, 37),
+    67: (30, 39), 66: (31, 41), 65: (29, 39), 64: (27, 37),
+    63: (25, 35), 62: (23, 33),
+}
 
 def _use_2027_shape_targets(settings: Dict[str, Any]) -> bool:
     cfg = settings.get("progression", {}) if isinstance(settings, dict) else {}
@@ -3897,8 +4074,8 @@ def _refresh_plan_targets(plan: List[Dict[str, Any]]) -> None:
     for item in plan:
         item["target_overall"] = int(_clamp(
             int(item["before_overall"]) + int(item["target_delta"]),
-            60,
-            99
+            RATING_MIN_OVERALL,
+            RATING_MAX_OVERALL
         ))
 
 
@@ -3907,26 +4084,42 @@ def _yearly_delta_caps_for_item(item: Dict[str, Any]) -> Tuple[int, int]:
     age = _safe_int(p.get("age"), 25)
     before = int(item.get("before_overall", _safe_int(p.get("overall"), 70)))
     potential = _safe_int(p.get("potential"), before)
-    gap = max(0, potential - before)
-    # User-facing realism guard: no normal one-year collapse bigger than -5.
+    prof = _v25_profile(p, None)
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    profile_name = str(prof.get("profile") or "steady_growth") if isinstance(prof, dict) else "steady_growth"
+    hidden_ceiling = _safe_int(prof.get("hiddenCeiling") if isinstance(prof, dict) else None, max(potential, before))
+    room = max(0, hidden_ceiling - before)
+    elite_young = _v25_elite_young_prospect(p, age, before, potential, prof)
+    low_young = _v25_low_young_developmental(p, age, before, potential, prof)
+
     if age < 30:
         lo = -3
     elif age <= 33:
         lo = -4
     else:
         lo = -5
-    # Legacy devPath never controls the yearly ceiling. V25D adds a rare +5
-    # lane for genuine low-OVR hidden superstar overlays/outliers.
-    prof = _v25_profile(p, None)
-    hidden_level = _v25_hidden_upside_level_from_profile(prof)
-    profile_name = str(prof.get("profile") or "steady_growth") if isinstance(prof, dict) else "steady_growth"
-    hidden_ceiling = _safe_int(prof.get("hiddenCeiling") if isinstance(prof, dict) else None, max(potential, before))
-    room = max(0, hidden_ceiling - before)
-    if age <= 23 and before <= 76 and room >= 12 and (hidden_level >= 4 or profile_name in {"raw_tools_outlier", "skill_feel_outlier"}):
+
+    if elite_young:
+        if profile_name == "true_bust":
+            lo = max(lo, -2)
+        elif profile_name in {"disappointment", "volatile"}:
+            lo = max(lo, -1)
+        else:
+            lo = max(lo, 0 if age <= 20 else -1)
+    elif potential >= 90 and age <= 24:
+        lo = max(lo, -2 if profile_name in {"true_bust", "disappointment"} else -1)
+    if low_young:
+        lo = max(lo, 0 if age <= 22 else -1)
+
+    if age <= 23 and before <= 77 and room >= 12 and (hidden_level >= 4 or profile_name in {"raw_tools_outlier", "skill_feel_outlier", "hidden_gem"}):
         hi = 5
-    elif age <= 24 and before <= 78 and room >= 10 and hidden_level >= 3:
+    elif age <= 22 and profile_name == "generational_hit" and room >= 9:
+        hi = 5
+    elif age <= 24 and before <= 79 and room >= 8 and (hidden_level >= 3 or profile_name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}):
         hi = 4
-    elif age <= 23 and potential >= 92 and gap >= 8:
+    elif age <= 24 and room >= 6 and (elite_young or profile_name in {"generational_hit", "star_hit", "slow_burn", "late_bloomer"}):
+        hi = 4
+    elif age <= 25 and low_young and room >= 8:
         hi = 4
     elif age <= 24:
         hi = 3
@@ -3934,6 +4127,7 @@ def _yearly_delta_caps_for_item(item: Dict[str, Any]) -> Tuple[int, int]:
         hi = 2
     else:
         hi = 1
+
     if before >= 95:
         hi = min(hi, 2)
     elif before >= 90:
@@ -3947,7 +4141,7 @@ def _cap_plan_yearly_deltas(plan: List[Dict[str, Any]]) -> None:
         lo, hi = _yearly_delta_caps_for_item(item)
         target = int(item.get("target_overall", before))
         capped = int(_clamp(target, before + lo, before + hi))
-        item["target_overall"] = int(_clamp(capped, 60, 99))
+        item["target_overall"] = int(_clamp(capped, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
         item["target_delta"] = item["target_overall"] - before
 
 
@@ -4444,7 +4638,7 @@ def _band_trim_priority(item: Dict[str, Any], rng: random.Random) -> Tuple[Any, 
 
 def _set_plan_target(item: Dict[str, Any], target: int) -> None:
     before = int(item["before_overall"])
-    target = int(_clamp(target, 60, 99))
+    target = int(_clamp(target, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
     item["target_delta"] = target - before
     item["target_overall"] = target
 
@@ -4538,9 +4732,9 @@ def _apply_band_excess_trims(
         elif label == "68_70":
             desired = max(64, after - 2)
         elif label == "64_67":
-            desired = max(60, after - 2)
+            desired = max(RATING_MIN_OVERALL, after - 2)
         else:
-            desired = max(60, after - 1)
+            desired = max(RATING_MIN_OVERALL, after - 1)
 
         if desired < after:
             _set_plan_target(item, desired)
@@ -5309,7 +5503,7 @@ def _apply_v20_fine_shape_lock(
                 after = int(item.get("target_overall", 0))
                 # Do not turn a one-year breakout into a full crash; one rung is
                 # enough because lower cumulative shelves run afterward.
-                desired = max(60, min(threshold - 1, after - 1))
+                desired = max(RATING_MIN_OVERALL, min(threshold - 1, after - 1))
                 if desired < after:
                     _set_plan_target(item, desired)
                     applied += 1
@@ -5379,67 +5573,31 @@ def _apply_v20_fine_shape_lock(
 # -------------------------
 # V23 final saved-pool hard league-shape lock
 # -------------------------
-_HARD_SHAPE_VERSION = "v25d_final_saved_pool_hard_caps_2027_universe"
+_HARD_SHAPE_VERSION = "v1_deflated_standard_62_99_tight_bands"
 
 
 def _hard_cumulative_spread(threshold: int) -> int:
-    # V23 uses fixed, population-independent corridors. Adding draft classes
-    # can increase the number of sub-74 players, but it can never expand these
-    # playable-quality shelves.
-    if threshold >= 90:
-        return 1
-    if threshold >= 85:
-        return 2
-    if threshold >= 80:
-        return 3
-    if threshold >= 77:
-        return 4
-    return 5
+    # Legacy helper kept for compatibility; actual standard corridors are fixed
+    # by _CANONICAL_2027_SHELF_BANDS below.
+    low, high = _CANONICAL_2027_SHELF_BANDS.get(int(threshold), (0, 9999))
+    base = int(_CANONICAL_2027_SHELF_COUNTS.get(int(threshold), low))
+    return max(0, high - base)
 
 
 def _hard_exact_spread(rung: int) -> int:
-    if rung >= 85:
-        return 1
-    if rung >= 80:
-        return 2
-    if rung >= 77:
-        return 2
-    return 3
+    # Legacy helper kept for compatibility; actual exact corridors are fixed
+    # by _CANONICAL_2027_EXACT_BANDS below.
+    low, high = _CANONICAL_2027_EXACT_BANDS.get(int(rung), (0, 9999))
+    base = int(_CANONICAL_2027_EXACT_COUNTS.get(int(rung), low))
+    return max(0, high - base)
 
 
 def _hard_cumulative_corridors() -> Dict[int, Tuple[int, int]]:
-    out: Dict[int, Tuple[int, int]] = {}
-    for threshold, base in _CANONICAL_2027_SHELF_COUNTS.items():
-        upper_spread = _hard_cumulative_spread(threshold)
-        # Upper limits are the literal hard caps. Lower floors are slightly
-        # wider in the depth tiers so the engine can create natural churn
-        # instead of force-boosting a specific number of 65-73 OVR players.
-        if threshold >= 90:
-            lower_spread = upper_spread
-        elif threshold >= 85:
-            lower_spread = upper_spread + 1
-        elif threshold >= 80:
-            lower_spread = upper_spread + 2
-        elif threshold >= 77:
-            lower_spread = 7
-        elif threshold >= 75:
-            lower_spread = 11
-        else:
-            lower_spread = 13
-        out[int(threshold)] = (max(0, int(base) - lower_spread), int(base) + upper_spread)
-    return out
+    return {int(k): (int(v[0]), int(v[1])) for k, v in _CANONICAL_2027_SHELF_BANDS.items()}
 
 
 def _hard_exact_corridors() -> Dict[int, Tuple[int, int]]:
-    # Exact rungs are hard *maximums* only. Cumulative shelves provide the
-    # league-quality floors. Requiring an exact minimum at every rung caused
-    # artificial boosts simply to fill a number such as 82 or 76.
-    out: Dict[int, Tuple[int, int]] = {99: (0, 1)}
-    for rung in range(98, 73, -1):
-        base = int(_CANONICAL_2027_EXACT_COUNTS.get(rung, 0))
-        spread = _hard_exact_spread(rung)
-        out[rung] = (0, base + spread)
-    return out
+    return {int(k): (int(v[0]), int(v[1])) for k, v in _CANONICAL_2027_EXACT_BANDS.items()}
 
 
 def _age_peak_overall_cap(item: Dict[str, Any], rng: random.Random) -> int:
@@ -5454,9 +5612,9 @@ def _age_peak_overall_cap(item: Dict[str, Any], rng: random.Random) -> int:
     )
     kind = str(profile.get("kind") or "steady")
     caps = {
-        30: 98, 31: 97, 32: 96, 33: 95, 34: 94, 35: 93,
-        36: 91, 37: 89, 38: 87, 39: 84, 40: 81, 41: 78,
-        42: 75, 43: 72,
+        30: 98, 31: 97, 32: 96, 33: 94, 34: 92, 35: 90,
+        36: 88, 37: 86, 38: 83, 39: 80, 40: 77, 41: 74,
+        42: 71, 43: 68,
     }
     if age < 30:
         cap = 99
@@ -5477,11 +5635,17 @@ def _age_peak_overall_cap(item: Dict[str, Any], rng: random.Random) -> int:
             cap += 1
         if 30 <= age <= 32 and before_ovr >= 96 and v25_name in {"long_prime", "generational_hit"}:
             cap += 1
+        original_ovr = _safe_int(v25_prof.get("originalOvr"), before_ovr)
+        hidden_ceiling = _safe_int(v25_prof.get("hiddenCeiling"), _safe_int(p.get("potential"), before_ovr))
+        if age >= 35 and original_ovr <= 76 and v25_name not in {"generational_hit", "star_hit", "long_prime"}:
+            late_role_cap = 86 if hidden_ceiling >= 90 else 83 if hidden_ceiling >= 85 else 80
+            late_role_cap -= max(0, age - 35)
+            cap = min(cap, late_role_cap)
     except Exception:
         pass
     if kind == "early_peak" and age > _safe_int(profile.get("peakAge"), 26):
         cap -= 1
-    return int(_clamp(cap, 60, 99))
+    return int(_clamp(cap, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
 
 
 def _hard_item_bounds(item: Dict[str, Any], rng: random.Random) -> Tuple[int, int]:
@@ -5495,17 +5659,17 @@ def _hard_item_bounds(item: Dict[str, Any], rng: random.Random) -> Tuple[int, in
     has_original_window = p.get("__progressionOriginalOverall") is not None
     if has_original_window:
         lo_delta, hi_delta = _yearly_delta_caps_for_item(item)
-        lo = int(_clamp(before + lo_delta, 60, 99))
-        hi = int(_clamp(before + hi_delta, 60, 99))
+        lo = int(_clamp(before + lo_delta, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
+        hi = int(_clamp(before + hi_delta, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
     elif item.get("final_shape_only"):
         # Roster/draft/free-agency lifecycle reconciliation is a one-rung
         # distribution correction, not a second progression event.
-        lo = int(_clamp(current - 1, 60, 99))
-        hi = int(_clamp(current + 1, 60, 99))
+        lo = int(_clamp(current - 1, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
+        hi = int(_clamp(current + 1, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
     else:
         lo_delta, hi_delta = _yearly_delta_caps_for_item(item)
-        lo = int(_clamp(before + lo_delta, 60, 99))
-        hi = int(_clamp(before + hi_delta, 60, 99))
+        lo = int(_clamp(before + lo_delta, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
+        hi = int(_clamp(before + hi_delta, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
 
     hi = min(hi, _age_peak_overall_cap(item, rng))
     if hi < lo:
@@ -5554,6 +5718,12 @@ def _hard_set_target(item: Dict[str, Any], desired: int, rng: random.Random, for
     # V23 never bypasses the yearly/lifecycle window. If a pathological save
     # makes the hard cap mathematically impossible, the final audit fails and
     # the UI blocks completion instead of silently creating an oversized jump.
+    # Deflated v1: shortage fills must be exact. A 55 OVR player with a +5 yearly
+    # ceiling should not be partially boosted to 60 while trying to fill a 64 rung.
+    if not force and desired > current and hi < desired:
+        return False
+    if not force and desired < current and lo > desired and lo >= current:
+        return False
     target = int(_clamp(desired, lo, hi))
     if target == current:
         return False
@@ -5588,22 +5758,31 @@ def audit_current_league_shape(league: Dict[str, Any]) -> Dict[str, Any]:
     for threshold in _PROGRESS_TIER_THRESHOLDS:
         low, high = cumulative[int(threshold)]
         actual = sum(1 for value in values if value >= threshold)
-        ok = actual <= high
+        ok = low <= actual <= high
         cumulative_audit[str(threshold)] = {
             "actual": actual, "targetMin": low, "max": high,
             "ok": ok, "belowTarget": actual < low,
         }
         if actual > high:
             violations.append({"type": "cumulative_max", "threshold": threshold, "actual": actual, "max": high})
+        elif actual < low:
+            # Soft floor: report as belowTarget in the audit but do not block the
+            # save. Hard maximums prevent inflation; soft minimums only smooth
+            # nearby rungs when plausible candidates exist.
+            pass
 
-    for rung in range(99, 73, -1):
-        _low, high = exact.get(rung, (0, 9999))
+    for rung in range(_PROGRESS_EXACT_RUNG_MAX, _PROGRESS_EXACT_RUNG_MIN - 1, -1):
+        low, high = exact.get(rung, (0, 9999))
         actual = sum(1 for value in values if value == rung)
-        hard = rung >= 90
-        ok = (actual <= high) if hard else True
-        exact_audit[str(rung)] = {"actual": actual, "max": high, "hard": hard, "ok": ok}
-        if hard and actual > high:
+        ok = low <= actual <= high
+        exact_audit[str(rung)] = {"actual": actual, "targetMin": low, "max": high, "hard": True, "ok": ok, "belowTarget": actual < low}
+        if actual > high:
             violations.append({"type": "exact_max", "rung": rung, "actual": actual, "max": high})
+        elif actual < low:
+            # Soft floor: report as belowTarget in the audit but do not block the
+            # save. Hard maximums prevent exact-rung clumping; soft minimums only
+            # smooth nearby rungs when plausible candidates exist.
+            pass
 
     potential_below_overall = []
     for p in players:
@@ -5681,7 +5860,7 @@ def _apply_true_hard_shape_lock(
                 break
 
     # 2. Hard exact-rung anti-clump maximums.
-    for rung in range(99, 73, -1):
+    for rung in range(_PROGRESS_EXACT_RUNG_MAX, _PROGRESS_EXACT_RUNG_MIN - 1, -1):
         _refresh_plan_targets(plan)
         _low, high = exact.get(rung, (0, 9999))
         while _hard_exact_count(plan, rung) > high:
@@ -5719,7 +5898,8 @@ def _apply_true_hard_shape_lock(
                 p = item.get("player") or {}
                 age = _safe_int(p.get("age"), 25)
                 pot = _safe_int(p.get("potential"), int(item.get("before_overall", after)))
-                if after < threshold and hi >= threshold:
+                near_enough = after == threshold - 1 or (threshold <= 84 and after >= threshold - 2)
+                if after < threshold and hi >= threshold and near_enough:
                     if threshold >= 95 and (age > 30 or pot < threshold):
                         continue
                     if threshold >= 90 and (age > 31 or pot < threshold - 1):
@@ -5734,7 +5914,7 @@ def _apply_true_hard_shape_lock(
 
     # 4. Exact-rung minimums prevent empty rungs. We only pull close plausible
     # players upward, then re-run all hard maximums.
-    for rung in range(98, 73, -1):
+    for rung in range(_PROGRESS_EXACT_RUNG_MAX - 1, _PROGRESS_EXACT_RUNG_MIN - 1, -1):
         low, _high = exact.get(rung, (0, 9999))
         need = low - _hard_exact_count(plan, rung)
         if need <= 0:
@@ -5762,7 +5942,7 @@ def _apply_true_hard_shape_lock(
                 break
             if not _hard_set_target(candidates[0], threshold - 1, rng):
                 break
-    for rung in range(99, 73, -1):
+    for rung in range(_PROGRESS_EXACT_RUNG_MAX, _PROGRESS_EXACT_RUNG_MIN - 1, -1):
         _low, high = exact.get(rung, (0, 9999))
         while _hard_exact_count(plan, rung) > high:
             candidates = [item for item in plan if not _is_shape_protected_item(item) and int(item.get("target_overall", 0)) == rung]
@@ -5779,19 +5959,30 @@ def _apply_true_hard_shape_lock(
     for threshold in _PROGRESS_TIER_THRESHOLDS:
         low, high = cumulative[int(threshold)]
         actual = _hard_count(plan, threshold)
+        ok = low <= actual <= high
         cumulative_audit[str(threshold)] = {
             "actual": actual, "targetMin": low, "max": high,
-            "ok": actual <= high, "belowTarget": actual < low,
+            "ok": ok, "belowTarget": actual < low,
         }
         if actual > high:
             violations.append({"type": "cumulative_max", "threshold": threshold, "actual": actual, "max": high})
-    for rung in range(99, 73, -1):
+        elif actual < low:
+            # Soft floor: report as belowTarget in the audit but do not block the
+            # save. Hard maximums prevent inflation; soft minimums only smooth
+            # nearby rungs when plausible candidates exist.
+            pass
+    for rung in range(_PROGRESS_EXACT_RUNG_MAX, _PROGRESS_EXACT_RUNG_MIN - 1, -1):
         low, high = exact.get(rung, (0, 9999))
         actual = _hard_exact_count(plan, rung)
-        hard = rung >= 90
-        exact_audit[str(rung)] = {"actual": actual, "max": high, "hard": hard, "ok": (actual <= high) if hard else True}
-        if hard and actual > high:
+        ok = low <= actual <= high
+        exact_audit[str(rung)] = {"actual": actual, "targetMin": low, "max": high, "hard": True, "ok": ok, "belowTarget": actual < low}
+        if actual > high:
             violations.append({"type": "exact_max", "rung": rung, "actual": actual, "max": high})
+        elif actual < low:
+            # Soft floor: report as belowTarget in the audit but do not block the
+            # save. Hard maximums prevent exact-rung clumping; soft minimums only
+            # smooth nearby rungs when plausible candidates exist.
+            pass
 
     return {
         "version": _HARD_SHAPE_VERSION,
@@ -5866,7 +6057,7 @@ def _force_overall_at_most(
     """
     attrs = _ensure_attrs(p.get("attrs"))
     pos = p.get("pos") or p.get("position") or "SF"
-    cap_overall = int(_clamp(cap_overall, 60, 99))
+    cap_overall = int(_clamp(cap_overall, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
 
     current = calc_overall_from_attrs(attrs, pos)
     if current <= cap_overall:
@@ -5963,7 +6154,10 @@ def _shape_metrics_from_players(players: List[Dict[str, Any]]) -> Dict[str, Any]
     for p in players:
         if not isinstance(p, dict):
             continue
-        if isinstance(p.get("attrs"), list) and len(p.get("attrs") or []) > 0:
+        visible_overall = p.get("overall") if p.get("overall") is not None else p.get("ovr")
+        if visible_overall is not None:
+            values.append(_safe_int(visible_overall, 0))
+        elif isinstance(p.get("attrs"), list) and len(p.get("attrs") or []) > 0:
             values.append(calc_overall_from_attrs(p.get("attrs") or [], p.get("pos") or p.get("position") or "SF"))
         else:
             values.append(_safe_int(p.get("overall"), 0))
@@ -6135,7 +6329,7 @@ def _apply_core_roster_shape_lock(
             if applied >= need:
                 break
             after = int(item["target_overall"])
-            desired = max(60, after - 1)
+            desired = max(RATING_MIN_OVERALL, after - 1)
             if desired < after:
                 _set_plan_target(item, desired)
                 down_used += 1
@@ -6391,8 +6585,8 @@ def _enforce_actual_yearly_delta_window(
     """Keep actual calculated OVR inside the user-facing yearly movement cap."""
     before = int(item.get("before_overall", _safe_int(p.get("overall"), 70)))
     lo, hi = _yearly_delta_caps_for_item(item)
-    min_allowed = int(_clamp(before + lo, 60, 99))
-    max_allowed = int(_clamp(before + hi, 60, 99))
+    min_allowed = int(_clamp(before + lo, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
+    max_allowed = int(_clamp(before + hi, RATING_MIN_OVERALL, RATING_MAX_OVERALL))
     current = _safe_int(p.get("overall"), before)
     if current > max_allowed:
         _force_overall_at_most(p, max_allowed, settings, rng)
