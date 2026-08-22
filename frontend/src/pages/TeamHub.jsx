@@ -308,12 +308,6 @@ export default function TeamHub() {
       },
     ],
     Season: [
-      {
-        name: "New Chapter",
-        action: "openSeasonBriefing",
-        enabled: true,
-        description: "Season Story, League Changes, Prospects, and Outlook",
-      },
       { name: "Standings", path: "/standings", enabled: true },
       { name: "Playoff Picture", path: "/playoff-picture", enabled: true },
       { name: "Power Rankings", path: "/power-rankings", enabled: true },
