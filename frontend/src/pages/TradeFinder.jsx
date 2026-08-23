@@ -6,6 +6,13 @@ import { findComfortableTradeFinderOffers, sortTradeFinderOfferItems } from "../
 import { findComfortableReverseTradeFinderOffers } from "../utils/reverseTradeFinderOfferEngine.js";
 import { evaluateTradeTeamImpact } from "../utils/tradeTeamImpact.js";
 import {
+  TRADE_PATIENCE_SUBMIT_MIN,
+  ensureTradePatienceForUserTeam,
+  formatTradePatienceWait,
+  getTeamTradePatience,
+  getTradePatienceBlockedTeams,
+} from "../utils/userTradePatience.js";
+import {
   buildOffseasonTradeEvaluationLeague,
   getOffseasonTradeContext,
   getTeamFromTradeLeague,
@@ -22,6 +29,7 @@ import {
   recordTradeFinderSearchSnapshot,
 } from "../utils/bmDiagnostics.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
+import { saveLeagueData } from "../utils/leagueStorage.js";
 import { getContractSeasonYear, getDraftYear } from "../utils/seasonContext.js";
 import { getTradeWindowLockMessage } from "../utils/tradeWindow.js";
 import { formatInjuryReturnLabel, isPlayerInjured } from "../utils/injurySystem.js";
@@ -2216,7 +2224,7 @@ function TradeFinderScrollbarStyles() {
 
 export default function TradeFinder() {
   const navigate = useNavigate();
-  const { leagueData, selectedTeam } = useGame();
+  const { leagueData, selectedTeam, setLeagueData } = useGame();
   const teams = useMemo(
     () => [...getAllTeamsFromLeague(leagueData)].sort((a, b) =>
       String(a?.name || a?.teamName || "").localeCompare(String(b?.name || b?.teamName || ""))
@@ -2245,9 +2253,63 @@ export default function TradeFinder() {
   const lastDraftProgressSignatureRef = useRef(liveDraftProgressSignature);
   const packageTeamInitializedRef = useRef(false);
   const userTradeCurrentDate = useMemo(() => getUserTradeCurrentDate(leagueData), [leagueData]);
+  const selectedUserTeamName = selectedTeam?.name || selectedTeam?.teamName || "";
+  const packageTeamName = packageTeam?.name || packageTeam?.teamName || "";
+  const packageTeamPatienceStatus = useMemo(
+    () => getTeamTradePatience({
+      leagueData,
+      userTeamName: selectedUserTeamName,
+      cpuTeamName: packageTeamName,
+      currentDate: userTradeCurrentDate,
+    }),
+    [leagueData, selectedUserTeamName, packageTeamName, userTradeCurrentDate]
+  );
+  const patienceAvailability = useMemo(() => {
+    const names = teams
+      .map((team) => team?.name || team?.teamName || "")
+      .filter(Boolean);
+    return getTradePatienceBlockedTeams({
+      leagueData,
+      userTeamName: selectedUserTeamName,
+      teamNames: names,
+      currentDate: userTradeCurrentDate,
+    });
+  }, [leagueData, selectedUserTeamName, teams, userTradeCurrentDate]);
+  const blockedPatienceTeamNames = useMemo(
+    () => new Set((patienceAvailability.blocked || []).map((entry) => String(entry.teamName || ""))),
+    [patienceAvailability]
+  );
+  const searchableTeams = useMemo(() => {
+    return teams.filter((team) => {
+      const name = team?.name || team?.teamName || "";
+      if (!name) return false;
+      if (sameTeamName(name, selectedUserTeamName)) return true;
+      return !blockedPatienceTeamNames.has(name);
+    });
+  }, [teams, selectedUserTeamName, blockedPatienceTeamNames]);
+  const blockedPatienceCount = patienceAvailability.blocked?.length || 0;
+  const standardSearchableCpuCount = Math.max(0, searchableTeams.length - 1);
+  const reversePatienceBlocked = Boolean(isReverseFinder && !packageTeamPatienceStatus.canNegotiate);
+  const standardPatienceBlocked = Boolean(!isReverseFinder && selectedItems.length > 0 && standardSearchableCpuCount <= 0);
+  const tradeFinderPatienceBlocked = reversePatienceBlocked || standardPatienceBlocked;
+  const tradeFinderPatienceMessage = reversePatienceBlocked
+    ? `${packageTeamName} is not taking trade calls right now. Sim ${formatTradePatienceWait(packageTeamPatienceStatus.daysUntilCanNegotiate)} to rebuild Front Office Patience.`
+    : standardPatienceBlocked
+      ? `No CPU teams are taking trade calls right now. Sim a few days to rebuild Front Office Patience.`
+      : "";
   const userDeadlineStatus = useMemo(() => getUserTradeDeadlineStatus(leagueData), [leagueData]);
   const tradeWindowLocked = Boolean(userDeadlineStatus.locked);
   const tradeLockMessage = userDeadlineStatus.reason || getTradeWindowLockMessage();
+
+  useEffect(() => {
+    if (!leagueData || !selectedUserTeamName) return;
+    const ensured = ensureTradePatienceForUserTeam(leagueData, selectedUserTeamName);
+    if (!ensured.changed || ensured.leagueData === leagueData) return;
+    setLeagueData(ensured.leagueData);
+    saveLeagueData(ensured.leagueData).catch((err) => {
+      console.warn("[TradeFinder] trade patience reset save failed", err);
+    });
+  }, [leagueData, selectedUserTeamName, setLeagueData]);
 
   const resetFinderWorkspace = ({ clearPackage = true } = {}) => {
     try { offerSearchAbortRef.current?.abort?.(); } catch {}
@@ -2453,10 +2515,14 @@ export default function TradeFinder() {
   const offers = useMemo(() => {
     if (!searched) return [];
     return (pythonOffers || []).filter((offer) => {
+      const offerTeamName = isReverseFinder
+        ? packageTeamName
+        : offer?.team?.name || offer?.team?.teamName || offer?.teamName || "";
+      if (offerTeamName && blockedPatienceTeamNames.has(offerTeamName)) return false;
       const rows = [...(offer?.offer || []), ...(offer?.targetItems || [])];
       return !rows.some((item) => item?.type === "pick" && isResolvedPickConsumed(item.pick || {}, leagueData));
     });
-  }, [searched, pythonOffers, leagueData, liveDraftProgressSignature]);
+  }, [searched, pythonOffers, leagueData, liveDraftProgressSignature, isReverseFinder, packageTeamName, blockedPatienceTeamNames]);
 
   const isPackageFull = selectedItems.length >= MAX_TRADE_FINDER_PACKAGE_ASSETS;
 
@@ -2577,6 +2643,12 @@ export default function TradeFinder() {
     if (!packageValidation.ok) {
       setPythonOffers([]);
       setOfferSearchError(packageValidation.reason || "This Trade Finder package contains an illegal asset.");
+      return;
+    }
+
+    if (tradeFinderPatienceBlocked) {
+      setPythonOffers([]);
+      setOfferSearchError(tradeFinderPatienceMessage || "No eligible CPU teams are taking trade calls right now.");
       return;
     }
 
@@ -2721,7 +2793,7 @@ export default function TradeFinder() {
             leagueData: userRuleLeagueData,
             selectedTeam,
             selectedItems,
-            teams,
+            teams: searchableTeams,
             signal: controller.signal,
             onProgress: standardProgress,
             userDrivenRules: true,
@@ -3160,7 +3232,7 @@ export default function TradeFinder() {
                     <div className="mt-1 text-xs font-bold text-neutral-500">
                       {isReverseFinder
                         ? `Searches ${selectedTeam?.name} assets • 0–5 distinct comfortable packages`
-                        : `One comfortable offer max per CPU team • Teams checked: ${Math.max(0, teams.length - 1)}`}
+                        : `One comfortable offer max per CPU team • Teams available: ${standardSearchableCpuCount}${blockedPatienceCount ? ` • ${blockedPatienceCount} not taking calls` : ""}`}
                     </div>
                   </div>
 
@@ -3168,10 +3240,10 @@ export default function TradeFinder() {
                     <button
                       type="button"
                       onClick={runSearchOffers}
-                      disabled={!selectedItems.length || isSearchingOffers || selectedPackageValidation.ok === false}
+                      disabled={!selectedItems.length || isSearchingOffers || selectedPackageValidation.ok === false || tradeFinderPatienceBlocked}
                       className="rounded-2xl bg-orange-600 px-5 py-2.5 text-sm font-black text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {isSearchingOffers ? "Searching..." : selectedPackageValidation.ok === false ? "Illegal Package" : "Search Offers"}
+                      {isSearchingOffers ? "Searching..." : selectedPackageValidation.ok === false ? "Illegal Package" : tradeFinderPatienceBlocked ? "Patience Locked" : "Search Offers"}
                     </button>
 
                     {isSearchingOffers && (
@@ -3191,6 +3263,18 @@ export default function TradeFinder() {
                 {selectedItems.length > 0 && selectedPackageValidation.ok === false && (
                   <div className="mb-3 rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm font-bold leading-6 text-red-100">
                     {selectedPackageValidation.reason || "This package contains an asset that cannot currently be traded."}
+                  </div>
+                )}
+
+                {blockedPatienceCount > 0 && !isReverseFinder && (
+                  <div className="mb-3 rounded-2xl border border-amber-400/25 bg-amber-500/10 p-4 text-xs font-bold leading-5 text-amber-100">
+                    {blockedPatienceCount} CPU team{blockedPatienceCount === 1 ? " is" : "s are"} not taking calls because Front Office Patience is below {TRADE_PATIENCE_SUBMIT_MIN}. Those teams will not provide Trade Finder offers until you sim ahead.
+                  </div>
+                )}
+
+                {reversePatienceBlocked && (
+                  <div className="mb-3 rounded-2xl border border-red-400/25 bg-red-500/10 p-4 text-xs font-bold leading-5 text-red-100">
+                    {tradeFinderPatienceMessage}
                   </div>
                 )}
 

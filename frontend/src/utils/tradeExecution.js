@@ -2148,10 +2148,25 @@ function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, u
     movedPicks,
     cpuDecision: evaluation?.decision || "accept",
     cpuScore: Number(evaluation?.score || 0),
+    // Internal-only user-negotiation diagnostics retained for future features.
+    ...(userDrivenRules
+      ? {
+          cpuDecisionMargin: Number(evaluation?.decisionMargin ?? evaluation?.teamImpact?.decisionMargin ?? 0),
+          cpuRawScoreMargin: Number(evaluation?.rawScoreMargin ?? evaluation?.teamImpact?.rawScoreMargin ?? 0),
+          cpuAcceptancePath: evaluation?.acceptancePath || evaluation?.teamImpact?.acceptancePath || "",
+        }
+      : {}),
     evaluationSummary: {
       decision: evaluation?.decision || "accept",
       accepted: hasAcceptedEvaluation(evaluation),
       score: Number(evaluation?.score || 0),
+      ...(userDrivenRules
+        ? {
+            decisionMargin: Number(evaluation?.decisionMargin ?? evaluation?.teamImpact?.decisionMargin ?? 0),
+            rawScoreMargin: Number(evaluation?.rawScoreMargin ?? evaluation?.teamImpact?.rawScoreMargin ?? 0),
+            acceptancePath: evaluation?.acceptancePath || evaluation?.teamImpact?.acceptancePath || "",
+          }
+        : {}),
       message: evaluation?.message || "",
       reasons: Array.isArray(evaluation?.reasons) ? evaluation.reasons.slice(0, 6) : [],
     },

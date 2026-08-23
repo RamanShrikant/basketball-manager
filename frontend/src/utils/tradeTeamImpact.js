@@ -715,7 +715,8 @@ function debugTradeImpactEvaluation(args = {}, result = {}, extra = {}) {
     decision: result?.decision,
     score: Number(result?.score ?? 0),
     threshold: Number(impact?.threshold ?? 0),
-    margin: Number(result?.score ?? 0) - Number(impact?.threshold ?? 0),
+    decisionMargin: Number(result?.decisionMargin ?? impact?.decisionMargin ?? 0),
+    rawScoreMargin: Number(result?.rawScoreMargin ?? impact?.rawScoreMargin ?? (Number(result?.score ?? 0) - Number(impact?.threshold ?? 0))),
     ratingMode: impact?.ratingMode || "",
     fastScan: Boolean(impact?.fastScan),
     fastFtr: Boolean(impact?.fastFtr),
@@ -2605,6 +2606,10 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
     leagueData,
     cpuIncomingPlayers,
     cpuOutgoingPlayers,
+    // The tiny bad-contract term nudge is intentionally user-trade-only.
+    // Trade Finder uses this same standard evaluator, so its final offers stay aligned
+    // with Propose Trade. CPU-to-CPU trade behavior is left untouched.
+    userTradeTermTuning: !isCpuCpuEvaluation,
   });
   addBreakdownMetric(__tfBreakdownMetrics, "contractMs", tfImpactNow() - contractStart);
 
@@ -2762,6 +2767,44 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
       cpuCpuAgingHighEndSellerAccept
   );
 
+  // Internal-only negotiation margin. Unlike the old raw score-vs-threshold
+  // difference, this follows the actual acceptance path that fired so its sign
+  // always matches the CPU decision. We intentionally keep the raw score margin
+  // too for diagnostics/future negotiation features.
+  const rawScoreMargin = round4(mainScore - threshold);
+  let acceptancePath = "strict_threshold";
+  let decisionMargin = rawScoreMargin;
+
+  if (accepted && !tradeoffAccept) {
+    if (noDownsideAccept) {
+      acceptancePath = "no_downside";
+      decisionMargin = round4(mainScore - (threshold - 0.25));
+    } else if (noDownsidePickSweetenerAccept) {
+      acceptancePath = "no_downside_pick_sweetener";
+      decisionMargin = round4(pickScore - NO_DOWNSIDE_PICK_SWEETENER_LINE);
+    } else if (cleanPickUpgradeAccept) {
+      acceptancePath = "clean_pick_upgrade";
+      decisionMargin = round4(pickScore - CLEAN_PICK_UPGRADE_ACCEPT_LINE);
+    } else if (mathematicallyStrictResolvedPickUpgradeAccept) {
+      acceptancePath = "strict_resolved_pick_upgrade";
+      decisionMargin = round4(Math.max(0.0001, pickScore));
+    } else if (cpuCpuBuyerAccept) {
+      acceptancePath = "cpu_cpu_buyer";
+      decisionMargin = round4(mainScore - (threshold - cpuCpuBuyerScoreSlack));
+    } else if (cpuCpuSellerAccept) {
+      acceptancePath = "cpu_cpu_seller";
+      decisionMargin = round4(mainScore - (threshold - cpuCpuSellerScoreSlack));
+    } else if (cpuCpuAgingHighEndSellerAccept) {
+      acceptancePath = "cpu_cpu_aging_high_end_seller";
+      decisionMargin = round4(mainScore - (threshold - 8.75));
+    }
+  }
+
+  // A CPU decision margin should be intuitive internally even if a future
+  // acceptance path is added without a continuous score line.
+  if (accepted && decisionMargin < 0) decisionMargin = Math.abs(decisionMargin);
+  if (!accepted && decisionMargin > 0) decisionMargin = -decisionMargin;
+
   const reasons = [
     `${cpuName} power rank #${powerContext.rank}: values OVR ${(ovrWeight * 100).toFixed(1)}% / POT ${(potWeight * 100).toFixed(1)}%.`,
     `Before trade: OVR ${before.exactOverall.toFixed(4)}, POT ${before.exactPot.toFixed(4)}, FTR ${before.exactFtr.toFixed(4)}.`,
@@ -2838,6 +2881,11 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
     accepted,
     decision: accepted ? "accept" : "reject",
     score: round4(mainScore),
+    // Internal-only: positive means accepted by this amount, negative means
+    // rejected by this amount. UI deliberately does not display this value.
+    decisionMargin: round4(decisionMargin),
+    rawScoreMargin,
+    acceptancePath,
     message: accepted
       ? `${cpuName} accepts the proposal.`
       : `${cpuName} rejects the proposal.`,
@@ -2858,6 +2906,9 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
       weights: { ovrWeight, potWeight },
       threshold,
       baseThreshold,
+      decisionMargin: round4(decisionMargin),
+      rawScoreMargin,
+      acceptancePath,
       cpuCpuBuyerPickFloor,
       cpuCpuSellerOvrDropFloor,
       bestIncomingPlayerOvr,

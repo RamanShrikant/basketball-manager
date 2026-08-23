@@ -14,6 +14,16 @@ const OUTGOING_GOOD_PENALTY_WEIGHT = 0.18;
 const MIN_CONTRACT_FRICTION = -0.12;
 const MAX_CONTRACT_FRICTION = 1.75;
 
+// User-trade-only term nudge for bad salary the CPU is being asked to take on.
+// Keep this intentionally tiny: expiring bad money is a touch easier to move,
+// while multi-year bad money is a touch harder. CPU-to-CPU trades are unchanged.
+const USER_INCOMING_BAD_TERM_TUNING = Object.freeze({
+  1: 0.96,
+  2: 1.01,
+  3: 1.02,
+  4: 1.03,
+});
+
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const round4 = (value) => Math.round(Number(value || 0) * 10000) / 10000;
 
@@ -508,12 +518,36 @@ function topGoodContractLabel(rows = []) {
   return `${top.playerName} is on a below-market deal.`;
 }
 
-export function evaluateCpuContractFriction({ leagueData = {}, cpuIncomingPlayers = [], cpuOutgoingPlayers = [] } = {}) {
+function getUserIncomingBadTermTuningMultiplier(yearsRemaining) {
+  const years = Math.max(1, Math.round(num(yearsRemaining, 1)));
+  if (years <= 1) return USER_INCOMING_BAD_TERM_TUNING[1];
+  if (years === 2) return USER_INCOMING_BAD_TERM_TUNING[2];
+  if (years === 3) return USER_INCOMING_BAD_TERM_TUNING[3];
+  return USER_INCOMING_BAD_TERM_TUNING[4];
+}
+
+function getIncomingBadScore(rows = [], applyUserTradeTermTuning = false) {
+  return round4(
+    (rows || []).reduce((sum, row) => {
+      const baseBadScore = num(row?.badScore, 0);
+      if (!applyUserTradeTermTuning || baseBadScore <= 0) return sum + baseBadScore;
+      return sum + baseBadScore * getUserIncomingBadTermTuningMultiplier(row?.remainingYears);
+    }, 0)
+  );
+}
+
+export function evaluateCpuContractFriction({
+  leagueData = {},
+  cpuIncomingPlayers = [],
+  cpuOutgoingPlayers = [],
+  userTradeTermTuning = false,
+} = {}) {
   const incoming = sumContractScores(cpuIncomingPlayers, leagueData);
   const outgoing = sumContractScores(cpuOutgoingPlayers, leagueData);
+  const incomingBadScore = getIncomingBadScore(incoming.rows, userTradeTermTuning);
 
   const rawFriction =
-    incoming.badScore * INCOMING_BAD_WEIGHT -
+    incomingBadScore * INCOMING_BAD_WEIGHT -
     outgoing.badScore * OUTGOING_BAD_RELIEF_WEIGHT +
     outgoing.goodScore * OUTGOING_GOOD_PENALTY_WEIGHT;
 
@@ -523,7 +557,7 @@ export function evaluateCpuContractFriction({ leagueData = {}, cpuIncomingPlayer
   if (friction > 0.03) {
     const incomingLabel = topBadContractLabel(incoming.rows);
     const outgoingGoodLabel = topGoodContractLabel(outgoing.rows);
-    if (incoming.badScore > 0.04) {
+    if (incomingBadScore > 0.04) {
       reasons.push(
         `Contract friction: +${friction.toFixed(2)} threshold because the CPU is taking on meaningful bad salary${incomingLabel ? ` (${incomingLabel})` : "."}`
       );
@@ -539,7 +573,7 @@ export function evaluateCpuContractFriction({ leagueData = {}, cpuIncomingPlayer
     reasons.push(
       `Contract relief: ${friction.toFixed(2)} threshold because the user is taking bad money off the CPU${outgoingLabel ? ` (${outgoingLabel})` : "."}`
     );
-  } else if (incoming.badScore > 0.025 || outgoing.badScore > 0.025 || outgoing.goodScore > 0.025) {
+  } else if (incomingBadScore > 0.025 || outgoing.badScore > 0.025 || outgoing.goodScore > 0.025) {
     reasons.push("Contract impact is basically neutral after the small-overpay buffer and salary-dump relief cap.");
   }
 
@@ -548,11 +582,14 @@ export function evaluateCpuContractFriction({ leagueData = {}, cpuIncomingPlayer
     rawFriction: round4(rawFriction),
     minFriction: MIN_CONTRACT_FRICTION,
     maxFriction: MAX_CONTRACT_FRICTION,
-    incomingBadScore: incoming.badScore,
+    incomingBadScore,
+    incomingBadScoreBeforeUserTermTuning: incoming.badScore,
     outgoingBadScore: outgoing.badScore,
     outgoingGoodScore: outgoing.goodScore,
     incomingRows: incoming.rows,
     outgoingRows: outgoing.rows,
+    userTradeTermTuning: Boolean(userTradeTermTuning),
+    userIncomingBadTermTuning: { ...USER_INCOMING_BAD_TERM_TUNING },
     reasons,
     weights: {
       incomingBad: INCOMING_BAD_WEIGHT,

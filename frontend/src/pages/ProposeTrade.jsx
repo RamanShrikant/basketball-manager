@@ -14,6 +14,7 @@ import {
   evaluateUserTradeFinancialLegality,
   getUserTradeDeadlineStatus,
   validateUserTradeAssetPackage,
+  getUserTradeCurrentDate,
   validateUserTradeRules,
 } from "../utils/userTradeRules.js";
 import {
@@ -32,6 +33,14 @@ import {
   validateCustomPickProtection,
 } from "../utils/draftPicks.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import {
+  TRADE_PATIENCE_SUBMIT_MIN,
+  applyRejectedTradePatienceDrop,
+  ensureTradePatienceForUserTeam,
+  formatTradePatienceWait,
+  getTeamTradePatience,
+  resetTeamTradePatience,
+} from "../utils/userTradePatience.js";
 import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import { formatInjuryReturnLabel, isPlayerInjured } from "../utils/injurySystem.js";
 import { isDevelopmentRosterPlayer, sanitizeTradeItems } from "../utils/tradeRosterEligibility.js";
@@ -266,6 +275,38 @@ function TradeInjuryBadge({ player, currentDate = null, compact = false }) {
     <span className={`inline-flex shrink-0 items-center rounded-full border border-red-400/45 bg-red-500/15 font-black uppercase tracking-[0.10em] text-red-200 ${compact ? "px-1.5 py-0.5 text-[8px]" : "px-2 py-0.5 text-[9px]"}`}>
       INJ{label ? ` — ${label}` : ""}
     </span>
+  );
+}
+
+function getPatienceBarColor(value) {
+  const score = Number(value || 0);
+  if (score >= 70) return "bg-emerald-400";
+  if (score >= 40) return "bg-amber-300";
+  if (score >= TRADE_PATIENCE_SUBMIT_MIN) return "bg-orange-400";
+  return "bg-red-500";
+}
+
+function FrontOfficePatienceBar({ status, teamName = "CPU Team" }) {
+  const value = Math.max(0, Math.min(100, Math.round(Number(status?.value ?? 100))));
+  const locked = Boolean(status?.isLocked);
+  return (
+    <div className={`min-w-[250px] rounded-2xl border px-3 py-2 ${locked ? "border-red-400/25 bg-red-500/10" : "border-white/10 bg-white/[0.035]"}`}>
+      <div className="flex items-center justify-between gap-3 text-[10px] font-black uppercase tracking-[0.16em]">
+        <span className={locked ? "text-red-200" : "text-orange-200"}>Front Office Patience</span>
+        <span className={locked ? "text-red-100" : "text-white"}>{value}/100</span>
+      </div>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+        <div
+          className={`h-full rounded-full transition-all ${getPatienceBarColor(value)}`}
+          style={{ width: `${value}%` }}
+        />
+      </div>
+      <div className={`mt-1 text-[10px] font-bold ${locked ? "text-red-200" : "text-neutral-500"}`}>
+        {locked
+          ? `${teamName} needs ${TRADE_PATIENCE_SUBMIT_MIN}+ • Sim ${formatTradePatienceWait(status?.daysUntilCanNegotiate)}.`
+          : `${teamName} is willing to hear offers.`}
+      </div>
+    </div>
   );
 }
 
@@ -1151,7 +1192,8 @@ function tradeDebugEvaluation(evaluation = {}) {
     decision: evaluation?.decision || "",
     score: Number(evaluation?.score ?? 0),
     threshold: Number(impact?.threshold ?? 0),
-    margin: Number(evaluation?.score ?? 0) - Number(impact?.threshold ?? 0),
+    decisionMargin: Number(evaluation?.decisionMargin ?? impact?.decisionMargin ?? 0),
+    rawScoreMargin: Number(evaluation?.rawScoreMargin ?? impact?.rawScoreMargin ?? (Number(evaluation?.score ?? 0) - Number(impact?.threshold ?? 0))),
     ratingMode: impact?.ratingMode || "",
     fastScan: Boolean(impact?.fastScan),
     fastFtr: Boolean(impact?.fastFtr),
@@ -1161,6 +1203,20 @@ function tradeDebugEvaluation(evaluation = {}) {
     contractFriction: impact?.contractFriction ?? breakdown?.contractFriction,
     starRetentionTax: impact?.starRetentionTax ?? breakdown?.starRetentionTax,
     topReasons: Array.isArray(evaluation?.reasons) ? evaluation.reasons.slice(0, 12) : [],
+  };
+}
+
+function buildInternalProposalEvaluationSnapshot(evaluation = {}) {
+  const impact = evaluation?.teamImpact || {};
+  return {
+    accepted: hasAcceptedEvaluation(evaluation),
+    decision: evaluation?.decision || "reject",
+    score: Number(evaluation?.score ?? 0),
+    threshold: Number(impact?.threshold ?? 0),
+    decisionMargin: Number(evaluation?.decisionMargin ?? impact?.decisionMargin ?? 0),
+    rawScoreMargin: Number(evaluation?.rawScoreMargin ?? impact?.rawScoreMargin ?? 0),
+    acceptancePath: evaluation?.acceptancePath || impact?.acceptancePath || "",
+    evaluatedAt: new Date().toISOString(),
   };
 }
 
@@ -1917,11 +1973,6 @@ function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, u
   return { ok: true, leagueData: nextLeague, tradeRecord };
 }
 
-function decisionTone(decision) {
-  if (decision === "accept") return "border-emerald-400/30 bg-emerald-500/10 text-emerald-100";
-  return "border-red-400/30 bg-red-500/10 text-red-100";
-}
-
 function RatingRing({ overall, potential, size = 88, style = {}, textTuning = {} }) {
   const safeOverall = Number(overall || 0);
   const fillPercent = Math.min(Math.max(safeOverall, 0) / 99, 1);
@@ -2565,8 +2616,8 @@ export default function ProposeTrade() {
       ? saved.tradeFinderEvaluation
       : null;
   });
-  const [isEvaluating, setIsEvaluating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [decisionModal, setDecisionModal] = useState(null);
   const [hardCapDetailModal, setHardCapDetailModal] = useState(null);
   const [liveDraftProgressSignature, setLiveDraftProgressSignature] = useState(() =>
     getLiveDraftProgressSignature(leagueData)
@@ -2607,9 +2658,24 @@ export default function ProposeTrade() {
     ? userDeadlineStatus.reason
     : "";
 
+  useEffect(() => {
+    if (!leagueData || !userTeamName) return;
+    const ensured = ensureTradePatienceForUserTeam(leagueData, userTeamName);
+    if (!ensured.changed || ensured.leagueData === leagueData) return;
+    setLeagueData(ensured.leagueData);
+    saveLeagueData(ensured.leagueData).catch((err) => {
+      console.warn("[ProposeTrade] trade patience reset save failed", err);
+    });
+  }, [leagueData, userTeamName, setLeagueData]);
+
   const cpuTeamName = builder.cpuTeamName || firstCpu;
   const userTeam = teams.find((t) => t?.name === userTeamName) || selectedTeam;
   const cpuTeam = teams.find((t) => t?.name === cpuTeamName) || cpuTeamOptions[0] || null;
+  const userTradeCurrentDate = useMemo(() => getUserTradeCurrentDate(leagueData), [leagueData]);
+  const cpuPatienceStatus = useMemo(
+    () => getTeamTradePatience({ leagueData, userTeamName, cpuTeamName, currentDate: userTradeCurrentDate }),
+    [leagueData, userTeamName, cpuTeamName, userTradeCurrentDate]
+  );
   const userItems = sanitizeTradeItems(builder.userItems || [], { leagueData, tradeContext });
   const cpuItems = sanitizeTradeItems(builder.cpuItems || [], { leagueData, tradeContext });
   const evaluationUserTeam = getTeamFromTradeLeague(evaluationLeagueData, userTeamName) || userTeam;
@@ -2624,8 +2690,9 @@ export default function ProposeTrade() {
 
   useEffect(() => {
     if (builder?.source === "tradeFinder" && builder?.tradeFinderEvaluation) {
+      // Finder's stored result stays internal only. Submit Proposal always runs a
+      // fresh exact evaluation against the current league before execution.
       setEvaluation(builder.tradeFinderEvaluation);
-      setNotice("Loaded accepted Trade Finder offer. Change any asset to ask the CPU again.");
     }
   }, [builder?.source, builder?.updatedAt]);
 
@@ -2673,8 +2740,9 @@ export default function ProposeTrade() {
     setEvaluation(null);
     setBuilder((prev) => {
       const next = updater(prev || makeEmptyBuilder(userTeamName, firstCpu));
-      saveBuilder(next);
-      return next;
+      const cleared = { ...next, lastProposalEvaluation: null };
+      saveBuilder(cleared);
+      return cleared;
     });
   };
 
@@ -2781,6 +2849,7 @@ export default function ProposeTrade() {
     setBuilder(next);
     saveBuilder(next);
     setEvaluation(null);
+    setDecisionModal(null);
     setSlotMenu(null);
     setHardCapDetailModal(null);
     if (nextNotice) setNotice(nextNotice);
@@ -2796,10 +2865,24 @@ export default function ProposeTrade() {
     navigate(topBackPath);
   };
 
-  const evaluateWithCpu = async () => {
+  const submitProposal = async () => {
     if (tradeDeadlineLocked) {
       setEvaluation(null);
       setNotice(tradeDeadlineMessage);
+      return;
+    }
+
+    if (isSubmitting) return;
+
+    const livePatience = getTeamTradePatience({
+      leagueData,
+      userTeamName,
+      cpuTeamName,
+      currentDate: userTradeCurrentDate,
+    });
+    if (!livePatience.canNegotiate) {
+      setEvaluation(null);
+      setNotice(`${cpuTeamName} is not taking more calls right now. Sim ${formatTradePatienceWait(livePatience.daysUntilCanNegotiate)} to rebuild Front Office Patience.`);
       return;
     }
 
@@ -2814,11 +2897,9 @@ export default function ProposeTrade() {
       return;
     }
 
-    const hasAnyTradeItem = userItems.length > 0 || cpuItems.length > 0;
-
-    if (!hasAnyTradeItem) {
+    if (userItems.length <= 0 || cpuItems.length <= 0) {
       setEvaluation(null);
-      setNotice("Add at least one trade item before evaluation.");
+      setNotice("Add at least one asset from each team before submitting the proposal.");
       return;
     }
 
@@ -2839,22 +2920,15 @@ export default function ProposeTrade() {
       return;
     }
 
-    const proposal = buildTradeProposalPayload({
-      userTeamName,
-      cpuTeamName,
-      userTeam,
-      cpuTeam,
-      userItems,
-      cpuItems,
-      leagueData,
-    });
-
-    setIsEvaluating(true);
+    setIsSubmitting(true);
+    setDecisionModal(null);
     setEvaluation(null);
-    setNotice("CPU front office is reviewing the proposal...");
+    setNotice("");
 
     try {
-      const result = evaluateTradeTeamImpact({
+      // Submit Proposal is the single negotiation action: always evaluate fresh,
+      // then execute immediately only if the CPU accepts.
+      const freshEvaluation = evaluateTradeTeamImpact({
         leagueData: evaluationLeagueData,
         userTeam: evaluationUserTeam,
         cpuTeam: evaluationCpuTeam,
@@ -2863,60 +2937,95 @@ export default function ProposeTrade() {
         userItems,
         cpuItems,
       });
-      debugProposeTradeEvaluation({ result, userTeamName, cpuTeamName, userItems, cpuItems, leagueData });
-      setEvaluation(result);
-      setNotice(result?.message || "CPU evaluation complete.");
-    } catch (error) {
-      setEvaluation(null);
-      setNotice(`CPU evaluation failed: ${error?.message || String(error || "Unknown error")}`);
-    } finally {
-      setIsEvaluating(false);
-    }
-  };
-
-
-  const submitAcceptedTrade = () => {
-    if (tradeDeadlineLocked) {
-      setNotice(tradeDeadlineMessage);
-      return;
-    }
-
-    if (isSubmitting) return;
-
-    let result;
-
-    try {
-      result = executeAcceptedTradeOnLeagueShared({
-        leagueData,
+      debugProposeTradeEvaluation({
+        result: freshEvaluation,
         userTeamName,
         cpuTeamName,
         userItems,
         cpuItems,
-        evaluation,
-        userDrivenRules: true,
+        leagueData,
       });
-    } catch (error) {
-      console.error("[ProposeTrade] Accepted trade execution crashed", error);
-      setNotice(`Trade could not be submitted: ${error?.message || String(error || "Unknown error")}`);
-      return;
-    }
+      setEvaluation(freshEvaluation);
 
-    if (!result?.ok) {
-      setNotice(result?.reason || "Trade could not be submitted.");
-      return;
-    }
+      if (!hasAcceptedEvaluation(freshEvaluation)) {
+        // Keep the exact package in place so the user can close the popup and
+        // continue negotiating from the same proposal. Store the internal
+        // margin summary for future negotiation features, but never display it.
+        const patienceResult = applyRejectedTradePatienceDrop({
+          leagueData,
+          userTeamName,
+          cpuTeamName,
+          currentDate: userTradeCurrentDate,
+          decisionMargin: freshEvaluation?.decisionMargin ?? freshEvaluation?.teamImpact?.decisionMargin ?? 0,
+        });
+        setLeagueData(patienceResult.leagueData);
+        saveLeagueData(patienceResult.leagueData).catch((err) => {
+          console.warn("[ProposeTrade] trade patience save failed", err);
+        });
+        const nextBuilder = {
+          ...builder,
+          lastProposalEvaluation: {
+            ...buildInternalProposalEvaluationSnapshot(freshEvaluation),
+            frontOfficePatience: {
+              teamName: cpuTeamName,
+              before: patienceResult.before,
+              after: patienceResult.after,
+              drop: patienceResult.drop,
+              daysUntilCanNegotiate: patienceResult.daysUntilCanNegotiate,
+            },
+          },
+        };
+        setBuilder(nextBuilder);
+        saveBuilder(nextBuilder);
+        setDecisionModal({
+          accepted: false,
+          teamName: cpuTeamName,
+          patienceBefore: patienceResult.before,
+          patienceAfter: patienceResult.after,
+          patienceDrop: patienceResult.drop,
+          daysUntilCanNegotiate: patienceResult.daysUntilCanNegotiate,
+        });
+        return;
+      }
 
-    setIsSubmitting(true);
+      let execution;
+      try {
+        execution = executeAcceptedTradeOnLeagueShared({
+          leagueData,
+          userTeamName,
+          cpuTeamName,
+          userItems,
+          cpuItems,
+          evaluation: freshEvaluation,
+          userDrivenRules: true,
+        });
+      } catch (error) {
+        console.error("[ProposeTrade] Accepted trade execution crashed", error);
+        setNotice(`Trade could not be submitted: ${error?.message || String(error || "Unknown error")}`);
+        return;
+      }
 
-    try {
-      setLeagueData(result.leagueData);
-      saveLeagueData(result.leagueData).catch((err) => {
+      if (!execution?.ok) {
+        setNotice(execution?.reason || "Trade could not be submitted.");
+        return;
+      }
+
+      const patienceReset = resetTeamTradePatience({
+        leagueData: execution.leagueData,
+        userTeamName,
+        cpuTeamName,
+        currentDate: userTradeCurrentDate,
+      });
+      const executedLeagueData = patienceReset.leagueData;
+
+      setLeagueData(executedLeagueData);
+      saveLeagueData(executedLeagueData).catch((err) => {
         console.warn("[ProposeTrade] IndexedDB league save failed", err);
       });
       try {
-        window.__leagueData = result.leagueData;
-        window.leagueData = result.leagueData;
-        window.__basketballManagerLeagueData = result.leagueData;
+        window.__leagueData = executedLeagueData;
+        window.leagueData = executedLeagueData;
+        window.__basketballManagerLeagueData = executedLeagueData;
       } catch {}
 
       const nextBuilder = makeEmptyBuilder(userTeamName, cpuTeamName || firstCpu);
@@ -2926,13 +3035,16 @@ export default function ProposeTrade() {
         localStorage.removeItem(TRADE_FINDER_STATE_KEY);
       }
       setEvaluation(null);
-      setNotice(`Trade completed: ${userTeamName} and ${cpuTeamName} have finalized the deal.`);
+      setNotice("");
+      setDecisionModal({ accepted: true, teamName: cpuTeamName });
     } catch (error) {
-      setNotice(`Trade save failed: ${error?.message || String(error || "Unknown error")}`);
+      setEvaluation(null);
+      setNotice(`Proposal review failed: ${error?.message || String(error || "Unknown error")}`);
     } finally {
       setIsSubmitting(false);
     }
   };
+
 
   if (!selectedTeam || !leagueData) {
     return (
@@ -2979,21 +3091,20 @@ export default function ProposeTrade() {
               Current Team: <span className="font-black text-white">{userTeamName}</span>
             </div>
 
-            <div className="flex flex-col gap-3 sm:flex-row xl:justify-center">
+            <div className="flex flex-wrap items-center justify-center gap-3 xl:justify-center">
               <button
-                onClick={evaluateWithCpu}
-                disabled={isEvaluating || tradeDeadlineLocked}
-                className="rounded-2xl bg-orange-600 px-8 py-3 text-sm font-black text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isEvaluating ? "Evaluating..." : "Evaluate Trade"}
-              </button>
-              <button
-                onClick={submitAcceptedTrade}
-                disabled={isSubmitting || tradeDeadlineLocked}
-                className="rounded-2xl border border-white/15 bg-black px-8 py-3 text-sm font-black text-neutral-200 transition hover:border-orange-400/35 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={submitProposal}
+                disabled={isSubmitting || tradeDeadlineLocked || !cpuPatienceStatus.canNegotiate}
+                title={!cpuPatienceStatus.canNegotiate ? `${cpuTeamName} is not taking more calls right now. Sim ${formatTradePatienceWait(cpuPatienceStatus.daysUntilCanNegotiate)} to rebuild Front Office Patience.` : "Submit proposal"}
+                className={`rounded-2xl px-10 py-3 text-sm font-black text-white transition disabled:cursor-not-allowed ${
+                  cpuPatienceStatus.canNegotiate && !tradeDeadlineLocked
+                    ? "bg-orange-600 hover:bg-orange-500 disabled:opacity-60"
+                    : "bg-neutral-700 text-neutral-300 opacity-55"
+                }`}
               >
                 {isSubmitting ? "Submitting..." : "Submit Proposal"}
               </button>
+              <FrontOfficePatienceBar status={cpuPatienceStatus} teamName={cpuTeamName} />
             </div>
 
             <label className="flex items-center gap-3 text-sm font-bold text-neutral-300 xl:justify-end">
@@ -3019,54 +3130,22 @@ export default function ProposeTrade() {
             </div>
           )}
 
-          {(notice || evaluation) && (
-            <div className="mb-2 grid max-h-[118px] shrink-0 gap-2 overflow-y-auto xl:grid-cols-[0.9fr_1.1fr] bmTableScroller">
-              {notice && (
-                <div className="relative rounded-2xl border border-orange-400/25 bg-orange-500/10 p-3 pr-10 text-xs font-bold text-orange-100">
-                  <button
-                    type="button"
-                    onClick={() => setNotice("")}
-                    className="absolute right-2 top-2 rounded-full bg-black/35 px-2 py-0.5 text-[10px] font-black text-orange-100 transition hover:bg-red-600 hover:text-white"
-                    title="Dismiss message"
-                  >
-                    ✕
-                  </button>
-                  {notice}
-                </div>
-              )}
-
-              {evaluation && (
-                <div className={`relative rounded-2xl border p-3 pr-10 text-left text-xs font-bold ${decisionTone(evaluation.decision)}`}>
-                  <button
-                    type="button"
-                    onClick={() => setEvaluation(null)}
-                    className="absolute right-2 top-2 rounded-full bg-black/35 px-2 py-0.5 text-[10px] font-black text-white/80 transition hover:bg-red-600 hover:text-white"
-                    title="Dismiss CPU decision"
-                  >
-                    ✕
-                  </button>
-                  <div className="flex items-center justify-between gap-3 pr-8">
-                    <span className="text-[10px] font-black uppercase tracking-[0.16em] opacity-70">CPU Decision</span>
-                    <span className="rounded-full bg-black/25 px-2 py-1 text-[10px] font-black uppercase">
-                      Score {Number(evaluation.score || 0).toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="mt-2 text-lg font-black uppercase">
-                    {evaluation.decision || "reject"}
-                  </div>
-
-                  {Array.isArray(evaluation.reasons) && evaluation.reasons.length > 0 && (
-                    <div className="mt-3 space-y-1 opacity-90">
-                      {evaluation.reasons.slice(0, 8).map((reason, index) => (
-                        <div key={`reason-${index}`}>• {reason}</div>
-                      ))}
-                    </div>
-                  )}
-
-                </div>
-              )}
+          {notice && (
+            <div className="mb-2 max-h-[118px] shrink-0 overflow-y-auto bmTableScroller">
+              <div className="relative rounded-2xl border border-orange-400/25 bg-orange-500/10 p-3 pr-10 text-xs font-bold text-orange-100">
+                <button
+                  type="button"
+                  onClick={() => setNotice("")}
+                  className="absolute right-2 top-2 rounded-full bg-black/35 px-2 py-0.5 text-[10px] font-black text-orange-100 transition hover:bg-red-600 hover:text-white"
+                  title="Dismiss message"
+                >
+                  ✕
+                </button>
+                {notice}
+              </div>
             </div>
           )}
+
 
           <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-2">
             <SidePanel
@@ -3095,6 +3174,62 @@ export default function ProposeTrade() {
           </div>
 
         </div>
+
+        {decisionModal && (
+          <div
+            className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setDecisionModal(null);
+            }}
+          >
+            <div
+              className={`w-full max-w-md overflow-hidden rounded-[28px] border bg-neutral-950 shadow-2xl ${
+                decisionModal.accepted ? "border-emerald-400/35" : "border-red-400/35"
+              }`}
+            >
+              <div
+                className={`px-7 py-7 text-center ${
+                  decisionModal.accepted ? "bg-emerald-500/10" : "bg-red-500/10"
+                }`}
+              >
+                <div
+                  className={`text-xs font-black uppercase tracking-[0.22em] ${
+                    decisionModal.accepted ? "text-emerald-300" : "text-red-300"
+                  }`}
+                >
+                  Trade Proposal
+                </div>
+                <div className="mt-3 text-2xl font-black leading-tight text-white">
+                  {decisionModal.teamName || cpuTeamName} has {decisionModal.accepted ? "accepted" : "declined"} the trade.
+                </div>
+                {!decisionModal.accepted && Number.isFinite(Number(decisionModal.patienceAfter)) && (
+                  <div className="mx-auto mt-4 max-w-xs rounded-2xl border border-red-300/20 bg-black/30 px-4 py-3 text-xs font-bold leading-5 text-red-100">
+                    Front Office Patience decreased: {Math.round(Number(decisionModal.patienceBefore ?? 100))} → {Math.round(Number(decisionModal.patienceAfter ?? 0))}.
+                    {Number(decisionModal.patienceAfter ?? 0) < TRADE_PATIENCE_SUBMIT_MIN && (
+                      <span> Sim {formatTradePatienceWait(decisionModal.daysUntilCanNegotiate)} before sending another offer.</span>
+                    )}
+                  </div>
+                )}
+                {decisionModal.accepted && (
+                  <div className="mx-auto mt-4 max-w-xs rounded-2xl border border-emerald-300/20 bg-black/30 px-4 py-3 text-xs font-bold leading-5 text-emerald-100">
+                    Front Office Patience reset to 100.
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setDecisionModal(null)}
+                  className={`mt-6 rounded-2xl px-8 py-3 text-sm font-black text-white transition ${
+                    decisionModal.accepted
+                      ? "bg-emerald-600 hover:bg-emerald-500"
+                      : "bg-red-600 hover:bg-red-500"
+                  }`}
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {hardCapDetailModal && (
           <div
