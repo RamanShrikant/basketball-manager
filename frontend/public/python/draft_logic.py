@@ -29,7 +29,7 @@ except Exception:
     ensure_league_financials = None
     get_rookie_salary_for_pick = None
 
-DRAFT_LOGIC_VERSION = "2026-08-21_draft_logic_deflated_realistic_v22"
+DRAFT_LOGIC_VERSION = "2026-08-22_draft_logic_custom_source_truth_v23"
 EXPECTED_AUTOGEN_DRAFT_RATING_MODEL = "deflated_realistic_100_player_v4"
 
 POSITION_ORDER = ["PG", "SG", "SF", "PF", "C"]
@@ -149,21 +149,91 @@ def _calc_overall_from_attrs(attrs: List[int], pos: str) -> int:
 
 def _has_source_truth_attrs(raw_attrs: Any) -> bool:
     # The current source-of-truth calculator expects the 15-attribute model.
-    # Only force formula-based OVR when a prospect actually carries real attrs.
     return isinstance(raw_attrs, list) and len(raw_attrs) >= 15
 
 
-def _resolve_prospect_overall(prospect: Dict[str, Any], default: int = 65) -> int:
-    raw_attrs = prospect.get("attrs") if isinstance(prospect.get("attrs"), list) else prospect.get("attributes")
-    if _has_source_truth_attrs(raw_attrs):
-        return _calc_overall_from_attrs(
-            _normalize_attrs(raw_attrs),
-            prospect.get("pos") or prospect.get("position") or "SF",
-        )
+def _explicit_overall_value(prospect: Dict[str, Any], default: Optional[int] = None) -> Optional[int]:
+    """Return an explicit displayed OVR from imported/generated draft data.
 
+    PATCH54 rule: explicit JSON OVR is the source of truth. 15 attrs describe
+    the skill profile, but they must never silently overwrite a curated draft
+    class rating. This fixes custom League Editor classes entering the league
+    5-6 OVR lower than their JSON says.
+    """
+    if not isinstance(prospect, dict):
+        return default
     for key in ["overall", "ovr", "rating"]:
-        if prospect.get(key) is not None:
-            return _safe_int(prospect.get(key), default)
+        value = prospect.get(key)
+        if value is None or value == "":
+            continue
+        return int(_clamp(_safe_int(value, default if default is not None else 65), 25, 99))
+    return default
+
+
+def _overall_impact_order(pos: str, rng: random.Random, direction: int, attrs: List[int]) -> List[int]:
+    p = OVERALL_POS_PARAMS.get(str(pos or "SF").upper(), OVERALL_POS_PARAMS["SF"])
+    weights = list(p.get("weights") or [])
+    primary = {max(0, int(i) - 1) for i in p.get("prim", [])}
+    order = list(range(15))
+    # For upward repair, touch high-impact + primary attrs first. For downward
+    # repair, also target high-impact attrs first so the calibration converges.
+    order.sort(key=lambda idx: (
+        weights[idx] if idx < len(weights) else 0.0,
+        0.08 if idx in primary else 0.0,
+        attrs[idx] if direction < 0 else 99 - attrs[idx],
+        rng.random(),
+    ), reverse=True)
+    return order
+
+
+def _calibrate_attrs_to_source_overall(attrs: Any, pos: str, target_overall: int, rng: Optional[random.Random] = None) -> List[int]:
+    """Gently repair attrs so the backend formula returns target_overall.
+
+    This is intentionally small/iterative and is used only when a prospect has
+    an explicit OVR. It keeps custom draft classes visually and statistically
+    consistent without letting the formula rewrite the imported rating.
+    """
+    rng = rng or random.Random(0)
+    target = int(_clamp(target_overall, 54, 99))
+    current_attrs = _normalize_attrs(attrs)
+    best_attrs = list(current_attrs)
+    best_dist = abs(_calc_overall_from_attrs(best_attrs, pos) - target)
+
+    for _ in range(260):
+        current = _calc_overall_from_attrs(current_attrs, pos)
+        dist = abs(current - target)
+        if dist < best_dist:
+            best_dist = dist
+            best_attrs = list(current_attrs)
+        if current == target:
+            return current_attrs
+
+        direction = 1 if current < target else -1
+        moved = False
+        candidates = [
+            idx for idx in _overall_impact_order(pos, rng, direction, current_attrs)
+            if 25 <= int(current_attrs[idx]) + direction <= 99
+        ]
+        for idx in candidates:
+            trial = list(current_attrs)
+            trial[idx] = int(_clamp(trial[idx] + direction, 25, 99))
+            trial_overall = _calc_overall_from_attrs(trial, pos)
+            trial_dist = abs(trial_overall - target)
+            overshoots = (direction > 0 and trial_overall > target) or (direction < 0 and trial_overall < target)
+            if trial_dist < dist or (trial_dist == dist and not overshoots):
+                current_attrs = trial
+                moved = True
+                break
+        if not moved:
+            break
+
+    return best_attrs
+
+
+def _resolve_prospect_overall(prospect: Dict[str, Any], default: int = 65) -> int:
+    explicit = _explicit_overall_value(prospect, None)
+    if explicit is not None:
+        return int(_clamp(explicit, 54, 99))
 
     return _calc_overall_from_attrs(
         _normalize_attrs(prospect.get("attrs") or prospect.get("attributes") or []),
@@ -945,11 +1015,27 @@ def _normalize_draft_prospect_for_state(
     attrs = _normalize_attrs(raw_attrs or [])
     p["attrs"] = attrs
 
-    if has_source_truth_attrs:
-        source_truth_overall = _calc_overall_from_attrs(
-            attrs,
-            p.get("pos") or p.get("position") or "SF",
-        )
+    explicit_overall = _explicit_overall_value(p, None)
+    formula_overall_before_repair = _calc_overall_from_attrs(attrs, p.get("pos") or p.get("position") or "SF")
+    if explicit_overall is not None:
+        target_overall = int(_clamp(explicit_overall, 54, 99))
+        if has_source_truth_attrs and formula_overall_before_repair != target_overall:
+            attrs = _calibrate_attrs_to_source_overall(
+                attrs,
+                p.get("pos") or p.get("position") or "SF",
+                target_overall,
+                random.Random(f"patch54:{season_year}:{index}:{p.get('id') or p.get('name') or p.get('playerName') or ''}"),
+            )
+            p["attrs"] = attrs
+        p["overall"] = target_overall
+        p["ovr"] = target_overall
+        p["rating"] = target_overall
+        p["overallSource"] = "explicit_json_source_truth"
+        p["calculatedOverallFromAttrs"] = formula_overall_before_repair
+        p["overallDriftFromAttrs"] = formula_overall_before_repair - target_overall
+        p["attrsRepairedToOverall"] = bool(has_source_truth_attrs and formula_overall_before_repair != target_overall)
+    elif has_source_truth_attrs:
+        source_truth_overall = formula_overall_before_repair
         p["overall"] = source_truth_overall
         p["ovr"] = source_truth_overall
         p["rating"] = source_truth_overall
@@ -972,6 +1058,9 @@ def _normalize_draft_prospect_for_state(
         p["overall"] = _resolve_prospect_overall(p, 65)
 
     overall = _resolve_prospect_overall(p, 65)
+    p["overall"] = overall
+    p["ovr"] = overall
+    p["rating"] = overall
     if p.get("potential") is None or _safe_int(p.get("potential"), 0) <= 0:
         p["potential"] = overall
     else:
@@ -1128,6 +1217,18 @@ def _prospect_to_player(
         attrs.append(60)
 
     overall_rating = _resolve_prospect_overall(prospect, 65)
+    formula_overall_before_repair = _calc_overall_from_attrs(
+        _normalize_attrs(attrs),
+        prospect.get("pos") or prospect.get("position") or "SF",
+    )
+    explicit_overall = _explicit_overall_value(prospect, None)
+    if explicit_overall is not None and formula_overall_before_repair != overall_rating:
+        attrs = _calibrate_attrs_to_source_overall(
+            attrs,
+            prospect.get("pos") or prospect.get("position") or "SF",
+            overall_rating,
+            random.Random(f"patch54:rookie:{season_year}:{prospect.get('id') or prospect.get('name') or prospect.get('playerName') or ''}"),
+        )
     off_rating, def_rating = _calc_off_def_v19(
         attrs,
         prospect.get("pos") or prospect.get("position") or "SF",
@@ -1188,6 +1289,12 @@ def _prospect_to_player(
         "weight": _safe_int(prospect.get("weight"), 215),
         "potential": player_potential,
         "overall": overall_rating,
+        "ovr": overall_rating,
+        "rating": overall_rating,
+        "overallSource": "explicit_json_source_truth" if explicit_overall is not None else "attrs_source_truth",
+        "calculatedOverallFromAttrs": formula_overall_before_repair,
+        "overallDriftFromAttrs": formula_overall_before_repair - overall_rating,
+        "attrsRepairedToOverall": bool(explicit_overall is not None and formula_overall_before_repair != overall_rating),
         "offRating": off_rating,
         "defRating": def_rating,
         "offense": off_rating,

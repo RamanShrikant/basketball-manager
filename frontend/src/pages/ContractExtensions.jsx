@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext.jsx";
 import {
   previewContractExtensions,
@@ -11,6 +11,28 @@ import { getOffseasonTradeContext } from "../utils/offseasonTradeContext.js";
 import { getUserTradeCurrentDate, stampExtensionRestriction } from "../utils/userTradeRules.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
+
+const EXTENSION_DEADLINE_CONTEXT_KEY = "bm_contract_extension_deadline_context_v1";
+
+function normalizeIsoDate(value) {
+  const text = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
+}
+
+function readStoredDeadlineContext() {
+  if (typeof sessionStorage === "undefined") return null;
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(EXTENSION_DEADLINE_CONTEXT_KEY) || "null");
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearStoredDeadlineContext() {
+  if (typeof sessionStorage === "undefined") return;
+  try { sessionStorage.removeItem(EXTENSION_DEADLINE_CONTEXT_KEY); } catch {}
+}
 
 function money(value) {
   return new Intl.NumberFormat("en-US", {
@@ -28,7 +50,10 @@ function compactMoney(value) {
   return money(amount);
 }
 
-function currentLeagueDate(leagueData) {
+function currentLeagueDate(leagueData, deadlineContext = null) {
+  const contextDate = normalizeIsoDate(deadlineContext?.date || deadlineContext?.currentDate || deadlineContext?.deadlineDate);
+  if (contextDate) return contextDate;
+
   const ruleDate = getUserTradeCurrentDate(leagueData);
   if (ruleDate) return ruleDate;
 
@@ -103,6 +128,7 @@ function sortExtensionRows(rows = []) {
 
 export default function ContractExtensions() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { leagueData, selectedTeam, setLeagueData } = useGame();
   const [preview, setPreview] = useState(null);
   const [selectedPlayerId, setSelectedPlayerId] = useState(null);
@@ -112,6 +138,18 @@ export default function ContractExtensions() {
   const [notice, setNotice] = useState(null);
 
   const teamName = selectedTeam?.name || null;
+  const deadlineContext = useMemo(() => {
+    const routeContext = location?.state?.extensionDeadlineContext || null;
+    const storedContext = readStoredDeadlineContext();
+    const context = routeContext || storedContext || null;
+    const contextSeason = Number(context?.seasonYear || 0);
+    const currentSeason = Number(leagueData?.seasonStartYear || leagueData?.seasonYear || leagueData?.currentSeasonYear || 0);
+    if (context && contextSeason && currentSeason && contextSeason !== currentSeason) {
+      clearStoredDeadlineContext();
+      return null;
+    }
+    return context;
+  }, [location?.state, leagueData?.seasonStartYear, leagueData?.seasonYear, leagueData?.currentSeasonYear]);
   const extensionWindowLocked = useMemo(() => Boolean(getOffseasonTradeContext(leagueData)?.inOffseason), [leagueData]);
   const selectedRow = useMemo(
     () => preview?.players?.find((row) => String(row.playerId || row.playerName) === String(selectedPlayerId)) || null,
@@ -137,7 +175,7 @@ export default function ContractExtensions() {
           sourceLeague,
           teamName,
           "opening",
-          currentLeagueDate(sourceLeague)
+          currentLeagueDate(sourceLeague, deadlineContext)
         );
         if (cpu?.ok && cpu?.leagueData) {
           workingLeague = cpu.leagueData;
@@ -148,7 +186,7 @@ export default function ContractExtensions() {
       const next = await previewContractExtensions(
         workingLeague,
         teamName,
-        currentLeagueDate(workingLeague)
+        currentLeagueDate(workingLeague, deadlineContext)
       );
       if (!next?.ok) throw new Error(next?.reason || "Could not load contract extensions.");
       setPreview(next);
@@ -172,7 +210,7 @@ export default function ContractExtensions() {
     loadPreview(leagueData, { runCpuOpening: false });
     // CPU extension actions now run only at the rookie/veteran deadline prompts, not from opening this page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leagueData?.seasonYear, teamName, extensionWindowLocked]);
+  }, [leagueData?.seasonYear, teamName, extensionWindowLocked, deadlineContext?.date, deadlineContext?.phase]);
 
   useEffect(() => {
     if (!selectedRow?.eligible || !selectedRow?.askPackages?.length) {
@@ -192,7 +230,7 @@ export default function ContractExtensions() {
         teamName,
         selectedRow.playerId || selectedRow.playerName,
         selectedPackage,
-        currentLeagueDate(leagueData)
+        currentLeagueDate(leagueData, deadlineContext)
       );
       if (!result?.ok) throw new Error(result?.reason || "The extension package could not be submitted.");
       const resultLeague = result.leagueData || leagueData;
@@ -201,7 +239,7 @@ export default function ContractExtensions() {
             leagueData: resultLeague,
             teamName,
             player: { id: selectedRow.playerId, playerId: selectedRow.playerId, name: selectedRow.playerName },
-            signedDate: currentLeagueDate(resultLeague),
+            signedDate: currentLeagueDate(resultLeague, deadlineContext),
           })
         : resultLeague;
       if (stampedLeague) setLeagueData(stampedLeague);

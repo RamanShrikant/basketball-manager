@@ -4934,6 +4934,7 @@ const CONTRACT_EXTENSION_DEADLINE_DATE = ROOKIE_EXTENSION_DEADLINE_DATE;
 const ROOKIE_EXTENSION_DEADLINE_HANDLED_KEY = `bm_rookie_extension_deadline_handled_v1_${seasonYear}`;
 const VETERAN_EXTENSION_DEADLINE_HANDLED_KEY = `bm_veteran_extension_deadline_handled_v1_${seasonYear}`;
 const CONTRACT_EXTENSION_DEADLINE_HANDLED_KEY = ROOKIE_EXTENSION_DEADLINE_HANDLED_KEY;
+const EXTENSION_DEADLINE_CONTEXT_KEY = "bm_contract_extension_deadline_context_v1";
 const rookieExtensionDeadlineHandledRef = useRef(
   localStorage.getItem(ROOKIE_EXTENSION_DEADLINE_HANDLED_KEY) === "true"
 );
@@ -4968,11 +4969,33 @@ function getContractExtensionDeadlineInfo(dateStrOrType) {
   return null;
 }
 
+function persistContractExtensionDeadlineContext(info) {
+  if (!info) return null;
+  const context = {
+    type: info.type,
+    phase: info.phase,
+    date: info.date,
+    deadlineDate: info.date,
+    seasonYear,
+    source: "calendar_prompt",
+    createdAt: Date.now(),
+  };
+  try {
+    sessionStorage.setItem(EXTENSION_DEADLINE_CONTEXT_KEY, JSON.stringify(context));
+  } catch {}
+  return context;
+}
+
+function clearContractExtensionDeadlineContext() {
+  try { sessionStorage.removeItem(EXTENSION_DEADLINE_CONTEXT_KEY); } catch {}
+}
+
 function openContractExtensionDeadlinePrompt(dateStrOrType = null) {
   const info = getContractExtensionDeadlineInfo(dateStrOrType || ROOKIE_EXTENSION_DEADLINE_DATE);
   setActionModal(null);
   setBoxModal(null);
   setContractExtensionPromptInfo(info);
+  persistContractExtensionDeadlineContext(info);
   setContractExtensionPromptOpen(true);
 }
 
@@ -9419,8 +9442,9 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
               try {
                 await processContractExtensionDeadline({ closeWindow: false, deadlineType: contractExtensionPromptInfo?.type });
                 markContractExtensionDeadlineHandled(contractExtensionPromptInfo?.type);
+                const context = persistContractExtensionDeadlineContext(contractExtensionPromptInfo);
                 setContractExtensionPromptOpen(false);
-                navigate("/contract-extensions");
+                navigate("/contract-extensions", { state: { extensionDeadlineContext: context } });
               } catch (error) {
                 openSimError(error?.message || "Extension deadline processing failed.", "Contract extension error");
               }
@@ -9436,6 +9460,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
               try {
                 await processContractExtensionDeadline({ closeWindow: true, deadlineType: contractExtensionPromptInfo?.type });
                 markContractExtensionDeadlineHandled(contractExtensionPromptInfo?.type);
+                clearContractExtensionDeadlineContext();
                 setContractExtensionPromptOpen(false);
                 setContractExtensionResumeToken((value) => value + 1);
               } catch (error) {

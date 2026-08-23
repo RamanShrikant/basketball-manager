@@ -7,7 +7,7 @@ import math
 import datetime as _dt
 import hashlib
 
-PROGRESSION_PY_VERSION = "2026-08-21_progression_story_arc_v3"
+PROGRESSION_PY_VERSION = "2026-08-22_progression_story_arc_elite_floor_v4"
 
 RATING_MIN_OVERALL = 54
 RATING_MAX_OVERALL = 99
@@ -5864,6 +5864,72 @@ def _apply_age_peak_caps(plan: List[Dict[str, Any]], rng: random.Random) -> None
     _refresh_plan_targets(plan)
 
 
+def _elite_floor_candidate_score(item: Dict[str, Any], rng: random.Random) -> Tuple[Any, ...]:
+    p = item.get("player") or {}
+    after = int(item.get("target_overall", _safe_int(p.get("overall"), 70)))
+    before = int(item.get("before_overall", _safe_int(p.get("overall"), after)))
+    age = _safe_int(p.get("age"), 25)
+    pot = _safe_int(p.get("potential"), after)
+    profile_name = _player_dev_path_value(p)
+    prof = _career_timing_profile(p, age, before, pot, rng)
+    hidden_ceiling = _safe_int(prof.get("ceiling"), pot)
+    prime_age = 1 if 23 <= age <= 30 else 0
+    young_star = 1 if age <= 27 and pot >= 95 else 0
+    path_score = 0
+    if profile_name in {"ceiling_hit", "star", "late_bloom", "late_bloomer"}:
+        path_score = 3
+    elif profile_name in {"starter", "steady", "normal"}:
+        path_score = 1
+    # Descending: strongest plausible face-of-league replacement first.
+    return (
+        prime_age,
+        young_star,
+        after,
+        pot,
+        hidden_ceiling,
+        path_score,
+        before,
+        -abs(age - 27),
+        rng.random(),
+    )
+
+
+def _apply_elite_floor_minimum(plan: List[Dict[str, Any]], rng: random.Random) -> bool:
+    """Guarantee at least one 95+ face in a healthy league.
+
+    The hard bands already cap elite inflation, but their lower bound was too
+    advisory in long sims, allowing zero 95+ players for whole eras. PATCH54
+    promotes the best real 93/94 candidate to 95 when the league has no 95+.
+    It never pulls a distant role player upward and keeps the 99/98/97 caps intact.
+    """
+    if len(plan) < 300 or _hard_count(plan, 95) > 0:
+        return False
+    candidates: List[Dict[str, Any]] = []
+    for item in plan:
+        if _is_shape_protected_item(item):
+            continue
+        after = int(item.get("target_overall", 0))
+        if after not in {93, 94}:
+            continue
+        p = item.get("player") or {}
+        age = _safe_int(p.get("age"), 25)
+        pot = _safe_int(p.get("potential"), after)
+        if age > 33:
+            continue
+        if pot < 93 and after < 94:
+            continue
+        candidates.append(item)
+    candidates.sort(key=lambda item: _elite_floor_candidate_score(item, rng), reverse=True)
+    for item in candidates:
+        # Force is deliberate here: this is an era-level minimum, not a random
+        # individual jump. Candidate filtering limits the boost to 93/94 only.
+        if _hard_set_target(item, 95, rng, force=True):
+            item["_elite_floor_promoted"] = True
+            _refresh_plan_targets(plan)
+            return True
+    return False
+
+
 def _apply_true_hard_shape_lock(
     plan: List[Dict[str, Any]],
     settings: Dict[str, Any],
@@ -5982,6 +6048,8 @@ def _apply_true_hard_shape_lock(
         candidates.sort(key=lambda item: _hard_boost_priority(item, rung, rng), reverse=True)
         for item in candidates[:need]:
             _hard_set_target(item, rung, rng)
+
+    _apply_elite_floor_minimum(plan, rng)
 
     # Re-assert every upper cap after floor filling. These loops terminate
     # because each correction moves a player below the current threshold/rung.
