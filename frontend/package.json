@@ -21,7 +21,9 @@
     "check:new-chapter": "node scripts/season-briefing-regression.mjs",
     "check:portrait-dressing": "node scripts/portrait-dressing-regression.mjs",
     "portrait:sync": "node scripts/sync-portrait-studio.mjs",
-    "check:portrait-studio": "node scripts/portrait-studio-regression.mjs"
+    "check:portrait-studio": "node scripts/portrait-studio-regression.mjs",
+    "portrait:build-real": "node scripts/build-real-player-portrait-manifest.mjs",
+    "portrait:sync-real": "node scripts/sync-real-player-portraits.mjs"
   },
   "dependencies": {
     "lz-string": "^1.5.0",

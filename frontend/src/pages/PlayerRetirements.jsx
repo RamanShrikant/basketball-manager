@@ -431,6 +431,9 @@ export default function PlayerRetirements() {
   const [playerCardPlayer, setPlayerCardPlayer] = useState(null);
   const [retirementNarratives, setRetirementNarratives] = useState({});
   const autoRunSeasonRef = useRef(null);
+  const retirementRowsViewportRef = useRef(null);
+  const [retirementRowScale, setRetirementRowScale] = useState(1);
+  const [retirementRowCanvasWidth, setRetirementRowCanvasWidth] = useState(null);
 
   useEffect(() => {
     setWorkingLeagueData(leagueData || null);
@@ -438,6 +441,43 @@ export default function PlayerRetirements() {
 
   const seasonYear = getSeasonYear(workingLeagueData || leagueData);
   const offseasonState = useMemo(() => readOffseasonState(seasonYear), [seasonYear]);
+
+  const retirementDesignWidth = Math.max(1, Number(RETIREMENT_LAYOUT.responsive?.designWidth || 1488));
+  const retirementMinScale = Math.max(0.1, Number(RETIREMENT_LAYOUT.responsive?.minScale ?? 0.6));
+  const retirementMaxScale = Math.max(retirementMinScale, Number(RETIREMENT_LAYOUT.responsive?.maxScale ?? 1));
+
+  useEffect(() => {
+    const node = retirementRowsViewportRef.current;
+    if (!node) return undefined;
+
+    const updateScale = () => {
+      const availableWidth = Math.max(1, node.clientWidth || node.getBoundingClientRect().width || retirementDesignWidth);
+      const needsScaling = availableWidth < retirementDesignWidth;
+      const nextScale = needsScaling
+        ? Math.max(retirementMinScale, Math.min(retirementMaxScale, availableWidth / retirementDesignWidth))
+        : 1;
+      // Wide rows keep their real width, preserving the exact current 4K layout.
+      // Only narrower rows switch to the fixed master canvas and scale as a unit.
+      const nextCanvasWidth = needsScaling ? retirementDesignWidth : availableWidth;
+
+      // Avoid resize-observer micro-jitter from sub-pixel scrollbar changes.
+      const roundedScale = Math.round(nextScale * 10000) / 10000;
+      const roundedWidth = Math.round(nextCanvasWidth * 100) / 100;
+      setRetirementRowScale((current) => (Math.abs(current - roundedScale) < 0.0001 ? current : roundedScale));
+      setRetirementRowCanvasWidth((current) => (current != null && Math.abs(current - roundedWidth) < 0.01 ? current : roundedWidth));
+    };
+
+    updateScale();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateScale);
+      return () => window.removeEventListener("resize", updateScale);
+    }
+
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [retirementDesignWidth, retirementMinScale, retirementMaxScale]);
 
   useEffect(() => {
     let cancelled = false;
@@ -695,7 +735,7 @@ setError("");
             </div>
           </div>
 
-          <div className="bmTableScroller min-h-0 flex-1 overflow-y-auto">
+          <div ref={retirementRowsViewportRef} className="bmTableScroller min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
             {!alreadyRan ? (
               <div className="flex h-full min-h-[220px] items-center justify-center text-white/45">{loading ? "Running retirements..." : "Preparing retirement results..."}</div>
             ) : retiredPlayers.length === 0 ? (
@@ -719,9 +759,19 @@ setError("");
                       type="button"
                       onClick={() => setPlayerCardPlayer(hydrateRetiredPlayerForCard(player, workingLeagueData || leagueData))}
                       className="relative block w-full overflow-visible text-left transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-orange-500/60"
-                      style={{ height: `${RETIREMENT_LAYOUT.rowHeight}px` }}
+                      style={{ height: `${RETIREMENT_LAYOUT.rowHeight * retirementRowScale}px` }}
                       title={`Open ${player?.name || "player"} card`}
                     >
+                      <div
+                        className="relative"
+                        style={{
+                          width: `${retirementRowCanvasWidth || retirementDesignWidth}px`,
+                          height: `${RETIREMENT_LAYOUT.rowHeight}px`,
+                          transform: `scale(${retirementRowScale})`,
+                          transformOrigin: "left top",
+                          willChange: "transform",
+                        }}
+                      >
                       <div
                         className="absolute overflow-visible"
                         style={{
@@ -902,6 +952,7 @@ setError("");
                           </div>
                         );
                       })()}
+                      </div>
                     </button>
                   );
                 })}

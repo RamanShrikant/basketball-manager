@@ -4,6 +4,7 @@ import {
   JERSEY_MANIFEST_URL,
   PORTRAIT_DEFAULT_FITS_URL,
   PORTRAIT_STUDIO_MANIFEST_URL,
+  REAL_PLAYER_FACE_MANIFEST_URL,
   getFallbackPortraitUrl,
   getJerseyTemplateId,
   getPlayerPortraitId,
@@ -29,16 +30,20 @@ async function loadPortraitRuntimeData() {
   if (runtimePromise) return runtimePromise;
   runtimePromise = Promise.all([
     fetch(PORTRAIT_STUDIO_MANIFEST_URL).then((res) => (res.ok ? res.json() : null)),
+    fetch(REAL_PLAYER_FACE_MANIFEST_URL).then((res) => (res.ok ? res.json() : [])).catch(() => []),
     fetch(JERSEY_MANIFEST_URL).then((res) => (res.ok ? res.json() : [])),
     fetch(`${PORTRAIT_DEFAULT_FITS_URL}?runtime=${Date.now()}`, { cache: "no-store" }).then((res) => (res.ok ? res.json() : null)).catch(() => null),
   ])
-    .then(([studio, jerseys, fits]) => {
-      const entries = Array.isArray(studio?.entries) ? studio.entries : [];
+    .then(([studio, realPlayers, jerseys, fits]) => {
+      const rookieEntries = Array.isArray(studio?.entries) ? studio.entries : [];
+      const realEntries = Array.isArray(realPlayers) ? realPlayers : [];
+      const entries = [...rookieEntries, ...realEntries];
       const jerseyRows = Array.isArray(jerseys) ? jerseys : [];
       const next = {
         studio,
         fitConfig: normalizePortraitFitConfig(fits || {}),
         faceById: new Map(entries.filter((row) => row?.id).map((row) => [String(row.id).toLowerCase(), row])),
+        faceByPlayerId: new Map(realEntries.filter((row) => row?.playerId).map((row) => [String(row.playerId), row])),
         jerseyByTeam: new Map(jerseyRows.filter((row) => row?.team).map((row) => [String(row.team).toUpperCase(), row])),
       };
       emitRuntimeSnapshot(next);
@@ -124,14 +129,30 @@ export default function RuntimePlayerPortrait({
   );
 
   const resolved = useMemo(() => {
-    if (mode === "draft" || useDraftAttireFreeAgent || !faceId || !data) return null;
-    const face = data.faceById?.get(faceId);
+    if (mode === "draft" || useDraftAttireFreeAgent || !data) return null;
+    const face = data.faceById?.get(faceId) || data.faceByPlayerId?.get(String(player?.id || ""));
     if (!face?.baseReady || !face?.baseUrl) return null;
+
+    const fitFaceId = String(face?.id || faceId || "").toLowerCase();
+    const isRealPlayerFace = /^real_face_/i.test(fitFaceId);
+    const sourceTeamCode = isRealPlayerFace
+      ? normalizePortraitTeamCode(face?.teamName || "", {})
+      : "";
+
+    // Real-player base portraits are alternate looks intended for when a player
+    // leaves the team that supplied the original official headshot. While the
+    // player is still on that original/source team, keep using the official
+    // source headshot. As soon as he changes teams (or becomes a free agent),
+    // switch to the generated jerseyless base system.
+    if (isRealPlayerFace && sourceTeamCode && sourceTeamCode === teamCode) {
+      return null;
+    }
+
     const jersey = teamCode ? data.jerseyByTeam?.get(teamCode) : null;
     const templateId = jersey ? getJerseyTemplateId(jersey) : "";
-    const fit = jersey ? resolveJerseyFit(data.fitConfig, faceId, templateId, stageId) : null;
+    const fit = jersey ? resolveJerseyFit(data.fitConfig, fitFaceId, templateId, stageId) : null;
     return { face, jersey, fit };
-  }, [data, faceId, mode, stageId, teamCode, useDraftAttireFreeAgent]);
+  }, [data, faceId, mode, player?.id, stageId, teamCode, useDraftAttireFreeAgent]);
 
   return (
     <div className={`relative overflow-visible ${className}`} style={style} aria-hidden={ariaHidden || undefined}>

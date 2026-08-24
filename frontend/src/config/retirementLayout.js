@@ -13,6 +13,16 @@
 export const RETIREMENT_LAYOUT = {
   rowHeight: 150,
 
+  // Responsive wrapper for the absolute-position master design below.
+  // The existing headshot/name/ring/story/logo coordinates are authored against
+  // this virtual row width. Smaller real rows scale the whole composition as one
+  // unit instead of letting the absolute offsets collide.
+  responsive: {
+    designWidth: 1488,
+    minScale: 0.6,
+    maxScale: 1,
+  },
+
   headshot: {
     left: 14,
     top: 4,

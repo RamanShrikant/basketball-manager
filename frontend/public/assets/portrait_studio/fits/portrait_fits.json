@@ -13505,6 +13505,321 @@
         }
       },
       "stages": {}
+    },
+    "real_face_1626164": {
+      "default": {
+        "x": 0,
+        "y": 0,
+        "scale": 1,
+        "left": 0,
+        "right": 0,
+        "up": 0,
+        "down": 0,
+        "opacity": 1
+      },
+      "jerseys": {
+        "ATL_jersey_v1": {
+          "x": 5.278583118076101,
+          "y": 31.671630259742116,
+          "scale": 1,
+          "left": 0,
+          "right": 0,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "BKN_jersey_v1": {
+          "x": 12.3167476387018,
+          "y": 39.88276233731343,
+          "scale": 1,
+          "left": 0,
+          "right": 0,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "BOS_jersey_v1": {
+          "x": 14.662695085861904,
+          "y": 41.05582147809835,
+          "scale": 1,
+          "left": 0,
+          "right": 0,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "CHA_jersey_v1": {
+          "x": 12.903194228098654,
+          "y": 32.25815983013458,
+          "scale": 1,
+          "left": 0,
+          "right": 0,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "CHI_jersey_v1": {
+          "x": 4.105528849709702,
+          "y": 29.325592523293174,
+          "scale": 1,
+          "left": 0,
+          "right": 0,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "CLE_jersey_v1": {
+          "x": 19.35475106975481,
+          "y": 32.84464912796659,
+          "scale": 1,
+          "left": 0,
+          "right": 0,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "DAL_jersey_v1": {
+          "x": 14.076167951678704,
+          "y": 24.04698748000282,
+          "scale": 1,
+          "left": -44,
+          "right": -43,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "DEN_jersey_v1": {
+          "x": -0.5865271341831996,
+          "y": 23.460498182170806,
+          "scale": 1,
+          "left": -67,
+          "right": -60,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "DET_jersey_v1": {
+          "x": 4.1056093944960494,
+          "y": 18.768342164152017,
+          "scale": 1,
+          "left": -47,
+          "right": -40,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "GSW_jersey_v1": {
+          "x": -0.586446589396852,
+          "y": 24.04698748000282,
+          "scale": 1,
+          "left": -49,
+          "right": -35,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "HOU_jersey_v1": {
+          "x": 4.692055983892901,
+          "y": 31.085140961910106,
+          "scale": 1,
+          "left": 0,
+          "right": 0,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "IND_jersey_v1": {
+          "x": 9.970639101969002,
+          "y": 21.114420173161413,
+          "scale": 1,
+          "left": -58,
+          "right": -61,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "LAC_jersey_v1": {
+          "x": 2.93255512612965,
+          "y": 21.700869198432972,
+          "scale": 1,
+          "left": -52,
+          "right": -40,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "LAL_jersey_v1": {
+          "x": 5.8651102522593,
+          "y": 17.595323295927543,
+          "scale": 1,
+          "left": -75,
+          "right": -72,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "MEM_jersey_v1": {
+          "x": 7.624611110022552,
+          "y": 31.671630259742116,
+          "scale": 1,
+          "left": 0,
+          "right": 0,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "MIA_jersey_v1": {
+          "x": 8.21113824420575,
+          "y": 22.87394847549812,
+          "scale": 1,
+          "left": -57,
+          "right": -56,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "MIL_jersey_v1": {
+          "x": 0,
+          "y": 19.94140130493694,
+          "scale": 1,
+          "left": -53,
+          "right": -49,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "MIN_jersey_v1": {
+          "x": 8.21113824420575,
+          "y": 31.671630259742116,
+          "scale": 1,
+          "left": 0,
+          "right": 0,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "NOP_jersey_v1": {
+          "x": 8.79766537838895,
+          "y": 17.00879372553508,
+          "scale": 1,
+          "left": -75,
+          "right": -63,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "NYK_jersey_v1": {
+          "x": 1.1730542683663991,
+          "y": 15.835774857310607,
+          "scale": 1,
+          "left": -79,
+          "right": -67,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "OKC_jersey_v1": {
+          "x": 17.0088036225947,
+          "y": 33.431178698359055,
+          "scale": 1,
+          "left": 14,
+          "right": 9,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "ORL_jersey_v1": {
+          "x": 5.865029707472951,
+          "y": 28.739103225461157,
+          "scale": 1,
+          "left": -39,
+          "right": -11,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "PHI_jersey_v1": {
+          "x": 0.586446589396852,
+          "y": 25.80653591861975,
+          "scale": 1,
+          "left": -74,
+          "right": -63,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "PHX_jersey_v1": {
+          "x": 0.586446589396852,
+          "y": 21.11442017316141,
+          "scale": 1,
+          "left": -69,
+          "right": -55,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "POR_jersey_v1": {
+          "x": 6.4516373864425,
+          "y": 18.768382436712468,
+          "scale": 1,
+          "left": -53,
+          "right": -46,
+          "up": 0,
+          "down": 4,
+          "opacity": 1
+        },
+        "SAC_jersey_v1": {
+          "x": 2.93255512612965,
+          "y": 17.00887427065598,
+          "scale": 1,
+          "left": -68,
+          "right": -60,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "SAS_jersey_v1": {
+          "x": 8.797665378388952,
+          "y": 18.181852866320003,
+          "scale": 1,
+          "left": -70,
+          "right": -64,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "TOR_jersey_v1": {
+          "x": 0.5865271341831996,
+          "y": 18.181893138880454,
+          "scale": 1,
+          "left": -76,
+          "right": -63,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "UTA_jersey_v1": {
+          "x": 5.278583118076101,
+          "y": 26.97955478684423,
+          "scale": 1,
+          "left": -37,
+          "right": -30,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        },
+        "WAS_jersey_v1": {
+          "x": 1.7595814025495988,
+          "y": 29.325552250732724,
+          "scale": 1,
+          "left": 0,
+          "right": 0,
+          "up": 0,
+          "down": 0,
+          "opacity": 1
+        }
+      },
+      "stages": {}
     }
   },
   "jerseyTemplateHashes": {

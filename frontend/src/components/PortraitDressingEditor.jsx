@@ -8,6 +8,7 @@ import {
   PORTRAIT_DRESSING_STORAGE_KEY,
   PORTRAIT_FIT_VERSION,
   PORTRAIT_STUDIO_MANIFEST_URL,
+  REAL_PLAYER_FACE_MANIFEST_URL,
   getJerseyTemplateId,
   getStoredPortraitFitConfig,
   hasJerseyOverride,
@@ -69,7 +70,9 @@ function withTemplateHashes(config, jerseys) {
 }
 
 export default function PortraitDressingEditor() {
-  const [faces, setFaces] = useState([]);
+  const [rookieFaces, setRookieFaces] = useState([]);
+  const [realFaces, setRealFaces] = useState([]);
+  const [portraitGroup, setPortraitGroup] = useState("rookies");
   const [studioMeta, setStudioMeta] = useState(null);
   const [jerseys, setJerseys] = useState([]);
   const [selectedFaceId, setSelectedFaceId] = useState("");
@@ -90,31 +93,52 @@ export default function PortraitDressingEditor() {
         if (!res.ok) throw new Error(`Portrait Studio manifest returned ${res.status}`);
         return res.json();
       }),
+      fetch(REAL_PLAYER_FACE_MANIFEST_URL).then((res) => {
+        if (!res.ok) throw new Error(`Real-player portrait manifest returned ${res.status}`);
+        return res.json();
+      }).catch(() => []),
       fetch(JERSEY_MANIFEST_URL).then((res) => {
         if (!res.ok) throw new Error(`Jersey manifest returned ${res.status}`);
         return res.json();
       }),
       fetch(`${PORTRAIT_DEFAULT_FITS_URL}?editor=${Date.now()}`, { cache: "no-store" }).then((res) => (res.ok ? res.json() : null)).catch(() => null),
     ])
-      .then(([studio, jerseyRows, defaults]) => {
+      .then(([studio, realPlayerRows, jerseyRows, defaults]) => {
         if (cancelled) return;
-        const nextFaces = Array.isArray(studio?.entries) ? studio.entries.filter((row) => row?.id) : [];
+        const nextRookieFaces = Array.isArray(studio?.entries) ? studio.entries.filter((row) => row?.id) : [];
+        const nextRealFaces = Array.isArray(realPlayerRows) ? realPlayerRows.filter((row) => row?.id) : [];
         const nextJerseys = Array.isArray(jerseyRows) ? jerseyRows.filter((row) => row?.team && row?.url) : [];
         const merged = mergePortraitFitConfigs(defaults || {}, getStoredPortraitFitConfig());
         setStudioMeta(studio);
-        setFaces(nextFaces);
+        setRookieFaces(nextRookieFaces);
+        setRealFaces(nextRealFaces);
         setJerseys(nextJerseys);
         setFitConfig(merged);
-        const firstReady = nextFaces.find((row) => row.baseReady);
-        setSelectedFaceId((prev) => prev || firstReady?.id || nextFaces[0]?.id || "");
+        const firstReady = nextRookieFaces.find((row) => row.baseReady);
+        setSelectedFaceId((prev) => prev || firstReady?.id || nextRookieFaces[0]?.id || nextRealFaces[0]?.id || "");
         setSelectedTeam((prev) => (nextJerseys.some((row) => row.team === prev) ? prev : nextJerseys[0]?.team || ""));
-        setStatus(`Ready: ${studio?.counts?.baseReady ?? nextFaces.filter((row) => row.baseReady).length} jerseyless bases, ${nextJerseys.length} jerseys.`);
+        setStatus(`Ready: ${nextRookieFaces.filter((row) => row.baseReady).length} rookie bases + ${nextRealFaces.filter((row) => row.baseReady).length} real-player bases, ${nextJerseys.length} jerseys.`);
       })
       .catch((error) => !cancelled && setStatus(`Could not load Portrait Studio assets: ${error.message}`));
     return () => { cancelled = true; };
   }, []);
 
+  const faces = portraitGroup === "real" ? realFaces : rookieFaces;
+
+  useEffect(() => {
+    const activeFaces = portraitGroup === "real" ? realFaces : rookieFaces;
+    if (!activeFaces.length) {
+      setSelectedFaceId("");
+      return;
+    }
+    if (!activeFaces.some((face) => face.id === selectedFaceId)) {
+      const firstReady = activeFaces.find((row) => row.baseReady);
+      setSelectedFaceId(firstReady?.id || activeFaces[0]?.id || "");
+    }
+  }, [portraitGroup, realFaces, rookieFaces, selectedFaceId]);
+
   const selectedFace = useMemo(() => faces.find((face) => face.id === selectedFaceId) || faces[0] || null, [faces, selectedFaceId]);
+  const fitStage = portraitGroup === "real" ? "real" : "rookie";
   const selectedJersey = useMemo(() => jerseys.find((jersey) => jersey.team === selectedTeam) || jerseys[0] || null, [jerseys, selectedTeam]);
   const selectedTemplateId = getJerseyTemplateId(selectedJersey || {});
   const inheritedFit = useMemo(() => {
@@ -130,13 +154,13 @@ export default function PortraitDressingEditor() {
     if (withoutSpecific.fitByFace[selectedFace.id].jerseys[selectedTemplateId] === undefined) {
       delete withoutSpecific.fitByFace[selectedFace.id].jerseys[selectedTemplateId];
     }
-    return resolveJerseyFit(withoutSpecific, selectedFace.id, selectedTemplateId, "rookie");
-  }, [fitConfig, selectedFace?.id, selectedTemplateId]);
+    return resolveJerseyFit(withoutSpecific, selectedFace.id, selectedTemplateId, fitStage);
+  }, [fitConfig, fitStage, selectedFace?.id, selectedTemplateId]);
   const currentResolvedFit = useMemo(
-    () => selectedFace?.id ? resolveJerseyFit(fitConfig, selectedFace.id, selectedTemplateId, "rookie") : normalizeJerseyFit(DEFAULT_JERSEY_FIT),
-    [fitConfig, selectedFace?.id, selectedTemplateId]
+    () => selectedFace?.id ? resolveJerseyFit(fitConfig, selectedFace.id, selectedTemplateId, fitStage) : normalizeJerseyFit(DEFAULT_JERSEY_FIT),
+    [fitConfig, fitStage, selectedFace?.id, selectedTemplateId]
   );
-  const hasSpecificOverride = selectedFace?.id ? hasJerseyOverride(fitConfig, selectedFace.id, selectedTemplateId, "rookie") : false;
+  const hasSpecificOverride = selectedFace?.id ? hasJerseyOverride(fitConfig, selectedFace.id, selectedTemplateId, fitStage) : false;
 
   useEffect(() => { setDraftFit(currentResolvedFit); }, [selectedFaceId, selectedTeam, currentResolvedFit.x, currentResolvedFit.y, currentResolvedFit.scale, currentResolvedFit.left, currentResolvedFit.right, currentResolvedFit.up, currentResolvedFit.down, currentResolvedFit.opacity]);
 
@@ -146,7 +170,7 @@ export default function PortraitDressingEditor() {
       if (filter === "ready" && !face.baseReady) return false;
       if (filter === "needs" && !face.needsBase) return false;
       if (!q) return true;
-      return `${face.id} ${face.appearancePool || ""} ${face.defaultHairStyle || ""} ${face.skinTone || ""}`.toLowerCase().includes(q);
+      return `${face.id} ${face.name || ""} ${face.teamName || ""} ${face.appearancePool || ""} ${face.defaultHairStyle || ""} ${face.skinTone || ""}`.toLowerCase().includes(q);
     });
   }, [faces, search, filter]);
 
@@ -243,9 +267,12 @@ export default function PortraitDressingEditor() {
     }).length;
   }, [fitConfig.jerseyTemplateHashes, jerseys]);
 
-  const readyCount = studioMeta?.counts?.baseReady ?? faces.filter((row) => row.baseReady).length;
-  const needsCount = studioMeta?.counts?.needsBase ?? faces.filter((row) => row.needsBase).length;
-  const draftCount = studioMeta?.counts?.draftReferences ?? faces.filter((row) => row.draftUrl).length;
+  const readyCount = faces.filter((row) => row.baseReady).length;
+  const needsCount = faces.filter((row) => row.needsBase).length;
+  const referenceCount = portraitGroup === "real"
+    ? realFaces.filter((row) => row.sourceUrl).length
+    : (studioMeta?.counts?.draftReferences ?? rookieFaces.filter((row) => row.draftUrl).length);
+  const referenceLabel = portraitGroup === "real" ? "Source Headshots" : "Draft References";
 
   return (
     <div className="space-y-5">
@@ -271,24 +298,28 @@ export default function PortraitDressingEditor() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <div className="rounded-2xl border bg-white p-4"><div className="text-[10px] font-black uppercase text-slate-500">Base Ready</div><div className="text-2xl font-black text-emerald-700">{readyCount}</div></div>
         <div className="rounded-2xl border bg-white p-4"><div className="text-[10px] font-black uppercase text-slate-500">Need Base</div><div className="text-2xl font-black text-amber-700">{needsCount}</div></div>
-        <div className="rounded-2xl border bg-white p-4"><div className="text-[10px] font-black uppercase text-slate-500">Draft References</div><div className="text-2xl font-black">{draftCount}</div></div>
+        <div className="rounded-2xl border bg-white p-4"><div className="text-[10px] font-black uppercase text-slate-500">{referenceLabel}</div><div className="text-2xl font-black">{referenceCount}</div></div>
         <div className="rounded-2xl border bg-white p-4"><div className="text-[10px] font-black uppercase text-slate-500">Team Jerseys</div><div className="text-2xl font-black">{jerseys.length}</div></div>
       </div>
 
       <div className="grid grid-cols-1 gap-5 2xl:grid-cols-[340px_minmax(0,1fr)_390px]">
         <div className="rounded-3xl border bg-white p-4 shadow-sm">
-          <div className="mb-3"><h2 className="text-lg font-black">Rookie Identities</h2><p className="text-xs text-slate-500">Choose a jerseyless base to fit.</p></div>
+          <div className="mb-3"><h2 className="text-lg font-black">{portraitGroup === "real" ? "NBA Players" : "Rookie Identities"}</h2><p className="text-xs text-slate-500">{portraitGroup === "real" ? "Choose a real player. Existing roster headshots stay visible until you add a jerseyless base." : "Choose a jerseyless base to fit."}</p></div>
+          <div className="mb-3 grid grid-cols-2 gap-1 rounded-xl bg-slate-950 p-1">
+            <button type="button" onClick={() => { setPortraitGroup("rookies"); setFilter("all"); setSearch(""); }} className={`rounded-lg px-2 py-2 text-[11px] font-black ${portraitGroup === "rookies" ? "bg-white text-slate-950 shadow-sm" : "text-slate-300 hover:text-white"}`}>Rookies ({rookieFaces.length})</button>
+            <button type="button" onClick={() => { setPortraitGroup("real"); setFilter("all"); setSearch(""); }} className={`rounded-lg px-2 py-2 text-[11px] font-black ${portraitGroup === "real" ? "bg-white text-slate-950 shadow-sm" : "text-slate-300 hover:text-white"}`}>NBA Players ({realFaces.length})</button>
+          </div>
           <div className="mb-3 grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
             {[["all","All"],["ready","Base Ready"],["needs","Need Base"]].map(([value,label]) => <button key={value} type="button" onClick={() => setFilter(value)} className={`rounded-lg px-2 py-2 text-[11px] font-black ${filter===value?"bg-white shadow-sm":"text-slate-500 hover:text-slate-900"}`}>{label}</button>)}
           </div>
-          <input value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Search face, pool, hair..." className="mb-3 w-full rounded-xl border px-3 py-2 text-sm" />
+          <input value={search} onChange={(e)=>setSearch(e.target.value)} placeholder={portraitGroup === "real" ? "Search player or team..." : "Search face, pool, hair..."} className="mb-3 w-full rounded-xl border px-3 py-2 text-sm" />
           <div className="grid max-h-[760px] grid-cols-2 gap-2 overflow-y-auto pr-1">
             {filteredFaces.map((face) => {
               const profile = fitConfig.fitByFace?.[face.id];
               const overrideCount = Object.keys(profile?.jerseys || {}).length;
               return <button key={face.id} type="button" onClick={()=>setSelectedFaceId(face.id)} className={`overflow-hidden rounded-xl border text-left ${face.id===selectedFace?.id?"border-blue-600 ring-2 ring-blue-500":"hover:border-slate-400"}`}>
-                <div className="relative aspect-[1040/760] bg-slate-100">{(face.baseUrl||face.draftUrl) && <img src={face.baseUrl||face.draftUrl} alt={face.id} loading="lazy" className="h-full w-full object-contain" />}</div>
-                <div className="p-2"><div className="truncate text-[11px] font-black">{face.id}</div><div className="truncate text-[10px] text-slate-500">{overrideCount ? `${overrideCount} jersey override${overrideCount===1?"":"s"}` : "Default only"}</div></div>
+                <div className="relative aspect-[1040/760] bg-slate-100">{(face.baseReady ? face.baseUrl : (face.sourceUrl || face.draftUrl || face.baseUrl)) && <img src={face.baseReady ? face.baseUrl : (face.sourceUrl || face.draftUrl || face.baseUrl)} alt={face.name || face.id} loading="lazy" className="h-full w-full object-contain" />}</div>
+                <div className="p-2"><div className="truncate text-[11px] font-black">{portraitGroup === "real" ? (face.name || face.id) : face.id}</div><div className="truncate text-[10px] text-slate-500">{portraitGroup === "real" ? (face.teamName || (face.baseReady ? "Base ready" : "Needs base")) : (overrideCount ? `${overrideCount} jersey override${overrideCount===1?"":"s"}` : "Default only")}</div>{portraitGroup === "real" && <div className={`mt-1 text-[9px] font-black uppercase ${face.baseReady ? "text-emerald-600" : "text-amber-600"}`}>{face.baseReady ? "Base Ready" : "Needs Base"}</div>}</div>
               </button>;
             })}
           </div>
@@ -296,10 +327,10 @@ export default function PortraitDressingEditor() {
 
         <div className="space-y-4 rounded-3xl border bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-xl font-black">Live 1040 × 760 Preview</h2><p className="text-xs text-slate-500">Drag the jersey for X/Y, then tune precisely. Current controls are a working preview until you save them as a default or team override.</p></div><label className="flex items-center gap-2 text-xs font-black text-slate-600"><input type="checkbox" checked={showGrid} onChange={(e)=>setShowGrid(e.target.checked)} /> Alignment grid</label></div>
-          {selectedFace?.baseReady ? <LayeredPlayerPortrait bodySrc={selectedFace.baseUrl} jerseySrc={selectedJersey?.url} fit={draftFit} showGrid={showGrid} draggableJersey onFitChange={(next)=>setDraftFit(normalizeJerseyFit(next))} alt={selectedFace.id} /> : <div className="grid aspect-[1040/760] place-items-center rounded-2xl border bg-slate-100 text-sm font-black text-amber-700">Jerseyless base required</div>}
-          <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4"><div className="rounded-xl bg-slate-50 p-3"><div className="text-[10px] font-black text-slate-500">IDENTITY</div><div className="truncate font-black">{selectedFace?.id||"—"}</div></div><div className="rounded-xl bg-slate-50 p-3"><div className="text-[10px] font-black text-slate-500">TEAM</div><div className="font-black">{selectedJersey?.team||"—"}</div></div><div className="rounded-xl bg-slate-50 p-3"><div className="text-[10px] font-black text-slate-500">FIT SOURCE</div><div className={`font-black ${hasSpecificOverride?"text-purple-700":"text-emerald-700"}`}>{hasSpecificOverride?"TEAM OVERRIDE":"INHERITED DEFAULT"}</div></div><div className="rounded-xl bg-slate-50 p-3"><div className="text-[10px] font-black text-slate-500">TEMPLATE</div><div className="truncate font-black">{selectedTemplateId||"—"}</div></div></div>
+          {selectedFace?.baseReady ? <LayeredPlayerPortrait bodySrc={selectedFace.baseUrl} jerseySrc={selectedJersey?.url} fit={draftFit} showGrid={showGrid} draggableJersey onFitChange={(next)=>setDraftFit(normalizeJerseyFit(next))} alt={selectedFace.name || selectedFace.id} /> : (selectedFace?.sourceUrl ? <div className="relative aspect-[1040/760] overflow-hidden rounded-2xl border bg-slate-100"><img src={selectedFace.sourceUrl} alt={selectedFace.name || selectedFace.id} className="h-full w-full object-contain" /><div className="absolute bottom-3 left-3 rounded-lg bg-slate-950/90 px-3 py-2 text-xs font-black text-amber-300">SOURCE HEADSHOT — JERSEYLESS BASE REQUIRED</div></div> : <div className="grid aspect-[1040/760] place-items-center rounded-2xl border bg-slate-100 text-sm font-black text-amber-700">Jerseyless base required</div>)}
+          <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4"><div className="rounded-xl bg-slate-50 p-3"><div className="text-[10px] font-black text-slate-500">IDENTITY</div><div className="truncate font-black">{portraitGroup === "real" ? (selectedFace?.name || selectedFace?.id || "—") : (selectedFace?.id || "—")}</div></div><div className="rounded-xl bg-slate-50 p-3"><div className="text-[10px] font-black text-slate-500">TEAM</div><div className="font-black">{selectedJersey?.team||"—"}</div></div><div className="rounded-xl bg-slate-50 p-3"><div className="text-[10px] font-black text-slate-500">FIT SOURCE</div><div className={`font-black ${hasSpecificOverride?"text-purple-700":"text-emerald-700"}`}>{hasSpecificOverride?"TEAM OVERRIDE":"INHERITED DEFAULT"}</div></div><div className="rounded-xl bg-slate-50 p-3"><div className="text-[10px] font-black text-slate-500">TEMPLATE</div><div className="truncate font-black">{selectedTemplateId||"—"}</div></div></div>
           <button type="button" onClick={()=>setShowAllTeams((v)=>!v)} className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-800">{showAllTeams?"Hide 30-Team QA":"Preview All 30 Jerseys"}</button>
-          {showAllTeams && selectedFace?.baseReady && <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">{jerseys.map((jersey)=>{ const templateId=getJerseyTemplateId(jersey); const fit=resolveJerseyFit(fitConfig, selectedFace.id, templateId, "rookie"); const override=hasJerseyOverride(fitConfig, selectedFace.id, templateId, "rookie"); return <button key={templateId} type="button" onClick={()=>setSelectedTeam(jersey.team)} className={`rounded-xl border p-1 text-left ${jersey.team===selectedTeam?"border-blue-600":"border-slate-200"}`}><LayeredPlayerPortrait bodySrc={selectedFace.baseUrl} jerseySrc={jersey.url} fit={fit} className="rounded-lg" /><div className="px-1 py-1 text-[10px] font-black">{jersey.team} {override?<span className="text-purple-700">• override</span>:<span className="text-slate-400">• default</span>}</div></button>;})}</div>}
+          {showAllTeams && selectedFace?.baseReady && <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">{jerseys.map((jersey)=>{ const templateId=getJerseyTemplateId(jersey); const fit=resolveJerseyFit(fitConfig, selectedFace.id, templateId, fitStage); const override=hasJerseyOverride(fitConfig, selectedFace.id, templateId, fitStage); return <button key={templateId} type="button" onClick={()=>setSelectedTeam(jersey.team)} className={`rounded-xl border p-1 text-left ${jersey.team===selectedTeam?"border-blue-600":"border-slate-200"}`}><LayeredPlayerPortrait bodySrc={selectedFace.baseUrl} jerseySrc={jersey.url} fit={fit} className="rounded-lg" /><div className="px-1 py-1 text-[10px] font-black">{jersey.team} {override?<span className="text-purple-700">• override</span>:<span className="text-slate-400">• default</span>}</div></button>;})}</div>}
         </div>
 
         <div className="space-y-4 rounded-3xl border bg-white p-4 shadow-sm">

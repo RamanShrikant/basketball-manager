@@ -4,6 +4,7 @@ export const PORTRAIT_CANVAS_WIDTH = 1040;
 export const PORTRAIT_CANVAS_HEIGHT = 760;
 export const ROOKIE_FACE_MANIFEST_URL = "/assets/rookie_faces/rookie_faces_manifest.json";
 export const PORTRAIT_STUDIO_MANIFEST_URL = "/assets/portrait_studio/portrait_studio_manifest.json";
+export const REAL_PLAYER_FACE_MANIFEST_URL = "/assets/real_player_faces/real_player_faces_manifest.json";
 export const PORTRAIT_DEFAULT_FITS_URL = "/assets/portrait_studio/fits/portrait_fits.json";
 export const JERSEY_MANIFEST_URL = "/assets/jerseys/v1/jerseys_manifest.json";
 export const PORTRAIT_DRESSING_STORAGE_KEY = "bm_portrait_dressing_fit_v2";
@@ -106,7 +107,7 @@ export function normalizePortraitFitConfig(raw = {}) {
   const rawFaceMap = isObject(source.fitByFace) ? source.fitByFace : source;
   const fitByFace = Object.fromEntries(
     Object.entries(rawFaceMap)
-      .filter(([faceId, profile]) => /^rookie_face_\d+$/i.test(String(faceId || "")) && isObject(profile))
+      .filter(([faceId, profile]) => /^(?:rookie_face_\d+|real_face_[a-z0-9_-]+)$/i.test(String(faceId || "")) && isObject(profile))
       .map(([faceId, profile]) => [String(faceId).toLowerCase(), normalizeFaceFitProfile(profile)])
   );
   const fitByTemplate = Object.fromEntries(
@@ -201,10 +202,19 @@ export function getPortraitStageId(player = {}) {
 
 export function getPlayerPortraitId(player = {}, fallbackSrc = "") {
   const explicit = String(player?.portraitId || player?.portraitFamilyId || player?.faceId || "").trim().toLowerCase();
-  if (/^rookie_face_\d+$/i.test(explicit)) return explicit;
+  if (/^(?:rookie_face_\d+|real_face_[a-z0-9_-]+)$/i.test(explicit)) return explicit;
+
   const source = String(fallbackSrc || player?.headshot || player?.image || player?.img || player?.portrait || "");
-  const match = source.match(/(rookie_face_\d+)(?:_base)?\.png/i);
-  return match ? match[1].toLowerCase() : "";
+  const rookieMatch = source.match(/(rookie_face_\d+)(?:_base)?\.png/i);
+  if (rookieMatch) return rookieMatch[1].toLowerCase();
+
+  const realBaseMatch = source.match(/(real_face_[a-z0-9_-]+)(?:_base)?\.png/i);
+  if (realBaseMatch) return realBaseMatch[1].toLowerCase();
+
+  const nbaMatch = source.match(/cdn\.nba\.com\/headshots\/nba\/latest\/1040x760\/(\d+)\.png/i);
+  if (nbaMatch) return `real_face_${nbaMatch[1]}`;
+
+  return "";
 }
 
 export function getFallbackPortraitUrl(player = {}, explicitSrc = "") {
