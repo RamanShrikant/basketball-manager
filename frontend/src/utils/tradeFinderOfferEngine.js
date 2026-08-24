@@ -1178,7 +1178,7 @@ export async function runTradeFinderTeamBatch({
     }
 
     try {
-      if (typeof onTeamDone === "function") onTeamDone(summary);
+      if (typeof onTeamDone === "function") onTeamDone(summary, offer);
     } catch {}
   }
 
@@ -1222,7 +1222,6 @@ async function runTradeFinderTeamsInWorkerPool({
   let completedTeams = 0;
   let offersFound = 0;
   const workers = [];
-  let abortHandler = null;
 
   const terminateAll = () => {
     for (const worker of workers) {
@@ -1245,49 +1244,116 @@ async function runTradeFinderTeamsInWorkerPool({
       searchProfile: "v12_builder_exact_best_player_anchor_worker_pool",
     });
 
-    if (signal) {
-      abortHandler = () => terminateAll();
-      signal.addEventListener?.("abort", abortHandler, { once: true });
-    }
-
     const runChunk = (chunk, workerId) =>
       new Promise((resolve, reject) => {
-        if (isCancelled(signal)) return resolve({ offers: [], teamSummaries: [], metrics: {}, timing: {}, stopped: true });
-        const worker = new Worker(new URL("../workers/tradeFinderTeamWorker.js", import.meta.url), { type: "module" });
-        workers.push(worker);
-        worker.onerror = (event) => {
-          reject(new Error(event?.message || `Trade Finder worker ${workerId} failed`));
+        const partial = {
+          offers: [],
+          teamSummaries: [],
+          metrics: {},
+          timing: {},
+          stopped: false,
         };
+        let settled = false;
+        let worker = null;
+
+        const cleanup = () => {
+          if (signal) signal.removeEventListener?.("abort", onAbort);
+          if (worker) {
+            try {
+              worker.terminate();
+            } catch {}
+          }
+        };
+
+        const finish = (result) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve(result);
+        };
+
+        const fail = (error) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(error);
+        };
+
+        const onAbort = () => {
+          partial.stopped = true;
+          partial.timing = {
+            ...partial.timing,
+            workerAbortMs: round1(nowMs() - workerStartedAt),
+          };
+          // IMPORTANT: terminating a Web Worker does not settle the Promise that
+          // was waiting for its "complete" message. Resolve with the completed
+          // team results immediately so Stop can never strand Promise.all().
+          finish(partial);
+        };
+
+        if (isCancelled(signal)) {
+          onAbort();
+          return;
+        }
+
+        try {
+          worker = new Worker(new URL("../workers/tradeFinderTeamWorker.js", import.meta.url), { type: "module" });
+          workers.push(worker);
+        } catch (error) {
+          fail(error);
+          return;
+        }
+
+        if (signal) signal.addEventListener?.("abort", onAbort, { once: true });
+
+        worker.onerror = (event) => {
+          if (isCancelled(signal)) {
+            onAbort();
+            return;
+          }
+          fail(new Error(event?.message || `Trade Finder worker ${workerId} failed`));
+        };
+
         worker.onmessage = (event) => {
+          if (settled) return;
           const message = event?.data || {};
           if (message.type === "team_done") {
+            const summary = message.summary || null;
+            if (summary) {
+              partial.teamSummaries.push(summary);
+              mergeMetricTotals(partial.metrics, summary.metrics || {});
+            }
+            if (message.offer) partial.offers.push(message.offer);
+
             completedTeams += 1;
-            if (message.summary?.foundOffer) offersFound += 1;
+            if (summary?.foundOffer) offersFound += 1;
             safeProgress(onProgress, {
               phase: "team_done",
-              team: message.summary?.team || "",
-              teamIndex: Number(message.summary?.teamIndex || completedTeams),
+              team: summary?.team || "",
+              teamIndex: Number(summary?.teamIndex || completedTeams),
               teamsToCheck: checkTeams.length,
               offersFound,
               elapsedSec: round1((nowMs() - startedAt) / 1000),
-              teamMs: Number(message.summary?.teamMs || 0),
-              evaluationsForTeam: Number(message.summary?.evaluationsForTeam || 0),
+              teamMs: Number(summary?.teamMs || 0),
+              evaluationsForTeam: Number(summary?.evaluationsForTeam || 0),
               workerId,
               workerCount: chunks.length,
             });
             return;
           }
           if (message.type === "complete") {
-            try {
-              worker.terminate();
-            } catch {}
-            resolve(message.result || { offers: [], teamSummaries: [], metrics: {}, timing: {} });
+            finish(message.result || partial);
             return;
           }
           if (message.type === "error") {
-            reject(new Error(message.error?.message || message.error || `Trade Finder worker ${workerId} error`));
+            if (isCancelled(signal)) {
+              onAbort();
+              return;
+            }
+            fail(new Error(message.error?.message || message.error || `Trade Finder worker ${workerId} error`));
           }
         };
+
         worker.postMessage({
           type: "run_batch",
           workerId,
@@ -1317,6 +1383,7 @@ async function runTradeFinderTeamsInWorkerPool({
         workerCount: chunks.length,
       },
       workerResults: results,
+      stopped: results.some((result) => Boolean(result?.stopped)) || isCancelled(signal),
     };
 
     for (const result of results) {
@@ -1333,7 +1400,6 @@ async function runTradeFinderTeamsInWorkerPool({
     merged.timing = roundTimingMap(merged.timing);
     return merged;
   } finally {
-    if (signal && abortHandler) signal.removeEventListener?.("abort", abortHandler);
     terminateAll();
   }
 }
@@ -1439,11 +1505,17 @@ export async function findComfortableTradeFinderOffers({
     }
   } catch (error) {
     addTimingMs(searchTiming, "workerPoolDispatchMs", nowMs() - phaseStartedAt);
-    console.warn("[TF WORKER] Worker pool failed; falling back to serial Trade Finder search.", error);
-    usedWorkerPool = false;
-    offers.length = 0;
-    teamSummaries.length = 0;
-    for (const key of Object.keys(aggregateMetrics)) aggregateMetrics[key] = Number(baseContext.metrics?.[key] || 0);
+    if (isCancelled(signal)) {
+      usedWorkerPool = true;
+    } else {
+      console.warn("[TF WORKER] Worker pool failed; falling back to serial Trade Finder search.", error);
+      usedWorkerPool = false;
+    }
+    if (!isCancelled(signal)) {
+      offers.length = 0;
+      teamSummaries.length = 0;
+      for (const key of Object.keys(aggregateMetrics)) aggregateMetrics[key] = Number(baseContext.metrics?.[key] || 0);
+    }
   }
 
   if (!usedWorkerPool) {

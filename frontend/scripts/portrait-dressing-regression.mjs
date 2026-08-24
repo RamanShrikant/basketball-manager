@@ -20,6 +20,19 @@ check("dressing.team_coverage", expectedTeams.every((team) => jerseyManifest.som
 check("dressing.jersey_files_exist", jerseyManifest.every((row) => exists(`${jerseyRoot}/${row.filename}`)), "Every jersey manifest row points to an installed PNG.");
 check("dressing.rookie_manifest_count", rookieManifest.length === 44, `Current context has 44 rookie identities (found ${rookieManifest.length}).`);
 
+const canonicalFits = JSON.parse(read("public/assets/portrait_studio/fits/portrait_fits.json"));
+const templateIds = jerseyManifest.map((row) => row.templateId || row.id).filter(Boolean);
+const missingGeneratedFits = rookieManifest.flatMap((face) =>
+  templateIds
+    .filter((templateId) => !canonicalFits?.fitByFace?.[face.id]?.jerseys?.[templateId])
+    .map((templateId) => `${face.id}:${templateId}`)
+);
+check(
+  "dressing.generated_rookie_full_team_fit_coverage",
+  missingGeneratedFits.length === 0,
+  `Every generated rookie face has an explicit fit for all 30 team jerseys (missing ${missingGeneratedFits.length}${missingGeneratedFits.length ? `: ${missingGeneratedFits.slice(0, 5).join(", ")}` : ""}).`
+);
+
 const v1Migrated = utils.normalizePortraitFitConfig({ fitByFace: { rookie_face_0003: { x: 7, y: -2, scale: 1.04 } } });
 check("dressing.v1_migration", v1Migrated.fitByFace.rookie_face_0003?.default?.x === 7, "Legacy v1 per-face fits migrate into the v2 player default without data loss.");
 

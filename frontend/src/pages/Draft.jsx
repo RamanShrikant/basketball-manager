@@ -5,7 +5,7 @@ import { getDraftYear } from "../utils/seasonContext.js";
 import HeadshotLayoutTransform from "../components/HeadshotLayoutTransform.jsx";
   import * as simEngine from "../api/simEnginePy.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
-import { applyDraftPickOwnershipToOrder, rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
+import { applyDraftPickOwnershipToOrder, archiveCompletedDraftHistory, rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
 import { recordCompletedDraftMoodEvents } from "../utils/offseasonMoodEvents.js";
 import {
   getDraftClassFingerprint,
@@ -1708,6 +1708,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
         : enrichedState;
 
       if (nextState?.completed) {
+        nextLeague = archiveCompletedDraftHistory(nextLeague, nextState, seasonYear);
         nextLeague = rollDraftPickAssetsForCompletedSeason(nextLeague, seasonYear);
       }
 
@@ -1900,7 +1901,8 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
           throw new Error("Draft results are out of sync with the league save. Reopen the draft to rebuild the current class.");
         }
 
-        const rolledLeague = rollDraftPickAssetsForCompletedSeason(workingLeagueData, seasonYear);
+        const archivedLeague = archiveCompletedDraftHistory(workingLeagueData, draftState, seasonYear);
+        const rolledLeague = rollDraftPickAssetsForCompletedSeason(archivedLeague, seasonYear);
         try {
           recordCompletedDraftMoodEvents(rolledLeague, draftState, { seasonYear });
         } catch (err) {

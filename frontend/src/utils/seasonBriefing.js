@@ -56,7 +56,7 @@ const TEAM_ALIASES = Object.freeze({
   "philadelphia sixers": "Philadelphia 76ers",
 });
 
-export const SEASON_BRIEFING_CONTENT_VERSION = 8;
+export const SEASON_BRIEFING_CONTENT_VERSION = 10;
 export const MAX_SEASON_BRIEFING_SNAPSHOTS = 8;
 export const MAX_SEASON_BRIEFING_STORYLINES = 12;
 
@@ -536,6 +536,895 @@ function formatStatLine(row) {
   return `${values[0]} PPG, ${values[1]} RPG and ${values[2]} APG`;
 }
 
+const TEAM_NICKNAME_PATTERN = /(Trail Blazers|76ers|Hawks|Celtics|Nets|Hornets|Bulls|Cavaliers|Mavericks|Nuggets|Pistons|Warriors|Rockets|Pacers|Clippers|Lakers|Grizzlies|Heat|Bucks|Timberwolves|Pelicans|Knicks|Thunder|Magic|Suns|Kings|Spurs|Raptors|Jazz|Wizards)$/i;
+
+function teamNickname(teamName) {
+  const match = text(teamName).match(TEAM_NICKNAME_PATTERN);
+  return match?.[1] || text(teamName);
+}
+
+function teamMarketName(teamName) {
+  const source = text(teamName);
+  const nickname = teamNickname(source);
+  if (!source || !nickname || normalizeName(source) === normalizeName(nickname)) return source;
+  return source.replace(new RegExp(`\\s+${nickname.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}$`, "i"), "").trim() || source;
+}
+
+function teamReference(teamName) {
+  const nickname = teamNickname(teamName);
+  return nickname ? `the ${nickname}` : text(teamName);
+}
+
+function draftPickOwnerName(pick = {}) {
+  return text(
+    pick?.ownerTeam ||
+    pick?.owner ||
+    pick?.currentOwner ||
+    pick?.currentOwnerTeamName ||
+    pick?.ownerTeamName ||
+    pick?.owningTeam ||
+    pick?.teamName ||
+    pick?.team
+  );
+}
+
+function draftPickOriginalTeamName(pick = {}) {
+  return text(
+    pick?.originalTeam ||
+    pick?.originalTeamName ||
+    pick?.original ||
+    pick?.originalPickTeamName ||
+    pick?.naturalLotteryTeamName ||
+    pick?.fromTeam ||
+    pick?.sourceTeam ||
+    pick?.teamName ||
+    pick?.team
+  );
+}
+
+function tradeAssetType(asset = {}) {
+  const raw = normalizeName(asset?.type || asset?.assetType || "");
+  if (raw.includes("pick") || raw.includes("swap") || asset?.pickId || asset?.year) return "pick";
+  return "player";
+}
+
+function normalizeTradeAsset(asset = {}) {
+  const type = tradeAssetType(asset);
+  if (type === "pick") {
+    const rawType = normalizeName(asset?.assetType || asset?.pickType || asset?.type || "pick");
+    const isSwap = rawType.includes("swap") || Boolean(asset?.swapWithTeam || asset?.swapTeam || asset?.swapGroup);
+    return {
+      type: "pick",
+      assetType: isSwap ? "swap" : "pick",
+      pickId: text(asset?.pickId || asset?.id),
+      label: text(asset?.displayLabel || asset?.label),
+      year: safeNumber(asset?.year ?? asset?.season ?? asset?.seasonYear, 0),
+      round: safeNumber(asset?.round ?? asset?.rnd, 0),
+      originalTeam: draftPickOriginalTeamName(asset),
+      protection: text(asset?.protection || asset?.displayProtection || asset?.protections),
+      fromTeam: text(asset?.teamName || asset?.fromTeam),
+      source: asset,
+    };
+  }
+  return {
+    type: "player",
+    playerName: text(asset?.playerName || asset?.name || asset?.player),
+    playerId: text(asset?.playerId || asset?.id),
+    overall: safeNumber(asset?.overall ?? asset?.ovr ?? asset?.rating, 0),
+    potential: safeNumber(asset?.potential ?? asset?.pot, 0),
+    age: safeNumber(asset?.age, 0),
+    salary: safeNumber(asset?.salary ?? asset?.capHit ?? asset?.aav, 0),
+    pos: text(asset?.pos || asset?.position),
+    fromTeam: text(asset?.fromTeam || asset?.from),
+    toTeam: text(asset?.toTeam || asset?.to),
+    source: asset,
+  };
+}
+
+function normalizeTradeAssets(rows = []) {
+  return (Array.isArray(rows) ? rows : []).map(normalizeTradeAsset).filter((asset) => (
+    asset.type === "player" ? asset.playerName : (asset.pickId || asset.year || asset.label)
+  ));
+}
+
+function fallbackTradePackages(row = {}) {
+  const userTeamName = text(row?.userTeamName || row?.fromTeamName);
+  const cpuTeamName = text(row?.cpuTeamName || row?.toTeamName);
+  const userSent = normalizeTradeAssets(row?.userSentAssets || []);
+  const cpuSent = normalizeTradeAssets(row?.cpuSentAssets || []);
+  if (userTeamName && cpuTeamName && (userSent.length || cpuSent.length)) {
+    return [
+      { teamName: userTeamName, sent: userSent, received: cpuSent },
+      { teamName: cpuTeamName, sent: cpuSent, received: userSent },
+    ];
+  }
+
+  const movedPlayers = getTradeMoves(row);
+  const teams = uniqueNames(movedPlayers.flatMap((move) => [move.fromTeam, move.toTeam]), 8);
+  if (teams.length < 2) return [];
+  return teams.map((teamName) => ({
+    teamName,
+    sent: movedPlayers
+      .filter((move) => normalizeName(move.fromTeam) === normalizeName(teamName))
+      .map((move) => normalizeTradeAsset({ type:"player", playerName:move.name, fromTeam:move.fromTeam, toTeam:move.toTeam })),
+    received: movedPlayers
+      .filter((move) => normalizeName(move.toTeam) === normalizeName(teamName))
+      .map((move) => normalizeTradeAsset({ type:"player", playerName:move.name, fromTeam:move.fromTeam, toTeam:move.toTeam })),
+  }));
+}
+
+function detailedTradePackages(row = {}) {
+  if (Array.isArray(row?.teamPackages) && row.teamPackages.length >= 2) {
+    return row.teamPackages.map((side) => ({
+      teamName: text(side?.teamName),
+      sent: normalizeTradeAssets(side?.sent || []),
+      received: normalizeTradeAssets(side?.received || []),
+      reason: text(side?.reason),
+    })).filter((side) => side.teamName);
+  }
+  return fallbackTradePackages(row);
+}
+
+function tradeSortValue(row = {}, fallback = 0) {
+  const raw = text(row?.currentDate || row?.date || row?.completedAt);
+  const parsed = Date.parse(raw);
+  if (Number.isFinite(parsed)) return parsed;
+  return safeNumber(row?.dayIndex ?? row?.day, fallback);
+}
+
+function assetImportance(asset = {}) {
+  if (asset.type === "player") {
+    const ovr = safeNumber(asset.overall, 0);
+    return ovr >= 90 ? 115 : ovr >= 86 ? 104 : ovr >= 82 ? 92 : ovr >= 78 ? 78 : ovr >= 74 ? 64 : 48;
+  }
+  if (asset.assetType === "swap") return 70;
+  if (Number(asset.round) === 1) return 82;
+  if (Number(asset.round) === 2) return 38;
+  return 32;
+}
+
+function describePickAsset(asset = {}, { includeProtection = true } = {}) {
+  const year = safeNumber(asset?.year, 0);
+  const original = text(asset?.originalTeam);
+  const round = Number(asset?.round || 0);
+  const roundLabel = round === 1 ? "first-round pick" : round === 2 ? "second-round pick" : "draft pick";
+  const protection = includeProtection && text(asset?.protection) && !/unprotected/i.test(text(asset.protection))
+    ? `${text(asset.protection)} `
+    : includeProtection && /unprotected/i.test(text(asset?.protection)) ? "unprotected " : "";
+  if (asset?.assetType === "swap") return `${year || "future"} first-round swap${original ? ` involving ${original}` : ""}`;
+  return `${protection}${year || "future"} ${original ? `${original} ` : ""}${roundLabel}`.replace(/\s+/g, " ").trim();
+}
+
+function describeTradeAssets(assets = [], limit = 4) {
+  const rows = (assets || []).filter(Boolean);
+  if (!rows.length) return "";
+  const labels = rows.slice(0, limit).map((asset) => asset.type === "player" ? asset.playerName : describePickAsset(asset));
+  if (rows.length > limit) labels.push(`${rows.length - limit} more asset${rows.length - limit === 1 ? "" : "s"}`);
+  return naturalList(labels);
+}
+
+function buildTeamTradeTimeline(leagueData, teamName, seasonYear, { lookback = 1 } = {}) {
+  const target = normalizeName(teamName);
+  const history = Array.isArray(leagueData?.tradeHistory) ? leagueData.tradeHistory : [];
+  const liveIndex = playerIndex(leagueData);
+  const previousEntry = getPreviousSeasonEntry(leagueData, seasonYear);
+  const archivedIndex = archivedPlayerIndex(previousEntry);
+  const enrichAsset = (asset) => {
+    if (asset?.type !== "player" || !asset?.playerName) return asset;
+    const live = liveIndex.get(normalizeName(asset.playerName));
+    const archived = archivedIndex.get(normalizeName(asset.playerName));
+    return {
+      ...asset,
+      overall: Math.max(safeNumber(asset.overall, 0), safeNumber(live?.overall, 0), safeNumber(archived?.overall, 0)),
+      age: safeNumber(asset.age, 0) || safeNumber(live?.age, 0) || safeNumber(archived?.age, 0),
+    };
+  };
+  const out = [];
+
+  history.forEach((row, rowIndex) => {
+    const rowYear = safeNumber(row?.seasonYear, 0);
+    if (rowYear && rowYear < Number(seasonYear) - lookback) return;
+    if (rowYear && rowYear > Number(seasonYear)) return;
+    const packages = detailedTradePackages(row);
+    const side = packages.find((item) => normalizeName(item.teamName) === target);
+    if (!side) return;
+    const sent = side.sent.map(enrichAsset);
+    const received = side.received.map(enrichAsset);
+    const partners = packages.filter((item) => normalizeName(item.teamName) !== target).map((item) => item.teamName).filter(Boolean);
+    const partner = partners.length === 1 ? partners[0] : naturalList(partners);
+    const score = Math.max(0, ...[...sent, ...received].map(assetImportance));
+    out.push({
+      id: text(row?.id) || `trade_${rowIndex}`,
+      rowIndex,
+      row,
+      seasonYear: rowYear,
+      date: text(row?.currentDate || row?.date || row?.completedAt),
+      sortValue: tradeSortValue(row, rowIndex),
+      phase: tradePhaseFromRecord(row),
+      teamName,
+      partnerTeam: partner,
+      teamContextAtTrade: row?.teamContextAtTrade && typeof row.teamContextAtTrade === "object" ? row.teamContextAtTrade : null,
+      sent,
+      received,
+      score,
+    });
+  });
+
+  return out.sort((a, b) => a.sortValue - b.sortValue || a.rowIndex - b.rowIndex);
+}
+
+function allTeamTradeTimeline(leagueData, teamName, seasonYear, lookback = 6) {
+  return buildTeamTradeTimeline(leagueData, teamName, seasonYear, { lookback });
+}
+
+function normalizeStintRow(row = {}) {
+  const stats = row?.stats && typeof row.stats === "object" ? row.stats : {};
+  return {
+    name: playerNameOf(row),
+    teamName: text(row?.teamName || row?.team),
+    games: safeNumber(row?.games ?? row?.gp ?? row?.GP ?? stats?.GP, 0),
+    ppg: safeNumber(row?.ppg ?? stats?.PTS, NaN),
+    rpg: safeNumber(row?.rpg ?? stats?.REB, NaN),
+    apg: safeNumber(row?.apg ?? stats?.AST, NaN),
+    spg: safeNumber(row?.spg ?? stats?.STL, NaN),
+    bpg: safeNumber(row?.bpg ?? stats?.BLK, NaN),
+  };
+}
+
+function currentOrHistoricalPlayer(leagueData, playerName) {
+  const target = normalizeName(playerName);
+  const current = playerIndex(leagueData).get(target);
+  if (current) return current;
+  const retired = (Array.isArray(leagueData?.retiredPlayersHistory) ? leagueData.retiredPlayersHistory : [])
+    .find((row) => normalizeName(playerNameOf(row)) === target);
+  return retired || null;
+}
+
+function playerSeasonStints(leagueData, previousEntry, playerName) {
+  const target = normalizeName(playerName);
+  if (!target) return [];
+  const archived = previousEntry?.statsArchive?.regular || {};
+  const explicitStints = (Array.isArray(archived?.stintRows) ? archived.stintRows : [])
+    .filter((row) => normalizeName(playerNameOf(row)) === target)
+    .map(normalizeStintRow)
+    .filter((row) => row.teamName && row.games > 0);
+  if (explicitStints.length) return explicitStints;
+
+  const player = currentOrHistoricalPlayer(leagueData, playerName);
+  const displayYear = safeNumber(previousEntry?.seasonYear, 0) + 1;
+  const historyRows = (Array.isArray(player?.history?.seasons) ? player.history.seasons : [])
+    .filter((row) => safeNumber(row?.seasonYear, 0) === displayYear)
+    .map(normalizeStintRow)
+    .filter((row) => row.teamName && row.games > 0);
+  if (historyRows.length) return historyRows;
+
+  return archivedPlayerRows(previousEntry)
+    .filter((row) => normalizeName(playerNameOf(row)) === target)
+    .map(normalizeStintRow)
+    .filter((row) => row.teamName && row.games > 0);
+}
+
+function playerStintOnTeam(leagueData, previousEntry, playerName, teamName) {
+  const target = normalizeName(teamName);
+  return playerSeasonStints(leagueData, previousEntry, playerName)
+    .find((row) => normalizeName(row.teamName) === target) || null;
+}
+
+function formatHumanProduction(stint = {}, { includeGames = false } = {}) {
+  const parts = [];
+  if (Number.isFinite(stint?.ppg)) parts.push(`${Math.round(stint.ppg)} point${Math.round(stint.ppg) === 1 ? "" : "s"}`);
+  if (Number.isFinite(stint?.rpg) && stint.rpg >= 2) parts.push(`${Math.round(stint.rpg)} rebound${Math.round(stint.rpg) === 1 ? "" : "s"}`);
+  if (Number.isFinite(stint?.apg) && stint.apg >= 2) parts.push(`${Math.round(stint.apg)} assist${Math.round(stint.apg) === 1 ? "" : "s"}`);
+  const production = parts.length ? naturalList(parts) : "";
+  if (includeGames && stint?.games) return `${stint.games} games${production ? ` at about ${production} per game` : ""}`;
+  return production ? `about ${production} per game` : "";
+}
+
+function pickKey(asset = {}) {
+  const id = text(asset?.pickId || asset?.id || asset?.draftPickAssetId);
+  if (id) return `id:${id}`;
+  return [
+    safeNumber(asset?.year ?? asset?.draftYear, 0),
+    safeNumber(asset?.round, 0),
+    normalizeName(asset?.originalTeam || asset?.originalTeamName),
+  ].join("|");
+}
+
+function samePickAsset(a = {}, b = {}) {
+  const aId = text(a?.pickId || a?.id || a?.draftPickAssetId);
+  const bId = text(b?.pickId || b?.id || b?.draftPickAssetId);
+  if (aId && bId) return aId === bId;
+  return safeNumber(a?.year ?? a?.draftYear, 0) === safeNumber(b?.year ?? b?.draftYear, 0) &&
+    safeNumber(a?.round, 0) === safeNumber(b?.round, 0) &&
+    normalizeName(a?.originalTeam || a?.originalTeamName) === normalizeName(b?.originalTeam || b?.originalTeamName);
+}
+
+function buildTradeAssetLedger({ leagueData, teamName, seasonYear, previousEntry, timeline }) {
+  const currentNames = new Set((findTeam(leagueData, teamName) ? getRoster(findTeam(leagueData, teamName)) : []).map((player) => normalizeName(playerNameOf(player))));
+  const receivedBefore = new Map();
+  const laterSentNames = new Set();
+  const bridges = [];
+  const rootOutgoingPlayers = [];
+  const allIncomingPlayers = [];
+  const picksIn = [];
+  const picksOut = [];
+  const seenRoot = new Set();
+
+  for (const event of timeline) {
+    for (const asset of event.received) {
+      if (asset.type === "pick") {
+        picksIn.push({ ...asset, eventId:event.id, partnerTeam:event.partnerTeam, date:event.date, event });
+        continue;
+      }
+      allIncomingPlayers.push({ ...asset, eventId:event.id, partnerTeam:asset.fromTeam || event.partnerTeam, date:event.date, event });
+      const key = normalizeName(asset.playerName);
+      if (key) receivedBefore.set(key, { asset:{ ...asset, partnerTeam:asset.fromTeam || event.partnerTeam }, event });
+    }
+
+    for (const asset of event.sent) {
+      if (asset.type === "pick") {
+        picksOut.push({ ...asset, eventId:event.id, partnerTeam:event.partnerTeam, date:event.date, event });
+        continue;
+      }
+      const key = normalizeName(asset.playerName);
+      if (!key) continue;
+      const received = receivedBefore.get(key);
+      if (received) {
+        laterSentNames.add(key);
+        const stint = playerStintOnTeam(leagueData, previousEntry, asset.playerName, teamName);
+        const days = received.event.sortValue && event.sortValue && event.sortValue > received.event.sortValue
+          ? Math.max(0, Math.round((event.sortValue - received.event.sortValue) / 86400000))
+          : null;
+        bridges.push({
+          playerName: asset.playerName,
+          overall: Math.max(asset.overall || 0, received.asset.overall || 0),
+          acquiredFrom: received.asset.partnerTeam || received.event.partnerTeam,
+          acquiredDate: received.event.date,
+          movedTo: asset.toTeam || event.partnerTeam,
+          movedDate: event.date,
+          games: stint?.games || 0,
+          stint,
+          days,
+          receivedWhenMoved: event.received,
+          acquiredEvent: received.event,
+          movedEvent: event,
+        });
+      } else if (!seenRoot.has(key)) {
+        seenRoot.add(key);
+        rootOutgoingPlayers.push({ ...asset, eventId:event.id, partnerTeam:asset.toTeam || event.partnerTeam, date:event.date, event });
+      }
+    }
+  }
+
+  const retainedIncomingPlayers = allIncomingPlayers
+    .filter((asset) => !laterSentNames.has(normalizeName(asset.playerName)))
+    .filter((asset) => !asset.playerName || currentNames.has(normalizeName(asset.playerName)))
+    .sort((a, b) => b.overall - a.overall);
+
+  rootOutgoingPlayers.sort((a, b) => b.overall - a.overall);
+  bridges.sort((a, b) => b.overall - a.overall);
+
+  const firstsIn = picksIn.filter((pick) => Number(pick.round) === 1 && pick.assetType !== "swap").length;
+  const firstsOut = picksOut.filter((pick) => Number(pick.round) === 1 && pick.assetType !== "swap").length;
+  const secondsIn = picksIn.filter((pick) => Number(pick.round) === 2).length;
+  const secondsOut = picksOut.filter((pick) => Number(pick.round) === 2).length;
+  const swapsIn = picksIn.filter((pick) => pick.assetType === "swap").length;
+  const swapsOut = picksOut.filter((pick) => pick.assetType === "swap").length;
+  const salaryOut = rootOutgoingPlayers.reduce((sum, row) => sum + safeNumber(row.salary, 0), 0);
+  const salaryIn = retainedIncomingPlayers.reduce((sum, row) => sum + safeNumber(row.salary, 0), 0);
+
+  return {
+    timeline,
+    rootOutgoingPlayers,
+    retainedIncomingPlayers,
+    bridges,
+    picksIn,
+    picksOut,
+    firstsIn,
+    firstsOut,
+    secondsIn,
+    secondsOut,
+    swapsIn,
+    swapsOut,
+    netFirsts: firstsIn - firstsOut,
+    netSeconds: secondsIn - secondsOut,
+    netSwaps: swapsIn - swapsOut,
+    salaryOut,
+    salaryIn,
+    salaryDelta: salaryIn - salaryOut,
+  };
+}
+
+function tradeCheckpointForTeam(event = {}, teamName = "") {
+  const contexts = event?.teamContextAtTrade || event?.row?.teamContextAtTrade || {};
+  const target = normalizeName(teamName);
+  const key = Object.keys(contexts || {}).find((name) => normalizeName(name) === target);
+  if (!key) return null;
+  const row = contexts[key] || {};
+  const wins = safeNumber(row?.wins, 0);
+  const losses = safeNumber(row?.losses, 0);
+  return wins + losses > 0 ? { wins, losses, record:`${wins}-${losses}`, phase:text(row?.phase) } : null;
+}
+
+function previousTeamOutcome(previousEntry, teamName) {
+  const row = previousTeamRow(previousEntry, teamName);
+  if (!row) return null;
+  return {
+    teamName,
+    record: formatRecord(row),
+    finish: formatFinish(row),
+    wins: safeNumber(row?.wins ?? row?.w, 0),
+    losses: safeNumber(row?.losses ?? row?.l, 0),
+    row,
+  };
+}
+
+function playerAwardsInSeason(leagueData, playerName, seasonYear) {
+  const target = normalizeName(playerName);
+  const labels = [];
+  for (const rows of Object.values(leagueData?.leagueHistory?.awards || {})) {
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (Number(row?.seasonYear) !== Number(seasonYear)) continue;
+      if (normalizeName(playerNameOf(row)) !== target) continue;
+      labels.push(text(row?.label || row?.shortLabel || row?.awardKey));
+    }
+  }
+
+  // Player-card history keeps a richer set of accolades than leagueHistory,
+  // including All-NBA, All-Defense, All-Star, championships, and Finals MVP.
+  const player = currentOrHistoricalPlayer(leagueData, playerName);
+  for (const row of Array.isArray(player?.history?.accolades) ? player.history.accolades : []) {
+    if (Number(row?.seasonYear) !== Number(seasonYear)) continue;
+    labels.push(text(row?.label || row?.details || row?.type));
+  }
+
+  return uniqueNames(labels.filter(Boolean), 5);
+}
+
+function buildTradePartnerAftermath(context) {
+  const timeline = context.historicalTradeTimeline || context.recentTradeTimeline || [];
+  const receivedBefore = new Set();
+  const candidates = [];
+  const seenPlayers = new Set();
+
+  for (const event of timeline) {
+    for (const asset of event.received || []) {
+      if (asset.type === "player" && asset.playerName) receivedBefore.add(normalizeName(asset.playerName));
+    }
+    for (const asset of event.sent || []) {
+      if (asset.type !== "player" || !asset.playerName) continue;
+      const key = normalizeName(asset.playerName);
+      // A player who arrived earlier and was later flipped is handled as a bridge
+      // in the main trade-chain story. This section follows true outgoing assets.
+      if (!key || receivedBefore.has(key) || seenPlayers.has(key)) continue;
+      const live = currentOrHistoricalPlayer(context.leagueData, asset.playerName);
+      const overall = Math.max(safeNumber(asset.overall, 0), playerOverall(live));
+      if (overall < 80) continue;
+      seenPlayers.add(key);
+      candidates.push({ ...asset, overall, event, destination:asset.toTeam || event.partnerTeam });
+    }
+  }
+
+  const items = [];
+  for (const asset of candidates) {
+    const destination = asset.destination || asset.event?.partnerTeam || "";
+    if (!destination) continue;
+
+    const allStints = playerSeasonStints(context.leagueData, context.previousEntry, asset.playerName);
+    const destinationStint = allStints.find((row) => normalizeName(row.teamName) === normalizeName(destination)) || null;
+    const current = currentOrHistoricalPlayer(context.leagueData, asset.playerName);
+    const currentTeam = text(current?.teamName || current?.team);
+    const currentStint = currentTeam
+      ? allStints.find((row) => normalizeName(row.teamName) === normalizeName(currentTeam)) || null
+      : null;
+    const outsideStints = allStints.filter((row) => normalizeName(row.teamName) !== normalizeName(context.canonical));
+    const relevantStint = destinationStint || (currentStint && normalizeName(currentStint.teamName) !== normalizeName(context.canonical) ? currentStint : null) || outsideStints.slice().sort((a, b) => b.games - a.games)[0] || null;
+    const relevantTeam = relevantStint?.teamName || (currentTeam && normalizeName(currentTeam) !== "free agency" ? currentTeam : destination);
+    const outcome = relevantStint ? previousTeamOutcome(context.previousEntry, relevantTeam) : null;
+    const destinationCheckpoint = tradeCheckpointForTeam(asset.event, destination);
+    const awards = playerAwardsInSeason(context.leagueData, asset.playerName, context.seasonYear);
+    const tradeYear = safeNumber(asset.event?.seasonYear, 0);
+    const seasonsAgo = tradeYear ? Math.max(0, context.seasonYear - tradeYear) : 0;
+
+    const intro = seasonsAgo >= 2
+      ? `${asset.playerName}, whom ${teamMarketName(context.canonical)} traded to ${teamMarketName(destination)} in ${tradeYear}`
+      : `${asset.playerName}, who ${teamMarketName(context.canonical)} sent to ${teamMarketName(destination)}`;
+    const sentences = [];
+
+    if (relevantStint?.games) {
+      const production = formatHumanProduction(relevantStint);
+      const locationNote = normalizeName(relevantTeam) === normalizeName(destination)
+        ? `for ${teamMarketName(destination)}`
+        : `for ${teamMarketName(relevantTeam)}`;
+      sentences.push(`${intro}, played ${relevantStint.games} games ${locationNote}${production ? ` and averaged ${production}` : ""} last season`);
+    } else if (currentTeam && normalizeName(currentTeam) !== "free agency") {
+      sentences.push(`${intro}, is now with ${currentTeam}`);
+    } else {
+      sentences.push(`${intro}, is no longer on ${teamReference(context.canonical)} roster`);
+    }
+
+    if (outcome?.record) {
+      if (destinationCheckpoint && normalizeName(relevantTeam) === normalizeName(destination)) {
+        sentences.push(`${teamMarketName(relevantTeam)} was ${destinationCheckpoint.record} when the trade happened, then finished ${outcome.record} and ${outcome.finish}`);
+      } else {
+        sentences.push(`${teamMarketName(relevantTeam)} finished ${outcome.record} and ${outcome.finish}`);
+      }
+    }
+    if (awards.length) sentences.push(`${asset.playerName} also earned ${naturalList(awards)}`);
+
+    const headline = `${sentences.join(". ")}.`;
+    items.push({
+      playerName: asset.playerName,
+      destination,
+      overall: asset.overall,
+      tradeYear,
+      seasonsAgo,
+      stint: relevantStint,
+      outcome,
+      checkpoint: destinationCheckpoint,
+      awards,
+      currentTeam,
+      headline,
+      score: asset.overall + (outcome?.wins || 0) * 0.2 + (awards.length ? 8 : 0) - seasonsAgo * 2,
+    });
+  }
+
+  return items.sort((a, b) => b.score - a.score).slice(0, 4);
+}
+
+
+function compactDraftHistoryFromState(state = {}) {
+  const draft = state?.draft && typeof state.draft === "object" ? state.draft : state;
+  if (!draft?.completed || !Array.isArray(draft?.draftedPicks) || !draft.draftedPicks.length) return null;
+  const draftYear = safeNumber(draft?.seasonYear, 0);
+  if (!draftYear) return null;
+  const order = Array.isArray(draft?.draftOrder) ? draft.draftOrder : [];
+  const orderByPick = new Map(order.map((row, index) => [safeNumber(row?.pick ?? row?.pickNumber, index + 1), row]));
+  return {
+    version: 0,
+    draftYear,
+    completedAt: null,
+    picks: draft.draftedPicks.map((pick, index) => {
+      const pickNumber = safeNumber(pick?.pick, index + 1);
+      const orderRow = orderByPick.get(pickNumber) || {};
+      return {
+        pick: pickNumber,
+        round: safeNumber(pick?.round || orderRow?.round, pickNumber <= 30 ? 1 : 2),
+        pickInRound: safeNumber(pick?.pickInRound || orderRow?.pickInRound, ((pickNumber - 1) % 30) + 1),
+        currentOwnerTeamName: text(pick?.teamName || orderRow?.currentOwnerTeamName || orderRow?.teamName),
+        teamName: text(pick?.teamName || orderRow?.currentOwnerTeamName || orderRow?.teamName),
+        originalTeamName: text(pick?.originalTeamName || orderRow?.originalTeamName || orderRow?.originalPickTeamName),
+        playerId: text(pick?.playerId || pick?.id),
+        playerName: text(pick?.playerName || pick?.name),
+        pos: text(pick?.pos || pick?.position),
+        overall: safeNumber(pick?.overall ?? pick?.ovr, 0),
+        potential: safeNumber(pick?.potential ?? pick?.pot, 0),
+        age: safeNumber(pick?.age, 0),
+        draftPickAssetId: text(orderRow?.draftPickAssetId || orderRow?.swapAssetId),
+        draftPickProtection: text(orderRow?.draftPickProtection || orderRow?.swapProtectionLabel),
+      };
+    }),
+  };
+}
+
+function getDraftHistory(leagueData) {
+  const rows = Array.isArray(leagueData?.draftHistory) ? [...leagueData.draftHistory] : [];
+  const live = compactDraftHistoryFromState(leagueData?.draftState || {});
+  if (live && !rows.some((row) => Number(row?.draftYear) === Number(live.draftYear))) rows.push(live);
+  return rows.sort((a, b) => safeNumber(a?.draftYear, 0) - safeNumber(b?.draftYear, 0));
+}
+
+function findDraftOutcomeForPick(leagueData, pickAsset = {}) {
+  const history = getDraftHistory(leagueData);
+  const year = safeNumber(pickAsset?.year, 0);
+  const round = safeNumber(pickAsset?.round, 0);
+  const original = normalizeName(pickAsset?.originalTeam);
+  const id = text(pickAsset?.pickId);
+  const entry = history.find((row) => Number(row?.draftYear) === year);
+  if (!entry) return null;
+  const picks = Array.isArray(entry?.picks) ? entry.picks : [];
+  let result = null;
+  if (id) result = picks.find((row) => text(row?.draftPickAssetId) === id || text(row?.swapAssetId) === id) || null;
+  if (!result) {
+    result = picks.find((row) =>
+      Number(row?.round || 0) === round &&
+      normalizeName(row?.originalTeamName) === original
+    ) || null;
+  }
+  return result ? { ...result, draftYear: year } : null;
+}
+
+function findCurrentDraftedPlayer(leagueData, outcome = {}) {
+  const byName = currentOrHistoricalPlayer(leagueData, outcome?.playerName);
+  if (byName) return byName;
+  return null;
+}
+
+function findCurrentPickAsset(leagueData, pick = {}) {
+  return (Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : []).find((row) => samePickAsset(row, pick)) || null;
+}
+
+function findLaterPickTrade(timeline = [], receivedPick = {}) {
+  const originalEvent = receivedPick?.event;
+  return timeline.find((event) =>
+    event.sortValue > safeNumber(originalEvent?.sortValue, -1) &&
+    event.sent.some((asset) => asset.type === "pick" && samePickAsset(asset, receivedPick))
+  ) || null;
+}
+
+function buildPickLineage(context) {
+  const historicalTimeline = context.historicalTradeTimeline || [];
+  const acquired = [];
+  const playerOrigins = new Map();
+  const pickOrigins = new Map();
+
+  // Walk the user's trade history in order and propagate the original outgoing
+  // player through bridge assets. Example: Booker -> Fox -> BOS 1st should still
+  // remember Booker as the root of that eventual pick, not stop at Fox.
+  for (const event of historicalTimeline) {
+    const sentPlayers = event.sent
+      .filter((asset) => asset.type === "player" && asset.playerName)
+      .sort((a, b) => safeNumber(b.overall, 0) - safeNumber(a.overall, 0));
+
+    const inheritedOrigins = sentPlayers
+      .map((asset) => playerOrigins.get(normalizeName(asset.playerName)) || {
+        playerName: asset.playerName,
+        overall: safeNumber(asset.overall, 0),
+        rootEvent: event,
+      })
+      .filter((row) => row?.playerName);
+
+    for (const sentPick of event.sent.filter((asset) => asset.type === "pick")) {
+      const inherited = pickOrigins.get(pickKey(sentPick));
+      if (inherited) inheritedOrigins.push(inherited);
+    }
+
+    inheritedOrigins.sort((a, b) => safeNumber(b.overall, 0) - safeNumber(a.overall, 0));
+    const rootAnchor = inheritedOrigins[0] || null;
+
+    for (const pick of event.received.filter((asset) => asset.type === "pick" && Number(asset.round) === 1)) {
+      const origin = rootAnchor ? {
+        playerName: rootAnchor.playerName,
+        overall: rootAnchor.overall,
+        rootEvent: rootAnchor.rootEvent || event,
+      } : null;
+      acquired.push({ ...pick, event, anchorPlayer: origin });
+      if (origin) pickOrigins.set(pickKey(pick), origin);
+    }
+
+    // Keep origin lineage even for second-round picks/swaps so a later trade can
+    // carry the same root story into whatever asset comes back.
+    if (rootAnchor) {
+      for (const pick of event.received.filter((asset) => asset.type === "pick")) {
+        pickOrigins.set(pickKey(pick), {
+          playerName: rootAnchor.playerName,
+          overall: rootAnchor.overall,
+          rootEvent: rootAnchor.rootEvent || event,
+        });
+      }
+      for (const asset of event.received.filter((row) => row.type === "player" && row.playerName)) {
+        playerOrigins.set(normalizeName(asset.playerName), {
+          playerName: rootAnchor.playerName,
+          overall: Math.max(safeNumber(rootAnchor.overall, 0), safeNumber(asset.overall, 0)),
+          rootEvent: rootAnchor.rootEvent || event,
+        });
+      }
+    }
+  }
+
+  const seen = new Set();
+  const stories = [];
+  for (const pick of acquired) {
+    const key = pickKey(pick);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const outcome = findDraftOutcomeForPick(context.leagueData, pick);
+    const currentPick = findCurrentPickAsset(context.leagueData, pick);
+    const laterTrade = findLaterPickTrade(historicalTimeline, pick);
+    const anchor = pick.anchorPlayer?.playerName ? `${pick.anchorPlayer.playerName} trade` : `trade with ${pick.event.partnerTeam}`;
+    let headline = "";
+    let score = 0;
+    let draftedPlayer = null;
+
+    if (outcome) {
+      draftedPlayer = findCurrentDraftedPlayer(context.leagueData, outcome);
+      const selection = `No. ${outcome.pick}`;
+      const owner = outcome.currentOwnerTeamName || outcome.teamName || "the team that held it";
+      headline = `The ${describePickAsset(pick, { includeProtection:false })} from the ${anchor} became the ${selection} pick. ${teamMarketName(owner)} used it on ${outcome.playerName}.`;
+      if (draftedPlayer && playerOverall(draftedPlayer)) {
+        const currentTeam = text(draftedPlayer?.teamName || draftedPlayer?.team);
+        headline += ` ${outcome.playerName} is now ${playerOverall(draftedPlayer)} OVR${currentTeam && normalizeName(currentTeam) !== normalizeName(owner) ? ` with ${teamMarketName(currentTeam)}` : ""}.`;
+        const latestStints = playerSeasonStints(context.leagueData, context.previousEntry, outcome.playerName)
+          .slice()
+          .sort((a, b) => b.games - a.games);
+        const latestStint = latestStints.find((row) => !currentTeam || normalizeName(row.teamName) === normalizeName(currentTeam)) || latestStints[0] || null;
+        if (latestStint?.games) {
+          const production = formatHumanProduction(latestStint);
+          headline += ` He played ${latestStint.games} games last season${production ? ` and averaged ${production}` : ""}.`;
+        }
+        const accolades = playerAwardsInSeason(context.leagueData, outcome.playerName, context.seasonYear);
+        if (accolades.length) headline += ` He also earned ${naturalList(accolades)}.`;
+      }
+      score = 92 + Math.max(0, safeNumber(outcome?.overall, 0) - 72) + Math.max(0, playerOverall(draftedPlayer) - 78);
+    } else if (laterTrade) {
+      const received = describeTradeAssets(laterTrade.received);
+      headline = `${teamMarketName(context.canonical)} later moved the ${describePickAsset(pick, { includeProtection:false })}${received ? ` to ${teamMarketName(laterTrade.partnerTeam)} in a deal that brought back ${received}` : ` to ${teamMarketName(laterTrade.partnerTeam)}`}.`;
+      score = 72;
+    } else if (currentPick && safeNumber(pick?.year, 0) >= context.seasonYear) {
+      headline = `${teamMarketName(context.canonical)} still owns the ${describePickAsset(pick)} from the ${anchor}.`;
+      score = 58 + Math.max(0, 4 - (safeNumber(pick.year, context.seasonYear) - context.seasonYear)) * 3;
+    }
+
+    if (headline) stories.push({ pick, outcome, currentPick, laterTrade, draftedPlayer, headline, score, anchorPlayer:pick.anchorPlayer?.playerName || "" });
+  }
+
+  return stories.sort((a, b) => b.score - a.score).slice(0, 8);
+}
+
+
+function previousRotationAge(previousEntry, teamName) {
+  const rows = previousTeamPlayerStats(previousEntry, teamName)
+    .filter((row) => playerAge(row) > 0)
+    .sort((a, b) => playerOverall(b) - playerOverall(a))
+    .slice(0, 9);
+  if (!rows.length) return 0;
+  return rows.reduce((sum, row) => sum + playerAge(row), 0) / rows.length;
+}
+
+function buildFranchiseDirection(context) {
+  const ledger = context.tradeLedger;
+  const top = context.snapshot.top[0];
+  const topOutgoing = ledger.rootOutgoingPlayers[0] || null;
+  const topIncoming = ledger.retainedIncomingPlayers[0] || null;
+  const previousWins = safeNumber(context.previousRow?.wins ?? context.previousRow?.w, 0);
+  const netFirsts = ledger.netFirsts;
+  const starOut = safeNumber(topOutgoing?.overall, 0);
+  const starIn = safeNumber(topIncoming?.overall, 0);
+  const currentTop = safeNumber(top?.ovr, 0);
+  const youngCore = context.snapshot.youngCore.length;
+  const market = teamMarketName(context.canonical);
+  const ref = teamReference(context.canonical);
+  const previousAverageAge = previousRotationAge(context.previousEntry, context.canonical);
+  const currentAverageAge = safeNumber(context.snapshot.averageAge, 0);
+  const ageDelta = previousAverageAge && currentAverageAge ? currentAverageAge - previousAverageAge : 0;
+  let type = "retooling";
+  let confidence = 60;
+
+  if (context.previousRow?.champion) {
+    type = "title_defense";
+    confidence = 96;
+  } else if ((ledger.firstsOut >= 2 && starIn >= 86) || (netFirsts <= -2 && starIn >= 84)) {
+    type = "championship_push";
+    confidence = 90;
+  } else if (netFirsts >= 2 && starOut >= 85 && (starIn <= starOut - 4 || ledger.bridges.some((row) => row.overall >= 84))) {
+    type = "rebuilding";
+    confidence = 94;
+  } else if (netFirsts >= 1 && starOut >= 83 && (currentTop >= 80 || youngCore >= 2)) {
+    type = "retooling";
+    confidence = 86;
+  } else if (context.snapshot.direction === "developing") {
+    type = "developing";
+    confidence = 78;
+  } else if (context.snapshot.direction === "contending" || previousWins >= 50) {
+    type = "contending";
+    confidence = 76;
+  } else if (context.snapshot.direction === "rebuilding") {
+    type = "rebuilding";
+    confidence = 78;
+  }
+
+  let summary = "";
+  if (type === "title_defense") summary = `${market} enters the season as the defending champion, so the roster is still being judged against a championship standard.`;
+  else if (type === "championship_push") summary = `${market} made a clear win-now push, spending future assets to add more high-end talent to the current roster.`;
+  else if (type === "rebuilding") {
+    const pickNote = netFirsts > 0
+      ? ` and coming out of those moves with ${netFirsts} additional first-round pick${netFirsts === 1 ? "" : "s"}`
+      : "";
+    const ageNote = ageDelta <= -1.5 ? " The main rotation is also noticeably younger than it was last season." : "";
+    summary = topOutgoing
+      ? `${market} has shifted toward a rebuild after moving ${topOutgoing.playerName}${pickNote}.${ageNote}`
+      : `${market} is entering the season in a rebuild, with development and future assets carrying more weight than short-term results.${ageNote}`;
+  } else if (type === "retooling") {
+    const ageNote = ageDelta <= -1.5 ? " The roster also got younger in the process." : "";
+    summary = `${market} looks to be retooling rather than starting over completely, changing important pieces while keeping a competitive core in place.${ageNote}`;
+  }
+  else if (type === "developing") summary = `${market} is still in a development phase, with the season centered on how quickly the young core can take on larger roles.`;
+  else summary = `${market} still has a roster built to compete now, so the season will be judged more by playoff progress than by regular-season development.`;
+
+  return {
+    type,
+    confidence,
+    summary,
+    metrics: {
+      firstsIn: ledger.firstsIn,
+      firstsOut: ledger.firstsOut,
+      netFirsts,
+      secondsIn: ledger.secondsIn,
+      secondsOut: ledger.secondsOut,
+      swapsIn: ledger.swapsIn,
+      swapsOut: ledger.swapsOut,
+      rootOutgoingOverall: starOut,
+      retainedIncomingOverall: starIn,
+      currentTopOverall: currentTop,
+      youngCoreCount: youngCore,
+      previousWins,
+      previousAverageAge: previousAverageAge ? Number(previousAverageAge.toFixed(1)) : 0,
+      currentAverageAge: currentAverageAge ? Number(currentAverageAge.toFixed(1)) : 0,
+      ageDelta: ageDelta ? Number(ageDelta.toFixed(1)) : 0,
+      salaryDelta: ledger.salaryDelta,
+    },
+    statement: summary,
+    teamReference: ref,
+  };
+}
+
+function buildMajorTradeNarratives(context) {
+  const ledger = context.tradeLedger;
+  const ref = teamReference(context.canonical);
+  const market = teamMarketName(context.canonical);
+  const stories = [];
+  const root = ledger.rootOutgoingPlayers[0] || null;
+
+  if (root?.event) {
+    const received = describeTradeAssets(root.event.received);
+    const checkpoint = tradeCheckpointForTeam(root.event, context.canonical);
+    stories.push(`${market} traded ${root.playerName} to ${teamMarketName(root.partnerTeam || root.event.partnerTeam)}${received ? ` for ${received}` : ""}.${checkpoint ? ` ${market} was ${checkpoint.record} at the time.` : ""}`);
+
+    const bridgesFromRoot = ledger.bridges.filter((bridge) => bridge.acquiredEvent?.id === root.event.id);
+    for (const bridge of bridgesFromRoot.slice(0, 2)) {
+      const stintText = bridge.games
+        ? ` He played ${bridge.games} games for ${teamMarketName(context.canonical)}`
+        : bridge.days != null && bridge.days <= 120
+          ? ` He stayed only ${bridge.days} days`
+          : " He was only a short-term part of the plan";
+      const returnText = describeTradeAssets(bridge.receivedWhenMoved);
+      stories.push(`${bridge.playerName} did not become a long-term replacement.${stintText} before ${ref} moved him to ${teamMarketName(bridge.movedTo)}${returnText ? ` for ${returnText}` : ""}.`);
+    }
+
+    if (ledger.netFirsts >= 2) {
+      stories.push(`Across those moves, ${market} gained ${ledger.netFirsts} more first-round picks than it sent out, making the overall direction much more like a rebuild than a simple star-for-star replacement.`);
+    } else if (ledger.netFirsts === 1) {
+      stories.push(`The trade sequence also left ${ref} with one additional first-round pick, giving the front office more flexibility for the next move.`);
+    }
+  } else {
+    const majorIncoming = ledger.retainedIncomingPlayers[0] || null;
+    if (majorIncoming?.event) {
+      const sent = describeTradeAssets(majorIncoming.event.sent);
+      stories.push(`${market} acquired ${majorIncoming.playerName} from ${majorIncoming.event.partnerTeam}${sent ? ` by sending out ${sent}` : ""}.`);
+      if (ledger.firstsOut >= 2) stories.push(`The price included ${ledger.firstsOut} first-round picks, so this was a clear bet on the current roster rather than a move for the distant future.`);
+    }
+  }
+
+  if (!stories.length) {
+    for (const event of [...ledger.timeline].sort((a, b) => b.score - a.score).slice(0, 2)) {
+      const sent = describeTradeAssets(event.sent);
+      const received = describeTradeAssets(event.received);
+      if (!sent && !received) continue;
+      stories.push(`${market} dealt with ${event.partnerTeam}${sent ? ` by sending ${sent}` : ""}${received ? `${sent ? " and" : " and"} receiving ${received}` : ""}.`);
+    }
+  }
+
+  return stories;
+}
+
+function buildHistoricalAssetHighlights(context) {
+  const rows = [
+    ...(context.tradePartnerAftermath || []).map((row) => ({ type:"player_aftermath", score:row.score, headline:row.headline, data:row })),
+    ...(context.pickLineage || []).map((row) => ({ type:"pick_lineage", score:row.score, headline:row.headline, data:row })),
+  ];
+  const seen = new Set();
+  return rows
+    .sort((a, b) => b.score - a.score)
+    .filter((row) => {
+      const key = normalizeName(row.headline);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 5);
+}
+
+
 function getBriefingContractYear(leagueData) {
   const candidates = [
     leagueData?.contractSeasonYear,
@@ -664,7 +1553,7 @@ function buildExtensionWatch(team, leagueData) {
         endYear,
         salary: currentContractSalary(player, leagueData),
         extensionType,
-        headline: `${playerNameOf(player)} (${playerOverall(player)} OVR) is in the ${extensionType} extension window with ${yearsLeft} contract year${yearsLeft === 1 ? "" : "s"} remaining.`,
+        headline: `${playerNameOf(player)} (${playerOverall(player)} OVR) is eligible for a ${extensionType} extension and has ${yearsLeft} year${yearsLeft === 1 ? "" : "s"} left on his current deal.`,
       };
     })
     .filter(Boolean)
@@ -1042,7 +1931,7 @@ function currentDraftPreview(leagueData, seasonYear) {
 function ownedFirstRoundPicks(leagueData, teamName, draftYear) {
   const target = normalizeName(teamName);
   return (Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : []).filter((pick) => {
-    const owner = normalizeName(pick?.owner || pick?.currentOwner || pick?.owningTeam || pick?.teamName || pick?.team);
+    const owner = normalizeName(draftPickOwnerName(pick));
     const year = safeNumber(pick?.year ?? pick?.draftYear ?? pick?.season, 0);
     const round = safeNumber(pick?.round, 0);
     const active = !pick?.status || normalizeName(pick.status) === "active";
@@ -1053,12 +1942,223 @@ function ownedFirstRoundPicks(leagueData, teamName, draftYear) {
 function totalFutureFirsts(leagueData, teamName, seasonYear, horizon = 4) {
   const target = normalizeName(teamName);
   return (Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : []).filter((pick) => {
-    const owner = normalizeName(pick?.owner || pick?.currentOwner || pick?.owningTeam || pick?.teamName || pick?.team);
+    const owner = normalizeName(draftPickOwnerName(pick));
     const year = safeNumber(pick?.year ?? pick?.draftYear ?? pick?.season, 0);
     const round = safeNumber(pick?.round, 0);
     const active = !pick?.status || normalizeName(pick.status) === "active";
     return owner === target && round === 1 && active && year >= seasonYear + 1 && year <= seasonYear + horizon;
   }).length;
+}
+
+function draftPickProtectionText(pick = {}) {
+  return text(pick?.displayProtection || pick?.protections || pick?.protection || pick?.conditions || "");
+}
+
+function draftPickSwapTeamName(pick = {}) {
+  return text(
+    pick?.swapWithTeam ||
+    pick?.swap_with_team ||
+    pick?.swapTeam ||
+    pick?.otherTeam ||
+    pick?.swap?.withTeam ||
+    ""
+  );
+}
+
+function externalFirstRoundAssets(leagueData, teamName, seasonYear, horizon = 7) {
+  const target = normalizeName(teamName);
+  return (Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : [])
+    .map((pick) => {
+      const owner = draftPickOwnerName(pick);
+      const originalTeam = draftPickOriginalTeamName(pick);
+      const swapWithTeam = draftPickSwapTeamName(pick);
+      const assetTypeRaw = normalizeName(pick?.assetType || pick?.type || "pick");
+      const assetType = assetTypeRaw.includes("swap") ? "swap" : "pick";
+      const externalTeam = normalizeName(originalTeam) && normalizeName(originalTeam) !== target
+        ? originalTeam
+        : normalizeName(swapWithTeam) && normalizeName(swapWithTeam) !== target
+          ? swapWithTeam
+          : "";
+      return {
+        id: text(pick?.id || pick?.pickId),
+        owner,
+        originalTeam,
+        externalTeam,
+        swapWithTeam,
+        assetType,
+        year: safeNumber(pick?.year ?? pick?.draftYear ?? pick?.season, 0),
+        round: safeNumber(pick?.round, 0),
+        protection: draftPickProtectionText(pick),
+        status: normalizeName(pick?.status || "active"),
+        source: pick,
+      };
+    })
+    .filter((pick) => (
+      normalizeName(pick.owner) === target &&
+      pick.round === 1 &&
+      (!pick.status || pick.status === "active") &&
+      pick.year >= seasonYear + 1 &&
+      pick.year <= seasonYear + horizon &&
+      Boolean(pick.externalTeam)
+    ))
+    .sort((a, b) => a.year - b.year || a.externalTeam.localeCompare(b.externalTeam));
+}
+
+function externalPickAssetLabel(asset = {}) {
+  const year = safeNumber(asset?.year, 0) || "future";
+  if (asset?.assetType === "swap") return `${year} first-round swap right`;
+  const protection = text(asset?.protection);
+  if (/unprotected/i.test(protection)) return `unprotected ${year} first`;
+  if (protection) return `${year} first (${protection})`;
+  return `${year} first`;
+}
+
+function externalPickTeamState(previousRow, snapshot) {
+  const wins = safeNumber(previousRow?.wins ?? previousRow?.w, NaN);
+  if (Number.isFinite(wins)) {
+    if (wins <= 28) return "bottom";
+    if (wins <= 37) return "lottery_mix";
+    if (wins <= 46) return "middle";
+    if (wins <= 53) return "strong";
+    return "elite";
+  }
+  if (snapshot?.direction === "rebuilding") return "bottom";
+  if (snapshot?.direction === "developing") return "lottery_mix";
+  if (snapshot?.direction === "contending") return "strong";
+  return "middle";
+}
+
+function externalPickImpactForDirection(teamName, direction = "") {
+  const market = teamMarketName(teamName);
+  if (["rebuilding", "developing"].includes(direction)) {
+    return `For ${possessive(market)} ${direction === "rebuilding" ? "rebuild" : "young core"}, outside firsts create another path to cost-controlled talent even if ${market} improves enough to push its own picks later in the round.`;
+  }
+  if (["contending", "championship_push", "title_defense"].includes(direction)) {
+    return `For a team trying to win now, that outside draft capital can either become inexpensive rotation talent or be used in another trade without relying only on ${possessive(market)} own firsts.`;
+  }
+  return `That outside draft capital keeps both options open: ${market} can hold it for another young player or use it as trade currency if a bigger roster move becomes available.`;
+}
+
+function buildExternalFirstRoundPickIntel({ leagueData, teamName, seasonYear, previousEntry = null, direction = "retooling" } = {}) {
+  const assets = externalFirstRoundAssets(leagueData, teamName, seasonYear, 7);
+  const market = teamMarketName(teamName);
+  if (!assets.length) {
+    return { count: 0, teamCount: 0, assets: [], groups: [], teamLead: "", portfolioSummary: "" };
+  }
+
+  const grouped = new Map();
+  for (const asset of assets) {
+    const key = normalizeName(asset.externalTeam);
+    if (!grouped.has(key)) grouped.set(key, { externalTeam: asset.externalTeam, assets: [] });
+    grouped.get(key).assets.push(asset);
+  }
+
+  const groups = [...grouped.values()].map((group) => {
+    const outsideTeam = group.externalTeam;
+    const outsideMarket = teamMarketName(outsideTeam);
+    const outsideTeamRow = previousTeamRow(previousEntry, outsideTeam);
+    const outsideTeamObj = findTeam(leagueData, outsideTeam);
+    const snap = outsideTeamObj ? rosterSnapshot(outsideTeamObj) : null;
+    const state = externalPickTeamState(outsideTeamRow, snap);
+    const sortedAssets = group.assets.slice().sort((a, b) => a.year - b.year);
+    const labels = sortedAssets.map(externalPickAssetLabel);
+    const nearest = sortedAssets[0];
+    const farthest = sortedAssets.at(-1);
+    const nearestYearsAway = safeNumber(nearest?.year, seasonYear) - seasonYear;
+    const farthestYearsAway = safeNumber(farthest?.year, seasonYear) - seasonYear;
+    const record = formatRecord(outsideTeamRow);
+    const finish = outsideTeamRow ? formatFinish(outsideTeamRow) : "";
+    const top = snap?.top?.[0] || null;
+    const topAging = (snap?.top || []).filter((row) => row.age >= 31 && row.ovr >= 82);
+    const allUnprotected = sortedAssets.every((asset) => /unprotected/i.test(text(asset.protection)));
+    const protectedAssets = sortedAssets.filter((asset) => text(asset.protection) && !/unprotected/i.test(text(asset.protection)));
+    const swaps = sortedAssets.filter((asset) => asset.assetType === "swap");
+
+    const sentences = [`${market} controls ${naturalList(labels)} tied to ${outsideTeam}.`];
+    if (outsideTeamRow && record) {
+      sentences.push(`${outsideMarket} went ${record} and ${finish} last season.`);
+    } else if (snap) {
+      if (snap.direction === "contending") sentences.push(`${outsideMarket} currently has a contender-level roster${top ? ` led by ${top.name} (${top.ovr} OVR)` : ""}.`);
+      else if (snap.direction === "rebuilding") sentences.push(`${outsideMarket} currently profiles as a rebuilding team${top ? ` with ${top.name} (${top.ovr} OVR) as its highest-rated player` : ""}.`);
+      else if (snap.direction === "developing") sentences.push(`${outsideMarket} has a young developing roster${top ? ` led by ${top.name} (${top.ovr} OVR)` : ""}.`);
+      else sentences.push(`${outsideMarket} currently sits in a middle competitive tier${top ? ` with ${top.name} (${top.ovr} OVR) at the top of the roster` : ""}.`);
+    }
+
+    if (state === "bottom") {
+      sentences.push(`That gives the ${nearest.year} asset real lottery upside if ${outsideMarket} remains near the bottom of the standings.`);
+    } else if (state === "lottery_mix") {
+      sentences.push(`The ${nearest.year} asset has meaningful upside because a modest swing in ${possessive(outsideMarket)} record could move it from the middle of the first round into the lottery.`);
+    } else if (state === "middle") {
+      sentences.push(`The ${nearest.year} asset is difficult to pin down right now; ${outsideMarket} is close enough to the playoff line that a few wins either way could materially change the slot.`);
+    } else {
+      sentences.push(`If ${outsideMarket} stays at that level, the ${nearest.year} asset is more likely to land later in the first round than near the lottery.`);
+    }
+
+    if (sortedAssets.length > 1 && farthestYearsAway >= 3 && farthest.year !== nearest.year) {
+      if ((snap?.averageAge || 0) >= 28.5 || topAging.length) {
+        const ageDetail = snap?.averageAge ? ` its current top-nine rotation averages ${snap.averageAge.toFixed(1)} years old` : " its current core already leans veteran";
+        sentences.push(`The ${farthest.year} asset carries more long-range volatility because${ageDetail}; any decline before that draft would increase its value.`);
+      } else if ((snap?.averageAge || 99) <= 26.2 && (snap?.youngCore?.length || 0) >= 2) {
+        sentences.push(`The ${farthest.year} asset is less obviously favorable because ${outsideMarket} has a young core that could still be improving when that pick conveys, although the distance leaves plenty of uncertainty.`);
+      } else {
+        sentences.push(`The ${farthest.year} asset is much harder to price this far out, which gives it more variance than the nearer pick.`);
+      }
+    } else if (nearestYearsAway >= 3 && snap) {
+      if ((snap.averageAge || 0) >= 28.5 || topAging.length) sentences.push(`Because the pick is still ${nearestYearsAway} years away and ${possessive(outsideMarket)} core leans older, its upside could grow if that roster declines before it conveys.`);
+      else if ((snap.averageAge || 99) <= 26.2 && (snap.youngCore?.length || 0) >= 2) sentences.push(`Because the pick is still ${nearestYearsAway} years away and ${outsideMarket} has a young core, its value depends heavily on whether that group keeps improving.`);
+    }
+
+    if (allUnprotected && swaps.length === 0) {
+      sentences.push(`${sortedAssets.length === 1 ? "It is" : "Those picks are"} unprotected, so ${market} gets the full draft-position benefit of any ${outsideMarket} decline.`);
+    } else {
+      for (const asset of protectedAssets.slice(0, 2)) {
+        sentences.push(`The ${asset.year} pick is ${text(asset.protection)}, which limits the best-case draft position available to ${market} in that year.`);
+      }
+      if (swaps.length) sentences.push(`The swap value only becomes meaningful if the outside team's draft slot is more favorable when the order is set.`);
+    }
+
+    const impact = externalPickImpactForDirection(teamName, direction);
+    sentences.push(impact);
+
+    let score = 60;
+    if (["bottom", "lottery_mix"].includes(state)) score += 18;
+    if (allUnprotected) score += 12;
+    if (sortedAssets.length >= 2) score += 8;
+    if (farthestYearsAway >= 3 && ((snap?.averageAge || 0) >= 28.5 || topAging.length)) score += 8;
+    if (protectedAssets.length) score -= 5;
+
+    const teamLead = `${market} also owns ${naturalList(labels)} tied to ${outsideTeam}. ${state === "bottom" || state === "lottery_mix"
+      ? `${outsideMarket} is currently weak enough that the nearest of those assets carries real upside.`
+      : `${outsideMarket} is currently competitive, so the nearer pick leans later while the longer-dated value remains less certain.`}`;
+
+    return {
+      externalTeam: outsideTeam,
+      assets: sortedAssets,
+      state,
+      score,
+      teamLead,
+      headline: sentences.join(" "),
+      previousRecord: record,
+      previousFinish: finish,
+      rosterDirection: snap?.direction || "",
+      rosterAverage: snap?.average ? Number(snap.average.toFixed(1)) : 0,
+      rosterAverageAge: snap?.averageAge ? Number(snap.averageAge.toFixed(1)) : 0,
+      topPlayer: top ? { name: top.name, overall: top.ovr, age: top.age } : null,
+    };
+  }).sort((a, b) => b.score - a.score || a.assets[0]?.year - b.assets[0]?.year);
+
+  const teams = groups.map((row) => row.externalTeam);
+  const unprotectedCount = assets.filter((asset) => /unprotected/i.test(text(asset.protection))).length;
+  const portfolioSummary = `${market} controls ${assets.length} outside first-round asset${assets.length === 1 ? "" : "s"} tied to ${naturalList(teams)}.${unprotectedCount ? ` ${unprotectedCount} ${unprotectedCount === 1 ? "is" : "are"} unprotected, preserving the full upside if those teams fall in the standings.` : ""} ${externalPickImpactForDirection(teamName, direction)}`;
+
+  return {
+    count: assets.length,
+    teamCount: groups.length,
+    assets,
+    groups,
+    teamLead: groups[0]?.teamLead || "",
+    portfolioSummary,
+  };
 }
 
 function recentRookies(team, seasonYear) {
@@ -1182,110 +2282,88 @@ function currentLeaguePlayer(context, playerName) {
 }
 
 function tradeAftermathSentence(context, event) {
-  const canonical = context.canonical;
-  const isIncoming = normalizeName(event?.toTeam) === normalizeName(canonical);
+  const market = teamMarketName(context.canonical);
+  const isIncoming = normalizeName(event?.toTeam) === normalizeName(context.canonical);
   const current = currentLeaguePlayer(context, event?.playerName);
-  const currentStillHere = normalizeName(current?.teamName) === normalizeName(canonical);
   const previous = previousPlayerRow(context, event?.playerName);
-  const production = roundedProductionText(previous);
-  const overall = safeNumber(current?.overall, safeNumber(event?.overall, 0));
   const fit = basketballFitPhrase(current || previous || {}, isIncoming ? "add" : "remove");
-  const phase = event?.phase || "unknown";
-
-  if (isIncoming && phase === "in_season") {
-    if (!currentStillHere) {
-      return `The in-season trade for ${event.playerName} never became a lasting answer; he is already elsewhere, so the move now reads more like a short-term swing than a piece of the current foundation.`;
-    }
-    if (overall >= 83 || (previous && safeNumber(previous?.stats?.PTS ?? previous?.stats?.ppg, 0) >= 15)) {
-      return `${choose(`${canonical}|${event.playerName}|trade-aged-well`, [
-        `The in-season trade for ${event.playerName} has aged well`,
-        `${event.playerName}'s midseason arrival looks better with a full offseason of distance`,
-        `What looked like a deadline gamble on ${event.playerName} now feels much more settled`,
-      ])}. ${production ? `By the end of last season he was giving ${canonical} ${production}, and he ${fit}.` : `In basketball terms, he ${fit}.`}`;
-    }
-    if (overall <= 74) {
-      return `The in-season trade for ${event.playerName} has not aged especially well. His role never grew into what the move seemed to promise, and ${canonical} is still searching for more certainty in that part of the rotation.`;
-    }
-    return `The in-season trade for ${event.playerName} has settled into something useful rather than transformative. ${production ? `He finished the year around ${production}, and he ${fit}.` : `In basketball terms, he ${fit}.`}`;
-  }
+  const stint = playerStintOnTeam(context.leagueData, context.previousEntry, event?.playerName, context.canonical);
 
   if (isIncoming) {
-    return `${choose(`${canonical}|${event.playerName}|trade-new`, [
-      `${canonical} changed the shape of the roster by trading for ${event.playerName}`,
-      `The trade for ${event.playerName} is one of the clearest changes to ${possessive(canonical)} identity`,
-      `${event.playerName} arrives through trade with a real job to do immediately`,
-    ])}. On paper, he ${fit}, giving the coaching staff a different set of answers than it had a year ago.`;
+    const stayed = normalizeName(current?.teamName) === normalizeName(context.canonical);
+    if (!stayed) {
+      const stintText = stint?.games ? ` after only ${stint.games} games with the team` : " after a short stay";
+      return `${market} acquired ${event.playerName} from ${event.fromTeam}, but he was moved again${stintText}.`;
+    }
+    const production = stint ? formatHumanProduction(stint) : "";
+    return `${market} acquired ${event.playerName} from ${event.fromTeam}. ${production ? `He gave the team ${production}, and he ${fit}.` : `He ${fit}.`}`;
   }
 
-  if (phase === "in_season") {
-    return `Trading ${event.playerName} away during last season is still part of the story. ${overall >= 82 ? `He remains a high-level player elsewhere, so the cost of that decision is visible every time ${canonical} needs what he used to provide.` : `The move has become easier to live with as his value has settled, but it still changed the shape of the rotation.`}`;
-  }
-  return `${canonical} moved ${event.playerName} out of the picture. That decision ${fit}, forcing the remaining core to redistribute the possessions and matchups he used to handle.`;
+  const destination = event?.toTeam || current?.teamName || "another team";
+  return `${market} traded ${event.playerName} to ${destination}. The move ${fit}.`;
 }
+
 
 function freeAgencyAdditionSentence(context, event) {
   const player = currentLeaguePlayer(context, event?.playerName);
   const fit = basketballFitPhrase(player || {}, "add");
-  const contractNote = event?.years ? ` The ${event.years}-year commitment makes this more than a camp experiment.` : "";
-  return `${choose(`${context.canonical}|${event.playerName}|fa-add`, [
-    `${event.playerName} is the clearest new face from free agency`,
-    `Free agency brought ${event.playerName} into the rotation`,
-    `${context.canonical} used the open market to add ${event.playerName}`,
-    `The offseason's most immediate fit change is ${event.playerName}`,
-  ])}. He ${fit}, which should change how some of the surrounding lineups can function.${contractNote}`;
+  const years = safeNumber(event?.years, 0);
+  const deal = years ? ` on a ${years}-year deal` : "";
+  return `${teamMarketName(context.canonical)} signed ${event.playerName} in free agency${deal}. He ${fit}.`;
 }
 
+
 function freeAgencyDepartureSentence(context, departure) {
-  const current = currentLeaguePlayer(context, departure?.name);
   const previous = previousPlayerRow(context, departure?.name) || departure;
-  const production = roundedProductionText(previous);
-  const fit = basketballFitPhrase(current || previous || {}, "remove");
+  const stint = playerStintOnTeam(context.leagueData, context.previousEntry, departure?.name, context.canonical);
+  const production = stint ? formatHumanProduction(stint) : roundedProductionText(previous);
   const destination = departure?.destination && normalizeName(departure.destination) !== "free agency"
     ? ` to ${departure.destination}`
     : "";
-  return `${choose(`${context.canonical}|${departure?.name}|fa-loss`, [
-    `The loss of ${departure.name}${destination} is not cosmetic`,
-    `${context.canonical} will feel ${departure.name}'s departure${destination}`,
-    `One of the real offseason subtractions is ${departure.name}${destination}`,
-    `Free agency took ${departure.name}${destination} out of last year's rotation`,
-  ])}. ${production ? `He had been giving the team ${production}, and losing him ` : "That exit "}${fit}.`;
+  return `${teamMarketName(context.canonical)} lost ${departure.name}${destination} in free agency.${production ? ` He had averaged ${production} for the team.` : ""}`;
 }
+
 
 function buildTeamTransactionStories(context) {
   const stories = [];
-  const used = new Set();
-  const add = (key, value) => {
-    const normalized = normalizeName(key);
-    if (!value || !normalized || used.has(normalized)) return;
-    used.add(normalized);
-    stories.push(value.replace(/\s+/g, " ").trim());
+  const seen = new Set();
+  const add = (value) => {
+    const clean = text(value).replace(/\s+/g, " ");
+    const key = normalizeName(clean);
+    if (!clean || !key || seen.has(key)) return;
+    seen.add(key);
+    stories.push(clean);
   };
 
-  const trades = [...context.activity.incomingTrades, ...context.activity.outgoingTrades]
-    .sort((a, b) => b.score - a.score);
-  const signings = [...context.activity.signings].sort((a, b) => b.score - a.score);
+  for (const story of context.majorTradeNarratives || []) add(story);
+
+  const coveredPlayers = new Set([
+    ...context.tradeLedger.rootOutgoingPlayers.map((row) => normalizeName(row.playerName)),
+    ...context.tradeLedger.bridges.map((row) => normalizeName(row.playerName)),
+    ...context.tradeLedger.retainedIncomingPlayers.map((row) => normalizeName(row.playerName)),
+  ]);
+
+  for (const event of [...context.activity.signings].sort((a, b) => b.score - a.score).slice(0, 3)) {
+    add(freeAgencyAdditionSentence(context, event));
+  }
+
   const tradedOut = new Set(context.activity.outgoingTrades.map((row) => normalizeName(row.playerName)));
-  const faLosses = (context.turnover?.departures || [])
-    .filter((row) => !tradedOut.has(normalizeName(row.name)))
-    .filter((row) => safeNumber(row.previousOverall, 0) >= 76 || safeNumber(row?.stats?.PTS ?? row?.stats?.ppg, 0) >= 9)
-    .slice(0, 4);
-
-  // Put one major beat from each transaction lane up front so the prose cannot
-  // become "three trade headlines" while ignoring the actual free-agent market.
-  if (trades[0]) add(`trade|${trades[0].playerName}|${trades[0].fromTeam}|${trades[0].toTeam}`, tradeAftermathSentence(context, trades[0]));
-  if (signings[0]) add(`signing|${signings[0].playerName}`, freeAgencyAdditionSentence(context, signings[0]));
-  if (faLosses[0]) add(`departure|${faLosses[0].name}`, freeAgencyDepartureSentence(context, faLosses[0]));
-
-  for (const event of trades.slice(1, 5)) {
-    add(`trade|${event.playerName}|${event.fromTeam}|${event.toTeam}`, tradeAftermathSentence(context, event));
+  for (const row of (context.turnover?.departures || [])
+    .filter((item) => !tradedOut.has(normalizeName(item.name)))
+    .filter((item) => safeNumber(item.previousOverall, 0) >= 76 || safeNumber(item?.stats?.PTS ?? item?.stats?.ppg, 0) >= 9)
+    .slice(0, 3)) {
+    add(freeAgencyDepartureSentence(context, row));
   }
-  for (const event of signings.slice(1, 4)) {
-    add(`signing|${event.playerName}`, freeAgencyAdditionSentence(context, event));
+
+  for (const event of context.activity.significant) {
+    if (coveredPlayers.has(normalizeName(event?.playerName))) continue;
+    add(event.type === "free_agency" ? freeAgencyAdditionSentence(context, event) : tradeAftermathSentence(context, event));
+    if (stories.length >= 7) break;
   }
-  for (const row of faLosses.slice(1, 4)) add(`departure|${row.name}`, freeAgencyDepartureSentence(context, row));
 
   return stories.slice(0, 7);
 }
+
 
 function teamActivity(leagueData, teamName, seasonYear, trades, signings) {
   const target = normalizeName(teamName);
@@ -1418,31 +2496,32 @@ function buildMoodPulse(moodData, previousRow, canonical) {
   const unsettled = rows.filter((row) => row.score < 55).sort((a, b) => a.score - b.score).slice(0, 3);
   const upbeat = rows.filter((row) => row.score >= 70).sort((a, b) => b.score - a.score).slice(0, 3);
   const falling = rows.filter((row) => normalizeName(row.trend) === "falling").length;
+  const market = teamMarketName(canonical);
   let summary = "";
   if (average >= 74) {
-    summary = `${canonical} opens camp with a genuinely upbeat locker room. The group is carrying confidence into the new season rather than dragging last year behind it.`;
+    summary = `${market} enters the season with strong locker-room morale.`;
   } else if (average >= 64) {
-    summary = `${canonical} enters the season with a mostly positive locker room, although there are still individual concerns beneath the surface.`;
+    summary = `${market} starts the year with mostly positive locker-room morale, although a few players still have concerns.`;
   } else if (average >= 54) {
-    summary = `${canonical} enters camp with mixed emotions. The room is not fractured, but the mood is uneven enough that results early in the season will matter.`;
+    summary = `Locker-room morale is mixed entering the season.`;
   } else {
-    summary = `${canonical} opens the year with an uneasy locker room. Several players are carrying real frustration into the season, and the group needs a strong start to settle the atmosphere.`;
+    summary = `Locker-room morale is low entering the season, with several players carrying frustration from last year.`;
   }
   if (previousRow?.madePlayoffs && !previousRow?.champion && !previousRow?.finals && average < 62) {
-    summary += ` ${playoffMoodPhrase(previousRow)} is still sitting poorly with parts of the roster.`;
+    summary += ` ${playoffMoodPhrase(previousRow)} is still bothering some players.`;
   } else if ((previousRow?.conferenceFinals || previousRow?.finals || previousRow?.champion) && average >= 68) {
-    summary += ` Last season's run has left the group believing it belongs in meaningful games again.`;
+    summary += ` Last season's playoff run has also given the group some confidence.`;
   }
 
   const items = [];
   for (const row of unsettled) {
     const reason = moodReasonText(row);
-    items.push(`${row.name} is one of the more unsettled players in the room${row.trend ? ` and is trending ${row.trend}` : ""}${reason ? `; ${reason}` : ""}.`);
+    items.push(`${row.name} has one of the lower mood scores on the team${row.trend ? ` and is trending ${row.trend}` : ""}${reason ? `; ${reason}` : ""}.`);
   }
   if (!items.length && upbeat.length) {
-    items.push(`${naturalList(upbeat.map((row) => row.name))} ${upbeat.length === 1 ? "is" : "are"} among the strongest positive voices in the locker room entering the season.`);
+    items.push(`${naturalList(upbeat.map((row) => row.name))} ${upbeat.length === 1 ? "has" : "have"} some of the strongest mood scores on the roster.`);
   }
-  if (falling >= 3 && average < 66) items.push(`${falling} players currently show a falling mood trend, so the emotional temperature of the room is worth monitoring early.`);
+  if (falling >= 3 && average < 66) items.push(`${falling} players currently have a falling mood trend, so the team will want a good start.`);
   return {
     average: Number(average.toFixed(1)),
     summary,
@@ -1523,35 +2602,63 @@ function buildTeamConcerns(context) {
     .sort((a, b) => b.ovr - a.ovr || b.age - a.age)
     .slice(0, 2);
   for (const row of aging) {
-    items.push(`${row.name} is still ${row.ovr} OVR at age ${row.age}, leaving a meaningful part of the team's ceiling tied to an older veteran staying healthy and productive.`);
+    items.push(`${row.name} is ${row.age} and still ${row.ovr} OVR, so keeping him healthy remains important.`);
   }
   for (const row of context.extensionWatch.slice(0, 2)) items.push(row.headline);
   const extensionNames = new Set(context.extensionWatch.map((row) => normalizeName(row.name)));
   for (const row of context.ownExpiringWatch.filter((item) => !extensionNames.has(normalizeName(item.name))).slice(0, 2)) {
-    items.push(`${row.name} (${row.overall} OVR) can reach free agency after this season if no new deal changes the timeline.`);
+    items.push(`${row.name} (${row.overall} OVR) can become a free agent after this season.`);
   }
   return uniqueNames(items, 6);
 }
 
 function primaryStoryline(context) {
-  const topIncoming = context.activity.significant.find((event) => event.toTeam && normalizeName(event.toTeam) === normalizeName(context.canonical) && event.overall >= 84);
-  const topOutgoing = context.activity.outgoingTrades.find((event) => event.overall >= 84);
-  const topDeparture = context.turnover?.departures?.find((row) => row.previousOverall >= 84);
+  const direction = context.franchiseDirection;
   const top = context.snapshot.top[0];
-  if (context.previousRow?.champion) return { type:"title_defense", subject:context.canonical, statement:`${context.canonical} enters the season carrying the pressure of a championship defense.` };
-  if (topDeparture) {
-    const destination = topDeparture.destination ? ` to ${topDeparture.destination}` : "";
-    return { type:"roster_reset", subject:topDeparture.name, statement:`The roster now has to absorb ${topDeparture.name}'s departure${destination}, making that loss the defining personnel challenge entering the season.` };
+  const rootOutgoing = context.tradeLedger.rootOutgoingPlayers[0] || null;
+  const topIncoming = context.tradeLedger.retainedIncomingPlayers[0] || null;
+
+  if (context.previousRow?.champion) {
+    return { type:"title_defense", subject:context.canonical, statement:`${teamMarketName(context.canonical)} enters the season as the defending champion.` };
   }
-  if (topIncoming) return { type:"roster_reset", subject:topIncoming.playerName, statement:`Adding ${topIncoming.playerName} changes the ceiling of the roster and raises the expectations immediately.` };
-  if (topOutgoing) return { type:"roster_reset", subject:topOutgoing.playerName, statement:`Moving ${topOutgoing.playerName} has changed the direction of the roster and put more responsibility on the players who remain.` };
-  if (top?.ovr >= 87 && top?.age >= 30) return { type:"star_window", subject:top.name, statement:`The season is tied to maximizing what remains of ${top.name}'s elite window at age ${top.age}.` };
-  if (context.snapshot.youngCore.length >= 2) return { type:"development", subject:context.snapshot.youngCore[0]?.name, statement:`The season will show whether ${naturalList(context.snapshot.youngCore.slice(0, 3).map((row) => row.name))} are ready to turn promise into a real competitive core.` };
-  return { type:"direction", subject:top?.name || context.canonical, statement:`This season is about turning last year's evidence into a clearer competitive identity.` };
+  if (direction?.type === "rebuilding") {
+    return {
+      type:"rebuild",
+      subject:rootOutgoing?.playerName || top?.name || context.canonical,
+      statement:direction.summary,
+    };
+  }
+  if (direction?.type === "championship_push") {
+    return {
+      type:"win_now",
+      subject:topIncoming?.playerName || top?.name || context.canonical,
+      statement:direction.summary,
+    };
+  }
+  if (direction?.type === "retooling") {
+    return {
+      type:"retool",
+      subject:rootOutgoing?.playerName || topIncoming?.playerName || top?.name || context.canonical,
+      statement:direction.summary,
+    };
+  }
+  if (direction?.type === "developing") {
+    return {
+      type:"development",
+      subject:context.snapshot.youngCore[0]?.name || top?.name || context.canonical,
+      statement:direction.summary,
+    };
+  }
+  if (direction?.type === "contending") {
+    return { type:"contending", subject:top?.name || context.canonical, statement:direction.summary };
+  }
+  return { type:"direction", subject:top?.name || context.canonical, statement:direction?.summary || `${teamMarketName(context.canonical)} enters the season with several roster decisions still to sort out.` };
 }
+
 
 function buildTeamSections(context) {
   const transactionItems = context.transactionStories || [];
+  const aftermathItems = (context.assetHighlights || []).map((row) => row.headline);
   const contractItems = [
     ...context.extensionWatch.map((row) => row.headline),
     ...context.ownExpiringWatch
@@ -1563,11 +2670,13 @@ function buildTeamSections(context) {
 
   return [
     { title: "How the roster changed", items: transactionItems.slice(0, 6) },
+    { title: "What happened after the trades", items: aftermathItems.slice(0, 5) },
     { title: "Pressure points", items: concernItems.slice(0, 5) },
     { title: "Contract watch", items: contractItems.slice(0, 6) },
     { title: "Locker room pulse", items: moodItems.slice(0, 5) },
   ].filter((section) => section.items.length);
 }
+
 
 function buildLeagueSections(context) {
   const conferenceItems = context.conferenceCompetition.map((row) => row.headline);
@@ -1591,6 +2700,7 @@ function buildLeagueSections(context) {
 
 function buildOutlookSections(context) {
   return [
+    { title: "Outside first-round assets", items: (context.externalPickIntel?.groups || []).slice(0, 4).map((row) => row.headline) },
     { title: "Potential expiring trade targets", items: context.expiringTradeTargets.map((row) => row.headline) },
     { title: `${context.canonical} contract decisions`, items: [
       ...context.extensionWatch.map((row) => row.headline),
@@ -1602,117 +2712,128 @@ function buildOutlookSections(context) {
 }
 
 function buildTeamParagraphs(context) {
-  const { canonical, previousRow, previousStats, snapshot, teamProgression, continuity } = context;
+  const { canonical, previousRow, previousStats, snapshot, teamProgression } = context;
+  const market = teamMarketName(canonical);
+  const ref = teamReference(canonical);
   const record = formatRecord(previousRow);
   const finish = formatFinish(previousRow);
   const leader = previousStats[0];
-  const roundedLeader = roundedProductionText(leader);
-  const leaderLine = leader && roundedLeader
-    ? `${leader.name} carried the biggest nightly load, giving them ${roundedLeader}.`
-    : "";
-  const moodLead = context.moodPulse?.summary || "";
-  const first = previousRow
-    ? `${choose(`${canonical}|${context.seasonYear}|opening`, [
-        `${canonical} does not enter ${seasonLabel(context.seasonYear)} with a blank slate`,
-        `The new season starts with last spring still hanging over ${canonical}`,
-        `${canonical} arrives at camp with a full year of evidence behind it`,
-        `Last season left ${canonical} with a clearer picture of what this group is`,
-      ])}. The team finished ${record || "the schedule"} and ${finish}. ${leaderLine} ${moodLead}`.trim()
-    : `${canonical} enters the year without a complete prior-season archive, so the current roster has to establish the tone itself. ${moodLead}`.trim();
+  const leaderProduction = leader ? roundedProductionText(leader) : "";
+
+  const openingParts = [];
+  if (previousRow) openingParts.push(`${market} finished ${record || "last season"} and ${finish}.`);
+  else openingParts.push(`${market} enters the season without a complete prior-season record in the save.`);
+  if (leader && leaderProduction) openingParts.push(`${leader.name} led the team with ${leaderProduction}.`);
+  if (context.franchiseDirection?.summary) openingParts.push(context.franchiseDirection.summary);
+  const first = openingParts.join(" ");
 
   const transactionStories = context.transactionStories || [];
   const second = transactionStories.length
     ? transactionStories.slice(0, 3).join(" ")
-    : "The core came through the offseason mostly intact, so this season will lean more heavily on internal growth than on a dramatic personnel reset.";
+    : `The main rotation came through the offseason mostly intact, so ${ref} will be relying more on internal improvement than on a major roster change.`;
 
-  const top = snapshot.top[0];
-  const secondStar = snapshot.top[1];
-  const aging = snapshot.roster.filter((row) => row.ovr >= 82 && row.age >= 33).sort((a, b) => b.ovr - a.ovr).slice(0, 2);
-  const identity = [];
-  if (top) identity.push(`${top.name} remains the central piece at ${top.ovr} OVR`);
-  if (secondStar) identity.push(`${secondStar.name} gives the roster another major pillar at ${secondStar.ovr} OVR`);
-  if (aging.length) identity.push(`${naturalList(aging.map((row) => `${row.name}, now ${row.age}`))} makes age and durability part of the competitive equation`);
-  const third = `${identity.length ? `${naturalList(identity)}.` : "The rotation still needs a clear hierarchy."}${teamProgression.length ? ` Internally, ${teamProgression.slice(0, 3).map((row) => `${row.name} ${row.delta > 0 ? "moved forward" : "gave back ground"}`).join(", ")}, changing the amount of responsibility the coaching staff can reasonably place on the younger pieces.` : ""}`;
+  const core = snapshot.top.slice(0, 3);
+  const coreText = core.length
+    ? `${core[0].name} is the highest-rated player on the roster at ${core[0].ovr} OVR${core[1] ? `, with ${core[1].name} at ${core[1].ovr} OVR` : ""}${core[2] ? ` and ${core[2].name} at ${core[2].ovr} OVR` : ""}.`
+    : "The rotation still needs a clear top group.";
+  const progressionText = teamProgression.length
+    ? ` ${teamProgression.slice(0, 3).map((row) => `${row.name} ${row.delta > 0 ? `improved by ${row.delta} OVR` : `dropped by ${Math.abs(row.delta)} OVR`}`).join(", ")}.`
+    : "";
+  const highlight = context.assetHighlights?.[0]?.headline || "";
+  const third = `${coreText}${progressionText}${highlight ? ` ${highlight}` : ""}`.trim();
 
-  const concernItems = buildTeamConcerns(context).slice(0, 3);
-  const continuityLead = continuity?.evidence ? `The thread from last season has not disappeared: ${continuity.evidence}.` : "";
-  const fourthFallback = transactionStories[3] || context.primaryStoryline.statement;
-  const fourth = `${continuityLead} ${concernItems.length
-    ? `The pressure entering camp is less abstract now. ${concernItems.join(" ")}`
-    : fourthFallback}`.trim();
+  const concerns = buildTeamConcerns(context).slice(0, 3);
+  const futureFirsts = context.futureFirsts;
+  const futureCapital = Number.isFinite(Number(futureFirsts))
+    ? `${market} currently controls ${futureFirsts} listed first-round pick${futureFirsts === 1 ? "" : "s"} over the next four drafts.${context.externalPickIntel?.teamLead ? ` ${context.externalPickIntel.teamLead}` : ""}`
+    : (context.externalPickIntel?.teamLead || "");
+  const mood = context.moodPulse?.summary || "";
+  const fourth = [
+    concerns.length ? concerns.join(" ") : "",
+    futureCapital,
+    mood,
+  ].filter(Boolean).join(" ");
 
   return [first, second, third, fourth].filter(Boolean);
 }
 
-function buildLeagueParagraphs(context) {
-  const { canonical, leagueBoard, previousEntry } = context;
-  const champ = text(previousEntry?.champion);
-  const firstEvents = leagueBoard.events.filter((event) => ["champion", "award", "team_season"].includes(event.type)).slice(0, 4);
-  const first = firstEvents.length
-    ? firstEvents.map((event) => `${event.headline}.`).join(" ")
-    : champ
-      ? `${champ} begins the year carrying the league's championship target.`
-      : "The league opens without one overwhelming archived headline, which puts more weight on the changes teams made after the season ended.";
 
-  const movementLeads = [...leagueBoard.trades.slice(0, 3), ...leagueBoard.signings.slice(0, 3), ...leagueBoard.franchiseShifts.slice(0, 2)]
+function buildLeagueParagraphs(context) {
+  const { leagueBoard, previousEntry } = context;
+  const champ = text(previousEntry?.champion);
+  const awardEvents = leagueBoard.events.filter((event) => event.type === "award").slice(0, 3);
+  const firstParts = [];
+  if (champ) firstParts.push(`${champ} won last season's NBA championship.`);
+  else firstParts.push("The previous champion is not fully recorded in this save.");
+  for (const event of awardEvents) firstParts.push(`${event.headline}.`);
+  const first = firstParts.join(" ");
+
+  const movement = [...leagueBoard.trades.slice(0, 4), ...leagueBoard.signings.slice(0, 3)]
     .sort((a, b) => b.score - a.score)
     .slice(0, 4)
-    .map((event) => event.headline);
-  const second = movementLeads.length
-    ? `${choose(`${canonical}|${context.seasonYear}|league-moved`, [
-        "The summer changed the shape of the league in several places",
-        "The transaction wire mattered this offseason",
-        "Several front offices chose movement over continuity",
-      ])}. ${movementLeads.join(". ")}. Those decisions will show up in rotations and playoff matchups long before they show up in a retrospective grade.`
-    : "The offseason produced no saved blockbuster large enough to redefine the landscape, so continuity will matter more than transaction shock at the start of the year.";
+    .map((event) => `${event.headline}.`);
+  const second = movement.length
+    ? movement.join(" ")
+    : "There were no saved blockbuster trades or free-agent signings large enough to dominate the offseason.";
 
   const conference = conferenceDisplayName(conferenceNameOf(context.team));
   const rivals = context.conferenceCompetition.slice(0, 3);
-  const rivalSentences = rivals.map((row) => row.headline.replace(/\.$/, ""));
   const third = rivals.length
-    ? `${possessive(canonical)} real race begins inside the ${conference}. ${rivalSentences.join(". ")}. That is the neighborhood that will decide seeding, matchup pressure and how aggressive the front office needs to become before the deadline.`
-    : `${possessive(canonical)} first measure is the ${conference}. The playoff race there will tell the front office far more than a generic league-wide roster ranking ever could.`;
+    ? `${conference} competition has also changed. ${rivals.map((row) => row.headline).join(" ")}`
+    : `${conference} results will be the clearest early measure of where the team stands.`;
   return [first, second, third];
 }
+
 
 function buildProspectParagraphs(context) {
   const { canonical, draft, firstRoundPicks, snapshot, recentRookieRows } = context;
+  const market = teamMarketName(canonical);
   const boardNames = draft.rows.slice(0, 5).map((row) => `${row.name} (${row.position}, ${row.overall}/${row.potential})`);
   const first = draft.rows.length
-    ? `The ${draft.draftYear} board is already live. ${naturalList(boardNames)} currently occupy the first tier of the saved class.`
-    : `The ${draft.draftYear} class has not been generated in this save yet. New Chapter will attach the live board as soon as Upcoming Draft prepares it.`;
+    ? `The ${draft.draftYear} draft class is already available. ${naturalList(boardNames)} currently make up the top group on the saved board.`
+    : `The ${draft.draftYear} draft class has not been generated in this save yet.`;
+  const ownedLabels = firstRoundPicks.slice(0, 4).map((pick) => {
+    const original = draftPickOriginalTeamName(pick);
+    return original && normalizeName(original) !== normalizeName(canonical)
+      ? `${original}'s first-round pick`
+      : "its own first-round pick";
+  });
   const capital = firstRoundPicks.length === 0
-    ? `${canonical} does not currently control a listed first-round pick in ${draft.draftYear}.`
-    : firstRoundPicks.length === 1
-      ? `${canonical} currently controls one listed first-round pick in ${draft.draftYear}.`
-      : `${canonical} currently controls ${firstRoundPicks.length} listed first-round picks in ${draft.draftYear}.`;
-  const second = `${capital} The clearest roster need by current depth is ${positionNeed(snapshot)}.`;
+    ? `${market} does not currently control a listed first-round pick in ${draft.draftYear}.`
+    : `${market} currently controls ${firstRoundPicks.length} listed first-round pick${firstRoundPicks.length === 1 ? "" : "s"} in ${draft.draftYear}${ownedLabels.length ? `, including ${naturalList(ownedLabels)}` : ""}.`;
+  const second = `${capital} The weakest position on the current depth chart is ${positionNeed(snapshot)}.`;
   const recent = recentRookieRows.length
-    ? `${naturalList(recentRookieRows.map((row) => `${row.name} (${row.ovr} OVR, ${row.pot} POT)`), "and")} ${recentRookieRows.length === 1 ? "is" : "are"} the newest young ${recentRookieRows.length === 1 ? "piece" : "pieces"} already on the roster.`
-    : "There is no clearly tagged recent rookie in the current roster data, so the upcoming class carries more of the prospect focus.";
-  return [first, second, recent];
+    ? `${naturalList(recentRookieRows.map((row) => `${row.name} (${row.ovr} OVR, ${row.pot} POT)`))} ${recentRookieRows.length === 1 ? "is" : "are"} the newest young ${recentRookieRows.length === 1 ? "player" : "players"} already on the roster.`
+    : "There is no clearly tagged recent rookie in the current roster data.";
+  const externalPickStories = (context.externalPickIntel?.groups || []).slice(0, 2).map((row) => row.headline);
+  const lineage = context.pickLineage?.find((row) => row.outcome)?.headline || "";
+  return [first, second, recent, ...externalPickStories, lineage].filter(Boolean);
 }
+
 
 function buildOutlookParagraphs(context) {
-  const { canonical, snapshot, previousRow, activity, futureFirsts, expiringTradeTargets, extensionWatch, ownExpiringWatch } = context;
-  const top = snapshot.top[0];
+  const { canonical, snapshot, previousRow, futureFirsts, expiringTradeTargets, extensionWatch, ownExpiringWatch } = context;
+  const market = teamMarketName(canonical);
   const core = snapshot.top.slice(0, 3).map((row) => `${row.name} (${row.ovr} OVR${row.age ? `, age ${row.age}` : ""})`);
-  const first = `${canonical} opens ${seasonLabel(context.seasonYear)} around ${naturalList(core) || "an unsettled core"}. ${previousRow ? `That group is coming out of a ${formatRecord(previousRow)} season that ${formatFinish(previousRow)}.` : "The prior-season archive is incomplete, so the current roster has to establish the standard itself."}`;
+  const first = `${market} enters ${seasonLabel(context.seasonYear)} with ${naturalList(core) || "an unsettled core"}.${previousRow ? ` Last season ended at ${formatRecord(previousRow)} with the team ${formatFinish(previousRow)}.` : ""} ${context.franchiseDirection?.summary || ""}`.trim();
 
-  const pressureBits = [];
-  const aging = snapshot.roster.filter((row) => row.ovr >= 82 && row.age >= 33).sort((a, b) => b.ovr - a.ovr).slice(0, 2);
-  if (aging.length) pressureBits.push(`${naturalList(aging.map((row) => `${row.name} at age ${row.age}`))} keeps part of the team's ceiling tied to an older veteran timeline`);
-  if (extensionWatch.length) pressureBits.push(`${extensionWatch.length} meaningful extension decision${extensionWatch.length === 1 ? " is" : "s are"} already approaching`);
+  const decisions = [];
+  if (extensionWatch.length) decisions.push(`${extensionWatch.length} extension decision${extensionWatch.length === 1 ? " is" : "s are"} already approaching`);
   const nonExtensionExpirings = ownExpiringWatch.filter((row) => !extensionWatch.some((ext) => normalizeName(ext.name) === normalizeName(row.name)));
-  if (nonExtensionExpirings.length) pressureBits.push(`${naturalList(nonExtensionExpirings.slice(0, 2).map((row) => row.name))} can reach free agency after the season`);
-  if (context.moodPulse?.average < 60) pressureBits.push("the locker room is entering the year with more tension than comfort");
-  const second = `${pressureBits.length ? `The front office is managing several live pressures: ${pressureBits.join("; ")}.` : "The front office enters the year without one obvious crisis hanging over the roster."} The team controls ${futureFirsts} listed first-round pick${futureFirsts === 1 ? "" : "s"} over the next four drafts${expiringTradeTargets.length ? `, while ${expiringTradeTargets.length} outside players on expiring deals currently grade as realistic market fits` : ""}.`;
+  if (nonExtensionExpirings.length) decisions.push(`${naturalList(nonExtensionExpirings.slice(0, 2).map((row) => row.name))} can reach free agency after the season`);
+  if (context.moodPulse?.average < 60) decisions.push("the locker room starts the year with some real frustration");
+  const capital = context.externalPickIntel?.portfolioSummary
+    || `${market} controls ${futureFirsts} listed first-round pick${futureFirsts === 1 ? "" : "s"} over the next four drafts.`;
+  const marketTargets = expiringTradeTargets.length
+    ? ` The current market list also includes ${expiringTradeTargets.length} realistic expiring-contract trade target${expiringTradeTargets.length === 1 ? "" : "s"}.`
+    : "";
+  const second = `${decisions.length ? `The front office also has to manage ${naturalList(decisions)}.` : "There is no single contract or locker-room issue dominating the start of the year."} ${capital}${marketTargets}`.trim();
 
-  const starMove = activity.significant.find((event) => event.overall >= 84);
-  const evidence = starMove ? `${starMove.headline}. ` : "";
-  const third = `${evidence}${context.primaryStoryline.statement} The season should be judged by whether the roster's decisions strengthen that direction rather than simply preserve the status quo.`.trim();
+  const lineage = context.assetHighlights?.find((row) => row.type === "pick_lineage")?.headline || "";
+  const third = `${lineage ? `${lineage} ` : ""}${context.primaryStoryline.statement} The next moves should match that direction instead of pulling the roster in two different directions.`.trim();
   return [first, second, third];
 }
+
 
 export function buildSeasonBriefingData(leagueData, teamName, explicitYear = null, options = {}) {
   const seasonYear = getSeasonBriefingSeasonYear(leagueData, explicitYear);
@@ -1724,6 +2845,16 @@ export function buildSeasonBriefingData(leagueData, teamName, explicitYear = nul
   const firstSeason = seasonYear === 2026 ? getFirstSeasonBriefing2026(canonical) : null;
   const prospectRows = draft.rows;
   if (firstSeason) {
+    const openingSnapshot = rosterSnapshot(team);
+    const externalPickIntel = buildExternalFirstRoundPickIntel({
+      leagueData,
+      teamName: canonical,
+      seasonYear,
+      previousEntry: null,
+      direction: openingSnapshot.direction,
+    });
+    const y1ProspectPickStories = externalPickIntel.groups.slice(0, 2).map((row) => row.headline);
+    const y1OutlookPickStory = externalPickIntel.portfolioSummary;
     return {
       contentVersion: SEASON_BRIEFING_CONTENT_VERSION,
       leagueScope: getSeasonBriefingLeagueScope(leagueData),
@@ -1736,8 +2867,17 @@ export function buildSeasonBriefingData(leagueData, teamName, explicitYear = nul
       tabs: {
         team: { ...firstSeason.team },
         league: { ...firstSeason.league, progression:{ improved:[], regressed:[] } },
-        prospects: { ...firstSeason.prospects, prospects:prospectRows, classCount:draft.classCount, draftYear:draft.draftYear },
-        outlook: { ...firstSeason.outlook },
+        prospects: {
+          ...firstSeason.prospects,
+          paragraphs: [...(firstSeason.prospects?.paragraphs || []), ...y1ProspectPickStories],
+          prospects:prospectRows,
+          classCount:draft.classCount,
+          draftYear:draft.draftYear,
+        },
+        outlook: {
+          ...firstSeason.outlook,
+          paragraphs: [...(firstSeason.outlook?.paragraphs || []), ...(y1OutlookPickStory ? [y1OutlookPickStory] : [])],
+        },
       },
     };
   }
@@ -1759,14 +2899,36 @@ export function buildSeasonBriefingData(leagueData, teamName, explicitYear = nul
   const ownExpiringWatch = buildOwnExpiringWatch(team, leagueData);
   const expiringTradeTargets = buildExpiringTradeTargets(leagueData, canonical, snapshot);
   const moodPulse = buildMoodPulse(options?.moodData || null, previousRow, canonical);
+  const recentTradeTimeline = buildTeamTradeTimeline(leagueData, canonical, seasonYear, { lookback: 1 });
+  const historicalTradeTimeline = allTeamTradeTimeline(leagueData, canonical, seasonYear, 8);
 
   const context = {
     leagueData, seasonYear, canonical, team, previousEntry, previousRow, snapshot,
     progressionRows, progression, teamProgression:teamProgressionRows,
     leagueBoard, activity, previousStats, turnover, draft, firstRoundPicks, futureFirsts,
     recentRookieRows, extensionWatch, ownExpiringWatch, expiringTradeTargets, moodPulse,
+    recentTradeTimeline, historicalTradeTimeline,
   };
+  context.tradeLedger = buildTradeAssetLedger({
+    leagueData,
+    teamName: canonical,
+    seasonYear,
+    previousEntry,
+    timeline: recentTradeTimeline,
+  });
+  context.franchiseDirection = buildFranchiseDirection(context);
+  context.externalPickIntel = buildExternalFirstRoundPickIntel({
+    leagueData,
+    teamName: canonical,
+    seasonYear,
+    previousEntry,
+    direction: context.franchiseDirection?.type || snapshot.direction,
+  });
+  context.majorTradeNarratives = buildMajorTradeNarratives(context);
   context.transactionStories = buildTeamTransactionStories(context);
+  context.tradePartnerAftermath = buildTradePartnerAftermath(context);
+  context.pickLineage = buildPickLineage(context);
+  context.assetHighlights = buildHistoricalAssetHighlights(context);
   context.conferenceCompetition = buildConferenceCompetition(context);
   const prior = previousStoredSnapshot(leagueData, canonical, seasonYear);
   const story = primaryStoryline(context);
@@ -1774,8 +2936,8 @@ export function buildSeasonBriefingData(leagueData, teamName, explicitYear = nul
   context.continuity = continuityAssessment(prior, context);
 
   const dossier = {
-    version: 5,
-    generatedFrom: "cinematic_transaction_timeline_market_contract_mood_intel",
+    version: 6,
+    generatedFrom: "transaction_asset_lineage_direction_partner_aftermath",
     seasonYear,
     previousSeasonYear: previousEntry?.seasonYear ?? null,
     previousRecord: formatRecord(previousRow),
@@ -1789,6 +2951,50 @@ export function buildSeasonBriefingData(leagueData, teamName, explicitYear = nul
     teamProgression: teamProgressionRows,
     significantTeamMoves: activity.significant.slice(0, 6).map((event) => ({ type:event.type, headline:event.headline, overall:event.overall || 0 })),
     transactionStories: context.transactionStories.slice(0, 6),
+    franchiseDirection: context.franchiseDirection,
+    externalPickIntel: {
+      count: context.externalPickIntel?.count || 0,
+      teamCount: context.externalPickIntel?.teamCount || 0,
+      portfolioSummary: context.externalPickIntel?.portfolioSummary || "",
+      groups: (context.externalPickIntel?.groups || []).slice(0, 4).map((row) => ({
+        externalTeam: row.externalTeam,
+        state: row.state,
+        previousRecord: row.previousRecord,
+        previousFinish: row.previousFinish,
+        rosterDirection: row.rosterDirection,
+        rosterAverage: row.rosterAverage,
+        rosterAverageAge: row.rosterAverageAge,
+        topPlayer: row.topPlayer,
+        headline: row.headline,
+        assets: row.assets.slice(0, 4).map((asset) => ({
+          id: asset.id, year: asset.year, assetType: asset.assetType, originalTeam: asset.originalTeam,
+          externalTeam: asset.externalTeam, protection: asset.protection, swapWithTeam: asset.swapWithTeam,
+        })),
+      })),
+    },
+    tradeLedger: {
+      firstsIn: context.tradeLedger.firstsIn,
+      firstsOut: context.tradeLedger.firstsOut,
+      netFirsts: context.tradeLedger.netFirsts,
+      secondsIn: context.tradeLedger.secondsIn,
+      secondsOut: context.tradeLedger.secondsOut,
+      swapsIn: context.tradeLedger.swapsIn,
+      swapsOut: context.tradeLedger.swapsOut,
+      salaryDelta: context.tradeLedger.salaryDelta,
+      rootOutgoingPlayers: context.tradeLedger.rootOutgoingPlayers.slice(0, 4).map((row) => ({ playerName:row.playerName, overall:row.overall, partnerTeam:row.partnerTeam, date:row.date })),
+      retainedIncomingPlayers: context.tradeLedger.retainedIncomingPlayers.slice(0, 4).map((row) => ({ playerName:row.playerName, overall:row.overall, partnerTeam:row.partnerTeam, date:row.date })),
+      bridges: context.tradeLedger.bridges.slice(0, 4).map((row) => ({ playerName:row.playerName, overall:row.overall, acquiredFrom:row.acquiredFrom, movedTo:row.movedTo, games:row.games, days:row.days })),
+    },
+    tradePartnerAftermath: context.tradePartnerAftermath.slice(0, 4).map((row) => ({ playerName:row.playerName, destination:row.destination, overall:row.overall, headline:row.headline })),
+    pickLineage: context.pickLineage.slice(0, 8).map((row) => ({
+      year:row.pick?.year || 0,
+      originalTeam:row.pick?.originalTeam || "",
+      anchorPlayer:row.anchorPlayer || "",
+      draftedPlayer:row.outcome?.playerName || "",
+      pickNumber:row.outcome?.pick || 0,
+      headline:row.headline,
+    })),
+    assetHighlights: context.assetHighlights.slice(0, 5).map((row) => ({ type:row.type, score:row.score, headline:row.headline })),
     majorTrades: leagueBoard.trades.slice(0, 6).map((event) => ({ playerName:event.playerName, fromTeam:event.fromTeam, toTeam:event.toTeam, overall:event.overall || 0, phase:event.phase || "unknown", headline:event.headline })),
     majorSignings: leagueBoard.signings.slice(0, 6).map((event) => ({ playerName:event.playerName, toTeam:event.toTeam, overall:event.overall || 0, years:event.years || 0, aav:event.aav || 0, headline:event.headline })),
     franchiseShifts: leagueBoard.franchiseShifts.slice(0, 5).map((event) => ({ teamName:event.teamName, severity:event.severity, headline:event.headline })),
@@ -1819,7 +3025,7 @@ export function buildSeasonBriefingData(leagueData, teamName, explicitYear = nul
     teamSlug: getSeasonBriefingTeamSlug(canonical),
     seasonYear,
     seasonLabel: seasonLabel(seasonYear),
-    source: "event_dossier_v5",
+    source: "event_dossier_v7",
     dossier,
     tabs: {
       team: {

@@ -59,8 +59,8 @@ self.onmessage = async (event) => {
     const { runTradeFinderTeamBatch } = await getEngine();
     const result = await runTradeFinderTeamBatch({
       ...(message.payload || {}),
-      onTeamDone: (summary) => {
-        self.postMessage({ type: "team_done", workerId, summary });
+      onTeamDone: (summary, offer) => {
+        self.postMessage({ type: "team_done", workerId, summary, offer: offer || null });
       },
     });
     self.postMessage({ type: "complete", workerId, result });

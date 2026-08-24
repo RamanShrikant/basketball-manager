@@ -336,6 +336,44 @@ function combineRawStatsByPlayerName(rawPlayerStats = {}) {
   return byName;
 }
 
+function buildMultiTeamStintRows(rawPlayerStats = {}) {
+  const grouped = new Map();
+
+  for (const rec of Object.values(rawPlayerStats || {})) {
+    if (!isRealRawPlayerStatRow(rec)) continue;
+    const playerName = rec?.player || rec?.name;
+    const teamName = rec?.team || rec?.teamName;
+    if (!playerName || !teamName) continue;
+    const key = String(playerName);
+    const rows = grouped.get(key) || [];
+    rows.push(rec);
+    grouped.set(key, rows);
+  }
+
+  const out = [];
+  for (const [playerName, rows] of grouped.entries()) {
+    const distinctTeams = new Set(rows.map((row) => String(row?.team || row?.teamName || "")).filter(Boolean));
+    if (distinctTeams.size < 2) continue;
+
+    for (const rec of rows) {
+      const teamName = rec?.team || rec?.teamName || "";
+      if (!teamName) continue;
+      out.push({
+        name: playerName,
+        player: playerName,
+        teamName,
+        team: teamName,
+        stats: toPlayerDisplayStats(rec),
+      });
+    }
+  }
+
+  return out.sort((a, b) =>
+    String(a.name || "").localeCompare(String(b.name || "")) ||
+    String(a.teamName || "").localeCompare(String(b.teamName || ""))
+  );
+}
+
 export function snapshotHasUsefulPlayerStats(snapshot) {
   return Boolean(
     snapshot &&
@@ -794,10 +832,12 @@ function buildSnapshotFromRaw({
   rawTeamStats,
   includeZeroRosterPlayers = true,
   combinePlayerStatsToRosterTeams = false,
+  preserveMultiTeamStints = false,
 }) {
   const maps = teamMetaMaps(teams);
   const playerRows = [];
   const addedPlayerKeys = new Set();
+  const stintRows = preserveMultiTeamStints ? buildMultiTeamStintRows(rawPlayerStats || {}) : [];
 
   if (combinePlayerStatsToRosterTeams) {
     const combinedByName = combineRawStatsByPlayerName(rawPlayerStats || {});
@@ -941,6 +981,7 @@ function buildSnapshotFromRaw({
     teams,
     playerRows,
     teamRows,
+    ...(stintRows.length ? { stintRows } : {}),
   };
 }
 
@@ -961,6 +1002,7 @@ export function buildRegularSeasonStatsSnapshot(
     rawTeamStats: normalizedRows,
     includeZeroRosterPlayers: true,
     combinePlayerStatsToRosterTeams: true,
+    preserveMultiTeamStints: true,
   });
 }
 

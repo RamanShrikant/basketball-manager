@@ -105,12 +105,40 @@ function preferNonEmpty(primary, fallback) {
   return fallback;
 }
 
+function mergeHistoryRows(fallbackRows = [], primaryRows = [], keyFn = () => "") {
+  const map = new Map();
+  for (const row of [...(Array.isArray(fallbackRows) ? fallbackRows : []), ...(Array.isArray(primaryRows) ? primaryRows : [])]) {
+    if (!row || typeof row !== "object") continue;
+    const key = keyFn(row) || JSON.stringify(row);
+    map.set(key, row);
+  }
+  return [...map.values()];
+}
+
+function mergePlayerHistory(primaryHistory, fallbackHistory) {
+  const primary = primaryHistory && typeof primaryHistory === "object" ? primaryHistory : {};
+  const fallback = fallbackHistory && typeof fallbackHistory === "object" ? fallbackHistory : {};
+  return {
+    ...fallback,
+    ...primary,
+    seasons: mergeHistoryRows(fallback?.seasons, primary?.seasons, (row) =>
+      `${Number(row?.seasonYear || row?.year || 0)}|${String(row?.teamName || row?.team || "").toLowerCase()}|${row?.rowType || "season"}`
+    ),
+    accolades: mergeHistoryRows(fallback?.accolades, primary?.accolades, (row) =>
+      `${Number(row?.seasonYear || row?.year || 0)}|${row?.type || row?.key || ""}|${row?.label || ""}|${String(row?.team || row?.teamName || "").toLowerCase()}`
+    ),
+    transactions: mergeHistoryRows(fallback?.transactions, primary?.transactions, (row) =>
+      String(row?.id || `${row?.date || row?.completedAt || ""}|${row?.type || ""}|${row?.fromTeam || ""}|${row?.toTeam || ""}|${row?.label || ""}`)
+    ),
+  };
+}
+
 function hydrateRetiredPlayerForCard(player, leagueData) {
   const full = findMatchingFullPlayer(leagueData, player) || {};
   return {
     ...full,
     ...player,
-    history: preferNonEmpty(player?.history, full?.history),
+    history: mergePlayerHistory(player?.history, full?.history),
     accolades: preferNonEmpty(player?.accolades, full?.accolades || full?.awards || full?.honors || []),
     attrs: preferNonEmpty(player?.attrs, full?.attrs || full?.attributes || []),
     contract: preferNonEmpty(player?.contract, full?.contract),

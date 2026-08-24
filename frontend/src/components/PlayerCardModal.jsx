@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import LZString from "lz-string";
 import RuntimePlayerPortrait from "./RuntimePlayerPortrait.jsx";
+import { getMergedLeagueHistory, normalizeHistoryName } from "../utils/leagueHistoryUtils.js";
 
 const ATTR_LABELS = [
   "3PT",
@@ -635,6 +636,68 @@ function addUniqueAccolade(rows, next) {
   if (!exists) rows.push(next);
 }
 
+function collectPersistentLeagueHistoryAccolades(player, leagueData) {
+  const playerName = player?.name || player?.player || "";
+  const playerKey = normalizeHistoryName(playerName);
+  if (!playerKey) return [];
+
+  const history = getMergedLeagueHistory(leagueData || {});
+  const rows = [];
+
+  for (const [awardKey, awardRows] of Object.entries(history?.awards || {})) {
+    for (const row of awardRows || []) {
+      if (normalizeHistoryName(row?.player || row?.playerName || row?.name) !== playerKey) continue;
+      addUniqueAccolade(rows, {
+        seasonYear: Number(row?.seasonYear || 0),
+        type: row?.key || row?.awardKey || awardKey,
+        label: row?.label || row?.shortLabel || awardKey,
+        team: row?.team || null,
+        source: "leagueHistory",
+        simulated: row?.source !== "real_nba_seed",
+      });
+    }
+  }
+
+  const seasonRows = Array.isArray(player?.history?.seasons) ? player.history.seasons : [];
+  const champions = Array.isArray(history?.champions) ? history.champions : [];
+
+  for (const season of seasonRows) {
+    if (!season || season?.rowType === "total") continue;
+    const seasonYear = Number(season?.seasonYear || season?.year || 0);
+    const teamName = season?.teamName || season?.team || "";
+    if (!seasonYear || !teamName) continue;
+
+    const champion = champions.find((row) =>
+      Number(row?.seasonYear || 0) === seasonYear &&
+      normalizeHistoryName(row?.championTeam || row?.team || row?.teamName) === normalizeHistoryName(teamName)
+    );
+    if (!champion) continue;
+
+    addUniqueAccolade(rows, {
+      seasonYear,
+      type: "champion",
+      label: "NBA Champion",
+      team: champion?.championTeam || teamName,
+      source: "leagueHistory",
+      simulated: champion?.source !== "real_nba_seed",
+    });
+  }
+
+  for (const champion of champions) {
+    if (normalizeHistoryName(champion?.finalsMvp || champion?.finals_mvp_player) !== playerKey) continue;
+    addUniqueAccolade(rows, {
+      seasonYear: Number(champion?.seasonYear || 0),
+      type: "finals_mvp",
+      label: "Finals MVP",
+      team: champion?.finalsMvpTeam || champion?.championTeam || null,
+      source: "leagueHistory",
+      simulated: champion?.source !== "real_nba_seed",
+    });
+  }
+
+  return rows;
+}
+
 function collectLiveSeasonAccolades(playerName, leagueData, resolvedTeamName) {
   if (!playerName) return [];
 
@@ -733,6 +796,10 @@ function buildPlayerCardAccolades({ player, leagueData, resolvedTeamName }) {
     if (row?.source === "sim" || row?.source === "live" || row?.simulated === true) return true;
     return seasonYear > 0 && seasonYear < currentSeasonYear;
   });
+
+  for (const row of collectPersistentLeagueHistoryAccolades(player, leagueData)) {
+    addUniqueAccolade(merged, row);
+  }
 
   for (const row of collectLiveSeasonAccolades(playerName, leagueData, resolvedTeamName)) {
     addUniqueAccolade(merged, row);

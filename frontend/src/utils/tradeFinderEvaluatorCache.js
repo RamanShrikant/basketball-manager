@@ -232,7 +232,7 @@ function makeResult({ context, cpuTeam, cpuItems, evaluation, finalValidation, m
     offerValue,
     targetValue,
     gap: offerValue - targetValue,
-    quality: comfortMargin <= 8 ? "Comfort Offer" : "CPU-Lean Offer",
+    quality: comfortMargin <= 8 ? "Comfort Offer" : "Accepted Offer",
     finderEvaluationMode: mode === "scan" ? "fast_scan" : "trade_finder_exact_confirm",
     finderEvaluationPath: mode === "scan" ? "fast_scan:v12" : "builder_exact:v12",
     finderSearchPhase: "v12_builder_exact_anchor_optimizer",

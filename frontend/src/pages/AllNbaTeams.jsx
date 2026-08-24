@@ -210,13 +210,16 @@ export default function AllNbaTeams({ leagueDataProp, onBackToAwards = null }) {
   const playerIndex = useMemo(() => {
     const idx = {};
     for (const t of allTeams) {
-      for (const p of t.players || []) {
-        const key = `${p.name}__${t.name}`;
-        idx[key] = {
-          ...p,
-          teamName: t.name,
-          teamLogo: teamLogo[t.name] || "",
-        };
+      for (const bucket of [t?.players, t?.twoWayPlayers, t?.stashPlayers]) {
+        for (const p of bucket || []) {
+          const key = `${p.name}__${t.name}`;
+          idx[key] = {
+            ...p,
+            teamName: t.name,
+            team: t.name,
+            teamLogo: teamLogo[t.name] || "",
+          };
+        }
       }
     }
     return idx;
@@ -264,6 +267,8 @@ export default function AllNbaTeams({ leagueDataProp, onBackToAwards = null }) {
       const key = `${a.player}__${a.team}`;
       const base = playerIndex[key] || {};
       return {
+        // Preserve portrait identity / generation metadata for dynamic jerseys.
+        ...base,
         // from league roster
         name: base.name || a.player,
         pos: base.pos || base.position || "PG",
@@ -426,6 +431,12 @@ export default function AllNbaTeams({ leagueDataProp, onBackToAwards = null }) {
 
   const rows = applySort(currentRows);
   const cardPlayer = selectedPlayer || rows[0];
+  const portraitLayoutPage =
+    section === "all_rookie"
+      ? "all-rookie"
+      : section === "all_defensive"
+        ? "all-defensive"
+        : "all-nba";
 
   /* -------------------------------------------------------------------------- */
   /*                                   RENDER                                   */
@@ -488,6 +499,7 @@ export default function AllNbaTeams({ leagueDataProp, onBackToAwards = null }) {
                   player={cardPlayer}
                   teamName={cardPlayer.teamName || cardPlayer.team || ""}
                   alt={cardPlayer.name}
+                  layoutPage={portraitLayoutPage}
                   className="h-[166px] w-[190px]"
                 />
                 <div className="flex flex-col justify-end mb-3">

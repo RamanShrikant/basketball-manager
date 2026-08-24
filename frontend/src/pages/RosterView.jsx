@@ -675,10 +675,19 @@ export default function RosterView() {
   const positionOrder = ["PG", "SG", "SF", "PF", "C"];
 
   const handleSort = (key) => {
-    let direction = "desc";
+    let direction = key === "pos" ? "asc" : "desc";
     if (sortConfig.key === key && sortConfig.direction === "desc") direction = "asc";
     else if (sortConfig.key === key && sortConfig.direction === "asc") direction = "default";
     setSortConfig({ key, direction });
+  };
+
+  const isPositionGrouped = sortConfig.key === "pos" && sortConfig.direction === "asc";
+
+  const togglePositionGrouping = () => {
+    setSortConfig(isPositionGrouped
+      ? { key: "overall", direction: "desc" }
+      : { key: "pos", direction: "asc" }
+    );
   };
 
   const sortedPlayers = useMemo(() => {
@@ -687,10 +696,14 @@ export default function RosterView() {
     rows.sort((a, b) => {
       const key = sortConfig.key;
       if (key === "pos") {
-        const aIdx = positionOrder.indexOf(a.pos);
-        const bIdx = positionOrder.indexOf(b.pos);
+        const primaryPos = (value = "") => String(value || "").toUpperCase().split(/[\/,-]/)[0].trim();
+        const aIdx = positionOrder.indexOf(primaryPos(a.pos));
+        const bIdx = positionOrder.indexOf(primaryPos(b.pos));
         const diff = (aIdx === -1 ? 99 : aIdx) - (bIdx === -1 ? 99 : bIdx);
-        return sortConfig.direction === "asc" ? diff : -diff;
+        if (diff) return sortConfig.direction === "asc" ? diff : -diff;
+        const overallDiff = Number(b.overall || 0) - Number(a.overall || 0);
+        if (overallDiff) return overallDiff;
+        return String(a.name || "").localeCompare(String(b.name || ""));
       }
       if (key === "name") {
         return sortConfig.direction === "asc"
@@ -1286,6 +1299,19 @@ export default function RosterView() {
             <span className="text-amber-200">
               Stashes: {stashRosterCount}
             </span>
+            <button
+              type="button"
+              onClick={togglePositionGrouping}
+              aria-pressed={isPositionGrouped}
+              title={isPositionGrouped ? "Return to overall ranking" : "Group roster by position"}
+              className={`inline-flex items-center rounded-lg border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] transition ${
+                isPositionGrouped
+                  ? "border-orange-400/55 bg-orange-500/15 text-orange-100"
+                  : "border-white/10 bg-white/[0.04] text-neutral-300 hover:border-orange-400/35 hover:text-white"
+              }`}
+            >
+              Position
+            </button>
           </div>
           {rosterOverRegularSeasonLimit && (
             <p className="mt-2 text-orange-100">

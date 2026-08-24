@@ -6,7 +6,7 @@ import AllNbaTeams from "./AllNbaTeams";
 import LZString from "lz-string";
 import styles from "./Awards.module.css";
 import PageFade from "../components/PageFade";
-import HeadshotLayoutTransform from "../components/HeadshotLayoutTransform.jsx";
+import PlayerPortraitFrame from "../components/PlayerPortraitFrame.jsx";
 import "../styles/BMAnimations.css";
 console.log("✅ Awards.jsx NEW loaded");
 
@@ -254,18 +254,20 @@ function buildPlayerPortraitIndex(leagueData) {
   const idx = {};
 
   for (const team of teams) {
-    for (const p of team.players || []) {
-      const key = statsKey(p.name || p.player, team.name);
-      idx[key] = {
-        portrait:
-          p.portrait ||
-          p.image ||
-          p.photo ||
-          p.headshot ||
-          p.img ||
-          p.face ||
-          null,
-      };
+    for (const bucket of [team?.players, team?.twoWayPlayers, team?.stashPlayers]) {
+      for (const p of bucket || []) {
+        const playerName = p?.name || p?.player;
+        if (!playerName) continue;
+        const key = statsKey(playerName, team.name);
+        // Preserve the full player identity. Generated rookies need portraitId /
+        // portraitFamilyId so RuntimePlayerPortrait can replace their baked draft
+        // attire with the jersey of the team they actually play for.
+        idx[key] = {
+          ...p,
+          teamName: team.name,
+          team: team.name,
+        };
+      }
     }
   }
 
@@ -362,12 +364,23 @@ const [mvpPartyPieces, setMvpPartyPieces] = useState([]);
     return buildPerGameRow(winner.player, winner.team, stats);
   }, [currentKey, winner, statsMap]);
 
-  const portraitSrc = useMemo(() => {
+  const winnerPlayer = useMemo(() => {
     if (!winner?.player || !winner?.team) return null;
-    const key = statsKey(winner.player, winner.team);
-    const entry = portraitsIndex[key];
-    return entry?.portrait || null;
+    return portraitsIndex[statsKey(winner.player, winner.team)] || null;
   }, [winner, portraitsIndex]);
+
+  const portraitSrc = useMemo(() => {
+    if (!winnerPlayer) return null;
+    return (
+      winnerPlayer.headshot ||
+      winnerPlayer.portrait ||
+      winnerPlayer.image ||
+      winnerPlayer.photo ||
+      winnerPlayer.img ||
+      winnerPlayer.face ||
+      null
+    );
+  }, [winnerPlayer]);
 
 const isLastAward = awardIndex === AWARD_ORDER.length - 1;
 
@@ -652,13 +665,15 @@ if (showAllNba) {
                   - centered so stats no longer feel stuck on one side */}
               <div className="flex justify-center items-end min-h-[270px]">
                 {hasWinner && portraitSrc ? (
-                  <HeadshotLayoutTransform className="inline-flex max-h-72 items-end justify-center">
-                    <img
-                      src={portraitSrc}
-                      alt={winner.player}
-                      className="max-h-72 w-auto object-contain"
-                    />
-                  </HeadshotLayoutTransform>
+                  <PlayerPortraitFrame
+                    src={portraitSrc}
+                    player={winnerPlayer}
+                    teamName={winner?.team || winnerPlayer?.teamName || ""}
+                    alt={winner.player}
+                    layoutPage="individual-awards"
+                    className="h-[270px] w-full max-w-[390px]"
+                    bottomInset={0}
+                  />
                 ) : (
                   <span className="text-xs text-neutral-500 flex items-center justify-center w-full h-full">
                     No portrait

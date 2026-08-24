@@ -2036,6 +2036,9 @@ function buildTradeRecordPackages({ userTeamName, cpuTeamName, userItems, cpuIte
   const userSent = summarizeDetailedTradeItems(userItems, userTeamName, leagueData);
   const cpuReceived = summarizeDetailedTradeItems(userItems, userTeamName, leagueData);
   const cpuSent = summarizeDetailedTradeItems(cpuItems, cpuTeamName, leagueData);
+  const userTeam = findTeamInLeague(leagueData, userTeamName);
+  const cpuTeam = findTeamInLeague(leagueData, cpuTeamName);
+  const teamContextAtTrade = buildTeamContextForTrade(userTeam, cpuTeam);
 
   const userReason = buildDefaultTradeReason({
     teamName: userTeamName,
@@ -2055,6 +2058,7 @@ function buildTradeRecordPackages({ userTeamName, cpuTeamName, userItems, cpuIte
   return {
     userSentAssets: userSent,
     cpuSentAssets: cpuSent,
+    teamContextAtTrade,
     teamPackages: [
       {
         teamName: userTeamName,

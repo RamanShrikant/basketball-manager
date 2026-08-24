@@ -2250,6 +2250,7 @@ export default function TradeFinder() {
     getLiveDraftProgressSignature(leagueData)
   );
   const offerSearchAbortRef = useRef(null);
+  const offerSearchRunIdRef = useRef(0);
   const lastDraftProgressSignatureRef = useRef(liveDraftProgressSignature);
   const packageTeamInitializedRef = useRef(false);
   const userTradeCurrentDate = useMemo(() => getUserTradeCurrentDate(leagueData), [leagueData]);
@@ -2290,8 +2291,11 @@ export default function TradeFinder() {
   const blockedPatienceCount = patienceAvailability.blocked?.length || 0;
   const standardSearchableCpuCount = Math.max(0, searchableTeams.length - 1);
   const reversePatienceBlocked = Boolean(isReverseFinder && !packageTeamPatienceStatus.canNegotiate);
-  const standardPatienceBlocked = Boolean(!isReverseFinder && selectedItems.length > 0 && standardSearchableCpuCount <= 0);
-  const tradeFinderPatienceBlocked = reversePatienceBlocked || standardPatienceBlocked;
+const standardPatienceBlocked = Boolean(
+  !isReverseFinder &&
+  selectedAssetKeys.length > 0 &&
+  standardSearchableCpuCount <= 0
+);  const tradeFinderPatienceBlocked = reversePatienceBlocked || standardPatienceBlocked;
   const tradeFinderPatienceMessage = reversePatienceBlocked
     ? `${packageTeamName} is not taking trade calls right now. Sim ${formatTradePatienceWait(packageTeamPatienceStatus.daysUntilCanNegotiate)} to rebuild Front Office Patience.`
     : standardPatienceBlocked
@@ -2300,6 +2304,18 @@ export default function TradeFinder() {
   const userDeadlineStatus = useMemo(() => getUserTradeDeadlineStatus(leagueData), [leagueData]);
   const tradeWindowLocked = Boolean(userDeadlineStatus.locked);
   const tradeLockMessage = userDeadlineStatus.reason || getTradeWindowLockMessage();
+
+  const invalidateOfferSearch = ({ markStopped = false, message = "" } = {}) => {
+    offerSearchRunIdRef.current += 1;
+    const controller = offerSearchAbortRef.current;
+    offerSearchAbortRef.current = null;
+    try { controller?.abort?.(); } catch {}
+    setIsSearchingOffers(false);
+    if (markStopped) {
+      setOfferSearchStopped(true);
+      setOfferSearchProgress(message || "Search stopped.");
+    }
+  };
 
   useEffect(() => {
     if (!leagueData || !selectedUserTeamName) return;
@@ -2312,8 +2328,7 @@ export default function TradeFinder() {
   }, [leagueData, selectedUserTeamName, setLeagueData]);
 
   const resetFinderWorkspace = ({ clearPackage = true } = {}) => {
-    try { offerSearchAbortRef.current?.abort?.(); } catch {}
-    offerSearchAbortRef.current = null;
+    invalidateOfferSearch();
     if (clearPackage) {
       setSelectedAssetKeys([]);
       setPickProtections({});
@@ -2365,8 +2380,7 @@ export default function TradeFinder() {
     if (lastDraftProgressSignatureRef.current === liveDraftProgressSignature) return;
     lastDraftProgressSignatureRef.current = liveDraftProgressSignature;
 
-    try { offerSearchAbortRef.current?.abort?.(); } catch {}
-    offerSearchAbortRef.current = null;
+    invalidateOfferSearch();
     setSearched(false);
     setPythonOffers([]);
     setOfferSearchProgress("");
@@ -2528,6 +2542,7 @@ export default function TradeFinder() {
 
   useEffect(() => {
     return () => {
+      offerSearchRunIdRef.current += 1;
       try {
         offerSearchAbortRef.current?.abort?.();
       } catch {}
@@ -2570,6 +2585,7 @@ export default function TradeFinder() {
         setPickProtections((current) => ({ ...current, [asset.key]: eligibility.suggestedPickRule }));
       }
     }
+    invalidateOfferSearch();
     setSearched(false);
     setPythonOffers([]);
     setOfferSearchError("");
@@ -2597,15 +2613,12 @@ export default function TradeFinder() {
   };
 
   const stopSearchOffers = () => {
-    const controller = offerSearchAbortRef.current;
-    if (!controller) return;
-
-    try {
-      controller.abort();
-    } catch {}
-
-    setOfferSearchStopped(true);
-    setOfferSearchProgress("Stopping after the current CPU evaluation finishes...");
+    if (!offerSearchAbortRef.current && !isSearchingOffers) return;
+    // Invalidate first so an old worker/result can never mutate the next search.
+    // The worker pool also resolves its pending promises on abort, so Stop is
+    // immediate instead of waiting forever for a terminated worker to reply.
+    invalidateOfferSearch({ markStopped: true, message: "Search stopped." });
+    setOfferSearchError("");
   };
 
   const runSearchOffers = async () => {
@@ -2615,24 +2628,16 @@ export default function TradeFinder() {
       return;
     }
 
-    try {
-      offerSearchAbortRef.current?.abort?.();
-    } catch {}
-
-    const controller = typeof AbortController !== "undefined"
-      ? new AbortController()
-      : { signal: { aborted: false }, abort() { this.signal.aborted = true; } };
-    offerSearchAbortRef.current = controller;
-
+    // Kill/invalidate any stale run before validating this package. This also
+    // prevents an older finally/progress callback from touching the new UI.
+    invalidateOfferSearch();
     setSearched(true);
+    setPythonOffers([]);
     setOfferSearchError("");
     setOfferSearchProgress("");
     setOfferSearchStopped(false);
 
-    if (!selectedItems.length) {
-      setPythonOffers([]);
-      return;
-    }
+    if (!selectedItems.length) return;
 
     const packageValidation = validateUserTradeAssetPackage({
       leagueData,
@@ -2641,22 +2646,31 @@ export default function TradeFinder() {
       incomingItems: [],
     });
     if (!packageValidation.ok) {
-      setPythonOffers([]);
       setOfferSearchError(packageValidation.reason || "This Trade Finder package contains an illegal asset.");
       return;
     }
 
     if (tradeFinderPatienceBlocked) {
-      setPythonOffers([]);
       setOfferSearchError(tradeFinderPatienceMessage || "No eligible CPU teams are taking trade calls right now.");
       return;
     }
+
+    const runId = ++offerSearchRunIdRef.current;
+    const controller = typeof AbortController !== "undefined"
+      ? new AbortController()
+      : { signal: { aborted: false }, abort() { this.signal.aborted = true; } };
+    offerSearchAbortRef.current = controller;
+    const isCurrentSearch = () =>
+      offerSearchRunIdRef.current === runId &&
+      offerSearchAbortRef.current === controller &&
+      !controller.signal?.aborted;
 
     setIsSearchingOffers(true);
     setOfferSearchProgress("Starting Trade Finder search...");
 
     try {
       const standardProgress = (progress = {}) => {
+          if (!isCurrentSearch()) return;
           const teamIndex = Number(progress.teamIndex || 0);
           const teamsToCheck = Number(progress.teamsToCheck || 0);
           const offersFound = Number(progress.offersFound || 0);
@@ -2741,6 +2755,7 @@ export default function TradeFinder() {
       };
 
       const reverseProgress = (progress = {}) => {
+        if (!isCurrentSearch()) return;
         const candidateIndex = Number(progress.candidateIndex || 0);
         const candidatesToCheck = Number(progress.candidatesToCheck || 0);
         const exactCandidates = Number(progress.exactCandidates || 0);
@@ -2798,6 +2813,8 @@ export default function TradeFinder() {
             onProgress: standardProgress,
             userDrivenRules: true,
           });
+
+      if (!isCurrentSearch()) return;
 
       const nextOffers = Array.isArray(result?.offers)
         ? result.offers.map((offer) => ({
@@ -2934,9 +2951,11 @@ export default function TradeFinder() {
         );
       }
     } catch (error) {
+      if (offerSearchRunIdRef.current !== runId) return;
       if (controller.signal?.aborted) {
         setOfferSearchStopped(true);
-        setOfferSearchError("Search stopped. Showing any offers found before stopping.");
+        setOfferSearchError("");
+        setOfferSearchProgress("Search stopped.");
       } else {
         console.warn("[TradeFinder] offer search failed.", error);
         setPythonOffers([]);
@@ -2944,10 +2963,10 @@ export default function TradeFinder() {
         setOfferSearchProgress("");
       }
     } finally {
-      if (offerSearchAbortRef.current === controller) {
+      if (offerSearchRunIdRef.current === runId && offerSearchAbortRef.current === controller) {
         offerSearchAbortRef.current = null;
+        setIsSearchingOffers(false);
       }
-      setIsSearchingOffers(false);
     }
   };
 
@@ -3348,7 +3367,7 @@ export default function TradeFinder() {
                               <div className="text-[11px] font-black uppercase tracking-[0.12em] text-neutral-500">
                                 {isReverseFinder
                                   ? `Built around ${offer.anchorLabel || "value base"} • Value ${Number(offer.offerValue || 0).toFixed(1)}`
-                                  : `${offer.quality || "Accepted Offer"} • Value ${Number(offer.offerValue || 0).toFixed(1)}`}
+                                  : `${offer.quality === "Comfort Offer" ? "Comfort Offer" : "Accepted Offer"} • Value ${Number(offer.offerValue || 0).toFixed(1)}`}
                               </div>
                             </div>
                           </div>

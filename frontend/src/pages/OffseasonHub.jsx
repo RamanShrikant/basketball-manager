@@ -6,7 +6,7 @@ import styles from "./OffseasonHub.module.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { recomputeDerivedRatingsInLeague } from "../utils/playerProgressionDerived_v1.js";
 import { applyLeagueInflationForOffseason, getLeagueFinancialRules } from "../utils/leagueFinancials.js";
-import { rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
+import { archiveCompletedDraftHistory, rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
 import {
   captureOffseasonMoodBaseline,
   recordCompletedDraftMoodEvents,
@@ -2889,8 +2889,13 @@ export default function OffseasonHub() {
       throw new Error(finished?.reason || "Draft simulation failed.");
     }
 
-    const nextLeague = rollDraftPickAssetsForCompletedSeason(finished.leagueData || initializedLeague, seasonYear, { draftComplete: true });
     const nextDraftState = finished.draftState || initializedDraftState;
+    const archivedDraftLeague = archiveCompletedDraftHistory(
+      finished.leagueData || initializedLeague,
+      nextDraftState,
+      seasonYear
+    );
+    const nextLeague = rollDraftPickAssetsForCompletedSeason(archivedDraftLeague, seasonYear, { draftComplete: true });
 
     if (nextDraftState) {
       localStorage.setItem(DRAFT_STATE_KEY, JSON.stringify(nextDraftState));
