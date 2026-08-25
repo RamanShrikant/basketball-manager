@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { getUserTradeDeadlineStatus } from "../utils/userTradeRules.js";
+import { buildRecordMap, getStandardPlayers, playerOverall } from "../utils/teamIntel_v1.js";
+import { getContractSeasonYear } from "../utils/seasonContext.js";
+import { normalizeDraftPicks, normalizeTeamName } from "../utils/draftPicks.js";
 import PageFade from "../components/PageFade";
 import {
   readTradeDeskFeed,
@@ -18,6 +21,242 @@ const DESK_FILTERS = [
   { key: "negotiation", label: "Talks", countKey: "negotiations" },
   { key: "transaction", label: "Deals", countKey: "transactions" },
 ];
+
+
+const POSITION_TARGETS = Object.freeze([
+  { key: "PG", label: "Point Guard" },
+  { key: "SG", label: "Shooting Guard" },
+  { key: "SF", label: "Small Forward" },
+  { key: "PF", label: "Power Forward" },
+  { key: "C", label: "Center" },
+]);
+
+function safeNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function primaryPositionOf(player = {}) {
+  const raw = String(player?.pos || player?.position || player?.primaryPosition || "").toUpperCase().trim();
+  if (!raw) return "";
+  const primary = raw.split(/[\/|,]/)[0].trim().split(/\s+/)[0];
+  return POSITION_TARGETS.some((row) => row.key === primary) ? primary : "";
+}
+
+function buildPositionDepth(team) {
+  const counts = Object.fromEntries(POSITION_TARGETS.map((row) => [row.key, 0]));
+  for (const player of getStandardPlayers(team)) {
+    const primary = primaryPositionOf(player);
+    if (primary && Object.prototype.hasOwnProperty.call(counts, primary)) counts[primary] += 1;
+  }
+  return POSITION_TARGETS.map((row) => ({ ...row, count: counts[row.key] || 0, target: 2 }));
+}
+
+function contractYearsLeft(player, leagueData) {
+  const direct = safeNumber(player?.yearsLeft ?? player?.contractYears, -1);
+  if (direct >= 0) return Math.max(0, Math.round(direct));
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const salaries = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+  if (!salaries.length) return 0;
+  const currentYear = getContractSeasonYear(leagueData || {});
+  const startYear = safeNumber(contract?.startYear, currentYear);
+  let index = currentYear - startYear;
+  if (!Number.isFinite(index) || index < 0) index = 0;
+  if (index >= salaries.length) return 0;
+  return Math.max(0, salaries.length - index);
+}
+
+function currentContractSalary(player, leagueData) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const salaries = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+  if (salaries.length) {
+    const currentYear = getContractSeasonYear(leagueData || {});
+    const startYear = safeNumber(contract?.startYear, currentYear);
+    let index = currentYear - startYear;
+    if (!Number.isFinite(index) || index < 0) index = 0;
+    if (index >= salaries.length) index = salaries.length - 1;
+    return safeNumber(salaries[index], 0);
+  }
+  return safeNumber(player?.salary ?? player?.currentSalary ?? player?.contractSalary ?? player?.capHit ?? player?.aav, 0);
+}
+
+function contractOriginalTerm(player) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+  const explicit = safeNumber(
+    contract?.originalTermYears ?? contract?.termYears ?? contract?.years ?? meta?.originalTermYears ?? meta?.contractYears,
+    0
+  );
+  if (explicit > 0) return Math.round(explicit);
+  return Array.isArray(contract?.salaryByYear) ? contract.salaryByYear.length : 0;
+}
+
+function hasFutureExtension(player, leagueData) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const currentYear = getContractSeasonYear(leagueData || {});
+  const rows = [
+    ...(Array.isArray(contract?.extensions) ? contract.extensions : []),
+    ...(contract?.extensionMeta && typeof contract.extensionMeta === "object" ? [contract.extensionMeta] : []),
+  ];
+  return rows.some((row) => safeNumber(row?.extensionStartYear, 0) > currentYear);
+}
+
+function unresolvedContractOption(player, leagueData) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const option = contract?.option && typeof contract.option === "object" ? contract.option : null;
+  if (!option || option.picked != null) return false;
+  const years = Array.isArray(option.yearIndices) ? option.yearIndices : [];
+  if (!years.length) return false;
+  const currentYear = getContractSeasonYear(leagueData || {});
+  const startYear = safeNumber(contract?.startYear, currentYear);
+  const currentIndex = Math.max(0, currentYear - startYear);
+  return years.some((index) => safeNumber(index, -99) >= currentIndex);
+}
+
+function isExtensionEligibleSoon(player, leagueData) {
+  const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
+  const yearsLeft = contractYearsLeft(player, leagueData);
+  if (yearsLeft <= 0 || hasFutureExtension(player, leagueData) || unresolvedContractOption(player, leagueData)) return false;
+  const status = String(player?.contractType || player?.rosterStatus || contract?.type || "standard").toLowerCase();
+  if (status.includes("two-way") || status.includes("two_way") || status.includes("stash")) return false;
+  const rights = player?.rights && typeof player.rights === "object" ? player.rights : {};
+  const meta = player?.meta && typeof player.meta === "object" ? player.meta : {};
+  const draftRound = safeNumber(meta?.draftRound ?? player?.draftRound, 0);
+  const rookieScale = Boolean(rights?.rookieScale || player?.rookieScale || contract?.rookieScale);
+  const originalTerm = contractOriginalTerm(player);
+  if (rookieScale && draftRound === 1 && yearsLeft === 1) return true;
+  return !rookieScale && originalTerm >= 3 && (yearsLeft === 1 || (yearsLeft === 2 && originalTerm >= 4));
+}
+
+
+function isProtectedPickAsset(asset = {}) {
+  const raw = String(asset?.displayProtection || asset?.protections || asset?.protection || "").trim().toLowerCase();
+  if (!raw) return false;
+  if (raw === "none" || raw === "n/a") return false;
+  return !raw.includes("unprotected");
+}
+
+function buildPickDepth(team, leagueData, teamNames = []) {
+  const ownerKey = normalizeTeamName(team?.name || team?.teamName || "");
+  const counts = {
+    unprotectedFirsts: 0,
+    protectedFirsts: 0,
+    unprotectedSeconds: 0,
+    protectedSeconds: 0,
+    swapRights: 0,
+  };
+  const assets = normalizeDraftPicks(leagueData?.draftPicks || [], teamNames);
+  for (const asset of assets) {
+    if (String(asset?.status || "active").toLowerCase() !== "active") continue;
+    if (normalizeTeamName(asset?.ownerTeam || "") !== ownerKey) continue;
+    const assetType = String(asset?.assetType || asset?.type || "pick").toLowerCase();
+    if (assetType === "swap") {
+      counts.swapRights += 1;
+      continue;
+    }
+    const isProtected = isProtectedPickAsset(asset);
+    if (Number(asset?.round) === 1) {
+      if (isProtected) counts.protectedFirsts += 1;
+      else counts.unprotectedFirsts += 1;
+    } else if (Number(asset?.round) === 2) {
+      if (isProtected) counts.protectedSeconds += 1;
+      else counts.unprotectedSeconds += 1;
+    }
+  }
+  return [
+    { key: "unprotectedFirsts", label: "Unprotected 1sts", count: counts.unprotectedFirsts },
+    { key: "protectedFirsts", label: "Protected 1sts", count: counts.protectedFirsts },
+    { key: "unprotectedSeconds", label: "Unprotected 2nds", count: counts.unprotectedSeconds },
+    { key: "protectedSeconds", label: "Protected 2nds", count: counts.protectedSeconds },
+    { key: "swapRights", label: "Swap Rights", count: counts.swapRights },
+  ];
+}
+
+function buildTeamContextAlerts(team, leagueData) {
+  const players = getStandardPlayers(team);
+  const extensionRows = players
+    .filter((player) => isExtensionEligibleSoon(player, leagueData))
+    .sort((a, b) => playerOverall(b) - playerOverall(a));
+  const extensionNames = new Set(extensionRows.map((player) => String(player?.name || player?.player || "")));
+  const expiringRows = players
+    .filter((player) => contractYearsLeft(player, leagueData) === 1 && currentContractSalary(player, leagueData) > 0)
+    .filter((player) => !extensionNames.has(String(player?.name || player?.player || "")))
+    .sort((a, b) => playerOverall(b) - playerOverall(a));
+
+  const alerts = [];
+  if (expiringRows[0]) alerts.push(`${expiringRows[0]?.name || expiringRows[0]?.player} is expiring after this season.`);
+  if (extensionRows[0]) alerts.push(`${extensionRows[0]?.name || extensionRows[0]?.player} is extension eligible soon.`);
+
+  if (alerts.length < 2 && expiringRows[1]) alerts.push(`${expiringRows[1]?.name || expiringRows[1]?.player} is expiring after this season.`);
+  if (alerts.length < 2 && extensionRows[1]) alerts.push(`${extensionRows[1]?.name || extensionRows[1]?.player} is extension eligible soon.`);
+  return alerts.slice(0, 2);
+}
+
+function normalizeConferenceLabel(value) {
+  const raw = String(value || "").trim();
+  const lower = raw.toLowerCase();
+  if (lower.includes("east")) return "East";
+  if (lower.includes("west")) return "West";
+  return raw;
+}
+
+function ordinalStanding(value) {
+  const rank = Number(value || 0);
+  if (!Number.isFinite(rank) || rank <= 0) return "";
+  const mod100 = rank % 100;
+  const suffix = mod100 >= 11 && mod100 <= 13 ? "th" : rank % 10 === 1 ? "st" : rank % 10 === 2 ? "nd" : rank % 10 === 3 ? "rd" : "th";
+  return `${rank}${suffix}`;
+}
+
+function buildTradePageStandingMap(leagueData, teams = []) {
+  const liveRecords = buildRecordMap(teams);
+  const conferenceByTeam = new Map();
+  if (leagueData?.conferences && typeof leagueData.conferences === "object") {
+    for (const [conference, rows] of Object.entries(leagueData.conferences)) {
+      for (const team of rows || []) {
+        const name = team?.name || team?.teamName || "";
+        if (name) conferenceByTeam.set(normalizeTeamName(name), normalizeConferenceLabel(conference));
+      }
+    }
+  }
+  const standings = teams.map((team) => {
+    const name = team?.name || team?.teamName || "";
+    const live = liveRecords?.[name] || {};
+    const liveGames = safeNumber(live?.gp, 0);
+    const embeddedWins = safeNumber(team?.wins ?? team?.record?.wins ?? team?.seasonRecord?.wins ?? team?.stats?.wins, 0);
+    const embeddedLosses = safeNumber(team?.losses ?? team?.record?.losses ?? team?.seasonRecord?.losses ?? team?.stats?.losses, 0);
+    const wins = liveGames > 0 ? safeNumber(live?.w, 0) : embeddedWins;
+    const losses = liveGames > 0 ? safeNumber(live?.l, 0) : embeddedLosses;
+    const games = wins + losses;
+    return {
+      name,
+      conference: conferenceByTeam.get(normalizeTeamName(name)) || normalizeConferenceLabel(team?.conference || team?.conf || ""),
+      wins,
+      losses,
+      games,
+      winPct: games > 0 ? wins / games : null,
+      pointDiff: liveGames > 0 ? safeNumber(live?.pf, 0) - safeNumber(live?.pa, 0) : 0,
+      rank: null,
+    };
+  });
+  for (const conference of new Set(standings.map((row) => row.conference).filter(Boolean))) {
+    const rows = standings.filter((row) => row.conference === conference);
+    if (!rows.some((row) => row.games > 0)) continue;
+    rows.sort((a, b) => (b.winPct ?? -1) - (a.winPct ?? -1) || b.pointDiff - a.pointDiff || b.wins - a.wins || a.name.localeCompare(b.name));
+    rows.forEach((row, index) => { row.rank = index + 1; });
+  }
+  return new Map(standings.map((row) => [normalizeTeamName(row.name), row]));
+}
+
+function standingLabel(standing) {
+  if (!standing) return "";
+  const record = `${standing.wins}-${standing.losses}`;
+  const rank = ordinalStanding(standing.rank);
+  if (standing.games <= 0) return standing.conference ? `Preseason • ${standing.conference}` : "Preseason";
+  if (rank && standing.conference) return `${record} • ${standing.conference} • ${rank}`;
+  if (standing.conference) return `${record} • ${standing.conference}`;
+  return record;
+}
 
 function labelForDeskFilter(filterKey) {
   return DESK_FILTERS.find((filter) => filter.key === filterKey)?.label || "All";
@@ -80,75 +319,12 @@ function formatHistoryTiming(entry = {}) {
   return parts.length ? parts.join(" • ") : "Trade logged";
 }
 
-function buildEmptyDeskItems(teams = []) {
-  const teamCount = teams.length;
-  return [
-    {
-      id: "empty_transaction_wire",
-      label: "Transaction Wire",
-      headline: "No CPU-to-CPU trade has been logged yet. Sim ahead and completed league moves will appear here.",
-      tag: "Feed",
-      type: "empty",
-      date: "Live",
-    },
-    {
-      id: "empty_market_watch",
-      label: "Market Watch",
-      headline: teamCount
-        ? `${teamCount} teams are being tracked. Rumors will update from real CPU buyer/seller signals during the season.`
-        : "League teams are still loading. Trade Desk intel will appear once the league is ready.",
-      tag: "Waiting",
-      type: "empty",
-      date: "Live",
-    },
-  ];
+function buildEmptyDeskItems() {
+  return [];
 }
 
-function buildFilteredEmptyDeskItems(filterKey, teams = []) {
-  const teamCount = teams.length;
-
-  if (filterKey === "rumor") {
-    return [
-      {
-        id: "empty_rumor_filter",
-        label: "Rumor Wire",
-        headline: teamCount
-          ? `${teamCount} teams are being tracked. More real buyer/seller rumors will appear after future CPU trade checks.`
-          : "League teams are still loading. Rumors will appear once the league is ready.",
-        tag: "No Rumors",
-        type: "empty",
-        date: "Live",
-      },
-    ];
-  }
-
-  if (filterKey === "negotiation") {
-    return [
-      {
-        id: "empty_talks_filter",
-        label: "Negotiation Wire",
-        headline: "No active or stalled CPU trade talks are currently logged. Sim ahead and framework talks will appear here.",
-        tag: "No Talks",
-        type: "empty",
-        date: "Live",
-      },
-    ];
-  }
-
-  if (filterKey === "transaction") {
-    return [
-      {
-        id: "empty_deals_filter",
-        label: "Transaction Wire",
-        headline: "No completed deal has been logged yet. Sim closer to the deadline and completed moves will appear here.",
-        tag: "No Deals",
-        type: "empty",
-        date: "Live",
-      },
-    ];
-  }
-
-  return buildEmptyDeskItems(teams);
+function buildFilteredEmptyDeskItems() {
+  return [];
 }
 
 function findTeamByName(teams = [], teamName = "") {
@@ -360,6 +536,12 @@ export default function Trades() {
   const userDeadlineStatus = getUserTradeDeadlineStatus(leagueData);
   const tradeWindowLocked = Boolean(userDeadlineStatus.locked);
   const tradeLockMessage = userDeadlineStatus.reason || "The trade deadline has passed.";
+  const positionDepth = useMemo(() => buildPositionDepth(selectedTeam), [selectedTeam]);
+  const pickDepth = useMemo(() => buildPickDepth(selectedTeam, leagueData, teams.map((team) => team?.name || team?.teamName || "")), [selectedTeam, leagueData, teams]);
+  const teamContextAlerts = useMemo(() => buildTeamContextAlerts(selectedTeam, leagueData), [selectedTeam, leagueData]);
+  const standingByTeam = useMemo(() => buildTradePageStandingMap(leagueData, teams), [leagueData, teams]);
+  const selectedStanding = standingByTeam.get(normalizeTeamName(selectedTeam?.name || selectedTeam?.teamName || ""));
+  const selectedStandingLabel = standingLabel(selectedStanding);
 
   if (!selectedTeam) {
     return (
@@ -379,171 +561,210 @@ export default function Trades() {
 
   return (
     <PageFade>
-      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white">
-        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1700px] flex-col gap-3">
-          <div className="flex shrink-0 items-center justify-between gap-4">
-            <button
-              onClick={() => navigate("/team-hub")}
-              className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
-            >
-              ← Team Hub
-            </button>
-
-            <div className="text-center">
-              <div className="text-xs font-black uppercase tracking-[0.24em] text-orange-300">
+      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-5 py-4 text-white">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1700px] flex-col gap-4">
+          <div className="flex shrink-0 items-start justify-between gap-4 px-1">
+            <div>
+              <div className="text-[11px] font-black uppercase tracking-[0.24em] text-orange-400">
                 Trade Center
               </div>
-              <h1 className="mt-0.5 text-2xl font-black text-orange-500">
+              <h1 className="mt-1 text-[30px] font-black leading-none tracking-[-0.02em] text-white">
                 {selectedTeam.name} Trades
               </h1>
+              {selectedStandingLabel && (
+                <div className="mt-2 text-sm font-black tracking-[0.02em] text-neutral-400">
+                  {selectedStandingLabel}
+                </div>
+              )}
             </div>
 
-            <div className="w-[108px]" />
+            <button
+              onClick={() => setStoredFeed(readTradeDeskFeed())}
+              className="mt-1 rounded-xl border border-white/10 bg-black/40 px-4 py-2 text-[11px] font-black uppercase tracking-[0.14em] text-neutral-300 transition hover:border-orange-400/35 hover:bg-orange-500/10 hover:text-white"
+            >
+              ↻ Refresh
+            </button>
           </div>
 
-          <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[1.02fr_0.98fr]">
-            <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/85 shadow-2xl">
-              <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-orange-600/25 via-neutral-900 to-neutral-900 px-5 py-4">
+          <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+            <section className="flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-white/10 bg-neutral-950/88 shadow-2xl">
+              <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-orange-600/12 via-neutral-900/95 to-neutral-950 px-6 py-5">
                 <div className="flex items-center gap-4">
                   {teamLogoOf(selectedTeam) ? (
                     <img
                       src={teamLogoOf(selectedTeam)}
                       alt={selectedTeam.name}
-                      className="h-12 w-12 object-contain"
+                      className="h-14 w-14 shrink-0 object-contain"
                     />
                   ) : (
-                    <div className="h-12 w-12 rounded-xl bg-white/5" />
+                    <div className="h-14 w-14 shrink-0 rounded-2xl bg-white/5" />
                   )}
-                  <div>
-                    <div className="text-sm font-black uppercase tracking-[0.18em] text-orange-200">
-                      Ready to negotiate
+                  <div className="min-w-0">
+                    <div className="text-[12px] font-black uppercase tracking-[0.18em] text-white">
+                      Team Context
                     </div>
-                    <div className="mt-1 text-xl font-black text-white">
-                      Build a proposal package
-                    </div>
-                    <div className="mt-1 text-sm font-semibold text-neutral-400">
-                      Add players and picks to create your offer.
+                    <div className="mt-1 text-sm font-semibold text-neutral-500">
+                      Live roster and contract context.
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="flex min-h-0 flex-1 flex-col justify-center p-5">
+              <div className="flex min-h-0 flex-1 flex-col p-6">
+                <div className="grid gap-2">
+                  {teamContextAlerts.length ? (
+                    teamContextAlerts.map((alert) => (
+                      <div
+                        key={alert}
+                        className="rounded-xl border border-white/10 bg-white/[0.035] px-4 py-2.5 text-sm font-bold text-neutral-200"
+                      >
+                        {alert}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-neutral-500">
+                      No major contract decisions are due right now.
+                    </div>
+                  )}
+                </div>
+
+                <div className="my-4 h-px bg-white/10" />
+
+                <div>
+                  <div className="mb-3 text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">
+                    Position Depth
+                  </div>
+                  <div className="grid grid-cols-5 gap-2">
+                    {positionDepth.map((row) => {
+                      const shortageClass = row.count === 0
+                        ? "border-red-500/35 bg-red-500/10 text-red-300"
+                        : row.count === 1
+                          ? "border-orange-400/35 bg-orange-500/10 text-orange-300"
+                          : "border-white/10 bg-black/30 text-neutral-300";
+                      return (
+                        <div
+                          key={row.key}
+                          className={`min-w-0 rounded-xl border px-2 py-3 text-center ${shortageClass}`}
+                        >
+                          <div className="truncate text-[9px] font-black uppercase tracking-[0.12em] opacity-80">
+                            {row.label}
+                          </div>
+                          <div className="mt-1 text-lg font-black leading-none">
+                            {row.count}/{row.target}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <div className="mb-2.5 text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">
+                    Pick Depth
+                  </div>
+                  <div className="grid grid-cols-5 gap-2">
+                    {pickDepth.map((row) => (
+                      <div
+                        key={row.key}
+                        className="min-w-0 rounded-xl border border-white/10 bg-black/30 px-2 py-3 text-center text-neutral-300"
+                      >
+                        <div className="whitespace-nowrap text-[8px] font-black uppercase tracking-[0.055em] opacity-85">
+                          {row.label}
+                        </div>
+                        <div className="mt-1 text-lg font-black leading-none">
+                          {row.count}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 {tradeWindowLocked && (
-                  <div className="mb-4 rounded-2xl border border-orange-400/25 bg-orange-500/10 px-4 py-3 text-sm font-black text-orange-100">
+                  <div className="mt-5 rounded-xl border border-orange-400/25 bg-orange-500/10 px-4 py-3 text-sm font-black text-orange-100">
                     {tradeLockMessage}
                   </div>
                 )}
 
-                <button
-                  onClick={() => !tradeWindowLocked && navigate("/propose-trade")}
-                  disabled={tradeWindowLocked}
-                  className="w-full rounded-xl bg-orange-600 px-6 py-4 text-lg font-black text-white shadow-[0_18px_45px_rgba(234,88,12,0.24)] transition hover:-translate-y-0.5 hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-500 disabled:shadow-none disabled:hover:translate-y-0"
-                >
-                  Propose Trade
-                </button>
+                <div className="mt-auto pt-6">
+                  <button
+                    onClick={() => !tradeWindowLocked && navigate("/propose-trade")}
+                    disabled={tradeWindowLocked}
+                    className="flex w-full items-center justify-between rounded-xl bg-gradient-to-r from-orange-600 to-orange-500 px-5 py-4 text-left text-base font-black text-white shadow-[0_18px_45px_rgba(234,88,12,0.22)] transition hover:-translate-y-0.5 hover:from-orange-500 hover:to-orange-400 disabled:cursor-not-allowed disabled:from-neutral-800 disabled:to-neutral-800 disabled:text-neutral-500 disabled:shadow-none disabled:hover:translate-y-0"
+                  >
+                    <span className="flex items-center gap-3"><span className="text-xl">↔</span> Propose Trade</span>
+                    <span className="text-xl">›</span>
+                  </button>
 
-                <button
-                  onClick={() => !tradeWindowLocked && navigate("/trade-finder")}
-                  disabled={tradeWindowLocked}
-                  className="mt-3 w-full rounded-xl border border-orange-400/25 bg-black px-6 py-4 text-lg font-black text-orange-100 transition hover:-translate-y-0.5 hover:border-orange-300/60 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-neutral-950 disabled:text-neutral-600 disabled:hover:translate-y-0"
-                >
-                  Trade Finder
-                </button>
+                  <button
+                    onClick={() => !tradeWindowLocked && navigate("/trade-finder")}
+                    disabled={tradeWindowLocked}
+                    className="mt-3 flex w-full items-center justify-between rounded-xl border border-orange-400/25 bg-black/45 px-5 py-4 text-left text-white transition hover:-translate-y-0.5 hover:border-orange-300/50 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-neutral-600 disabled:hover:translate-y-0"
+                  >
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-3 text-base font-black"><span className="text-xl text-orange-400">⌕</span> Trade Finder</span>
+                      <span className="mt-1 block pl-8 text-[11px] font-semibold text-neutral-500">Find matches and trade ideas around the league.</span>
+                    </span>
+                    <span className="text-xl">›</span>
+                  </button>
 
-
-                {hasSavedProposal && (
-                  <div className="mt-5 rounded-2xl border border-orange-400/25 bg-orange-500/10 p-4 text-sm font-semibold text-orange-100">
-                    Saved proposal: {pluralize(userItems, "asset")} from your side, {pluralize(cpuItems, "asset")} from the other side.
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/75 shadow-2xl">
-              <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-neutral-900 to-black px-5 py-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-sm font-black uppercase tracking-[0.2em] text-orange-300">
-                      Trade Desk
+                  {hasSavedProposal && (
+                    <div className="mt-3 rounded-xl border border-orange-400/20 bg-orange-500/[0.08] px-4 py-3 text-xs font-semibold text-orange-100">
+                      Saved proposal: {pluralize(userItems, "asset")} from your side, {pluralize(cpuItems, "asset")} from the other side.
                     </div>
-                    <div className="mt-1 text-2xl font-black text-white">
-                      {showingHistory ? "Trade History Log" : "League Rumor Board"}
+                  )}
+                </div>
+              </div>
+            </section>
+
+            <section className="flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-white/10 bg-neutral-950/82 shadow-2xl">
+              <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-neutral-900/95 to-black px-6 py-5">
+                <div className="flex items-center gap-3">
+                  <span className="text-xl font-black text-orange-500">⌁</span>
+                  <div>
+                    <div className="text-[18px] font-black uppercase tracking-[0.02em] text-white">
+                      League Rumor Board
                     </div>
                     <div className="mt-1 text-sm font-semibold text-neutral-500">
-                      {showingHistory
-                        ? "Completed season trades with timing, full packages, and both-side reasoning."
-                        : "Real CPU front-office signals, negotiations, and completed movement."}
+                      Real CPU front-office signals, negotiations, and completed movement.
                     </div>
                   </div>
-                  <button
-                    onClick={() => setStoredFeed(readTradeDeskFeed())}
-                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-neutral-300 transition hover:border-orange-300/40 hover:bg-orange-500/10"
-                  >
-                    Refresh
-                  </button>
                 </div>
               </div>
 
-              <div className="bmTableScroller grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-4">
-                <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/25 p-2 text-center">
+              <div className="bmTableScroller grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-5">
+                <div className="grid grid-cols-2 rounded-xl border border-white/10 bg-black/30 p-1">
                   <button
                     type="button"
                     onClick={() => setActiveDeskView("live")}
-                    className={`rounded-xl border px-3 py-3 transition ${
-                      !showingHistory
-                        ? "border-orange-400/60 bg-orange-500/15 shadow-[0_0_20px_rgba(249,115,22,0.12)]"
-                        : "border-transparent bg-transparent hover:border-orange-400/25 hover:bg-orange-500/10"
-                    }`}
+                    className={`relative rounded-lg px-3 py-3 text-sm font-black transition ${!showingHistory ? "bg-white/[0.035] text-orange-200" : "text-neutral-500 hover:text-neutral-300"}`}
                   >
-                    <div className="text-sm font-black text-white">Live Board</div>
-                    <div className={`text-[10px] font-black uppercase tracking-[0.16em] ${!showingHistory ? "text-orange-200" : "text-neutral-500"}`}>
-                      {allTradeDeskRows.length} items
-                    </div>
+                    Live Board
+                    {!showingHistory && <span className="absolute bottom-0 left-1/4 right-1/4 h-[2px] rounded-full bg-orange-500" />}
                   </button>
                   <button
                     type="button"
                     onClick={() => setActiveDeskView("history")}
-                    className={`rounded-xl border px-3 py-3 transition ${
-                      showingHistory
-                        ? "border-orange-400/60 bg-orange-500/15 shadow-[0_0_20px_rgba(249,115,22,0.12)]"
-                        : "border-transparent bg-transparent hover:border-orange-400/25 hover:bg-orange-500/10"
-                    }`}
+                    className={`relative rounded-lg px-3 py-3 text-sm font-black transition ${showingHistory ? "bg-white/[0.035] text-orange-200" : "text-neutral-500 hover:text-neutral-300"}`}
                   >
-                    <div className="text-sm font-black text-white">History Log</div>
-                    <div className={`text-[10px] font-black uppercase tracking-[0.16em] ${showingHistory ? "text-orange-200" : "text-neutral-500"}`}>
-                      {tradeHistoryRows.length} trades
-                    </div>
+                    History Log
+                    {showingHistory && <span className="absolute bottom-0 left-1/4 right-1/4 h-[2px] rounded-full bg-orange-500" />}
                   </button>
                 </div>
 
                 {!showingHistory && (
                   <>
-                    <div className="grid grid-cols-3 gap-2 rounded-2xl border border-white/10 bg-black/25 p-3 text-center">
+                    <div className="grid grid-cols-3 gap-3">
                       {DESK_FILTERS.map((filter) => {
                         const active = activeDeskFilter === filter.key;
                         return (
                           <button
                             key={filter.key}
                             type="button"
-                            onClick={() =>
-                              setActiveDeskFilter((prev) =>
-                                prev === filter.key ? "all" : filter.key
-                              )
-                            }
-                            className={`rounded-xl border px-2 py-3 transition ${
-                              active
-                                ? "border-orange-400/60 bg-orange-500/15 shadow-[0_0_20px_rgba(249,115,22,0.12)]"
-                                : "border-transparent bg-transparent hover:border-orange-400/25 hover:bg-orange-500/10"
-                            }`}
-                            title={`Show ${filter.label.toLowerCase()} only`}
+                            onClick={() => setActiveDeskFilter((prev) => prev === filter.key ? "all" : filter.key)}
+                            className={`rounded-xl border px-3 py-4 text-center transition ${active ? "border-orange-400/35 bg-orange-500/10" : "border-white/10 bg-white/[0.035] hover:border-orange-400/20 hover:bg-orange-500/[0.06]"}`}
                           >
-                            <div className="text-lg font-black text-white">
-                              {feedCounts[filter.countKey]}
-                            </div>
-                            <div className={`text-[10px] font-black uppercase tracking-[0.16em] ${
-                              active ? "text-orange-200" : "text-neutral-500"
-                            }`}>
+                            <div className="text-2xl font-black text-white">{feedCounts[filter.countKey]}</div>
+                            <div className={`mt-1 text-[10px] font-black uppercase tracking-[0.16em] ${active ? "text-orange-300" : "text-neutral-500"}`}>
                               {filter.label}
                             </div>
                           </button>
@@ -552,46 +773,48 @@ export default function Trades() {
                     </div>
 
                     {showingFilteredDesk && (
-                      <div className="flex items-center justify-between gap-3 rounded-2xl border border-orange-400/20 bg-orange-500/10 px-4 py-3">
-                        <div className="text-[11px] font-black uppercase tracking-[0.16em] text-orange-100">
+                      <div className="flex items-center justify-between gap-3 rounded-xl border border-orange-400/20 bg-orange-500/[0.08] px-4 py-2.5">
+                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-orange-100">
                           Showing {labelForDeskFilter(activeDeskFilter)} only
                         </div>
                         <button
                           type="button"
                           onClick={() => setActiveDeskFilter("all")}
-                          className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-neutral-300 transition hover:border-orange-300/40 hover:text-white"
+                          className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-neutral-300 hover:text-white"
                         >
                           Show All
                         </button>
                       </div>
                     )}
 
-                    {tradeDeskItems.map((item) => (
-                      <div
-                        key={item.id || `${item.label}_${item.headline}`}
-                        className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 transition hover:border-orange-400/30 hover:bg-orange-500/10"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-xs font-black uppercase tracking-[0.16em] text-orange-200">
-                            {item.label}
-                          </div>
-                          <div className="rounded-full border border-white/10 bg-black/35 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-400">
-                            {item.tag}
-                          </div>
-                        </div>
-                        <div className="mt-2 text-sm font-bold leading-relaxed text-neutral-200">
-                          {item.headline}
-                        </div>
-                        <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] font-black uppercase tracking-[0.14em] text-neutral-500">
-                          <span>{formatFeedDate(item)}</span>
-                          {Array.isArray(item.teamNames) && item.teamNames.slice(0, 2).map((team) => (
-                            <span key={team} className="rounded-full border border-white/10 bg-black/25 px-2 py-1">
-                              {team}
-                            </span>
-                          ))}
+                    {!tradeDeskItems.length && (
+                      <div className="flex min-h-[250px] flex-col items-center justify-center rounded-xl border border-white/10 bg-white/[0.025] px-6 py-8 text-center">
+                        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-orange-400/25 bg-orange-500/[0.06] text-2xl text-orange-400">⌁</div>
+                        <div className="text-base font-black text-white">No live activity right now</div>
+                        <div className="mt-2 max-w-[460px] text-sm font-semibold leading-relaxed text-neutral-500">
+                          Sim ahead and real CPU rumors, talks, and completed deals will appear here.
                         </div>
                       </div>
-                    ))}
+                    )}
+
+                    {tradeDeskItems.map((item) => {
+                      const displayLabel = item.label === "Transaction Wire" ? "Completed Deal" : item.label;
+                      return (
+                        <div
+                          key={item.id || `${item.label}_${item.headline}`}
+                          className="rounded-xl border border-white/10 bg-white/[0.035] p-4 transition hover:border-orange-400/25 hover:bg-orange-500/[0.06]"
+                        >
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-orange-200">{displayLabel}</div>
+                          <div className="mt-2 text-sm font-bold leading-relaxed text-neutral-200">{item.headline}</div>
+                          <div className="mt-3 flex flex-wrap items-center gap-2 text-[9px] font-black uppercase tracking-[0.12em] text-neutral-500">
+                            <span>{formatFeedDate(item)}</span>
+                            {Array.isArray(item.teamNames) && item.teamNames.slice(0, 2).map((team) => (
+                              <span key={team} className="rounded-full border border-white/10 bg-black/25 px-2 py-1">{team}</span>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </>
                 )}
 
@@ -602,27 +825,17 @@ export default function Trades() {
                         <TradeHistoryCard key={entry.id} entry={entry} teams={teams} />
                       ))
                     ) : (
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-                        <div className="text-xs font-black uppercase tracking-[0.16em] text-orange-200">
-                          No Completed Trades
-                        </div>
-                        <div className="mt-2 text-sm font-bold leading-relaxed text-neutral-300">
-                          No trade history has been saved for this season yet. Once user trades or CPU-to-CPU trades complete, the full packages and reasoning will appear here.
+                      <div className="flex min-h-[250px] flex-col items-center justify-center rounded-xl border border-white/10 bg-white/[0.025] px-6 py-8 text-center">
+                        <div className="text-sm font-black text-white">No completed trades yet</div>
+                        <div className="mt-2 max-w-[480px] text-sm font-semibold leading-relaxed text-neutral-500">
+                          Completed user and CPU trades will appear here with their saved packages and reasoning.
                         </div>
                       </div>
                     )}
                   </div>
                 )}
-
-                <button
-                  onClick={() => navigate("/propose-trade")}
-                  className="mt-2 rounded-2xl border border-orange-400/25 bg-orange-500/10 px-5 py-4 text-sm font-black text-orange-100 transition hover:border-orange-300/50 hover:bg-orange-500/20"
-                >
-                  Open Trade Builder
-                </button>
-
               </div>
-            </div>
+            </section>
           </div>
 
         </div>

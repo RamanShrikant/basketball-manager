@@ -31,6 +31,7 @@ import {
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { getContractSeasonYear, getDraftYear } from "../utils/seasonContext.js";
+import { buildRecordMap } from "../utils/teamIntel_v1.js";
 import { getTradeWindowLockMessage } from "../utils/tradeWindow.js";
 import { formatInjuryReturnLabel, isPlayerInjured } from "../utils/injurySystem.js";
 import {
@@ -349,6 +350,127 @@ function teamLogoOf(team) {
 
 function sameTeamName(a = "", b = "") {
   return normalizeTeamName(a) === normalizeTeamName(b);
+}
+
+function tradeFinderTeamName(team = {}) {
+  return String(team?.name || team?.teamName || team?.team || "").trim();
+}
+
+function normalizeTradeFinderConference(value = "") {
+  const raw = String(value || "").trim();
+  const lower = raw.toLowerCase();
+  if (lower.includes("east")) return "East";
+  if (lower.includes("west")) return "West";
+  return raw;
+}
+
+function ordinalStanding(value) {
+  const rank = Number(value || 0);
+  if (!Number.isFinite(rank) || rank <= 0) return "";
+  const mod100 = rank % 100;
+  const suffix = mod100 >= 11 && mod100 <= 13
+    ? "th"
+    : rank % 10 === 1
+      ? "st"
+      : rank % 10 === 2
+        ? "nd"
+        : rank % 10 === 3
+          ? "rd"
+          : "th";
+  return `${rank}${suffix}`;
+}
+
+function embeddedTradeFinderRecord(team = {}) {
+  const wins = Number(team?.wins ?? team?.record?.wins ?? team?.seasonRecord?.wins ?? team?.stats?.wins ?? 0);
+  const losses = Number(team?.losses ?? team?.record?.losses ?? team?.seasonRecord?.losses ?? team?.stats?.losses ?? 0);
+  return {
+    wins: Number.isFinite(wins) ? wins : 0,
+    losses: Number.isFinite(losses) ? losses : 0,
+  };
+}
+
+function buildTradeFinderStandingMap(leagueData, teams = []) {
+  const rows = Array.isArray(teams) ? teams.filter(Boolean) : [];
+  const liveRecords = buildRecordMap(rows);
+  const conferenceByTeam = new Map();
+
+  if (leagueData?.conferences && typeof leagueData.conferences === "object") {
+    for (const [conference, conferenceTeams] of Object.entries(leagueData.conferences)) {
+      for (const team of conferenceTeams || []) {
+        const name = tradeFinderTeamName(team);
+        if (name) conferenceByTeam.set(normalizeTeamName(name), normalizeTradeFinderConference(conference));
+      }
+    }
+  }
+
+  const standings = rows.map((team) => {
+    const name = tradeFinderTeamName(team);
+    const live = liveRecords?.[name] || {};
+    const liveGames = Number(live?.gp || 0);
+    const embedded = embeddedTradeFinderRecord(team);
+    const wins = liveGames > 0 ? Number(live?.w || 0) : embedded.wins;
+    const losses = liveGames > 0 ? Number(live?.l || 0) : embedded.losses;
+    const games = wins + losses;
+    const conference = conferenceByTeam.get(normalizeTeamName(name)) || normalizeTradeFinderConference(team?.conference || team?.conf || "");
+    const pointDiff = liveGames > 0 ? Number(live?.pf || 0) - Number(live?.pa || 0) : 0;
+    return {
+      name,
+      abbreviation: String(team?.abbreviation || team?.abbr || team?.shortName || "").trim().toUpperCase(),
+      conference,
+      wins,
+      losses,
+      games,
+      winPct: games > 0 ? wins / games : null,
+      pointDiff,
+      rank: null,
+    };
+  });
+
+  const conferences = new Set(standings.map((row) => row.conference).filter(Boolean));
+  for (const conference of conferences) {
+    const conferenceRows = standings.filter((row) => row.conference === conference);
+    if (!conferenceRows.some((row) => row.games > 0)) continue;
+    conferenceRows
+      .sort((a, b) =>
+        (b.winPct ?? -1) - (a.winPct ?? -1) ||
+        b.pointDiff - a.pointDiff ||
+        b.wins - a.wins ||
+        a.name.localeCompare(b.name)
+      )
+      .forEach((row, index) => { row.rank = index + 1; });
+  }
+
+  return new Map(standings.map((row) => [normalizeTeamName(row.name), row]));
+}
+
+function tradeFinderStandingLabel(standing) {
+  if (!standing) return "";
+  const record = `${standing.wins}-${standing.losses}`;
+  const rank = ordinalStanding(standing.rank);
+  if (rank && standing.conference) return `${record} • ${rank} ${standing.conference}`;
+  if (standing.games > 0) return record;
+  return standing.conference ? `${record} • ${standing.conference}` : record;
+}
+
+function tradeFinderPickOriginName(pick = {}) {
+  return String(
+    pick?.originalTeam ||
+    pick?.originalTeamName ||
+    pick?.originalPickTeamName ||
+    pick?.naturalLotteryTeamName ||
+    ""
+  ).trim();
+}
+
+function tradeFinderPickStandingLabel(pick, owningTeam, standingByTeam) {
+  const originName = tradeFinderPickOriginName(pick);
+  const ownerName = tradeFinderTeamName(owningTeam);
+  if (!originName || sameTeamName(originName, ownerName)) return "";
+  const standing = standingByTeam?.get?.(normalizeTeamName(originName));
+  const label = tradeFinderStandingLabel(standing);
+  if (!label) return "";
+  const shortName = standing?.abbreviation || originName;
+  return `${shortName} • ${label}`;
 }
 
 function getTradeFinderPillLogoTuning(teamName, variant = "packageRows") {
@@ -1835,7 +1957,7 @@ function TradeFinderRatingRing({ player, variant = "packageRows" }) {
   );
 }
 
-function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team, currentDate = null, selectedActionLabel = "Added", disabled = false, disabledLabel = "Max", disabledReason = "" }) {
+function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team, standingByTeam, currentDate = null, selectedActionLabel = "Added", disabled = false, disabledLabel = "Max", disabledReason = "" }) {
   const isPlayer = asset.type === "player";
   const isResolvedPick = !isPlayer && isResolvedDraftPickAsset(asset.pick);
   const label = isPlayer ? playerNameOf(asset.player) : formatPick(asset.pick);
@@ -1855,6 +1977,7 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
     : isResolvedPick
       ? "Exact resolved draft pick"
       : `${protection || DEFAULT_PICK_PROTECTION} • Owns ${ownedRange?.start || "?"}-${ownedRange?.end || "?"}`;
+  const pickStandingLine = !isPlayer ? tradeFinderPickStandingLabel(asset.pick, team, standingByTeam) : "";
   const headshotT = TRADE_FINDER_HEADSHOT_TUNING.packageRows;
   const ringT = TRADE_FINDER_RATING_RING_TUNING.packageRows;
   const rowT = TRADE_FINDER_PLAYER_ROW_TUNING.packageRows;
@@ -1955,15 +2078,22 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
                 )}
               </div>
             ) : (
-              <div
-                className="mt-1 font-black uppercase tracking-[0.08em] text-neutral-300"
-                style={{
-                  fontSize: rowT.positionSize,
-                  transform: `translate(${rowT.positionX || 0}px, ${rowT.positionY || 0}px)`,
-                }}
-              >
-                {contractLine}
-              </div>
+              <>
+                <div
+                  className="mt-1 font-black uppercase tracking-[0.08em] text-neutral-300"
+                  style={{
+                    fontSize: rowT.positionSize,
+                    transform: `translate(${rowT.positionX || 0}px, ${rowT.positionY || 0}px)`,
+                  }}
+                >
+                  {contractLine}
+                </div>
+                {pickStandingLine && (
+                  <div className="mt-1 text-[9px] font-black uppercase tracking-[0.12em] text-neutral-500">
+                    {pickStandingLine}
+                  </div>
+                )}
+              </>
             )}
             {isPlayer && (
               <div
@@ -2056,7 +2186,7 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
   );
 }
 
-function OfferAssetLine({ item, team, leagueData, currentDate = null }) {
+function OfferAssetLine({ item, team, leagueData, standingByTeam, currentDate = null }) {
   if (item.type === "player") {
     const headshotT = TRADE_FINDER_HEADSHOT_TUNING.offerRows;
     const ringT = TRADE_FINDER_RATING_RING_TUNING.offerRows;
@@ -2161,6 +2291,7 @@ function OfferAssetLine({ item, team, leagueData, currentDate = null }) {
     );
   }
 
+  const pickStandingLine = tradeFinderPickStandingLabel(item.pick, team, standingByTeam);
   return (
     <div
       className="relative overflow-hidden border border-white/10 bg-white/[0.035] font-black text-white transition hover:border-orange-400/30 hover:bg-orange-500/10"
@@ -2171,11 +2302,18 @@ function OfferAssetLine({ item, team, leagueData, currentDate = null }) {
       }}
     >
       <TradeFinderPillBackgroundLogo team={team} variant="offerRows" />
-      <span className="relative z-10">
-        {isResolvedDraftPickAsset(item.pick)
-          ? formatResolvedDraftPickLabel(item.pick)
-          : `${item.protection || DEFAULT_PICK_PROTECTION} ${formatPick(item.pick)}`}
-      </span>
+      <div className="relative z-10">
+        <div>
+          {isResolvedDraftPickAsset(item.pick)
+            ? formatResolvedDraftPickLabel(item.pick)
+            : `${item.protection || DEFAULT_PICK_PROTECTION} ${formatPick(item.pick)}`}
+        </div>
+        {pickStandingLine && (
+          <div className="mt-1 text-[9px] font-black uppercase tracking-[0.12em] text-neutral-500">
+            {pickStandingLine}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2230,6 +2368,10 @@ export default function TradeFinder() {
       String(a?.name || a?.teamName || "").localeCompare(String(b?.name || b?.teamName || ""))
     ),
     [leagueData]
+  );
+  const standingByTeam = useMemo(
+    () => buildTradeFinderStandingMap(leagueData, teams),
+    [leagueData, teams]
   );
   const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
   const [packageTeamIndex, setPackageTeamIndex] = useState(() => {
@@ -2947,7 +3089,7 @@ const standardPatienceBlocked = Boolean(
         setOfferSearchError(
           rejectedGeneratedOffers.length
             ? "Trade Finder generated offers, but all were filtered before display because they failed exact ownership, salary, or temporary-roster validation. Run bmDiag.tradeFinder() in the console for the precise reasons."
-            : result?.message || "No CPU team found a Propose Trade-legal package it would comfortably accept."
+            : result?.message || "No CPU team found a Propose Trade-legal package for this search."
         );
       }
     } catch (error) {
@@ -3093,8 +3235,10 @@ const standardPatienceBlocked = Boolean(
                         {isReverseFinder ? "Browse Target" : "Browse Assets"}
                       </div>
                       <div className="mt-0.5 truncate text-xl font-black text-white">{packageTeam?.name}</div>
-                      <div className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-neutral-600">
-                        Team {packageTeamIndex + 1} of {teams.length}
+                      <div className="mt-1 text-[10px] font-black uppercase tracking-[0.14em] text-neutral-500">
+                        {tradeFinderStandingLabel(standingByTeam.get(normalizeTeamName(tradeFinderTeamName(packageTeam))))}
+                        <span className="text-neutral-700"> • </span>
+                        <span className="text-neutral-600">Team {packageTeamIndex + 1} of {teams.length}</span>
                       </div>
                     </div>
                   </div>
@@ -3129,6 +3273,7 @@ const standardPatienceBlocked = Boolean(
                           onToggle={() => toggleAsset(asset)}
                           leagueData={leagueData}
                           team={packageTeam}
+                          standingByTeam={standingByTeam}
                           currentDate={userTradeCurrentDate}
                           disabled={isPackageFull || assetEligibilityByKey.get(asset.key)?.ok === false}
                           disabledLabel={assetEligibilityByKey.get(asset.key)?.ok === false ? "Locked" : "Full"}
@@ -3169,6 +3314,7 @@ const standardPatienceBlocked = Boolean(
                           }}
                           leagueData={leagueData}
                           team={packageTeam}
+                          standingByTeam={standingByTeam}
                           currentDate={userTradeCurrentDate}
                           disabled={isPackageFull || assetEligibilityByKey.get(asset.key)?.ok === false}
                           disabledLabel={assetEligibilityByKey.get(asset.key)?.ok === false ? "Locked" : "Full"}
@@ -3194,7 +3340,7 @@ const standardPatienceBlocked = Boolean(
                       {selectedItems.length ? `${selectedItems.length} asset${selectedItems.length === 1 ? "" : "s"}` : "Build Package"}
                     </div>
                     <div className="mt-1 text-xs font-bold text-orange-100/70">
-                      Value {selectedValue.toFixed(1)} • Click remove to send assets back left
+                      Click remove to send assets back left
                     </div>
                   </div>
                   <div className="rounded-xl border border-orange-300/25 bg-black/35 px-3 py-2 text-xs font-black text-orange-100">
@@ -3224,6 +3370,7 @@ const standardPatienceBlocked = Boolean(
                         } : undefined}
                         leagueData={leagueData}
                         team={packageTeam}
+                        standingByTeam={standingByTeam}
                         currentDate={userTradeCurrentDate}
                       />
                     ))}
@@ -3250,8 +3397,8 @@ const standardPatienceBlocked = Boolean(
                     </div>
                     <div className="mt-1 text-xs font-bold text-neutral-500">
                       {isReverseFinder
-                        ? `Searches ${selectedTeam?.name} assets • 0–5 distinct comfortable packages`
-                        : `One comfortable offer max per CPU team • Teams available: ${standardSearchableCpuCount}${blockedPatienceCount ? ` • ${blockedPatienceCount} not taking calls` : ""}`}
+                        ? `Searches ${selectedTeam?.name} assets • 0–5 distinct asking-price packages`
+                        : `One legal offer max per CPU team • Teams available: ${standardSearchableCpuCount}${blockedPatienceCount ? ` • ${blockedPatienceCount} not taking calls` : ""}`}
                     </div>
                   </div>
 
@@ -3318,7 +3465,7 @@ const standardPatienceBlocked = Boolean(
                         ? "Stopping search after the current CPU evaluation finishes..."
                         : isReverseFinder
                           ? `${packageTeam?.name} is checking distinct asking-price packages from ${selectedTeam?.name}...`
-                          : "CPU teams are building one comfortable legal offer each..."}
+                          : "CPU teams are building one legal offer each..."}
                     </div>
                     {offerSearchProgress && (
                       <div className="mt-3 rounded-xl border border-orange-300/20 bg-black/25 px-3 py-2 text-xs text-orange-50">
@@ -3338,7 +3485,7 @@ const standardPatienceBlocked = Boolean(
                   <div className="rounded-2xl border border-white/10 bg-black/35 p-5 text-sm font-bold leading-6 text-neutral-300">
                     {isReverseFinder
                       ? `${packageTeam?.name} did not find a distinct legal asking price from ${selectedTeam?.name}.`
-                      : "No CPU team found a legal comfortable offer for this package."}
+                      : "No CPU team found a legal offer for this package."}
                   </div>
                 )}
 
@@ -3364,10 +3511,8 @@ const standardPatienceBlocked = Boolean(
                               <div className="truncate text-lg font-black text-white">
                                 {isReverseFinder ? `Package ${offerIndex + 1}` : offer.team?.name}
                               </div>
-                              <div className="text-[11px] font-black uppercase tracking-[0.12em] text-neutral-500">
-                                {isReverseFinder
-                                  ? `Built around ${offer.anchorLabel || "value base"} • Value ${Number(offer.offerValue || 0).toFixed(1)}`
-                                  : `${offer.quality === "Comfort Offer" ? "Comfort Offer" : "Accepted Offer"} • Value ${Number(offer.offerValue || 0).toFixed(1)}`}
+                              <div className="text-[11px] font-black uppercase tracking-[0.10em] text-neutral-400">
+                                {tradeFinderStandingLabel(standingByTeam.get(normalizeTeamName(tradeFinderTeamName(isReverseFinder ? selectedTeam : offer.team))))}
                               </div>
                             </div>
                           </div>
@@ -3388,16 +3533,12 @@ const standardPatienceBlocked = Boolean(
                               item={item}
                               team={isReverseFinder ? selectedTeam : offer.team}
                               leagueData={leagueData}
+                              standingByTeam={standingByTeam}
                               currentDate={userTradeCurrentDate}
                             />
                           ))}
                         </div>
 
-                        <div className="mt-3 text-xs font-bold text-neutral-500">
-                          {isReverseFinder
-                            ? `${packageTeam?.name} comfort margin ${Number(offer.comfortMargin || 0) >= 0 ? "+" : ""}${Number(offer.comfortMargin || 0).toFixed(2)}.`
-                            : `Finder gap ${Number(offer.gap || 0) >= 0 ? "+" : ""}${Number(offer.gap || 0).toFixed(1)} • CPU comfort ${Number(offer.comfortMargin || 0) >= 0 ? "+" : ""}${Number(offer.comfortMargin || 0).toFixed(2)}.`}
-                        </div>
                       </div>
                     ))}
                   </div>

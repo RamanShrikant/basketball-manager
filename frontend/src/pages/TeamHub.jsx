@@ -183,6 +183,7 @@ export default function TeamHub() {
   const programmaticScrollTimerRef = useRef(null);
   const ignoreScrollUntilRef = useRef(0);
   const activeTileIndexRef = useRef(0);
+  const [scrollbarState, setScrollbarState] = useState({ left: 0, max: 0 });
 
   useEffect(() => {
     document.body.classList.add("th-no-scroll");
@@ -419,6 +420,30 @@ export default function TeamHub() {
   const activeSectionTiles = currentSection ? sectionTiles[currentSection] || [] : [];
   const tiles = currentSection ? activeSectionTiles : mainItems;
 
+  useEffect(() => {
+    const row = scrollRowRef.current;
+    if (!row) return undefined;
+
+    const syncScrollbar = () => {
+      const max = Math.max(0, row.scrollWidth - row.clientWidth);
+      setScrollbarState({
+        left: Math.max(0, Math.min(max, row.scrollLeft)),
+        max,
+      });
+    };
+
+    const frame = window.requestAnimationFrame(syncScrollbar);
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(syncScrollbar) : null;
+    observer?.observe(row);
+    window.addEventListener("resize", syncScrollbar);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener("resize", syncScrollbar);
+    };
+  }, [currentSection, tiles.length]);
+
   const navigateWithMode = (path, tile = null) => {
     const hubReturnContext = currentSection
       ? sectionReturnPayload(currentSection, {
@@ -601,6 +626,39 @@ export default function TeamHub() {
   const handleRowScroll = () => {
     // Navigation is intentionally owned by activeTileIndex. Native scroll events
     // were causing edge-card jumps, so the row no longer changes selection.
+    const row = scrollRowRef.current;
+    if (!row) return;
+    const max = Math.max(0, row.scrollWidth - row.clientWidth);
+    setScrollbarState({
+      left: Math.max(0, Math.min(max, row.scrollLeft)),
+      max,
+    });
+  };
+
+  const handleScrollbarChange = (event) => {
+    const row = scrollRowRef.current;
+    if (!row) return;
+    const nextLeft = Math.max(0, Math.min(scrollbarState.max, Number(event.target.value || 0)));
+    row.scrollTo({ left: nextLeft, behavior: "auto" });
+    setScrollbarState((current) => ({ ...current, left: nextLeft }));
+  };
+
+
+  const handleCarouselWheel = (event) => {
+    const row = scrollRowRef.current;
+    if (!row) return;
+    const max = Math.max(0, row.scrollWidth - row.clientWidth);
+    if (max <= 0) return;
+
+    const horizontalDelta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
+      ? event.deltaX
+      : event.deltaY;
+    if (!horizontalDelta) return;
+
+    event.preventDefault();
+    const nextLeft = Math.max(0, Math.min(max, row.scrollLeft + horizontalDelta));
+    row.scrollTo({ left: nextLeft, behavior: "auto" });
+    setScrollbarState({ left: nextLeft, max });
   };
 
   useEffect(() => {
@@ -739,7 +797,7 @@ export default function TeamHub() {
           ◄
         </button>
 
-        <div key={currentSection || "main"} ref={scrollRowRef} className={styles.scrollRow} onScroll={handleRowScroll}>
+        <div key={currentSection || "main"} ref={scrollRowRef} className={styles.scrollRow} onScroll={handleRowScroll} onWheel={handleCarouselWheel}>
           {tiles.map((tile, index) => {
             const enabled = tile.enabled && (tile.sectionKey || tile.path !== "#");
             const active = index === activeTileIndex;
@@ -791,6 +849,25 @@ export default function TeamHub() {
         >
           ►
         </button>
+
+        <input
+          type="range"
+          min="0"
+          max={Math.max(1, scrollbarState.max)}
+          step="1"
+          value={Math.min(scrollbarState.left, Math.max(1, scrollbarState.max))}
+          onChange={handleScrollbarChange}
+          onWheel={handleCarouselWheel}
+          onPointerUp={snapManualScrollToNearestTile}
+          onKeyUp={(event) => {
+            if (["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(event.key)) {
+              snapManualScrollToNearestTile();
+            }
+          }}
+          disabled={scrollbarState.max <= 0}
+          className={styles.bottomScrollbar}
+          aria-label="Scroll Team Hub options"
+        />
       </div>
 
       {currentSection && (

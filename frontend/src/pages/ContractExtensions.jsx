@@ -292,6 +292,29 @@ export default function ContractExtensions() {
 
   return (
     <PageFade>
+      <style>{`
+        .contract-extension-orange-scrollbar {
+          scrollbar-width: auto;
+          scrollbar-color: #f97316 #171717;
+        }
+        .contract-extension-orange-scrollbar::-webkit-scrollbar {
+          width: 14px;
+        }
+        .contract-extension-orange-scrollbar::-webkit-scrollbar-track {
+          background: #171717;
+          border-radius: 999px;
+          box-shadow: inset 0 1px 2px rgba(0,0,0,0.72);
+        }
+        .contract-extension-orange-scrollbar::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, #fb923c, #ea580c);
+          border-radius: 999px;
+          border: 2px solid #171717;
+          box-shadow: 0 0 10px rgba(249,115,22,0.22);
+        }
+        .contract-extension-orange-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(180deg, #fdba74, #f97316);
+        }
+      `}</style>
       <div className="bm-page-bg min-h-screen overflow-hidden bg-neutral-950 pb-16 text-white">
         <div className="mx-auto flex h-[calc(100vh-70px)] max-w-[1600px] flex-col px-5 py-3">
           <header className="mb-3 flex shrink-0 items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/55 px-5 py-2.5 backdrop-blur">
@@ -331,7 +354,7 @@ export default function ContractExtensions() {
                 <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{preview?.summary?.veteranEligibleCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Veteran</div></div>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto p-3 orange-scrollbar">
+              <div className="contract-extension-orange-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
                 {loading ? (
                   <div className="p-6 text-center text-neutral-400">Loading extension eligibility…</div>
                 ) : (
