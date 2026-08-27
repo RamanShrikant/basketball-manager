@@ -868,8 +868,8 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     }
 
     return (
-      <div className={`${sizeClass} shrink-0 overflow-hidden flex items-end justify-center`}>
-        <HeadshotLayoutTransform className="h-full w-full">
+      <div className={`${sizeClass} relative z-[2] shrink-0 overflow-visible flex items-end justify-center`}>
+        <HeadshotLayoutTransform page="draft" className="h-full w-full overflow-visible">
           <img
             src={src}
             alt={name || "Prospect"}
@@ -883,9 +883,9 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
 
   function ProspectHeroHeadshot({ src, name }) {
     return (
-      <div className="relative flex h-40 w-44 shrink-0 self-end items-end justify-center overflow-hidden">
+      <div className="relative flex h-40 w-44 shrink-0 self-end items-end justify-center overflow-visible">
         {src ? (
-          <HeadshotLayoutTransform className="h-full w-full">
+          <HeadshotLayoutTransform page="draft" className="h-full w-full overflow-visible">
             <img
               src={src}
               alt={name || "Prospect"}

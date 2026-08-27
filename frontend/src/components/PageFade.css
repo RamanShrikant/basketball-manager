@@ -8,27 +8,36 @@ body,
 .bm-page-fade {
   min-height: 100vh;
   background: #050505;
-}
-
-.bm-page-fade > * {
-  animation: bmPageContentIn 260ms ease-out both;
+  animation: bmRouteFadeSoft var(--bm-nav-fade-duration, 380ms)
+    cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  transform-origin: center center;
   will-change: opacity, transform;
 }
 
-@keyframes bmPageContentIn {
-  from {
-    opacity: 0;
-    transform: translateY(3px);
+/*
+ * Smooth route entrance only. App.jsx already remounts PageFade by pathname,
+ * so normal navigation plus browser Back/Forward all retrigger this animation.
+ * There is no exit timer, route interception, or navigation delay.
+ */
+@keyframes bmRouteFadeSoft {
+  0% {
+    opacity: var(--bm-nav-fade-start-opacity, 0.52);
+    transform: translate3d(0, var(--bm-nav-fade-move-y, 0px), 0)
+      scale(var(--bm-nav-fade-start-scale, 0.995));
   }
 
-  to {
+  30% {
+    opacity: 0.72;
+  }
+
+  68% {
+    opacity: 0.93;
+  }
+
+  100% {
     opacity: 1;
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .bm-page-fade > * {
-    animation: none;
-  }
-}
+/* The app owner explicitly wants the navigation transition to remain active. */

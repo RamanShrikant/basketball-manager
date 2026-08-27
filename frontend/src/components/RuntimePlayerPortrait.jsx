@@ -97,8 +97,9 @@ function FallbackPortrait({ src, alt, imageClassName = "", fallback = null }) {
  * - Other free agents (no team) use the jerseyless base only.
  * - Fit resolution supports per-player defaults and per-player/per-template overrides.
  *
- * The wrapper uses overflow-visible so page-level headshot Y tuning doesn't run
- * into an artificial inner clipping pocket before reaching the page chrome.
+ * The outer wrapper stays overflow-visible so page-level headshot tuning can
+ * move the complete portrait freely. The canonical 1040x760 composite itself
+ * is clipped, so jersey overlays cannot bleed past the portrait canvas edge.
  */
 export default function RuntimePlayerPortrait({
   player = null,
@@ -162,8 +163,8 @@ export default function RuntimePlayerPortrait({
         className="absolute inset-0 overflow-visible"
       >
         {resolved ? (
-          <div className="absolute bottom-0 left-1/2 h-full -translate-x-1/2 overflow-visible" style={{ aspectRatio: "1040 / 760" }}>
-            <div className="relative h-full w-full overflow-visible" style={contentStyle}>
+          <div className="absolute bottom-0 left-1/2 h-full -translate-x-1/2 overflow-hidden" style={{ aspectRatio: "1040 / 760" }}>
+            <div className="relative h-full w-full overflow-hidden" style={contentStyle}>
               <img
                 src={resolved.face.baseUrl}
                 alt={alt}

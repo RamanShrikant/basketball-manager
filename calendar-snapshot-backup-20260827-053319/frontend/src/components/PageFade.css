@@ -1,0 +1,54 @@
+html,
+body,
+#root {
+  min-height: 100%;
+  background: #050505;
+}
+
+.bm-page-fade {
+  min-height: 100vh;
+  background: #050505;
+  animation: bmRouteFadeThrough var(--bm-nav-fade-duration, 310ms)
+    cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: center center;
+  will-change: opacity, transform;
+}
+
+/*
+ * GLOBAL ROUTE FADE
+ *
+ * App.jsx already remounts this wrapper with key={pathname}. Therefore this
+ * animation starts again for:
+ *   - normal tile/button/link navigation
+ *   - browser Back
+ *   - browser Forward
+ *
+ * There is deliberately NO exit timer and NO navigation delay. The route is
+ * allowed to change immediately, then the new screen fades up from the app's
+ * black background. This gives the visual impression of a clean fade-through
+ * while keeping route lifecycle/game logic completely untouched.
+ */
+@keyframes bmRouteFadeThrough {
+  0% {
+    opacity: var(--bm-nav-fade-start-opacity, 0.34);
+    transform: translate3d(0, var(--bm-nav-fade-move-y, 0px), 0)
+      scale(var(--bm-nav-fade-start-scale, 0.997));
+  }
+
+  42% {
+    opacity: 0.78;
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/*
+ * IMPORTANT:
+ * The app owner explicitly wants this navigation transition to remain active.
+ * We therefore do not disable .bm-page-fade via prefers-reduced-motion here.
+ * This also prevents the Windows/Chrome reduced-motion preference from making
+ * the transition silently disappear altogether.
+ */

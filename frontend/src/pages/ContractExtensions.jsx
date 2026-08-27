@@ -7,12 +7,86 @@ import {
   submitContractExtensionOffer,
 } from "../api/simEnginePy.js";
 import PageFade from "../components/PageFade.jsx";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
+import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
+import { CONTRACT_EXTENSION_VISUAL_TUNING, getResponsiveVisualScale } from "../config/headshotLayout.js";
 import { getOffseasonTradeContext } from "../utils/offseasonTradeContext.js";
 import { getUserTradeCurrentDate, stampExtensionRestriction } from "../utils/userTradeRules.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 
 const EXTENSION_DEADLINE_CONTEXT_KEY = "bm_contract_extension_deadline_context_v1";
+
+
+// CONTRACT EXTENSION PLAYER-PILL VISUAL TUNING
+// Master controls live in src/config/headshotLayout.js. All pixel values are
+// multiplied by one proportional page scale, so the same tuning survives
+// desktop, 1536px and laptop layouts without maintaining separate profiles.
+function useContractExtensionVisualTuning() {
+  const getWidth = () => (typeof window === "undefined" ? CONTRACT_EXTENSION_VISUAL_TUNING.referenceWidth : window.innerWidth);
+  const [viewportWidth, setViewportWidth] = useState(getWidth);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(getWidth());
+    window.addEventListener("resize", onResize);
+    onResize();
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  return useMemo(() => {
+    const master = CONTRACT_EXTENSION_VISUAL_TUNING;
+    const s = getResponsiveVisualScale(viewportWidth, master);
+    const px = (value) => Number(value || 0) * s;
+    return {
+      responsiveScale: s,
+      rowMinHeight: px(master.row.minHeight),
+      rowPaddingX: px(master.row.paddingX),
+      rowPaddingY: px(master.row.paddingY),
+      gap: px(master.row.gap),
+      headshot: {
+        width: px(master.headshot.width),
+        height: px(master.headshot.height),
+      },
+      ring: {
+        size: px(master.overall.size),
+        x: px(master.overall.x),
+        y: px(master.overall.y),
+        scale: Number(master.overall.scale || 1),
+        strokeWidth: px(master.overall.strokeWidth),
+      },
+      statusBar: {
+        x: px(master.statusBar.x),
+        y: px(master.statusBar.y),
+        scale: Number(master.statusBar.scale || 1),
+      },
+      nameSize: px(master.text.nameSize),
+      reasonSize: px(master.text.reasonSize),
+    };
+  }, [viewportWidth]);
+}
+
+function extensionSourcePlayer(team, row) {
+  const players = Array.isArray(team?.players) ? team.players : [];
+  const rowId = String(row?.playerId ?? "");
+  const rowName = String(row?.playerName || "").trim().toLowerCase();
+  return players.find((player) => {
+    if (rowId && String(player?.id ?? player?.playerId ?? "") === rowId) return true;
+    return rowName && String(player?.name || player?.player || "").trim().toLowerCase() === rowName;
+  }) || null;
+}
+
+function extensionHeadshotOf(player, row) {
+  return (
+    player?.headshot ||
+    player?.headshotUrl ||
+    player?.photoUrl ||
+    player?.portrait ||
+    player?.image ||
+    player?.img ||
+    row?.headshot ||
+    ""
+  );
+}
 
 function normalizeIsoDate(value) {
   const text = String(value || "").trim();
@@ -136,6 +210,7 @@ export default function ContractExtensions() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState(null);
+  const playerPillTuning = useContractExtensionVisualTuning();
 
   const teamName = selectedTeam?.name || null;
   const deadlineContext = useMemo(() => {
@@ -362,23 +437,82 @@ export default function ContractExtensions() {
                     {orderedExtensionPlayers.map((row) => {
                       const key = row.playerId || row.playerName;
                       const active = String(key) === String(selectedPlayerId);
+                      const portraitPlayer = extensionSourcePlayer(selectedTeam, row) || {
+                        id: row.playerId,
+                        name: row.playerName,
+                        overall: row.overall,
+                        potential: row.potential,
+                      };
                       return (
                         <button
                           type="button"
                           key={key}
                           onClick={() => setSelectedPlayerId(key)}
-                          className={`w-full rounded-xl border p-3 text-left transition ${active ? "border-orange-400 bg-orange-500/12" : "border-white/8 bg-black/25 hover:border-white/20"}`}
+                          className={`w-full rounded-xl border text-left transition ${active ? "border-orange-400 bg-orange-500/12" : "border-white/8 bg-black/25 hover:border-white/20"}`}
+                          style={{
+                            minHeight: playerPillTuning.rowMinHeight,
+                            padding: `${playerPillTuning.rowPaddingY}px ${playerPillTuning.rowPaddingX}px`,
+                          }}
                         >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-black">{row.playerName}</div>
-                              <div className="mt-1 text-xs text-neutral-500">{row.position || "—"} · Age {row.age} · {row.overall} OVR · {row.potential} POT</div>
+                          <div className="flex min-w-0 items-center" style={{ gap: playerPillTuning.gap }}>
+                            <div
+                              className="relative shrink-0 overflow-visible"
+                              style={{
+                                width: playerPillTuning.headshot.width,
+                                height: playerPillTuning.headshot.height,
+                              }}
+                            >
+                              <RuntimePlayerPortrait
+                                player={portraitPlayer}
+                                teamName={teamName}
+                                src={extensionHeadshotOf(portraitPlayer, row)}
+                                alt={row.playerName}
+                                layoutPage="contract-extensions"
+                                className="h-full w-full"
+                                fallback={<div className="h-full w-full" />}
+                              />
                             </div>
-                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${row.eligible ? "bg-emerald-500/15 text-emerald-300" : row.alreadyExtended ? "bg-sky-500/15 text-sky-300" : row.playerRefusesExtension ? "bg-amber-500/15 text-amber-300" : "bg-white/5 text-neutral-500"}`}>
+
+                            <div
+                              className="shrink-0"
+                              style={{
+                                transform: `translate(${playerPillTuning.ring.x}px, ${playerPillTuning.ring.y}px) scale(${playerPillTuning.ring.scale})`,
+                                transformOrigin: "center center",
+                              }}
+                            >
+                              <PlayerRatingRing
+                                overall={row.overall}
+                                potential={row.potential}
+                                size={playerPillTuning.ring.size}
+                                strokeWidth={playerPillTuning.ring.strokeWidth}
+                              />
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <div
+                                className="truncate font-black text-white"
+                                style={{ fontSize: playerPillTuning.nameSize }}
+                              >
+                                {row.playerName}
+                              </div>
+                              <div
+                                className="mt-1 line-clamp-2 leading-4 text-neutral-400"
+                                style={{ fontSize: playerPillTuning.reasonSize }}
+                              >
+                                {row.reason}
+                              </div>
+                            </div>
+
+                            <span
+                              className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${row.eligible ? "bg-emerald-500/15 text-emerald-300" : row.alreadyExtended ? "bg-sky-500/15 text-sky-300" : row.playerRefusesExtension ? "bg-amber-500/15 text-amber-300" : "bg-white/5 text-neutral-500"}`}
+                              style={{
+                                transform: `translate(${playerPillTuning.statusBar.x}px, ${playerPillTuning.statusBar.y}px) scale(${playerPillTuning.statusBar.scale})`,
+                                transformOrigin: "center center",
+                              }}
+                            >
                               {row.eligible ? "Has Ask" : row.alreadyExtended ? "Extended" : row.playerRefusesExtension ? "Refuses" : "Ineligible"}
                             </span>
                           </div>
-                          <div className="mt-2 line-clamp-2 text-xs leading-5 text-neutral-400">{row.reason}</div>
                         </button>
                       );
                     })}

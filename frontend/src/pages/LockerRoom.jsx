@@ -276,11 +276,47 @@ function moodToneClasses(tone) {
   return "border-white/10 bg-white/[0.04] text-white";
 }
 
+function lockerMoodImpactCardClass(value) {
+  const impact = Number(value || 0);
+  if (impact > 0.05) {
+    return "border-emerald-400/30 bg-emerald-500/10 shadow-[inset_0_0_24px_rgba(16,185,129,0.035)]";
+  }
+  if (impact < -0.05) {
+    return "border-rose-400/30 bg-rose-500/10 shadow-[inset_0_0_24px_rgba(244,63,94,0.035)]";
+  }
+  return "border-white/8 bg-white/[0.035]";
+}
+
 function factorTone(value) {
   const n = Number(value || 0);
   if (n > 0) return "text-emerald-300";
   if (n < 0) return "text-red-300";
   return "text-neutral-300";
+}
+function moodSemanticCardClasses(value) {
+  const impact = Number(value || 0);
+  if (impact > 0) return "border-emerald-300/30 bg-emerald-500/12 text-emerald-50";
+  if (impact < 0) return "border-red-300/30 bg-red-500/12 text-red-50";
+  return "border-white/8 bg-white/[0.035] text-white";
+}
+
+
+function moodCardTone(value) {
+  const n = Number(value || 0);
+  if (n > 0) return "border-emerald-400/30 bg-emerald-500/[0.09]";
+  if (n < 0) return "border-red-400/30 bg-red-500/[0.09]";
+  return "border-white/8 bg-white/[0.035]";
+}
+
+function moodImpactCardClasses(value) {
+  const n = Number(value || 0);
+  if (n > 0) {
+    return "border-emerald-400/35 bg-emerald-500/[0.09] shadow-[inset_0_0_26px_rgba(16,185,129,0.045)]";
+  }
+  if (n < 0) {
+    return "border-rose-400/35 bg-rose-500/[0.09] shadow-[inset_0_0_26px_rgba(244,63,94,0.045)]";
+  }
+  return "border-white/10 bg-white/[0.035]";
 }
 
 function trendText(trend) {
@@ -728,6 +764,7 @@ function LockerRoomPlayerHeadshot({ row, team = null }) {
         src={row.headshot}
         alt=""
         ariaHidden
+        layoutPage="locker-room-list"
         className="h-full w-full select-none"
         contentStyle={{
           transform: `translate(${t.headshotX}px, ${t.headshotY}px)`,
@@ -1413,7 +1450,7 @@ function CompactMoodContextPanel({ player }) {
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2">
         {factors.length ? factors.map((factor) => (
-          <div key={factor.label} className="rounded-xl border border-white/8 bg-white/[0.035] px-2.5 py-1.5">
+          <div key={factor.label} className={`rounded-xl border px-2.5 py-1.5 ${lockerMoodImpactCardClass(factor.value)}`} data-bm-mood-tone={factor.value > 0 ? "positive" : factor.value < 0 ? "negative" : "neutral"}>
             <div className="flex items-center justify-between gap-2">
               <span className="min-w-0 truncate text-[11px] font-black uppercase tracking-[0.08em] text-neutral-300">{factor.label}</span>
               <span className={`shrink-0 text-sm font-black ${factorTone(factor.value)}`}>
@@ -1474,7 +1511,7 @@ function MoodDriversPanel({ player }) {
 
       <div className="mt-2 grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2 xl:grid-cols-3">
         {factors.length ? factors.map((factor) => (
-          <div key={factor.key} className="flex min-h-0 flex-col justify-center rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5">
+          <div key={factor.key} className={`flex min-h-0 flex-col justify-center rounded-xl border px-3 py-2.5 ${moodImpactCardClasses(factor.value)}`}>
             <div className="flex items-center justify-between gap-3">
               <span className="min-w-0 text-[11px] font-black uppercase tracking-[0.08em] text-neutral-300">{factor.label}</span>
               <span className={`shrink-0 text-sm font-black ${factorTone(factor.value)}`}>
@@ -1560,7 +1597,7 @@ function MoodLedgerStrip({ player }) {
       </div>
       <div className="mt-2 grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2">
         {shown.length ? shown.map((event, index) => (
-          <div key={`${event.text}-${index}`} className="flex min-h-0 flex-col justify-center rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2">
+          <div key={`${event.text}-${index}`} className={`flex min-h-0 flex-col justify-center rounded-xl border px-3 py-2 ${moodSemanticCardClasses(event.impact)}`}>
             <div className="flex items-start justify-between gap-2">
               <span className="min-w-0 break-words text-[9.5px] font-black uppercase leading-[12px] tracking-[0.04em] text-white">
                 {humanizeMoodLabel(event.category || "Mood Context")}
@@ -1806,6 +1843,7 @@ export default function LockerRoom() {
                             teamName={activeTeam?.name || ""}
                             src={selectedPlayer?.headshot}
                             alt={selectedPlayer?.playerName || "Player"}
+                            layoutPage="locker-room-selected"
                             className="absolute inset-0 h-full w-full"
                             fallback={<div className="flex h-full items-center justify-center text-sm font-bold text-neutral-500">No Image</div>}
                           />

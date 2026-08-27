@@ -1,0 +1,70 @@
+html,
+body,
+#root {
+  min-height: 100%;
+  background: #050505;
+}
+
+.bm-page-fade {
+  min-height: 100vh;
+  background: #050505;
+}
+
+/* Existing per-page wrapper: preserved for pages that rely on it directly. */
+.bm-page-fade > * {
+  animation: bmPageContentIn 260ms ease-out both;
+  will-change: opacity, transform;
+}
+
+/* Global route transition: every navigation gets the same calm quick entrance. */
+.bm-route-fade {
+  min-height: 100vh;
+  will-change: opacity, transform;
+}
+
+.bm-route-fade-in {
+  animation: bmPageContentIn 260ms ease-out both;
+}
+
+.bm-route-fade-out {
+  animation: bmPageContentOut 110ms ease-in both;
+}
+
+/* Pages that already use <PageFade> should not animate twice inside the global wrapper. */
+.bm-route-fade .bm-page-fade > * {
+  animation: none;
+  will-change: auto;
+}
+
+@keyframes bmPageContentIn {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes bmPageContentOut {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bm-page-fade > *,
+  .bm-route-fade,
+  .bm-route-fade-in,
+  .bm-route-fade-out {
+    animation: none;
+  }
+}

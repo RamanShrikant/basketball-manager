@@ -2728,14 +2728,6 @@
       "targetFilename": "real_face_1631124_base.png"
     },
     {
-      "id": "real_face_203944",
-      "playerId": "b64694e1-7cb9-4011-b392-ce28e261057a",
-      "name": "Julius Randle",
-      "teamName": "Brooklyn Nets",
-      "sourceUrl": "https://cdn.nba.com/headshots/nba/latest/1040x760/203944.png",
-      "targetFilename": "real_face_203944_base.png"
-    },
-    {
       "id": "real_face_1630551",
       "playerId": "1763697346440-c7pxff",
       "name": "Justin Champagnie",
@@ -3438,14 +3430,6 @@
       "teamName": "Free Agency",
       "sourceUrl": "https://cdn.nba.com/headshots/nba/latest/1040x760/201563.png",
       "targetFilename": "real_face_201563_base.png"
-    },
-    {
-      "id": "real_face_1629008",
-      "playerId": "77ebce3e-0a31-4d34-9d9f-64091c2f9e3d",
-      "name": "Michael Porter Jr.",
-      "teamName": "Brooklyn Nets",
-      "sourceUrl": "https://cdn.nba.com/headshots/nba/latest/1040x760/1629008.png",
-      "targetFilename": "real_face_1629008_base.png"
     },
     {
       "id": "real_face_1628969",

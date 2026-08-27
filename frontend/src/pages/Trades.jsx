@@ -6,6 +6,9 @@ import { buildRecordMap, getStandardPlayers, playerOverall } from "../utils/team
 import { getContractSeasonYear } from "../utils/seasonContext.js";
 import { normalizeDraftPicks, normalizeTeamName } from "../utils/draftPicks.js";
 import PageFade from "../components/PageFade";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
+import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
+import { TRADE_CONTEXT_POPUP_TUNING } from "../config/tradeContextPopupTuning.js";
 import {
   readTradeDeskFeed,
   mergeTradeDeskFeedWithLeague,
@@ -13,6 +16,7 @@ import {
 } from "../utils/tradeDeskFeed.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
+import "./Trades.css";
 
 const TRADE_BUILDER_KEY = "bm_trade_builder_v1";
 
@@ -30,6 +34,46 @@ const POSITION_TARGETS = Object.freeze([
   { key: "PF", label: "Power Forward" },
   { key: "C", label: "Center" },
 ]);
+
+function useTradeContextPopupVisualTuning() {
+  const readViewportWidth = () => {
+    if (typeof window === "undefined") return 1600;
+    return window.innerWidth;
+  };
+
+  const [viewportWidth, setViewportWidth] = useState(readViewportWidth);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(readViewportWidth());
+    window.addEventListener("resize", onResize);
+    onResize();
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Internal responsive scale. You never need to tune this.
+  const responsiveScale = Math.max(0.78, Math.min(1, viewportWidth / 1600));
+
+  const resolveVisual = (key) => {
+    const visual = TRADE_CONTEXT_POPUP_TUNING?.[key] || {};
+    const x = Number(visual.x);
+    const y = Number(visual.y);
+    const scale = Number(visual.scale);
+    return {
+      x: (Number.isFinite(x) ? x : 0) * responsiveScale,
+      y: (Number.isFinite(y) ? y : 0) * responsiveScale,
+      scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
+    };
+  };
+
+  return {
+    responsiveScale,
+    headshot: resolveVisual("headshot"),
+    overall: resolveVisual("overall"),
+    outerRing: resolveVisual("outerRing"),
+    name: resolveVisual("name"),
+    ageText: resolveVisual("ageText"),
+  };
+}
 
 function safeNumber(value, fallback = 0) {
   const number = Number(value);
@@ -170,6 +214,238 @@ function buildPickDepth(team, leagueData, teamNames = []) {
     { key: "protectedSeconds", label: "Protected 2nds", count: counts.protectedSeconds },
     { key: "swapRights", label: "Swap Rights", count: counts.swapRights },
   ];
+}
+
+
+function getOwnedActiveDraftAssets(team, leagueData, teamNames = []) {
+  const ownerKey = normalizeTeamName(team?.name || team?.teamName || "");
+  return normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
+    .filter((asset) => String(asset?.status || "active").toLowerCase() === "active")
+    .filter((asset) => normalizeTeamName(asset?.ownerTeam || "") === ownerKey)
+    .sort((a, b) => safeNumber(a?.year, 9999) - safeNumber(b?.year, 9999) || safeNumber(a?.round, 9) - safeNumber(b?.round, 9));
+}
+
+function pickDepthBucketKey(asset = {}) {
+  const assetType = String(asset?.assetType || asset?.type || "pick").toLowerCase();
+  if (assetType === "swap") return "swapRights";
+  const protectedPick = isProtectedPickAsset(asset);
+  if (Number(asset?.round) === 1) return protectedPick ? "protectedFirsts" : "unprotectedFirsts";
+  if (Number(asset?.round) === 2) return protectedPick ? "protectedSeconds" : "unprotectedSeconds";
+  return "";
+}
+
+function positionModalPlayers(team, positionKey) {
+  return getStandardPlayers(team)
+    .filter((player) => primaryPositionOf(player) === positionKey)
+    .sort((a, b) => playerOverall(b) - playerOverall(a) || String(a?.name || a?.player || "").localeCompare(String(b?.name || b?.player || "")));
+}
+
+function playerPotentialValue(player) {
+  return safeNumber(player?.potential ?? player?.pot, playerOverall(player));
+}
+
+function formatPickRound(round) {
+  return Number(round) === 2 ? "2nd" : "1st";
+}
+
+function TradeContextDetailModal({ detail, team, leagueData, teamNames, onClose }) {
+  useEffect(() => {
+    if (!detail) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [detail, onClose]);
+
+  const visualTuning = useTradeContextPopupVisualTuning();
+
+  if (!detail) return null;
+
+  const isPosition = detail.type === "position";
+  const rows = isPosition
+    ? positionModalPlayers(team, detail.key)
+    : getOwnedActiveDraftAssets(team, leagueData, teamNames).filter((asset) => pickDepthBucketKey(asset) === detail.key);
+
+  return (
+    <div
+      className="fixed inset-0 z-[140] flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-[2px]"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${detail.label} details`}
+        className="flex max-h-[72vh] w-full max-w-[560px] flex-col overflow-hidden rounded-[20px] border border-white/10 bg-neutral-950 shadow-[0_28px_90px_rgba(0,0,0,0.72)]"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 bg-gradient-to-r from-orange-600/[0.09] via-neutral-950 to-neutral-950 px-5 py-4">
+          <div className="min-w-0">
+            <div className="text-[9px] font-black uppercase tracking-[0.2em] text-orange-400">
+              {isPosition ? "Position Depth" : "Pick Depth"}
+            </div>
+            <div className="mt-1 truncate text-lg font-black text-white">{detail.label}</div>
+            <div className="mt-1 text-[11px] font-semibold text-neutral-500">
+              {rows.length} {isPosition ? (rows.length === 1 ? "player" : "players") : (rows.length === 1 ? "asset" : "assets")}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-black/35 text-sm font-black text-neutral-400 transition hover:border-orange-400/30 hover:bg-orange-500/10 hover:text-white"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="trade-context-modal-scroll min-h-0 flex-1 overflow-y-auto p-3 pr-2">
+          {rows.length ? (
+            <div className="grid gap-2">
+              {isPosition ? rows.map((player, index) => {
+                const name = player?.name || player?.player || `Player ${index + 1}`;
+                const overall = playerOverall(player);
+                const potential = playerPotentialValue(player);
+                const age = safeNumber(player?.age, 0);
+                const teamName = String(team?.name || team?.teamName || "");
+                const headshot = player?.headshot || player?.headshotUrl || player?.photo || player?.image || "";
+                const portraitSlotSize = 58 * visualTuning.responsiveScale;
+                const portraitRenderSize = portraitSlotSize * visualTuning.headshot.scale;
+                const ringSize = 58 * visualTuning.responsiveScale;
+
+                return (
+                  <div
+                    key={player?.id || player?.playerId || `${name}_${index}`}
+                    className="trade-context-player-row flex items-center rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2"
+                    style={{ minHeight: 72 * visualTuning.responsiveScale }}
+                  >
+                    {/*
+                      Keep the layout slot fixed, but render the portrait at its
+                      actual tuned size. This prevents a tiny 58px layer from being
+                      rasterized first and then enlarged by CSS transform.
+                    */}
+                    <div
+                      className="relative shrink-0 overflow-visible"
+                      style={{ width: portraitSlotSize, height: portraitSlotSize }}
+                    >
+                      <div
+                        className="absolute bottom-0 left-1/2 overflow-visible"
+                        style={{
+                          width: portraitRenderSize,
+                          height: portraitRenderSize,
+                          transform: `translate3d(calc(-50% + ${visualTuning.headshot.x}px), ${visualTuning.headshot.y}px, 0)`,
+                          transformOrigin: "center bottom",
+                        }}
+                      >
+                        <RuntimePlayerPortrait
+                          player={player}
+                          teamName={teamName}
+                          src={headshot}
+                          alt={name}
+                          layoutPage="trade-context-popup"
+                          className="h-full w-full"
+                          fallback={<div className="h-full w-full" />}
+                        />
+                      </div>
+                    </div>
+
+                    <div
+                      className="ml-2 shrink-0"
+                      style={{
+                        transform: `translate(${visualTuning.overall.x}px, ${visualTuning.overall.y}px) scale(${visualTuning.overall.scale})`,
+                        transformOrigin: "center center",
+                      }}
+                    >
+                      <PlayerRatingRing
+                        overall={overall}
+                        potential={potential}
+                        size={ringSize}
+                        ringStyle={{
+                          transform: `translate(${visualTuning.outerRing.x}px, ${visualTuning.outerRing.y}px) scale(${visualTuning.outerRing.scale})`,
+                          transformOrigin: "center center",
+                          transformBox: "fill-box",
+                        }}
+                      />
+                    </div>
+
+                    {/*
+                      Fixed paint viewport: name/age scale and movement are visual
+                      only and can no longer change the row/modal scroll geometry.
+                    */}
+                    <div
+                      className="trade-context-player-copy ml-3 min-w-0 flex-1"
+                      style={{ height: 58 * visualTuning.responsiveScale }}
+                    >
+                      <div
+                        className="trade-context-player-name truncate text-sm font-black text-neutral-100"
+                        style={{
+                          top: 20 * visualTuning.responsiveScale,
+                          fontSize: 14 * visualTuning.responsiveScale,
+                          transform: `translate(${visualTuning.name.x}px, ${visualTuning.name.y}px) scale(${visualTuning.name.scale})`,
+                          transformOrigin: "left center",
+                        }}
+                      >
+                        {name}
+                      </div>
+
+                      {age > 0 && (
+                        <div
+                          className="trade-context-player-age text-[10px] font-bold uppercase tracking-[0.09em] text-neutral-500"
+                          style={{
+                            top: 39 * visualTuning.responsiveScale,
+                            fontSize: 10 * visualTuning.responsiveScale,
+                            transform: `translate(${visualTuning.ageText.x}px, ${visualTuning.ageText.y}px) scale(${visualTuning.ageText.scale})`,
+                            transformOrigin: "left center",
+                          }}
+                        >
+                          Age {age}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              }) : rows.map((asset, index) => {
+                const isSwap = String(asset?.assetType || asset?.type || "pick").toLowerCase() === "swap";
+                const year = safeNumber(asset?.year, 0);
+                const roundLabel = formatPickRound(asset?.round);
+                const originalTeam = String(asset?.originalTeam || "").trim();
+                const selectedName = String(team?.name || team?.teamName || "").trim();
+                const via = originalTeam && normalizeTeamName(originalTeam) !== normalizeTeamName(selectedName) ? `via ${originalTeam}` : "Own pick";
+                const protection = isSwap
+                  ? (asset?.swapWithTeam ? `Swap with ${asset.swapWithTeam}` : "Swap right")
+                  : (asset?.displayProtection || asset?.protections || asset?.protection || "Unprotected");
+                return (
+                  <div
+                    key={asset?.id || `${detail.key}_${year}_${index}`}
+                    className="rounded-xl border border-white/[0.08] bg-white/[0.035] px-4 py-3"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-black text-neutral-100">
+                          {year || "Future"} {roundLabel} Round {isSwap ? "Swap" : "Pick"}
+                        </div>
+                        <div className="mt-1 truncate text-[10px] font-bold uppercase tracking-[0.08em] text-neutral-500">{via}</div>
+                      </div>
+                      <div className="max-w-[46%] shrink-0 rounded-full border border-orange-400/15 bg-orange-500/[0.07] px-2.5 py-1 text-right text-[9px] font-black uppercase tracking-[0.08em] text-orange-200">
+                        {protection}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex min-h-[170px] items-center justify-center rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-5 text-center text-sm font-semibold text-neutral-500">
+              {isPosition ? `No ${detail.label.toLowerCase()}s on the standard roster.` : `No ${detail.label.toLowerCase()} assets are currently owned.`}
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function buildTeamContextAlerts(team, leagueData) {
@@ -485,6 +761,7 @@ export default function Trades() {
   const [storedFeed, setStoredFeed] = useState(() => readTradeDeskFeed());
   const [activeDeskFilter, setActiveDeskFilter] = useState("all");
   const [activeDeskView, setActiveDeskView] = useState("live");
+  const [contextDetail, setContextDetail] = useState(null);
 
   useEffect(() => {
     const refresh = () => setStoredFeed(readTradeDeskFeed());
@@ -642,9 +919,12 @@ export default function Trades() {
                           ? "border-orange-400/35 bg-orange-500/10 text-orange-300"
                           : "border-white/10 bg-black/30 text-neutral-300";
                       return (
-                        <div
+                        <button
                           key={row.key}
-                          className={`min-w-0 rounded-xl border px-2 py-3 text-center ${shortageClass}`}
+                          type="button"
+                          onClick={() => setContextDetail({ type: "position", key: row.key, label: row.label })}
+                          className={`group min-w-0 rounded-xl border px-2 py-3 text-center transition duration-150 hover:-translate-y-px hover:border-orange-400/35 hover:bg-orange-500/[0.08] focus:outline-none focus-visible:ring-1 focus-visible:ring-orange-400/60 ${shortageClass}`}
+                          aria-label={`View ${row.label} players`}
                         >
                           <div className="truncate text-[9px] font-black uppercase tracking-[0.12em] opacity-80">
                             {row.label}
@@ -652,7 +932,7 @@ export default function Trades() {
                           <div className="mt-1 text-lg font-black leading-none">
                             {row.count}/{row.target}
                           </div>
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
@@ -664,9 +944,12 @@ export default function Trades() {
                   </div>
                   <div className="grid grid-cols-5 gap-2">
                     {pickDepth.map((row) => (
-                      <div
+                      <button
                         key={row.key}
-                        className="min-w-0 rounded-xl border border-white/10 bg-black/30 px-2 py-3 text-center text-neutral-300"
+                        type="button"
+                        onClick={() => setContextDetail({ type: "pick", key: row.key, label: row.label })}
+                        className="group min-w-0 rounded-xl border border-white/10 bg-black/30 px-2 py-3 text-center text-neutral-300 transition duration-150 hover:-translate-y-px hover:border-orange-400/35 hover:bg-orange-500/[0.08] hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-orange-400/60"
+                        aria-label={`View ${row.label}`}
                       >
                         <div className="whitespace-nowrap text-[8px] font-black uppercase tracking-[0.055em] opacity-85">
                           {row.label}
@@ -674,7 +957,7 @@ export default function Trades() {
                         <div className="mt-1 text-lg font-black leading-none">
                           {row.count}
                         </div>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -840,6 +1123,14 @@ export default function Trades() {
 
         </div>
       </div>
+
+      <TradeContextDetailModal
+        detail={contextDetail}
+        team={selectedTeam}
+        leagueData={leagueData}
+        teamNames={teams.map((team) => team?.name || team?.teamName || "")}
+        onClose={() => setContextDetail(null)}
+      />
     </PageFade>
   );
 }

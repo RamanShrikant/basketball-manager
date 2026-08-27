@@ -500,7 +500,8 @@ export default function AllNbaTeams({ leagueDataProp, onBackToAwards = null }) {
                   teamName={cardPlayer.teamName || cardPlayer.team || ""}
                   alt={cardPlayer.name}
                   layoutPage={portraitLayoutPage}
-                  className="h-[166px] w-[190px]"
+                  bottomInset={0}
+                  className="h-[166px] w-[228px]"
                 />
                 <div className="flex flex-col justify-end mb-3">
                   <h2 className="text-[38px] font-bold leading-tight">

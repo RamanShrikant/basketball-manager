@@ -1,8 +1,8 @@
 BASKETBALL MANAGER — REAL PLAYER BASE PORTRAITS
 ===============================================
 
-Ready: 1
-Missing: 638
+Ready: 3
+Missing: 636
 
 A.J. Green -> real_face_1631260_base.png
 A.J. Lawson -> real_face_1630639_base.png
@@ -344,7 +344,6 @@ Julian Champagnie -> real_face_1630577_base.png
 Julian Phillips -> real_face_1641763_base.png
 Julian Reese -> real_face_1642882_base.png
 Julian Strawther -> real_face_1631124_base.png
-Julius Randle -> real_face_203944_base.png
 Justin Champagnie -> real_face_1630551_base.png
 Justin Edwards -> real_face_1642348_base.png
 Jusuf Nurkic -> real_face_jusuf_nurkic_df45b701_base.png
@@ -433,7 +432,6 @@ Meleek Thomas -> real_face_meleek_thomas_d7c4df38_base.png
 Micah Peavy -> real_face_micah_peavy_371d8127_base.png
 Micah Potter -> real_face_1630695_base.png
 Michael Beasley -> real_face_201563_base.png
-Michael Porter Jr. -> real_face_1629008_base.png
 Mikal Bridges -> real_face_1628969_base.png
 Mike Conley -> real_face_201144_base.png
 Mike James -> real_face_1628455_base.png

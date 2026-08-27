@@ -4100,8 +4100,8 @@
     "sourceUrl": "https://cdn.nba.com/headshots/nba/latest/1040x760/203944.png",
     "baseFilename": "real_face_203944_base.png",
     "baseUrl": "/assets/real_player_faces/base/real_face_203944_base.png",
-    "baseReady": false,
-    "needsBase": true
+    "baseReady": true,
+    "needsBase": false
   },
   {
     "id": "real_face_1630551",
@@ -5168,8 +5168,8 @@
     "sourceUrl": "https://cdn.nba.com/headshots/nba/latest/1040x760/1629008.png",
     "baseFilename": "real_face_1629008_base.png",
     "baseUrl": "/assets/real_player_faces/base/real_face_1629008_base.png",
-    "baseReady": false,
-    "needsBase": true
+    "baseReady": true,
+    "needsBase": false
   },
   {
     "id": "real_face_1628969",

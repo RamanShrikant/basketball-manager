@@ -1,4 +1,4 @@
-import { useLayoutEffect } from "react";
+import React, { useLayoutEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import Layout from "./components/Layout.jsx";
 import Home from "./pages/Home.jsx";
@@ -48,6 +48,8 @@ import AwardHistory from "./pages/AwardHistory.jsx";
 import PastChampions from "./pages/PastChampions.jsx";
 import GlobalGameNav from "./components/GlobalGameNav.jsx";
 import SeasonBriefingHost from "./components/SeasonBriefingHost.jsx";
+import PageFade from "./components/PageFade.jsx";
+import "./components/PageFade.css";
 
 function RouteDensitySync() {
   const { pathname } = useLocation();
@@ -74,67 +76,74 @@ function RouteDensitySync() {
   return null;
 }
 
+function RoutePageFade({ children }) {
+  const { pathname } = useLocation();
+  return <PageFade key={pathname}>{children}</PageFade>;
+}
+
 function App() {
   return (
     <BrowserRouter>
       <RouteDensitySync />
       <GlobalGameNav />
       <SeasonBriefingHost />
+      <RoutePageFade>
       <Routes>
-        {/* ✅ Routes that use your shared Layout */}
-        <Route element={<Layout />}>
-          <Route index element={<LeagueEditor />} />
-          <Route path="players" element={<PlayerEditor />} />
-          <Route path="players/:playerId" element={<PlayerEditor />} />
-          <Route path="trade" element={<TradeSimulator />} />
-          <Route path="simulate" element={<GameSimulator />} />
-          <Route path="league-editor" element={<LeagueEditor />} />
-          <Route path="awards" element={<Awards />} />
-          <Route path="/finals-mvp" element={<FinalsMvp />} />
-        </Route>
+          {/* ✅ Routes that use your shared Layout */}
+          <Route element={<Layout />}>
+            <Route index element={<LeagueEditor />} />
+            <Route path="players" element={<PlayerEditor />} />
+            <Route path="players/:playerId" element={<PlayerEditor />} />
+            <Route path="trade" element={<TradeSimulator />} />
+            <Route path="simulate" element={<GameSimulator />} />
+            <Route path="league-editor" element={<LeagueEditor />} />
+            <Route path="awards" element={<Awards />} />
+            <Route path="/finals-mvp" element={<FinalsMvp />} />
+          </Route>
 
-        {/* ✅ Standalone full-screen routes */}
-        <Route path="/play" element={<Play />} />
-        <Route path="/team-selector" element={<TeamSelector />} />
-        <Route path="/team-hub" element={<TeamHub />} />
-        <Route path="/roster-view" element={<RosterView />} />
-        <Route path="/coach-gameplan" element={<CoachGameplan />} />
-        <Route path="/calendar" element={<Calendar />} />
-        <Route path="/player-stats" element={<PlayerStats scope="regular" />} />
-        <Route path="/playoff-stats" element={<PlayerStats scope="playoffs" />} />
-        <Route path="/draft-lottery" element={<DraftLottery />} />
-        <Route path="/draft" element={<Draft />} />
-        <Route path="/upcoming-draft" element={<UpcomingDraft />} />
-        <Route path="/rookie-signings" element={<RookieSignings />} />
-        <Route path="/roster-finalization" element={<RosterFinalization />} />
-        <Route path="/standings" element={<Standings />} />
-        <Route path="/power-rankings" element={<PowerRankings />} />
-        <Route path="/draft-picks" element={<DraftPicks />} />
-        <Route path="/trades" element={<Trades />} />
-        <Route path="/propose-trade" element={<ProposeTrade />} />
-        <Route path="/trade-player-select" element={<TradePlayerSelect />} />
-        <Route path="/trade-pick-select" element={<TradePickSelect />} />
-        <Route path="/trade-finder" element={<TradeFinder />} />
-        <Route path="/locker-room" element={<LockerRoom />} />
-        <Route path="/contract-extensions" element={<ContractExtensions />} />
-        <Route path="/intel" element={<Intel />} />
-        <Route path="/settings" element={<Settings />} />
-        <Route path="/league-history" element={<LeagueHistory />} />
-        <Route path="/award-history" element={<AwardHistory />} />
-        <Route path="/past-champions" element={<PastChampions />} />
-        <Route path="/playoffs" element={<Playoffs />} />
-        <Route path="/playoff-picture" element={<PlayoffPicture />} />
-        <Route path="/player-progression" element={<PlayerProgression />} />
-        <Route path="salary-table" element={<SalaryTable />} />
-        <Route path="/free-agents" element={<FreeAgents />} />
-        <Route path="/award-tracker" element={<AwardTracker />} />
-        <Route path="/all-stars" element={<AllStarsPage />} />
-        <Route path="/offseason" element={<OffseasonHub />} />
-        <Route path="/offseason-hub" element={<Navigate to="/offseason" replace />} />
-        <Route path="/player-team-options" element={<PlayerTeamOptions />} />
-        <Route path="/player-retirements" element={<PlayerRetirements />} />
-        <Route path="/viewing-offers" element={<ViewingOffers />} />
-      </Routes>
+          {/* ✅ Standalone full-screen routes */}
+          <Route path="/play" element={<Play />} />
+          <Route path="/team-selector" element={<TeamSelector />} />
+          <Route path="/team-hub" element={<TeamHub />} />
+          <Route path="/roster-view" element={<RosterView />} />
+          <Route path="/coach-gameplan" element={<CoachGameplan />} />
+          <Route path="/calendar" element={<Calendar />} />
+          <Route path="/player-stats" element={<PlayerStats scope="regular" />} />
+          <Route path="/playoff-stats" element={<PlayerStats scope="playoffs" />} />
+          <Route path="/draft-lottery" element={<DraftLottery />} />
+          <Route path="/draft" element={<Draft />} />
+          <Route path="/upcoming-draft" element={<UpcomingDraft />} />
+          <Route path="/rookie-signings" element={<RookieSignings />} />
+          <Route path="/roster-finalization" element={<RosterFinalization />} />
+          <Route path="/standings" element={<Standings />} />
+          <Route path="/power-rankings" element={<PowerRankings />} />
+          <Route path="/draft-picks" element={<DraftPicks />} />
+          <Route path="/trades" element={<Trades />} />
+          <Route path="/propose-trade" element={<ProposeTrade />} />
+          <Route path="/trade-player-select" element={<TradePlayerSelect />} />
+          <Route path="/trade-pick-select" element={<TradePickSelect />} />
+          <Route path="/trade-finder" element={<TradeFinder />} />
+          <Route path="/locker-room" element={<LockerRoom />} />
+          <Route path="/contract-extensions" element={<ContractExtensions />} />
+          <Route path="/intel" element={<Intel />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/league-history" element={<LeagueHistory />} />
+          <Route path="/award-history" element={<AwardHistory />} />
+          <Route path="/past-champions" element={<PastChampions />} />
+          <Route path="/playoffs" element={<Playoffs />} />
+          <Route path="/playoff-picture" element={<PlayoffPicture />} />
+          <Route path="/player-progression" element={<PlayerProgression />} />
+          <Route path="salary-table" element={<SalaryTable />} />
+          <Route path="/free-agents" element={<FreeAgents />} />
+          <Route path="/award-tracker" element={<AwardTracker />} />
+          <Route path="/all-stars" element={<AllStarsPage />} />
+          <Route path="/offseason" element={<OffseasonHub />} />
+          <Route path="/offseason-hub" element={<Navigate to="/offseason" replace />} />
+          <Route path="/player-team-options" element={<PlayerTeamOptions />} />
+          <Route path="/player-retirements" element={<PlayerRetirements />} />
+          <Route path="/viewing-offers" element={<ViewingOffers />} />
+        </Routes>
+      </RoutePageFade>
     </BrowserRouter>
   );
 }

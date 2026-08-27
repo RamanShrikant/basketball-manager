@@ -119,21 +119,27 @@ function StatTile({ label, value, sub = "", tone = "orange" }) {
   );
 }
 
-function PlayerTiny({ row, source = false, compact = false }) {
+function PlayerTiny({ row, source = false, compact = false, teamName = "" }) {
   const player = row?.player || row;
   const name = row?.name || playerNameOf(player);
   const headshot = row?.headshot || playerHeadshotOf(player);
+  const resolvedTeamName = source
+    ? (row?.sourceTeamName || row?.teamName || row?.team || player?.teamName || player?.team || teamName || "")
+    : (row?.teamName || row?.team || player?.teamName || player?.team || teamName || "");
   const overall = row?.overall ?? player?.overall ?? "—";
   const potential = row?.potential ?? player?.potential ?? "—";
   const age = row?.age ?? player?.age ?? "—";
   const pos = row?.pos || player?.pos || "-";
   const meta = `${pos} · ${overall} OVR · ${potential} POT · Age ${age}`;
   const footer = row?.salary ? formatMoney(row.salary) : "";
+  const portraitTeamName = source
+    ? (row?.sourceTeamName || row?.teamName || row?.team || player?.teamName || teamName || "")
+    : (teamName || row?.teamName || row?.team || player?.teamName || "");
 
   return (
     <div className={cx("grid min-w-0 grid-cols-[36px_1fr_auto] items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.035] px-2.5", compact ? "h-full min-h-[46px] max-h-[54px]" : "h-[54px]")}> 
       <div className="flex h-8 w-8 shrink-0 items-end justify-center overflow-hidden rounded-lg bg-black/50 ring-1 ring-white/8">
-        <RuntimePlayerPortrait player={player} teamName={row?.teamName || row?.team || player?.teamName || ""} src={headshot} alt={name} className="h-10 w-10" fallback={<span className="text-[8px] text-neutral-600">N/A</span>} />
+        <RuntimePlayerPortrait player={player} teamName={source ? (row?.sourceTeamName || row?.teamName || row?.team || player?.teamName || teamName || "") : (teamName || row?.teamName || row?.team || player?.teamName || player?.team || "")} src={headshot} alt={name} layoutPage="intel" className="h-10 w-10" fallback={<span className="text-[8px] text-neutral-600">N/A</span>} />
       </div>
       <div className="min-w-0">
         <div className="truncate text-[12px] font-black leading-none text-white">{name}</div>
@@ -147,7 +153,7 @@ function PlayerTiny({ row, source = false, compact = false }) {
   );
 }
 
-function ListPanel({ title, subtitle, rows = [], empty, source = false, limit = 3 }) {
+function ListPanel({ title, subtitle, rows = [], empty, source = false, limit = 3, teamName = "" }) {
   const shown = rows.slice(0, limit);
   const more = Math.max(0, rows.length - shown.length);
   const rowCount = Math.max(1, shown.length);
@@ -163,7 +169,7 @@ function ListPanel({ title, subtitle, rows = [], empty, source = false, limit = 
       >
         {shown.length ? shown.map((row) => (
           <div key={`${title}-${row.sourceTeamName || ""}-${row.name}`} className="min-h-0">
-            <PlayerTiny row={row} source={source} compact />
+            <PlayerTiny row={row} source={source} compact teamName={teamName} />
           </div>
         )) : <EmptyMini>{empty}</EmptyMini>}
       </div>
@@ -231,7 +237,7 @@ function ExpiringPanel({ active }) {
       >
         {expiring.map((row) => (
           <div key={`exp-${row.name}`} className="min-h-0">
-            <PlayerTiny row={{ ...row, reason: `${formatMoney(row.salary)} expiring` }} compact />
+            <PlayerTiny row={{ ...row, reason: `${formatMoney(row.salary)} expiring` }} compact teamName={active?.name || ""} />
           </div>
         ))}
         {!expiring.length && <EmptyMini>No major expiring deals.</EmptyMini>}
@@ -367,14 +373,14 @@ export default function Intel() {
               <div className="grid min-h-0 gap-3 overflow-hidden xl:grid-cols-[300px_1fr]">
                 <div className="grid min-h-0 grid-rows-[208px_1fr] gap-3 overflow-hidden">
                   <LineupCard active={active} />
-                  <ListPanel title="Untouchable" subtitle="protected core / hard to pry loose" rows={active.untouchables} empty="No true untouchable detected." limit={3} />
+                  <ListPanel title="Untouchable" subtitle="protected core / hard to pry loose" rows={active.untouchables} empty="No true untouchable detected." limit={3} teamName={active?.name || ""} />
                 </div>
 
                 <div className="grid min-h-0 grid-rows-[168px_1fr] gap-3 overflow-hidden">
                   <StatusPanel active={active} />
                   <div className="grid min-h-0 grid-cols-3 gap-3 overflow-hidden">
-                    <ListPanel title="Trade Block" subtitle="timeline, salary, or rotation squeeze" rows={active.tradeBlock} empty="No obvious movable players." limit={4} />
-                    <ListPanel title="Targets" subtitle="fits from other rosters" rows={active.targets} empty="No clean target match." source limit={4} />
+                    <ListPanel title="Trade Block" subtitle="timeline, salary, or rotation squeeze" rows={active.tradeBlock} empty="No obvious movable players." limit={4} teamName={active?.name || ""} />
+                    <ListPanel title="Targets" subtitle="fits from other rosters" rows={active.targets} empty="No clean target match." source limit={4} teamName={active?.name || ""} />
                     <ExpiringPanel active={active} />
                   </div>
                 </div>

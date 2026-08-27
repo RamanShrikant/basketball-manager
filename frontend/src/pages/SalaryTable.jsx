@@ -5,6 +5,11 @@ import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import PageFade from "../components/PageFade";
 import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
+import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
+import {
+  HEADSHOT_LAYOUTS,
+  getResponsiveVisualScale,
+} from "../config/headshotLayout.js";
 import "../styles/BMAnimations.css";
 import styles from "./SalaryTable.module.css";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
@@ -17,6 +22,91 @@ import {
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const LEAGUE_META_KEY = "bm_league_meta_v1";
+
+
+// Salary Table base sizing. These values preserve the existing working
+// headshot/ring sizing behavior. Manual x/y/scale + row-height controls live in
+// config/headshotLayout.js inside HEADSHOT_LAYOUTS["salary-table"].
+const SALARY_TABLE_PLAYER_VISUAL_TUNING = Object.freeze({
+  laptopMaxWidth: 1440,
+  desktop: {
+    gap: 8,
+    headshot: { width: 42, height: 44, x: 0, y: 0, scale: 1.0 },
+    ring: { size: 50, x: 0, y: 0, strokeWidth: 6 },
+    nameSize: 14,
+  },
+  laptop: {
+    gap: 6,
+    headshot: { width: 36, height: 40, x: 0, y: 0, scale: 1.0 },
+    ring: { size: 48, x: 0, y: 0, strokeWidth: 6 },
+    nameSize: 13,
+  },
+});
+
+function useResponsiveSalaryVisualTuning(config) {
+  const resolveMode = () => {
+    if (typeof window === "undefined") return "desktop";
+    return window.innerWidth <= Number(config?.laptopMaxWidth || 1440) ? "laptop" : "desktop";
+  };
+  const [mode, setMode] = useState(resolveMode);
+  useEffect(() => {
+    const onResize = () => setMode(resolveMode());
+    window.addEventListener("resize", onResize);
+    onResize();
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return config?.[mode] || config?.desktop || {};
+}
+
+function useSalaryTableManualVisualTuning() {
+  // All user-editable Salary Table values live in ONE place:
+  // HEADSHOT_LAYOUTS["salary-table"] in config/headshotLayout.js.
+  const controls = HEADSHOT_LAYOUTS["salary-table"] || {};
+
+  const readViewportWidth = () => {
+    if (typeof window === "undefined") return 1600;
+    return window.innerWidth;
+  };
+
+  const [viewportWidth, setViewportWidth] = useState(readViewportWidth);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(readViewportWidth());
+    window.addEventListener("resize", onResize);
+    onResize();
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Keep x/y and row height proportional across desktop/laptop resolutions.
+  // These responsive defaults are intentionally internal; you do not need to edit them.
+  const responsiveScale = getResponsiveVisualScale(viewportWidth, {
+    referenceWidth: 1600,
+    minResponsiveScale: 0.78,
+    maxResponsiveScale: 1,
+  });
+  const rowHeight = Math.max(1, Number(controls.rowHeight || 60)) * responsiveScale;
+
+  const resolveVisual = (key) => {
+    const visual = controls?.[key] || {};
+    const x = Number(visual.x);
+    const y = Number(visual.y);
+    const scale = Number(visual.scale);
+    return {
+      x: (Number.isFinite(x) ? x : 0) * responsiveScale,
+      y: (Number.isFinite(y) ? y : 0) * responsiveScale,
+      scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
+    };
+  };
+
+  return {
+    responsiveScale,
+    rowHeight,
+    name: resolveVisual("name"),
+    overall: resolveVisual("overall"),
+    outerRing: resolveVisual("outerRing"),
+    option: resolveVisual("option"),
+  };
+}
 
 function safeParseSalaryTableJSON(key, fallback = null) {
   try {
@@ -136,6 +226,8 @@ export default function SalaryTable() {
   const [selectedTeamKey, setSelectedTeamKey] = useState("");
   const [capHoldInfo, setCapHoldInfo] = useState(null);
   const [deadCapInfo, setDeadCapInfo] = useState(null);
+  const salaryPlayerTuning = useResponsiveSalaryVisualTuning(SALARY_TABLE_PLAYER_VISUAL_TUNING);
+  const salaryManualTuning = useSalaryTableManualVisualTuning();
 
   const salaryContextLeague = useMemo(() => buildSalaryContextLeague(leagueData), [leagueData]);
   const currentSeasonYear = resolveSalaryTableSeasonYear(leagueData || salaryContextLeague || {});
@@ -515,6 +607,7 @@ export default function SalaryTable() {
       name: player?.name || "Unknown",
       pos: player?.pos || "",
       overall: player?.overall ?? "-",
+      potential: player?.potential ?? player?.pot ?? player?.overall ?? "-",
       headshot: getPlayerImage(player),
       portraitId: player?.portraitId || player?.portraitFamilyId || "",
       contract: {
@@ -547,6 +640,7 @@ export default function SalaryTable() {
       name: player?.name || "Unknown",
       pos: player?.pos || "",
       overall: player?.overall ?? "-",
+      potential: player?.potential ?? player?.pot ?? player?.overall ?? "-",
       headshot: getPlayerImage(player),
       portraitId: player?.portraitId || player?.portraitFamilyId || "",
       contract: {
@@ -1096,6 +1190,7 @@ export default function SalaryTable() {
         name: p?.name || "Unknown",
         pos: p?.pos || "",
         overall: p?.overall ?? "-",
+        potential: p?.potential ?? p?.pot ?? p?.overall ?? "-",
         headshot: getPlayerImage(p),
         portraitId: p?.portraitId || p?.portraitFamilyId || "",
         contract: c,
@@ -1117,6 +1212,7 @@ export default function SalaryTable() {
       name: row.playerName,
       pos: row.position,
       overall: row.overall,
+      potential: row.potential ?? row.pot ?? row.overall ?? "-",
       headshot: row.headshot,
       contract: {
         startYear: currentSeasonYear,
@@ -1139,6 +1235,7 @@ export default function SalaryTable() {
       name: row.playerName,
       pos: row.pos || "-",
       overall: row.overall ?? "-",
+      potential: row.potential ?? row.pot ?? row.overall ?? "-",
       headshot: row.headshot || "",
       contract: {
         startYear: currentSeasonYear,
@@ -1522,6 +1619,7 @@ export default function SalaryTable() {
         name: p?.name || "Unknown",
         pos: p?.pos || "",
         overall: p?.overall ?? "-",
+        potential: p?.potential ?? p?.pot ?? p?.overall ?? "-",
         headshot: getPlayerImage(p),
         portraitId: p?.portraitId || p?.portraitFamilyId || "",
         contract: c,
@@ -1543,6 +1641,7 @@ export default function SalaryTable() {
       name: row.playerName,
       pos: row.position,
       overall: row.overall,
+      potential: row.potential ?? row.pot ?? row.overall ?? "-",
       headshot: row.headshot,
       contract: {
         startYear: currentSeasonYear,
@@ -1565,6 +1664,7 @@ export default function SalaryTable() {
       name: row.playerName,
       pos: row.pos || "-",
       overall: row.overall ?? "-",
+      potential: row.potential ?? row.pot ?? row.overall ?? "-",
       headshot: row.headshot || "",
       contract: {
         startYear: currentSeasonYear,
@@ -1628,6 +1728,111 @@ export default function SalaryTable() {
     };
   };
 
+
+  const renderSalaryPlayerIdentity = (p, teamName) => (
+    <div className="flex min-w-0 items-center" style={{ gap: salaryPlayerTuning.gap }}>
+      <div
+        className="relative shrink-0 overflow-visible"
+        style={{
+          width: salaryPlayerTuning.headshot.width,
+          height: salaryPlayerTuning.headshot.height,
+          transform: `translate(${salaryPlayerTuning.headshot.x}px, ${salaryPlayerTuning.headshot.y}px) scale(${salaryPlayerTuning.headshot.scale})`,
+          transformOrigin: "center bottom",
+        }}
+      >
+        <RuntimePlayerPortrait
+          player={p}
+          teamName={teamName}
+          src={p.headshot}
+          alt={p.name}
+          layoutPage="salary-table"
+          className="h-full w-full"
+          fallback={<div className="h-full w-full" />}
+        />
+      </div>
+
+      <div
+        className="shrink-0"
+        style={{
+          transform: `translate(${salaryPlayerTuning.ring.x + salaryManualTuning.overall.x}px, ${salaryPlayerTuning.ring.y + salaryManualTuning.overall.y}px) scale(${salaryManualTuning.overall.scale})`,
+          transformOrigin: "center center",
+        }}
+      >
+        <PlayerRatingRing
+          overall={p.overall}
+          potential={p.potential ?? p.overall}
+          size={salaryPlayerTuning.ring.size}
+          strokeWidth={salaryPlayerTuning.ring.strokeWidth}
+          ringStyle={{
+            transform: `translate(${salaryManualTuning.outerRing.x}px, ${salaryManualTuning.outerRing.y}px) scale(${salaryManualTuning.outerRing.scale})`,
+            transformOrigin: "center center",
+            transformBox: "fill-box",
+          }}
+        />
+      </div>
+
+      <div className="min-w-0 leading-tight">
+        <div
+          className="flex min-w-0 items-center gap-2 font-semibold"
+          style={{
+            fontSize: salaryPlayerTuning.nameSize,
+            transform: `translate(${salaryManualTuning.name.x}px, ${salaryManualTuning.name.y}px) scale(${salaryManualTuning.name.scale})`,
+            transformOrigin: "left center",
+          }}
+        >
+          <span className="truncate">{p.name}</span>
+          {p.isTwoWay && (
+            <span className="inline-flex shrink-0 items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-200">
+              2W
+            </span>
+          )}
+          {p.isStash && (
+            <span className="inline-flex shrink-0 items-center rounded-full border border-amber-400/25 bg-amber-500/15 px-2 py-0.5 text-[10px] font-extrabold text-amber-200">
+              STASH
+            </span>
+          )}
+          {p.isDeadCap && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setDeadCapInfo(p);
+              }}
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-red-400/45 bg-red-500/20 text-[11px] font-extrabold text-red-100 transition hover:bg-red-500/30"
+              title="Explain dead cap"
+              aria-label={`Explain ${p.name} dead cap`}
+            >
+              ?
+            </button>
+          )}
+          {p.isCapHold && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setCapHoldInfo(p);
+              }}
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-red-400/45 bg-red-500/15 text-[11px] font-extrabold text-red-100 transition hover:bg-red-500/25"
+              title="Explain cap hold"
+              aria-label={`Explain ${p.name} cap hold`}
+            >
+              ?
+            </button>
+          )}
+        </div>
+        <div
+          className={p.isDeadCap || p.isCapHold ? "mt-0.5 truncate text-xs text-red-200/75" : "mt-0.5 truncate text-xs text-white/50"}
+          style={{
+            transform: `translate(${salaryManualTuning.option.x}px, ${salaryManualTuning.option.y}px) scale(${salaryManualTuning.option.scale})`,
+            transformOrigin: "left center",
+          }}
+        >
+          {p.optionLabel}
+        </div>
+      </div>
+    </div>
+  );
+
   const allTeamSalaryTables = useMemo(() => {
     if (!isAllTeamsView) return [];
 
@@ -1686,12 +1891,11 @@ export default function SalaryTable() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px]">
+          <table className="w-full min-w-[920px]">
             <thead className="bg-white/5 border-b border-white/10">
               <tr className="text-white/70 text-sm">
                 <th className="text-left px-4 py-3">Player</th>
                 <th className="text-center px-3 py-2">Pos</th>
-                <th className="text-center px-3 py-2">OVR</th>
                 {yearColumns.map((y) => (
                   <th key={y} className="text-right px-3 py-2 whitespace-nowrap" title={getSeasonRangeLabel(y)}>
                     {getDisplayYearLabel(y)}
@@ -1707,70 +1911,18 @@ export default function SalaryTable() {
                 <tr
                   key={`${snapshot.teamName}-${p.id}`}
                   className={`${p.isDeadCap ? "border-b border-red-500/45 bg-red-500/10 hover:bg-red-500/15" : p.isCapHold ? "border-b border-red-500/35 bg-red-500/5 hover:bg-red-500/10" : p.isTwoWay ? "border-b border-emerald-400/10 bg-emerald-500/5 hover:bg-emerald-500/10" : p.isStash ? "border-b border-amber-400/10 bg-amber-500/5 hover:bg-amber-500/10" : "border-b border-white/5 hover:bg-white/5"} transition`}
-                  style={p.isDeadCap || p.isCapHold ? { boxShadow: "inset 0 0 0 1px rgba(248, 113, 113, 0.35)" } : undefined}
+                  style={{
+                    height: `${salaryManualTuning.rowHeight}px`,
+                    ...(p.isDeadCap || p.isCapHold
+                      ? { boxShadow: "inset 0 0 0 1px rgba(248, 113, 113, 0.35)" }
+                      : {}),
+                  }}
                 >
                   <td className="px-4 py-2">
-                    <div className="flex items-center gap-3">
-                      <RuntimePlayerPortrait
-                        player={p}
-                        teamName={snapshot.teamName}
-                        src={p.headshot}
-                        alt={p.name}
-                        className={`h-12 w-12 rounded-full border bg-white/5 ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`}
-                        fallback={<div className={`h-12 w-12 rounded-full bg-white/5 border ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`} />}
-                      />
-
-                      <div className="leading-tight">
-                        <div className="font-semibold flex items-center gap-2">
-                          <span>{p.name}</span>
-                          {p.isTwoWay && (
-                            <span className="inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-200">
-                              2W
-                            </span>
-                          )}
-                          {p.isStash && (
-                            <span className="inline-flex items-center rounded-full border border-amber-400/25 bg-amber-500/15 px-2 py-0.5 text-[10px] font-extrabold text-amber-200">
-                              STASH
-                            </span>
-                          )}
-                          {p.isDeadCap && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setDeadCapInfo(p);
-                              }}
-                              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-red-400/45 bg-red-500/20 text-[11px] font-extrabold text-red-100 hover:bg-red-500/30 transition"
-                              title="Explain dead cap"
-                              aria-label={`Explain ${p.name} dead cap`}
-                            >
-                              ?
-                            </button>
-                          )}
-                          {p.isCapHold && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setCapHoldInfo(p);
-                              }}
-                              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-red-400/45 bg-red-500/15 text-[11px] font-extrabold text-red-100 hover:bg-red-500/25 transition"
-                              title="Explain cap hold"
-                              aria-label={`Explain ${p.name} cap hold`}
-                            >
-                              ?
-                            </button>
-                          )}
-                        </div>
-                        <div className={p.isDeadCap || p.isCapHold ? "text-xs text-red-200/75" : "text-xs text-white/50"}>
-                          {p.optionLabel}
-                        </div>
-                      </div>
-                    </div>
+                    {renderSalaryPlayerIdentity(p, snapshot.teamName)}
                   </td>
 
                   <td className="text-center px-3 py-3 text-white/85">{p.pos}</td>
-                  <td className="text-center px-3 py-3 font-semibold text-orange-300">{p.overall}</td>
 
                   {yearColumns.map((seasonYear) => {
                     const idx = seasonYear - p.contract.startYear;
@@ -1820,7 +1972,7 @@ export default function SalaryTable() {
               ))}
 
               <tr className="bg-white/5">
-                <td className="px-4 py-3 font-extrabold text-white/90" colSpan={3}>
+                <td className="px-4 py-3 font-extrabold text-white/90" colSpan={2}>
                   Team Totals:
                 </td>
 
@@ -1974,13 +2126,12 @@ export default function SalaryTable() {
               </div>
 
               <div className="bmTableScroller min-h-0 flex-1 overflow-auto">
-                <table className="w-full min-w-[980px]">
+                <table className="w-full min-w-[920px]">
                   <thead className="bg-white/5 border-b border-white/10">
                     <tr className="text-white/70 text-sm">
                       <th className="text-left px-4 py-3">Player</th>
                       <th className="text-center px-3 py-2">Pos</th>
-                      <th className="text-center px-3 py-2">OVR</th>
-                      {yearColumns.map((y) => (
+                            {yearColumns.map((y) => (
                         <th key={y} className="text-right px-3 py-2 whitespace-nowrap" title={getSeasonRangeLabel(y)}>
                           {getDisplayYearLabel(y)}
                         </th>
@@ -1995,70 +2146,18 @@ export default function SalaryTable() {
                       <tr
                         key={p.id}
                         className={`${p.isDeadCap ? "border-b border-red-500/45 bg-red-500/10 hover:bg-red-500/15" : p.isCapHold ? "border-b border-red-500/35 bg-red-500/5 hover:bg-red-500/10" : p.isTwoWay ? "border-b border-emerald-400/10 bg-emerald-500/5 hover:bg-emerald-500/10" : p.isStash ? "border-b border-amber-400/10 bg-amber-500/5 hover:bg-amber-500/10" : "border-b border-white/5 hover:bg-white/5"} transition`}
-                        style={p.isDeadCap || p.isCapHold ? { boxShadow: "inset 0 0 0 1px rgba(248, 113, 113, 0.35)" } : undefined}
+                        style={{
+                    height: `${salaryManualTuning.rowHeight}px`,
+                    ...(p.isDeadCap || p.isCapHold
+                      ? { boxShadow: "inset 0 0 0 1px rgba(248, 113, 113, 0.35)" }
+                      : {}),
+                  }}
                       >
                         <td className="px-4 py-2">
-                          <div className="flex items-center gap-3">
-                            <RuntimePlayerPortrait
-                              player={p}
-                              teamName={selectedTeam.name}
-                              src={p.headshot}
-                              alt={p.name}
-                              className={`h-9 w-9 rounded-full border bg-white/5 ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`}
-                              fallback={<div className={`h-9 w-9 rounded-full bg-white/5 border ${p.isDeadCap || p.isCapHold ? "border-red-400/35" : "border-white/10"}`} />}
-                            />
-
-                            <div className="leading-tight">
-                              <div className="font-semibold flex items-center gap-2">
-                                <span>{p.name}</span>
-                                {p.isTwoWay && (
-                                  <span className="inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-200">
-                                    2W
-                                  </span>
-                                )}
-                                {p.isStash && (
-                                  <span className="inline-flex items-center rounded-full border border-amber-400/25 bg-amber-500/15 px-2 py-0.5 text-[10px] font-extrabold text-amber-200">
-                                    STASH
-                                  </span>
-                                )}
-                                {p.isDeadCap && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setDeadCapInfo(p);
-                                    }}
-                                    className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-red-400/45 bg-red-500/20 text-[11px] font-extrabold text-red-100 hover:bg-red-500/30 transition"
-                                    title="Explain dead cap"
-                                    aria-label={`Explain ${p.name} dead cap`}
-                                  >
-                                    ?
-                                  </button>
-                                )}
-                                {p.isCapHold && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setCapHoldInfo(p);
-                                    }}
-                                    className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-red-400/45 bg-red-500/15 text-[11px] font-extrabold text-red-100 hover:bg-red-500/25 transition"
-                                    title="Explain cap hold"
-                                    aria-label={`Explain ${p.name} cap hold`}
-                                  >
-                                    ?
-                                  </button>
-                                )}
-                              </div>
-                              <div className={p.isDeadCap || p.isCapHold ? "text-xs text-red-200/75" : "text-xs text-white/50"}>
-                                {p.optionLabel}
-                              </div>
-                            </div>
-                          </div>
+                          {renderSalaryPlayerIdentity(p, selectedTeam.name)}
                         </td>
 
                         <td className="text-center px-3 py-3 text-white/85">{p.pos}</td>
-                        <td className="text-center px-3 py-3 font-semibold text-orange-300">{p.overall}</td>
 
                         {yearColumns.map((seasonYear) => {
                           const idx = seasonYear - p.contract.startYear;
@@ -2108,7 +2207,7 @@ export default function SalaryTable() {
                     ))}
 
                     <tr className="bg-white/5">
-                      <td className="px-4 py-3 font-extrabold text-white/90" colSpan={3}>
+                      <td className="px-4 py-3 font-extrabold text-white/90" colSpan={2}>
                         Team Totals:
                       </td>
 

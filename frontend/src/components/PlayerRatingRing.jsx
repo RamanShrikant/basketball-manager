@@ -23,6 +23,7 @@ export default function PlayerRatingRing({
   showPotential = true,
   strokeWidth = null,
   ariaLabel = null,
+  ringStyle = null,
 }) {
   const rawId = useId();
   const gradientId = `bm-rating-ring-${String(rawId).replace(/[^a-zA-Z0-9_-]/g, "")}`;
@@ -48,7 +49,13 @@ export default function PlayerRatingRing({
       role="img"
       aria-label={ariaLabel || `${label} ${ovr ?? "unknown"}${showPotential ? `, potential ${pot ?? "unknown"}` : ""}`}
     >
-      <svg width={px} height={px} viewBox="0 0 120 120" aria-hidden="true">
+      <svg
+        width={px}
+        height={px}
+        viewBox="0 0 120 120"
+        aria-hidden="true"
+        style={ringStyle || undefined}
+      >
         <defs>
           <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="0%">
             <stop offset="0%" stopColor="#FFA500" />

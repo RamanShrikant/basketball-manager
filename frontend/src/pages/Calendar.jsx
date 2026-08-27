@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import { useGame } from "../context/GameContext";
-import { getSeasonCalendarConfig, getSeasonStartYear } from "../utils/seasonContext.js";
+import { getDraftYear, getSeasonCalendarConfig, getSeasonStartYear } from "../utils/seasonContext.js";
 import { writeLeagueClock } from "../utils/leagueClock.js";
 import { getUserTradeRuleSettings, stampFreeAgentSigningRestrictions } from "../utils/userTradeRules.js";
 import { useNavigate } from "react-router-dom";
@@ -55,6 +55,7 @@ import {
 } from "../utils/indexedDbStorage";
 import PageFade from "../components/PageFade";
 import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
+import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
 import InjuryAlertModal from "../components/InjuryAlertModal";
 import "../styles/BMAnimations.css";
 import {
@@ -77,8 +78,17 @@ import {
   flushCpuTradeLeagueSaves,
 } from "../utils/cpuTradeSaveQueue.js";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
-import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
 import { getDefaultDivisionForTeam, getDivisionConference, resolveTeamDivision } from "../utils/leagueDivisions.js";
+import {
+  getDraftPickProtectionLabel,
+  normalizeDraftPicks,
+  normalizeTeamName,
+} from "../utils/draftPicks.js";
+import { CALENDAR_TILE_LOGO_TUNING } from "../config/calendarVisualTuning.js";
+import {
+  CALENDAR_TEAM_SNAPSHOT_TUNING,
+  getCalendarTeamSnapshotResponsiveScale,
+} from "../config/calendarTeamSnapshotTuning.js";
 import {
   applyGameToClutchStats,
   computeClutchAwardResults,
@@ -662,6 +672,385 @@ const Logo = ({ team, size = 36 }) => {
     </div>
   );
 };
+
+function useCalendarTileLogoTuning() {
+  const readWidth = () => (typeof window === "undefined" ? 1600 : window.innerWidth);
+  const [viewportWidth, setViewportWidth] = useState(readWidth);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(readWidth());
+    window.addEventListener("resize", onResize);
+    onResize();
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const responsiveScale = Math.max(0.78, Math.min(1, Number(viewportWidth || 1600) / 1600));
+  const x = Number(CALENDAR_TILE_LOGO_TUNING?.x);
+  const y = Number(CALENDAR_TILE_LOGO_TUNING?.y);
+  const scale = Number(CALENDAR_TILE_LOGO_TUNING?.scale);
+  const opacity = Number(CALENDAR_TILE_LOGO_TUNING?.opacity);
+
+  return {
+    responsiveScale,
+    x: (Number.isFinite(x) ? x : 0) * responsiveScale,
+    y: (Number.isFinite(y) ? y : 0) * responsiveScale,
+    scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
+    opacity: Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1,
+  };
+}
+
+function calendarPlayerOverall(player = {}) {
+  const value = Number(
+    player?.overall ??
+      player?.ovr ??
+      player?.rating ??
+      player?.ratings?.overall ??
+      player?.ratings?.ovr
+  );
+  return Number.isFinite(value) ? Math.round(value) : null;
+}
+
+function calendarPlayerPotential(player = {}) {
+  const value = Number(
+    player?.potential ??
+      player?.pot ??
+      player?.ratings?.potential ??
+      player?.ratings?.pot
+  );
+  return Number.isFinite(value) ? Math.round(value) : null;
+}
+
+function calendarPlayerPosition(player = {}) {
+  const raw =
+    player?.position ??
+    player?.pos ??
+    player?.primaryPosition ??
+    player?.position1 ??
+    (Array.isArray(player?.positions) ? player.positions[0] : "");
+  return String(raw || "").trim();
+}
+
+function useCalendarTeamSnapshotTuning() {
+  const readWidth = () => (typeof window === "undefined" ? 1600 : window.innerWidth);
+  const [viewportWidth, setViewportWidth] = useState(readWidth);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(readWidth());
+    window.addEventListener("resize", onResize);
+    onResize();
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const responsiveScale = getCalendarTeamSnapshotResponsiveScale(viewportWidth);
+  const readVisual = (key, scaleOffsets = true) => {
+    const row = CALENDAR_TEAM_SNAPSHOT_TUNING?.[key] || {};
+    const x = Number(row?.x);
+    const y = Number(row?.y);
+    const scale = Number(row?.scale);
+    const offsetScale = scaleOffsets ? responsiveScale : 1;
+    return {
+      x: (Number.isFinite(x) ? x : 0) * offsetScale,
+      y: (Number.isFinite(y) ? y : 0) * offsetScale,
+      scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
+    };
+  };
+
+  return {
+    responsiveScale,
+    rowHeight: Math.max(46, Number(CALENDAR_TEAM_SNAPSHOT_TUNING?.rowHeight || 62) * responsiveScale),
+    headshot: readVisual("headshot"),
+    overall: readVisual("overall"),
+    outerRing: readVisual("outerRing", false),
+    name: readVisual("name"),
+    ageText: readVisual("ageText"),
+    positionText: readVisual("positionText"),
+  };
+}
+
+function calendarTeamRoster(team = {}) {
+  const rows = Array.isArray(team?.players)
+    ? team.players
+    : Array.isArray(team?.roster)
+      ? team.roster
+      : [];
+
+  return [...rows].sort((a, b) => {
+    const diff = Number(calendarPlayerOverall(b) || 0) - Number(calendarPlayerOverall(a) || 0);
+    if (diff) return diff;
+    return String(a?.name || a?.player || "").localeCompare(String(b?.name || b?.player || ""));
+  });
+}
+
+function CalendarTeamInfoModal({ team, leagueData, teams = [], onClose }) {
+  const snapshotTuning = useCalendarTeamSnapshotTuning();
+
+  useEffect(() => {
+    if (!team) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") onClose?.();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [team, onClose]);
+
+  if (!team || typeof document === "undefined") return null;
+
+  const teamName = String(team?.name || team?.teamName || "Team");
+  const teamKey = normalizeTeamName(teamName);
+  const teamNames = teams.map((row) => row?.name || row?.teamName).filter(Boolean);
+  const draftYear = getDraftYear(leagueData || {});
+  const assets = normalizeDraftPicks(leagueData?.draftPicks || [], teamNames).filter(
+    (asset) => String(asset?.status || "active").toLowerCase() === "active" && Number(asset?.year) === Number(draftYear)
+  );
+  const roster = calendarTeamRoster(team);
+  const ownedAssets = assets
+    .filter((asset) => normalizeTeamName(asset?.ownerTeam || "") === teamKey)
+    .sort((a, b) => Number(a?.round || 0) - Number(b?.round || 0) || String(a?.originalTeam || "").localeCompare(String(b?.originalTeam || "")));
+
+  const ownPickStatus = [1, 2].map((round) => {
+    const direct = assets.find(
+      (asset) =>
+        String(asset?.assetType || asset?.type || "pick").toLowerCase() !== "swap" &&
+        Number(asset?.round) === round &&
+        normalizeTeamName(asset?.originalTeam || "") === teamKey
+    );
+    const swap = assets.find(
+      (asset) =>
+        String(asset?.assetType || asset?.type || "").toLowerCase() === "swap" &&
+        Number(asset?.round) === round &&
+        normalizeTeamName(asset?.originalTeam || "") === teamKey
+    );
+    return { round, asset: direct || swap || null };
+  });
+
+  const modal = (
+    <div
+      className="fixed inset-0 z-[190] flex items-center justify-center bg-black/75 px-4 py-8 backdrop-blur-[2px]"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose?.();
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${teamName} roster and draft picks`}
+        className="flex max-h-[72vh] w-full max-w-[760px] flex-col overflow-hidden rounded-[18px] border border-orange-500/20 bg-[#090909] shadow-[0_28px_90px_rgba(0,0,0,0.75)]"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-center justify-between border-b border-white/10 bg-gradient-to-r from-orange-600/[0.08] via-transparent to-transparent px-4 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <Logo team={team} size={30} />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-black text-white">{teamName}</div>
+              <div className="text-[10px] font-bold uppercase tracking-[0.15em] text-orange-400/75">
+                Team Snapshot
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-xs font-black text-neutral-400 transition hover:border-orange-400/40 hover:text-orange-300"
+            aria-label="Close team snapshot"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 md:grid-cols-[0.9fr_1.1fr]">
+          <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.025]">
+            <div className="shrink-0 border-b border-white/[0.07] px-3 py-2">
+              <div className="text-[9px] font-black uppercase tracking-[0.17em] text-orange-400">Roster</div>
+              <div className="mt-0.5 text-[10px] text-neutral-500">{roster.length} players</div>
+            </div>
+            <div className="calendar-team-info-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2">
+              {roster.length ? roster.map((player, index) => {
+                const name = player?.name || player?.player || `Player ${index + 1}`;
+                const age = Number(player?.age);
+                const position = calendarPlayerPosition(player);
+                const overall = calendarPlayerOverall(player);
+                const potential = calendarPlayerPotential(player);
+                const teamNameForPortrait = player?.team || player?.teamName || teamName;
+                const portraitBase = 50 * snapshotTuning.responsiveScale;
+                const ringSlotSize = 48 * snapshotTuning.responsiveScale;
+                const portraitRenderSize = portraitBase * snapshotTuning.headshot.scale;
+                const ringVisualScale = snapshotTuning.responsiveScale * snapshotTuning.overall.scale;
+                const visualTransform = (visual) => ({
+                  transform: `translate3d(${visual.x}px, ${visual.y}px, 0) scale(${visual.scale})`,
+                  transformOrigin: "center center",
+                });
+                return (
+                  <div
+                    key={player?.id || player?.playerId || `${name}_${index}`}
+                    className="flex items-center gap-2 overflow-hidden border-b border-white/[0.06] px-1.5 last:border-b-0"
+                    style={{ minHeight: snapshotTuning.rowHeight, height: snapshotTuning.rowHeight }}
+                  >
+                    <div
+                      className="relative shrink-0 overflow-visible"
+                      style={{ width: portraitBase, height: portraitBase }}
+                    >
+                      <div
+                        className="absolute left-1/2 top-1/2"
+                        style={{
+                          width: portraitRenderSize,
+                          height: portraitRenderSize,
+                          transform: `translate(-50%, -50%) translate3d(${snapshotTuning.headshot.x}px, ${snapshotTuning.headshot.y}px, 0)`,
+                        }}
+                      >
+                        <RuntimePlayerPortrait
+                          player={player}
+                          teamName={teamNameForPortrait}
+                          src={player?.headshot || player?.image || player?.portrait || player?.photo}
+                          alt={name}
+                          className="h-full w-full"
+                          fallback={<div className="h-full w-full" />}
+                        />
+                      </div>
+                    </div>
+
+                    <div
+                      className="relative shrink-0 overflow-visible"
+                      style={{ width: ringSlotSize, height: ringSlotSize }}
+                    >
+                      {overall != null && (
+                        <div
+                          className="absolute left-1/2 top-1/2"
+                          style={{
+                            width: 48,
+                            height: 48,
+                            transform: `translate(-50%, -50%) translate3d(${snapshotTuning.overall.x}px, ${snapshotTuning.overall.y}px, 0)`,
+                          }}
+                        >
+                          <div
+                            className="h-full w-full"
+                            style={{
+                              transform: `scale(${ringVisualScale})`,
+                              transformOrigin: "center center",
+                            }}
+                          >
+                            <PlayerRatingRing
+                              overall={overall}
+                              potential={potential}
+                              size={48}
+                              ringStyle={{
+                                transform: `translate3d(${snapshotTuning.outerRing.x}px, ${snapshotTuning.outerRing.y}px, 0) scale(${snapshotTuning.outerRing.scale})`,
+                                transformOrigin: "center center",
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="min-w-0 flex-1 overflow-hidden">
+                      <div className="relative overflow-visible" style={{ height: 18 * snapshotTuning.responsiveScale }}>
+                        <div
+                          className="absolute inset-y-0 left-0 max-w-full truncate font-bold text-neutral-200"
+                          style={{
+                            ...visualTransform(snapshotTuning.name),
+                            fontSize: 11 * snapshotTuning.responsiveScale,
+                          }}
+                        >
+                          {name}
+                        </div>
+                      </div>
+                      <div
+                        className="mt-0.5 flex min-w-0 items-center gap-2 overflow-visible"
+                        style={{ height: 14 * snapshotTuning.responsiveScale }}
+                      >
+                        <div className="relative shrink-0 overflow-visible">
+                          <span
+                            className="block whitespace-nowrap font-semibold uppercase tracking-[0.08em] text-neutral-600"
+                            style={{
+                              ...visualTransform(snapshotTuning.ageText),
+                              fontSize: 9 * snapshotTuning.responsiveScale,
+                            }}
+                          >
+                            {Number.isFinite(age) && age > 0 ? `Age ${age}` : "Rostered"}
+                          </span>
+                        </div>
+                        {position && (
+                          <div className="relative shrink-0 overflow-visible">
+                            <span
+                              className="block whitespace-nowrap font-semibold uppercase tracking-[0.08em] text-neutral-500"
+                              style={{
+                                ...visualTransform(snapshotTuning.positionText),
+                                fontSize: 9 * snapshotTuning.responsiveScale,
+                              }}
+                            >
+                              {position}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              }) : (
+                <div className="px-2 py-4 text-[11px] text-neutral-500">No roster data available.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="calendar-team-info-scroll min-h-0 overflow-y-auto rounded-xl border border-white/[0.08] bg-white/[0.025] p-3">
+            <div className="text-[9px] font-black uppercase tracking-[0.17em] text-orange-400">{draftYear} Draft</div>
+
+            <div className="mt-3 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-500">Picks they own</div>
+            <div className="mt-1.5 space-y-1.5">
+              {ownedAssets.length ? ownedAssets.map((asset, index) => {
+                const isSwap = String(asset?.assetType || asset?.type || "pick").toLowerCase() === "swap";
+                const protection = getDraftPickProtectionLabel(asset);
+                const origin = String(asset?.originalTeam || "").trim();
+                const swapWith = String(asset?.swapWithTeam || asset?.swap?.withTeam || "").trim();
+                return (
+                  <div key={asset?.id || `${draftYear}_${asset?.round}_${index}`} className="rounded-lg border border-white/[0.07] bg-black/25 px-2.5 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold text-neutral-200">
+                        {Number(asset?.round) === 2 ? "2nd" : "1st"} {isSwap ? "swap" : "pick"}
+                      </span>
+                      <span className="text-[9px] font-bold text-orange-300/80">{protection}</span>
+                    </div>
+                    <div className="mt-1 text-[9px] text-neutral-500">
+                      {isSwap
+                        ? `Rights involving ${origin || "original team"}${swapWith ? ` / ${swapWith}` : ""}`
+                        : normalizeTeamName(origin) === teamKey
+                          ? "Own pick"
+                          : `Via ${origin || "another team"}`}
+                    </div>
+                  </div>
+                );
+              }) : (
+                <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2.5 py-3 text-[10px] text-neutral-500">
+                  No active {draftYear} draft assets owned.
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-500">Who owns their picks</div>
+            <div className="mt-1.5 space-y-1.5">
+              {ownPickStatus.map(({ round, asset }) => (
+                <div key={`own_${round}`} className="rounded-lg border border-white/[0.07] bg-black/25 px-2.5 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-neutral-200">{round === 1 ? "1st" : "2nd"} round</span>
+                    <span className="truncate text-right text-[10px] font-black text-white/80">
+                      {asset?.ownerTeam || "No active record"}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-[9px] text-neutral-500">
+                    {asset ? getDraftPickProtectionLabel(asset) : "Ownership/protection not present in active draft-pick data."}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+
+  return createPortal(modal, document.body);
+}
+
 const MiniStandingsPanel = ({
   title,
   rows,
@@ -677,6 +1066,7 @@ const MiniStandingsPanel = ({
   awardRows = [],
   onPrevAward,
   onNextAward,
+  onInspectTeam,
 }) => {
   const sideClass = side === "left" ? "left-2" : "right-2";
 
@@ -769,6 +1159,21 @@ const MiniStandingsPanel = ({
                   <span className="text-gray-500">-</span>
                   <span className="text-red-400">{row.l}</span>
                 </div>
+
+                {onInspectTeam && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onInspectTeam(row.team);
+                    }}
+                    className="ml-auto flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-orange-400/25 text-[9px] font-black text-orange-400/80 transition hover:border-orange-400/60 hover:bg-orange-500/10 hover:text-orange-300"
+                    title={`View ${row.team} roster and draft picks`}
+                    aria-label={`View ${row.team} roster and draft picks`}
+                  >
+                    ?
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -5182,7 +5587,14 @@ const [stopRequested, setStopRequested] = useState(false);
 const [showWestStandings, setShowWestStandings] = useState(true);
 const [showEastStandings, setShowEastStandings] = useState(true);
 const [showAwardsPanel, setShowAwardsPanel] = useState(false);
+const [showWestAwardsPanel, setShowWestAwardsPanel] = useState(false);
+const [calendarTeamInfoName, setCalendarTeamInfoName] = useState("");
 const [miniAwardTab, setMiniAwardTab] = useState("mvp");
+const calendarTileLogoTuning = useCalendarTileLogoTuning();
+const calendarTeamInfoTeam = useMemo(
+  () => teams.find((team) => normalizeTeamName(team?.name || team?.teamName || "") === normalizeTeamName(calendarTeamInfoName)) || null,
+  [teams, calendarTeamInfoName]
+);
 const CALENDAR_SCALE = 1;
 
 const acquireSimRunLock = (label = "simulation") => {
@@ -7902,6 +8314,7 @@ setContractExtensionPromptInfo(null);
 setAllStarOpen(false);
 setAllStarData(null);
 setShowAwardsPanel(false);
+setShowWestAwardsPanel(false);
 setMiniAwardTab("mvp");
 
   try {
@@ -8689,6 +9102,30 @@ return (
     .standings-scrollbar::-webkit-scrollbar-thumb:hover {
       background: #fb923c;
     }
+
+    .calendar-team-info-scroll {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(249, 115, 22, 0.86) rgba(18, 18, 18, 0.28);
+    }
+
+    .calendar-team-info-scroll::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .calendar-team-info-scroll::-webkit-scrollbar-track {
+      background: rgba(18, 18, 18, 0.28);
+      border-radius: 999px;
+    }
+
+    .calendar-team-info-scroll::-webkit-scrollbar-thumb {
+      background: rgba(249, 115, 22, 0.86);
+      border-radius: 999px;
+      border: 1px solid rgba(18, 18, 18, 0.7);
+    }
+
+    .calendar-team-info-scroll::-webkit-scrollbar-thumb:hover {
+      background: #fb923c;
+    }
   `}
 </style>
     <MiniStandingsPanel
@@ -8699,6 +9136,14 @@ return (
       onToggle={() => setShowWestStandings((v) => !v)}
       collapsedLabel="Show West"
       side="left"
+      awardsEnabled={true}
+      showAwards={showWestAwardsPanel}
+      onToggleAwards={() => setShowWestAwardsPanel((v) => !v)}
+      awardTab={miniAwardTab}
+      awardRows={miniAwardLadders[miniAwardTab] || []}
+      onPrevAward={() => cycleMiniAwardTab("prev")}
+      onNextAward={() => cycleMiniAwardTab("next")}
+      onInspectTeam={(teamName) => setCalendarTeamInfoName(teamName)}
     />
 
 <MiniStandingsPanel
@@ -8716,6 +9161,14 @@ return (
   awardRows={miniAwardLadders[miniAwardTab] || []}
   onPrevAward={() => cycleMiniAwardTab("prev")}
   onNextAward={() => cycleMiniAwardTab("next")}
+  onInspectTeam={(teamName) => setCalendarTeamInfoName(teamName)}
+/>
+
+<CalendarTeamInfoModal
+  team={calendarTeamInfoTeam}
+  leagueData={leagueData}
+  teams={teams}
+  onClose={() => setCalendarTeamInfoName("")}
 />
 
 <div
@@ -9019,23 +9472,25 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                           )}
 
                           {game && (
-                            <div className="mt-2 flex min-h-[54px] items-center gap-2.5 pr-1">
-                              <div className="shrink-0 rounded-md bg-black/20 p-1">
-                                <Logo
-                                  team={{
-                                    name: iAmHome ? game.away : game.home,
-                                    logo: iAmHome ? game.awayLogo : game.homeLogo,
+                            <div className="relative mt-1 h-[68px] w-full overflow-visible">
+                              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                                <div
+                                  style={{
+                                    transform: `translate3d(${calendarTileLogoTuning.x}px, ${calendarTileLogoTuning.y}px, 0)`,
+                                    opacity: calendarTileLogoTuning.opacity,
+                                    filter: game.played ? "grayscale(1)" : "none",
+                                    transition: "filter 160ms ease, opacity 160ms ease",
                                   }}
-                                  size={28}
-                                />
+                                >
+                                  <Logo
+                                    team={{
+                                      name: iAmHome ? game.away : game.home,
+                                      logo: iAmHome ? game.awayLogo : game.homeLogo,
+                                    }}
+                                    size={34 * calendarTileLogoTuning.responsiveScale * calendarTileLogoTuning.scale}
+                                  />
+                                </div>
                               </div>
-
-                              <span
-                                className="text-[14px] font-black tracking-wide text-white/90"
-                                title={iAmHome ? game.away : game.home}
-                              >
-                                {getTeamAbbreviation(iAmHome ? game.away : game.home)}
-                              </span>
                             </div>
                           )}
 

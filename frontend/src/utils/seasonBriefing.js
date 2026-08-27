@@ -56,7 +56,7 @@ const TEAM_ALIASES = Object.freeze({
   "philadelphia sixers": "Philadelphia 76ers",
 });
 
-export const SEASON_BRIEFING_CONTENT_VERSION = 10;
+export const SEASON_BRIEFING_CONTENT_VERSION = 11;
 export const MAX_SEASON_BRIEFING_SNAPSHOTS = 8;
 export const MAX_SEASON_BRIEFING_STORYLINES = 12;
 
@@ -1730,6 +1730,130 @@ function readProgressionRows(leagueData, seasonYear) {
   return rows;
 }
 
+function immersiveProgressionHeadline(row = {}) {
+  const delta = safeNumber(row?.delta, 0);
+  const magnitude = Math.abs(delta);
+  const name = text(row?.name) || "A key player";
+  const team = text(row?.teamName) || "his team";
+  const current = safeNumber(row?.currentOverall, 0);
+  const seed = `progression-story:${name}:${team}:${delta}:${current}`;
+
+  if (delta > 0) {
+    if (magnitude >= 6) {
+      return choose(seed, [
+        `${name} returned looking like a different level of player, emerging at ${current} OVR and giving ${team} a new piece to build around`,
+        `Few players changed their standing more than ${name}, whose leap to ${current} OVR reshaped what ${team} can reasonably expect from him`,
+        `${name}'s development accelerated in a major way, pushing him to ${current} OVR and changing the ceiling of ${team}'s rotation`,
+      ]);
+    }
+    if (magnitude >= 4) {
+      return choose(seed, [
+        `${name} took a clear step forward, arriving at ${current} OVR with a larger role now within reach for ${team}`,
+        `The year was an important one for ${name}; his game moved forward enough to bring him to ${current} OVR for ${team}`,
+        `${name} came back noticeably sharper, climbing to ${current} OVR and giving ${team} more to work with`,
+      ]);
+    }
+    return choose(seed, [
+      `${name} made steady progress and enters the year at ${current} OVR for ${team}`,
+      `${name}'s development kept moving in the right direction, nudging him to ${current} OVR for ${team}`,
+    ]);
+  }
+
+  if (magnitude >= 6) {
+    return choose(seed, [
+      `The decline around ${name} became difficult to ignore; he enters the year at ${current} OVR, forcing ${team} to rethink how heavily it can lean on him`,
+      `${name} no longer looks quite like the same force, sliding to ${current} OVR and leaving ${team} with a more complicated version of its old hierarchy`,
+      `Time caught up with ${name} in a meaningful way. At ${current} OVR, his place in ${team}'s pecking order is no longer as secure as it once was`,
+    ]);
+  }
+  if (magnitude >= 4) {
+    return choose(seed, [
+      `${name} lost some of his old edge over the course of the year and now sits at ${current} OVR, a change ${team} will have to account for`,
+      `The season took something out of ${name}; his slide to ${current} OVR changes the amount of responsibility ${team} can comfortably put on him`,
+      `${name}'s game showed real signs of wear, leaving him at ${current} OVR and subtly changing the shape of ${team}'s rotation`,
+    ]);
+  }
+  return choose(seed, [
+    `${name} slipped a little over the year and enters the season at ${current} OVR for ${team}`,
+    `${name} gave back some ground and now sits at ${current} OVR, something ${team} will be watching closely`,
+  ]);
+}
+
+function cleanStorySentence(value) {
+  const clean = text(value).replace(/\s+/g, " ").replace(/[.!?]+$/g, "");
+  return clean ? `${clean}.` : "";
+}
+
+function buildImmersiveTransactionParagraph(context, stories = [], ref = "the team") {
+  const rows = (stories || []).map(cleanStorySentence).filter(Boolean).slice(0, 3);
+  if (!rows.length) {
+    return `The main rotation came through the offseason mostly intact, so ${ref} will be relying more on continuity and internal improvement than on a dramatic roster reset.`;
+  }
+  if (rows.length === 1) return rows[0];
+
+  const seed = `team-transactions:${context?.canonical || ref}:${context?.seasonYear || ""}:${rows.join("|")}`;
+  const bridgeOne = choose(seed, [
+    "That was only the beginning of the reshaping.",
+    "The front office did not stop there.",
+    "It became one part of a broader change in direction.",
+    "The move set the tone for the rest of the roster work.",
+  ]);
+  const bridgeTwo = choose(`${seed}:2`, [
+    "By the time the dust settled, another important piece of the rotation had changed as well.",
+    "The final shape of the offseason added one more meaningful wrinkle.",
+    "Another move completed the picture and gave the roster a noticeably different feel.",
+  ]);
+
+  return rows.length === 2
+    ? `${rows[0]} ${bridgeOne} ${rows[1]}`
+    : `${rows[0]} ${bridgeOne} ${rows[1]} ${bridgeTwo} ${rows[2]}`;
+}
+
+function isMajorLeagueMovement(event = {}) {
+  const score = safeNumber(event?.score, 0);
+  const overall = safeNumber(event?.overall, 0);
+  const kind = text(event?.movementKind || event?.type).toLowerCase();
+  if (overall >= 84) return true;
+  if (score >= 82) return true;
+  if (kind.includes("trade") && overall >= 80 && score >= 74) return true;
+  if ((kind.includes("sign") || kind.includes("free")) && overall >= 80 && score >= 72) return true;
+  return false;
+}
+
+function buildLeagueMovementParagraph(movement = []) {
+  const rows = (movement || []).filter(Boolean).slice(0, 5);
+  if (!rows.length) {
+    return "The league avoided a true balance-of-power move this time around; plenty changed at the margins, but no saved trade or free-agent signing was large enough to define the summer.";
+  }
+
+  const inSeasonTrades = rows.filter((event) => event.movementKind === "trade" && event.phase === "in_season");
+  const offseasonTrades = rows.filter((event) => event.movementKind === "trade" && event.phase !== "in_season");
+  const signings = rows.filter((event) => event.movementKind === "signing");
+  const sections = [];
+
+  if (inSeasonTrades.length) {
+    sections.push(`The league had already started shifting before the summer arrived. ${inSeasonTrades.map((event) => cleanStorySentence(event.headline)).join(" ")}`);
+  }
+  if (offseasonTrades.length) {
+    sections.push(`${inSeasonTrades.length ? "The offseason kept that movement going." : "The offseason opened with real movement around the league."} ${offseasonTrades.map((event) => cleanStorySentence(event.headline)).join(" ")}`);
+  }
+  if (signings.length) {
+    sections.push(`${sections.length ? "Free agency added another layer." : "Free agency supplied the biggest change in the league's landscape."} ${signings.map((event) => cleanStorySentence(event.headline)).join(" ")}`);
+  }
+
+  return sections.join(" ");
+}
+
+function immersiveCoreParagraph(core = []) {
+  if (!core.length) return "The rotation still needs a clear top group.";
+  const first = core[0];
+  const second = core[1];
+  const third = core[2];
+  if (!second) return `${first.name}, now ${first.ovr} OVR, stands alone as the clearest pillar of the roster.`;
+  if (!third) return `${first.name} remains the player everything bends around at ${first.ovr} OVR, with ${second.name} forming the next layer of the core.`;
+  return `${first.name} remains the player at the center of the roster at ${first.ovr} OVR. ${second.name} and ${third.name} form the next layer around him, giving the team a clearer hierarchy than a simple depth-chart reading would suggest.`;
+}
+
 function progressionLeaders(rows, limit = 10) {
   return {
     improved: rows.filter((row) => row.delta > 0).sort((a, b) => b.delta - a.delta || b.currentOverall - a.currentOverall).slice(0, limit),
@@ -1744,6 +1868,104 @@ function teamProgression(rows, teamName) {
     .slice(0, 5);
 }
 
+function progressionStorySentence(row, { teamName = "" } = {}) {
+  const name = text(row?.name) || "A rotation player";
+  const delta = safeNumber(row?.delta, 0);
+  const movement = Math.abs(delta);
+  const current = safeNumber(row?.currentOverall, 0);
+  const team = text(teamName || row?.teamName);
+  const market = teamMarketName(team);
+  const seed = `${name}|${team}|${delta}|${current}|progression_story`;
+
+  if (!delta) return "";
+
+  if (delta > 0) {
+    const rise = movement >= 6
+      ? "one of the summer's clearest internal leaps"
+      : movement >= 4
+        ? "a noticeable leap over the summer"
+        : "another meaningful step forward";
+    const impact = movement >= 5
+      ? (market ? `That kind of jump changes what ${market} can reasonably ask of him this season.` : "That kind of jump can change his role immediately.")
+      : (market ? `It gives ${market} a little more upside in the rotation than it had a year ago.` : "It gives his team more upside than it had a year ago.");
+    const variants = [
+      `${name} made ${rise}${current ? `, arriving at ${current} OVR after gaining ${movement} point${movement === 1 ? "" : "s"}` : ""}. ${impact}`,
+      `${name} came back sharper and more complete than he was a year ago${current ? `, climbing to ${current} OVR` : ""}. The ${movement}-point rise is substantial enough to matter when roles are set in camp.`,
+      `${name}'s development did not stall over the summer${current ? `; he now sits at ${current} OVR` : ""}, up ${movement} point${movement === 1 ? "" : "s"} from where he finished. ${impact}`,
+    ];
+    return choose(seed, variants);
+  }
+
+  const slip = movement >= 6
+    ? "a major step back over the summer"
+    : movement >= 4
+      ? "a noticeable step back over the summer"
+      : "a small step back compared with last season";
+  const impact = movement >= 5
+    ? (market ? `For ${market}, it is a large enough change to alter the way the top of the rotation is viewed.` : "It is a large enough change to alter how his role is viewed.")
+    : (market ? `${market} will be hoping the slide does not become a longer-term trend.` : "His team will be hoping the slide does not become a longer-term trend.");
+  const variants = [
+    `${name} took ${slip}${current ? ` and opens the year at ${current} OVR, ${movement} point${movement === 1 ? "" : "s"} below where he finished` : ""}. ${impact}`,
+    `${name} did not come out of the summer at quite the same level${current ? `, slipping to ${current} OVR` : ""}. The ${movement}-point drop is difficult to ignore, even if the season will decide how permanent it really is.`,
+    `${name}'s trajectory bent the wrong way over the summer${current ? `, leaving him at ${current} OVR` : ""} after a ${movement}-point decline. ${impact}`,
+  ];
+  return choose(seed, variants);
+}
+
+function isMajorLeagueTransaction(event = {}) {
+  const overall = safeNumber(event?.overall, 0);
+  const score = safeNumber(event?.score, 0);
+  if (event?.type === "trade") return overall >= 82 || score >= 86;
+  if (event?.type === "free_agency") return overall >= 82 || score >= 84;
+  return false;
+}
+
+function leagueTransactionStory(event = {}) {
+  const name = text(event?.playerName) || "a major player";
+  if (event?.type === "trade") {
+    const from = teamMarketName(event?.fromTeam) || text(event?.fromTeam);
+    const to = teamMarketName(event?.toTeam) || text(event?.toTeam);
+    const overall = safeNumber(event?.overall, 0);
+    const stature = overall >= 90
+      ? "one of the league's true stars"
+      : overall >= 86
+        ? "a proven star-level piece"
+        : overall >= 82
+          ? "a high-end starter"
+          : "an established rotation piece";
+    const seed = `${name}|${from}|${to}|${event?.phase}|trade_story`;
+    if (event?.phase === "in_season") {
+      return choose(seed, [
+        `${to} made one of last season's defining swings when it acquired ${name} from ${from}, moving ${stature} into a new situation before the year was over.`,
+        `The league had already started shifting before the summer when ${name} was dealt from ${from} to ${to}. Moving ${stature} changed the shape of both teams.`,
+      ]);
+    }
+    if (event?.phase === "offseason") {
+      return choose(seed, [
+        `The summer market shifted when ${to} landed ${name} from ${from}, adding ${stature} before opening night.`,
+        `${name}'s move from ${from} to ${to} became one of the offseason's biggest trades, with ${stature} changing sides before camp.`,
+      ]);
+    }
+    return choose(seed, [
+      `${to} made one of the league's biggest roster swings by acquiring ${name} from ${from}, sending ${stature} into a new situation.`,
+      `${name}'s move from ${from} to ${to} became one of the major transactions shaping the league around the new season.`,
+    ]);
+  }
+
+  if (event?.type === "free_agency") {
+    const to = teamMarketName(event?.toTeam) || text(event?.toTeam);
+    const years = safeNumber(event?.years, 0);
+    const aav = safeNumber(event?.aav, 0);
+    const deal = years ? ` on a ${years}-year${aav ? `, ${compactMoney(aav)}-per-year` : ""} deal` : "";
+    const seed = `${name}|${to}|${years}|${aav}|fa_story`;
+    return choose(seed, [
+      `Free agency shifted the balance again when ${to} signed ${name}${deal}, giving the roster another major piece before the new season.`,
+      `${to} made one of the summer's loudest free-agent moves by bringing in ${name}${deal}. It was the kind of signing that immediately changes expectations around a rotation.`,
+    ]);
+  }
+
+  return text(event?.headline);
+}
 function getTradeMoves(row) {
   if (Array.isArray(row?.movedPlayers) && row.movedPlayers.length) {
     return row.movedPlayers.map((move) => ({
@@ -2384,9 +2606,7 @@ function buildLeagueEventBoard({ leagueData, seasonYear, previousEntry, progress
     score: 64 + Math.min(22, Math.abs(row.delta) * 4) + Math.max(0, row.currentOverall - 82),
     playerName: row.name,
     teamName: row.teamName,
-    headline: row.delta > 0
-      ? `${row.name} jumped ${row.delta} overall points to ${row.currentOverall} OVR for ${row.teamName}`
-      : `${row.name} fell ${Math.abs(row.delta)} overall points to ${row.currentOverall} OVR for ${row.teamName}`,
+    headline: progressionStorySentence(row),
   }));
   const events = [
     ...leagueHistoryEvents(leagueData, seasonYear, previousEntry),
@@ -2431,7 +2651,7 @@ function continuityAssessment(prior, current) {
   } else if (old.type === "development" && current.teamProgression.some((row) => row.delta >= 3)) {
     status = "progressed";
     const row = current.teamProgression.find((item) => item.delta >= 3);
-    evidence = `${row.name} rose ${row.delta} OVR points`;
+    evidence = progressionStorySentence(row, { teamName: current.canonical });
   } else if (current.previousRow) {
     evidence = `${current.canonical} finished ${formatRecord(current.previousRow)} and ${formatFinish(current.previousRow)}`;
   }
@@ -2583,8 +2803,8 @@ function buildConferenceCompetition(context) {
     let detail = "";
     if (peer.shift?.headline) detail = peer.shift.headline;
     else if (move?.headline) detail = move.headline;
-    else if (peer.progressionNet >= 3) detail = `internal development added ${peer.progressionNet} net OVR points across its most notable movers`;
-    else if (peer.progressionNet <= -3) detail = `internal regression removed ${Math.abs(peer.progressionNet)} net OVR points across its most notable movers`;
+    else if (peer.progressionNet >= 3) detail = `several important players came back improved, giving the rotation a noticeable internal lift`;
+    else if (peer.progressionNet <= -3) detail = `several important players slipped over the summer, taking some of the edge off the rotation`;
     else detail = `its current rotation remains close to ${possessive(context.canonical)} competitive tier`;
     return {
       teamName: peer.teamName,
@@ -2681,12 +2901,12 @@ function buildTeamSections(context) {
 function buildLeagueSections(context) {
   const conferenceItems = context.conferenceCompetition.map((row) => row.headline);
   const majorTrades = context.leagueBoard.trades
-    .filter((event) => event.overall >= 78 || event.score >= 72)
+    .filter((event) => isMajorLeagueTransaction(event))
     .slice(0, 6)
     .map((event) => event.headline);
   const franchiseShifts = context.leagueBoard.franchiseShifts.slice(0, 5).map((event) => event.headline);
   const majorSignings = context.leagueBoard.signings
-    .filter((event) => event.overall >= 78 || event.score >= 70)
+    .filter((event) => isMajorLeagueTransaction(event))
     .slice(0, 6)
     .map((event) => event.headline);
 
@@ -2728,16 +2948,13 @@ function buildTeamParagraphs(context) {
   const first = openingParts.join(" ");
 
   const transactionStories = context.transactionStories || [];
-  const second = transactionStories.length
-    ? transactionStories.slice(0, 3).join(" ")
-    : `The main rotation came through the offseason mostly intact, so ${ref} will be relying more on internal improvement than on a major roster change.`;
+  const second = buildImmersiveTransactionParagraph(context, transactionStories, ref);
 
   const core = snapshot.top.slice(0, 3);
-  const coreText = core.length
-    ? `${core[0].name} is the highest-rated player on the roster at ${core[0].ovr} OVR${core[1] ? `, with ${core[1].name} at ${core[1].ovr} OVR` : ""}${core[2] ? ` and ${core[2].name} at ${core[2].ovr} OVR` : ""}.`
-    : "The rotation still needs a clear top group.";
-  const progressionText = teamProgression.length
-    ? ` ${teamProgression.slice(0, 3).map((row) => `${row.name} ${row.delta > 0 ? `improved by ${row.delta} OVR` : `dropped by ${Math.abs(row.delta)} OVR`}`).join(", ")}.`
+  const coreText = immersiveCoreParagraph(core);
+  const notableProgression = teamProgression.filter((row) => Math.abs(safeNumber(row.delta, 0)) >= 2).slice(0, 3);
+  const progressionText = notableProgression.length
+    ? ` ${notableProgression.map((row) => progressionStorySentence(row, { teamName: canonical })).filter(Boolean).join(" ")}`
     : "";
   const highlight = context.assetHighlights?.[0]?.headline || "";
   const third = `${coreText}${progressionText}${highlight ? ` ${highlight}` : ""}`.trim();
@@ -2768,13 +2985,35 @@ function buildLeagueParagraphs(context) {
   for (const event of awardEvents) firstParts.push(`${event.headline}.`);
   const first = firstParts.join(" ");
 
-  const movement = [...leagueBoard.trades.slice(0, 4), ...leagueBoard.signings.slice(0, 3)]
+  const majorTrades = leagueBoard.trades
+    .filter((event) => isMajorLeagueTransaction(event))
+    .sort((a, b) => b.score - a.score);
+  const majorSignings = leagueBoard.signings
+    .filter((event) => isMajorLeagueTransaction(event))
+    .sort((a, b) => b.score - a.score);
+
+  const inSeason = majorTrades.filter((event) => event.phase === "in_season").slice(0, 2);
+  const offseasonTrades = majorTrades.filter((event) => event.phase === "offseason").slice(0, 2);
+  const unphasedTrades = majorTrades.filter((event) => event.phase !== "in_season" && event.phase !== "offseason").slice(0, 1);
+  const summerSignings = majorSignings.slice(0, 2);
+  const movementParts = [];
+
+  if (inSeason.length) {
+    movementParts.push(`The reshaping of the league actually started before the summer. ${inSeason.map(leagueTransactionStory).join(" ")}`);
+  }
+  const summerMovement = [...offseasonTrades, ...summerSignings]
     .sort((a, b) => b.score - a.score)
-    .slice(0, 4)
-    .map((event) => `${event.headline}.`);
-  const second = movement.length
-    ? movement.join(" ")
-    : "There were no saved blockbuster trades or free-agent signings large enough to dominate the offseason.";
+    .slice(0, 3);
+  if (summerMovement.length) {
+    movementParts.push(`${inSeason.length ? "The offseason pushed that movement even further." : "The offseason did not leave the league standing still."} ${summerMovement.map(leagueTransactionStory).join(" ")}`);
+  }
+  if (unphasedTrades.length) {
+    movementParts.push(unphasedTrades.map(leagueTransactionStory).join(" "));
+  }
+
+  const second = movementParts.length
+    ? movementParts.join(" ")
+    : "There were no saved trades or free-agent signings significant enough to define the league's offseason story.";
 
   const conference = conferenceDisplayName(conferenceNameOf(context.team));
   const rivals = context.conferenceCompetition.slice(0, 3);

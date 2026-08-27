@@ -893,7 +893,7 @@ function buildUntouchables(team, phase, leagueData = null, needs = []) {
         playerAge(a.player) - playerAge(b.player)
     )
     .slice(0, 3)
-    .map((row) => decoratePlayer(row.player, { reason: row.status.label }));
+    .map((row) => decoratePlayer(row.player, { teamName: teamNameOf(team), reason: row.status.label }));
 }
 
 function positionalCrowding(player, team) {
@@ -1011,6 +1011,7 @@ function buildTradeBlock(team, phase, leagueData, untouchables = [], needs = [])
       if (!reasons.length || score < 14) return null;
 
       return decoratePlayer(player, {
+        teamName: teamNameOf(team),
         salary,
         mpg,
         score,
@@ -1202,7 +1203,7 @@ function buildExpiringContracts(team, leagueData) {
         playerNameOf(a).localeCompare(playerNameOf(b))
     )
     .slice(0, 4)
-    .map((player) => decoratePlayer(player, { salary: getPlayerSalary(player, leagueData), reason: "expiring" }));
+    .map((player) => decoratePlayer(player, { teamName: teamNameOf(team), salary: getPlayerSalary(player, leagueData), reason: "expiring" }));
 }
 
 function buildStatusBullets(row) {

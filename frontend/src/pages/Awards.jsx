@@ -671,7 +671,7 @@ if (showAllNba) {
                     teamName={winner?.team || winnerPlayer?.teamName || ""}
                     alt={winner.player}
                     layoutPage="individual-awards"
-                    className="h-[270px] w-full max-w-[390px]"
+                    className="h-[270px] w-[370px] max-w-full"
                     bottomInset={0}
                   />
                 ) : (

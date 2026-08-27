@@ -1,0 +1,29 @@
+.trade-context-modal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(249, 115, 22, 0.82) rgba(18, 18, 18, 0.35);
+}
+
+.trade-context-modal-scroll::-webkit-scrollbar {
+  width: 7px;
+}
+
+.trade-context-modal-scroll::-webkit-scrollbar-track {
+  background: rgba(18, 18, 18, 0.35);
+  border-radius: 999px;
+}
+
+.trade-context-modal-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(251, 146, 60, 0.9), rgba(234, 88, 12, 0.9));
+  border: 1px solid rgba(18, 18, 18, 0.8);
+  border-radius: 999px;
+}
+
+.trade-context-modal-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #fb923c, #f97316);
+}
+
+/* Position-detail player rows: portrait/rating visuals stay clean and minimal. */
+.trade-context-player-row {
+  min-height: 72px;
+  overflow: visible;
+}
