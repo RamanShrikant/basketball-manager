@@ -6,6 +6,7 @@ import {
   PORTRAIT_STUDIO_MANIFEST_URL,
   REAL_PLAYER_FACE_MANIFEST_URL,
   getFallbackPortraitUrl,
+  getLastKnownPortraitTeamCode,
   getJerseyTemplateId,
   getPlayerPortraitId,
   getPortraitStageId,
@@ -92,9 +93,10 @@ function FallbackPortrait({ src, alt, imageClassName = "", fallback = null }) {
 /**
  * Runtime portrait renderer for post-draft players.
  * - Prospects/draft views can set mode="draft" to preserve the baked source image.
- * - Active players use jerseyless base + current team jersey.
+ * - Active players use jerseyless base + current team jersey when appropriate.
+ * - Real NBA free agents preserve their most recent valid team headshot.
  * - First-year generated rookie free agents keep their original draft-attire portrait.
- * - Other free agents (no team) use the jerseyless base only.
+ * - Other generated free agents preserve the existing jerseyless-base behavior.
  * - Fit resolution supports per-player defaults and per-player/per-template overrides.
  *
  * The outer wrapper stays overflow-visible so page-level headshot tuning can
@@ -129,9 +131,14 @@ export default function RuntimePlayerPortrait({
     teamCode
   );
 
+  const runtimeFace = useMemo(() => {
+    if (!data) return null;
+    return data.faceById?.get(faceId) || data.faceByPlayerId?.get(String(player?.id || "")) || null;
+  }, [data, faceId, player?.id]);
+
   const resolved = useMemo(() => {
-    if (mode === "draft" || useDraftAttireFreeAgent || !data) return null;
-    const face = data.faceById?.get(faceId) || data.faceByPlayerId?.get(String(player?.id || ""));
+    if (mode === "draft" || useDraftAttireFreeAgent || !runtimeFace) return null;
+    const face = runtimeFace;
     if (!face?.baseReady || !face?.baseUrl) return null;
 
     const fitFaceId = String(face?.id || faceId || "").toLowerCase();
@@ -140,20 +147,36 @@ export default function RuntimePlayerPortrait({
       ? normalizePortraitTeamCode(face?.teamName || "", {})
       : "";
 
-    // Real-player base portraits are alternate looks intended for when a player
-    // leaves the team that supplied the original official headshot. While the
-    // player is still on that original/source team, keep using the official
-    // source headshot. As soon as he changes teams (or becomes a free agent),
-    // switch to the generated jerseyless base system.
-    if (isRealPlayerFace && sourceTeamCode && sourceTeamCode === teamCode) {
+    // A real player's jerseyless base is never a finished portrait. When the
+    // player is a free agent, preserve the most recent NBA-team presentation
+    // recorded by the existing FA lifecycle metadata (for example:
+    // PHX official -> SAS dressed portrait -> FA keeps SAS dressed portrait).
+    const portraitTeamCode = isRealPlayerFace && !teamCode
+      ? getLastKnownPortraitTeamCode(player || {})
+      : teamCode;
+
+    // If the last/current team is still the source-headshot team, the official
+    // source image is already the correct most-recent look.
+    if (isRealPlayerFace && sourceTeamCode && sourceTeamCode === portraitTeamCode) {
       return null;
     }
 
-    const jersey = teamCode ? data.jerseyByTeam?.get(teamCode) : null;
+    const jersey = portraitTeamCode ? data.jerseyByTeam?.get(portraitTeamCode) : null;
+
+    // Never expose a naked jerseyless base for a real NBA player. If there is
+    // no valid team jersey to layer, fall back to the official source headshot.
+    if (isRealPlayerFace && !jersey?.url) return null;
+
     const templateId = jersey ? getJerseyTemplateId(jersey) : "";
     const fit = jersey ? resolveJerseyFit(data.fitConfig, fitFaceId, templateId, stageId) : null;
-    return { face, jersey, fit };
-  }, [data, faceId, mode, player?.id, stageId, teamCode, useDraftAttireFreeAgent]);
+    return { face, jersey, fit, portraitTeamCode };
+  }, [data, faceId, mode, player, runtimeFace, stageId, teamCode, useDraftAttireFreeAgent]);
+
+  const isRealRuntimeFace = /^real_face_/i.test(String(runtimeFace?.id || faceId || ""));
+  const fallbackIsNakedRealBase = /\/assets\/real_player_faces\/base\/real_face_[a-z0-9_-]+_base\.png(?:[?#].*)?$/i.test(String(fallbackSrc || ""));
+  const displayFallbackSrc = isRealRuntimeFace
+    ? (runtimeFace?.sourceUrl || (fallbackIsNakedRealBase ? "" : fallbackSrc))
+    : fallbackSrc;
 
   return (
     <div className={`relative overflow-visible ${className}`} style={style} aria-hidden={ariaHidden || undefined}>
@@ -185,7 +208,7 @@ export default function RuntimePlayerPortrait({
             </div>
           </div>
         ) : (
-          <FallbackPortrait src={fallbackSrc} alt={alt} imageClassName={imageClassName} fallback={fallback} />
+          <FallbackPortrait src={displayFallbackSrc} alt={alt} imageClassName={imageClassName} fallback={fallback} />
         )}
       </HeadshotLayoutTransform>
     </div>

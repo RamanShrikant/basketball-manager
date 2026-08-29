@@ -71,6 +71,22 @@ check(
   "First-year generated rookie free agents keep their original draft-attire portrait while veteran generated free agents stay on the runtime path."
 );
 check("dressing.phoenix_normalization", utils.normalizePortraitTeamCode("Phoenix Suns") === "PHX", "Phoenix team naming resolves to the PHX runtime template.");
+const realPlayerFaFromSpurs = {
+  id: 1626164,
+  team: "Free Agent",
+  freeAgencyMeta: { fromTeam: "San Antonio Spurs" },
+};
+const realPlayerFaFromSuns = {
+  id: 1626164,
+  team: "Free Agent",
+  freeAgencyMeta: { fromTeam: "Phoenix Suns" },
+};
+check(
+  "dressing.real_player_fa_last_team",
+  utils.getLastKnownPortraitTeamCode(realPlayerFaFromSpurs) === "SAS" &&
+    utils.getLastKnownPortraitTeamCode(realPlayerFaFromSuns) === "PHX",
+  "Real-player free agents resolve the most recent NBA team from existing freeAgencyMeta.fromTeam metadata."
+);
 
 const layered = read("src/components/LayeredPlayerPortrait.jsx");
 const runtime = read("src/components/RuntimePlayerPortrait.jsx");
@@ -82,6 +98,14 @@ check("dressing.directional_fit", ["left", "right", "up", "down"].every((field) 
 check("dressing.per_template_storage", editor.includes("Save Player Default") && editor.includes("saveTeamOverride") && utils.PORTRAIT_DRESSING_STORAGE_KEY.endsWith("_v2"), "Editor stores player defaults plus per-template exceptions in the v2 working format.");
 check("dressing.durable_project_save", vite.includes("/__bm/portrait-fits") && vite.includes("portrait_fits.json"), "Local Vite server exposes a dev-only canonical fit writer so fitting work is not trapped in localStorage.");
 check("dressing.smart_frame", frame.includes("RuntimePlayerPortrait") && runtime.includes("getPlayerPortraitId"), "Shared portrait frame auto-upgrades generated rookies to runtime dressed portraits while keeping legacy fallback images.");
+check(
+  "dressing.real_player_base_never_naked",
+  runtime.includes("getLastKnownPortraitTeamCode") &&
+    runtime.includes("if (isRealPlayerFace && !jersey?.url) return null") &&
+    runtime.includes("fallbackIsNakedRealBase") &&
+    runtime.includes("runtimeFace?.sourceUrl"),
+  "Real NBA player bases require a valid jersey layer; FA/missing-team fallback uses the official source headshot instead of exposing the base."
+);
 
 const integrationFiles = [
   "src/pages/RosterView.jsx",

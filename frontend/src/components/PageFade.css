@@ -8,36 +8,24 @@ body,
 .bm-page-fade {
   min-height: 100vh;
   background: #050505;
-  animation: bmRouteFadeSoft var(--bm-nav-fade-duration, 380ms)
-    cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  opacity: var(--bm-nav-fade-start-opacity, 0.58);
+  transform: translate3d(0, var(--bm-nav-fade-move-y, 3px), 0)
+    scale(var(--bm-nav-fade-start-scale, 1));
   transform-origin: center center;
   will-change: opacity, transform;
 }
 
 /*
- * Smooth route entrance only. App.jsx already remounts PageFade by pathname,
- * so normal navigation plus browser Back/Forward all retrigger this animation.
- * There is no exit timer, route interception, or navigation delay.
+ * Route entrance begins only after PageFade has allowed the destination to
+ * reach a painted frame. This keeps heavy pages from consuming the transition
+ * while they are still mounting and makes forward/back navigation consistent.
  */
-@keyframes bmRouteFadeSoft {
-  0% {
-    opacity: var(--bm-nav-fade-start-opacity, 0.52);
-    transform: translate3d(0, var(--bm-nav-fade-move-y, 0px), 0)
-      scale(var(--bm-nav-fade-start-scale, 0.995));
-  }
-
-  30% {
-    opacity: 0.72;
-  }
-
-  68% {
-    opacity: 0.93;
-  }
-
-  100% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-  }
+.bm-page-fade.bm-page-fade--entered {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+  transition:
+    opacity var(--bm-nav-fade-duration, 290ms) cubic-bezier(0.16, 1, 0.3, 1),
+    transform var(--bm-nav-fade-duration, 290ms) cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* The app owner explicitly wants the navigation transition to remain active. */

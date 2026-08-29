@@ -267,6 +267,31 @@ export function normalizePortraitTeamCode(teamLike, player = {}) {
   return fromName === "PHO" ? "PHX" : fromName;
 }
 
+/**
+ * Real-player portraits keep the most recent valid NBA-team presentation when
+ * the player becomes a free agent. Free-agency lifecycle code already stores
+ * that team in freeAgencyMeta.fromTeam, so portrait rendering can stay visual
+ * only and does not need to mutate roster/game state.
+ */
+export function getLastKnownPortraitTeamCode(player = {}) {
+  const freeAgencyMeta = isObject(player?.freeAgencyMeta) ? player.freeAgencyMeta : {};
+  const candidates = [
+    freeAgencyMeta.fromTeam,
+    freeAgencyMeta.teamName,
+    player?.formerTeamName,
+    player?.previousTeamName,
+    player?.previousTeam,
+    player?.lastTeamName,
+    player?.releasedByTeamName,
+  ];
+
+  for (const candidate of candidates) {
+    const teamCode = normalizePortraitTeamCode(candidate, {});
+    if (teamCode) return teamCode;
+  }
+  return "";
+}
+
 export function hasJerseyOverride(config, faceId, templateId, stageId = "") {
   const clean = normalizePortraitFitConfig(config);
   const profile = clean.fitByFace[String(faceId || "").toLowerCase()];

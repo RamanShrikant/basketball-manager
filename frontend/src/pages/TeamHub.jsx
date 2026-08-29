@@ -797,7 +797,7 @@ export default function TeamHub() {
           ◄
         </button>
 
-        <div key={currentSection || "main"} ref={scrollRowRef} className={styles.scrollRow} onScroll={handleRowScroll} onWheel={handleCarouselWheel}>
+        <div key={currentSection || "main"} ref={scrollRowRef} className={`${styles.scrollRow} ${styles.sectionSwapFade}`} onScroll={handleRowScroll} onWheel={handleCarouselWheel}>
           {tiles.map((tile, index) => {
             const enabled = tile.enabled && (tile.sectionKey || tile.path !== "#");
             const active = index === activeTileIndex;
