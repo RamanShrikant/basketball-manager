@@ -1597,6 +1597,32 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
 
     const currentTeamName = getPickTeam(currentPick || {});
     const userOnClock = Boolean(currentPick && selectedTeamName && currentTeamName === selectedTeamName);
+
+    // Draft-day trades can change ownership after the live draft state has
+    // already been initialized. Keep that in-memory state rebased against the
+    // canonical draft-pick ownership source so the on-clock team changes
+    // immediately instead of waiting for a fresh draft initialization.
+    useEffect(() => {
+      if (!draftState || draftState.completed || !workingLeagueData) return;
+      if (!Array.isArray(draftState.draftOrder) || !draftState.draftOrder.length) return;
+
+      const ownedOrder = applyDraftPickOwnershipToOrder(draftState.draftOrder, {
+        leagueData: workingLeagueData,
+        seasonYear,
+      });
+      const beforeSignature = getDraftOrderSignature(draftState.draftOrder);
+      const afterSignature = getDraftOrderSignature(ownedOrder);
+      if (!afterSignature || beforeSignature === afterSignature) return;
+
+      const nextState = {
+        ...draftState,
+        draftOrder: ownedOrder,
+        draftOrderSignature: afterSignature,
+        pickOwnershipVersion: "draft_pick_ownership_v7_live_sync",
+      };
+      setDraftState(nextState);
+      saveDraftState(nextState);
+    }, [draftState, workingLeagueData, seasonYear]);
     const remainingUserPicks = useMemo(() => {
       if (!selectedTeamName || !Array.isArray(draftState?.draftOrder)) return [];
       const start = Math.max(0, Number(draftState?.currentPickIndex || 0));

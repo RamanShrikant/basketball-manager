@@ -468,7 +468,7 @@ export function getOffseasonTradeContext(leagueData = {}, explicitContext = null
   const preLotteryExpectedSlotByTeam = buildPreLotteryExpectedSlots(records, lotterySystem);
 
   return {
-    version: 2,
+    version: 3,
     seasonYear,
     targetSeasonYear: seasonYear + 1,
     inOffseason,
@@ -481,6 +481,7 @@ export function getOffseasonTradeContext(leagueData = {}, explicitContext = null
     draftInProgress,
     currentPickIndex,
     progressionComplete: Boolean(offseasonState?.progressionComplete || leagueData?.draftState?.progressionComplete),
+    optionsComplete: Boolean(offseasonState?.optionsComplete),
     useProjectedNextSeasonRatings: Boolean(inOffseason && !(offseasonState?.progressionComplete || leagueData?.draftState?.progressionComplete)),
     draftOrder,
     lotterySystem,

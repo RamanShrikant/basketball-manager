@@ -162,7 +162,54 @@ export function getOffseasonGuaranteedContractStatus(player = {}, { leagueData =
   const targetSeasonYear = Number(context.targetSeasonYear || context.seasonYear + 1);
 
   if (!contract || !salaries.length || !Number.isFinite(startYear)) {
-    return { eligible: false, code: "NO_GUARANTEED_CONTRACT", reason: "No guaranteed contract is recorded for next season." };
+    return { eligible: false, code: "NO_GUARANTEED_CONTRACT", reason: "No active standard contract is recorded." };
+  }
+
+  // Draft-day trades occur before this game's Options phase and before the
+  // Free Agency/new-contract state takes over. During that window a player's
+  // CURRENT contract is the authoritative trade asset: an unresolved player
+  // option, unresolved team option, or contract expiring at the upcoming
+  // rollover can still be traded and the option/contract rights travel with
+  // him. The previous implementation looked ahead to targetSeasonYear too
+  // early, causing valid draft-day players to disappear from Propose Trade.
+  //
+  // Old embedded offseason contexts may predate `optionsComplete`, so the
+  // Free Agency stages also count as post-options for backwards safety.
+  const optionsResolved = Boolean(
+    context?.optionsComplete ||
+      context?.stage === "free_agency" ||
+      context?.stage === "post_free_agency"
+  );
+
+  if (!optionsResolved) {
+    // Draft/pre-options rule: if a standard-roster player still carries a real
+    // contract on the roster, he is tradeable. Expiring contracts and
+    // unresolved player/team options are intentionally allowed here; they are
+    // resolved later in the normal Options/Free Agency flow. Do NOT require a
+    // salary slot for the incoming season before the draft.
+    const lastPositiveSalary = [...salaries].reverse().find((value) => value > 0) || 0;
+    if (lastPositiveSalary <= 0) {
+      return {
+        eligible: false,
+        code: "NO_ACTIVE_ROSTER_CONTRACT",
+        reason: "No active standard contract is recorded for this roster player.",
+      };
+    }
+
+    const option = contract?.option && typeof contract.option === "object" ? contract.option : null;
+    const optionType = normalized(option?.type);
+    const unresolvedOptionTransfers = Boolean(
+      option &&
+        (optionType === "player" || optionType === "team") &&
+        getOptionDecision(option, getOptionYearIndices(option).slice(-1)[0]) == null
+    );
+
+    return {
+      eligible: true,
+      code: "PRE_DRAFT_ROSTER_CONTRACT",
+      salary: lastPositiveSalary,
+      unresolvedOptionTransfers,
+    };
   }
 
   const targetIndex = targetSeasonYear - startYear;

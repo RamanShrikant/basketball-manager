@@ -1336,29 +1336,53 @@ function tradeDebugEvaluation(evaluation = {}) {
   };
 }
 
+function evaluateTradeFinderOfferWithBuilderExact({ leagueData, selectedTeam, offer }) {
+  const offerTeamName = offer?.team?.name || offer?.team?.teamName || offer?.teamName || "";
+  const selectedTeamName = selectedTeam?.name || selectedTeam?.teamName || "";
+  const offerTeam = findTeamInLeague(leagueData, offerTeamName) || offer?.team;
+  const selectedItems = Array.isArray(offer?.selectedItems) ? offer.selectedItems : [];
+  const offerItems = sortTradeFinderOfferItems(offer?.offer || [], leagueData);
+
+  const projected = buildOffseasonTradeEvaluationLeague(leagueData);
+  const evaluationLeague = projected.leagueData;
+  const builderEvaluation = evaluateTradeTeamImpact({
+    leagueData: evaluationLeague,
+    userTeam: getTeamFromTradeLeague(evaluationLeague, selectedTeamName) || selectedTeam,
+    cpuTeam: getTeamFromTradeLeague(evaluationLeague, offerTeamName) || offerTeam,
+    userTeamName: selectedTeamName,
+    cpuTeamName: offerTeamName,
+    userItems: selectedItems,
+    cpuItems: offerItems,
+  });
+
+  const summary = tradeDebugEvaluation(builderEvaluation);
+  return {
+    accepted: Boolean(summary.accepted),
+    evaluation: builderEvaluation,
+    summary,
+    offerTeam,
+    offerItems,
+    selectedItems,
+  };
+}
+
 function debugTradeFinderLoadOffer({ leagueData, selectedTeam, selectedItems, offer }) {
   if (!isTradeDebugEnabled()) return;
 
   try {
-    const offerTeam = findTeamInLeague(leagueData, offer?.team?.name || offer?.team?.teamName || offer?.teamName) || offer?.team;
-    const offerItems = sortTradeFinderOfferItems(offer?.offer || [], leagueData);
-    const projected = buildOffseasonTradeEvaluationLeague(leagueData);
-    const evaluationLeague = projected.leagueData;
-    const builderEvaluation = evaluateTradeTeamImpact({
-      leagueData: evaluationLeague,
-      userTeam: getTeamFromTradeLeague(evaluationLeague, selectedTeam?.name) || selectedTeam,
-      cpuTeam: getTeamFromTradeLeague(evaluationLeague, offerTeam?.name) || offerTeam,
-      userTeamName: selectedTeam?.name || selectedTeam?.teamName || "",
-      cpuTeamName: offerTeam?.name || offerTeam?.teamName || offer?.teamName || "",
-      userItems: selectedItems,
-      cpuItems: offerItems,
-      evaluationMode: "standard",
-      cpuTradeRole: "",
-      cpuTradeContext: { source: "trade_finder_load_offer_debug" },
+    const preparedOffer = {
+      ...offer,
+      selectedItems,
+    };
+    const exact = evaluateTradeFinderOfferWithBuilderExact({
+      leagueData,
+      selectedTeam,
+      offer: preparedOffer,
     });
-
+    const offerTeam = exact.offerTeam;
+    const offerItems = exact.offerItems;
     const finderSummary = tradeDebugEvaluation(offer?.evaluation || {});
-    const builderSummary = tradeDebugEvaluation(builderEvaluation);
+    const builderSummary = exact.summary;
     const mismatch = Boolean(offer?.accepted) && !builderSummary.accepted;
     const payload = {
       selectedTeam: selectedTeam?.name || selectedTeam?.teamName || "",
@@ -1735,6 +1759,32 @@ function validateTradeFinderOfferDetailed({ leagueData, selectedTeam, offer }) {
     });
   }
 
+  // Final parity gate: every offer that reaches the screen must pass the exact
+  // same CPU willingness evaluator used by Submit Proposal. Worker/scan results
+  // are candidates only; they are never authoritative for display/load.
+  const exactAcceptance = evaluateTradeFinderOfferWithBuilderExact({
+    leagueData,
+    selectedTeam,
+    offer: {
+      ...offer,
+      team: offerTeam,
+      selectedItems,
+      offer: offerItems,
+    },
+  });
+  if (!exactAcceptance.accepted) {
+    return fail(
+      "cpu_exact_rejected",
+      `${offerTeamName} no longer accepts this exact package. Trade Finder removed it before loading.`,
+      {
+        selectedRosterProjection,
+        offerRosterProjection,
+        finderEvaluation: tradeDebugEvaluation(offer?.evaluation || {}),
+        builderEvaluation: exactAcceptance.summary,
+      }
+    );
+  }
+
   return {
     ok: true,
     code: "ok",
@@ -1744,6 +1794,7 @@ function validateTradeFinderOfferDetailed({ leagueData, selectedTeam, offer }) {
       duplicateAssetKeys,
       selectedRosterProjection,
       offerRosterProjection,
+      exactCpuAcceptance: exactAcceptance.summary,
       asymmetricPlayerCounts:
         countTradePlayers(selectedItems) !== countTradePlayers(offerItems),
       repairBeforeSimulation: {
@@ -3047,7 +3098,7 @@ const standardPatienceBlocked = Boolean(
 
       if (rejectedGeneratedOffers.length) {
         console.error(
-          `[BM DIAGNOSTICS][TRADE FINDER PRE-DISPLAY FILTER] Removed ${rejectedGeneratedOffers.length} generated offer${rejectedGeneratedOffers.length === 1 ? "" : "s"} that failed the exact Load Offer validation.`,
+          `[BM DIAGNOSTICS][TRADE FINDER PRE-DISPLAY FILTER] Removed ${rejectedGeneratedOffers.length} generated offer${rejectedGeneratedOffers.length === 1 ? "" : "s"} that failed exact ownership, salary, roster, or CPU-acceptance validation.`,
           rejectedGeneratedOffers
         );
       }
@@ -3088,7 +3139,7 @@ const standardPatienceBlocked = Boolean(
       if (!loadableOffers.length && !result?.stopped) {
         setOfferSearchError(
           rejectedGeneratedOffers.length
-            ? "Trade Finder generated offers, but all were filtered before display because they failed exact ownership, salary, or temporary-roster validation. Run bmDiag.tradeFinder() in the console for the precise reasons."
+            ? "Trade Finder generated offers, but all were filtered before display because they failed exact ownership, salary, roster, or CPU-acceptance validation. Run bmDiag.tradeFinder() in the console for the precise reasons."
             : result?.message || "No CPU team found a Propose Trade-legal package for this search."
         );
       }

@@ -9,6 +9,7 @@ import "../styles/BMPageBackground.css";
 import { getArchivedStatsSnapshot, getLatestSeasonHistoryEntry, seasonLabelFromStartYear } from "../utils/seasonStatsArchive.js";
 import { DIVISION_NAMES, groupTeamsByDivision, resolveTeamDivision } from "../utils/leagueDivisions.js";
 import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
+import { compareCanonicalTeams, computeCanonicalStandings } from "../utils/canonicalStandings.js";
 
 /* -----------------------------
    Results V3 (per-game storage)
@@ -116,17 +117,14 @@ export default function Standings() {
     );
   }, [leagueData]);
 
-  // ✅ Build a fast lookup map: gameId(string) -> meta
-  const scheduleById = useMemo(() => {
-    const map = {};
-    for (const games of Object.values(schedule || {})) {
-      for (const g of games || []) {
-        if (g?.id == null) continue;
-        map[String(g.id)] = g;
-      }
-    }
-    return map;
-  }, [schedule]);
+  const liveTeamByName = useMemo(() => new Map(allTeams.map((team) => [team.name, team])), [allTeams]);
+
+  const liveStandings = useMemo(() => computeCanonicalStandings({
+    teams: allTeams,
+    scheduleByDate: schedule,
+    resultsById: results,
+    confOf: (teamName) => liveTeamByName.get(teamName)?.conf || "",
+  }), [allTeams, schedule, results, liveTeamByName]);
 
   const teamStats = useMemo(() => {
     if (isOffseasonMode && Array.isArray(archivedSnapshot?.teamRows) && archivedSnapshot.teamRows.length) {
@@ -174,83 +172,22 @@ export default function Standings() {
       });
     }
 
-    const stats = {};
-
-    // start every team at 0
-    allTeams.forEach((t) => {
-      stats[t.name] = {
-        team: t.name,
-        conf: t.conf,
-        division: t.division,
-        logo: t.logo,
-        w: 0,
-        l: 0,
-        pf: 0,
-        pa: 0,
+    return Object.values(liveStandings).map((row) => {
+      const meta = liveTeamByName.get(row.team) || {};
+      return {
+        team: row.team,
+        conf: row.conf || meta.conf || "",
+        division: meta.division || resolveTeamDivision({ name: row.team }, row.conf || meta.conf || ""),
+        logo: meta.logo || "",
+        w: row.wins,
+        l: row.losses,
+        pf: row.pf,
+        pa: row.pa,
+        pct: row.winPct.toFixed(3),
+        diff: row.diff,
       };
     });
-
-    Object.entries(results).forEach(([gameIdStr, g]) => {
-      if (!g || !g.totals) return;
-
-      // ✅ lookup meta using normalized string id
-      const meta = scheduleById[gameIdStr];
-      if (!meta) return;
-
-      const homeName = meta.home;
-      const awayName = meta.away;
-
-      const homePts = Number(g.totals.home || 0);
-      const awayPts = Number(g.totals.away || 0);
-
-      if (!stats[homeName]) {
-        stats[homeName] = {
-          team: homeName,
-          conf: meta.confHome || "",
-          division: meta.divisionHome || resolveTeamDivision({ name: homeName }, meta.confHome || ""),
-          logo: resolveLogo(meta) || "",
-          w: 0,
-          l: 0,
-          pf: 0,
-          pa: 0,
-        };
-      }
-      if (!stats[awayName]) {
-        stats[awayName] = {
-          team: awayName,
-          conf: meta.confAway || "",
-          division: meta.divisionAway || resolveTeamDivision({ name: awayName }, meta.confAway || ""),
-          logo: resolveLogo(meta) || "",
-          w: 0,
-          l: 0,
-          pf: 0,
-          pa: 0,
-        };
-      }
-
-      // points for / against
-      stats[homeName].pf += homePts;
-      stats[homeName].pa += awayPts;
-      stats[awayName].pf += awayPts;
-      stats[awayName].pa += homePts;
-
-      // decide winner directly from points
-      if (homePts > awayPts) {
-        stats[homeName].w += 1;
-        stats[awayName].l += 1;
-      } else if (awayPts > homePts) {
-        stats[awayName].w += 1;
-        stats[homeName].l += 1;
-      }
-    });
-
-    // final shape for the table
-    return Object.values(stats).map((t) => ({
-      ...t,
-      pct: t.w + t.l > 0 ? (t.w / (t.w + t.l)).toFixed(3) : "0.000",
-      diff: t.pf - t.pa,
-    }));
-  }, [results, allTeams, scheduleById, isOffseasonMode, archivedSeason, archivedSnapshot]);
+  }, [liveStandings, liveTeamByName, allTeams, isOffseasonMode, archivedSeason, archivedSnapshot]);
 
   const filtered = useMemo(() => {
     if (viewMode === "east")
@@ -260,19 +197,29 @@ export default function Standings() {
     return teamStats;
   }, [teamStats, viewMode]);
 
-  const sorted = useMemo(
-    () =>
-      [...filtered].sort(
-        (a, b) => parseFloat(b.pct) - parseFloat(a.pct) || b.diff - a.diff
-      ),
-    [filtered]
-  );
+  const sorted = useMemo(() => {
+    const rows = [...filtered];
+    if (isOffseasonMode) {
+      return rows.sort((a, b) =>
+        parseFloat(b.pct) - parseFloat(a.pct) ||
+        b.diff - a.diff ||
+        String(a.team).localeCompare(String(b.team))
+      );
+    }
+    return rows.sort((a, b) => compareCanonicalTeams(a.team, b.team, liveStandings));
+  }, [filtered, isOffseasonMode, liveStandings]);
+
   const divisionGroups = useMemo(() => {
-    const sortedTeams = [...teamStats].sort(
-      (a, b) => parseFloat(b.pct) - parseFloat(a.pct) || b.diff - a.diff || String(a.team).localeCompare(String(b.team))
-    );
+    const sortedTeams = [...teamStats].sort((a, b) => {
+      if (isOffseasonMode) {
+        return parseFloat(b.pct) - parseFloat(a.pct) ||
+          b.diff - a.diff ||
+          String(a.team).localeCompare(String(b.team));
+      }
+      return compareCanonicalTeams(a.team, b.team, liveStandings);
+    });
     return groupTeamsByDivision(sortedTeams, leagueData);
-  }, [teamStats, leagueData]);
+  }, [teamStats, leagueData, isOffseasonMode, liveStandings]);
 
   const renderStandingsTable = (rows, compact = false) => (
     <table className="w-full text-sm text-center">
@@ -371,7 +318,7 @@ export default function Standings() {
         </button>
       </div>
     </div>
-  
+
     </PageFade>
   );
 }

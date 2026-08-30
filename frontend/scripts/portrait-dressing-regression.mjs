@@ -99,12 +99,14 @@ check("dressing.per_template_storage", editor.includes("Save Player Default") &&
 check("dressing.durable_project_save", vite.includes("/__bm/portrait-fits") && vite.includes("portrait_fits.json"), "Local Vite server exposes a dev-only canonical fit writer so fitting work is not trapped in localStorage.");
 check("dressing.smart_frame", frame.includes("RuntimePlayerPortrait") && runtime.includes("getPlayerPortraitId"), "Shared portrait frame auto-upgrades generated rookies to runtime dressed portraits while keeping legacy fallback images.");
 check(
-  "dressing.real_player_base_never_naked",
+  "dressing.base_never_naked",
   runtime.includes("getLastKnownPortraitTeamCode") &&
-    runtime.includes("if (isRealPlayerFace && !jersey?.url) return null") &&
+    runtime.includes("if (!jersey?.url) return null") &&
     runtime.includes("fallbackIsNakedRealBase") &&
-    runtime.includes("runtimeFace?.sourceUrl"),
-  "Real NBA player bases require a valid jersey layer; FA/missing-team fallback uses the official source headshot instead of exposing the base."
+    runtime.includes("fallbackIsNakedGeneratedBase") &&
+    runtime.includes("runtimeFace?.sourceUrl") &&
+    runtime.includes("runtimeFace?.draftUrl"),
+  "Real and generated jerseyless bases require a valid jersey layer; FA/missing-team fallbacks use finished source/draft portraits instead of exposing a base."
 );
 
 const integrationFiles = [

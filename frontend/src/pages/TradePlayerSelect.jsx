@@ -5,6 +5,8 @@ import PageFade from "../components/PageFade";
 import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
 import { getContractSeasonYear } from "../utils/seasonContext.js";
+import { getOffseasonTradeContext } from "../utils/offseasonTradeContext.js";
+import { getTradePlayerEligibility } from "../utils/tradeRosterEligibility.js";
 import { getUserTradeCurrentDate, getUserTradePlayerEligibility } from "../utils/userTradeRules.js";
 import { formatInjuryReturnLabel, isPlayerInjured } from "../utils/injurySystem.js";
 import styles from "./RosterView.module.css";
@@ -92,7 +94,10 @@ function getSalaryForPayrollYear(player, payrollSeasonYear) {
     const startYear = Number(contract.startYear || payrollSeasonYear);
     const idx = payrollSeasonYear - startYear;
     if (idx >= 0 && idx < salaries.length) return Number(salaries[idx] || 0);
-    return 0;
+    // Before the draft, expiring players are still valid trade assets. Keep the
+    // selector aligned with Propose Trade instead of showing a fake $0 salary.
+    if (idx >= salaries.length) return Number(salaries[salaries.length - 1] || 0);
+    return Number(salaries[0] || 0);
   }
 
   const fallback = Number(
@@ -141,10 +146,10 @@ function getContractYearsRemaining(player, leagueData) {
 
   const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
   const startYear = Number(contract.startYear || payrollSeasonYear);
-  const idx = payrollSeasonYear - startYear;
-  if (!Number.isFinite(idx) || idx < 0) return salaries.length;
-  if (idx >= salaries.length) return 0;
-  return salaries.length - idx;
+  let idx = payrollSeasonYear - startYear;
+  if (!Number.isFinite(idx) || idx < 0) idx = 0;
+  if (idx >= salaries.length) idx = salaries.length - 1;
+  return Math.max(1, salaries.length - idx);
 }
 
 function getContractTotalRemaining(player, leagueData) {
@@ -156,9 +161,9 @@ function getContractTotalRemaining(player, leagueData) {
 
   const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
   const startYear = Number(contract.startYear || payrollSeasonYear);
-  const idx = payrollSeasonYear - startYear;
-  if (!Number.isFinite(idx) || idx < 0) return salaries.reduce((sum, value) => sum + Number(value || 0), 0);
-  if (idx >= salaries.length) return 0;
+  let idx = payrollSeasonYear - startYear;
+  if (!Number.isFinite(idx) || idx < 0) idx = 0;
+  if (idx >= salaries.length) idx = salaries.length - 1;
 
   return salaries.slice(idx).reduce((sum, value) => sum + Number(value || 0), 0);
 }
@@ -296,6 +301,7 @@ export default function TradePlayerSelect() {
     [builderSnapshot, tradeSide]
   );
   const userTradeCurrentDate = useMemo(() => getUserTradeCurrentDate(leagueData), [leagueData]);
+  const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
   const alreadyAddedPlayerKeys = useMemo(
     () => getAlreadyAddedPlayerKeys(currentSideItems),
     [currentSideItems]
@@ -305,15 +311,40 @@ export default function TradePlayerSelect() {
   const playerEligibilityByKey = useMemo(() => {
     const map = new Map();
     for (const player of players) {
-      map.set(playerKey(player), getUserTradePlayerEligibility({
+      const userRule = getUserTradePlayerEligibility({
         leagueData,
         teamName: team?.name || team?.teamName || tradeTeamName,
         player,
         currentDate: userTradeCurrentDate,
-      }));
+      });
+
+      if (userRule?.ok === false) {
+        map.set(playerKey(player), userRule);
+        continue;
+      }
+
+      // The selector must use the same offseason guaranteed-contract/option
+      // gate as Propose Trade. Previously this page could add a player that
+      // Propose Trade immediately sanitized away, leaving an invisible ghost
+      // item in bm_trade_builder_v1 and later showing "Already in package".
+      const rosterRule = getTradePlayerEligibility(player, {
+        leagueData,
+        tradeContext,
+      });
+
+      map.set(
+        playerKey(player),
+        rosterRule?.eligible === false
+          ? {
+              ok: false,
+              code: rosterRule.code || "OFFSEASON_CONTRACT_LOCK",
+              reason: rosterRule.reason || "This player is not currently trade eligible.",
+            }
+          : userRule
+      );
     }
     return map;
-  }, [leagueData, players, team, tradeTeamName, userTradeCurrentDate]);
+  }, [leagueData, players, team, tradeTeamName, tradeContext, userTradeCurrentDate]);
 
   const [selectedKey, setSelectedKey] = useState("");
   const [sortConfig, setSortConfig] = useState({ key: "overall", direction: "desc" });

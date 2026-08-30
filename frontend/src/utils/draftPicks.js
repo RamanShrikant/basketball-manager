@@ -1157,6 +1157,107 @@ export function resolveDraftPickOwner({ leagueData, year, round, originalTeam, p
     ownershipType: protectedPick ? "protected_reverted_to_original" : "draft_pick_asset",
   };
 }
+
+export function transferResolvedDraftPickOwnershipAsset(
+  leagueData,
+  { year, round, originalTeam, pickNumber, fromTeam, toTeam, tradeStamp = {} } = {}
+) {
+  if (!leagueData || typeof leagueData !== "object") {
+    return { ok: false, reason: "Missing league data for resolved draft-pick transfer." };
+  }
+
+  const y = Number(year || getDraftYear(leagueData || {}));
+  const r = Number(round || (Number(pickNumber || 0) <= 30 ? 1 : 2));
+  const pick = Number(pickNumber || 0);
+  const teamNames = getTeamNamesFromLeague(leagueData);
+  const resolveTeamName = buildTeamResolver(leagueData);
+  const original = resolveTeamName(originalTeam);
+  const from = resolveTeamName(fromTeam);
+  const to = resolveTeamName(toTeam);
+
+  if (!y || !r || !original || !to) {
+    return { ok: false, reason: "Resolved draft-pick transfer is missing year, round, original team, or destination team." };
+  }
+
+  const normalized = normalizeDraftPicks(leagueData?.draftPicks || [], teamNames);
+  const resolution = resolveDraftPickOwner({
+    leagueData,
+    year: y,
+    round: r,
+    originalTeam: original,
+    pickNumber: pick,
+  });
+
+  let targetIndex = -1;
+  const resolvedAssetId = String(resolution?.asset?.id || "");
+  if (resolvedAssetId) {
+    targetIndex = normalized.findIndex((asset) => String(asset?.id || "") === resolvedAssetId);
+  }
+
+  if (targetIndex < 0) {
+    targetIndex = normalized.findIndex((asset) =>
+      sameDraftPickAsset(asset, {
+        year: y,
+        round: r,
+        originalTeam: original,
+        resolveTeamName,
+      }) && (!from || isSameTeamName(asset?.ownerTeam, from) || isSameTeamName(asset?.ownerTeam, original))
+    );
+  }
+
+  const stamp = {
+    ...tradeStamp,
+    fromTeam: from || fromTeam || "",
+    toTeam: to,
+    seasonYear: Number(tradeStamp?.seasonYear || y),
+    assetType: "resolved",
+    pickNumber: pick || null,
+    action: tradeStamp?.action || "resolved_pick_transfer",
+  };
+
+  if (targetIndex >= 0) {
+    const current = normalized[targetIndex];
+    normalized[targetIndex] = normalizeDraftPickAsset({
+      ...current,
+      ownerTeam: to,
+      owner: to,
+      currentOwner: to,
+      currentOwnerTeamName: to,
+      ownerTeamName: to,
+      status: "resolved",
+      resolvedPickNumber: pick || current?.resolvedPickNumber || null,
+      lastTrade: stamp,
+      tradeHistory: [
+        ...(Array.isArray(current?.tradeHistory) ? current.tradeHistory : []),
+        stamp,
+      ],
+    }, targetIndex, teamNames);
+  } else {
+    normalized.push(normalizeDraftPickAsset({
+      assetType: "pick",
+      year: y,
+      round: r,
+      originalTeam: original,
+      ownerTeam: to,
+      status: "resolved",
+      protections: null,
+      displayProtection: "Resolved",
+      resolvedPickNumber: pick || null,
+      lastTrade: stamp,
+      tradeHistory: [stamp],
+      notes: pick ? `Resolved as pick #${pick}; ownership transferred after lottery.` : "Resolved pick ownership transferred after lottery.",
+    }, normalized.length, teamNames));
+  }
+
+  return {
+    ok: true,
+    draftPicks: normalized.sort(sortDraftPickAssets),
+    ownerTeam: to,
+    originalTeam: original,
+    pickNumber: pick,
+  };
+}
+
 function setPickRowOwner(row = {}, ownerTeam, leagueData, extra = {}) {
   const logoMap = getTeamLogoMap(leagueData);
   const ownerLogo = logoMap[normalizeTeamName(ownerTeam)] || row.currentOwnerTeamLogo || row.ownerLogo || row.logo || "";

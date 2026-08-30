@@ -3620,11 +3620,17 @@ updateOffseasonState({
                   type="range"
                   min={offerMinimumMillions}
                   max={offerMaximumMillions}
-                  step="0.01"
+                  step="0.001"
                   value={Math.min(Math.max(Number(offerSalaryText) || offerMinimumMillions, offerMinimumMillions), offerMaximumMillions)}
                   onChange={(e) => {
-                    const val = Number(e.target.value);
-                    setOfferSalaryText(val.toFixed(2));
+                    const rawMillions = Number(e.target.value);
+                    const rawAmount = Math.round(rawMillions * 1_000_000);
+                    const snappedAmount = rawAmount <= offerMinimumAmount + 500
+                      ? offerMinimumAmount
+                      : rawAmount >= offerMaximumAmount - 500
+                        ? offerMaximumAmount
+                        : Math.round(rawAmount / 1_000) * 1_000;
+                    setOfferSalaryText(formatMillionsInput(snappedAmount));
                     setSignError("");
                   }}
                   className="w-full accent-green-500"

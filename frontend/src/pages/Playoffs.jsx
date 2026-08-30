@@ -32,6 +32,7 @@ import {
   recoverPlayersForDate,
 } from "../utils/injurySystem.js";
 import { clearScheduleStorage, readScheduleFromStorage } from "../utils/scheduleStorage.js";
+import { computeCanonicalStandings, sortCanonicalTeamNames } from "../utils/canonicalStandings.js";
 
 const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
@@ -883,122 +884,7 @@ function upsertSeasonHistoryEntry(leagueData, entry) {
   return next;
 }
 
-/* ------------ standings + tiebreak helpers ------------ */
-function computeStandings({ teams, scheduleByDate, resultsById, confOf }) {
-  const base = {};
-  for (const t of teams) {
-    base[t.name] = {
-      team: t.name,
-      conf: confOf(t.name),
-      wins: 0,
-      losses: 0,
-      pf: 0,
-      pa: 0,
-      diff: 0,
-      confWins: 0,
-      confLosses: 0,
-      h2h: {}, // opponent -> {w,l}
-    };
-  }
-
-  for (const games of Object.values(scheduleByDate || {})) {
-    for (const g of games || []) {
-      // ✅ PATCH: standings must be regular-season only (ignore any postseason IDs if they ever appear)
-      if (typeof g?.id === "string" && (g.id.startsWith("PO_") || g.id.startsWith("PI_"))) continue;
-
-      if (!g?.played) continue;
-      const r = resultsById?.[g.id];
-      if (!r?.totals) continue;
-
-      const home = g.home;
-      const away = g.away;
-      if (!base[home] || !base[away]) continue;
-
-      const hs = r.totals.home ?? 0;
-      const as = r.totals.away ?? 0;
-
-      base[home].pf += hs;
-      base[home].pa += as;
-      base[away].pf += as;
-      base[away].pa += hs;
-
-      const homeWon = hs > as;
-      const awayWon = as > hs;
-
-      if (homeWon) {
-        base[home].wins++;
-        base[away].losses++;
-      } else if (awayWon) {
-        base[away].wins++;
-        base[home].losses++;
-      }
-
-      const homeConf = base[home].conf;
-      const awayConf = base[away].conf;
-      if (homeConf && awayConf && homeConf === awayConf) {
-        if (homeWon) {
-          base[home].confWins++;
-          base[away].confLosses++;
-        } else if (awayWon) {
-          base[away].confWins++;
-          base[home].confLosses++;
-        }
-      }
-
-      base[home].h2h[away] = base[home].h2h[away] || { w: 0, l: 0 };
-      base[away].h2h[home] = base[away].h2h[home] || { w: 0, l: 0 };
-      if (homeWon) {
-        base[home].h2h[away].w++;
-        base[away].h2h[home].l++;
-      } else if (awayWon) {
-        base[away].h2h[home].w++;
-        base[home].h2h[away].l++;
-      }
-    }
-  }
-
-  for (const k of Object.keys(base)) {
-    base[k].diff = base[k].pf - base[k].pa;
-    const gp = base[k].wins + base[k].losses;
-    base[k].winPct = gp ? base[k].wins / gp : 0;
-
-    const cgp = base[k].confWins + base[k].confLosses;
-    base[k].confPct = cgp ? base[k].confWins / cgp : 0;
-  }
-
-  return base;
-}
-
-function sortWithTiebreak(teamNames, standings) {
-  const arr = [...teamNames];
-
-  arr.sort((A, B) => {
-    const a = standings[A],
-      b = standings[B];
-    if (!a || !b) return (A || "").localeCompare(B || "");
-
-    if (b.winPct !== a.winPct) return b.winPct - a.winPct;
-
-    const h2hA = a.h2h?.[B];
-    const h2hB = b.h2h?.[A];
-    if (h2hA && h2hB) {
-      const gp = h2hA.w + h2hA.l;
-      if (gp > 0) {
-        const aPct = h2hA.w / gp;
-        const bPct = h2hB.w / gp;
-        if (bPct !== aPct) return bPct - aPct;
-      }
-    }
-
-    if (b.confPct !== a.confPct) return b.confPct - a.confPct;
-    if (b.diff !== a.diff) return b.diff - a.diff;
-
-    return (A || "").localeCompare(B || "");
-  });
-
-  return arr;
-}
-
+/* ------------ canonical standings + tiebreak helpers live in utils/canonicalStandings.js ------------ */
 /* ------------ sim helpers ------------ */
 async function simOneSafe({ homeName, awayName, leagueData, teamsByName, currentDate = null }) {
   const homeTeamObj = teamsByName[homeName];
@@ -1328,7 +1214,7 @@ export default function Playoffs() {
   const resultsById = useMemo(() => loadAllResultsV3(), []);
 
   const standings = useMemo(() => {
-    return computeStandings({ teams, scheduleByDate, resultsById, confOf });
+    return computeCanonicalStandings({ teams, scheduleByDate, resultsById, confOf });
   }, [teams, scheduleByDate, resultsById]);
 
   const seasonYear = useMemo(() => {
@@ -1360,7 +1246,7 @@ export default function Playoffs() {
         .filter((x) => x.conf === ck)
         .map((x) => x.team);
 
-      const sorted = sortWithTiebreak(teamNames, standings);
+      const sorted = sortCanonicalTeamNames(teamNames, standings);
       out[ck] = sorted.slice(0, 10);
     }
 

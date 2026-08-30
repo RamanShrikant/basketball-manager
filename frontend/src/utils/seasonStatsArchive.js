@@ -1000,8 +1000,15 @@ export function buildRegularSeasonStatsSnapshot(
     teams,
     rawPlayerStats: playerStatsMap || {},
     rawTeamStats: normalizedRows,
-    includeZeroRosterPlayers: true,
-    combinePlayerStatsToRosterTeams: true,
+    // Do not inject the CURRENT offseason roster as zero-game rows into a
+    // completed-season archive. A player signed after the season must not
+    // appear as if he was already on that team during the completed season.
+    includeZeroRosterPlayers: false,
+    // Historical production must stay attached to the team recorded by the
+    // actual regular-season stat row. Reassigning combined totals to the
+    // player's CURRENT roster corrupts history after offseason FA signings
+    // (for example, a Utah season becoming an Orlando season).
+    combinePlayerStatsToRosterTeams: false,
     preserveMultiTeamStints: true,
   });
 }

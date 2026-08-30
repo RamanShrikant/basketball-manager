@@ -921,15 +921,39 @@ function findBestPickOnlyOfferForTeam({ context, cpuTeam, board, signal = null }
   const ladder = buildPickOnlyCandidateLadder({ board, leagueData: context.leagueData });
   let best = null;
   let checks = 0;
+  let exactConfirmAttempts = 0;
   for (const items of ladder) {
     if (isCancelled(signal)) break;
     checks += 1;
-    const result = evaluateCore({ context, cpuTeam, items, allowExactFallback: checks <= 3 });
+
+    // Pick-only searches used to have a parity hole here: an accepted fast scan
+    // could become the displayed result without the exact Builder evaluator ever
+    // seeing the same package. Keep scan mode as the cheap candidate gate, but
+    // never allow its acceptance to be final.
+    const candidate = evaluateCore({ context, cpuTeam, items, allowExactFallback: checks <= 3 });
+    if (!candidate) {
+      if (checks >= 14) break;
+      continue;
+    }
+
+    exactConfirmAttempts += 1;
+    const result = evaluateCpuPackage({
+      context,
+      cpuTeam,
+      cpuItems: items,
+      mode: BUILDER_EXACT_MODE,
+      requireFinalValidation: true,
+    });
     if (isBetterFinalOffer(result, best, context)) best = result;
     if (best && Number(best.comfortMargin || 0) <= Number(context.comfortFloor || TRADE_FINDER_COMFORT_FLOOR) + 1.0) break;
     if (checks >= 14) break;
   }
-  return best ? withSearchStats(best, { engine: "v11_pick_only_ladder", coreChecks: checks, exactConfirmAttempts: checks, comfortFloor: context.comfortFloor }) : null;
+  return best ? withSearchStats(best, {
+    engine: "v12_pick_only_builder_exact_confirm",
+    coreChecks: checks,
+    exactConfirmAttempts,
+    comfortFloor: context.comfortFloor,
+  }) : null;
 }
 
 async function findBestOfferForTeam({ context, cpuTeam, teamIndex = 0, teamsToCheck = 0, onProgress = null, signal = null }) {

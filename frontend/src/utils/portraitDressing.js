@@ -268,10 +268,10 @@ export function normalizePortraitTeamCode(teamLike, player = {}) {
 }
 
 /**
- * Real-player portraits keep the most recent valid NBA-team presentation when
- * the player becomes a free agent. Free-agency lifecycle code already stores
- * that team in freeAgencyMeta.fromTeam, so portrait rendering can stay visual
- * only and does not need to mutate roster/game state.
+ * Runtime portraits keep the most recent valid NBA-team presentation when a
+ * player becomes a free agent. Free-agency lifecycle code already stores that
+ * team in freeAgencyMeta.fromTeam, so portrait rendering stays visual-only and
+ * does not need to mutate roster/game state.
  */
 export function getLastKnownPortraitTeamCode(player = {}) {
   const freeAgencyMeta = isObject(player?.freeAgencyMeta) ? player.freeAgencyMeta : {};

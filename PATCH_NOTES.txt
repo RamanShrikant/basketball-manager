@@ -1,0 +1,40 @@
+Basketball Manager - Trade Finder Exact Acceptance Parity Patch
+Date: 2026-08-30
+
+PURPOSE
+-------
+Prevent Trade Finder from displaying/loading an offer that the exact same CPU
+would immediately reject when Submit Proposal is pressed.
+
+CHANGES
+-------
+1. Pick-only searches:
+   - fast scan remains a candidate gate only
+   - the exact same pick package must pass builder-exact evaluation before it can
+     become the final offer
+
+2. Main-thread final gate:
+   - every generated offer that passes ownership/salary/roster validation also
+     receives a fresh evaluateTradeTeamImpact() evaluation using the same role
+     and offseason evaluation league as Propose Trade
+   - rejected exact packages are discarded before display
+   - Load Offer repeats the same detailed validation, protecting against state
+     changes between search and click
+
+3. Debug path now reuses the same exact evaluation helper.
+
+UNCHANGED
+---------
+- CPU trade values / thresholds / scoring
+- Front Office Patience
+- trade execution
+- draft ownership
+- pre-draft expiring/PO/TO eligibility
+- Salary Table / portraits / retirement / headshot tuning
+
+TARGETED REGRESSION
+-------------------
+Run from frontend/:
+  node scripts/trade-finder-exact-parity-regression.mjs
+
+Expected: 12/12 PASS

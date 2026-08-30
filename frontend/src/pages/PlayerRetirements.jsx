@@ -461,7 +461,6 @@ export default function PlayerRetirements() {
   const autoRunSeasonRef = useRef(null);
   const retirementRowsViewportRef = useRef(null);
   const [retirementRowScale, setRetirementRowScale] = useState(1);
-  const [retirementRowCanvasWidth, setRetirementRowCanvasWidth] = useState(null);
 
   useEffect(() => {
     setWorkingLeagueData(leagueData || null);
@@ -470,8 +469,8 @@ export default function PlayerRetirements() {
   const seasonYear = getSeasonYear(workingLeagueData || leagueData);
   const offseasonState = useMemo(() => readOffseasonState(seasonYear), [seasonYear]);
 
-  const retirementDesignWidth = Math.max(1, Number(RETIREMENT_LAYOUT.responsive?.designWidth || 1488));
-  const retirementMinScale = Math.max(0.1, Number(RETIREMENT_LAYOUT.responsive?.minScale ?? 0.6));
+  const retirementMasterWidth = Math.max(1, Number(RETIREMENT_LAYOUT.responsive?.masterWidth || 1700));
+  const retirementMinScale = Math.max(0.1, Number(RETIREMENT_LAYOUT.responsive?.minScale ?? 0.5));
   const retirementMaxScale = Math.max(retirementMinScale, Number(RETIREMENT_LAYOUT.responsive?.maxScale ?? 1));
 
   useEffect(() => {
@@ -479,20 +478,19 @@ export default function PlayerRetirements() {
     if (!node) return undefined;
 
     const updateScale = () => {
-      const availableWidth = Math.max(1, node.clientWidth || node.getBoundingClientRect().width || retirementDesignWidth);
-      const needsScaling = availableWidth < retirementDesignWidth;
-      const nextScale = needsScaling
-        ? Math.max(retirementMinScale, Math.min(retirementMaxScale, availableWidth / retirementDesignWidth))
-        : 1;
-      // Wide rows keep their real width, preserving the exact current 4K layout.
-      // Only narrower rows switch to the fixed master canvas and scale as a unit.
-      const nextCanvasWidth = needsScaling ? retirementDesignWidth : availableWidth;
+      const availableWidth = Math.max(1, node.clientWidth || node.getBoundingClientRect().width || retirementMasterWidth);
 
-      // Avoid resize-observer micro-jitter from sub-pixel scrollbar changes.
+      // One equation for every compact viewport. Height never participates, so
+      // 1366x625 and 1366x768 render the SAME row geometry; only the number of
+      // visible rows changes. Wider screens stay at the authored desktop 1:1.
+      const nextScale = Math.max(
+        retirementMinScale,
+        Math.min(retirementMaxScale, availableWidth / retirementMasterWidth)
+      );
+
+      // Avoid ResizeObserver micro-jitter from sub-pixel scrollbar changes.
       const roundedScale = Math.round(nextScale * 10000) / 10000;
-      const roundedWidth = Math.round(nextCanvasWidth * 100) / 100;
       setRetirementRowScale((current) => (Math.abs(current - roundedScale) < 0.0001 ? current : roundedScale));
-      setRetirementRowCanvasWidth((current) => (current != null && Math.abs(current - roundedWidth) < 0.01 ? current : roundedWidth));
     };
 
     updateScale();
@@ -505,7 +503,7 @@ export default function PlayerRetirements() {
     const observer = new ResizeObserver(updateScale);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [retirementDesignWidth, retirementMinScale, retirementMaxScale]);
+  }, [retirementMasterWidth, retirementMinScale, retirementMaxScale]);
 
   useEffect(() => {
     let cancelled = false;
@@ -793,7 +791,7 @@ setError("");
                       <div
                         className="relative"
                         style={{
-                          width: `${retirementRowCanvasWidth || retirementDesignWidth}px`,
+                          width: `${retirementMasterWidth}px`,
                           height: `${RETIREMENT_LAYOUT.rowHeight}px`,
                           transform: `scale(${retirementRowScale})`,
                           transformOrigin: "left top",

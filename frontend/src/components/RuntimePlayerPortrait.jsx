@@ -94,9 +94,9 @@ function FallbackPortrait({ src, alt, imageClassName = "", fallback = null }) {
  * Runtime portrait renderer for post-draft players.
  * - Prospects/draft views can set mode="draft" to preserve the baked source image.
  * - Active players use jerseyless base + current team jersey when appropriate.
- * - Real NBA free agents preserve their most recent valid team headshot.
+ * - Free agents preserve their most recent valid team presentation.
  * - First-year generated rookie free agents keep their original draft-attire portrait.
- * - Other generated free agents preserve the existing jerseyless-base behavior.
+ * - A jerseyless base is never a valid finished runtime portrait.
  * - Fit resolution supports per-player defaults and per-player/per-template overrides.
  *
  * The outer wrapper stays overflow-visible so page-level headshot tuning can
@@ -147,11 +147,11 @@ export default function RuntimePlayerPortrait({
       ? normalizePortraitTeamCode(face?.teamName || "", {})
       : "";
 
-    // A real player's jerseyless base is never a finished portrait. When the
-    // player is a free agent, preserve the most recent NBA-team presentation
-    // recorded by the existing FA lifecycle metadata (for example:
-    // PHX official -> SAS dressed portrait -> FA keeps SAS dressed portrait).
-    const portraitTeamCode = isRealPlayerFace && !teamCode
+    // A jerseyless base is never a finished portrait. When ANY veteran player
+    // is a free agent, preserve the most recent NBA-team presentation recorded
+    // by the existing FA lifecycle metadata. First-year generated releases are
+    // handled above by useDraftAttireFreeAgent and keep their baked draft look.
+    const portraitTeamCode = !teamCode
       ? getLastKnownPortraitTeamCode(player || {})
       : teamCode;
 
@@ -163,9 +163,9 @@ export default function RuntimePlayerPortrait({
 
     const jersey = portraitTeamCode ? data.jerseyByTeam?.get(portraitTeamCode) : null;
 
-    // Never expose a naked jerseyless base for a real NBA player. If there is
-    // no valid team jersey to layer, fall back to the official source headshot.
-    if (isRealPlayerFace && !jersey?.url) return null;
+    // Never expose a naked jerseyless base for any player. If there is no valid
+    // team jersey to layer, fall back to a finished source/draft portrait.
+    if (!jersey?.url) return null;
 
     const templateId = jersey ? getJerseyTemplateId(jersey) : "";
     const fit = jersey ? resolveJerseyFit(data.fitConfig, fitFaceId, templateId, stageId) : null;
@@ -174,9 +174,10 @@ export default function RuntimePlayerPortrait({
 
   const isRealRuntimeFace = /^real_face_/i.test(String(runtimeFace?.id || faceId || ""));
   const fallbackIsNakedRealBase = /\/assets\/real_player_faces\/base\/real_face_[a-z0-9_-]+_base\.png(?:[?#].*)?$/i.test(String(fallbackSrc || ""));
+  const fallbackIsNakedGeneratedBase = /\/assets\/portrait_studio\/base\/rookie_face_\d+_base\.png(?:[?#].*)?$/i.test(String(fallbackSrc || ""));
   const displayFallbackSrc = isRealRuntimeFace
     ? (runtimeFace?.sourceUrl || (fallbackIsNakedRealBase ? "" : fallbackSrc))
-    : fallbackSrc;
+    : (fallbackIsNakedGeneratedBase ? (runtimeFace?.draftUrl || "") : fallbackSrc);
 
   return (
     <div className={`relative overflow-visible ${className}`} style={style} aria-hidden={ariaHidden || undefined}>
@@ -186,7 +187,20 @@ export default function RuntimePlayerPortrait({
         className="absolute inset-0 overflow-visible"
       >
         {resolved ? (
-          <div className="absolute bottom-0 left-1/2 h-full -translate-x-1/2 overflow-hidden" style={{ aspectRatio: "1040 / 760" }}>
+          <div
+            className={`absolute bottom-0 left-1/2 -translate-x-1/2 overflow-hidden ${layoutPage === "salary-table" ? "w-full" : "h-full"}`}
+            style={{
+              aspectRatio: "1040 / 760",
+              // Salary Table's normal/static headshots use object-contain inside a
+              // narrow portrait slot. Runtime base+jersey composites previously
+              // forced h-full, making the same 1040x760 canvas ~43% larger there.
+              // Width-fit the composite on Salary Table so both source types use
+              // the exact same visual envelope; all manual page tuning remains
+              // outside this component and therefore stays untouched.
+              ...(layoutPage === "salary-table" ? { height: "auto", maxHeight: "100%" } : {}),
+            }}
+            data-bm-portrait-envelope={layoutPage === "salary-table" ? "contain-width" : "height-fit"}
+          >
             <div className="relative h-full w-full overflow-hidden" style={contentStyle}>
               <img
                 src={resolved.face.baseUrl}

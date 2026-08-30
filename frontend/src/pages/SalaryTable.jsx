@@ -1730,7 +1730,14 @@ export default function SalaryTable() {
 
 
   const renderSalaryPlayerIdentity = (p, teamName) => (
-    <div className="flex min-w-0 items-center" style={{ gap: salaryPlayerTuning.gap }}>
+    <div
+      className="flex min-w-0 items-center overflow-visible"
+      style={{
+        gap: salaryPlayerTuning.gap,
+        height: `${salaryManualTuning.rowHeight}px`,
+        minHeight: 0,
+      }}
+    >
       <div
         className="relative shrink-0 overflow-visible"
         style={{
@@ -1918,11 +1925,19 @@ export default function SalaryTable() {
                       : {}),
                   }}
                 >
-                  <td className="px-4 py-2">
+                  <td
+                    className="px-4 align-middle overflow-visible"
+                    style={{ height: `${salaryManualTuning.rowHeight}px`, paddingTop: 0, paddingBottom: 0 }}
+                  >
                     {renderSalaryPlayerIdentity(p, snapshot.teamName)}
                   </td>
 
-                  <td className="text-center px-3 py-3 text-white/85">{p.pos}</td>
+                  <td
+                    className="text-center px-3 align-middle text-white/85"
+                    style={{ height: `${salaryManualTuning.rowHeight}px`, paddingTop: 0, paddingBottom: 0 }}
+                  >
+                    {p.pos}
+                  </td>
 
                   {yearColumns.map((seasonYear) => {
                     const idx = seasonYear - p.contract.startYear;
@@ -1937,9 +1952,10 @@ export default function SalaryTable() {
                     return (
                       <td
                         key={`${snapshot.teamName}-${p.id}-${seasonYear}`}
-                        className={`text-right px-3 py-3 whitespace-nowrap ${
+                        className={`text-right px-3 align-middle whitespace-nowrap ${
                           sal > 0 ? salClass : "text-white/35"
                         }`}
+                        style={{ height: `${salaryManualTuning.rowHeight}px`, paddingTop: 0, paddingBottom: 0 }}
                         title={optionType === "player" ? "Player option year" : optionType === "team" ? "Team option year" : undefined}
                       >
                         {sal > 0 ? (
@@ -1956,11 +1972,17 @@ export default function SalaryTable() {
                     );
                   })}
 
-                  <td className={`text-right px-3 py-3 whitespace-nowrap font-extrabold ${p.isDeadCap || p.isCapHold ? "text-red-200" : "text-white/90"}`}>
+                  <td
+                    className={`text-right px-3 align-middle whitespace-nowrap font-extrabold ${p.isDeadCap || p.isCapHold ? "text-red-200" : "text-white/90"}`}
+                    style={{ height: `${salaryManualTuning.rowHeight}px`, paddingTop: 0, paddingBottom: 0 }}
+                  >
                     {fmtM(p.totalRemaining)}
                   </td>
 
-                  <td className="text-center px-3 py-3 whitespace-nowrap">
+                  <td
+                    className="text-center px-3 align-middle whitespace-nowrap"
+                    style={{ height: `${salaryManualTuning.rowHeight}px`, paddingTop: 0, paddingBottom: 0 }}
+                  >
                     <span
                       className={`inline-flex items-center justify-center gap-1 rounded-full border px-2.5 py-1 text-xs font-extrabold ${getExpChipClass(p.expType)}`}
                       title={p.expNote}
@@ -2153,11 +2175,19 @@ export default function SalaryTable() {
                       : {}),
                   }}
                       >
-                        <td className="px-4 py-2">
+                        <td
+                          className="px-4 align-middle overflow-visible"
+                          style={{ height: `${salaryManualTuning.rowHeight}px`, paddingTop: 0, paddingBottom: 0 }}
+                        >
                           {renderSalaryPlayerIdentity(p, selectedTeam.name)}
                         </td>
 
-                        <td className="text-center px-3 py-3 text-white/85">{p.pos}</td>
+                        <td
+                    className="text-center px-3 align-middle text-white/85"
+                    style={{ height: `${salaryManualTuning.rowHeight}px`, paddingTop: 0, paddingBottom: 0 }}
+                  >
+                    {p.pos}
+                  </td>
 
                         {yearColumns.map((seasonYear) => {
                           const idx = seasonYear - p.contract.startYear;
@@ -2172,9 +2202,10 @@ export default function SalaryTable() {
                           return (
                             <td
                               key={`${p.id}-${seasonYear}`}
-                              className={`text-right px-3 py-3 whitespace-nowrap ${
+                              className={`text-right px-3 align-middle whitespace-nowrap ${
                                 sal > 0 ? salClass : "text-white/35"
                               }`}
+                              style={{ height: `${salaryManualTuning.rowHeight}px`, paddingTop: 0, paddingBottom: 0 }}
                               title={optionType === "player" ? "Player option year" : optionType === "team" ? "Team option year" : undefined}
                             >
                               {sal > 0 ? (
@@ -2191,11 +2222,17 @@ export default function SalaryTable() {
                           );
                         })}
 
-                        <td className={`text-right px-3 py-3 whitespace-nowrap font-extrabold ${p.isDeadCap || p.isCapHold ? "text-red-200" : "text-white/90"}`}>
+                        <td
+                          className={`text-right px-3 align-middle whitespace-nowrap font-extrabold ${p.isDeadCap || p.isCapHold ? "text-red-200" : "text-white/90"}`}
+                          style={{ height: `${salaryManualTuning.rowHeight}px`, paddingTop: 0, paddingBottom: 0 }}
+                        >
                           {fmtM(p.totalRemaining)}
                         </td>
 
-                        <td className="text-center px-3 py-3 whitespace-nowrap">
+                        <td
+                          className="text-center px-3 align-middle whitespace-nowrap"
+                          style={{ height: `${salaryManualTuning.rowHeight}px`, paddingTop: 0, paddingBottom: 0 }}
+                        >
                           <span
                             className={`inline-flex items-center justify-center gap-1 rounded-full border px-2.5 py-1 text-xs font-extrabold ${getExpChipClass(p.expType)}`}
                             title={p.expNote}

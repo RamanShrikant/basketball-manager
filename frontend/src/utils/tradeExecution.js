@@ -14,6 +14,7 @@ import {
   normalizeDraftPickAsset,
   normalizeTeamName,
   protectionDisplayForOwnedRange,
+  transferResolvedDraftPickOwnershipAsset,
   validateCustomPickProtection,
 } from "./draftPicks.js";
 import { getContractSeasonYear } from "./seasonContext.js";
@@ -1549,6 +1550,10 @@ function transferResolvedDraftPick(nextLeague, fromTeamName, toTeamName, pickIte
 
   if (Array.isArray(nextLeague.draftState.draftOrder) && nextLeague.draftState.draftOrder.length) {
     nextLeague.draftState.draftOrder = applyToRows(nextLeague.draftState.draftOrder);
+    // Ownership changed without changing the pick sequence. Any signature cached
+    // before this trade now describes stale owners, so force Draft.jsx to
+    // recompute it from the updated order on the next hydrate.
+    delete nextLeague.draftState.draftOrderSignature;
   }
 
   if (Array.isArray(nextLeague.draftState?.lottery?.fullDraftOrder) && nextLeague.draftState.lottery.fullDraftOrder.length) {
@@ -1591,6 +1596,9 @@ function transferResolvedDraftPick(nextLeague, fromTeamName, toTeamName, pickIte
     const nextDraftState = {
       ...savedDraftState,
       draftOrder: applyToRows(savedDraftState.draftOrder),
+      // Do not carry the pre-trade ownership signature forward. Draft.jsx will
+      // regenerate it from this just-updated order.
+      draftOrderSignature: null,
     };
     writeSavedDraftState(nextDraftState);
   }
@@ -1602,6 +1610,22 @@ function transferResolvedDraftPick(nextLeague, fromTeamName, toTeamName, pickIte
   if (!ownedByFrom) {
     return { ok: false, reason: `${fromTeamName} no longer owns ${formatPick(pick)}.` };
   }
+
+  // The locked order is a presentation/runtime projection. leagueData.draftPicks
+  // remains the canonical ownership source used whenever Draft/Draft Assets
+  // rebuild that order. Persist the resolved trade there too, otherwise a
+  // later ownership pass can silently revert the traded pick.
+  const canonicalTransfer = transferResolvedDraftPickOwnershipAsset(nextLeague, {
+    year: seasonYear,
+    round: getRoundFromAny(pick),
+    originalTeam: getOriginalTeamFromAny(pick),
+    pickNumber: getPickNumberFromAny(pick),
+    fromTeam: fromTeamName,
+    toTeam: toTeamName,
+    tradeStamp,
+  });
+  if (!canonicalTransfer.ok) return canonicalTransfer;
+  nextLeague.draftPicks = canonicalTransfer.draftPicks;
 
   return { ok: true, pickLabel };
 }

@@ -5,6 +5,7 @@ import { useGame } from "../context/GameContext";
 import PageFade from "../components/PageFade";
 import styles from "./PlayoffPicture.module.css";
 import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
+import { computeCanonicalStandings, sortCanonicalTeamNames } from "../utils/canonicalStandings.js";
 
 const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
 const RESULT_V3_PREFIX = "bm_result_v3_";
@@ -41,66 +42,6 @@ function loadResults() {
     } catch {}
   }
   return out;
-}
-
-function computeStandings({ teams, schedule, results, confOf }) {
-  const rows = {};
-  for (const team of teams) {
-    rows[team.name] = { team: team.name, conf: confOf(team.name), wins: 0, losses: 0, pf: 0, pa: 0, diff: 0, confWins: 0, confLosses: 0, h2h: {} };
-  }
-
-  for (const games of Object.values(schedule || {})) {
-    for (const game of games || []) {
-      if (!game?.id || String(game.id).startsWith("PO_") || String(game.id).startsWith("PI_")) continue;
-      const result = results?.[game.id];
-      if (!game.played && !result?.totals) continue;
-      if (!result?.totals || !rows[game.home] || !rows[game.away]) continue;
-      const homePts = Number(result.totals.home || 0);
-      const awayPts = Number(result.totals.away || 0);
-      if (homePts === awayPts) continue;
-      const homeWon = homePts > awayPts;
-      const home = rows[game.home];
-      const away = rows[game.away];
-      home.pf += homePts; home.pa += awayPts;
-      away.pf += awayPts; away.pa += homePts;
-      if (homeWon) { home.wins += 1; away.losses += 1; } else { away.wins += 1; home.losses += 1; }
-      if (home.conf && home.conf === away.conf) {
-        if (homeWon) { home.confWins += 1; away.confLosses += 1; } else { away.confWins += 1; home.confLosses += 1; }
-      }
-      home.h2h[game.away] ||= { w: 0, l: 0 };
-      away.h2h[game.home] ||= { w: 0, l: 0 };
-      if (homeWon) { home.h2h[game.away].w += 1; away.h2h[game.home].l += 1; }
-      else { away.h2h[game.home].w += 1; home.h2h[game.away].l += 1; }
-    }
-  }
-
-  for (const row of Object.values(rows)) {
-    row.diff = row.pf - row.pa;
-    const gp = row.wins + row.losses;
-    row.winPct = gp ? row.wins / gp : 0;
-    const cgp = row.confWins + row.confLosses;
-    row.confPct = cgp ? row.confWins / cgp : 0;
-  }
-  return rows;
-}
-
-function sortWithTiebreak(names, standings) {
-  return [...names].sort((A, B) => {
-    const a = standings[A]; const b = standings[B];
-    if (!a || !b) return String(A).localeCompare(String(B));
-    if (b.winPct !== a.winPct) return b.winPct - a.winPct;
-    const h2hA = a.h2h?.[B]; const h2hB = b.h2h?.[A];
-    if (h2hA && h2hB) {
-      const games = h2hA.w + h2hA.l;
-      if (games) {
-        const aPct = h2hA.w / games; const bPct = h2hB.w / games;
-        if (bPct !== aPct) return bPct - aPct;
-      }
-    }
-    if (b.confPct !== a.confPct) return b.confPct - a.confPct;
-    if (b.diff !== a.diff) return b.diff - a.diff;
-    return String(A).localeCompare(String(B));
-  });
 }
 
 function teamLogo(team) {
@@ -263,11 +204,11 @@ export default function PlayoffPicture() {
     for (const [key, list] of Object.entries(leagueData?.conferences || {})) if ((list || []).some((team)=>team.name===name)) return key;
     return teamByName[name]?.conference || teamByName[name]?.conf || null;
   };
-  const standings = useMemo(() => computeStandings({ teams, schedule, results, confOf }), [teams, schedule, results]);
+  const standings = useMemo(() => computeCanonicalStandings({ teams, scheduleByDate: schedule, resultsById: results, confOf }), [teams, schedule, results]);
   const gamesPlayed = useMemo(() => Object.values(standings).reduce((sum,row)=>sum+row.wins+row.losses,0)/2, [standings]);
   const seedOrder = useMemo(() => Object.fromEntries(conferenceKeys.map((key)=>{
     const names=Object.values(standings).filter((row)=>row.conf===key).map((row)=>row.team);
-    return [key,sortWithTiebreak(names,standings).slice(0,10)];
+    return [key,sortCanonicalTeamNames(names,standings).slice(0,10)];
   })), [conferenceKeys, standings]);
 
   const historical = Boolean(isOffseason && historicalEntry?.postseasonBracket);

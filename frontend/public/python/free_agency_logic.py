@@ -586,10 +586,121 @@ def get_legacy_bird_rights_salary_ceiling(
     return 0
 
 
+def _contract_contains_post_rookie_year(player: Dict[str, Any], contract: Any) -> bool:
+    if not isinstance(contract, dict):
+        return False
+
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    draft_year = int(num(meta.get("draftYear") or meta.get("draftSeasonYear") or player.get("draftYear"), 0))
+    draft_round = int(num(meta.get("draftRound") or player.get("draftRound"), 0))
+    salaries = contract.get("salaryByYear") if isinstance(contract.get("salaryByYear"), list) else []
+    start_year = int(num(contract.get("startYear"), 0))
+
+    if draft_year <= 0 or draft_round not in [1, 2] or start_year <= 0 or not salaries:
+        return False
+
+    rookie_control_last_year = draft_year + 3
+    contract_last_year = start_year + len(salaries) - 1
+    return contract_last_year > rookie_control_last_year
+
+
+def _has_explicit_rookie_extension_marker(player: Dict[str, Any]) -> bool:
+    rights = player.get("rights") if isinstance(player.get("rights"), dict) else {}
+    if rights.get("rookieScaleExtensionSigned") or rights.get("rookieScaleControlConsumed"):
+        return True
+
+    rows = []
+    for contract in [player.get("contract"), player.get("previousContract")]:
+        if not isinstance(contract, dict):
+            continue
+        if isinstance(contract.get("extensionMeta"), dict):
+            rows.append(contract.get("extensionMeta"))
+        if isinstance(contract.get("extensions"), list):
+            rows.extend(row for row in contract.get("extensions") if isinstance(row, dict))
+
+    return any(
+        str(row.get("type") or row.get("extensionType") or "").strip().lower() == "rookie_scale"
+        for row in rows
+    )
+
+
+def consume_stale_post_rookie_control(player: Dict[str, Any]) -> bool:
+    """Consume stale rookie RFA/QO control once a post-rookie contract exists.
+
+    Rookie team control can only cover draftYear through draftYear + 3. If a
+    current/previous contract contains a salary season after that point, the
+    player has already signed a post-rookie deal and may never re-enter the
+    rookie-scale qualifying-offer/RFA path.
+    """
+    if not isinstance(player, dict):
+        return False
+
+    rights = get_player_rights(player)
+    if not rights.get("rookieScale"):
+        return False
+
+    consumed = bool(
+        _has_explicit_rookie_extension_marker(player)
+        or _contract_contains_post_rookie_year(player, player.get("contract"))
+        or _contract_contains_post_rookie_year(player, player.get("previousContract"))
+    )
+    if not consumed:
+        return False
+
+    set_player_rights(
+        player = player,
+        held_by_team = rights.get("heldByTeam"),
+        seasons_toward_bird = rights.get("seasonsTowardBird", 0),
+        rookie_scale = False,
+        restricted_free_agent = False,
+    )
+    player["rights"]["rookieScaleControlConsumed"] = True
+    player["rights"]["rookieScaleExtensionSigned"] = True
+    player["rookieScale"] = False
+    player["restrictedFreeAgent"] = False
+
+    for key in [
+        "qualifyingOffer",
+        "qualifyingOfferEligible",
+        "rfaOfferSheet",
+        "offerSheet",
+        "rfaMatched",
+        "rfaMatch",
+        "rfaStatus",
+        "tenderedQO",
+    ]:
+        player.pop(key, None)
+
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    if not isinstance(player.get("meta"), dict):
+        player["meta"] = meta
+    meta["rookieTeamControl"] = False
+    meta["rookieRightsConsumed"] = True
+    meta.pop("rookieRightsPath", None)
+
+    for contract in [player.get("contract"), player.get("previousContract")]:
+        if not isinstance(contract, dict):
+            continue
+        contract["rookieScale"] = False
+        for key in [
+            "restrictedFreeAgent",
+            "rfa",
+            "isRFA",
+            "rfaMatched",
+            "offerSheet",
+            "qualifyingOffer",
+        ]:
+            contract.pop(key, None)
+
+    return True
+
+
 def normalize_player_rights_for_location(
     player: Dict[str, Any],
     current_team_name: Optional[str] = None,
 ) -> Dict[str, Any]:
+    consume_stale_post_rookie_control(player)
+
     # A renounced free agent should not silently regain rights from
     # freeAgencyMeta.fromTeam during later normalization passes.
     # If he is already back on a roster, clear the stale renounced flag first.
@@ -715,6 +826,7 @@ def should_extend_qualifying_offer(
     player: Dict[str, Any],
     reason: str,
 ) -> bool:
+    consume_stale_post_rookie_control(player)
     rights = get_player_rights(player)
 
     if not rights.get("rookieScale"):

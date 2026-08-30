@@ -688,14 +688,14 @@ function makeEmptyBuilder(userTeamName, cpuTeamName) {
   };
 }
 
-function sanitizeBuilderForStandardRoster(builder, userTeamName, cpuTeamName) {
+function sanitizeBuilderForStandardRoster(builder, userTeamName, cpuTeamName, eligibilityOptions = {}) {
   const source = builder && typeof builder === "object" ? builder : {};
   return {
     ...source,
     userTeamName: source.userTeamName || userTeamName,
     cpuTeamName: source.cpuTeamName || cpuTeamName,
-    userItems: sanitizeTradeItems(source.userItems),
-    cpuItems: sanitizeTradeItems(source.cpuItems),
+    userItems: sanitizeTradeItems(source.userItems, eligibilityOptions),
+    cpuItems: sanitizeTradeItems(source.cpuItems, eligibilityOptions),
     updatedAt: Number(source.updatedAt || Date.now()),
   };
 }
@@ -2604,7 +2604,7 @@ export default function ProposeTrade() {
     const saved = safeReadBuilder();
     sessionStorage.removeItem("bm_trade_builder_resume_v1");
     if (shouldResumeSavedBuilder && saved) {
-      return sanitizeBuilderForStandardRoster(saved, userTeamName, firstCpu);
+      return sanitizeBuilderForStandardRoster(saved, userTeamName, firstCpu, { leagueData, tradeContext });
     }
     return makeEmptyBuilder(userTeamName, firstCpu);
   });
@@ -2710,7 +2710,8 @@ export default function ProposeTrade() {
       const saved = sanitizeBuilderForStandardRoster(
         prev || makeEmptyBuilder(userTeamName, firstCpu),
         userTeamName,
-        firstCpu
+        firstCpu,
+        { leagueData, tradeContext }
       );
       const userTeamChanged = Boolean(saved?.userTeamName && saved.userTeamName !== userTeamName);
       const cpuTeamStillValid = Boolean(
@@ -2730,7 +2731,7 @@ export default function ProposeTrade() {
       saveBuilder(next);
       return next;
     });
-  }, [userTeamName, firstCpu, cpuTeamOptions]);
+  }, [userTeamName, firstCpu, cpuTeamOptions, leagueData, tradeContext]);
 
   useEffect(() => {
     saveBuilder(builder);

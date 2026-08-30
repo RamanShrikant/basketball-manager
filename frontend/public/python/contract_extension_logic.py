@@ -865,9 +865,34 @@ def _apply_accepted_extension(
         rights = player.setdefault("rights", {})
         if isinstance(rights, dict):
             rights["rookieScaleExtensionSigned"] = True
+            rights["rookieScaleControlConsumed"] = True
             rights["rookieScale"] = False
+            rights["restrictedFreeAgent"] = False
         player["rookieScale"] = False
+        player["restrictedFreeAgent"] = False
         contract["rookieScale"] = False
+
+        # Signing a rookie extension permanently consumes the one rookie-scale
+        # RFA/QO path. Clear any stale aliases so the player cannot become RFA
+        # again when the extension eventually expires.
+        for key in [
+            "qualifyingOffer",
+            "qualifyingOfferEligible",
+            "rfaOfferSheet",
+            "offerSheet",
+            "rfaMatched",
+            "rfaMatch",
+            "rfaStatus",
+            "tenderedQO",
+        ]:
+            player.pop(key, None)
+
+        meta_rights = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+        if not isinstance(player.get("meta"), dict):
+            player["meta"] = meta_rights
+        meta_rights["rookieTeamControl"] = False
+        meta_rights["rookieRightsConsumed"] = True
+        meta_rights.pop("rookieRightsPath", None)
     player["contract"] = {
         **contract,
         "salaryByYear": original_salaries + extension_salaries,

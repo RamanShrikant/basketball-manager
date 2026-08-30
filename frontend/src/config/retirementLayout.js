@@ -13,13 +13,18 @@
 export const RETIREMENT_LAYOUT = {
   rowHeight: 150,
 
-  // Responsive wrapper for the absolute-position master design below.
-  // The existing headshot/name/ring/story/logo coordinates are authored against
-  // this virtual row width. Smaller real rows scale the whole composition as one
-  // unit instead of letting the absolute offsets collide.
+  // SINGLE MASTER-CANVAS SYSTEM
+  // ------------------------------------------------------------
+  // All manual controls below are authored in ONE desktop coordinate system.
+  // The complete row is then uniformly scaled from WIDTH ONLY.
+  // No element receives a laptop/tablet-specific X/Y/scale override.
+  //
+  // 1700px is the canonical row width for the current tuned desktop layout.
+  // At <=1700px the entire row shrinks as one piece. Wider viewports keep the
+  // authored desktop size at 1:1 so the current desktop tuning is preserved.
   responsive: {
-    designWidth: 1488,
-    minScale: 0.6,
+    masterWidth: 1700,
+    minScale: 0.5,
     maxScale: 1,
   },
 
