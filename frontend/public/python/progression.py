@@ -7,7 +7,7 @@ import math
 import datetime as _dt
 import hashlib
 
-PROGRESSION_PY_VERSION = "2026-08-22_progression_story_arc_elite_floor_v4"
+PROGRESSION_PY_VERSION = "2026-09-01_progression_jump7_young_takeover_v6"
 
 RATING_MIN_OVERALL = 54
 RATING_MAX_OVERALL = 99
@@ -2336,11 +2336,11 @@ def _is_shape_protected_item(item: Dict[str, Any]) -> bool:
 # V25 hidden career-path engine
 # -------------------------
 
-_V25_PROFILE_VERSION = "v25f_story_arc_v3"
+_V25_PROFILE_VERSION = "v26_dynamic_career_identity_v1"
 _V25_AUDIT_KEY = "v25CareerAudit"
 _V25_FAST_DECLINE_PROFILES = {"fast_decliner", "short_peak", "true_bust"}
-_V25_BREAKOUT_PROFILES = {"generational_hit", "star_hit", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier", "late_bloomer", "slow_burn"}
-_V25_PROTECTED_PROFILES = {"generational_hit", "star_hit", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier", "long_prime", "late_bloomer"}
+_V25_BREAKOUT_PROFILES = {"early_superstar", "generational_hit", "star_hit", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier", "late_bloomer", "slow_burn"}
+_V25_PROTECTED_PROFILES = {"early_superstar", "generational_hit", "star_hit", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier", "long_prime", "historic_longevity", "late_bloomer"}
 # V25C: hidden upside is an overlay, not a competing profile. A player can be
 # steady/slow-burn/volatile and ALSO secretly have more ceiling than his visible
 # POT suggests. This is the missing low/mid-tier surprise lane.
@@ -2717,6 +2717,65 @@ def _v25_low_young_developmental(p: Dict[str, Any], age: int, overall: int, pote
     return name not in {"true_bust", "fast_decliner"}
 
 
+def _v25_curve_progress_fraction(age: int, original_age: int, peak_start: int, peak_end: int, profile: str) -> float:
+    """Expected share of hidden ceiling by current age for catch-up pressure.
+
+    This is intentionally soft. It does not guarantee linear growth; it only
+    identifies young stars who are materially behind their saved career arc.
+    """
+    if age <= original_age:
+        return 0.0
+    ramp_start = max(18, min(original_age + 1, peak_start - (2 if profile == "early_superstar" else 1)))
+    ramp_end = max(ramp_start + 1, peak_start + (1 if profile in {"early_superstar", "generational_hit"} else 2))
+    raw = (age - ramp_start) / max(1, ramp_end - ramp_start)
+    return float(_clamp(raw, 0.0, 1.0))
+
+
+def _v25_young_takeover_catchup_pressure(p: Dict[str, Any], age: int, overall: int, potential: int, prof: Dict[str, Any]) -> float:
+    """Extra hidden-arc pressure for elite young paths that are behind schedule.
+
+    PATCH58: the league needs occasional Luka/Wemby/LeBron-style early takeovers.
+    This nudges only young high-ceiling profiles that are below their internal
+    expected curve. It does not touch ordinary role players or old-player decline.
+    """
+    name = str(prof.get("profile") or "steady_growth")
+    if age > 25 or name in {"true_bust", "disappointment", "fast_decliner"}:
+        return 0.0
+    ceiling = _safe_int(prof.get("hiddenCeiling"), max(overall, potential))
+    original_ovr = _safe_int(prof.get("originalOvr"), overall)
+    original_age = _safe_int(prof.get("originalAge"), age)
+    peak_start = _safe_int(prof.get("peakStartAge"), 25)
+    peak_end = _safe_int(prof.get("peakEndAge"), max(peak_start, 29))
+    room_total = max(0, ceiling - original_ovr)
+    room_now = max(0, ceiling - overall)
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    elite_path = name in {"early_superstar", "generational_hit", "star_hit"}
+    hidden_path = name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier"} or hidden_level >= 3
+    if not elite_path and not hidden_path:
+        return 0.0
+    if ceiling < 90 or room_now <= 2 or room_total <= 5:
+        return 0.0
+
+    expected_frac = _v25_curve_progress_fraction(age, original_age, peak_start, peak_end, name)
+    expected_ovr = original_ovr + room_total * expected_frac
+    behind = max(0.0, expected_ovr - overall)
+    if behind < 1.25:
+        return 0.0
+
+    pressure = min(0.62, behind * 0.115)
+    if name == "early_superstar":
+        pressure += 0.22
+    elif name == "generational_hit":
+        pressure += 0.15
+    elif hidden_level >= 4:
+        pressure += 0.14
+    elif hidden_level >= 3:
+        pressure += 0.08
+    if age <= 22 and ceiling >= 96:
+        pressure += 0.12
+    return float(_clamp(pressure, 0.0, 0.82))
+
+
 def _v25_story_phase_pressure(p: Dict[str, Any], age: int, overall: int, potential: int, prof: Dict[str, Any]) -> float:
     """Small deterministic pull toward the saved career story.
 
@@ -2735,11 +2794,14 @@ def _v25_story_phase_pressure(p: Dict[str, Any], age: int, overall: int, potenti
 
     if age < peak_start:
         years_to_peak = max(1, peak_start - age)
-        # Arc pull scales with room but is intentionally modest; it nudges odds,
-        # it does not guarantee a ladder every season.
-        adj += _clamp((room / years_to_peak) * 0.095, 0.0, 0.42)
-        if name in {"generational_hit", "star_hit"}:
-            adj += 0.13 if room >= 5 else 0.04
+        # V26: the hidden profile is now a real career identity, not just a tiny
+        # annual nudge. It still allows noisy/non-linear seasons, but players on
+        # true star paths get pulled hard enough to become elite before age 27.
+        adj += _clamp((room / years_to_peak) * 0.158, 0.0, 0.74)
+        if name == "early_superstar":
+            adj += 0.42 if room >= 5 else 0.14
+        elif name in {"generational_hit", "star_hit"}:
+            adj += 0.28 if room >= 5 else 0.09
         elif name in {"quality_starter", "steady_growth"}:
             adj += 0.05 if room >= 3 else 0.0
         elif name in {"slow_burn", "late_bloomer"}:
@@ -2749,9 +2811,11 @@ def _v25_story_phase_pressure(p: Dict[str, Any], age: int, overall: int, potenti
         elif name == "true_bust":
             adj -= 0.16
     elif age <= peak_end:
-        adj += _clamp(room * 0.055, 0.0, 0.35)
+        adj += _clamp(room * 0.075, 0.0, 0.48)
+        if name == "early_superstar":
+            adj += 0.28
         if name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
-            adj += 0.18 + hidden_level * 0.04
+            adj += 0.22 + hidden_level * 0.055
     else:
         if overall > floor and name in {"true_bust", "fast_decliner"}:
             adj -= 0.18
@@ -2761,8 +2825,10 @@ def _v25_story_phase_pressure(p: Dict[str, Any], age: int, overall: int, potenti
         # climbs. Late bloomers can hold longer, but they should not commonly
         # set first career highs at 38-40.
         post = max(1, age - peak_end)
-        if name == "long_prime":
-            adj -= min(0.24, post * 0.045)
+        if name == "historic_longevity":
+            adj -= min(0.12, post * 0.020)
+        elif name == "long_prime":
+            adj -= min(0.20, post * 0.035)
         elif name in {"late_bloomer", "slow_burn", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
             adj -= min(0.42, post * 0.085)
         else:
@@ -2773,7 +2839,9 @@ def _v25_story_phase_pressure(p: Dict[str, Any], age: int, overall: int, potenti
         # further into unusable territory unless their true-bust story demands it.
         adj += 0.16 + max(0, min(8, potential - overall)) * 0.018
 
-    return float(_clamp(adj, -0.55, 0.65))
+    adj += _v25_young_takeover_catchup_pressure(p, age, overall, potential, prof)
+
+    return float(_clamp(adj, -0.62, 1.05))
 
 
 
@@ -2815,26 +2883,31 @@ def _v25_profile_weights(p: Dict[str, Any], age: int, overall: int, potential: i
         # V25B: early-30s stars should not cliff by default. Keep decline
         # variance, but move some fast-decliner odds into long-prime/steady.
         base = [
-            ("long_prime", 18 + max(0, overall - 82) * 1.0),
-            ("steady_growth", 34),
-            ("short_peak", 9 + max(0, overall - 86) * 0.45),
-            ("fast_decliner", 11 + max(0, age - 33) * 2.7),
+            ("historic_longevity", (6 + max(0, overall - 88) * 1.4) if overall >= 88 else 1),
+            ("long_prime", 22 + max(0, overall - 82) * 1.15),
+            ("steady_growth", 31),
+            ("short_peak", 8 + max(0, overall - 86) * 0.38),
+            ("fast_decliner", 9 + max(0, age - 33) * 2.3),
             ("volatile", 5),
         ]
         if overall >= 90:
             base.append(("star_hit", 10))
+        if overall >= 94:
+            base.append(("generational_hit", 3))
         return base
 
     if overall >= 90:
         return [
-            ("generational_hit", 7 if potential >= 96 and age <= 27 else 2),
-            ("star_hit", 33),
-            ("long_prime", 14),
-            ("short_peak", 10),
-            ("steady_growth", 18),
+            ("early_superstar", 7 if potential >= 96 and age <= 25 else 1.4),
+            ("generational_hit", 9 if potential >= 96 and age <= 27 else 2.5),
+            ("star_hit", 32),
+            ("historic_longevity", 4 if overall >= 93 else 1.5),
+            ("long_prime", 16),
+            ("short_peak", 8),
+            ("steady_growth", 16),
             ("volatile", 8),
-            ("fast_decliner", 3 if age >= 27 else 1),
-            ("disappointment", 4),
+            ("fast_decliner", 2.4 if age >= 27 else 0.8),
+            ("disappointment", 3.5),
         ]
 
     if potential >= 95 and age <= 23:
@@ -2842,33 +2915,36 @@ def _v25_profile_weights(p: Dict[str, Any], age: int, overall: int, potential: i
         # exist, but most misses should become starters/rotation disappointments
         # instead of falling straight into the low 70s.
         return [
-            ("generational_hit", 15 * class_mult),
-            ("star_hit", 29 * class_mult),
-            ("quality_starter", 24),
-            ("steady_growth", 8),
-            ("slow_burn", 13 + 3 * boom),
-            ("late_bloomer", 7 + 2 * work),
+            ("early_superstar", 10.5 * class_mult),
+            ("generational_hit", 18 * class_mult),
+            ("star_hit", 30 * class_mult),
+            ("quality_starter", 21),
+            ("steady_growth", 7),
+            ("slow_burn", 11 + 3 * boom),
+            ("late_bloomer", 6 + 2 * work),
             ("volatile", 7 + 4 * boom),
-            ("disappointment", 12 + 4 * (1 - work)),
-            ("true_bust", 1.0 + 1.0 * boom),
+            ("disappointment", 9 + 4 * (1 - work)),
+            ("true_bust", 0.8 + 0.9 * boom),
         ]
     if potential >= 90 and age <= 24:
         return [
-            ("generational_hit", 3.5 * class_mult),
-            ("star_hit", 18 * class_mult),
-            ("quality_starter", 31),
+            ("early_superstar", 3.7 * class_mult),
+            ("generational_hit", 5.5 * class_mult),
+            ("star_hit", 21 * class_mult),
+            ("quality_starter", 29),
             ("steady_growth", 8),
-            ("slow_burn", 15 + 3 * boom),
-            ("late_bloomer", 10 + 2 * work),
+            ("slow_burn", 13 + 3 * boom),
+            ("late_bloomer", 9 + 2 * work),
             ("volatile", 9 + 4 * boom),
-            ("disappointment", 16 + 5 * (1 - work)),
-            ("true_bust", 2.0 + 1.2 * boom),
-            ("raw_tools_outlier", 3.0 * raw_fit),
+            ("disappointment", 14 + 4 * (1 - work)),
+            ("true_bust", 1.7 + 1.0 * boom),
+            ("raw_tools_outlier", 3.8 * raw_fit),
         ]
     if potential >= 84 and age <= 25:
         gem_chance = _v25_hidden_gem_chance(p, age, overall, potential, grade, origin, class_type)
         return [
-            ("star_hit", 4.5 * class_mult),
+            ("early_superstar", 1.15 * class_mult),
+            ("star_hit", 5.8 * class_mult),
             ("quality_starter", 26),
             ("steady_growth", 23),
             ("slow_burn", 13 + 2 * boom),
@@ -2960,7 +3036,17 @@ def _v25_build_profile(p: Dict[str, Any], league_seed: str, season_year: Any, rn
         profile = "steady_growth"
 
     u = lambda label: _v25_unit(league_seed, seed_key, label)
-    if profile == "early_peak":
+    if profile == "early_superstar":
+        peak_start = 20 + int(u("peak_start") * 4)
+        peak_end = peak_start + 4 + int(u("peak_end") * 4)
+        decline_start = peak_end + 3 + int(u("decline") * 4)
+        decline_sharp = 0.32 + u("sharp") * 0.20
+    elif profile == "historic_longevity":
+        peak_start = max(24, min(age, 28))
+        peak_end = 34 + int(u("peak_end") * 4)
+        decline_start = peak_end + 1 + int(u("decline") * 3)
+        decline_sharp = 0.16 + u("sharp") * 0.16
+    elif profile == "early_peak":
         peak_start = 22 + int(u("peak_start") * 3)
         peak_end = peak_start + 2 + int(u("peak_end") * 3)
         decline_start = peak_end + 1 + int(u("decline") * 3)
@@ -3014,7 +3100,11 @@ def _v25_build_profile(p: Dict[str, Any], league_seed: str, season_year: Any, rn
     # stars should peak in the mid/late 20s and decline should begin in the
     # early/mid 30s.
     if age <= 22:
-        if profile in {"late_bloomer", "slow_burn", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
+        if profile == "early_superstar":
+            peak_start = min(peak_start, 23)
+            peak_end = min(max(peak_end, peak_start + 4), 31)
+            decline_start = min(max(decline_start, peak_end + 3), 38)
+        elif profile in {"late_bloomer", "slow_burn", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
             peak_start = min(peak_start, 29)
             peak_end = min(max(peak_end, peak_start + 2), 33)
             decline_start = min(max(decline_start, peak_end + 1), 35)
@@ -3027,14 +3117,21 @@ def _v25_build_profile(p: Dict[str, Any], league_seed: str, season_year: Any, rn
             peak_end = min(max(peak_end, peak_start + 2), 31)
             decline_start = min(max(decline_start, peak_end + 1), 34)
     elif age <= 25:
-        peak_start = min(peak_start, 29 if profile in {"late_bloomer", "slow_burn"} else 28)
-        peak_end = min(max(peak_end, peak_start + 2), 33)
-        decline_start = min(max(decline_start, peak_end + 1), 35)
+        if profile == "early_superstar":
+            peak_start = min(peak_start, 24)
+            peak_end = min(max(peak_end, peak_start + 4), 32)
+            decline_start = min(max(decline_start, peak_end + 3), 38)
+        else:
+            peak_start = min(peak_start, 29 if profile in {"late_bloomer", "slow_burn"} else 28)
+            peak_end = min(max(peak_end, peak_start + 2), 33)
+            decline_start = min(max(decline_start, peak_end + 1), 35)
 
     base_ceiling = max(overall, potential)
     ceiling = base_ceiling
-    if profile == "generational_hit":
-        ceiling = max(96, base_ceiling + 2, overall + 8)
+    if profile == "early_superstar":
+        ceiling = max(98, base_ceiling + 3, overall + 12)
+    elif profile == "generational_hit":
+        ceiling = max(96, base_ceiling + 2, overall + 9)
     elif profile == "star_hit":
         ceiling = max(90, base_ceiling + 1, overall + 5)
     elif profile == "quality_starter":
@@ -3069,6 +3166,8 @@ def _v25_build_profile(p: Dict[str, Any], league_seed: str, season_year: Any, rn
             ceiling = max(overall + 1, min(base_ceiling - 2, overall + 5, 83))
         else:
             ceiling = max(overall, min(base_ceiling - 3, overall + 3, 82))
+    elif profile == "historic_longevity":
+        ceiling = max(base_ceiling, overall + (3 if overall >= 90 else 2))
     elif profile == "long_prime":
         ceiling = max(base_ceiling, overall + 2)
     elif profile == "short_peak":
@@ -3096,8 +3195,8 @@ def _v25_build_profile(p: Dict[str, Any], league_seed: str, season_year: Any, rn
             ceiling = min(ceiling, max(base_ceiling + 4, 88))
         else:
             ceiling = min(ceiling, max(base_ceiling + 3, 90 if profile in {"star_hit", "raw_tools_outlier", "skill_feel_outlier"} else 86))
-    if class_type == "generational" and profile in {"generational_hit", "star_hit"}:
-        ceiling = max(ceiling, 96 if profile == "generational_hit" else 92)
+    if class_type == "generational" and profile in {"early_superstar", "generational_hit", "star_hit"}:
+        ceiling = max(ceiling, 98 if profile == "early_superstar" else 96 if profile == "generational_hit" else 92)
 
     if profile == "true_bust" and potential >= 92 and age <= 24:
         floor = max(25, overall - 3)
@@ -3205,10 +3304,12 @@ def _v25_profile_expected_adjustment(p: Dict[str, Any], age: int, overall: int, 
     adj = 0.0
     adj += _v25_story_phase_pressure(p, age, overall, potential, prof)
 
-    if name == "generational_hit":
-        adj += 0.52 if room >= 4 else 0.15
+    if name == "early_superstar":
+        adj += 0.92 if room >= 5 else 0.34
+    elif name == "generational_hit":
+        adj += 0.70 if room >= 4 else 0.22
     elif name == "star_hit":
-        adj += 0.34 if room >= 3 else 0.08
+        adj += 0.47 if room >= 3 else 0.12
     elif name == "quality_starter":
         adj += 0.16 if room >= 2 else 0.0
     elif name == "steady_growth":
@@ -3240,15 +3341,17 @@ def _v25_profile_expected_adjustment(p: Dict[str, Any], age: int, overall: int, 
         adj += 0.16 if age < 21 else 0.70 if age <= peak_end and room >= 3 else 0.10
     elif name == "skill_feel_outlier":
         adj += 0.10 if age < 22 else 0.60 if age <= peak_end and room >= 2 else 0.14
+    elif name == "historic_longevity":
+        adj += 0.16 if age <= peak_end else 0.08 if age <= decline_start + 2 else -0.08
     elif name == "long_prime":
-        adj += 0.08 if age <= peak_end else 0.18 if age >= decline_start else 0.0
+        adj += 0.10 if age <= peak_end else 0.12 if age >= decline_start else 0.0
     elif name == "fast_decliner":
         adj -= 0.40 if age >= decline_start - 1 else 0.0
 
-    if ceiling >= 98 and 23 <= age <= 29 and overall >= 94 and name in {"generational_hit", "star_hit", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
-        adj += 0.12
-    if ceiling >= 99 and 24 <= age <= 28 and overall >= 96 and name in {"generational_hit", "star_hit", "hidden_gem"}:
-        adj += 0.16
+    if ceiling >= 98 and 22 <= age <= 29 and overall >= 93 and name in {"early_superstar", "generational_hit", "star_hit", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
+        adj += 0.18
+    if ceiling >= 99 and 23 <= age <= 29 and overall >= 95 and name in {"early_superstar", "generational_hit", "star_hit", "hidden_gem"}:
+        adj += 0.22
 
     hidden_level = _v25_hidden_upside_level_from_profile(prof)
     if hidden_level > 0 and room > 0:
@@ -3267,6 +3370,8 @@ def _v25_profile_expected_adjustment(p: Dict[str, Any], age: int, overall: int, 
             adj += 0.18
         if hidden_level >= 4 and age <= 23 and overall <= 76 and room >= 12:
             adj += 0.22
+
+    adj += _v25_young_takeover_catchup_pressure(p, age, overall, potential, prof)
 
     if age >= decline_start:
         decline_pressure = min(2.8, (age - decline_start + 1) * sharp * 0.46)
@@ -3293,8 +3398,10 @@ def _v25_sigma_mult(p: Dict[str, Any], age: int, overall: int, potential: int, r
     name = str(prof.get("profile") or "steady_growth")
     mult = _safe_float(prof.get("volatility"), 1.0)
     if name in {"volatile", "raw_tools_outlier", "skill_feel_outlier", "hidden_gem"}:
-        mult *= 1.12
-    if name in {"steady_growth", "long_prime"}:
+        mult *= 1.15
+    if name == "early_superstar" and age <= 25:
+        mult *= 1.14
+    if name in {"steady_growth", "long_prime", "historic_longevity"}:
         mult *= 0.88
     if name in {"true_bust", "disappointment"} and age <= 23:
         mult *= 1.05
@@ -3313,15 +3420,19 @@ def _v25_random_event_adjustment(p: Dict[str, Any], age: int, overall: int, pote
         chance += 0.010
     if name in {"volatile", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
         chance += 0.026
+    if name == "early_superstar" and age <= 25:
+        chance += 0.026
     hidden_level = _v25_hidden_upside_level_from_profile(prof)
     if hidden_level > 0 and age <= 26:
         chance += 0.010 + hidden_level * 0.006
     if traits["boomBust"] >= 0.65:
         chance += 0.012
-    chance = _clamp(chance, 0.006, 0.075)
+    chance = _clamp(chance, 0.006, 0.092)
     roll = rng.random()
     if roll < chance * 0.45:
         hidden_level = _v25_hidden_upside_level_from_profile(prof)
+        if name == "early_superstar" and age <= 25 and _safe_int(prof.get("hiddenCeiling"), potential) >= 96:
+            return rng.choice([1.35, 1.85, 2.35, 3.05, 3.45])
         if hidden_level >= 4 and age <= 23 and overall <= 78 and _safe_int(prof.get("hiddenCeiling"), potential) >= 90:
             return rng.choice([1.35, 1.75, 2.25, 2.65])
         if hidden_level >= 3 and age <= 24 and overall <= 80 and _safe_int(prof.get("hiddenCeiling"), potential) >= 88:
@@ -3371,20 +3482,30 @@ def _v25_bound_delta(p: Dict[str, Any], age: int, overall: int, potential: int, 
     if low_young:
         lo = max(lo, 0 if age <= 22 else -1)
 
-    # Rare +5 lane, visible +4 lane. These remain hidden-path/room gated so the
-    # league bands do not become inflation machines.
-    if age <= 23 and hidden_level >= 4 and overall <= 77 and room >= 12:
-        hi = 5
-    elif age <= 23 and name in {"raw_tools_outlier", "skill_feel_outlier", "hidden_gem"} and room >= 11 and overall <= 77:
-        hi = 5 if rng.random() < 0.22 else 4
-    elif age <= 22 and name == "generational_hit" and room >= 9:
-        hi = 5 if rng.random() < 0.12 else 4
+    # PATCH58: rare +7 lane plus broader +5/+6 access for true young-takeover
+    # paths. This is still hidden-ceiling/age/room gated, so ordinary players do
+    # not inflate the league.
+    catchup = _v25_young_takeover_catchup_pressure(p, age, overall, potential, prof)
+    if age <= 22 and name == "early_superstar" and ceiling >= 98 and overall <= 82 and room >= 13 and catchup >= 0.35:
+        roll = rng.random()
+        hi = 7 if roll < 0.075 else 6 if roll < 0.36 else 5
+    elif age <= 23 and hidden_level >= 4 and ceiling >= 94 and overall <= 78 and room >= 13 and catchup >= 0.28:
+        roll = rng.random()
+        hi = 7 if roll < 0.040 else 6 if roll < 0.25 else 5
+    elif age <= 24 and name == "early_superstar" and room >= 10:
+        hi = 6 if rng.random() < (0.30 if catchup >= 0.30 else 0.20) else 5
+    elif age <= 24 and name == "generational_hit" and room >= 9:
+        hi = 6 if rng.random() < (0.18 if catchup >= 0.25 else 0.08) else 5 if rng.random() < 0.32 else 4
+    elif age <= 24 and hidden_level >= 4 and overall <= 80 and room >= 11:
+        hi = 6 if rng.random() < 0.18 else 5
+    elif age <= 24 and name in {"raw_tools_outlier", "skill_feel_outlier", "hidden_gem"} and room >= 10 and overall <= 79:
+        hi = 5 if rng.random() < 0.42 else 4
     elif age <= 24 and (hidden_level >= 3 or name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}) and room >= 8:
-        hi = 4
-    elif age <= 24 and (name in {"generational_hit", "star_hit", "slow_burn", "late_bloomer"} or elite_young) and room >= 6:
-        hi = 4 if rng.random() < (0.24 if elite_young else 0.16) else 3
+        hi = 5 if rng.random() < 0.14 else 4
+    elif age <= 25 and (name in {"early_superstar", "generational_hit", "star_hit", "slow_burn", "late_bloomer"} or elite_young) and room >= 6:
+        hi = 5 if (name in {"early_superstar", "generational_hit", "star_hit"} and rng.random() < (0.28 if catchup >= 0.22 else 0.16)) else 4 if rng.random() < (0.42 if elite_young else 0.28) else 3
     elif age <= 25 and low_young and room >= 8:
-        hi = 4 if rng.random() < 0.20 else 3
+        hi = 4 if rng.random() < 0.26 else 3
     elif age <= 24:
         hi = 3
     elif age <= 29:
@@ -3488,8 +3609,8 @@ def _v25_boost_priority_score(item: Dict[str, Any], threshold: int, rng: Optiona
         score += 2
     if name in {"generational_hit", "star_hit"}:
         score += 2
-    if threshold >= 95 and ceiling >= 98 and 23 <= age <= 29 and name in {"generational_hit", "star_hit", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
-        score += 3
+    if threshold >= 95 and ceiling >= 98 and 22 <= age <= 29 and name in {"early_superstar", "generational_hit", "star_hit", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
+        score += 4
     if threshold >= 98 and ceiling >= 99 and 24 <= age <= 29:
         score += 4
     if name in {"true_bust", "disappointment", "fast_decliner"}:
@@ -3755,6 +3876,19 @@ def _target_delta_for_player(
 
     prof = _v25_profile(p, rng)
     name = str(prof.get("profile") or "steady_growth")
+    hidden_level = _v25_hidden_upside_level_from_profile(prof)
+    hidden_ceiling = _safe_int(prof.get("hiddenCeiling"), max(overall, potential))
+    catchup = _v25_young_takeover_catchup_pressure(p, age, overall, potential, prof)
+    # PATCH58 sudden-breakout valve: this is the only place that can actively
+    # push a yearly result into the new +7 lane, and it is limited to young
+    # hidden-ceiling outliers who are behind their saved career curve.
+    if age <= 22 and name == "early_superstar" and hidden_ceiling >= 98 and overall <= 83 and catchup >= 0.30:
+        if rng.random() < 0.045:
+            delta = max(delta, rng.choice([6, 7]))
+    elif age <= 23 and hidden_level >= 4 and hidden_ceiling >= 94 and overall <= 79 and catchup >= 0.24:
+        if rng.random() < 0.030:
+            delta = max(delta, rng.choice([5, 6, 7]))
+
     surprise = 0.025
     if name in {"volatile", "hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}:
         surprise += 0.025
@@ -4111,14 +4245,16 @@ def _yearly_delta_caps_for_item(item: Dict[str, Any]) -> Tuple[int, int]:
     if low_young:
         lo = max(lo, 0 if age <= 22 else -1)
 
-    if age <= 23 and before <= 77 and room >= 12 and (hidden_level >= 4 or profile_name in {"raw_tools_outlier", "skill_feel_outlier", "hidden_gem"}):
-        hi = 5
+    if age <= 23 and profile_name == "early_superstar" and room >= 11:
+        hi = 6
+    elif age <= 23 and before <= 77 and room >= 12 and (hidden_level >= 4 or profile_name in {"raw_tools_outlier", "skill_feel_outlier", "hidden_gem"}):
+        hi = 6 if hidden_level >= 4 else 5
     elif age <= 22 and profile_name == "generational_hit" and room >= 9:
         hi = 5
     elif age <= 24 and before <= 79 and room >= 8 and (hidden_level >= 3 or profile_name in {"hidden_gem", "raw_tools_outlier", "skill_feel_outlier"}):
         hi = 4
-    elif age <= 24 and room >= 6 and (elite_young or profile_name in {"generational_hit", "star_hit", "slow_burn", "late_bloomer"}):
-        hi = 4
+    elif age <= 24 and room >= 6 and (elite_young or profile_name in {"early_superstar", "generational_hit", "star_hit", "slow_burn", "late_bloomer"}):
+        hi = 5 if profile_name == "early_superstar" and room >= 8 else 4
     elif age <= 25 and low_young and room >= 8:
         hi = 4
     elif age <= 24:
@@ -5658,13 +5794,27 @@ def _age_peak_overall_cap(item: Dict[str, Any], rng: random.Random) -> int:
         v25_prof = _v25_profile(p, rng)
         v25_name = str(v25_prof.get("profile") or "steady_growth")
         before_ovr = int(item.get("before_overall", _safe_int(p.get("overall"), 70)))
-        if 30 <= age <= 34 and before_ovr >= 92 and v25_name in {"long_prime", "star_hit", "generational_hit", "steady_growth"}:
+        if 30 <= age <= 34 and before_ovr >= 92 and v25_name in {"historic_longevity", "long_prime", "early_superstar", "star_hit", "generational_hit", "steady_growth"}:
             cap += 1
-        if 30 <= age <= 32 and before_ovr >= 96 and v25_name in {"long_prime", "generational_hit"}:
+        if 30 <= age <= 32 and before_ovr >= 96 and v25_name in {"historic_longevity", "long_prime", "early_superstar", "generational_hit"}:
             cap += 1
+        if v25_name == "historic_longevity" and before_ovr >= 90:
+            if age == 35:
+                cap = max(cap, 93)
+            elif age == 36:
+                cap = max(cap, 92)
+            elif age == 37:
+                cap = max(cap, 90)
+            elif age == 38:
+                cap = max(cap, 88)
+        elif v25_name in {"long_prime", "early_superstar", "generational_hit"} and before_ovr >= 93:
+            if age == 35:
+                cap = max(cap, 92)
+            elif age == 36:
+                cap = max(cap, 90)
         original_ovr = _safe_int(v25_prof.get("originalOvr"), before_ovr)
         hidden_ceiling = _safe_int(v25_prof.get("hiddenCeiling"), _safe_int(p.get("potential"), before_ovr))
-        if age >= 35 and original_ovr <= 76 and v25_name not in {"generational_hit", "star_hit", "long_prime"}:
+        if age >= 35 and original_ovr <= 76 and v25_name not in {"early_superstar", "generational_hit", "star_hit", "long_prime", "historic_longevity"}:
             late_role_cap = 86 if hidden_ceiling >= 90 else 83 if hidden_ceiling >= 85 else 80
             late_role_cap -= max(0, age - 35)
             cap = min(cap, late_role_cap)
@@ -5914,7 +6064,9 @@ def _apply_elite_floor_minimum(plan: List[Dict[str, Any]], rng: random.Random) -
         p = item.get("player") or {}
         age = _safe_int(p.get("age"), 25)
         pot = _safe_int(p.get("potential"), after)
-        if age > 33:
+        if age > 36:
+            continue
+        if age >= 35 and after < 94:
             continue
         if pot < 93 and after < 94:
             continue

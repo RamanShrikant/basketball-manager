@@ -38,6 +38,43 @@ const CPU_CPU_ELITE_TEAM_THRESHOLD_TAX = 0.05;
 const CPU_CPU_BASE_BUYER_PICK_FLOOR = -3.25;
 const CPU_CPU_BASE_SELLER_OVR_DROP = -2.75;
 
+// PATCH58 CPU-to-CPU-only market smoothing. This deliberately does not affect
+// manual Propose Trade, Trade Finder, or mega-trade evaluations. The goal is to
+// let non-mega CPU trade candidates pass a little more naturally across more
+// team phases without making already-stacked contenders even easier to load up.
+const CPU_CPU_NON_MEGA_BUYER_RELIEF_BY_PHASE = {
+  contender: 0.00,
+  buyer: 0.04,
+  middle: 0.18,
+  retool: 0.22,
+  seller: 0.16,
+};
+const CPU_CPU_NON_MEGA_SELLER_RELIEF_BY_PHASE = {
+  contender: 0.00,
+  buyer: 0.06,
+  middle: 0.14,
+  retool: 0.18,
+  seller: 0.12,
+};
+const CPU_CPU_NON_MEGA_BUYER_SLACK_BY_PHASE = {
+  contender: 0.00,
+  buyer: 0.12,
+  middle: 0.34,
+  retool: 0.42,
+  seller: 0.28,
+};
+const CPU_CPU_NON_MEGA_SELLER_SLACK_BY_PHASE = {
+  contender: 0.00,
+  buyer: 0.08,
+  middle: 0.26,
+  retool: 0.34,
+  seller: 0.24,
+};
+
+function cpuCpuPhaseRelief(map, phase) {
+  return Number(map?.[String(phase || "").toLowerCase()] || 0);
+}
+
 // Extra threshold required when the CPU is asked to send out a true star.
 // This is intentionally non-net-aware: receiving another star does not erase
 // the organizational cost of moving a franchise player.
@@ -2656,10 +2693,21 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
       ? CPU_CPU_ELITE_TEAM_THRESHOLD_TAX
       : ELITE_TEAM_THRESHOLD_TAX
     : 0;
+  const cpuCpuDebugMarksMegaTrade = Boolean(cpuTradeContext?.megaTrade);
+  const isCpuCpuNonMegaEvaluation = isCpuCpuEvaluation && !cpuCpuDebugMarksMegaTrade;
+  const buyerPhase = String(cpuTradeContext?.buyerPhase || "").toLowerCase();
+  const sellerPhase = String(cpuTradeContext?.sellerPhase || "").toLowerCase();
+  const cpuCpuNonMegaPhaseRelief = isCpuCpuNonMegaEvaluation
+    ? normalizedCpuTradeRole === "buyer"
+      ? cpuCpuPhaseRelief(CPU_CPU_NON_MEGA_BUYER_RELIEF_BY_PHASE, buyerPhase)
+      : normalizedCpuTradeRole === "seller"
+        ? cpuCpuPhaseRelief(CPU_CPU_NON_MEGA_SELLER_RELIEF_BY_PHASE, sellerPhase)
+        : 0
+    : 0;
   const thresholdDiscount = isCpuCpuEvaluation ? CPU_CPU_THRESHOLD_DISCOUNT : 0;
   const minimumBaseThreshold = isCpuCpuEvaluation ? CPU_CPU_MIN_ACCEPT_THRESHOLD : 0.18;
   const baseThreshold = round4(
-    Math.max(minimumBaseThreshold, BASE_ACCEPT_THRESHOLD + topConferenceTax + eliteTeamTax - thresholdDiscount)
+    Math.max(minimumBaseThreshold, BASE_ACCEPT_THRESHOLD + topConferenceTax + eliteTeamTax - thresholdDiscount - cpuCpuNonMegaPhaseRelief)
   );
   const threshold = round4(
     baseThreshold +
@@ -2718,14 +2766,19 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
         : bestIncomingPlayerOvr >= 76
           ? -4.75
           : CPU_CPU_BASE_BUYER_PICK_FLOOR;
-  const sellerPhase = String(cpuTradeContext?.sellerPhase || "").toLowerCase();
   const sellerIsFutureFocused = sellerPhase === "seller" || sellerPhase === "retool";
   const sellerReceivesRealFutureValue = pickScore >= 0.45 || deltaPOT >= 0.040 || incomingPremiumYoungPlayer;
   const cpuCpuSellerOvrDropFloor = sellerIsFutureFocused && bestOutgoingPlayerOvr >= 76 && sellerReceivesRealFutureValue
     ? -4.15
     : CPU_CPU_BASE_SELLER_OVR_DROP;
-  const cpuCpuBuyerScoreSlack = bestIncomingPlayerOvr >= 83 ? 1.55 : bestIncomingPlayerOvr >= 80 ? 1.35 : 1.15;
-  const cpuCpuSellerScoreSlack = bestOutgoingPlayerOvr >= 83 && sellerReceivesRealFutureValue ? 2.00 : bestOutgoingPlayerOvr >= 76 && sellerReceivesRealFutureValue ? 1.85 : 1.60;
+  const cpuCpuBuyerPhaseSlack = isCpuCpuNonMegaEvaluation
+    ? cpuCpuPhaseRelief(CPU_CPU_NON_MEGA_BUYER_SLACK_BY_PHASE, buyerPhase)
+    : 0;
+  const cpuCpuSellerPhaseSlack = isCpuCpuNonMegaEvaluation
+    ? cpuCpuPhaseRelief(CPU_CPU_NON_MEGA_SELLER_SLACK_BY_PHASE, sellerPhase)
+    : 0;
+  const cpuCpuBuyerScoreSlack = (bestIncomingPlayerOvr >= 83 ? 1.55 : bestIncomingPlayerOvr >= 80 ? 1.35 : 1.15) + cpuCpuBuyerPhaseSlack;
+  const cpuCpuSellerScoreSlack = (bestOutgoingPlayerOvr >= 83 && sellerReceivesRealFutureValue ? 2.00 : bestOutgoingPlayerOvr >= 76 && sellerReceivesRealFutureValue ? 1.85 : 1.60) + cpuCpuSellerPhaseSlack;
   const targetAge = toNum(cpuTradeContext?.targetAge, 27);
   const cpuCpuAgingHighEndSellerAccept =
     isCpuCpuEvaluation &&
@@ -2823,6 +2876,11 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
     reasons.push(
       `CPU-to-CPU ${roleText} mode: threshold ${threshold.toFixed(2)} using the expanded CPU market standard; manual/user trade standards remain stricter.`
     );
+    if (isCpuCpuNonMegaEvaluation && cpuCpuNonMegaPhaseRelief > 0) {
+      reasons.push(
+        `PATCH58 non-mega CPU market smoothing applied ${cpuCpuNonMegaPhaseRelief.toFixed(2)} phase relief; mega trades, Trade Finder, and Propose Trade are unchanged.`
+      );
+    }
   }
 
   if (Array.isArray(pickImpact?.reasons) && pickImpact.reasons.length > 0) {
@@ -2909,6 +2967,13 @@ function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTe
       decisionMargin: round4(decisionMargin),
       rawScoreMargin,
       acceptancePath,
+      cpuCpuDebugMarksMegaTrade,
+      isCpuCpuNonMegaEvaluation,
+      buyerPhase,
+      sellerPhase,
+      cpuCpuNonMegaPhaseRelief,
+      cpuCpuBuyerPhaseSlack,
+      cpuCpuSellerPhaseSlack,
       cpuCpuBuyerPickFloor,
       cpuCpuSellerOvrDropFloor,
       bestIncomingPlayerOvr,
