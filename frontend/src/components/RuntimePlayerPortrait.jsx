@@ -179,6 +179,14 @@ export default function RuntimePlayerPortrait({
     ? (runtimeFace?.sourceUrl || (fallbackIsNakedRealBase ? "" : fallbackSrc))
     : (fallbackIsNakedGeneratedBase ? (runtimeFace?.draftUrl || "") : fallbackSrc);
 
+  // Salary Table and Player Retirements use carefully tuned, compact portrait
+  // slots. Force every source type through the same canonical 1040x760
+  // width-fit envelope there so odd static source aspect ratios and runtime
+  // base+jersey composites cannot paint larger than standard NBA headshots.
+  // Page-level x/y/scale tuning remains outside this component and is untouched.
+  const useCanonicalContainEnvelope =
+    layoutPage === "salary-table" || layoutPage === "player-retirements";
+
   return (
     <div className={`relative overflow-visible ${className}`} style={style} aria-hidden={ariaHidden || undefined}>
       <HeadshotLayoutTransform
@@ -188,18 +196,13 @@ export default function RuntimePlayerPortrait({
       >
         {resolved ? (
           <div
-            className={`absolute bottom-0 left-1/2 -translate-x-1/2 overflow-hidden ${layoutPage === "salary-table" ? "w-full" : "h-full"}`}
+            className={`absolute bottom-0 left-1/2 -translate-x-1/2 overflow-hidden ${useCanonicalContainEnvelope ? "w-full" : "h-full"}`}
             style={{
               aspectRatio: "1040 / 760",
-              // Salary Table's normal/static headshots use object-contain inside a
-              // narrow portrait slot. Runtime base+jersey composites previously
-              // forced h-full, making the same 1040x760 canvas ~43% larger there.
-              // Width-fit the composite on Salary Table so both source types use
-              // the exact same visual envelope; all manual page tuning remains
-              // outside this component and therefore stays untouched.
-              ...(layoutPage === "salary-table" ? { height: "auto", maxHeight: "100%" } : {}),
+              ...(useCanonicalContainEnvelope ? { height: "auto", maxHeight: "100%" } : {}),
             }}
-            data-bm-portrait-envelope={layoutPage === "salary-table" ? "contain-width" : "height-fit"}
+            data-bm-portrait-envelope={useCanonicalContainEnvelope ? "contain-width" : "height-fit"}
+            data-bm-portrait-source="runtime-composite"
           >
             <div className="relative h-full w-full overflow-hidden" style={contentStyle}>
               <img
@@ -220,6 +223,15 @@ export default function RuntimePlayerPortrait({
                 </div>
               )}
             </div>
+          </div>
+        ) : useCanonicalContainEnvelope ? (
+          <div
+            className="absolute bottom-0 left-1/2 w-full -translate-x-1/2 overflow-hidden"
+            style={{ aspectRatio: "1040 / 760", height: "auto", maxHeight: "100%" }}
+            data-bm-portrait-envelope="contain-width"
+            data-bm-portrait-source="fallback-static"
+          >
+            <FallbackPortrait src={displayFallbackSrc} alt={alt} imageClassName={imageClassName} fallback={fallback} />
           </div>
         ) : (
           <FallbackPortrait src={displayFallbackSrc} alt={alt} imageClassName={imageClassName} fallback={fallback} />

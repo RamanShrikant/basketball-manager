@@ -814,6 +814,7 @@ setError("");
                           teamName={player?.retiredFromTeam || player?.teamName || player?.team || ""}
                           src={headshot || ""}
                           alt={player?.name || "Retired Player"}
+                          layoutPage="player-retirements"
                           className="absolute inset-0 h-full w-full overflow-visible bg-transparent"
                           imageClassName="object-contain object-bottom"
                           fallback={<div className="h-full w-full" />}
