@@ -32,6 +32,8 @@ import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
 import { getContractSeasonYear, getDraftYear } from "../utils/seasonContext.js";
 import { buildRecordMap } from "../utils/teamIntel_v1.js";
+import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
+import { buildCanonicalStandingLabelMap, loadRegularSeasonResultsV3FromStorage } from "../utils/canonicalStandings.js";
 import { getTradeWindowLockMessage } from "../utils/tradeWindow.js";
 import { formatInjuryReturnLabel, isPlayerInjured } from "../utils/injurySystem.js";
 import {
@@ -392,55 +394,34 @@ function embeddedTradeFinderRecord(team = {}) {
 function buildTradeFinderStandingMap(leagueData, teams = []) {
   const rows = Array.isArray(teams) ? teams.filter(Boolean) : [];
   const liveRecords = buildRecordMap(rows);
-  const conferenceByTeam = new Map();
-
-  if (leagueData?.conferences && typeof leagueData.conferences === "object") {
-    for (const [conference, conferenceTeams] of Object.entries(leagueData.conferences)) {
-      for (const team of conferenceTeams || []) {
-        const name = tradeFinderTeamName(team);
-        if (name) conferenceByTeam.set(normalizeTeamName(name), normalizeTradeFinderConference(conference));
-      }
-    }
-  }
-
-  const standings = rows.map((team) => {
-    const name = tradeFinderTeamName(team);
-    const live = liveRecords?.[name] || {};
-    const liveGames = Number(live?.gp || 0);
-    const embedded = embeddedTradeFinderRecord(team);
-    const wins = liveGames > 0 ? Number(live?.w || 0) : embedded.wins;
-    const losses = liveGames > 0 ? Number(live?.l || 0) : embedded.losses;
-    const games = wins + losses;
-    const conference = conferenceByTeam.get(normalizeTeamName(name)) || normalizeTradeFinderConference(team?.conference || team?.conf || "");
-    const pointDiff = liveGames > 0 ? Number(live?.pf || 0) - Number(live?.pa || 0) : 0;
-    return {
-      name,
-      abbreviation: String(team?.abbreviation || team?.abbr || team?.shortName || "").trim().toUpperCase(),
-      conference,
-      wins,
-      losses,
-      games,
-      winPct: games > 0 ? wins / games : null,
-      pointDiff,
-      rank: null,
-    };
+  const canonicalMap = buildCanonicalStandingLabelMap({
+    leagueData,
+    teams: rows,
+    recordsByTeam: liveRecords,
+    scheduleByDate: readScheduleFromStorage(),
+    resultsById: loadRegularSeasonResultsV3FromStorage(),
   });
 
-  const conferences = new Set(standings.map((row) => row.conference).filter(Boolean));
-  for (const conference of conferences) {
-    const conferenceRows = standings.filter((row) => row.conference === conference);
-    if (!conferenceRows.some((row) => row.games > 0)) continue;
-    conferenceRows
-      .sort((a, b) =>
-        (b.winPct ?? -1) - (a.winPct ?? -1) ||
-        b.pointDiff - a.pointDiff ||
-        b.wins - a.wins ||
-        a.name.localeCompare(b.name)
-      )
-      .forEach((row, index) => { row.rank = index + 1; });
+  for (const team of rows) {
+    const name = tradeFinderTeamName(team);
+    const key = normalizeTeamName(name);
+    if (!name || canonicalMap.has(key)) continue;
+    const embedded = embeddedTradeFinderRecord(team);
+    const games = embedded.wins + embedded.losses;
+    canonicalMap.set(key, {
+      name,
+      abbreviation: String(team?.abbreviation || team?.abbr || team?.shortName || "").trim().toUpperCase(),
+      conference: normalizeTradeFinderConference(team?.conference || team?.conf || ""),
+      wins: embedded.wins,
+      losses: embedded.losses,
+      games,
+      winPct: games > 0 ? embedded.wins / games : null,
+      pointDiff: 0,
+      rank: null,
+    });
   }
 
-  return new Map(standings.map((row) => [normalizeTeamName(row.name), row]));
+  return canonicalMap;
 }
 
 function tradeFinderStandingLabel(standing) {

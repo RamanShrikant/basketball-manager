@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { getUserTradeDeadlineStatus } from "../utils/userTradeRules.js";
 import { buildRecordMap, getStandardPlayers, playerOverall } from "../utils/teamIntel_v1.js";
+import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
+import { buildCanonicalStandingLabelMap, loadRegularSeasonResultsV3FromStorage } from "../utils/canonicalStandings.js";
 import { getContractSeasonYear } from "../utils/seasonContext.js";
 import { normalizeDraftPicks, normalizeTeamName } from "../utils/draftPicks.js";
 import PageFade from "../components/PageFade";
@@ -485,43 +487,13 @@ function ordinalStanding(value) {
 }
 
 function buildTradePageStandingMap(leagueData, teams = []) {
-  const liveRecords = buildRecordMap(teams);
-  const conferenceByTeam = new Map();
-  if (leagueData?.conferences && typeof leagueData.conferences === "object") {
-    for (const [conference, rows] of Object.entries(leagueData.conferences)) {
-      for (const team of rows || []) {
-        const name = team?.name || team?.teamName || "";
-        if (name) conferenceByTeam.set(normalizeTeamName(name), normalizeConferenceLabel(conference));
-      }
-    }
-  }
-  const standings = teams.map((team) => {
-    const name = team?.name || team?.teamName || "";
-    const live = liveRecords?.[name] || {};
-    const liveGames = safeNumber(live?.gp, 0);
-    const embeddedWins = safeNumber(team?.wins ?? team?.record?.wins ?? team?.seasonRecord?.wins ?? team?.stats?.wins, 0);
-    const embeddedLosses = safeNumber(team?.losses ?? team?.record?.losses ?? team?.seasonRecord?.losses ?? team?.stats?.losses, 0);
-    const wins = liveGames > 0 ? safeNumber(live?.w, 0) : embeddedWins;
-    const losses = liveGames > 0 ? safeNumber(live?.l, 0) : embeddedLosses;
-    const games = wins + losses;
-    return {
-      name,
-      conference: conferenceByTeam.get(normalizeTeamName(name)) || normalizeConferenceLabel(team?.conference || team?.conf || ""),
-      wins,
-      losses,
-      games,
-      winPct: games > 0 ? wins / games : null,
-      pointDiff: liveGames > 0 ? safeNumber(live?.pf, 0) - safeNumber(live?.pa, 0) : 0,
-      rank: null,
-    };
+  return buildCanonicalStandingLabelMap({
+    leagueData,
+    teams,
+    recordsByTeam: buildRecordMap(teams),
+    scheduleByDate: readScheduleFromStorage(),
+    resultsById: loadRegularSeasonResultsV3FromStorage(),
   });
-  for (const conference of new Set(standings.map((row) => row.conference).filter(Boolean))) {
-    const rows = standings.filter((row) => row.conference === conference);
-    if (!rows.some((row) => row.games > 0)) continue;
-    rows.sort((a, b) => (b.winPct ?? -1) - (a.winPct ?? -1) || b.pointDiff - a.pointDiff || b.wins - a.wins || a.name.localeCompare(b.name));
-    rows.forEach((row, index) => { row.rank = index + 1; });
-  }
-  return new Map(standings.map((row) => [normalizeTeamName(row.name), row]));
 }
 
 function standingLabel(standing) {

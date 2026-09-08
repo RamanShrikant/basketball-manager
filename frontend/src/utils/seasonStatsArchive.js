@@ -659,6 +659,9 @@ function normalizeRegularSeasonRows(rows = []) {
     pointDifferential: safeNumber(row?.pointDifferential ?? row?.diff, 0),
     pointsFor: safeNumber(row?.pointsFor ?? row?.pf, 0),
     pointsAgainst: safeNumber(row?.pointsAgainst ?? row?.pa, 0),
+    conferenceWins: safeNumber(row?.conferenceWins ?? row?.confWins, 0),
+    conferenceLosses: safeNumber(row?.conferenceLosses ?? row?.confLosses, 0),
+    h2h: row?.h2h && typeof row.h2h === "object" ? row.h2h : {},
     conferenceSeed: row?.conferenceSeed ?? null,
     leagueRank: row?.leagueRank ?? null,
   }));
@@ -693,6 +696,9 @@ function buildRegularSeasonRowsFromStorage(leagueData) {
         pointsFor: 0,
         pointsAgainst: 0,
         pointDifferential: 0,
+        conferenceWins: 0,
+        conferenceLosses: 0,
+        h2h: {},
       },
     ])
   );
@@ -717,6 +723,9 @@ function buildRegularSeasonRowsFromStorage(leagueData) {
         pointsFor: 0,
         pointsAgainst: 0,
         pointDifferential: 0,
+        conferenceWins: 0,
+        conferenceLosses: 0,
+        h2h: {},
       });
     }
     return byName.get(teamName);
@@ -745,6 +754,26 @@ function buildRegularSeasonRowsFromStorage(leagueData) {
     } else if (awayPts > homePts) {
       away.wins += 1;
       home.losses += 1;
+    }
+
+    if (home.conference && away.conference && home.conference === away.conference) {
+      if (homePts > awayPts) {
+        home.conferenceWins += 1;
+        away.conferenceLosses += 1;
+      } else if (awayPts > homePts) {
+        away.conferenceWins += 1;
+        home.conferenceLosses += 1;
+      }
+    }
+
+    home.h2h[game.away] ||= { w: 0, l: 0 };
+    away.h2h[game.home] ||= { w: 0, l: 0 };
+    if (homePts > awayPts) {
+      home.h2h[game.away].w += 1;
+      away.h2h[game.home].l += 1;
+    } else if (awayPts > homePts) {
+      away.h2h[game.home].w += 1;
+      home.h2h[game.away].l += 1;
     }
   }
 
@@ -944,6 +973,9 @@ function buildSnapshotFromRaw({
       wins: safeNumber(raw?.wins ?? raw?.w, 0),
       losses: safeNumber(raw?.losses ?? raw?.l, 0),
       pointDifferential: safeNumber(raw?.pointDifferential ?? raw?.diff, pointsFor - pointsAgainst),
+      conferenceWins: safeNumber(raw?.conferenceWins ?? raw?.confWins, 0),
+      conferenceLosses: safeNumber(raw?.conferenceLosses ?? raw?.confLosses, 0),
+      h2h: raw?.h2h && typeof raw.h2h === "object" ? raw.h2h : {},
       stats: {
         GP: gp,
         PTS: format1(pointsFor / safeGp),

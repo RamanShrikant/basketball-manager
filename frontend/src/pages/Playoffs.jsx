@@ -494,13 +494,10 @@ function getWinPctFromStanding(row) {
 function buildRegularSeasonSnapshot({ standings, seeds }) {
   const rows = Object.values(standings || {}).filter((row) => row?.team);
 
-  const leagueSorted = [...rows].sort((a, b) => {
-    const winDiff = getWinPctFromStanding(b) - getWinPctFromStanding(a);
-    if (winDiff !== 0) return winDiff;
-    const diffDiff = Number(b?.diff || 0) - Number(a?.diff || 0);
-    if (diffDiff !== 0) return diffDiff;
-    return String(a.team || "").localeCompare(String(b.team || ""));
-  });
+  const leagueSortedNames = sortCanonicalTeamNames(rows.map((row) => row.team), standings);
+  const leagueSorted = leagueSortedNames
+    .map((teamName) => standings?.[teamName] || rows.find((row) => row.team === teamName))
+    .filter(Boolean);
 
   const leagueRankByTeam = {};
   leagueSorted.forEach((row, idx) => {

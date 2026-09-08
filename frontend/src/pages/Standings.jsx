@@ -9,7 +9,7 @@ import "../styles/BMPageBackground.css";
 import { getArchivedStatsSnapshot, getLatestSeasonHistoryEntry, seasonLabelFromStartYear } from "../utils/seasonStatsArchive.js";
 import { DIVISION_NAMES, groupTeamsByDivision, resolveTeamDivision } from "../utils/leagueDivisions.js";
 import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
-import { compareCanonicalTeams, computeCanonicalStandings } from "../utils/canonicalStandings.js";
+import { compareCanonicalTeams, computeCanonicalStandings, computeCanonicalStandingsFromRows } from "../utils/canonicalStandings.js";
 
 /* -----------------------------
    Results V3 (per-game storage)
@@ -189,6 +189,13 @@ export default function Standings() {
     });
   }, [liveStandings, liveTeamByName, allTeams, isOffseasonMode, archivedSeason, archivedSnapshot]);
 
+  const archivedStandings = useMemo(() => {
+    if (!isOffseasonMode) return null;
+    return computeCanonicalStandingsFromRows(teamStats, { leagueData, teams: allTeams });
+  }, [teamStats, isOffseasonMode, leagueData, allTeams]);
+
+  const activeStandings = isOffseasonMode ? archivedStandings : liveStandings;
+
   const filtered = useMemo(() => {
     if (viewMode === "east")
       return teamStats.filter((t) => t.conf?.toLowerCase() === "east");
@@ -199,27 +206,13 @@ export default function Standings() {
 
   const sorted = useMemo(() => {
     const rows = [...filtered];
-    if (isOffseasonMode) {
-      return rows.sort((a, b) =>
-        parseFloat(b.pct) - parseFloat(a.pct) ||
-        b.diff - a.diff ||
-        String(a.team).localeCompare(String(b.team))
-      );
-    }
-    return rows.sort((a, b) => compareCanonicalTeams(a.team, b.team, liveStandings));
-  }, [filtered, isOffseasonMode, liveStandings]);
+    return rows.sort((a, b) => compareCanonicalTeams(a.team, b.team, activeStandings || {}));
+  }, [filtered, activeStandings]);
 
   const divisionGroups = useMemo(() => {
-    const sortedTeams = [...teamStats].sort((a, b) => {
-      if (isOffseasonMode) {
-        return parseFloat(b.pct) - parseFloat(a.pct) ||
-          b.diff - a.diff ||
-          String(a.team).localeCompare(String(b.team));
-      }
-      return compareCanonicalTeams(a.team, b.team, liveStandings);
-    });
+    const sortedTeams = [...teamStats].sort((a, b) => compareCanonicalTeams(a.team, b.team, activeStandings || {}));
     return groupTeamsByDivision(sortedTeams, leagueData);
-  }, [teamStats, leagueData, isOffseasonMode, liveStandings]);
+  }, [teamStats, leagueData, activeStandings]);
 
   const renderStandingsTable = (rows, compact = false) => (
     <table className="w-full text-sm text-center">

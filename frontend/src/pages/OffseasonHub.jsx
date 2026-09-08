@@ -7,6 +7,7 @@ import { saveLeagueData } from "../utils/leagueStorage.js";
 import { recomputeDerivedRatingsInLeague } from "../utils/playerProgressionDerived_v1.js";
 import { applyLeagueInflationForOffseason, getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { archiveCompletedDraftHistory, rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
+import { computeCanonicalStandingsFromRows, sortCanonicalStandingRows } from "../utils/canonicalStandings.js";
 import {
   captureOffseasonMoodBaseline,
   recordCompletedDraftMoodEvents,
@@ -1110,6 +1111,32 @@ function getUsableLotteryRows(rows = [], leagueData = null) {
     .filter(hasUsableLotteryRecord);
 }
 
+function rankLotteryRowsCanonically(rows = [], leagueData = null) {
+  const safeRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!safeRows.length) return [];
+  const standings = computeCanonicalStandingsFromRows(safeRows, {
+    leagueData,
+    teams: getAllTeamsFromLeague(leagueData),
+  });
+  const sortedBest = sortCanonicalStandingRows(safeRows, standings);
+  const byConference = new Map();
+  return sortedBest.map((row, index) => {
+    const teamName = getRecordTeamName(row);
+    const standing = standings?.[teamName] || null;
+    const conference = standing?.conf || row?.conference || row?.conf || "";
+    const confKey = String(conference || "");
+    const confRank = (byConference.get(confKey) || 0) + 1;
+    if (confKey) byConference.set(confKey, confRank);
+    return {
+      ...row,
+      conference,
+      conf: conference,
+      conferenceSeed: row?.conferenceSeed || row?.confSeed || (confKey ? confRank : null),
+      leagueRank: index + 1,
+    };
+  });
+}
+
 function getSeasonHistoryCandidates(leagueData, seasonYear) {
   const history = Array.isArray(leagueData?.seasonHistory) ? leagueData.seasonHistory : [];
   if (!history.length) return [];
@@ -1166,7 +1193,7 @@ function getLatestSeasonHistoryEntry(leagueData, seasonYear) {
 function getTeamRecordsForDevLottery(leagueData, seasonYear) {
   const latest = getLatestSeasonHistoryEntry(leagueData, seasonYear);
   if (latest) {
-    const rows = getUsableLotteryRows(latest.teams, leagueData);
+    const rows = rankLotteryRowsCanonically(getUsableLotteryRows(latest.teams, leagueData), leagueData);
     if (rows.length >= 30) return rows.slice(0, 30);
   }
 
@@ -1186,7 +1213,8 @@ function getTeamRecordsForDevLottery(leagueData, seasonYear) {
     leagueData
   );
 
-  if (currentTeamRows.length >= 30) return currentTeamRows.slice(0, 30);
+  const rankedCurrentTeamRows = rankLotteryRowsCanonically(currentTeamRows, leagueData);
+  if (rankedCurrentTeamRows.length >= 30) return rankedCurrentTeamRows.slice(0, 30);
 
   return [];
 }

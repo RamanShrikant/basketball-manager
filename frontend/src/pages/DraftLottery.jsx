@@ -6,6 +6,7 @@ import * as simEngine from "../api/simEnginePy.js";
 import { applyDraftPickOwnershipToLotteryResult, applyDraftPickOwnershipToOrder, finalizeResolvedDraftOrderAssets } from "../utils/draftPicks.js";
 import { getDraftYear } from "../utils/seasonContext.js";
 import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
+import { computeCanonicalStandings, computeCanonicalStandingsFromRows, sortCanonicalStandingRows } from "../utils/canonicalStandings.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
@@ -108,6 +109,37 @@ function buildFallbackTeamRecordsFromSchedule(leagueData) {
   const schedule = readScheduleFromStorage();
   const results = loadAllResultsV3();
   const teams = getAllTeamsFromLeague(leagueData);
+
+  const canonicalStandings = computeCanonicalStandings({
+    teams,
+    scheduleByDate: schedule,
+    resultsById: results,
+    confOf: (teamName) => {
+      const found = teams.find((team) => normalizeTeamName(team?.name || team?.teamName || "") === normalizeTeamName(teamName));
+      return found?.conference || found?.conf || "";
+    },
+  });
+  const canonicalRows = Object.values(canonicalStandings || {}).filter((row) => row?.gamesPlayed > 0);
+  if (canonicalRows.length >= 30) {
+    return sortCanonicalStandingRows(canonicalRows, canonicalStandings).map((row, index) => ({
+      teamName: row.team,
+      conference: row.conf || null,
+      wins: row.wins,
+      losses: row.losses,
+      gamesPlayed: row.gamesPlayed,
+      pointsFor: row.pf,
+      pointsAgainst: row.pa,
+      pointDifferential: row.diff,
+      conferenceWins: row.confWins,
+      conferenceLosses: row.confLosses,
+      h2h: row.h2h,
+      madePlayoffs: index < 16,
+      madePlayIn: false,
+      playoffResult: index < 16 ? "playoffs" : "missed_playoffs",
+      leagueRank: index + 1,
+      logo: resolveTeamLogoFromLeague(leagueData, row.team),
+    }));
+  }
 
   const stats = {};
   for (const team of teams) {
@@ -262,6 +294,32 @@ function getUsableLotteryRows(rows = [], leagueData = null) {
     .filter(hasUsableLotteryRecord);
 }
 
+function rankLotteryRowsCanonically(rows = [], leagueData = null) {
+  const safeRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!safeRows.length) return [];
+  const standings = computeCanonicalStandingsFromRows(safeRows, {
+    leagueData,
+    teams: getAllTeamsFromLeague(leagueData),
+  });
+  const sortedBest = sortCanonicalStandingRows(safeRows, standings);
+  const byConference = new Map();
+  return sortedBest.map((row, index) => {
+    const teamName = getRecordTeamName(row);
+    const standing = standings?.[teamName] || null;
+    const conference = standing?.conf || row?.conference || row?.conf || "";
+    const confKey = String(conference || "");
+    const confRank = (byConference.get(confKey) || 0) + 1;
+    if (confKey) byConference.set(confKey, confRank);
+    return {
+      ...row,
+      conference,
+      conf: conference,
+      conferenceSeed: row?.conferenceSeed || row?.confSeed || (confKey ? confRank : null),
+      leagueRank: index + 1,
+    };
+  });
+}
+
 function getSeasonHistoryCandidates(leagueData, seasonYear) {
   const history = Array.isArray(leagueData?.seasonHistory) ? leagueData.seasonHistory : [];
   if (!history.length) return [];
@@ -308,11 +366,14 @@ function getLatestSeasonHistoryEntry(leagueData, seasonYear) {
 function getTeamRecordsForLottery(leagueData, seasonYear) {
   const latest = getLatestSeasonHistoryEntry(leagueData, seasonYear);
   if (latest) {
-    const rows = getUsableLotteryRows(latest.teams, leagueData);
+    const rows = rankLotteryRowsCanonically(getUsableLotteryRows(latest.teams, leagueData), leagueData);
     if (rows.length >= 30) return rows.slice(0, 30);
   }
 
-  const fallbackRows = getUsableLotteryRows(buildFallbackTeamRecordsFromSchedule(leagueData), leagueData);
+  const fallbackRows = rankLotteryRowsCanonically(
+    getUsableLotteryRows(buildFallbackTeamRecordsFromSchedule(leagueData), leagueData),
+    leagueData
+  );
   if (fallbackRows.length >= 30) return fallbackRows.slice(0, 30);
 
   return [];

@@ -73,6 +73,7 @@ import {
   persistScheduleStructure,
   readScheduleFromStorage,
 } from "../utils/scheduleStorage.js";
+import { computeCanonicalStandings, sortCanonicalTeamNames } from "../utils/canonicalStandings.js";
 import {
   enqueueCpuTradeLeagueSave,
   flushCpuTradeLeagueSaves,
@@ -8842,6 +8843,13 @@ const teamAgg = useMemo(() => {
   return totals;
 }, [scheduleByDate, resultsById]);
 
+const canonicalStandings = useMemo(() => computeCanonicalStandings({
+  teams,
+  scheduleByDate,
+  resultsById,
+  confOf: (teamName) => confByTeam?.[teamName] || "",
+}), [teams, scheduleByDate, resultsById, confByTeam]);
+
 function ordinal(n) {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;
@@ -8852,24 +8860,18 @@ const headerInfo = useMemo(() => {
   const seasonLabel = `${seasonYear}-${seasonYear + 1}`;
 
   const myName = selectedTeam?.name;
-  const myConf = confByTeam?.[myName] || "";
+  const myCanonical = myName ? canonicalStandings?.[myName] : null;
+  const myConf = myCanonical?.conf || confByTeam?.[myName] || "";
 
   const myRow = teamAgg?.[myName] || { w: 0, l: 0, gp: 0, pf: 0, pa: 0 };
-  const w = myRow.w || 0;
-  const l = myRow.l || 0;
+  const w = myCanonical?.wins ?? myRow.w ?? 0;
+  const l = myCanonical?.losses ?? myRow.l ?? 0;
 
-  // standings in conference (pct desc, then diff desc)
-  const confTeams = Object.keys(confByTeam || {}).filter((t) => confByTeam[t] === myConf);
-  const rows = confTeams.map((t) => {
-    const r = teamAgg?.[t] || { w: 0, l: 0, gp: 0, pf: 0, pa: 0 };
-    const gp = (r.w || 0) + (r.l || 0);
-    const pct = gp > 0 ? (r.w / gp) : 0;
-    const diff = (r.pf || 0) - (r.pa || 0);
-    return { team: t, w: r.w || 0, l: r.l || 0, pct, diff };
-  });
-
-  rows.sort((a, b) => b.pct - a.pct || b.diff - a.diff);
-  const confRank = myName ? (rows.findIndex((x) => x.team === myName) + 1) : 0;
+  const confTeams = Object.values(canonicalStandings || {})
+    .filter((row) => String(row?.conf || "") === String(myConf || ""))
+    .map((row) => row.team);
+  const rankedConfTeams = sortCanonicalTeamNames(confTeams, canonicalStandings);
+  const confRank = myName ? (rankedConfTeams.findIndex((team) => team === myName) + 1) : 0;
 
   // Off/Def ranks in league (Off: PF/G desc, Def: PA/G asc)
   const leagueTeams = Object.keys(confByTeam || {});
@@ -8899,43 +8901,39 @@ const headerInfo = useMemo(() => {
     offRank,
     defRank,
   };
-}, [seasonYear, selectedTeam, confByTeam, teamAgg]);
+}, [seasonYear, selectedTeam, confByTeam, teamAgg, canonicalStandings]);
 
 const conferenceStandings = useMemo(() => {
-  const rows = teams.map((t) => {
-    const agg = teamAgg?.[t.name] || { w: 0, l: 0, pf: 0, pa: 0 };
-    const gp = (agg.w || 0) + (agg.l || 0);
+  const byLogo = new Map(teams.map((t) => [t.name, (
+    t.logo ||
+    t.teamLogo ||
+    t.newTeamLogo ||
+    t.logoUrl ||
+    t.image ||
+    t.img ||
+    ""
+  )]));
+  const rows = Object.values(canonicalStandings || {}).map((row) => ({
+    team: row.team,
+    conf: String(row.conf || confByTeam?.[row.team] || ""),
+    logo: byLogo.get(row.team) || "",
+    w: row.wins || 0,
+    l: row.losses || 0,
+    pct: row.winPct || 0,
+    diff: row.diff || 0,
+  }));
 
-    return {
-      team: t.name,
-      conf: String(confByTeam?.[t.name] || ""),
-      logo:
-        t.logo ||
-        t.teamLogo ||
-        t.newTeamLogo ||
-        t.logoUrl ||
-        t.image ||
-        t.img ||
-        "",
-      w: agg.w || 0,
-      l: agg.l || 0,
-      pct: gp > 0 ? agg.w / gp : 0,
-      diff: (agg.pf || 0) - (agg.pa || 0),
-    };
-  });
-
-  const sorter = (a, b) =>
-    b.pct - a.pct || b.diff - a.diff || a.team.localeCompare(b.team);
+  const sortRows = (items) => {
+    const names = sortCanonicalTeamNames(items.map((row) => row.team), canonicalStandings);
+    const order = new Map(names.map((name, index) => [name, index]));
+    return [...items].sort((a, b) => (order.get(a.team) ?? 999) - (order.get(b.team) ?? 999));
+  };
 
   return {
-    west: rows
-      .filter((row) => row.conf.toLowerCase() === "west")
-      .sort(sorter),
-    east: rows
-      .filter((row) => row.conf.toLowerCase() === "east")
-      .sort(sorter),
+    west: sortRows(rows.filter((row) => row.conf.toLowerCase() === "west")),
+    east: sortRows(rows.filter((row) => row.conf.toLowerCase() === "east")),
   };
-}, [teams, teamAgg, confByTeam]);
+}, [teams, canonicalStandings, confByTeam]);
 
 const livePlayerStats = useMemo(() => {
   return loadPlayerStats();
