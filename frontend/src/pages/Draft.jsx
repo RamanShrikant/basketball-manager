@@ -5,7 +5,7 @@ import { getDraftYear } from "../utils/seasonContext.js";
 import HeadshotLayoutTransform from "../components/HeadshotLayoutTransform.jsx";
   import * as simEngine from "../api/simEnginePy.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
-import { applyDraftPickOwnershipToOrder, archiveCompletedDraftHistory, rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
+import { applyDraftPickOwnershipToOrder, archiveCompletedDraftHistory, finalizeResolvedDraftOrderAssets, rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
 import { recordCompletedDraftMoodEvents } from "../utils/offseasonMoodEvents.js";
 import {
   getDraftClassFingerprint,
@@ -1570,6 +1570,19 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
 
     const lottery = useMemo(() => readDraftLottery(seasonYear), [seasonYear]);
     const lotteryOrderLocked = isLotteryDraftOrderLocked(lottery);
+
+    // Repair older saves made before resolved-order ownership was canonicalized.
+    // This is idempotent and only changes leagueData when the locked order still
+    // has live swaps/ranged current-year assets behind it.
+    useEffect(() => {
+      const lockedOrder = lotteryOrderLocked ? lottery?.result?.fullDraftOrder || [] : [];
+      if (!workingLeagueData || !lockedOrder.length) return;
+      const finalized = finalizeResolvedDraftOrderAssets(workingLeagueData, lockedOrder, seasonYear);
+      if (finalized === workingLeagueData) return;
+      setWorkingLeagueData(finalized);
+      persistLeagueData(finalized, setLeagueData);
+    }, [lotteryOrderLocked, lottery, workingLeagueData, seasonYear, setLeagueData]);
+
     const draftOrder = useMemo(() => {
       const rawOrder = lotteryOrderLocked
         ? lottery?.result?.fullDraftOrder || []
@@ -2092,6 +2105,32 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
             <SmallPill label="Current Pick" value={completed ? "Done" : `#${pickNumber}`} />
             <SmallPill label="On Clock" value={completed ? "-" : currentTeamName} />
             <SmallPill label="Your Team" value={selectedTeamName || "-"} />
+          </div>
+
+          <div className="mb-2 flex shrink-0 items-center gap-3 rounded-xl border border-white/10 bg-neutral-900/85 px-4 py-2">
+            <span className="shrink-0 text-[10px] font-black uppercase tracking-[0.18em] text-orange-300">Your Picks</span>
+            <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+              {remainingUserPicks.length ? (
+                remainingUserPicks.map((pick, index) => {
+                  const number = Number(pick?.pick || index + 1);
+                  const original = pick?.originalTeamName || pick?.originalPickTeamName || pick?.naturalLotteryTeamName || "";
+                  const title = original && original !== selectedTeamName
+                    ? `#${number} — originally ${original}`
+                    : `#${number}`;
+                  return (
+                    <span
+                      key={`${number}-${original}-${index}`}
+                      title={title}
+                      className="rounded-lg border border-orange-500/25 bg-orange-500/10 px-2.5 py-1 text-xs font-extrabold text-orange-100"
+                    >
+                      #{number}
+                    </span>
+                  );
+                })
+              ) : (
+                <span className="text-xs font-semibold text-white/45">No remaining picks</span>
+              )}
+            </div>
           </div>
 
           {!completed && (

@@ -348,21 +348,10 @@ function getSalaryForPayrollYear(player, payrollSeasonYear) {
     : [];
 
   if (salaries.length) {
-    let startYear = Number(contract.startYear || payrollSeasonYear);
-    let idx = payrollSeasonYear - startYear;
-    const lastYear = startYear + salaries.length - 1;
-    const hasPayrollSeasonSlot = idx >= 0 && idx < salaries.length;
-
-    // SalaryTable treats one-year deals that were created in the prior offseason
-    // as active for the displayed payroll season. Keep trade screens aligned.
-    if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && !hasPayrollSeasonSlot) {
-      startYear = payrollSeasonYear;
-      idx = 0;
-    }
-
+    const startYear = Number(contract.startYear || payrollSeasonYear);
+    const idx = payrollSeasonYear - startYear;
     if (idx >= 0 && idx < salaries.length) return Number(salaries[idx] || 0);
-    if (payrollSeasonYear > lastYear) return Number(salaries[salaries.length - 1] || 0);
-    return Number(salaries[0] || 0);
+    return 0;
   }
 
   const fallback = Number(
@@ -397,6 +386,10 @@ function getRosterPayrollForYear(team, payrollSeasonYear) {
 }
 
 function getTradePayrollSeasonYear(leagueData) {
+  const context = getOffseasonTradeContext(leagueData || {});
+  if (context?.inOffseason && Number.isFinite(Number(context?.targetSeasonYear))) {
+    return Number(context.targetSeasonYear);
+  }
   return getContractSeasonYear(leagueData || {});
 }
 
@@ -410,16 +403,11 @@ function getContractYearsRemaining(player, leagueData) {
   if (!salaries.length) return 0;
 
   const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
-  let startYear = Number(contract.startYear || payrollSeasonYear);
+  const startYear = Number(contract.startYear || payrollSeasonYear);
   let idx = payrollSeasonYear - startYear;
-  const hasPayrollSeasonSlot = idx >= 0 && idx < salaries.length;
-  if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && !hasPayrollSeasonSlot) {
-    startYear = payrollSeasonYear;
-    idx = 0;
-  }
   if (!Number.isFinite(idx) || idx < 0) idx = 0;
-  if (idx >= salaries.length) idx = salaries.length - 1;
-  return Math.max(1, salaries.length - idx);
+  if (idx >= salaries.length || Number(salaries[idx] || 0) <= 0) return 0;
+  return Math.max(0, salaries.length - idx);
 }
 
 function getContractTotalRemaining(player, leagueData) {
@@ -430,15 +418,10 @@ function getContractTotalRemaining(player, leagueData) {
   if (!salaries.length) return getPlayerSalary(player, leagueData);
 
   const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
-  let startYear = Number(contract.startYear || payrollSeasonYear);
+  const startYear = Number(contract.startYear || payrollSeasonYear);
   let idx = payrollSeasonYear - startYear;
-  const hasPayrollSeasonSlot = idx >= 0 && idx < salaries.length;
-  if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && !hasPayrollSeasonSlot) {
-    startYear = payrollSeasonYear;
-    idx = 0;
-  }
   if (!Number.isFinite(idx) || idx < 0) idx = 0;
-  if (idx >= salaries.length) idx = salaries.length - 1;
+  if (idx >= salaries.length) return 0;
 
   return salaries.slice(idx).reduce((sum, value) => sum + Number(value || 0), 0);
 }

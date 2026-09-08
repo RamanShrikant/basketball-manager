@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
-import { applyDraftPickOwnershipToLotteryResult, applyDraftPickOwnershipToOrder } from "../utils/draftPicks.js";
+import { applyDraftPickOwnershipToLotteryResult, applyDraftPickOwnershipToOrder, finalizeResolvedDraftOrderAssets } from "../utils/draftPicks.js";
 import { getDraftYear } from "../utils/seasonContext.js";
 import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
 
@@ -920,7 +920,7 @@ export default function DraftLottery() {
         !resolvedLotteryState.isPreview
     );
 
-    const updatedLeague = {
+    let updatedLeague = {
       ...(leagueData || {}),
       draftState: {
         ...(leagueData?.draftState || {}),
@@ -930,6 +930,32 @@ export default function DraftLottery() {
         draftLotteryComplete: complete,
       },
     };
+
+    // Once both rounds are revealed, convert every current-year draft right into
+    // exact pick ownership and retire swap calculations for this draft. From this
+    // point forward #2 is a concrete asset; an old MIN/UTA swap can never re-run
+    // later and overwrite a draft-day trade of that slot.
+    if (complete && Array.isArray(resolvedLotteryState.result?.fullDraftOrder) && resolvedLotteryState.result.fullDraftOrder.length) {
+      updatedLeague = finalizeResolvedDraftOrderAssets(
+        updatedLeague,
+        resolvedLotteryState.result.fullDraftOrder,
+        seasonYear
+      );
+      const lockedResult = applyDraftPickOwnershipToLotteryResult(resolvedLotteryState.result, {
+        leagueData: updatedLeague,
+        seasonYear,
+      });
+      resolvedLotteryState.result = lockedResult;
+      updatedLeague = {
+        ...updatedLeague,
+        draftState: {
+          ...(updatedLeague.draftState || {}),
+          lottery: lockedResult,
+          draftOrder: lockedResult?.fullDraftOrder || [],
+          draftLotteryComplete: true,
+        },
+      };
+    }
 
     saveDraftLottery(resolvedLotteryState);
     persistLeagueData(updatedLeague, setLeagueData);

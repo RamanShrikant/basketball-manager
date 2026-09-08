@@ -26,30 +26,42 @@ const liveDraft = { ...preDraft, stage: 'live_draft' };
 const postDraftPreOptions = { ...preDraft, stage: 'post_draft', draftComplete: true };
 const afterOptions = { ...postDraftPreOptions, optionsComplete: true };
 
-const najiStyleExpiring = {
+const expiring = {
   name: 'Expiring Veteran',
-  contract: { startYear: 2026, salaryByYear: [9_000_000], option: null },
+  contract: { startYear: 2027, salaryByYear: [9_000_000], option: null },
 };
-const grayson = {
+const guaranteed = {
+  name: 'Guaranteed Veteran',
+  contract: { startYear: 2027, salaryByYear: [18_000_000, 19_000_000], option: null },
+};
+const playerOptionPending = {
   name: 'Player Option Veteran',
   contract: {
-    startYear: 2026,
+    startYear: 2027,
     salaryByYear: [18_125_000, 19_375_000],
     option: { type: 'player', yearIndices: [1], picked: null },
   },
 };
-const kon = {
+const teamOptionPending = {
   name: 'Team Option Rookie',
   contract: {
-    startYear: 2026,
+    startYear: 2027,
     salaryByYear: [10_516_560, 11_017_560, 13_937_214],
     option: { type: 'team', yearIndices: [1, 2], picked: null },
+  },
+};
+const exercisedTeamOption = {
+  ...teamOptionPending,
+  name: 'Exercised Team Option Rookie',
+  contract: {
+    ...teamOptionPending.contract,
+    option: { type: 'team', yearIndices: [1, 2], picked: { 1: true, 2: null } },
   },
 };
 const development = {
   name: 'Two Way Player',
   isTwoWay: true,
-  contract: { startYear: 2026, salaryByYear: [600_000] },
+  contract: { startYear: 2027, salaryByYear: [600_000, 650_000] },
 };
 const unsigned = {
   name: 'Unsigned Rookie',
@@ -57,45 +69,60 @@ const unsigned = {
   contract: null,
 };
 
-check('expiring roster player is tradeable before draft', () => {
-  const result = getTradePlayerEligibility(najiStyleExpiring, { tradeContext: preDraft });
-  assert.equal(result.eligible, true);
-  assert.equal(result.code, 'PRE_DRAFT_ROSTER_CONTRACT');
-  assert.equal(result.salary, 9_000_000);
-});
-
-check('expiring roster player is tradeable during live draft', () => {
-  assert.equal(getTradePlayerEligibility(najiStyleExpiring, { tradeContext: liveDraft }).eligible, true);
-});
-
-check('unresolved player option is tradeable before draft', () => {
-  const result = getTradePlayerEligibility(grayson, { tradeContext: preDraft });
-  assert.equal(result.eligible, true);
-  assert.equal(result.code, 'PRE_DRAFT_ROSTER_CONTRACT');
-  assert.equal(result.unresolvedOptionTransfers, true);
-});
-
-check('unresolved team option is tradeable before draft', () => {
-  const result = getTradePlayerEligibility(kon, { tradeContext: preDraft });
-  assert.equal(result.eligible, true);
-  assert.equal(result.code, 'PRE_DRAFT_ROSTER_CONTRACT');
-  assert.equal(result.unresolvedOptionTransfers, true);
-});
-
-check('same simple rule remains active until normal options processing', () => {
-  assert.equal(getTradePlayerEligibility(najiStyleExpiring, { tradeContext: postDraftPreOptions }).eligible, true);
-});
-
-check('after options processing an expired contract is no longer tradeable', () => {
-  const result = getTradePlayerEligibility(najiStyleExpiring, { tradeContext: afterOptions });
+check('expiring roster player is blocked before draft', () => {
+  const result = getTradePlayerEligibility(expiring, { tradeContext: preDraft });
   assert.equal(result.eligible, false);
   assert.equal(result.code, 'EXPIRING_CONTRACT');
 });
 
-check('after options processing an unresolved future team option uses normal option rules', () => {
-  const result = getTradePlayerEligibility(kon, { tradeContext: afterOptions });
+check('expiring roster player is blocked during live draft', () => {
+  const result = getTradePlayerEligibility(expiring, { tradeContext: liveDraft });
+  assert.equal(result.eligible, false);
+  assert.equal(result.code, 'EXPIRING_CONTRACT');
+});
+
+check('guaranteed upcoming salary is tradeable before draft', () => {
+  const result = getTradePlayerEligibility(guaranteed, { tradeContext: preDraft });
+  assert.equal(result.eligible, true);
+  assert.equal(result.code, 'GUARANTEED_NEXT_SEASON');
+  assert.equal(result.salary, 19_000_000);
+});
+
+check('unresolved player option is blocked before draft', () => {
+  const result = getTradePlayerEligibility(playerOptionPending, { tradeContext: preDraft });
+  assert.equal(result.eligible, false);
+  assert.equal(result.code, 'PENDING_PLAYER_OPTION');
+});
+
+check('unresolved team option is blocked before draft', () => {
+  const result = getTradePlayerEligibility(teamOptionPending, { tradeContext: preDraft });
   assert.equal(result.eligible, false);
   assert.equal(result.code, 'PENDING_TEAM_OPTION');
+});
+
+check('same guaranteed-upcoming-season rule remains active through pre-options offseason', () => {
+  const result = getTradePlayerEligibility(expiring, { tradeContext: postDraftPreOptions });
+  assert.equal(result.eligible, false);
+  assert.equal(result.code, 'EXPIRING_CONTRACT');
+});
+
+check('after options processing an expired contract remains blocked', () => {
+  const result = getTradePlayerEligibility(expiring, { tradeContext: afterOptions });
+  assert.equal(result.eligible, false);
+  assert.equal(result.code, 'EXPIRING_CONTRACT');
+});
+
+check('unresolved future team option remains blocked after options processing', () => {
+  const result = getTradePlayerEligibility(teamOptionPending, { tradeContext: afterOptions });
+  assert.equal(result.eligible, false);
+  assert.equal(result.code, 'PENDING_TEAM_OPTION');
+});
+
+check('exercised upcoming team option is tradeable at its option salary', () => {
+  const result = getTradePlayerEligibility(exercisedTeamOption, { tradeContext: afterOptions });
+  assert.equal(result.eligible, true);
+  assert.equal(result.code, 'GUARANTEED_NEXT_SEASON');
+  assert.equal(result.salary, 11_017_560);
 });
 
 check('two-way/development players remain blocked', () => {
@@ -111,7 +138,7 @@ check('unsigned rookies remain blocked', () => {
 });
 
 check('regular-season standard player eligibility is unchanged', () => {
-  const result = getTradePlayerEligibility(najiStyleExpiring, { inOffseason: false });
+  const result = getTradePlayerEligibility(expiring, { inOffseason: false });
   assert.equal(result.eligible, true);
   assert.equal(result.code, 'STANDARD_ROSTER');
 });
@@ -119,7 +146,7 @@ check('regular-season standard player eligibility is unchanged', () => {
 console.table(checks);
 const failures = checks.filter((row) => row.status !== 'PASS');
 if (failures.length) {
-  console.error(`${failures.length}/${checks.length} draft-day trade checks failed.`);
+  console.error(`${failures.length}/${checks.length} trade-player selector checks failed.`);
   process.exit(1);
 }
-console.log(`${checks.length}/${checks.length} draft-day trade checks passed.`);
+console.log(`${checks.length}/${checks.length} trade-player selector checks passed.`);

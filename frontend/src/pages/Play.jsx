@@ -12,6 +12,7 @@ import {
 const CUSTOM_DRAFT_CLASS_MODE_BY_YEAR_KEY = "bm_draft_class_mode_by_year_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
 const DEFAULT_DRAFT_CLASS_YEAR = 2027;
+const FUTURE_DRAFT_CLASS_YEARS = [2028, 2029, 2030, 2031, 2032, 2033, 2034, 2035];
 
 function safeJSON(raw, fallback = null) {
   try {
@@ -106,8 +107,11 @@ function clearDraftStateForYearIfNotStarted(seasonYear) {
 export default function Play() {
   const { setLeagueData } = useGame();
   const [fileName, setFileName] = useState("");
+  const [rosterMode, setRosterMode] = useState("default");
+  const [draft2027Mode, setDraft2027Mode] = useState("default");
+  const [startingGame, setStartingGame] = useState(false);
   const [error, setError] = useState("");
-  const [draftClassYear, setDraftClassYear] = useState(DEFAULT_DRAFT_CLASS_YEAR);
+  const [draftClassYear, setDraftClassYear] = useState(2028);
   const [draftClassStatus, setDraftClassStatus] = useState("");
   const [draftClassIndex, setDraftClassIndex] = useState(() =>
     readCustomDraftClassesIndex() || {}
@@ -123,7 +127,7 @@ export default function Play() {
 
   const loadedDraftClassYears = useMemo(() => {
     return Object.keys(draftClassIndex || {})
-      .filter((year) => Number.isFinite(Number(year)))
+      .filter((year) => Number.isFinite(Number(year)) && Number(year) > DEFAULT_DRAFT_CLASS_YEAR)
       .sort((a, b) => Number(a) - Number(b));
   }, [draftClassIndex]);
 
@@ -177,6 +181,7 @@ export default function Play() {
         console.log("GLOBAL leagueData updated:", window.leagueData);
 
         setFileName(file.name);
+        setRosterMode("custom");
         setError("");
       } catch (err) {
         setError("Invalid JSON format.");
@@ -186,7 +191,7 @@ export default function Play() {
     reader.readAsText(file);
   };
 
-  const handleDraftClassUpload = (e) => {
+  const handleDraftClassUpload = (e, forcedYear = null) => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
@@ -201,8 +206,9 @@ export default function Play() {
     reader.onload = (event) => {
       try {
         const parsed = JSON.parse(event.target.result);
-        const normalized = normalizeDraftClassForVault(parsed, draftClassYear, file.name);
-        const seasonYear = Number(normalized.seasonYear || draftClassYear || DEFAULT_DRAFT_CLASS_YEAR);
+        const fallbackYear = Number(forcedYear || draftClassYear || DEFAULT_DRAFT_CLASS_YEAR);
+        const normalized = normalizeDraftClassForVault(parsed, fallbackYear, file.name);
+        const seasonYear = Number(normalized.seasonYear || fallbackYear || DEFAULT_DRAFT_CLASS_YEAR);
         const key = String(seasonYear);
 
         writeCustomDraftClassForYear(seasonYear, normalized);
@@ -225,7 +231,8 @@ export default function Play() {
         saveDraftClassModes(nextModes);
         clearDraftStateForYearIfNotStarted(seasonYear);
 
-        setDraftClassYear(seasonYear);
+        setDraftClassYear(seasonYear === DEFAULT_DRAFT_CLASS_YEAR ? 2028 : seasonYear);
+        if (seasonYear === DEFAULT_DRAFT_CLASS_YEAR) setDraft2027Mode("custom");
         setDraftClassStatus(
           `Loaded ${normalized.draftClass.length} prospects for the ${seasonYear} draft class. This year is set to custom.`
         );
@@ -256,12 +263,67 @@ export default function Play() {
     setDraftClassStatus(`Cleared the ${seasonYear} custom draft class. This year will auto-generate rookies.`);
   };
 
-  const handleContinue = () => {
-    if (!fileName) {
-      setError("Please upload a league file first!");
-      return;
+  const loadBundledJson = async (path) => {
+    const response = await fetch(path, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Could not load built-in game data (${response.status}).`);
+    return response.json();
+  };
+
+  const installDraftClass = (payload, sourceName) => {
+    const normalized = normalizeDraftClassForVault(payload, DEFAULT_DRAFT_CLASS_YEAR, sourceName);
+    const seasonYear = Number(normalized.seasonYear || DEFAULT_DRAFT_CLASS_YEAR);
+    const key = String(seasonYear);
+    writeCustomDraftClassForYear(seasonYear, normalized);
+
+    const nextIndex = {
+      ...(draftClassIndex || {}),
+      [key]: {
+        seasonYear,
+        count: normalized.draftClass.length,
+        fileName: sourceName,
+        importedAt: normalized.importedAt,
+      },
+    };
+    saveDraftClassIndex(nextIndex);
+
+    const nextModes = { ...(draftClassModes || {}), [key]: "custom" };
+    saveDraftClassModes(nextModes);
+    clearDraftStateForYearIfNotStarted(seasonYear);
+    return normalized;
+  };
+
+  const handleContinue = async () => {
+    if (startingGame) return;
+    setStartingGame(true);
+    setError("");
+
+    try {
+      if (rosterMode === "default") {
+        const parsed = await loadBundledJson("/defaults/default_roster.json");
+        setLeagueData(parsed);
+        saveLeagueDataInBackground(parsed);
+        window.leagueData = parsed;
+      } else if (!fileName) {
+        throw new Error("Upload your custom roster JSON first.");
+      }
+
+      if (draft2027Mode === "default") {
+        const payload = await loadBundledJson("/defaults/default_2027_draft.json");
+        installDraftClass(payload, "Built-in 2027 Draft");
+      } else if (draft2027Mode === "auto") {
+        setDraftClassModeForYear(DEFAULT_DRAFT_CLASS_YEAR, "auto");
+      } else {
+        const summary = draftClassIndex?.[String(DEFAULT_DRAFT_CLASS_YEAR)];
+        if (!summary) throw new Error("Upload your custom 2027 draft JSON first.");
+        setDraftClassModeForYear(DEFAULT_DRAFT_CLASS_YEAR, "custom");
+      }
+
+      navigate("/team-selector");
+    } catch (err) {
+      setError(err?.message || "Could not start the game.");
+    } finally {
+      setStartingGame(false);
     }
-    navigate("/team-selector");
   };
 
   return (
@@ -269,34 +331,109 @@ export default function Play() {
       <h1 className="text-4xl font-bold mb-8 text-orange-500">NBA MyLeague</h1>
 
       <div className="flex flex-col items-center gap-4 bg-neutral-800 p-8 rounded-2xl shadow-lg w-full max-w-[460px]">
-        <label
-          htmlFor="fileUpload"
-          className="cursor-pointer px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
-        >
-          Upload League JSON
-        </label>
-
-        <input
-          id="fileUpload"
-          type="file"
-          accept=".json,application/json"
-          className="hidden"
-          onChange={handleFileUpload}
-        />
-
-        {fileName && (
-          <p className="text-green-400 text-sm mt-2">
-            ✅ Loaded: <span className="font-semibold">{fileName}</span>
+        <div className="w-full">
+          <p className="mb-2 text-xs font-black uppercase tracking-[0.16em] text-orange-300">Starting Roster</p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => { setRosterMode("default"); setError(""); }}
+              className={`rounded-xl border px-3 py-3 text-sm font-bold transition ${
+                rosterMode === "default"
+                  ? "border-orange-500 bg-orange-500/15 text-orange-100"
+                  : "border-white/10 bg-neutral-900 text-white/65 hover:border-white/20"
+              }`}
+            >
+              Default Roster
+            </button>
+            <label
+              htmlFor="fileUpload"
+              className={`cursor-pointer rounded-xl border px-3 py-3 text-center text-sm font-bold transition ${
+                rosterMode === "custom"
+                  ? "border-orange-500 bg-orange-500/15 text-orange-100"
+                  : "border-white/10 bg-neutral-900 text-white/65 hover:border-white/20"
+              }`}
+            >
+              Upload Custom
+            </label>
+          </div>
+          <input id="fileUpload" type="file" accept=".json,application/json" className="hidden" onChange={handleFileUpload} />
+          <p className="mt-2 text-xs text-white/45">
+            {rosterMode === "default" ? "Uses the built-in starting NBA roster." : fileName ? `Loaded: ${fileName}` : "Choose a roster JSON file."}
           </p>
-        )}
-        {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
+        </div>
+
+        <div className="w-full rounded-2xl border border-orange-500/20 bg-neutral-900/80 p-4">
+          <p className="mb-2 text-xs font-black uppercase tracking-[0.16em] text-orange-300">2027 Draft Class</p>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setDraft2027Mode("default");
+                setDraftClassYear(2028);
+                setDraftClassStatus("The 2027 draft will use the built-in class.");
+                setError("");
+              }}
+              className={`rounded-xl border px-3 py-3 text-sm font-bold transition ${
+                draft2027Mode === "default"
+                  ? "border-orange-500 bg-orange-500/15 text-orange-100"
+                  : "border-white/10 bg-neutral-800 text-white/65 hover:border-white/20"
+              }`}
+            >
+              Default
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDraft2027Mode("auto");
+                setDraftClassYear(2028);
+                setDraftClassModeForYear(DEFAULT_DRAFT_CLASS_YEAR, "auto");
+                setError("");
+              }}
+              className={`rounded-xl border px-3 py-3 text-sm font-bold transition ${
+                draft2027Mode === "auto"
+                  ? "border-orange-500 bg-orange-500/15 text-orange-100"
+                  : "border-white/10 bg-neutral-800 text-white/65 hover:border-white/20"
+              }`}
+            >
+              Auto
+            </button>
+            <label
+              htmlFor="draftClassUpload2027"
+              className={`cursor-pointer rounded-xl border px-3 py-3 text-center text-sm font-bold transition ${
+                draft2027Mode === "custom"
+                  ? "border-orange-500 bg-orange-500/15 text-orange-100"
+                  : "border-white/10 bg-neutral-800 text-white/65 hover:border-white/20"
+              }`}
+            >
+              Upload
+            </label>
+          </div>
+          <input
+            id="draftClassUpload2027"
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={(event) => { setDraftClassYear(DEFAULT_DRAFT_CLASS_YEAR); handleDraftClassUpload(event, DEFAULT_DRAFT_CLASS_YEAR); }}
+          />
+          <p className="mt-2 text-xs text-white/45">
+            {draft2027Mode === "default"
+              ? "Uses the built-in 2027 class."
+              : draft2027Mode === "auto"
+              ? "Auto-generates the 2027 class when the draft starts."
+              : draftClassIndex?.[String(DEFAULT_DRAFT_CLASS_YEAR)]
+              ? `Loaded ${draftClassIndex[String(DEFAULT_DRAFT_CLASS_YEAR)]?.count || 0} prospects.`
+              : "Choose a 2027 draft JSON file."}
+          </p>
+        </div>
+
+        {error && <p className="w-full rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</p>}
 
         <div className="mt-4 w-full rounded-2xl border border-purple-500/30 bg-neutral-900/80 p-4">
           <div className="flex items-center justify-between gap-3 mb-3">
             <div>
-              <h2 className="text-lg font-bold text-purple-300">Draft Classes</h2>
+              <h2 className="text-lg font-bold text-purple-300">Future Draft Classes</h2>
               <p className="text-xs text-gray-400 mt-1">
-                Optional. Upload custom classes by year. Missing years still auto-generate.
+                Optional: customize 2028 and later. Any future year without a file auto-generates.
               </p>
             </div>
           </div>
@@ -307,7 +444,7 @@ export default function Play() {
               onChange={(e) => setDraftClassYear(Number(e.target.value))}
               className="rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm"
             >
-              {[2027, 2028, 2029, 2030, 2031, 2032, 2033, 2034, 2035].map((year) => (
+              {FUTURE_DRAFT_CLASS_YEARS.map((year) => (
                 <option key={year} value={year}>
                   Class of {year}
                 </option>
@@ -395,14 +532,15 @@ export default function Play() {
 
         <button
           onClick={handleContinue}
-          className="mt-6 px-8 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold transition"
+          disabled={startingGame}
+          className="mt-6 px-8 py-3 bg-orange-600 hover:bg-orange-500 disabled:bg-neutral-700 disabled:text-white/45 rounded-lg font-semibold transition"
         >
-          Continue
+          {startingGame ? "Starting..." : "Continue"}
         </button>
       </div>
 
       <p className="mt-10 text-sm text-gray-400 italic">
-        Tip: Upload your 2026-27 league JSON, then optionally attach a 2027+ custom draft class.
+        Choose the defaults for a quick start, or replace either file with your own JSON.
       </p>
     </div>
   );

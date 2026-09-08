@@ -95,22 +95,22 @@ const TRADE_FINDER_SCROLLBAR_TUNING = {
 const TRADE_FINDER_HEADSHOT_TUNING = {
   packageRows: {
     // Compact enough for the 3-column finder, but still keeps the 2K-style card look.
-    boxWidth: 126,
-    size: 90,
+    boxWidth: 96,
+    size: 76,
     imageHeight: 72,
-    x: 8,
+    x: 4,
     y: 0,
-    leftPad: 124,
+    leftPad: 88,
     opacity: 1,
   },
   offerRows: {
     // Keep right-side offer pills at the same scale as the left/middle pills.
-    boxWidth: 126,
-    size: 90,
+    boxWidth: 96,
+    size: 76,
     imageHeight: 72,
-    x: 8,
+    x: 4,
     y: 0,
-    leftPad: 124,
+    leftPad: 88,
     opacity: 1,
   },
 };
@@ -122,13 +122,13 @@ const TRADE_FINDER_RATING_RING_TUNING = {
   packageRows: {
     // Change `size` to shrink/grow the WHOLE ring.
     // The OVR/POT text now auto-scales with this number.
-    size: 62,
+    size: 54,
     referenceSize: 70,
     autoScaleText: true,
     textScale: 1,
-    x: -6,
+    x: -2,
     y: 0,
-    gap: 10,
+    gap: 8,
     ovrLabelSize: 8,
     ovrLabelX: 0,
     ovrLabelY: 0,
@@ -144,13 +144,13 @@ const TRADE_FINDER_RATING_RING_TUNING = {
   },
   offerRows: {
     // Same exact scale as the left/middle package rows.
-    size: 62,
+    size: 54,
     referenceSize: 70,
     autoScaleText: true,
     textScale: 1,
-    x: -6,
+    x: -2,
     y: 0,
-    gap: 10,
+    gap: 8,
     ovrLabelSize: 8,
     ovrLabelX: 0,
     ovrLabelY: 0,
@@ -170,9 +170,9 @@ const TRADE_FINDER_RATING_RING_TUNING = {
 // Use these when the headshot/ring/text spacing needs tiny 2K-style tuning.
 const TRADE_FINDER_PLAYER_ROW_TUNING = {
   packageRows: {
-    rowMinHeight: 88,
-    rowPaddingX: 14,
-    rowPaddingY: 12,
+    rowMinHeight: 92,
+    rowPaddingX: 12,
+    rowPaddingY: 10,
     rowRadius: 16,
 
     contentX: 0,
@@ -209,9 +209,9 @@ const TRADE_FINDER_PLAYER_ROW_TUNING = {
   },
   offerRows: {
     // Right-side offer player pills match the left/middle package player pill style.
-    rowMinHeight: 88,
-    rowPaddingX: 14,
-    rowPaddingY: 12,
+    rowMinHeight: 92,
+    rowPaddingX: 12,
+    rowPaddingY: 10,
     rowRadius: 16,
 
     contentX: 0,
@@ -566,6 +566,10 @@ function getCurrentSeasonYear(leagueData) {
 }
 
 function getTradePayrollSeasonYear(leagueData) {
+  const context = getOffseasonTradeContext(leagueData || {});
+  if (context?.inOffseason && Number.isFinite(Number(context?.targetSeasonYear))) {
+    return Number(context.targetSeasonYear);
+  }
   return getContractSeasonYear(leagueData || {});
 }
 
@@ -577,19 +581,10 @@ function getPlayerSalary(player, leagueData) {
   const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
 
   if (salaries.length) {
-    let startYear = Number(contract.startYear || payrollSeasonYear);
-    let idx = payrollSeasonYear - startYear;
-    const lastYear = startYear + salaries.length - 1;
-    const hasPayrollSeasonSlot = idx >= 0 && idx < salaries.length;
-
-    if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && !hasPayrollSeasonSlot) {
-      startYear = payrollSeasonYear;
-      idx = 0;
-    }
-
+    const startYear = Number(contract.startYear || payrollSeasonYear);
+    const idx = payrollSeasonYear - startYear;
     if (idx >= 0 && idx < salaries.length) return Number(salaries[idx] || 0);
-    if (payrollSeasonYear > lastYear) return Number(salaries[salaries.length - 1] || 0);
-    return Number(salaries[0] || 0);
+    return 0;
   }
 
   const fallback = Number(
@@ -622,13 +617,8 @@ function getPlayerContractYearsRemaining(player, leagueData) {
   if (!salaries.length) return 0;
 
   const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
-  let startYear = Number(contract.startYear || payrollSeasonYear);
+  const startYear = Number(contract.startYear || payrollSeasonYear);
   let index = payrollSeasonYear - startYear;
-
-  if (salaries.length === 1 && startYear === payrollSeasonYear - 1 && (index < 0 || index >= salaries.length)) {
-    startYear = payrollSeasonYear;
-    index = 0;
-  }
 
   if (!Number.isFinite(index)) index = 0;
   if (index < 0) index = 0;
@@ -661,6 +651,42 @@ function formatPick(pick) {
   const pickText = pickNumber ? ` #${pickNumber}` : "";
   return `${pick?.year || "Future"} ${round}${pickText} - ${original}`;
 }
+function getTradeFinderResolvedPickNumber(pick = {}) {
+  const value = Number(
+    pick?.pickNumber ??
+      pick?.overallPick ??
+      pick?.resolvedPickNumber ??
+      pick?.draftPickNumber ??
+      pick?.slot ??
+      0
+  );
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function compareTradeFinderDraftPicks(a = {}, b = {}) {
+  const aYear = Number(a?.year || a?.seasonYear || 9999);
+  const bYear = Number(b?.year || b?.seasonYear || 9999);
+  const aRound = Number(a?.round || a?.rnd || 1);
+  const bRound = Number(b?.round || b?.rnd || 1);
+  const aPickNumber = getTradeFinderResolvedPickNumber(a);
+  const bPickNumber = getTradeFinderResolvedPickNumber(b);
+  const aResolved = isResolvedDraftPickAsset(a) || aPickNumber > 0;
+  const bResolved = isResolvedDraftPickAsset(b) || bPickNumber > 0;
+
+  if (aResolved || bResolved) {
+    return (
+      aYear - bYear ||
+      Number(!aResolved) - Number(!bResolved) ||
+      aPickNumber - bPickNumber ||
+      aRound - bRound ||
+      String(a?.originalTeam || a?.originalTeamName || "").localeCompare(String(b?.originalTeam || b?.originalTeamName || "")) ||
+      String(a?.ownerTeam || a?.owner || "").localeCompare(String(b?.ownerTeam || b?.owner || ""))
+    );
+  }
+
+  return sortDraftPickAssets(a, b);
+}
+
 
 function pickProtectionLabel(pick) {
   if (isResolvedDraftPickAsset(pick)) return "Resolved";
@@ -1075,7 +1101,7 @@ function collectTradeablePicksForSingleTeamForFinder(leagueData, teamName = "", 
   const seen = new Set();
   return [...resolvedPicks, ...futurePicks]
     .filter((pick) => normalizeTeamName(pick.ownerTeam || pick.owner || pick.currentOwnerTeamName || "") === ownerKey)
-    .sort(sortDraftPickAssets)
+    .sort(compareTradeFinderDraftPicks)
     .filter((pick) => {
       const key = pickKey(pick);
       if (seen.has(key)) return false;
@@ -2078,7 +2104,7 @@ function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagu
             style={{ transform: `translate(${rowT.textBlockX || 0}px, ${rowT.textBlockY || 0}px)` }}
           >
             <div
-              className="truncate font-black text-white"
+              className="whitespace-normal break-words font-black leading-tight text-white"
               style={{
                 fontSize: rowT.nameSize,
                 transform: `translate(${rowT.nameX || 0}px, ${rowT.nameY || 0}px)`,
@@ -2277,7 +2303,7 @@ function OfferAssetLine({ item, team, leagueData, standingByTeam, currentDate = 
               style={{ transform: `translate(${rowT.textBlockX || 0}px, ${rowT.textBlockY || 0}px)` }}
             >
               <div
-                className="truncate font-black text-white"
+                className="whitespace-normal break-words font-black leading-tight text-white"
                 style={{
                   fontSize: rowT.nameSize,
                   transform: `translate(${rowT.nameX || 0}px, ${rowT.nameY || 0}px)`,
@@ -2592,6 +2618,12 @@ const standardPatienceBlocked = Boolean(
   const playerAssets = useMemo(
     () => selectedTeamPlayers
       .map((player) => ({ type: "player", player, key: `player:${playerKey(player)}` }))
+      .filter((asset) => getUserTradePlayerEligibility({
+        leagueData,
+        teamName: packageTeam?.name || packageTeam?.teamName || "",
+        player: asset.player,
+        currentDate: userTradeCurrentDate,
+      })?.ok !== false)
       .sort((a, b) => {
         const aOvr = Number(a.player?.overall || 0);
         const bOvr = Number(b.player?.overall || 0);
@@ -2601,7 +2633,7 @@ const standardPatienceBlocked = Boolean(
         if (aPot !== bPot) return bPot - aPot;
         return playerNameOf(a.player).localeCompare(playerNameOf(b.player));
       }),
-    [selectedTeamPlayers]
+    [selectedTeamPlayers, leagueData, packageTeam, userTradeCurrentDate]
   );
 
   const pickAssets = useMemo(
@@ -2615,6 +2647,8 @@ const standardPatienceBlocked = Boolean(
     () => allAssets.filter((asset) => selectedKeySet.has(asset.key)),
     [allAssets, selectedKeySet]
   );
+  const hiddenPlayerAssetCount = Math.max(0, selectedTeamPlayers.length - playerAssets.length);
+
   const availablePlayerAssets = useMemo(
     () => playerAssets.filter((asset) => !selectedKeySet.has(asset.key)),
     [playerAssets, selectedKeySet]
@@ -2721,7 +2755,7 @@ const standardPatienceBlocked = Boolean(
   }, [selectedAssetKeys]);
   const offers = useMemo(() => {
     if (!searched) return [];
-    return (pythonOffers || []).filter((offer) => {
+    const filtered = (pythonOffers || []).filter((offer) => {
       const offerTeamName = isReverseFinder
         ? packageTeamName
         : offer?.team?.name || offer?.team?.teamName || offer?.teamName || "";
@@ -2729,6 +2763,12 @@ const standardPatienceBlocked = Boolean(
       const rows = [...(offer?.offer || []), ...(offer?.targetItems || [])];
       return !rows.some((item) => item?.type === "pick" && isResolvedPickConsumed(item.pick || {}, leagueData));
     });
+    if (isReverseFinder) return filtered;
+    return [...filtered].sort((a, b) =>
+      String(a?.team?.name || a?.team?.teamName || a?.teamName || "").localeCompare(
+        String(b?.team?.name || b?.team?.teamName || b?.teamName || "")
+      )
+    );
   }, [searched, pythonOffers, leagueData, liveDraftProgressSignature, isReverseFinder, packageTeamName, blockedPatienceTeamNames]);
 
   const isPackageFull = selectedItems.length >= MAX_TRADE_FINDER_PACKAGE_ASSETS;
@@ -3261,7 +3301,7 @@ const standardPatienceBlocked = Boolean(
             </button>
           </div>
 
-          <div className="grid min-h-0 gap-5 xl:grid-cols-3">
+          <div className="grid min-h-0 gap-4 xl:grid-cols-3">
             <div className="flex min-h-0 flex-col overflow-hidden rounded-[24px] border border-white/10 bg-neutral-950/85 shadow-2xl">
               <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-orange-600/20 to-black px-4 py-4">
                 <div className="flex items-center gap-3">
@@ -3283,13 +3323,11 @@ const standardPatienceBlocked = Boolean(
                     )}
                     <div className="min-w-0">
                       <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-200">
-                        {isReverseFinder ? "Browse Target" : "Browse Assets"}
+                        {isReverseFinder ? "Target Team" : "Your Assets"}
                       </div>
                       <div className="mt-0.5 truncate text-xl font-black text-white">{packageTeam?.name}</div>
                       <div className="mt-1 text-[10px] font-black uppercase tracking-[0.14em] text-neutral-500">
                         {tradeFinderStandingLabel(standingByTeam.get(normalizeTeamName(tradeFinderTeamName(packageTeam))))}
-                        <span className="text-neutral-700"> • </span>
-                        <span className="text-neutral-600">Team {packageTeamIndex + 1} of {teams.length}</span>
                       </div>
                     </div>
                   </div>
@@ -3306,12 +3344,12 @@ const standardPatienceBlocked = Boolean(
                 </div>
               </div>
 
-              <div className="tradeFinderScroller grid max-h-[70vh] min-h-0 gap-3 overflow-y-auto p-4">
+              <div className="tradeFinderScroller grid max-h-[calc(100vh-185px)] min-h-0 gap-3 overflow-y-auto px-4 pb-20 pt-4">
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Players</div>
                     <div className="text-[10px] font-black uppercase tracking-[0.14em] text-neutral-600">
-                      {availablePlayerAssets.length} left
+                      {availablePlayerAssets.length} left{hiddenPlayerAssetCount ? ` • ${hiddenPlayerAssetCount} ineligible hidden` : ""}
                     </div>
                   </div>
                   <div className="grid gap-2">
@@ -3390,9 +3428,7 @@ const standardPatienceBlocked = Boolean(
                     <div className="mt-0.5 truncate text-xl font-black text-white">
                       {selectedItems.length ? `${selectedItems.length} asset${selectedItems.length === 1 ? "" : "s"}` : "Build Package"}
                     </div>
-                    <div className="mt-1 text-xs font-bold text-orange-100/70">
-                      Click remove to send assets back left
-                    </div>
+
                   </div>
                   <div className="rounded-xl border border-orange-300/25 bg-black/35 px-3 py-2 text-xs font-black text-orange-100">
                     {selectedItems.length} / {MAX_TRADE_FINDER_PACKAGE_ASSETS}
@@ -3400,7 +3436,7 @@ const standardPatienceBlocked = Boolean(
                 </div>
               </div>
 
-              <div className="tradeFinderScroller max-h-[70vh] min-h-0 flex-1 overflow-y-auto p-4">
+              <div className="tradeFinderScroller max-h-[calc(100vh-185px)] min-h-0 flex-1 overflow-y-auto px-4 pb-20 pt-4">
                 {selectedPackageAssets.length ? (
                   <div className="grid gap-3">
                     {selectedPackageAssets.map((asset) => (
@@ -3428,7 +3464,7 @@ const standardPatienceBlocked = Boolean(
                   </div>
                 ) : (
                   <div className="rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-bold leading-6 text-neutral-400">
-                    Select players or picks from the left column. Your package will stay here while you search offers on the right.
+                    Add players or picks from the left.
                   </div>
                 )}
               </div>
@@ -3439,7 +3475,7 @@ const standardPatienceBlocked = Boolean(
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">
-                      {isReverseFinder ? "CPU Asking Prices" : "Legal CPU Offers"}
+                      {isReverseFinder ? "Asking Prices" : "Offers"}
                     </div>
                     <div className="mt-0.5 truncate text-2xl font-black text-white">
                       {isReverseFinder
@@ -3448,8 +3484,10 @@ const standardPatienceBlocked = Boolean(
                     </div>
                     <div className="mt-1 text-xs font-bold text-neutral-500">
                       {isReverseFinder
-                        ? `Searches ${selectedTeam?.name} assets • 0–5 distinct asking-price packages`
-                        : `One legal offer max per CPU team • Teams available: ${standardSearchableCpuCount}${blockedPatienceCount ? ` • ${blockedPatienceCount} not taking calls` : ""}`}
+                        ? `What it takes to get this package`
+                        : blockedPatienceCount
+                          ? `${blockedPatienceCount} team${blockedPatienceCount === 1 ? " is" : "s are"} not taking calls`
+                          : "Compare offers from around the league"}
                     </div>
                   </div>
 
@@ -3476,7 +3514,7 @@ const standardPatienceBlocked = Boolean(
                 </div>
               </div>
 
-              <div className="tradeFinderScroller max-h-[70vh] min-h-0 flex-1 overflow-y-auto p-4">
+              <div className="tradeFinderScroller max-h-[calc(100vh-185px)] min-h-0 flex-1 overflow-y-auto px-4 pb-20 pt-4">
                 {selectedItems.length > 0 && selectedPackageValidation.ok === false && (
                   <div className="mb-3 rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm font-bold leading-6 text-red-100">
                     {selectedPackageValidation.reason || "This package contains an asset that cannot currently be traded."}
@@ -3499,7 +3537,7 @@ const standardPatienceBlocked = Boolean(
                   <div className="rounded-2xl border border-orange-400/25 bg-orange-500/10 p-4 text-sm font-bold leading-6 text-orange-100">
                     {isReverseFinder
                       ? `Build the ${packageTeam?.name} target package in the middle, then search for asking prices from ${selectedTeam?.name}.`
-                      : "Build your package in the middle, then search for legal CPU offers back."}
+                      : "Add the assets you want to move, then search offers."}
                   </div>
                 )}
 
@@ -3516,7 +3554,7 @@ const standardPatienceBlocked = Boolean(
                         ? "Stopping search after the current CPU evaluation finishes..."
                         : isReverseFinder
                           ? `${packageTeam?.name} is checking distinct asking-price packages from ${selectedTeam?.name}...`
-                          : "CPU teams are building one legal offer each..."}
+                          : "Checking offers around the league..."}
                     </div>
                     {offerSearchProgress && (
                       <div className="mt-3 rounded-xl border border-orange-300/20 bg-black/25 px-3 py-2 text-xs text-orange-50">

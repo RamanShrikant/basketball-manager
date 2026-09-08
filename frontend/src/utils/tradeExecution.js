@@ -8,16 +8,25 @@ import {
   projectStandardRosterCount,
 } from "./rosterRules.js";
 import {
+  auditDraftPickIntegrity,
   buildTradeMachineSwapAssets,
+  canCreateSwapWithPick,
+  getDraftPickConflictKey,
+  getDraftPickEncumbranceReason,
+  getResolvedDraftPickNumber,
   getTradeablePickOwnedRange,
+  formatResolvedDraftPickLabel,
+  isResolvedDraftPickAsset,
   makeTradeGeneratedDraftPickId,
   normalizeDraftPickAsset,
   normalizeTeamName,
   protectionDisplayForOwnedRange,
+  removeDirectPickRowsConsumedBySwap,
   transferResolvedDraftPickOwnershipAsset,
   validateCustomPickProtection,
 } from "./draftPicks.js";
 import { getContractSeasonYear } from "./seasonContext.js";
+import { getOffseasonTradeContext } from "./offseasonTradeContext.js";
 import {
   getUserTradeCurrentDate,
   getUserTradeRuleSettings,
@@ -378,6 +387,10 @@ function getRosterPayrollForYear(team, payrollSeasonYear) {
 }
 
 function getTradePayrollSeasonYear(leagueData) {
+  const context = getOffseasonTradeContext(leagueData || {});
+  if (context?.inOffseason && Number.isFinite(Number(context?.targetSeasonYear))) {
+    return Number(context.targetSeasonYear);
+  }
   return getContractSeasonYear(leagueData || {});
 }
 
@@ -1478,6 +1491,24 @@ function transferSwapDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
     return { ok: false, reason: `${toTeamName} no longer owns ${formatPick(swapPick)}.` };
   }
 
+  if (!canCreateSwapWithPick(normalizedSource)) {
+    return { ok: false, reason: `${formatPick(normalizedSource)} cannot be used in a new swap because it is not a full unprotected normal pick.` };
+  }
+  if (!canCreateSwapWithPick(normalizedSwap)) {
+    return { ok: false, reason: `${formatPick(normalizedSwap)} cannot be used in a new swap because it is not a full unprotected normal pick.` };
+  }
+
+  const sourceConflictKey = getDraftPickConflictKey(normalizedSource, nextLeague);
+  const swapConflictKey = getDraftPickConflictKey(normalizedSwap, nextLeague);
+  if (!sourceConflictKey || !swapConflictKey || sourceConflictKey === swapConflictKey) {
+    return { ok: false, reason: "A swap must use two different original picks in the same year and round." };
+  }
+
+  const sourceEncumbrance = getDraftPickEncumbranceReason(normalizedSource, rows, nextLeague);
+  if (sourceEncumbrance) return { ok: false, reason: sourceEncumbrance };
+  const swapEncumbrance = getDraftPickEncumbranceReason(normalizedSwap, rows, nextLeague);
+  if (swapEncumbrance) return { ok: false, reason: swapEncumbrance };
+
   const tradeStamp = {
     fromTeam: fromTeamName,
     toTeam: toTeamName,
@@ -1497,9 +1528,18 @@ function transferSwapDraftPick(nextLeague, fromTeamName, toTeamName, pickItem) {
     tradeStamp,
   });
 
+  // A new swap replaces the two direct full-pick rows with the paired swap
+  // entitlements. Leaving the direct rows alive creates duplicate ownership
+  // (for example MIA 2033 directly owned plus MIA/TOR Swap Best).
+  const cleanedRows = removeDirectPickRowsConsumedBySwap(rows, normalizedSource, normalizedSwap, nextLeague);
+  rows.splice(0, rows.length, ...cleanedRows);
+
   const existingIds = new Set(rows.map((row) => String(row.id || "")));
   for (const asset of swapAssets) {
-    if (!existingIds.has(String(asset.id || ""))) rows.push(asset);
+    if (!existingIds.has(String(asset.id || ""))) {
+      rows.push(asset);
+      existingIds.add(String(asset.id || ""));
+    }
   }
 
   return {
@@ -1969,19 +2009,26 @@ function stripAcceptedReasonPrefix(text = "") {
     .replace(/^accepted in [^:]+ mode because\s+/i, "");
 }
 
+function isInternalEvaluatorReason(text = "") {
+  return /(team-impact score|adjusted threshold|weighted team-impact|evaluation threshold|score clears|cpu-to-cpu .* mode|net draft-pick value for cpu|clean draft-asset upgrade|draft-asset upgrade for the cpu)/i.test(
+    normalizeTradeReasonText(text)
+  );
+}
+
 function firstEvaluationReason(evaluation = {}, fallback = "") {
   const message = normalizeTradeReasonText(evaluation?.message);
-  if (message && !isGenericTradeDecisionMessage(message)) return message;
+  if (message && !isGenericTradeDecisionMessage(message) && !isInternalEvaluatorReason(message)) return message;
 
   const reasons = Array.isArray(evaluation?.reasons)
     ? evaluation.reasons.map(normalizeTradeReasonText).filter(Boolean)
     : [];
 
-  const acceptedReason = reasons.find((reason) => /^accepted (because|in)\b/i.test(reason));
+  const acceptedReason = reasons.find((reason) => /^accepted (because|in)\b/i.test(reason) && !isInternalEvaluatorReason(reason));
   if (acceptedReason) return stripAcceptedReasonPrefix(acceptedReason);
 
   const strategicReason = reasons.find((reason) =>
-    /(rotation upgrade|future\/upside|draft-pick value|team-impact score|no draft-asset downside|contract downside|clear reason to trade)/i.test(reason)
+    !isInternalEvaluatorReason(reason) &&
+    /(rotation upgrade|future\/upside|draft-pick value|no draft-asset downside|contract downside|clear reason to trade)/i.test(reason)
   );
   if (strategicReason) return stripAcceptedReasonPrefix(strategicReason);
 
@@ -1992,7 +2039,17 @@ function summarizeAssetsForReason(items = []) {
   const labels = (items || [])
     .map((item) => {
       if (item?.type === "player") return playerNameOf(item.player);
-      if (item?.type === "pick") return item.displayLabel || `${formatPick(item.pick)} (${item.protection || item.pick?.protection || "Unprotected"})`;
+      if (item?.type === "pick") {
+        const pick = item.pick || {};
+        const pickNumber = getResolvedDraftPickNumber(pick);
+        const protection = item.protection || pick.displayProtection || pick.protections || pick.protection || "Unprotected";
+        const resolved = isResolvedDraftPickAsset(pick) || pickNumber > 0 || String(protection).toLowerCase() === "resolved";
+        if (resolved) {
+          const originalTeam = pick?.originalTeam || pick?.originalTeamName || pick?.original || pick?.team || "";
+          return `${formatResolvedDraftPickLabel({ ...pick, pickNumber })}${originalTeam ? ` — originally ${originalTeam}` : ""}`;
+        }
+        return item.displayLabel || item.label || `${formatPick(pick)} (${protection})`;
+      }
       return "";
     })
     .filter(Boolean);
@@ -2025,16 +2082,26 @@ function summarizeDetailedTradeItems(items = [], fromTeamName = "", leagueData =
       if (item?.type === "pick" && item.pick) {
         const pick = item.pick || {};
         const protection = item.protection || pick.displayProtection || pick.protections || pick.protection || "Unprotected";
+        const originalTeam = pick?.originalTeam || pick?.originalTeamName || pick?.original || pick?.team || "";
+        const pickNumber = getResolvedDraftPickNumber(pick);
+        const resolved = isResolvedDraftPickAsset(pick) || pickNumber > 0 || String(protection).toLowerCase() === "resolved";
+        const exactLabel = resolved
+          ? `${formatResolvedDraftPickLabel({ ...pick, pickNumber })}${originalTeam ? ` — originally ${originalTeam}` : ""}`
+          : (item.displayLabel || item.label || `${formatPick(pick)} (${protection})`);
         return {
           type: "pick",
-          label: item.displayLabel || `${formatPick(pick)} (${protection})`,
-          displayLabel: item.displayLabel || `${formatPick(pick)} (${protection})`,
+          label: exactLabel,
+          displayLabel: exactLabel,
           pickId: pick?.id || pick?.pickId || null,
           teamName: fromTeamName,
           year: pick?.year || pick?.season || pick?.seasonYear || null,
           round: pick?.round || pick?.rnd || null,
-          originalTeam: pick?.originalTeam || pick?.originalTeamName || pick?.original || pick?.team || "",
-          protection,
+          pickNumber: pickNumber || null,
+          resolvedPickNumber: pickNumber || null,
+          originalTeam,
+          protection: resolved ? "Resolved" : protection,
+          swapGroup: pick?.swapGroup || pick?.swap?.group || null,
+          swapProtectionLabel: pick?.swapProtectionLabel || null,
         };
       }
 
@@ -2141,6 +2208,18 @@ function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, u
     if (!result.ok) return result;
     if (!move.item?.tradeRule?.mirror && !move.item?.tradeValueExcluded) {
       movedPicks.push({ label: result.pickLabel, fromTeam: move.from, toTeam: move.to });
+    }
+  }
+
+  if (pickMoves.length) {
+    const draftIntegrity = auditDraftPickIntegrity(nextLeague);
+    if (!draftIntegrity.ok) {
+      const first = draftIntegrity.errors?.[0];
+      return {
+        ok: false,
+        reason: `Draft-pick integrity check blocked this trade (${first?.code || "invalid draft asset state"}).`,
+        draftIntegrity,
+      };
     }
   }
 

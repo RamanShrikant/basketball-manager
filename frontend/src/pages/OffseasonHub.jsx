@@ -2321,28 +2321,28 @@ function EventCard({
 
   return (
     <div
-      className={`grid min-h-[104px] grid-cols-[42px_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border px-4 py-3 shadow-xl transition ${outerClass} ${
+      className={`grid min-h-[82px] grid-cols-[38px_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border px-4 py-2 shadow-xl transition ${outerClass} ${
         disabled ? "opacity-65" : "hover:border-orange-500/45"
       }`}
     >
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-black/25 text-lg font-extrabold text-orange-400">
+      <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-black/25 text-base font-extrabold text-orange-400">
         {step}
       </div>
 
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="truncate text-lg font-extrabold text-white">{title}</h2>
+          <h2 className="truncate text-base font-extrabold text-white">{title}</h2>
           <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusClass}`}>
             {status}
           </span>
         </div>
-        <p className="mt-1 line-clamp-2 text-xs leading-4 text-white/55">{description}</p>
+        {description ? <p className="mt-1 line-clamp-1 text-[11px] leading-4 text-white/55">{description}</p> : null}
       </div>
 
       <button
         onClick={onClick}
         disabled={disabled}
-        className={`min-w-[124px] rounded-lg px-3 py-2 text-sm font-bold transition ${
+        className={`min-w-[118px] rounded-lg px-3 py-2 text-xs font-bold transition ${
           disabled
             ? "cursor-not-allowed bg-neutral-700 text-white/40"
             : accent === "green"
@@ -3742,9 +3742,7 @@ export default function OffseasonHub() {
       {
         step: "1",
         title: "Player Retirements",
-        description: offseasonState.retirementsDisabled
-          ? "Retirements are disabled for this save, so veteran players will remain active and the offseason will continue without removing anyone."
-          : "Run retirement logic, remove retired veterans from active rosters, and store them in league history before the draft process begins.",
+        description: "",
         status: retirementsComplete ? "Complete" : "Current",
         accent: retirementsComplete ? "green" : "orange",
         buttonLabel: retirementsComplete ? "View Results" : "Open Retirements",
@@ -3754,8 +3752,7 @@ export default function OffseasonHub() {
       {
         step: "2",
         title: "Draft Lottery",
-        description:
-          "Review the lottery odds and draft matrix, reveal the first round, then reveal the second round to lock the full draft order.",
+        description: "",
         status: draftLotteryComplete ? "Complete" : leagueInflationComplete ? "Current" : retirementsComplete ? "Preparing" : "Locked",
         accent: draftLotteryComplete ? "green" : leagueInflationComplete ? "orange" : retirementsComplete ? "orange" : "neutral",
         buttonLabel: leagueInflationComplete ? "Open Draft Lottery" : retirementsComplete ? "Applying Inflation..." : "Locked",
@@ -3765,8 +3762,7 @@ export default function OffseasonHub() {
       {
         step: "3",
         title: "NBA Draft",
-        description:
-          "Use your locked draft order and draft class to make picks. Sim CPU picks one at a time, sim to your pick, or run the rest of the draft.",
+        description: "",
         status: draftComplete ? "Complete" : draftLotteryComplete ? "Current" : "Locked",
         accent: draftComplete ? "green" : draftLotteryComplete ? "orange" : "neutral",
         buttonLabel: draftLotteryComplete ? "Open Draft" : "Locked",
@@ -3776,8 +3772,7 @@ export default function OffseasonHub() {
       {
         step: "4",
         title: "Rookie Signings",
-        description:
-          "Finalize rookie contracts after the draft. First-rounders are handled as rookie-scale deals, while second-round picks can become standard contracts, two-way players, or free agents.",
+        description: "",
         status: rookieSigningsComplete ? "Complete" : draftComplete ? "Current" : "Locked",
         accent: rookieSigningsComplete ? "green" : draftComplete ? "orange" : "neutral",
         buttonLabel: draftComplete ? "Open Rookie Signings" : "Locked",
@@ -3787,8 +3782,7 @@ export default function OffseasonHub() {
       {
         step: "5",
         title: "Player / Team Options",
-        description:
-          "Resolve player options and team options after rookie signings so every contract decision is settled before free agency begins.",
+        description: "",
         status: optionsComplete ? "Complete" : rookieSigningsComplete ? "Current" : "Locked",
         accent: optionsComplete ? "green" : rookieSigningsComplete ? "orange" : "neutral",
         buttonLabel: rookieSigningsComplete ? "Open Options" : "Locked",
@@ -3798,8 +3792,7 @@ export default function OffseasonHub() {
       {
         step: "6",
         title: "Free Agency",
-        description:
-          "Negotiate with available players and reshape your roster once draft, rookie signing, and option decisions are settled.",
+        description: "",
         status: freeAgencyComplete ? "Complete" : optionsComplete ? "Current" : "Locked",
         accent: freeAgencyComplete ? "green" : optionsComplete ? "orange" : "neutral",
         buttonLabel: optionsComplete ? "Open Free Agency" : "Locked",
@@ -3809,9 +3802,7 @@ export default function OffseasonHub() {
       {
         step: "7",
         title: "Player Progression",
-        description: rosterWarningBeforeSim
-          ? "Apply offseason development now if you want. Your roster can stay overfilled until Calendar simulation, where you will be prompted to trim it."
-          : "Apply offseason development once roster moves are finished so your updated squads grow into the next year together.",
+        description: "",
         status: progressionComplete ? "Complete" : freeAgencyReadyForProgression ? "Current" : "Locked",
         accent: progressionComplete ? "green" : freeAgencyReadyForProgression ? "orange" : "neutral",
         buttonLabel: freeAgencyReadyForProgression ? "Open Progression" : "Locked",
@@ -3821,8 +3812,7 @@ export default function OffseasonHub() {
       {
         step: "8",
         title: "Advance to New Season",
-        description:
-          "Finalize the offseason, automatically clean up CPU rosters, and begin the new season once retirements, draft, rookie signings, options, free agency, and progression are all complete.",
+        description: "",
         status: progressionComplete ? "Current" : "Locked",
         accent: progressionComplete ? "orange" : "neutral",
         buttonLabel: progressionComplete ? "Advance to New Season" : "Locked",
@@ -3833,24 +3823,21 @@ export default function OffseasonHub() {
   }, [navigate, offseasonState, leagueData, rosterWarningBeforeSim]);
 
   return (
-    <div className={`${styles.offseasonPage} bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white`}>
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col">
-        <div className="mb-2 shrink-0 text-center">
+    <div className={`${styles.offseasonPage} bmCourtPage h-full min-h-0 overflow-y-auto overflow-x-hidden px-4 py-2 text-white`}>
+      <div className="mx-auto flex min-h-full w-full max-w-7xl flex-col pb-2">
+        <div className="mb-1 shrink-0 text-center">
           <p className="text-[10px] text-white/45 tracking-[0.25em] uppercase mb-1">
             Basketball Manager
           </p>
           <h1 className="text-3xl font-extrabold text-orange-500 tracking-tight">
             OFFSEASON HUB
           </h1>
-          <p className="text-xs text-white/55 mt-1">
-            Move through each offseason stage one event at a time.
-          </p>
           <p className="mt-1 text-[9px] font-black uppercase tracking-[0.24em] text-orange-300/65">
             Current Date • {formatLeagueDate(currentOffseasonDate)}
           </p>
         </div>
 
-        <div className="mb-3 shrink-0 rounded-2xl border border-white/10 bg-neutral-800/85 px-5 py-3 shadow-xl">
+        <div className="mb-2 shrink-0 rounded-2xl border border-white/10 bg-neutral-800/85 px-5 py-2 shadow-xl">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
             <div>
               <p className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-1">
@@ -3949,13 +3936,13 @@ export default function OffseasonHub() {
           </div>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-3 overflow-hidden">
+        <div className="grid min-h-0 flex-1 grid-cols-2 auto-rows-fr gap-2">
           {cards.map((card) => (
             <EventCard key={card.step} {...card} />
           ))}
         </div>
 
-        <div className="bmLegacyRouteBack mt-8 flex justify-center gap-4 flex-wrap">
+        <div className="bmLegacyRouteBack mt-3 flex justify-center gap-4 flex-wrap">
           <button
             onClick={() =>
               navigate("/team-hub", {

@@ -3,6 +3,7 @@ import { getContractSeasonYear, getSeasonCalendarConfig } from "./seasonContext.
 import {
   getOffseasonTradeContext,
 } from "./offseasonTradeContext.js";
+import { getTradePlayerEligibility } from "./tradeRosterEligibility.js";
 import {
   addIsoDays,
   formatLeagueDate,
@@ -35,6 +36,7 @@ const pickEligibilityResultCache = new WeakMap();
 const stepienViolationsCache = new WeakMap();
 const secondApronFurthestFirstCache = new WeakMap();
 const SALARY_TOLERANCE = 1_000;
+const MAX_FUTURE_DRAFT_YEARS = 7;
 const MATCHING_SMALL_OUTGOING = 7_500_000;
 const MATCHING_MID_OUTGOING = 29_000_000;
 const MATCHING_BUFFER = 250_000;
@@ -374,8 +376,16 @@ function getPlayerSalaryForYear(player = {}, payrollSeasonYear) {
   return Number.isFinite(fallback) ? fallback : 0;
 }
 
+function getUserTradePayrollSeasonYear(leagueData = {}) {
+  const context = getOffseasonTradeContext(leagueData || {});
+  if (context?.inOffseason && Number.isFinite(Number(context?.targetSeasonYear))) {
+    return Number(context.targetSeasonYear);
+  }
+  return getContractSeasonYear(leagueData || {});
+}
+
 export function getUserTradePlayerSalary(player = {}, leagueData = {}) {
-  return getPlayerSalaryForYear(player, getContractSeasonYear(leagueData || {}));
+  return getPlayerSalaryForYear(player, getUserTradePayrollSeasonYear(leagueData || {}));
 }
 
 export function getUserTradeSideSalary(items = [], leagueData = {}) {
@@ -386,7 +396,7 @@ export function getUserTradeSideSalary(items = [], leagueData = {}) {
 }
 
 function getTeamBasePayroll(team = {}, leagueData = {}) {
-  const payrollSeasonYear = getContractSeasonYear(leagueData || {});
+  const payrollSeasonYear = getUserTradePayrollSeasonYear(leagueData || {});
   const rosterPayroll = (Array.isArray(team?.players) ? team.players : []).reduce(
     (sum, player) => sum + getPlayerSalaryForYear(player, payrollSeasonYear),
     0
@@ -757,11 +767,22 @@ export function getUserTradePlayerEligibility({
     leagueRuleHistorySignature(leagueData),
     normalizeIsoDate(player?.tradeMeta?.eligibleDate || player?.tradeRestrictions?.eligibleDate || ""),
     normalizeIsoDate(player?.tradeMeta?.acquiredTradeEligibleDate || player?.tradeRestrictions?.acquiredTradeEligibleDate || ""),
+    JSON.stringify(player?.contract || {}),
   ].join("|") : "";
   if (cache && cache.has(playerCacheKey)) {
     bumpPerfCounter("tradeRules.playerEligibilityCacheHit");
     return cache.get(playerCacheKey);
   }
+  const baseTradeEligibility = getTradePlayerEligibility(player, { leagueData });
+  if (!baseTradeEligibility?.eligible) {
+    const result = lockedEligibility({
+      code: String(baseTradeEligibility?.code || "player_not_trade_eligible").toLowerCase(),
+      reason: baseTradeEligibility?.reason || "This player cannot be traded right now.",
+    });
+    if (cache && playerCacheKey) cache.set(playerCacheKey, result);
+    return result;
+  }
+
   const metadata = normalizeRestrictionMetadata(player, leagueData);
   const restrictions = [];
 
@@ -899,11 +920,7 @@ function futureStepienStartYear(leagueData = {}, context = null) {
   // draft order is locked should Stepien start at the following draft year.
   const inRealOffseason = shouldUseOffseasonDateForUserTrades(leagueData, tradeContext);
   const currentDraftResolved = Boolean(
-    inRealOffseason &&
-      tradeContext?.draftOrderLocked &&
-      Number.isFinite(dateYear) &&
-      Number(dateYear) === Number(draftYear) &&
-      Number(dateMonth) >= 6
+    inRealOffseason && tradeContext?.draftOrderLocked
   );
 
   return currentDraftResolved ? draftYear + 1 : draftYear;
@@ -1177,6 +1194,14 @@ export function getUserTradePickEligibility({
   const context = getOffseasonTradeContext(leagueData);
   const startYear = futureStepienStartYear(leagueData, context);
   const year = pickYear(pick);
+  const maxFutureYear = startYear + (MAX_FUTURE_DRAFT_YEARS - 1);
+  const currentDraftIsResolved = Boolean(
+    context?.inOffseason &&
+      context?.draftOrderLocked &&
+      !context?.draftComplete &&
+      Number(year) === Number(context?.seasonYear)
+  );
+  const resolvedForTradeRules = Boolean(isResolvedDraftPickAsset(pick) || currentDraftIsResolved);
   const resolvedTeamName = resolveTeamNameForTradeRules({ leagueData, teamName, pick, outgoingItems, incomingItems });
   const cache = getScopedResultCache(pickEligibilityResultCache, leagueData);
   const cacheKey = cache ? [
@@ -1195,6 +1220,23 @@ export function getUserTradePickEligibility({
     return cache.get(cacheKey);
   }
 
+  if (!resolvedForTradeRules && year > maxFutureYear) {
+    return {
+      ok: false,
+      code: "seven_year_rule",
+      reason: `${year} draft picks cannot be traded yet. Teams can trade picks only through the next ${MAX_FUTURE_DRAFT_YEARS} drafts (${startYear}-${maxFutureYear}).`,
+      allowedYears: [startYear, maxFutureYear],
+    };
+  }
+
+  if (!resolvedForTradeRules && year > 0 && year < startYear) {
+    return {
+      ok: false,
+      code: "stale_draft_pick",
+      reason: `${year} is no longer a future draft asset.`,
+    };
+  }
+
   if (active.secondApron && isUnprotectedNormalFutureFirst(pick, item)) {
     const furthestYear = getSecondApronFurthestFirstYear({ leagueData, teamName: resolvedTeamName, pick, outgoingItems, incomingItems });
     if (furthestYear && year === furthestYear && year >= startYear) {
@@ -1206,7 +1248,7 @@ export function getUserTradePickEligibility({
     }
   }
 
-  if (active.stepienRule && pickRound(pick) === 1 && year >= startYear && !isResolvedDraftPickAsset(pick)) {
+  if (active.stepienRule && pickRound(pick) === 1 && year >= startYear && !resolvedForTradeRules) {
     const candidate = item || { type: "pick", pick };
     const alreadyPresent = (outgoingItems || []).some((row) => row?.type === "pick" && pickIdentity(row.pick || {}) === pickIdentity(pick));
     const projectedOutgoing = alreadyPresent ? outgoingItems : [...(outgoingItems || []), candidate];
