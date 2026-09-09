@@ -5,7 +5,7 @@ import { getDraftYear } from "../utils/seasonContext.js";
 import HeadshotLayoutTransform from "../components/HeadshotLayoutTransform.jsx";
   import * as simEngine from "../api/simEnginePy.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
-import { applyDraftPickOwnershipToOrder, archiveCompletedDraftHistory, finalizeResolvedDraftOrderAssets, rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
+import { applyDraftPickOwnershipToOrder, archiveCompletedDraftHistory, finalizeResolvedDraftOrderAssets, hasLockedDraftOrderLength, rollDraftPickAssetsForCompletedSeason } from "../utils/draftPicks.js";
 import { recordCompletedDraftMoodEvents } from "../utils/offseasonMoodEvents.js";
 import {
   getDraftClassFingerprint,
@@ -172,7 +172,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
       lottery.firstRoundRevealed &&
       lottery.secondRoundRevealed &&
       Array.isArray(lottery?.result?.fullDraftOrder) &&
-      lottery.result.fullDraftOrder.length >= 60
+      hasLockedDraftOrderLength(lottery.result.fullDraftOrder, leagueData, seasonYear)
     );
   }
 

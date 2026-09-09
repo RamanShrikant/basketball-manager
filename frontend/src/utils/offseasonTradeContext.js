@@ -5,6 +5,7 @@ import {
   readCustomDraftClassForYear,
   readDefaultCustomDraftClass,
 } from "./customDraftClassStorage.js";
+import { hasLockedDraftOrderLength } from "./draftPicks.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
@@ -176,7 +177,7 @@ function getLockedDraftOrder(leagueData, seasonYear, savedLottery, savedDraftSta
   // storage. User trade surfaces need the most complete locked order so current
   // draft picks become exact resolved assets instead of stale "2027 1st --" rows.
   candidates.sort((a, b) => b.length - a.length);
-  return candidates.find((rows) => rows.length >= 60) || candidates[0] || [];
+  return candidates.find((rows) => hasLockedDraftOrderLength(rows, leagueData, seasonYear)) || candidates[0] || [];
 }
 
 function getDraftProspects(leagueData, seasonYear, savedDraftState) {
@@ -412,7 +413,7 @@ export function getOffseasonTradeContext(leagueData = {}, explicitContext = null
     savedLottery?.secondRoundRevealed ||
       offseasonState?.draftLotteryComplete ||
       leagueData?.draftState?.draftLotteryComplete ||
-      (rawDraftOrder.length >= 60 && savedDraftState)
+      (hasLockedDraftOrderLength(rawDraftOrder, leagueData, seasonYear) && savedDraftState)
   );
   // DraftLottery pre-generates a hidden full order before the reveal animation.
   // Never attach that hidden order to Trade Finder/Builder: doing so would leak

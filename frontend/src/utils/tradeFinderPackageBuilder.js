@@ -6,6 +6,7 @@ import {
   formatResolvedDraftPickLabel,
   getTradePickBaseProtectionLabel,
   getTradeablePickOwnedRange,
+  hasLockedDraftOrderLength,
   isResolvedDraftPickAsset,
   isSwapDraftPickAsset,
   normalizeDraftPicks,
@@ -233,7 +234,7 @@ export function collectTradeablePicksForTeam(leagueData, teamName) {
   const seasonYear = getSeasonYearFromLeague(leagueData);
   const draftOrder = readLockedDraftOrder(leagueData, seasonYear);
   const draftComplete = isDraftCompleteForSeason(leagueData, seasonYear);
-  const draftOrderLocked = draftOrder.length >= 60;
+  const draftOrderLocked = hasLockedDraftOrderLength(draftOrder, leagueData, seasonYear);
 
   const futurePicks = normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
     .filter((pick) => String(pick.status || "active").toLowerCase() === "active")

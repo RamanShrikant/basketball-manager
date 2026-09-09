@@ -1891,7 +1891,7 @@ function progressionStorySentence(row, { teamName = "" } = {}) {
     const variants = [
       `${name} made ${rise}${current ? `, arriving at ${current} OVR after gaining ${movement} point${movement === 1 ? "" : "s"}` : ""}. ${impact}`,
       `${name} came back sharper and more complete than he was a year ago${current ? `, climbing to ${current} OVR` : ""}. The ${movement}-point rise is substantial enough to matter when roles are set in camp.`,
-      `${name}'s development did not stall over the summer${current ? `; he now sits at ${current} OVR` : ""}, up ${movement} point${movement === 1 ? "" : "s"} from where he finished. ${impact}`,
+      `${name} improved by ${movement} OVR over the summer${current ? ` and now sits at ${current} OVR` : ""}. ${impact}`,
     ];
     return choose(seed, variants);
   }

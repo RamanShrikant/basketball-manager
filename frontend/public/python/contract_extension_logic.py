@@ -57,6 +57,10 @@ except Exception:  # pragma: no cover
 EXTENSION_SYSTEM_VERSION = "2026-08-08_selective_interest_v10"
 EXTENSION_HAPPY_MOOD_THRESHOLD = 76  # legacy compatibility only
 EXTENSION_INTEREST_THRESHOLD = 70
+EXTENSION_INTEREST_SOFT_FLOOR = 58
+EXTENSION_CORE_PLAYER_INTEREST_FLOOR = 65
+EXTENSION_HAPPY_MOOD_OVERRIDE_THRESHOLD = 76
+EXTENSION_STABLE_MOOD_OVERRIDE_THRESHOLD = 72
 
 
 def _num(value: Any, fallback: float = 0.0) -> float:
@@ -712,8 +716,9 @@ def build_extension_eligibility(
     base["extensionMoodEligible"] = bool(extension_mood >= 72)
     base["extensionInterestScore"] = _int(extension_interest, 65)
     base["extensionInterestRequired"] = EXTENSION_INTEREST_THRESHOLD
-    base["extensionInterestEligible"] = bool(sentiment.get("extensionInterestWilling", extension_interest >= EXTENSION_INTEREST_THRESHOLD))
-    base["extensionInterestLabel"] = sentiment.get("extensionInterestLabel") or ("Interested" if extension_interest >= EXTENSION_INTEREST_THRESHOLD else "Prefers to Wait")
+    base["extensionInterestSoftFloor"] = EXTENSION_INTEREST_SOFT_FLOOR
+    base["extensionInterestEligible"] = _extension_interest_allows_negotiation(sentiment)
+    base["extensionInterestLabel"] = sentiment.get("extensionInterestLabel") or ("Interested" if base["extensionInterestEligible"] else "Prefers to Wait")
     base["extensionInterestReasons"] = list(sentiment.get("extensionInterestReasons") or [])
     base["extensionPersonalityType"] = sentiment.get("extensionPersonalityType") or "Flexible"
 
@@ -1001,6 +1006,24 @@ def _validate_offer(offer: Dict[str, Any], eligibility: Dict[str, Any]) -> Tuple
         "optionType": option_type,
         "extensionType": eligibility.get("extensionType"),
     }
+
+    for package in ask_packages:
+        same_shape = (
+            _int(package.get("years"), 0) == years and
+            _int(package.get("firstYearSalary"), 0) == normalized["firstYearSalary"] and
+            abs(_num(package.get("annualRaisePct"), 0) - raise_pct) < 0.01 and
+            str(package.get("optionType") or "none").lower() == option_type
+        )
+        if same_shape:
+            normalized.update({
+                "askPackageId": str(package.get("askPackageId") or package.get("packageId") or ""),
+                "packageId": str(package.get("packageId") or package.get("askPackageId") or ""),
+                "playerAsk": True,
+                "acceptedByPlayerAsk": True,
+                "label": package.get("label"),
+            })
+            break
+
     return True, "", normalized
 
 
@@ -1253,13 +1276,16 @@ def close_contract_extension_window(
     updated = cpu_result.get("leagueData") if isinstance(cpu_result.get("leagueData"), dict) else copy.deepcopy(league_data)
     state = _extension_state(updated, payload)
     closed_types = set(state.get("closedTypes") or [])
-    if phase in {"rookie_deadline", "rookie", "opening"}:
+    if raw_phase in {"deadline", "all", "close", "closed"}:
+        # The explicit close action means the user/flow is done with extension
+        # business for this checkpoint. Keep phase-specific CPU processing above,
+        # then persist a full close so stale veteran/rookie windows cannot reopen.
+        closed_types.update({"rookie_scale", "veteran"})
+    elif phase in {"rookie_deadline", "rookie", "opening"}:
         closed_types.add("rookie_scale")
     elif phase in {"veteran_deadline", "veteran"}:
         closed_types.add("veteran")
     else:
-        # Defensive fallback for older callers. Before the veteran deadline, never
-        # close the veteran window from a generic deadline/open-flow call.
         current = state.get("currentDate", "")
         veteran_deadline = state.get("veteranDeadlineDate", "")
         if current and veteran_deadline and current >= veteran_deadline:
@@ -1415,6 +1441,17 @@ def _canonical_extension_mood_value(player: Dict[str, Any], payload: Optional[Di
     return _num(_canonical_extension_sentiment(player, payload).get("moodScore"), 65)
 
 
+def _extension_interest_allows_negotiation(sentiment: Dict[str, Any]) -> bool:
+    score = _int(sentiment.get("extensionInterestScore"), 65)
+    mood = _int(sentiment.get("moodScore"), 65)
+    willing = bool(sentiment.get("extensionInterestWilling", score >= EXTENSION_INTEREST_THRESHOLD))
+    if willing and score >= EXTENSION_INTEREST_THRESHOLD:
+        return True
+    if mood >= EXTENSION_HAPPY_MOOD_OVERRIDE_THRESHOLD and score >= EXTENSION_INTEREST_SOFT_FLOOR:
+        return True
+    return mood >= EXTENSION_STABLE_MOOD_OVERRIDE_THRESHOLD and score >= EXTENSION_CORE_PLAYER_INTEREST_FLOOR
+
+
 def _extension_refusal_reason(
     league_data: Dict[str, Any],
     team: Dict[str, Any],
@@ -1425,8 +1462,7 @@ def _extension_refusal_reason(
     sentiment = _canonical_extension_sentiment(player, payload)
     score = _int(sentiment.get("extensionInterestScore"), 65)
     mood = _int(sentiment.get("moodScore"), 65)
-    willing = bool(sentiment.get("extensionInterestWilling", score >= EXTENSION_INTEREST_THRESHOLD))
-    if willing and score >= EXTENSION_INTEREST_THRESHOLD:
+    if _extension_interest_allows_negotiation(sentiment):
         return None
     label = str(sentiment.get("extensionInterestLabel") or "Prefers to Wait")
     if mood >= 80:
@@ -1435,7 +1471,7 @@ def _extension_refusal_reason(
             f"{score}/100. He wants to preserve more future flexibility before committing long term."
         )
     return (
-        f"{label} — extension interest is {score}/100 (needs {EXTENSION_INTEREST_THRESHOLD}+). "
+        f"{label} — extension interest is {score}/100 (needs {EXTENSION_INTEREST_THRESHOLD}+; happy players can negotiate from {EXTENSION_INTEREST_SOFT_FLOOR}+ and stable core players from {EXTENSION_CORE_PLAYER_INTEREST_FLOOR}+). "
         f"Current Locker Room mood is {mood}; role, security, team direction, franchise relationship, and free-agency leverage all affect this decision."
     )
 

@@ -15,6 +15,7 @@ import {
   getDraftPickEncumbranceReason,
   getResolvedDraftPickNumber,
   getTradeablePickOwnedRange,
+  hasLockedDraftOrderLength,
   formatResolvedDraftPickLabel,
   isResolvedDraftPickAsset,
   makeTradeGeneratedDraftPickId,
@@ -503,7 +504,7 @@ function readTradePhaseInfo(leagueData) {
   const savedDraftState = readSavedDraftState(seasonYear);
 
   const draftOrder = getLockedDraftOrder(leagueData, seasonYear);
-  const draftOrderLocked = draftOrder.length >= 60;
+  const draftOrderLocked = hasLockedDraftOrderLength(draftOrder, leagueData, seasonYear);
   const draftComplete = Boolean(
     (Number(offseasonState?.seasonYear || seasonYear) === Number(seasonYear) && offseasonState?.draftComplete) ||
       (Number(savedDraftState?.seasonYear || 0) === Number(seasonYear) && savedDraftState?.completed) ||

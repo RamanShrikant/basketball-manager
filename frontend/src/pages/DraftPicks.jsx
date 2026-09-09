@@ -7,10 +7,13 @@ import {
   getAllTeamsFromLeague,
   getTeamLogoMap,
   getDraftPickProtectionLabel,
+  hasLockedDraftOrderLength,
   normalizeDraftPicks,
   normalizeTeamName,
   applyDraftPickOwnershipToOrder,
   sortDraftPickAssets,
+  isActiveDraftPickAsset,
+  isForfeitedDraftPickAsset,
 } from "../utils/draftPicks.js";
 import "../styles/BMAnimations.css";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
@@ -223,7 +226,7 @@ function readLockedDraftOrder(leagueData, seasonYear) {
   pushRows(leagueData?.draftLottery?.fullDraftOrder, leagueLotteryComplete);
 
   candidates.sort((a, b) => b.length - a.length);
-  return candidates.find((rows) => rows.length >= 60) || candidates[0] || [];
+  return candidates.find((rows) => hasLockedDraftOrderLength(rows, leagueData, seasonYear)) || candidates[0] || [];
 }
 
 function isDraftCompleteForSeason(leagueData, seasonYear) {
@@ -419,6 +422,7 @@ export default function DraftPicks() {
 
   const picks = useMemo(() => {
     return normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
+      .filter((pick) => isActiveDraftPickAsset(pick) && !isForfeitedDraftPickAsset(pick))
       .filter((pick) => Number(pick.year || 0) >= Number(seasonYear))
       .filter((pick) => !(draftComplete && Number(pick.year || 0) === Number(seasonYear)))
       .filter((pick) => !(draftOrderLocked && !draftComplete && Number(pick.year || 0) === Number(seasonYear)))

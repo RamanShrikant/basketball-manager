@@ -828,7 +828,7 @@ function getCurrentSeasonYear(leagueData = {}) {
   // as the current draft year when needed. After a season rolls, 2033 is added
   // and the old draft year is removed, so this also follows the rolling window.
   const activePickYears = (Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : [])
-    .filter((row) => !["void", "deleted", "removed", "inactive"].includes(String(row?.status || "active").toLowerCase()))
+    .filter((row) => !["void", "deleted", "removed", "inactive", "forfeited"].includes(String(row?.status || "active").toLowerCase()))
     .map((row) => Number(row?.year || row?.seasonYear || 0))
     .filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
   const minActivePickYear = activePickYears.length ? Math.min(...activePickYears) : 0;

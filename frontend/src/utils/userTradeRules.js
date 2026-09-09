@@ -1542,7 +1542,9 @@ function applyUserTradeRestrictionPatches(leagueData = {}, patches = new Map(), 
     },
   };
 
-  return patchPlayerCollectionsWithTradeRuleLocks(leagueWithState, nextLocks);
+  // Keep the restriction ledger as the source of truth. Player-level tradeMeta /
+  // tradeRestrictions copies made saves larger and could go stale after later moves.
+  return leagueWithState;
 }
 
 

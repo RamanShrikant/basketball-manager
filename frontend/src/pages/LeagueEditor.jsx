@@ -178,7 +178,7 @@ const APPEARANCE_POOL_OPTIONS = [
 const FACE_STAGE_OPTIONS = ["rookie", "young", "prime", "veteran", "old"];
 
 
-const DRAFT_PICK_STATUS_OPTIONS = ["active", "conveyed", "resolved", "void"];
+const DRAFT_PICK_STATUS_OPTIONS = ["active", "conveyed", "resolved", "void", "removed"];
 
 const DRAFT_PICK_COMMON_PROTECTION_OPTIONS = [
   {
@@ -309,6 +309,14 @@ function makeDraftPickAssetId(asset = {}) {
   return `${year}_${original}_${round}_${type}_${owner}_${random}`;
 }
 
+function isHiddenDraftPickForfeitureRow(row = {}) {
+  const status = String(row?.status || "").toLowerCase();
+  if (status === "forfeited") return true;
+  if (row?.forfeited === true) return true;
+  const protection = String(row?.protectionType || row?.displayProtection || row?.protections || row?.protection || "").toLowerCase();
+  return protection.includes("forfeit");
+}
+
 function normalizeDraftPickAsset(row = {}, index = 0) {
   const type = row.type === "swap" || row.assetType === "swap" || row.isSwap ? "swap" : "pick";
   const year = Number(row.year || row.draftYear || getDraftYear(getEditorLeagueSnapshot()));
@@ -347,6 +355,7 @@ function normalizeDraftPickAsset(row = {}, index = 0) {
 
 function normalizeDraftPickAssets(rows = []) {
   return (Array.isArray(rows) ? rows : [])
+    .filter((row) => !isHiddenDraftPickForfeitureRow(row))
     .map((row, index) => normalizeDraftPickAsset(row, index))
     .filter((row) => row.originalTeam || row.ownerTeam);
 }

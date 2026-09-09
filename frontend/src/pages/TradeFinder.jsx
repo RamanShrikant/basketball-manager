@@ -51,6 +51,7 @@ import {
   formatResolvedDraftPickLabel,
   getTradePickBaseProtectionLabel,
   getTradeablePickOwnedRange,
+  hasLockedDraftOrderLength,
   isResolvedDraftPickAsset,
   normalizeDraftPicks,
   normalizeTeamName,
@@ -845,7 +846,7 @@ function readLockedDraftOrder(leagueData, seasonYear) {
   pushRows(leagueData?.draftLottery?.fullDraftOrder, leagueLotteryComplete);
 
   candidates.sort((a, b) => b.length - a.length);
-  return candidates.find((rows) => rows.length >= 60) || candidates[0] || [];
+  return candidates.find((rows) => hasLockedDraftOrderLength(rows, leagueData, seasonYear)) || candidates[0] || [];
 }
 
 function isDraftCompleteForSeason(leagueData, seasonYear) {
@@ -2976,7 +2977,7 @@ const standardPatienceBlocked = Boolean(
         const offersFound = Number(progress.offersFound || 0);
         const elapsed = Number(progress.elapsedSec || 0);
         if (progress.phase === "scan_start") {
-          setOfferSearchProgress(`Quick scanning ${candidatesToCheck} legal package shapes from ${selectedTeam?.name || "your team"}...`);
+          setOfferSearchProgress(`Quick scanning ${candidatesToCheck} trade package shapes from ${selectedTeam?.name || "your team"}...`);
           return;
         }
         if (progress.phase === "scan_candidate") {
@@ -3161,7 +3162,7 @@ const standardPatienceBlocked = Boolean(
         setOfferSearchError(
           rejectedGeneratedOffers.length
             ? "Trade Finder generated offers, but all were filtered before display because they failed exact ownership, salary, roster, or CPU-acceptance validation. Run bmDiag.tradeFinder() in the console for the precise reasons."
-            : result?.message || "No CPU team found a Propose Trade-legal package for this search."
+            : result?.message || "No CPU team found an acceptable package for this search."
         );
       }
     } catch (error) {

@@ -12,7 +12,7 @@
     "test:bm": "node scripts/bm-regression-check.mjs",
     "check:bm": "node scripts/bm-regression-check.mjs",
     "check:cpu-trade-history": "node scripts/bm-cpu-trade-history-parity.mjs",
-    "check:bm:full": "node scripts/bm-regression-check.mjs && python scripts/contract-extension-regression.py && npm run check:fa-contract-rules && node scripts/bm-cpu-trade-history-parity.mjs && node scripts/bm-year2-storage-regression.mjs && node scripts/bm-year2-cpu-trade-phase-regression.mjs && npm run check:cpu-roster-repair-fastpath && npm run check:new-chapter && npm run check:portrait-studio && npm run check:portrait-dressing",
+    "check:bm:full": "node scripts/bm-regression-check.mjs && python scripts/contract-extension-regression.py && npm run check:fa-contract-rules && node scripts/bm-cpu-trade-history-parity.mjs && node scripts/bm-year2-storage-regression.mjs && node scripts/bm-year2-cpu-trade-phase-regression.mjs && npm run check:cpu-roster-repair-fastpath && npm run check:new-chapter && npm run check:portrait-studio && npm run check:portrait-dressing && npm run check:clippers-forfeiture",
     "check:year2-storage": "node scripts/bm-year2-storage-regression.mjs",
     "check:year2-cpu-trade-phase": "node scripts/bm-year2-cpu-trade-phase-regression.mjs",
     "check:contract-extensions": "python scripts/contract-extension-regression.py",
@@ -23,7 +23,8 @@
     "portrait:sync": "node scripts/sync-portrait-studio.mjs",
     "check:portrait-studio": "node scripts/portrait-studio-regression.mjs",
     "portrait:build-real": "node scripts/build-real-player-portrait-manifest.mjs",
-    "portrait:sync-real": "node scripts/sync-real-player-portraits.mjs"
+    "portrait:sync-real": "node scripts/sync-real-player-portraits.mjs",
+    "check:clippers-forfeiture": "node scripts/clippers-draft-forfeiture-regression.mjs"
   },
   "dependencies": {
     "lz-string": "^1.5.0",

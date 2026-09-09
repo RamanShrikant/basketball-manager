@@ -30,7 +30,7 @@ import {
 } from "./cpuTradeTelemetry.js";
 
 export const CPU_TRADE_BANK_FIELD = "cpuTradeBankState";
-export const CPU_TRADE_BANK_VERSION = 18;
+export const CPU_TRADE_BANK_VERSION = 12;
 export const CPU_TRADE_BANK_TEST_CONFIG_KEY = "bm_cpu_trade_bank_test_config_v1";
 
 const TARGET_MIN = CPU_TRADE_CONTINUOUS_MIN_TARGET;

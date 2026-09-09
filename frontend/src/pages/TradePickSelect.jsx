@@ -17,6 +17,7 @@ import {
   getTeamLogoMap,
   getTradePickBaseProtectionLabel,
   getTradeablePickOwnedRange,
+  hasLockedDraftOrderLength,
   isResolvedDraftPickAsset,
   isSwapDraftPickAsset,
   normalizeDraftPicks,
@@ -294,7 +295,7 @@ function readLockedDraftOrder(leagueData, seasonYear) {
   pushRows(leagueData?.draftLottery?.fullDraftOrder, leagueLotteryComplete);
 
   candidates.sort((a, b) => b.length - a.length);
-  return candidates.find((rows) => rows.length >= 60) || candidates[0] || [];
+  return candidates.find((rows) => hasLockedDraftOrderLength(rows, leagueData, seasonYear)) || candidates[0] || [];
 }
 
 function isDraftCompleteForSeason(leagueData, seasonYear) {

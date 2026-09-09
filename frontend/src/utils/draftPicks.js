@@ -132,7 +132,7 @@ export function normalizeDraftPickAsset(row = {}, index = 0, teamNames = []) {
     ownerTeam,
     protections: protections.trim() || null,
     displayProtection: displayProtection.trim() || protections.trim() || null,
-    status: ["active", "resolved", "void", "conveyed"].includes(status) ? status : DEFAULT_PICK_STATUS,
+    status: ["active", "resolved", "void", "conveyed", "removed"].includes(status) ? status : status === "forfeited" ? "removed" : DEFAULT_PICK_STATUS,
     notes: notes.trim() || null,
     swapWithTeam: assetType === "swap" ? swapWithTeam : "",
     swap:
@@ -152,7 +152,8 @@ export function normalizeDraftPicks(rows = [], teamNames = []) {
   return (Array.isArray(rows) ? rows : [])
     .filter((row) => row && typeof row === "object")
     .map((row, index) => normalizeDraftPickAsset(row, index, teamNames))
-    .filter((row) => row.year && row.round && row.originalTeam && row.ownerTeam);
+    .filter((row) => row.year && row.round && row.originalTeam && row.ownerTeam)
+    .filter((row) => !isForfeitedDraftPickAsset(row));
 }
 
 export function createDefaultDraftPicksForTeams(teamNames = [], startYear = DEFAULT_START_YEAR, endYear = DEFAULT_END_YEAR) {
@@ -447,6 +448,10 @@ export function rollDraftPickAssetsForCompletedSeason(leagueData, completedSeaso
   const out = [...kept];
   for (const teamName of teamNames) {
     for (const round of [1, 2]) {
+      const forfeitedKey = `${Number(round)}|${normalizeTeamName(teamName)}`;
+      const futureRoundForfeitures = getForfeitedDraftPickKeys(leagueData, nextFutureYear, round);
+      if (futureRoundForfeitures.has(forfeitedKey)) continue;
+
       const alreadyHasOwnPick = out.some(
         (row) =>
           String(row.assetType || row.type || "pick").toLowerCase() === "pick" &&
@@ -490,6 +495,10 @@ export function getDraftPickAssetLabel(asset = {}) {
   if (asset.assetType === "swap") {
     const swapWith = asset.swapWithTeam ? ` with ${asset.swapWithTeam}` : "";
     return `${base} swap right held by ${asset.ownerTeam}${swapWith}`;
+  }
+
+  if (isForfeitedDraftPickAsset(asset)) {
+    return `${base} forfeited by ${asset.ownerTeam || "league penalty"}`;
   }
 
   return `${base} owned by ${asset.ownerTeam}`;
@@ -554,9 +563,174 @@ function getDraftOwnershipTeamName(team = {}) {
   return String(team?.name || team?.teamName || team?.abbreviation || team?.abbr || team?.shortName || "").trim();
 }
 
-function isActiveDraftPickAsset(asset = {}) {
+export function isActiveDraftPickAsset(asset = {}) {
+  if (isForfeitedDraftPickAsset(asset)) return false;
   const status = String(asset.status || "active").toLowerCase();
-  return !["inactive", "void", "removed", "deleted", "expired"].includes(status);
+  return !["inactive", "void", "removed", "deleted", "expired", "forfeited"].includes(status);
+}
+
+export function isForfeitedDraftPickAsset(asset = {}) {
+  const status = String(asset?.status || "").toLowerCase();
+  if (status === "forfeited") return true;
+  if (asset?.forfeited === true) return true;
+  const protection = String(asset?.protectionType || asset?.displayProtection || asset?.protections || asset?.protection || "").toLowerCase();
+  return protection.includes("forfeit");
+}
+
+function normalizeDraftPickForfeiture(row = {}, leagueData = {}) {
+  const resolveTeamName = buildTeamResolver(leagueData);
+  const year = Number(row?.year || row?.seasonYear || 0);
+  const round = Number(row?.round || 1);
+  const originalTeam = resolveTeamName(row?.originalTeam || row?.originalTeamName || row?.teamName || row?.affectedTeam || "");
+  const penalizedTeam = resolveTeamName(row?.penalizedTeam || row?.teamName || row?.ownerTeam || "Los Angeles Clippers");
+  if (!year || !round || !originalTeam) return null;
+  return {
+    id: String(row?.id || row?.assetId || `FORFEITURE_${year}_${cleanToken(originalTeam)}_R${round}`),
+    year,
+    round,
+    originalTeam,
+    penalizedTeam,
+    teamName: penalizedTeam,
+    reason: row?.reason || row?.notes || "First-round pick removed by league penalty",
+    source: row?.source || "league_penalty",
+    countsForStepien: false,
+    tradeable: false,
+    draftOrderSlotRemoved: row?.draftOrderSlotRemoved !== false,
+  };
+}
+
+function getDraftPickForfeitureRows(leagueData = {}, { year = null, round = null } = {}) {
+  const topLevel = Array.isArray(leagueData?.draftPickForfeitures) ? leagueData.draftPickForfeitures : [];
+  const legacyRows = Array.isArray(leagueData?.draftPicks)
+    ? leagueData.draftPicks.filter((asset) => !isSwapDraftPickAsset(asset) && isForfeitedDraftPickAsset(asset))
+    : [];
+
+  const rows = [...topLevel, ...legacyRows]
+    .map((row) => normalizeDraftPickForfeiture(row, leagueData))
+    .filter(Boolean)
+    .filter((row) => year == null || Number(row.year || 0) === Number(year))
+    .filter((row) => round == null || Number(row.round || 0) === Number(round));
+
+  const seen = new Set();
+  return rows.filter((row) => {
+    const key = `${row.year}|${row.round}|${normalizeTeamName(row.originalTeam)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function getForfeitedDraftPickAssets(leagueData = {}, { year = null, round = null } = {}) {
+  return getDraftPickForfeitureRows(leagueData, { year, round });
+}
+
+export function getForfeitedDraftPickKeys(leagueData = {}, seasonYear = null, round = 1) {
+  const year = Number(seasonYear || getDraftYear(leagueData || {}));
+  const resolveTeamName = buildTeamResolver(leagueData);
+  const keys = new Set();
+  for (const asset of getForfeitedDraftPickAssets(leagueData, { year, round })) {
+    const originalTeam = resolveTeamName(asset.originalTeam || asset.originalTeamName || asset.teamName || "");
+    if (!originalTeam) continue;
+    keys.add(`${Number(asset.round || round)}|${normalizeTeamName(originalTeam)}`);
+  }
+  return keys;
+}
+
+export function getExpectedFirstRoundPickCount(leagueData = {}, seasonYear = null) {
+  const teamCount = getTeamNamesFromLeague(leagueData).length || 30;
+  return Math.max(0, teamCount - getForfeitedDraftPickKeys(leagueData, seasonYear, 1).size);
+}
+
+export function getExpectedLockedDraftOrderLength(leagueData = {}, seasonYear = null) {
+  const teamCount = getTeamNamesFromLeague(leagueData).length || 30;
+  return Math.max(0, teamCount * 2 - getForfeitedDraftPickKeys(leagueData, seasonYear, 1).size);
+}
+
+export function hasLockedDraftOrderLength(order = [], leagueData = {}, seasonYear = null) {
+  const rows = sanitizeDraftOrderRows(order);
+  if (!rows.length) return false;
+  return rows.length >= getExpectedLockedDraftOrderLength(leagueData, seasonYear);
+}
+
+function compactForfeitedPickAsset(asset = {}, leagueData = {}) {
+  const resolveTeamName = buildTeamResolver(leagueData);
+  return {
+    id: asset.id || null,
+    year: Number(asset.year || 0),
+    round: Number(asset.round || 0),
+    originalTeam: resolveTeamName(asset.originalTeam || asset.originalTeamName || ""),
+    ownerTeam: resolveTeamName(asset.ownerTeam || asset.currentOwnerTeamName || ""),
+    reason: asset?.forfeiture?.reason || asset?.forfeitureReason || asset?.notes || "Forfeited by league penalty",
+    source: asset?.forfeiture?.source || asset?.source || "league_penalty",
+  };
+}
+
+function renumberDraftOrderAfterForfeitures(rows = []) {
+  const firstRound = [];
+  const secondRound = [];
+  const otherRows = [];
+
+  for (const row of sanitizeDraftOrderRows(rows)) {
+    const round = Number(row.round || getRoundFromPickRow(row));
+    if (round === 1) firstRound.push(row);
+    else if (round === 2) secondRound.push(row);
+    else otherRows.push(row);
+  }
+
+  const first = firstRound.map((row, index) => {
+    const pick = index + 1;
+    return {
+      ...row,
+      pick,
+      pickNumber: pick,
+      overallPick: pick,
+      pickInRound: pick,
+      round: 1,
+    };
+  });
+
+  const second = secondRound.map((row, index) => {
+    const fallbackPick = 31 + index;
+    const pick = getPickNumberFromRow(row) >= 31 ? getPickNumberFromRow(row) : fallbackPick;
+    const pickInRound = Number(row.pickInRound || 0) > 0 ? Number(row.pickInRound) : index + 1;
+    return {
+      ...row,
+      pick,
+      pickNumber: pick,
+      overallPick: pick,
+      pickInRound,
+      round: 2,
+    };
+  });
+
+  return [...first, ...second, ...otherRows];
+}
+
+function applyDraftPickForfeituresToOrder(order = [], { leagueData = {}, year = null } = {}) {
+  const cleanOrder = sanitizeDraftOrderRows(order);
+  const draftYear = Number(year || getDraftYear(leagueData || {}));
+  if (!cleanOrder.length || !Number.isFinite(draftYear)) return cleanOrder;
+
+  const forfeitedKeys = getForfeitedDraftPickKeys(leagueData, draftYear, 1);
+  if (!forfeitedKeys.size) return cleanOrder;
+
+  const resolveTeamName = buildTeamResolver(leagueData);
+  const kept = cleanOrder.filter((row) => {
+    const round = Number(row.round || getRoundFromPickRow(row));
+    if (round !== 1) return true;
+    const originalTeam = resolveTeamName(
+      row.originalTeamName ||
+        row.originalPickTeamName ||
+        row.naturalLotteryTeamName ||
+        row.teamName ||
+        row.currentOwnerTeamName ||
+        ""
+    );
+    const key = `${round}|${normalizeTeamName(originalTeam)}`;
+    return !forfeitedKeys.has(key);
+  });
+
+  return renumberDraftOrderAfterForfeitures(kept);
 }
 
 function getTeamAliases(team = {}) {
@@ -1877,7 +2051,8 @@ export function applyDraftPickOwnershipToOrder(order = [], { leagueData, seasonY
     });
   });
 
-  return applySwapRightsToOrder(normallyResolved, { leagueData, year });
+  const swapped = applySwapRightsToOrder(normallyResolved, { leagueData, year });
+  return applyDraftPickForfeituresToOrder(swapped, { leagueData, year });
 }
 
 export function applyDraftPickOwnershipToLotteryResult(result = {}, { leagueData, seasonYear } = {}) {
@@ -1889,13 +2064,22 @@ export function applyDraftPickOwnershipToLotteryResult(result = {}, { leagueData
     ? [...firstRoundOrder, ...secondRoundOrder]
     : applyDraftPickOwnershipToOrder(result.fullDraftOrder || [], { leagueData, seasonYear });
 
+  const year = Number(seasonYear || getDraftYear(leagueData || {}));
+  const removedFirstRoundPickCount = getForfeitedDraftPickKeys(leagueData, year, 1).size;
+
   return {
     ...result,
     firstRoundOrder,
     secondRoundOrder,
     fullDraftOrder,
     pickOwnershipResolved: true,
-    pickOwnershipVersion: "draft_pick_ownership_v6",
+    pickOwnershipVersion: "draft_pick_ownership_v8_removed_forfeitures",
+    meta: {
+      ...(result.meta || {}),
+      removedFirstRoundPickCount,
+      expectedFirstRoundPickCount: getExpectedFirstRoundPickCount(leagueData, year),
+      expectedFullDraftOrderLength: getExpectedLockedDraftOrderLength(leagueData, year),
+    },
   };
 }
 

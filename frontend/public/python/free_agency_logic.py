@@ -1124,7 +1124,7 @@ def get_realistic_expected_contract_years(player: Dict[str, Any]) -> int:
     age = int(num(player.get("age"), 27))
     upside = max(0.0, potential - overall)
     visible_upside = max(0.0, visible_potential - visible_overall)
-    minimum_bucket = (visible_overall <= 63 or (visible_overall <= 65 and age >= 28 and visible_upside <= 1) or (visible_overall <= 67 and age >= 32 and visible_upside <= 1))
+    minimum_bucket = (visible_overall <= 63 or (visible_overall <= 65 and age >= 28 and visible_upside <= 1) or (visible_overall <= 67 and age >= 32 and visible_upside <= 1) or (visible_overall <= 72 and age >= 34 and visible_upside <= 1))
     if minimum_bucket:
         if age <= 25 and visible_upside >= 4: return 2
         return 1 if age >= 30 else 2
@@ -3324,12 +3324,12 @@ def estimate_market_value(player: Dict[str, Any], league_data: Optional[Dict[str
     player_minimum = get_player_minimum_salary_amount(league_data, player)
     player_maximum = get_player_max_salary_amount(league_data, player)
     cap_scale = float(MAX_SALARY) / 54_000_000.0
-    minimum_bucket = (visible_overall <= 63 or (visible_overall <= 65 and age >= 28 and visible_upside <= 1) or (visible_overall <= 67 and age >= 32 and visible_upside <= 1))
+    minimum_bucket = (visible_overall <= 63 or (visible_overall <= 65 and age >= 28 and visible_upside <= 1) or (visible_overall <= 67 and age >= 32 and visible_upside <= 1) or (visible_overall <= 72 and age >= 34 and visible_upside <= 1))
     years = get_realistic_expected_contract_years(player)
     if minimum_bucket:
         legacy_base_salary = MIN_DEAL
         if visible_overall >= 66 and age <= 26 and visible_upside >= 2: legacy_base_salary = max(MIN_DEAL, int(round(2_000_000 * cap_scale)))
-        elif visible_overall >= 66: legacy_base_salary = max(MIN_DEAL, int(round(DEFAULT_MINIMUM_EXCEPTION)))
+        elif visible_overall >= 66 and not (age >= 34 and visible_upside <= 1): legacy_base_salary = max(MIN_DEAL, int(round(DEFAULT_MINIMUM_EXCEPTION)))
         legacy_year1 = int(round_to_nearest(legacy_base_salary, base=1_000))
         legacy_salary_by_year = build_salary_by_year(legacy_year1, years)
         actual_year1 = int(round_to_nearest(clamp(legacy_year1, player_minimum, player_maximum), base=1_000))
