@@ -1237,7 +1237,8 @@ function convert(py) {
 // ------------------------------------------------------------
 // PUBLIC API - SINGLE GAME (with timeout)
 // ------------------------------------------------------------
-const WORKER_TIMEOUT_MS = 300;
+// Includes queue wait and slower devices; 300ms discarded valid late results.
+const WORKER_TIMEOUT_MS = 30000;
 function requestCpuRosterRepairWorker(
   leagueData,
   userTeamName,

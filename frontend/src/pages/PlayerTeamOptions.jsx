@@ -1,3 +1,5 @@
+import { saveLeagueData } from "../utils/leagueStorage.js";
+import { readCurrentOffseasonState, currentOptionsResult, optionsPreviewNeedsProcessing } from "../utils/offseasonCompletion.js";
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
@@ -19,7 +21,7 @@ function safeJSON(raw, fallback = null) {
 }
 
 function getSeasonYear(leagueData) {
-  return getSeasonStartYear(leagueData || safeJSON(localStorage.getItem("bm_league_meta_v1"), {}) || {});
+  return Number(leagueData?.seasonYear || leagueData?.currentSeasonYear || getSeasonStartYear(leagueData || safeJSON(localStorage.getItem("bm_league_meta_v1"), {}) || {}));
 }
 
 function getOperatingFinancialSeasonYear(leagueData) {
@@ -60,11 +62,7 @@ function readOffseasonState(seasonYear) {
     return buildDefaultOffseasonState(seasonYear);
   }
 
-  return {
-    ...buildDefaultOffseasonState(seasonYear),
-    ...stored,
-    seasonYear,
-  };
+  return readCurrentOffseasonState(stored, seasonYear, buildDefaultOffseasonState(seasonYear));
 }
 
 function saveOffseasonState(state) {
@@ -423,16 +421,17 @@ const [sectionTeamFilters, setSectionTeamFilters] = useState({
     return map;
   }, [workingLeagueData, leagueData]);
 
-  const applyLeagueUpdate = (updated) => {
+  const applyLeagueUpdate = async (updated) => {
     if (!updated) return;
 
+    await saveLeagueData(updated, { source: "options-and-rights" });
     setWorkingLeagueData(updated);
 
     if (typeof setLeagueData === "function") {
-      setLeagueData(updated);
+      setLeagueData(updated, { persist: false });
     }
 
-    localStorage.setItem("leagueData", JSON.stringify(updated));
+    // saveLeagueData already persisted the full league before completion flags.
 
     if (typeof setSelectedTeam === "function" && selectedTeam?.name) {
       let nextSelectedTeam = null;
@@ -455,8 +454,15 @@ const [sectionTeamFilters, setSectionTeamFilters] = useState({
   };
 
   useEffect(() => {
-    const stored = safeJSON(localStorage.getItem(OPTIONS_RESULTS_KEY), null);
-    if (!stored || stored?.seasonYear !== seasonYear) return;
+    setPreviewData(null);
+    setAppliedData(null);
+    setRightsFinalizedLocal(false);
+    setRightsPreviewData(null);
+    setUserTeamOptionChoices({});
+    setUserTwoWayChoices({});
+    setUserStashChoices({});
+    const stored = currentOptionsResult(safeJSON(localStorage.getItem(OPTIONS_RESULTS_KEY), null), seasonYear);
+    if (!stored) return;
 
     if (stored?.preview) setPreviewData(stored.preview);
     if (stored?.applied) setAppliedData(stored.applied);
@@ -530,6 +536,11 @@ const [sectionTeamFilters, setSectionTeamFilters] = useState({
     });
   }, [previewData]);
 
+  const optionsLeagueForYear = (value) => ({
+    ...value, contractSeasonYear: seasonYear, payrollSeasonYear: seasonYear,
+    currentPayrollSeasonYear: seasonYear, salarySeasonYear: seasonYear, currentSalarySeasonYear: seasonYear,
+  });
+
   const loadPreview = async () => {
     if (!workingLeagueData) {
       setError("No league data found.");
@@ -541,7 +552,7 @@ const [sectionTeamFilters, setSectionTeamFilters] = useState({
 
     try {
       const res = await previewPlayerTeamOptions(
-        workingLeagueData,
+        optionsLeagueForYear(workingLeagueData),
         selectedTeam?.name || null
       );
 
@@ -550,10 +561,10 @@ const [sectionTeamFilters, setSectionTeamFilters] = useState({
         return;
       }
 
-      setPreviewData(res);
+      setPreviewData({ ...res, validatedLive: true });
 
       // Keep this storage tiny. Full preview payloads can exceed browser localStorage quota.
-      const stored = safeJSON(localStorage.getItem(OPTIONS_RESULTS_KEY), {}) || {};
+      const stored = currentOptionsResult(safeJSON(localStorage.getItem(OPTIONS_RESULTS_KEY), null), seasonYear) || {};
       safeSetJSON(OPTIONS_RESULTS_KEY, {
         ...stored,
         seasonYear,
@@ -562,7 +573,7 @@ const [sectionTeamFilters, setSectionTeamFilters] = useState({
           seasonYear: res?.seasonYear,
           summary: res?.summary || {},
         },
-        applied: stored?.applied || null,
+        applied: optionsPreviewNeedsProcessing(res) ? null : stored?.applied || null,
       });
     } catch (err) {
       setError(err?.message || "Failed to load player and team options.");
@@ -604,10 +615,9 @@ const [sectionTeamFilters, setSectionTeamFilters] = useState({
 
   useEffect(() => {
     if (!workingLeagueData) return;
-    if (appliedData?.ok) return;
-    if (previewData?.ok) return;
+    if (previewData?.validatedLive) return;
     loadPreview();
-  }, [workingLeagueData]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [workingLeagueData, seasonYear, previewData?.validatedLive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pendingUserTeamOptions = previewData?.pendingUserTeamOptions || [];
   const pendingUserTwoWayDecisions = previewData?.pendingUserTwoWayDecisions || [];
@@ -677,7 +687,7 @@ const previewSummary = previewData?.summary || {};
 const appliedSummary = appliedData?.summary || {};
 
 const selectedTeamName = selectedTeam?.name || null;
-const optionsComplete = !!offseasonState?.optionsComplete || !!appliedData?.ok;
+const optionsComplete = previewData?.validatedLive === true && !optionsPreviewNeedsProcessing(previewData) && (!!offseasonState?.optionsComplete || !!appliedData?.ok);
 
 const userPlayerOptions = useMemo(() => {
   if (!selectedTeamName) return [];
@@ -797,8 +807,11 @@ useEffect(() => {
     seasonYear,
     retirementsComplete: true,
     optionsComplete: true,
+        optionsResolvedSeasonYear: seasonYear,
     rightsManagementComplete: true,
+        rightsResolvedSeasonYear: seasonYear,
     preFreeAgencyResolved: true,
+        preFreeAgencyResolvedSeasonYear: seasonYear,
     freeAgencyComplete: false,
     progressionComplete: false,
   };
@@ -944,7 +957,7 @@ const filteredExpiredContracts = useMemo(() => {
       decisionsPayload.__stashDecisions = stashDecisionsPayload;
 
       const res = await applyPlayerTeamOptions(
-        workingLeagueData,
+        optionsLeagueForYear(workingLeagueData),
         selectedTeamName,
         decisionsPayload
       );
@@ -957,11 +970,11 @@ const filteredExpiredContracts = useMemo(() => {
         return;
       }
 
-      applyLeagueUpdate(res.leagueData);
+      await applyLeagueUpdate(res.leagueData);
       setAppliedData(res);
 
       if (res?.previewAfter) {
-        setPreviewData(res.previewAfter);
+        setPreviewData({ ...res.previewAfter, validatedLive: true });
       }
 
       const nextOffseasonState = {
@@ -970,6 +983,7 @@ const filteredExpiredContracts = useMemo(() => {
         seasonYear,
         retirementsComplete: true,
         optionsComplete: true,
+        optionsResolvedSeasonYear: seasonYear,
         rightsManagementComplete: false,
         preFreeAgencyResolved: false,
         freeAgencyComplete: false,
@@ -1147,7 +1161,7 @@ const finalizeRightsManagement = async () => {
       return;
     }
 
-    applyLeagueUpdate(res.leagueData);
+    await applyLeagueUpdate(res.leagueData);
 
     if (res?.previewAfter) {
       setRightsPreviewData(res.previewAfter);
@@ -1161,8 +1175,11 @@ const finalizeRightsManagement = async () => {
       seasonYear,
       retirementsComplete: true,
       optionsComplete: true,
+        optionsResolvedSeasonYear: seasonYear,
       rightsManagementComplete: true,
+        rightsResolvedSeasonYear: seasonYear,
       preFreeAgencyResolved: true,
+        preFreeAgencyResolvedSeasonYear: seasonYear,
       freeAgencyComplete: false,
       progressionComplete: false,
     };

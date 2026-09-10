@@ -1468,7 +1468,7 @@ function buildPairQueues(matchups = []) {
   return queues;
 }
 
-function buildRoundPairsFromQueues(pairQueues = {}, teamIds = [], neededRounds = 82) {
+function buildRoundPairsFromQueues(pairQueues = {}, teamIds = [], neededRounds = 82, scheduleSeed = "") {
   // Build 82 full-league rounds from the 82-game NBA matchup graph. Each round
   // has every team playing once, which naturally creates the game/off/game rhythm
   // Raman wanted and removes random 4-6 day dead zones from the old greedy spread.
@@ -1514,7 +1514,7 @@ function buildRoundPairsFromQueues(pairQueues = {}, teamIds = [], neededRounds =
         for (const candidate of available) {
           const possible = candidateCountWithin(candidate, available);
           const degree = remainingDegreeWithin(candidate, available);
-          const meta = [possible, -degree, stableHashNumber(`${attempt}|${roundIndex}|pick|${candidate}`)];
+          const meta = [possible, -degree, stableHashNumber(`${scheduleSeed}|${attempt}|${roundIndex}|pick|${candidate}`)];
           if (
             !bestMeta ||
             meta[0] < bestMeta[0] ||
@@ -1544,7 +1544,7 @@ function buildRoundPairsFromQueues(pairQueues = {}, teamIds = [], neededRounds =
             const degreeDiff = remainingDegreeWithin(b, available) - remainingDegreeWithin(a, available);
             if (degreeDiff) return degreeDiff;
 
-            return stableHashNumber(`${attempt}|${roundIndex}|${team}|${a}`) - stableHashNumber(`${attempt}|${roundIndex}|${team}|${b}`);
+            return stableHashNumber(`${scheduleSeed}|${attempt}|${roundIndex}|${team}|${a}`) - stableHashNumber(`${scheduleSeed}|${attempt}|${roundIndex}|${team}|${b}`);
           });
 
         available.delete(team);
@@ -1595,7 +1595,10 @@ function generateFullSeasonSchedule(teams, startDate, endDate, calendarConfig = 
   const canonicalIds = teams.map((t) => slugifyId(t.name));
   if (canonicalIds.length < 2) return { byDate: {}, list: [] };
 
+  const scheduleSeed = String(calendarConfig?.scheduleSeed || ('schedule-v2|' + startDate.getFullYear()));
   const { matchups, byCanon } = buildDivisionAwareMatchups(teams);
+  // Rotate home/away every year while retaining each pair's game count.
+  if (startDate.getFullYear() % 2) for (const game of matchups) [game.home, game.away] = [game.away, game.home];
   const days = rangeDays(startDate, endDate);
   const byDate = {};
   for (const d of days) byDate[fmt(d)] = [];
@@ -1627,7 +1630,7 @@ function generateFullSeasonSchedule(teams, startDate, endDate, calendarConfig = 
 
   const pairQueues = buildPairQueues(matchups);
   const rounds = neededRounds > 0
-    ? buildRoundPairsFromQueues(pairQueues, canonicalIds, neededRounds)
+    ? buildRoundPairsFromQueues(pairQueues, canonicalIds, neededRounds, scheduleSeed)
     : null;
   const roundDates = buildCompactSeasonRoundDates(playableDays, neededRounds, allStarBreak);
 

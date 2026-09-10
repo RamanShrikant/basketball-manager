@@ -1,3 +1,5 @@
+import { getCanonicalPlayer, formatPlayerHeight } from "../utils/playerResolver.js";
+import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext.jsx";
@@ -210,6 +212,7 @@ export default function ContractExtensions() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState(null);
+  const [playerCardOpen, setPlayerCardOpen] = useState(false);
   const playerPillTuning = useContractExtensionVisualTuning();
 
   const teamName = selectedTeam?.name || null;
@@ -231,6 +234,7 @@ export default function ContractExtensions() {
     [preview, selectedPlayerId]
   );
 
+  const selectedPlayer = useMemo(() => getCanonicalPlayer(leagueData, selectedRow), [leagueData, selectedRow]);
   const askPackages = selectedRow?.askPackages || [];
   const selectedPackage = useMemo(
     () => askPackages.find((pkg) => String(pkg.askPackageId || pkg.packageId) === String(selectedPackageId)) || askPackages[0] || null,
@@ -361,7 +365,8 @@ export default function ContractExtensions() {
             </button>
           </div>
         </div>
-      </PageFade>
+        <PlayerCardModal open={playerCardOpen} player={selectedPlayer} team={selectedTeam} leagueData={leagueData} onClose={() => setPlayerCardOpen(false)} />
+    </PageFade>
     );
   }
 
@@ -526,11 +531,14 @@ export default function ContractExtensions() {
                 <div className="flex h-full items-center justify-center text-neutral-500">Select a player.</div>
               ) : (
                 <>
-                  <div className="min-h-0 flex-1 overflow-hidden p-3">
+                  <div className="contract-extension-orange-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
                     <div className="flex h-full min-h-0 flex-col gap-2">
                       <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 pb-2">
                         <div className="min-w-0">
-                          <h2 className="truncate text-xl font-black">{selectedRow.playerName}</h2>
+                          <button type="button" onClick={() => setPlayerCardOpen(true)} className="truncate text-left text-xl font-black hover:text-orange-300">{selectedPlayer?.name || selectedRow.playerName}</button>
+                          <div className="mt-1 text-xs text-neutral-300">
+                            {selectedPlayer?.pos || "—"} · Age {selectedPlayer?.age ?? "—"} · {formatPlayerHeight(selectedPlayer?.height)} · OVR {selectedPlayer?.overall ?? "—"} · POT {selectedPlayer?.potential ?? "—"}
+                          </div>
                           {!selectedRow.eligible && (
                             <div className="mt-1 line-clamp-2 text-xs leading-4 text-neutral-400">{selectedRow.reason}</div>
                           )}
@@ -597,7 +605,7 @@ export default function ContractExtensions() {
                       ) : (
                         <div className="flex min-h-0 flex-1 flex-col">
                           <div className="mb-1 shrink-0 text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Player-requested packages</div>
-                          <div className="grid min-h-0 flex-1 gap-2 xl:grid-cols-3">
+                          <div className="grid shrink-0 gap-2 2xl:grid-cols-3">
                             {askPackages.map((pkg) => {
                               const id = pkg.askPackageId || pkg.packageId;
                               const active = String(id) === String(selectedPackage?.askPackageId || selectedPackage?.packageId);
@@ -606,11 +614,11 @@ export default function ContractExtensions() {
                                   type="button"
                                   key={id}
                                   onClick={() => setSelectedPackageId(id)}
-                                  className={`flex min-h-0 flex-col rounded-2xl border p-2.5 text-left transition ${active ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black/25 hover:border-white/25"}`}
+                                  className={`flex min-h-[180px] shrink-0 flex-col rounded-2xl border p-2.5 text-left transition ${active ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black/25 hover:border-white/25"}`}
                                 >
                                   <div className="flex items-start justify-between gap-3">
                                     <div>
-                                      <div className="text-sm font-black text-white">{pkg.label || `${pkg.years}-year package`}</div>
+                                      <div className="text-sm font-black text-white">{`${pkg.years}-Year Extension`}</div>
                                       <div className="mt-1 text-xs text-neutral-500">{pkg.years} years · {optionLabel(pkg.optionType)}</div>
                                     </div>
                                     <div className="rounded-full border border-white/10 bg-black/25 px-2.5 py-1 text-[10px] font-black uppercase text-neutral-300">

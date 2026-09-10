@@ -1,3 +1,5 @@
+import { createPortal } from "react-dom";
+import { getCanonicalPlayer, formatPlayerHeight } from "../utils/playerResolver.js";
 import React, { useEffect, useMemo, useState } from "react";
 import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import { useNavigate } from "react-router-dom";
@@ -638,41 +640,7 @@ function getPlayerKeyFromAny(row = {}) {
 }
 
 function findPlayerInLeague(leagueData, row = {}) {
-  const playerId = row.playerId || row.id || row?.player?.id;
-  const playerName = row.playerName || row.name || row?.player?.name;
-
-  if (row?.player && typeof row.player === "object") {
-    return row.player;
-  }
-
-  const freeAgents = Array.isArray(leagueData?.freeAgents) ? leagueData.freeAgents : [];
-  const teams = getAllTeamsFromLeague(leagueData);
-  const pools = [freeAgents, ...teams.map((team) => team?.players || [])];
-
-  for (const pool of pools) {
-    for (const player of pool || []) {
-      if (playerId !== undefined && playerId !== null && playerId !== "" && player?.id === playerId) {
-        return player;
-      }
-      if (playerName && player?.name === playerName) {
-        return player;
-      }
-    }
-  }
-
-  if (playerName) {
-    return {
-      id: playerId || null,
-      name: playerName,
-      pos: row.position || row.pos || row?.player?.position || row?.player?.pos || "-",
-      age: row.age || row?.player?.age || null,
-      overall: row.overall || row?.player?.overall || null,
-      potential: row.potential || row?.player?.potential || null,
-      headshot: row.headshot || row?.player?.headshot || "",
-    };
-  }
-
-  return null;
+  return getCanonicalPlayer(leagueData, row);
 }
 
 function getLatestTeamHistoryRow(leagueData, teamName) {
@@ -3276,7 +3244,7 @@ return (
           )}
         </div>
 
-        <div className="bmTableScroller min-h-0 flex-1 overflow-y-auto pb-6 pr-1">
+        <div className="bmTableScroller min-h-0 flex-1 overflow-y-auto pb-24 pr-1">
         {shouldShowEmptyResults ? (
           <div className="bg-neutral-800 border border-neutral-700 rounded-2xl p-6 shadow-lg">
             <p className="text-lg text-gray-300">
@@ -3715,7 +3683,8 @@ return (
                 <p className="text-gray-400">No user signings are waiting for your decision right now.</p>
               ) : (
                 <div className="space-y-3">
-                  {pendingUserDecisions.map((row) => {
+                  {pendingUserDecisions.map((decision) => {
+                    const row = { ...decision, player: findPlayerInLeague(leagueData, decision) };
                     const isSelected = Boolean(selectedDecisionMap[row.playerKey]);
                     const contractSummary = getContractSummary(
                       row?.contract,
@@ -3814,8 +3783,10 @@ return (
       </div>
 
       <div className="text-sm text-gray-400 mt-1">
-        {row?.player?.position || "-"}
+        {row?.player?.pos || row?.player?.position || "-"}
         {row?.player?.age ? ` • Age ${row.player.age}` : ""}
+        {row?.player?.height ? ` • ${formatPlayerHeight(row.player.height)}` : ""}
+        {` • POT ${row?.player?.potential ?? "-"}`}
       </div>
 
       <div className="text-base text-gray-300 mt-2">
@@ -4199,8 +4170,8 @@ return (
         )}
         </div>
       </div>
-      {offerStatusPopupOpen && offerPopupRows.length > 0 && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] px-4 py-6">
+      {offerStatusPopupOpen && offerPopupRows.length > 0 && createPortal(
+        <div className="fixed inset-0 bg-black/70 flex items-start justify-center overflow-y-auto z-[250] px-4 py-6">
           <div className="w-full max-w-2xl bg-neutral-800 rounded-2xl border border-orange-500/40 shadow-2xl p-6">
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
@@ -4283,11 +4254,11 @@ return (
               </button>
             </div>
           </div>
-        </div>
+        </div> , document.body
       )}
 
-      {infoPopup && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[80] px-4 py-6">
+      {infoPopup && createPortal(
+        <div className="fixed inset-0 bg-black/70 flex items-start justify-center overflow-y-auto z-[260] px-4 py-6">
           <div className="w-full max-w-2xl bg-neutral-800 rounded-2xl border border-orange-500/40 shadow-2xl p-6">
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
@@ -4406,7 +4377,7 @@ return (
               </button>
             </div>
           </div>
-        </div>
+        </div> , document.body
       )}
 
       <PlayerCardModal

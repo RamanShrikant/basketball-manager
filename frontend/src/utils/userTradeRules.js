@@ -236,7 +236,8 @@ function shouldUseOffseasonDateForUserTrades(leagueData = {}, context = null) {
   if (direct) {
     const [year, month] = direct.split("-").map(Number);
     if (Number.isFinite(year) && Number.isFinite(month)) {
-      const draftYear = seasonStartYear + 1;
+      const draftYear = context?.inOffseason && Number(context?.seasonYear) >= 2020
+        ? Number(context.seasonYear) : seasonStartYear + 1;
       if (year < draftYear || (year === draftYear && month < 6)) return false;
     }
   }
@@ -909,7 +910,7 @@ function isGuaranteedFirst(pick = {}, item = null) {
 function futureStepienStartYear(leagueData = {}, context = null) {
   const tradeContext = context || getOffseasonTradeContext(leagueData);
   const seasonStartYear = getCurrentSeasonStartYear(leagueData);
-  const draftYear = seasonStartYear + 1;
+
   const currentDate = getUserTradeCurrentDate(leagueData);
   const [dateYear, dateMonth] = String(currentDate || "")
     .split("-")
@@ -923,6 +924,11 @@ function futureStepienStartYear(leagueData = {}, context = null) {
     inRealOffseason && tradeContext?.draftOrderLocked
   );
 
+  // Payroll may already have rolled forward while the current draft is pending.
+  const contextDraftYear = Number(tradeContext?.seasonYear);
+  const draftYear = inRealOffseason && Number.isFinite(contextDraftYear) && contextDraftYear >= 2020
+    ? contextDraftYear
+    : seasonStartYear + 1;
   return currentDraftResolved ? draftYear + 1 : draftYear;
 }
 

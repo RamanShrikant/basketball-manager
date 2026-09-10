@@ -1,3 +1,6 @@
+import { getDisplaySeasonYear } from "../utils/seasonContext.js";
+import { getCanonicalPlayer } from "../utils/playerResolver.js";
+import { createPortal } from "react-dom";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import LZString from "lz-string";
 import RuntimePlayerPortrait from "./RuntimePlayerPortrait.jsx";
@@ -286,15 +289,7 @@ function getMoodLabel(value) {
 }
 
 function getCurrentSeasonDisplayYear(leagueData) {
-  const leagueYears = [leagueData?.currentSeasonYear, leagueData?.seasonYear]
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value) && value > 1900);
-
-  if (leagueYears.length) return Math.max(...leagueYears) + 1;
-
-  const meta = safeJSON(localStorage.getItem("bm_league_meta_v1"), {});
-  const metaStartYear = Number(meta?.seasonYear);
-  return Number.isFinite(metaStartYear) && metaStartYear > 1900 ? metaStartYear + 1 : 2026;
+  return getDisplaySeasonYear(leagueData || {});
 }
 
 function round1(value) {
@@ -605,7 +600,7 @@ function buildPlayerCardSeasonRows({ player, leagueData, resolvedTeamName, resol
     ...combineRowsBySeasonYear([
       ...historicalRows,
       ...archivedFallbackRows,
-    ].filter((row) => Number(row?.seasonYear || 0) !== Number(currentSeasonYear))),
+    ].filter((row) => !liveRows.length || Number(row?.seasonYear || 0) !== Number(currentSeasonYear))),
     ...combineRowsBySeasonYear(liveRows),
   ].sort((a, b) => Number(a?.seasonYear || 0) - Number(b?.seasonYear || 0));
 }
@@ -1367,7 +1362,7 @@ function AttributeCompareRow({ label, value, average, compact = false }) {
 
 export default function PlayerCardModal({
   open,
-  player,
+  player: playerReference,
   team,
   teamName,
   teamLogo,
@@ -1375,13 +1370,14 @@ export default function PlayerCardModal({
   currentStats,
   onClose,
 }) {
+  const player = useMemo(() => getCanonicalPlayer(leagueData, playerReference), [leagueData, playerReference]);
   const [activeTab, setActiveTab] = useState("overview");
   const [accoladeFilter, setAccoladeFilter] = useState("all");
   const [openHonorKey, setOpenHonorKey] = useState(null);
   const contentRootRef = useRef(null);
 
-  const resolvedTeamName = useMemo(() => getPrimaryTeamName(player, team?.name || teamName), [player, team?.name, teamName]);
-  const resolvedTeamLogo = useMemo(() => getPrimaryTeamLogo(player, team?.logo || teamLogo, leagueData, resolvedTeamName), [player, team?.logo, teamLogo, leagueData, resolvedTeamName]);
+  const resolvedTeamName = useMemo(() => getPrimaryTeamName(player, player?.teamName || team?.name || teamName), [player, team?.name, teamName]);
+  const resolvedTeamLogo = useMemo(() => getPrimaryTeamLogo(player, getTeamLogoIndex(leagueData)[resolvedTeamName] || (resolvedTeamName === "Free Agent" ? "" : team?.logo || teamLogo), leagueData, resolvedTeamName), [player, team?.logo, teamLogo, leagueData, resolvedTeamName]);
   const mood = useMemo(() => computeMood(player, leagueData, resolvedTeamName, currentStats), [player, leagueData, resolvedTeamName, currentStats]);
   const seasons = useMemo(() => player ? buildPlayerCardSeasonRows({ player, leagueData, resolvedTeamName, resolvedTeamLogo }) : [], [player, leagueData, resolvedTeamName, resolvedTeamLogo]);
   const accolades = useMemo(() => player ? buildPlayerCardAccolades({ player, leagueData, resolvedTeamName }) : [], [player, leagueData, resolvedTeamName]);
@@ -1460,8 +1456,8 @@ export default function PlayerCardModal({
   const latestSeason = careerSummary.latest;
   const featuredAccolades = allGroupedAccolades.slice(0, 4);
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center px-3 py-3 sm:px-6">
+  return createPortal(
+    <div className="fixed inset-0 z-[300] flex items-center justify-center px-3 py-3 sm:px-6">
       <style>{`
         .pc-modal-scroll { scrollbar-width: thin; scrollbar-color: #f97316 #111111; }
         .pc-modal-scroll::-webkit-scrollbar { width: 9px; height: 9px; }
@@ -1479,7 +1475,7 @@ export default function PlayerCardModal({
 
       <button type="button" aria-label="Close player card" onClick={onClose} className="absolute inset-0 bg-black/75 backdrop-blur-md" />
 
-      <div className="pc-pop pc-glow-card relative flex h-[92vh] w-full max-w-[1100px] flex-col overflow-hidden rounded-[30px] border border-white/15 bg-[#090909] text-white">
+      <div className="pc-pop pc-glow-card relative flex h-[92dvh] w-full max-w-[1100px] flex-col overflow-hidden rounded-[30px] border border-white/15 bg-[#090909] text-white">
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute -left-32 -top-32 h-80 w-80 rounded-full bg-orange-500/20 blur-3xl" />
           <div className="absolute -right-24 top-24 h-72 w-72 rounded-full bg-amber-400/10 blur-3xl" />
@@ -1546,8 +1542,8 @@ export default function PlayerCardModal({
 
           <div className="min-h-0 flex-1 overflow-hidden">
             {activeTab === "overview" && (
-              <div className="grid h-full min-h-0 gap-3 overflow-hidden lg:grid-cols-[1fr_0.86fr]">
-                <div className="min-h-0 space-y-3 overflow-hidden">
+              <div className="pc-modal-scroll grid h-full min-h-0 content-start gap-3 overflow-y-auto pr-2 lg:grid-cols-[1fr_0.86fr]">
+                <div className="space-y-3">
                   <div className="pc-soft-border rounded-[22px] border border-white/15 bg-white/[0.04] p-3">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <h3 className="text-lg font-black">Snapshot</h3>
@@ -1571,7 +1567,7 @@ export default function PlayerCardModal({
                   </div>
                 </div>
 
-                <div className="min-h-0 space-y-3 overflow-hidden">
+                <div className="space-y-3">
                   <div className="pc-soft-border rounded-[22px] border border-white/15 bg-white/[0.04] p-3">
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <h3 className="text-lg font-black">Contract</h3>
@@ -1816,6 +1812,7 @@ export default function PlayerCardModal({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

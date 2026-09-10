@@ -1,3 +1,4 @@
+import { createPlayerResolver } from "../utils/playerResolver.js";
 import React, { useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useGame } from "../context/GameContext";
@@ -717,7 +718,7 @@ const isOffseasonMode =
   const freeAgencyFinished = !!offseasonState?.freeAgencyComplete;
 
   const freeAgents = useMemo(() => {
-    return workingLeagueData?.freeAgents || [];
+    return (workingLeagueData?.freeAgents || []).map(createPlayerResolver(workingLeagueData));
   }, [workingLeagueData]);
 
   const liveFreeAgencyState = useMemo(() => {
@@ -857,11 +858,7 @@ const isOffseasonMode =
 
   const effectiveFreeAgencyFinished =
     trustedFreeAgencyFinished ||
-    freeAgencyMarketComplete ||
-    (isOffseasonMode &&
-      optionsComplete &&
-      !isLiveFreeAgencyActive &&
-      freeAgents.length === 0);
+    freeAgencyMarketComplete;
 
   const activeOfferCount = useMemo(() => {
     const offersByPlayer = liveFreeAgencyState?.offersByPlayer || {};
@@ -1962,7 +1959,7 @@ const isOffseasonMode =
     if (!optionsComplete) return;
     if (freeAgencyFinished) return;
     if (isLiveFreeAgencyActive) return;
-    if (!freeAgencyMarketComplete && freeAgents.length > 0) return;
+    if (!freeAgencyMarketComplete) return;
 
     updateOffseasonState({
       active: true,
@@ -2709,29 +2706,6 @@ const handleContinueToProgression = () => {
       setMarketInitLoading(true);
       setDaySummary(null);
 
-      if (!(workingLeagueData?.freeAgents || []).length) {
-        updateOffseasonState({
-          active: true,
-          seasonYear: currentSeasonYear,
-          optionsComplete: true,
-          rightsManagementComplete: true,
-          freeAgencyComplete: true,
-        });
-
-        setDaySummary({
-          dayResolved: 0,
-          signings: [],
-          generatedOffers: [],
-          stateSummary: {
-            isActive: false,
-            currentDay: 0,
-            maxDays: 0,
-            freeAgentCount: 0,
-          },
-        });
-        return;
-      }
-
 const cleanFreeAgencyState = buildCleanFreeAgencyStateForInit(
   currentSeasonYear,
   selectedTeam?.name || null,
@@ -2752,6 +2726,12 @@ const res = await initializeFreeAgencyPeriod(
 );
 
       if (!res?.ok || !res?.leagueData) {
+        if (String(res?.reason || '').startsWith('PRE_FREE_AGENCY_CONTRACT_CLEANUP_REQUIRED')) {
+          updateOffseasonState({ seasonYear: currentSeasonYear, optionsComplete: false, rightsManagementComplete: false, preFreeAgencyResolved: false, freeAgencyComplete: false, optionsResolvedSeasonYear: null, rightsResolvedSeasonYear: null });
+          localStorage.removeItem('bm_option_decision_results_v1');
+          navigate('/player-team-options');
+          return;
+        }
         setDaySummary({
           error: res?.reason || "Failed to start free agency.",
         });
@@ -3131,7 +3111,7 @@ updateOffseasonState({
     return optionsLockedView;
   }
 
-  if (!freeAgents.length && (!isOffseasonMode || optionsComplete || effectiveFreeAgencyFinished)) {
+  if (!freeAgents.length && (!isOffseasonMode || effectiveFreeAgencyFinished)) {
     return noFreeAgentsView;
   }
 
@@ -3829,21 +3809,25 @@ updateOffseasonState({
         document.body
       )}
 
-      {offersModalOpen && (
+      {offersModalOpen && createPortal(
         <div
-          className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-50 px-4 py-4"
+          className="fixed inset-0 bg-black/70 flex items-center justify-center overflow-hidden z-[250] px-4 py-4"
           onClick={closeOffersModal}
           role="presentation"
         >
           <div
-            className="fa-modal-scroll w-full max-w-4xl max-h-[calc(100vh-1.5rem)] overflow-y-auto bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-6"
+            className="flex min-h-0 flex-col w-full max-w-4xl max-h-[calc(100dvh-2rem)] overflow-hidden bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-6"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
           >
+            <div className="flex shrink-0 items-center justify-between gap-3">
+              <button type="button" aria-label="Close offers" onClick={closeOffersModal} className="order-2 rounded-lg bg-neutral-700 px-3 py-2 text-white">Close</button>
             <h2 className="text-lg font-bold text-orange-400 mb-0.5">
               View Offers
             </h2>
+            </div>
+            <div className="fa-modal-scroll min-h-0 flex-1 overflow-y-auto pr-2">
 
             <p className="text-white text-sm mb-0.5">
               {offersViewData?.player?.name || selectedPlayer?.name || "-"}
@@ -4046,8 +4030,9 @@ updateOffseasonState({
                 Close
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </div>, document.body
       )}
 
       {capInfoModal && userCapDashboard && (() => {

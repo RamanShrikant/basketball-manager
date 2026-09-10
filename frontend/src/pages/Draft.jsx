@@ -1,3 +1,4 @@
+import { repairUnstartedDualSwapOrder } from "../utils/draftPicks.js";
   import React, { useEffect, useMemo, useRef, useState } from "react";
   import { useNavigate } from "react-router-dom";
   import { useGame } from "../context/GameContext";
@@ -165,7 +166,7 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
   }
 
 
-  function isLotteryDraftOrderLocked(lottery) {
+  function isLotteryDraftOrderLocked(lottery, leagueData, seasonYear) {
     if (!lottery || typeof lottery !== "object") return false;
     if (lottery.isPreview || lottery?.result?.meta?.isPreview) return false;
     return Boolean(
@@ -1568,8 +1569,8 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
       }
     }, [leagueData, seasonYear, setLeagueData]);
 
-    const lottery = useMemo(() => readDraftLottery(seasonYear), [seasonYear]);
-    const lotteryOrderLocked = isLotteryDraftOrderLocked(lottery);
+    const lottery = useMemo(() => readDraftLottery(seasonYear), [seasonYear, workingLeagueData]);
+    const lotteryOrderLocked = isLotteryDraftOrderLocked(lottery, leagueData, seasonYear);
 
     // Repair older saves made before resolved-order ownership was canonicalized.
     // This is idempotent and only changes leagueData when the locked order still
@@ -1577,7 +1578,16 @@ function stripLegacyDraftStateFromLeagueData(leagueData, seasonYear) {
     useEffect(() => {
       const lockedOrder = lotteryOrderLocked ? lottery?.result?.fullDraftOrder || [] : [];
       if (!workingLeagueData || !lockedOrder.length) return;
-      const finalized = finalizeResolvedDraftOrderAssets(workingLeagueData, lockedOrder, seasonYear);
+      const savedDraft = safeJSON(localStorage.getItem(DRAFT_STATE_KEY), null);
+      const repairedOrder = repairUnstartedDualSwapOrder(workingLeagueData, lockedOrder, seasonYear, savedDraft);
+      if (repairedOrder !== lockedOrder) {
+        localStorage.setItem('bm_dual_swap_repair_v2', JSON.stringify({ seasonYear, previousOrder: lockedOrder }));
+        localStorage.setItem(DRAFT_LOTTERY_KEY, JSON.stringify({ ...lottery, result: { ...lottery.result, fullDraftOrder: repairedOrder } }));
+        if (savedDraft && Number(savedDraft.seasonYear) === Number(seasonYear)) {
+          localStorage.setItem(DRAFT_STATE_KEY, JSON.stringify({ ...savedDraft, draftOrder: repairedOrder, draftOrderSignature: getDraftOrderSignature(repairedOrder) }));
+        }
+      }
+      const finalized = finalizeResolvedDraftOrderAssets(workingLeagueData, repairedOrder, seasonYear);
       if (finalized === workingLeagueData) return;
       setWorkingLeagueData(finalized);
       persistLeagueData(finalized, setLeagueData);

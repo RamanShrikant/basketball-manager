@@ -1,3 +1,4 @@
+import { createPlayerResolver } from "../utils/playerResolver.js";
 import React, { useState, useEffect, useMemo } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
@@ -663,13 +664,16 @@ export default function RosterView() {
   );
 
   // active rows
-  const viewPlayers = isAllView
+  const resolvePlayer = useMemo(() => createPlayerResolver(leagueData), [leagueData]);
+  const rawViewPlayers = isAllView
     ? allLeaguePlayers
     : [
         ...normalizedRosterBuckets.standardPlayers,
         ...normalizedRosterBuckets.twoWayPlayers.map(markTwoWayPlayer),
         ...normalizedRosterBuckets.stashPlayers.map(markStashPlayer),
       ];
+
+  const viewPlayers = rawViewPlayers.map((row) => ({ ...row, ...resolvePlayer(row) }));
 
   // sorting
   const positionOrder = ["PG", "SG", "SF", "PF", "C"];

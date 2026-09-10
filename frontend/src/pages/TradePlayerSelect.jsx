@@ -1,3 +1,4 @@
+import { createPlayerResolver } from "../utils/playerResolver.js";
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
@@ -27,7 +28,7 @@ function getTeamPlayers(team, leagueData) {
   // Patch 29: the selector should not silently hide standard-contract players.
   // Show the team roster and let getUserTradePlayerEligibility render exact
   // lock reasons for recently signed/acquired/two-way/stash/deadline cases.
-  return Array.isArray(team?.players) ? team.players.filter(Boolean) : [];
+  return Array.isArray(team?.players) ? team.players.filter(Boolean).map(createPlayerResolver(leagueData)) : [];
 }
 
 function playerNameOf(player) {

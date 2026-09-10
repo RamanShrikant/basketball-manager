@@ -1,0 +1,64 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import { createRequire } from 'node:module';
+import { createPlayerResolver, getCanonicalPlayer, formatPlayerHeight } from '../src/utils/playerResolver.js';
+import { hasLockedDraftOrderLength } from '../src/utils/draftPicks.js';
+import * as seasonContext from '../src/utils/seasonContext.js';
+const require = createRequire(import.meta.url);
+const { transformSync } = require('@swc/core');
+let checks = 0;
+function check(name, fn) { fn(); checks++; console.log(`PASS ${name}`); }
+const store = new Map();
+const localStorage = { getItem: key => store.get(key) ?? null, setItem: (k,v) => store.set(k,String(v)), removeItem:k=>store.delete(k) };
+globalThis.localStorage = localStorage;
+const read = f => fs.readFileSync(new URL(`../src/${f}`,import.meta.url),'utf8');
+function helpers(file, names, dependencies = {}) {
+  const code = transformSync(read(file)+`\nexport { ${names.join(', ')} };`, { jsc: { parser: { syntax:'ecmascript',jsx:true }, target:'es2022' }, module:{type:'commonjs'} }).code;
+  const exports = {};
+  const context = { exports, localStorage, console, window:{}, document:{}, setTimeout, clearTimeout,
+    require: key => dependencies[key] ?? (key === 'react' ? { createContext:()=>({}) } : key === 'lz-string' ? require('lz-string') : key.includes('seasonContext') ? seasonContext : {}) };
+  vm.runInNewContext(code,context,{filename:file});
+  return exports;
+}
+const live = { id:7,name:'Test Veteran',position:'SF',height:81,overall:89,potential:90,age:32,contract:null,history:{seasons:[{seasonYear:2027,teamName:'Old Team',games:70,ppg:22,source:'sim'}],accolades:[]} };
+const snapshot = {id:'7',name:live.name,overall:80,contract:{salaryByYear:[100]},history:{seasons:[]}};
+const league = {seasonStartYear:2027,displaySeasonYear:2027,teams:[{name:'Other',players:[]}],freeAgents:[live]};
+check('live ratings override transaction snapshot',()=>assert.equal(getCanonicalPlayer(league,snapshot).overall,89));
+check('numeric and string IDs match',()=>assert.equal(getCanonicalPlayer(league,{playerId:'7',playerName:live.name}).potential,90));
+check('offer IDs never shadow explicit player IDs',()=>assert.equal(getCanonicalPlayer(league,{id:'offer-99',playerId:7,playerName:live.name}).overall,89));
+check('pending metadata and history are complete',()=>{const p=getCanonicalPlayer(league,{player:snapshot});assert.equal(p.pos,'SF');assert.equal(p.height,81);assert.equal(p.history.seasons[0].ppg,22);});
+check('explicit cleared contract stays cleared',()=>assert.equal(getCanonicalPlayer(league,snapshot).contract,null));
+check('live aliases beat stale snapshot aliases',()=>assert.equal(getCanonicalPlayer(league,{...snapshot,pos:'C'}).pos,'SF'));
+check('FA ownership ignores rights team',()=>assert.equal(getCanonicalPlayer(league,snapshot).teamName,'Free Agent'));
+check('signed ownership and history follow current roster',()=>{const signed={...league,teams:[{name:'New Team',players:[{...live,contract:{salaryByYear:[200]}}]}],freeAgents:[]};const p=getCanonicalPlayer(signed,snapshot);assert.equal(p.teamName,'New Team');assert.equal(p.history.seasons[0].teamName,'Old Team');assert.equal(p.contract.salaryByYear[0],200);});
+check('resolver does not mutate inputs',()=>{const before=JSON.stringify(league);getCanonicalPlayer(league,snapshot);assert.equal(JSON.stringify(league),before);});
+check('same-name players with distinct IDs never merge',()=>{const l={teams:[{players:[{id:1,name:'Same',overall:60},{id:2,name:'Same',overall:95}]}]};assert.equal(getCanonicalPlayer(l,{id:1,name:'Same'}).overall,60);assert.equal(getCanonicalPlayer(l,{name:'Same'}).overall,undefined);assert.equal(getCanonicalPlayer(l,{id:3,name:'Same'}).overall,undefined);});
+check('conference storage and developmental pools resolve',()=>{const l={conferences:{East:[{name:'A',players:[],twoWayPlayers:[live]}]}};assert.equal(createPlayerResolver(l)(snapshot).overall,89);});
+check('unmatched rookie remains usable',()=>assert.equal(getCanonicalPlayer({}, {id:'rookie',ovr:70,pot:85}).overall,70));
+check('height is formatted for compact headers',()=>assert.equal(formatPlayerHeight(81),'6\'9"'));
+const cards = helpers('components/PlayerCardModal.jsx',['buildPlayerCardSeasonRows']);
+check('archived current season survives cleared live stats',()=>{const rows=cards.buildPlayerCardSeasonRows({player:live,leagueData:league});assert.equal(rows.length,1);assert.equal(rows[0].seasonYear,2027);assert.equal(rows[0].ppg,22);});
+check('card history is identical before and after signing',()=>{const before=cards.buildPlayerCardSeasonRows({player:getCanonicalPlayer(league,snapshot),leagueData:league});const after=cards.buildPlayerCardSeasonRows({player:getCanonicalPlayer({...league,teams:[{name:'New Team',players:[live]}],freeAgents:[]},snapshot),leagueData:league});assert.equal(JSON.stringify(before),JSON.stringify(after));});
+check('live stats replace same-season archive without duplication',()=>{localStorage.setItem('bm_player_stats_v1',JSON.stringify({'Test Veteran__Old Team':{player:live.name,team:'Old Team',gp:2,pts:50}}));const rows=cards.buildPlayerCardSeasonRows({player:live,leagueData:league});assert.equal(rows.length,1);assert.equal(rows[0].ppg,25);store.clear();});
+const draft=helpers('pages/Draft.jsx',['isLotteryDraftOrderLocked'],{'../utils/draftPicks.js':{hasLockedDraftOrderLength}});
+const draftLeague={teams:Array.from({length:30},(_,i)=>({name:`T${i}`,players:[]}))};
+const order=Array.from({length:60},(_,i)=>({pick:i+1}));
+check('draft unopened and preview states do not crash',()=>{assert.equal(draft.isLotteryDraftOrderLocked(null,draftLeague,2027),false);assert.equal(draft.isLotteryDraftOrderLocked({isPreview:true},draftLeague,2027),false);});
+check('draft revealed order has explicit league and year',()=>assert.equal(draft.isLotteryDraftOrderLocked({firstRoundRevealed:true,secondRoundRevealed:true,result:{fullDraftOrder:order}},draftLeague,2027),true));
+check('draft partial reveal stays unlocked',()=>assert.equal(draft.isLotteryDraftOrderLocked({firstRoundRevealed:true,secondRoundRevealed:false,result:{fullDraftOrder:order}},draftLeague,2027),false));
+// Exercise the actual year-window function with controlled clock dependencies.
+const rulesSource=read('utils/userTradeRules.js');
+const start=rulesSource.indexOf('function futureStepienStartYear('),end=rulesSource.indexOf('\nfunction normalizeLeaguePicks',start);
+const ruleContext={getCurrentSeasonStartYear:l=>l.seasonStartYear,getUserTradeCurrentDate:()=>'',shouldUseOffseasonDateForUserTrades:(_l,c)=>c.inOffseason};
+vm.createContext(ruleContext);vm.runInContext(rulesSource.slice(start,end),ruleContext);
+check('advanced payroll year does not hide upcoming draft',()=>assert.equal(ruleContext.futureStepienStartYear({seasonStartYear:2027},{inOffseason:true,seasonYear:2027,draftOrderLocked:false}),2027));
+check('resolved current picks shift future Stepien window once',()=>assert.equal(ruleContext.futureStepienStartYear({seasonStartYear:2027},{inOffseason:true,seasonYear:2027,draftOrderLocked:true}),2028));
+check('regular season ignores stale offseason year',()=>assert.equal(ruleContext.futureStepienStartYear({seasonStartYear:2027},{inOffseason:false,seasonYear:2027,draftOrderLocked:true}),2028));
+const guardStart=rulesSource.indexOf('function shouldUseOffseasonDateForUserTrades('),guardEnd=rulesSource.indexOf('export function getUserTradeCurrentDate',guardStart);
+let phase='offseason',date='2027-06-20';
+const guardContext={getDirectUserTradeDate:()=>date,readClockPhase:()=>phase,getCurrentSeasonStartYear:l=>l.seasonStartYear};
+vm.createContext(guardContext);vm.runInContext(rulesSource.slice(guardStart,guardEnd),guardContext);
+check('offseason clock accepts upcoming draft despite rolled payroll',()=>assert.equal(guardContext.shouldUseOffseasonDateForUserTrades({seasonStartYear:2027},{inOffseason:true,seasonYear:2027}),true));
+check('active regular-season clock defeats stale offseason storage',()=>{phase='regularseason';assert.equal(guardContext.shouldUseOffseasonDateForUserTrades({seasonStartYear:2027},{inOffseason:true,seasonYear:2027}),false);});
+console.log(`Player data integrity regression passed: ${checks}/${checks} checks.`);

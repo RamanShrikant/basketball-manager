@@ -1,3 +1,4 @@
+import { getLiveDraftSeasonYear } from "../utils/liveDraftTradeAvailability.js";
 import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -231,17 +232,7 @@ function getBuilderTeamName(builder, side) {
 }
 
 function getSeasonYearFromLeague(leagueData) {
-  const offseasonState = safeJSON(localStorage.getItem("bm_offseason_state_v1"), {}) || {};
-  const candidates = [
-    offseasonState?.seasonYear,
-    leagueData?.seasonYear,
-    leagueData?.currentSeasonYear,
-    leagueData?.seasonStartYear,
-  ]
-    .map(Number)
-    .filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
-
-  return candidates.length ? Math.max(...candidates) : 2026;
+  return getLiveDraftSeasonYear(leagueData);
 }
 
 function getDraftOrderPickNumber(row = null) {

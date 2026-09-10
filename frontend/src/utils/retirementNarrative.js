@@ -120,12 +120,20 @@ function teamOf(row) {
 }
 
 function championshipRows(player, leagueData) {
-  const explicit = accoladeRows(player)
+  let explicit = accoladeRows(player)
     .filter((row) => accoladeKind(row) === "champion")
     .map((row) => ({ ...row, seasonYear: yearOf(row), team: teamOf(row) }))
     .filter((row) => row.seasonYear || row.team);
 
-  const seen = new Set(explicit.map((row) => `${row.seasonYear}|${row.team}`));
+  // A title is one event per player/season. Prefer the richer team-bearing row.
+  const bySeason = new Map();
+  for (const row of explicit) {
+    const key = row.seasonYear ? String(row.seasonYear) : 'unknown|' + row.team;
+    const previous = bySeason.get(key);
+    if (!previous || (!previous.team && row.team)) bySeason.set(key, row);
+  }
+  explicit = [...bySeason.values()];
+  const seen = new Set(explicit.filter((row) => row.seasonYear).map((row) => row.seasonYear));
   const historyChampions = Array.isArray(leagueData?.leagueHistory?.champions) ? leagueData.leagueHistory.champions : [];
   const seasons = seasonRows(player);
 
@@ -135,7 +143,9 @@ function championshipRows(player, leagueData) {
     if (!year || !team) continue;
     const champion = historyChampions.find((item) => Number(item?.seasonYear) === year && normalizeTeam(item?.championTeam || item?.teamName || item?.team) === team);
     if (!champion) continue;
-    const key = `${year}|${team}`;
+    const key = year;
+    const existing = explicit.find((item) => item.seasonYear === year);
+    if (existing && !existing.team) existing.team = team;
     if (!seen.has(key)) {
       explicit.push({ seasonYear: year, team, type: "champion", label: "NBA Champion", source: "leagueHistory" });
       seen.add(key);

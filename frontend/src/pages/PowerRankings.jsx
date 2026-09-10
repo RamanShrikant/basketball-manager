@@ -1,10 +1,10 @@
+import { createPlayerResolver } from "../utils/playerResolver.js";
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
 import { computeTeamRatings } from "../api/teamRatings.js";
 import { GAMEPLAN_VERSION, buildSmartRotation } from "../utils/ensureGameplans";
-import { buildOffseasonTradeEvaluationLeague } from "../utils/offseasonTradeContext.js";
 import PageFade from "../components/PageFade";
 import "../styles/BMPageBackground.css";
 import "../styles/BMAnimations.css";
@@ -550,11 +550,13 @@ export default function PowerRankings() {
   };
 
   const rankingsLeagueData = useMemo(() => {
-    const projected = buildOffseasonTradeEvaluationLeague(leagueData || {});
-    return projected?.leagueData || leagueData;
+    return leagueData;
   }, [leagueData]);
 
-  const teams = useMemo(() => getAllTeamsFromLeague(rankingsLeagueData), [rankingsLeagueData]);
+  const teams = useMemo(() => {
+    const resolve = createPlayerResolver(leagueData);
+    return getAllTeamsFromLeague(rankingsLeagueData).map((team) => ({ ...team, players: (team.players || []).map(resolve) }));
+  }, [rankingsLeagueData, leagueData]);
   const confMap = useMemo(
     () => getTeamConferenceMap(rankingsLeagueData, teams),
     [rankingsLeagueData, teams]

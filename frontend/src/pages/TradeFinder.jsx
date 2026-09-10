@@ -1,3 +1,4 @@
+import { createPlayerResolver, getCanonicalPlayer } from "../utils/playerResolver.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
@@ -2017,6 +2018,8 @@ function TradeFinderRatingRing({ player, variant = "packageRows" }) {
 }
 
 function AssetRow({ asset, selected, onToggle, pickRule, onPickRuleChange, leagueData, team, standingByTeam, currentDate = null, selectedActionLabel = "Added", disabled = false, disabledLabel = "Max", disabledReason = "" }) {
+  const resolvedPlayer = useMemo(() => asset.type === "player" ? getCanonicalPlayer(leagueData, asset.player) : null, [asset, leagueData]);
+  if (resolvedPlayer) asset = { ...asset, player: resolvedPlayer };
   const isPlayer = asset.type === "player";
   const isResolvedPick = !isPlayer && isResolvedDraftPickAsset(asset.pick);
   const label = isPlayer ? playerNameOf(asset.player) : formatPick(asset.pick);
@@ -2589,8 +2592,8 @@ const standardPatienceBlocked = Boolean(
   }, [liveDraftProgressSignature]);
 
   const selectedTeamPlayers = useMemo(
-    () => (getTeamPlayers(packageTeam) || []).filter(Boolean),
-    [packageTeam]
+    () => (getTeamPlayers(packageTeam) || []).filter(Boolean).map(createPlayerResolver(leagueData)),
+    [packageTeam, leagueData]
   );
   const selectedTeamPicks = useMemo(
     () => collectTradeablePicksForSingleTeamForFinder(leagueData, packageTeam?.name || packageTeam?.teamName || "", teams),
@@ -2600,12 +2603,6 @@ const standardPatienceBlocked = Boolean(
   const playerAssets = useMemo(
     () => selectedTeamPlayers
       .map((player) => ({ type: "player", player, key: `player:${playerKey(player)}` }))
-      .filter((asset) => getUserTradePlayerEligibility({
-        leagueData,
-        teamName: packageTeam?.name || packageTeam?.teamName || "",
-        player: asset.player,
-        currentDate: userTradeCurrentDate,
-      })?.ok !== false)
       .sort((a, b) => {
         const aOvr = Number(a.player?.overall || 0);
         const bOvr = Number(b.player?.overall || 0);
@@ -2629,7 +2626,7 @@ const standardPatienceBlocked = Boolean(
     () => allAssets.filter((asset) => selectedKeySet.has(asset.key)),
     [allAssets, selectedKeySet]
   );
-  const hiddenPlayerAssetCount = Math.max(0, selectedTeamPlayers.length - playerAssets.length);
+
 
   const availablePlayerAssets = useMemo(
     () => playerAssets.filter((asset) => !selectedKeySet.has(asset.key)),
@@ -3331,7 +3328,7 @@ const standardPatienceBlocked = Boolean(
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Players</div>
                     <div className="text-[10px] font-black uppercase tracking-[0.14em] text-neutral-600">
-                      {availablePlayerAssets.length} left{hiddenPlayerAssetCount ? ` • ${hiddenPlayerAssetCount} ineligible hidden` : ""}
+                      {availablePlayerAssets.length} players • Unavailable players are marked Locked
                     </div>
                   </div>
                   <div className="grid gap-2">

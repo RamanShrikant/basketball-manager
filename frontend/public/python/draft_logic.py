@@ -483,37 +483,17 @@ def _prospect_score(
     pick: Dict[str, Any],
     rng: random.Random,
 ) -> float:
-    # CPU draft board philosophy, v21:
-    # - Keep CPU picks simple and best-player-available driven.
-    # - Normal prospects are scored about 50% OVR, 40% POT, 10% roster fit.
-    # - 75+ OVR prospects are protected as obvious NBA-ready talent: the CPU
-    #   should not overthink an 81 vs. 80 with similar potential because of fit.
+    # Talent first, with a small bounded fit adjustment; no OVR threshold jump.
     _ = history_row, pick, rng
     overall = _resolve_prospect_overall(prospect, 60)
     potential = max(overall, _safe_int(prospect.get("potential"), overall))
-    pos = prospect.get("pos") or "SF"
-
-    # _need_score is 0-18, so normalize it to a 0-100 fit component before
-    # applying the requested 10% weight.
-    fit_score = (_need_score(team, pos) / 18.0) * 100.0
-
-    if overall >= 75:
-        # OVR-first lock for real first-round level prospects. One OVR point is
-        # intentionally worth more than any potential/fit tiebreak swing.
-        return float(
-            100.0
-            + overall * 10.0
-            + potential * 0.40
-            + fit_score * 0.05
-            - _safe_int(prospect.get("draftProjection"), 999) * 0.001
-        )
-
-    return float(
-        overall * 0.50
-        + potential * 0.40
-        + fit_score * 0.10
-        - _safe_int(prospect.get("draftProjection"), 999) * 0.001
-    )
+    pos = prospect.get("pos") or prospect.get("position") or "SF"
+    fit_bonus = max(0.0, min(1.5, _need_score(team, pos) / 18.0 * 1.5))
+    age = _safe_int(prospect.get("age"), 20)
+    age_bonus = max(-1.0, min(1.0, (20 - age) * 0.25))
+    rank = _safe_int(prospect.get("draftProjection") or prospect.get("trueRank") or prospect.get("rank"), 999)
+    board_bonus = max(0.0, 1.5 * (1.0 - min(max(rank, 1), 30) / 30.0))
+    return float(overall * 0.50 + potential * 0.50 + fit_bonus + age_bonus + board_bonus)
 
 
 def _choose_cpu_prospect(

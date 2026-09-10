@@ -1,3 +1,4 @@
+import { createPlayerResolver } from "../utils/playerResolver.js";
 
 // src/pages/SalaryTable.jsx
 import React, { useEffect, useMemo, useState } from "react";
@@ -1167,7 +1168,7 @@ export default function SalaryTable() {
   };
 
   const players = useMemo(() => {
-    const pls = selectedTeam?.players || [];
+    const pls = (selectedTeam?.players || []).map(createPlayerResolver(leagueData));
 
     const rosterRows = pls.map((p) => {
       const c = normalizeContract(p);
@@ -1598,7 +1599,7 @@ export default function SalaryTable() {
   };
 
   const buildPlayerRowsForTeam = (team, teamCapHoldRows, teamDeadCapPlayerRows) => {
-    const rosterRows = (team?.players || []).map((p) => {
+    const rosterRows = (team?.players || []).map(createPlayerResolver(leagueData)).map((p) => {
       const c = normalizeContract(p);
       const years = Math.max(1, c.salaryByYear.length || 1);
       const endYear = c.salaryByYear.length
@@ -1897,7 +1898,7 @@ export default function SalaryTable() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="max-h-[65vh] overflow-auto">
           <table className="w-full min-w-[920px]">
             <thead className="bg-white/5 border-b border-white/10">
               <tr className="text-white/70 text-sm">

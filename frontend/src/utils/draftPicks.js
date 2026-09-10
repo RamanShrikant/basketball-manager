@@ -1924,9 +1924,9 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
     if (!bestOwner || !ownerIsAllowed(bestAsset, bestOwner)) bestOwner = "";
     if (!worstOwner || !ownerIsAllowed(worstAsset, worstOwner)) worstOwner = "";
 
-    if (bestOwner && (!worstOwner || isSameTeamName(bestOwner, worstOwner))) {
+    if (bestOwner && !worstOwner) {
       worstOwner = otherPairTeam(ownerPairNames, bestOwner);
-    } else if (worstOwner && (!bestOwner || isSameTeamName(bestOwner, worstOwner))) {
+    } else if (worstOwner && !bestOwner) {
       bestOwner = otherPairTeam(ownerPairNames, worstOwner);
     } else if (!bestOwner && !worstOwner && sortedAssets.length) {
       const primary = sortedAssets[0];
@@ -1939,7 +1939,7 @@ function applySwapRightsToOrder(rows = [], { leagueData, year }) {
       }
     }
 
-    if (!bestOwner || !worstOwner || isSameTeamName(bestOwner, worstOwner)) return null;
+    if (!bestOwner || !worstOwner) return null;
 
     return {
       bestOwner,
@@ -2083,3 +2083,40 @@ export function applyDraftPickOwnershipToLotteryResult(result = {}, { leagueData
   };
 }
 
+
+// Repair only unstarted drafts with explicit retained ownership evidence.
+// Never move drafted players or override trades of already-resolved picks.
+export function repairUnstartedDualSwapOrder(leagueData, order, year, draftState = null) {
+  if (!Array.isArray(order) || !order.length) return order;
+  for (const state of [draftState, leagueData?.draftState]) {
+    if (state && Number(state.seasonYear || year) === Number(year) &&
+        (state.completed || Number(state.currentPickIndex || 0) > 0 || state.draftedPicks?.length)) return order;
+  }
+  const names = getTeamNamesFromLeague(leagueData);
+  const resolve = buildTeamResolver(leagueData);
+  const assets = normalizeDraftPicks(leagueData?.draftPicks || [], names);
+  const groups = new Map();
+  for (const asset of assets) {
+    if (!isSwapDraftPickAsset(asset) || Number(asset.year) !== Number(year) || asset.status !== 'resolved') continue;
+    const pair = [...new Set(getSwapInvolvedTeams(asset, names, resolve).map(resolve).filter(Boolean))].sort();
+    if (pair.length !== 2) continue;
+    const key = asset.round + '|' + pair.join('|');
+    if (!groups.has(key)) groups.set(key, { pair, round: Number(asset.round), assets: [] });
+    groups.get(key).assets.push(asset);
+  }
+  let result = order;
+  for (const group of groups.values()) {
+    if (group.assets.length !== 2 || new Set(group.assets.map(swapDirection)).size !== 2) continue;
+    const owner = resolve(group.assets[0].ownerTeam);
+    if (!owner || !isSameTeamName(owner, resolve(group.assets[1].ownerTeam))) continue;
+    const pairRows = order.filter(row => Number(row.round || getRoundFromPickRow(row)) === group.round && group.pair.some(name => isSameTeamName(name, resolve(rowOriginalTeam(row)))));
+    if (pairRows.length !== 2) continue;
+    const evidence = pairRows.map(row => assets.find(asset => !isSwapDraftPickAsset(asset) && Number(asset.year) === Number(year) && Number(asset.round) === group.round && isSameTeamName(resolve(asset.originalTeam), resolve(rowOriginalTeam(row)))));
+    if (evidence.some(asset => !asset || asset.lastTrade || asset.tradeHistory?.length || !String(asset.resolutionSource || '').startsWith('swap_'))) continue;
+    for (const row of pairRows) {
+      if (isSameTeamName(row.currentOwnerTeamName || row.teamName, owner)) continue;
+      result = setPickRowOwnerByIdentity(result, row, owner, leagueData, { ownershipRepair: 'dual_swap_v2' });
+    }
+  }
+  return result;
+}

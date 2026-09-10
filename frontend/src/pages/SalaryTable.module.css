@@ -39,3 +39,9 @@
     background-blend-mode: soft-light, normal, normal, normal;
   }
 }
+
+/* Both axes scroll in the same container so headers share column geometry. */
+.bmTablePanel table { border-collapse: separate; border-spacing: 0; }
+.bmTablePanel thead th { position: sticky; top: 0; z-index: 20; background: #191919; box-shadow: 0 1px 0 #393939; }
+.bmTablePanel th:first-child { min-width: 260px; }
+.bmTablePanel th:not(:first-child) { min-width: 88px; }
