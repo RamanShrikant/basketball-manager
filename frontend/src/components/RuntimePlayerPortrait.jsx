@@ -179,13 +179,15 @@ export default function RuntimePlayerPortrait({
     ? (runtimeFace?.sourceUrl || (fallbackIsNakedRealBase ? "" : fallbackSrc))
     : (fallbackIsNakedGeneratedBase ? (runtimeFace?.draftUrl || "") : fallbackSrc);
 
-  // Salary Table and Player Retirements use carefully tuned, compact portrait
-  // slots. Force every source type through the same canonical 1040x760
-  // width-fit envelope there so odd static source aspect ratios and runtime
+  // Salary Table, Player Retirements and Trade Finder use carefully tuned,
+  // compact portrait slots. Force every source type through the same canonical
+  // 1040x760 width-fit envelope there so odd static source aspect ratios and runtime
   // base+jersey composites cannot paint larger than standard NBA headshots.
   // Page-level x/y/scale tuning remains outside this component and is untouched.
   const useCanonicalContainEnvelope =
-    layoutPage === "salary-table" || layoutPage === "player-retirements";
+    layoutPage === "salary-table" ||
+    layoutPage === "player-retirements" ||
+    layoutPage === "trade-finder";
 
   return (
     <div className={`relative overflow-visible ${className}`} style={style} aria-hidden={ariaHidden || undefined}>

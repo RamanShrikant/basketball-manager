@@ -1920,6 +1920,7 @@ function TradeFinderPlayerHeadshot({ player, team = null, variant = "packageRows
         src={headshot}
         alt=""
         ariaHidden
+        layoutPage="trade-finder"
         className="h-full w-full select-none"
         contentStyle={{
           opacity: t.opacity ?? 1,

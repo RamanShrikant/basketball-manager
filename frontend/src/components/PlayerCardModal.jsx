@@ -1,4 +1,4 @@
-import { getDisplaySeasonYear } from "../utils/seasonContext.js";
+import { getContractSeasonYear, getDisplaySeasonYear } from "../utils/seasonContext.js";
 import { getCanonicalPlayer } from "../utils/playerResolver.js";
 import { createPortal } from "react-dom";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -231,6 +231,36 @@ function getContractAav(contract) {
   const salaryByYear = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
   if (!salaryByYear.length) return 0;
   return salaryByYear.reduce((sum, salary) => sum + Number(salary || 0), 0) / salaryByYear.length;
+}
+
+function getRemainingContractView(contract, leagueData) {
+  const salaryByYear = Array.isArray(contract?.salaryByYear) ? contract.salaryByYear : [];
+  const startYear = safeNumber(contract?.startYear, 0);
+  if (!salaryByYear.length || !startYear) {
+    return { rows: [], years: 0, aav: 0, displayStartYear: startYear || null };
+  }
+
+  const payrollSeasonYear = safeNumber(getContractSeasonYear(leagueData || {}), startYear);
+  const rawOffset = payrollSeasonYear - startYear;
+  const offset = Math.max(0, Math.min(salaryByYear.length, rawOffset));
+  const rows = salaryByYear.slice(offset).map((salary, localIndex) => {
+    const originalIndex = offset + localIndex;
+    return {
+      salary,
+      originalIndex,
+      seasonYear: startYear + originalIndex,
+    };
+  });
+  const aav = rows.length
+    ? rows.reduce((sum, row) => sum + Number(row.salary || 0), 0) / rows.length
+    : 0;
+
+  return {
+    rows,
+    years: rows.length,
+    aav,
+    displayStartYear: rows[0]?.seasonYear ?? null,
+  };
 }
 
 function formatBirdLevel(level) {
@@ -1438,9 +1468,13 @@ export default function PlayerCardModal({
   const twoWayYearsUsed = isTwoWayDevelopmentContract ? Math.max(1, safeNumber(player?.twoWayMeta?.twoWayYearsUsed ?? player?.twoWayYearsUsed, 1)) : 0;
   const maxTwoWayYears = isTwoWayDevelopmentContract ? Math.max(twoWayYearsUsed, safeNumber(player?.twoWayMeta?.maxTwoWayYears ?? player?.maxTwoWayYears, 3)) : 0;
   const developmentYearsLabel = isTwoWayDevelopmentContract ? `Year ${twoWayYearsUsed} of ${maxTwoWayYears}` : "Development";
-  const salaryByYear = isNonCapDevelopmentContract ? [] : Array.isArray(player?.contract?.salaryByYear) ? player.contract.salaryByYear : [];
-  const contractYears = isNonCapDevelopmentContract ? 0 : getContractYears(player?.contract);
-  const contractAav = isNonCapDevelopmentContract ? 0 : getContractAav(player?.contract);
+  const remainingContract = isNonCapDevelopmentContract
+    ? { rows: [], years: 0, aav: 0, displayStartYear: null }
+    : getRemainingContractView(player?.contract, leagueData);
+  const salaryByYear = remainingContract.rows;
+  const contractYears = remainingContract.years;
+  const contractAav = remainingContract.aav;
+  const contractDisplayStartYear = remainingContract.displayStartYear;
   const moodTheme = MOOD_COLORS[mood.label] || MOOD_COLORS.Content;
   const option = player?.contract?.option;
   const optionType = option?.type ? String(option.type).replaceAll("_", " ") : null;
@@ -1475,7 +1509,7 @@ export default function PlayerCardModal({
 
       <button type="button" aria-label="Close player card" onClick={onClose} className="absolute inset-0 bg-black/75 backdrop-blur-md" />
 
-      <div className="pc-pop pc-glow-card relative flex h-[92dvh] w-full max-w-[1100px] flex-col overflow-hidden rounded-[30px] border border-white/15 bg-[#090909] text-white">
+      <div className="pc-pop pc-glow-card relative flex h-[96dvh] w-full max-w-[1100px] flex-col overflow-hidden rounded-[30px] border border-white/15 bg-[#090909] text-white">
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute -left-32 -top-32 h-80 w-80 rounded-full bg-orange-500/20 blur-3xl" />
           <div className="absolute -right-24 top-24 h-72 w-72 rounded-full bg-amber-400/10 blur-3xl" />
@@ -1542,7 +1576,7 @@ export default function PlayerCardModal({
 
           <div className="min-h-0 flex-1 overflow-hidden">
             {activeTab === "overview" && (
-              <div className="pc-modal-scroll grid h-full min-h-0 content-start gap-3 overflow-y-auto pr-2 lg:grid-cols-[1fr_0.86fr]">
+              <div className="pc-overview-fit grid h-full min-h-0 content-start gap-2 overflow-y-auto pr-1 lg:grid-cols-[1fr_0.86fr] lg:overflow-y-hidden">
                 <div className="space-y-3">
                   <div className="pc-soft-border rounded-[22px] border border-white/15 bg-white/[0.04] p-3">
                     <div className="mb-3 flex items-center justify-between gap-3">
@@ -1575,7 +1609,7 @@ export default function PlayerCardModal({
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <StatPill compact label="AAV" value={isNonCapDevelopmentContract ? "No cap" : formatMillions(contractAav)} accent />
-                      <StatPill compact label="Start" value={player?.contract?.startYear || "-"} />
+                      <StatPill compact label="Start" value={contractDisplayStartYear || "-"} />
                     </div>
                   </div>
 
@@ -1633,7 +1667,7 @@ export default function PlayerCardModal({
                     <StatPill label="Type" value={contractTypeLabel} accent />
                     <StatPill label="Years" value={isNonCapDevelopmentContract ? developmentYearsLabel : contractYears ? `${contractYears}` : "No deal"} />
                     <StatPill label="AAV" value={isNonCapDevelopmentContract ? "No cap hit" : formatMillions(contractAav)} accent />
-                    <StatPill label="Start" value={player?.contract?.startYear || "-"} />
+                    <StatPill label="Start" value={contractDisplayStartYear || "-"} />
                   </div>
 
                   <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4">
@@ -1652,11 +1686,13 @@ export default function PlayerCardModal({
                   <h3 className="mb-4 text-xl font-black">Salary Table</h3>
                   {salaryByYear.length ? (
                     <div className="grid gap-3">
-                      {salaryByYear.map((salary, index) => {
-                        const seasonYear = safeNumber(player?.contract?.startYear, 0) + index;
-                        const optionInfo = getContractOptionInfo(player?.contract, index, contractDisplaySeasonYear, optionWindowActive);
+                      {salaryByYear.map((row, index) => {
+                        const salary = row.salary;
+                        const seasonYear = row.seasonYear;
+                        const originalIndex = row.originalIndex;
+                        const optionInfo = getContractOptionInfo(player?.contract, originalIndex, contractDisplaySeasonYear, optionWindowActive);
                         return (
-                          <div key={`${seasonYear}-${index}`} className={`pc-stat-pill flex items-center justify-between rounded-2xl border px-4 py-3 text-sm ${contractOptionRowClass(optionInfo)}`}>
+                          <div key={`${seasonYear}-${originalIndex}`} className={`pc-stat-pill flex items-center justify-between rounded-2xl border px-4 py-3 text-sm ${contractOptionRowClass(optionInfo)}`}>
                             <span className={`font-bold ${contractOptionTextClass(optionInfo)}`}>
                               {seasonYear || `Year ${index + 1}`}
                               {optionInfo ? ` (${optionInfo.label.toLowerCase()}${optionInfo.pending ? ", pending" : ""})` : ""}

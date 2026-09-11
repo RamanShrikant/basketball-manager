@@ -3437,7 +3437,7 @@ export default function PlayerProgression() {
                   ["OVR", featured.overall, deltaFor(featured, "overall")],
                   ["OFF", featured.offRating, deltaFor(featured, "offRating")],
                   ["DEF", featured.defRating, deltaFor(featured, "defRating")],
-                  ["POT", featured.potential, 0],
+                  ["POT", featured.potential, deltaFor(featured, "potential")],
                 ].map(([label, value, delta]) => (
                   <div key={label} className="min-w-[62px] rounded-lg border border-white/10 bg-black/30 px-2 py-1.5">
                     <div className="text-[9px] font-black uppercase tracking-wider text-white/45">{label}</div>
@@ -3498,7 +3498,9 @@ export default function PlayerProgression() {
                           <span>{showLetters ? toLetter(p[k]) : p[k]}</span><DeltaBadge d={deltaFor(p, k)} />
                         </td>
                       ))}
-                      <td className="px-3 py-1.5" onDoubleClick={handleCellDoubleClick}>{showLetters ? toLetter(p.potential) : p.potential}</td>
+                      <td className="px-3 py-1.5" onDoubleClick={handleCellDoubleClick}>
+                        <span>{showLetters ? toLetter(p.potential) : p.potential}</span><DeltaBadge d={deltaFor(p, "potential")} />
+                      </td>
                       {attrColumns.map((a) => {
                         const val = p.attrs?.[a.index] ?? 0;
                         return (

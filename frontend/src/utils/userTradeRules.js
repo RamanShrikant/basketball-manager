@@ -159,6 +159,24 @@ function addIsoMonths(value, months) {
   return date.toISOString().slice(0, 10);
 }
 
+function isTradeDeadlineStatusForSeason(status = null, seasonStartYear = 0) {
+  if (!status || typeof status !== "object") return false;
+  const expectedStart = Number(seasonStartYear);
+  if (!Number.isFinite(expectedStart)) return false;
+
+  const storedSeason = Number(status?.seasonYear);
+  if (Number.isFinite(storedSeason)) return storedSeason === expectedStart;
+
+  // Backward compatibility for older status rows that predate seasonYear. A
+  // deadline in February belongs to the season that started the prior fall.
+  const storedDeadline = normalizeIsoDate(status?.deadlineDate || status?.date);
+  if (storedDeadline) return Number(storedDeadline.slice(0, 4)) === expectedStart + 1;
+
+  // An unscoped bare `locked:true` cannot safely survive a season rollover.
+  // The current league clock/date will still enforce a real current deadline.
+  return false;
+}
+
 
 export function getUserTradeRuleSettings(leagueData = {}) {
   return normalizeTradeRuleSettings(
@@ -292,10 +310,13 @@ export function getUserTradeDeadlineStatus(leagueData = {}) {
   const context = getOffseasonTradeContext(leagueData);
   if (context?.inOffseason) return { enabled: true, locked: false, reason: "" };
 
-  const status = typeof localStorage !== "undefined"
+  const storedStatus = typeof localStorage !== "undefined"
     ? safeJSON(localStorage.getItem(TRADE_DEADLINE_STATUS_KEY), null)
     : null;
   const seasonStartYear = getCurrentSeasonStartYear(leagueData);
+  const status = isTradeDeadlineStatusForSeason(storedStatus, seasonStartYear)
+    ? storedStatus
+    : null;
   const calendarConfig = getSeasonCalendarConfig({
     ...(leagueData || {}),
     seasonYear: seasonStartYear,
@@ -379,8 +400,13 @@ function getPlayerSalaryForYear(player = {}, payrollSeasonYear) {
 
 function getUserTradePayrollSeasonYear(leagueData = {}) {
   const context = getOffseasonTradeContext(leagueData || {});
-  if (context?.inOffseason && Number.isFinite(Number(context?.targetSeasonYear))) {
-    return Number(context.targetSeasonYear);
+  if (context?.inOffseason) {
+    const target = Number(
+      context?.targetContractSeasonYear ??
+        context?.contractSeasonYear ??
+        context?.targetSeasonYear
+    );
+    if (Number.isFinite(target)) return target;
   }
   return getContractSeasonYear(leagueData || {});
 }

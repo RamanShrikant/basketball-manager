@@ -11,7 +11,7 @@ import styles from "./Playoffs.module.css";
 import FinalsMvpReveal from "../components/FinalsMvpReveal";
 import InjuryAlertModal from "../components/InjuryAlertModal";
 import { finalizeFinalsMvpAndGoOffseason } from "../utils/finalsMvpSeasonActions";
-import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
+import { markLeagueInjuryStateChanged, saveInjuryStateOverlay, saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 import {
   isMultiYearSpeedDiagnosticsEnabled,
   recordMultiYearInjuryEvents,
@@ -1850,9 +1850,9 @@ export default function Playoffs() {
 
     const recovery = recoverPlayersForDate(leagueData, currentDate);
     if (recovery.touchedTeamNames.length) {
-      const cloned = structuredClone(leagueData);
-      setLeagueData(cloned, { source: "Playoffs.injuryRecovery.context" });
-      saveLeagueDataInBackground(cloned, { source: "Playoffs.injuryRecovery.explicit" });
+      markLeagueInjuryStateChanged(leagueData);
+      setLeagueData({ ...leagueData }, { source: "Playoffs.injuryRecovery.context", persist: false });
+      await saveInjuryStateOverlay(leagueData, { source: "Playoffs.injuryRecovery.sidecar" });
       showUserPostseasonInjuryAlert(recovery.events);
     }
 
@@ -1870,9 +1870,9 @@ export default function Playoffs() {
     });
     recordMultiYearInjuryEvents({ seasonYear, phase: "playoffs", events: injuryResult?.events || [] });
     if (injuryResult.touchedTeamNames.length) {
-      const cloned = structuredClone(leagueData);
-      setLeagueData(cloned, { source: "Playoffs.gameInjury.context" });
-      saveLeagueDataInBackground(cloned, { source: "Playoffs.gameInjury.explicit" });
+      markLeagueInjuryStateChanged(leagueData);
+      setLeagueData({ ...leagueData }, { source: "Playoffs.gameInjury.context", persist: false });
+      await saveInjuryStateOverlay(leagueData, { source: "Playoffs.gameInjury.sidecar" });
       showUserPostseasonInjuryAlert(injuryResult.events);
     }
 
@@ -2231,9 +2231,9 @@ export default function Playoffs() {
 
     const recovery = recoverPlayersForDate(leagueData, node.date);
     if (recovery.touchedTeamNames.length) {
-      const cloned = structuredClone(leagueData);
-      setLeagueData(cloned, { source: "Playoffs.playInInjuryRecovery.context" });
-      saveLeagueDataInBackground(cloned, { source: "Playoffs.playInInjuryRecovery.explicit" });
+      markLeagueInjuryStateChanged(leagueData);
+      setLeagueData({ ...leagueData }, { source: "Playoffs.playInInjuryRecovery.context", persist: false });
+      await saveInjuryStateOverlay(leagueData, { source: "Playoffs.playInInjuryRecovery.sidecar" });
     }
 
     const slim = await safeSimTransientPlayIn(node.home, node.away, node.date, { retries: 1 });
@@ -2247,9 +2247,9 @@ export default function Playoffs() {
     });
     recordMultiYearInjuryEvents({ seasonYear, phase: "playoffs", events: injuryResult?.events || [] });
     if (injuryResult.touchedTeamNames.length) {
-      const cloned = structuredClone(leagueData);
-      setLeagueData(cloned, { source: "Playoffs.playInGameInjury.context" });
-      saveLeagueDataInBackground(cloned, { source: "Playoffs.playInGameInjury.explicit" });
+      markLeagueInjuryStateChanged(leagueData);
+      setLeagueData({ ...leagueData }, { source: "Playoffs.playInGameInjury.context", persist: false });
+      await saveInjuryStateOverlay(leagueData, { source: "Playoffs.playInGameInjury.sidecar" });
       showUserPostseasonInjuryAlert(injuryResult.events);
     }
 

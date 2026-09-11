@@ -389,6 +389,57 @@ function buildSimulationRuntime(leagueData, teams = []) {
   return { leagueData, teams, teamById, teamByName, minutesByTeam, roleByTeam, orderByTeam };
 }
 
+function refreshSimulationRuntimeForTouchedTeams(
+  leagueData,
+  currentTeams = [],
+  runtime = null,
+  touchedTeamNames = []
+) {
+  const touched = new Set((touchedTeamNames || []).filter(Boolean));
+  if (!touched.size) return { teams: currentTeams, runtime };
+
+  const leagueTeamsByName = new Map(
+    getAllTeamsFromLeague(leagueData)
+      .filter((team) => team?.name)
+      .map((team) => [team.name, team])
+  );
+  const baseTeams = Array.isArray(currentTeams) && currentTeams.length
+    ? currentTeams
+    : buildTeamsFromLeagueForSim(leagueData);
+  const nextTeams = baseTeams.map((team) => {
+    if (!touched.has(team?.name)) return team;
+    const source = leagueTeamsByName.get(team.name) || team;
+    return { ...source, id: slugifyId(source.name) };
+  });
+
+  // Callers that have not built a runtime yet will build it once immediately
+  // after this refresh. Avoid a redundant all-team runtime construction here.
+  if (!runtime) return { teams: nextTeams, runtime: null };
+
+  const nextRuntime = {
+    ...runtime,
+    leagueData,
+    teams: nextTeams,
+    teamById: new Map(runtime.teamById || []),
+    teamByName: new Map(runtime.teamByName || []),
+    minutesByTeam: new Map(runtime.minutesByTeam || []),
+    roleByTeam: new Map(runtime.roleByTeam || []),
+    orderByTeam: new Map(runtime.orderByTeam || []),
+  };
+
+  for (const teamName of touched) {
+    const team = nextTeams.find((row) => row?.name === teamName);
+    if (!team) continue;
+    nextRuntime.teamById.set(slugifyId(teamName), team);
+    nextRuntime.teamByName.set(teamName, team);
+    nextRuntime.minutesByTeam.set(teamName, readFlatMinutesFromGameplan(teamName));
+    nextRuntime.roleByTeam.set(teamName, loadTeamRoleMap(teamName));
+    nextRuntime.orderByTeam.set(teamName, readGameplanOrder(teamName, team));
+  }
+
+  return { teams: nextTeams, runtime: nextRuntime };
+}
+
 function yieldToBrowser() {
   return new Promise((resolve) => {
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
@@ -5292,11 +5343,19 @@ const alwaysAutoAdjustAfterInjury = async () => {
   }
 };
 
-const refreshInjuryTouchedTeams = async (activeLeagueData, touchedTeamNames = [], currentDate = "") => {
+const refreshInjuryTouchedTeams = async (
+  activeLeagueData,
+  touchedTeamNames = [],
+  currentDate = "",
+  currentTeams = [],
+  runtime = null
+) => {
   if (!touchedTeamNames?.length) return null;
 
-  // The injury engine already mutated the authoritative simulation object and
-  // rebuilt the affected rotation. Stamp that exact state before cloning it.
+  // The injury engine mutates the authoritative simulation object in place and
+  // rebuilds only the affected gameplans. Do not deep-clone the entire growing
+  // league for each injury/recovery; a new top-level reference is enough for
+  // React while the injury sidecar persists the authoritative domain state.
   if (injuryAlertsEnabledRef.current === false) {
     activeLeagueData.settings = { ...(activeLeagueData.settings || {}) };
     activeLeagueData.settings.injuries = {
@@ -5306,26 +5365,22 @@ const refreshInjuryTouchedTeams = async (activeLeagueData, touchedTeamNames = []
   }
   markLeagueInjuryStateChanged(activeLeagueData);
 
-  const injurySnapshot = structuredClone(activeLeagueData);
+  const injurySnapshot = { ...activeLeagueData };
   const normalizedInjurySnapshot = setLeagueData(injurySnapshot, {
     source: "Calendar.injuryStateRefresh",
     persist: false,
   }) || injurySnapshot;
 
-  // Persist ONLY the authoritative injury/settings snapshot. This sidecar is a
-  // few active-injury rows, not the 3–4 MB league object. Awaiting it preserves
-  // the existing game-result -> injury-state crash ordering without paying for
-  // hundreds of full-league writes. If the sidecar fails, leagueStorage falls
-  // back to a normal full save rather than sacrificing correctness.
   await saveInjuryStateOverlay(normalizedInjurySnapshot, {
     source: "Calendar.injuryStateSidecar",
   });
 
-  const nextTeams = buildTeamsFromLeagueForSim(activeLeagueData);
-  return {
-    teams: nextTeams,
-    runtime: buildSimulationRuntime(activeLeagueData, nextTeams),
-  };
+  return refreshSimulationRuntimeForTouchedTeams(
+    activeLeagueData,
+    currentTeams,
+    runtime,
+    touchedTeamNames
+  );
 };
 
 const ALL_STAR_DATE = seasonCalendarConfig.allStarSelectionDate || fmt(new Date(seasonYear + 1, 1, 13));
@@ -6865,7 +6920,7 @@ const handleSimOnlyGame = async (dateStr, game) => {
   let activeTeams = repairedTeams;
   const recovery = recoverPlayersForDate(activeLeagueData, dateStr);
   if (recovery.touchedTeamNames.length) {
-    const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames, dateStr);
+    const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames, dateStr, activeTeams, null);
     if (refreshed) {
       activeTeams = refreshed.teams;
     }
@@ -6938,7 +6993,7 @@ const handleSimOnlyGame = async (dateStr, game) => {
     currentDate: dateStr,
   });
   if (injuryResult.touchedTeamNames.length) {
-    await refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames, dateStr);
+    await refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames, dateStr, activeTeams, null);
   }
 
   savePlayerStats(playerStats);
@@ -7118,7 +7173,7 @@ for (const d of sorted) {
 
   const recovery = recoverPlayersForDate(activeLeagueData, d);
   if (recovery.touchedTeamNames.length) {
-    const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames, d);
+    const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames, d, activeTeams, simRuntime);
     if (refreshed) {
       activeTeams = refreshed.teams;
       simRuntime = refreshed.runtime;
@@ -7406,7 +7461,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
           simulationPerf.injuriesGenerated += Array.isArray(injuryResult?.events) ? injuryResult.events.length : 0;
           recordMultiYearInjuryEvents({ seasonYear, phase: "regular_season", events: injuryResult?.events || [] });
           if (injuryResult.touchedTeamNames.length) {
-            const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames, d);
+            const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames, d, activeTeams, simRuntime);
             if (refreshed) {
               activeTeams = refreshed.teams;
               simRuntime = refreshed.runtime;
@@ -7757,7 +7812,7 @@ for (let di = 0; di < dates.length; di++) {
 
   const recovery = recoverPlayersForDate(activeLeagueData, date);
   if (recovery.touchedTeamNames.length) {
-    const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames, date);
+    const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, recovery.touchedTeamNames, date, activeTeams, simRuntime);
     if (refreshed) {
       activeTeams = refreshed.teams;
       simRuntime = refreshed.runtime;
@@ -7990,7 +8045,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
           simulationPerf.injuriesGenerated += Array.isArray(injuryResult?.events) ? injuryResult.events.length : 0;
           recordMultiYearInjuryEvents({ seasonYear, phase: "regular_season", events: injuryResult?.events || [] });
           if (injuryResult.touchedTeamNames.length) {
-            const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames, date);
+            const refreshed = await refreshInjuryTouchedTeams(activeLeagueData, injuryResult.touchedTeamNames, date, activeTeams, simRuntime);
             if (refreshed) {
               activeTeams = refreshed.teams;
               simRuntime = refreshed.runtime;

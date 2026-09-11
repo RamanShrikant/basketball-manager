@@ -159,16 +159,22 @@ export function getOffseasonGuaranteedContractStatus(player = {}, { leagueData =
     ? contract.salaryByYear.map((value) => Math.max(0, toNum(value, 0)))
     : [];
   const startYear = Number(contract?.startYear);
-  const targetSeasonYear = Number(context.targetSeasonYear || context.seasonYear + 1);
+  const targetSeasonYear = Number(
+    context.targetContractSeasonYear ??
+      context.contractSeasonYear ??
+      context.targetSeasonYear ??
+      context.seasonYear
+  );
 
   if (!contract || !salaries.length || !Number.isFinite(startYear)) {
     return { eligible: false, code: "NO_GUARANTEED_CONTRACT", reason: "No active standard contract is recorded." };
   }
 
   // Offseason trade rule: the player must already have guaranteed salary in
-  // the UPCOMING season. Salary from the season that just ended is not a
-  // tradeable contract once the offseason begins. Pending player/team options
-  // are also not guaranteed until they are affirmatively exercised.
+  // the UPCOMING payroll season. Offseason/draft years are labels and can be
+  // one year ahead of contract.salaryByYear indexing, so use the explicit
+  // targetContractSeasonYear resolved by offseasonTradeContext. Pending
+  // player/team options are not guaranteed until affirmatively exercised.
   const targetIndex = targetSeasonYear - startYear;
   if (!Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex >= salaries.length || salaries[targetIndex] <= 0) {
     return { eligible: false, code: "EXPIRING_CONTRACT", reason: "The player's contract does not include guaranteed salary for next season." };

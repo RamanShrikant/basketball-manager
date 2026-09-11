@@ -6,6 +6,7 @@ import {
   readDefaultCustomDraftClass,
 } from "./customDraftClassStorage.js";
 import { hasLockedDraftOrderLength } from "./draftPicks.js";
+import { getContractSeasonYear } from "./seasonContext.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const DRAFT_LOTTERY_KEY = "bm_draft_lottery_v1";
@@ -393,7 +394,16 @@ function determineStage({ inOffseason, lotteryRevealed, draftComplete, draftInPr
 }
 
 export function getOffseasonTradeContext(leagueData = {}, explicitContext = null) {
-  const embedded = explicitContext || leagueData?.__offseasonTradeContext;
+  // Explicit callers already resolved the authoritative phase/context for this
+  // operation. Reuse it even during the regular season instead of re-reading
+  // schedule/results storage for every Trade Finder team/package evaluation.
+  // Only the passive context embedded on leagueData is guarded against stale
+  // offseason state while a live regular-season clock is active.
+  if (explicitContext && typeof explicitContext === "object" && explicitContext.version) {
+    return explicitContext;
+  }
+
+  const embedded = leagueData?.__offseasonTradeContext;
   const seasonYear = currentSeasonYear(leagueData);
   const activeRegularSeasonClock = isActiveRegularSeasonClock(leagueData, seasonYear);
   if (embedded && typeof embedded === "object" && embedded.version && !activeRegularSeasonClock) return embedded;
@@ -468,10 +478,21 @@ export function getOffseasonTradeContext(leagueData = {}, explicitContext = null
   );
   const preLotteryExpectedSlotByTeam = buildPreLotteryExpectedSlots(records, lotterySystem);
 
+  const contractSeasonYear = getContractSeasonYear(leagueData);
+  // During the offseason, `seasonYear` is the draft/offseason year while
+  // contract.salaryByYear is keyed by the season START year. The upcoming
+  // guaranteed salary is therefore the later of the saved payroll season and
+  // the active offseason/draft year -- not blindly seasonYear + 1.
+  const targetContractSeasonYear = inOffseason
+    ? Math.max(Number(contractSeasonYear || 0), Number(seasonYear || 0))
+    : Number(contractSeasonYear || seasonYear || 0);
+
   return {
-    version: 3,
+    version: 4,
     seasonYear,
     targetSeasonYear: seasonYear + 1,
+    contractSeasonYear,
+    targetContractSeasonYear,
     inOffseason,
     stage: determineStage({ inOffseason, lotteryRevealed, draftComplete, draftInProgress, offseasonState }),
     lotteryRevealed,
@@ -678,6 +699,7 @@ export function getOffseasonTradeContextSignature(context = {}) {
     .join(";");
   return [
     context?.seasonYear,
+    context?.targetContractSeasonYear ?? context?.contractSeasonYear ?? "",
     context?.stage,
     context?.lotteryRevealed ? 1 : 0,
     context?.draftComplete ? 1 : 0,

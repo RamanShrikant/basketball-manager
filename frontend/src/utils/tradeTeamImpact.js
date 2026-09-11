@@ -162,6 +162,7 @@ let cpuTradeImpactNextContextToken = 1;
 const cpuTradeImpactContextTokens = new Map();
 let cpuTradeImpactLeagueContextCache = new WeakMap();
 let attachedRecordSignatureCache = new WeakMap();
+let tradeFinderLeaguePowerSignatureCache = new WeakMap();
 
 const CPU_TRADE_IMPACT_BREAKDOWN_MAX_ROWS = 800;
 let cpuTradeImpactBreakdownEnabled = false;
@@ -251,6 +252,7 @@ export function resetTradeFinderImpactSearchCaches({ keepPowerContext = true } =
   rankOnlyRatingCache.clear();
   tradeFinderImpactCache.clear();
   attachedRecordSignatureCache = new WeakMap();
+  tradeFinderLeaguePowerSignatureCache = new WeakMap();
   try { resetFullTeamRatingCache(); } catch {}
   if (!keepPowerContext) powerContextCache.clear();
 }
@@ -382,7 +384,7 @@ function makeTradeFinderImpactCacheKey({
 } = {}) {
   if (String(cpuTradeRole || "").toLowerCase() !== "trade_finder") return null;
   const teams = getAllTeamsFromLeague(leagueData);
-  const leagueSignature = leaguePowerSignature(leagueData, teams);
+  const leagueSignature = tradeFinderLeaguePowerSignature(leagueData, teams, cpuTradeContext);
   const cpuName = cpuTeamName || getTeamName(cpuTeam) || "";
   const fastScanKey = cpuTradeContext?.tradeFinderFastScan
     ? `fastscan:${cpuTradeContext?.searchPhase || ""}`
@@ -632,6 +634,25 @@ function leaguePowerSignature(leagueData, teams = []) {
     offseasonPart,
     storagePart,
   ].join("::");
+}
+
+function tradeFinderLeaguePowerSignature(leagueData, teams = [], cpuTradeContext = null) {
+  // Trade Finder asks for this exact whole-league signature for every candidate
+  // package. Cache it only inside the active Trade Finder search context. This
+  // avoids re-walking every roster on each package while leaving normal CPU /
+  // mega-trade power signatures completely untouched. The cache is reset at the
+  // beginning of each Trade Finder search.
+  const key = cpuTradeContext && typeof cpuTradeContext === "object"
+    ? cpuTradeContext
+    : (leagueData && typeof leagueData === "object" ? leagueData : null);
+  if (key) {
+    const cached = tradeFinderLeaguePowerSignatureCache.get(key);
+    if (cached?.leagueData === leagueData) return cached.signature;
+  }
+
+  const signature = leaguePowerSignature(leagueData, teams);
+  if (key) tradeFinderLeaguePowerSignatureCache.set(key, { leagueData, signature });
+  return signature;
 }
 
 function getAllTeamsFromLeague(leagueData) {
