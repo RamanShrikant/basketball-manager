@@ -115582,30 +115582,6 @@
       "_old_index": 328
     },
     {
-      "id": "2029_LAC_R1_8_5a939a3a",
-      "type": "pick",
-      "year": 2029,
-      "round": 1,
-      "originalTeam": "Indiana Pacers",
-      "ownerTeam": "Los Angeles Clippers",
-      "protections": "Unprotected",
-      "swapWithTeam": "",
-      "status": "active",
-      "notes": "Los Angeles Clippers owns this 2029 1st round pick.",
-      "source": "Playable cleaned future draft assets",
-      "sourceAsOf": "2026-06-21",
-      "realLifeDetails": {
-        "source": "RealGM / ProSportsTransactions / Fanspo, normalized for pre-2026 playable draft assets",
-        "sourceAsOf": "2026-06-20",
-        "playableDisplayRule": "Los Angeles Clippers owns this 2029 1st round pick.",
-        "cleanupVersion": "v8_locked_clean"
-      },
-      "displayProtection": "Unprotected",
-      "protectionType": "unprotected",
-      "logicType": "v8_locked_clean",
-      "assetType": "pick"
-    },
-    {
       "id": "SWAP_2029_LAC_PHI_R1_LAC_WORST_v9",
       "type": "swap",
       "year": 2029,
@@ -118718,30 +118694,6 @@
       "assetType": "pick"
     },
     {
-      "id": "2031_LAC_R1_11_ecaa425d",
-      "type": "pick",
-      "year": 2031,
-      "round": 1,
-      "originalTeam": "Los Angeles Clippers",
-      "ownerTeam": "Los Angeles Clippers",
-      "protections": "Unprotected",
-      "swapWithTeam": "",
-      "status": "active",
-      "notes": "Los Angeles Clippers owns this 2031 1st round pick.",
-      "source": "Playable cleaned future draft assets",
-      "sourceAsOf": "2026-06-21",
-      "realLifeDetails": {
-        "source": "RealGM / ProSportsTransactions / Fanspo, normalized for pre-2026 playable draft assets",
-        "sourceAsOf": "2026-06-20",
-        "playableDisplayRule": "Los Angeles Clippers owns this 2031 1st round pick.",
-        "cleanupVersion": "v8_locked_clean"
-      },
-      "displayProtection": "Unprotected",
-      "protectionType": "unprotected",
-      "logicType": "v8_locked_clean",
-      "assetType": "pick"
-    },
-    {
       "id": "2031_MEM_R1_15_f7434384",
       "type": "pick",
       "year": 2031,
@@ -120167,30 +120119,6 @@
       "assetType": "pick"
     },
     {
-      "id": "2032_LAC_R1_13_e1aa6fca",
-      "type": "pick",
-      "year": 2032,
-      "round": 1,
-      "originalTeam": "Los Angeles Clippers",
-      "ownerTeam": "Los Angeles Clippers",
-      "protections": "Unprotected",
-      "swapWithTeam": "",
-      "status": "active",
-      "notes": "Los Angeles Clippers owns this 2032 1st round pick.",
-      "source": "Playable cleaned future draft assets",
-      "sourceAsOf": "2026-06-21",
-      "realLifeDetails": {
-        "source": "RealGM / ProSportsTransactions / Fanspo, normalized for pre-2026 playable draft assets",
-        "sourceAsOf": "2026-06-20",
-        "playableDisplayRule": "Los Angeles Clippers owns this 2032 1st round pick.",
-        "cleanupVersion": "v8_locked_clean"
-      },
-      "displayProtection": "Unprotected",
-      "protectionType": "unprotected",
-      "logicType": "v8_locked_clean",
-      "assetType": "pick"
-    },
-    {
       "id": "2032_LAL_R1_6_6477d202",
       "type": "pick",
       "year": 2032,
@@ -121564,31 +121492,6 @@
       "_old_index": 999999
     },
     {
-      "id": "2030_LAC_R1_9_8cc21323",
-      "type": "pick",
-      "year": 2030,
-      "round": 1,
-      "originalTeam": "Los Angeles Clippers",
-      "ownerTeam": "Los Angeles Clippers",
-      "protections": "Unprotected",
-      "swapWithTeam": "",
-      "status": "active",
-      "notes": "Los Angeles Clippers owns this 2030 1st round pick.",
-      "source": "Playable cleaned future draft assets",
-      "sourceAsOf": "2026-06-21",
-      "realLifeDetails": {
-        "source": "RealGM / ProSportsTransactions / Fanspo, normalized for pre-2026 playable draft assets",
-        "sourceAsOf": "2026-06-20",
-        "playableDisplayRule": "Los Angeles Clippers owns this 2030 1st round pick.",
-        "cleanupVersion": "v8_locked_clean"
-      },
-      "displayProtection": "Unprotected",
-      "protectionType": "unprotected",
-      "logicType": "v8_locked_clean",
-      "assetType": "pick",
-      "_old_index": null
-    },
-    {
       "id": "2030_TOR_R1_9_f68e9873",
       "type": "pick",
       "year": 2030,
@@ -122751,29 +122654,6 @@
       "assetType": "pick"
     },
     {
-      "id": "2033_LAC_R1_own_9c7c2f9f",
-      "type": "pick",
-      "year": 2033,
-      "round": 1,
-      "originalTeam": "Los Angeles Clippers",
-      "ownerTeam": "Los Angeles Clippers",
-      "protections": "Unprotected",
-      "swapWithTeam": "",
-      "status": "active",
-      "notes": "Los Angeles Clippers owns this 2033 1st round pick.",
-      "source": "2027 Season Opening Rosters migration",
-      "sourceAsOf": "2026-07-24",
-      "realLifeDetails": {
-        "source": "NBA.com / simplified playable rollover",
-        "playableDisplayRule": "Unprotected",
-        "maxOneProtection": true
-      },
-      "displayProtection": "Unprotected",
-      "protectionType": "unprotected",
-      "logicType": "v10_2027_opening_rollover",
-      "assetType": "pick"
-    },
-    {
       "id": "2033_LAC_R2_own_4e5e5380",
       "type": "pick",
       "year": 2033,
@@ -123154,6 +123034,83 @@
       "protectionType": "protected_range",
       "logicType": "v6_verified_2026_offseason",
       "assetType": "pick"
+    }
+  ],
+  "draftPickForfeitures": [
+    {
+      "id": "FORFEITURE_2029_INDIANA_PACERS_R1",
+      "assetId": "2029_LAC_R1_8_5a939a3a",
+      "year": 2029,
+      "round": 1,
+      "originalTeam": "Indiana Pacers",
+      "penalizedTeam": "Los Angeles Clippers",
+      "teamName": "Los Angeles Clippers",
+      "reason": "First-round pick removed by league penalty.",
+      "source": "league_penalty",
+      "tradeable": false,
+      "countsForStepien": false,
+      "draftOrderSlotRemoved": true,
+      "visibility": "hidden_system_rule"
+    },
+    {
+      "id": "FORFEITURE_2030_LOS_ANGELES_CLIPPERS_R1",
+      "assetId": "2030_LAC_R1_9_8cc21323",
+      "year": 2030,
+      "round": 1,
+      "originalTeam": "Los Angeles Clippers",
+      "penalizedTeam": "Los Angeles Clippers",
+      "teamName": "Los Angeles Clippers",
+      "reason": "First-round pick removed by league penalty.",
+      "source": "league_penalty",
+      "tradeable": false,
+      "countsForStepien": false,
+      "draftOrderSlotRemoved": true,
+      "visibility": "hidden_system_rule"
+    },
+    {
+      "id": "FORFEITURE_2031_LOS_ANGELES_CLIPPERS_R1",
+      "assetId": "2031_LAC_R1_11_ecaa425d",
+      "year": 2031,
+      "round": 1,
+      "originalTeam": "Los Angeles Clippers",
+      "penalizedTeam": "Los Angeles Clippers",
+      "teamName": "Los Angeles Clippers",
+      "reason": "First-round pick removed by league penalty.",
+      "source": "league_penalty",
+      "tradeable": false,
+      "countsForStepien": false,
+      "draftOrderSlotRemoved": true,
+      "visibility": "hidden_system_rule"
+    },
+    {
+      "id": "FORFEITURE_2032_LOS_ANGELES_CLIPPERS_R1",
+      "assetId": "2032_LAC_R1_13_e1aa6fca",
+      "year": 2032,
+      "round": 1,
+      "originalTeam": "Los Angeles Clippers",
+      "penalizedTeam": "Los Angeles Clippers",
+      "teamName": "Los Angeles Clippers",
+      "reason": "First-round pick removed by league penalty.",
+      "source": "league_penalty",
+      "tradeable": false,
+      "countsForStepien": false,
+      "draftOrderSlotRemoved": true,
+      "visibility": "hidden_system_rule"
+    },
+    {
+      "id": "FORFEITURE_2033_LOS_ANGELES_CLIPPERS_R1",
+      "assetId": "2033_LAC_R1_own_9c7c2f9f",
+      "year": 2033,
+      "round": 1,
+      "originalTeam": "Los Angeles Clippers",
+      "penalizedTeam": "Los Angeles Clippers",
+      "teamName": "Los Angeles Clippers",
+      "reason": "First-round pick removed by league penalty.",
+      "source": "league_penalty",
+      "tradeable": false,
+      "countsForStepien": false,
+      "draftOrderSlotRemoved": true,
+      "visibility": "hidden_system_rule"
     }
   ],
   "seasonYear": 2026,
