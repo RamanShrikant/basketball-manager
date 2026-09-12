@@ -1,0 +1,435 @@
+.page {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  color: #f8fafc;
+  background:
+    radial-gradient(circle at 16% 13%, rgba(37, 99, 235, 0.2), transparent 30%),
+    radial-gradient(circle at 84% 15%, rgba(124, 58, 237, 0.18), transparent 32%),
+    radial-gradient(circle at 52% 105%, rgba(14, 165, 233, 0.12), transparent 38%),
+    linear-gradient(135deg, #050a12 0%, #07111f 45%, #030712 100%);
+  padding: clamp(12px, 2vh, 18px);
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+.page,
+.page * {
+  box-sizing: border-box;
+}
+
+.shell {
+  width: min(100%, 1580px);
+  height: 100%;
+  margin: 0 auto;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) clamp(108px, 14vh, 138px);
+  gap: 14px;
+}
+
+.mainGrid,
+.feedbackBar {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(8, 15, 28, 0.82);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(18px);
+}
+
+.mainGrid::before,
+.feedbackBar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(circle at 52% 46%, black 0%, transparent 72%);
+}
+
+.mainGrid {
+  min-height: 0;
+  border-radius: 22px;
+  display: grid;
+  grid-template-columns: minmax(330px, 0.74fr) minmax(0, 1.26fr);
+  gap: clamp(26px, 3.4vw, 56px);
+  padding: clamp(34px, 6vh, 70px);
+}
+
+.mainGrid::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  inset: auto -18% -42% 16%;
+  height: 340px;
+  background: radial-gradient(circle, rgba(37, 99, 235, 0.2), transparent 68%);
+}
+
+.brandBlock,
+.games,
+.feedbackCopy,
+.feedbackActions {
+  position: relative;
+  z-index: 1;
+}
+
+.brandBlock {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: clamp(24px, 4vh, 38px);
+}
+
+.mark {
+  width: clamp(230px, 34vh, 360px);
+  height: auto;
+  display: block;
+  object-fit: contain;
+  filter: drop-shadow(0 26px 42px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 30px rgba(96, 165, 250, 0.12));
+}
+
+.brandCopy {
+  max-width: 570px;
+}
+
+.brandCopy h1 {
+  margin: 0;
+  color: #ffffff;
+  font-size: clamp(3.85rem, 8vh, 7rem);
+  line-height: 0.9;
+  letter-spacing: -0.065em;
+  font-weight: 900;
+}
+
+.brandCopy p {
+  margin: clamp(16px, 2.4vh, 22px) 0 0;
+  max-width: 520px;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: clamp(0.96rem, 1.7vh, 1.1rem);
+  line-height: 1.55;
+  font-weight: 500;
+}
+
+.games {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 0.92fr);
+  gap: 18px;
+}
+
+.gameCard {
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  text-decoration: none;
+  padding: clamp(22px, 3.3vh, 36px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.gameCard::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.availableGame {
+  color: #ffffff;
+  border-color: rgba(96, 165, 250, 0.36);
+  background:
+    linear-gradient(135deg, rgba(30, 64, 175, 0.74), rgba(15, 23, 42, 0.95) 63%),
+    rgba(15, 23, 42, 0.76);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 18px 44px rgba(30, 64, 175, 0.17);
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.availableGame::before {
+  background:
+    radial-gradient(circle at 88% 24%, rgba(59, 130, 246, 0.34), transparent 25%),
+    linear-gradient(90deg, rgba(96, 165, 250, 0.16), transparent 46%);
+}
+
+.availableGame:hover,
+.availableGame:focus-visible {
+  transform: translateY(-2px);
+  border-color: rgba(147, 197, 253, 0.72);
+  outline: none;
+}
+
+.lockedGame {
+  color: rgba(226, 232, 240, 0.52);
+  background: rgba(15, 23, 42, 0.62);
+  cursor: not-allowed;
+  user-select: none;
+}
+
+.lockedGame::before {
+  background:
+    radial-gradient(circle at 84% 20%, rgba(148, 163, 184, 0.12), transparent 25%),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.08), transparent 56%);
+}
+
+.statusText,
+.gameCardBody,
+.actionPill {
+  position: relative;
+  z-index: 1;
+}
+
+.statusText {
+  color: rgba(226, 232, 240, 0.72);
+  font-size: clamp(0.78rem, 1.5vh, 0.9rem);
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 850;
+}
+
+.gameCardBody {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.gameCard h2 {
+  margin: 0;
+  color: inherit;
+  font-size: clamp(2.7rem, 6vh, 5.25rem);
+  line-height: 0.92;
+  letter-spacing: -0.06em;
+  font-weight: 900;
+}
+
+.gameCard p {
+  margin: clamp(12px, 1.8vh, 18px) 0 0;
+  max-width: 640px;
+  color: rgba(226, 232, 240, 0.74);
+  font-size: clamp(0.94rem, 1.55vh, 1.06rem);
+  line-height: 1.48;
+  font-weight: 500;
+}
+
+.lockedGame h2 {
+  color: rgba(248, 250, 252, 0.56);
+}
+
+.lockedGame h2 span {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.44em;
+  line-height: 1;
+  letter-spacing: -0.025em;
+  color: rgba(226, 232, 240, 0.48);
+}
+
+.lockedGame p {
+  color: rgba(226, 232, 240, 0.48);
+}
+
+.actionPill {
+  flex: 0 0 auto;
+  color: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.16);
+  background: rgba(255, 255, 255, 0.085);
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-size: clamp(0.82rem, 1.5vh, 0.94rem);
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.lockedGame .actionPill {
+  color: rgba(226, 232, 240, 0.56);
+}
+
+.feedbackBar {
+  min-height: 0;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  padding: clamp(16px, 2.5vh, 24px) clamp(20px, 2.7vw, 32px);
+}
+
+.feedbackCopy {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.feedbackCopy span {
+  color: rgba(196, 181, 253, 0.82);
+  font-size: 0.78rem;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 850;
+}
+
+.feedbackCopy p {
+  margin: 0;
+  max-width: 820px;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: clamp(0.9rem, 1.45vh, 1rem);
+  line-height: 1.42;
+  font-weight: 500;
+}
+
+.feedbackCopy strong {
+  color: rgba(248, 250, 252, 0.88);
+  font-size: 0.94rem;
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feedbackActions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.feedbackActions a {
+  color: #f8fafc;
+  text-decoration: none;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.075);
+  border-radius: 999px;
+  padding: 11px 16px;
+  font-size: 0.84rem;
+  font-weight: 850;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.feedbackActions a:hover,
+.feedbackActions a:focus-visible {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(226, 232, 240, 0.28);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+@media (max-height: 720px) {
+  .page {
+    padding: 10px;
+  }
+
+  .shell {
+    grid-template-rows: minmax(0, 1fr) 104px;
+    gap: 10px;
+  }
+
+  .mainGrid {
+    padding: 28px;
+    gap: 28px;
+  }
+
+  .mark {
+    width: 210px;
+  }
+
+  .brandCopy h1 {
+    font-size: 3.8rem;
+  }
+
+  .brandCopy p,
+  .gameCard p {
+    font-size: 0.9rem;
+    line-height: 1.42;
+  }
+
+  .gameCard {
+    border-radius: 20px;
+    padding: 20px;
+  }
+
+  .gameCard h2 {
+    font-size: 3rem;
+  }
+}
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .mainGrid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    padding: 22px;
+  }
+
+  .brandBlock {
+    align-items: center;
+    text-align: center;
+    gap: 12px;
+  }
+
+  .mark {
+    width: 172px;
+  }
+
+  .brandCopy h1 {
+    font-size: 3rem;
+  }
+
+  .brandCopy p {
+    margin-top: 10px;
+  }
+
+  .feedbackBar {
+    min-height: 112px;
+  }
+}
+
+@media (max-width: 640px) {
+  .mainGrid {
+    padding: 18px;
+  }
+
+  .gameCardBody {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .gameCard h2 {
+    font-size: 2.5rem;
+  }
+
+  .feedbackBar {
+    align-items: stretch;
+    flex-direction: column;
+    justify-content: center;
+    padding: 12px 14px;
+  }
+
+  .feedbackActions {
+    width: 100%;
+  }
+
+  .feedbackActions a {
+    flex: 1 1 0;
+    text-align: center;
+  }
+}

@@ -1,6 +1,7 @@
 import React, { useLayoutEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import Layout from "./components/Layout.jsx";
+import StudioLanding from "./pages/StudioLanding.jsx";
 import Home from "./pages/Home.jsx";
 import PlayerEditor from "./pages/PlayerEditor.jsx";
 import TradeSimulator from "./pages/TradeSimulator.jsx";
@@ -57,7 +58,7 @@ function RouteDensitySync() {
   useLayoutEffect(() => {
     const routeName =
       pathname === "/"
-        ? "league-editor"
+        ? "studio-landing"
         : pathname.replace(/^\/+|\/+$/g, "").replace(/\//g, "-") || "home";
 
     document.documentElement.dataset.bmRoute = routeName;
@@ -89,9 +90,10 @@ function App() {
       <SeasonBriefingHost />
       <RoutePageFade>
       <Routes>
+          <Route path="/" element={<StudioLanding />} />
+
           {/* ✅ Routes that use your shared Layout */}
           <Route element={<Layout />}>
-            <Route index element={<LeagueEditor />} />
             <Route path="players" element={<PlayerEditor />} />
             <Route path="players/:playerId" element={<PlayerEditor />} />
             <Route path="trade" element={<TradeSimulator />} />
