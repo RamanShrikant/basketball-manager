@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
-import { getContractSeasonYear } from "../utils/seasonContext.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { evaluateTradeTeamImpact } from "../utils/tradeTeamImpact.js";
 import {
   buildOffseasonTradeEvaluationLeague,
   getOffseasonTradeContext,
+  getOffseasonTradePayrollSeasonYear,
   getTeamFromTradeLeague,
 } from "../utils/offseasonTradeContext.js";
 import { executeAcceptedTradeOnLeague as executeAcceptedTradeOnLeagueShared } from "../utils/tradeExecution.js";
@@ -386,11 +386,7 @@ function getRosterPayrollForYear(team, payrollSeasonYear) {
 }
 
 function getTradePayrollSeasonYear(leagueData) {
-  const context = getOffseasonTradeContext(leagueData || {});
-  if (context?.inOffseason && Number.isFinite(Number(context?.targetSeasonYear))) {
-    return Number(context.targetSeasonYear);
-  }
-  return getContractSeasonYear(leagueData || {});
+  return getOffseasonTradePayrollSeasonYear(leagueData || {});
 }
 
 function getPlayerSalary(player, leagueData) {

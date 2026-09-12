@@ -16,6 +16,7 @@ import {
 import {
   buildOffseasonTradeEvaluationLeague,
   getOffseasonTradeContext,
+  getOffseasonTradePayrollSeasonYear,
   getTeamFromTradeLeague,
 } from "../utils/offseasonTradeContext.js";
 import {
@@ -31,7 +32,7 @@ import {
 } from "../utils/bmDiagnostics.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
-import { getContractSeasonYear, getDraftYear } from "../utils/seasonContext.js";
+import { getDraftYear } from "../utils/seasonContext.js";
 import { buildRecordMap } from "../utils/teamIntel_v1.js";
 import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
 import { buildCanonicalStandingLabelMap, loadRegularSeasonResultsV3FromStorage } from "../utils/canonicalStandings.js";
@@ -549,11 +550,7 @@ function getCurrentSeasonYear(leagueData) {
 }
 
 function getTradePayrollSeasonYear(leagueData) {
-  const context = getOffseasonTradeContext(leagueData || {});
-  if (context?.inOffseason && Number.isFinite(Number(context?.targetSeasonYear))) {
-    return Number(context.targetSeasonYear);
-  }
-  return getContractSeasonYear(leagueData || {});
+  return getOffseasonTradePayrollSeasonYear(leagueData || {});
 }
 
 function getPlayerSalary(player, leagueData) {

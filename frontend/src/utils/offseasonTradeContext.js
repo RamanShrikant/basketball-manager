@@ -515,6 +515,22 @@ export function getOffseasonTradeContext(leagueData = {}, explicitContext = null
   };
 }
 
+// Canonical salary/payroll season for every trade surface.
+// `targetSeasonYear` is the next progression/draft label and must never be used
+// to index contract.salaryByYear during the active offseason.
+export function getOffseasonTradePayrollSeasonYear(leagueData = {}, explicitContext = null) {
+  const context = getOffseasonTradeContext(leagueData || {}, explicitContext);
+  if (context?.inOffseason) {
+    const target = Number(
+      context?.targetContractSeasonYear ??
+        context?.contractSeasonYear ??
+        getContractSeasonYear(leagueData || {})
+    );
+    if (Number.isFinite(target)) return target;
+  }
+  return getContractSeasonYear(leagueData || {});
+}
+
 function isCurrentOffseasonRookie(player = {}, source = "", context = {}) {
   if (source === "pending_rookie") return true;
   const currentDraftYear = Number(context?.seasonYear || 0);

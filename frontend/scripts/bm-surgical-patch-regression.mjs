@@ -39,7 +39,10 @@ function setClock({ date, phase, seasonYear }) {
   );
 }
 
-const { getOffseasonTradeContext } = await import("../src/utils/offseasonTradeContext.js");
+const {
+  getOffseasonTradeContext,
+  getOffseasonTradePayrollSeasonYear,
+} = await import("../src/utils/offseasonTradeContext.js");
 const { getOffseasonGuaranteedContractStatus } = await import("../src/utils/tradeRosterEligibility.js");
 const { getUserTradeDeadlineStatus, getUserTradePlayerSalary } = await import("../src/utils/userTradeRules.js");
 
@@ -131,6 +134,42 @@ const optionStatus = getOffseasonGuaranteedContractStatus(pendingOption, {
 });
 assert.equal(optionStatus.eligible, false);
 assert.equal(optionStatus.code, "PENDING_TEAM_OPTION", "Pending options must still be blocked until resolved.");
+
+// The trade UI/execution paths must index the same active payroll slot.
+assert.equal(
+  getOffseasonTradePayrollSeasonYear(offseasonLeague, offseasonContext),
+  2029,
+  "Trade surfaces must use targetContractSeasonYear, never targetSeasonYear."
+);
+
+// Reproduce the user-visible failure shape exactly: one guaranteed current
+// offseason year followed by no salary. The old bug read targetSeasonYear and
+// displayed this player as $0 / expiring even though the 2028 slot was live.
+const garlandShapeLeague = {
+  seasonStartYear: 2027,
+  seasonYear: 2027,
+  currentSeasonYear: 2027,
+  draftYear: 2028,
+  currentDraftYear: 2028,
+  teams: [],
+};
+const garlandShapeContext = {
+  version: 4,
+  seasonYear: 2028,
+  targetSeasonYear: 2029,
+  contractSeasonYear: 2028,
+  targetContractSeasonYear: 2028,
+  inOffseason: true,
+  stage: "free_agency",
+};
+assert.equal(
+  getOffseasonTradePayrollSeasonYear(garlandShapeLeague, garlandShapeContext),
+  2028,
+  "A 2028 offseason salary must remain on the 2028 payroll slot instead of shifting to 2029."
+);
+const garlandShapeContract = { startYear: 2028, salaryByYear: [44_900_000] };
+const garlandIndex = getOffseasonTradePayrollSeasonYear(garlandShapeLeague, garlandShapeContext) - garlandShapeContract.startYear;
+assert.equal(garlandShapeContract.salaryByYear[garlandIndex], 44_900_000);
 
 console.log("PASS surgical_patch.offseason_contract_payroll_year");
 
@@ -235,4 +274,24 @@ assert.match(impactSource, /tradeFinderLeaguePowerSignatureCache\.set\(key, \{ l
 assert.match(impactSource, /const leagueSignature = tradeFinderLeaguePowerSignature\(leagueData, teams, cpuTradeContext\)/);
 console.log("PASS surgical_patch.trade_finder_power_signature_cache");
 
-console.log("Surgical patch regression passed: 8/8 checks.");
+const proposeTradeSource = read("src/pages/ProposeTrade.jsx");
+const tradeExecutionSource = read("src/utils/tradeExecution.js");
+for (const [label, source] of [
+  ["TradeFinder", tradeFinderSource],
+  ["ProposeTrade", proposeTradeSource],
+  ["tradeExecution", tradeExecutionSource],
+]) {
+  assert.match(
+    source,
+    /return getOffseasonTradePayrollSeasonYear\(leagueData \|\| \{\}\);/,
+    `${label} must use the canonical offseason payroll-season helper.`
+  );
+  assert.doesNotMatch(
+    source,
+    /context\?\.inOffseason[^}]{0,220}targetSeasonYear/,
+    `${label} must never index salaryByYear with targetSeasonYear.`
+  );
+}
+console.log("PASS surgical_patch.offseason_trade_salary_surface_parity");
+
+console.log("Surgical patch regression passed: 9/9 checks.");

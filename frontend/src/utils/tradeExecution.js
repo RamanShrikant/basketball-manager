@@ -27,7 +27,10 @@ import {
   validateCustomPickProtection,
 } from "./draftPicks.js";
 import { getContractSeasonYear } from "./seasonContext.js";
-import { getOffseasonTradeContext } from "./offseasonTradeContext.js";
+import {
+  getOffseasonTradeContext,
+  getOffseasonTradePayrollSeasonYear,
+} from "./offseasonTradeContext.js";
 import {
   getUserTradeCurrentDate,
   getUserTradeRuleSettings,
@@ -388,11 +391,7 @@ function getRosterPayrollForYear(team, payrollSeasonYear) {
 }
 
 function getTradePayrollSeasonYear(leagueData) {
-  const context = getOffseasonTradeContext(leagueData || {});
-  if (context?.inOffseason && Number.isFinite(Number(context?.targetSeasonYear))) {
-    return Number(context.targetSeasonYear);
-  }
-  return getContractSeasonYear(leagueData || {});
+  return getOffseasonTradePayrollSeasonYear(leagueData || {});
 }
 
 function getPlayerSalary(player, leagueData) {
