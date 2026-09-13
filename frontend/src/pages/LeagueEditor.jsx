@@ -2294,6 +2294,31 @@ const normalizePlayer = (p) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPlayerForm, playerForm.attrs, playerForm.age, playerForm.potential, playerForm.height, playerForm.pos, playerForm.name]);
 
+  useEffect(() => {
+    if (!showTradeModal && !showPlayerForm && !editTeamModal) return;
+
+    const handleLeagueEditorModalKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+
+      if (showPlayerForm) {
+        setShowPlayerForm(false);
+        return;
+      }
+
+      if (showTradeModal) {
+        setShowTradeModal(false);
+        return;
+      }
+
+      if (editTeamModal) {
+        setEditTeamModal(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleLeagueEditorModalKeyDown);
+    return () => window.removeEventListener("keydown", handleLeagueEditorModalKeyDown);
+  }, [showTradeModal, showPlayerForm, editTeamModal]);
+
   /* ---------------- Handlers ---------------- */
   const addTeam = () => {
     if (!newTeamName.trim()) return;
@@ -3215,9 +3240,24 @@ const normalizePlayer = (p) => {
 
       {/* Trades Modal */}
       {showTradeModal && (
-        <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50">
-          <div className="bg-white rounded-lg p-6 w-[900px] max-h-[90vh] overflow-y-auto">
-            <h2 className="text-xl font-bold mb-4">Trades (Roster Swap)</h2>
+        <div
+          className="league-editor-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setShowTradeModal(false);
+          }}
+        >
+          <div className="league-editor-modal-panel bg-white rounded-lg p-6 w-[900px] max-w-[96vw] max-h-[calc(100vh-2rem)] overflow-y-auto">
+            <div className="league-editor-modal-title-row">
+              <h2 className="text-xl font-bold">Trades (Roster Swap)</h2>
+              <button
+                type="button"
+                onClick={() => setShowTradeModal(false)}
+                className="league-editor-modal-close"
+                aria-label="Close trades modal"
+              >
+                ×
+              </button>
+            </div>
 
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
@@ -3374,9 +3414,24 @@ const normalizePlayer = (p) => {
 
       {/* Player Modal */}
       {showPlayerForm && (
-        <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50">
-          <div className="bg-white rounded-lg p-6 w-[650px] max-h-[90vh] overflow-y-auto">
-            <h2 className="text-xl font-bold mb-4">{editingPool === "DRAFT" ? editingPlayer !== null ? "Edit Prospect" : "Add Prospect" : editingPlayer !== null ? "Edit Player" : "Add Player"}</h2>
+        <div
+          className="league-editor-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setShowPlayerForm(false);
+          }}
+        >
+          <div className="league-editor-modal-panel league-editor-player-modal bg-white rounded-lg p-6 w-[760px] max-w-[96vw] max-h-[calc(100vh-2rem)] overflow-y-auto">
+            <div className="league-editor-modal-title-row">
+              <h2 className="text-xl font-bold">{editingPool === "DRAFT" ? editingPlayer !== null ? "Edit Prospect" : "Add Prospect" : editingPlayer !== null ? "Edit Player" : "Add Player"}</h2>
+              <button
+                type="button"
+                onClick={() => setShowPlayerForm(false)}
+                className="league-editor-modal-close"
+                aria-label="Close player editor"
+              >
+                ×
+              </button>
+            </div>
 
             <div className="flex flex-col gap-2 mb-3">
               <input
@@ -4354,9 +4409,24 @@ const normalizePlayer = (p) => {
           protectionOptionsForForm[0];
 
         return (
-          <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50">
-            <div className="bg-white rounded-lg p-6 w-[980px] max-w-[96vw] max-h-[92vh] overflow-y-auto">
-              <h2 className="text-xl font-bold mb-4">Edit Team</h2>
+          <div
+            className="league-editor-modal-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setEditTeamModal(null);
+            }}
+          >
+            <div className="league-editor-modal-panel bg-white rounded-lg p-6 w-[980px] max-w-[96vw] max-h-[calc(100vh-2rem)] overflow-y-auto">
+              <div className="league-editor-modal-title-row">
+                <h2 className="text-xl font-bold">Edit Team</h2>
+                <button
+                  type="button"
+                  onClick={() => setEditTeamModal(null)}
+                  className="league-editor-modal-close"
+                  aria-label="Close team editor"
+                >
+                  ×
+                </button>
+              </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
                 <div>

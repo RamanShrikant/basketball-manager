@@ -261,10 +261,132 @@ select.league-editor-input option:checked,
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28) !important;
 }
 
-.league-editor-theme .rounded-2xl,
-.league-editor-theme .rounded-lg,
-.league-editor-theme .rounded-xl {
-  overflow: hidden;
+.league-editor-theme > .league-editor-modal-backdrop {
+  max-width: none;
+  margin: 0;
+}
+
+.league-editor-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: clamp(16px, 3vh, 28px) 16px;
+  overflow-y: auto;
+  background: rgba(2, 6, 23, 0.76);
+  backdrop-filter: blur(10px);
+}
+
+.league-editor-modal-panel {
+  position: relative;
+  width: min(100%, var(--league-editor-modal-width, 760px));
+  max-height: calc(100vh - clamp(32px, 6vh, 56px));
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  color: #f8fafc;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(59, 130, 246, 0.18), transparent 34%),
+    linear-gradient(135deg, rgba(8, 15, 28, 0.96), rgba(15, 23, 42, 0.98)) !important;
+  border: 1px solid rgba(147, 197, 253, 0.2);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.5);
+}
+
+.league-editor-modal-panel.w-\[900px\] {
+  --league-editor-modal-width: 900px;
+}
+
+.league-editor-modal-panel.w-\[980px\] {
+  --league-editor-modal-width: 980px;
+}
+
+.league-editor-player-modal {
+  --league-editor-modal-width: 760px;
+}
+
+.league-editor-modal-title-row {
+  position: sticky;
+  top: -1.5rem;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: -1.5rem -1.5rem 1rem;
+  padding: 1.1rem 1.25rem;
+  background: rgba(8, 15, 28, 0.96);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  backdrop-filter: blur(16px);
+}
+
+.league-editor-modal-title-row h2 {
+  margin: 0;
+}
+
+.league-editor-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: rgba(248, 250, 252, 0.92);
+  background: rgba(15, 23, 42, 0.88);
+  font-size: 1.45rem;
+  line-height: 1;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.league-editor-modal-close:hover,
+.league-editor-modal-close:focus-visible {
+  color: #ffffff;
+  border-color: rgba(147, 197, 253, 0.62);
+  background: rgba(37, 99, 235, 0.42);
+  outline: none;
+}
+
+.league-editor-modal-panel label,
+.league-editor-modal-panel .text-xs,
+.league-editor-modal-panel .text-sm {
+  color: rgba(226, 232, 240, 0.8) !important;
+}
+
+.league-editor-modal-panel input:not([type="file"]):not([type="range"]):not([type="checkbox"]),
+.league-editor-modal-panel select,
+.league-editor-modal-panel textarea {
+  color: #f8fafc !important;
+  background-color: rgba(15, 23, 42, 0.92) !important;
+  border-color: rgba(148, 163, 184, 0.26) !important;
+}
+
+.league-editor-modal-panel input:not([type="file"]):not([type="range"]):not([type="checkbox"]):focus,
+.league-editor-modal-panel select:focus,
+.league-editor-modal-panel textarea:focus {
+  border-color: rgba(147, 197, 253, 0.72) !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  outline: none;
+}
+
+.league-editor-modal-panel input:disabled,
+.league-editor-modal-panel input[readonly] {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.league-editor-modal-panel .bg-slate-50,
+.league-editor-modal-panel .bg-gray-100,
+.league-editor-modal-panel .bg-gray-200,
+.league-editor-modal-panel .bg-gray-300 {
+  background: rgba(15, 23, 42, 0.68) !important;
+}
+
+.league-editor-modal-panel input[type="range"],
+.league-editor-modal-panel input[type="checkbox"] {
+  accent-color: #60a5fa;
 }
 
 .league-editor-theme h2,
