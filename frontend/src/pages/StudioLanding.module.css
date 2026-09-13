@@ -150,6 +150,72 @@
   pointer-events: none;
 }
 
+.cardIcon {
+  position: absolute;
+  z-index: 0;
+  right: clamp(22px, 3.4vw, 54px);
+  top: 50%;
+  width: clamp(145px, 16vw, 245px);
+  height: auto;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.basketballIcon {
+  color: rgba(191, 219, 254, 0.86);
+  opacity: 0.15;
+  filter: drop-shadow(0 0 28px rgba(96, 165, 250, 0.2));
+}
+
+.iconDisc {
+  fill: currentColor;
+  opacity: 0.08;
+  stroke: none;
+}
+
+.iconLine {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fightIcon {
+  width: clamp(170px, 18vw, 275px);
+  color: rgba(226, 232, 240, 0.82);
+  opacity: 0.14;
+  filter: drop-shadow(0 0 22px rgba(148, 163, 184, 0.12));
+}
+
+.gloveRear {
+  opacity: 0.33;
+}
+
+.gloveFront {
+  opacity: 0.94;
+}
+
+.gloveShell,
+.gloveThumb,
+.gloveCuff {
+  fill: currentColor;
+  stroke: rgba(226, 232, 240, 0.72);
+  stroke-width: 5;
+  stroke-linejoin: round;
+}
+
+.gloveCuff {
+  opacity: 0.92;
+}
+
+.gloveCut {
+  fill: none;
+  stroke: rgba(8, 15, 28, 0.78);
+  stroke-width: 9;
+  stroke-linecap: round;
+}
+
 .availableGame {
   color: #ffffff;
   border-color: rgba(96, 165, 250, 0.36);
@@ -207,6 +273,10 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
+}
+
+.gameCardBody > div {
+  max-width: min(700px, calc(100% - 160px));
 }
 
 .gameCard h2 {
@@ -431,5 +501,15 @@
   .feedbackActions a {
     flex: 1 1 0;
     text-align: center;
+  }
+
+  .cardIcon {
+    right: 16px;
+    width: 150px;
+    opacity: 0.08;
+  }
+
+  .gameCardBody > div {
+    max-width: 100%;
   }
 }

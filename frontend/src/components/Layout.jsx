@@ -1,6 +1,8 @@
 // src/components/Layout.jsx
 import React from "react";
-import { Outlet, Link, useLocation } from "react-router-dom";
+import { Outlet, Link, NavLink, useLocation } from "react-router-dom";
+import samsaraSymbol from "../assets/samsara-studios-symbol.png";
+import "./Layout.css";
 
 export default function Layout() {
   const location = useLocation();
@@ -26,33 +28,25 @@ export default function Layout() {
   const hideHeader = hideHeaderRoutes.some((route) => pathname.startsWith(route));
 
   return (
-    <div
-      className={`min-h-screen flex flex-col ${
-        hideHeader ? "bg-neutral-900 text-white" : "bg-white text-black"
-      }`}
-    >
+    <div className={hideHeader ? "bm-layout bm-layout--immersive" : "bm-layout"}>
       {!hideHeader && (
-        <header className="w-full bg-gray-100 border-b border-gray-300 px-6 py-3 flex items-center gap-4">
-          <h1 className="text-xl font-bold">Basketball Manager</h1>
+        <header className="bm-game-header">
+          <Link to="/" className="bm-studio-link" aria-label="Back to Samsara Studios home">
+            <img src={samsaraSymbol} alt="" className="bm-studio-mark" />
+            <span>Samsara Studios</span>
+          </Link>
 
-          <nav className="flex gap-3 text-sm">
-            <Link to="/" className="hover:underline">
-              Home
-            </Link>
-            <Link to="/league-editor" className="hover:underline">
-              League Editor
-            </Link>
-            <Link to="/salary-table" className="hover:underline">
-              Salary Table
-            </Link>
-            <Link to="/play" className="hover:underline">
-              Play
-            </Link>
+          <div className="bm-game-title">Basketball Manager</div>
+
+          <nav className="bm-game-nav" aria-label="Basketball Manager navigation">
+            <NavLink to="/play" className={({ isActive }) => `bm-game-nav-link bm-play-link${isActive ? " is-active" : ""}`}>
+              Start League
+            </NavLink>
           </nav>
         </header>
       )}
 
-      <main className="flex-1">
+      <main className="bm-layout-main">
         <Outlet />
       </main>
     </div>

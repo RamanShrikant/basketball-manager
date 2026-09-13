@@ -1,6 +1,7 @@
 // LeagueEditor.jsx
 import React, { useState, useEffect, useMemo } from "react";
 import PlayerCreatorStudio from "../components/PlayerCreatorStudio.jsx";
+import "./LeagueEditorTheme.css";
 import HeadshotLayoutTransform from "../components/HeadshotLayoutTransform.jsx";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
@@ -2542,18 +2543,24 @@ const normalizePlayer = (p) => {
 
   /* ---------------- UI ---------------- */
   return (
-    <div className="p-6 space-y-6">
-      <h1 className="text-3xl font-bold text-center">League Editor</h1>
+    <div className="league-editor-theme p-6 space-y-6">
+      <section className="league-editor-intro">
+        <div>
+          <span className="league-editor-kicker">Basketball Manager</span>
+          <h1>League Editor</h1>
+          <p>Import a roster file, edit teams and players, then use Start League in the top bar when everything is ready.</p>
+        </div>
+      </section>
 
-      <div className="flex flex-col md:flex-row items-center justify-center gap-4">
+      <div className="league-editor-control-row">
         <input
-          className="border p-2 rounded w-60"
+          className="league-editor-input"
           value={leagueName}
           onChange={(e) => setLeagueName(e.target.value)}
           placeholder="League Name"
         />
-        <div className="flex gap-2">
-          <label className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300 cursor-pointer">
+        <div className="league-editor-button-row">
+          <label className="league-editor-secondary-button">
             Import JSON
             <input
               type="file"
@@ -2621,7 +2628,7 @@ const normalizePlayer = (p) => {
 
           <button
             onClick={openTradeModal}
-            className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700"
+            className="league-editor-trades-button"
           >
             Trades
           </button>
@@ -2647,7 +2654,7 @@ const normalizePlayer = (p) => {
               a.click();
               URL.revokeObjectURL(url);
             }}
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+            className="league-editor-primary-button"
           >
             Export JSON
           </button>
@@ -2655,14 +2662,12 @@ const normalizePlayer = (p) => {
       </div>
 
       {/* FIX 5: Pool Toggle */}
-      <div className="flex justify-center gap-4 flex-wrap">
+      <div className="league-editor-tab-row">
         {["TEAMS", "PLAYER_CREATOR", "FA", "DRAFT"].map((p) => (
           <button
             key={p}
             onClick={() => setSelectedPool(p)}
-            className={`px-4 py-2 rounded ${
-              selectedPool === p ? "bg-orange-600 text-white" : "bg-gray-200"
-            }`}
+            className={`league-editor-tab ${selectedPool === p ? "is-active" : ""}`}
           >
             {p === "TEAMS"
               ? "Teams"
@@ -2679,7 +2684,7 @@ const normalizePlayer = (p) => {
 
       {/* Only show conference toggle when on Teams */}
       {selectedPool === "TEAMS" && (
-        <div className="flex justify-center gap-4">
+        <div className="league-editor-subtab-row">
           {["East", "West"].map((c) => (
             <button
               key={c}
@@ -2688,9 +2693,7 @@ const normalizePlayer = (p) => {
                 const options = DIVISION_NAMES.filter((division) => getDivisionConference(division) === c);
                 if (!options.includes(newTeamDivision)) setNewTeamDivision(options[0] || newTeamDivision);
               }}
-              className={`px-4 py-2 rounded ${
-                selectedConf === c ? "bg-green-600 text-white" : "bg-gray-200"
-              }`}
+              className={`league-editor-conference-tab ${selectedConf === c ? "is-active" : ""}`}
             >
               {c} Conference
             </button>
@@ -2700,21 +2703,21 @@ const normalizePlayer = (p) => {
 
       {/* Only show team creation when on Teams */}
       {selectedPool === "TEAMS" && (
-        <div className="flex flex-wrap justify-center gap-2">
+        <div className="league-editor-team-form">
           <input
-            className="border p-2 rounded w-52"
+            className="league-editor-input"
             placeholder="Team Name"
             value={newTeamName}
             onChange={(e) => setNewTeamName(e.target.value)}
           />
           <input
-            className="border p-2 rounded w-52"
+            className="league-editor-input"
             placeholder="Logo URL"
             value={newTeamLogo}
             onChange={(e) => setNewTeamLogo(e.target.value)}
           />
           <select
-            className="border p-2 rounded w-52"
+            className="league-editor-input"
             value={newTeamDivision}
             onChange={(e) => setNewTeamDivision(e.target.value)}
           >
@@ -2724,7 +2727,7 @@ const normalizePlayer = (p) => {
           </select>
           <button
             onClick={addTeam}
-            className="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
+            className="league-editor-add-team"
           >
             Add Team
           </button>
