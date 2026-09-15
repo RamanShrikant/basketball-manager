@@ -1,0 +1,17 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here,'..');
+const roster = fs.readFileSync(path.join(root,'src/pages/RosterView.jsx'),'utf8');
+const css = fs.readFileSync(path.join(root,'src/pages/RosterView.module.css'),'utf8');
+const checks=[]; const check=(c,id,detail)=>checks.push({status:c?'PASS':'FAIL',id,detail});
+check(roster.includes('activeRosterLogo'),'roster.logo','Uses the current team logo.');
+check(roster.includes('title="Previous Team"')&&roster.includes('title="Next Team"'),'roster.arrows','Keeps team arrows.');
+check(roster.includes('Standard contracts')&&roster.includes('Two-way contracts')&&roster.includes('Stashes'),'roster.counts','Keeps live roster counts.');
+check(roster.includes('Player Card')&&roster.includes('navigate("/coach-gameplan")'),'roster.actions','Adds player actions.');
+check(roster.includes('selectedPlayerWatermark')&&roster.includes('PlayerRatingRing'),'roster.hero','Keeps rating ring and adds watermark.');
+check(roster.includes('<table')&&roster.includes('sortedPlayers.map'),'roster.table','Roster table remains.');
+check(css.includes('.rosterHeaderBar')&&css.includes('.selectedPlayerHero'),'roster.css','New upper-layout CSS exists.');
+check(!roster.includes('Season 2027')&&!roster.includes('>ROSTER<'),'roster.no_fluff','No Season/ROSTER sampler fluff added.');
+console.table(checks); const failed=checks.filter(x=>x.status==='FAIL'); if(failed.length){console.error(`Roster header/hero regression failed: ${failed.length}/${checks.length}`);process.exit(1)} console.log(`Roster header/hero regression passed: ${checks.length}/${checks.length} checks.`);

@@ -1,0 +1,251 @@
+.sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 120;
+  width: var(--bm-persistent-sidebar-width, 236px);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: #f1ece7;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(249, 115, 22, 0.095), transparent 34%),
+    linear-gradient(180deg, #120d09 0%, #0e0b09 56%, #090807 100%);
+  border-right: 1px solid rgba(251, 146, 60, 0.11);
+  box-shadow: 14px 0 38px rgba(0, 0, 0, 0.28);
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: left;
+}
+
+.brand {
+  flex: 0 0 auto;
+  min-height: 86px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 22px;
+  border-bottom: 1px solid rgba(251, 146, 60, 0.08);
+}
+
+.monogram {
+  color: #ffffff;
+  font-size: 31px;
+  line-height: 1;
+  font-weight: 950;
+  font-style: italic;
+  letter-spacing: -0.09em;
+  transform: skewX(-7deg);
+  text-shadow: 0 4px 16px rgba(0, 0, 0, 0.24);
+}
+
+.brandWords {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: rgba(255, 247, 237, 0.97);
+  font-size: 10px;
+  line-height: 1.03;
+  font-weight: 800;
+  letter-spacing: 0.055em;
+}
+
+.navViewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 12px 24px;
+  scrollbar-width: thin;
+  scrollbar-color: #f97316 rgba(255, 255, 255, 0.025);
+}
+
+.navViewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.navViewport::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: 999px;
+}
+
+.navViewport::-webkit-scrollbar-thumb {
+  border: 1px solid rgba(12, 9, 7, 0.88);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #fb923c, #ea580c);
+  box-shadow: 0 0 10px rgba(249, 115, 22, 0.22);
+}
+
+.navViewport::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #fdba74, #f97316);
+}
+
+.group {
+  margin-top: 10px;
+}
+
+.groupHeader {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 0 9px 3px 10px;
+  border: 0;
+  background: transparent;
+  color: #e2a16f;
+  font: inherit;
+  font-size: 8.5px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+  transition: color 130ms ease;
+}
+
+.groupHeader:hover {
+  color: #ffc08a;
+}
+
+.groupChevron {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  color: #f0a060;
+  opacity: 0.95;
+}
+
+.groupItems {
+  display: block;
+}
+
+.navItem {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 39px;
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: 1px 0;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #c8bfb7;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1;
+  font-weight: 560;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.navItem:hover:not(:disabled) {
+  color: #ffffff;
+  background: rgba(249, 115, 22, 0.08);
+}
+
+.navItem:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.navItemActive,
+.navItemActive:hover {
+  color: #ffffff !important;
+  background: #d65316 !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(251, 146, 60, 0.13),
+    0 7px 18px rgba(67, 20, 7, 0.25);
+  font-weight: 700;
+}
+
+.navItemActive .icon {
+  color: #fff7ed;
+}
+
+.navItemDisabled {
+  color: #5c514a;
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+}
+
+.icon svg {
+  width: 21px;
+  height: 21px;
+  display: block;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-height: 720px) and (min-width: 1024px) {
+  .brand {
+    min-height: 68px;
+    gap: 10px;
+    padding-inline: 17px;
+  }
+
+  .monogram {
+    font-size: 27px;
+  }
+
+  .brandWords {
+    font-size: 8.5px;
+  }
+
+  .navViewport {
+    padding: 8px 10px 18px;
+  }
+
+  .group {
+    margin-top: 6px;
+  }
+
+  .groupHeader {
+    min-height: 18px;
+    padding-bottom: 1px;
+    font-size: 7.4px;
+  }
+
+  .groupChevron {
+    width: 10px;
+    height: 10px;
+  }
+
+  .navItem {
+    min-height: 32px;
+    grid-template-columns: 23px minmax(0, 1fr);
+    gap: 8px;
+    padding-inline: 9px;
+    border-radius: 7px;
+    font-size: 11.7px;
+  }
+
+  .icon,
+  .icon svg {
+    width: 18px;
+    height: 18px;
+  }
+}

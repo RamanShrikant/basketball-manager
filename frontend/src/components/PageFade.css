@@ -40,3 +40,70 @@ body,
 }
 
 /* The app owner explicitly wants the navigation transition to remain active. */
+
+/* ROSTER_COACH_VIEWPORT_CHAIN_FIX */
+body[data-bm-route="roster-view"] .bm-page-fade,
+body[data-bm-route="coach-gameplan"] .bm-page-fade {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
+
+  background-color: #0d0d0d !important;
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 22px),
+    radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%) !important;
+  background-repeat: repeat, repeat, repeat, no-repeat !important;
+  background-size: 340px 340px, auto, auto, cover !important;
+  background-position: center !important;
+  background-blend-mode: soft-light, normal, normal, normal !important;
+}
+
+body[data-bm-route="roster-view"] .bm-page-fade > *,
+body[data-bm-route="coach-gameplan"] .bm-page-fade > * {
+  box-sizing: border-box !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+}
+
+/* ROSTER_COACH_ROOT_FALLBACK_FIX */
+
+/*
+  frontend/index.html hardcodes <body class="bg-slate-100">.
+  When a route ends a little short of the visible browser viewport, that light
+  Tailwind body background (Coach Gameplan) or the #050505 root fallback
+  (Roster View) becomes visible.
+
+  Paint the route's actual document/root fallback with the same BM court
+  background so any exposed pixels visually remain part of the page.
+*/
+html[data-bm-route="roster-view"],
+html[data-bm-route="coach-gameplan"],
+body[data-bm-route="roster-view"],
+body[data-bm-route="coach-gameplan"],
+body[data-bm-route="roster-view"] #root,
+body[data-bm-route="coach-gameplan"] #root {
+  min-height: 100vh !important;
+  min-height: 100dvh !important;
+  background-color: #0d0d0d !important;
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 22px),
+    radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%) !important;
+  background-repeat: repeat, repeat, repeat, no-repeat !important;
+  background-size: 340px 340px, auto, auto, cover !important;
+  background-position: center !important;
+  background-blend-mode: soft-light, normal, normal, normal !important;
+}
+
+/* Keep PageFade itself visually continuous too. */
+body[data-bm-route="roster-view"] .bm-page-fade,
+body[data-bm-route="coach-gameplan"] .bm-page-fade {
+  background-color: transparent !important;
+}

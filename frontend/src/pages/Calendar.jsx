@@ -499,7 +499,7 @@ function getSimulationBlockMessageThroughDate(scheduleByDate, teams, endDate = n
 async function simOneSafe(game, leagueData, teams, runtime = null, currentDate = null) {
   if (window.__debugSimLogs) {
     window.__lastGame = game;
-    console.log("⏳ simOneSafe starting:", game.home, "vs", game.away);
+    console.log("â³ simOneSafe starting:", game.home, "vs", game.away);
   }
 
 const activeRuntime = runtime || buildSimulationRuntime(leagueData, teams);
@@ -905,7 +905,7 @@ function CalendarTeamInfoModal({ team, leagueData, teams = [], onClose }) {
             className="flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-xs font-black text-neutral-400 transition hover:border-orange-400/40 hover:text-orange-300"
             aria-label="Close team snapshot"
           >
-            ×
+            Ã—
           </button>
         </div>
 
@@ -1151,7 +1151,7 @@ const MiniStandingsPanel = ({
                   className="px-1 text-xs text-gray-300 hover:text-orange-400"
                   title="Previous ladder"
                 >
-                  ◄
+                  &larr;
                 </button>
 
                 <span className="text-[11px] font-bold text-orange-400">
@@ -1163,7 +1163,7 @@ const MiniStandingsPanel = ({
                   className="px-1 text-xs text-gray-300 hover:text-orange-400"
                   title="Next ladder"
                 >
-                  ►
+                  &rarr;
                 </button>
               </div>
             )}
@@ -1968,7 +1968,7 @@ function slimResult(full) {
         }
       : null;
 
-  // 🔥 helper to pull makes/attempts from a variety of shapes
+  // ðŸ”¥ helper to pull makes/attempts from a variety of shapes
   function extractMA(obj, keysM, keysA, stringKeys = []) {
     let m, a;
 
@@ -2013,7 +2013,7 @@ function slimResult(full) {
     (arr || []).map((p) => {
       const obj = p instanceof Map ? Object.fromEntries(p) : p;
 
-      // 🔥 FG
+      // ðŸ”¥ FG
       const fg = extractMA(
         obj,
         ["fgm", "fg_m"],
@@ -2021,7 +2021,7 @@ function slimResult(full) {
         ["fg"]
       );
 
-      // 🔥 3P
+      // ðŸ”¥ 3P
       const tp = extractMA(
         obj,
         ["tpm", "tp_m", "fg3m", "three_m"],
@@ -2029,7 +2029,7 @@ function slimResult(full) {
         ["3p", "tp", "three"]
       );
 
-      // 🔥 FT
+      // ðŸ”¥ FT
       const ft = extractMA(
         obj,
         ["ftm", "ft_m"],
@@ -2067,7 +2067,7 @@ const side =
   const boxAway = convertBox(rawAwayBox);
 
   if ((boxHome.length === 0 || boxAway.length === 0) && (homeScore || awayScore)) {
-    console.warn("⚠ slimResult: empty box with non-zero score", {
+    console.warn("âš  slimResult: empty box with non-zero score", {
       homeScore,
       awayScore,
       rawHomeBox,
@@ -2138,7 +2138,7 @@ function isBadFullResult(full) {
 
   const noBox = (!homeBox || homeBox.length === 0) && (!awayBox || awayBox.length === 0);
 
-  // “ghost” signature
+  // &quot;ghost&quot; signature
   return home === 0 && away === 0 && noBox;
 }
 
@@ -2859,7 +2859,7 @@ export default function Calendar() {
   
   const navigate = useNavigate();
   const { leagueData, setLeagueData, selectedTeam } = useGame();
-  if (window.__debugSimLogs) console.log("🔥 Calendar leagueData =", leagueData);
+  if (window.__debugSimLogs) console.log("ðŸ”¥ Calendar leagueData =", leagueData);
   window.__leagueData = leagueData;
 
   useEffect(() => {
@@ -3055,7 +3055,7 @@ const teams = useMemo(() => {
   if (!leagueData) return [];
 
   const arr = getAllTeamsFromLeague(leagueData);
-  if (window.__debugCalendarTeams) console.log("🔥 DEBUG Calendar loaded teams:", arr);
+  if (window.__debugCalendarTeams) console.log("ðŸ”¥ DEBUG Calendar loaded teams:", arr);
   window.__debugTeams = arr;
 
   return arr.map((t) => ({
@@ -3891,7 +3891,7 @@ const starters = new Set(sortedByMin.slice(0, 5).map((r) => r.player));
         fta: 0,
         to: 0,
         pf: 0,
-        // 🔥 role tracking
+        // ðŸ”¥ role tracking
         started: 0,
         sixth: 0,
       };
@@ -3936,7 +3936,7 @@ else {
   return stats;
 }
 
-// 🔥 Rebuild player stats from existing schedule + results
+// ðŸ”¥ Rebuild player stats from existing schedule + results
   function recomputePlayerSeasonStatsFromResults(schedule, results) {
     let stats = {};
     let clutchStats = createEmptyClutchStats(seasonYear);
@@ -4907,7 +4907,7 @@ useEffect(() => {
     return;
   }
 
-  // ✅ IMPORTANT: if schedule is missing/invalid, regenerate it EVEN IF results exist
+  // âœ… IMPORTANT: if schedule is missing/invalid, regenerate it EVEN IF results exist
   if (!scheduleValid) {
     const byDate =
       generatedScheduleForRecovery ||
@@ -5640,7 +5640,7 @@ useEffect(() => {
   }
 }, [seasonYear]);
 
-// ✅ stop control
+// âœ… stop control
 const stopRef = useRef(false);
 const [stopRequested, setStopRequested] = useState(false);
 const [showWestStandings, setShowWestStandings] = useState(true);
@@ -7084,12 +7084,12 @@ setBoxModal(null);
     resumed: Boolean(resume),
   });
 
-  // ✅ reset stop state at the start of THIS run
+  // âœ… reset stop state at the start of THIS run
   stopRef.current = false;
   setStopRequested(false);
 
   setSimLock(true);
-  console.log("▶ SimToDate ENTER:", dateStr);
+  console.log("&rarr; SimToDate ENTER:", dateStr);
 
   let upd = structuredClone(scheduleByDate);
   let newResults = structuredClone(resultsById);
@@ -7159,7 +7159,7 @@ setBoxModal(null);
 
   try {
 for (const d of sorted) {
-  // ✅ allow stop between dates
+  // âœ… allow stop between dates
   if (stopRef.current) break;
 
   if (d > dateStr) break;
@@ -7361,7 +7361,7 @@ for (const d of sorted) {
   let dayChanged = false;
 
       for (let i = 0; i < dayGames.length; i++) {
-        // ✅ allow stop between games
+        // âœ… allow stop between games
         if (stopRef.current) break;
 
         const g = dayGames[i];
@@ -7391,13 +7391,13 @@ for (const d of sorted) {
         try {
           const full = await runGameWithRetries(g, activeLeagueData, activeTeams, 3, simRuntime, d);
 
-          // ✅ if user clicked stop while this game was running, bail after it finishes
+          // âœ… if user clicked stop while this game was running, bail after it finishes
           if (stopRef.current) {
             finishSimulationGameOrderEvent(gameOrderEvent, "stopped_after_worker");
             break;
           }
 
-          // still failed → skip, leave unplayed
+          // still failed â†’ skip, leave unplayed
           if (!full) {
             simulationPerf.gameErrors += 1;
             finishSimulationGameOrderEvent(gameOrderEvent, "no_result");
@@ -7440,7 +7440,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
           simulationPerf.gamesSimmed += 1;
           finishSimulationGameOrderEvent(gameOrderEvent, "completed");
 
-          // 🔥 update player stats
+          // ðŸ”¥ update player stats
           const playerStatsBeforeGame = playerStats;
           playerStats = applyGameToPlayerStats(playerStats, slim, g);
           clutchStats = applyGameToClutchStats(clutchStats, slim, g, seasonYear);
@@ -7610,7 +7610,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
     }
     setActionModal(null);
     releaseSimRunLock();
-    console.log("◀ SimToDate EXIT:", dateStr);
+    console.log("&larr; SimToDate EXIT:", dateStr);
 
     if (!pausedAtCheckpoint) {
       clearPendingSimIntent();
@@ -7722,7 +7722,7 @@ setBoxModal(null);
     resumed: Boolean(resume),
   });
 
-  // ✅ reset stop state at the start of a run
+  // âœ… reset stop state at the start of a run
   stopRef.current = false;
   setStopRequested(false);
 
@@ -7733,7 +7733,7 @@ setBoxModal(null);
 
 
   setSimLock(true);
-  console.log("🔥 FULL SEASON START");
+  console.log("ðŸ”¥ FULL SEASON START");
 
   let upd = structuredClone(scheduleByDate);
   let results = structuredClone(resultsById);
@@ -7790,7 +7790,7 @@ setBoxModal(null);
   let lastPersistedGames = 0;
   let lastDateProcessed = null;
 
-// ✅ track if user stopped
+// âœ… track if user stopped
 let stopped = false;
 let pausedForAllStar = false;
 let pausedForTradeDeadline = false;
@@ -7941,7 +7941,7 @@ for (let di = 0; di < dates.length; di++) {
   let dayChanged = false;
 
       if (window.__debugSimLogs) {
-        console.log("📅 Processing date", di + 1, "of", dates.length, date, "games:", dayGames.length);
+        console.log("ðŸ“… Processing date", di + 1, "of", dates.length, date, "games:", dayGames.length);
       }
 
       for (let i = 0; i < dayGames.length; i++) {
@@ -8234,9 +8234,9 @@ if (stopped) {
   saveSimulationCursorDate(nextPendingAfterRun || getNextCalendarDateString(lastDateProcessed || fmt(seasonEnd)));
 }
 
-// ✅ If stopped, do NOT compute awards or navigate away
+// âœ… If stopped, do NOT compute awards or navigate away
 if (stopped) {
-  console.log("🛑 FULL SEASON STOPPED by user at gamesSimmed:", gamesSimmed);
+  console.log("ðŸ›‘ FULL SEASON STOPPED by user at gamesSimmed:", gamesSimmed);
   return;
 }
 
@@ -8259,7 +8259,7 @@ if (stopped) {
     navigate("/awards");
 
     console.log(
-      "🏁 FULL SEASON EXIT, total gamesSimmed:",
+      "ðŸ FULL SEASON EXIT, total gamesSimmed:",
       gamesSimmed,
       "last date processed:",
       lastDateProcessed
@@ -8316,7 +8316,7 @@ const closeAllStarTeams = () => {
 const handleResetSeason = () => {
   if (!window.confirm("Reset season? ALL results + schedule will be wiped.")) return;
 
-  // ✅ wipe all schedule/result/playoffs versions (so future key bumps don't break reset)
+  // âœ… wipe all schedule/result/playoffs versions (so future key bumps don't break reset)
   for (let i = localStorage.length - 1; i >= 0; i--) {
     const k = localStorage.key(i);
     if (!k) continue;
@@ -8330,8 +8330,8 @@ if (
   k.startsWith("bm_contract_extension_deadline_handled_v1_") ||
   k.startsWith("bm_rookie_extension_deadline_handled_v1_") ||
   k.startsWith("bm_veteran_extension_deadline_handled_v1_") ||
-  k.startsWith("bm_result_v3_") ||     // ✅ NEW
-  k === "bm_results_index_v3" ||       // ✅ NEW
+  k.startsWith("bm_result_v3_") ||     // âœ… NEW
+  k === "bm_results_index_v3" ||       // âœ… NEW
   k === "bm_trade_deadline_status_v1"
 ) {
   localStorage.removeItem(k);
@@ -9184,41 +9184,9 @@ return (
     }
   `}
 </style>
-    <MiniStandingsPanel
-      title="West"
-      rows={conferenceStandings.west}
-      selectedTeamName={calendarViewTeam?.name || selectedTeam.name}
-      hidden={!showWestStandings}
-      onToggle={() => setShowWestStandings((v) => !v)}
-      collapsedLabel="Show West"
-      side="left"
-      awardsEnabled={true}
-      showAwards={showWestAwardsPanel}
-      onToggleAwards={() => setShowWestAwardsPanel((v) => !v)}
-      awardTab={miniAwardTab}
-      awardRows={miniAwardLadders[miniAwardTab] || []}
-      onPrevAward={() => cycleMiniAwardTab("prev")}
-      onNextAward={() => cycleMiniAwardTab("next")}
-      onInspectTeam={(teamName) => setCalendarTeamInfoName(teamName)}
-    />
+    
 
-<MiniStandingsPanel
-  title="East"
-  rows={conferenceStandings.east}
-  selectedTeamName={calendarViewTeam?.name || selectedTeam.name}
-  hidden={!showEastStandings}
-  onToggle={() => setShowEastStandings((v) => !v)}
-  collapsedLabel="Show East"
-  side="right"
-  awardsEnabled={true}
-  showAwards={showAwardsPanel}
-  onToggleAwards={() => setShowAwardsPanel((v) => !v)}
-  awardTab={miniAwardTab}
-  awardRows={miniAwardLadders[miniAwardTab] || []}
-  onPrevAward={() => cycleMiniAwardTab("prev")}
-  onNextAward={() => cycleMiniAwardTab("next")}
-  onInspectTeam={(teamName) => setCalendarTeamInfoName(teamName)}
-/>
+
 
 <CalendarTeamInfoModal
   team={calendarTeamInfoTeam}
@@ -9243,14 +9211,32 @@ return (
               className="text-2xl hover:text-orange-400"
               onClick={() => handleTeamSwitch("prev")}
             >
-              ◄
-            </button>
+              <span
+                aria-hidden="true"
+                style={{
+                  display: "inline-block",
+                  width: 0,
+                  height: 0,
+                  borderTop: "7px solid transparent",
+                  borderBottom: "7px solid transparent",
+                  borderRight: "11px solid currentColor",
+                }}
+              /></button>
             <button
               className="text-2xl hover:text-orange-400"
               onClick={() => handleTeamSwitch("next")}
             >
-              ►
-            </button>
+              <span
+                aria-hidden="true"
+                style={{
+                  display: "inline-block",
+                  width: 0,
+                  height: 0,
+                  borderTop: "7px solid transparent",
+                  borderBottom: "7px solid transparent",
+                  borderLeft: "11px solid currentColor",
+                }}
+              /></button>
 
             <div className="flex items-center gap-3">
               <Logo team={calendarViewTeam || selectedTeam} size={72} />
@@ -9269,7 +9255,7 @@ return (
       disabled
       title="Simulation in progress"
     >
-      Simulating…
+      Simulating...
     </button>
 
     <button
@@ -9278,7 +9264,7 @@ return (
       onClick={requestStop}
       title="Stop simulation"
     >
-      {stopRequested ? "Stopping…" : "Stop"}
+      {stopRequested ? "Stopping..." : "Stop"}
     </button>
   </>
 )}
@@ -9331,7 +9317,7 @@ return (
                 if (i > 0) scrollToMonth(months[i - 1]);
               }}
             >
-              ‹ Prev
+              &lsaquo; Prev
             </button>
             <select
               value={month}
@@ -9358,7 +9344,7 @@ return (
                 if (i < months.length - 1) scrollToMonth(months[i + 1]);
               }}
             >
-              Next ›
+              Next &rsaquo;
             </button>
           </div>
         </div>
@@ -9370,7 +9356,7 @@ return (
               Season {headerInfo.seasonLabel}
             </span>
 
-            <span className="text-gray-400">•</span>
+            <span className="text-gray-400">&bull;</span>
 
             <span className="text-gray-200">
               Record{" "}
@@ -9379,22 +9365,22 @@ return (
               <span className="font-bold text-red-400">{headerInfo.l}</span>
             </span>
 
-            <span className="text-gray-400">•</span>
+            <span className="text-gray-400">&bull;</span>
 
             <span className="text-gray-200">
-              {headerInfo.confRank ? `${ordinal(headerInfo.confRank)} in ${headerInfo.conf}` : `— in ${headerInfo.conf || "—"}`}
+              {headerInfo.confRank ? `${ordinal(headerInfo.confRank)} in ${headerInfo.conf}` : `-- in ${headerInfo.conf || "--"}`}
             </span>
 
-            <span className="text-gray-400">•</span>
+            <span className="text-gray-400">&bull;</span>
 
             <span className="text-gray-200">
-              Off Rank {headerInfo.offRank ? `#${headerInfo.offRank}` : "—"}
+              Off Rank {headerInfo.offRank ? `#${headerInfo.offRank}` : "--"}
             </span>
 
-            <span className="text-gray-400">•</span>
+            <span className="text-gray-400">&bull;</span>
 
             <span className="text-gray-200">
-              Def Rank {headerInfo.defRank ? `#${headerInfo.defRank}` : "—"}
+              Def Rank {headerInfo.defRank ? `#${headerInfo.defRank}` : "--"}
             </span>
           </div>
         </div>
@@ -9566,7 +9552,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                                 <div className="shrink-0 whitespace-nowrap rounded-md bg-emerald-700/90 px-2 py-1 text-[10px] font-bold">
                                   {finalScore}
                                   {Number(result?.winner?.ot ?? result?.periods?.otCount ?? 0) > 0
-                                    ? ` · ${Number(result?.winner?.ot ?? result?.periods?.otCount) === 1 ? "OT" : `${Number(result?.winner?.ot ?? result?.periods?.otCount)}OT`}`
+                                    ? ` Â· ${Number(result?.winner?.ot ?? result?.periods?.otCount) === 1 ? "OT" : `${Number(result?.winner?.ot ?? result?.periods?.otCount)}OT`}`
                                     : ""}
                                 </div>
                               ) : null}
@@ -9742,7 +9728,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
       >
         <div className="mb-2 flex shrink-0 items-center justify-between gap-4">
           <h3 className="min-w-0 truncate text-lg font-black">
-            {boxModal.game.away} @ {boxModal.game.home} • {boxModal.result?.winner?.score}
+            {boxModal.game.away} @ {boxModal.game.home} &bull; {boxModal.result?.winner?.score}
             {formatOTLabel(boxModal.result?.winner?.ot ?? boxModal.result?.periods?.otCount)}
           </h3>
 
@@ -9768,10 +9754,10 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
             const legacyOtHome = Number(periods.otBreakdown?.home || 0);
 
             const qVal = (arr, idx) =>
-              arr[idx] != null && Number.isFinite(Number(arr[idx])) ? Number(arr[idx]) : "—";
+              arr[idx] != null && Number.isFinite(Number(arr[idx])) ? Number(arr[idx]) : "--";
             const otVal = (arr, idx, legacyValue) => {
               if (hasIndividualOts) return qVal(arr, idx);
-              return idx === 0 && legacyValue ? legacyValue : "—";
+              return idx === 0 && legacyValue ? legacyValue : "--";
             };
             const otHeader = (idx) => (idx === 0 ? "OT" : `${idx + 1}OT`);
 
@@ -9800,7 +9786,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                         {Array.from({ length: displayOtCount }, (_, idx) => (
                           <td key={`${side}-ot-${idx}`}>{otVal(ots, idx, legacyOt)}</td>
                         ))}
-                        <td className="font-black">{total ?? "—"}</td>
+                        <td className="font-black">{total ?? "--"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -9839,7 +9825,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                   <tbody>
                     {rows.map((player, index) => {
                       const dnp = Number(player?.min || 0) <= 0;
-                      const stat = (value) => (dnp ? "—" : value ?? 0);
+                      const stat = (value) => (dnp ? "--" : value ?? 0);
                       return (
                         <tr key={`${player?.player || "player"}-${index}`} className="border-b border-neutral-700/35 last:border-0">
                           <td className="truncate px-1 py-[2px] font-semibold" title={player?.player}>{player?.player}</td>
@@ -9979,7 +9965,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
               }
             }}
           >
-            {contractExtensionDeadlineBusy ? "Processing…" : "Close Window & Continue"}
+            {contractExtensionDeadlineBusy ? "Processing..." : "Close Window & Continue"}
           </button>
         </div>
       </div>

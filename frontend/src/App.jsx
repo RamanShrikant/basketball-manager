@@ -50,6 +50,7 @@ import PastChampions from "./pages/PastChampions.jsx";
 import GlobalGameNav from "./components/GlobalGameNav.jsx";
 import SeasonBriefingHost from "./components/SeasonBriefingHost.jsx";
 import PageFade from "./components/PageFade.jsx";
+import PersistentGameShell from "./components/PersistentGameShell.jsx";
 import "./components/PageFade.css";
 
 function RouteDensitySync() {
@@ -88,8 +89,9 @@ function App() {
       <RouteDensitySync />
       <GlobalGameNav />
       <SeasonBriefingHost />
-      <RoutePageFade>
-      <Routes>
+      <PersistentGameShell>
+        <RoutePageFade>
+        <Routes>
           <Route path="/" element={<StudioLanding />} />
 
           {/* ✅ Routes that use your shared Layout */}
@@ -145,7 +147,8 @@ function App() {
           <Route path="/player-retirements" element={<PlayerRetirements />} />
           <Route path="/viewing-offers" element={<ViewingOffers />} />
         </Routes>
-      </RoutePageFade>
+        </RoutePageFade>
+      </PersistentGameShell>
     </BrowserRouter>
   );
 }

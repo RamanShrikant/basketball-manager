@@ -1,809 +1,2760 @@
-@import url('https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,700;0,800;0,900;1,700;1,800;1,900&display=swap');
-
-:root {
-  --accent: #ffa500;
-}
-
-.wrapper {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100vh;
+.dashboard {
+  box-sizing: border-box;
   width: 100%;
-  color: white;
-  position: relative;
-  overflow: hidden;
-  font-family: "Bebas Neue", sans-serif;
-
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 18px 18px;
+  color: #f7f9fc;
   background:
-    repeating-linear-gradient(45deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 28px),
-    repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 22px),
-    radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%);
-  zoom: 1;
+    radial-gradient(circle at 82% 4%, rgba(74, 43, 145, 0.16), transparent 32%),
+    linear-gradient(180deg, #06101b 0%, #07111c 46%, #050d16 100%);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-.wrapper::before {
-  content: "";
-  position: absolute;
-  inset: -120px;
-  pointer-events: none;
-  z-index: -1;
-  background-image:
-    conic-gradient(from 210deg at 18% 22%,
-      rgba(255,255,255,0.16) 0deg, rgba(255,255,255,0.08) 14deg,
-      rgba(255,255,255,0.00) 36deg 360deg),
-    conic-gradient(from 30deg at 82% 78%,
-      rgba(255,255,255,0.14) 0deg, rgba(255,255,255,0.07) 16deg,
-      rgba(255,255,255,0.00) 38deg 360deg);
-  background-repeat: no-repeat, no-repeat;
-  background-size: 760px 760px, 700px 700px;
-  background-position: left -120px top -80px, right -90px bottom -60px;
-  filter: blur(20px);
-  opacity: 0.26;
+.dashboard::-webkit-scrollbar {
+  width: 8px;
 }
 
-.wrapper::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image: url("../assets/basketball-pattern.svg");
-  background-repeat: repeat;
-  background-size: 340px 340px;
-  opacity: 0.06;
-  animation: drift 80s linear infinite;
-  z-index: -1;
+.dashboard::-webkit-scrollbar-track {
+  background: rgba(5, 10, 18, 0.88);
 }
 
-.scrollRow {
+.dashboard::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #6d55bb;
+}
+
+.topBar {
+  min-height: 42px;
   display: flex;
-  overflow-x: auto;
-  overflow-y: hidden;
   align-items: center;
-  gap: 3rem;
-  width: 96%;
-  padding: 1rem 2rem;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: auto;
-  scrollbar-color: var(--accent) rgba(255,255,255,0.08);
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 10px;
 }
 
-/* Cards */
-.card {
-  position: relative;
-  flex-shrink: 0;
-  width: 370px;
-  height: 460px;
-  background-color: #171717;
-  border-radius: 20px;
-  box-shadow: 0 0 12px rgba(0, 0, 0, 0.5);
-  transition: transform 0.25s ease, opacity 0.25s ease, border-color 0.25s ease, filter 0.25s ease;
-  cursor: pointer;
-  scroll-snap-align: center;
-  opacity: 0.55;
+.seasonContext {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-}
-
-.card:hover {
-  opacity: 1;
-  transform: scale(1.05);
-  filter: brightness(1.08);
-}
-
-.disabled {
-  cursor: not-allowed;
-  opacity: 0.35;
-  filter: none;
-}
-
-.disabled:hover {
-  transform: none;
-  filter: none;
-  opacity: 0.35;
-}
-
-/* Center logo */
-.logo {
-  height: 15rem;
-  object-fit: contain;
-  margin-bottom: 0.5rem;
-  pointer-events: none;
-  user-select: none;
-  opacity: 0.92;
-}
-
-.card:hover .logo {
-  opacity: 1;
-}
-
-/* Bottom label like TeamSelector */
-.labelBar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 1.2rem 1.4rem;
-}
-
-.labelBg {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 140px;
-  border-bottom-left-radius: 20px;
-  border-bottom-right-radius: 20px;
-  background: linear-gradient(to top, rgba(0,0,0,0.70), rgba(0,0,0,0.00));
-}
-
-.labelText {
-  position: relative;
-}
-
-.tileName {
-  font-size: 32px;
+  gap: 18px;
+  color: #eef3fb;
+  font-size: 14px;
   font-weight: 700;
-  line-height: 1.05;
 }
 
-.teamName {
-  margin-top: 0.35rem;
-  font-size: 18px;
-  color: rgba(255,255,255,0.70);
-  font-weight: 600;
+.contextDivider {
+  width: 1px;
+  height: 20px;
+  background: rgba(154, 168, 191, 0.22);
 }
 
-/* Orange horizontal scrollbar like selector */
-.scrollRow::-webkit-scrollbar {
-  height: 8px;
-}
-.scrollRow::-webkit-scrollbar-track {
-  background: rgba(255,255,255,0.08);
-  border-radius: 10px;
-}
-.scrollRow::-webkit-scrollbar-thumb {
-  background-color: var(--accent);
-  border-radius: 10px;
-}
-.scrollRow::-webkit-scrollbar-thumb:hover,
-.scrollRow::-webkit-scrollbar-thumb:active {
-  background-color: var(--accent);
-}
-
-/* Apply ONLY while TeamHub is mounted */
-:global(body.th-no-scroll) {
-  margin: 0;
-  overflow-y: hidden;
-  background-color: #0d0d0d;
-}
-
-@keyframes drift {
-  0% { transform: translate(0, 0) rotate(0deg); }
-  50% { transform: translate(-100px, -60px) rotate(1deg); }
-  100% { transform: translate(0, 0) rotate(0deg); }
-}
-
-/* 100%-zoom desktop density */
-@media (min-width: 1024px) {
-  .scrollRow {
-    gap: clamp(1rem, 1.4vw, 1.75rem);
-    width: min(98%, 1760px);
-    padding: 0.75rem 1.25rem;
-  }
-
-  .card {
-    width: clamp(250px, 20vw, 305px);
-    height: clamp(330px, 54vh, 390px);
-    border-radius: 16px;
-  }
-
-  .logo {
-    height: clamp(9.5rem, 22vh, 12rem);
-  }
-
-  .labelBar {
-    padding: 0.9rem 1.1rem;
-  }
-
-  .labelBg {
-    height: 108px;
-    border-bottom-left-radius: 16px;
-    border-bottom-right-radius: 16px;
-  }
-
-  .tileName {
-    font-size: clamp(22px, 1.65vw, 27px);
-  }
-
-  .teamName {
-    font-size: clamp(14px, 1vw, 16px);
-  }
-}
-
-@media (min-width: 1024px) and (max-height: 820px) {
-  .card {
-    height: min(350px, 62vh);
-  }
-
-  .logo {
-    height: min(10rem, 24vh);
-  }
-}
-
-.navigationRail {
-  width: min(96%, 1760px);
-  margin: 0 auto 0.45rem;
-  display: grid;
-  grid-template-columns: 42px 1fr 42px;
+.controlBox {
+  display: flex;
   align-items: center;
   gap: 10px;
-  position: relative;
-  z-index: 3;
 }
 
-.railArrow {
-  height: 38px;
-  border-radius: 11px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(8,8,8,0.78);
-  color: white;
-  font-size: 17px;
-  font-weight: 900;
-  cursor: pointer;
-  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
-}
-
-.railArrow:hover {
-  border-color: rgba(249,115,22,0.75);
-  background: rgba(55,28,10,0.88);
-  transform: translateY(-1px);
-}
-
-.railStatus {
-  min-height: 38px;
-  padding: 7px 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 11px;
-  background: rgba(8,8,8,0.62);
-  color: rgba(255,255,255,0.72);
-  font-family: "Poppins", sans-serif;
+.controlBox > span {
+  color: #8d9aaf;
   font-size: 11px;
-  font-weight: 800;
-  backdrop-filter: blur(8px);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
-.keyHint {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 42px;
-  height: 23px;
-  padding: 0 7px;
-  border-radius: 7px;
-  border: 1px solid rgba(255,255,255,0.2);
-  background: rgba(255,255,255,0.07);
-  color: #fb923c;
-  font-size: 9px;
-  letter-spacing: 0.08em;
-}
-
-.railLabel {
-  color: rgba(255,255,255,0.78);
-}
-
-.railDivider {
-  color: rgba(255,255,255,0.28);
-}
-
-.railCounter {
-  margin-left: auto;
-  color: white;
-  font-variant-numeric: tabular-nums;
-}
-
-.activeCard {
-  opacity: 1 !important;
-  border: 2px solid rgba(249,115,22,0.82);
-  box-shadow: 0 0 0 1px rgba(249,115,22,0.18), 0 18px 48px rgba(0,0,0,0.48);
-  filter: brightness(1.08);
-  transform: translateY(-4px);
-}
-
-.activeCard .logo {
-  opacity: 1;
-  transform: scale(1.06);
-}
-
-.logo {
-  transition: transform 180ms ease, opacity 180ms ease;
-}
-
-.scrollRow {
-  scrollbar-gutter: stable both-edges;
-  overscroll-behavior-x: contain;
-  scroll-padding-inline: 2rem;
-  padding-bottom: 1.2rem;
-}
-
-.scrollRow:focus-visible,
-.wrapper:focus-visible {
+.controlBox select {
+  min-width: 188px;
+  height: 34px;
+  padding: 0 34px 0 12px;
+  border: 1px solid #26344a;
+  border-radius: 9px;
+  background: #101b2a;
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 750;
   outline: none;
 }
 
-.scrollRow::-webkit-scrollbar {
-  height: 12px;
+.teamBanner {
+  position: relative;
+  min-height: 104px;
+  display: grid;
+  grid-template-columns: minmax(330px, 1.55fr) minmax(130px, 0.54fr) minmax(130px, 0.54fr) minmax(260px, 1fr);
+  align-items: center;
+  overflow: hidden;
+  margin-bottom: 10px;
+  border: 1px solid #223047;
+  border-radius: 12px;
+  background:
+    linear-gradient(
+      100deg,
+      rgba(29, 21, 61, 0.74) 0%,
+      rgba(12, 18, 31, 0.96) 24%,
+      rgba(8, 17, 27, 0.99) 58%,
+      rgba(8, 17, 27, 1) 100%
+    );
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2);
 }
 
-.scrollRow::-webkit-scrollbar-track {
-  background: rgba(10,10,10,0.82);
-  border: 1px solid rgba(255,255,255,0.09);
-  border-radius: 999px;
+.bannerWatermark {
+  position: absolute;
+  right: 120px;
+  top: 50%;
+  width: 420px;
+  height: 260px;
+  object-fit: contain;
+  transform: translateY(-50%) rotate(-6deg);
+  opacity: 0.045;
+  pointer-events: none;
+  filter: saturate(0.55);
 }
 
-.scrollRow::-webkit-scrollbar-thumb {
-  border: 2px solid rgba(10,10,10,0.82);
-  background: linear-gradient(90deg, #ea580c, #fb923c);
+.teamIdentity {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  padding: 14px 24px;
 }
 
-@media (min-width: 1024px) {
-  .wrapper {
-    justify-content: center;
-    padding-top: 3.2rem;
-    padding-bottom: 1.2rem;
-  }
-
-  .navigationRail {
-    width: min(96%, 1760px);
-  }
-
-  .scrollRow {
-    align-items: stretch;
-  }
-
-  .card {
-    width: clamp(255px, 18.2vw, 315px);
-    height: clamp(340px, 51vh, 400px);
-    opacity: 0.62;
-  }
-
-  .logo {
-    height: clamp(11.5rem, 25vh, 14.5rem);
-  }
+.teamLogo {
+  width: 112px;
+  height: 82px;
+  object-fit: contain;
+  flex: 0 0 auto;
 }
 
-@media (min-width: 1024px) and (max-height: 820px) {
-  .wrapper {
-    padding-top: 2.4rem;
-  }
-
-  .card {
-    height: min(340px, 57vh);
-  }
-
-  .logo {
-    height: min(11.5rem, 25vh);
-  }
-
-  .navigationRail {
-    margin-bottom: 0.25rem;
-  }
+.teamIdentity h1 {
+  margin: 0;
+  max-width: 360px;
+  color: #f7f8fb;
+  font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
+  font-size: clamp(25px, 1.95vw, 33px);
+  line-height: 0.98;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  text-transform: uppercase;
 }
 
-/* Game-ready navigation rail: controls remain discoverable without tutorial text. */
-.railStatus {
+.heroMetric {
+  position: relative;
+  z-index: 1;
+  min-height: 64px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 20px;
+  border-left: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.heroMetric span,
+.nextGame span {
+  color: #93a0b4;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.heroMetric strong {
+  margin-top: 4px;
+  color: white;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.heroMetric small {
+  margin-top: 5px;
+  color: #9eabc0;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.nextGame {
+  position: relative;
+  z-index: 1;
+  min-height: 74px;
+  display: grid;
+  grid-template-columns: 1fr 54px auto;
+  align-items: center;
+  column-gap: 12px;
+  padding: 0 24px;
+  border-left: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.nextGame > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.nextGame strong {
+  color: white;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.nextGame img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
+.nextGame small {
+  color: #d5dce8;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.topGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(290px, 0.88fr) minmax(320px, 1.02fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.middleGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(310px, 0.9fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.bottomGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(330px, 1fr);
+  gap: 10px;
+}
+
+.panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #223047;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(10, 23, 38, 0.98), rgba(7, 17, 29, 0.98));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.018);
+}
+
+.panelHeading {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+  border-bottom: 1px solid rgba(135, 151, 174, 0.12);
+}
+
+.panelHeading h2 {
+  margin: 0;
+  color: #f4f7fb;
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.panelHeading button,
+.panelActions button {
+  border: 0;
+  background: transparent;
+  color: #b9c7dd;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.panelHeading button:hover,
+.panelActions button:hover {
+  color: #a78bfa;
+}
+
+.gameList,
+.recentList {
+  padding: 3px 12px 8px;
+}
+
+.gameRow {
+  min-height: 29px;
+  display: grid;
+  grid-template-columns: 55px 22px 28px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid rgba(133, 149, 172, 0.1);
+  color: #d8e0ec;
+  font-size: 11px;
+}
+
+.gameRow:last-child,
+.recentRow:last-child {
+  border-bottom: 0;
+}
+
+.gameRow img,
+.recentRow img,
+.standingTeam img {
+  width: 23px;
+  height: 23px;
+  object-fit: contain;
+}
+
+.gameRow strong,
+.recentRow strong {
+  color: #f5f7fb;
+  font-weight: 800;
+}
+
+.gameRow em {
+  color: #aab6c8;
+  font-style: normal;
+  font-weight: 650;
+  text-align: right;
+}
+
+.homeAway {
+  color: #8795aa;
+  text-align: center;
+}
+
+.metricList {
+  padding: 4px 12px 8px;
+}
+
+.metricList > div {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding-inline: 12px;
+  border-bottom: 1px solid rgba(133, 149, 172, 0.1);
 }
 
-.railProgress {
-  flex: 1;
-  height: 5px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.1);
+.metricList > div:last-child {
+  border-bottom: 0;
 }
 
-.railProgress > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #ea580c, #fb923c);
-  transition: width 180ms ease;
-}
-
-@media (min-width: 1024px) {
-  .wrapper {
-    justify-content: center;
-    padding-top: 3.5rem;
-  }
-
-  .navigationRail,
-  .scrollRow {
-    width: min(97vw, 1760px);
-  }
-
-  .scrollRow {
-    align-items: stretch;
-    padding-bottom: 1rem;
-  }
-
-  .card {
-    width: clamp(255px, 19vw, 320px);
-    height: clamp(340px, 49vh, 410px);
-  }
-
-  .logo {
-    height: clamp(11rem, 23vh, 14rem);
-  }
-}
-
-/* Final game-ready hub composition. The rail and tiles begin high enough to
-   use the full screen while leaving the team selector unobstructed. */
-.modeBadge {
-  position: absolute;
-  top: 20px;
-  left: 22px;
-  z-index: 30;
-  padding: 7px 12px;
-  border: 1px solid rgba(249, 115, 22, 0.4);
-  border-radius: 999px;
-  background: rgba(45, 22, 8, 0.86);
-  color: #fed7aa;
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-@media (min-width: 1024px) {
-  .wrapper {
-    justify-content: flex-start !important;
-    padding-top: clamp(118px, 15vh, 158px) !important;
-    padding-bottom: 1rem !important;
-  }
-
-  .navigationRail,
-  .scrollRow {
-    width: min(97vw, 1760px) !important;
-  }
-
-  .card {
-    width: clamp(248px, 18.3vw, 316px) !important;
-    height: clamp(342px, 47vh, 402px) !important;
-  }
-
-  .logo {
-    height: clamp(11.75rem, 23.5vh, 14rem) !important;
-  }
-}
-
-@media (min-width: 1024px) and (max-height: 820px) {
-  .wrapper {
-    padding-top: 92px !important;
-  }
-
-  .card {
-    height: min(350px, 53vh) !important;
-  }
-}
-
-/* Keep the console-style rail substantial on standard 1366x768 laptops. */
-@media (min-width: 1024px) and (max-height: 820px) {
-  .card {
-    height: min(410px, 60vh) !important;
-  }
-
-  .logo {
-    width: min(13rem, 24vw) !important;
-    height: min(13rem, 28vh) !important;
-  }
-}
-
-/* Playoff-stat navigation patch: the carousel uses one real scrollbar beneath
-   the cards instead of a second progress rail above them. */
-.carouselShell {
-  width: min(97vw, 1760px);
-  display: grid;
-  grid-template-columns: 46px minmax(0, 1fr) 46px;
-  align-items: center;
-  gap: 10px;
-  position: relative;
-  z-index: 3;
-}
-
-.carouselShell .scrollRow {
-  width: 100% !important;
-  min-width: 0;
-  margin: 0;
-  padding-inline: 0.75rem;
-  padding-bottom: 1rem;
-}
-
-.carouselShell .railArrow {
-  align-self: center;
-}
-
-@media (min-width: 1024px) and (max-height: 820px) {
-  .carouselShell {
-    grid-template-columns: 42px minmax(0, 1fr) 42px;
-    gap: 8px;
-  }
-}
-
-/* Lightweight subsection labels while preserving the original horizontal Team Hub carousel. */
-.sectionChip,
-.directChip {
-  position: absolute;
-  top: 14px;
-  left: 14px;
-  z-index: 2;
-  max-width: calc(100% - 28px);
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(251, 146, 60, 0.42);
-  background: rgba(14, 14, 14, 0.72);
-  color: #fed7aa;
-  font-family: "Poppins", sans-serif;
+.metricList span {
+  color: #a8b4c6;
   font-size: 10px;
-  font-weight: 900;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  box-shadow: 0 10px 22px rgba(0,0,0,0.3);
-  backdrop-filter: blur(8px);
-  pointer-events: none;
-  white-space: nowrap;
+}
+
+.metricList strong {
+  color: #f6f8fc;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.accentValue {
+  color: #f4c84d !important;
+}
+
+.standingsHeader,
+.standingRow {
+  display: grid;
+  grid-template-columns: 24px minmax(140px, 1fr) 35px 35px 44px;
+  align-items: center;
+}
+
+.standingsHeader {
+  min-height: 26px;
+  padding: 0 12px;
+  color: #8593a8;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.standingRow {
+  min-height: 32px;
+  margin: 0 8px;
+  padding: 0 6px;
+  border-bottom: 1px solid rgba(133, 149, 172, 0.1);
+  color: #dbe3ef;
+  font-size: 10px;
+  border-radius: 6px;
+}
+
+.standingTeam {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 750;
 }
 
-.directChip {
-  background: rgba(67, 32, 10, 0.82);
-  border-color: rgba(249, 115, 22, 0.68);
+.selectedStanding {
+  background: linear-gradient(90deg, rgba(148, 111, 28, 0.62), rgba(98, 75, 23, 0.26));
+  color: #fff6d8;
+}
+
+.rotationPanel {
+  min-height: 184px;
+}
+
+.panelActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panelActions span {
+  width: 1px;
+  height: 12px;
+  background: #6d55bb;
+}
+
+.playerStrip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px 12px 11px;
+}
+
+.playerCard {
+  position: relative;
+  min-width: 0;
+  height: 128px;
+  overflow: hidden;
+  padding: 4px 8px 8px;
+  border: 1px solid #223047;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #0b1726 0%, #08121e 100%);
   color: white;
+  text-align: left;
+  cursor: pointer;
 }
 
-.activeCard .sectionChip,
-.activeCard .directChip {
-  background: linear-gradient(135deg, rgba(234, 88, 12, 0.92), rgba(251, 146, 60, 0.82));
-  border-color: rgba(255,255,255,0.22);
-  color: white;
+.playerCard:hover {
+  border-color: #6c5b9d;
+  transform: translateY(-1px);
 }
 
-/* Section-subhub patch: keep the old horizontal carousel look, but make the
-   first row true categories. Selecting a category swaps the same carousel into
-   the pages inside that section. */
-.sectionBackButton {
-  position: fixed;
-  top: 74px;
-  left: 22px;
-  z-index: 31;
-  padding: 9px 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(249, 115, 22, 0.45);
-  background: rgba(18, 18, 18, 0.88);
-  color: #fed7aa;
-  font-family: "Poppins", sans-serif;
+.playerCard img {
+  position: absolute;
+  left: 50%;
+  bottom: 25px;
+  width: 92px;
+  height: 96px;
+  object-fit: contain;
+  object-position: bottom center;
+  transform: translateX(-50%);
+}
+
+.playerCard small {
+  position: absolute;
+  left: 8px;
+  bottom: 27px;
+  color: #aeb9ca;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.playerCard strong {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 7px;
+  overflow: hidden;
+  color: #f7f9fc;
+  font-size: 10px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overallBubble {
+  position: absolute;
+  z-index: 2;
+  top: 7px;
+  left: 8px;
+  width: 31px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #68d58c;
+  border-radius: 50%;
+  background: #0c1722;
+  color: #f5f9f7;
   font-size: 11px;
   font-weight: 900;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-  box-shadow: 0 14px 32px rgba(0,0,0,0.35);
-  backdrop-filter: blur(10px);
 }
 
-.sectionBackButton:hover {
-  border-color: rgba(249, 115, 22, 0.82);
-  background: rgba(61, 30, 10, 0.92);
+.recentRow {
+  min-height: 29px;
+  display: grid;
+  grid-template-columns: 52px 20px 26px 1fr 22px 62px;
+  align-items: center;
+  gap: 5px;
+  border-bottom: 1px solid rgba(133, 149, 172, 0.1);
+  color: #aeb9ca;
+  font-size: 10px;
+}
+
+.recentRow b {
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.recentRow em {
+  color: #f3f6fa;
+  font-style: normal;
+  font-weight: 750;
+  text-align: right;
+}
+
+.win {
+  color: #63e68d;
+}
+
+.loss {
+  color: #ff5d67;
+}
+
+.prospectGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px 12px 11px;
+}
+
+.prospect {
+  min-width: 0;
+  height: 34px;
+  display: grid;
+  grid-template-columns: 20px 28px minmax(0, 1fr) 26px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px;
+  border: 1px solid #1e2b40;
+  border-radius: 7px;
+  background: #0a1523;
+}
+
+.prospect > span {
+  color: #dfe6f1;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.prospect img,
+.prospect i {
+  width: 25px;
+  height: 29px;
+  object-fit: contain;
+  object-position: bottom center;
+  border-radius: 4px;
+  background: #111d2c;
+}
+
+.prospect strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #f1f5f9;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prospect small {
+  color: #8f9eb3;
+  font-size: 9px;
+  text-align: right;
+}
+
+.newsEmpty {
+  min-height: 78px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 10px 14px 14px;
+}
+
+.newsEmpty strong {
+  color: #dce4ef;
+  font-size: 11px;
+}
+
+.newsEmpty span {
+  margin-top: 5px;
+  max-width: 520px;
+  color: #8290a4;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.emptyPanel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 58px;
+  padding: 12px;
+  color: #8190a5;
+  font-size: 10px;
+  text-align: center;
+}
+
+.emptyState {
+  width: 100%;
+  height: 100dvh;
+  display: grid;
+  place-content: center;
+  gap: 12px;
+  background: #07111c;
   color: white;
+  text-align: center;
 }
 
-@media (min-width: 1024px) and (max-height: 820px) {
-  .sectionBackButton {
-    top: 58px;
+.emptyState h1 {
+  margin: 0;
+  font-size: 26px;
+}
+
+.emptyState button {
+  height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: #6d55bb;
+  color: white;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+@media (max-width: 1180px) {
+  .teamBanner {
+    grid-template-columns: minmax(300px, 1.45fr) 120px 120px minmax(220px, 0.9fr);
+  }
+
+  .teamLogo {
+    width: 92px;
+  }
+
+  .topGrid {
+    grid-template-columns: 1fr 0.85fr;
+  }
+
+  .topGrid > :last-child {
+    grid-column: 1 / -1;
+  }
+
+  .middleGrid,
+  .bottomGrid {
+    grid-template-columns: 1fr;
   }
 }
 
-/* Navigation-crisp patch: JS owns the active card. CSS snap stays gentle so
-   keyboard/button navigation cannot be pulled to a different tile mid-animation. */
-.card {
-  scroll-snap-stop: normal;
+@media (max-width: 900px) {
+  .dashboard {
+    padding: 10px 12px 16px;
+  }
+
+  .teamBanner {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .teamIdentity {
+    grid-column: 1 / -1;
+  }
+
+  .nextGame {
+    border-top: 1px solid rgba(148, 163, 184, 0.16);
+  }
+
+  .playerStrip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .prospectGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* TEAM HUB BANNER MATCH PASS 2 */
+.teamBanner {
+  min-height: 112px;
+  grid-template-columns: minmax(390px, 1.62fr) minmax(145px, 0.56fr) minmax(145px, 0.56fr) minmax(270px, 1fr);
+  background:
+    linear-gradient(
+      96deg,
+      #170d35 0%,
+      #0c1120 20%,
+      #09121d 50%,
+      #08111b 72%,
+      #08111b 100%
+    );
+  border-color: #202a3b;
+}
+
+.teamIdentity {
+  gap: 20px;
+  padding: 12px 28px 12px 30px;
+}
+
+.teamLogo {
+  width: 118px;
+  height: 86px;
+}
+
+.teamWordmark {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.teamCity {
+  color: #f0f2f7;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+.teamIdentity h1 {
+  margin: 0;
+  max-width: 300px;
+  color: #f7f8fb;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 30px;
+  line-height: 0.98;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  text-transform: uppercase;
+}
+
+.heroMetric {
+  min-height: 66px;
+  padding: 0 24px;
+  border-left-color: rgba(148, 163, 184, 0.18);
+}
+
+.heroMetric span,
+.nextGame span {
+  color: #9ba7ba;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.heroMetric strong {
+  margin-top: 6px;
+  color: #f7f8fb;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.heroMetric small {
+  margin-top: 6px;
+  color: #9ea9bb;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 500;
+}
+
+.nextGame strong {
+  color: #f7f8fb;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.nextGame small {
+  color: #cfd6e2;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.bannerWatermark {
+  opacity: 0.035;
+}
+
+
+/* TEAM HUB TOPSTRIP + BANNER MATCH PASS 3 */
+.dashboard {
+  padding-top: 6px;
+}
+
+.topBar {
+  min-height: 34px;
+  margin-bottom: 6px;
+  gap: 16px;
+}
+
+.seasonContext {
+  gap: 28px;
+  color: #e7ebf2;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.contextItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.contextChevron {
+  position: relative;
+  top: -1px;
+  color: #a8b2c2;
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.contextDivider,
+.controlBox {
+  display: none !important;
+}
+
+.topUtilities {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.searchShell {
+  width: 292px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 11px;
+  border: 1px solid rgba(84, 102, 128, 0.12);
+  border-radius: 8px;
+  background: #101a28;
+}
+
+.searchShell svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: #8f9caf;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.searchShell input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #aab5c5;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  pointer-events: none;
+}
+
+.searchShell input::placeholder {
+  color: #8b97aa;
+  opacity: 1;
+}
+
+.bellButton {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #dce3ed;
+  cursor: default;
+}
+
+.bellButton svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.avatarControl {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+}
+
+.avatarBadge {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #4a2a7d;
+  color: #ece6ff;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 750;
   user-select: none;
 }
 
-.scrollRow {
-  scroll-behavior: auto;
-  scroll-snap-type: x proximity;
-  scroll-padding-inline: max(0.75rem, 3vw);
+.avatarControl select {
+  position: absolute;
+  inset: 0;
+  width: 34px;
+  height: 34px;
+  cursor: pointer;
+  opacity: 0;
 }
 
-.sectionBottomBackButton {
-  position: fixed;
-  left: 18px;
-  bottom: 18px;
-  z-index: 35;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 42px;
+/* Preserve team switching while making the visible top-right match the sampler. */
+
+.teamBanner {
+  min-height: 106px;
+  grid-template-columns: minmax(420px, 1.62fr) minmax(145px, 0.56fr) minmax(145px, 0.56fr) minmax(285px, 1fr);
+  margin-bottom: 10px;
+  background:
+    linear-gradient(
+      96deg,
+      #120a2b 0%,
+      #0b101d 18%,
+      #08111b 47%,
+      #07101a 72%,
+      #07101a 100%
+    );
+  border-color: #1d293b;
+}
+
+.teamIdentity {
+  gap: 18px;
+  padding: 10px 26px 10px 34px;
+}
+
+.teamLogo {
+  width: 128px;
+  height: 90px;
+}
+
+.teamCity {
+  color: #f0f2f7;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.05;
+  font-weight: 600;
+  letter-spacing: 0.012em;
+}
+
+.teamIdentity h1 {
+  max-width: 310px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 31px;
+  line-height: 0.96;
+  font-weight: 760;
+  letter-spacing: -0.03em;
+}
+
+.heroMetric {
+  min-height: 68px;
+  padding: 0 24px;
+  border-left: 1px solid rgba(130, 145, 165, 0.22);
+}
+
+.heroMetric span,
+.nextGame span {
+  color: #9ba6b8;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 400;
+}
+
+.heroMetric strong {
+  margin-top: 7px;
+  color: #f5f7fb;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 25px;
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.heroMetric small {
+  margin-top: 6px;
+  color: #9da8ba;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 400;
+}
+
+.nextGame {
+  min-height: 68px;
+  grid-template-columns: 1fr 54px auto;
+  padding: 0 28px 0 28px;
+  border-left: 1px solid rgba(130, 145, 165, 0.18);
+}
+
+.nextGame strong {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 19px;
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.nextGame small {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.bannerWatermark {
+  right: 165px;
+  width: 560px;
+  height: 330px;
+  opacity: 0.018;
+  transform: translateY(-50%) rotate(-5deg);
+  filter: saturate(0.45);
+}
+
+@media (max-width: 1180px) {
+  .searchShell {
+    width: 230px;
+  }
+
+  .teamBanner {
+    grid-template-columns: minmax(350px, 1.45fr) 130px 130px minmax(230px, 0.9fr);
+  }
+
+  .teamLogo {
+    width: 112px;
+  }
+}
+
+
+/* TEAM HUB BANNER HEIGHT SQUEEZE */
+.teamBanner {
+  min-height: 96px;
+}
+
+.teamIdentity {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.teamLogo {
+  height: 88px;
+}
+
+.heroMetric,
+.nextGame {
+  min-height: 60px;
+}
+
+
+/* TEAM HUB BANNER PROPORTION MATCH PASS 4 */
+
+/* Match the sampler's compact horizontal proportions:
+   identity ~30%, record ~13%, last-10 ~17%, next-game ~40%. */
+.teamBanner {
+  min-height: 84px;
+  grid-template-columns: 30% 13% 17% 40%;
+}
+
+.teamIdentity {
+  gap: 14px;
+  padding: 4px 18px 4px 28px;
+}
+
+.teamLogo {
+  width: 70px;
+  height: 70px;
+}
+
+/* Logo vertically tracks the city+nickname wordmark instead of towering over it. */
+.teamWordmark {
+  gap: 1px;
+}
+
+.teamCity {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.08;
+  font-weight: 600;
+  letter-spacing: 0.015em;
+}
+
+.teamIdentity h1 {
+  max-width: 240px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 28px;
+  line-height: 0.98;
+  font-weight: 760;
+  letter-spacing: -0.025em;
+}
+
+.heroMetric {
+  min-height: 54px;
   padding: 0 18px;
-  border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(8,8,8,0.88);
-  color: white;
-  font-family: "Poppins", sans-serif;
-  font-size: 13px;
-  font-weight: 900;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  box-shadow: 0 16px 38px rgba(0,0,0,0.38);
-  backdrop-filter: blur(10px);
-  transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
 }
 
-.sectionBottomBackButton:hover {
-  transform: translateY(-1px);
-  border-color: rgba(249,115,22,0.68);
-  background: rgba(26,18,12,0.94);
+.heroMetric span {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 400;
+  color: #9aa5b6;
 }
 
-/* Keep the old removed top-left subsection pill unavailable even if stale CSS is loaded. */
-.sectionBackButton {
+.heroMetric strong {
+  margin-top: 5px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+}
+
+.heroMetric small {
+  margin-top: 5px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 400;
+  color: #9ca7b8;
+}
+
+.nextGame {
+  min-height: 54px;
+  grid-template-columns: minmax(110px, 1fr) 44px auto;
+  column-gap: 14px;
+  padding: 0 26px 0 24px;
+}
+
+.nextGame > div {
+  gap: 3px;
+  justify-self: end;
+  text-align: left;
+}
+
+.nextGame span {
+  color: #a98be8;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 500;
+}
+
+.nextGame strong {
+  color: #f6f7fb;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+}
+
+.nextGame img {
+  width: 42px;
+  height: 42px;
+}
+
+.nextGame small {
+  color: #d0d6e1;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 400;
+}
+
+.bannerWatermark {
+  right: 145px;
+  width: 520px;
+  height: 285px;
+  opacity: 0.016;
+}
+
+@media (max-width: 1180px) {
+  .teamBanner {
+    grid-template-columns: 31% 14% 17% 38%;
+  }
+
+  .teamLogo {
+    width: 64px;
+    height: 64px;
+  }
+
+  .teamCity {
+    font-size: 14px;
+  }
+
+  .teamIdentity h1 {
+    font-size: 25px;
+  }
+}
+
+
+/* TEAM HUB BANNER IDENTITY + METRICS MATCH PASS 5 */
+
+/* Identity: push the logo + wordmark right and let ATLANTA / HAWKS
+   use the maximum comfortable size inside the current pill. */
+.teamIdentity {
+  gap: 14px;
+  padding-left: 54px;
+  padding-right: 16px;
+}
+
+.teamLogo {
+  width: 66px;
+  height: 66px;
+}
+
+.teamWordmark {
+  gap: 0;
+}
+
+.teamCity {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.02;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.teamIdentity h1 {
+  max-width: 250px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 31px;
+  line-height: 0.94;
+  font-weight: 760;
+  letter-spacing: -0.03em;
+}
+
+/* Record / Last 10: smaller and lighter like the sampler. */
+.heroMetric {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.heroMetric span {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 400;
+  color: #8f9aac;
+}
+
+.heroMetric strong {
+  margin-top: 5px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 20px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.heroMetric small {
+  margin-top: 5px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 400;
+  color: #939fb1;
+}
+
+/* Keep the next-game typography compact and sampler-like. */
+.nextGame span {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.nextGame strong {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.nextGame img {
+  width: 40px;
+  height: 40px;
+}
+
+.nextGame small {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+@media (max-width: 1180px) {
+  .teamIdentity {
+    padding-left: 42px;
+  }
+
+  .teamLogo {
+    width: 62px;
+    height: 62px;
+  }
+
+  .teamCity {
+    font-size: 15px;
+  }
+
+  .teamIdentity h1 {
+    font-size: 28px;
+  }
+}
+
+
+/* TEAM HUB ORANGE THEME + METRICS MATCH PASS 6 */
+
+/* Replace the cool navy cast with the game's orange/brown visual family.
+   Keep surfaces dark so the dashboard still reads like the sampler. */
+.dashboard {
+  background:
+    radial-gradient(circle at 78% 0%, rgba(255, 111, 0, 0.08), transparent 34%),
+    linear-gradient(180deg, #100b08 0%, #0d0a08 44%, #090807 100%);
+}
+
+.topBar {
+  color: #f5efe9;
+}
+
+.searchShell {
+  border-color: rgba(255, 128, 32, 0.14);
+  background: #17110e;
+}
+
+.searchShell svg {
+  stroke: #a99d94;
+}
+
+.searchShell input {
+  color: #b8ada5;
+}
+
+.searchShell input::placeholder {
+  color: #938981;
+}
+
+.avatarBadge {
+  background: #7a3512;
+  color: #fff1e7;
+}
+
+.teamBanner {
+  background:
+    linear-gradient(
+      96deg,
+      #241007 0%,
+      #17100c 18%,
+      #100d0a 47%,
+      #0d0b09 72%,
+      #0d0b09 100%
+    );
+  border-color: #3b2418;
+}
+
+.panel {
+  border-color: #352318;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(25, 17, 12, 0.985),
+      rgba(16, 12, 9, 0.985)
+    );
+}
+
+.panelHeading {
+  border-bottom-color: rgba(255, 146, 72, 0.11);
+}
+
+.gameRow,
+.recentRow,
+.metricList > div,
+.standingRow {
+  border-bottom-color: rgba(255, 146, 72, 0.085);
+}
+
+.playerCard,
+.prospect {
+  border-color: #3a261a;
+  background: linear-gradient(180deg, #1b130f 0%, #120e0b 100%);
+}
+
+.playerCard:hover {
+  border-color: #a45122;
+}
+
+.selectedStanding {
+  background: linear-gradient(90deg, rgba(147, 69, 20, 0.62), rgba(91, 42, 15, 0.26));
+  color: #fff0e6;
+}
+
+.panelActions span {
+  background: #c45f24;
+}
+
+.dashboard::-webkit-scrollbar-track {
+  background: #0c0907;
+}
+
+.dashboard::-webkit-scrollbar-thumb {
+  background: #dd6a25;
+}
+
+/* Record and Last 10: same family, same scale, smaller like the sampler. */
+.heroMetric span,
+.heroMetric strong,
+.heroMetric small {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+.heroMetric span {
+  font-size: 9px;
+  font-weight: 400;
+  color: #998f88;
+}
+
+.heroMetric strong {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.012em;
+}
+
+.heroMetric small {
+  margin-top: 4px;
+  font-size: 9px;
+  font-weight: 400;
+  color: #9c928a;
+}
+
+/* Keep both metric blocks visually identical. */
+.heroMetric {
+  align-items: flex-start;
+  justify-content: center;
+}
+
+/* Next-game typography follows the same restrained scale. */
+.nextGame span {
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.nextGame strong {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.nextGame small {
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.nextGame img {
+  width: 38px;
+  height: 38px;
+}
+
+/* Orange-tint the large watermark very subtly instead of cool navy. */
+.bannerWatermark {
+  opacity: 0.018;
+  filter: sepia(0.45) saturate(0.8) hue-rotate(330deg);
+}
+
+
+/* TEAM HUB RECORD + LAST10 TYPOGRAPHY PASS 10 */
+.heroMetric span,
+.heroMetric strong,
+.heroMetric small {
+  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.heroMetric span {
+  font-weight: 450;
+  letter-spacing: -0.005em;
+}
+
+.heroMetric strong {
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.heroMetric small {
+  font-weight: 400;
+  letter-spacing: -0.006em;
+}
+
+
+/* TEAM HUB SAMPLER SURFACE PASS 11 */
+
+/*
+  SURFACE-ONLY PASS.
+  Intentionally does NOT change:
+  - banner height
+  - banner grid
+  - team logo x/y/size
+  - team city x/y/size
+  - team name x/y/size
+  - Record / Last 10 manual x/y/size controls
+  - watermark x/y/scale/opacity/rotation
+  - Next Game manual controls
+*/
+
+/* 1. Restore the sampler's cool blue-black atmosphere.
+      Orange remains an accent instead of tinting every surface. */
+.dashboard {
+  background:
+    radial-gradient(circle at 82% 0%, rgba(63, 78, 105, 0.10), transparent 30%),
+    linear-gradient(180deg, #07111b 0%, #07101a 48%, #050c14 100%);
+  color: #f3f6fa;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+.topBar {
+  color: #edf2f8;
+}
+
+.searchShell {
+  border-color: rgba(128, 150, 178, 0.14);
+  background: #101a27;
+}
+
+.searchShell svg {
+  stroke: #94a2b5;
+}
+
+.searchShell input {
+  color: #b8c2d0;
+}
+
+.searchShell input::placeholder {
+  color: #8f9caf;
+}
+
+.avatarBadge {
+  background: #4b2e72;
+  color: #f0eaff;
+}
+
+/* 2. Neutral/cool banner surface. Team identity comes from the actual team logo,
+      not a permanent orange wash. */
+.teamBanner {
+  border-color: rgba(115, 139, 169, 0.20);
+  background:
+    linear-gradient(
+      100deg,
+      rgba(24, 18, 45, 0.96) 0%,
+      rgba(10, 20, 34, 0.985) 27%,
+      rgba(7, 17, 29, 0.99) 58%,
+      rgba(6, 15, 26, 0.995) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.018),
+    0 8px 22px rgba(0, 0, 0, 0.18);
+}
+
+/* Do not touch opacity/transform: those remain under your manual controls. */
+.bannerWatermark {
+  filter: saturate(0.42) brightness(0.78);
+}
+
+/* 3. Card surfaces: darker, cooler, and flatter like the sampler. */
+.panel {
+  border-color: rgba(105, 132, 164, 0.20);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(9, 22, 36, 0.985) 0%,
+      rgba(7, 17, 29, 0.99) 100%
+    );
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.015);
+}
+
+.panelHeading {
+  border-bottom-color: rgba(129, 151, 178, 0.11);
+}
+
+.gameRow,
+.recentRow,
+.metricList > div,
+.standingRow {
+  border-bottom-color: rgba(122, 145, 173, 0.095);
+}
+
+.playerCard {
+  border-color: rgba(105, 132, 164, 0.22);
+  background: linear-gradient(180deg, #0a1725 0%, #08131f 100%);
+}
+
+.playerCard:hover {
+  border-color: rgba(249, 115, 22, 0.58);
+}
+
+.prospect {
+  border-color: rgba(105, 132, 164, 0.20);
+  background: #091522;
+}
+
+.prospect img,
+.prospect i {
+  background: #101c2a;
+}
+
+/* 4. Typography hierarchy. Sizes are left alone; this normalizes the
+      overly stylized/heavy look to the sampler's cleaner UI sans. */
+.panelHeading h2,
+.panelHeading button,
+.panelActions button,
+.gameRow,
+.recentRow,
+.metricList,
+.standingsHeader,
+.standingRow,
+.playerCard,
+.prospect,
+.newsEmpty,
+.emptyPanel {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+.panelHeading h2 {
+  font-weight: 650;
+  letter-spacing: -0.012em;
+}
+
+.panelHeading button,
+.panelActions button {
+  color: #aebed2;
+  font-weight: 500;
+}
+
+.panelHeading button:hover,
+.panelActions button:hover {
+  color: #f59a5b;
+}
+
+.gameRow,
+.recentRow,
+.standingRow {
+  color: #cfd8e5;
+}
+
+.gameRow strong,
+.recentRow strong,
+.standingTeam,
+.playerCard strong,
+.prospect strong {
+  font-weight: 600;
+}
+
+.metricList span,
+.playerCard small,
+.prospect small,
+.newsEmpty span,
+.emptyPanel {
+  color: #8f9eb2;
+  font-weight: 400;
+}
+
+.metricList strong {
+  color: #eef3f8;
+  font-weight: 650;
+}
+
+.standingsHeader {
+  color: #8493a8;
+  font-weight: 600;
+}
+
+/* 5. Sampler-like selected standings: muted gold, not orange-brown. */
+.selectedStanding {
+  background: linear-gradient(
+    90deg,
+    rgba(111, 83, 20, 0.66) 0%,
+    rgba(84, 65, 20, 0.38) 72%,
+    rgba(60, 49, 23, 0.20) 100%
+  );
+  color: #f6efd7;
+}
+
+/* 6. Keep BM orange as a restrained accent. */
+.panelActions span {
+  background: #f97316;
+}
+
+.accentValue {
+  color: #e7bf43 !important;
+}
+
+.dashboard::-webkit-scrollbar-track {
+  background: #060d15;
+}
+
+.dashboard::-webkit-scrollbar-thumb {
+  background: #e86f22;
+}
+
+/* 7. Keep success / loss colors clean and modern. */
+.win {
+  color: #56d883;
+}
+
+.loss {
+  color: #ff5e68;
+}
+
+/* 8. Next Game gets the cool lavender cue from the sampler.
+      No x/y/size/geometry is changed here. */
+.nextGame span {
+  color: #b694ee;
+}
+
+.nextGame small {
+  color: #c8d1de;
+}
+
+/* 9. Empty-state surfaces follow the same cool palette. */
+.emptyState {
+  background: #07111b;
+}
+
+.emptyState button {
+  background: #f97316;
+}
+
+
+/* TEAM HUB DARK SAMPLER SURFACE PASS 12 */
+
+/*
+  SURFACE / TYPOGRAPHY / TOP-ROW EQUALITY ONLY.
+  IMPORTANT: teamHubBannerLayout.js remains authoritative for ALL banner manual
+  controls. This pass does not alter any x/y/size/height values in that file.
+*/
+
+/* Main canvas: neutral black/charcoal like the sampler, not navy and not brown. */
+.dashboard {
+  background:
+    radial-gradient(circle at 80% -10%, rgba(255,255,255,0.025), transparent 34%),
+    linear-gradient(180deg, #08090b 0%, #07080a 52%, #060709 100%);
+  color: #f3f5f7;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+}
+
+/* Top strip stays nearly black. */
+.topBar {
+  color: #f2f4f6;
+}
+
+/* Team banner is the ONE warm/orange surface, kept dark enough to match BM. */
+.teamBanner {
+  border-color: rgba(214, 92, 26, 0.30);
+  background:
+    linear-gradient(
+      100deg,
+      rgba(78, 28, 7, 0.92) 0%,
+      rgba(48, 20, 9, 0.92) 18%,
+      rgba(23, 14, 10, 0.97) 46%,
+      rgba(11, 11, 12, 0.99) 78%,
+      rgba(9, 10, 11, 0.995) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.018),
+    0 8px 22px rgba(0,0,0,0.20);
+}
+
+/* Preserve manual watermark opacity/position/scale/rotation; only remove blue cast. */
+.bannerWatermark {
+  filter: saturate(0.42) brightness(0.70);
+}
+
+/* Everything below the hero returns to true dark/black surfaces. */
+.panel {
+  border-color: rgba(255,255,255,0.085);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(14, 15, 17, 0.99) 0%,
+      rgba(9, 10, 12, 0.995) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.012),
+    0 6px 18px rgba(0,0,0,0.10);
+}
+
+.panelHeading {
+  border-bottom-color: rgba(255,255,255,0.07);
+}
+
+.gameRow,
+.recentRow,
+.metricList > div,
+.standingRow {
+  border-bottom-color: rgba(255,255,255,0.06);
+}
+
+.playerCard,
+.prospect {
+  border-color: rgba(255,255,255,0.085);
+  background: linear-gradient(180deg, #101113 0%, #0b0c0e 100%);
+}
+
+.playerCard:hover {
+  border-color: rgba(249,115,22,0.55);
+}
+
+/* Search/control chrome: neutral, not navy. */
+.searchShell,
+.controlBox select {
+  border-color: rgba(255,255,255,0.10);
+  background: #101113;
+  color: #e7ebef;
+}
+
+.searchShell input,
+.searchShell input::placeholder {
+  color: #9da5ae;
+}
+
+/* Record + Last 10:
+   Same typography family/weights as one another; sizes remain controlled by
+   the manual config so the user's tuning is preserved. */
+.heroMetric span,
+.heroMetric strong,
+.heroMetric small {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  font-style: normal;
+  letter-spacing: 0;
+}
+
+.heroMetric span {
+  color: #9da4ad;
+  font-weight: 400;
+  line-height: 1.05;
+}
+
+.heroMetric strong {
+  color: #f4f5f7;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.heroMetric small {
+  color: #929aa4;
+  font-weight: 400;
+  line-height: 1.05;
+}
+
+/* Sampler-like content hierarchy. */
+.panelHeading h2 {
+  color: #f2f4f6;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+}
+
+.panelHeading button,
+.panelActions button {
+  color: #aeb5bd;
+  font-weight: 500;
+}
+
+.panelHeading button:hover,
+.panelActions button:hover {
+  color: #f58a42;
+}
+
+.metricList span,
+.playerCard small,
+.prospect small,
+.newsEmpty span,
+.emptyPanel {
+  color: #8e969f;
+}
+
+.metricList strong,
+.gameRow strong,
+.recentRow strong,
+.standingTeam,
+.playerCard strong,
+.prospect strong {
+  color: #f1f3f5;
+}
+
+/* Muted sampler-style gold selection instead of an orange/brown slab. */
+.selectedStanding {
+  background: linear-gradient(
+    90deg,
+    rgba(102, 78, 23, 0.68) 0%,
+    rgba(73, 59, 27, 0.38) 72%,
+    rgba(40, 36, 27, 0.18) 100%
+  );
+  color: #f6efd9;
+}
+
+/* Keep Next Game lavender like the reference. */
+.nextGame span {
+  color: #b793ee;
+}
+
+/* Make Upcoming Games / Team Overview / Standings exactly the same height
+   whenever they are in the same three-column row. */
+@media (min-width: 1181px) {
+  .topGrid {
+    align-items: stretch;
+    grid-auto-rows: 1fr;
+  }
+
+  .topGrid > .panel {
+    height: 100%;
+    min-height: 0;
+  }
+}
+
+/* Keep BM orange as an accent only. */
+.panelActions span {
+  background: #f97316;
+}
+
+.dashboard::-webkit-scrollbar-track {
+  background: #07080a;
+}
+
+.dashboard::-webkit-scrollbar-thumb {
+  background: #e96f22;
+}
+
+/* Team-Hub-only sidebar cooling.
+   CSS-module class names retain their source name, so this catches the persistent
+   sidebar without changing its layout or active orange nav item. */
+:global(body.th-no-scroll) :global([class*="sidebar"]),
+:global(body.th-no-scroll) :global([class*="sideBar"]),
+:global(body.th-no-scroll) :global([class*="sideNav"]),
+:global(body.th-no-scroll) :global([class*="shellNav"]) {
+  background: linear-gradient(180deg, #0b0c0e 0%, #090a0c 48%, #070809 100%) !important;
+  border-color: rgba(255,255,255,0.07) !important;
+  box-shadow: none !important;
+}
+
+/* If the sidebar uses a decorative wash pseudo-element, neutralize just that wash. */
+:global(body.th-no-scroll) :global([class*="sidebar"])::before,
+:global(body.th-no-scroll) :global([class*="sideBar"])::before,
+:global(body.th-no-scroll) :global([class*="sideNav"])::before,
+:global(body.th-no-scroll) :global([class*="shellNav"])::before {
+  background: transparent !important;
+  opacity: 0 !important;
+}
+
+/* TEAM HUB CONSOLIDATED VISUAL PASS 20 */
+/*
+  Context-verified consolidation of the visual overrides from Passes 13-19.
+  This intentionally removes the old stacked override blocks and replaces them
+  with ONE authoritative section so border/watermark/card rules stop fighting.
+
+  Preserved:
+  - all manual values in teamHubBannerLayout.js
+  - current OVR/POT ring presentation
+  - current Team Hub data/gameplay wiring
+*/
+
+/* --- Hero/banner surface: one surface, one faint neutral edge. --- */
+.teamBanner {
+  border: 1px solid rgba(255, 255, 255, 0.024);
+  background:
+    linear-gradient(
+      90deg,
+      rgba(77, 37, 22, 0.28) 0%,
+      rgba(61, 30, 21, 0.22) 16%,
+      rgba(38, 23, 20, 0.14) 34%,
+      rgba(18, 18, 20, 0.09) 53%,
+      rgba(11, 13, 17, 0.065) 73%,
+      rgba(9, 11, 15, 0.045) 100%
+    ),
+    linear-gradient(180deg, #0d0f12 0%, #090b0e 100%);
+  box-shadow: 0 5px 13px rgba(0, 0, 0, 0.13);
+}
+
+/* Kill every old pseudo-edge/highlight layer. */
+.teamBanner::before,
+.teamBanner::after {
+  content: none !important;
   display: none !important;
+  background: none !important;
+  box-shadow: none !important;
 }
 
-/* Hover should feel responsive, but it no longer changes the selected card. */
-.card:not(.activeCard):hover {
-  opacity: 0.76;
-  transform: none;
-  filter: brightness(1.03);
+/*
+  The inline transform + opacity still come from the user's manual controls.
+  This only defines the base box/placement/filter so the logo reads visibly.
+*/
+.bannerWatermark {
+  position: absolute;
+  left: auto;
+  right: 215px;
+  top: 50%;
+  width: 430px;
+  height: 285px;
+  object-fit: contain;
+  z-index: 0;
+  filter: saturate(0.88) brightness(0.72) contrast(1.08);
+  pointer-events: none;
 }
 
-/* Stable Team Hub navigation patch: JS controls the chosen card. Native scroll
-   snap was causing edge cards like Awards to be visually selected while the
-   scroll position still mapped to Stats/Front Office. */
-.scrollRow {
-  scroll-snap-type: none !important;
-}
-
-.card {
-  scroll-snap-align: none !important;
-}
-
-
-/* Final Team Hub fix: no native-scroll selection. The selected card is owned by
-   React state only, so arrow/A-D movement cannot wrap or jump to a random card. */
-.scrollRow {
-  overflow-x: hidden !important;
-  scroll-snap-type: none !important;
-  scrollbar-width: none !important;
-}
-
-.scrollRow::-webkit-scrollbar {
-  display: none !important;
-}
-
-.railArrow:disabled {
-  opacity: 0.32;
-  cursor: default;
-  transform: none !important;
-  border-color: rgba(255,255,255,0.08);
-  background: rgba(8,8,8,0.48);
-}
-
-.railArrow:disabled:hover {
-  border-color: rgba(255,255,255,0.08);
-  background: rgba(8,8,8,0.48);
-  transform: none !important;
-}
-
-
-/* Always-visible Team Hub rail. Native Windows/Chrome scrollbars can auto-hide,
-   so this compact orange slider mirrors the real carousel scroll position. */
-.carouselShell {
-  grid-template-rows: minmax(0, auto) 18px;
-}
-
-.carouselShell .scrollRow {
-  grid-column: 2;
-  grid-row: 1;
-  scrollbar-width: none;
-  padding-bottom: 0.8rem;
-}
-
-.carouselShell .scrollRow::-webkit-scrollbar {
-  display: none;
-}
-
-.carouselShell .railArrow {
-  grid-row: 1;
-}
-
-.bottomScrollbar {
-  grid-column: 2;
-  grid-row: 2;
-  width: calc(100% - 1.5rem);
-  height: 14px;
-  margin: 1px auto 0;
+/* --- Starting Five / Bench cards. --- */
+.playerCard {
   padding: 0;
-  appearance: none;
-  -webkit-appearance: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.playerVisual {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 92px;
+  overflow: hidden;
+  border-bottom: 4px solid rgba(149, 157, 170, 0.38);
+  background: linear-gradient(180deg, rgba(255,255,255,0.01) 0%, rgba(255,255,255,0) 100%);
+}
+
+.playerRatingBadge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  transform: scale(0.88);
+  transform-origin: top left;
+}
+
+.playerPortrait {
+  position: absolute !important;
+  left: 50% !important;
+  bottom: 0 !important;
+  width: 96px !important;
+  height: 94px !important;
+  object-fit: contain !important;
+  object-position: bottom center !important;
+  transform: translateX(-50%) !important;
+}
+
+/* Beat the legacy .playerCard small declaration and pin position to top-right. */
+.playerCard .playerPositionBadge {
+  position: absolute !important;
+  top: 8px !important;
+  right: 10px !important;
+  left: auto !important;
+  bottom: auto !important;
+  z-index: 5;
+  display: block;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   background: transparent;
+  box-shadow: none;
+  color: #cbd2dc;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.playerCardMeta {
+  min-height: 38px;
+  padding: 7px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.playerCardMeta strong,
+.playerCard strong {
+  position: static;
+  overflow: hidden;
+  color: #f6f8fb;
+  font-size: 11px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overallBubble {
+  display: none !important;
+}
+
+
+/* TEAM HUB MIDDLE PANELS POLISH PASS 22 */
+
+/*
+  Sampler-match pass for ONLY the three top content panels:
+  Upcoming Games / Team Overview / Standings.
+  The banner, manual banner controls, Starting Five, prospects, news, sidebar,
+  and all gameplay/data logic are intentionally untouched.
+*/
+
+.topGrid {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+}
+
+/* Flatter, quieter card shell like the sampler. */
+.topGrid > .panel {
+  border-color: rgba(255, 255, 255, 0.055);
+  background: linear-gradient(180deg, rgba(12, 13, 15, 0.992) 0%, rgba(8, 9, 11, 0.996) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.008),
+    0 4px 12px rgba(0,0,0,0.08);
+}
+
+/* Header separator becomes a ghost line instead of a visible rule. */
+.topGrid .panelHeading {
+  min-height: 38px;
+  border-bottom-color: rgba(255, 255, 255, 0.035);
+}
+
+.topGrid .panelHeading h2 {
+  color: #f1f3f5;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 610;
+  letter-spacing: -0.018em;
+}
+
+.topGrid .panelHeading button,
+.topGrid .panelActions button {
+  color: #9fa8b2;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.topGrid .panelHeading button:hover,
+.topGrid .panelActions button:hover {
+  color: #c6cbd1;
+}
+
+/* Row rules are intentionally very faint, matching the sampler. */
+.topGrid .gameRow,
+.topGrid .metricList > div,
+.topGrid .standingRow {
+  border-bottom-color: rgba(255, 255, 255, 0.026);
+}
+
+/* Upcoming Games typography + breathing room. */
+.topGrid .gameRow {
+  min-height: 30px;
+  color: #c6cdd5;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 430;
+}
+
+.topGrid .gameRow strong {
+  color: #edf0f3;
+  font-weight: 575;
+}
+
+.topGrid .gameRow em {
+  color: #b9c0c8;
+  font-weight: 520;
+}
+
+.topGrid .homeAway {
+  color: #7f8994;
+  font-weight: 450;
+}
+
+/* Team Overview: softer labels, crisp but not heavy values. */
+.topGrid .metricList > div {
+  min-height: 25px;
+}
+
+.topGrid .metricList span {
+  color: #929ba5;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 430;
+  letter-spacing: 0;
+}
+
+.topGrid .metricList strong {
+  color: #eef1f4;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 610;
+  letter-spacing: -0.005em;
+}
+
+/* Standings: cleaner columns and calmer selected-team wash. */
+.topGrid .standingsHeader {
+  color: #818b96;
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 560;
+  letter-spacing: 0.01em;
+}
+
+.topGrid .standingRow {
+  min-height: 32px;
+  color: #cbd2da;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 470;
+}
+
+.topGrid .standingTeam {
+  color: #e7eaee;
+  font-weight: 560;
+}
+
+.topGrid .selectedStanding {
+  background: linear-gradient(
+    90deg,
+    rgba(104, 80, 27, 0.50) 0%,
+    rgba(78, 64, 31, 0.28) 72%,
+    rgba(47, 42, 31, 0.12) 100%
+  );
+  color: #f2ecd9;
+}
+
+/* Keep all three cards locked to equal height on the desktop/laptop layout. */
+@media (min-width: 1181px) {
+  .topGrid {
+    align-items: stretch;
+    grid-auto-rows: 1fr;
+  }
+
+  .topGrid > .panel {
+    height: 100%;
+    min-height: 0;
+  }
+}
+
+
+/* TEAM HUB MIDDLE FINAL POLISH PASS 23 */
+
+/*
+  Final sampler-match polish for the content area only.
+  IMPORTANT: top banner/manual controls, sidebar, schedule/data/gameplay logic,
+  and navigation behavior are intentionally untouched.
+*/
+
+/* 1. Refine the typography hierarchy across the content panels. */
+.topGrid,
+.middleGrid,
+.bottomGrid {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+}
+
+.topGrid .panelHeading h2,
+.middleGrid .panelHeading h2,
+.bottomGrid .panelHeading h2 {
+  color: #f1f3f5;
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: -0.016em;
+}
+
+.topGrid .panelHeading button,
+.middleGrid .panelHeading button,
+.bottomGrid .panelHeading button,
+.topGrid .panelActions button,
+.middleGrid .panelActions button {
+  color: #959da7;
+  font-size: 9.5px;
+  font-weight: 470;
+  letter-spacing: 0;
+}
+
+.topGrid .panelHeading button:hover,
+.middleGrid .panelHeading button:hover,
+.bottomGrid .panelHeading button:hover,
+.topGrid .panelActions button:hover,
+.middleGrid .panelActions button:hover {
+  color: #bcc2c8;
+}
+
+/* 2. Make every separator feel like a guide, not a box edge. */
+.topGrid > .panel,
+.middleGrid > .panel,
+.bottomGrid > .panel {
+  border-color: rgba(255,255,255,0.047);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.006),
+    0 3px 10px rgba(0,0,0,0.065);
+}
+
+.topGrid .panelHeading,
+.middleGrid .panelHeading,
+.bottomGrid .panelHeading {
+  border-bottom-color: rgba(255,255,255,0.026);
+}
+
+.topGrid .gameRow,
+.topGrid .metricList > div,
+.topGrid .standingRow,
+.middleGrid .recentRow,
+.bottomGrid .prospect {
+  border-bottom-color: rgba(255,255,255,0.018);
+}
+
+/* 3. Slightly tighter, more deliberate vertical rhythm. */
+.topGrid .gameRow {
+  min-height: 28px;
+}
+
+.topGrid .metricList > div {
+  min-height: 24px;
+}
+
+.topGrid .standingRow {
+  min-height: 31px;
+}
+
+.middleGrid .recentRow {
+  min-height: 28px;
+}
+
+/* 4. Softer labels + cleaner values / column alignment. */
+.topGrid .gameRow,
+.middleGrid .recentRow,
+.topGrid .standingRow {
+  color: #c3cad2;
+  font-size: 10.5px;
+  font-weight: 430;
+}
+
+.topGrid .gameRow strong,
+.middleGrid .recentRow strong,
+.topGrid .standingTeam {
+  color: #eceff2;
+  font-weight: 560;
+}
+
+.topGrid .gameRow em,
+.middleGrid .recentRow em {
+  color: #d6dbe0;
+  font-weight: 540;
+}
+
+.topGrid .metricList span {
+  color: #8b939c;
+  font-size: 9.7px;
+  font-weight: 420;
+}
+
+.topGrid .metricList strong {
+  color: #eef1f4;
+  font-size: 10.7px;
+  font-weight: 590;
+  font-variant-numeric: tabular-nums;
+}
+
+.topGrid .standingsHeader {
+  color: #7d858e;
+  font-size: 8.7px;
+  font-weight: 520;
+}
+
+.topGrid .standingRow {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Selected team stays readable but no longer looks like a heavy gold bar. */
+.topGrid .selectedStanding {
+  background: linear-gradient(
+    90deg,
+    rgba(100, 76, 25, 0.43) 0%,
+    rgba(72, 58, 29, 0.22) 72%,
+    rgba(44, 40, 31, 0.08) 100%
+  );
+  color: #efe9d6;
+}
+
+/* 5. Starting Five becomes calmer: quieter cards, smaller ring dominance,
+      cleaner name treatment, while preserving the OVR/POT ring design. */
+.middleGrid .playerCard {
+  border-color: rgba(255,255,255,0.052);
+  background: linear-gradient(180deg, #0e0f11 0%, #0a0b0d 100%);
+}
+
+.middleGrid .playerCard:hover {
+  border-color: rgba(249,115,22,0.30);
+  transform: translateY(-1px);
+}
+
+.middleGrid .playerRatingBadge {
+  transform: scale(0.82);
+  transform-origin: top left;
+}
+
+.middleGrid .playerCard .playerPositionBadge {
+  color: #aeb5bd;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.middleGrid .playerVisual {
+  border-bottom-color: rgba(154, 160, 169, 0.22);
+}
+
+.middleGrid .playerCardMeta strong,
+.middleGrid .playerCard strong {
+  color: #edf0f2;
+  font-size: 10.2px;
+  font-weight: 560;
+  letter-spacing: -0.008em;
+}
+
+/* Recent Games + bottom cards share the same quiet hierarchy. */
+.middleGrid .recentRow {
+  border-bottom-color: rgba(255,255,255,0.018);
+}
+
+.bottomGrid .prospect {
+  border-color: rgba(255,255,255,0.050);
+  background: #0b0c0e;
+}
+
+.bottomGrid .prospect strong,
+.bottomGrid .newsEmpty strong {
+  color: #e9ecef;
+  font-weight: 560;
+}
+
+.bottomGrid .prospect small,
+.bottomGrid .newsEmpty span,
+.bottomGrid .emptyPanel {
+  color: #858d96;
+  font-weight: 420;
+}
+
+
+/* TEAM HUB MIDDLE BREATHING / TYPOGRAPHY PASS 24 */
+
+/*
+  Tiny final correction after Pass 23:
+  - restore a little typography presence
+  - add a little vertical breathing room to Starting Five
+  - keep the quieter borders / separators / panel surfaces from Pass 23 exactly as-is
+  - top banner/manual controls/sidebar remain untouched
+*/
+
+.topGrid .panelHeading h2,
+.middleGrid .panelHeading h2,
+.bottomGrid .panelHeading h2 {
+  font-size: 15.4px;
+  font-weight: 640;
+  letter-spacing: -0.014em;
+}
+
+.topGrid .panelHeading button,
+.middleGrid .panelHeading button,
+.bottomGrid .panelHeading button,
+.topGrid .panelActions button,
+.middleGrid .panelActions button {
+  font-size: 9.9px;
+  font-weight: 500;
+}
+
+.topGrid .gameRow,
+.middleGrid .recentRow,
+.topGrid .standingRow {
+  font-size: 10.9px;
+  font-weight: 440;
+}
+
+.topGrid .gameRow strong,
+.middleGrid .recentRow strong,
+.topGrid .standingTeam {
+  font-weight: 580;
+}
+
+.topGrid .metricList span {
+  font-size: 10px;
+  font-weight: 430;
+}
+
+.topGrid .metricList strong {
+  font-size: 11.1px;
+  font-weight: 610;
+}
+
+.topGrid .standingsHeader {
+  font-size: 9px;
+  font-weight: 530;
+}
+
+/* Slightly more air without making the row loose again. */
+.topGrid .gameRow {
+  min-height: 29px;
+}
+
+.topGrid .metricList > div {
+  min-height: 25px;
+}
+
+.topGrid .standingRow {
+  min-height: 32px;
+}
+
+.middleGrid .recentRow {
+  min-height: 29px;
+}
+
+/* Starting Five: preserve current ring scale and separator styling; only restore room. */
+.middleGrid .playerCard {
+  height: 134px;
+}
+
+.middleGrid .playerVisual {
+  min-height: 96px;
+}
+
+.middleGrid .playerCardMeta {
+  min-height: 38px;
+  padding: 7px 8px 9px;
+}
+
+.middleGrid .playerCardMeta strong,
+.middleGrid .playerCard strong {
+  font-size: 10.5px;
+  font-weight: 580;
+  line-height: 1.12;
+}
+
+.middleGrid .playerCard .playerPositionBadge {
+  font-size: 9.2px;
+  font-weight: 670;
+}
+
+/* Lower panels get only a tiny type correction; geometry stays untouched. */
+.bottomGrid .prospect strong,
+.bottomGrid .newsEmpty strong {
+  font-weight: 580;
+}
+
+.bottomGrid .prospect small,
+.bottomGrid .newsEmpty span,
+.bottomGrid .emptyPanel {
+  font-weight: 430;
+}
+
+/* TEAM HUB FUNCTIONAL GLOBAL SEARCH PASS 25 */
+.searchWrap {
+  position: relative;
+  z-index: 260;
+  width: 292px;
+}
+
+.searchShell {
+  box-sizing: border-box;
+  width: 100%;
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.searchShellActive {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(15, 17, 21, 0.98);
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.20);
+}
+
+.searchShell input {
+  pointer-events: auto !important;
+  cursor: text;
+  color: #e8edf4;
+}
+
+.searchShell input::-webkit-search-cancel-button {
+  opacity: 0.45;
   cursor: pointer;
 }
 
-.bottomScrollbar::-webkit-slider-runnable-track {
-  height: 7px;
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 999px;
-  background: rgba(7,7,7,0.88);
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.72);
+.searchResults {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 400;
+  box-sizing: border-box;
+  width: 360px;
+  max-width: min(360px, calc(100vw - var(--bm-persistent-sidebar-width, 236px) - 38px));
+  max-height: min(430px, calc(100vh - 116px));
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 11px;
+  background: rgba(10, 12, 15, 0.985);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(14px);
 }
 
-.bottomScrollbar::-webkit-slider-thumb {
-  width: 94px;
-  height: 7px;
-  margin-top: -1px;
+.searchResults::-webkit-scrollbar {
+  width: 5px;
+}
+
+.searchResults::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.20);
+}
+
+.searchGroup + .searchGroup {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(148, 163, 184, 0.075);
+}
+
+.searchGroupLabel {
+  padding: 5px 8px 4px;
+  color: #8792a3;
+  font-size: 8.5px;
+  font-weight: 650;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.searchResult {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 46px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
   border: 0;
-  border-radius: 999px;
-  appearance: none;
-  -webkit-appearance: none;
-  background: linear-gradient(90deg, #ea580c, #fb923c);
-  box-shadow: 0 0 12px rgba(249,115,22,0.28);
-  cursor: grab;
+  border-radius: 8px;
+  background: transparent;
+  color: #eef2f7;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
 }
 
-.bottomScrollbar:active::-webkit-slider-thumb {
-  cursor: grabbing;
-  background: linear-gradient(90deg, #f97316, #fdba74);
+.searchResult:hover,
+.searchResult:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.045);
 }
 
-.bottomScrollbar::-moz-range-track {
-  height: 7px;
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 999px;
-  background: rgba(7,7,7,0.88);
+.searchResultMedia {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
 }
 
-.bottomScrollbar::-moz-range-thumb {
-  width: 94px;
-  height: 7px;
-  border: 0;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #ea580c, #fb923c);
-  box-shadow: 0 0 12px rgba(249,115,22,0.28);
-  cursor: grab;
+.searchResultMedia img {
+  width: 29px;
+  height: 29px;
+  object-fit: contain;
 }
 
-.bottomScrollbar:disabled {
-  opacity: 0.28;
-  cursor: default;
+.searchPlayerMedia {
+  align-self: stretch;
+  height: 36px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.018);
 }
 
-/* Internal Team Hub category changes do not change the URL, so the global
-   route transition cannot see them. The keyed carousel row remounts whenever
-   main/category content changes and gets its own lightweight presentation-only
-   fade. */
-.sectionSwapFade {
-  animation: bmTeamHubSectionSwapIn 230ms cubic-bezier(0.16, 1, 0.3, 1) both;
+.searchPlayerMedia img {
+  width: 34px;
+  height: 36px;
+  object-fit: contain;
+  object-position: center bottom;
 }
 
-@keyframes bmTeamHubSectionSwapIn {
-  from {
-    opacity: 0.48;
-    transform: translate3d(0, 3px, 0);
-  }
+.searchPlayerMedia > span {
+  color: #aab4c2;
+  font-size: 13px;
+  font-weight: 700;
+}
 
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
+.searchResultCopy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.searchResultCopy strong {
+  overflow: hidden;
+  color: #f2f5f8;
+  font-size: 11.5px;
+  font-weight: 590;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.searchResultCopy small {
+  overflow: hidden;
+  color: #8793a5;
+  font-size: 9.4px;
+  font-weight: 430;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.searchResultArrow {
+  color: #7e8999;
+  font-size: 13px;
+}
+
+.searchPlayerOverall {
+  min-width: 27px;
+  color: #d9a05c;
+  font-size: 11px;
+  font-weight: 680;
+  text-align: right;
+}
+
+.searchEmpty {
+  padding: 18px 12px;
+  color: #8490a1;
+  font-size: 10.5px;
+  font-weight: 440;
+  text-align: center;
+}
+
+.avatarControl,
+.avatarBadge {
+  display: none !important;
+}
+
+@media (max-width: 1200px) {
+  .searchWrap { width: 250px; }
+  .searchResults { width: 330px; }
 }

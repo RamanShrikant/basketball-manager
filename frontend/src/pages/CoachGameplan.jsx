@@ -516,12 +516,21 @@ const handleAutoRebuild = () => {
     const fillPercent = Math.min(player.overall / 99, 1);
     const strokeOffset = circleCircumference * (1 - fillPercent);
     const lineupLabels = ["PG", "SG", "SF", "PF", "C", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"];
+    const activeTeamLogo =
+        selectedTeam?.logo ||
+        selectedTeam?.teamLogo ||
+        selectedTeam?.newTeamLogo ||
+        selectedTeam?.image ||
+        selectedTeam?.logoUrl ||
+        "";
+    const minutesAssignedPercent = Math.max(0, Math.min(100, (total / 240) * 100));
+
     const formatExactRating = (value) => Number(value || 0).toFixed(4);
     const currentLeagueDate = readLeagueClock()?.date || null;
 
     return (
     <PageFade>
-        <div className="h-screen min-h-0 bmCourtPage text-white flex flex-col items-center overflow-hidden px-5 py-2 pb-16">
+        <div className="h-full min-h-0 bmCourtPage text-white flex flex-col items-center overflow-hidden px-5 py-2">
         {toast && (
             <div className="fixed top-6 right-6 bg-neutral-800 border border-orange-500 text-orange-400 px-5 py-2 rounded-lg shadow-lg animate-pulse">
             Gameplan saved!
@@ -579,234 +588,316 @@ const handleAutoRebuild = () => {
             </div>
         )}
 
-        {/* Static header with pinned arrows (never shifts) */}
-        <div className="w-full max-w-7xl flex items-center justify-between mb-1 select-none shrink-0">
-            <div className="w-24 flex items-center justify-start">
+        {/* Roster-style team header */}
+        <div className="w-full max-w-7xl flex items-center gap-3 mb-2 select-none shrink-0 px-1">
             <button
                 onClick={() => handleTeamSwitch("prev")}
                 disabled={!allTeams.length}
-                className={`text-4xl font-bold transition-transform active:scale-90 ${
+                className={`flex h-8 w-8 shrink-0 items-center justify-center text-[18px] font-black transition-transform active:scale-90 ${
                 allTeams.length ? "text-white hover:text-orange-400" : "text-neutral-600 cursor-not-allowed"
                 }`}
-                title="Prev team"
+                title="Previous Team"
+                aria-label="Previous Team"
             >
                 ◄
             </button>
-            </div>
 
-            <h1 className="text-2xl md:text-3xl font-extrabold text-orange-500 text-center">
-            {selectedTeam.name} – Coach Gameplan
+            {activeTeamLogo ? (
+                <img
+                    src={activeTeamLogo}
+                    alt=""
+                    aria-hidden="true"
+                    className="h-11 w-11 shrink-0 object-contain"
+                />
+            ) : null}
+
+            <h1 className="min-w-0 truncate text-[25px] font-extrabold leading-none text-white">
+                {selectedTeam.name} Coach Gameplan
             </h1>
 
-            <div className="w-24 flex items-center justify-end">
             <button
                 onClick={() => handleTeamSwitch("next")}
                 disabled={!allTeams.length}
-                className={`text-4xl font-bold transition-transform active:scale-90 ${
+                className={`flex h-8 w-8 shrink-0 items-center justify-center text-[18px] font-black transition-transform active:scale-90 ${
                 allTeams.length ? "text-white hover:text-orange-400" : "text-neutral-600 cursor-not-allowed"
                 }`}
-                title="Next team"
+                title="Next Team"
+                aria-label="Next Team"
             >
                 ►
             </button>
+        </div>
+
+        {/* Selected player + minutes summary */}
+        <div className="relative w-full flex justify-center shrink-0">
+            <div className="relative bmSolidPanel w-full max-w-7xl border border-neutral-700/70 rounded-t-xl px-5 pt-3 pb-0 shadow-lg overflow-hidden">
+                {activeTeamLogo ? (
+                    <img
+                        src={activeTeamLogo}
+                        alt=""
+                        aria-hidden="true"
+                        className="pointer-events-none absolute object-contain select-none"
+                        style={{
+                            left: "-18px",
+                            top: "50%",
+                            width: "190px",
+                            height: "190px",
+                            opacity: 0.08,
+                            transform: "translateY(-50%)",
+                            filter: "saturate(.85)",
+                        }}
+                    />
+                ) : null}
+
+            <div className="flex min-h-[118px] items-end justify-between gap-5">
+                    <div className="flex min-w-0 items-end gap-4">
+                        <PlayerPortraitFrame
+                            src={player.headshot}
+                            player={player}
+                            team={selectedTeam}
+                            teamName={selectedTeam?.name || ""}
+                            alt={player.name}
+                            className="h-[112px] w-[142px] shrink-0"
+                        />
+
+                        <div className="flex min-w-0 flex-col justify-end pb-4">
+                            <h2 className="flex items-center gap-3 truncate text-[32px] font-bold leading-tight text-white">
+                                <span className="truncate">{player.name}</span>
+                                {isPlayerInjured(player, currentLeagueDate) && (
+                                    <span className="rounded-full border border-red-400/40 bg-red-500/20 px-2 py-1 text-[12px] font-black uppercase tracking-wide text-red-100">
+                                        INJ
+                                    </span>
+                                )}
+                            </h2>
+                            <p className="mt-0.5 text-[17px] font-bold text-white">
+                                {player.pos}
+                                {player.secondaryPos ? ` / ${player.secondaryPos}` : ""} <span className="mx-2 text-neutral-500">|</span> Age {player.age}
+                                {isPlayerInjured(player, currentLeagueDate) ? ` • ${formatInjuryReturnLabel(player, currentLeagueDate)}` : ""}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-4 pb-3">
+                        <PlayerRatingRing
+                            overall={player.overall}
+                            size={84}
+                            showPotential={false}
+                        />
+
+                        <div className="flex h-[88px] min-w-[305px] items-center rounded-xl border border-neutral-700 bg-black/35 px-4">
+                            <div
+                                className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full"
+                                style={{
+                                    background: `conic-gradient(#f97316 ${minutesAssignedPercent * 3.6}deg, #27272a 0deg)`,
+                                }}
+                                aria-hidden="true"
+                            >
+                                <div className="h-10 w-10 rounded-full bg-neutral-950"></div>
+                            </div>
+
+                            <div className="ml-4 min-w-[112px]">
+                                <div className="text-[22px] font-black leading-none text-white">{total} / 240</div>
+                                <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.08em] text-neutral-400">
+                                    Minutes Assigned
+                                </div>
+                            </div>
+
+                            <div className="mx-4 h-12 w-px bg-neutral-700"></div>
+
+                            <div className="min-w-[68px] text-center">
+                                <div className={`text-[22px] font-black leading-none ${remaining > 0 ? "text-orange-400" : "text-white"}`}>
+                                    {remaining}
+                                </div>
+                                <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.08em] text-neutral-400">
+                                    Remaining
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
-        {/* Player Card */}
-        <div className="relative w-full flex justify-center mb-0 shrink-0">
-            <div className="relative bmSolidPanel w-full max-w-7xl px-5 pt-3 pb-2 rounded-t-xl shadow-lg">
-            <button
-                type="button"
-                onClick={() => setShowRatingDetails(true)}
-                className="absolute right-5 top-4 z-10 flex h-7 w-7 items-center justify-center rounded-full border border-neutral-600 bg-neutral-900/90 text-[14px] font-extrabold text-gray-300 hover:border-orange-400 hover:bg-orange-600 hover:text-white transition"
-                title="Show exact team ratings"
-                aria-label="Show exact team ratings"
-            >
-                i
-            </button>
-            <div className="pointer-events-none absolute left-0 right-0 bottom-0 z-20 h-[3px] bg-white opacity-60"></div>
-            <div className="flex items-end justify-between">
-                <div className="flex items-end gap-4">
-                <PlayerPortraitFrame
-                    src={player.headshot}
-                    player={player}
-                    team={selectedTeam}
-                    teamName={selectedTeam?.name || ""}
-                    alt={player.name}
-                    className="h-[112px] w-[142px]"
-                />
-                <div className="flex flex-col justify-end mb-2">
-                    <h2 className="text-[32px] font-bold leading-tight flex items-center gap-3">
-                    <span>{player.name}</span>
-                    {isPlayerInjured(player, currentLeagueDate) && (
-                        <span className="rounded-full border border-red-400/40 bg-red-500/20 px-2 py-1 text-[12px] font-black uppercase tracking-wide text-red-100">INJ</span>
-                    )}
-                    </h2>
-                    <p className="text-gray-400 text-[17px] mt-0.5">
-                    {player.pos}
-                    {player.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age {player.age}
-                    {isPlayerInjured(player, currentLeagueDate) ? ` • ${formatInjuryReturnLabel(player, currentLeagueDate)}` : ""}
-                    </p>
-                </div>
-                </div>
-                <PlayerRatingRing
-                  overall={player.overall}
-                  size={84}
-                  showPotential={false}
-                  className="mr-4 mb-2"
-                />
-            </div>
-            </div>
-        </div>
+        {/* Connected starters + bench rotation table */}
+        <div className="w-full flex-1 min-h-0 flex justify-center -mt-px">
+            <div className="w-full max-w-7xl bmSolidPanel border border-neutral-700/70 border-t-0 rounded-b-xl shadow-lg flex flex-col min-h-0 overflow-hidden">
+                <div className="bmTableScroller overflow-y-auto flex-1 min-h-0">
+                    <table className="w-full table-fixed border-collapse text-left">
+                        <tbody className="text-[14px]">
+                            <tr className="sticky top-0 z-10 border-b border-neutral-700 bg-neutral-900/95">
+                                <td className="relative w-[60px] py-2"><span className="absolute left-3 top-1/2 -translate-y-1/2 whitespace-nowrap text-[12px] font-black uppercase tracking-[0.08em] text-orange-400">STARTERS</span></td>
+                                <td className="py-2 w-[110px] text-center text-[13px] font-black uppercase tracking-[0.04em] text-gray-300">POS</td>
+                                <td className="py-2 text-[13px] font-black uppercase tracking-[0.04em] text-gray-300">PLAYER</td>
+                                <td className="py-2 w-[120px] text-center text-[13px] font-black uppercase tracking-[0.04em] text-gray-300">OVR</td>
+                                <td className="py-2 w-[300px] text-center text-[13px] font-black uppercase tracking-[0.04em] text-gray-300">MINUTES</td>
+                            </tr>
 
-        {/* Table */}
-        <div className="w-full flex-1 min-h-0 flex justify-center mt-[-1px]">
-            <div className="w-full max-w-7xl bmSolidPanel rounded-b-xl p-3 shadow-lg flex flex-col min-h-0">
-            <div className="flex flex-wrap justify-between items-center gap-2 mb-2 text-gray-300 text-sm font-semibold shrink-0">
-                <span>
-                Total: {total} / 240{" "}
-                <span className={remaining > 0 ? "text-orange-400" : "text-gray-400"}>
-                    • Remaining: {remaining} min
-                </span>
-                </span>
-                <div className="flex flex-wrap gap-x-4 gap-y-1">
-                <span>
-                    POT: <span className="text-orange-400">{potRatings.pot}</span>
-                </span>
-                <span>
-                    FTR: <span className="text-orange-400">{ftrRatings.ftr}</span>
-                </span>
-                <span className="text-white">Team Overall:</span>
-                <span>
-                    OVR <span className="text-orange-400">{teamRatings.overall}</span>
-                </span>
-                <span>
-                    OFF <span className="text-orange-400">{teamRatings.off}</span>
-                </span>
-                <span>
-                    DEF <span className="text-orange-400">{teamRatings.def}</span>
-                </span>
-                </div>
-            </div>
+                            {players.slice(0, 5).map((p, i) => {
+                                const injured = isPlayerInjured(p, currentLeagueDate);
+                                return (
+                                    <tr
+                                        key={p.name}
+                                        data-bm-nav-row-index={i}
+                                        onClick={() => setSelectedPlayer(p)}
+                                        className={`cursor-pointer border-b border-neutral-800/70 transition ${
+                                        selectedPlayer?.name === p.name
+                                            ? "bg-orange-600 text-white"
+                                            : injured
+                                            ? "bg-red-950/30 text-red-100"
+                                            : "hover:bg-neutral-800"
+                                        }`}
+                                    >
+                                        <td className="text-center">
+                                            <div
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleSquareClick(p);
+                                                }}
+                                                title={injured ? "Injured players cannot be placed in the starting five" : "Swap rotation slot"}
+                                                className={`w-5 h-5 mx-auto border-2 rounded-sm transition ${
+                                                injured
+                                                    ? "cursor-not-allowed border-red-300 bg-red-500/30 opacity-60"
+                                                    : swapSelection?.name === p.name
+                                                    ? "cursor-pointer bg-orange-500 border-orange-400"
+                                                    : "cursor-pointer border-white"
+                                                }`}
+                                            ></div>
+                                        </td>
+                                        <td className="text-center font-bold text-white">{lineupLabels[i]}</td>
+                                        <td className="py-1.5 font-semibold whitespace-nowrap">
+                                            {p.name}
+                                            {injured && (
+                                                <span className="ml-2 rounded-full border border-red-400/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-red-100">
+                                                    INJ • {formatInjuryReturnLabel(p, currentLeagueDate)}
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td className="text-center text-orange-400 font-bold">{p.overall}</td>
+                                        <td className="text-center">
+                                            <div className="flex items-center gap-3 justify-center">
+                                                <input
+                                                    type="range"
+                                                    min={injured ? 0 : MANUAL_STARTER_MINUTES}
+                                                    max={injured ? 0 : MANUAL_STARTER_MAX_MINUTES}
+                                                    step="1"
+                                                    value={injured ? 0 : minutes[p.name] ?? 0}
+                                                    disabled={injured}
+                                                    onChange={(e) => handleMinuteChange(p.name, e.target.value)}
+                                                    className={`w-[150px] accent-white ${injured ? "cursor-not-allowed opacity-45" : ""}`}
+                                                />
+                                                <span className="w-[38px] text-right text-sm font-semibold text-gray-200">
+                                                    {injured ? 0 : Math.round(minutes[p.name] ?? 0)}
+                                                </span>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
 
-            <div className="bmTableScroller overflow-y-auto flex-1 min-h-0 pr-1">
-                <table className="w-full border-collapse text-left">
-                <thead className="sticky top-0 z-10 bg-neutral-950 text-gray-400 text-[13px] border-b border-gray-700">
-                    <tr>
-                    <th className="py-2 w-[60px]"></th>
-                    <th className="py-2 text-center">POS</th>
-                    <th className="py-2">Player</th>
-                    <th className="py-2 text-center">OVR</th>
-                    <th className="py-2 text-center">Minutes</th>
-                    </tr>
-                </thead>
-                <tbody className="text-[14px]">
-                    {players.map((p, i) => {
-                    const injured = isPlayerInjured(p, currentLeagueDate);
-                    return (
-                    <tr
-                        key={p.name}
-                        data-bm-nav-row-index={i}
-                        onClick={() => setSelectedPlayer(p)}
-                        className={`cursor-pointer transition ${
-                        selectedPlayer?.name === p.name
-                            ? "bg-orange-600 text-white"
-                            : injured
-                            ? "bg-red-950/30 text-red-100"
-                            : i < 5
-                            ? "bg-neutral-850"
-                            : "hover:bg-neutral-700"
+                            <tr className="border-b border-neutral-800 bg-neutral-900/95">
+                                <td className="relative w-[60px] py-2"><span className="absolute left-3 top-1/2 -translate-y-1/2 whitespace-nowrap text-[12px] font-black uppercase tracking-[0.08em] text-orange-400">BENCH</span></td>
+                                <td colSpan={4}></td>
+                            </tr>
+
+                            {players.slice(5).map((p, benchIndex) => {
+                                const i = benchIndex + 5;
+                                const injured = isPlayerInjured(p, currentLeagueDate);
+                                return (
+                                    <tr
+                                        key={p.name}
+                                        data-bm-nav-row-index={i}
+                                        onClick={() => setSelectedPlayer(p)}
+                                        className={`cursor-pointer border-b border-neutral-800/70 transition ${
+                                        selectedPlayer?.name === p.name
+                                            ? "bg-orange-600 text-white"
+                                            : injured
+                                            ? "bg-red-950/30 text-red-100"
+                                            : "hover:bg-neutral-800"
+                                        }`}
+                                    >
+                                        <td className="text-center">
+                                            <div
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleSquareClick(p);
+                                                }}
+                                                title={injured ? "Injured players cannot be placed in the starting five" : "Swap rotation slot"}
+                                                className={`w-5 h-5 mx-auto border-2 rounded-sm transition ${
+                                                injured
+                                                    ? "cursor-not-allowed border-red-300 bg-red-500/30 opacity-60"
+                                                    : swapSelection?.name === p.name
+                                                    ? "cursor-pointer bg-orange-500 border-orange-400"
+                                                    : "cursor-pointer border-white"
+                                                }`}
+                                            ></div>
+                                        </td>
+                                        <td className="text-center font-bold text-white">{i + 1}</td>
+                                        <td className="py-1.5 font-semibold whitespace-nowrap">
+                                            {p.name}
+                                            {injured && (
+                                                <span className="ml-2 rounded-full border border-red-400/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-red-100">
+                                                    INJ • {formatInjuryReturnLabel(p, currentLeagueDate)}
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td className="text-center text-orange-400 font-bold">{p.overall}</td>
+                                        <td className="text-center">
+                                            <div className="flex items-center gap-3 justify-center">
+                                                <input
+                                                    type="range"
+                                                    min={injured ? 0 : MANUAL_BENCH_MINUTES}
+                                                    max={injured ? 0 : MANUAL_BENCH_MAX_MINUTES}
+                                                    step="1"
+                                                    value={injured ? 0 : minutes[p.name] ?? 0}
+                                                    disabled={injured}
+                                                    onChange={(e) => handleMinuteChange(p.name, e.target.value)}
+                                                    className={`w-[150px] accent-white ${injured ? "cursor-not-allowed opacity-45" : ""}`}
+                                                />
+                                                <span className="w-[38px] text-right text-sm font-semibold text-gray-200">
+                                                    {injured ? 0 : Math.round(minutes[p.name] ?? 0)}
+                                                </span>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div className="flex justify-end gap-3 border-t border-neutral-800 bg-neutral-950/70 px-3 py-2 shrink-0">
+                    <button
+                        onClick={handleAutoRebuild}
+                        className="px-5 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
+                    >
+                        Auto Rebuild Rotation
+                    </button>
+                    <button
+                        onClick={handleSave}
+                        disabled={total !== 240}
+                        className={`px-5 py-2 rounded-lg font-semibold transition ${
+                            total !== 240
+                            ? "bg-neutral-700 text-gray-500 cursor-not-allowed"
+                            : "bg-orange-600 hover:bg-orange-500"
                         }`}
                     >
-                        <td className="text-center">
-                        <div
-                            onClick={(e) => {
-                            e.stopPropagation();
-                            handleSquareClick(p);
-                            }}
-                            title={injured ? "Injured players cannot be placed in the starting five" : "Swap rotation slot"}
-                            className={`w-5 h-5 mx-auto border-2 rounded-sm transition ${
-                            injured
-                                ? "cursor-not-allowed border-red-300 bg-red-500/30 opacity-60"
-                                : swapSelection?.name === p.name
-                                ? "cursor-pointer bg-orange-500 border-orange-400"
-                                : "cursor-pointer border-white"
-                            }`}
-                        ></div>
-                        </td>
-                        <td className="text-center font-semibold">
-                        {lineupLabels[i] || i + 1}
-                        </td>
-                        <td className="py-1.5 font-semibold whitespace-nowrap">
-                        {p.name}
-                        {injured && (
-                            <span className="ml-2 rounded-full border border-red-400/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-red-100">
-                            INJ • {formatInjuryReturnLabel(p, currentLeagueDate)}
-                            </span>
-                        )}
-                        <span className="text-[#bfbfbf] text-sm ml-2">
-                            {p.pos}
-                            {p.secondaryPos ? ` / ${p.secondaryPos}` : ""}
-                        </span>
-                        </td>
-                        <td className="text-center text-orange-400 font-bold">{p.overall}</td>
-                        <td className="text-center w-[250px]">
-                        <div className="flex items-center gap-3 justify-center">
-                            <input
-                            type="range"
-                            min={injured ? 0 : i < 5 ? MANUAL_STARTER_MINUTES : MANUAL_BENCH_MINUTES}
-                            max={injured ? 0 : i < 5 ? MANUAL_STARTER_MAX_MINUTES : MANUAL_BENCH_MAX_MINUTES}
-                            step="1"
-                            value={injured ? 0 : minutes[p.name] ?? 0}
-                            disabled={injured}
-                            onChange={(e) => handleMinuteChange(p.name, e.target.value)}
-                            className={`w-[130px] accent-white ${injured ? "cursor-not-allowed opacity-45" : ""}`}
-                            />
-                            <span className="w-[50px] text-gray-200 text-sm">
-                            {injured ? 0 : Math.round(minutes[p.name] ?? 0)}
-                            </span>
-                        </div>
-                        </td>
-                    </tr>
-                    );
-                    })}
-                </tbody>
-                </table>
-            </div>
-
-            <div className="flex justify-end gap-3 mt-2 shrink-0">
-                <button
-                onClick={handleAutoRebuild}
-                className="px-5 py-2 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold transition"
-                >
-                Auto Rebuild Rotation
-                </button>
-                <button
-                onClick={handleSave}
-                disabled={total !== 240}
-                className={`px-5 py-2 rounded-lg font-semibold transition ${
-                    total !== 240
-                    ? "bg-neutral-700 text-gray-500 cursor-not-allowed"
-                    : "bg-orange-600 hover:bg-orange-500"
-                }`}
-                >
-                Save Gameplan
-                </button>
-                <button
-                onClick={() => {
-                    persistCurrentGameplan(players, minutes, false);
-                    navigate("/team-hub");
-                }}
-                disabled={total !== 240}
-                className={`bmLegacyRouteBack px-5 py-2 rounded-lg font-semibold transition ${
-                    total !== 240
-                    ? "bg-neutral-700 text-gray-500 cursor-not-allowed"
-                    : "bg-neutral-700 hover:bg-neutral-600"
-                }`}
-                >
-                Back to Team Hub
-                </button>
-            </div>
+                        Save Gameplan
+                    </button>
+                    <button
+                        onClick={() => {
+                            persistCurrentGameplan(players, minutes, false);
+                            navigate("/team-hub");
+                        }}
+                        disabled={total !== 240}
+                        className={`bmLegacyRouteBack px-5 py-2 rounded-lg font-semibold transition ${
+                            total !== 240
+                            ? "bg-neutral-700 text-gray-500 cursor-not-allowed"
+                            : "bg-neutral-700 hover:bg-neutral-600"
+                        }`}
+                    >
+                        Back to Team Hub
+                    </button>
+                </div>
             </div>
         </div>
         </div>

@@ -1,0 +1,73 @@
+:global(:root) {
+  --bm-persistent-sidebar-width: clamp(210px, 14.2vw, 252px);
+}
+
+.shell {
+  min-height: 100vh;
+  width: 100%;
+  min-width: 0;
+  position: relative;
+}
+
+.content {
+  width: calc(100% - var(--bm-persistent-sidebar-width));
+  min-width: 0;
+  min-height: 100vh;
+  margin-left: var(--bm-persistent-sidebar-width);
+  position: relative;
+  overflow-x: clip;
+}
+
+:global(body.bm-persistent-sidebar-active .bmGlobalRouteNav) {
+  left: calc(var(--bm-persistent-sidebar-width) + 14px) !important;
+}
+
+:global(body.bm-persistent-sidebar-active) {
+  overflow-x: hidden;
+}
+
+@media (min-width: 1024px) and (max-height: 720px) {
+  :global(:root) {
+    --bm-persistent-sidebar-width: clamp(196px, 14vw, 226px);
+  }
+}
+
+/* Persistent sidebar replaces the old floating bottom route controls. */
+:global(body.bm-persistent-sidebar-active .bmGlobalRouteNav),
+:global(body.bm-persistent-sidebar-active .bmLegacyRouteBack) {
+  display: none !important;
+}
+
+/* PERSISTENT_GAME_CANVAS_CLEANUP */
+.content {
+  background: #050505;
+}
+
+:global(body[data-bm-route="roster-view"]) .content,
+:global(body[data-bm-route="coach-gameplan"]) .content {
+  background-color: #0d0d0d;
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 22px),
+    radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%);
+  background-repeat: repeat, repeat, repeat, no-repeat;
+  background-size: 340px 340px, auto, auto, cover;
+  background-position: center;
+  background-blend-mode: soft-light, normal, normal, normal;
+}
+
+:global(body[data-bm-route="roster-view"] .bm-page-fade),
+:global(body[data-bm-route="coach-gameplan"] .bm-page-fade) {
+  background: transparent !important;
+}
+
+/* ROSTER_COACH_SHELL_VIEWPORT_FIX */
+:global(body[data-bm-route="roster-view"]) .content,
+:global(body[data-bm-route="coach-gameplan"]) .content {
+  box-sizing: border-box !important;
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
+}

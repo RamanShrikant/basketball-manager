@@ -396,6 +396,22 @@ html[data-bm-route="player-retirements"] .py-16 {
   --bm-route-height: calc(100dvh - var(--bm-footer-height));
 }
 
+/* PERSISTENT_SIDEBAR_REMOVES_LEGACY_FOOTER_RESERVATION */
+/*
+  The old desktop shell reserved 48px for .bmGlobalRouteNav by defining
+  --bm-route-height as 100dvh - 48px.
+
+  The persistent left sidebar hides that footer entirely, so keeping the
+  reservation leaves an exact ~48px dead strip at the bottom of every sidebar
+  route (Roster, Coach Gameplan, etc.).
+
+  When the persistent sidebar is active, restore the route to the full viewport.
+*/
+body.bm-persistent-sidebar-active {
+  --bm-footer-height: 0px;
+  --bm-route-height: 100dvh;
+}
+
 .bmGlobalRouteNav {
   left: 0;
   right: 0;

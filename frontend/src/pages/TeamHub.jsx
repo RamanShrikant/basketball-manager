@@ -1,890 +1,1121 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
-import LZString from "lz-string";
-import styles from "../components/TeamHub.module.css";
 import PageFade from "../components/PageFade";
-import "../styles/BMAnimations.css";
+import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
+import PlayerCardModal from "../components/PlayerCardModal.jsx";
+import styles from "../components/TeamHub.module.css";
+import { TEAM_HUB_BANNER_LAYOUT as bannerLayout } from "../config/teamHubBannerLayout.js";
 import {
-  isAllStarsAvailable,
-  readOffseasonState as readAllStarsOffseasonState,
-  readSavedAllStars,
-} from "../utils/allStarsAvailability";
+  buildConferenceLookup,
+  compareCanonicalTeams,
+  computeCanonicalStandings,
+  loadRegularSeasonResultsV3FromStorage,
+  normalizeStandingsTeamName,
+} from "../utils/canonicalStandings.js";
+import {
+  hydrateScheduleTeamMetadata,
+  readScheduleFromStorage,
+} from "../utils/scheduleStorage.js";
+import {
+  collectOwnedPicksForTeam,
+  formatMoney,
+  getPlayerSalary,
+  getStandardPlayers,
+  playerHeadshotOf,
+  playerOverall,
+  teamLogoOf,
+} from "../utils/teamIntel_v1.js";
 import {
   getUpcomingDraftYearForPhase,
-  isDraftStartedForYear,
+  readUpcomingDraftClassForYear,
 } from "../utils/upcomingDraftClass.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const POSTSEASON_KEY = "bm_postseason_v2";
-const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
-const TEAM_HUB_RETURN_CONTEXT_KEY = "bm_team_hub_return_context_v1";
+
+function bannerTextStyle(control = {}) {
+  return {
+    transform: `translate(${Number(control?.x || 0)}px, ${Number(control?.y || 0)}px)`,
+    fontSize: Number.isFinite(Number(control?.size)) ? `${Number(control.size)}px` : undefined,
+  };
+}
+
+function bannerBlockStyle(control = {}) {
+  const x = Number(control?.x || 0);
+  const y = Number(control?.y || 0);
+  return {
+    transform: `translate(${Number.isFinite(x) ? x : 0}px, ${Number.isFinite(y) ? y : 0}px)`,
+  };
+}
+
+function bannerBoxStyle(control = {}) {
+  const height = Number(control?.height);
+  const safeHeight = Number.isFinite(height) && height > 0 ? height : null;
+  return safeHeight
+    ? { height: `${safeHeight}px`, minHeight: `${safeHeight}px` }
+    : undefined;
+}
+
+function bannerWatermarkStyle(control = {}) {
+  const safeNumber = (value, fallback) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  const x = safeNumber(control?.x, 0);
+  const y = safeNumber(control?.y, 0);
+  const scale = Math.max(0.01, safeNumber(control?.scale, 1));
+  const rotation = safeNumber(control?.rotation, -5);
+  const opacity = Math.min(1, Math.max(0, safeNumber(control?.opacity, 0.018)));
+  return {
+    transform: `translate(${x}px, calc(-50% + ${y}px)) rotate(${rotation}deg) scale(${scale})`,
+    opacity,
+  };
+}
+
+function bannerLogoStyle(control = {}) {
+  const size = Number(control?.size || 0);
+  return {
+    transform: `translate(${Number(control?.x || 0)}px, ${Number(control?.y || 0)}px)`,
+    width: size > 0 ? `${size}px` : undefined,
+    height: size > 0 ? `${size}px` : undefined,
+  };
+}
 
 function safeJSON(raw, fallback = null) {
-  if (!raw) return fallback;
-
   try {
+    if (!raw) return fallback;
     const parsed = JSON.parse(raw);
-    return parsed ?? fallback;
-  } catch {}
-
-  try {
-    const source = raw.startsWith("lz:") ? raw.slice(3) : raw;
-    const decompressed = LZString.decompressFromUTF16(source);
-    if (!decompressed) return fallback;
-
-    const parsed = JSON.parse(decompressed);
     return parsed ?? fallback;
   } catch {
     return fallback;
   }
 }
 
-function getOffseasonFreeAgencyReturnPath() {
-  const lastRoute = localStorage.getItem(FREE_AGENCY_LAST_ROUTE_KEY);
+function getAllTeams(leagueData = {}) {
+  if (Array.isArray(leagueData?.teams)) return leagueData.teams.filter(Boolean);
+  return Object.entries(leagueData?.conferences || {}).flatMap(([conference, teams]) =>
+    (Array.isArray(teams) ? teams : []).filter(Boolean).map((team) => ({
+      ...team,
+      conference: team?.conference || team?.conf || conference,
+    }))
+  );
+}
 
-  if (lastRoute !== "/viewing-offers") {
-    return "/free-agents";
+function teamNameOf(team = {}) {
+  return String(team?.name || team?.teamName || "").trim();
+}
+
+function splitTeamIdentity(team = {}) {
+  const fullName = teamNameOf(team);
+  const explicitCity = String(
+    team?.city || team?.location || team?.market || team?.teamCity || ""
+  ).trim();
+  const explicitNickname = String(
+    team?.nickname || team?.mascot || team?.teamNickname || ""
+  ).trim();
+
+  if (explicitCity && explicitNickname) {
+    return { city: explicitCity, nickname: explicitNickname };
   }
 
-  const leagueData = safeJSON(localStorage.getItem("leagueData"), null);
-  const freeAgencyState = leagueData?.freeAgencyState || {};
+  if (explicitNickname && fullName.toLowerCase().endsWith(explicitNickname.toLowerCase())) {
+    return {
+      city: fullName.slice(0, fullName.length - explicitNickname.length).trim(),
+      nickname: explicitNickname,
+    };
+  }
 
-  const pendingUserDecisionCount = Array.isArray(freeAgencyState?.pendingUserDecisions)
-    ? freeAgencyState.pendingUserDecisions.length
-    : 0;
+  const knownNicknames = [
+    "Trail Blazers",
+    "Timberwolves",
+    "Mavericks",
+    "Cavaliers",
+    "Grizzlies",
+    "Pelicans",
+    "Warriors",
+    "Clippers",
+    "Lakers",
+    "Kings",
+    "Spurs",
+    "Rockets",
+    "Thunder",
+    "Suns",
+    "Jazz",
+    "Nuggets",
+    "Hawks",
+    "Celtics",
+    "Nets",
+    "Hornets",
+    "Bulls",
+    "Pacers",
+    "Pistons",
+    "Bucks",
+    "Heat",
+    "Magic",
+    "Knicks",
+    "76ers",
+    "Raptors",
+    "Wizards",
+  ];
 
-  const pendingRfaDecisionCount = Array.isArray(freeAgencyState?.pendingRfaMatchDecisions)
-    ? freeAgencyState.pendingRfaMatchDecisions.length
-    : 0;
-
-  const hasLatestResults = Boolean(freeAgencyState?.latestResults);
-  const marketIsActive = Boolean(freeAgencyState?.isActive);
-  const currentDay = Number(freeAgencyState?.currentDay || 0);
-  const maxDays = Number(freeAgencyState?.maxDays || 0);
-  const marketComplete = Boolean(
-    freeAgencyState?.marketComplete ||
-      freeAgencyState?.freeAgencyComplete ||
-      freeAgencyState?.completed ||
-      freeAgencyState?.isComplete ||
-      freeAgencyState?.status === "complete" ||
-      (!marketIsActive && maxDays > 0 && currentDay >= maxDays)
+  const nickname = knownNicknames.find((candidate) =>
+    fullName.toLowerCase().endsWith(candidate.toLowerCase())
   );
 
-  if (marketComplete && pendingUserDecisionCount === 0 && pendingRfaDecisionCount === 0) {
-    return "/free-agents";
+  if (nickname) {
+    return {
+      city: fullName.slice(0, fullName.length - nickname.length).trim(),
+      nickname,
+    };
   }
 
-  if (pendingUserDecisionCount > 0 || pendingRfaDecisionCount > 0 || hasLatestResults) {
-    return "/viewing-offers";
-  }
-
-  return "/free-agents";
-}
-
-function tileSubtitle(tile, selectedTeamName, { allStarsAvailable = false, isOffseasonMode = false } = {}) {
-  if (tile.description) return tile.description;
-
-  return tile.name === "Return to Offseason Hub"
-    ? "Resume offseason flow"
-    : tile.name === "Return to Playoffs"
-    ? "Resume playoff bracket"
-    : tile.name === "Schedule"
-    ? "Calendar and Season Simulation"
-    : tile.name === "New Chapter"
-    ? "Season Story, League Changes, Prospects, and Outlook"
-    : tile.name === "Standings"
-    ? "League, Conference, and Division Table"
-    : tile.name === "Playoff Picture"
-    ? "Seeds, Play-In, and Playoff Race"
-    : tile.name === "Award Tracker"
-    ? "Live MVP, DPOY, 6MOY, MIP, CPOTY, ROTY"
-    : tile.name === "Free Agents"
-    ? "Market and Available Players"
-    : tile.name === "Salary Table"
-    ? "Contracts, Cap, and Payroll"
-    : tile.name === "Contract Extensions"
-    ? "Eligibility, Negotiations, and Future Payroll"
-    : tile.name === "Power Rankings"
-    ? "League-Wide Team Ratings"
-    : tile.name === "Draft Picks"
-    ? "Team Draft Assets"
-    : tile.name === "Trades"
-    ? "Propose and Review Trades"
-    : tile.name === "Team Intel"
-    ? "Team scouting and trade intel"
-    : tile.name === "Locker Room"
-    ? "Player Morale and Role Check"
-    : tile.name === "Upcoming Draft"
-    ? "Prospects, Rankings, and Scouting Reports"
-    : tile.name === "Statistics"
-    ? isOffseasonMode ? "Previous Regular Season" : "Player and Team Stats"
-    : tile.name === "Playoff Statistics"
-    ? isOffseasonMode ? "Previous Postseason" : "Current Postseason"
-    : tile.name === "View All-Stars"
-    ? allStarsAvailable ? "Starters and Reserves" : "Available After Selections"
-    : tile.name === "League History"
-    ? "Transactions, Awards, and Champions"
-    : tile.name === "Transaction History"
-    ? "Trades, Signings, and Dates"
-    : tile.name === "Award History"
-    ? "MVP, DPOY, 6MOY, MIP, CPOTY, ROTY"
-    : tile.name === "Past Champions"
-    ? "Champions and Finals MVPs"
-    : tile.name === "Settings"
-    ? "Trade Rules and League Options"
-    : selectedTeamName;
-}
-
-
-function shouldIgnoreHubShortcut(event) {
-  const tagName = String(event?.target?.tagName || "").toLowerCase();
-  if (["input", "select", "textarea"].includes(tagName)) return true;
-  if (event?.target?.isContentEditable) return true;
-  if (document.querySelector('[role="dialog"][aria-modal="true"]')) return true;
-  return false;
-}
-
-function sectionReturnPayload(section, mode = {}) {
-  if (!section) return null;
+  const parts = fullName.split(/\s+/).filter(Boolean);
   return {
-    section,
-    label: section,
-    offseasonMode: Boolean(mode.isOffseasonMode),
-    playoffMode: Boolean(mode.isPlayoffMode),
-    returnTo: mode.offseasonReturnTo || null,
-    playoffReturnTo: mode.playoffReturnTo || null,
-    updatedAt: Date.now(),
+    city: parts.slice(0, -1).join(" "),
+    nickname: parts.at(-1) || fullName,
   };
 }
 
-function writeTeamHubReturnContext(payload) {
-  try {
-    if (!payload?.section) {
-      sessionStorage.removeItem(TEAM_HUB_RETURN_CONTEXT_KEY);
-      return;
-    }
-    sessionStorage.setItem(TEAM_HUB_RETURN_CONTEXT_KEY, JSON.stringify(payload));
-  } catch {}
+function teamAbbr(team = {}) {
+  const explicit = team?.abbreviation || team?.abbr || team?.code || team?.shortName;
+  if (explicit) return String(explicit).toUpperCase();
+  const words = teamNameOf(team).split(/\s+/).filter(Boolean);
+  return words.slice(-2).map((word) => word[0]).join("").toUpperCase() || "—";
 }
+
+function seasonLabel(leagueData = {}) {
+  const start = Number(
+    leagueData?.seasonStartYear ??
+      leagueData?.seasonYear ??
+      leagueData?.currentSeasonYear ??
+      2026
+  );
+  if (!Number.isFinite(start)) return "Season";
+  return `Season ${start}-${String((start + 1) % 100).padStart(2, "0")}`;
+}
+
+function phaseLabel() {
+  const offseason = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {});
+  const postseason = safeJSON(localStorage.getItem(POSTSEASON_KEY), null);
+  if (offseason?.active) return "Offseason";
+  if (postseason) return "Playoffs";
+  return "Regular Season";
+}
+
+function ordinal(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+  if (n % 10 === 1) return `${n}st`;
+  if (n % 10 === 2) return `${n}nd`;
+  if (n % 10 === 3) return `${n}rd`;
+  return `${n}th`;
+}
+
+function parseGameScore(game, results = {}) {
+  const result = results?.[String(game?.id || "")];
+  if (!result) return null;
+
+  const home = Number(
+    result?.totals?.home ??
+      result?.finalScore?.home ??
+      result?.score?.home ??
+      result?.homeScore
+  );
+  const away = Number(
+    result?.totals?.away ??
+      result?.finalScore?.away ??
+      result?.score?.away ??
+      result?.awayScore
+  );
+
+  if (!Number.isFinite(home) || !Number.isFinite(away)) return null;
+  return { home, away };
+}
+
+function formatGameDate(value) {
+  const raw = String(value || "");
+  if (!raw) return "—";
+  const date = new Date(`${raw}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function readGameplanOrder(team = {}) {
+  const roster = getStandardPlayers(team);
+  const byName = new Map(roster.map((player) => [player?.name, player]));
+
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(`gameplan_${teamNameOf(team)}`) || "null");
+  } catch {}
+
+  const rotationCandidates = [
+    saved?.rotationOrder?.home,
+    saved?.rotationOrder?.away,
+    Array.isArray(saved?.rotationOrder) ? saved.rotationOrder : null,
+    saved?.order,
+    saved?.players,
+  ];
+
+  for (const candidate of rotationCandidates) {
+    if (!Array.isArray(candidate) || !candidate.length) continue;
+    const resolved = candidate
+      .map((entry) => {
+        const name = typeof entry === "string" ? entry : entry?.name || entry?.player;
+        return byName.get(name);
+      })
+      .filter(Boolean);
+    if (resolved.length >= 5) return resolved;
+  }
+
+  const minutes =
+    saved?.minutes && typeof saved.minutes === "object" && !Array.isArray(saved.minutes)
+      ? saved.minutes
+      : saved && typeof saved === "object" && !Array.isArray(saved)
+      ? saved
+      : {};
+
+  return [...roster].sort((a, b) => {
+    const minuteDiff = Number(minutes?.[b?.name] || 0) - Number(minutes?.[a?.name] || 0);
+    if (minuteDiff) return minuteDiff;
+    return playerOverall(b) - playerOverall(a);
+  });
+}
+
+function getProspectHeadshot(player = {}) {
+  return player?.headshot || player?.image || player?.img || player?.portrait || "";
+}
+
+// TEAM HUB GLOBAL SEARCH HELPERS PASS 25
+function normalizeSearchText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function searchMatchScore(value, query) {
+  const text = normalizeSearchText(value);
+  const q = normalizeSearchText(query);
+  if (!text || !q) return Number.POSITIVE_INFINITY;
+  if (text === q) return 0;
+  if (text.startsWith(q)) return 1;
+  if (text.split(/\s+/).some((word) => word.startsWith(q))) return 2;
+  if (text.includes(q)) return 3;
+  return Number.POSITIVE_INFINITY;
+}
+
+function playerNameOf(player = {}) {
+  return String(player?.name || player?.playerName || player?.player || "").trim();
+}
+
+function collectSearchablePlayers(leagueData = {}, teams = []) {
+  const rows = [];
+  const seen = new Set();
+
+  const addPlayer = (player, team = null, teamName = "Free Agent") => {
+    if (!player || typeof player !== "object") return;
+    const name = playerNameOf(player);
+    if (!name) return;
+    const resolvedTeamName = team ? teamNameOf(team) : String(teamName || "Free Agent");
+    const identity = String(player?.id ?? player?.playerId ?? player?.uuid ?? name);
+    const key = `${normalizeSearchText(resolvedTeamName)}::${normalizeSearchText(identity)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push({
+      player,
+      team,
+      teamName: resolvedTeamName,
+      teamLogo: team ? teamLogoOf(team) : String(player?.teamLogo || ""),
+    });
+  };
+
+  teams.forEach((team) => {
+    const buckets = [
+      team?.players,
+      team?.roster,
+      team?.standardPlayers,
+      team?.twoWayPlayers,
+      team?.twoWay,
+      team?.stashPlayers,
+      team?.stashes,
+      getStandardPlayers(team),
+    ];
+    buckets.forEach((bucket) => {
+      if (!Array.isArray(bucket)) return;
+      bucket.forEach((player) => addPlayer(player, team));
+    });
+  });
+
+  const freeAgentBuckets = [
+    leagueData?.freeAgents,
+    leagueData?.freeAgency?.freeAgents,
+    leagueData?.freeAgency?.players,
+    leagueData?.freeAgencyState?.freeAgents,
+    leagueData?.freeAgencyState?.availablePlayers,
+  ];
+  freeAgentBuckets.forEach((bucket) => {
+    if (!Array.isArray(bucket)) return;
+    bucket.forEach((player) => addPlayer(player, null, "Free Agent"));
+  });
+
+  return rows;
+}
+
 
 export default function TeamHub() {
   const { leagueData, selectedTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
-  const location = useLocation();
-  const [activeTileIndex, setActiveTileIndex] = useState(0);
-  const [activeSection, setActiveSection] = useState(() => (typeof location.state?.hubSection === "string" ? location.state.hubSection : null));
-  const hubRef = useRef(null);
-  const scrollRowRef = useRef(null);
-  const tileRefs = useRef([]);
-  const scrollSnapTimerRef = useRef(null);
-  const programmaticScrollRef = useRef(false);
-  const scrollReleaseTimerRef = useRef(null);
-  const programmaticScrollTimerRef = useRef(null);
-  const ignoreScrollUntilRef = useRef(0);
-  const activeTileIndexRef = useRef(0);
-  const [scrollbarState, setScrollbarState] = useState({ left: 0, max: 0 });
+  const [showBench, setShowBench] = useState(false);
+  // TEAM HUB GLOBAL SEARCH STATE PASS 25
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchPlayerCard, setSearchPlayerCard] = useState(null);
+  const searchRef = useRef(null);
 
   useEffect(() => {
     document.body.classList.add("th-no-scroll");
     return () => document.body.classList.remove("th-no-scroll");
   }, []);
 
+  // TEAM HUB GLOBAL SEARCH DISMISS PASS 25
   useEffect(() => {
-    activeTileIndexRef.current = activeTileIndex;
-  }, [activeTileIndex]);
-
-  useEffect(() => {
-    const requestedSection = location.state?.hubSection;
-    if (typeof requestedSection === "string" && requestedSection) {
-      setActiveSection(requestedSection);
-    }
-  }, [location.state?.hubSection]);
-
-  useEffect(() => {
-    if (!selectedTeam) return undefined;
-    const frame = window.requestAnimationFrame(() => hubRef.current?.focus?.());
-    return () => window.cancelAnimationFrame(frame);
-  }, [selectedTeam?.name]);
-
-  useLayoutEffect(() => {
-    activeTileIndexRef.current = 0;
-    setActiveTileIndex(0);
-    tileRefs.current = [];
-    if (scrollSnapTimerRef.current) window.clearTimeout(scrollSnapTimerRef.current);
-    if (scrollReleaseTimerRef.current) window.clearTimeout(scrollReleaseTimerRef.current);
-    if (programmaticScrollTimerRef.current) window.clearTimeout(programmaticScrollTimerRef.current);
-    programmaticScrollRef.current = true;
-    const row = scrollRowRef.current;
-    if (row) row.scrollLeft = 0;
-    programmaticScrollTimerRef.current = window.setTimeout(() => {
-      programmaticScrollRef.current = false;
-    }, 120);
-  }, [activeSection]);
-
-  const offseasonState = safeJSON(
-    localStorage.getItem(OFFSEASON_STATE_KEY),
-    {}
-  );
-
-  const postseasonState = safeJSON(
-    localStorage.getItem(POSTSEASON_KEY),
-    null
-  );
-
-  const isOffseasonMode = Boolean(
-    location.state?.offseasonMode || offseasonState?.active
-  );
-
-  const isPlayoffMode = Boolean(
-    !isOffseasonMode &&
-      (location.state?.playoffMode || postseasonState)
-  );
-
-  const offseasonReturnTo = location.state?.returnTo || "/offseason";
-  const playoffReturnTo = location.state?.playoffReturnTo || "/playoffs";
-  const offseasonFreeAgentsPath = getOffseasonFreeAgencyReturnPath();
-  const savedAllStars = readSavedAllStars();
-  const upcomingDraftYear = getUpcomingDraftYearForPhase(leagueData || {}, {
-    isOffseasonMode,
-  });
-  const upcomingDraftAvailable = Boolean(
-    leagueData && !isDraftStartedForYear(upcomingDraftYear, leagueData)
-  );
-  const allStarsAvailable = isAllStarsAvailable({
-    leagueData,
-    offseasonState: readAllStarsOffseasonState(),
-    data: savedAllStars,
-  });
-
-  const teamsSorted = useMemo(() => {
-    const teams = Array.isArray(leagueData?.teams)
-      ? leagueData.teams
-      : Object.values(leagueData?.conferences || {}).flat();
-
-    return teams
-      .filter(Boolean)
-      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-  }, [leagueData]);
-
-  const handleControlledTeamChange = (event) => {
-    const nextTeamName = event.target.value;
-    const nextTeam = teamsSorted.find((team) => team?.name === nextTeamName);
-    if (!nextTeam) return;
-    setSelectedTeam(nextTeam);
-  };
-
-  // Keep the Team Hub structure identical in every phase. Only the first
-  // direct tile changes from Schedule to the appropriate return action, while
-  // individual destinations can be disabled when that phase does not allow them.
-  const sectionTiles = {
-    Team: [
-      { name: "View Roster", path: "/roster-view", enabled: true },
-      { name: "Coach Gameplan", path: "/coach-gameplan", enabled: true },
-    ],
-    Stats: [
-      { name: "Statistics", path: "/player-stats", enabled: true },
-      {
-        name: "Playoff Statistics",
-        path: isPlayoffMode || isOffseasonMode ? "/playoff-stats" : "#",
-        enabled: isPlayoffMode || isOffseasonMode,
-      },
-    ],
-    "Front Office": [
-      { name: "Trades", path: "/trades", enabled: !isPlayoffMode },
-      {
-        name: "Free Agents",
-        path: isOffseasonMode ? offseasonFreeAgentsPath : "/free-agents",
-        enabled: !isPlayoffMode,
-      },
-      { name: "Draft Picks", path: "/draft-picks", enabled: true },
-      { name: "Salary Table", path: "/salary-table", enabled: true },
-      {
-        name: "Contract Extensions",
-        path: "/contract-extensions",
-        enabled: !isPlayoffMode && !isOffseasonMode,
-        description: isOffseasonMode
-          ? "Reopens When the Next Season Starts"
-          : "Eligibility, Negotiations, and Future Payroll",
-      },
-    ],
-    Season: [
-      { name: "Standings", path: "/standings", enabled: true },
-      { name: "Playoff Picture", path: "/playoff-picture", enabled: true },
-      { name: "Power Rankings", path: "/power-rankings", enabled: true },
-    ],
-    Scouting: [
-      { name: "Locker Room", path: "/locker-room", enabled: true },
-      { name: "Team Intel", path: "/intel", enabled: true },
-      {
-        name: "Upcoming Draft",
-        path: upcomingDraftAvailable ? "/upcoming-draft" : "#",
-        enabled: upcomingDraftAvailable,
-        description: upcomingDraftAvailable
-          ? "Prospects, Rankings, and Scouting Reports"
-          : "Reopens When the Next Season Starts",
-      },
-    ],
-    Awards: [
-      { name: "Award Tracker", path: "/award-tracker", enabled: true },
-      {
-        name: "View All-Stars",
-        path: allStarsAvailable ? "/all-stars" : "#",
-        enabled: allStarsAvailable,
-      },
-    ],
-    "League History": [
-      { name: "Transaction History", path: "/league-history", enabled: true },
-      { name: "Award History", path: "/award-history", enabled: true },
-      { name: "Past Champions", path: "/past-champions", enabled: true },
-    ],
-  };
-
-  const firstMainItem = isOffseasonMode
-    ? {
-        name: "Return to Offseason Hub",
-        path: offseasonReturnTo,
-        enabled: true,
-        direct: true,
-        description: "Resume Offseason Flow",
-      }
-    : isPlayoffMode
-    ? {
-        name: "Return to Playoffs",
-        path: playoffReturnTo,
-        enabled: true,
-        direct: true,
-        description: "Resume Playoff Bracket",
-      }
-    : {
-        name: "Schedule",
-        path: "/calendar",
-        enabled: true,
-        direct: true,
-        description: "Calendar and Season Simulation",
-      };
-
-  const mainItems = [
-    firstMainItem,
-    { name: "Team", sectionKey: "Team", enabled: true, description: "Roster and Gameplan" },
-    {
-      name: "Stats",
-      sectionKey: "Stats",
-      enabled: true,
-      description: isOffseasonMode
-        ? "Previous Regular Season and Playoff Stats"
-        : isPlayoffMode
-        ? "Regular and Playoff Stats"
-        : "Player and Playoff Stat Tables",
-    },
-    {
-      name: "Front Office",
-      sectionKey: "Front Office",
-      enabled: true,
-      description: "Trades, Free Agency, Picks, Salary",
-    },
-    {
-      name: "Season",
-      sectionKey: "Season",
-      enabled: true,
-      description: "Standings, Playoff Picture, Rankings",
-    },
-    {
-      name: "Scouting",
-      sectionKey: "Scouting",
-      enabled: true,
-      description: "Locker Room, Team Intel, and Draft Board",
-    },
-    {
-      name: "Awards",
-      sectionKey: "Awards",
-      enabled: true,
-      description: "Tracker and All-Star Selections",
-    },
-    {
-      name: "League History",
-      sectionKey: "League History",
-      enabled: true,
-      description: "Transactions, Awards, and Champions",
-    },
-    {
-      name: "Settings",
-      path: "/settings",
-      enabled: true,
-      direct: true,
-      description: "Trade Rules and League Options",
-    },
-  ];
-
-  const currentSection = activeSection && sectionTiles[activeSection] ? activeSection : null;
-  const activeSectionTiles = currentSection ? sectionTiles[currentSection] || [] : [];
-  const tiles = currentSection ? activeSectionTiles : mainItems;
-
-  useEffect(() => {
-    const row = scrollRowRef.current;
-    if (!row) return undefined;
-
-    const syncScrollbar = () => {
-      const max = Math.max(0, row.scrollWidth - row.clientWidth);
-      setScrollbarState({
-        left: Math.max(0, Math.min(max, row.scrollLeft)),
-        max,
-      });
+    const handlePointerDown = (event) => {
+      if (!searchRef.current?.contains(event.target)) setSearchOpen(false);
     };
-
-    const frame = window.requestAnimationFrame(syncScrollbar);
-    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(syncScrollbar) : null;
-    observer?.observe(row);
-    window.addEventListener("resize", syncScrollbar);
-
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setSearchOpen(false);
+        setSearchQuery("");
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
     return () => {
-      window.cancelAnimationFrame(frame);
-      observer?.disconnect();
-      window.removeEventListener("resize", syncScrollbar);
-    };
-  }, [currentSection, tiles.length]);
-
-  const navigateWithMode = (path, tile = null) => {
-    const hubReturnContext = currentSection
-      ? sectionReturnPayload(currentSection, {
-          isOffseasonMode,
-          isPlayoffMode,
-          offseasonReturnTo,
-          playoffReturnTo,
-        })
-      : null;
-
-    writeTeamHubReturnContext(hubReturnContext);
-
-    const navState = {
-      ...(isOffseasonMode
-        ? {
-            offseasonMode: true,
-            returnTo: offseasonReturnTo,
-          }
-        : {}),
-      ...(isPlayoffMode
-        ? {
-            playoffMode: true,
-            playoffReturnTo,
-          }
-        : {}),
-      ...(hubReturnContext
-        ? {
-            hubSection: hubReturnContext.section,
-            hubSectionLabel: hubReturnContext.label,
-          }
-        : {}),
-    };
-
-    navigate(path, {
-      state: Object.keys(navState).length ? navState : undefined,
-    });
-  };
-
-  const handleTileClick = (tile) => {
-    if (!tile?.enabled) return;
-
-    if (!currentSection && tile.sectionKey) {
-      activeTileIndexRef.current = 0;
-      setActiveTileIndex(0);
-      setActiveSection(tile.sectionKey);
-      return;
-    }
-
-    if (tile.action === "openSeasonBriefing") {
-      window.dispatchEvent(new CustomEvent("bm:open-season-briefing", { detail: { source: "team-hub" } }));
-      return;
-    }
-
-    if (!tile.path || tile.path === "#") return;
-    navigateWithMode(tile.path, tile);
-  };
-
-  const getTileCenterTargetLeft = (index) => {
-    const row = scrollRowRef.current;
-    const node = tileRefs.current[index];
-    if (!row || !node) return null;
-
-    const targetLeft = node.offsetLeft - (row.clientWidth - node.offsetWidth) / 2;
-    const maxLeft = Math.max(0, row.scrollWidth - row.clientWidth);
-    return Math.max(0, Math.min(maxLeft, targetLeft));
-  };
-
-  const nearestTileIndexFromScroll = () => {
-    const row = scrollRowRef.current;
-    if (!row || !tiles.length) return activeTileIndex;
-
-    const maxLeft = Math.max(0, row.scrollWidth - row.clientWidth);
-
-    // Edge handling matters here. On wide screens the last card cannot always be
-    // centered, so row-center math can incorrectly pick Season/Stats while the
-    // user is clearly parked at Awards/front-office end.
-    if (row.scrollLeft <= 4) return 0;
-    if (maxLeft > 0 && row.scrollLeft >= maxLeft - 4) return tiles.length - 1;
-
-    const rowCenter = row.scrollLeft + row.clientWidth / 2;
-    let nearestIndex = activeTileIndex;
-    let nearestDistance = Number.POSITIVE_INFINITY;
-
-    tileRefs.current.forEach((node, index) => {
-      if (!node) return;
-      const cardCenter = node.offsetLeft + node.offsetWidth / 2;
-      const distance = Math.abs(cardCenter - rowCenter);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestIndex = index;
-      }
-    });
-
-    return nearestIndex;
-  };
-
-  const scrollToTile = (index, behavior = "smooth") => {
-    if (!tiles.length) return;
-    const nextIndex = Math.max(0, Math.min(tiles.length - 1, index));
-    activeTileIndexRef.current = nextIndex;
-    setActiveTileIndex(nextIndex);
-
-    const row = scrollRowRef.current;
-    const targetLeft = getTileCenterTargetLeft(nextIndex);
-    if (!row || targetLeft === null) return;
-
-    if (scrollSnapTimerRef.current) window.clearTimeout(scrollSnapTimerRef.current);
-    if (scrollReleaseTimerRef.current) window.clearTimeout(scrollReleaseTimerRef.current);
-    if (programmaticScrollTimerRef.current) window.clearTimeout(programmaticScrollTimerRef.current);
-
-    programmaticScrollRef.current = true;
-    ignoreScrollUntilRef.current = Date.now() + (behavior === "smooth" ? 520 : 160);
-    row.scrollTo({ left: targetLeft, behavior });
-
-    // End every keyboard/button move by forcing the intended card. Do not let
-    // scrollbar position or native scroll-snap reinterpret the active card.
-    programmaticScrollTimerRef.current = window.setTimeout(() => {
-      const finalLeft = getTileCenterTargetLeft(nextIndex);
-      if (finalLeft !== null) row.scrollTo({ left: finalLeft, behavior: "auto" });
-      activeTileIndexRef.current = nextIndex;
-      setActiveTileIndex(nextIndex);
-      programmaticScrollRef.current = false;
-      ignoreScrollUntilRef.current = Date.now() + 160;
-    }, behavior === "smooth" ? 280 : 40);
-  };
-
-  const moveTileFocus = (direction) => {
-    if (!tiles.length) return;
-
-    const currentIndex = Math.max(0, Math.min(tiles.length - 1, Number(activeTileIndexRef.current || 0)));
-    const nextIndex = currentIndex + direction;
-
-    // Hard clamp: at the edge, do absolutely nothing. No wrap, no scroll
-    // recalc, no nearest-card guess.
-    if (nextIndex < 0 || nextIndex >= tiles.length) return;
-
-    scrollToTile(nextIndex, "smooth");
-  };
-
-  const handleHubKeyDown = (event) => {
-    const tagName = String(event.target?.tagName || "").toLowerCase();
-    if (["input", "select", "textarea"].includes(tagName)) return;
-
-    if (event.key === "Escape" || event.key === "Backspace") {
-      if (currentSection) {
-        event.preventDefault();
-        activeTileIndexRef.current = 0;
-        setActiveTileIndex(0);
-        setActiveSection(null);
-      }
-      return;
-    }
-
-    if (event.key === "ArrowRight" || event.key === "d" || event.key === "D") {
-      event.preventDefault();
-      moveTileFocus(1);
-      return;
-    }
-
-    if (event.key === "ArrowLeft" || event.key === "a" || event.key === "A") {
-      event.preventDefault();
-      moveTileFocus(-1);
-      return;
-    }
-
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      handleTileClick(tiles[activeTileIndexRef.current] || tiles[activeTileIndex]);
-    }
-  };
-
-  const snapManualScrollToNearestTile = () => {
-    if (!tiles.length) return;
-    const nearestIndex = nearestTileIndexFromScroll();
-    activeTileIndexRef.current = nearestIndex;
-    setActiveTileIndex(nearestIndex);
-    scrollToTile(nearestIndex, "smooth");
-  };
-
-  const handleRowScroll = () => {
-    // Navigation is intentionally owned by activeTileIndex. Native scroll events
-    // were causing edge-card jumps, so the row no longer changes selection.
-    const row = scrollRowRef.current;
-    if (!row) return;
-    const max = Math.max(0, row.scrollWidth - row.clientWidth);
-    setScrollbarState({
-      left: Math.max(0, Math.min(max, row.scrollLeft)),
-      max,
-    });
-  };
-
-  const handleScrollbarChange = (event) => {
-    const row = scrollRowRef.current;
-    if (!row) return;
-    const nextLeft = Math.max(0, Math.min(scrollbarState.max, Number(event.target.value || 0)));
-    row.scrollTo({ left: nextLeft, behavior: "auto" });
-    setScrollbarState((current) => ({ ...current, left: nextLeft }));
-  };
-
-
-  const handleCarouselWheel = (event) => {
-    const row = scrollRowRef.current;
-    if (!row) return;
-    const max = Math.max(0, row.scrollWidth - row.clientWidth);
-    if (max <= 0) return;
-
-    const horizontalDelta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
-      ? event.deltaX
-      : event.deltaY;
-    if (!horizontalDelta) return;
-
-    event.preventDefault();
-    const nextLeft = Math.max(0, Math.min(max, row.scrollLeft + horizontalDelta));
-    row.scrollTo({ left: nextLeft, behavior: "auto" });
-    setScrollbarState({ left: nextLeft, max });
-  };
-
-  useEffect(() => {
-    return () => {
-      if (scrollSnapTimerRef.current) window.clearTimeout(scrollSnapTimerRef.current);
-      if (scrollReleaseTimerRef.current) window.clearTimeout(scrollReleaseTimerRef.current);
-      if (programmaticScrollTimerRef.current) window.clearTimeout(programmaticScrollTimerRef.current);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, []);
 
-  useEffect(() => {
-    const onWindowKeyDown = (event) => {
-      if (event.defaultPrevented || shouldIgnoreHubShortcut(event)) return;
-      const key = event.key;
-      const isNavKey =
-        key === "ArrowRight" ||
-        key === "ArrowLeft" ||
-        key === "a" ||
-        key === "A" ||
-        key === "d" ||
-        key === "D" ||
-        key === "Enter" ||
-        key === " " ||
-        key === "Escape" ||
-        key === "Backspace";
+  const teams = useMemo(() => getAllTeams(leagueData || {}), [leagueData]);
 
-      if (!isNavKey) return;
-      hubRef.current?.focus?.({ preventScroll: true });
-      handleHubKeyDown(event);
-    };
+  const teamsSorted = useMemo(
+    () => [...teams].sort((a, b) => teamNameOf(a).localeCompare(teamNameOf(b))),
+    [teams]
+  );
 
-    window.addEventListener("keydown", onWindowKeyDown);
-    return () => window.removeEventListener("keydown", onWindowKeyDown);
-  }, [activeTileIndex, currentSection, tiles]);
+  const teamMap = useMemo(
+    () => new Map(teams.map((team) => [teamNameOf(team), team])),
+    [teams]
+  );
+
+  // TEAM HUB GLOBAL SEARCH INDEX PASS 25
+  const searchablePlayers = useMemo(
+    () => collectSearchablePlayers(leagueData || {}, teams),
+    [leagueData, teams]
+  );
+
+  const searchResults = useMemo(() => {
+    const query = normalizeSearchText(searchQuery);
+    if (!query) return { teams: [], players: [] };
+
+    const teamResults = teamsSorted
+      .map((team) => {
+        const identity = splitTeamIdentity(team);
+        const scores = [
+          searchMatchScore(teamNameOf(team), query),
+          searchMatchScore(identity.city, query),
+          searchMatchScore(identity.nickname, query),
+          searchMatchScore(teamAbbr(team), query),
+        ];
+        return { kind: "team", team, score: Math.min(...scores) };
+      })
+      .filter((result) => Number.isFinite(result.score))
+      .sort((a, b) => a.score - b.score || teamNameOf(a.team).localeCompare(teamNameOf(b.team)))
+      .slice(0, 4);
+
+    const playerResults = searchablePlayers
+      .map((entry) => {
+        const nameScore = searchMatchScore(playerNameOf(entry.player), query);
+        const teamScore = searchMatchScore(entry.teamName, query);
+        const positionScore = searchMatchScore(entry.player?.pos || entry.player?.position || "", query);
+        const score = Math.min(
+          nameScore,
+          Number.isFinite(teamScore) ? teamScore + 4 : Number.POSITIVE_INFINITY,
+          Number.isFinite(positionScore) ? positionScore + 6 : Number.POSITIVE_INFINITY
+        );
+        return { kind: "player", ...entry, score };
+      })
+      .filter((result) => Number.isFinite(result.score))
+      .sort((a, b) => a.score - b.score || playerNameOf(a.player).localeCompare(playerNameOf(b.player)) || playerOverall(b.player) - playerOverall(a.player))
+      .slice(0, 6);
+
+    return { teams: teamResults, players: playerResults };
+  }, [searchQuery, teamsSorted, searchablePlayers]);
+
+  const schedule = useMemo(() => {
+    const raw = readScheduleFromStorage() || {};
+    return hydrateScheduleTeamMetadata(raw, leagueData || {});
+  }, [leagueData, selectedTeam?.name]);
+
+  const results = useMemo(
+    () => loadRegularSeasonResultsV3FromStorage(),
+    [leagueData, selectedTeam?.name]
+  );
+
+  const flatGames = useMemo(
+    () =>
+      Object.entries(schedule || {})
+        .flatMap(([date, games]) =>
+          (Array.isArray(games) ? games : []).map((game) => ({
+            ...game,
+            date: game?.date || date,
+          }))
+        )
+        .sort((a, b) => String(a.date || "").localeCompare(String(b.date || ""))),
+    [schedule]
+  );
+
+  const conferenceLookup = useMemo(
+    () => buildConferenceLookup(leagueData || {}, teams),
+    [leagueData, teams]
+  );
+
+  const standings = useMemo(
+    () =>
+      computeCanonicalStandings({
+        teams,
+        scheduleByDate: schedule,
+        resultsById: results,
+        confOf: (teamName) =>
+          conferenceLookup.get(normalizeStandingsTeamName(teamName)) || "",
+      }),
+    [teams, schedule, results, conferenceLookup]
+  );
+
+  const selectedTeamName = selectedTeam?.name || "";
+  const teamIdentity = useMemo(() => splitTeamIdentity(selectedTeam || {}), [selectedTeam]);
+
+  const selectedGames = useMemo(
+    () =>
+      flatGames.filter(
+        (game) => game?.home === selectedTeamName || game?.away === selectedTeamName
+      ),
+    [flatGames, selectedTeamName]
+  );
+
+  const completedGames = useMemo(
+    () =>
+      selectedGames
+        .map((game) => ({ game, score: parseGameScore(game, results) }))
+        .filter((entry) => entry.score)
+        .sort((a, b) => String(b.game.date || "").localeCompare(String(a.game.date || ""))),
+    [selectedGames, results]
+  );
+
+  const upcomingGames = useMemo(
+    () =>
+      selectedGames
+        .filter((game) => !parseGameScore(game, results))
+        .slice(0, 6),
+    [selectedGames, results]
+  );
+
+  const selectedStanding = useMemo(() => {
+    if (!selectedTeamName) return null;
+    return (
+      standings?.[selectedTeamName] ||
+      Object.values(standings || {}).find(
+        (row) =>
+          normalizeStandingsTeamName(row?.team) ===
+          normalizeStandingsTeamName(selectedTeamName)
+      ) ||
+      null
+    );
+  }, [standings, selectedTeamName]);
+
+  const conference = useMemo(
+    () =>
+      conferenceLookup.get(normalizeStandingsTeamName(selectedTeamName)) ||
+      selectedStanding?.conf ||
+      selectedTeam?.conference ||
+      "",
+    [conferenceLookup, selectedStanding, selectedTeam, selectedTeamName]
+  );
+
+  const conferenceTeams = useMemo(() => {
+    const names = teams
+      .filter(
+        (team) =>
+          (conferenceLookup.get(normalizeStandingsTeamName(teamNameOf(team))) ||
+            team?.conference ||
+            "") === conference
+      )
+      .map(teamNameOf)
+      .filter(Boolean);
+
+    return names.sort((a, b) => compareCanonicalTeams(a, b, standings));
+  }, [teams, conferenceLookup, conference, standings]);
+
+  const leagueOrder = useMemo(
+    () => teams.map(teamNameOf).filter(Boolean).sort((a, b) => compareCanonicalTeams(a, b, standings)),
+    [teams, standings]
+  );
+
+  const conferenceRank = conferenceTeams.indexOf(selectedTeamName) + 1;
+  const leagueRank = leagueOrder.indexOf(selectedTeamName) + 1;
+
+  const offenseOrder = useMemo(
+    () =>
+      Object.values(standings || {})
+        .filter((row) => Number(row?.games || row?.gp || 0) > 0)
+        .sort(
+          (a, b) =>
+            Number(b?.pf || 0) / Math.max(1, Number(b?.games || b?.gp || 0)) -
+            Number(a?.pf || 0) / Math.max(1, Number(a?.games || a?.gp || 0))
+        ),
+    [standings]
+  );
+
+  const defenseOrder = useMemo(
+    () =>
+      Object.values(standings || {})
+        .filter((row) => Number(row?.games || row?.gp || 0) > 0)
+        .sort(
+          (a, b) =>
+            Number(a?.pa || 0) / Math.max(1, Number(a?.games || a?.gp || 0)) -
+            Number(b?.pa || 0) / Math.max(1, Number(b?.games || b?.gp || 0))
+        ),
+    [standings]
+  );
+
+  const offenseRank =
+    offenseOrder.findIndex(
+      (row) =>
+        normalizeStandingsTeamName(row?.team) ===
+        normalizeStandingsTeamName(selectedTeamName)
+    ) + 1;
+
+  const defenseRank =
+    defenseOrder.findIndex(
+      (row) =>
+        normalizeStandingsTeamName(row?.team) ===
+        normalizeStandingsTeamName(selectedTeamName)
+    ) + 1;
+
+  const last10 = completedGames.slice(0, 10).reduce(
+    (acc, entry) => {
+      const { game, score } = entry;
+      const selectedIsHome = game.home === selectedTeamName;
+      const own = selectedIsHome ? score.home : score.away;
+      const opp = selectedIsHome ? score.away : score.home;
+      if (own > opp) acc.w += 1;
+      else acc.l += 1;
+      return acc;
+    },
+    { w: 0, l: 0 }
+  );
+
+  const rotation = useMemo(
+    () => (selectedTeam ? readGameplanOrder(selectedTeam) : []),
+    [selectedTeam]
+  );
+
+  const startingFive = rotation.slice(0, 5);
+  const benchFive = rotation.slice(5, 10);
+  const displayedRotation = showBench ? benchFive : startingFive;
+
+  const payroll = useMemo(
+    () =>
+      selectedTeam
+        ? getStandardPlayers(selectedTeam).reduce(
+            (sum, player) => sum + Number(getPlayerSalary(player, leagueData || {}) || 0),
+            0
+          )
+        : 0,
+    [selectedTeam, leagueData]
+  );
+
+  const salaryCap = Number(
+    leagueData?.salaryCap ??
+      leagueData?.capLimit ??
+      leagueData?.financialRules?.salaryCap ??
+      leagueData?.leagueFinancialRules?.salaryCap ??
+      0
+  );
+
+  const ownedFirsts = useMemo(() => {
+    if (!selectedTeamName) return 0;
+    try {
+      return collectOwnedPicksForTeam(leagueData || {}, selectedTeamName).filter(
+        (pick) => Number(pick?.round || 0) === 1
+      ).length;
+    } catch {
+      return 0;
+    }
+  }, [leagueData, selectedTeamName]);
+
+  const draftYear = getUpcomingDraftYearForPhase(leagueData || {}, {
+    isOffseasonMode: phaseLabel() === "Offseason",
+  });
+
+  const topProspects = useMemo(() => {
+    const preview = readUpcomingDraftClassForYear(draftYear);
+    return Array.isArray(preview?.draftClass) ? preview.draftClass.slice(0, 5) : [];
+  }, [draftYear, leagueData]);
+
+  const nextGame = upcomingGames[0] || null;
+  const nextOpponentName = nextGame
+    ? nextGame.home === selectedTeamName
+      ? nextGame.away
+      : nextGame.home
+    : "";
+  const nextOpponent = teamMap.get(nextOpponentName);
+
+  // TEAM HUB GLOBAL SEARCH ACTIONS PASS 25
+  const closeSearch = () => { setSearchOpen(false); setSearchQuery(""); };
+  const openSearchResult = (result) => {
+    if (!result) return;
+    if (result.kind === "team" && result.team) {
+      setSelectedTeam(result.team);
+      closeSearch();
+      return;
+    }
+    if (result.kind === "player" && result.player) {
+      setSearchPlayerCard(result);
+      closeSearch();
+    }
+  };
+  const firstSearchResult = searchResults.teams[0] || searchResults.players[0] || null;
 
   if (!selectedTeam) {
     return (
-      <div className={styles.wrapper}>
-        <p style={{ fontSize: "18px", marginBottom: "16px" }}>No team selected.</p>
-        <button
-          onClick={() => navigate("/team-selector")}
-          style={{
-            padding: "12px 24px",
-            backgroundColor: "#ea580c",
-            borderRadius: "10px",
-            fontWeight: 700,
-            border: "none",
-            cursor: "pointer",
-            color: "white",
-          }}
-        >
-          Back to Team Select
-        </button>
-      </div>
+      <PageFade>
+        <div className={styles.emptyState}>
+          <h1>No team selected</h1>
+          <button type="button" onClick={() => navigate("/team-selector")}>
+            Choose Team
+          </button>
+        </div>
+      </PageFade>
     );
   }
 
-
   return (
     <PageFade>
-      <div
-        ref={hubRef}
-        className={styles.wrapper}
-        tabIndex={0}
-        aria-label="Team Hub navigation"
-      >
-      {teamsSorted.length > 0 && (
-        <div
-          style={{
-            position: "fixed",
-            top: "18px",
-            right: "22px",
-            zIndex: 30,
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "8px 10px",
-            borderRadius: "12px",
-            border: "1px solid rgba(255,255,255,0.12)",
-            background: "rgba(15, 15, 15, 0.86)",
-            boxShadow: "0 12px 30px rgba(0,0,0,0.35)",
-            backdropFilter: "blur(10px)",
-          }}
-        >
-          <span
-            style={{
-              color: "rgba(255,255,255,0.72)",
-              fontSize: "12px",
-              fontWeight: 800,
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-            }}
-          >
-            Control
-          </span>
-          <select
-            value={selectedTeam?.name || ""}
-            onChange={handleControlledTeamChange}
-            title="Switch controlled team"
-            style={{
-              maxWidth: "210px",
-              padding: "7px 32px 7px 10px",
-              borderRadius: "10px",
-              border: "1px solid rgba(251,146,60,0.45)",
-              background: "rgba(23,23,23,0.96)",
-              color: "white",
-              fontSize: "13px",
-              fontWeight: 800,
-              outline: "none",
-              cursor: "pointer",
-            }}
-          >
-            {teamsSorted.map((team) => (
-              <option key={team.name} value={team.name}>
-                {team.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
+      <div className={styles.dashboard}>
+        <div className={styles.topBar}>
+          <div className={styles.seasonContext}>
+            <span className={styles.contextItem}>
+              {seasonLabel(leagueData || {})}
+              <span className={styles.contextChevron}>⌄</span>
+            </span>
+          </div>
 
-      {(isOffseasonMode || isPlayoffMode) && (
-        <div className={styles.modeBadge}>
-          {isOffseasonMode ? "Offseason" : "Playoffs"}
-        </div>
-      )}
-
-      <div className={styles.carouselShell}>
-        <button
-          type="button"
-          className={styles.railArrow}
-          onClick={() => moveTileFocus(-1)}
-          disabled={activeTileIndex <= 0}
-          aria-label="Previous Team Hub option"
-        >
-          ◄
-        </button>
-
-        <div key={currentSection || "main"} ref={scrollRowRef} className={`${styles.scrollRow} ${styles.sectionSwapFade}`} onScroll={handleRowScroll} onWheel={handleCarouselWheel}>
-          {tiles.map((tile, index) => {
-            const enabled = tile.enabled && (tile.sectionKey || tile.path !== "#");
-            const active = index === activeTileIndex;
-            const chipText = currentSection || tile.name;
-
-            return (
-              <div
-                key={`${currentSection || "main"}-${tile.name}`}
-                ref={(node) => { tileRefs.current[index] = node; }}
-                onClick={() => {
-                  activeTileIndexRef.current = index;
-                  setActiveTileIndex(index);
-                  scrollToTile(index, "auto");
-                  handleTileClick(tile);
-                }}
-                tabIndex={enabled ? 0 : -1}
-                aria-current={active ? "true" : undefined}
-                className={`${styles.card} ${active ? styles.activeCard : ""} ${enabled ? "bmRouteCardClickable" : styles.disabled}`}
-                style={{ cursor: enabled ? "pointer" : "not-allowed" }}
-              >
-                <div className={tile.direct ? styles.directChip : styles.sectionChip}>{chipText}</div>
-
-                <img
-                  src={selectedTeam.logo}
-                  alt={selectedTeam.name}
-                  className={styles.logo}
+          <div className={styles.topUtilities}>
+            <div className={styles.searchWrap} ref={searchRef} data-teamhub-search-pass="25">
+              <label className={`${styles.searchShell} ${searchOpen ? styles.searchShellActive : ""}`}>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="11" cy="11" r="6.5" />
+                  <path d="M16 16l4 4" />
+                </svg>
+                <input
+                  type="search"
+                  value={searchQuery}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label="Search players and teams"
+                  aria-expanded={searchOpen && Boolean(searchQuery.trim())}
+                  aria-controls="team-hub-search-results"
+                  placeholder="Search players, teams, etc..."
+                  onFocus={() => setSearchOpen(true)}
+                  onChange={(event) => {
+                    setSearchQuery(event.target.value);
+                    setSearchOpen(true);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && firstSearchResult) {
+                      event.preventDefault();
+                      openSearchResult(firstSearchResult);
+                    }
+                  }}
                 />
+              </label>
 
-                <div className={styles.labelBar}>
-                  <div className={styles.labelBg} />
-                  <div className={styles.labelText}>
-                    <div className={styles.tileName}>{tile.name}</div>
-                    <div className={styles.teamName}>
-                      {tileSubtitle(tile, selectedTeam.name, { allStarsAvailable, isOffseasonMode })}
+              {searchOpen && searchQuery.trim() ? (
+                <div id="team-hub-search-results" className={styles.searchResults} role="listbox">
+                  {searchResults.teams.length ? (
+                    <div className={styles.searchGroup}>
+                      <div className={styles.searchGroupLabel}>Teams</div>
+                      {searchResults.teams.map((result) => (
+                        <button
+                          type="button"
+                          className={styles.searchResult}
+                          key={`team-${teamNameOf(result.team)}`}
+                          onClick={() => openSearchResult(result)}
+                        >
+                          <span className={styles.searchResultMedia}>
+                            <img src={teamLogoOf(result.team)} alt="" />
+                          </span>
+                          <span className={styles.searchResultCopy}>
+                            <strong>{teamNameOf(result.team)}</strong>
+                            <small>Open Team Hub</small>
+                          </span>
+                          <span className={styles.searchResultArrow}>→</span>
+                        </button>
+                      ))}
                     </div>
-                  </div>
+                  ) : null}
+
+                  {searchResults.players.length ? (
+                    <div className={styles.searchGroup}>
+                      <div className={styles.searchGroupLabel}>Players</div>
+                      {searchResults.players.map((result) => (
+                        <button
+                          type="button"
+                          className={styles.searchResult}
+                          key={`player-${result.teamName}-${result.player?.id ?? result.player?.playerId ?? playerNameOf(result.player)}`}
+                          onClick={() => openSearchResult(result)}
+                        >
+                          <span className={`${styles.searchResultMedia} ${styles.searchPlayerMedia}`}>
+                            {playerHeadshotOf(result.player) ? (
+                              <img src={playerHeadshotOf(result.player)} alt="" />
+                            ) : (
+                              <span>{playerNameOf(result.player).slice(0, 1)}</span>
+                            )}
+                          </span>
+                          <span className={styles.searchResultCopy}>
+                            <strong>{playerNameOf(result.player)}</strong>
+                            <small>
+                              {result.player?.pos || result.player?.position || "—"}
+                              {result.teamName ? ` · ${result.teamName}` : ""}
+                            </small>
+                          </span>
+                          <span className={styles.searchPlayerOverall}>{playerOverall(result.player)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {!searchResults.teams.length && !searchResults.players.length ? (
+                    <div className={styles.searchEmpty}>No matching players or teams.</div>
+                  ) : null}
                 </div>
-              </div>
-            );
-          })}
+              ) : null}
+            </div>
+
+            <button
+              type="button"
+              className={styles.bellButton}
+              title="Notifications"
+              aria-label="Notifications"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18 9a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+                <path d="M10 21h4" />
+              </svg>
+            </button>
+          </div>
+
         </div>
 
-        <button
-          type="button"
-          className={styles.railArrow}
-          onClick={() => moveTileFocus(1)}
-          disabled={activeTileIndex >= tiles.length - 1}
-          aria-label="Next Team Hub option"
+        <section
+          className={styles.teamBanner}
+          style={bannerBoxStyle(bannerLayout.banner)}
         >
-          ►
-        </button>
+          <img
+            className={styles.bannerWatermark}
+            src={teamLogoOf(selectedTeam)}
+            alt=""
+            aria-hidden="true"
+            style={bannerWatermarkStyle(bannerLayout.watermark)}
+          />
 
-        <input
-          type="range"
-          min="0"
-          max={Math.max(1, scrollbarState.max)}
-          step="1"
-          value={Math.min(scrollbarState.left, Math.max(1, scrollbarState.max))}
-          onChange={handleScrollbarChange}
-          onWheel={handleCarouselWheel}
-          onPointerUp={snapManualScrollToNearestTile}
-          onKeyUp={(event) => {
-            if (["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(event.key)) {
-              snapManualScrollToNearestTile();
-            }
-          }}
-          disabled={scrollbarState.max <= 0}
-          className={styles.bottomScrollbar}
-          aria-label="Scroll Team Hub options"
-        />
+          <div
+            className={styles.teamIdentity}
+            style={bannerBlockStyle(bannerLayout.identityBlock)}
+          >
+            <img
+              className={styles.teamLogo}
+              src={teamLogoOf(selectedTeam)}
+              alt=""
+              style={bannerLogoStyle(bannerLayout.logo)}
+            />
+            <div className={styles.teamWordmark}>
+              <div
+                className={styles.teamCity}
+                style={bannerTextStyle(bannerLayout.teamCity)}
+              >
+                {teamIdentity.city || selectedTeamName}
+              </div>
+              <h1 style={bannerTextStyle(bannerLayout.teamName)}>
+                {teamIdentity.nickname || selectedTeamName}
+              </h1>
+            </div>
+          </div>
+
+          <div
+            className={styles.heroMetric}
+            style={bannerBlockStyle(bannerLayout.recordBlock)}
+          >
+            <span style={bannerTextStyle(bannerLayout.recordLabel)}>Record</span>
+            <strong style={bannerTextStyle(bannerLayout.recordValue)}>
+              {selectedStanding
+                ? `${Number(selectedStanding.wins || 0)} - ${Number(selectedStanding.losses || 0)}`
+                : "—"}
+            </strong>
+            <small style={bannerTextStyle(bannerLayout.recordStanding)}>
+              {conferenceRank > 0 ? `${ordinal(conferenceRank)} in ${conference || "Conference"}` : "—"}
+            </small>
+          </div>
+
+          <div
+            className={styles.heroMetric}
+            style={bannerBlockStyle(bannerLayout.last10Block)}
+          >
+            <span style={bannerTextStyle(bannerLayout.last10Label)}>Last 10</span>
+            <strong style={bannerTextStyle(bannerLayout.last10Value)}>
+              {completedGames.length ? `${last10.w} - ${last10.l}` : "—"}
+            </strong>
+            <small style={bannerTextStyle(bannerLayout.last10Subtext)}>
+              {completedGames.length ? `${Math.min(10, completedGames.length)} games` : "No results yet"}
+            </small>
+          </div>
+
+          <div
+            className={styles.nextGame}
+            style={bannerBlockStyle(bannerLayout.nextGameBlock)}
+          >
+            <div>
+              <span style={bannerTextStyle(bannerLayout.nextGameLabel)}>Next Game</span>
+              <strong style={bannerTextStyle(bannerLayout.nextGameValue)}>
+                {nextOpponentName ? `vs ${teamAbbr(nextOpponent || { name: nextOpponentName })}` : "—"}
+              </strong>
+            </div>
+            {nextOpponentName ? (
+              <img
+                src={teamLogoOf(nextOpponent || {})}
+                alt=""
+                style={bannerLogoStyle(bannerLayout.nextGameLogo)}
+              />
+            ) : null}
+            <small
+              style={bannerTextStyle(nextGame ? bannerLayout.nextGameDate : bannerLayout.nextGameEmpty)}
+            >
+              {nextGame ? formatGameDate(nextGame.date) : "No game scheduled"}
+            </small>
+          </div>
+        </section>
+
+        <div className={styles.topGrid}>
+          <section className={styles.panel}>
+            <div className={styles.panelHeading}>
+              <h2>Upcoming Games</h2>
+              <button type="button" onClick={() => navigate("/calendar")}>View Calendar →</button>
+            </div>
+            <div className={styles.gameList}>
+              {upcomingGames.length ? upcomingGames.map((game) => {
+                const isHome = game.home === selectedTeamName;
+                const opponentName = isHome ? game.away : game.home;
+                const opponent = teamMap.get(opponentName) || {};
+                const opponentStanding = standings?.[opponentName];
+                return (
+                  <div className={styles.gameRow} key={game.id || `${game.date}-${opponentName}`}>
+                    <span>{formatGameDate(game.date)}</span>
+                    <span className={styles.homeAway}>{isHome ? "vs" : "@"}</span>
+                    <img src={teamLogoOf(opponent)} alt="" />
+                    <strong>{teamAbbr(opponent || { name: opponentName })}</strong>
+                    <em>
+                      {opponentStanding
+                        ? `${Number(opponentStanding.wins || 0)} - ${Number(opponentStanding.losses || 0)}`
+                        : "—"}
+                    </em>
+                  </div>
+                );
+              }) : <div className={styles.emptyPanel}>No upcoming regular-season games.</div>}
+            </div>
+          </section>
+
+          <section className={styles.panel}>
+            <div className={styles.panelHeading}>
+              <h2>Team Overview</h2>
+            </div>
+            <div className={styles.metricList}>
+              <div><span>Record</span><strong>{selectedStanding ? `${selectedStanding.wins}-${selectedStanding.losses}` : "—"}</strong></div>
+              <div><span>Conference Rank</span><strong>{conferenceRank > 0 ? ordinal(conferenceRank) : "—"}</strong></div>
+              <div><span>Offensive Rank</span><strong>{offenseRank > 0 ? ordinal(offenseRank) : "—"}</strong></div>
+              <div><span>Defensive Rank</span><strong>{defenseRank > 0 ? ordinal(defenseRank) : "—"}</strong></div>
+              <div><span>Roster Count</span><strong>{getStandardPlayers(selectedTeam).length}</strong></div>
+              <div><span>Payroll</span><strong>{formatMoney(payroll)}</strong></div>
+              <div><span>Cap Space</span><strong>{salaryCap ? formatMoney(salaryCap - payroll) : "—"}</strong></div>
+            </div>
+          </section>
+
+          <section className={styles.panel}>
+            <div className={styles.panelHeading}>
+              <h2>Standings</h2>
+              <button type="button" onClick={() => navigate("/standings")}>Full Standings →</button>
+            </div>
+            <div className={styles.standingsHeader}>
+              <span>#</span><span>Team</span><span>W</span><span>L</span><span>GB</span>
+            </div>
+            <div className={styles.standingsRows}>
+              {conferenceTeams.slice(0, 5).map((name, index) => {
+                const row = standings?.[name] || {};
+                const team = teamMap.get(name) || {};
+                const leader = standings?.[conferenceTeams[0]] || {};
+                const leaderPct = Number(leader?.wins || 0) - Number(leader?.losses || 0);
+                const rowPct = Number(row?.wins || 0) - Number(row?.losses || 0);
+                const gb = index === 0 ? "—" : ((leaderPct - rowPct) / 2).toFixed(1);
+                return (
+                  <div
+                    key={name}
+                    className={`${styles.standingRow} ${name === selectedTeamName ? styles.selectedStanding : ""}`}
+                  >
+                    <span>{index + 1}</span>
+                    <span className={styles.standingTeam}>
+                      <img src={teamLogoOf(team)} alt="" />
+                      {name}
+                    </span>
+                    <span>{Number(row?.wins || 0)}</span>
+                    <span>{Number(row?.losses || 0)}</span>
+                    <span>{gb}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+
+        <div className={styles.middleGrid}>
+          <section className={`${styles.panel} ${styles.rotationPanel}`}>
+            <div className={styles.panelHeading}>
+              <h2>{showBench ? "Bench" : "Starting Five"}</h2>
+              <div className={styles.panelActions}>
+                <button type="button" onClick={() => setShowBench((current) => !current)}>
+                  {showBench ? "View Starters" : "View Bench"}
+                </button>
+                <span />
+                <button type="button" onClick={() => navigate("/coach-gameplan")}>
+                  Coach Gameplan →
+                </button>
+              </div>
+            </div>
+
+            <div className={styles.playerStrip}>
+              {displayedRotation.length ? displayedRotation.map((player) => (
+                <button
+                  type="button"
+                  className={styles.playerCard}
+                  key={player?.name}
+                  onClick={() => navigate("/roster-view")}
+                >
+                  <div className={styles.playerVisual}>
+                    <div className={styles.playerRatingBadge}>
+                      <PlayerRatingRing
+                        overall={playerOverall(player)}
+                        potential={Number(
+                          player?.potential ??
+                          player?.pot ??
+                          player?.POT ??
+                          player?.potentialRating ??
+                          player?.ratingPotential ??
+                          playerOverall(player)
+                        ) || playerOverall(player)}
+                        size={58}
+                      />
+                    </div>
+                    <small className={styles.playerPositionBadge}>{player?.pos || "—"}</small>
+                    <img className={styles.playerPortrait} src={playerHeadshotOf(player)} alt="" />
+                  </div>
+                  <div className={styles.playerCardMeta}>
+                    <strong>{player?.name}</strong>
+                  </div>
+                </button>
+              )) : <div className={styles.emptyPanel}>No saved rotation available.</div>}
+            </div>
+          </section>
+
+          <section className={styles.panel}>
+            <div className={styles.panelHeading}>
+              <h2>Recent Games</h2>
+              <button type="button" onClick={() => navigate("/calendar")}>View Schedule →</button>
+            </div>
+            <div className={styles.recentList}>
+              {completedGames.slice(0, 5).map(({ game, score }) => {
+                const isHome = game.home === selectedTeamName;
+                const opponentName = isHome ? game.away : game.home;
+                const opponent = teamMap.get(opponentName) || {};
+                const own = isHome ? score.home : score.away;
+                const opp = isHome ? score.away : score.home;
+                const won = own > opp;
+                return (
+                  <div className={styles.recentRow} key={game.id}>
+                    <span>{formatGameDate(game.date)}</span>
+                    <span>{isHome ? "vs" : "@"}</span>
+                    <img src={teamLogoOf(opponent)} alt="" />
+                    <strong>{teamAbbr(opponent || { name: opponentName })}</strong>
+                    <b className={won ? styles.win : styles.loss}>{won ? "W" : "L"}</b>
+                    <em>{own} - {opp}</em>
+                  </div>
+                );
+              })}
+              {!completedGames.length ? <div className={styles.emptyPanel}>No completed games yet.</div> : null}
+            </div>
+          </section>
+        </div>
+
+        <div className={styles.bottomGrid}>
+          <section className={styles.panel}>
+            <div className={styles.panelHeading}>
+              <h2>Top Prospects</h2>
+              <button type="button" onClick={() => navigate("/upcoming-draft")}>View Draft Class →</button>
+            </div>
+            {topProspects.length ? (
+              <div className={styles.prospectGrid}>
+                {topProspects.map((prospect, index) => (
+                  <div className={styles.prospect} key={prospect?.id || prospect?.name}>
+                    <span>{index + 1}</span>
+                    {getProspectHeadshot(prospect) ? <img src={getProspectHeadshot(prospect)} alt="" /> : <i />}
+                    <strong>{prospect?.name || prospect?.playerName || `Prospect ${index + 1}`}</strong>
+                    <small>{prospect?.pos || prospect?.position || "—"}</small>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className={styles.emptyPanel}>No draft preview has been generated for {draftYear} yet.</div>
+            )}
+          </section>
+
+          <section className={styles.panel}>
+            <div className={styles.panelHeading}>
+              <h2>League News</h2>
+              <button type="button" onClick={() => navigate("/league-history")}>View All →</button>
+            </div>
+            <div className={styles.newsEmpty}>
+              <strong>No persisted league headlines yet.</strong>
+              <span>Trades, signings, awards and other recorded events can populate this panel later.</span>
+            </div>
+          </section>
+        </div>
       </div>
 
-      {currentSection && (
-        <button
-          type="button"
-          className={styles.sectionBottomBackButton}
-          onClick={() => {
-            activeTileIndexRef.current = 0;
-            setActiveTileIndex(0);
-            setActiveSection(null);
-          }}
-        >
-          <span aria-hidden="true">←</span>
-          <span>Team Hub</span>
-        </button>
-      )}
-    </div>
+      {searchPlayerCard ? (
+        <div data-teamhub-player-search-modal="25">
+          <PlayerCardModal
+            open={Boolean(searchPlayerCard)}
+            player={searchPlayerCard.player}
+            teamName={searchPlayerCard.teamName || "Free Agent"}
+            teamLogo={searchPlayerCard.teamLogo || ""}
+            leagueData={leagueData}
+            onClose={() => setSearchPlayerCard(null)}
+          />
+        </div>
+      ) : null}
     </PageFade>
   );
 }

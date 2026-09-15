@@ -3247,7 +3247,7 @@ updateOffseasonState({
         </div>
       )}
 
-      <div className="w-full flex justify-center px-4">
+      <div className="w-full flex justify-center">
         <div className="relative bg-neutral-800/95 backdrop-blur-md border border-neutral-700 w-full max-w-7xl px-5 pt-3 pb-1 rounded-t-xl shadow-2xl">
           <div className="pointer-events-none absolute left-0 right-0 bottom-0 z-20 h-[3px] bg-white opacity-60"></div>
 

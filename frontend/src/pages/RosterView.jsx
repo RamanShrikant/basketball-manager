@@ -7,7 +7,6 @@ import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./RosterView.module.css";
 import PageFade from "../components/PageFade";
 import PlayerPortraitFrame from "../components/PlayerPortraitFrame";
-import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
 import "../styles/BMAnimations.css";
 import { getLeagueFinancialRules, getRookieSalaryForPick } from "../utils/leagueFinancials.js";
@@ -104,8 +103,6 @@ export default function RosterView() {
   );
   const [releaseModalOpen, setReleaseModalOpen] = useState(false);
   const [releaseTargetPlayer, setReleaseTargetPlayer] = useState(null);
-  const [playerActionOpen, setPlayerActionOpen] = useState(false);
-  const [actionTargetPlayer, setActionTargetPlayer] = useState(null);
   const [playerCardOpen, setPlayerCardOpen] = useState(false);
   const [cardTargetPlayer, setCardTargetPlayer] = useState(null);
   const [viewTeamName, setViewTeamName] = useState(null);
@@ -653,7 +650,7 @@ export default function RosterView() {
   };
 
   useKeyboardTeamNavigation({
-    enabled: totalSlots > 1 && !releaseModalOpen && !playerActionOpen && !playerCardOpen,
+    enabled: totalSlots > 1 && !releaseModalOpen && !playerCardOpen,
     onPrevious: () => handleTeamSwitch("prev"),
     onNext: () => handleTeamSwitch("next"),
   });
@@ -742,28 +739,15 @@ export default function RosterView() {
     items: sortedPlayers,
     selectedItem: selectedPlayer,
     onSelect: setSelectedPlayer,
-    enabled: !playerActionOpen && !playerCardOpen && !releaseModalOpen,
+    enabled: !playerCardOpen && !releaseModalOpen,
     getKey: (row) => row?.id || row?.playerId || row?.name,
   });
 
-  const openPlayerActions = (player, e) => {
-    e?.stopPropagation?.();
-    if (!player) return;
-    setSelectedPlayer(player);
-    setActionTargetPlayer(player);
-    setPlayerActionOpen(true);
-  };
-
-  const closePlayerActions = () => {
-    setPlayerActionOpen(false);
-    setActionTargetPlayer(null);
-  };
 
   const openPlayerCard = (player) => {
     if (!player) return;
     setCardTargetPlayer(player);
     setPlayerCardOpen(true);
-    closePlayerActions();
   };
 
   const closePlayerCard = () => {
@@ -1066,10 +1050,7 @@ export default function RosterView() {
 
     if (assignedPlayer) {
       setSelectedPlayer(assignedPlayer);
-      setActionTargetPlayer(assignedPlayer);
     }
-
-    closePlayerActions();
   };
 
   const handleUpgradeTwoWayToStandard = (player) => {
@@ -1117,10 +1098,7 @@ export default function RosterView() {
 
     if (upgradedPlayer) {
       setSelectedPlayer(upgradedPlayer);
-      setActionTargetPlayer(upgradedPlayer);
     }
-
-    closePlayerActions();
   };
 
   const handleReleaseTwoWayToFreeAgency = (player) => {
@@ -1164,14 +1142,12 @@ export default function RosterView() {
 
     persistUpdatedLeagueAndTeam(updated, selectedTeam.name);
     setSelectedPlayer(null);
-    closePlayerActions();
   };
 
-  const openReleaseFromActions = (player) => {
+  const openReleaseForPlayer = (player) => {
     if (!player || isAllView || !canManageCurrentRoster) return;
     setReleaseTargetPlayer(player);
     setReleaseModalOpen(true);
-    closePlayerActions();
   };
 
   const closeReleaseModal = () => {
@@ -1258,138 +1234,222 @@ export default function RosterView() {
     !isAllView && standardRosterCount > regularSeasonStandardRosterLimit;
   const currentLeagueDate = readLeagueClock()?.date || null;
   const selectedPlayerInjured = isPlayerInjured(player, currentLeagueDate);
+  const activeRosterLogo = !isAllView
+    ? (
+        activeRosterTeam?.logo ||
+        activeRosterTeam?.teamLogo ||
+        activeRosterTeam?.newTeamLogo ||
+        activeRosterTeam?.image ||
+        activeRosterTeam?.logoUrl ||
+        ""
+      )
+    : "";
+  const selectedTwoWayBlockReason =
+    !isAllView &&
+    canManageCurrentRoster &&
+    player &&
+    !player?.isTwoWay &&
+    !player?.isStash
+      ? getTwoWayAssignmentBlockReason(player, activeRosterTeam)
+      : "";
 
   return (
     <PageFade>
     <div className={`${styles.rosterPage} ${styles.viewportShell} h-full min-h-0 overflow-hidden text-white flex flex-col items-center px-4 py-3`}>
-      {/* Static header with pinned arrows */}
-      <div className="w-full max-w-7xl flex shrink-0 items-center justify-between mb-2 select-none">
-        <div className="w-24 flex items-center justify-start">
-          <button
-            onClick={() => handleTeamSwitch("prev")}
-            className="text-2xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
-            title="Previous Team"
-          >
-            ◄
-          </button>
-        </div>
-        <h1 className="text-3xl font-extrabold text-orange-500 text-center leading-none">
-          {headerTitle}
-        </h1>
-        <div className="w-24 flex items-center justify-end">
+      {/* Compact roster header: team identity + live roster counts + pinned team arrows */}
+      <div className={`${styles.rosterHeaderBar} w-full max-w-7xl shrink-0 mb-2 select-none`}>
+        <button
+          onClick={() => handleTeamSwitch("prev")}
+          className={styles.teamSwitchButton}
+          title="Previous Team"
+          aria-label="Previous Team"
+        >
+          ◄
+        </button>
+
+        <div className={styles.rosterIdentityCluster}>
+          <div className={styles.rosterIdentity}>
+            {!isAllView && activeRosterLogo ? (
+              <img
+                src={activeRosterLogo}
+                alt=""
+                className={styles.rosterIdentityLogo}
+                aria-hidden="true"
+              />
+            ) : null}
+            <h1 className={styles.rosterIdentityTitle}>{headerTitle}</h1>
+          </div>
+
           <button
             onClick={() => handleTeamSwitch("next")}
-            className="text-2xl text-white hover:text-orange-400 transition-transform active:scale-90 font-bold"
+            className={styles.teamSwitchButton}
             title="Next Team"
+            aria-label="Next Team"
           >
             ►
           </button>
         </div>
+
+        {!isAllView && (
+          <div className={styles.rosterStatusCluster}>
+            <div className={styles.rosterStatusItem}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="7" r="3.2" />
+                <path d="M5.5 20c.4-4 2.6-6.2 6.5-6.2s6.1 2.2 6.5 6.2" />
+              </svg>
+              <div>
+                <div className={styles.rosterStatusLabel}>Standard contracts</div>
+                <div className={styles.rosterStatusValue}>{standardRosterCount}/{regularSeasonStandardRosterLimit}</div>
+              </div>
+            </div>
+
+            <div className={styles.rosterStatusDivider} />
+
+            <div className={styles.rosterStatusItem}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="9" cy="7" r="3" />
+                <path d="M3.8 19c.4-3.6 2.2-5.6 5.2-5.6 3.1 0 4.9 2 5.3 5.6" />
+                <path d="M15.2 4.8a2.8 2.8 0 0 1 0 5.3" />
+                <path d="M16.2 13.5c2.3.5 3.7 2.2 4 5" />
+              </svg>
+              <div>
+                <div className={styles.rosterStatusLabel}>Two-way contracts</div>
+                <div className={styles.rosterStatusValue}>{twoWayRosterCount}/3</div>
+              </div>
+            </div>
+
+            <div className={styles.rosterStatusDivider} />
+
+            <div className={styles.rosterStatusItem}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M5 7h12.5a1.5 1.5 0 0 1 1.5 1.5V19H6.5A1.5 1.5 0 0 1 5 17.5Z" />
+                <path d="M5 9V6.5A2.5 2.5 0 0 1 7.5 4H16" />
+                <path d="M15.5 11.5H19V15h-3.5a1.75 1.75 0 1 1 0-3.5Z" />
+              </svg>
+              <div>
+                <div className={styles.rosterStatusLabel}>Stashes</div>
+                <div className={styles.rosterStatusValue}>{stashRosterCount}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
 
-      {!isAllView && (
-        <div className={`mb-2 w-full max-w-7xl shrink-0 rounded-xl border px-4 py-2 text-xs ${
-          rosterOverRegularSeasonLimit
-            ? "border-orange-400/40 bg-orange-500/10 text-orange-100"
-            : "border-neutral-700 bg-neutral-900/65 text-neutral-300"
-        }`}>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <span className="font-semibold">
-              Standard contracts: {standardRosterCount}/{regularSeasonStandardRosterLimit}
-            </span>
-            <span className="text-emerald-200">
-              Two-way contracts: {twoWayRosterCount}/3
-            </span>
-            <span className="text-amber-200">
-              Stashes: {stashRosterCount}
-            </span>
-            <button
-              type="button"
-              onClick={togglePositionGrouping}
-              aria-pressed={isPositionGrouped}
-              title={isPositionGrouped ? "Return to overall ranking" : "Group roster by position"}
-              className={`inline-flex items-center rounded-lg border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] transition ${
-                isPositionGrouped
-                  ? "border-orange-400/55 bg-orange-500/15 text-orange-100"
-                  : "border-white/10 bg-white/[0.04] text-neutral-300 hover:border-orange-400/35 hover:text-white"
-              }`}
-            >
-              Position
-            </button>
-          </div>
-          {rosterOverRegularSeasonLimit && (
-            <p className="mt-2 text-orange-100">
-              You can carry extra players for now, but before simulating you must either release players or assign eligible first-3-season players to two-way contracts until you are at {regularSeasonStandardRosterLimit} or fewer standard contracts.
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Player Card */}
+      {/* Selected player hero */}
       <div className="relative w-full flex shrink-0 justify-center">
-        <div className="relative bg-neutral-800 w-full max-w-7xl px-5 pt-3 pb-1 rounded-t-xl shadow-lg">
-          <div className="pointer-events-none absolute left-0 right-0 bottom-0 z-20 h-[3px] bg-white opacity-60"></div>
-          <div className="flex items-end justify-between relative">
-            <div className="flex items-end gap-6">
+        <div className={`${styles.selectedPlayerHero} w-full max-w-7xl`}>
+          {!isAllView && activeRosterLogo ? (
+            <img src={activeRosterLogo} alt="" className={styles.selectedPlayerWatermark} aria-hidden="true" />
+          ) : null}
+
+          <div className={styles.selectedPlayerHeroContent}>
+            <div className={styles.selectedPlayerPrimary}>
               <PlayerPortraitFrame
                 src={player?.headshot}
                 player={player}
                 team={activeRosterTeam || selectedTeam}
                 teamName={activeRosterTeam?.name || selectedTeam?.name || ""}
                 alt={player?.name || "Player"}
-                className="h-[116px] w-[150px]"
+                className={styles.selectedPlayerPortrait}
                 fallback={(
-                  <div className="flex h-full w-full items-center justify-center rounded-t-lg bg-neutral-700 text-neutral-300">
-                    No Image
-                  </div>
+                  <div className="flex h-full w-full items-center justify-center rounded-t-lg bg-neutral-800 text-neutral-400">No Image</div>
                 )}
               />
-              <div className="flex flex-col justify-end mb-3">
-                <h2 className="text-[30px] font-bold leading-tight flex items-center gap-3">
-                  <span>{player?.name || "-"}</span>
-                  {player?.isTwoWay && (
-                    <span className="inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-1 text-[12px] font-extrabold text-emerald-200">
-                      2W
-                    </span>
-                  )}
-                  {player?.isStash && (
-                    <span className="inline-flex items-center rounded-full border border-amber-400/25 bg-amber-500/15 px-2 py-1 text-[12px] font-extrabold text-amber-200">
-                      STASH
-                    </span>
-                  )}
+
+              <div className={styles.selectedPlayerInfo}>
+                <div className={styles.selectedPlayerNameRow}>
+                  <h2>{player?.name || "-"}</h2>
+                  {player?.isTwoWay && <span className={styles.twoWayBadge}>2W</span>}
+                  {player?.isStash && <span className={styles.stashBadge}>STASH</span>}
                   {selectedPlayerInjured && (
                     <>
-                      <span className="inline-flex items-center rounded-full border border-red-400/30 bg-red-500/20 px-2 py-1 text-[12px] font-extrabold text-red-100">
-                        INJ
-                      </span>
-                      <span className="inline-flex items-center rounded-full border border-red-400/20 bg-red-950/45 px-2 py-1 text-[11px] font-extrabold text-red-200">
-                        {formatInjuryReturnLabel(player, currentLeagueDate)}
-                      </span>
+                      <span className={styles.injuryBadge}>INJ</span>
+                      <span className={styles.injuryReturnBadge}>{formatInjuryReturnLabel(player, currentLeagueDate)}</span>
                     </>
                   )}
-                </h2>
-                <p className="text-gray-400 text-[16px] mt-0.5">
-                  {player?.pos || "-"}
-                  {player?.secondaryPos ? ` / ${player.secondaryPos}` : ""} • Age{" "}
-                  {player?.age ?? "-"}
-                  {player?.isTwoWay ? " • Two-Way Contract" : ""}
-                  {player?.isStash ? " • Stashed" : ""}
-                </p>
+                </div>
+
+                <div className={styles.selectedPlayerMeta}>
+                  <strong>
+                    {player?.pos || "-"}
+                    {player?.secondaryPos ? ` / ${player.secondaryPos}` : ""}
+                  </strong>
+                  <span className={styles.metaDivider}>|</span>
+                  <strong>Age {player?.age ?? "-"}</strong>
+                  {player?.isTwoWay ? <><span className={styles.metaDivider}>|</span>Two-Way</> : null}
+                  {player?.isStash ? <><span className={styles.metaDivider}>|</span>Stashed</> : null}
+                </div>
+
+                <div className={styles.selectedPlayerActions}>
+                  <button
+                    type="button"
+                    onClick={() => openPlayerCard(player)}
+                    className={styles.playerCardButton}
+                  >
+                    Player Card
+                  </button>
+
+                  {canManageCurrentRoster && !isAllView && (
+                    <button
+                      type="button"
+                      onClick={() => navigate("/coach-gameplan")}
+                      className={styles.gameplanButton}
+                    >
+                      Coach Gameplan
+                    </button>
+                  )}
+
+                  {canManageCurrentRoster &&
+                    !isAllView &&
+                    !player?.isTwoWay &&
+                    !player?.isStash &&
+                    !selectedTwoWayBlockReason && (
+                      <button
+                        type="button"
+                        onClick={() => handleAssignStandardToTwoWay(player)}
+                        className={styles.twoWayActionButton}
+                      >
+                        Assign Two-Way
+                      </button>
+                    )}
+
+                  {canManageCurrentRoster && !isAllView && player?.isTwoWay && (
+                    <button
+                      type="button"
+                      onClick={() => handleUpgradeTwoWayToStandard(player)}
+                      className={styles.upgradeActionButton}
+                    >
+                      Upgrade Standard
+                    </button>
+                  )}
+
+                  {canManageCurrentRoster && !isAllView && !player?.isStash && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        player?.isTwoWay
+                          ? handleReleaseTwoWayToFreeAgency(player)
+                          : openReleaseForPlayer(player)
+                      }
+                      className={styles.releasePlayerButton}
+                    >
+                      Release Player
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
-            <PlayerRatingRing
-              overall={player?.overall}
-              potential={player?.potential}
-              size={82}
-              className="mr-4 mb-2"
-            />
+            <div className={styles.selectedPlayerRating}>
+              <PlayerRatingRing overall={player?.overall} potential={player?.potential} size={88} />
+            </div>
           </div>
         </div>
       </div>
 
       {/* Table */}
-      <div className="w-full flex flex-1 min-h-0 justify-center transition-opacity duration-300 ease-in-out mt-[-1px]">
+      <div className={`${styles.rosterTableRegion} w-full flex flex-1 min-h-0 items-start justify-center transition-opacity duration-300 ease-in-out mt-[-1px]`}>
         <div className={`${styles.tablePanel} ${styles.rosterScroller} bmTableScroller w-full max-w-7xl min-h-0 overflow-auto rounded-b-xl`}>
           <div className="min-w-[1390px] w-max">
             <table className="w-full border-collapse text-center">
@@ -1461,11 +1521,7 @@ export default function RosterView() {
                         </td>
                       )}
 
-                      <td
-                        className="py-1.5 px-3 whitespace-nowrap text-left pl-4"
-                        onDoubleClick={(e) => openPlayerActions(p, e)}
-                        title="Double click for player actions"
-                      >
+                      <td className="py-1.5 px-3 whitespace-nowrap text-left pl-4">
                         <span>{p.name}</span>
                         {p.isTwoWay && (
                           <span className="ml-2 inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-200">
@@ -1483,8 +1539,8 @@ export default function RosterView() {
                           </span>
                         )}
                       </td>
-                      <td className="py-1.5 px-3">{p.pos}</td>
-                      <td className="py-1.5 px-3">{p.age}</td>
+                      <td className="py-1.5 px-3 font-bold">{p.pos}</td>
+                      <td className="py-1.5 px-3 font-bold">{p.age}</td>
                       <td className="py-1.5 px-3" onDoubleClick={handleCellDoubleClick}>
                         {showLetters ? toLetter(p.overall) : p.overall}
                       </td>
@@ -1520,197 +1576,6 @@ export default function RosterView() {
       >
         Back to Team Hub
       </button>
-
-      {playerActionOpen && actionTargetPlayer && (
-        <div
-          className={`${styles.modalLayer} fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 px-4`}
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closePlayerActions();
-          }}
-        >
-          <div className="relative w-full max-w-lg overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 shadow-[0_28px_90px_rgba(0,0,0,0.65)]">
-            <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-orange-600 via-amber-400 to-orange-600" />
-            <div className="absolute -right-16 -top-16 h-44 w-44 rounded-full bg-orange-500/20 blur-3xl" />
-            <div className="absolute -left-20 bottom-0 h-48 w-48 rounded-full bg-amber-400/10 blur-3xl" />
-
-            <div className="relative p-5 sm:p-6">
-              <div className="flex items-center gap-4">
-                <div className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-neutral-900">
-                  <RuntimePlayerPortrait
-                    player={actionTargetPlayer}
-                    team={activeRosterTeam || selectedTeam}
-                    teamName={activeRosterTeam?.name || selectedTeam?.name || ""}
-                    src={actionTargetPlayer?.headshot}
-                    alt={actionTargetPlayer?.name || "Player"}
-                    className="h-full w-full"
-                    fallback={<div className="flex h-full w-full items-center justify-center text-xs font-bold text-neutral-500">No Image</div>}
-                  />
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs font-black uppercase tracking-[0.22em] text-orange-300">
-                    Player Actions
-                  </div>
-                  <h2 className="mt-1 truncate text-2xl font-black text-white">
-                    {actionTargetPlayer?.name || "Player"}
-                    {actionTargetPlayer?.isTwoWay && (
-                      <span className="ml-2 align-middle inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-200">
-                        2W
-                      </span>
-                    )}
-                    {actionTargetPlayer?.isStash && (
-                      <span className="ml-2 align-middle inline-flex items-center rounded-full border border-amber-400/25 bg-amber-500/15 px-2 py-0.5 text-[10px] font-extrabold text-amber-200">
-                        STASH
-                      </span>
-                    )}
-                  </h2>
-                  <div className="mt-1 text-sm font-semibold text-neutral-400">
-                    {actionTargetPlayer?.pos || "-"}
-                    {actionTargetPlayer?.secondaryPos ? ` / ${actionTargetPlayer.secondaryPos}` : ""}
-                    {" • "}Age {actionTargetPlayer?.age ?? "-"}
-                    {" • "}OVR {actionTargetPlayer?.overall ?? "-"}
-                    {actionTargetPlayer?.isTwoWay ? " • Two-Way" : ""}
-                    {actionTargetPlayer?.isStash ? " • Stashed" : ""}
-                  </div>
-                </div>
-
-                <button
-                  onClick={closePlayerActions}
-                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm font-black text-neutral-300 transition hover:bg-white/10 hover:text-white"
-                  title="Close"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="mt-6 grid gap-3">
-                <button
-                  onClick={() => openPlayerCard(actionTargetPlayer)}
-                  className="group flex items-center justify-between rounded-2xl border border-orange-400/25 bg-orange-500/10 px-5 py-4 text-left transition hover:-translate-y-0.5 hover:border-orange-300/50 hover:bg-orange-500/20 hover:shadow-[0_18px_40px_rgba(234,88,12,0.18)]"
-                >
-                  <div>
-                    <div className="text-lg font-black text-white">View Player Card</div>
-                    <div className="mt-1 text-sm font-semibold text-neutral-400">
-                      Mood, history, accolades, contract, ratings, and transactions.
-                    </div>
-                  </div>
-                  <div className="ml-4 rounded-full bg-orange-500 px-3 py-1 text-sm font-black text-white transition group-hover:bg-orange-400">
-                    Open
-                  </div>
-                </button>
-
-                {actionTargetPlayer?.isStash ? (
-                  <div className="rounded-2xl border border-amber-400/25 bg-amber-500/10 px-5 py-4">
-                    <div className="text-lg font-black text-white">Stashed Player</div>
-                    <div className="mt-1 text-sm font-semibold text-neutral-300">
-                      This player is controlled by the team but is not on the 15-man roster, cannot receive minutes, and returns on the next offseason options screen.
-                    </div>
-                  </div>
-                ) : actionTargetPlayer?.isTwoWay ? (
-                  <>
-                    <button
-                      onClick={() => handleUpgradeTwoWayToStandard(actionTargetPlayer)}
-                      disabled={isAllView || !canManageCurrentRoster}
-                      className={`flex items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
-                        isAllView || !canManageCurrentRoster
-                          ? "cursor-not-allowed border-white/10 bg-white/[0.03] opacity-50"
-                          : "border-emerald-400/25 bg-emerald-500/10 hover:-translate-y-0.5 hover:border-emerald-300/50 hover:bg-emerald-500/20 hover:shadow-[0_18px_40px_rgba(16,185,129,0.16)]"
-                      }`}
-                    >
-                      <div>
-                        <div className="text-lg font-black text-white">Upgrade to Standard Contract</div>
-                        <div className="mt-1 text-sm font-semibold text-neutral-400">
-                          Move him from the two-way list to the 15-man roster on the correct rookie-slot salary or standard minimum, with the salary beginning only after conversion.
-                        </div>
-                      </div>
-                      <div className="ml-4 rounded-full bg-emerald-600 px-3 py-1 text-sm font-black text-white">
-                        Upgrade
-                      </div>
-                    </button>
-
-                    <button
-                      onClick={() => handleReleaseTwoWayToFreeAgency(actionTargetPlayer)}
-                      disabled={isAllView || !canManageCurrentRoster}
-                      className={`flex items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
-                        isAllView || !canManageCurrentRoster
-                          ? "cursor-not-allowed border-white/10 bg-white/[0.03] opacity-50"
-                          : "border-red-400/25 bg-red-500/10 hover:-translate-y-0.5 hover:border-red-300/50 hover:bg-red-500/20 hover:shadow-[0_18px_40px_rgba(239,68,68,0.16)]"
-                      }`}
-                    >
-                      <div>
-                        <div className="text-lg font-black text-white">Release Two-Way Player</div>
-                        <div className="mt-1 text-sm font-semibold text-neutral-400">
-                          Remove him from the two-way list and move him to free agency with no dead cap.
-                        </div>
-                      </div>
-                      <div className="ml-4 rounded-full bg-red-600 px-3 py-1 text-sm font-black text-white">
-                        Release
-                      </div>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    {(() => {
-                      const blockReason = getTwoWayAssignmentBlockReason(actionTargetPlayer, activeRosterTeam);
-                      const disabled = Boolean(blockReason);
-
-                      return (
-                        <button
-                          onClick={() => handleAssignStandardToTwoWay(actionTargetPlayer)}
-                          disabled={disabled}
-                          className={`flex items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
-                            disabled
-                              ? "cursor-not-allowed border-white/10 bg-white/[0.03] opacity-50"
-                              : "border-emerald-400/25 bg-emerald-500/10 hover:-translate-y-0.5 hover:border-emerald-300/50 hover:bg-emerald-500/20 hover:shadow-[0_18px_40px_rgba(16,185,129,0.16)]"
-                          }`}
-                        >
-                          <div>
-                            <div className="text-lg font-black text-white">Assign to Two-Way Contract</div>
-                            <div className="mt-1 text-sm font-semibold text-neutral-400">
-                              {blockReason || "Move him out of the 15-man standard roster for the rest of the season. Two-way players do not count against team salary cap."}
-                            </div>
-                          </div>
-                          <div className="ml-4 rounded-full bg-emerald-600 px-3 py-1 text-sm font-black text-white">
-                            2-Way
-                          </div>
-                        </button>
-                      );
-                    })()}
-
-                    <button
-                      onClick={() => openReleaseFromActions(actionTargetPlayer)}
-                      disabled={isAllView || !canManageCurrentRoster}
-                      className={`flex items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
-                        isAllView || !canManageCurrentRoster
-                          ? "cursor-not-allowed border-white/10 bg-white/[0.03] opacity-50"
-                          : "border-red-400/25 bg-red-500/10 hover:-translate-y-0.5 hover:border-red-300/50 hover:bg-red-500/20 hover:shadow-[0_18px_40px_rgba(239,68,68,0.16)]"
-                      }`}
-                    >
-                      <div>
-                        <div className="text-lg font-black text-white">Release to Free Agency</div>
-                        <div className="mt-1 text-sm font-semibold text-neutral-400">
-                          {isAllView
-                            ? "Switch to a team roster first before releasing a player."
-                            : !canManageCurrentRoster
-                            ? "You are only viewing this roster. Switch to this team from Team Hub before editing contracts."
-                            : "Move him to free agency and keep the original remaining guaranteed salary as dead cap."}
-                        </div>
-                      </div>
-                      <div className="ml-4 rounded-full bg-red-600 px-3 py-1 text-sm font-black text-white">
-                        Release
-                      </div>
-                    </button>
-                  </>
-                )}
-              </div>
-
-              <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs font-semibold text-neutral-500">
-                Tip: single click selects a player. Double click the player name to open this menu.
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       <PlayerCardModal
         open={playerCardOpen}
