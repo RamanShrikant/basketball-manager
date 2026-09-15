@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import * as simEngine from "../api/simEnginePy.js";
+import { playSound, primeSound, SOUND_KEYS } from "../audio/soundManager.js";
 import { rebuildGameplansForLeague } from "../utils/ensureGameplans";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./FreeAgents.module.css";
@@ -2931,6 +2932,8 @@ updateOffseasonState({
 
     const offer = buildOfferContract(year1Salary, offerYears, optionType, offerContractRules);
 
+    primeSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
+
     try {
       if (isOffseasonMode) {
         if (canSubmitLiveOffer) {
@@ -2961,6 +2964,7 @@ updateOffseasonState({
 
           applyLeagueUpdate(restoredLeagueData);
           closeSignModal();
+          playSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
 
           // Show the updated live ranking immediately using the fresh backend
           // response, so the user's new/replaced offer appears right away.
@@ -2989,6 +2993,7 @@ updateOffseasonState({
 
           applyLeagueUpdate(res.leagueData);
           closeSignModal();
+          playSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
 
           if (offersModalOpen) {
             closeOffersModal();
@@ -3018,6 +3023,7 @@ updateOffseasonState({
 
       applyLeagueUpdate(res.leagueData);
       closeSignModal();
+      playSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
     } catch (err) {
       setSignError(err?.message || (isOffseasonMode ? "Offer submission failed." : "Signing failed."));
     }

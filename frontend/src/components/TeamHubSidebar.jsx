@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
+import { playSound, SOUND_KEYS } from "../audio/soundManager.js";
 import {
   isAllStarsAvailable,
   readOffseasonState as readAllStarsOffseasonState,
@@ -457,6 +458,7 @@ export default function TeamHubSidebar() {
 
   const navigateItem = (item) => {
     if (!item?.enabled || !item?.path || item.path === "#") return;
+    playSound(SOUND_KEYS.SIDEBAR_NAVIGATION);
 
     const hubReturnContext = item.sectionKey
       ? sectionReturnPayload(item.sectionKey, {
@@ -487,12 +489,14 @@ export default function TeamHubSidebar() {
   };
 
   const navigateHome = () => {
+    playSound(SOUND_KEYS.SIDEBAR_NAVIGATION);
     clearTradeBuilderResumeWhenLeaving(location.pathname, "/team-hub");
     writeTeamHubReturnContext(null);
     navigate("/team-hub");
   };
 
   const toggleGroup = (key) => {
+    playSound(SOUND_KEYS.SIDEBAR_NAVIGATION);
     setCollapsedGroups((current) => ({
       ...current,
       [key]: !current[key],

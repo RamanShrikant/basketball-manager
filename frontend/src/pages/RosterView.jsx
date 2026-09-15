@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useGame } from "../context/GameContext";
 import { useNavigate } from "react-router-dom";
 import { releasePlayerToFreeAgency } from "../api/simEnginePy.js";
+import { playSound, primeSound, SOUND_KEYS } from "../audio/soundManager.js";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./RosterView.module.css";
 import PageFade from "../components/PageFade";
@@ -1104,6 +1105,8 @@ export default function RosterView() {
   const handleReleaseTwoWayToFreeAgency = (player) => {
     if (!player || isAllView || !canManageCurrentRoster || !workingLeagueData?.conferences) return;
 
+    primeSound(SOUND_KEYS.PLAYER_RELEASE_SUCCESS);
+
     const releasedPlayer = {
       ...player,
       isTwoWay: false,
@@ -1142,6 +1145,7 @@ export default function RosterView() {
 
     persistUpdatedLeagueAndTeam(updated, selectedTeam.name);
     setSelectedPlayer(null);
+    playSound(SOUND_KEYS.PLAYER_RELEASE_SUCCESS);
   };
 
   const openReleaseForPlayer = (player) => {
@@ -1157,6 +1161,8 @@ export default function RosterView() {
 
   const handleReleaseToFreeAgency = async () => {
     if (!releaseTargetPlayer || !canManageCurrentRoster || !selectedTeam || !workingLeagueData?.conferences) return;
+
+    primeSound(SOUND_KEYS.PLAYER_RELEASE_SUCCESS);
 
     try {
       const res = await releasePlayerToFreeAgency(
@@ -1197,6 +1203,7 @@ export default function RosterView() {
       saveLeagueDataInBackground(updated);
 
       closeReleaseModal();
+      playSound(SOUND_KEYS.PLAYER_RELEASE_SUCCESS);
     } catch (err) {
       console.error("[RosterView] release worker error:", err);
     }

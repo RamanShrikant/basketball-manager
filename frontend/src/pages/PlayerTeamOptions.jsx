@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
+import { playSound, primeSound, SOUND_KEYS } from "../audio/soundManager.js";
 import styles from "./PlayerTeamOptions.module.css";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { getFinancialSeasonYear, getSeasonStartYear } from "../utils/seasonContext.js";
@@ -889,6 +890,7 @@ const filteredExpiredContracts = useMemo(() => {
       return;
     }
 
+    primeSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
     setLoadingApply(true);
     setError("");
 
@@ -972,6 +974,18 @@ const filteredExpiredContracts = useMemo(() => {
 
       await applyLeagueUpdate(res.leagueData);
       setAppliedData(res);
+
+      const completedOptionTransactions =
+        Number(res?.summary?.playerOptionAcceptedCount || 0) +
+        Number(res?.summary?.teamOptionExercisedCount || 0) +
+        Number(res?.summary?.twoWayExtendedCount || 0) +
+        Number(res?.summary?.twoWayConvertedCount || 0) +
+        Number(res?.summary?.stashTwoWayCount || 0) +
+        Number(res?.summary?.stashConvertedCount || 0);
+
+      if (completedOptionTransactions > 0) {
+        playSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
+      }
 
       if (res?.previewAfter) {
         setPreviewData({ ...res.previewAfter, validatedLive: true });
@@ -1142,6 +1156,8 @@ const finalizeRightsManagement = async () => {
       return;
     }
 
+    primeSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
+
     const rightsDecisions = {};
 
     for (const row of rightsRows) {
@@ -1190,6 +1206,9 @@ const finalizeRightsManagement = async () => {
     const renouncedCount =
       res?.summary?.renouncedCount ?? selectedRenounceRows.length;
     const extendedQOCount = Number(res?.summary?.extendedQOCount || 0);
+    if (extendedQOCount > 0) {
+      playSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
+    }
     const declinedQOCount = Number(res?.summary?.declinedQOCount || 0) + Number(res?.summary?.withdrawnQOCount || 0);
 
     const parts = [];

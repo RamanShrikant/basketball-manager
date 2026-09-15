@@ -2,6 +2,7 @@ import { createPlayerResolver, getCanonicalPlayer } from "../utils/playerResolve
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import { playSound, SOUND_KEYS } from "../audio/soundManager.js";
 import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import { findComfortableTradeFinderOffers, sortTradeFinderOfferItems } from "../utils/tradeFinderOfferEngine.js";
 import { findComfortableReverseTradeFinderOffers } from "../utils/reverseTradeFinderOfferEngine.js";
@@ -2795,6 +2796,11 @@ const standardPatienceBlocked = Boolean(
         setPickProtections((current) => ({ ...current, [asset.key]: eligibility.suggestedPickRule }));
       }
     }
+
+    if (!alreadySelected && selectedAssetKeys.length < MAX_TRADE_FINDER_PACKAGE_ASSETS) {
+      playSound(SOUND_KEYS.TRADE_FINDER_ADD_ASSET);
+    }
+
     invalidateOfferSearch();
     setSearched(false);
     setPythonOffers([]);
@@ -3471,7 +3477,10 @@ const standardPatienceBlocked = Boolean(
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
-                      onClick={runSearchOffers}
+                      onClick={() => {
+                        playSound(SOUND_KEYS.TRADE_FINDER_SEARCH_OFFERS);
+                        runSearchOffers();
+                      }}
                       disabled={!selectedItems.length || isSearchingOffers || selectedPackageValidation.ok === false || tradeFinderPatienceBlocked}
                       className="rounded-2xl bg-orange-600 px-5 py-2.5 text-sm font-black text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >

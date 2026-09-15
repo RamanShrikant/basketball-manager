@@ -5,6 +5,7 @@ import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import * as simEngine from "../api/simEnginePy.js";
+import { playSound, primeSound, SOUND_KEYS } from "../audio/soundManager.js";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "./ViewingOffers.module.css";
 import { saveLeagueData } from "../utils/leagueStorage.js";
@@ -2789,6 +2790,13 @@ const handleReturnToOffseasonHub = () => {
       // then returns to FreeAgents for the next day. Once the market is closed,
       // this button should finish FA and move directly into progression.
       const hadPendingUserDecisions = pendingUserDecisions.length > 0;
+      const selectedSigningCount = pendingUserDecisions.filter(
+        (row) => selectedDecisionMap[row.playerKey]
+      ).length;
+
+      if (selectedSigningCount > 0) {
+        primeSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
+      }
 
       if (marketClosed && !hadPendingUserDecisions) {
         finalizeFreeAgencyComplete(leagueData, latestResults);
@@ -2879,6 +2887,10 @@ const handleReturnToOffseasonHub = () => {
 
       const baseLeague = processRes?.leagueData || leagueData;
       const baseStateSummary = processRes?.stateSummary || null;
+
+      if (selectedSigningCount > 0) {
+        playSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
+      }
       const latest = {
         dayResolved: dayResolved ?? baseLeague?.freeAgencyState?.currentDay ?? null,
         signings: processRes?.processedSignings || [],

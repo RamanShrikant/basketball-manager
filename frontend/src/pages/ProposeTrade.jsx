@@ -33,6 +33,7 @@ import {
   validateCustomPickProtection,
 } from "../utils/draftPicks.js";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import { playSound, primeSound, SOUND_KEYS } from "../audio/soundManager.js";
 import {
   TRADE_PATIENCE_SUBMIT_MIN,
   applyRejectedTradePatienceDrop,
@@ -2922,6 +2923,7 @@ export default function ProposeTrade() {
       return;
     }
 
+    primeSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
     setIsSubmitting(true);
     setDecisionModal(null);
     setEvaluation(null);
@@ -3039,6 +3041,7 @@ export default function ProposeTrade() {
       setEvaluation(null);
       setNotice("");
       setDecisionModal({ accepted: true, teamName: cpuTeamName });
+      playSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
     } catch (error) {
       setEvaluation(null);
       setNotice(`Proposal review failed: ${error?.message || String(error || "Unknown error")}`);
