@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import { useGame } from "../context/GameContext";
 import { getDraftYear, getSeasonCalendarConfig, getSeasonStartYear } from "../utils/seasonContext.js";
@@ -499,7 +499,7 @@ function getSimulationBlockMessageThroughDate(scheduleByDate, teams, endDate = n
 async function simOneSafe(game, leagueData, teams, runtime = null, currentDate = null) {
   if (window.__debugSimLogs) {
     window.__lastGame = game;
-    console.log("â³ simOneSafe starting:", game.home, "vs", game.away);
+    console.log("Ã¢ÂÂ³ simOneSafe starting:", game.home, "vs", game.away);
   }
 
 const activeRuntime = runtime || buildSimulationRuntime(leagueData, teams);
@@ -905,7 +905,7 @@ function CalendarTeamInfoModal({ team, leagueData, teams = [], onClose }) {
             className="flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-xs font-black text-neutral-400 transition hover:border-orange-400/40 hover:text-orange-300"
             aria-label="Close team snapshot"
           >
-            Ã—
+            Ãƒâ€”
           </button>
         </div>
 
@@ -1968,7 +1968,7 @@ function slimResult(full) {
         }
       : null;
 
-  // ðŸ”¥ helper to pull makes/attempts from a variety of shapes
+  // Ã°Å¸â€Â¥ helper to pull makes/attempts from a variety of shapes
   function extractMA(obj, keysM, keysA, stringKeys = []) {
     let m, a;
 
@@ -2013,7 +2013,7 @@ function slimResult(full) {
     (arr || []).map((p) => {
       const obj = p instanceof Map ? Object.fromEntries(p) : p;
 
-      // ðŸ”¥ FG
+      // Ã°Å¸â€Â¥ FG
       const fg = extractMA(
         obj,
         ["fgm", "fg_m"],
@@ -2021,7 +2021,7 @@ function slimResult(full) {
         ["fg"]
       );
 
-      // ðŸ”¥ 3P
+      // Ã°Å¸â€Â¥ 3P
       const tp = extractMA(
         obj,
         ["tpm", "tp_m", "fg3m", "three_m"],
@@ -2029,7 +2029,7 @@ function slimResult(full) {
         ["3p", "tp", "three"]
       );
 
-      // ðŸ”¥ FT
+      // Ã°Å¸â€Â¥ FT
       const ft = extractMA(
         obj,
         ["ftm", "ft_m"],
@@ -2067,7 +2067,7 @@ const side =
   const boxAway = convertBox(rawAwayBox);
 
   if ((boxHome.length === 0 || boxAway.length === 0) && (homeScore || awayScore)) {
-    console.warn("âš  slimResult: empty box with non-zero score", {
+    console.warn("Ã¢Å¡Â  slimResult: empty box with non-zero score", {
       homeScore,
       awayScore,
       rawHomeBox,
@@ -2856,10 +2856,10 @@ function getCalendarLeagueSeasonYear(leagueData) {
 }
 
 export default function Calendar() {
-  
+
   const navigate = useNavigate();
   const { leagueData, setLeagueData, selectedTeam } = useGame();
-  if (window.__debugSimLogs) console.log("ðŸ”¥ Calendar leagueData =", leagueData);
+  if (window.__debugSimLogs) console.log("Ã°Å¸â€Â¥ Calendar leagueData =", leagueData);
   window.__leagueData = leagueData;
 
   useEffect(() => {
@@ -3055,7 +3055,7 @@ const teams = useMemo(() => {
   if (!leagueData) return [];
 
   const arr = getAllTeamsFromLeague(leagueData);
-  if (window.__debugCalendarTeams) console.log("ðŸ”¥ DEBUG Calendar loaded teams:", arr);
+  if (window.__debugCalendarTeams) console.log("Ã°Å¸â€Â¥ DEBUG Calendar loaded teams:", arr);
   window.__debugTeams = arr;
 
   return arr.map((t) => ({
@@ -3891,7 +3891,7 @@ const starters = new Set(sortedByMin.slice(0, 5).map((r) => r.player));
         fta: 0,
         to: 0,
         pf: 0,
-        // ðŸ”¥ role tracking
+        // Ã°Å¸â€Â¥ role tracking
         started: 0,
         sixth: 0,
       };
@@ -3936,7 +3936,7 @@ else {
   return stats;
 }
 
-// ðŸ”¥ Rebuild player stats from existing schedule + results
+// Ã°Å¸â€Â¥ Rebuild player stats from existing schedule + results
   function recomputePlayerSeasonStatsFromResults(schedule, results) {
     let stats = {};
     let clutchStats = createEmptyClutchStats(seasonYear);
@@ -4907,7 +4907,7 @@ useEffect(() => {
     return;
   }
 
-  // âœ… IMPORTANT: if schedule is missing/invalid, regenerate it EVEN IF results exist
+  // Ã¢Å“â€¦ IMPORTANT: if schedule is missing/invalid, regenerate it EVEN IF results exist
   if (!scheduleValid) {
     const byDate =
       generatedScheduleForRecovery ||
@@ -5640,7 +5640,7 @@ useEffect(() => {
   }
 }, [seasonYear]);
 
-// âœ… stop control
+// Ã¢Å“â€¦ stop control
 const stopRef = useRef(false);
 const [stopRequested, setStopRequested] = useState(false);
 const [showWestStandings, setShowWestStandings] = useState(true);
@@ -7084,7 +7084,7 @@ setBoxModal(null);
     resumed: Boolean(resume),
   });
 
-  // âœ… reset stop state at the start of THIS run
+  // Ã¢Å“â€¦ reset stop state at the start of THIS run
   stopRef.current = false;
   setStopRequested(false);
 
@@ -7159,7 +7159,7 @@ setBoxModal(null);
 
   try {
 for (const d of sorted) {
-  // âœ… allow stop between dates
+  // Ã¢Å“â€¦ allow stop between dates
   if (stopRef.current) break;
 
   if (d > dateStr) break;
@@ -7361,7 +7361,7 @@ for (const d of sorted) {
   let dayChanged = false;
 
       for (let i = 0; i < dayGames.length; i++) {
-        // âœ… allow stop between games
+        // Ã¢Å“â€¦ allow stop between games
         if (stopRef.current) break;
 
         const g = dayGames[i];
@@ -7391,13 +7391,13 @@ for (const d of sorted) {
         try {
           const full = await runGameWithRetries(g, activeLeagueData, activeTeams, 3, simRuntime, d);
 
-          // âœ… if user clicked stop while this game was running, bail after it finishes
+          // Ã¢Å“â€¦ if user clicked stop while this game was running, bail after it finishes
           if (stopRef.current) {
             finishSimulationGameOrderEvent(gameOrderEvent, "stopped_after_worker");
             break;
           }
 
-          // still failed â†’ skip, leave unplayed
+          // still failed Ã¢â€ â€™ skip, leave unplayed
           if (!full) {
             simulationPerf.gameErrors += 1;
             finishSimulationGameOrderEvent(gameOrderEvent, "no_result");
@@ -7440,7 +7440,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
           simulationPerf.gamesSimmed += 1;
           finishSimulationGameOrderEvent(gameOrderEvent, "completed");
 
-          // ðŸ”¥ update player stats
+          // Ã°Å¸â€Â¥ update player stats
           const playerStatsBeforeGame = playerStats;
           playerStats = applyGameToPlayerStats(playerStats, slim, g);
           clutchStats = applyGameToClutchStats(clutchStats, slim, g, seasonYear);
@@ -7722,7 +7722,7 @@ setBoxModal(null);
     resumed: Boolean(resume),
   });
 
-  // âœ… reset stop state at the start of a run
+  // Ã¢Å“â€¦ reset stop state at the start of a run
   stopRef.current = false;
   setStopRequested(false);
 
@@ -7733,7 +7733,7 @@ setBoxModal(null);
 
 
   setSimLock(true);
-  console.log("ðŸ”¥ FULL SEASON START");
+  console.log("Ã°Å¸â€Â¥ FULL SEASON START");
 
   let upd = structuredClone(scheduleByDate);
   let results = structuredClone(resultsById);
@@ -7790,7 +7790,7 @@ setBoxModal(null);
   let lastPersistedGames = 0;
   let lastDateProcessed = null;
 
-// âœ… track if user stopped
+// Ã¢Å“â€¦ track if user stopped
 let stopped = false;
 let pausedForAllStar = false;
 let pausedForTradeDeadline = false;
@@ -7941,7 +7941,7 @@ for (let di = 0; di < dates.length; di++) {
   let dayChanged = false;
 
       if (window.__debugSimLogs) {
-        console.log("ðŸ“… Processing date", di + 1, "of", dates.length, date, "games:", dayGames.length);
+        console.log("Ã°Å¸â€œâ€¦ Processing date", di + 1, "of", dates.length, date, "games:", dayGames.length);
       }
 
       for (let i = 0; i < dayGames.length; i++) {
@@ -8234,9 +8234,9 @@ if (stopped) {
   saveSimulationCursorDate(nextPendingAfterRun || getNextCalendarDateString(lastDateProcessed || fmt(seasonEnd)));
 }
 
-// âœ… If stopped, do NOT compute awards or navigate away
+// Ã¢Å“â€¦ If stopped, do NOT compute awards or navigate away
 if (stopped) {
-  console.log("ðŸ›‘ FULL SEASON STOPPED by user at gamesSimmed:", gamesSimmed);
+  console.log("Ã°Å¸â€ºâ€˜ FULL SEASON STOPPED by user at gamesSimmed:", gamesSimmed);
   return;
 }
 
@@ -8259,7 +8259,7 @@ if (stopped) {
     navigate("/awards");
 
     console.log(
-      "ðŸ FULL SEASON EXIT, total gamesSimmed:",
+      "Ã°Å¸ÂÂ FULL SEASON EXIT, total gamesSimmed:",
       gamesSimmed,
       "last date processed:",
       lastDateProcessed
@@ -8316,7 +8316,7 @@ const closeAllStarTeams = () => {
 const handleResetSeason = () => {
   if (!window.confirm("Reset season? ALL results + schedule will be wiped.")) return;
 
-  // âœ… wipe all schedule/result/playoffs versions (so future key bumps don't break reset)
+  // Ã¢Å“â€¦ wipe all schedule/result/playoffs versions (so future key bumps don't break reset)
   for (let i = localStorage.length - 1; i >= 0; i--) {
     const k = localStorage.key(i);
     if (!k) continue;
@@ -8330,8 +8330,8 @@ if (
   k.startsWith("bm_contract_extension_deadline_handled_v1_") ||
   k.startsWith("bm_rookie_extension_deadline_handled_v1_") ||
   k.startsWith("bm_veteran_extension_deadline_handled_v1_") ||
-  k.startsWith("bm_result_v3_") ||     // âœ… NEW
-  k === "bm_results_index_v3" ||       // âœ… NEW
+  k.startsWith("bm_result_v3_") ||     // Ã¢Å“â€¦ NEW
+  k === "bm_results_index_v3" ||       // Ã¢Å“â€¦ NEW
   k === "bm_trade_deadline_status_v1"
 ) {
   localStorage.removeItem(k);
@@ -9184,7 +9184,7 @@ return (
     }
   `}
 </style>
-    
+
 
 
 
@@ -9552,7 +9552,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                                 <div className="shrink-0 whitespace-nowrap rounded-md bg-emerald-700/90 px-2 py-1 text-[10px] font-bold">
                                   {finalScore}
                                   {Number(result?.winner?.ot ?? result?.periods?.otCount ?? 0) > 0
-                                    ? ` Â· ${Number(result?.winner?.ot ?? result?.periods?.otCount) === 1 ? "OT" : `${Number(result?.winner?.ot ?? result?.periods?.otCount)}OT`}`
+                                    ? ` Ã‚Â· ${Number(result?.winner?.ot ?? result?.periods?.otCount) === 1 ? "OT" : `${Number(result?.winner?.ot ?? result?.periods?.otCount)}OT`}`
                                     : ""}
                                 </div>
                               ) : null}
@@ -10059,7 +10059,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
   closeLabel={pendingSimIntent ? "Close & Continue Simulation" : "Close"}
 />
     </div>
-  
+
     </PageFade>
   );
 }
