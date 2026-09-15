@@ -368,13 +368,14 @@ function collectSearchablePlayers(leagueData = {}, teams = []) {
 
 
 export default function TeamHub() {
-  const { leagueData, selectedTeam, setSelectedTeam } = useGame();
+  const { leagueData, selectedTeam } = useGame();
   const navigate = useNavigate();
   const [showBench, setShowBench] = useState(false);
   // TEAM HUB GLOBAL SEARCH STATE PASS 25
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchPlayerCard, setSearchPlayerCard] = useState(null);
+  const [hubViewTeamName, setHubViewTeamName] = useState(() => selectedTeam?.name || "");
   const searchRef = useRef(null);
 
   useEffect(() => {
@@ -411,6 +412,22 @@ export default function TeamHub() {
   const teamMap = useMemo(
     () => new Map(teams.map((team) => [teamNameOf(team), team])),
     [teams]
+  );
+
+  // CONTROLLED TEAM PREVIEW SAFETY PASS 33
+  // Team search is a read-only preview. The controlled franchise remains
+  // selectedTeam in GameContext so trades, roster actions, and sidebar routes
+  // can never silently switch the user's franchise.
+  const controlledTeamName = selectedTeam?.name || "";
+
+  useEffect(() => {
+    setHubViewTeamName(controlledTeamName);
+  }, [controlledTeamName]);
+
+  const hubTeam = teamMap.get(hubViewTeamName) || selectedTeam || null;
+  const hubTeamName = teamNameOf(hubTeam);
+  const isPreviewingTeam = Boolean(
+    controlledTeamName && hubTeamName && controlledTeamName !== hubTeamName
   );
 
   // TEAM HUB GLOBAL SEARCH INDEX PASS 25
@@ -460,11 +477,11 @@ export default function TeamHub() {
   const schedule = useMemo(() => {
     const raw = readScheduleFromStorage() || {};
     return hydrateScheduleTeamMetadata(raw, leagueData || {});
-  }, [leagueData, selectedTeam?.name]);
+  }, [leagueData, hubTeamName]);
 
   const results = useMemo(
     () => loadRegularSeasonResultsV3FromStorage(),
-    [leagueData, selectedTeam?.name]
+    [leagueData, hubTeamName]
   );
 
   const flatGames = useMemo(
@@ -497,15 +514,14 @@ export default function TeamHub() {
     [teams, schedule, results, conferenceLookup]
   );
 
-  const selectedTeamName = selectedTeam?.name || "";
-  const teamIdentity = useMemo(() => splitTeamIdentity(selectedTeam || {}), [selectedTeam]);
+  const teamIdentity = useMemo(() => splitTeamIdentity(hubTeam || {}), [hubTeam]);
 
   const selectedGames = useMemo(
     () =>
       flatGames.filter(
-        (game) => game?.home === selectedTeamName || game?.away === selectedTeamName
+        (game) => game?.home === hubTeamName || game?.away === hubTeamName
       ),
-    [flatGames, selectedTeamName]
+    [flatGames, hubTeamName]
   );
 
   const completedGames = useMemo(
@@ -526,25 +542,25 @@ export default function TeamHub() {
   );
 
   const selectedStanding = useMemo(() => {
-    if (!selectedTeamName) return null;
+    if (!hubTeamName) return null;
     return (
-      standings?.[selectedTeamName] ||
+      standings?.[hubTeamName] ||
       Object.values(standings || {}).find(
         (row) =>
           normalizeStandingsTeamName(row?.team) ===
-          normalizeStandingsTeamName(selectedTeamName)
+          normalizeStandingsTeamName(hubTeamName)
       ) ||
       null
     );
-  }, [standings, selectedTeamName]);
+  }, [standings, hubTeamName]);
 
   const conference = useMemo(
     () =>
-      conferenceLookup.get(normalizeStandingsTeamName(selectedTeamName)) ||
+      conferenceLookup.get(normalizeStandingsTeamName(hubTeamName)) ||
       selectedStanding?.conf ||
-      selectedTeam?.conference ||
+      hubTeam?.conference ||
       "",
-    [conferenceLookup, selectedStanding, selectedTeam, selectedTeamName]
+    [conferenceLookup, selectedStanding, hubTeam, hubTeamName]
   );
 
   const conferenceTeams = useMemo(() => {
@@ -566,8 +582,8 @@ export default function TeamHub() {
     [teams, standings]
   );
 
-  const conferenceRank = conferenceTeams.indexOf(selectedTeamName) + 1;
-  const leagueRank = leagueOrder.indexOf(selectedTeamName) + 1;
+  const conferenceRank = conferenceTeams.indexOf(hubTeamName) + 1;
+  const leagueRank = leagueOrder.indexOf(hubTeamName) + 1;
 
   const offenseOrder = useMemo(
     () =>
@@ -597,20 +613,20 @@ export default function TeamHub() {
     offenseOrder.findIndex(
       (row) =>
         normalizeStandingsTeamName(row?.team) ===
-        normalizeStandingsTeamName(selectedTeamName)
+        normalizeStandingsTeamName(hubTeamName)
     ) + 1;
 
   const defenseRank =
     defenseOrder.findIndex(
       (row) =>
         normalizeStandingsTeamName(row?.team) ===
-        normalizeStandingsTeamName(selectedTeamName)
+        normalizeStandingsTeamName(hubTeamName)
     ) + 1;
 
   const last10 = completedGames.slice(0, 10).reduce(
     (acc, entry) => {
       const { game, score } = entry;
-      const selectedIsHome = game.home === selectedTeamName;
+      const selectedIsHome = game.home === hubTeamName;
       const own = selectedIsHome ? score.home : score.away;
       const opp = selectedIsHome ? score.away : score.home;
       if (own > opp) acc.w += 1;
@@ -621,8 +637,8 @@ export default function TeamHub() {
   );
 
   const rotation = useMemo(
-    () => (selectedTeam ? readGameplanOrder(selectedTeam) : []),
-    [selectedTeam]
+    () => (hubTeam ? readGameplanOrder(hubTeam) : []),
+    [hubTeam]
   );
 
   const startingFive = rotation.slice(0, 5);
@@ -631,13 +647,13 @@ export default function TeamHub() {
 
   const payroll = useMemo(
     () =>
-      selectedTeam
-        ? getStandardPlayers(selectedTeam).reduce(
+      hubTeam
+        ? getStandardPlayers(hubTeam).reduce(
             (sum, player) => sum + Number(getPlayerSalary(player, leagueData || {}) || 0),
             0
           )
         : 0,
-    [selectedTeam, leagueData]
+    [hubTeam, leagueData]
   );
 
   const salaryCap = Number(
@@ -649,15 +665,15 @@ export default function TeamHub() {
   );
 
   const ownedFirsts = useMemo(() => {
-    if (!selectedTeamName) return 0;
+    if (!hubTeamName) return 0;
     try {
-      return collectOwnedPicksForTeam(leagueData || {}, selectedTeamName).filter(
+      return collectOwnedPicksForTeam(leagueData || {}, hubTeamName).filter(
         (pick) => Number(pick?.round || 0) === 1
       ).length;
     } catch {
       return 0;
     }
-  }, [leagueData, selectedTeamName]);
+  }, [leagueData, hubTeamName]);
 
   const draftYear = getUpcomingDraftYearForPhase(leagueData || {}, {
     isOffseasonMode: phaseLabel() === "Offseason",
@@ -670,7 +686,7 @@ export default function TeamHub() {
 
   const nextGame = upcomingGames[0] || null;
   const nextOpponentName = nextGame
-    ? nextGame.home === selectedTeamName
+    ? nextGame.home === hubTeamName
       ? nextGame.away
       : nextGame.home
     : "";
@@ -681,7 +697,8 @@ export default function TeamHub() {
   const openSearchResult = (result) => {
     if (!result) return;
     if (result.kind === "team" && result.team) {
-      setSelectedTeam(result.team);
+      setHubViewTeamName(teamNameOf(result.team));
+      setShowBench(false);
       closeSearch();
       return;
     }
@@ -717,6 +734,20 @@ export default function TeamHub() {
           </div>
 
           <div className={styles.topUtilities}>
+            {isPreviewingTeam ? (
+              <button
+                type="button"
+                className={styles.previewReturnButton}
+                onClick={() => {
+                  setHubViewTeamName(controlledTeamName);
+                  setShowBench(false);
+                }}
+                title={`Return to ${controlledTeamName}`}
+              >
+                Return to My Team
+              </button>
+            ) : null}
+
             <div className={styles.searchWrap} ref={searchRef} data-teamhub-search-pass="25">
               <label className={`${styles.searchShell} ${searchOpen ? styles.searchShellActive : ""}`}>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -763,7 +794,7 @@ export default function TeamHub() {
                           </span>
                           <span className={styles.searchResultCopy}>
                             <strong>{teamNameOf(result.team)}</strong>
-                            <small>Open Team Hub</small>
+                            <small>Preview Team Hub</small>
                           </span>
                           <span className={styles.searchResultArrow}>→</span>
                         </button>
@@ -829,7 +860,7 @@ export default function TeamHub() {
         >
           <img
             className={styles.bannerWatermark}
-            src={teamLogoOf(selectedTeam)}
+            src={teamLogoOf(hubTeam)}
             alt=""
             aria-hidden="true"
             style={bannerWatermarkStyle(bannerLayout.watermark)}
@@ -841,7 +872,7 @@ export default function TeamHub() {
           >
             <img
               className={styles.teamLogo}
-              src={teamLogoOf(selectedTeam)}
+              src={teamLogoOf(hubTeam)}
               alt=""
               style={bannerLogoStyle(bannerLayout.logo)}
             />
@@ -850,10 +881,10 @@ export default function TeamHub() {
                 className={styles.teamCity}
                 style={bannerTextStyle(bannerLayout.teamCity)}
               >
-                {teamIdentity.city || selectedTeamName}
+                {teamIdentity.city || hubTeamName}
               </div>
               <h1 style={bannerTextStyle(bannerLayout.teamName)}>
-                {teamIdentity.nickname || selectedTeamName}
+                {teamIdentity.nickname || hubTeamName}
               </h1>
             </div>
           </div>
@@ -919,7 +950,7 @@ export default function TeamHub() {
             </div>
             <div className={styles.gameList}>
               {upcomingGames.length ? upcomingGames.map((game) => {
-                const isHome = game.home === selectedTeamName;
+                const isHome = game.home === hubTeamName;
                 const opponentName = isHome ? game.away : game.home;
                 const opponent = teamMap.get(opponentName) || {};
                 const opponentStanding = standings?.[opponentName];
@@ -949,7 +980,7 @@ export default function TeamHub() {
               <div><span>Conference Rank</span><strong>{conferenceRank > 0 ? ordinal(conferenceRank) : "—"}</strong></div>
               <div><span>Offensive Rank</span><strong>{offenseRank > 0 ? ordinal(offenseRank) : "—"}</strong></div>
               <div><span>Defensive Rank</span><strong>{defenseRank > 0 ? ordinal(defenseRank) : "—"}</strong></div>
-              <div><span>Roster Count</span><strong>{getStandardPlayers(selectedTeam).length}</strong></div>
+              <div><span>Roster Count</span><strong>{getStandardPlayers(hubTeam).length}</strong></div>
               <div><span>Payroll</span><strong>{formatMoney(payroll)}</strong></div>
               <div><span>Cap Space</span><strong>{salaryCap ? formatMoney(salaryCap - payroll) : "—"}</strong></div>
             </div>
@@ -974,7 +1005,7 @@ export default function TeamHub() {
                 return (
                   <div
                     key={name}
-                    className={`${styles.standingRow} ${name === selectedTeamName ? styles.selectedStanding : ""}`}
+                    className={`${styles.standingRow} ${name === hubTeamName ? styles.selectedStanding : ""}`}
                   >
                     <span>{index + 1}</span>
                     <span className={styles.standingTeam}>
@@ -1047,7 +1078,7 @@ export default function TeamHub() {
             </div>
             <div className={styles.recentList}>
               {completedGames.slice(0, 5).map(({ game, score }) => {
-                const isHome = game.home === selectedTeamName;
+                const isHome = game.home === hubTeamName;
                 const opponentName = isHome ? game.away : game.home;
                 const opponent = teamMap.get(opponentName) || {};
                 const own = isHome ? score.home : score.away;

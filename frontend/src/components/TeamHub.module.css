@@ -2758,3 +2758,27 @@
   .searchWrap { width: 250px; }
   .searchResults { width: 330px; }
 }
+
+
+/* CONTROLLED TEAM PREVIEW SAFETY PASS 33 */
+.previewReturnButton {
+  height: 32px;
+  flex: 0 0 auto;
+  padding: 0 11px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #b8c1ce;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.015em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.previewReturnButton:hover {
+  border-color: rgba(249, 115, 22, 0.34);
+  background: rgba(249, 115, 22, 0.08);
+  color: #f0f3f7;
+}

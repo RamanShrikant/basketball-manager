@@ -17,6 +17,12 @@ const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const POSTSEASON_KEY = "bm_postseason_v2";
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
 const TEAM_HUB_RETURN_CONTEXT_KEY = "bm_team_hub_return_context_v1";
+const TRADE_BUILDER_RESUME_KEY = "bm_trade_builder_resume_v1";
+const TRADE_FLOW_ROUTES = new Set([
+  "/propose-trade",
+  "/trade-player-select",
+  "/trade-pick-select",
+]);
 
 const LABEL_OVERRIDES = {
   "View Roster": "Roster",
@@ -109,12 +115,18 @@ function safeJSON(raw, fallback = null) {
   }
 }
 
-function getOffseasonFreeAgencyReturnPath() {
+function getOffseasonFreeAgencyReturnPath(liveLeagueData = null) {
   const lastRoute = localStorage.getItem(FREE_AGENCY_LAST_ROUTE_KEY);
   if (lastRoute !== "/viewing-offers") return "/free-agents";
 
-  const leagueData = safeJSON(localStorage.getItem("leagueData"), null);
-  const freeAgencyState = leagueData?.freeAgencyState || {};
+  // leagueData localStorage is intentionally only an IndexedDB pointer in modern
+  // saves. Prefer GameContext's live league so pending FA decisions are visible.
+  const fallbackLeagueData = safeJSON(localStorage.getItem("leagueData"), null);
+  const resolvedLeagueData =
+    liveLeagueData && typeof liveLeagueData === "object"
+      ? liveLeagueData
+      : fallbackLeagueData;
+  const freeAgencyState = resolvedLeagueData?.freeAgencyState || {};
 
   const pendingUserDecisionCount = Array.isArray(freeAgencyState?.pendingUserDecisions)
     ? freeAgencyState.pendingUserDecisions.length
@@ -144,6 +156,13 @@ function getOffseasonFreeAgencyReturnPath() {
   }
 
   return "/free-agents";
+}
+
+function clearTradeBuilderResumeWhenLeaving(currentPath, nextPath) {
+  if (!TRADE_FLOW_ROUTES.has(currentPath) || TRADE_FLOW_ROUTES.has(nextPath)) return;
+  try {
+    sessionStorage.removeItem(TRADE_BUILDER_RESUME_KEY);
+  } catch {}
 }
 
 function sectionReturnPayload(section, mode = {}) {
@@ -269,7 +288,7 @@ export default function TeamHubSidebar() {
 
   const offseasonReturnTo = location.state?.returnTo || "/offseason";
   const playoffReturnTo = location.state?.playoffReturnTo || "/playoffs";
-  const offseasonFreeAgentsPath = getOffseasonFreeAgencyReturnPath();
+  const offseasonFreeAgentsPath = getOffseasonFreeAgencyReturnPath(leagueData);
 
   const savedAllStars = readSavedAllStars();
   const upcomingDraftYear = getUpcomingDraftYearForPhase(leagueData || {}, {
@@ -449,6 +468,7 @@ export default function TeamHubSidebar() {
       : null;
 
     writeTeamHubReturnContext(hubReturnContext);
+    clearTradeBuilderResumeWhenLeaving(location.pathname, item.path);
 
     const navState = {
       ...(isOffseasonMode ? { offseasonMode: true, returnTo: offseasonReturnTo } : {}),
@@ -464,6 +484,12 @@ export default function TeamHubSidebar() {
     navigate(item.path, {
       state: Object.keys(navState).length ? navState : undefined,
     });
+  };
+
+  const navigateHome = () => {
+    clearTradeBuilderResumeWhenLeaving(location.pathname, "/team-hub");
+    writeTeamHubReturnContext(null);
+    navigate("/team-hub");
   };
 
   const toggleGroup = (key) => {
@@ -487,7 +513,7 @@ export default function TeamHubSidebar() {
         <button
           type="button"
           className={`${styles.navItem} ${activeName === "Team Hub" ? styles.navItemActive : ""}`}
-          onClick={() => navigate("/team-hub")}
+          onClick={navigateHome}
           aria-current={activeName === "Team Hub" ? "page" : undefined}
         >
           <span className={styles.icon}><SidebarIcon type="home" /></span>

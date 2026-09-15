@@ -679,6 +679,22 @@ function sanitizeBuilderForStandardRoster(builder, userTeamName, cpuTeamName, el
   };
 }
 
+function resumeBuilderForControlledTeam(builder, userTeamName, cpuTeamName, eligibilityOptions = {}) {
+  const source = builder && typeof builder === "object" ? builder : null;
+  if (!source) return makeEmptyBuilder(userTeamName, cpuTeamName);
+
+  const savedUserTeamName = String(source.userTeamName || "").trim();
+  const controlledUserTeamName = String(userTeamName || "").trim();
+
+  // Never render another franchise's saved proposal under the currently
+  // controlled team, even for a single frame before the sync effect runs.
+  if (savedUserTeamName && controlledUserTeamName && savedUserTeamName !== controlledUserTeamName) {
+    return makeEmptyBuilder(controlledUserTeamName, cpuTeamName);
+  }
+
+  return sanitizeBuilderForStandardRoster(source, controlledUserTeamName, cpuTeamName, eligibilityOptions);
+}
+
 function itemKey(item) {
   if (!item) return "";
   if (item.type === "player") {
@@ -2583,7 +2599,7 @@ export default function ProposeTrade() {
     const saved = safeReadBuilder();
     sessionStorage.removeItem("bm_trade_builder_resume_v1");
     if (shouldResumeSavedBuilder && saved) {
-      return sanitizeBuilderForStandardRoster(saved, userTeamName, firstCpu, { leagueData, tradeContext });
+      return resumeBuilderForControlledTeam(saved, userTeamName, firstCpu, { leagueData, tradeContext });
     }
     return makeEmptyBuilder(userTeamName, firstCpu);
   });
@@ -2591,7 +2607,13 @@ export default function ProposeTrade() {
   const [notice, setNotice] = useState("");
   const [evaluation, setEvaluation] = useState(() => {
     const saved = shouldResumeSavedBuilder ? safeReadBuilder() : null;
-    return location.state?.fromTradeFinder && saved?.source === "tradeFinder" && saved?.tradeFinderEvaluation
+    const savedBuilderMatchesControlledTeam = Boolean(
+      !saved?.userTeamName || saved.userTeamName === userTeamName
+    );
+    return location.state?.fromTradeFinder &&
+      savedBuilderMatchesControlledTeam &&
+      saved?.source === "tradeFinder" &&
+      saved?.tradeFinderEvaluation
       ? saved.tradeFinderEvaluation
       : null;
   });
