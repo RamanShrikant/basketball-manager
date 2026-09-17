@@ -2797,7 +2797,9 @@ const standardPatienceBlocked = Boolean(
       }
     }
 
-    if (!alreadySelected && selectedAssetKeys.length < MAX_TRADE_FINDER_PACKAGE_ASSETS) {
+    if (alreadySelected) {
+      playSound(SOUND_KEYS.UI_BACK_CANCEL);
+    } else if (selectedAssetKeys.length < MAX_TRADE_FINDER_PACKAGE_ASSETS) {
       playSound(SOUND_KEYS.TRADE_FINDER_ADD_ASSET);
     }
 
@@ -3277,7 +3279,7 @@ const standardPatienceBlocked = Boolean(
             </div>
 
             <button
-              onClick={() => navigate("/propose-trade")}
+              onClick={() => { playSound(SOUND_KEYS.UI_BACK_CANCEL); navigate("/propose-trade"); }}
               className="rounded-xl border border-orange-400/25 bg-orange-500/10 px-4 py-2 text-sm font-black text-orange-100 hover:bg-orange-500/20"
             >
               Builder

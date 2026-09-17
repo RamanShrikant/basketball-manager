@@ -2777,6 +2777,7 @@ export default function ProposeTrade() {
   };
 
   const removeItem = (side, itemIdentity) => {
+    playSound(SOUND_KEYS.UI_BACK_CANCEL);
     updateBuilder((prev) => {
       const items = [...getSideItems(prev, side)];
       const identityIsIndex = typeof itemIdentity === "number";
@@ -3318,7 +3319,7 @@ export default function ProposeTrade() {
                   <div className="mt-1 text-sm font-semibold text-neutral-500">Open pick selector and choose valid pick rules.</div>
                 </button>
                 <button
-                  onClick={() => setSlotMenu(null)}
+                  onClick={() => { playSound(SOUND_KEYS.UI_BACK_CANCEL); setSlotMenu(null); }}
                   className="rounded-2xl border border-white/10 bg-black px-5 py-3 text-sm font-black text-neutral-400 hover:bg-white/10"
                 >
                   Cancel

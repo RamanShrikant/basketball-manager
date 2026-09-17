@@ -23,6 +23,7 @@ import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
 import useKeyboardListNavigation from "../utils/useKeyboardListNavigation.js";
 import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
+import { playSound, SOUND_KEYS } from "../audio/soundManager.js";
 
 const MANUAL_STARTER_MINUTES = 1;
 const MANUAL_STARTER_MAX_MINUTES = 48;
@@ -463,6 +464,7 @@ const handleAutoRebuild = () => {
     const handleSquareClick = (player) => {
         const currentDate = readLeagueClock()?.date || null;
         if (isPlayerInjured(player, currentDate)) return;
+        playSound(SOUND_KEYS.COACH_GAMEPLAN_SWAP);
         if (!swapSelection) {
         setSwapSelection(player);
         } else if (swapSelection.name === player.name) {

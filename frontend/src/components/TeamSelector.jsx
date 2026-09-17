@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import { playSound, SOUND_KEYS } from "../audio/soundManager.js";
 import styles from "./TeamSelector.module.css";
 
 const NBA_LOGO_SRC = "/nba_PNG20.png";
@@ -39,6 +40,7 @@ export default function TeamSelector() {
   const moveCarousel = useCallback(
     (dir) => {
       if (cycleSize <= 1) return;
+      playSound(SOUND_KEYS.TEAM_SELECTOR_CYCLE);
       setActiveSlot((prev) => normalizeSlot(prev + dir));
     },
     [cycleSize, normalizeSlot]
@@ -48,6 +50,7 @@ export default function TeamSelector() {
 
   const handleAdvance = useCallback(() => {
     if (!activeTeam) return;
+    playSound(SOUND_KEYS.TEAM_SELECTION_ADVANCE);
     setSelectedTeam(activeTeam);
     navigate("/team-hub");
   }, [activeTeam, navigate, setSelectedTeam]);
@@ -94,7 +97,7 @@ export default function TeamSelector() {
     return (
       <div className={styles.wrapper}>
         <p>No league loaded.</p>
-        <button onClick={() => navigate("/play")}>Go Back</button>
+        <button onClick={() => { playSound(SOUND_KEYS.UI_BACK_CANCEL); navigate("/play"); }}>Go Back</button>
       </div>
     );
   }
@@ -150,7 +153,10 @@ export default function TeamSelector() {
               type="button"
               key={`${item.key}-${item.offset}-${index}`}
               onClick={() => {
-                if (item.offset !== 0) setActiveSlot(item.slot);
+                if (item.offset !== 0) {
+                  playSound(SOUND_KEYS.TEAM_SELECTOR_CYCLE);
+                  setActiveSlot(item.slot);
+                }
               }}
               disabled={item.offset === 0 && item.isPlaceholder}
               className={`${styles.card} ${
