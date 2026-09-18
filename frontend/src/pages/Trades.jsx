@@ -1,13 +1,15 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { getUserTradeDeadlineStatus } from "../utils/userTradeRules.js";
-import { buildRecordMap, getStandardPlayers, playerOverall } from "../utils/teamIntel_v1.js";
+import { buildRecordMap, getStandardPlayers, playerHeadshotOf, playerOverall } from "../utils/teamIntel_v1.js";
 import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
 import { buildCanonicalStandingLabelMap, loadRegularSeasonResultsV3FromStorage } from "../utils/canonicalStandings.js";
 import { getContractSeasonYear } from "../utils/seasonContext.js";
+import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { normalizeDraftPicks, normalizeTeamName } from "../utils/draftPicks.js";
 import PageFade from "../components/PageFade";
+import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
 import { TRADE_CONTEXT_POPUP_TUNING } from "../config/tradeContextPopupTuning.js";
@@ -470,6 +472,193 @@ function buildTeamContextAlerts(team, leagueData) {
   return alerts.slice(0, 2);
 }
 
+
+function getExpiringContractRows(team, leagueData) {
+  return getStandardPlayers(team)
+    .filter((player) => contractYearsLeft(player, leagueData) === 1 && currentContractSalary(player, leagueData) > 0)
+    .sort((a, b) => playerOverall(b) - playerOverall(a));
+}
+
+function formatTradeMoney(value) {
+  const amount = Math.abs(Number(value || 0));
+  if (amount >= 1_000_000_000) {
+    const billions = Number((amount / 1_000_000_000).toFixed(amount >= 10_000_000_000 ? 0 : 1));
+    return `$${billions}B`;
+  }
+  if (amount >= 1_000_000) {
+    const millions = Number((amount / 1_000_000).toFixed(amount >= 10_000_000 ? 1 : 2));
+    return `$${millions}M`;
+  }
+  if (amount >= 1_000) return `$${Math.round(amount / 1_000)}K`;
+  return `$${Math.round(amount)}`;
+}
+
+function getTradeCenterDeadCap(team, leagueData) {
+  const teamName = team?.name || team?.teamName || "";
+  const seasonYear = getContractSeasonYear(leagueData || {});
+  const rows = Array.isArray(leagueData?.deadCapByTeam?.[teamName]) ? leagueData.deadCapByTeam[teamName] : [];
+  return rows.reduce((sum, row) => {
+    const rowSeason = safeNumber(row?.seasonYear, seasonYear);
+    if (rowSeason !== safeNumber(seasonYear, rowSeason)) return sum;
+    return sum + safeNumber(row?.amount ?? row?.netAmount ?? row?.originalAmount, 0);
+  }, 0);
+}
+
+function getTradeCenterPayroll(team, leagueData) {
+  const rosterPayroll = (Array.isArray(team?.players) ? team.players : [])
+    .reduce((sum, player) => sum + currentContractSalary(player, leagueData), 0);
+  const computed = rosterPayroll + getTradeCenterDeadCap(team, leagueData);
+  if (computed > 0) return computed;
+  return safeNumber(team?.payroll ?? team?.totalSalary ?? team?.salaryTotal ?? team?.financials?.payroll, 0);
+}
+
+function buildCapOutlook(team, leagueData) {
+  const rules = getLeagueFinancialRules(leagueData || {});
+  const payroll = getTradeCenterPayroll(team, leagueData);
+  const cap = safeNumber(rules?.salaryCap, 0);
+  const tax = safeNumber(rules?.luxuryTaxLine, 0);
+  const firstApron = safeNumber(rules?.firstApron, 0);
+  const secondApron = safeNumber(rules?.secondApron, 0);
+
+  if (!payroll) {
+    return { primary: "—", secondary: "Payroll data unavailable", payroll: 0 };
+  }
+  if (cap && payroll <= cap) {
+    return { primary: `${formatTradeMoney(cap - payroll)} cap room`, secondary: `Payroll ${formatTradeMoney(payroll)}`, payroll };
+  }
+  if (tax && payroll <= tax) {
+    return { primary: `${formatTradeMoney(tax - payroll)} below tax`, secondary: `Payroll ${formatTradeMoney(payroll)}`, payroll };
+  }
+  if (firstApron && payroll <= firstApron) {
+    return { primary: `${formatTradeMoney(firstApron - payroll)} below 1st apron`, secondary: `Payroll ${formatTradeMoney(payroll)}`, payroll };
+  }
+  if (secondApron && payroll <= secondApron) {
+    return { primary: `${formatTradeMoney(secondApron - payroll)} below 2nd apron`, secondary: `Payroll ${formatTradeMoney(payroll)}`, payroll };
+  }
+  if (secondApron) {
+    return { primary: `${formatTradeMoney(payroll - secondApron)} above 2nd apron`, secondary: `Payroll ${formatTradeMoney(payroll)}`, payroll };
+  }
+  return { primary: formatTradeMoney(payroll), secondary: "Current payroll", payroll };
+}
+
+function DraftPickIcon({ className = "h-5 w-5" }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M4 7.2h16v3a2 2 0 0 0 0 3.6v3H4v-3a2 2 0 0 0 0-3.6z" />
+      <path d="M12 8.8v6.4" />
+    </svg>
+  );
+}
+
+function TradeSearchIcon({ className = "h-5 w-5" }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <circle cx="10.8" cy="10.8" r="6.3" />
+      <path d="m15.6 15.6 4.1 4.1" />
+    </svg>
+  );
+}
+
+function normalizePlayerSearchText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function playerSearchMatchScore(value, query) {
+  const text = normalizePlayerSearchText(value);
+  const q = normalizePlayerSearchText(query);
+  if (!text || !q) return Number.POSITIVE_INFINITY;
+  if (text === q) return 0;
+  if (text.startsWith(q)) return 1;
+  if (text.split(/\s+/).some((word) => word.startsWith(q))) return 2;
+  if (text.includes(q)) return 3;
+  return Number.POSITIVE_INFINITY;
+}
+
+function playerSearchNameOf(player = {}) {
+  return String(player?.name || player?.playerName || player?.player || "").trim();
+}
+
+function collectTradeCenterSearchablePlayers(leagueData = {}, teams = []) {
+  const rows = [];
+  const seen = new Set();
+
+  const addPlayer = (player, team = null, teamName = "Free Agent") => {
+    if (!player || typeof player !== "object") return;
+    const name = playerSearchNameOf(player);
+    if (!name) return;
+    const resolvedTeamName = team ? String(team?.name || team?.teamName || "").trim() : String(teamName || "Free Agent");
+    const identity = String(player?.id ?? player?.playerId ?? player?.uuid ?? name);
+    const key = `${normalizePlayerSearchText(resolvedTeamName)}::${normalizePlayerSearchText(identity)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push({
+      player,
+      teamName: resolvedTeamName || "Free Agent",
+      teamLogo: team ? teamLogoOf(team) : String(player?.teamLogo || ""),
+    });
+  };
+
+  teams.forEach((team) => {
+    const buckets = [
+      team?.players,
+      team?.roster,
+      team?.standardPlayers,
+      team?.twoWayPlayers,
+      team?.twoWay,
+      team?.stashPlayers,
+      team?.stashes,
+      getStandardPlayers(team),
+    ];
+    buckets.forEach((bucket) => {
+      if (!Array.isArray(bucket)) return;
+      bucket.forEach((player) => addPlayer(player, team));
+    });
+  });
+
+  const freeAgentBuckets = [
+    leagueData?.freeAgents,
+    leagueData?.freeAgency?.freeAgents,
+    leagueData?.freeAgency?.players,
+    leagueData?.freeAgencyState?.freeAgents,
+    leagueData?.freeAgencyState?.availablePlayers,
+  ];
+  freeAgentBuckets.forEach((bucket) => {
+    if (!Array.isArray(bucket)) return;
+    bucket.forEach((player) => addPlayer(player, null, "Free Agent"));
+  });
+
+  return rows;
+}
+
+function feedMatchesSearch(row, query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return true;
+  const teamNames = Array.isArray(row?.teamNames) ? row.teamNames : [];
+  const playerNames = Array.isArray(row?.playerNames) ? row.playerNames : [];
+  const haystack = [row?.headline, row?.label, row?.tag, ...teamNames, ...playerNames]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(q);
+}
+
+function historyMatchesSearch(entry, query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return true;
+  const bits = [entry?.headline, entry?.tag];
+  for (const side of Array.isArray(entry?.teamPackages) ? entry.teamPackages : []) {
+    bits.push(side?.teamName, side?.reason);
+    for (const asset of Array.isArray(side?.received) ? side.received : []) {
+      bits.push(assetLabel(asset), assetMeta(asset));
+    }
+  }
+  return bits.filter(Boolean).join(" ").toLowerCase().includes(q);
+}
+
 function normalizeConferenceLabel(value) {
   const raw = String(value || "").trim();
   const lower = raw.toLowerCase();
@@ -734,6 +923,10 @@ export default function Trades() {
   const [activeDeskFilter, setActiveDeskFilter] = useState("all");
   const [activeDeskView, setActiveDeskView] = useState("live");
   const [contextDetail, setContextDetail] = useState(null);
+  const [playerSearchQuery, setPlayerSearchQuery] = useState("");
+  const [playerSearchOpen, setPlayerSearchOpen] = useState(false);
+  const [searchPlayerCard, setSearchPlayerCard] = useState(null);
+  const playerSearchRef = useRef(null);
 
   useEffect(() => {
     const refresh = () => setStoredFeed(readTradeDeskFeed());
@@ -748,6 +941,24 @@ export default function Trades() {
     return () => {
       window.clearInterval(intervalId);
       window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handlePointerDown = (event) => {
+      if (!playerSearchRef.current?.contains(event.target)) setPlayerSearchOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setPlayerSearchOpen(false);
+        setPlayerSearchQuery("");
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, []);
 
@@ -791,6 +1002,33 @@ export default function Trades() {
   const standingByTeam = useMemo(() => buildTradePageStandingMap(leagueData, teams), [leagueData, teams]);
   const selectedStanding = standingByTeam.get(normalizeTeamName(selectedTeam?.name || selectedTeam?.teamName || ""));
   const selectedStandingLabel = standingLabel(selectedStanding);
+  const expiringContracts = useMemo(() => getExpiringContractRows(selectedTeam, leagueData), [selectedTeam, leagueData]);
+  const capOutlook = useMemo(() => buildCapOutlook(selectedTeam, leagueData), [selectedTeam, leagueData]);
+  const searchablePlayers = useMemo(
+    () => collectTradeCenterSearchablePlayers(leagueData || {}, teams),
+    [leagueData, teams]
+  );
+  const playerSearchResults = useMemo(() => {
+    const query = normalizePlayerSearchText(playerSearchQuery);
+    if (!query) return [];
+    return searchablePlayers
+      .map((entry) => {
+        const nameScore = playerSearchMatchScore(playerSearchNameOf(entry.player), query);
+        const teamScore = playerSearchMatchScore(entry.teamName, query);
+        const positionScore = playerSearchMatchScore(entry.player?.pos || entry.player?.position || "", query);
+        const score = Math.min(
+          nameScore,
+          Number.isFinite(teamScore) ? teamScore + 4 : Number.POSITIVE_INFINITY,
+          Number.isFinite(positionScore) ? positionScore + 6 : Number.POSITIVE_INFINITY
+        );
+        return { ...entry, score };
+      })
+      .filter((result) => Number.isFinite(result.score))
+      .sort((a, b) => a.score - b.score || playerSearchNameOf(a.player).localeCompare(playerSearchNameOf(b.player)) || playerOverall(b.player) - playerOverall(a.player))
+      .slice(0, 6);
+  }, [playerSearchQuery, searchablePlayers]);
+  const firstPlayerSearchResult = playerSearchResults[0] || null;
+  const primaryExpiringName = expiringContracts[0]?.name || expiringContracts[0]?.player || "";
 
   if (!selectedTeam) {
     return (
@@ -810,289 +1048,306 @@ export default function Trades() {
 
   return (
     <PageFade>
-      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-5 py-4 text-white">
-        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1700px] flex-col gap-4">
-          <div className="flex shrink-0 items-start justify-between gap-4 px-1">
-            <div>
-              <div className="text-[11px] font-black uppercase tracking-[0.24em] text-orange-400">
-                Trade Center
-              </div>
-              <h1 className="mt-1 text-[30px] font-black leading-none tracking-[-0.02em] text-white">
-                {selectedTeam.name} Trades
-              </h1>
-              {selectedStandingLabel && (
-                <div className="mt-2 text-sm font-black tracking-[0.02em] text-neutral-400">
-                  {selectedStandingLabel}
-                </div>
+      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white lg:px-5 lg:py-4">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1700px] flex-col gap-3.5 lg:gap-4">
+          <header className="trade-center-header flex shrink-0 items-center justify-between gap-5 px-1 py-1 lg:gap-6">
+            <div className="flex min-w-0 items-center gap-4 lg:gap-5">
+              {teamLogoOf(selectedTeam) ? (
+                <img src={teamLogoOf(selectedTeam)} alt={selectedTeam.name} className="trade-center-team-logo h-[62px] w-[62px] shrink-0 object-contain lg:h-[70px] lg:w-[70px]" />
+              ) : (
+                <div className="h-[62px] w-[62px] shrink-0 rounded-2xl bg-[#111318] lg:h-[70px] lg:w-[70px]" />
               )}
+              <div className="min-w-0">
+                <div className="text-[10px] font-black uppercase tracking-[0.26em] text-orange-400 lg:text-[11px]">Trade Center</div>
+                <h1 className="mt-1 truncate pb-[3px] pr-2 text-[29px] font-black leading-[1.16] tracking-[-0.025em] text-white sm:text-[31px] lg:text-[35px]">
+                  {selectedTeam.name} Trades
+                </h1>
+                {selectedStandingLabel && (
+                  <div className="mt-1.5 text-[12px] font-bold tracking-[0.02em] text-neutral-400 lg:text-sm">{selectedStandingLabel}</div>
+                )}
+              </div>
             </div>
 
-            <button
-              onClick={() => setStoredFeed(readTradeDeskFeed())}
-              className="mt-1 rounded-xl border border-white/10 bg-black/40 px-4 py-2 text-[11px] font-black uppercase tracking-[0.14em] text-neutral-300 transition hover:border-orange-400/35 hover:bg-orange-500/10 hover:text-white"
-            >
-              ↻ Refresh
-            </button>
-          </div>
+            <div ref={playerSearchRef} className="relative hidden w-[332px] shrink-0 md:block lg:w-[382px]">
+              <label className={`trade-center-search flex h-11 items-center gap-2.5 rounded-xl border bg-[#11151b] px-3.5 text-neutral-300 shadow-[0_12px_30px_rgba(0,0,0,0.26),inset_0_1px_0_rgba(255,255,255,0.045)] transition ${playerSearchOpen ? "border-orange-400/45 bg-[#131922]" : "border-white/[0.18]"}`}>
+                <TradeSearchIcon className="h-4 w-4 shrink-0" />
+                <input
+                  type="search"
+                  value={playerSearchQuery}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onFocus={() => setPlayerSearchOpen(true)}
+                  onChange={(event) => {
+                    setPlayerSearchQuery(event.target.value);
+                    setPlayerSearchOpen(true);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && firstPlayerSearchResult) {
+                      event.preventDefault();
+                      setSearchPlayerCard(firstPlayerSearchResult);
+                      setPlayerSearchOpen(false);
+                    }
+                  }}
+                  placeholder="Search players..."
+                  className="min-w-0 flex-1 bg-transparent text-[13px] font-semibold text-white outline-none placeholder:text-neutral-500"
+                  aria-label="Search players"
+                  aria-expanded={playerSearchOpen && Boolean(playerSearchQuery.trim())}
+                  aria-controls="trade-center-player-search-results"
+                />
+                {playerSearchQuery && (
+                  <button type="button" onClick={() => { setPlayerSearchQuery(""); setPlayerSearchOpen(false); }} className="text-[11px] font-black text-neutral-500 hover:text-white" aria-label="Clear player search">×</button>
+                )}
+              </label>
 
-          <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-            <section className="flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-white/10 bg-neutral-950/88 shadow-2xl">
-              <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-orange-600/12 via-neutral-900/95 to-neutral-950 px-6 py-5">
-                <div className="flex items-center gap-4">
-                  {teamLogoOf(selectedTeam) ? (
-                    <img
-                      src={teamLogoOf(selectedTeam)}
-                      alt={selectedTeam.name}
-                      className="h-14 w-14 shrink-0 object-contain"
-                    />
-                  ) : (
-                    <div className="h-14 w-14 shrink-0 rounded-2xl bg-white/5" />
-                  )}
-                  <div className="min-w-0">
-                    <div className="text-[12px] font-black uppercase tracking-[0.18em] text-white">
-                      Team Context
-                    </div>
-                    <div className="mt-1 text-sm font-semibold text-neutral-500">
-                      Live roster and contract context.
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex min-h-0 flex-1 flex-col p-6">
-                <div className="grid gap-2">
-                  {teamContextAlerts.length ? (
-                    teamContextAlerts.map((alert) => (
-                      <div
-                        key={alert}
-                        className="rounded-xl border border-white/10 bg-white/[0.035] px-4 py-2.5 text-sm font-bold text-neutral-200"
+              {playerSearchOpen && playerSearchQuery.trim() ? (
+                <div id="trade-center-player-search-results" className="absolute right-0 top-[calc(100%+8px)] z-50 w-full overflow-hidden rounded-xl border border-white/[0.12] bg-[#0d1014] p-2 shadow-[0_22px_48px_rgba(0,0,0,0.55)]">
+                  <div className="px-2 pb-1.5 pt-1 text-[9px] font-black uppercase tracking-[0.16em] text-neutral-500">Players</div>
+                  {playerSearchResults.length ? playerSearchResults.map((result) => {
+                    const name = playerSearchNameOf(result.player);
+                    const headshot = playerHeadshotOf(result.player);
+                    return (
+                      <button
+                        key={`${result.teamName}-${result.player?.id ?? result.player?.playerId ?? name}`}
+                        type="button"
+                        onClick={() => {
+                          setSearchPlayerCard(result);
+                          setPlayerSearchOpen(false);
+                        }}
+                        className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition hover:bg-white/[0.06]"
                       >
-                        {alert}
-                      </div>
-                    ))
-                  ) : (
-                    <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-neutral-500">
-                      No major contract decisions are due right now.
+                        <span className="flex h-10 w-10 shrink-0 items-end justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#171b21]">
+                          {headshot ? <img src={headshot} alt="" className="h-full w-full object-cover object-top" /> : <span className="pb-2 text-sm font-black text-neutral-500">{name.slice(0, 1)}</span>}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[12px] font-black text-white">{name}</span>
+                          <span className="mt-0.5 block truncate text-[10px] font-semibold text-neutral-500">
+                            {result.player?.pos || result.player?.position || "—"}{result.teamName ? ` • ${result.teamName}` : ""}
+                          </span>
+                        </span>
+                        <span className="shrink-0 rounded-lg border border-orange-400/20 bg-orange-500/10 px-2 py-1 text-[11px] font-black text-orange-200">{playerOverall(result.player)}</span>
+                      </button>
+                    );
+                  }) : (
+                    <div className="px-3 py-5 text-center text-[11px] font-semibold text-neutral-500">No matching players.</div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          </header>
+
+          <div className="trade-center-grid grid min-h-0 flex-1 gap-3 lg:grid-cols-[1.07fr_0.93fr] lg:gap-4">
+            <section className="trade-center-panel flex min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/[0.08] bg-[#0b0d10] shadow-[0_22px_56px_rgba(0,0,0,0.30)]">
+              <div className="flex min-h-0 flex-1 flex-col p-4 lg:p-5">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-orange-400/20 bg-orange-500/10 text-orange-400">
+                    <span className="text-lg font-black">◎</span>
+                  </div>
+                  <div>
+                    <div className="text-[15px] font-black uppercase tracking-[0.11em] text-white">Team Context</div>
+                    <div className="mt-0.5 text-[11.5px] font-semibold text-neutral-400">Real roster, payroll, and contract context.</div>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => navigate("/salary-table")}
+                    className="group flex min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-white/[0.09] bg-[#171b21] px-3.5 py-3.5 text-left shadow-[0_10px_22px_rgba(0,0,0,0.16),inset_0_1px_0_rgba(255,255,255,0.03)] transition hover:-translate-y-px hover:border-orange-400/35 hover:bg-[#1b2027] hover:shadow-[0_14px_28px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.04)]"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-orange-400/15 bg-orange-500/[0.08] text-orange-300">
+                      <span className="text-lg">◉</span>
                     </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[11px] font-bold text-neutral-300">Cap Outlook</div>
+                      <div className="mt-0.5 truncate text-[17px] font-black text-white">{capOutlook.primary}</div>
+                      <div className="mt-0.5 flex items-center justify-between gap-2 text-[10px] font-semibold text-neutral-500">
+                        <span className="truncate">{capOutlook.secondary}</span>
+                        <span className="shrink-0 text-orange-300/75">Salary Table</span>
+                      </div>
+                    </div>
+                    <span className="text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">›</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => navigate("/contract-extensions")}
+                    className="group flex min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-white/[0.09] bg-[#171b21] px-3.5 py-3.5 text-left shadow-[0_10px_22px_rgba(0,0,0,0.16),inset_0_1px_0_rgba(255,255,255,0.03)] transition hover:-translate-y-px hover:border-orange-400/35 hover:bg-[#1b2027] hover:shadow-[0_14px_28px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.04)]"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-orange-400/15 bg-orange-500/[0.08] text-orange-300">
+                      <span className="text-lg">▤</span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[11px] font-bold text-neutral-300">Expiring Contracts</div>
+                      <div className="mt-0.5 text-[17px] font-black text-white">{pluralize(expiringContracts.length, "player")}</div>
+                      <div className="mt-0.5 flex items-center justify-between gap-2 text-[10px] font-semibold text-neutral-500">
+                        <span className="truncate">{primaryExpiringName ? `${primaryExpiringName}${expiringContracts.length > 1 ? ` + ${expiringContracts.length - 1} more` : ""}` : "No standard contracts expiring"}</span>
+                        <span className="shrink-0 text-orange-300/75">Contracts</span>
+                      </div>
+                    </div>
+                    <span className="text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">›</span>
+                  </button>
+                </div>
+
+                <div className="mt-2.5 grid gap-2">
+                  {teamContextAlerts.length ? teamContextAlerts.map((alert, index) => (
+                    <div key={alert} className="flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-[#121419] px-3.5 py-2.5 text-[12px] font-bold text-neutral-200">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-orange-500/15 text-[11px] font-black text-orange-300">!</span>
+                      <span className={index === 0 ? "text-neutral-200" : "text-neutral-300"}>{alert}</span>
+                    </div>
+                  )) : (
+                    <div className="rounded-xl border border-white/[0.07] bg-[#121419] px-3.5 py-2.5 text-[12px] font-semibold text-neutral-400">No major contract decisions are due right now.</div>
                   )}
                 </div>
 
-                <div className="my-4 h-px bg-white/10" />
-
-                <div>
-                  <div className="mb-3 text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">
-                    Position Depth
+                <div className="mt-3 rounded-[16px] bg-[#101217] p-3.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)]">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-[19px] text-orange-400">♙</span>
+                    <div>
+                      <div className="text-[13.5px] font-black uppercase tracking-[0.095em] text-white">Position Depth</div>
+                      <div className="mt-0.5 text-[10.5px] font-semibold text-neutral-400">Players under contract by position.</div>
+                    </div>
                   </div>
-                  <div className="grid grid-cols-5 gap-2">
+                  <div className="mt-2.5 grid grid-cols-5 gap-2">
                     {positionDepth.map((row) => {
-                      const shortageClass = row.count === 0
-                        ? "border-red-500/35 bg-red-500/10 text-red-300"
-                        : row.count === 1
-                          ? "border-orange-400/35 bg-orange-500/10 text-orange-300"
-                          : "border-white/10 bg-black/30 text-neutral-300";
+                      const shortageClass = row.count === 0 ? "text-red-300" : row.count === 1 ? "text-orange-300" : "text-white";
+                      const fillClass = row.count === 0 ? "bg-red-500/85" : row.count === 1 ? "bg-orange-500/90" : "bg-emerald-500/75";
+                      const fillPercent = Math.min(100, Math.max(12, (row.count / Math.max(1, row.target)) * 100));
                       return (
-                        <button
-                          key={row.key}
-                          type="button"
-                          onClick={() => setContextDetail({ type: "position", key: row.key, label: row.label })}
-                          className={`group min-w-0 rounded-xl border px-2 py-3 text-center transition duration-150 hover:-translate-y-px hover:border-orange-400/35 hover:bg-orange-500/[0.08] focus:outline-none focus-visible:ring-1 focus-visible:ring-orange-400/60 ${shortageClass}`}
-                          aria-label={`View ${row.label} players`}
-                        >
-                          <div className="truncate text-[9px] font-black uppercase tracking-[0.12em] opacity-80">
-                            {row.label}
-                          </div>
-                          <div className="mt-1 text-lg font-black leading-none">
-                            {row.count}/{row.target}
-                          </div>
+                        <button key={row.key} type="button" onClick={() => setContextDetail({ type: "position", key: row.key, label: row.label })} className="group relative min-w-0 cursor-pointer rounded-xl border border-white/[0.07] bg-[#15181d] px-2.5 py-2.5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition hover:-translate-y-px hover:border-orange-400/35 hover:bg-[#191b20]" aria-label={`View ${row.label} players`}>
+                          <span className="absolute right-2 top-1.5 text-[12px] font-black text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">›</span>
+                          <div className="text-[10.5px] font-black uppercase tracking-[0.1em] text-neutral-400">{row.key}</div>
+                          <div className={`mt-1 text-[20px] font-black leading-none ${shortageClass}`}>{row.count}<span className="ml-0.5 text-[11px] text-neutral-500">/{row.target}</span></div>
+                          <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-white/[0.08]"><div className={`h-full rounded-full ${fillClass}`} style={{ width: `${fillPercent}%` }} /></div>
                         </button>
                       );
                     })}
                   </div>
-                </div>
 
-                <div className="mt-4">
-                  <div className="mb-2.5 text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">
-                    Pick Depth
+                  <div className="mt-3 flex items-center gap-2.5">
+                    <DraftPickIcon className="h-[19px] w-[19px] text-orange-400" />
+                    <div>
+                      <div className="text-[13.5px] font-black uppercase tracking-[0.095em] text-white">Pick Depth</div>
+                      <div className="mt-0.5 text-[10.5px] font-semibold text-neutral-400">Draft assets and pick control.</div>
+                    </div>
                   </div>
-                  <div className="grid grid-cols-5 gap-2">
+                  <div className="mt-2 grid grid-cols-5 gap-2">
                     {pickDepth.map((row) => (
-                      <button
-                        key={row.key}
-                        type="button"
-                        onClick={() => setContextDetail({ type: "pick", key: row.key, label: row.label })}
-                        className="group min-w-0 rounded-xl border border-white/10 bg-black/30 px-2 py-3 text-center text-neutral-300 transition duration-150 hover:-translate-y-px hover:border-orange-400/35 hover:bg-orange-500/[0.08] hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-orange-400/60"
-                        aria-label={`View ${row.label}`}
-                      >
-                        <div className="whitespace-nowrap text-[8px] font-black uppercase tracking-[0.055em] opacity-85">
-                          {row.label}
+                      <button key={row.key} type="button" onClick={() => setContextDetail({ type: "pick", key: row.key, label: row.label })} className="group relative flex min-w-0 cursor-pointer items-end justify-between gap-2 rounded-xl border border-white/[0.07] bg-[#15181d] px-2.5 py-3 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition hover:-translate-y-px hover:border-orange-400/35 hover:bg-[#191b20]" aria-label={`View ${row.label}`}>
+                        <span className="absolute right-2 top-1.5 text-[12px] font-black text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">›</span>
+                        <div className="min-w-0 flex-1 pr-4">
+                          <div className="min-h-[24px] text-[9.5px] font-bold leading-[1.2] text-neutral-400">{row.label}</div>
+                          <div className="mt-1.5 text-[20px] font-black leading-none text-white">{row.count}</div>
                         </div>
-                        <div className="mt-1 text-lg font-black leading-none">
-                          {row.count}
-                        </div>
+                        <DraftPickIcon className="mb-0.5 h-3.5 w-3.5 shrink-0 text-orange-500/55" />
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {tradeWindowLocked && (
-                  <div className="mt-5 rounded-xl border border-orange-400/25 bg-orange-500/10 px-4 py-3 text-sm font-black text-orange-100">
-                    {tradeLockMessage}
-                  </div>
-                )}
+                {tradeWindowLocked && <div className="mt-2.5 rounded-xl border border-orange-400/25 bg-orange-500/10 px-4 py-2.5 text-[11px] font-black text-orange-100">{tradeLockMessage}</div>}
 
-                <div className="mt-auto pt-6">
+                <div className="mt-3 grid grid-cols-2 gap-2.5">
                   <button
                     onClick={() => !tradeWindowLocked && navigate("/propose-trade")}
                     disabled={tradeWindowLocked}
-                    className="flex w-full items-center justify-between rounded-xl bg-gradient-to-r from-orange-600 to-orange-500 px-5 py-4 text-left text-base font-black text-white shadow-[0_18px_45px_rgba(234,88,12,0.22)] transition hover:-translate-y-0.5 hover:from-orange-500 hover:to-orange-400 disabled:cursor-not-allowed disabled:from-neutral-800 disabled:to-neutral-800 disabled:text-neutral-500 disabled:shadow-none disabled:hover:translate-y-0"
+                    className="group flex min-w-0 items-center justify-between rounded-xl bg-gradient-to-r from-orange-600 to-orange-500 px-4 py-3.5 text-left text-white shadow-[0_16px_36px_rgba(234,88,12,0.18)] transition hover:-translate-y-0.5 hover:from-orange-500 hover:to-orange-400 disabled:cursor-not-allowed disabled:from-neutral-800 disabled:to-neutral-800 disabled:text-neutral-500 disabled:shadow-none disabled:hover:translate-y-0"
                   >
-                    <span className="flex items-center gap-3"><span className="text-xl">↔</span> Propose Trade</span>
-                    <span className="text-xl">›</span>
-                  </button>
-
-                  <button
-                    onClick={() => !tradeWindowLocked && navigate("/trade-finder")}
-                    disabled={tradeWindowLocked}
-                    className="mt-3 flex w-full items-center justify-between rounded-xl border border-orange-400/25 bg-black/45 px-5 py-4 text-left text-white transition hover:-translate-y-0.5 hover:border-orange-300/50 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-neutral-600 disabled:hover:translate-y-0"
-                  >
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-3 text-base font-black"><span className="text-xl text-orange-400">⌕</span> Trade Finder</span>
-                      <span className="mt-1 block pl-8 text-[11px] font-semibold text-neutral-500">Find matches and trade ideas around the league.</span>
+                    <span className="flex min-w-0 items-center gap-3">
+                      <span className="text-[24px] leading-none">↔</span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-[14px] font-black">{hasSavedProposal ? "Resume Proposal" : "Propose Trade"}</span>
+                        <span className="mt-0.5 block truncate text-[10px] font-semibold text-orange-50/85">
+                          {hasSavedProposal ? `${pluralize(userItems, "asset")} from you • ${pluralize(cpuItems, "asset")} from them` : "Build and send a trade proposal."}
+                        </span>
+                      </span>
                     </span>
-                    <span className="text-xl">›</span>
+                    <span className="text-xl transition group-hover:translate-x-0.5">›</span>
                   </button>
 
-                  {hasSavedProposal && (
-                    <div className="mt-3 rounded-xl border border-orange-400/20 bg-orange-500/[0.08] px-4 py-3 text-xs font-semibold text-orange-100">
-                      Saved proposal: {pluralize(userItems, "asset")} from your side, {pluralize(cpuItems, "asset")} from the other side.
-                    </div>
-                  )}
+                  <button onClick={() => !tradeWindowLocked && navigate("/trade-finder")} disabled={tradeWindowLocked} className="group flex min-w-0 items-center justify-between rounded-xl border border-orange-400/20 bg-[#111318] px-4 py-3.5 text-left text-white transition hover:-translate-y-0.5 hover:border-orange-300/45 hover:bg-orange-500/[0.08] disabled:cursor-not-allowed disabled:border-white/10 disabled:text-neutral-600 disabled:hover:translate-y-0">
+                    <span className="flex min-w-0 items-center gap-3">
+                      <TradeSearchIcon className="h-6 w-6 shrink-0 text-orange-400" />
+                      <span className="min-w-0">
+                        <span className="block text-[14px] font-black">Trade Finder</span>
+                        <span className="mt-0.5 block truncate text-[10px] font-semibold text-neutral-400">Find matches and trade ideas.</span>
+                      </span>
+                    </span>
+                    <span className="text-xl transition group-hover:translate-x-0.5">›</span>
+                  </button>
                 </div>
               </div>
             </section>
 
-            <section className="flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-white/10 bg-neutral-950/82 shadow-2xl">
-              <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-neutral-900/95 to-black px-6 py-5">
+            <section className="trade-center-panel flex min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/[0.08] bg-[#0b0d10] shadow-[0_22px_56px_rgba(0,0,0,0.30)]">
+              <div className="shrink-0 px-4 pb-2 pt-4 lg:px-5">
                 <div className="flex items-center gap-3">
-                  <span className="text-xl font-black text-orange-500">⌁</span>
+                  <span className="text-[22px] font-black text-orange-500">⌁</span>
                   <div>
-                    <div className="text-[18px] font-black uppercase tracking-[0.02em] text-white">
-                      League Rumor Board
-                    </div>
-                    <div className="mt-1 text-sm font-semibold text-neutral-500">
-                      Real CPU front-office signals, negotiations, and completed movement.
-                    </div>
+                    <div className="text-[16px] font-black uppercase tracking-[0.035em] text-white">League Rumor Board</div>
+                    <div className="mt-0.5 text-[11px] font-semibold text-neutral-400">Real CPU front-office signals, negotiations, and completed movement.</div>
                   </div>
                 </div>
               </div>
 
-              <div className="bmTableScroller grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-5">
-                <div className="grid grid-cols-2 rounded-xl border border-white/10 bg-black/30 p-1">
-                  <button
-                    type="button"
-                    onClick={() => setActiveDeskView("live")}
-                    className={`relative rounded-lg px-3 py-3 text-sm font-black transition ${!showingHistory ? "bg-white/[0.035] text-orange-200" : "text-neutral-500 hover:text-neutral-300"}`}
-                  >
-                    Live Board
-                    {!showingHistory && <span className="absolute bottom-0 left-1/4 right-1/4 h-[2px] rounded-full bg-orange-500" />}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveDeskView("history")}
-                    className={`relative rounded-lg px-3 py-3 text-sm font-black transition ${showingHistory ? "bg-white/[0.035] text-orange-200" : "text-neutral-500 hover:text-neutral-300"}`}
-                  >
-                    History Log
-                    {showingHistory && <span className="absolute bottom-0 left-1/4 right-1/4 h-[2px] rounded-full bg-orange-500" />}
-                  </button>
+              <div className="bmTableScroller flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-4 lg:px-5">
+                <div className="grid shrink-0 grid-cols-2 border-b border-white/10">
+                  <button type="button" onClick={() => setActiveDeskView("live")} className={`relative px-3 py-3 text-[12px] font-black transition ${!showingHistory ? "text-white" : "text-neutral-500 hover:text-neutral-300"}`}>Live Board{!showingHistory && <span className="absolute bottom-[-1px] left-1/4 right-1/4 h-[2px] rounded-full bg-orange-500" />}</button>
+                  <button type="button" onClick={() => setActiveDeskView("history")} className={`relative px-3 py-3 text-[12px] font-black transition ${showingHistory ? "text-white" : "text-neutral-500 hover:text-neutral-300"}`}>History Log{showingHistory && <span className="absolute bottom-[-1px] left-1/4 right-1/4 h-[2px] rounded-full bg-orange-500" />}</button>
                 </div>
 
                 {!showingHistory && (
                   <>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="mt-3 grid shrink-0 grid-cols-3 gap-2.5">
                       {DESK_FILTERS.map((filter) => {
                         const active = activeDeskFilter === filter.key;
-                        return (
-                          <button
-                            key={filter.key}
-                            type="button"
-                            onClick={() => setActiveDeskFilter((prev) => prev === filter.key ? "all" : filter.key)}
-                            className={`rounded-xl border px-3 py-4 text-center transition ${active ? "border-orange-400/35 bg-orange-500/10" : "border-white/10 bg-white/[0.035] hover:border-orange-400/20 hover:bg-orange-500/[0.06]"}`}
-                          >
-                            <div className="text-2xl font-black text-white">{feedCounts[filter.countKey]}</div>
-                            <div className={`mt-1 text-[10px] font-black uppercase tracking-[0.16em] ${active ? "text-orange-300" : "text-neutral-500"}`}>
-                              {filter.label}
-                            </div>
-                          </button>
-                        );
+                        return <button key={filter.key} type="button" onClick={() => setActiveDeskFilter((prev) => prev === filter.key ? "all" : filter.key)} className={`rounded-xl border px-2 py-3 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition ${active ? "border-orange-400/35 bg-[#1b1511]" : "border-white/[0.07] bg-[#15181d] hover:border-orange-400/25 hover:bg-[#191b20]"}`}><div className="text-[22px] font-black leading-none text-white">{feedCounts[filter.countKey]}</div><div className={`mt-1.5 text-[10px] font-black uppercase tracking-[0.14em] ${active ? "text-orange-300" : "text-neutral-400"}`}>{filter.label}</div></button>;
                       })}
                     </div>
 
                     {showingFilteredDesk && (
-                      <div className="flex items-center justify-between gap-3 rounded-xl border border-orange-400/20 bg-orange-500/[0.08] px-4 py-2.5">
-                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-orange-100">
-                          Showing {labelForDeskFilter(activeDeskFilter)} only
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setActiveDeskFilter("all")}
-                          className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-neutral-300 hover:text-white"
-                        >
-                          Show All
-                        </button>
+                      <div className="mt-2.5 flex shrink-0 items-center justify-between gap-3 rounded-lg border border-orange-400/15 bg-[#18130f] px-3 py-1.5">
+                        <div className="truncate text-[8px] font-black uppercase tracking-[0.12em] text-orange-100">{`Showing ${labelForDeskFilter(activeDeskFilter)} only`}</div>
+                        <button type="button" onClick={() => setActiveDeskFilter("all")} className="text-[8px] font-black uppercase tracking-[0.1em] text-neutral-400 hover:text-white">Clear</button>
                       </div>
                     )}
 
                     {!tradeDeskItems.length && (
-                      <div className="flex min-h-[250px] flex-col items-center justify-center rounded-xl border border-white/10 bg-white/[0.025] px-6 py-8 text-center">
-                        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-orange-400/25 bg-orange-500/[0.06] text-2xl text-orange-400">⌁</div>
-                        <div className="text-base font-black text-white">No live activity right now</div>
-                        <div className="mt-2 max-w-[460px] text-sm font-semibold leading-relaxed text-neutral-500">
-                          Sim ahead and real CPU rumors, talks, and completed deals will appear here.
-                        </div>
+                      <div className="mt-3 flex min-h-[220px] flex-col items-center justify-center rounded-xl border border-white/[0.08] bg-[#12161c] px-6 py-8 text-center shadow-[0_14px_28px_rgba(0,0,0,0.14),inset_0_1px_0_rgba(255,255,255,0.03)]">
+                        <div className="mb-2 flex h-14 w-14 items-center justify-center rounded-full border border-orange-400/25 bg-orange-500/[0.08] text-[23px] text-orange-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">⌁</div>
+                        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-orange-200/90">Awaiting activity</div>
+                        <div className="mt-1 text-[14px] font-black text-white">No live activity right now</div>
+                        <div className="mt-1.5 max-w-[420px] text-[11px] font-semibold leading-relaxed text-neutral-400">Sim ahead and real CPU rumors, talks, and completed deals will appear here as league activity unfolds.</div>
                       </div>
                     )}
 
-                    {tradeDeskItems.map((item) => {
-                      const displayLabel = item.label === "Transaction Wire" ? "Completed Deal" : item.label;
-                      return (
-                        <div
-                          key={item.id || `${item.label}_${item.headline}`}
-                          className="rounded-xl border border-white/10 bg-white/[0.035] p-4 transition hover:border-orange-400/25 hover:bg-orange-500/[0.06]"
-                        >
-                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-orange-200">{displayLabel}</div>
-                          <div className="mt-2 text-sm font-bold leading-relaxed text-neutral-200">{item.headline}</div>
-                          <div className="mt-3 flex flex-wrap items-center gap-2 text-[9px] font-black uppercase tracking-[0.12em] text-neutral-500">
-                            <span>{formatFeedDate(item)}</span>
-                            {Array.isArray(item.teamNames) && item.teamNames.slice(0, 2).map((team) => (
-                              <span key={team} className="rounded-full border border-white/10 bg-black/25 px-2 py-1">{team}</span>
-                            ))}
+                    <div className="mt-3 grid gap-2">
+                      {tradeDeskItems.map((item) => {
+                        const displayLabel = item.label === "Transaction Wire" ? "Deal" : item.label;
+                        const primaryTeam = Array.isArray(item.teamNames) ? findTeamByName(teams, item.teamNames[0]) : null;
+                        const primaryLogo = teamLogoOf(primaryTeam);
+                        const tagClass = item.type === "transaction" ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-300" : item.type === "negotiation" ? "border-sky-400/20 bg-sky-500/10 text-sky-300" : "border-orange-400/20 bg-orange-500/10 text-orange-300";
+                        return (
+                          <div key={item.id || `${item.label}_${item.headline}`} className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-[#15181d] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition hover:border-orange-400/25 hover:bg-[#191b20]">
+                            {primaryLogo ? <img src={primaryLogo} alt="" className="h-8 w-8 shrink-0 object-contain" /> : <div className="h-8 w-8 shrink-0 rounded-lg bg-white/5" />}
+                            <div className="min-w-0 flex-1"><div className="line-clamp-2 text-[11px] font-bold leading-snug text-neutral-200">{item.headline}</div></div>
+                            <div className="shrink-0 text-right"><div className={`rounded-md border px-2 py-1 text-[8px] font-black uppercase tracking-[0.1em] ${tagClass}`}>{displayLabel}</div><div className="mt-1 text-[9px] font-bold text-neutral-500">{formatFeedDate(item)}</div></div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </>
                 )}
 
                 {showingHistory && (
-                  <div className="grid max-h-[610px] gap-3 overflow-y-auto pr-1">
-                    {tradeHistoryRows.length ? (
-                      tradeHistoryRows.map((entry) => (
-                        <TradeHistoryCard key={entry.id} entry={entry} teams={teams} />
-                      ))
-                    ) : (
-                      <div className="flex min-h-[250px] flex-col items-center justify-center rounded-xl border border-white/10 bg-white/[0.025] px-6 py-8 text-center">
-                        <div className="text-sm font-black text-white">No completed trades yet</div>
-                        <div className="mt-2 max-w-[480px] text-sm font-semibold leading-relaxed text-neutral-500">
-                          Completed user and CPU trades will appear here with their saved packages and reasoning.
-                        </div>
-                      </div>
+                  <div className="mt-3 grid gap-3">
+                    {tradeHistoryRows.length ? tradeHistoryRows.map((entry) => <TradeHistoryCard key={entry.id} entry={entry} teams={teams} />) : (
+                      <div className="flex min-h-[260px] flex-col items-center justify-center rounded-xl border border-white/[0.07] bg-[#111318] px-6 py-8 text-center"><div className="text-[14px] font-black text-white">No completed trades yet</div><div className="mt-2 max-w-[440px] text-[11px] font-semibold leading-relaxed text-neutral-400">Completed user and CPU trades will appear here with their saved packages and reasoning.</div></div>
                     )}
                   </div>
                 )}
               </div>
             </section>
           </div>
-
         </div>
       </div>
 
@@ -1103,6 +1358,17 @@ export default function Trades() {
         teamNames={teams.map((team) => team?.name || team?.teamName || "")}
         onClose={() => setContextDetail(null)}
       />
+
+      {searchPlayerCard ? (
+        <PlayerCardModal
+          open={Boolean(searchPlayerCard)}
+          player={searchPlayerCard.player}
+          teamName={searchPlayerCard.teamName || "Free Agent"}
+          teamLogo={searchPlayerCard.teamLogo || ""}
+          leagueData={leagueData}
+          onClose={() => setSearchPlayerCard(null)}
+        />
+      ) : null}
     </PageFade>
   );
 }

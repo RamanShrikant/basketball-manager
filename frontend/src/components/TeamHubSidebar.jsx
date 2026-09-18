@@ -517,6 +517,7 @@ export default function TeamHubSidebar() {
         <button
           type="button"
           className={`${styles.navItem} ${activeName === "Team Hub" ? styles.navItemActive : ""}`}
+          style={activeName === "Team Hub" ? { borderColor: "rgba(249, 115, 22, 0.55)", boxShadow: "none" } : undefined}
           onClick={navigateHome}
           aria-current={activeName === "Team Hub" ? "page" : undefined}
         >
@@ -551,6 +552,7 @@ export default function TeamHubSidebar() {
                         key={`${group.key}-${item.name}`}
                         type="button"
                         className={`${styles.navItem} ${active ? styles.navItemActive : ""} ${!enabled ? styles.navItemDisabled : ""}`}
+                        style={active ? { borderColor: "rgba(249, 115, 22, 0.55)", boxShadow: "none" } : undefined}
                         onClick={() => enabled && navigateItem(item)}
                         disabled={!enabled}
                         aria-current={active ? "page" : undefined}
