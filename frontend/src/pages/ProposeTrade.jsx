@@ -71,15 +71,15 @@ const TRADE_SALARY_TOLERANCE = 1_000;
 // Change only these numbers to move/resize the player face, OVR ring, name,
 // position/age line, and contract line inside each selected trade asset card.
 const TRADE_PLAYER_CARD_TUNING = {
-  cardHeight: 76,
+  cardHeight: 62,
   face: {
-    boxWidth: 68,
-    imageHeight: 88,
+    boxWidth: 56,
+    imageHeight: 72,
     x: 0,
     y: 16,
   },
   ring: {
-    size: 56,
+    size: 42,
     x: -1,
     y: 0,
   },
@@ -90,7 +90,7 @@ const TRADE_PLAYER_CARD_TUNING = {
       y: 0,
     },
     ovrNumber: {
-      size: 18,
+      size: 15,
       x: 0,
       y: 0,
     },
@@ -110,12 +110,12 @@ const TRADE_PLAYER_CARD_TUNING = {
     y: 0,
   },
   positionAge: {
-    size: 9,
+    size: 7,
     x: 0,
     y: 0,
   },
   contract: {
-    size: 8,
+    size: 7,
     x: 0,
     y: 0,
   },
@@ -3067,8 +3067,8 @@ export default function ProposeTrade() {
 
   return (
     <PageFade>
-      <div className="h-screen min-h-0 overflow-hidden bmCourtPage text-white px-3 py-3">
-        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1760px] flex-col">
+      <div className="min-h-screen bmCourtPage text-white px-3 py-3">
+        <div className="mx-auto flex min-h-[calc(100vh-1.5rem)] w-full max-w-none flex-col">
           <div className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-3">
             <button
               onClick={leaveTradeBuilder}

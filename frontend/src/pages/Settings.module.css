@@ -616,3 +616,169 @@
   .optionList, .ruleList { gap: 4px; }
   .ruleRow { padding-top: 3px; padding-bottom: 3px; }
 }
+
+/* === V14.8B SETTINGS SPACING START === */
+/* Settings spacing balance: less crushed, still one-screen focused. */
+.shell {
+  gap: 9px !important;
+  padding-top: 9px !important;
+}
+
+.headerBlock h1 {
+  margin-bottom: 5px !important;
+}
+
+.headerBlock p {
+  line-height: 1.22 !important;
+}
+
+.summaryRow {
+  gap: 9px !important;
+}
+
+.summaryCard {
+  min-height: 47px !important;
+  padding-top: 9px !important;
+  padding-bottom: 8px !important;
+}
+
+.summaryActions {
+  padding: 7px !important;
+}
+
+.summaryActions button,
+.modalDone {
+  height: 31px !important;
+}
+
+.panel {
+  padding-top: 10px !important;
+  padding-bottom: 11px !important;
+}
+
+.optionsPanel {
+  min-height: 136px !important;
+}
+
+.panelHeader {
+  padding-bottom: 7px !important;
+}
+
+.optionList,
+.ruleList {
+  gap: 6px !important;
+  padding-top: 8px !important;
+}
+
+.ruleRow {
+  padding-top: 5px !important;
+  padding-bottom: 5px !important;
+  min-height: 31px !important;
+}
+
+.ruleLabel {
+  line-height: 1.06 !important;
+}
+
+.ruleStatus {
+  margin-top: 4px !important;
+  line-height: 1.05 !important;
+}
+
+@media (max-height: 820px) {
+  .shell {
+    gap: 7px !important;
+    padding-top: 7px !important;
+  }
+
+  .summaryCard {
+    min-height: 43px !important;
+    padding-top: 7px !important;
+    padding-bottom: 7px !important;
+  }
+
+  .panel {
+    padding-top: 8px !important;
+    padding-bottom: 9px !important;
+  }
+
+  .optionsPanel {
+    min-height: 126px !important;
+  }
+
+  .optionList,
+  .ruleList {
+    gap: 5px !important;
+    padding-top: 6px !important;
+  }
+
+  .ruleRow {
+    min-height: 29px !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+  }
+}
+/* === V14.8B SETTINGS SPACING END === */
+/* V14.9 SETTINGS SPACING POLISH START */
+/* Use more vertical room without making Settings scroll at normal desktop height. */
+.shell {
+  gap: 9px !important;
+  padding-top: 10px !important;
+}
+
+.summaryRow {
+  gap: 10px !important;
+}
+
+.summaryCard {
+  min-height: 47px !important;
+  padding-block: 9px !important;
+}
+
+.panel {
+  padding: 10px 16px 12px !important;
+}
+
+.optionsPanel {
+  min-height: 150px !important;
+}
+
+.optionList {
+  gap: 8px !important;
+  padding-top: 9px !important;
+}
+
+.ruleList {
+  gap: 6px !important;
+  padding-top: 9px !important;
+}
+
+.ruleRow {
+  min-height: 31px !important;
+  padding: 5px 12px 5px 14px !important;
+}
+
+.ruleTextBlock strong {
+  line-height: 1.05 !important;
+}
+
+.ruleStatus {
+  margin-top: 2px !important;
+}
+
+@media (max-height: 820px) {
+  .shell {
+    gap: 8px !important;
+  }
+  .summaryCard {
+    min-height: 45px !important;
+  }
+  .ruleList {
+    gap: 5px !important;
+  }
+  .ruleRow {
+    min-height: 29px !important;
+    padding-block: 4px !important;
+  }
+}
+/* V14.9 SETTINGS SPACING POLISH END */

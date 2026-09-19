@@ -39,3 +39,84 @@ body {
   -ms-overflow-style: none; /* IE/Edge */
   scrollbar-width: none;    /* Firefox */
 }
+/* V14.9 GLOBAL TRADE SCREEN POLISH START */
+/* Shared trade screen polish: cleaner one-screen density, less blue-card feel, scroll fallback. */
+.bmCourtPage {
+  min-height: 100vh;
+}
+
+.trade-center-header {
+  margin-bottom: 0 !important;
+}
+
+.trade-center-grid {
+  width: 100% !important;
+  max-width: none !important;
+  align-items: stretch !important;
+}
+
+.trade-center-panel {
+  background: linear-gradient(180deg, rgba(13, 13, 14, 0.98), rgba(5, 5, 6, 0.98)) !important;
+  border-color: rgba(255, 255, 255, 0.075) !important;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28) !important;
+}
+
+.trade-center-panel .bg-[#171b21],
+.trade-center-panel .bg-[#15181d],
+.trade-center-panel .bg-[#111318],
+.trade-center-panel .bg-[#101217],
+.tradeFinderScroller .bg-[#171b21],
+.tradeFinderScroller .bg-[#15181d],
+.tradeFinderScroller .bg-[#111318],
+.tradeFinderScroller .bg-[#101217] {
+  background-color: #111 !important;
+}
+
+.trade-center-panel .grid-cols-5 {
+  gap: 0.35rem !important;
+}
+
+.tradeFinderScroller {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(249, 115, 22, 0.86) rgba(20, 20, 20, 0.74);
+}
+
+.tradeFinderScroller::-webkit-scrollbar {
+  width: 8px;
+}
+
+.tradeFinderScroller::-webkit-scrollbar-track {
+  background: rgba(10,10,10,0.78);
+}
+
+.tradeFinderScroller::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(180deg, #fb923c, #f97316);
+}
+
+.tradeFinderScroller > * {
+  min-width: 0 !important;
+}
+
+.tradeFinderScroller button,
+.tradeFinderScroller [role='button'] {
+  min-width: 0 !important;
+}
+
+@media (max-height: 850px) {
+  .trade-center-team-logo {
+    width: 54px !important;
+    height: 54px !important;
+  }
+  .trade-center-header h1 {
+    font-size: 28px !important;
+    line-height: 1 !important;
+  }
+  .trade-center-search {
+    height: 38px !important;
+  }
+  .trade-center-panel {
+    border-radius: 16px !important;
+  }
+}
+/* V14.9 GLOBAL TRADE SCREEN POLISH END */

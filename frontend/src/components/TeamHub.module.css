@@ -3003,3 +3003,500 @@
     font-size: clamp(19px, 1.6vw, 26px) !important;
   }
 }
+
+/* === V14.8B ONE PAGE FIT START === */
+/* Make Team Hub fit cleanly in one normal desktop viewport without clipping labels. */
+.dashboard {
+  overflow: hidden !important;
+  padding: 7px 14px 8px !important;
+}
+
+.topBar {
+  min-height: 31px !important;
+  margin-bottom: 6px !important;
+}
+
+.seasonContext {
+  font-size: 13px !important;
+}
+
+.teamBanner {
+  height: 72px !important;
+  min-height: 72px !important;
+  margin-bottom: 7px !important;
+  grid-template-columns: minmax(370px, 1.62fr) minmax(112px, 0.48fr) minmax(112px, 0.48fr) minmax(360px, 1.22fr) !important;
+  overflow: hidden !important;
+}
+
+.teamIdentity {
+  gap: 10px !important;
+  padding: 8px 18px !important;
+  min-width: 0 !important;
+}
+
+.teamLogo {
+  width: 64px !important;
+  height: 52px !important;
+  flex: 0 0 auto !important;
+}
+
+.teamCity {
+  font-size: clamp(11px, 0.95vw, 15px) !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+.teamIdentity h1 {
+  font-size: clamp(20px, 1.55vw, 27px) !important;
+  line-height: 0.9 !important;
+  max-height: 1.9em !important;
+  overflow: hidden !important;
+  text-wrap: balance !important;
+}
+
+.heroMetric {
+  min-height: 48px !important;
+  padding-left: 12px !important;
+  padding-right: 10px !important;
+}
+
+.heroMetric span,
+.nextGame span {
+  font-size: 9px !important;
+  line-height: 1.05 !important;
+}
+
+.heroMetric strong {
+  font-size: 17px !important;
+  margin-top: 2px !important;
+}
+
+.heroMetric small {
+  font-size: 9px !important;
+  margin-top: 2px !important;
+  line-height: 1.1 !important;
+}
+
+.nextGame {
+  min-height: 48px !important;
+  grid-template-columns: minmax(80px, 0.58fr) minmax(18px, 24px) minmax(190px, 1.2fr) !important;
+  gap: 8px !important;
+  padding-left: 14px !important;
+  padding-right: 18px !important;
+  overflow: visible !important;
+}
+
+.nextGame:not(:has(img)) {
+  grid-template-columns: minmax(84px, 0.52fr) minmax(22px, 28px) minmax(190px, 1.2fr) !important;
+}
+
+.nextGame:not(:has(img)) small {
+  grid-column: 3 !important;
+  justify-self: start !important;
+  text-align: left !important;
+}
+
+.nextGame:has(img) small {
+  grid-column: 3 !important;
+}
+
+.nextGame strong {
+  font-size: 13px !important;
+  line-height: 1.05 !important;
+}
+
+.nextGame small {
+  font-size: 10.5px !important;
+  line-height: 1.18 !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  max-width: none !important;
+}
+
+.nextGame img {
+  width: 30px !important;
+  height: 30px !important;
+}
+
+.bannerWatermark {
+  width: 360px !important;
+  height: 200px !important;
+}
+
+.topGrid,
+.middleGrid,
+.bottomGrid {
+  gap: 7px !important;
+  margin-bottom: 7px !important;
+}
+
+.bottomGrid {
+  margin-bottom: 0 !important;
+}
+
+.panel {
+  border-radius: 9px !important;
+}
+
+.panelHeading {
+  min-height: 28px !important;
+  padding: 0 12px !important;
+}
+
+.panelHeading h2 {
+  font-size: 14px !important;
+}
+
+.panelHeading button,
+.panelActions button {
+  font-size: 9.5px !important;
+}
+
+.gameList,
+.recentList {
+  padding: 2px 10px 6px !important;
+}
+
+.gameRow,
+.recentRow {
+  min-height: 22px !important;
+}
+
+.gameRow img,
+.recentRow img,
+.standingTeam img {
+  width: 19px !important;
+  height: 19px !important;
+}
+
+.metricList {
+  padding: 3px 11px 6px !important;
+}
+
+.metricList > div,
+.topGrid .metricList > div {
+  min-height: 20px !important;
+}
+
+.metricList span,
+.topGrid .metricList span {
+  font-size: 9px !important;
+}
+
+.metricList strong,
+.topGrid .metricList strong {
+  font-size: 10.2px !important;
+}
+
+.standingsHeader {
+  min-height: 21px !important;
+  padding: 0 10px !important;
+}
+
+.standingRow,
+.topGrid .standingRow {
+  min-height: 25px !important;
+  margin: 0 7px !important;
+  font-size: 9.5px !important;
+}
+
+.emptyPanel {
+  min-height: 42px !important;
+  padding: 8px !important;
+  font-size: 9.5px !important;
+}
+
+.rotationPanel {
+  min-height: 149px !important;
+}
+
+.playerStrip {
+  gap: 7px !important;
+  padding: 6px 10px 8px !important;
+}
+
+.playerCard,
+.middleGrid .playerCard {
+  height: 112px !important;
+  border-radius: 7px !important;
+}
+
+.playerVisual,
+.middleGrid .playerVisual {
+  min-height: 80px !important;
+}
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  width: 78px !important;
+  height: 80px !important;
+}
+
+.playerRatingBadge,
+.middleGrid .playerRatingBadge {
+  top: 2px !important;
+  left: 3px !important;
+  transform: scale(0.62) !important;
+  transform-origin: top left !important;
+}
+
+.playerCard .playerPositionBadge,
+.middleGrid .playerCard .playerPositionBadge {
+  top: 6px !important;
+  right: 7px !important;
+  font-size: 8.4px !important;
+}
+
+.playerCardMeta,
+.middleGrid .playerCardMeta {
+  min-height: 27px !important;
+  padding: 5px 7px 6px !important;
+}
+
+.playerCardMeta strong,
+.playerCard strong,
+.middleGrid .playerCardMeta strong,
+.middleGrid .playerCard strong {
+  font-size: 9.5px !important;
+  line-height: 1.08 !important;
+}
+
+.prospectGrid {
+  gap: 5px !important;
+  padding: 6px 10px 8px !important;
+}
+
+.prospect {
+  height: 28px !important;
+  grid-template-columns: 18px 24px minmax(0, 1fr) 24px !important;
+}
+
+.prospect img,
+.prospect i {
+  width: 22px !important;
+  height: 25px !important;
+}
+
+.newsEmpty {
+  min-height: 50px !important;
+  padding: 8px 12px 10px !important;
+}
+
+.newsEmpty strong {
+  font-size: 10px !important;
+}
+
+.newsEmpty span {
+  font-size: 8.8px !important;
+  line-height: 1.3 !important;
+}
+
+@media (max-height: 820px) {
+  .dashboard {
+    padding-top: 6px !important;
+    padding-bottom: 7px !important;
+  }
+
+  .teamBanner {
+    height: 68px !important;
+    min-height: 68px !important;
+  }
+
+  .teamLogo {
+    width: 58px !important;
+    height: 48px !important;
+  }
+
+  .teamIdentity h1 {
+    font-size: clamp(18px, 1.43vw, 24px) !important;
+  }
+
+  .panelHeading {
+    min-height: 27px !important;
+  }
+
+  .rotationPanel {
+    min-height: 142px !important;
+  }
+
+  .playerCard,
+  .middleGrid .playerCard {
+    height: 105px !important;
+  }
+
+  .playerVisual,
+  .middleGrid .playerVisual {
+    min-height: 76px !important;
+  }
+
+  .playerPortrait,
+  .middleGrid .playerPortrait {
+    width: 74px !important;
+    height: 76px !important;
+  }
+
+  .playerCardMeta,
+  .middleGrid .playerCardMeta {
+    min-height: 25px !important;
+    padding-top: 4px !important;
+    padding-bottom: 5px !important;
+  }
+}
+/* === V14.8B ONE PAGE FIT END === */
+/* V14.9 TEAM HUB SPACE / DRAFT LIST POLISH START */
+/* Let Team Hub use available screen width/height again while keeping a clean scroll fallback. */
+.dashboard {
+  height: 100% !important;
+  min-height: 100vh !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding: 10px 20px 16px !important;
+  background: #050505 !important;
+}
+
+.topBar {
+  min-height: 36px !important;
+  margin-bottom: 8px !important;
+}
+
+.teamBanner {
+  height: 76px !important;
+  min-height: 76px !important;
+  margin-bottom: 9px !important;
+  grid-template-columns: minmax(340px, 1.38fr) minmax(106px, 0.44fr) minmax(106px, 0.44fr) minmax(345px, 1.14fr) !important;
+}
+
+.nextGame {
+  grid-template-columns: minmax(86px, 0.62fr) 34px minmax(170px, 1.08fr) !important;
+  padding-left: 13px !important;
+  padding-right: 18px !important;
+}
+
+.nextGame:not(:has(img)) {
+  grid-template-columns: minmax(86px, 0.52fr) minmax(185px, 1.15fr) !important;
+}
+
+.nextGame small {
+  min-width: 0 !important;
+  max-width: 100% !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  line-height: 1.2 !important;
+}
+
+.topGrid,
+.middleGrid,
+.bottomGrid {
+  width: 100% !important;
+  gap: 10px !important;
+  margin-bottom: 10px !important;
+}
+
+.middleGrid {
+  grid-template-columns: minmax(0, 1.56fr) minmax(320px, 0.88fr) !important;
+}
+
+.bottomGrid {
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 1fr) !important;
+}
+
+.panel {
+  background: linear-gradient(180deg, rgba(12, 12, 13, 0.98), rgba(7, 7, 8, 0.98)) !important;
+  border-color: rgba(255, 255, 255, 0.075) !important;
+}
+
+.panelHeading {
+  min-height: 34px !important;
+  padding-inline: 14px !important;
+}
+
+.panelHeading h2 {
+  font-size: 15px !important;
+}
+
+.rotationPanel {
+  min-height: 164px !important;
+}
+
+.playerStrip {
+  gap: 9px !important;
+  padding: 8px 12px 10px !important;
+}
+
+.playerCard,
+.middleGrid .playerCard {
+  height: 124px !important;
+}
+
+.playerVisual,
+.middleGrid .playerVisual {
+  min-height: 90px !important;
+}
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  width: 86px !important;
+  height: 86px !important;
+}
+
+.playerRatingBadge,
+.middleGrid .playerRatingBadge {
+  top: 3px !important;
+  left: 4px !important;
+  transform: scale(0.64) !important;
+  transform-origin: top left !important;
+}
+
+.prospectGrid {
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  gap: 6px !important;
+  padding: 8px 12px 10px !important;
+}
+
+.prospect {
+  height: 30px !important;
+  grid-template-columns: 18px 23px minmax(0, 1fr) 24px !important;
+  background: #0d0d0e !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+.prospect strong {
+  font-size: 10px !important;
+}
+
+.newsEmpty {
+  min-height: 62px !important;
+}
+
+@media (max-height: 820px) {
+  .dashboard {
+    padding-top: 8px !important;
+    padding-bottom: 12px !important;
+  }
+  .teamBanner {
+    height: 72px !important;
+    min-height: 72px !important;
+  }
+  .rotationPanel {
+    min-height: 154px !important;
+  }
+  .playerCard,
+  .middleGrid .playerCard {
+    height: 116px !important;
+  }
+  .playerVisual,
+  .middleGrid .playerVisual {
+    min-height: 84px !important;
+  }
+  .playerPortrait,
+  .middleGrid .playerPortrait {
+    width: 82px !important;
+    height: 82px !important;
+  }
+  .prospectGrid {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+}
+/* V14.9 TEAM HUB SPACE / DRAFT LIST POLISH END */

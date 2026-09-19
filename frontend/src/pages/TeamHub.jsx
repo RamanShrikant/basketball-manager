@@ -681,7 +681,7 @@ export default function TeamHub() {
 
   const topProspects = useMemo(() => {
     const preview = readUpcomingDraftClassForYear(draftYear);
-    return Array.isArray(preview?.draftClass) ? preview.draftClass.slice(0, 5) : [];
+    return Array.isArray(preview?.draftClass) ? preview.draftClass.slice(0, 10) : [];
   }, [draftYear, leagueData]);
 
   const nextGame = upcomingGames[0] || null;
@@ -1103,7 +1103,7 @@ export default function TeamHub() {
         <div className={styles.bottomGrid}>
           <section className={styles.panel}>
             <div className={styles.panelHeading}>
-              <h2>Top Prospects</h2>
+              <h2>Upcoming Draft Picks</h2>
               <button type="button" onClick={() => navigate("/upcoming-draft")}>View Draft Class →</button>
             </div>
             {topProspects.length ? (
@@ -1118,7 +1118,7 @@ export default function TeamHub() {
                 ))}
               </div>
             ) : (
-              <div className={styles.emptyPanel}>No draft preview has been generated for {draftYear} yet.</div>
+              <div className={styles.emptyPanel}>No upcoming draft picks have been generated for {draftYear} yet.</div>
             )}
           </section>
 

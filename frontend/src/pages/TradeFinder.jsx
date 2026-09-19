@@ -101,22 +101,22 @@ const TRADE_FINDER_SCROLLBAR_TUNING = {
 const TRADE_FINDER_HEADSHOT_TUNING = {
   packageRows: {
     // Compact enough for the 3-column finder, but still keeps the 2K-style card look.
-    boxWidth: 96,
-    size: 76,
-    imageHeight: 72,
+    boxWidth: 78,
+    size: 62,
+    imageHeight: 62,
     x: 4,
     y: 0,
-    leftPad: 88,
+    leftPad: 72,
     opacity: 1,
   },
   offerRows: {
     // Keep right-side offer pills at the same scale as the left/middle pills.
-    boxWidth: 96,
-    size: 76,
-    imageHeight: 72,
+    boxWidth: 78,
+    size: 62,
+    imageHeight: 62,
     x: 4,
     y: 0,
-    leftPad: 88,
+    leftPad: 72,
     opacity: 1,
   },
 };
@@ -128,7 +128,7 @@ const TRADE_FINDER_RATING_RING_TUNING = {
   packageRows: {
     // Change `size` to shrink/grow the WHOLE ring.
     // The OVR/POT text now auto-scales with this number.
-    size: 54,
+    size: 43,
     referenceSize: 70,
     autoScaleText: true,
     textScale: 1,
@@ -150,7 +150,7 @@ const TRADE_FINDER_RATING_RING_TUNING = {
   },
   offerRows: {
     // Same exact scale as the left/middle package rows.
-    size: 54,
+    size: 43,
     referenceSize: 70,
     autoScaleText: true,
     textScale: 1,
@@ -176,9 +176,9 @@ const TRADE_FINDER_RATING_RING_TUNING = {
 // Use these when the headshot/ring/text spacing needs tiny 2K-style tuning.
 const TRADE_FINDER_PLAYER_ROW_TUNING = {
   packageRows: {
-    rowMinHeight: 92,
-    rowPaddingX: 12,
-    rowPaddingY: 10,
+    rowMinHeight: 76,
+    rowPaddingX: 10,
+    rowPaddingY: 8,
     rowRadius: 16,
 
     contentX: 0,
@@ -186,15 +186,15 @@ const TRADE_FINDER_PLAYER_ROW_TUNING = {
 
     textBlockX: 0,
     textBlockY: 0,
-    nameSize: 15,
+    nameSize: 12,
     nameX: 0,
     nameY: 0,
 
     // POS / AGE line controls. These are separate now.
-    positionSize: 11,
+    positionSize: 9,
     positionX: 0,
     positionY: 0,
-    ageSize: 11,
+    ageSize: 9,
     ageX: 0,
     ageY: 0,
     positionLineGap: 8,
@@ -202,22 +202,22 @@ const TRADE_FINDER_PLAYER_ROW_TUNING = {
     dotX: 0,
     dotY: 0,
 
-    contractSize: 11,
+    contractSize: 9,
     contractX: 0,
     contractY: 0,
 
     buttonX: 0,
     buttonY: 0,
-    buttonPadX: 12,
-    buttonPadY: 8,
-    buttonTextSize: 12,
+    buttonPadX: 10,
+    buttonPadY: 6,
+    buttonTextSize: 10,
     buttonRadius: 12,
   },
   offerRows: {
     // Right-side offer player pills match the left/middle package player pill style.
-    rowMinHeight: 92,
-    rowPaddingX: 12,
-    rowPaddingY: 10,
+    rowMinHeight: 76,
+    rowPaddingX: 10,
+    rowPaddingY: 8,
     rowRadius: 16,
 
     contentX: 0,
@@ -225,14 +225,14 @@ const TRADE_FINDER_PLAYER_ROW_TUNING = {
 
     textBlockX: 0,
     textBlockY: 0,
-    nameSize: 15,
+    nameSize: 12,
     nameX: 0,
     nameY: 0,
 
-    positionSize: 11,
+    positionSize: 9,
     positionX: 0,
     positionY: 0,
-    ageSize: 11,
+    ageSize: 9,
     ageX: 0,
     ageY: 0,
     positionLineGap: 8,
@@ -240,7 +240,7 @@ const TRADE_FINDER_PLAYER_ROW_TUNING = {
     dotX: 0,
     dotY: 0,
 
-    contractSize: 11,
+    contractSize: 9,
     contractX: 0,
     contractY: 0,
   },
@@ -3263,7 +3263,7 @@ const standardPatienceBlocked = Boolean(
   return (
     <PageFade>
       <TradeFinderScrollbarStyles />
-      <div className="min-h-screen bmCourtPage px-3 py-6 text-white">
+      <div className="min-h-screen bmCourtPage px-3 py-3 text-white">
         <div className="mx-auto w-full max-w-[1760px]">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
             <button
@@ -3329,7 +3329,7 @@ const standardPatienceBlocked = Boolean(
                 </div>
               </div>
 
-              <div className="tradeFinderScroller grid max-h-[calc(100vh-185px)] min-h-0 gap-3 overflow-y-auto px-4 pb-20 pt-4">
+              <div className="tradeFinderScroller grid max-h-[calc(100vh-170px)] min-h-0 gap-3 overflow-y-auto px-3 pb-4 pt-3">
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Players</div>
@@ -3421,7 +3421,7 @@ const standardPatienceBlocked = Boolean(
                 </div>
               </div>
 
-              <div className="tradeFinderScroller max-h-[calc(100vh-185px)] min-h-0 flex-1 overflow-y-auto px-4 pb-20 pt-4">
+              <div className="tradeFinderScroller max-h-[calc(100vh-170px)] min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3">
                 {selectedPackageAssets.length ? (
                   <div className="grid gap-3">
                     {selectedPackageAssets.map((asset) => (
@@ -3502,7 +3502,7 @@ const standardPatienceBlocked = Boolean(
                 </div>
               </div>
 
-              <div className="tradeFinderScroller max-h-[calc(100vh-185px)] min-h-0 flex-1 overflow-y-auto px-4 pb-20 pt-4">
+              <div className="tradeFinderScroller max-h-[calc(100vh-170px)] min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3">
                 {selectedItems.length > 0 && selectedPackageValidation.ok === false && (
                   <div className="mb-3 rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm font-bold leading-6 text-red-100">
                     {selectedPackageValidation.reason || "This package contains an asset that cannot currently be traded."}

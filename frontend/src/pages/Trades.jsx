@@ -1049,7 +1049,7 @@ export default function Trades() {
   return (
     <PageFade>
       <div className="bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white lg:px-5 lg:py-4">
-        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1700px] flex-col gap-3.5 lg:gap-4">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-none flex-col gap-3">
           <header className="trade-center-header flex shrink-0 items-center justify-between gap-5 px-1 py-1 lg:gap-6">
             <div className="flex min-w-0 items-center gap-4 lg:gap-5">
               {teamLogoOf(selectedTeam) ? (
@@ -1135,7 +1135,7 @@ export default function Trades() {
             </div>
           </header>
 
-          <div className="trade-center-grid grid min-h-0 flex-1 gap-3 lg:grid-cols-[1.07fr_0.93fr] lg:gap-4">
+          <div className="trade-center-grid grid min-h-0 flex-1 gap-3 lg:grid-cols-[1fr_0.82fr]">
             <section className="trade-center-panel flex min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/[0.08] bg-[#0b0d10] shadow-[0_22px_56px_rgba(0,0,0,0.30)]">
               <div className="flex min-h-0 flex-1 flex-col p-4 lg:p-5">
                 <div className="flex items-center gap-3">
@@ -1186,17 +1186,6 @@ export default function Trades() {
                     </div>
                     <span className="text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">›</span>
                   </button>
-                </div>
-
-                <div className="mt-2.5 grid gap-2">
-                  {teamContextAlerts.length ? teamContextAlerts.map((alert, index) => (
-                    <div key={alert} className="flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-[#121419] px-3.5 py-2.5 text-[12px] font-bold text-neutral-200">
-                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-orange-500/15 text-[11px] font-black text-orange-300">!</span>
-                      <span className={index === 0 ? "text-neutral-200" : "text-neutral-300"}>{alert}</span>
-                    </div>
-                  )) : (
-                    <div className="rounded-xl border border-white/[0.07] bg-[#121419] px-3.5 py-2.5 text-[12px] font-semibold text-neutral-400">No major contract decisions are due right now.</div>
-                  )}
                 </div>
 
                 <div className="mt-3 rounded-[16px] bg-[#101217] p-3.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)]">
