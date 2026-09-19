@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
 import { playSound, SOUND_KEYS } from "../audio/soundManager.js";
+import { updateActiveLeagueSaveSnapshot } from "../storage/leagueSaves.js";
 import {
   isAllStarsAvailable,
   readOffseasonState as readAllStarsOffseasonState,
@@ -59,6 +60,7 @@ const ICON_BY_ITEM = {
   "Award History": "trophy",
   "Past Champions": "crown",
   "League Editor": "edit",
+  "Save & Exit": "edit",
   Settings: "gear",
 };
 
@@ -93,7 +95,7 @@ const ACTIVE_ROUTE_ALIASES = {
   "/league-history": "Transaction History",
   "/award-history": "Award History",
   "/past-champions": "Past Champions",
-  "/league-editor": "League Editor",
+  "/league-editor": "Save & Exit",
   "/settings": "Settings",
 };
 
@@ -274,10 +276,12 @@ function decorate(items, sectionKey) {
 }
 
 export default function TeamHubSidebar() {
-  const { leagueData } = useGame();
+  const { leagueData, selectedTeam } = useGame();
   const location = useLocation();
   const navigate = useNavigate();
   const [collapsedGroups, setCollapsedGroups] = useState({});
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
+  const [exitBusy, setExitBusy] = useState(false);
 
   const offseasonState = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {});
   const postseasonState = safeJSON(localStorage.getItem(POSTSEASON_KEY), null);
@@ -422,12 +426,13 @@ export default function TeamHubSidebar() {
         label: "System",
         items: [
           {
-            name: "League Editor",
-            sidebarLabel: "League Editor",
+            name: "Save & Exit",
+            sidebarLabel: "Save & Exit",
             path: "/league-editor",
             enabled: true,
             sectionKey: null,
             icon: "edit",
+            action: "saveExit",
           },
           {
             name: "Settings",
@@ -456,9 +461,14 @@ export default function TeamHubSidebar() {
       ? "Team Hub"
       : ACTIVE_ROUTE_ALIASES[location.pathname] || "";
 
-  const navigateItem = (item) => {
+  const navigateItem = async (item) => {
     if (!item?.enabled || !item?.path || item.path === "#") return;
     playSound(SOUND_KEYS.SIDEBAR_NAVIGATION);
+
+    if (item.action === "saveExit") {
+      setExitConfirmOpen(true);
+      return;
+    }
 
     const hubReturnContext = item.sectionKey
       ? sectionReturnPayload(item.sectionKey, {
@@ -503,7 +513,28 @@ export default function TeamHubSidebar() {
     }));
   };
 
+  const confirmSaveAndExit = async () => {
+    if (exitBusy) return;
+    setExitBusy(true);
+    try {
+      await updateActiveLeagueSaveSnapshot({
+        leagueData,
+        selectedTeamName: selectedTeam?.name || "",
+        source: "TeamHubSidebar.saveAndExit",
+      });
+    } catch (error) {
+      console.warn("[TeamHubSidebar] Save & Exit could not update the active save slot.", error);
+    } finally {
+      clearTradeBuilderResumeWhenLeaving(location.pathname, "/league-editor");
+      writeTeamHubReturnContext(null);
+      setExitBusy(false);
+      setExitConfirmOpen(false);
+      navigate("/league-editor");
+    }
+  };
+
   return (
+    <>
     <aside className={styles.sidebar} aria-label="Basketball Manager navigation">
       <div className={styles.brand}>
         <div className={styles.monogram}>BM</div>
@@ -570,5 +601,30 @@ export default function TeamHubSidebar() {
         })}
       </div>
     </aside>
+
+    {exitConfirmOpen && (
+      <div className={styles.exitModalBackdrop} role="presentation" onMouseDown={() => !exitBusy && setExitConfirmOpen(false)}>
+        <section
+          className={styles.exitModal}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="save-exit-title"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <p className={styles.exitModalKicker}>Save & Exit</p>
+          <h2 id="save-exit-title">Exit this league?</h2>
+          <p>Your current league will be saved locally before returning to the League Editor.</p>
+          <div className={styles.exitModalActions}>
+            <button type="button" className={styles.exitModalSecondary} disabled={exitBusy} onClick={() => setExitConfirmOpen(false)}>
+              No, stay here
+            </button>
+            <button type="button" className={styles.exitModalPrimary} disabled={exitBusy} onClick={confirmSaveAndExit}>
+              {exitBusy ? "Saving..." : "Yes, save & exit"}
+            </button>
+          </div>
+        </section>
+      </div>
+    )}
+    </>
   );
 }

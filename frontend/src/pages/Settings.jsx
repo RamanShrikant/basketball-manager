@@ -12,6 +12,7 @@ import {
   normalizeInjurySettings,
 } from "../utils/injurySystem.js";
 import { readLeagueClock } from "../utils/leagueClock.js";
+import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
 import styles from "./Settings.module.css";
 
 function countEnabled(settings = {}) {
@@ -37,7 +38,7 @@ function ToggleSwitch({ checked, onChange, label }) {
 export default function Settings() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { leagueData, setLeagueData, selectedTeam } = useGame();
+  const { leagueData, setLeagueData, selectedTeam, setSelectedTeam } = useGame();
   const [activeHelpRule, setActiveHelpRule] = useState(null);
   const [activeHelpOption, setActiveHelpOption] = useState(null);
 
@@ -58,6 +59,29 @@ export default function Settings() {
   }, [leagueData?.settings?.injuries]);
 
   const enabledCount = countEnabled(tradeRules);
+  const controlledTeamDisplay = selectedTeam?.name
+    ? getTeamAbbreviation(selectedTeam.name, selectedTeam.name)
+    : "—";
+
+  const allTeamsAlphabetical = useMemo(() => {
+    if (!leagueData) return [];
+    const rawTeams = Array.isArray(leagueData?.teams)
+      ? leagueData.teams
+      : leagueData?.conferences
+      ? Object.values(leagueData.conferences).flat()
+      : [];
+
+    return rawTeams
+      .filter((team) => team?.name)
+      .slice()
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }, [leagueData]);
+
+  const handleControlledTeamChange = (event) => {
+    const nextName = event.target.value;
+    const nextTeam = allTeamsAlphabetical.find((team) => team.name === nextName) || nextName || null;
+    setSelectedTeam(nextTeam);
+  };
 
   const updateInjuryOption = (key, value) => {
     if (!leagueData) return;
@@ -132,9 +156,23 @@ export default function Settings() {
         </div>
 
         <div className={styles.summaryRow}>
-          <div className={styles.summaryCard}>
+          <div className={`${styles.summaryCard} ${styles.teamCard}`}>
             <span>Controlled Team</span>
-            <strong>{selectedTeam?.name || "No team selected"}</strong>
+            <div className={styles.teamSelectRow}>
+              <strong title={selectedTeam?.name || "No team selected"}>{controlledTeamDisplay}</strong>
+              <select
+                value={selectedTeam?.name || ""}
+                onChange={handleControlledTeamChange}
+                className={styles.teamSelect}
+                aria-label="Change controlled team"
+                disabled={!allTeamsAlphabetical.length}
+              >
+                <option value="">Choose team</option>
+                {allTeamsAlphabetical.map((team) => (
+                  <option key={team.name} value={team.name}>{team.name}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className={styles.summaryCard}>
             <span>Trade Rules</span>

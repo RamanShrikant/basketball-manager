@@ -249,3 +249,108 @@
     height: 18px;
   }
 }
+
+.exitModalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 260;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(10px);
+}
+
+.exitModal {
+  width: min(92vw, 430px);
+  border: 1px solid rgba(251, 146, 60, 0.2);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(249, 115, 22, 0.12), transparent 38%),
+    linear-gradient(180deg, #14100d, #090807 70%);
+  box-shadow: 0 32px 90px rgba(0, 0, 0, 0.68), inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  color: #fff7ed;
+  padding: 24px;
+  text-align: left;
+}
+
+.exitModalKicker {
+  margin: 0 0 10px;
+  color: #fdba74;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.exitModal h2 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 28px;
+  line-height: 1;
+  letter-spacing: -0.045em;
+  font-weight: 900;
+}
+
+.exitModal p:not(.exitModalKicker) {
+  margin: 12px 0 0;
+  color: rgba(255, 247, 237, 0.68);
+  font-size: 14px;
+  line-height: 1.55;
+  font-weight: 600;
+}
+
+.exitModalActions {
+  margin-top: 22px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.exitModalSecondary,
+.exitModalPrimary {
+  min-height: 42px;
+  border-radius: 12px;
+  padding: 0 15px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 850;
+  cursor: pointer;
+  transition: transform 140ms ease, background 140ms ease, border-color 140ms ease, opacity 140ms ease;
+}
+
+.exitModalSecondary {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(255, 247, 237, 0.78);
+}
+
+.exitModalPrimary {
+  border: 1px solid rgba(251, 146, 60, 0.48);
+  background: linear-gradient(135deg, #ea580c, #c2410c);
+  color: #ffffff;
+  box-shadow: 0 14px 28px rgba(249, 115, 22, 0.2);
+}
+
+.exitModalSecondary:hover:not(:disabled),
+.exitModalPrimary:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.exitModalSecondary:disabled,
+.exitModalPrimary:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+@media (max-width: 520px) {
+  .exitModalActions {
+    flex-direction: column-reverse;
+  }
+
+  .exitModalSecondary,
+  .exitModalPrimary {
+    width: 100%;
+  }
+}

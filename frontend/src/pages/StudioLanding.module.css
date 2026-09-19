@@ -98,7 +98,7 @@
   height: auto;
   display: block;
   object-fit: contain;
-  filter: drop-shadow(0 26px 42px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 30px rgba(96, 165, 250, 0.12));
+  filter: drop-shadow(0 26px 42px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 24px rgba(96, 165, 250, 0.12));
 }
 
 .brandCopy {
@@ -248,7 +248,7 @@
 
 .availableGame::before {
   background:
-    radial-gradient(circle at 88% 24%, rgba(59, 130, 246, 0.34), transparent 25%),
+    radial-gradient(circle at 88% 24%, rgba(59, 130, 246, 0.24), transparent 25%),
     linear-gradient(90deg, rgba(96, 165, 250, 0.16), transparent 46%);
 }
 
@@ -280,7 +280,7 @@
 }
 
 .statusText {
-  color: rgba(226, 232, 240, 0.72);
+  color: rgba(253, 186, 116, 0.82);
   font-size: clamp(0.78rem, 1.5vh, 0.9rem);
   line-height: 1;
   letter-spacing: 0.08em;
@@ -539,4 +539,38 @@
   .gameCardBody > div {
     max-width: 100%;
   }
+}
+
+/* V14.4: keep the public studio landing screen blue and cohesive. */
+.statusText,
+.feedbackCopy span {
+  color: rgba(147, 197, 253, 0.9);
+}
+
+.availableGame {
+  border-color: rgba(96, 165, 250, 0.36) !important;
+  background:
+    linear-gradient(135deg, rgba(30, 64, 175, 0.74), rgba(15, 23, 42, 0.95) 63%),
+    rgba(15, 23, 42, 0.76) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 18px 44px rgba(30, 64, 175, 0.17) !important;
+}
+
+.availableGame::before {
+  background:
+    radial-gradient(circle at 88% 24%, rgba(59, 130, 246, 0.24), transparent 25%),
+    linear-gradient(90deg, rgba(96, 165, 250, 0.16), transparent 46%) !important;
+}
+
+.availableGame:hover,
+.availableGame:focus-visible {
+  border-color: rgba(147, 197, 253, 0.72) !important;
+}
+
+.availableGame .actionPill {
+  border-color: rgba(147, 197, 253, 0.22);
+  background: rgba(37, 99, 235, 0.14);
+}
+
+.lockedGame .statusText {
+  color: rgba(226, 232, 240, 0.58);
 }

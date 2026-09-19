@@ -7,6 +7,6 @@
 export const NAVIGATION_FADE_TUNING = Object.freeze({
   durationMs: 290,
   startOpacity: 0.58,
-  moveY: 3,
+  moveY: 0,
   startScale: 1,
 });

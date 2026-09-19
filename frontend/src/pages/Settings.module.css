@@ -497,3 +497,122 @@
     flex: 1;
   }
 }
+
+/* V14.5 compact team-change control. Keeps Settings on one page while allowing quick controlled-team swaps. */
+.summaryRow {
+  grid-template-columns: minmax(230px, 1.35fr) minmax(130px, 0.72fr) minmax(112px, 0.58fr) minmax(112px, 0.58fr) auto;
+}
+
+.teamCard {
+  min-width: 0;
+}
+
+.teamSelectRow {
+  display: grid;
+  grid-template-columns: minmax(0, 0.72fr) minmax(150px, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.teamSelectRow strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.teamSelect {
+  width: 100%;
+  height: 27px;
+  min-width: 0;
+  border-radius: 9px;
+  border: 1px solid rgba(249,115,22,0.28);
+  background: rgba(10,10,10,0.78);
+  color: rgba(255,255,255,0.92);
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 1000;
+  padding: 0 8px;
+  outline: none;
+  color-scheme: dark;
+}
+
+.teamSelect:focus {
+  border-color: rgba(249,115,22,0.62);
+  box-shadow: 0 0 0 2px rgba(249,115,22,0.14);
+}
+
+.teamSelect option {
+  background: #111;
+  color: #fff;
+}
+
+@media (max-width: 1180px) {
+  .teamSelectRow {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .teamSelect {
+    height: 25px;
+  }
+}
+
+
+/* V14.6 Settings breathing pass: slightly less cramped while staying one-page. */
+.shell {
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.summaryRow {
+  gap: 9px;
+  grid-template-columns: minmax(190px, 0.82fr) minmax(130px, 0.64fr) minmax(112px, 0.54fr) minmax(112px, 0.54fr) auto;
+}
+
+.summaryCard {
+  min-height: 45px;
+  padding: 8px 13px;
+}
+
+.teamSelectRow {
+  grid-template-columns: 52px minmax(135px, 1fr);
+}
+
+.teamSelectRow strong {
+  color: #fff;
+  font-size: 16px;
+  letter-spacing: 0.03em;
+}
+
+.teamSelect {
+  height: 29px;
+  padding: 0 9px;
+}
+
+.panel {
+  padding: 9px 14px 10px;
+}
+
+.optionList,
+.ruleList {
+  gap: 5px;
+}
+
+.ruleRow {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.ruleStatus {
+  margin-top: 4px;
+}
+
+@media (max-height: 820px) {
+  .shell { gap: 6px; padding-top: 6px; }
+  .summaryRow { gap: 7px; }
+  .summaryCard { min-height: 40px; padding-top: 6px; padding-bottom: 6px; }
+  .panel { padding-top: 7px; padding-bottom: 8px; }
+  .optionList, .ruleList { gap: 4px; }
+  .ruleRow { padding-top: 3px; padding-bottom: 3px; }
+}

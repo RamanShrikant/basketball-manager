@@ -918,7 +918,7 @@ export default function TeamHub() {
           </div>
 
           <div
-            className={styles.nextGame}
+            className={`${styles.nextGame} ${!nextGame ? styles.nextGameNoGame : ""}`}
             style={bannerBlockStyle(bannerLayout.nextGameBlock)}
           >
             <div>

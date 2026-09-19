@@ -2782,3 +2782,224 @@
   background: rgba(249, 115, 22, 0.08);
   color: #f0f3f7;
 }
+
+
+/* V14.6 banner fit guard: keep every team header clean at normal desktop width. */
+.teamBanner {
+  grid-template-columns: minmax(360px, 1.55fr) minmax(112px, 0.48fr) minmax(112px, 0.48fr) minmax(220px, 0.86fr) !important;
+  min-height: 82px !important;
+  overflow: hidden !important;
+}
+
+.teamIdentity {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  gap: 12px !important;
+  padding-right: 10px !important;
+}
+
+.teamWordmark {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  max-width: min(360px, 100%) !important;
+}
+
+.teamCity,
+.teamIdentity h1 {
+  max-width: 100% !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: clip !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+}
+
+.teamCity {
+  white-space: nowrap !important;
+  font-size: clamp(13px, 1.15vw, 18px) !important;
+  line-height: 1 !important;
+}
+
+.teamIdentity h1 {
+  display: block !important;
+  white-space: normal !important;
+  font-size: clamp(24px, 2.15vw, 33px) !important;
+  line-height: 0.91 !important;
+  max-height: 2.02em !important;
+}
+
+.heroMetric {
+  min-width: 0 !important;
+  padding-left: 14px !important;
+  padding-right: 12px !important;
+}
+
+.heroMetric small {
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.nextGame {
+  min-width: 0 !important;
+  grid-template-columns: minmax(74px, 1fr) 42px minmax(92px, auto) !important;
+  gap: 10px !important;
+  padding-left: 16px !important;
+  padding-right: 16px !important;
+  overflow: hidden !important;
+}
+
+.nextGame > div {
+  min-width: 0 !important;
+  justify-self: start !important;
+}
+
+.nextGame span,
+.nextGame strong,
+.nextGame small {
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.nextGame img {
+  width: 38px !important;
+  height: 38px !important;
+  transform: none !important;
+}
+
+.nextGame small {
+  justify-self: end !important;
+  text-align: right !important;
+}
+
+.bannerWatermark {
+  max-width: 48vw !important;
+}
+
+@media (max-width: 1280px) {
+  .teamBanner {
+    grid-template-columns: minmax(320px, 1.4fr) minmax(100px, 0.42fr) minmax(104px, 0.42fr) minmax(210px, 0.82fr) !important;
+  }
+  .teamIdentity h1 {
+    font-size: clamp(22px, 2vw, 29px) !important;
+  }
+}
+
+/* V14.7 banner/rotation fit polish:
+   - give Next Game enough room so "No game scheduled" never truncates
+   - tighten metric columns and keep identity readable across long team names
+   - move the Starting Five OVR/POT ring away from player faces */
+.teamBanner {
+  grid-template-columns: minmax(315px, 1.08fr) minmax(92px, 0.30fr) minmax(96px, 0.32fr) minmax(315px, 1.02fr) !important;
+  column-gap: 0 !important;
+}
+
+.teamIdentity {
+  padding-left: 24px !important;
+  padding-right: 12px !important;
+  gap: 10px !important;
+}
+
+.teamLogo {
+  width: 62px !important;
+  height: 62px !important;
+}
+
+.teamWordmark {
+  max-width: 265px !important;
+}
+
+.teamCity {
+  font-size: clamp(12px, 1.05vw, 16px) !important;
+  line-height: 1.04 !important;
+}
+
+.teamIdentity h1 {
+  font-size: clamp(21px, 1.72vw, 29px) !important;
+  line-height: 0.95 !important;
+  max-height: 2.08em !important;
+  letter-spacing: -0.026em !important;
+}
+
+.heroMetric {
+  padding-left: 12px !important;
+  padding-right: 10px !important;
+}
+
+.nextGame {
+  grid-template-columns: minmax(98px, 0.9fr) 36px minmax(142px, 1.1fr) !important;
+  column-gap: 12px !important;
+  padding-left: 16px !important;
+  padding-right: 18px !important;
+}
+
+.nextGame > div {
+  justify-self: start !important;
+  text-align: left !important;
+}
+
+.nextGame strong {
+  min-height: 19px !important;
+  line-height: 1.1 !important;
+}
+
+.nextGame small {
+  min-width: 0 !important;
+  width: 100% !important;
+  text-align: right !important;
+  line-height: 1.2 !important;
+  padding-bottom: 1px !important;
+}
+
+.nextGameNoGame {
+  grid-template-columns: minmax(98px, auto) minmax(164px, 1fr) !important;
+}
+
+.nextGameNoGame small {
+  justify-self: start !important;
+  text-align: left !important;
+  max-width: none !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  white-space: nowrap !important;
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+}
+
+.nextGameNoGame img {
+  display: none !important;
+}
+
+.middleGrid .playerRatingBadge {
+  top: 2px !important;
+  left: 3px !important;
+  transform: scale(0.66) !important;
+  transform-origin: top left !important;
+}
+
+.middleGrid .playerPortrait {
+  width: 90px !important;
+  height: 91px !important;
+}
+
+.middleGrid .playerCard .playerPositionBadge {
+  top: 7px !important;
+  right: 9px !important;
+}
+
+@media (max-width: 1280px) {
+  .teamBanner {
+    grid-template-columns: minmax(285px, 1fr) minmax(84px, 0.28fr) minmax(90px, 0.30fr) minmax(300px, 1fr) !important;
+  }
+
+  .teamWordmark {
+    max-width: 235px !important;
+  }
+
+  .teamIdentity h1 {
+    font-size: clamp(19px, 1.6vw, 26px) !important;
+  }
+}

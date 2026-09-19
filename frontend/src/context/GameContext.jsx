@@ -8,6 +8,7 @@ import { withNormalizedSeasonContext, installSeasonContextAudit } from "../utils
 import { ensureTradeRuleSettings } from "../utils/tradeRuleSettings.js";
 import { ensureInjurySettings } from "../utils/injurySystem.js";
 import { normalizePostRookieExtensionRights } from "../utils/postRookieRightsNormalization.js";
+import { updateActiveLeagueSaveSnapshotInBackground } from "../storage/leagueSaves.js";
 
 const GameContext = createContext();
 
@@ -54,8 +55,12 @@ export function GameProvider({ children }) {
     if (diagnostics?.persist === false) return normalized;
 
     if (normalized && leagueHasTeams(normalized)) {
-      saveLeagueDataInBackground(normalized, {
-        source: diagnostics?.source || "GameContext.setLeagueData",
+      const source = diagnostics?.source || "GameContext.setLeagueData";
+      saveLeagueDataInBackground(normalized, { source });
+      updateActiveLeagueSaveSnapshotInBackground({
+        leagueData: normalized,
+        selectedTeamName,
+        source,
       });
     }
 
@@ -91,6 +96,11 @@ export function GameProvider({ children }) {
 
         setLeagueDataRaw(parsed);
         saveLeagueDataInBackground(parsed, { source: "GameContext.hydrate" });
+        updateActiveLeagueSaveSnapshotInBackground({
+          leagueData: parsed,
+          selectedTeamName,
+          source: "GameContext.hydrate",
+        });
         return true;
       } catch (err) {
         console.error("Failed to load leagueData:", err);
@@ -154,6 +164,12 @@ export function GameProvider({ children }) {
       if (name) localStorage.setItem("selectedTeam", JSON.stringify(name));
       else localStorage.removeItem("selectedTeam");
     } catch {}
+
+    updateActiveLeagueSaveSnapshotInBackground({
+      leagueData,
+      selectedTeamName: name,
+      source: "GameContext.setSelectedTeam",
+    });
   };
 
   return (

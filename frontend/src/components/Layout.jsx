@@ -40,7 +40,7 @@ export default function Layout() {
 
           <nav className="bm-game-nav" aria-label="Basketball Manager navigation">
             <NavLink to="/play" className={({ isActive }) => `bm-game-nav-link bm-play-link${isActive ? " is-active" : ""}`}>
-              Start League
+              Play
             </NavLink>
           </nav>
         </header>

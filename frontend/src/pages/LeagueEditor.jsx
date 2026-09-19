@@ -2573,7 +2573,7 @@ const normalizePlayer = (p) => {
         <div>
           <span className="league-editor-kicker">Basketball Manager</span>
           <h1>League Editor</h1>
-          <p>Import a roster file, edit teams and players, then use Start League in the top bar when everything is ready.</p>
+          <p>Import a roster file, edit teams and players, then use Play in the top bar when everything is ready.</p>
         </div>
       </section>
 
