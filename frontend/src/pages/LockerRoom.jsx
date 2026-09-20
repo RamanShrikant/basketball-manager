@@ -1493,7 +1493,7 @@ function MoodDriversPanel({ player }) {
     .slice(0, 6);
 
   return (
-    <section className="flex h-full min-h-0 flex-col rounded-2xl border border-white/10 bg-black/55 p-3">
+    <section className="rounded-2xl border border-white/10 bg-black/55 p-4">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">Mood Overview</div>
@@ -1509,9 +1509,9 @@ function MoodDriversPanel({ player }) {
         </div>
       </div>
 
-      <div className="mt-2 grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2 xl:grid-cols-3">
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {factors.length ? factors.map((factor) => (
-          <div key={factor.key} className={`flex min-h-0 flex-col justify-center rounded-xl border px-3 py-2.5 ${moodImpactCardClasses(factor.value)}`}>
+          <div key={factor.key} className={`flex flex-col justify-center rounded-xl border px-3 py-2.5 ${moodImpactCardClasses(factor.value)}`}>
             <div className="flex items-center justify-between gap-3">
               <span className="min-w-0 text-[11px] font-black uppercase tracking-[0.08em] text-neutral-300">{factor.label}</span>
               <span className={`shrink-0 text-sm font-black ${factorTone(factor.value)}`}>
@@ -1546,7 +1546,7 @@ function ContractOutlookMini({ player }) {
   const reasons = Array.isArray(interest.reasons) ? interest.reasons.slice(0, 3) : [];
 
   return (
-    <section className="flex h-full min-h-0 flex-col rounded-2xl border border-orange-400/18 bg-orange-500/[0.055] p-3">
+    <section className="rounded-2xl border border-orange-400/18 bg-orange-500/[0.055] p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">Contract Outlook</div>
@@ -1563,7 +1563,7 @@ function ContractOutlookMini({ player }) {
         </div>
       </div>
 
-      <div className="mt-3 flex-1 space-y-2">
+      <div className="mt-3 space-y-2">
         {reasons.map((reason, index) => {
           const impact = Number(reason?.impact || 0);
           return (
@@ -1583,7 +1583,7 @@ function MoodLedgerStrip({ player }) {
   const shown = events.slice(0, 4);
 
   return (
-    <section className="flex h-full min-h-0 flex-col rounded-2xl border border-white/10 bg-black/45 p-3">
+    <section className="rounded-2xl border border-white/10 bg-black/45 p-4">
       <div className="flex items-center justify-between gap-4">
         <div>
           <div className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">Active Mood Context</div>
@@ -1595,9 +1595,9 @@ function MoodLedgerStrip({ player }) {
           <span>Mood <b className="text-orange-300">{targetMood}</b></span>
         </div>
       </div>
-      <div className="mt-2 grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2">
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {shown.length ? shown.map((event, index) => (
-          <div key={`${event.text}-${index}`} className={`flex min-h-0 flex-col justify-center rounded-xl border px-3 py-2 ${moodSemanticCardClasses(event.impact)}`}>
+          <div key={`${event.text}-${index}`} className={`flex flex-col justify-center rounded-xl border px-3 py-2.5 ${moodSemanticCardClasses(event.impact)}`}>
             <div className="flex items-start justify-between gap-2">
               <span className="min-w-0 break-words text-[9.5px] font-black uppercase leading-[12px] tracking-[0.04em] text-white">
                 {humanizeMoodLabel(event.category || "Mood Context")}
@@ -1804,7 +1804,7 @@ export default function LockerRoom() {
               Checking the locker room...
             </div>
           ) : (
-            <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[520px_minmax(0,1fr)]">
+            <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[450px_minmax(0,1fr)] min-[1500px]:grid-cols-[480px_minmax(0,1fr)]">
               <div className="flex h-full min-h-0 flex-col rounded-2xl border border-white/10 bg-neutral-950/90 p-3 shadow-2xl">
                 <div className="mb-3 flex items-center justify-between gap-3 px-1">
                   <div>
@@ -1833,9 +1833,9 @@ export default function LockerRoom() {
               <div className="relative isolate h-full min-h-0 overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/95 shadow-2xl">
 
                 {selectedPlayer ? (
-                  <div className="relative z-10 grid h-full min-h-0 grid-rows-[164px_minmax(0,1fr)] gap-2.5 p-3 pb-3">
-                    <div className="relative h-[164px] overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(100deg,rgba(20,20,20,0.96),rgba(10,10,10,0.90))] shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
-                      <div className="relative z-10 grid h-full grid-cols-[180px_minmax(0,1fr)_118px] items-center gap-5 px-6">
+                  <div className="locker-room-detail-scroll relative z-10 h-full min-h-0 overflow-y-auto p-3 pr-2">
+                    <div className="relative h-[156px] overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(100deg,rgba(20,20,20,0.96),rgba(10,10,10,0.90))] shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
+                      <div className="relative z-10 grid h-full grid-cols-[160px_minmax(0,1fr)_112px] items-center gap-4 px-5">
                         <div className="relative h-full overflow-hidden">
                           <RuntimePlayerPortrait
                             player={selectedPlayer}
@@ -1851,7 +1851,7 @@ export default function LockerRoom() {
 
                         <div className="min-w-0 self-center">
                           <div className="text-[12px] font-black uppercase tracking-[0.28em] text-orange-300">Locker Room Report</div>
-                          <h2 className="mt-1 truncate text-[36px] font-black leading-[1.02] text-white">{selectedPlayer.playerName}</h2>
+                          <h2 className="mt-1 truncate text-[32px] font-black leading-[1.02] text-white">{selectedPlayer.playerName}</h2>
                           <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-black uppercase tracking-[0.10em] text-neutral-400">
                             <span>{selectedPlayer.position || "-"}</span>
                             <span className="text-neutral-700">•</span>
@@ -1869,8 +1869,8 @@ export default function LockerRoom() {
                       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-white/45" />
                     </div>
 
-                    <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_270px] gap-2.5">
-                      <div className="grid min-h-0 grid-rows-[minmax(0,1.08fr)_minmax(0,0.92fr)] gap-2.5">
+                    <div className="mt-3 grid items-start gap-3 min-[1380px]:grid-cols-[minmax(0,1fr)_280px]">
+                      <div className="grid content-start gap-3">
                         <MoodDriversPanel player={selectedPlayer} />
                         <MoodLedgerStrip player={selectedPlayer} />
                       </div>

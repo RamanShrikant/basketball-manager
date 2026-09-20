@@ -91,6 +91,10 @@ function clearRuntimeSeasonStores() {
     "bm_draft_lottery_v1",
     "bm_draft_state_v1",
     "bm_trade_deadline_status_v1",
+    "bm_league_clock_v1",
+    "bm_calendar_current_date_v1",
+    "bm_calendar_cursor_date_v1",
+    "bm_calendar_cursor_v1",
     "bm_trade_builder_v1",
     "bm_trade_finder_state_v1",
     "bm_trade_finder_results_v1",
@@ -122,6 +126,7 @@ function clearRuntimeSeasonStores() {
       if (
         key.startsWith(RESULT_V3_PREFIX) ||
         key.startsWith("bm_calendar_cursor_v1_") ||
+        key.startsWith("bm_calendar_sim_cursor_v1_") ||
         key.startsWith("bm_all_star_handled_v1_") ||
         key.startsWith("bm_trade_deadline_handled_v1_") ||
         key.startsWith("gameplan_") ||

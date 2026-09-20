@@ -126,19 +126,30 @@ async function resetRuntimeStateForNewLeague() {
     await clearScheduleStorage();
   } catch {}
   try {
+    const exactRuntimeKeys = new Set([
+      "bm_results_index_v3",
+      "bm_calendar_cursor_v1",
+      "bm_calendar_current_date_v1",
+      "bm_calendar_cursor_date_v1",
+      "bm_calendar_mood_context_v1",
+      "bm_league_clock_v1",
+      "bm_trade_deadline_status_v1",
+      "bm_pending_calendar_sim_v1",
+      "bm_postseason_v2",
+      "bm_offseason_state_v1",
+    ]);
+    const runtimePrefixes = [
+      "bm_result_v3_",
+      "bm_box_score_",
+      "bm_calendar_cursor_v1_",
+      "bm_calendar_sim_cursor_v1_",
+      "bm_trade_deadline_handled_v1_",
+    ];
     const keysToRemove = [];
     for (let i = 0; i < localStorage.length; i += 1) {
       const key = localStorage.key(i);
       if (!key) continue;
-      if (
-        key === "bm_results_index_v3" ||
-        key === "bm_calendar_cursor_v1" ||
-        key === "bm_calendar_mood_context_v1" ||
-        key === "bm_postseason_v2" ||
-        key === "bm_offseason_state_v1" ||
-        key.startsWith("bm_result_v3_") ||
-        key.startsWith("bm_box_score_")
-      ) {
+      if (exactRuntimeKeys.has(key) || runtimePrefixes.some((prefix) => key.startsWith(prefix))) {
         keysToRemove.push(key);
       }
     }

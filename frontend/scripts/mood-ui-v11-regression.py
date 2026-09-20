@@ -44,7 +44,8 @@ def test_v11_source_guards():
     assert_true("function MoodDriversPanel" in locker, "Mood-first Locker Room panel is missing")
     assert_true("function ContractOutlookMini" in locker, "Compact contract outlook is missing")
     assert_true("function MoodLedgerStrip" in locker, "Mood context strip is missing")
-    assert_true("xl:grid-cols-[520px_minmax(0,1fr)]" in locker, "Locker Room left-column sizing is missing")
+    assert_true("locker-room-detail-scroll" in locker, "Locker Room detail scroller is missing")
+    assert_true("xl:grid-cols-[450px_minmax(0,1fr)]" in locker, "Locker Room readable left-column sizing is missing")
     assert_true("right-[-120px]" not in locker, "Old clipped Locker Room team watermark is still present")
 
     assert_true("orderedExtensionPlayers" in extensions, "Contract Extensions status ordering is missing")
@@ -55,9 +56,9 @@ def test_v11_source_guards():
     assert_true('{ key: "injuryStatus", label: "STATUS"' not in roster, "Roster STATUS column still exists")
     assert_true("formatInjuryReturnLabel(player, currentLeagueDate)" in roster, "Selected-player return-date badge is missing")
 
-    assert_true("grid-rows-[110px_1fr]" in intel, "League Intel report-height tune is missing")
-    assert_true("grid-rows-[220px_1fr]" in intel, "League Intel lineup-height tune is missing")
-    assert_true("grid-rows-[190px_1fr]" in intel, "League Intel status-height tune is missing")
+    assert_true("bm-intel-scroll min-h-0 overflow-y-auto" in intel, "League Intel report scroller is missing")
+    assert_true("min-h-[138px]" in intel, "League Intel readable report header is missing")
+    assert_true("xl:grid-cols-2" in intel and "xl:col-span-2" in intel, "League Intel readable card flow is missing")
 
 
 if __name__ == "__main__":
