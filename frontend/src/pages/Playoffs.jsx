@@ -1,6 +1,6 @@
 // src/pages/Playoffs.jsx
 // FMVP/boxscore surgical patch v5_2_RENDERLOOPFIX - 2026-05-13
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import LZString from "lz-string";
@@ -10,6 +10,7 @@ import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import styles from "./Playoffs.module.css";
 import FinalsMvpReveal from "../components/FinalsMvpReveal";
 import InjuryAlertModal from "../components/InjuryAlertModal";
+import GameBoxScoreModal from "../components/GameBoxScoreModal.jsx";
 import { finalizeFinalsMvpAndGoOffseason } from "../utils/finalsMvpSeasonActions";
 import { markLeagueInjuryStateChanged, saveInjuryStateOverlay, saveLeagueDataInBackground } from "../utils/leagueStorage.js";
 import {
@@ -94,23 +95,6 @@ function readGameplanOrder(teamName, teamObj = null) {
     .filter(Boolean);
 
   return Array.from(new Set([...savedOrder, ...minuteOrder, ...rosterOrder]));
-}
-
-function sortBoxRowsByFrozenRotation(rows = [], frozenOrder = [], fallbackOrder = []) {
-  const order = Array.from(new Set([...(frozenOrder || []), ...(fallbackOrder || [])]));
-  const index = new Map(order.map((name, i) => [String(name), i]));
-
-  return [...(rows || [])].sort((a, b) => {
-    const aName = String(a?.player || "");
-    const bName = String(b?.player || "");
-    const aIdx = index.has(aName) ? index.get(aName) : Number.MAX_SAFE_INTEGER;
-    const bIdx = index.has(bName) ? index.get(bName) : Number.MAX_SAFE_INTEGER;
-    if (aIdx !== bIdx) return aIdx - bIdx;
-
-    const minDiff = Number(b?.min || 0) - Number(a?.min || 0);
-    if (minDiff !== 0) return minDiff;
-    return aName.localeCompare(bName);
-  });
 }
 
 
@@ -268,12 +252,17 @@ function safeSetCompressedJSON(key, value, fallbackCleaner = null) {
 }
 
 function cleanupOldSeasonStorageForPostseasonSave() {
-  // Once the playoff bracket exists, regular-season game blobs and schedule are
-  // no longer needed for bracket progress. Clearing them prevents season-two
-  // localStorage quota crashes.
+  // Completed regular-season schedule/results must remain reviewable through
+  // playoffs and the following offseason. Quota recovery may drop legacy and
+  // diagnostic caches, but it must never destroy the canonical completed season.
   try {
-    clearAllResultsV3();
-    clearScheduleStorage();
+    localStorage.removeItem("bm_results_v2");
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i);
+      if (key?.startsWith("bm_cpu_trade_trace_") || key?.startsWith("bm_perf_debug_")) {
+        localStorage.removeItem(key);
+      }
+    }
   } catch {}
 }
 
@@ -387,6 +376,54 @@ function slimResult(full) {
   const rawHomeBox = full.box_home || full.boxHome || full.home_box || [];
   const rawAwayBox = full.box_away || full.boxAway || full.away_box || [];
 
+  const toNumArray = (value) => {
+    if (!value) return [];
+    if (value instanceof Map) return Array.from(value.values()).map((v) => Number(v) || 0);
+    if (Array.isArray(value)) return value.map((v) => Number(v) || 0);
+    if (typeof value === "object") return Object.values(value).map((v) => Number(v) || 0);
+    return [];
+  };
+  const sumNums = (arr) => (arr || []).reduce((sum, value) => sum + (Number(value) || 0), 0);
+  const rawPeriods = full.periods || full.lineScore || full.linescore || null;
+  const quartersHome = toNumArray(
+    full.quarters_home || full.quartersHome || full.home_quarters || full.homeQuarters || rawPeriods?.home || rawPeriods?.Home
+  );
+  const quartersAway = toNumArray(
+    full.quarters_away || full.quartersAway || full.away_quarters || full.awayQuarters || rawPeriods?.away || rawPeriods?.Away
+  );
+  const explicitOtCount = Number(
+    full.ot ?? full.overtime ?? full.otCount ?? rawPeriods?.otCount ?? rawPeriods?.ot ?? 0
+  ) || 0;
+  const inferredOtCount = Math.max(0, quartersHome.length - 4, quartersAway.length - 4);
+  const rawOts = rawPeriods?.ots || rawPeriods?.otPeriods || {};
+  const rawOtsHome = toNumArray(
+    rawOts?.home || rawOts?.Home || rawPeriods?.ots_home || rawPeriods?.otsHome || quartersHome.slice(4)
+  );
+  const rawOtsAway = toNumArray(
+    rawOts?.away || rawOts?.Away || rawPeriods?.ots_away || rawPeriods?.otsAway || quartersAway.slice(4)
+  );
+  const otCount = Math.max(explicitOtCount, inferredOtCount, rawOtsHome.length, rawOtsAway.length);
+  const fillOts = (arr, count) => Array.from({ length: count }, (_, idx) => Number(arr[idx] || 0));
+  const hasRawIndividualOts = rawOtsHome.length > 0 || rawOtsAway.length > 0;
+  const otsHome = hasRawIndividualOts ? fillOts(rawOtsHome, otCount) : [];
+  const otsAway = hasRawIndividualOts ? fillOts(rawOtsAway, otCount) : [];
+  const rawOtBreakdown = rawPeriods?.otBreakdown || {};
+  const otHome = Number(
+    rawOtBreakdown.home ?? rawOtBreakdown.Home ?? rawPeriods?.ot_home ?? rawPeriods?.otHome ?? sumNums(otsHome)
+  ) || 0;
+  const otAway = Number(
+    rawOtBreakdown.away ?? rawOtBreakdown.Away ?? rawPeriods?.ot_away ?? rawPeriods?.otAway ?? sumNums(otsAway)
+  ) || 0;
+  const periods = quartersHome.length || quartersAway.length || rawPeriods
+    ? {
+        home: quartersHome.slice(0, 4),
+        away: quartersAway.slice(0, 4),
+        ots: { home: otsHome, away: otsAway },
+        otCount,
+        otBreakdown: { home: otHome || undefined, away: otAway || undefined },
+      }
+    : null;
+
   const makePair = (m, a) => `${m || 0}-${a || 0}`;
 
   function extractMA(obj, keysM, keysA, stringKeys = []) {
@@ -459,10 +496,11 @@ function slimResult(full) {
       score: `${homeScore}-${awayScore}`,
       home: homeScore,
       away: awayScore,
-      ot: full.ot ?? 0,
+      ot: otCount,
       side,
     },
     totals: { home: homeScore, away: awayScore },
+    periods,
     box: { home: convertBox(rawHomeBox), away: convertBox(rawAwayBox) },
   };
 }
@@ -1214,7 +1252,21 @@ export default function Playoffs() {
     return computeCanonicalStandings({ teams, scheduleByDate, resultsById, confOf });
   }, [teams, scheduleByDate, resultsById]);
 
+  const offseasonReviewState = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("bm_offseason_state_v1") || "{}") || {};
+    } catch {
+      return {};
+    }
+  }, [leagueData]);
+  const retainedPostseason = useMemo(() => loadPostseasonState(), [leagueData]);
+  const isOffseasonPostseasonReview = Boolean(
+    offseasonReviewState?.active && retainedPostseason?.seasonYear
+  );
+
   const seasonYear = useMemo(() => {
+    if (isOffseasonPostseasonReview) return Number(retainedPostseason.seasonYear);
+
     const leagueYear = Number(
       leagueData?.seasonYear ||
         leagueData?.currentSeasonYear ||
@@ -1228,11 +1280,13 @@ export default function Playoffs() {
     if (typeof y === "number") return y;
 
     return FIRST_PLAYABLE_SEASON_YEAR;
-  }, [leagueData]);
+  }, [leagueData, isOffseasonPostseasonReview, retainedPostseason]);
 
   const fmvpSeasonYear = useMemo(() => {
-    return getFinalsDisplaySeasonYear(leagueData, seasonYear);
-  }, [leagueData, seasonYear]);
+    return isOffseasonPostseasonReview
+      ? Number(seasonYear) + 1
+      : getFinalsDisplaySeasonYear(leagueData, seasonYear);
+  }, [leagueData, seasonYear, isOffseasonPostseasonReview]);
 
   const seeds = useMemo(() => {
     const out = {};
@@ -1460,49 +1514,17 @@ export default function Playoffs() {
   const [simProgress, setSimProgress] = useState(null);
   const simDoneRef = useRef(0);
 
-  // ===== Size knobs (tweak these) =====
-  const LOGO_SZ = 60;
-  const SEED_SZ = 30;
-  const WIN_SZ = 32;
-  const BOX_W = 265;
-  const BOX_PAD = 12;
-  const ROW_GAP = 10;
+  // Matchup card sizing. The playoff bracket itself is responsive and lives
+  // entirely inside the persistent shell's content pane; only Play-In cards
+  // use the larger legacy dimensions.
+  const LOGO_SZ = 50;
+  const SEED_SZ = 28;
+  const WIN_SZ = 28;
+  const BOX_W = 210;
+  const BOX_PAD = 10;
+  const ROW_GAP = 8;
   const BOX_H = LOGO_SZ * 2 + ROW_GAP + BOX_PAD * 2;
-
-  // ===== 2K full-screen scaling =====
-  // ===== Layout knobs (match BracketSide2K) =====
-  const BRACKET_GAP = 74; // must match BracketSide2K GAP
-  const SIDE_W = (BOX_W + BRACKET_GAP) * 2 + BOX_W; // width of one conference bracket
-  const FINALS_W = BOX_W; // finals should match series box width
-  const BASE_W = SIDE_W * 2 + FINALS_W; // true content width
-  // The play-in now has its own full-screen stage. Once it is complete, the
-  // playoff bracket only needs to contain rounds one through the Finals.
-  const BASE_H = 820;
-
-  const [uiScale, setUiScale] = useState(1);
-
-  useLayoutEffect(() => {
-    const recalc = () => {
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-
-      const PAD_X = 48; // px-6 left + right (24 + 24)
-      const TOPBAR_H = 64;
-      const FOOTER_H = 48;
-
-      const usableW = vw - PAD_X;
-      const usableH = vh - TOPBAR_H - FOOTER_H - 12; // tiny breathing room
-
-      const s = Math.min(usableW / BASE_W, usableH / BASE_H);
-      const clamped = Math.max(0.42, Math.min(1.0, s));
-
-      setUiScale(clamped);
-    };
-
-    recalc();
-    window.addEventListener("resize", recalc);
-    return () => window.removeEventListener("resize", recalc);
-  }, []);
+  const playoffsRootRef = useRef(null);
 
   useEffect(() => {
     try {
@@ -3128,10 +3150,10 @@ export default function Playoffs() {
   }
 
   // ================== 2K STYLE BRACKET UI ==================
-  const WinsPill = ({ n }) => (
+  const WinsPill = ({ n, size = WIN_SZ, fontSize = 12 }) => (
     <div
       className="bg-neutral-900/60 border border-neutral-600 rounded-md flex items-center justify-center font-extrabold text-neutral-100"
-      style={{ width: WIN_SZ, height: WIN_SZ, fontSize: 12 }}
+      style={{ width: size, height: size, fontSize }}
       title="Series wins"
     >
       {n ?? 0}
@@ -3148,18 +3170,24 @@ export default function Playoffs() {
     onClick,
     disabled,
     mirror = false,
+    compact = false,
+    fluid = false,
   }) => {
+    const logoSize = compact ? 38 : LOGO_SZ;
+    const seedSize = compact ? 22 : SEED_SZ;
+    const winSize = compact ? 22 : WIN_SZ;
+    const pad = compact ? 7 : BOX_PAD;
+    const rowGap = compact ? 5 : ROW_GAP;
+    const itemGap = compact ? 6 : 10;
+    const boxHeight = compact ? logoSize * 2 + rowGap + pad * 2 : BOX_H;
     const rowClass = `flex items-center justify-between ${mirror ? "flex-row-reverse" : ""}`;
 
     return (
       <button
         type="button"
         aria-disabled={disabled}
-        tabIndex={0} // keep it focusable
-        onClick={(e) => {
-          // ✅ ALWAYS allow opening the modal (even while sim is running)
-          onClick?.(e);
-        }}
+        tabIndex={0}
+        onClick={(e) => onClick?.(e)}
         className={`
 bg-neutral-800/90 border border-white/30 rounded-lg
 hover:bg-neutral-700
@@ -3169,38 +3197,30 @@ transition-all duration-150
 ${disabled ? "opacity-60" : ""}
       `}
         style={{
-          width: BOX_W,
-          height: BOX_H,
-          padding: BOX_PAD,
+          width: fluid ? "100%" : BOX_W,
+          height: boxHeight,
+          padding: pad,
           cursor: "pointer",
         }}
       >
-        <div className="flex flex-col" style={{ gap: ROW_GAP }}>
-          <div className={rowClass}>
-            <div className="flex items-center" style={{ gap: 10 }}>
-              <div
-                className="rounded-md bg-neutral-800 border border-neutral-600 flex items-center justify-center font-extrabold text-neutral-100"
-                style={{ width: SEED_SZ, height: SEED_SZ, fontSize: 11 }}
-              >
-                {topSeed ?? ""}
+        <div className="flex flex-col" style={{ gap: rowGap }}>
+          {[
+            { seed: topSeed, logo: topLogo, wins: topWins },
+            { seed: botSeed, logo: botLogo, wins: botWins },
+          ].map((row, index) => (
+            <div key={index} className={rowClass}>
+              <div className="flex min-w-0 items-center" style={{ gap: itemGap }}>
+                <div
+                  className="shrink-0 rounded-md bg-neutral-800 border border-neutral-600 flex items-center justify-center font-extrabold text-neutral-100"
+                  style={{ width: seedSize, height: seedSize, fontSize: compact ? 9 : 11 }}
+                >
+                  {row.seed ?? ""}
+                </div>
+                <Logo src={row.logo} size={logoSize} title="" />
               </div>
-              <Logo src={topLogo} size={LOGO_SZ} title="" />
+              <WinsPill n={row.wins} size={winSize} fontSize={compact ? 10 : 12} />
             </div>
-            <WinsPill n={topWins} />
-          </div>
-
-          <div className={rowClass}>
-            <div className="flex items-center" style={{ gap: 10 }}>
-              <div
-                className="rounded-md bg-neutral-800 border border-neutral-600 flex items-center justify-center font-extrabold text-neutral-100"
-                style={{ width: SEED_SZ, height: SEED_SZ, fontSize: 11 }}
-              >
-                {botSeed ?? ""}
-              </div>
-              <Logo src={botLogo} size={LOGO_SZ} title="" />
-            </div>
-            <WinsPill n={botWins} />
-          </div>
+          ))}
         </div>
       </button>
     );
@@ -3237,173 +3257,175 @@ ${disabled ? "opacity-60" : ""}
     );
   };
 
-  // Draws the little bracket “┐┘” connectors between columns (2K vibe)
-  const Connector = ({ x, y1, y2, dir = "right" }) => {
-    // dir: "right" (West) or "left" (East)
-    const width = 22;
-    const lineStyle = "bg-sky-500/60"; // 2K blue-ish
-    const thickness = 2;
+  const BRACKET_R1_KEYS = ["s1v8", "s4v5", "s3v6", "s2v7"];
+  const BRACKET_R1_CENTERS = [12.5, 37.5, 62.5, 87.5];
+  const BRACKET_R2_CENTERS = [25, 75];
+  const BRACKET_CENTER = 50;
 
-    // horizontal segment from series box to vertical spine
-    const hx = dir === "right" ? x : x - width;
+  const BracketMatchPosition = ({ centerPct, children }) => (
+    <div
+      className="absolute left-1/2 z-10 -translate-x-1/2 -translate-y-1/2"
+      style={{ top: `${centerPct}%`, width: "calc(100% - 14px)", maxWidth: 190 }}
+    >
+      {children}
+    </div>
+  );
+
+  const BracketSeriesCard = ({ confKey, roundName, seriesKey, mirror = false }) => {
+    const series = post?.conf?.[confKey]?.rounds?.[roundName]?.[seriesKey];
+    if (!series) return null;
+
     return (
-      <>
-        {/* top horizontal */}
-        <div
-          className={lineStyle}
-          style={{
-            position: "absolute",
-            left: hx,
-            top: y1,
-            width: width,
-            height: thickness,
-            borderRadius: 2,
-          }}
-        />
-        {/* bottom horizontal */}
-        <div
-          className={lineStyle}
-          style={{
-            position: "absolute",
-            left: hx,
-            top: y2,
-            width: width,
-            height: thickness,
-            borderRadius: 2,
-          }}
-        />
-        {/* vertical spine */}
-        <div
-          className={lineStyle}
-          style={{
-            position: "absolute",
-            left: dir === "right" ? x + width : x - width,
-            top: y1,
-            width: thickness,
-            height: y2 - y1 + thickness,
-            borderRadius: 2,
-          }}
-        />
-      </>
+      <SeriesBox
+        topSeed={series.highSeedNum}
+        botSeed={series.lowSeedNum}
+        topLogo={teamLogo[series.highSeedTeam]}
+        botLogo={teamLogo[series.lowSeedTeam]}
+        topWins={series.winsHigh ?? 0}
+        botWins={series.winsLow ?? 0}
+        mirror={mirror}
+        compact
+        fluid
+        onClick={() => setModal({ type: "series", confKey, roundName, seriesKey })}
+        disabled={!series.highSeedTeam || !series.lowSeedTeam}
+      />
     );
   };
 
-  const BracketSide2K = ({ confKey, mirror = false }) => {
-    const conf = post?.conf?.[confKey];
-    if (!conf?.rounds?.r1 || !conf?.playIn) {
-      return <div className="text-neutral-400 text-sm">Bracket not ready for {confKey}.</div>;
-    }
-
-    const r1 = conf.rounds.r1;
-    const pi = conf.playIn;
-
-    const r1Keys = ["s1v8", "s4v5", "s3v6", "s2v7"];
-
-    const COL_W = BOX_W; // <-- uses your knob
-    const GAP = BRACKET_GAP; // <-- tighten/loosen column spacing
-    const STEP = COL_W + GAP;
-    const SIDE_W = STEP * 2 + COL_W;
-
-    // Columns
-    const X1 = mirror ? STEP * 2 : 0;
-    const X2 = STEP * 1;
-    const X3 = mirror ? 0 : STEP * 2;
-
-    const y0 = 18;
-    const pairGap = 24; // gap between two matchups in the same half
-    const blockGap = 60; // gap between top half and bottom half
-
-    const Y_R1 = [
-      y0,
-      y0 + BOX_H + pairGap,
-      y0 + (BOX_H + pairGap) * 2 + blockGap,
-      y0 + (BOX_H + pairGap) * 3 + blockGap,
-    ];
-
-    const Y_R2 = [Math.round((Y_R1[0] + Y_R1[1]) / 2), Math.round((Y_R1[2] + Y_R1[3]) / 2)];
-    const Y_R3 = [Math.round((Y_R2[0] + Y_R2[1]) / 2)];
-
-    const boxMidY = (y) => y + BOX_H / 2;
-    const dir = mirror ? "left" : "right";
-
-    const SIDE_H = Y_R1[3] + BOX_H + 30;
+  const ResponsiveBracketConnectors = () => {
+    const stroke = "rgba(14,165,233,0.62)";
+    const pathProps = {
+      fill: "none",
+      stroke,
+      strokeWidth: 2,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      vectorEffect: "non-scaling-stroke",
+    };
 
     return (
-      <div className="relative" style={{ width: SIDE_W, height: SIDE_H }}>
-        {/* ROUND 1 */}
-        {r1Keys.map((k, idx) => {
-          const s = r1[k];
-          const top = s.highSeedTeam;
-          const bot = s.lowSeedTeam;
-          return (
-            <div key={k} style={{ position: "absolute", left: X1, top: Y_R1[idx] }}>
-              <SeriesBox
-                topSeed={s.highSeedNum}
-                botSeed={s.lowSeedNum}
-                topLogo={teamLogo[top]}
-                botLogo={teamLogo[bot]}
-                topWins={s.winsHigh ?? 0}
-                botWins={s.winsLow ?? 0}
-                mirror={mirror}
-                onClick={() => setModal({ type: "series", confKey, roundName: "r1", seriesKey: k })}
-                disabled={!top || !bot}
-              />
+      <svg
+        className="pointer-events-none absolute inset-0 z-0 h-full w-full"
+        viewBox="0 0 700 1000"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        {/* West round 1 -> semifinals */}
+        <path {...pathProps} d="M50 125 H100 V250 H150" />
+        <path {...pathProps} d="M50 375 H100 V250 H150" />
+        <path {...pathProps} d="M50 625 H100 V750 H150" />
+        <path {...pathProps} d="M50 875 H100 V750 H150" />
+        {/* West semifinals -> conference finals */}
+        <path {...pathProps} d="M150 250 H200 V500 H250" />
+        <path {...pathProps} d="M150 750 H200 V500 H250" />
+        {/* West conference finals -> NBA Finals */}
+        <path {...pathProps} d="M250 500 H350" />
+
+        {/* East round 1 -> semifinals */}
+        <path {...pathProps} d="M650 125 H600 V250 H550" />
+        <path {...pathProps} d="M650 375 H600 V250 H550" />
+        <path {...pathProps} d="M650 625 H600 V750 H550" />
+        <path {...pathProps} d="M650 875 H600 V750 H550" />
+        {/* East semifinals -> conference finals */}
+        <path {...pathProps} d="M550 250 H500 V500 H450" />
+        <path {...pathProps} d="M550 750 H500 V500 H450" />
+        {/* East conference finals -> NBA Finals */}
+        <path {...pathProps} d="M450 500 H350" />
+      </svg>
+    );
+  };
+
+  const ResponsivePlayoffBracket = () => {
+    const columnLabels = [
+      `${left} · Round 1`,
+      `${left} · Semis`,
+      `${left} · Conf Finals`,
+      "NBA Finals",
+      `${right} · Conf Finals`,
+      `${right} · Semis`,
+      `${right} · Round 1`,
+    ];
+
+    return (
+      <div className="flex h-full min-h-0 w-full min-w-0 flex-col">
+        <div className="grid shrink-0 grid-cols-7 px-1 pb-1 text-center text-[9px] font-black uppercase tracking-[0.1em] text-white/48">
+          {columnLabels.map((label) => (
+            <div key={label} className="min-w-0 truncate px-1">{label}</div>
+          ))}
+        </div>
+
+        <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-white/5 bg-black/5">
+          <ResponsiveBracketConnectors />
+          <div className="absolute inset-0 grid grid-cols-7">
+            {/* West Round 1 */}
+            <div className="relative min-w-0">
+              {BRACKET_R1_KEYS.map((seriesKey, index) => (
+                <BracketMatchPosition key={seriesKey} centerPct={BRACKET_R1_CENTERS[index]}>
+                  <BracketSeriesCard confKey={left} roundName="r1" seriesKey={seriesKey} />
+                </BracketMatchPosition>
+              ))}
             </div>
-          );
-        })}
 
-        {/* Connect R1 -> R2 */}
-        <Connector x={mirror ? X1 : X1 + COL_W} y1={boxMidY(Y_R1[0])} y2={boxMidY(Y_R1[1])} dir={dir} />
-        <Connector x={mirror ? X1 : X1 + COL_W} y1={boxMidY(Y_R1[2])} y2={boxMidY(Y_R1[3])} dir={dir} />
+            {/* West Semifinals */}
+            <div className="relative min-w-0">
+              {["top", "bot"].map((seriesKey, index) => (
+                <BracketMatchPosition key={seriesKey} centerPct={BRACKET_R2_CENTERS[index]}>
+                  <BracketSeriesCard confKey={left} roundName="r2" seriesKey={seriesKey} />
+                </BracketMatchPosition>
+              ))}
+            </div>
 
-        {/* ROUND 2 */}
-        <div style={{ position: "absolute", left: X2, top: Y_R2[0] }}>
-          <SeriesBox
-            topSeed={conf.rounds.r2.top.highSeedNum}
-            botSeed={conf.rounds.r2.top.lowSeedNum}
-            topLogo={teamLogo[conf.rounds.r2.top.highSeedTeam]}
-            botLogo={teamLogo[conf.rounds.r2.top.lowSeedTeam]}
-            topWins={conf.rounds.r2.top.winsHigh ?? 0}
-            botWins={conf.rounds.r2.top.winsLow ?? 0}
-            mirror={mirror}
-            onClick={() => setModal({ type: "series", confKey, roundName: "r2", seriesKey: "top" })}
-            disabled={!conf.rounds.r2.top.highSeedTeam || !conf.rounds.r2.top.lowSeedTeam}
-          />
+            {/* West Conference Finals */}
+            <div className="relative min-w-0">
+              <BracketMatchPosition centerPct={BRACKET_CENTER}>
+                <BracketSeriesCard confKey={left} roundName="r3" seriesKey="confFinals" />
+              </BracketMatchPosition>
+            </div>
+
+            {/* NBA Finals */}
+            <div className="relative min-w-0">
+              <BracketMatchPosition centerPct={BRACKET_CENTER}>
+                <SeriesBox
+                  topSeed={null}
+                  botSeed={null}
+                  topLogo={teamLogo[post.finals.highSeedTeam]}
+                  botLogo={teamLogo[post.finals.lowSeedTeam]}
+                  topWins={post.finals.winsHigh ?? 0}
+                  botWins={post.finals.winsLow ?? 0}
+                  compact
+                  fluid
+                  onClick={() => setModal({ type: "series", roundName: "finals" })}
+                  disabled={!post.finals.highSeedTeam || !post.finals.lowSeedTeam}
+                />
+              </BracketMatchPosition>
+            </div>
+
+            {/* East Conference Finals */}
+            <div className="relative min-w-0">
+              <BracketMatchPosition centerPct={BRACKET_CENTER}>
+                <BracketSeriesCard confKey={right} roundName="r3" seriesKey="confFinals" mirror />
+              </BracketMatchPosition>
+            </div>
+
+            {/* East Semifinals */}
+            <div className="relative min-w-0">
+              {["top", "bot"].map((seriesKey, index) => (
+                <BracketMatchPosition key={seriesKey} centerPct={BRACKET_R2_CENTERS[index]}>
+                  <BracketSeriesCard confKey={right} roundName="r2" seriesKey={seriesKey} mirror />
+                </BracketMatchPosition>
+              ))}
+            </div>
+
+            {/* East Round 1 */}
+            <div className="relative min-w-0">
+              {BRACKET_R1_KEYS.map((seriesKey, index) => (
+                <BracketMatchPosition key={seriesKey} centerPct={BRACKET_R1_CENTERS[index]}>
+                  <BracketSeriesCard confKey={right} roundName="r1" seriesKey={seriesKey} mirror />
+                </BracketMatchPosition>
+              ))}
+            </div>
+          </div>
         </div>
-
-        <div style={{ position: "absolute", left: X2, top: Y_R2[1] }}>
-          <SeriesBox
-            topSeed={conf.rounds.r2.bot.highSeedNum}
-            botSeed={conf.rounds.r2.bot.lowSeedNum}
-            topLogo={teamLogo[conf.rounds.r2.bot.highSeedTeam]}
-            botLogo={teamLogo[conf.rounds.r2.bot.lowSeedTeam]}
-            topWins={conf.rounds.r2.bot.winsHigh ?? 0}
-            botWins={conf.rounds.r2.bot.winsLow ?? 0}
-            mirror={mirror}
-            onClick={() => setModal({ type: "series", confKey, roundName: "r2", seriesKey: "bot" })}
-            disabled={!conf.rounds.r2.bot.highSeedTeam || !conf.rounds.r2.bot.lowSeedTeam}
-          />
-        </div>
-
-        {/* Connect R2 -> R3 */}
-        <Connector x={mirror ? X2 : X2 + COL_W} y1={boxMidY(Y_R2[0])} y2={boxMidY(Y_R2[1])} dir={dir} />
-
-        {/* CONF FINALS */}
-        <div style={{ position: "absolute", left: X3, top: Y_R3[0] }}>
-          <SeriesBox
-            topSeed={conf.rounds.r3.confFinals.highSeedNum}
-            botSeed={conf.rounds.r3.confFinals.lowSeedNum}
-            topLogo={teamLogo[conf.rounds.r3.confFinals.highSeedTeam]}
-            botLogo={teamLogo[conf.rounds.r3.confFinals.lowSeedTeam]}
-            topWins={conf.rounds.r3.confFinals.winsHigh ?? 0}
-            botWins={conf.rounds.r3.confFinals.winsLow ?? 0}
-            mirror={mirror}
-            onClick={() => setModal({ type: "series", confKey, roundName: "r3", seriesKey: "confFinals" })}
-            disabled={!conf.rounds.r3.confFinals.highSeedTeam || !conf.rounds.r3.confFinals.lowSeedTeam}
-          />
-        </div>
-
-
       </div>
     );
   };
@@ -3453,7 +3475,7 @@ ${disabled ? "opacity-60" : ""}
     };
 
     return (
-      <div className="absolute inset-x-0 top-[64px] bottom-0 overflow-hidden px-6 pb-4 pt-3">
+      <div className="absolute inset-x-0 top-[108px] bottom-0 overflow-hidden px-5 pb-4 pt-2">
         <div className="mx-auto flex h-full max-w-[1320px] min-h-0 flex-col">
           <div className="mb-3 shrink-0 text-center">
             <div className="text-[10px] font-black uppercase tracking-[0.26em] text-orange-300/70">Postseason Opening Stage</div>
@@ -3472,7 +3494,7 @@ ${disabled ? "opacity-60" : ""}
   const showingPlayIn = !allPlayInsComplete || postseasonView === "playin";
 
   return (
-    <div className={`fixed inset-x-0 top-0 bottom-[48px] overflow-hidden ${styles.wrapper}`}>
+    <div ref={playoffsRootRef} className={`relative h-full min-h-0 w-full overflow-hidden ${styles.wrapper}`}>
       <style>{`
   .noScrollbar::-webkit-scrollbar { display: none; }
   .noScrollbar { -ms-overflow-style: none; scrollbar-width: none; }
@@ -3488,122 +3510,110 @@ ${disabled ? "opacity-60" : ""}
   .bmPlayoffPanelRise { animation: bmPlayoffPanelRise 220ms ease-out both; }
 `}</style>
 
-      {/* top bar */}
-      <div className="absolute left-0 right-0 top-0 h-[64px] px-6 flex items-center justify-between z-20">
-        <div className="flex gap-2">
+      {/* Postseason toolbar + title occupy separate rows so controls can never overlap headings. */}
+      <div className="absolute left-0 right-0 top-0 z-20 h-[108px] px-5 pt-2">
+        <div className="flex h-[48px] min-w-0 items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-2">
+            {!isOffseasonPostseasonReview ? (
+              <>
+                <button
+                  disabled={simLock || simsDisabled}
+                  onClick={async () => {
+                    if (allPlayInsComplete) await simGlobalOneGameAllSeries();
+                    else await simGlobalOnePlayInGame();
+                  }}
+                  className="rounded bg-neutral-800 px-3 py-2 text-xs font-bold hover:bg-neutral-700 disabled:opacity-50"
+                >
+                  Sim One Day
+                </button>
+                <button
+                  disabled={simLock || simsDisabled}
+                  onClick={async () => { await simTopNextRound(); }}
+                  className="rounded bg-neutral-800 px-3 py-2 text-xs font-bold hover:bg-neutral-700 disabled:opacity-50"
+                >
+                  {allPlayInsComplete ? "Simulate Round" : "Simulate Play-In"}
+                </button>
+                {(allPlayInsComplete || simsDisabled) && (
+                  <button
+                    disabled={simLock || fmvpLoading || (simsDisabled && !champModal?.team)}
+                    onClick={async () => {
+                      if (simsDisabled) { continueFromFinalsMvpModal(); return; }
+                      await simTopPlayoffsToChampion();
+                    }}
+                    className="rounded bg-orange-600 px-3 py-2 text-xs font-bold hover:bg-orange-500 disabled:opacity-50"
+                  >
+                    {simsDisabled ? "Continue to Offseason" : "Simulate Playoffs"}
+                  </button>
+                )}
+                <button
+                  disabled={simLock || fmvpLoading || simsDisabled}
+                  onClick={async () => { await simDevInstantPlayoffsToChampion(); }}
+                  className="rounded bg-purple-700 px-3 py-2 text-xs font-bold hover:bg-purple-600 disabled:opacity-50"
+                  title="Dev shortcut: simulates the rest of playoffs with one final bracket save"
+                >
+                  Dev Instant Playoffs
+                </button>
+                <button
+                  disabled={!simLock}
+                  onClick={() => { stopRequestedRef.current = true; setSimStopping(true); }}
+                  className="rounded border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-xs hover:bg-neutral-800 disabled:opacity-50"
+                  title="Stops after the current game finishes"
+                >
+                  {simStopping ? "Stopping..." : "Stop"}
+                </button>
+              </>
+            ) : (
+              <div className="rounded-lg border border-orange-400/30 bg-orange-500/10 px-3 py-2 text-[10px] font-black uppercase tracking-[0.14em] text-orange-200">
+                Completed Postseason Review
+              </div>
+            )}
 
-          <button
-            disabled={simLock || simsDisabled}
-            onClick={async () => {
-              if (allPlayInsComplete) await simGlobalOneGameAllSeries();
-              else await simGlobalOnePlayInGame();
-            }}
-            className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm font-bold disabled:opacity-50"
-          >
-            Sim One Day
-          </button>
+            {!isOffseasonPostseasonReview && finalsMvpSeen && champModal?.team && (
+              <button
+                disabled={fmvpLoading}
+                onClick={openFinalsMvpModal}
+                className="rounded border border-orange-500/40 bg-neutral-800 px-3 py-2 text-xs font-bold text-orange-200 hover:bg-neutral-700 disabled:opacity-50"
+              >
+                Finals MVP
+              </button>
+            )}
+          </div>
 
-          {/* Full-stage controls */}
-          <button
-            disabled={simLock || simsDisabled}
-            onClick={async () => {
-              await simTopNextRound();
-            }}
-            className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm font-bold disabled:opacity-50"
-          >
-            {allPlayInsComplete ? "Simulate Round" : "Simulate Play-In"}
-          </button>
-
-          {(allPlayInsComplete || simsDisabled) && (
+          <div className="flex shrink-0 items-center justify-end gap-2">
+            {allPlayInsComplete && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setPostseasonView("playin")}
+                  className={`rounded px-3 py-2 text-xs font-black ${showingPlayIn ? "bg-orange-600" : "bg-neutral-800 hover:bg-neutral-700"}`}
+                >
+                  View Play-In
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPostseasonView("bracket")}
+                  className={`rounded px-3 py-2 text-xs font-black ${!showingPlayIn ? "bg-orange-600" : "bg-neutral-800 hover:bg-neutral-700"}`}
+                >
+                  View Bracket
+                </button>
+              </>
+            )}
             <button
-              disabled={simLock || fmvpLoading || (simsDisabled && !champModal?.team)}
-              onClick={async () => {
-                if (simsDisabled) {
-                  continueFromFinalsMvpModal();
-                  return;
-                }
-
-                await simTopPlayoffsToChampion();
-              }}
-              className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded text-sm font-bold disabled:opacity-50"
+              onClick={() => navigate("/team-hub", { state: { playoffMode: true, playoffReturnTo: "/playoffs" } })}
+              className="bmLegacyRouteBack rounded bg-neutral-800 px-3 py-2 text-xs font-bold hover:bg-neutral-700"
             >
-              {simsDisabled ? "Continue to Offseason" : "Simulate Playoffs"}
+              Team Hub
             </button>
-          )}
-
-          <button
-            disabled={simLock || fmvpLoading || simsDisabled}
-            onClick={async () => {
-              await simDevInstantPlayoffsToChampion();
-            }}
-            className="px-4 py-2 bg-purple-700 hover:bg-purple-600 rounded text-sm font-bold disabled:opacity-50"
-            title="Dev shortcut: simulates the rest of playoffs with one final bracket save"
-          >
-            Dev Instant Playoffs
-          </button>
-
-          {/* ✅ PATCH: STOP BUTTON */}
-          <button
-            disabled={!simLock}
-            onClick={() => {
-              stopRequestedRef.current = true;
-              setSimStopping(true);
-            }}
-            className="px-4 py-2 bg-neutral-900/70 hover:bg-neutral-800 rounded text-sm border border-neutral-700 disabled:opacity-50"
-            title="Stops after the current game finishes"
-          >
-            {simStopping ? "Stopping..." : "Stop"}
-          </button>
-
-          {finalsMvpSeen && champModal?.team && (
-            <button
-              disabled={fmvpLoading}
-              onClick={openFinalsMvpModal}
-              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm font-bold border border-orange-500/40 text-orange-200 transition-all duration-200 hover:-translate-y-1 disabled:opacity-50"
-            >
-              Finals MVP
-            </button>
-          )}
+          </div>
         </div>
 
-        <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center select-none">
-          <div className="text-[28px] font-extrabold leading-none tracking-wide text-white/90">
+        <div className="flex h-[52px] flex-col items-center justify-center select-none">
+          <div className="text-[26px] font-extrabold leading-none tracking-wide text-white/90">
             {showingPlayIn ? "PLAY-IN TOURNAMENT" : "PLAYOFFS"}
           </div>
           <div className="mt-1 text-[9px] font-black uppercase tracking-[0.24em] text-orange-300/65">
             Current Date • {formatLeagueDate(post?.calendar?.currentDate)}
           </div>
-        </div>
-
-        <div className="flex w-[300px] justify-end gap-2">
-          {allPlayInsComplete && (
-            <>
-              <button
-                type="button"
-                onClick={() => setPostseasonView("playin")}
-                className={`rounded px-3 py-2 text-xs font-black ${showingPlayIn ? "bg-orange-600" : "bg-neutral-800 hover:bg-neutral-700"}`}
-              >
-                View Play-In
-              </button>
-              <button
-                type="button"
-                onClick={() => setPostseasonView("bracket")}
-                className={`rounded px-3 py-2 text-xs font-black ${!showingPlayIn ? "bg-orange-600" : "bg-neutral-800 hover:bg-neutral-700"}`}
-              >
-                View Bracket
-              </button>
-            </>
-          )}
-          <button
-            onClick={() =>
-              navigate("/team-hub", {
-                state: { playoffMode: true, playoffReturnTo: "/playoffs" },
-              })
-            }
-            className="bmLegacyRouteBack rounded bg-neutral-800 px-3 py-2 text-xs font-bold hover:bg-neutral-700"
-          >
-            Team Hub
-          </button>
         </div>
       </div>
 
@@ -3611,43 +3621,8 @@ ${disabled ? "opacity-60" : ""}
       {showingPlayIn ? (
         <PlayInTournamentStage />
       ) : (
-        <div className="absolute inset-x-0 top-[64px] bottom-0 flex items-start justify-center overflow-hidden px-6">
-          <div
-            className="relative"
-            style={{
-              width: `${BASE_W}px`,
-              height: `${BASE_H}px`,
-              transform: `scale(${uiScale})`,
-              transformOrigin: "top center",
-            }}
-          >
-            <div className="flex items-start justify-between w-full h-full pt-6">
-              <div>
-                <div className="text-white/80 font-extrabold text-xl mb-3 select-none">{left}</div>
-                <BracketSide2K confKey={left} mirror={false} />
-              </div>
-
-              <div className="flex flex-col items-center mt-[110px]" style={{ width: BOX_W }}>
-                <div className="text-white/80 font-extrabold text-xl mb-3 select-none">FINALS</div>
-                <SeriesBox
-                  topSeed={null}
-                  botSeed={null}
-                  topLogo={teamLogo[post.finals.highSeedTeam]}
-                  botLogo={teamLogo[post.finals.lowSeedTeam]}
-                  topWins={post.finals.winsHigh ?? 0}
-                  botWins={post.finals.winsLow ?? 0}
-                  mirror={false}
-                  onClick={() => setModal({ type: "series", roundName: "finals" })}
-                  disabled={!post.finals.highSeedTeam || !post.finals.lowSeedTeam}
-                />
-              </div>
-
-              <div>
-                <div className="text-white/80 font-extrabold text-xl mb-3 select-none text-right">{right}</div>
-                <BracketSide2K confKey={right} mirror={true} />
-              </div>
-            </div>
-          </div>
+        <div className="absolute inset-x-0 top-[108px] bottom-0 min-h-0 min-w-0 overflow-hidden px-3 pb-3 pt-2">
+          <ResponsivePlayoffBracket />
         </div>
       )}
 
@@ -3868,87 +3843,18 @@ ${disabled ? "opacity-60" : ""}
         </div>
       )}
 
-      {/* Box Score Modal */}
+      {/* Unified Box Score Modal */}
       {boxModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-neutral-900 border border-neutral-700 rounded-xl w-[880px] max-h-[90vh] overflow-auto p-5">
-            <div className="flex justify-between mb-4 items-center">
-              <div className="flex items-center gap-3">
-                <Logo src={teamLogo[boxModal.awayName]} size={34} title="Away" />
-                <span className="text-neutral-500 text-sm">Away</span>
-                <span className="text-neutral-600">•</span>
-                <Logo src={teamLogo[boxModal.homeName]} size={34} title="Home" />
-                <span className="text-neutral-500 text-sm">Home</span>
-                <span className="text-neutral-600">•</span>
-                <span className="text-sm font-bold">
-                  {boxModal.result?.winner?.score}
-                  {boxModal.result?.winner?.ot ? " (OT)" : ""}
-                </span>
-              </div>
-
-              <button className="px-2 py-1 bg-neutral-700 rounded" onClick={() => setBoxModal(null)}>
-                Close
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              {[
-                { side: "away", label: "Away", logoTeam: boxModal.awayName },
-                { side: "home", label: "Home", logoTeam: boxModal.homeName },
-              ].map(({ side, label, logoTeam }) => {
-                const teamName = side === "away" ? boxModal.awayName : boxModal.homeName;
-                const fallbackTeam = teams.find((team) => team?.name === teamName);
-                const fallbackOrder = readGameplanOrder(teamName, fallbackTeam);
-                const rows = sortBoxRowsByFrozenRotation(
-                  boxModal.result?.box?.[side] || [],
-                  boxModal.result?.rotationOrder?.[side] || [],
-                  fallbackOrder
-                );
-                return (
-                  <div key={side} className="bg-neutral-800 p-3 rounded-lg">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Logo src={teamLogo[logoTeam]} size={26} title={label} />
-                      <h4 className="font-bold">{label}</h4>
-                    </div>
-
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-neutral-700">
-                          <th className="py-1 text-left">Player</th>
-                          <th className="py-1">MIN</th>
-                          <th className="py-1">PTS</th>
-                          <th className="py-1">REB</th>
-                          <th className="py-1">AST</th>
-                          <th className="py-1">STL</th>
-                          <th className="py-1">BLK</th>
-                          <th className="py-1">FG</th>
-                          <th className="py-1">3P</th>
-                          <th className="py-1">FT</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rows.map((r, i) => (
-                          <tr key={i} className="border-b border-neutral-700">
-                            <td className="text-left">{r.player}</td>
-                            <td className="text-center">{r.min}</td>
-                            <td className="text-center">{r.pts}</td>
-                            <td className="text-center">{r.reb}</td>
-                            <td className="text-center">{r.ast}</td>
-                            <td className="text-center">{r.stl}</td>
-                            <td className="text-center">{r.blk}</td>
-                            <td className="text-center">{r.fg}</td>
-                            <td className="text-center">{r["3p"]}</td>
-                            <td className="text-center">{r.ft}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+        <GameBoxScoreModal
+          game={{ home: boxModal.homeName, away: boxModal.awayName }}
+          result={boxModal.result}
+          onClose={() => setBoxModal(null)}
+          teamLogos={teamLogo}
+          fallbackOrders={{
+            away: readGameplanOrder(boxModal.awayName, teamsByName?.[boxModal.awayName] || null),
+            home: readGameplanOrder(boxModal.homeName, teamsByName?.[boxModal.homeName] || null),
+          }}
+        />
       )}
     </div>
   );

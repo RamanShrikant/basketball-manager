@@ -16,6 +16,7 @@ import {
   restoreLeagueSaveToActive,
 } from "../storage/leagueSaves.js";
 import { clearActiveLeagueRuntime } from "../storage/saveManager.js";
+import { buildVisibleLeagueSaveSlots } from "../storage/leagueSaveSlots.js";
 import {
   deleteCustomDraftClassForYear,
   readCustomDraftClassesIndex,
@@ -130,6 +131,7 @@ export default function Play() {
   const navigate = useNavigate();
 
   const [screen, setScreen] = useState("menu");
+  const [newLeagueSlotIndex, setNewLeagueSlotIndex] = useState(null);
   const [leagueName, setLeagueName] = useState("NBA 2026-27");
   const [fileName, setFileName] = useState("");
   const [customRosterData, setCustomRosterData] = useState(null);
@@ -353,15 +355,19 @@ export default function Play() {
     return normalized;
   };
 
-  const beginNewLeagueSetup = async () => {
+  const beginNewLeagueSetup = async (slotIndex = null) => {
     if (startingGame || loadingSaveId) return;
     setStartingGame(true);
     setError("");
     setSavesError("");
     try {
       const existingSaves = await listLeagueSaves();
-      if (existingSaves.length >= MAX_LEAGUE_SAVE_SLOTS) {
-        throw new Error(`You can keep up to ${MAX_LEAGUE_SAVE_SLOTS} league saves. Delete a save before starting another league.`);
+      const requestedSlotIndex = Number(slotIndex);
+      if (!Number.isInteger(requestedSlotIndex) || requestedSlotIndex < 0 || requestedSlotIndex >= MAX_LEAGUE_SAVE_SLOTS) {
+        throw new Error("Choose an empty save slot first.");
+      }
+      if (existingSaves.some((save) => Number(save?.slotIndex) === requestedSlotIndex)) {
+        throw new Error(`Save Slot ${requestedSlotIndex + 1} is already in use.`);
       }
 
       if (getActiveLeagueSaveId() && leagueData) {
@@ -388,6 +394,7 @@ export default function Play() {
       setRosterMode("default");
       setDraft2027Mode("default");
       setDraftClassStatus("");
+      setNewLeagueSlotIndex(requestedSlotIndex);
       setScreen("new");
     } catch (err) {
       setError(err?.message || "Could not prepare a clean new league.");
@@ -443,6 +450,7 @@ export default function Play() {
         selectedTeamName: "",
         activate: true,
         source: "Play.startNewLeague",
+        slotIndex: newLeagueSlotIndex,
       });
 
       navigate("/team-selector");
@@ -538,7 +546,17 @@ export default function Play() {
     }
   };
 
-  const playShell = "min-h-screen bg-[#050505] px-5 py-6 text-white";
+  const visibleSaveSlots = useMemo(
+    () => buildVisibleLeagueSaveSlots(saveSlots, MAX_LEAGUE_SAVE_SLOTS),
+    [saveSlots]
+  );
+
+  const formatLastPlayed = (value) => {
+    const time = Date.parse(value || "");
+    if (!Number.isFinite(time)) return "Unknown";
+    return new Date(time).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  };
+
   const chromePanel = "rounded-xl border border-[#252525] bg-[#090909] shadow-[0_12px_30px_rgba(0,0,0,.28)]";
   const darkInput = "rounded-lg border border-[#303030] bg-[#111111] px-4 py-3 text-sm font-black text-white outline-none placeholder:text-white/28 focus:border-orange-500/80 focus:ring-2 focus:ring-orange-500/18";
   const selectInput = "rounded-lg border border-[#303030] bg-[#111111] px-3 py-2 text-sm font-black text-white outline-none [color-scheme:dark] focus:border-orange-500/70 focus:ring-2 focus:ring-orange-500/15";
@@ -549,100 +567,87 @@ export default function Play() {
 
   if (screen === "menu") {
     return (
-      <div className={playShell}>
-        <div className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-6xl flex-col justify-center gap-5">
-          <div className={`${chromePanel} overflow-hidden p-6 md:p-8`}>
-            <p className="mb-3 text-xs font-black uppercase tracking-[0.22em] text-orange-300">Basketball Manager</p>
-            <h1 className="text-5xl font-black tracking-[-0.07em] md:text-7xl">Play</h1>
-            <p className="mt-4 max-w-2xl text-base font-semibold leading-7 text-white/58">
-              Start a new rebuild or continue a league saved on this browser. Saves stay local to this device for now.
-            </p>
-
-            <div className="mt-8 grid gap-3 md:grid-cols-2">
-              <button
-                type="button"
-                onClick={beginNewLeagueSetup}
-                className="group rounded-xl border border-[#252525] border-l-4 border-l-orange-600 bg-[#0b0b0b] p-5 text-left transition hover:border-orange-500/45 hover:bg-[#13100d]"
-              >
-                <span className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Start</span>
-                <h2 className="mt-3 text-3xl font-black tracking-[-0.05em]">New League</h2>
-                <p className="mt-2 text-sm font-semibold leading-6 text-white/55">Name a fresh save slot, choose roster/draft setup, then select your team.</p>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => { setScreen("continue"); refreshSaveSlots(); }}
-                className="group rounded-xl border border-[#252525] bg-[#0b0b0b] p-5 text-left transition hover:border-orange-500/40 hover:bg-[#13100d]"
-              >
-                <span className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Load</span>
-                <h2 className="mt-3 text-3xl font-black tracking-[-0.05em]">Continue League</h2>
-                <p className="mt-2 text-sm font-semibold leading-6 text-white/55">Resume, rename, export, or delete local rebuild saves.</p>
-              </button>
+      <div className="h-[100dvh] overflow-hidden bg-[#050505] px-4 py-4 text-white">
+        <div className="mx-auto flex h-full w-full max-w-[1500px] min-h-0 flex-col gap-3">
+          <header className="flex shrink-0 items-end justify-between gap-4 px-1">
+            <div className="min-w-0">
+              <p className="mb-1 text-[10px] font-black uppercase tracking-[0.22em] text-orange-300">Basketball Manager</p>
+              <div className="flex flex-wrap items-end gap-x-4 gap-y-1">
+                <h1 className="text-4xl font-black tracking-[-0.07em] md:text-5xl">League Saves</h1>
+                <span className="mb-1 rounded-full border border-orange-500/25 bg-orange-500/10 px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-orange-200">
+                  {saveSlots.length} / {MAX_LEAGUE_SAVE_SLOTS} slots used
+                </span>
+              </div>
+              <p className="mt-1 text-xs font-semibold text-white/48">Choose an occupied slot to continue, or an empty slot to start a new rebuild.</p>
             </div>
-          </div>
-
-          <button type="button" onClick={() => navigate("/league-editor")} className="self-start text-sm font-black text-white/45 hover:text-orange-300">
-            ← Back to League Editor
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (screen === "continue") {
-    return (
-      <div className={playShell}>
-        <div className="mx-auto w-full max-w-6xl">
-          <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <p className="mb-2 text-xs font-black uppercase tracking-[0.22em] text-orange-300">Local Saves</p>
-              <h1 className="text-5xl font-black tracking-[-0.07em]">Continue League</h1>
-              <p className="mt-3 text-sm font-semibold text-white/50">Saved rebuilds live in this browser. Export backups before clearing site data. {saveSlots.length}/{MAX_LEAGUE_SAVE_SLOTS} slots used.</p>
+            <div className="flex shrink-0 gap-2">
+              <button type="button" onClick={() => navigate("/league-editor")} className={`${quietButton} px-3 py-2 text-xs`}>League Editor</button>
+              <button type="button" onClick={refreshSaveSlots} className={`${orangeButton} px-3 py-2 text-xs`}>Refresh</button>
             </div>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => navigate("/league-editor")} className={quietButton}>Back to League Editor</button>
-              <button type="button" onClick={refreshSaveSlots} className={orangeButton}>Refresh</button>
-            </div>
-          </div>
+          </header>
 
-          {savesError && <p className="mb-4 rounded-2xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm font-bold text-red-200">{savesError}</p>}
+          {savesError && (
+            <p className="shrink-0 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-200">{savesError}</p>
+          )}
 
-          {loadingSaves ? (
-            <div className={`${chromePanel} p-8 text-white/55`}>Loading local saves...</div>
-          ) : saveSlots.length === 0 ? (
-            <div className={`${chromePanel} p-8`}>
-              <h2 className="text-2xl font-black">No saved leagues yet</h2>
-              <p className="mt-2 text-sm font-semibold text-white/50">Start a new league and it will show up here after the first save slot is created.</p>
-              <button type="button" onClick={beginNewLeagueSetup} className={`${orangeButton} mt-5`}>Start New League</button>
-            </div>
-          ) : (
-            <div className="grid gap-3">
-              {saveSlots.map((save) => {
-                const busy = saveBusyId === save.saveId || loadingSaveId === save.saveId;
+          <main className="grid min-h-0 flex-1 grid-cols-5 grid-rows-2 gap-3">
+            {visibleSaveSlots.map(({ slotIndex, save }) => {
+              const busy = save ? saveBusyId === save.saveId || loadingSaveId === save.saveId : startingGame;
+
+              if (!save) {
                 return (
-                  <article key={save.saveId} className={`${chromePanel} p-5`}>
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                      <div className="min-w-0">
-                        <h2 className="truncate text-2xl font-black tracking-[-0.04em]">{save.leagueName}</h2>
-                        <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs font-bold text-white/48">
-                          <span>{save.controlledTeamName || "No team selected"}</span>
-                          <span>{save.seasonLabel || "Season not started"}</span>
-                          <span>{save.teamCount || 0} teams</span>
-                          <span>Last played {new Date(save.updatedAt).toLocaleString()}</span>
-                          {Number(save.schemaVersion || 1) < 2 && <span className="text-amber-300">Legacy save · save once to upgrade</span>}
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button type="button" disabled={busy} onClick={() => continueSave(save.saveId)} className={orangeButton}>{loadingSaveId === save.saveId ? "Loading..." : "Continue"}</button>
-                        <button type="button" disabled={busy} onClick={() => renameSave(save)} className={quietButton}>Rename</button>
-                        <button type="button" disabled={busy} onClick={() => exportSave(save)} className={quietButton}>Export</button>
-                        <button type="button" disabled={busy} onClick={() => deleteSave(save)} className="rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-black text-red-100 transition hover:border-red-300/45 hover:bg-red-500/18 disabled:opacity-50">Delete</button>
-                      </div>
-                    </div>
-                  </article>
+                  <button
+                    key={`empty-${slotIndex}`}
+                    type="button"
+                    disabled={startingGame || loadingSaves}
+                    onClick={() => beginNewLeagueSetup(slotIndex)}
+                    className="group flex min-h-0 min-w-0 flex-col items-center justify-center rounded-xl border border-dashed border-white/16 bg-[#090909] p-4 text-center transition hover:border-orange-500/55 hover:bg-[#120d09] disabled:cursor-wait disabled:opacity-55"
+                  >
+                    <span className="absolute sr-only">Start new league in Save Slot {slotIndex + 1}</span>
+                    <span className="mb-3 text-[10px] font-black uppercase tracking-[0.2em] text-white/32">Save Slot {slotIndex + 1}</span>
+                    <span className="flex h-11 w-11 items-center justify-center rounded-full border border-orange-500/35 bg-orange-500/10 text-3xl font-light text-orange-300 transition group-hover:scale-105 group-hover:bg-orange-500/16">+</span>
+                    <h2 className="mt-3 text-xl font-black tracking-[-0.04em] text-white/88">New League</h2>
+                    <p className="mt-1 text-[11px] font-semibold text-white/36">Empty slot</p>
+                  </button>
                 );
-              })}
-            </div>
+              }
+
+              return (
+                <article key={save.saveId} className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#090909] shadow-[0_12px_28px_rgba(0,0,0,.24)]">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => continueSave(save.saveId)}
+                    className="group min-h-0 flex-1 p-4 text-left transition hover:bg-[#13100d] disabled:cursor-wait disabled:opacity-60"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">Save Slot {slotIndex + 1}</span>
+                      <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-emerald-200">Occupied</span>
+                    </div>
+                    <h2 className="mt-3 line-clamp-2 text-xl font-black leading-tight tracking-[-0.04em] text-white group-hover:text-orange-100">{save.leagueName}</h2>
+                    <p className="mt-2 truncate text-sm font-black text-white/72">{save.controlledTeamName || "No team selected"}</p>
+                    <div className="mt-2 space-y-1 text-[10px] font-bold text-white/40">
+                      <div className="truncate">{save.seasonLabel || "Season not started"}</div>
+                      <div>{save.teamCount || 0} teams</div>
+                      <div>Last played {formatLastPlayed(save.updatedAt)}</div>
+                    </div>
+                    <div className="mt-3 rounded-lg border border-orange-500/20 bg-orange-500/10 px-3 py-2 text-center text-xs font-black text-orange-100 transition group-hover:bg-orange-500/16">
+                      {loadingSaveId === save.saveId ? "Loading..." : "Continue League"}
+                    </div>
+                  </button>
+
+                  <div className="grid shrink-0 grid-cols-3 border-t border-white/8 bg-black/20">
+                    <button type="button" disabled={busy} onClick={() => renameSave(save)} className="border-r border-white/8 px-2 py-2 text-[10px] font-black text-white/55 hover:bg-white/5 hover:text-white disabled:opacity-40">Rename</button>
+                    <button type="button" disabled={busy} onClick={() => exportSave(save)} className="border-r border-white/8 px-2 py-2 text-[10px] font-black text-white/55 hover:bg-white/5 hover:text-white disabled:opacity-40">Export</button>
+                    <button type="button" disabled={busy} onClick={() => deleteSave(save)} className="px-2 py-2 text-[10px] font-black text-red-300/75 hover:bg-red-500/10 hover:text-red-200 disabled:opacity-40">Delete</button>
+                  </div>
+                </article>
+              );
+            })}
+          </main>
+
+          {loadingSaves && (
+            <div className="pointer-events-auto absolute inset-0 flex items-center justify-center bg-black/35 text-sm font-black text-white/70">Loading save slots...</div>
           )}
         </div>
       </div>
@@ -652,13 +657,13 @@ export default function Play() {
   return (
     <div className="min-h-screen overflow-hidden bg-[#050505] px-4 py-3 text-white">
       <div className="mx-auto flex min-h-[calc(100vh-1.5rem)] w-full max-w-7xl flex-col justify-center gap-2">
-        <button type="button" onClick={() => navigate("/league-editor")} className="self-start rounded-lg border border-[#303030] bg-[#111111] px-4 py-2 text-sm font-black text-white/70 hover:border-orange-500/40 hover:text-orange-200">← Back to League Editor</button>
+        <button type="button" onClick={() => { setScreen("menu"); setError(""); refreshSaveSlots(); }} className="self-start rounded-lg border border-[#303030] bg-[#111111] px-4 py-2 text-sm font-black text-white/70 hover:border-orange-500/40 hover:text-orange-200">← Back to Save Slots</button>
 
         <div className={`${chromePanel} overflow-hidden p-3 md:p-3`}>
           <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <div>
               <p className="mb-2 text-[11px] font-black uppercase tracking-[0.18em] text-orange-300">Basketball Manager</p>
-              <h1 className="text-3xl font-black tracking-[-0.06em] md:text-4xl">Start New League</h1>
+              <h1 className="text-3xl font-black tracking-[-0.06em] md:text-4xl">Start New League <span className="text-orange-300/80">· Slot {Number(newLeagueSlotIndex) + 1}</span></h1>
             </div>
             <div className="w-full md:w-[360px]">
               <p className="mb-2 text-[11px] font-black uppercase tracking-[0.16em] text-orange-300">League Name</p>

@@ -18,6 +18,7 @@ import { getTeamAbbreviation } from "../utils/teamAbbreviations.js";
 import { archiveCurrentSeasonIntoPlayerCards } from "../utils/playerCareerHistory.js";
 import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.js";
 import { formatLeagueDate, getOffseasonCurrentDate, writeLeagueClock } from "../utils/leagueClock.js";
+import { clearCompletedSeasonRuntimeForNextSeason } from "../utils/finalsMvpSeasonActions.js";
 import { getContractSeasonYear } from "../utils/seasonContext.js";
 import {
   readCustomDraftClassForYear,
@@ -2664,6 +2665,9 @@ export default function OffseasonHub() {
     setOffseasonState(next);
     saveOffseasonState(next);
 
+    // The completed season stays reviewable throughout the offseason. Clear it
+    // only now, immediately before the new regular season calendar is mounted.
+    clearCompletedSeasonRuntimeForNextSeason();
     navigate("/calendar");
   };
 
@@ -3567,6 +3571,7 @@ export default function OffseasonHub() {
       date: "",
       replace: true,
     });
+    clearCompletedSeasonRuntimeForNextSeason();
     navigate("/calendar");
   };
 

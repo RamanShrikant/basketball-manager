@@ -102,7 +102,7 @@ export function getCompletedSeasonYearForArchive(leagueData, fmvpRaw) {
   return FIRST_PLAYABLE_SEASON_YEAR + 1;
 }
 
-function clearSeasonStores() {
+export function clearCompletedSeasonRuntimeForNextSeason() {
   // Delete the actual result payloads synchronously before dropping the index.
   // The previous deferred cleanup could be interrupted by a reload/navigation,
   // leaving 1,230 invisible prior-season keys that consumed localStorage until
@@ -233,8 +233,12 @@ export function finalizeFinalsMvpAndGoOffseason({
   const currentSeasonStartYear = completedSeasonYear - 1;
   const nextSeasonYear = bumpSeasonYearMeta(currentSeasonStartYear);
 
-  // 6) clear season runtime keys so Calendar generates a fresh schedule/results later
-  clearSeasonStores();
+  // 6) Keep the completed regular season + postseason runtime alive through the
+  // offseason so Schedule/Playoffs remain reviewable. Only reset draft-cycle
+  // state here; the heavy season runtime is cleared exactly once when the
+  // offseason advances into the next regular season.
+  localStorage.removeItem(DRAFT_LOTTERY_KEY);
+  localStorage.removeItem(DRAFT_STATE_KEY);
 
   // 7) reset offseason state/results for the new offseason
   localStorage.setItem(

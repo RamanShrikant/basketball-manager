@@ -702,9 +702,19 @@ html[data-bm-route="calendar"] .bmGlobalRouteNavCalendar .bmGlobalRouteNavButton
   }
 
   body[data-bm-route="awards"] #root,
-  body[data-bm-route="awards"] .bm-page-fade,
-  body[data-bm-route="awards"] .bm-page-fade > .bmCourtPage {
+  body[data-bm-route="awards"] .bm-page-fade {
     height: 100dvh !important;
+    min-height: 0 !important;
+  }
+
+  /* Awards still passes through the legacy Layout wrapper. Make every parent
+     in that chain consume the route height so h-full on the awards court does
+     not stop short and expose a black strip at the bottom. */
+  body[data-bm-route="awards"] .bm-layout--immersive,
+  body[data-bm-route="awards"] .bm-layout-main,
+  body[data-bm-route="awards"] .bm-layout-main > .bmCourtPage {
+    box-sizing: border-box !important;
+    height: 100% !important;
     min-height: 0 !important;
   }
 }

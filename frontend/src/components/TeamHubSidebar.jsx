@@ -50,6 +50,7 @@ const ICON_BY_ITEM = {
   "Contract Extensions": "file",
   Standings: "standings",
   "Playoff Picture": "bracket",
+  Playoffs: "bracket",
   "Power Rankings": "trend",
   "Locker Room": "users",
   "Team Intel": "eye",
@@ -72,6 +73,7 @@ const ACTIVE_ROUTE_ALIASES = {
   "/playoff-stats": "Playoff Statistics",
   "/standings": "Standings",
   "/playoff-picture": "Playoff Picture",
+  "/playoffs": "Playoffs",
   "/power-rankings": "Power Rankings",
   "/draft-picks": "Draft Picks",
   "/salary-table": "Salary Table",
@@ -309,6 +311,16 @@ export default function TeamHubSidebar() {
     data: savedAllStars,
   });
 
+  const hasCompletedPostseason = Boolean(postseasonState?.seasonYear);
+  const showPostseasonNavigation = Boolean(
+    isPlayoffMode || (isOffseasonMode && hasCompletedPostseason)
+  );
+
+  // Schedule remains available through the active postseason so the completed
+  // regular season can be reviewed while the bracket is live. Once offseason
+  // begins, the primary navigation returns to Offseason Hub and Schedule is
+  // intentionally hidden; archived standings + the completed playoff bracket
+  // remain available without keeping a misleading partial calendar entry point.
   const firstMainItem = isOffseasonMode
     ? {
         name: "Return to Offseason Hub",
@@ -316,18 +328,13 @@ export default function TeamHubSidebar() {
         enabled: true,
         description: "Resume Offseason Flow",
       }
-    : isPlayoffMode
-    ? {
-        name: "Return to Playoffs",
-        path: playoffReturnTo,
-        enabled: true,
-        description: "Resume Playoff Bracket",
-      }
     : {
         name: "Schedule",
         path: "/calendar",
         enabled: true,
-        description: "Calendar and Season Simulation",
+        description: isPlayoffMode
+          ? "Review Regular Season Schedule"
+          : "Calendar and Season Simulation",
       };
 
   const sectionTiles = {
@@ -363,7 +370,9 @@ export default function TeamHubSidebar() {
     ],
     Season: [
       { name: "Standings", path: "/standings", enabled: true },
-      { name: "Playoff Picture", path: "/playoff-picture", enabled: true },
+      showPostseasonNavigation
+        ? { name: "Playoffs", path: "/playoffs", enabled: true, description: "Review Postseason Bracket" }
+        : { name: "Playoff Picture", path: "/playoff-picture", enabled: true },
       { name: "Power Rankings", path: "/power-rankings", enabled: true },
     ],
     Scouting: [

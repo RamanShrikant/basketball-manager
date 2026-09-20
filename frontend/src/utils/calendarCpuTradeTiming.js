@@ -31,6 +31,40 @@ export function findFirstPendingSimulationDate(scheduleByDate = {}, resultsById 
     .find((date) => dateHasPendingSimulationGame(scheduleByDate?.[date], resultsById)) || null;
 }
 
+// The persisted simulation cursor is allowed to sit on an off-day before the
+// next scheduled game so CPU-trade/deadline/recovery checkpoints still run.
+// It is never allowed to sit *after* an unfinished game, though: that would
+// strand the game behind the resume cursor forever.
+export function resolveSimulationRunCursorDate({
+  storedCursorDate = "",
+  firstPendingDate = "",
+  seasonStartDate = "",
+} = {}) {
+  const stored = cleanDate(storedCursorDate);
+  const pending = cleanDate(firstPendingDate);
+  const seasonStart = cleanDate(seasonStartDate);
+
+  let resolved = stored || seasonStart || pending;
+  if (seasonStart && (!resolved || resolved < seasonStart)) resolved = seasonStart;
+  if (pending && (!resolved || pending < resolved)) resolved = pending;
+  if (seasonStart && resolved < seasonStart) resolved = seasonStart;
+
+  return resolved;
+}
+
+// After Sim-to-Date, keep walking calendar off-days normally, but if any game
+// at/before that next cursor is still unfinished, pull the cursor back to it.
+export function resolveSimulationCursorAfterTarget({
+  nextCalendarDate = "",
+  firstPendingDate = "",
+} = {}) {
+  const next = cleanDate(nextCalendarDate);
+  const pending = cleanDate(firstPendingDate);
+
+  if (pending && (!next || pending < next)) return pending;
+  return next || pending || "";
+}
+
 export function getCpuTradeSimulationDateDecision({
   currentDate,
   firstPendingDate = null,

@@ -55,6 +55,7 @@ import {
 } from "../utils/indexedDbStorage";
 import PageFade from "../components/PageFade";
 import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
+import GameBoxScoreModal from "../components/GameBoxScoreModal.jsx";
 import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
 import InjuryAlertModal from "../components/InjuryAlertModal";
 import "../styles/BMAnimations.css";
@@ -103,6 +104,8 @@ import {
 } from "../utils/rosterRules.js";
 import {
   findFirstPendingSimulationDate,
+  resolveSimulationCursorAfterTarget,
+  resolveSimulationRunCursorDate,
   getCpuTradeSimulationDateDecision,
   getCpuTradeCalendarPacingDecision,
   isCpuTradeWindowOpenDate,
@@ -254,12 +257,6 @@ function slugifyId(v) {
     .replace(/(^-|-$)/g, "");
 }
 window.__slug = slugifyId;
-function formatOTLabel(otCount) {
-  const n = Number(otCount || 0);
-  if (!n) return "";
-  return n === 1 ? " (OT)" : ` (${n}OT)`;
-}
-
 function readSavedGameplan(teamName) {
   try {
     const raw = localStorage.getItem(`gameplan_${teamName}`);
@@ -295,23 +292,6 @@ function readGameplanOrder(teamName, teamObj = null) {
     .filter(Boolean);
 
   return Array.from(new Set([...savedOrder, ...minuteOrder, ...rosterOrder]));
-}
-
-function sortBoxRowsByFrozenRotation(rows = [], frozenOrder = [], fallbackOrder = []) {
-  const order = Array.from(new Set([...(frozenOrder || []), ...(fallbackOrder || [])]));
-  const index = new Map(order.map((name, i) => [String(name), i]));
-
-  return [...(rows || [])].sort((a, b) => {
-    const aName = String(a?.player || "");
-    const bName = String(b?.player || "");
-    const aIdx = index.has(aName) ? index.get(aName) : Number.MAX_SAFE_INTEGER;
-    const bIdx = index.has(bName) ? index.get(bName) : Number.MAX_SAFE_INTEGER;
-    if (aIdx !== bIdx) return aIdx - bIdx;
-
-    const minDiff = Number(b?.min || 0) - Number(a?.min || 0);
-    if (minDiff !== 0) return minDiff;
-    return aName.localeCompare(bName);
-  });
 }
 
 function readFlatMinutesFromGameplan(teamName) {
@@ -2883,9 +2863,36 @@ export default function Calendar() {
       calendarValidSeasonYear(meta?.seasonStartYear);
   } catch {}
 
-  const seasonYear =
-    leagueSeasonYear ??
-    (leagueData ? FIRST_PLAYABLE_SEASON_YEAR : storedSeasonYear ?? FIRST_PLAYABLE_SEASON_YEAR);
+  let offseasonReviewState = {};
+  let postseasonReviewState = null;
+  try {
+    offseasonReviewState = JSON.parse(localStorage.getItem("bm_offseason_state_v1") || "{}") || {};
+  } catch {}
+  try {
+    const rawPostseason = localStorage.getItem("bm_postseason_v2");
+    if (rawPostseason) {
+      const source = rawPostseason.startsWith("lz:") ? rawPostseason.slice(3) : rawPostseason;
+      const decompressed = LZString.decompressFromUTF16(source);
+      postseasonReviewState = JSON.parse(decompressed || source);
+    }
+  } catch {}
+
+  const completedSeasonReviewYear = calendarValidSeasonYear(postseasonReviewState?.seasonYear);
+  const isCompletedSeasonReview = Boolean(
+    offseasonReviewState?.active && completedSeasonReviewYear
+  );
+  const isOffseasonScheduleBlocked = Boolean(offseasonReviewState?.active);
+
+  useEffect(() => {
+    if (isOffseasonScheduleBlocked) {
+      navigate("/offseason", { replace: true });
+    }
+  }, [isOffseasonScheduleBlocked, navigate]);
+
+  const seasonYear = isCompletedSeasonReview
+    ? completedSeasonReviewYear
+    : leagueSeasonYear ??
+      (leagueData ? FIRST_PLAYABLE_SEASON_YEAR : storedSeasonYear ?? FIRST_PLAYABLE_SEASON_YEAR);
 
   const seasonCalendarConfig = useMemo(
     () => getSeasonCalendarConfig({ ...(leagueData || {}), seasonYear, currentSeasonYear: seasonYear, seasonStartYear: seasonYear }),
@@ -2896,6 +2903,7 @@ export default function Calendar() {
   const cpuTradeGenerationJobRef = useRef(null);
 
   useEffect(() => {
+    if (isCompletedSeasonReview) return;
     if (!leagueData || !seasonYear || !leagueData?.cpuTradeBankState) return;
 
     const tradeDeadlineDate = seasonCalendarConfig.tradeDeadlineDate || fmt(new Date(seasonYear + 1, 1, 4));
@@ -2922,7 +2930,7 @@ export default function Calendar() {
     saveLeagueData(initialized.leagueData).catch((error) => {
       console.warn("[CPU Trade Bank] failed to save initialized bank", error);
     });
-  }, [leagueData, seasonYear, seasonCalendarConfig, setLeagueData]);
+  }, [leagueData, seasonYear, seasonCalendarConfig, setLeagueData, isCompletedSeasonReview]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -3008,6 +3016,7 @@ export default function Calendar() {
   }, [leagueData]);
 
   useEffect(() => {
+    if (isCompletedSeasonReview) return;
     const y = calendarValidSeasonYear(leagueSeasonYear ?? seasonYear);
     if (!y) return;
 
@@ -3031,7 +3040,7 @@ export default function Calendar() {
         );
       }
     } catch {}
-  }, [leagueSeasonYear, seasonYear]);
+  }, [leagueSeasonYear, seasonYear, isCompletedSeasonReview]);
 
   const CALENDAR_CURSOR_KEY = `bm_calendar_cursor_v1_${seasonYear}`;
   const CALENDAR_SIM_CURSOR_KEY = `bm_calendar_sim_cursor_v1_${seasonYear}`;
@@ -7017,8 +7026,16 @@ const handleSimToDate = async (dateStr, { resume = false } = {}) => {
   if (!acquireSimRunLock("SimToDate")) return;
   const multiYearRunWallStartedAt = Date.now();
 
-  const simulationCursorAtStart = readSimulationCursorDate();
+  const storedSimulationCursorAtStart = readSimulationCursorDate();
   const firstPendingForTarget = findFirstPendingSimulationDate(scheduleByDate, resultsById);
+  const simulationCursorAtStart = resolveSimulationRunCursorDate({
+    storedCursorDate: storedSimulationCursorAtStart,
+    firstPendingDate: firstPendingForTarget,
+    seasonStartDate: fmt(seasonStart),
+  });
+  if (simulationCursorAtStart !== storedSimulationCursorAtStart) {
+    saveSimulationCursorDate(simulationCursorAtStart);
+  }
   if (dateStr < simulationCursorAtStart) {
     releaseSimRunLock();
     setActionModal(null);
@@ -7103,7 +7120,11 @@ setBoxModal(null);
   }
   const lockedGamesAtStart = snapshotLockedRegularSeasonGames(upd, newResults);
   const firstPendingTradeDate = findFirstPendingSimulationDate(upd, newResults);
-  const runStartCursorDate = readSimulationCursorDate();
+  const runStartCursorDate = resolveSimulationRunCursorDate({
+    storedCursorDate: simulationCursorAtStart,
+    firstPendingDate: firstPendingTradeDate,
+    seasonStartDate: fmt(seasonStart),
+  });
   const allowPreseasonCpuTrades = Boolean(firstPendingTradeDate && runStartCursorDate < firstPendingTradeDate);
   recordMultiYearLeagueSnapshot(repairedLeagueData, {
     seasonYear,
@@ -7146,6 +7167,7 @@ setBoxModal(null);
   let shouldGoToAwards = false;
   let pausedAtCheckpoint = false;
   let lastDateProcessed = null;
+  let blockedSimulationError = null;
   const simulationTraceEnabled = isCpuTradeDeepTraceEnabled();
   const stopCpuTradeMainThreadMonitor = startCpuTradeMainThreadMonitor();
   if (simulationTraceEnabled) {
@@ -7397,11 +7419,18 @@ for (const d of sorted) {
             break;
           }
 
-          // still failed Ã¢â€ â€™ skip, leave unplayed
+          // Fail closed: never continue past a scheduled game that did not
+          // produce a canonical result. Leaving it behind the cursor can make
+          // future runs permanently skip that game.
           if (!full) {
             simulationPerf.gameErrors += 1;
             finishSimulationGameOrderEvent(gameOrderEvent, "no_result");
-            continue;
+            blockedSimulationError = {
+              date: d,
+              gameId: g.id,
+              message: `Simulation did not return a result for ${g.away} at ${g.home}.`,
+            };
+            break;
           }
 
           const slim = slimResult(full);
@@ -7495,8 +7524,14 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
             message: String(err?.message || err || "unknown error"),
           });
           simulationPerf.gameErrors += 1;
+          blockedSimulationError = {
+            date: d,
+            gameId: g.id,
+            message: String(err?.message || err || "Unknown simulation error"),
+          };
           console.error("[SimToDate] ERROR for game", g.id, err);
-          // keep unplayed on error
+          // Keep the failed game unplayed and stop this run before later games.
+          break;
         }
 
       }
@@ -7510,11 +7545,12 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
       }
       await yieldToBrowser();
       finishMultiYearCalendarDateProbe(multiYearDateProbe, simulationPerf, seasonYear, d, TRADE_DEADLINE_DATE);
+      if (blockedSimulationError) break;
     }
 
-    // final saves (even if stopped, we save progress)
+    // final saves (even if stopped or a game failed, we save progress)
     const lastPlayedDate =
-      getLastPlayedDateFromSchedule(upd) || dateStr;
+      getLastPlayedDateFromSchedule(upd) || blockedSimulationError?.date || dateStr;
 
     if (lastPlayedDate) {
       saveCalendarCursor(lastPlayedDate, monthKey(new Date(lastPlayedDate)));
@@ -7522,10 +7558,15 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
       setMonth(monthKey(new Date(lastPlayedDate)));
     }
     if (!pausedAtCheckpoint) {
-      const cursorBase = stopRef.current
-        ? (findFirstPendingSimulationDate(upd, newResults) || lastDateProcessed || dateStr)
-        : dateStr;
-      saveSimulationCursorDate(stopRef.current ? cursorBase : getNextCalendarDateString(cursorBase));
+      const firstPendingAfterRun = findFirstPendingSimulationDate(upd, newResults);
+      if (stopRef.current || blockedSimulationError) {
+        saveSimulationCursorDate(firstPendingAfterRun || lastDateProcessed || dateStr);
+      } else {
+        saveSimulationCursorDate(resolveSimulationCursorAfterTarget({
+          nextCalendarDate: getNextCalendarDateString(dateStr),
+          firstPendingDate: firstPendingAfterRun,
+        }));
+      }
     }
 
     savePlayerStats(playerStats);
@@ -7544,7 +7585,7 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
     setScheduleByDate(structuredClone(upd));
     setResultsById(structuredClone(newResults));
 
-    if (!stopRef.current && isRegularSeasonComplete(upd, newResults)) {
+    if (!stopRef.current && !blockedSimulationError && isRegularSeasonComplete(upd, newResults)) {
       const awards = await computeAndSaveCalendarAwards({
         playerStats,
         schedule: upd,
@@ -7616,7 +7657,12 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
       clearPendingSimIntent();
     }
 
-    if (shouldGoToAwards) {
+    if (blockedSimulationError) {
+      openSimError(
+        `${blockedSimulationError.message} The game was left unplayed and the simulation cursor was kept on ${blockedSimulationError.date} so it cannot be skipped.`,
+        "Simulation stopped safely"
+      );
+    } else if (shouldGoToAwards) {
       navigate("/awards");
     }
   }
@@ -7747,7 +7793,15 @@ setBoxModal(null);
   }
   const lockedGamesAtStart = snapshotLockedRegularSeasonGames(upd, results);
   const firstPendingTradeDate = findFirstPendingSimulationDate(upd, results);
-  const runStartCursorDate = readSimulationCursorDate();
+  const storedRunStartCursorDate = readSimulationCursorDate();
+  const runStartCursorDate = resolveSimulationRunCursorDate({
+    storedCursorDate: storedRunStartCursorDate,
+    firstPendingDate: firstPendingTradeDate,
+    seasonStartDate: fmt(seasonStart),
+  });
+  if (runStartCursorDate !== storedRunStartCursorDate) {
+    saveSimulationCursorDate(runStartCursorDate);
+  }
   const allowPreseasonCpuTrades = Boolean(firstPendingTradeDate && runStartCursorDate < firstPendingTradeDate);
   recordMultiYearLeagueSnapshot(repairedLeagueData, {
     seasonYear,
@@ -7792,6 +7846,7 @@ setBoxModal(null);
 
 // Ã¢Å“â€¦ track if user stopped
 let stopped = false;
+let blockedFullSeasonError = null;
 let pausedForAllStar = false;
 let pausedForTradeDeadline = false;
 let pausedForContractExtensionDeadline = false;
@@ -7979,7 +8034,13 @@ for (let di = 0; di < dates.length; di++) {
           if (!full) {
             simulationPerf.gameErrors += 1;
             finishSimulationGameOrderEvent(gameOrderEvent, "no_result");
-            continue;
+            blockedFullSeasonError = {
+              date,
+              gameId: g.id,
+              message: `Simulation did not return a result for ${g.away} at ${g.home}.`,
+            };
+            stopped = true;
+            break;
           }
 
           if (stopRef.current) {
@@ -8080,7 +8141,14 @@ const awayRoles = simRuntime.roleByTeam.get(g.away) || {};
             message: String(err?.message || err || "unknown error"),
           });
           simulationPerf.gameErrors += 1;
+          blockedFullSeasonError = {
+            date,
+            gameId: g.id,
+            message: String(err?.message || err || "Unknown simulation error"),
+          };
+          stopped = true;
           console.error("FULL SEASON ERROR for game", g.id, err);
+          break;
         }
       }
 
@@ -8236,7 +8304,14 @@ if (stopped) {
 
 // Ã¢Å“â€¦ If stopped, do NOT compute awards or navigate away
 if (stopped) {
-  console.log("Ã°Å¸â€ºâ€˜ FULL SEASON STOPPED by user at gamesSimmed:", gamesSimmed);
+  if (blockedFullSeasonError) {
+    openSimError(
+      `${blockedFullSeasonError.message} The game was left unplayed and the simulation cursor was kept on ${blockedFullSeasonError.date} so it cannot be skipped.`,
+      "Simulation stopped safely"
+    );
+  } else {
+    console.log("Ã°Å¸â€ºâ€˜ FULL SEASON STOPPED by user at gamesSimmed:", gamesSimmed);
+  }
   return;
 }
 
@@ -9248,6 +9323,8 @@ return (
 
           {/* right: controls */}
           <div className="flex flex-wrap items-center justify-end gap-2">
+            {!isCompletedSeasonReview && (
+              <>
             {simLock && (
   <>
     <button
@@ -9308,6 +9385,15 @@ return (
   </>
 )}
 
+
+              </>
+            )}
+
+            {isCompletedSeasonReview && (
+              <div className="rounded-lg border border-orange-400/30 bg-orange-500/10 px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-orange-200">
+                Completed Season Review
+              </div>
+            )}
 
             {/* Month navigation */}
             <button
@@ -9552,7 +9638,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                                 <div className="shrink-0 whitespace-nowrap rounded-md bg-emerald-700/90 px-2 py-1 text-[10px] font-bold">
                                   {finalScore}
                                   {Number(result?.winner?.ot ?? result?.periods?.otCount ?? 0) > 0
-                                    ? ` Ã‚Â· ${Number(result?.winner?.ot ?? result?.periods?.otCount) === 1 ? "OT" : `${Number(result?.winner?.ot ?? result?.periods?.otCount)}OT`}`
+                                    ? ` · ${Number(result?.winner?.ot ?? result?.periods?.otCount) === 1 ? "OT" : `${Number(result?.winner?.ot ?? result?.periods?.otCount)}OT`}`
                                     : ""}
                                 </div>
                               ) : null}
@@ -9715,144 +9801,29 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
   )}
 
 {/* ---------------------------- BOX SCORE MODAL ---------------------------- */}
-{boxModal &&
-  createPortal(
-    <div
-      className="fixed inset-0 z-[210] flex items-center justify-center bg-black/78 p-2"
-      onClick={() => setBoxModal(null)}
-    >
-      <div
-        className="flex w-[97vw] max-w-[1700px] flex-col overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900 p-3 text-white shadow-2xl"
-        style={{ maxHeight: "calc(100dvh - 20px)" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-2 flex shrink-0 items-center justify-between gap-4">
-          <h3 className="min-w-0 truncate text-lg font-black">
-            {boxModal.game.away} @ {boxModal.game.home} &bull; {boxModal.result?.winner?.score}
-            {formatOTLabel(boxModal.result?.winner?.ot ?? boxModal.result?.periods?.otCount)}
-          </h3>
-
-          <button
-            className="shrink-0 rounded bg-neutral-700 px-3 py-1.5 text-sm font-bold hover:bg-neutral-600"
-            onClick={() => setBoxModal(null)}
-          >
-            Close
-          </button>
-        </div>
-
-        {boxModal.result?.periods &&
-          (() => {
-            const periods = boxModal.result.periods;
-            const awayQ = Array.isArray(periods.away) ? periods.away : [];
-            const homeQ = Array.isArray(periods.home) ? periods.home : [];
-            const awayOts = Array.isArray(periods.ots?.away) ? periods.ots.away : [];
-            const homeOts = Array.isArray(periods.ots?.home) ? periods.ots.home : [];
-            const otCount = Number(periods.otCount || Math.max(awayOts.length, homeOts.length, 0));
-            const hasIndividualOts = awayOts.length > 0 || homeOts.length > 0;
-            const displayOtCount = Math.min(hasIndividualOts ? otCount : otCount > 0 ? 1 : 0, 6);
-            const legacyOtAway = Number(periods.otBreakdown?.away || 0);
-            const legacyOtHome = Number(periods.otBreakdown?.home || 0);
-
-            const qVal = (arr, idx) =>
-              arr[idx] != null && Number.isFinite(Number(arr[idx])) ? Number(arr[idx]) : "--";
-            const otVal = (arr, idx, legacyValue) => {
-              if (hasIndividualOts) return qVal(arr, idx);
-              return idx === 0 && legacyValue ? legacyValue : "--";
-            };
-            const otHeader = (idx) => (idx === 0 ? "OT" : `${idx + 1}OT`);
-
-            return (
-              <div className="mb-2 shrink-0 rounded-lg bg-neutral-800 px-3 py-2">
-                <table className="w-full table-fixed text-center text-[11px]">
-                  <thead className="text-gray-300">
-                    <tr className="border-b border-neutral-700">
-                      <th className="w-[24%] py-1 text-left">Team</th>
-                      <th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th>
-                      {Array.from({ length: displayOtCount }, (_, idx) => (
-                        <th key={`ot-head-${idx}`}>{otHeader(idx)}</th>
-                      ))}
-                      <th>Final</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[
-                      ["away", boxModal.game.away, awayQ, awayOts, legacyOtAway, boxModal.result?.totals?.away],
-                      ["home", boxModal.game.home, homeQ, homeOts, legacyOtHome, boxModal.result?.totals?.home],
-                    ].map(([side, name, quarters, ots, legacyOt, total]) => (
-                      <tr key={side} className="border-b border-neutral-800 last:border-0">
-                        <td className="truncate py-1 text-left font-bold" title={name}>{name}</td>
-                        <td>{qVal(quarters, 0)}</td><td>{qVal(quarters, 1)}</td>
-                        <td>{qVal(quarters, 2)}</td><td>{qVal(quarters, 3)}</td>
-                        {Array.from({ length: displayOtCount }, (_, idx) => (
-                          <td key={`${side}-ot-${idx}`}>{otVal(ots, idx, legacyOt)}</td>
-                        ))}
-                        <td className="font-black">{total ?? "--"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-          })()}
-
-        <div className="grid min-h-0 grid-cols-2 gap-3">
-          {["away", "home"].map((side) => {
-            const name = side === "away" ? boxModal.game.away : boxModal.game.home;
-            const fallbackTeam = teams.find((team) => team?.name === name);
-            const fallbackOrder = readGameplanOrder(name, fallbackTeam);
-            const rows = sortBoxRowsByFrozenRotation(
-              boxModal.result?.box?.[side] || [],
-              boxModal.result?.rotationOrder?.[side] || [],
-              fallbackOrder
-            );
-
-            return (
-              <div key={side} className="flex min-h-0 flex-col overflow-hidden rounded-lg bg-neutral-800 p-2">
-                <h4 className="mb-1 shrink-0 truncate text-sm font-black" title={name}>{name}</h4>
-                <table className="w-full table-fixed text-[10px] leading-tight">
-                  <colgroup>
-                    <col style={{ width: "27%" }} />
-                    {Array.from({ length: 11 }, (_, idx) => <col key={idx} />)}
-                  </colgroup>
-                  <thead>
-                    <tr className="border-b border-neutral-700 text-white/70">
-                      <th className="px-1 py-1 text-left">Player</th>
-                      {['MIN','PTS','REB','AST','STL','BLK','FG','3P','FT','TO','PF'].map((label) => (
-                        <th key={label} className="px-0.5 text-center">{label}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((player, index) => {
-                      const dnp = Number(player?.min || 0) <= 0;
-                      const stat = (value) => (dnp ? "--" : value ?? 0);
-                      return (
-                        <tr key={`${player?.player || "player"}-${index}`} className="border-b border-neutral-700/35 last:border-0">
-                          <td className="truncate px-1 py-[2px] font-semibold" title={player?.player}>{player?.player}</td>
-                          <td className="px-0.5 text-center font-bold">{dnp ? "DNP" : player?.min}</td>
-                          <td className="px-0.5 text-center">{stat(player?.pts)}</td>
-                          <td className="px-0.5 text-center">{stat(player?.reb)}</td>
-                          <td className="px-0.5 text-center">{stat(player?.ast)}</td>
-                          <td className="px-0.5 text-center">{stat(player?.stl)}</td>
-                          <td className="px-0.5 text-center">{stat(player?.blk)}</td>
-                          <td className="px-0.5 text-center whitespace-nowrap">{stat(player?.fg)}</td>
-                          <td className="px-0.5 text-center whitespace-nowrap">{stat(player?.["3p"])}</td>
-                          <td className="px-0.5 text-center whitespace-nowrap">{stat(player?.ft)}</td>
-                          <td className="px-0.5 text-center">{stat(player?.to)}</td>
-                          <td className="px-0.5 text-center">{stat(player?.pf)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>,
-    document.body
-  )}
+{boxModal && (
+  <GameBoxScoreModal
+    game={boxModal.game}
+    result={boxModal.result}
+    onClose={() => setBoxModal(null)}
+    teamLogos={Object.fromEntries(
+      (teams || []).map((team) => [
+        team?.name,
+        team?.logo || team?.teamLogo || team?.newTeamLogo || team?.image || team?.logoUrl || "",
+      ])
+    )}
+    fallbackOrders={{
+      away: readGameplanOrder(
+        boxModal.game?.away,
+        teams.find((team) => team?.name === boxModal.game?.away) || null
+      ),
+      home: readGameplanOrder(
+        boxModal.game?.home,
+        teams.find((team) => team?.name === boxModal.game?.home) || null
+      ),
+    }}
+  />
+)}
 
 {/* ---------------------------- INJURY ALERT MODAL ---------------------------- */}
 {injuryAlertModal && (

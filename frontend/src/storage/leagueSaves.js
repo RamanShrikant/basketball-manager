@@ -3,9 +3,15 @@ import {
   captureActiveLeagueRuntime,
   restoreLeagueRuntime,
 } from "./saveManager.js";
+import {
+  MAX_LEAGUE_SAVE_SLOTS,
+  assignLeagueSaveSlotIndexes,
+  findFirstAvailableLeagueSaveSlot,
+  normalizeLeagueSaveSlotIndex,
+} from "./leagueSaveSlots.js";
 
 export const CURRENT_LEAGUE_SAVE_SCHEMA_VERSION = 2;
-export const MAX_LEAGUE_SAVE_SLOTS = 5;
+export { MAX_LEAGUE_SAVE_SLOTS };
 
 const DB_NAME = "basketball_manager_local_save_slots_v1";
 const DB_VERSION = 1;
@@ -91,7 +97,7 @@ function currentRoute() {
   try { return window.location?.pathname || ""; } catch { return ""; }
 }
 
-function buildMetadata({ saveId, leagueName, leagueData, selectedTeamName, createdAt, updatedAt, schemaVersion } = {}) {
+function buildMetadata({ saveId, leagueName, leagueData, selectedTeamName, createdAt, updatedAt, schemaVersion, slotIndex } = {}) {
   const now = new Date().toISOString();
   const teamName = resolveTeamName(leagueData, selectedTeamName);
   return {
@@ -100,6 +106,7 @@ function buildMetadata({ saveId, leagueName, leagueData, selectedTeamName, creat
     createdAt: safeDate(createdAt || now),
     updatedAt: safeDate(updatedAt || now),
     schemaVersion: Number(schemaVersion || CURRENT_LEAGUE_SAVE_SCHEMA_VERSION),
+    slotIndex: normalizeLeagueSaveSlotIndex(slotIndex),
     appVersion: "local-save-slots-v2",
     controlledTeamName: teamName || "No team selected",
     seasonLabel: resolveSeasonLabel(leagueData),
@@ -118,8 +125,10 @@ function buildSaveRecord({
   source = "unknown",
   runtime,
   savedRoute,
+  slotIndex,
 } = {}) {
-  const metadata = buildMetadata({ saveId, leagueName, leagueData, selectedTeamName, createdAt, updatedAt });
+  const resolvedSlotIndex = normalizeLeagueSaveSlotIndex(slotIndex ?? existing?.slotIndex);
+  const metadata = buildMetadata({ saveId, leagueName, leagueData, selectedTeamName, createdAt, updatedAt, slotIndex: resolvedSlotIndex });
   const previousSnapshot = existing?.snapshot && typeof existing.snapshot === "object" ? existing.snapshot : {};
   const hasRuntimeArgument = runtime !== undefined;
   return {
@@ -212,6 +221,7 @@ export function migrateLeagueSave(record = null) {
     createdAt: safeDate(record.createdAt || record.updatedAt),
     updatedAt: safeDate(record.updatedAt || record.createdAt),
     schemaVersion: Number(record.schemaVersion || 1),
+    slotIndex: normalizeLeagueSaveSlotIndex(record.slotIndex),
     appVersion: record.appVersion || "local-save-slots-v1",
     snapshot: {
       ...snapshot,
@@ -230,6 +240,7 @@ export function migrateLeagueSave(record = null) {
     createdAt: migrated.createdAt,
     updatedAt: migrated.updatedAt,
     schemaVersion: migrated.schemaVersion,
+    slotIndex: migrated.slotIndex,
   });
   return { ...migrated, ...metadata, schemaVersion: migrated.snapshot.runtime ? CURRENT_LEAGUE_SAVE_SCHEMA_VERSION : Math.max(1, migrated.schemaVersion) };
 }
@@ -238,11 +249,20 @@ export async function flushLeagueSaveSlotWrites() { await saveMutationChain.catc
 
 export async function listLeagueSaves() {
   const records = await runTransaction("readonly", (store) => store.getAll());
-  return (records || []).map(migrateLeagueSave).filter(Boolean).filter((save) => {
+  const migrated = (records || []).map(migrateLeagueSave).filter(Boolean).filter((save) => {
     const name = normalizeLeagueName(save?.leagueName || "");
     const source = String(save?.snapshot?.source || "").toLowerCase();
     return !(name === "recovered league" && source.includes("recovered"));
-  }).sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
+  });
+
+  const assigned = assignLeagueSaveSlotIndexes(migrated, MAX_LEAGUE_SAVE_SLOTS);
+  const originalById = new Map(migrated.map((save) => [save.saveId, normalizeLeagueSaveSlotIndex(save.slotIndex)]));
+  for (const save of assigned) {
+    if (normalizeLeagueSaveSlotIndex(save.slotIndex) !== originalById.get(save.saveId)) {
+      await enqueueSaveMutation(() => writeLeagueSaveRecord(save));
+    }
+  }
+  return assigned;
 }
 
 export async function getLeagueSave(saveId) {
@@ -257,12 +277,17 @@ export async function upsertLeagueSave(record) {
   return enqueueSaveMutation(() => writeLeagueSaveRecord(migrated));
 }
 
-export async function createLeagueSave({ leagueName, leagueData, selectedTeamName, activate = true, source = "create" } = {}) {
+export async function createLeagueSave({ leagueName, leagueData, selectedTeamName, activate = true, source = "create", slotIndex = null } = {}) {
   if (!leagueHasTeams(leagueData)) throw new Error("Cannot create a save before a roster is loaded.");
   const cleanLeagueName = String(leagueName || "").trim() || "Untitled League";
   const existingSaves = await listLeagueSaves();
-  if (existingSaves.length >= MAX_LEAGUE_SAVE_SLOTS) {
+  const requestedSlotIndex = normalizeLeagueSaveSlotIndex(slotIndex);
+  const resolvedSlotIndex = requestedSlotIndex ?? findFirstAvailableLeagueSaveSlot(existingSaves, MAX_LEAGUE_SAVE_SLOTS);
+  if (resolvedSlotIndex === null) {
     throw new Error(`You can keep up to ${MAX_LEAGUE_SAVE_SLOTS} league saves. Delete a save before starting another league.`);
+  }
+  if (existingSaves.some((save) => normalizeLeagueSaveSlotIndex(save?.slotIndex) === resolvedSlotIndex)) {
+    throw new Error(`Save Slot ${resolvedSlotIndex + 1} is already in use.`);
   }
   await assertUniqueLeagueName(cleanLeagueName);
   await flushLeagueSaveSlotWrites();
@@ -276,6 +301,7 @@ export async function createLeagueSave({ leagueName, leagueData, selectedTeamNam
     updatedAt: now,
     source,
     runtime: captured.runtime,
+    slotIndex: resolvedSlotIndex,
   });
   await enqueueSaveMutation(() => writeLeagueSaveRecord(record));
   if (activate) setActiveLeagueSaveId(record.saveId);
@@ -299,6 +325,7 @@ export async function updateLeagueSaveSnapshot(saveId, { leagueName, leagueData,
       source,
       runtime,
       savedRoute,
+      slotIndex: existing.slotIndex,
     });
     return writeLeagueSaveRecord(record);
   });
