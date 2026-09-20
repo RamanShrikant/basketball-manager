@@ -11,7 +11,6 @@ import {
 import PageFade from "../components/PageFade.jsx";
 import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
-import { CONTRACT_EXTENSION_VISUAL_TUNING, getResponsiveVisualScale } from "../config/headshotLayout.js";
 import { getOffseasonTradeContext } from "../utils/offseasonTradeContext.js";
 import { getUserTradeCurrentDate, stampExtensionRestriction } from "../utils/userTradeRules.js";
 import "../styles/BMAnimations.css";
@@ -20,52 +19,6 @@ import "../styles/BMPageBackground.css";
 const EXTENSION_DEADLINE_CONTEXT_KEY = "bm_contract_extension_deadline_context_v1";
 
 
-// CONTRACT EXTENSION PLAYER-PILL VISUAL TUNING
-// Master controls live in src/config/headshotLayout.js. All pixel values are
-// multiplied by one proportional page scale, so the same tuning survives
-// desktop, 1536px and laptop layouts without maintaining separate profiles.
-function useContractExtensionVisualTuning() {
-  const getWidth = () => (typeof window === "undefined" ? CONTRACT_EXTENSION_VISUAL_TUNING.referenceWidth : window.innerWidth);
-  const [viewportWidth, setViewportWidth] = useState(getWidth);
-
-  useEffect(() => {
-    const onResize = () => setViewportWidth(getWidth());
-    window.addEventListener("resize", onResize);
-    onResize();
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  return useMemo(() => {
-    const master = CONTRACT_EXTENSION_VISUAL_TUNING;
-    const s = getResponsiveVisualScale(viewportWidth, master);
-    const px = (value) => Number(value || 0) * s;
-    return {
-      responsiveScale: s,
-      rowMinHeight: px(master.row.minHeight),
-      rowPaddingX: px(master.row.paddingX),
-      rowPaddingY: px(master.row.paddingY),
-      gap: px(master.row.gap),
-      headshot: {
-        width: px(master.headshot.width),
-        height: px(master.headshot.height),
-      },
-      ring: {
-        size: px(master.overall.size),
-        x: px(master.overall.x),
-        y: px(master.overall.y),
-        scale: Number(master.overall.scale || 1),
-        strokeWidth: px(master.overall.strokeWidth),
-      },
-      statusBar: {
-        x: px(master.statusBar.x),
-        y: px(master.statusBar.y),
-        scale: Number(master.statusBar.scale || 1),
-      },
-      nameSize: px(master.text.nameSize),
-      reasonSize: px(master.text.reasonSize),
-    };
-  }, [viewportWidth]);
-}
 
 function extensionSourcePlayer(team, row) {
   const players = Array.isArray(team?.players) ? team.players : [];
@@ -213,7 +166,6 @@ export default function ContractExtensions() {
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState(null);
   const [playerCardOpen, setPlayerCardOpen] = useState(false);
-  const playerPillTuning = useContractExtensionVisualTuning();
 
   const teamName = selectedTeam?.name || null;
   const deadlineContext = useMemo(() => {
@@ -243,6 +195,14 @@ export default function ContractExtensions() {
   const projectedSalaries = selectedPackage?.salaryByYear || [];
   const refusingCount = useMemo(() => (preview?.players || []).filter((row) => row?.playerRefusesExtension).length, [preview]);
   const orderedExtensionPlayers = useMemo(() => sortExtensionRows(preview?.players || []), [preview]);
+  const extensionSummary = useMemo(() => {
+    const candidates = (preview?.players || []).filter((row) => row?.eligible || row?.playerRefusesExtension);
+    return {
+      eligibleLikeCount: candidates.length,
+      rookieCount: candidates.filter((row) => row?.extensionType === "rookie_scale" || row?.deadlineType === "rookie").length,
+      veteranCount: candidates.filter((row) => row?.extensionType === "veteran" || row?.deadlineType === "veteran").length,
+    };
+  }, [preview]);
 
   const loadPreview = async (sourceLeague = leagueData, { runCpuOpening = false } = {}) => {
     if (!sourceLeague || !teamName) return;
@@ -395,9 +355,9 @@ export default function ContractExtensions() {
           background: linear-gradient(180deg, #fdba74, #f97316);
         }
       `}</style>
-      <div className="bm-page-bg min-h-screen overflow-hidden bg-neutral-950 pb-16 text-white">
-        <div className="mx-auto flex h-[calc(100vh-70px)] max-w-[1600px] flex-col px-5 py-3">
-          <header className="mb-3 flex shrink-0 items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/55 px-5 py-2.5 backdrop-blur">
+      <div className="bm-page-bg min-h-screen overflow-hidden bg-neutral-950 pb-6 text-white">
+        <div className="mx-auto flex h-[calc(100vh-50px)] max-w-[1600px] flex-col px-5 py-2">
+          <header className="mb-2 flex shrink-0 items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/55 px-5 py-2 backdrop-blur">
             <div>
               <div className="text-[11px] font-black uppercase tracking-[0.25em] text-orange-300">Front Office</div>
               <h1 className="mt-0.5 text-2xl font-black">Contract Extensions</h1>
@@ -426,12 +386,12 @@ export default function ContractExtensions() {
             </div>
           )}
 
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[420px_minmax(0,1fr)]">
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[330px_minmax(0,1fr)]">
             <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-900/90">
               <div className="grid grid-cols-3 gap-2 border-b border-white/10 p-3 text-center">
-                <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{preview?.summary?.eligibleCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Eligible</div></div>
-                <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{preview?.summary?.rookieEligibleCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Rookie</div></div>
-                <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{preview?.summary?.veteranEligibleCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Veteran</div></div>
+                <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{extensionSummary.eligibleLikeCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Eligible</div></div>
+                <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{extensionSummary.rookieCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Rookie</div></div>
+                <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{extensionSummary.veteranCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Veteran</div></div>
               </div>
 
               <div className="contract-extension-orange-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
@@ -453,69 +413,40 @@ export default function ContractExtensions() {
                           type="button"
                           key={key}
                           onClick={() => setSelectedPlayerId(key)}
-                          className={`w-full rounded-xl border text-left transition ${active ? "border-orange-400 bg-orange-500/12" : "border-white/8 bg-black/25 hover:border-white/20"}`}
-                          style={{
-                            minHeight: playerPillTuning.rowMinHeight,
-                            padding: `${playerPillTuning.rowPaddingY}px ${playerPillTuning.rowPaddingX}px`,
-                          }}
+                          className={`w-full rounded-xl border px-1.5 py-2 text-left transition ${active ? "border-orange-400 bg-orange-500/12" : "border-white/8 bg-black/25 hover:border-white/20"}`}
                         >
-                          <div className="flex min-w-0 items-center" style={{ gap: playerPillTuning.gap }}>
-                            <div
-                              className="relative shrink-0 overflow-visible"
-                              style={{
-                                width: playerPillTuning.headshot.width,
-                                height: playerPillTuning.headshot.height,
-                              }}
-                            >
+                          <div className="grid min-w-0 grid-cols-[50px_48px_minmax(0,1fr)_68px] items-center gap-1.5">
+                            <div className="relative -ml-1 h-[50px] w-[50px] shrink-0 overflow-visible">
                               <RuntimePlayerPortrait
                                 player={portraitPlayer}
                                 teamName={teamName}
                                 src={extensionHeadshotOf(portraitPlayer, row)}
                                 alt={row.playerName}
-                                layoutPage="contract-extensions"
-                                className="h-full w-full"
+                                layoutPage="salary-table"
+                                className="h-full w-full object-contain object-bottom"
                                 fallback={<div className="h-full w-full" />}
                               />
                             </div>
 
-                            <div
-                              className="shrink-0"
-                              style={{
-                                transform: `translate(${playerPillTuning.ring.x}px, ${playerPillTuning.ring.y}px) scale(${playerPillTuning.ring.scale})`,
-                                transformOrigin: "center center",
-                              }}
-                            >
+                            <div className="flex shrink-0 items-center justify-center">
                               <PlayerRatingRing
                                 overall={row.overall}
                                 potential={row.potential}
-                                size={playerPillTuning.ring.size}
-                                strokeWidth={playerPillTuning.ring.strokeWidth}
+                                size={48}
+                                strokeWidth={4}
                               />
                             </div>
 
-                            <div className="min-w-0 flex-1">
-                              <div
-                                className="truncate font-black text-white"
-                                style={{ fontSize: playerPillTuning.nameSize }}
-                              >
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-black text-white">
                                 {row.playerName}
-                              </div>
-                              <div
-                                className="mt-1 line-clamp-2 leading-4 text-neutral-400"
-                                style={{ fontSize: playerPillTuning.reasonSize }}
-                              >
-                                {row.reason}
                               </div>
                             </div>
 
                             <span
-                              className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${row.eligible ? "bg-emerald-500/15 text-emerald-300" : row.alreadyExtended ? "bg-sky-500/15 text-sky-300" : row.playerRefusesExtension ? "bg-amber-500/15 text-amber-300" : "bg-white/5 text-neutral-500"}`}
-                              style={{
-                                transform: `translate(${playerPillTuning.statusBar.x}px, ${playerPillTuning.statusBar.y}px) scale(${playerPillTuning.statusBar.scale})`,
-                                transformOrigin: "center center",
-                              }}
+                              className={`flex h-[34px] w-[68px] shrink-0 items-center justify-center rounded-full px-1 text-center text-[8px] font-black uppercase leading-[0.98] tracking-[0.02em] ${row.eligible ? "bg-emerald-500/15 text-emerald-300" : row.alreadyExtended ? "bg-sky-500/15 text-sky-300" : row.playerRefusesExtension ? "bg-amber-500/15 text-amber-300" : "bg-white/5 text-neutral-500"}`}
                             >
-                              {row.eligible ? "Has Ask" : row.alreadyExtended ? "Extended" : row.playerRefusesExtension ? "Refuses" : "Ineligible"}
+                              {row.eligible ? <>Has<br />Interest</> : row.alreadyExtended ? <>Contract<br />Extended</> : row.playerRefusesExtension ? <>Not<br />Interested</> : "Ineligible"}
                             </span>
                           </div>
                         </button>
@@ -531,9 +462,9 @@ export default function ContractExtensions() {
                 <div className="flex h-full items-center justify-center text-neutral-500">Select a player.</div>
               ) : (
                 <>
-                  <div className="contract-extension-orange-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
-                    <div className="flex h-full min-h-0 flex-col gap-2">
-                      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 pb-2">
+                  <div className="contract-extension-detail-panel min-h-0 flex-1 overflow-hidden p-2.5">
+                    <div className="flex h-full min-h-0 flex-col gap-1.5">
+                      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 pb-1.5">
                         <div className="min-w-0">
                           <button type="button" onClick={() => setPlayerCardOpen(true)} className="truncate text-left text-xl font-black hover:text-orange-300">{selectedPlayer?.name || selectedRow.playerName}</button>
                           <div className="mt-1 text-xs text-neutral-300">
@@ -546,7 +477,13 @@ export default function ContractExtensions() {
                         <div className="shrink-0 rounded-xl border border-orange-400/20 bg-orange-500/10 px-3 py-1.5 text-right">
                           <div className="text-[10px] font-black uppercase tracking-wider text-orange-300">Player Camp</div>
                           <div className={`mt-1 text-sm font-black ${interestTone(selectedRow.interestLabel || selectedRow.extensionInterestLabel || selectedRow.reason)}`}>
-                            {selectedRow.eligible ? selectedRow.interestLabel || selectedRow.extensionInterestLabel || "Ask available" : selectedRow.playerRefusesExtension ? selectedRow.extensionInterestLabel || "Prefers to wait" : "Not negotiable"}
+                            {selectedRow.eligible
+                              ? "Has Interest"
+                              : selectedRow.alreadyExtended
+                              ? "Contract Extended"
+                              : selectedRow.playerRefusesExtension
+                              ? "Not Interested"
+                              : "Ineligible"}
                           </div>
                           {selectedRow.extensionInterestScore != null && (
                             <div className="mt-0.5 text-[10px] font-black text-neutral-400">Interest {selectedRow.extensionInterestScore}/100 · Mood {selectedRow.extensionMoodScore ?? "—"}</div>
@@ -554,7 +491,7 @@ export default function ContractExtensions() {
                         </div>
                       </div>
 
-                      <div className="grid shrink-0 gap-2 md:grid-cols-4">
+                      <div className="grid shrink-0 gap-1.5 md:grid-cols-4">
                         <div className="rounded-xl border border-white/8 bg-black/25 p-2.5">
                           <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Current Contract</div>
                           <div className="mt-1 text-sm font-black">{selectedRow.remainingContractYears ?? selectedRow.currentContract?.salaryByYear?.length ?? 0} years left</div>
@@ -577,35 +514,30 @@ export default function ContractExtensions() {
                         </div>
                       </div>
 
-                      {selectedRow.currentContract?.salaryByYear?.length > 0 && (
-                        <div className="shrink-0">
-                          <div className="mb-1 text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Existing guaranteed years</div>
-                          <div className="grid grid-cols-5 gap-2">
-                            {selectedRow.currentContract.salaryByYear
-                              .map((salary, index) => ({
-                                salary,
-                                year: Number(selectedRow.currentContract.startYear) + index,
-                              }))
-                              .filter((row) => row.year >= Number(selectedRow.currentContractSeasonYear || selectedRow.currentContract.startYear))
-                              .map((row) => (
-                                <div key={row.year} className="rounded-xl border border-white/8 bg-black/20 px-2.5 py-2">
-                                  <div className="text-[10px] text-neutral-500">{row.year}</div>
-                                  <div className="mt-0.5 text-sm font-black">{compactMoney(row.salary)}</div>
-                                </div>
-                              ))}
-                          </div>
-                        </div>
-                      )}
-
                       {!selectedRow.eligible ? (
-                        <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                          <div className="text-base font-black">Not currently negotiable</div>
-                          <p className="mt-1 text-xs leading-5 text-neutral-400">{selectedRow.reason}</p>
+                        <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 lg:grid-cols-[1.1fr_0.9fr]">
+                          <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
+                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Extension status</div>
+                            <div className="mt-3 text-2xl font-black">
+                              {selectedRow.alreadyExtended ? "Contract Extended" : selectedRow.playerRefusesExtension ? "Not Interested" : "Ineligible"}
+                            </div>
+                            <p className="mt-3 text-sm font-bold leading-6 text-neutral-300">{selectedRow.reason}</p>
+                          </div>
+                          <div className="rounded-2xl border border-orange-400/15 bg-orange-500/8 p-4">
+                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-orange-300">Front office note</div>
+                            <div className="mt-3 text-sm font-black leading-6 text-white">
+                              {selectedRow.alreadyExtended
+                                ? "This player is locked in. Their new contract years should now show on the salary table."
+                                : selectedRow.playerRefusesExtension
+                                ? "This player prefers to wait. Check again closer to the relevant deadline or after team context changes."
+                                : "This player does not currently have an extension pathway available."}
+                            </div>
+                          </div>
                         </div>
                       ) : (
                         <div className="flex min-h-0 flex-1 flex-col">
-                          <div className="mb-1 shrink-0 text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Player-requested packages</div>
-                          <div className="grid shrink-0 gap-2 2xl:grid-cols-3">
+                          <div className="mb-0.5 shrink-0 text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Player-requested packages</div>
+                          <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-hidden">
                             {askPackages.map((pkg) => {
                               const id = pkg.askPackageId || pkg.packageId;
                               const active = String(id) === String(selectedPackage?.askPackageId || selectedPackage?.packageId);
@@ -614,26 +546,23 @@ export default function ContractExtensions() {
                                   type="button"
                                   key={id}
                                   onClick={() => setSelectedPackageId(id)}
-                                  className={`flex min-h-[180px] shrink-0 flex-col rounded-2xl border p-2.5 text-left transition ${active ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black/25 hover:border-white/25"}`}
+                                  className={`grid flex-1 min-h-[86px] grid-cols-[minmax(132px,0.62fr)_minmax(360px,1.9fr)_82px] items-center gap-2 rounded-xl border px-3 py-1.5 text-left transition ${active ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black/25 hover:border-white/25"}`}
                                 >
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                      <div className="text-sm font-black text-white">{`${pkg.years}-Year Extension`}</div>
-                                      <div className="mt-1 text-xs text-neutral-500">{pkg.years} years · {optionLabel(pkg.optionType)}</div>
-                                    </div>
-                                    <div className="rounded-full border border-white/10 bg-black/25 px-2.5 py-1 text-[10px] font-black uppercase text-neutral-300">
-                                      AAV {compactMoney(packageAav(pkg))}
-                                    </div>
+                                  <div className="min-w-0">
+                                    <div className="truncate text-sm font-black text-white">{`${pkg.years}-Year Extension`}</div>
+                                    <div className="mt-0.5 text-2xl font-black leading-none">{compactMoney(packageTotal(pkg))}</div>
+                                    <div className="mt-0.5 truncate text-[10px] text-neutral-400">{pkg.years} years · {optionLabel(pkg.optionType)} · {pkg.annualRaisePct}% raises</div>
                                   </div>
-                                  <div className="mt-1.5 text-lg font-black">{compactMoney(packageTotal(pkg))}</div>
-                                  <div className="mt-0.5 text-[10px] text-neutral-400">First year {compactMoney(pkg.firstYearSalary)} · {pkg.annualRaisePct}% raises</div>
-                                  <div className="mt-auto flex flex-wrap gap-1 pt-2">
+                                  <div className="grid min-w-0 grid-flow-col auto-cols-fr gap-1">
                                     {(pkg.salaryByYear || []).map((salary, index) => (
-                                      <div key={`${id}-${index}`} className="rounded-md bg-black/30 px-1.5 py-1 text-center">
-                                        <span className="text-[8px] text-neutral-500">{Number(selectedRow.extensionStartYear) + index} </span>
-                                        <span className="text-[10px] font-black">{compactMoney(salary)}</span>
+                                      <div key={`${id}-${index}`} className="min-w-[52px] rounded-md bg-black/30 px-1.5 py-1 text-center">
+                                        <span className="block text-[8px] text-neutral-500">{Number(selectedRow.extensionStartYear) + index}</span>
+                                        <span className="text-[9.5px] font-black">{compactMoney(salary)}</span>
                                       </div>
                                     ))}
+                                  </div>
+                                  <div className="shrink-0 rounded-full border border-white/10 bg-black/25 px-1.5 py-1 text-center text-[9px] font-black uppercase leading-tight text-neutral-300">
+                                    AAV {compactMoney(packageAav(pkg))}
                                   </div>
                                 </button>
                               );
@@ -645,14 +574,14 @@ export default function ContractExtensions() {
                   </div>
 
                   {selectedRow.eligible && selectedPackage && (
-                    <div className="shrink-0 border-t border-orange-400/20 bg-neutral-950/95 px-3 py-2 shadow-[0_-16px_40px_rgba(0,0,0,0.35)]">
+                    <div className="shrink-0 border-t border-orange-400/20 bg-neutral-950/95 px-3 py-1 shadow-[0_-16px_40px_rgba(0,0,0,0.35)]">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Selected Ask</div>
-                          <div className="mt-0.5 text-lg font-black">
+                          <div className="text-[10px] font-black uppercase tracking-[0.18em] text-orange-300">Selected Ask</div>
+                          <div className="mt-0.5 text-base font-black">
                             {selectedPackage.years} years · {compactMoney(packageTotal(selectedPackage))}
                           </div>
-                          <div className="mt-0.5 text-xs text-neutral-400">
+                          <div className="mt-0.5 text-[11px] text-neutral-400">
                             {compactMoney(packageAav(selectedPackage))} AAV · {optionLabel(selectedPackage.optionType)} · begins {selectedRow.extensionStartYear}
                           </div>
                         </div>
@@ -660,7 +589,7 @@ export default function ContractExtensions() {
                           type="button"
                           disabled={submitting || !preview?.state?.isOpen}
                           onClick={submitOffer}
-                          className="rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-black text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="rounded-xl bg-orange-600 px-4 py-1.5 text-sm font-black text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           {submitting ? "Submitting…" : "Offer Extension"}
                         </button>

@@ -1048,8 +1048,8 @@ export default function Trades() {
 
   return (
     <PageFade>
-      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-4 py-3 text-white lg:px-5 lg:py-4">
-        <div className="mx-auto flex h-full min-h-0 w-full max-w-none flex-col gap-3">
+      <div className="bmCourtPage min-h-screen overflow-y-auto overflow-x-hidden px-4 py-3 text-white lg:px-5 lg:py-4">
+        <div className="mx-auto flex min-h-0 w-full max-w-none flex-col gap-3">
           <header className="trade-center-header flex shrink-0 items-center justify-between gap-5 px-1 py-1 lg:gap-6">
             <div className="flex min-w-0 items-center gap-4 lg:gap-5">
               {teamLogoOf(selectedTeam) ? (
@@ -1135,7 +1135,7 @@ export default function Trades() {
             </div>
           </header>
 
-          <div className="trade-center-grid grid min-h-0 flex-1 gap-3 lg:grid-cols-[1fr_0.82fr]">
+          <div className="trade-center-grid grid min-h-0 gap-3 lg:grid-cols-[1fr_0.82fr]">
             <section className="trade-center-panel flex min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/[0.08] bg-[#0b0d10] shadow-[0_22px_56px_rgba(0,0,0,0.30)]">
               <div className="flex min-h-0 flex-1 flex-col p-4 lg:p-5">
                 <div className="flex items-center gap-3">

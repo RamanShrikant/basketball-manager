@@ -64,15 +64,17 @@ function useSalaryTableManualVisualTuning() {
   // HEADSHOT_LAYOUTS["salary-table"] in config/headshotLayout.js.
   const controls = HEADSHOT_LAYOUTS["salary-table"] || {};
 
-  const readViewportWidth = () => {
-    if (typeof window === "undefined") return 1600;
-    return window.innerWidth;
+  const readViewport = () => {
+    if (typeof window === "undefined") return { width: 1600, height: 900 };
+    return { width: window.innerWidth, height: window.innerHeight };
   };
 
-  const [viewportWidth, setViewportWidth] = useState(readViewportWidth);
+  const [viewport, setViewport] = useState(readViewport);
+  const viewportWidth = viewport.width;
+  const viewportHeight = viewport.height;
 
   useEffect(() => {
-    const onResize = () => setViewportWidth(readViewportWidth());
+    const onResize = () => setViewport(readViewport());
     window.addEventListener("resize", onResize);
     onResize();
     return () => window.removeEventListener("resize", onResize);
@@ -85,7 +87,10 @@ function useSalaryTableManualVisualTuning() {
     minResponsiveScale: 0.78,
     maxResponsiveScale: 1,
   });
-  const rowHeight = Math.max(1, Number(controls.rowHeight || 60)) * responsiveScale;
+  const configuredRowHeight = Math.max(1, Number(controls.rowHeight || 60)) * responsiveScale;
+  const salaryFitSpace = Math.max(520, viewportHeight - 245);
+  const fitFifteenRowsHeight = Math.floor(salaryFitSpace / 16); // 15 roster rows + totals row.
+  const rowHeight = Math.max(36, Math.min(46, Math.min(configuredRowHeight, fitFifteenRowsHeight)));
 
   const resolveVisual = (key) => {
     const visual = controls?.[key] || {};

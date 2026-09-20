@@ -782,3 +782,1045 @@
   }
 }
 /* V14.9 SETTINGS SPACING POLISH END */
+
+
+/* V14.10 SETTINGS SPACING FIX START */
+.shell {
+  gap: 10px;
+  padding-top: 10px;
+}
+
+.summaryRow {
+  gap: 10px;
+}
+
+.summaryCard {
+  min-height: 48px;
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+.panel {
+  padding-top: 11px;
+  padding-bottom: 12px;
+}
+
+.panelHeader {
+  padding-bottom: 8px;
+}
+
+.ruleList {
+  gap: 6px;
+  padding-top: 9px;
+}
+
+.ruleRow {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+@media (max-height: 850px) {
+  .shell {
+    gap: 8px;
+    padding-top: 8px;
+  }
+  .ruleList {
+    gap: 5px;
+  }
+  .ruleRow {
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+}
+/* V14.10 SETTINGS SPACING FIX END */
+
+/* V14.11 SETTINGS READABILITY FIX START */
+.summaryRow {
+  grid-template-columns: minmax(350px, 1.75fr) minmax(138px, 0.68fr) minmax(118px, 0.58fr) minmax(118px, 0.58fr) minmax(300px, auto) !important;
+  gap: 11px !important;
+}
+
+.teamSelectRow {
+  grid-template-columns: 54px minmax(0, 1fr) !important;
+  gap: 12px !important;
+}
+
+.teamSelectRow strong {
+  font-size: 18px !important;
+  line-height: 1 !important;
+  letter-spacing: 0.025em !important;
+  text-align: left !important;
+}
+
+.teamSelect {
+  height: 32px !important;
+  font-size: 11.5px !important;
+  padding-left: 11px !important;
+  padding-right: 24px !important;
+}
+
+.optionsPanel {
+  min-height: 154px !important;
+}
+
+.panel:not(.optionsPanel) {
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
+}
+
+.ruleList {
+  grid-template-rows: repeat(10, minmax(36px, 1fr)) !important;
+  gap: 7px !important;
+  padding-top: 10px !important;
+}
+
+.ruleRow {
+  min-height: 36px !important;
+  padding: 6px 12px 6px 14px !important;
+  overflow: hidden !important;
+}
+
+.ruleLabel {
+  font-size: 13px !important;
+  line-height: 1.06 !important;
+}
+
+.ruleStatus {
+  margin-top: 3px !important;
+  font-size: 8.3px !important;
+  line-height: 1.08 !important;
+}
+
+.ruleControls {
+  gap: 7px !important;
+}
+
+.switch {
+  width: 58px !important;
+  height: 25px !important;
+}
+
+.switchKnob {
+  width: 17px !important;
+  height: 17px !important;
+}
+
+.switchOn .switchKnob {
+  transform: translateX(33px) !important;
+}
+
+@media (max-height: 850px) {
+  .summaryRow {
+    gap: 9px !important;
+  }
+  .optionsPanel {
+    min-height: 146px !important;
+  }
+  .ruleList {
+    grid-template-rows: repeat(10, minmax(33px, 1fr)) !important;
+    gap: 6px !important;
+    padding-top: 8px !important;
+  }
+  .ruleRow {
+    min-height: 33px !important;
+    padding-top: 5px !important;
+    padding-bottom: 5px !important;
+  }
+}
+/* V14.11 SETTINGS READABILITY FIX END */
+
+
+/* V14.12 SETTINGS FINAL FIT CLEANUP START */
+/* Clean Settings heading like the Free Agency page: no extra subheading paragraph. */
+.page {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+.shell {
+  height: auto !important;
+  min-height: calc(100vh - 66px) !important;
+  max-height: none !important;
+  padding-top: 8px !important;
+  padding-bottom: 26px !important;
+  gap: 7px !important;
+}
+
+.headerBlock {
+  min-height: 48px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.headerBlock .kicker,
+.headerBlock p {
+  display: none !important;
+}
+
+.headerBlock h1 {
+  margin: 0 !important;
+  font-size: clamp(34px, 3.4vw, 48px) !important;
+  line-height: 0.9 !important;
+  letter-spacing: -0.055em !important;
+}
+
+.summaryRow {
+  grid-template-columns: minmax(380px, 1.38fr) minmax(132px, 0.48fr) minmax(108px, 0.4fr) minmax(108px, 0.4fr) minmax(255px, 0.86fr) !important;
+  gap: 8px !important;
+  align-items: stretch !important;
+}
+
+.summaryCard {
+  min-height: 43px !important;
+  padding: 7px 12px !important;
+}
+
+.summaryActions {
+  min-width: 0 !important;
+  padding: 6px !important;
+  gap: 7px !important;
+}
+
+.summaryActions button {
+  min-width: 0 !important;
+  flex: 1 1 0 !important;
+  height: 30px !important;
+  padding: 0 10px !important;
+  white-space: nowrap !important;
+}
+
+.teamSelectRow {
+  grid-template-columns: 56px minmax(205px, 1fr) !important;
+  gap: 10px !important;
+  align-items: center !important;
+}
+
+.teamSelectRow strong {
+  min-width: 0 !important;
+  font-size: 18px !important;
+  line-height: 1 !important;
+  overflow: hidden !important;
+  text-overflow: clip !important;
+}
+
+.teamSelect {
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: 31px !important;
+  font-size: 11px !important;
+  padding-left: 10px !important;
+  padding-right: 30px !important;
+}
+
+.optionsPanel {
+  min-height: 126px !important;
+}
+
+.panel {
+  padding: 8px 14px 9px !important;
+}
+
+.panel:not(.optionsPanel) {
+  flex: 0 0 auto !important;
+  min-height: 0 !important;
+}
+
+.panelHeader {
+  padding-bottom: 6px !important;
+}
+
+.panelHeader h2 {
+  font-size: 19px !important;
+}
+
+.optionList {
+  gap: 6px !important;
+  padding-top: 7px !important;
+}
+
+.ruleList {
+  display: grid !important;
+  grid-template-rows: repeat(10, 30px) !important;
+  gap: 4px !important;
+  padding-top: 7px !important;
+  overflow: visible !important;
+}
+
+.ruleRow {
+  min-height: 30px !important;
+  height: 30px !important;
+  padding: 3px 10px 3px 13px !important;
+  overflow: visible !important;
+}
+
+.ruleLabel {
+  font-size: 12.4px !important;
+  line-height: 1 !important;
+}
+
+.ruleStatus {
+  margin-top: 2px !important;
+  font-size: 7.8px !important;
+  line-height: 1 !important;
+}
+
+.helpButton {
+  width: 23px !important;
+  height: 23px !important;
+}
+
+.switch {
+  width: 56px !important;
+  height: 24px !important;
+}
+
+.switchKnob {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.switchOn .switchKnob {
+  transform: translateX(32px) !important;
+}
+
+@media (max-height: 820px) {
+  .shell {
+    gap: 6px !important;
+    padding-top: 6px !important;
+    padding-bottom: 18px !important;
+  }
+  .headerBlock {
+    min-height: 40px !important;
+  }
+  .headerBlock h1 {
+    font-size: clamp(30px, 3vw, 40px) !important;
+  }
+  .summaryCard {
+    min-height: 40px !important;
+    padding-top: 6px !important;
+    padding-bottom: 6px !important;
+  }
+  .optionsPanel {
+    min-height: 112px !important;
+  }
+  .ruleList {
+    grid-template-rows: repeat(10, 28px) !important;
+    gap: 4px !important;
+    padding-top: 6px !important;
+  }
+  .ruleRow {
+    height: 28px !important;
+    min-height: 28px !important;
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+  }
+  .ruleLabel {
+    font-size: 12px !important;
+  }
+}
+
+@media (max-width: 1280px) {
+  .summaryRow {
+    grid-template-columns: minmax(340px, 1.25fr) minmax(120px, 0.45fr) minmax(104px, 0.38fr) minmax(104px, 0.38fr) minmax(230px, 0.82fr) !important;
+  }
+  .teamSelectRow {
+    grid-template-columns: 50px minmax(170px, 1fr) !important;
+  }
+}
+/* V14.12 SETTINGS FINAL FIT CLEANUP END */
+
+/* V14.13 SETTINGS CONTROL TEAM / SPACE TUNE START */
+/* Use the leftover vertical room without making the page scroll, and separate the controlled-team selector. */
+.shell {
+  height: calc(100vh - 66px) !important;
+  max-height: calc(100vh - 66px) !important;
+  overflow: hidden !important;
+  gap: 8px !important;
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+}
+
+.headerBlock {
+  min-height: 42px !important;
+}
+
+.summaryRow {
+  grid-template-columns: minmax(500px, 1.55fr) minmax(155px, 0.43fr) minmax(132px, 0.36fr) minmax(132px, 0.36fr) minmax(312px, 0.78fr) !important;
+  gap: 10px !important;
+}
+
+.summaryCard {
+  min-height: 46px !important;
+  padding: 7px 14px !important;
+}
+
+.teamSelectRow {
+  grid-template-columns: 62px minmax(280px, 1fr) !important;
+  gap: 18px !important;
+  align-items: center !important;
+}
+
+.teamSelectRow strong {
+  font-size: 18px !important;
+  letter-spacing: 0.01em !important;
+  text-align: left !important;
+}
+
+.teamSelect {
+  height: 32px !important;
+  padding-left: 12px !important;
+  padding-right: 34px !important;
+  font-size: 11.5px !important;
+}
+
+.optionsPanel {
+  min-height: 126px !important;
+}
+
+.panel {
+  padding: 9px 14px 10px !important;
+}
+
+.panelHeader {
+  padding-bottom: 7px !important;
+}
+
+.optionList {
+  gap: 7px !important;
+  padding-top: 8px !important;
+}
+
+.ruleList {
+  grid-template-rows: repeat(10, 32px) !important;
+  gap: 5px !important;
+  padding-top: 8px !important;
+  overflow: hidden !important;
+}
+
+.ruleRow {
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 4px 10px 4px 13px !important;
+}
+
+.ruleLabel {
+  font-size: 12.5px !important;
+  line-height: 1.02 !important;
+}
+
+.ruleStatus {
+  margin-top: 2px !important;
+  font-size: 7.9px !important;
+}
+
+@media (max-height: 820px) {
+  .shell {
+    gap: 7px !important;
+    padding-top: 6px !important;
+    padding-bottom: 6px !important;
+  }
+  .headerBlock {
+    min-height: 36px !important;
+  }
+  .summaryCard {
+    min-height: 42px !important;
+  }
+  .optionsPanel {
+    min-height: 118px !important;
+  }
+  .ruleList {
+    grid-template-rows: repeat(10, 30px) !important;
+    gap: 4px !important;
+    padding-top: 7px !important;
+  }
+  .ruleRow {
+    height: 30px !important;
+    min-height: 30px !important;
+  }
+}
+
+@media (max-width: 1390px) {
+  .summaryRow {
+    grid-template-columns: minmax(455px, 1.48fr) minmax(145px, 0.42fr) minmax(124px, 0.34fr) minmax(124px, 0.34fr) minmax(292px, 0.76fr) !important;
+  }
+  .teamSelectRow {
+    grid-template-columns: 58px minmax(240px, 1fr) !important;
+    gap: 15px !important;
+  }
+}
+/* V14.13 SETTINGS CONTROL TEAM / SPACE TUNE END */
+
+/* V14.14 SETTINGS REPAIR - NO CUTOFF + CONTROL TEAM SPACE START */
+/* Undo the hidden-page clipping. Settings may scroll if the browser viewport is short, but rows should never disappear under the taskbar. */
+.page {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+.shell {
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: visible !important;
+  padding-top: 8px !important;
+  padding-bottom: 86px !important;
+  gap: 8px !important;
+}
+
+.headerBlock {
+  min-height: 40px !important;
+}
+
+.summaryRow {
+  grid-template-columns: minmax(610px, 1.75fr) minmax(140px, 0.38fr) minmax(120px, 0.32fr) minmax(120px, 0.32fr) minmax(275px, 0.72fr) !important;
+  gap: 12px !important;
+  align-items: stretch !important;
+}
+
+.teamCard {
+  padding-left: 16px !important;
+  padding-right: 16px !important;
+  overflow: hidden !important;
+}
+
+.teamCard > span {
+  margin-bottom: 7px !important;
+}
+
+.teamSelectRow {
+  grid-template-columns: 78px minmax(330px, 1fr) !important;
+  gap: 26px !important;
+  align-items: center !important;
+}
+
+.teamSelectRow strong {
+  font-size: 18px !important;
+  line-height: 1 !important;
+  padding-right: 4px !important;
+}
+
+.teamSelect {
+  height: 32px !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  padding-left: 13px !important;
+  padding-right: 36px !important;
+}
+
+.optionsPanel {
+  min-height: 124px !important;
+}
+
+.panel {
+  overflow: visible !important;
+  padding: 9px 14px 10px !important;
+}
+
+.panel:not(.optionsPanel) {
+  min-height: 382px !important;
+}
+
+.ruleList {
+  grid-template-rows: repeat(10, 34px) !important;
+  gap: 5px !important;
+  overflow: visible !important;
+}
+
+.ruleRow {
+  height: 34px !important;
+  min-height: 34px !important;
+  overflow: hidden !important;
+}
+
+@media (max-width: 1450px) {
+  .summaryRow {
+    grid-template-columns: minmax(560px, 1.65fr) minmax(132px, 0.36fr) minmax(110px, 0.3fr) minmax(110px, 0.3fr) minmax(245px, 0.68fr) !important;
+    gap: 10px !important;
+  }
+  .teamSelectRow {
+    grid-template-columns: 72px minmax(285px, 1fr) !important;
+    gap: 22px !important;
+  }
+}
+
+@media (max-height: 820px) {
+  .shell {
+    padding-bottom: 72px !important;
+    gap: 7px !important;
+  }
+  .panel:not(.optionsPanel) {
+    min-height: 370px !important;
+  }
+  .ruleList {
+    grid-template-rows: repeat(10, 32px) !important;
+    gap: 4px !important;
+  }
+  .ruleRow {
+    height: 32px !important;
+    min-height: 32px !important;
+  }
+}
+/* V14.14 SETTINGS REPAIR - NO CUTOFF + CONTROL TEAM SPACE END */
+
+/* V14.15 SETTINGS SINGLE PAGE FIT START */
+/* Final settings fit: no page scrollbar, no clipped trade rules, and clear spacing between team code + dropdown. */
+:global(html[data-bm-route="settings"]),
+:global(body[data-bm-route="settings"]) {
+  overflow: hidden !important;
+}
+
+.page {
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
+}
+
+.shell {
+  height: 100dvh !important;
+  min-height: 0 !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 7px !important;
+  padding-top: 7px !important;
+  padding-bottom: 10px !important;
+  box-sizing: border-box !important;
+}
+
+.headerBlock {
+  flex: 0 0 40px !important;
+  min-height: 40px !important;
+  max-height: 40px !important;
+  overflow: hidden !important;
+}
+
+.headerBlock h1 {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  font-size: clamp(30px, 3.1vw, 42px) !important;
+  line-height: 0.86 !important;
+}
+
+.headerBlock .kicker,
+.headerBlock p {
+  display: none !important;
+}
+
+.summaryRow {
+  flex: 0 0 54px !important;
+  min-height: 54px !important;
+  max-height: 54px !important;
+  grid-template-columns: minmax(640px, 1.82fr) minmax(140px, 0.38fr) minmax(128px, 0.34fr) minmax(128px, 0.34fr) minmax(256px, 0.68fr) !important;
+  gap: 10px !important;
+  align-items: stretch !important;
+  overflow: visible !important;
+}
+
+.summaryCard,
+.summaryActions {
+  min-height: 54px !important;
+  height: 54px !important;
+  box-sizing: border-box !important;
+}
+
+.summaryCard {
+  padding: 8px 14px !important;
+}
+
+.teamCard {
+  padding-left: 16px !important;
+  padding-right: 16px !important;
+  overflow: visible !important;
+}
+
+.teamCard > span {
+  margin-bottom: 7px !important;
+}
+
+.teamSelectRow {
+  grid-template-columns: 86px minmax(360px, 1fr) !important;
+  gap: 34px !important;
+  align-items: center !important;
+  min-width: 0 !important;
+}
+
+.teamSelectRow strong {
+  display: block !important;
+  font-size: 18px !important;
+  line-height: 1 !important;
+  letter-spacing: 0.02em !important;
+  padding-right: 0 !important;
+  white-space: nowrap !important;
+}
+
+.teamSelect {
+  height: 34px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  padding-left: 14px !important;
+  padding-right: 38px !important;
+  font-size: 12px !important;
+}
+
+.optionsPanel {
+  flex: 0 0 134px !important;
+  min-height: 0 !important;
+  max-height: 134px !important;
+  overflow: hidden !important;
+}
+
+.panel {
+  padding: 9px 14px !important;
+  box-sizing: border-box !important;
+}
+
+.panel:not(.optionsPanel) {
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: hidden !important;
+}
+
+.panelHeader {
+  min-height: 39px !important;
+  height: 39px !important;
+  padding-bottom: 6px !important;
+  margin-bottom: 0 !important;
+  box-sizing: border-box !important;
+}
+
+.panelHeader h2 {
+  font-size: 18px !important;
+  line-height: 1 !important;
+}
+
+.optionList {
+  height: calc(100% - 39px) !important;
+  min-height: 0 !important;
+  display: grid !important;
+  grid-template-rows: repeat(2, minmax(0, 1fr)) !important;
+  gap: 6px !important;
+  padding-top: 6px !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+}
+
+.ruleList {
+  height: calc(100% - 39px) !important;
+  min-height: 0 !important;
+  display: grid !important;
+  grid-template-rows: repeat(10, minmax(0, 1fr)) !important;
+  gap: 4px !important;
+  padding-top: 6px !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+}
+
+.ruleRow {
+  height: 100% !important;
+  min-height: 0 !important;
+  padding: 3px 10px 3px 13px !important;
+  overflow: hidden !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+}
+
+.ruleLabel {
+  font-size: 12px !important;
+  line-height: 1 !important;
+}
+
+.ruleStatus {
+  margin-top: 2px !important;
+  font-size: 7.5px !important;
+  line-height: 1 !important;
+}
+
+.ruleControls {
+  gap: 8px !important;
+}
+
+.helpButton {
+  width: 24px !important;
+  height: 24px !important;
+  min-width: 24px !important;
+}
+
+.switch {
+  width: 56px !important;
+  height: 26px !important;
+}
+
+.switchThumb {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+.switchOn .switchThumb {
+  transform: translateX(30px) !important;
+}
+
+@media (max-width: 1450px) {
+  .summaryRow {
+    grid-template-columns: minmax(590px, 1.72fr) minmax(130px, 0.36fr) minmax(112px, 0.31fr) minmax(112px, 0.31fr) minmax(228px, 0.65fr) !important;
+    gap: 9px !important;
+  }
+  .teamSelectRow {
+    grid-template-columns: 82px minmax(320px, 1fr) !important;
+    gap: 30px !important;
+  }
+}
+
+@media (max-height: 820px) {
+  .shell {
+    gap: 6px !important;
+    padding-top: 6px !important;
+    padding-bottom: 7px !important;
+  }
+  .headerBlock {
+    flex-basis: 36px !important;
+    min-height: 36px !important;
+    max-height: 36px !important;
+  }
+  .headerBlock h1 {
+    font-size: clamp(28px, 3vw, 39px) !important;
+  }
+  .summaryRow,
+  .summaryCard,
+  .summaryActions {
+    flex-basis: 50px !important;
+    min-height: 50px !important;
+    max-height: 50px !important;
+    height: 50px !important;
+  }
+  .optionsPanel {
+    flex-basis: 124px !important;
+    max-height: 124px !important;
+  }
+  .panelHeader {
+    height: 36px !important;
+    min-height: 36px !important;
+  }
+  .optionList,
+  .ruleList {
+    height: calc(100% - 36px) !important;
+    gap: 4px !important;
+    padding-top: 5px !important;
+  }
+  .ruleRow {
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+  }
+  .ruleLabel {
+    font-size: 11.5px !important;
+  }
+  .ruleStatus {
+    font-size: 7.1px !important;
+  }
+}
+/* V14.15 SETTINGS SINGLE PAGE FIT END */
+
+
+/* V14.16 SETTINGS TOP ROW FIT START */
+/* Surgical fix only for the top Settings summary row: narrower controlled-team dropdown, cleaner code spacing, and no right-side cutoff. */
+.summaryRow {
+  flex: 0 0 54px !important;
+  min-height: 54px !important;
+  max-height: 54px !important;
+  grid-template-columns: minmax(455px, 1.08fr) minmax(128px, 0.32fr) minmax(112px, 0.28fr) minmax(112px, 0.28fr) minmax(286px, 0.62fr) !important;
+  gap: 10px !important;
+  align-items: stretch !important;
+  overflow: visible !important;
+}
+
+.teamCard {
+  min-width: 0 !important;
+  overflow: visible !important;
+  padding-left: 18px !important;
+  padding-right: 18px !important;
+}
+
+.teamCard > span {
+  margin-bottom: 7px !important;
+}
+
+.teamSelectRow {
+  grid-template-columns: 68px minmax(210px, 300px) !important;
+  gap: 26px !important;
+  align-items: center !important;
+  justify-content: start !important;
+  min-width: 0 !important;
+}
+
+.teamSelectRow strong {
+  display: block !important;
+  width: 68px !important;
+  min-width: 68px !important;
+  max-width: 68px !important;
+  font-size: 18px !important;
+  line-height: 1 !important;
+  letter-spacing: 0.02em !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-align: left !important;
+}
+
+.teamSelect {
+  width: 300px !important;
+  max-width: 300px !important;
+  min-width: 210px !important;
+  height: 34px !important;
+  padding-left: 14px !important;
+  padding-right: 34px !important;
+  font-size: 12px !important;
+}
+
+.summaryActions {
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: 286px !important;
+  overflow: hidden !important;
+  justify-content: stretch !important;
+  gap: 8px !important;
+  padding: 7px !important;
+}
+
+.summaryActions button {
+  min-width: 0 !important;
+  flex: 1 1 0 !important;
+  height: 32px !important;
+  padding: 0 8px !important;
+  font-size: 11px !important;
+  white-space: nowrap !important;
+}
+
+@media (max-width: 1450px) {
+  .summaryRow {
+    grid-template-columns: minmax(420px, 1.02fr) minmax(122px, 0.3fr) minmax(104px, 0.25fr) minmax(104px, 0.25fr) minmax(262px, 0.58fr) !important;
+    gap: 8px !important;
+  }
+  .teamSelectRow {
+    grid-template-columns: 62px minmax(190px, 270px) !important;
+    gap: 22px !important;
+  }
+  .teamSelectRow strong {
+    width: 62px !important;
+    min-width: 62px !important;
+    max-width: 62px !important;
+  }
+  .teamSelect {
+    width: 270px !important;
+    max-width: 270px !important;
+  }
+  .summaryActions {
+    max-width: 262px !important;
+  }
+  .summaryActions button {
+    font-size: 10.5px !important;
+    padding-inline: 6px !important;
+  }
+}
+
+@media (max-height: 820px) {
+  .summaryRow,
+  .summaryCard,
+  .summaryActions {
+    flex-basis: 50px !important;
+    min-height: 50px !important;
+    max-height: 50px !important;
+    height: 50px !important;
+  }
+  .teamSelect {
+    height: 31px !important;
+  }
+  .summaryActions button {
+    height: 29px !important;
+  }
+}
+/* V14.16 SETTINGS TOP ROW FIT END */
+
+
+
+
+/* V14.18 SETTINGS CONTROLLED TEAM FINAL MICROFIT START */
+/* Settings-only final microfit: keep the header row clean, lower the 3-letter abbreviation, and shorten the team dropdown from the left side. */
+.teamCard {
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+  min-width: 0 !important;
+}
+
+.teamCard > span {
+  margin-bottom: 1px !important;
+  line-height: 0.95 !important;
+  transform: translateY(-3px) !important;
+}
+
+.teamSelectRow {
+  grid-template-columns: 84px minmax(190px, 292px) !important;
+  column-gap: 26px !important;
+  align-items: center !important;
+  transform: translateY(-6px) !important;
+}
+
+.teamSelectRow strong {
+  align-self: center !important;
+  transform: translateY(3px) !important;
+  line-height: 0.95 !important;
+}
+
+.teamSelect {
+  width: 292px !important;
+  max-width: 292px !important;
+  min-width: 190px !important;
+  height: 33px !important;
+  margin-left: 10px !important;
+  transform: translateY(-2px) !important;
+}
+
+@media (max-width: 1450px) {
+  .teamSelectRow {
+    grid-template-columns: 80px minmax(180px, 274px) !important;
+    column-gap: 24px !important;
+    transform: translateY(-6px) !important;
+  }
+
+  .teamSelectRow strong {
+    transform: translateY(3px) !important;
+  }
+
+  .teamSelect {
+    width: 274px !important;
+    max-width: 274px !important;
+    min-width: 180px !important;
+    margin-left: 10px !important;
+  }
+}
+
+@media (max-height: 820px) {
+  .teamCard {
+    padding-top: 7px !important;
+    padding-bottom: 7px !important;
+  }
+
+  .teamCard > span {
+    transform: translateY(-4px) !important;
+  }
+
+  .teamSelectRow {
+    transform: translateY(-7px) !important;
+  }
+
+  .teamSelectRow strong {
+    transform: translateY(4px) !important;
+  }
+
+  .teamSelect {
+    height: 31px !important;
+    transform: translateY(-3px) !important;
+  }
+}
+/* V14.18 SETTINGS CONTROLLED TEAM FINAL MICROFIT END */

@@ -22,60 +22,18 @@ import { initializeOffseasonMoodBaselineStorage } from "./utils/offseasonMoodBas
 // DEV BOOT RESET (npm run dev)
 // ------------------------------
 function devBootResetIfNeeded() {
-  // Only run this in dev
+  // Local save slots need to survive normal npm-run-dev restarts. The old dev
+  // boot reset wiped every bm_* key, which erased active save IDs, schedule
+  // caches, and draft/runtime state unless the user clicked Schedule again.
+  // Keep the boot marker for diagnostics, but do not perform a destructive wipe.
   if (!import.meta.env.DEV) return false;
-
-  // This constant is injected by vite.config.js (define: __DEV_SERVER_BOOT_ID__)
   const bootId =
     typeof __DEV_SERVER_BOOT_ID__ !== "undefined" ? __DEV_SERVER_BOOT_ID__ : null;
   if (!bootId) return false;
-
-  const KEY = "bm_dev_boot_id_v1";
-  const prev = localStorage.getItem(KEY);
-
-  // First ever run: just store boot id, don't wipe
-  if (!prev) {
-    localStorage.setItem(KEY, String(bootId));
-    return false;
-  }
-
-  // Same server boot: do nothing
-  if (prev === String(bootId)) return false;
-
-  // New dev server boot => wipe save state. Calendar also consumes this
-  // one-shot token before its first season hydrate so stale result payloads or
-  // played flags cannot survive a dev fresh-start through another storage layer.
   try {
-    sessionStorage.setItem("bm_dev_fresh_calendar_boot_v1", String(bootId));
+    localStorage.setItem("bm_dev_boot_id_v1", String(bootId));
   } catch {}
-
-  for (let i = localStorage.length - 1; i >= 0; i--) {
-    const k = localStorage.key(i);
-    if (!k) continue;
-
-    // wipe ALL game state keys
-    if (
-      k === "leagueData" ||
-      k === "selectedTeam" ||
-      k.startsWith("gameplan_") ||
-      k.startsWith("bm_") ||
-      k.startsWith("bm_result_v3_")
-    ) {
-      localStorage.removeItem(k);
-      continue;
-    }
-
-    // also wipe progression keys if you have them
-    if (k === "bm_progression_deltas_v1" || k === "bm_progression_meta_v1") {
-      localStorage.removeItem(k);
-    }
-  }
-
-  // store the new boot id so we don't wipe repeatedly during this same run
-  localStorage.setItem(KEY, String(bootId));
-
-  console.log("🧹 Dev boot detected — wiped save state for a fresh start.");
-  return true;
+  return false;
 }
 
 function DiagnosticsBridge() {

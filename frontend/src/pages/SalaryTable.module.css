@@ -45,3 +45,61 @@
 .bmTablePanel thead th { position: sticky; top: 0; z-index: 20; background: #191919; box-shadow: 0 1px 0 #393939; }
 .bmTablePanel th:first-child { min-width: 260px; }
 .bmTablePanel th:not(:first-child) { min-width: 88px; }
+
+
+/* V14.16 SALARY TABLE 15 ROW FIT START */
+/* Keep the salary page compact enough to show about 15 players, while keeping rows readable and scrollable for deeper rosters. */
+.bmTablePanel {
+  min-height: 0;
+}
+
+.bmTablePanel thead th {
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+  line-height: 1.05 !important;
+}
+
+.bmTablePanel tbody td {
+  line-height: 1.08 !important;
+}
+
+.bmTablePanel tbody tr:last-child td {
+  padding-top: 9px !important;
+  padding-bottom: 9px !important;
+}
+
+@media (max-height: 820px) {
+  .bmTablePanel thead th {
+    padding-top: 7px !important;
+    padding-bottom: 7px !important;
+  }
+}
+/* V14.16 SALARY TABLE 15 ROW FIT END */
+
+/* V14.17 SALARY TABLE FULL-FIT TUNE START */
+.bmTablePanel {
+  min-height: 0;
+}
+
+.bmTablePanel :global(.bmTableScroller) {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.bmTablePanel thead th {
+  padding-top: 6px !important;
+  padding-bottom: 6px !important;
+}
+
+.bmTablePanel tbody tr:last-child td {
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+}
+
+@media (max-height: 820px) {
+  .bmTablePanel thead th {
+    padding-top: 5px !important;
+    padding-bottom: 5px !important;
+  }
+}
+/* V14.17 SALARY TABLE FULL-FIT TUNE END */

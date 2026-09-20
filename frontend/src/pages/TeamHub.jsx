@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
+import { getSeasonCalendarConfig, getSeasonStartYear } from "../utils/seasonContext.js";
+import { generateFullSeasonSchedule } from "./Calendar.jsx";
 import PageFade from "../components/PageFade";
 import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
@@ -14,13 +16,16 @@ import {
   normalizeStandingsTeamName,
 } from "../utils/canonicalStandings.js";
 import {
+  cacheScheduleForRuntime,
   hydrateScheduleTeamMetadata,
+  persistScheduleStructure,
   readScheduleFromStorage,
 } from "../utils/scheduleStorage.js";
 import {
   collectOwnedPicksForTeam,
   formatMoney,
   getPlayerSalary,
+  pickProtectionLabel,
   getStandardPlayers,
   playerHeadshotOf,
   playerOverall,
@@ -28,7 +33,6 @@ import {
 } from "../utils/teamIntel_v1.js";
 import {
   getUpcomingDraftYearForPhase,
-  readUpcomingDraftClassForYear,
 } from "../utils/upcomingDraftClass.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
@@ -177,12 +181,108 @@ function splitTeamIdentity(team = {}) {
   };
 }
 
+const NBA_TEAM_ABBREVIATIONS = {
+  "Atlanta Hawks": "ATL",
+  "Boston Celtics": "BOS",
+  "Brooklyn Nets": "BKN",
+  "Charlotte Hornets": "CHA",
+  "Chicago Bulls": "CHI",
+  "Cleveland Cavaliers": "CLE",
+  "Dallas Mavericks": "DAL",
+  "Denver Nuggets": "DEN",
+  "Detroit Pistons": "DET",
+  "Golden State Warriors": "GSW",
+  "Houston Rockets": "HOU",
+  "Indiana Pacers": "IND",
+  "LA Clippers": "LAC",
+  "Los Angeles Clippers": "LAC",
+  "Los Angeles Lakers": "LAL",
+  "Memphis Grizzlies": "MEM",
+  "Miami Heat": "MIA",
+  "Milwaukee Bucks": "MIL",
+  "Minnesota Timberwolves": "MIN",
+  "New Orleans Pelicans": "NOP",
+  "New York Knicks": "NYK",
+  "Oklahoma City Thunder": "OKC",
+  "Orlando Magic": "ORL",
+  "Philadelphia 76ers": "PHI",
+  "Phoenix Suns": "PHX",
+  "Portland Trail Blazers": "POR",
+  "Sacramento Kings": "SAC",
+  "San Antonio Spurs": "SAS",
+  "Toronto Raptors": "TOR",
+  "Utah Jazz": "UTA",
+  "Washington Wizards": "WAS",
+};
+
 function teamAbbr(team = {}) {
-  const explicit = team?.abbreviation || team?.abbr || team?.code || team?.shortName;
-  if (explicit) return String(explicit).toUpperCase();
-  const words = teamNameOf(team).split(/\s+/).filter(Boolean);
-  return words.slice(-2).map((word) => word[0]).join("").toUpperCase() || "—";
+  const explicit = team?.abbreviation || team?.abbr || team?.code;
+  const explicitText = String(explicit || "").trim().toUpperCase();
+  if (explicitText && explicitText.length <= 4) return explicitText;
+  const name = teamNameOf(team);
+  if (NBA_TEAM_ABBREVIATIONS[name]) return NBA_TEAM_ABBREVIATIONS[name];
+  const matchedName = Object.keys(NBA_TEAM_ABBREVIATIONS).find(
+    (candidate) => candidate.toLowerCase() === name.toLowerCase()
+  );
+  if (matchedName) return NBA_TEAM_ABBREVIATIONS[matchedName];
+  const words = name.split(/\s+/).filter(Boolean);
+  return words.slice(-3).map((word) => word[0]).join("").slice(0, 3).toUpperCase() || "—";
 }
+
+function parseDashboardDate(value) {
+  if (!value) return null;
+  const [year, month, day] = String(value).split("-").map(Number);
+  if ([year, month, day].every(Number.isFinite)) return new Date(year, month - 1, day);
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function hasScheduleGames(schedule = {}) {
+  return Object.values(schedule || {}).some((games) => Array.isArray(games) && games.length > 0);
+}
+
+function createDashboardScheduleIfMissing(leagueData = {}, teams = []) {
+  const stored = readScheduleFromStorage() || {};
+  if (hasScheduleGames(stored) || teams.length < 2) return stored;
+
+  try {
+    const seasonYear = getSeasonStartYear(leagueData || {});
+    const calendarConfig = getSeasonCalendarConfig({
+      ...(leagueData || {}),
+      seasonYear,
+      currentSeasonYear: seasonYear,
+      seasonStartYear: seasonYear,
+    });
+    const seasonStart =
+      parseDashboardDate(calendarConfig?.regularSeasonStart) || new Date(seasonYear, 9, 21);
+    const seasonEnd =
+      parseDashboardDate(calendarConfig?.regularSeasonEnd) || new Date(seasonYear + 1, 3, 12);
+    const generated = generateFullSeasonSchedule(teams, seasonStart, seasonEnd, calendarConfig)?.byDate || {};
+    if (hasScheduleGames(generated)) {
+      cacheScheduleForRuntime(generated);
+      persistScheduleStructure(generated);
+      return generated;
+    }
+  } catch (error) {
+    console.warn("[TeamHub] Could not generate dashboard schedule before Calendar loads.", error);
+  }
+
+  return stored;
+}
+
+function formatDraftAssetForHub(pick, teamMap = new Map()) {
+  const year = Number(pick?.year || pick?.seasonYear || 0) || "Future";
+  const round = Number(pick?.round || 1) === 1 ? "1st" : "2nd";
+  const originalName = pick?.originalTeam || pick?.originalTeamName || pick?.teamName || "Own";
+  const originalAbbr = teamAbbr(teamMap.get(originalName) || { name: originalName });
+  if (String(pick?.assetType || pick?.type || "pick").toLowerCase() === "swap") {
+    const swapName = pick?.swapWithTeam || pick?.swap?.withTeam || "";
+    const swapAbbr = swapName ? teamAbbr(teamMap.get(swapName) || { name: swapName }) : "SWAP";
+    return `${year} Swap ${originalAbbr}${swapName ? `/${swapAbbr}` : ""}`;
+  }
+  return `${year} ${round} - ${originalAbbr}`;
+}
+
 
 function seasonLabel(leagueData = {}) {
   const start = Number(
@@ -475,9 +575,9 @@ export default function TeamHub() {
   }, [searchQuery, teamsSorted, searchablePlayers]);
 
   const schedule = useMemo(() => {
-    const raw = readScheduleFromStorage() || {};
+    const raw = createDashboardScheduleIfMissing(leagueData || {}, teams);
     return hydrateScheduleTeamMetadata(raw, leagueData || {});
-  }, [leagueData, hubTeamName]);
+  }, [leagueData, teams, hubTeamName]);
 
   const results = useMemo(
     () => loadRegularSeasonResultsV3FromStorage(),
@@ -679,10 +779,16 @@ export default function TeamHub() {
     isOffseasonMode: phaseLabel() === "Offseason",
   });
 
-  const topProspects = useMemo(() => {
-    const preview = readUpcomingDraftClassForYear(draftYear);
-    return Array.isArray(preview?.draftClass) ? preview.draftClass.slice(0, 10) : [];
-  }, [draftYear, leagueData]);
+  const draftAssets = useMemo(() => {
+    if (!hubTeamName) return [];
+    try {
+      return collectOwnedPicksForTeam(leagueData || {}, hubTeamName)
+        .filter((pick) => Number(pick?.year || 0) >= Number(draftYear || 0))
+        .slice(0, 6);
+    } catch {
+      return [];
+    }
+  }, [leagueData, hubTeamName, draftYear]);
 
   const nextGame = upcomingGames[0] || null;
   const nextOpponentName = nextGame
@@ -1103,22 +1209,29 @@ export default function TeamHub() {
         <div className={styles.bottomGrid}>
           <section className={styles.panel}>
             <div className={styles.panelHeading}>
-              <h2>Upcoming Draft Picks</h2>
-              <button type="button" onClick={() => navigate("/upcoming-draft")}>View Draft Class →</button>
+              <h2>Draft Assets</h2>
+              <button type="button" onClick={() => navigate("/draft-picks")}>View Draft Picks →</button>
             </div>
-            {topProspects.length ? (
-              <div className={styles.prospectGrid}>
-                {topProspects.map((prospect, index) => (
-                  <div className={styles.prospect} key={prospect?.id || prospect?.name}>
-                    <span>{index + 1}</span>
-                    {getProspectHeadshot(prospect) ? <img src={getProspectHeadshot(prospect)} alt="" /> : <i />}
-                    <strong>{prospect?.name || prospect?.playerName || `Prospect ${index + 1}`}</strong>
-                    <small>{prospect?.pos || prospect?.position || "—"}</small>
-                  </div>
-                ))}
+            {draftAssets.length ? (
+              <div className={styles.draftAssetList}>
+                {draftAssets.map((pick, index) => {
+                  const assetLabel = formatDraftAssetForHub(pick, teamMap);
+                  const protectionLabel = pickProtectionLabel(pick);
+                  const roundText = Number(pick?.round || 1) === 1 ? "1st" : "2nd";
+                  return (
+                    <div className={styles.draftAssetRow} key={pick?.id || `${pick?.year}-${pick?.round}-${pick?.originalTeam}-${index}`}>
+                      <span className={styles.draftAssetNumber}>{index + 1}</span>
+                      <span className={styles.draftAssetRound}>{roundText}</span>
+                      <div className={styles.draftAssetText}>
+                        <strong>{assetLabel}</strong>
+                        <small>{protectionLabel}</small>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             ) : (
-              <div className={styles.emptyPanel}>No upcoming draft picks have been generated for {draftYear} yet.</div>
+              <div className={styles.emptyPanel}>No active future draft assets found for {hubTeamName || "this team"}.</div>
             )}
           </section>
 

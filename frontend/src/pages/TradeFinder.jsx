@@ -253,28 +253,28 @@ const TRADE_FINDER_PILL_LOGO_TUNING = {
   packageRows: {
     enabled: true,
     size: 250,
-    opacity: 0.1,
+    opacity: 0.035,
     x: 185,
     y: 0,
     rotate: 0,
     blur: 0,
     brightness: 1.25,
     contrast: 1.12,
-    saturate: 1.2,
-    blendMode: "screen",
+    saturate: 0,
+    blendMode: "luminosity",
   },
   offerRows: {
     enabled: true,
     size: 250,
-    opacity: 0.1,
+    opacity: 0.035,
     x: 185,
     y: 0,
     rotate: 0,
     blur: 0,
     brightness: 1.25,
     contrast: 1.12,
-    saturate: 1.2,
-    blendMode: "screen",
+    saturate: 0,
+    blendMode: "luminosity",
   },
 };
 
@@ -284,53 +284,53 @@ const TRADE_FINDER_PILL_LOGO_TEAM_OVERRIDES = {
   pelicans: {
     packageRows: {
       size: 330,
-      opacity: 0.11,
+      opacity: 0.04,
       x: 210,
       y: 0,
       rotate: 0,
       blur: 0,
       brightness: 1.35,
       contrast: 1.15,
-      saturate: 1.25,
-      blendMode: "screen",
+      saturate: 0,
+      blendMode: "luminosity",
     },
     offerRows: {
       size: 310,
-      opacity: 0.11,
+      opacity: 0.04,
       x: 210,
       y: 0,
       rotate: 0,
       blur: 0,
       brightness: 1.35,
       contrast: 1.15,
-      saturate: 1.25,
-      blendMode: "screen",
+      saturate: 0,
+      blendMode: "luminosity",
     },
   },
   trailBlazers: {
     packageRows: {
       size: 400,
-      opacity: 0.18,
+      opacity: 0.05,
       x: 220,
       y: 80,
       rotate: 0,
       blur: 0,
       brightness: 1.75,
       contrast: 1.22,
-      saturate: 1.45,
-      blendMode: "screen",
+      saturate: 0,
+      blendMode: "luminosity",
     },
     offerRows: {
       size: 400,
-      opacity: 0.18,
+      opacity: 0.05,
       x: 220,
       y: 80,
       rotate: 0,
       blur: 0,
       brightness: 1.75,
       contrast: 1.22,
-      saturate: 1.45,
-      blendMode: "screen",
+      saturate: 0,
+      blendMode: "luminosity",
     },
   },
 };
@@ -3263,9 +3263,9 @@ const standardPatienceBlocked = Boolean(
   return (
     <PageFade>
       <TradeFinderScrollbarStyles />
-      <div className="min-h-screen bmCourtPage px-3 py-3 text-white">
+      <div className="min-h-screen bmCourtPage px-3 py-5 text-white">
         <div className="mx-auto w-full max-w-[1760px]">
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
             <button
               onClick={() => navigate("/trades")}
               className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
@@ -3286,7 +3286,7 @@ const standardPatienceBlocked = Boolean(
             </button>
           </div>
 
-          <div className="grid min-h-0 gap-4 xl:grid-cols-3">
+          <div className="grid min-h-0 gap-4 pt-2 xl:grid-cols-3">
             <div className="flex min-h-0 flex-col overflow-hidden rounded-[24px] border border-white/10 bg-neutral-950/85 shadow-2xl">
               <div className="shrink-0 border-b border-white/10 bg-gradient-to-r from-orange-600/20 to-black px-4 py-4">
                 <div className="flex items-center gap-3">

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import { clearScheduleStorage } from "../utils/scheduleStorage.js";
 import {
   createLeagueSave,
   deleteLeagueSave,
@@ -118,6 +119,31 @@ function clearDraftStateForYearIfNotStarted(seasonYear) {
   if (picksMade === 0) {
     localStorage.removeItem(DRAFT_STATE_KEY);
   }
+}
+
+async function resetRuntimeStateForNewLeague() {
+  try {
+    await clearScheduleStorage();
+  } catch {}
+  try {
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (
+        key === "bm_results_index_v3" ||
+        key === "bm_calendar_cursor_v1" ||
+        key === "bm_calendar_mood_context_v1" ||
+        key === "bm_postseason_v2" ||
+        key === "bm_offseason_state_v1" ||
+        key.startsWith("bm_result_v3_") ||
+        key.startsWith("bm_box_score_")
+      ) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach((key) => localStorage.removeItem(key));
+  } catch {}
 }
 
 export default function Play() {
@@ -299,9 +325,30 @@ export default function Play() {
   };
 
   const loadBundledJson = async (path) => {
-    const response = await fetch(path, { cache: "no-store" });
-    if (!response.ok) throw new Error(`Could not load built-in game data (${response.status}).`);
-    return response.json();
+    const cleanPath = String(path || "").trim();
+    const candidates = [...new Set([
+      cleanPath,
+      cleanPath.replace(/^\/+/, ""),
+      `/${cleanPath.replace(/^\/+/, "")}`,
+    ].filter(Boolean))];
+
+    let lastError = null;
+    for (const candidate of candidates) {
+      try {
+        const response = await fetch(candidate, { cache: "no-store" });
+        if (!response.ok) {
+          lastError = new Error(`Could not load ${candidate} (${response.status}).`);
+          continue;
+        }
+        return response.json();
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    throw new Error(
+      `Could not load built-in game data. Make sure the dev server is running, then refresh. ${lastError?.message || ""}`.trim()
+    );
   };
 
   const installDraftClass = (payload, sourceName) => {
@@ -353,6 +400,7 @@ export default function Play() {
       }
 
       setSelectedTeam(null);
+      await resetRuntimeStateForNewLeague();
       nextLeagueData = setLeagueData(nextLeagueData, { source: "Play.startNewLeague", persist: false });
       await saveLeagueData(nextLeagueData, { source: "Play.startNewLeague" });
       window.leagueData = nextLeagueData;
@@ -488,8 +536,8 @@ export default function Play() {
             </div>
           </div>
 
-          <button type="button" onClick={() => navigate("/")} className="self-start text-sm font-black text-white/45 hover:text-orange-300">
-            ← Back to Samsara Studios
+          <button type="button" onClick={() => navigate("/league-editor")} className="self-start text-sm font-black text-white/45 hover:text-orange-300">
+            ← Back to League Editor
           </button>
         </div>
       </div>
@@ -507,7 +555,7 @@ export default function Play() {
               <p className="mt-3 text-sm font-semibold text-white/50">Saved rebuilds live in this browser. Export backups before clearing site data.</p>
             </div>
             <div className="flex gap-2">
-              <button type="button" onClick={() => setScreen("menu")} className={quietButton}>Back</button>
+              <button type="button" onClick={() => navigate("/league-editor")} className={quietButton}>Back to League Editor</button>
               <button type="button" onClick={refreshSaveSlots} className={orangeButton}>Refresh</button>
             </div>
           </div>
@@ -558,7 +606,7 @@ export default function Play() {
   return (
     <div className="min-h-screen overflow-hidden bg-[#050505] px-4 py-3 text-white">
       <div className="mx-auto flex min-h-[calc(100vh-1.5rem)] w-full max-w-7xl flex-col justify-center gap-2">
-        <button type="button" onClick={() => setScreen("menu")} className="self-start text-sm font-black text-white/45 hover:text-orange-300">← Back</button>
+        <button type="button" onClick={() => navigate("/league-editor")} className="self-start rounded-lg border border-[#303030] bg-[#111111] px-4 py-2 text-sm font-black text-white/70 hover:border-orange-500/40 hover:text-orange-200">← Back to League Editor</button>
 
         <div className={`${chromePanel} overflow-hidden p-3 md:p-3`}>
           <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">

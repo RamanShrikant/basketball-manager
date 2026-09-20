@@ -73,7 +73,7 @@ export const HEADSHOT_LAYOUTS = {
     outerRing:{ x: 0, y: 0,   scale: 1 },
     name:     { x: 40, y: 0,   scale: 0.7 },
     option:   { x: 40, y: -5,   scale: 0.8 },
-    rowHeight: 32,
+    rowHeight: 34,
   },
   "free-agents":        { x: 0, y: 36, scale: 1 },
   "award-tracker":      { x: 0, y: 0, scale: 1 },

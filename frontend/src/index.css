@@ -61,14 +61,14 @@ body {
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28) !important;
 }
 
-.trade-center-panel .bg-[#171b21],
-.trade-center-panel .bg-[#15181d],
-.trade-center-panel .bg-[#111318],
-.trade-center-panel .bg-[#101217],
-.tradeFinderScroller .bg-[#171b21],
-.tradeFinderScroller .bg-[#15181d],
-.tradeFinderScroller .bg-[#111318],
-.tradeFinderScroller .bg-[#101217] {
+.trade-center-panel .bg-\[\#171b21\],
+.trade-center-panel .bg-\[\#15181d\],
+.trade-center-panel .bg-\[\#111318\],
+.trade-center-panel .bg-\[\#101217\],
+.tradeFinderScroller .bg-\[\#171b21\],
+.tradeFinderScroller .bg-\[\#15181d\],
+.tradeFinderScroller .bg-\[\#111318\],
+.tradeFinderScroller .bg-\[\#101217\] {
   background-color: #111 !important;
 }
 
@@ -120,3 +120,412 @@ body {
   }
 }
 /* V14.9 GLOBAL TRADE SCREEN POLISH END */
+
+
+/* V14.10 TRADE LAYOUT FIT CLEANUP START */
+body[data-bm-route="trades"] .bmRouteScroller,
+body[data-bm-route="trade-finder"] .bmRouteScroller,
+body[data-bm-route="propose-trade"] .bmRouteScroller {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+body[data-bm-route="trades"] .trade-center-grid {
+  min-height: 0 !important;
+  padding-bottom: 28px !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel {
+  min-height: 0 !important;
+  max-height: calc(100vh - 210px) !important;
+  overflow: hidden !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel > div {
+  min-height: 0 !important;
+}
+
+body[data-bm-route="trade-finder"] .tradeFinderScroller,
+body[data-bm-route="propose-trade"] .tradeFinderScroller {
+  max-height: calc(100vh - 185px) !important;
+}
+
+@media (max-height: 850px) {
+  body[data-bm-route="trades"] .trade-center-grid {
+    gap: 0.75rem !important;
+  }
+  body[data-bm-route="trades"] .trade-center-panel {
+    max-height: calc(100vh - 182px) !important;
+  }
+  body[data-bm-route="propose-trade"] .bmCourtPage,
+  body[data-bm-route="trade-finder"] .bmCourtPage,
+  body[data-bm-route="trades"] .bmCourtPage {
+    padding-top: 0.6rem !important;
+    padding-bottom: 1.75rem !important;
+  }
+}
+/* V14.10 TRADE LAYOUT FIT CLEANUP END */
+
+/* V14.11 TRADE SCREEN FIT / COLOR CLEANUP START */
+body[data-bm-route="trade-finder"] .bmCourtPage {
+  padding-top: 1.25rem !important;
+  padding-bottom: 2.3rem !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+body[data-bm-route="trade-finder"] .bmCourtPage > div {
+  max-width: 1660px !important;
+}
+
+body[data-bm-route="trade-finder"] .bmCourtPage > div > div:first-child {
+  margin-bottom: 1.15rem !important;
+}
+
+body[data-bm-route="trade-finder"] .bmCourtPage > div > .grid {
+  align-items: start !important;
+  margin-top: 0.4rem !important;
+}
+
+body[data-bm-route="trade-finder"] .rounded-\[24px\] {
+  border-radius: 18px !important;
+  background: linear-gradient(180deg, rgba(12,12,13,0.98), rgba(5,5,6,0.98)) !important;
+  border-color: rgba(255,255,255,0.085) !important;
+}
+
+body[data-bm-route="trade-finder"] .bg-neutral-950\/85,
+body[data-bm-route="trade-finder"] .bg-neutral-950\/75,
+body[data-bm-route="trade-finder"] .bg-neutral-900,
+body[data-bm-route="trade-finder"] .bg-white\/\[0\.04\],
+body[data-bm-route="trade-finder"] .bg-white\/\[0\.035\],
+body[data-bm-route="trade-finder"] .bg-white\/\[0\.025\] {
+  background: rgba(13,13,14,0.95) !important;
+}
+
+body[data-bm-route="trade-finder"] .bg-gradient-to-r {
+  background-image: linear-gradient(90deg, rgba(249,115,22,0.13), rgba(5,5,6,0.98)) !important;
+}
+
+body[data-bm-route="trade-finder"] .tradeFinderScroller {
+  max-height: calc(100vh - 214px) !important;
+}
+
+body[data-bm-route="trades"] .bmCourtPage {
+  padding-bottom: 2.5rem !important;
+  overflow-y: auto !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel {
+  max-height: calc(100vh - 230px) !important;
+}
+
+body[data-bm-route="propose-trade"] .bmCourtPage {
+  padding-bottom: 2.5rem !important;
+  overflow-y: auto !important;
+}
+/* V14.11 TRADE SCREEN FIT / COLOR CLEANUP END */
+
+
+/* V14.12 TRADE PAGE NO CLIP START */
+body[data-bm-route="trades"] .bmCourtPage {
+  min-height: 100vh !important;
+  height: auto !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding-bottom: 4rem !important;
+}
+
+body[data-bm-route="trades"] .trade-center-header {
+  margin-bottom: 0.35rem !important;
+}
+
+body[data-bm-route="trades"] .trade-center-grid {
+  min-height: auto !important;
+  align-items: start !important;
+  padding-bottom: 2rem !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel {
+  max-height: none !important;
+  min-height: 0 !important;
+  overflow: visible !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel > div {
+  min-height: auto !important;
+  overflow: visible !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel .grid-cols-5 {
+  gap: 0.45rem !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel button {
+  min-width: 0 !important;
+}
+
+body[data-bm-route="trade-finder"] .bmCourtPage {
+  padding-top: 1.6rem !important;
+  padding-bottom: 4rem !important;
+}
+
+body[data-bm-route="trade-finder"] .bmCourtPage > div > .grid {
+  margin-top: 1rem !important;
+  align-items: start !important;
+}
+
+body[data-bm-route="trade-finder"] .rounded-[24px],
+body[data-bm-route="trade-finder"] .rounded-[28px] {
+  background: linear-gradient(180deg, rgba(13,13,14,0.98), rgba(4,4,5,0.98)) !important;
+}
+
+body[data-bm-route="trade-finder"] .tradeFinderScroller {
+  max-height: calc(100vh - 230px) !important;
+}
+/* V14.12 TRADE PAGE NO CLIP END */
+
+/* V14.13 TRADE PAGE EQUAL HEIGHT / SCROLL TUNE START */
+/* Trades gets one strong viewport layout: both columns equal height, internals scroll when activity grows. */
+body[data-bm-route="trades"] .bmCourtPage {
+  height: 100vh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  padding-top: 12px !important;
+  padding-bottom: 14px !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+body[data-bm-route="trades"] .bmCourtPage > div {
+  height: 100% !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.75rem !important;
+}
+
+body[data-bm-route="trades"] .trade-center-header {
+  flex: 0 0 auto !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+body[data-bm-route="trades"] .trade-center-team-logo {
+  width: 58px !important;
+  height: 58px !important;
+}
+
+body[data-bm-route="trades"] .trade-center-header h1 {
+  font-size: clamp(27px, 2.25vw, 38px) !important;
+  line-height: 0.96 !important;
+}
+
+body[data-bm-route="trades"] .trade-center-search {
+  height: 42px !important;
+}
+
+body[data-bm-route="trades"] .trade-center-grid {
+  flex: 1 1 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  align-items: stretch !important;
+  padding-bottom: 0 !important;
+  gap: 0.85rem !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel > div {
+  min-height: 0 !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel:first-child > div:first-child {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding-bottom: 12px !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel:last-child .bmTableScroller {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel .grid-cols-5 {
+  gap: 0.5rem !important;
+}
+
+@media (max-height: 820px) {
+  body[data-bm-route="trades"] .bmCourtPage {
+    padding-top: 9px !important;
+    padding-bottom: 10px !important;
+  }
+  body[data-bm-route="trades"] .bmCourtPage > div {
+    gap: 0.55rem !important;
+  }
+  body[data-bm-route="trades"] .trade-center-team-logo {
+    width: 52px !important;
+    height: 52px !important;
+  }
+  body[data-bm-route="trades"] .trade-center-search {
+    height: 38px !important;
+  }
+  body[data-bm-route="trades"] .trade-center-panel:first-child > div:first-child {
+    padding-top: 0.85rem !important;
+    padding-bottom: 0.8rem !important;
+  }
+}
+/* V14.13 TRADE PAGE EQUAL HEIGHT / SCROLL TUNE END */
+
+/* V14.14 TRADE SCREEN REPAIR - PANEL FIT START */
+/* Lift the trade panels slightly off the bottom, keep both columns even, and remove the redundant Team Context header. */
+body[data-bm-route="trades"] .bmCourtPage {
+  height: 100vh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  padding-top: 12px !important;
+  padding-bottom: 30px !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+body[data-bm-route="trades"] .bmCourtPage > div {
+  height: 100% !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.72rem !important;
+}
+
+body[data-bm-route="trades"] .trade-center-grid {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  align-items: stretch !important;
+  padding-bottom: 14px !important;
+  gap: 0.9rem !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel {
+  height: calc(100% - 10px) !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel:first-child > div:first-child {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding-top: 16px !important;
+  padding-bottom: 18px !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel:first-child > div:first-child > div:first-child {
+  display: none !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel:first-child > div:first-child > div:nth-child(2) {
+  margin-top: 0 !important;
+}
+
+body[data-bm-route="trades"] .trade-center-panel:last-child > div:last-child,
+body[data-bm-route="trades"] .trade-center-panel:last-child .bmTableScroller {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+@media (max-height: 820px) {
+  body[data-bm-route="trades"] .bmCourtPage {
+    padding-top: 10px !important;
+    padding-bottom: 26px !important;
+  }
+  body[data-bm-route="trades"] .trade-center-grid {
+    padding-bottom: 12px !important;
+  }
+}
+/* V14.14 TRADE SCREEN REPAIR - PANEL FIT END */
+
+
+/* V14.16 CONTRACT EXTENSIONS FINAL FIT START */
+/* Right-side extension details should read as one clean panel, not as a nested scroll window. */
+.contract-extension-detail-panel {
+  overflow: hidden !important;
+}
+
+.contract-extension-detail-panel [class*="border-white/8"][class*="bg-black/25"] {
+  padding: 0.45rem 0.55rem !important;
+}
+
+.contract-extension-detail-panel .text-sm.font-black {
+  line-height: 1.05 !important;
+}
+
+.contract-extension-detail-panel .text-lg.font-black {
+  line-height: 1.05 !important;
+}
+
+.contract-extension-detail-panel .mt-1 {
+  margin-top: 0.15rem !important;
+}
+
+.contract-extension-detail-panel [class*="mt-1.5"] {
+  margin-top: 0.25rem !important;
+}
+
+.contract-extension-detail-panel .pt-2 {
+  padding-top: 0.35rem !important;
+}
+
+@media (max-height: 820px) {
+  .contract-extension-detail-panel {
+    padding: 0.55rem !important;
+  }
+  .contract-extension-detail-panel .text-xs.leading-4,
+  .contract-extension-detail-panel .text-xs.leading-5 {
+    line-height: 1.15 !important;
+  }
+}
+/* V14.16 CONTRACT EXTENSIONS FINAL FIT END */
+
+/* V14.17 CONTRACT EXTENSIONS SPACE BALANCE START */
+.contract-extension-detail-panel {
+  overflow: hidden !important;
+}
+
+.contract-extension-detail-panel [class*="grid"][class*="xl:grid-cols-3"] > button {
+  min-height: 104px !important;
+}
+
+.contract-extension-detail-panel [class*="grid-cols-5"] > div {
+  padding-top: 0.4rem !important;
+  padding-bottom: 0.4rem !important;
+}
+
+body[data-bm-route="contract-extensions"] .bm-page-bg > div {
+  padding-bottom: 0.6rem !important;
+}
+
+@media (max-height: 820px) {
+  body[data-bm-route="contract-extensions"] .contract-extension-detail-panel {
+    padding: 0.5rem !important;
+  }
+
+  body[data-bm-route="contract-extensions"] header {
+    padding-top: 0.45rem !important;
+    padding-bottom: 0.45rem !important;
+  }
+}
+/* V14.17 CONTRACT EXTENSIONS SPACE BALANCE END */

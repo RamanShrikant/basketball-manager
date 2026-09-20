@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import { useGame } from "../context/GameContext";
 import { getDraftYear, getSeasonCalendarConfig, getSeasonStartYear } from "../utils/seasonContext.js";
@@ -1642,7 +1642,7 @@ function buildRoundPairsFromQueues(pairQueues = {}, teamIds = [], neededRounds =
   return null;
 }
 
-function generateFullSeasonSchedule(teams, startDate, endDate, calendarConfig = null) {
+export function generateFullSeasonSchedule(teams, startDate, endDate, calendarConfig = null) {
   const canonicalIds = teams.map((t) => slugifyId(t.name));
   if (canonicalIds.length < 2) return { byDate: {}, list: [] };
 

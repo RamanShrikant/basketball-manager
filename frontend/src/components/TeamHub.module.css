@@ -3500,3 +3500,937 @@
   }
 }
 /* V14.9 TEAM HUB SPACE / DRAFT LIST POLISH END */
+
+
+/* V14.10 TEAM HUB DATA/FIT POLISH START */
+.prospect i {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  border: 1px solid rgba(249, 115, 22, 0.35);
+  background: rgba(249, 115, 22, 0.12);
+  color: #fed7aa;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 1000;
+}
+
+.prospect small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prospect strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (min-width: 900px) and (max-height: 900px) {
+  .hub {
+    padding-top: 8px;
+    gap: 8px;
+  }
+  .hero {
+    min-height: 74px;
+  }
+  .topGrid,
+  .middleGrid,
+  .bottomGrid {
+    gap: 8px;
+  }
+}
+/* V14.10 TEAM HUB DATA/FIT POLISH END */
+
+/* V14.11 DRAFT ASSET READABILITY / HUB FIT START */
+.draftAssetList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px 12px 10px;
+}
+
+.draftAssetRow {
+  min-width: 0;
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: 20px 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255,255,255,0.085);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(18,18,19,0.96), rgba(9,9,10,0.98));
+  padding: 5px 8px;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.015);
+}
+
+.draftAssetNumber {
+  color: rgba(255,255,255,0.72);
+  font-size: 10px;
+  font-weight: 1000;
+  text-align: center;
+}
+
+.draftAssetRound {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 22px;
+  border-radius: 8px;
+  border: 1px solid rgba(249,115,22,0.42);
+  background: rgba(249,115,22,0.12);
+  color: #fed7aa;
+  font-size: 10px;
+  font-weight: 1000;
+}
+
+.draftAssetText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.draftAssetText strong,
+.draftAssetText small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draftAssetText strong {
+  color: rgba(255,255,255,0.94);
+  font-size: 10.8px;
+  line-height: 1.05;
+  font-weight: 1000;
+}
+
+.draftAssetText small {
+  color: rgba(255,255,255,0.46);
+  font-size: 8.3px;
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+@media (max-height: 820px) {
+  .draftAssetList {
+    gap: 5px;
+    padding-top: 7px;
+    padding-bottom: 8px;
+  }
+  .draftAssetRow {
+    min-height: 29px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+  .draftAssetText strong {
+    font-size: 10px;
+  }
+  .draftAssetText small {
+    font-size: 7.9px;
+  }
+}
+/* V14.11 DRAFT ASSET READABILITY / HUB FIT END */
+
+
+/* V14.12 DRAFT ASSET SIX FIT START */
+.draftAssetList {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-auto-rows: 34px !important;
+  gap: 6px !important;
+  padding: 7px 12px 9px !important;
+  max-height: 122px !important;
+  overflow: hidden !important;
+}
+
+.draftAssetRow {
+  min-height: 34px !important;
+  height: 34px !important;
+  grid-template-columns: 18px 36px minmax(0, 1fr) !important;
+  gap: 7px !important;
+  padding: 5px 8px !important;
+}
+
+.draftAssetRound {
+  min-width: 32px !important;
+  height: 22px !important;
+}
+
+.draftAssetText strong {
+  font-size: 10.6px !important;
+}
+
+.draftAssetText small {
+  font-size: 7.8px !important;
+}
+/* V14.12 DRAFT ASSET SIX FIT END */
+
+/* V14.13 TEAM HUB TRUE ONE SCREEN FIT START */
+/* This pass keeps Team Hub locked to one viewport. It trims empty vertical air instead of hiding content. */
+.dashboard {
+  height: 100% !important;
+  max-height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  padding: 7px 18px 8px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+}
+
+.topBar {
+  min-height: 32px !important;
+  height: 32px !important;
+  margin-bottom: 7px !important;
+}
+
+.seasonContext {
+  gap: 12px !important;
+  font-size: 13px !important;
+}
+
+.teamBanner {
+  flex: 0 0 66px !important;
+  min-height: 66px !important;
+  height: 66px !important;
+  margin-bottom: 7px !important;
+  grid-template-columns: minmax(315px, 1.46fr) minmax(112px, 0.45fr) minmax(112px, 0.45fr) minmax(250px, 0.94fr) !important;
+}
+
+.teamIdentity {
+  gap: 12px !important;
+  padding: 8px 18px !important;
+}
+
+.teamLogo {
+  width: 76px !important;
+  height: 54px !important;
+}
+
+.teamIdentity h1 {
+  max-width: 300px !important;
+  font-size: clamp(18px, 1.55vw, 25px) !important;
+  line-height: 0.94 !important;
+}
+
+.heroMetric {
+  min-height: 52px !important;
+  padding-inline: 15px !important;
+}
+
+.heroMetric span,
+.nextGame span {
+  font-size: 9px !important;
+}
+
+.heroMetric strong {
+  margin-top: 2px !important;
+  font-size: 18px !important;
+}
+
+.heroMetric small {
+  margin-top: 3px !important;
+  font-size: 9px !important;
+}
+
+.nextGame {
+  min-height: 54px !important;
+  grid-template-columns: minmax(0, 1fr) 40px auto !important;
+  column-gap: 9px !important;
+  padding: 0 18px !important;
+}
+
+.nextGame strong {
+  font-size: 14px !important;
+  line-height: 0.96 !important;
+}
+
+.nextGame img {
+  width: 36px !important;
+  height: 36px !important;
+}
+
+.nextGame small {
+  font-size: 10px !important;
+}
+
+.topGrid,
+.middleGrid,
+.bottomGrid {
+  gap: 7px !important;
+  min-height: 0 !important;
+}
+
+.topGrid {
+  flex: 0 0 188px !important;
+  height: 188px !important;
+  margin-bottom: 7px !important;
+}
+
+.middleGrid {
+  flex: 0 0 171px !important;
+  height: 171px !important;
+  margin-bottom: 7px !important;
+}
+
+.bottomGrid {
+  flex: 1 1 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.topGrid > .panel,
+.middleGrid > .panel,
+.bottomGrid > .panel {
+  min-height: 0 !important;
+  height: 100% !important;
+}
+
+.panelHeading {
+  min-height: 30px !important;
+  height: 30px !important;
+  padding-inline: 12px !important;
+}
+
+.panelHeading h2 {
+  font-size: 14px !important;
+}
+
+.panelHeading button,
+.panelActions button {
+  font-size: 9.5px !important;
+}
+
+.gameList,
+.recentList {
+  padding: 3px 11px 5px !important;
+}
+
+.gameRow,
+.recentRow {
+  min-height: 23px !important;
+  height: 23px !important;
+  font-size: 10px !important;
+}
+
+.gameRow {
+  grid-template-columns: 47px 18px 24px 1fr auto !important;
+  gap: 5px !important;
+}
+
+.gameRow img,
+.recentRow img,
+.standingTeam img {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+.metricList {
+  padding: 3px 12px 5px !important;
+}
+
+.metricList > div {
+  min-height: 22px !important;
+}
+
+.metricList span {
+  font-size: 9.5px !important;
+}
+
+.metricList strong {
+  font-size: 10.5px !important;
+}
+
+.standingsHeader {
+  min-height: 22px !important;
+}
+
+.standingRow {
+  min-height: 27px !important;
+  height: 27px !important;
+  margin-inline: 8px !important;
+  font-size: 9.5px !important;
+}
+
+.rotationPanel {
+  min-height: 0 !important;
+}
+
+.playerStrip {
+  height: calc(100% - 30px) !important;
+  padding: 6px 12px 8px !important;
+  gap: 7px !important;
+}
+
+.playerCard,
+.middleGrid .playerCard {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 130px !important;
+}
+
+.playerVisual,
+.middleGrid .playerVisual {
+  min-height: 82px !important;
+}
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  width: 76px !important;
+  height: 78px !important;
+}
+
+.playerRatingBadge,
+.middleGrid .playerRatingBadge {
+  top: 3px !important;
+  left: 4px !important;
+  transform: scale(0.57) !important;
+  transform-origin: top left !important;
+}
+
+.playerPositionBadge,
+.middleGrid .playerPositionBadge {
+  right: 8px !important;
+  top: 7px !important;
+  font-size: 9px !important;
+}
+
+.playerCardMeta {
+  min-height: 23px !important;
+  padding: 5px 8px !important;
+}
+
+.playerCardMeta strong {
+  font-size: 9.5px !important;
+  line-height: 1.05 !important;
+}
+
+.draftAssetList {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-auto-rows: 29px !important;
+  max-height: 101px !important;
+  padding: 6px 12px 7px !important;
+  gap: 5px !important;
+  overflow: hidden !important;
+}
+
+.draftAssetRow {
+  height: 29px !important;
+  min-height: 29px !important;
+  grid-template-columns: 17px 33px minmax(0, 1fr) !important;
+  gap: 6px !important;
+  padding: 3px 7px !important;
+  border-radius: 9px !important;
+}
+
+.draftAssetRound {
+  min-width: 30px !important;
+  height: 20px !important;
+  font-size: 9.5px !important;
+}
+
+.draftAssetText strong {
+  font-size: 9.8px !important;
+  line-height: 1 !important;
+}
+
+.draftAssetText small {
+  font-size: 7.2px !important;
+  line-height: 1 !important;
+}
+
+.newsEmpty {
+  min-height: 0 !important;
+  height: calc(100% - 30px) !important;
+  padding: 10px 14px !important;
+  justify-content: flex-start !important;
+}
+
+.newsEmpty strong {
+  font-size: 11px !important;
+}
+
+.newsEmpty span {
+  font-size: 9.5px !important;
+  line-height: 1.25 !important;
+}
+
+@media (max-height: 820px) {
+  .dashboard {
+    padding-top: 6px !important;
+    padding-bottom: 7px !important;
+  }
+  .topBar {
+    height: 30px !important;
+    min-height: 30px !important;
+    margin-bottom: 6px !important;
+  }
+  .teamBanner {
+    flex-basis: 62px !important;
+    min-height: 62px !important;
+    height: 62px !important;
+    margin-bottom: 6px !important;
+  }
+  .teamLogo {
+    width: 68px !important;
+    height: 50px !important;
+  }
+  .topGrid {
+    flex-basis: 180px !important;
+    height: 180px !important;
+    margin-bottom: 6px !important;
+  }
+  .middleGrid {
+    flex-basis: 160px !important;
+    height: 160px !important;
+    margin-bottom: 6px !important;
+  }
+  .playerPortrait,
+  .middleGrid .playerPortrait {
+    width: 72px !important;
+    height: 74px !important;
+  }
+  .draftAssetList {
+    grid-auto-rows: 27px !important;
+    max-height: 91px !important;
+  }
+  .draftAssetRow {
+    height: 27px !important;
+    min-height: 27px !important;
+  }
+}
+/* V14.13 TEAM HUB TRUE ONE SCREEN FIT END */
+
+/* V14.14 TEAM HUB REPAIR - SURGICAL FIT START */
+/* Repair the V14.13 over-tightening: keep the hub non-scrollable, but make the grid rows fit instead of hiding the bottom sections. */
+.dashboard {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+  overflow: hidden !important;
+  display: grid !important;
+  grid-template-rows: 28px 62px minmax(158px, 1.05fr) minmax(142px, 0.86fr) minmax(124px, 0.78fr) !important;
+  row-gap: 6px !important;
+  padding: 6px 18px 7px !important;
+  box-sizing: border-box !important;
+}
+
+.topBar,
+.teamBanner,
+.topGrid,
+.middleGrid,
+.bottomGrid {
+  min-height: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.topBar {
+  height: 28px !important;
+  min-height: 28px !important;
+}
+
+.teamBanner {
+  height: 62px !important;
+  min-height: 62px !important;
+  flex: none !important;
+}
+
+.topGrid,
+.middleGrid,
+.bottomGrid {
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.topGrid > .panel,
+.middleGrid > .panel,
+.bottomGrid > .panel {
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.panelHeading {
+  height: 28px !important;
+  min-height: 28px !important;
+  padding-inline: 12px !important;
+}
+
+.panelHeading h2 {
+  font-size: 13.5px !important;
+}
+
+.gameList,
+.recentList,
+.metricList {
+  padding-top: 2px !important;
+  padding-bottom: 4px !important;
+}
+
+.gameRow,
+.recentRow,
+.standingRow {
+  min-height: 21px !important;
+  height: 21px !important;
+}
+
+.rotationPanel {
+  min-height: 0 !important;
+}
+
+.playerStrip {
+  height: calc(100% - 28px) !important;
+  min-height: 0 !important;
+  padding: 5px 10px 6px !important;
+  gap: 7px !important;
+}
+
+.playerCard,
+.middleGrid .playerCard {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+}
+
+.playerVisual,
+.middleGrid .playerVisual {
+  min-height: 0 !important;
+  height: calc(100% - 28px) !important;
+}
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  width: 72px !important;
+  height: 74px !important;
+}
+
+.playerRatingBadge,
+.middleGrid .playerRatingBadge {
+  top: 3px !important;
+  left: 4px !important;
+  transform: scale(0.55) !important;
+  transform-origin: top left !important;
+}
+
+.playerCardMeta,
+.middleGrid .playerCardMeta {
+  min-height: 28px !important;
+  height: 28px !important;
+  padding: 4px 7px !important;
+}
+
+.draftAssetList {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-auto-rows: 25px !important;
+  max-height: calc(100% - 28px) !important;
+  padding: 5px 12px 6px !important;
+  gap: 4px 6px !important;
+  overflow: hidden !important;
+}
+
+.draftAssetRow {
+  height: 25px !important;
+  min-height: 25px !important;
+  grid-template-columns: 16px 31px minmax(0, 1fr) !important;
+  gap: 6px !important;
+  padding: 2px 7px !important;
+  border-radius: 8px !important;
+}
+
+.draftAssetRound {
+  min-width: 28px !important;
+  height: 18px !important;
+  font-size: 9px !important;
+}
+
+.draftAssetText strong {
+  font-size: 9.4px !important;
+  line-height: 1 !important;
+}
+
+.draftAssetText small {
+  font-size: 6.8px !important;
+  line-height: 1 !important;
+}
+
+.newsEmpty {
+  height: calc(100% - 28px) !important;
+  min-height: 0 !important;
+  padding: 8px 12px !important;
+  justify-content: flex-start !important;
+}
+
+@media (max-height: 820px) {
+  .dashboard {
+    grid-template-rows: 26px 58px minmax(148px, 1.02fr) minmax(132px, 0.84fr) minmax(112px, 0.72fr) !important;
+    row-gap: 5px !important;
+    padding-top: 5px !important;
+    padding-bottom: 5px !important;
+  }
+  .topBar { height: 26px !important; min-height: 26px !important; }
+  .teamBanner { height: 58px !important; min-height: 58px !important; }
+  .panelHeading { height: 27px !important; min-height: 27px !important; }
+  .gameRow,
+  .recentRow,
+  .standingRow { height: 20px !important; min-height: 20px !important; }
+  .draftAssetList { grid-auto-rows: 23px !important; }
+  .draftAssetRow { height: 23px !important; min-height: 23px !important; }
+}
+/* V14.14 TEAM HUB REPAIR - SURGICAL FIT END */
+
+/* V14.15 TEAM HUB FULL VIEWPORT FIT START */
+/* Surgical final fit: fill the visible game canvas without allowing the Team Hub page itself to scroll. */
+:global(html[data-bm-route="team-hub"]),
+:global(body[data-bm-route="team-hub"]) {
+  overflow: hidden !important;
+}
+
+.dashboard {
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
+  display: grid !important;
+  grid-template-rows: 30px 70px minmax(182px, 1.12fr) minmax(154px, 0.96fr) minmax(134px, 0.84fr) !important;
+  row-gap: 7px !important;
+  padding: 8px 18px 9px !important;
+  box-sizing: border-box !important;
+}
+
+.topBar,
+.teamBanner,
+.topGrid,
+.middleGrid,
+.bottomGrid,
+.topGrid > .panel,
+.middleGrid > .panel,
+.bottomGrid > .panel {
+  min-height: 0 !important;
+  height: 100% !important;
+  margin-bottom: 0 !important;
+  overflow: hidden !important;
+}
+
+.topBar {
+  height: 30px !important;
+  min-height: 30px !important;
+}
+
+.teamBanner {
+  height: 70px !important;
+  min-height: 70px !important;
+  flex: none !important;
+}
+
+.teamLogo {
+  width: 72px !important;
+  height: 56px !important;
+}
+
+.teamNameBlock h1 {
+  font-size: clamp(19px, 2.05vw, 30px) !important;
+  line-height: 0.92 !important;
+}
+
+.teamNameBlock span {
+  font-size: 12px !important;
+  line-height: 1 !important;
+}
+
+.bannerStat,
+.nextGame {
+  min-height: 0 !important;
+}
+
+.nextGame {
+  grid-template-columns: minmax(68px, max-content) 1fr auto !important;
+  column-gap: 13px !important;
+  align-items: center !important;
+  min-width: 0 !important;
+}
+
+.nextGame strong,
+.nextGame span,
+.nextGame small {
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+
+.nextGame img {
+  width: 34px !important;
+  height: 34px !important;
+}
+
+.panelHeading {
+  height: 29px !important;
+  min-height: 29px !important;
+  padding-inline: 13px !important;
+}
+
+.panelHeading h2 {
+  font-size: 14px !important;
+  line-height: 1 !important;
+}
+
+.gameList,
+.recentList,
+.metricList {
+  height: calc(100% - 29px) !important;
+  min-height: 0 !important;
+  padding: 4px 12px 6px !important;
+  box-sizing: border-box !important;
+}
+
+.gameRow,
+.recentRow,
+.standingRow {
+  min-height: 22px !important;
+  height: 22px !important;
+}
+
+.gameRow {
+  grid-template-columns: 48px 18px 24px minmax(36px, 1fr) auto !important;
+  gap: 6px !important;
+}
+
+.gameRow img,
+.recentRow img,
+.standingTeam img {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+.metricList > div {
+  min-height: 23px !important;
+}
+
+.standingsHeader {
+  min-height: 22px !important;
+}
+
+.standingRow {
+  margin-inline: 8px !important;
+}
+
+.playerStrip {
+  height: calc(100% - 29px) !important;
+  min-height: 0 !important;
+  padding: 6px 12px 7px !important;
+  gap: 8px !important;
+  box-sizing: border-box !important;
+}
+
+.playerCard,
+.middleGrid .playerCard {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+}
+
+.playerVisual,
+.middleGrid .playerVisual {
+  min-height: 0 !important;
+  height: calc(100% - 30px) !important;
+}
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  width: 78px !important;
+  height: 80px !important;
+}
+
+.playerRatingBadge,
+.middleGrid .playerRatingBadge {
+  top: 4px !important;
+  left: 6px !important;
+  transform: scale(0.54) !important;
+  transform-origin: top left !important;
+}
+
+.playerCardMeta,
+.middleGrid .playerCardMeta {
+  height: 30px !important;
+  min-height: 30px !important;
+  padding: 4px 8px !important;
+}
+
+.draftAssetList {
+  height: calc(100% - 29px) !important;
+  max-height: none !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-template-rows: repeat(3, minmax(0, 1fr)) !important;
+  grid-auto-rows: 0 !important;
+  padding: 6px 12px 8px !important;
+  gap: 6px 7px !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+}
+
+.draftAssetRow {
+  height: 100% !important;
+  min-height: 0 !important;
+  grid-template-columns: 17px 32px minmax(0, 1fr) !important;
+  gap: 7px !important;
+  padding: 3px 8px !important;
+  border-radius: 9px !important;
+}
+
+.draftAssetRound {
+  min-width: 29px !important;
+  height: 19px !important;
+  font-size: 9px !important;
+}
+
+.draftAssetText strong {
+  font-size: 9.6px !important;
+  line-height: 1.02 !important;
+}
+
+.draftAssetText small {
+  font-size: 7px !important;
+  line-height: 1 !important;
+}
+
+.newsEmpty {
+  height: calc(100% - 29px) !important;
+  min-height: 0 !important;
+  padding: 9px 14px !important;
+  justify-content: flex-start !important;
+}
+
+@media (max-height: 820px) {
+  .dashboard {
+    grid-template-rows: 28px 66px minmax(170px, 1.08fr) minmax(145px, 0.94fr) minmax(124px, 0.78fr) !important;
+    row-gap: 6px !important;
+    padding: 6px 16px 7px !important;
+  }
+  .topBar { height: 28px !important; min-height: 28px !important; }
+  .teamBanner { height: 66px !important; min-height: 66px !important; }
+  .panelHeading { height: 28px !important; min-height: 28px !important; }
+  .gameList,
+  .recentList,
+  .metricList,
+  .playerStrip,
+  .draftAssetList,
+  .newsEmpty { height: calc(100% - 28px) !important; }
+  .gameRow,
+  .recentRow,
+  .standingRow { height: 21px !important; min-height: 21px !important; }
+  .playerPortrait,
+  .middleGrid .playerPortrait { width: 74px !important; height: 76px !important; }
+  .playerCardMeta,
+  .middleGrid .playerCardMeta { height: 28px !important; min-height: 28px !important; }
+}
+/* V14.15 TEAM HUB FULL VIEWPORT FIT END */

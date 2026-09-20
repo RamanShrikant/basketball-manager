@@ -252,6 +252,14 @@ export async function listLeagueSaves() {
   return (records || [])
     .map(migrateLeagueSave)
     .filter(Boolean)
+    .filter((save) => {
+      const name = normalizeLeagueName(save?.leagueName || "");
+      const source = String(save?.snapshot?.source || "").toLowerCase();
+      // Older V14 builds auto-created a noisy "Recovered League" whenever an
+      // active save ID was missing. Hide those generated slots from the normal
+      // continue screen so only intentional saves are shown.
+      return !(name === "recovered league" && source.includes("recovered"));
+    })
     .sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
 }
 
@@ -302,16 +310,13 @@ export async function updateLeagueSaveSnapshot(saveId, { leagueName, leagueData,
 export async function updateActiveLeagueSaveSnapshot({ leagueData, selectedTeamName, source = "active_autosave" } = {}) {
   if (!leagueHasTeams(leagueData)) return null;
   const activeId = getActiveLeagueSaveId();
-  if (activeId) {
-    return updateLeagueSaveSnapshot(activeId, { leagueData, selectedTeamName, source });
+  if (!activeId) {
+    // Do not invent "Recovered League" saves just because the app has default
+    // roster data in memory. New League and Continue League are the only flows
+    // that should create/activate save slots.
+    return null;
   }
-  return createLeagueSave({
-    leagueName: "Recovered League",
-    leagueData,
-    selectedTeamName,
-    activate: true,
-    source: `${source}:recovered`,
-  });
+  return updateLeagueSaveSnapshot(activeId, { leagueData, selectedTeamName, source });
 }
 
 export function updateActiveLeagueSaveSnapshotInBackground(payload = {}) {
