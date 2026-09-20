@@ -178,7 +178,8 @@ check(
   "year3.schedule_cleanup_idb",
   finals.includes("clearScheduleStorage();") &&
     fs.readFileSync(path.join(root, "src/pages/Playoffs.jsx"), "utf8").includes("clearScheduleStorage();") &&
-    fs.readFileSync(path.join(root, "src/pages/LeagueEditor.jsx"), "utf8").includes("clearScheduleStorage();"),
+    (fs.readFileSync(path.join(root, "src/pages/LeagueEditor.jsx"), "utf8").includes("clearScheduleStorage();") ||
+      fs.readFileSync(path.join(root, "src/pages/LeagueEditor.jsx"), "utf8").includes("clearActiveLeagueRuntime({ resetCaches: true })")),
   "Season transitions and league resets clear the IndexedDB-backed schedule instead of only deleting a legacy key."
 );
 

@@ -239,3 +239,9 @@
     overflow: hidden !important;
   }
 }
+
+/* SAVE_V2_ROSTER_ACTION_BUTTONS */
+.twoWayActionButton{border:1px solid rgba(52,211,153,.48);background:rgba(16,185,129,.14);color:#d1fae5;box-shadow:0 4px 14px rgba(16,185,129,.08)}
+.twoWayActionButton:hover{border-color:rgba(52,211,153,.78);background:rgba(16,185,129,.24);color:#ecfdf5}
+.upgradeActionButton{border:1px solid rgba(251,146,60,.55);background:rgba(249,115,22,.13);color:#ffedd5;box-shadow:0 4px 14px rgba(249,115,22,.08)}
+.upgradeActionButton:hover{border-color:rgba(251,146,60,.85);background:rgba(249,115,22,.23);color:#fff7ed}

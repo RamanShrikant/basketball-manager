@@ -1,26 +1,36 @@
 import { saveLeagueData } from "../utils/leagueStorage.js";
+import {
+  captureActiveLeagueRuntime,
+  restoreLeagueRuntime,
+} from "./saveManager.js";
 
-export const CURRENT_LEAGUE_SAVE_SCHEMA_VERSION = 1;
+export const CURRENT_LEAGUE_SAVE_SCHEMA_VERSION = 2;
+export const MAX_LEAGUE_SAVE_SLOTS = 5;
 
 const DB_NAME = "basketball_manager_local_save_slots_v1";
 const DB_VERSION = 1;
 const STORE_NAME = "leagueSaves";
 const ACTIVE_SAVE_KEY = "bm_active_league_save_id_v1";
 
+let saveMutationChain = Promise.resolve();
+
+const SAFE_RESUME_ROUTES = new Set([
+  "/team-hub", "/roster-view", "/coach-gameplan", "/calendar", "/player-stats",
+  "/playoff-stats", "/draft-lottery", "/draft", "/upcoming-draft", "/rookie-signings",
+  "/roster-finalization", "/standings", "/power-rankings", "/draft-picks", "/trades",
+  "/propose-trade", "/trade-player-select", "/trade-pick-select", "/trade-finder",
+  "/locker-room", "/contract-extensions", "/intel", "/settings", "/league-history",
+  "/award-history", "/past-champions", "/playoffs", "/playoff-picture", "/player-progression",
+  "/salary-table", "/free-agents", "/award-tracker", "/all-stars", "/offseason",
+  "/player-team-options", "/player-retirements", "/viewing-offers", "/team-selector",
+]);
+
 function hasIndexedDB() {
-  try {
-    return typeof indexedDB !== "undefined";
-  } catch {
-    return false;
-  }
+  try { return typeof indexedDB !== "undefined"; } catch { return false; }
 }
 
 function hasLocalStorage() {
-  try {
-    return typeof localStorage !== "undefined" && !!localStorage;
-  } catch {
-    return false;
-  }
+  try { return typeof localStorage !== "undefined" && !!localStorage; } catch { return false; }
 }
 
 function createId(prefix = "league") {
@@ -34,9 +44,7 @@ function createId(prefix = "league") {
 
 function clone(value) {
   if (value == null) return value;
-  try {
-    if (typeof structuredClone === "function") return structuredClone(value);
-  } catch {}
+  try { if (typeof structuredClone === "function") return structuredClone(value); } catch {}
   return JSON.parse(JSON.stringify(value));
 }
 
@@ -46,26 +54,7 @@ function safeDate(value = null) {
 }
 
 function normalizeLeagueName(value = "") {
-  return String(value || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
-
-async function assertUniqueLeagueName(leagueName, { ignoreSaveId = "" } = {}) {
-  const normalized = normalizeLeagueName(leagueName);
-  if (!normalized) throw new Error("League name is required.");
-
-  const existingSaves = await listLeagueSaves();
-  const duplicate = existingSaves.find((save) => {
-    if (!save?.saveId) return false;
-    if (ignoreSaveId && String(save.saveId) === String(ignoreSaveId)) return false;
-    return normalizeLeagueName(save.leagueName) === normalized;
-  });
-
-  if (duplicate) {
-    throw new Error("A league with this name already exists. Choose a different name.");
-  }
+  return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function getTeams(leagueData = null) {
@@ -86,20 +75,20 @@ function resolveTeamName(leagueData = null, selectedTeamName = "") {
     try {
       const parsed = JSON.parse(localStorage.getItem("selectedTeam") || "null");
       return typeof parsed === "string" ? parsed : parsed?.name || "";
-    } catch {
-      return "";
-    }
+    } catch { return ""; }
   })();
   if (saved) return saved;
-  return getTeams(leagueData)?.[0]?.name || "";
+  return "";
 }
 
 function resolveSeasonLabel(leagueData = null) {
-  const seasonYear = Number(
-    leagueData?.seasonYear || leagueData?.currentSeasonYear || leagueData?.seasonStartYear || leagueData?.year || 0
-  );
+  const seasonYear = Number(leagueData?.seasonYear || leagueData?.currentSeasonYear || leagueData?.seasonStartYear || leagueData?.year || 0);
   if (Number.isFinite(seasonYear) && seasonYear > 0) return `Season ${seasonYear}-${String(seasonYear + 1).slice(-2)}`;
   return "Season not started";
+}
+
+function currentRoute() {
+  try { return window.location?.pathname || ""; } catch { return ""; }
 }
 
 function buildMetadata({ saveId, leagueName, leagueData, selectedTeamName, createdAt, updatedAt, schemaVersion } = {}) {
@@ -111,36 +100,45 @@ function buildMetadata({ saveId, leagueName, leagueData, selectedTeamName, creat
     createdAt: safeDate(createdAt || now),
     updatedAt: safeDate(updatedAt || now),
     schemaVersion: Number(schemaVersion || CURRENT_LEAGUE_SAVE_SCHEMA_VERSION),
-    appVersion: "local-save-slots-v1",
+    appVersion: "local-save-slots-v2",
     controlledTeamName: teamName || "No team selected",
     seasonLabel: resolveSeasonLabel(leagueData),
     teamCount: getTeams(leagueData).length,
   };
 }
 
-function buildSaveRecord({ saveId, leagueName, leagueData, selectedTeamName, createdAt, updatedAt, source = "unknown" } = {}) {
+function buildSaveRecord({
+  existing = null,
+  saveId,
+  leagueName,
+  leagueData,
+  selectedTeamName,
+  createdAt,
+  updatedAt,
+  source = "unknown",
+  runtime,
+  savedRoute,
+} = {}) {
   const metadata = buildMetadata({ saveId, leagueName, leagueData, selectedTeamName, createdAt, updatedAt });
+  const previousSnapshot = existing?.snapshot && typeof existing.snapshot === "object" ? existing.snapshot : {};
+  const hasRuntimeArgument = runtime !== undefined;
   return {
     ...metadata,
     snapshot: {
       leagueData: clone(leagueData),
       selectedTeamName: resolveTeamName(leagueData, selectedTeamName),
-      savedRoute: typeof window !== "undefined" ? window.location?.pathname || "" : "",
+      savedRoute: String(savedRoute ?? currentRoute() ?? previousSnapshot.savedRoute ?? ""),
       savedAt: metadata.updatedAt,
       source,
+      runtime: clone(hasRuntimeArgument ? runtime : previousSnapshot.runtime ?? null),
     },
   };
 }
 
 function openDatabase() {
   return new Promise((resolve, reject) => {
-    if (!hasIndexedDB()) {
-      reject(new Error("IndexedDB is not available in this browser."));
-      return;
-    }
-
+    if (!hasIndexedDB()) { reject(new Error("IndexedDB is not available in this browser.")); return; }
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
@@ -149,7 +147,6 @@ function openDatabase() {
         store.createIndex("leagueName", "leagueName", { unique: false });
       }
     };
-
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("Could not open local save slots."));
     request.onblocked = () => console.warn("[leagueSaves] Database upgrade is blocked by another tab.");
@@ -157,41 +154,37 @@ function openDatabase() {
 }
 
 function runTransaction(mode, callback) {
-  return openDatabase().then((db) => {
-    return new Promise((resolve, reject) => {
-      let tx;
-      let store;
-      let request = null;
+  return openDatabase().then((db) => new Promise((resolve, reject) => {
+    let tx; let store; let request = null;
+    try {
+      tx = db.transaction(STORE_NAME, mode);
+      store = tx.objectStore(STORE_NAME);
+      request = callback(store);
+    } catch (error) { db.close(); reject(error); return; }
+    if (request) request.onerror = () => reject(request.error || new Error("Local save request failed."));
+    tx.oncomplete = () => { const result = request?.result ?? null; db.close(); resolve(result); };
+    tx.onerror = () => { db.close(); reject(tx.error || new Error("Local save transaction failed.")); };
+    tx.onabort = () => { db.close(); reject(tx.error || new Error("Local save transaction aborted.")); };
+  }));
+}
 
-      try {
-        tx = db.transaction(STORE_NAME, mode);
-        store = tx.objectStore(STORE_NAME);
-        request = callback(store);
-      } catch (error) {
-        db.close();
-        reject(error);
-        return;
-      }
+function enqueueSaveMutation(operation) {
+  const task = saveMutationChain.then(operation);
+  saveMutationChain = task.catch(() => {});
+  return task;
+}
 
-      if (request) {
-        request.onerror = () => reject(request.error || new Error("Local save request failed."));
-      }
+async function writeLeagueSaveRecord(record) {
+  await runTransaction("readwrite", (store) => store.put(record));
+  return record;
+}
 
-      tx.oncomplete = () => {
-        const result = request?.result ?? null;
-        db.close();
-        resolve(result);
-      };
-      tx.onerror = () => {
-        db.close();
-        reject(tx.error || new Error("Local save transaction failed."));
-      };
-      tx.onabort = () => {
-        db.close();
-        reject(tx.error || new Error("Local save transaction aborted."));
-      };
-    });
-  });
+async function assertUniqueLeagueName(leagueName, { ignoreSaveId = "" } = {}) {
+  const normalized = normalizeLeagueName(leagueName);
+  if (!normalized) throw new Error("League name is required.");
+  const existingSaves = await listLeagueSaves();
+  const duplicate = existingSaves.find((save) => save?.saveId && (!ignoreSaveId || String(save.saveId) !== String(ignoreSaveId)) && normalizeLeagueName(save.leagueName) === normalized);
+  if (duplicate) throw new Error("A league with this name already exists. Choose a different name.");
 }
 
 export function getActiveLeagueSaveId() {
@@ -206,9 +199,7 @@ export function setActiveLeagueSaveId(saveId = "") {
   else localStorage.removeItem(ACTIVE_SAVE_KEY);
 }
 
-export function clearActiveLeagueSaveId() {
-  setActiveLeagueSaveId("");
-}
+export function clearActiveLeagueSaveId() { setActiveLeagueSaveId(""); }
 
 export function migrateLeagueSave(record = null) {
   if (!record || typeof record !== "object") return null;
@@ -226,10 +217,11 @@ export function migrateLeagueSave(record = null) {
       ...snapshot,
       leagueData,
       selectedTeamName: resolveTeamName(leagueData, snapshot.selectedTeamName || record.controlledTeamName),
+      savedRoute: snapshot.savedRoute || "",
       savedAt: snapshot.savedAt || record.updatedAt || new Date().toISOString(),
+      runtime: snapshot.runtime && typeof snapshot.runtime === "object" ? snapshot.runtime : null,
     },
   };
-
   const metadata = buildMetadata({
     saveId: migrated.saveId,
     leagueName: migrated.leagueName,
@@ -239,28 +231,18 @@ export function migrateLeagueSave(record = null) {
     updatedAt: migrated.updatedAt,
     schemaVersion: migrated.schemaVersion,
   });
-
-  return {
-    ...migrated,
-    ...metadata,
-    schemaVersion: CURRENT_LEAGUE_SAVE_SCHEMA_VERSION,
-  };
+  return { ...migrated, ...metadata, schemaVersion: migrated.snapshot.runtime ? CURRENT_LEAGUE_SAVE_SCHEMA_VERSION : Math.max(1, migrated.schemaVersion) };
 }
+
+export async function flushLeagueSaveSlotWrites() { await saveMutationChain.catch(() => {}); }
 
 export async function listLeagueSaves() {
   const records = await runTransaction("readonly", (store) => store.getAll());
-  return (records || [])
-    .map(migrateLeagueSave)
-    .filter(Boolean)
-    .filter((save) => {
-      const name = normalizeLeagueName(save?.leagueName || "");
-      const source = String(save?.snapshot?.source || "").toLowerCase();
-      // Older V14 builds auto-created a noisy "Recovered League" whenever an
-      // active save ID was missing. Hide those generated slots from the normal
-      // continue screen so only intentional saves are shown.
-      return !(name === "recovered league" && source.includes("recovered"));
-    })
-    .sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
+  return (records || []).map(migrateLeagueSave).filter(Boolean).filter((save) => {
+    const name = normalizeLeagueName(save?.leagueName || "");
+    const source = String(save?.snapshot?.source || "").toLowerCase();
+    return !(name === "recovered league" && source.includes("recovered"));
+  }).sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
 }
 
 export async function getLeagueSave(saveId) {
@@ -272,114 +254,148 @@ export async function getLeagueSave(saveId) {
 export async function upsertLeagueSave(record) {
   const migrated = migrateLeagueSave(record);
   if (!migrated) throw new Error("Cannot save an empty league slot.");
-  await runTransaction("readwrite", (store) => store.put(migrated));
-  return migrated;
+  return enqueueSaveMutation(() => writeLeagueSaveRecord(migrated));
 }
 
 export async function createLeagueSave({ leagueName, leagueData, selectedTeamName, activate = true, source = "create" } = {}) {
   if (!leagueHasTeams(leagueData)) throw new Error("Cannot create a save before a roster is loaded.");
   const cleanLeagueName = String(leagueName || "").trim() || "Untitled League";
+  const existingSaves = await listLeagueSaves();
+  if (existingSaves.length >= MAX_LEAGUE_SAVE_SLOTS) {
+    throw new Error(`You can keep up to ${MAX_LEAGUE_SAVE_SLOTS} league saves. Delete a save before starting another league.`);
+  }
   await assertUniqueLeagueName(cleanLeagueName);
+  await flushLeagueSaveSlotWrites();
+  const captured = await captureActiveLeagueRuntime({ leagueData });
   const now = new Date().toISOString();
-  const record = buildSaveRecord({ leagueName: cleanLeagueName, leagueData, selectedTeamName, createdAt: now, updatedAt: now, source });
-  await upsertLeagueSave(record);
+  const record = buildSaveRecord({
+    leagueName: cleanLeagueName,
+    leagueData: captured.leagueData || leagueData,
+    selectedTeamName,
+    createdAt: now,
+    updatedAt: now,
+    source,
+    runtime: captured.runtime,
+  });
+  await enqueueSaveMutation(() => writeLeagueSaveRecord(record));
   if (activate) setActiveLeagueSaveId(record.saveId);
   return record;
 }
 
-export async function updateLeagueSaveSnapshot(saveId, { leagueName, leagueData, selectedTeamName, source = "update" } = {}) {
+export async function updateLeagueSaveSnapshot(saveId, { leagueName, leagueData, selectedTeamName, source = "update", runtime, savedRoute } = {}) {
   const id = String(saveId || "").trim();
-  if (!id) return null;
-  if (!leagueHasTeams(leagueData)) return null;
-
-  const existing = (await getLeagueSave(id)) || {};
-  const now = new Date().toISOString();
-  const record = buildSaveRecord({
-    saveId: id,
-    leagueName: leagueName || existing.leagueName || "Untitled League",
-    leagueData,
-    selectedTeamName,
-    createdAt: existing.createdAt || now,
-    updatedAt: now,
-    source,
+  if (!id || !leagueHasTeams(leagueData)) return null;
+  return enqueueSaveMutation(async () => {
+    const existing = (await getLeagueSave(id)) || {};
+    const now = new Date().toISOString();
+    const record = buildSaveRecord({
+      existing,
+      saveId: id,
+      leagueName: leagueName || existing.leagueName || "Untitled League",
+      leagueData,
+      selectedTeamName,
+      createdAt: existing.createdAt || now,
+      updatedAt: now,
+      source,
+      runtime,
+      savedRoute,
+    });
+    return writeLeagueSaveRecord(record);
   });
-  await upsertLeagueSave(record);
-  return record;
 }
 
 export async function updateActiveLeagueSaveSnapshot({ leagueData, selectedTeamName, source = "active_autosave" } = {}) {
   if (!leagueHasTeams(leagueData)) return null;
   const activeId = getActiveLeagueSaveId();
-  if (!activeId) {
-    // Do not invent "Recovered League" saves just because the app has default
-    // roster data in memory. New League and Continue League are the only flows
-    // that should create/activate save slots.
-    return null;
-  }
+  if (!activeId) return null;
   return updateLeagueSaveSnapshot(activeId, { leagueData, selectedTeamName, source });
 }
 
 export function updateActiveLeagueSaveSnapshotInBackground(payload = {}) {
-  updateActiveLeagueSaveSnapshot(payload).catch((error) => {
-    console.warn("[leagueSaves] Could not update active league save slot.", error);
+  updateActiveLeagueSaveSnapshot(payload).catch((error) => console.warn("[leagueSaves] Could not update active league save slot.", error));
+}
+
+export async function checkpointActiveLeagueSave({ leagueData, selectedTeamName, source = "manual_checkpoint", savedRoute } = {}) {
+  if (!leagueHasTeams(leagueData)) return null;
+  const activeId = getActiveLeagueSaveId();
+  if (!activeId) return null;
+  await flushLeagueSaveSlotWrites();
+  const captured = await captureActiveLeagueRuntime({ leagueData });
+  return updateLeagueSaveSnapshot(activeId, {
+    leagueData: captured.leagueData || leagueData,
+    selectedTeamName,
+    source,
+    runtime: captured.runtime,
+    savedRoute: savedRoute ?? currentRoute(),
   });
 }
 
 export async function renameLeagueSave(saveId, leagueName) {
-  const existing = await getLeagueSave(saveId);
+  const cleanId = String(saveId || "").trim();
+  const existing = await getLeagueSave(cleanId);
   if (!existing) throw new Error("Save slot not found.");
   const cleanLeagueName = String(leagueName || "").trim() || existing.leagueName || "Untitled League";
   await assertUniqueLeagueName(cleanLeagueName, { ignoreSaveId: existing.saveId });
-  const renamed = {
-    ...existing,
-    leagueName: cleanLeagueName,
-    updatedAt: new Date().toISOString(),
-  };
-  const normalized = migrateLeagueSave(renamed);
-  await upsertLeagueSave(normalized);
-  return normalized;
+  return enqueueSaveMutation(async () => {
+    const latest = (await getLeagueSave(cleanId)) || existing;
+    const normalized = migrateLeagueSave({ ...latest, leagueName: cleanLeagueName, updatedAt: new Date().toISOString() });
+    return writeLeagueSaveRecord(normalized);
+  });
 }
 
 export async function deleteLeagueSave(saveId) {
   const id = String(saveId || "").trim();
   if (!id) return;
-  await runTransaction("readwrite", (store) => store.delete(id));
+  await enqueueSaveMutation(() => runTransaction("readwrite", (store) => store.delete(id)));
   if (getActiveLeagueSaveId() === id) clearActiveLeagueSaveId();
 }
 
+export function getResumeRouteForLeagueSave(record = null) {
+  const selectedTeamName = record?.snapshot?.selectedTeamName || record?.controlledTeamName || "";
+  const route = String(record?.snapshot?.savedRoute || "").trim();
+  if (route === "/team-selector" && !selectedTeamName) return route;
+  if (selectedTeamName && SAFE_RESUME_ROUTES.has(route) && route !== "/team-selector") return route;
+  return selectedTeamName ? "/team-hub" : "/team-selector";
+}
+
 export async function restoreLeagueSaveToActive(saveId, { setLeagueData, setSelectedTeam } = {}) {
+  await flushLeagueSaveSlotWrites();
   const record = await getLeagueSave(saveId);
   if (!record?.snapshot?.leagueData) throw new Error("This save slot has no league data to load.");
 
   const leagueData = clone(record.snapshot.leagueData);
   const selectedTeamName = record.snapshot.selectedTeamName || record.controlledTeamName || "";
 
-  setActiveLeagueSaveId(record.saveId);
-  await saveLeagueData(leagueData, { source: "restoreLeagueSaveToActive" });
+  await restoreLeagueRuntime({
+    runtime: record.snapshot.runtime,
+    leagueData,
+    selectedTeamName,
+  });
 
+  setActiveLeagueSaveId(record.saveId);
   try {
-    if (selectedTeamName) localStorage.setItem("selectedTeam", JSON.stringify(selectedTeamName));
-    else localStorage.removeItem("selectedTeam");
     window.__leagueData = leagueData;
     window.leagueData = leagueData;
   } catch {}
 
-  if (typeof setLeagueData === "function") setLeagueData(leagueData, { source: "restoreLeagueSaveToActive" });
+  if (typeof setLeagueData === "function") setLeagueData(leagueData, { source: "restoreLeagueSaveToActive", persist: false });
   if (typeof setSelectedTeam === "function") setSelectedTeam(selectedTeamName || null);
 
-  return { record, leagueData, selectedTeamName };
+  return {
+    record,
+    leagueData,
+    selectedTeamName,
+    resumeRoute: getResumeRouteForLeagueSave(record),
+    migratedFromV1: !record.snapshot.runtime,
+  };
 }
 
 export function downloadLeagueSaveBackup(record) {
   const migrated = migrateLeagueSave(record);
   if (!migrated || typeof document === "undefined") return;
-
   const blob = new Blob([JSON.stringify(migrated, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
-  const safeName = String(migrated.leagueName || "league-save")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "league-save";
+  const safeName = String(migrated.leagueName || "league-save").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "league-save";
   const link = document.createElement("a");
   link.href = url;
   link.download = `${safeName}.basketball-manager-save.json`;

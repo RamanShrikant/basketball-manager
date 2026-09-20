@@ -5,7 +5,13 @@ import "./LeagueEditorTheme.css";
 import HeadshotLayoutTransform from "../components/HeadshotLayoutTransform.jsx";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { saveLeagueDataInBackground } from "../utils/leagueStorage.js";
-import { clearBoxScoresFromDB } from "../utils/indexedDbStorage.js";
+import { clearActiveLeagueRuntime } from "../storage/saveManager.js";
+import {
+  checkpointActiveLeagueSave,
+  clearActiveLeagueSaveId,
+  flushLeagueSaveSlotWrites,
+  getActiveLeagueSaveId,
+} from "../storage/leagueSaves.js";
 import {
   getContractSeasonYear,
   getDraftYear,
@@ -13,18 +19,15 @@ import {
   withNormalizedSeasonContext,
 } from "../utils/seasonContext.js";
 import { DIVISION_NAMES, getDefaultDivisionForTeam, getDivisionConference, normalizeLeagueDivisions } from "../utils/leagueDivisions.js";
-import { clearScheduleStorage } from "../utils/scheduleStorage.js";
 import {
   readCustomDraftClassForYear,
   readCustomDraftClassesIndex,
   replaceCustomDraftClasses,
 } from "../utils/customDraftClassStorage.js";
-import { clearOffseasonMoodBaselineStorage } from "../utils/offseasonMoodBaselineStorage.js";
 
 const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 const DEFAULT_DRAFT_CLASS_YEAR = 2027;
 const LEAGUE_META_KEY = "bm_league_meta_v1";
-const RESULT_V3_PREFIX = "bm_result_v3_";
 
 function validSeasonYear(value) {
   const y = Number(value);
@@ -70,86 +73,37 @@ function writeLeagueMetaSeason(seasonYear, league = {}) {
   } catch {}
 }
 
-function clearRuntimeSeasonStores() {
-  clearScheduleStorage();
-  const exactKeys = [
-    "bm_results_v2",
-    "bm_results_index_v3",
-    "bm_player_stats_v1",
-    "bm_clutch_stats_v1",
-    "bm_awards_latest",
-    "bm_awards_v1",
-    "bm_postseason_v2",
-    "bm_champ_v1",
-    "bm_finals_mvp_latest",
-    "bm_finals_mvp_seen_v1",
-    "bm_all_stars_v1",
-    "bm_offseason_state_v1",
-    "bm_retirement_results_v1",
-    "bm_progression_deltas_v1",
-    "bm_progression_meta_v1",
-    "bm_draft_lottery_v1",
-    "bm_draft_state_v1",
-    "bm_trade_deadline_status_v1",
-    "bm_league_clock_v1",
-    "bm_calendar_current_date_v1",
-    "bm_calendar_cursor_date_v1",
-    "bm_calendar_cursor_v1",
-    "bm_trade_builder_v1",
-    "bm_trade_finder_state_v1",
-    "bm_trade_finder_results_v1",
-    "bm_trade_debug_v1",
-    "bm_trade_desk_items_v1",
-    "bm_free_agency_last_route_v1",
-    "bm_player_team_options_results_v1",
-    "bm_season_stats_archive_v1",
-    "bm_power_rankings_v1",
-    "bm_dev_lottery_system_v1",
-    "bm_pending_calendar_sim_v1",
-    "bm_calendar_mood_context_v1",
-    "bm_cpu_trade_bank_test_config_v1",
-    "bm_cpu_trade_bank_snapshot_v1",
-    "bm_offseason_mood_baseline_v1",
-    "bm_offseason_trade_snapshot_v1",
-  ];
+async function clearRuntimeSeasonStores() {
+  // League Editor imports are a new active runtime, never a mutation of the
+  // previously played save slot. If someone reached the editor without using
+  // Save & Exit first, checkpoint the live universe before detaching it.
+  const activeSaveId = getActiveLeagueSaveId();
+  if (activeSaveId) {
+    const liveLeague = (() => {
+      try { return window.__leagueData || window.leagueData || null; } catch { return null; }
+    })();
+    const selectedTeamName = (() => {
+      try {
+        const parsed = JSON.parse(localStorage.getItem("selectedTeam") || "null");
+        return typeof parsed === "string" ? parsed : parsed?.name || "";
+      } catch { return ""; }
+    })();
 
-  for (const key of exactKeys) {
-    try {
-      localStorage.removeItem(key);
-    } catch {}
+    if (liveLeague && (Array.isArray(liveLeague?.teams) || liveLeague?.conferences)) {
+      await checkpointActiveLeagueSave({
+        leagueData: liveLeague,
+        selectedTeamName,
+        source: "LeagueEditor.beforeImport",
+      });
+    } else {
+      await flushLeagueSaveSlotWrites();
+    }
   }
 
-  try {
-    for (let i = localStorage.length - 1; i >= 0; i--) {
-      const key = localStorage.key(i);
-      if (!key) continue;
-      if (
-        key.startsWith(RESULT_V3_PREFIX) ||
-        key.startsWith("bm_calendar_cursor_v1_") ||
-        key.startsWith("bm_calendar_sim_cursor_v1_") ||
-        key.startsWith("bm_all_star_handled_v1_") ||
-        key.startsWith("bm_trade_deadline_handled_v1_") ||
-        key.startsWith("gameplan_") ||
-        key.startsWith("bm_box_score_") ||
-        key.startsWith("bm_draft_class_mode_") ||
-        key.startsWith("bm_draft_state_v1_") ||
-        key.startsWith("bm_draft_lottery_v1_")
-      ) {
-        localStorage.removeItem(key);
-      }
-    }
-  } catch {}
-
-  try {
-    clearOffseasonMoodBaselineStorage();
-  } catch {}
-
-  try {
-    clearBoxScoresFromDB().catch((err) => {
-      console.warn("[LeagueEditor] IndexedDB box-score clear failed", err);
-    });
-  } catch {}
+  clearActiveLeagueSaveId();
+  await clearActiveLeagueRuntime({ resetCaches: true });
 }
+
 
 function safeJSON(raw, fallback = null) {
   try {
@@ -2600,7 +2554,7 @@ const normalizePlayer = (p) => {
                 const f = e.target.files[0];
                 if (!f) return;
                 const r = new FileReader();
-                r.onload = (x) => {
+                r.onload = async (x) => {
                   try {
                     const d = JSON.parse(x.target.result);
                     if (d.leagueName && d.conferences) {
@@ -2633,7 +2587,7 @@ const normalizePlayer = (p) => {
                       const resolvedSeasonYear = resolveLeagueSeasonYear(d);
                       const timed = withLeagueTimingFields(normalizeLeagueDivisions(updated), resolvedSeasonYear);
 
-                      clearRuntimeSeasonStores();
+                      await clearRuntimeSeasonStores();
                       writeLeagueMetaSeason(resolvedSeasonYear, timed);
 
                       setLeagueName(timed.leagueName);

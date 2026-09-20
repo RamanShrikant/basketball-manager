@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import LZString from "lz-string";
 import { useGame } from "../context/GameContext";
 import { playSound, SOUND_KEYS } from "../audio/soundManager.js";
-import { updateActiveLeagueSaveSnapshot } from "../storage/leagueSaves.js";
+import { checkpointActiveLeagueSave, clearActiveLeagueSaveId } from "../storage/leagueSaves.js";
 import {
   isAllStarsAvailable,
   readOffseasonState as readAllStarsOffseasonState,
@@ -282,6 +282,7 @@ export default function TeamHubSidebar() {
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
   const [exitBusy, setExitBusy] = useState(false);
+  const [exitError, setExitError] = useState("");
 
   const offseasonState = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {});
   const postseasonState = safeJSON(localStorage.getItem(POSTSEASON_KEY), null);
@@ -466,6 +467,7 @@ export default function TeamHubSidebar() {
     playSound(SOUND_KEYS.SIDEBAR_NAVIGATION);
 
     if (item.action === "saveExit") {
+      setExitError("");
       setExitConfirmOpen(true);
       return;
     }
@@ -516,20 +518,26 @@ export default function TeamHubSidebar() {
   const confirmSaveAndExit = async () => {
     if (exitBusy) return;
     setExitBusy(true);
+    setExitError("");
     try {
-      await updateActiveLeagueSaveSnapshot({
+      const saved = await checkpointActiveLeagueSave({
         leagueData,
         selectedTeamName: selectedTeam?.name || "",
         source: "TeamHubSidebar.saveAndExit",
+        savedRoute: location.pathname,
       });
-    } catch (error) {
-      console.warn("[TeamHubSidebar] Save & Exit could not update the active save slot.", error);
-    } finally {
+      if (!saved) throw new Error("No active league save slot is available.");
+
       clearTradeBuilderResumeWhenLeaving(location.pathname, "/league-editor");
       writeTeamHubReturnContext(null);
-      setExitBusy(false);
+      clearActiveLeagueSaveId();
       setExitConfirmOpen(false);
       navigate("/league-editor");
+    } catch (error) {
+      console.warn("[TeamHubSidebar] Save & Exit could not checkpoint the active league.", error);
+      setExitError(error?.message || "The league could not be saved. Your game is still open.");
+    } finally {
+      setExitBusy(false);
     }
   };
 
@@ -614,8 +622,9 @@ export default function TeamHubSidebar() {
           <p className={styles.exitModalKicker}>Save & Exit</p>
           <h2 id="save-exit-title">Exit this league?</h2>
           <p>Your current league will be saved locally before returning to the League Editor.</p>
+          {exitError && <p className={styles.exitModalError}>{exitError}</p>}
           <div className={styles.exitModalActions}>
-            <button type="button" className={styles.exitModalSecondary} disabled={exitBusy} onClick={() => setExitConfirmOpen(false)}>
+            <button type="button" className={styles.exitModalSecondary} disabled={exitBusy} onClick={() => { setExitError(""); setExitConfirmOpen(false); }}>
               No, stay here
             </button>
             <button type="button" className={styles.exitModalPrimary} disabled={exitBusy} onClick={confirmSaveAndExit}>

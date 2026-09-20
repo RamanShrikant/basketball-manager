@@ -10,18 +10,16 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8");
 const play = read("src/pages/Play.jsx");
 const editor = read("src/pages/LeagueEditor.jsx");
 
-for (const key of [
-  "bm_league_clock_v1",
-  "bm_trade_deadline_status_v1",
-  "bm_calendar_current_date_v1",
-  "bm_calendar_cursor_date_v1",
-  "bm_calendar_sim_cursor_v1_",
-  "bm_trade_deadline_handled_v1_",
-]) {
-  assert.match(play, new RegExp(key), `New-league startup reset must clear ${key}.`);
-  assert.match(editor, new RegExp(key), `League import reset must clear ${key}.`);
-}
-assert.match(play, /runtimePrefixes\.some\(\(prefix\) => key\.startsWith\(prefix\)\)/);
+const saveManager = read("src/storage/saveManager.js");
+const saveRegistry = read("src/storage/saveStorageRegistry.js");
+assert.match(play, /clearActiveLeagueRuntime\(\{ resetCaches: true \}\)/);
+assert.match(play, /clearActiveLeagueSaveId\(\)/);
+assert.match(saveManager, /clearLeagueLocalStorage\(\)/);
+assert.match(saveManager, /replaceBasketballManagerRuntimeSnapshot\(null\)/);
+assert.match(saveRegistry, /"bm_"/);
+assert.match(editor, /clearActiveLeagueRuntime\(\{ resetCaches: true \}\)/);
+assert.match(editor, /clearActiveLeagueSaveId\(\)/);
+assert.doesNotMatch(editor, /function clearRuntimeSeasonStores\(\) \{[\s\S]{0,1600}bm_calendar_cursor_v1_/);
 console.log("PASS fresh_league.trade_runtime_reset");
 
 const playoffCss = read("src/pages/PlayoffPicture.module.css");

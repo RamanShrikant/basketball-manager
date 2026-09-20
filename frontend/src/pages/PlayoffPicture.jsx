@@ -133,21 +133,21 @@ function projectedConference(seeds = []) {
 
 function BracketView({ conferenceKeys, picture, logos }) {
   return (
-    <div className={`${styles.scroll} min-h-0 flex-1 overflow-auto px-5 pb-5`}>
-      <div className="mx-auto grid min-w-[1260px] max-w-[1560px] grid-cols-[1fr_260px_1fr] gap-5 pt-4">
+    <div className={`${styles.scroll} min-h-0 flex-1 overflow-auto p-5`}>
+      <div className="mx-auto grid h-full min-h-[520px] min-w-[1260px] max-w-[1560px] grid-cols-[1fr_260px_1fr] gap-5">
         {conferenceKeys.map((confKey, conferenceIndex) => {
           const conf = picture?.conferences?.[confKey] || {};
           const r1 = conf?.rounds?.r1 || {};
           const r2 = conf?.rounds?.r2 || {};
           const r3 = conf?.rounds?.r3 || {};
           const content = (
-            <section className="rounded-2xl border border-white/10 bg-neutral-900/65 p-4">
+            <section className="flex h-full min-h-[520px] flex-col rounded-2xl border border-white/10 bg-neutral-900/65 p-4">
               <h2 className={`mb-3 text-xl font-black ${conferenceIndex ? "text-right" : ""}`}>{confKey}</h2>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="space-y-3">
+              <div className="grid min-h-0 flex-1 grid-cols-3 gap-3">
+                <div className="flex min-h-0 flex-col justify-between gap-3">
                   {[[r1.s1v8,"First Round"],[r1.s4v5,"First Round"],[r1.s3v6,"First Round"],[r1.s2v7,"First Round"]].map(([series,title], i) => { const card=seriesCard(series,title,logos); return <MatchupCard key={i} {...card}/>; })}
                 </div>
-                <div className="flex flex-col justify-around gap-4 py-10">
+                <div className="flex min-h-0 flex-col justify-around gap-4 py-8">
                   {[r2.top,r2.bot].map((series,i)=>{ const card=seriesCard(series,"Conference Semifinals",logos); return <MatchupCard key={i} {...card}/>; })}
                 </div>
                 <div className="flex items-center"><div className="w-full"><MatchupCard {...seriesCard(r3.confFinals,"Conference Finals",logos)} /></div></div>
@@ -155,12 +155,12 @@ function BracketView({ conferenceKeys, picture, logos }) {
             </section>
           );
           return (
-            <div key={confKey} className={conferenceIndex === 0 ? "col-start-1 row-start-1" : "col-start-3 row-start-1"}>
+            <div key={confKey} className={`${conferenceIndex === 0 ? "col-start-1 row-start-1" : "col-start-3 row-start-1"} h-full`}>
               {content}
             </div>
           );
         })}
-        <div className="col-start-2 row-start-1 flex items-center">
+        <div className="col-start-2 row-start-1 flex h-full items-center">
           <div className="w-full rounded-2xl border border-orange-400/20 bg-neutral-900/85 p-3">
             <div className="mb-2 text-center text-xs font-black uppercase tracking-[0.2em] text-orange-300">NBA Finals</div>
             <MatchupCard {...seriesCard(picture?.finals,"Finals",logos)} />
@@ -231,13 +231,15 @@ export default function PlayoffPicture() {
     <PageFade>
       <div className={styles.page}>
         <div className={`${styles.stage} flex h-full min-h-0 flex-col`}>
-          <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-5">
-            <button onClick={()=>navigate("/team-hub", { state: isOffseason ? { offseasonMode:true, returnTo:"/offseason" } : undefined })} className="rounded-lg bg-neutral-800 px-4 py-2 text-xs font-black hover:bg-neutral-700">Team Hub</button>
-            <div className="text-center">
+          <header className="grid h-16 shrink-0 grid-cols-[220px_minmax(0,1fr)_220px] items-center border-b border-white/10 px-5">
+            <div className="justify-self-start">
+              <button onClick={()=>navigate("/team-hub", { state: isOffseason ? { offseasonMode:true, returnTo:"/offseason" } : undefined })} className="rounded-lg bg-neutral-800 px-4 py-2 text-xs font-black hover:bg-neutral-700">Team Hub</button>
+            </div>
+            <div className="min-w-0 text-center">
               <div className="text-[10px] font-black uppercase tracking-[0.25em] text-orange-300/70">{historical ? "Most Recent Completed Postseason" : "If the season ended today"}</div>
               <h1 className="text-2xl font-black">PLAYOFF PICTURE</h1>
             </div>
-            <div className="flex w-[220px] justify-end gap-2">
+            <div className="flex w-[220px] justify-self-end justify-end gap-2">
               <button onClick={()=>setView("playin")} className={`rounded-lg px-3 py-2 text-xs font-black ${view==="playin"?"bg-orange-600":"bg-neutral-800 hover:bg-neutral-700"}`}>Play-In</button>
               <button onClick={()=>setView("playoffs")} className={`rounded-lg px-3 py-2 text-xs font-black ${view==="playoffs"?"bg-orange-600":"bg-neutral-800 hover:bg-neutral-700"}`}>Playoffs</button>
             </div>

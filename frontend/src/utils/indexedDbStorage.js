@@ -386,3 +386,56 @@ export async function deleteAppDataByPrefixFromDB(prefix) {
 
   return true;
 }
+
+// ------------------------------------------------------------
+// SAVE-SLOT RUNTIME SNAPSHOTS
+// ------------------------------------------------------------
+function readAllRowsFromStore(db, storeName) {
+  return new Promise((resolve, reject) => {
+    try {
+      const tx = db.transaction(storeName, "readonly");
+      const store = tx.objectStore(storeName);
+      const request = store.getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error || new Error(`Failed to snapshot IndexedDB store: ${storeName}`));
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+export async function exportBasketballManagerRuntimeSnapshot() {
+  const db = await openBasketballManagerDb();
+  const [boxScores, appData] = await Promise.all([
+    readAllRowsFromStore(db, BOX_SCORE_STORE),
+    readAllRowsFromStore(db, APP_DATA_STORE),
+  ]);
+  return { version: 1, capturedAt: Date.now(), boxScores, appData };
+}
+
+export async function replaceBasketballManagerRuntimeSnapshot(snapshot = null) {
+  const boxScores = Array.isArray(snapshot?.boxScores) ? snapshot.boxScores : [];
+  const appData = Array.isArray(snapshot?.appData) ? snapshot.appData : [];
+  const db = await openBasketballManagerDb();
+
+  await new Promise((resolve, reject) => {
+    let tx;
+    try {
+      tx = db.transaction([BOX_SCORE_STORE, APP_DATA_STORE], "readwrite");
+      const boxStore = tx.objectStore(BOX_SCORE_STORE);
+      const appStore = tx.objectStore(APP_DATA_STORE);
+      boxStore.clear();
+      appStore.clear();
+      for (const row of boxScores) if (row?.gameId) boxStore.put(row);
+      for (const row of appData) if (row?.key) appStore.put(row);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error("Failed to replace runtime IndexedDB snapshot."));
+    tx.onabort = () => reject(tx.error || new Error("Runtime IndexedDB replacement was aborted."));
+  });
+
+  return { boxScores: boxScores.length, appData: appData.length };
+}

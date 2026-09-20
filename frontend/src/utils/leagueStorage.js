@@ -24,6 +24,30 @@ const LAST_SAVED_KEY = "leagueDataLastSavedAt";
 
 let originalLocalStorageSetItem = null;
 let leagueDataSaveInProgress = false;
+let activeLeagueDataWriteCount = 0;
+let leagueDataWriteWaiters = [];
+
+function beginTrackedLeagueDataWrite() {
+  activeLeagueDataWriteCount += 1;
+  leagueDataSaveInProgress = true;
+}
+
+function endTrackedLeagueDataWrite() {
+  activeLeagueDataWriteCount = Math.max(0, activeLeagueDataWriteCount - 1);
+  leagueDataSaveInProgress = activeLeagueDataWriteCount > 0;
+  if (activeLeagueDataWriteCount === 0 && leagueDataWriteWaiters.length) {
+    const waiters = leagueDataWriteWaiters;
+    leagueDataWriteWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+}
+
+export async function flushLeagueDataWrites() {
+  while (activeLeagueDataWriteCount > 0) {
+    await new Promise((resolve) => leagueDataWriteWaiters.push(resolve));
+  }
+}
+
 let leagueStorageIdentitySequence = 0;
 
 function hasIndexedDB() {
@@ -296,6 +320,22 @@ function reconcileNewerInjuryOverlayBeforeFullSave(leagueData = null, overlayRec
   }
 
   return applyInjuryStateOverlay(leagueData, overlayRecord);
+}
+
+function reconcileNewerCpuTradeBankOverlayBeforeFullSave(leagueData = null, overlayRecord = null) {
+  const candidate = mergeCpuTradeBankOverlayIntoLeague(leagueData, { updatedAt: 0 }, overlayRecord);
+  if (!candidate.applied) return candidate;
+
+  const incomingUpdatedAt = Date.parse(leagueData?.cpuTradeBankState?.updatedAt || "") || 0;
+  const overlayStateUpdatedAt = Date.parse(overlayRecord?.cpuTradeBankState?.updatedAt || "") || 0;
+  const overlayRecordUpdatedAt = Number(overlayRecord?.updatedAt || 0);
+  const overlayUpdatedAt = Math.max(overlayStateUpdatedAt, overlayRecordUpdatedAt);
+
+  if (incomingUpdatedAt && incomingUpdatedAt >= overlayUpdatedAt) {
+    return { leagueData, applied: false, reason: "incoming_cpu_trade_bank_is_current" };
+  }
+
+  return candidate;
 }
 
 export function buildCpuTradeBankOverlayRecord(leagueData = null, updatedAt = Date.now()) {
@@ -713,37 +753,47 @@ export async function saveLeagueData(leagueData, diagnostics = {}) {
   let persistedLeagueData = leagueData;
   let savedAt = Date.now();
   try {
-    leagueDataSaveInProgress = true;
+    beginTrackedLeagueDataWrite();
 
     await runStoreTransaction("readwrite", (store) => {
-      // Read and reconcile the injury sidecar INSIDE the same read/write
-      // transaction as the full save. IndexedDB serializes writers, so a stale
-      // full-league snapshot cannot land after a newer injury/recovery snapshot
-      // and silently erase it.
+      // Materialize BOTH lightweight sidecars inside the same read/write
+      // transaction as the full save before clearing either one.
       const injuryOverlayRequest = store.get(INJURY_STATE_OVERLAY_KEY);
+      const cpuTradeOverlayRequest = store.get(CPU_TRADE_BANK_OVERLAY_KEY);
+      let injuryReady = false;
+      let cpuReady = false;
+      let finalized = false;
 
-      injuryOverlayRequest.onsuccess = () => {
-        const reconciliation = reconcileNewerInjuryOverlayBeforeFullSave(
+      const finalizeFullSave = () => {
+        if (finalized || !injuryReady || !cpuReady) return;
+        finalized = true;
+
+        const injuryReconciliation = reconcileNewerInjuryOverlayBeforeFullSave(
           persistedLeagueData,
           injuryOverlayRequest.result
         );
-        persistedLeagueData = reconciliation.leagueData || persistedLeagueData;
+        persistedLeagueData = injuryReconciliation.leagueData || persistedLeagueData;
+
+        const cpuReconciliation = reconcileNewerCpuTradeBankOverlayBeforeFullSave(
+          persistedLeagueData,
+          cpuTradeOverlayRequest.result
+        );
+        persistedLeagueData = cpuReconciliation.leagueData || persistedLeagueData;
+
         ensureLeagueStorageIdentity(persistedLeagueData);
         savedAt = Date.now();
-
         store.put({
           id: ACTIVE_LEAGUE_KEY,
           leagueData: persistedLeagueData,
           updatedAt: savedAt,
           version: 5,
         });
-
-        // A full league snapshot already contains both current sidecar states.
-        // Clear them in this SAME transaction so no older overlay can survive
-        // a roster, ownership, reset, offseason, or trade-history save.
         store.delete(CPU_TRADE_BANK_OVERLAY_KEY);
         store.delete(INJURY_STATE_OVERLAY_KEY);
       };
+
+      injuryOverlayRequest.onsuccess = () => { injuryReady = true; finalizeFullSave(); };
+      cpuTradeOverlayRequest.onsuccess = () => { cpuReady = true; finalizeFullSave(); };
 
       return injuryOverlayRequest;
     });
@@ -773,7 +823,7 @@ export async function saveLeagueData(leagueData, diagnostics = {}) {
 
     return persistedLeagueData;
   } finally {
-    leagueDataSaveInProgress = false;
+    endTrackedLeagueDataWrite();
     if (diagnosticsEnabled) {
       const diagnosticEndedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
       recordMultiYearStorageWrite({

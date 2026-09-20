@@ -28,7 +28,8 @@
     "check:player-data-integrity": "node scripts/player-data-integrity-regression.mjs",
     "check:offseason-stability-v2": "node scripts/offseason-stability-v2-regression.mjs && python scripts/offseason-stability-v2-regression.py",
     "check:surgical-patch": "node scripts/bm-surgical-patch-regression.mjs",
-    "check:fresh-league-ui": "node scripts/fresh-league-ui-readability-regression.mjs"
+    "check:fresh-league-ui": "node scripts/fresh-league-ui-readability-regression.mjs",
+    "check:multi-save-v2": "node scripts/multi-save-isolation-regression.mjs"
   },
   "dependencies": {
     "lz-string": "^1.5.0",

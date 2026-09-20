@@ -2,16 +2,20 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { saveLeagueData } from "../utils/leagueStorage.js";
-import { clearScheduleStorage } from "../utils/scheduleStorage.js";
 import {
+  checkpointActiveLeagueSave,
+  clearActiveLeagueSaveId,
   createLeagueSave,
   deleteLeagueSave,
   downloadLeagueSaveBackup,
+  getActiveLeagueSaveId,
   getLeagueSave,
   listLeagueSaves,
+  MAX_LEAGUE_SAVE_SLOTS,
   renameLeagueSave,
   restoreLeagueSaveToActive,
 } from "../storage/leagueSaves.js";
+import { clearActiveLeagueRuntime } from "../storage/saveManager.js";
 import {
   deleteCustomDraftClassForYear,
   readCustomDraftClassesIndex,
@@ -121,44 +125,8 @@ function clearDraftStateForYearIfNotStarted(seasonYear) {
   }
 }
 
-async function resetRuntimeStateForNewLeague() {
-  try {
-    await clearScheduleStorage();
-  } catch {}
-  try {
-    const exactRuntimeKeys = new Set([
-      "bm_results_index_v3",
-      "bm_calendar_cursor_v1",
-      "bm_calendar_current_date_v1",
-      "bm_calendar_cursor_date_v1",
-      "bm_calendar_mood_context_v1",
-      "bm_league_clock_v1",
-      "bm_trade_deadline_status_v1",
-      "bm_pending_calendar_sim_v1",
-      "bm_postseason_v2",
-      "bm_offseason_state_v1",
-    ]);
-    const runtimePrefixes = [
-      "bm_result_v3_",
-      "bm_box_score_",
-      "bm_calendar_cursor_v1_",
-      "bm_calendar_sim_cursor_v1_",
-      "bm_trade_deadline_handled_v1_",
-    ];
-    const keysToRemove = [];
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const key = localStorage.key(i);
-      if (!key) continue;
-      if (exactRuntimeKeys.has(key) || runtimePrefixes.some((prefix) => key.startsWith(prefix))) {
-        keysToRemove.push(key);
-      }
-    }
-    keysToRemove.forEach((key) => localStorage.removeItem(key));
-  } catch {}
-}
-
 export default function Play() {
-  const { leagueData, setLeagueData, setSelectedTeam } = useGame();
+  const { leagueData, setLeagueData, selectedTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
 
   const [screen, setScreen] = useState("menu");
@@ -385,6 +353,49 @@ export default function Play() {
     return normalized;
   };
 
+  const beginNewLeagueSetup = async () => {
+    if (startingGame || loadingSaveId) return;
+    setStartingGame(true);
+    setError("");
+    setSavesError("");
+    try {
+      const existingSaves = await listLeagueSaves();
+      if (existingSaves.length >= MAX_LEAGUE_SAVE_SLOTS) {
+        throw new Error(`You can keep up to ${MAX_LEAGUE_SAVE_SLOTS} league saves. Delete a save before starting another league.`);
+      }
+
+      if (getActiveLeagueSaveId() && leagueData) {
+        await checkpointActiveLeagueSave({
+          leagueData,
+          selectedTeamName: selectedTeam?.name || "",
+          source: "Play.beginNewLeagueSetup",
+        });
+      }
+
+      clearActiveLeagueSaveId();
+      setSelectedTeam(null);
+      setLeagueData(null, { source: "Play.beginNewLeagueSetup", persist: false });
+      await clearActiveLeagueRuntime({ resetCaches: true });
+      try {
+        window.__leagueData = null;
+        window.leagueData = null;
+      } catch {}
+
+      setDraftClassIndex({});
+      setDraftClassModes({});
+      setCustomRosterData(null);
+      setFileName("");
+      setRosterMode("default");
+      setDraft2027Mode("default");
+      setDraftClassStatus("");
+      setScreen("new");
+    } catch (err) {
+      setError(err?.message || "Could not prepare a clean new league.");
+    } finally {
+      setStartingGame(false);
+    }
+  };
+
   const handleContinue = async () => {
     if (startingGame) return;
     setStartingGame(true);
@@ -411,7 +422,6 @@ export default function Play() {
       }
 
       setSelectedTeam(null);
-      await resetRuntimeStateForNewLeague();
       nextLeagueData = setLeagueData(nextLeagueData, { source: "Play.startNewLeague", persist: false });
       await saveLeagueData(nextLeagueData, { source: "Play.startNewLeague" });
       window.leagueData = nextLeagueData;
@@ -448,11 +458,22 @@ export default function Play() {
     setLoadingSaveId(saveId);
     setSavesError("");
     try {
-      const { selectedTeamName } = await restoreLeagueSaveToActive(saveId, { setLeagueData, setSelectedTeam });
-      navigate(selectedTeamName ? "/team-hub" : "/team-selector");
+      const activeId = getActiveLeagueSaveId();
+      if (activeId && leagueData) {
+        await checkpointActiveLeagueSave({
+          leagueData,
+          selectedTeamName: selectedTeam?.name || "",
+          source: activeId === saveId ? "Play.resumeActiveSave" : "Play.beforeSaveSwitch",
+        });
+      }
+
+      const { resumeRoute } = await restoreLeagueSaveToActive(saveId);
+      // A hard navigation is intentional: it discards every module-level cache
+      // from the previous universe, then the normal boot sequence hydrates the
+      // selected save from its restored IndexedDB/localStorage runtime.
+      window.location.assign(resumeRoute || "/team-hub");
     } catch (err) {
       setSavesError(err?.message || "Could not continue this save.");
-    } finally {
       setLoadingSaveId("");
     }
   };
@@ -483,7 +504,13 @@ export default function Play() {
     if (!ok) return;
     setSaveBusyId(save.saveId);
     try {
+      const deletingActiveSave = getActiveLeagueSaveId() === save.saveId;
       await deleteLeagueSave(save.saveId);
+      if (deletingActiveSave) {
+        setSelectedTeam(null);
+        setLeagueData(null, { source: "Play.deleteActiveSave", persist: false });
+        await clearActiveLeagueRuntime({ resetCaches: true });
+      }
       await refreshSaveSlots();
     } catch (err) {
       setSavesError(err?.message || "Could not delete this save.");
@@ -495,6 +522,13 @@ export default function Play() {
   const exportSave = async (save) => {
     setSaveBusyId(save.saveId);
     try {
+      if (getActiveLeagueSaveId() === save.saveId && leagueData) {
+        await checkpointActiveLeagueSave({
+          leagueData,
+          selectedTeamName: selectedTeam?.name || "",
+          source: "Play.exportSave",
+        });
+      }
       const full = await getLeagueSave(save.saveId);
       downloadLeagueSaveBackup(full);
     } catch (err) {
@@ -527,7 +561,7 @@ export default function Play() {
             <div className="mt-8 grid gap-3 md:grid-cols-2">
               <button
                 type="button"
-                onClick={() => { setScreen("new"); setError(""); }}
+                onClick={beginNewLeagueSetup}
                 className="group rounded-xl border border-[#252525] border-l-4 border-l-orange-600 bg-[#0b0b0b] p-5 text-left transition hover:border-orange-500/45 hover:bg-[#13100d]"
               >
                 <span className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">Start</span>
@@ -563,7 +597,7 @@ export default function Play() {
             <div>
               <p className="mb-2 text-xs font-black uppercase tracking-[0.22em] text-orange-300">Local Saves</p>
               <h1 className="text-5xl font-black tracking-[-0.07em]">Continue League</h1>
-              <p className="mt-3 text-sm font-semibold text-white/50">Saved rebuilds live in this browser. Export backups before clearing site data.</p>
+              <p className="mt-3 text-sm font-semibold text-white/50">Saved rebuilds live in this browser. Export backups before clearing site data. {saveSlots.length}/{MAX_LEAGUE_SAVE_SLOTS} slots used.</p>
             </div>
             <div className="flex gap-2">
               <button type="button" onClick={() => navigate("/league-editor")} className={quietButton}>Back to League Editor</button>
@@ -579,7 +613,7 @@ export default function Play() {
             <div className={`${chromePanel} p-8`}>
               <h2 className="text-2xl font-black">No saved leagues yet</h2>
               <p className="mt-2 text-sm font-semibold text-white/50">Start a new league and it will show up here after the first save slot is created.</p>
-              <button type="button" onClick={() => setScreen("new")} className={`${orangeButton} mt-5`}>Start New League</button>
+              <button type="button" onClick={beginNewLeagueSetup} className={`${orangeButton} mt-5`}>Start New League</button>
             </div>
           ) : (
             <div className="grid gap-3">
@@ -595,6 +629,7 @@ export default function Play() {
                           <span>{save.seasonLabel || "Season not started"}</span>
                           <span>{save.teamCount || 0} teams</span>
                           <span>Last played {new Date(save.updatedAt).toLocaleString()}</span>
+                          {Number(save.schemaVersion || 1) < 2 && <span className="text-amber-300">Legacy save · save once to upgrade</span>}
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2">
