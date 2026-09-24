@@ -17,6 +17,7 @@ import {
 } from "../storage/leagueSaves.js";
 import { clearActiveLeagueRuntime } from "../storage/saveManager.js";
 import { buildVisibleLeagueSaveSlots } from "../storage/leagueSaveSlots.js";
+import { withDevToolsEnabled } from "../utils/devTools.js";
 import {
   deleteCustomDraftClassForYear,
   readCustomDraftClassesIndex,
@@ -133,6 +134,7 @@ export default function Play() {
   const [screen, setScreen] = useState("menu");
   const [newLeagueSlotIndex, setNewLeagueSlotIndex] = useState(null);
   const [leagueName, setLeagueName] = useState("NBA 2026-27");
+  const [devToolsEnabled, setDevToolsEnabled] = useState(false);
   const [fileName, setFileName] = useState("");
   const [customRosterData, setCustomRosterData] = useState(null);
   const [rosterMode, setRosterMode] = useState("default");
@@ -393,6 +395,7 @@ export default function Play() {
       setFileName("");
       setRosterMode("default");
       setDraft2027Mode("default");
+      setDevToolsEnabled(false);
       setDraftClassStatus("");
       setNewLeagueSlotIndex(requestedSlotIndex);
       setScreen("new");
@@ -429,6 +432,7 @@ export default function Play() {
       }
 
       setSelectedTeam(null);
+      nextLeagueData = withDevToolsEnabled(nextLeagueData, devToolsEnabled);
       nextLeagueData = setLeagueData(nextLeagueData, { source: "Play.startNewLeague", persist: false });
       await saveLeagueData(nextLeagueData, { source: "Play.startNewLeague" });
       window.leagueData = nextLeagueData;
@@ -660,20 +664,42 @@ export default function Play() {
         <button type="button" onClick={() => { setScreen("menu"); setError(""); refreshSaveSlots(); }} className="self-start rounded-lg border border-[#303030] bg-[#111111] px-4 py-2 text-sm font-black text-white/70 hover:border-orange-500/40 hover:text-orange-200">← Back to Save Slots</button>
 
         <div className={`${chromePanel} overflow-hidden p-3 md:p-3`}>
-          <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
               <p className="mb-2 text-[11px] font-black uppercase tracking-[0.18em] text-orange-300">Basketball Manager</p>
               <h1 className="text-3xl font-black tracking-[-0.06em] md:text-4xl">Start New League <span className="text-orange-300/80">· Slot {Number(newLeagueSlotIndex) + 1}</span></h1>
             </div>
-            <div className="w-full md:w-[360px]">
-              <p className="mb-2 text-[11px] font-black uppercase tracking-[0.16em] text-orange-300">League Name</p>
-              <input
-                type="text"
-                value={leagueName}
-                onChange={(event) => setLeagueName(event.target.value)}
-                placeholder="Name this rebuild"
-                className={`${darkInput} w-full py-2`}
-              />
+
+            <div className="flex w-full flex-col gap-2 sm:flex-row md:w-auto md:items-end">
+              <div className="rounded-lg border border-[#303030] bg-[#0d0d0d] px-3 py-2">
+                <p className="mb-1 text-[10px] font-black uppercase tracking-[0.16em] text-orange-300">Developer Tools</p>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={devToolsEnabled}
+                  onClick={() => setDevToolsEnabled((enabled) => !enabled)}
+                  className="flex min-w-[150px] items-center justify-between gap-3 rounded-md border border-[#303030] bg-[#111111] px-3 py-2 text-xs font-black text-white transition hover:border-orange-500/45"
+                  title="Controls whether developer shortcuts are visible in this league."
+                >
+                  <span className={devToolsEnabled ? "text-orange-200" : "text-white/55"}>
+                    {devToolsEnabled ? "On" : "Off"}
+                  </span>
+                  <span className={`relative h-5 w-9 rounded-full transition ${devToolsEnabled ? "bg-orange-600" : "bg-neutral-700"}`}>
+                    <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${devToolsEnabled ? "left-[18px]" : "left-0.5"}`} />
+                  </span>
+                </button>
+              </div>
+
+              <div className="w-full sm:w-[300px] md:w-[360px]">
+                <p className="mb-2 text-[11px] font-black uppercase tracking-[0.16em] text-orange-300">League Name</p>
+                <input
+                  type="text"
+                  value={leagueName}
+                  onChange={(event) => setLeagueName(event.target.value)}
+                  placeholder="Name this rebuild"
+                  className={`${darkInput} w-full py-2`}
+                />
+              </div>
             </div>
           </div>
 

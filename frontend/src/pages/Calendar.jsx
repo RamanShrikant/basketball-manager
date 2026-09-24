@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ensureGameplansForLeague } from "../utils/ensureGameplans";
 import { useGame } from "../context/GameContext";
 import { getDraftYear, getSeasonCalendarConfig, getSeasonStartYear } from "../utils/seasonContext.js";
+import { areDevToolsEnabled } from "../utils/devTools.js";
 import { writeLeagueClock } from "../utils/leagueClock.js";
 import { getUserTradeRuleSettings, stampFreeAgentSigningRestrictions } from "../utils/userTradeRules.js";
 import { useNavigate } from "react-router-dom";
@@ -2839,6 +2840,7 @@ export default function Calendar() {
 
   const navigate = useNavigate();
   const { leagueData, setLeagueData, selectedTeam } = useGame();
+  const devToolsEnabled = areDevToolsEnabled(leagueData);
   if (window.__debugSimLogs) console.log("Ã°Å¸â€Â¥ Calendar leagueData =", leagueData);
   window.__leagueData = leagueData;
 
@@ -9346,15 +9348,17 @@ return (
   </>
 )}
 
-<button
-  className="px-3 py-2 bg-red-700 rounded"
-  onClick={handleResetSeason}
->
-  Reset Season
-</button>
+{devToolsEnabled && (
+  <button
+    className="px-3 py-2 bg-red-700 rounded"
+    onClick={handleResetSeason}
+  >
+    Reset Season
+  </button>
+)}
 
 
-{DEV_QUICK_SIM_TOOLS && (
+{devToolsEnabled && DEV_QUICK_SIM_TOOLS && (
   <>
     <button
       className="px-3 py-2 bg-purple-800 hover:bg-purple-700 rounded text-xs font-bold disabled:opacity-50"

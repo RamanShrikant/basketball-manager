@@ -34,6 +34,7 @@ import {
 } from "../utils/injurySystem.js";
 import { clearScheduleStorage, readScheduleFromStorage } from "../utils/scheduleStorage.js";
 import { computeCanonicalStandings, sortCanonicalTeamNames } from "../utils/canonicalStandings.js";
+import { areDevToolsEnabled } from "../utils/devTools.js";
 
 const FIRST_PLAYABLE_SEASON_YEAR = 2025;
 
@@ -150,9 +151,44 @@ function clearAllResultsV3() {
 // Playoff results (keep existing v2 blob behavior)
 const RESULT_KEY = "bm_results_v2"; // (used here for playoff games PO_/PI_)
 const POSTSEASON_KEY = "bm_postseason_v2";
+const PENDING_POSTSEASON_SIM_INTENT_KEY = "bm_pending_postseason_sim_v1";
 const CHAMP_KEY = "bm_champ_v1";
 const FINALS_MVP_KEY = "bm_finals_mvp_v1"; // ✅ PATCH (Finals MVP)
 const FINALS_MVP_SEEN_KEY = "bm_finals_mvp_seen_v1";
+
+
+function readPendingPostseasonSimulationIntent() {
+  try {
+    const raw = localStorage.getItem(PENDING_POSTSEASON_SIM_INTENT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const allowedModes = new Set(["one_day", "round", "playoffs", "playin_all"]);
+    if (!parsed || typeof parsed !== "object" || !allowedModes.has(parsed.mode)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writePendingPostseasonSimulationIntent(intent) {
+  try {
+    if (!intent || typeof intent !== "object") {
+      localStorage.removeItem(PENDING_POSTSEASON_SIM_INTENT_KEY);
+      return null;
+    }
+    const next = { ...intent, updatedAt: new Date().toISOString() };
+    localStorage.setItem(PENDING_POSTSEASON_SIM_INTENT_KEY, JSON.stringify(next));
+    return next;
+  } catch {
+    return intent || null;
+  }
+}
+
+function isPostseasonInjuryPauseResult(value) {
+  return Boolean(value?.__postseasonInjuryPause);
+}
+
+const POSTSEASON_INJURY_PAUSE_RESULT = Object.freeze({ __postseasonInjuryPause: true });
 
 
 function safeReadSmallJSON(key, fallback = null) {
@@ -930,8 +966,6 @@ async function simOneSafe({ homeName, awayName, leagueData, teamsByName, current
   }
 
   ensureGameplansForLeague(leagueData);
-  recoverPlayersForDate(leagueData, currentDate);
-
   const multiYearCloneStartedAt = isMultiYearSpeedDiagnosticsEnabled() ? performance.now() : 0;
   const home = structuredClone(homeTeamObj);
   const away = structuredClone(awayTeamObj);
@@ -1182,6 +1216,7 @@ export default function Playoffs() {
 
   const navigate = useNavigate();
   const { leagueData, setLeagueData, selectedTeam, setSelectedTeam } = useGame();
+  const devToolsEnabled = areDevToolsEnabled(leagueData);
 
   const teams = useMemo(() => {
     const arr = getAllTeamsFromLeague(leagueData);
@@ -1328,18 +1363,60 @@ export default function Playoffs() {
   const [champModal, setChampModal] = useState(null);
   const [postseasonView, setPostseasonView] = useState("auto");
 
-  // ✅ PATCH: stop button support (calendar-style stop behavior)
+  // Calendar-style stop/pause behavior for postseason simulations. Injury
+  // interruptions persist their resume intent so visiting Coach Gameplan cannot
+  // lose the simulation the user was running.
   const stopRequestedRef = useRef(false);
-  const postseasonResumeIntentRef = useRef(null);
+  const [pendingPostseasonSimIntent, setPendingPostseasonSimIntent] = useState(() =>
+    readPendingPostseasonSimulationIntent()
+  );
+  const postseasonResumeIntentRef = useRef(readPendingPostseasonSimulationIntent());
   const postseasonInjuryAlertsEnabledRef = useRef(
     normalizeInjurySettings(leagueData?.settings?.injuries).userAlerts !== false
   );
   const [simStopping, setSimStopping] = useState(false);
 
+  const persistPostseasonSimIntent = (intent) => {
+    const next = writePendingPostseasonSimulationIntent(
+      intent ? { ...intent, seasonYear: Number(seasonYear) } : null
+    );
+    postseasonResumeIntentRef.current = next;
+    setPendingPostseasonSimIntent(next);
+    return next;
+  };
+
+  const clearPostseasonSimIntent = () => {
+    writePendingPostseasonSimulationIntent(null);
+    postseasonResumeIntentRef.current = null;
+    setPendingPostseasonSimIntent(null);
+  };
+
+  const finalizePostseasonSimIntent = () => {
+    const saved = readPendingPostseasonSimulationIntent();
+    if (saved?.pausedReason === "injury_alert") {
+      postseasonResumeIntentRef.current = saved;
+      setPendingPostseasonSimIntent(saved);
+      return;
+    }
+    clearPostseasonSimIntent();
+  };
+
   useEffect(() => {
     postseasonInjuryAlertsEnabledRef.current =
       normalizeInjurySettings(leagueData?.settings?.injuries).userAlerts !== false;
   }, [leagueData?.settings?.injuries]);
+
+  useEffect(() => {
+    const saved = readPendingPostseasonSimulationIntent();
+    if (saved && Number(saved.seasonYear) !== Number(seasonYear)) {
+      clearPostseasonSimIntent();
+      return;
+    }
+    postseasonResumeIntentRef.current = saved;
+    setPendingPostseasonSimIntent(saved);
+    // seasonYear is the only boundary that can invalidate a saved postseason run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seasonYear]);
 
   const showUserPostseasonInjuryAlert = (events = []) => {
     const injurySettings = normalizeInjurySettings(leagueData?.settings?.injuries);
@@ -1353,21 +1430,37 @@ export default function Playoffs() {
     }
     const userEvents = (events || []).filter((event) => event?.teamName === selectedTeam.name);
     if (!userEvents.length) return false;
+
+    const activeIntent = postseasonResumeIntentRef.current || readPendingPostseasonSimulationIntent();
+    const pausedIntent = activeIntent?.mode
+      ? persistPostseasonSimIntent({ ...activeIntent, pausedReason: "injury_alert" })
+      : null;
+
     stopRequestedRef.current = true;
     setSimStopping(true);
     setPostseasonInjuryAlert({
       events: userEvents,
-      intent: postseasonResumeIntentRef.current,
+      intent: pausedIntent,
       createdAt: Date.now(),
     });
     return true;
   };
 
-  const disablePostseasonUserInjuryAlerts = () => {
+  const disablePostseasonUserInjuryAlerts = async () => {
     postseasonInjuryAlertsEnabledRef.current = false;
     if (!leagueData || typeof leagueData !== "object") return;
 
-    const nextLeagueData = structuredClone(leagueData);
+    const latestLeagueData = (() => {
+      try {
+        return window.__leagueData && typeof window.__leagueData === "object"
+          ? window.__leagueData
+          : leagueData;
+      } catch {
+        return leagueData;
+      }
+    })();
+
+    const nextLeagueData = structuredClone(latestLeagueData);
     nextLeagueData.settings = {
       ...(nextLeagueData.settings || {}),
       injuries: {
@@ -1375,36 +1468,61 @@ export default function Playoffs() {
         userAlerts: false,
       },
     };
+    markLeagueInjuryStateChanged(nextLeagueData);
 
-    setLeagueData(nextLeagueData, { source: "Playoffs.injuryAlertsDisabled.context" });
-    saveLeagueDataInBackground(nextLeagueData, { source: "Playoffs.injuryAlertsDisabled.persist" });
+    const normalizedLeagueData = setLeagueData(nextLeagueData, {
+      source: "Playoffs.injuryAlertsDisabled.context",
+      persist: false,
+    }) || nextLeagueData;
+    try {
+      await saveInjuryStateOverlay(normalizedLeagueData, {
+        source: "Playoffs.injuryAlertsDisabled.sidecar",
+      });
+    } catch (error) {
+      console.warn("[Playoffs] failed to persist disabled injury alerts", error);
+      saveLeagueDataInBackground(normalizedLeagueData, { source: "Playoffs.injuryAlertsDisabled.fallback" });
+    }
 
     try {
-      window.__leagueData = nextLeagueData;
-      window.leagueData = nextLeagueData;
-      window.__basketballManagerLeagueData = nextLeagueData;
+      window.__leagueData = normalizedLeagueData;
+      window.leagueData = normalizedLeagueData;
+      window.__basketballManagerLeagueData = normalizedLeagueData;
     } catch {}
   };
 
-  const resumePostseasonAfterInjury = (intent = null) => {
-    const resumeIntent = intent || postseasonInjuryAlert?.intent || postseasonResumeIntentRef.current;
-    setPostseasonInjuryAlert(null);
+  const resumePostseasonPendingSimulation = (intent = null) => {
+    const resumeIntent = intent || readPendingPostseasonSimulationIntent() || postseasonResumeIntentRef.current;
+    if (!resumeIntent?.mode || simLock) return;
+    if (Number(resumeIntent.seasonYear) !== Number(seasonYear)) {
+      clearPostseasonSimIntent();
+      return;
+    }
+
+    clearPostseasonSimIntent();
     stopRequestedRef.current = false;
     setSimStopping(false);
 
-    if (!resumeIntent?.mode) return;
-
     window.setTimeout(() => {
-      if (resumeIntent.mode === "round") {
+      if (resumeIntent.mode === "one_day") {
+        if (allPlayInsComplete) simGlobalOneGameAllSeries();
+        else simGlobalOnePlayInGame();
+      } else if (resumeIntent.mode === "round") {
         simTopNextRound();
       } else if (resumeIntent.mode === "playoffs") {
         simTopPlayoffsToChampion();
-      } else if (resumeIntent.mode === "dev_playoffs") {
-        simDevInstantPlayoffsToChampion();
       } else if (resumeIntent.mode === "playin_all") {
         simAllPlayInsBothConferences();
       }
     }, 0);
+  };
+
+  const resumePostseasonAfterInjury = (intent = null) => {
+    const resumeIntent = intent || postseasonInjuryAlert?.intent || readPendingPostseasonSimulationIntent();
+    setPostseasonInjuryAlert(null);
+    stopRequestedRef.current = false;
+    setSimStopping(false);
+
+    if (resumeIntent?.mode) resumePostseasonPendingSimulation(resumeIntent);
   };
 
   // ✅ PATCH (Finals MVP)
@@ -1875,7 +1993,11 @@ export default function Playoffs() {
       markLeagueInjuryStateChanged(leagueData);
       setLeagueData({ ...leagueData }, { source: "Playoffs.injuryRecovery.context", persist: false });
       await saveInjuryStateOverlay(leagueData, { source: "Playoffs.injuryRecovery.sidecar" });
-      showUserPostseasonInjuryAlert(recovery.events);
+    }
+    // Match Calendar semantics: a controlled-team return is a checkpoint BEFORE
+    // the scheduled game. The game remains unplayed until the popup is resolved.
+    if (showUserPostseasonInjuryAlert(recovery.events)) {
+      return POSTSEASON_INJURY_PAUSE_RESULT;
     }
 
     const full = await simOneSafe({ homeName, awayName, leagueData, teamsByName, currentDate });
@@ -1912,6 +2034,7 @@ export default function Playoffs() {
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const slim = await simGameId(gameId, homeName, awayName, currentDate);
+        if (isPostseasonInjuryPauseResult(slim)) return slim;
 
         // treat tie/0-0 as a failed attempt so we retry
         if (slim && !isBadSlimResult(slim)) return slim;
@@ -1988,6 +2111,7 @@ export default function Playoffs() {
     const { home, away } = seriesGameMeta(series, idx);
 
     const slim = await safeSimGameId(gid, home, away, gameDate, { retries: 2 });
+    if (isPostseasonInjuryPauseResult(slim)) return;
     const side = winnerFromSlim(slim);
 
     if (!side) {
@@ -2033,6 +2157,7 @@ export default function Playoffs() {
         const { home, away } = seriesGameMeta(series, idx);
 
         const slim = await safeSimGameId(gid, home, away, gameDate, { retries: 2 });
+        if (isPostseasonInjuryPauseResult(slim)) break;
         const side = winnerFromSlim(slim);
 
         if (!side) {
@@ -2156,6 +2281,9 @@ export default function Playoffs() {
   function startNewSeason() {
     // wipe season artifacts
     localStorage.removeItem(POSTSEASON_KEY);
+    writePendingPostseasonSimulationIntent(null);
+    postseasonResumeIntentRef.current = null;
+    setPendingPostseasonSimIntent(null);
 
     // ✅ keep playoffs results wipe (existing behavior)
     localStorage.removeItem(RESULT_KEY);
@@ -2257,6 +2385,9 @@ export default function Playoffs() {
       setLeagueData({ ...leagueData }, { source: "Playoffs.playInInjuryRecovery.context", persist: false });
       await saveInjuryStateOverlay(leagueData, { source: "Playoffs.playInInjuryRecovery.sidecar" });
     }
+    // Play-in recovery checkpoints now behave exactly like Calendar/playoffs:
+    // show the same popup and do not play this game until it is resolved.
+    if (showUserPostseasonInjuryAlert(recovery.events)) return false;
 
     const slim = await safeSimTransientPlayIn(node.home, node.away, node.date, { retries: 1 });
     if (!slim) return;
@@ -2312,6 +2443,7 @@ export default function Playoffs() {
     }
 
     wireForward(cur, confKey);
+    return true;
   }
 
   function listReadyPlayInGamesByDate(cur, confKeys) {
@@ -2362,6 +2494,9 @@ export default function Playoffs() {
   async function simGlobalOnePlayInGame() {
     if (simLock || allPlayInsComplete) return;
     setSimLock(true);
+    stopRequestedRef.current = false;
+    persistPostseasonSimIntent({ mode: "one_day" });
+    setSimStopping(false);
 
     try {
       const cur = structuredClone(post);
@@ -2374,7 +2509,9 @@ export default function Playoffs() {
       // One click processes one actual play-in date. Games on the next play-in
       // date cannot begin until a later click, preserving the built-in rest days.
       for (const target of targets) {
+        if (stopRequestedRef.current) break;
         await simPlayInGameInCur(cur, target.confKey, target.which);
+        if (stopRequestedRef.current) break;
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
 
@@ -2384,6 +2521,9 @@ export default function Playoffs() {
       }
     } finally {
       setSimLock(false);
+      stopRequestedRef.current = false;
+      finalizePostseasonSimIntent();
+      setSimStopping(false);
     }
   }
 
@@ -2391,7 +2531,7 @@ export default function Playoffs() {
     if (simLock) return;
     setSimLock(true);
     stopRequestedRef.current = false;
-    postseasonResumeIntentRef.current = { mode: "playin_all" };
+    persistPostseasonSimIntent({ mode: "playin_all" });
     setSimStopping(false);
 
     try {
@@ -2409,7 +2549,7 @@ export default function Playoffs() {
     } finally {
       setSimLock(false);
       stopRequestedRef.current = false;
-      if (!postseasonInjuryAlert) postseasonResumeIntentRef.current = null;
+      finalizePostseasonSimIntent();
       setSimStopping(false);
     }
   }
@@ -2424,6 +2564,7 @@ export default function Playoffs() {
     const { home, away } = seriesGameMeta(series, idx);
 
     const slim = await safeSimGameId(gid, home, away, gameDate, { retries: 2 });
+    if (isPostseasonInjuryPauseResult(slim)) return;
     const side = winnerFromSlim(slim);
 
     if (!side) {
@@ -2471,6 +2612,7 @@ export default function Playoffs() {
       const { home, away } = seriesGameMeta(series, idx);
 
       const slim = await safeSimGameId(gid, home, away, gameDate, { retries: 2 });
+      if (isPostseasonInjuryPauseResult(slim)) break;
       const side = winnerFromSlim(slim);
 
       if (!side) {
@@ -2618,6 +2760,9 @@ export default function Playoffs() {
     if (simLock) return;
     if (!allPlayInsComplete) return;
     setSimLock(true);
+    stopRequestedRef.current = false;
+    persistPostseasonSimIntent({ mode: "one_day" });
+    setSimStopping(false);
 
     try {
       const cur = structuredClone(post);
@@ -2625,6 +2770,9 @@ export default function Playoffs() {
       if (round) await simCurrentRoundOneDayInCur(cur, round, { flush: true });
     } finally {
       setSimLock(false);
+      stopRequestedRef.current = false;
+      finalizePostseasonSimIntent();
+      setSimStopping(false);
     }
   }
 
@@ -2680,7 +2828,7 @@ export default function Playoffs() {
 
     setSimLock(true);
     stopRequestedRef.current = false;
-    postseasonResumeIntentRef.current = { mode: "round" };
+    persistPostseasonSimIntent({ mode: "round" });
     setSimStopping(false);
 
     try {
@@ -2712,7 +2860,7 @@ export default function Playoffs() {
     } finally {
       setSimLock(false);
       stopRequestedRef.current = false;
-      if (!postseasonInjuryAlert) postseasonResumeIntentRef.current = null;
+      finalizePostseasonSimIntent();
       setSimStopping(false);
     }
   }
@@ -2726,7 +2874,7 @@ export default function Playoffs() {
     let multiYearFinalsComplete = false;
     setSimLock(true);
     stopRequestedRef.current = false;
-    postseasonResumeIntentRef.current = { mode: "playoffs" };
+    persistPostseasonSimIntent({ mode: "playoffs" });
     setSimStopping(false);
 
     try {
@@ -2757,7 +2905,9 @@ export default function Playoffs() {
         const progressed = await simCurrentRoundOneDayInCur(cur, round, { flush: true });
 
         if (!progressed) {
-          console.warn("[playoffs] Global sim made no progress; stopping to avoid infinite loop.");
+          if (!stopRequestedRef.current) {
+            console.warn("[playoffs] Global sim made no progress; stopping to avoid infinite loop.");
+          }
           break;
         }
 
@@ -2781,7 +2931,7 @@ export default function Playoffs() {
       }
       setSimLock(false);
       stopRequestedRef.current = false;
-      if (!postseasonInjuryAlert) postseasonResumeIntentRef.current = null;
+      finalizePostseasonSimIntent();
       setSimStopping(false);
     }
   }
@@ -2794,7 +2944,7 @@ export default function Playoffs() {
 
     setSimLock(true);
     stopRequestedRef.current = false;
-    postseasonResumeIntentRef.current = { mode: "dev_playoffs" };
+    clearPostseasonSimIntent();
     setSimStopping(false);
 
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -3118,7 +3268,7 @@ export default function Playoffs() {
     } finally {
       setSimLock(false);
       stopRequestedRef.current = false;
-      if (!postseasonInjuryAlert) postseasonResumeIntentRef.current = null;
+      clearPostseasonSimIntent();
       setSimStopping(false);
     }
   }
@@ -3545,14 +3695,16 @@ ${disabled ? "opacity-60" : ""}
                     {simsDisabled ? "Continue to Offseason" : "Simulate Playoffs"}
                   </button>
                 )}
-                <button
-                  disabled={simLock || fmvpLoading || simsDisabled}
-                  onClick={async () => { await simDevInstantPlayoffsToChampion(); }}
-                  className="rounded bg-purple-700 px-3 py-2 text-xs font-bold hover:bg-purple-600 disabled:opacity-50"
-                  title="Dev shortcut: simulates the rest of playoffs with one final bracket save"
-                >
-                  Dev Instant Playoffs
-                </button>
+                {devToolsEnabled && (
+                  <button
+                    disabled={simLock || fmvpLoading || simsDisabled}
+                    onClick={async () => { await simDevInstantPlayoffsToChampion(); }}
+                    className="rounded bg-purple-700 px-3 py-2 text-xs font-bold hover:bg-purple-600 disabled:opacity-50"
+                    title="Dev shortcut: simulates the rest of playoffs with one final bracket save"
+                  >
+                    Dev Instant Playoffs
+                  </button>
+                )}
                 <button
                   disabled={!simLock}
                   onClick={() => { stopRequestedRef.current = true; setSimStopping(true); }}
@@ -3633,18 +3785,40 @@ ${disabled ? "opacity-60" : ""}
           events={postseasonInjuryAlert.events || []}
           formatEventLine={formatInjuryEventLine}
           onAdjustManually={() => {
+            // Keep the persisted resume intent exactly like Calendar does. The
+            // user can edit the rotation, return here, and resume from the same
+            // unplayed postseason game/date without duplication or skipping.
             setPostseasonInjuryAlert(null);
-            postseasonResumeIntentRef.current = null;
             stopRequestedRef.current = false;
             setSimStopping(false);
             navigate("/coach-gameplan");
           }}
           onAutoAdjust={() => resumePostseasonAfterInjury(postseasonInjuryAlert?.intent)}
-          onAlwaysAutoAdjust={() => {
-            disablePostseasonUserInjuryAlerts();
+          onAlwaysAutoAdjust={async () => {
+            await disablePostseasonUserInjuryAlerts();
             resumePostseasonAfterInjury(postseasonInjuryAlert?.intent);
           }}
         />
+      )}
+
+      {pendingPostseasonSimIntent && !simLock && !postseasonInjuryAlert && (
+        <div className="fixed bottom-6 left-1/2 z-[252] w-[min(620px,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-orange-400/35 bg-neutral-950/95 p-4 text-white shadow-2xl backdrop-blur">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-[0.22em] text-orange-300">Simulation Paused</div>
+              <div className="mt-1 text-sm font-bold text-neutral-200">
+                Resume the postseason simulation from the next unplayed game.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => resumePostseasonPendingSimulation(pendingPostseasonSimIntent)}
+              className="shrink-0 rounded-xl bg-orange-600 px-5 py-3 text-sm font-black hover:bg-orange-500"
+            >
+              Resume Simulation
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Series / Play-In Modal */}

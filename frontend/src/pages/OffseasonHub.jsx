@@ -20,6 +20,7 @@ import { ensureCompletedSeasonStatsArchive } from "../utils/seasonStatsArchive.j
 import { formatLeagueDate, getOffseasonCurrentDate, writeLeagueClock } from "../utils/leagueClock.js";
 import { clearCompletedSeasonRuntimeForNextSeason } from "../utils/finalsMvpSeasonActions.js";
 import { getContractSeasonYear } from "../utils/seasonContext.js";
+import { areDevToolsEnabled } from "../utils/devTools.js";
 import {
   readCustomDraftClassForYear,
   readDefaultCustomDraftClass,
@@ -2390,6 +2391,7 @@ function EventCard({
 export default function OffseasonHub() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam, setLeagueData } = useGame();
+  const devToolsEnabled = areDevToolsEnabled(leagueData);
 
   const seasonYear = getSeasonYear(leagueData);
   const champion = getChampionName();
@@ -3891,73 +3893,75 @@ export default function OffseasonHub() {
                 {selectedTeam?.name ? ` Your team: ${selectedTeam.name}.` : ""}
               </p>
 
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <button
-                  onClick={toggleRetirementsDisabled}
-                  disabled={devOffseasonRunning}
-                  className={`px-4 py-2 rounded-xl font-semibold transition ${
-                    devOffseasonRunning
-                      ? "bg-neutral-700 text-white/45 cursor-not-allowed"
-                      : offseasonState.retirementsDisabled
-                      ? "bg-emerald-700 hover:bg-emerald-600 text-white"
-                      : "bg-neutral-700 hover:bg-neutral-600 text-white"
-                  }`}
-                >
-                  {offseasonState.retirementsDisabled ? "Retirements: OFF" : "Retirements: ON"}
-                </button>
-
-                <select
-                  value={devOffseasonTarget}
-                  onChange={(event) => setDevOffseasonTarget(event.target.value)}
-                  disabled={devOffseasonRunning}
-                  className={`px-4 py-2 rounded-xl font-bold border transition ${
-                    devOffseasonRunning
-                      ? "bg-neutral-800 border-white/10 text-white/45 cursor-not-allowed"
-                      : "bg-neutral-900 border-purple-500/35 text-purple-100 hover:border-purple-400"
-                  }`}
-                  title="Choose where the dev sim should stop."
-                >
-                  {DEV_SIM_TARGET_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-
-                <button
-                  onClick={handleDevSimFullOffseason}
-                  disabled={devOffseasonRunning}
-                  className={`px-4 py-2 rounded-xl font-bold transition shadow-lg shadow-purple-950/30 ${
-                    devOffseasonRunning
-                      ? "bg-purple-950/70 text-white/55 cursor-not-allowed"
-                      : "bg-purple-700 hover:bg-purple-600 text-white"
-                  }`}
-                  title="Developer shortcut: runs the offseason until the selected stop point."
-                >
-                  {devOffseasonRunning ? "Dev Simming..." : `DEV: Sim To ${getDevSimTargetLabel(devOffseasonTarget)}`}
-                </button>
-
-                {devOffseasonRunning && (
+              {devToolsEnabled && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
                   <button
-                    onClick={requestDevStop}
-                    disabled={devStopRequested}
-                    className={`px-4 py-2 rounded-xl font-bold transition shadow-lg shadow-purple-950/30 ${
-                      devStopRequested
-                        ? "bg-neutral-800 text-white/45 cursor-not-allowed"
-                        : "bg-purple-950 hover:bg-purple-900 text-white border border-purple-400/30"
+                    onClick={toggleRetirementsDisabled}
+                    disabled={devOffseasonRunning}
+                    className={`px-4 py-2 rounded-xl font-semibold transition ${
+                      devOffseasonRunning
+                        ? "bg-neutral-700 text-white/45 cursor-not-allowed"
+                        : offseasonState.retirementsDisabled
+                        ? "bg-emerald-700 hover:bg-emerald-600 text-white"
+                        : "bg-neutral-700 hover:bg-neutral-600 text-white"
                     }`}
-                    title="Stops after the current backend step finishes."
                   >
-                    {devStopRequested ? "Stopping..." : "Stop Dev Sim"}
+                    {offseasonState.retirementsDisabled ? "Retirements: OFF" : "Retirements: ON"}
                   </button>
-                )}
 
-                {devOffseasonStatus && (
-                  <span className="max-w-[360px] truncate rounded-xl border border-purple-400/25 bg-purple-950/30 px-3 py-2 text-xs font-semibold text-purple-100">
-                    {devOffseasonStatus}
-                  </span>
-                )}
-              </div>
+                  <select
+                    value={devOffseasonTarget}
+                    onChange={(event) => setDevOffseasonTarget(event.target.value)}
+                    disabled={devOffseasonRunning}
+                    className={`px-4 py-2 rounded-xl font-bold border transition ${
+                      devOffseasonRunning
+                        ? "bg-neutral-800 border-white/10 text-white/45 cursor-not-allowed"
+                        : "bg-neutral-900 border-purple-500/35 text-purple-100 hover:border-purple-400"
+                    }`}
+                    title="Choose where the dev sim should stop."
+                  >
+                    {DEV_SIM_TARGET_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    onClick={handleDevSimFullOffseason}
+                    disabled={devOffseasonRunning}
+                    className={`px-4 py-2 rounded-xl font-bold transition shadow-lg shadow-purple-950/30 ${
+                      devOffseasonRunning
+                        ? "bg-purple-950/70 text-white/55 cursor-not-allowed"
+                        : "bg-purple-700 hover:bg-purple-600 text-white"
+                    }`}
+                    title="Developer shortcut: runs the offseason until the selected stop point."
+                  >
+                    {devOffseasonRunning ? "Dev Simming..." : `DEV: Sim To ${getDevSimTargetLabel(devOffseasonTarget)}`}
+                  </button>
+
+                  {devOffseasonRunning && (
+                    <button
+                      onClick={requestDevStop}
+                      disabled={devStopRequested}
+                      className={`px-4 py-2 rounded-xl font-bold transition shadow-lg shadow-purple-950/30 ${
+                        devStopRequested
+                          ? "bg-neutral-800 text-white/45 cursor-not-allowed"
+                          : "bg-purple-950 hover:bg-purple-900 text-white border border-purple-400/30"
+                      }`}
+                      title="Stops after the current backend step finishes."
+                    >
+                      {devStopRequested ? "Stopping..." : "Stop Dev Sim"}
+                    </button>
+                  )}
+
+                  {devOffseasonStatus && (
+                    <span className="max-w-[360px] truncate rounded-xl border border-purple-400/25 bg-purple-950/30 px-3 py-2 text-xs font-semibold text-purple-100">
+                      {devOffseasonStatus}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-4 gap-2">

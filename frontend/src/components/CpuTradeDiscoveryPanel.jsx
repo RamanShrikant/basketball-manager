@@ -4,6 +4,7 @@ import {
   getCpuTradeScannerTeams,
   scanCpuTradeMarket,
 } from "../utils/cpuTradeDiscovery.js";
+import { areDevToolsEnabled } from "../utils/devTools.js";
 
 function teamLogoOf(team) {
   return team?.logo || team?.teamLogo || team?.newTeamLogo || team?.logoUrl || team?.image || team?.img || "";
@@ -197,6 +198,7 @@ function OpponentGroup({ row, leagueData }) {
 }
 
 export default function CpuTradeDiscoveryPanel({ leagueData, selectedTeam }) {
+  const devToolsEnabled = areDevToolsEnabled(leagueData);
   const userTeamName = selectedTeam?.name || selectedTeam?.teamName || "";
   const cpuTeams = useMemo(() => getCpuTradeScannerTeams(leagueData, userTeamName), [leagueData, userTeamName]);
   const [focusTeamName, setFocusTeamName] = useState("");
@@ -299,6 +301,8 @@ export default function CpuTradeDiscoveryPanel({ leagueData, selectedTeam }) {
     }
     setIsScanning(false);
   };
+
+  if (!devToolsEnabled) return null;
 
   if (!cpuTeams.length) {
     return (

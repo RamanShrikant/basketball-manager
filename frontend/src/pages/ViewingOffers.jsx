@@ -12,6 +12,7 @@ import { saveLeagueData } from "../utils/leagueStorage.js";
 import { getLeagueFinancialRules } from "../utils/leagueFinancials.js";
 import { getContractSeasonYear, getFinancialSeasonYear } from "../utils/seasonContext.js";
 import { stampFreeAgentSigningRestrictions } from "../utils/userTradeRules.js";
+import { areDevToolsEnabled } from "../utils/devTools.js";
 
 const FREE_AGENCY_LAST_ROUTE_KEY = "bm_free_agency_last_route_v1";
 
@@ -1596,6 +1597,7 @@ function buildFreeAgencySummaryText(entries = []) {
 export default function ViewingOffers() {
   const navigate = useNavigate();
   const { leagueData, selectedTeam, setLeagueData, setSelectedTeam } = useGame();
+  const devToolsEnabled = areDevToolsEnabled(leagueData);
 
   const [hideLeagueEvents, setHideLeagueEvents] = useState(false);
   const [hideCpuOffers, setHideCpuOffers] = useState(false);
@@ -4148,27 +4150,31 @@ return (
       : "Continue to Free Agency"}
   </button>
 
-  <button
-    onClick={handleDevAdvanceDayFromViewingOffers}
-    disabled={processingBack || processingAdvance || processingDevAdvance || processingDevSimToEnd || marketClosed || pendingRfaMatchDecisions.length > 0}
-    className="px-6 py-3 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition shadow-lg shadow-purple-950/30"
-    title="Developer shortcut: process selected pending signings, decline the rest, then advance the free-agency day without leaving this screen."
-  >
-    {processingDevAdvance ? "Dev Advancing..." : "DEV: Advance Day"}
-  </button>
+  {devToolsEnabled && (
+    <>
+      <button
+        onClick={handleDevAdvanceDayFromViewingOffers}
+        disabled={processingBack || processingAdvance || processingDevAdvance || processingDevSimToEnd || marketClosed || pendingRfaMatchDecisions.length > 0}
+        className="px-6 py-3 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition shadow-lg shadow-purple-950/30"
+        title="Developer shortcut: process selected pending signings, decline the rest, then advance the free-agency day without leaving this screen."
+      >
+        {processingDevAdvance ? "Dev Advancing..." : "DEV: Advance Day"}
+      </button>
 
-  <button
-    onClick={handleDevSimToEndFreeAgency}
-    disabled={processingBack || processingAdvance || processingDevAdvance || processingDevSimToEnd || marketClosed || pendingRfaMatchDecisions.length > 0}
-    className="px-6 py-3 bg-purple-800 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition shadow-lg shadow-purple-950/30"
-    title="Developer shortcut: keep advancing free agency until the market closes. Future user pending signings are declined automatically; RFA match decisions still stop for manual review."
-  >
-    {processingDevSimToEnd
-      ? "Dev Simming..."
-      : pendingRfaMatchDecisions.length > 0
-      ? "Resolve RFA Decisions First"
-      : "DEV: Sim to End FA"}
-  </button>
+      <button
+        onClick={handleDevSimToEndFreeAgency}
+        disabled={processingBack || processingAdvance || processingDevAdvance || processingDevSimToEnd || marketClosed || pendingRfaMatchDecisions.length > 0}
+        className="px-6 py-3 bg-purple-800 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition shadow-lg shadow-purple-950/30"
+        title="Developer shortcut: keep advancing free agency until the market closes. Future user pending signings are declined automatically; RFA match decisions still stop for manual review."
+      >
+        {processingDevSimToEnd
+          ? "Dev Simming..."
+          : pendingRfaMatchDecisions.length > 0
+          ? "Resolve RFA Decisions First"
+          : "DEV: Sim to End FA"}
+      </button>
+    </>
+  )}
 
 <button
   onClick={handleReturnToOffseasonHub}
@@ -4266,7 +4272,8 @@ return (
               </button>
             </div>
           </div>
-        </div> , document.body
+        </div>
+ , document.body
       )}
 
       {infoPopup && createPortal(
@@ -4389,7 +4396,8 @@ return (
               </button>
             </div>
           </div>
-        </div> , document.body
+        </div>
+ , document.body
       )}
 
       <PlayerCardModal
