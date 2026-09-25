@@ -2444,13 +2444,14 @@ function getCpuOwnedSecondRoundPickItems(leagueData = {}, teamName = "", usedKey
     .sort((a, b) => Number(a.pick?.year || 0) - Number(b.pick?.year || 0));
 }
 
-function cpuStepienPackageValidation(leagueData, teamName, outgoingItems, incomingItems) {
+function cpuStepienPackageValidation(leagueData, teamName, outgoingItems, incomingItems, tradeContext = null) {
   return validateUserTradeAssetPackage({
     leagueData,
     teamName,
     outgoingItems,
     incomingItems,
     settings: CPU_STEPIEN_ONLY_SETTINGS,
+    context: tradeContext,
   });
 }
 
@@ -2635,12 +2636,12 @@ function buildCpuGreedyFirstCombo(pool = [], count = 0, mode = "balanced", origi
   return chosen.length >= wanted ? chosen : [];
 }
 
-function repairCpuStepienForSide({ leagueData, teamName, outgoingItems = [], incomingItems = [] } = {}) {
+function repairCpuStepienForSide({ leagueData, teamName, outgoingItems = [], incomingItems = [], tradeContext = null } = {}) {
   const original = (Array.isArray(outgoingItems) ? outgoingItems : []).filter(Boolean);
   const originalFirsts = original.filter(isCpuFutureFirstItem);
   const originalFirstKeys = new Set(originalFirsts.map(cpuPickKey));
   const initialCapped = capCpuPackageToMax(original, originalFirstKeys, MAX_SIDE_ITEMS);
-  const initial = cpuStepienPackageValidation(leagueData, teamName, initialCapped, incomingItems);
+  const initial = cpuStepienPackageValidation(leagueData, teamName, initialCapped, incomingItems, tradeContext);
 
   if (initial.ok && cpuPackageAssetCount(initialCapped) <= MAX_SIDE_ITEMS) {
     return { ok: true, items: initialCapped, changed: cpuPackageAssetCount(original) !== cpuPackageAssetCount(initialCapped) };
@@ -2698,7 +2699,7 @@ function repairCpuStepienForSide({ leagueData, teamName, outgoingItems = [], inc
       originalFirstKeys,
     });
     if (!cpuPackageAssetCount(trial)) continue;
-    const validation = cpuStepienPackageValidation(leagueData, teamName, trial, incomingItems);
+    const validation = cpuStepienPackageValidation(leagueData, teamName, trial, incomingItems, tradeContext);
     if (validation.ok && cpuPackageAssetCount(trial) <= MAX_SIDE_ITEMS) {
       return { ok: true, items: trial, changed: true, replacementType: attempt.label };
     }
@@ -2715,7 +2716,7 @@ function repairCpuStepienForSide({ leagueData, teamName, outgoingItems = [], inc
     originalNonFirstPicks,
     originalFirstKeys,
   });
-  const secondsValidation = cpuStepienPackageValidation(leagueData, teamName, secondsOnly, incomingItems);
+  const secondsValidation = cpuStepienPackageValidation(leagueData, teamName, secondsOnly, incomingItems, tradeContext);
   if (secondsValidation.ok && cpuPackageAssetCount(secondsOnly) > 0 && cpuPackageAssetCount(secondsOnly) <= MAX_SIDE_ITEMS) {
     return { ok: true, items: secondsOnly, changed: true, replacementType: "seconds" };
   }
@@ -2731,14 +2732,15 @@ function repairCpuTradeStepienPackages({ leagueData, fromTeamName, toTeamName, f
   const settings = getUserTradeRuleSettings(leagueData);
   if (!settings.stepienRule) return { ok: true, fromItems, toItems, changed: false };
 
-  const fromRepair = repairCpuStepienForSide({ leagueData, teamName: fromTeamName, outgoingItems: fromItems, incomingItems: toItems });
+  const tradeContext = getOffseasonTradeContext(leagueData);
+  const fromRepair = repairCpuStepienForSide({ leagueData, teamName: fromTeamName, outgoingItems: fromItems, incomingItems: toItems, tradeContext });
   if (!fromRepair.ok) return fromRepair;
-  const toRepair = repairCpuStepienForSide({ leagueData, teamName: toTeamName, outgoingItems: toItems, incomingItems: fromRepair.items });
+  const toRepair = repairCpuStepienForSide({ leagueData, teamName: toTeamName, outgoingItems: toItems, incomingItems: fromRepair.items, tradeContext });
   if (!toRepair.ok) return toRepair;
 
   // One final validation pass only. Do not re-run the repair recursively for both
   // sides; that was the expensive Jan/deadline behavior regression.
-  const finalFromValidation = cpuStepienPackageValidation(leagueData, fromTeamName, fromRepair.items, toRepair.items);
+  const finalFromValidation = cpuStepienPackageValidation(leagueData, fromTeamName, fromRepair.items, toRepair.items, tradeContext);
   if (!finalFromValidation.ok) {
     return {
       ok: false,
@@ -2746,7 +2748,7 @@ function repairCpuTradeStepienPackages({ leagueData, fromTeamName, toTeamName, f
       staleCode: finalFromValidation.code || "cpu_stepien_repair_failed",
     };
   }
-  const finalToValidation = cpuStepienPackageValidation(leagueData, toTeamName, toRepair.items, fromRepair.items);
+  const finalToValidation = cpuStepienPackageValidation(leagueData, toTeamName, toRepair.items, fromRepair.items, tradeContext);
   if (!finalToValidation.ok) {
     return {
       ok: false,

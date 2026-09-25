@@ -386,20 +386,20 @@ function getRosterPayrollForYear(team, payrollSeasonYear) {
   );
 }
 
-function getTradePayrollSeasonYear(leagueData) {
-  return getOffseasonTradePayrollSeasonYear(leagueData || {});
+function getTradePayrollSeasonYear(leagueData, tradeContext = null) {
+  return getOffseasonTradePayrollSeasonYear(leagueData || {}, tradeContext);
 }
 
-function getPlayerSalary(player, leagueData) {
-  return getSalaryForPayrollYear(player, getTradePayrollSeasonYear(leagueData));
+function getPlayerSalary(player, leagueData, tradeContext = null) {
+  return getSalaryForPayrollYear(player, getTradePayrollSeasonYear(leagueData, tradeContext));
 }
 
-function getContractYearsRemaining(player, leagueData) {
+function getContractYearsRemaining(player, leagueData, tradeContext = null) {
   const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
   const salaries = Array.isArray(contract.salaryByYear) ? contract.salaryByYear : [];
   if (!salaries.length) return 0;
 
-  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
+  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData, tradeContext);
   const startYear = Number(contract.startYear || payrollSeasonYear);
   let idx = payrollSeasonYear - startYear;
   if (!Number.isFinite(idx) || idx < 0) idx = 0;
@@ -407,14 +407,14 @@ function getContractYearsRemaining(player, leagueData) {
   return Math.max(0, salaries.length - idx);
 }
 
-function getContractTotalRemaining(player, leagueData) {
+function getContractTotalRemaining(player, leagueData, tradeContext = null) {
   const contract = player?.contract && typeof player.contract === "object" ? player.contract : {};
   const salaries = Array.isArray(contract.salaryByYear)
     ? contract.salaryByYear.map((value) => Number(value) || 0)
     : [];
-  if (!salaries.length) return getPlayerSalary(player, leagueData);
+  if (!salaries.length) return getPlayerSalary(player, leagueData, tradeContext);
 
-  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData);
+  const payrollSeasonYear = getTradePayrollSeasonYear(leagueData, tradeContext);
   const startYear = Number(contract.startYear || payrollSeasonYear);
   let idx = payrollSeasonYear - startYear;
   if (!Number.isFinite(idx) || idx < 0) idx = 0;
@@ -776,10 +776,10 @@ function sortTradeItemsForDisplay(items = []) {
   });
 }
 
-function sideSalary(items, leagueData) {
+function sideSalary(items, leagueData, tradeContext = null) {
   return (items || []).reduce((sum, item) => {
     if (item?.type !== "player") return sum;
-    return sum + getPlayerSalary(item.player, leagueData);
+    return sum + getPlayerSalary(item.player, leagueData, tradeContext);
   }, 0);
 }
 
@@ -793,8 +793,8 @@ function getLeagueAmount(leagueData, rules, keys, fallback = 0) {
   return Number.isFinite(fallbackValue) ? fallbackValue : 0;
 }
 
-function getFinancialLimits(leagueData) {
-  const seasonYear = getTradePayrollSeasonYear(leagueData);
+function getFinancialLimits(leagueData, tradeContext = null) {
+  const seasonYear = getTradePayrollSeasonYear(leagueData, tradeContext);
   const rules = getLeagueFinancialRules(leagueData || {}, seasonYear);
   const salaryCap = getLeagueAmount(leagueData, rules, ["salaryCap", "capLimit"], rules.salaryCap);
   const firstApron = getLeagueAmount(leagueData, rules, ["firstApron", "apron1"], rules.firstApron || salaryCap);
@@ -810,9 +810,9 @@ function getFinancialLimits(leagueData) {
   return { salaryCap, firstApron, secondApron, hardCap, inflationIndex, seasonYear };
 }
 
-function getCurrentDeadCapForTeam(team, leagueData) {
+function getCurrentDeadCapForTeam(team, leagueData, tradeContext = null) {
   const teamName = team?.name;
-  const seasonYear = getTradePayrollSeasonYear(leagueData);
+  const seasonYear = getTradePayrollSeasonYear(leagueData, tradeContext);
   const rows = Array.isArray(leagueData?.deadCapByTeam?.[teamName])
     ? leagueData.deadCapByTeam[teamName]
     : [];
@@ -824,13 +824,13 @@ function getCurrentDeadCapForTeam(team, leagueData) {
   }, 0);
 }
 
-function getTeamBasePayroll(team, leagueData) {
+function getTeamBasePayroll(team, leagueData, tradeContext = null) {
   const standardPlayers = Array.isArray(team?.players) ? team.players : [];
   const rosterPayroll = standardPlayers.reduce(
-    (sum, player) => sum + getPlayerSalary(player, leagueData),
+    (sum, player) => sum + getPlayerSalary(player, leagueData, tradeContext),
     0
   );
-  const deadCap = getCurrentDeadCapForTeam(team, leagueData);
+  const deadCap = getCurrentDeadCapForTeam(team, leagueData, tradeContext);
   const computedPayroll = rosterPayroll + deadCap;
 
   if (computedPayroll > 0) return computedPayroll;
@@ -839,10 +839,10 @@ function getTeamBasePayroll(team, leagueData) {
   return Number.isFinite(storedPayroll) ? storedPayroll : 0;
 }
 
-function getTeamCapInfo(team, leagueData, outgoingSalary = 0, incomingSalary = 0) {
-  const limits = getFinancialLimits(leagueData);
+function getTeamCapInfo(team, leagueData, outgoingSalary = 0, incomingSalary = 0, tradeContext = null) {
+  const limits = getFinancialLimits(leagueData, tradeContext);
   const { salaryCap, firstApron, secondApron, hardCap } = limits;
-  const basePayroll = getTeamBasePayroll(team, leagueData);
+  const basePayroll = getTeamBasePayroll(team, leagueData, tradeContext);
   const payroll = Math.max(0, basePayroll - Number(outgoingSalary || 0) + Number(incomingSalary || 0));
   const capRoom = salaryCap > 0 ? salaryCap - payroll : Number(team?.capRoom ?? team?.financials?.capRoom ?? 0);
   const firstApronRoom = firstApron > 0 ? firstApron - payroll : 0;
@@ -2085,13 +2085,13 @@ function TeamLogoWatermark({ team }) {
   );
 }
 
-function TradeItemCard({ item, team, leagueData, onRemove }) {
+function TradeItemCard({ item, team, leagueData, tradeContext = null, onRemove }) {
   if (!item) return null;
 
   if (item.type === "player") {
     const player = item.player || {};
     const playerName = playerNameOf(player);
-    const yearsRemaining = getContractYearsRemaining(player, leagueData);
+    const yearsRemaining = getContractYearsRemaining(player, leagueData, tradeContext);
     const currentDate = getTradeScreenCurrentDate();
     const t = TRADE_PLAYER_CARD_TUNING;
     const nameFontSize = getTradeCardNameFontSize(playerName, t.name.size);
@@ -2184,7 +2184,7 @@ function TradeItemCard({ item, team, leagueData, onRemove }) {
                 transform: `translate(${t.contract.x}px, ${t.contract.y}px)`,
               }}
             >
-              Contract: <span className="text-white">{formatMoney(getPlayerSalary(player, leagueData))}</span>
+              Contract: <span className="text-white">{formatMoney(getPlayerSalary(player, leagueData, tradeContext))}</span>
               <span className="mx-2 text-white">•</span>
               <span className="text-white">
                 {yearsRemaining || "—"} YR{yearsRemaining === 1 ? "" : "S"}
@@ -2456,20 +2456,22 @@ function TradeFinancialFooter({ team, cap, netSalary, playerCount, hardCapDetail
   );
 }
 
-function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incomingItems = [], onAdd, onRemove, onHardCapDetails }) {
-  const salaryTotal = sideSalary(items, leagueData);
-  const cap = getTeamCapInfo(team, leagueData, salaryTotal, incomingSalary);
+function SidePanel({ side, team, items, leagueData, tradeContext = null, incomingSalary = 0, incomingItems = [], onAdd, onRemove, onHardCapDetails }) {
+  const salaryTotal = sideSalary(items, leagueData, tradeContext);
+  const cap = getTeamCapInfo(team, leagueData, salaryTotal, incomingSalary, tradeContext);
   const financialCheck = evaluateUserTradeFinancialLegality({
     team,
     leagueData,
     outgoingItems: items,
     incomingItems,
+    context: tradeContext,
   });
   const assetRuleCheck = validateUserTradeAssetPackage({
     leagueData,
     teamName: team?.name || team?.teamName || "",
     outgoingItems: items,
     incomingItems,
+    context: tradeContext,
   });
   const displayCheck = assetRuleCheck.ok
     ? financialCheck
@@ -2544,6 +2546,7 @@ function SidePanel({ side, team, items, leagueData, incomingSalary = 0, incoming
                   item={item}
                   team={team}
                   leagueData={leagueData}
+                  tradeContext={tradeContext}
                   onRemove={() => onRemove(side, itemKey(item))}
                 />
               ) : (
@@ -2654,7 +2657,7 @@ export default function ProposeTrade() {
     );
   }, [liveDraftProgressSignature, leagueData]);
 
-  const userDeadlineStatus = getUserTradeDeadlineStatus(leagueData);
+  const userDeadlineStatus = getUserTradeDeadlineStatus(leagueData, tradeContext);
   const tradeDeadlineLocked = Boolean(userDeadlineStatus.locked);
   const tradeDeadlineMessage = tradeDeadlineLocked
     ? userDeadlineStatus.reason
@@ -2917,6 +2920,7 @@ export default function ProposeTrade() {
       cpuItems,
       includeDeadline: true,
       includeFinancial: true,
+      context: tradeContext,
     });
     if (!userRuleValidation.ok) {
       setEvaluation(null);
@@ -3159,7 +3163,8 @@ export default function ProposeTrade() {
               team={userTeam}
               items={userItems}
               leagueData={leagueData}
-              incomingSalary={sideSalary(cpuItems, leagueData)}
+              tradeContext={tradeContext}
+              incomingSalary={sideSalary(cpuItems, leagueData, tradeContext)}
               incomingItems={cpuItems}
               onAdd={openAddMenu}
               onRemove={removeItem}
@@ -3171,7 +3176,8 @@ export default function ProposeTrade() {
               team={cpuTeam}
               items={cpuItems}
               leagueData={leagueData}
-              incomingSalary={sideSalary(userItems, leagueData)}
+              tradeContext={tradeContext}
+              incomingSalary={sideSalary(userItems, leagueData, tradeContext)}
               incomingItems={userItems}
               onAdd={openAddMenu}
               onRemove={removeItem}

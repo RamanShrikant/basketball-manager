@@ -414,6 +414,7 @@ export async function runReverseTradeFinderSearch({
         teamName: getTeamName(controlledTeam),
         outgoingItems: cleaned,
         incomingItems: targetItems,
+        context: tradeContext,
       });
       if (!assetValidation.ok) {
         diagnostics.financialRejected += 1;

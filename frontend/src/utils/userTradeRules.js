@@ -279,9 +279,9 @@ function shouldUseOffseasonDateForUserTrades(leagueData = {}, context = null) {
   return Boolean(leagueHasOffseasonState || context?.inOffseason);
 }
 
-export function getUserTradeCurrentDate(leagueData = {}) {
+export function getUserTradeCurrentDate(leagueData = {}, explicitContext = null) {
   const direct = getDirectUserTradeDate(leagueData);
-  const context = getOffseasonTradeContext(leagueData);
+  const context = getOffseasonTradeContext(leagueData, explicitContext);
 
   if (context?.inOffseason && shouldUseOffseasonDateForUserTrades(leagueData, context)) {
     return getOffseasonCurrentDate({
@@ -301,13 +301,13 @@ export function getUserTradeCurrentDate(leagueData = {}) {
   return `${seasonStartYear}-07-30`;
 }
 
-export function getUserTradeDeadlineStatus(leagueData = {}) {
+export function getUserTradeDeadlineStatus(leagueData = {}, explicitContext = null) {
   const settings = getUserTradeRuleSettings(leagueData);
   if (!settings.tradeDeadline) {
     return { enabled: false, locked: false, reason: "" };
   }
 
-  const context = getOffseasonTradeContext(leagueData);
+  const context = getOffseasonTradeContext(leagueData, explicitContext);
   if (context?.inOffseason) return { enabled: true, locked: false, reason: "" };
 
   const storedStatus = typeof localStorage !== "undefined"
@@ -398,8 +398,8 @@ function getPlayerSalaryForYear(player = {}, payrollSeasonYear) {
   return Number.isFinite(fallback) ? fallback : 0;
 }
 
-function getUserTradePayrollSeasonYear(leagueData = {}) {
-  const context = getOffseasonTradeContext(leagueData || {});
+function getUserTradePayrollSeasonYear(leagueData = {}, explicitContext = null) {
+  const context = getOffseasonTradeContext(leagueData || {}, explicitContext);
   if (context?.inOffseason) {
     const target = Number(
       context?.targetContractSeasonYear ??
@@ -411,19 +411,19 @@ function getUserTradePayrollSeasonYear(leagueData = {}) {
   return getContractSeasonYear(leagueData || {});
 }
 
-export function getUserTradePlayerSalary(player = {}, leagueData = {}) {
-  return getPlayerSalaryForYear(player, getUserTradePayrollSeasonYear(leagueData || {}));
+export function getUserTradePlayerSalary(player = {}, leagueData = {}, explicitContext = null) {
+  return getPlayerSalaryForYear(player, getUserTradePayrollSeasonYear(leagueData || {}, explicitContext));
 }
 
-export function getUserTradeSideSalary(items = [], leagueData = {}) {
+export function getUserTradeSideSalary(items = [], leagueData = {}, explicitContext = null) {
   return (Array.isArray(items) ? items : []).reduce((sum, item) => {
     if (item?.type !== "player" || !item.player) return sum;
-    return sum + getUserTradePlayerSalary(item.player, leagueData);
+    return sum + getUserTradePlayerSalary(item.player, leagueData, explicitContext);
   }, 0);
 }
 
-function getTeamBasePayroll(team = {}, leagueData = {}) {
-  const payrollSeasonYear = getUserTradePayrollSeasonYear(leagueData || {});
+function getTeamBasePayroll(team = {}, leagueData = {}, explicitContext = null) {
+  const payrollSeasonYear = getUserTradePayrollSeasonYear(leagueData || {}, explicitContext);
   const rosterPayroll = (Array.isArray(team?.players) ? team.players : []).reduce(
     (sum, player) => sum + getPlayerSalaryForYear(player, payrollSeasonYear),
     0
@@ -468,12 +468,14 @@ export function evaluateUserTradeFinancialLegality({
   outgoingItems = [],
   incomingItems = [],
   settings = null,
+  context = null,
 } = {}) {
   if (!team) return { ok: false, code: "missing_team", message: "Trade team could not be found." };
   const active = settings || getUserTradeRuleSettings(leagueData);
-  const outgoing = getUserTradeSideSalary(outgoingItems, leagueData);
-  const incoming = getUserTradeSideSalary(incomingItems, leagueData);
-  const basePayroll = getTeamBasePayroll(team, leagueData);
+  const tradeContext = context || getOffseasonTradeContext(leagueData);
+  const outgoing = getUserTradeSideSalary(outgoingItems, leagueData, tradeContext);
+  const incoming = getUserTradeSideSalary(incomingItems, leagueData, tradeContext);
+  const basePayroll = getTeamBasePayroll(team, leagueData, tradeContext);
   const projectedPayroll = Math.max(0, basePayroll - outgoing + incoming);
   const rules = getLeagueFinancialRules(leagueData);
   const salaryCap = Number(rules?.salaryCap || 0);
@@ -506,11 +508,11 @@ export function evaluateUserTradeFinancialLegality({
     const outgoingPlayers = outgoingItems.filter((item) => item?.type === "player" && item.player);
     const incomingPlayers = incomingItems.filter((item) => item?.type === "player" && item.player);
     const highestIncoming = incomingPlayers.reduce(
-      (max, item) => Math.max(max, getUserTradePlayerSalary(item.player, leagueData)),
+      (max, item) => Math.max(max, getUserTradePlayerSalary(item.player, leagueData, tradeContext)),
       0
     );
     const highestOutgoing = outgoingPlayers.reduce(
-      (max, item) => Math.max(max, getUserTradePlayerSalary(item.player, leagueData)),
+      (max, item) => Math.max(max, getUserTradePlayerSalary(item.player, leagueData, tradeContext)),
       0
     );
     if (outgoingPlayers.length > 1 && incomingPlayers.length === 1 && highestIncoming > highestOutgoing + SALARY_TOLERANCE) {
@@ -780,11 +782,12 @@ export function getUserTradePlayerEligibility({
   player = null,
   currentDate = null,
   settings = null,
+  context = null,
 } = {}) {
   bumpPerfCounter("tradeRules.playerEligibilityCalls");
   if (!player) return { ok: false, code: "missing_player", reason: "Player could not be found." };
   const active = settings || getUserTradeRuleSettings(leagueData);
-  const today = normalizeIsoDate(currentDate) || getUserTradeCurrentDate(leagueData);
+  const today = normalizeIsoDate(currentDate) || getUserTradeCurrentDate(leagueData, context);
   const cache = getScopedResultCache(playerEligibilityResultCache, leagueData);
   const playerCacheKey = cache ? [
     normalizeTeamName(teamName),
@@ -937,7 +940,7 @@ function futureStepienStartYear(leagueData = {}, context = null) {
   const tradeContext = context || getOffseasonTradeContext(leagueData);
   const seasonStartYear = getCurrentSeasonStartYear(leagueData);
 
-  const currentDate = getUserTradeCurrentDate(leagueData);
+  const currentDate = getUserTradeCurrentDate(leagueData, tradeContext);
   const [dateYear, dateMonth] = String(currentDate || "")
     .split("-")
     .map((value) => Number(value));
@@ -1024,9 +1027,9 @@ function pickIdentity(pick = {}) {
   ].join("|");
 }
 
-function buildGuaranteedFirstMap({ leagueData = {}, teamName = "", outgoingItems = [], incomingItems = [] } = {}) {
-  const context = getOffseasonTradeContext(leagueData);
-  const startYear = futureStepienStartYear(leagueData, context);
+function buildGuaranteedFirstMap({ leagueData = {}, teamName = "", outgoingItems = [], incomingItems = [], context = null } = {}) {
+  const tradeContext = context || getOffseasonTradeContext(leagueData);
+  const startYear = futureStepienStartYear(leagueData, tradeContext);
   const resolvedTeamName = resolveTeamNameForTradeRules({ leagueData, teamName, outgoingItems, incomingItems });
   const teamKey = normalizeTeamName(resolvedTeamName);
   const outgoingKeys = selectedOutgoingPickKeys(outgoingItems);
@@ -1131,7 +1134,7 @@ function getLeagueScopedCache(weakCache, leagueData = {}) {
 function findStepienViolations(args = {}) {
   const leagueData = args?.leagueData || {};
   const resolvedTeamName = resolveTeamNameForTradeRules(args);
-  const context = getOffseasonTradeContext(leagueData);
+  const context = args?.context || getOffseasonTradeContext(leagueData);
   const startYear = futureStepienStartYear(leagueData, context);
   const cache = getLeagueScopedCache(stepienViolationsCache, leagueData);
   const key = cache
@@ -1148,7 +1151,7 @@ function findStepienViolations(args = {}) {
   }
 
   bumpPerfCounter("tradeRules.stepienViolationBuild");
-  const map = buildGuaranteedFirstMap({ ...args, teamName: resolvedTeamName || args?.teamName || "" });
+  const map = buildGuaranteedFirstMap({ ...args, context, teamName: resolvedTeamName || args?.teamName || "" });
   const violations = [];
   for (let year = map.startYear; year < map.maxYear; year += 1) {
     if (!map.years.get(year) && !map.years.get(year + 1)) {
@@ -1182,14 +1185,14 @@ function isUnprotectedNormalFutureFirst(pick = {}, item = null) {
   );
 }
 
-function getSecondApronFurthestFirstYear({ leagueData = {}, teamName = "", pick = null, outgoingItems = [], incomingItems = [] } = {}) {
+function getSecondApronFurthestFirstYear({ leagueData = {}, teamName = "", pick = null, outgoingItems = [], incomingItems = [], context = null } = {}) {
   const resolvedTeamName = resolveTeamNameForTradeRules({ leagueData, teamName, pick, outgoingItems, incomingItems });
   const team = getTeamByName(leagueData, resolvedTeamName);
   if (!team) return null;
   const rules = getLeagueFinancialRules(leagueData);
   const secondApron = Number(rules?.secondApron || 0);
-  if (!secondApron || getTeamBasePayroll(team, leagueData) < secondApron - SALARY_TOLERANCE) return null;
-  const startYear = futureStepienStartYear(leagueData);
+  if (!secondApron || getTeamBasePayroll(team, leagueData, context) < secondApron - SALARY_TOLERANCE) return null;
+  const startYear = futureStepienStartYear(leagueData, context);
   const cache = getLeagueScopedCache(secondApronFurthestFirstCache, leagueData);
   const key = cache
     ? [normalizeTeamName(resolvedTeamName), startYear, stepienItemsSignature(outgoingItems), stepienItemsSignature(incomingItems)].join("|")
@@ -1219,19 +1222,20 @@ export function getUserTradePickEligibility({
   outgoingItems = [],
   incomingItems = [],
   settings = null,
+  context = null,
 } = {}) {
   bumpPerfCounter("tradeRules.pickEligibilityCalls");
   if (!pick) return { ok: false, code: "missing_pick", reason: "Draft pick could not be found." };
   const active = settings || getUserTradeRuleSettings(leagueData);
-  const context = getOffseasonTradeContext(leagueData);
-  const startYear = futureStepienStartYear(leagueData, context);
+  const tradeContext = context || getOffseasonTradeContext(leagueData);
+  const startYear = futureStepienStartYear(leagueData, tradeContext);
   const year = pickYear(pick);
   const maxFutureYear = startYear + (MAX_FUTURE_DRAFT_YEARS - 1);
   const currentDraftIsResolved = Boolean(
-    context?.inOffseason &&
-      context?.draftOrderLocked &&
-      !context?.draftComplete &&
-      Number(year) === Number(context?.seasonYear)
+    tradeContext?.inOffseason &&
+      tradeContext?.draftOrderLocked &&
+      !tradeContext?.draftComplete &&
+      Number(year) === Number(tradeContext?.seasonYear)
   );
   const resolvedForTradeRules = Boolean(isResolvedDraftPickAsset(pick) || currentDraftIsResolved);
   const resolvedTeamName = resolveTeamNameForTradeRules({ leagueData, teamName, pick, outgoingItems, incomingItems });
@@ -1241,7 +1245,7 @@ export function getUserTradePickEligibility({
     pickIdentity(pick),
     pickProtectionLabel(pick),
     primitiveSettingsSignature(active),
-    futureStepienStartYear(leagueData, context),
+    startYear,
     leagueRuleHistorySignature(leagueData),
     Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks.length : 0,
     outgoingPickSignature(outgoingItems),
@@ -1270,7 +1274,7 @@ export function getUserTradePickEligibility({
   }
 
   if (active.secondApron && isUnprotectedNormalFutureFirst(pick, item)) {
-    const furthestYear = getSecondApronFurthestFirstYear({ leagueData, teamName: resolvedTeamName, pick, outgoingItems, incomingItems });
+    const furthestYear = getSecondApronFurthestFirstYear({ leagueData, teamName: resolvedTeamName, pick, outgoingItems, incomingItems, context: tradeContext });
     if (furthestYear && year === furthestYear && year >= startYear) {
       return {
         ok: false,
@@ -1284,8 +1288,8 @@ export function getUserTradePickEligibility({
     const candidate = item || { type: "pick", pick };
     const alreadyPresent = (outgoingItems || []).some((row) => row?.type === "pick" && pickIdentity(row.pick || {}) === pickIdentity(pick));
     const projectedOutgoing = alreadyPresent ? outgoingItems : [...(outgoingItems || []), candidate];
-    const before = findStepienViolations({ leagueData, teamName: resolvedTeamName, outgoingItems, incomingItems });
-    const after = findStepienViolations({ leagueData, teamName: resolvedTeamName, outgoingItems: projectedOutgoing, incomingItems });
+    const before = findStepienViolations({ leagueData, teamName: resolvedTeamName, outgoingItems, incomingItems, context: tradeContext });
+    const after = findStepienViolations({ leagueData, teamName: resolvedTeamName, outgoingItems: projectedOutgoing, incomingItems, context: tradeContext });
     const newViolation = findNewStepienViolation(before, after);
     if (newViolation) {
       return {
@@ -1308,8 +1312,10 @@ export function validateUserTradeAssetPackage({
   outgoingItems = [],
   incomingItems = [],
   settings = null,
+  context = null,
 } = {}) {
   const active = settings || getUserTradeRuleSettings(leagueData);
+  const tradeContext = context || getOffseasonTradeContext(leagueData);
   const resolvedTeamName = resolveTeamNameForTradeRules({ leagueData, teamName, outgoingItems, incomingItems });
   for (const item of outgoingItems || []) {
     if (item?.type === "player" && item.player) {
@@ -1318,6 +1324,7 @@ export function validateUserTradeAssetPackage({
         teamName: resolvedTeamName || teamName,
         player: item.player,
         settings: active,
+        context: tradeContext,
       });
       if (!result.ok) return result;
     }
@@ -1330,13 +1337,14 @@ export function validateUserTradeAssetPackage({
         outgoingItems,
         incomingItems,
         settings: active,
+        context: tradeContext,
       });
       if (!result.ok) return result;
     }
   }
   if (active.stepienRule) {
-    const baseline = findStepienViolations({ leagueData, teamName: resolvedTeamName || teamName, outgoingItems: [], incomingItems: [] });
-    const projected = findStepienViolations({ leagueData, teamName: resolvedTeamName || teamName, outgoingItems, incomingItems });
+    const baseline = findStepienViolations({ leagueData, teamName: resolvedTeamName || teamName, outgoingItems: [], incomingItems: [], context: tradeContext });
+    const projected = findStepienViolations({ leagueData, teamName: resolvedTeamName || teamName, outgoingItems, incomingItems, context: tradeContext });
     const newViolation = findNewStepienViolation(baseline, projected);
     if (newViolation) {
       return {
@@ -1361,6 +1369,7 @@ export function validateUserTradeRules({
   includeDeadline = true,
   includeFinancial = true,
   settings = null,
+  context = null,
 } = {}) {
   const active = settings || getUserTradeRuleSettings(leagueData);
   const resolvedUserTeam = userTeam || getTeamByName(leagueData, userTeamName);
@@ -1368,17 +1377,19 @@ export function validateUserTradeRules({
   const resolvedUserName = userTeamName || teamNameOf(resolvedUserTeam);
   const resolvedCpuName = cpuTeamName || teamNameOf(resolvedCpuTeam);
 
+  const tradeContext = context || getOffseasonTradeContext(leagueData);
+
   if (includeDeadline) {
-    const deadline = getUserTradeDeadlineStatus(leagueData);
+    const deadline = getUserTradeDeadlineStatus(leagueData, tradeContext);
     if (deadline.locked) return { ok: false, code: "trade_deadline", reason: deadline.reason };
   }
-
   const userAssets = validateUserTradeAssetPackage({
     leagueData,
     teamName: resolvedUserName,
     outgoingItems: userItems,
     incomingItems: cpuItems,
     settings: active,
+    context: tradeContext,
   });
   if (!userAssets.ok) return userAssets;
 
@@ -1388,6 +1399,7 @@ export function validateUserTradeRules({
     outgoingItems: cpuItems,
     incomingItems: userItems,
     settings: active,
+    context: tradeContext,
   });
   if (!cpuAssets.ok) return cpuAssets;
 
@@ -1398,6 +1410,7 @@ export function validateUserTradeRules({
       outgoingItems: userItems,
       incomingItems: cpuItems,
       settings: active,
+      context: tradeContext,
     });
     if (!userFinancial.ok) return { ...userFinancial, reason: userFinancial.message };
     const cpuFinancial = evaluateUserTradeFinancialLegality({
@@ -1406,6 +1419,7 @@ export function validateUserTradeRules({
       outgoingItems: cpuItems,
       incomingItems: userItems,
       settings: active,
+      context: tradeContext,
     });
     if (!cpuFinancial.ok) return { ...cpuFinancial, reason: cpuFinancial.message };
   }

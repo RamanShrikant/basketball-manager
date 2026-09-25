@@ -476,18 +476,18 @@ function getFastEncumbranceReason(pick = {}, activeSwapKeys = new Set(), leagueD
   return `${pick?.year || "Future"} ${roundText} - ${original} is already tied to an active swap right.`;
 }
 
-function collectTradeablePicks({ leagueData, teamName, teamNames, activeSwapKeys }) {
+function collectTradeablePicks({ leagueData, teamName, teamNames, activeSwapKeys, tradeContext = null }) {
   if (!leagueData || !teamName) return [];
 
   const seasonYear = getSeasonYearFromLeague(leagueData);
-  const tradeContext = getOffseasonTradeContext(leagueData);
-  const draftOrder = tradeContext?.draftOrderLocked
-    ? tradeContext.draftOrder
+  const resolvedTradeContext = getOffseasonTradeContext(leagueData, tradeContext);
+  const draftOrder = resolvedTradeContext?.draftOrderLocked
+    ? resolvedTradeContext.draftOrder
     : readLockedDraftOrder(leagueData, seasonYear);
-  const draftComplete = tradeContext?.inOffseason
-    ? Boolean(tradeContext.draftComplete)
+  const draftComplete = resolvedTradeContext?.inOffseason
+    ? Boolean(resolvedTradeContext.draftComplete)
     : isDraftCompleteForSeason(leagueData, seasonYear);
-  const draftOrderLocked = Boolean(tradeContext?.draftOrderLocked || draftOrder.length > 0);
+  const draftOrderLocked = Boolean(resolvedTradeContext?.draftOrderLocked || draftOrder.length > 0);
 
   const normalizedFuturePicks = normalizeDraftPicks(leagueData?.draftPicks || [], teamNames)
     .filter((pick) => String(pick.status || "active").toLowerCase() === "active")
@@ -582,6 +582,7 @@ export default function TradePickSelect() {
     [teams]
   );
   const logoMap = useMemo(() => getTeamLogoMap(leagueData), [leagueData]);
+  const tradeContext = useMemo(() => getOffseasonTradeContext(leagueData), [leagueData]);
   const team = teams.find((t) => (t?.name || t?.teamName) === tradeTeamName) || null;
   const teamLogo = logoMap[normalizeTeamName(tradeTeamName)] || teamLogoOf(team);
 
@@ -612,13 +613,13 @@ export default function TradePickSelect() {
   );
 
   const picks = useMemo(
-    () => collectTradeablePicks({ leagueData, teamName: tradeTeamName, teamNames, activeSwapKeys }),
-    [activeSwapKeys, leagueData, tradeTeamName, teamNames]
+    () => collectTradeablePicks({ leagueData, teamName: tradeTeamName, teamNames, activeSwapKeys, tradeContext }),
+    [activeSwapKeys, leagueData, tradeTeamName, teamNames, tradeContext]
   );
 
   const otherTeamPicks = useMemo(
-    () => collectTradeablePicks({ leagueData, teamName: otherTeamName, teamNames, activeSwapKeys }),
-    [activeSwapKeys, leagueData, otherTeamName, teamNames]
+    () => collectTradeablePicks({ leagueData, teamName: otherTeamName, teamNames, activeSwapKeys, tradeContext }),
+    [activeSwapKeys, leagueData, otherTeamName, teamNames, tradeContext]
   );
 
   const rowEligibilityByKey = useMemo(() => {
@@ -643,10 +644,11 @@ export default function TradePickSelect() {
         item: previewItem,
         outgoingItems: currentSideItems,
         incomingItems: otherSideItems,
+        context: tradeContext,
       }));
     }
     return map;
-  }, [currentSideItems, leagueData, otherSideItems, picks, tradeTeamName]);
+  }, [currentSideItems, leagueData, otherSideItems, picks, tradeTeamName, tradeContext]);
 
   const [selectedKey, setSelectedKey] = useState("");
   const [rulePickKey, setRulePickKey] = useState("");
@@ -757,6 +759,7 @@ export default function TradePickSelect() {
       item: { type: "pick", teamName: tradeTeamName, pick, tradeRule: { action: "full" } },
       outgoingItems: currentSideItems,
       incomingItems: otherSideItems,
+      context: tradeContext,
     });
     const canUseProtection = canAddCustomProtectionToPick(pick);
 
@@ -792,6 +795,7 @@ export default function TradePickSelect() {
       item: primaryItem,
       outgoingItems: currentSideItems,
       incomingItems: otherSideItems,
+      context: tradeContext,
     });
     if (!primaryEligibility.ok) {
       setRuleError(primaryEligibility.reason || "This pick is not trade eligible.");
@@ -805,6 +809,7 @@ export default function TradePickSelect() {
         item: mirrorItem,
         outgoingItems: otherSideItems,
         incomingItems: currentSideItems,
+        context: tradeContext,
       });
       if (!mirrorEligibility.ok) {
         setRuleError(mirrorEligibility.reason || "The linked swap pick is not trade eligible.");
@@ -971,6 +976,7 @@ export default function TradePickSelect() {
         item: { type: "pick", teamName: tradeTeamName, pick: rulePick, tradeRule: { action: "full" } },
         outgoingItems: currentSideItems,
         incomingItems: otherSideItems,
+        context: tradeContext,
       })
     : { ok: true };
   const configuredModeLocked = Boolean(ruleMode === "full" && fullModeEligibility.ok === false);
