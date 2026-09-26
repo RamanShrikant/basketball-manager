@@ -3588,6 +3588,49 @@ def _v9_extension_interest(
         personality_type = "Flexible"
 
     reasons_sorted = sorted(reasons, key=lambda row: abs(num(row.get("impact"), 0)), reverse=True)[:6]
+
+    # Presentation-only diagnostics for the Contract Extensions UI.
+    # These are the exact component impacts already used above to calculate
+    # extension interest. Exposing them does NOT alter the formula, thresholds,
+    # willingness, CPU behavior, offer generation, acceptance, or saved state.
+    components = {
+        "roleFit": {
+            "label": "Role",
+            "impact": round(role_component, 1),
+            "minImpact": -7.0,
+            "maxImpact": 5.0,
+            "detail": "A role that matches his talent makes a long-term commitment more appealing.",
+        },
+        "security": {
+            "label": "Security",
+            "impact": round(security, 1),
+            "minImpact": -2.0,
+            "maxImpact": 7.0,
+            "detail": "Guaranteed years matter differently by age, market position, and player preference.",
+        },
+        "teamDirection": {
+            "label": "Team Direction",
+            "impact": round(situation_component, 1),
+            "minImpact": -5.0,
+            "maxImpact": 5.0,
+            "detail": "Competitive outlook and career timeline affect long-term interest.",
+        },
+        "franchiseRelationship": {
+            "label": "Franchise Relationship",
+            "impact": round(relationship_component, 1),
+            "minImpact": -5.0,
+            "maxImpact": 5.0,
+            "detail": "Continuity and history with the organization can make commitment more attractive.",
+        },
+        "freeAgencyLeverage": {
+            "label": "Free Agency Leverage",
+            "impact": round(leverage, 1),
+            "minImpact": -18.0,
+            "maxImpact": 2.0,
+            "detail": "A stronger open market gives him more reason to preserve future options.",
+        },
+    }
+
     return {
         "score": score,
         "label": label,
@@ -3595,5 +3638,6 @@ def _v9_extension_interest(
         "threshold": V9_EXTENSION_INTEREST_THRESHOLD,
         "personalityType": personality_type,
         "reasons": reasons_sorted,
+        "components": components,
         "calibrationVersion": "v10_selective_interest",
     }

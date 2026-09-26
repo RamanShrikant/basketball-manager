@@ -3,6 +3,8 @@ import { SOUND_KEYS, SOUND_REGISTRY } from "./soundRegistry.js";
 const SFX_ENABLED_KEY = "bm_sfx_enabled_v1";
 const SFX_MASTER_VOLUME_KEY = "bm_sfx_master_volume_v1";
 const audioCache = new Map();
+const lastPlayAtByKey = new Map();
+const DUPLICATE_BURST_WINDOW_MS = 45;
 
 function clamp01(value, fallback = 1) {
   const numeric = Number(value);
@@ -122,6 +124,16 @@ export function primeSound(soundKey) {
 
 export function playSound(soundKey) {
   if (!isSoundEnabled()) return false;
+
+  // A document-level semantic click binding can fire before a page's existing
+  // React onClick handler. Suppress the second copy of the same semantic sound
+  // from the same physical click without affecting normal human-speed clicks.
+  const now = typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+  const previous = Number(lastPlayAtByKey.get(soundKey));
+  if (Number.isFinite(previous) && now - previous < DUPLICATE_BURST_WINDOW_MS) return false;
+
   const source = chooseSource(soundKey);
   if (!source) return false;
 
@@ -134,6 +146,7 @@ export function playSound(soundKey) {
     audio.muted = false;
     audio.currentTime = 0;
     audio.volume = clamp01(config?.volume, 1) * getMasterVolume();
+    lastPlayAtByKey.set(soundKey, now);
     const playResult = audio.play();
     if (playResult && typeof playResult.catch === "function") {
       playResult.catch(() => {});

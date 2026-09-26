@@ -720,6 +720,7 @@ def build_extension_eligibility(
     base["extensionInterestEligible"] = _extension_interest_allows_negotiation(sentiment)
     base["extensionInterestLabel"] = sentiment.get("extensionInterestLabel") or ("Interested" if base["extensionInterestEligible"] else "Prefers to Wait")
     base["extensionInterestReasons"] = list(sentiment.get("extensionInterestReasons") or [])
+    base["extensionInterestComponents"] = dict(sentiment.get("extensionInterestComponents") or {})
     base["extensionPersonalityType"] = sentiment.get("extensionPersonalityType") or "Flexible"
 
     refusal = _extension_refusal_reason(league_data, team, player, extension_type, mood_payload)
@@ -1382,6 +1383,7 @@ def _build_extension_mood_map(
                 "extensionInterestWilling": bool(interest.get("willing", interest_score >= EXTENSION_INTEREST_THRESHOLD)),
                 "extensionInterestThreshold": _int(interest.get("threshold"), EXTENSION_INTEREST_THRESHOLD),
                 "extensionInterestReasons": list(interest.get("reasons") or []),
+                "extensionInterestComponents": dict(interest.get("components") or {}),
                 "extensionPersonalityType": interest.get("personalityType") or "Flexible",
             }
             for value in [row.get("playerId"), row.get("id"), row.get("playerName"), row.get("name"), row.get("player")]:
@@ -1423,6 +1425,7 @@ def _canonical_extension_sentiment(
                 "extensionInterestThreshold": EXTENSION_INTEREST_THRESHOLD,
                 "extensionInterestLabel": "Interested" if mood >= EXTENSION_INTEREST_THRESHOLD else "Prefers to Wait",
                 "extensionInterestReasons": [],
+                "extensionInterestComponents": {},
                 "extensionPersonalityType": "Flexible",
             }
     mood = _player_mood_value(player)
@@ -1433,6 +1436,7 @@ def _canonical_extension_sentiment(
         "extensionInterestThreshold": EXTENSION_INTEREST_THRESHOLD,
         "extensionInterestLabel": "Interested" if mood >= EXTENSION_INTEREST_THRESHOLD else "Prefers to Wait",
         "extensionInterestReasons": [],
+        "extensionInterestComponents": {},
         "extensionPersonalityType": "Flexible",
     }
 

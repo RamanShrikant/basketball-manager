@@ -17,6 +17,7 @@ import { initializeUpcomingDraftClassStorage } from "./utils/upcomingDraftClass.
 import { initializeSeasonStatsArchiveStorage } from "./utils/seasonStatsArchive.js";
 import { initializeCustomDraftClassStorage } from "./utils/customDraftClassStorage.js";
 import { initializeOffseasonMoodBaselineStorage } from "./utils/offseasonMoodBaselineStorage.js";
+import { installUiSoundBindings } from "./audio/uiSoundBindings.js";
 
 // ------------------------------
 // DEV BOOT RESET (npm run dev)
@@ -70,6 +71,7 @@ async function bootstrap() {
   }
 
   installBasketballManagerDiagnostics();
+  installUiSoundBindings();
 
   window.simulateOneGame = pySimOneGame;
   console.log("✓ simulateOneGame exposed globally");

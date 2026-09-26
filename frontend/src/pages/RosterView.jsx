@@ -1225,6 +1225,9 @@ export default function RosterView() {
   }
 
   const player = selectedPlayer || viewPlayers[0] || {};
+  const selectedPlayerPortraitTeam = isAllView
+    ? (getTeamForPlayer(player) || selectedTeam || null)
+    : (activeRosterTeam || selectedTeam || null);
   const headerTitle = isAllView ? "All Players" : `${activeRosterTeam?.name || selectedTeam?.name || "Team"} Roster`;
   const showTeamCol = isAllView; // logo column only in All Players view
   const regularSeasonStandardRosterLimit = Number(
@@ -1355,8 +1358,8 @@ export default function RosterView() {
               <PlayerPortraitFrame
                 src={player?.headshot}
                 player={player}
-                team={activeRosterTeam || selectedTeam}
-                teamName={activeRosterTeam?.name || selectedTeam?.name || ""}
+                team={selectedPlayerPortraitTeam}
+                teamName={selectedPlayerPortraitTeam?.name || selectedPlayerPortraitTeam?.teamName || ""}
                 alt={player?.name || "Player"}
                 className={styles.selectedPlayerPortrait}
                 fallback={(

@@ -4434,3 +4434,184 @@
   .middleGrid .playerCardMeta { height: 28px !important; min-height: 28px !important; }
 }
 /* V14.15 TEAM HUB FULL VIEWPORT FIT END */
+
+
+/* TEAM HUB CONTENT FILL + ROTATION MANUAL CONTROLS PASS
+   Visual-only:
+   - distribute the three top-panel rows through the available card height
+   - slightly strengthen type so the panels feel intentionally filled
+   - expose Team Hub Starting Five / Bench portrait + OVR/POT ring tuning through
+     frontend/src/config/teamHubRotationLayout.js
+   No data, roster, simulation, standings, schedule, or trade logic is changed.
+*/
+
+/* Fill the available vertical space instead of leaving a dead strip under the rows. */
+.topGrid .gameList,
+.topGrid .metricList,
+.topGrid .standingsRows {
+  display: flex !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+}
+
+.topGrid .gameList,
+.topGrid .metricList {
+  height: calc(100% - 29px) !important;
+}
+
+.topGrid .standingsRows {
+  height: calc(100% - 51px) !important; /* 29px panel heading + 22px column heading */
+  padding-bottom: 5px !important;
+  box-sizing: border-box !important;
+}
+
+.topGrid .gameRow,
+.topGrid .metricList > div,
+.topGrid .standingRow {
+  flex: 1 1 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+/* Slightly fuller typography while remaining safe on laptop widths/heights. */
+.topGrid .panelHeading h2 {
+  font-size: clamp(14px, 0.72vw, 15px) !important;
+}
+
+.topGrid .gameRow,
+.topGrid .standingRow {
+  font-size: clamp(10.5px, 0.56vw, 11.6px) !important;
+}
+
+.topGrid .gameRow strong,
+.topGrid .standingTeam {
+  font-weight: 620 !important;
+}
+
+.topGrid .metricList span {
+  font-size: clamp(10px, 0.52vw, 10.8px) !important;
+}
+
+.topGrid .metricList strong {
+  font-size: clamp(11px, 0.58vw, 12px) !important;
+  font-weight: 640 !important;
+}
+
+.topGrid .standingsHeader {
+  font-size: clamp(9px, 0.47vw, 9.8px) !important;
+}
+
+.topGrid .gameRow img,
+.topGrid .standingTeam img {
+  width: 21px !important;
+  height: 21px !important;
+}
+
+/* Manual Team Hub player-headshot controls.
+   Defaults exactly preserve the pre-patch final V14.15 dimensions (78 x 80). */
+.playerPortrait,
+.middleGrid .playerPortrait {
+  width: var(--team-hub-headshot-width, 78px) !important;
+  height: var(--team-hub-headshot-height, 80px) !important;
+  transform:
+    translateX(-50%)
+    translate(
+      var(--team-hub-headshot-x, 0px),
+      var(--team-hub-headshot-y, 0px)
+    ) !important;
+  transform-origin: bottom center !important;
+}
+
+/* Manual Team Hub OVR/POT ring controls.
+   Defaults exactly preserve the pre-patch final V14.15 placement/scale. */
+.playerRatingBadge,
+.middleGrid .playerRatingBadge {
+  top: calc(4px + var(--team-hub-ring-y, 0px)) !important;
+  left: calc(6px + var(--team-hub-ring-x, 0px)) !important;
+  transform: scale(var(--team-hub-ring-scale, 0.54)) !important;
+  transform-origin: top left !important;
+}
+
+@media (max-height: 820px) {
+  .topGrid .standingsRows {
+    height: calc(100% - 49px) !important; /* 27px compact heading + 22px table header */
+  }
+
+  .topGrid .gameRow,
+  .topGrid .standingRow {
+    font-size: 10.4px !important;
+  }
+
+  .topGrid .metricList span {
+    font-size: 9.8px !important;
+  }
+
+  .topGrid .metricList strong {
+    font-size: 10.8px !important;
+  }
+}
+/* TEAM HUB CONTENT FILL + ROTATION MANUAL CONTROLS END */
+
+
+/* TEAM HUB PLAYER SOURCE OVERRIDE + DRAFT ASSET WATERMARK PASS
+   Visual-only:
+   - allows per-player portrait scale/offset exceptions for differently cropped source images
+   - removes the redundant orange 1st/2nd Draft Assets badge
+   - adds the pick's original-team logo as a subtle, manually tunable watermark
+   No draft ownership, pick value, trade, roster, simulation, or save logic is changed.
+*/
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  transform:
+    translateX(-50%)
+    translate(
+      var(--team-hub-headshot-x, 0px),
+      var(--team-hub-headshot-y, 0px)
+    )
+    scale(var(--team-hub-headshot-scale, 1)) !important;
+  transform-origin: bottom center !important;
+}
+
+.draftAssetRow {
+  position: relative !important;
+  grid-template-columns: 17px minmax(0, 1fr) !important;
+  overflow: hidden !important;
+  isolation: isolate;
+}
+
+.draftAssetRound {
+  display: none !important;
+}
+
+.draftAssetNumber,
+.draftAssetText {
+  position: relative;
+  z-index: 2;
+}
+
+
+.draftAssetLogo {
+  position: absolute;
+  z-index: 1;
+  right: 8px;
+  top: 50%;
+  width: var(--team-hub-draft-logo-size, 64px);
+  height: var(--team-hub-draft-logo-size, 64px);
+  object-fit: contain;
+  object-position: center;
+  opacity: var(--team-hub-draft-logo-opacity, 0.055);
+  transform:
+    translate(
+      var(--team-hub-draft-logo-x, 0px),
+      calc(-50% + var(--team-hub-draft-logo-y, 0px))
+    )
+    rotate(var(--team-hub-draft-logo-rotation, -8deg))
+    scale(var(--team-hub-draft-logo-scale, 1));
+  transform-origin: center;
+  filter: saturate(0.75) brightness(0.95);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* TEAM HUB PLAYER SOURCE OVERRIDE + DRAFT ASSET WATERMARK END */

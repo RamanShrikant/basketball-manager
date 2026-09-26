@@ -11,12 +11,19 @@ import {
 import PageFade from "../components/PageFade.jsx";
 import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
+import { CONTRACT_EXTENSIONS_LAYOUT } from "../config/contractExtensionsLayout.js";
+import { CONTRACT_EXTENSIONS_TEXT_LAYOUT } from "../config/contractExtensionsTextLayout.js";
+import { playSound, primeSound, SOUND_KEYS } from "../audio/soundManager.js";
 import { getOffseasonTradeContext } from "../utils/offseasonTradeContext.js";
+import { getSeasonCalendarConfig } from "../utils/seasonContext.js";
 import { getUserTradeCurrentDate, stampExtensionRestriction } from "../utils/userTradeRules.js";
 import "../styles/BMAnimations.css";
 import "../styles/BMPageBackground.css";
+import "./ContractExtensions.css";
 
 const EXTENSION_DEADLINE_CONTEXT_KEY = "bm_contract_extension_deadline_context_v1";
+const CE_LAYOUT = CONTRACT_EXTENSIONS_LAYOUT;
+const CE_TEXT = CONTRACT_EXTENSIONS_TEXT_LAYOUT;
 
 
 
@@ -40,6 +47,37 @@ function extensionHeadshotOf(player, row) {
     player?.img ||
     row?.headshot ||
     ""
+  );
+}
+
+function extensionTeamLogoOf(team) {
+  return (
+    team?.logo ||
+    team?.teamLogo ||
+    team?.newTeamLogo ||
+    team?.logoUrl ||
+    team?.image ||
+    team?.img ||
+    ""
+  );
+}
+
+function extensionVisualTeam(leagueData, selectedTeam) {
+  const selectedName = String(selectedTeam?.name || selectedTeam?.teamName || "").trim().toLowerCase();
+  if (!selectedName) return selectedTeam || null;
+
+  const teams = Array.isArray(leagueData?.teams)
+    ? leagueData.teams
+    : leagueData?.conferences
+      ? Object.values(leagueData.conferences).flat().filter(Boolean)
+      : [];
+
+  return (
+    teams.find((team) =>
+      String(team?.name || team?.teamName || "").trim().toLowerCase() === selectedName
+    ) ||
+    selectedTeam ||
+    null
   );
 }
 
@@ -127,6 +165,95 @@ function interestTone(label = "") {
   return "text-rose-300";
 }
 
+const EXTENSION_FACTOR_DEFS = [
+  { key: "roleFit", label: "Role", icon: "▣" },
+  { key: "security", label: "Security", icon: "◇" },
+  { key: "teamDirection", label: "Team Direction", icon: "↗" },
+  { key: "franchiseRelationship", label: "Franchise Relationship", icon: "◎" },
+  { key: "freeAgencyLeverage", label: "Free Agency Leverage", icon: "★" },
+];
+
+function clampNumber(value, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return min;
+  return Math.max(min, Math.min(max, number));
+}
+
+function parseIsoUtc(value) {
+  const text = normalizeIsoDate(value);
+  if (!text) return null;
+  const [year, month, day] = text.split("-").map(Number);
+  const stamp = Date.UTC(year, month - 1, day);
+  return Number.isFinite(stamp) ? stamp : null;
+}
+
+function formatExtensionDate(value, { compact = false } = {}) {
+  const stamp = parseIsoUtc(value);
+  if (stamp == null) return "—";
+  const date = new Date(stamp);
+  if (compact) {
+    return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(date);
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+}
+
+function negotiationWindowState(leagueData, selectedRow, deadlineContext) {
+  const currentDate = currentLeagueDate(leagueData, deadlineContext);
+  const deadlineDate = normalizeIsoDate(selectedRow?.deadlineDate);
+  const calendar = getSeasonCalendarConfig(leagueData || {});
+  const startDate = normalizeIsoDate(calendar?.regularSeasonStart) || currentDate;
+
+  const start = parseIsoUtc(startDate);
+  const current = parseIsoUtc(currentDate);
+  const deadline = parseIsoUtc(deadlineDate);
+
+  let progress = 0;
+  if (start != null && current != null && deadline != null && deadline > start) {
+    progress = clampNumber(((current - start) / (deadline - start)) * 100, 0, 100);
+  }
+
+  return { currentDate, deadlineDate, startDate, progress };
+}
+
+function extensionFactorVisual(component = {}) {
+  const impact = Number(component?.impact);
+  const minImpact = Number(component?.minImpact);
+  const maxImpact = Number(component?.maxImpact);
+  const validImpact = Number.isFinite(impact) ? impact : 0;
+  const validMin = Number.isFinite(minImpact) ? minImpact : -5;
+  const validMax = Number.isFinite(maxImpact) && maxImpact > validMin ? maxImpact : 5;
+  const pct = clampNumber(((validImpact - validMin) / (validMax - validMin)) * 100, 0, 100);
+
+  let label = "Neutral";
+  let tone = "neutral";
+  if (validImpact >= 2.5) {
+    label = "Strong";
+    tone = "positive";
+  } else if (validImpact >= 0.75) {
+    label = "Positive";
+    tone = "positive";
+  } else if (validImpact <= -5) {
+    label = "Strong concern";
+    tone = "negative";
+  } else if (validImpact <= -0.75) {
+    label = "Concern";
+    tone = "warning";
+  }
+
+  return { impact: validImpact, pct, label, tone };
+}
+
+function signedImpact(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || Math.abs(number) < 0.05) return "0.0";
+  return `${number > 0 ? "+" : ""}${number.toFixed(1)}`;
+}
+
 function packageTotal(pkg) {
   return Number(pkg?.totalValue || (pkg?.salaryByYear || []).reduce((sum, value) => sum + Number(value || 0), 0));
 }
@@ -168,6 +295,8 @@ export default function ContractExtensions() {
   const [playerCardOpen, setPlayerCardOpen] = useState(false);
 
   const teamName = selectedTeam?.name || null;
+  const visualTeam = useMemo(() => extensionVisualTeam(leagueData, selectedTeam), [leagueData, selectedTeam]);
+  const visualTeamLogo = extensionTeamLogoOf(visualTeam) || extensionTeamLogoOf(selectedTeam);
   const deadlineContext = useMemo(() => {
     const routeContext = location?.state?.extensionDeadlineContext || null;
     const storedContext = readStoredDeadlineContext();
@@ -187,6 +316,40 @@ export default function ContractExtensions() {
   );
 
   const selectedPlayer = useMemo(() => getCanonicalPlayer(leagueData, selectedRow), [leagueData, selectedRow]);
+  const negotiationWindow = useMemo(
+    () => negotiationWindowState(leagueData, selectedRow, deadlineContext),
+    [leagueData, selectedRow?.deadlineDate, deadlineContext]
+  );
+  const extensionFactors = useMemo(() => {
+    const components =
+      selectedRow?.extensionInterestComponents && typeof selectedRow.extensionInterestComponents === "object"
+        ? selectedRow.extensionInterestComponents
+        : {};
+    const reasons = Array.isArray(selectedRow?.extensionInterestReasons) ? selectedRow.extensionInterestReasons : [];
+
+    return EXTENSION_FACTOR_DEFS.map((definition) => {
+      const direct = components?.[definition.key];
+      const reason = reasons.find((row) =>
+        String(row?.label || "").toLowerCase() === String(definition.label || "").toLowerCase()
+      );
+      const component = direct && typeof direct === "object"
+        ? direct
+        : reason
+          ? {
+              impact: reason.impact,
+              minImpact: -5,
+              maxImpact: 5,
+              detail: reason.detail,
+            }
+          : {};
+      return {
+        ...definition,
+        component,
+        visual: extensionFactorVisual(component),
+        detail: component?.detail || reason?.detail || "This factor contributes to extension interest.",
+      };
+    });
+  }, [selectedRow]);
   const askPackages = selectedRow?.askPackages || [];
   const selectedPackage = useMemo(
     () => askPackages.find((pkg) => String(pkg.askPackageId || pkg.packageId) === String(selectedPackageId)) || askPackages[0] || null,
@@ -261,6 +424,7 @@ export default function ContractExtensions() {
 
   const submitOffer = async () => {
     if (!leagueData || !teamName || !selectedRow?.eligible || !selectedPackage) return;
+    primeSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
     setSubmitting(true);
     setNotice(null);
     try {
@@ -282,6 +446,9 @@ export default function ContractExtensions() {
           })
         : resultLeague;
       if (stampedLeague) setLeagueData(stampedLeague);
+      if (result.accepted) {
+        playSound(SOUND_KEYS.PLAYER_TRANSACTION_SUCCESS);
+      }
       setNotice({
         type: result.accepted ? "success" : "warning",
         text: result.accepted
@@ -332,73 +499,34 @@ export default function ContractExtensions() {
 
   return (
     <PageFade>
-      <style>{`
-        .contract-extension-orange-scrollbar {
-          scrollbar-width: auto;
-          scrollbar-color: #f97316 #171717;
-        }
-        .contract-extension-orange-scrollbar::-webkit-scrollbar {
-          width: 14px;
-        }
-        .contract-extension-orange-scrollbar::-webkit-scrollbar-track {
-          background: #171717;
-          border-radius: 999px;
-          box-shadow: inset 0 1px 2px rgba(0,0,0,0.72);
-        }
-        .contract-extension-orange-scrollbar::-webkit-scrollbar-thumb {
-          background: linear-gradient(180deg, #fb923c, #ea580c);
-          border-radius: 999px;
-          border: 2px solid #171717;
-          box-shadow: 0 0 10px rgba(249,115,22,0.22);
-        }
-        .contract-extension-orange-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: linear-gradient(180deg, #fdba74, #f97316);
-        }
-      `}</style>
-      <div className="bm-page-bg min-h-screen overflow-hidden bg-neutral-950 pb-6 text-white">
-        <div className="mx-auto flex h-[calc(100vh-50px)] max-w-[1600px] flex-col px-5 py-2">
-          <header className="mb-2 flex shrink-0 items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/55 px-5 py-2 backdrop-blur">
-            <div>
-              <div className="text-[11px] font-black uppercase tracking-[0.25em] text-orange-300">Front Office</div>
-              <h1 className="mt-0.5 text-2xl font-black">Contract Extensions</h1>
-              <p className="mt-1 text-sm text-neutral-400">
-                {teamName} · Rookie deadline {preview?.state?.rookieDeadlineDate || "—"} · Veteran deadline {preview?.state?.veteranDeadlineDate || "—"}
-              </p>
+      <div className="bm-page-bg ce-page min-h-screen overflow-hidden bg-neutral-950 text-white">
+        <div className="ce-shell mx-auto flex h-[calc(100vh-50px)] max-w-[1600px] flex-col">
+          <header className="ce-page-header">
+            <div className="ce-page-heading">
+              <div className="ce-eyebrow">Front Office</div>
+              <h1>Contract Extensions</h1>
             </div>
-            <button
-              type="button"
-              onClick={() => navigate("/team-hub", { state: { hubSection: "Front Office" } })}
-              className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-black hover:bg-white/10"
-            >
-              Back to Team Hub
-            </button>
           </header>
 
           {notice && (
-            <div className={`mb-3 shrink-0 rounded-xl border px-4 py-3 text-sm font-bold ${
-              notice.type === "success"
-                ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
-                : notice.type === "warning"
-                ? "border-amber-400/30 bg-amber-500/10 text-amber-200"
-                : "border-rose-400/30 bg-rose-500/10 text-rose-200"
-            }`}>
+            <div className={`ce-notice ${notice.type === "success" ? "ce-notice-success" : notice.type === "warning" ? "ce-notice-warning" : "ce-notice-error"}`}>
               {notice.text}
             </div>
           )}
 
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[330px_minmax(0,1fr)]">
-            <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-900/90">
-              <div className="grid grid-cols-3 gap-2 border-b border-white/10 p-3 text-center">
-                <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{extensionSummary.eligibleLikeCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Eligible</div></div>
-                <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{extensionSummary.rookieCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Rookie</div></div>
-                <div className="rounded-xl bg-black/30 p-3"><div className="text-2xl font-black">{extensionSummary.veteranCount ?? "—"}</div><div className="text-[10px] uppercase tracking-wider text-neutral-500">Veteran</div></div>
+          <div className="ce-workspace">
+            <section className="ce-candidate-panel">
+              <div className="ce-summary-grid">
+                <div className="ce-summary-card"><strong>{extensionSummary.eligibleLikeCount ?? "—"}</strong><span>Eligible</span></div>
+                <div className="ce-summary-card"><strong>{extensionSummary.rookieCount ?? "—"}</strong><span>Rookie</span></div>
+                <div className="ce-summary-card"><strong>{extensionSummary.veteranCount ?? "—"}</strong><span>Veteran</span></div>
               </div>
 
-              <div className="contract-extension-orange-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
+              <div className="contract-extension-orange-scrollbar ce-candidate-scroll">
                 {loading ? (
-                  <div className="p-6 text-center text-neutral-400">Loading extension eligibility…</div>
+                  <div className="ce-loading">Loading extension eligibility…</div>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="ce-candidate-list">
                     {orderedExtensionPlayers.map((row) => {
                       const key = row.playerId || row.playerName;
                       const active = String(key) === String(selectedPlayerId);
@@ -412,13 +540,35 @@ export default function ContractExtensions() {
                         <button
                           type="button"
                           key={key}
+                          data-bm-sfx-ui-nav="true"
                           onClick={() => setSelectedPlayerId(key)}
-                          className={`w-full rounded-xl border px-1.5 py-2 text-left transition ${active ? "border-orange-400 bg-orange-500/12" : "border-white/8 bg-black/25 hover:border-white/20"}`}
+                          className={`ce-candidate-row ${active ? "is-selected" : ""}`}
                         >
-                          <div className="grid min-w-0 grid-cols-[50px_48px_minmax(0,1fr)_68px] items-center gap-1.5">
-                            <div className="relative -ml-1 h-[50px] w-[50px] shrink-0 overflow-visible">
+                          {visualTeamLogo ? (
+                            <img
+                              className="ce-candidate-watermark"
+                              src={visualTeamLogo}
+                              alt=""
+                              aria-hidden="true"
+                              style={{
+                                left: `calc(50% + ${CE_LAYOUT.playerList.teamLogo?.x ?? 0}px)`,
+                                top: `calc(50% + ${CE_LAYOUT.playerList.teamLogo?.y ?? 0}px)`,
+                                opacity: CE_LAYOUT.playerList.teamLogo?.opacity ?? 0.05,
+                                transform: `translate(-50%, -50%) scale(${CE_LAYOUT.playerList.teamLogo?.scale ?? 1})`,
+                                transformOrigin: "center",
+                              }}
+                            />
+                          ) : null}
+                          <div className="ce-candidate-portrait">
+                            <div
+                              className="ce-candidate-portrait-stage"
+                              style={{
+                                transform: `translate(${CE_LAYOUT.playerList.headshot.x}px, ${CE_LAYOUT.playerList.headshot.y}px) scale(${CE_LAYOUT.playerList.headshot.scale})`,
+                              }}
+                            >
                               <RuntimePlayerPortrait
                                 player={portraitPlayer}
+                                team={selectedTeam}
                                 teamName={teamName}
                                 src={extensionHeadshotOf(portraitPlayer, row)}
                                 alt={row.playerName}
@@ -427,28 +577,62 @@ export default function ContractExtensions() {
                                 fallback={<div className="h-full w-full" />}
                               />
                             </div>
-
-                            <div className="flex shrink-0 items-center justify-center">
-                              <PlayerRatingRing
-                                overall={row.overall}
-                                potential={row.potential}
-                                size={48}
-                                strokeWidth={4}
-                              />
-                            </div>
-
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-black text-white">
-                                {row.playerName}
-                              </div>
-                            </div>
-
-                            <span
-                              className={`flex h-[34px] w-[68px] shrink-0 items-center justify-center rounded-full px-1 text-center text-[8px] font-black uppercase leading-[0.98] tracking-[0.02em] ${row.eligible ? "bg-emerald-500/15 text-emerald-300" : row.alreadyExtended ? "bg-sky-500/15 text-sky-300" : row.playerRefusesExtension ? "bg-amber-500/15 text-amber-300" : "bg-white/5 text-neutral-500"}`}
-                            >
-                              {row.eligible ? <>Has<br />Interest</> : row.alreadyExtended ? <>Contract<br />Extended</> : row.playerRefusesExtension ? <>Not<br />Interested</> : "Ineligible"}
-                            </span>
                           </div>
+                          <div
+                            className="ce-candidate-rating-stage"
+                            style={{
+                              transform: `translate(${CE_LAYOUT.playerList.overallRing.x}px, ${CE_LAYOUT.playerList.overallRing.y}px) scale(${CE_LAYOUT.playerList.overallRing.scale})`,
+                              "--ce-ring-ovr-label-size": `${CE_LAYOUT.playerList.overallRing.ovrLabelSize ?? 6}px`,
+                              "--ce-ring-ovr-label-x": `${CE_LAYOUT.playerList.overallRing.ovrLabelX ?? 0}px`,
+                              "--ce-ring-ovr-label-y": `${CE_LAYOUT.playerList.overallRing.ovrLabelY ?? -1}px`,
+                              "--ce-ring-ovr-number-size": `${CE_LAYOUT.playerList.overallRing.ovrNumberSize ?? 17}px`,
+                              "--ce-ring-ovr-number-x": `${CE_LAYOUT.playerList.overallRing.ovrNumberX ?? 0}px`,
+                              "--ce-ring-ovr-number-y": `${CE_LAYOUT.playerList.overallRing.ovrNumberY ?? 0}px`,
+                              "--ce-ring-pot-size": `${CE_LAYOUT.playerList.overallRing.potSize ?? 6}px`,
+                              "--ce-ring-pot-x": `${CE_LAYOUT.playerList.overallRing.potX ?? 0}px`,
+                              "--ce-ring-pot-y": `${CE_LAYOUT.playerList.overallRing.potY ?? 1}px`,
+                            }}
+                          >
+                            <PlayerRatingRing
+                              overall={row.overall}
+                              potential={row.potential}
+                              size={50}
+                              strokeWidth={4}
+                              className="ce-candidate-rating"
+                            />
+                          </div>
+                          <div
+                            className="ce-candidate-copy"
+                            style={{
+                              transform: `translate(${CE_TEXT.playerList.box.x}px, ${CE_TEXT.playerList.box.y}px) scale(${CE_TEXT.playerList.box.scale})`,
+                              transformOrigin: "left center",
+                            }}
+                          >
+                            <strong
+                              style={{
+                                fontSize: `${CE_TEXT.playerList.name.size}px`,
+                                transform: `translate(${CE_TEXT.playerList.name.x}px, ${CE_TEXT.playerList.name.y}px)`,
+                                transformOrigin: "left center",
+                              }}
+                            >
+                              {row.playerName}
+                            </strong>
+                            <div
+                              className="ce-candidate-meta"
+                              style={{
+                                fontSize: `${CE_TEXT.playerList.meta.size}px`,
+                                transform: `translate(${CE_TEXT.playerList.meta.x}px, ${CE_TEXT.playerList.meta.y}px)`,
+                                transformOrigin: "left center",
+                              }}
+                            >
+                              <span>{portraitPlayer?.pos || row?.position || row?.pos || "—"}</span>
+                              <span className="ce-meta-divider">|</span>
+                              <span>Age {portraitPlayer?.age ?? "—"}</span>
+                            </div>
+                          </div>
+                          <span className={`ce-status-pill ${row.eligible ? "is-interest" : row.alreadyExtended ? "is-extended" : row.playerRefusesExtension ? "is-waiting" : "is-ineligible"}`}>
+                            {row.eligible ? <>Has<br />Interest</> : row.alreadyExtended ? <>Contract<br />Extended</> : row.playerRefusesExtension ? <>Not<br />Interested</> : "Ineligible"}
+                          </span>
                         </button>
                       );
                     })}
@@ -457,26 +641,105 @@ export default function ContractExtensions() {
               </div>
             </section>
 
-            <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-900/90">
+            <section className="ce-detail-panel">
               {!selectedRow ? (
-                <div className="flex h-full items-center justify-center text-neutral-500">Select a player.</div>
+                <div className="ce-empty">Select a player.</div>
               ) : (
                 <>
-                  <div className="contract-extension-detail-panel min-h-0 flex-1 overflow-hidden p-2.5">
-                    <div className="flex h-full min-h-0 flex-col gap-1.5">
-                      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 pb-1.5">
-                        <div className="min-w-0">
-                          <button type="button" onClick={() => setPlayerCardOpen(true)} className="truncate text-left text-xl font-black hover:text-orange-300">{selectedPlayer?.name || selectedRow.playerName}</button>
-                          <div className="mt-1 text-xs text-neutral-300">
-                            {selectedPlayer?.pos || "—"} · Age {selectedPlayer?.age ?? "—"} · {formatPlayerHeight(selectedPlayer?.height)} · OVR {selectedPlayer?.overall ?? "—"} · POT {selectedPlayer?.potential ?? "—"}
+                  <div className="ce-detail-scroll">
+                    <div className="ce-player-hero">
+                      {visualTeamLogo ? (
+                        <img
+                          className="ce-player-watermark"
+                          src={visualTeamLogo}
+                          alt=""
+                          aria-hidden="true"
+                          style={{
+                            left: `calc(-20px + ${CE_LAYOUT.selectedPlayer.teamLogo?.x ?? 0}px)`,
+                            top: `calc(50% + ${CE_LAYOUT.selectedPlayer.teamLogo?.y ?? 0}px)`,
+                            opacity: CE_LAYOUT.selectedPlayer.teamLogo?.opacity ?? 0.075,
+                            transform: `translateY(-50%) scale(${CE_LAYOUT.selectedPlayer.teamLogo?.scale ?? 1})`,
+                            transformOrigin: "center",
+                          }}
+                        />
+                      ) : null}
+                      <div className="ce-player-identity">
+                        <div className="ce-player-portrait">
+                          <div
+                            className="ce-player-portrait-stage"
+                            style={{
+                              transform: `translate(${CE_LAYOUT.selectedPlayer.headshot.x}px, ${CE_LAYOUT.selectedPlayer.headshot.y}px) scale(${CE_LAYOUT.selectedPlayer.headshot.scale})`,
+                            }}
+                          >
+                            <RuntimePlayerPortrait
+                              player={selectedPlayer || selectedRow}
+                              team={selectedTeam}
+                              teamName={teamName}
+                              src={extensionHeadshotOf(selectedPlayer, selectedRow)}
+                              alt={selectedPlayer?.name || selectedRow.playerName}
+                              className="h-full w-full object-contain object-bottom"
+                              fallback={<div className="h-full w-full" />}
+                            />
                           </div>
-                          {!selectedRow.eligible && (
-                            <div className="mt-1 line-clamp-2 text-xs leading-4 text-neutral-400">{selectedRow.reason}</div>
-                          )}
                         </div>
-                        <div className="shrink-0 rounded-xl border border-orange-400/20 bg-orange-500/10 px-3 py-1.5 text-right">
-                          <div className="text-[10px] font-black uppercase tracking-wider text-orange-300">Player Camp</div>
-                          <div className={`mt-1 text-sm font-black ${interestTone(selectedRow.interestLabel || selectedRow.extensionInterestLabel || selectedRow.reason)}`}>
+                        <div
+                          className="ce-player-copy"
+                          style={{
+                            transform: `translate(${CE_TEXT.selectedPlayer.box.x}px, ${CE_TEXT.selectedPlayer.box.y}px) scale(${CE_TEXT.selectedPlayer.box.scale})`,
+                            transformOrigin: "left center",
+                          }}
+                        >
+                          <h2
+                            style={{
+                              fontSize: `${CE_TEXT.selectedPlayer.name.size}px`,
+                              transform: `translate(${CE_TEXT.selectedPlayer.name.x}px, ${CE_TEXT.selectedPlayer.name.y}px)`,
+                              transformOrigin: "left center",
+                            }}
+                          >
+                            {selectedPlayer?.name || selectedRow.playerName}
+                          </h2>
+                          <p
+                            style={{
+                              fontSize: `${CE_TEXT.selectedPlayer.meta.size}px`,
+                              transform: `translate(${CE_TEXT.selectedPlayer.meta.x}px, ${CE_TEXT.selectedPlayer.meta.y}px)`,
+                              transformOrigin: "left center",
+                            }}
+                          >
+                            {selectedPlayer?.pos || "—"}
+                            <span>|</span> Age {selectedPlayer?.age ?? "—"}
+                          </p>
+                          {!selectedRow.eligible && selectedRow.reason ? <div className="ce-player-reason">{selectedRow.reason}</div> : null}
+                        </div>
+                      </div>
+
+                      <div className="ce-player-hero-side">
+                        <div
+                          className="ce-player-rating-stage"
+                          style={{
+                            transform: `translate(${CE_LAYOUT.selectedPlayer.overallRing.x}px, ${CE_LAYOUT.selectedPlayer.overallRing.y}px) scale(${CE_LAYOUT.selectedPlayer.overallRing.scale})`,
+                            "--ce-ring-ovr-label-size": `${CE_LAYOUT.selectedPlayer.overallRing.ovrLabelSize ?? 8}px`,
+                            "--ce-ring-ovr-label-x": `${CE_LAYOUT.selectedPlayer.overallRing.ovrLabelX ?? 0}px`,
+                            "--ce-ring-ovr-label-y": `${CE_LAYOUT.selectedPlayer.overallRing.ovrLabelY ?? 0}px`,
+                            "--ce-ring-ovr-number-size": `${CE_LAYOUT.selectedPlayer.overallRing.ovrNumberSize ?? 26}px`,
+                            "--ce-ring-ovr-number-x": `${CE_LAYOUT.selectedPlayer.overallRing.ovrNumberX ?? 0}px`,
+                            "--ce-ring-ovr-number-y": `${CE_LAYOUT.selectedPlayer.overallRing.ovrNumberY ?? 0}px`,
+                            "--ce-ring-pot-size": `${CE_LAYOUT.selectedPlayer.overallRing.potSize ?? 8}px`,
+                            "--ce-ring-pot-x": `${CE_LAYOUT.selectedPlayer.overallRing.potX ?? 0}px`,
+                            "--ce-ring-pot-y": `${CE_LAYOUT.selectedPlayer.overallRing.potY ?? 0}px`,
+                          }}
+                        >
+                          <PlayerRatingRing
+                            overall={selectedPlayer?.overall ?? selectedRow?.overall}
+                            potential={selectedPlayer?.potential ?? selectedRow?.potential}
+                            size={76}
+                            strokeWidth={6}
+                            className="ce-player-rating"
+                          />
+                        </div>
+                        <div className="ce-player-camp">
+                          <div className="ce-player-camp-label">Player Camp</div>
+                          <div className={`ce-player-camp-status ${interestTone(selectedRow.interestLabel || selectedRow.extensionInterestLabel || selectedRow.reason)}`}>
+                            <span className="ce-flame" aria-hidden="true">●</span>
                             {selectedRow.eligible
                               ? "Has Interest"
                               : selectedRow.alreadyExtended
@@ -486,114 +749,224 @@ export default function ContractExtensions() {
                               : "Ineligible"}
                           </div>
                           {selectedRow.extensionInterestScore != null && (
-                            <div className="mt-0.5 text-[10px] font-black text-neutral-400">Interest {selectedRow.extensionInterestScore}/100 · Mood {selectedRow.extensionMoodScore ?? "—"}</div>
+                            <div className="ce-player-camp-meta">Interest {selectedRow.extensionInterestScore}/100 · Mood {selectedRow.extensionMoodScore ?? "—"}</div>
                           )}
                         </div>
                       </div>
+                    </div>
 
-                      <div className="grid shrink-0 gap-1.5 md:grid-cols-4">
-                        <div className="rounded-xl border border-white/8 bg-black/25 p-2.5">
-                          <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Current Contract</div>
-                          <div className="mt-1 text-sm font-black">{selectedRow.remainingContractYears ?? selectedRow.currentContract?.salaryByYear?.length ?? 0} years left</div>
-                          <div className="mt-0.5 text-[10px] text-neutral-400">Ends {selectedRow.currentContractEndYear || "—"}</div>
-                        </div>
-                        <div className="rounded-xl border border-white/8 bg-black/25 p-2.5">
-                          <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Extension Type</div>
-                          <div className="mt-1 text-sm font-black">{extensionTypeLabel(selectedRow.extensionType)}</div>
-                          <div className="mt-0.5 text-[10px] text-neutral-400">Starts {selectedRow.extensionStartYear || "—"}</div>
-                        </div>
-                        <div className="rounded-xl border border-white/8 bg-black/25 p-2.5">
-                          <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Projected Market</div>
-                          <div className="mt-1 text-sm font-black">{compactMoney(selectedRow.marketValue?.expectedAAV)}</div>
-                          <div className="mt-0.5 text-[10px] text-neutral-400">Expected AAV</div>
-                        </div>
-                        <div className="rounded-xl border border-white/8 bg-black/25 p-2.5">
-                          <div className="text-[10px] font-black uppercase tracking-wider text-neutral-500">Deadline</div>
-                          <div className="mt-1 text-sm font-black">{selectedRow.deadlineType === "rookie" ? "Rookie" : selectedRow.deadlineType === "veteran" ? "Veteran" : "—"}</div>
-                          <div className="mt-0.5 text-[10px] text-neutral-400">{selectedRow.deadlineDate || "—"}</div>
-                        </div>
+                    <div className="ce-info-grid">
+                      <div className="ce-info-card">
+                        <div className="ce-info-icon" aria-hidden="true">▤</div>
+                        <div><span>Current Contract</span><strong>{selectedRow.remainingContractYears ?? selectedRow.currentContract?.salaryByYear?.length ?? 0} years left</strong><small>Ends {selectedRow.currentContractEndYear || "—"}</small></div>
                       </div>
+                      <div className="ce-info-card">
+                        <div className="ce-info-icon" aria-hidden="true">◇</div>
+                        <div><span>Extension Type</span><strong>{extensionTypeLabel(selectedRow.extensionType)}</strong><small>Starts {selectedRow.extensionStartYear || "—"}</small></div>
+                      </div>
+                      <div className="ce-info-card">
+                        <div className="ce-info-icon" aria-hidden="true">▥</div>
+                        <div><span>Projected Market</span><strong>{compactMoney(selectedRow.marketValue?.expectedAAV)}</strong><small>Expected AAV</small></div>
+                      </div>
+                      <div className="ce-info-card">
+                        <div className="ce-info-icon" aria-hidden="true">□</div>
+                        <div><span>Deadline</span><strong>{selectedRow.deadlineType === "rookie" ? "Rookie" : selectedRow.deadlineType === "veteran" ? "Veteran" : "—"}</strong><small>{selectedRow.deadlineDate || "—"}</small></div>
+                      </div>
+                    </div>
 
-                      {!selectedRow.eligible ? (
-                        <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 lg:grid-cols-[1.1fr_0.9fr]">
-                          <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Extension status</div>
-                            <div className="mt-3 text-2xl font-black">
-                              {selectedRow.alreadyExtended ? "Contract Extended" : selectedRow.playerRefusesExtension ? "Not Interested" : "Ineligible"}
-                            </div>
-                            <p className="mt-3 text-sm font-bold leading-6 text-neutral-300">{selectedRow.reason}</p>
+                    {!selectedRow.eligible ? (
+                      selectedRow.playerRefusesExtension ? (
+                        <div className="ce-wait-dashboard">
+                          <div className="ce-wait-top-grid">
+                            <section className="ce-interest-status-card">
+                              <div className="ce-wait-card-kicker">Extension status</div>
+                              <div className="ce-interest-title-row">
+                                <div>
+                                  <h3>Not Interested</h3>
+                                  <p>{selectedRow.reason}</p>
+                                </div>
+                                <span className="ce-negotiation-lock-pill">Not willing to negotiate</span>
+                              </div>
+
+                              <div className="ce-interest-meter-block">
+                                <div className="ce-interest-meter-head">
+                                  <span>Interest level</span>
+                                  <strong>
+                                    <b>{selectedRow.extensionInterestScore ?? "—"}</b>
+                                    <em>/100</em>
+                                  </strong>
+                                </div>
+                                <div className="ce-interest-track" aria-label={`Extension interest ${selectedRow.extensionInterestScore ?? 0} out of 100`}>
+                                  <span
+                                    className="ce-interest-fill"
+                                    style={{ width: `${clampNumber(selectedRow.extensionInterestScore ?? 0, 0, 100)}%` }}
+                                  />
+                                  <span
+                                    className="ce-interest-threshold"
+                                    style={{ left: `${clampNumber(selectedRow.extensionInterestRequired ?? 70, 0, 100)}%` }}
+                                  />
+                                </div>
+                                <div className="ce-interest-meter-foot">
+                                  <span>{selectedRow.extensionInterestLabel || "Prefers to Wait"}</span>
+                                  <strong>{selectedRow.extensionInterestRequired ?? 70}+ needed to negotiate</strong>
+                                </div>
+                              </div>
+                            </section>
+
+                            <section className="ce-negotiation-window-card">
+                              <div className="ce-window-heading">
+                                <div>
+                                  <div className="ce-wait-card-kicker">Negotiation window</div>
+                                  <strong>{formatExtensionDate(negotiationWindow.deadlineDate)}</strong>
+                                </div>
+                                <span>{selectedRow.deadlineType === "rookie" ? "Rookie Extension Deadline" : "Veteran Extension Deadline"}</span>
+                              </div>
+
+                              <div className="ce-window-track-wrap">
+                                <div className="ce-window-track">
+                                  <span className="ce-window-progress" style={{ width: `${negotiationWindow.progress}%` }} />
+                                  <span className="ce-window-now-dot" style={{ left: `${negotiationWindow.progress}%` }} />
+                                  <span className="ce-window-milestone is-start" />
+                                  <span className="ce-window-milestone is-mid" />
+                                  <span className="ce-window-milestone is-late" />
+                                  <span className="ce-window-milestone is-end" />
+                                </div>
+                                <div className="ce-window-labels">
+                                  <span>Start</span>
+                                  <span>Mid season</span>
+                                  <span>Pre-deadline</span>
+                                  <span>Deadline</span>
+                                </div>
+                              </div>
+
+                              <div className="ce-window-now-row">
+                                <span>Current league date</span>
+                                <strong>{formatExtensionDate(negotiationWindow.currentDate, { compact: true })}</strong>
+                              </div>
+
+                              <div className="ce-window-note">
+                                This timeline follows the live league date. Interest only changes when the existing extension and player-context systems change it.
+                              </div>
+                            </section>
                           </div>
-                          <div className="rounded-2xl border border-orange-400/15 bg-orange-500/8 p-4">
-                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-orange-300">Front office note</div>
-                            <div className="mt-3 text-sm font-black leading-6 text-white">
-                              {selectedRow.alreadyExtended
-                                ? "This player is locked in. Their new contract years should now show on the salary table."
-                                : selectedRow.playerRefusesExtension
-                                ? "This player prefers to wait. Check again closer to the relevant deadline or after team context changes."
-                                : "This player does not currently have an extension pathway available."}
+
+                          <section className="ce-factor-section">
+                            <div className="ce-factor-heading">
+                              <div>
+                                <div className="ce-wait-card-kicker">What affects interest?</div>
+                                <p>These are read-only views of the real factors already used by the extension-interest calculation.</p>
+                              </div>
+                              <span>Impact on extension interest</span>
                             </div>
-                          </div>
+
+                            <div className="ce-factor-grid">
+                              {extensionFactors.map((factor) => (
+                                <article className="ce-factor-card" key={factor.key}>
+                                  <div className="ce-factor-title-row">
+                                    <span className="ce-factor-icon" aria-hidden="true">{factor.icon}</span>
+                                    <strong>{factor.label}</strong>
+                                    <em className={`is-${factor.visual.tone}`}>{factor.visual.label}</em>
+                                  </div>
+                                  <div className="ce-factor-meter">
+                                    <span style={{ width: `${factor.visual.pct}%` }} />
+                                  </div>
+                                  <div className="ce-factor-impact">
+                                    <span>Interest impact</span>
+                                    <strong className={factor.visual.impact > 0 ? "is-positive" : factor.visual.impact < 0 ? "is-negative" : ""}>
+                                      {signedImpact(factor.visual.impact)}
+                                    </strong>
+                                  </div>
+                                  <p>{factor.detail}</p>
+                                </article>
+                              ))}
+                            </div>
+                          </section>
                         </div>
                       ) : (
-                        <div className="flex min-h-0 flex-1 flex-col">
-                          <div className="mb-0.5 shrink-0 text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Player-requested packages</div>
-                          <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-hidden">
-                            {askPackages.map((pkg) => {
-                              const id = pkg.askPackageId || pkg.packageId;
-                              const active = String(id) === String(selectedPackage?.askPackageId || selectedPackage?.packageId);
-                              return (
-                                <button
-                                  type="button"
-                                  key={id}
-                                  onClick={() => setSelectedPackageId(id)}
-                                  className={`grid flex-1 min-h-[86px] grid-cols-[minmax(132px,0.62fr)_minmax(360px,1.9fr)_82px] items-center gap-2 rounded-xl border px-3 py-1.5 text-left transition ${active ? "border-orange-400 bg-orange-500/15" : "border-white/10 bg-black/25 hover:border-white/25"}`}
-                                >
-                                  <div className="min-w-0">
-                                    <div className="truncate text-sm font-black text-white">{`${pkg.years}-Year Extension`}</div>
-                                    <div className="mt-0.5 text-2xl font-black leading-none">{compactMoney(packageTotal(pkg))}</div>
-                                    <div className="mt-0.5 truncate text-[10px] text-neutral-400">{pkg.years} years · {optionLabel(pkg.optionType)} · {pkg.annualRaisePct}% raises</div>
-                                  </div>
-                                  <div className="grid min-w-0 grid-flow-col auto-cols-fr gap-1">
-                                    {(pkg.salaryByYear || []).map((salary, index) => (
-                                      <div key={`${id}-${index}`} className="min-w-[52px] rounded-md bg-black/30 px-1.5 py-1 text-center">
-                                        <span className="block text-[8px] text-neutral-500">{Number(selectedRow.extensionStartYear) + index}</span>
-                                        <span className="text-[9.5px] font-black">{compactMoney(salary)}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                  <div className="shrink-0 rounded-full border border-white/10 bg-black/25 px-1.5 py-1 text-center text-[9px] font-black uppercase leading-tight text-neutral-300">
-                                    AAV {compactMoney(packageAav(pkg))}
-                                  </div>
-                                </button>
-                              );
-                            })}
+                        <div className="ce-ineligible-grid">
+                          <div className="ce-ineligible-card">
+                            <span>Extension status</span>
+                            <strong>{selectedRow.alreadyExtended ? "Contract Extended" : "Ineligible"}</strong>
+                            <p>{selectedRow.reason}</p>
+                          </div>
+                          <div className="ce-ineligible-card ce-ineligible-note">
+                            <span>Front office note</span>
+                            <p>
+                              {selectedRow.alreadyExtended
+                                ? "This player is locked in. Their new contract years should now show on the salary table."
+                                : "This player does not currently have an extension pathway available."}
+                            </p>
                           </div>
                         </div>
-                      )}
-                    </div>
+                      )
+                    ) : (
+                      <div className="ce-package-section">
+                        <div className="ce-package-heading-row">
+                          <div className="ce-section-title">Player-requested packages</div>
+                          <div className="ce-package-year-heads" aria-hidden="true">
+                            {Array.from({ length: 4 }, (_, index) => (
+                              <span key={`package-year-head-${index}`}>
+                                {Number(selectedRow.extensionStartYear) + index}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="ce-package-aav-head" aria-hidden="true">AAV</div>
+                        </div>
+                        <div className="ce-package-list">
+                          {askPackages.map((pkg) => {
+                            const id = pkg.askPackageId || pkg.packageId;
+                            const active = String(id) === String(selectedPackage?.askPackageId || selectedPackage?.packageId);
+                            const salaryByYear = Array.isArray(pkg.salaryByYear) ? pkg.salaryByYear : [];
+                            return (
+                              <button
+                                type="button"
+                                key={id}
+                                data-bm-sfx-ui-nav="true"
+                                onClick={() => setSelectedPackageId(id)}
+                                className={`ce-package-card ${active ? "is-selected" : ""}`}
+                              >
+                                <span className="ce-package-radio" aria-hidden="true"><span /></span>
+                                <div className="ce-package-summary">
+                                  <span>{pkg.years}-Year Extension</span>
+                                  <strong>{compactMoney(packageTotal(pkg))}</strong>
+                                </div>
+                                <div className="ce-package-years">
+                                  {Array.from({ length: 4 }, (_, index) => {
+                                    const salary = salaryByYear[index];
+                                    const hasSalary = Number.isFinite(Number(salary));
+                                    return (
+                                      <div key={`${id}-${index}`} className={`ce-year-cell ${hasSalary ? "" : "is-empty"}`}>
+                                        <strong>{hasSalary ? compactMoney(salary) : "—"}</strong>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                <div className="ce-aav-box"><strong>{compactMoney(packageAav(pkg))}</strong></div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {selectedRow.eligible && selectedPackage && (
-                    <div className="shrink-0 border-t border-orange-400/20 bg-neutral-950/95 px-3 py-1 shadow-[0_-16px_40px_rgba(0,0,0,0.35)]">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="text-[10px] font-black uppercase tracking-[0.18em] text-orange-300">Selected Ask</div>
-                          <div className="mt-0.5 text-base font-black">
-                            {selectedPackage.years} years · {compactMoney(packageTotal(selectedPackage))}
-                          </div>
-                          <div className="mt-0.5 text-[11px] text-neutral-400">
-                            {compactMoney(packageAav(selectedPackage))} AAV · {optionLabel(selectedPackage.optionType)} · begins {selectedRow.extensionStartYear}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          disabled={submitting || !preview?.state?.isOpen}
-                          onClick={submitOffer}
-                          className="rounded-xl bg-orange-600 px-4 py-1.5 text-sm font-black text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          {submitting ? "Submitting…" : "Offer Extension"}
-                        </button>
+                    <div className="ce-selected-bar">
+                      <div className="ce-selected-icon" aria-hidden="true">▤</div>
+                      <div className="ce-selected-copy">
+                        <span>Selected Ask</span>
+                        <strong>{selectedPackage.years} years · {compactMoney(packageTotal(selectedPackage))}</strong>
+                        <small>{compactMoney(packageAav(selectedPackage))} AAV · begins {selectedRow.extensionStartYear}</small>
                       </div>
+                      <button
+                        type="button"
+                        disabled={submitting || !preview?.state?.isOpen}
+                        onClick={submitOffer}
+                        className="ce-offer-button"
+                      >
+                        <span aria-hidden="true">➤</span>
+                        {submitting ? "Submitting…" : "Offer Extension"}
+                      </button>
                     </div>
                   )}
                 </>

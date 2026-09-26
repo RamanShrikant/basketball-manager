@@ -3858,7 +3858,7 @@ export default function OffseasonHub() {
   }, [navigate, offseasonState, leagueData, rosterWarningBeforeSim]);
 
   return (
-    <div className={`${styles.offseasonPage} bmCourtPage h-full min-h-0 overflow-y-auto overflow-x-hidden px-4 py-2 text-white`}>
+    <div data-bm-sfx-scope="offseason" className={`${styles.offseasonPage} bmCourtPage h-full min-h-0 overflow-y-auto overflow-x-hidden px-4 py-2 text-white`}>
       <div className="mx-auto flex min-h-full w-full max-w-7xl flex-col pb-2">
         <div className="mb-1 shrink-0 text-center">
           <p className="text-[10px] text-white/45 tracking-[0.25em] uppercase mb-1">

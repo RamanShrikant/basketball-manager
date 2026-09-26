@@ -1919,7 +1919,7 @@ export default function PlayerCardModal({
 
       <div aria-hidden="true" onClick={onClose} className="absolute inset-0 bg-black/58" style={{ backdropFilter: "blur(1.5px)", WebkitBackdropFilter: "blur(1.5px)" }} />
 
-      <div className="pc-player-card pc29-card pc-pop pc-glow-card relative flex flex-col overflow-hidden rounded-[20px] border border-white/[0.10] bg-[#090b0e] text-white">
+      <div data-bm-sfx-scope="player-card" className="pc-player-card pc29-card pc-pop pc-glow-card relative flex flex-col overflow-hidden rounded-[20px] border border-white/[0.10] bg-[#090b0e] text-white">
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute -left-32 -top-32 h-80 w-80 rounded-full bg-orange-500/20 blur-3xl" />
           <div className="absolute -right-24 top-24 h-72 w-72 rounded-full bg-amber-400/10 blur-3xl" />

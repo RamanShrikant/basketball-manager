@@ -473,6 +473,7 @@ export default function TeamHubSidebar() {
 
   const navigateItem = async (item) => {
     if (!item?.enabled || !item?.path || item.path === "#") return;
+    if (item.action !== "saveExit" && item.path === location.pathname) return;
     playSound(SOUND_KEYS.SIDEBAR_NAVIGATION);
 
     if (item.action === "saveExit") {
@@ -510,6 +511,7 @@ export default function TeamHubSidebar() {
   };
 
   const navigateHome = () => {
+    if (location.pathname === "/team-hub") return;
     playSound(SOUND_KEYS.SIDEBAR_NAVIGATION);
     clearTradeBuilderResumeWhenLeaving(location.pathname, "/team-hub");
     writeTeamHubReturnContext(null);

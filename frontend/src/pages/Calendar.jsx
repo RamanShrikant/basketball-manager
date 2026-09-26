@@ -9560,6 +9560,7 @@ className={`rounded-xl border-2 p-3 transition-colors duration-200 ${
                       return (
                         <div
                           key={monthStr + "-" + dateStr}
+                          data-bm-sfx-ui-nav="true"
                           className={`relative h-36 rounded-lg border cursor-pointer overflow-hidden px-2.5 pb-2 pt-2 ${
                             game
                               ? iAmHome

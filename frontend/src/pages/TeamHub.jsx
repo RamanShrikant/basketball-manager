@@ -8,6 +8,7 @@ import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import styles from "../components/TeamHub.module.css";
 import { TEAM_HUB_BANNER_LAYOUT as bannerLayout } from "../config/teamHubBannerLayout.js";
+import { TEAM_HUB_ROTATION_LAYOUT as rotationLayout } from "../config/teamHubRotationLayout.js";
 import {
   buildConferenceLookup,
   compareCanonicalTeams,
@@ -1144,7 +1145,25 @@ export default function TeamHub() {
             </div>
 
             <div className={styles.playerStrip}>
-              {displayedRotation.length ? displayedRotation.map((player) => (
+              {displayedRotation.length ? displayedRotation.map((player) => {
+                const playerHeadshotOverride =
+                  rotationLayout?.playerOverrides?.[playerNameOf(player)]?.headshot || {};
+                const globalHeadshot = rotationLayout?.headshot || {};
+                const globalHeadshotScale = Number(globalHeadshot?.scale ?? 1);
+                const overrideHeadshotScale = Number(playerHeadshotOverride?.scale ?? 1);
+                const headshotScale =
+                  (Number.isFinite(globalHeadshotScale) ? globalHeadshotScale : 1) *
+                  (Number.isFinite(overrideHeadshotScale) ? overrideHeadshotScale : 1);
+                const headshotX =
+                  Number(globalHeadshot?.x || 0) + Number(playerHeadshotOverride?.x || 0);
+                const headshotY =
+                  Number(globalHeadshot?.y || 0) + Number(playerHeadshotOverride?.y || 0);
+                const headshotWidth =
+                  Number(playerHeadshotOverride?.width || globalHeadshot?.width || 78);
+                const headshotHeight =
+                  Number(playerHeadshotOverride?.height || globalHeadshot?.height || 80);
+
+                return (
                 <button
                   type="button"
                   className={styles.playerCard}
@@ -1152,7 +1171,14 @@ export default function TeamHub() {
                   onClick={() => navigate("/roster-view")}
                 >
                   <div className={styles.playerVisual}>
-                    <div className={styles.playerRatingBadge}>
+                    <div
+                      className={styles.playerRatingBadge}
+                      style={{
+                        "--team-hub-ring-x": `${Number(rotationLayout?.overallRing?.x || 0)}px`,
+                        "--team-hub-ring-y": `${Number(rotationLayout?.overallRing?.y || 0)}px`,
+                        "--team-hub-ring-scale": Number(rotationLayout?.overallRing?.scale ?? 0.54),
+                      }}
+                    >
                       <PlayerRatingRing
                         overall={playerOverall(player)}
                         potential={Number(
@@ -1163,17 +1189,29 @@ export default function TeamHub() {
                           player?.ratingPotential ??
                           playerOverall(player)
                         ) || playerOverall(player)}
-                        size={58}
+                        size={Number(rotationLayout?.overallRing?.size || 58)}
                       />
                     </div>
                     <small className={styles.playerPositionBadge}>{player?.pos || "—"}</small>
-                    <img className={styles.playerPortrait} src={playerHeadshotOf(player)} alt="" />
+                    <img
+                      className={styles.playerPortrait}
+                      src={playerHeadshotOf(player)}
+                      alt=""
+                      style={{
+                        "--team-hub-headshot-x": `${headshotX}px`,
+                        "--team-hub-headshot-y": `${headshotY}px`,
+                        "--team-hub-headshot-width": `${headshotWidth}px`,
+                        "--team-hub-headshot-height": `${headshotHeight}px`,
+                        "--team-hub-headshot-scale": headshotScale,
+                      }}
+                    />
                   </div>
                   <div className={styles.playerCardMeta}>
                     <strong>{player?.name}</strong>
                   </div>
                 </button>
-              )) : <div className={styles.emptyPanel}>No saved rotation available.</div>}
+                );
+              }) : <div className={styles.emptyPanel}>No saved rotation available.</div>}
             </div>
           </section>
 
@@ -1217,11 +1255,51 @@ export default function TeamHub() {
                 {draftAssets.map((pick, index) => {
                   const assetLabel = formatDraftAssetForHub(pick, teamMap);
                   const protectionLabel = pickProtectionLabel(pick);
-                  const roundText = Number(pick?.round || 1) === 1 ? "1st" : "2nd";
+                  const originalTeamName =
+                    pick?.originalTeam ||
+                    pick?.originalTeamName ||
+                    pick?.teamName ||
+                    hubTeamName;
+                  const originalTeam =
+                    teamMap.get(originalTeamName) ||
+                    teams.find(
+                      (team) =>
+                        teamAbbr(team) === String(originalTeamName || "").trim().toUpperCase() ||
+                        normalizeStandingsTeamName(teamNameOf(team)) ===
+                          normalizeStandingsTeamName(originalTeamName)
+                    ) ||
+                    (normalizeStandingsTeamName(originalTeamName) ===
+                    normalizeStandingsTeamName(hubTeamName)
+                      ? hubTeam
+                      : null);
+                  const draftAssetLogo = originalTeam ? teamLogoOf(originalTeam) : "";
+                  const draftLogoControl = rotationLayout?.draftAssetLogo || {};
+                  const draftLogoSize = Number(draftLogoControl?.size || 64);
+                  const draftLogoScale = Number(draftLogoControl?.scale ?? 1);
+                  const draftLogoOpacity = Number(draftLogoControl?.opacity ?? 0.055);
+                  const draftLogoRotation = Number(draftLogoControl?.rotation ?? -8);
+                  const draftLogoX = Number(draftLogoControl?.x || 0);
+                  const draftLogoY = Number(draftLogoControl?.y || 0);
+
                   return (
                     <div className={styles.draftAssetRow} key={pick?.id || `${pick?.year}-${pick?.round}-${pick?.originalTeam}-${index}`}>
+                      {draftAssetLogo ? (
+                        <img
+                          className={styles.draftAssetLogo}
+                          src={draftAssetLogo}
+                          alt=""
+                          aria-hidden="true"
+                          style={{
+                            "--team-hub-draft-logo-size": `${Number.isFinite(draftLogoSize) ? draftLogoSize : 64}px`,
+                            "--team-hub-draft-logo-scale": Number.isFinite(draftLogoScale) ? draftLogoScale : 1,
+                            "--team-hub-draft-logo-opacity": Number.isFinite(draftLogoOpacity) ? draftLogoOpacity : 0.055,
+                            "--team-hub-draft-logo-rotation": `${Number.isFinite(draftLogoRotation) ? draftLogoRotation : -8}deg`,
+                            "--team-hub-draft-logo-x": `${Number.isFinite(draftLogoX) ? draftLogoX : 0}px`,
+                            "--team-hub-draft-logo-y": `${Number.isFinite(draftLogoY) ? draftLogoY : 0}px`,
+                          }}
+                        />
+                      ) : null}
                       <span className={styles.draftAssetNumber}>{index + 1}</span>
-                      <span className={styles.draftAssetRound}>{roundText}</span>
                       <div className={styles.draftAssetText}>
                         <strong>{assetLabel}</strong>
                         <small>{protectionLabel}</small>
