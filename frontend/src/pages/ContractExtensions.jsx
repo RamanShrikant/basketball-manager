@@ -254,6 +254,32 @@ function signedImpact(value) {
   return `${number > 0 ? "+" : ""}${number.toFixed(1)}`;
 }
 
+function extensionDisplayStatus(row) {
+  if (row?.eligible) {
+    return { code: "eligible", title: "Extension Talks Open", label: "Has Interest", pillClass: "is-interest" };
+  }
+  if (row?.playerRefusesExtension) {
+    return { code: "not_interested", title: "Not Interested", label: "Not Interested", pillClass: "is-waiting" };
+  }
+
+  const code = String(row?.displayStatusCode || "ineligible");
+  const title = row?.displayStatusTitle || (row?.alreadyExtended ? "Contract Extended" : "Ineligible");
+  const label = row?.displayStatusLabel || (row?.alreadyExtended ? "Contract Extended" : "Ineligible");
+  return {
+    code,
+    title,
+    label,
+    pillClass: code === "already_extended" || row?.alreadyExtended ? "is-extended" : "is-ineligible",
+  };
+}
+
+function optionPreviewLabel(row) {
+  const option = row?.primaryUnresolvedOption;
+  if (!option) return null;
+  const year = option?.displayYear || "Future";
+  return `${year} ${option?.label || "Contract Option"}`;
+}
+
 function packageTotal(pkg) {
   return Number(pkg?.totalValue || (pkg?.salaryByYear || []).reduce((sum, value) => sum + Number(value || 0), 0));
 }
@@ -266,7 +292,7 @@ function packageAav(pkg) {
 function extensionRowSortBucket(row) {
   if (row?.eligible) return 0;
   if (row?.playerRefusesExtension) return 1;
-  if (row?.alreadyExtended) return 2;
+  if (row?.alreadyExtended || row?.displayStatusCode === "already_extended") return 2;
   return 3;
 }
 
@@ -630,9 +656,15 @@ export default function ContractExtensions() {
                               <span>Age {portraitPlayer?.age ?? "—"}</span>
                             </div>
                           </div>
-                          <span className={`ce-status-pill ${row.eligible ? "is-interest" : row.alreadyExtended ? "is-extended" : row.playerRefusesExtension ? "is-waiting" : "is-ineligible"}`}>
-                            {row.eligible ? <>Has<br />Interest</> : row.alreadyExtended ? <>Contract<br />Extended</> : row.playerRefusesExtension ? <>Not<br />Interested</> : "Ineligible"}
-                          </span>
+                          {(() => {
+                            const status = extensionDisplayStatus(row);
+                            const words = String(status.label || "Ineligible").split(" ");
+                            return (
+                              <span className={`ce-status-pill ${status.pillClass}`}>
+                                {words.length > 1 ? <>{words.slice(0, -1).join(" ")}<br />{words[words.length - 1]}</> : status.label}
+                              </span>
+                            );
+                          })()}
                         </button>
                       );
                     })}
@@ -708,7 +740,9 @@ export default function ContractExtensions() {
                             {selectedPlayer?.pos || "—"}
                             <span>|</span> Age {selectedPlayer?.age ?? "—"}
                           </p>
-                          {!selectedRow.eligible && selectedRow.reason ? <div className="ce-player-reason">{selectedRow.reason}</div> : null}
+                          {!selectedRow.eligible && (selectedRow.displayReason || selectedRow.reason) ? (
+                            <div className="ce-player-reason">{selectedRow.displayReason || selectedRow.reason}</div>
+                          ) : null}
                         </div>
                       </div>
 
@@ -738,16 +772,15 @@ export default function ContractExtensions() {
                         </div>
                         <div className="ce-player-camp">
                           <div className="ce-player-camp-label">Player Camp</div>
-                          <div className={`ce-player-camp-status ${interestTone(selectedRow.interestLabel || selectedRow.extensionInterestLabel || selectedRow.reason)}`}>
-                            <span className="ce-flame" aria-hidden="true">●</span>
-                            {selectedRow.eligible
-                              ? "Has Interest"
-                              : selectedRow.alreadyExtended
-                              ? "Contract Extended"
-                              : selectedRow.playerRefusesExtension
-                              ? "Not Interested"
-                              : "Ineligible"}
-                          </div>
+                          {(() => {
+                            const status = extensionDisplayStatus(selectedRow);
+                            return (
+                              <div className={`ce-player-camp-status ${interestTone(selectedRow.interestLabel || selectedRow.extensionInterestLabel || selectedRow.displayReason || selectedRow.reason)}`}>
+                                <span className="ce-flame" aria-hidden="true">●</span>
+                                {status.label}
+                              </div>
+                            );
+                          })()}
                           {selectedRow.extensionInterestScore != null && (
                             <div className="ce-player-camp-meta">Interest {selectedRow.extensionInterestScore}/100 · Mood {selectedRow.extensionMoodScore ?? "—"}</div>
                           )}
@@ -758,11 +791,11 @@ export default function ContractExtensions() {
                     <div className="ce-info-grid">
                       <div className="ce-info-card">
                         <div className="ce-info-icon" aria-hidden="true">▤</div>
-                        <div><span>Current Contract</span><strong>{selectedRow.remainingContractYears ?? selectedRow.currentContract?.salaryByYear?.length ?? 0} years left</strong><small>Ends {selectedRow.currentContractEndYear || "—"}</small></div>
+                        <div><span>Current Contract</span><strong>{selectedRow.remainingContractYears ?? selectedRow.currentContract?.salaryByYear?.length ?? 0} years left</strong><small>Ends {selectedRow.currentContractEndDisplayYear ?? (selectedRow.currentContractEndYear != null ? Number(selectedRow.currentContractEndYear) + 1 : "—")}</small></div>
                       </div>
                       <div className="ce-info-card">
                         <div className="ce-info-icon" aria-hidden="true">◇</div>
-                        <div><span>Extension Type</span><strong>{extensionTypeLabel(selectedRow.extensionType)}</strong><small>Starts {selectedRow.extensionStartYear || "—"}</small></div>
+                        <div><span>Extension Type</span><strong>{extensionTypeLabel(selectedRow.extensionType)}</strong><small>Starts {selectedRow.extensionStartDisplayYear ?? (selectedRow.extensionStartYear != null ? Number(selectedRow.extensionStartYear) + 1 : "—")}</small></div>
                       </div>
                       <div className="ce-info-card">
                         <div className="ce-info-icon" aria-hidden="true">▥</div>
@@ -770,7 +803,7 @@ export default function ContractExtensions() {
                       </div>
                       <div className="ce-info-card">
                         <div className="ce-info-icon" aria-hidden="true">□</div>
-                        <div><span>Deadline</span><strong>{selectedRow.deadlineType === "rookie" ? "Rookie" : selectedRow.deadlineType === "veteran" ? "Veteran" : "—"}</strong><small>{selectedRow.deadlineDate || "—"}</small></div>
+                        <div><span>Deadline</span><strong>{selectedRow.deadlineType === "rookie" ? "Rookie" : selectedRow.deadlineType === "veteran" ? "Veteran" : "—"}</strong><small>{selectedRow.displayDeadlineDate || (selectedRow.deadlineType ? selectedRow.deadlineDate : null) || "—"}</small></div>
                       </div>
                     </div>
 
@@ -884,19 +917,52 @@ export default function ContractExtensions() {
                         </div>
                       ) : (
                         <div className="ce-ineligible-grid">
-                          <div className="ce-ineligible-card">
-                            <span>Extension status</span>
-                            <strong>{selectedRow.alreadyExtended ? "Contract Extended" : "Ineligible"}</strong>
-                            <p>{selectedRow.reason}</p>
-                          </div>
-                          <div className="ce-ineligible-card ce-ineligible-note">
-                            <span>Front office note</span>
-                            <p>
-                              {selectedRow.alreadyExtended
-                                ? "This player is locked in. Their new contract years should now show on the salary table."
-                                : "This player does not currently have an extension pathway available."}
-                            </p>
-                          </div>
+                          {(() => {
+                            const status = extensionDisplayStatus(selectedRow);
+                            const optionLabel = optionPreviewLabel(selectedRow);
+                            return (
+                              <>
+                                <div className="ce-ineligible-card">
+                                  <span>Extension status</span>
+                                  <strong>{status.title}</strong>
+                                  <p>{selectedRow.displayReason || selectedRow.reason}</p>
+
+                                  <div className="ce-ineligible-facts">
+                                    {selectedRow.remainingContractYears != null ? (
+                                      <div>
+                                        <span>Contract timing</span>
+                                        <strong>{selectedRow.remainingContractYears} {Number(selectedRow.remainingContractYears) === 1 ? "season" : "seasons"} remaining</strong>
+                                      </div>
+                                    ) : null}
+                                    {optionLabel ? (
+                                      <div>
+                                        <span>Unresolved option</span>
+                                        <strong>{optionLabel}</strong>
+                                      </div>
+                                    ) : null}
+                                    {selectedRow.displayEligibleNextSeason ? (
+                                      <div>
+                                        <span>Next check</span>
+                                        <strong>Next season</strong>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </div>
+
+                                <div className="ce-ineligible-card ce-ineligible-note">
+                                  <span>Front office guidance</span>
+                                  <strong>{status.code === "already_extended" ? "No action needed" : "What this means"}</strong>
+                                  <p>{selectedRow.displayNote || "This player does not currently have an extension pathway available."}</p>
+                                  {selectedRow.displayDeadlineDate ? (
+                                    <div className="ce-ineligible-deadline">
+                                      <span>Applicable deadline</span>
+                                      <strong>{formatExtensionDate(selectedRow.displayDeadlineDate)}</strong>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </>
+                            );
+                          })()}
                         </div>
                       )
                     ) : (
@@ -906,7 +972,7 @@ export default function ContractExtensions() {
                           <div className="ce-package-year-heads" aria-hidden="true">
                             {Array.from({ length: 4 }, (_, index) => (
                               <span key={`package-year-head-${index}`}>
-                                {Number(selectedRow.extensionStartYear) + index}
+                                {Number(selectedRow.extensionStartDisplayYear ?? (Number(selectedRow.extensionStartYear) + 1)) + index}
                               </span>
                             ))}
                           </div>
@@ -956,7 +1022,7 @@ export default function ContractExtensions() {
                       <div className="ce-selected-copy">
                         <span>Selected Ask</span>
                         <strong>{selectedPackage.years} years · {compactMoney(packageTotal(selectedPackage))}</strong>
-                        <small>{compactMoney(packageAav(selectedPackage))} AAV · begins {selectedRow.extensionStartYear}</small>
+                        <small>{compactMoney(packageAav(selectedPackage))} AAV · begins {selectedRow.extensionStartDisplayYear ?? (Number(selectedRow.extensionStartYear) + 1)}</small>
                       </div>
                       <button
                         type="button"

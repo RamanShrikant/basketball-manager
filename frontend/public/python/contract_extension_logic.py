@@ -1028,6 +1028,265 @@ def _validate_offer(offer: Dict[str, Any], eligibility: Dict[str, Any]) -> Tuple
     return True, "", normalized
 
 
+
+def _contract_display_year(league_data: Dict[str, Any], contract_year: Any) -> Optional[int]:
+    raw = _int(contract_year, 0)
+    if raw <= 0:
+        return None
+    offset = _display_year(league_data) - _season_start_year(league_data)
+    if offset < 0 or offset > 1:
+        offset = 1
+    return raw + offset
+
+
+def _unresolved_option_preview_details(
+    league_data: Dict[str, Any],
+    contract: Optional[Dict[str, Any]],
+    current_year: int,
+) -> List[Dict[str, Any]]:
+    if not isinstance(contract, dict):
+        return []
+    option = contract.get("option") if isinstance(contract.get("option"), dict) else None
+    if not option:
+        return []
+
+    raw_indices = option.get("yearIndices") if isinstance(option.get("yearIndices"), list) else [option.get("yearIndex")]
+    indices = sorted({_int(value, -1) for value in raw_indices if value not in [None, ""]})
+    picked = option.get("picked")
+    option_type = str(option.get("type") or "").strip().lower()
+    option_label = "Player Option" if option_type == "player" else "Team Option" if option_type == "team" else "Contract Option"
+    details: List[Dict[str, Any]] = []
+
+    for idx in indices:
+        if idx < 0:
+            continue
+        absolute_year = _int(contract.get("startYear"), current_year) + idx
+        if absolute_year < current_year:
+            continue
+        if isinstance(picked, dict):
+            value = picked.get(str(idx), picked.get("default"))
+        else:
+            value = picked
+        if value is not None:
+            continue
+        details.append({
+            "type": option_type or None,
+            "label": option_label,
+            "yearIndex": idx,
+            "contractSeasonYear": absolute_year,
+            "displayYear": _contract_display_year(league_data, absolute_year),
+        })
+    return details
+
+
+def _preview_extension_display(
+    league_data: Dict[str, Any],
+    player: Dict[str, Any],
+    row: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Read-only UI diagnostics. This must never alter extension eligibility."""
+    contract = _normalize_contract(player)
+    current_year = _contract_season_year(league_data)
+    player_name = str(player.get("name") or row.get("playerName") or "This player")
+    remaining = _int(row.get("remainingContractYears"), -1)
+    if remaining < 0 and contract:
+        start_year = _int(contract.get("startYear"), current_year)
+        remaining = max(0, start_year + len(contract.get("salaryByYear") or []) - current_year)
+
+    end_year = row.get("currentContractEndYear")
+    if end_year in [None, ""] and contract:
+        end_year = _int(contract.get("startYear"), current_year) + len(contract.get("salaryByYear") or []) - 1
+
+    option_details = _unresolved_option_preview_details(league_data, contract, current_year)
+    first_option = option_details[0] if option_details else None
+
+    display = {
+        "displayStatusCode": "eligible" if row.get("eligible") else "ineligible",
+        "displayStatusTitle": "Eligible" if row.get("eligible") else "Ineligible",
+        "displayStatusLabel": "Has Interest" if row.get("eligible") else "Ineligible",
+        "displayReason": row.get("reason") or "Not extension eligible.",
+        "displayNote": "This player does not currently have an extension pathway available.",
+        "currentContractEndDisplayYear": _contract_display_year(league_data, end_year),
+        "extensionStartDisplayYear": _contract_display_year(league_data, row.get("extensionStartYear")),
+        "displayDeadlineDate": row.get("deadlineDate") if row.get("deadlineType") in {"rookie", "veteran"} else None,
+        "unresolvedOptions": option_details,
+        "primaryUnresolvedOption": first_option,
+        "displayEligibleNextSeason": bool(row.get("eligibleNextSeason")),
+    }
+
+    if row.get("eligible"):
+        display.update({
+            "displayStatusCode": "eligible",
+            "displayStatusTitle": "Extension Talks Open",
+            "displayStatusLabel": "Has Interest",
+            "displayNote": "The player is eligible and willing to negotiate using the available extension packages.",
+        })
+        return display
+
+    if row.get("playerRefusesExtension"):
+        display.update({
+            "displayStatusCode": "not_interested",
+            "displayStatusTitle": "Not Interested",
+            "displayStatusLabel": "Not Interested",
+            "displayNote": "The contract path is open, but the player's current extension interest is below the negotiation threshold.",
+        })
+        return display
+
+    # Detect a previously signed extension before interpreting other blockers.
+    # Core eligibility intentionally remains untouched; this is preview text only.
+    extensions = contract.get("extensions") if isinstance(contract, dict) and isinstance(contract.get("extensions"), list) else []
+    latest_meta = contract.get("extensionMeta") if isinstance(contract, dict) and isinstance(contract.get("extensionMeta"), dict) else None
+    extension_meta = latest_meta or (extensions[-1] if extensions else None)
+    if isinstance(extension_meta, dict):
+        extension_start = _int(extension_meta.get("extensionStartYear"), 0)
+        if extension_start > current_year:
+            display.update({
+                "displayStatusCode": "already_extended",
+                "displayStatusTitle": "Contract Extended",
+                "displayStatusLabel": "Contract Extended",
+                "displayReason": "This player has already signed an extension.",
+                "displayNote": "No new negotiation is needed. The signed extension is already attached to the player's contract and will appear in the salary table.",
+                "extensionStartDisplayYear": _contract_display_year(league_data, extension_start),
+            })
+            return display
+
+    if not contract:
+        display.update({
+            "displayStatusCode": "no_standard_contract",
+            "displayStatusTitle": "No Standard Contract",
+            "displayStatusLabel": "Ineligible",
+            "displayReason": "A signed standard NBA contract is required before extension talks can open.",
+            "displayNote": "This is a contract-status issue, not a player-interest issue. Sign the player to a standard contract before evaluating an extension pathway.",
+        })
+        return display
+
+    contract_type = str(player.get("contractType") or player.get("rosterStatus") or contract.get("type") or "standard").lower()
+    if contract_type in {"two_way", "two-way", "stash"}:
+        display.update({
+            "displayStatusCode": "non_standard_contract",
+            "displayStatusTitle": "Standard Extension Unavailable",
+            "displayStatusLabel": "Ineligible",
+            "displayReason": "Two-way and stashed players cannot sign standard contract extensions.",
+            "displayNote": "This player's roster/contract type must change before the standard extension system applies.",
+        })
+        return display
+
+    if remaining <= 0:
+        display.update({
+            "displayStatusCode": "free_agency_required",
+            "displayStatusTitle": "Free Agency Required",
+            "displayStatusLabel": "Free Agency",
+            "displayReason": "The current contract is expiring, so the next contract must be handled through Free Agency rather than the extension system.",
+            "displayNote": "Use the Free Agency flow for the next contract. Extension packages are no longer available on an expired contract path.",
+        })
+        return display
+
+    rights = player.get("rights") if isinstance(player.get("rights"), dict) else {}
+    meta = player.get("meta") if isinstance(player.get("meta"), dict) else {}
+    draft_round = _int(meta.get("draftRound") or player.get("draftRound"), 0)
+    has_prior_extension = bool(latest_meta or extensions)
+    is_rookie_scale = bool(
+        not has_prior_extension
+        and (rights.get("rookieScale") or player.get("rookieScale") or contract.get("rookieScale"))
+        and draft_round == 1
+    )
+
+    timing_block = None
+    timing_reason = None
+    timing_note = None
+    eligible_next_season = False
+
+    if is_rookie_scale:
+        if remaining != 1:
+            timing_block = "rookie_timing"
+            eligible_next_season = remaining == 2
+            timing_reason = (
+                f"{player_name} has {remaining} contract seasons remaining. Rookie-scale extensions open when one guaranteed rookie-contract season remains."
+            )
+            timing_note = (
+                "Recheck next season, when the rookie-scale extension window should become relevant."
+                if eligible_next_season
+                else "This is a contract-timing issue. The rookie-scale extension window is not yet close enough to open."
+            )
+    else:
+        explicit_original_term = (
+            contract.get("originalTermYears")
+            or contract.get("termYears")
+            or contract.get("years")
+            or meta.get("originalTermYears")
+            or meta.get("contractYears")
+        )
+        original_term = _int(explicit_original_term, 0)
+        if original_term <= 0:
+            original_term = 4 if remaining == 2 else 3 if remaining == 1 else len(contract.get("salaryByYear") or [])
+
+        if original_term < 3:
+            timing_block = "contract_too_short"
+            timing_reason = "The current contract term is too short to qualify for a standard veteran extension."
+            timing_note = "Resolving an option would not create an extension path on this contract; the contract itself does not meet the extension-term requirement."
+        elif not (remaining == 1 or (remaining == 2 and original_term >= 4)):
+            timing_block = "veteran_timing"
+            eligible_next_season = remaining in {2, 3}
+            timing_reason = (
+                f"{player_name} has {remaining} contract seasons remaining. Veteran extension eligibility opens closer to the end of the current deal."
+            )
+            timing_note = (
+                "Recheck next season; based on the current contract structure, the player should move into the extension-eligibility range then."
+                if eligible_next_season
+                else "This is primarily a contract-timing issue. The player is still too far from the end of the current deal for veteran extension talks."
+            )
+
+    if timing_block:
+        if first_option:
+            option_text = f"{first_option.get('displayYear') or 'Future'} {first_option.get('label') or 'Contract Option'}"
+            timing_note += f" The {option_text} is also unresolved, but resolving it now would not by itself make the player extension-eligible."
+        display.update({
+            "displayStatusCode": "not_yet_eligible" if timing_block != "contract_too_short" else "contract_too_short",
+            "displayStatusTitle": "Not Yet Extension Eligible" if timing_block != "contract_too_short" else "Contract Not Extendable",
+            "displayStatusLabel": "Not Yet Eligible" if timing_block != "contract_too_short" else "Ineligible",
+            "displayReason": timing_reason,
+            "displayNote": timing_note,
+            "displayEligibleNextSeason": eligible_next_season,
+        })
+        return display
+
+    if first_option:
+        option_text = f"{first_option.get('displayYear') or 'Future'} {first_option.get('label') or 'Contract Option'}"
+        display.update({
+            "displayStatusCode": "option_required",
+            "displayStatusTitle": "Option Decision Required",
+            "displayStatusLabel": "Option Required",
+            "displayReason": f"The {option_text} is unresolved and currently blocks extension talks.",
+            "displayNote": "The player is otherwise within the contract-timing range for an extension. The option must be resolved through the normal Player/Team Options flow before an extension can proceed.",
+        })
+        return display
+
+    reason_text = str(row.get("reason") or "")
+    if reason_text == "The contract extension windows have passed." or "Deadline has passed" in reason_text or reason_text == "This extension window is closed for the season.":
+        display.update({
+            "displayStatusCode": "window_closed",
+            "displayStatusTitle": "Extension Window Closed",
+            "displayStatusLabel": "Window Closed",
+            "displayReason": reason_text or "The extension window is closed for the season.",
+            "displayNote": "The player's contract may otherwise support an extension, but no extension can be submitted after the applicable deadline. Recheck in the next eligible season.",
+            "displayDeadlineDate": row.get("deadlineDate") if row.get("deadlineType") in {"rookie", "veteran"} else None,
+        })
+        return display
+
+    if reason_text == "No legal extension package could be generated under the current contract limits.":
+        display.update({
+            "displayStatusCode": "no_legal_package",
+            "displayStatusTitle": "No Legal Extension Package",
+            "displayStatusLabel": "No Package",
+            "displayReason": reason_text,
+            "displayNote": "The player reached the negotiation stage, but the current contract and extension limits do not produce a legal offer package. No gameplay rule has been bypassed.",
+        })
+        return display
+
+    display["displayNote"] = "The extension engine is blocking negotiations for the reason shown. Player interest is not being treated as the cause unless the player is explicitly marked Not Interested."
+    return display
+
+
 def preview_contract_extensions(
     league_data: Dict[str, Any],
     user_team_name: Optional[str] = None,
@@ -1038,7 +1297,11 @@ def preview_contract_extensions(
         return {"ok": False, "reason": "Selected team could not be found."}
     mood_payload = dict(payload or {})
     mood_payload["__extensionMoodByPlayer"] = _build_extension_mood_map(league_data, team, mood_payload)
-    rows = [build_extension_eligibility(league_data, team, player, mood_payload) for player in team.get("players", []) or []]
+    rows = []
+    for player in team.get("players", []) or []:
+        row = build_extension_eligibility(league_data, team, player, mood_payload)
+        row.update(_preview_extension_display(league_data, player, row))
+        rows.append(row)
     rows.sort(key=lambda row: (not row.get("eligible"), -_num(row.get("overall"), 0), str(row.get("playerName") or "")))
     state = _extension_state(league_data, mood_payload)
     return {
