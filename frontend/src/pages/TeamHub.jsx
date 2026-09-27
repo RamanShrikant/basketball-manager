@@ -35,6 +35,10 @@ import {
 import {
   getUpcomingDraftYearForPhase,
 } from "../utils/upcomingDraftClass.js";
+import {
+  getDraftAssetParticipantKeys,
+  normalizeTeamName as normalizeDraftTeamName,
+} from "../utils/draftPicks.js";
 
 const OFFSEASON_STATE_KEY = "bm_offseason_state_v1";
 const POSTSEASON_KEY = "bm_postseason_v2";
@@ -70,7 +74,7 @@ function bannerWatermarkStyle(control = {}) {
   const x = safeNumber(control?.x, 0);
   const y = safeNumber(control?.y, 0);
   const scale = Math.max(0.01, safeNumber(control?.scale, 1));
-  const rotation = safeNumber(control?.rotation, -5);
+  const rotation = safeNumber(control?.rotation, 0);
   const opacity = Math.min(1, Math.max(0, safeNumber(control?.opacity, 0.018)));
   return {
     transform: `translate(${x}px, calc(-50% + ${y}px)) rotate(${rotation}deg) scale(${scale})`,
@@ -148,10 +152,10 @@ function splitTeamIdentity(team = {}) {
     "Suns",
     "Jazz",
     "Nuggets",
+    "Hornets",
     "Hawks",
     "Celtics",
     "Nets",
-    "Hornets",
     "Bulls",
     "Pacers",
     "Pistons",
@@ -164,9 +168,18 @@ function splitTeamIdentity(team = {}) {
     "Wizards",
   ];
 
-  const nickname = knownNicknames.find((candidate) =>
-    fullName.toLowerCase().endsWith(candidate.toLowerCase())
-  );
+  // Longest full-nickname match + word boundary. This prevents cases such as
+  // Charlotte Hornets being split as "Charlotte Hor" / "Nets".
+  const normalizedFullName = fullName.toLowerCase();
+  const nickname = [...knownNicknames]
+    .sort((a, b) => b.length - a.length)
+    .find((candidate) => {
+      const normalizedCandidate = candidate.toLowerCase();
+      if (!normalizedFullName.endsWith(normalizedCandidate)) return false;
+      if (normalizedFullName === normalizedCandidate) return true;
+      const boundaryIndex = normalizedFullName.length - normalizedCandidate.length - 1;
+      return boundaryIndex >= 0 && normalizedFullName[boundaryIndex] === " ";
+    });
 
   if (nickname) {
     return {
@@ -230,6 +243,14 @@ function teamAbbr(team = {}) {
   return words.slice(-3).map((word) => word[0]).join("").slice(0, 3).toUpperCase() || "—";
 }
 
+function compactConferenceLabel(value) {
+  const text = String(value || "").trim();
+  const lower = text.toLowerCase();
+  if (lower.includes("east")) return "EAST";
+  if (lower.includes("west")) return "WEST";
+  return text ? text.toUpperCase().slice(0, 8) : "CONF";
+}
+
 function parseDashboardDate(value) {
   if (!value) return null;
   const [year, month, day] = String(value).split("-").map(Number);
@@ -284,6 +305,52 @@ function formatDraftAssetForHub(pick, teamMap = new Map()) {
   return `${year} ${round} - ${originalAbbr}`;
 }
 
+
+// BM_TEAMHUB_VISUAL_TOUCHUPS_v4
+function draftAssetLogoTeams(pick, leagueData, teamMap = new Map(), teams = [], hubTeam = null) {
+  const participantKeys = getDraftAssetParticipantKeys(pick, leagueData);
+  const byNormalizedName = new Map(
+    (teams || []).map((team) => [normalizeDraftTeamName(teamNameOf(team)), team])
+  );
+
+  const resolved = [];
+  const seen = new Set();
+
+  for (const participantKey of participantKeys) {
+    const keyParts = String(participantKey || "").split("|");
+    const normalizedName = keyParts.slice(2).join("|");
+    const team = byNormalizedName.get(normalizedName);
+    if (!team) continue;
+    const teamKey = normalizeDraftTeamName(teamNameOf(team));
+    if (!teamKey || seen.has(teamKey)) continue;
+    seen.add(teamKey);
+    resolved.push(team);
+  }
+
+  if (resolved.length) return resolved;
+
+  // Safe fallback for ordinary picks / older saves whose participant metadata
+  // predates the canonical swap-participant fields.
+  const originalTeamName =
+    pick?.originalTeam ||
+    pick?.originalTeamName ||
+    pick?.teamName ||
+    (hubTeam ? teamNameOf(hubTeam) : "");
+  const originalTeam =
+    teamMap.get(originalTeamName) ||
+    (teams || []).find(
+      (team) =>
+        teamAbbr(team) === String(originalTeamName || "").trim().toUpperCase() ||
+        normalizeStandingsTeamName(teamNameOf(team)) ===
+          normalizeStandingsTeamName(originalTeamName)
+    ) ||
+    (hubTeam &&
+    normalizeStandingsTeamName(originalTeamName) === normalizeStandingsTeamName(teamNameOf(hubTeam))
+      ? hubTeam
+      : null);
+
+  return originalTeam ? [originalTeam] : [];
+}
 
 function seasonLabel(leagueData = {}) {
   const start = Number(
@@ -472,6 +539,8 @@ export default function TeamHub() {
   const { leagueData, selectedTeam } = useGame();
   const navigate = useNavigate();
   const [showBench, setShowBench] = useState(false);
+  // BM_TEAMHUB_UPRIGHT_LOGOS_STANDINGS_SCROLL_v8
+  const [standingsViewConference, setStandingsViewConference] = useState("");
   // TEAM HUB GLOBAL SEARCH STATE PASS 25
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -677,6 +746,67 @@ export default function TeamHub() {
 
     return names.sort((a, b) => compareCanonicalTeams(a, b, standings));
   }, [teams, conferenceLookup, conference, standings]);
+
+  const conferenceOptions = useMemo(() => {
+    const seen = new Set();
+    const values = [];
+
+    teams.forEach((team) => {
+      const value =
+        conferenceLookup.get(normalizeStandingsTeamName(teamNameOf(team))) ||
+        team?.conference ||
+        team?.conf ||
+        "";
+      const text = String(value || "").trim();
+      if (!text) return;
+      const key = text.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      values.push(text);
+    });
+
+    return values.sort((a, b) => {
+      const aLabel = compactConferenceLabel(a);
+      const bLabel = compactConferenceLabel(b);
+      if (aLabel === "EAST" && bLabel !== "EAST") return -1;
+      if (bLabel === "EAST" && aLabel !== "EAST") return 1;
+      if (aLabel === "WEST" && bLabel !== "WEST") return -1;
+      if (bLabel === "WEST" && aLabel !== "WEST") return 1;
+      return a.localeCompare(b);
+    });
+  }, [teams, conferenceLookup]);
+
+  useEffect(() => {
+    setStandingsViewConference(conference || conferenceOptions[0] || "");
+  }, [hubTeamName, conference, conferenceOptions]);
+
+  const activeStandingsConference =
+    standingsViewConference || conference || conferenceOptions[0] || "";
+
+  const standingsConferenceTeams = useMemo(() => {
+    const names = teams
+      .filter((team) => {
+        const teamConference =
+          conferenceLookup.get(normalizeStandingsTeamName(teamNameOf(team))) ||
+          team?.conference ||
+          team?.conf ||
+          "";
+        return String(teamConference || "") === String(activeStandingsConference || "");
+      })
+      .map(teamNameOf)
+      .filter(Boolean);
+
+    return names.sort((a, b) => compareCanonicalTeams(a, b, standings));
+  }, [teams, conferenceLookup, activeStandingsConference, standings]);
+
+  const toggleStandingsConference = () => {
+    if (conferenceOptions.length < 2) return;
+    setStandingsViewConference((current) => {
+      const active = current || conference || conferenceOptions[0];
+      const index = Math.max(0, conferenceOptions.findIndex((value) => value === active));
+      return conferenceOptions[(index + 1) % conferenceOptions.length];
+    });
+  };
 
   const leagueOrder = useMemo(
     () => teams.map(teamNameOf).filter(Boolean).sort((a, b) => compareCanonicalTeams(a, b, standings)),
@@ -1096,16 +1226,29 @@ export default function TeamHub() {
           <section className={styles.panel}>
             <div className={styles.panelHeading}>
               <h2>Standings</h2>
-              <button type="button" onClick={() => navigate("/standings")}>Full Standings →</button>
+              <div className={styles.standingsHeadingActions}>
+                <button
+                  type="button"
+                  className={styles.conferenceSwitchButton}
+                  onClick={toggleStandingsConference}
+                  disabled={conferenceOptions.length < 2}
+                  title="Switch conference"
+                  aria-label={`Switch conference. Currently showing ${compactConferenceLabel(activeStandingsConference)}.`}
+                >
+                  <span>{compactConferenceLabel(activeStandingsConference)}</span>
+                  <b aria-hidden="true">⇄</b>
+                </button>
+                <button type="button" onClick={() => navigate("/standings")}>Full Standings →</button>
+              </div>
             </div>
             <div className={styles.standingsHeader}>
               <span>#</span><span>Team</span><span>W</span><span>L</span><span>GB</span>
             </div>
             <div className={styles.standingsRows}>
-              {conferenceTeams.slice(0, 5).map((name, index) => {
+              {standingsConferenceTeams.map((name, index) => {
                 const row = standings?.[name] || {};
                 const team = teamMap.get(name) || {};
-                const leader = standings?.[conferenceTeams[0]] || {};
+                const leader = standings?.[standingsConferenceTeams[0]] || {};
                 const leaderPct = Number(leader?.wins || 0) - Number(leader?.losses || 0);
                 const rowPct = Number(row?.wins || 0) - Number(row?.losses || 0);
                 const gb = index === 0 ? "—" : ((leaderPct - rowPct) / 2).toFixed(1);
@@ -1171,6 +1314,24 @@ export default function TeamHub() {
                   onClick={() => navigate("/roster-view")}
                 >
                   <div className={styles.playerVisual}>
+                    {!showBench && teamLogoOf(hubTeam) ? (
+                      <img
+                        className={styles.playerTeamWatermark}
+                        src={teamLogoOf(hubTeam)}
+                        alt=""
+                        aria-hidden="true"
+                        // BM_TEAMHUB_LOGO_POSITION_AND_GRID_ALIGNMENT_v7
+                        // Position X/Y directly on the absolutely-positioned watermark.
+                        // Keeping translation out of the CSS-variable transform makes
+                        // x/y independent from scale and immediately visible while tuning.
+                        style={{
+                          left: `calc(50% + ${Number(rotationLayout?.startingFiveTeamLogo?.x || 0)}px)`,
+                          top: `calc(50% + ${Number(rotationLayout?.startingFiveTeamLogo?.y || 0)}px)`,
+                          opacity: Number(rotationLayout?.startingFiveTeamLogo?.opacity ?? 0.06),
+                          transform: `translate(-50%, -50%) scale(${Number(rotationLayout?.startingFiveTeamLogo?.scale ?? 1)})`,
+                        }}
+                      />
+                    ) : null}
                     <div
                       className={styles.playerRatingBadge}
                       style={{
@@ -1255,49 +1416,56 @@ export default function TeamHub() {
                 {draftAssets.map((pick, index) => {
                   const assetLabel = formatDraftAssetForHub(pick, teamMap);
                   const protectionLabel = pickProtectionLabel(pick);
-                  const originalTeamName =
-                    pick?.originalTeam ||
-                    pick?.originalTeamName ||
-                    pick?.teamName ||
-                    hubTeamName;
-                  const originalTeam =
-                    teamMap.get(originalTeamName) ||
-                    teams.find(
-                      (team) =>
-                        teamAbbr(team) === String(originalTeamName || "").trim().toUpperCase() ||
-                        normalizeStandingsTeamName(teamNameOf(team)) ===
-                          normalizeStandingsTeamName(originalTeamName)
-                    ) ||
-                    (normalizeStandingsTeamName(originalTeamName) ===
-                    normalizeStandingsTeamName(hubTeamName)
-                      ? hubTeam
-                      : null);
-                  const draftAssetLogo = originalTeam ? teamLogoOf(originalTeam) : "";
+                  const draftAssetTeams = draftAssetLogoTeams(
+                    pick,
+                    leagueData,
+                    teamMap,
+                    teams,
+                    hubTeam
+                  );
+                  const draftAssetLogos = draftAssetTeams
+                    .map((team) => ({
+                      key: normalizeDraftTeamName(teamNameOf(team)) || teamNameOf(team),
+                      src: teamLogoOf(team),
+                    }))
+                    .filter((entry) => entry.src);
                   const draftLogoControl = rotationLayout?.draftAssetLogo || {};
                   const draftLogoSize = Number(draftLogoControl?.size || 64);
                   const draftLogoScale = Number(draftLogoControl?.scale ?? 1);
                   const draftLogoOpacity = Number(draftLogoControl?.opacity ?? 0.055);
-                  const draftLogoRotation = Number(draftLogoControl?.rotation ?? -8);
+                  const draftLogoRotation = Number(draftLogoControl?.rotation ?? 0);
                   const draftLogoX = Number(draftLogoControl?.x || 0);
                   const draftLogoY = Number(draftLogoControl?.y || 0);
+                  const participantLogoScale =
+                    draftAssetLogos.length <= 1
+                      ? 1
+                      : Math.max(0.46, 0.72 - Math.max(0, draftAssetLogos.length - 2) * 0.08);
+                  const renderedDraftLogoSize = draftLogoSize * participantLogoScale;
 
                   return (
                     <div className={styles.draftAssetRow} key={pick?.id || `${pick?.year}-${pick?.round}-${pick?.originalTeam}-${index}`}>
-                      {draftAssetLogo ? (
-                        <img
-                          className={styles.draftAssetLogo}
-                          src={draftAssetLogo}
-                          alt=""
+                      {draftAssetLogos.length ? (
+                        <div
+                          className={`${styles.draftAssetLogoGroup} ${draftAssetLogos.length > 1 ? styles.draftAssetLogoGroupMulti : ""}`}
                           aria-hidden="true"
                           style={{
-                            "--team-hub-draft-logo-size": `${Number.isFinite(draftLogoSize) ? draftLogoSize : 64}px`,
+                            "--team-hub-draft-logo-size": `${Number.isFinite(renderedDraftLogoSize) ? renderedDraftLogoSize : 64}px`,
                             "--team-hub-draft-logo-scale": Number.isFinite(draftLogoScale) ? draftLogoScale : 1,
                             "--team-hub-draft-logo-opacity": Number.isFinite(draftLogoOpacity) ? draftLogoOpacity : 0.055,
-                            "--team-hub-draft-logo-rotation": `${Number.isFinite(draftLogoRotation) ? draftLogoRotation : -8}deg`,
+                            "--team-hub-draft-logo-rotation": `${Number.isFinite(draftLogoRotation) ? draftLogoRotation : 0}deg`,
                             "--team-hub-draft-logo-x": `${Number.isFinite(draftLogoX) ? draftLogoX : 0}px`,
                             "--team-hub-draft-logo-y": `${Number.isFinite(draftLogoY) ? draftLogoY : 0}px`,
                           }}
-                        />
+                        >
+                          {draftAssetLogos.map((logo) => (
+                            <img
+                              key={logo.key}
+                              className={styles.draftAssetLogo}
+                              src={logo.src}
+                              alt=""
+                            />
+                          ))}
+                        </div>
                       ) : null}
                       <span className={styles.draftAssetNumber}>{index + 1}</span>
                       <div className={styles.draftAssetText}>

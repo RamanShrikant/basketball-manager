@@ -32,7 +32,7 @@ export const TEAM_HUB_BANNER_LAYOUT = {
   last10Subtext: { x: 0, y: 0, size: 9 },
 
   // Low-opacity background team logo. These values affect only the watermark.
-  watermark: { x: 70, y: 0, scale: 1, opacity: 0.155, rotation: -5 },
+  watermark: { x: 70, y: 0, scale: 1, opacity: 0.155, rotation: 0 },
 
   // Entire Next Game area.
   nextGameBlock: { x: 0, y: 0 },

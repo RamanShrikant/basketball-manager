@@ -4615,3 +4615,266 @@
 }
 
 /* TEAM HUB PLAYER SOURCE OVERRIDE + DRAFT ASSET WATERMARK END */
+
+/* TEAM HUB MULTI-DRAFT-LOGO + STARTING-FIVE TEAM WATERMARK PASS START
+   Visual-only. Draft ownership/trade semantics and rotation/gameplay are unchanged. */
+
+.playerTeamWatermark {
+  position: absolute;
+  z-index: 0;
+  left: 50%;
+  top: 50%;
+  width: 112px;
+  height: 112px;
+  object-fit: contain;
+  object-position: center;
+  opacity: var(--team-hub-player-logo-opacity, 0.06);
+  transform:
+    translate(-50%, -50%)
+    translate(
+      var(--team-hub-player-logo-x, 0px),
+      var(--team-hub-player-logo-y, 0px)
+    )
+    scale(var(--team-hub-player-logo-scale, 1));
+  transform-origin: center;
+  filter: saturate(0.72) brightness(0.78);
+  pointer-events: none;
+  user-select: none;
+}
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  z-index: 2 !important;
+}
+
+.draftAssetLogoGroup {
+  position: absolute;
+  z-index: 1;
+  right: 8px;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  opacity: var(--team-hub-draft-logo-opacity, 0.055);
+  transform:
+    translate(
+      var(--team-hub-draft-logo-x, 0px),
+      calc(-50% + var(--team-hub-draft-logo-y, 0px))
+    )
+    rotate(var(--team-hub-draft-logo-rotation, -8deg))
+    scale(var(--team-hub-draft-logo-scale, 1));
+  transform-origin: right center;
+  pointer-events: none;
+  user-select: none;
+}
+
+.draftAssetLogoGroup .draftAssetLogo {
+  position: relative !important;
+  inset: auto !important;
+  flex: 0 0 auto;
+  width: var(--team-hub-draft-logo-size, 64px) !important;
+  height: var(--team-hub-draft-logo-size, 64px) !important;
+  object-fit: contain;
+  object-position: center;
+  opacity: 1 !important;
+  transform: none !important;
+  filter: saturate(0.75) brightness(0.95);
+}
+
+.draftAssetLogoGroupMulti {
+  max-width: 52%;
+}
+
+/* TEAM HUB MULTI-DRAFT-LOGO + STARTING-FIVE TEAM WATERMARK PASS END */
+
+/* TEAM HUB PANEL COLUMN ALIGNMENT v5
+   Visual-only:
+   - aligns the Draft Assets / League News divider with
+     the Starting Five / Recent Games divider
+   - preserves all player, logo, draft-pick, manual tuning and gameplay logic
+*/
+.middleGrid,
+.bottomGrid {
+  grid-template-columns: minmax(0, 1.56fr) minmax(320px, 0.88fr) !important;
+}
+
+/* Keep the same vertical divider on compact laptop-height layouts too. */
+@media (max-height: 900px) and (min-width: 900px) {
+  .middleGrid,
+  .bottomGrid {
+    grid-template-columns: minmax(0, 1.56fr) minmax(320px, 0.88fr) !important;
+  }
+}
+
+/* TEAM HUB PANEL COLUMN ALIGNMENT v5 END */
+/* TEAM HUB TOP ROW ALIGNMENT v6
+   Visual-only desktop column redistribution.
+
+   Goal:
+   - move Team Overview slightly left
+   - widen Standings toward the left
+   - bring the Team Overview / Standings divider into line with the
+     Starting Five / Recent Games and Draft Assets / League News divider
+
+   Existing <=1180px responsive stacking remains authoritative.
+*/
+@media (min-width: 1181px) {
+  .topGrid {
+    grid-template-columns:
+      minmax(0, 0.94fr)
+      minmax(290px, 0.88fr)
+      minmax(340px, 1.04fr) !important;
+  }
+}
+
+/* TEAM HUB TOP ROW ALIGNMENT v6 END */
+
+/* TEAM HUB EXACT RIGHT-COLUMN ALIGNMENT v7
+   Desktop visual-only polish.
+
+   One shared right-column width now drives:
+   - Standings
+   - Recent Games
+   - League News
+
+   This makes their left edges mathematically identical instead of relying
+   on three slightly different fractional grid calculations.
+
+   The two left-side top panels split the remaining room with Team Overview
+   receiving a tiny bit more space, shifting it slightly left as requested.
+*/
+@media (min-width: 1181px) {
+  .topGrid,
+  .middleGrid,
+  .bottomGrid {
+    --team-hub-right-column-width: 37%;
+    --team-hub-shared-panel-gap: 10px;
+    gap: var(--team-hub-shared-panel-gap) !important;
+  }
+
+  .middleGrid,
+  .bottomGrid {
+    grid-template-columns:
+      minmax(0, 1fr)
+      minmax(320px, var(--team-hub-right-column-width)) !important;
+  }
+
+  .topGrid {
+    grid-template-columns:
+      minmax(0, 0.96fr)
+      minmax(290px, 1.04fr)
+      minmax(340px, var(--team-hub-right-column-width)) !important;
+  }
+}
+
+/* TEAM HUB EXACT RIGHT-COLUMN ALIGNMENT v7 END */
+
+/* TEAM HUB STANDINGS SCROLL + CONFERENCE SWITCH v8
+   Visual-only standings polish:
+   - full conference is available inside the existing card
+   - slim muted-orange scrollbar
+   - tiny conference toggle
+*/
+.standingsHeadingActions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.conferenceSwitchButton {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 49px;
+  height: 20px;
+  padding: 0 7px !important;
+  border: 1px solid rgba(249, 115, 22, 0.34) !important;
+  border-radius: 999px !important;
+  background: rgba(249, 115, 22, 0.075) !important;
+  color: rgba(255, 203, 151, 0.92) !important;
+  font-size: 8px !important;
+  line-height: 1 !important;
+  font-weight: 850 !important;
+  letter-spacing: 0.07em !important;
+  text-transform: uppercase;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.conferenceSwitchButton b {
+  color: #f97316;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.conferenceSwitchButton:hover:not(:disabled) {
+  background: rgba(249, 115, 22, 0.13) !important;
+  border-color: rgba(249, 115, 22, 0.55) !important;
+  color: #fff1e6 !important;
+}
+
+.conferenceSwitchButton:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.topGrid .standingsRows {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(249, 115, 22, 0.82) rgba(255, 255, 255, 0.035);
+  padding-right: 3px !important;
+}
+
+.topGrid .standingsRows .standingRow {
+  flex: 0 0 34px !important;
+  min-height: 34px !important;
+  height: 34px !important;
+}
+
+.topGrid .standingsRows::-webkit-scrollbar {
+  width: 5px;
+}
+
+.topGrid .standingsRows::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: 999px;
+}
+
+.topGrid .standingsRows::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    rgba(251, 146, 60, 0.92),
+    rgba(234, 88, 12, 0.88)
+  );
+  border-radius: 999px;
+}
+
+.topGrid .standingsRows::-webkit-scrollbar-thumb:hover {
+  background: rgba(249, 115, 22, 0.98);
+}
+
+@media (max-height: 820px) {
+  .topGrid .standingsRows .standingRow {
+    flex-basis: 30px !important;
+    min-height: 30px !important;
+    height: 30px !important;
+  }
+
+  .conferenceSwitchButton {
+    height: 18px;
+    min-width: 45px;
+    padding: 0 6px !important;
+    font-size: 7.5px !important;
+  }
+}
+
+/* TEAM HUB STANDINGS SCROLL + CONFERENCE SWITCH v8 END */

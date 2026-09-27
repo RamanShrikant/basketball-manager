@@ -740,9 +740,6 @@ export default function ContractExtensions() {
                             {selectedPlayer?.pos || "—"}
                             <span>|</span> Age {selectedPlayer?.age ?? "—"}
                           </p>
-                          {!selectedRow.eligible && (selectedRow.displayReason || selectedRow.reason) ? (
-                            <div className="ce-player-reason">{selectedRow.displayReason || selectedRow.reason}</div>
-                          ) : null}
                         </div>
                       </div>
 

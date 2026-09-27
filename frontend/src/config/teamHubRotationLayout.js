@@ -18,7 +18,17 @@ export const TEAM_HUB_ROTATION_LAYOUT = {
     x: 0,
     y: 0,
     size: 90,
-    scale: 0.54,
+    scale: 0.64,
+  },
+
+  // Low-opacity team logo behind each Starting Five player card.
+  // Positive X moves right. Positive Y moves down.
+  // Scale changes logo size. Opacity is 0..1.
+  startingFiveTeamLogo: {
+    x: 0,
+    y: 0,
+    scale: 1.8,
+    opacity: 0.26,
   },
 
   // Per-player visual exceptions for source images that are framed differently.
@@ -41,7 +51,7 @@ export const TEAM_HUB_ROTATION_LAYOUT = {
     size: 64,
     scale: 1,
     opacity: 0.555,
-    rotation: -8,
+    rotation: 0,
   },
 };
 
