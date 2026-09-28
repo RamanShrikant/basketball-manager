@@ -546,15 +546,23 @@ export default function RosterView() {
   }, [workingLeagueData]);
 
   // all players list
-  const allLeaguePlayers = useMemo(
-    () =>
-      teamsSorted.flatMap((t) => [
-        ...(t.players || []),
-        ...getTwoWayPlayers(t).map(markTwoWayPlayer),
-        ...getStashPlayers(t).map(markStashPlayer),
-      ]),
-    [teamsSorted]
-  );
+  const allLeaguePlayers = useMemo(() => {
+    const rosterPlayers = teamsSorted.flatMap((t) => [
+      ...(t.players || []),
+      ...getTwoWayPlayers(t).map(markTwoWayPlayer),
+      ...getStashPlayers(t).map(markStashPlayer),
+    ]);
+
+    const freeAgentPlayers = Array.isArray(workingLeagueData?.freeAgents)
+      ? workingLeagueData.freeAgents.map((p) => ({
+          ...p,
+          isFreeAgent: true,
+          teamName: "FA",
+        }))
+      : [];
+
+    return [...rosterPlayers, ...freeAgentPlayers];
+  }, [teamsSorted, workingLeagueData?.freeAgents]);
 
   // map player -> team info (for logo column)
   const teamOfPlayer = useMemo(() => {
@@ -572,8 +580,25 @@ export default function RosterView() {
         if (p.name) map[`name:${p.name}`] = row;
       }
     }
+
+    const freeAgentRow = { teamName: "FA", logo: "", team: null, isFreeAgent: true };
+    const freeAgentPlayers = Array.isArray(workingLeagueData?.freeAgents)
+      ? workingLeagueData.freeAgents
+      : [];
+
+    for (const p of freeAgentPlayers) {
+      if (p.id !== undefined && p.id !== null) {
+        const idKey = `id:${p.id}`;
+        if (!map[idKey]) map[idKey] = freeAgentRow;
+      }
+      if (p.name) {
+        const nameKey = `name:${p.name}`;
+        if (!map[nameKey]) map[nameKey] = freeAgentRow;
+      }
+    }
+
     return map;
-  }, [teamsSorted]);
+  }, [teamsSorted, workingLeagueData?.freeAgents]);
 
   const getPlayerKey = (target) => {
     if (!target) return "";
@@ -1500,7 +1525,9 @@ export default function RosterView() {
 
               <tbody className="text-[14px] font-medium">
                 {sortedPlayers.map((p, idx) => {
-                  const tinfo = teamOfPlayer[getPlayerKey(p)] || teamOfPlayer[`name:${p.name || ""}`] || {};
+                  const tinfo = p?.isFreeAgent
+                    ? { teamName: "FA", logo: "", isFreeAgent: true }
+                    : teamOfPlayer[getPlayerKey(p)] || teamOfPlayer[`name:${p.name || ""}`] || {};
                   const injured = isPlayerInjured(p, currentLeagueDate);
                   return (
                     <tr
@@ -1527,6 +1554,10 @@ export default function RosterView() {
                               alt={tinfo.teamName || "Team"}
                               className="h-6 w-6 object-contain inline-block align-middle"
                             />
+                          ) : tinfo.teamName === "FA" || p?.isFreeAgent ? (
+                            <span className="inline-flex min-w-6 items-center justify-center rounded-md border border-neutral-500/35 bg-neutral-800/75 px-1.5 py-0.5 text-[11px] font-extrabold tracking-wide text-neutral-200">
+                              FA
+                            </span>
                           ) : null}
                         </td>
                       )}
