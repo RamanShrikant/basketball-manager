@@ -254,3 +254,68 @@
   padding-bottom: 2px;
   margin-bottom: -2px;
 }
+
+
+/* PATCH59_FIXED_TEAM_ARROWS: arrows live in fixed grid cells so next-team spam clicking never drifts with team-name length. */
+.rosterHeaderBar {
+  grid-template-columns: 32px minmax(0, 1fr) 32px auto !important;
+  align-items: center !important;
+}
+.rosterIdentityCluster {
+  display: flex !important;
+  width: auto !important;
+  max-width: 100% !important;
+  justify-self: stretch !important;
+  min-width: 0 !important;
+}
+.rosterIdentity {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+.rosterHeaderBar > .teamSwitchButton {
+  justify-self: center !important;
+}
+@media (max-width: 980px) {
+  .rosterHeaderBar {
+    grid-template-columns: 32px minmax(0, 1fr) 32px !important;
+  }
+  .rosterStatusCluster {
+    display: none !important;
+  }
+}
+
+/* UI_STATS_FINANCES_REPAIR_V2: centered team identity with fixed arrows. */
+.rosterHeaderBar {
+  grid-template-columns: 32px minmax(0, 1fr) 32px auto !important;
+  column-gap: 12px !important;
+}
+
+.rosterIdentityCluster {
+  width: 100% !important;
+  max-width: 100% !important;
+  justify-self: stretch !important;
+  justify-content: center !important;
+}
+
+.rosterIdentity {
+  justify-content: center !important;
+  max-width: 100% !important;
+}
+
+.rosterIdentityTitle {
+  text-align: center !important;
+}
+
+.rosterStatusCluster {
+  justify-self: end !important;
+}
+
+@media (max-width: 1180px) {
+  .rosterHeaderBar {
+    grid-template-columns: 32px minmax(0, 1fr) 32px !important;
+  }
+
+  .rosterStatusCluster {
+    display: none !important;
+  }
+}

@@ -218,6 +218,7 @@ export default function Standings() {
     <table className="w-full text-sm text-center">
       <thead className="sticky top-0 z-10 bg-neutral-800 text-gray-300">
         <tr>
+          <th className="px-3 py-2 w-[70px]">Rank</th>
           <th className="px-3 py-2 text-left pl-4">Team</th>
           <th className="px-3 py-2">W</th>
           <th className="px-3 py-2">L</th>
@@ -230,10 +231,11 @@ export default function Standings() {
       <tbody>
         {rows.map((t, i) => (
           <tr key={`${t.division || "league"}-${t.team}`} className={`hover:bg-neutral-800/60 ${selectedTeam?.name === t.team ? "bg-orange-600/70" : ""}`}>
+            <td className={`px-3 ${compact ? "py-1.5" : "py-2"} font-black text-orange-200`}>{i + 1}</td>
             <td className={`px-3 ${compact ? "py-1.5" : "py-2"} text-left pl-4 font-semibold`}>
               <div className="flex items-center gap-2">
                 {t.logo && <img src={t.logo} alt={t.team} className="w-6 h-6 object-contain" />}
-                <span>{i + 1}. {t.team}</span>
+                <span>{t.team}</span>
               </div>
             </td>
             <td className="px-3 py-2">{t.w}</td>

@@ -103,6 +103,7 @@ import {
 import {
   evaluateTeamSimulationRoster,
 } from "../utils/rosterRules.js";
+import { isMipImprovementEligible, scoreMipImprovement } from "../utils/mipScoring.js";
 import {
   findFirstPendingSimulationDate,
   resolveSimulationCursorAfterTarget,
@@ -2200,15 +2201,19 @@ function normalizeAwards(raw) {
 function buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById) {
   const wins = {};
   const gamesPlayed = {};
+  const pointsFor = {};
+  const pointsAgainst = {};
 
   const bumpWin = (teamName) => {
     if (!teamName) return;
     wins[teamName] = (wins[teamName] || 0) + 1;
   };
 
-  const bumpGame = (teamName) => {
+  const bumpGame = (teamName, pf = 0, pa = 0) => {
     if (!teamName) return;
     gamesPlayed[teamName] = (gamesPlayed[teamName] || 0) + 1;
+    pointsFor[teamName] = (pointsFor[teamName] || 0) + Number(pf || 0);
+    pointsAgainst[teamName] = (pointsAgainst[teamName] || 0) + Number(pa || 0);
   };
 
   for (const games of Object.values(scheduleByDate || {})) {
@@ -2218,11 +2223,11 @@ function buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById) {
       const r = resultsById?.[g.id];
       if (!r?.totals) continue;
 
-      bumpGame(g.home);
-      bumpGame(g.away);
-
       const homePts = Number(r.totals.home ?? 0);
       const awayPts = Number(r.totals.away ?? 0);
+
+      bumpGame(g.home, homePts, awayPts);
+      bumpGame(g.away, awayPts, homePts);
 
       // ignore ties
       if (homePts === awayPts) continue;
@@ -2232,12 +2237,22 @@ function buildTeamsWithWinsForAwards(allTeams, scheduleByDate, resultsById) {
     }
   }
 
-  // Return a list that awards.py can consume and the live ladders can use for 80% GP checks.
-  return (allTeams || []).map((t) => ({
-    team: t?.name,     // IMPORTANT: must match playerStats.team (your schedule uses team names)
-    wins: wins[t?.name] || 0,
-    games: gamesPlayed[t?.name] || 0,
-  }));
+  // Return a list that awards.py can consume and the live ladders can use for GP checks.
+  return (allTeams || []).map((t) => {
+    const teamName = t?.name || t?.team;
+    const games = gamesPlayed[teamName] || 0;
+    const pf = pointsFor[teamName] || 0;
+    const pa = pointsAgainst[teamName] || 0;
+    return {
+      team: teamName,
+      wins: wins[teamName] || 0,
+      games,
+      pf,
+      pa,
+      netPerGame: games > 0 ? (pf - pa) / games : 0,
+      winPct: games > 0 ? (wins[teamName] || 0) / games : 0,
+    };
+  });
 }
 const MINI_AWARD_TABS = ["mvp", "dpoy", "sixth_man"];
 const MINI_AWARD_LABELS = {
@@ -4338,7 +4353,7 @@ function buildCalendarAwardFallbackRow(row = {}, score = 0, extra = {}) {
 function buildFallbackSeasonAwards(playersArray = [], teamsWithWins = [], regularSeasonComplete = false) {
   const teamWins = new Map((teamsWithWins || []).map((team) => [team.team, Number(team.wins || 0)]));
   const pool = (playersArray || [])
-    .filter((row) => Number(row?.gp || 0) >= (regularSeasonComplete ? 45 : 1))
+    .filter((row) => Number(row?.gp || 0) >= 65)
     .filter(statRowHasRealProduction)
     .map((row) => ({
       ...row,
@@ -4388,13 +4403,8 @@ function buildFallbackSeasonAwards(playersArray = [], teamsWithWins = [], regula
 
   const scoreMip = (row) => {
     const prev = row.mip_prev || row.mipPrev || row.previousSeasonStats || {};
-    const prevGp = Number(prev.games ?? prev.gp ?? 0);
-    if (prevGp > 0 && prevGp < 30) return -1;
-    const prevPpg = Number(prev.ppg ?? prev.pts ?? 0);
-    const prevRpg = Number(prev.rpg ?? prev.reb ?? 0);
-    const prevApg = Number(prev.apg ?? prev.ast ?? 0);
-    const prodGain = (row._ppg + row._rpg + row._apg) - (prevPpg + prevRpg + prevApg);
-    return prodGain + Math.max(0, row._mpg - Number(prev.mpg || prev.min || 0)) * 0.15;
+    if (!isMipImprovementEligible(row, prev, { isRookie: isRotyEligible(row) })) return -1;
+    return scoreMipImprovement(row, prev);
   };
 
   const isRotyEligible = (row) => {
@@ -4420,7 +4430,28 @@ function buildFallbackSeasonAwards(playersArray = [], teamsWithWins = [], regula
       mip_prod_delta: Number(((row._ppg + row._rpg + row._apg) - (Number(prev.ppg ?? prev.pts ?? 0) + Number(prev.rpg ?? prev.reb ?? 0) + Number(prev.apg ?? prev.ast ?? 0))).toFixed(1)),
     };
   }).slice(0, 10);
-  const rotyRace = ranked(scoreMvp, () => ({}), pool.filter(isRotyEligible)).slice(0, 10);
+  const rotyPool = pool.filter((row) => isRotyEligible(row) && Number(row?.gp || 0) >= 65);
+  const rotyRace = ranked(scoreMvp, () => ({}), rotyPool).slice(0, 10);
+
+  const allRookieSource = (playersArray || [])
+    .filter(isRotyEligible)
+    .filter(statRowHasRealProduction)
+    .map((row) => ({
+      ...row,
+      _team_wins: Number(row?._team_wins ?? teamWins.get(row?.team) ?? 0),
+      _ppg: awardFallbackPerGame(row, "pts"),
+      _rpg: awardFallbackPerGame(row, "reb"),
+      _apg: awardFallbackPerGame(row, "ast"),
+      _spg: awardFallbackPerGame(row, "stl"),
+      _bpg: awardFallbackPerGame(row, "blk"),
+      _mpg: awardFallbackPerGame(row, "min"),
+    }));
+  const allRookiePool = [
+    ...rotyRace,
+    ...ranked(scoreMvp, () => ({}), allRookieSource
+      .filter((row) => !rotyRace.some((picked) => picked.player === row.player && picked.team === row.team))
+      .sort((a, b) => Number(b?.gp || 0) - Number(a?.gp || 0)))
+  ].slice(0, 10);
 
   const allNba = ranked(scoreMvp).slice(0, 15);
   const allDef = ranked(scoreDpoy).slice(0, 10);
@@ -4433,9 +4464,9 @@ function buildFallbackSeasonAwards(playersArray = [], teamsWithWins = [], regula
     mvp_race: mvpRace,
     dpoy: dpoyRace[0] || mvpRace[0] || null,
     dpoy_race: dpoyRace,
-    sixth_man: sixthRace[0] || mvpRace[0] || null,
+    sixth_man: sixthRace[0] || null,
     sixth_man_race: sixthRace,
-    mip: mipRace[0] || mvpRace[0] || null,
+    mip: mipRace[0] || null,
     mip_race: mipRace,
     roty: rotyRace[0] || null,
     roty_race: rotyRace,
@@ -4444,8 +4475,8 @@ function buildFallbackSeasonAwards(playersArray = [], teamsWithWins = [], regula
     all_nba_third: allNba.slice(10, 15),
     all_defensive_first: allDef.slice(0, 5),
     all_defensive_second: allDef.slice(5, 10),
-    all_rookie_first: rotyRace.slice(0, 5),
-    all_rookie_second: rotyRace.slice(5, 10),
+    all_rookie_first: allRookiePool.slice(0, 5),
+    all_rookie_second: allRookiePool.slice(5, 10),
   };
 }
 
@@ -4606,21 +4637,26 @@ async function computeAndSaveCalendarAwards({
     }
 
     const rookieMetaMap = buildAwardRosterMetaLookup(activeTeams, seasonYear + 1);
+    const teamsWithWins = buildTeamsWithWinsForAwards(activeTeams, schedule, results);
+    const teamAwardMeta = new Map((teamsWithWins || []).map((team) => [team.team, team]));
 
     const playersArray = Object.values(combinedCurrentRosterStats || {}).map((p) => {
       const key = `${p.player}__${p.team}`;
       const def = defMap[key];
       const rookieMeta = rookieMetaMap[key] || {};
+      const teamMeta = teamAwardMeta.get(p.team) || {};
       return {
         ...p,
         ...rookieMeta,
+        _team_wins: Number(teamMeta.wins || 0),
+        _team_games: Number(teamMeta.games || 0),
+        _team_net_per_game: Number(teamMeta.netPerGame || 0),
+        _team_win_pct: Number(teamMeta.winPct || 0),
         def_rating: Number.isFinite(Number(def)) ? Number(def) : 110,
       };
     });
 
     console.log("[Calendar] computing awards from combined sim-to-date stats for", playersArray.length, "players");
-
-    const teamsWithWins = buildTeamsWithWinsForAwards(activeTeams, schedule, results);
 
     const deepUnpair = (x) => {
       if (Array.isArray(x) && x.length && Array.isArray(x[0]) && x[0].length === 2) {

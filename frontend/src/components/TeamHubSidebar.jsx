@@ -55,6 +55,7 @@ const ICON_BY_ITEM = {
   "Locker Room": "users",
   "Team Intel": "eye",
   "Upcoming Draft": "search",
+  "League Finances": "wallet",
   "Award Tracker": "award",
   "View All-Stars": "star",
   "Transaction History": "clock",
@@ -92,6 +93,7 @@ const ACTIVE_ROUTE_ALIASES = {
   "/draft": "Upcoming Draft",
   "/rookie-signings": "Upcoming Draft",
   "/roster-finalization": "Upcoming Draft",
+  "/league-finances": "League Finances",
   "/award-tracker": "Award Tracker",
   "/all-stars": "View All-Stars",
   "/league-history": "Transaction History",
@@ -370,10 +372,10 @@ export default function TeamHubSidebar() {
     ],
     Season: [
       { name: "Standings", path: "/standings", enabled: true },
+      { name: "Power Rankings", path: "/power-rankings", enabled: true },
       showPostseasonNavigation
         ? { name: "Playoffs", path: "/playoffs", enabled: true, description: "Review Postseason Bracket" }
         : { name: "Playoff Picture", path: "/playoff-picture", enabled: true },
-      { name: "Power Rankings", path: "/power-rankings", enabled: true },
     ],
     Scouting: [
       { name: "Locker Room", path: "/locker-room", enabled: true },
@@ -386,6 +388,7 @@ export default function TeamHubSidebar() {
           ? "Prospects, Rankings, and Scouting Reports"
           : "Reopens When the Next Season Starts",
       },
+      { name: "League Finances", path: "/league-finances", enabled: true },
     ],
     Awards: [
       { name: "Award Tracker", path: "/award-tracker", enabled: true },

@@ -3998,7 +3998,7 @@ ${disabled ? "opacity-60" : ""}
 
       {/* Finals MVP Reveal Modal */}
       {showFinalsMvpModal && (
-        <div className="fixed inset-0 z-[80] bg-black/30 flex items-center justify-center p-4 bmPlayoffFadeIn">
+        <div className="fixed bottom-0 right-0 top-0 left-[260px] z-[80] flex items-center justify-center bg-black/30 p-4 bmPlayoffFadeIn max-lg:left-0">
           <FinalsMvpReveal
             leagueData={leagueData}
             fmvpRaw={(() => {

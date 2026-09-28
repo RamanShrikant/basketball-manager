@@ -1289,16 +1289,16 @@ export default function RosterView() {
             ) : null}
             <h1 className={styles.rosterIdentityTitle}>{headerTitle}</h1>
           </div>
-
-          <button
-            onClick={() => handleTeamSwitch("next")}
-            className={styles.teamSwitchButton}
-            title="Next Team"
-            aria-label="Next Team"
-          >
-            ►
-          </button>
         </div>
+
+        <button
+          onClick={() => handleTeamSwitch("next")}
+          className={styles.teamSwitchButton}
+          title="Next Team"
+          aria-label="Next Team"
+        >
+          ►
+        </button>
 
         {!isAllView && (
           <div className={styles.rosterStatusCluster}>

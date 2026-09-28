@@ -48,7 +48,7 @@ const AWARD_META = {
     label: "Clutch Player of the Year",
     short: "CPOTY",
     description:
-      "Awarded to the player who combined clutch-game winning, production, volume, and the strongest performance elevation in games decided by five points or fewer.",
+      "Awarded to the league's top late-game performer during the regular season.",
   },
   roty: {
     label: "Rookie of the Year",
@@ -135,6 +135,7 @@ function buildPerGameRow(name, team, stats) {
     name,
     team,
     gp: stats.gp || 0,
+    gs: Number(stats.started ?? stats.gs ?? stats.gamesStarted ?? 0),
     min: fmt(min),
     pts: fmt(pts),
     reb: fmt(reb),
@@ -177,6 +178,7 @@ function combineAwardStatsMapRows(statsMap, playerName, currentTeamName = "") {
     tpa: 0,
     ftm: 0,
     fta: 0,
+    started: 0,
   };
 
   for (const row of records) {
@@ -193,6 +195,7 @@ function combineAwardStatsMapRows(statsMap, playerName, currentTeamName = "") {
     total.tpa += Number(row.tpa || 0);
     total.ftm += Number(row.ftm || 0);
     total.fta += Number(row.fta || 0);
+    total.started += Number(row.started ?? row.gs ?? row.gamesStarted ?? 0);
   }
 
   return total;
@@ -344,25 +347,9 @@ const [mvpPartyPieces, setMvpPartyPieces] = useState([]);
 
   const winnerRow = useMemo(() => {
     if (!winner?.player || !winner?.team) return null;
-    if (currentKey === "clutch_player") {
-      return {
-        name: winner.player,
-        team: winner.team,
-        gp: Number(winner.gp || 0),
-        min: fmtAward1(winner.clutch_mpg),
-        pts: fmtAward1(winner.clutch_ppg),
-        reb: fmtAward1(winner.clutch_rpg),
-        ast: fmtAward1(winner.clutch_apg),
-        stl: fmtAward1(winner.clutch_spg),
-        blk: fmtAward1(winner.clutch_bpg),
-        fgPct: 0,
-        tpPct: 0,
-        ftPct: 0,
-      };
-    }
     const stats = combineAwardStatsMapRows(statsMap, winner.player, winner.team);
     return buildPerGameRow(winner.player, winner.team, stats);
-  }, [currentKey, winner, statsMap]);
+  }, [winner, statsMap]);
 
   const winnerPlayer = useMemo(() => {
     if (!winner?.player || !winner?.team) return null;
@@ -466,72 +453,70 @@ const goNext = () => {
     };
   }, [currentKey, hasWinner, mvpPartyLogo]);
 
-  /* ------- WINNER STAT RIBBON (bottom of winner card) -------------------- */
+  function getAwardStatSpecs(row, awardKey) {
+    if (!row) return [];
+
+    const benchGames = Math.max(0, Number(row.gp || 0) - Number(row.gs || 0));
+
+    if (awardKey === "dpoy") {
+      return [
+        { label: "GP", value: row.gp },
+        { label: "RPG", value: row.reb },
+        { label: "SPG", value: row.stl },
+        { label: "BPG", value: row.blk },
+      ];
+    }
+
+    if (awardKey === "sixth_man") {
+      return [
+        { label: "G(B)", value: benchGames },
+        { label: "PPG", value: row.pts },
+        { label: "RPG", value: row.reb },
+        { label: "APG", value: row.ast },
+        { label: "SPG", value: row.stl },
+        { label: "BPG", value: row.blk },
+      ];
+    }
+
+    if (awardKey === "mip" || awardKey === "clutch_player") {
+      return [
+        { label: "GP", value: row.gp },
+        { label: "PPG", value: row.pts },
+        { label: "RPG", value: row.reb },
+        { label: "APG", value: row.ast },
+        { label: "SPG", value: row.stl },
+        { label: "BPG", value: row.blk },
+      ];
+    }
+
+    return [
+      { label: "GP", value: row.gp },
+      { label: "PPG", value: row.pts },
+      { label: "RPG", value: row.reb },
+      { label: "APG", value: row.ast },
+      { label: "SPG", value: row.stl },
+      { label: "BPG", value: row.blk },
+    ];
+  }
+
   function renderWinnerStatRibbon() {
     if (!hasWinner) return null;
-
-    const statsForAward =
-      currentKey === "dpoy"
-        ? [
-            { label: "GP", value: winnerRow.gp },
-            { label: "MIN", value: winnerRow.min },
-            { label: "RPG", value: winnerRow.reb },
-            { label: "SPG", value: winnerRow.stl },
-            { label: "BPG", value: winnerRow.blk },
-            { label: "FG%", value: `${winnerRow.fgPct}%` },
-            { label: "FT%", value: `${winnerRow.ftPct}%` },
-          ]
-        : currentKey === "mip"
-        ? [
-            { label: "GP", value: winnerRow.gp },
-            { label: "PPG", value: winnerRow.pts },
-            { label: "ΔPPG", value: fmtSignedAward1(winner?.mip_ppg_delta) },
-            { label: "RPG", value: winnerRow.reb },
-            { label: "APG", value: winnerRow.ast },
-            { label: "ΔPROD", value: fmtSignedAward1(winner?.mip_prod_delta) },
-            { label: "FG%", value: `${winnerRow.fgPct}%` },
-            { label: "Prev", value: fmtAward1(winner?.mip_prev_ppg) },
-          ]
-        : currentKey === "clutch_player"
-        ? [
-            { label: "CL GP", value: fmtAward1(winner?.clutch_gp) },
-            { label: "CL W-L", value: `${winner?.clutch_wins || 0}-${winner?.clutch_losses || 0}` },
-            { label: "CL PPG", value: fmtAward1(winner?.clutch_ppg) },
-            { label: "CL RPG", value: fmtAward1(winner?.clutch_rpg) },
-            { label: "CL APG", value: fmtAward1(winner?.clutch_apg) },
-            { label: "CLUTCH LIFT", value: fmtSignedAward1(winner?.impact_lift) },
-            { label: "TS% Δ", value: `${fmtSignedAward1(winner?.ts_lift)}%` },
-            { label: "SCORE", value: fmtAward1(winner?.clutch_score) },
-          ]
-        : [
-            { label: "GP", value: winnerRow.gp },
-            { label: "PPG", value: winnerRow.pts },
-            { label: "RPG", value: winnerRow.reb },
-            { label: "APG", value: winnerRow.ast },
-            { label: "SPG", value: winnerRow.stl },
-            { label: "BPG", value: winnerRow.blk },
-            { label: "FG%", value: `${winnerRow.fgPct}%` },
-            { label: "3P%", value: `${winnerRow.tpPct}%` },
-          ];
-
-    const statGridStyle = {
-      gridTemplateColumns:
-        statsForAward.length >= 8
-          ? "repeat(6, minmax(0, 1fr)) 1.25fr 1.25fr"
-          : "repeat(5, minmax(0, 1fr)) 1.25fr 1.25fr",
-    };
+    const statsForAward = getAwardStatSpecs(winnerRow, currentKey);
 
     return (
-      <div className="grid gap-1.5 text-center" style={statGridStyle}>
+      <div
+        className="grid gap-2 text-center"
+        style={{ gridTemplateColumns: `repeat(${statsForAward.length}, minmax(0, 1fr))` }}
+      >
         {statsForAward.map((stat) => (
           <div
             key={stat.label}
-            className="rounded-lg bg-neutral-950/70 border border-white/10 px-1 py-2 min-w-0 overflow-hidden"
+            className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-neutral-950/70 px-2 py-2"
           >
-            <div className="text-[9px] font-semibold uppercase tracking-wide text-orange-300/80">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-orange-300/85">
               {stat.label}
             </div>
-            <div className="text-[15px] font-extrabold leading-tight text-white whitespace-nowrap">
+            <div className="truncate text-[17px] font-black leading-tight text-white">
               {stat.value}
             </div>
           </div>
@@ -542,13 +527,9 @@ const goNext = () => {
 
   function renderRaceStat(label, value) {
     return (
-      <span className="text-right whitespace-nowrap">
-        <span className="text-white/75 font-semibold mr-1">
-          {label}
-        </span>
-        <span className="text-white font-extrabold">
-          {value}
-        </span>
+      <span className="whitespace-nowrap text-right">
+        <span className="font-semibold text-white/70">{label}</span>{" "}
+        <span className="font-black text-white">{value}</span>
       </span>
     );
   }
@@ -612,25 +593,25 @@ if (showAllNba) {
         `}</style>
 
       <div
-        className={`max-w-[1320px] mx-auto px-6 ${
+        className={`max-w-[1420px] mx-auto px-4 ${
           mvpPartyShakeActive ? styles.mvpContentShake : ""
         }`}
       >
         {/* TITLE (global page title) 
             - text-3xl: change to text-4xl to make "2025 Season Awards" bigger */}
-        <h1 className="text-3xl font-extrabold text-center text-orange-500 mb-10">
+        <h1 className="mb-3 text-center text-3xl font-extrabold text-orange-500">
           {season} Season Awards
         </h1>
 
         <div key={currentKey} className="bmAwardStepEnter">
         {/* TOP ROW */}
-        <div className="flex flex-col xl:flex-row gap-7 mb-6">
+        <div className="grid grid-cols-1 items-stretch gap-5 xl:grid-cols-[390px_minmax(0,1fr)]">
           {/* WINNER CARD ----------------------------------------------------- */}
           {/* CARD SIZE / PADDING / BORDER:
                - flex-1 lg:flex-[1.6]   → relative width vs ladder card
                - px-6 pt-3 pb-2        → inner padding; increase/decrease to move content away from edges
                - border-orange-500/80  → change thickness/color here (add border-2, etc.) */}
-          <div className="flex-1 xl:flex-[1.15] bg-neutral-900 border border-orange-500/80 rounded-xl px-6 pt-3 pb-0 shadow-lg flex flex-col h-full overflow-hidden">
+          <div className="flex h-[430px] flex-col overflow-hidden rounded-xl border border-orange-500/80 bg-neutral-900 px-5 pt-4 pb-0 shadow-lg">
             {/* Header block (award label + player name + team) */}
             <div>
               {/* AWARD LABEL TEXT ("MOST VALUABLE PLAYER")
@@ -644,7 +625,7 @@ if (showAllNba) {
               {/* PLAYER NAME TEXT
                   - text-4xl          → main knob for name size
                   - mt-1              → vertical gap between label and name */}
-              <div className="text-4xl font-extrabold mt-1">
+              <div className="mt-1 break-words text-[32px] font-black leading-[0.98]">
                 {hasWinner ? winner.player : "No winner determined"}
               </div>
 
@@ -659,11 +640,11 @@ if (showAllNba) {
             </div>
 
             {/* Winner image + bottom stat ribbon */}
-            <div className="mt-auto pt-3 flex flex-col">
+            <div className="mt-2 flex min-h-0 flex-1 flex-col justify-end pt-1">
               {/* HEADSHOT BLOCK
                   - max-h-72 controls portrait height
                   - centered so stats no longer feel stuck on one side */}
-              <div className="flex justify-center items-end min-h-[270px]">
+              <div className="flex min-h-[205px] items-end justify-center">
                 {hasWinner && portraitSrc ? (
                   <PlayerPortraitFrame
                     src={portraitSrc}
@@ -671,7 +652,7 @@ if (showAllNba) {
                     teamName={winner?.team || winnerPlayer?.teamName || ""}
                     alt={winner.player}
                     layoutPage="individual-awards"
-                    className="h-[270px] w-[370px] max-w-full"
+                    className="h-[238px] w-[300px] max-w-full"
                     bottomInset={0}
                   />
                 ) : (
@@ -682,7 +663,7 @@ if (showAllNba) {
               </div>
 
               {/* Bottom stat ribbon */}
-              <div className="-mx-6 border-t border-orange-500/25 bg-black/25 px-3 py-3">
+              <div className="-mx-5 border-t border-orange-500/25 bg-black/25 px-3 py-2">
                 {renderWinnerStatRibbon()}
               </div>
             </div>
@@ -691,7 +672,7 @@ if (showAllNba) {
 
           {/* LADDER CARD ----------------------------------------------------- */}
           {/* Similar pattern: you can tweak ladder card border, padding, etc. here. */}
-          <div className="w-full xl:flex-[1.85] bg-neutral-900 border border-orange-500/80 rounded-xl px-6 py-4 flex flex-col justify-between shadow-lg">
+          <div className="flex h-[430px] min-w-0 flex-col justify-between rounded-xl border border-orange-500/80 bg-neutral-900 px-5 py-4 shadow-lg">
             <div>
               {/* Ladder title ("Most Valuable Player") */}
               <div className="text-lg font-bold mb-1">{meta.label}</div>
@@ -704,19 +685,13 @@ if (showAllNba) {
               </div>
 
               {race && race.length > 0 ? (
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {race.map((p, idx) => {
-                    const row = currentKey === "clutch_player"
-                      ? {
-                          pts: fmtAward1(p.clutch_ppg),
-                          reb: fmtAward1(p.clutch_rpg),
-                          ast: fmtAward1(p.clutch_apg),
-                        }
-                      : buildPerGameRow(
-                          p.player,
-                          p.team,
-                          statsMap[statsKey(p.player, p.team)]
-                        );
+                    const row = buildPerGameRow(
+                      p.player,
+                      p.team,
+                      combineAwardStatsMapRows(statsMap, p.player, p.team)
+                    );
                     if (!row) return null;
 
                     const isWinner =
@@ -729,7 +704,7 @@ if (showAllNba) {
                     return (
                       <div
                         key={idx}
-                        className={`flex items-center justify-between text-xs px-2 py-2.5 rounded ${
+                        className={`flex items-center justify-between text-xs px-2 py-1.5 rounded ${
                           isWinner
                             ? "bg-orange-500/20 text-orange-200"
                             : "bg-neutral-800 text-neutral-200"
@@ -758,40 +733,15 @@ if (showAllNba) {
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-5 gap-x-3 text-[11px] flex-shrink-0 ml-4 w-[430px]">
-                          {currentKey === "dpoy" ? (
-                            <>
-                              {renderRaceStat("REB", row.reb)}
-                              {renderRaceStat("STL", row.stl)}
-                              {renderRaceStat("BLK", row.blk)}
-                              {renderRaceStat("FG%", `${row.fgPct}%`)}
-                              {renderRaceStat("3P%", `${row.tpPct}%`)}
-                            </>
-                          ) : currentKey === "mip" ? (
-                            <>
-                              {renderRaceStat("PTS", row.pts)}
-                              {renderRaceStat("Prev", fmtAward1(p.mip_prev_ppg))}
-                              {renderRaceStat("ΔPTS", fmtSignedAward1(p.mip_ppg_delta))}
-                              {renderRaceStat("REB", row.reb)}
-                              {renderRaceStat("AST", row.ast)}
-                            </>
-                          ) : currentKey === "clutch_player" ? (
-                            <>
-                              {renderRaceStat("W-L", `${p.clutch_wins || 0}-${p.clutch_losses || 0}`)}
-                              {renderRaceStat("PTS", row.pts)}
-                              {renderRaceStat("REB", row.reb)}
-                              {renderRaceStat("AST", row.ast)}
-                              {renderRaceStat("Score", fmtAward1(p.clutch_score))}
-                            </>
-                          ) : (
-                            <>
-                              {renderRaceStat("PTS", row.pts)}
-                              {renderRaceStat("REB", row.reb)}
-                              {renderRaceStat("AST", row.ast)}
-                              {renderRaceStat("FG%", `${row.fgPct}%`)}
-                              {renderRaceStat("3P%", `${row.tpPct}%`)}
-                            </>
-                          )}
+                        <div
+                          className="ml-3 grid shrink-0 gap-x-2 text-[10.5px]"
+                          style={{ gridTemplateColumns: `repeat(${getAwardStatSpecs(row, currentKey).length}, minmax(42px, 1fr))` }}
+                        >
+                          {getAwardStatSpecs(row, currentKey).map((stat) => (
+                            <React.Fragment key={stat.label}>
+                              {renderRaceStat(stat.label, stat.value)}
+                            </React.Fragment>
+                          ))}
                         </div>
                       </div>
                     );
@@ -804,7 +754,7 @@ if (showAllNba) {
               )}
             </div>
 
-            <div className="mt-4 flex items-center justify-between text-[11px] text-neutral-500">
+            <div className="mt-3 flex items-center justify-between text-[11px] text-neutral-500">
               <div className="flex gap-1">
                 {AWARD_ORDER.map((key, i) => (
                   <span

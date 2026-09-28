@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-AWARDS_PY_VERSION = "2026-08-10_all_rookie_gp_fill_v5"
+AWARDS_PY_VERSION = "2026-09-27_mip_raw_delta_65gp_v6"
 
 # ---------------------------------------------------------------------------
 # UTILITIES
@@ -386,6 +386,69 @@ def _prev_per36_prod(prev, prev_prod):
         return prev_prod
     return prev_prod * 36.0 / prev_mpg
 
+def _mip_stat_delta_score(p, prev):
+    return (
+        1.00 * max(0.0, _ppg(p) - _mip_prev_stat(prev, "ppg")) +
+        0.70 * max(0.0, _apg(p) - _mip_prev_stat(prev, "apg")) +
+        0.55 * max(0.0, _rpg(p) - _mip_prev_stat(prev, "rpg")) +
+        1.75 * max(0.0, _spg(p) - _mip_prev_stat(prev, "spg")) +
+        1.75 * max(0.0, _bpg(p) - _mip_prev_stat(prev, "bpg"))
+    )
+
+def _mip_per36_delta_score(p, prev):
+    minutes = _safe_float(p.get("min"), 0.0)
+    if minutes <= 0:
+        return 0.0
+
+    def curr36(total_key, per_game_func):
+        return 36.0 * _safe_float(p.get(total_key), 0.0) / minutes
+
+    def prev36(key):
+        prev_mpg = _mip_prev_mpg(prev)
+        if prev_mpg <= 0:
+            return _mip_prev_stat(prev, key)
+        return 36.0 * _mip_prev_stat(prev, key) / prev_mpg
+
+    return (
+        1.00 * max(0.0, curr36("pts", _ppg) - prev36("ppg")) +
+        0.70 * max(0.0, curr36("ast", _apg) - prev36("apg")) +
+        0.55 * max(0.0, curr36("reb", _rpg) - prev36("rpg")) +
+        1.75 * max(0.0, curr36("stl", _spg) - prev36("spg")) +
+        1.75 * max(0.0, curr36("blk", _bpg) - prev36("bpg"))
+    )
+
+def _mip_prev_team_value(prev, keys):
+    for key in keys:
+        value = prev.get(key) if isinstance(prev, dict) else None
+        if value not in [None, ""]:
+            return _safe_float(value, None)
+    return None
+
+def _mip_team_efficiency_bonus(p, prev):
+    current = p.get("_team_net_per_game", p.get("teamNet", None))
+    prev_net = _mip_prev_team_value(prev, ["teamNet", "team_net", "netRating", "net", "pointDiff", "diff"])
+    if current in [None, ""] or prev_net is None:
+        return 0.0
+    return max(0.0, min(1.0, (_safe_float(current, 0.0) - prev_net) / 8.0)) * 0.90
+
+def _mip_team_wins_bonus(p, prev):
+    current_games = max(_safe_float(p.get("_team_games", p.get("teamGames", 0)), 0.0), 1.0)
+    current_pct = p.get("_team_win_pct", None)
+    if current_pct in [None, ""]:
+        current_pct = _safe_float(p.get("_team_wins", 0), 0.0) / current_games
+    else:
+        current_pct = _safe_float(current_pct, 0.0)
+
+    prev_pct = _mip_prev_team_value(prev, ["teamWinPct", "team_win_pct", "winPct", "pct"])
+    if prev_pct is None:
+        prev_wins = _mip_prev_team_value(prev, ["teamWins", "wins", "team_wins"])
+        prev_games = _mip_prev_team_value(prev, ["teamGames", "team_games"])
+        if prev_wins is not None and prev_games and prev_games > 0:
+            prev_pct = prev_wins / prev_games
+    if prev_pct is None:
+        return 0.0
+    return max(0.0, min(1.0, (current_pct - prev_pct) / 0.300)) * 0.35
+
 def _is_mip_candidate(p, season_js=None):
     # Rookies / first-NBA-minutes players belong in ROTY, not MIP.
     if _is_roty_candidate_for_awards(p, season_js):
@@ -399,25 +462,19 @@ def _is_mip_candidate(p, season_js=None):
     if _gp(p) < 65 or prev_games < 30:
         return False
 
-    # Fixes the 0-minute / no-production previous season bug.
     prev_prod = _previous_nba_activity(prev)
     prev_mpg = _mip_prev_mpg(prev)
     if prev_prod <= 0.25 and prev_mpg <= 0.01:
         return False
 
-    # Keeps pure garbage-time jumps out while still allowing bench-to-starter leaps.
     if _mpg(p) < 18:
         return False
 
-    curr_prod = _mip_prod(_ppg(p), _rpg(p), _apg(p), _spg(p), _bpg(p))
-    per36_delta = _current_per36_prod(p) - _prev_per36_prod(prev, prev_prod)
+    raw_delta = _mip_stat_delta_score(p, prev)
+    per36_delta = _mip_per36_delta_score(p, prev)
     ppg_delta = _ppg(p) - _mip_prev_stat(prev, "ppg")
 
-    # No superstar exclusion anymore: only actual improvement matters.
-    if (curr_prod - prev_prod) < 1.0 and ppg_delta < 1.0 and per36_delta < 1.5:
-        return False
-
-    return True
+    return raw_delta >= 1.2 or ppg_delta >= 1.0 or per36_delta >= 1.8
 
 def _impact_mip(p):
     prev = _mip_prev_row(p)
@@ -427,7 +484,6 @@ def _impact_mip(p):
     prev_apg = _mip_prev_stat(prev, "apg")
     prev_spg = _mip_prev_stat(prev, "spg")
     prev_bpg = _mip_prev_stat(prev, "bpg")
-    prev_fg = _mip_prev_stat(prev, "fgPct")
 
     curr_ppg = _ppg(p)
     curr_rpg = _rpg(p)
@@ -435,40 +491,12 @@ def _impact_mip(p):
     curr_spg = _spg(p)
     curr_bpg = _bpg(p)
 
-    prev_prod = _mip_prod(prev_ppg, prev_rpg, prev_apg, prev_spg, prev_bpg)
-    curr_prod = _mip_prod(curr_ppg, curr_rpg, curr_apg, curr_spg, curr_bpg)
-    prod_delta = curr_prod - prev_prod
-    relative_gain = prod_delta / max(prev_prod, 5.0)
-    per36_delta = _current_per36_prod(p) - _prev_per36_prod(prev, prev_prod)
+    raw_delta = _mip_stat_delta_score(p, prev)
+    per36_delta = _mip_per36_delta_score(p, prev)
+    team_eff_bonus = _mip_team_efficiency_bonus(p, prev)
+    team_wins_bonus = _mip_team_wins_bonus(p, prev)
 
-    ppg_delta = curr_ppg - prev_ppg
-    rpg_delta = curr_rpg - prev_rpg
-    apg_delta = curr_apg - prev_apg
-    spg_delta = curr_spg - prev_spg
-    bpg_delta = curr_bpg - prev_bpg
-
-    fg_delta = _mip_current_fg_pct(p) - prev_fg if prev_fg > 0 else 0.0
-    role_bonus = min(_mpg(p), 36.0) / 36.0
-    wins_bonus = _norm_wins(p.get("_team_wins", 0), 82, gamma=2.0)
-
-    score = (
-        2.20 * max(0.0, relative_gain) +
-        0.60 * max(0.0, prod_delta) +
-        0.52 * max(0.0, per36_delta) +
-        0.72 * max(0.0, ppg_delta) +
-        0.28 * max(0.0, rpg_delta) +
-        0.32 * max(0.0, apg_delta) +
-        0.70 * max(0.0, spg_delta) +
-        0.70 * max(0.0, bpg_delta) +
-        0.14 * max(0.0, fg_delta) +
-        0.35 * role_bonus +
-        0.18 * wins_bonus
-    )
-
-    # Tiny baselines can inflate relative_gain, so temper those cases without
-    # excluding real breakouts.
-    if prev_prod < 6.0:
-        score *= 0.86
+    score = raw_delta + 0.22 * per36_delta + team_eff_bonus + team_wins_bonus
 
     p["_mip"] = score
     p["_mipEligible"] = True
@@ -479,10 +507,12 @@ def _impact_mip(p):
     p["mip_prev_rpg"] = round(prev_rpg, 3)
     p["mip_prev_apg"] = round(prev_apg, 3)
     p["mip_prev_mpg"] = round(_mip_prev_mpg(prev), 3)
-    p["mip_ppg_delta"] = round(ppg_delta, 3)
-    p["mip_rpg_delta"] = round(rpg_delta, 3)
-    p["mip_apg_delta"] = round(apg_delta, 3)
-    p["mip_prod_delta"] = round(prod_delta, 3)
+    p["mip_ppg_delta"] = round(curr_ppg - prev_ppg, 3)
+    p["mip_rpg_delta"] = round(curr_rpg - prev_rpg, 3)
+    p["mip_apg_delta"] = round(curr_apg - prev_apg, 3)
+    p["mip_spg_delta"] = round(curr_spg - prev_spg, 3)
+    p["mip_bpg_delta"] = round(curr_bpg - prev_bpg, 3)
+    p["mip_prod_delta"] = round(_mip_prod(curr_ppg, curr_rpg, curr_apg, curr_spg, curr_bpg) - _mip_prod(prev_ppg, prev_rpg, prev_apg, prev_spg, prev_bpg), 3)
     p["mip_per36_delta"] = round(per36_delta, 3)
     return score
 
@@ -543,11 +573,18 @@ def compute_awards(players_js, teams_js, season_js=None):
     # --- DEBUG: teams payload sanity ---
 
     team_wins: Dict[str, int] = {}
+    team_games: Dict[str, int] = {}
+    team_net: Dict[str, float] = {}
+    team_win_pct: Dict[str, float] = {}
     for t in teams:
         key = t.get("team") or t.get("name")
         if key is None:
             continue
         team_wins[key] = int(t.get("wins", 0) or 0)
+        team_games[key] = int(t.get("games", 0) or 0)
+        team_net[key] = _safe_float(t.get("netPerGame", t.get("net", 0.0)), 0.0)
+        gp = max(team_games[key], 1)
+        team_win_pct[key] = _safe_float(t.get("winPct", team_wins[key] / gp), team_wins[key] / gp)
 
     sample = list(team_wins.items())[:5]
     nonzero = sum(1 for _, w in team_wins.items() if w > 0)
@@ -557,6 +594,9 @@ def compute_awards(players_js, teams_js, season_js=None):
 
     for p in eligible:
         p["_team_wins"] = team_wins.get(p.get("team"), 0)
+        p["_team_games"] = team_games.get(p.get("team"), 0)
+        p["_team_net_per_game"] = team_net.get(p.get("team"), 0.0)
+        p["_team_win_pct"] = team_win_pct.get(p.get("team"), 0.0)
 
     # --- DEBUG: show team wins for current top few PPG players ---
     top_ppg = sorted(eligible, key=lambda x: _ppg(x), reverse=True)[:5]
@@ -612,20 +652,23 @@ def compute_awards(players_js, teams_js, season_js=None):
     rookie_candidates_all = [p for p in players if _is_roty_candidate_for_awards(p, season_js)]
     for p in rookie_candidates_all:
         p["_team_wins"] = team_wins.get(p.get("team"), 0)
+        p["_team_games"] = team_games.get(p.get("team"), 0)
+        p["_team_net_per_game"] = team_net.get(p.get("team"), 0.0)
+        p["_team_win_pct"] = team_win_pct.get(p.get("team"), 0.0)
     # No broad young-player fallback here. It was letting established young vets
     # sneak into ROTY when metadata was missing. A generated/real rookie must be
     # explicitly rookie-marked or have zero prior NBA activity.
 
-    MIN_ROOKIE_GAMES = 30
-    rookies = [p for p in rookie_candidates_all if _gp(p) >= MIN_ROOKIE_GAMES] or rookie_candidates_all
-    ctx_roty = _ctx(rookies) if rookies else ctx
-    max_roty_mpg = max((_mpg(p) for p in rookies), default=0)
+    MIN_ROTY_GAMES = 65
+    roty_candidates = [p for p in rookie_candidates_all if _gp(p) >= MIN_ROTY_GAMES]
+    ctx_roty = _ctx(roty_candidates) if roty_candidates else ctx
+    max_roty_mpg = max((_mpg(p) for p in roty_candidates), default=0)
 
-    for p in rookies:
+    for p in roty_candidates:
         p["_roty"] = _impact_roty(p, ctx_roty, max_roty_mpg)
         p["_rookieEligible"] = True
 
-    roty_sorted = sorted(rookies, key=lambda p: p.get("_roty", 0.0), reverse=True)
+    roty_sorted = sorted(roty_candidates, key=lambda p: p.get("_roty", 0.0), reverse=True)
 
     all_rookie_pool = []
     seen_rookie_names = set()

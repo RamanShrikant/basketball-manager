@@ -194,6 +194,7 @@ function buildRosterSnapshot(leagueData) {
 function blankPlayerStats() {
   return {
     GP: 0,
+    GS: 0,
     MIN: "0.0",
     PTS: "0.0",
     REB: "0.0",
@@ -221,6 +222,7 @@ function toPlayerDisplayStats(rec = {}) {
 
   return {
     GP: gp,
+    GS: safeNumber(rec?.started ?? rec?.gs ?? rec?.gamesStarted, 0),
     MIN: format1(safeNumber(rec?.min, 0) / safeGp),
     PTS: format1(safeNumber(rec?.pts, 0) / safeGp),
     REB: format1(safeNumber(rec?.reb, 0) / safeGp),

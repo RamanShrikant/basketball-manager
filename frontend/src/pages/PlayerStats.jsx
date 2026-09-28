@@ -321,6 +321,7 @@ export default function PlayerStats({ scope = "regular" }) {
     if (!rec || !Number(rec.gp || 0)) {
       return {
         GP: 0,
+        GS: 0,
         MIN: "0.0",
         PTS: "0.0",
         REB: "0.0",
@@ -344,6 +345,7 @@ export default function PlayerStats({ scope = "regular" }) {
 
     return {
       GP: Number(rec.gp || 0),
+      GS: Number(rec.started ?? rec.gs ?? rec.gamesStarted ?? 0),
       MIN: fmtAvg(Number(rec.min || 0) / games),
       PTS: fmtAvg(Number(rec.pts || 0) / games),
       REB: fmtAvg(Number(rec.reb || 0) / games),
@@ -553,6 +555,7 @@ export default function PlayerStats({ scope = "regular" }) {
     { key: "name", label: "Name" },
     { key: "pos", label: "POS" },
     { key: "GP", label: "GP" },
+    { key: "GS", label: "GS" },
     { key: "MIN", label: "MIN" },
     { key: "PTS", label: "PTS" },
     { key: "REB", label: "REB" },
@@ -911,6 +914,7 @@ export default function PlayerStats({ scope = "regular" }) {
                     </td>
                     <td>{player.pos}</td>
                     <td>{player.stats.GP}</td>
+                    <td>{player.stats.GS ?? 0}</td>
                     <td>{player.stats.MIN}</td>
                     <td>{player.stats.PTS}</td>
                     <td>{player.stats.REB}</td>

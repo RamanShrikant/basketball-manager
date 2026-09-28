@@ -590,8 +590,8 @@ const handleAutoRebuild = () => {
             </div>
         )}
 
-        {/* Roster-style team header */}
-        <div className="w-full max-w-7xl flex items-center gap-3 mb-2 select-none shrink-0 px-1">
+        {/* Fixed team header: arrow cells stay put while team names change. */}
+        <div className="mb-2 grid w-full max-w-7xl shrink-0 select-none grid-cols-[32px_minmax(0,1fr)_32px] items-center gap-3 px-1">
             <button
                 onClick={() => handleTeamSwitch("prev")}
                 disabled={!allTeams.length}
@@ -604,18 +604,20 @@ const handleAutoRebuild = () => {
                 ◄
             </button>
 
-            {activeTeamLogo ? (
-                <img
-                    src={activeTeamLogo}
-                    alt=""
-                    aria-hidden="true"
-                    className="h-11 w-11 shrink-0 object-contain"
-                />
-            ) : null}
+            <div className="flex min-w-0 items-center justify-center gap-3 text-center">
+                {activeTeamLogo ? (
+                    <img
+                        src={activeTeamLogo}
+                        alt=""
+                        aria-hidden="true"
+                        className="h-11 w-11 shrink-0 object-contain"
+                    />
+                ) : null}
 
-            <h1 className="min-w-0 truncate text-[25px] font-extrabold leading-none text-white">
-                {selectedTeam.name} Coach Gameplan
-            </h1>
+                <h1 className="min-w-0 truncate text-center text-[25px] font-extrabold leading-none text-white">
+                    {selectedTeam.name} Coach Gameplan
+                </h1>
+            </div>
 
             <button
                 onClick={() => handleTeamSwitch("next")}

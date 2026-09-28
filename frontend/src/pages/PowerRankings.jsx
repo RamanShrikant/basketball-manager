@@ -643,7 +643,12 @@ export default function PowerRankings() {
   }, [rows, conferenceFilter]);
 
   const visibleRows = useMemo(() => {
-    if (!sortConfig.key || sortConfig.direction === "default") return filteredRows;
+    if (!sortConfig.key || sortConfig.direction === "default") {
+      return filteredRows.map((row, index) => ({
+        ...row,
+        displayRank: conferenceFilter === "all" ? row.rank : index + 1,
+      }));
+    }
 
     const direction = sortConfig.direction === "asc" ? 1 : -1;
     const sorted = [...filteredRows];
@@ -700,8 +705,11 @@ export default function PowerRankings() {
       return diff * direction;
     });
 
-    return sorted;
-  }, [filteredRows, sortConfig]);
+    return sorted.map((row, index) => ({
+      ...row,
+      displayRank: conferenceFilter === "all" ? row.rank : index + 1,
+    }));
+  }, [filteredRows, sortConfig, conferenceFilter]);
 
   if (!leagueData) {
     return (
@@ -734,17 +742,13 @@ export default function PowerRankings() {
           </div>
 
           <div className="bmTableScroller min-h-0 flex-1 overflow-auto rounded-xl border border-neutral-800 bg-neutral-900/80">
-            <table className="w-full min-w-[980px] text-center text-sm">
+            <table className="w-full min-w-[760px] text-center text-sm">
               <thead className="sticky top-0 z-10 bg-neutral-800 text-gray-300">
                 <tr>
                   <SortHeader label="Rank" sortKey="rank" sortConfig={sortConfig} onSort={handleSort} />
                   <SortHeader label="Team" sortKey="team" sortConfig={sortConfig} onSort={handleSort} align="left" />
-                  <SortHeader label="Team OVR" sortKey="overall" sortConfig={sortConfig} onSort={handleSort} />
-                  <SortHeader label="OFF" sortKey="off" sortConfig={sortConfig} onSort={handleSort} />
-                  <SortHeader label="DEF" sortKey="def" sortConfig={sortConfig} onSort={handleSort} />
                   <SortHeader label="Record" sortKey="record" sortConfig={sortConfig} onSort={handleSort} />
                   <SortHeader label="Conf" sortKey="conference" sortConfig={sortConfig} onSort={handleSort} />
-                  <SortHeader label="POT" sortKey="potential" sortConfig={sortConfig} onSort={handleSort} />
                   <SortHeader label="Top Players" sortKey="topPlayers" sortConfig={sortConfig} onSort={handleSort} align="left" />
                 </tr>
               </thead>
@@ -757,23 +761,19 @@ export default function PowerRankings() {
                       selectedTeam?.name === row.name ? "bg-orange-600/70" : ""
                     }`}
                   >
-                    <td className="px-3 py-1.5 font-semibold">{row.rank}</td>
+                    <td className="px-3 py-1.5 font-semibold">{row.displayRank ?? row.rank}</td>
                     <td className="px-3 py-1.5 text-left pl-4 font-semibold">
                       <div className="flex items-center gap-2">
                         {row.logo && <img src={row.logo} alt={row.name} className="h-6 w-6 object-contain" />}
                         <span className="whitespace-nowrap">{row.name}</span>
                       </div>
                     </td>
-                    <td className="px-3 py-1.5 font-bold text-orange-300">{row.overall}</td>
-                    <td className="px-3 py-1.5">{row.off}</td>
-                    <td className="px-3 py-1.5">{row.def}</td>
                     <td className="px-3 py-1.5 font-semibold">
                       <span className="text-green-400">{row.w}</span>
                       <span className="text-gray-400"> - </span>
                       <span className="text-red-400">{row.l}</span>
                     </td>
                     <td className="px-3 py-1.5">{row.conference || "—"}</td>
-                    <td className="px-3 py-1.5 font-semibold text-orange-300">{row.potential}</td>
                     <td className="px-3 py-1.5 text-left text-gray-300">{row.topPlayers || "—"}</td>
                   </tr>
                 ))}

@@ -34,7 +34,8 @@
   inset: 0;
   pointer-events: none;
   overflow: hidden;
-  z-index: 9999;
+  z-index: 0;
+  opacity: 0.42;
   background: transparent;
 }
 
@@ -45,7 +46,7 @@
   height: var(--size);
   object-fit: contain;
   opacity: 0;
-  filter: drop-shadow(0 0 10px rgba(255, 165, 0, 0.55));
+  filter: drop-shadow(0 0 6px rgba(255, 165, 0, 0.35));
   animation: mvpLogoConfetti var(--dur) ease-in forwards;
   animation-delay: var(--delay);
   transform: translate3d(var(--x-start), -80px, 0) rotate(0deg) scale(0.8);

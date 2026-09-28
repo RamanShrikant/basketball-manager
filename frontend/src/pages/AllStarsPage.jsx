@@ -20,7 +20,7 @@ export default function AllStarsPage() {
   return (
     <PageFade>
       <div className="bmCourtPage h-full overflow-auto px-4 py-4 text-white">
-        <div className="mx-auto max-w-7xl">
+        <div className="mx-auto max-w-[1520px]">
           {!leagueData || !selectedTeam ? (
             <div className="flex min-h-[70vh] flex-col items-center justify-center gap-4 text-center">
               <h1 className="text-3xl font-black text-orange-400">All-Star Teams</h1>
@@ -28,8 +28,8 @@ export default function AllStarsPage() {
               <button onClick={() => navigate("/team-selector")} className="rounded-xl bg-orange-600 px-5 py-3 font-black hover:bg-orange-500">Team Select</button>
             </div>
           ) : available ? (
-            <div className="rounded-2xl border border-white/15 bg-neutral-900/90 p-6 shadow-2xl">
-              <AllStarsContent data={data} leagueData={leagueData} />
+            <div className="rounded-2xl border border-white/15 bg-neutral-900/90 p-3 shadow-2xl">
+              <AllStarsContent data={data} leagueData={leagueData} variant="page" />
             </div>
           ) : (
             <div className="flex min-h-[70vh] flex-col items-center justify-center gap-3 rounded-2xl border border-white/10 bg-neutral-900/80 p-8 text-center">

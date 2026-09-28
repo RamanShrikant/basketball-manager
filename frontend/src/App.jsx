@@ -43,6 +43,7 @@ import TradeFinder from "./pages/TradeFinder.jsx";
 import LockerRoom from "./pages/LockerRoom.jsx";
 import ContractExtensions from "./pages/ContractExtensions.jsx";
 import Intel from "./pages/Intel_v1.jsx";
+import LeagueFinances from "./pages/LeagueFinances.jsx";
 import Settings from "./pages/Settings.jsx";
 import LeagueHistory from "./pages/LeagueHistory.jsx";
 import AwardHistory from "./pages/AwardHistory.jsx";
@@ -130,6 +131,7 @@ function App() {
           <Route path="/locker-room" element={<LockerRoom />} />
           <Route path="/contract-extensions" element={<ContractExtensions />} />
           <Route path="/intel" element={<Intel />} />
+          <Route path="/league-finances" element={<LeagueFinances />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/league-history" element={<LeagueHistory />} />
           <Route path="/award-history" element={<AwardHistory />} />
